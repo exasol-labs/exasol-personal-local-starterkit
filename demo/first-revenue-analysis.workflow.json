@@ -1,0 +1,62 @@
+{
+  "workflow_version": 1,
+  "name": "first-revenue-analysis",
+  "title": "Revenue by product type",
+  "description": "The kit's first guided workflow: which product type generated the most revenue, answered with inspect-before-run discipline and independent validation. Runs against the bundled TPC-H sample. Serves as the template for saving your own workflows.",
+  "question": "Which product type generated the most revenue?",
+  "database": {
+    "schema": "TPCH",
+    "connection_profile": "starter-kit"
+  },
+  "steps": [
+    {
+      "id": "discover",
+      "type": "prompt",
+      "description": "Ground the assistant in the real schema before asking anything",
+      "prompt": "What schemas and tables are available in my Exasol database? For the tables in the TPCH schema, describe their columns and how they relate to each other."
+    },
+    {
+      "id": "ask",
+      "type": "prompt",
+      "description": "Ask the question with the inspect-before-run instruction",
+      "prompt": "Which product type generated the most revenue? Show me the SQL you intend to run and explain it before executing.",
+      "inspect_before_run": true,
+      "review_checklist": [
+        "Which columns define revenue? (kit convention: L_EXTENDEDPRICE * (1 - L_DISCOUNT))",
+        "Is tax (L_TAX) included? (the convention above excludes it)",
+        "Are returned line items (L_RETURNFLAG = 'R') subtracted (net) or included (gross)?",
+        "Any filters applied (e.g. an O_ORDERDATE range)?"
+      ]
+    },
+    {
+      "id": "run",
+      "type": "sql",
+      "description": "The SQL approved during the ask step. In TPC-H a part's P_TYPE is the closest thing to a product category; revenue is summed from LINEITEM joined to PART. Column names follow data/data-dictionary.md.",
+      "sql": "SELECT p.P_TYPE,\n       SUM(l.L_EXTENDEDPRICE * (1 - l.L_DISCOUNT)) AS REVENUE\nFROM   TPCH.LINEITEM l\nJOIN   TPCH.PART p ON p.P_PARTKEY = l.L_PARTKEY\nGROUP  BY p.P_TYPE\nORDER  BY REVENUE DESC\nLIMIT  10",
+      "executed_via": "mcp read-only query tool"
+    },
+    {
+      "id": "validate",
+      "type": "shell",
+      "description": "Independent reproduction outside the assistant - same SQL, direct database path",
+      "command": "exapump sql -p starter-kit < revenue-by-type.sql",
+      "expectation": "Result matches the assistant's answer"
+    },
+    {
+      "id": "rerun",
+      "type": "note",
+      "description": "Rerun any time with the validate command above; results are comparable run over run because the SQL is fixed and reviewed."
+    }
+  ],
+  "outcome": {
+    "deliverable": "Ranked product types (PART.P_TYPE) by revenue, verified through two independent paths",
+    "trust_properties": [
+      "SQL reviewed by a human before execution",
+      "Read-only database access for the assistant",
+      "Result reproduced outside the assistant with exapump",
+      "Workflow captured in this file for rerun"
+    ]
+  },
+  "created": "2026-07-02",
+  "kit_level_required": 1
+}

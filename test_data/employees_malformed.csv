@@ -1,0 +1,11 @@
+id,first_name,last_name,email,department,salary,hire_date,is_active
+21,Toomany,Columns,toomany@example.com,Engineering,90000.00,2021-04-01,true,EXTRA_VALUE
+22,Toofew,Columns,toofew@example.com,Sales
+23,Bad,Salary,bad.salary@example.com,Finance,NOT_A_NUMBER,2020-01-01,true
+24,Bad,Date,bad.date@example.com,Marketing,60000.00,2020-13-45,true
+25,Bad,Bool,bad.bool@example.com,Ops,55000.00,2021-01-01,MAYBE
+notanumber,Bad,ID,bad.id@example.com,Legal,70000.00,2019-05-05,false
+27,Unterminated"Quote,Field,unterminated@example.com,Support,50000.00,2022-02-02,true
+28,Empty,Line,follows@example.com,HR,48000.00,2023-03-03,true
+
+29,Negative,Salary,neg@example.com,Finance,-1000.00,2020-06-06,true

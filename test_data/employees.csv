@@ -1,0 +1,11 @@
+id,first_name,last_name,email,department,salary,hire_date,is_active
+1,Alice,Johnson,alice.johnson@example.com,Engineering,95000.50,2021-03-15,true
+2,Bob,Smith,bob.smith@example.com,Sales,62000.00,2019-07-01,true
+3,Carol,Williams,carol.williams@example.com,Marketing,71500.75,2020-11-23,false
+4,David,Brown,david.brown@example.com,Engineering,88000.00,2022-01-10,true
+5,Eve,Davis,eve.davis@example.com,Finance,79000.25,2018-05-30,true
+6,Frank,Miller,frank.miller@example.com,Sales,54000.00,2023-02-14,true
+7,Grace,Wilson,grace.wilson@example.com,Engineering,102000.00,2017-09-05,false
+8,Henry,Moore,henry.moore@example.com,Marketing,68000.50,2021-12-01,true
+9,Ivy,Taylor,ivy.taylor@example.com,Finance,83500.00,2020-06-18,true
+10,Jack,Anderson,jack.anderson@example.com,Sales,59000.00,2022-08-22,true

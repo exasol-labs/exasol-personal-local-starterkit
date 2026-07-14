@@ -1,0 +1,19 @@
+# Shell scripts must stay LF even on Windows checkouts (core.autocrlf=true
+# otherwise rewrites them to CRLF, which breaks bash when the clone is run
+# from WSL via /mnt/c or copied into a Linux environment).
+*.sh text eol=lf
+
+# The exakit helper is an extensionless bash script, so the *.sh rule cannot
+# match it. A CRLF checkout installs a helper whose shebang is broken
+# (env: 'bash\r': No such file or directory) for WSL installs that use a
+# Windows-side checkout (EXAKIT_LOCAL_KIT or /mnt/c).
+setup/exakit text eol=lf
+
+# Runtime-parsed text files. The bash installer reads dataset.conf with sed
+# (a CRLF checkout makes every dataset id end in CR, so dataset discovery
+# fails with "Unknown bundled dataset"), and the SQL/CSV fixtures are fed to
+# the database, which expects LF row terminators.
+*.conf text eol=lf
+*.sql text eol=lf
+*.py text eol=lf
+*.csv text eol=lf

@@ -1,0 +1,12 @@
+id,first_name,last_name,email,department,salary,hire_date,is_active
+11,"O'Brien",Sørensen,obrien.sorensen@example.com,Engineering,90000.00,2021-04-01,true
+12,"Anne, Marie",Dupont,anne.dupont@example.com,"Sales, EMEA",64000.00,2020-02-15,true
+13,李,王,li.wang@example.com,研发,88000.00,2022-03-20,true
+14,"Line
+Break",Test,line.break@example.com,Support,50000.00,2023-01-01,false
+15,Quote"Inside,Name,quote.inside@example.com,Legal,72000.00,2019-10-10,true
+16,,Missing,missing.first@example.com,Finance,,2021-06-15,true
+17,Null,Values,,,NULL,,
+18,Trailing,Spaces,  spaced@example.com  ,  Marketing  ,61000.00,2020-08-08,true
+19,Tab	Char,Inside,tab.char@example.com,Ops,55000.00,2022-11-11,true
+20,Semicolon;Test,Name,semi@example.com,"R&D; Labs",99000.00,2018-12-25,false

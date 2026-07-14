@@ -1,0 +1,34 @@
+tool	command	options	description
+exakit	preflight		Check this machine's requirements (runtime, RAM, ports); install nothing.
+exakit	status		Show what is installed and whether each component is healthy.
+exakit	version		Show kit source, install date, and component versions.
+exakit	update-check	[all|runtime|exakit|exapump|mcp|nano|personal]	Check latest available versions and print the exact update command.
+exakit	update	[all|runtime|exakit|exapump|mcp|nano|personal]	Update all or one component while preserving database data by default.
+exakit	update personal	[--plan|--backup|--apply]	Handle Exasol Personal major-version updates with an explicit non-destructive plan, deployment backup, and launcher apply step.
+exakit	info		Print the connection details panel (DSN, users, schema).
+exakit	guide		Friendly walkthrough: connect AI clients (MCP), SQL clients (DBeaver recommended), and Python (pyexasol).
+exakit	start		Start the local Exasol database container.
+exakit	stop		Stop the local Exasol database container.
+exakit	data-load	[--force | -Force]	Open the focused data-loading menu: bundled sample data or a local CSV/Parquet file. --force reloads the bundled sample.
+exakit	mcp-setup		Permanently configure MCP in supported AI clients.
+exakit	mcp-status	[clients]	Show managed MCP state for all supported AI clients.
+exakit	mcp-validate	[clients]	Validate managed MCP configs and test connectivity.
+exakit	mcp-repair	[clients]	Repair managed MCP config drift back to the known-good state.
+exakit	mcp-doctor	[clients]	Run MCP diagnostics and report problems.
+exakit	mcp-remove	[clients]	Remove the managed MCP config from the supported clients.
+exakit	mcp-restore	[snapshot]	Restore the latest (or a chosen) MCP config snapshot.
+exakit	skills-install		Install the kit's AI skills into ~/.claude/skills and ~/.agents/skills for CLI agents (Claude Code, Codex).
+exakit	uninstall	[--yes | --dry-run]	Remove EVERYTHING the kit installed (database + data, MCP client configs, skills, exapump, kit home, CLI binaries). --dry-run previews; --yes skips the typed confirmation.
+exakit	logs		Print the path of the latest setup log.
+exakit	catalog	[search]	Browse or search every exakit, exapump, and exasol command (this screen).
+exakit	help		Show the exakit usage text.
+exapump	sql	-p <profile> "<SQL>"	Run a single SQL statement through a saved connection profile.
+exapump	sql	-p <profile> < file.sql	Run a SQL script file (via stdin) through a profile.
+exapump	upload	<file> --table <schema.table>	Bulk-load a CSV or Parquet file into a table.
+exapump	profile init	<name>	Create or update a named connection profile (host, port, user, password).
+exapump	--version		Print the exapump version.
+exapump	--help		Show exapump's built-in help.
+exapump	EXAPUMP_CONFIG	(env var)	Override the config path; profiles live in ~/.exapump/config.toml. Kit default profile: starter-kit.
+exasol	exasol-mcp-server	uvx exasol-mcp-server@<ver>	Read-only MCP server the AI client runs to query Exasol over stdio.
+exasol	exasol-mcp-server-http	--host <h> --port <p>	Run the Exasol MCP server in HTTP mode instead of stdio.
+exasol	connection	host:port / user / password	Kit provisions a least-privilege mcp_readonly user with database-wide read and no write (DSN default 127.0.0.1:8563).

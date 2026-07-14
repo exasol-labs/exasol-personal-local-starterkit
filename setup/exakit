@@ -1,0 +1,367 @@
+#!/usr/bin/env bash
+# exakit — lifecycle helper for the Exasol Personal Local Starter Kit.
+#
+# usage: exakit <command>
+#
+#   preflight           check this machine's requirements, install nothing
+#   status              show what is installed and whether it is healthy
+#   version             kit source, install date, component versions
+#   update-check [what] check latest versions (all, runtime, exakit, exapump, mcp)
+#   update [what]       update all or one component without deleting database data
+#                       Personal major upgrades support --plan, --backup, --apply
+#   info                print the connection details panel
+#   guide               friendly walkthrough: connect AI clients (MCP), SQL
+#                       clients (DBeaver), and Python (pyexasol)
+#   start               start the local database
+#   stop                stop the local database
+#   data-load [--force] open focused data loading options; --force reloads bundled sample data
+#   mcp-setup           permanently configure MCP in supported AI clients
+#   mcp-doctor          check MCP config, connectivity, and managed state
+#   mcp-status          show managed MCP state for the supported AI clients
+#   mcp-validate        validate managed MCP configs and test connectivity
+#   mcp-repair          repair managed MCP config drift
+#   mcp-remove          remove managed MCP config from the supported clients
+#   mcp-restore         restore the latest (or a chosen) MCP snapshot
+#   skills-install      install the kit's AI skills for CLI agents
+#                       (~/.claude/skills, ~/.agents/skills)
+#   uninstall [--yes] [--dry-run]
+#                       remove EVERYTHING the kit installed: database + all
+#                       data, MCP client configs, skills, exapump, the kit home
+#                       and the CLI binaries. --dry-run previews; --yes skips
+#                       the typed confirmation
+#   logs                print the path of the latest setup log
+#   catalog [search]    browse/search every exakit, exapump & exasol command
+#   help                this text
+#
+# Installed to ~/.local/bin by the setup scripts; also runs straight from a
+# repo checkout (setup/exakit).
+
+set -u
+set -o pipefail
+
+# --- locate the kit's lib directory ----------------------------------------
+_script_dir="$(cd "$(dirname "$0")" && pwd)"
+if [ -f "$_script_dir/lib/common.sh" ]; then
+    _lib_dir="$_script_dir/lib"
+elif [ -f "${EXAKIT_HOME:-$HOME/.exasol-starter-kit}/kit/setup/lib/common.sh" ]; then
+    _lib_dir="${EXAKIT_HOME:-$HOME/.exasol-starter-kit}/kit/setup/lib"
+else
+    echo "exakit: cannot find the kit library (looked in $_script_dir/lib and ~/.exasol-starter-kit/kit)" >&2
+    exit 1
+fi
+
+. "$_lib_dir/common.sh"
+. "$_lib_dir/detect.sh"
+. "$_lib_dir/runtime-nano.sh"
+. "$_lib_dir/runtime-personal.sh"
+[ -f "$_lib_dir/exapump.sh" ] && . "$_lib_dir/exapump.sh"
+[ -f "$_lib_dir/mcp.sh" ] && . "$_lib_dir/mcp.sh"
+
+_runtime_type() {
+    manifest_get runtime.type 2>/dev/null
+}
+
+_require_install() {
+    [ -f "$EXAKIT_MANIFEST" ] || die "No installation found. Run the installer first."
+    [ -n "$(_runtime_type)" ] || die "No runtime recorded in the manifest yet."
+}
+
+cmd_status() {
+    if [ ! -f "$EXAKIT_MANIFEST" ]; then
+        echo "Not installed (no manifest at $EXAKIT_MANIFEST)"
+        exit 0
+    fi
+    _type="$(_runtime_type)"
+    printf 'Kit level:  %s\n' "$(manifest_get kit_level 2>/dev/null)"
+    printf 'Runtime:    %s\n' "${_type:-none}"
+    case "$_type" in
+        nano)     printf 'Status:     %s\n' "$(nano_status)" ;;
+        personal) printf 'Status:     %s\n' "$(personal_status)" ;;
+        *)        printf 'Status:     unknown\n' ;;
+    esac
+    printf 'Steps done: %s\n' "$(manifest_get steps_completed 2>/dev/null)"
+    printf 'Manifest:   %s\n' "$EXAKIT_MANIFEST"
+}
+
+cmd_start() {
+    _require_install
+    case "$(_runtime_type)" in
+        nano)     nano_start ;;
+        personal) personal_start ;;
+    esac
+}
+
+cmd_stop() {
+    _require_install
+    case "$(_runtime_type)" in
+        nano)     nano_stop ;;
+        personal) personal_stop ;;
+    esac
+}
+
+cmd_uninstall() {
+    # Distinct variable names (_uni_*): exakit_uninstall_run assigns globals like
+    # _dry without `local`, so a plain _dry here would be clobbered by the
+    # plan-display call below.
+    _uni_yes=0
+    _uni_dry=0
+    for _uni_arg in "$@"; do
+        case "$_uni_arg" in
+            -y|--yes)      _uni_yes=1 ;;
+            -n|--dry-run)  _uni_dry=1 ;;
+            *) die "Unknown option '$_uni_arg' for uninstall (supported: --yes, --dry-run)." ;;
+        esac
+    done
+    exakit_init_logging 2>/dev/null || true
+
+    # Nothing installed anywhere we can see? Say so and stop.
+    if [ ! -f "$EXAKIT_MANIFEST" ] && [ ! -e "$EXAKIT_BIN_DIR/exasol" ] && \
+       [ ! -e "$EXAKIT_BIN_DIR/exakit" ] && [ ! -d "$EXAKIT_HOME" ]; then
+        info "Nothing to uninstall — no manifest, kit home, or installed binaries were found."
+        exit 0
+    fi
+
+    printf '\n'
+    warn "exakit uninstall PERMANENTLY removes the Exasol Personal Local Starter Kit."
+    info "The following will be removed:"
+    exakit_uninstall_run 1
+    printf '\n'
+    warn "This is IRREVERSIBLE — all local database data will be lost."
+    info "Not touched: uv/uvx (shared tool) and any PATH line in your shell profile."
+
+    if [ "$_uni_dry" = 1 ]; then
+        printf '\n'
+        info "Dry run only — nothing was removed."
+        exit 0
+    fi
+
+    if [ "$_uni_yes" != 1 ]; then
+        _tty="$(_exakit_prompt_tty)"
+        [ -n "$_tty" ] || die "uninstall needs an interactive terminal to confirm; re-run with --yes to proceed non-interactively."
+        printf '\033[1;31m  !\033[0m Type \033[1mUNINSTALL\033[0m to confirm (anything else cancels): '
+        if [ "$_tty" = "/dev/tty" ]; then read -r _answer < /dev/tty; else read -r _answer; fi
+        [ "$_answer" = "UNINSTALL" ] || { info "Uninstall cancelled."; exit 0; }
+    fi
+
+    printf '\n'
+    exakit_uninstall_run 0
+    printf '\n'
+    ok "Uninstall complete — the Exasol Personal Local Starter Kit has been removed."
+    info "If a PATH entry for $EXAKIT_BIN_DIR remains in your shell profile (~/.zshrc, ~/.bashrc, ~/.profile), remove it manually if you no longer need it."
+}
+
+cmd_version() {
+    [ -f "$EXAKIT_MANIFEST" ] || { echo "Not installed (no manifest at $EXAKIT_MANIFEST)"; exit 0; }
+    printf 'Kit level:      %s\n' "$(manifest_get kit_level 2>/dev/null)"
+    printf 'Kit source:     %s\n' "$(manifest_get kit.source 2>/dev/null)"
+    printf 'Installed at:   %s\n' "$(manifest_get installed_at 2>/dev/null)"
+    printf 'Runtime:        %s %s\n' "$(manifest_get runtime.type 2>/dev/null)" \
+        "$(manifest_get runtime.version 2>/dev/null || manifest_get runtime.image 2>/dev/null)"
+    printf 'exapump:        %s\n' "$(manifest_get components.exapump.version 2>/dev/null)"
+    printf 'MCP server:     %s %s\n' "$(manifest_get components.mcp_server.package 2>/dev/null)" \
+        "$(manifest_get components.mcp_server.version 2>/dev/null)"
+    printf 'pyexasol:       %s\n' "$(manifest_get components.pyexasol.version 2>/dev/null)"
+    printf '\n'
+    exakit_print_update_check all || true
+}
+
+cmd_update_check() {
+    [ -f "$EXAKIT_MANIFEST" ] || { echo "Not installed (no manifest at $EXAKIT_MANIFEST)"; exit 0; }
+    exakit_print_update_check "${1:-all}"
+}
+
+cmd_update() {
+    _require_install
+    exakit_update "$@"
+}
+
+cmd_logs() {
+    _latest="$(ls -t "$EXAKIT_LOG_DIR"/*.log 2>/dev/null | head -1)"
+    if [ -n "$_latest" ]; then
+        echo "$_latest"
+    else
+        echo "No logs found in $EXAKIT_LOG_DIR" >&2
+        exit 1
+    fi
+}
+
+cmd_data_load() {
+    _require_install
+    case "${1:-}" in
+        ""|--force) ;;
+        *) die "Unknown option '$1' for data-load (only --force is supported)." ;;
+    esac
+    command -v exakit_load_sample_data >/dev/null 2>&1 || \
+        die "The exapump data-loading module is not available in this kit build."
+    exakit_init_logging
+    if [ "${1:-}" = "--force" ]; then
+        _kit_root="$(exakit_repo_root)" || \
+            die "Could not find the kit's sql/ and data/ files to load."
+        info "Reloading the bundled sample dataset (log: ${EXAKIT_LOG_FILE:-none})"
+        exakit_load_sample_data "$_kit_root" "--force"
+    else
+        command -v exakit_data_load_menu >/dev/null 2>&1 || \
+            die "The exapump data-loading module is not available in this kit build."
+        exakit_data_load_menu
+    fi
+}
+
+cmd_mcp_setup() {
+    _require_install
+    exakit_init_logging
+    exakit_mcp_setup || die "Could not complete MCP client setup"
+}
+
+cmd_mcp_repair() {
+    _require_install
+    exakit_init_logging
+    exakit_mcp_operation repair "$@" || die "Could not repair MCP state"
+}
+
+cmd_mcp_doctor() {
+    _require_install
+    exakit_init_logging
+    exakit_mcp_operation doctor "$@" || die "Could not run MCP diagnostics"
+}
+
+cmd_mcp_status() {
+    _require_install
+    exakit_init_logging
+    exakit_mcp_operation status "$@" || die "Could not read managed MCP state"
+}
+
+cmd_mcp_validate() {
+    _require_install
+    exakit_init_logging
+    exakit_mcp_operation validate "$@" || die "Could not validate managed MCP configuration"
+}
+
+cmd_mcp_remove() {
+    _require_install
+    exakit_init_logging
+    exakit_mcp_operation uninstall "$@" || die "Could not remove managed MCP configuration"
+}
+
+cmd_mcp_restore() {
+    _require_install
+    exakit_init_logging
+    exakit_mcp_restore "${1:-}" || die "Could not restore managed MCP configuration"
+}
+
+cmd_skills_install() {
+    exakit_init_logging
+    exakit_install_skills || die "Could not install the kit's AI skills"
+}
+
+usage() {
+    # `exakit help --all` prints the full command reference: the leading
+    # comment block (from line 2) up to the first non-comment line — no
+    # hardcoded range, so new command lines always appear instead of being
+    # silently truncated. Plain `exakit help` (and a bare `exakit`) prints
+    # only the short everyday list below, so a first-time user sees a handful
+    # of commands, not the whole surface. Mirrors PowerShell Show-ExakitUsage.
+    if [ "${1:-}" = "--all" ] || [ "${1:-}" = "-a" ]; then
+        awk 'NR > 1 { if ($0 !~ /^#/) exit; sub(/^# ?/, ""); print }' "$0"
+        return
+    fi
+    cat <<'EOF'
+exakit — Exasol Personal Local Starter Kit
+
+Get started:
+  exakit mcp-setup     connect your AI assistant (Claude, Cursor, Codex)
+
+Everyday commands:
+  status               is the database up and healthy?
+  info                 show your connection details
+  start | stop         run or pause the local database
+  data-load            load the sample data or your own CSV / Parquet
+  mcp-doctor           check the AI (MCP) connection
+EOF
+}
+
+# cmd_catalog [search] — render the searchable command catalog from the shared
+# catalog.tsv (one source of truth for both the bash and PowerShell CLIs).
+cmd_catalog() {
+    _search="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+    _catalog="$_lib_dir/catalog.tsv"
+    [ -f "$_catalog" ] || die "Catalog data not found: $_catalog"
+
+    if [ -t 1 ]; then
+        _cy=$'\033[36m'; _cyb=$'\033[1;36m'; _dim=$'\033[2m'; _b=$'\033[1m'; _gn=$'\033[1;32m'; _r=$'\033[0m'
+    else
+        _cy=; _cyb=; _dim=; _b=; _gn=; _r=
+    fi
+    _rule='━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
+
+    printf '\n  %s%s%s\n' "$_cy" "$_rule" "$_r"
+    printf '   %s▸ EXASOL%s  %s·%s  starter kit\n' "$_cyb" "$_r" "$_dim" "$_r"
+    if [ -n "$_search" ]; then
+        printf '     %scommand catalog — results for "%s"%s\n' "$_dim" "$_search" "$_r"
+    else
+        printf '     %scommand catalog · exakit · exapump · exasol%s\n' "$_dim" "$_r"
+    fi
+    printf '  %s%s%s\n\n' "$_cy" "$_rule" "$_r"
+
+    _found=0
+    for _tool in exakit exapump exasol; do
+        # Emit fields separated by US (0x1f), a non-whitespace char: `read` with
+        # a tab IFS collapses the empty options field (tab is IFS-whitespace),
+        # which would merge no-option commands onto their description line.
+        _rows="$(awk -F'\t' -v tool="$_tool" -v q="$_search" '
+            NR==1 {next}
+            $1==tool {
+                hay=tolower($1" "$2" "$3" "$4)
+                if (q=="" || index(hay,q)>0) print $2"\037"$3"\037"$4
+            }' "$_catalog")"
+        [ -z "$_rows" ] && continue
+        _found=1
+        case "$_tool" in
+            exakit)  _label='exakit   — kit lifecycle & MCP management' ;;
+            exapump) _label='exapump  — data loading CLI' ;;
+            exasol)  _label='exasol   — database & AI (MCP) bridge' ;;
+        esac
+        printf '  %s%s%s\n' "$_gn" "$_label" "$_r"
+        printf '%s\n' "$_rows" | while IFS=$(printf '\037') read -r _cmd _opt _desc; do
+            if [ "$_tool" = "exasol" ]; then _name="$_cmd"; else _name="$_tool $_cmd"; fi
+            if [ -n "$_opt" ]; then
+                printf '    %s%s%s %s%s%s\n' "$_b" "$_name" "$_r" "$_dim" "$_opt" "$_r"
+            else
+                printf '    %s%s%s\n' "$_b" "$_name" "$_r"
+            fi
+            printf '        %s\n' "$_desc"
+        done
+        printf '\n'
+    done
+
+    if [ "$_found" -eq 0 ]; then
+        printf '  %sNo commands match "%s".%s  Try: exakit catalog mcp\n\n' "$_dim" "$_search" "$_r"
+        return 0
+    fi
+    printf '  %sTip:%s exakit catalog <search>   e.g. exakit catalog data · exakit catalog mcp\n\n' "$_dim" "$_r"
+}
+
+case "${1:-help}" in
+    preflight) preflight_report ;;
+    status)   cmd_status ;;
+    version|--version|-v)  cmd_version ;;
+    update-check) shift; cmd_update_check "${1:-all}" ;;
+    update) shift; cmd_update "$@" ;;
+    info)     connection_panel ;;
+    guide)    exakit_guide ;;
+    start)    cmd_start ;;
+    stop)     cmd_stop ;;
+    data-load) shift; cmd_data_load "${1:-}" ;;
+    mcp-setup) cmd_mcp_setup ;;
+    mcp-repair) shift; cmd_mcp_repair "$@" ;;
+    mcp-doctor) shift; cmd_mcp_doctor "$@" ;;
+    mcp-status) shift; cmd_mcp_status "$@" ;;
+    mcp-validate) shift; cmd_mcp_validate "$@" ;;
+    mcp-remove) shift; cmd_mcp_remove "$@" ;;
+    mcp-restore) shift; cmd_mcp_restore "$@" ;;
+    skills-install) cmd_skills_install ;;
+    uninstall) shift; cmd_uninstall "$@" ;;
+    logs)     cmd_logs ;;
+    catalog)  shift; cmd_catalog "${1:-}" ;;
+    help|-h|--help) shift; usage "${1:-}" ;;
+    *) echo "exakit: unknown command '${1}'" >&2; usage >&2; exit 2 ;;
+esac
