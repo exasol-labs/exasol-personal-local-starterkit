@@ -206,10 +206,6 @@ Something failed mid-install? Re-run the install command. It picks up where it l
 
 <div align="center">
 
-**Start locally. Connect AI safely. Inspect the SQL. Validate the output.**
-
-*Questions or issues: open an issue in this repository.*
-
-Part of the [Exasol](https://www.exasol.com) ecosystem · [Exasol Personal](https://github.com/exasol/exasol-personal) · [exapump](https://github.com/exasol-labs/exapump) · [MCP server](https://github.com/exasol/mcp-server) · [pyexasol](https://github.com/exasol/pyexasol)
+Community-supported. Licensed under [MIT](LICENSE). Maintained by [Exasol Labs 🧪](https://github.com/exasol-labs/).
 
 </div>
