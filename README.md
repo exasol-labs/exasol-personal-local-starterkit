@@ -206,6 +206,10 @@ Something failed mid-install? Re-run the install command. It picks up where it l
 
 <div align="center">
 
+*Questions or issues: open an issue in this repository.*
+
 Community-supported. Licensed under [MIT](LICENSE). Maintained by [Exasol Labs 🧪](https://github.com/exasol-labs/).
+
+Continue exploring [Exasol](https://github.com/exasol).
 
 </div>
