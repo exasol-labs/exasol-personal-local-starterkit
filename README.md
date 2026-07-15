@@ -49,10 +49,10 @@ You already use AI. The hard part is trusting it with your data. This kit gives 
 
 | | Component | What it does for you |
 |---|---|---|
-| 🤖 | **MCP server** | Lets Claude, Cursor, or other supported MCP clients query your database with a dedicated read-only login |
-| 🗄️ | **Exasol&nbsp;Personal&nbsp;Local** | A full in-memory analytics database, running locally |
-| ⚡ | **exapump** | Load CSV/Parquet files and run SQL from your terminal |
-| 🐍 | **pyexasol** | The official Exasol Python driver, ready in its own environment |
+| 🤖 | **[MCP server](https://github.com/exasol/mcp-server)** | Lets Claude, Cursor, or other supported MCP clients query your database with a dedicated read-only login |
+| 🗄️ | **[Exasol&nbsp;Personal&nbsp;Local](https://github.com/exasol/exasol-personal)** | A full in-memory analytics database, running locally |
+| ⚡ | **[exapump](https://github.com/exasol-labs/exapump)** | Load CSV/Parquet files and run SQL from your terminal |
+| 🐍 | **[pyexasol](https://github.com/exasol/pyexasol)** | The official Exasol Python driver, ready in its own environment |
 
 At the end: connection details on screen, a managed runtime state under `~/.exasol-starter-kit/`, and guided MCP setup for supported clients. Time to first query: **under 2 minutes**.
 
