@@ -190,8 +190,6 @@ Install, connect an AI client, and run the first query, end to end:
 
 https://github.com/user-attachments/assets/8afa8bca-d6e1-44cc-882d-a90ed68e0c8e
 
-🎬 Prefer a copy? [Download the demo video](static/starter-kit-demo.mp4).
-
 ## Quick answers
 
 | Question | Answer |
