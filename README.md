@@ -184,6 +184,14 @@ Something failed mid-install? Re-run the install command. It picks up where it l
 - **Local only.** The database listens on `127.0.0.1` only, passwords live in local files and are never shown on screen, and AI client configs are backed up before every change.
 - **Reversible lifecycle.** `exakit` manages the kit end to end: `status`, `start`/`stop`, `data-load`, MCP setup and maintenance (`mcp-setup`, `mcp-doctor`, `mcp-repair`, `mcp-remove`, `mcp-restore`), `logs`, and a guarded `uninstall`. Run `exakit help` (or `exakit catalog`) to see every command.
 
+## See it in action
+
+Install, connect an AI client, and run the first query, end to end:
+
+https://github.com/user-attachments/assets/8afa8bca-d6e1-44cc-882d-a90ed68e0c8e
+
+🎬 Prefer a copy? [Download the demo video](static/starter-kit-demo.mp4).
+
 ## Quick answers
 
 | Question | Answer |
@@ -208,7 +216,7 @@ Something failed mid-install? Re-run the install command. It picks up where it l
 
 *Questions or issues: open an issue in this repository.*
 
-Community-supported. Licensed under [MIT](LICENSE). Maintained by [Exasol Labs 🧪](https://github.com/exasol-labs/).
+Community-supported. Licensed under [MIT](LICENSE). Part of [Exasol Labs 🧪](https://github.com/exasol-labs/).
 
 Continue exploring [Exasol](https://github.com/exasol).
 
