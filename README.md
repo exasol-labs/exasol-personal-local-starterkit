@@ -188,7 +188,7 @@ Something failed mid-install? Re-run the install command. It picks up where it l
 
 Install, connect an AI client, and run the first query, end to end:
 
-https://github.com/user-attachments/assets/8afa8bca-d6e1-44cc-882d-a90ed68e0c8e
+https://github.com/user-attachments/assets/77916db0-d273-4720-8d59-1aedac95d5e8
 
 ## Quick answers
 
