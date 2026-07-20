@@ -489,10 +489,7 @@ personal_update() {
     _latest="$(exakit_component_latest personal)"
     [ -n "$_latest" ] || die "Could not resolve the latest Exasol Personal release."
     _current="$(manifest_get runtime.version 2>/dev/null || true)"
-    if [ "$_latest" = "$_current" ]; then
-        ok "Exasol Personal launcher is already current ($_current)"
-        return 0
-    fi
+    exakit_update_guard "Exasol Personal launcher" "$_current" "$_latest" || return 0
 
     _current_major="$(exakit_major_version "$_current")"
     _latest_major="$(exakit_major_version "$_latest")"

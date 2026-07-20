@@ -121,10 +121,7 @@ mcp_update() {
     _latest="$(exakit_component_latest mcp)"
     [ -n "$_latest" ] || die "Could not resolve the latest ${EXAKIT_MCP_PACKAGE} version."
     _current="$(manifest_get components.mcp_server.version 2>/dev/null || true)"
-    if [ "$_latest" = "$_current" ]; then
-        ok "MCP server is already current ($_current)"
-        return 0
-    fi
+    exakit_update_guard "MCP server" "$_current" "$_latest" || return 0
     info "Updating MCP server ${_current:-unknown} -> $_latest"
     mcp_update_snapshot || warn "MCP pre-update snapshot was not created; generated configs will still be refreshed."
     EXAKIT_MCP_VERSION="$_latest"

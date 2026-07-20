@@ -46,6 +46,10 @@ $Repo       = if ($env:EXAKIT_REPO) { $env:EXAKIT_REPO } else { "exasol-labs/exa
 $Ref        = if ($env:EXAKIT_REF)  { $env:EXAKIT_REF }  else { "main" }
 $KitDir     = Join-Path $ExakitHome "kit"
 
+# Record where this kit came from (repo@ref) so the manifest can compare the
+# installed ref against published releases. Mirrors install.sh.
+if (-not $env:EXAKIT_KIT_SOURCE) { $env:EXAKIT_KIT_SOURCE = "$Repo@$Ref" }
+
 # --- 1. preflight ------------------------------------------------------------
 if ($env:OS -notlike "*Windows*") {
     throw "This installer is for Windows. On macOS/Linux/WSL use install.sh."

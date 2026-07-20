@@ -439,10 +439,7 @@ nano_update() {
     _latest="$(exakit_component_latest nano)"
     [ -n "$_latest" ] || die "Could not resolve the latest Exasol Nano image tag."
     _current="$(exakit_component_current nano 2>/dev/null || true)"
-    if [ "$_latest" = "$_current" ]; then
-        ok "Exasol Nano is already current ($_current)"
-        return 0
-    fi
+    exakit_update_guard "Exasol Nano" "$_current" "$_latest" || return 0
 
     _engine="$(nano_engine)"
     _image="docker.io/${EXAKIT_NANO_IMAGE}:${_latest}"

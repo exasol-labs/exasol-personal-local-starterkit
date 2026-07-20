@@ -335,6 +335,67 @@ else
     check "mcp_update(snapshot)" "yes" "no"
 fi
 
+echo "update guard (no silent downgrades):"
+# newer -> proceed (rc 0)
+if bash -c ". '$ROOT/setup/lib/common.sh'; exakit_update_guard demo 1.0.0 1.1.0" >/dev/null 2>&1; then
+    check "guard(newer proceeds)" "yes" "yes"
+else
+    check "guard(newer proceeds)" "yes" "no"
+fi
+# equal -> clean no-op (rc 1, says already current)
+guard_equal="$(bash -c ". '$ROOT/setup/lib/common.sh'; exakit_update_guard demo 1.1.0 1.1.0; echo rc=\$?" 2>&1)"
+case "$guard_equal" in
+    *"already current"*rc=1*|*rc=1*) check "guard(equal no-op)" "yes" "yes" ;;
+    *) check "guard(equal no-op)" "yes" "no" ;;
+esac
+# older -> refuses (non-zero, mentions downgrade)
+guard_refuse="$(bash -c ". '$ROOT/setup/lib/common.sh'; exakit_update_guard demo 2.0.0 1.0.0" 2>&1; echo "rc=$?")"
+case "$guard_refuse" in
+    *refusing*rc=1*|*refusing*) check "guard(older refuses)" "yes" "yes" ;;
+    *) check "guard(older refuses)" "yes" "no" ;;
+esac
+# older + EXAKIT_ALLOW_DOWNGRADE=1 -> proceeds with a banner
+guard_force="$(EXAKIT_ALLOW_DOWNGRADE=1 bash -c ". '$ROOT/setup/lib/common.sh'; exakit_update_guard demo 2.0.0 1.0.0 && echo forced-ok" 2>&1)"
+case "$guard_force" in
+    *DOWNGRADING*forced-ok*) check "guard(forced downgrade banner)" "yes" "yes" ;;
+    *) check "guard(forced downgrade banner)" "yes" "no" ;;
+esac
+# unknown installed version -> refuses without the override
+if bash -c ". '$ROOT/setup/lib/common.sh'; exakit_update_guard demo unknown 1.0.0" >/dev/null 2>&1; then
+    check "guard(unknown refuses)" "yes" "no"
+else
+    check "guard(unknown refuses)" "yes" "yes"
+fi
+# every updater consults the guard, in both shells
+if grep -q 'exakit_update_guard "exakit"' "$ROOT/setup/lib/common.sh" && \
+   grep -q 'exakit_update_guard "exapump"' "$ROOT/setup/lib/exapump.sh" && \
+   grep -q 'exakit_update_guard "MCP server"' "$ROOT/setup/lib/mcp.sh" && \
+   grep -q 'exakit_update_guard "Exasol Nano"' "$ROOT/setup/lib/runtime-nano.sh" && \
+   grep -q 'exakit_update_guard "Exasol Personal launcher"' "$ROOT/setup/lib/runtime-personal.sh"; then
+    check "guard(wired in bash updaters)" "yes" "yes"
+else
+    check "guard(wired in bash updaters)" "yes" "no"
+fi
+if grep -q 'function Assert-ExakitUpdateAllowed' "$ROOT/setup/exakit.ps1" && \
+   [ "$(grep -c 'Assert-ExakitUpdateAllowed -Label' "$ROOT/setup/exakit.ps1")" -ge 4 ]; then
+    check "guard(wired in PowerShell updaters)" "yes" "yes"
+else
+    check "guard(wired in PowerShell updaters)" "yes" "no"
+fi
+# the CLI must not override the arch-aware Docker tag lookup from the library
+if grep -q 'function Get-ExakitLatestDockerTag' "$ROOT/setup/exakit.ps1"; then
+    check "docker_tag(single arch-aware definition)" "yes" "no"
+else
+    check "docker_tag(single arch-aware definition)" "yes" "yes"
+fi
+# both installers record provenance for the kit row of update-check
+if grep -q 'EXAKIT_KIT_SOURCE="$EXAKIT_REPO@$EXAKIT_REF"' "$ROOT/install.sh" && \
+   grep -q 'EXAKIT_KIT_SOURCE = "$Repo@$Ref"' "$ROOT/install.ps1"; then
+    check "installers(record provenance)" "yes" "yes"
+else
+    check "installers(record provenance)" "yes" "no"
+fi
+
 echo
 echo "passed: $PASS, failed: $FAIL"
 [ "$FAIL" -eq 0 ]

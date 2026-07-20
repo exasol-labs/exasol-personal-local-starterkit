@@ -280,30 +280,10 @@ function Get-ExakitUpdateTargets {
     }
 }
 
-function Get-ExakitLatestGithubRelease {
-    param([Parameter(Mandatory)][string]$Repo)
-    try {
-        $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repo/releases/latest" -UseBasicParsing -TimeoutSec 12
-        return ("" + $release.tag_name).TrimStart("v")
-    } catch { return "" }
-}
-
-function Get-ExakitLatestPypiVersion {
-    param([Parameter(Mandatory)][string]$Package)
-    try {
-        $doc = Invoke-RestMethod -Uri "https://pypi.org/pypi/$Package/json" -UseBasicParsing -TimeoutSec 12
-        return "" + $doc.info.version
-    } catch { return "" }
-}
-
-function Get-ExakitLatestDockerTag {
-    try {
-        $doc = Invoke-RestMethod -Uri "https://hub.docker.com/v2/repositories/$($script:NanoImage)/tags?page_size=100&ordering=last_updated" -UseBasicParsing -TimeoutSec 12
-        $candidates = @($doc.results | ForEach-Object { $_.name } | Where-Object { $_ -match '^\d+(\.\d+)+[-._A-Za-z0-9]*$' -and $_ -notmatch 'latest' })
-        if ($candidates.Count -eq 0) { return "" }
-        return ($candidates | Sort-Object { [regex]::Replace($_, '\d+', { param($m) $m.Value.PadLeft(12, '0') }) } | Select-Object -Last 1)
-    } catch { return "" }
-}
+# The version-lookup helpers (Get-ExakitLatestGithubRelease, Get-ExakitLatestPypiVersion,
+# Get-ExakitLatestDockerTag) live in setup\lib\exakit-common.ps1 and are dot-sourced
+# above. The Docker Hub helper there filters tags by host architecture, so update
+# paths select the correct image on ARM machines.
 
 function Test-ExakitVersionNewer {
     param([string]$Latest, [string]$Current)
@@ -311,6 +291,37 @@ function Test-ExakitVersionNewer {
     $lk = [regex]::Replace($Latest.TrimStart("v"), '\d+', { param($m) $m.Value.PadLeft(12, '0') })
     $ck = [regex]::Replace($Current.TrimStart("v"), '\d+', { param($m) $m.Value.PadLeft(12, '0') })
     return ([string]::CompareOrdinal($lk, $ck) -gt 0)
+}
+
+# Assert-ExakitUpdateAllowed - the one go/no-go gate every updater consults
+# before changing anything, using the same comparison the update-check table
+# uses. Returns $true to proceed and $false for a clean no-op (already
+# current). Any verdict that is not a definite "newer" refuses via Fail unless
+# EXAKIT_ALLOW_DOWNGRADE=1, which proceeds with a loud banner. Mirrors
+# exakit_update_guard in setup/lib/common.sh.
+function Assert-ExakitUpdateAllowed {
+    param([string]$Label, [string]$Current, [string]$Latest)
+    if (-not $Current) {
+        Info "Installing $Label $Latest (no installed version recorded)"
+        return $true
+    }
+    if ($Current -eq "unknown") {
+        if ($env:EXAKIT_ALLOW_DOWNGRADE -eq "1") {
+            Warn2 "FORCING $Label to $Latest although the installed version is unknown (EXAKIT_ALLOW_DOWNGRADE=1)"
+            return $true
+        }
+        Fail "Installed $Label version is unknown; refusing to replace it blindly. Re-run with EXAKIT_ALLOW_DOWNGRADE=1 to force $Latest."
+    }
+    if ($Latest -eq $Current) {
+        Ok "$Label is already current ($Current)"
+        return $false
+    }
+    if (Test-ExakitVersionNewer -Latest $Latest -Current $Current) { return $true }
+    if ($env:EXAKIT_ALLOW_DOWNGRADE -eq "1") {
+        Warn2 "DOWNGRADING $Label $Current -> $Latest (EXAKIT_ALLOW_DOWNGRADE=1)"
+        return $true
+    }
+    Fail "$Label $Latest is not newer than the installed $Current; refusing a downgrade or sideways move. Re-run with EXAKIT_ALLOW_DOWNGRADE=1 to force it."
 }
 
 function Get-ExakitComponentCurrent {
@@ -341,6 +352,17 @@ function Get-ExakitComponentCurrent {
 }
 
 function Get-ExakitComponentLatest {
+    param([string]$Component)
+    # Resolve each component's latest version once per run; the update-check
+    # table and the appliers reuse the same answer instead of querying twice.
+    if (-not $script:ExakitLatestCache) { $script:ExakitLatestCache = @{} }
+    if ($script:ExakitLatestCache.ContainsKey($Component)) { return $script:ExakitLatestCache[$Component] }
+    $resolved = Resolve-ExakitComponentLatest -Component $Component
+    if ($resolved) { $script:ExakitLatestCache[$Component] = $resolved }
+    return $resolved
+}
+
+function Resolve-ExakitComponentLatest {
     param([string]$Component)
     switch ($Component) {
         "exakit" { return (Get-ExakitLatestGithubRelease $(if ($env:EXAKIT_KIT_REPO) { $env:EXAKIT_KIT_REPO } elseif ($env:EXAKIT_REPO) { $env:EXAKIT_REPO } else { "exasol-labs/exasol-personal-local-starterkit" })) }
@@ -397,19 +419,29 @@ function Invoke-CmdUpdate {
             "runtime" {
                 if ((Get-RuntimeType) -eq "nano") {
                     $latest = Get-ExakitComponentLatest "nano"
-                    if ($latest) { Update-Nano -LatestTag $latest }
+                    if (-not $latest) { Fail "Could not resolve the latest Exasol Nano image tag." }
+                    $current = Get-ExakitComponentCurrent "nano"
+                    if (Assert-ExakitUpdateAllowed -Label "Exasol Nano" -Current $current -Latest $latest) {
+                        Update-Nano -LatestTag $latest
+                    }
                 }
             }
             "nano" {
                 $latest = Get-ExakitComponentLatest "nano"
-                if ($latest) { Update-Nano -LatestTag $latest }
+                if (-not $latest) { Fail "Could not resolve the latest Exasol Nano image tag." }
+                $current = Get-ExakitComponentCurrent "nano"
+                if (Assert-ExakitUpdateAllowed -Label "Exasol Nano" -Current $current -Latest $latest) {
+                    Update-Nano -LatestTag $latest
+                }
             }
             "personal" {
                 Warn2 "Exasol Personal local deployments are macOS-only in this kit. On Windows this target is reported for catalog parity but cannot be applied."
             }
             "exapump" {
                 $latest = Get-ExakitComponentLatest "exapump"
-                if ($latest) {
+                if (-not $latest) { Fail "Could not resolve the latest exapump release." }
+                $current = Get-ExakitComponentCurrent "exapump"
+                if (Assert-ExakitUpdateAllowed -Label "exapump" -Current $current -Latest $latest) {
                     $script:ExapumpVersion = $latest
                     Remove-Item -Force (Get-ExapumpCli) -ErrorAction SilentlyContinue
                     Install-Exapump
@@ -419,7 +451,9 @@ function Invoke-CmdUpdate {
             }
             "mcp" {
                 $latest = Get-ExakitComponentLatest "mcp"
-                if ($latest) {
+                if (-not $latest) { Fail "Could not resolve the latest exasol-mcp-server version." }
+                $current = Get-ExakitComponentCurrent "mcp"
+                if (Assert-ExakitUpdateAllowed -Label "MCP server" -Current $current -Latest $latest) {
                     New-McpUpdateSnapshot | Out-Null
                     $script:McpVersion = $latest
                     Install-Mcp

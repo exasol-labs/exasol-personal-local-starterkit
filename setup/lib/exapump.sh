@@ -460,10 +460,7 @@ exapump_update() {
     _latest="$(exakit_component_latest exapump)"
     [ -n "$_latest" ] || die "Could not resolve the latest exapump release."
     _current="$(manifest_get components.exapump.version 2>/dev/null || true)"
-    if [ "$_latest" = "$_current" ]; then
-        ok "exapump is already current ($_current)"
-        return 0
-    fi
+    exakit_update_guard "exapump" "$_current" "$_latest" || return 0
     info "Updating exapump ${_current:-unknown} -> $_latest"
     EXAKIT_EXAPUMP_VERSION="$_latest"
     EXAKIT_FORCE_COMPONENT_INSTALL=1

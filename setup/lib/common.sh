@@ -829,6 +829,57 @@ exakit_major_version() {
     printf '%s\n' "$1" | sed -E 's/^v//; s/^([0-9]+).*/\1/'
 }
 
+# exakit_update_guard <label> <current> <latest> — the one go/no-go gate every
+# updater consults before changing anything, using the same comparison the
+# update-check table uses. Returns 0 to proceed and 1 for a clean no-op
+# (already current). Any verdict that is not a definite "newer" refuses via
+# die unless EXAKIT_ALLOW_DOWNGRADE=1, which proceeds with a loud banner.
+# An empty installed version means the component was never recorded (fresh or
+# repaired install) and proceeds; the literal "unknown" means the kit cannot
+# tell what is installed (checkout installs) and refuses to replace it blindly.
+exakit_update_guard() {
+    _guard_label="$1"
+    _guard_current="$2"
+    _guard_latest="$3"
+    if [ -z "$_guard_current" ]; then
+        info "Installing $_guard_label $_guard_latest (no installed version recorded)"
+        return 0
+    fi
+    if [ "$_guard_current" = "unknown" ]; then
+        if [ "${EXAKIT_ALLOW_DOWNGRADE:-0}" = "1" ]; then
+            warn "FORCING $_guard_label to $_guard_latest although the installed version is unknown (EXAKIT_ALLOW_DOWNGRADE=1)"
+            return 0
+        fi
+        die "Installed $_guard_label version is unknown; refusing to replace it blindly. Re-run with EXAKIT_ALLOW_DOWNGRADE=1 to force $_guard_latest."
+    fi
+    if [ "$_guard_latest" = "$_guard_current" ]; then
+        ok "$_guard_label is already current ($_guard_current)"
+        return 1
+    fi
+    if exakit_version_newer "$_guard_latest" "$_guard_current"; then
+        return 0
+    fi
+    if [ "${EXAKIT_ALLOW_DOWNGRADE:-0}" = "1" ]; then
+        warn "DOWNGRADING $_guard_label $_guard_current -> $_guard_latest (EXAKIT_ALLOW_DOWNGRADE=1)"
+        return 0
+    fi
+    die "$_guard_label $_guard_latest is not newer than the installed $_guard_current; refusing a downgrade or sideways move. Re-run with EXAKIT_ALLOW_DOWNGRADE=1 to force it."
+}
+
+# exakit_prime_latest <component> — resolve a component's latest version once
+# per run and export it, so the update-check table and the applier (each
+# reading through command-substitution subshells) reuse one answer instead of
+# querying the network twice. Component names are fixed lowercase words, so
+# the dynamic variable name is safe for eval.
+exakit_prime_latest() {
+    case "$1" in exakit|exapump|mcp|nano|personal) ;; *) return 0 ;; esac
+    eval "_primed=\${EXAKIT_LATEST_$1:-}"
+    [ -n "$_primed" ] && return 0
+    _primed="$(exakit_component_latest "$1" 2>/dev/null || true)"
+    [ -n "$_primed" ] || return 0
+    eval "EXAKIT_LATEST_$1=\"\$_primed\"; export EXAKIT_LATEST_$1"
+}
+
 exakit_resolve_install_versions() {
     [ "${EXAKIT_VERSION_POLICY:-latest}" = "latest" ] || {
         EXAKIT_PERSONAL_VERSION="${EXAKIT_PERSONAL_VERSION:-$EXAKIT_PERSONAL_VERSION_FALLBACK}"
@@ -873,6 +924,16 @@ exakit_resolve_install_versions() {
 }
 
 exakit_component_latest() {
+    case "$1" in
+        exakit|exapump|mcp|nano|personal)
+            # Reuse the answer primed by exakit_prime_latest for this run.
+            eval "_cached_latest=\${EXAKIT_LATEST_$1:-}"
+            if [ -n "$_cached_latest" ]; then
+                printf '%s\n' "$_cached_latest"
+                return 0
+            fi
+            ;;
+    esac
     case "$1" in
         exakit)   exakit_latest_github_release_version "$EXAKIT_KIT_REPO" ;;
         exapump)  exakit_latest_github_release_version "$EXAKIT_EXAPUMP_REPO" ;;
@@ -955,10 +1016,7 @@ exakit_update_self() {
     _latest="$(exakit_component_latest exakit)"
     [ -n "$_latest" ] || die "Could not resolve the latest starter kit release."
     _current="$(exakit_component_current exakit 2>/dev/null || true)"
-    if [ "$_latest" = "$_current" ]; then
-        ok "exakit is already current ($_current)"
-        return 0
-    fi
+    exakit_update_guard "exakit" "$_current" "$_latest" || return 0
     _repo="$EXAKIT_KIT_REPO"
     _kit_dir="$EXAKIT_HOME/kit"
     _tmp="$(mktemp "${TMPDIR:-/tmp}/exakit-kit.XXXXXX")"
@@ -1052,6 +1110,10 @@ exakit_update() {
     _targets="$(exakit_update_targets "$_target")" || die "Unknown update target: $_target"
     exakit_init_logging
     info "Checking updates before applying changes"
+    for _component in $_targets; do
+        _actual="$(exakit_update_actual_target "$_component" 2>/dev/null || printf '%s\n' "$_component")"
+        exakit_prime_latest "$_actual"
+    done
     exakit_print_update_check "$_target"
     for _component in $_targets; do
         exakit_update_component "$_component" "$@"
