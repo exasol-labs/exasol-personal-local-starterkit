@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bank Transactions — Connect &amp; Query · Quick Reference</title>
+<style>
+  :root{
+    --page:#050f24; --sheet:#0A1E3F; --inner:rgba(255,255,255,0.035); --inner-hover:rgba(255,255,255,0.06);
+    --code:#061633; --border:rgba(139,197,63,0.16); --border-soft:rgba(255,255,255,0.07);
+    --green:#8BC53F; --green-dim:rgba(139,197,63,0.14); --amber:#EAC38A; --amber-accent:#F0A93A;
+    --text:#EAF1FB; --muted:#AEBFD8; --dim:#7A8CA8;
+    --kw:#9BD24E; --str:#93C5F0; --num:#EEBE7C;
+    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,system-ui,sans-serif;
+  }
+  *{box-sizing:border-box;}
+  body{margin:0;min-height:100vh;font-family:var(--sans);line-height:1.5;-webkit-font-smoothing:antialiased;
+    color:var(--text);padding:34px 16px 64px;
+    background:radial-gradient(1100px 560px at 50% -12%, rgba(139,197,63,0.07) 0, transparent 62%), linear-gradient(180deg,#08152f 0,#050f24 60%);
+    background-color:var(--page);}
+  .sheet{max-width:780px;margin:0 auto;background:linear-gradient(180deg,#0c2349 0,#0A1E3F 22%);
+    border:1px solid var(--border-soft);border-radius:16px;overflow:hidden;box-shadow:0 30px 80px rgba(0,0,0,.5),0 2px 0 rgba(255,255,255,.03) inset;}
+  .accent{height:3px;background:linear-gradient(90deg,var(--green) 0,rgba(139,197,63,.15) 70%,transparent 100%);}
+  .head{padding:26px 32px 20px;border-bottom:1px solid var(--border);}
+  .eyebrow{display:flex;align-items:center;gap:9px;margin-bottom:9px;}
+  .eyebrow .dot{width:7px;height:7px;background:var(--green);border-radius:2px;box-shadow:0 0 10px rgba(139,197,63,.7);}
+  .eyebrow .txt{font-size:11px;letter-spacing:2px;color:var(--green);text-transform:uppercase;font-weight:600;}
+  h1.title{font-size:25px;font-weight:650;color:#fff;line-height:1.2;margin:0;letter-spacing:-.01em;}
+  .subtitle{font-size:12.5px;color:var(--dim);margin-top:6px;}
+  .body{padding:20px 32px 26px;display:flex;flex-direction:column;gap:15px;}
+  .card{background:var(--inner);border:1px solid var(--border-soft);border-radius:13px;padding:16px 18px;transition:background .15s,border-color .15s;}
+  .card:hover{background:var(--inner-hover);}
+  .card.standout{border-color:rgba(240,169,58,.35);background:rgba(240,169,58,.05);}
+  .card-head{display:flex;align-items:center;gap:11px;margin-bottom:10px;}
+  .badge{flex:none;width:23px;height:23px;border-radius:7px;background:var(--green-dim);color:var(--green);
+    font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;font-family:var(--mono);}
+  .card.standout .badge{background:rgba(240,169,58,.16);color:var(--amber-accent);}
+  .card-title{font-size:13.5px;font-weight:650;color:#EAF1FB;letter-spacing:.2px;}
+  .card.standout .card-title{color:#F6D9AE;}
+  .flag{margin-left:auto;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--amber-accent);
+    border:1px solid rgba(240,169,58,.4);border-radius:999px;padding:2px 9px;}
+  .q{font-size:13px;color:#C6D5EC;font-style:italic;margin:0 0 11px;}
+  .grid{display:grid;grid-template-columns:88px 1fr;gap:7px 16px;font-size:13px;color:#C6D5EC;margin-bottom:13px;}
+  .grid .k{color:var(--dim);}
+  .grid .v{font-family:var(--mono);font-size:12.5px;color:#DCE7F6;}
+  .note{font-size:12.5px;color:var(--muted);line-height:1.65;border-top:1px solid var(--border);padding-top:13px;}
+  /* code block */
+  .code{border:1px solid var(--border-soft);border-radius:9px;overflow:hidden;background:var(--code);margin-top:2px;}
+  .cbar{display:flex;align-items:center;justify-content:space-between;padding:6px 10px 6px 12px;background:rgba(255,255,255,.03);border-bottom:1px solid var(--border-soft);}
+  .lang{font-family:var(--mono);font-size:10.5px;letter-spacing:.5px;text-transform:uppercase;color:var(--dim);}
+  .copy{background:transparent;border:1px solid var(--border);color:var(--green);border-radius:6px;
+    padding:3px 11px;font-size:11px;font-weight:600;cursor:pointer;font-family:var(--sans);transition:background .12s,color .12s;}
+  .copy:hover{background:var(--green-dim);}
+  .copy.done{background:var(--green);color:#06152f;border-color:var(--green);}
+  pre.src{margin:0;padding:12px 14px;font-family:var(--mono);font-size:12px;line-height:1.6;color:#D6E2F2;overflow-x:auto;white-space:pre;}
+  pre.src.cmd{color:var(--green);font-size:12.5px;padding:10px 14px;}
+  pre.src .k{color:var(--kw);font-weight:600;}
+  pre.src .s{color:var(--str);}
+  pre.src .n{color:var(--num);}
+  .note .code{margin-top:8px;}
+  .foot{padding:8px 32px 26px;}
+  .fallback{display:flex;gap:10px;align-items:flex-start;background:var(--green-dim);border:1px solid var(--border);border-radius:10px;padding:12px 15px;font-size:12.5px;color:var(--text);}
+  .fallback .fdot{flex:none;color:var(--green);font-weight:700;}
+  .fallback b{color:var(--green);font-weight:600;}
+  .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(16px);background:var(--green);color:#06152f;
+    padding:9px 20px;border-radius:999px;font-size:13px;font-weight:650;opacity:0;transition:opacity .2s,transform .2s;pointer-events:none;box-shadow:0 8px 24px rgba(0,0,0,.4);}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
+  @media (max-width:560px){.head,.body,.foot{padding-left:18px;padding-right:18px;}.grid{grid-template-columns:76px 1fr;}}
+  @media (prefers-reduced-motion: reduce){*{transition:none!important;}}
+</style>
+</head>
+<body>
+<main class="sheet">
+  <div class="accent"></div>
+  <div class="head">
+    <div class="eyebrow"><span class="dot"></span><span class="txt">Quick reference</span></div>
+    <h1 class="title">Bank Transactions — Connect &amp; Query</h1>
+    <div class="subtitle">Exasol Personal · Local Starter Kit workshop</div>
+  </div>
+
+  <div class="body">
+    <!-- Connect -->
+    <div class="card">
+      <div class="card-head"><span class="badge">1</span><span class="card-title">Connect DBeaver</span></div>
+      <div class="grid">
+        <span class="k">Driver</span><span class="v">Exasol</span>
+        <span class="k">Host</span><span class="v">127.0.0.1</span>
+        <span class="k">Port</span><span class="v">8563</span>
+        <span class="k">User</span><span class="v">sys</span>
+        <span class="k">Password</span><span>your own — get it locally (see below)</span>
+        <span class="k">SSL</span><span>enabled · disable cert validation (self-signed)</span>
+      </div>
+      <div class="note">
+        Your password is generated locally on install and never shared. Get yours with:
+        <div class="code"><div class="cbar"><span class="lang">shell</span><button class="copy" type="button">Copy</button></div><pre class="src cmd">exakit info</pre></div>
+        <div style="margin-top:10px;">then read the file it points to, for example:</div>
+        <div class="code"><div class="cbar"><span class="lang">shell</span><button class="copy" type="button">Copy</button></div><pre class="src cmd">cat ~/.exasol-starter-kit/credentials/personal_sys_password</pre></div>
+      </div>
+    </div>
+
+    <!-- 2 Risk -->
+    <div class="card">
+      <div class="card-head"><span class="badge">2</span><span class="card-title">Risk score</span></div>
+      <p class="q">"Identify potentially fraudulent transactions based on amount, login attempts, and duration."</p>
+      <div class="code"><div class="cbar"><span class="lang">SQL</span><button class="copy" type="button">Copy</button></div><pre class="src">SELECT "AccountID", "TransactionID", "TransactionAmount",
+       CAST("LoginAttempts" AS DECIMAL) AS "LOGIN_ATTEMPTS",
+       "TransactionDuration", "Channel", "TransactionDate",
+       (CASE WHEN "TransactionAmount" &gt;= 881 THEN 1 ELSE 0 END
+      + CASE WHEN CAST("LoginAttempts" AS DECIMAL) &gt;= 4 THEN 1 ELSE 0 END
+      + CASE WHEN "TransactionDuration" &gt;= 260 THEN 1 ELSE 0 END) AS "RISK_FLAGS"
+FROM "STARTER_KIT"."BANK_TRANSACTIONS_DATA"
+WHERE (CASE WHEN "TransactionAmount" &gt;= 881 THEN 1 ELSE 0 END
+     + CASE WHEN CAST("LoginAttempts" AS DECIMAL) &gt;= 4 THEN 1 ELSE 0 END
+     + CASE WHEN "TransactionDuration" &gt;= 260 THEN 1 ELSE 0 END) &gt;= 2
+ORDER BY "RISK_FLAGS" DESC, "TransactionAmount" DESC;</pre></div>
+    </div>
+
+    <!-- 3 Top locations -->
+    <div class="card">
+      <div class="card-head"><span class="badge">3</span><span class="card-title">Top locations</span></div>
+      <p class="q">"Show the top 5 locations by total transaction volume."</p>
+      <div class="code"><div class="cbar"><span class="lang">SQL</span><button class="copy" type="button">Copy</button></div><pre class="src">SELECT "Location", COUNT(*) AS "TXN_COUNT",
+       ROUND(SUM("TransactionAmount"), 2) AS "TOTAL_VALUE"
+FROM "STARTER_KIT"."BANK_TRANSACTIONS_DATA"
+GROUP BY "Location"
+ORDER BY "TOTAL_VALUE" DESC
+LIMIT 5;</pre></div>
+    </div>
+
+    <!-- 4 Channel value -->
+    <div class="card">
+      <div class="card-head"><span class="badge">4</span><span class="card-title">Channel value</span></div>
+      <p class="q">"Which transaction channels generate the highest transaction value?"</p>
+      <div class="code"><div class="cbar"><span class="lang">SQL</span><button class="copy" type="button">Copy</button></div><pre class="src">SELECT "Channel", COUNT(*) AS "TXN_COUNT",
+       ROUND(SUM("TransactionAmount"),2) AS "TOTAL_VALUE",
+       ROUND(AVG("TransactionAmount"),2) AS "AVG_VALUE"
+FROM "STARTER_KIT"."BANK_TRANSACTIONS_DATA"
+GROUP BY "Channel"
+ORDER BY "TOTAL_VALUE" DESC;</pre></div>
+    </div>
+
+    <!-- 5 Spend by occupation -->
+    <div class="card">
+      <div class="card-head"><span class="badge">5</span><span class="card-title">Spend by occupation</span></div>
+      <p class="q">"Which customer occupations have the highest average transaction amount?"</p>
+      <div class="code"><div class="cbar"><span class="lang">SQL</span><button class="copy" type="button">Copy</button></div><pre class="src">SELECT "CustomerOccupation", COUNT(*) AS "TXN_COUNT",
+       ROUND(AVG("TransactionAmount"),2) AS "AVG_AMOUNT"
+FROM "STARTER_KIT"."BANK_TRANSACTIONS_DATA"
+GROUP BY "CustomerOccupation"
+ORDER BY "AVG_AMOUNT" DESC;</pre></div>
+    </div>
+
+    <!-- 6 Schema -->
+    <div class="card">
+      <div class="card-head"><span class="badge">6</span><span class="card-title">Schema lookup</span></div>
+      <p class="q">"Show the schema of the transactions table."</p>
+      <div class="code"><div class="cbar"><span class="lang">SQL</span><button class="copy" type="button">Copy</button></div><pre class="src">DESCRIBE "STARTER_KIT"."BANK_TRANSACTIONS_DATA";</pre></div>
+    </div>
+  </div>
+</main>
+<div class="toast" id="toast">Copied</div>
+
+<script>
+  // Light SQL highlighting. Operates on the escaped source; copy still reads the
+  // raw textContent, so highlighting never affects what gets copied.
+  function esc(s){ return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+  const TOKEN = /("(?:[^"])*")|(\b(?:SELECT|FROM|WHERE|GROUP|BY|ORDER|LIMIT|CASE|WHEN|THEN|ELSE|END|AS|AND|OR|NOT|NULL|IS|IN|ON|CAST|DECIMAL|DESC|ASC|DESCRIBE|COUNT|SUM|AVG|ROUND|MAX|MIN)\b)|(\b\d+(?:\.\d+)?\b)/g;
+  document.querySelectorAll("pre.src:not(.cmd)").forEach(pre => {
+    const raw = pre.textContent;
+    pre.innerHTML = esc(raw).replace(TOKEN, (m, str, kw, num) =>
+      str !== undefined ? '<span class="s">'+str+'</span>'
+      : kw !== undefined ? '<span class="k">'+kw+'</span>'
+      : '<span class="n">'+num+'</span>');
+  });
+
+  const toast = document.getElementById("toast"); let tt;
+  function showToast(m){ toast.textContent=m; toast.classList.add("show"); clearTimeout(tt); tt=setTimeout(()=>toast.classList.remove("show"),1500); }
+  document.querySelectorAll(".copy").forEach(btn => {
+    btn.addEventListener("click", () => {
+      const pre = btn.closest(".code").querySelector("pre.src");
+      navigator.clipboard.writeText(pre ? pre.textContent : "").then(() => {
+        btn.classList.add("done"); const t=btn.textContent; btn.textContent="Copied ✓"; showToast("Copied to clipboard");
+        setTimeout(() => { btn.classList.remove("done"); btn.textContent=t; }, 1300);
+      }).catch(() => showToast("Copy failed — select the text manually"));
+    });
+  });
+</script>
+</body>
+</html>
