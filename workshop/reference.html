@@ -3,186 +3,326 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Bank Transactions — Connect &amp; Query · Quick Reference</title>
+<title>TPC-H · Connect &amp; Query — Exasol Personal Workshop</title>
 <style>
   :root{
-    --page:#050f24; --sheet:#0A1E3F; --inner:rgba(255,255,255,0.035); --inner-hover:rgba(255,255,255,0.06);
-    --code:#061633; --border:rgba(139,197,63,0.16); --border-soft:rgba(255,255,255,0.07);
-    --green:#8BC53F; --green-dim:rgba(139,197,63,0.14); --amber:#EAC38A; --amber-accent:#F0A93A;
-    --text:#EAF1FB; --muted:#AEBFD8; --dim:#7A8CA8;
-    --kw:#9BD24E; --str:#93C5F0; --num:#EEBE7C;
-    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace;
-    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,system-ui,sans-serif;
+    --ink:#06172e; --navy:#0A1E3F; --navy-lift:#0e2551;
+    --panel:rgba(255,255,255,.038); --panel-2:rgba(255,255,255,.055);
+    --line:rgba(150,172,210,.14); --line-strong:rgba(150,172,210,.24); --line-green:rgba(139,197,63,.26);
+    --code:#071b3a; --green:#8BC53F; --green-br:#A9E255; --teal:#4FD1C5;
+    --text:#EEF4FC; --text-2:#D6E2F2; --muted:#A6B8D6; --dim:#8A9CC0;
+    --amber:#F0C078; --idblue:#8FC7F7; --on-accent:#06172e;
+    --sans:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",Roboto,Helvetica,Arial,system-ui,sans-serif;
+    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,"JetBrains Mono",Consolas,"Liberation Mono",monospace;
+    --maxw:1180px;
   }
   *{box-sizing:border-box;}
-  body{margin:0;min-height:100vh;font-family:var(--sans);line-height:1.5;-webkit-font-smoothing:antialiased;
-    color:var(--text);padding:34px 16px 64px;
-    background:radial-gradient(1100px 560px at 50% -12%, rgba(139,197,63,0.07) 0, transparent 62%), linear-gradient(180deg,#08152f 0,#050f24 60%);
-    background-color:var(--page);}
-  .sheet{max-width:780px;margin:0 auto;background:linear-gradient(180deg,#0c2349 0,#0A1E3F 22%);
-    border:1px solid var(--border-soft);border-radius:16px;overflow:hidden;box-shadow:0 30px 80px rgba(0,0,0,.5),0 2px 0 rgba(255,255,255,.03) inset;}
-  .accent{height:3px;background:linear-gradient(90deg,var(--green) 0,rgba(139,197,63,.15) 70%,transparent 100%);}
-  .head{padding:26px 32px 20px;border-bottom:1px solid var(--border);}
-  .eyebrow{display:flex;align-items:center;gap:9px;margin-bottom:9px;}
-  .eyebrow .dot{width:7px;height:7px;background:var(--green);border-radius:2px;box-shadow:0 0 10px rgba(139,197,63,.7);}
-  .eyebrow .txt{font-size:11px;letter-spacing:2px;color:var(--green);text-transform:uppercase;font-weight:600;}
-  h1.title{font-size:25px;font-weight:650;color:#fff;line-height:1.2;margin:0;letter-spacing:-.01em;}
-  .subtitle{font-size:12.5px;color:var(--dim);margin-top:6px;}
-  .body{padding:20px 32px 26px;display:flex;flex-direction:column;gap:15px;}
-  .card{background:var(--inner);border:1px solid var(--border-soft);border-radius:13px;padding:16px 18px;transition:background .15s,border-color .15s;}
-  .card:hover{background:var(--inner-hover);}
-  .card.standout{border-color:rgba(240,169,58,.35);background:rgba(240,169,58,.05);}
-  .card-head{display:flex;align-items:center;gap:11px;margin-bottom:10px;}
-  .badge{flex:none;width:23px;height:23px;border-radius:7px;background:var(--green-dim);color:var(--green);
-    font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center;font-family:var(--mono);}
-  .card.standout .badge{background:rgba(240,169,58,.16);color:var(--amber-accent);}
-  .card-title{font-size:13.5px;font-weight:650;color:#EAF1FB;letter-spacing:.2px;}
-  .card.standout .card-title{color:#F6D9AE;}
-  .flag{margin-left:auto;font-size:10px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--amber-accent);
-    border:1px solid rgba(240,169,58,.4);border-radius:999px;padding:2px 9px;}
-  .q{font-size:13px;color:#C6D5EC;font-style:italic;margin:0 0 11px;}
-  .grid{display:grid;grid-template-columns:88px 1fr;gap:7px 16px;font-size:13px;color:#C6D5EC;margin-bottom:13px;}
-  .grid .k{color:var(--dim);}
-  .grid .v{font-family:var(--mono);font-size:12.5px;color:#DCE7F6;}
-  .note{font-size:12.5px;color:var(--muted);line-height:1.65;border-top:1px solid var(--border);padding-top:13px;}
+  html{scroll-behavior:smooth;}
+  body{margin:0;min-height:100vh;color:var(--text);background:var(--ink);font-family:var(--sans);
+    line-height:1.55;-webkit-font-smoothing:antialiased;position:relative;overflow-x:hidden;}
+
+  /* ambient data-console ground */
+  .bg{position:fixed;inset:0;z-index:-2;background:
+    radial-gradient(1000px 680px at 88% -10%, rgba(139,197,63,.15), transparent 58%),
+    radial-gradient(820px 620px at 4% 112%, rgba(79,209,197,.12), transparent 58%),
+    linear-gradient(180deg,#0a2043 0,#06172e 60%);}
+  .bg::after{content:"";position:absolute;inset:0;opacity:.4;
+    background-image:linear-gradient(rgba(150,172,210,.05) 1px,transparent 1px),linear-gradient(90deg,rgba(150,172,210,.05) 1px,transparent 1px);
+    background-size:56px 56px;mask-image:radial-gradient(1300px 760px at 50% 4%,#000 0,transparent 76%);}
+
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 clamp(18px,4vw,48px);}
+
+  /* top bar */
+  .topbar{display:flex;align-items:center;justify-content:space-between;padding:24px 0 4px;}
+  .mark{display:flex;align-items:center;gap:11px;font-weight:700;letter-spacing:.4px;font-size:15px;}
+  .mark .sq{width:12px;height:12px;border-radius:3px;background:var(--green);box-shadow:0 0 18px rgba(139,197,63,.7);}
+  .mark small{color:var(--dim);font-weight:600;}
+  .tag{font-family:var(--mono);font-size:10.5px;letter-spacing:1.5px;text-transform:uppercase;color:var(--green);
+    border:1px solid var(--line-green);border-radius:999px;padding:6px 13px;background:rgba(139,197,63,.06);}
+
+  /* hero */
+  .hero{display:grid;grid-template-columns:1.35fr .95fr;gap:clamp(24px,4vw,56px);align-items:center;
+    padding:clamp(38px,6vw,80px) 0 clamp(24px,3vw,36px);}
+  .hero-copy{opacity:0;transform:translateY(16px);animation:rise .7s cubic-bezier(.2,.7,.2,1) .05s forwards;}
+  .eyebrow{display:inline-flex;align-items:center;gap:10px;font-family:var(--mono);font-size:11.5px;letter-spacing:2px;
+    text-transform:uppercase;color:var(--green);margin-bottom:22px;}
+  .eyebrow .ln{width:32px;height:1px;background:linear-gradient(90deg,var(--green),transparent);}
+  h1{font-size:clamp(36px,6.4vw,68px);line-height:1.03;letter-spacing:-.025em;font-weight:800;margin:0 0 20px;text-wrap:balance;}
+  h1 .grad{color:var(--green-br);background:linear-gradient(100deg,var(--green-br),var(--green) 45%,var(--teal));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;}
+  .lede{font-size:clamp(15px,1.5vw,18px);color:var(--muted);max-width:52ch;margin:0;}
+
+  /* hero schema panel — the subject's own artifact */
+  .schema{background:linear-gradient(180deg,var(--panel-2),rgba(255,255,255,.02));border:1px solid var(--line-strong);
+    border-radius:16px;padding:18px 18px 16px;opacity:0;transform:translateY(16px);animation:rise .7s cubic-bezier(.2,.7,.2,1) .16s forwards;}
+  .schema-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;}
+  .schema-h .t{font-family:var(--mono);font-size:11px;letter-spacing:1.4px;text-transform:uppercase;color:var(--dim);}
+  .schema-h .b{font-family:var(--mono);font-size:10.5px;color:var(--teal);border:1px solid rgba(79,209,197,.28);border-radius:6px;padding:3px 8px;}
+  .tbl{display:grid;grid-template-columns:16px 1fr;gap:0 11px;align-items:start;position:relative;padding:9px 0;}
+  .tbl + .tbl{border-top:1px solid var(--line);}
+  .tbl .node{width:9px;height:9px;border-radius:2px;background:var(--green);margin-top:5px;box-shadow:0 0 10px rgba(139,197,63,.5);}
+  .tbl .name{font-family:var(--mono);font-size:13px;color:var(--text);font-weight:600;}
+  .tbl .cols{font-family:var(--mono);font-size:11px;color:#93A6C7;margin-top:2px;line-height:1.5;}
+  .tbl .role{font-family:var(--sans);font-size:11px;color:var(--muted);}
+
+  /* section head */
+  .sec{display:flex;align-items:center;gap:14px;margin:clamp(24px,3vw,40px) 0 18px;}
+  .sec h2{font-size:clamp(19px,2.3vw,26px);font-weight:750;letter-spacing:-.01em;margin:0;}
+  .sec .hint{font-family:var(--mono);font-size:11.5px;color:var(--dim);}
+  .sec .rule{flex:1;height:1px;background:linear-gradient(90deg,var(--line-strong),transparent);}
+
+  /* card base + reveal */
+  .card{background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.018));border:1px solid var(--line);
+    border-radius:18px;padding:clamp(18px,2.2vw,26px);position:relative;overflow:hidden;
+    opacity:0;transform:translateY(18px);animation:rise .7s cubic-bezier(.2,.7,.2,1) forwards;}
+  .card::before{content:"";position:absolute;inset:0;border-radius:18px;padding:1px;pointer-events:none;opacity:0;transition:opacity .3s;
+    background:linear-gradient(120deg,rgba(139,197,63,.4),transparent 42%);
+    -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;}
+  .card:hover::before{opacity:1;}
+  @keyframes rise{to{opacity:1;transform:none;}}
+
+  /* connect */
+  .connect{display:grid;grid-template-columns:1.05fr 1fr;gap:clamp(16px,2.4vw,30px);}
+  .conn-main,.conn-side,.code,.schema{min-width:0;}
+  .kv .v{overflow-wrap:anywhere;}
+  .conn-title{display:flex;align-items:center;gap:11px;margin-bottom:16px;}
+  .conn-title .ic{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;background:rgba(139,197,63,.12);color:var(--green);}
+  .conn-title h3{font-size:15px;font-weight:700;margin:0;}
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:11px 22px;font-size:14px;}
+  .kv .k{font-family:var(--mono);font-size:12px;letter-spacing:.4px;color:var(--dim);text-transform:uppercase;}
+  .kv .v{font-family:var(--mono);font-size:13px;color:var(--text-2);} .kv .v.free{font-family:var(--sans);color:var(--muted);}
+  .conn-side .lead{font-size:13px;color:var(--muted);margin:0 0 10px;}
+  .conn-side .lead + .code{margin-bottom:13px;}
+
+  /* more ways to connect */
+  .ways{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;}
+  .way{display:flex;flex-direction:column;background:linear-gradient(180deg,rgba(255,255,255,.045),rgba(255,255,255,.015));
+    border:1px solid var(--line);border-radius:16px;padding:18px 18px 20px;transition:border-color .2s,transform .2s;}
+  .way:hover{border-color:var(--line-green);transform:translateY(-2px);}
+  .way-h{display:flex;align-items:center;gap:9px;margin-bottom:12px;}
+  .wic{width:31px;height:31px;border-radius:9px;display:grid;place-items:center;background:rgba(255,255,255,.05);color:var(--muted);border:1px solid var(--line);}
+  .kick{font-family:var(--mono);font-size:10px;letter-spacing:1.3px;text-transform:uppercase;font-weight:600;}
+  .kick-gui{color:var(--green);} .kick-py{color:var(--teal);} .kick-term{color:var(--amber);}
+  .way .nm{font-size:17px;font-weight:700;letter-spacing:-.01em;margin-bottom:6px;}
+  .way .desc{font-size:13px;color:var(--muted);margin:0 0 14px;line-height:1.55;}
+  .way .code{margin-top:auto;}
+
   /* code block */
-  .code{border:1px solid var(--border-soft);border-radius:9px;overflow:hidden;background:var(--code);margin-top:2px;}
-  .cbar{display:flex;align-items:center;justify-content:space-between;padding:6px 10px 6px 12px;background:rgba(255,255,255,.03);border-bottom:1px solid var(--border-soft);}
-  .lang{font-family:var(--mono);font-size:10.5px;letter-spacing:.5px;text-transform:uppercase;color:var(--dim);}
-  .copy{background:transparent;border:1px solid var(--border);color:var(--green);border-radius:6px;
-    padding:3px 11px;font-size:11px;font-weight:600;cursor:pointer;font-family:var(--sans);transition:background .12s,color .12s;}
-  .copy:hover{background:var(--green-dim);}
-  .copy.done{background:var(--green);color:#06152f;border-color:var(--green);}
-  pre.src{margin:0;padding:12px 14px;font-family:var(--mono);font-size:12px;line-height:1.6;color:#D6E2F2;overflow-x:auto;white-space:pre;}
-  pre.src.cmd{color:var(--green);font-size:12.5px;padding:10px 14px;}
-  pre.src .k{color:var(--kw);font-weight:600;}
-  pre.src .s{color:var(--str);}
-  pre.src .n{color:var(--num);}
-  .note .code{margin-top:8px;}
-  .foot{padding:8px 32px 26px;}
-  .fallback{display:flex;gap:10px;align-items:flex-start;background:var(--green-dim);border:1px solid var(--border);border-radius:10px;padding:12px 15px;font-size:12.5px;color:var(--text);}
-  .fallback .fdot{flex:none;color:var(--green);font-weight:700;}
-  .fallback b{color:var(--green);font-weight:600;}
-  .toast{position:fixed;bottom:24px;left:50%;transform:translateX(-50%) translateY(16px);background:var(--green);color:#06152f;
-    padding:9px 20px;border-radius:999px;font-size:13px;font-weight:650;opacity:0;transition:opacity .2s,transform .2s;pointer-events:none;box-shadow:0 8px 24px rgba(0,0,0,.4);}
+  .code{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--code);}
+  .cbar{display:flex;align-items:center;justify-content:space-between;padding:8px 10px 8px 14px;background:rgba(255,255,255,.03);border-bottom:1px solid var(--line);}
+  .lang{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:10.5px;letter-spacing:.9px;text-transform:uppercase;color:var(--dim);}
+  .lang .d{width:6px;height:6px;border-radius:50%;background:var(--green);opacity:.85;}
+  .copy{display:inline-flex;align-items:center;gap:6px;background:transparent;border:1px solid var(--line-green);color:var(--green);
+    border-radius:8px;padding:5px 13px;font-size:11.5px;font-weight:600;cursor:pointer;font-family:var(--sans);transition:.14s;}
+  .copy:hover{background:rgba(139,197,63,.14);} .copy:focus-visible{outline:2px solid var(--green);outline-offset:2px;}
+  .copy.done{background:var(--green);color:var(--on-accent);border-color:var(--green);}
+  pre.src{margin:0;padding:14px 16px;font-family:var(--mono);font-size:12.5px;line-height:1.68;color:var(--text-2);overflow-x:auto;max-width:100%;white-space:pre;}
+  pre.src.cmd{color:var(--green);padding:12px 16px;}
+  pre.src .k{color:var(--green-br);font-weight:600;} pre.src .s{color:var(--idblue);} pre.src .n{color:var(--amber);}
+
+  /* personas */
+  .list{display:flex;flex-direction:column;gap:16px;}
+  .persona{display:grid;grid-template-columns:340px minmax(0,620px);gap:clamp(16px,2.6vw,34px);align-items:center;}
+  .p-icon{width:46px;height:46px;border-radius:13px;display:grid;place-items:center;background:rgba(139,197,63,.12);
+    color:var(--green);border:1px solid var(--line-green);margin-bottom:15px;}
+  .p-role{font-size:20px;font-weight:750;letter-spacing:-.01em;margin:0 0 5px;}
+  .p-what{font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:.9px;text-transform:uppercase;color:var(--teal);margin-bottom:13px;}
+  .p-q{font-size:14.5px;color:var(--text-2);font-style:italic;margin:0 0 16px;line-height:1.5;}
+  .lineage{display:flex;flex-wrap:wrap;align-items:center;gap:6px;}
+  .lineage .lbl{font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--dim);margin-right:3px;}
+  .chip{font-family:var(--mono);font-size:11px;color:var(--text-2);background:rgba(79,209,197,.09);border:1px solid rgba(79,209,197,.25);border-radius:6px;padding:3px 9px;}
+  .arw{color:var(--dim);font-size:11px;}
+  .p-code{min-width:0;}
+
+  footer{border-top:1px solid var(--line);margin-top:clamp(34px,5vw,60px);padding:24px 0 46px;
+    display:flex;flex-wrap:wrap;gap:12px;justify-content:space-between;align-items:center;color:var(--dim);font-size:12.5px;}
+  footer .mark{font-size:13px;}
+
+  .toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%) translateY(16px);background:var(--green);color:var(--on-accent);
+    padding:10px 22px;border-radius:999px;font-size:13px;font-weight:700;opacity:0;transition:.2s;pointer-events:none;box-shadow:0 12px 34px rgba(0,0,0,.5);z-index:20;}
   .toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
-  @media (max-width:560px){.head,.body,.foot{padding-left:18px;padding-right:18px;}.grid{grid-template-columns:76px 1fr;}}
-  @media (prefers-reduced-motion: reduce){*{transition:none!important;}}
+
+  a{color:var(--green);} :focus-visible{outline:2px solid var(--green);outline-offset:2px;}
+
+  @media (max-width:560px){ .topbar{flex-wrap:wrap;gap:6px 10px;} .tag{font-size:9.5px;letter-spacing:1px;padding:5px 10px;} }
+  @media (max-width:940px){ .hero{grid-template-columns:1fr;gap:28px;} .connect{grid-template-columns:1fr;} }
+  @media (max-width:760px){
+    .persona{grid-template-columns:1fr;gap:14px;}
+    .p-meta{display:flex;flex-wrap:wrap;align-items:center;gap:9px 13px;}
+    .p-icon{margin-bottom:0;} .p-what{margin-bottom:0;} .p-q{flex-basis:100%;margin:2px 0 0;} .lineage{flex-basis:100%;}
+  }
+  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;}.card,.hero-copy,.schema{opacity:1;transform:none;}}
 </style>
 </head>
 <body>
-<main class="sheet">
-  <div class="accent"></div>
-  <div class="head">
-    <div class="eyebrow"><span class="dot"></span><span class="txt">Quick reference</span></div>
-    <h1 class="title">Bank Transactions — Connect &amp; Query</h1>
-    <div class="subtitle">Exasol Personal · Local Starter Kit workshop</div>
+<div class="bg"></div>
+<div class="wrap">
+
+  <div class="topbar">
+    <div class="mark"><span class="sq"></span>EXASOL <small>· Personal</small></div>
+    <span class="tag">Local Starter Kit · Workshop</span>
   </div>
 
-  <div class="body">
-    <!-- Connect -->
-    <div class="card">
-      <div class="card-head"><span class="badge">1</span><span class="card-title">Connect DBeaver</span></div>
-      <div class="grid">
+  <!-- HERO -->
+  <header class="hero">
+    <div class="hero-copy">
+      <div class="eyebrow"><span class="ln"></span>Quick reference · TPC-H</div>
+      <h1>Connect once.<br><span class="grad">Query by role.</span></h1>
+      <p class="lede">Point DBeaver at your local Exasol and explore TPC-H, the classic decision-support benchmark. One dataset, three lenses. Copy the SQL, run it, see the answer.</p>
+    </div>
+    <div class="schema" role="group" aria-label="TPC-H tables used in this workshop">
+      <div class="schema-h"><span class="t">TPCH · schema</span><span class="b">4 tables</span></div>
+      <div class="tbl"><span class="node"></span><span><span class="name">REGION</span> &nbsp;<span class="role">geography</span><div class="cols">R_REGIONKEY · R_NAME</div></span></div>
+      <div class="tbl"><span class="node"></span><span><span class="name">NATION</span> &nbsp;<span class="role">geography</span><div class="cols">N_NATIONKEY · N_NAME · N_REGIONKEY</div></span></div>
+      <div class="tbl"><span class="node"></span><span><span class="name">CUSTOMER</span> &nbsp;<span class="role">who</span><div class="cols">C_CUSTKEY · C_MKTSEGMENT · C_NATIONKEY</div></span></div>
+      <div class="tbl"><span class="node"></span><span><span class="name">ORDERS</span> &nbsp;<span class="role">what</span><div class="cols">O_ORDERKEY · O_CUSTKEY · O_TOTALPRICE</div></span></div>
+    </div>
+  </header>
+
+  <!-- CONNECT -->
+  <div class="sec"><h2>Connect</h2><span class="hint">local · self-signed TLS</span><span class="rule"></span></div>
+  <div class="card connect" style="animation-delay:.05s">
+    <div class="conn-main">
+      <div class="conn-title"><span class="ic"><svg aria-hidden="true" focusable="false" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg></span><h3>Connection details</h3></div>
+      <div class="kv">
         <span class="k">Driver</span><span class="v">Exasol</span>
         <span class="k">Host</span><span class="v">127.0.0.1</span>
         <span class="k">Port</span><span class="v">8563</span>
         <span class="k">User</span><span class="v">sys</span>
-        <span class="k">Password</span><span>your own — get it locally (see below)</span>
-        <span class="k">SSL</span><span>enabled · disable cert validation (self-signed)</span>
-      </div>
-      <div class="note">
-        Your password is generated locally on install and never shared. Get yours with:
-        <div class="code"><div class="cbar"><span class="lang">shell</span><button class="copy" type="button">Copy</button></div><pre class="src cmd">exakit info</pre></div>
-        <div style="margin-top:10px;">then read the file it points to, for example:</div>
-        <div class="code"><div class="cbar"><span class="lang">shell</span><button class="copy" type="button">Copy</button></div><pre class="src cmd">cat ~/.exasol-starter-kit/credentials/personal_sys_password</pre></div>
+        <span class="k">Password</span><span class="v free">your own — get it locally →</span>
+        <span class="k">SSL</span><span class="v free">enabled · disable cert validation (self-signed)</span>
       </div>
     </div>
-
-    <!-- 2 Risk -->
-    <div class="card">
-      <div class="card-head"><span class="badge">2</span><span class="card-title">Risk score</span></div>
-      <p class="q">"Identify potentially fraudulent transactions based on amount, login attempts, and duration."</p>
-      <div class="code"><div class="cbar"><span class="lang">SQL</span><button class="copy" type="button">Copy</button></div><pre class="src">SELECT "AccountID", "TransactionID", "TransactionAmount",
-       CAST("LoginAttempts" AS DECIMAL) AS "LOGIN_ATTEMPTS",
-       "TransactionDuration", "Channel", "TransactionDate",
-       (CASE WHEN "TransactionAmount" &gt;= 881 THEN 1 ELSE 0 END
-      + CASE WHEN CAST("LoginAttempts" AS DECIMAL) &gt;= 4 THEN 1 ELSE 0 END
-      + CASE WHEN "TransactionDuration" &gt;= 260 THEN 1 ELSE 0 END) AS "RISK_FLAGS"
-FROM "STARTER_KIT"."BANK_TRANSACTIONS_DATA"
-WHERE (CASE WHEN "TransactionAmount" &gt;= 881 THEN 1 ELSE 0 END
-     + CASE WHEN CAST("LoginAttempts" AS DECIMAL) &gt;= 4 THEN 1 ELSE 0 END
-     + CASE WHEN "TransactionDuration" &gt;= 260 THEN 1 ELSE 0 END) &gt;= 2
-ORDER BY "RISK_FLAGS" DESC, "TransactionAmount" DESC;</pre></div>
-    </div>
-
-    <!-- 3 Top locations -->
-    <div class="card">
-      <div class="card-head"><span class="badge">3</span><span class="card-title">Top locations</span></div>
-      <p class="q">"Show the top 5 locations by total transaction volume."</p>
-      <div class="code"><div class="cbar"><span class="lang">SQL</span><button class="copy" type="button">Copy</button></div><pre class="src">SELECT "Location", COUNT(*) AS "TXN_COUNT",
-       ROUND(SUM("TransactionAmount"), 2) AS "TOTAL_VALUE"
-FROM "STARTER_KIT"."BANK_TRANSACTIONS_DATA"
-GROUP BY "Location"
-ORDER BY "TOTAL_VALUE" DESC
-LIMIT 5;</pre></div>
-    </div>
-
-    <!-- 4 Channel value -->
-    <div class="card">
-      <div class="card-head"><span class="badge">4</span><span class="card-title">Channel value</span></div>
-      <p class="q">"Which transaction channels generate the highest transaction value?"</p>
-      <div class="code"><div class="cbar"><span class="lang">SQL</span><button class="copy" type="button">Copy</button></div><pre class="src">SELECT "Channel", COUNT(*) AS "TXN_COUNT",
-       ROUND(SUM("TransactionAmount"),2) AS "TOTAL_VALUE",
-       ROUND(AVG("TransactionAmount"),2) AS "AVG_VALUE"
-FROM "STARTER_KIT"."BANK_TRANSACTIONS_DATA"
-GROUP BY "Channel"
-ORDER BY "TOTAL_VALUE" DESC;</pre></div>
-    </div>
-
-    <!-- 5 Spend by occupation -->
-    <div class="card">
-      <div class="card-head"><span class="badge">5</span><span class="card-title">Spend by occupation</span></div>
-      <p class="q">"Which customer occupations have the highest average transaction amount?"</p>
-      <div class="code"><div class="cbar"><span class="lang">SQL</span><button class="copy" type="button">Copy</button></div><pre class="src">SELECT "CustomerOccupation", COUNT(*) AS "TXN_COUNT",
-       ROUND(AVG("TransactionAmount"),2) AS "AVG_AMOUNT"
-FROM "STARTER_KIT"."BANK_TRANSACTIONS_DATA"
-GROUP BY "CustomerOccupation"
-ORDER BY "AVG_AMOUNT" DESC;</pre></div>
-    </div>
-
-    <!-- 6 Schema -->
-    <div class="card">
-      <div class="card-head"><span class="badge">6</span><span class="card-title">Schema lookup</span></div>
-      <p class="q">"Show the schema of the transactions table."</p>
-      <div class="code"><div class="cbar"><span class="lang">SQL</span><button class="copy" type="button">Copy</button></div><pre class="src">DESCRIBE "STARTER_KIT"."BANK_TRANSACTIONS_DATA";</pre></div>
+    <div class="conn-side">
+      <p class="lead">Your password is generated locally on install and never shared. Get yours with:</p>
+      <div class="code"><div class="cbar"><span class="lang"><span class="d"></span>shell</span><button class="copy" type="button">Copy</button></div><pre class="src cmd">exakit info</pre></div>
+      <p class="lead">then read the file it points to, for example:</p>
+      <div class="code"><div class="cbar"><span class="lang"><span class="d"></span>shell</span><button class="copy" type="button">Copy</button></div><pre class="src cmd">cat ~/.exasol-starter-kit/credentials/personal_sys_password</pre></div>
     </div>
   </div>
-</main>
-<div class="toast" id="toast">Copied</div>
+
+  <!-- MORE WAYS -->
+  <div class="sec"><h2>More ways to connect</h2><span class="hint">same database · your tool of choice</span><span class="rule"></span></div>
+  <div class="ways">
+    <div class="way">
+      <div class="way-h"><span class="wic"><svg aria-hidden="true" focusable="false" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M3 9h18"/></svg></span><span class="kick kick-gui">GUI</span></div>
+      <div class="nm">DBeaver</div>
+      <p class="desc">New Connection, pick the Exasol driver, then enter the details above.</p>
+    </div>
+    <div class="way">
+      <div class="way-h"><span class="wic"><svg aria-hidden="true" focusable="false" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M3 9h18"/></svg></span><span class="kick kick-gui">GUI</span></div>
+      <div class="nm">DbVisualizer</div>
+      <p class="desc">Create a database connection with the Exasol driver, same host, port and user.</p>
+    </div>
+    <div class="way">
+      <div class="way-h"><span class="wic"><svg aria-hidden="true" focusable="false" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 8L4.5 12l4 4"/><path d="M15.5 8l4 4-4 4"/></svg></span><span class="kick kick-py">Python</span></div>
+      <div class="nm">pyexasol</div>
+      <p class="desc">Comes preinstalled in its own environment. Connect straight from Python.</p>
+    </div>
+    <div class="way">
+      <div class="way-h"><span class="wic"><svg aria-hidden="true" focusable="false" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M7 10l2.5 2.5L7 15"/><path d="M12.5 15H17"/></svg></span><span class="kick kick-term">Terminal</span></div>
+      <div class="nm">exapump</div>
+      <p class="desc">Open a SQL shell right in your terminal.</p>
+      <div class="code"><div class="cbar"><span class="lang"><span class="d"></span>shell</span><button class="copy" type="button">Copy</button></div><pre class="src cmd">exapump interactive -p starter-kit</pre></div>
+    </div>
+  </div>
+
+  <!-- PERSONAS -->
+  <div class="sec"><h2>Ask by role</h2><span class="hint">question → SQL → run</span><span class="rule"></span></div>
+  <div class="list">
+
+    <div class="card persona" style="animation-delay:.1s">
+      <div class="p-meta">
+        <div class="p-icon"><svg aria-hidden="true" focusable="false" width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M19 8l-5 5-3-3-4 4"/></svg></div>
+        <div class="p-role">Data Scientist</div>
+        <div class="p-what">Revenue by market segment</div>
+        <p class="p-q">"Show revenue by customer market segment, using each order's total price."</p>
+        <div class="lineage"><span class="lbl">joins</span><span class="chip">CUSTOMER</span><span class="arw">→</span><span class="chip">ORDERS</span></div>
+      </div>
+      <div class="p-code">
+        <div class="code"><div class="cbar"><span class="lang"><span class="d"></span>SQL</span><button class="copy" type="button">Copy</button></div><pre class="src">SELECT c.C_MKTSEGMENT AS segment,
+       COUNT(o.O_ORDERKEY) AS order_count,
+       ROUND(SUM(o.O_TOTALPRICE), 2) AS total_revenue
+FROM TPCH.CUSTOMER c
+JOIN TPCH.ORDERS o ON c.C_CUSTKEY = o.O_CUSTKEY
+GROUP BY c.C_MKTSEGMENT
+ORDER BY total_revenue DESC;</pre></div>
+      </div>
+    </div>
+
+    <div class="card persona" style="animation-delay:.16s">
+      <div class="p-meta">
+        <div class="p-icon"><svg aria-hidden="true" focusable="false" width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="5" rx="1.5"/><rect x="3" y="15" width="18" height="5" rx="1.5"/><path d="M7 6.5h.01M7 17.5h.01"/></svg></div>
+        <div class="p-role">Data Engineer</div>
+        <div class="p-what">Inspect the schema</div>
+        <p class="p-q">"Show the schema of the orders table."</p>
+        <div class="lineage"><span class="lbl">reads</span><span class="chip">ORDERS</span></div>
+      </div>
+      <div class="p-code">
+        <div class="code"><div class="cbar"><span class="lang"><span class="d"></span>SQL</span><button class="copy" type="button">Copy</button></div><pre class="src">DESCRIBE TPCH.ORDERS;</pre></div>
+      </div>
+    </div>
+
+    <div class="card persona" style="animation-delay:.22s">
+      <div class="p-meta">
+        <div class="p-icon"><svg aria-hidden="true" focusable="false" width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><path d="M15.5 8.5l-4 4-2-2"/></svg></div>
+        <div class="p-role">Leadership</div>
+        <div class="p-what">Sales by region</div>
+        <p class="p-q">"Which region generates the most total sales, based on order value?"</p>
+        <div class="lineage"><span class="lbl">joins</span><span class="chip">ORDERS</span><span class="arw">→</span><span class="chip">CUSTOMER</span><span class="arw">→</span><span class="chip">NATION</span><span class="arw">→</span><span class="chip">REGION</span></div>
+      </div>
+      <div class="p-code">
+        <div class="code"><div class="cbar"><span class="lang"><span class="d"></span>SQL</span><button class="copy" type="button">Copy</button></div><pre class="src">SELECT r.R_NAME AS region,
+       SUM(o.O_TOTALPRICE) AS total_sales,
+       COUNT(o.O_ORDERKEY) AS order_count
+FROM TPCH.ORDERS o
+JOIN TPCH.CUSTOMER c ON o.O_CUSTKEY = c.C_CUSTKEY
+JOIN TPCH.NATION n ON c.C_NATIONKEY = n.N_NATIONKEY
+JOIN TPCH.REGION r ON n.N_REGIONKEY = r.R_REGIONKEY
+GROUP BY r.R_NAME
+ORDER BY total_sales DESC;</pre></div>
+      </div>
+    </div>
+
+  </div>
+
+  <footer>
+    <div class="mark"><span class="sq"></span>EXASOL <small>· Personal Local Starter Kit</small></div>
+    <div>If the AI's answer looks off, paste the SQL into DBeaver and run it yourself.</div>
+  </footer>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite">Copied</div>
 
 <script>
-  // Light SQL highlighting. Operates on the escaped source; copy still reads the
-  // raw textContent, so highlighting never affects what gets copied.
   function esc(s){ return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
-  const TOKEN = /("(?:[^"])*")|(\b(?:SELECT|FROM|WHERE|GROUP|BY|ORDER|LIMIT|CASE|WHEN|THEN|ELSE|END|AS|AND|OR|NOT|NULL|IS|IN|ON|CAST|DECIMAL|DESC|ASC|DESCRIBE|COUNT|SUM|AVG|ROUND|MAX|MIN)\b)|(\b\d+(?:\.\d+)?\b)/g;
-  document.querySelectorAll("pre.src:not(.cmd)").forEach(pre => {
-    const raw = pre.textContent;
-    pre.innerHTML = esc(raw).replace(TOKEN, (m, str, kw, num) =>
-      str !== undefined ? '<span class="s">'+str+'</span>'
-      : kw !== undefined ? '<span class="k">'+kw+'</span>'
-      : '<span class="n">'+num+'</span>');
+  var TOKEN = /("(?:[^"])*")|(\b(?:SELECT|FROM|WHERE|JOIN|ON|GROUP|BY|ORDER|LIMIT|CASE|WHEN|THEN|ELSE|END|AS|AND|OR|NOT|NULL|IS|IN|CAST|DECIMAL|DESC|ASC|DESCRIBE|COUNT|SUM|AVG|ROUND|MAX|MIN)\b)|(\b\d+(?:\.\d+)?\b)/g;
+  document.querySelectorAll("pre.src:not(.cmd)").forEach(function(pre){
+    pre.innerHTML = esc(pre.textContent).replace(TOKEN, function(m,str,kw,num){
+      return str!==undefined ? '<span class="s">'+str+'</span>'
+           : kw!==undefined  ? '<span class="k">'+kw+'</span>'
+           :                    '<span class="n">'+num+'</span>';
+    });
   });
-
-  const toast = document.getElementById("toast"); let tt;
-  function showToast(m){ toast.textContent=m; toast.classList.add("show"); clearTimeout(tt); tt=setTimeout(()=>toast.classList.remove("show"),1500); }
-  document.querySelectorAll(".copy").forEach(btn => {
-    btn.addEventListener("click", () => {
-      const pre = btn.closest(".code").querySelector("pre.src");
-      navigator.clipboard.writeText(pre ? pre.textContent : "").then(() => {
-        btn.classList.add("done"); const t=btn.textContent; btn.textContent="Copied ✓"; showToast("Copied to clipboard");
-        setTimeout(() => { btn.classList.remove("done"); btn.textContent=t; }, 1300);
-      }).catch(() => showToast("Copy failed — select the text manually"));
+  var toast = document.getElementById("toast"), tt;
+  function showToast(m){ toast.textContent=m; toast.classList.add("show"); clearTimeout(tt); tt=setTimeout(function(){toast.classList.remove("show");},1500); }
+  document.querySelectorAll(".copy").forEach(function(btn){
+    btn.addEventListener("click", function(){
+      var code = btn.closest(".code"); if(!code) return;
+      var pre = code.querySelector("pre.src");
+      var text = pre ? pre.textContent : "";
+      function ok(){ btn.classList.add("done"); var t=btn.textContent; btn.textContent="Copied ✓"; showToast("Copied to clipboard");
+        setTimeout(function(){ btn.classList.remove("done"); btn.textContent=t; },1300); }
+      function fail(){ showToast("Copy failed — select the text manually"); }
+      function legacyCopy(){
+        try{
+          var ta=document.createElement("textarea"); ta.value=text;
+          ta.style.position="fixed"; ta.style.top="0"; ta.style.left="0"; ta.style.opacity="0";
+          document.body.appendChild(ta); ta.focus(); ta.select();
+          var okc=document.execCommand("copy"); document.body.removeChild(ta); okc?ok():fail();
+        }catch(e){ fail(); }
+      }
+      if(navigator.clipboard && navigator.clipboard.writeText){
+        navigator.clipboard.writeText(text).then(ok).catch(legacyCopy);
+      } else { legacyCopy(); }
     });
   });
 </script>
