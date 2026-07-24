@@ -151,7 +151,7 @@ Your uploads go to the `STARTER_KIT` schema by default.
 
 ## More ways to connect
 
-- **GUI**: [DBeaver](https://dbeaver.io/download/). New Connection, Exasol, host `127.0.0.1`, port `8563`, user `sys`.
+- **GUI**: [DBeaver](https://dbeaver.io/download/) or [DbVisualizer](https://www.dbvis.com/download/). New Connection, Exasol, host `127.0.0.1`, port `8563`, user `sys`.
   - `exakit info` shows where the password lives.
 - **Python**: pyexasol comes preinstalled in its own environment.
 - **Terminal**: `exapump interactive -p starter-kit` opens a SQL shell.
