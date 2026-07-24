@@ -3,243 +3,272 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>TPC-H · Connect &amp; Query — Exasol Personal Workshop</title>
+<title>TPC-H · Connect and query — Exasol Personal Starter Kit</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%235fc33b'/%3E%3Cpath d='M9 9l14 14M23 9L9 23' stroke='white' stroke-width='3.4' stroke-linecap='round'/%3E%3C/svg%3E">
 <style>
   :root{
-    --ink:#06172e; --navy:#0A1E3F; --navy-lift:#0e2551;
-    --panel:rgba(255,255,255,.038); --panel-2:rgba(255,255,255,.055);
-    --line:rgba(150,172,210,.14); --line-strong:rgba(150,172,210,.24); --line-green:rgba(139,197,63,.26);
-    --code:#071b3a; --green:#8BC53F; --green-br:#A9E255; --teal:#4FD1C5;
-    --text:#EEF4FC; --text-2:#D6E2F2; --muted:#A6B8D6; --dim:#8A9CC0;
-    --amber:#F0C078; --idblue:#8FC7F7; --on-accent:#06172e;
-    --sans:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",Roboto,Helvetica,Arial,system-ui,sans-serif;
+    color-scheme: light dark;
+    --bg:#ffffff; --panel:#f6f8f9; --surface:#ffffff;
+    --border:#e5eaec; --border-2:#d3dbde;
+    --ink:#002e40; --text:#3b4d54; --muted:#647a81; --faint:#87979d;
+    --green:#3f9e22; --green-mark:#5fc33b; --accent-soft:rgba(95,195,59,.12);
+    --code-bg:#f5f8f9;
+    --kw:#2f8f2a; --id:#1668a8; --num:#a8621a; --str:#1668a8;
+    --shadow:0 1px 2px rgba(0,46,64,.05), 0 10px 26px rgba(0,46,64,.05);
+    --radius:12px;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,system-ui,sans-serif;
     --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,"JetBrains Mono",Consolas,"Liberation Mono",monospace;
-    --maxw:1180px;
+    --maxw:1120px;
   }
+  @media (prefers-color-scheme:dark){
+    :root:not([data-theme="light"]){
+      --bg:#0b1418; --panel:#111e23; --surface:#101a1f;
+      --border:rgba(255,255,255,.10); --border-2:rgba(255,255,255,.17);
+      --ink:#eaf3f1; --text:#c0cdd1; --muted:#8ba0a6; --faint:#6b8087;
+      --green:#6fce4a; --green-mark:#5fc33b; --accent-soft:rgba(95,195,59,.15);
+      --code-bg:#0a161b;
+      --kw:#83d55f; --id:#82b9e8; --num:#e2ad6b; --str:#82b9e8;
+      --shadow:0 1px 2px rgba(0,0,0,.3), 0 12px 32px rgba(0,0,0,.36);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0b1418; --panel:#111e23; --surface:#101a1f;
+    --border:rgba(255,255,255,.10); --border-2:rgba(255,255,255,.17);
+    --ink:#eaf3f1; --text:#c0cdd1; --muted:#8ba0a6; --faint:#6b8087;
+    --green:#6fce4a; --green-mark:#5fc33b; --accent-soft:rgba(95,195,59,.15);
+    --code-bg:#0a161b;
+    --kw:#83d55f; --id:#82b9e8; --num:#e2ad6b; --str:#82b9e8;
+    --shadow:0 1px 2px rgba(0,0,0,.3), 0 12px 32px rgba(0,0,0,.36);
+  }
+
   *{box-sizing:border-box;}
   html{scroll-behavior:smooth;}
-  body{margin:0;min-height:100vh;color:var(--text);background:var(--ink);font-family:var(--sans);
-    line-height:1.55;-webkit-font-smoothing:antialiased;position:relative;overflow-x:hidden;}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:var(--sans);line-height:1.6;
+    -webkit-font-smoothing:antialiased;font-size:16px;}
+  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 clamp(20px,4vw,40px);}
+  a{color:var(--green);text-underline-offset:2px;}
+  :focus-visible{outline:2px solid var(--green-mark);outline-offset:2px;border-radius:4px;}
 
-  /* ambient data-console ground */
-  .bg{position:fixed;inset:0;z-index:-2;background:
-    radial-gradient(1000px 680px at 88% -10%, rgba(139,197,63,.15), transparent 58%),
-    radial-gradient(820px 620px at 4% 112%, rgba(79,209,197,.12), transparent 58%),
-    linear-gradient(180deg,#0a2043 0,#06172e 60%);}
-  .bg::after{content:"";position:absolute;inset:0;opacity:.4;
-    background-image:linear-gradient(rgba(150,172,210,.05) 1px,transparent 1px),linear-gradient(90deg,rgba(150,172,210,.05) 1px,transparent 1px);
-    background-size:56px 56px;mask-image:radial-gradient(1300px 760px at 50% 4%,#000 0,transparent 76%);}
-
-  .wrap{max-width:var(--maxw);margin:0 auto;padding:0 clamp(18px,4vw,48px);}
-
-  /* top bar */
-  .topbar{display:flex;align-items:center;justify-content:space-between;padding:24px 0 4px;}
-  .mark{display:flex;align-items:center;gap:11px;font-weight:700;letter-spacing:.4px;font-size:15px;}
-  .mark .sq{width:12px;height:12px;border-radius:3px;background:var(--green);box-shadow:0 0 18px rgba(139,197,63,.7);}
-  .mark small{color:var(--dim);font-weight:600;}
-  .tag{font-family:var(--mono);font-size:10.5px;letter-spacing:1.5px;text-transform:uppercase;color:var(--green);
-    border:1px solid var(--line-green);border-radius:999px;padding:6px 13px;background:rgba(139,197,63,.06);}
+  /* topbar */
+  .topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;
+    padding:20px 0;border-bottom:1px solid var(--border);}
+  .exa-logo{height:26px;width:auto;display:block;color:var(--ink);}
+  .top-right{display:flex;align-items:center;gap:16px;}
+  .top-label{font-family:var(--mono);font-size:11px;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);}
+  .tbtn{display:grid;place-items:center;width:36px;height:36px;border:1px solid var(--border-2);border-radius:9px;
+    background:var(--surface);color:var(--ink);cursor:pointer;transition:border-color .15s,background .15s;}
+  .tbtn:hover{border-color:var(--green-mark);}
 
   /* hero */
-  .hero{display:grid;grid-template-columns:1.35fr .95fr;gap:clamp(24px,4vw,56px);align-items:center;
-    padding:clamp(38px,6vw,80px) 0 clamp(24px,3vw,36px);}
-  .hero-copy{opacity:0;transform:translateY(16px);animation:rise .7s cubic-bezier(.2,.7,.2,1) .05s forwards;}
-  .eyebrow{display:inline-flex;align-items:center;gap:10px;font-family:var(--mono);font-size:11.5px;letter-spacing:2px;
-    text-transform:uppercase;color:var(--green);margin-bottom:22px;}
-  .eyebrow .ln{width:32px;height:1px;background:linear-gradient(90deg,var(--green),transparent);}
-  h1{font-size:clamp(36px,6.4vw,68px);line-height:1.03;letter-spacing:-.025em;font-weight:800;margin:0 0 20px;text-wrap:balance;}
-  h1 .grad{color:var(--green-br);background:linear-gradient(100deg,var(--green-br),var(--green) 45%,var(--teal));-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;}
-  .lede{font-size:clamp(15px,1.5vw,18px);color:var(--muted);max-width:52ch;margin:0;}
+  .hero{display:grid;grid-template-columns:1.4fr .9fr;gap:clamp(28px,5vw,64px);align-items:center;
+    padding:clamp(40px,6vw,72px) 0 clamp(30px,4vw,44px);}
+  .eyebrow{font-family:var(--mono);font-size:12px;letter-spacing:1.4px;text-transform:uppercase;color:var(--green);
+    margin:0 0 16px;font-weight:600;}
+  h1{font-size:clamp(31px,4.6vw,46px);line-height:1.08;letter-spacing:-.02em;font-weight:800;color:var(--ink);
+    margin:0 0 16px;text-wrap:balance;}
+  .lede{font-size:clamp(15px,1.4vw,17px);color:var(--text);max-width:50ch;margin:0;}
+  .lede b{color:var(--ink);font-weight:600;}
 
-  /* hero schema panel — the subject's own artifact */
-  .schema{background:linear-gradient(180deg,var(--panel-2),rgba(255,255,255,.02));border:1px solid var(--line-strong);
-    border-radius:16px;padding:18px 18px 16px;opacity:0;transform:translateY(16px);animation:rise .7s cubic-bezier(.2,.7,.2,1) .16s forwards;}
-  .schema-h{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;}
-  .schema-h .t{font-family:var(--mono);font-size:11px;letter-spacing:1.4px;text-transform:uppercase;color:var(--dim);}
-  .schema-h .b{font-family:var(--mono);font-size:10.5px;color:var(--teal);border:1px solid rgba(79,209,197,.28);border-radius:6px;padding:3px 8px;}
-  .tbl{display:grid;grid-template-columns:16px 1fr;gap:0 11px;align-items:start;position:relative;padding:9px 0;}
-  .tbl + .tbl{border-top:1px solid var(--line);}
-  .tbl .node{width:9px;height:9px;border-radius:2px;background:var(--green);margin-top:5px;box-shadow:0 0 10px rgba(139,197,63,.5);}
-  .tbl .name{font-family:var(--mono);font-size:13px;color:var(--text);font-weight:600;}
-  .tbl .cols{font-family:var(--mono);font-size:11px;color:#93A6C7;margin-top:2px;line-height:1.5;}
-  .tbl .role{font-family:var(--sans);font-size:11px;color:var(--muted);}
+  /* schema panel */
+  .schema{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;box-shadow:var(--shadow);}
+  .schema-h{display:flex;align-items:center;justify-content:space-between;padding-bottom:12px;margin-bottom:6px;border-bottom:1px solid var(--border);}
+  .schema-h .t{font-family:var(--mono);font-size:11px;letter-spacing:1px;text-transform:uppercase;color:var(--muted);}
+  .schema-h .b{font-family:var(--mono);font-size:11px;color:var(--green);}
+  .tbl{display:grid;grid-template-columns:auto 1fr;gap:1px 10px;padding:10px 0;align-items:baseline;}
+  .tbl + .tbl{border-top:1px solid var(--border);}
+  .tbl .name{font-family:var(--mono);font-size:13.5px;color:var(--ink);font-weight:600;}
+  .tbl .role{font-family:var(--sans);font-size:11.5px;color:var(--muted);text-align:right;}
+  .tbl .cols{grid-column:1 / -1;font-family:var(--mono);font-size:11.5px;color:var(--faint);margin-top:3px;}
 
   /* section head */
-  .sec{display:flex;align-items:center;gap:14px;margin:clamp(24px,3vw,40px) 0 18px;}
-  .sec h2{font-size:clamp(19px,2.3vw,26px);font-weight:750;letter-spacing:-.01em;margin:0;}
-  .sec .hint{font-family:var(--mono);font-size:11.5px;color:var(--dim);}
-  .sec .rule{flex:1;height:1px;background:linear-gradient(90deg,var(--line-strong),transparent);}
+  .sec{display:flex;align-items:center;gap:14px;margin:clamp(30px,4vw,48px) 0 20px;}
+  .sec h2{font-size:clamp(19px,2.2vw,24px);font-weight:750;letter-spacing:-.01em;color:var(--ink);margin:0;white-space:nowrap;}
+  .sec .note{font-family:var(--mono);font-size:12px;color:var(--muted);white-space:nowrap;}
+  .sec .rule{flex:1;height:1px;background:var(--border);}
 
-  /* card base + reveal */
-  .card{background:linear-gradient(180deg,rgba(255,255,255,.05),rgba(255,255,255,.018));border:1px solid var(--line);
-    border-radius:18px;padding:clamp(18px,2.2vw,26px);position:relative;overflow:hidden;
-    opacity:0;transform:translateY(18px);animation:rise .7s cubic-bezier(.2,.7,.2,1) forwards;}
-  .card::before{content:"";position:absolute;inset:0;border-radius:18px;padding:1px;pointer-events:none;opacity:0;transition:opacity .3s;
-    background:linear-gradient(120deg,rgba(139,197,63,.4),transparent 42%);
-    -webkit-mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);mask:linear-gradient(#000 0 0) content-box,linear-gradient(#000 0 0);-webkit-mask-composite:xor;mask-composite:exclude;}
-  .card:hover::before{opacity:1;}
-  @keyframes rise{to{opacity:1;transform:none;}}
-
-  /* connect */
-  .connect{display:grid;grid-template-columns:1.05fr 1fr;gap:clamp(16px,2.4vw,30px);}
+  /* card + connect */
+  .card{background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:clamp(18px,2.2vw,26px);box-shadow:var(--shadow);}
+  .connect{display:grid;grid-template-columns:1.05fr 1fr;gap:clamp(20px,3vw,40px);}
   .conn-main,.conn-side,.code,.schema{min-width:0;}
-  .kv .v{overflow-wrap:anywhere;}
-  .conn-title{display:flex;align-items:center;gap:11px;margin-bottom:16px;}
-  .conn-title .ic{width:30px;height:30px;border-radius:9px;display:grid;place-items:center;background:rgba(139,197,63,.12);color:var(--green);}
+  .conn-title{display:flex;align-items:center;gap:10px;margin-bottom:16px;color:var(--ink);}
   .conn-title h3{font-size:15px;font-weight:700;margin:0;}
-  .kv{display:grid;grid-template-columns:auto 1fr;gap:11px 22px;font-size:14px;}
-  .kv .k{font-family:var(--mono);font-size:12px;letter-spacing:.4px;color:var(--dim);text-transform:uppercase;}
-  .kv .v{font-family:var(--mono);font-size:13px;color:var(--text-2);} .kv .v.free{font-family:var(--sans);color:var(--muted);}
-  .conn-side .lead{font-size:13px;color:var(--muted);margin:0 0 10px;}
-  .conn-side .lead + .code{margin-bottom:13px;}
+  .kv{display:grid;grid-template-columns:auto 1fr;gap:10px 22px;font-size:14.5px;}
+  .kv .k{font-family:var(--mono);font-size:12px;letter-spacing:.3px;color:var(--muted);text-transform:uppercase;}
+  .kv .v{font-family:var(--mono);font-size:13.5px;color:var(--ink);overflow-wrap:anywhere;}
+  .kv .v.free{font-family:var(--sans);color:var(--text);}
+  .conn-side .lead{font-size:13.5px;color:var(--text);margin:0 0 10px;}
+  .conn-side .lead + .code{margin-bottom:14px;}
 
-  /* more ways to connect */
-  .ways{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px;}
-  .way{display:flex;flex-direction:column;background:linear-gradient(180deg,rgba(255,255,255,.045),rgba(255,255,255,.015));
-    border:1px solid var(--line);border-radius:16px;padding:18px 18px 20px;transition:border-color .2s,transform .2s;}
-  .way:hover{border-color:var(--line-green);transform:translateY(-2px);}
-  .way-h{display:flex;align-items:center;gap:9px;margin-bottom:12px;}
-  .wic{width:31px;height:31px;border-radius:9px;display:grid;place-items:center;background:rgba(255,255,255,.05);color:var(--muted);border:1px solid var(--line);}
-  .kick{font-family:var(--mono);font-size:10px;letter-spacing:1.3px;text-transform:uppercase;font-weight:600;}
-  .kick-gui{color:var(--green);} .kick-py{color:var(--teal);} .kick-term{color:var(--amber);}
-  .way .nm{font-size:17px;font-weight:700;letter-spacing:-.01em;margin-bottom:6px;}
+  /* code block */
+  .code{border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--code-bg);}
+  .cbar{display:flex;align-items:center;justify-content:space-between;padding:7px 9px 7px 14px;border-bottom:1px solid var(--border);}
+  .lang{font-family:var(--mono);font-size:10.5px;letter-spacing:.8px;text-transform:uppercase;color:var(--muted);}
+  .copy{display:inline-flex;align-items:center;gap:6px;background:transparent;border:1px solid var(--border-2);color:var(--ink);
+    border-radius:7px;padding:4px 12px;font-size:11.5px;font-weight:600;cursor:pointer;font-family:var(--sans);transition:.14s;}
+  .copy:hover{border-color:var(--green-mark);color:var(--green);}
+  .copy.done{background:var(--green-mark);color:#052a12;border-color:var(--green-mark);}
+  pre.src{margin:0;padding:14px 16px;font-family:var(--mono);font-size:12.5px;line-height:1.7;color:var(--ink);overflow-x:auto;max-width:100%;white-space:pre;}
+  pre.src.cmd{color:var(--green);}
+  pre.src .k{color:var(--kw);font-weight:600;} pre.src .s{color:var(--str);} pre.src .n{color:var(--num);}
+
+  /* more ways */
+  .ways{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:14px;}
+  .way{display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);
+    padding:18px 18px 20px;box-shadow:var(--shadow);transition:border-color .18s,transform .18s;}
+  .way:hover{border-color:var(--border-2);transform:translateY(-2px);}
+  .way .kick{font-family:var(--mono);font-size:10px;letter-spacing:1.2px;text-transform:uppercase;font-weight:700;margin-bottom:10px;}
+  .kick-gui{color:var(--green);} .kick-py{color:var(--id);} .kick-term{color:var(--num);}
+  .way .nm{font-size:16.5px;font-weight:700;letter-spacing:-.01em;color:var(--ink);margin-bottom:6px;}
   .way .desc{font-size:13px;color:var(--muted);margin:0 0 14px;line-height:1.55;}
   .way .code{margin-top:auto;}
 
-  /* code block */
-  .code{border:1px solid var(--line);border-radius:12px;overflow:hidden;background:var(--code);}
-  .cbar{display:flex;align-items:center;justify-content:space-between;padding:8px 10px 8px 14px;background:rgba(255,255,255,.03);border-bottom:1px solid var(--line);}
-  .lang{display:flex;align-items:center;gap:7px;font-family:var(--mono);font-size:10.5px;letter-spacing:.9px;text-transform:uppercase;color:var(--dim);}
-  .lang .d{width:6px;height:6px;border-radius:50%;background:var(--green);opacity:.85;}
-  .copy{display:inline-flex;align-items:center;gap:6px;background:transparent;border:1px solid var(--line-green);color:var(--green);
-    border-radius:8px;padding:5px 13px;font-size:11.5px;font-weight:600;cursor:pointer;font-family:var(--sans);transition:.14s;}
-  .copy:hover{background:rgba(139,197,63,.14);} .copy:focus-visible{outline:2px solid var(--green);outline-offset:2px;}
-  .copy.done{background:var(--green);color:var(--on-accent);border-color:var(--green);}
-  pre.src{margin:0;padding:14px 16px;font-family:var(--mono);font-size:12.5px;line-height:1.68;color:var(--text-2);overflow-x:auto;max-width:100%;white-space:pre;}
-  pre.src.cmd{color:var(--green);padding:12px 16px;}
-  pre.src .k{color:var(--green-br);font-weight:600;} pre.src .s{color:var(--idblue);} pre.src .n{color:var(--amber);}
+  /* exakit.live callout */
+  .tryout{display:flex;align-items:center;justify-content:space-between;gap:20px;flex-wrap:wrap;margin-top:16px;
+    padding:20px 24px;border:1px solid var(--border);border-radius:var(--radius);background:var(--accent-soft);
+    text-decoration:none;transition:border-color .18s;}
+  .tryout:hover{border-color:var(--green-mark);}
+  .tryout .kick{font-family:var(--mono);font-size:10.5px;letter-spacing:1.2px;text-transform:uppercase;color:var(--green);font-weight:700;}
+  .tryout .tt{font-size:17px;font-weight:750;color:var(--ink);margin:5px 0 4px;letter-spacing:-.01em;}
+  .tryout .td{font-size:13.5px;color:var(--text);margin:0;max-width:64ch;}
+  .tryout .cta{font-size:14px;font-weight:700;color:var(--green);white-space:nowrap;}
 
   /* personas */
   .list{display:flex;flex-direction:column;gap:16px;}
-  .persona{display:grid;grid-template-columns:340px minmax(0,620px);gap:clamp(16px,2.6vw,34px);align-items:center;}
-  .p-icon{width:46px;height:46px;border-radius:13px;display:grid;place-items:center;background:rgba(139,197,63,.12);
-    color:var(--green);border:1px solid var(--line-green);margin-bottom:15px;}
-  .p-role{font-size:20px;font-weight:750;letter-spacing:-.01em;margin:0 0 5px;}
-  .p-what{font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:.9px;text-transform:uppercase;color:var(--teal);margin-bottom:13px;}
-  .p-q{font-size:14.5px;color:var(--text-2);font-style:italic;margin:0 0 16px;line-height:1.5;}
+  .persona{display:grid;grid-template-columns:300px minmax(0,1fr);gap:clamp(18px,3vw,36px);align-items:center;}
+  .p-role{font-size:19px;font-weight:750;letter-spacing:-.01em;color:var(--ink);margin:0 0 4px;}
+  .p-what{font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:.8px;text-transform:uppercase;color:var(--green);margin-bottom:12px;}
+  .p-q{font-size:14.5px;color:var(--text);margin:0 0 15px;line-height:1.5;}
   .lineage{display:flex;flex-wrap:wrap;align-items:center;gap:6px;}
-  .lineage .lbl{font-family:var(--mono);font-size:9.5px;letter-spacing:1px;text-transform:uppercase;color:var(--dim);margin-right:3px;}
-  .chip{font-family:var(--mono);font-size:11px;color:var(--text-2);background:rgba(79,209,197,.09);border:1px solid rgba(79,209,197,.25);border-radius:6px;padding:3px 9px;}
-  .arw{color:var(--dim);font-size:11px;}
+  .lineage .lbl{font-family:var(--mono);font-size:9.5px;letter-spacing:.9px;text-transform:uppercase;color:var(--faint);margin-right:2px;}
+  .chip{font-family:var(--mono);font-size:11px;color:var(--ink);background:var(--panel);border:1px solid var(--border-2);border-radius:6px;padding:2px 8px;}
+  .arw{color:var(--faint);font-size:11px;}
   .p-code{min-width:0;}
 
-  footer{border-top:1px solid var(--line);margin-top:clamp(34px,5vw,60px);padding:24px 0 46px;
-    display:flex;flex-wrap:wrap;gap:12px;justify-content:space-between;align-items:center;color:var(--dim);font-size:12.5px;}
-  footer .mark{font-size:13px;}
+  footer{border-top:1px solid var(--border);margin-top:clamp(36px,5vw,60px);padding:22px 0 46px;
+    display:flex;flex-wrap:wrap;gap:12px 20px;justify-content:space-between;align-items:center;color:var(--muted);font-size:12.5px;}
+  .foot-logo{height:20px;width:auto;color:var(--ink);opacity:.85;}
 
-  .toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%) translateY(16px);background:var(--green);color:var(--on-accent);
-    padding:10px 22px;border-radius:999px;font-size:13px;font-weight:700;opacity:0;transition:.2s;pointer-events:none;box-shadow:0 12px 34px rgba(0,0,0,.5);z-index:20;}
+  .toast{position:fixed;bottom:26px;left:50%;transform:translateX(-50%) translateY(14px);background:var(--ink);color:var(--bg);
+    padding:9px 20px;border-radius:999px;font-size:13px;font-weight:600;opacity:0;transition:.2s;pointer-events:none;box-shadow:var(--shadow);z-index:30;}
   .toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
 
-  a{color:var(--green);} :focus-visible{outline:2px solid var(--green);outline-offset:2px;}
-
-  @media (max-width:560px){ .topbar{flex-wrap:wrap;gap:6px 10px;} .tag{font-size:9.5px;letter-spacing:1px;padding:5px 10px;} }
-  @media (max-width:940px){ .hero{grid-template-columns:1fr;gap:28px;} .connect{grid-template-columns:1fr;} }
-  @media (max-width:760px){
+  @media (max-width:900px){ .hero{grid-template-columns:1fr;gap:26px;} .connect{grid-template-columns:1fr;} }
+  @media (max-width:720px){
     .persona{grid-template-columns:1fr;gap:14px;}
-    .p-meta{display:flex;flex-wrap:wrap;align-items:center;gap:9px 13px;}
-    .p-icon{margin-bottom:0;} .p-what{margin-bottom:0;} .p-q{flex-basis:100%;margin:2px 0 0;} .lineage{flex-basis:100%;}
+    .p-meta{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;}
+    .p-what{margin-bottom:0;} .p-q{flex-basis:100%;margin:2px 0 0;} .lineage{flex-basis:100%;}
+    .top-label{display:none;}
   }
-  @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;}.card,.hero-copy,.schema{opacity:1;transform:none;}}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important;}}
 </style>
 </head>
 <body>
-<div class="bg"></div>
 <div class="wrap">
 
+  <!-- TOPBAR -->
   <div class="topbar">
-    <div class="mark"><span class="sq"></span>EXASOL <small>· Personal</small></div>
-    <span class="tag">Local Starter Kit · Workshop</span>
+    <svg class="exa-logo" viewBox="0 0 3763 1513" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Exasol"><g>
+      <path d="M188.278,350.715l0,795.192l493.925,-0l0,-124.459l-349.492,0l0,-213.775l267.742,0l0,-124.233l-267.742,0l0,-208.5l331.575,0l0,-124.225l-476.008,0Z" style="fill:currentColor;fill-rule:nonzero;"/>
+      <path d="M1695.31,1036.84c93.141,3.225 171.275,-69.658 174.516,-162.808c0.225,-4.2 0.225,-8.417 0,-12.625c1.275,-93.709 -73.658,-170.717 -167.366,-171.992l-7.15,0c-92.509,-3.092 -170.017,69.375 -173.134,161.892l0,10.1c-2.7,94.183 71.459,172.733 165.65,175.433l7.484,0Zm175.666,28.017c-37.658,61.766 -119.866,93.225 -190.133,93.225c-152.7,-0 -287.033,-114.809 -287.033,-295.525c-6.2,-156.117 115.333,-287.709 271.45,-293.909c0.141,0 0.283,-0.008 0.425,-0.016l15.158,-0c68.892,-0 151.325,27.791 190.133,91.85l0,-80.134l123.534,0l-0,565.567l-123.534,0l0,-81.058Z" style="fill:currentColor;fill-rule:nonzero;"/>
+      <path d="M2170.86,975.754c42.409,39.5 97.759,62.192 155.684,63.834c40.191,-0 74.858,-17.909 74.858,-51.667c-0,-84.958 -277.617,-73.933 -277.617,-257.408c0,-106.542 95.067,-168.084 218.375,-168.084c128.825,0 191.509,64.984 191.509,64.984l-52.584,105.166c-39.491,-32.283 -89.066,-49.675 -140.075,-49.133c-36.966,-0 -72.791,15.608 -72.791,51.433c-0,80.6 277.85,70.492 277.85,254.192c-0,95.3 -82.892,171.3 -218.609,171.3c-81.883,1.575 -161.233,-28.442 -221.583,-83.808l64.983,-100.809Z" style="fill:currentColor;fill-rule:nonzero;"/>
+      <path d="M2932.3,1039.59c93.841,-0.25 169.716,-76.533 169.458,-170.383l0,-7.809c4.892,-93.716 -67.125,-173.65 -160.85,-178.533c-93.717,-4.883 -173.65,67.133 -178.533,160.858l-0,17.675c-4.55,93.459 67.3,173.017 160.741,177.967l8.267,0m0,-477.167c174.742,0 314.808,124.234 314.808,298.517c0,174.283 -140.066,298.508 -313.658,298.508c-173.6,0 -314.592,-123.075 -314.592,-298.508c0,-175.433 139.842,-298.517 313.442,-298.517" style="fill:currentColor;fill-rule:nonzero;"/>
+      <path d="M3352.28,350.715l141.217,0l-0,597.025c-0,62.683 21.358,78.3 58.325,78.3c11.025,0 21.125,-1.15 21.125,-1.15l-0,124.458c-15.217,2.109 -30.558,3.184 -45.925,3.217c-78.3,0 -175.892,-19.975 -175.892,-183.7l1.15,-618.15Z" style="fill:currentColor;fill-rule:nonzero;"/>
+      <path d="M758.436,1145.91l217.458,-283.817l-216.542,-282.208l167.167,-0l216.542,282.208l-217.684,283.817l-166.941,-0Z" style="fill:#5fc33b;fill-rule:nonzero;"/>
+      <path d="M1089.1,721.331l83.583,109.075l191.283,-250.758l-167.4,-0.225l-107.466,141.908Z" style="fill:currentColor;fill-rule:nonzero;"/>
+      <path d="M1089.1,1004l83.583,-109.075l191.283,250.75l-167.4,0.233l-107.466,-141.908Z" style="fill:currentColor;fill-rule:nonzero;"/>
+    </g></svg>
+    <div class="top-right">
+      <span class="top-label">Local Starter Kit · Workshop</span>
+      <button class="tbtn" id="themeBtn" type="button" aria-label="Switch theme"></button>
+    </div>
   </div>
 
   <!-- HERO -->
   <header class="hero">
     <div class="hero-copy">
-      <div class="eyebrow"><span class="ln"></span>Quick reference · TPC-H</div>
-      <h1>Connect once.<br><span class="grad">Query by role.</span></h1>
-      <p class="lede">Point DBeaver at your local Exasol and explore TPC-H, the classic decision-support benchmark. One dataset, three lenses. Copy the SQL, run it, see the answer.</p>
+      <p class="eyebrow">Quick reference</p>
+      <h1>Connect to your local Exasol and query TPC-H.</h1>
+      <p class="lede">Point a SQL tool at the database, then explore <b>TPC-H</b>, the classic decision-support benchmark. One dataset, three questions by role. Copy the SQL, run it, read the answer.</p>
     </div>
     <div class="schema" role="group" aria-label="TPC-H tables used in this workshop">
-      <div class="schema-h"><span class="t">TPCH · schema</span><span class="b">4 tables</span></div>
-      <div class="tbl"><span class="node"></span><span><span class="name">REGION</span> &nbsp;<span class="role">geography</span><div class="cols">R_REGIONKEY · R_NAME</div></span></div>
-      <div class="tbl"><span class="node"></span><span><span class="name">NATION</span> &nbsp;<span class="role">geography</span><div class="cols">N_NATIONKEY · N_NAME · N_REGIONKEY</div></span></div>
-      <div class="tbl"><span class="node"></span><span><span class="name">CUSTOMER</span> &nbsp;<span class="role">who</span><div class="cols">C_CUSTKEY · C_MKTSEGMENT · C_NATIONKEY</div></span></div>
-      <div class="tbl"><span class="node"></span><span><span class="name">ORDERS</span> &nbsp;<span class="role">what</span><div class="cols">O_ORDERKEY · O_CUSTKEY · O_TOTALPRICE</div></span></div>
+      <div class="schema-h"><span class="t">TPCH schema</span><span class="b">4 tables</span></div>
+      <div class="tbl"><span class="name">REGION</span><span class="role">geography</span><span class="cols">R_REGIONKEY · R_NAME</span></div>
+      <div class="tbl"><span class="name">NATION</span><span class="role">geography</span><span class="cols">N_NATIONKEY · N_NAME · N_REGIONKEY</span></div>
+      <div class="tbl"><span class="name">CUSTOMER</span><span class="role">who</span><span class="cols">C_CUSTKEY · C_MKTSEGMENT · C_NATIONKEY</span></div>
+      <div class="tbl"><span class="name">ORDERS</span><span class="role">what</span><span class="cols">O_ORDERKEY · O_CUSTKEY · O_TOTALPRICE</span></div>
     </div>
   </header>
 
   <!-- CONNECT -->
-  <div class="sec"><h2>Connect</h2><span class="hint">local · self-signed TLS</span><span class="rule"></span></div>
-  <div class="card connect" style="animation-delay:.05s">
+  <div class="sec"><h2>Connect</h2><span class="note">local · self-signed TLS</span><span class="rule"></span></div>
+  <div class="card connect">
     <div class="conn-main">
-      <div class="conn-title"><span class="ic"><svg aria-hidden="true" focusable="false" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg></span><h3>Connection details</h3></div>
+      <div class="conn-title"><svg aria-hidden="true" focusable="false" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v6c0 1.7 3.6 3 8 3s8-1.3 8-3V5"/><path d="M4 11v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6"/></svg><h3>Connection details</h3></div>
       <div class="kv">
         <span class="k">Driver</span><span class="v">Exasol</span>
         <span class="k">Host</span><span class="v">127.0.0.1</span>
         <span class="k">Port</span><span class="v">8563</span>
         <span class="k">User</span><span class="v">sys</span>
-        <span class="k">Password</span><span class="v free">your own — get it locally →</span>
-        <span class="k">SSL</span><span class="v free">enabled · disable cert validation (self-signed)</span>
+        <span class="k">Password</span><span class="v free">your own, get it locally →</span>
+        <span class="k">SSL</span><span class="v free">enabled, disable cert validation (self-signed)</span>
       </div>
     </div>
     <div class="conn-side">
       <p class="lead">Your password is generated locally on install and never shared. Get yours with:</p>
-      <div class="code"><div class="cbar"><span class="lang"><span class="d"></span>shell</span><button class="copy" type="button">Copy</button></div><pre class="src cmd">exakit info</pre></div>
+      <div class="code"><div class="cbar"><span class="lang">shell</span><button class="copy" type="button">Copy</button></div><pre class="src cmd">exakit info</pre></div>
       <p class="lead">then read the file it points to, for example:</p>
-      <div class="code"><div class="cbar"><span class="lang"><span class="d"></span>shell</span><button class="copy" type="button">Copy</button></div><pre class="src cmd">cat ~/.exasol-starter-kit/credentials/personal_sys_password</pre></div>
+      <div class="code"><div class="cbar"><span class="lang">shell</span><button class="copy" type="button">Copy</button></div><pre class="src cmd">cat ~/.exasol-starter-kit/credentials/personal_sys_password</pre></div>
     </div>
   </div>
 
   <!-- MORE WAYS -->
-  <div class="sec"><h2>More ways to connect</h2><span class="hint">same database · your tool of choice</span><span class="rule"></span></div>
+  <div class="sec"><h2>More ways to connect</h2><span class="note">same database, your tool of choice</span><span class="rule"></span></div>
   <div class="ways">
     <div class="way">
-      <div class="way-h"><span class="wic"><svg aria-hidden="true" focusable="false" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M3 9h18"/></svg></span><span class="kick kick-gui">GUI</span></div>
+      <div class="kick kick-gui">GUI</div>
       <div class="nm">DBeaver</div>
       <p class="desc">New Connection, pick the Exasol driver, then enter the details above.</p>
     </div>
     <div class="way">
-      <div class="way-h"><span class="wic"><svg aria-hidden="true" focusable="false" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M3 9h18"/></svg></span><span class="kick kick-gui">GUI</span></div>
+      <div class="kick kick-gui">GUI</div>
       <div class="nm">DbVisualizer</div>
       <p class="desc">Create a database connection with the Exasol driver, same host, port and user.</p>
     </div>
     <div class="way">
-      <div class="way-h"><span class="wic"><svg aria-hidden="true" focusable="false" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M8.5 8L4.5 12l4 4"/><path d="M15.5 8l4 4-4 4"/></svg></span><span class="kick kick-py">Python</span></div>
+      <div class="kick kick-py">Python</div>
       <div class="nm">pyexasol</div>
       <p class="desc">Comes preinstalled in its own environment. Connect straight from Python.</p>
     </div>
     <div class="way">
-      <div class="way-h"><span class="wic"><svg aria-hidden="true" focusable="false" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="15" rx="2"/><path d="M7 10l2.5 2.5L7 15"/><path d="M12.5 15H17"/></svg></span><span class="kick kick-term">Terminal</span></div>
+      <div class="kick kick-term">Terminal</div>
       <div class="nm">exapump</div>
       <p class="desc">Open a SQL shell right in your terminal.</p>
-      <div class="code"><div class="cbar"><span class="lang"><span class="d"></span>shell</span><button class="copy" type="button">Copy</button></div><pre class="src cmd">exapump interactive -p starter-kit</pre></div>
+      <div class="code"><div class="cbar"><span class="lang">shell</span><button class="copy" type="button">Copy</button></div><pre class="src cmd">exapump interactive -p starter-kit</pre></div>
     </div>
   </div>
 
+  <a class="tryout" href="https://exakit.live/" target="_blank" rel="noopener noreferrer">
+    <div class="tryout-main">
+      <div class="kick">No install needed</div>
+      <div class="tt">Explore in your browser at exakit.live</div>
+      <p class="td">A hosted console for exploring an Exasol database, local or remote, with a temporary AI assistant included. A quick way to try things before you install the kit.</p>
+    </div>
+    <span class="cta">Open exakit.live →</span>
+  </a>
+
   <!-- PERSONAS -->
-  <div class="sec"><h2>Ask by role</h2><span class="hint">question → SQL → run</span><span class="rule"></span></div>
+  <div class="sec"><h2>Ask by role</h2><span class="note">question → SQL → run</span><span class="rule"></span></div>
   <div class="list">
 
-    <div class="card persona" style="animation-delay:.1s">
+    <div class="card persona">
       <div class="p-meta">
-        <div class="p-icon"><svg aria-hidden="true" focusable="false" width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M19 8l-5 5-3-3-4 4"/></svg></div>
         <div class="p-role">Data Scientist</div>
         <div class="p-what">Revenue by market segment</div>
         <p class="p-q">"Show revenue by customer market segment, using each order's total price."</p>
         <div class="lineage"><span class="lbl">joins</span><span class="chip">CUSTOMER</span><span class="arw">→</span><span class="chip">ORDERS</span></div>
       </div>
       <div class="p-code">
-        <div class="code"><div class="cbar"><span class="lang"><span class="d"></span>SQL</span><button class="copy" type="button">Copy</button></div><pre class="src">SELECT c.C_MKTSEGMENT AS segment,
+        <div class="code"><div class="cbar"><span class="lang">SQL</span><button class="copy" type="button">Copy</button></div><pre class="src">SELECT c.C_MKTSEGMENT AS segment,
        COUNT(o.O_ORDERKEY) AS order_count,
        ROUND(SUM(o.O_TOTALPRICE), 2) AS total_revenue
 FROM TPCH.CUSTOMER c
@@ -249,29 +278,27 @@ ORDER BY total_revenue DESC;</pre></div>
       </div>
     </div>
 
-    <div class="card persona" style="animation-delay:.16s">
+    <div class="card persona">
       <div class="p-meta">
-        <div class="p-icon"><svg aria-hidden="true" focusable="false" width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="5" rx="1.5"/><rect x="3" y="15" width="18" height="5" rx="1.5"/><path d="M7 6.5h.01M7 17.5h.01"/></svg></div>
         <div class="p-role">Data Engineer</div>
         <div class="p-what">Inspect the schema</div>
         <p class="p-q">"Show the schema of the orders table."</p>
         <div class="lineage"><span class="lbl">reads</span><span class="chip">ORDERS</span></div>
       </div>
       <div class="p-code">
-        <div class="code"><div class="cbar"><span class="lang"><span class="d"></span>SQL</span><button class="copy" type="button">Copy</button></div><pre class="src">DESCRIBE TPCH.ORDERS;</pre></div>
+        <div class="code"><div class="cbar"><span class="lang">SQL</span><button class="copy" type="button">Copy</button></div><pre class="src">DESCRIBE TPCH.ORDERS;</pre></div>
       </div>
     </div>
 
-    <div class="card persona" style="animation-delay:.22s">
+    <div class="card persona">
       <div class="p-meta">
-        <div class="p-icon"><svg aria-hidden="true" focusable="false" width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3"/><path d="M15.5 8.5l-4 4-2-2"/></svg></div>
         <div class="p-role">Leadership</div>
         <div class="p-what">Sales by region</div>
         <p class="p-q">"Which region generates the most total sales, based on order value?"</p>
         <div class="lineage"><span class="lbl">joins</span><span class="chip">ORDERS</span><span class="arw">→</span><span class="chip">CUSTOMER</span><span class="arw">→</span><span class="chip">NATION</span><span class="arw">→</span><span class="chip">REGION</span></div>
       </div>
       <div class="p-code">
-        <div class="code"><div class="cbar"><span class="lang"><span class="d"></span>SQL</span><button class="copy" type="button">Copy</button></div><pre class="src">SELECT r.R_NAME AS region,
+        <div class="code"><div class="cbar"><span class="lang">SQL</span><button class="copy" type="button">Copy</button></div><pre class="src">SELECT r.R_NAME AS region,
        SUM(o.O_TOTALPRICE) AS total_sales,
        COUNT(o.O_ORDERKEY) AS order_count
 FROM TPCH.ORDERS o
@@ -286,43 +313,64 @@ ORDER BY total_sales DESC;</pre></div>
   </div>
 
   <footer>
-    <div class="mark"><span class="sq"></span>EXASOL <small>· Personal Local Starter Kit</small></div>
-    <div>If the AI's answer looks off, paste the SQL into DBeaver and run it yourself.</div>
+    <svg class="foot-logo" viewBox="0 0 3763 1513" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Exasol"><g>
+      <path d="M188.278,350.715l0,795.192l493.925,-0l0,-124.459l-349.492,0l0,-213.775l267.742,0l0,-124.233l-267.742,0l0,-208.5l331.575,0l0,-124.225l-476.008,0Z" style="fill:currentColor;fill-rule:nonzero;"/>
+      <path d="M1695.31,1036.84c93.141,3.225 171.275,-69.658 174.516,-162.808c0.225,-4.2 0.225,-8.417 0,-12.625c1.275,-93.709 -73.658,-170.717 -167.366,-171.992l-7.15,0c-92.509,-3.092 -170.017,69.375 -173.134,161.892l0,10.1c-2.7,94.183 71.459,172.733 165.65,175.433l7.484,0Zm175.666,28.017c-37.658,61.766 -119.866,93.225 -190.133,93.225c-152.7,-0 -287.033,-114.809 -287.033,-295.525c-6.2,-156.117 115.333,-287.709 271.45,-293.909c0.141,0 0.283,-0.008 0.425,-0.016l15.158,-0c68.892,-0 151.325,27.791 190.133,91.85l0,-80.134l123.534,0l-0,565.567l-123.534,0l0,-81.058Z" style="fill:currentColor;fill-rule:nonzero;"/>
+      <path d="M2170.86,975.754c42.409,39.5 97.759,62.192 155.684,63.834c40.191,-0 74.858,-17.909 74.858,-51.667c-0,-84.958 -277.617,-73.933 -277.617,-257.408c0,-106.542 95.067,-168.084 218.375,-168.084c128.825,0 191.509,64.984 191.509,64.984l-52.584,105.166c-39.491,-32.283 -89.066,-49.675 -140.075,-49.133c-36.966,-0 -72.791,15.608 -72.791,51.433c-0,80.6 277.85,70.492 277.85,254.192c-0,95.3 -82.892,171.3 -218.609,171.3c-81.883,1.575 -161.233,-28.442 -221.583,-83.808l64.983,-100.809Z" style="fill:currentColor;fill-rule:nonzero;"/>
+      <path d="M2932.3,1039.59c93.841,-0.25 169.716,-76.533 169.458,-170.383l0,-7.809c4.892,-93.716 -67.125,-173.65 -160.85,-178.533c-93.717,-4.883 -173.65,67.133 -178.533,160.858l-0,17.675c-4.55,93.459 67.3,173.017 160.741,177.967l8.267,0m0,-477.167c174.742,0 314.808,124.234 314.808,298.517c0,174.283 -140.066,298.508 -313.658,298.508c-173.6,0 -314.592,-123.075 -314.592,-298.508c0,-175.433 139.842,-298.517 313.442,-298.517" style="fill:currentColor;fill-rule:nonzero;"/>
+      <path d="M3352.28,350.715l141.217,0l-0,597.025c-0,62.683 21.358,78.3 58.325,78.3c11.025,0 21.125,-1.15 21.125,-1.15l-0,124.458c-15.217,2.109 -30.558,3.184 -45.925,3.217c-78.3,0 -175.892,-19.975 -175.892,-183.7l1.15,-618.15Z" style="fill:currentColor;fill-rule:nonzero;"/>
+      <path d="M758.436,1145.91l217.458,-283.817l-216.542,-282.208l167.167,-0l216.542,282.208l-217.684,283.817l-166.941,-0Z" style="fill:#5fc33b;fill-rule:nonzero;"/>
+      <path d="M1089.1,721.331l83.583,109.075l191.283,-250.758l-167.4,-0.225l-107.466,141.908Z" style="fill:currentColor;fill-rule:nonzero;"/>
+      <path d="M1089.1,1004l83.583,-109.075l191.283,250.75l-167.4,0.233l-107.466,-141.908Z" style="fill:currentColor;fill-rule:nonzero;"/>
+    </g></svg>
+    <div>If the AI's answer looks off, paste the SQL into your SQL tool and run it yourself.</div>
   </footer>
 </div>
 <div class="toast" id="toast" role="status" aria-live="polite">Copied</div>
 
 <script>
+  /* theme */
+  (function(){
+    var root=document.documentElement, KEY="exa-theme", saved=null;
+    try{ saved=localStorage.getItem(KEY); }catch(e){}
+    if(saved==="light"||saved==="dark") root.setAttribute("data-theme",saved);
+    var btn=document.getElementById("themeBtn");
+    var SUN='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4.4"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M19.1 4.9l-1.8 1.8M6.7 17.3l-1.8 1.8"/></svg>';
+    var MOON='<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8Z"/></svg>';
+    function dark(){ var t=root.getAttribute("data-theme"); if(t) return t==="dark"; return window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches; }
+    function paint(){ if(!btn) return; btn.innerHTML=dark()?SUN:MOON; btn.setAttribute("aria-label", dark()?"Switch to light mode":"Switch to dark mode"); root.style.colorScheme=dark()?"dark":"light"; }
+    if(btn) btn.addEventListener("click", function(){ var next=dark()?"light":"dark"; root.setAttribute("data-theme",next); try{localStorage.setItem(KEY,next);}catch(e){} paint(); });
+    paint();
+  })();
+
+  /* SQL syntax highlighting */
   function esc(s){ return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
-  var TOKEN = /("(?:[^"])*")|(\b(?:SELECT|FROM|WHERE|JOIN|ON|GROUP|BY|ORDER|LIMIT|CASE|WHEN|THEN|ELSE|END|AS|AND|OR|NOT|NULL|IS|IN|CAST|DECIMAL|DESC|ASC|DESCRIBE|COUNT|SUM|AVG|ROUND|MAX|MIN)\b)|(\b\d+(?:\.\d+)?\b)/g;
+  var TOKEN=/("(?:[^"])*")|(\b(?:SELECT|FROM|WHERE|JOIN|ON|GROUP|BY|ORDER|LIMIT|CASE|WHEN|THEN|ELSE|END|AS|AND|OR|NOT|NULL|IS|IN|CAST|DECIMAL|DESC|ASC|DESCRIBE|COUNT|SUM|AVG|ROUND|MAX|MIN)\b)|(\b\d+(?:\.\d+)?\b)/g;
   document.querySelectorAll("pre.src:not(.cmd)").forEach(function(pre){
-    pre.innerHTML = esc(pre.textContent).replace(TOKEN, function(m,str,kw,num){
+    pre.innerHTML=esc(pre.textContent).replace(TOKEN, function(m,str,kw,num){
       return str!==undefined ? '<span class="s">'+str+'</span>'
            : kw!==undefined  ? '<span class="k">'+kw+'</span>'
            :                    '<span class="n">'+num+'</span>';
     });
   });
-  var toast = document.getElementById("toast"), tt;
+
+  /* copy */
+  var toast=document.getElementById("toast"), tt;
   function showToast(m){ toast.textContent=m; toast.classList.add("show"); clearTimeout(tt); tt=setTimeout(function(){toast.classList.remove("show");},1500); }
   document.querySelectorAll(".copy").forEach(function(btn){
     btn.addEventListener("click", function(){
-      var code = btn.closest(".code"); if(!code) return;
-      var pre = code.querySelector("pre.src");
-      var text = pre ? pre.textContent : "";
+      var code=btn.closest(".code"); if(!code) return;
+      var pre=code.querySelector("pre.src"); var text=pre?pre.textContent:"";
       function ok(){ btn.classList.add("done"); var t=btn.textContent; btn.textContent="Copied ✓"; showToast("Copied to clipboard");
         setTimeout(function(){ btn.classList.remove("done"); btn.textContent=t; },1300); }
-      function fail(){ showToast("Copy failed — select the text manually"); }
+      function fail(){ showToast("Copy failed, select the text manually"); }
       function legacyCopy(){
-        try{
-          var ta=document.createElement("textarea"); ta.value=text;
-          ta.style.position="fixed"; ta.style.top="0"; ta.style.left="0"; ta.style.opacity="0";
-          document.body.appendChild(ta); ta.focus(); ta.select();
-          var okc=document.execCommand("copy"); document.body.removeChild(ta); okc?ok():fail();
+        try{ var ta=document.createElement("textarea"); ta.value=text; ta.style.position="fixed"; ta.style.top="0"; ta.style.opacity="0";
+          document.body.appendChild(ta); ta.focus(); ta.select(); var okc=document.execCommand("copy"); document.body.removeChild(ta); okc?ok():fail();
         }catch(e){ fail(); }
       }
-      if(navigator.clipboard && navigator.clipboard.writeText){
-        navigator.clipboard.writeText(text).then(ok).catch(legacyCopy);
-      } else { legacyCopy(); }
+      if(navigator.clipboard && navigator.clipboard.writeText){ navigator.clipboard.writeText(text).then(ok).catch(legacyCopy); }
+      else { legacyCopy(); }
     });
   });
 </script>
