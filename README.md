@@ -17,15 +17,23 @@
 
 **macOS / Linux / WSL**
 
+<table align="center"><tr><td>
+
 ```bash
 curl https://www.exasol.com/install/starter-kit.sh | sh
 ```
 
+</td></tr></table>
+
 **Windows (PowerShell)**
+
+<table align="center"><tr><td>
 
 ```powershell
 irm https://www.exasol.com/install/starter-kit.ps1 | iex
 ```
+
+</td></tr></table>
 
 **Prefer to let your AI do it?** Paste this into Claude Code, Codex, or any coding agent:
 
