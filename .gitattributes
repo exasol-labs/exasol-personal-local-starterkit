@@ -17,3 +17,10 @@ setup/exakit text eol=lf
 *.sql text eol=lf
 *.py text eol=lf
 *.csv text eol=lf
+
+# install.sh fetches this repo as a source tarball, so every byte here is on the
+# critical path of `curl | sh` — before the banner even appears. The demo video
+# is documentation: nothing in the kit reads it, and no installed copy needs it.
+# export-ignore keeps it in the repo (browsable, cloneable, linkable) while
+# dropping it from the archive GitHub builds with `git archive`.
+static/*.mp4 export-ignore
