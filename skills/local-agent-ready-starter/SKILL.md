@@ -51,11 +51,11 @@ One command installs and connects the database, `exapump` (data/SQL CLI), and th
 
 - **macOS / Linux / WSL:**
   ```bash
-  curl -fsSL https://raw.githubusercontent.com/exasol-labs/exasol-personal-local-starterkit/main/install.sh | sh
+  curl https://www.exasol.com/install/starter-kit.sh | sh
   ```
 - **Windows (PowerShell):**
   ```powershell
-  irm https://raw.githubusercontent.com/exasol-labs/exasol-personal-local-starterkit/main/install.ps1 | iex
+  irm https://www.exasol.com/install/starter-kit.ps1 | iex
   ```
 
 Inspect-before-run applies to setup too, not just SQL. Offer the user the kit's read-first

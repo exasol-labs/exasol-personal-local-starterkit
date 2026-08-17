@@ -20,7 +20,7 @@ No Python on your Mac? That is fine. The installer brings its own.
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/exasol-labs/exasol-personal-local-starterkit/main/install.sh | sh
+curl https://www.exasol.com/install/starter-kit.sh | sh
 ```
 
 What happens, in order:

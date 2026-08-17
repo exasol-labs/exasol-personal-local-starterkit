@@ -22,7 +22,7 @@ Every ✗ line tells you what to fix. The usual one is Docker Desktop not runnin
 ## Install (inside the WSL terminal)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/exasol-labs/exasol-personal-local-starterkit/main/install.sh | sh
+curl https://www.exasol.com/install/starter-kit.sh | sh
 ```
 
 What happens, in order:
