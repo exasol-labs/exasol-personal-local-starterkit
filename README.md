@@ -63,6 +63,7 @@ At the end: connection details on screen, a managed runtime state under `~/.exas
 - 🔒 **Read-only AI.** Your assistant can read everything and change nothing. The database enforces it.
 - 🤖 **Support for multiple AI clients.** Claude, Codex, Cursor, GitHub Copilot, Gemini CLI, OpenCode, Continue.
 - 📊 **Sample data included.** Three sample datasets, loaded and verified for you.
+- 🧠 **UDFs on macOS.** Exasol Personal 2.2.0 runs Python, Java and R UDFs locally — install a language container once with `exasol slc install PYTHON3`.
 - ♻️ **Safe to re-run.** Re-runs skip what is already done.
 
 ## 🚀 Local Agent-Ready Starter
