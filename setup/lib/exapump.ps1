@@ -108,11 +108,12 @@ function Get-ExapumpAssetName {
     }
 }
 
-# Digest of the pinned release (published by the release API). When the
-# version is overridden the digest is fetched from the API instead.
+# Digests of the fallback releases (published by the release API). For any
+# other version the digest is fetched from the API instead.
 function Get-ExapumpPinnedSha256 {
     param([Parameter(Mandatory)][string]$AssetName)
     switch ($AssetName) {
+        "exapump-0.13.0-windows-x86_64.exe" { return "b6eccf50732f4f2d3d4f6edb34789e6e24e94d9c6dbd50f5f080104b375aa838" }
         "exapump-0.11.2-windows-x86_64.exe" { return "8a2e8199a94f1b21782e4c68179948bfa43217c82c9b9b2a25eaec4532305237" }
         default { return $null }
     }
@@ -179,6 +180,18 @@ function Install-Exapump {
 
     $expected = Get-ExapumpPinnedSha256 $asset
     if (-not $expected) { $expected = Get-ExapumpDigestFromApi $asset }
+    # No digest for the requested version (un-pinned latest and the release
+    # API unreachable or rate-limited): install the fallback release instead,
+    # verified against its pinned digest, rather than failing the install.
+    if (-not $expected -and $env:EXAKIT_ALLOW_UNVERIFIED_EXAPUMP -ne "1" -and $script:ExapumpVersion -ne $script:ExapumpVersionFallback) {
+        Warn2 "No checksum available for $asset - installing the fallback exapump v$($script:ExapumpVersionFallback) instead."
+        $script:ExapumpVersion = $script:ExapumpVersionFallback
+        $asset = Get-ExapumpAssetName
+        $url = "https://github.com/$($script:ExapumpRepo)/releases/download/v$($script:ExapumpVersion)/$asset"
+        Info "Downloading exapump v$($script:ExapumpVersion) ($asset)"
+        Get-ExakitFile -Url $url -Dest $tmp
+        $expected = Get-ExapumpPinnedSha256 $asset
+    }
     if ($expected) {
         Test-ExakitSha256 -Path $tmp -Expected $expected
     } elseif ($env:EXAKIT_ALLOW_UNVERIFIED_EXAPUMP -eq "1") {

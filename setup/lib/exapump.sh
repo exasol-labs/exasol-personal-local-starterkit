@@ -29,10 +29,14 @@ exapump_asset_name() {
     echo "exapump-${_ver}-${_osname}-${_archname}"
 }
 
-# Digests of the bundled fallback release (published by the release API). When the
-# version is overridden the digest is fetched from the API instead.
+# Digests of the fallback releases (published by the release API). For any
+# other version the digest is fetched from the API instead.
 exapump_pinned_sha256() {
     case "$1" in
+        exapump-0.13.0-linux-aarch64)  echo "f23a955caf131f26833471dcac0e40e524b825e75277cdda68dfb157acb806bf" ;;
+        exapump-0.13.0-linux-x86_64)   echo "69a5a9bc63aa07ff7b95d00b8786ec1c67c3dff6e7f3fbac5f09b110c8d288db" ;;
+        exapump-0.13.0-macos-aarch64)  echo "819a3c0c7e024069c8e1ee76c931cf6ea3701e7335c72d97431b2e06d7234c71" ;;
+        exapump-0.13.0-macos-x86_64)   echo "38507010bb903573029991e56af3ad846830b328f90cd2f04d048ca684e29ec9" ;;
         exapump-0.11.2-linux-aarch64)  echo "106c3c5ea168a1381549807b82639137c8b3f94bd64c1b6d02fa380a025d5085" ;;
         exapump-0.11.2-linux-x86_64)   echo "669af4d488e5b1ae2e9c9e030c1be4b1cdb7442dedf3175a361928613f4b3e80" ;;
         exapump-0.11.2-macos-aarch64)  echo "e1438c69f26cdcca69ad1b7211aa9495524c53ff1badebee91d5a631c503616b" ;;
@@ -123,6 +127,20 @@ exapump_install() {
     _expected="$(exapump_pinned_sha256 "$_asset")"
     if [ -z "$_expected" ]; then
         _expected="$(exapump_release_digest_from_api "$_asset")"
+    fi
+    # No digest for the requested version (un-pinned latest and the release
+    # API unreachable or rate-limited): install the fallback release instead,
+    # verified against its pinned digest, rather than failing the install.
+    if [ -z "$_expected" ] && [ "${EXAKIT_ALLOW_UNVERIFIED_EXAPUMP:-0}" != "1" ] \
+        && [ "$EXAKIT_EXAPUMP_VERSION" != "$EXAKIT_EXAPUMP_VERSION_FALLBACK" ]; then
+        warn "No checksum available for $_asset — installing the fallback exapump v${EXAKIT_EXAPUMP_VERSION_FALLBACK} instead."
+        EXAKIT_EXAPUMP_VERSION="$EXAKIT_EXAPUMP_VERSION_FALLBACK"
+        export EXAKIT_EXAPUMP_VERSION
+        _asset="$(exapump_asset_name)"
+        _url="https://github.com/${EXAKIT_EXAPUMP_REPO}/releases/download/v${EXAKIT_EXAPUMP_VERSION}/${_asset}"
+        info "Downloading exapump v${EXAKIT_EXAPUMP_VERSION} ($_asset)"
+        fetch "$_url" "$_tmp"
+        _expected="$(exapump_pinned_sha256 "$_asset")"
     fi
     if [ -n "$_expected" ]; then
         verify_sha256 "$_tmp" "$_expected"

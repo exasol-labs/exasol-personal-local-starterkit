@@ -305,7 +305,7 @@ if command -v pwsh >/dev/null 2>&1; then
       Write-Output "$script:NanoTag $script:ExapumpVersion $script:McpVersion"
     ' | tail -1 | tr -d '\r')"
     rm -rf "$_ps_tmp"
-    check "powershell(version_policy_fallback)" "2026.2.0-nano.2 0.11.2 1.10.1" "$ps_versions"
+    check "powershell(version_policy_fallback)" "2026.2.0-nano.2 0.13.0 1.10.1" "$ps_versions"
 else
     check "powershell(parse)" "skipped" "skipped"
     check "powershell(version_policy_fallback)" "skipped" "skipped"
