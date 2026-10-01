@@ -141,9 +141,9 @@ exakit version
 
 `exakit update` applies what is pending. Most updates take seconds and need no downtime. A database update stops the database for a minute or two, so the kit asks first unless you pass `--yes`.
 
-## See it in action
+<!-- ## See it in action
 
-The whole flow, from install to the first query:
+The whole flow, from install to the first query: -->
 
 <!-- https://github.com/user-attachments/assets/77916db0-d273-4720-8d59-1aedac95d5e8 -->
 
@@ -160,7 +160,7 @@ The whole flow, from install to the first query:
 | Port&nbsp;8563&nbsp;already&nbsp;taken? | If an Exasol database is on it, the kit adopts that database. If another program is on it, the kit says which program and leaves it running. Stop that program and re-run. `exakit info` shows the port your database uses. |
 | Behind&nbsp;a&nbsp;corporate&nbsp;proxy? | Set `HTTPS_PROXY` to your proxy address before you run the install command, and every download goes through it: `export HTTPS_PROXY=http://proxy.example.com:8080` on macOS and Linux, `$env:HTTPS_PROXY = 'http://proxy.example.com:8080'` in PowerShell. If the proxy asks for a login, the Windows installer uses your signed-in Windows account. |
 | Installing&nbsp;over&nbsp;a&nbsp;database<br>I&nbsp;already&nbsp;have? | The kit adopts your existing database, running or stopped, and reuses it with its data intact. The installer replaces a database only if it cannot start at all, and it warns you first. |
-| I&nbsp;already&nbsp;have&nbsp;the&nbsp;kit.<br>How&nbsp;do&nbsp;I&nbsp;get&nbsp;this&nbsp;version? | Re-run the install command. See [Upgrade](#upgrade). |
+| I&nbsp;already&nbsp;have&nbsp;the&nbsp;kit.<br>How&nbsp;do&nbsp;I&nbsp;get&nbsp;this&nbsp;version? | Re-run the install command. See [Upgrade](#upgrade-path-for-starterkit). |
 | How&nbsp;do&nbsp;I&nbsp;remove&nbsp;everything? | Run `exakit uninstall`. |
 
 ---
