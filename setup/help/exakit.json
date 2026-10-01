@@ -1,0 +1,487 @@
+{
+  "schema_version": 1,
+  "id": "exakit",
+  "kind": "cli",
+  "title": "exakit",
+  "tagline": "Your local Exasol database and everything that talks to it.",
+  "repo": "exasol-labs/exasol-personal-local-starterkit",
+  "docs": "https://github.com/exasol-labs/exasol-personal-local-starterkit#readme",
+  "state_dir": "~/.exasol-starter-kit",
+  "groups": [
+    {
+      "title": "Everyday",
+      "commands": [
+        "status",
+        "info",
+        "start",
+        "stop",
+        "sql",
+        "data-load",
+        "logs",
+        "autostart"
+      ]
+    },
+    {
+      "title": "AI clients (MCP)",
+      "commands": [
+        "mcp-setup",
+        "mcp-doctor",
+        "mcp-status"
+      ]
+    },
+    {
+      "title": "Add-ons",
+      "commands": [
+        "marketplace"
+      ]
+    },
+    {
+      "title": "Keeping up to date",
+      "commands": [
+        "version",
+        "update"
+      ]
+    },
+    {
+      "title": "Repair and removal",
+      "commands": [
+        "preflight",
+        "repair-runtime",
+        "migrate",
+        "uninstall"
+      ]
+    },
+    {
+      "title": "Reference",
+      "commands": [
+        "guide",
+        "skills",
+        "preflight",
+        "help",
+        "catalog",
+        "whats-new"
+      ]
+    }
+  ],
+  "commands": [
+    {
+      "command": "preflight",
+      "options": "",
+      "summary": "Check this machine's requirements; install nothing.",
+      "description": "Re-runs the machine-requirement checks the installer runs first - RAM, free disk, the container engine or the macOS runtime, and the ports the database needs - against an installed kit, and changes nothing. The same checks run before an install with EXAKIT_PREFLIGHT=1.",
+      "examples": [
+        "exakit preflight"
+      ]
+    },
+    {
+      "command": "status",
+      "options": "[--json | -j]",
+      "summary": "Is the database up and healthy?",
+      "description": "Shows what is installed, whether each component is healthy, which datasets are loaded, and whether add-on services are running. While the installer is still running the status is `installing` with the current step, exit 3, so a poll started in another shell can follow the install from its first seconds.",
+      "exit_codes": {
+        "0": "running",
+        "3": "database stopped",
+        "4": "not installed"
+      },
+      "examples": [
+        "exakit status",
+        "exakit status --json"
+      ]
+    },
+    {
+      "command": "version",
+      "options": "[--json | -j]",
+      "summary": "What is installed, and what is newer.",
+      "description": "Kit source and install date, then one row per component and add-on: what is installed, and whether the maintainers advertise something newer. Applying what is waiting is `exakit update`. --json prints the same rows as one object (installed, advertised, status, severity per component) with the installed/status/remedy keys every state query carries.",
+      "examples": [
+        "exakit version",
+        "exakit version --json"
+      ]
+    },
+    {
+      "command": "info",
+      "options": "[--json | -j]",
+      "summary": "Your connection details.",
+      "description": "The connection panel: DSN, admin and MCP users, where each password file lives, TLS mode and paths. --json prints the install record (manifest.json) plus the state keys installed / status / remedy / skills on stdout, with nothing else on it.",
+      "exit_codes": {
+        "0": "running",
+        "3": "database stopped",
+        "4": "not installed"
+      },
+      "examples": [
+        "exakit info",
+        "exakit info --json"
+      ]
+    },
+    {
+      "command": "guide",
+      "options": "",
+      "summary": "Friendly walkthrough of every way to connect.",
+      "description": "How to connect AI clients over MCP, SQL clients (DBeaver or DbVisualizer), and Python via pyexasol.",
+      "examples": [
+        "exakit guide"
+      ]
+    },
+    {
+      "command": "start",
+      "options": "",
+      "summary": "Start the database and every add-on service.",
+      "description": "Starts everything the kit runs, deploying the database first if it has never been deployed.",
+      "examples": [
+        "exakit start"
+      ]
+    },
+    {
+      "command": "stop",
+      "options": "",
+      "summary": "Stop the add-on services and the database.",
+      "description": "Your data is kept. Bring it back with exakit start.",
+      "examples": [
+        "exakit stop"
+      ]
+    },
+    {
+      "command": "autostart",
+      "options": "",
+      "summary": "Come back automatically after a restart?",
+      "description": "Shows whether the kit's services start at login, then offers to change it.",
+      "examples": [
+        "exakit autostart"
+      ]
+    },
+    {
+      "command": "sql",
+      "options": "'<statement>' | --file <path> | (stdin) [--json] [--write] [--help]",
+      "summary": "Run one SQL statement, with the error translated.",
+      "description": "Runs a single statement and turns the three faults everyone hits first into their remedy (connection refused -> exakit start; FETCH FIRST/TOP -> LIMIT; object not found -> describe it). Reads only unless --write. A saved statement runs with --file <path> or on stdin; comment lines (--) and a trailing ; are dropped first. The remedy is printed FIRST, on stdout with the error. --json returns one object instead: {\"ok\": true, \"rows\": [...]} or {\"ok\": false, \"error\": ..., \"remedy\": ...}, nothing else on stdout; a refusal (typo, write without --write, two statements) is {\"ok\": false, \"error\": ..., \"rejected\": true} with exit 2. A first word that is neither a read nor a known write is reported as unrecognised (a typo), not as a write.",
+      "warning": "This connects with the starter-kit profile, which is the ADMIN user and is NOT sandboxed. The read-only boundary is the MCP user, not this command.",
+      "examples": [
+        "exakit sql 'SELECT CURRENT_TIMESTAMP'",
+        "exakit sql 'SELECT * FROM TPCH.NATION LIMIT 5'",
+        "exakit sql --file ~/.exasol-starter-kit/workflows/top3.sql",
+        "exakit sql --json 'SELECT COUNT(*) AS c FROM TPCH.NATION'"
+      ]
+    },
+    {
+      "command": "data-load",
+      "options": "[--force | -Force] [<file-or-folder>]",
+      "summary": "Load sample data, one file, or a whole folder.",
+      "description": "Opens the data-loading menu: bundled datasets (tpch, energy, weather) or your own data. Name a path to skip the menu. A FILE asks the same two things whatever its kind - the file, then SCHEMA.TABLE - and JSON is shredded into tables by an engine the kit installs for you. A FOLDER is a bulk load: every CSV / Parquet / JSON (.json, .geojson) file at its top level, one table each named after the file, asking for the schema once. Files go to the loader as they are - a ';'-separated CSV with its delimiter, a header with no rows skipped by name, a tabular .txt or .tsv listed with the rename to .csv that exapump needs. Subfolders are not scanned, files of other kinds are ignored, and duplicates - byte-identical files, or two names that resolve to the same table - are skipped with the reason. RUNNING A FOLDER AGAIN IS SAFE: a file already loaded from that folder is skipped rather than loaded on top of itself, a file a stopped run left half-written is reloaded from scratch, and a target table holding rows this kit did not load is left alone unless you say otherwise (EXAKIT_ON_EXISTING). When the load finishes, every file is listed with the table it went into, the rows it landed, and - for one that did not load - the reason against it; a file the engine refuses leaves no empty table behind. --force REPLACES bundled datasets instead of skipping what is already there: their tables are dropped and rebuilt, so anything you changed in those schemas is lost. JSON is macOS, Linux and WSL only; on Windows a folder's JSON files are listed as skipped. Unattended, EXAKIT_DATASETS=tpch,energy,weather loads only what is not loaded yet and exits 0 when everything named is already there.",
+      "environment": [
+        "EXAKIT_DATASETS=tpch,energy,weather names exactly which bundled datasets to load",
+        "EXAKIT_DATA_FILE=/path/file.json or /path/folder answers the local-data question, so a run without a terminal loads that file or folder",
+        "EXAKIT_DATA_TABLE=SCHEMA.TABLE answers the target-table question for a single EXAKIT_DATA_FILE (default: STARTER_KIT.<filename>)",
+        "EXAKIT_SCHEMA sets the default target schema",
+        "EXAKIT_ON_EXISTING=skip|replace|append decides what happens to a target table that already holds rows this kit did not load (default: skip, which is also the answer without a terminal)"
+      ],
+      "examples": [
+        "exakit data-load",
+        "exakit data-load ~/exports",
+        "exakit data-load ./sales.csv",
+        "exakit data-load --force",
+        "EXAKIT_DATASETS=tpch exakit data-load",
+        "EXAKIT_DATA_FILE=./sales.json EXAKIT_DATA_TABLE=STARTER_KIT.SALES exakit data-load",
+        "EXAKIT_DATA_FILE=~/exports EXAKIT_SCHEMA=SALES exakit data-load",
+        "EXAKIT_ON_EXISTING=replace exakit data-load ~/exports"
+      ]
+    },
+    {
+      "command": "logs",
+      "options": "[target | --json] [-f] [--lines N] [--path]",
+      "summary": "Every log the kit can show.",
+      "description": "The installer run, the database container, each add-on service, and what the boot entries wrote at login. No target lists them all with size and last-updated; -f follows one live; --path prints just the path for piping.",
+      "examples": [
+        "exakit logs",
+        "exakit logs setup -f",
+        "exakit logs dash-server --path"
+      ]
+    },
+    {
+      "command": "mcp-setup",
+      "options": "",
+      "summary": "Connect your AI clients.",
+      "description": "Permanently configures the exasol MCP server in every supported AI client. Existing configs are backed up first. Restart the client afterwards and look for a server named exasol. Takes no options: clients are named with EXAKIT_MCP_CLIENTS (an option or argument exits 2). A client whose config no longer holds the kit's entry is offered again.",
+      "environment": [
+        "EXAKIT_MCP_CLIENTS=claude,codex names clients by name (never menu numbers)",
+        "EXAKIT_SKIP_MCP=1 skips MCP setup entirely"
+      ],
+      "examples": [
+        "exakit mcp-setup",
+        "EXAKIT_MCP_CLIENTS=claude,cursor exakit mcp-setup"
+      ]
+    },
+    {
+      "command": "mcp-doctor",
+      "options": "[clients] [--json]",
+      "summary": "Test and repair the AI connection.",
+      "description": "Checks the configured MCP clients, repairs what has drifted - including a warning it can act on, such as a loosened file mode - then re-checks. Confirms the database is running first. --json reports the diagnosis without repairing; its remedy names this command. Each finding names the client it is about, and only that client reads needs_attention.",
+      "exit_codes": {
+        "0": "healthy",
+        "3": "database not running",
+        "4": "not installed"
+      },
+      "examples": [
+        "exakit mcp-doctor",
+        "exakit mcp-doctor --json"
+      ]
+    },
+    {
+      "command": "mcp-status",
+      "options": "[clients] [--json | -j]",
+      "summary": "Show managed MCP state per client.",
+      "description": "Which clients the kit manages, which config file each one uses, and the current snapshot id. --json prints the operation result with a per-client state list (configured / not_set_up / not_installed).",
+      "examples": [
+        "exakit mcp-status",
+        "exakit mcp-status --json"
+      ]
+    },
+    {
+      "command": "mcp-remove",
+      "options": "<client> [<client>...]",
+      "summary": "Remove the kit's MCP entries from named AI clients.",
+      "description": "Takes the kit's managed entries (exasol, and an add-on's such as dash-server) out of the named clients and forgets them, so mcp-doctor stops reporting a client that is no longer on the machine. Clients by name (claude_desktop, claude_code, codex, cursor, vscode_copilot, gemini_cli, opencode, continue); the full removal is exakit uninstall.",
+      "examples": [
+        "exakit mcp-remove cursor",
+        "exakit mcp-remove gemini_cli opencode"
+      ]
+    },
+    {
+      "command": "skills",
+      "options": "[--json | -j]",
+      "summary": "List the AI skills the kit carries.",
+      "description": "One skill per component and add-on, with a one-line summary and whether each has reached the agents' discovery folders. Names the next command when one is needed: exakit update when the maintainers advertise a newer skill set, exakit skills-install when a placed skill has gone missing. --json adds installed_version, advertised_version, status and next.",
+      "examples": [
+        "exakit skills",
+        "exakit skills --json"
+      ]
+    },
+    {
+      "command": "skills-install",
+      "options": "",
+      "summary": "Re-place the AI skills the kit copy carries (repair only).",
+      "description": "Places the skills this kit copy carries into ~/.claude/skills and ~/.agents/skills, and merges the read-only command allowlist into Claude Code's settings. The installer already does this, and exakit update fetches and places a NEWER set, so this is only for a skill folder that went missing: exakit skills names it when that is the case. Restart or reload the agent afterwards.",
+      "examples": [
+        "exakit skills-install"
+      ],
+      "hidden": true
+    },
+    {
+      "command": "marketplace",
+      "options": "[--list [--json]] [<addon-id>...]",
+      "summary": "Optional add-ons (dashboards and more).",
+      "description": "Browse and install optional tools: Space selects, Enter installs. Bare and without a terminal it installs NOTHING - installing non-interactively takes an explicit answer. --list shows every add-on and its state without installing anything (--json for scripts). Naming ids installs exactly those: exakit marketplace dash-server. Installed add-ons then update through exakit update, and one can be removed with exakit uninstall <id>. A tool you installed yourself is recognised and never re-offered.",
+      "environment": [
+        "EXAKIT_MARKETPLACE_ADDONS=dash-server answers the menu non-interactively (ids csv, all, or none)"
+      ],
+      "examples": [
+        "exakit marketplace",
+        "exakit marketplace --list",
+        "exakit marketplace --json",
+        "exakit marketplace dash-server",
+        "EXAKIT_MARKETPLACE_ADDONS=dash-server exakit marketplace"
+      ]
+    },
+    {
+      "command": "update",
+      "options": "[all|runtime|exakit|exapump|mcp|pyexasol|skills|<add-on>|personal]",
+      "summary": "Apply the updates that are waiting.",
+      "description": "Applies the quick components (kit scripts, exapump, MCP server, pyexasol, the AI skills, installed add-ons) in seconds. A newer skill set published by the maintainers is fetched and installed here too, with no kit release needed. A database change stops the database, so it is only applied for an answer the run was actually given: on a terminal you are asked, and an unattended run defers it with the exact command. Your data is kept either way. An unknown option or target is refused (exit 2) and records nothing.",
+      "environment": [
+        "EXAKIT_CONFIRM_RUNTIME_UPDATE=1 pre-answers yes to the database change",
+        "EXAKIT_<COMPONENT>_VERSION pins one component by hand"
+      ],
+      "examples": [
+        "exakit update",
+        "exakit update --yes"
+      ]
+    },
+    {
+      "command": "repair-runtime",
+      "options": "[--yes] [--json | -j]",
+      "summary": "Rebuild a database that cannot start.",
+      "description": "For a deployment the launcher reports interrupted where every start fails the same way. Without --yes it asks, and without a terminal the answer is no: declining changes nothing and exits 5, so a scripted caller can tell \"not confirmed\" from \"repaired\". --json answers with one object ({\"ok\", \"status\", \"changed\", \"remedy\"}) instead of the panel.",
+      "warning": "DESTRUCTIVE: your database is rebuilt from empty and its data is not recoverable. Bundled datasets are reloaded afterwards.",
+      "environment": [
+        "EXAKIT_CONFIRM_RUNTIME_REPAIR=1 pre-answers the confirmation"
+      ],
+      "examples": [
+        "exakit repair-runtime",
+        "exakit repair-runtime --yes",
+        "exakit repair-runtime --json"
+      ],
+      "exit_codes": {
+        "0": "your database was rebuilt",
+        "2": "bad input",
+        "3": "the rebuild did not finish",
+        "4": "not installed",
+        "5": "declined - not confirmed, nothing was changed"
+      }
+    },
+    {
+      "command": "migrate",
+      "options": "docker-nano [--container NAME] [--engine docker|podman] [--dsn HOST:PORT] [--user USER] [--password-file PATH] [--yes] [--json]",
+      "summary": "Copy an older kit's container database into this one.",
+      "description": "The installer asks about a container database from an older kit exactly once. This is for the machine that answered skip and wants the data after all, and for a container the installer never saw - made by hand with docker run exasol/nano, or by the upstream kit. Every non-system table is copied out while the container runs and restored into the running deployment with its column types preserved; the kit's own bundled sample data (tpch, energy, weather) is left out when it is unchanged, because the kit loads it itself (exakit data-load). When the container publishes the deployment's port, the database is stopped for the copy out and started again before the copy in; a container on another port costs no downtime. Nothing in the container is changed or removed. What is not named on the command line comes from the record the installer kept, then from the old install's own record, then from the machine (which engine knows the container, which port it publishes), then from an older kit's defaults (container exasol-nano, user sys). --json prints one object on stdout: ok, status (done | nothing | declined | failed | partial), container, engine, dsn, copied_out, restored, left_alone, failed, sample_left_out, reason, remedy.",
+      "warning": "The password never goes on the command line (there is no --password): pass a file with --password-file, set EXAKIT_LEGACY_PASSWORD for a scripted run, or answer the prompt on a terminal. A text column that held an empty string arrives as NULL.",
+      "environment": [
+        "EXAKIT_LEGACY_PASSWORD=... the old database's password for a scripted run (a file via --password-file is preferred)",
+        "EXAKIT_LEGACY_READY_TIMEOUT=n seconds to wait for a container this command had to start (120)"
+      ],
+      "examples": [
+        "exakit migrate docker-nano",
+        "exakit migrate docker-nano --container exasol-nano --engine docker",
+        "exakit migrate docker-nano --password-file ~/nano_sys_password --yes",
+        "exakit migrate docker-nano --json --yes"
+      ],
+      "exit_codes": {
+        "0": "done, or nothing of yours to copy",
+        "1": "the copy did not finish - the reason and where the copies are kept are printed",
+        "2": "bad input",
+        "3": "no deployment to copy into, or no exapump to copy with",
+        "4": "not installed",
+        "5": "declined - not confirmed, nothing was changed"
+      }
+    },
+    {
+      "command": "uninstall",
+      "options": "[--yes] [--dry-run] [<addon-id>]",
+      "summary": "Remove what the kit installed.",
+      "description": "Pick what to remove (Skip, each add-on, or EVERYTHING) with a confirmation summary and a typed gate. --dry-run previews the full plan and changes nothing. Removing one add-on only: exakit uninstall <addon-id> [--yes] - the rest of the kit is untouched.",
+      "warning": "A full uninstall removes the database AND its data, the MCP configs, the skills and the binaries.",
+      "examples": [
+        "exakit uninstall --dry-run",
+        "exakit uninstall --yes",
+        "exakit uninstall json-tables --yes"
+      ]
+    },
+    {
+      "command": "help",
+      "options": "[--all] [<component>]",
+      "summary": "This screen.",
+      "description": "exakit help shows the everyday commands. --all lists every command. exakit help <component> (or exakit <component> --help) opens the full reference for one component.",
+      "examples": [
+        "exakit help",
+        "exakit help --all",
+        "exakit help exapump"
+      ]
+    },
+    {
+      "command": "catalog",
+      "options": "[search] [--json | -j]",
+      "summary": "Browse or search every command.",
+      "description": "Every exakit, exapump and exasol command in one searchable screen. --json prints the whole command surface as one machine-readable object.",
+      "examples": [
+        "exakit catalog",
+        "exakit catalog mcp",
+        "exakit catalog --json"
+      ]
+    },
+    {
+      "command": "whats-new",
+      "options": "[<version>]",
+      "summary": "What changed in this kit version.",
+      "description": "The what's-new card for the kit version you have installed, or for a named one. The installer shows the same cards, one per version crossed, after an upgrade; this prints them again any time.",
+      "examples": [
+        "exakit whats-new",
+        "exakit whats-new 0.2.0"
+      ]
+    },
+    {
+      "command": "upgrade-kit2",
+      "options": "",
+      "summary": "Add the Kit 2 trust assets to this install (internal).",
+      "description": "Runs the kit's own upgrade/upgrade-kit2.sh against this install: the Trusted AI Workflow add-on is layered on top and nothing is reinstalled. An upgrade path the kit runs for itself, not a command to reach for by hand.",
+      "examples": [
+        "exakit upgrade-kit2"
+      ],
+      "hidden": true
+    },
+    {
+      "command": "rollback-kit2",
+      "options": "",
+      "summary": "Remove exactly what upgrade-kit2 added (internal).",
+      "description": "Runs the kit's own upgrade/rollback-kit2.sh: everything upgrade-kit2 added is removed, and the database and every Kit 1 component stay untouched.",
+      "examples": [
+        "exakit rollback-kit2"
+      ],
+      "hidden": true
+    }
+  ],
+  "environment": [
+    {
+      "name": "EXAKIT_MCP_CLIENTS",
+      "effect": "Which MCP clients to configure, by name: claude, claude_desktop, claude_code, codex, cursor, vscode_copilot, gemini_cli, opencode, continue, all, skip."
+    },
+    {
+      "name": "EXAKIT_SKIP_MCP",
+      "effect": "1 skips MCP client setup entirely."
+    },
+    {
+      "name": "EXAKIT_DATASETS",
+      "effect": "Which bundled datasets to load: tpch, energy, weather."
+    },
+    {
+      "name": "EXAKIT_LOAD_SAMPLE",
+      "effect": "0 skips data loading, 1 loads the bundled sample."
+    },
+    {
+      "name": "EXAKIT_MARKETPLACE_ADDONS",
+      "effect": "Answers the marketplace offer: ids csv, all, or none."
+    },
+    {
+      "name": "EXAKIT_REUSE_DB",
+      "effect": "1 adopts an existing database (default), 0 destroys it and deploys fresh - 0 removes the local deployment and all its data."
+    },
+    {
+      "name": "EXAKIT_DB_PORT",
+      "effect": "Alternate database port. The launcher selects and remembers the deployment's own port; exakit info shows the one in use."
+    },
+    {
+      "name": "EXAKIT_VERSION_POLICY",
+      "effect": "manifest (default), latest, or pinned - where component versions come from."
+    },
+    {
+      "name": "EXAKIT_CONFIRM_RUNTIME_UPDATE",
+      "effect": "1 pre-answers yes to stopping the database for a runtime update."
+    },
+    {
+      "name": "EXAKIT_NO_UPDATE_NOTICE",
+      "effect": "1 never prints the update notice other commands can show."
+    }
+  ],
+  "troubleshooting": [
+    {
+      "symptom": "Podman is installed but not running",
+      "remedy": "Run: podman machine start - then re-run the installer."
+    },
+    {
+      "symptom": "Port 8563 is already in use",
+      "remedy": "Stop the other app, or re-run with EXAKIT_DB_PORT=8564."
+    },
+    {
+      "symptom": "Setup failed mid-way",
+      "remedy": "Re-run the same install command. It resumes from the failed step."
+    },
+    {
+      "symptom": "Assistant cannot see the database",
+      "remedy": "exakit status, then exakit mcp-doctor, then restart the AI client."
+    },
+    {
+      "symptom": "Another setup run is already in progress",
+      "remedy": "Wait for it. If the pid is dead, remove ~/.exasol-starter-kit/.install.lock and re-run."
+    },
+    {
+      "symptom": "Anything else",
+      "remedy": "exakit logs has the full story. Every error message names its remedy."
+    }
+  ],
+  "see_also": [
+    "exapump",
+    "mcp",
+    "pyexasol",
+    "personal",
+    "dash-server",
+    "json-tables",
+    "exasol-vscode"
+  ]
+}

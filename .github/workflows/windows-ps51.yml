@@ -1,0 +1,84 @@
+name: windows-ps51
+
+# The Windows CLI runs under Windows PowerShell 5.1 - the exakit.cmd shim invokes
+# powershell.exe - and 5.1 serializes differently from pwsh 7: ConvertFrom-Json
+# hands an array back as one object, a one-element array becomes a bare string,
+# Set-Content -Encoding UTF8 writes a BOM. Every --json shape bug of the fourth
+# agent-operability audit passed the pwsh-only suites. This job runs the contract
+# test under both engines on a real Windows runner.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  json-contracts:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: contracts under Windows PowerShell 5.1
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/ps51-json-contracts.ps1
+      - name: contracts under PowerShell 7
+        shell: pwsh
+        run: pwsh -NoProfile -File tests/ps51-json-contracts.ps1
+
+  # Everything below runs on a real Windows machine because that is the only
+  # place it means anything. The AST guard and both PowerShell-native suites
+  # already run on the Linux runner under pwsh 7, which is a different engine
+  # with a different cmdlet set: it cannot resolve Get-Acl or
+  # Get-NetTCPConnection, so those are taken on trust in an allowlist, and it
+  # accepts syntax 5.1 rejects. Here the allowlist is checked instead of
+  # trusted, and the suites execute under the engine exakit.cmd actually
+  # invokes.
+  powershell-suites:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: undefined-function sweep under Windows PowerShell 5.1
+        shell: bash
+        run: EXAKIT_PS_BIN=powershell bash tests/ps-undefined-functions.sh
+      - name: encoding guard
+        shell: bash
+        run: bash tests/ps-encoding-guard.sh
+      # First, because a file that does not parse makes every other suite here
+      # meaningless: they Invoke-Expression what they can and skip the rest.
+      - name: every .ps1 parses under 5.1
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/ps-parse.ps1
+      # Parsing is not enough: a param() block below a statement parses fine and
+      # silently stops being a parameter block. See the file's header.
+      - name: every param() block is declared first
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/ps-param-placement.ps1
+      - name: uninstall suite under 5.1
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/uninstall-ps.ps1
+      - name: non-interactive answers under 5.1
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/noninteractive-answers.ps1
+      # The Windows Personal runtime module, executed against a sandboxed kit
+      # home: port from deployment.json, deployed-version state files, the
+      # wedge probe, the guest-rebuild recognition, the manifest keys, and the
+      # per-subcommand --auto-approve probe against a stub launcher.
+      - name: personal runtime module under 5.1
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/runtime-personal-ps.ps1
+      # The crossing from a container database, executed on the engine that
+      # exakit.cmd really runs under: the fault-injection engine and exapump
+      # behind .cmd wrappers, every gate, both halves, and the coverage floor.
+      - name: legacy crossing under 5.1
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/legacy-crossing-ps.ps1
+      # The local data loader on the files people actually have - BOM, CRLF,
+      # ';', GTFS .txt, header-only, .geojson - against a .cmd stub exapump
+      # that keeps the bytes it was handed: the kit passes them on untouched.
+      - name: data-load shapes under 5.1
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/data-load-shapes-ps.ps1
+      # The skill layer, executed rather than grepped. tests/skills.sh asserts
+      # this half with awk against exakit-common.ps1, which catches a deleted
+      # line and nothing else.
+      - name: skills under 5.1
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/skills.ps1

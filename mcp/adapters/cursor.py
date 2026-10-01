@@ -12,4 +12,7 @@ class CursorAdapter(JsonConfigAdapter):
             top_level_key="mcpServers",
             activation_message="Reload Cursor to load the updated MCP configuration.",
             default_location=".cursor/mcp.json",
+            # Evidence of the editor itself, not of a config file the kit wrote.
+            programs=("cursor",),
+            bundles=("Cursor",),
         )

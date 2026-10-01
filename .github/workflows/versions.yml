@@ -1,0 +1,695 @@
+name: versions
+
+# versions.json is the maintainer-edited record of the tested version set: every
+# installed kit reads it, so a typo there reaches users directly. This workflow
+# is the review gate for that file and for the shell/PowerShell code that reads
+# it — schema and formatting first, then real artifact digests, then the test
+# suite on both a real bash 3.2 (macOS) and a Linux host with pwsh available.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: versions-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: detect versions.json changes
+    runs-on: ubuntu-latest
+    outputs:
+      versions: ${{ steps.detect.outputs.versions }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: detect
+        run: |
+          set -u
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            changed="$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")"
+          elif [ -n "${{ github.event.before }}" ] && \
+               git cat-file -e "${{ github.event.before }}^{commit}" 2>/dev/null; then
+            changed="$(git diff --name-only "${{ github.event.before }}" HEAD)"
+          else
+            # No usable base (first push, force push, rerun): verify rather than skip.
+            changed="versions.json"
+          fi
+          if printf '%s\n' "$changed" | grep -qx 'versions.json'; then
+            echo "versions=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "versions=false" >> "$GITHUB_OUTPUT"
+          fi
+          printf 'versions.json changed: %s\n' "$(printf '%s\n' "$changed" | grep -cx 'versions.json')"
+
+  validate:
+    name: validate versions.json
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: canonical formatting
+        # The no-Python reader in setup/lib/common.sh walks the file line by
+        # line, so the shape is an interface: 2-space pretty-print, one key per
+        # line, LF endings. A reformat that json.tool would not produce breaks
+        # that reader on machines without Python.
+        run: |
+          python3 -m json.tool --indent 2 versions.json > /tmp/canonical.json
+          diff -u versions.json /tmp/canonical.json
+          if grep -q $'\r' versions.json; then
+            echo "versions.json contains CR characters (must be LF-only)" >&2
+            exit 1
+          fi
+
+      - name: schema
+        run: |
+          python3 - <<'PY'
+          import collections
+          import json
+          import re
+          import sys
+
+          with open("versions.json") as handle:
+              doc = json.load(handle, object_pairs_hook=collections.OrderedDict)
+
+          problems = []
+          version_re = re.compile(r"^[A-Za-z0-9._+-]+$")
+          digest_re = re.compile(r"^[0-9a-f]{64}$")
+
+          if doc.get("schema_version") != 1:
+              problems.append("schema_version must be 1")
+          if not re.match(r"^\d{4}-\d{2}-\d{2}$", str(doc.get("updated", ""))):
+              problems.append("updated must be an ISO date (YYYY-MM-DD)")
+
+          expected = {"personal", "exapump", "mcp", "pyexasol", "skills",
+                      "dash-server", "exasol-vscode", "json-tables",
+                      "exasol-scheduler", "dbt-exasol"}
+          components = doc.get("components") or {}
+          if set(components) != expected:
+              problems.append("components must be exactly %s, found %s"
+                              % (sorted(expected), sorted(components)))
+
+          blocks = [("kit", doc.get("kit") or {})]
+          blocks += [("components.%s" % name, block) for name, block in components.items()]
+          if doc.get("kit2") is not None:
+              blocks.append(("kit2", doc["kit2"]))
+
+          for label, block in blocks:
+              if not isinstance(block, dict):
+                  problems.append("%s must be an object" % label)
+                  continue
+              version = block.get("version")
+              if not isinstance(version, str) or not version_re.match(version):
+                  problems.append("%s.version is missing or outside [A-Za-z0-9._+-]" % label)
+              keys = list(block)
+              # The no-Python reader tracks nesting by indentation, so a nested
+              # object before "version" would hide it behind a deeper path.
+              nested = [k for k in keys if isinstance(block[k], dict)]
+              if nested and "version" in keys and keys.index("version") > min(keys.index(k) for k in nested):
+                  problems.append('%s must list "version" before any nested object' % label)
+              severity = block.get("severity")
+              if severity is not None and severity not in ("normal", "recommended", "critical"):
+                  problems.append("%s.severity must be normal, recommended or critical" % label)
+              note = block.get("note")
+              if note is not None and (not isinstance(note, str) or "\n" in note):
+                  problems.append("%s.note must be a single-line string" % label)
+              min_kit = block.get("min_kit_version")
+              if min_kit is not None and (not isinstance(min_kit, str) or not version_re.match(min_kit)):
+                  problems.append("%s.min_kit_version is outside [A-Za-z0-9._+-]" % label)
+
+          exapump = components.get("exapump") or {}
+          digests = exapump.get("sha256") or {}
+          expected_platforms = {
+              "macos-aarch64", "macos-x86_64",
+              "linux-aarch64", "linux-x86_64",
+              "windows-x86_64",
+          }
+          if set(digests) != expected_platforms:
+              problems.append("components.exapump.sha256 must cover exactly %s, found %s"
+                              % (sorted(expected_platforms), sorted(digests)))
+          for platform, digest in digests.items():
+              if not isinstance(digest, str) or not digest_re.match(digest):
+                  problems.append("components.exapump.sha256.%s is not a 64-character hex digest" % platform)
+
+          for problem in problems:
+              print("versions.json: %s" % problem, file=sys.stderr)
+          sys.exit(1 if problems else 0)
+          PY
+
+      - name: the MCP fallback constant matches the manifest
+        # mcp/runtime/exakit.py keeps a last-resort default for the MCP server
+        # version. It must move with the manifest, in the same pull request.
+        run: |
+          set -u
+          advertised="$(python3 -c 'import json; print(json.load(open("versions.json"))["components"]["mcp"]["version"])')"
+          constant="$(sed -n 's/^DEFAULT_MCP_VERSION = "\(.*\)"$/\1/p' mcp/runtime/exakit.py)"
+          printf 'manifest: %s\nexakit.py: %s\n' "$advertised" "$constant"
+          if [ "$advertised" != "$constant" ]; then
+            echo "DEFAULT_MCP_VERSION in mcp/runtime/exakit.py must equal components.mcp.version" >&2
+            exit 1
+          fi
+
+  digest-verify:
+    name: verify exapump digests
+    needs: changes
+    if: needs.changes.outputs.versions == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: download the advertised assets and check every digest
+        # A wrong digest here would make the exapump install refuse to run (or,
+        # worse, be waved through with EXAKIT_ALLOW_UNVERIFIED_EXAPUMP=1). The
+        # assets are the ground truth, so download them and hash them.
+        run: |
+          set -u
+          repo="$(python3 -c 'import json; print(json.load(open("versions.json"))["components"]["exapump"].get("repo", "exasol-labs/exapump"))')"
+          version="$(python3 -c 'import json; print(json.load(open("versions.json"))["components"]["exapump"]["version"])')"
+          # Written to a file rather than piped: a mismatch must fail the job,
+          # and `exit 1` inside a piped while-loop only ends the subshell.
+          python3 -c 'import json; d = json.load(open("versions.json"))["components"]["exapump"]["sha256"]; print("\n".join("%s %s" % kv for kv in d.items()))' > /tmp/digests.txt
+          while read -r platform digest; do
+            case "$platform" in
+              windows-*) asset="exapump-${version}-${platform}.exe" ;;
+              *)         asset="exapump-${version}-${platform}" ;;
+            esac
+            url="https://github.com/${repo}/releases/download/v${version}/${asset}"
+            printf '\n%s\n' "$asset"
+            if ! curl -fL --proto '=https' --retry 3 -sS -o "/tmp/$asset" "$url"; then
+              echo "  could not download $url" >&2
+              exit 1
+            fi
+            actual="$(sha256sum "/tmp/$asset" | cut -d' ' -f1)"
+            rm -f "/tmp/$asset"
+            if [ "$actual" != "$digest" ]; then
+              printf '  digest mismatch\n    advertised: %s\n    actual:     %s\n' "$digest" "$actual" >&2
+              exit 1
+            fi
+            printf '  verified %s\n' "$digest"
+          done < /tmp/digests.txt
+
+  upstream-exists:
+    name: the advertised versions exist upstream
+    needs: changes
+    if: needs.changes.outputs.versions == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: every advertised version resolves at its own upstream
+        # digest-verify proves the exapump binaries are the ones we say they are.
+        # This job asks the other question: does what we advertise exist at all?
+        # A typo in a launcher version, an MCP version that was never published, or a
+        # yanked pyexasol release reaches users as a failed install, and the
+        # manifest is the only place to catch it before that happens.
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import sys
+          import time
+          import urllib.error
+          import urllib.request
+
+          with open("versions.json") as handle:
+              doc = json.load(handle)
+          components = doc.get("components") or {}
+          problems = []
+
+          def fetch(url, token=False):
+              """GET url, returning a parsed body, or (None, reason). Retries the
+              transient failures only: a 404 is an answer, not a flake."""
+              request = urllib.request.Request(url, headers={
+                  "Accept": "application/json",
+                  "User-Agent": "exakit-versions-ci",
+              })
+              if token and os.environ.get("GITHUB_TOKEN"):
+                  request.add_header("Authorization", "Bearer %s" % os.environ["GITHUB_TOKEN"])
+              last = "unknown error"
+              for attempt in range(3):
+                  try:
+                      with urllib.request.urlopen(request, timeout=30) as response:
+                          return json.load(response), None
+                  except urllib.error.HTTPError as error:
+                      if error.code in (403, 429) or error.code >= 500:
+                          last = "HTTP %s" % error.code
+                          time.sleep(2 * (attempt + 1))
+                          continue
+                      return None, "HTTP %s" % error.code
+                  except Exception as error:                      # network, DNS, timeout
+                      last = str(error)
+                      time.sleep(2 * (attempt + 1))
+              return None, last
+
+          def check_pypi(label, block, default_package):
+              version = block.get("version")
+              package = block.get("package", default_package)
+              body, reason = fetch("https://pypi.org/pypi/%s/%s/json" % (package, version))
+              if body is None:
+                  problems.append("%s: %s==%s did not resolve on PyPI (%s)"
+                                  % (label, package, version, reason))
+                  return
+              if (body.get("info") or {}).get("yanked"):
+                  why = (body["info"].get("yanked_reason") or "no reason given")
+                  problems.append("%s: %s==%s is YANKED on PyPI (%s)" % (label, package, version, why))
+                  return
+              print("  ok  %s: %s==%s is published and not yanked" % (label, package, version))
+
+          # --- the database runtime -------------------------------------------
+          personal = components.get("personal") or {}
+          if personal:
+              version = personal.get("version")
+              repo = personal.get("repo", "exasol/exasol-personal")
+              # runtime-personal.sh downloads from releases/download/v<version>/,
+              # so the tag it needs is v-prefixed. Check exactly that.
+              body, reason = fetch("https://api.github.com/repos/%s/releases/tags/v%s"
+                                   % (repo, version), token=True)
+              if body is None:
+                  problems.append("personal: %s has no release tagged v%s (%s)"
+                                  % (repo, version, reason))
+              else:
+                  print("  ok  personal: %s release v%s exists" % (repo, version))
+
+          # --- the PyPI-published pieces --------------------------------------
+          if components.get("mcp"):
+              check_pypi("mcp", components["mcp"], "exasol-mcp-server")
+          if components.get("pyexasol"):
+              check_pypi("pyexasol", components["pyexasol"], "pyexasol")
+          # dbt-exasol installs from PyPI too, and carries no `repo` on purpose:
+          # the generic upstream lookup prefers repo, and the GitHub tags are
+          # v-prefixed (v1.12.1) while the PyPI versions are not (1.12.1).
+          if components.get("dbt-exasol"):
+              check_pypi("dbt-exasol", components["dbt-exasol"], "dbt-exasol")
+
+          # --- the marketplace add-ons (GitHub-release-installed) --------------
+          # Each installs from its release tag, so the tag the installer
+          # downloads must exist. exasol-vscode additionally advertises the
+          # vsix digest: assert the release asset carries exactly that digest,
+          # so a stale hash can never ship (the install refuses on mismatch).
+          # json-tables is not released upstream in installable form: the kit
+          # prebuilds it (pkg-json-tables.yml) and publishes ONE IMMUTABLE
+          # RELEASE PER BUILD in this repository, tagged json-tables-<version>.
+          # versions.json names that release, the wheel and the digest of every
+          # asset, and the install trusts nothing else -- so this is the merge
+          # gate: the release must exist, carry every asset the pins name, and
+          # each asset's published digest must equal the pinned one. The pkg
+          # workflow's advertise job writes all of it at once from the files it
+          # just published; a hand edit that gets any of it wrong cannot merge,
+          # and a release can never be rewritten underneath a pin because the
+          # workflow refuses to touch an existing tag.
+          jt = components.get("json-tables") or {}
+          if jt.get("version"):
+              before = len(problems)
+              release = jt.get("release") or "json-tables-%s" % jt["version"]
+              if not release.startswith("json-tables-%s" % jt["version"]):
+                  problems.append("json-tables: release %s does not belong to version %s"
+                                  % (release, jt["version"]))
+              required = {"linux-x86_64", "linux-aarch64", "macos-aarch64",
+                          "windows-x86_64", "cargo-windows-x86_64", "wheel"}
+              pins = jt.get("sha256") or {}
+              if set(pins) != required:
+                  problems.append("json-tables: sha256 must cover exactly %s, found %s"
+                                  % (sorted(required), sorted(pins)))
+              if not jt.get("wheel"):
+                  problems.append("json-tables: wheel is not pinned")
+
+              def jt_asset_for(key):
+                  if key == "wheel":
+                      return jt.get("wheel", "")
+                  if key.startswith("cargo-"):
+                      return "exakit-json-tables-cargo-%s%s" % (key[len("cargo-"):],
+                                                                ".exe" if "windows" in key else "")
+                  return "exasol-json-tables-ingest-%s%s" % (key, ".exe" if "windows" in key else "")
+
+              body, reason = fetch("https://api.github.com/repos/%s/releases/tags/%s"
+                                   % (os.environ.get("GITHUB_REPOSITORY", ""), release), token=True)
+              if body is None:
+                  problems.append("json-tables: release %s does not exist (%s) -- the 'pkg / json-tables' "
+                                  "workflow publishes the release BEFORE the version is advertised"
+                                  % (release, reason))
+              else:
+                  assets = {a.get("name", ""): a for a in body.get("assets") or []}
+                  for key, pinned in sorted(pins.items()):
+                      name = jt_asset_for(key)
+                      asset = assets.get(name)
+                      if asset is None:
+                          problems.append("json-tables: release %s has no asset %s (pinned as sha256.%s)"
+                                          % (release, name, key))
+                          continue
+                      published = str(asset.get("digest") or "").replace("sha256:", "")
+                      if published != pinned:
+                          problems.append("json-tables: sha256.%s pins %s but %s on %s is %s"
+                                          % (key, pinned, name, release, published or "unknown"))
+              if len(problems) == before:
+                  print("  ok  json-tables: release %s carries every pinned asset with the pinned digest"
+                        % release)
+
+          # exasol-scheduler follows the same immutable-release contract as
+          # json-tables, minus the wheel and the cargo shim: bare binaries per
+          # platform on a release tagged exasol-scheduler-<version>, digests
+          # pinned here by the pkg workflow's advertise job. One allowance the
+          # json-tables arm no longer needs: with NO sha256 block at all this
+          # is the bootstrap state - the add-on merged before its first
+          # release was published - and users are safe (the module refuses an
+          # unverifiable download), so it is a loud notice rather than a merge
+          # blocker. The moment pins exist, the full gate applies.
+          es = components.get("exasol-scheduler") or {}
+          if es.get("version"):
+              before = len(problems)
+              release = es.get("release") or "exasol-scheduler-%s" % es["version"]
+              if not release.startswith("exasol-scheduler-%s" % es["version"]):
+                  problems.append("exasol-scheduler: release %s does not belong to version %s"
+                                  % (release, es["version"]))
+              es_required = {"linux-x86_64", "linux-arm64", "macos-arm64",
+                             "macos-x86_64", "windows-x86_64"}
+              es_pins = es.get("sha256") or {}
+              if not es_pins:
+                  print("::warning::exasol-scheduler: no digests pinned yet (bootstrap) -- "
+                        "run the 'pkg / exasol-scheduler' workflow to publish %s, and merge "
+                        "the advertise PR it opens" % release)
+              else:
+                  if set(es_pins) != es_required:
+                      problems.append("exasol-scheduler: sha256 must cover exactly %s, found %s"
+                                      % (sorted(es_required), sorted(es_pins)))
+                  body, reason = fetch("https://api.github.com/repos/%s/releases/tags/%s"
+                                       % (os.environ.get("GITHUB_REPOSITORY", ""), release), token=True)
+                  if body is None:
+                      problems.append("exasol-scheduler: release %s does not exist (%s) -- the "
+                                      "'pkg / exasol-scheduler' workflow publishes the release "
+                                      "BEFORE the version is advertised" % (release, reason))
+                  else:
+                      assets = {a.get("name", ""): a for a in body.get("assets") or []}
+                      for key, pinned in sorted(es_pins.items()):
+                          name = "exasol-scheduler-%s%s" % (key, ".exe" if "windows" in key else "")
+                          asset = assets.get(name)
+                          if asset is None:
+                              problems.append("exasol-scheduler: release %s has no asset %s (pinned as sha256.%s)"
+                                              % (release, name, key))
+                              continue
+                          published = str(asset.get("digest") or "").replace("sha256:", "")
+                          if published != pinned:
+                              problems.append("exasol-scheduler: sha256.%s pins %s but %s on %s is %s"
+                                              % (key, pinned, name, release, published or "unknown"))
+              if len(problems) == before:
+                  print("  ok  exasol-scheduler: the pinned release checks out")
+
+          for addon in ("dash-server", "exasol-vscode"):
+              block = components.get(addon) or {}
+              if not block:
+                  continue
+              version = block.get("version")
+              repo = block.get("repo", "exasol-labs/%s" % addon)
+              body, reason = fetch("https://api.github.com/repos/%s/releases/tags/v%s"
+                                   % (repo, version), token=True)
+              if body is None:
+                  problems.append("%s: %s has no release tagged v%s (%s)"
+                                  % (addon, repo, version, reason))
+                  continue
+              print("  ok  %s: %s release v%s exists" % (addon, repo, version))
+              advertised = (block.get("sha256") or {}).get("vsix")
+              if advertised:
+                  asset_name = "%s-%s.vsix" % (addon, version)
+                  digest = next((a.get("digest", "") for a in body.get("assets", [])
+                                 if a.get("name") == asset_name), "")
+                  if digest != "sha256:%s" % advertised:
+                      problems.append("%s: the advertised vsix digest does not match "
+                                      "the release asset (%s vs %s)"
+                                      % (addon, advertised, digest or "no digest"))
+                  else:
+                      print("  ok  %s: the vsix digest matches the release asset" % addon)
+
+          # exapump is deliberately not re-checked here: digest-verify already
+          # downloads all five assets and hashes them, which is strictly stronger.
+          print("  --  exapump: covered by the digest-verify job")
+
+          for problem in problems:
+              print("versions.json: %s" % problem, file=sys.stderr)
+          sys.exit(1 if problems else 0)
+          PY
+
+  repo-published-pins:
+    name: the repo-published pins match this repository's releases
+    runs-on: ubuntu-latest
+    # Deliberately NOT gated on `changes`: json-tables and exasol-scheduler are
+    # built and released by THIS repository, so their pins are repo-local. A
+    # fork publishes its own release under the same tag with different
+    # binaries, and a sync that carries the fork's digests here makes the
+    # add-on uninstallable -- the module refuses every asset whose digest is
+    # not the pinned one. That breakage arrives in commits that need not touch
+    # versions.json at all, and it went unnoticed once because the gated job
+    # only runs when the file is in the diff. This one always runs.
+    steps:
+      - uses: actions/checkout@v7
+      - name: every repo-published pin resolves in this repository
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys, time, urllib.error, urllib.request
+
+          REPO = os.environ.get("GITHUB_REPOSITORY", "")
+
+          with open("versions.json") as handle:
+              components = (json.load(handle).get("components") or {})
+          problems = []
+
+          def fetch(url):
+              request = urllib.request.Request(url, headers={
+                  "Accept": "application/json", "User-Agent": "exakit-repo-pins",
+              })
+              if os.environ.get("GITHUB_TOKEN"):
+                  request.add_header("Authorization", "Bearer %s" % os.environ["GITHUB_TOKEN"])
+              last = "unknown error"
+              for attempt in range(3):
+                  try:
+                      with urllib.request.urlopen(request, timeout=30) as response:
+                          return json.load(response), None
+                  except urllib.error.HTTPError as error:
+                      if error.code in (403, 429) or error.code >= 500:
+                          last = "HTTP %s" % error.code
+                          time.sleep(2 * (attempt + 1))
+                          continue
+                      return None, "HTTP %s" % error.code
+                  except Exception as error:
+                      last = str(error)
+                      time.sleep(2 * (attempt + 1))
+              return None, last
+
+          def check(label, block, prefix, required, asset_for):
+              """Assert the pinned release lives in THIS repository and every pinned
+              digest equals the digest of the asset actually published there."""
+              version = block.get("version")
+              if not version:
+                  return
+              release = block.get("release") or "%s-%s" % (prefix, version)
+              if not release.startswith("%s-%s" % (prefix, version)):
+                  problems.append("%s: release %s does not belong to version %s" % (label, release, version))
+              pins = block.get("sha256") or {}
+              if not pins:
+                  print("::warning::%s: no digests pinned yet (bootstrap)" % label)
+                  return
+              if set(pins) != required:
+                  problems.append("%s: sha256 must cover exactly %s, found %s"
+                                  % (label, sorted(required), sorted(pins)))
+              body, reason = fetch("https://api.github.com/repos/%s/releases/tags/%s" % (REPO, release))
+              if body is None:
+                  problems.append("%s: release %s does not exist in %s (%s) -- the pins must name a "
+                                  "release published by THIS repository, not a fork's"
+                                  % (label, release, REPO, reason))
+                  return
+              assets = {a.get("name", ""): a for a in body.get("assets") or []}
+              wrong = 0
+              for key, pinned in sorted(pins.items()):
+                  name = asset_for(key)
+                  asset = assets.get(name)
+                  if asset is None:
+                      problems.append("%s: release %s has no asset %s (pinned as sha256.%s)"
+                                      % (label, release, name, key))
+                      continue
+                  published = str(asset.get("digest") or "").replace("sha256:", "")
+                  if published != pinned:
+                      wrong += 1
+                      problems.append("%s: sha256.%s pins %s but %s on %s is %s"
+                                      % (label, key, pinned, name, release, published))
+              if wrong:
+                  problems.append("%s: %d digest(s) describe a different build -- pins copied from a fork "
+                                  "do not apply here, because each repository publishes its own release "
+                                  "under this tag. Re-pin from %s's own release." % (label, wrong, REPO))
+              elif not problems:
+                  print("  ok  %s: %s carries every pinned asset with the pinned digest" % (label, release))
+
+          jt = components.get("json-tables") or {}
+          def jt_asset(key):
+              if key == "wheel":
+                  return jt.get("wheel", "")
+              if key.startswith("cargo-"):
+                  plat = key[len("cargo-"):]
+                  return "exakit-json-tables-cargo-%s%s" % (plat, ".exe" if "windows" in plat else "")
+              return "exasol-json-tables-ingest-%s%s" % (key, ".exe" if "windows" in key else "")
+
+          check("json-tables", jt, "json-tables",
+                {"linux-x86_64", "linux-aarch64", "macos-aarch64",
+                 "windows-x86_64", "cargo-windows-x86_64", "wheel"}, jt_asset)
+
+          check("exasol-scheduler", components.get("exasol-scheduler") or {}, "exasol-scheduler",
+                {"linux-x86_64", "linux-arm64", "macos-arm64", "macos-x86_64", "windows-x86_64"},
+                lambda key: "exasol-scheduler-%s%s" % (key, ".exe" if "windows" in key else ""))
+
+          for problem in problems:
+              print("versions.json: %s" % problem, file=sys.stderr)
+          sys.exit(1 if problems else 0)
+          PY
+
+  shell-tests:
+    name: shell tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # macOS gives a real bash 3.2 (the version users actually run the
+        # installer with); the Linux runner ships pwsh, so the PowerShell
+        # halves of the parity guards execute instead of being skipped.
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - name: bash version
+        run: bash --version | head -1
+      - name: PowerShell available
+        run: command -v pwsh >/dev/null 2>&1 && pwsh --version || echo "pwsh not installed - PowerShell checks will report skipped"
+      - run: bash tests/ps-encoding-guard.sh
+      # PowerShell resolves command names at call time, so a script calling a
+      # function that exists nowhere parses clean and dies only on a real
+      # Windows machine - that is how the exasol-scheduler install shipped
+      # broken while every brace-balance guard stayed green. This walks the
+      # AST of every shipped .ps1 and fails on any static Verb-Noun call that
+      # resolves to nothing.
+      - run: bash tests/ps-undefined-functions.sh
+      - run: bash tests/versions-manifest.sh
+      - run: bash tests/dry-run-matrix.sh
+      - run: bash tests/noninteractive-answers.sh
+      - run: bash tests/marketplace.sh
+      # json-tables ships from one immutable release per build; the pin in
+      # versions.json is the only authority. This guards both halves: the
+      # module never reads a pin for a build it is not installing, and the
+      # packaging workflow can never overwrite a published release.
+      - run: bash tests/json-tables-release.sh
+      # The twelve findings of the agent-operability audit, pinned: the state
+      # queries' contract, the sql path, all-means-detected, installing state,
+      # the port conflict, and what uninstall keeps.
+      - run: bash tests/agent-audit.sh
+      - run: bash tests/uninstall.sh
+      # An installation made by an older kit has a database this kit cannot
+      # drive, and the crossing is the only code that touches one. What it
+      # DECIDES and what it HANDS to the engine and to exapump are both
+      # exactly checkable, and the invariant worth a CI job is that it never
+      # deletes the old database on either answer.
+      - run: bash tests/legacy-crossing.sh
+      # The same crossing under every fault the road can throw: an engine that
+      # hangs, refuses or loses the container; a database with no password,
+      # no answer, a late answer, or nothing in it; copies and restores that
+      # fail for some tables or all; a run that dies between the two halves.
+      # It ends by measuring how much of the module it walked, and that floor
+      # is a gate.
+      - run: bash tests/legacy-crossing-resilience.sh
+      - run: bash tests/podman-rootless-selfheal.sh
+      - run: bash tests/windows-rootful-podman.sh
+      - run: bash tests/skills.sh
+      # AGENTS.md's hand-maintained rosters go stale silently: a registered
+      # add-on with a skill and a help document was invisible to the runbook,
+      # and a quickstart named a command form both CLIs reject.
+      - run: bash tests/agents-rosters.sh
+      # bash 3.2 is /bin/bash on macOS. This guard proves its own premise on the
+      # running shell and tests its detector against a fixture - and until now it
+      # ran on no runner at all, so the defect it was written for could return
+      # unnoticed. It is cheap; it runs on both.
+      - run: bash tests/bash32-guard.sh
+      # The only empirical proof the MCP database user is read-only. It skips
+      # cleanly without credentials, so it is safe on a runner that has none.
+      - run: bash tests/mcp-readonly-sql-matrix.sh
+      - run: bash tests/kit-upgrade.sh
+      - run: bash tests/agent-operability.sh
+      # The MCP subsystem's own tests were never wired in, so nothing in CI
+      # exercised mcp/ at all -- a NameError in that package would have shipped.
+      - run: python3 -m unittest discover -s mcp/tests -t .
+      # Three more suites existed and were never run by CI either. This one had
+      # rotted: it asserted a data-load prompt wording that the JSON support
+      # changed on the bash side, and nothing noticed. (Not discoverable via
+      # `unittest discover` -- tests/ is not an importable package.)
+      - run: python3 tests/test_sample_data_schema.py
+      - run: bash tests/reap-orphan-daemon.sh
+      # Readiness is a TLS handshake and adoption needs ownership proof: the
+      # two facts the Windows install on a laptop with WSL got wrong.
+      - run: bash tests/personal-readiness.sh
+      - run: bash tests/deploy-progress.sh
+      - run: bash tests/bulk-folder-load.sh
+      - run: bash tests/dataset-load-progress.sh
+      - run: bash tests/install-output-brevity.sh
+      # Resume-path safety: both bugs it guards only appear on a SECOND run
+      # of the installer, which is the run nobody exercises by hand.
+      - run: bash tests/install-resume-safety.sh
+      # `exakit update <component>` still works and is deliberately not
+      # advertised. The guard reads the surfaces a reader reads, and also
+      # checks the capability was hidden rather than deleted.
+      - run: bash tests/update-command-surface.sh
+      # Needs a real pty: ui_spin_begin re-checks `-t 1` at call time, so the
+      # spinner never starts in a captured pipeline and the collision this
+      # guards against cannot be reproduced by running the command normally.
+      - run: bash tests/spinner-line-safety.sh
+      # The table component's PowerShell twin is asserted STATICALLY -- there is
+      # no pwsh on the machine this kit is developed on, so CI is the only thing
+      # that ever reads ui.ps1 at all. It was written and then never wired in
+      # here, which is how the twin drifted while 119 checks sat unrun.
+      - run: bash tests/ps-table-twin.sh
+      - run: bash tests/checkbox-group.sh
+      - run: bash tests/menu-hint.sh
+      - run: bash tests/mcp-status-clients.sh
+      - run: bash tests/status-soft-components.sh
+      - run: bash tests/install-payload.sh
+      - run: bash tests/uninstall-addons-only.sh
+      - run: bash tests/whats-new.sh
+      # The two PowerShell-native suites had NO caller anywhere -- not this
+      # workflow, not their shell siblings, not a script. They document
+      # themselves as `pwsh tests/<name>.ps1` and were simply never run by
+      # anything. The Linux runner ships pwsh, which is where they belong.
+      # Cheap, pwsh-free, and runs on every host: it reads the CLI and the test
+      # as text. The PowerShell suite below can only be verified where pwsh
+      # exists, and finding its next unresolved call by pushing and waiting
+      # costs a full CI round each time.
+      - run: bash tests/lib/ps-uninstall-calls.sh
+      # ONE LEG HAS TO INSIST. This used to skip on any runner without pwsh and
+      # exit 0 either way, so macos-latest (which has none) reported success
+      # having run nothing, and ubuntu-latest was the only thing covering these
+      # five suites plus the AST sweep - on the implicit property that the
+      # hosted image happens to ship pwsh. Drop it from the image and six
+      # guards go quiet with a green matrix and nothing to notice.
+      #
+      # ubuntu-latest now declares that it requires pwsh, so its absence is a
+      # red build there. macOS keeps the skip: it is a real platform for the
+      # shell suites and has no business failing over an engine it does not
+      # ship.
+      - name: PowerShell available (required on Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: pwsh --version
+      - name: PowerShell-native suites
+        env:
+          EXAKIT_REQUIRE_PS: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
+        run: |
+          if command -v pwsh >/dev/null 2>&1; then
+            pwsh -NoProfile -File tests/noninteractive-answers.ps1
+            pwsh -NoProfile -File tests/uninstall-ps.ps1
+            pwsh -NoProfile -File tests/runtime-personal-ps.ps1
+            pwsh -NoProfile -File tests/legacy-crossing-ps.ps1
+            pwsh -NoProfile -File tests/data-load-shapes-ps.ps1
+          elif [ "${EXAKIT_REQUIRE_PS:-0}" = "1" ]; then
+            echo "FAIL pwsh is missing on the runner that is supposed to have it" >&2
+            exit 1
+          else
+            echo "pwsh not installed on this runner - PowerShell suites skipped"
+          fi
+      # Dry run only without EXAKIT_SMOKE_FULL=1: no install, no database.
+      - run: bash tests/smoke-test.sh

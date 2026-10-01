@@ -1,4 +1,9 @@
-# Data dictionary — sample dataset (TPC-H, SF=0.02)
+# Data dictionary — bundled sample datasets (TPC-H at SF=0.02, ENERGY, WEATHER)
+
+> The same descriptions ship **inside the database** as table and column comments
+> (`SYS.EXA_ALL_TABLES.TABLE_COMMENT`, `SYS.EXA_ALL_COLUMNS.COLUMN_COMMENT`) and are
+> readable by the read-only MCP user, so an agent never needs this file to learn the
+> shape of the data. This file adds the narrative: keys, joins and conventions.
 
 Reference for every table and column in this folder. Use it to write correct SQL
 (and to ground an AI assistant) without guessing what a column means.
@@ -152,6 +157,64 @@ Grain: one product line within an order. **PK:** `(l_orderkey, l_linenumber)`.
 
 *Row counts above are for scale factor 0.02. See [README.md](README.md) to regenerate at a
 different size (counts scale linearly with SF).*
+
+## ENERGY — smart-meter readings (schema `ENERGY`, ~108k rows)
+
+Hourly household electricity consumption: 50 meters × 90 days × 24 hours. Loaded by
+`exakit data-load` (dataset id `energy`) from `data/datasets/energy/`.
+
+### energy_meters  (50 rows)
+Grain: one smart meter per household. **PK:** `meter_id`.
+
+| Column | Type | Description | Example |
+|---|---|---|---|
+| meter_id | DECIMAL(9,0) | Meter id (PK) | 1 |
+| household | VARCHAR(25) | Household label the meter belongs to | HH-001 |
+| city | VARCHAR(25) | City the household is in | Berlin |
+| tariff | VARCHAR(10) | Tariff plan: BASIC, GREEN, or NIGHT | NIGHT |
+| base_load_kwh | DECIMAL(6,3) | Typical hourly baseline consumption, kWh | 0.850 |
+
+### energy_readings  (108,000 rows) — fact table
+Grain: one reading per meter per hour. **PK:** `(meter_id, reading_ts)`. **FK:** `meter_id`→energy_meters.
+
+| Column | Type | Description | Example |
+|---|---|---|---|
+| meter_id | DECIMAL(9,0) | Meter that produced the reading (FK) | 1 |
+| reading_ts | TIMESTAMP(3) | Hour of the reading, one row per meter per hour | 2025-01-01 13:00:00 |
+| kwh | DECIMAL(8,3) | Energy consumed in that hour, kWh | 1.204 |
+
+Typical questions: average hourly consumption per tariff, peak hours per city, meters
+whose consumption drifts from their `base_load_kwh`.
+
+## WEATHER — daily city weather history (schema `WEATHER`, ~11k rows)
+
+Daily observations for 10 European cities, 2023-01-01 to 2025-12-31. Loaded by
+`exakit data-load` (dataset id `weather`) from `data/datasets/weather/`.
+
+### weather_cities  (10 rows)
+Grain: one city. **PK:** `city_id`.
+
+| Column | Type | Description | Example |
+|---|---|---|---|
+| city_id | DECIMAL(9,0) | City id (PK) | 1 |
+| city | VARCHAR(30) | City name | Berlin |
+| country | VARCHAR(30) | Country the city is in | Germany |
+
+### weather_daily  (10,960 rows) — fact table
+Grain: one row per city per day. **PK:** `(city_id, w_date)`. **FK (documented, not enforced):** `city_id`→weather_cities.
+
+| Column | Type | Description | Example |
+|---|---|---|---|
+| city_id | DECIMAL(9,0) | City (FK) | 1 |
+| w_date | DATE | Calendar day of the observation | 2024-07-14 |
+| temp_avg_c | DECIMAL(5,1) | Daily mean temperature, °C | 21.4 |
+| temp_min_c | DECIMAL(5,1) | Daily minimum temperature, °C | 15.2 |
+| temp_max_c | DECIMAL(5,1) | Daily maximum temperature, °C | 27.9 |
+| precip_mm | DECIMAL(6,1) | Total precipitation for the day, mm | 3.2 |
+| wind_kmh | DECIMAL(5,1) | Mean wind speed, km/h | 14.0 |
+
+Typical questions: hottest month per city, rainy-day counts per year, a city's
+temperature range on a given day.
 
 ## Writing SQL against this data (Exasol notes)
 

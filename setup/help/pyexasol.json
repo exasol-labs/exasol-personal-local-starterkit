@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "id": "pyexasol",
+  "kind": "component",
+  "title": "pyexasol",
+  "tagline": "The official Exasol driver for Python, preinstalled.",
+  "role": "The kit installs pyexasol into its own virtual environment so you can query the database from Python without touching your system Python.",
+  "repo": "exasol/pyexasol",
+  "package": "pyexasol",
+  "venv": "~/.exasol-starter-kit/pyexasol-venv",
+  "python": "~/.exasol-starter-kit/pyexasol-venv/bin/python",
+  "installed_by": "The installer, at step 5 of 6. Deliberately non-fatal: if it fails, everything else still works.",
+  "quickstart": [
+    {
+      "step": "Use the kit's interpreter",
+      "run": "~/.exasol-starter-kit/pyexasol-venv/bin/python"
+    },
+    {
+      "step": "Connect and query",
+      "run": "python -c \"import pyexasol\"",
+      "note": "The kit's database uses a self-signed certificate, so pass websocket_sslopt={'cert_reqs': 0}."
+    },
+    {
+      "step": "Repair it if missing",
+      "run": "exakit update"
+    }
+  ],
+  "commands": [
+    {
+      "command": "exakit update",
+      "options": "",
+      "summary": "Install or repair the driver.",
+      "description": "The same command fixes a component that reports not installed.",
+      "examples": [
+        "exakit update"
+      ]
+    }
+  ],
+  "snippets": [
+    {
+      "title": "Connect and run a query",
+      "language": "python",
+      "code": "import pathlib, pyexasol\\npw = (pathlib.Path.home() / '.exasol-starter-kit/credentials/personal_sys_password').read_text().strip()\\nc = pyexasol.connect(dsn='127.0.0.1:8563', user='sys', password=pw,\\n                     websocket_sslopt={'cert_reqs': 0})\\nprint(c.execute('SELECT CURRENT_TIMESTAMP').fetchval())"
+    }
+  ],
+  "notes": [
+    "Never print or log the files under ~/.exasol-starter-kit/credentials/. Read them, use them, do not echo them.",
+    "To add packages such as pandas, install them into the same venv."
+  ],
+  "troubleshooting": [
+    {
+      "symptom": "import pyexasol fails",
+      "remedy": "You are on the wrong interpreter. Use ~/.exasol-starter-kit/pyexasol-venv/bin/python."
+    },
+    {
+      "symptom": "Certificate verify failed",
+      "remedy": "The local database uses a self-signed certificate. Pass websocket_sslopt={'cert_reqs': 0}."
+    }
+  ],
+  "see_also": [
+    "exapump",
+    "mcp"
+  ]
+}

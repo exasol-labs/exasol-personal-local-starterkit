@@ -188,6 +188,11 @@ class DiscoveredClient:
 class OperationRequest:
     operation: OperationName
     target_clients: tuple[str, ...] = ()
+    # Which SERVER entries an operation applies to, empty meaning all of them.
+    # A client config can hold more than one entry this kit manages (the exasol
+    # server and the dash-server add-on's control plane), so removing one
+    # add-on must not take the others with it.
+    target_servers: tuple[str, ...] = ()
     deployment_mode: DeploymentMode = DeploymentMode.STDIO
     dry_run: bool = False
     force: bool = False
@@ -208,6 +213,11 @@ class OperationRequest:
     allow_restore: bool = True
     include_recommendations: bool = True
     remove_runtime_cache: bool = True
+    # `server_launch` is deliberately NOT here. It is the only stage that RUNS
+    # the configured server instead of inspecting paperwork about it, so it costs
+    # a subprocess and (on a cold uvx cache) a download — which is exactly what
+    # the hermetic suites must never do. `exakit mcp-doctor` adds it explicitly
+    # against a real install; see _doctor_stages in mcp/cli.py.
     stages: tuple[str, ...] = (
         "environment",
         "config_syntax",
@@ -222,6 +232,7 @@ class OperationRequest:
             request_id=raw.get("request_id"),
             operation=OperationName(str(raw["operation"])),
             target_clients=tuple(str(item) for item in raw.get("target_clients", [])),
+            target_servers=tuple(str(item) for item in raw.get("target_servers", [])),
             deployment_mode=DeploymentMode(str(raw.get("deployment_mode", "stdio"))),
             dry_run=bool(raw.get("dry_run", False)),
             force=bool(raw.get("force", False)),

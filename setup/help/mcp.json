@@ -1,0 +1,111 @@
+{
+  "schema_version": 1,
+  "id": "mcp",
+  "kind": "component",
+  "title": "MCP server (exasol-mcp-server)",
+  "tagline": "The read-only bridge between your AI client and the database.",
+  "role": "Your AI client starts this server on demand over stdio and queries the database through it. It connects as a dedicated mcp_readonly user, so reads work everywhere and writes are rejected by the database itself - not by client-side filtering.",
+  "repo": "exasol/exasol-mcp-server",
+  "package": "exasol-mcp-server",
+  "runs_via": "uvx",
+  "installed_by": "The installer, at step 4 of 6.",
+  "db_user": "mcp_readonly",
+  "boundary": "Prove the boundary, do not assert it: as the MCP user, SELECT PRIVILEGE FROM SYS.EXA_USER_SYS_PRIVS returns exactly CREATE SESSION, SELECT ANY TABLE, USE ANY SCHEMA.",
+  "clients": [
+    "Claude Desktop",
+    "Claude Code (CLI)",
+    "Codex",
+    "Cursor",
+    "GitHub Copilot (VS Code)",
+    "Gemini CLI",
+    "OpenCode",
+    "Continue"
+  ],
+  "quickstart": [
+    {
+      "step": "Configure your clients",
+      "run": "exakit mcp-setup"
+    },
+    {
+      "step": "Restart the client",
+      "run": "",
+      "note": "Then look for an MCP server named exasol. Claude Code and Gemini CLI can also run /mcp in an existing session."
+    },
+    {
+      "step": "Check it is healthy",
+      "run": "exakit mcp-doctor"
+    }
+  ],
+  "commands": [
+    {
+      "command": "exakit mcp-setup",
+      "options": "",
+      "summary": "Configure MCP in supported AI clients.",
+      "description": "Backs up each config first, then writes the managed entries: exasol always, plus dash-server when that add-on is installed.",
+      "examples": [
+        "exakit mcp-setup"
+      ]
+    },
+    {
+      "command": "exakit mcp-doctor",
+      "options": "[clients] [--json]",
+      "summary": "Check and repair, then re-check.",
+      "examples": [
+        "exakit mcp-doctor"
+      ]
+    },
+    {
+      "command": "exakit mcp-status",
+      "options": "[clients]",
+      "summary": "Which clients are managed, and where.",
+      "examples": [
+        "exakit mcp-status"
+      ]
+    },
+    {
+      "command": "exasol-mcp-server",
+      "options": "uvx exasol-mcp-server@<ver>",
+      "summary": "The server itself, over stdio.",
+      "description": "This is what the AI client runs; you rarely run it by hand.",
+      "examples": []
+    },
+    {
+      "command": "exasol-mcp-server-http",
+      "options": "--host <h> --port <p>",
+      "summary": "Run the server in HTTP mode instead of stdio.",
+      "examples": []
+    }
+  ],
+  "environment": [
+    {
+      "name": "EXAKIT_MCP_CLIENTS",
+      "effect": "Which clients to configure, by name. Never menu numbers."
+    },
+    {
+      "name": "EXAKIT_SKIP_MCP",
+      "effect": "1 skips MCP setup entirely."
+    }
+  ],
+  "notes": [
+    "The database credential is stored as plaintext in each client's configuration file. It is the read-only user's password, not the admin one."
+  ],
+  "troubleshooting": [
+    {
+      "symptom": "The assistant cannot see the database",
+      "remedy": "exakit status first, then exakit mcp-doctor, then restart the AI client."
+    },
+    {
+      "symptom": "[Errno 61] or [Errno 111] Connection refused",
+      "remedy": "The database is not running: exakit start."
+    },
+    {
+      "symptom": "The exasol server is missing after setup",
+      "remedy": "The client was not restarted. Restart it, or run /mcp in Claude Code or Gemini CLI."
+    }
+  ],
+  "see_also": [
+    "exakit mcp-setup",
+    "exakit mcp-doctor",
+    "pyexasol"
+  ]
+}

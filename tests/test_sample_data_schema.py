@@ -226,13 +226,21 @@ class LoadWiringTests(unittest.TestCase):
         a local-file option, and a mutually exclusive opt-out."""
         bash = EXAPUMP_LIB.read_text(encoding="utf-8")
         ps1 = EXAPUMP_PS1.read_text(encoding="utf-8")
-        # Standalone menus delegate to the shared selector with a plain Cancel.
-        self.assertIn('exakit_data_load_select "Cancel (load nothing)"', bash)
-        self.assertIn('Select-ExakitDataLoad -FinalLabel "Cancel (load nothing)"', ps1)
-        # The selector offers the local-file source on both platforms.
+        # Every entry point delegates to the shared selector with the same
+        # one-word opt-out.
+        self.assertIn('exakit_data_load_select "Skip"', bash)
+        self.assertIn('Select-ExakitDataLoad -FinalLabel "Skip"', ps1)
+        # The selector offers the local-file source on both platforms, with the
+        # SAME label. The PowerShell label used to stay narrow ("A local
+        # CSV/Parquet file") because exapump.ps1 had no twin of the shell's JSON
+        # load path; that routing has landed (a .json pick goes to
+        # Import-ExakitLocalJson), and the label was widened with it in
+        # b792369. This assertion is the one that had to move with them.
+        self.assertIn("A local CSV / Parquet / JSON file", bash)
+        self.assertIn("A local CSV / Parquet / JSON file", ps1)
+        self.assertIn("Import-ExakitLocalJson -Path $path -Target $target", ps1)
         for text, name in ((bash, "exapump.sh"), (ps1, "exapump.ps1")):
             with self.subTest(menu=name):
-                self.assertIn("A local CSV/Parquet file", text)
                 for removed_option in (
                     "Remote CSV/Text File",
                     "Import from Another Database",
@@ -281,12 +289,20 @@ class LoadWiringTests(unittest.TestCase):
         )
 
     def test_install_offer_uses_skip_wording(self) -> None:
-        """The installer's data step uses the same dynamic selector, but its
-        opt-out reads 'Skip for now' (install mode) rather than 'Cancel'."""
+        """Every caller of the shared selector passes the same one-word opt-out.
+
+        The install path and the standalone command used to word this row
+        differently ("Skip for now (no data loading)" against "Cancel (load
+        nothing)") - two labels for one row, in a menu whose other rows are one
+        word each. Both are "Skip" now, so what is worth pinning is that all
+        four call sites (two entry points x two platforms) agree.
+        """
         common = COMMON_LIB.read_text(encoding="utf-8")
+        exapump = EXAPUMP_LIB.read_text(encoding="utf-8")
         exapump_ps1 = EXAPUMP_PS1.read_text(encoding="utf-8")
-        self.assertIn('exakit_data_load_select "Skip for now (no data loading)"', common)
-        self.assertIn('Select-ExakitDataLoad -FinalLabel "Skip for now (no data loading)"', exapump_ps1)
+        self.assertIn('exakit_data_load_select "Skip"', common)
+        self.assertIn('exakit_data_load_select "Skip"', exapump)
+        self.assertEqual(2, exapump_ps1.count('Select-ExakitDataLoad -FinalLabel "Skip"'))
 
     def test_local_file_data_load_can_return_to_menu(self) -> None:
         local_file_blocks = (
@@ -303,7 +319,11 @@ class LoadWiringTests(unittest.TestCase):
         for menu_name, local_file_flow in local_file_blocks:
             with self.subTest(menu=menu_name):
                 self.assertIn("type back to return", local_file_flow)
-                self.assertIn("Please enter a local CSV/Parquet file path", local_file_flow)
+                # Both halves name JSON: the compiled cargo shim made the
+                # json-tables add-on installable on Windows x86_64, so the
+                # platform split this once asserted is gone. The prompt takes a
+                # FOLDER as readily as a file (the bulk load), so both name both.
+                self.assertIn("Please enter a local CSV, Parquet or JSON file, a folder of them", local_file_flow)
                 self.assertIn("back to return", local_file_flow)
                 self.assertIn("Returning to data loading options.", local_file_flow)
 
@@ -311,7 +331,7 @@ class LoadWiringTests(unittest.TestCase):
 class DatabaseReadinessTests(unittest.TestCase):
     """Lock in the first-boot readiness fix so it cannot silently regress.
 
-    Right after first boot the Nano database answers SELECT 1 while still
+    Right after first boot the database answers SELECT 1 while still
     stabilizing, and in that window it can ACK a DDL batch ("0 failed") without
     durably persisting it — the schema-creation step "succeeds" but the next
     upload fails with "schema not found". Two guards must stay in place and in

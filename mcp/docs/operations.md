@@ -20,7 +20,7 @@ Owned mutable state belongs under:
 - Repair should prefer non-destructive correction before replacement.
 - Backup should run before restore, repair, uninstall, or upgrade-driven rewrites.
 - Installs should resolve latest component versions by default, record the resolved desired versions, and fall back only when lookup fails or a non-latest policy is explicitly selected.
-- Nano updates should create runtime snapshot metadata before container replacement and attempt to restore the previous image if the updated container does not start cleanly.
+- Runtime updates should keep the deployment's data in place, and a major Exasol Personal upgrade should stay on its explicit plan/backup/apply path rather than being taken from a single confirmation.
 - MCP package updates should attempt a managed-state snapshot before refreshing the package/config bundle and should surface whether that snapshot was created.
 - Uninstall should remove only subsystem-owned artifacts.
 - Doctor mode should separate environment checks from mutating actions.

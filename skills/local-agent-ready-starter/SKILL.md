@@ -1,6 +1,6 @@
 ---
 name: local-agent-ready-starter
-description: Use this to set up the Exasol Personal Local Starter Kit and run a first trusted, AI-assisted query against a local Exasol database — installing the local runtime, connecting an AI client over MCP, loading the sample data, and running the ask → inspect-SQL → run → validate → rerun loop. Triggers — "set up the Exasol starter kit", "install Exasol locally", "connect my AI to Exasol", "run my first query on my local database", "help me get started with the starter kit".
+description: Use this to set up the Exasol Personal Local Starter Kit and run a first trusted, AI-assisted query against a local Exasol database — installing the local runtime, connecting an AI client over MCP, loading the sample data, and running the ask → inspect-SQL → run → validate → rerun loop. Triggers — "set up the Exasol starter kit", "install Exasol locally", "set up the starter kit and connect my AI", "run my first query on my local database", "help me get started with the starter kit".
 ---
 
 # Local Agent-Ready Starter
@@ -35,7 +35,7 @@ Branch on the result — **do not blindly reinstall**:
 
 | What you see | Go to |
 |---|---|
-| `exakit: command not found` | Step 1 (install) |
+| `exakit: command not found` | **Check `~/.local/bin/exakit` first** — the kit installs there, and that directory is absent from a bare non-interactive `PATH`, so a clean subprocess reports this on a working machine. If the file exists, use it by absolute path (or export `PATH="$HOME/.local/bin:$PATH"`). Only if it is genuinely missing: Step 1 (install) |
 | installed, runtime **not** running | Step 2 (start + verify) |
 | running, no MCP client configured | Step 3 (connect MCP) |
 | running + MCP configured, no data | Step 4 (load data) |
@@ -127,7 +127,13 @@ selected; **every selectable (pending) client is pre-selected**. The user restar
 client afterward.
 
 After setup, the client starts the MCP server named `exasol` on demand over stdio (it is not
-a background service). Verify with `exakit mcp-doctor`.
+a background service). Verify with `exakit mcp-doctor`, which starts the server itself and
+completes an MCP handshake — so a `connected` client is one that can really reach it.
+
+**If you are the client you just configured, you cannot use those tools yet.** An MCP client
+reads its server list at startup, so the `exasol` tools appear only after *your own* process
+restarts. Nothing is broken; say so plainly rather than diagnosing it. Use `exakit sql` for
+the rest of this session and leave the MCP path to the next one.
 
 The MCP login is a **dedicated, read-only database user** — it can read every schema in the
 database but cannot write, and that read-only limit is enforced by the database, not by
@@ -158,6 +164,13 @@ ASK  ->  INSPECT (show the SQL first)  ->  RUN (read-only)  ->  VALIDATE (indepe
 
 1. **Discover.** Ask the user's assistant to list schemas/tables and describe the
    `TPCH` tables first — ground in the *real* schema, do not guess column names.
+   Without MCP tools (always the case in the session that ran the install) the
+   system tables answer the same questions in well under a second:
+   `SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_ROW_COUNT FROM SYS.EXA_ALL_TABLES WHERE TABLE_SCHEMA NOT LIKE 'SYS%'`
+   lists every table, `SYS.EXA_ALL_COLUMNS` (filter on `COLUMN_SCHEMA`) gives
+   columns and types, and `~/.exasol-starter-kit/kit/data/data-dictionary.md`
+   describes each bundled dataset. Run them through `exakit sql` (`--json` for
+   one parseable object).
 2. **Ask, but show the SQL first.** For a question like *"which product category generated
    the most revenue?"*, present the SQL and a plain-English explanation **before executing**.
    Call out the judgment calls: what defines "revenue" (price × quantity? an amount column?),
@@ -168,16 +181,19 @@ ASK  ->  INSPECT (show the SQL first)  ->  RUN (read-only)  ->  VALIDATE (indepe
    quirk (Exasol uses `LIMIT n`, **not** `FETCH FIRST`/`TOP`), or an identifier that needs
    different casing — fix and re-run **without** re-asking; the approved intent hasn't changed.
 4. **Validate independently.** Reproduce the number outside the assistant with the *same*
-   approved SQL: `exapump sql -p starter-kit "<the approved SQL>"`. Matching numbers is the
-   whole point — the AI's answer becomes the user's *verified* answer. **Caution:** the
-   `starter-kit` exapump profile connects as the **admin** user, *not* the read-only MCP user —
-   it is not sandboxed. Issue only the exact approved `SELECT` here; never DDL/DML through
-   exapump. Reproducing the same SQL proves it reruns and connects; to also sanity-check
-   *correctness*, vary one thing (a filter or grouping) and confirm the number moves the way
-   you'd expect.
-5. **Make it rerunnable.** Save the approved SQL to a file the user can rerun tomorrow
-   (e.g. under `~/.exasol-starter-kit/workflows/`). Point to the walkthrough in
-   `~/.exasol-starter-kit/kit/demo/first-revenue-analysis.md`.
+   approved SQL: `exakit sql "<the approved SQL>"`. Matching numbers is the whole point —
+   the AI's answer becomes the user's *verified* answer. Prefer `exakit sql` over
+   `exapump sql -p starter-kit`: it runs over the same connection but refuses anything that
+   is not a single read statement unless you pass `--write`, and it translates a failure
+   into its remedy instead of handing you the raw engine text. **Caution either way:** that
+   connection is the **admin** user, *not* the read-only MCP user — it is not sandboxed.
+   Issue only the exact approved `SELECT` here. Reproducing the same SQL proves it reruns
+   and connects; to also sanity-check *correctness*, vary one thing (a filter or grouping)
+   and confirm the number moves the way you'd expect.
+5. **Make it rerunnable.** Save the approved SQL to a file the user can rerun tomorrow:
+   `~/.exasol-starter-kit/workflows/` exists for exactly this and is created by the install.
+   Tell the user the file's path and how to rerun it:
+   `exakit sql --file ~/.exasol-starter-kit/workflows/<name>.sql`.
 
 ## Non-negotiable guardrails
 
@@ -188,6 +204,23 @@ Follow these on every interaction, no exceptions:
   - **MCP tools** run as the dedicated read-only user — it can read every schema
     (`USE ANY SCHEMA` + `SELECT ANY TABLE`) but the database *enforces* read-only, so a
     mutation is rejected outright. This is the safe default path for querying.
+
+    Two layers stop a write here, and only one of them is load-bearing. The MCP **tool
+    gate** rejects a statement that does not *begin* with SELECT, before it reaches the
+    database (`The query is invalid or not a SELECT statement` — that message is the tool,
+    not the engine). It is a keyword check, not a parser: `SELECT 1; DROP TABLE T` passes
+    it and reaches the engine, which refuses it for its own reasons. So treat the tool gate
+    as a typo-catcher and **never** as the boundary. The boundary is the **privilege gate**
+    beneath it, which the database enforces and which holds no matter what got through.
+    Prove that one any time with a single query as the MCP user:
+
+    ```sql
+    SELECT PRIVILEGE FROM SYS.EXA_USER_SYS_PRIVS
+    ```
+
+    It returns exactly `CREATE SESSION`, `SELECT ANY TABLE`, `USE ANY SCHEMA` — no write
+    privilege exists to misuse. (That system table is the one to use: the natural guess
+    `EXA_SESSION_PRIVILEGES` does not exist and errors.)
   - **`exapump -p starter-kit`** connects as the **admin** user and is *not* restricted — the
     only thing stopping a destructive statement there is you. Use it solely for the approved
     `SELECT` in Step 5.4. Never route a write through it, and never use it to "work around"
@@ -204,9 +237,14 @@ Follow these on every interaction, no exceptions:
 
 ## When something goes wrong
 
-- `exakit status` — is the runtime running?
-- `exakit logs` — path to the latest log; every error message names its remedy.
-- `exakit mcp-doctor` / `exakit mcp-repair` — MCP connectivity.
+- `exakit status` — is the runtime running? Exit code 0 running, 3 not running, 4 not
+  installed; `--json` adds `remedies`, a map of component to the exact repair command.
+- **`Status: interrupted` is not `stopped`.** A database in that state cannot be started —
+  `exakit start` fails identically every time, and re-running the installer does not fix it.
+  The remedy is `exakit repair-runtime`, which **rebuilds the deployment and destroys its
+  data** (bundled datasets are reloaded; the user's own uploads are not). Ask first.
+- `exakit logs` — every log the kit can show (`--json` for the target list and paths).
+- `exakit mcp-doctor` — MCP connectivity (it repairs what it finds).
 - Assistant can't see the database → confirm the runtime is running and the client was
   restarted after the MCP config change.
 - Fuller guidance: `~/.exasol-starter-kit/kit/QUICKSTART.md` and the README troubleshooting

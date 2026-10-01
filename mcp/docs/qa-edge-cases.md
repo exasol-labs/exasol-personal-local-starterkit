@@ -77,8 +77,8 @@ Expected behavior:
 - `mcp-doctor` (validation) on healthy managed state
 - `mcp-doctor` (validation) with invalid DSN literal
 - `mcp-doctor` (validation) with TCP connectivity failure
-- `mcp-repair` when nothing is wrong
-- `mcp-repair` when managed config drift exists
+- `mcp-doctor` when nothing is wrong
+- `mcp-doctor` when managed config drift exists
 - `mcp-remove` for one selected client
 - `mcp-remove` for all managed clients
 - `mcp-remove` when there is nothing to remove

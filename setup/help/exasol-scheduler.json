@@ -1,0 +1,120 @@
+{
+  "schema_version": 1,
+  "id": "exasol-scheduler",
+  "kind": "addon",
+  "title": "Exasol Scheduler",
+  "tagline": "SQL jobs on a schedule, defined and audited in a table.",
+  "role": "A single small binary that polls SCHED.SCHED_TASKS and runs each due row's SQL_TEXT against the local database. Jobs are created, paused, chained and audited with plain SQL - the same surface everything else in this kit teaches - and every run lands in SCHED_HISTORY. It is a SQL scheduler, not a workflow runner: it never invokes a shell or an external tool.",
+  "repo": "exasol-labs/exasol-scheduler",
+  "binary": "~/.local/bin/exasol-scheduler (the kit's supervising launcher)",
+  "db_user": "A dedicated SCHEDULER_SVC user the kit creates - never the admin. Out of the box it can only log in and use its own SCHED schema: the bootstrap CREATE SCHEMA and CREATE TABLE it needed are revoked again once SCHED exists. Jobs run with ITS privileges, so grant what they need first, e.g. exakit sql --write \"GRANT SELECT ON SCHEMA RETAIL TO SCHEDULER_SVC\" and, if a job writes, exakit sql --write \"GRANT INSERT, UPDATE, DELETE ON SCHEMA RETAIL TO SCHEDULER_SVC\".",
+  "installed_by": "Never by the installer. Only through exakit marketplace.",
+  "platforms": "macOS (Apple Silicon and Intel), Linux x86_64 and arm64 (including WSL), Windows x86_64. Windows ARM64 has no published binary yet.",
+  "warning": "SCHED_TASKS is a code-execution surface: whoever can INSERT or UPDATE a row runs arbitrary SQL as the scheduler's database user. The kit's read-only MCP user can SEE the table but cannot write it - task creation deliberately goes through the admin path (exakit sql --write, or exapump).",
+  "quickstart": [
+    {
+      "step": "Install it",
+      "run": "exakit marketplace",
+      "note": "Space selects Exasol Scheduler, Enter installs it. The kit creates the scheduler_svc database user, starts the service, waits for it to bootstrap its SCHED schema, then revokes the bootstrap privileges again."
+    },
+    {
+      "step": "Grant the job what it will touch",
+      "run": "exakit sql --write \"GRANT SELECT, INSERT, UPDATE, DELETE ON SCHEMA STARTER_KIT TO SCHEDULER_SVC\"",
+      "note": "Do this BEFORE the first job. SCHEDULER_SVC can only read and write inside its own SCHED schema until you say otherwise - a nightly aggregate into any other schema fails with insufficient privileges. Name the schemas your jobs read and the ones they write. If a job CREATEs a table, it also needs the system privilege back: exakit sql --write \"GRANT CREATE TABLE TO SCHEDULER_SVC\" - validate revoked it after the bootstrap."
+    },
+    {
+      "step": "Define your first job",
+      "run": "exakit sql --write \"INSERT INTO SCHED.SCHED_TASKS (\\\"TASK_ID\\\", \\\"SCHEDULE\\\", \\\"SQL_TEXT\\\") VALUES ('hourly_cleanup', 'CRON 0 0 * * * * TZ=UTC', 'DELETE FROM STARTER_KIT.STAGING WHERE created_at < ADD_DAYS(CURRENT_TIMESTAMP, -7)')\"",
+      "note": "Always double-quote the scheduler's column names. The scheduler notices new rows on its next poll - no restart."
+    },
+    {
+      "step": "Watch it run",
+      "run": "exakit sql 'SELECT * FROM SCHED.SCHED_HISTORY ORDER BY 1 DESC LIMIT 5'"
+    }
+  ],
+  "commands": [
+    {
+      "command": "exakit marketplace",
+      "options": "",
+      "summary": "Install it.",
+      "examples": [
+        "exakit marketplace"
+      ]
+    },
+    {
+      "command": "exakit start",
+      "options": "",
+      "summary": "Starts the database and every service, this one included.",
+      "examples": [
+        "exakit start"
+      ]
+    },
+    {
+      "command": "exakit stop",
+      "options": "",
+      "summary": "Stops the services and the database.",
+      "examples": [
+        "exakit stop"
+      ]
+    },
+    {
+      "command": "exakit status",
+      "options": "",
+      "summary": "running / stopped, alongside the database.",
+      "examples": [
+        "exakit status"
+      ]
+    },
+    {
+      "command": "exakit logs exasol-scheduler",
+      "options": "[-f]",
+      "summary": "What the scheduler and its supervisor wrote.",
+      "examples": [
+        "exakit logs exasol-scheduler -f"
+      ]
+    },
+    {
+      "command": "exakit update exasol-scheduler",
+      "options": "",
+      "summary": "Update the binary; job definitions and history are untouched.",
+      "examples": [
+        "exakit update exasol-scheduler"
+      ]
+    }
+  ],
+  "notes": [
+    "One instance per task table, enforced: a second copy refuses to start, because two pollers would run every job twice.",
+    "Missed runs are NOT replayed. A laptop that was asleep at 02:00 does not run the 02:00 job on wake - the next occurrence is computed from the current clock. That is upstream's documented design, not a fault.",
+    "The engine exits on fatal errors by design; the kit's launcher restarts it with backoff and gives up loudly after five rapid failures instead of looping forever. At login it also waits (bounded) for the database to come up first.",
+    "Schedules take a timezone (CRON ... TZ=UTC). Your laptop's clock and the schedule's TZ are independent - state the TZ you mean.",
+    "The scheduler's password lives under ~/.exasol-starter-kit/credentials/ (mode 600) and is read at run time - it is never placed on a command line where ps could show it.",
+    "Uninstall removes the service, binary, credential and database user - but deliberately LEAVES the SCHED schema: your job definitions and execution history are data, not part of the add-on."
+  ],
+  "troubleshooting": [
+    {
+      "symptom": "exakit status says stopped right after login",
+      "remedy": "The launcher waits up to two minutes for the database, then the engine retries with backoff; five rapid failures stop it and the status row then says 'stopped (gave up after N rapid failures ...)' so a dead scheduler never reads like a stop you chose. Diagnose with exakit logs exasol-scheduler, restart with exakit start (which clears the give-up state)."
+    },
+    {
+      "symptom": "A job did not run while the machine was off or asleep",
+      "remedy": "Missed occurrences are never replayed - the next one is computed from the current clock. If a run must happen after wake, give the task a shorter schedule or trigger it once by hand."
+    },
+    {
+      "symptom": "insufficient privileges in SCHED_HISTORY for a task",
+      "remedy": "Tasks run as SCHEDULER_SVC, which starts with rights on nothing but its own SCHED schema. Grant what the job needs: exakit sql --write \"GRANT SELECT, INSERT ON SCHEMA MY_SCHEMA TO SCHEDULER_SVC\". A job that CREATEs a table needs exakit sql --write \"GRANT CREATE TABLE TO SCHEDULER_SVC\" as well - the install grants CREATE SCHEMA and CREATE TABLE only to bootstrap SCHED and revokes both at validate, so they are gone by the time your first job runs."
+    },
+    {
+      "symptom": "exasol-scheduler is already running (pid ...)",
+      "remedy": "That is the singleton guard doing its job - one poller per task table. Use exakit stop first if you really mean to restart it."
+    },
+    {
+      "symptom": "The MCP tools cannot INSERT into SCHED_TASKS",
+      "remedy": "By design: the table is a code-execution surface and the MCP user is read-only. Create tasks through exakit sql --write or exapump."
+    }
+  ],
+  "see_also": [
+    "exakit sql",
+    "exapump",
+    "json-tables"
+  ]
+}

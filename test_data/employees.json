@@ -1,0 +1,102 @@
+[
+  {
+    "id": 1,
+    "first_name": "Alice",
+    "last_name": "Johnson",
+    "email": "alice.johnson@example.com",
+    "department": "Engineering",
+    "salary": 95000.5,
+    "hire_date": "2021-03-15",
+    "is_active": true
+  },
+  {
+    "id": 2,
+    "first_name": "Bob",
+    "last_name": "Smith",
+    "email": "bob.smith@example.com",
+    "department": "Sales",
+    "salary": 62000.0,
+    "hire_date": "2019-07-01",
+    "is_active": true
+  },
+  {
+    "id": 3,
+    "first_name": "Carol",
+    "last_name": "Williams",
+    "email": "carol.williams@example.com",
+    "department": "Marketing",
+    "salary": 71500.75,
+    "hire_date": "2020-11-23",
+    "is_active": false
+  },
+  {
+    "id": 4,
+    "first_name": "David",
+    "last_name": "Brown",
+    "email": "david.brown@example.com",
+    "department": "Engineering",
+    "salary": 88000.0,
+    "hire_date": "2022-01-10",
+    "is_active": true
+  },
+  {
+    "id": 5,
+    "first_name": "Eve",
+    "last_name": "Davis",
+    "email": "eve.davis@example.com",
+    "department": "Finance",
+    "salary": 79000.25,
+    "hire_date": "2018-05-30",
+    "is_active": true
+  },
+  {
+    "id": 6,
+    "first_name": "Frank",
+    "last_name": "Miller",
+    "email": "frank.miller@example.com",
+    "department": "Sales",
+    "salary": 54000.0,
+    "hire_date": "2023-02-14",
+    "is_active": true
+  },
+  {
+    "id": 7,
+    "first_name": "Grace",
+    "last_name": "Wilson",
+    "email": "grace.wilson@example.com",
+    "department": "Engineering",
+    "salary": 102000.0,
+    "hire_date": "2017-09-05",
+    "is_active": false
+  },
+  {
+    "id": 8,
+    "first_name": "Henry",
+    "last_name": "Moore",
+    "email": "henry.moore@example.com",
+    "department": "Marketing",
+    "salary": 68000.5,
+    "hire_date": "2021-12-01",
+    "is_active": true
+  },
+  {
+    "id": 9,
+    "first_name": "Ivy",
+    "last_name": "Taylor",
+    "email": "ivy.taylor@example.com",
+    "department": "Finance",
+    "salary": 83500.0,
+    "hire_date": "2020-06-18",
+    "is_active": true
+  },
+  {
+    "id": 10,
+    "first_name": "Jack",
+    "last_name": "Anderson",
+    "email": "jack.anderson@example.com",
+    "department": "Sales",
+    "salary": 59000.0,
+    "hire_date": "2022-08-22",
+    "is_active": true
+  }
+]

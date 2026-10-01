@@ -363,7 +363,7 @@ Captured on 2026-07-07 from the implementation review that triggered the hardeni
 | Architecture | 6.5/10 | Current architecture is workable, but update/state ownership is spreading across Bash, PowerShell, and Python. |
 | Maintainability | 6/10 | Component routing and version lookup are becoming repeated string-switch logic. |
 | Cross-Platform Parity | 5.5/10 | Unix install resolves latest versions by default, but Windows shared setup still uses pinned defaults. |
-| Safety / Recovery | 6/10 | Personal major upgrades have a safer plan/backup/apply path; Nano and MCP update flows need clearer snapshot/backup behavior. |
+| Safety / Recovery | 6/10 | Personal major upgrades have a safer plan/backup/apply path; the MCP update flow needs clearer snapshot/backup behavior. |
 | Documentation Alignment | 7/10 | README documents the new capability, but previously overstated "latest by default" for Windows. |
 | Overall | 6.5/10 | Good direction, but update safety and platform parity need tightening before production-solid status. |
 
@@ -383,25 +383,20 @@ Tasks:
 
 Acceptance:
 
-- Windows setup resolves latest Nano, exapump, and MCP versions before first install.
+- Windows setup resolves latest launcher, exapump, and MCP versions before first install.
 - Fallback mode remains deterministic for offline/corporate-proxy environments.
 - `tests/dry-run-matrix.sh` covers the behavior.
 
-### PH-002 Nano update recovery
+### PH-002 Runtime update recovery
 
-Status: done in the 2026-07-07 hardening pass.
+Status: superseded. The container runtime this item was written for no longer
+exists; Exasol Personal is the kit's only runtime.
 
-Tasks:
+What replaced it:
 
-- Create a pre-update runtime snapshot record under `~/.exasol-starter-kit/backups/nano-update/`.
-- Recreate the previous container image automatically if the new image fails to start or become ready.
-- Keep the data volume in place and record the latest Nano update snapshot in the manifest.
-
-Acceptance:
-
-- Failed Nano image replacement does not strand the user without the previous container image.
-- Snapshot metadata names the old tag, new tag, container, volume, and prior image.
-- Bash and PowerShell paths both implement the behavior.
+- A minor launcher update replaces the launcher and leaves the deployment's data untouched, so there is no image to restore.
+- A MAJOR upgrade is a data migration and keeps its own explicit plan/backup/apply flow, with a real archive under `~/.exasol-starter-kit/backups/`.
+- Both halves probe the database after the update instead of recording it healthy on faith.
 
 ### PH-003 MCP update snapshot clarity
 

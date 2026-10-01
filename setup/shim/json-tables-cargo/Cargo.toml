@@ -1,0 +1,23 @@
+[package]
+name = "exakit-json-tables-cargo-shim"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "A `cargo` stand-in that answers JSON Tables' one ingest call with the kit's prebuilt engine."
+
+# The binary MUST be named `cargo`: it is found by name on PATH, and on Windows
+# CreateProcess resolves a bare name by appending `.exe` only, so this is what
+# makes `subprocess.run(["cargo", ...])` reach us at all.
+[[bin]]
+name = "cargo"
+path = "src/main.rs"
+
+[profile.release]
+# The shim is downloaded by every Windows install of the add-on; there is no
+# reason for it to be large. No panic machinery either - every failure path
+# here exits with a message and a code.
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"

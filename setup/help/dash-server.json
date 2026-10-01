@@ -1,0 +1,102 @@
+{
+  "schema_version": 1,
+  "id": "dash-server",
+  "kind": "addon",
+  "title": "dash-server",
+  "tagline": "Agent-operated Dash hosting for live dashboards on your database.",
+  "role": "An add-on that hosts Dash apps against the local database. Your AI agent drives it through its MCP control plane while you watch the result in a browser.",
+  "repo": "exasol-labs/dash-server",
+  "package": "dash-server",
+  "binary": "~/.local/bin/dash-server",
+  "url": "http://127.0.0.1:5100 by default. If something else already holds that port the install moves to the next free one and records it - so to see where yours is actually serving, run dash-server: it prints the address, and if a copy is already up it says so and prints that one's address rather than starting a second.",
+  "control_plane": "The same address with /mcp on the end. exakit mcp-setup registers it as an MCP server named dash-server, so its tools sit beside the exasol ones once the client restarts - Cursor, Claude Code, Codex, GitHub Copilot, Gemini CLI, OpenCode and Continue. Claude Desktop is the one left out: its config file has no shape for a remote MCP server (the app takes those through its own Connectors settings), so setup prints one note naming the URL and the run is not affected.",
+  "installed_by": "Never by the installer. Only through exakit marketplace.",
+  "warning": "The control plane at /mcp is unauthenticated and bound to 127.0.0.1. Anything that can reach loopback on this machine - any other session on a shared box, any script, any browser page - can build, deploy and pip-install dependencies for Dash apps as you. That is fine on a personal laptop; on a shared or multi-user machine, stop dash-server when you are not using it (exakit stop). Never put this port on a LAN or behind a public tunnel.",
+  "db_user": "Reuses the kit's read-only mcp_readonly user - dashboards read, they do not write.",
+  "quickstart": [
+    {
+      "step": "Install it",
+      "run": "exakit marketplace",
+      "note": "Space selects dash-server, Enter installs it. That is the whole install."
+    },
+    {
+      "step": "Start it",
+      "run": "dash-server",
+      "note": "It prints the address it is serving on. Run it again any time you need that address - an already-running copy reports itself instead of starting a second one."
+    },
+    {
+      "step": "Build a dashboard",
+      "run": "",
+      "note": "Ask your AI agent. It drives the control plane while you watch the page in a browser."
+    }
+  ],
+  "commands": [
+    {
+      "command": "dash-server",
+      "options": "",
+      "summary": "Start the server.",
+      "description": "A second copy will not bind: the first one (often started at login) is already serving.",
+      "examples": [
+        "dash-server"
+      ]
+    },
+    {
+      "command": "exakit start",
+      "options": "",
+      "summary": "Starts the database and every service, including this one.",
+      "examples": [
+        "exakit start"
+      ]
+    },
+    {
+      "command": "exakit status",
+      "options": "",
+      "summary": "Shows running, stopped, or the port held by someone else.",
+      "examples": [
+        "exakit status"
+      ]
+    },
+    {
+      "command": "exakit logs",
+      "options": "dash-server [-f]",
+      "summary": "What the service wrote.",
+      "examples": [
+        "exakit logs dash-server -f"
+      ]
+    },
+    {
+      "command": "exakit update",
+      "options": "",
+      "summary": "Update it, and regenerate its launcher.",
+      "examples": [
+        "exakit update"
+      ]
+    }
+  ],
+  "environment": [
+    {
+      "name": "EXAKIT_DASH_SERVER_PORT",
+      "effect": "Serve on a different port: EXAKIT_DASH_SERVER_PORT=5200 exakit update."
+    }
+  ],
+  "notes": [
+    "Not sure which port yours is on? Run dash-server. It prints the address, whether it starts one or finds one already running.",
+    "If port 5100 is taken at install time the kit moves to the next free port and records it.",
+    "The launcher stores only the PATH of the credential file, never the password, and reads it fresh at run time.",
+    "Supply chain: dash-server is the one add-on the kit installs WITHOUT a pinned checksum. The version is tag-pinned, but the install is uv pip install of the tag's GitHub source tarball - and source tarballs publish no digest, so there is nothing kit-side to verify the download against; its Python dependencies then come from PyPI unpinned. The other add-ons refuse an artifact whose digest they cannot check. Install this one only if you trust exasol-labs/dash-server and the network you are on."
+  ],
+  "troubleshooting": [
+    {
+      "symptom": "It looks like a crash on start",
+      "remedy": "A second copy cannot bind the port. The first one is already serving - check exakit status."
+    },
+    {
+      "symptom": "The control plane answers but the page is blank or 500",
+      "remedy": "exakit logs dash-server -f while you reload the page."
+    }
+  ],
+  "see_also": [
+    "exakit marketplace",
+    "mcp"
+  ]
+}

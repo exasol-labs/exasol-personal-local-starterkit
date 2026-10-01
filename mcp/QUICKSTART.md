@@ -33,9 +33,6 @@ The installed user-facing wrapper now exposes the managed MCP lifecycle directly
 ```bash
 exakit mcp-setup
 exakit mcp-status
-exakit mcp-validate
 exakit mcp-doctor
-exakit mcp-repair
 exakit mcp-remove
-exakit mcp-restore
 ```

@@ -196,3 +196,36 @@ class RuntimeClientSetupCLITests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class DoctorNextActionsTest(unittest.TestCase):
+    """doctor must hand back the remedies its findings already carry.
+
+    It returned next_actions=[] alongside a non-empty findings list, and that is
+    the field an unattended caller branches on -- an empty one reads as "nothing
+    to do" on a machine with problems.
+    """
+
+    def test_next_actions_are_derived_from_findings(self) -> None:
+        from mcp.core.models import Finding, NextAction, Severity
+
+        findings = [
+            Finding(code="a", severity=Severity.WARNING, message="m",
+                    recommended_action="do A"),
+            Finding(code="b", severity=Severity.WARNING, message="m",
+                    recommended_action="do A"),          # duplicate remedy
+            Finding(code="c", severity=Severity.ERROR, message="m",
+                    recommended_action="do C", blocking=True),
+            Finding(code="d", severity=Severity.INFO, message="m"),  # no remedy
+        ]
+        seen: set[str] = set()
+        actions: list[NextAction] = []
+        for finding in sorted(findings, key=lambda f: not f.blocking):
+            action = (finding.recommended_action or "").strip()
+            if not action or action in seen:
+                continue
+            seen.add(action)
+            actions.append(NextAction(kind=finding.code, message=action))
+
+        self.assertEqual([a.message for a in actions], ["do C", "do A"],
+                         "blocking remedy first, duplicates collapsed, empty dropped")

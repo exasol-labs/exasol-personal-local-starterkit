@@ -26,37 +26,91 @@ pyexasol_installed_version() {
     "$_pyx_python" -c 'import pyexasol; print(pyexasol.__version__)' 2>/dev/null
 }
 
+# _pyexasol_not_installed <reason> — report a soft failure and return 1.
+# pyexasol is the last, optional Component, and the exakit helper is installed
+# AFTER it: dying here would leave a user with a working database but no exakit
+# command to manage it. So every failure in this step is explained, recorded as
+# validated=false, and handed back to the caller as a non-zero return, which
+# leaves the step unmarked so a re-run retries it.
+_pyexasol_not_installed() {
+    warn "pyexasol was not installed: $1"
+    # Explain the underlying fault BEFORE offering the retry. A corrupt uv
+    # managed-Python cache makes `exakit update pyexasol` fail identically
+    # forever, so "retry with" on its own is a loop, not a remedy.
+    command -v exakit_explain_last_log_error >/dev/null 2>&1 && exakit_explain_last_log_error
+    warn "Everything else in the kit is unaffected. Retry with: exakit update"
+    # The reason has to outlive this subshell so the closing summary can print it
+    # instead of a generic "did not finish" (see exakit_note_failure in common.sh).
+    command -v exakit_note_failure >/dev/null 2>&1 && exakit_note_failure "$1"
+    manifest_set components.pyexasol.validated false
+    return 1
+}
+
 pyexasol_install() {
     # uv is normally present already (the MCP step installs it and it is a
     # hard dependency of the kit); bootstrap it here only if this step runs
-    # in a build without the MCP module.
-    if ! command -v uv >/dev/null 2>&1; then
-        if command -v mcp_uv_install >/dev/null 2>&1; then
-            mcp_uv_install
-        else
-            die "uv is required to install pyexasol but is not available. Install uv (https://docs.astral.sh/uv/) and re-run."
-        fi
+    # in a build without the MCP module. exakit_ensure_uv, not mcp_uv_install:
+    # this step may not fail the run, and mcp_uv_install dies on failure.
+    _pyx_uv=""
+    if command -v uv >/dev/null 2>&1; then
+        _pyx_uv="uv"
+    elif exakit_ensure_uv && [ -x "${EXAKIT_UV_BIN:-}" ]; then
+        _pyx_uv="$EXAKIT_UV_BIN"
+    else
+        _pyexasol_not_installed "uv (the Python tool runner) is not available — install it from https://docs.astral.sh/uv/ and re-run"
+        return 1
     fi
 
     _pyx_current="$(pyexasol_installed_version || true)"
     if [ -n "$_pyx_current" ] && [ "$_pyx_current" = "$EXAKIT_PYEXASOL_VERSION" ]; then
         ok "pyexasol $_pyx_current already installed: $EXAKIT_PYEXASOL_VENV"
     else
+        EXAKIT_ACTIVE_LABEL="Installing pyexasol $EXAKIT_PYEXASOL_VERSION"
         info "Installing pyexasol $EXAKIT_PYEXASOL_VERSION (Exasol Python driver)"
         if [ ! -x "$(pyexasol_venv_python)" ]; then
-            run_logged uv venv --python "$EXAKIT_MANAGED_PYTHON_VERSION" "$EXAKIT_PYEXASOL_VENV" || \
-                die "Could not create the pyexasol virtual environment at $EXAKIT_PYEXASOL_VENV (see log)."
+            # --seed puts pip in the venv. uv leaves it out by default, and the
+            # pyexasol skill tells agents to `-m pip install pandas` into this
+            # venv for export_to_pandas - which failed with "No module named pip".
+            if ! run_logged "$_pyx_uv" venv --seed --python "$EXAKIT_MANAGED_PYTHON_VERSION" "$EXAKIT_PYEXASOL_VENV"; then
+                _pyexasol_not_installed "the virtual environment at $EXAKIT_PYEXASOL_VENV could not be created (see log)"
+                return 1
+            fi
             push_rollback "rm -rf '$EXAKIT_PYEXASOL_VENV'"
         fi
-        run_logged uv pip install --python "$(pyexasol_venv_python)" \
-            "${EXAKIT_PYEXASOL_PACKAGE}==${EXAKIT_PYEXASOL_VERSION}" || \
-            die "pyexasol installation failed (see log)."
+        if ! run_logged "$_pyx_uv" pip install --python "$(pyexasol_venv_python)" \
+                "${EXAKIT_PYEXASOL_PACKAGE}==${EXAKIT_PYEXASOL_VERSION}"; then
+            _pyexasol_not_installed "installing ${EXAKIT_PYEXASOL_PACKAGE}==${EXAKIT_PYEXASOL_VERSION} failed (see log)"
+            return 1
+        fi
         ok "pyexasol installed: $EXAKIT_PYEXASOL_VENV"
     fi
 
     manifest_set components.pyexasol.version "$EXAKIT_PYEXASOL_VERSION"
     manifest_set components.pyexasol.venv "$EXAKIT_PYEXASOL_VENV"
     manifest_set components.pyexasol.python "$(pyexasol_venv_python)"
+}
+
+# pyexasol_update — install the advertised version into the venv. Doubles as the
+# repair command: the install step is soft-fail, so this is what a user runs after
+# `exakit status` or `exakit version` reports pyexasol as missing. Asked for
+# explicitly, so a failure here IS a failure.
+pyexasol_update() {
+    _pyu_available="$(exakit_component_available pyexasol 2>/dev/null || true)"
+    [ -n "$_pyu_available" ] || die "Could not resolve the advertised pyexasol version."
+    _pyu_current="$(pyexasol_installed_version 2>/dev/null || true)"
+    if [ -n "$_pyu_current" ] && [ "$_pyu_current" = "$_pyu_available" ]; then
+        ok "pyexasol is already current ($_pyu_current)"
+        return 0
+    fi
+    info "Updating pyexasol ${_pyu_current:-not installed} -> $_pyu_available"
+    EXAKIT_PYEXASOL_VERSION="$_pyu_available"
+    export EXAKIT_PYEXASOL_VERSION
+    if ! pyexasol_install; then
+        die "pyexasol could not be installed — see the warning above and ${EXAKIT_LOG_FILE:-the log}."
+    fi
+    pyexasol_validate || true
+    manifest_set desired.pyexasol "$EXAKIT_PYEXASOL_VERSION"
+    ok "pyexasol updated; database data was not changed"
 }
 
 # pyexasol_apply_sve_workaround <venv-python> — recognize and self-repair the
@@ -122,6 +176,9 @@ EXAKIT_SVE_EOF
 # and every other component are unaffected, and a re-run retries this step.
 pyexasol_validate() {
     _pyx_python="$(pyexasol_venv_python)"
+    # Nothing to validate when the install did not get far enough to create the
+    # venv: it is soft-fail by design and has already explained itself.
+    [ -x "$_pyx_python" ] || return 0
     # Non-fatal, matching this step's stated contract (and the live-check path
     # below): pyexasol is the last, optional component, so a broken import
     # records validated=false and warns rather than turning an otherwise
@@ -135,7 +192,7 @@ pyexasol_validate() {
         if pyexasol_apply_sve_workaround "$_pyx_python"; then
             : # import fixed in place — fall through to the live check below
         else
-            warn "pyexasol is installed but cannot be imported from $EXAKIT_PYEXASOL_VENV (see log). Recorded validated=false; remove the venv and re-run setup to retry."
+            warn "pyexasol is installed but cannot be imported from $EXAKIT_PYEXASOL_VENV. Why: exakit logs setup. Recorded validated=false; remove the venv and re-run setup to retry."
             manifest_set components.pyexasol.validated false
             return 0
         fi
@@ -153,6 +210,8 @@ pyexasol_validate() {
     fi
 
     info "Validating pyexasol against the database (SELECT 1)"
+    _pyv_t0="$(date +%s 2>/dev/null || echo 0)"
+    EXAKIT_ACTIVE_LABEL="Validating pyexasol against the database"
     # The password travels via a file read inside python, never on a command
     # line. TLS mirrors the exapump profile posture (tls on, local cert not
     # validated); a plain connection is the fallback for non-TLS runtimes.
@@ -176,9 +235,13 @@ PY
     then
         ok "pyexasol works: SELECT 1 returned 1"
         manifest_set components.pyexasol.validated true
-        info "Use it from Python:  $_pyx_python  (import pyexasol)"
+        # Two lines for the step: what happened, and the interpreter to run it
+        # with. Installed-and-validated is one fact -- an install that failed
+        # validation says so through the warn below, which is never gated.
+        ok_step "pyexasol ${EXAKIT_PYEXASOL_VERSION} installed and validated against the database ($(( $(date +%s 2>/dev/null || echo 0) - _pyv_t0 ))s)"
+        info_step "Use it from Python:  $(ui_tilde "$_pyx_python")  (import pyexasol)"
     else
-        warn "pyexasol could not complete SELECT 1 against the database (see log). Recorded validated=false; re-run setup to retry."
+        warn "pyexasol could not complete SELECT 1 against the database. Why: exakit logs setup. Check the database is up with: exakit status, then re-run setup to retry."
         manifest_set components.pyexasol.validated false
     fi
     return 0

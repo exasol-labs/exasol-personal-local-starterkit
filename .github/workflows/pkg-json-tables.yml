@@ -1,0 +1,488 @@
+name: pkg / json-tables
+
+# JSON Tables (exasol-labs/exasol-json-tables) is a Python package plus a Rust
+# ingest engine (crate `json_tables_ingest`). Everything a user installs comes
+# from ONE IMMUTABLE RELEASE PER BUILD in this repository, tagged
+# `json-tables-<version>`, so end users never need Rust/cargo — the kit just
+# downloads the prebuilt artifacts and verifies them against the digests
+# versions.json pins.
+#
+# Since v0.3 upstream publishes prebuilt engines of its own, so this workflow
+# only BUILDS what upstream does not ship — the linux-aarch64 and
+# windows-x86_64 engines, and the Windows cargo shim (which is this
+# repository's own source and could never come from upstream). The engines and
+# wheel upstream does publish are DOWNLOADED, verified against upstream's
+# SHA256SUMS, and republished here under the kit's own asset names — one
+# release, one naming scheme, one digest authority for the installer either
+# way.
+#
+# A published release is never touched again. versions.json pins the digest of
+# every asset on it, so rewriting those assets would turn every pinned install
+# into a checksum failure: that is exactly what happened when a single rolling
+# tag was overwritten with the v0.3 binaries while versions.json still pinned
+# v0.2. The change gate is therefore "is this build already published", and a
+# forced rebuild of the same upstream version gets a NEW suffixed tag.
+
+on:
+  schedule:
+    - cron: "30 7 * * *" # daily 07:30 UTC (the check job is change-gated)
+  workflow_dispatch:
+    inputs:
+      force:
+        description: >-
+          Rebuild the current upstream version and publish it as a NEW release
+          (json-tables-<version>-2, -3, ...). Published releases are never
+          overwritten. Needed whenever OUR OWN artifacts move - the Windows
+          cargo shim lives in this repository and versions independently of
+          upstream, so without this a shim fix could not ship until upstream
+          happened to cut a release.
+        type: boolean
+        default: false
+
+concurrency:
+  group: pkg-json-tables
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  UPSTREAM: exasol-labs/exasol-json-tables
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.v.outputs.sha }}
+      ref: ${{ steps.v.outputs.ref }}
+      changed: ${{ steps.v.outputs.changed }}
+      tag: ${{ steps.v.outputs.tag }}
+    steps:
+      - id: v
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # ONLY a released version is ever built or advertised. "v0.1" is
+          # something a user can recognise, compare and talk about; a bare
+          # commit id like 41ddd51a9a33 is not, and it silently ties every
+          # install to whatever main happened to hold that day.
+          #
+          # Two things count as a release, in order:
+          #   1. a published GitHub Release  (/releases/latest -> tag_name)
+          #   2. a plain git TAG             (/tags -> newest by commit date)
+          #
+          # The tag step matters because /releases/latest sees ONLY published
+          # Releases: a repository that ran `git tag v0.1 && git push --tags`
+          # without cutting a Release looks release-less to that endpoint, and
+          # that is exactly why builds used to be advertised as a commit id.
+          #
+          # There is deliberately NO fallback to the main commit. If upstream
+          # has cut nothing, this builds nothing and says so - an unreleased
+          # main is not a version, and shipping one as if it were is how a
+          # user ends up pinned to an arbitrary mid-development tree.
+          # Both lookups are non-fatal: `set -o pipefail` is on, so a blip in
+          # curl or jq would otherwise abort the run rather than fall through
+          # to the next source of a version.
+          rel=$(curl -sSL -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$UPSTREAM/releases/latest" | jq -r '.tag_name // ""') || rel=""
+          if [ -z "$rel" ] || [ "$rel" = "null" ]; then
+            # Newest tag by the date of the commit it points at - NOT the order
+            # the API happens to return, which is lexical and would make v0.10
+            # older than v0.9.
+            rel=$(curl -sSL -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/$UPSTREAM/tags?per_page=100" \
+              | jq -r '.[] | "\(.name) \(.commit.url)"' \
+              | while read -r name url; do
+                  date=$(curl -sSL -H "Authorization: Bearer $GH_TOKEN" "$url" \
+                    | jq -r '.commit.committer.date // ""')
+                  [ -n "$date" ] && printf '%s\t%s\n' "$date" "$name"
+                done | sort -r | head -1 | cut -f2) || rel=""
+          fi
+          if [ -z "$rel" ] || [ "$rel" = "null" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "sha=" >> "$GITHUB_OUTPUT"
+            echo "ref=" >> "$GITHUB_OUTPUT"
+            echo "tag=" >> "$GITHUB_OUTPUT"
+            echo "::warning::$UPSTREAM has published no Release and no tag - nothing to build. Cut a release upstream, then re-run this workflow."
+            exit 0
+          fi
+          # The tag is both what gets BUILT and what gets ADVERTISED, so the
+          # artifacts and the version can never describe different code.
+          sha="$rel"; ref="$rel"
+          # ONE IMMUTABLE RELEASE PER BUILD. The release tag carries the
+          # version, and a tag that exists is never touched again: versions.json
+          # pins the digests of the assets on it, so rewriting them would turn
+          # every pinned install into a checksum failure. "Already published"
+          # is therefore the change gate, not "did upstream move".
+          tag="json-tables-$sha"
+          release_exists() {
+            code=$(curl -sSL -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/tags/$1" 2>/dev/null) || code=""
+            [ "$code" = "200" ]
+          }
+          if [ "${{ github.event.inputs.force }}" = "true" ]; then
+            # A rebuild of the SAME upstream version (a shim fix) gets a new
+            # release with a numeric suffix. The published one stays exactly as
+            # it is; the advertise PR moves versions.json to the new tag.
+            if release_exists "$tag"; then
+              n=2
+              while release_exists "$tag-$n"; do n=$((n + 1)); done
+              tag="$tag-$n"
+            fi
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::force requested - building json-tables $sha as release $tag."
+          elif release_exists "$tag"; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::json-tables $sha is already published as $tag - skipping (re-run with force to rebuild under a new tag)."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::json-tables $sha - building the prebuilt artifacts for release $tag."
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  ingest:
+    needs: check
+    if: needs.check.outputs.changed == 'true'
+    name: ingest ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # ONLY the engines upstream does not publish. linux-x86_64 and
+        # macos-arm64 come prebuilt from upstream's release (the `upstream`
+        # job); these two are built here because nobody else builds them.
+        # (macOS x86 was dropped earlier still — that runner is the slow one.)
+        include:
+          - { os: ubuntu-22.04-arm, label: linux-aarch64, ext: "" }
+          - { os: windows-latest, label: windows-x86_64, ext: ".exe" }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: exasol-labs/exasol-json-tables
+          ref: ${{ needs.check.outputs.ref }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+          key: ${{ matrix.label }}
+      - name: Build ingest engine
+        run: cargo build --release --manifest-path crates/json_tables_ingest/Cargo.toml --target-dir "${{ github.workspace }}/rust-target"
+      - name: Stage binary
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p out
+          bin="rust-target/release/json_to_parquet${{ matrix.ext }}"
+          if [ ! -f "$bin" ]; then
+            # Fall back: find the built executable anywhere under a release dir.
+            bin=$(find . -type f -name "json_to_parquet${{ matrix.ext }}" -path "*/release/*" | head -n1)
+          fi
+          test -n "$bin" && test -f "$bin"
+          cp "$bin" "out/exasol-json-tables-ingest-${{ matrix.label }}${{ matrix.ext }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ingest-${{ matrix.label }}
+          path: out/*
+
+  upstream:
+    # WHAT UPSTREAM ALREADY BUILT IS NOT REBUILT. Since v0.3 the upstream
+    # release carries prebuilt engines for linux-x86_64 and macos-arm64 plus
+    # the wheel, each listed in a SHA256SUMS it publishes alongside them. This
+    # job downloads those three, refuses anything the sums file does not
+    # vouch for, unpacks the engines (upstream ships tar.gz archives with a
+    # README and LICENSE inside; the kit installs a bare binary), and stages
+    # everything under the kit's own asset names — upstream says macos-arm64
+    # where the kit says macos-aarch64, and the kit's names are the contract
+    # versions.json pins digests against.
+    #
+    # If the upstream release is missing any of the three, this fails NAMING
+    # the gap instead of quietly building it locally: a silent fallback would
+    # hide the day upstream stops shipping binaries, and the fix (restore the
+    # matrix row, or ask upstream) is a decision a person should make.
+    needs: check
+    if: needs.check.outputs.changed == 'true'
+    name: upstream prebuilts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download and verify upstream's prebuilt assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ref="${{ needs.check.outputs.ref }}"
+          api="https://api.github.com/repos/$UPSTREAM/releases/tags/$ref"
+          assets=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" "$api" | jq -r '.assets[].name')
+          # The wheel's filename carries upstream's own version string (0.3.0
+          # for tag v0.3), so it is read from the release listing, never
+          # derived from the tag.
+          wheel=$(printf '%s\n' "$assets" | grep -E '\.whl$' | head -1) || wheel=""
+          linux="json_to_parquet-$ref-linux-x86_64.tar.gz"
+          macos="json_to_parquet-$ref-macos-arm64.tar.gz"
+          missing=""
+          for need in "$linux" "$macos" "SHA256SUMS"; do
+            printf '%s\n' "$assets" | grep -qxF "$need" || missing="$missing $need"
+          done
+          [ -n "$wheel" ] || missing="$missing <wheel>"
+          if [ -n "$missing" ]; then
+            echo "::error::upstream release $ref does not carry:$missing. Either upstream stopped publishing prebuilts (restore the matrix rows in the ingest job) or the release is incomplete (ask upstream)."
+            exit 1
+          fi
+          mkdir -p dl out
+          base="https://github.com/$UPSTREAM/releases/download/$ref"
+          for asset in "$linux" "$macos" "$wheel" "SHA256SUMS"; do
+            curl -fsSL -o "dl/$asset" "$base/$asset"
+          done
+          # Every downloaded file must be vouched for by upstream's own sums
+          # file — a file it does not list is refused, not waved through.
+          cd dl
+          for f in "$linux" "$macos" "$wheel"; do
+            awk -v f="$f" '$2 == f' SHA256SUMS >> tocheck.sums
+            grep -qF "$f" tocheck.sums || { echo "::error::$f is not listed in upstream's SHA256SUMS"; exit 1; }
+          done
+          sha256sum -c tocheck.sums
+          # Unpack each engine and stage the binary under the kit's name. The
+          # archive layout is upstream's to change, so the binary is FOUND by
+          # name rather than assumed at a fixed path.
+          stage() {
+            mkdir -p "unpack-$2"
+            tar -xzf "$1" -C "unpack-$2"
+            bin=$(find "unpack-$2" -type f -name json_to_parquet | head -1)
+            test -n "$bin" || { echo "::error::no json_to_parquet binary inside $1"; exit 1; }
+            install -m 755 "$bin" "../out/$2"
+          }
+          stage "$linux" exasol-json-tables-ingest-linux-x86_64
+          stage "$macos" exasol-json-tables-ingest-macos-aarch64
+          cp "$wheel" ../out/
+          ls -la ../out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: upstream-prebuilts
+          path: out/*
+
+  shim:
+    # THE WINDOWS UNBLOCK. Upstream's CLI reaches its engine only through
+    # `subprocess.run(["cargo", "run", ...])`, and on Windows that goes to
+    # CreateProcess, which resolves a bare name by appending .exe ONLY - it
+    # never consults PATHEXT. So the /bin/sh `cargo` shim the kit writes on
+    # macOS and Linux is invisible there, and a .cmd or .bat would be too.
+    # The answer has to be a real executable, so we build one. The toolchain
+    # requirement lands on this runner instead of on the user, which is the
+    # whole trade this add-on exists to make.
+    #
+    # Built from THIS repository (setup/shim/json-tables-cargo), not upstream's,
+    # and rebuilt on every publish so the mirror release never ends up carrying
+    # an engine with no way to reach it.
+    needs: check
+    if: needs.check.outputs.changed == 'true'
+    name: cargo shim windows-x86_64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: setup/shim/json-tables-cargo -> target
+          key: json-tables-cargo-shim
+      - name: Test the shim
+        # The argument-shape parsing IS the contract with upstream's CLI. It is
+        # unit-tested rather than eyeballed, and a failure here must stop the
+        # publish: a shim that mis-parses would forward the wrong argv to the
+        # engine and fail in the middle of a user's ingest.
+        run: cargo test --manifest-path setup/shim/json-tables-cargo/Cargo.toml
+      - name: Build the shim
+        run: cargo build --release --manifest-path setup/shim/json-tables-cargo/Cargo.toml --target-dir "${{ github.workspace }}/shim-target"
+      - name: Stage the shim
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p out
+          # The crate builds a binary literally named `cargo` - that name is
+          # what makes it findable at all - so it is renamed only for transit
+          # and put back as cargo.exe at install time.
+          bin="shim-target/release/cargo.exe"
+          test -f "$bin"
+          cp "$bin" "out/exakit-json-tables-cargo-windows-x86_64.exe"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cargo-shim-windows-x86_64
+          path: out/*
+
+  publish:
+    needs: [check, ingest, upstream, shim]
+    if: needs.check.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: refuse to overwrite a published release
+        # Belt and braces for the check job's gate: between that check and this
+        # step another run could have published the same tag. A release that
+        # exists is immutable, so this run stops rather than replaces it.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${{ needs.check.outputs.tag }}"
+          test -n "$tag"
+          code=$(curl -sSL -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/$tag") || code=""
+          if [ "$code" = "200" ]; then
+            echo "::error::release $tag already exists and is immutable - nothing was published. Re-run with force to build under a new tag."
+            exit 1
+          fi
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Flatten
+        run: |
+          mkdir -p release
+          find artifacts -type f -exec cp {} release/ \;
+          ls -la release
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.check.outputs.tag }}
+          name: json-tables ${{ needs.check.outputs.sha }} (prebuilt by CI)
+          body: |
+            Prebuilt JSON Tables ingest engine (all distributions) + Python wheel
+            from ${{ env.UPSTREAM }} ${{ needs.check.outputs.sha }} so users need no
+            Rust/cargo — the engines and wheel upstream publishes are downloaded and
+            verified against its SHA256SUMS, the rest are built here — plus the
+            compiled `cargo` shim Windows needs to reach that engine (CreateProcess
+            resolves .exe only, so a script shim cannot work there).
+
+            This release is immutable: versions.json pins the digest of every asset.
+            version=${{ needs.check.outputs.sha }}
+          files: release/*
+          fail_on_unmatched_files: true
+          prerelease: true
+
+  advertise:
+    # THE ORDERING GUARANTEE. versions.json is what every installed kit reads
+    # to decide what to install and whether an update exists, and for this
+    # add-on it is the ONLY authority: release tag, wheel name and the digest
+    # of every asset. So the whole pin is written here, from the very files
+    # that were just published, and proposed as a pull request -- the same
+    # review and the same CI a hand-written bump gets, where versions.yml
+    # checks each pinned digest against the asset on the named release.
+    # Until it merges, users keep installing the previous release, which still
+    # exists untouched. Nobody is ever shown a version they cannot install,
+    # and nobody's pinned install ever stops verifying.
+    needs: [check, publish]
+    if: needs.check.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: point versions.json at the freshly published release
+        id: bump
+        run: |
+          set -euo pipefail
+          new="${{ needs.check.outputs.sha }}"
+          tag="${{ needs.check.outputs.tag }}"
+          python3 - "$new" "$tag" <<'PY'
+          import collections, datetime, hashlib, json, pathlib, sys
+          new, tag = sys.argv[1], sys.argv[2]
+
+          def key_for(name):
+              """versions.json keys digests by PLATFORM, not by asset name: the
+              kit reads the document as a dotted path, and a wheel name has
+              dots in it."""
+              if name.endswith(".whl"):
+                  return "wheel"
+              if name.startswith("exakit-json-tables-cargo-"):
+                  return "cargo-" + name[len("exakit-json-tables-cargo-"):].replace(".exe", "")
+              if name.startswith("exasol-json-tables-ingest-"):
+                  return name[len("exasol-json-tables-ingest-"):].replace(".exe", "")
+              raise SystemExit("unexpected artifact %s" % name)
+
+          digests, wheel = {}, ""
+          for path in sorted(p for p in pathlib.Path("artifacts").rglob("*") if p.is_file()):
+              key = key_for(path.name)
+              if key in digests:
+                  raise SystemExit("two artifacts map to sha256.%s" % key)
+              digests[key] = hashlib.sha256(path.read_bytes()).hexdigest()
+              if key == "wheel":
+                  wheel = path.name
+          required = {"linux-x86_64", "linux-aarch64", "macos-aarch64",
+                      "windows-x86_64", "cargo-windows-x86_64", "wheel"}
+          if set(digests) != required:
+              raise SystemExit("digest keys %s, expected %s" % (sorted(digests), sorted(required)))
+
+          with open("versions.json") as handle:
+              doc = json.load(handle, object_pairs_hook=collections.OrderedDict)
+          old = doc["components"]["json-tables"]
+          block = collections.OrderedDict()
+          block["version"] = new
+          block["release"] = tag
+          block["severity"] = "normal"
+          block["wheel"] = wheel
+          block["sha256"] = collections.OrderedDict(sorted(digests.items()))
+          # Keep what the maintainers wrote (min_kit_version, ...) except a
+          # note, which described the previous build.
+          for key, value in old.items():
+              if key not in block and key != "note":
+                  block[key] = value
+          if old == block:
+              print("unchanged")
+              raise SystemExit(0)
+          doc["components"]["json-tables"] = block
+          doc["updated"] = datetime.date.today().isoformat()
+          with open("versions.json", "w") as handle:
+              json.dump(doc, handle, indent=2)
+              handle.write("\n")
+          print("bumped %s -> %s (%s)" % (old.get("version", ""), new, tag))
+          PY
+          # The module's fallback constant is what a no-network install picks:
+          # it moves with the manifest or the two drift apart, which versions.yml
+          # fails the build over.
+          sed -i "s/^EXAKIT_JSON_TABLES_VERSION_FALLBACK=\"\${EXAKIT_JSON_TABLES_VERSION_FALLBACK:-.*}\"$/EXAKIT_JSON_TABLES_VERSION_FALLBACK=\"\${EXAKIT_JSON_TABLES_VERSION_FALLBACK:-$new}\"/" setup/lib/json-tables.sh
+          python3 - "$new" <<'PY'
+          import re, sys
+          new = sys.argv[1]
+          path = "setup/lib/json-tables.ps1"
+          with open(path) as handle:
+              text = handle.read()
+          text = re.sub(r'(\$script:JsonTablesVersionFallback = .*else \{ ")[^"]*(" \})',
+                        lambda m: m.group(1) + new + m.group(2), text, count=1)
+          with open(path, "w") as handle:
+              handle.write(text)
+          PY
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: open the pull request
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          new="${{ needs.check.outputs.sha }}"
+          tag="${{ needs.check.outputs.tag }}"
+          branch="pkg/$tag"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add versions.json setup/lib/json-tables.sh setup/lib/json-tables.ps1
+          git commit -m "json-tables: advertise $new (release $tag published)"
+          git push -u origin "$branch" --force
+          # An existing open PR for this branch just gets the new commit from
+          # the push above; only create one when none is open. Never hide the
+          # error: if creation is refused (most commonly the repository
+          # setting "Allow GitHub Actions to create and approve pull
+          # requests" being off), say exactly that and hand over the one-click
+          # URL instead of failing a job whose artifacts are already published.
+          if [ -n "$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // empty')" ]; then
+            echo "::notice::an open PR for $branch already exists - the push updated it."
+          elif gh pr create --head "$branch" --base "${{ github.event.repository.default_branch }}" \
+            --title "json-tables: advertise $new" \
+            --body "The prebuilt ingest engine, cargo shim and wheel for \`$new\` are published as the immutable release \`$tag\`, and this pull request pins its version, wheel and every asset digest in versions.json. CI verifies each pin against the release before this can merge. Merging is what makes the new build visible to installed kits; until then every kit keeps installing the previous release, which is untouched."; then
+            echo "::notice::advertise PR opened for $new ($tag)."
+          else
+            echo "::warning::could not open the advertise PR (is 'Allow GitHub Actions to create and approve pull requests' enabled under Settings > Actions > General?). The branch is pushed - open it here: https://github.com/${{ github.repository }}/compare/${{ github.event.repository.default_branch }}...$branch?expand=1"
+          fi

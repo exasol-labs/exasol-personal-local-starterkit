@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from pathlib import Path
-import stat
 from urllib.parse import urlparse
 
 from mcp.core.models import DeploymentMode, Finding, OperationRequest, Severity
+from mcp.runtime.filesystem import protect_path
 
 
 class SecurityPolicy:
@@ -98,7 +98,10 @@ class SecurityPolicy:
         return False
 
     def apply_managed_permissions(self, path: Path) -> str | None:
-        if path.exists() and path.is_file() and hasattr(path, "chmod"):
-            path.chmod(stat.S_IRUSR | stat.S_IWUSR)
-            return format(stat.S_IMODE(path.stat().st_mode), "04o")
-        return None
+        if not (path.exists() and path.is_file()):
+            return None
+        # One implementation of "owner-only" for the whole Python runtime, in
+        # mcp.runtime.filesystem: the snapshot copies and the directories they
+        # live in have to be protected the same way this is, and two copies of
+        # an icacls invocation is how they drift apart.
+        return protect_path(path)

@@ -1,0 +1,84 @@
+{
+  "schema_version": 1,
+  "updated": "2026-09-30",
+  "kit": {
+    "version": "0.2.0"
+  },
+  "components": {
+    "personal": {
+      "version": "2.3.0",
+      "severity": "normal"
+    },
+    "exapump": {
+      "version": "0.13.0",
+      "repo": "exasol-labs/exapump",
+      "severity": "normal",
+      "sha256": {
+        "linux-aarch64": "f23a955caf131f26833471dcac0e40e524b825e75277cdda68dfb157acb806bf",
+        "linux-x86_64": "69a5a9bc63aa07ff7b95d00b8786ec1c67c3dff6e7f3fbac5f09b110c8d288db",
+        "macos-aarch64": "819a3c0c7e024069c8e1ee76c931cf6ea3701e7335c72d97431b2e06d7234c71",
+        "macos-x86_64": "38507010bb903573029991e56af3ad846830b328f90cd2f04d048ca684e29ec9",
+        "windows-x86_64": "b6eccf50732f4f2d3d4f6edb34789e6e24e94d9c6dbd50f5f080104b375aa838"
+      }
+    },
+    "mcp": {
+      "version": "2.2.0",
+      "package": "exasol-mcp-server",
+      "severity": "normal"
+    },
+    "pyexasol": {
+      "version": "2.4.1",
+      "package": "pyexasol",
+      "severity": "normal"
+    },
+    "skills": {
+      "version": "1.12.2",
+      "severity": "normal"
+    },
+    "dash-server": {
+      "version": "0.1.1",
+      "repo": "exasol-labs/dash-server",
+      "package": "dash-server",
+      "severity": "normal"
+    },
+    "exasol-scheduler": {
+      "version": "v0.2",
+      "release": "exasol-scheduler-v0.2",
+      "severity": "normal",
+      "sha256": {
+        "linux-arm64": "32de1c7bf55b7d3a538198300e5359e42ea883209c4c46d04f86f280e834c7e1",
+        "linux-x86_64": "9092a62c35ca4531e3772fcad559decc8c7097063a26b0bf4d14e071399c0fb9",
+        "macos-arm64": "ee6901768de50ef83af3ee8df07068310310631cd73b53ce9c7aba36e643757c",
+        "macos-x86_64": "77574a75b5cf3cf6c1c90e5c3a5567689c7ff45876e48f3b13d2daa2acbd895b",
+        "windows-x86_64": "349bdf070c2dd78eadf5c67c5340392a04d1abbab56cb562d2e8cc91b777a207"
+      }
+    },
+    "exasol-vscode": {
+      "version": "1.8.0",
+      "repo": "exasol-labs/exasol-vscode",
+      "severity": "normal",
+      "sha256": {
+        "vsix": "da442768b544a29b15e1f8cc7ae4b42d1dd6462312f044461be49298be82ecd5"
+      }
+    },
+    "json-tables": {
+      "version": "v0.3.2",
+      "release": "json-tables-v0.3.2-2",
+      "severity": "normal",
+      "wheel": "exasol_json_tables-0.3.2-py3-none-any.whl",
+      "sha256": {
+        "cargo-windows-x86_64": "72b31a0071700f17572f76ab78b68c1a1fca646865472eaddd2d087bf8bfd944",
+        "linux-aarch64": "2a800f891bad1966640391aa3bf0e3969b71296b13026c8dacd70332249f2f86",
+        "linux-x86_64": "b3c1cebbcb479d12a16c5cf4afd81df2c9cc59d8cc685553200bd49786757112",
+        "macos-aarch64": "a76cc138c729b3321e436cb551c7053e21f787a9fe38165e6799ddfd66bc1849",
+        "wheel": "29cbbd270ca68d1fd1aa83641d65e5a8ea919377c53348f343b6598c755509b8",
+        "windows-x86_64": "b09152bbe6ee71a68e938e1dd0c7c375ac050cb07982057addd24d9fc655bd2d"
+      }
+    },
+    "dbt-exasol": {
+      "version": "1.12.1",
+      "package": "dbt-exasol",
+      "severity": "normal"
+    }
+  }
+}

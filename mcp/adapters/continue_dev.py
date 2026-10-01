@@ -29,6 +29,12 @@ _HEADER = (
 # A YAML scalar can be left unquoted only when it is a plain, unambiguous token
 # (no YAML indicators, no leading/trailing space). Anything else — colons (the
 # DSN host:port!), spaces, quotes — is double-quoted and escaped.
+_KIT_SERVER_NAME = "exasol"
+_BLOCK_FILE_STEM = "exasol-starter-kit"
+# A block file name is derived from a server name, so anything that could walk
+# out of the blocks directory or confuse a path is folded to a dash.
+_UNSAFE_FILE_CHARS = re.compile(r"[^A-Za-z0-9._-]+")
+
 _YAML_BARE = re.compile(r"^[A-Za-z0-9_./@+-]+$")
 # YAML 1.1 parsers (common in JS/TS tooling) coerce these bare tokens to
 # booleans/null, and coerce numeric-looking tokens to numbers. Env values like
@@ -68,7 +74,7 @@ class ContinueAdapter(ClientAdapter):
     def describe_capabilities(self) -> AdapterCapabilities:
         return AdapterCapabilities(
             supports_stdio=True,
-            supports_http=False,
+            supports_http=True,
             supports_managed_file=True,
             supports_patch_mode=False,
             supports_env_block=True,
@@ -93,40 +99,55 @@ class ContinueAdapter(ClientAdapter):
             ],
         )
 
-    def detect(self, environment: ExecutionEnvironment) -> DetectionResult:
-        location = self.locate(environment)
-        evidence = list(location.evidence)
-        if not location.available or location.path is None:
-            return DetectionResult(
-                detected=False,
-                confidence="none",
-                location=location,
-                evidence=evidence,
+    def locate_for_server(
+        self, environment: ExecutionEnvironment, server_name: str
+    ) -> LocationResult:
+        """One block file per server, because Continue loads them that way.
+
+        The kit's own server keeps the historical file name, so an existing
+        install is not orphaned; every other server gets a file named after it.
+        An explicit CONTINUE_MCP_CONFIG_PATH names ONE file, which is the kit
+        server's: a second server is written beside it under a derived name
+        rather than on top of it.
+        """
+        if server_name == _KIT_SERVER_NAME:
+            return self.locate(environment)
+        suffix = _safe_file_stem(server_name)
+        override = environment.env.get(self._CONFIG_ENV_NAME)
+        if override:
+            base = Path(override)
+            path = base.with_name(base.stem + "-" + suffix + (base.suffix or ".yaml"))
+            return LocationResult(
+                available=True,
+                path=path,
+                evidence=[
+                    "Using a per-server block file beside "
+                    + self._CONFIG_ENV_NAME
+                    + " (" + path.name + ")."
+                ],
             )
-        if location.path.exists():
-            evidence.append("Block file exists.")
-            return DetectionResult(
-                detected=True,
-                confidence="high",
-                location=location,
-                evidence=evidence,
-            )
-        if (environment.home / ".continue").exists() or shutil.which("continue"):
-            evidence.append("Continue is installed but has no Exasol block file yet.")
-            return DetectionResult(
-                detected=True,
-                confidence="medium",
-                location=location,
-                evidence=evidence,
-            )
-        evidence.append("No Continue evidence was found.")
-        return DetectionResult(
-            detected=False,
-            confidence="low",
-            location=location,
-            evidence=evidence,
+        file_name = _BLOCK_FILE_STEM + "-" + suffix + ".yaml"
+        return LocationResult(
+            available=True,
+            path=environment.home / ".continue" / "mcpServers" / file_name,
+            evidence=[
+                "Using a per-server Continue block file "
+                f"(~/.continue/mcpServers/{file_name})."
+            ],
         )
 
+    def detect(self, environment: ExecutionEnvironment) -> DetectionResult:
+        # The block file is kit-owned by definition, so it is never evidence;
+        # Continue's own files under ~/.continue (config.yaml, sessions) are.
+        return self.detect_from_evidence(
+            environment,
+            client_label="Continue",
+            programs=("cn", "continue"),
+            client_dir=lambda env, path: env.home / ".continue",
+            kit_only=lambda path: True,
+            kit_paths=lambda path: set(path.parent.glob("exasol-starter-kit*.yaml")) | {path},
+            override_env=self._CONFIG_ENV_NAME,
+        )
     def inspect(self, path: Path, server_name: str) -> AdapterInspection:
         # The block file is kit-owned, so "inspection" is deliberately simple:
         # its identity is the hash of the whole file (drift = any manual edit).
@@ -171,10 +192,10 @@ class ContinueAdapter(ClientAdapter):
     def render(
         self, server_definition: ServerDefinition, inspection: AdapterInspection
     ) -> RenderResult:
-        if server_definition.transport != DeploymentMode.STDIO:
-            raise ValueError("Continue rendering currently supports stdio only.")
-        if not server_definition.command:
+        if server_definition.transport == DeploymentMode.STDIO and not server_definition.command:
             raise ValueError("Continue stdio rendering requires a command.")
+        if server_definition.transport == DeploymentMode.HTTP and not server_definition.url:
+            raise ValueError("Continue HTTP rendering requires a url.")
         content = self._emit_block_file(server_definition)
         return RenderResult(
             path=inspection.path,
@@ -227,6 +248,17 @@ class ContinueAdapter(ClientAdapter):
         lines.append('schema: "v1"')
         lines.append("mcpServers:")
         lines.append(f"  - name: {_yaml_scalar(server_definition.name)}")
+        if server_definition.transport == DeploymentMode.HTTP:
+            # Continue names its transports in the block itself; "streamable-http"
+            # is the one that matches an MCP endpoint served over plain HTTP.
+            lines.append("    type: streamable-http")
+            lines.append(f"    url: {_yaml_scalar(server_definition.url)}")
+            if server_definition.headers:
+                lines.append("    requestOptions:")
+                lines.append("      headers:")
+                for key, value in server_definition.headers.items():
+                    lines.append(f"        {_yaml_scalar(key)}: {_yaml_scalar(value)}")
+            return "\n".join(lines) + "\n"
         lines.append(f"    command: {_yaml_scalar(server_definition.command)}")
         if server_definition.args:
             lines.append("    args:")
@@ -239,6 +271,11 @@ class ContinueAdapter(ClientAdapter):
             for key, value in server_definition.env.items():
                 lines.append(f"      {_yaml_scalar(key)}: {_yaml_scalar(value)}")
         return "\n".join(lines) + "\n"
+
+
+def _safe_file_stem(server_name: str) -> str:
+    stem = _UNSAFE_FILE_CHARS.sub("-", server_name).strip("-.")
+    return stem or "server"
 
 
 def _yaml_scalar(value: object) -> str:

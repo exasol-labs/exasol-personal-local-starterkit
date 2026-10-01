@@ -1,0 +1,293 @@
+name: pkg / exasol-scheduler
+
+# Exasol Scheduler (exasol-labs/exasol-scheduler) publishes prebuilt binaries
+# for every platform the kit runs on, each with its own .sha256 file. So unlike
+# json-tables NOTHING is built here: this workflow downloads upstream's
+# archives, refuses any file upstream's own checksums do not vouch for, unpacks
+# them, and republishes the bare binaries as ONE IMMUTABLE RELEASE PER BUILD,
+# tagged `exasol-scheduler-<version>`, under the kit's own asset names — one
+# release, one naming scheme, one digest authority for the installer.
+#
+# A published release is never touched again: versions.json pins the digest of
+# every asset on it, so rewriting them would turn every pinned install into a
+# checksum failure. "Already published" is the change gate, and a forced
+# rebuild of the same upstream version gets a NEW suffixed tag.
+
+on:
+  schedule:
+    - cron: "40 7 * * *" # daily 07:40 UTC (the check job is change-gated)
+  workflow_dispatch:
+    inputs:
+      force:
+        description: >-
+          Republish the current upstream version as a NEW release
+          (exasol-scheduler-<version>-2, -3, ...). Published releases are
+          never overwritten.
+        type: boolean
+        default: false
+
+concurrency:
+  group: pkg-exasol-scheduler
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  UPSTREAM: exasol-labs/exasol-scheduler
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.v.outputs.sha }}
+      ref: ${{ steps.v.outputs.ref }}
+      changed: ${{ steps.v.outputs.changed }}
+      tag: ${{ steps.v.outputs.tag }}
+    steps:
+      - id: v
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # ONLY a released version is ever packaged or advertised, and there
+          # is deliberately no fallback to the main commit — an unreleased
+          # main is not a version. Same policy as pkg-json-tables.
+          rel=$(curl -sSL -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/$UPSTREAM/releases/latest" | jq -r '.tag_name // ""') || rel=""
+          if [ -z "$rel" ] || [ "$rel" = "null" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "sha=" >> "$GITHUB_OUTPUT"; echo "ref=" >> "$GITHUB_OUTPUT"; echo "tag=" >> "$GITHUB_OUTPUT"
+            echo "::warning::$UPSTREAM has published no Release - nothing to package."
+            exit 0
+          fi
+          sha="$rel"; ref="$rel"
+          tag="exasol-scheduler-$sha"
+          release_exists() {
+            code=$(curl -sSL -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $GH_TOKEN" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/tags/$1" 2>/dev/null) || code=""
+            [ "$code" = "200" ]
+          }
+          if [ "${{ github.event.inputs.force }}" = "true" ]; then
+            if release_exists "$tag"; then
+              n=2
+              while release_exists "$tag-$n"; do n=$((n + 1)); done
+              tag="$tag-$n"
+            fi
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::force requested - packaging exasol-scheduler $sha as release $tag."
+          elif release_exists "$tag"; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::exasol-scheduler $sha is already published as $tag - skipping."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::exasol-scheduler $sha - packaging upstream's prebuilt binaries as $tag."
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "ref=$ref" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  upstream:
+    # Download, verify against upstream's own per-asset .sha256 files, unpack,
+    # and stage every platform's binary under the kit's asset name. If the
+    # upstream release is missing a platform, this fails NAMING the gap: a
+    # silent skip would hide the day upstream drops a platform, and what to do
+    # about it is a person's decision.
+    needs: check
+    if: needs.check.outputs.changed == 'true'
+    name: upstream prebuilts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download, verify and stage upstream's binaries
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          ref="${{ needs.check.outputs.ref }}"
+          base="https://github.com/$UPSTREAM/releases/download/$ref"
+          api="https://api.github.com/repos/$UPSTREAM/releases/tags/$ref"
+          assets=$(curl -fsSL -H "Authorization: Bearer $GH_TOKEN" "$api" | jq -r '.assets[].name')
+          mkdir -p dl out
+          # kit key -> upstream archive. Upstream names macOS arm64/x86_64 the
+          # way the kit does, so only the archive form differs per platform.
+          stage_one() { # <kit-key> <upstream-archive> <inner-binary-name>
+            key="$1"; archive="$2"; inner="$3"
+            printf '%s\n' "$assets" | grep -qxF "$archive" || {
+              echo "::error::upstream release $ref does not carry $archive - upstream dropped a platform, or the release is incomplete. Decide, do not skip."
+              exit 1
+            }
+            printf '%s\n' "$assets" | grep -qxF "$archive.sha256" || {
+              echo "::error::upstream release $ref has no $archive.sha256 to verify against - refusing an unverifiable artifact."
+              exit 1
+            }
+            curl -fsSL -o "dl/$archive" "$base/$archive"
+            curl -fsSL -o "dl/$archive.sha256" "$base/$archive.sha256"
+            expected=$(awk '{print $1}' "dl/$archive.sha256")
+            actual=$(sha256sum "dl/$archive" | awk '{print $1}')
+            if [ "$actual" != "$expected" ]; then
+              echo "::error::$archive does not match upstream's own .sha256 (expected $expected, got $actual)"
+              exit 1
+            fi
+            mkdir -p "dl/unpack-$key"
+            case "$archive" in
+              *.zip)    unzip -q "dl/$archive" -d "dl/unpack-$key" ;;
+              *.tar.gz) tar -xzf "dl/$archive" -C "dl/unpack-$key" ;;
+            esac
+            # Found by name, not assumed at a fixed path - the archive layout
+            # is upstream's to change.
+            bin=$(find "dl/unpack-$key" -type f -name "$inner" | head -1)
+            test -n "$bin" || { echo "::error::no $inner inside $archive"; exit 1; }
+            case "$key" in
+              windows-*) install -m 755 "$bin" "out/exasol-scheduler-$key.exe" ;;
+              *)         install -m 755 "$bin" "out/exasol-scheduler-$key" ;;
+            esac
+          }
+          stage_one linux-x86_64   "exasol_scheduler-$ref-linux-x86_64.tar.gz"   exasol_scheduler
+          stage_one linux-arm64    "exasol_scheduler-$ref-linux-arm64.tar.gz"    exasol_scheduler
+          stage_one macos-arm64    "exasol_scheduler-$ref-macos-arm64.tar.gz"    exasol_scheduler
+          stage_one macos-x86_64   "exasol_scheduler-$ref-macos-x86_64.tar.gz"   exasol_scheduler
+          stage_one windows-x86_64 "exasol_scheduler-$ref-windows-x86_64.zip"    exasol_scheduler.exe
+          ls -la out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: upstream-prebuilts
+          path: out/*
+
+  publish:
+    needs: [check, upstream]
+    if: needs.check.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: refuse to overwrite a published release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          tag="${{ needs.check.outputs.tag }}"
+          test -n "$tag"
+          code=$(curl -sSL -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $GH_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/$tag") || code=""
+          if [ "$code" = "200" ]; then
+            echo "::error::release $tag already exists and is immutable - nothing was published."
+            exit 1
+          fi
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Flatten
+        run: |
+          mkdir -p release
+          find artifacts -type f -exec cp {} release/ \;
+          ls -la release
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.check.outputs.tag }}
+          name: exasol-scheduler ${{ needs.check.outputs.sha }} (prebuilt)
+          body: |
+            Exasol Scheduler binaries for every platform, downloaded from
+            ${{ env.UPSTREAM }} ${{ needs.check.outputs.sha }} and verified against
+            upstream's own per-asset .sha256 files - nothing is built here.
+
+            This release is immutable: versions.json pins the digest of every asset.
+            version=${{ needs.check.outputs.sha }}
+          files: release/*
+          fail_on_unmatched_files: true
+          prerelease: true
+
+  advertise:
+    # THE ORDERING GUARANTEE, same as pkg-json-tables: versions.json is the
+    # only authority the installer trusts, so the whole pin - release tag and
+    # every digest - is written here from the very files just published, and
+    # proposed as a pull request that versions.yml gates.
+    needs: [check, publish]
+    if: needs.check.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: point versions.json at the freshly published release
+        id: bump
+        run: |
+          set -euo pipefail
+          new="${{ needs.check.outputs.sha }}"
+          tag="${{ needs.check.outputs.tag }}"
+          python3 - "$new" "$tag" <<'PY'
+          import collections, hashlib, json, pathlib, sys
+          new, tag = sys.argv[1], sys.argv[2]
+
+          def key_for(name):
+              if not name.startswith("exasol-scheduler-"):
+                  raise SystemExit("unexpected artifact %s" % name)
+              return name[len("exasol-scheduler-"):].replace(".exe", "")
+
+          digests = {}
+          for path in sorted(p for p in pathlib.Path("artifacts").rglob("*") if p.is_file()):
+              key = key_for(path.name)
+              if key in digests:
+                  raise SystemExit("two artifacts map to sha256.%s" % key)
+              digests[key] = hashlib.sha256(path.read_bytes()).hexdigest()
+          required = {"linux-x86_64", "linux-arm64", "macos-arm64",
+                      "macos-x86_64", "windows-x86_64"}
+          if set(digests) != required:
+              raise SystemExit("digest keys %s, expected %s" % (sorted(digests), sorted(required)))
+
+          with open("versions.json") as handle:
+              doc = json.load(handle, object_pairs_hook=collections.OrderedDict)
+          old = doc["components"].get("exasol-scheduler") or {}
+          block = collections.OrderedDict()
+          block["version"] = new
+          block["release"] = tag
+          block["severity"] = "normal"
+          block["sha256"] = collections.OrderedDict(sorted(digests.items()))
+          for key, value in old.items():
+              if key not in block and key != "note":
+                  block[key] = value
+          doc["components"]["exasol-scheduler"] = block
+          with open("versions.json", "w") as handle:
+              json.dump(doc, handle, indent=2)
+              handle.write("\n")
+          print("pinned exasol-scheduler %s -> %s" % (old.get("version", "none"), new))
+          PY
+          # The module fallbacks move with the manifest or the two drift apart,
+          # which versions.yml fails the build over.
+          sed -i "s/^EXAKIT_EXASOL_SCHEDULER_VERSION_FALLBACK=\"\${EXAKIT_EXASOL_SCHEDULER_VERSION_FALLBACK:-.*}\"$/EXAKIT_EXASOL_SCHEDULER_VERSION_FALLBACK=\"\${EXAKIT_EXASOL_SCHEDULER_VERSION_FALLBACK:-$new}\"/" setup/lib/exasol-scheduler.sh
+          python3 - "$new" <<'PY'
+          import re, sys
+          new = sys.argv[1]
+          path = "setup/lib/exasol-scheduler.ps1"
+          with open(path) as handle:
+              text = handle.read()
+          text = re.sub(r'(\$script:ExasolSchedulerVersionFallback = .*else \{ ")[^"]*(" \})',
+                        lambda m: m.group(1) + new + m.group(2), text, count=1)
+          with open(path, "w") as handle:
+              handle.write(text)
+          PY
+          if git diff --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: open the pull request
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          new="${{ needs.check.outputs.sha }}"
+          branch="pkg/exasol-scheduler-$new"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$branch"
+          git add versions.json setup/lib/exasol-scheduler.sh setup/lib/exasol-scheduler.ps1
+          git commit -m "exasol-scheduler: advertise $new (prebuilt binaries published)"
+          git push -u origin "$branch" --force
+          if [ -n "$(gh pr list --head "$branch" --state open --json number --jq '.[0].number // empty')" ]; then
+            echo "::notice::an open PR for $branch already exists - the push updated it."
+          else
+            gh pr create --title "exasol-scheduler: advertise $new" \
+              --body "Automated: pins release ${{ needs.check.outputs.tag }} and the digest of every asset on it. Opened by pkg / exasol-scheduler after the release was published, so the ordering guarantee holds: nobody is advertised a version they cannot install." \
+              || echo "::warning::could not open the advertise PR - the branch is pushed: https://github.com/${{ github.repository }}/compare/main...$branch?expand=1"
+          fi

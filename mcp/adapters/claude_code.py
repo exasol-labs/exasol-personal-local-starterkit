@@ -19,6 +19,7 @@ from .base import (
     DetectionResult,
     LocationResult,
     RenderResult,
+    json_config_is_kit_only,
 )
 
 
@@ -43,7 +44,7 @@ class ClaudeCodeAdapter(ClientAdapter):
     def describe_capabilities(self) -> AdapterCapabilities:
         return AdapterCapabilities(
             supports_stdio=True,
-            supports_http=False,
+            supports_http=True,
             supports_managed_file=True,
             supports_patch_mode=True,
             supports_env_block=True,
@@ -66,39 +67,17 @@ class ClaudeCodeAdapter(ClientAdapter):
         )
 
     def detect(self, environment: ExecutionEnvironment) -> DetectionResult:
-        location = self.locate(environment)
-        evidence = list(location.evidence)
-        if not location.available or location.path is None:
-            return DetectionResult(
-                detected=False,
-                confidence="none",
-                location=location,
-                evidence=evidence,
-            )
-        if location.path.exists():
-            evidence.append("Config file exists.")
-            return DetectionResult(
-                detected=True,
-                confidence="high",
-                location=location,
-                evidence=evidence,
-            )
-        if shutil.which("claude") or (environment.home / ".claude").exists():
-            evidence.append("The Claude Code CLI is installed but has no user config yet.")
-            return DetectionResult(
-                detected=True,
-                confidence="medium",
-                location=location,
-                evidence=evidence,
-            )
-        evidence.append("No Claude Code CLI evidence was found.")
-        return DetectionResult(
-            detected=False,
-            confidence="low",
-            location=location,
-            evidence=evidence,
+        # ~/.claude.json carries far more than mcpServers once Claude Code has
+        # run; a file with only our entry was written by the kit. The CLI on
+        # PATH, or a ~/.claude with the CLI's own state, is the real evidence.
+        return self.detect_from_evidence(
+            environment,
+            client_label="the Claude Code CLI",
+            programs=("claude",),
+            client_dir=lambda env, path: env.home / ".claude",
+            kit_only=lambda path: json_config_is_kit_only(path, "mcpServers"),
+            override_env=self._CONFIG_ENV_NAME,
         )
-
     def inspect(self, path: Path, server_name: str) -> AdapterInspection:
         if not path.exists():
             return AdapterInspection(
@@ -177,18 +156,9 @@ class ClaudeCodeAdapter(ClientAdapter):
     def render(
         self, server_definition: ServerDefinition, inspection: AdapterInspection
     ) -> RenderResult:
-        if server_definition.transport != DeploymentMode.STDIO:
-            raise ValueError("Claude Code rendering currently supports stdio only.")
-        if not server_definition.command:
-            raise ValueError("Claude Code stdio rendering requires a command.")
         document = copy.deepcopy(inspection.document or {})
         mcp_servers = document.setdefault("mcpServers", {})
-        entry: dict[str, Any] = {
-            "command": server_definition.command,
-            "args": list(server_definition.args),
-        }
-        if server_definition.env:
-            entry["env"] = dict(server_definition.env)
+        entry = self._entry_for(server_definition)
         mcp_servers[server_definition.name] = entry
         # No sort_keys: ~/.claude.json is the CLI's own state file, so the
         # managed edit is kept minimally invasive (insertion-order preserved).
@@ -199,6 +169,30 @@ class ClaudeCodeAdapter(ClientAdapter):
             managed_hash=sha256_json(entry),
             entry_name=server_definition.name,
         )
+
+    def _entry_for(self, server_definition: ServerDefinition) -> dict[str, Any]:
+        """One server entry, in Claude Code's shape.
+
+        A launched server is the bare command/args pair Claude Code has always
+        taken; a remote one is declared with an explicit ``type`` of ``http``,
+        which is what distinguishes it from an SSE endpoint.
+        """
+        if server_definition.transport == DeploymentMode.HTTP:
+            if not server_definition.url:
+                raise ValueError("Claude Code HTTP rendering requires a url.")
+            entry: dict[str, Any] = {"type": "http", "url": server_definition.url}
+            if server_definition.headers:
+                entry["headers"] = dict(server_definition.headers)
+            return entry
+        if not server_definition.command:
+            raise ValueError("Claude Code stdio rendering requires a command.")
+        entry = {
+            "command": server_definition.command,
+            "args": list(server_definition.args),
+        }
+        if server_definition.env:
+            entry["env"] = dict(server_definition.env)
+        return entry
 
     def render_removal(self, inspection: AdapterInspection, server_name: str) -> RenderResult:
         document = copy.deepcopy(inspection.document or {})

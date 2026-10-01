@@ -15,7 +15,7 @@ Status: Phase 1 baseline.
 | R-007 | Repository structure differs from the brief | Medium | Medium | Treat current workspace gap as an assumption and validate before architecture is locked |
 | R-008 | False validation success masks broken runtime state | Medium | Medium | Separate syntax validation, connectivity validation, and permission validation |
 | R-009 | Platform update behavior drifts between Unix and Windows | High | Medium | Keep latest-version resolution and update-recovery hooks covered by shared dry-run/static guards |
-| R-010 | Container update leaves Nano data intact but no runnable previous container | High | Low | Snapshot pre-update runtime metadata and recreate the previous image if the updated container fails readiness |
+| R-010 | A runtime update leaves the deployment's data intact but the database down | High | Low | Probe the database after every runtime update rather than recording it healthy, and keep a major upgrade on its explicit plan/backup/apply path |
 | R-011 | MCP package refresh obscures managed client-config recovery state | Medium | Medium | Attempt a managed MCP backup before update and record the snapshot reference when available |
 
 ## Review Note

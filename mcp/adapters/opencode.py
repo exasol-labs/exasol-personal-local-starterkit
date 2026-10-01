@@ -19,6 +19,7 @@ from .base import (
     DetectionResult,
     LocationResult,
     RenderResult,
+    json_config_is_kit_only,
 )
 
 # The canonical schema URL OpenCode ships; added to a freshly created config so
@@ -54,7 +55,7 @@ class OpenCodeAdapter(ClientAdapter):
     def describe_capabilities(self) -> AdapterCapabilities:
         return AdapterCapabilities(
             supports_stdio=True,
-            supports_http=False,
+            supports_http=True,
             supports_managed_file=True,
             supports_patch_mode=True,
             supports_env_block=True,
@@ -79,39 +80,16 @@ class OpenCodeAdapter(ClientAdapter):
         )
 
     def detect(self, environment: ExecutionEnvironment) -> DetectionResult:
-        location = self.locate(environment)
-        evidence = list(location.evidence)
-        if not location.available or location.path is None:
-            return DetectionResult(
-                detected=False,
-                confidence="none",
-                location=location,
-                evidence=evidence,
-            )
-        if location.path.exists():
-            evidence.append("Config file exists.")
-            return DetectionResult(
-                detected=True,
-                confidence="high",
-                location=location,
-                evidence=evidence,
-            )
-        if (environment.home / ".config" / "opencode").exists() or shutil.which("opencode"):
-            evidence.append("OpenCode is installed but has no config file yet.")
-            return DetectionResult(
-                detected=True,
-                confidence="medium",
-                location=location,
-                evidence=evidence,
-            )
-        evidence.append("No OpenCode evidence was found.")
-        return DetectionResult(
-            detected=False,
-            confidence="low",
-            location=location,
-            evidence=evidence,
+        # The kit writes a "$schema" key beside "mcp"; that key alone is still
+        # the kit's own work, not the user's.
+        return self.detect_from_evidence(
+            environment,
+            client_label="OpenCode",
+            programs=("opencode",),
+            client_dir=lambda env, path: env.home / ".config" / "opencode",
+            kit_only=lambda path: json_config_is_kit_only(path, "mcp", ignore_keys=("$schema",)),
+            override_env=self._CONFIG_ENV_NAME,
         )
-
     def inspect(self, path: Path, server_name: str) -> AdapterInspection:
         if not path.exists():
             return AdapterInspection(
@@ -190,23 +168,12 @@ class OpenCodeAdapter(ClientAdapter):
     def render(
         self, server_definition: ServerDefinition, inspection: AdapterInspection
     ) -> RenderResult:
-        if server_definition.transport != DeploymentMode.STDIO:
-            raise ValueError("OpenCode rendering currently supports stdio (type=local) only.")
-        if not server_definition.command:
-            raise ValueError("OpenCode local rendering requires a command.")
         document = copy.deepcopy(inspection.document or {})
         # Add the schema URL only when the file has none, so editors get
         # completion without overwriting an operator's own value.
         document.setdefault("$schema", _OPENCODE_SCHEMA_URL)
         mcp_servers = document.setdefault("mcp", {})
-        entry: dict[str, Any] = {
-            "type": "local",
-            # OpenCode expects command + args folded into one array.
-            "command": [server_definition.command, *server_definition.args],
-            "enabled": True,
-        }
-        if server_definition.env:
-            entry["environment"] = dict(server_definition.env)
+        entry = self._entry_for(server_definition)
         mcp_servers[server_definition.name] = entry
         # No sort_keys: opencode.json is the user's own settings file, so the
         # managed edit is kept minimally invasive (insertion-order preserved).
@@ -217,6 +184,36 @@ class OpenCodeAdapter(ClientAdapter):
             managed_hash=sha256_json(entry),
             entry_name=server_definition.name,
         )
+
+    def _entry_for(self, server_definition: ServerDefinition) -> dict[str, Any]:
+        """One server entry, in OpenCode's shape.
+
+        OpenCode's two transports are its own words: ``local`` for a launched
+        server (command and args folded into one array, env under
+        ``environment``) and ``remote`` for a URL. Both carry ``enabled``.
+        """
+        if server_definition.transport == DeploymentMode.HTTP:
+            if not server_definition.url:
+                raise ValueError("OpenCode remote rendering requires a url.")
+            entry: dict[str, Any] = {
+                "type": "remote",
+                "url": server_definition.url,
+                "enabled": True,
+            }
+            if server_definition.headers:
+                entry["headers"] = dict(server_definition.headers)
+            return entry
+        if not server_definition.command:
+            raise ValueError("OpenCode local rendering requires a command.")
+        entry = {
+            "type": "local",
+            # OpenCode expects command + args folded into one array.
+            "command": [server_definition.command, *server_definition.args],
+            "enabled": True,
+        }
+        if server_definition.env:
+            entry["environment"] = dict(server_definition.env)
+        return entry
 
     def render_removal(self, inspection: AdapterInspection, server_name: str) -> RenderResult:
         document = copy.deepcopy(inspection.document or {})

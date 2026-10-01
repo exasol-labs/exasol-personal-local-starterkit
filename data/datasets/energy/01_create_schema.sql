@@ -27,3 +27,18 @@ CREATE OR REPLACE TABLE ENERGY_READINGS (
     KWH        DECIMAL(8,3)  NOT NULL,
     CONSTRAINT ENERGY_READINGS_PK PRIMARY KEY (METER_ID, READING_TS)
 );
+
+-- Semantics travel WITH the tables (see the note in tpch/01_create_schema.sql):
+-- the MCP describe path reads these comments. COMMENT is idempotent.
+
+COMMENT ON TABLE  ENERGY_METERS IS 'One smart meter per household (50 rows). PK meter_id.';
+COMMENT ON COLUMN ENERGY_METERS.METER_ID IS 'Meter id (PK)';
+COMMENT ON COLUMN ENERGY_METERS.HOUSEHOLD IS 'Household label the meter belongs to';
+COMMENT ON COLUMN ENERGY_METERS.CITY IS 'City the household is in';
+COMMENT ON COLUMN ENERGY_METERS.TARIFF IS 'Tariff plan: BASIC, GREEN, or NIGHT';
+COMMENT ON COLUMN ENERGY_METERS.BASE_LOAD_KWH IS 'Typical hourly baseline consumption, kWh';
+
+COMMENT ON TABLE  ENERGY_READINGS IS 'Hourly consumption readings: 50 meters x 90 days x 24h. PK (meter_id, reading_ts); meter_id -> energy_meters.';
+COMMENT ON COLUMN ENERGY_READINGS.METER_ID IS 'Meter that produced the reading (FK -> energy_meters.meter_id)';
+COMMENT ON COLUMN ENERGY_READINGS.READING_TS IS 'Hour of the reading (timestamp, one row per meter per hour)';
+COMMENT ON COLUMN ENERGY_READINGS.KWH IS 'Energy consumed in that hour, kWh';

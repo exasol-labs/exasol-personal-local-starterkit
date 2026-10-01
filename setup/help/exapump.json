@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "id": "exapump",
+  "kind": "component",
+  "title": "exapump",
+  "invocation_prefix": "exapump",
+  "tagline": "The kit's SQL and bulk-load CLI.",
+  "role": "exapump runs SQL against the local database and bulk-loads CSV and Parquet files into tables. The kit installs it and writes a connection profile called starter-kit.",
+  "repo": "exasol-labs/exapump",
+  "binary": "~/.local/bin/exapump",
+  "config": "~/.exapump/config.toml",
+  "profile": "starter-kit",
+  "installed_by": "The installer, at step 3 of 6.",
+  "warning": "The starter-kit profile connects as the ADMIN user and is NOT sandboxed: it can create, drop and delete. Never treat an exapump success as proof something is safe for the MCP path, and never reach for exapump to work around an MCP rejection.",
+  "quickstart": [
+    {
+      "step": "Prove the database works",
+      "run": "exapump sql -p starter-kit 'SELECT CURRENT_TIMESTAMP'"
+    },
+    {
+      "step": "Load a file",
+      "run": "exapump upload data.csv --table STARTER_KIT.MYTABLE"
+    },
+    {
+      "step": "Or use the guided menu",
+      "run": "exakit data-load"
+    }
+  ],
+  "commands": [
+    {
+      "command": "sql",
+      "options": "-p <profile> \"<SQL>\"",
+      "summary": "Run one SQL statement.",
+      "description": "Runs a single statement through a saved connection profile and prints the result.",
+      "examples": [
+        "exapump sql -p starter-kit 'SELECT COUNT(*) FROM TPCH.NATION'"
+      ]
+    },
+    {
+      "command": "sql",
+      "options": "-p <profile> < file.sql",
+      "summary": "Run a SQL script file.",
+      "description": "Feeds a script in over stdin, which also keeps statements off the process table.",
+      "examples": [
+        "exapump sql -p starter-kit < schema.sql"
+      ]
+    },
+    {
+      "command": "upload",
+      "options": "<file> --table <schema.table>",
+      "summary": "Bulk-load CSV or Parquet.",
+      "description": "Loads a CSV or Parquet file into a table. JSON is not an exapump input - use exakit data-load, which shreds it into tables first.",
+      "examples": [
+        "exapump upload orders.csv --table STARTER_KIT.ORDERS"
+      ]
+    },
+    {
+      "command": "profile init",
+      "options": "<name>",
+      "summary": "Create or update a connection profile.",
+      "description": "Prompts for host, port, user and password and writes them into the config file (mode 600).",
+      "examples": [
+        "exapump profile init myprofile"
+      ]
+    },
+    {
+      "command": "--version",
+      "options": "",
+      "summary": "Print the exapump version.",
+      "examples": [
+        "exapump --version"
+      ]
+    },
+    {
+      "command": "--help",
+      "options": "",
+      "summary": "exapump's own built-in help.",
+      "examples": [
+        "exapump --help"
+      ]
+    }
+  ],
+  "environment": [
+    {
+      "name": "EXAPUMP_CONFIG",
+      "effect": "Override the config path. Profiles live in ~/.exapump/config.toml by default."
+    }
+  ],
+  "troubleshooting": [
+    {
+      "symptom": "Failed to connect to 127.0.0.1:8563",
+      "remedy": "The database is not running: exakit start, then exakit status."
+    },
+    {
+      "symptom": "syntax error, unexpected FETCH_ (or TOP_)",
+      "remedy": "Exasol does not page with FETCH FIRST or TOP. Use LIMIT <n>, optionally with OFFSET."
+    },
+    {
+      "symptom": "object <NAME> not found",
+      "remedy": "Wrong name or a missing schema qualifier. DESCRIBE <schema>.<table> first, then fix the query."
+    }
+  ],
+  "see_also": [
+    "exakit sql",
+    "exakit data-load",
+    "json-tables"
+  ]
+}

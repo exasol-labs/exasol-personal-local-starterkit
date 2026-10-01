@@ -1,0 +1,108 @@
+{
+  "schema_version": 1,
+  "id": "personal",
+  "kind": "runtime",
+  "title": "Exasol Personal (the kit's database runtime)",
+  "tagline": "The local Exasol database, run by its own launcher.",
+  "role": "The kit's only database runtime. The Exasol launcher deploys it locally on macOS, Linux (through Podman, native or inside WSL) and Windows x86_64; Windows arm64 is not supported and the installer says so and exits. In WSL the launcher takes its Linux path, so Podman must be installed inside the distro.",
+  "repo": "exasol/exasol-personal",
+  "binary": "~/.local/bin/exasol",
+  "deployment_dir": "~/.exasol/personal/deployments/default",
+  "dsn": "127.0.0.1:8563",
+  "admin_user": "sys",
+  "installed_by": "The installer, at steps 1 and 2 of 6.",
+  "quickstart": [
+    {
+      "step": "Is it running?",
+      "run": "exakit status"
+    },
+    {
+      "step": "Start or stop it",
+      "run": "exakit start"
+    },
+    {
+      "step": "Deployment detail",
+      "run": "exasol info"
+    }
+  ],
+  "commands": [
+    {
+      "command": "exakit start",
+      "options": "",
+      "summary": "Start the database (deploying it if needed).",
+      "examples": [
+        "exakit start"
+      ]
+    },
+    {
+      "command": "exakit stop",
+      "options": "",
+      "summary": "Stop it. Your data is kept.",
+      "examples": [
+        "exakit stop"
+      ]
+    },
+    {
+      "command": "exakit autostart",
+      "options": "",
+      "summary": "Come back at login?",
+      "examples": [
+        "exakit autostart"
+      ],
+      "environment": [
+        "EXAKIT_AUTOSTART_CHANGE=1|0 pre-answers the question for scripts"
+      ]
+    },
+    {
+      "command": "exakit repair-runtime",
+      "options": "[--yes]",
+      "summary": "Rebuild a database that cannot start.",
+      "description": "DESTRUCTIVE: your database is rebuilt from empty and its data is not recoverable.",
+      "examples": [
+        "exakit repair-runtime"
+      ]
+    },
+    {
+      "command": "exakit update",
+      "options": "",
+      "summary": "Applies the tested version set.",
+      "description": "A MAJOR Exasol Personal upgrade is a real data migration, so it never starts on its own: the update reports it, takes no destructive action, and points at the Exasol Personal migration guidance for that version. Your database data is left where it is."
+    },
+    {
+      "command": "exasol info",
+      "options": "",
+      "summary": "The launcher's own deployment overview.",
+      "examples": [
+        "exasol info"
+      ]
+    }
+  ],
+  "environment": [
+    {
+      "name": "EXAKIT_REUSE_DB",
+      "effect": "1 adopts an existing deployment (default), 0 destroys it and deploys fresh."
+    }
+  ],
+  "notes": [
+    "An existing database is adopted, running or stopped. Only one that cannot start is replaced, and the installer says so.",
+    "A database update recreates the container over the same data volume; the previous image is put back if the new one does not come up."
+  ],
+  "troubleshooting": [
+    {
+      "symptom": "Connection refused on 8563",
+      "remedy": "exakit start, then confirm with exakit status (exit 0 running, 3 stopped)."
+    },
+    {
+      "symptom": "Port 8563 is already in use",
+      "remedy": "Stop the other app holding it, then exakit start."
+    },
+    {
+      "symptom": "Every start fails the same way",
+      "remedy": "exakit repair-runtime rebuilds it - destructive, data is not recoverable."
+    }
+  ],
+  "see_also": [
+    "exakit start",
+    "exakit status"
+  ]
+}

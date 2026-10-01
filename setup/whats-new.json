@@ -1,0 +1,29 @@
+{
+  "_comment": [
+    "What's new cards. One key per kit version, one short line per highlight.",
+    "",
+    "The installer draws a card for every version it crossed during an upgrade,",
+    "and `exakit whats-new [version]` reads the same lines. This file is the only",
+    "source: there is nothing else to keep in step.",
+    "",
+    "Rules, enforced by tests/whats-new.sh so a bad line cannot reach a user:",
+    "  - a line is at most 68 characters, or the card would truncate it to '...'",
+    "  - at most 6 lines per version, or the card stops being skimmable",
+    "  - a version key is a plain dotted number (0.2.0), because the installer",
+    "    sorts them to decide which cards a jump like 0.1.0 -> 0.4.0 crosses",
+    "  - lines stay ASCII. PowerShell 5.1 reads a BOM-less file through the",
+    "    legacy ANSI codepage, so an em dash here renders as garbage on Windows",
+    "    - the same trap tests/ps-encoding-guard.sh catches in .ps1 files but",
+    "    cannot see in a data file",
+    "",
+    "Write what the reader can now DO, not what changed in the code. A first",
+    "install shows no cards at all, so every line here is read by someone who",
+    "already had the kit working and wants to know what is different."
+  ],
+  "0.2.0": [
+    "exakit marketplace with powerful add-ons.",
+    "exakit update applies the recommended updates, latest AI skills.",
+    "exakit version shows installed and recommended versions.",
+    "truly agentic, every command speaks JSON with clear exit codes."
+  ]
+}

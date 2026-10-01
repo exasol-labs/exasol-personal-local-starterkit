@@ -21,7 +21,15 @@ MANIFEST="$EXAKIT_HOME/manifest.json"
 # grant-coverage probe also lands here (any granted dataset schema would do).
 S=TPCH
 
-skip() { echo "SKIP: $1"; exit 0; }
+# This is the ONLY suite that empirically proves the MCP user can read and
+# cannot write - every other guard on that user is a grep over the GRANT SQL.
+# It needs a live database, no CI job starts one, and a bare `exit 0` meant
+# that wiring it into CI would have printed SKIP and passed: the kit's central
+# security claim would have looked covered by 40 assertions, none of which can
+# fire. EXAKIT_REQUIRE_DB=1 is how a maintainer running it deliberately after
+# an install cannot mistake a skip for a pass. See tests/lib/require.sh.
+. "$(dirname "$0")/lib/require.sh"
+skip() { exakit_require_skip DB "$1"; }
 
 EXAPUMP="$(command -v exapump || echo "$HOME/.local/bin/exapump")"
 [ -x "$EXAPUMP" ] || skip "exapump not found (kit not installed)"
@@ -43,7 +51,15 @@ fi
 DSN="$(grep -oE '"dsn"[[:space:]]*:[[:space:]]*"[^"]+"' "$MANIFEST" | head -1 | sed -E 's/.*"([^"]+)"$/\1/')"
 HOSTP="${DSN%%:*}"; PORTP="${DSN##*:}"
 HOSTP="${HOSTP:-127.0.0.1}"; PORTP="${PORTP:-8563}"
-(exec 3<>"/dev/tcp/$HOSTP/$PORTP") 2>/dev/null && exec 3>&- 3<&- || skip "database not reachable at $HOSTP:$PORTP (start it with: exakit start)"
+# A PORT THAT ANSWERS IS NOT A DATABASE THAT ANSWERS, and this suite is the
+# one place that must not blur them. The guard was a bare TCP connect; on a
+# machine whose launcher had left an orphaned runner holding 8563 the connect
+# SUCCEEDED, every query then failed at the TLS layer, and - because the
+# rejection test below counted any non-zero exit as "rejected" - the write/DDL
+# section reported seven green "[rejected]" lines about a database it had never
+# reached. A security suite reporting PASS for a connection that did not happen
+# is worse than one that skips, so the real check is a real query, and it is
+# made AFTER the profiles are written (below), where one can be run.
 
 # Isolated exapump profiles in a throwaway HOME so the real config is untouched.
 TMP="$(mktemp -d)"
@@ -57,6 +73,13 @@ mkdir -p "$TMP/.exapump"
 } > "$TMP/.exapump/config.toml"
 chmod 600 "$TMP/.exapump/config.toml"
 
+# The real reachability probe: a trivial SELECT through the very profile the
+# checks use. Anything short of a working query means this suite cannot answer
+# its question, and it says so instead of guessing.
+if ! printf 'SELECT 1;' | HOME="$TMP" "$EXAPUMP" sql -p mcpro >/dev/null 2>&1; then
+    skip "the database did not answer a query as mcp_readonly at $HOSTP:$PORTP (start it with: exakit start)"
+fi
+
 PASS=0; FAIL=0
 # check <label> <ok|fail> <sql>  — ok: must succeed as mcp_readonly;
 #                                  fail: must be rejected (read-only integrity).
@@ -67,8 +90,24 @@ check() {
         if [ "$_rc" -eq 0 ]; then PASS=$((PASS+1)); printf '  ok   %s\n' "$_label"
         else FAIL=$((FAIL+1)); printf '  FAIL %s: %s\n' "$_label" "$(printf '%s' "$_out" | tr '\n' ' ' | cut -c1-120)"; fi
     else
-        if [ "$_rc" -ne 0 ]; then PASS=$((PASS+1)); printf '  ok   %s [rejected]\n' "$_label"
-        else FAIL=$((FAIL+1)); printf '  FAIL %s: WRITE ALLOWED — read-only breached!\n' "$_label"; fi
+        # A REJECTION IS A REFUSAL BY THE DATABASE, not merely a non-zero exit.
+        # Counting any failure as a rejection made an unreachable database look
+        # like a perfectly enforced read-only user - the one result this suite
+        # exists to be sure of, reported without a single query having run.
+        # Exasol denies with "insufficient privileges ... (SQL state: 42500)";
+        # a connection error is a different sentence and is never a pass here.
+        if [ "$_rc" -eq 0 ]; then
+            FAIL=$((FAIL+1)); printf '  FAIL %s: WRITE ALLOWED — read-only breached!\n' "$_label"
+        else
+            case "$_out" in
+                *"insufficient privileges"*|*"not allowed"*|*"no privilege"*|*"42500"*)
+                    PASS=$((PASS+1)); printf '  ok   %s [rejected]\n' "$_label" ;;
+                *)
+                    FAIL=$((FAIL+1))
+                    printf '  FAIL %s: failed, but NOT as a privilege denial: %s\n' \
+                        "$_label" "$(printf '%s' "$_out" | tr '\n' ' ' | cut -c1-120)" ;;
+            esac
+        fi
     fi
 }
 

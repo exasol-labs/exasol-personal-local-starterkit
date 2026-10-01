@@ -18,6 +18,7 @@ from .base import (
     DetectionResult,
     LocationResult,
     RenderResult,
+    json_config_is_kit_only,
 )
 
 
@@ -128,39 +129,16 @@ class ClaudeDesktopAdapter(ClientAdapter):
         return LocationResult(available=True, path=chosen, evidence=evidence)
 
     def detect(self, environment: ExecutionEnvironment) -> DetectionResult:
-        location = self.locate(environment)
-        evidence = list(location.evidence)
-        if not location.available or location.path is None:
-            return DetectionResult(
-                detected=False,
-                confidence="none",
-                location=location,
-                evidence=evidence,
-            )
-        if location.path.exists():
-            evidence.append("Config file exists.")
-            return DetectionResult(
-                detected=True,
-                confidence="high",
-                location=location,
-                evidence=evidence,
-            )
-        if location.path.parent.exists():
-            evidence.append("Config directory exists.")
-            return DetectionResult(
-                detected=True,
-                confidence="medium",
-                location=location,
-                evidence=evidence,
-            )
-        evidence.append("No local config evidence was found.")
-        return DetectionResult(
-            detected=False,
-            confidence="low",
-            location=location,
-            evidence=evidence,
+        # The desktop app keeps many files beside its config (Local Storage,
+        # Preferences, ...), so a directory holding only our config file is the
+        # kit's own doing, not the app's. See ClientAdapter.detect_from_evidence.
+        return self.detect_from_evidence(
+            environment,
+            client_label="Claude Desktop",
+            bundles=("Claude",),
+            kit_only=lambda path: json_config_is_kit_only(path, "mcpServers"),
+            override_env=self._CONFIG_ENV_NAME,
         )
-
     def inspect(self, path: Path, server_name: str) -> AdapterInspection:
         if not path.exists():
             return AdapterInspection(

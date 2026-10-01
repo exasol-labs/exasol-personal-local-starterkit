@@ -1,0 +1,116 @@
+{
+  "schema_version": 1,
+  "id": "json-tables",
+  "kind": "addon",
+  "title": "JSON Tables",
+  "tagline": "Turns JSON-shaped data into relational tables.",
+  "role": "exapump loads CSV and Parquet; a JSON document is an arbitrarily nested tree, and this add-on shreds it into tables. exakit data-load installs it for you the moment you hand it a .json file - it asks nothing, and one document may legitimately produce several tables.",
+  "repo": "exasol-labs/exasol-json-tables",
+  "package": "exasol-json-tables",
+  "binary": "~/.local/bin/exasol-json-tables",
+  "installed_by": "Automatically by exakit data-load when you load a JSON file, or from exakit marketplace.",
+  "platforms": "macOS (Apple silicon), Linux (including WSL) and Windows x86_64. Not available on Windows ARM64 or Intel Macs: no prebuilt ingest engine is published for them.",
+  "quickstart": [
+    {
+      "step": "Just load a JSON file",
+      "run": "exakit data-load",
+      "note": "Pick the file, give it SCHEMA.TABLE, and the engine is installed and run for you."
+    },
+    {
+      "step": "Or install it up front",
+      "run": "exakit marketplace",
+      "note": "Space selects JSON Tables, Enter installs it."
+    }
+  ],
+  "commands": [
+    {
+      "command": "exakit data-load",
+      "options": "",
+      "summary": "The normal way in - hand it a .json file.",
+      "examples": [
+        "exakit data-load"
+      ]
+    },
+    {
+      "command": "exasol-json-tables ingest",
+      "options": "--input <file.json> --output-dir <dir>",
+      "summary": "Shred JSON into Parquet by hand.",
+      "examples": []
+    },
+    {
+      "command": "exakit update",
+      "options": "",
+      "summary": "Update the engine and wheel.",
+      "examples": [
+        "exakit update"
+      ]
+    },
+    {
+      "command": "exakit logs",
+      "options": "json-tables [-f]",
+      "summary": "What the ingest wrote.",
+      "examples": [
+        "exakit logs json-tables -f"
+      ]
+    }
+  ],
+  "notes": [
+    "The ingest engine ships PREBUILT. Nobody needs Rust or cargo - never tell a user to install a toolchain.",
+    "Several tables from one document all land in the schema you named, sharing the table name you gave as their prefix.",
+    "Quoted names are not optional: the table and column names come from the JSON, so `\"users[].addresses[]\"` and `\"_parent\"` need double quotes in every statement. A view with uppercase aliases (see the write example) is the usual way to stop typing them.",
+    "`exakit data-load` runs the ingest half only. The JSON-friendly SQL surface - dotted paths, TO_JSON, array expansion - is an upstream capability you install yourself with `exasol-json-tables ingest-and-wrap`."
+  ],
+  "troubleshooting": [
+    {
+      "symptom": "exapump will not take my .json file",
+      "remedy": "That is expected - use exakit data-load, which routes JSON through this add-on."
+    },
+    {
+      "symptom": "No tables came out of the document",
+      "remedy": "Check the file really is JSON or NDJSON, then retry exakit data-load."
+    },
+    {
+      "symptom": "Not available on this machine",
+      "remedy": "No prebuilt engine is published for this platform (Windows ARM64, Intel Mac). Load the file from a supported machine; on Windows, WSL works."
+    },
+    {
+      "symptom": "object <NAME> not found, on a table you can see in the list",
+      "remedy": "The name came from your JSON and is case-sensitive with brackets in it. Quote it exactly: SELECT * FROM STARTER_KIT.\"users[].addresses[]\"."
+    },
+    {
+      "symptom": "A column called something|object or something|array holds no values",
+      "remedy": "It is a marker saying a child table of that name exists. Join that table instead - on _id for an object, on _parent for an array."
+    }
+  ],
+  "see_also": [
+    "exakit data-load",
+    "exapump"
+  ],
+  "snippets": [
+    {
+      "title": "What you get: one table per nesting level, linked by id",
+      "language": "text",
+      "code": "root                          _id, <scalars>, <name>|object, <name>|array\nusers[]                       _id, _parent, _pos, <scalars>\nusers[].identity.contact      _id, email, phone          (object: 1:1 with its parent)\nusers[].addresses[]           _id, _parent, _pos, city, country, line1, line2\nusers[].activity.tags[]       _parent, _pos, _value      (array of scalars)\n\nA column named `payment|object` or `items|array` is a MARKER, not the data:\nit says a child table of that name exists. The values live in that table."
+    },
+    {
+      "title": "Read: join a child back to its parent",
+      "language": "sql",
+      "code": "-- objects are 1:1, so they share the parent's _id\nSELECT u.\"id\", c.\"email\"\nFROM   STARTER_KIT.\"users[]\" u\nJOIN   STARTER_KIT.\"users[].identity.contact\" c ON c.\"_id\" = u.\"_id\";\n\n-- arrays are 1:many: the child's _parent points at the parent's _id,\n-- and _pos preserves the order the elements had in the document\nSELECT u.\"id\", a.\"city\", a.\"country\"\nFROM   STARTER_KIT.\"users[]\" u\nJOIN   STARTER_KIT.\"users[].addresses[]\" a ON a.\"_parent\" = u.\"_id\"\nORDER  BY u.\"_id\", a.\"_pos\";"
+    },
+    {
+      "title": "Aggregate across the nesting, like any other tables",
+      "language": "sql",
+      "code": "SELECT a.\"country\", COUNT(DISTINCT u.\"_id\") AS USERS\nFROM   STARTER_KIT.\"users[]\" u\nJOIN   STARTER_KIT.\"users[].addresses[]\" a ON a.\"_parent\" = u.\"_id\"\nGROUP  BY a.\"country\"\nORDER  BY USERS DESC\nLIMIT  10;"
+    },
+    {
+      "title": "Write: ordinary SQL - but mind which connection you are on",
+      "language": "sql",
+      "code": "-- These are plain Exasol tables, so CREATE / INSERT / UPDATE / DELETE all\n-- work. What decides whether they are ALLOWED is the user you connect as:\n--\n--   exakit sql '<statement>' --write     admin, not sandboxed\n--   exapump sql -p starter-kit '...'     admin, not sandboxed\n--   the MCP tools in your AI client      mcp_readonly - writes are rejected\n--                                        by the database itself\n--\n-- A durable, SQL-friendly view over the awkward quoted names:\nCREATE OR REPLACE VIEW STARTER_KIT.USER_ADDRESSES AS\nSELECT u.\"_id\" AS USER_ID, u.\"id\" AS USER_KEY,\n       a.\"_pos\" AS ADDRESS_POS, a.\"city\" AS CITY, a.\"country\" AS COUNTRY\nFROM   STARTER_KIT.\"users[]\" u\nJOIN   STARTER_KIT.\"users[].addresses[]\" a ON a.\"_parent\" = u.\"_id\";"
+    },
+    {
+      "title": "Beyond the kit: query JSON syntax instead of joins (upstream feature)",
+      "language": "sql",
+      "code": "-- `exakit data-load` runs the INGEST half only, so you get the relational\n-- tables above. The upstream tool can also install a JSON-friendly wrapper\n-- surface over them - dotted paths, array expansion, TO_JSON - which the\n-- kit does not set up for you:\n--\n--   exasol-json-tables ingest-and-wrap --input <file.json> ...\n--\n-- Then activate the preprocessor in the session that needs the syntax:\nALTER SESSION SET SQL_PREPROCESSOR_SCRIPT = JVS_WRAP_PP.JSON_WRAPPER_PREPROCESSOR;\n\nSELECT \"meta.info.note\", \"tags[LAST]\", TO_JSON(*) AS DOC\nFROM   JSON_VIEW.SAMPLE\nORDER  BY \"_id\";"
+    }
+  ]
+}

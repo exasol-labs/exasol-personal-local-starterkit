@@ -37,6 +37,27 @@ try {
     . (Join-Path $lib "exapump.ps1")
     . (Join-Path $lib "mcp.ps1")
 
+    Write-Host "the runtime update offer - an unattended run is never asked, so it never stops a database:"
+    # `exakit update` applies the runtime (which stops the database) only for an
+    # answer it was actually given. Twin of the same block in the bash test; the
+    # helpers live in the CLI, loaded with a harmless command.
+    . (Join-Path $PSScriptRoot "..\setup\exakit.ps1") -Command "help" *> $null
+    Remove-Item Env:EXAKIT_CONFIRM_RUNTIME_UPDATE -ErrorAction SilentlyContinue
+    $unanswered = Get-ExakitRuntimeUpdatePreanswer
+    if (-not $unanswered) { $unanswered = "" }
+    Check "nobody has answered yet" "" $unanswered
+    $env:EXAKIT_CONFIRM_RUNTIME_UPDATE = "1"
+    Check "EXAKIT_CONFIRM_RUNTIME_UPDATE=1 opts in" "yes" (Get-ExakitRuntimeUpdatePreanswer)
+    $env:EXAKIT_CONFIRM_RUNTIME_UPDATE = "no"
+    Check "=no is a deliberate refusal" "no" (Get-ExakitRuntimeUpdatePreanswer)
+    $env:EXAKIT_CONFIRM_RUNTIME_UPDATE = "maybe"
+    $vague = Get-ExakitRuntimeUpdatePreanswer
+    if (-not $vague) { $vague = "" }
+    Check "an unrecognised value answers nothing" "" $vague
+    Remove-Item Env:EXAKIT_CONFIRM_RUNTIME_UPDATE -ErrorAction SilentlyContinue
+    Check "-Yes opts in for one run" "yes" (Get-ExakitRuntimeUpdatePreanswer -AssumeYes $true)
+    Check "the major version is read the same way" "2026" (Get-ExakitMajorVersion "2026.2.0")
+
     Write-Host "EXAKIT_MCP_CLIENTS - client selection parses names, 'all', and numbers:"
     # "claude" (or 1) expands to both Claude surfaces (desktop app + Claude Code
     # CLI); "all" covers every supported client. Keep these in lockstep with

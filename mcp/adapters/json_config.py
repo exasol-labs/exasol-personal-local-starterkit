@@ -18,6 +18,7 @@ from .base import (
     DetectionResult,
     LocationResult,
     RenderResult,
+    json_config_is_kit_only,
 )
 
 
@@ -35,7 +36,11 @@ class JsonConfigAdapter(ClientAdapter):
         default_location: str | None = None,
         workspace_relative_location: str | None = None,
         platforms: tuple[str, ...] = ("darwin", "linux", "win32"),
+        programs: tuple[str, ...] = (),
+        bundles: tuple[str, ...] = (),
     ) -> None:
+        self._programs = programs
+        self._bundles = bundles
         self._adapter_id_value = adapter_id_value
         self._display_name_value = display_name_value
         self._config_env_name = config_env_name
@@ -96,24 +101,14 @@ class JsonConfigAdapter(ClientAdapter):
         )
 
     def detect(self, environment: ExecutionEnvironment) -> DetectionResult:
-        location = self.locate(environment)
-        evidence = list(location.evidence)
-        if not location.available or location.path is None:
-            return DetectionResult(
-                detected=False,
-                confidence="none",
-                location=location,
-                evidence=evidence,
-            )
-        if location.path.exists():
-            evidence.append("Config file exists.")
-            return DetectionResult(True, "high", location, evidence)
-        if location.path.parent.exists():
-            evidence.append("Config directory exists.")
-            return DetectionResult(True, "medium", location, evidence)
-        evidence.append("No local config evidence was found.")
-        return DetectionResult(False, "low", location, evidence)
-
+        return self.detect_from_evidence(
+            environment,
+            client_label=self._display_name_value,
+            programs=self._programs,
+            bundles=self._bundles,
+            kit_only=lambda path: json_config_is_kit_only(path, self._top_level_key),
+            override_env=self._config_env_name,
+        )
     def inspect(self, path: Path, server_name: str) -> AdapterInspection:
         if not path.exists():
             return AdapterInspection(
@@ -194,19 +189,13 @@ class JsonConfigAdapter(ClientAdapter):
     def render(
         self, server_definition: ServerDefinition, inspection: AdapterInspection
     ) -> RenderResult:
-        if server_definition.transport != DeploymentMode.STDIO:
-            raise ValueError(f"{self.display_name()} rendering currently supports stdio only.")
-        if not server_definition.command:
-            raise ValueError(f"{self.display_name()} stdio rendering requires a command.")
         document = copy.deepcopy(inspection.document or {self._top_level_key: {}})
         servers = document.setdefault(self._top_level_key, {})
-        entry: dict[str, Any] = {
-            "command": server_definition.command,
-            "args": list(server_definition.args),
-        }
-        if server_definition.env:
-            entry["env"] = dict(server_definition.env)
-        self._mutate_entry(entry)
+        entry = self._entry_for(server_definition)
+        # Only a launched server has a command to mutate; a remote entry is a
+        # URL and nothing else, so client-specific stdio keys do not apply.
+        if server_definition.transport == DeploymentMode.STDIO:
+            self._mutate_entry(entry)
         servers[server_definition.name] = entry
         return RenderResult(
             path=inspection.path,
@@ -253,6 +242,29 @@ class JsonConfigAdapter(ClientAdapter):
 
     def activation_instructions(self) -> list[NextAction]:
         return [NextAction(kind="restart_client", message=self._activation_message)]
+
+    def _entry_for(self, server_definition: ServerDefinition) -> dict[str, Any]:
+        """One server entry, in this client's shape.
+
+        Cursor takes a remote server as a bare ``url``; it reads the transport
+        from the endpoint rather than from a ``type`` key, so none is written.
+        """
+        if server_definition.transport == DeploymentMode.HTTP:
+            if not server_definition.url:
+                raise ValueError(f"{self.display_name()} HTTP rendering requires a url.")
+            entry: dict[str, Any] = {"url": server_definition.url}
+            if server_definition.headers:
+                entry["headers"] = dict(server_definition.headers)
+            return entry
+        if not server_definition.command:
+            raise ValueError(f"{self.display_name()} stdio rendering requires a command.")
+        entry = {
+            "command": server_definition.command,
+            "args": list(server_definition.args),
+        }
+        if server_definition.env:
+            entry["env"] = dict(server_definition.env)
+        return entry
 
     def _mutate_entry(self, entry: dict[str, Any]) -> None:
         """Allow concrete adapters to add client-specific keys."""

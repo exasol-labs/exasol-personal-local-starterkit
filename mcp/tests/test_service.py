@@ -19,10 +19,22 @@ class MCPSubsystemLifecycleTests(unittest.TestCase):
         self._temp_dir = Path(tempfile.mkdtemp(prefix="mcp-subsystem-tests-"))
         self.runtime_root = self._temp_dir / "runtime"
         self.config_path = self._temp_dir / "claude" / "claude_desktop_config.json"
+        self._no_apps = self._temp_dir / "no-applications"
+        self._no_apps.mkdir(parents=True, exist_ok=True)
         self.environment = ExecutionEnvironment(
             os_name="darwin",
             home=self._temp_dir,
-            env={"CLAUDE_DESKTOP_CONFIG_PATH": str(self.config_path)},
+            # EXAKIT_MCP_APP_ROOTS points at an empty directory because
+            # detection on darwin counts an installed <name>.app as evidence,
+            # and without it this probe reads the DEVELOPER'S OWN
+            # /Applications. On a machine with Cursor installed, "cursor" came
+            # back not_set_up instead of not_installed and discover's
+            # client_not_detected INFO never fired - two failures that were
+            # measuring the host rather than the code.
+            env={
+                "CLAUDE_DESKTOP_CONFIG_PATH": str(self.config_path),
+                "EXAKIT_MCP_APP_ROOTS": str(self._no_apps),
+            },
         )
         self.subsystem = MCPAccessSubsystem(environment=self.environment)
 
@@ -130,6 +142,8 @@ class MCPSubsystemLifecycleTests(unittest.TestCase):
             env={
                 "CURSOR_MCP_CONFIG_PATH": str(cursor_path),
                 "CODEX_MCP_CONFIG_PATH": str(codex_path),
+                # Same reason as in setUp: no real /Applications.
+                "EXAKIT_MCP_APP_ROOTS": str(self._no_apps),
             },
             cwd=workspace,
         )
@@ -255,10 +269,22 @@ class DoctorClientStateTests(unittest.TestCase):
         self._temp_dir = Path(tempfile.mkdtemp(prefix="mcp-doctor-state-tests-"))
         self.runtime_root = self._temp_dir / "runtime"
         self.config_path = self._temp_dir / "claude" / "claude_desktop_config.json"
+        self._no_apps = self._temp_dir / "no-applications"
+        self._no_apps.mkdir(parents=True, exist_ok=True)
         self.environment = ExecutionEnvironment(
             os_name="darwin",
             home=self._temp_dir,
-            env={"CLAUDE_DESKTOP_CONFIG_PATH": str(self.config_path)},
+            # EXAKIT_MCP_APP_ROOTS points at an empty directory because
+            # detection on darwin counts an installed <name>.app as evidence,
+            # and without it this probe reads the DEVELOPER'S OWN
+            # /Applications. On a machine with Cursor installed, "cursor" came
+            # back not_set_up instead of not_installed and discover's
+            # client_not_detected INFO never fired - two failures that were
+            # measuring the host rather than the code.
+            env={
+                "CLAUDE_DESKTOP_CONFIG_PATH": str(self.config_path),
+                "EXAKIT_MCP_APP_ROOTS": str(self._no_apps),
+            },
         )
         self.subsystem = MCPAccessSubsystem(environment=self.environment)
 
@@ -311,6 +337,28 @@ class DoctorClientStateTests(unittest.TestCase):
             # renderers need the managed set: doctor must carry artifacts
             self.assertEqual(len(doctor.artifacts), 1)
             self.assertEqual(doctor.artifacts[0].client, "claude_desktop")
+
+    def test_doctor_carries_a_health_derived_client_state_map(self) -> None:
+        """details.clients: one row per supported client, state from the checks.
+
+        The human screen used to call a client connected because a manifest
+        record existed -- with its entry deleted, and for clients that were
+        not installed -- and the JSON carried no per-client state at all.
+        """
+        with self._mock_connectivity():
+            configure = self.subsystem.execute(self._request("configure", ["claude_desktop"]))
+            self.assertEqual(configure.status, OperationStatus.SUCCESS)
+            doctor = self.subsystem.execute(self._request("doctor", ["claude_desktop", "cursor"]))
+            states = {row["client"]: row["state"] for row in doctor.details["clients"]}
+            self.assertEqual(states["claude_desktop"], "connected")
+            self.assertEqual(states["cursor"], "not_installed")
+            self.assertEqual(len(states), 8)   # one row per supported client
+
+            # The client vanishes after setup: still managed, no longer detected.
+            shutil.rmtree(self.config_path.parent)
+            doctor = self.subsystem.execute(self._request("doctor", ["claude_desktop"]))
+            states = {row["client"]: row["state"] for row in doctor.details["clients"]}
+            self.assertEqual(states["claude_desktop"], "configured_client_missing")
 
     def test_managed_entry_with_missing_client_warns(self) -> None:
         with self._mock_connectivity():

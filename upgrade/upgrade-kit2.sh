@@ -55,10 +55,6 @@ ok "Kit 1 installation detected (kit_level: 1)"
 # Health: the upgrade needs a reachable database.
 _type="$(manifest_get runtime.type 2>/dev/null)"
 case "$_type" in
-    nano)
-        . "$LIB_DIR/runtime-nano.sh"
-        [ "$(nano_status)" = "running" ] || die "The Nano container is not running. Start it first: exakit start"
-        ;;
     personal)
         . "$LIB_DIR/runtime-personal.sh"
         [ "$(personal_status)" = "running" ] || die "The Personal deployment is not reachable. Check: exasol info"
@@ -135,6 +131,11 @@ done
 if [ "$_installed" -gt 0 ]; then
     manifest_set kit_level 2
     manifest_set kit2.upgraded_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    # Which asset bundle this is, taken from the kit tree the assets came from -
+    # not from an older kit copy that may still sit under the kit home. This is
+    # what `exakit version` compares against later.
+    _k2_version="$(exakit_kit_version_at "$KIT_ROOT" kit2.version 2>/dev/null || true)"
+    [ -n "$_k2_version" ] && manifest_set kit2.version "$_k2_version"
     exakit_finish
     ok "Upgrade complete — kit_level is now 2 ($_installed/3 assets present)"
     [ "$_installed" -lt 3 ] && info "Missing assets install automatically when you re-run this script after they land."

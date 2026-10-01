@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "id": "dbt-exasol",
+  "kind": "addon",
+  "title": "dbt-exasol",
+  "tagline": "Build, test and document SQL models with dbt.",
+  "role": "The dbt adapter for Exasol. dbt turns a folder of SELECT statements into managed tables and views with dependencies, tests and documentation; this add-on is what lets it speak to the kit's local database. Installing it is also what puts dbt itself on the machine - dbt-core comes with the adapter.",
+  "repo": "exasol/dbt-exasol",
+  "package": "dbt-exasol",
+  "binary": "~/.local/bin/dbt-exasol",
+  "profile": "The kit generates ~/.exasol-starter-kit/dbt/profiles.yml with a profile named exasol_starter_kit, and the launcher points dbt at that directory with DBT_PROFILES_DIR. Your own ~/.dbt/profiles.yml is never read or written - if you keep your warehouses in one file, copy the block out of the kit's copy rather than expecting the kit to merge into yours.",
+  "credentials": "The password is never written into the profile. It names DBT_ENV_SECRET_EXASOL_PASSWORD, which the launcher fills from the kit's credential file at run time; dbt scrubs values under that prefix from its own logs and artifacts. The profile uses the runtime ADMIN user, not the read-only one the MCP server and dash-server share, because building models means creating tables.",
+  "installed_by": "Never by the installer. Only through exakit marketplace.",
+  "platforms": "macOS, Linux (including WSL) and Windows. Requires Python 3.11 to 3.14; the kit's managed interpreter (3.12) is inside that range, so nothing extra is needed.",
+  "quickstart": [
+    {
+      "step": "Install it",
+      "run": "exakit marketplace",
+      "note": "Space selects dbt-exasol, Enter installs it. That is the whole install - the profile and the launcher are written for you."
+    },
+    {
+      "step": "Check it can reach the database",
+      "run": "dbt-exasol debug",
+      "note": "Run it inside a dbt project. The install already ran this check for you if the database was up."
+    },
+    {
+      "step": "Build something",
+      "run": "dbt-exasol run",
+      "note": "From a project folder. Models land in the DBT schema, which dbt creates on the first run."
+    }
+  ],
+  "commands": [
+    {
+      "command": "dbt-exasol",
+      "options": "<any dbt command>",
+      "summary": "dbt, with the kit's database already configured.",
+      "examples": [
+        "dbt-exasol debug",
+        "dbt-exasol run",
+        "dbt-exasol test"
+      ]
+    },
+    {
+      "command": "exakit update",
+      "options": "dbt-exasol",
+      "summary": "Install the advertised version; also repairs the profile and launcher.",
+      "examples": [
+        "exakit update dbt-exasol"
+      ]
+    },
+    {
+      "command": "exakit uninstall",
+      "options": "",
+      "summary": "Pick dbt-exasol from the selection to remove it.",
+      "examples": [
+        "exakit uninstall"
+      ]
+    }
+  ],
+  "notes": [
+    "The command is `dbt-exasol`, not `dbt`. A dbt you installed yourself for another warehouse keeps that name - the kit does not take over a command it did not create.",
+    "dbt needs a project. `dbt-exasol run` outside a folder with a dbt_project.yml will tell you so; that is dbt's own behaviour, not a broken install.",
+    "Set `profile: exasol_starter_kit` in your dbt_project.yml to use the generated profile, or export your own DBT_PROFILES_DIR to use yours instead.",
+    "Models build into the DBT schema by default. dbt creates it on the first run; change it with the schema key in the generated profile, which `exakit update dbt-exasol` will then rewrite - so change it in your project's config if you want it to stick.",
+    "The generated profile sets validate_server_certificate: false, because the kit's local runtime speaks TLS with a self-signed certificate. That is correct here and wrong for a production warehouse - do not copy the block to one.",
+    "Uninstall removes the venv, the launcher and the generated profiles.yml. Anything else you put in ~/.exasol-starter-kit/dbt is left alone, including a project you kept there."
+  ],
+  "troubleshooting": [
+    {
+      "symptom": "dbt-exasol: command not found",
+      "remedy": "exakit update dbt-exasol"
+    },
+    {
+      "symptom": "Could not find profile named 'exasol_starter_kit'",
+      "remedy": "exakit update dbt-exasol"
+    },
+    {
+      "symptom": "Runtime Error: Could not connect",
+      "remedy": "exakit start"
+    },
+    {
+      "symptom": "Env var required but not provided: DBT_ENV_SECRET_EXASOL_PASSWORD",
+      "remedy": "exakit update dbt-exasol"
+    },
+    {
+      "symptom": "The marketplace does not list dbt-exasol",
+      "remedy": "exakit update"
+    }
+  ],
+  "see_also": [
+    "exakit marketplace",
+    "pyexasol"
+  ]
+}

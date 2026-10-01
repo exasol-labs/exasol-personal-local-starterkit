@@ -19,6 +19,7 @@ from .base import (
     DetectionResult,
     LocationResult,
     RenderResult,
+    json_config_is_kit_only,
 )
 
 
@@ -42,7 +43,7 @@ class VSCodeCopilotAdapter(ClientAdapter):
     def describe_capabilities(self) -> AdapterCapabilities:
         return AdapterCapabilities(
             supports_stdio=True,
-            supports_http=False,
+            supports_http=True,
             supports_managed_file=True,
             supports_patch_mode=True,
             supports_env_block=True,
@@ -80,39 +81,16 @@ class VSCodeCopilotAdapter(ClientAdapter):
         )
 
     def detect(self, environment: ExecutionEnvironment) -> DetectionResult:
-        location = self.locate(environment)
-        evidence = list(location.evidence)
-        if not location.available or location.path is None:
-            return DetectionResult(
-                detected=False,
-                confidence="none",
-                location=location,
-                evidence=evidence,
-            )
-        if location.path.exists():
-            evidence.append("Config file exists.")
-            return DetectionResult(
-                detected=True,
-                confidence="high",
-                location=location,
-                evidence=evidence,
-            )
-        if location.path.parent.exists() or shutil.which("code"):
-            evidence.append("VS Code is installed but has no global MCP config yet.")
-            return DetectionResult(
-                detected=True,
-                confidence="medium",
-                location=location,
-                evidence=evidence,
-            )
-        evidence.append("No VS Code evidence was found.")
-        return DetectionResult(
-            detected=False,
-            confidence="low",
-            location=location,
-            evidence=evidence,
+        # VS Code's User directory holds settings.json and more when the editor
+        # is installed; one mcp.json of ours alone is not the editor.
+        return self.detect_from_evidence(
+            environment,
+            client_label="VS Code",
+            programs=("code", "code-insiders"),
+            bundles=("Visual Studio Code", "Visual Studio Code - Insiders"),
+            kit_only=lambda path: json_config_is_kit_only(path, "servers"),
+            override_env=self._CONFIG_ENV_NAME,
         )
-
     def inspect(self, path: Path, server_name: str) -> AdapterInspection:
         if not path.exists():
             return AdapterInspection(
@@ -191,19 +169,9 @@ class VSCodeCopilotAdapter(ClientAdapter):
     def render(
         self, server_definition: ServerDefinition, inspection: AdapterInspection
     ) -> RenderResult:
-        if server_definition.transport != DeploymentMode.STDIO:
-            raise ValueError("VS Code rendering currently supports stdio only.")
-        if not server_definition.command:
-            raise ValueError("VS Code stdio rendering requires a command.")
         document = copy.deepcopy(inspection.document or {"servers": {}})
         servers = document.setdefault("servers", {})
-        entry: dict[str, Any] = {
-            "type": "stdio",
-            "command": server_definition.command,
-            "args": list(server_definition.args),
-        }
-        if server_definition.env:
-            entry["env"] = dict(server_definition.env)
+        entry = self._entry_for(server_definition)
         servers[server_definition.name] = entry
         content = json.dumps(document, indent=2, sort_keys=True) + "\n"
         return RenderResult(
@@ -213,21 +181,49 @@ class VSCodeCopilotAdapter(ClientAdapter):
             entry_name=server_definition.name,
         )
 
+    def _entry_for(self, server_definition: ServerDefinition) -> dict[str, Any]:
+        """One server entry, in VS Code's shape.
+
+        VS Code types every entry explicitly — ``stdio`` for a launched server,
+        ``http`` for a remote one — so the type is written in both branches.
+        """
+        if server_definition.transport == DeploymentMode.HTTP:
+            if not server_definition.url:
+                raise ValueError("VS Code HTTP rendering requires a url.")
+            entry: dict[str, Any] = {"type": "http", "url": server_definition.url}
+            if server_definition.headers:
+                entry["headers"] = dict(server_definition.headers)
+            return entry
+        if not server_definition.command:
+            raise ValueError("VS Code stdio rendering requires a command.")
+        entry = {
+            "type": "stdio",
+            "command": server_definition.command,
+            "args": list(server_definition.args),
+        }
+        if server_definition.env:
+            entry["env"] = dict(server_definition.env)
+        return entry
+
     def render_removal(self, inspection: AdapterInspection, server_name: str) -> RenderResult:
         document = copy.deepcopy(inspection.document or {})
         servers = document.get("servers")
         if isinstance(servers, dict):
             servers.pop(server_name, None)
-            if not servers:
-                document.pop("servers", None)
-        remove_file = not document
-        content = None if remove_file else json.dumps(document, indent=2, sort_keys=True) + "\n"
+            # Keep the (possibly empty) servers table and NEVER delete the
+            # file. mcp.json is VS Code's, not the kit's: an uninstall used to
+            # remove the whole file once the kit's entries were the last ones
+            # in it, and the kit's own snapshot of it went with the kit home in
+            # the same run, so a user with other servers there had nothing to
+            # recover from.
+            document["servers"] = servers
+        content = json.dumps(document, indent=2, sort_keys=True) + "\n"
         return RenderResult(
             path=inspection.path,
             content=content,
             managed_hash=None,
             entry_name=server_name,
-            remove_file=remove_file,
+            remove_file=False,
         )
 
     def validate_render(self, rendered: RenderResult) -> list[Finding]:

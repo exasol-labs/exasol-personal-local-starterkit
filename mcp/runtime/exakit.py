@@ -17,8 +17,15 @@ from .paths import RuntimePaths
 
 DEFAULT_MCP_COMMAND = "uvx"
 DEFAULT_MCP_PACKAGE = "exasol-mcp-server"
-DEFAULT_MCP_VERSION = "1.10.1"
+DEFAULT_MCP_VERSION = "2.2.0"
 DEFAULT_SERVER_NAME = "exasol"
+# The dash-server add-on's MCP control plane. dash-server speaks Streamable
+# HTTP on a port it records at install time (5100 unless something already held
+# it), so it is registered as a URL, not a command.
+DASH_SERVER_SERVER_NAME = "dash-server"
+DASH_SERVER_DEFAULT_PORT = 5100
+DASH_SERVER_HOST = "127.0.0.1"
+DASH_SERVER_MCP_PATH = "/mcp"
 LOCAL_SELF_SIGNED_TLS_ENV = {"EXA_SSL_CERT_VALIDATION": "no"}
 DEFAULT_READ_ONLY_MCP_SETTINGS = {
     "enable_read_query": True,
@@ -139,6 +146,64 @@ class ExakitRuntimeLoader:
             password_file=password_file,
             server_definition=definition,
         )
+
+    def load_dash_server(self, runtime_root: Path) -> ServerDefinition | None:
+        """The dash-server add-on's MCP control plane, or None when it is absent.
+
+        Registration is decided by the add-on's own manifest block, which its
+        installer writes and its uninstall removes wholesale — so "installed"
+        and "registered" cannot drift apart. Deliberately NOT gated on
+        ``validated``: the entry is a pointer to a port, and it becomes correct
+        the moment the server is running, which is exactly the state a user
+        repairs with `exakit update dash-server`.
+
+        Unlike the exasol server there is nothing secret here — no credentials,
+        no env block — because the control plane is loopback-only.
+        """
+        paths = RuntimePaths(runtime_root)
+        manifest_path = paths.manifest_path
+        if not manifest_path.exists():
+            return None
+        try:
+            document = self._filesystem.read_json(manifest_path)
+        except Exception:  # noqa: BLE001 - an unreadable manifest is the caller's problem
+            return None
+        components = document.get("components")
+        if not isinstance(components, dict):
+            return None
+        component_state = components.get("dash_server")
+        if not isinstance(component_state, dict) or not component_state:
+            return None
+        port = self._dash_server_port(component_state)
+        name = str(
+            self._environment.env.get("EXAKIT_DASH_SERVER_MCP_NAME")
+            or DASH_SERVER_SERVER_NAME
+        ).strip()
+        return ServerDefinition(
+            transport=DeploymentMode.HTTP,
+            name=name,
+            url=f"http://{DASH_SERVER_HOST}:{port}{DASH_SERVER_MCP_PATH}",
+        )
+
+    def _dash_server_port(self, component_state: dict) -> int:
+        """The port every dash-server command agrees on.
+
+        Same precedence as the shell side (setup/lib/dash-server.sh): an
+        explicit environment choice outranks the recorded port, which outranks
+        the default. A recorded value that is not a port is ignored rather than
+        raising — a malformed manifest field must not cost the user MCP setup.
+        """
+        for raw in (
+            self._environment.env.get("EXAKIT_DASH_SERVER_PORT"),
+            component_state.get("port"),
+        ):
+            try:
+                port = int(str(raw).strip())
+            except (TypeError, ValueError):
+                continue
+            if 1 <= port <= 65535:
+                return port
+        return DASH_SERVER_DEFAULT_PORT
 
     def _resolve_mcp_command(self, component_state: dict) -> str:
         for candidate in self._candidate_mcp_commands(component_state):

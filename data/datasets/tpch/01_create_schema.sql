@@ -119,3 +119,86 @@ CREATE OR REPLACE TABLE LINEITEM (
     l_comment       VARCHAR(44),
     CONSTRAINT lineitem_pk PRIMARY KEY (l_orderkey, l_linenumber)
 );
+
+-- Semantics travel WITH the tables: agents discover meaning through the MCP
+-- describe/summarize path, which reads these comments — without them a table's
+-- shape is visible but its meaning lives only in data/data-dictionary.md, a
+-- file no SQL client can see. Kept short; the dictionary stays the deep
+-- reference. COMMENT is idempotent, so re-runs simply reapply.
+
+COMMENT ON TABLE  REGION IS 'One geographic region (5 rows). PK r_regionkey.';
+COMMENT ON COLUMN REGION.R_REGIONKEY IS 'Region id (PK)';
+COMMENT ON COLUMN REGION.R_NAME IS 'Region name: AFRICA, AMERICA, ASIA, EUROPE, MIDDLE EAST';
+COMMENT ON COLUMN REGION.R_COMMENT IS 'Free-text note';
+
+COMMENT ON TABLE  NATION IS 'One nation, in a region (25 rows). PK n_nationkey; n_regionkey -> region.';
+COMMENT ON COLUMN NATION.N_NATIONKEY IS 'Nation id (PK)';
+COMMENT ON COLUMN NATION.N_NAME IS 'Nation name, e.g. UNITED STATES, GERMANY, JAPAN';
+COMMENT ON COLUMN NATION.N_REGIONKEY IS 'Region this nation is in (FK -> region.r_regionkey)';
+COMMENT ON COLUMN NATION.N_COMMENT IS 'Free-text note';
+
+COMMENT ON TABLE  CUSTOMER IS 'One customer (3,000 rows). PK c_custkey; c_nationkey -> nation.';
+COMMENT ON COLUMN CUSTOMER.C_CUSTKEY IS 'Customer id (PK)';
+COMMENT ON COLUMN CUSTOMER.C_NAME IS 'Customer name (Customer#NNNNNNNNN)';
+COMMENT ON COLUMN CUSTOMER.C_ADDRESS IS 'Street address';
+COMMENT ON COLUMN CUSTOMER.C_NATIONKEY IS 'Customer''s nation (FK -> nation.n_nationkey)';
+COMMENT ON COLUMN CUSTOMER.C_PHONE IS 'Phone number';
+COMMENT ON COLUMN CUSTOMER.C_ACCTBAL IS 'Account balance, can be negative';
+COMMENT ON COLUMN CUSTOMER.C_MKTSEGMENT IS 'Market segment: AUTOMOBILE, BUILDING, FURNITURE, HOUSEHOLD, MACHINERY';
+COMMENT ON COLUMN CUSTOMER.C_COMMENT IS 'Free-text note';
+
+COMMENT ON TABLE  SUPPLIER IS 'One supplier (200 rows). PK s_suppkey; s_nationkey -> nation.';
+COMMENT ON COLUMN SUPPLIER.S_SUPPKEY IS 'Supplier id (PK)';
+COMMENT ON COLUMN SUPPLIER.S_NAME IS 'Supplier name (Supplier#NNNNNNNNN)';
+COMMENT ON COLUMN SUPPLIER.S_ADDRESS IS 'Street address';
+COMMENT ON COLUMN SUPPLIER.S_NATIONKEY IS 'Supplier''s nation (FK -> nation.n_nationkey)';
+COMMENT ON COLUMN SUPPLIER.S_PHONE IS 'Phone number';
+COMMENT ON COLUMN SUPPLIER.S_ACCTBAL IS 'Account balance, can be negative';
+COMMENT ON COLUMN SUPPLIER.S_COMMENT IS 'Free-text note';
+
+COMMENT ON TABLE  PART IS 'One sellable product (4,000 rows). PK p_partkey.';
+COMMENT ON COLUMN PART.P_PARTKEY IS 'Part id (PK)';
+COMMENT ON COLUMN PART.P_NAME IS 'Descriptive name (color words)';
+COMMENT ON COLUMN PART.P_MFGR IS 'Manufacturer (Manufacturer#N)';
+COMMENT ON COLUMN PART.P_BRAND IS 'Brand (Brand#NN)';
+COMMENT ON COLUMN PART.P_TYPE IS 'Type/material/finish, e.g. PROMO BURNISHED COPPER';
+COMMENT ON COLUMN PART.P_SIZE IS 'Size code';
+COMMENT ON COLUMN PART.P_CONTAINER IS 'Container, e.g. JUMBO PKG';
+COMMENT ON COLUMN PART.P_RETAILPRICE IS 'List retail price';
+COMMENT ON COLUMN PART.P_COMMENT IS 'Free-text note';
+
+COMMENT ON TABLE  PARTSUPP IS 'One part supplied by one supplier (16,000 rows). PK (ps_partkey, ps_suppkey); FKs -> part, supplier.';
+COMMENT ON COLUMN PARTSUPP.PS_PARTKEY IS 'Part (PK part, FK -> part.p_partkey)';
+COMMENT ON COLUMN PARTSUPP.PS_SUPPKEY IS 'Supplier (PK part, FK -> supplier.s_suppkey)';
+COMMENT ON COLUMN PARTSUPP.PS_AVAILQTY IS 'Quantity this supplier has available';
+COMMENT ON COLUMN PARTSUPP.PS_SUPPLYCOST IS 'Cost to source the part from this supplier';
+COMMENT ON COLUMN PARTSUPP.PS_COMMENT IS 'Free-text note';
+
+COMMENT ON TABLE  ORDERS IS 'One customer order header (30,000 rows). PK o_orderkey; o_custkey -> customer. Line detail in LINEITEM.';
+COMMENT ON COLUMN ORDERS.O_ORDERKEY IS 'Order id (PK)';
+COMMENT ON COLUMN ORDERS.O_CUSTKEY IS 'Customer who placed it (FK -> customer.c_custkey)';
+COMMENT ON COLUMN ORDERS.O_ORDERSTATUS IS 'Status flag: O = open, F = fulfilled, P = partial';
+COMMENT ON COLUMN ORDERS.O_TOTALPRICE IS 'Order total incl. tax (sum of its line items)';
+COMMENT ON COLUMN ORDERS.O_ORDERDATE IS 'Date the order was placed';
+COMMENT ON COLUMN ORDERS.O_ORDERPRIORITY IS 'Priority: 1-URGENT, 2-HIGH, 3-MEDIUM, 4-NOT SPECIFIED, 5-LOW';
+COMMENT ON COLUMN ORDERS.O_CLERK IS 'Clerk who handled it (Clerk#NNNNNNNNN)';
+COMMENT ON COLUMN ORDERS.O_SHIPPRIORITY IS 'Ship priority (usually 0)';
+COMMENT ON COLUMN ORDERS.O_COMMENT IS 'Free-text note';
+
+COMMENT ON TABLE  LINEITEM IS 'Fact table: one product line within an order (~120K rows). PK (l_orderkey, l_linenumber). Revenue = l_extendedprice * (1 - l_discount).';
+COMMENT ON COLUMN LINEITEM.L_ORDERKEY IS 'Order this line belongs to (FK -> orders.o_orderkey)';
+COMMENT ON COLUMN LINEITEM.L_PARTKEY IS 'Part sold (FK -> part.p_partkey)';
+COMMENT ON COLUMN LINEITEM.L_SUPPKEY IS 'Supplier of the part (FK -> supplier.s_suppkey)';
+COMMENT ON COLUMN LINEITEM.L_LINENUMBER IS 'Line number within the order (part of PK)';
+COMMENT ON COLUMN LINEITEM.L_QUANTITY IS 'Units on this line';
+COMMENT ON COLUMN LINEITEM.L_EXTENDEDPRICE IS 'quantity x part price, pre-discount';
+COMMENT ON COLUMN LINEITEM.L_DISCOUNT IS 'Discount fraction, 0.00-0.10 (revenue = l_extendedprice * (1 - l_discount))';
+COMMENT ON COLUMN LINEITEM.L_TAX IS 'Tax fraction applied after discount';
+COMMENT ON COLUMN LINEITEM.L_RETURNFLAG IS 'Return flag: R = returned, A = accepted, N = none';
+COMMENT ON COLUMN LINEITEM.L_LINESTATUS IS 'Line status: O = open, F = fulfilled';
+COMMENT ON COLUMN LINEITEM.L_SHIPDATE IS 'Date the line shipped';
+COMMENT ON COLUMN LINEITEM.L_COMMITDATE IS 'Committed delivery date';
+COMMENT ON COLUMN LINEITEM.L_RECEIPTDATE IS 'Date the customer received it';
+COMMENT ON COLUMN LINEITEM.L_SHIPINSTRUCT IS 'Shipping instructions, e.g. DELIVER IN PERSON';
+COMMENT ON COLUMN LINEITEM.L_SHIPMODE IS 'Ship mode: AIR, FOB, MAIL, RAIL, REG AIR, SHIP, TRUCK';
+COMMENT ON COLUMN LINEITEM.L_COMMENT IS 'Free-text note';

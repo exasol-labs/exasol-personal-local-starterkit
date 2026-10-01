@@ -12,8 +12,10 @@ from mcp.core.models import (
     ArtifactReference,
     ChangeKind,
     ChangeRecord,
+    DeploymentMode,
     DiscoveredClient,
     Finding,
+    NextAction,
     OperationName,
     OperationRequest,
     OperationResult,
@@ -331,7 +333,11 @@ class MCPAccessSubsystem:
                 summary="Repair is blocked by request or policy validation.",
                 findings=findings,
             )
-        existing_validation = validator.validate_manifest_consistency()
+        # With the desired definition in hand this sees an entry that is intact
+        # but superseded, not just a hand-edited one -- which is the whole
+        # difference between repair fixing a stale version pin and repair
+        # answering "already consistent" forever.
+        existing_validation = validator.validate_manifest_consistency(request.server_definition)
         findings.extend(existing_validation.findings)
         if not existing_validation.findings:
             return OperationResult(
@@ -360,7 +366,7 @@ class MCPAccessSubsystem:
             configure_request = OperationRequest(
                 request_id=request.request_id,
                 operation=OperationName.CONFIGURE,
-                target_clients=request.target_clients,
+                target_clients=self._repair_targets(request, existing_validation.findings),
                 deployment_mode=request.deployment_mode,
                 dry_run=False,
                 force=request.force,
@@ -527,15 +533,73 @@ class MCPAccessSubsystem:
             active_artifacts,
         )
         findings = discover_result.findings + validation.findings
+        # One row per supported client with a state derived from HEALTH, not
+        # from the existence of a manifest record. The screen used to call a
+        # client "connected" because an artifact existed for it -- with the
+        # entry deleted from the file, and for clients that were not installed
+        # at all -- and the JSON carried no per-client state whatsoever.
+        #   connected                  managed, client detected, no warning/error names it
+        #   needs_attention            managed, a warning/error names it (drift, missing entry, launch failure)
+        #   configured_client_missing  managed, but the client is not on this machine
+        #   not_set_up                 client detected, not managed
+        #   not_installed              neither
+        discovered_by_id = {
+            entry.get("client"): entry
+            for entry in (discover_result.details or {}).get("discovered_clients", [])
+        }
+        managed_ids = {artifact.client for artifact in active_artifacts}
+        troubled_ids: set[str] = set()
+        for finding in validation.findings:
+            if finding.severity in (Severity.WARNING, Severity.ERROR, Severity.CRITICAL):
+                client_id = (finding.scope or {}).get("client")
+                if client_id:
+                    troubled_ids.add(client_id)
+                else:
+                    # A finding with no client scope (a manifest-wide drift, a
+                    # launch failure of the shared server) taints every managed client.
+                    troubled_ids.update(managed_ids)
+        client_states: list[dict[str, str | None]] = []
+        for adapter in self._registry.all():
+            adapter_id = adapter.adapter_id()
+            detected = bool((discovered_by_id.get(adapter_id) or {}).get("detected"))
+            managed = adapter_id in managed_ids
+            if managed and not detected:
+                state = "configured_client_missing"
+            elif managed and adapter_id in troubled_ids:
+                state = "needs_attention"
+            elif managed:
+                state = "connected"
+            elif detected:
+                state = "not_set_up"
+            else:
+                state = "not_installed"
+            client_states.append({"client": adapter_id, "state": state})
+        details = dict(discover_result.details or {})
+        details["clients"] = client_states
+        # Findings already carry their own remedy; doctor was throwing it away
+        # and returning next_actions=[] alongside a non-empty findings list. That
+        # is the field an unattended caller branches on, so an empty one reads as
+        # "nothing to do" on a machine with problems. Blocking findings first,
+        # then the rest, de-duplicated while preserving order.
+        _seen_actions: set[str] = set()
+        next_actions: list[NextAction] = []
+        for _finding in sorted(findings, key=lambda f: not f.blocking):
+            _action = (_finding.recommended_action or "").strip()
+            if not _action or _action in _seen_actions:
+                continue
+            _seen_actions.add(_action)
+            next_actions.append(NextAction(kind=_finding.code, message=_action))
+
         return OperationResult(
             request_id=request.request_id,
             operation=request.operation,
             status=self._combine_status(discover_result.findings, validation.findings),
             summary=f"Doctor completed with {summarize_findings(findings)}",
             findings=findings,
+            next_actions=next_actions,
             verification_evidence=validation.verification_evidence,
             artifacts=active_artifacts,
-            details=discover_result.details,
+            details=details,
         )
 
     def _uninstall(
@@ -549,10 +613,15 @@ class MCPAccessSubsystem:
         del validator
         active_records = self._active_artifacts(manifest_repository)
         target_ids = set(request.target_clients) if request.target_clients else None
+        target_servers = set(request.target_servers) if request.target_servers else None
         target_artifacts = [
             artifact
             for artifact in active_records
-            if target_ids is None or artifact.client in target_ids
+            if (target_ids is None or artifact.client in target_ids)
+            and (
+                target_servers is None
+                or str(artifact.metadata.get("entry_name", "exasol")) in target_servers
+            )
         ]
         if not target_artifacts:
             return OperationResult(
@@ -618,6 +687,38 @@ class MCPAccessSubsystem:
                 )
             )
         latest_snapshot = manifest_repository.latest_snapshot_id()
+        # One row per SUPPORTED client, not per recorded artifact. The reader of
+        # `exakit mcp-status` is asking "is my Claude set up?", and a count of
+        # artifacts cannot answer that: it says how many rows exist, never which
+        # clients they belong to or which of yours are missing.
+        #
+        # Three states, because "no config" has two different causes and only one
+        # of them has an action:
+        #   configured    - the kit manages this client's config (path shown)
+        #   not_set_up    - the client is on this machine, but not configured
+        #   not_installed - the client is not here at all, so there is nothing to do
+        by_client = {artifact.client: artifact for artifact in active_artifacts}
+        clients: list[dict[str, str | None]] = []
+        for adapter in self._registry.all():
+            adapter_id = adapter.adapter_id()
+            artifact = by_client.get(adapter_id)
+            if artifact is not None:
+                clients.append({"client": adapter_id, "state": "configured", "path": artifact.path})
+                continue
+            # Detection touches the filesystem and belongs to the adapter, so a
+            # client whose probe raises must not take the whole status screen
+            # down with it. Unknown means "not here", which prints no action.
+            try:
+                detected = adapter.detect(self._environment).detected
+            except Exception:  # noqa: BLE001 - a read-only screen never fails here
+                detected = False
+            clients.append(
+                {
+                    "client": adapter_id,
+                    "state": "not_set_up" if detected else "not_installed",
+                    "path": None,
+                }
+            )
         return OperationResult(
             request_id=request.request_id,
             operation=request.operation,
@@ -626,7 +727,41 @@ class MCPAccessSubsystem:
             findings=findings,
             artifacts=active_artifacts,
             backup_reference=latest_snapshot,
+            details={"clients": clients},
         )
+
+    @staticmethod
+    def _repair_targets(
+        request: OperationRequest, findings: list[Finding]
+    ) -> tuple[str, ...]:
+        """The clients repair should hand configure: the ones actually at fault.
+
+        Repair used to pass the caller's whole client list straight through, and
+        the caller is normally "every supported client" -- harmless while repair
+        only ever ran on a file someone had hand-edited, because that state is
+        rare and the user had asked for a rewrite anyway. Now that a superseded
+        entry also triggers repair, that list would have configure CREATE managed
+        entries in every client installed on the machine, including the ones the
+        user deliberately never connected. So the findings choose the targets.
+
+        An explicit client selection still narrows it. If the intersection is
+        empty -- findings for clients the caller did not name -- the selection is
+        used unchanged, which is exactly what happened before.
+        """
+
+        named = tuple(
+            dict.fromkeys(
+                str(finding.scope["client"])
+                for finding in findings
+                if finding.scope.get("client")
+            )
+        )
+        if request.target_clients:
+            narrowed = tuple(
+                client for client in named if client in request.target_clients
+            )
+            return narrowed or request.target_clients
+        return named or request.target_clients
 
     def _render_for_client(
         self, adapter: ClientAdapter, request: OperationRequest
@@ -645,7 +780,45 @@ class MCPAccessSubsystem:
         """
 
         findings: list[Finding] = []
-        location = adapter.locate(self._environment)
+        if request.server_definition is None:  # pragma: no cover - guarded by the caller
+            raise BlockingOperationError(
+                "missing_server_definition",
+                "Server definition is required for configure.",
+            )
+        server_definition = request.server_definition
+        capabilities = adapter.describe_capabilities()
+        if server_definition.transport is DeploymentMode.HTTP and not capabilities.supports_http:
+            # Not every client can express a remote server, and the ones that
+            # cannot are skipped rather than half-configured: an entry this
+            # adapter cannot render is an entry the user would have to clean up.
+            # This is a standing fact about the client, not something this run
+            # did wrong, so it is INFO and worded as a note -- "cannot be
+            # configured ... (skipped)" under a warning glyph on every update
+            # read as a failure and prompted support questions. The URL is in
+            # the message so it can be added through the client's own settings.
+            findings.append(
+                Finding(
+                    code="client_transport_unsupported",
+                    severity=Severity.INFO,
+                    message=(
+                        f"{adapter.display_name()} has no config-file shape for a remote "
+                        f"MCP server, so the '{server_definition.name}' endpoint "
+                        f"({server_definition.url}) is not registered there."
+                    ),
+                    scope={
+                        "client": adapter.adapter_id(),
+                        "server": server_definition.name,
+                        "transport": server_definition.transport.value,
+                    },
+                    evidence=[f"Endpoint: {server_definition.url}"],
+                    recommended_action=(
+                        f"Add {server_definition.url} in {adapter.display_name()}'s own settings "
+                        "if it supports remote MCP servers; nothing else is affected."
+                    ),
+                )
+            )
+            return None, None, findings
+        location = adapter.locate_for_server(self._environment, server_definition.name)
         if not location.available or location.path is None:
             # Not blocking, and not an error for the run: "this client is not
             # supported on this platform" is a fact about this one client. As a
@@ -662,16 +835,11 @@ class MCPAccessSubsystem:
                 )
             )
             return None, None, findings
-        if request.server_definition is None:  # pragma: no cover - guarded by the caller
-            raise BlockingOperationError(
-                "missing_server_definition",
-                "Server definition is required for configure.",
-            )
-        inspection = adapter.inspect(location.path, request.server_definition.name)
+        inspection = adapter.inspect(location.path, server_definition.name)
         findings.extend(inspection.findings)
         if any(finding.blocking for finding in findings):
             return None, location.path, findings
-        rendered = adapter.render(request.server_definition, inspection)
+        rendered = adapter.render(server_definition, inspection)
         findings.extend(adapter.validate_render(rendered))
         if any(finding.blocking for finding in findings):
             return None, location.path, findings
