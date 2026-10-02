@@ -18,7 +18,7 @@
 # shim is needed (the binary is invoked directly, unlike json-tables' cargo
 # indirection). Windows ARM64 has no published engine yet.
 
-$script:ExasolSchedulerVersionFallback = if ($env:EXAKIT_EXASOL_SCHEDULER_VERSION_FALLBACK) { $env:EXAKIT_EXASOL_SCHEDULER_VERSION_FALLBACK } else { "v0.2" }
+$script:ExasolSchedulerVersionFallback = if ($env:EXAKIT_EXASOL_SCHEDULER_VERSION_FALLBACK) { $env:EXAKIT_EXASOL_SCHEDULER_VERSION_FALLBACK } else { "v0.3.1" }
 $script:ExasolSchedulerVersion = if ($env:EXAKIT_EXASOL_SCHEDULER_VERSION) { $env:EXAKIT_EXASOL_SCHEDULER_VERSION } else { "" }
 $script:ExasolSchedulerRepo = if ($env:EXAKIT_EXASOL_SCHEDULER_REPO) { $env:EXAKIT_EXASOL_SCHEDULER_REPO } else { "exasol-labs/exasol-scheduler" }
 $script:ExasolSchedulerReleaseTag = if ($env:EXAKIT_EXASOL_SCHEDULER_RELEASE_TAG) { $env:EXAKIT_EXASOL_SCHEDULER_RELEASE_TAG } else { "" }
