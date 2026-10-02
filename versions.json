@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated": "2026-09-30",
+  "updated": "2026-10-02",
   "kit": {
     "version": "0.2.0"
   },
@@ -63,16 +63,16 @@
     },
     "json-tables": {
       "version": "v0.3.2",
-      "release": "json-tables-v0.3.2-2",
+      "release": "json-tables-v0.3.2",
       "severity": "normal",
       "wheel": "exasol_json_tables-0.3.2-py3-none-any.whl",
       "sha256": {
-        "cargo-windows-x86_64": "72b31a0071700f17572f76ab78b68c1a1fca646865472eaddd2d087bf8bfd944",
-        "linux-aarch64": "2a800f891bad1966640391aa3bf0e3969b71296b13026c8dacd70332249f2f86",
+        "cargo-windows-x86_64": "ada5e3d5a43da626924b0a5550437ca6503e7b587fcb72ff82ce9b9a77bf0a8e",
+        "linux-aarch64": "455fb116ea2971a07cb42c4c37daea1387a95c46dc896606b21fd8fb39d02794",
         "linux-x86_64": "b3c1cebbcb479d12a16c5cf4afd81df2c9cc59d8cc685553200bd49786757112",
         "macos-aarch64": "a76cc138c729b3321e436cb551c7053e21f787a9fe38165e6799ddfd66bc1849",
         "wheel": "29cbbd270ca68d1fd1aa83641d65e5a8ea919377c53348f343b6598c755509b8",
-        "windows-x86_64": "b09152bbe6ee71a68e938e1dd0c7c375ac050cb07982057addd24d9fc655bd2d"
+        "windows-x86_64": "cc2c935203cba88eef532236f7533ec5a28098e0e1bc71dea6260392168e6a2a"
       }
     },
     "dbt-exasol": {
