@@ -283,9 +283,9 @@
     },
     {
       "command": "update",
-      "options": "[all|runtime|exakit|exapump|mcp|pyexasol|skills|<add-on>|personal]",
+      "options": "[all|runtime|exakit|exapump|mcp|pyexasol|skills|<add-on>|personal] [--yes]",
       "summary": "Apply the updates that are waiting.",
-      "description": "Applies the quick components (kit scripts, exapump, MCP server, pyexasol, the AI skills, installed add-ons) in seconds. A newer skill set published by the maintainers is fetched and installed here too, with no kit release needed. A database change stops the database, so it is only applied for an answer the run was actually given: on a terminal you are asked, and an unattended run defers it with the exact command. Your data is kept either way. An unknown option or target is refused (exit 2) and records nothing.",
+      "description": "Applies the quick components (kit scripts, exapump, MCP server, pyexasol, the AI skills, installed add-ons) in seconds. A newer skill set published by the maintainers is fetched and installed here too, with no kit release needed. A database change stops the database, so it is only applied for an answer the run was actually given: on a terminal you are asked, and an unattended run defers it with the exact command. Your data is kept either way. --yes (-y) may stand anywhere. --plan, --backup and --apply belong to the staged Personal major upgrade and are accepted only behind their target, as in exakit update personal --plan; written first, or behind another target, they are refused with the place they go. An unknown option or target is refused (exit 2) and records nothing.",
       "environment": [
         "EXAKIT_CONFIRM_RUNTIME_UPDATE=1 pre-answers yes to the database change",
         "EXAKIT_<COMPONENT>_VERSION pins one component by hand"

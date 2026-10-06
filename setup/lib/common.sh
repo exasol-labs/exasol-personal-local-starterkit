@@ -6086,6 +6086,19 @@ exakit_offer_runtime_update() {
     exakit_apply_runtime_update "$_oru_component"
 }
 
+# exakit_update_options_hint — the ONE sentence that says which options
+# `exakit update` takes, and where. Two parsers refuse options: the dispatcher
+# arm in setup/exakit (an option it does not know) and exakit_update below (an
+# option in the wrong position). They used to carry two different lists — the
+# dispatcher's union of everything valid somewhere ("--yes -y --plan --backup
+# --apply") and this function's "--yes" — so `exakit update --json` advertised
+# --plan and a retry with --plan was refused by a list that left it out. An
+# agent that retries with an option the tool just advertised must not be
+# refused twice, so both refusals print this and nothing else about options.
+exakit_update_options_hint() {
+    printf '%s\n' "supported: --yes (-y) anywhere; --plan, --backup and --apply only after the target, as in: exakit update personal --plan"
+}
+
 exakit_update() {
     # -y/--yes answers the runtime offer below and may appear anywhere in the
     # arguments; everything else keeps its position, so the target and the
@@ -6110,14 +6123,16 @@ exakit_update() {
     fi
     _target="${1:-all}"
     if [ "$#" -gt 0 ]; then shift; fi
+    # Bad input is exit 2 and records nothing, like every other refusal: an
+    # option behind the wrong target is not a failed update, so not a die.
     if [ "$#" -gt 0 ]; then
         case "$_target" in
             personal|runtime|database|db) ;;
-            *) die "Update options are only supported for Personal runtime updates." ;;
+            *) reject "Update options are only supported for Personal runtime updates ($(exakit_update_options_hint))." ;;
         esac
     fi
     case "$_target" in
-        -*) reject "Unknown option '$_target' for update (supported: --yes; a component name selects what to update)." ;;
+        -*) reject "Unknown option '$_target' for update ($(exakit_update_options_hint))." ;;
     esac
     _targets="$(exakit_update_targets "$_target")" || reject "Unknown update target '$_target' (see: exakit version)"
     exakit_init_logging

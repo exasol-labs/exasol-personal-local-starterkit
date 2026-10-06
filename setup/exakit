@@ -12,8 +12,9 @@
 #                       A runtime change stops the database, so on a terminal it is
 #                       offered ("stop the database and update it now?") and applied
 #                       on yes; without a terminal it is deferred unless --yes (or
-#                       EXAKIT_CONFIRM_RUNTIME_UPDATE=1) says otherwise
-#                       Personal major upgrades support --plan, --backup, --apply
+#                       EXAKIT_CONFIRM_RUNTIME_UPDATE=1) says otherwise.
+#                       Personal major upgrades take --plan, --backup, --apply
+#                       behind their target: exakit update personal --plan
 #                       (macOS, Linux and WSL only - the Windows CLI has no
 #                       staged route and says so if you pass one of them)
 #   info [--json]       print the connection details panel; --json prints the
@@ -2346,6 +2347,33 @@ _exakit_refuse_unknown_options() {
     done
 }
 
+# _exakit_update_refuse_options <args...> — the update arm's own gate, because
+# its options are POSITION-DEPENDENT and the flat list above cannot say so.
+# --yes/-y may stand anywhere. --plan/--backup/--apply are real — the staged
+# Personal major upgrade — but only behind their target (`exakit update
+# personal --plan`): exakit_update reads the first bare word as the target, so
+# a leading --plan landed in that slot and was refused with "supported: --yes"
+# right after this file's guard had listed --plan as supported. Two lists,
+# each true in its own position, read as a contradiction from outside; now the
+# one sentence exakit_update_options_hint prints serves every refusal, and a
+# flag in the wrong place is told where it goes rather than merely refused.
+_exakit_update_refuse_options() {
+    _uro_target=""
+    for _uro_arg in "$@"; do
+        case "$_uro_arg" in
+            -y|--yes) ;;
+            --plan|--backup|--apply)
+                case "$_uro_target" in
+                    personal|runtime|database|db) ;;
+                    "") reject "'$_uro_arg' belongs to the staged Personal upgrade and needs its target first: exakit update personal $_uro_arg" ;;
+                    *)  reject "'$_uro_arg' belongs to the staged Personal upgrade, not to $_uro_target: exakit update personal $_uro_arg" ;;
+                esac ;;
+            -*) reject "Unknown option '$_uro_arg' for update ($(exakit_update_options_hint))." ;;
+            *)  [ -n "$_uro_target" ] || _uro_target="$_uro_arg" ;;
+        esac
+    done
+}
+
 # EXAKIT_REFUSAL_JSON — did this caller ask for a machine answer?
 #
 # Set once, here, so that reject() and the unknown-command arm below can honour
@@ -2383,10 +2411,10 @@ case "${1:-help}" in
               esac ;;
     version|--version|-v)  shift; cmd_version "$@" ;;
     # --plan/--backup/--apply are the Personal MAJOR-upgrade route the header
-    # and the macOS quickstart have always named — and this guard refused
-    # them, so the documented migration path was unreachable from the CLI
-    # while personal_update implemented it in full.
-    update) shift; _exakit_refuse_unknown_options update "--yes,-y,--plan,--backup,--apply" "$@"; cmd_update "$@" ;;
+    # and the macOS quickstart have always named — the generic guard once
+    # refused them outright, then advertised them flat while exakit_update
+    # only takes them behind a target. The arm's own gate knows the position.
+    update) shift; _exakit_update_refuse_options "$@"; cmd_update "$@" ;;
     info)     shift
               _exakit_refuse_unknown_options info "--json,-j" "$@"
               case "${1:-}" in
