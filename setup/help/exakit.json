@@ -249,7 +249,7 @@
       "command": "skills",
       "options": "[--json | -j]",
       "summary": "List the AI skills the kit carries.",
-      "description": "One skill per component and add-on, with a one-line summary and whether each has reached the agents' discovery folders. Names the next command when one is needed: exakit update when the maintainers advertise a newer skill set, exakit skills-install when a placed skill has gone missing. --json adds installed_version, advertised_version, status and next.",
+      "description": "One skill per component and add-on, with a one-line summary and whether each has reached the agents' discovery folders. Names the next command when one is needed: exakit update when the maintainers advertise a newer skill set, exakit skills-install when a placed skill has gone missing. The panel ends with one labelled tally (installed, arriving with an add-on, not placed, total), and --json carries the same four numbers under counts (installed, needs_addon, missing, total; they add up to total) beside installed_version, advertised_version, status and next.",
       "examples": [
         "exakit skills",
         "exakit skills --json"
