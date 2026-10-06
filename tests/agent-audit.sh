@@ -284,6 +284,45 @@ check "two statements: JSON too" "False" "$(bash "$CLI" sql --json 'SELECT 1; SE
 check "an unknown option with --json: JSON too" "False" "$(bash "$CLI" sql --json --bogus 'SELECT 1' 2>/dev/null | python3 -c 'import json,sys; print(json.load(sys.stdin)["ok"])' 2>/dev/null)"
 check "without --json the refusal is still the human line" "" "$(bash "$CLI" sql 'SELCT 1' 2>/dev/null)"
 
+echo "R3-2b. sql --json's failure object is documented as it is emitted (upstream #33):"
+# The emitter splits the failure into remedy (a command to run verbatim, or
+# null) and remedy_hint (the sentence); the help, AGENTS.md and the exapump
+# skill documented only remedy, so an agent coded to the documented contract
+# read null on every fault that has no command to run. The shape is pinned
+# through a stub exapump that fails the way the engine does, and every
+# document that describes it is held to the same two keys.
+_sqlhelp="$(python3 -c 'import json, sys
+d = json.load(open(sys.argv[1]))
+print(next(c["description"] for c in d["commands"] if c["command"] == "sql"))' "$ROOT/setup/help/exakit.json" 2>/dev/null)"
+has "the sql help names remedy_hint" "remedy_hint" "$_sqlhelp"
+has "...and says what remedy is" "a command to run as written, or null" "$_sqlhelp"
+has "AGENTS.md's sql shapes carry both keys" '"remedy": <runnable command or null>, "remedy_hint": <the sentence or null>' "$(cat "$ROOT/AGENTS.md")"
+has "the exapump skill describes the same split" '"remedy_hint": "<sentence>" | null' "$(cat "$ROOT/skills/exasol-exapump/SKILL.md")"
+lacks "...and no longer calls remedy 'what to do'" '"remedy": "<what to do>"' "$(cat "$ROOT/skills/exasol-exapump/SKILL.md")"
+has "the shell emitter writes remedy_hint" '"remedy_hint": remedy.strip() or None' "$(cat "$CLI")"
+has "the PowerShell sql arm writes it too" 'remedy = $remedyCmd; remedy_hint = $remedyHint' "$(cat "$ROOT/setup/exakit.ps1")"
+# Through the real command: a stub exapump answers like the engine, so the
+# object an agent receives is the one the documents now describe.
+mkdir -p "$WORK/stub-exapump"
+_stub="$WORK/stub-exapump/exapump"
+printf '#!/bin/sh\necho "Error: object NOPE not found" >&2\nexit 1\n' > "$_stub"; chmod +x "$_stub"
+_nf="$(EXAKIT_EXAPUMP_BIN="$_stub" bash "$CLI" sql --json 'SELECT * FROM NOPE.NOPE' 2>/dev/null)"
+check "object not found: remedy is null, the advice is in remedy_hint" "NoneType|str|describe" \
+    "$(printf '%s' "$_nf" | python3 -c 'import json, sys
+d = json.load(sys.stdin)
+print("%s|%s|%s" % (type(d["remedy"]).__name__, type(d["remedy_hint"]).__name__,
+      "describe" if "escribe" in d["remedy_hint"] else "no-advice"))' 2>/dev/null)"
+printf '#!/bin/sh\necho "Error: connection refused (os error 61)" >&2\nexit 1\n' > "$_stub"
+_cr="$(EXAKIT_EXAPUMP_BIN="$_stub" bash "$CLI" sql --json 'SELECT 1' 2>/dev/null)"
+check "connection refused: remedy is the runnable command, the sentence is the hint" "exakit start|str" \
+    "$(printf '%s' "$_cr" | python3 -c 'import json, sys
+d = json.load(sys.stdin)
+print("%s|%s" % (d["remedy"], type(d["remedy_hint"]).__name__))' 2>/dev/null)"
+check "...and remedy is never a sentence" "command" \
+    "$(printf '%s' "$_cr" | python3 -c 'import json, sys
+d = json.load(sys.stdin)
+print("command" if d["remedy"].startswith("exakit ") and " " not in d["remedy"].strip()[7:] else "prose")' 2>/dev/null)"
+
 echo "R3-3. exakit mcp-remove exists and takes client names:"
 check "no client named: exit 2" "2" "$(bash "$CLI" mcp-remove >/dev/null 2>&1; echo $?)"
 check "'all' refused: exit 2" "2" "$(bash "$CLI" mcp-remove all >/dev/null 2>&1; echo $?)"
