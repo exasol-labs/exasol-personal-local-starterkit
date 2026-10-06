@@ -671,5 +671,136 @@ for _v in Write-ExakitLoadReceipt Get-ExakitLoadReceipt Get-ExakitBulkDecisions 
     has "the twin has $_v" "$_v" "$BULK_PS"
 done
 
+printf '\n== a single file is held to the same rule as a folder ==\n'
+
+# THE SMALL DOOR HAD NO GUARD. The folder path asks EXAKIT_ON_EXISTING before it
+# touches a table holding rows this kit did not load; the single-file path called
+# exapump's upload - which APPENDS - without looking. So replace, skip and the
+# default all appended, the policy was never mentioned, and someone meaning to
+# rebuild a table doubled it instead (upstream issue #29). The database is
+# stubbed at the listing and the count, as above: what is under test is the
+# decision, the DROP, the receipt and the exit code.
+SF="$WORK/single"; mkdir -p "$SF/cache"
+EXAKIT_CACHE_DIR="$SF/cache"
+printf 'A\nb\n' > "$SF/x.csv"
+EXAKIT_DATA_FILE="$SF/x.csv"; EXAKIT_DATA_TABLE="T.X"
+export EXAKIT_DATA_FILE EXAKIT_DATA_TABLE
+# No terminal: the prompts take their defaults and the clash answer is skip.
+_exakit_prompt_tty() { printf ''; }
+# The verified count after an upload, which the receipt is written from.
+FAKE_COUNT=1
+exapump_count() { printf '%s\n' "$FAKE_COUNT"; }
+# One file for both the DROP (fake exapump) and the upload (stub), so their
+# ORDER can be read back: the drop has to come first.
+DROPPED_LOG="$LOADED"; export DROPPED_LOG
+sf_reset() { : > "$LOADED"; rm -f "$SF/cache/load-receipts.tsv" "$SF/cache/load-inflight"; }
+
+# A table holding one row this kit did not load, and no policy given.
+sf_reset
+exakit_table_rows_listing() { printf 'EXAKIT.LISTING_ANSWERED|1\nT.X|1\n'; }
+SFO="$( (exakit_load_local_file) 2>&1 )"; SFRC=$?
+check "rows this kit did not load are not loaded over, by default" "5" "$SFRC"
+has "...and the refusal names the table and what it holds" "Not loaded: T.X already holds 1 row" "$SFO"
+has "...and the remedy names both overrides" "EXAKIT_ON_EXISTING=replace" "$SFO"
+has "...the append one too"                  "=append" "$SFO"
+check "nothing reached the database"  "0" "$(grep -c . "$LOADED")"
+check "...and no receipt was written" "0" "$(cat "$SF/cache/load-receipts.tsv" 2>/dev/null | grep -c . || true)"
+
+# skip, said out loud, is the same answer.
+sf_reset
+SFO="$( (EXAKIT_ON_EXISTING=skip exakit_load_local_file) 2>&1 )"; SFRC=$?
+check "skip declines the load" "5" "$SFRC"
+check "...and sends nothing" "0" "$(grep -c . "$LOADED")"
+
+# replace: the table is dropped BEFORE the file goes in - the half the issue
+# was about, where a rebuild silently became a doubling.
+sf_reset
+SFO="$( (EXAKIT_ON_EXISTING=replace exakit_load_local_file) 2>&1 )"; SFRC=$?
+check "replace loads" "0" "$SFRC"
+has "replace drops the table"       "DROP TABLE IF EXISTS T.X" "$(cat "$LOADED")"
+has "...then loads the file into it" "upload x.csv -> T.X"     "$(cat "$LOADED")"
+check "...in that order" "yes" \
+    "$(_d="$(grep -n 'DROP TABLE' "$LOADED" | head -1 | cut -d: -f1)"; _u="$(grep -n 'upload x.csv' "$LOADED" | head -1 | cut -d: -f1)"; [ -n "$_d" ] && [ -n "$_u" ] && [ "$_d" -lt "$_u" ] && echo yes || echo no)"
+has "...and says which policy applied" "Replacing the 1 row already in T.X" "$SFO"
+has "...naming the variable"           "EXAKIT_ON_EXISTING=replace" "$SFO"
+has "a receipt is written for the file" "T.X	" "$(cat "$SF/cache/load-receipts.tsv" 2>/dev/null)"
+
+# The receipt is what makes a second run of the same file safe: the table
+# holds exactly what this file put there, so it is left as it is - exit 0,
+# nothing sent, and the two overrides named for anyone who meant it.
+: > "$LOADED"
+exakit_table_rows_listing() { printf 'EXAKIT.LISTING_ANSWERED|1\nT.X|1\n'; }
+SFO="$( (exakit_load_local_file) 2>&1 )"; SFRC=$?
+check "the same file again is recognised" "0" "$SFRC"
+has "...and left as it is" "already holds the 1 row this file loaded" "$SFO"
+has "...with the overrides named" "EXAKIT_ON_EXISTING=append" "$SFO"
+check "...and nothing is sent twice" "0" "$(grep -c . "$LOADED")"
+# ...but only while the count still matches: a table added to since is the
+# reader's again, and the answer is a question, not an assumption.
+exakit_table_rows_listing() { printf 'EXAKIT.LISTING_ANSWERED|1\nT.X|7\n'; }
+SFO="$( (exakit_load_local_file) 2>&1 )"; SFRC=$?
+check "a receipt whose row count no longer matches is not trusted" "5" "$SFRC"
+# ...and append on a recognised file is honoured, not refused.
+: > "$LOADED"
+exakit_table_rows_listing() { printf 'EXAKIT.LISTING_ANSWERED|1\nT.X|1\n'; }
+SFO="$( (EXAKIT_ON_EXISTING=append exakit_load_local_file) 2>&1 )"; SFRC=$?
+check "append loads on top of a recognised file" "0" "$SFRC"
+has "...saying so" "Appending to the 1 row already in T.X" "$SFO"
+lacks "...without a DROP" "DROP TABLE" "$(cat "$LOADED")"
+has "...and the file goes in" "upload x.csv -> T.X" "$(cat "$LOADED")"
+
+# append over a clash: the rows stay, the file lands, the policy is named.
+sf_reset
+exakit_table_rows_listing() { printf 'EXAKIT.LISTING_ANSWERED|1\nT.X|99\n'; }
+SFO="$( (EXAKIT_ON_EXISTING=append exakit_load_local_file) 2>&1 )"; SFRC=$?
+check "append over foreign rows loads" "0" "$SFRC"
+lacks "...and drops nothing" "DROP TABLE" "$(cat "$LOADED")"
+has "...and says which policy applied" "Appending to the 99 rows already in T.X (EXAKIT_ON_EXISTING=append)" "$SFO"
+
+# An EMPTY table, an ABSENT one and a database that cannot be asked all load,
+# exactly as the folder path decides for the same answers - and none of them
+# prints a policy line, because no rows were at stake.
+for _sf_case in 'T.X|0' absent unreachable; do
+    sf_reset
+    case "$_sf_case" in
+        unreachable) exakit_table_rows_listing() { printf ''; } ;;
+        absent)      exakit_table_rows_listing() { printf 'EXAKIT.LISTING_ANSWERED|1\n'; } ;;
+        *)           exakit_table_rows_listing() { printf 'EXAKIT.LISTING_ANSWERED|1\n%s\n' "$_sf_case"; } ;;
+    esac
+    SFO="$( (exakit_load_local_file) 2>&1 )"; SFRC=$?
+    check "$_sf_case: loads" "0" "$SFRC"
+    has "$_sf_case: the file goes in" "upload x.csv -> T.X" "$(cat "$LOADED")"
+    lacks "$_sf_case: no policy line for rows that were not there" "EXAKIT_ON_EXISTING" "$SFO"
+    has "$_sf_case: a receipt is written" "T.X	" "$(cat "$SF/cache/load-receipts.tsv" 2>/dev/null)"
+done
+
+# An unusable value is a refusal (bad input, like an unsupported file), not a
+# silent fallback to the most destructive reading.
+sf_reset
+exakit_table_rows_listing() { printf 'EXAKIT.LISTING_ANSWERED|1\nT.X|1\n'; }
+SFO="$( (EXAKIT_ON_EXISTING=nonsense exakit_load_local_file) 2>&1 )"; SFRC=$?
+check "an unusable value is refused as bad input" "3" "$SFRC"
+has "...naming the three answers" "must be skip, replace or append" "$SFO"
+check "...and nothing was touched" "0" "$(grep -c . "$LOADED")"
+
+# Both callers of the loader read exit 5 as "declined", not as a failed step:
+# the installer must not write a failure note over the reader's own table.
+has "the installer does not book a declined load as a failed step" \
+    '_local_status" -eq 5' "$(grep -v '^[[:space:]]*#' "$ROOT/setup/lib/common.sh")"
+has "exakit data-load answers 5 for it" '_menu_status=5' "$BULK_SH"
+# The help says the rule covers one file too.
+has "the help holds a single file to the same rule" "A SINGLE FILE is held to the same rule" \
+    "$(cat "$ROOT/setup/help/exakit.json")"
+# Both sides, same decision, same names for it.
+for _v in exakit_file_ask_clash exakit_clash_prompt EXAKIT_LAST_VERIFIED_ROWS; do
+    has "the shell side has $_v" "$_v" "$BULK_SH"
+done
+for _v in Read-ExakitFileClashAnswer Read-ExakitClashPrompt ExakitLastVerifiedRows; do
+    has "...and Windows does too: $_v" "$_v" "$BULK_PS"
+done
+has "the twin reads the policy on the single-file path" 'return "declined"' "$BULK_PS"
+has "...and the Windows command answers 5 for it" 'if ($result -eq "declined") { $script:PendingExitCode = 5 }' "$BULK_PS"
+unset EXAKIT_DATA_FILE EXAKIT_DATA_TABLE
+
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
