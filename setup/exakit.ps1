@@ -18,8 +18,9 @@
 #                         installed / status / remedy / skills, nothing else
 #   guide                 friendly walkthrough: connect AI clients (MCP), SQL
 #                         clients (DBeaver, DbVisualizer), and Python (pyexasol)
-#   start                 start the local database and every add-on service
-#   stop                  stop them again
+#   start [<service>]     start the local database and every add-on service,
+#                         or one of them by id
+#   stop [<service>]      stop them again, or one of them by id
 #   autostart             whether everything comes back after a restart; shows
 #                         the current state and asks whether to change it
 #   data-load [-Force|<path>]
@@ -871,14 +872,39 @@ function Invoke-CmdAutostart {
     }
 }
 
-function Invoke-CmdStart {
+# Resolve-ExakitServiceScope - the optional service id a `exakit start|stop`
+# was given, validated BEFORE anything runs: "" for the bare form, else the
+# id. Twin of _service_scope in setup/exakit.
+#
+# Shape first, then the install check, then the registry: bad input answers 2
+# on any machine (Invoke-CmdAutostart makes the same argument), and only an
+# installed kit can say which services it has. An id that is a known add-on
+# gets the reason it cannot be acted on rather than "unknown".
+function Resolve-ExakitServiceScope {
+    param([Parameter(Mandatory)][string]$Verb, [string[]]$Arguments = @())
+    $args2 = @($Arguments | Where-Object { "$_" -ne "" })
+    if ($args2.Count -eq 0) { return "" }
+    if ($args2.Count -gt 1) {
+        Deny-ExakitInput "$Verb takes at most one service id - exakit $Verb <service>"
+    }
+    $id = "$($args2[0])"
     Assert-ExakitInstalled
-    # Logging first: launcher output belongs in the logfile, not interleaved
-    # with the [ok] lines on stdout. Twin of the same fix in cmd_start.
-    Initialize-ExakitLogging
-    # Everything the kit runs, database first: self-heal semantics for the
-    # runtime (a stopped one is started, a missing one created - `exakit start`
-    # promises a running database), then every add-on service.
+    $ids = @(Get-ExakitServiceIds)
+    if ($ids -contains $id) { return $id }
+    if (Get-ExakitMarketplaceAddon $id) {
+        if (Test-ExakitMarketplaceAddonInstalled $id) {
+            Deny-ExakitInput "$id is installed but runs no service, so there is nothing to $Verb."
+        }
+        Deny-ExakitInput "$id is not installed, so there is nothing to $Verb. Add it with: exakit marketplace $id"
+    }
+    Deny-ExakitInput "Unknown service '$id' for $Verb (services on this machine: $($ids -join ', '))."
+}
+
+# Start-ExakitDatabase - the database half of `exakit start`: self-heal
+# semantics for the runtime (a stopped one is started, a missing one created -
+# `exakit start` promises a running database). Shared by the bare form and by
+# `exakit start database`, so the two cannot drift. Twin of _start_database.
+function Start-ExakitDatabase {
     if ((Get-RuntimeType) -eq "personal" -and (Test-PersonalDeploymentRunning)) {
         Ok "Database is already running"
     } elseif ((Get-RuntimeType) -eq "personal" -and (Get-PersonalStatus) -eq "conflict") {
@@ -889,23 +915,58 @@ function Invoke-CmdStart {
     } else {
         Confirm-ExakitRuntimeRunning -Deploy
     }
-    foreach ($id in (Get-ExakitServiceIds)) {
-        if ($id -eq "database") { continue }
-        Start-ExakitService -Id $id
-    }
     # The database is up, so a note left by an earlier start that could not is
     # no longer true. Only a runtime note goes; an install-step note stays.
     try { if ((Get-ExakitRuntimeStatus) -like "running*") { Clear-ExakitRuntimeFailureNote } } catch { }
 }
 
+function Invoke-CmdStart {
+    param([string[]]$Scope = @())
+    $id = Resolve-ExakitServiceScope -Verb "start" -Arguments $Scope
+    Assert-ExakitInstalled
+    # Logging first: launcher output belongs in the logfile, not interleaved
+    # with the [ok] lines on stdout. Twin of the same fix in cmd_start.
+    Initialize-ExakitLogging
+    if ($id) {
+        Write-ExakitLog "INFO" "start scoped to $id"
+        if ($id -eq "database") { Start-ExakitDatabase; return }
+        # One add-on was asked for, so only that one is touched: the database
+        # is NOT started on its behalf. Started against a stopped database an
+        # add-on would only sit there failing to connect, so say what is
+        # missing and name the command that brings everything up - and record
+        # nothing: this is a refusal, not a failed step. Twin of cmd_start.
+        if ((Get-RuntimeType) -eq "personal" -and -not (Test-PersonalDeploymentRunning)) {
+            Warn2 "The database is not running, and $id needs it. Start everything with: exakit start"
+            exit 1
+        }
+        Start-ExakitService -Id $id
+        return
+    }
+    # Everything the kit runs, database first, then every add-on service.
+    Start-ExakitDatabase
+    foreach ($sid in (Get-ExakitServiceIds)) {
+        if ($sid -eq "database") { continue }
+        Start-ExakitService -Id $sid
+    }
+}
+
 function Invoke-CmdStop {
+    param([string[]]$Scope = @())
+    $id = Resolve-ExakitServiceScope -Verb "stop" -Arguments $Scope
     Assert-ExakitInstalled
     Initialize-ExakitLogging
+    # One named service, and only that one: the bare form below is the only
+    # one that touches the database without naming it. Twin of cmd_stop.
+    if ($id) {
+        Write-ExakitLog "INFO" "stop scoped to $id"
+        Stop-ExakitService -Id $id
+        return
+    }
     # Add-on services first: they talk to the database, so they should be down
     # before it goes.
-    foreach ($id in (Get-ExakitServiceIds)) {
-        if ($id -eq "database") { continue }
-        Stop-ExakitService -Id $id
+    foreach ($sid in (Get-ExakitServiceIds)) {
+        if ($sid -eq "database") { continue }
+        Stop-ExakitService -Id $sid
     }
     switch (Get-RuntimeType) { "personal" { Stop-Personal } }
 }
@@ -3441,8 +3502,12 @@ try {
             }
         }
         "guide"        { Assert-ExakitKnownOptions -CommandName "guide" -Allowed @() -Arguments $RestArgs; Show-ExakitGuide }
-        "start"        { Assert-ExakitKnownOptions -CommandName "start" -Allowed @() -Arguments $RestArgs; Invoke-CmdStart }
-        "stop"         { Assert-ExakitKnownOptions -CommandName "stop" -Allowed @() -Arguments $RestArgs; Invoke-CmdStop }
+        # The arguments travel on: the option guard lets a plain word through,
+        # and dropping it here is how `exakit stop exasol-scheduler` ran the
+        # bare form and stopped the database. Twin of the same arms in
+        # setup/exakit; Invoke-CmdStart/Stop validate the id themselves.
+        "start"        { Assert-ExakitKnownOptions -CommandName "start" -Allowed @() -Arguments $RestArgs; Invoke-CmdStart -Scope @($RestArgs) }
+        "stop"         { Assert-ExakitKnownOptions -CommandName "stop" -Allowed @() -Arguments $RestArgs; Invoke-CmdStop -Scope @($RestArgs) }
         "sql" {
             # A lone --help is unambiguous; a statement may contain the text.
             if (@($RestArgs).Count -eq 1 -and ($RestArgs[0] -eq "--help" -or $RestArgs[0] -eq "-h")) { Show-ExakitUsage -Topic "sql"; break }
