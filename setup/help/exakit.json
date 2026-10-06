@@ -269,7 +269,7 @@
       "command": "marketplace",
       "options": "[--list [--json]] [<addon-id>...]",
       "summary": "Optional add-ons (dashboards and more).",
-      "description": "Browse and install optional tools: Space selects, Enter installs. Bare and without a terminal it installs NOTHING - installing non-interactively takes an explicit answer. --list shows every add-on and its state without installing anything (--json for scripts). Naming ids installs exactly those: exakit marketplace dash-server. Installed add-ons then update through exakit update, and one can be removed with exakit uninstall <id>. A tool you installed yourself is recognised and never re-offered.",
+      "description": "Browse and install optional tools: Space selects, Enter installs. Bare and without a terminal it installs NOTHING - installing non-interactively takes an explicit answer. --list shows every add-on and its state without installing anything (--json for scripts: one object whose addons array carries id, status, installed, version, repo and docs - the repository as owner/name and the documentation URL, null when unknown). The full reference for any add-on is on this machine: exakit help <id>. Naming ids installs exactly those: exakit marketplace dash-server. Installed add-ons then update through exakit update, and one can be removed with exakit uninstall <id>. A tool you installed yourself is recognised and never re-offered.",
       "environment": [
         "EXAKIT_MARKETPLACE_ADDONS=dash-server answers the menu non-interactively (ids csv, all, or none)"
       ],

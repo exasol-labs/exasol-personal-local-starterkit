@@ -6,6 +6,7 @@
   "tagline": "SQL jobs on a schedule, defined and audited in a table.",
   "role": "A single small binary that polls SCHED.SCHED_TASKS and runs each due row's SQL_TEXT against the local database. Jobs are created, paused, chained and audited with plain SQL - the same surface everything else in this kit teaches - and every run lands in SCHED_HISTORY. It is a SQL scheduler, not a workflow runner: it never invokes a shell or an external tool.",
   "repo": "exasol-labs/exasol-scheduler",
+  "docs": "https://github.com/exasol-labs/exasol-scheduler#readme",
   "binary": "~/.local/bin/exasol-scheduler (the kit's supervising launcher)",
   "db_user": "A dedicated SCHEDULER_SVC user the kit creates - never the admin. Out of the box it can only log in and use its own SCHED schema: the bootstrap CREATE SCHEMA and CREATE TABLE it needed are revoked again once SCHED exists. Jobs run with ITS privileges, so grant what they need first, e.g. exakit sql --write \"GRANT SELECT ON SCHEMA RETAIL TO SCHEDULER_SVC\" and, if a job writes, exakit sql --write \"GRANT INSERT, UPDATE, DELETE ON SCHEMA RETAIL TO SCHEDULER_SVC\".",
   "installed_by": "Never by the installer. Only through exakit marketplace.",

@@ -4400,6 +4400,11 @@ EXAKIT_MM_COVERED
     done
     EXAKIT_ADDON_TABLE_DISABLED="$_mm_covered"
     EXAKIT_ADDON_TABLE_META="$_mm_meta"
+    # Above the table, not under it: the Description column is a repository's
+    # About line, which is a table cell and not a reference. The reference is
+    # the help document, and nothing on this screen named it. ⇄ twin:
+    # Show-ExakitMarketplaceMenu.
+    info "Details on any add-on: exakit help <id>"
     _exakit_addon_table_build "$EXAKIT_ADDON_TABLE_STATE" "${_mm_pick_ids[@]}"
     UI_TABLE_TITLE="Marketplace add-ons"
     # The first column's heading, or the add-ons would sit under "Dataset".
@@ -4477,7 +4482,18 @@ exakit_marketplace_list() {
             _ml_status="available"
             _ml_ver="$(exakit_version_plain "$(exakit_component_available "$_ml_id" 2>/dev/null || true)")"
         fi
-        _ml_rows="$_ml_rows$_ml_id|$_ml_status|$_ml_ver|$_ml_reason
+        # Where to read more. A listing of names and version numbers is all an
+        # agent deciding whether an add-on fits a task had to go on; the help
+        # document for every add-on already carries its repository and a
+        # documentation link, so the row points at both. Read from the
+        # document on disk (no network), empty when the document is missing.
+        _ml_repo="$(_exakit_addon_repo "$_ml_id" 2>/dev/null || true)"
+        _ml_docs="$(_exakit_addon_doc_field "$_ml_id" docs 2>/dev/null || true)"
+        case "$_ml_docs" in
+            https://*) ;;
+            *) _ml_docs="" ;;
+        esac
+        _ml_rows="$_ml_rows$_ml_id|$_ml_status|$_ml_ver|$_ml_reason|$_ml_repo|$_ml_docs
 "
     done <<EXAKIT_ML_EOF
 $(exakit_marketplace_addons)
@@ -4486,7 +4502,7 @@ EXAKIT_ML_EOF
     if [ "$_ml_json" = "1" ]; then
         _ml_first=1
         printf '{\n  "addons": [\n'
-        while IFS='|' read -r _ml_id _ml_status _ml_ver _ml_reason; do
+        while IFS='|' read -r _ml_id _ml_status _ml_ver _ml_reason _ml_repo _ml_docs; do
             [ -n "$_ml_id" ] || continue
             [ "$_ml_first" -eq 1 ] || printf ',\n'
             _ml_first=0
@@ -4496,6 +4512,14 @@ EXAKIT_ML_EOF
             [ -n "$_ml_ver" ] && printf ', "version": "%s"' "$_ml_ver"
             [ -n "$_ml_reason" ] && printf ', "reason": "%s"' \
                 "$(printf '%s' "$_ml_reason" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+            # Always present, null when unknown: a key that comes and goes is
+            # a shape a parser has to probe for, and remedy set the precedent.
+            if [ -n "$_ml_repo" ]; then printf ', "repo": "%s"' "$_ml_repo"; else printf ', "repo": null'; fi
+            if [ -n "$_ml_docs" ]; then
+                printf ', "docs": "%s"' "$(printf '%s' "$_ml_docs" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+            else
+                printf ', "docs": null'
+            fi
             printf '}'
         done <<EXAKIT_ML_JSON
 $_ml_rows
@@ -4504,7 +4528,7 @@ EXAKIT_ML_JSON
         return 0
     fi
 
-    while IFS='|' read -r _ml_id _ml_status _ml_ver _ml_reason; do
+    while IFS='|' read -r _ml_id _ml_status _ml_ver _ml_reason _ml_repo _ml_docs; do
         [ -n "$_ml_id" ] || continue
         printf '%-16s %s%s%s\n' "$_ml_id" "$_ml_status" \
             "${_ml_ver:+ }" "$_ml_ver"
@@ -4512,6 +4536,9 @@ EXAKIT_ML_JSON
     done <<EXAKIT_ML_OUT
 $_ml_rows
 EXAKIT_ML_OUT
+    # The reference pages exist (exakit help <id> renders ten of them, offline)
+    # and nothing on this screen said so.
+    printf '\nDetails on any add-on: exakit help <id>\n'
     return 0
 }
 

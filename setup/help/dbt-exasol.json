@@ -6,6 +6,7 @@
   "tagline": "Build, test and document SQL models with dbt.",
   "role": "The dbt adapter for Exasol. dbt turns a folder of SELECT statements into managed tables and views with dependencies, tests and documentation; this add-on is what lets it speak to the kit's local database. Installing it is also what puts dbt itself on the machine - dbt-core comes with the adapter.",
   "repo": "exasol/dbt-exasol",
+  "docs": "https://github.com/exasol/dbt-exasol#readme",
   "package": "dbt-exasol",
   "binary": "~/.local/bin/dbt-exasol",
   "profile": "The kit generates ~/.exasol-starter-kit/dbt/profiles.yml with a profile named exasol_starter_kit, and the launcher points dbt at that directory with DBT_PROFILES_DIR. Your own ~/.dbt/profiles.yml is never read or written - if you keep your warehouses in one file, copy the block out of the kit's copy rather than expecting the kit to merge into yours.",

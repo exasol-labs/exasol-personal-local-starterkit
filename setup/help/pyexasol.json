@@ -6,6 +6,7 @@
   "tagline": "The official Exasol driver for Python, preinstalled.",
   "role": "The kit installs pyexasol into its own virtual environment so you can query the database from Python without touching your system Python.",
   "repo": "exasol/pyexasol",
+  "docs": "https://exasol.github.io/pyexasol/",
   "package": "pyexasol",
   "venv": "~/.exasol-starter-kit/pyexasol-venv",
   "python": "~/.exasol-starter-kit/pyexasol-venv/bin/python",

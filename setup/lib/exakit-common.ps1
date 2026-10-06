@@ -5154,6 +5154,11 @@ function Show-ExakitMarketplaceMenu {
     # saying why, the way the MCP client list shows "Cursor - not installed".
     # Twin of _exakit_addon_table_build in common.sh.
     $addonIds = New-Object 'System.Collections.Generic.List[string]'
+    # Above the table, not under it: the Description column is a repository's
+    # About line, which is a table cell and not a reference. The reference is
+    # the help document, and nothing on this screen named it. Twin of the same
+    # line in exakit_marketplace_menu.
+    Info "Details on any add-on: exakit help <id>"
     $script:ExakitAddonTable = New-ExakitTable -Title "Marketplace add-ons" -Col1 "Add-on" `
         -Col2 "Version" -Col3 "Description"
     [void](Add-ExakitTableRow -Kind "group" -Label "Select All" -Table $script:ExakitAddonTable)
@@ -5284,6 +5289,18 @@ function Show-ExakitMarketplaceList {
         $entry = [ordered]@{ id = $addon.Id; status = $status; installed = ($status -eq "installed") }
         if ($version) { $entry.version = $version }
         if ($reason) { $entry.reason = $reason }
+        # Where to read more: the add-on's repository and documentation link,
+        # from its help document on disk (no network). Always present, null
+        # when unknown, so the shape never has to be probed for - the same
+        # posture as remedy. Twin of the repo/docs fields in
+        # exakit_marketplace_list.
+        $repo = Get-ExakitAddonRepo $addon.Id
+        $docs = ""
+        $doc = Get-ExakitAddonDocument $addon.Id
+        if ($doc -and $doc.PSObject.Properties["docs"]) { $docs = "" + $doc.docs }
+        if ($docs -notlike "https://*") { $docs = "" }
+        if ($repo) { $entry.repo = $repo } else { $entry.repo = $null }
+        if ($docs) { $entry.docs = $docs } else { $entry.docs = $null }
         $entries += [pscustomobject]$entry
     }
     if ($Json) {
@@ -5299,6 +5316,10 @@ function Show-ExakitMarketplaceList {
             Write-Host ("{0,-16} ({1})" -f "", $entry.reason)
         }
     }
+    # The reference pages exist (exakit help <id> renders ten of them, offline)
+    # and nothing on this screen said so.
+    Write-Host ""
+    Write-Host "Details on any add-on: exakit help <id>"
 }
 
 # The add-ons table: the rows a reader ticks in the selection are the rows the

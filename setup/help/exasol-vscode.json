@@ -6,6 +6,7 @@
   "tagline": "SQL editing and schema browsing inside VS Code.",
   "role": "The Exasol VS Code extension, installed into VS Code itself. A copy you already installed from the VS Code Marketplace is respected and never touched.",
   "repo": "exasol-labs/exasol-vscode",
+  "docs": "https://github.com/exasol-labs/exasol-vscode#readme",
   "installed_by": "Only through exakit marketplace, and only on a machine that has VS Code or a fork the kit can drive: VS Code Insiders, Cursor, VSCodium or Windsurf. The kit finds them by their own CLI (code, code-insiders, cursor, windsurf, codium) and installs the same .vsix into whichever it finds first, VS Code proper first.",
   "quickstart": [
     {
