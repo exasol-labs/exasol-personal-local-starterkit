@@ -694,7 +694,10 @@ exasol_scheduler_update() {
         # Same version can still need repair: regenerate the launcher so a
         # DSN or credential change since the install is picked up.
         exasol_scheduler_write_launcher >/dev/null 2>&1 || true
-        ok "exasol-scheduler is already current ($_esu_current)"
+        # Under EXAKIT_VERSION_POLICY=latest this line read as upstream's
+        # verdict while the version came from the kit's own pin; the note
+        # says so, and is empty under the manifest policy.
+        ok "exasol-scheduler is already current ($_esu_current)$(exakit_pinned_latest_note exasol-scheduler)"
         return 0
     fi
     info "Updating exasol-scheduler ${_esu_current:-not installed} -> $_esu_available"

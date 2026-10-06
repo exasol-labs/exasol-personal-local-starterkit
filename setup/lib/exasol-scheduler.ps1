@@ -531,7 +531,9 @@ function Update-ExasolScheduler {
     $current = Get-ExasolSchedulerInstalledVersion
     if ($current -and $current -eq $available) {
         [void](Write-ExasolSchedulerLauncher)
-        Ok ("exasol-scheduler is already current (" + $current + ")")
+        # Twin of the note in exasol_scheduler_update: under the latest
+        # policy, say the version is the kit's pin, not upstream's newest.
+        Ok ("exasol-scheduler is already current (" + $current + ")" + (Get-ExakitPinnedLatestNote "exasol-scheduler"))
         return $true
     }
     Info ("Updating exasol-scheduler " + $(if ($current) { $current } else { "not installed" }) + " -> " + $available)

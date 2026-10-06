@@ -2881,6 +2881,50 @@ exakit_component_latest() {
     esac
 }
 
+# exakit_component_latest_source <component> — where exakit_component_latest's
+# answer for this Component comes from: "upstream" (a live GitHub or PyPI
+# lookup) or "pinned" (the add-on's own <id>_latest hook, which answers from
+# versions.json because only a build the kit's packaging workflow has published
+# and fingerprinted is installable — exasol-scheduler and json-tables).
+#
+# The distinction has to be visible. EXAKIT_VERSION_POLICY=latest printed one
+# line for the whole run — "Available versions come from live upstream
+# lookups" — and then "exasol-scheduler is already current (v0.2)" while
+# upstream had shipped v0.3.1. Both lines were untrue for that one add-on, and
+# nothing on screen said its lookup never left the manifest (upstream #27).
+# ⇄ twin: Get-ExakitComponentLatestSource.
+exakit_component_latest_source() {
+    if _exakit_addon_registered "$1" && \
+       command -v "$(_exakit_addon_fn "$1" latest)" >/dev/null 2>&1; then
+        printf 'pinned\n'
+    else
+        printf 'upstream\n'
+    fi
+}
+
+# exakit_pinned_addons — the registered add-ons whose "latest" is pinned, one
+# id per line. The hook lives in the add-on's module, so the modules are
+# loaded first: an unsourced module would read as "upstream".
+# ⇄ twin: Get-ExakitPinnedAddons.
+exakit_pinned_addons() {
+    _exakit_marketplace_load_modules 2>/dev/null || true
+    for _pa_id in $(exakit_marketplace_addons | cut -d'|' -f1); do
+        [ "$(exakit_component_latest_source "$_pa_id")" = "pinned" ] && printf '%s\n' "$_pa_id"
+    done
+    return 0
+}
+
+# exakit_pinned_latest_note <component> — the qualifier an "already current"
+# line carries under EXAKIT_VERSION_POLICY=latest for a pinned add-on, or
+# nothing at all. Empty under every other policy, so the manifest-policy
+# wording the updaters print is untouched. ⇄ twin: Get-ExakitPinnedLatestNote.
+exakit_pinned_latest_note() {
+    [ "${EXAKIT_VERSION_POLICY:-manifest}" = "latest" ] || return 0
+    [ "$(exakit_component_latest_source "$1")" = "pinned" ] || return 0
+    printf '%s' " — the build this kit pins; a newer upstream release is offered once the kit's manifest pins it"
+    return 0
+}
+
 # _exakit_component_block <component> — where this Component lives in
 # versions.json. One mapping serves version, severity, note and min_kit_version.
 _exakit_component_block() {
@@ -3352,7 +3396,14 @@ exakit_component_current() {
 #      further wiring.
 #   2. Add a components.<id> block to versions.json: version, severity, and
 #      repo (GitHub-release-installed) or package (PyPI-installed) — that
-#      field is what the generic upstream lookup reads.
+#      field is what the generic upstream lookup reads. An add-on the kit
+#      repackages itself (exasol-scheduler, json-tables) carries neither and
+#      defines <id>_latest instead: exakit_component_latest asks that hook
+#      FIRST, so a repo field beside it would never be read. The hook answers
+#      from versions.json on purpose — only a build the pkg workflow has
+#      published and fingerprinted is installable — and
+#      exakit_component_latest_source is how the rest of the kit tells the
+#      two apart.
 #   3. Add one line to exakit_marketplace_addons below.
 # The add-on's one-line description is NOT one of those changes: it is the
 # About field of its own repository, read through
@@ -4755,6 +4806,7 @@ exakit_print_versions_source_line() {
         manifest) ;;
         latest)
             info "Available versions come from live upstream lookups (EXAKIT_VERSION_POLICY=latest)"
+            _exakit_print_pinned_line
             _exakit_print_override_line
             return 0
             ;;
@@ -4794,6 +4846,19 @@ exakit_print_versions_source_line() {
         info "This kit is older than the published manifest — update it first: exakit update"
     fi
     _exakit_print_override_line
+    return 0
+}
+
+# _exakit_print_pinned_line — the add-ons the "live upstream lookups" line
+# does NOT describe, named on their own line. Their "latest" never leaves
+# versions.json (exakit_component_latest_source), and a reader who has just
+# been told everything was looked up upstream would otherwise take "already
+# current" as upstream's word. Silent when no add-on is pinned.
+# ⇄ twin: Write-ExakitPinnedLine.
+_exakit_print_pinned_line() {
+    _ppl_ids="$(exakit_pinned_addons | tr '\n' ' ' | sed 's/ $//; s/ /, /g')"
+    [ -n "$_ppl_ids" ] || return 0
+    info "Pinned by this kit, not looked up upstream: $_ppl_ids (only builds the kit has packaged and verified are offered; a newer one arrives once the kit's manifest pins it)"
     return 0
 }
 

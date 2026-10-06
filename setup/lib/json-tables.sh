@@ -811,7 +811,9 @@ json_tables_update() {
         # newer kit's improvements reach an existing install.
         json_tables_write_shim >/dev/null 2>&1 || true
         json_tables_write_launcher >/dev/null 2>&1 || true
-        ok "JSON Tables is already current ($_jtu_current)"
+        # Same note as exasol-scheduler: under the latest policy, say the
+        # version is the kit's pin rather than upstream's newest.
+        ok "JSON Tables is already current ($_jtu_current)$(exakit_pinned_latest_note json-tables)"
         return 0
     fi
     info "Updating JSON Tables ${_jtu_current:-not installed} -> $_jtu_available"
