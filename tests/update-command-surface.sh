@@ -126,5 +126,88 @@ for _want in exakit runtime exapump mcp pyexasol skills; do
     esac
 done
 
+printf '\n== the command advertises one option list, and it is the true one ==\n'
+# `exakit update --json` used to answer "supported: --yes -y --plan --backup
+# --apply", and `exakit update --plan` then answered "supported: --yes". Both
+# were true in their own position (the staged flags only work behind the
+# Personal target) and read as a contradiction from outside, so an agent that
+# retried with an option the tool had just advertised was refused twice.
+# Driven through the real CLI on an EMPTY home: the option gate runs before
+# the install check, so bad input is exit 2 there, while an accepted shape
+# falls through to the install check's exit 4. That difference is the whole
+# assertion - 2 means the parser refused it, 4 means it let it through.
+_UCS_HOME="$(mktemp -d "${TMPDIR:-/tmp}/exakit-ucs.XXXXXX")"
+_ucs_run() { # _ucs_run <args...> -> stderr+stdout; sets _ucs_rc
+    EXAKIT_HOME="$_UCS_HOME/none" bash "$ROOT/setup/exakit" update "$@" 2>&1
+}
+_ucs_hint="$(bash -c ". '$ROOT/setup/lib/common.sh' 2>/dev/null; exakit_update_options_hint 2>/dev/null" || true)"
+if [ -n "$_ucs_hint" ]; then
+    pass "exakit_update_options_hint prints the shared sentence"
+else
+    fail "exakit_update_options_hint is missing or prints nothing"
+fi
+# Both parsers go through it, or the two lists drift apart again by omission:
+# the dispatcher calls it, and common.sh holds the definition plus its own
+# calls (the outer gate, the wrong-target refusal), so at least two more.
+if grep -q '$(exakit_update_options_hint)' "$ROOT/setup/exakit" && \
+   [ "$(grep -c '$(exakit_update_options_hint)' "$ROOT/setup/lib/common.sh")" -ge 2 ]; then
+    pass "the dispatcher and exakit_update both print the shared hint"
+else
+    fail "a refusal no longer uses exakit_update_options_hint (lists can drift)"
+fi
+
+_ucs_out="$(_ucs_run --json)"; _ucs_rc=$?
+[ "$_ucs_rc" -eq 2 ] && pass "update --json is refused with exit 2" || fail "update --json exited $_ucs_rc, expected 2"
+case "$_ucs_out" in
+    *"supported: --yes -y --plan"*) fail "update --json still advertises the flat list with --plan in it" ;;
+    *)                              pass "update --json no longer advertises --plan as a bare option" ;;
+esac
+case "$_ucs_out" in
+    *"$_ucs_hint"*) pass "...and carries the shared hint" ;;
+    *)              fail "...but the shared hint is not in the refusal" ;;
+esac
+case "$_ucs_out" in
+    *'"rejected": true'*) pass "...as JSON, because --json was asked for" ;;
+    *)                    fail "...but a --json refusal was not JSON" ;;
+esac
+
+_ucs_out="$(_ucs_run --plan)"; _ucs_rc=$?
+[ "$_ucs_rc" -eq 2 ] && pass "a staged flag with no target is refused with exit 2" || fail "update with a leading staged flag exited $_ucs_rc, expected 2"
+case "$_ucs_out" in
+    *"exakit update personal --plan"*) pass "...and is told where the flag goes" ;;
+    *)                                 fail "...but the refusal does not name 'exakit update personal --plan'" ;;
+esac
+case "$_ucs_out" in
+    *"supported: --yes;"*|*"supported: --yes -y"*) fail "...and still answers with one of the two old lists" ;;
+    *) pass "...without either of the two old lists" ;;
+esac
+
+_ucs_out="$(_ucs_run exapump --plan)"; _ucs_rc=$?
+[ "$_ucs_rc" -eq 2 ] && pass "a staged flag behind the wrong target is refused with exit 2" || fail "update exapump with a staged flag exited $_ucs_rc, expected 2"
+case "$_ucs_out" in
+    *"exakit update personal --plan"*) pass "...and names the target it belongs to" ;;
+    *)                                 fail "...but does not name the Personal form" ;;
+esac
+
+_ucs_out="$(_ucs_run --bogus)"; _ucs_rc=$?
+[ "$_ucs_rc" -eq 2 ] && pass "an unknown option is still refused with exit 2" || fail "update --bogus exited $_ucs_rc, expected 2"
+case "$_ucs_out" in
+    *"$_ucs_hint"*) pass "...with the same shared hint" ;;
+    *)              fail "...but with a different option list" ;;
+esac
+
+# The accepted shapes reach the install check (exit 4 on an empty home), which
+# proves the gate let them through rather than refusing them as bad input.
+for _ucs_shape in "personal --plan" "runtime --backup" "--yes" "personal --plan --yes" "--yes personal --apply"; do
+    # shellcheck disable=SC2086 -- the shape is a word list by construction
+    _ucs_out="$(_ucs_run $_ucs_shape)"; _ucs_rc=$?
+    if [ "$_ucs_rc" -eq 4 ]; then
+        pass "\"exakit update $_ucs_shape\" passes the option gate (exit 4: no install, not 2)"
+    else
+        fail "\"exakit update $_ucs_shape\" exited $_ucs_rc - the gate refused a valid shape"
+    fi
+done
+rm -rf "$_UCS_HOME"
+
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
