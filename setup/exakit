@@ -2145,10 +2145,14 @@ cmd_sql() {
         # `--format json` already puts the rows on stdout and every "[1/1] ..."
         # and "1 statement executed" line on stderr, so the two are separable
         # without parsing - the CSV mode interleaves them. Shape:
-        #   {"ok": true,  "rows": [...]}
-        #   {"ok": false, "error": "<engine text>", "remedy": "<...>" | null}
-        # The remedy is the same one the human form prints first; an agent gets
-        # it at a key instead of inside the text. Exit code unchanged.
+        #   {"ok": true,  "rows": [...], "row_count": n}
+        #   {"ok": false, "error": "<engine text>", "remedy": "<command>" | null,
+        #                 "remedy_hint": "<sentence>" | null}
+        # Two keys, on purpose: remedy is a command to run verbatim or null
+        # (the contract every --json answer keeps), and the sentence the human
+        # form prints first goes to remedy_hint. The help and AGENTS.md
+        # document both; a reader coded to "remedy" alone found null on every
+        # fault that has no command to run. Exit code unchanged.
         # Rows, error text and remedy travel through FILES. Handed to Python as
         # arguments, a 120,000-row result hit the OS argument-size limit
         # ("Argument list too long"), stdout stayed empty and the exit code was

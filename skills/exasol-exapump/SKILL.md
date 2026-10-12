@@ -52,9 +52,13 @@ mentions `exakit start`. A saved single statement reruns with `exakit sql --file
 for multi-statement scripts, bulk loads and the interactive shell.
 
 **Parsing results.** `exakit sql --json` prints exactly one JSON object on stdout
-and nothing else there: `{"ok": true, "rows": [{col: value, ...}]}` on success,
-`{"ok": false, "error": "<engine text>", "remedy": "<what to do>" | null}` on
-failure (exit code unchanged). Prefer it over scraping the CSV form, whose
+and nothing else there: `{"ok": true, "rows": [{col: value, ...}], "row_count": n}`
+on success, `{"ok": false, "error": "<engine text>", "remedy": "<command>" | null,
+"remedy_hint": "<sentence>" | null}` on failure (exit code unchanged). `remedy`
+is only ever a command to run verbatim (`exakit start` for connection refused,
+`exakit status` for a TLS fault); a fault with no command to run (object not
+found, `FETCH FIRST`) has `remedy: null` and its advice in `remedy_hint` — read
+that, do not execute it. Prefer it over scraping the CSV form, whose
 `[1/1] ... N rows` header and `1 statement executed` footer share stdout with
 the data.
 
