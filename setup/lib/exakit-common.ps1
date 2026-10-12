@@ -4661,7 +4661,6 @@ function Get-ExakitMarketplaceAddons {
             LogFn       = "Get-ExasolSchedulerLogPath"
             SummaryFn   = "Get-ExasolSchedulerSummary"
             SystemPresentFn = "Get-ExasolSchedulerSystemPresent"
-            LatestFn     = "Get-ExasolSchedulerLatest"
             ApplicableFn = "Test-ExasolSchedulerApplicable"
             ReasonFn     = "Get-ExasolSchedulerApplicableReason"
             EnvVar      = "EXAKIT_EXASOL_SCHEDULER_VERSION"

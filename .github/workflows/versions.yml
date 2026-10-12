@@ -136,6 +136,30 @@ jobs:
               if not isinstance(digest, str) or not digest_re.match(digest):
                   problems.append("components.exapump.sha256.%s is not a 64-character hex digest" % platform)
 
+          # exasol-scheduler installs straight from upstream's release, like
+          # exapump: the block names the upstream repo and one digest per
+          # platform archive, and the install refuses an archive that does not
+          # match. Plain version (0.3.1); the tag is v<version>.
+          scheduler = components.get("exasol-scheduler") or {}
+          if not scheduler.get("repo"):
+              problems.append("components.exasol-scheduler.repo is missing (the install downloads from that upstream release)")
+          if scheduler.get("release"):
+              problems.append("components.exasol-scheduler.release is obsolete: the kit no longer republishes the scheduler")
+          if str(scheduler.get("version", "")).startswith("v"):
+              problems.append("components.exasol-scheduler.version must be plain (0.3.1); the tag is v<version>")
+          digests = scheduler.get("sha256") or {}
+          scheduler_platforms = {
+              "linux-arm64", "linux-x86_64",
+              "macos-arm64", "macos-x86_64",
+              "windows-x86_64",
+          }
+          if set(digests) != scheduler_platforms:
+              problems.append("components.exasol-scheduler.sha256 must cover exactly %s, found %s"
+                              % (sorted(scheduler_platforms), sorted(digests)))
+          for platform, digest in digests.items():
+              if not isinstance(digest, str) or not digest_re.match(digest):
+                  problems.append("components.exasol-scheduler.sha256.%s is not a 64-character hex digest" % platform)
+
           for problem in problems:
               print("versions.json: %s" % problem, file=sys.stderr)
           sys.exit(1 if problems else 0)
@@ -191,6 +215,36 @@ jobs:
             fi
             printf '  verified %s\n' "$digest"
           done < /tmp/digests.txt
+      - name: download the advertised scheduler archives and check every digest
+        # Same ground truth, same reason: exasol-scheduler installs upstream's
+        # archive for the platform and refuses one whose digest differs from
+        # the pin. The pins are upstream's own (its .sha256 sidecars); hashing
+        # the real files is what proves a hand edit or a re-uploaded asset
+        # cannot merge.
+        run: |
+          set -u
+          repo="$(python3 -c 'import json; print(json.load(open("versions.json"))["components"]["exasol-scheduler"].get("repo", "exasol-labs/exasol-scheduler"))')"
+          version="$(python3 -c 'import json; print(json.load(open("versions.json"))["components"]["exasol-scheduler"]["version"])')"
+          python3 -c 'import json; d = json.load(open("versions.json"))["components"]["exasol-scheduler"]["sha256"]; print("\n".join("%s %s" % kv for kv in d.items()))' > /tmp/sched-digests.txt
+          while read -r platform digest; do
+            case "$platform" in
+              windows-*) asset="exasol_scheduler-v${version}-${platform}.zip" ;;
+              *)         asset="exasol_scheduler-v${version}-${platform}.tar.gz" ;;
+            esac
+            url="https://github.com/${repo}/releases/download/v${version}/${asset}"
+            printf '\n%s\n' "$asset"
+            if ! curl -fL --proto '=https' --retry 3 -sS -o "/tmp/$asset" "$url"; then
+              echo "  could not download $url" >&2
+              exit 1
+            fi
+            actual="$(sha256sum "/tmp/$asset" | cut -d' ' -f1)"
+            rm -f "/tmp/$asset"
+            if [ "$actual" != "$digest" ]; then
+              printf '  digest mismatch\n    advertised: %s\n    actual:     %s\n' "$digest" "$actual" >&2
+              exit 1
+            fi
+            printf '  verified %s\n' "$digest"
+          done < /tmp/sched-digests.txt
 
   upstream-exists:
     name: the advertised versions exist upstream
@@ -349,54 +403,44 @@ jobs:
                   print("  ok  json-tables: release %s carries every pinned asset with the pinned digest"
                         % release)
 
-          # exasol-scheduler follows the same immutable-release contract as
-          # json-tables, minus the wheel and the cargo shim: bare binaries per
-          # platform on a release tagged exasol-scheduler-<version>, digests
-          # pinned here by the pkg workflow's advertise job. One allowance the
-          # json-tables arm no longer needs: with NO sha256 block at all this
-          # is the bootstrap state - the add-on merged before its first
-          # release was published - and users are safe (the module refuses an
-          # unverifiable download), so it is a loud notice rather than a merge
-          # blocker. The moment pins exist, the full gate applies.
+          # exasol-scheduler installs straight from upstream's release, the way
+          # exapump does: the tag v<version> must exist in its repo and carry an
+          # archive for every pinned platform, and each archive's published
+          # digest must equal the pin (the install refuses on mismatch).
+          # digest-verify downloads and hashes the same archives, which is
+          # stronger; this is the cheap existence check that names the tag.
           es = components.get("exasol-scheduler") or {}
           if es.get("version"):
               before = len(problems)
-              release = es.get("release") or "exasol-scheduler-%s" % es["version"]
-              if not release.startswith("exasol-scheduler-%s" % es["version"]):
-                  problems.append("exasol-scheduler: release %s does not belong to version %s"
-                                  % (release, es["version"]))
+              es_repo = es.get("repo", "exasol-labs/exasol-scheduler")
               es_required = {"linux-x86_64", "linux-arm64", "macos-arm64",
                              "macos-x86_64", "windows-x86_64"}
               es_pins = es.get("sha256") or {}
-              if not es_pins:
-                  print("::warning::exasol-scheduler: no digests pinned yet (bootstrap) -- "
-                        "run the 'pkg / exasol-scheduler' workflow to publish %s, and merge "
-                        "the advertise PR it opens" % release)
+              if set(es_pins) != es_required:
+                  problems.append("exasol-scheduler: sha256 must cover exactly %s, found %s"
+                                  % (sorted(es_required), sorted(es_pins)))
+              body, reason = fetch("https://api.github.com/repos/%s/releases/tags/v%s"
+                                   % (es_repo, es["version"]), token=True)
+              if body is None:
+                  problems.append("exasol-scheduler: %s has no release tagged v%s (%s)"
+                                  % (es_repo, es["version"], reason))
               else:
-                  if set(es_pins) != es_required:
-                      problems.append("exasol-scheduler: sha256 must cover exactly %s, found %s"
-                                      % (sorted(es_required), sorted(es_pins)))
-                  body, reason = fetch("https://api.github.com/repos/%s/releases/tags/%s"
-                                       % (os.environ.get("GITHUB_REPOSITORY", ""), release), token=True)
-                  if body is None:
-                      problems.append("exasol-scheduler: release %s does not exist (%s) -- the "
-                                      "'pkg / exasol-scheduler' workflow publishes the release "
-                                      "BEFORE the version is advertised" % (release, reason))
-                  else:
-                      assets = {a.get("name", ""): a for a in body.get("assets") or []}
-                      for key, pinned in sorted(es_pins.items()):
-                          name = "exasol-scheduler-%s%s" % (key, ".exe" if "windows" in key else "")
-                          asset = assets.get(name)
-                          if asset is None:
-                              problems.append("exasol-scheduler: release %s has no asset %s (pinned as sha256.%s)"
-                                              % (release, name, key))
-                              continue
-                          published = str(asset.get("digest") or "").replace("sha256:", "")
-                          if published != pinned:
-                              problems.append("exasol-scheduler: sha256.%s pins %s but %s on %s is %s"
-                                              % (key, pinned, name, release, published or "unknown"))
+                  assets = {a.get("name", ""): a for a in body.get("assets") or []}
+                  for key, pinned in sorted(es_pins.items()):
+                      name = "exasol_scheduler-v%s-%s.%s" % (
+                          es["version"], key, "zip" if key.startswith("windows-") else "tar.gz")
+                      asset = assets.get(name)
+                      if asset is None:
+                          problems.append("exasol-scheduler: release v%s has no asset %s (pinned as sha256.%s)"
+                                          % (es["version"], name, key))
+                          continue
+                      published = str(asset.get("digest") or "").replace("sha256:", "")
+                      if published != pinned:
+                          problems.append("exasol-scheduler: sha256.%s pins %s but %s on v%s is %s"
+                                          % (key, pinned, name, es["version"], published or "unknown"))
               if len(problems) == before:
-                  print("  ok  exasol-scheduler: the pinned release checks out")
+                  print("  ok  exasol-scheduler: %s release v%s carries every pinned archive with the pinned digest"
+                        % (es_repo, es["version"]))
 
           for addon in ("dash-server", "exasol-vscode"):
               block = components.get(addon) or {}
@@ -435,8 +479,8 @@ jobs:
   repo-published-pins:
     name: the repo-published pins match this repository's releases
     runs-on: ubuntu-latest
-    # Deliberately NOT gated on `changes`: json-tables and exasol-scheduler are
-    # built and released by THIS repository, so their pins are repo-local. A
+    # Deliberately NOT gated on `changes`: json-tables is built and released by
+    # THIS repository, so its pins are repo-local. A
     # fork publishes its own release under the same tag with different
     # binaries, and a sync that carries the fork's digests here makes the
     # add-on uninstallable -- the module refuses every asset whose digest is
@@ -535,10 +579,6 @@ jobs:
           check("json-tables", jt, "json-tables",
                 {"linux-x86_64", "linux-aarch64", "macos-aarch64",
                  "windows-x86_64", "cargo-windows-x86_64", "wheel"}, jt_asset)
-
-          check("exasol-scheduler", components.get("exasol-scheduler") or {}, "exasol-scheduler",
-                {"linux-x86_64", "linux-arm64", "macos-arm64", "macos-x86_64", "windows-x86_64"},
-                lambda key: "exasol-scheduler-%s%s" % (key, ".exe" if "windows" in key else ""))
 
           for problem in problems:
               print("versions.json: %s" % problem, file=sys.stderr)

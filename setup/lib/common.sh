@@ -2885,13 +2885,15 @@ exakit_component_latest() {
 # answer for this Component comes from: "upstream" (a live GitHub or PyPI
 # lookup) or "pinned" (the add-on's own <id>_latest hook, which answers from
 # versions.json because only a build the kit's packaging workflow has published
-# and fingerprinted is installable — exasol-scheduler and json-tables).
+# and fingerprinted is installable — json-tables).
 #
 # The distinction has to be visible. EXAKIT_VERSION_POLICY=latest printed one
 # line for the whole run — "Available versions come from live upstream
 # lookups" — and then "exasol-scheduler is already current (v0.2)" while
 # upstream had shipped v0.3.1. Both lines were untrue for that one add-on, and
 # nothing on screen said its lookup never left the manifest (upstream #27).
+# The scheduler has since moved to upstream's own release and is looked up
+# like exapump; json-tables is the case that remains.
 # ⇄ twin: Get-ExakitComponentLatestSource.
 exakit_component_latest_source() {
     if _exakit_addon_registered "$1" && \
@@ -3397,7 +3399,7 @@ exakit_component_current() {
 #   2. Add a components.<id> block to versions.json: version, severity, and
 #      repo (GitHub-release-installed) or package (PyPI-installed) — that
 #      field is what the generic upstream lookup reads. An add-on the kit
-#      repackages itself (exasol-scheduler, json-tables) carries neither and
+#      repackages itself (json-tables) carries neither and
 #      defines <id>_latest instead: exakit_component_latest asks that hook
 #      FIRST, so a repo field beside it would never be read. The hook answers
 #      from versions.json on purpose — only a build the pkg workflow has

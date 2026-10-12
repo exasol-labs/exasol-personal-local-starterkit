@@ -18,7 +18,7 @@
 # shim is needed (the binary is invoked directly, unlike json-tables' cargo
 # indirection). Windows ARM64 has no published engine yet.
 
-$script:ExasolSchedulerVersionFallback = if ($env:EXAKIT_EXASOL_SCHEDULER_VERSION_FALLBACK) { $env:EXAKIT_EXASOL_SCHEDULER_VERSION_FALLBACK } else { "v0.3.1" }
+$script:ExasolSchedulerVersionFallback = if ($env:EXAKIT_EXASOL_SCHEDULER_VERSION_FALLBACK) { $env:EXAKIT_EXASOL_SCHEDULER_VERSION_FALLBACK } else { "0.3.1" }
 $script:ExasolSchedulerVersion = if ($env:EXAKIT_EXASOL_SCHEDULER_VERSION) { $env:EXAKIT_EXASOL_SCHEDULER_VERSION } else { "" }
 $script:ExasolSchedulerRepo = if ($env:EXAKIT_EXASOL_SCHEDULER_REPO) { $env:EXAKIT_EXASOL_SCHEDULER_REPO } else { "exasol-labs/exasol-scheduler" }
 $script:ExasolSchedulerReleaseTag = if ($env:EXAKIT_EXASOL_SCHEDULER_RELEASE_TAG) { $env:EXAKIT_EXASOL_SCHEDULER_RELEASE_TAG } else { "" }
@@ -54,51 +54,55 @@ function Get-ExasolSchedulerCredentialPath {
 }
 
 # --- version + release resolution -------------------------------------------
+#
+# No LatestFn hook, on purpose: the scheduler installs from upstream's own
+# release, so the generic lookup (components.exasol-scheduler.repo) answers
+# the latest policy, as it does for exapump. Twin of the shell module's
+# resolution block.
 
-# Deliberately the version versions.json ADVERTISES: only a build the pkg
-# workflow has published and pinned is installable. Twin of
-# exasol_scheduler_latest.
-function Get-ExasolSchedulerLatest {
+# Plain digits, no leading v: upstream tags its releases v<version>, and the
+# kit stores the version the way every other component does. Twin of
+# _exasol_scheduler_advertised_version.
+function Get-ExasolSchedulerAdvertisedVersion {
     $advertised = Get-ExakitVersionsValue "components.exasol-scheduler.version"
-    if ($advertised) { return $advertised }
-    return $script:ExasolSchedulerVersionFallback
+    if (-not $advertised) { $advertised = $script:ExasolSchedulerVersionFallback }
+    return ("" + $advertised).TrimStart("v")
 }
 
 function Get-ExasolSchedulerTargetVersion {
-    if ($script:ExasolSchedulerVersion) { return $script:ExasolSchedulerVersion }
-    return (Get-ExasolSchedulerLatest)
+    if ($script:ExasolSchedulerVersion) { return ("" + $script:ExasolSchedulerVersion).TrimStart("v") }
+    return (Get-ExasolSchedulerAdvertisedVersion)
 }
 
 function Test-ExasolSchedulerPinApplies {
     if ($script:ExasolSchedulerReleaseTag) { return $false }
     if (-not $script:ExasolSchedulerVersion) { return $true }
-    $advertised = Get-ExakitVersionsValue "components.exasol-scheduler.version"
-    return ($advertised -and $advertised -eq $script:ExasolSchedulerVersion)
+    return ((Get-ExasolSchedulerAdvertisedVersion) -eq (Get-ExasolSchedulerTargetVersion))
 }
 
-function Get-ExasolSchedulerMirrorRepo {
-    if ($env:EXAKIT_EXASOL_SCHEDULER_MIRROR_REPO) { return $env:EXAKIT_EXASOL_SCHEDULER_MIRROR_REPO }
-    $source = Get-ExakitManifestValue "kit.source"
-    if ($source -and $source -match "^([^@]+/[^@]+)@") { return $Matches[1] }
-    return $script:KitRepo
-}
-
+# The upstream tag the assets are downloaded from: v<version>, unless
+# EXAKIT_EXASOL_SCHEDULER_RELEASE_TAG names one. Twin of
+# exasol_scheduler_release_tag.
 function Get-ExasolSchedulerReleaseTag {
     if ($script:ExasolSchedulerReleaseTag) { return $script:ExasolSchedulerReleaseTag }
-    if (Test-ExasolSchedulerPinApplies) {
-        $pin = Get-ExakitVersionsValue "components.exasol-scheduler.release"
-        if ($pin) { return $pin }
-    }
-    return ("exasol-scheduler-" + (Get-ExasolSchedulerTargetVersion))
+    return ("v" + (Get-ExasolSchedulerTargetVersion))
 }
 
 # --- platform ----------------------------------------------------------------
 
-# The engine built for THIS machine, by the kit release's own naming (bare
-# binaries, repackaged by the pkg workflow). Twin of exasol_scheduler_asset.
-function Get-ExasolSchedulerAsset {
+# The <os>-<arch> token upstream names its archives by, and the key
+# versions.json pins the digest under. Twin of _exasol_scheduler_platform.
+function Get-ExasolSchedulerPlatform {
     if ((Get-ExakitHostArch) -eq "arm64") { return "" }
-    return "exasol-scheduler-windows-x86_64.exe"
+    return "windows-x86_64"
+}
+
+# Upstream's archive for THIS machine, the bare engine inside. Twin of
+# exasol_scheduler_asset.
+function Get-ExasolSchedulerAsset {
+    $platform = Get-ExasolSchedulerPlatform
+    if (-not $platform) { return "" }
+    return ("exasol_scheduler-" + (Get-ExasolSchedulerReleaseTag) + "-" + $platform + ".zip")
 }
 
 function Test-ExasolSchedulerApplicable {
@@ -119,7 +123,9 @@ function Get-ExasolSchedulerSystemPresent {
 function Get-ExasolSchedulerInstalledVersion {
     if (-not (Test-Path (Get-ExasolSchedulerEnginePath))) { return "" }
     $recorded = Get-ExakitManifestValue "components.exasol_scheduler.version"
-    if ($recorded) { return $recorded }
+    # Installs made while the kit republished upstream's builds recorded the
+    # tag (v0.3.1); the plain form is what versions.json advertises now.
+    if ($recorded) { return ("" + $recorded).TrimStart("v") }
     return ""
 }
 
@@ -127,23 +133,31 @@ function Get-ExasolSchedulerInstalledVersion {
 
 function Get-ExasolSchedulerAssetUrl {
     param([Parameter(Mandatory)][string]$Asset)
-    return ("https://github.com/" + (Get-ExasolSchedulerMirrorRepo) + "/releases/download/" + (Get-ExasolSchedulerReleaseTag) + "/" + $Asset)
+    return ("https://github.com/" + $script:ExasolSchedulerRepo + "/releases/download/" + (Get-ExasolSchedulerReleaseTag) + "/" + $Asset)
 }
 
-# Pinned first (versions.json cannot be rate limited), else the digest GitHub
-# publishes for the asset on the release being installed. An unverifiable
-# download is refused. Twin of _exasol_scheduler_digest.
+# The pin in versions.json for the advertised version (no network), else the
+# <asset>.sha256 upstream publishes beside every archive, else the digest
+# GitHub's release API reports. An unverifiable download is refused. Twin of
+# _exasol_scheduler_digest.
 function Get-ExasolSchedulerDigest {
     param([Parameter(Mandatory)][string]$Asset)
-    $key = $Asset -replace "^exasol-scheduler-", "" -replace "\.exe$", ""
-    if (Test-ExasolSchedulerPinApplies) {
-        $pin = Get-ExakitVersionsValue ("components.exasol-scheduler.sha256." + $key)
-        if ($pin) { return $pin.ToLower() }
+    $platform = Get-ExasolSchedulerPlatform
+    if ((Test-ExasolSchedulerPinApplies) -and $platform) {
+        $pin = Get-ExakitVersionsValue ("components.exasol-scheduler.sha256." + $platform)
+        if ($pin -and $pin -match "^[0-9a-fA-F]{64}$") { return $pin.ToLower() }
     }
+    try {
+        $side = Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 -Uri ((Get-ExasolSchedulerAssetUrl -Asset $Asset) + ".sha256")
+        $raw = $side.Content
+        if ($raw -is [byte[]]) { $raw = [System.Text.Encoding]::UTF8.GetString($raw) }
+        $first = (("" + $raw).Trim() -split "\s+")[0]
+        if ($first -and $first -match "^[0-9a-fA-F]{64}$") { return $first.ToLower() }
+    } catch { }
     try {
         $headers = @{}
         if ($env:GITHUB_TOKEN) { $headers["Authorization"] = "Bearer $($env:GITHUB_TOKEN)" }
-        $api = "https://api.github.com/repos/" + (Get-ExasolSchedulerMirrorRepo) + "/releases/tags/" + (Get-ExasolSchedulerReleaseTag)
+        $api = "https://api.github.com/repos/" + $script:ExasolSchedulerRepo + "/releases/tags/" + (Get-ExasolSchedulerReleaseTag)
         $doc = Invoke-RestMethod -Uri $api -Headers $headers -TimeoutSec 30
         foreach ($entry in $doc.assets) {
             if ($entry.name -eq $Asset -and $entry.digest -and $entry.digest.StartsWith("sha256:")) {
@@ -168,14 +182,14 @@ function Get-ExasolSchedulerVerifiedAsset {
     if (-not $expected) {
         # The escape hatch the other components already carry, named in the
         # refusal rather than left as folklore: a refusal that offers only a
-        # retry is a dead end on an offline machine or a fork whose packaging
-        # workflow has not run. Twin of _exasol_scheduler_fetch_verified.
+        # retry is a dead end on an offline machine. Twin of
+        # _exasol_scheduler_fetch_verified.
         if ($env:EXAKIT_ALLOW_UNVERIFIED_EXASOL_SCHEDULER -eq "1") {
             Warn2 "No digest available for $Asset - proceeding WITHOUT checksum verification (EXAKIT_ALLOW_UNVERIFIED_EXASOL_SCHEDULER=1)."
             return $true
         }
         Remove-Item -Force -ErrorAction SilentlyContinue $Destination
-        Warn2 "No checksum is available for $Asset; refusing an unverified artifact. Usually the release is still publishing or the GitHub API was unreachable - retry with: exakit update exasol-scheduler. Add its digest to versions.json (components.exasol-scheduler.sha256.<platform>) or, at your own risk, override with EXAKIT_ALLOW_UNVERIFIED_EXASOL_SCHEDULER=1."
+        Warn2 "No checksum is available for $Asset; refusing an unverified artifact. Usually the release is still publishing or github.com was unreachable - retry with: exakit update exasol-scheduler. Add its digest to versions.json (components.exasol-scheduler.sha256.<platform>) or, at your own risk, override with EXAKIT_ALLOW_UNVERIFIED_EXASOL_SCHEDULER=1."
         return $false
     }
     $actual = Get-ExakitSha256 $Destination
@@ -186,6 +200,30 @@ function Get-ExasolSchedulerVerifiedAsset {
     }
     Ok "Checksum verified: $Asset"
     return $true
+}
+
+# The bare engine out of upstream's archive, found by name rather than at an
+# assumed path: the archive layout is upstream's to change. Twin of
+# _exasol_scheduler_unpack.
+function Expand-ExasolSchedulerArchive {
+    param([Parameter(Mandatory)][string]$Archive, [Parameter(Mandatory)][string]$Destination)
+    $stage = Join-Path ([System.IO.Path]::GetTempPath()) ("exakit-scheduler-unpack-" + [guid]::NewGuid().ToString("N"))
+    try {
+        New-Item -ItemType Directory -Force -Path $stage | Out-Null
+        Expand-Archive -Path $Archive -DestinationPath $stage -Force
+        $engine = Get-ChildItem -Path $stage -Recurse -File -Filter "exasol_scheduler.exe" | Select-Object -First 1
+        if (-not $engine -or $engine.Length -eq 0) {
+            Warn2 ("No exasol_scheduler.exe inside " + (Split-Path -Leaf $Archive))
+            return $false
+        }
+        Copy-Item -Force $engine.FullName $Destination
+        return $true
+    } catch {
+        Warn2 ("Could not unpack " + (Split-Path -Leaf $Archive) + ": $_")
+        return $false
+    } finally {
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $stage
+    }
 }
 
 # --- the dedicated database user ----------------------------------------------
@@ -370,11 +408,21 @@ function Install-ExasolScheduler {
     $asset = Get-ExasolSchedulerAsset
     $libexec = Join-Path (Get-ExasolSchedulerHome) "libexec"
     New-Item -ItemType Directory -Force -Path $libexec | Out-Null
-    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("exakit-scheduler-" + [guid]::NewGuid().ToString("N") + ".exe")
-    if (-not (Get-ExasolSchedulerVerifiedAsset -Asset $asset -Destination $tmp)) {
-        return (Write-ExasolSchedulerNotInstalled ("the prebuilt scheduler binary (" + $asset + ") could not be downloaded or verified (see log)"))
+    $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) ("exakit-scheduler-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
+    $archive = Join-Path $tmpDir $asset
+    try {
+        if (-not (Get-ExasolSchedulerVerifiedAsset -Asset $asset -Destination $archive)) {
+            return (Write-ExasolSchedulerNotInstalled ("the prebuilt scheduler archive (" + $asset + ") could not be downloaded or verified (see log)"))
+        }
+        $engineTmp = Join-Path $tmpDir "exasol_scheduler.exe"
+        if (-not (Expand-ExasolSchedulerArchive -Archive $archive -Destination $engineTmp)) {
+            return (Write-ExasolSchedulerNotInstalled ("no exasol_scheduler.exe could be unpacked from " + $asset + " (see log)"))
+        }
+        Move-Item -Force $engineTmp (Get-ExasolSchedulerEnginePath)
+    } finally {
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $tmpDir
     }
-    Move-Item -Force $tmp (Get-ExasolSchedulerEnginePath)
     & (Get-ExasolSchedulerEnginePath) --help *> $null
     if ($LASTEXITCODE -ne 0) {
         return (Write-ExasolSchedulerNotInstalled "the prebuilt engine does not run on this machine (unsigned-binary policy? see log)")
@@ -531,9 +579,7 @@ function Update-ExasolScheduler {
     $current = Get-ExasolSchedulerInstalledVersion
     if ($current -and $current -eq $available) {
         [void](Write-ExasolSchedulerLauncher)
-        # Twin of the note in exasol_scheduler_update: under the latest
-        # policy, say the version is the kit's pin, not upstream's newest.
-        Ok ("exasol-scheduler is already current (" + $current + ")" + (Get-ExakitPinnedLatestNote "exasol-scheduler"))
+        Ok ("exasol-scheduler is already current (" + $current + ")")
         return $true
     }
     Info ("Updating exasol-scheduler " + $(if ($current) { $current } else { "not installed" }) + " -> " + $available)

@@ -2086,25 +2086,29 @@ echo "the latest policy names the add-ons it never looks up (upstream #27):"
 # published and fingerprinted is installable - but nothing on screen said so,
 # and the reporter's suggested fix (a repo field) would never have been read:
 # exakit_component_latest asks the <id>_latest hook first.
-check "the scheduler's latest is pinned"       "pinned"   "$(exakit_component_latest_source exasol-scheduler)"
 check "json-tables' latest is pinned"          "pinned"   "$(exakit_component_latest_source json-tables)"
+# The scheduler was the second pinned add-on until it moved to upstream's own
+# release (below); its "latest" is a live lookup now, like exapump's.
+check "the scheduler's latest is looked up"    "upstream" "$(exakit_component_latest_source exasol-scheduler)"
 check "dash-server's latest is looked up"      "upstream" "$(exakit_component_latest_source dash-server)"
 check "a kit component's latest is looked up"  "upstream" "$(exakit_component_latest_source exapump)"
-check "the pinned set is exactly those two" "exasol-scheduler json-tables" \
+check "the pinned set is exactly json-tables" "json-tables" \
     "$(exakit_pinned_addons | tr '\n' ' ' | sed 's/ $//')"
 _pin_line="$(EXAKIT_VERSION_POLICY=latest exakit_print_versions_source_line 2>&1)"
 has   "the latest-policy source line still says where lookups go" "live upstream lookups" "$_pin_line"
-has   "...and names the scheduler as pinned on its own line"      "Pinned by this kit, not looked up upstream: exasol-scheduler, json-tables" "$_pin_line"
+has   "...and names json-tables as pinned on its own line"        "Pinned by this kit, not looked up upstream: json-tables" "$_pin_line"
 lacks "...but not dash-server, which really is looked up"         "dash-server"          "$_pin_line"
+lacks "...nor the scheduler, which is looked up too"              "exasol-scheduler"     "$_pin_line"
 # The "already current" line is the other half: under the latest policy a
 # pinned add-on says the version is the kit's pin; under the manifest policy
 # (the default) the wording is untouched.
 has   "a pinned add-on's already-current line is qualified under latest" "the build this kit pins" \
-    "$(EXAKIT_VERSION_POLICY=latest exakit_pinned_latest_note exasol-scheduler)"
-check "...and says nothing under the manifest policy"   "" "$(EXAKIT_VERSION_POLICY=manifest exakit_pinned_latest_note exasol-scheduler)"
+    "$(EXAKIT_VERSION_POLICY=latest exakit_pinned_latest_note json-tables)"
+check "...and says nothing under the manifest policy"   "" "$(EXAKIT_VERSION_POLICY=manifest exakit_pinned_latest_note json-tables)"
 check "...or for an add-on that is looked up upstream"  "" "$(EXAKIT_VERSION_POLICY=latest exakit_pinned_latest_note dash-server)"
-has "the scheduler's updater carries the note"  'exakit_pinned_latest_note exasol-scheduler' "$(cat "$ROOT/setup/lib/exasol-scheduler.sh")"
-has "...and json-tables' updater too"           'exakit_pinned_latest_note json-tables'      "$(cat "$ROOT/setup/lib/json-tables.sh")"
+check "...the scheduler included"                       "" "$(EXAKIT_VERSION_POLICY=latest exakit_pinned_latest_note exasol-scheduler)"
+has   "json-tables' updater carries the note"           'exakit_pinned_latest_note json-tables'      "$(cat "$ROOT/setup/lib/json-tables.sh")"
+lacks "the scheduler's updater no longer does"          'exakit_pinned_latest_note exasol-scheduler' "$(cat "$ROOT/setup/lib/exasol-scheduler.sh")"
 # The add-on contract used to say repo-or-package is what the lookup reads,
 # full stop; two add-ons satisfy neither, so it has to name the hook.
 has "the add-on contract names the <id>_latest hook" 'defines <id>_latest instead' "$(cat "$ROOT/setup/lib/common.sh")"
@@ -2113,8 +2117,65 @@ _pin_ps_common="$(cat "$ROOT/setup/lib/exakit-common.ps1")"
 has "the Windows registry answers the same source question" 'function Get-ExakitComponentLatestSource' "$_pin_ps_common"
 has "...with the same note"                                 'function Get-ExakitPinnedLatestNote'      "$_pin_ps_common"
 has "the Windows source line names the pinned add-ons"      'Write-ExakitPinnedLine'                    "$(cat "$ROOT/setup/exakit.ps1")"
-has "the Windows scheduler updater qualifies its line"      'Get-ExakitPinnedLatestNote "exasol-scheduler"' "$(cat "$ROOT/setup/lib/exasol-scheduler.ps1")"
-has "...and the Windows json-tables updater too"            'Get-ExakitPinnedLatestNote "json-tables"'      "$(cat "$ROOT/setup/lib/json-tables.ps1")"
+has   "the Windows json-tables updater qualifies its line"  'Get-ExakitPinnedLatestNote "json-tables"'      "$(cat "$ROOT/setup/lib/json-tables.ps1")"
+lacks "...the Windows scheduler updater no longer does"     'Get-ExakitPinnedLatestNote "exasol-scheduler"' "$(cat "$ROOT/setup/lib/exasol-scheduler.ps1")"
+
+echo
+echo "exasol-scheduler installs straight from upstream's release:"
+# Until 0.2.0 the kit republished upstream's prebuilt binaries on a release of
+# its own (pkg-exasol-scheduler.yml), which put a packaging run and a merge
+# between every upstream tag and its availability (upstream #27). Upstream
+# ships an archive per platform with a .sha256 beside each, which is exactly
+# what exapump offers, so the scheduler now follows exapump's model: the
+# archive is fetched from upstream's tag v<version>, verified against the
+# digest versions.json pins, and the engine is unpacked out of it.
+_sch_adv="$(python3 -c 'import json; print(json.load(open("'"$ROOT"'/versions.json"))["components"]["exasol-scheduler"]["version"])')"
+_sch_pin="$(python3 -c 'import json; print(json.load(open("'"$ROOT"'/versions.json"))["components"]["exasol-scheduler"]["sha256"]["macos-arm64"])')"
+check "versions.json names the upstream repo" "exasol-labs/exasol-scheduler" \
+    "$(python3 -c 'import json; print(json.load(open("'"$ROOT"'/versions.json"))["components"]["exasol-scheduler"].get("repo", ""))')"
+check "...and no kit-repo release any more" "absent" \
+    "$(python3 -c 'import json; print("PRESENT" if "release" in json.load(open("'"$ROOT"'/versions.json"))["components"]["exasol-scheduler"] else "absent")')"
+check "...with a plain version, the tag being v<version>" "plain" "$(printf '%s' "$_sch_adv" | grep -q '^v' && echo v-prefixed || echo plain)"
+check "no <id>_latest hook: the generic lookup answers" "" "$(command -v exasol_scheduler_latest || true)"
+check "no mirror repository either"                     "" "$(command -v exasol_scheduler_mirror_repo || true)"
+_sch_probe() { # <function...> under a stubbed macOS/arm64 host
+    ( detect_os() { printf 'macos'; }; detect_arch() { printf 'arm64'; }; "$@" )
+}
+check "the release tag is v<version>"        "v$_sch_adv" "$(_sch_probe exasol_scheduler_release_tag)"
+check "the asset is upstream's archive"      "exasol_scheduler-v$_sch_adv-macos-arm64.tar.gz" "$(_sch_probe exasol_scheduler_asset)"
+check "...downloaded from upstream's release" \
+    "https://github.com/exasol-labs/exasol-scheduler/releases/download/v$_sch_adv/exasol_scheduler-v$_sch_adv-macos-arm64.tar.gz" \
+    "$(_sch_probe _exasol_scheduler_asset_url "exasol_scheduler-v$_sch_adv-macos-arm64.tar.gz")"
+check "...verified against the versions.json pin, no network" "$_sch_pin" \
+    "$(_sch_probe _exasol_scheduler_digest "exasol_scheduler-v$_sch_adv-macos-arm64.tar.gz")"
+check "a hand-named tag is downloaded as named"        "v9.9" "$(EXAKIT_EXASOL_SCHEDULER_RELEASE_TAG=v9.9 _sch_probe exasol_scheduler_release_tag)"
+check "...and the pin does not apply to it"            "no"   "$(EXAKIT_EXASOL_SCHEDULER_RELEASE_TAG=v9.9 _exasol_scheduler_pin_applies && echo yes || echo no)"
+check "a version override spelled with a v is the advertised build" "yes" \
+    "$(EXAKIT_EXASOL_SCHEDULER_VERSION="v$_sch_adv" _exasol_scheduler_pin_applies && echo yes || echo no)"
+check "an install recorded by the mirror era (v0.3.1) reads as the plain version" "0.3.1" \
+    "$( ( exasol_scheduler_engine_path() { printf '%s' "$WORK/code-bin/code"; }; manifest_get() { printf 'v0.3.1'; }; exasol_scheduler_installed_version ) )"
+# The engine is found inside the archive by name, never at an assumed path.
+_sch_tgz="$WORK/sched-archive"
+mkdir -p "$_sch_tgz/src/target/some-triple/release"
+printf '#!/bin/sh\necho engine\n' > "$_sch_tgz/src/target/some-triple/release/exasol_scheduler"
+printf 'readme\n' > "$_sch_tgz/src/README.md"
+tar -czf "$_sch_tgz/good.tar.gz" -C "$_sch_tgz/src" .
+_exasol_scheduler_unpack "$_sch_tgz/good.tar.gz" "$_sch_tgz/engine" >/dev/null 2>&1
+check "the engine is unpacked out of the archive by name" "engine" "$("$_sch_tgz/engine" 2>/dev/null)"
+mkdir -p "$_sch_tgz/empty"; printf 'readme\n' > "$_sch_tgz/empty/README.md"
+tar -czf "$_sch_tgz/bad.tar.gz" -C "$_sch_tgz/empty" .
+check "an archive without the engine is refused" "refused" \
+    "$(_exasol_scheduler_unpack "$_sch_tgz/bad.tar.gz" "$_sch_tgz/none" >/dev/null 2>&1 && echo accepted || echo refused)"
+check "the packaging workflow is gone"      "absent" "$([ -f "$ROOT/.github/workflows/pkg-exasol-scheduler.yml" ] && echo PRESENT || echo absent)"
+has   "the bump workflow proposes scheduler releases with their digests" 'bumped["exasol-scheduler"]' "$(cat "$ROOT/.github/workflows/versions-bump.yml")"
+has   "CI checks the pins against upstream's archives" 'exasol_scheduler-v${version}-${platform}.tar.gz' "$(cat "$ROOT/.github/workflows/versions.yml")"
+lacks "...and no longer expects a kit-repo release"   'pkg / exasol-scheduler' "$(cat "$ROOT/.github/workflows/versions.yml")"
+_sch_ps="$(cat "$ROOT/setup/lib/exasol-scheduler.ps1")"
+has   "Windows names the platform the same way"      'function Get-ExasolSchedulerPlatform'   "$_sch_ps"
+has   "...fetches upstream's zip"                    '"-" + $platform + ".zip"'               "$_sch_ps"
+has   "...and unpacks the engine out of it"          'function Expand-ExasolSchedulerArchive' "$_sch_ps"
+lacks "...with no mirror repository"                 'MirrorRepo'                             "$_sch_ps"
+lacks "...and no pinned latest"                      'function Get-ExasolSchedulerLatest'     "$_sch_ps"
 
 echo
 echo "the Windows registry dispatches the same per-add-on hooks as the shell:"
@@ -2132,7 +2193,7 @@ has "...and the VS Code extension's"                'SystemPresentFn = "Test-Exa
 has "the detector exists for VS Code"               'function Test-ExasolVscodeSystemPresent' "$(cat "$ROOT/setup/lib/exasol-vscode.ps1")"
 has "the present probe dispatches the hook first"   '$addon.SystemPresentFn' "$COMMON_PS_TP"
 has "the registry declares json-tables' latest"     'LatestFn     = "Get-JsonTablesLatest"' "$COMMON_PS_TP"
-has "...and the scheduler's"                        'LatestFn     = "Get-ExasolSchedulerLatest"' "$COMMON_PS_TP"
+lacks "...but not the scheduler's, which is looked up upstream" 'LatestFn     = "Get-ExasolSchedulerLatest"' "$COMMON_PS_TP"
 has "the latest lookup dispatches the hook first"   '$addon.LatestFn' "$COMMON_PS_TP"
 # ADD-01/CPY-02: "recorded, so every command agrees" was false on Windows -
 # the module never read the port back. The audit's own zero-occurrence check,

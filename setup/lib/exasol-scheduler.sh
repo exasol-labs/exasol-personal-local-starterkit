@@ -11,10 +11,14 @@
 #   - A single stateless Rust binary that polls a SCHED.SCHED_TASKS table and
 #     runs each due row's SQL_TEXT verbatim against Exasol. Jobs are defined,
 #     paused and audited with plain SQL; history lands in SCHED_HISTORY.
-#   - Upstream publishes prebuilt binaries for every platform the kit runs on;
-#     the pkg workflow verifies them against upstream's own per-asset .sha256
-#     files and republishes them as bare binaries on ONE IMMUTABLE RELEASE per
-#     build (exasol-scheduler-<version>), the same posture as json-tables.
+#   - Upstream publishes a prebuilt archive for every platform the kit runs
+#     on, each with its own .sha256 beside it, so the kit installs STRAIGHT
+#     FROM UPSTREAM'S RELEASE, the way exapump does: the archive is verified
+#     against the digest versions.json pins (upstream's own, re-checked by CI
+#     before a pin can merge), the engine is unpacked out of it, and nothing
+#     is republished by the kit. (Until 0.2.0 the kit mirrored those binaries
+#     on a release of its own, which put a packaging run and a merge between
+#     every upstream tag and its availability — upstream #27.)
 #   - SCHED_TASKS is a CODE-EXECUTION SURFACE: whoever can write that table
 #     runs arbitrary SQL as the scheduler's database user. So the kit NEVER
 #     runs it as the admin user — install creates a dedicated SCHEDULER_SVC
@@ -46,7 +50,7 @@
 # convention (EXAKIT_<ID>_VERSION[_FALLBACK]), and the versions-bump workflow
 # keeps the fallback in lockstep with versions.json (COUPLED table).
 EXAKIT_EXASOL_SCHEDULER_VERSION="${EXAKIT_EXASOL_SCHEDULER_VERSION:-}"
-EXAKIT_EXASOL_SCHEDULER_VERSION_FALLBACK="${EXAKIT_EXASOL_SCHEDULER_VERSION_FALLBACK:-v0.3.1}"
+EXAKIT_EXASOL_SCHEDULER_VERSION_FALLBACK="${EXAKIT_EXASOL_SCHEDULER_VERSION_FALLBACK:-0.3.1}"
 EXAKIT_EXASOL_SCHEDULER_REPO="${EXAKIT_EXASOL_SCHEDULER_REPO:-exasol-labs/exasol-scheduler}"
 EXAKIT_EXASOL_SCHEDULER_HOME="${EXAKIT_EXASOL_SCHEDULER_HOME:-$EXAKIT_HOME/exasol-scheduler}"
 EXAKIT_EXASOL_SCHEDULER_BIN="${EXAKIT_EXASOL_SCHEDULER_BIN:-$EXAKIT_BIN_DIR/exasol-scheduler}"
@@ -54,8 +58,8 @@ EXAKIT_EXASOL_SCHEDULER_LOG="${EXAKIT_EXASOL_SCHEDULER_LOG:-$EXAKIT_LOG_DIR/exas
 EXAKIT_EXASOL_SCHEDULER_PIDFILE="${EXAKIT_EXASOL_SCHEDULER_PIDFILE:-$EXAKIT_EXASOL_SCHEDULER_HOME/exasol-scheduler.pid}"
 EXAKIT_EXASOL_SCHEDULER_USER="${EXAKIT_EXASOL_SCHEDULER_USER:-scheduler_svc}"
 EXAKIT_EXASOL_SCHEDULER_SCHEMA="${EXAKIT_EXASOL_SCHEDULER_SCHEMA:-SCHED}"
-# Names a release tag by hand (tests, or pointing an install at one specific
-# build); empty means "the release versions.json pins".
+# Names an upstream release tag by hand (tests, or pointing an install at one
+# specific build); empty means v<version> for the version being installed.
 EXAKIT_EXASOL_SCHEDULER_RELEASE_TAG="${EXAKIT_EXASOL_SCHEDULER_RELEASE_TAG:-}"
 
 exasol_scheduler_engine_path() {
@@ -67,73 +71,60 @@ exasol_scheduler_log_path() {
 }
 
 # --- version + release resolution --------------------------------------------
+#
+# No <id>_latest hook, on purpose. The scheduler installs from upstream's own
+# release, so the generic lookup reads components.exasol-scheduler.repo in
+# versions.json and answers EXAKIT_VERSION_POLICY=latest the way it does for
+# exapump, and the daily bump workflow proposes new versions together with
+# their digests. The hook existed while the kit republished upstream's builds
+# on a release of its own, when "latest" had to mean "latest the kit had
+# packaged" — that lag was upstream #27.
 
-# exasol_scheduler_latest — the generic <id>_latest hook. Deliberately the
-# version versions.json ADVERTISES, not upstream's newest: only a build the
-# pkg workflow has already published and pinned is installable, so nothing is
-# ever offered before its artifacts and digests exist. Same posture as
-# json-tables. ⇄ twin: Get-ExasolSchedulerLatest.
-exasol_scheduler_latest() {
-    _esl="$(exakit_versions_value components.exasol-scheduler.version 2>/dev/null || true)"
-    [ -n "$_esl" ] || _esl="$EXAKIT_EXASOL_SCHEDULER_VERSION_FALLBACK"
-    printf '%s\n' "$_esl"
+# _exasol_scheduler_advertised_version — what versions.json advertises, or
+# the module's fallback when no document can be read. Plain digits, no
+# leading v: upstream tags its releases v<version>, and the kit stores the
+# version the way every other component does (exapump: 0.13.0, tag v0.13.0).
+_exasol_scheduler_advertised_version() {
+    _esa_v="$(exakit_versions_value components.exasol-scheduler.version 2>/dev/null || true)"
+    [ -n "$_esa_v" ] || _esa_v="$EXAKIT_EXASOL_SCHEDULER_VERSION_FALLBACK"
+    exakit_version_plain "$_esa_v"
 }
 
 _exasol_scheduler_target_version() {
     if [ -n "${EXAKIT_EXASOL_SCHEDULER_VERSION:-}" ]; then
-        printf '%s\n' "$EXAKIT_EXASOL_SCHEDULER_VERSION"
+        exakit_version_plain "$EXAKIT_EXASOL_SCHEDULER_VERSION"
         return 0
     fi
-    exasol_scheduler_latest
+    _exasol_scheduler_advertised_version
 }
 
-# The digest pins describe the ADVERTISED build only; a build chosen by hand
-# reads its own release's published digests instead.
+# The digest pins describe the ADVERTISED version only; a version chosen by
+# hand is verified against the digest upstream publishes beside its asset.
 _exasol_scheduler_pin_applies() {
     [ -n "${EXAKIT_EXASOL_SCHEDULER_RELEASE_TAG:-}" ] && return 1
     [ -z "${EXAKIT_EXASOL_SCHEDULER_VERSION:-}" ] && return 0
-    _esp_adv="$(exakit_versions_value components.exasol-scheduler.version 2>/dev/null || true)"
-    [ -n "$_esp_adv" ] && [ "$_esp_adv" = "$EXAKIT_EXASOL_SCHEDULER_VERSION" ]
+    [ "$(_exasol_scheduler_advertised_version)" = "$(_exasol_scheduler_target_version)" ]
 }
 
-# Where the prebuilt artifacts live: the repository this kit copy came from,
-# so a fork install downloads from the fork. Same resolution as
-# json_tables_mirror_repo.
-exasol_scheduler_mirror_repo() {
-    if [ -n "${EXAKIT_EXASOL_SCHEDULER_MIRROR_REPO:-}" ]; then
-        printf '%s\n' "$EXAKIT_EXASOL_SCHEDULER_MIRROR_REPO"
-        return 0
-    fi
-    _esm_src="$(manifest_get kit.source 2>/dev/null || true)"
-    case "$_esm_src" in
-        */*@*) printf '%s\n' "${_esm_src%@*}"; return 0 ;;
-    esac
-    printf '%s\n' "$EXAKIT_KIT_REPO"
-}
-
+# exasol_scheduler_release_tag — the upstream tag the assets are downloaded
+# from: v<version>, unless EXAKIT_EXASOL_SCHEDULER_RELEASE_TAG names one.
+# ⇄ twin: Get-ExasolSchedulerReleaseTag.
 exasol_scheduler_release_tag() {
     if [ -n "${EXAKIT_EXASOL_SCHEDULER_RELEASE_TAG:-}" ]; then
         printf '%s\n' "$EXAKIT_EXASOL_SCHEDULER_RELEASE_TAG"
         return 0
     fi
-    if _exasol_scheduler_pin_applies; then
-        _esr_pin="$(exakit_versions_value components.exasol-scheduler.release 2>/dev/null || true)"
-        if [ -n "$_esr_pin" ]; then
-            printf '%s\n' "$_esr_pin"
-            return 0
-        fi
-    fi
-    printf 'exasol-scheduler-%s\n' "$(_exasol_scheduler_target_version)"
+    printf 'v%s\n' "$(_exasol_scheduler_target_version)"
 }
 
 # --- platform ----------------------------------------------------------------
 
-# exasol_scheduler_asset — the engine built for THIS machine, by the kit
-# release's own naming (bare binaries, repackaged by the pkg workflow from
-# upstream's archives). Upstream ships every platform the kit runs on —
-# including Intel macOS, which most add-ons lack — so "not applicable" is only
-# ever an exotic architecture. ⇄ twin: Get-ExasolSchedulerAsset.
-exasol_scheduler_asset() {
+# _exasol_scheduler_platform — the <os>-<arch> token upstream names its
+# archives by, which is also the key versions.json pins the digest under.
+# Upstream ships every platform the kit runs on — including Intel macOS, which
+# most add-ons lack — so "not applicable" is only ever an exotic architecture.
+# ⇄ twin: Get-ExasolSchedulerPlatform.
+_exasol_scheduler_platform() {
     if command -v detect_os >/dev/null 2>&1; then
         _esa_raw_os="$(detect_os 2>/dev/null || true)"
         _esa_raw_arch="$(detect_arch 2>/dev/null || true)"
@@ -153,11 +144,19 @@ exasol_scheduler_asset() {
         x86_64|amd64)   _esa_arch="x86_64" ;;
         *)              return 1 ;;
     esac
-    printf 'exasol-scheduler-%s-%s\n' "$_esa_os" "$_esa_arch"
+    printf '%s-%s\n' "$_esa_os" "$_esa_arch"
+}
+
+# exasol_scheduler_asset — upstream's archive for THIS machine:
+# exasol_scheduler-<tag>-<os>-<arch>.tar.gz (a .zip on Windows), the bare
+# engine inside. ⇄ twin: Get-ExasolSchedulerAsset.
+exasol_scheduler_asset() {
+    _esa_platform="$(_exasol_scheduler_platform)" || return 1
+    printf 'exasol_scheduler-%s-%s.tar.gz\n' "$(exasol_scheduler_release_tag)" "$_esa_platform"
 }
 
 exasol_scheduler_applicable() {
-    exasol_scheduler_asset >/dev/null 2>&1
+    _exasol_scheduler_platform >/dev/null 2>&1
 }
 
 exasol_scheduler_applicable_reason() {
@@ -182,29 +181,49 @@ exasol_scheduler_installed_version() {
     [ -x "$(exasol_scheduler_engine_path)" ] || return 1
     _esv="$(manifest_get components.exasol_scheduler.version 2>/dev/null || true)"
     [ -n "$_esv" ] || return 1
-    printf '%s\n' "$_esv"
+    # Installs made while the kit republished upstream's builds recorded the
+    # tag (v0.2, v0.3.1). The plain form is what versions.json advertises now,
+    # so the two compare equal and nothing is re-installed for the rename.
+    exakit_version_plain "$_esv"
 }
 
 # --- verified download --------------------------------------------------------
 
 _exasol_scheduler_asset_url() {
     printf 'https://github.com/%s/releases/download/%s/%s\n' \
-        "$(exasol_scheduler_mirror_repo)" "$(exasol_scheduler_release_tag)" "$1"
+        "$EXAKIT_EXASOL_SCHEDULER_REPO" "$(exasol_scheduler_release_tag)" "$1"
 }
 
-# _exasol_scheduler_digest <asset> — the sha256 to verify against: the pin in
-# versions.json for the advertised build (no network, cannot be rate limited),
-# else the digest GitHub publishes for the asset on the release being
-# installed. An unverifiable download is refused either way.
+# _exasol_scheduler_digest <asset> — the sha256 to verify against, in the
+# order exapump uses: the pin in versions.json for the advertised version (no
+# network, cannot be rate limited; the pins are upstream's own digests, copied
+# by the bump workflow and re-checked by CI before they can merge), else the
+# <asset>.sha256 file upstream publishes beside every archive, else the digest
+# GitHub's release API reports for the asset. An unverifiable download is
+# refused either way. ⇄ twin: Get-ExasolSchedulerDigest.
 _exasol_scheduler_digest() {
-    _esd_key="${1#exasol-scheduler-}"
-    _esd_key="$(printf '%s' "$_esd_key" | sed 's/\.exe$//')"
-    if _exasol_scheduler_pin_applies; then
-        _esd_pin="$(exakit_versions_value "components.exasol-scheduler.sha256.$_esd_key" 2>/dev/null || true)"
-        if [ -n "$_esd_pin" ]; then
+    _esd_platform="$(_exasol_scheduler_platform 2>/dev/null || true)"
+    if _exasol_scheduler_pin_applies && [ -n "$_esd_platform" ]; then
+        _esd_pin="$(exakit_versions_value "components.exasol-scheduler.sha256.$_esd_platform" 2>/dev/null || true)"
+        case "$_esd_pin" in
+            *[!0-9a-f]*) _esd_pin="" ;;
+        esac
+        if [ -n "$_esd_pin" ] && [ "${#_esd_pin}" -eq 64 ]; then
             printf '%s\n' "$_esd_pin"
             return 0
         fi
+    fi
+    # Upstream's own checksum file: "<sha256>  <asset>", one line. No token
+    # and no API quota involved, so this is the answer for a hand-chosen
+    # version on a machine that cannot reach api.github.com.
+    _esd_side="$(curl -fsSL --proto '=https' --proto-redir '=https' --retry 3 --connect-timeout 15 \
+        "$(_exasol_scheduler_asset_url "$1").sha256" 2>/dev/null | awk 'NR == 1 { print $1 }')"
+    case "$_esd_side" in
+        *[!0-9a-f]*) _esd_side="" ;;
+    esac
+    if [ -n "$_esd_side" ] && [ "${#_esd_side}" -eq 64 ]; then
+        printf '%s\n' "$_esd_side"
+        return 0
     fi
     exakit_can_run_python || return 1
     # --proto/--proto-redir, and here it matters most: this call attaches
@@ -213,7 +232,7 @@ _exasol_scheduler_digest() {
     # and the response it fetches decides which digest is checked.
     _esd_json="$(curl -sSL --proto '=https' --proto-redir '=https' --retry 3 --connect-timeout 15 \
         ${GITHUB_TOKEN:+-H "Authorization: Bearer $GITHUB_TOKEN"} \
-        "https://api.github.com/repos/$(exasol_scheduler_mirror_repo)/releases/tags/$(exasol_scheduler_release_tag)" \
+        "https://api.github.com/repos/$EXAKIT_EXASOL_SCHEDULER_REPO/releases/tags/$(exasol_scheduler_release_tag)" \
         2>/dev/null || true)"
     [ -n "$_esd_json" ] || return 1
     printf '%s' "$_esd_json" | run_python -c '
@@ -235,14 +254,14 @@ _exasol_scheduler_fetch_verified() {
     if [ -z "$_esf_expected" ]; then
         # The escape hatch the other components already carry, named in the
         # refusal rather than left as folklore: a refusal that offers only a
-        # retry is a dead end on an offline machine or a fork whose packaging
-        # workflow has not run. ⇄ twin: Get-ExasolSchedulerVerifiedAsset.
+        # retry is a dead end on an offline machine.
+        # ⇄ twin: Get-ExasolSchedulerVerifiedAsset.
         if [ "${EXAKIT_ALLOW_UNVERIFIED_EXASOL_SCHEDULER:-0}" = "1" ]; then
             warn "No digest available for $_esf_asset — proceeding WITHOUT checksum verification (EXAKIT_ALLOW_UNVERIFIED_EXASOL_SCHEDULER=1)."
             return 0
         fi
         rm -f "$_esf_dest"
-        warn "No checksum is available for $_esf_asset; refusing an unverified artifact. Usually the release is still publishing or the GitHub API was unreachable - retry with: exakit update exasol-scheduler. Add its digest to versions.json (components.exasol-scheduler.sha256.<platform>) or, at your own risk, override with EXAKIT_ALLOW_UNVERIFIED_EXASOL_SCHEDULER=1."
+        warn "No checksum is available for $_esf_asset; refusing an unverified artifact. Usually the release is still publishing or github.com was unreachable - retry with: exakit update exasol-scheduler. Add its digest to versions.json (components.exasol-scheduler.sha256.<platform>) or, at your own risk, override with EXAKIT_ALLOW_UNVERIFIED_EXASOL_SCHEDULER=1."
         return 1
     fi
     _esf_actual="$(sha256_of "$_esf_dest")"
@@ -252,6 +271,27 @@ _exasol_scheduler_fetch_verified() {
         return 1
     fi
     ok "Checksum verified: $_esf_asset"
+}
+
+# _exasol_scheduler_unpack <archive> <engine-dest> — the bare engine out of
+# upstream's archive. Found by name, never at an assumed path: the archive
+# layout is upstream's to change, and a build that stopped carrying the
+# binary is refused rather than installed as an empty file.
+# ⇄ twin: Expand-ExasolSchedulerArchive.
+_exasol_scheduler_unpack() {
+    _esx_dir="$(mktemp -d "${TMPDIR:-/tmp}/exakit-scheduler-unpack.XXXXXX")" || return 1
+    if ! tar -xzf "$1" -C "$_esx_dir" >>"${EXAKIT_LOG_FILE:-/dev/null}" 2>&1; then
+        rm -rf "$_esx_dir"
+        return 1
+    fi
+    _esx_bin="$(find "$_esx_dir" -type f -name exasol_scheduler | head -1)"
+    if [ -z "$_esx_bin" ] || [ ! -s "$_esx_bin" ]; then
+        rm -rf "$_esx_dir"
+        return 1
+    fi
+    install -m 755 "$_esx_bin" "$2" || { rm -rf "$_esx_dir"; return 1; }
+    rm -rf "$_esx_dir"
+    return 0
 }
 
 # --- the dedicated database user ----------------------------------------------
@@ -491,9 +531,14 @@ exasol_scheduler_install() {
         _exasol_scheduler_not_installed "could not create a temporary download directory"
         return 1
     }
-    if ! _exasol_scheduler_fetch_verified "$_esi_asset" "$_esi_tmp/engine"; then
+    if ! _exasol_scheduler_fetch_verified "$_esi_asset" "$_esi_tmp/$_esi_asset"; then
         rm -rf "$_esi_tmp"
-        _exasol_scheduler_not_installed "the prebuilt scheduler binary ($_esi_asset) could not be downloaded or verified (see log). The release: $(exasol_scheduler_release_tag) in $(exasol_scheduler_mirror_repo)"
+        _exasol_scheduler_not_installed "the prebuilt scheduler archive ($_esi_asset) could not be downloaded or verified (see log). The release: $(exasol_scheduler_release_tag) in $EXAKIT_EXASOL_SCHEDULER_REPO"
+        return 1
+    fi
+    if ! _exasol_scheduler_unpack "$_esi_tmp/$_esi_asset" "$_esi_tmp/engine"; then
+        rm -rf "$_esi_tmp"
+        _exasol_scheduler_not_installed "no exasol_scheduler binary could be unpacked from $_esi_asset (see log)"
         return 1
     fi
     mkdir -p "$EXAKIT_EXASOL_SCHEDULER_HOME/libexec" 2>/dev/null || {
@@ -694,10 +739,7 @@ exasol_scheduler_update() {
         # Same version can still need repair: regenerate the launcher so a
         # DSN or credential change since the install is picked up.
         exasol_scheduler_write_launcher >/dev/null 2>&1 || true
-        # Under EXAKIT_VERSION_POLICY=latest this line read as upstream's
-        # verdict while the version came from the kit's own pin; the note
-        # says so, and is empty under the manifest policy.
-        ok "exasol-scheduler is already current ($_esu_current)$(exakit_pinned_latest_note exasol-scheduler)"
+        ok "exasol-scheduler is already current ($_esu_current)"
         return 0
     fi
     info "Updating exasol-scheduler ${_esu_current:-not installed} -> $_esu_available"
