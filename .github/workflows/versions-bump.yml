@@ -287,6 +287,50 @@ jobs:
               bumped[addon_name] = (addon["version"], winner)
               addon["version"] = winner
 
+          # --- exasol-scheduler: newest stable upstream release + five digests ---
+          # Installs straight from upstream's release (exapump's model). Upstream
+          # tags v<version> with two or three numbers (v0.2, v0.3.1); the version
+          # is stored plain and the tag is rebuilt as v<version>. The digests are
+          # upstream's own archives hashed from the real files, and a version
+          # whose five archives cannot all be fetched is left alone rather than
+          # advertised with stale digests (the install refuses on mismatch).
+          scheduler = components.get("exasol-scheduler") or {}
+          if scheduler.get("version"):
+              repo = scheduler.get("repo", "exasol-labs/exasol-scheduler")
+              body, reason = fetch("https://api.github.com/repos/%s/releases?per_page=100" % repo,
+                                   token=True)
+              if body is None:
+                  notes.append("- `exasol-scheduler`: GitHub did not answer (%s), left alone" % reason)
+              else:
+                  shape = re.compile(r"^v(\d+(?:\.\d+){1,2})$")
+                  candidates = []
+                  for release in body:
+                      if release.get("draft") or release.get("prerelease"):
+                          continue
+                      match = shape.match(release.get("tag_name") or "")
+                      if match:
+                          candidates.append(match.group(1))
+                  winner = pick(candidates, scheduler["version"], "exasol-scheduler", semver_key)
+                  if winner:
+                      digests = {}
+                      failed = None
+                      for platform in sorted(scheduler.get("sha256") or {}):
+                          asset = "exasol_scheduler-v%s-%s.%s" % (
+                              winner, platform, "zip" if platform.startswith("windows-") else "tar.gz")
+                          payload, why = fetch("https://github.com/%s/releases/download/v%s/%s"
+                                               % (repo, winner, asset), raw=True)
+                          if payload is None:
+                              failed = "%s (%s)" % (asset, why)
+                              break
+                          digests[platform] = hashlib.sha256(payload).hexdigest()
+                      if failed:
+                          notes.append("- `exasol-scheduler`: %s is available but %s could not be "
+                                       "downloaded, so it was left alone" % (winner, failed))
+                      else:
+                          bumped["exasol-scheduler"] = (scheduler["version"], winner)
+                          scheduler["version"] = winner
+                          scheduler["sha256"] = digests
+
           # --- the constants that must move with the manifest -------------------
           # A version lives in more than one place. mcp/runtime/exakit.py's
           # DEFAULT_MCP_VERSION is asserted equal to components.mcp.version by the
@@ -405,6 +449,10 @@ jobs:
                   summary.append("")
                   summary.append("The five exapump `sha256` digests were recomputed from the "
                                  "downloaded release assets.")
+              if "exasol-scheduler" in bumped:
+                  summary.append("")
+                  summary.append("The five exasol-scheduler `sha256` digests were recomputed from "
+                                 "upstream's downloaded release archives.")
               if touched:
                   summary.append("")
                   summary.append("Constants moved with the manifest, so a fully offline install "

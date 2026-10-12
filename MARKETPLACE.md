@@ -539,8 +539,8 @@ Hard rules for both files (CI enforces them):
 
 `repo` for a GitHub-release-installed tool, `package` for a PyPI one — that
 field is what the generic upstream lookup (`EXAKIT_VERSION_POLICY=latest`) and
-the auto-bump workflow read. A tool the kit repackages itself (json-tables,
-exasol-scheduler) carries neither: its `my_tool_latest` hook answers from
+the auto-bump workflow read. A tool the kit repackages itself (json-tables)
+carries neither: its `my_tool_latest` hook answers from
 `versions.json`, `exakit_component_latest` asks that hook *first*, so a `repo`
 beside it would never be read, and `exakit_component_latest_source` reports
 such a tool as `pinned` — which is how the latest-policy screen names it
