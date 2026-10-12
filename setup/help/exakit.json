@@ -124,20 +124,23 @@
     },
     {
       "command": "start",
-      "options": "",
-      "summary": "Start the database and every add-on service.",
-      "description": "Starts everything the kit runs, deploying the database first if it has never been deployed.",
+      "options": "[<service>]",
+      "summary": "Start the database and every add-on service, or one of them.",
+      "description": "Starts everything the kit runs, deploying the database first if it has never been deployed. Name a service to start only that one: database, or an installed add-on that runs a service (exakit status lists them under services). An add-on needs the database, so exakit start <add-on> refuses while the database is stopped and names the bare command. An unknown or uninstalled service is refused (exit 2) and nothing is started.",
       "examples": [
-        "exakit start"
+        "exakit start",
+        "exakit start exasol-scheduler"
       ]
     },
     {
       "command": "stop",
-      "options": "",
-      "summary": "Stop the add-on services and the database.",
-      "description": "Your data is kept. Bring it back with exakit start.",
+      "options": "[<service>]",
+      "summary": "Stop the add-on services and the database, or one of them.",
+      "description": "Your data is kept. Bring it back with exakit start. Name a service to stop only that one - exakit stop exasol-scheduler leaves the database and every other add-on running; the bare command is the only form that stops the database without naming it. An unknown or uninstalled service is refused (exit 2) and nothing is stopped. A stopped add-on that is registered for automatic start comes back at the next login; exakit autostart is where that is turned off.",
       "examples": [
-        "exakit stop"
+        "exakit stop",
+        "exakit stop exasol-scheduler",
+        "exakit stop database"
       ]
     },
     {

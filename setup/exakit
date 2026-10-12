@@ -22,8 +22,9 @@
 #                       installed / status / remedy / skills, nothing else
 #   guide               friendly walkthrough: connect AI clients (MCP), SQL
 #                       clients (DBeaver, DbVisualizer), and Python (pyexasol)
-#   start               start the local database and every add-on service
-#   stop                stop them again
+#   start [<service>]   start the local database and every add-on service,
+#                       or one of them by id
+#   stop [<service>]    stop them again, or one of them by id
 #   repair-runtime [--yes]  rebuild a database that cannot be started (the
 #                       launcher reports it interrupted and every start fails);
 #                       DESTRUCTIVE — the deployment is replaced and its data
@@ -880,15 +881,43 @@ EXAKIT_CS_SOFT
     exit 0
 }
 
-cmd_start() {
+# _service_scope <verb> [id] — the optional service id a `exakit start|stop`
+# was given, validated BEFORE anything runs, left in EXAKIT_SERVICE_SCOPE
+# (empty for the bare form).
+#
+# Called in the main shell, never through $(...): reject() exits, and an exit
+# inside a command substitution ends only the subshell - the caller would then
+# run the bare form on the very input it had just refused, which for `stop` is
+# the database going down.
+#
+# Shape first, then the install check, then the registry: bad input answers 2
+# on any machine (cmd_autostart makes the same argument), and only an installed
+# kit can say which services it has. An id that is a known add-on gets the
+# reason it cannot be acted on rather than "unknown".
+_service_scope() {
+    _ssc_verb="$1"; shift
+    EXAKIT_SERVICE_SCOPE=""
+    [ "$#" -gt 0 ] || return 0
+    [ "$#" -eq 1 ] || reject "$_ssc_verb takes at most one service id — exakit $_ssc_verb <service>"
     _require_install
-    # Logging FIRST: run_logged only routes the launcher's raw JSON stream to
-    # the logfile when one exists — without this, `exakit start` interleaved
-    # multi-line launcher logs with its own [ok] lines on stdout.
-    exakit_init_logging 2>/dev/null || true
-    # Everything the kit runs, database first: self-heal semantics for the
-    # runtime (a stopped one is started, a missing one deployed — `exakit
-    # start` promises a running database), then every add-on service.
+    _ssc_ids="$(exakit_service_ids | tr '\n' ' ')"
+    case " $_ssc_ids " in
+        *" $1 "*) EXAKIT_SERVICE_SCOPE="$1"; return 0 ;;
+    esac
+    if _exakit_addon_registered "$1"; then
+        if exakit_marketplace_addon_installed "$1" 2>/dev/null; then
+            reject "$1 is installed but runs no service, so there is nothing to $_ssc_verb."
+        fi
+        reject "$1 is not installed, so there is nothing to $_ssc_verb. Add it with: exakit marketplace $1"
+    fi
+    reject "Unknown service '$1' for $_ssc_verb (services on this machine: $(printf '%s' "$_ssc_ids" | sed 's/ $//; s/ /, /g'))."
+}
+
+# _start_database — the database half of `exakit start`: self-heal semantics
+# for the runtime (a stopped one is started, a missing one deployed — `exakit
+# start` promises a running database). Shared by the bare form and by
+# `exakit start database`, so the two cannot drift.
+_start_database() {
     case "$(_runtime_type)" in
         personal)
             if personal_deployment_running 2>/dev/null; then
@@ -933,10 +962,6 @@ cmd_start() {
             ;;
         *)        exakit_ensure_runtime_running deploy ;;
     esac
-    for _start_id in $(exakit_service_ids); do
-        [ "$_start_id" = "database" ] && continue
-        exakit_service_start "$_start_id" || true
-    done
     # The database is up, so a note left by an earlier start that could not
     # ("Port 8563 is held by another process ...") is no longer true. Only a
     # runtime note goes; an install-step note is a different fault and stays.
@@ -944,9 +969,54 @@ cmd_start() {
     return 0
 }
 
+# cmd_start [service] — everything the kit runs, or one named service.
+cmd_start() {
+    _service_scope start "$@"
+    _require_install
+    # Logging FIRST: run_logged only routes the launcher's raw JSON stream to
+    # the logfile when one exists — without this, `exakit start` interleaved
+    # multi-line launcher logs with its own [ok] lines on stdout.
+    exakit_init_logging 2>/dev/null || true
+    if [ -n "$EXAKIT_SERVICE_SCOPE" ]; then
+        _exakit_log_file "INFO  start scoped to $EXAKIT_SERVICE_SCOPE"
+        if [ "$EXAKIT_SERVICE_SCOPE" = "database" ]; then
+            _start_database
+            return $?
+        fi
+        # One add-on was asked for, so only that one is touched: the database
+        # is NOT started on its behalf. An add-on talks to the database, and
+        # started against a stopped one it would only sit there failing to
+        # connect (the scheduler eventually gives up) - so say what is missing
+        # and name the command that brings everything up, and record nothing:
+        # this is a refusal, not a failed step.
+        if ! exakit_runtime_is_running 2>/dev/null; then
+            warn "The database is not running, and $EXAKIT_SERVICE_SCOPE needs it. Start everything with: exakit start"
+            return 1
+        fi
+        exakit_service_start "$EXAKIT_SERVICE_SCOPE"
+        return $?
+    fi
+    # Everything the kit runs, database first, then every add-on service.
+    _start_database
+    for _start_id in $(exakit_service_ids); do
+        [ "$_start_id" = "database" ] && continue
+        exakit_service_start "$_start_id" || true
+    done
+    return 0
+}
+
+# cmd_stop [service] — the add-on services and the database, or one named
+# service. Bare `exakit stop` is the only form that touches the database
+# without naming it.
 cmd_stop() {
+    _service_scope stop "$@"
     _require_install
     exakit_init_logging 2>/dev/null || true
+    if [ -n "$EXAKIT_SERVICE_SCOPE" ]; then
+        _exakit_log_file "INFO  stop scoped to $EXAKIT_SERVICE_SCOPE"
+        exakit_service_stop "$EXAKIT_SERVICE_SCOPE"
+        return $?
+    fi
     # Add-on services first: they talk to the database, so they should be down
     # before it goes.
     for _stop_id in $(exakit_service_ids); do
@@ -2435,8 +2505,12 @@ case "${1:-help}" in
                   *) _with_notice cmd_info ;;
               esac ;;
     guide)    shift; _exakit_refuse_unknown_options guide "" "$@"; _with_notice exakit_guide ;;
-    start)    shift; _exakit_refuse_unknown_options start "" "$@"; _with_notice cmd_start ;;
-    stop)     shift; _exakit_refuse_unknown_options stop "" "$@"; _with_notice cmd_stop ;;
+    # The arguments travel on. The dash-only guard let a plain word through and
+    # the arm dropped it, so `exakit stop exasol-scheduler` ran the bare form
+    # and stopped the database - it only LOOKED scoped because one add-on was
+    # installed. cmd_start/cmd_stop validate the id themselves.
+    start)    shift; _exakit_refuse_unknown_options start "" "$@"; _with_notice cmd_start "$@" ;;
+    stop)     shift; _exakit_refuse_unknown_options stop "" "$@"; _with_notice cmd_stop "$@" ;;
     repair-runtime) shift; cmd_repair_runtime "$@" ;;
     migrate)  shift; cmd_migrate "$@" ;;
     autostart) shift; _with_notice cmd_autostart "$@" ;;

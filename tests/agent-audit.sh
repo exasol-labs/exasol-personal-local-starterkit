@@ -99,7 +99,9 @@ _conf="$( (
     personal_status
     personal_deployment_running && echo running || echo not-running ) 2>&1 | tr '\n' ' ')"
 check "status is conflict, and the start probe says not running" "conflict not-running " "$_conf"
-has "cmd_start refuses on conflict with the remedy" "held by another process" "$(sed -n '/^cmd_start()/,/^}/p' "$CLI")"
+# The database half of cmd_start lives in _start_database (shared with
+# `exakit start database`), so the slice covers both.
+has "cmd_start refuses on conflict with the remedy" "held by another process" "$(sed -n '/^_start_database()/,/^}/p; /^cmd_start()/,/^}/p' "$CLI")"
 has "status --json names the conflict remedy" "another process is listening on the database port" "$(cat "$CLI")"
 
 echo "4. info --json carries the contract keys:"
@@ -241,7 +243,7 @@ exakit_note_failure "the AI client configuration did not finish (see the log)"
 exakit_clear_runtime_failure_note
 check "an install-step note stays" "present" "$([ -f "$EXAKIT_HOME/.last-failure" ] && echo present || echo absent)"
 exakit_clear_failure_note
-has "cmd_start calls it once the database runs" "exakit_clear_runtime_failure_note" "$(sed -n '/^cmd_start()/,/^}/p' "$CLI")"
+has "cmd_start calls it once the database runs" "exakit_clear_runtime_failure_note" "$(sed -n '/^_start_database()/,/^}/p; /^cmd_start()/,/^}/p' "$CLI")"
 
 echo "R2-5. exakit sql --json is an option, and the gate still runs first:"
 check "sql --json 'SELCT 1' exits 2 (typo gate before any connection)" "2" "$(bash "$CLI" sql --json 'SELCT 1' >/dev/null 2>&1; echo $?)"
