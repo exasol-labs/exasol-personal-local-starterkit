@@ -42,15 +42,15 @@
       "severity": "normal"
     },
     "exasol-scheduler": {
-      "version": "v0.2",
-      "release": "exasol-scheduler-v0.2",
+      "version": "v0.3.1",
+      "release": "exasol-scheduler-v0.3.1",
       "severity": "normal",
       "sha256": {
-        "linux-arm64": "32de1c7bf55b7d3a538198300e5359e42ea883209c4c46d04f86f280e834c7e1",
-        "linux-x86_64": "9092a62c35ca4531e3772fcad559decc8c7097063a26b0bf4d14e071399c0fb9",
-        "macos-arm64": "ee6901768de50ef83af3ee8df07068310310631cd73b53ce9c7aba36e643757c",
-        "macos-x86_64": "77574a75b5cf3cf6c1c90e5c3a5567689c7ff45876e48f3b13d2daa2acbd895b",
-        "windows-x86_64": "349bdf070c2dd78eadf5c67c5340392a04d1abbab56cb562d2e8cc91b777a207"
+        "linux-arm64": "fcd8f6460c381b2d15e03033e5d18c2e2b34f2050395fcf8ff0a95623b026c60",
+        "linux-x86_64": "1c7662d25a32bc7e5757145641d290597f3c6d002f5d8aff1f3a0765df1615a0",
+        "macos-arm64": "552b04a98af8d81c5c428f9792e73b1eed161dd6b469fa54def035413d7b45f0",
+        "macos-x86_64": "f727ca4e4d1d77ae6937ed9802494107cd08df66d48985b93ed061ea66271404",
+        "windows-x86_64": "d66a8ba7e4e95680f6a8034574a49ea976accc8b396731aaec8b8fa1b8a39c81"
       }
     },
     "exasol-vscode": {
