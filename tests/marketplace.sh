@@ -2044,6 +2044,38 @@ check "the JSON form is valid JSON" "yes" \
     "$(printf '%s' "$_mm_listjson" | python3 -m json.tool >/dev/null 2>&1 && echo yes || echo no)"
 has "and carries a status per add-on" '"status": ' "$_mm_listjson"
 has "and an installed boolean"        '"installed": ' "$_mm_listjson"
+# THE LISTING POINTS AT THE REFERENCE. A row was id/status/installed/version:
+# a list of names and numbers, with the help document that explains each
+# add-on (repository, docs link, what it installs) reachable only by knowing
+# `exakit help <id>` exists - and nothing said so. Every row now carries the
+# repository and the documentation URL from its help document, and both
+# surfaces name the help command.
+has "every JSON row names its repository"     '"repo": "exasol-labs/dash-server"' "$_mm_listjson"
+has "...and its documentation link"          '"docs": "https://github.com/exasol-labs/dash-server#readme"' "$_mm_listjson"
+check "no row is left without the two keys" "0" \
+    "$(printf '%s' "$_mm_listjson" | python3 -c 'import json,sys
+rows = json.load(sys.stdin)["addons"]
+print(sum(1 for r in rows if "repo" not in r or "docs" not in r))' 2>/dev/null)"
+check "and the links are null or https" "0" \
+    "$(printf '%s' "$_mm_listjson" | python3 -c 'import json,sys
+rows = json.load(sys.stdin)["addons"]
+print(sum(1 for r in rows if r["docs"] is not None and not str(r["docs"]).startswith("https://")))' 2>/dev/null)"
+has "the plain list names the help command"  "exakit help <id>" "$_mm_list"
+has "...and so does the interactive menu"    'info "Details on any add-on: exakit help <id>"' "$(cat "$ROOT/setup/lib/common.sh")"
+# The data the row reads: every help document carries a docs link, so no
+# add-on answers null on a machine with the kit copy on it.
+_mm_docs_missing="$(python3 -c 'import json,glob,os
+missing = []
+for path in sorted(glob.glob("'"$ROOT"'/setup/help/*.json")):
+    doc = json.load(open(path, encoding="utf-8"))
+    docs = doc.get("docs")
+    if not (isinstance(docs, str) and docs.startswith("https://")):
+        missing.append(os.path.basename(path))
+print(" ".join(missing))' 2>/dev/null)"
+check "every help document carries an https docs link" "" "$_mm_docs_missing"
+has "the Windows row carries the repository"   '$entry.repo = $repo' "$(cat "$ROOT/setup/lib/exakit-common.ps1")"
+has "...and the documentation link"            '$entry.docs = $docs' "$(cat "$ROOT/setup/lib/exakit-common.ps1")"
+has "...and the Windows list names the help command" 'Details on any add-on: exakit help <id>' "$(cat "$ROOT/setup/lib/exakit-common.ps1")"
 
 echo
 echo "the latest policy names the add-ons it never looks up (upstream #27):"

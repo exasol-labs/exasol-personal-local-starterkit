@@ -6,6 +6,7 @@
   "tagline": "The local Exasol database, run by its own launcher.",
   "role": "The kit's only database runtime. The Exasol launcher deploys it locally on macOS, Linux (through Podman, native or inside WSL) and Windows x86_64; Windows arm64 is not supported and the installer says so and exits. In WSL the launcher takes its Linux path, so Podman must be installed inside the distro.",
   "repo": "exasol/exasol-personal",
+  "docs": "https://github.com/exasol/exasol-personal#readme",
   "binary": "~/.local/bin/exasol",
   "deployment_dir": "~/.exasol/personal/deployments/default",
   "dsn": "127.0.0.1:8563",

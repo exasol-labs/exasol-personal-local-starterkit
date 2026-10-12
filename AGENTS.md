@@ -170,11 +170,12 @@ What an agent needs to know:
 
 ## Marketplace add-ons (optional)
 
-Optional tools live behind `exakit marketplace`, never in the install flow. Interactively it is a checkbox menu (Space selects, Enter installs); without a terminal it installs nothing. An agent looks with `exakit marketplace --list` (`--json` for scripts), installs by naming ids or answering with the environment, and removes one add-on with `exakit uninstall <id> --yes`:
+Optional tools live behind `exakit marketplace`, never in the install flow. Interactively it is a checkbox menu (Space selects, Enter installs); without a terminal it installs nothing. An agent looks with `exakit marketplace --list` (`--json` for scripts), installs by naming ids or answering with the environment, and removes one add-on with `exakit uninstall <id> --yes`. Each `--json` row carries `id`, `status`, `installed`, `version`, `repo` (owner/name) and `docs` (the documentation URL; both `null` when unknown) — and the full offline reference for any add-on, with what it needs, what it installs and how to operate it, is `exakit help <id>`:
 
 ```bash
 exakit marketplace --list                                  # read-only: every add-on and its state
-exakit marketplace --json                                  # the same, machine-readable
+exakit marketplace --json                                  # the same, machine-readable: + repo and docs per row
+exakit help dash-server                                    # the add-on's full reference, offline
 exakit marketplace dash-server                             # install exactly this one
 EXAKIT_MARKETPLACE_ADDONS=dash-server exakit marketplace   # ids csv, or all / none
 exakit uninstall json-tables --yes                         # remove one add-on, nothing else
