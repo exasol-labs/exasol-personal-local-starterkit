@@ -4315,6 +4315,19 @@ function Get-ExakitKitSkillNames {
 
 # Show-ExakitSkills - what skills this kit carries and whether each one has
 # reached the agents' discovery folders.
+# Get-ExakitSkillsSummaryLine - the one sentence every skill count is read
+# against, each number named. Zero buckets are left out rather than printed,
+# so a healthy machine reads "13 installed, 13 in this kit" and not a row of
+# zeros. Twin of exakit_skills_summary_line (common.sh).
+function Get-ExakitSkillsSummaryLine {
+    param([int]$Installed, [int]$WithAddons, [int]$NotPlaced, [int]$Total)
+    $line = "$Installed installed"
+    if ($WithAddons -eq 1) { $line = "$line, 1 arrives with its add-on" }
+    elseif ($WithAddons -gt 1) { $line = "$line, $WithAddons arrive with their add-ons" }
+    if ($NotPlaced -gt 0) { $line = "$line, $NotPlaced not placed" }
+    return "$line, $Total in this kit"
+}
+
 function Show-ExakitSkills {
     param([switch]$Json)
     if (-not (Get-ExakitSkillsDir)) {
@@ -4333,12 +4346,19 @@ function Show-ExakitSkills {
     # following `next` looped. Give the case its own state, name the add-on that
     # owns it, and leave it out of the pending count the advice is computed
     # from. Twin of the same branch in exakit_skills_list (common.sh).
+    # The same three buckets as exakit_skills_list, so the labelled tally and
+    # the --json counts agree on both halves: installed, waiting for an add-on
+    # (a half-placed copy of one is the same case - skills-install will not
+    # touch it, installing the add-on places it whole), and not placed.
     $entries = @()
     $pending = 0
+    $placed = 0
+    $gated = 0
     foreach ($row in $rows) {
         $state = Get-ExakitSkillState -Id $row.Id
         $owner = Get-ExakitSkillGatingAddon -Id $row.Id
-        if ($state -eq "available" -and $owner) {
+        if ($state -ne "installed" -and $owner) {
+            $gated++
             $entries += [pscustomobject]@{
                 name = $row.Id; state = "needs-addon"; addon = $owner
                 remedy = "exakit marketplace $owner"; summary = $row.Summary
@@ -4346,7 +4366,7 @@ function Show-ExakitSkills {
             }
             continue
         }
-        if ($state -ne "installed") { $pending++ }
+        if ($state -ne "installed") { $pending++ } else { $placed++ }
         $entries += [pscustomobject]@{ name = $row.Id; state = $state; summary = $row.Summary; panel = $state }
     }
 
@@ -4368,6 +4388,13 @@ function Show-ExakitSkills {
         $skjDoc = [ordered]@{
             # `panel` is the human column only; it never reaches the contract.
             skills = @($entries | Select-Object -Property * -ExcludeProperty panel)
+            # Four labelled counts, installed + needs_addon + missing = total:
+            # the installer's sentence, the folders on disk and this listing
+            # each counted something different and said so nowhere. Twin of
+            # the counts object in exakit_skills_list --json.
+            counts = [ordered]@{
+                installed = $placed; needs_addon = $gated; missing = $skjMissing; total = $rows.Count
+            }
             installed_version = $(if ($skjHave) { "$skjHave" } else { $null })
             advertised_version = $(if ($skjWant) { "$skjWant" } else { $null })
             status = $skjStatus
@@ -4382,6 +4409,10 @@ function Show-ExakitSkills {
     foreach ($entry in $entries) {
         Write-ExakitPanelLine ("{0,-26} {1,-22} {2}" -f $entry.name, $entry.panel, $entry.summary)
     }
+    Write-ExakitPanelLine ""
+    # What the rows add up to, every number labelled: the table alone left a
+    # reader counting rows against the installer's sentence.
+    Write-ExakitPanelLine (Get-ExakitSkillsSummaryLine -Installed $placed -WithAddons $gated -NotPlaced $pending -Total $rows.Count)
     # Stale beats pending in the advice: copies that exist but predate a kit
     # update are the case a user cannot see for themselves, and the remedy is
     # the same command either way.
@@ -4416,6 +4447,7 @@ function Install-ExakitSkills {
     if (-not (Test-Path $skillsSrc)) { Warn2 "No skills\ directory in this kit build yet - nothing to install."; return $false }
 
     $installed = 0
+    $gated = 0
     foreach ($skillDir in (Get-ChildItem -Path $skillsSrc -Directory -ErrorAction SilentlyContinue)) {
         if (-not (Test-Path (Join-Path $skillDir.FullName "SKILL.md"))) { continue }
         # Frontmatter that does not parse is skipped HERE as well as in the
@@ -4430,8 +4462,9 @@ function Install-ExakitSkills {
         # given triggers for three tools they do not have - and one who installs
         # an add-on later gets its skill as part and parcel of that install. On a
         # refresh this also keeps the add-ons you DO have current without
-        # resurrecting the ones you removed.
-        if (-not (Test-ExakitSkillWanted -Path (Join-Path $skillDir.FullName "SKILL.md"))) { continue }
+        # resurrecting the ones you removed. Counted, so the closing sentence
+        # can say where the rest of the set is.
+        if (-not (Test-ExakitSkillWanted -Path (Join-Path $skillDir.FullName "SKILL.md"))) { $gated++; continue }
         $name = $skillDir.Name
         Copy-ExakitSkill -Source $skillDir.FullName -Name $name
         # The names go to the logfile, not the screen: nine ticked lines say
@@ -4440,8 +4473,17 @@ function Install-ExakitSkills {
         $installed++
     }
     if ($installed -eq 0) { Warn2 "No SKILL.md files found under $skillsSrc - nothing to install."; return $false }
-    if ($installed -eq 1) { $skillUnit = "AI skill" } else { $skillUnit = "AI skills" }
-    Ok "Installed $installed $skillUnit for Claude Code (~\.claude\skills) and open-standard agents (~\.agents\skills)"
+    # "Installed 8 AI skills" beside 13 rows in `exakit skills` read as five
+    # lost: name the whole set and where the rest come from. With nothing
+    # gated the sentence is unchanged. Twin of the same branch in
+    # exakit_install_skills (common.sh).
+    if ($gated -gt 0) {
+        if ($gated -eq 1) { $arrive = "1 arrives with its add-on" } else { $arrive = "$gated arrive with their add-ons" }
+        Ok "Installed $installed of $($installed + $gated) AI skills ($arrive) for Claude Code (~\.claude\skills) and open-standard agents (~\.agents\skills)"
+    } else {
+        if ($installed -eq 1) { $skillUnit = "AI skill" } else { $skillUnit = "AI skills" }
+        Ok "Installed $installed $skillUnit for Claude Code (~\.claude\skills) and open-standard agents (~\.agents\skills)"
+    }
 
     # A skill the NEW set no longer carries leaves the discovery roots with the
     # update: it was placed by the kit - the manifest's installed list is the

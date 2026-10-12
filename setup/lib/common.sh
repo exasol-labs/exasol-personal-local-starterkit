@@ -7120,6 +7120,22 @@ exakit_skill_state() {
     fi
 }
 
+# exakit_skills_summary_line <installed> <with-addons> <not-placed> <total> —
+# the one sentence every skill count is read against, each number named.
+# Zero buckets are left out rather than printed, so a healthy machine reads
+# "13 installed, 13 in this kit" and not a row of zeros.
+# ⇄ twin: Get-ExakitSkillsSummaryLine.
+exakit_skills_summary_line() {
+    _ssl="$1 installed"
+    if [ "$2" -eq 1 ]; then
+        _ssl="$_ssl, 1 arrives with its add-on"
+    elif [ "$2" -gt 1 ]; then
+        _ssl="$_ssl, $2 arrive with their add-ons"
+    fi
+    [ "$3" -gt 0 ] && _ssl="$_ssl, $3 not placed"
+    printf '%s, %s in this kit\n' "$_ssl" "$4"
+}
+
 # exakit_skills_list [--json] — what skills this kit carries and whether each
 # one has reached the agents' discovery folders.
 exakit_skills_list() {
@@ -7130,22 +7146,48 @@ exakit_skills_list() {
 
     if [ "${1:-}" = "--json" ] || [ "${1:-}" = "-j" ]; then
         _skl_first=1
+        # Four LABELLED counts travel with the rows, under "counts". The
+        # installer's "8 AI skills", the 9 folders on disk after an add-on
+        # install and the 13 rows this listing names were each right, and
+        # read as a contradiction because nobody said what was being counted.
+        # The identity that holds, and that tests/skills.sh asserts:
+        #     installed + needs_addon + missing = total
+        # total is every skill this kit copy carries; needs_addon the ones
+        # waiting for an add-on that is not installed; missing the core ones
+        # not (fully) placed, which is the number the status verdict below is
+        # built from. Nested rather than top-level on purpose: a top-level
+        # "installed" is the boolean every STATE query carries, and AGENTS.md
+        # tells parsers apart by its absence here.
+        _skj_installed=0
+        _skj_gated=0
+        _skj_missing=0
+        _skj_total=0
         printf '{"skills":['
         while IFS='|' read -r _skl_id _skl_sum; do
             [ -n "$_skl_id" ] || continue
             [ "$_skl_first" -eq 1 ] || printf ','
             _skl_first=0
+            _skj_total=$((_skj_total + 1))
             _skl_state="$(exakit_skill_state "$_skl_id")"
             _skl_owner="$(_exakit_skill_gating_addon "$_skl_id")"
             # An add-on's skill is never "available" to skills-install — that
             # command deliberately skips it, so calling it available
             # prescribed a command that cannot change it. It arrives with its
-            # add-on, and the state says so, naming whose it is.
-            if [ "$_skl_state" = "available" ] && [ -n "$_skl_owner" ]; then
+            # add-on, and the state says so, naming whose it is. A half-placed
+            # copy of one (partial) is the same case: skills-install will not
+            # touch it either, so it is neither missing nor a reason to
+            # prescribe that command - installing the add-on places it whole.
+            if [ "$_skl_state" != "installed" ] && [ -n "$_skl_owner" ]; then
+                _skj_gated=$((_skj_gated + 1))
                 printf '{"name":"%s","state":"needs-addon","addon":"%s","remedy":"exakit marketplace %s","summary":"%s"}' \
                     "$_skl_id" "$_skl_owner" "$_skl_owner" \
                     "$(printf '%s' "$_skl_sum" | sed 's/\\/\\\\/g; s/"/\\"/g')"
             else
+                if [ "$_skl_state" = "installed" ]; then
+                    _skj_installed=$((_skj_installed + 1))
+                else
+                    _skj_missing=$((_skj_missing + 1))
+                fi
                 printf '{"name":"%s","state":"%s","summary":"%s"}' \
                     "$_skl_id" "$_skl_state" \
                     "$(printf '%s' "$_skl_sum" | sed 's/\\/\\\\/g; s/"/\\"/g')"
@@ -7159,25 +7201,14 @@ EXAKIT_SKL_EOF
         # the advertised number comes from the cached versions document.
         _skj_have="$(manifest_get components.skills.version 2>/dev/null || true)"
         _skj_want="$(exakit_versions_value components.skills.version 2>/dev/null || true)"
-        _skj_missing=0
-        while IFS='|' read -r _skj_id _skj_sum; do
-            [ -n "$_skj_id" ] || continue
-            # An add-on-gated skill whose add-on is absent is not MISSING:
-            # skills-install cannot place it, so counting it would prescribe a
-            # command that changes nothing, forever.
-            [ "$(exakit_skill_state "$_skj_id")" = "installed" ] || \
-                [ -n "$(_exakit_skill_gating_addon "$_skj_id")" ] || \
-                _skj_missing=$((_skj_missing + 1))
-        done <<EXAKIT_SKJ_EOF
-$(exakit_skills_registry)
-EXAKIT_SKJ_EOF
         _skj_status="current"; _skj_next="null"
         if [ -n "$_skj_have" ] && [ -n "$_skj_want" ] && [ "$_skj_have" != "$_skj_want" ]; then
             _skj_status="update_pending"; _skj_next='"exakit update"'
         elif [ "$_skj_missing" -gt 0 ]; then
             _skj_status="missing"; _skj_next='"exakit skills-install"'
         fi
-        printf '],"installed_version":%s,"advertised_version":%s,"status":"%s","next":%s}\n' \
+        printf '],"counts":{"installed":%d,"needs_addon":%d,"missing":%d,"total":%d},"installed_version":%s,"advertised_version":%s,"status":"%s","next":%s}\n' \
+            "$_skj_installed" "$_skj_gated" "$_skj_missing" "$_skj_total" \
             "$([ -n "$_skj_have" ] && printf '"%s"' "$_skj_have" || printf null)" \
             "$([ -n "$_skj_want" ] && printf '"%s"' "$_skj_want" || printf null)" \
             "$_skj_status" "$_skj_next"
@@ -7186,6 +7217,8 @@ EXAKIT_SKJ_EOF
 
     _skl_count=0
     _skl_pending=0
+    _skl_installed=0
+    _skl_gated=0
     printf '\n'
     ui_panel_begin "Exasol skills"
     while IFS='|' read -r _skl_id _skl_sum; do
@@ -7194,11 +7227,14 @@ EXAKIT_SKJ_EOF
         # An add-on's skill arrives with its add-on; "available" beside advice
         # to run skills-install prescribed a command that deliberately skips
         # it. Say whose it is instead, and leave it out of the pending count
-        # the advice below is computed from.
+        # the advice below is computed from. Same three buckets as --json.
         _skl_owner="$(_exakit_skill_gating_addon "$_skl_id")"
-        if [ "$_skl_state" = "available" ] && [ -n "$_skl_owner" ]; then
+        if [ "$_skl_state" != "installed" ] && [ -n "$_skl_owner" ]; then
             _skl_state="with $_skl_owner"
-        elif [ "$_skl_state" != "installed" ]; then
+            _skl_gated=$((_skl_gated + 1))
+        elif [ "$_skl_state" = "installed" ]; then
+            _skl_installed=$((_skl_installed + 1))
+        else
             _skl_pending=$((_skl_pending + 1))
         fi
         ui_panel_line "$(printf '%-26s %-22s %s' "$_skl_id" "$_skl_state" "$_skl_sum")"
@@ -7215,6 +7251,9 @@ EXAKIT_SKL_EOF
     fi
 
     ui_panel_line ""
+    # What the rows add up to, every number labelled: the table alone left a
+    # reader counting rows against the installer's sentence.
+    ui_panel_line "$(exakit_skills_summary_line "$_skl_installed" "$_skl_gated" "$_skl_pending" "$_skl_count")"
     # Stale beats pending in the advice: copies that exist but predate a kit
     # update are the case a user cannot see for themselves, and the remedy is
     # the same command either way.
@@ -7265,6 +7304,7 @@ exakit_install_skills() {
     fi
 
     _installed=0
+    _isk_gated=0
     for _skill_dir in "$_skills_src"/*/; do
         [ -f "$_skill_dir/SKILL.md" ] || continue
         # Frontmatter that does not parse is skipped HERE as well as in the
@@ -7280,8 +7320,9 @@ exakit_install_skills() {
         # installs one later gets its skill as part and parcel of that install.
         # On a refresh (exakit skills-install after a kit update) this is also
         # what keeps the add-ons you DO have up to date without resurrecting the
-        # ones you removed.
-        _exakit_skill_wanted "$_skill_dir/SKILL.md" || continue
+        # ones you removed. Counted, so the closing sentence can say where the
+        # rest of the set is instead of leaving the reader to notice a gap.
+        _exakit_skill_wanted "$_skill_dir/SKILL.md" || { _isk_gated=$((_isk_gated + 1)); continue; }
         _name="$(basename "$_skill_dir")"
         _exakit_skill_place "$_skill_dir" "$_name"
         # The names go to the logfile, not the screen: nine ticked lines say
@@ -7294,7 +7335,15 @@ exakit_install_skills() {
         warn "No SKILL.md files found under $_skills_src — nothing to install."
         return 1
     fi
-    ok "Installed $_installed AI skill$([ "$_installed" = 1 ] || printf 's') for Claude Code (~/.claude/skills) and open-standard agents (~/.agents/skills)"
+    # "Installed 8 AI skills" beside 13 rows in `exakit skills` read as five
+    # lost: name the whole set and where the rest come from. With nothing
+    # gated the sentence is unchanged. ⇄ twin: Install-ExakitSkills.
+    if [ "$_isk_gated" -gt 0 ]; then
+        if [ "$_isk_gated" -eq 1 ]; then _isk_arrive="1 arrives with its add-on"; else _isk_arrive="$_isk_gated arrive with their add-ons"; fi
+        ok "Installed $_installed of $((_installed + _isk_gated)) AI skills ($_isk_arrive) for Claude Code (~/.claude/skills) and open-standard agents (~/.agents/skills)"
+    else
+        ok "Installed $_installed AI skill$([ "$_installed" = 1 ] || printf 's') for Claude Code (~/.claude/skills) and open-standard agents (~/.agents/skills)"
+    fi
 
     # A skill the NEW set no longer carries leaves the discovery roots with the
     # update: it was placed by the kit — the manifest's installed list is the
