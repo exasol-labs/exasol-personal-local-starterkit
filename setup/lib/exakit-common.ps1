@@ -6102,6 +6102,41 @@ function Get-ExakitComponentFallback {
 # Get-ExakitComponentLatest - the newest version upstream publishes. The
 # implementation behind EXAKIT_VERSION_POLICY=latest; under the default manifest
 # policy nothing calls it, which keeps `exakit version` off the network.
+# Get-ExakitComponentLatestSource - twin of exakit_component_latest_source:
+# "pinned" when the add-on answers its own "latest" through the registry's
+# LatestFn (only a build the kit's packaging workflow has published and
+# fingerprinted is installable - exasol-scheduler, json-tables), "upstream"
+# when the answer is a live GitHub or PyPI lookup. The latest-policy screen
+# used to credit every version to an upstream lookup, pinned ones included.
+function Get-ExakitComponentLatestSource {
+    param([string]$Component)
+    $addon = Get-ExakitMarketplaceAddon $Component
+    if ($addon -and $addon.PSObject.Properties["LatestFn"] -and $addon.LatestFn -and
+        (Get-Command $addon.LatestFn -ErrorAction SilentlyContinue)) { return "pinned" }
+    return "upstream"
+}
+
+# Get-ExakitPinnedAddons - twin of exakit_pinned_addons: the registered
+# add-ons whose "latest" is pinned.
+function Get-ExakitPinnedAddons {
+    $ids = @()
+    foreach ($addon in (Get-ExakitMarketplaceAddons)) {
+        if ((Get-ExakitComponentLatestSource $addon.Id) -eq "pinned") { $ids += $addon.Id }
+    }
+    return $ids
+}
+
+# Get-ExakitPinnedLatestNote - twin of exakit_pinned_latest_note: the
+# qualifier an "already current" line carries under
+# EXAKIT_VERSION_POLICY=latest for a pinned add-on, "" otherwise - so the
+# manifest-policy wording stays exactly as it was.
+function Get-ExakitPinnedLatestNote {
+    param([string]$Component)
+    if ($script:VersionPolicy -ne "latest") { return "" }
+    if ((Get-ExakitComponentLatestSource $Component) -ne "pinned") { return "" }
+    return " - the build this kit pins; a newer upstream release is offered once the kit's manifest pins it"
+}
+
 function Get-ExakitComponentLatest {
     param([string]$Component)
     switch ($Component) {

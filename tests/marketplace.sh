@@ -2046,6 +2046,45 @@ has "and carries a status per add-on" '"status": ' "$_mm_listjson"
 has "and an installed boolean"        '"installed": ' "$_mm_listjson"
 
 echo
+echo "the latest policy names the add-ons it never looks up (upstream #27):"
+# EXAKIT_VERSION_POLICY=latest printed "Available versions come from live
+# upstream lookups" and then "exasol-scheduler is already current (v0.2)"
+# while upstream had shipped v0.3.1. The scheduler's and json-tables' "latest"
+# IS the versions.json pin by design - only a build the pkg workflow has
+# published and fingerprinted is installable - but nothing on screen said so,
+# and the reporter's suggested fix (a repo field) would never have been read:
+# exakit_component_latest asks the <id>_latest hook first.
+check "the scheduler's latest is pinned"       "pinned"   "$(exakit_component_latest_source exasol-scheduler)"
+check "json-tables' latest is pinned"          "pinned"   "$(exakit_component_latest_source json-tables)"
+check "dash-server's latest is looked up"      "upstream" "$(exakit_component_latest_source dash-server)"
+check "a kit component's latest is looked up"  "upstream" "$(exakit_component_latest_source exapump)"
+check "the pinned set is exactly those two" "exasol-scheduler json-tables" \
+    "$(exakit_pinned_addons | tr '\n' ' ' | sed 's/ $//')"
+_pin_line="$(EXAKIT_VERSION_POLICY=latest exakit_print_versions_source_line 2>&1)"
+has   "the latest-policy source line still says where lookups go" "live upstream lookups" "$_pin_line"
+has   "...and names the scheduler as pinned on its own line"      "Pinned by this kit, not looked up upstream: exasol-scheduler, json-tables" "$_pin_line"
+lacks "...but not dash-server, which really is looked up"         "dash-server"          "$_pin_line"
+# The "already current" line is the other half: under the latest policy a
+# pinned add-on says the version is the kit's pin; under the manifest policy
+# (the default) the wording is untouched.
+has   "a pinned add-on's already-current line is qualified under latest" "the build this kit pins" \
+    "$(EXAKIT_VERSION_POLICY=latest exakit_pinned_latest_note exasol-scheduler)"
+check "...and says nothing under the manifest policy"   "" "$(EXAKIT_VERSION_POLICY=manifest exakit_pinned_latest_note exasol-scheduler)"
+check "...or for an add-on that is looked up upstream"  "" "$(EXAKIT_VERSION_POLICY=latest exakit_pinned_latest_note dash-server)"
+has "the scheduler's updater carries the note"  'exakit_pinned_latest_note exasol-scheduler' "$(cat "$ROOT/setup/lib/exasol-scheduler.sh")"
+has "...and json-tables' updater too"           'exakit_pinned_latest_note json-tables'      "$(cat "$ROOT/setup/lib/json-tables.sh")"
+# The add-on contract used to say repo-or-package is what the lookup reads,
+# full stop; two add-ons satisfy neither, so it has to name the hook.
+has "the add-on contract names the <id>_latest hook" 'defines <id>_latest instead' "$(cat "$ROOT/setup/lib/common.sh")"
+has "...and MARKETPLACE.md says the same"            'exakit_component_latest_source' "$(cat "$ROOT/MARKETPLACE.md")"
+_pin_ps_common="$(cat "$ROOT/setup/lib/exakit-common.ps1")"
+has "the Windows registry answers the same source question" 'function Get-ExakitComponentLatestSource' "$_pin_ps_common"
+has "...with the same note"                                 'function Get-ExakitPinnedLatestNote'      "$_pin_ps_common"
+has "the Windows source line names the pinned add-ons"      'Write-ExakitPinnedLine'                    "$(cat "$ROOT/setup/exakit.ps1")"
+has "the Windows scheduler updater qualifies its line"      'Get-ExakitPinnedLatestNote "exasol-scheduler"' "$(cat "$ROOT/setup/lib/exasol-scheduler.ps1")"
+has "...and the Windows json-tables updater too"            'Get-ExakitPinnedLatestNote "json-tables"'      "$(cat "$ROOT/setup/lib/json-tables.ps1")"
+
+echo
 echo "the Windows registry dispatches the same per-add-on hooks as the shell:"
 # THE PARITY GAP THIS PINS: the PS registry had no field for the per-add-on
 # hooks the shell registry dispatches to. Get-JsonTablesSystemPresent and
@@ -2081,7 +2120,7 @@ JT_SH_TP="$(cat "$ROOT/setup/lib/json-tables.sh")"
 has "Update-JsonTables compares the installed build" \
     '$current -and $current -eq $available' "$JT_PS_TP"
 has "...and stops instead of re-downloading" \
-    'Ok "JSON Tables is already current ($current)"' "$JT_PS_TP"
+    'Ok ("JSON Tables is already current ($current)"' "$JT_PS_TP"
 has "...rewriting the launcher first, like the shell half" \
     '[void](Write-JsonTablesLauncher)' "$JT_PS_TP"
 has "the shell half says the same words" \

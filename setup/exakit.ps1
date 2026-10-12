@@ -2299,9 +2299,19 @@ function Test-ExakitComponentAhead {
 
 # Where the Tagged column came from, so nobody has to guess whether a stale
 # answer is being shown.
+# Write-ExakitPinnedLine - twin of _exakit_print_pinned_line: the add-ons the
+# "live upstream lookups" line does NOT describe, named on their own line so
+# "already current" is not read as upstream's word. Silent when none is pinned.
+function Write-ExakitPinnedLine {
+    $ids = @(Get-ExakitPinnedAddons)
+    if ($ids.Count -eq 0) { return }
+    Info ("Pinned by this kit, not looked up upstream: " + ($ids -join ", ") + " (only builds the kit has packaged and verified are offered; a newer one arrives once the kit's manifest pins it)")
+}
+
 function Write-ExakitVersionsSourceLine {
     if ($script:VersionPolicy -eq "latest") {
         Info "Available versions come from live upstream lookups (EXAKIT_VERSION_POLICY=latest)"
+        Write-ExakitPinnedLine
         Write-ExakitOverrideLine
         return
     }
