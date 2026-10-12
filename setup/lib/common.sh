@@ -9622,6 +9622,13 @@ exakit_maybe_offer_data_load() {
             # do not book it as a failed step.
             _data_notes="${_data_notes}warn|The local file was refused (see above). Load another any time with: exakit data-load
 "
+        elif [ "$_local_status" -eq 5 ]; then
+            # Declined: the target already held rows this kit did not load and
+            # nobody said replace or append, so the loader changed nothing
+            # (the remedy is printed above it). Not a failed step - the
+            # install is fine, the table is the reader's.
+            _data_notes="${_data_notes}warn|The local file was not loaded: its table already holds rows (see above). Decide with EXAKIT_ON_EXISTING=replace or =append and re-run: exakit data-load
+"
         elif [ "$_local_status" -ne 0 ]; then
             _data_notes="${_data_notes}warn|Data loading did not finish cleanly. Retry any time with: exakit data-load
 "
