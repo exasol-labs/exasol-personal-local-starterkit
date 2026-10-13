@@ -74,6 +74,8 @@ For the full detail, see [Staying up to date](../README.md#staying-up-to-date).
 
 ## Windows notes
 
+For help with the Podman machine, rootless mode or WSL2 errors, see the [Podman troubleshooting guide](podman.md).
+
 | Issue | Fix |
 |---|---|
 | The Podman install asked for administrator approval | That is Windows Package Manager installing Podman, once, and the installer tells you before it happens. Approve it, or install Podman yourself first (`winget install RedHat.Podman`; you may need to reboot) and re-run. The kit itself never needs admin rights. If you refuse the approval, the kit reports Podman as the cause rather than the database, skips the database step and carries on. Everything that doesn't need a database still installs, and re-running the install command afterwards finishes the job (completed steps are skipped) |

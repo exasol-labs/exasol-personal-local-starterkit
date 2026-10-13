@@ -71,6 +71,8 @@ exakit update      # bring the kit and its components up to date
 
 ## Notes
 
+For Podman installation, rootless permissions or WSL2 errors, see the [Podman troubleshooting guide](podman.md).
+
 | Situation | What to know |
 |---|---|
 | No Podman | The installer installs it for you at the database step (apt, dnf, yum, zypper, pacman or apk), without stopping to ask, because the database can't run without it. It uses `sudo`, so you will be asked for your password. If it doesn't know your package manager, it skips the database step and lists it in the closing summary; the rest of the install still completes. Install Podman yourself (`sudo apt-get install -y podman uidmap`, `sudo dnf install -y podman`), then re-run the install command. Completed steps are skipped, and it resumes at the database step. It has to be Podman: the launcher only drives Podman, so no other container engine will work. |
