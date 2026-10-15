@@ -2,6 +2,77 @@
 
 ## Unreleased
 
+## 0.2.1
+
+**The seven issues filed against 0.2.0 (#27 to #33) are fixed, and the
+scheduler installs from upstream.**
+
+- `exakit start <service>` / `exakit stop <service>` act on one service id
+  (`database` or an installed add-on), validated before anything runs; an
+  unknown or uninstalled id exits 2 and changes nothing. `exakit stop database`
+  under running add-on services asks whether to stop them first; answered no,
+  it names the `exakit start <service>` each needs once the database is back
+  (`EXAKIT_STOP_ADDONS=1|0` answers for a script). (#28)
+- `exakit update` has one option list, and it is the true one: `--yes` and
+  `--json` anywhere; `--plan`, `--backup` and `--apply` only with `personal`,
+  and the refusal names the form that works. `exakit update --json` answers
+  one object (`ok`, `status`, per-component lists, `remedy`, `remedy_hint`)
+  and keeps the caller's `EXAKIT_CONFIRM_RUNTIME_UPDATE` answer. (#31)
+- `exakit sql --json` failures carry `remedy` (a runnable command or null) and
+  `remedy_hint` (the explanation); the help, AGENTS.md and the exapump skill
+  document them as emitted. (#33)
+- Every marketplace help document carries a docs link; `marketplace --json`
+  rows carry `repo` and `docs`; the list and the menu point at
+  `exakit help <id>`. (#30)
+- `EXAKIT_VERSION_POLICY=latest` names the add-ons it never looks up, and
+  their already-current line says the version is the kit's pin. (#27)
+- Skills are counted one way everywhere: `skills --json` carries `counts`
+  (installed, needs_addon, missing, total) and the installer says
+  "N of M (k arrive with their add-ons)". (#32)
+- A single-file `data-load` onto a table that already holds rows this kit did
+  not load follows the same `EXAKIT_ON_EXISTING` rule as a folder (skip,
+  replace, append), writes a receipt, and a declined load exits 5 with
+  nothing changed. (#29)
+- exasol-scheduler installs straight from upstream's own release: versions.json
+  names the repository and pins upstream's per-platform archive digests, the
+  kit-repo packaging workflow is gone, and the bump workflow proposes scheduler
+  releases with recomputed digests. v0.3.1 is advertised.
+- Every `--json` output goes through one formatter: two-space indent,
+  non-ASCII kept as is. `exakit help --help` works like every other command's.
+
+**Found by the pre-merge audit of this release and fixed with it.**
+
+- `exakit stop database` under running add-on services asks whether to stop
+  them first (they need the database, and the scheduler's supervisor gives up
+  after a few failed reconnects); answered no, it stops the database alone and
+  names the `exakit start <service>` each needs once the database is back.
+  `EXAKIT_STOP_ADDONS=1|0` answers for a script; with no terminal and no
+  answer they are stopped too.
+- `exakit update --json` keeps the caller's `EXAKIT_CONFIRM_RUNTIME_UPDATE`:
+  it used to force the variable to 0 whenever `--yes` was absent, so the
+  unattended form the runbook documents deferred the database change on every
+  run. Only a missing or unreadable answer defaults to no.
+- `exakit update <unknown> --json` on Windows is refused before anything runs,
+  one rejected object with exit 2, as on macOS and Linux; it used to answer a
+  failed-run object with exit 1. `exakit start <add-on>` with the database
+  down is exit 2 on both platforms. Every `marketplace --json` row carries
+  `version`, null when unknown.
+- The scheduler's bootstrap privileges (CREATE SCHEMA, CREATE TABLE) are
+  granted only when its schema does not exist yet. An update of a stopped
+  scheduler used to grant them again and leave them until its next start.
+- A single-file load that stops at a table with rows says there is no load
+  record for this file, which is what the kit knows, not that it did not put
+  them there.
+- Tests: `tests/service-scope.sh` runs in CI; a new PowerShell twin suite,
+  `tests/service-scope-ps.ps1`, drives one-service start and stop on Windows
+  (pwsh and Windows PowerShell 5.1); the 5.1 contract suite covers
+  `update --json`, the skills counts and the marketplace rows; the
+  installer's handling of a declined load is driven, not grepped for.
+- AGENTS.md carries the data-load exit 5 and `EXAKIT_ON_EXISTING`, the
+  `update --json` list shapes as they are, and the `sql --json` refusal
+  shape; the skills show `exakit start|stop <service>`; MARKETPLACE.md's
+  help-document template carries the `docs` key.
+
 **A rate-limited GitHub no longer stops the exapump install.** The kit asks
 the GitHub release API for a version's checksum, and that API allows 60
 unauthenticated requests an hour per address - repeated installs, or an office

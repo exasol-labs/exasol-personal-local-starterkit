@@ -92,6 +92,8 @@ set like dash-server:
 ```bash
 exakit status                      # running / stopped, next to the database
 exakit start | exakit stop         # with the database and every service
+exakit stop exasol-scheduler       # this one only; the database and other add-ons keep running
+exakit start exasol-scheduler      # this one only; needs the database up
 exakit logs exasol-scheduler -f    # the engine and its supervisor, live
 exakit update exasol-scheduler     # new binary; jobs and history untouched
 ```
@@ -166,7 +168,7 @@ touching the scheduler at all.
 |---|---|---|
 | `stopped (gave up after N rapid failures ...)` in `exakit status` | the engine kept dying — bad credentials, unreachable DB, or a fatal task error | `exakit logs exasol-scheduler`, fix the cause, `exakit start` |
 | a `FAILED` row with `insufficient privileges` | the task touches a schema `scheduler_svc` has no grant for | `GRANT` what the job needs to `SCHEDULER_SVC`, it retries on the next occurrence |
-| `exasol-scheduler is already running (pid ...)` on start | the singleton guard — one poller per task table | that is the answer, not an error; `exakit stop` first if you truly mean to restart |
+| `exasol-scheduler is already running (pid ...)` on start | the singleton guard — one poller per task table | that is the answer, not an error; `exakit stop exasol-scheduler` then `exakit start exasol-scheduler` if you truly mean to restart (bare `exakit stop` takes the database down too) |
 | a task ran twice per minute | a second scheduler outside the kit polls the same table | stop the copy the kit does not manage; the guard only covers kit-started ones |
 | the MCP tools cannot `INSERT` into `SCHED_TASKS` | the read-only boundary, by design | create tasks via `exakit sql --write` (admin), with the SQL shown first |
 | nothing in `SCHED_HISTORY` for a due task | scheduler not running, or task `ENABLED = FALSE` | `exakit status`, then check the row's `"ENABLED"` |

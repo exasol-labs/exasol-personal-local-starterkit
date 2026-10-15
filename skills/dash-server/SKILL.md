@@ -77,6 +77,8 @@ the database:
 dash-server          # the launcher, starts it directly
 exakit start         # the database AND every installed service, including this
 exakit stop
+exakit stop dash-server    # just this one; the database and other add-ons keep running
+exakit start dash-server   # just this one; needs the database up
 exakit status        # running | stopped | not installed
 exakit autostart     # asks, then flips it; EXAKIT_AUTOSTART_CHANGE=1 pre-answers
 exakit logs dash-server
@@ -116,7 +118,7 @@ templates it never re-read.
 Symptom: agents can drive it fine over MCP, the user sees an error page. Fix:
 
 ```bash
-exakit stop && exakit start        # restart it
+exakit stop dash-server && exakit start dash-server   # restart just this one; bare exakit stop/start would cycle the database too
 # or
 exakit update          # the repair path
 ```

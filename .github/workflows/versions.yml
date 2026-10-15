@@ -136,6 +136,30 @@ jobs:
               if not isinstance(digest, str) or not digest_re.match(digest):
                   problems.append("components.exapump.sha256.%s is not a 64-character hex digest" % platform)
 
+          # exasol-scheduler installs straight from upstream's release, like
+          # exapump: the block names the upstream repo and one digest per
+          # platform archive, and the install refuses an archive that does not
+          # match. Plain version (0.3.1); the tag is v<version>.
+          scheduler = components.get("exasol-scheduler") or {}
+          if not scheduler.get("repo"):
+              problems.append("components.exasol-scheduler.repo is missing (the install downloads from that upstream release)")
+          if scheduler.get("release"):
+              problems.append("components.exasol-scheduler.release is obsolete: the kit no longer republishes the scheduler")
+          if str(scheduler.get("version", "")).startswith("v"):
+              problems.append("components.exasol-scheduler.version must be plain (0.3.1); the tag is v<version>")
+          digests = scheduler.get("sha256") or {}
+          scheduler_platforms = {
+              "linux-arm64", "linux-x86_64",
+              "macos-arm64", "macos-x86_64",
+              "windows-x86_64",
+          }
+          if set(digests) != scheduler_platforms:
+              problems.append("components.exasol-scheduler.sha256 must cover exactly %s, found %s"
+                              % (sorted(scheduler_platforms), sorted(digests)))
+          for platform, digest in digests.items():
+              if not isinstance(digest, str) or not digest_re.match(digest):
+                  problems.append("components.exasol-scheduler.sha256.%s is not a 64-character hex digest" % platform)
+
           for problem in problems:
               print("versions.json: %s" % problem, file=sys.stderr)
           sys.exit(1 if problems else 0)
@@ -191,6 +215,36 @@ jobs:
             fi
             printf '  verified %s\n' "$digest"
           done < /tmp/digests.txt
+      - name: download the advertised scheduler archives and check every digest
+        # Same ground truth, same reason: exasol-scheduler installs upstream's
+        # archive for the platform and refuses one whose digest differs from
+        # the pin. The pins are upstream's own (its .sha256 sidecars); hashing
+        # the real files is what proves a hand edit or a re-uploaded asset
+        # cannot merge.
+        run: |
+          set -u
+          repo="$(python3 -c 'import json; print(json.load(open("versions.json"))["components"]["exasol-scheduler"].get("repo", "exasol-labs/exasol-scheduler"))')"
+          version="$(python3 -c 'import json; print(json.load(open("versions.json"))["components"]["exasol-scheduler"]["version"])')"
+          python3 -c 'import json; d = json.load(open("versions.json"))["components"]["exasol-scheduler"]["sha256"]; print("\n".join("%s %s" % kv for kv in d.items()))' > /tmp/sched-digests.txt
+          while read -r platform digest; do
+            case "$platform" in
+              windows-*) asset="exasol_scheduler-v${version}-${platform}.zip" ;;
+              *)         asset="exasol_scheduler-v${version}-${platform}.tar.gz" ;;
+            esac
+            url="https://github.com/${repo}/releases/download/v${version}/${asset}"
+            printf '\n%s\n' "$asset"
+            if ! curl -fL --proto '=https' --retry 3 -sS -o "/tmp/$asset" "$url"; then
+              echo "  could not download $url" >&2
+              exit 1
+            fi
+            actual="$(sha256sum "/tmp/$asset" | cut -d' ' -f1)"
+            rm -f "/tmp/$asset"
+            if [ "$actual" != "$digest" ]; then
+              printf '  digest mismatch\n    advertised: %s\n    actual:     %s\n' "$digest" "$actual" >&2
+              exit 1
+            fi
+            printf '  verified %s\n' "$digest"
+          done < /tmp/sched-digests.txt
 
   upstream-exists:
     name: the advertised versions exist upstream
@@ -349,54 +403,44 @@ jobs:
                   print("  ok  json-tables: release %s carries every pinned asset with the pinned digest"
                         % release)
 
-          # exasol-scheduler follows the same immutable-release contract as
-          # json-tables, minus the wheel and the cargo shim: bare binaries per
-          # platform on a release tagged exasol-scheduler-<version>, digests
-          # pinned here by the pkg workflow's advertise job. One allowance the
-          # json-tables arm no longer needs: with NO sha256 block at all this
-          # is the bootstrap state - the add-on merged before its first
-          # release was published - and users are safe (the module refuses an
-          # unverifiable download), so it is a loud notice rather than a merge
-          # blocker. The moment pins exist, the full gate applies.
+          # exasol-scheduler installs straight from upstream's release, the way
+          # exapump does: the tag v<version> must exist in its repo and carry an
+          # archive for every pinned platform, and each archive's published
+          # digest must equal the pin (the install refuses on mismatch).
+          # digest-verify downloads and hashes the same archives, which is
+          # stronger; this is the cheap existence check that names the tag.
           es = components.get("exasol-scheduler") or {}
           if es.get("version"):
               before = len(problems)
-              release = es.get("release") or "exasol-scheduler-%s" % es["version"]
-              if not release.startswith("exasol-scheduler-%s" % es["version"]):
-                  problems.append("exasol-scheduler: release %s does not belong to version %s"
-                                  % (release, es["version"]))
+              es_repo = es.get("repo", "exasol-labs/exasol-scheduler")
               es_required = {"linux-x86_64", "linux-arm64", "macos-arm64",
                              "macos-x86_64", "windows-x86_64"}
               es_pins = es.get("sha256") or {}
-              if not es_pins:
-                  print("::warning::exasol-scheduler: no digests pinned yet (bootstrap) -- "
-                        "run the 'pkg / exasol-scheduler' workflow to publish %s, and merge "
-                        "the advertise PR it opens" % release)
+              if set(es_pins) != es_required:
+                  problems.append("exasol-scheduler: sha256 must cover exactly %s, found %s"
+                                  % (sorted(es_required), sorted(es_pins)))
+              body, reason = fetch("https://api.github.com/repos/%s/releases/tags/v%s"
+                                   % (es_repo, es["version"]), token=True)
+              if body is None:
+                  problems.append("exasol-scheduler: %s has no release tagged v%s (%s)"
+                                  % (es_repo, es["version"], reason))
               else:
-                  if set(es_pins) != es_required:
-                      problems.append("exasol-scheduler: sha256 must cover exactly %s, found %s"
-                                      % (sorted(es_required), sorted(es_pins)))
-                  body, reason = fetch("https://api.github.com/repos/%s/releases/tags/%s"
-                                       % (os.environ.get("GITHUB_REPOSITORY", ""), release), token=True)
-                  if body is None:
-                      problems.append("exasol-scheduler: release %s does not exist (%s) -- the "
-                                      "'pkg / exasol-scheduler' workflow publishes the release "
-                                      "BEFORE the version is advertised" % (release, reason))
-                  else:
-                      assets = {a.get("name", ""): a for a in body.get("assets") or []}
-                      for key, pinned in sorted(es_pins.items()):
-                          name = "exasol-scheduler-%s%s" % (key, ".exe" if "windows" in key else "")
-                          asset = assets.get(name)
-                          if asset is None:
-                              problems.append("exasol-scheduler: release %s has no asset %s (pinned as sha256.%s)"
-                                              % (release, name, key))
-                              continue
-                          published = str(asset.get("digest") or "").replace("sha256:", "")
-                          if published != pinned:
-                              problems.append("exasol-scheduler: sha256.%s pins %s but %s on %s is %s"
-                                              % (key, pinned, name, release, published or "unknown"))
+                  assets = {a.get("name", ""): a for a in body.get("assets") or []}
+                  for key, pinned in sorted(es_pins.items()):
+                      name = "exasol_scheduler-v%s-%s.%s" % (
+                          es["version"], key, "zip" if key.startswith("windows-") else "tar.gz")
+                      asset = assets.get(name)
+                      if asset is None:
+                          problems.append("exasol-scheduler: release v%s has no asset %s (pinned as sha256.%s)"
+                                          % (es["version"], name, key))
+                          continue
+                      published = str(asset.get("digest") or "").replace("sha256:", "")
+                      if published != pinned:
+                          problems.append("exasol-scheduler: sha256.%s pins %s but %s on v%s is %s"
+                                          % (key, pinned, name, es["version"], published or "unknown"))
               if len(problems) == before:
-                  print("  ok  exasol-scheduler: the pinned release checks out")
+                  print("  ok  exasol-scheduler: %s release v%s carries every pinned archive with the pinned digest"
+                        % (es_repo, es["version"]))
 
           for addon in ("dash-server", "exasol-vscode"):
               block = components.get(addon) or {}
@@ -435,8 +479,8 @@ jobs:
   repo-published-pins:
     name: the repo-published pins match this repository's releases
     runs-on: ubuntu-latest
-    # Deliberately NOT gated on `changes`: json-tables and exasol-scheduler are
-    # built and released by THIS repository, so their pins are repo-local. A
+    # Deliberately NOT gated on `changes`: json-tables is built and released by
+    # THIS repository, so its pins are repo-local. A
     # fork publishes its own release under the same tag with different
     # binaries, and a sync that carries the fork's digests here makes the
     # add-on uninstallable -- the module refuses every asset whose digest is
@@ -536,17 +580,13 @@ jobs:
                 {"linux-x86_64", "linux-aarch64", "macos-aarch64",
                  "windows-x86_64", "cargo-windows-x86_64", "wheel"}, jt_asset)
 
-          check("exasol-scheduler", components.get("exasol-scheduler") or {}, "exasol-scheduler",
-                {"linux-x86_64", "linux-arm64", "macos-arm64", "macos-x86_64", "windows-x86_64"},
-                lambda key: "exasol-scheduler-%s%s" % (key, ".exe" if "windows" in key else ""))
-
           for problem in problems:
               print("versions.json: %s" % problem, file=sys.stderr)
           sys.exit(1 if problems else 0)
           PY
 
   shell-tests:
-    name: shell tests (${{ matrix.os }})
+    name: shell tests (${{ matrix.os }}, ${{ matrix.shard }}/4)
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -555,6 +595,14 @@ jobs:
         # installer with); the Linux runner ships pwsh, so the PowerShell
         # halves of the parity guards execute instead of being skipped.
         os: [ubuntu-latest, macos-latest]
+        # FOUR SHARDS, SAME SUITES. Run end to end on one macOS runner the
+        # suites took 29 minutes, and three quarters of that was five suites.
+        # Every suite below names the shard it runs in; the long ones are kept
+        # apart (the crossing resilience suite alone; bash32-guard with
+        # marketplace; versions-manifest with agent-audit; everything small in
+        # the fourth, with the PowerShell suites on Linux). A suite with no
+        # `if:` would run four times - the balance only has to stay rough.
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@v7
       - name: bash version
@@ -562,6 +610,7 @@ jobs:
       - name: PowerShell available
         run: command -v pwsh >/dev/null 2>&1 && pwsh --version || echo "pwsh not installed - PowerShell checks will report skipped"
       - run: bash tests/ps-encoding-guard.sh
+        if: matrix.shard == 2
       # PowerShell resolves command names at call time, so a script calling a
       # function that exists nowhere parses clean and dies only on a real
       # Windows machine - that is how the exasol-scheduler install shipped
@@ -569,26 +618,35 @@ jobs:
       # AST of every shipped .ps1 and fails on any static Verb-Noun call that
       # resolves to nothing.
       - run: bash tests/ps-undefined-functions.sh
+        if: matrix.shard == 2
       - run: bash tests/versions-manifest.sh
+        if: matrix.shard == 3
       - run: bash tests/dry-run-matrix.sh
+        if: matrix.shard == 3
       - run: bash tests/noninteractive-answers.sh
+        if: matrix.shard == 4
       - run: bash tests/marketplace.sh
+        if: matrix.shard == 2
       # json-tables ships from one immutable release per build; the pin in
       # versions.json is the only authority. This guards both halves: the
       # module never reads a pin for a build it is not installing, and the
       # packaging workflow can never overwrite a published release.
       - run: bash tests/json-tables-release.sh
+        if: matrix.shard == 3
       # The twelve findings of the agent-operability audit, pinned: the state
       # queries' contract, the sql path, all-means-detected, installing state,
       # the port conflict, and what uninstall keeps.
       - run: bash tests/agent-audit.sh
+        if: matrix.shard == 3
       - run: bash tests/uninstall.sh
+        if: matrix.shard == 3
       # An installation made by an older kit has a database this kit cannot
       # drive, and the crossing is the only code that touches one. What it
       # DECIDES and what it HANDS to the engine and to exapump are both
       # exactly checkable, and the invariant worth a CI job is that it never
       # deletes the old database on either answer.
       - run: bash tests/legacy-crossing.sh
+        if: matrix.shard == 2
       # The same crossing under every fault the road can throw: an engine that
       # hangs, refuses or loses the container; a database with no password,
       # no answer, a late answer, or nothing in it; copies and restores that
@@ -596,62 +654,92 @@ jobs:
       # It ends by measuring how much of the module it walked, and that floor
       # is a gate.
       - run: bash tests/legacy-crossing-resilience.sh
+        if: matrix.shard == 1
       - run: bash tests/podman-rootless-selfheal.sh
+        if: matrix.shard == 2
       - run: bash tests/windows-rootful-podman.sh
+        if: matrix.shard == 2
       - run: bash tests/skills.sh
+        if: matrix.shard == 4
       # AGENTS.md's hand-maintained rosters go stale silently: a registered
       # add-on with a skill and a help document was invisible to the runbook,
       # and a quickstart named a command form both CLIs reject.
       - run: bash tests/agents-rosters.sh
+        if: matrix.shard == 4
       # bash 3.2 is /bin/bash on macOS. This guard proves its own premise on the
       # running shell and tests its detector against a fixture - and until now it
       # ran on no runner at all, so the defect it was written for could return
       # unnoticed. It is cheap; it runs on both.
       - run: bash tests/bash32-guard.sh
+        if: matrix.shard == 2
       # The only empirical proof the MCP database user is read-only. It skips
       # cleanly without credentials, so it is safe on a runner that has none.
       - run: bash tests/mcp-readonly-sql-matrix.sh
+        if: matrix.shard == 4
       - run: bash tests/kit-upgrade.sh
+        if: matrix.shard == 3
       - run: bash tests/agent-operability.sh
+        if: matrix.shard == 4
       # The MCP subsystem's own tests were never wired in, so nothing in CI
       # exercised mcp/ at all -- a NameError in that package would have shipped.
       - run: python3 -m unittest discover -s mcp/tests -t .
+        if: matrix.shard == 4
       # Three more suites existed and were never run by CI either. This one had
       # rotted: it asserted a data-load prompt wording that the JSON support
       # changed on the bash side, and nothing noticed. (Not discoverable via
       # `unittest discover` -- tests/ is not an importable package.)
       - run: python3 tests/test_sample_data_schema.py
+        if: matrix.shard == 4
       - run: bash tests/reap-orphan-daemon.sh
+        if: matrix.shard == 4
+      - run: bash tests/service-scope.sh
+        if: matrix.shard == 4
       # Readiness is a TLS handshake and adoption needs ownership proof: the
       # two facts the Windows install on a laptop with WSL got wrong.
       - run: bash tests/personal-readiness.sh
+        if: matrix.shard == 4
       - run: bash tests/deploy-progress.sh
+        if: matrix.shard == 3
       - run: bash tests/bulk-folder-load.sh
+        if: matrix.shard == 4
       - run: bash tests/dataset-load-progress.sh
+        if: matrix.shard == 3
       - run: bash tests/install-output-brevity.sh
+        if: matrix.shard == 4
       # Resume-path safety: both bugs it guards only appear on a SECOND run
       # of the installer, which is the run nobody exercises by hand.
       - run: bash tests/install-resume-safety.sh
+        if: matrix.shard == 3
       # `exakit update <component>` still works and is deliberately not
       # advertised. The guard reads the surfaces a reader reads, and also
       # checks the capability was hidden rather than deleted.
       - run: bash tests/update-command-surface.sh
+        if: matrix.shard == 4
       # Needs a real pty: ui_spin_begin re-checks `-t 1` at call time, so the
       # spinner never starts in a captured pipeline and the collision this
       # guards against cannot be reproduced by running the command normally.
       - run: bash tests/spinner-line-safety.sh
+        if: matrix.shard == 4
       # The table component's PowerShell twin is asserted STATICALLY -- there is
       # no pwsh on the machine this kit is developed on, so CI is the only thing
       # that ever reads ui.ps1 at all. It was written and then never wired in
       # here, which is how the twin drifted while 119 checks sat unrun.
       - run: bash tests/ps-table-twin.sh
+        if: matrix.shard == 4
       - run: bash tests/checkbox-group.sh
+        if: matrix.shard == 2
       - run: bash tests/menu-hint.sh
+        if: matrix.shard == 2
       - run: bash tests/mcp-status-clients.sh
+        if: matrix.shard == 4
       - run: bash tests/status-soft-components.sh
+        if: matrix.shard == 4
       - run: bash tests/install-payload.sh
+        if: matrix.shard == 3
       - run: bash tests/uninstall-addons-only.sh
+        if: matrix.shard == 3
       - run: bash tests/whats-new.sh
+        if: matrix.shard == 3
       # The two PowerShell-native suites had NO caller anywhere -- not this
       # workflow, not their shell siblings, not a script. They document
       # themselves as `pwsh tests/<name>.ps1` and were simply never run by
@@ -661,6 +749,7 @@ jobs:
       # exists, and finding its next unresolved call by pushing and waiting
       # costs a full CI round each time.
       - run: bash tests/lib/ps-uninstall-calls.sh
+        if: matrix.shard == 1
       # ONE LEG HAS TO INSIST. This used to skip on any runner without pwsh and
       # exit 0 either way, so macos-latest (which has none) reported success
       # having run nothing, and ubuntu-latest was the only thing covering these
@@ -676,6 +765,7 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: pwsh --version
       - name: PowerShell-native suites
+        if: matrix.shard == 4
         env:
           EXAKIT_REQUIRE_PS: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
         run: |
@@ -683,8 +773,24 @@ jobs:
             pwsh -NoProfile -File tests/noninteractive-answers.ps1
             pwsh -NoProfile -File tests/uninstall-ps.ps1
             pwsh -NoProfile -File tests/runtime-personal-ps.ps1
-            pwsh -NoProfile -File tests/legacy-crossing-ps.ps1
+            pwsh -NoProfile -File tests/service-scope-ps.ps1
             pwsh -NoProfile -File tests/data-load-shapes-ps.ps1
+          elif [ "${EXAKIT_REQUIRE_PS:-0}" = "1" ]; then
+            echo "FAIL pwsh is missing on the runner that is supposed to have it" >&2
+            exit 1
+          else
+            echo "pwsh not installed on this runner - PowerShell suites skipped"
+          fi
+      # The crossing suite is the one long PowerShell run (minutes, not
+      # seconds), so it shares the shard with its long shell sibling instead of
+      # sitting behind the five quick ones.
+      - name: PowerShell crossing suite
+        if: matrix.shard == 1
+        env:
+          EXAKIT_REQUIRE_PS: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
+        run: |
+          if command -v pwsh >/dev/null 2>&1; then
+            pwsh -NoProfile -File tests/legacy-crossing-ps.ps1
           elif [ "${EXAKIT_REQUIRE_PS:-0}" = "1" ]; then
             echo "FAIL pwsh is missing on the runner that is supposed to have it" >&2
             exit 1
@@ -693,3 +799,4 @@ jobs:
           fi
       # Dry run only without EXAKIT_SMOKE_FULL=1: no install, no database.
       - run: bash tests/smoke-test.sh
+        if: matrix.shard == 2

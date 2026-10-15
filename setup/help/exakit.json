@@ -124,20 +124,23 @@
     },
     {
       "command": "start",
-      "options": "",
-      "summary": "Start the database and every add-on service.",
-      "description": "Starts everything the kit runs, deploying the database first if it has never been deployed.",
+      "options": "[<service>]",
+      "summary": "Start the database and every add-on service, or one of them.",
+      "description": "Starts everything the kit runs, deploying the database first if it has never been deployed. Name a service to start only that one: database, or an installed add-on that runs a service (exakit status lists them under services). An add-on needs the database, so exakit start <add-on> refuses (exit 2) while the database is stopped and names the bare command. An unknown or uninstalled service is refused (exit 2) and nothing is started.",
       "examples": [
-        "exakit start"
+        "exakit start",
+        "exakit start exasol-scheduler"
       ]
     },
     {
       "command": "stop",
-      "options": "",
-      "summary": "Stop the add-on services and the database.",
-      "description": "Your data is kept. Bring it back with exakit start.",
+      "options": "[<service>]",
+      "summary": "Stop the add-on services and the database, or one of them.",
+      "description": "Your data is kept. Bring it back with exakit start. Name a service to stop only that one - exakit stop exasol-scheduler leaves the database and every other add-on running; the bare command is the only form that stops the database without naming it. An unknown or uninstalled service is refused (exit 2) and nothing is stopped. A stopped add-on that is registered for automatic start comes back at the next login; exakit autostart is where that is turned off. exakit stop database asks first whether to stop the running add-on services too, because they need the database: yes stops them before it, no stops the database alone and names the exakit start <service> each needs once the database is back. EXAKIT_STOP_ADDONS=1 or 0 answers without a terminal; with neither, they are stopped too.",
       "examples": [
-        "exakit stop"
+        "exakit stop",
+        "exakit stop exasol-scheduler",
+        "exakit stop database"
       ]
     },
     {
@@ -153,7 +156,7 @@
       "command": "sql",
       "options": "'<statement>' | --file <path> | (stdin) [--json] [--write] [--help]",
       "summary": "Run one SQL statement, with the error translated.",
-      "description": "Runs a single statement and turns the three faults everyone hits first into their remedy (connection refused -> exakit start; FETCH FIRST/TOP -> LIMIT; object not found -> describe it). Reads only unless --write. A saved statement runs with --file <path> or on stdin; comment lines (--) and a trailing ; are dropped first. The remedy is printed FIRST, on stdout with the error. --json returns one object instead: {\"ok\": true, \"rows\": [...]} or {\"ok\": false, \"error\": ..., \"remedy\": ...}, nothing else on stdout; a refusal (typo, write without --write, two statements) is {\"ok\": false, \"error\": ..., \"rejected\": true} with exit 2. A first word that is neither a read nor a known write is reported as unrecognised (a typo), not as a write.",
+      "description": "Runs a single statement and turns the three faults everyone hits first into their remedy (connection refused -> exakit start; FETCH FIRST/TOP -> LIMIT; object not found -> describe it). Reads only unless --write. A saved statement runs with --file <path> or on stdin; comment lines (--) and a trailing ; are dropped first. The remedy is printed FIRST, on stdout with the error. --json returns one object instead: {\"ok\": true, \"rows\": [...], \"row_count\": n} or {\"ok\": false, \"error\": ..., \"remedy\": <a command to run as written, or null>, \"remedy_hint\": <the explanation, or null>}, nothing else on stdout. remedy is only ever a runnable command (exakit start for connection refused, exakit status for a TLS fault); a fault with no command to run (object not found, FETCH FIRST/TOP) has remedy null and its advice in remedy_hint - read it, do not execute it; a refusal (typo, write without --write, two statements) is {\"ok\": false, \"error\": ..., \"rejected\": true} with exit 2. A first word that is neither a read nor a known write is reported as unrecognised (a typo), not as a write.",
       "warning": "This connects with the starter-kit profile, which is the ADMIN user and is NOT sandboxed. The read-only boundary is the MCP user, not this command.",
       "examples": [
         "exakit sql 'SELECT CURRENT_TIMESTAMP'",
@@ -166,13 +169,13 @@
       "command": "data-load",
       "options": "[--force | -Force] [<file-or-folder>]",
       "summary": "Load sample data, one file, or a whole folder.",
-      "description": "Opens the data-loading menu: bundled datasets (tpch, energy, weather) or your own data. Name a path to skip the menu. A FILE asks the same two things whatever its kind - the file, then SCHEMA.TABLE - and JSON is shredded into tables by an engine the kit installs for you. A FOLDER is a bulk load: every CSV / Parquet / JSON (.json, .geojson) file at its top level, one table each named after the file, asking for the schema once. Files go to the loader as they are - a ';'-separated CSV with its delimiter, a header with no rows skipped by name, a tabular .txt or .tsv listed with the rename to .csv that exapump needs. Subfolders are not scanned, files of other kinds are ignored, and duplicates - byte-identical files, or two names that resolve to the same table - are skipped with the reason. RUNNING A FOLDER AGAIN IS SAFE: a file already loaded from that folder is skipped rather than loaded on top of itself, a file a stopped run left half-written is reloaded from scratch, and a target table holding rows this kit did not load is left alone unless you say otherwise (EXAKIT_ON_EXISTING). When the load finishes, every file is listed with the table it went into, the rows it landed, and - for one that did not load - the reason against it; a file the engine refuses leaves no empty table behind. --force REPLACES bundled datasets instead of skipping what is already there: their tables are dropped and rebuilt, so anything you changed in those schemas is lost. JSON is macOS, Linux and WSL only; on Windows a folder's JSON files are listed as skipped. Unattended, EXAKIT_DATASETS=tpch,energy,weather loads only what is not loaded yet and exits 0 when everything named is already there.",
+      "description": "Opens the data-loading menu: bundled datasets (tpch, energy, weather) or your own data. Name a path to skip the menu. A FILE asks the same two things whatever its kind - the file, then SCHEMA.TABLE - and JSON is shredded into tables by an engine the kit installs for you. A FOLDER is a bulk load: every CSV / Parquet / JSON (.json, .geojson) file at its top level, one table each named after the file, asking for the schema once. Files go to the loader as they are - a ';'-separated CSV with its delimiter, a header with no rows skipped by name, a tabular .txt or .tsv listed with the rename to .csv that exapump needs. Subfolders are not scanned, files of other kinds are ignored, and duplicates - byte-identical files, or two names that resolve to the same table - are skipped with the reason. RUNNING A FOLDER AGAIN IS SAFE: a file already loaded from that folder is skipped rather than loaded on top of itself, a file a stopped run left half-written is reloaded from scratch, and a target table holding rows this kit did not load is left alone unless you say otherwise (EXAKIT_ON_EXISTING). A SINGLE FILE is held to the same rule: a target already holding rows this kit did not load is not loaded unless EXAKIT_ON_EXISTING says replace (drop and rebuild it) or append (load on top) - on a terminal you are asked, and a declined load exits 5 with nothing changed - and the same file loaded twice is recognised and left as it is. When the load finishes, every file is listed with the table it went into, the rows it landed, and - for one that did not load - the reason against it; a file the engine refuses leaves no empty table behind. --force REPLACES bundled datasets instead of skipping what is already there: their tables are dropped and rebuilt, so anything you changed in those schemas is lost. JSON is macOS, Linux and WSL only; on Windows a folder's JSON files are listed as skipped. Unattended, EXAKIT_DATASETS=tpch,energy,weather loads only what is not loaded yet and exits 0 when everything named is already there.",
       "environment": [
         "EXAKIT_DATASETS=tpch,energy,weather names exactly which bundled datasets to load",
         "EXAKIT_DATA_FILE=/path/file.json or /path/folder answers the local-data question, so a run without a terminal loads that file or folder",
         "EXAKIT_DATA_TABLE=SCHEMA.TABLE answers the target-table question for a single EXAKIT_DATA_FILE (default: STARTER_KIT.<filename>)",
         "EXAKIT_SCHEMA sets the default target schema",
-        "EXAKIT_ON_EXISTING=skip|replace|append decides what happens to a target table that already holds rows this kit did not load (default: skip, which is also the answer without a terminal)"
+        "EXAKIT_ON_EXISTING=skip|replace|append decides what happens to a target table that already holds rows this kit did not load, for a single file and for every file in a folder alike (default: skip, which is also the answer without a terminal; a declined single-file load exits 5 with nothing changed)"
       ],
       "examples": [
         "exakit data-load",
@@ -249,7 +252,7 @@
       "command": "skills",
       "options": "[--json | -j]",
       "summary": "List the AI skills the kit carries.",
-      "description": "One skill per component and add-on, with a one-line summary and whether each has reached the agents' discovery folders. Names the next command when one is needed: exakit update when the maintainers advertise a newer skill set, exakit skills-install when a placed skill has gone missing. --json adds installed_version, advertised_version, status and next.",
+      "description": "One skill per component and add-on, with a one-line summary and whether each has reached the agents' discovery folders. Names the next command when one is needed: exakit update when the maintainers advertise a newer skill set, exakit skills-install when a placed skill has gone missing. The panel ends with one labelled tally (installed, arriving with an add-on, not placed, total), and --json carries the same four numbers under counts (installed, needs_addon, missing, total; they add up to total) beside installed_version, advertised_version, status and next.",
       "examples": [
         "exakit skills",
         "exakit skills --json"
@@ -269,7 +272,7 @@
       "command": "marketplace",
       "options": "[--list [--json]] [<addon-id>...]",
       "summary": "Optional add-ons (dashboards and more).",
-      "description": "Browse and install optional tools: Space selects, Enter installs. Bare and without a terminal it installs NOTHING - installing non-interactively takes an explicit answer. --list shows every add-on and its state without installing anything (--json for scripts). Naming ids installs exactly those: exakit marketplace dash-server. Installed add-ons then update through exakit update, and one can be removed with exakit uninstall <id>. A tool you installed yourself is recognised and never re-offered.",
+      "description": "Browse and install optional tools: Space selects, Enter installs. Bare and without a terminal it installs NOTHING - installing non-interactively takes an explicit answer. --list shows every add-on and its state without installing anything (--json for scripts: one object whose addons array carries id, status, installed, version, repo and docs - the repository as owner/name and the documentation URL; version, repo and docs are null when unknown). The full reference for any add-on is on this machine: exakit help <id>. Naming ids installs exactly those: exakit marketplace dash-server. Installed add-ons then update through exakit update, and one can be removed with exakit uninstall <id>. A tool you installed yourself is recognised and never re-offered.",
       "environment": [
         "EXAKIT_MARKETPLACE_ADDONS=dash-server answers the menu non-interactively (ids csv, all, or none)"
       ],
@@ -283,16 +286,17 @@
     },
     {
       "command": "update",
-      "options": "[all|runtime|exakit|exapump|mcp|pyexasol|skills|<add-on>|personal]",
+      "options": "[all|runtime|exakit|exapump|mcp|pyexasol|skills|<add-on>|personal] [--yes] [--json]; --plan, --backup and --apply only with personal",
       "summary": "Apply the updates that are waiting.",
-      "description": "Applies the quick components (kit scripts, exapump, MCP server, pyexasol, the AI skills, installed add-ons) in seconds. A newer skill set published by the maintainers is fetched and installed here too, with no kit release needed. A database change stops the database, so it is only applied for an answer the run was actually given: on a terminal you are asked, and an unattended run defers it with the exact command. Your data is kept either way. An unknown option or target is refused (exit 2) and records nothing.",
+      "description": "Applies the quick components (kit scripts, exapump, MCP server, pyexasol, the AI skills, installed add-ons) in seconds. A newer skill set published by the maintainers is fetched and installed here too, with no kit release needed. A database change stops the database, so it is only applied for an answer the run was actually given: on a terminal you are asked, and an unattended run defers it with the exact command. Your data is kept either way. --yes (-y) may stand anywhere. --plan, --backup and --apply belong to the staged Personal major upgrade and work only with personal, as in exakit update personal --plan; written first, or with any other component, they are refused with the form that works. --json answers one object instead, with nothing else on stdout: {\"ok\", \"status\": updated|current|deferred|blocked|failed, \"updated\", \"deferred\", \"blocked\", \"current\", \"skipped\", \"ahead\", \"failed\", \"remedy\", \"remedy_hint\"}; every screen line goes to the log, nothing prompts, a database change is deferred unless --yes pre-answers it, and remedy names the command that applies what is left. Exit 1 when an updater failed. An unknown option or target is refused (exit 2) and records nothing.",
       "environment": [
         "EXAKIT_CONFIRM_RUNTIME_UPDATE=1 pre-answers yes to the database change",
         "EXAKIT_<COMPONENT>_VERSION pins one component by hand"
       ],
       "examples": [
         "exakit update",
-        "exakit update --yes"
+        "exakit update --yes",
+        "exakit update --json"
       ]
     },
     {

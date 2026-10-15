@@ -12,8 +12,9 @@
 #                       A runtime change stops the database, so on a terminal it is
 #                       offered ("stop the database and update it now?") and applied
 #                       on yes; without a terminal it is deferred unless --yes (or
-#                       EXAKIT_CONFIRM_RUNTIME_UPDATE=1) says otherwise
-#                       Personal major upgrades support --plan, --backup, --apply
+#                       EXAKIT_CONFIRM_RUNTIME_UPDATE=1) says otherwise.
+#                       Personal major upgrades take --plan, --backup, --apply
+#                       behind their target: exakit update personal --plan
 #                       (macOS, Linux and WSL only - the Windows CLI has no
 #                       staged route and says so if you pass one of them)
 #   info [--json]       print the connection details panel; --json prints the
@@ -21,8 +22,9 @@
 #                       installed / status / remedy / skills, nothing else
 #   guide               friendly walkthrough: connect AI clients (MCP), SQL
 #                       clients (DBeaver, DbVisualizer), and Python (pyexasol)
-#   start               start the local database and every add-on service
-#   stop                stop them again
+#   start [<service>]   start the local database and every add-on service,
+#                       or one of them by id
+#   stop [<service>]    stop them again, or one of them by id
 #   repair-runtime [--yes]  rebuild a database that cannot be started (the
 #                       launcher reports it interrupted and every start fails);
 #                       DESTRUCTIVE — the deployment is replaced and its data
@@ -196,7 +198,7 @@ _require_install() {
             # KeyError on exactly one of the five. `ok` and `error` stay for
             # the non-state-query callers of this function, which is why this
             # is additive rather than a swap.
-            printf '{"ok": false, "installed": false, "status": "not installed", "manifest": "%s", "reason": "no install record", "error": "no installation found", "remedy": "%s"}\n' \
+            exakit_json_out '{"ok": false, "installed": false, "status": "not installed", "manifest": "%s", "reason": "no install record", "error": "no installation found", "remedy": "%s"}\n' \
                 "$EXAKIT_MANIFEST" "$(exakit_install_command)"
             exit 4
         fi
@@ -211,7 +213,7 @@ _require_install() {
         # exit 3 for this same machine state. Two state queries may not
         # disagree on either, so this gate speaks the same vocabulary.
         if [ "$_ri_json" = "1" ]; then
-            printf '{"ok": false, "installed": true, "status": "no database", "error": "no runtime recorded in the manifest yet", "remedy": "%s", "remedy_hint": "the installer resumes at the unfinished step"}\n' "$(exakit_install_command)"
+            exakit_json_out '{"ok": false, "installed": true, "status": "no database", "error": "no runtime recorded in the manifest yet", "remedy": "%s", "remedy_hint": "the installer resumes at the unfinished step"}\n' "$(exakit_install_command)"
             exit 3
         fi
         printf '\n  %s%s %sNo runtime recorded in the manifest yet — re-run the installer, it resumes at the unfinished step: %s%s\n' \
@@ -253,7 +255,7 @@ _not_installed_answer() {
         # cmd_mcp_doctor). They used to differ per state with no key in common,
         # so a parser that read .status off the healthy shape hit a KeyError on
         # exactly the two states worth branching on.
-        printf '{"installed": false, "status": "not installed", "manifest": "%s", "reason": "no install record", "remedy": "%s", %s}\n' \
+        exakit_json_out '{"installed": false, "status": "not installed", "manifest": "%s", "reason": "no install record", "remedy": "%s", %s}\n' \
             "$EXAKIT_MANIFEST" "$(exakit_install_command)" "$(_exakit_platform_json_fields)"
     else
         printf 'Not installed (no manifest at %s). Run the installer first.\n' "$EXAKIT_MANIFEST" >&2
@@ -428,7 +430,7 @@ cmd_status() {
         # command which puts a Python runtime back — never a corrupt answer and
         # never a silent side effect.
         if ! exakit_can_run_python_any; then
-            printf '{"installed": true, "status": "unknown", "remedy": "exakit update", "remedy_hint": "no Python runtime is available on this machine, so the kit cannot read its own install record; exakit update restores it", "installing": false, "install_step": null, "runtime": {"type": null, "status": "unknown"}, "running": false, "remedies": {}, "remedy_hints": {}, "manifest": "%s", %s}\n' \
+            exakit_json_out '{"installed": true, "status": "unknown", "remedy": "exakit update", "remedy_hint": "no Python runtime is available on this machine, so the kit cannot read its own install record; exakit update restores it", "installing": false, "install_step": null, "runtime": {"type": null, "status": "unknown"}, "running": false, "remedies": {}, "remedy_hints": {}, "manifest": "%s", %s}\n' \
                 "$EXAKIT_MANIFEST" "$(_exakit_platform_json_fields)"
             exit 3
         fi
@@ -608,7 +610,7 @@ if legacy_c:
         "sample_left_out": legacy_sample.split(",") if legacy_sample else [],
         "command": command,
     }
-print(json.dumps(payload, indent=2))
+print(json.dumps(payload, indent=2, ensure_ascii=False))
 EXAKIT_SJ_PY
         # 0 means healthy AND complete: while the installer runs, a poller that
         # reads the exit code must not see success off a half-built kit.
@@ -879,15 +881,43 @@ EXAKIT_CS_SOFT
     exit 0
 }
 
-cmd_start() {
+# _service_scope <verb> [id] — the optional service id a `exakit start|stop`
+# was given, validated BEFORE anything runs, left in EXAKIT_SERVICE_SCOPE
+# (empty for the bare form).
+#
+# Called in the main shell, never through $(...): reject() exits, and an exit
+# inside a command substitution ends only the subshell - the caller would then
+# run the bare form on the very input it had just refused, which for `stop` is
+# the database going down.
+#
+# Shape first, then the install check, then the registry: bad input answers 2
+# on any machine (cmd_autostart makes the same argument), and only an installed
+# kit can say which services it has. An id that is a known add-on gets the
+# reason it cannot be acted on rather than "unknown".
+_service_scope() {
+    _ssc_verb="$1"; shift
+    EXAKIT_SERVICE_SCOPE=""
+    [ "$#" -gt 0 ] || return 0
+    [ "$#" -eq 1 ] || reject "$_ssc_verb takes at most one service id — exakit $_ssc_verb <service>"
     _require_install
-    # Logging FIRST: run_logged only routes the launcher's raw JSON stream to
-    # the logfile when one exists — without this, `exakit start` interleaved
-    # multi-line launcher logs with its own [ok] lines on stdout.
-    exakit_init_logging 2>/dev/null || true
-    # Everything the kit runs, database first: self-heal semantics for the
-    # runtime (a stopped one is started, a missing one deployed — `exakit
-    # start` promises a running database), then every add-on service.
+    _ssc_ids="$(exakit_service_ids | tr '\n' ' ')"
+    case " $_ssc_ids " in
+        *" $1 "*) EXAKIT_SERVICE_SCOPE="$1"; return 0 ;;
+    esac
+    if _exakit_addon_registered "$1"; then
+        if exakit_marketplace_addon_installed "$1" 2>/dev/null; then
+            reject "$1 is installed but runs no service, so there is nothing to $_ssc_verb."
+        fi
+        reject "$1 is not installed, so there is nothing to $_ssc_verb. Add it with: exakit marketplace $1"
+    fi
+    reject "Unknown service '$1' for $_ssc_verb (services on this machine: $(printf '%s' "$_ssc_ids" | sed 's/ $//; s/ /, /g'))."
+}
+
+# _start_database — the database half of `exakit start`: self-heal semantics
+# for the runtime (a stopped one is started, a missing one deployed — `exakit
+# start` promises a running database). Shared by the bare form and by
+# `exakit start database`, so the two cannot drift.
+_start_database() {
     case "$(_runtime_type)" in
         personal)
             if personal_deployment_running 2>/dev/null; then
@@ -932,10 +962,6 @@ cmd_start() {
             ;;
         *)        exakit_ensure_runtime_running deploy ;;
     esac
-    for _start_id in $(exakit_service_ids); do
-        [ "$_start_id" = "database" ] && continue
-        exakit_service_start "$_start_id" || true
-    done
     # The database is up, so a note left by an earlier start that could not
     # ("Port 8563 is held by another process ...") is no longer true. Only a
     # runtime note goes; an install-step note is a different fault and stays.
@@ -943,9 +969,90 @@ cmd_start() {
     return 0
 }
 
+# cmd_start [service] — everything the kit runs, or one named service.
+cmd_start() {
+    _service_scope start "$@"
+    _require_install
+    # Logging FIRST: run_logged only routes the launcher's raw JSON stream to
+    # the logfile when one exists — without this, `exakit start` interleaved
+    # multi-line launcher logs with its own [ok] lines on stdout.
+    exakit_init_logging 2>/dev/null || true
+    if [ -n "$EXAKIT_SERVICE_SCOPE" ]; then
+        _exakit_log_file "INFO  start scoped to $EXAKIT_SERVICE_SCOPE"
+        if [ "$EXAKIT_SERVICE_SCOPE" = "database" ]; then
+            _start_database
+            return $?
+        fi
+        # One add-on was asked for, so only that one is touched: the database
+        # is NOT started on its behalf. An add-on talks to the database, and
+        # started against a stopped one it would only sit there failing to
+        # connect (the scheduler eventually gives up) - so say what is missing
+        # and name the command that brings everything up, and record nothing:
+        # this is a refusal, not a failed step.
+        if ! exakit_runtime_is_running 2>/dev/null; then
+            reject "The database is not running, and $EXAKIT_SERVICE_SCOPE needs it. Start everything with: exakit start"
+        fi
+        exakit_service_start "$EXAKIT_SERVICE_SCOPE"
+        return $?
+    fi
+    # Everything the kit runs, database first, then every add-on service.
+    _start_database
+    for _start_id in $(exakit_service_ids); do
+        [ "$_start_id" = "database" ] && continue
+        exakit_service_start "$_start_id" || true
+    done
+    return 0
+}
+
+# cmd_stop [service] — the add-on services and the database, or one named
+# service. Bare `exakit stop` is the only form that touches the database
+# without naming it.
+# _stop_database_scoped — `exakit stop database`. The add-on services talk to
+# the database, and the scheduler's supervisor gives up after a few failed
+# reconnects, so a database stopped under running add-ons leaves them dead
+# without a word. Ask first, naming them: yes stops them before the database,
+# exactly as the bare form does; no stops the database alone and says what the
+# user has taken on - starting each of them again once the database is back.
+# EXAKIT_STOP_ADDONS=1|0 answers for a script; with no terminal and no answer
+# they are stopped too, the side that leaves nothing crash-looping. Twin:
+# Stop-ExakitDatabaseScoped in exakit.ps1.
+_stop_database_scoped() {
+    _sds_running=""
+    for _sds_id in $(exakit_service_ids); do
+        [ "$_sds_id" = "database" ] && continue
+        [ "$(exakit_service_status "$_sds_id" 2>/dev/null)" = "running" ] || continue
+        _sds_running="${_sds_running}${_sds_running:+ }${_sds_id}"
+    done
+    if [ -n "$_sds_running" ]; then
+        _sds_list="$(printf '%s' "$_sds_running" | sed 's/ /, /g')"
+        info "Running add-on services need the database: $_sds_list"
+        if confirm_env EXAKIT_STOP_ADDONS "Stop them too, before the database" y; then
+            for _sds_id in $_sds_running; do
+                exakit_service_stop "$_sds_id" || true
+            done
+        else
+            warn "Stopping only the database. Still running without it: $_sds_list"
+            for _sds_id in $_sds_running; do
+                info "Once you start the database again (exakit start database), you must also start it: exakit start $_sds_id"
+            done
+        fi
+    fi
+    exakit_service_stop database
+}
+
 cmd_stop() {
+    _service_scope stop "$@"
     _require_install
     exakit_init_logging 2>/dev/null || true
+    if [ -n "$EXAKIT_SERVICE_SCOPE" ]; then
+        _exakit_log_file "INFO  stop scoped to $EXAKIT_SERVICE_SCOPE"
+        if [ "$EXAKIT_SERVICE_SCOPE" = "database" ]; then
+            _stop_database_scoped
+            return $?
+        fi
+        exakit_service_stop "$EXAKIT_SERVICE_SCOPE"
+        return $?
+    fi
     # Add-on services first: they talk to the database, so they should be down
     # before it goes.
     for _stop_id in $(exakit_service_ids); do
@@ -1054,7 +1161,7 @@ cmd_repair_runtime() {
             # reject() exists. Nothing is recorded here either — but the code is
             # 5, not 0: "you did not confirm" is not "it is repaired".
             if [ "$_rr_json" -eq 1 ]; then
-                printf '{"ok": false, "status": "declined", "reason": "not confirmed", "changed": false, "remedy": "exakit repair-runtime --yes", "remedy_hint": "this DESTROYS the database and its data - ask the user before running it"}\n'
+                exakit_json_out '{"ok": false, "status": "declined", "reason": "not confirmed", "changed": false, "remedy": "exakit repair-runtime --yes", "remedy_hint": "this DESTROYS the database and its data - ask the user before running it"}\n'
             else
                 info "Repair cancelled — nothing was changed."
                 info "When you are ready: exakit repair-runtime --yes (or set EXAKIT_CONFIRM_RUNTIME_REPAIR=1)"
@@ -1097,10 +1204,10 @@ cmd_repair_runtime() {
         bash "$_rr_kit/$_rr_setup" >&2
         _rr_rc=$?
         if [ "$_rr_rc" -eq 0 ]; then
-            printf '{"ok": true, "status": "repaired", "changed": true, "remedy": null}\n'
+            exakit_json_out '{"ok": true, "status": "repaired", "changed": true, "remedy": null}\n'
             return 0
         fi
-        printf '{"ok": false, "status": "failed", "changed": true, "reason": "the rebuild did not finish (see exakit logs)", "remedy": "%s"}\n' \
+        exakit_json_out '{"ok": false, "status": "failed", "changed": true, "reason": "the rebuild did not finish (see exakit logs)", "remedy": "%s"}\n' \
             "$(exakit_install_command)"
         return 3
     fi
@@ -1138,7 +1245,7 @@ cmd_migrate() {
     # `exakit sql` already answers with, so one parser reads both.
     _mg_reject() {
         if [ "$_mg_json" -eq 1 ]; then
-            printf '{"ok": false, "error": "%s", "remedy": null, "rejected": true}\n' "$(_mg_js "$1")"
+            exakit_json_out '{"ok": false, "error": "%s", "remedy": null, "rejected": true}\n' "$(_mg_js "$1")"
             exit 2
         fi
         reject "$1"
@@ -1185,7 +1292,7 @@ cmd_migrate() {
     # query carries, exit 3 - the code for "installed, but not usable for this".
     _mg_refuse() {
         if [ "$_mg_json" -eq 1 ]; then
-            printf '{"ok": false, "installed": true, "status": "%s", "error": "%s", "remedy": "%s"}\n' \
+            exakit_json_out '{"ok": false, "installed": true, "status": "%s", "error": "%s", "remedy": "%s"}\n' \
                 "$(_mg_js "$1")" "$(_mg_js "$2")" "$(_mg_js "$3")"
             exit 3
         fi
@@ -1280,7 +1387,7 @@ cmd_migrate() {
         [ -n "${EXAKIT_LEGACY_MIGRATE_REASON:-}" ] && _mg_reason="\"$(_mg_js "$EXAKIT_LEGACY_MIGRATE_REASON")\""
         _mg_sample="[]"
         [ -n "${EXAKIT_LEGACY_SAMPLE_IDS:-}" ] && _mg_sample="[\"$(printf '%s' "$EXAKIT_LEGACY_SAMPLE_IDS" | sed 's/,/", "/g')\"]"
-        printf '{"ok": %s, "installed": true, "status": "%s", "container": "%s", "engine": "%s", "dsn": "%s", "copied_out": %s, "restored": %s, "left_alone": %s, "failed": %s, "sample_left_out": %s, "reason": %s, "remedy": %s}\n' \
+        exakit_json_out '{"ok": %s, "installed": true, "status": "%s", "container": "%s", "engine": "%s", "dsn": "%s", "copied_out": %s, "restored": %s, "left_alone": %s, "failed": %s, "sample_left_out": %s, "reason": %s, "remedy": %s}\n' \
             "$_mg_ok" "$(_mg_js "${EXAKIT_LEGACY_MIGRATE_STATUS:-failed}")" \
             "$(_mg_js "$EXAKIT_LEGACY_CONTAINER")" "$(_mg_js "$EXAKIT_LEGACY_ENGINE")" "$(_mg_js "$EXAKIT_LEGACY_DSN")" \
             "${EXAKIT_LEGACY_EXPORTED:-0}" "${EXAKIT_LEGACY_RESTORED:-0}" "${EXAKIT_LEGACY_SKIPPED:-0}" "${EXAKIT_LEGACY_RESTORE_FAILED:-0}" \
@@ -1479,7 +1586,11 @@ cmd_version() {
 }
 
 cmd_update() {
-    _require_install
+    _cu_json=0
+    for _cu_arg in "$@"; do
+        case "$_cu_arg" in --json|-j) _cu_json=1 ;; esac
+    done
+    _require_install "$_cu_json"
     exakit_update "$@"
 }
 
@@ -1691,7 +1802,7 @@ cmd_mcp_doctor() {
         # so an agent cross-checking the two state queries AGENTS.md groups
         # under one contract got opposite answers to "is the kit installed?".
         if [ "$_cmd_json" -eq 1 ]; then
-            printf '{"installed": true, "status": "no database", "database": "not installed", "remedy": "%s", "remedy_hint": "no runtime is recorded yet; the installer resumes at the unfinished step"}\n' \
+            exakit_json_out '{"installed": true, "status": "no database", "database": "not installed", "remedy": "%s", "remedy_hint": "no runtime is recorded yet; the installer resumes at the unfinished step"}\n' \
                 "$(exakit_install_command)"
         else
             warn "No runtime is recorded in the manifest yet, so there is no database to diagnose against."
@@ -1714,7 +1825,7 @@ cmd_mcp_doctor() {
             # command and silently false for the other two. The sentence lives
             # on in `database` and in the prose below, where it reads well;
             # `status` is the machine field and now has one value per state.
-            printf '{"installed": true, "status": "stopped", "database": "not running", "remedy": "%s"}\n' \
+            exakit_json_out '{"installed": true, "status": "stopped", "database": "not running", "remedy": "%s"}\n' \
                 "$(exakit_runtime_remedy)"
         else
             warn "The database is not running — fix that first: $(exakit_runtime_remedy)"
@@ -1893,6 +2004,7 @@ usage() {
     for _u_arg in "$@"; do
         case "$_u_arg" in
             --json|-j) _u_json=1 ;;
+            --help|-h) [ -n "$_u_topic" ] || _u_topic="help" ;;
             *) [ -n "$_u_topic" ] || _u_topic="$_u_arg" ;;
         esac
     done
@@ -1995,7 +2107,7 @@ doc["skills"] = {
     "status": "update_pending" if (skills_have and skills_want and skills_have != skills_want) else "current",
     "next": "exakit update" if (skills_have and skills_want and skills_have != skills_want) else None,
 }
-print(json.dumps(doc, indent=2))
+print(json.dumps(doc, indent=2, ensure_ascii=False))
 EXAKIT_IJ_PY
     else
         cat "$EXAKIT_MANIFEST"
@@ -2027,7 +2139,7 @@ _sql_reject() {
     if [ "${_sql_json:-0}" -eq 1 ]; then
         run_python - "$1" <<'EXAKIT_SQL_REJECT_PY'
 import json, sys
-print(json.dumps({"ok": False, "error": sys.argv[1], "remedy": None, "rejected": True}))
+print(json.dumps({"ok": False, "error": sys.argv[1], "remedy": None, "rejected": True}, indent=2, ensure_ascii=False))
 EXAKIT_SQL_REJECT_PY
         _exakit_log_file "REJECT $1"
         exit 2
@@ -2131,7 +2243,7 @@ cmd_sql() {
     _sql_bin="$(exapump_cli)"
     if [ ! -x "$_sql_bin" ]; then
         if [ "$_sql_json" -eq 1 ]; then
-            printf '{"ok": false, "error": "exapump (the SQL client) is not installed", "remedy": "exakit update"}\n'
+            exakit_json_out '{"ok": false, "error": "exapump (the SQL client) is not installed", "remedy": "exakit update"}\n'
         else
             error "exapump (the SQL client) is not installed."
             info "Repair it with: exakit update"
@@ -2144,10 +2256,14 @@ cmd_sql() {
         # `--format json` already puts the rows on stdout and every "[1/1] ..."
         # and "1 statement executed" line on stderr, so the two are separable
         # without parsing - the CSV mode interleaves them. Shape:
-        #   {"ok": true,  "rows": [...]}
-        #   {"ok": false, "error": "<engine text>", "remedy": "<...>" | null}
-        # The remedy is the same one the human form prints first; an agent gets
-        # it at a key instead of inside the text. Exit code unchanged.
+        #   {"ok": true,  "rows": [...], "row_count": n}
+        #   {"ok": false, "error": "<engine text>", "remedy": "<command>" | null,
+        #                 "remedy_hint": "<sentence>" | null}
+        # Two keys, on purpose: remedy is a command to run verbatim or null
+        # (the contract every --json answer keeps), and the sentence the human
+        # form prints first goes to remedy_hint. The help and AGENTS.md
+        # document both; a reader coded to "remedy" alone found null on every
+        # fault that has no command to run. Exit code unchanged.
         # Rows, error text and remedy travel through FILES. Handed to Python as
         # arguments, a 120,000-row result hit the OS argument-size limit
         # ("Argument list too long"), stdout stayed empty and the exit code was
@@ -2181,7 +2297,7 @@ if rc == 0:
         parsed = json.loads(rows) if rows.strip() else []
     except ValueError:
         parsed = []
-    print(json.dumps({"ok": True, "rows": parsed, "row_count": len(parsed) if isinstance(parsed, list) else None}))
+    print(json.dumps({"ok": True, "rows": parsed, "row_count": len(parsed) if isinstance(parsed, list) else None}, indent=2, ensure_ascii=False))
 else:
     # The engine's message, not exapump's framing: the first line that carries
     # an error, with the generic "Hint:" left out because the remedy is the hint.
@@ -2198,13 +2314,13 @@ else:
                       lines[0] if lines else "query failed")
     print(json.dumps({"ok": False, "error": detail,
                       "remedy": remedy_cmd.strip() or None,
-                      "remedy_hint": remedy.strip() or None}))
+                      "remedy_hint": remedy.strip() or None}, indent=2, ensure_ascii=False))
 EXAKIT_SQL_JSON_PY
         _sql_py_rc=$?
         rm -f "$_sql_err" "$_sql_rowsf" "$_sql_remf"
         # The object is the answer; if it could not be produced, say so as one.
         if [ "$_sql_py_rc" -ne 0 ]; then
-            printf '{"ok": false, "error": "exakit could not render the result as JSON (see exakit logs)", "remedy": null}\n'
+            exakit_json_out '{"ok": false, "error": "exakit could not render the result as JSON (see exakit logs)", "remedy": null}\n'
             return 1
         fi
         return "$_sql_rc"
@@ -2346,6 +2462,33 @@ _exakit_refuse_unknown_options() {
     done
 }
 
+# _exakit_update_refuse_options <args...> — the update arm's own gate, because
+# its options are POSITION-DEPENDENT and the flat list above cannot say so.
+# --yes/-y may stand anywhere. --plan/--backup/--apply are real — the staged
+# Personal major upgrade — but only behind their target (`exakit update
+# personal --plan`): exakit_update reads the first bare word as the target, so
+# a leading --plan landed in that slot and was refused with "supported: --yes"
+# right after this file's guard had listed --plan as supported. Two lists,
+# each true in its own position, read as a contradiction from outside; now the
+# one sentence exakit_update_options_hint prints serves every refusal, and a
+# flag in the wrong place is told where it goes rather than merely refused.
+_exakit_update_refuse_options() {
+    _uro_target=""
+    for _uro_arg in "$@"; do
+        case "$_uro_arg" in
+            -y|--yes|-j|--json) ;;
+            --plan|--backup|--apply)
+                case "$_uro_target" in
+                    personal|runtime|database|db) ;;
+                    "") reject "'$_uro_arg' belongs to the staged Personal upgrade and works only with personal: exakit update personal $_uro_arg" ;;
+                    *)  reject "'$_uro_arg' belongs to the staged Personal upgrade and works only with personal, not $_uro_target: exakit update personal $_uro_arg" ;;
+                esac ;;
+            -*) reject "Unknown option '$_uro_arg' for update ($(exakit_update_options_hint))." ;;
+            *)  [ -n "$_uro_target" ] || _uro_target="$_uro_arg" ;;
+        esac
+    done
+}
+
 # EXAKIT_REFUSAL_JSON — did this caller ask for a machine answer?
 #
 # Set once, here, so that reject() and the unknown-command arm below can honour
@@ -2383,10 +2526,10 @@ case "${1:-help}" in
               esac ;;
     version|--version|-v)  shift; cmd_version "$@" ;;
     # --plan/--backup/--apply are the Personal MAJOR-upgrade route the header
-    # and the macOS quickstart have always named — and this guard refused
-    # them, so the documented migration path was unreachable from the CLI
-    # while personal_update implemented it in full.
-    update) shift; _exakit_refuse_unknown_options update "--yes,-y,--plan,--backup,--apply" "$@"; cmd_update "$@" ;;
+    # and the macOS quickstart have always named — the generic guard once
+    # refused them outright, then advertised them flat while exakit_update
+    # only takes them behind a target. The arm's own gate knows the position.
+    update) shift; _exakit_update_refuse_options "$@"; cmd_update "$@" ;;
     info)     shift
               _exakit_refuse_unknown_options info "--json,-j" "$@"
               case "${1:-}" in
@@ -2403,8 +2546,12 @@ case "${1:-help}" in
                   *) _with_notice cmd_info ;;
               esac ;;
     guide)    shift; _exakit_refuse_unknown_options guide "" "$@"; _with_notice exakit_guide ;;
-    start)    shift; _exakit_refuse_unknown_options start "" "$@"; _with_notice cmd_start ;;
-    stop)     shift; _exakit_refuse_unknown_options stop "" "$@"; _with_notice cmd_stop ;;
+    # The arguments travel on. The dash-only guard let a plain word through and
+    # the arm dropped it, so `exakit stop exasol-scheduler` ran the bare form
+    # and stopped the database - it only LOOKED scoped because one add-on was
+    # installed. cmd_start/cmd_stop validate the id themselves.
+    start)    shift; _exakit_refuse_unknown_options start "" "$@"; _with_notice cmd_start "$@" ;;
+    stop)     shift; _exakit_refuse_unknown_options stop "" "$@"; _with_notice cmd_stop "$@" ;;
     repair-runtime) shift; cmd_repair_runtime "$@" ;;
     migrate)  shift; cmd_migrate "$@" ;;
     autostart) shift; _with_notice cmd_autostart "$@" ;;
@@ -2420,7 +2567,11 @@ case "${1:-help}" in
                   *) _with_notice cmd_skills ;;
               esac ;;
     skills-install) shift; _exakit_refuse_unknown_options skills-install "" "$@"; _with_notice cmd_skills_install ;;
-    marketplace) shift; _with_notice cmd_marketplace "$@" ;;
+    # --json is one object and nothing else on stdout, like every other
+    # machine answer: the update notice that follows the human screen is
+    # skipped for it, as status and skills skip it. One line, on purpose:
+    # tests/dry-run-matrix.sh reads this arm as one line.
+    marketplace) shift; case " $* " in *" --json "*|*" -j "*) cmd_marketplace "$@" ;; *) _with_notice cmd_marketplace "$@" ;; esac ;;
     upgrade-kit2)  cmd_kit2_script upgrade-kit2.sh ;;
     rollback-kit2) cmd_kit2_script rollback-kit2.sh ;;
     uninstall) shift; cmd_uninstall "$@" ;;
@@ -2428,7 +2579,10 @@ case "${1:-help}" in
     sql)      shift; cmd_sql "$@" ;;
     logs)     shift; cmd_logs "$@" ;;
     catalog)  shift; _exakit_refuse_unknown_options catalog "--json,-j" "$@"; cmd_catalog "$@" ;;
-    help|-h|--help) shift; _exakit_refuse_unknown_options help "--json,-j,--all,-a" "$@"; usage "$@" ;;
+    # `exakit help --help` reaches this arm (the universal --help hook skips
+    # the help command on purpose), so --help/-h are options here and name
+    # the help command's own page, like every other command's --help does.
+    help|-h|--help) shift; _exakit_refuse_unknown_options help "--json,-j,--all,-a,--help,-h" "$@"; usage "$@" ;;
     *) # A component name on its own is a reasonable thing to type, and the
        # answer is its page - not "unknown command" followed by the whole menu.
        if exakit_help_is_id "${1}"; then
@@ -2436,7 +2590,7 @@ case "${1:-help}" in
        elif [ "${EXAKIT_REFUSAL_JSON:-0}" = "1" ]; then
            # One object on stdout, and the whole usage screen NOT dumped into
            # the middle of it.
-           printf '{"ok": false, "error": "%s", "remedy": "exakit catalog --json", "rejected": true}\n' \
+           exakit_json_out '{"ok": false, "error": "%s", "remedy": "exakit catalog --json", "rejected": true}\n' \
                "$(_exakit_json_string "Unknown command '${1}'.")"
            exit 2
        else

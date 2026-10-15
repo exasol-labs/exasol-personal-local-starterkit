@@ -6,6 +6,7 @@
   "tagline": "Turns JSON-shaped data into relational tables.",
   "role": "exapump loads CSV and Parquet; a JSON document is an arbitrarily nested tree, and this add-on shreds it into tables. exakit data-load installs it for you the moment you hand it a .json file - it asks nothing, and one document may legitimately produce several tables.",
   "repo": "exasol-labs/exasol-json-tables",
+  "docs": "https://github.com/exasol-labs/exasol-json-tables#readme",
   "package": "exasol-json-tables",
   "binary": "~/.local/bin/exasol-json-tables",
   "installed_by": "Automatically by exakit data-load when you load a JSON file, or from exakit marketplace.",

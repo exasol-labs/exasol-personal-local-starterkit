@@ -1029,7 +1029,7 @@ lacks "update runtime --plan is not refused" "Unknown option" "$_su_out"
 # install across every other one, so the flag that promises to touch nothing
 # replaced the launcher binary without asking.
 lacks "update runtime --plan installs nothing" "Installing launcher" "$_su_out"
-has "...and says how to apply it instead" "Apply it with: exakit update runtime" "$_su_out"
+has "...and says how to apply it instead" "Apply it with: exakit update personal" "$_su_out"
 check "...leaving no launcher behind" "absent" \
     "$([ -e "$_su/bin/exasol" ] && echo PRESENT || echo absent)"
 # AGK-02: a DEAD installer answers with installing:false, the step it died at,

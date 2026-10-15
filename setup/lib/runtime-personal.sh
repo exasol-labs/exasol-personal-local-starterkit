@@ -2226,7 +2226,7 @@ personal_update() {
             info "Exasol Personal launcher ${_current:-unknown} -> $_latest."
             info "The launcher binary is replaced; the deployment and its data are not touched."
             info "The first start after it rebuilds the deployment's VM guest - several minutes, once."
-            info "Apply it with: exakit update runtime"
+            info "Apply it with: exakit update personal"
             return 0
             ;;
         backup)
@@ -2234,7 +2234,7 @@ personal_update() {
             # is not. Saying "done" here would hand back a backup that was never
             # taken, so it says what this update actually is instead.
             info "Exasol Personal ${_current:-unknown} -> $_latest replaces the launcher binary only - it neither deletes nor migrates database content, so there is nothing to back up first."
-            info "Apply it with: exakit update runtime"
+            info "Apply it with: exakit update personal"
             return 0
             ;;
     esac

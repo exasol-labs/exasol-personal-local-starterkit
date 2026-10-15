@@ -71,9 +71,9 @@ Personal version never starts that way. It is a data migration, so it goes
 through the backup-gated route, one step at a time:
 
 ```bash
-exakit update runtime --plan     # what the migration involves, changes nothing
-exakit update runtime --backup   # take the backup the migration is gated on
-exakit update runtime --apply    # perform the migration
+exakit update personal --plan    # what the migration involves, changes nothing
+exakit update personal --backup   # take the backup the migration is gated on
+exakit update personal --apply   # perform the migration
 ```
 
 For the full detail, see [Staying up to date](../README.md#staying-up-to-date).

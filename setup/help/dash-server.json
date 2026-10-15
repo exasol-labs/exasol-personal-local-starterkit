@@ -6,6 +6,7 @@
   "tagline": "Agent-operated Dash hosting for live dashboards on your database.",
   "role": "An add-on that hosts Dash apps against the local database. Your AI agent drives it through its MCP control plane while you watch the result in a browser.",
   "repo": "exasol-labs/dash-server",
+  "docs": "https://github.com/exasol-labs/dash-server#readme",
   "package": "dash-server",
   "binary": "~/.local/bin/dash-server",
   "url": "http://127.0.0.1:5100 by default. If something else already holds that port the install moves to the next free one and records it - so to see where yours is actually serving, run dash-server: it prints the address, and if a copy is already up it says so and prints that one's address rather than starting a second.",

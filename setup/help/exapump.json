@@ -7,6 +7,7 @@
   "tagline": "The kit's SQL and bulk-load CLI.",
   "role": "exapump runs SQL against the local database and bulk-loads CSV and Parquet files into tables. The kit installs it and writes a connection profile called starter-kit.",
   "repo": "exasol-labs/exapump",
+  "docs": "https://github.com/exasol-labs/exapump#readme",
   "binary": "~/.local/bin/exapump",
   "config": "~/.exapump/config.toml",
   "profile": "starter-kit",

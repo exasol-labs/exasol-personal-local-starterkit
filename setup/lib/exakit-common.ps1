@@ -4315,6 +4315,19 @@ function Get-ExakitKitSkillNames {
 
 # Show-ExakitSkills - what skills this kit carries and whether each one has
 # reached the agents' discovery folders.
+# Get-ExakitSkillsSummaryLine - the one sentence every skill count is read
+# against, each number named. Zero buckets are left out rather than printed,
+# so a healthy machine reads "13 installed, 13 in this kit" and not a row of
+# zeros. Twin of exakit_skills_summary_line (common.sh).
+function Get-ExakitSkillsSummaryLine {
+    param([int]$Installed, [int]$WithAddons, [int]$NotPlaced, [int]$Total)
+    $line = "$Installed installed"
+    if ($WithAddons -eq 1) { $line = "$line, 1 arrives with its add-on" }
+    elseif ($WithAddons -gt 1) { $line = "$line, $WithAddons arrive with their add-ons" }
+    if ($NotPlaced -gt 0) { $line = "$line, $NotPlaced not placed" }
+    return "$line, $Total in this kit"
+}
+
 function Show-ExakitSkills {
     param([switch]$Json)
     if (-not (Get-ExakitSkillsDir)) {
@@ -4333,12 +4346,19 @@ function Show-ExakitSkills {
     # following `next` looped. Give the case its own state, name the add-on that
     # owns it, and leave it out of the pending count the advice is computed
     # from. Twin of the same branch in exakit_skills_list (common.sh).
+    # The same three buckets as exakit_skills_list, so the labelled tally and
+    # the --json counts agree on both halves: installed, waiting for an add-on
+    # (a half-placed copy of one is the same case - skills-install will not
+    # touch it, installing the add-on places it whole), and not placed.
     $entries = @()
     $pending = 0
+    $placed = 0
+    $gated = 0
     foreach ($row in $rows) {
         $state = Get-ExakitSkillState -Id $row.Id
         $owner = Get-ExakitSkillGatingAddon -Id $row.Id
-        if ($state -eq "available" -and $owner) {
+        if ($state -ne "installed" -and $owner) {
+            $gated++
             $entries += [pscustomobject]@{
                 name = $row.Id; state = "needs-addon"; addon = $owner
                 remedy = "exakit marketplace $owner"; summary = $row.Summary
@@ -4346,7 +4366,7 @@ function Show-ExakitSkills {
             }
             continue
         }
-        if ($state -ne "installed") { $pending++ }
+        if ($state -ne "installed") { $pending++ } else { $placed++ }
         $entries += [pscustomobject]@{ name = $row.Id; state = $state; summary = $row.Summary; panel = $state }
     }
 
@@ -4368,6 +4388,13 @@ function Show-ExakitSkills {
         $skjDoc = [ordered]@{
             # `panel` is the human column only; it never reaches the contract.
             skills = @($entries | Select-Object -Property * -ExcludeProperty panel)
+            # Four labelled counts, installed + needs_addon + missing = total:
+            # the installer's sentence, the folders on disk and this listing
+            # each counted something different and said so nowhere. Twin of
+            # the counts object in exakit_skills_list --json.
+            counts = [ordered]@{
+                installed = $placed; needs_addon = $gated; missing = $skjMissing; total = $rows.Count
+            }
             installed_version = $(if ($skjHave) { "$skjHave" } else { $null })
             advertised_version = $(if ($skjWant) { "$skjWant" } else { $null })
             status = $skjStatus
@@ -4382,6 +4409,10 @@ function Show-ExakitSkills {
     foreach ($entry in $entries) {
         Write-ExakitPanelLine ("{0,-26} {1,-22} {2}" -f $entry.name, $entry.panel, $entry.summary)
     }
+    Write-ExakitPanelLine ""
+    # What the rows add up to, every number labelled: the table alone left a
+    # reader counting rows against the installer's sentence.
+    Write-ExakitPanelLine (Get-ExakitSkillsSummaryLine -Installed $placed -WithAddons $gated -NotPlaced $pending -Total $rows.Count)
     # Stale beats pending in the advice: copies that exist but predate a kit
     # update are the case a user cannot see for themselves, and the remedy is
     # the same command either way.
@@ -4416,6 +4447,7 @@ function Install-ExakitSkills {
     if (-not (Test-Path $skillsSrc)) { Warn2 "No skills\ directory in this kit build yet - nothing to install."; return $false }
 
     $installed = 0
+    $gated = 0
     foreach ($skillDir in (Get-ChildItem -Path $skillsSrc -Directory -ErrorAction SilentlyContinue)) {
         if (-not (Test-Path (Join-Path $skillDir.FullName "SKILL.md"))) { continue }
         # Frontmatter that does not parse is skipped HERE as well as in the
@@ -4430,8 +4462,9 @@ function Install-ExakitSkills {
         # given triggers for three tools they do not have - and one who installs
         # an add-on later gets its skill as part and parcel of that install. On a
         # refresh this also keeps the add-ons you DO have current without
-        # resurrecting the ones you removed.
-        if (-not (Test-ExakitSkillWanted -Path (Join-Path $skillDir.FullName "SKILL.md"))) { continue }
+        # resurrecting the ones you removed. Counted, so the closing sentence
+        # can say where the rest of the set is.
+        if (-not (Test-ExakitSkillWanted -Path (Join-Path $skillDir.FullName "SKILL.md"))) { $gated++; continue }
         $name = $skillDir.Name
         Copy-ExakitSkill -Source $skillDir.FullName -Name $name
         # The names go to the logfile, not the screen: nine ticked lines say
@@ -4440,8 +4473,17 @@ function Install-ExakitSkills {
         $installed++
     }
     if ($installed -eq 0) { Warn2 "No SKILL.md files found under $skillsSrc - nothing to install."; return $false }
-    if ($installed -eq 1) { $skillUnit = "AI skill" } else { $skillUnit = "AI skills" }
-    Ok "Installed $installed $skillUnit for Claude Code (~\.claude\skills) and open-standard agents (~\.agents\skills)"
+    # "Installed 8 AI skills" beside 13 rows in `exakit skills` read as five
+    # lost: name the whole set and where the rest come from. With nothing
+    # gated the sentence is unchanged. Twin of the same branch in
+    # exakit_install_skills (common.sh).
+    if ($gated -gt 0) {
+        if ($gated -eq 1) { $arrive = "1 arrives with its add-on" } else { $arrive = "$gated arrive with their add-ons" }
+        Ok "Installed $installed of $($installed + $gated) AI skills ($arrive) for Claude Code (~\.claude\skills) and open-standard agents (~\.agents\skills)"
+    } else {
+        if ($installed -eq 1) { $skillUnit = "AI skill" } else { $skillUnit = "AI skills" }
+        Ok "Installed $installed $skillUnit for Claude Code (~\.claude\skills) and open-standard agents (~\.agents\skills)"
+    }
 
     # A skill the NEW set no longer carries leaves the discovery roots with the
     # update: it was placed by the kit - the manifest's installed list is the
@@ -4619,7 +4661,6 @@ function Get-ExakitMarketplaceAddons {
             LogFn       = "Get-ExasolSchedulerLogPath"
             SummaryFn   = "Get-ExasolSchedulerSummary"
             SystemPresentFn = "Get-ExasolSchedulerSystemPresent"
-            LatestFn     = "Get-ExasolSchedulerLatest"
             ApplicableFn = "Test-ExasolSchedulerApplicable"
             ReasonFn     = "Get-ExasolSchedulerApplicableReason"
             EnvVar      = "EXAKIT_EXASOL_SCHEDULER_VERSION"
@@ -5154,6 +5195,11 @@ function Show-ExakitMarketplaceMenu {
     # saying why, the way the MCP client list shows "Cursor - not installed".
     # Twin of _exakit_addon_table_build in common.sh.
     $addonIds = New-Object 'System.Collections.Generic.List[string]'
+    # Above the table, not under it: the Description column is a repository's
+    # About line, which is a table cell and not a reference. The reference is
+    # the help document, and nothing on this screen named it. Twin of the same
+    # line in exakit_marketplace_menu.
+    Info "Details on any add-on: exakit help <id>"
     $script:ExakitAddonTable = New-ExakitTable -Title "Marketplace add-ons" -Col1 "Add-on" `
         -Col2 "Version" -Col3 "Description"
     [void](Add-ExakitTableRow -Kind "group" -Label "Select All" -Table $script:ExakitAddonTable)
@@ -5282,8 +5328,21 @@ function Show-ExakitMarketplaceList {
         }
         $version = Get-ExakitVersionPlain ("" + $version)
         $entry = [ordered]@{ id = $addon.Id; status = $status; installed = ($status -eq "installed") }
-        if ($version) { $entry.version = $version }
+        # version joins repo and docs below: always present, null when unknown.
+        if ($version) { $entry.version = $version } else { $entry.version = $null }
         if ($reason) { $entry.reason = $reason }
+        # Where to read more: the add-on's repository and documentation link,
+        # from its help document on disk (no network). Always present, null
+        # when unknown, so the shape never has to be probed for - the same
+        # posture as remedy. Twin of the repo/docs fields in
+        # exakit_marketplace_list.
+        $repo = Get-ExakitAddonRepo $addon.Id
+        $docs = ""
+        $doc = Get-ExakitAddonDocument $addon.Id
+        if ($doc -and $doc.PSObject.Properties["docs"]) { $docs = "" + $doc.docs }
+        if ($docs -notlike "https://*") { $docs = "" }
+        if ($repo) { $entry.repo = $repo } else { $entry.repo = $null }
+        if ($docs) { $entry.docs = $docs } else { $entry.docs = $null }
         $entries += [pscustomobject]$entry
     }
     if ($Json) {
@@ -5299,6 +5358,10 @@ function Show-ExakitMarketplaceList {
             Write-Host ("{0,-16} ({1})" -f "", $entry.reason)
         }
     }
+    # The reference pages exist (exakit help <id> renders ten of them, offline)
+    # and nothing on this screen said so.
+    Write-Host ""
+    Write-Host "Details on any add-on: exakit help <id>"
 }
 
 # The add-ons table: the rows a reader ticks in the selection are the rows the
@@ -6060,6 +6123,41 @@ function Get-ExakitComponentFallback {
 # Get-ExakitComponentLatest - the newest version upstream publishes. The
 # implementation behind EXAKIT_VERSION_POLICY=latest; under the default manifest
 # policy nothing calls it, which keeps `exakit version` off the network.
+# Get-ExakitComponentLatestSource - twin of exakit_component_latest_source:
+# "pinned" when the add-on answers its own "latest" through the registry's
+# LatestFn (only a build the kit's packaging workflow has published and
+# fingerprinted is installable - exasol-scheduler, json-tables), "upstream"
+# when the answer is a live GitHub or PyPI lookup. The latest-policy screen
+# used to credit every version to an upstream lookup, pinned ones included.
+function Get-ExakitComponentLatestSource {
+    param([string]$Component)
+    $addon = Get-ExakitMarketplaceAddon $Component
+    if ($addon -and $addon.PSObject.Properties["LatestFn"] -and $addon.LatestFn -and
+        (Get-Command $addon.LatestFn -ErrorAction SilentlyContinue)) { return "pinned" }
+    return "upstream"
+}
+
+# Get-ExakitPinnedAddons - twin of exakit_pinned_addons: the registered
+# add-ons whose "latest" is pinned.
+function Get-ExakitPinnedAddons {
+    $ids = @()
+    foreach ($addon in (Get-ExakitMarketplaceAddons)) {
+        if ((Get-ExakitComponentLatestSource $addon.Id) -eq "pinned") { $ids += $addon.Id }
+    }
+    return $ids
+}
+
+# Get-ExakitPinnedLatestNote - twin of exakit_pinned_latest_note: the
+# qualifier an "already current" line carries under
+# EXAKIT_VERSION_POLICY=latest for a pinned add-on, "" otherwise - so the
+# manifest-policy wording stays exactly as it was.
+function Get-ExakitPinnedLatestNote {
+    param([string]$Component)
+    if ($script:VersionPolicy -ne "latest") { return "" }
+    if ((Get-ExakitComponentLatestSource $Component) -ne "pinned") { return "" }
+    return " - the build this kit pins"
+}
+
 function Get-ExakitComponentLatest {
     param([string]$Component)
     switch ($Component) {
@@ -6185,6 +6283,15 @@ function Get-ExakitStartupDir {
     $base = $env:APPDATA
     if (-not $base) { $base = Join-Path (Get-ExakitAgentHome) "AppData\Roaming" }
     return (Join-Path $base "Microsoft\Windows\Start Menu\Programs\Startup")
+}
+
+# Test-ExakitUpdateTarget <target> - whether Get-ExakitUpdateTargets would
+# resolve it, without its Fail: the caller refuses bad input itself (exit 2)
+# before any update runs. Twin of `exakit_update_targets ... || reject`.
+function Test-ExakitUpdateTarget {
+    param([string]$Target = "all")
+    if ($Target -in @("all", "runtime", "database", "db", "personal", "exakit", "exapump", "mcp", "pyexasol", "skills", "kit2")) { return $true }
+    return [bool](Get-ExakitMarketplaceAddon $Target)
 }
 
 function Get-ExakitUpdateTargets {

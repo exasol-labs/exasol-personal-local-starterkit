@@ -59,7 +59,8 @@ foreach ($case in @(
     @{ Args = @("status", "--json");     Label = "status --json" },
     @{ Args = @("info", "--json");       Label = "info --json" },
     @{ Args = @("mcp-doctor", "--json"); Label = "mcp-doctor --json" },
-    @{ Args = @("version", "--json");    Label = "version --json" }
+    @{ Args = @("version", "--json");    Label = "version --json" },
+    @{ Args = @("update", "--json");     Label = "update --json" }
 )) {
     $r = Run-Cli $case.Args
     Check "$($case.Label) (not installed) exits 4" ($r.Code -eq 4) "exit $($r.Code): $(Head $r.Out 120)"
@@ -82,7 +83,17 @@ if ($doc) { Check "help sql --json finds the sql command" (@($doc.commands | Whe
 $r = Run-Cli @("skills", "--json")
 Check "skills --json exits 0" ($r.Code -eq 0) "exit $($r.Code)"
 $doc = Parse-Json "skills --json" $r.Out
-if ($doc) { Check "skills --json lists the kit's skills" (@($doc.skills).Count -ge 5) "count $(@($doc.skills).Count): $(Head $r.Out 120)" }
+if ($doc) {
+    Check "skills --json lists the kit's skills" (@($doc.skills).Count -ge 5) "count $(@($doc.skills).Count): $(Head $r.Out 120)"
+    # The one labelled tally: counts carries installed, needs_addon, missing and
+    # total, the three add up to the total, and the total is the list's length.
+    $c = $doc.counts
+    Check "skills --json carries counts" ($null -ne $c -and $c.PSObject.Properties["installed"] -and $c.PSObject.Properties["needs_addon"] -and $c.PSObject.Properties["missing"] -and $c.PSObject.Properties["total"]) (Head $r.Out 160)
+    if ($c) {
+        Check "skills --json counts add up" (([int]$c.installed + [int]$c.needs_addon + [int]$c.missing) -eq [int]$c.total) "installed=$($c.installed) needs_addon=$($c.needs_addon) missing=$($c.missing) total=$($c.total)"
+        Check "skills --json counts.total is the list's length" ([int]$c.total -eq @($doc.skills).Count) "total=$($c.total) list=$(@($doc.skills).Count)"
+    }
+}
 
 # --- 3. the library, dot-sourced: the helpers behind the shapes -------------
 Write-Host "--- library"
@@ -167,6 +178,41 @@ $r = Run-Cli @("mcp-doctor", "--json")
 $doc = Parse-Json "mcp-doctor --json (live install)" $r.Out
 if ($doc) { Check "mcp-doctor --json agrees: installing, installed, exit 3" ($doc.status -eq "installing" -and $doc.installed -eq $true -and $r.Code -eq 3) "status=$($doc.status) installed=$($doc.installed) exit=$($r.Code)" }
 Remove-Item -Path $script:InstallLockPath -Force
+
+# --- 5. the new surfaces on that manifest: update <unknown> --json, marketplace rows
+Write-Host "--- update and marketplace on the manifest"
+# An unknown update target is bad input, refused before any updater runs:
+# one rejected object, exit 2 - the shell's contract. It used to come back as
+# a failed RUN object (component null, exit 1) because the target was resolved
+# inside the silenced run and its Fail was swallowed with the screen.
+# A recorded runtime, or the install check answers first (exit 3, "no
+# database") - the same gate as the shell's _require_install. Put back after.
+$manifestBefore = Get-Content -Raw -Path $script:ManifestPath
+Set-ExakitManifestValue "runtime.type" "personal"
+$r = Run-Cli @("update", "nosuch", "--json")
+Set-Content -Path $script:ManifestPath -Value $manifestBefore -NoNewline
+Check "update <unknown> --json exits 2" ($r.Code -eq 2) "exit $($r.Code): $(Head $r.Out 160)"
+$doc = Parse-Json "update <unknown> --json" $r.Out
+if ($doc) {
+    Check "update <unknown> --json is a refusal, not a run" ($doc.rejected -eq $true -and -not $doc.PSObject.Properties["failed"]) (Head $r.Out 160)
+    Check "update <unknown> --json names the target" ("$($doc.error)" -match "Unknown update target 'nosuch'") "error=$($doc.error)"
+}
+$r = Run-Cli @("marketplace", "--json")
+Check "marketplace --json exits 0" ($r.Code -eq 0) "exit $($r.Code): $(Head $r.Out 160)"
+$doc = Parse-Json "marketplace --json" $r.Out
+if ($doc) {
+    $rows = @($doc.addons)
+    Check "marketplace --json lists the add-ons" ($rows.Count -ge 5) "count $($rows.Count)"
+    $shapeOk = $true; $why = ""
+    foreach ($row in $rows) {
+        foreach ($k in @("id", "status", "installed", "version", "repo", "docs")) {
+            if (-not $row.PSObject.Properties[$k]) { $shapeOk = $false; $why += "$($row.id) lacks $k; " }
+        }
+        if ($null -ne $row.docs -and "$($row.docs)" -notlike "https://*") { $shapeOk = $false; $why += "$($row.id) docs not https; " }
+        if ($null -ne $row.repo -and "$($row.repo)" -notmatch '^[^/\s]+/[^/\s]+$') { $shapeOk = $false; $why += "$($row.id) repo not owner/name; " }
+    }
+    Check "marketplace --json: every row carries id, status, installed, version, repo and docs (null when unknown)" $shapeOk $why
+}
 
 # --- a checksum does not depend on a cmdlet that may not load ----------------
 # Get-FileHash arrives through module auto-loading, which is not guaranteed on

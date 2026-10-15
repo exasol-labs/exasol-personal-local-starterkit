@@ -539,8 +539,13 @@ Hard rules for both files (CI enforces them):
 
 `repo` for a GitHub-release-installed tool, `package` for a PyPI one — that
 field is what the generic upstream lookup (`EXAKIT_VERSION_POLICY=latest`) and
-the auto-bump workflow read. Keep the file canonical: `python3 -m json.tool
---indent 2` output, LF-only (CI diffs it).
+the auto-bump workflow read. A tool the kit repackages itself (json-tables)
+carries neither: its `my_tool_latest` hook answers from
+`versions.json`, `exakit_component_latest` asks that hook *first*, so a `repo`
+beside it would never be read, and `exakit_component_latest_source` reports
+such a tool as `pinned` — which is how the latest-policy screen names it
+instead of crediting its version to an upstream lookup. Keep the file
+canonical: `python3 -m json.tool --indent 2` output, LF-only (CI diffs it).
 
 ### 3. Add one registry line each side
 
@@ -582,9 +587,14 @@ fields carry the marketplace:
   "kind": "addon",
   "title": "my-tool",
   "tagline": "What it does, in one clause.",
-  "repo": "exasol-labs/my-tool"
+  "repo": "exasol-labs/my-tool",
+  "docs": "https://github.com/exasol-labs/my-tool#readme"
 }
 ```
+
+`docs` is required and must be an https URL: `tests/marketplace.sh` rejects a
+help document without one, and it is the `docs` field every row of
+`exakit marketplace --json` carries (`null` only when a document has none).
 
 `repo` is where the About is read from — `https://api.github.com/repos/<repo>`,
 resolved offline from this document, so a machine with no network still knows

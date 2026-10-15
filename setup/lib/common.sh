@@ -985,7 +985,7 @@ reject() {
     # no-library branch scans for --json and answers with an object before
     # exiting 4.
     if [ "${EXAKIT_REFUSAL_JSON:-0}" = "1" ]; then
-        printf '{"ok": false, "error": "%s", "remedy": null, "rejected": true}\n' \
+        exakit_json_out '{"ok": false, "error": "%s", "remedy": null, "rejected": true}\n' \
             "$(_exakit_json_string "$*")"
         _exakit_log_file "REJECT $*"
         exit 2
@@ -2881,6 +2881,52 @@ exakit_component_latest() {
     esac
 }
 
+# exakit_component_latest_source <component> — where exakit_component_latest's
+# answer for this Component comes from: "upstream" (a live GitHub or PyPI
+# lookup) or "pinned" (the add-on's own <id>_latest hook, which answers from
+# versions.json because only a build the kit's packaging workflow has published
+# and fingerprinted is installable — json-tables).
+#
+# The distinction has to be visible. EXAKIT_VERSION_POLICY=latest printed one
+# line for the whole run — "Available versions come from live upstream
+# lookups" — and then "exasol-scheduler is already current (v0.2)" while
+# upstream had shipped v0.3.1. Both lines were untrue for that one add-on, and
+# nothing on screen said its lookup never left the manifest (upstream #27).
+# The scheduler has since moved to upstream's own release and is looked up
+# like exapump; json-tables is the case that remains.
+# ⇄ twin: Get-ExakitComponentLatestSource.
+exakit_component_latest_source() {
+    if _exakit_addon_registered "$1" && \
+       command -v "$(_exakit_addon_fn "$1" latest)" >/dev/null 2>&1; then
+        printf 'pinned\n'
+    else
+        printf 'upstream\n'
+    fi
+}
+
+# exakit_pinned_addons — the registered add-ons whose "latest" is pinned, one
+# id per line. The hook lives in the add-on's module, so the modules are
+# loaded first: an unsourced module would read as "upstream".
+# ⇄ twin: Get-ExakitPinnedAddons.
+exakit_pinned_addons() {
+    _exakit_marketplace_load_modules 2>/dev/null || true
+    for _pa_id in $(exakit_marketplace_addons | cut -d'|' -f1); do
+        [ "$(exakit_component_latest_source "$_pa_id")" = "pinned" ] && printf '%s\n' "$_pa_id"
+    done
+    return 0
+}
+
+# exakit_pinned_latest_note <component> — the qualifier an "already current"
+# line carries under EXAKIT_VERSION_POLICY=latest for a pinned add-on, or
+# nothing at all. Empty under every other policy, so the manifest-policy
+# wording the updaters print is untouched. ⇄ twin: Get-ExakitPinnedLatestNote.
+exakit_pinned_latest_note() {
+    [ "${EXAKIT_VERSION_POLICY:-manifest}" = "latest" ] || return 0
+    [ "$(exakit_component_latest_source "$1")" = "pinned" ] || return 0
+    printf '%s' " — the build this kit pins"
+    return 0
+}
+
 # _exakit_component_block <component> — where this Component lives in
 # versions.json. One mapping serves version, severity, note and min_kit_version.
 _exakit_component_block() {
@@ -3352,7 +3398,14 @@ exakit_component_current() {
 #      further wiring.
 #   2. Add a components.<id> block to versions.json: version, severity, and
 #      repo (GitHub-release-installed) or package (PyPI-installed) — that
-#      field is what the generic upstream lookup reads.
+#      field is what the generic upstream lookup reads. An add-on the kit
+#      repackages itself (json-tables) carries neither and
+#      defines <id>_latest instead: exakit_component_latest asks that hook
+#      FIRST, so a repo field beside it would never be read. The hook answers
+#      from versions.json on purpose — only a build the pkg workflow has
+#      published and fingerprinted is installable — and
+#      exakit_component_latest_source is how the rest of the kit tells the
+#      two apart.
 #   3. Add one line to exakit_marketplace_addons below.
 # The add-on's one-line description is NOT one of those changes: it is the
 # About field of its own repository, read through
@@ -4400,6 +4453,11 @@ EXAKIT_MM_COVERED
     done
     EXAKIT_ADDON_TABLE_DISABLED="$_mm_covered"
     EXAKIT_ADDON_TABLE_META="$_mm_meta"
+    # Above the table, not under it: the Description column is a repository's
+    # About line, which is a table cell and not a reference. The reference is
+    # the help document, and nothing on this screen named it. ⇄ twin:
+    # Show-ExakitMarketplaceMenu.
+    info "Details on any add-on: exakit help <id>"
     _exakit_addon_table_build "$EXAKIT_ADDON_TABLE_STATE" "${_mm_pick_ids[@]}"
     UI_TABLE_TITLE="Marketplace add-ons"
     # The first column's heading, or the add-ons would sit under "Dataset".
@@ -4449,6 +4507,38 @@ EXAKIT_MM_COVERED
     _exakit_marketplace_apply "$_mm_picked"
 }
 
+# _exakit_marketplace_json_compact <rows> — the marketplace --json document
+# from the "id|status|version|reason|repo|docs" rows, one add-on per line;
+# exakit_marketplace_list hands it to exakit_json_pretty.
+_exakit_marketplace_json_compact() {
+    _ml_rows="$1"
+    _ml_first=1
+    printf '{\n  "addons": [\n'
+    while IFS='|' read -r _ml_id _ml_status _ml_ver _ml_reason _ml_repo _ml_docs; do
+        [ -n "$_ml_id" ] || continue
+        [ "$_ml_first" -eq 1 ] || printf ',\n'
+        _ml_first=0
+        printf '    {"id": "%s", "status": "%s", "installed": %s' \
+            "$_ml_id" "$_ml_status" \
+            "$([ "$_ml_status" = "installed" ] && echo true || echo false)"
+        if [ -n "$_ml_ver" ]; then printf ', "version": "%s"' "$_ml_ver"; else printf ', "version": null'; fi
+        [ -n "$_ml_reason" ] && printf ', "reason": "%s"' \
+            "$(printf '%s' "$_ml_reason" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+        # Always present, null when unknown: a key that comes and goes is
+        # a shape a parser has to probe for, and remedy set the precedent.
+        if [ -n "$_ml_repo" ]; then printf ', "repo": "%s"' "$_ml_repo"; else printf ', "repo": null'; fi
+        if [ -n "$_ml_docs" ]; then
+            printf ', "docs": "%s"' "$(printf '%s' "$_ml_docs" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+        else
+            printf ', "docs": null'
+        fi
+        printf '}'
+    done <<EXAKIT_ML_JSON
+$_ml_rows
+EXAKIT_ML_JSON
+    printf '\n  ]\n}\n'
+}
+
 # exakit_marketplace_list <json01> — the READ-ONLY answer to "what add-ons
 # exist and where do they stand?", for agents and scripts that must never
 # trigger an install by looking. One row per registered add-on, whatever its
@@ -4477,34 +4567,33 @@ exakit_marketplace_list() {
             _ml_status="available"
             _ml_ver="$(exakit_version_plain "$(exakit_component_available "$_ml_id" 2>/dev/null || true)")"
         fi
-        _ml_rows="$_ml_rows$_ml_id|$_ml_status|$_ml_ver|$_ml_reason
+        # Where to read more. A listing of names and version numbers is all an
+        # agent deciding whether an add-on fits a task had to go on; the help
+        # document for every add-on already carries its repository and a
+        # documentation link, so the row points at both. Read from the
+        # document on disk (no network), empty when the document is missing.
+        _ml_repo="$(_exakit_addon_repo "$_ml_id" 2>/dev/null || true)"
+        _ml_docs="$(_exakit_addon_doc_field "$_ml_id" docs 2>/dev/null || true)"
+        case "$_ml_docs" in
+            https://*) ;;
+            *) _ml_docs="" ;;
+        esac
+        _ml_rows="$_ml_rows$_ml_id|$_ml_status|$_ml_ver|$_ml_reason|$_ml_repo|$_ml_docs
 "
     done <<EXAKIT_ML_EOF
 $(exakit_marketplace_addons)
 EXAKIT_ML_EOF
 
     if [ "$_ml_json" = "1" ]; then
-        _ml_first=1
-        printf '{\n  "addons": [\n'
-        while IFS='|' read -r _ml_id _ml_status _ml_ver _ml_reason; do
-            [ -n "$_ml_id" ] || continue
-            [ "$_ml_first" -eq 1 ] || printf ',\n'
-            _ml_first=0
-            printf '    {"id": "%s", "status": "%s", "installed": %s' \
-                "$_ml_id" "$_ml_status" \
-                "$([ "$_ml_status" = "installed" ] && echo true || echo false)"
-            [ -n "$_ml_ver" ] && printf ', "version": "%s"' "$_ml_ver"
-            [ -n "$_ml_reason" ] && printf ', "reason": "%s"' \
-                "$(printf '%s' "$_ml_reason" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-            printf '}'
-        done <<EXAKIT_ML_JSON
-$_ml_rows
-EXAKIT_ML_JSON
-        printf '\n  ]\n}\n'
+        # Built as one line per add-on, then laid out one key per line by the
+        # same formatter status --json and skills --json use: a row of seven
+        # fields on one 180-character line is not readable on a screen.
+        _ml_doc="$(_exakit_marketplace_json_compact "$_ml_rows")"
+        exakit_json_pretty "$_ml_doc"
         return 0
     fi
 
-    while IFS='|' read -r _ml_id _ml_status _ml_ver _ml_reason; do
+    while IFS='|' read -r _ml_id _ml_status _ml_ver _ml_reason _ml_repo _ml_docs; do
         [ -n "$_ml_id" ] || continue
         printf '%-16s %s%s%s\n' "$_ml_id" "$_ml_status" \
             "${_ml_ver:+ }" "$_ml_ver"
@@ -4512,6 +4601,9 @@ EXAKIT_ML_JSON
     done <<EXAKIT_ML_OUT
 $_ml_rows
 EXAKIT_ML_OUT
+    # The reference pages exist (exakit help <id> renders ten of them, offline)
+    # and nothing on this screen said so.
+    printf '\nDetails on any add-on: exakit help <id>\n'
     return 0
 }
 
@@ -4755,6 +4847,7 @@ exakit_print_versions_source_line() {
         manifest) ;;
         latest)
             info "Available versions come from live upstream lookups (EXAKIT_VERSION_POLICY=latest)"
+            _exakit_print_pinned_line
             _exakit_print_override_line
             return 0
             ;;
@@ -4794,6 +4887,19 @@ exakit_print_versions_source_line() {
         info "This kit is older than the published manifest — update it first: exakit update"
     fi
     _exakit_print_override_line
+    return 0
+}
+
+# _exakit_print_pinned_line — the add-ons the "live upstream lookups" line
+# does NOT describe, named on their own line. Their "latest" never leaves
+# versions.json (exakit_component_latest_source), and a reader who has just
+# been told everything was looked up upstream would otherwise take "already
+# current" as upstream's word. Silent when no add-on is pinned.
+# ⇄ twin: Write-ExakitPinnedLine.
+_exakit_print_pinned_line() {
+    _ppl_ids="$(exakit_pinned_addons | tr '\n' ' ' | sed 's/ $//; s/ /, /g')"
+    [ -n "$_ppl_ids" ] || return 0
+    info "Pinned by this kit, not looked up upstream: $_ppl_ids (newer versions come with a kit update)"
     return 0
 }
 
@@ -5374,7 +5480,7 @@ print(json.dumps({
     "kit": {"version": sys.argv[3], "installed_at": sys.argv[4] or None},
     "versions_source": sys.argv[5] or None,
     "components": rows,
-}, indent=2))
+}, indent=2, ensure_ascii=False))
 EXAKIT_VJ_PY
         _uvt_rc=$?
         rm -f "$_uvt_tmp"
@@ -6086,16 +6192,34 @@ exakit_offer_runtime_update() {
     exakit_apply_runtime_update "$_oru_component"
 }
 
+# exakit_update_options_hint — the ONE sentence that says which options
+# `exakit update` takes, and where. It names `personal` alone on purpose:
+# the aliases (runtime, database, db) still work, but listing them, or
+# saying "after the target", reads as if other components took the staged
+# flags too, and none does. Two parsers refuse options: the dispatcher
+# arm in setup/exakit (an option it does not know) and exakit_update below (an
+# option in the wrong position). They used to carry two different lists — the
+# dispatcher's union of everything valid somewhere ("--yes -y --plan --backup
+# --apply") and this function's "--yes" — so `exakit update --json` advertised
+# --plan and a retry with --plan was refused by a list that left it out. An
+# agent that retries with an option the tool just advertised must not be
+# refused twice, so both refusals print this and nothing else about options.
+exakit_update_options_hint() {
+    printf '%s\n' "supported: --yes (-y) and --json anywhere; --plan, --backup and --apply only with personal, as in: exakit update personal --plan"
+}
+
 exakit_update() {
     # -y/--yes answers the runtime offer below and may appear anywhere in the
     # arguments; everything else keeps its position, so the target and the
     # Personal upgrade options arrive exactly as they did. Rebuilt by rotating
     # the positional parameters — no arrays, so bash 3.2 and dash both cope.
     _upd_assume_yes=0
+    _upd_json=0
     _upd_left="$#"
     while [ "$_upd_left" -gt 0 ]; do
         case "$1" in
-            -y|--yes) _upd_assume_yes=1 ;;
+            -y|--yes)  _upd_assume_yes=1 ;;
+            -j|--json) _upd_json=1 ;;
             *) set -- "$@" "$1" ;;
         esac
         shift
@@ -6110,17 +6234,135 @@ exakit_update() {
     fi
     _target="${1:-all}"
     if [ "$#" -gt 0 ]; then shift; fi
+    # Bad input is exit 2 and records nothing, like every other refusal: an
+    # option behind the wrong target is not a failed update, so not a die.
     if [ "$#" -gt 0 ]; then
         case "$_target" in
             personal|runtime|database|db) ;;
-            *) die "Update options are only supported for Personal runtime updates." ;;
+            *) reject "Update options are only supported for Personal runtime updates ($(exakit_update_options_hint))." ;;
         esac
     fi
     case "$_target" in
-        -*) reject "Unknown option '$_target' for update (supported: --yes; a component name selects what to update)." ;;
+        -*) reject "Unknown option '$_target' for update ($(exakit_update_options_hint))." ;;
     esac
     _targets="$(exakit_update_targets "$_target")" || reject "Unknown update target '$_target' (see: exakit version)"
     exakit_init_logging
+    # --json: the same run, with every screen line sent to the logfile and
+    # ONE object on stdout at the end. Nothing may prompt under --json, so a
+    # database change that was not pre-answered (--yes or
+    # EXAKIT_CONFIRM_RUNTIME_UPDATE) is deferred and named in remedy, exactly
+    # as an unattended run defers it. The work runs in a subshell so that an
+    # updater's die() ends the run, not the process, and the object still
+    # says what landed before it stopped.
+    if [ "$_upd_json" = "1" ]; then
+        EXAKIT_UPDATE_JSON=1; export EXAKIT_UPDATE_JSON
+        # The caller's own answer stands: EXAKIT_CONFIRM_RUNTIME_UPDATE=1 (or
+        # --yes, which set it above) applies the database change, 0 defers it.
+        # Only a missing or unreadable answer defaults to "no", so the run can
+        # never reach a prompt.
+        case "${EXAKIT_CONFIRM_RUNTIME_UPDATE:-}" in
+            1|y|Y|yes|YES|Yes|0|n|N|no|NO|No) ;;
+            *) EXAKIT_CONFIRM_RUNTIME_UPDATE=0; export EXAKIT_CONFIRM_RUNTIME_UPDATE ;;
+        esac
+        EXAKIT_UPDATE_RESULTS="$(mktemp "${TMPDIR:-/tmp}/exakit-update.XXXXXX")" || die "Could not create a temporary file."
+        export EXAKIT_UPDATE_RESULTS
+        # A loader while the run is silent: the spinner draws only when stdout
+        # is a terminal and clears its line before the object prints, so a
+        # piped --json never sees a frame, and a person watching sees the
+        # elapsed time instead of a blank screen for a minute.
+        ui_spin_begin "Applying updates (every line goes to the log: exakit logs)"
+        ( _exakit_update_run "$_target" "$_targets" "$@" ) >>"${EXAKIT_LOG_FILE:-/dev/null}" 2>&1
+        _upd_rc=$?
+        ui_spin_end
+        _exakit_update_json_report "$EXAKIT_UPDATE_RESULTS" "$_upd_rc"
+        _upd_json_rc=$?
+        rm -f "$EXAKIT_UPDATE_RESULTS"
+        return "$_upd_json_rc"
+    fi
+    _exakit_update_run "$_target" "$_targets" "$@"
+}
+
+# _exakit_update_note <component> <outcome> <installed> <advertised> [remedy]
+# — one line in the --json results file; a no-op on the human screen.
+_exakit_update_note() {
+    [ -n "${EXAKIT_UPDATE_RESULTS:-}" ] || return 0
+    printf '%s|%s|%s|%s|%s\n' "$1" "$2" "${3:-}" "${4:-}" "${5:-}" >> "$EXAKIT_UPDATE_RESULTS"
+    return 0
+}
+
+# _exakit_update_json_report <results-file> <run-rc> — the one object
+# `exakit update --json` prints: what was updated, deferred, left current,
+# skipped or failed, and the one command that resolves what is left.
+_exakit_update_json_report() {
+    if exakit_can_run_python; then
+        run_python - "$1" "$2" <<'EXAKIT_UPDATE_JSON_PY'
+import json, sys
+rows = []
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        for line in handle:
+            parts = line.rstrip("\n").split("|")
+            if len(parts) >= 5 and parts[0]:
+                rows.append(parts)
+except OSError:
+    pass
+rc = int(sys.argv[2])
+def entries(kind):
+    out = []
+    for comp, outcome, cur, avail, remedy in rows:
+        if outcome != kind:
+            continue
+        entry = {"component": comp, "from": cur or None, "to": avail or None}
+        if remedy:
+            entry["remedy"] = remedy
+        out.append(entry)
+    return out
+updated, deferred, failed = entries("updated"), entries("deferred"), entries("failed")
+blocked, skipped, ahead = entries("blocked"), entries("skipped"), entries("ahead")
+current = [comp for comp, outcome, _, _, _ in rows if outcome == "current"]
+if rc != 0 and not failed:
+    failed.append({"component": None, "from": None, "to": None,
+                   "remedy": "exakit update", "error": "the update did not finish (see exakit logs)"})
+if failed:
+    status, remedy = "failed", failed[0].get("remedy") or "exakit update"
+elif deferred:
+    status, remedy = "deferred", deferred[0].get("remedy") or "exakit update --yes"
+elif blocked:
+    status, remedy = "blocked", "exakit update"
+elif updated:
+    status, remedy = "updated", None
+else:
+    status, remedy = "current", None
+print(json.dumps({
+    "ok": not failed,
+    "status": status,
+    "updated": updated,
+    "deferred": deferred,
+    "blocked": blocked,
+    "current": current,
+    "skipped": skipped,
+    "ahead": ahead,
+    "failed": failed,
+    "remedy": remedy,
+    "remedy_hint": ("a database change needs the database stopped; --yes (or EXAKIT_CONFIRM_RUNTIME_UPDATE=1) applies it unattended" if status == "deferred" else None),
+}, indent=2, ensure_ascii=False))
+sys.exit(0 if not failed else 1)
+EXAKIT_UPDATE_JSON_PY
+        return $?
+    fi
+    # No Python: the verdict without the lists.
+    if [ "$2" -eq 0 ]; then
+        exakit_json_out '{"ok": true, "status": "done", "remedy": null, "remedy_hint": "no Python runtime, so the per-component lists are not available; see exakit logs"}\n'
+        return 0
+    fi
+    exakit_json_out '{"ok": false, "status": "failed", "remedy": "exakit update", "remedy_hint": "the update did not finish (see exakit logs)"}\n'
+    return 1
+}
+
+# _exakit_update_run <target> <targets> [component options...] — the body of
+# exakit_update: one pass over the targets, applying what is advertised.
+_exakit_update_run() {
+    _target="$1"; _targets="$2"; shift 2
     # An explicit update applies what is advertised right NOW, so ask upstream
     # once and resolve in this shell — the loop below reads the same document.
     if [ "${EXAKIT_VERSION_POLICY:-manifest}" = "manifest" ]; then
@@ -6140,6 +6382,7 @@ exakit_update() {
         # nothing the user can do), and an explicit target says why rather than
         # failing deep inside the installer.
         if ! exakit_component_supported "$_upd_actual"; then
+            _exakit_update_note "$_upd_actual" skipped "$_cur" "$_avail"
             [ "$_target" = "all" ] && continue
             die "$_upd_actual has no build for this platform, so there is nothing to update."
         fi
@@ -6149,6 +6392,7 @@ exakit_update() {
         # report the real reason.
         if [ "$_target" = "all" ] && [ -z "$_avail" ]; then
             warn "No advertised version for $_upd_actual — skipping it. Details: exakit version"
+            _exakit_update_note "$_upd_actual" skipped "$_cur" ""
             continue
         fi
         # Never backwards, and this has to be settled BEFORE the heavy branch.
@@ -6161,6 +6405,7 @@ exakit_update() {
         # by skipping the question.
         if exakit_component_is_ahead "$_upd_actual"; then
             ok "$_upd_actual ${_cur:-unknown} is newer than the tested $_avail — keeping yours"
+            _exakit_update_note "$_upd_actual" ahead "$_cur" "$_avail"
             continue
         fi
         # A blanket update stops the database only for an answer it was given: on a
@@ -6171,9 +6416,13 @@ exakit_update() {
             if [ -n "$_cur" ] && [ -n "$_avail" ] && [ "$_cur" != "unknown" ] && [ "$_cur" != "$_avail" ]; then
                 if exakit_offer_runtime_update "$_component" "$_upd_actual" "$_cur" "$_avail"; then
                     _acted=$((_acted + 1))
+                    _exakit_update_note "$_upd_actual" updated "$_cur" "$_avail"
                 else
                     _deferred=$((_deferred + 1))
+                    _exakit_update_note "$_upd_actual" deferred "$_cur" "$_avail" "exakit update --yes"
                 fi
+            else
+                _exakit_update_note "$_upd_actual" current "$_cur" "$_avail"
             fi
             continue
         fi
@@ -6189,6 +6438,7 @@ exakit_update() {
         # work plan, not a sweep of every component's repair path.
         if [ -n "$_cur" ] && [ -n "$_avail" ] && [ "$_cur" = "$_avail" ]; then
             if [ "$_target" = "all" ] || ! _exakit_addon_registered "$_component"; then
+                _exakit_update_note "$_upd_actual" current "$_cur" "$_avail"
                 continue
             fi
         fi
@@ -6197,13 +6447,30 @@ exakit_update() {
         _upd_min_kit="$(exakit_component_min_kit "$_upd_actual" 2>/dev/null || true)"
         if [ -n "$_upd_min_kit" ] && ! exakit_min_kit_satisfied "$_upd_min_kit"; then
             warn "$_upd_actual $_avail needs kit >= $_upd_min_kit — update the kit first: exakit update"
+            _exakit_update_note "$_upd_actual" blocked "$_cur" "$_avail" "exakit update"
             [ "$_target" = "all" ] && continue
             die "Refusing to install $_upd_actual $_avail on kit $(exakit_component_current exakit 2>/dev/null || printf unknown)."
         fi
         if [ -n "$_avail" ]; then
             info "$_upd_actual ${_cur:-not installed} -> $_avail"
         fi
-        exakit_update_component "$_component" "$@"
+        # Under --json each updater runs in its own subshell, so one that
+        # die()s is recorded as failed and the rest still run; on the screen
+        # a die stops the run as it always did.
+        if [ "${EXAKIT_UPDATE_JSON:-0}" = "1" ]; then
+            if ( exakit_update_component "$_component" "$@" ); then
+                if [ -n "$_cur" ] && [ "$_cur" = "$_avail" ]; then
+                    _exakit_update_note "$_upd_actual" current "$_cur" "$_avail"
+                else
+                    _exakit_update_note "$_upd_actual" updated "$_cur" "$_avail"
+                fi
+            else
+                _exakit_update_note "$_upd_actual" failed "$_cur" "$_avail" "exakit update $_component"
+                _upd_failed=$((${_upd_failed:-0} + 1))
+            fi
+        else
+            exakit_update_component "$_component" "$@"
+        fi
         _acted=$((_acted + 1))
     done
     if [ "$_acted" -eq 0 ] && [ "$_deferred" -eq 0 ]; then
@@ -6212,6 +6479,7 @@ exakit_update() {
     if [ "$_deferred" -gt 0 ]; then
         info "See everything, including the deferred runtime change: exakit version"
     fi
+    [ "${_upd_failed:-0}" -eq 0 ] || return 1
     return 0
 }
 
@@ -7105,8 +7373,123 @@ exakit_skill_state() {
     fi
 }
 
+# exakit_skills_summary_line <installed> <with-addons> <not-placed> <total> —
+# the one sentence every skill count is read against, each number named.
+# Zero buckets are left out rather than printed, so a healthy machine reads
+# "13 installed, 13 in this kit" and not a row of zeros.
+# ⇄ twin: Get-ExakitSkillsSummaryLine.
+exakit_skills_summary_line() {
+    _ssl="$1 installed"
+    if [ "$2" -eq 1 ]; then
+        _ssl="$_ssl, 1 arrives with its add-on"
+    elif [ "$2" -gt 1 ]; then
+        _ssl="$_ssl, $2 arrive with their add-ons"
+    fi
+    [ "$3" -gt 0 ] && _ssl="$_ssl, $3 not placed"
+    printf '%s, %s in this kit\n' "$_ssl" "$4"
+}
+
 # exakit_skills_list [--json] — what skills this kit carries and whether each
 # one has reached the agents' discovery folders.
+# exakit_json_pretty <json> — one object, printed the way `status --json`
+# prints: two-space indent, one key per line. A query a person reads in a
+# terminal is not served by one 2,000-character line; a parser does not
+# care either way. Without a Python the compact document goes out as is,
+# which is the same valid JSON. ⇄ twin: ConvertTo-Json already indents.
+exakit_json_pretty() {
+    if exakit_can_run_python; then
+        if printf '%s' "$1" | run_python -c '
+import json, sys
+print(json.dumps(json.load(sys.stdin), indent=2, ensure_ascii=False))
+' 2>/dev/null; then
+            return 0
+        fi
+    fi
+    printf '%s\n' "$1"
+}
+
+# exakit_json_out <printf-format> [args...] — every hand-built JSON answer
+# goes out through here: the object is assembled with printf exactly as
+# before and then laid out by exakit_json_pretty, so a refusal, a result and
+# a state query all read the same way on a screen.
+exakit_json_out() {
+    _jo_fmt="$1"; shift
+    # shellcheck disable=SC2059 -- the format is the caller's literal
+    exakit_json_pretty "$(printf "$_jo_fmt" "$@")"
+}
+
+# _exakit_skills_json_compact — the `skills --json` document, built in the
+# shell as one line; exakit_skills_list hands it to exakit_json_pretty.
+_exakit_skills_json_compact() {
+    _skl_first=1
+    # Four LABELLED counts travel with the rows, under "counts". The
+    # installer's "8 AI skills", the 9 folders on disk after an add-on
+    # install and the 13 rows this listing names were each right, and
+    # read as a contradiction because nobody said what was being counted.
+    # The identity that holds, and that tests/skills.sh asserts:
+    #     installed + needs_addon + missing = total
+    # total is every skill this kit copy carries; needs_addon the ones
+    # waiting for an add-on that is not installed; missing the core ones
+    # not (fully) placed, which is the number the status verdict below is
+    # built from. Nested rather than top-level on purpose: a top-level
+    # "installed" is the boolean every STATE query carries, and AGENTS.md
+    # tells parsers apart by its absence here.
+    _skj_installed=0
+    _skj_gated=0
+    _skj_missing=0
+    _skj_total=0
+    printf '{"skills":['
+    while IFS='|' read -r _skl_id _skl_sum; do
+        [ -n "$_skl_id" ] || continue
+        [ "$_skl_first" -eq 1 ] || printf ','
+        _skl_first=0
+        _skj_total=$((_skj_total + 1))
+        _skl_state="$(exakit_skill_state "$_skl_id")"
+        _skl_owner="$(_exakit_skill_gating_addon "$_skl_id")"
+        # An add-on's skill is never "available" to skills-install — that
+        # command deliberately skips it, so calling it available
+        # prescribed a command that cannot change it. It arrives with its
+        # add-on, and the state says so, naming whose it is. A half-placed
+        # copy of one (partial) is the same case: skills-install will not
+        # touch it either, so it is neither missing nor a reason to
+        # prescribe that command - installing the add-on places it whole.
+        if [ "$_skl_state" != "installed" ] && [ -n "$_skl_owner" ]; then
+            _skj_gated=$((_skj_gated + 1))
+            printf '{"name":"%s","state":"needs-addon","addon":"%s","remedy":"exakit marketplace %s","summary":"%s"}' \
+                "$_skl_id" "$_skl_owner" "$_skl_owner" \
+                "$(printf '%s' "$_skl_sum" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+        else
+            if [ "$_skl_state" = "installed" ]; then
+                _skj_installed=$((_skj_installed + 1))
+            else
+                _skj_missing=$((_skj_missing + 1))
+            fi
+            printf '{"name":"%s","state":"%s","summary":"%s"}' \
+                "$_skl_id" "$_skl_state" \
+                "$(printf '%s' "$_skl_sum" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+        fi
+    done <<EXAKIT_SKL_EOF
+$(exakit_skills_registry)
+EXAKIT_SKL_EOF
+    # The same verdict the panel prints, as data: which set is placed,
+    # which is advertised, and the one command to run if they differ or a
+    # placed skill has gone missing. Nothing here touches the network -
+    # the advertised number comes from the cached versions document.
+    _skj_have="$(manifest_get components.skills.version 2>/dev/null || true)"
+    _skj_want="$(exakit_versions_value components.skills.version 2>/dev/null || true)"
+    _skj_status="current"; _skj_next="null"
+    if [ -n "$_skj_have" ] && [ -n "$_skj_want" ] && [ "$_skj_have" != "$_skj_want" ]; then
+        _skj_status="update_pending"; _skj_next='"exakit update"'
+    elif [ "$_skj_missing" -gt 0 ]; then
+        _skj_status="missing"; _skj_next='"exakit skills-install"'
+    fi
+    printf '],"counts":{"installed":%d,"needs_addon":%d,"missing":%d,"total":%d},"installed_version":%s,"advertised_version":%s,"status":"%s","next":%s}\n' \
+        "$_skj_installed" "$_skj_gated" "$_skj_missing" "$_skj_total" \
+        "$([ -n "$_skj_have" ] && printf '"%s"' "$_skj_have" || printf null)" \
+        "$([ -n "$_skj_want" ] && printf '"%s"' "$_skj_want" || printf null)" \
+        "$_skj_status" "$_skj_next"
+}
+
 exakit_skills_list() {
     if ! exakit_skills_dir >/dev/null 2>&1; then
         warn "No skills/ directory in this kit build — nothing to list."
@@ -7114,63 +7497,15 @@ exakit_skills_list() {
     fi
 
     if [ "${1:-}" = "--json" ] || [ "${1:-}" = "-j" ]; then
-        _skl_first=1
-        printf '{"skills":['
-        while IFS='|' read -r _skl_id _skl_sum; do
-            [ -n "$_skl_id" ] || continue
-            [ "$_skl_first" -eq 1 ] || printf ','
-            _skl_first=0
-            _skl_state="$(exakit_skill_state "$_skl_id")"
-            _skl_owner="$(_exakit_skill_gating_addon "$_skl_id")"
-            # An add-on's skill is never "available" to skills-install — that
-            # command deliberately skips it, so calling it available
-            # prescribed a command that cannot change it. It arrives with its
-            # add-on, and the state says so, naming whose it is.
-            if [ "$_skl_state" = "available" ] && [ -n "$_skl_owner" ]; then
-                printf '{"name":"%s","state":"needs-addon","addon":"%s","remedy":"exakit marketplace %s","summary":"%s"}' \
-                    "$_skl_id" "$_skl_owner" "$_skl_owner" \
-                    "$(printf '%s' "$_skl_sum" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-            else
-                printf '{"name":"%s","state":"%s","summary":"%s"}' \
-                    "$_skl_id" "$_skl_state" \
-                    "$(printf '%s' "$_skl_sum" | sed 's/\\/\\\\/g; s/"/\\"/g')"
-            fi
-        done <<EXAKIT_SKL_EOF
-$(exakit_skills_registry)
-EXAKIT_SKL_EOF
-        # The same verdict the panel prints, as data: which set is placed,
-        # which is advertised, and the one command to run if they differ or a
-        # placed skill has gone missing. Nothing here touches the network -
-        # the advertised number comes from the cached versions document.
-        _skj_have="$(manifest_get components.skills.version 2>/dev/null || true)"
-        _skj_want="$(exakit_versions_value components.skills.version 2>/dev/null || true)"
-        _skj_missing=0
-        while IFS='|' read -r _skj_id _skj_sum; do
-            [ -n "$_skj_id" ] || continue
-            # An add-on-gated skill whose add-on is absent is not MISSING:
-            # skills-install cannot place it, so counting it would prescribe a
-            # command that changes nothing, forever.
-            [ "$(exakit_skill_state "$_skj_id")" = "installed" ] || \
-                [ -n "$(_exakit_skill_gating_addon "$_skj_id")" ] || \
-                _skj_missing=$((_skj_missing + 1))
-        done <<EXAKIT_SKJ_EOF
-$(exakit_skills_registry)
-EXAKIT_SKJ_EOF
-        _skj_status="current"; _skj_next="null"
-        if [ -n "$_skj_have" ] && [ -n "$_skj_want" ] && [ "$_skj_have" != "$_skj_want" ]; then
-            _skj_status="update_pending"; _skj_next='"exakit update"'
-        elif [ "$_skj_missing" -gt 0 ]; then
-            _skj_status="missing"; _skj_next='"exakit skills-install"'
-        fi
-        printf '],"installed_version":%s,"advertised_version":%s,"status":"%s","next":%s}\n' \
-            "$([ -n "$_skj_have" ] && printf '"%s"' "$_skj_have" || printf null)" \
-            "$([ -n "$_skj_want" ] && printf '"%s"' "$_skj_want" || printf null)" \
-            "$_skj_status" "$_skj_next"
+        _skj_doc="$(_exakit_skills_json_compact)" || return 1
+        exakit_json_pretty "$_skj_doc"
         return 0
     fi
 
     _skl_count=0
     _skl_pending=0
+    _skl_installed=0
+    _skl_gated=0
     printf '\n'
     ui_panel_begin "Exasol skills"
     while IFS='|' read -r _skl_id _skl_sum; do
@@ -7179,11 +7514,14 @@ EXAKIT_SKJ_EOF
         # An add-on's skill arrives with its add-on; "available" beside advice
         # to run skills-install prescribed a command that deliberately skips
         # it. Say whose it is instead, and leave it out of the pending count
-        # the advice below is computed from.
+        # the advice below is computed from. Same three buckets as --json.
         _skl_owner="$(_exakit_skill_gating_addon "$_skl_id")"
-        if [ "$_skl_state" = "available" ] && [ -n "$_skl_owner" ]; then
+        if [ "$_skl_state" != "installed" ] && [ -n "$_skl_owner" ]; then
             _skl_state="with $_skl_owner"
-        elif [ "$_skl_state" != "installed" ]; then
+            _skl_gated=$((_skl_gated + 1))
+        elif [ "$_skl_state" = "installed" ]; then
+            _skl_installed=$((_skl_installed + 1))
+        else
             _skl_pending=$((_skl_pending + 1))
         fi
         ui_panel_line "$(printf '%-26s %-22s %s' "$_skl_id" "$_skl_state" "$_skl_sum")"
@@ -7200,6 +7538,9 @@ EXAKIT_SKL_EOF
     fi
 
     ui_panel_line ""
+    # What the rows add up to, every number labelled: the table alone left a
+    # reader counting rows against the installer's sentence.
+    ui_panel_line "$(exakit_skills_summary_line "$_skl_installed" "$_skl_gated" "$_skl_pending" "$_skl_count")"
     # Stale beats pending in the advice: copies that exist but predate a kit
     # update are the case a user cannot see for themselves, and the remedy is
     # the same command either way.
@@ -7250,6 +7591,7 @@ exakit_install_skills() {
     fi
 
     _installed=0
+    _isk_gated=0
     for _skill_dir in "$_skills_src"/*/; do
         [ -f "$_skill_dir/SKILL.md" ] || continue
         # Frontmatter that does not parse is skipped HERE as well as in the
@@ -7265,8 +7607,9 @@ exakit_install_skills() {
         # installs one later gets its skill as part and parcel of that install.
         # On a refresh (exakit skills-install after a kit update) this is also
         # what keeps the add-ons you DO have up to date without resurrecting the
-        # ones you removed.
-        _exakit_skill_wanted "$_skill_dir/SKILL.md" || continue
+        # ones you removed. Counted, so the closing sentence can say where the
+        # rest of the set is instead of leaving the reader to notice a gap.
+        _exakit_skill_wanted "$_skill_dir/SKILL.md" || { _isk_gated=$((_isk_gated + 1)); continue; }
         _name="$(basename "$_skill_dir")"
         _exakit_skill_place "$_skill_dir" "$_name"
         # The names go to the logfile, not the screen: nine ticked lines say
@@ -7279,7 +7622,15 @@ exakit_install_skills() {
         warn "No SKILL.md files found under $_skills_src — nothing to install."
         return 1
     fi
-    ok "Installed $_installed AI skill$([ "$_installed" = 1 ] || printf 's') for Claude Code (~/.claude/skills) and open-standard agents (~/.agents/skills)"
+    # "Installed 8 AI skills" beside 13 rows in `exakit skills` read as five
+    # lost: name the whole set and where the rest come from. With nothing
+    # gated the sentence is unchanged. ⇄ twin: Install-ExakitSkills.
+    if [ "$_isk_gated" -gt 0 ]; then
+        if [ "$_isk_gated" -eq 1 ]; then _isk_arrive="1 arrives with its add-on"; else _isk_arrive="$_isk_gated arrive with their add-ons"; fi
+        ok "Installed $_installed of $((_installed + _isk_gated)) AI skills ($_isk_arrive) for Claude Code (~/.claude/skills) and open-standard agents (~/.agents/skills)"
+    else
+        ok "Installed $_installed AI skill$([ "$_installed" = 1 ] || printf 's') for Claude Code (~/.claude/skills) and open-standard agents (~/.agents/skills)"
+    fi
 
     # A skill the NEW set no longer carries leaves the discovery roots with the
     # update: it was placed by the kit — the manifest's installed list is the
@@ -9205,7 +9556,7 @@ if "remedy" not in doc:
         candidates.append((RANK[severity], 0 if scope.get("path") else 1, index, finding["recommended_action"]))
     remedy = min(candidates)[3] if candidates else None
     doc["remedy"] = remedy
-print(json.dumps(doc, indent=2, sort_keys=True))
+print(json.dumps(doc, indent=2, sort_keys=True, ensure_ascii=False))
 EXAKIT_MCP_STAMP_PY
     }
     # JSON mode (EXAKIT_MCP_RESULT_JSON=1): the operation's own result file is
@@ -9226,7 +9577,7 @@ EXAKIT_MCP_STAMP_PY
             # rather than swallowed.
             _exakit_stamp_mcp_json "$_result_file" || cat "$_result_file"
         else
-            printf '{"installed": true, "status": "error", "remedy": "exakit logs setup", "error": "the MCP %s operation produced no result; what it printed is in: exakit logs setup"}\n' "$_operation"
+            exakit_json_out '{"installed": true, "status": "error", "remedy": "exakit logs setup", "error": "the MCP %s operation produced no result; what it printed is in: exakit logs setup"}\n' "$_operation"
             [ "$_operation_status" -eq 0 ] && _operation_status=1
         fi
         rm -f "$_result_file"
@@ -9465,6 +9816,13 @@ exakit_maybe_offer_data_load() {
             # Refused as bad input (the file, not the install): say so, but
             # do not book it as a failed step.
             _data_notes="${_data_notes}warn|The local file was refused (see above). Load another any time with: exakit data-load
+"
+        elif [ "$_local_status" -eq 5 ]; then
+            # Declined: the target already held rows this kit did not load and
+            # nobody said replace or append, so the loader changed nothing
+            # (the remedy is printed above it). Not a failed step - the
+            # install is fine, the table is the reader's.
+            _data_notes="${_data_notes}warn|The local file was not loaded: its table already holds rows (see above). Decide with EXAKIT_ON_EXISTING=replace or =append and re-run: exakit data-load
 "
         elif [ "$_local_status" -ne 0 ]; then
             _data_notes="${_data_notes}warn|Data loading did not finish cleanly. Retry any time with: exakit data-load
@@ -10761,7 +11119,7 @@ for line in sys.argv[1].splitlines():
         "size": size,
         "updated": updated,
     })
-print(json.dumps({"count": len(targets), "targets": targets}, indent=2))
+print(json.dumps({"count": len(targets), "targets": targets}, indent=2, ensure_ascii=False))
 EXAKIT_LOJ_PY
 }
 

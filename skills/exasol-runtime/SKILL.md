@@ -63,6 +63,8 @@ to the exact repair command. Read the remedy from there rather than inferring it
 ```bash
 exakit start    # the database AND every installed add-on service
 exakit stop     # the add-on services, then the database
+exakit stop <service>    # one of them: an add-on, or database (which asks before taking the database from running add-ons)
+exakit start <service>   # one of them; an add-on needs the database up
 ```
 
 `exakit start` deploys the database if it has never been deployed, and simply

@@ -87,6 +87,7 @@ database itself:
 exakit status        # shows running / stopped per service
 exakit start         # database AND every installed service
 exakit stop
+exakit stop <id>     # one add-on service only; exakit start <id> needs the database up
 exakit autostart     # asks, then flips it; EXAKIT_AUTOSTART_CHANGE=1 pre-answers
 exakit logs          # each service's log is listed
 ```

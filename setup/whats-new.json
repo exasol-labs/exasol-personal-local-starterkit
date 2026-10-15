@@ -20,6 +20,14 @@
     "install shows no cards at all, so every line here is read by someone who",
     "already had the kit working and wants to know what is different."
   ],
+  "0.2.1": [
+    "exakit start|stop <service> acts on one service, not everything.",
+    "exakit stop database asks before taking it from running add-ons.",
+    "exakit update --json answers one object with what happened.",
+    "Loading a file onto a table with rows asks: skip, replace or append.",
+    "exasol-scheduler installs straight from its own GitHub release.",
+    "Every --json output is laid out to read, with one formatter."
+  ],
   "0.2.0": [
     "exakit marketplace with powerful add-ons.",
     "exakit update applies the recommended updates, latest AI skills.",

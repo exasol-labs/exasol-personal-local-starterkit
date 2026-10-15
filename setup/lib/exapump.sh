@@ -1402,6 +1402,10 @@ exakit_verify_loaded_table() {
     fi
     manifest_set data.last_load.verified_table "$_target"
     manifest_set data.last_load.verified_rows "$_rows"
+    # The count, for the caller too: the single-file load writes its receipt
+    # from it, and asking the database a second time for a number it just
+    # answered is another process start and TLS handshake for nothing.
+    EXAKIT_LAST_VERIFIED_ROWS="$_rows"
 }
 
 exakit_prompt_optional_verification() {
@@ -1826,12 +1830,89 @@ exakit_load_local_file() {
         ok "Loaded $(ui_tilde "$_path") into ${EXAKIT_LAST_LOAD_TARGET:-$_target}"
         return 0
     fi
+    # WHAT IS ALREADY IN THAT TABLE? exapump's upload APPENDS, and this path
+    # used to call it without looking: the folder load asks EXAKIT_ON_EXISTING
+    # (skip / replace / append, skip by default) before it touches a table
+    # holding rows this kit did not load, while one file went straight in --
+    # so `EXAKIT_ON_EXISTING=replace` over a table with one foreign row and a
+    # one-row file left TWO rows, said nothing about the policy, and the one
+    # person who had asked for a rebuild got a doubled table instead. Same
+    # three answers as the folder, same default, same receipts, decided here
+    # BEFORE the schema call so that a refusal changes nothing.
+    _llf_policy="${EXAKIT_ON_EXISTING:-}"
+    case "$_llf_policy" in
+        ""|skip|replace|append) ;;
+        # Bad input, the same class as an unsupported file: exit 2 for the
+        # user, nothing recorded -- not the folder path's return 1, which the
+        # installer books as a failed step over a typo in a variable.
+        *) _llf_refuse "EXAKIT_ON_EXISTING must be skip, replace or append (got '$EXAKIT_ON_EXISTING')." ;;
+    esac
+    exakit_clear_table_listing
+    _llf_rows="$(exakit_table_rows_of "$_target")"
+    _llf_verdict="load"
+    case "$_llf_rows" in
+        # "" is a database that could not be asked, not an empty one; absent
+        # and 0 hold nothing worth protecting. All three load, as the folder
+        # path decides for the same answers (exakit_bulk_decide).
+        ""|absent|0) ;;
+        *)
+            _llf_seen="$(exakit_load_receipt_match "$_target" "$_path" 2>/dev/null || true)"
+            if [ -n "$_llf_seen" ] && [ "$_llf_seen" = "$_llf_rows" ]; then
+                _llf_verdict="done"
+            else
+                _llf_verdict="clash"
+            fi
+            ;;
+    esac
+    if [ "$_llf_verdict" = "done" ]; then
+        case "$_llf_policy" in
+            replace|append) ;;
+            *)
+                # Loaded from this very file, and still holding exactly what
+                # it put there: the whole point of the receipts. Loading it
+                # again would double it, and that is what a re-run used to do.
+                ok "$_target already holds the $(exakit_rows_label "$_llf_rows") this file loaded — left as it is."
+                info "Load it again on top with EXAKIT_ON_EXISTING=append, or drop and rebuild it with EXAKIT_ON_EXISTING=replace."
+                return 0
+                ;;
+        esac
+    elif [ "$_llf_verdict" = "clash" ]; then
+        [ -n "$_llf_policy" ] || _llf_policy="$(exakit_file_ask_clash "$_target" "$_llf_rows")"
+        if [ "$_llf_policy" = "skip" ]; then
+            # EXIT 5, "declined": the rows are the reader's and nobody said
+            # replace or append, so nothing was changed -- the code every
+            # unconfirmed command answers with. Not 0, which an agent reads as
+            # "loaded"; not 1, which the installer books as a failed step.
+            warn "Not loaded: $_target already holds $(exakit_rows_label "$_llf_rows") with no load record for this file (another file loaded them, or a load made before this kit version kept no record)."
+            info "Re-run with EXAKIT_ON_EXISTING=replace (drop and rebuild it) or =append (load on top)."
+            return 5
+        fi
+    fi
+    # The policy, said whenever it applied: the output never leaves the reader
+    # guessing what happened to the rows that were already there.
+    if [ "$_llf_verdict" != "load" ]; then
+        if [ "$_llf_policy" = "replace" ]; then
+            info "Replacing the $(exakit_rows_label "$_llf_rows") already in $_target — the table is dropped and rebuilt (EXAKIT_ON_EXISTING=replace)."
+            # DROP, not TRUNCATE, exactly as the folder path does: the file may
+            # not even have the same columns as what is there.
+            "$(exapump_cli)" sql -p "$EXAKIT_EXAPUMP_PROFILE" \
+                "DROP TABLE IF EXISTS $_target" >> "${EXAKIT_LOG_FILE:-/dev/null}" 2>&1 || true
+            exakit_load_receipt_forget "$_target"
+            _exakit_log_file "RESET $_target dropped before loading $(basename "$_path")"
+        else
+            info "Appending to the $(exakit_rows_label "$_llf_rows") already in $_target (EXAKIT_ON_EXISTING=append)."
+        fi
+    fi
     exakit_ensure_schema "$(exakit_target_schema "$_target")"
     exapump_upload "$_path" "$_target"
     manifest_set data.last_load.type "local_file"
     manifest_set data.last_load.target "$_target"
     manifest_set data.last_load.source "$_path"
+    EXAKIT_LAST_VERIFIED_ROWS=""
     exakit_verify_loaded_table "$_target"
+    # A receipt, like every file a folder load lands: it is what lets the next
+    # run of this same file say "already loaded" instead of loading it twice.
+    exakit_load_receipt_record "$_target" "$_path" "${EXAKIT_LAST_VERIFIED_ROWS:-0}"
     EXAKIT_UPLOAD_QUIET=0
     EXAKIT_ACTIVE_LABEL=""
     ok "Loaded $(ui_tilde "$_path") into $_target"
@@ -2238,7 +2319,7 @@ EXAKIT_BULK_WEIGH_EOF
             _blf_skipped=$((_blf_skipped + 1))
             _blf_done_w=$(( _blf_done_w + _blf_w ))
             _exakit_log_file "SKIP  $(basename "$_blf_path") -> $_blf_target (holds $_blf_had rows this kit did not load)"
-            [ -n "$_blf_out" ] && printf 'skip\t%s\t%s\t%s\tnot loaded: the table already holds rows this kit did not put there\n' \
+            [ -n "$_blf_out" ] && printf 'skip\t%s\t%s\t%s\tnot loaded: the table already holds rows with no load record for this file\n' \
                 "$(basename "$_blf_path")" "$_blf_table" "$(exakit_rows_label "$_blf_had")" >> "$_blf_out"
             continue
         fi
@@ -2551,14 +2632,34 @@ exakit_bulk_ask_clashes() {
         info "Skipping those files. Re-run with EXAKIT_ON_EXISTING=replace or =append to decide otherwise." >&2
         printf 'skip\n'; return 0
     fi
+    exakit_clash_prompt 'Those files: (s)kip, (r)eplace what is there, or (a)ppend to it'
+}
+
+# exakit_clash_prompt <question> — the one question both load paths ask about
+# rows this kit did not put there, so a folder and a single file cannot drift
+# into offering different answers. The answer is the whole of stdout; the
+# retry warning goes to stderr like every other line of this UI.
+exakit_clash_prompt() {
     while :; do
-        case "$(prompt_text 'Those files: (s)kip, (r)eplace what is there, or (a)ppend to it' 's')" in
+        case "$(prompt_text "$1" 's')" in
             s|S|skip|Skip|SKIP)          printf 'skip\n'; return 0 ;;
             r|R|replace|Replace|REPLACE) printf 'replace\n'; return 0 ;;
             a|A|append|Append|APPEND)    printf 'append\n'; return 0 ;;
             *) warn "Answer s, r or a." ;;
         esac
     done
+}
+
+# exakit_file_ask_clash <SCHEMA.TABLE> <rows> — the single-file form of the
+# question above: one table, so no list, and without a terminal the answer is
+# skip for the same reason as the folder's (appending by accident cannot be
+# undone; skipping costs a re-run). The caller prints the refusal and the
+# remedy, so nothing is said here on the no-terminal path.
+exakit_file_ask_clash() {
+    [ -n "$(_exakit_prompt_tty)" ] || { printf 'skip\n'; return 0; }
+    printf '\n' >&2
+    warn "$1 already holds $(exakit_rows_label "$2") this kit did not load."
+    exakit_clash_prompt 'That table: (s)kip, (r)eplace what is there, or (a)ppend to it'
 }
 
 # exakit_bulk_print_resume <decisions> <clash-answer> — said BEFORE the bar
@@ -3579,6 +3680,12 @@ exakit_data_load_menu() {
             # The file was refused as bad input (message already printed): the
             # command answers like every other refusal, exit 2, nothing recorded.
             _menu_status=2
+        elif [ "$_local_status" -eq 5 ]; then
+            # Declined: the table already held rows this kit did not load and
+            # the answer was skip. Exit 5 is the code every unconfirmed command
+            # answers with (AGENTS.md), and it is kept as is: 0 would read as
+            # "loaded" to an agent, 1 as a load that broke.
+            _menu_status=5
         elif [ "$_local_status" -ne 0 ]; then
             _menu_status="$_local_status"
         fi

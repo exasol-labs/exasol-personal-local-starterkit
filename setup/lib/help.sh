@@ -578,7 +578,7 @@ def render_json(which):
                (" ".join([r["tool"], r["command"], r["options"], r["description"]])).lower()]
         payload = {"schema_version": 1, "search": which, "count": len(hit),
                    "commands": hit}
-    print(json.dumps(payload, indent=2))
+    print(json.dumps(payload, indent=2, ensure_ascii=False))
     return 0
 
 if mode == "overview":

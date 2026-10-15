@@ -223,13 +223,35 @@ has "manifest records what was installed" "zz-invented-skill" \
 # The listing is a state query, so it must answer machine-readably with
 # nothing else on stdout — the same contract status/info/mcp-doctor keep.
 JSON="$(exakit_skills_list --json 2>/dev/null)"
-has "--json names the skill" '"name":"zz-invented-skill"' "$JSON"
-has "--json carries the state" '"state":' "$JSON"
+# Pretty-printed like status --json (one key per line) when a Python can run,
+# so the needles parse the document instead of assuming its spacing.
+has "--json names the skill" '"name": "zz-invented-skill"' "$JSON"
+has "--json carries the state" '"state": ' "$JSON"
+check "--json is laid out one key per line, like status --json" "yes" \
+    "$(printf '%s' "$JSON" | grep -q '^  "skills": \[' && echo yes || echo no)"
 if printf '%s' "$JSON" | python3 -c 'import json,sys; json.load(sys.stdin)' 2>/dev/null; then
     check "--json is parseable" "yes" "yes"
 else
     check "--json is parseable" "yes" "NOT-JSON"
 fi
+# SKL-06: three sources, three unlabelled numbers - the installer's "8 AI
+# skills", 9 folders on disk, 13 rows in --json - read as a contradiction
+# while every one was right. The listing now carries each bucket by name, and
+# they must add up: installed + needs_addon + missing = total. Here the one
+# core skill is half-placed (one root removed above), so it is "missing".
+check "--json carries the four counts, and they add up" \
+    "{'installed': 0, 'needs_addon': 0, 'missing': 1, 'total': 1}" \
+    "$(printf '%s' "$JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["counts"])' 2>/dev/null)"
+_cnt="$(printf '%s' "$JSON" | python3 -c 'import json,sys
+d=json.load(sys.stdin); c=d["counts"]
+print(all(isinstance(c[k],int) for k in ("installed","needs_addon","missing","total")),
+      c["installed"]+c["needs_addon"]+c["missing"]==c["total"], c["total"]==len(d["skills"]))' 2>/dev/null)"
+check "...as integers, summing to the row count" "True True True" "$_cnt"
+has "the panel ends with the same tally, every number labelled" \
+    "0 installed, 1 not placed, 1 in this kit" "$(exakit_skills_list 2>/dev/null)"
+# With nothing gated, the installer's sentence is the one it always printed.
+has "with nothing gated the installer sentence is unchanged" \
+    "Installed 1 AI skill for Claude Code" "$(cat "$WORK/install.log")"
 
 # ---------------------------------------------------------------------------
 echo
@@ -316,6 +338,10 @@ check "...and still places the core one" "installed" \
     "$(exakit_skill_state zz-invented-skill)"
 lacks "the manifest does not claim it either" "zz-owned-skill" \
     "$(manifest_get components.skills.installed 2>/dev/null || true)"
+# SKL-06: and the sentence says what it counted - placed of the whole set, and
+# where the rest are - instead of a bare "Installed 1" beside two rows.
+has "the installer says placed-of-total and where the rest come from" \
+    "Installed 1 of 2 AI skills (1 arrives with its add-on) for Claude Code" "$(cat "$WORK/install2.log")"
 
 # 2. Installing the add-on places it.
 exakit_install_addon_skills zz-fake-addon
@@ -328,6 +354,8 @@ has "...and the manifest records it, so uninstall can find it" "zz-owned-skill" 
 #    skills step as the only authority and sweeping it away again.
 ZZ_ADDON_INSTALLED=1
 exakit_install_skills >"$WORK/install3.log" 2>&1
+has "...and once the add-on is there, nothing is held back from the count" \
+    "Installed 2 AI skills for Claude Code" "$(cat "$WORK/install3.log")"
 check "a refresh keeps an installed add-on's skill" "installed" \
     "$(exakit_skill_state zz-owned-skill)"
 
@@ -469,7 +497,7 @@ print(bool(rows) and rows[0].get("hidden") is True)' 2>/dev/null)"
 has "but exakit skills-install --help still renders its page" "The installer already does this" "$(bash "$ROOT/setup/exakit" skills-install --help 2>/dev/null)"
 has "the PowerShell renderer filters hidden entries the same way" 'Get-ExakitHelpVisibleCommands' "$(cat "$ROOT/setup/lib/help.ps1")"
 has "exakit skills names the repair only when a skill is missing" 'exakit skills-install' "$(sed -n '/^exakit_skills_list()/,/^}/p' "$ROOT/setup/lib/common.sh")"
-has "skills --json carries the verdict" '"installed_version"' "$(sed -n '/^exakit_skills_list()/,/^}/p' "$ROOT/setup/lib/common.sh")"
+has "skills --json carries the verdict" '"installed_version"' "$(sed -n '/^_exakit_skills_json_compact()/,/^}/p' "$ROOT/setup/lib/common.sh")"
 has "info --json carries the skills block" 'doc["skills"] = {' "$(sed -n '/^cmd_info_json()/,/^}/p' "$ROOT/setup/exakit")"
 has "the info panel has a Skills row" 'ui_panel_line "Skills:' "$(cat "$ROOT/setup/lib/common.sh")"
 has "PowerShell info carries the skills block" '"skills" -NotePropertyValue' "$(cat "$ROOT/setup/exakit.ps1")"
@@ -666,11 +694,22 @@ EOF
 exakit_repo_root() { printf '%s
 ' "$GATEKIT"; }
 _gated_json="$(exakit_skills_list --json 2>/dev/null)"
-has "the JSON says needs-addon" '"name":"zz-gated","state":"needs-addon","addon":"zz-never-addon"' "$_gated_json"
-has "...with the runnable remedy" '"remedy":"exakit marketplace zz-never-addon"' "$_gated_json"
+check "the JSON says needs-addon" "needs-addon zz-never-addon exakit marketplace zz-never-addon" \
+    "$(printf '%s' "$_gated_json" | python3 -c 'import json,sys
+r=[r for r in json.load(sys.stdin)["skills"] if r["name"]=="zz-gated"][0]
+print(r["state"], r["addon"], r["remedy"])' 2>/dev/null)"
 _gated_panel="$(exakit_skills_list 2>/dev/null)"
 has "the panel names the owning add-on" "with zz-never-addon" "$_gated_panel"
 lacks "...and does not prescribe skills-install for it" "exakit skills-install" "$_gated_panel"
+# SKL-06: a gated skill is counted under needs_addon, never under missing -
+# or the verdict would call a healthy machine "missing" and name a command
+# that cannot change it.
+check "the counts file it under needs_addon, not missing" \
+    "{'installed': 0, 'needs_addon': 1, 'missing': 0, 'total': 1}" \
+    "$(printf '%s' "$_gated_json" | python3 -c 'import json,sys; print(json.load(sys.stdin)["counts"])' 2>/dev/null)"
+lacks "...and the verdict never reads missing for it" '"status": "missing"' "$_gated_json"
+has "the panel tally says where it comes from" \
+    "0 installed, 1 arrives with its add-on, 1 in this kit" "$_gated_panel"
 rm -rf "$GATEKIT"
 
 # ---------------------------------------------------------------------------
@@ -709,6 +748,13 @@ _PS_SHOW="$(awk '/^function Show-ExakitSkills/,/^}$/' "$ROOT/setup/lib/exakit-co
 has "...and gives the case its own state" 'state = "needs-addon"' "$_PS_SHOW"
 has "...naming the add-on that owns it"   'remedy = "exakit marketplace $owner"' "$_PS_SHOW"
 has "...and leaves it out of the pending count" '$skjMissing = $pending' "$_PS_SHOW"
+# SKL-06: the four labelled counts, on the Windows half too, summing the same
+# way - and the installer's placed-of-total sentence beside them.
+has "the twin carries the same four counts" 'counts = [ordered]@{' "$_PS_SHOW"
+has "...from the same three buckets" \
+    'installed = $placed; needs_addon = $gated; missing = $skjMissing; total = $rows.Count' "$_PS_SHOW"
+has "...and the panel's labelled tally" 'Get-ExakitSkillsSummaryLine -Installed $placed -WithAddons $gated -NotPlaced $pending -Total $rows.Count' "$_PS_SHOW"
+has "the twin's installer says placed-of-total" 'Installed $installed of $($installed + $gated) AI skills ($arrive)' "$_PS_INSTALL"
 # The gated branch must `continue` BEFORE the pending++ line, or the state word
 # changes and the count does not -- the exact half-fix this guards against.
 has "...by skipping the count entirely" "continue" \

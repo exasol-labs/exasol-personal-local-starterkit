@@ -716,7 +716,7 @@ function Update-JsonTables {
     if ($current -and $current -eq $available -and
         (Test-Path (Get-JsonTablesEnginePath)) -and (Test-Path $shimPath)) {
         [void](Write-JsonTablesLauncher)
-        Ok "JSON Tables is already current ($current)"
+        Ok ("JSON Tables is already current ($current)" + (Get-ExakitPinnedLatestNote "json-tables"))
         return $true
     }
     if ($current) { Info "Updating JSON Tables $current -> $available" }

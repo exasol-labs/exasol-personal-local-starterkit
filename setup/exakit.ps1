@@ -18,8 +18,9 @@
 #                         installed / status / remedy / skills, nothing else
 #   guide                 friendly walkthrough: connect AI clients (MCP), SQL
 #                         clients (DBeaver, DbVisualizer), and Python (pyexasol)
-#   start                 start the local database and every add-on service
-#   stop                  stop them again
+#   start [<service>]     start the local database and every add-on service,
+#                         or one of them by id
+#   stop [<service>]      stop them again, or one of them by id
 #   autostart             whether everything comes back after a restart; shows
 #                         the current state and asks whether to change it
 #   data-load [-Force|<path>]
@@ -871,14 +872,39 @@ function Invoke-CmdAutostart {
     }
 }
 
-function Invoke-CmdStart {
+# Resolve-ExakitServiceScope - the optional service id a `exakit start|stop`
+# was given, validated BEFORE anything runs: "" for the bare form, else the
+# id. Twin of _service_scope in setup/exakit.
+#
+# Shape first, then the install check, then the registry: bad input answers 2
+# on any machine (Invoke-CmdAutostart makes the same argument), and only an
+# installed kit can say which services it has. An id that is a known add-on
+# gets the reason it cannot be acted on rather than "unknown".
+function Resolve-ExakitServiceScope {
+    param([Parameter(Mandatory)][string]$Verb, [string[]]$Arguments = @())
+    $args2 = @($Arguments | Where-Object { "$_" -ne "" })
+    if ($args2.Count -eq 0) { return "" }
+    if ($args2.Count -gt 1) {
+        Deny-ExakitInput "$Verb takes at most one service id - exakit $Verb <service>"
+    }
+    $id = "$($args2[0])"
     Assert-ExakitInstalled
-    # Logging first: launcher output belongs in the logfile, not interleaved
-    # with the [ok] lines on stdout. Twin of the same fix in cmd_start.
-    Initialize-ExakitLogging
-    # Everything the kit runs, database first: self-heal semantics for the
-    # runtime (a stopped one is started, a missing one created - `exakit start`
-    # promises a running database), then every add-on service.
+    $ids = @(Get-ExakitServiceIds)
+    if ($ids -contains $id) { return $id }
+    if (Get-ExakitMarketplaceAddon $id) {
+        if (Test-ExakitMarketplaceAddonInstalled $id) {
+            Deny-ExakitInput "$id is installed but runs no service, so there is nothing to $Verb."
+        }
+        Deny-ExakitInput "$id is not installed, so there is nothing to $Verb. Add it with: exakit marketplace $id"
+    }
+    Deny-ExakitInput "Unknown service '$id' for $Verb (services on this machine: $($ids -join ', '))."
+}
+
+# Start-ExakitDatabase - the database half of `exakit start`: self-heal
+# semantics for the runtime (a stopped one is started, a missing one created -
+# `exakit start` promises a running database). Shared by the bare form and by
+# `exakit start database`, so the two cannot drift. Twin of _start_database.
+function Start-ExakitDatabase {
     if ((Get-RuntimeType) -eq "personal" -and (Test-PersonalDeploymentRunning)) {
         Ok "Database is already running"
     } elseif ((Get-RuntimeType) -eq "personal" -and (Get-PersonalStatus) -eq "conflict") {
@@ -889,23 +915,85 @@ function Invoke-CmdStart {
     } else {
         Confirm-ExakitRuntimeRunning -Deploy
     }
-    foreach ($id in (Get-ExakitServiceIds)) {
-        if ($id -eq "database") { continue }
-        Start-ExakitService -Id $id
-    }
     # The database is up, so a note left by an earlier start that could not is
     # no longer true. Only a runtime note goes; an install-step note stays.
     try { if ((Get-ExakitRuntimeStatus) -like "running*") { Clear-ExakitRuntimeFailureNote } } catch { }
 }
 
+function Invoke-CmdStart {
+    param([string[]]$Scope = @())
+    $id = Resolve-ExakitServiceScope -Verb "start" -Arguments $Scope
+    Assert-ExakitInstalled
+    # Logging first: launcher output belongs in the logfile, not interleaved
+    # with the [ok] lines on stdout. Twin of the same fix in cmd_start.
+    Initialize-ExakitLogging
+    if ($id) {
+        Write-ExakitLog "INFO" "start scoped to $id"
+        if ($id -eq "database") { Start-ExakitDatabase; return }
+        # One add-on was asked for, so only that one is touched: the database
+        # is NOT started on its behalf. Started against a stopped database an
+        # add-on would only sit there failing to connect, so say what is
+        # missing and name the command that brings everything up - and record
+        # nothing: this is a refusal, not a failed step. Twin of cmd_start.
+        if ((Get-RuntimeType) -eq "personal" -and -not (Test-PersonalDeploymentRunning)) {
+            Deny-ExakitInput "The database is not running, and $id needs it. Start everything with: exakit start"
+        }
+        Start-ExakitService -Id $id
+        return
+    }
+    # Everything the kit runs, database first, then every add-on service.
+    Start-ExakitDatabase
+    foreach ($sid in (Get-ExakitServiceIds)) {
+        if ($sid -eq "database") { continue }
+        Start-ExakitService -Id $sid
+    }
+}
+
+# Stop-ExakitDatabaseScoped - `exakit stop database`. Twin of
+# _stop_database_scoped in setup/exakit: the add-on services need the database,
+# so ask before taking it from under them. Yes stops the running ones first, as
+# the bare form does; no stops the database alone and names the start command
+# each needs once the database is back. EXAKIT_STOP_ADDONS=1|0 answers for a
+# script; no console and no answer stops them too.
+function Stop-ExakitDatabaseScoped {
+    $running = @()
+    foreach ($sid in (Get-ExakitServiceIds)) {
+        if ($sid -eq "database") { continue }
+        if ((Get-ExakitServiceStatus -Id $sid) -eq "running") { $running += $sid }
+    }
+    if ($running.Count -gt 0) {
+        $list = $running -join ", "
+        Info "Running add-on services need the database: $list"
+        if (Confirm-ExakitEnvPrompt -EnvName "EXAKIT_STOP_ADDONS" -Question "Stop them too, before the database" -DefaultYes $true) {
+            foreach ($sid in $running) { Stop-ExakitService -Id $sid }
+        } else {
+            Warn2 "Stopping only the database. Still running without it: $list"
+            foreach ($sid in $running) {
+                Info "Once you start the database again (exakit start database), you must also start it: exakit start $sid"
+            }
+        }
+    }
+    Stop-ExakitService -Id "database"
+}
+
 function Invoke-CmdStop {
+    param([string[]]$Scope = @())
+    $id = Resolve-ExakitServiceScope -Verb "stop" -Arguments $Scope
     Assert-ExakitInstalled
     Initialize-ExakitLogging
+    # One named service, and only that one: the bare form below is the only
+    # one that touches the database without naming it. Twin of cmd_stop.
+    if ($id) {
+        Write-ExakitLog "INFO" "stop scoped to $id"
+        if ($id -eq "database") { Stop-ExakitDatabaseScoped; return }
+        Stop-ExakitService -Id $id
+        return
+    }
     # Add-on services first: they talk to the database, so they should be down
     # before it goes.
-    foreach ($id in (Get-ExakitServiceIds)) {
-        if ($id -eq "database") { continue }
-        Stop-ExakitService -Id $id
+    foreach ($sid in (Get-ExakitServiceIds)) {
+        if ($sid -eq "database") { continue }
+        Stop-ExakitService -Id $sid
     }
     switch (Get-RuntimeType) { "personal" { Stop-Personal } }
 }
@@ -2299,9 +2387,19 @@ function Test-ExakitComponentAhead {
 
 # Where the Tagged column came from, so nobody has to guess whether a stale
 # answer is being shown.
+# Write-ExakitPinnedLine - twin of _exakit_print_pinned_line: the add-ons the
+# "live upstream lookups" line does NOT describe, named on their own line so
+# "already current" is not read as upstream's word. Silent when none is pinned.
+function Write-ExakitPinnedLine {
+    $ids = @(Get-ExakitPinnedAddons)
+    if ($ids.Count -eq 0) { return }
+    Info ("Pinned by this kit, not looked up upstream: " + ($ids -join ", ") + " (newer versions come with a kit update)")
+}
+
 function Write-ExakitVersionsSourceLine {
     if ($script:VersionPolicy -eq "latest") {
         Info "Available versions come from live upstream lookups (EXAKIT_VERSION_POLICY=latest)"
+        Write-ExakitPinnedLine
         Write-ExakitOverrideLine
         return
     }
@@ -2552,11 +2650,116 @@ function Invoke-ExakitRuntimeUpdateOffer {
 # EXAKIT_CONFIRM_RUNTIME_UPDATE answer without asking, and an unattended run with
 # neither defers it with the exact command that applies it later.
 # Twin of exakit_update in setup/lib/common.sh.
+# Add-ExakitUpdateNote - one row of the --json result; a no-op on the human
+# screen. Twin of _exakit_update_note.
+function Add-ExakitUpdateNote {
+    param([string]$Component, [string]$Outcome, [string]$From = "", [string]$To = "", [string]$Remedy = "")
+    if (-not $script:ExakitUpdateJson) { return }
+    [void]$script:ExakitUpdateResults.Add([pscustomobject]@{
+        component = $Component; outcome = $Outcome; from = $From; to = $To; remedy = $Remedy
+    })
+}
+
+# Write-ExakitUpdateJsonReport - the one object `exakit update --json` prints:
+# what was updated, deferred, left current, skipped or failed, and the one
+# command that resolves what is left. Twin of _exakit_update_json_report.
+function Write-ExakitUpdateJsonReport {
+    param([bool]$RunFailed = $false, [string]$RunError = "")
+    $updated = @(); $deferred = @(); $blocked = @(); $current = @()
+    $skipped = @(); $ahead = @(); $failed = @()
+    foreach ($row in @($script:ExakitUpdateResults)) {
+        $entry = [ordered]@{ component = $row.component }
+        $entry.from = $(if ($row.from) { $row.from } else { $null })
+        $entry.to = $(if ($row.to) { $row.to } else { $null })
+        if ($row.remedy) { $entry.remedy = $row.remedy }
+        switch ($row.outcome) {
+            "updated"  { $updated += [pscustomobject]$entry }
+            "deferred" { $deferred += [pscustomobject]$entry }
+            "blocked"  { $blocked += [pscustomobject]$entry }
+            "current"  { $current += $row.component }
+            "skipped"  { $skipped += [pscustomobject]$entry }
+            "ahead"    { $ahead += [pscustomobject]$entry }
+            "failed"   { $failed += [pscustomobject]$entry }
+        }
+    }
+    if ($RunFailed -and $failed.Count -eq 0) {
+        $msg = $(if ($RunError) { $RunError } else { "the update did not finish (see exakit logs)" })
+        $failed += [pscustomobject]@{ component = $null; from = $null; to = $null; remedy = "exakit update"; error = $msg }
+    }
+    $hint = $null
+    if ($failed.Count -gt 0) {
+        $status = "failed"; $remedy = $(if ($failed[0].remedy) { $failed[0].remedy } else { "exakit update" })
+    } elseif ($deferred.Count -gt 0) {
+        $status = "deferred"; $remedy = $(if ($deferred[0].remedy) { $deferred[0].remedy } else { "exakit update --yes" })
+        $hint = "a database change needs the database stopped; --yes (or EXAKIT_CONFIRM_RUNTIME_UPDATE=1) applies it unattended"
+    } elseif ($blocked.Count -gt 0) {
+        $status = "blocked"; $remedy = "exakit update"
+    } elseif ($updated.Count -gt 0) {
+        $status = "updated"; $remedy = $null
+    } else {
+        $status = "current"; $remedy = $null
+    }
+    $payload = [ordered]@{
+        ok = ($failed.Count -eq 0); status = $status
+        updated = @($updated); deferred = @($deferred); blocked = @($blocked); current = @($current)
+        skipped = @($skipped); ahead = @($ahead); failed = @($failed)
+        remedy = $remedy; remedy_hint = $hint
+    }
+    Write-Output ($payload | ConvertTo-Json -Depth 5)
+    if ($failed.Count -gt 0) { exit 1 }
+}
+
 function Invoke-CmdUpdate {
-    param([string]$Target = "all", [bool]$AssumeYes = $false)
-    Assert-ExakitInstalled
+    param([string]$Target = "all", [bool]$AssumeYes = $false, [bool]$Json = $false)
+    if ($Json) { Assert-ExakitInstalled -Json } else { Assert-ExakitInstalled }
     Initialize-ExakitLogging
     if (-not $Target) { $Target = "all" }
+    # An unknown target is bad input: refused before anything runs, exit 2,
+    # as JSON under --json - what exakit_update's reject does. Resolved out
+    # here, not inside the silenced run below, where Get-ExakitUpdateTargets'
+    # Fail would be swallowed with the screen and the object would blame an
+    # updater that never ran.
+    if (-not (Test-ExakitUpdateTarget $Target)) {
+        Deny-ExakitInput "Unknown update target '$Target' (see: exakit version)"
+    }
+    if (-not $Json) {
+        Invoke-ExakitUpdateRun -Target $Target -AssumeYes $AssumeYes
+        return
+    }
+    # --json: the same run with every screen line discarded (the log keeps
+    # them) and ONE object on stdout at the end. Nothing may prompt under
+    # --json, so a database change that was not pre-answered is deferred and
+    # named in remedy. An updater's Fail throws, so the run ends in the
+    # object rather than a bare exit. Twin of exakit_update's --json arm.
+    $script:ExakitUpdateJson = $true
+    $script:ExakitUpdateResults = New-Object System.Collections.ArrayList
+    # The caller's own answer stands: EXAKIT_CONFIRM_RUNTIME_UPDATE=1 (or
+    # -AssumeYes) applies the database change, 0 defers it. Only a missing or
+    # unreadable answer defaults to "no", so the run can never reach a prompt.
+    # Twin of the case arm in exakit_update.
+    if (-not $AssumeYes) {
+        $confirmAnswer = "" + $env:EXAKIT_CONFIRM_RUNTIME_UPDATE
+        if ($confirmAnswer -cnotmatch '^(1|y|Y|yes|YES|Yes|0|n|N|no|NO|No)$') { $env:EXAKIT_CONFIRM_RUNTIME_UPDATE = "0" }
+    }
+    $runFailed = $false
+    $runError = ""
+    try {
+        # A loader while the run is silent; the spinner stops before the
+        # object prints. Twin of the ui_spin_begin around _exakit_update_run.
+        Invoke-ExakitWithSpinner -Label "Applying updates (every line goes to the log: exakit logs)" -Body {
+            & { Invoke-ExakitUpdateRun -Target $Target -AssumeYes $AssumeYes } *> $null
+        } | Out-Null
+    } catch {
+        $runFailed = $true
+        $runError = "" + $_.Exception.Message
+    }
+    Write-ExakitUpdateJsonReport -RunFailed $runFailed -RunError $runError
+}
+
+# Invoke-ExakitUpdateRun - the body of `exakit update`: one pass over the
+# targets, applying what is advertised. Twin of _exakit_update_run.
+function Invoke-ExakitUpdateRun {
+    param([string]$Target = "all", [bool]$AssumeYes = $false)
     if ($AssumeYes) {
         # -Yes answers the only question this command asks: may it stop the
         # database. The runtime updater reads the same variable, so an
@@ -2584,6 +2787,7 @@ function Invoke-CmdUpdate {
         # nothing the user can do), and an explicit target says why rather than
         # failing deep inside the installer.
         if (-not (Test-ExakitComponentSupported $actual)) {
+            Add-ExakitUpdateNote -Component $actual -Outcome "skipped" -From $current -To $available
             if ($Target -eq "all") { continue }
             Fail "$actual has no build for this platform, so there is nothing to update."
         }
@@ -2593,6 +2797,7 @@ function Invoke-CmdUpdate {
         # report the real reason.
         if ($Target -eq "all" -and -not $available) {
             Warn2 "No advertised version for $actual - skipping it. Details: exakit version"
+            Add-ExakitUpdateNote -Component $actual -Outcome "skipped" -From $current -To ""
             continue
         }
         # Never backwards, and this has to be settled BEFORE the heavy branch.
@@ -2607,6 +2812,7 @@ function Invoke-CmdUpdate {
             $shown = $current
             if (-not $shown) { $shown = "unknown" }
             Ok "$actual $shown is newer than the tested $available - keeping yours"
+            Add-ExakitUpdateNote -Component $actual -Outcome "ahead" -From $current -To $available
             continue
         }
         # A blanket update stops the database only for an answer it was given: on a
@@ -2620,19 +2826,31 @@ function Invoke-CmdUpdate {
                 # and an array is truthy no matter what it holds.
                 $applied = @(Invoke-ExakitRuntimeUpdateOffer -Component $component -Actual $actual `
                     -Installed $current -Advertised $available -AssumeYes $AssumeYes)[-1]
-                if ($applied -eq $true) { $acted += 1 } else { $deferred += 1 }
+                if ($applied -eq $true) {
+                    $acted += 1
+                    Add-ExakitUpdateNote -Component $actual -Outcome "updated" -From $current -To $available
+                } else {
+                    $deferred += 1
+                    Add-ExakitUpdateNote -Component $actual -Outcome "deferred" -From $current -To $available -Remedy "exakit update --yes"
+                }
+            } else {
+                Add-ExakitUpdateNote -Component $actual -Outcome "current" -From $current -To $available
             }
             continue
         }
         # Only the components this run will actually touch are reported: the work
         # plan, not a status table. `exakit version` is where everything is
         # listed, including what is already current.
-        if ($current -and $available -and $current -eq $available) { continue }
+        if ($current -and $available -and $current -eq $available) {
+            Add-ExakitUpdateNote -Component $actual -Outcome "current" -From $current -To $available
+            continue
+        }
         # The table's "update exakit first" verdict has to hold here too, or the
         # manifest's only hard compatibility lever would be advice nobody applies.
         $minKit = Get-ExakitComponentMinKit $actual
         if ($minKit -and -not (Test-ExakitMinKitSatisfied -Required $minKit)) {
             Warn2 "$actual $available needs kit >= $minKit - update the kit first: exakit update"
+            Add-ExakitUpdateNote -Component $actual -Outcome "blocked" -From $current -To $available -Remedy "exakit update"
             if ($Target -eq "all") { continue }
             Fail "Refusing to install $actual $available on kit $(Get-ExakitComponentCurrent 'exakit')."
         }
@@ -2641,6 +2859,10 @@ function Invoke-CmdUpdate {
             if (-not $shown) { $shown = "not installed" }
             Info "$actual $shown -> $available"
         }
+        # Under --json each updater's Fail is caught here, recorded as failed,
+        # and the rest still run; on the screen it stops the run as before.
+        $componentFailed = $false
+        try {
         switch ($component) {
             "exakit" {
                 Update-ExakitSelf -Advertised $available -Installed $current
@@ -2693,6 +2915,14 @@ function Invoke-CmdUpdate {
                     else { Fail "The $component module is not available in this version." }
                 }
             }
+        }
+        } catch {
+            if (-not $script:ExakitUpdateJson) { throw }
+            $componentFailed = $true
+            Add-ExakitUpdateNote -Component $actual -Outcome "failed" -From $current -To $available -Remedy "exakit update $component"
+        }
+        if (-not $componentFailed) {
+            Add-ExakitUpdateNote -Component $actual -Outcome "updated" -From $current -To $available
         }
         $acted += 1
     }
@@ -3409,12 +3639,14 @@ try {
                         "To take a major Exasol Personal upgrade here, re-run the installer: irm https://www.exasol.com/install/starter-kit.ps1 | iex")
                 }
             }
-            Assert-ExakitKnownOptions -CommandName "update" -Allowed @("--yes", "-y", "-Yes") -Arguments $RestArgs
-            # -y/--yes/-Yes answers the runtime offer, so it must not be mistaken
-            # for the target when it is the only argument given.
+            Assert-ExakitKnownOptions -CommandName "update" -Allowed @("--yes", "-y", "-Yes", "--json", "-j") -Arguments $RestArgs
+            # -y/--yes/-Yes answers the runtime offer, and --json asks for one
+            # object; neither may be mistaken for the target when it is the
+            # only argument given.
             $updateYes = ($RestArgs -contains "-Yes" -or $RestArgs -contains "--yes" -or $RestArgs -contains "-y")
-            $updateArgs = @($RestArgs | Where-Object { $_ -notin @("-Yes", "--yes", "-y") })
-            Invoke-CmdUpdate -Target ($updateArgs | Select-Object -First 1) -AssumeYes $updateYes
+            $updateJson = ($RestArgs -contains "--json" -or $RestArgs -contains "-j")
+            $updateArgs = @($RestArgs | Where-Object { $_ -notin @("-Yes", "--yes", "-y", "--json", "-j") })
+            Invoke-CmdUpdate -Target ($updateArgs | Select-Object -First 1) -AssumeYes $updateYes -Json $updateJson
         }
         "info"         {
             Assert-ExakitKnownOptions -CommandName "info" -Allowed @("--json", "-j") -Arguments $RestArgs
@@ -3441,8 +3673,12 @@ try {
             }
         }
         "guide"        { Assert-ExakitKnownOptions -CommandName "guide" -Allowed @() -Arguments $RestArgs; Show-ExakitGuide }
-        "start"        { Assert-ExakitKnownOptions -CommandName "start" -Allowed @() -Arguments $RestArgs; Invoke-CmdStart }
-        "stop"         { Assert-ExakitKnownOptions -CommandName "stop" -Allowed @() -Arguments $RestArgs; Invoke-CmdStop }
+        # The arguments travel on: the option guard lets a plain word through,
+        # and dropping it here is how `exakit stop exasol-scheduler` ran the
+        # bare form and stopped the database. Twin of the same arms in
+        # setup/exakit; Invoke-CmdStart/Stop validate the id themselves.
+        "start"        { Assert-ExakitKnownOptions -CommandName "start" -Allowed @() -Arguments $RestArgs; Invoke-CmdStart -Scope @($RestArgs) }
+        "stop"         { Assert-ExakitKnownOptions -CommandName "stop" -Allowed @() -Arguments $RestArgs; Invoke-CmdStop -Scope @($RestArgs) }
         "sql" {
             # A lone --help is unambiguous; a statement may contain the text.
             if (@($RestArgs).Count -eq 1 -and ($RestArgs[0] -eq "--help" -or $RestArgs[0] -eq "-h")) { Show-ExakitUsage -Topic "sql"; break }

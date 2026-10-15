@@ -46,6 +46,8 @@ upgrade anything.
 exakit update           # everything that is waiting
 exakit update skills    # or one target
 exakit update --yes     # pre-answer the one question it can ask
+exakit update --json    # one object: ok, status (updated|current|deferred|blocked|failed), per-component lists, remedy
+exakit update personal --plan   # --plan, --backup and --apply work only with personal
 ```
 
 Targets are `all`, `runtime`, `exakit`, `exapump`, `mcp`, `pyexasol`, `skills`,

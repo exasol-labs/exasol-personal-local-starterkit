@@ -1425,6 +1425,10 @@ function Confirm-ExakitLoadedTable {
     }
     Set-ExakitManifestValue "data.last_load.verified_table" $Target
     Set-ExakitManifestValue "data.last_load.verified_rows" $rows
+    # The count, for the caller too: the single-file load writes its receipt
+    # from it rather than launching exapump a second time for a number it just
+    # answered. Twin of EXAKIT_LAST_VERIFIED_ROWS.
+    $script:ExakitLastVerifiedRows = $rows
 }
 
 function Request-ExakitOptionalVerification {
@@ -1888,6 +1892,67 @@ function Import-ExakitLocalFile {
         return
     }
 
+    # WHAT IS ALREADY IN THAT TABLE? exapump's upload APPENDS, and this path
+    # used to call it without looking: the folder load asks EXAKIT_ON_EXISTING
+    # (skip / replace / append, skip by default) before it touches a table
+    # holding rows this kit did not load, while one file went straight in - so
+    # replace over a table with one foreign row and a one-row file left TWO
+    # rows and said nothing. Same three answers as the folder, same default,
+    # same receipts, decided BEFORE the schema call so a refusal changes
+    # nothing. Twin of the same block in exakit_load_local_file.
+    $policy = "" + $env:EXAKIT_ON_EXISTING
+    if ($policy -ne "" -and (@("skip", "replace", "append") -notcontains $policy)) {
+        # Bad input, the same class as an unsupported file: exit 2, nothing
+        # recorded - not the folder path's "failed", which the installer books
+        # as a failed step over a typo in a variable.
+        Write-Host ""; Write-Host "  [x] EXAKIT_ON_EXISTING must be skip, replace or append (got '$policy')."
+        Write-ExakitLog "REJECT" "EXAKIT_ON_EXISTING must be skip, replace or append (got '$policy')."
+        exit 2
+    }
+    Clear-ExakitTableListing
+    $rows = Get-ExakitTableRowCount $target
+    $verdict = "load"
+    # $null is a database that could not be asked, not an empty one; absent
+    # and 0 hold nothing worth protecting. All three load, as the folder path
+    # decides for the same answers (Get-ExakitBulkDecisions).
+    if ($null -ne $rows -and $rows -ne "absent" -and [long]$rows -gt 0) {
+        $seen = Get-ExakitLoadReceipt $target $path
+        if ($null -ne $seen -and $seen -eq [long]$rows) { $verdict = "done" } else { $verdict = "clash" }
+    }
+    if ($verdict -eq "done" -and $policy -ne "replace" -and $policy -ne "append") {
+        # Loaded from this very file, and still holding exactly what it put
+        # there: loading it again would double it, which is what a re-run did.
+        Ok "$target already holds the $(Get-ExakitRowsLabel $rows) this file loaded - left as it is."
+        Info "Load it again on top with EXAKIT_ON_EXISTING=append, or drop and rebuild it with EXAKIT_ON_EXISTING=replace."
+        return
+    }
+    if ($verdict -eq "clash") {
+        if ($policy -eq "") { $policy = Read-ExakitFileClashAnswer -Target $target -Rows $rows }
+        if ($policy -eq "skip") {
+            # Declined: the rows are the reader's and nobody said replace or
+            # append, so nothing was changed. The menu turns this into exit 5,
+            # the code every unconfirmed command answers with - not 0, which an
+            # agent reads as "loaded", and not a failed step.
+            Warn2 "Not loaded: $target already holds $(Get-ExakitRowsLabel $rows) with no load record for this file (another file loaded them, or a load made before this kit version kept no record)."
+            Info "Re-run with EXAKIT_ON_EXISTING=replace (drop and rebuild it) or =append (load on top)."
+            return "declined"
+        }
+    }
+    # The policy, said whenever it applied: the output never leaves the reader
+    # guessing what happened to the rows that were already there.
+    if ($verdict -ne "load") {
+        if ($policy -eq "replace") {
+            Info "Replacing the $(Get-ExakitRowsLabel $rows) already in $target - the table is dropped and rebuilt (EXAKIT_ON_EXISTING=replace)."
+            # DROP, not TRUNCATE, exactly as the folder path does: the file may
+            # not even have the same columns as what is there.
+            [void](Invoke-Exapump @("sql", "-p", $script:ExapumpProfile, "DROP TABLE IF EXISTS $target"))
+            Remove-ExakitLoadReceipt $target
+            Write-ExakitLog "RESET" "$target dropped before loading $(Split-Path $path -Leaf)"
+        } else {
+            Info "Appending to the $(Get-ExakitRowsLabel $rows) already in $target (EXAKIT_ON_EXISTING=append)."
+        }
+    }
+
     # One label, one spinner, for the whole job - the twin of what exapump.sh
     # does with EXAKIT_UPLOAD_QUIET and EXAKIT_ACTIVE_LABEL.
     $script:ExakitUploadQuiet = $true
@@ -1898,7 +1963,12 @@ function Import-ExakitLocalFile {
         Set-ExakitManifestValue "data.last_load.type" "local_file"
         Set-ExakitManifestValue "data.last_load.target" $target
         Set-ExakitManifestValue "data.last_load.source" $path
+        $script:ExakitLastVerifiedRows = $null
         Confirm-ExakitLoadedTable $target
+        # A receipt, like every file a folder load lands: it is what lets the
+        # next run of this same file say "already loaded" instead of loading
+        # it twice.
+        Write-ExakitLoadReceipt -Target $target -File $path -Rows $script:ExakitLastVerifiedRows
     } finally {
         $script:ExakitUploadQuiet = $false
         $script:ExakitActiveLabel = ""
@@ -2130,8 +2200,16 @@ function Read-ExakitBulkClashAnswer {
         Info "Skipping those files. Re-run with EXAKIT_ON_EXISTING=replace or =append to decide otherwise."
         return "skip"
     }
+    return (Read-ExakitClashPrompt "Those files: (s)kip, (r)eplace what is there, or (a)ppend to it")
+}
+
+# Read-ExakitClashPrompt <question> - the one question both load paths ask
+# about rows this kit did not put there, so a folder and a single file cannot
+# drift into offering different answers. Twin of exakit_clash_prompt.
+function Read-ExakitClashPrompt {
+    param([Parameter(Mandatory)][string]$Question)
     while ($true) {
-        $answer = Read-ExakitPrompt "Those files: (s)kip, (r)eplace what is there, or (a)ppend to it" "s"
+        $answer = Read-ExakitPrompt $Question "s"
         switch -Regex ($answer) {
             '^[sS]' { return "skip" }
             '^[rR]' { return "replace" }
@@ -2139,6 +2217,18 @@ function Read-ExakitBulkClashAnswer {
             default { Warn2 "Answer s, r or a." }
         }
     }
+}
+
+# Read-ExakitFileClashAnswer <target> <rows> - the single-file form: one
+# table, so no list, and without a console the answer is skip for the same
+# reason as the folder's. The caller prints the refusal and the remedy. Twin
+# of exakit_file_ask_clash.
+function Read-ExakitFileClashAnswer {
+    param([Parameter(Mandatory)][string]$Target, $Rows)
+    if (-not (Test-ExakitInteractive)) { return "skip" }
+    Write-Host ""
+    Warn2 "$Target already holds $(Get-ExakitRowsLabel $Rows) this kit did not load."
+    return (Read-ExakitClashPrompt "That table: (s)kip, (r)eplace what is there, or (a)ppend to it")
 }
 
 # Get-ExakitRowsLabel <rows> - "339 rows" from a count, or "" when the database
@@ -2502,7 +2592,7 @@ function Import-ExakitLocalFolder {
                 Write-ExakitLog "SKIP" "$(Split-Path $file -Leaf) -> $target (holds $($d.Had) rows this kit did not load)"
                 $outcomes += [pscustomobject]@{ Status = "skip"; File = $file; Table = $d.Table
                     Detail = (Get-ExakitRowsLabel $d.Had)
-                    Why = "not loaded: the table already holds rows this kit did not put there" }
+                    Why = "not loaded: the table already holds rows with no load record for this file" }
                 continue
             }
             # An interrupted write leaves PART of a file in the table, and a
@@ -3529,6 +3619,10 @@ function Show-ExakitDataLoadMenu {
                 Stop-ExakitDataTableRun
                 $result = Import-ExakitLocalFile
                 if ($result -eq "back") { Info "Local file load skipped. Run it any time with: exakit data-load" }
+                # Declined (the table held rows this kit did not load and the
+                # answer was skip): exit 5, as every unconfirmed command does.
+                # Twin of _menu_status=5 in exakit_data_load_menu.
+                if ($result -eq "declined") { $script:PendingExitCode = 5 }
             } else {
                 $kitRoot = Get-ExakitRepoRoot
                 if (-not $kitRoot) { Fail "Could not find the kit's sql/ and data/ files to load." }
@@ -3663,6 +3757,11 @@ function Request-ExakitDataLoadOffer {
                 Stop-ExakitDataTableRun
                 $result = Import-ExakitLocalFile
                 if ($result -eq "back") { Info "Local file load skipped. Run it any time with: exakit data-load" }
+                # Not a failed step - the install is fine, the table is the
+                # reader's. Twin of the exit-5 note in the shell installer.
+                if ($result -eq "declined") {
+                    Warn2 "The local file was not loaded: its table already holds rows (see above). Decide with EXAKIT_ON_EXISTING=replace or =append and re-run: exakit data-load"
+                }
             } else {
                 try {
                     Invoke-ExakitDatasetLoad -KitRoot $KitRoot -Id $id
