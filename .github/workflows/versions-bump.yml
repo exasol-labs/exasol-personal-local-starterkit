@@ -227,6 +227,36 @@ jobs:
                               personal["version"] = winner
                               s3["sha256"] = digests
 
+          # --- nano: the newest YYYY.M.P-nano.N tag on Docker Hub, with the ----
+          # manifest-list digest the registry serves for it. The per-architecture
+          # (-amd64, -arm64) and the .run tags are not candidates. The digest is
+          # what the install checks the pulled image against, so the two move
+          # together or not at all.
+          nano = components.get("nano") or {}
+          if nano.get("version"):
+              image = nano.get("image", "exasol/nano")
+              body, reason = fetch("https://hub.docker.com/v2/repositories/%s/tags?page_size=100&ordering=last_updated" % image)
+              if body is None:
+                  notes.append("- `nano`: Docker Hub did not answer (%s), left alone" % reason)
+              else:
+                  nano_shape = re.compile(r"^(\d+)\.(\d+)\.(\d+)-nano\.(\d+)$")
+                  def nano_key(tag):
+                      match = nano_shape.match(tag or "")
+                      if not match:
+                          return None
+                      return tuple(int(part) for part in match.groups())
+                  served = {}
+                  for entry in body.get("results") or []:
+                      name = entry.get("name") or ""
+                      digest = (entry.get("digest") or "").replace("sha256:", "")
+                      if nano_shape.match(name) and re.match(r"^[0-9a-f]{64}$", digest):
+                          served[name] = digest
+                  winner = pick(list(served), nano["version"], "nano", nano_key)
+                  if winner:
+                      bumped["nano"] = (nano["version"], winner)
+                      nano["version"] = winner
+                      nano["digest"] = served[winner]
+
           # --- mcp and pyexasol: stable, non-yanked PyPI releases ---------------
           def bump_pypi(key, default_package):
               block = components.get(key) or {}
@@ -391,6 +421,11 @@ jobs:
                   ("setup/lib/common.sh", "bash", "EXAKIT_PERSONAL_VERSION_FALLBACK"),
                   ("setup/lib/runtime-personal.ps1", "pwsh", "PersonalVersionFallback"),
               ],
+              # The Docker variant's Windows runtime keeps its tag constant in
+              # its own module (there is no bash twin: Nano is Windows-only).
+              "nano": [
+                  ("setup/lib/runtime-nano.ps1", "pwsh", "NanoTagFallback"),
+              ],
               "exapump": [
                   ("setup/lib/common.sh", "bash", "EXAKIT_EXAPUMP_VERSION_FALLBACK"),
                   ("setup/lib/exakit-common.ps1", "pwsh", "ExapumpVersionFallback"),
@@ -504,6 +539,10 @@ jobs:
                   summary.append("")
                   summary.append("The five exasol-scheduler `sha256` digests were recomputed from "
                                  "upstream's downloaded release archives.")
+              if "nano" in bumped:
+                  summary.append("")
+                  summary.append("The nano `digest` is the manifest-list digest Docker Hub serves "
+                                 "for the new tag; the install refuses a pulled image without it.")
               if touched:
                   summary.append("")
                   summary.append("Constants moved with the manifest, so a fully offline install "

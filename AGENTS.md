@@ -10,7 +10,7 @@ Everything below expands on this. If you read nothing else, this is enough to in
 # 1. Install, unattended, in the background; answer choices with env vars (names, never menu numbers).
 #    nohup, not a bare &: your shell tool's timeout would otherwise reap the installer mid-step.
 EXAKIT_DATASETS=tpch,energy,weather EXAKIT_MCP_CLIENTS=all EXAKIT_MARKETPLACE_ADDONS=none \
-  nohup sh -c 'curl -fsSL https://www.exasol.com/install/starter-kit.sh | sh' \
+  nohup sh -c 'curl -fsSL https://raw.githubusercontent.com/exasol-labs/exasol-personal-local-starterkit/exasol-starterkit-docker/install.sh | sh' \
   </dev/null >~/exakit-install.log 2>&1 &
 # 2. Put the CLI on PATH once — a bare non-interactive shell does not have ~/.local/bin.
 export PATH="$HOME/.local/bin:$PATH"      # Windows/Git Bash: the command is exakit.cmd
@@ -32,16 +32,18 @@ exakit sql --json "SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_ROW_COUNT FROM SYS.EXA
 
 ## Install (one command)
 
+This is the **Docker variant** of the kit (branch `exasol-starterkit-docker`): on Windows the database is an **Exasol Nano container in Docker Desktop**, which must be installed and running before the install (the kit never installs or starts it). macOS, Linux and WSL install Exasol Personal exactly as the standard kit does. A kit installed from these commands follows this branch for its manifest, its self-update and its skills. A Windows machine that runs Exasol Personal from the standard kit is refused, not converted: `exakit uninstall` first, or stay on the standard kit.
+
 macOS / Linux / WSL:
 
 ```bash
-curl https://www.exasol.com/install/starter-kit.sh | sh
+curl -fsSL https://raw.githubusercontent.com/exasol-labs/exasol-personal-local-starterkit/exasol-starterkit-docker/install.sh | sh
 ```
 
 Windows (PowerShell):
 
 ```powershell
-irm https://www.exasol.com/install/starter-kit.ps1 | iex
+irm https://raw.githubusercontent.com/exasol-labs/exasol-personal-local-starterkit/exasol-starterkit-docker/install.ps1 | iex
 ```
 
 The installer is **fully unattended-safe**. With no TTY attached (the normal case for an agent shell) every question takes a safe default: all bundled datasets are loaded, and every AI client that is installed on the machine but not yet connected gets an MCP config. Nothing ever hangs waiting for input.
@@ -72,7 +74,7 @@ Flags do not travel through a pipe, so choices are env vars. They work on all pl
 | `EXAKIT_PREFLIGHT=1` | Check machine requirements only, installs nothing. Both installers: `... \| EXAKIT_PREFLIGHT=1 sh`, or `$env:EXAKIT_PREFLIGHT = '1'` before `irm ... \| iex` |
 | `EXAKIT_DRY_RUN=1` | Download the kit into a temporary folder for inspection; installs nothing and changes nothing under `EXAKIT_HOME` |
 | `EXAKIT_LOCAL_KIT=/path/to/checkout` | Install from a local checkout instead of downloading — on every platform, including Windows (`$env:EXAKIT_LOCAL_KIT = 'C:\path\to\checkout'`), where the checkout must contain `setup\exakit.ps1` or the installer refuses it by name. On WSL this is the only supported way to install from a Windows-side clone: pass the `/mnt/c/...` path |
-| `EXAKIT_DB_PORT=8564` | Alternate DB port (Linux and Windows container path only). Set it once, for the install: the kit records it and every later `exakit start` reuses it |
+| `EXAKIT_DB_PORT=8564` | Alternate DB port (Linux, and the Windows Nano container). Set it once, for the install: the kit records it and every later `exakit start` reuses it |
 
 Version and update behaviour (all optional, sensible defaults):
 
@@ -106,6 +108,10 @@ None of these are needed on a normal machine, and none are set by default. They 
 | `EXAKIT_UPLOAD_RETRIES=0` | How many more attempts a data-file upload gets when the database's import connection is cut mid-transfer (`ETL-5105 ... transfer closed with outstanding read data remaining`; default `2`, `0` disables). Retried one file at a time, logged, never shown; a malformed file or a refused login is never retried |
 | `EXAKIT_INSTALL_PODMAN=0` | Linux and WSL only: do **not** install Podman when it is missing. The default is to install it — the database runs through Podman, so the kit runs one package-manager command through `sudo` (apt, dnf, yum, zypper, pacman or apk) between the launcher step and the database step, and on Debian/Ubuntu brings `uidmap` with it. The command's output goes to the logfile behind a spinner, and a password is asked for only when `sudo` actually wants one. Set this to `0` for a run where package installs are somebody else's job: the database step is then recorded as not finished and prints the command instead |
 | `EXAKIT_PERSONAL_MIN_RAM_GB=4` | RAM floor for the deployment (default `8`) |
+| `EXAKIT_NANO_MIN_RAM_GB=4` | Windows (Docker variant): RAM floor for the Nano container (default `4`) |
+| `EXAKIT_NANO_READY_TIMEOUT=900` | Windows (Docker variant): seconds to wait for the Nano database to answer after the container starts (default `600`); a first start initialises the database |
+| `EXAKIT_NANO_TAG=2026.2.0-nano.5` | Windows (Docker variant): pull that Exasol Nano image tag instead of the one `versions.json` advertises. A tag the manifest does not pin is used unverified, and the kit says so |
+| `EXAKIT_KIT_REF=exasol-starterkit-docker` | The git ref this kit fetches its manifest, self-update and skills from (default: this branch, or the ref recorded in the manifest's `kit.source`). Set it only to point one command at another branch on purpose |
 | `EXAKIT_PERSONAL_MIN_DISK_GB=10` | Free-disk floor at the home directory, where the deployment lives (default `20`) |
 | `EXAKIT_PERSONAL_REAP_MIN_AGE=0` | Seconds a matching runner process must have been alive before the kit will treat it as an abandoned orphan and kill it (default `180`). A deployment that is still coming up carries the same process name as a stranded one, so the kit waits out the start budget before reaping; `0` restores the old reap-by-name-alone behaviour. **Do not set it to `0` to get past a busy port** — killing a runner that is mid-start leaves the launcher `interrupted`, and the only documented cure for that is `exakit repair-runtime`, which deletes the database |
 | `EXAKIT_FORCE=1` | Install even though a RAM or free-disk check failed, or could not read the number at all. It lowers no requirement — the deploy can still fail on the real limit |

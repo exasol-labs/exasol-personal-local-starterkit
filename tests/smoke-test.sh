@@ -14,6 +14,16 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
+# ON THIS BRANCH (the Docker variant) install.sh fetches the kit from the
+# exasol-starterkit-docker branch. In CI that branch lives in the repository
+# running the workflow - a fork carries it before the published repository
+# does - so the fetch is pointed there; anywhere else the installer's own
+# default (the published repository) stands, unless EXAKIT_REPO says otherwise.
+if [ -n "${GITHUB_REPOSITORY:-}" ] && [ -z "${EXAKIT_REPO:-}" ]; then
+    EXAKIT_REPO="$GITHUB_REPOSITORY"
+    export EXAKIT_REPO
+fi
+
 say() { printf '\n\033[1;36m[smoke]\033[0m %s\n' "$*"; }
 
 say "1/4 dry run through the pipe entry point"

@@ -2292,9 +2292,9 @@ self_update() (
                 *) shift ;;
             esac
         done
-        # Only the main branch archive exists in this world; the tag fallbacks 404.
+        # Only the kit's own branch archive exists in this world; the tag fallbacks 404.
         case "$_su_url" in
-            *refs/heads/main.tar.gz) cp "$SU_SERVE" "$_co" ;;
+            *refs/heads/exasol-starterkit-docker.tar.gz) cp "$SU_SERVE" "$_co" ;;
             *) return 22 ;;
         esac
     }
@@ -2313,14 +2313,14 @@ PS_KIT_SRC="$MK_LAST_SRC"       # reused by the PowerShell self-update check bel
 # which repository that is can be retargeted (a fork, for testing), and none of
 # these checks are about its name.
 check "a newer kit replaces the copy and records itself" \
-    "rc=0 version=0.3.0 source=$EXAKIT_KIT_REPO@main kit-present replaced cli-installed backup-kept" \
+    "rc=0 version=0.3.0 source=$EXAKIT_KIT_REPO@exasol-starterkit-docker kit-present replaced cli-installed backup-kept" \
     "$(self_update "$WORK/kit-0.3.0.tgz" 0.3.0)"
 
 # The raw endpoint can be minutes ahead of the branch archive: record what landed.
 make_kit_tarball "$WORK/kit-0.2.5.tgz" 0.2.5
 lag_state="$(self_update "$WORK/kit-0.2.5.tgz" 0.3.0)"
 check "a lagging archive records the version that landed" \
-    "rc=0 version=0.2.5 source=$EXAKIT_KIT_REPO@main kit-present replaced cli-installed backup-kept" \
+    "rc=0 version=0.2.5 source=$EXAKIT_KIT_REPO@exasol-starterkit-docker kit-present replaced cli-installed backup-kept" \
     "$lag_state"
 has "and says the manifest was ahead" "not the advertised 0.3.0" "$(cat "$WORK/su-out.txt")"
 
@@ -2478,10 +2478,10 @@ PY
     ps_self="$(EXAKIT_HOME="$PS_SU/home" EXAKIT_BIN_DIR="$PS_SU/home/bin" \
         VM_ROOT="$ROOT" SU_ZIP="$PS_SU/kit-0.3.0.zip" pwsh -NoProfile -Command '
         . "$env:VM_ROOT/setup/lib/exakit-common.ps1"
-        # Only the main-branch archive exists in this world; the tags 404.
+        # Only the kit branch archive exists in this world; the tags 404.
         function Invoke-WebRequest {
             param($Uri, $OutFile, [switch]$UseBasicParsing, $TimeoutSec, $UserAgent)
-            if ($Uri -notlike "*refs/heads/main.zip") { throw "404" }
+            if ($Uri -notlike "*refs/heads/exasol-starterkit-docker.zip") { throw "404" }
             Copy-Item -Force $env:SU_ZIP $OutFile
         }
         Initialize-ExakitManifest
@@ -2500,7 +2500,7 @@ PY
     # Nothing above sets EXAKIT_KIT_REPO for pwsh, so the slug in this line is the
     # PowerShell default measured against the bash one: the two must not drift.
     check "powershell(self_update)" \
-        "0.3.0 $EXAKIT_KIT_REPO@main kit-present replaced shim-written backup-kept" \
+        "0.3.0 $EXAKIT_KIT_REPO@exasol-starterkit-docker kit-present replaced shim-written backup-kept" \
         "$ps_self"
     # The notice is mirrored code and its wording carries the cost of the update, so
     # compare the real thing against the same fixture the bash lines came from.

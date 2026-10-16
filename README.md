@@ -11,6 +11,8 @@
 
 **Install it with one command. You don't need a cloud account or a license key.**
 
+> **This is the Docker variant of the kit** (branch `exasol-starterkit-docker`). On **Windows** it installs the database as an **Exasol Nano container in Docker Desktop** instead of Exasol Personal through Podman. macOS, Linux and WSL install Exasol Personal exactly as the standard kit does. The commands below fetch this branch, and a kit installed from them keeps following it. `versions.json` on this branch pins the Nano image tag and its digest, and the installer checks the pulled image against that pin. For the standard kit, use the [main branch](https://github.com/exasol-labs/exasol-personal-local-starterkit).
+
 [![Documentation](https://img.shields.io/badge/docs-exasol.com-blue)](https://docs.exasol.com/db/latest/home.htm)
 [![Community](https://img.shields.io/badge/community-exasol-green)](https://community.exasol.com)
 [![Quickstart](https://img.shields.io/badge/database%20ready-~5%20min-orange)](QUICKSTART.md)
@@ -18,13 +20,13 @@
 **macOS / Linux / WSL**
 
 ```bash
-curl https://www.exasol.com/install/starter-kit.sh | sh
+curl -fsSL https://raw.githubusercontent.com/exasol-labs/exasol-personal-local-starterkit/exasol-starterkit-docker/install.sh | sh
 ```
 
-**Windows (PowerShell)**
+**Windows (PowerShell, with Docker Desktop running)**
 
 ```powershell
-irm https://www.exasol.com/install/starter-kit.ps1 | iex
+irm https://raw.githubusercontent.com/exasol-labs/exasol-personal-local-starterkit/exasol-starterkit-docker/install.ps1 | iex
 ```
 
 To have an AI agent do the install, paste this into Claude Code, Codex or any other coding agent:
@@ -32,7 +34,7 @@ To have an AI agent do the install, paste this into Claude Code, Codex or any ot
 <div align="left">
 
 ```text
-Install the Exasol starter kit from https://github.com/exasol-labs/exasol-personal-local-starterkit
+Install the Exasol starter kit from https://github.com/exasol-labs/exasol-personal-local-starterkit/tree/exasol-starterkit-docker
 ```
 
 </div>
@@ -50,7 +52,7 @@ The install command sets up four components and connects them:
 | Component | What it does |
 |---|---|
 | [MCP server](https://github.com/exasol/mcp-server) | Let Claude, Cursor or other supported MCP clients query your database through a dedicated read-only login |
-| [Exasol&nbsp;Personal&nbsp;Local](https://github.com/exasol/exasol-personal) | An in-memory analytics database that runs on your machine |
+| [Exasol&nbsp;Personal&nbsp;Local](https://github.com/exasol/exasol-personal) | An in-memory analytics database that runs on your machine. On Windows, this variant runs [Exasol Nano](https://hub.docker.com/r/exasol/nano) as a container in Docker Desktop instead |
 | [exapump](https://github.com/exasol-labs/exapump) | Loads CSV and Parquet files and runs SQL from your terminal |
 | [pyexasol](https://github.com/exasol/pyexasol) | The official Exasol Python driver, installed in its own environment |
 
@@ -81,20 +83,22 @@ Point `exakit data-load` at a folder and every CSV, Parquet or JSON file in it b
 
 ## Minimum requirements
 
-Every platform runs the same database, Exasol Personal, set up by the same launcher.
+macOS, Linux and WSL run Exasol Personal, set up by the Exasol launcher. Windows runs Exasol Nano as a container in Docker Desktop.
 
 | Machine | Minimum | Notes |
 |---|---|---|
 | **[macOS](quickstarts/macos.md)** | 8 GB+ RAM, 20 GB free disk | Runs in a lightweight managed VM. Nothing to install first |
 | **[Linux](quickstarts/linux.md)** | Podman (rootless is fine), 8 GB+ RAM, 20 GB free disk | If Podman is missing, the installer installs it without stopping to ask. It uses `sudo`, so expect a password prompt |
-| **[Windows](quickstarts/windows.md)** | 8 GB+ RAM, 20 GB free disk | Runs through Podman, which the launcher offers to install (this may need administrator approval). An existing Podman machine must be rootless (`podman machine set --rootful=false`), or the database port cannot reach Windows. Windows arm64 is not supported<br>**WSL** is supported and follows the Linux path: run the same command inside a WSL2 distro. |
+| **[Windows](quickstarts/windows.md)** | Docker Desktop installed and running, 8 GB+ RAM (4 GB minimum), 20 GB free disk | The database is the Exasol Nano image, pulled into Docker Desktop and checked against the digest pinned in `versions.json`. The kit does not install Docker Desktop. Windows arm64 runs the database only: exapump and the AI bridge have no arm64 build there<br>**WSL** is supported and follows the Linux path: run the same command inside a WSL2 distro. |
 | All platforms | Python 3.11+ |  |
 
-If Podman blocks the install, see the [Podman troubleshooting guide](quickstarts/podman.md).
+If Podman blocks a Linux or WSL install, see the [Podman troubleshooting guide](quickstarts/podman.md).
 
 ## Upgrade Path for Starterkit
 
-To upgrade from 0.1.0 to 0.2.0, run the install command from the top of this page again. On Windows it is recommended to have Podman Desktop installed before you start, and Podman on Linux. On macOS there is nothing to prepare, and `exakit update` does the same job.
+To upgrade from 0.1.0 to 0.2.0, run the install command from the top of this page again. On Linux have Podman installed before you start. On macOS there is nothing to prepare, and `exakit update` does the same job.
+
+On Windows, this variant adopts a 0.1.0 install as it is: the 0.1.0 database was already an Exasol Nano container in Docker Desktop, and the kit keeps using it. A Windows machine that runs Exasol Personal from the standard kit is not converted: the installer stops and says so. Run `exakit uninstall` first, or stay on the standard kit.
 
 ## Connect your AI client and ask
 
@@ -154,9 +158,9 @@ The whole flow, from install to the first query: -->
 | Question | Answer |
 |---|---|
 | What&nbsp;do&nbsp;I&nbsp;need&nbsp;installed&nbsp;first? | Python 3.11+. You don't need Rust or Homebrew. |
-| What&nbsp;if&nbsp;I&nbsp;don't&nbsp;have<br>Podman&nbsp;Desktop&nbsp;on&nbsp;Windows? | The Exasol launcher offers to install Podman at the database step through Windows Package Manager, which may ask for administrator approval once. If that fails, see the [Podman troubleshooting guide](quickstarts/podman.md). |
-| Podman&nbsp;on&nbsp;Windows:&nbsp;rootful&nbsp;machine<br>or&nbsp;unreachable&nbsp;database? | The kit needs a rootless machine. Follow the [steps to switch to rootless mode](quickstarts/podman.md#windows-rootful-machine) when you can restart the machine and interrupt its containers. |
-| Podman&nbsp;on&nbsp;Windows:&nbsp;installed<br>but&nbsp;unable&nbsp;to&nbsp;connect? | Run `podman info` and check whether the machine is running. The [connection troubleshooting steps](quickstarts/podman.md#windows-connection-failures) explain how to get it working. |
+| What&nbsp;do&nbsp;I&nbsp;need&nbsp;on&nbsp;Windows? | Docker Desktop, installed and running. The installer checks for it before it downloads anything, and it does not install Docker Desktop for you. Docker Desktop has its own licence: free for personal use, education and small businesses, and a paid subscription in larger companies (see Docker's terms). |
+| Docker&nbsp;Desktop&nbsp;is&nbsp;installed,<br>but&nbsp;the&nbsp;install&nbsp;says&nbsp;it&nbsp;is&nbsp;not&nbsp;running? | Open Docker Desktop and wait until it reports that the engine is running, then re-run the command. A machine that signs in with a company account may need that sign-in first. |
+| The&nbsp;database&nbsp;password<br>does&nbsp;not&nbsp;work&nbsp;on&nbsp;Windows? | The password file is mounted into the container on its first start. Docker Desktop > Settings > Resources > File sharing must include your user profile drive. Then run `exakit uninstall` and install again. |
 | Podman&nbsp;on&nbsp;WSL2:&nbsp;machine&nbsp;won't&nbsp;start<br>or&nbsp;reports&nbsp;a&nbsp;virtualization&nbsp;error? | Check your WSL2 and Windows virtualization setup using the [WSL2 troubleshooting steps](quickstarts/podman.md#wsl2-and-virtualization). |
 | Podman&nbsp;on&nbsp;Linux/WSL:&nbsp;what&nbsp;do<br>`subuid`&nbsp;or&nbsp;`newuidmap`&nbsp;errors&nbsp;mean? | Your account may be missing the ID ranges or helpers that rootless Podman needs. Follow the [rootless permissions guide](quickstarts/podman.md#linux-and-wsl-rootless-permissions) before changing system settings. |
 | Does&nbsp;it&nbsp;cost&nbsp;anything? | No. Exasol Personal Local is free of charge, but it is not open source: the database ships under the [Exasol Personal End User License Agreement](https://www.exasol.com/terms-and-conditions/#h-exasol-personal-end-user-license-agreement), and this kit's scripts are [MIT](LICENSE). |
@@ -165,10 +169,10 @@ The whole flow, from install to the first query: -->
 | The&nbsp;install&nbsp;failed&nbsp;partway&nbsp;through? | Re-run the install command. It skips what is already done and picks up where it left off. |
 | `exakit` not recognized after<br>a Windows install? | Re-run the install command. It adds `~\.local\bin` to your user PATH and fixes the command. |
 | Port&nbsp;8563&nbsp;already&nbsp;taken? | If an Exasol database is on it, the kit adopts that database. If another program is on it, the kit says which program and leaves it running. Stop that program and re-run. `exakit info` shows the port your database uses. |
-| Behind&nbsp;a&nbsp;corporate&nbsp;proxy? | Set `HTTPS_PROXY` before installing so the kit can download through your proxy. Use `export HTTPS_PROXY=http://proxy.example.com:8080` on macOS and Linux, or `$env:HTTPS_PROXY = 'http://proxy.example.com:8080'` in PowerShell. For proxies that require a login, the Windows installer uses your signed-in Windows account. Podman image pulls may need separate proxy and certificate settings inside its machine. See the [Podman troubleshooting guide](quickstarts/podman.md). |
+| Behind&nbsp;a&nbsp;corporate&nbsp;proxy? | Set `HTTPS_PROXY` before installing so the kit can download through your proxy. Use `export HTTPS_PROXY=http://proxy.example.com:8080` on macOS and Linux, or `$env:HTTPS_PROXY = 'http://proxy.example.com:8080'` in PowerShell. For proxies that require a login, the Windows installer uses your signed-in Windows account. Image pulls go through the container engine's own proxy settings: Docker Desktop > Settings > Resources > Proxies on Windows, and the Podman machine on Linux and WSL (see the [Podman troubleshooting guide](quickstarts/podman.md)). |
 | Installing&nbsp;over&nbsp;a&nbsp;database<br>I&nbsp;already&nbsp;have? | The kit adopts your existing database, running or stopped, and reuses it with its data intact. The installer replaces a database only if it cannot start at all, and it warns you first. |
 | I&nbsp;already&nbsp;have&nbsp;the&nbsp;kit.<br>How&nbsp;do&nbsp;I&nbsp;get&nbsp;this&nbsp;version? | Re-run the install command. See [Upgrade](#upgrade-path-for-starterkit). |
-| How&nbsp;do&nbsp;I&nbsp;remove&nbsp;everything? | Run `exakit uninstall`. |
+| How&nbsp;do&nbsp;I&nbsp;remove&nbsp;everything? | Run `exakit uninstall`. On Windows that removes the Nano container and its data volume; Docker Desktop itself stays. |
 
 ---
 

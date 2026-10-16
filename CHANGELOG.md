@@ -1,5 +1,31 @@
 # Changelog
 
+## Docker variant (branch `exasol-starterkit-docker`)
+
+**The Windows database is an Exasol Nano container in Docker Desktop, the way
+0.1.0 installed it; macOS, Linux and WSL keep Exasol Personal as on main.**
+This branch receives main's changes one way and is never merged back.
+
+- `setup/lib/runtime-nano.ps1` drives the container: pull, digest check, first
+  deploy with a generated SYS password, start, stop, remove, update over the
+  same data volume, and a restart policy for `exakit autostart`. A 0.1.0
+  container install is adopted as it stands; a Windows machine running Exasol
+  Personal from the standard kit is refused, not converted.
+- `versions.json` carries `components.nano`: the image, the tag and the
+  manifest-list digest Docker Hub serves for it. The install refuses a pulled
+  image whose digest differs. CI checks the pin against Docker Hub on every
+  manifest change, and the bump workflow proposes newer `YYYY.M.P-nano.N`
+  tags with their digests.
+- The kit follows its own branch: `EXAKIT_KIT_REF` (default
+  `exasol-starterkit-docker`, or the ref recorded in the manifest's
+  `kit.source`) names where the manifest, the self-update and the skills are
+  fetched from, and the install commands point at the branch's raw
+  installers. `EXAKIT_NANO_TAG` pins another image tag by hand (unverified).
+- `exakit version` shows a `Variant` row (`docker-nano`); `exakit status`
+  reads `nano (docker)`. Windows arm64 is no longer refused: the Nano image is
+  multi-arch, so the database runs and the pieces without an arm64 build are
+  skipped.
+
 ## Unreleased
 
 ## 0.2.2

@@ -75,6 +75,11 @@ function Get-RuntimeType { "personal" }
 function Get-ExakitRepoRoot { return $null }   # force fallback skill list
 function Get-ExakitProfileHome { return $fakeProfile }
 function Remove-Personal { $script:markers.database = $true }
+# The Docker variant's runtime (runtime-nano.ps1), reachable from the same
+# uninstall paths: stubbed so the call sweep (tests/lib/ps-uninstall-calls.sh)
+# sees a leaf, and so a nano record removes its database the same way.
+function Remove-Nano { param([switch]$Data) $script:markers.database = $true }
+function Set-NanoRestartPolicy { param([bool]$Enabled) return $true }
 function Invoke-McpOperation { param($Operation, $InputArgs) $script:markers.mcp = $Operation; return $true }
 # The real helper defers deletion to a detached process (so cmd.exe does not
 # choke on exakit.cmd being removed mid-run); here we delete synchronously so

@@ -409,7 +409,11 @@ for _s in setup/setup-macos.sh setup/setup-linux.sh; do
     has "$_s calls the first half"  "legacy_crossing_before" "$(cat "$ROOT/$_s")"
     has "$_s calls the second half" "legacy_crossing_after"  "$(cat "$ROOT/$_s")"
 done
-has "setup-windows.ps1 calls the first half"  "Invoke-LegacyCrossingBefore" "$(cat "$ROOT/setup/setup-windows.ps1")"
+# ON THIS BRANCH (the Docker variant) the Windows installer does not cross: a
+# Nano record IS its runtime (adopted by runtime-nano.ps1), and a Personal
+# record is refused rather than converted. The sh installers still cross.
+lacks "setup-windows.ps1 no longer calls the first half (Docker variant)" "Invoke-LegacyCrossingBefore" "$(cat "$ROOT/setup/setup-windows.ps1")"
+has "setup-windows.ps1 refuses a Personal record instead" 'recordedRuntime -eq "personal"' "$(cat "$ROOT/setup/setup-windows.ps1")"
 has "setup-windows.ps1 calls the second half" "Invoke-LegacyCrossingAfter"  "$(cat "$ROOT/setup/setup-windows.ps1")"
 # THE ORDER IS THE FEATURE. The first half must precede the requirements gate
 # (it needs the old database up); the second must follow the shared steps (it

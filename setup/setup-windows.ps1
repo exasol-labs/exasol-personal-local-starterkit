@@ -1,13 +1,15 @@
 # setup-windows.ps1 - Exasol Personal Local Starter Kit, Windows path.
 #
-# (Renamed during the runtime migration: the Windows database is an Exasol
-# Personal deployment now, and the file that installs it is named for the
-# platform rather than for an engine it does not use.)
+# THE DOCKER VARIANT (branch exasol-starterkit-docker). On this branch the
+# Windows database is an Exasol Nano container running in Docker Desktop, the
+# way the 0.1.0 release installed it, instead of an Exasol Personal deployment
+# through Podman. Everything else - exapump, the Exasol MCP server, pyexasol,
+# the skills, the marketplace - is the standard kit. macOS, Linux and WSL are
+# untouched: they run Exasol Personal exactly as on main.
 #
 # Installs and connects the database, exapump, the Exasol MCP server, and
-# pyexasol. Prints connection details when done. The database is an Exasol
-# Personal local deployment running through host Podman; the launcher installs
-# Podman itself through winget when it is missing.
+# pyexasol. Prints connection details when done. Docker Desktop must be
+# installed and running; the kit never installs or starts it.
 #
 # Usually launched by install.ps1, but runs standalone from a checkout too:
 #   powershell -ExecutionPolicy Bypass -File setup\setup-windows.ps1
@@ -22,6 +24,7 @@ $KitRoot = Split-Path -Parent $ScriptDir
 
 . (Join-Path $LibDir "exakit-common.ps1")
 . (Join-Path $LibDir "runtime-personal.ps1")
+. (Join-Path $LibDir "runtime-nano.ps1")
 $legacyModule = Join-Path $LibDir "legacy-crossing.ps1"
 if (Test-Path $legacyModule) { . $legacyModule }
 . (Join-Path $LibDir "exapump.ps1")
@@ -57,6 +60,9 @@ Set-ExakitManifestValue "kit.source" $kitSource
 Set-ExakitKitUpgradeNote -KitRoot $KitRoot
 $kitVersion = Get-ExakitKitVersionAt -KitRoot $KitRoot
 if ($kitVersion) { Set-ExakitManifestValue "kit.version" $kitVersion }
+# Which kit this is, for `exakit version` and for a support conversation: the
+# Docker variant's record says so; the standard kit writes no such key.
+Set-ExakitManifestValue "kit.variant" "docker-nano"
 
 # The `exakit` command first, so `exakit status` answers from the first seconds
 # of this install (AGENTS.md tells an agent to poll it). It used to be written
@@ -77,30 +83,30 @@ try {
     # install from one that crashed. Twin of exakit_enable_failure_handling.
     Enter-ExakitInstallLock
 
-    # --- step 0: an installation this kit cannot manage ----------------------
-    # An older kit could put the database in a container. This asks what to do
-    # with it, copies the data out while it is still readable, and stops it so
-    # the new deployment can have the port. A machine with no such installation
-    # - which is every fresh one - passes straight through.
-    if (Get-Command Invoke-LegacyCrossingBefore -ErrorAction SilentlyContinue) {
-        Invoke-LegacyCrossingBefore
+    # --- step 0: an installation this variant cannot manage ------------------
+    # This is the Docker variant: its Windows database is an Exasol Nano
+    # container. A machine whose record says the database is an Exasol Personal
+    # deployment (installed by the standard kit) is refused, not converted -
+    # nothing here can move a Personal deployment into a container, and
+    # deploying a second database beside it would fight over the port. A
+    # 0.1.0 record (a Nano container) is this kit's own runtime and is adopted
+    # below as it stands; a machine with no record passes straight through.
+    $recordedRuntime = "" + (Get-ExakitManifestValue "runtime.type")
+    if ($recordedRuntime -eq "personal") {
+        Fail "This machine has an Exasol Personal deployment installed by the standard starter kit, and this Docker variant does not convert it. Keep using the standard kit (irm https://www.exasol.com/install/starter-kit.ps1 | iex), or remove it first with 'exakit uninstall' and re-run this installer. Nothing was changed."
     }
 
     # --- step 1: requirements ------------------------------------------------
-    Test-PersonalRequirements
+    Test-NanoRequirements
 
-    # --- step 2: the launcher --------------------------------------------------
-    # Its own step, matching the macOS shape and heading. Twin of the same
-    # split in setup-macos.sh and setup-linux.sh.
-    if (Begin-ExakitStep "launcher" "Step 1/6  Exasol launcher") {
-        Install-PersonalLauncher
-        Set-ExakitStepDone "launcher"
-    }
-
-    if (Begin-ExakitStep "runtime" "Step 2/6  Local database deployment") {
-        $script:PersonalNoDatabase = $false
-        Install-PersonalDeployment
-        if ($script:PersonalNoDatabase) {
+    # --- step 2: the database container ----------------------------------------
+    # No launcher step on this variant: the database is the Nano image pulled
+    # into Docker Desktop, verified against the digest versions.json pins, and
+    # started as a container over a named data volume. Five steps, not six.
+    if (Begin-ExakitStep "runtime" "Step 1/5  Exasol Nano container (Docker Desktop)") {
+        $script:NanoNoDatabase = $false
+        Install-Nano
+        if ($script:NanoNoDatabase) {
             Register-ExakitSoftFailure -Component "runtime" -Repair (Get-ExakitInstallCommand) `
                 -Reason (Get-ExakitFailureReason) -Label "the local database"
             Warn2 "The database was not installed - carrying on so the rest of the install completes"
@@ -108,34 +114,32 @@ try {
             Set-ExakitStepDone "runtime"
         }
     } else {
-        # A deployment recorded by an earlier run can still carry the old
-        # container's keys (status read "personal (docker)"); this is the run
-        # that clears them.
-        Clear-PersonalStaleRecord
-        # The resume arms every setup carries: redeploy what is gone, start what
-        # is merely stopped - every later step talks SQL to the database.
-        # Twin of setup-macos.sh / setup-linux.sh.
-        if (-not (Test-PersonalDeploymentExists)) {
-            Info "Deployment marked done but not reachable - redeploying"
-            $script:PersonalNoDatabase = $false
-            Install-PersonalDeployment
-            if ($script:PersonalNoDatabase) {
+        # The resume arms every setup carries: recreate what is gone, start
+        # what is merely stopped - every later step talks SQL to the database.
+        # A 0.1.0 install arrives here with its tick set and its container in
+        # place, and is adopted by these same arms.
+        if (-not (Test-NanoDeploymentExists)) {
+            Info "Container marked done but not found - recreating it over the data volume"
+            $script:NanoNoDatabase = $false
+            Install-Nano
+            if ($script:NanoNoDatabase) {
                 Register-ExakitSoftFailure -Component "runtime" -Repair (Get-ExakitInstallCommand) `
                     -Reason (Get-ExakitFailureReason) -Label "the local database"
                 Warn2 "The database was not installed - carrying on so the rest of the install completes"
             }
-        } elseif (-not (Test-PersonalDeploymentRunning)) {
-            Info "Database is deployed but not running - starting it"
-            # Recorded, not fatal, and for the same reason as the arm above.
-            # Invoke-ExakitSoftStep catches Start-Personal's own Fail, which is
-            # right for `exakit start` and wrong here, where this is one step of
-            # six; Wait-PersonalReadyOrDeploy repairs a start the launcher
-            # accepted without acting on. Twin of the subshell in setup-linux.sh.
+        } elseif (-not (Test-NanoDeploymentRunning)) {
+            Info "Database container exists but is not running - starting it"
+            # Recorded, not fatal: this is one step of five, and the summary
+            # names the command that finishes the job.
             [void](Invoke-ExakitSoftStep -Component "runtime" -Repair "exakit start" `
                 -Label "the local database" -Body {
-                    Start-Personal
-                    return (Wait-PersonalReadyOrDeploy)
+                    if (Wait-NanoReadyOrDeploy) { Set-NanoManifest -Status "running"; return $true }
+                    return $false
                 })
+        } else {
+            # Running and answering: keep the record current (a 0.1.0 record
+            # carries the same keys, so this is also the adoption).
+            Set-NanoManifest -Status "running"
         }
     }
 
@@ -156,7 +160,7 @@ try {
     # each of those used to fail on its own, four errors deep, for one cause
     # already named above. Twin of _kss_nodb in kit_shared_steps (common.sh).
     # The exakit helper below still installs: it is the command that finishes
-    # the job once Podman is there.
+    # the job once Docker Desktop is there.
     $dbReady = -not (Test-ExakitSoftFailed "runtime")
     if (-not $dbReady) {
         Info "Skipping exapump, the sample data, the AI bridge and pyexasol - they all need the database, which is not installed"
@@ -170,7 +174,7 @@ try {
     }
 
     # --- step 3: exapump (data loading CLI) ------------------------------------
-    if ($dbReady -and $exapumpSupported -and (Begin-ExakitStep "exapump" "Step 3/6  exapump (data loading CLI)")) {
+    if ($dbReady -and $exapumpSupported -and (Begin-ExakitStep "exapump" "Step 2/5  exapump (data loading CLI)")) {
         # Three lines for this step, not nine. Invoke-ExakitLogged animates the
         # label Begin-ExakitStep set, so the Info bullets under it were the
         # second telling. What survives goes through OkStep: what was installed
@@ -193,11 +197,11 @@ try {
     } elseif (-not $exapumpSupported) {
         # Say which step is not happening. Begin-ExakitStep is the only thing
         # that prints a step label, so gating the whole call made the screen
-        # jump from "Step 2/6" to "Step 5/6" - which reads as output that got
+        # jump from "Step 1/5" to "Step 4/5" - which reads as output that got
         # lost, not as two steps this machine does not need. Twin of
         # kit_shared_steps (common.sh), which prints this same line when a
         # step is not part of the installation.
-        Info "Step 3/6  exapump - not part of this installation, skipping"
+        Info "Step 2/5  exapump - not part of this installation, skipping"
     }
 
     # Load the sample data before any MCP configuration. exapump is now up
@@ -235,7 +239,7 @@ try {
     }
 
     # --- step 3: AI bridge (server, clients, skills) ----------------------------
-    if ($dbReady -and $exapumpSupported -and (Begin-ExakitStep "mcp" "Step 4/6  AI bridge (MCP server, clients and skills)")) {
+    if ($dbReady -and $exapumpSupported -and (Begin-ExakitStep "mcp" "Step 3/5  AI bridge (MCP server, clients and skills)")) {
         if (Invoke-ExakitSoftStep -Component "mcp" -Repair "exakit update" -Body {
                 # One line for this step's server work: the spinner narrates
                 # the prime and the handshake, so the Info/Ok pairs beneath
@@ -255,7 +259,7 @@ try {
             Set-ExakitStepDone "mcp"
         }
     } elseif (-not $exapumpSupported) {
-        Info "Step 4/6  AI bridge (MCP server, clients and skills) - not part of this installation, skipping"
+        Info "Step 3/5  AI bridge (MCP server, clients and skills) - not part of this installation, skipping"
     }
 
     # The AI bridge is finished HERE, in the step that says it is being built:
@@ -301,7 +305,7 @@ try {
     # soft in name only: the driver could install fine and any Fail() raised while
     # validating (an unwritable manifest, say) still ended the run before the
     # exakit helper below existed. Install and validate are one isolated unit.
-    if ($dbReady -and (Begin-ExakitStep "pyexasol" "Step 5/6  pyexasol (Exasol Python driver)")) {
+    if ($dbReady -and (Begin-ExakitStep "pyexasol" "Step 4/5  pyexasol (Exasol Python driver)")) {
         # Two lines for this step, not five: the outcome, and the interpreter to
         # run it with. Everything between is in the logfile, and the spinner
         # covered it live. Twin of _exakit_install_pyexasol (common.sh).
@@ -325,7 +329,7 @@ try {
     # testing, older builds), a re-run must reinstall it rather than skip -
     # and the PATH check must run either way, since the PATH entry can be
     # missing even when the step is marked done.
-    $helperNeeded = Begin-ExakitStep "exakit_helper" "Step 6/6  exakit helper command"
+    $helperNeeded = Begin-ExakitStep "exakit_helper" "Step 5/5  exakit helper command"
     if (-not $helperNeeded -and -not (Test-Path (Join-Path $script:BinDir "exakit.cmd"))) {
         Info "exakit command is missing - reinstalling it"
         $helperNeeded = $true

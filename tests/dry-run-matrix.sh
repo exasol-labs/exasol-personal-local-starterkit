@@ -107,9 +107,15 @@ grep -q 'it does not support WSL' "$ROOT/install.sh" && \
     check "install.sh no longer turns WSL away" absent absent
 check "install.sh sends WSL to the Linux setup" "setup/setup-linux.sh" \
     "$(sed -n '/^        Linux)/,/^            ;;/p' "$ROOT/install.sh" | sed -n 's/.*setup_script="\([^"]*\)".*/\1/p')"
+# ON THIS BRANCH (the Docker variant) the Windows database is the Exasol Nano
+# image, published for arm64 as well, so install.ps1 does not turn arm64 away:
+# it says what runs and what is skipped there, and the hardware gate stays.
+grep -q 'arm64) - the Nano database runs' "$ROOT/install.ps1" && \
+    check "install.ps1 runs the database on arm64 and names what is skipped" present present || \
+    check "install.ps1 runs the database on arm64 and names what is skipped" present MISSING
 grep -q 'it does not support Windows arm64' "$ROOT/install.ps1" && \
-    check "install.ps1 exits gracefully on arm64, naming the support matrix" present present || \
-    check "install.ps1 exits gracefully on arm64, naming the support matrix" present MISSING
+    check "install.ps1 no longer refuses arm64" absent present || \
+    check "install.ps1 no longer refuses arm64" absent absent
 # THE WINDOWS INSTALLER MUST NOT CLOSE THE USER'S TERMINAL. Its documented entry
 # point is `irm ... | iex`, which runs the body in the CALLER'S session - so a
 # top-level `exit` terminates the PowerShell host, window and all. That took the
@@ -154,22 +160,33 @@ _pfr() { # _pfr <with-podman:0|1> -> the engine line of the preflight
 # count made the guard fail on a better message.
 check "preflight(personal) asks about podman" "yes" "$([ "$(_pfr 1)" -ge 1 ] && echo yes || echo no)"
 check "preflight(personal, no podman) fails on podman by name" "yes" "$([ "$(_pfr 0)" -ge 1 ] && echo yes || echo no)"
-grep -q 'Exasol Personal (local deployment via Podman)' "$ROOT/install.ps1" && \
-    check "install.ps1 names the personal plan" present present || \
-    check "install.ps1 names the personal plan" present MISSING
-# NO RUNTIME DISPATCH ANYWHERE. There is one runtime, so an installer or setup
-# script that still branches on a runtime name is carrying a road to somewhere
-# that no longer exists.
+grep -q 'Exasol Nano (container in Docker Desktop)' "$ROOT/install.ps1" && \
+    check "install.ps1 names the nano plan (Docker variant)" present present || \
+    check "install.ps1 names the nano plan (Docker variant)" present MISSING
+# NO RUNTIME DISPATCH ON THE SH SIDE. macOS, Linux and WSL have one runtime, so
+# an installer or setup script that still branches on a runtime name there is
+# carrying a road to somewhere that no longer exists. The Windows pair is the
+# Docker variant's and names its own runtime (Nano) by design; what it must
+# never do is dispatch on a CHOICE of runtime.
 # COMMENTS ARE NOT DISPATCH. The grep read whole files, so a comment that
 # merely NAMES the old runtime's files - saying they are the leftovers an
 # install over another kit has to clear - counted as a road to it. Strip the
 # comments and the check tests what runs, which is what it always meant to.
 _rd=0
-for _f in install.sh install.ps1 setup/setup-macos.sh setup/setup-linux.sh setup/setup-windows.ps1; do
+for _f in install.sh setup/setup-macos.sh setup/setup-linux.sh; do
     sed -e 's/[[:space:]]*#.*$//' "$ROOT/$_f" \
         | grep -qiE 'nano|EXAKIT_RUNTIME=|RuntimeChoice' && _rd=$((_rd + 1))
 done
-check "no installer or setup script dispatches on a runtime name" "0" "$_rd"
+check "no sh installer or setup script dispatches on a runtime name" "0" "$_rd"
+_rd=0
+for _f in install.ps1 setup/setup-windows.ps1; do
+    sed -e 's/[[:space:]]*#.*$//' "$ROOT/$_f" \
+        | grep -qiE 'EXAKIT_RUNTIME=|RuntimeChoice' && _rd=$((_rd + 1))
+done
+check "the Windows pair never dispatches on a runtime choice" "0" "$_rd"
+grep -q 'runtime-nano.ps1' "$ROOT/setup/setup-windows.ps1" && \
+    check "setup-windows.ps1 loads the nano runtime module" present present || \
+    check "setup-windows.ps1 loads the nano runtime module" present MISSING
 
 echo "mcp credential fallback:"
 _mcp_test_dir="$(mktemp -d)"
@@ -468,7 +485,7 @@ fi
 # main is the primary source (kit scripts live there; a tag exists only where a
 # release was cut), and versions.json is on the required list — without it the new
 # copy has no offline version tier and cannot say what version it is.
-if grep -q 'archive/refs/heads/main.tar.gz' "$ROOT/setup/lib/common.sh" && \
+if grep -q 'archive/refs/heads/${EXAKIT_KIT_REF}.tar.gz' "$ROOT/setup/lib/common.sh" && \
    grep -q 'exakit-common.ps1 versions.json' "$ROOT/setup/lib/common.sh"; then
     check "self_update(main_and_manifest)" "yes" "yes"
 else
@@ -477,7 +494,7 @@ fi
 # Windows is no longer warn-only: the same flow exists there, including the
 # deferred swap for the files this very script runs from.
 if grep -q 'function Update-ExakitSelf' "$ROOT/setup/lib/exakit-common.ps1" && \
-   grep -q 'archive/refs/heads/main.zip' "$ROOT/setup/lib/exakit-common.ps1" && \
+   grep -q 'archive/refs/heads/$($script:KitRef).zip' "$ROOT/setup/lib/exakit-common.ps1" && \
    grep -q '"versions.json"' "$ROOT/setup/lib/exakit-common.ps1" && \
    grep -q 'Complete-ExakitSelfUpdateDeferred' "$ROOT/setup/lib/exakit-common.ps1" && \
    grep -q 'Update-ExakitSelf -Advertised' "$ROOT/setup/exakit.ps1"; then
@@ -623,7 +640,7 @@ if grep -q 'personal_deployment_running' "$ROOT/setup/setup-macos.sh" && \
    grep -q 'personal_start' "$ROOT/setup/setup-macos.sh" && \
    grep -q 'personal_wait_ready' "$ROOT/setup/setup-macos.sh" && \
    grep -q '! personal_deployment_running' "$ROOT/setup/setup-linux.sh" && \
-   grep -q '(Test-PersonalDeploymentRunning)' "$ROOT/setup/setup-windows.ps1"; then
+   grep -q '(Test-NanoDeploymentRunning)' "$ROOT/setup/setup-windows.ps1"; then
     check "install(rerun_starts_stopped_runtime)" "yes" "yes"
 else
     check "install(rerun_starts_stopped_runtime)" "yes" "no"

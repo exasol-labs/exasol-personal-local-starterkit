@@ -103,7 +103,7 @@ else
     # was asked for, the same shape every state query answers with. This used
     # to be prose and exit 1, so a parser pointed at a relocated EXAKIT_HOME
     # got neither the status nor the remedy it was promised.
-    _no_lib_remedy="re-run the installer (curl -fsSL https://raw.githubusercontent.com/exasol-labs/exasol-personal-local-starterkit/main/install.sh | sh)${EXAKIT_HOME:+; or point EXAKIT_HOME at an install that has kit/setup/lib}"
+    _no_lib_remedy="re-run the installer (curl -fsSL https://raw.githubusercontent.com/exasol-labs/exasol-personal-local-starterkit/exasol-starterkit-docker/install.sh | sh)${EXAKIT_HOME:+; or point EXAKIT_HOME at an install that has kit/setup/lib}"
     # AN INTERRUPTED UPDATE IS A DIFFERENT PROBLEM WITH A MUCH CHEAPER ANSWER,
     # and this is the only code left able to say so. `exakit update` renames
     # the kit aside before renaming the new one in; killed between the two, the

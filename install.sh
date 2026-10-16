@@ -1,7 +1,12 @@
 #!/bin/sh
 # install.sh — Exasol Personal Local Starter Kit, one-command installer.
 #
-#   curl -fsSL https://raw.githubusercontent.com/exasol-labs/exasol-personal-local-starterkit/main/install.sh | sh
+# THE DOCKER VARIANT (branch exasol-starterkit-docker): the kit is fetched from
+# that branch and keeps following it. On macOS, Linux and WSL it installs the
+# same Exasol Personal database as the standard kit; only the Windows path
+# (install.ps1) differs, with an Exasol Nano container in Docker Desktop.
+#
+#   curl -fsSL https://raw.githubusercontent.com/exasol-labs/exasol-personal-local-starterkit/exasol-starterkit-docker/install.sh | sh
 #
 # What it does, in order:
 #   1. detects your OS and hardware
@@ -65,7 +70,7 @@ set -u
 main() {
     EXAKIT_HOME="${EXAKIT_HOME:-$HOME/.exasol-starter-kit}"
     EXAKIT_REPO="${EXAKIT_REPO:-exasol-labs/exasol-personal-local-starterkit}"
-    EXAKIT_REF="${EXAKIT_REF:-main}"
+    EXAKIT_REF="${EXAKIT_REF:-exasol-starterkit-docker}"
     kit_dir="$EXAKIT_HOME/kit"
 
     # Top-level installer actions: a blue bullet at the outer indent, matching

@@ -8,7 +8,7 @@ name: versions
 
 on:
   push:
-    branches: [main]
+    branches: [main, exasol-starterkit-docker]
   pull_request:
 
 permissions:
@@ -86,7 +86,7 @@ jobs:
           if not re.match(r"^\d{4}-\d{2}-\d{2}$", str(doc.get("updated", ""))):
               problems.append("updated must be an ISO date (YYYY-MM-DD)")
 
-          expected = {"personal", "exapump", "mcp", "pyexasol", "skills",
+          expected = {"personal", "nano", "exapump", "mcp", "pyexasol", "skills",
                       "dash-server", "exasol-vscode", "json-tables",
                       "exasol-scheduler", "dbt-exasol"}
           components = doc.get("components") or {}
@@ -133,6 +133,17 @@ jobs:
           for platform, digest in personal_pins.items():
               if not isinstance(digest, str) or not digest_re.match(digest):
                   problems.append("components.personal.s3.sha256.%s is not a 64-character hex digest" % platform)
+
+          # nano is the Docker variant's Windows database: one image tag and
+          # the manifest-list digest Docker Hub serves for it, which the
+          # install checks the pulled image against before it is started.
+          nano = components.get("nano") or {}
+          if not re.match(r"^\d+\.\d+\.\d+-nano\.\d+$", str(nano.get("version", ""))):
+              problems.append("components.nano.version must look like 2026.2.0-nano.6")
+          if not re.match(r"^[a-z0-9]+(?:[._-][a-z0-9]+)*/[a-z0-9]+(?:[._-][a-z0-9]+)*$", str(nano.get("image", ""))):
+              problems.append("components.nano.image must be a Docker Hub repository (owner/name)")
+          if not isinstance(nano.get("digest"), str) or not digest_re.match(nano.get("digest", "")):
+              problems.append("components.nano.digest is not a 64-character hex digest")
 
           exapump = components.get("exapump") or {}
           digests = exapump.get("sha256") or {}
@@ -389,6 +400,24 @@ jobs:
                                   % (repo, version, reason))
               else:
                   print("  ok  personal: %s release v%s exists" % (repo, version))
+
+          # --- nano: the pinned image tag, served with the pinned digest -------
+          # The install refuses an image whose RepoDigests do not carry this
+          # digest, so a stale pin reaches users as a failed install. Docker
+          # Hub's tag endpoint reports the manifest-list digest it serves.
+          nano = components.get("nano") or {}
+          if nano.get("version"):
+              image = nano.get("image", "exasol/nano")
+              body, reason = fetch("https://hub.docker.com/v2/repositories/%s/tags/%s" % (image, nano["version"]))
+              if body is None:
+                  problems.append("nano: Docker Hub did not answer for %s:%s (%s)" % (image, nano["version"], reason))
+              else:
+                  served = (body.get("digest") or "").replace("sha256:", "")
+                  if served != nano.get("digest"):
+                      problems.append("nano: Docker Hub serves %s:%s with digest %s, versions.json pins %s"
+                                      % (image, nano["version"], served or "none", nano.get("digest")))
+                  else:
+                      print("  ok  nano: %s:%s exists with the pinned digest" % (image, nano["version"]))
 
           # --- the PyPI-published pieces --------------------------------------
           if components.get("mcp"):
@@ -838,6 +867,7 @@ jobs:
             pwsh -NoProfile -File tests/noninteractive-answers.ps1
             pwsh -NoProfile -File tests/uninstall-ps.ps1
             pwsh -NoProfile -File tests/runtime-personal-ps.ps1
+            pwsh -NoProfile -File tests/runtime-nano-ps.ps1
             pwsh -NoProfile -File tests/service-scope-ps.ps1
             pwsh -NoProfile -File tests/personal-s3-ps.ps1
             pwsh -NoProfile -File tests/data-load-shapes-ps.ps1

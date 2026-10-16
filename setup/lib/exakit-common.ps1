@@ -237,10 +237,38 @@ else {
         } catch { }
     }
 }
-$script:VersionsUrl = if ($env:EXAKIT_VERSIONS_URL) { $env:EXAKIT_VERSIONS_URL } else { "https://raw.githubusercontent.com/$($script:KitRepo)/main/versions.json" }
-# The public install entry point for Windows. Twin of EXAKIT_INSTALL_URL in
-# common.sh, pointing at the PowerShell installer rather than the shell one.
-$script:InstallUrl = if ($env:EXAKIT_INSTALL_URL) { $env:EXAKIT_INSTALL_URL } else { "https://www.exasol.com/install/starter-kit.ps1" }
+# THE BRANCH THIS KIT FOLLOWS. This is the exasol-starterkit-docker variant of
+# the kit (Windows: Exasol Nano in Docker Desktop). A kit installed from it
+# must keep fetching its manifest, its self-update and its skills from that
+# branch, or the first `exakit update` would pull main's scripts and put the
+# Podman path back. The environment outranks the manifest (EXAKIT_KIT_REF),
+# the ref recorded in the manifest's kit.source outranks the default, and only
+# a value that looks like a git ref is accepted - it is interpolated into
+# download URLs. Twin of EXAKIT_KIT_REF in common.sh.
+$script:KitRefDefault = "exasol-starterkit-docker"
+if ($env:EXAKIT_KIT_REF) { $script:KitRef = $env:EXAKIT_KIT_REF }
+else {
+    $script:KitRef = $script:KitRefDefault
+    $refManifestPath = Join-Path $script:ExakitHome "manifest.json"
+    if (Test-Path $refManifestPath) {
+        try {
+            $refManifestDoc = Get-Content -Raw -Path $refManifestPath -Encoding UTF8 | ConvertFrom-Json
+            $refKitSource = ""
+            if ($refManifestDoc.kit -and $refManifestDoc.kit.source) { $refKitSource = [string]$refManifestDoc.kit.source }
+            if ($refKitSource.Contains("@")) {
+                $refKitRef = ($refKitSource -split "@", 2)[1]
+                if ($refKitRef -match '^[A-Za-z0-9][A-Za-z0-9._/-]*$' -and $refKitRef -notmatch '\.\.') {
+                    $script:KitRef = $refKitRef
+                }
+            }
+        } catch { }
+    }
+}
+$script:VersionsUrl = if ($env:EXAKIT_VERSIONS_URL) { $env:EXAKIT_VERSIONS_URL } else { "https://raw.githubusercontent.com/$($script:KitRepo)/$($script:KitRef)/versions.json" }
+# The install entry point for Windows ON THIS BRANCH: the exasol.com short
+# link serves main, so the raw installer of the branch is the address.
+# Twin of EXAKIT_INSTALL_URL in common.sh.
+$script:InstallUrl = if ($env:EXAKIT_INSTALL_URL) { $env:EXAKIT_INSTALL_URL } else { "https://raw.githubusercontent.com/$($script:KitRepo)/$($script:KitRef)/install.ps1" }
 
 # Get-ExakitInstallCommand - the install one-liner for THIS platform. Twin of
 # exakit_install_command in common.sh. Windows runs irm | iex; it does not have
@@ -3347,7 +3375,7 @@ function Update-ExakitSkills {
     # See the same fix in Update-ExakitSelf.
     $stage = Join-Path $script:ExakitHome ".skills-stage-$([guid]::NewGuid().ToString('N'))"
     try {
-        Invoke-WebRequest -Uri "https://github.com/$($script:KitRepo)/archive/refs/heads/main.zip" -OutFile $tmpZip -UseBasicParsing -TimeoutSec 300
+        Invoke-WebRequest -Uri "https://github.com/$($script:KitRepo)/archive/refs/heads/$($script:KitRef).zip" -OutFile $tmpZip -UseBasicParsing -TimeoutSec 300
     } catch {
         Remove-Item -Force $tmpZip -ErrorAction SilentlyContinue
         Warn2 "Could not download the skill set from $($script:KitRepo); the skills were left as they are. Retry: exakit update"
@@ -3422,14 +3450,15 @@ function Update-ExakitSelf {
     # construction makes the swap a rename again. (The zip may stay in TEMP:
     # Expand-Archive writes across volumes fine.)
     $stage = Join-Path $script:ExakitHome ".kit-stage-$([guid]::NewGuid().ToString('N'))"
-    # main first - that is what install.ps1 fetches, and kit script changes live on
-    # main: a tag exists only where a release was cut. The tag URLs stay behind it
-    # so a kit installed from a tagged release still updates.
-    $refs = @("main", "v$Advertised", "$Advertised")
+    # The kit's own branch first - that is what install.ps1 fetches, and kit
+    # script changes live there: a tag exists only where a release was cut. The
+    # tag URLs stay behind it so a kit installed from a tagged release still
+    # updates.
+    $refs = @($script:KitRef, "v$Advertised", "$Advertised")
     $kitRef = ""
     $proxyHint = ""
     foreach ($ref in $refs) {
-        if ($ref -eq "main") { $url = "https://github.com/$repo/archive/refs/heads/main.zip" }
+        if ($ref -eq $script:KitRef) { $url = "https://github.com/$repo/archive/refs/heads/$($script:KitRef).zip" }
         else { $url = "https://github.com/$repo/archive/refs/tags/$ref.zip" }
         try {
             Invoke-WebRequest -Uri $url -OutFile $tmpZip -UseBasicParsing -TimeoutSec 300
@@ -3441,7 +3470,7 @@ function Update-ExakitSelf {
     }
     if (-not $kitRef) {
         Remove-Item -Force $tmpZip -ErrorAction SilentlyContinue
-        Fail "Could not download the starter kit from github.com/$repo (tried main and the $Advertised tags).$proxyHint"
+        Fail "Could not download the starter kit from github.com/$repo (tried $($script:KitRef) and the $Advertised tags).$proxyHint"
     }
 
     try {
@@ -4630,6 +4659,28 @@ function Confirm-ExakitRuntimeRunning {
             Install-PersonalDeployment
             if ($script:PersonalNoDatabase) {
                 Fail "No database could be deployed (the reason is above). Once it is fixed, re-run the installer: $(Get-ExakitInstallCommand)"
+            }
+            return
+        }
+        Fail "No database found. Start one with: exakit start (or re-run the installer)"
+    }
+    if ($runtimeType -eq "nano") {
+        if (-not (Get-Command Get-NanoStatus -ErrorAction SilentlyContinue)) { return }
+        if (Test-NanoDeploymentRunning) { return }
+        if (Test-NanoContainerExists) {
+            Info "Self-heal: the database container exists but is not running - starting it"
+            Start-Nano
+            if (-not (Wait-NanoReady)) {
+                Fail "The database container did not come up. Read the state with 'exakit status'; its own log: docker logs $($script:NanoContainer)"
+            }
+            return
+        }
+        if ($Deploy) {
+            Info "Self-heal: no database container found - creating one over the data volume"
+            $script:NanoNoDatabase = $false
+            Install-Nano
+            if ($script:NanoNoDatabase) {
+                Fail "No database could be created (the reason is above). Once it is fixed, re-run the installer: $(Get-ExakitInstallCommand)"
             }
             return
         }
@@ -6025,9 +6076,10 @@ function Get-ExakitComponentBlock {
     switch ($Component) {
         "exakit" { return "kit" }
         "kit2" { return "kit2" }
-        { $_ -in @("exapump", "mcp", "pyexasol", "personal", "skills") } { return "components.$Component" }
+        { $_ -in @("exapump", "mcp", "pyexasol", "personal", "nano", "skills") } { return "components.$Component" }
         "runtime" {
             if ((Get-RuntimeType) -eq "personal") { return "components.personal" }
+            if ((Get-RuntimeType) -eq "nano") { return "components.nano" }
             return $null
         }
         default {
@@ -6054,7 +6106,7 @@ function Get-ExakitComponentCurrent {
             $version = Get-ExakitManifestValue "kit.version"
             if ($version) { return $version }
             $src = Get-ExakitManifestValue "kit.source"
-            if ($src -and $src.Contains("@") -and -not $src.EndsWith("@main")) { return ($src -split "@")[-1] }
+            if ($src -and $src.Contains("@") -and -not $src.EndsWith("@main") -and -not $src.EndsWith("@" + $script:KitRef)) { return ($src -split "@")[-1] }
             $bundled = Get-ExakitKitBundledVersion
             if ($bundled) { return $bundled }
             return "unknown"
@@ -6101,12 +6153,18 @@ function Get-ExakitComponentCurrent {
         }
         "runtime" {
             if ((Get-RuntimeType) -eq "personal") { return (Get-ExakitComponentCurrent "personal") }
+            if ((Get-RuntimeType) -eq "nano") { return (Get-ExakitComponentCurrent "nano") }
             return ""
         }
         # The launcher is a different axis from the runtime (see
         # exakit_installed_personal_version in common.sh): the record is the answer.
         "personal" {
             if ((Get-RuntimeType) -eq "personal") { return (Get-ExakitManifestValue "runtime.version") }
+            return ""
+        }
+        # The Nano image tag the container was created from, as recorded.
+        "nano" {
+            if ((Get-RuntimeType) -eq "nano") { return (Get-ExakitManifestValue "runtime.version") }
             return ""
         }
         default {
@@ -6140,6 +6198,7 @@ function Get-ExakitComponentEnvOverride {
         "mcp" { return $env:EXAKIT_MCP_VERSION }
         "pyexasol" { return $env:EXAKIT_PYEXASOL_VERSION }
         "personal" { return $env:EXAKIT_PERSONAL_VERSION }
+        "nano" { return $env:EXAKIT_NANO_TAG }
         default {
             # Marketplace add-ons name their override in the registry.
             $addon = Get-ExakitMarketplaceAddon $component
@@ -6163,6 +6222,11 @@ function Get-ExakitComponentFallback {
             # file loads first.
             $pvar = Get-Variable -Scope Script -Name "PersonalVersionFallback" -ErrorAction SilentlyContinue
             if ($pvar) { return $pvar.Value }
+            return ""
+        }
+        "nano" {
+            $nvar = Get-Variable -Scope Script -Name "NanoTagFallback" -ErrorAction SilentlyContinue
+            if ($nvar) { return $nvar.Value }
             return ""
         }
         # The skill set has no constant either: the kit copy on disk says which
@@ -6230,8 +6294,14 @@ function Get-ExakitComponentLatest {
         "mcp" { return (Get-ExakitLatestPypiVersion $script:McpPackage) }
         "pyexasol" { return (Get-ExakitLatestPypiVersion $script:PyexasolPackage) }
         "personal" { return (Get-ExakitLatestGithubRelease "exasol/exasol-personal") }
+        "nano" {
+            # Docker Hub, through the module's own lookup (the tag shape is its).
+            if (Get-Command Get-NanoLatestTag -ErrorAction SilentlyContinue) { return (Get-NanoLatestTag) }
+            return ""
+        }
         "runtime" {
             if ((Get-RuntimeType) -eq "personal") { return (Get-ExakitComponentLatest "personal") }
+            if ((Get-RuntimeType) -eq "nano") { return (Get-ExakitComponentLatest "nano") }
             return ""
         }
         default {
@@ -6354,7 +6424,7 @@ function Get-ExakitStartupDir {
 # before any update runs. Twin of `exakit_update_targets ... || reject`.
 function Test-ExakitUpdateTarget {
     param([string]$Target = "all")
-    if ($Target -in @("all", "runtime", "database", "db", "personal", "exakit", "exapump", "mcp", "pyexasol", "skills", "kit2")) { return $true }
+    if ($Target -in @("all", "runtime", "database", "db", "personal", "nano", "exakit", "exapump", "mcp", "pyexasol", "skills", "kit2")) { return $true }
     return [bool](Get-ExakitMarketplaceAddon $Target)
 }
 
@@ -6375,7 +6445,7 @@ function Get-ExakitUpdateTargets {
             return @($targets + (Get-ExakitMarketplaceInstalledAddons))
         }
         { $_ -in @("runtime", "database", "db") } { return @("runtime") }
-        { $_ -in @("personal", "exakit", "exapump", "mcp", "pyexasol", "skills", "kit2") } { return @($Target) }
+        { $_ -in @("personal", "nano", "exakit", "exapump", "mcp", "pyexasol", "skills", "kit2") } { return @($Target) }
         default {
             # Any registered marketplace add-on is a valid explicit target.
             if (Get-ExakitMarketplaceAddon $Target) { return @($Target) }
@@ -6386,9 +6456,13 @@ function Get-ExakitUpdateTargets {
 
 function Get-RuntimeType { return (Get-ExakitManifestValue "runtime.type") }
 
-# The recorded runtime types that belong to a kit OLDER than this one: a
-# database in a container, which this kit neither deploys nor drives.
-$script:LegacyRuntimeTypes = @("nano")
+# The recorded runtime types that belong to a kit OLDER than this one. On main
+# that is "nano": a container database the Personal kit neither deploys nor
+# drives, which the crossing in legacy-crossing.ps1 moves into Personal. ON
+# THIS BRANCH the Windows database IS a Nano container, driven by
+# runtime-nano.ps1, so a 0.1.0 record is simply this kit's own runtime and is
+# adopted as it stands. Nothing is legacy here; the crossing never runs.
+$script:LegacyRuntimeTypes = @()
 
 # Test-ExakitLegacyRuntimeRecorded - true when this machine's installation was
 # made by an older kit whose database is a container.
@@ -6426,6 +6500,16 @@ function Register-ExakitAutostart {
                 # the sh side registers through the platform supervisor.
                 $command = '"' + (Get-PersonalCli) + '" start'
             }
+            "nano" {
+                # Docker Desktop honours the container's restart policy when it
+                # starts at sign-in, so that is what brings the database back.
+                # The Startup entry's `docker start` is the belt to that brace:
+                # harmless when the policy already acted, and it covers a
+                # policy a recreate dropped.
+                if (-not (Get-Command Set-NanoRestartPolicy -ErrorAction SilentlyContinue)) { return $false }
+                [void](Set-NanoRestartPolicy -Enabled $true)
+                $command = Get-NanoAutostartCommand
+            }
             default { return $false }
         }
     } else {
@@ -6457,7 +6541,7 @@ function Register-ExakitAutostart {
 # lives in code rather than in the manifest.
 function Test-ExakitComponentHeavy {
     param([string]$Component)
-    return ($Component -in @("runtime", "personal"))
+    return ($Component -in @("runtime", "personal", "nano"))
 }
 
 # The severity, note and min_kit_version below describe the ADVERTISED set. Under

@@ -97,6 +97,16 @@ EXAKIT_EXAPUMP_REPO="exasol-labs/exapump"
 # outrank an answer the caller gave in the environment.
 _EXAKIT_KIT_REPO_FROM_ENV="${EXAKIT_KIT_REPO:-${EXAKIT_REPO:-}}"
 EXAKIT_KIT_REPO="${EXAKIT_KIT_REPO:-${EXAKIT_REPO:-exasol-labs/exasol-personal-local-starterkit}}"
+# THE BRANCH THIS KIT FOLLOWS. This is the exasol-starterkit-docker variant of
+# the kit (Windows: Exasol Nano in Docker Desktop). A kit installed from it
+# must keep fetching its manifest, its self-update and its skills from that
+# branch, or the first `exakit update` would pull main's scripts. The
+# environment outranks the manifest (EXAKIT_KIT_REF), the ref recorded in the
+# manifest's kit.source outranks the default (below, beside the repo), and only
+# a value that looks like a git ref is accepted - it is interpolated into
+# download URLs. Twin of $script:KitRef in exakit-common.ps1.
+_EXAKIT_KIT_REF_FROM_ENV="${EXAKIT_KIT_REF:-}"
+EXAKIT_KIT_REF="${EXAKIT_KIT_REF:-exasol-starterkit-docker}"
 # --retry-all-errors landed in curl 7.71. Without it plain --retry ignores the
 # mid-stream transport failures that actually strand a large download, so it is
 # worth having where available and must be absent where not: an unknown flag
@@ -130,7 +140,7 @@ EXAKIT_VERSION_LOOKUP_MAX_TIME="${EXAKIT_VERSION_LOOKUP_MAX_TIME:-12}"
 # Nothing is collected on our side: the request carries a User-Agent header and
 # no query string, and no third party is involved.
 _EXAKIT_VERSIONS_URL_FROM_ENV="${EXAKIT_VERSIONS_URL:-}"
-EXAKIT_VERSIONS_URL="${EXAKIT_VERSIONS_URL:-https://raw.githubusercontent.com/${EXAKIT_KIT_REPO}/main/versions.json}"
+EXAKIT_VERSIONS_URL="${EXAKIT_VERSIONS_URL:-https://raw.githubusercontent.com/${EXAKIT_KIT_REPO}/${EXAKIT_KIT_REF}/versions.json}"
 
 # --- an installed kit follows its own source ---------------------------------
 #
@@ -156,7 +166,7 @@ EXAKIT_VERSIONS_URL="${EXAKIT_VERSIONS_URL:-https://raw.githubusercontent.com/${
 # The macOS Command Line Tools stub (see _exakit_python3_is_xcode_stub, which is
 # not defined yet) is ruled out inline: running it pops the developer-tools
 # dialog, and this runs on every exakit command.
-if [ -z "$_EXAKIT_KIT_REPO_FROM_ENV" ] && [ -f "$EXAKIT_MANIFEST" ] && \
+if { [ -z "$_EXAKIT_KIT_REPO_FROM_ENV" ] || [ -z "$_EXAKIT_KIT_REF_FROM_ENV" ]; } && [ -f "$EXAKIT_MANIFEST" ] && \
    command -v python3 >/dev/null 2>&1 && \
    ! { [ "$(command -v python3)" = /usr/bin/python3 ] && [ -x /usr/bin/xcode-select ] && \
        ! /usr/bin/xcode-select -p >/dev/null 2>&1; }; then
@@ -167,23 +177,33 @@ try:
 except Exception:
     raise SystemExit(1)
 src = ((doc.get("kit") or {}).get("source") or "").strip()
-repo = src.split("@", 1)[0]
+repo, _, ref = src.partition("@")
 parts = repo.split("/")
 ok = (len(parts) == 2 and all(p and all(c.isalnum() or c in "._-" for c in p)
                               for p in parts))
+# The ref on its own line: a branch or tag name, never a path trick.
+ref_ok = (ok and ref != "" and ".." not in ref and ref[0].isalnum()
+          and all(c.isalnum() or c in "._/-" for c in ref))
 print(repo if ok else "")
+print(ref if ref_ok else "")
 EXAKIT_KIT_SRC_PY
 )" || _ekr_src=""
-    if [ -n "$_ekr_src" ]; then
-        EXAKIT_KIT_REPO="$_ekr_src"
-        [ -z "$_EXAKIT_VERSIONS_URL_FROM_ENV" ] && \
-            EXAKIT_VERSIONS_URL="https://raw.githubusercontent.com/${EXAKIT_KIT_REPO}/main/versions.json"
+    _ekr_repo="$(printf '%s\n' "$_ekr_src" | sed -n '1p')"
+    _ekr_ref="$(printf '%s\n' "$_ekr_src" | sed -n '2p')"
+    if [ -z "$_EXAKIT_KIT_REPO_FROM_ENV" ] && [ -n "$_ekr_repo" ]; then
+        EXAKIT_KIT_REPO="$_ekr_repo"
+    fi
+    if [ -z "$_EXAKIT_KIT_REF_FROM_ENV" ] && [ -n "$_ekr_ref" ]; then
+        EXAKIT_KIT_REF="$_ekr_ref"
+    fi
+    if [ -n "$_ekr_repo" ] && [ -z "$_EXAKIT_VERSIONS_URL_FROM_ENV" ]; then
+        EXAKIT_VERSIONS_URL="https://raw.githubusercontent.com/${EXAKIT_KIT_REPO}/${EXAKIT_KIT_REF}/versions.json"
     fi
 fi
-# The public install entry point, which is NOT the raw repository URL: someone
-# reinstalling months from now should be sent to the address the product
-# publishes, not to a branch of whichever repository built their copy.
-EXAKIT_INSTALL_URL="${EXAKIT_INSTALL_URL:-https://www.exasol.com/install/starter-kit.sh}"
+# The install entry point ON THIS BRANCH. The exasol.com short link the
+# standard kit publishes serves main, so a reinstall from it would put the
+# standard kit back; the branch's own raw installer is the address here.
+EXAKIT_INSTALL_URL="${EXAKIT_INSTALL_URL:-https://raw.githubusercontent.com/${EXAKIT_KIT_REPO}/${EXAKIT_KIT_REF}/install.sh}"
 EXAKIT_VERSIONS_TTL="${EXAKIT_VERSIONS_TTL:-86400}"
 # How long a FAILED versions fetch is remembered, so a network that cannot
 # reach the manifest is asked once rather than once per command. Deliberately
@@ -3313,7 +3333,7 @@ exakit_component_current() {
             else
                 _src="$(manifest_get kit.source 2>/dev/null || true)"
                 case "$_src" in
-                    *@main) exakit_kit_bundled_version 2>/dev/null || printf '%s\n' "unknown" ;;
+                    *@main|*"@$EXAKIT_KIT_REF") exakit_kit_bundled_version 2>/dev/null || printf '%s\n' "unknown" ;;
                     *@*)    printf '%s\n' "${_src##*@}" ;;
                     *)      exakit_kit_bundled_version 2>/dev/null || printf '%s\n' "unknown" ;;
                 esac
@@ -5670,16 +5690,19 @@ exakit_update_self() {
     # Named before the swap, cleared after it. See _exakit_update_marker.
     _update_marker="$EXAKIT_HOME/.update-in-progress"
     info "Updating starter kit ${_current:-unknown} -> $_latest"
-    # main first — that is what install.sh fetches, and kit script changes live on
-    # main: a tag exists only where a release was cut. The tag URLs stay behind it
-    # so a kit installed from a tagged release still updates, and so a v0.1.0 field
-    # kit (which only ever knew tags) keeps working.
+    # The kit's own branch first — that is what install.sh fetches, and kit script
+    # changes live there: a tag exists only where a release was cut. The tag URLs
+    # stay behind it so a kit installed from a tagged release still updates, and
+    # so a v0.1.0 field kit (which only ever knew tags) keeps working.
     _kit_ref=""
-    for _kit_candidate in "main" "v${_latest}" "${_latest}"; do
-        case "$_kit_candidate" in
-            main) _kit_url="https://github.com/${_repo}/archive/refs/heads/main.tar.gz" ;;
-            *)    _kit_url="https://github.com/${_repo}/archive/refs/tags/${_kit_candidate}.tar.gz" ;;
-        esac
+    _kit_first=1
+    for _kit_candidate in "$EXAKIT_KIT_REF" "v${_latest}" "${_latest}"; do
+        if [ "$_kit_first" = 1 ]; then
+            _kit_url="https://github.com/${_repo}/archive/refs/heads/${EXAKIT_KIT_REF}.tar.gz"
+            _kit_first=0
+        else
+            _kit_url="https://github.com/${_repo}/archive/refs/tags/${_kit_candidate}.tar.gz"
+        fi
         if curl -fL --proto '=https' --retry 3 --connect-timeout 15 -sS -o "$_tmp" "$_kit_url"; then
             _kit_ref="$_kit_candidate"
             break
@@ -5688,7 +5711,7 @@ exakit_update_self() {
     if [ -z "$_kit_ref" ]; then
         rm -f "$_tmp"
         rm -rf "$_stage"
-        die "Could not download the starter kit from $_repo (tried main and the $_latest tags)."
+        die "Could not download the starter kit from $_repo (tried $EXAKIT_KIT_REF and the $_latest tags)."
     fi
     tar -xzf "$_tmp" -C "$_stage" --strip-components 1 || {
         rm -rf "$_stage"
@@ -5891,7 +5914,7 @@ exakit_update_skills() {
     }
     info "Updating AI skills ${_us_current:-not installed} -> $_us_latest"
     if ! curl -fL --proto '=https' --retry 3 --connect-timeout 15 -sS -o "$_us_tmp" \
-            "https://github.com/${EXAKIT_KIT_REPO}/archive/refs/heads/main.tar.gz"; then
+            "https://github.com/${EXAKIT_KIT_REPO}/archive/refs/heads/${EXAKIT_KIT_REF}.tar.gz"; then
         rm -f "$_us_tmp"; rm -rf "$_us_stage"
         warn "Could not download the skill set from $EXAKIT_KIT_REPO; the skills were left as they are. Retry: exakit update"
         return 0

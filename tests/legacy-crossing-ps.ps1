@@ -17,6 +17,17 @@
 
 $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent $PSScriptRoot
+# RETIRED ON THE DOCKER VARIANT (branch exasol-starterkit-docker). There the
+# Windows database IS the Nano container: runtime-nano.ps1 adopts a 0.1.0
+# record as its own runtime, exakit-common.ps1 lists no legacy runtime types,
+# and the crossing this suite drives never runs. The module and this suite
+# stay as they are for the one-way merge from main; the suite says so and
+# passes. tests/legacy-crossing.sh still proves the twin exists.
+$commonText = Get-Content (Join-Path $repo "setup/lib/exakit-common.ps1") -Raw
+if ($commonText -match '\$script:LegacyRuntimeTypes = @\(\)') {
+    Write-Host "legacy-crossing-ps.ps1: the crossing is retired on this branch (no legacy runtime types), nothing to run"
+    exit 0
+}
 $script:PASS = 0
 $script:FAIL = 0
 function Check($label, $expected, $actual) {

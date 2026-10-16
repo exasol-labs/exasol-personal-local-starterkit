@@ -456,11 +456,23 @@
     {
       "name": "EXAKIT_PERSONAL_S3",
       "effect": "0 skips Exasol's S3 bucket for the Personal launcher and downloads the verified GitHub release directly - for a network that blocks the bucket. Default: S3 first, GitHub as fallback."
+    },
+    {
+      "name": "EXAKIT_NANO_TAG",
+      "effect": "Windows (Docker variant): the Exasol Nano image tag to pull instead of the one versions.json advertises. A tag the manifest does not pin is used unverified, and the kit says so. Default: the advertised tag, checked against its pinned digest."
+    },
+    {
+      "name": "EXAKIT_KIT_REF",
+      "effect": "The git ref this kit fetches its manifest, self-update and skills from. Default: exasol-starterkit-docker, or the ref recorded in the manifest's kit.source. Set it only to point one command at another branch on purpose."
     }
   ],
   "troubleshooting": [
     {
-      "symptom": "Podman is installed but not running",
+      "symptom": "Docker is installed but not running (Windows)",
+      "remedy": "Start Docker Desktop and wait until it reports that the engine is running, then re-run. The Windows database on this kit is an Exasol Nano container in Docker Desktop; the kit never installs or starts Docker Desktop."
+    },
+    {
+      "symptom": "Podman is installed but not running (Linux, WSL)",
       "remedy": "Run: podman machine start - then re-run the installer."
     },
     {

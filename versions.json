@@ -19,6 +19,12 @@
         }
       }
     },
+    "nano": {
+      "version": "2026.2.0-nano.6",
+      "image": "exasol/nano",
+      "digest": "808e66784aeed57a1ef88d7ac1654d924bdf2ac293abaf80cc05bd68388f1592",
+      "severity": "normal"
+    },
     "exapump": {
       "version": "0.13.0",
       "repo": "exasol-labs/exapump",

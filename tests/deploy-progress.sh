@@ -351,8 +351,12 @@ WIN_PS="$(cat "$ROOT/setup/setup-windows.ps1")"
 for _six_h in "Exasol launcher" "Local database deployment"; do
     has "macOS has: $_six_h"   "$_six_h" "$MAC_SH"
     has "WSL has: $_six_h"     "$_six_h" "$WSL_SH"
-    has "Windows has: $_six_h" "$_six_h" "$WIN_PS"
 done
+# ON THIS BRANCH (the Docker variant) Windows has no launcher: its database is
+# the Nano image pulled into Docker Desktop, one step, so the Windows run is
+# five steps where the launcher platforms have six.
+has "Windows has: Exasol Nano container" "Exasol Nano container (Docker Desktop)" "$WIN_PS"
+lacks "Windows has no launcher step" "Exasol launcher" "$WIN_PS"
 
 # Six on every platform, and the shared tail told the right total.
 # Counted as DECLARATIONS, not as label text: the two shell installers declare
@@ -363,7 +367,7 @@ check "macOS declares two, then delegates" "2" \
     "$(printf '%s\n' "$MAC_SH" | grep -c '^if begin_step ')"
 check "WSL declares two, then delegates" "2" \
     "$(printf '%s\n' "$WSL_SH" | grep -c '^if begin_step ')"
-check "Windows declares all six itself" "6" \
+check "Windows declares all five itself" "5" \
     "$(printf '%s\n' "$WIN_PS" | grep -c 'Begin-ExakitStep "')"
 # The shared tail must be told the right start and total, or the four steps it
 # owns would number themselves against the old five.
@@ -374,7 +378,7 @@ check "WSL hands over at 3 of 6"   "1" \
 # And no installer still advertises a five-step run.
 lacks "macOS has no stale total"   "/5  " "$MAC_SH"
 lacks "WSL has no stale total"     "/5  " "$WSL_SH"
-lacks "Windows has no stale total" "/5  " "$WIN_PS"
+lacks "Windows has no stale total" "/6  " "$WIN_PS"
 
 # --- Linux is a served platform ----------------------------------------------
 echo

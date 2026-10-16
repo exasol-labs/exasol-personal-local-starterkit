@@ -132,19 +132,18 @@ run_engine 0; check "idempotent second run" 0 "$?"
 # --- the farewell line has to be pasteable ON THIS PLATFORM ----------------
 # THE BUG: a full uninstall on Windows ended by telling the reader to run
 # `curl ... | sh`, which Windows does not have. Each side must hand back its
-# own form, and neither may point at a raw repository URL - someone
-# reinstalling months from now should be sent to the address the product
-# publishes, not to a branch of whichever repository built their copy.
+# own form. ON THIS BRANCH (the Docker variant) the address is the branch's
+# own raw installer, not the exasol.com short link: that link serves main,
+# and a reinstall from it would put the standard kit back. The expected line
+# is computed from the same sourcing, so it follows whatever repo and ref the
+# sandbox's manifest records.
 echo
 echo "the reinstall hint:"
 _ic="$( . "$ROOT/setup/lib/common.sh" >/dev/null 2>&1; exakit_install_command )"
-case "$_ic" in
-    "curl -fsSL https://www.exasol.com/install/starter-kit.sh | sh") _ic_ok=yes ;;
-    *) _ic_ok="$_ic" ;;
-esac
-check "the shell side curls the published installer into sh" "yes" "$_ic_ok"
-case "$_ic" in *raw.githubusercontent.com*) _ic_raw=yes ;; *) _ic_raw=no ;; esac
-check "and does not point at a raw repository URL" "no" "$_ic_raw"
+_ic_expected="$( . "$ROOT/setup/lib/common.sh" >/dev/null 2>&1; printf 'curl -fsSL https://raw.githubusercontent.com/%s/%s/install.sh | sh' "$EXAKIT_KIT_REPO" "$EXAKIT_KIT_REF" )"
+check "the shell side curls this branch's installer into sh" "$_ic_expected" "$_ic"
+case "$_ic" in *raw.githubusercontent.com/*/*/install.sh*) _ic_raw=yes ;; *) _ic_raw=no ;; esac
+check "and points at a raw installer of the kit's own branch" "yes" "$_ic_raw"
 
 # The PowerShell twin is asserted from source: this suite is bash, and the one
 # thing that must never regress is Windows being handed the shell form.

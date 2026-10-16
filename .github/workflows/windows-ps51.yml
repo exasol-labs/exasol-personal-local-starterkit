@@ -8,7 +8,7 @@ name: windows-ps51
 # test under both engines on a real Windows runner.
 on:
   push:
-    branches: [main]
+    branches: [main, exasol-starterkit-docker]
   pull_request:
 
 jobs:
@@ -78,6 +78,14 @@ jobs:
         if: matrix.shard == 2
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/runtime-personal-ps.ps1
+      # The Docker variant's Windows runtime module, executed against a
+      # sandboxed kit home and a stub docker: the tag resolution, the digest
+      # check after the pull, the container arguments, the manifest keys, the
+      # status vocabulary and the restart policy.
+      - name: nano runtime module under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/runtime-nano-ps.ps1
       - name: start and stop one service under 5.1
         if: matrix.shard == 2
         shell: powershell

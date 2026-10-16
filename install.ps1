@@ -1,6 +1,11 @@
 # install.ps1 - Exasol Personal Local Starter Kit, one-command installer (Windows).
 #
-#   irm https://raw.githubusercontent.com/exasol-labs/exasol-personal-local-starterkit/main/install.ps1 | iex
+# THE DOCKER VARIANT (branch exasol-starterkit-docker): on Windows the database
+# is an Exasol Nano container in Docker Desktop instead of an Exasol Personal
+# deployment through Podman. The kit is fetched from that branch, and a kit
+# installed from it keeps following that branch.
+#
+#   irm https://raw.githubusercontent.com/exasol-labs/exasol-personal-local-starterkit/exasol-starterkit-docker/install.ps1 | iex
 #
 # IMPORTANT: this file must NOT have a UTF-8 BOM. It is only ever executed
 # via `irm | iex` (as a fetched string, never read from disk with -File), and
@@ -12,14 +17,14 @@
 # "fix" those to match this file.)
 #
 # What it does, in order:
-#   1. checks this machine can run the kit (container runtime, memory, free
-#      disk) - before anything at all is written
+#   1. checks this machine can run the kit (Docker Desktop running, memory,
+#      free disk) - before anything at all is written
 #   2. downloads the starter kit to ~\.exasol-starter-kit\kit (so you can
 #      read every script before or after it runs)
 #   3. shows the installation plan
-#   4. hands off to setup\setup-windows.ps1, which installs the
-#      Exasol Personal local deployment, exapump (data loading CLI), and the
-#      MCP server - the same components the macOS/Linux/WSL path installs
+#   4. hands off to setup\setup-windows.ps1, which installs the Exasol Nano
+#      container, exapump (data loading CLI), and the MCP server - the same
+#      components the macOS/Linux/WSL path installs beside Exasol Personal
 #
 # Options (environment variables):
 #   $env:EXAKIT_DRY_RUN = "1"   show the plan, install nothing
@@ -122,7 +127,7 @@ function Get-ExakitInstallHomeBase {
 $ExakitHome = if ($env:EXAKIT_HOME) { $env:EXAKIT_HOME } else { Join-Path (Get-ExakitInstallHomeBase) ".exasol-starter-kit" }
 $env:EXAKIT_HOME = $ExakitHome
 $Repo       = if ($env:EXAKIT_REPO) { $env:EXAKIT_REPO } else { "exasol-labs/exasol-personal-local-starterkit" }
-$Ref        = if ($env:EXAKIT_REF)  { $env:EXAKIT_REF }  else { "main" }
+$Ref        = if ($env:EXAKIT_REF)  { $env:EXAKIT_REF }  else { "exasol-starterkit-docker" }
 $KitDir     = Join-Path $ExakitHome "kit"
 # A DRY RUN WRITES NOTHING UNDER EXAKIT_HOME. It used to swap the download into
 # $ExakitHome\kit - the copy an installed exakit loads its code from - and then
@@ -139,10 +144,12 @@ if ($env:OS -notlike "*Windows*") {
     throw "This installer is for Windows. On macOS/Linux/WSL use install.sh."
 }
 
-# Exasol Personal is the database this kit installs. The HARDWARE is asked the
-# way Get-ExakitHostArch asks it - inlined, since no kit library is loaded yet -
-# because PROCESSOR_ARCHITECTURE reports the emulated x64 shell on ARM devices,
-# and the launcher publishes no Windows arm64 deployment.
+# Exasol Nano is the database this variant installs, and its image is published
+# for amd64 and arm64 alike, so Windows on ARM is not refused here: the
+# database runs, and setup skips the pieces that have no arm64 build (exapump
+# and the AI bridge that depends on it). The HARDWARE is asked the way
+# Get-ExakitHostArch asks it - inlined, since no kit library is loaded yet -
+# because PROCESSOR_ARCHITECTURE reports the emulated x64 shell on ARM devices.
 $HostIsAmd64 = $true
 try {
     $cpu = (Get-CimInstance -ClassName Win32_Processor -ErrorAction Stop | Select-Object -First 1).Architecture
@@ -150,9 +157,6 @@ try {
 } catch {
     $p = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
     if ($p -match 'ARM') { $HostIsAmd64 = $false }
-}
-if (-not $HostIsAmd64) {
-    throw "Exasol Personal supports macOS, native Linux and Windows x86_64 - it does not support Windows arm64, and this kit has no other database to offer. Nothing was installed."
 }
 
 # GROUP POLICY OUTRANKS -ExecutionPolicy Bypass, by design: on a machine where
@@ -181,7 +185,7 @@ foreach ($gpoScope in @("MachinePolicy", "UserPolicy")) {
 # install.sh cannot do this: its check lives in setup\lib\detect.sh, inside the
 # kit it has to download first. Nothing these checks need is in the kit.
 #
-# This is a gate, not the check. Test-PersonalRequirements still runs the real one
+# This is a gate, not the check. Test-NanoRequirements still runs the real one
 # once setup starts (is the engine actually answering, every volume the install
 # writes to, the tight-disk advice) and it owns every message this gate
 # borrows: the wording is copied word for word so nobody meets two spellings of
@@ -231,24 +235,52 @@ function Get-ExakitRequirementChecks {
     # covers there: memory and free disk, never the container runtime, because
     # there is nothing to force when the thing the database runs in is absent.
     $forced = ($env:EXAKIT_FORCE -eq "1")
-    $minRamGb = if ($env:EXAKIT_PERSONAL_MIN_RAM_GB) { [int]$env:EXAKIT_PERSONAL_MIN_RAM_GB } else { 8 }
+    $minRamGb = if ($env:EXAKIT_NANO_MIN_RAM_GB) { [int]$env:EXAKIT_NANO_MIN_RAM_GB } else { 4 }
     $minSystemDiskGb = if ($env:EXAKIT_MIN_SYSTEM_DISK_GB) { [int]$env:EXAKIT_MIN_SYSTEM_DISK_GB } else { 5 }
     $checks = @()
 
     $checks += New-ExakitCheckResult -State "ok" -Text "Operating system: Windows"
 
-    # Reported, not judged: Windows arm64 is already refused above, before this
-    # gate is ever built, so by here the only thing left to say is what it is.
-    $checks += New-ExakitCheckResult -State "ok" -Text "CPU architecture: $env:PROCESSOR_ARCHITECTURE"
-
-    # A missing Podman is not a failure: the Exasol launcher offers to install
-    # it itself (winget, possibly an administrator prompt), so failing the gate
-    # for it would demand a manual install the launcher makes unnecessary.
-    if (Get-Command podman -ErrorAction SilentlyContinue) {
-        $checks += New-ExakitCheckResult -State "ok" -Text "Podman: available (the Exasol Personal runtime deploys through it)"
+    if ($HostIsAmd64) {
+        $checks += New-ExakitCheckResult -State "ok" -Text "CPU architecture: $env:PROCESSOR_ARCHITECTURE"
     } else {
         $checks += New-ExakitCheckResult -State "note" `
-            -Text "Podman not found - the Exasol launcher will offer to install it (Windows Package Manager; may ask for administrator approval)"
+            -Text "CPU architecture: $env:PROCESSOR_ARCHITECTURE (arm64) - the Nano database runs; exapump and the AI bridge have no Windows arm64 build and are skipped"
+    }
+
+    # Docker Desktop is REQUIRED, and it must be running: the Nano database is
+    # a container in it, and nothing in this kit installs or starts it. Under
+    # the global Stop preference a healthy `docker info` can still throw on
+    # Windows PowerShell 5.1 (its warnings go to stderr), so the exit code is
+    # read with the preference relaxed for that one call.
+    $dockerCmd = Get-Command docker -ErrorAction SilentlyContinue
+    if (-not $dockerCmd) {
+        $checks += New-ExakitCheckResult -State "bad" `
+            -Text "Docker Desktop: not found - the Exasol Nano database runs as a container in it" `
+            -Detail @(
+                "This machine has no Docker Desktop, and this variant of the kit runs its database in one.",
+                "Install it from https://docs.docker.com/desktop/setup/install/windows-install/ , start it, then re-run. Nothing was installed."
+            ) `
+            -Reason "Docker Desktop is not installed."
+    } else {
+        $dockerUp = $false
+        $prevEap = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            & $dockerCmd.Source info --format "{{.ServerVersion}}" *> $null
+            $dockerUp = ($LASTEXITCODE -eq 0)
+        } catch { $dockerUp = $false } finally { $ErrorActionPreference = $prevEap }
+        if ($dockerUp) {
+            $checks += New-ExakitCheckResult -State "ok" -Text "Docker Desktop: running (the Exasol Nano database runs as a container in it)"
+        } else {
+            $checks += New-ExakitCheckResult -State "bad" `
+                -Text "Docker Desktop: installed but not running" `
+                -Detail @(
+                    "Docker Desktop is installed but not running, and this variant of the kit runs its database in it.",
+                    "Start Docker Desktop, wait until it reports that it is running, then re-run. Nothing was installed."
+                ) `
+                -Reason "Docker Desktop is not running."
+        }
     }
 
     $ramGb = Get-ExakitTotalRamGb
@@ -256,15 +288,15 @@ function Get-ExakitRequirementChecks {
         $checks += New-ExakitCheckResult -State "note" `
             -Text "Memory: could not be read here - the installer checks it again with the kit's own tools"
     } elseif ($ramGb -ge $minRamGb) {
-        $checks += New-ExakitCheckResult -State "ok" -Text "Memory: $ramGb GB (Exasol Personal needs $minRamGb+)"
+        $checks += New-ExakitCheckResult -State "ok" -Text "Memory: $ramGb GB (Exasol Nano needs $minRamGb+)"
     } elseif ($forced) {
         $checks += New-ExakitCheckResult -State "note" `
             -Text "Memory: $ramGb GB - below the $minRamGb GB minimum, continuing because EXAKIT_FORCE=1"
     } else {
         $checks += New-ExakitCheckResult -State "bad" `
-            -Text "Memory: $ramGb GB - Exasol Personal needs at least $minRamGb GB" `
+            -Text "Memory: $ramGb GB - Exasol Nano needs at least $minRamGb GB" `
             -Detail @(
-                "This machine is not compatible: Exasol Personal needs at least $minRamGb GB RAM and this machine has $ramGb GB.",
+                "This machine is not compatible: Exasol Nano needs at least $minRamGb GB RAM and this machine has $ramGb GB.",
                 "Nothing was installed. Re-run on a machine with $minRamGb+ GB RAM (or force at your own risk with EXAKIT_FORCE=1)."
             ) `
             -Reason "Insufficient memory: $ramGb GB."
@@ -368,6 +400,25 @@ foreach ($check in $RequirementChecks) {
         }
     }
     throw $check.Reason
+}
+
+# --- the standard kit's database is not converted ----------------------------
+# This is the Docker variant: its Windows database is an Exasol Nano container.
+# A machine whose kit record says the database is an Exasol Personal deployment
+# (the standard kit's) is refused HERE, before anything is downloaded or
+# written: nothing in this variant can move a Personal deployment into a
+# container, and a second database beside it would fight over the port. The
+# setup script repeats the check for a run from a checkout.
+$existingManifest = Join-Path $ExakitHome "manifest.json"
+if ((Test-Path $existingManifest) -and $env:EXAKIT_DRY_RUN -ne "1") {
+    $recordedRuntime = ""
+    try {
+        $recordedDoc = Get-Content -Raw -Path $existingManifest -Encoding UTF8 | ConvertFrom-Json
+        if ($recordedDoc.runtime -and $recordedDoc.runtime.type) { $recordedRuntime = "" + $recordedDoc.runtime.type }
+    } catch { $recordedRuntime = "" }
+    if ($recordedRuntime -eq "personal") {
+        throw "This machine has an Exasol Personal deployment installed by the standard starter kit, and this Docker variant does not convert it. Keep using the standard kit (irm https://www.exasol.com/install/starter-kit.ps1 | iex), or remove it first with 'exakit uninstall' and re-run this installer. Nothing was changed."
+    }
 }
 
 # --- 2. fetch the kit ----------------------------------------------------------
@@ -541,7 +592,7 @@ if (Test-Path $uiLib) {
         . ([scriptblock]::Create($uiText))
         Write-ExakitInstallPlan `
             -Platform "windows ($env:PROCESSOR_ARCHITECTURE, $ramText)" `
-            -Database "Exasol Personal (local deployment via Podman)" `
+            -Database "Exasol Nano (container in Docker Desktop)" `
             -KitDir $KitDir -StateDir $ExakitHome
         $uiLoaded = $true
     } catch { $uiLoaded = $false }

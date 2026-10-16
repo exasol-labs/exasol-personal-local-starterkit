@@ -108,6 +108,9 @@ if (Test-Path (Join-Path $scriptDir "lib\exakit-common.ps1")) {
 
 . (Join-Path $libDir "exakit-common.ps1")
 . (Join-Path $libDir "runtime-personal.ps1")
+# The Docker variant's Windows runtime (exasol-starterkit-docker branch).
+$nanoModule = Join-Path $libDir "runtime-nano.ps1"
+if (Test-Path $nanoModule) { . $nanoModule }
 . (Join-Path $libDir "exapump.ps1")
 # The crossing module: `exakit migrate docker-nano` is its after-the-install
 # road, and `exakit status` reads what it remembered about the old database.
@@ -237,7 +240,7 @@ function Invoke-CmdStatus {
         # none of the arms downstream, so the screen fell through to "Start it:
         # exakit start" - a command that in this state can only fail. Twin of
         # the same case in cmd_status.
-        switch ($type) { "personal" { Get-PersonalStatus } default { "not installed" } }
+        switch ($type) { "personal" { Get-PersonalStatus } "nano" { Get-NanoStatus } default { "not installed" } }
     }
     $running = "$status".StartsWith("running")
     $steps = @(Get-ExakitManifestValue "steps_completed")
@@ -703,6 +706,7 @@ function Get-ExakitServiceStatus {
     if ($Id -eq "database") {
         switch (Get-RuntimeType) {
             "personal" { return (Get-PersonalStatus) }
+            "nano" { return (Get-NanoStatus) }
         }
         return "unknown"
     }
@@ -739,6 +743,7 @@ function Stop-ExakitService {
     if ($Id -eq "database") {
         switch (Get-RuntimeType) {
             "personal" { Stop-Personal }
+            "nano" { Stop-Nano }
         }
         return
     }
@@ -750,6 +755,11 @@ function Stop-ExakitService {
 
 function Unregister-ExakitAutostart {
     param([Parameter(Mandatory)][string]$Id)
+    # The container's restart policy is the half of autostart the Startup
+    # entry does not own; off means both go.
+    if ($Id -eq "database" -and (Get-RuntimeType) -eq "nano" -and (Get-Command Set-NanoRestartPolicy -ErrorAction SilentlyContinue)) {
+        [void](Set-NanoRestartPolicy -Enabled $false)
+    }
     $entry = Get-ExakitAutostartEntryPath -Id $Id
     if (Test-Path $entry) {
         Remove-Item -Force -ErrorAction SilentlyContinue $entry
@@ -905,7 +915,11 @@ function Resolve-ExakitServiceScope {
 # `exakit start` promises a running database). Shared by the bare form and by
 # `exakit start database`, so the two cannot drift. Twin of _start_database.
 function Start-ExakitDatabase {
-    if ((Get-RuntimeType) -eq "personal" -and (Test-PersonalDeploymentRunning)) {
+    if ((Get-RuntimeType) -eq "nano" -and (Test-NanoDeploymentRunning)) {
+        Ok "Database is already running"
+    } elseif ((Get-RuntimeType) -eq "nano" -and (Get-NanoStatus) -eq "conflict") {
+        Fail "Port $(Get-NanoDbPort) is held by another process, not by the Nano container, so the database cannot start. Stop that process, then: exakit start"
+    } elseif ((Get-RuntimeType) -eq "personal" -and (Test-PersonalDeploymentRunning)) {
         Ok "Database is already running"
     } elseif ((Get-RuntimeType) -eq "personal" -and (Get-PersonalStatus) -eq "conflict") {
         # Port open is not database up: with another program on the port this
@@ -935,7 +949,8 @@ function Invoke-CmdStart {
         # add-on would only sit there failing to connect, so say what is
         # missing and name the command that brings everything up - and record
         # nothing: this is a refusal, not a failed step. Twin of cmd_start.
-        if ((Get-RuntimeType) -eq "personal" -and -not (Test-PersonalDeploymentRunning)) {
+        if (((Get-RuntimeType) -eq "personal" -and -not (Test-PersonalDeploymentRunning)) -or
+            ((Get-RuntimeType) -eq "nano" -and -not (Test-NanoDeploymentRunning))) {
             Deny-ExakitInput "The database is not running, and $id needs it. Start everything with: exakit start"
         }
         Start-ExakitService -Id $id
@@ -995,7 +1010,7 @@ function Invoke-CmdStop {
         if ($sid -eq "database") { continue }
         Stop-ExakitService -Id $sid
     }
-    switch (Get-RuntimeType) { "personal" { Stop-Personal } }
+    switch (Get-RuntimeType) { "personal" { Stop-Personal } "nano" { Stop-Nano } }
 }
 
 # Invoke-CmdRepairRuntime [-Yes] - rebuild a database that cannot be started.
@@ -1086,6 +1101,13 @@ function Invoke-CmdRepairRuntime {
     # trusts the record whenever the database cannot be asked - which a database
     # that came up seconds ago sometimes cannot. Twin of exakit_reset_dataset_flags.
     Reset-ExakitDatasetFlags
+    # A container database is rebuilt from nothing: the setup step would adopt
+    # a container that is still there, so the container and its data volume go
+    # first. The Personal path is cleared by EXAKIT_REUSE_DB below instead.
+    if ((Get-RuntimeType) -eq "nano" -and (Get-Command Remove-Nano -ErrorAction SilentlyContinue)) {
+        Info "Removing the Nano container and its data volume"
+        try { Remove-Nano -Data } catch { Warn2 "Removing the old container reported errors (continuing with the rebuild)" }
+    }
     Info "Re-running setup\setup-windows.ps1 to rebuild the database"
     $env:EXAKIT_BANNER_SHOWN = "1"
     # The deployment step must NOT offer to reuse what is there: its reuse
@@ -1214,6 +1236,9 @@ function Invoke-CmdMigrate {
         Write-ExakitError $Msg
         Info "Then: $Remedy"
         exit 3
+    }
+    if ((Get-RuntimeType) -eq "nano") {
+        Deny-MigrateState "not applicable" "This kit's own database is the Exasol Nano container, so there is nothing to copy it into: migrate is for a kit whose database is an Exasol Personal deployment." "exakit status"
     }
     if ((Get-RuntimeType) -ne "personal") {
         Deny-MigrateState "no database" "This install has no Exasol Personal deployment to copy into yet." (Get-ExakitInstallCommand)
@@ -1496,9 +1521,10 @@ function Invoke-ExakitUninstallRun {
             Info "Removing the local Exasol $type deployment and all data"
             switch ($type) {
                 "personal" { try { Remove-Personal } catch { Warn2 "Database removal reported errors (continuing uninstall)" } }
+                "nano" { try { Remove-Nano -Data } catch { Warn2 "Database removal reported errors (continuing uninstall)" } }
                 default { Warn2 "Unknown runtime type '$type'; skipping database removal" }
             }
-            RecordRemoved "Database removed: the local Exasol Personal deployment and all its data"
+            RecordRemoved "Database removed: the local Exasol $type database and all its data"
         }
     }
 
@@ -1864,8 +1890,13 @@ function Invoke-ExakitUninstallComponent {
             # from Show-ExakitUninstallMenu), which is the only place saying it
             # can still change the answer. Twin of the same move in
             # _exakit_uninstall_component.
-            Info "Removing the local Exasol Personal deployment and all data"
-            try { Remove-Personal } catch { Warn2 "Database removal reported errors" }
+            Info "Removing the local Exasol $(Get-RuntimeType) database and all data"
+            try {
+                switch (Get-RuntimeType) {
+                    "nano" { Remove-Nano -Data }
+                    default { Remove-Personal }
+                }
+            } catch { Warn2 "Database removal reported errors" }
             Remove-ExakitStepDone "runtime"
         }
         "mcp_configs" {
@@ -1958,6 +1989,11 @@ function Invoke-CmdVersion {
         # No "Source" row either: an absolute path to the kit's own copy of itself,
         # which answers a question nobody asks of a version screen.
         Write-ExakitPanelLine ("{0,-14} {1}" -f "Installed", "$(Format-ExakitLocalTime (Get-ExakitManifestValue 'installed_at'))")
+        # The variant row tells a support conversation which kit this is: the
+        # Docker variant records "docker-nano" at install; the standard kit
+        # records nothing and shows no row.
+        $variant = "" + (Get-ExakitManifestValue "kit.variant")
+        if ($variant) { Write-ExakitPanelLine ("{0,-14} {1}" -f "Variant", $variant) }
         Complete-ExakitPanel
         Write-Host ""
     }
@@ -2469,9 +2505,13 @@ function Invoke-ExakitRuntimeComponentUpdate {
     switch ($Component) {
         "runtime" {
             if ((Get-RuntimeType) -eq "personal" -and $Advertised) { Update-Personal -Advertised $Advertised }
+            if ((Get-RuntimeType) -eq "nano" -and $Advertised) { Update-Nano -Advertised $Advertised }
         }
         "personal" {
             if ($Advertised) { Update-Personal -Advertised $Advertised }
+        }
+        "nano" {
+            if ($Advertised) { Update-Nano -Advertised $Advertised }
         }
     }
 }
@@ -2484,6 +2524,7 @@ function Invoke-ExakitRuntimeComponentUpdate {
 function Get-ExakitRuntimeStatus {
     switch (Get-RuntimeType) {
         "personal" { try { return (Get-PersonalStatus) } catch { return "" } }
+        "nano" { try { return (Get-NanoStatus) } catch { return "" } }
     }
     return ""
 }
@@ -2499,6 +2540,10 @@ function Start-ExakitRuntime {
         "personal" {
             Start-Personal
             [void](Wait-PersonalReadyOrDeploy)
+        }
+        "nano" {
+            Start-Nano
+            [void](Wait-NanoReadyOrDeploy)
         }
     }
 }
@@ -3605,7 +3650,10 @@ try {
     switch ($Command) {
         "preflight"    {
             Assert-ExakitKnownOptions -CommandName "preflight" -Allowed @() -Arguments $RestArgs
-            Test-PersonalRequirements
+            # This branch's Windows database is the Nano container: the check
+            # is Docker Desktop's, unless the record says a Personal deployment
+            # is what this machine has.
+            if ((Get-RuntimeType) -eq "personal") { Test-PersonalRequirements } else { Test-NanoRequirements }
         }
         "status"       {
             $statusJson = ($RestArgs -contains "--json" -or $RestArgs -contains "-j")
@@ -3636,7 +3684,7 @@ try {
             foreach ($_upArg in @($RestArgs)) {
                 if (@("--plan", "--backup", "--apply") -contains "$_upArg") {
                     Deny-ExakitInput ("$_upArg is part of the staged major-upgrade route, which the Windows CLI does not implement (it is macOS, Linux and WSL only). " +
-                        "To take a major Exasol Personal upgrade here, re-run the installer: irm https://www.exasol.com/install/starter-kit.ps1 | iex")
+                        "To take a major Exasol Personal upgrade here, re-run the installer: $(Get-ExakitInstallCommand)")
                 }
             }
             Assert-ExakitKnownOptions -CommandName "update" -Allowed @("--yes", "-y", "-Yes", "--json", "-j") -Arguments $RestArgs
@@ -3788,7 +3836,8 @@ try {
             }
             $doctorArgs = @($RestArgs | Where-Object { $_ -notin @("--json", "-j") })
             $doctorType = Get-RuntimeType
-            $doctorUp = ($doctorType -eq "personal" -and (Get-PersonalStatus) -eq "running")
+            $doctorUp = (($doctorType -eq "personal" -and (Get-PersonalStatus) -eq "running") -or
+                         ($doctorType -eq "nano" -and (Get-NanoStatus) -eq "running"))
             if (-not $doctorUp) {
                 if ($doctorJson) {
                     # The same three keys every --json state answer carries.
