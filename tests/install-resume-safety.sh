@@ -333,7 +333,9 @@ fi
 # that quietly stopped asking about memory would still have the function
 # sitting in the file for a grep to find.
 _builder="$(sed -n '/^function Get-ExakitRequirementChecks {/,/^}/p' "$_IPS")"
-for _probe in 'Get-Command podman' 'Get-ExakitTotalRamGb' 'Get-ExakitFreeGb'; do
+# On this branch (the Docker variant) the engine the gate asks about is Docker
+# Desktop, which must be running, not a Podman the launcher could install.
+for _probe in 'Get-Command docker' 'Get-ExakitTotalRamGb' 'Get-ExakitFreeGb'; do
     if printf '%s
 ' "$_builder" | grep -qF "$_probe"; then
         pass "...and the gate asks $_probe"
@@ -342,7 +344,7 @@ for _probe in 'Get-Command podman' 'Get-ExakitTotalRamGb' 'Get-ExakitFreeGb'; do
     fi
 done
 # ...and everything those probes read is read before the download writes anything.
-for _probe in 'Get-Command podman' 'TotalPhysicalMemory' 'AvailableFreeSpace'; do
+for _probe in 'Get-Command docker' 'TotalPhysicalMemory' 'AvailableFreeSpace'; do
     _l="$(_line_of "$_IPS" "$_probe")"
     if [ -n "$_l" ] && [ -n "$_dl" ] && [ "$_l" -lt "$_dl" ]; then
         pass "...reading $_probe while the machine is still untouched"
@@ -353,16 +355,18 @@ done
 
 # The gate borrows its refusals word for word from the library that owns them,
 # so nobody meets two spellings of the same message. BOTH sides are checked:
-# rewording runtime-personal.ps1 alone is exactly how they would drift apart in
-# silence.
+# rewording the runtime module alone is exactly how they would drift apart in
+# silence. ON THIS BRANCH (the Docker variant) the Windows runtime module is
+# runtime-nano.ps1, and the database is Exasol Nano.
+_RNS="$ROOT/setup/lib/runtime-nano.ps1"
 for _msg in \
-    'This machine is not compatible: Exasol Personal needs at least' \
+    'This machine is not compatible: Exasol Nano needs at least' \
     'This machine is not compatible right now:'
 do
-    if grep -qF "$_msg" "$_IPS" && grep -qF "$_msg" "$_RPS"; then
-        pass "the gate and runtime-personal.ps1 both say: $_msg"
+    if grep -qF "$_msg" "$_IPS" && grep -qF "$_msg" "$_RNS"; then
+        pass "the gate and runtime-nano.ps1 both say: $_msg"
     else
-        fail "install.ps1 and setup/lib/runtime-personal.ps1 no longer share this refusal, so the same machine gets two spellings of it: $_msg"
+        fail "install.ps1 and setup/lib/runtime-nano.ps1 no longer share this refusal, so the same machine gets two spellings of it: $_msg"
     fi
 done
 # The two the gate owns alone: they are what the trap prints as the reason, and
@@ -467,10 +471,11 @@ printf '\n== the Windows-on-ARM install says what it is skipping ==\n'
 _has "$ROOT/setup/lib/common.sh" 'not part of this installation, skipping' \
     "bash names a step it is not running" \
     "bash no longer names a skipped step - the wording the Windows twin copies is gone"
-_has "$_SWD" 'Info "Step 3/6  exapump - not part of this installation, skipping"' \
+# Five steps on this branch (the Docker variant has no launcher step).
+_has "$_SWD" 'Info "Step 2/5  exapump - not part of this installation, skipping"' \
     "the Windows path names the skipped exapump step" \
-    "Windows-on-ARM jumps from Step 2/6 to Step 5/6 again"
-_has "$_SWD" 'Info "Step 4/6  AI bridge (MCP server, clients and skills) - not part of this installation, skipping"' \
+    "Windows-on-ARM jumps from Step 1/5 to Step 4/5 again"
+_has "$_SWD" 'Info "Step 3/5  AI bridge (MCP server, clients and skills) - not part of this installation, skipping"' \
     "...and the skipped AI bridge step" \
     "Windows-on-ARM skips the AI bridge step without printing it"
 
