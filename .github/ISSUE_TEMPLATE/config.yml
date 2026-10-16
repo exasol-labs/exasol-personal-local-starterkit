@@ -1,0 +1,6 @@
+# Shown on the "new issue" chooser next to the blank-issue button.
+blank_issues_enabled: true
+contact_links:
+  - name: Write to the team
+    url: mailto:plg.connect@exasol.com
+    about: Questions, or anything you would rather not post publicly. For a problem with the kit, an issue here with the output of `exakit status --json` and `exakit logs` is the fastest route.

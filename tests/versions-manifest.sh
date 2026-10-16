@@ -212,7 +212,10 @@ both_value() {
 }
 
 echo "validation gate:"
+fixture_doc "invalid Personal S3 digest" "$WORK/bad-personal-s3.json" \
+    "components.personal.s3.sha256.linux-arm64=not-a-digest"
 both_rc "shipped versions.json" 0 "$REAL"
+both_rc "invalid Personal S3 digest" 1 "$WORK/bad-personal-s3.json"
 both_rc "newer schema" 2 "$FIX/schema2.json"
 both_rc "version outside the safe charset" 1 "$FIX/bad-charset.json"
 both_rc "digest that is not 64 hex chars" 1 "$FIX/bad-digest.json"
@@ -228,6 +231,7 @@ check "newer schema is reported as ahead" "yes" "$schema_ahead"
 
 echo "reader (Python and the awk fallback must agree):"
 for _path in kit.version components.personal.version components.personal.severity \
+             components.personal.s3.base_url components.personal.s3.sha256.linux-arm64 \
              components.exapump.version components.mcp.version \
              components.mcp.package components.pyexasol.version \
              components.dash-server.version components.dash-server.repo \

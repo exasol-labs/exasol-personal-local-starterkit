@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## 0.2.2
+
+**The Personal launcher comes from Exasol's S3 bucket first, verified, with
+the GitHub release as the fallback.** The kit downloads the versioned,
+platform-specific raw executable from `components.personal.s3.base_url` and
+checks it against the platform's SHA-256 pin in versions.json before
+installing it. A download that fails or does not match the pin is discarded
+and the same version's GitHub release archive is fetched and verified against
+the release's own `checksums.txt`, exactly as before; a miss leaves no failure
+note behind. WSL takes the Linux path. The pin applies only to the manifest's
+version: an `EXAKIT_PERSONAL_VERSION` override or the `latest` policy that
+selects another version skips S3 and uses the verified GitHub release, and
+`EXAKIT_PERSONAL_S3=0` skips it for any version, for a network that blocks
+the bucket. A miss costs seconds, not a minute: the S3 download gets a short
+budget before the fallback. On macOS, Linux, WSL and Windows alike. CI hashes
+every
+advertised S3 executable whenever versions.json changes, and the bump
+workflow recomputes the five pins before it proposes a Personal version.
+
 ## 0.2.1
 
 **The seven issues filed against 0.2.0 (#27 to #33) are fixed, and the

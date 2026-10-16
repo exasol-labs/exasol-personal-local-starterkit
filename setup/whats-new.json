@@ -20,6 +20,12 @@
     "install shows no cards at all, so every line here is read by someone who",
     "already had the kit working and wants to know what is different."
   ],
+  "0.2.2": [
+    "The launcher now downloads from Exasol's own server (S3), verified.",
+    "If that server is unreachable, the verified GitHub release is used.",
+    "Pinning another launcher version still takes the GitHub release.",
+    "EXAKIT_PERSONAL_S3=0 skips that server if your network blocks it."
+  ],
   "0.2.1": [
     "exakit start|stop <service> acts on one service, not everything.",
     "exakit stop database asks before taking it from running add-ons.",

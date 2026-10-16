@@ -2016,6 +2016,15 @@ if not isinstance(components, dict) or not components:
     sys.exit(1)
 for block in components.values():
     check_block(block)
+personal_s3 = components.get("personal", {}).get("s3")
+if personal_s3 is not None:
+    if not isinstance(personal_s3, dict) or not re.match(r"^https://[^\s]+$", str(personal_s3.get("base_url", ""))):
+        sys.exit(1)
+    digests = personal_s3.get("sha256")
+    if not isinstance(digests, dict) or set(digests) != {
+        "macos-arm64", "macos-x86_64", "linux-arm64", "linux-x86_64", "windows-x86_64"
+    } or any(not isinstance(value, str) or not digest_re.match(value) for value in digests.values()):
+        sys.exit(1)
 # Optional and additive: absent until the first Kit 2 assets ship.
 if doc.get("kit2") is not None:
     check_block(doc["kit2"])
@@ -2051,6 +2060,10 @@ _exakit_versions_validate_shell() {
     while IFS="$(printf '\t')" read -r _vs_path _vs_value; do
         [ -n "$_vs_path" ] || continue
         case "$_vs_path" in
+            components.personal.s3.base_url)
+                case "$_vs_value" in https://*) : ;; *) return 1 ;; esac
+                case "$_vs_value" in *[[:space:]]*) return 1 ;; esac
+                ;;
             *.sha256.*)
                 case "$_vs_value" in
                     *[!0-9a-f]*|'') return 1 ;;
@@ -6972,8 +6985,18 @@ fetch() {
     # moving rather than one that is merely slow; -C - resumes instead of
     # restarting from byte zero; --retry-all-errors covers the transport errors
     # plain --retry does not (curl 7.71+, hence the capability probe).
-    curl -fL --proto '=https' --retry 3 $(_exakit_curl_retry_all) --connect-timeout 15 \
-        --speed-limit 1024 --speed-time 60 -C - \
+    # A download the caller can do without (fetch_soft) gets a short budget:
+    # one retry of a transient error, none of a hard one, a 10 s handshake cap
+    # and a 20 s stall cap, so a blocked host costs seconds before the fallback
+    # instead of the minute the full schedule takes.
+    if [ "${_EXAKIT_FETCH_BUDGET:-}" = "soft" ]; then
+        _fetch_retry="--retry 1"; _fetch_retry_all=""; _fetch_connect=10; _fetch_stall=20
+    else
+        _fetch_retry="--retry 3"; _fetch_retry_all="$(_exakit_curl_retry_all)"; _fetch_connect=15; _fetch_stall=60
+    fi
+    # shellcheck disable=SC2086 -- the retry words are meant to split
+    curl -fL --proto '=https' $_fetch_retry $_fetch_retry_all --connect-timeout "$_fetch_connect" \
+        --speed-limit 1024 --speed-time "$_fetch_stall" -C - \
         -sS -o "$_dest" "$_url"
     _fetch_rc=$?
     ui_spin_end
@@ -7005,6 +7028,20 @@ fetch_quiet() {
     _fq_rc=$?
     ui_spin_end
     return "$_fq_rc"
+}
+
+# fetch_soft <url> <dest> — fetch_quiet for a download the caller can do
+# without. A miss is a return code and nothing more: the die inside the
+# subshell would otherwise record ".last-failure: Could not download <file>",
+# and exakit status would report a failed install step for an attempt that was
+# recovered from on the spot (the S3 launcher download, which falls back to the
+# GitHub release). The read-only flag is what keeps exakit_note_failure quiet;
+# the log still gets the FATAL line, so the miss can be diagnosed. The short
+# budget (_EXAKIT_FETCH_BUDGET=soft, a name no user sets by accident) is what
+# keeps a blocked host to seconds. Twin: Get-ExakitFile -Soft in
+# exakit-common.ps1.
+fetch_soft() {
+    EXAKIT_READONLY_QUERY=1 _EXAKIT_FETCH_BUDGET=soft fetch_quiet "$@"
 }
 
 # sha256_of <file>

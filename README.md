@@ -174,7 +174,7 @@ The whole flow, from install to the first query: -->
 
 <div align="center">
 
-*For questions or problems, open an issue in this repository.*
+*Questions or problems? Open an issue in this repository, or write to plg.connect@exasol.com.*
 
 This kit is community supported. Its own scripts are licensed under [MIT](LICENSE). The Exasol database it installs is a separate product under Exasol's own licence terms. The kit is part of [Exasol Labs](https://github.com/exasol-labs/).
 

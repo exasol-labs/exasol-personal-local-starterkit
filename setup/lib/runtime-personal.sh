@@ -2,7 +2,8 @@
 # runtime-personal.sh — Exasol Personal local runtime module (macOS and Linux).
 #
 # Sourced by setup scripts after common.sh and detect.sh. Installs the Exasol
-# launcher from the resolved GitHub release (checksum-verified) and deploys a
+# launcher from Exasol's versioned S3 binary (manifest SHA-256 verified), falling
+# back to the checksum-verified GitHub release, and deploys a
 # local database with `exasol install local`.
 #
 # Launcher facts:
@@ -517,6 +518,30 @@ personal_release_url() {
     echo "https://github.com/${EXAKIT_PERSONAL_REPO}/releases/download/v${EXAKIT_PERSONAL_VERSION}"
 }
 
+# The S3 URL and SHA-256 describe a RAW executable, not the GitHub archive.
+# Never use a manifest pin for a different target version (including an env
+# override or latest policy). Missing/invalid S3 metadata is a safe GitHub
+# fallback, not permission to run an unchecked binary.
+personal_s3_source() {
+    # EXAKIT_PERSONAL_S3=0: the user's network blocks the bucket, or they want
+    # the release path for its own sake; the GitHub download is as verified.
+    [ "${EXAKIT_PERSONAL_S3:-1}" = "0" ] && return 1
+    _pss_manifest_version="$(exakit_versions_value components.personal.version 2>/dev/null || true)"
+    [ "$_pss_manifest_version" = "$EXAKIT_PERSONAL_VERSION" ] || return 1
+    _pss_base="$(exakit_versions_value components.personal.s3.base_url 2>/dev/null || true)"
+    case "$_pss_base" in https://*) : ;; *) return 1 ;; esac
+    case "$(detect_os)" in
+        macos) _pss_os=macos ;;
+        linux|wsl) _pss_os=linux ;;
+        *) return 1 ;;
+    esac
+    case "$(detect_arch)" in arm64|x86_64) _pss_arch="$(detect_arch)" ;; *) return 1 ;; esac
+    _pss_hash="$(exakit_versions_value "components.personal.s3.sha256.${_pss_os}-${_pss_arch}" 2>/dev/null || true)"
+    case "$_pss_hash" in *[!0-9a-f]*|'') return 1 ;; esac
+    [ "${#_pss_hash}" -eq 64 ] || return 1
+    printf '%s\n%s\n' "${_pss_base%/}/${_pss_os}/${_pss_arch}/${EXAKIT_PERSONAL_VERSION}/exasol" "$_pss_hash"
+}
+
 # personal_deployed_version — the launcher version that created the deployment
 # currently on disk; empty (non-zero) when there is no deployment, or its
 # version cannot be read.
@@ -681,8 +706,6 @@ personal_install_launcher() {
     # to object to.
     personal_refuse_launcher_downgrade
 
-    _asset="$(personal_asset_name)"
-    _base="$(personal_release_url)"
     _tmp="$(mktemp -d "${TMPDIR:-/tmp}/exakit-personal.XXXXXX")"
 
     # The whole step on ONE line. begin_step already set a spinner label, and
@@ -706,17 +729,52 @@ personal_install_launcher() {
     # at their next ui_spin_begin, so the words change on the operation boundary
     # without a second animator and without restarting the one already running.
     EXAKIT_ACTIVE_LABEL="Downloading Exasol launcher v${EXAKIT_PERSONAL_VERSION}"
-    info "Downloading Exasol launcher v${EXAKIT_PERSONAL_VERSION} ($_asset)"
-    fetch "$_base/$_asset" "$_tmp/$_asset"
-    fetch "$_base/exasol-personal_${EXAKIT_PERSONAL_VERSION}_checksums.txt" "$_tmp/checksums.txt"
-    verify_sha256_from_file "$_tmp/$_asset" "$_tmp/checksums.txt"
+    _pil_source="github"
+    _pil_s3="$(personal_s3_source 2>/dev/null || true)"
+    if [ "${EXAKIT_PERSONAL_S3:-1}" = "0" ]; then
+        info "Exasol S3 skipped (EXAKIT_PERSONAL_S3=0); using the verified GitHub release"
+    elif [ -n "$_pil_s3" ]; then
+        _pil_s3_url="${_pil_s3%%$'\n'*}"
+        _pil_s3_hash="${_pil_s3#*$'\n'}"
+        info "Downloading Exasol launcher v${EXAKIT_PERSONAL_VERSION} from Exasol S3"
+        if fetch_soft "$_pil_s3_url" "$_tmp/exasol"; then
+            _pil_actual="$(sha256_of "$_tmp/exasol")"
+            if [ "$_pil_actual" = "$_pil_s3_hash" ]; then
+                _pil_source="s3"
+                ok "S3 launcher SHA-256 verified"
+            else
+                warn "The launcher from Exasol's server did not match its expected checksum and was discarded; getting it from the verified GitHub release instead."
+                _exakit_log_file "WARN  S3 launcher SHA-256 expected $_pil_s3_hash, got $_pil_actual"
+            fi
+        else
+            warn "Could not download the launcher from Exasol's server; getting the same version from the verified GitHub release instead."
+        fi
+    else
+        info "Launcher v${EXAKIT_PERSONAL_VERSION} is not the version versions.json pins for Exasol's server; using the verified GitHub release"
+    fi
+
+    if [ "$_pil_source" = "github" ]; then
+        rm -f "$_tmp/exasol"
+        _asset="$(personal_asset_name)"
+        _base="$(personal_release_url)"
+        info "Downloading Exasol launcher v${EXAKIT_PERSONAL_VERSION} ($_asset)"
+        fetch "$_base/$_asset" "$_tmp/$_asset"
+        fetch "$_base/exasol-personal_${EXAKIT_PERSONAL_VERSION}_checksums.txt" "$_tmp/checksums.txt"
+        verify_sha256_from_file "$_tmp/$_asset" "$_tmp/checksums.txt"
+        # Into a folder of its own: the search below must never be able to
+        # pick a discarded S3 candidate. Twin of the release folder in
+        # Install-PersonalLauncher.
+        mkdir -p "$_tmp/release"
+        run_logged tar -xzf "$_tmp/$_asset" -C "$_tmp/release" || die "Could not extract $_asset"
+        _binary="$(find "$_tmp/release" -name exasol -type f | head -1)"
+        [ -n "$_binary" ] || die "The release archive did not contain an 'exasol' binary"
+    else
+        _binary="$_tmp/exasol"
+    fi
 
     EXAKIT_ACTIVE_LABEL="Installing launcher to $(ui_tilde "$EXAKIT_PERSONAL_BIN")"
     info "Installing launcher to $(ui_tilde "$EXAKIT_PERSONAL_BIN")"
     mkdir -p "$EXAKIT_BIN_DIR"
-    run_logged tar -xzf "$_tmp/$_asset" -C "$_tmp" || die "Could not extract $_asset"
-    _binary="$(find "$_tmp" -name exasol -type f | head -1)"
-    [ -n "$_binary" ] || die "The release archive did not contain an 'exasol' binary"
     install -m 755 "$_binary" "$EXAKIT_PERSONAL_BIN" \
         || die "Could not install the Exasol launcher to $EXAKIT_PERSONAL_BIN (is it writable? is the disk full?)."
     push_rollback "rm -f \"$EXAKIT_PERSONAL_BIN\""

@@ -291,7 +291,8 @@
       "description": "Applies the quick components (kit scripts, exapump, MCP server, pyexasol, the AI skills, installed add-ons) in seconds. A newer skill set published by the maintainers is fetched and installed here too, with no kit release needed. A database change stops the database, so it is only applied for an answer the run was actually given: on a terminal you are asked, and an unattended run defers it with the exact command. Your data is kept either way. --yes (-y) may stand anywhere. --plan, --backup and --apply belong to the staged Personal major upgrade and work only with personal, as in exakit update personal --plan; written first, or with any other component, they are refused with the form that works. --json answers one object instead, with nothing else on stdout: {\"ok\", \"status\": updated|current|deferred|blocked|failed, \"updated\", \"deferred\", \"blocked\", \"current\", \"skipped\", \"ahead\", \"failed\", \"remedy\", \"remedy_hint\"}; every screen line goes to the log, nothing prompts, a database change is deferred unless --yes pre-answers it, and remedy names the command that applies what is left. Exit 1 when an updater failed. An unknown option or target is refused (exit 2) and records nothing.",
       "environment": [
         "EXAKIT_CONFIRM_RUNTIME_UPDATE=1 pre-answers yes to the database change",
-        "EXAKIT_<COMPONENT>_VERSION pins one component by hand"
+        "EXAKIT_<COMPONENT>_VERSION pins one component by hand",
+        "EXAKIT_PERSONAL_S3=0 skips Exasol's S3 for the launcher and uses the GitHub release directly (for a network that blocks the bucket)"
       ],
       "examples": [
         "exakit update",
@@ -451,6 +452,10 @@
     {
       "name": "EXAKIT_NO_UPDATE_NOTICE",
       "effect": "1 never prints the update notice other commands can show."
+    },
+    {
+      "name": "EXAKIT_PERSONAL_S3",
+      "effect": "0 skips Exasol's S3 bucket for the Personal launcher and downloads the verified GitHub release directly - for a network that blocks the bucket. Default: S3 first, GitHub as fallback."
     }
   ],
   "troubleshooting": [

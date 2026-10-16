@@ -7,7 +7,8 @@
 # bounded probes, downloads) lives there.
 #
 # Launcher facts, from the same release this module downloads:
-#   - the Windows asset is exasol-personal_Windows_x86_64.zip + checksums;
+#   - first try the raw Windows EXE in Exasol S3, pinned by versions.json;
+#     fall back to exasol-personal_Windows_x86_64.zip + release checksums;
 #     there is NO Windows arm64 local deployment
 #   - the database runs through HOST Podman inside Podman's default machine;
 #     a missing Podman is offered for install by the launcher itself (winget,
@@ -544,6 +545,20 @@ function Repair-PersonalRootfulPodmanMachine {
     return $true
 }
 
+function Get-PersonalS3Source {
+    param([Parameter(Mandatory)][string]$Version)
+    # The pin is for the raw Windows executable, not the GitHub ZIP. An
+    # override/latest target must never reuse the manifest's older digest.
+    # EXAKIT_PERSONAL_S3=0: the network blocks the bucket, or the release path
+    # is wanted for its own sake; the GitHub download is as verified.
+    if ($env:EXAKIT_PERSONAL_S3 -eq "0") { return $null }
+    if ((Get-ExakitVersionsValue -Path "components.personal.version") -ne $Version) { return $null }
+    $base = Get-ExakitVersionsValue -Path "components.personal.s3.base_url"
+    $sha = Get-ExakitVersionsValue -Path "components.personal.s3.sha256.windows-x86_64"
+    if (-not $base -or $base -notmatch '^https://' -or $sha -notmatch '^[0-9a-f]{64}$') { return $null }
+    return @{ Url = "$($base.TrimEnd('/'))/windows/x86_64/$Version/exasol.exe"; Sha256 = $sha }
+}
+
 function Install-PersonalLauncher {
     if ($env:EXAKIT_FORCE_COMPONENT_INSTALL -ne "1") {
         $existing = Get-Command exasol -ErrorAction SilentlyContinue
@@ -559,8 +574,6 @@ function Install-PersonalLauncher {
     }
 
     $version = Get-PersonalTargetVersion
-    $asset = "exasol-personal_Windows_x86_64.zip"
-    $base = "https://github.com/$($script:PersonalRepo)/releases/download/v$version"
     $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) "exakit-personal-$([guid]::NewGuid().ToString('N'))"
     New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
 
@@ -575,34 +588,70 @@ function Install-PersonalLauncher {
 
     try {
         $script:ExakitActiveLabel = "Downloading Exasol launcher v$version"
-        Info "Downloading Exasol launcher v$version ($asset)"
-        Get-ExakitFile -Url "$base/$asset" -Dest (Join-Path $tmpDir $asset)
-        Get-ExakitFile -Url "$base/exasol-personal_${version}_checksums.txt" -Dest (Join-Path $tmpDir "checksums.txt")
-
-        # The checksums file is "HASH  filename" lines; the asset's own line is
-        # the verdict. A checksums file that does not name the asset is treated
-        # exactly like a mismatch - never as permission to skip verification.
-        $expected = $null
-        foreach ($line in (Get-Content (Join-Path $tmpDir "checksums.txt"))) {
-            if ($line -match ('^([0-9a-fA-F]{64})\s+\*?' + [regex]::Escape($asset) + '\s*$')) {
-                $expected = $Matches[1].ToLowerInvariant()
-                break
+        $source = Get-PersonalS3Source -Version $version
+        $binaryPath = Join-Path $tmpDir "exasol.exe"
+        $verifiedS3 = $false
+        if ($env:EXAKIT_PERSONAL_S3 -eq "0") {
+            Info "Exasol S3 skipped (EXAKIT_PERSONAL_S3=0); using the verified GitHub release"
+        } elseif ($source) {
+            Info "Downloading Exasol launcher v$version from Exasol S3"
+            if (Get-ExakitFile -Url $source.Url -Dest $binaryPath -Soft) {
+                try {
+                    $actual = Get-ExakitSha256 -Path $binaryPath
+                    if ($actual -eq $source.Sha256) {
+                        $verifiedS3 = $true
+                        Ok "S3 launcher SHA-256 verified"
+                    } else {
+                        Warn2 "The launcher from Exasol's server did not match its expected checksum and was discarded; getting it from the verified GitHub release instead."
+                        Write-ExakitLog "WARN" "S3 launcher SHA-256 expected $($source.Sha256), got $actual"
+                    }
+                } catch {
+                    Warn2 "Could not check the launcher from Exasol's server, so it was discarded; getting it from the verified GitHub release instead."
+                    Write-ExakitLog "WARN" "S3 launcher hashing failed: $_"
+                }
+            } else {
+                Warn2 "Could not download the launcher from Exasol's server; getting the same version from the verified GitHub release instead."
             }
+        } else {
+            Info "Launcher v$version is not the version versions.json pins for Exasol's server; using the verified GitHub release"
         }
-        if (-not $expected) {
-            Fail "The release's checksums file does not name $asset; refusing to install an unverified launcher."
+
+        if (-not $verifiedS3) {
+            Remove-Item -Force $binaryPath -ErrorAction SilentlyContinue
+            $asset = "exasol-personal_Windows_x86_64.zip"
+            $base = "https://github.com/$($script:PersonalRepo)/releases/download/v$version"
+            Info "Downloading Exasol launcher v$version ($asset)"
+            Get-ExakitFile -Url "$base/$asset" -Dest (Join-Path $tmpDir $asset)
+            Get-ExakitFile -Url "$base/exasol-personal_${version}_checksums.txt" -Dest (Join-Path $tmpDir "checksums.txt")
+
+            # The GitHub checksum is for the ZIP, never the S3 executable.
+            $expected = $null
+            foreach ($line in (Get-Content (Join-Path $tmpDir "checksums.txt"))) {
+                if ($line -match ('^([0-9a-fA-F]{64})\s+\*?' + [regex]::Escape($asset) + '\s*$')) {
+                    $expected = $Matches[1].ToLowerInvariant()
+                    break
+                }
+            }
+            if (-not $expected) {
+                Fail "The release's checksums file does not name $asset; refusing to install an unverified launcher."
+            }
+            Test-ExakitSha256 -Path (Join-Path $tmpDir $asset) -Expected $expected
+
+            # Into a folder of its own: the search below must never be able to
+            # pick a discarded S3 candidate that a scanner kept locked.
+            $releaseDir = Join-Path $tmpDir "release"
+            Expand-Archive -Path (Join-Path $tmpDir $asset) -DestinationPath $releaseDir -Force
+            $extracted = Get-ChildItem -Path $releaseDir -Filter "exasol.exe" -Recurse | Select-Object -First 1
+            if (-not $extracted) {
+                Fail "The launcher archive did not contain exasol.exe - the download looks wrong. Re-run the installer."
+            }
+            $binaryPath = $extracted.FullName
         }
-        Test-ExakitSha256 -Path (Join-Path $tmpDir $asset) -Expected $expected
 
         $script:ExakitActiveLabel = "Installing launcher to $(Get-ExakitTilde $script:PersonalBinPath)"
         Info "Installing launcher to $(Get-ExakitTilde $script:PersonalBinPath)"
-        Expand-Archive -Path (Join-Path $tmpDir $asset) -DestinationPath $tmpDir -Force
-        $extracted = Get-ChildItem -Path $tmpDir -Filter "exasol.exe" -Recurse | Select-Object -First 1
-        if (-not $extracted) {
-            Fail "The launcher archive did not contain exasol.exe - the download looks wrong. Re-run the installer."
-        }
         New-Item -ItemType Directory -Force -Path $script:BinDir | Out-Null
-        Move-Item -Force $extracted.FullName $script:PersonalBinPath
+        Move-Item -Force $binaryPath $script:PersonalBinPath
         OkStep "Exasol launcher v$version installed to $(Get-ExakitTilde $script:PersonalBinPath)"
     } finally {
         # The flag is restored in the SAME finally that cleans the temp dir:

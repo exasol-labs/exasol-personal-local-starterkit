@@ -122,6 +122,18 @@ jobs:
               if min_kit is not None and (not isinstance(min_kit, str) or not version_re.match(min_kit)):
                   problems.append("%s.min_kit_version is outside [A-Za-z0-9._+-]" % label)
 
+          personal_s3 = (components.get("personal") or {}).get("s3") or {}
+          if not re.match(r"^https://\S+$", str(personal_s3.get("base_url", ""))):
+              problems.append("components.personal.s3.base_url must be an HTTPS URL")
+          personal_pins = personal_s3.get("sha256") or {}
+          personal_platforms = {"linux-arm64", "linux-x86_64", "macos-arm64",
+                                "macos-x86_64", "windows-x86_64"}
+          if set(personal_pins) != personal_platforms:
+              problems.append("components.personal.s3.sha256 must cover exactly the five supported platforms")
+          for platform, digest in personal_pins.items():
+              if not isinstance(digest, str) or not digest_re.match(digest):
+                  problems.append("components.personal.s3.sha256.%s is not a 64-character hex digest" % platform)
+
           exapump = components.get("exapump") or {}
           digests = exapump.get("sha256") or {}
           expected_platforms = {
@@ -165,6 +177,26 @@ jobs:
           sys.exit(1 if problems else 0)
           PY
 
+      - name: the manifest date moves forward with the kit version
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          git fetch --depth=1 origin "${{ github.event.pull_request.base.sha }}"
+          git show "${{ github.event.pull_request.base.sha }}:versions.json" > /tmp/base-versions.json
+          python3 - <<'PY'
+          import json
+          base = json.load(open("/tmp/base-versions.json")); head = json.load(open("versions.json"))
+          # Installed kits keep a cached manifest on an equal date, and a cached
+          # older document has no idea of a newer kit's blocks: the date is what
+          # makes the new document win. So it never moves backward, and it moves
+          # forward whenever the kit version does.
+          if head["updated"] < base["updated"]:
+              raise SystemExit("`updated` moved backward (%s -> %s)" % (base["updated"], head["updated"]))
+          if head["kit"]["version"] != base["kit"]["version"] and head["updated"] <= base["updated"]:
+              raise SystemExit("kit.version moved %s -> %s but `updated` did not move forward (%s -> %s)"
+                               % (base["kit"]["version"], head["kit"]["version"], base["updated"], head["updated"]))
+          print("ok: kit %s -> %s, updated %s -> %s" % (base["kit"]["version"], head["kit"]["version"], base["updated"], head["updated"]))
+          PY
       - name: the MCP fallback constant matches the manifest
         # mcp/runtime/exakit.py keeps a last-resort default for the MCP server
         # version. It must move with the manifest, in the same pull request.
@@ -177,6 +209,35 @@ jobs:
             echo "DEFAULT_MCP_VERSION in mcp/runtime/exakit.py must equal components.mcp.version" >&2
             exit 1
           fi
+
+  personal-s3-digest-verify:
+    name: verify Personal S3 raw binary digests
+    needs: changes
+    if: needs.changes.outputs.versions == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: hash every advertised versioned S3 executable
+        run: |
+          set -euo pipefail
+          version="$(python3 -c 'import json; print(json.load(open("versions.json"))["components"]["personal"]["version"])')"
+          base="$(python3 -c 'import json; print(json.load(open("versions.json"))["components"]["personal"]["s3"]["base_url"])')"
+          while read -r platform expected; do
+            os="${platform%%-*}"
+            arch="${platform#*-}"
+            binary=exasol
+            if [ "$os" = windows ]; then binary=exasol.exe; fi
+            curl -fLsS --proto '=https' --retry 3 --connect-timeout 15 \
+              --speed-limit 1024 --speed-time 60 \
+              "$base/$os/$arch/$version/$binary" -o "/tmp/personal-$platform"
+            actual="$(sha256sum "/tmp/personal-$platform" | cut -d' ' -f1)"
+            if [ "$actual" != "$expected" ]; then
+              echo "Personal S3 $platform: expected $expected, got $actual" >&2
+              exit 1
+            fi
+            rm "/tmp/personal-$platform"
+            echo "Personal S3 $platform verified"
+          done < <(python3 -c 'import json; d=json.load(open("versions.json"))["components"]["personal"]["s3"]["sha256"]; print("\n".join("%s %s" % kv for kv in sorted(d.items())))')
 
   digest-verify:
     name: verify exapump digests
@@ -319,8 +380,8 @@ jobs:
           if personal:
               version = personal.get("version")
               repo = personal.get("repo", "exasol/exasol-personal")
-              # runtime-personal.sh downloads from releases/download/v<version>/,
-              # so the tag it needs is v-prefixed. Check exactly that.
+              # The launcher first tries pinned S3, but GitHub is the verified
+              # fallback; its release tag must therefore exist at v<version>.
               body, reason = fetch("https://api.github.com/repos/%s/releases/tags/v%s"
                                    % (repo, version), token=True)
               if body is None:
@@ -586,7 +647,7 @@ jobs:
           PY
 
   shell-tests:
-    name: shell tests (${{ matrix.os }}, ${{ matrix.shard }}/4)
+    name: shell tests (${{ matrix.os }}, ${{ matrix.shard }}/5)
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -595,14 +656,16 @@ jobs:
         # installer with); the Linux runner ships pwsh, so the PowerShell
         # halves of the parity guards execute instead of being skipped.
         os: [ubuntu-latest, macos-latest]
-        # FOUR SHARDS, SAME SUITES. Run end to end on one macOS runner the
+        # FIVE SHARDS, SAME SUITES. Run end to end on one macOS runner the
         # suites took 29 minutes, and three quarters of that was five suites.
         # Every suite below names the shard it runs in; the long ones are kept
         # apart (the crossing resilience suite alone; bash32-guard with
         # marketplace; versions-manifest with agent-audit; everything small in
-        # the fourth, with the PowerShell suites on Linux). A suite with no
-        # `if:` would run four times - the balance only has to stay rough.
-        shard: [1, 2, 3, 4]
+        # the fourth; the PowerShell crossing suite alone in the fifth - both
+        # runners ship pwsh now, so it is seven minutes on macOS as well). The
+        # wall time is the longest single suite. A suite with no `if:` would
+        # run five times - the balance only has to stay rough.
+        shard: [1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@v7
       - name: bash version
@@ -621,6 +684,8 @@ jobs:
         if: matrix.shard == 2
       - run: bash tests/versions-manifest.sh
         if: matrix.shard == 3
+      - run: bash tests/personal-s3.sh
+        if: matrix.shard == 4
       - run: bash tests/dry-run-matrix.sh
         if: matrix.shard == 3
       - run: bash tests/noninteractive-answers.sh
@@ -774,6 +839,7 @@ jobs:
             pwsh -NoProfile -File tests/uninstall-ps.ps1
             pwsh -NoProfile -File tests/runtime-personal-ps.ps1
             pwsh -NoProfile -File tests/service-scope-ps.ps1
+            pwsh -NoProfile -File tests/personal-s3-ps.ps1
             pwsh -NoProfile -File tests/data-load-shapes-ps.ps1
           elif [ "${EXAKIT_REQUIRE_PS:-0}" = "1" ]; then
             echo "FAIL pwsh is missing on the runner that is supposed to have it" >&2
@@ -781,11 +847,11 @@ jobs:
           else
             echo "pwsh not installed on this runner - PowerShell suites skipped"
           fi
-      # The crossing suite is the one long PowerShell run (minutes, not
-      # seconds), so it shares the shard with its long shell sibling instead of
-      # sitting behind the five quick ones.
+      # The crossing suite is the one long PowerShell run (seven minutes on
+      # either runner), so it has a shard to itself; beside its shell sibling
+      # the two ran back to back for fifteen.
       - name: PowerShell crossing suite
-        if: matrix.shard == 1
+        if: matrix.shard == 5
         env:
           EXAKIT_REQUIRE_PS: ${{ matrix.os == 'ubuntu-latest' && '1' || '0' }}
         run: |

@@ -1,13 +1,23 @@
 {
   "schema_version": 1,
-  "updated": "2026-10-15",
+  "updated": "2026-10-16",
   "kit": {
-    "version": "0.2.1"
+    "version": "0.2.2"
   },
   "components": {
     "personal": {
       "version": "2.3.0",
-      "severity": "normal"
+      "severity": "normal",
+      "s3": {
+        "base_url": "https://x-up.s3.eu-west-1.amazonaws.com/releases/exasol-personal",
+        "sha256": {
+          "linux-arm64": "ab543074586579a9f21cd63a4d2a3e765c89f4af0fc283ed78a46e76ea0de17c",
+          "linux-x86_64": "62f7dcd9da76e54848cf5c53f0de70d1d33908fe994455687d0d4ed5524ab2b9",
+          "macos-arm64": "b1119c8374db7767950f2c87c427267e7dd3914436ea7e72bd637dfc6cf94bac",
+          "macos-x86_64": "fa1e769fc895b4bc0e05cdc3177dd32e67d88266bf81f9901a5efaf87ad50b8e",
+          "windows-x86_64": "cd33517a53a593239a7f489f0f15a8f7fd63cc00c1975e22dd4a3ce7c5c7d73a"
+        }
+      }
     },
     "exapump": {
       "version": "0.13.0",

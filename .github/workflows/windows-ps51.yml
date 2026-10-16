@@ -82,6 +82,10 @@ jobs:
         if: matrix.shard == 2
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/service-scope-ps.ps1
+      - name: Personal S3 fallback under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/personal-s3-ps.ps1
       # The crossing from a container database, executed on the engine that
       # exakit.cmd really runs under: the fault-injection engine and exapump
       # behind .cmd wrappers, every gate, both halves, and the coverage floor.

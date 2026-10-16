@@ -1656,6 +1656,20 @@ function Test-ExakitVersionsDoc {
             }
         }
     }
+    $personalS3 = Get-ManifestValue -Manifest $doc -Path "components.personal.s3"
+    if ($null -ne $personalS3) {
+        if (-not ($personalS3 -is [System.Management.Automation.PSCustomObject])) { return 1 }
+        $base = Get-ManifestValue -Manifest $personalS3 -Path "base_url"
+        if (-not ($base -is [string]) -or $base -notmatch '^https://\S+$') { return 1 }
+        $pins = Get-ManifestValue -Manifest $personalS3 -Path "sha256"
+        if (-not ($pins -is [System.Management.Automation.PSCustomObject])) { return 1 }
+        $platforms = @($pins.PSObject.Properties.Name | Sort-Object)
+        $expected = @("linux-arm64", "linux-x86_64", "macos-arm64", "macos-x86_64", "windows-x86_64")
+        if ((@($platforms) -join ',') -ne ($expected -join ',')) { return 1 }
+        foreach ($pin in $pins.PSObject.Properties) {
+            if (-not ($pin.Value -is [string]) -or $pin.Value -notmatch '^[0-9a-f]{64}$') { return 1 }
+        }
+    }
     return 0
 }
 
@@ -3650,7 +3664,8 @@ function Get-ExakitProxyHint {
 }
 
 function Get-ExakitFile {
-    param([Parameter(Mandatory)][string]$Url, [Parameter(Mandatory)][string]$Dest)
+    param([Parameter(Mandatory)][string]$Url, [Parameter(Mandatory)][string]$Dest,
+          [switch]$Soft)
     New-Item -ItemType Directory -Force -Path (Split-Path $Dest -Parent) | Out-Null
     Write-ExakitLog "GET" "$Url -> $Dest"
     # TLS 1.2 explicitly. Windows PowerShell 5.1 runs on .NET Framework, whose
@@ -3665,6 +3680,53 @@ function Get-ExakitFile {
     } catch { }
     # Retry transient failures, mirroring the bash side's curl --retry 3
     # --connect-timeout policy: one network blip must not abort the install.
+    # A download the caller can do without (-Soft) gets a short budget and a
+    # stall cap, which WebClient cannot give (its defaults are 100 s to connect
+    # and 300 s between bytes): a HEAD probe with a 10 s cap answers an
+    # unreachable or blocked host in seconds, then ONE transfer through
+    # HttpWebRequest, 10 s to connect and 20 s between bytes, streamed to disk
+    # in 1 MB pieces; no retry - the caller has a fallback. Twin of fetch's
+    # soft budget in common.sh.
+    if ($Soft -and $Url -match '^https?://') {
+        try {
+            $probe = [System.Net.WebRequest]::Create($Url)
+            $probe.Method = "HEAD"
+            $probe.Timeout = 10000
+            $probe.Proxy = [System.Net.WebRequest]::DefaultWebProxy
+            if ($probe.Proxy) { $probe.Proxy.Credentials = [System.Net.CredentialCache]::DefaultCredentials }
+            $probeResponse = $probe.GetResponse()
+            $probeResponse.Close()
+        } catch {
+            Write-ExakitLog "WARN" "Download skipped, the host did not answer within 10s: $Url ($_)"
+            return $false
+        }
+        # ($Soft is the switch parameter; variable names are case-insensitive, so
+        # the request is never called $soft.)
+        $transfer = $null; $softStream = $null; $softFile = $null
+        try {
+            $transfer = [System.Net.WebRequest]::Create($Url)
+            $transfer.Timeout = 10000
+            $transfer.ReadWriteTimeout = 20000
+            $transfer.UserAgent = "exakit"
+            $transfer.Proxy = [System.Net.WebRequest]::DefaultWebProxy
+            if ($transfer.Proxy) { $transfer.Proxy.Credentials = [System.Net.CredentialCache]::DefaultCredentials }
+            $softResponse = $transfer.GetResponse()
+            $softStream = $softResponse.GetResponseStream()
+            $softFile = [System.IO.File]::Create($Dest)
+            $piece = New-Object byte[] 1048576
+            while (($got = $softStream.Read($piece, 0, $piece.Length)) -gt 0) { $softFile.Write($piece, 0, $got) }
+            $softFile.Dispose(); $softFile = $null
+            $softStream.Dispose(); $softStream = $null
+            $softResponse.Close()
+            return $true
+        } catch {
+            if ($softFile) { $softFile.Dispose() }
+            if ($softStream) { $softStream.Dispose() }
+            Remove-Item -Force $Dest -ErrorAction SilentlyContinue
+            Write-ExakitLog "WARN" "Download failed: $Url ($_)"
+            return $false
+        }
+    }
     $attempt = 0
     while ($true) {
         $attempt++
@@ -3693,6 +3755,7 @@ function Get-ExakitFile {
             break
         } catch {
             Remove-Item -Force $Dest -ErrorAction SilentlyContinue
+            if ($Soft) { Write-ExakitLog "WARN" "Download failed: $Url ($_)"; return $false }
             $proxyHint = Get-ExakitProxyHint "$_"
             # A 407 is the proxy, not the network: retrying it three times only
             # wastes 15 seconds before saying the same thing.
@@ -3706,6 +3769,7 @@ function Get-ExakitFile {
             Start-Sleep -Seconds (5 * $attempt)
         }
     }
+    if ($Soft) { return $true }
 }
 
 # Get-ExakitSha256 - the digest of a file, without depending on a cmdlet that

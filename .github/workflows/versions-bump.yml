@@ -123,6 +123,32 @@ jobs:
                       time.sleep(2 * (attempt + 1))
               return None, last
 
+          def fetch_sha256(url):
+              # Stream large Personal executables instead of holding each one
+              # in memory. Never publish a new version with old S3 pins.
+              request = urllib.request.Request(url, headers={"User-Agent": "exakit-versions-bump"})
+              last = "unknown error"
+              for attempt in range(3):
+                  try:
+                      digest = hashlib.sha256()
+                      total = 0
+                      with urllib.request.urlopen(request, timeout=60) as response:
+                          expected = response.getheader("Content-Length")
+                          for chunk in iter(lambda: response.read(1024 * 1024), b""):
+                              digest.update(chunk)
+                              total += len(chunk)
+                      # A truncated body hashes cleanly: read() answers b"" at a
+                      # dropped connection instead of raising, so the byte count
+                      # is compared with what the server announced and a short
+                      # read goes through the retry like any other failure.
+                      if expected is not None and total != int(expected):
+                          raise IOError("short read: %d of %s bytes" % (total, expected))
+                      return digest.hexdigest(), None
+                  except Exception as error:
+                      last = str(error)
+                      time.sleep(2 * (attempt + 1))
+              return None, last
+
           def numbers(version, width=6):
               """The leading numeric tuple, zero-padded so 2.1 and 2.1.0 rank equal."""
               head = re.match(r"^v?(\d+(?:\.\d+)*)", version.strip())
@@ -177,8 +203,29 @@ jobs:
                           candidates.append(match.group(1))
                   winner = pick(candidates, personal["version"], "personal", semver_key)
                   if winner:
-                      bumped["personal"] = (personal["version"], winner)
-                      personal["version"] = winner
+                      s3 = personal.get("s3") or {}
+                      base = (s3.get("base_url") or "").rstrip("/")
+                      if not base.startswith("https://"):
+                          notes.append("- `personal`: %s is available but the S3 base URL is missing; left alone" % winner)
+                      else:
+                          digests = {}
+                          failed = None
+                          for platform in sorted((s3.get("sha256") or {})):
+                              os_name, arch = platform.split("-", 1)
+                              binary = "exasol.exe" if os_name == "windows" else "exasol"
+                              url = "%s/%s/%s/%s/%s" % (base, os_name, arch, winner, binary)
+                              digest, why = fetch_sha256(url)
+                              if not digest:
+                                  failed = "%s (%s)" % (platform, why)
+                                  break
+                              digests[platform] = digest
+                          if failed or len(digests) != 5:
+                              notes.append("- `personal`: %s is available but S3 binary %s could not be verified; left alone" %
+                                           (winner, failed or "pins"))
+                          else:
+                              bumped["personal"] = (personal["version"], winner)
+                              personal["version"] = winner
+                              s3["sha256"] = digests
 
           # --- mcp and pyexasol: stable, non-yanked PyPI releases ---------------
           def bump_pypi(key, default_package):
@@ -449,6 +496,10 @@ jobs:
                   summary.append("")
                   summary.append("The five exapump `sha256` digests were recomputed from the "
                                  "downloaded release assets.")
+              if "personal" in bumped:
+                  summary.append("")
+                  summary.append("The five Personal S3 raw-binary `sha256` digests were recomputed ")
+                  summary.append("from the versioned Exasol S3 objects; GitHub release archives retain their own checksums.")
               if "exasol-scheduler" in bumped:
                   summary.append("")
                   summary.append("The five exasol-scheduler `sha256` digests were recomputed from "
