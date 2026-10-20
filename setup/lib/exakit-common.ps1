@@ -4761,6 +4761,18 @@ function Get-ExakitMarketplaceAddons {
             LatestFn     = "Get-JsonTablesLatest"
             EnvVar      = "EXAKIT_JSON_TABLES_VERSION"
             FallbackVar = "JsonTablesVersionFallback"
+        },
+        [pscustomobject]@{
+            Id          = "notebook"
+            Label       = "Notebooks (JupyterLab on Exasol)"
+            InstallFn   = "Install-Notebook"
+            ValidateFn  = "Test-Notebook"
+            UpdateFn    = "Update-Notebook"
+            VersionFn   = "Get-NotebookInstalledVersion"
+            UninstallFn = "Uninstall-Notebook"
+            SummaryFn   = "Get-NotebookSummary"
+            EnvVar      = "EXAKIT_NOTEBOOK_VERSION"
+            FallbackVar = "NotebookVersionFallback"
         }
     )
 }

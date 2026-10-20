@@ -410,6 +410,10 @@ jobs:
                   ("setup/lib/dbt-exasol.sh", "bash", "EXAKIT_DBT_EXASOL_VERSION_FALLBACK"),
                   ("setup/lib/dbt-exasol.ps1", "pwsh", "DbtExasolVersionFallback"),
               ],
+              "notebook": [
+                  ("setup/lib/notebook.sh", "bash", "EXAKIT_NOTEBOOK_VERSION_FALLBACK"),
+                  ("setup/lib/notebook.ps1", "pwsh", "NotebookVersionFallback"),
+              ],
               "exasol-scheduler": [
                   ("setup/lib/exasol-scheduler.sh", "bash", "EXAKIT_EXASOL_SCHEDULER_VERSION_FALLBACK"),
                   ("setup/lib/exasol-scheduler.ps1", "pwsh", "ExasolSchedulerVersionFallback"),

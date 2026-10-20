@@ -140,7 +140,7 @@ cover_every_addon() {
 }
 
 echo "registry:"
-check "addons list carries every registered add-on" "dash-server dbt-exasol exasol-scheduler exasol-vscode json-tables" \
+check "addons list carries every registered add-on" "dash-server dbt-exasol exasol-scheduler exasol-vscode json-tables notebook" \
     "$(exakit_marketplace_addons | cut -d'|' -f1 | tr '\n' ' ' | sed 's/ $//')"
 check "addon module is loaded" "yes" "$(exakit_marketplace_addon_available dash-server && echo yes || echo no)"
 check "component block" "components.dash-server" "$(_exakit_component_block dash-server)"
@@ -230,7 +230,7 @@ run_menu() ( # run_menu <env-answer> — echoes "installed:<ids>" + menu output
 )
 check "none installs nothing" "rc=0 called=" "$(run_menu none)"
 check "naming one addon installs only it" "rc=0 called=dash-server" "$(run_menu dash-server)"
-check "all installs every pending addon" "rc=0 called=dash-server dbt-exasol exasol-scheduler exasol-vscode json-tables" "$(run_menu all)"
+check "all installs every pending addon" "rc=0 called=dash-server dbt-exasol exasol-scheduler exasol-vscode json-tables notebook" "$(run_menu all)"
 _unknown_out="$( (run_menu not-a-tool) 2>&1 || true)"
 check "an unknown id refuses" "yes" "$( (EXAKIT_MARKETPLACE_ADDONS=not-a-tool exakit_marketplace_menu >/dev/null 2>&1); [ $? -ne 0 ] && echo yes || echo no )"
 # An installer that fails must not report success.
@@ -735,8 +735,12 @@ exit 0
 DRAINSTUBEOF
 chmod +x "$WORK/drain-bin/code"
 # The registry's LAST entry is the canary: it is the one a drain loses first.
+# Whatever it is, it must come AFTER exasol-vscode (the row that runs the
+# draining CLI), or there is nothing left for the drain to eat.
 _drain_last="$(exakit_marketplace_addons | tail -1 | cut -d'|' -f1)"
-check "the canary is still the last registry entry" "json-tables" "$_drain_last"
+_drain_last_fn="$(printf '%s' "$_drain_last" | tr '-' '_')"
+check "the canary is registered after exasol-vscode" "yes" \
+    "$(exakit_marketplace_addons | cut -d'|' -f1 | sed -n '/^exasol-vscode$/,$p' | grep -qx "$_drain_last" && [ "$_drain_last" != exasol-vscode ] && echo yes || echo no)"
 # NOTE: the result is computed first and matched with `has`, rather than with a
 # `case` inside the $( ). bash 3.2 - what macOS ships, and what this repo must
 # keep working on - mis-parses a case pattern's closing ')' inside a command
@@ -755,8 +759,8 @@ _drain_installed="$( (
     # would answer "not installed" here for reasons that have nothing to do
     # with the drain.
     manifest_set components.exasol_vscode.version "1.7.0" >/dev/null 2>&1
-    manifest_set components.json_tables.version "v0.2" >/dev/null 2>&1
-    json_tables_installed_version() { printf 'v0.2\n'; }
+    manifest_set "components.$_drain_last_fn.version" "1.0" >/dev/null 2>&1
+    eval "${_drain_last_fn}_installed_version() { printf '1.0\\n'; }"
     exakit_marketplace_installed_addons 2>/dev/null
 ) )"
 has "installed-addon enumeration survives the drain" "$_drain_last" "$_drain_installed"

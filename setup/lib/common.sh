@@ -3448,6 +3448,7 @@ exakit_marketplace_addons() {
     printf '%s\n' "exasol-scheduler|Exasol Scheduler (SQL jobs on a schedule)"
     printf '%s\n' "exasol-vscode|Exasol for VS Code (editor extension)"
     printf '%s\n' "json-tables|JSON Tables (JSON into Exasol)"
+    printf '%s\n' "notebook|Notebooks (JupyterLab on Exasol)"
 }
 
 # _exakit_addon_fn <id> <suffix> — the module function for an add-on.

@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "id": "notebook",
+  "kind": "addon",
+  "title": "Notebooks",
+  "tagline": "Notebooks connected to the local database, in your JupyterLab or one the kit installs when you say yes.",
+  "role": "Installs Exasol's notebook connector (the package AI Lab is built on), pyexasol, the Langfuse and OpenAI clients, the kit's notebook helpers and a Jupyter kernel named 'Exasol (Starter Kit)' in an environment of their own. It does not install JupyterLab behind your back: a JupyterLab you already have is used, with the kit's kernel in it; when there is none you are asked, and a skip installs nothing and tells you where to get it.",
+  "repo": "exasol/notebook-connector",
+  "docs": "https://github.com/exasol/notebook-connector#readme",
+  "package": "exasol-notebook-connector",
+  "credentials": "The connection lives in the connector's encrypted configuration store (~/.exasol-starter-kit/notebook/connection.scs). Its master password and the JupyterLab token are kit credentials in ~/.exasol-starter-kit/credentials, readable by you only. The kernel's spec names only those two file paths, and the helpers read them, so no kernel spec, notebook or output ever holds a secret. The notebooks connect as the kit's admin user, because building tables and UDFs needs it.",
+  "installed_by": "exakit marketplace notebook (EXAKIT_MARKETPLACE_ADDONS=notebook for a script).",
+  "platforms": "macOS on Apple silicon, Linux x86_64 (including WSL) and Windows x86_64. The connector supports Python 3.11 and 3.12; the kit's managed interpreter is 3.12. Linux on Arm is not offered: one of the connector's dependencies publishes no Linux Arm build.",
+  "quickstart": [
+    {
+      "step": "Install it",
+      "run": "exakit marketplace notebook",
+      "note": "About 1 GB: the connector brings PyTorch for its transformer features (the CPU-only build on Linux). JupyterLab is not part of it: if you have none, you are asked."
+    },
+    {
+      "step": "Open the notebooks",
+      "run": "exakit notebook",
+      "note": "JupyterLab in the background, opened in your browser, logged in. start_here.ipynb, explore.ipynb and train.ipynb are in ~/.exasol-starter-kit/notebooks."
+    },
+    {
+      "step": "Stop JupyterLab",
+      "run": "exakit notebook --stop"
+    }
+  ],
+  "commands": [
+    {
+      "command": "exakit notebook",
+      "options": "[--check] [--setup] [--stop] [--no-browser] [--port <number>]",
+      "summary": "Start JupyterLab in the background, connected, and open it; --stop stops it; --check proves the connection; --setup settles JupyterLab without starting it.",
+      "examples": [
+        "exakit notebook",
+        "exakit notebook --check",
+        "exakit notebook --stop"
+      ]
+    }
+  ],
+  "notes": [
+    "JupyterLab is yours to choose. A JupyterLab already on your machine is used as it is; the kit only adds its kernel, 'Exasol (Starter Kit)', which VS Code and other Jupyter front ends offer too. When there is none, the kit asks before installing one into its own notebook environment; skip, and it prints https://jupyter.org/install and the command to run once you have it: exakit notebook. EXAKIT_NOTEBOOK_JUPYTER=install or skip answers without a terminal.",
+    "Choose the kernel 'Exasol (Starter Kit)' for a notebook of your own: the helpers only find the connection on it.",
+    "In a notebook: import exakit_nb; conn = exakit_nb.connect() opens the database, exakit_nb.sql(conn, '...') runs a query into a DataFrame and remembers it, and exakit_nb.show_sql() prints the last statement.",
+    "Model-call tracing is opt-in: with LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY and LANGFUSE_HOST set before exakit notebook, exakit_nb.trace(...) records the calls in your own Langfuse project. Without them it says tracing is off and does nothing else.",
+    "Exasol's AI Lab notebooks that use only the database run here. Those that upload to BucketFS, install the Transformers or Text AI extensions or deploy a container through BucketFS do not: a local Exasol Personal database has no BucketFS upload service. Use exakit udf-file and exakit udf-use instead.",
+    "A notebook you edited is never overwritten: an update copies only notebooks you do not have yet.",
+    "An AI Lab or a JupyterLab of your own on the same machine is left alone.",
+    "explore.ipynb runs on any dataset with a descriptor: set DATASET in its first code cell to pharma_trials, banking_complaints, or the path of your own descriptor.json, and every query is built from the descriptor's roles and printed before its result. A small scikit-learn model trains on this computer. Its text step sends a few rows to your own model endpoint only when EXAKIT_NB_MODEL (the model name) is set before exakit notebook, with the endpoint and key in OPENAI_BASE_URL and OPENAI_API_KEY; with the LANGFUSE_* variables set too, those calls are one trace tagged with the dataset, the descriptor's digest, the database session and the SQL.",
+    "train.ipynb trains a text classifier inside the database with a Python UDF (the database's own Python and scikit-learn) and logs the run with exasol-mlflow from the notebook: parameters, metrics, the training SQL, the model file and the session, statement and deployment it came from. The run goes to MLFLOW_TRACKING_URI when set before exakit notebook, else to a local MLflow store in the mlflow folder beside the notebook. The UDF holds no MLflow credentials and needs no network."
+  ],
+  "troubleshooting": [
+    {
+      "symptom": "JupyterLab is not installed, so the notebooks have nothing to open in",
+      "remedy": "exakit notebook --setup"
+    },
+    {
+      "symptom": "This notebook is not running on the kit's kernel",
+      "remedy": "exakit notebook"
+    },
+    {
+      "symptom": "exakit notebook says the add-on is not installed",
+      "remedy": "exakit marketplace notebook"
+    },
+    {
+      "symptom": "A notebook cannot connect",
+      "remedy": "exakit notebook --check"
+    },
+    {
+      "symptom": "JupyterLab does not start because another Jupyter answers on the port",
+      "remedy": "exakit notebook --port 8890"
+    },
+    {
+      "symptom": "import exakit_nb fails",
+      "remedy": "exakit update notebook"
+    },
+    {
+      "symptom": "JupyterLab did not answer in time",
+      "remedy": "exakit logs notebook"
+    },
+    {
+      "symptom": "explore.ipynb says the descriptor does not match the database",
+      "remedy": "exakit data-load pharma_trials"
+    }
+  ],
+  "see_also": [
+    "exakit marketplace",
+    "pyexasol"
+  ]
+}

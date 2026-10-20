@@ -1110,16 +1110,31 @@ for _rp_ln in $(grep -n 'destroy --remove' "$_rp_file" \
     _rp_gate="$(printf '%s\n' "$_rp_head" | grep -n 'confirm_env EXAKIT_REPLACE_DB\|!= "--data"' | tail -1 | cut -d: -f1)"
     _rp_fn="$(printf '%s\n' "$_rp_head" | grep -n '^[a-z_][a-z_0-9]*() {' | tail -1 | cut -d: -f1)"
     if [ -z "$_rp_gate" ] || [ "${_rp_gate:-0}" -lt "${_rp_fn:-0}" ]; then
-        _rp_ungated="$_rp_ungated $_rp_ln"
+        # A destroy inside a helper is gated when EVERY call of that helper is:
+        # each caller line needs a gate above it in its own function. One level
+        # deep, on purpose - a helper of a helper would hide the gate too well.
+        _rp_name="$(printf '%s\n' "$_rp_head" | sed -n "${_rp_fn:-0}p" | sed 's/() {.*//')"
+        _rp_callers="$(grep -n "\b$_rp_name\b" "$_rp_file" | grep -v "^[0-9]*:$_rp_name() {" | grep -v '^[0-9]*:[[:space:]]*#' | cut -d: -f1)"
+        [ -n "$_rp_callers" ] || _rp_ungated="$_rp_ungated $_rp_ln"
+        for _rp_cl in $_rp_callers; do
+            _rp_chead="$(sed -n "1,${_rp_cl}p" "$_rp_file")"
+            _rp_cgate="$(printf '%s\n' "$_rp_chead" | grep -n 'confirm_env EXAKIT_REPLACE_DB\|!= "--data"' | tail -1 | cut -d: -f1)"
+            _rp_cfn="$(printf '%s\n' "$_rp_chead" | grep -n '^[a-z_][a-z_0-9]*() {' | tail -1 | cut -d: -f1)"
+            if [ -z "$_rp_cgate" ] || [ "${_rp_cgate:-0}" -lt "${_rp_cfn:-0}" ]; then
+                _rp_ungated="$_rp_ungated $_rp_ln(via $_rp_cl)"
+            fi
+        done
     fi
 done
 check "no deploy path destroys without consent" "none" "${_rp_ungated:-none}"
 # ...and the enumeration is not vacuously empty: if the grep above stops
 # matching (the launcher subcommand gets renamed, say), the loop body never
 # runs and the check above passes having examined nothing.
+# Two today: the one destroy, in personal_destroy (its callers are the gated
+# sites, checked above), and the rollback registration.
 _rp_sites="$(grep -c 'destroy --remove' "$_rp_file")"
 check "...and the destroy sites were actually found" "yes" \
-    "$([ "${_rp_sites:-0}" -ge 3 ] && echo yes || echo no)"
+    "$([ "${_rp_sites:-0}" -ge 2 ] && grep -q '^personal_destroy() {' "$_rp_file" && echo yes || echo no)"
 # MAC-01: one PATH-persistence policy - the second writer delegates to the
 # Darwin-aware ensure_path_hint instead of preferring ~/.bashrc.
 has "the second PATH writer delegates to the one Darwin-aware policy" \

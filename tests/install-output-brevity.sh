@@ -484,7 +484,10 @@ has "exasol-scheduler has a summary" 'function Get-ExasolSchedulerSummary' "$(ca
 has "dbt-exasol has a summary"      'function Get-DbtExasolSummary'      "$(cat "$ROOT/setup/lib/dbt-exasol.ps1")"
 # Counted from the registry, so a new add-on that forgets its SummaryFn row
 # fails here by count even before its own has-check exists.
-check "every add-on is registered" "5" "$(printf '%s\n' "$COMMON_PS1" | grep -cE 'SummaryFn *= *"')"
+has "notebook has a summary"        'function Get-NotebookSummary'        "$(cat "$ROOT/setup/lib/notebook.ps1")"
+# The shell registry is the count, so adding an add-on needs no edit here.
+_addon_count="$(sed -n '/^exakit_marketplace_addons() {/,/^}/p' "$ROOT/setup/lib/common.sh" | grep -c "printf")"
+check "every add-on is registered" "$_addon_count" "$(printf '%s\n' "$COMMON_PS1" | grep -cE 'SummaryFn *= *"')"
 has "the apply loop reads the hook" '$addon.PSObject.Properties["SummaryFn"]' "$COMMON_PS1"
 has "and only when it resolves"     'Get-Command $addon.SummaryFn -ErrorAction SilentlyContinue' "$COMMON_PS1"
 

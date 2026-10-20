@@ -88,6 +88,10 @@ jobs:
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/personal-s3-ps.ps1
       # A stale launcher lock no longer blocks an uninstall, against a .cmd stub
       # launcher and a real process holding the launcher's image name.
+      - name: the notebook add-on under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/notebook-addon-ps.ps1
       - name: destroy through a stale lock under 5.1
         if: matrix.shard == 2
         shell: powershell

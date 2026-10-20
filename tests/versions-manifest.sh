@@ -236,6 +236,7 @@ for _path in kit.version components.personal.version components.personal.severit
              components.mcp.package components.pyexasol.version \
              components.dash-server.version components.dash-server.repo \
              components.dbt-exasol.version components.dbt-exasol.package \
+             components.notebook.version components.notebook.package \
              components.exasol-vscode.version components.exasol-vscode.sha256.vsix \
              components.exapump.sha256.macos-aarch64 \
              components.exapump.sha256.windows-x86_64; do

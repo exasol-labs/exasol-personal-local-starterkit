@@ -88,7 +88,7 @@ jobs:
 
           expected = {"personal", "exapump", "mcp", "pyexasol", "skills",
                       "dash-server", "exasol-vscode", "json-tables",
-                      "exasol-scheduler", "dbt-exasol"}
+                      "exasol-scheduler", "dbt-exasol", "notebook"}
           components = doc.get("components") or {}
           if set(components) != expected:
               problems.append("components must be exactly %s, found %s"
@@ -400,6 +400,9 @@ jobs:
           # v-prefixed (v1.12.1) while the PyPI versions are not (1.12.1).
           if components.get("dbt-exasol"):
               check_pypi("dbt-exasol", components["dbt-exasol"], "dbt-exasol")
+          # The notebook add-on installs Exasol's notebook connector from PyPI.
+          if components.get("notebook"):
+              check_pypi("notebook", components["notebook"], "exasol-notebook-connector")
 
           # --- the marketplace add-ons (GitHub-release-installed) --------------
           # Each installs from its release tag, so the tag the installer
@@ -759,6 +762,15 @@ jobs:
       # half against a fake exapump (refuse an existing schema, drop its own).
       - run: python3 tests/test_dataset_check.py
         if: matrix.shard == 4
+      # The notebook add-on: one pinned resolution, notebooks never
+      # overwritten, the command's refusals, uninstall keeps the notebooks;
+      # the exakit_nb helpers and exasol-mlflow against fakes.
+      - run: bash tests/notebook-addon.sh
+        if: matrix.shard == 4
+      - run: python3 tests/test_notebook_helpers.py
+        if: matrix.shard == 4
+      - run: python3 tests/test_exasol_mlflow.py
+        if: matrix.shard == 4
       - run: bash tests/reap-orphan-daemon.sh
         if: matrix.shard == 4
       - run: bash tests/service-scope.sh
@@ -849,6 +861,7 @@ jobs:
             pwsh -NoProfile -File tests/service-scope-ps.ps1
             pwsh -NoProfile -File tests/personal-s3-ps.ps1
             pwsh -NoProfile -File tests/personal-destroy-lock-ps.ps1
+            pwsh -NoProfile -File tests/notebook-addon-ps.ps1
             pwsh -NoProfile -File tests/data-load-shapes-ps.ps1
           elif [ "${EXAKIT_REQUIRE_PS:-0}" = "1" ]; then
             echo "FAIL pwsh is missing on the runner that is supposed to have it" >&2

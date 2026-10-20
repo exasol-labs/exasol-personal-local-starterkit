@@ -1,0 +1,13 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "exakit-nb"
+version = "0.1.0"
+description = "Helpers for the Exasol Personal Local Starter Kit's notebooks: the kit's connection, the SQL a cell ran, opt-in tracing."
+requires-python = ">=3.11,<3.13"
+license = "MIT"
+
+[tool.setuptools]
+packages = ["exakit_nb"]

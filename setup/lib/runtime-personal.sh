@@ -2129,18 +2129,6 @@ personal_stop() {
 # The launcher's words for a deployment whose lock another run holds.
 PERSONAL_LOCKED_TEXT="locked by another operation"
 
-# _personal_destroy_once FILE — one `destroy --remove --auto-approve`, its
-# output into FILE (and the log), under the spinner. Returns the launcher's rc.
-_personal_destroy_once() {
-    _exakit_log_file "CMD   $(personal_cli) destroy --remove --auto-approve"
-    ui_spin_begin "${EXAKIT_ACTIVE_LABEL:-working}"
-    "$(personal_cli)" destroy --remove --auto-approve > "$1" 2>&1
-    _pdo_rc=$?
-    ui_spin_end
-    [ -n "${EXAKIT_LOG_FILE:-}" ] && cat "$1" >> "$EXAKIT_LOG_FILE"
-    return $_pdo_rc
-}
-
 # personal_unlock_stale — release the deployment's lock when no launcher holds
 # it: a launcher that crashed or was killed leaves its lock behind, and then
 # even `destroy` refuses, leaving the database running and its folder on disk.
@@ -2155,21 +2143,30 @@ personal_unlock_stale() {
     run_logged "$(personal_cli)" diag unlock --auto-approve
 }
 
-# personal_destroy — destroy the deployment and remove its folder. A stale lock
-# (see personal_unlock_stale) is released and the destroy tried once more.
-# When it still fails, PERSONAL_DESTROY_ERROR holds the launcher's own last
-# error line for the warning (the log keeps all of it). Returns the outcome.
+# personal_destroy — destroy the deployment and remove its folder. Called only
+# from behind a consent gate (teardown's --data guard, or the replace question);
+# tests/agent-operability.sh checks every caller. A stale lock (see
+# personal_unlock_stale) is released and the destroy tried once more. When it
+# still fails, PERSONAL_DESTROY_ERROR holds the launcher's own last error line
+# for the warning (the log keeps all of it). Returns the outcome.
 personal_destroy() {
     PERSONAL_DESTROY_ERROR=""
     _pd_out="$(mktemp "${TMPDIR:-/tmp}/exakit-destroy.XXXXXX")" || return 1
-    if _personal_destroy_once "$_pd_out"; then
-        rm -f "$_pd_out"
-        return 0
-    fi
-    if grep -q "$PERSONAL_LOCKED_TEXT" "$_pd_out" && personal_unlock_stale && _personal_destroy_once "$_pd_out"; then
-        rm -f "$_pd_out"
-        return 0
-    fi
+    _pd_try=1
+    while :; do
+        _exakit_log_file "CMD   $(personal_cli) destroy (attempt $_pd_try, removing the deployment folder)"
+        ui_spin_begin "${EXAKIT_ACTIVE_LABEL:-working}"
+        "$(personal_cli)" destroy --remove --auto-approve > "$_pd_out" 2>&1
+        _pd_rc=$?
+        ui_spin_end
+        [ -n "${EXAKIT_LOG_FILE:-}" ] && cat "$_pd_out" >> "$EXAKIT_LOG_FILE"
+        if [ "$_pd_rc" -eq 0 ]; then
+            rm -f "$_pd_out"
+            return 0
+        fi
+        [ "$_pd_try" = 1 ] && grep -q "$PERSONAL_LOCKED_TEXT" "$_pd_out" && personal_unlock_stale || break
+        _pd_try=2
+    done
     PERSONAL_DESTROY_ERROR="$(grep -i -E 'error|fail|cannot|could not|denied' "$_pd_out" | tail -1 | cut -c1-300)"
     [ -n "$PERSONAL_DESTROY_ERROR" ] || PERSONAL_DESTROY_ERROR="$(grep -v '^[[:space:]]*$' "$_pd_out" | tail -1 | cut -c1-300)"
     [ -n "$PERSONAL_DESTROY_ERROR" ] || PERSONAL_DESTROY_ERROR="nothing more"

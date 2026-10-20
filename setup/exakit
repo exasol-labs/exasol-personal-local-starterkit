@@ -62,6 +62,8 @@
 #   marketplace         browse optional add-ons (dash-server, ...) and install
 #                       the ones you select; installed add-ons then update
 #                       through `exakit update` like every other component
+#   notebook            open JupyterLab connected to the database (the notebook
+#                       add-on); --check, --setup, --stop, --no-browser, --port N
 #   upgrade-kit2        add the Kit 2 trust assets (Trusted AI Workflow add-on)
 #                       on top of this install; nothing is reinstalled
 #   rollback-kit2       remove exactly what upgrade-kit2 added; the database and
@@ -169,6 +171,7 @@ fi
 [ -f "$_lib_dir/exasol-vscode.sh" ] && . "$_lib_dir/exasol-vscode.sh"
 [ -f "$_lib_dir/json-tables.sh" ] && . "$_lib_dir/json-tables.sh"
 [ -f "$_lib_dir/exasol-scheduler.sh" ] && . "$_lib_dir/exasol-scheduler.sh"
+[ -f "$_lib_dir/notebook.sh" ] && . "$_lib_dir/notebook.sh"
 
 _runtime_type() {
     manifest_get runtime.type 2>/dev/null
@@ -2579,6 +2582,7 @@ case "${1:-help}" in
     sql)      shift; cmd_sql "$@" ;;
     logs)     shift; cmd_logs "$@" ;;
     catalog)  shift; _exakit_refuse_unknown_options catalog "--json,-j" "$@"; cmd_catalog "$@" ;;
+    notebook) shift; command -v notebook_cmd >/dev/null 2>&1 || die "The notebook module is missing from this kit copy. Repair with: exakit update"; notebook_cmd "$@" ;;
     # `exakit help --help` reaches this arm (the universal --help hook skips
     # the help command on purpose), so --help/-h are options here and name
     # the help command's own page, like every other command's --help does.
