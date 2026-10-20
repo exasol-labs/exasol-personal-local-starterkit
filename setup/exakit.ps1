@@ -59,6 +59,10 @@
 #                         through `exakit update` like every other component
 #   notebook              open JupyterLab connected to the database (the notebook
 #                         add-on); --check, --setup, --stop, --no-browser, --port N
+#   udf-setup             Python UDFs: install the official container (udf-devkit)
+#   udf-use               install a container: default, or a tarball; --list
+#   udf-build             build a container from a pinned requirements.txt
+#   udf-file              copy a file into BucketFS; prints the path a UDF reads
 #   upgrade-kit2          add the Kit 2 trust assets (bash paths only for now)
 #   rollback-kit2         remove what upgrade-kit2 added (bash paths only for now)
 #   uninstall [<addon-id>] [-Yes] [-DryRun]
@@ -127,6 +131,7 @@ if (Test-Path (Join-Path $libDir "exasol-vscode.ps1")) { . (Join-Path $libDir "e
 if (Test-Path (Join-Path $libDir "json-tables.ps1")) { . (Join-Path $libDir "json-tables.ps1") }
 if (Test-Path (Join-Path $libDir "exasol-scheduler.ps1")) { . (Join-Path $libDir "exasol-scheduler.ps1") }
 if (Test-Path (Join-Path $libDir "notebook.ps1")) { . (Join-Path $libDir "notebook.ps1") }
+if (Test-Path (Join-Path $libDir "udf-devkit.ps1")) { . (Join-Path $libDir "udf-devkit.ps1") }
 if (Test-Path (Join-Path $libDir "help.ps1")) { . (Join-Path $libDir "help.ps1") }
 
 
@@ -690,65 +695,10 @@ function Invoke-CmdStatus {
 # add-ons opt in through the registry (StatusFn/StartFn/StopFn/AutostartFn), so
 # `exakit start|stop|status` and the boot entry pick a new one up with no
 # wiring here. Windows registers a Startup-folder entry per service.
-function Get-ExakitServiceIds {
-    $ids = @()
-    if (Get-ExakitManifestValue "runtime.type") { $ids += "database" }
-    foreach ($addonId in (Get-ExakitMarketplaceInstalledAddons)) {
-        $addon = Get-ExakitMarketplaceAddon $addonId
-        if ($addon -and $addon.PSObject.Properties["StatusFn"] -and
-            (Get-Command $addon.StatusFn -ErrorAction SilentlyContinue)) { $ids += $addonId }
-    }
-    return $ids
-}
-
-function Get-ExakitServiceStatus {
-    param([Parameter(Mandatory)][string]$Id)
-    if ($Id -eq "database") {
-        switch (Get-RuntimeType) {
-            "personal" { return (Get-PersonalStatus) }
-        }
-        return "unknown"
-    }
-    $addon = Get-ExakitMarketplaceAddon $Id
-    if ($addon -and (Get-Command $addon.StatusFn -ErrorAction SilentlyContinue)) { return (& $addon.StatusFn) }
-    return "unknown"
-}
-
-# Get-ExakitServiceUrl - the address a service is reachable at, or "" when it
-# has none. Optional registry hook (UrlFn), resolved the same generic way as
-# StatusFn/StartFn, so a future add-on gets a `urls` row with no wiring here.
-# Twin of the `url` convention hook that cmd_status resolves via _exakit_addon_fn.
-function Get-ExakitServiceUrl {
-    param([Parameter(Mandatory)][string]$Id)
-    if ($Id -eq "database") { return "" }
-    $addon = Get-ExakitMarketplaceAddon $Id
-    if ($addon -and $addon.PSObject.Properties["UrlFn"] -and
-        (Get-Command $addon.UrlFn -ErrorAction SilentlyContinue)) {
-        try { return "$(& $addon.UrlFn)" } catch { return "" }
-    }
-    return ""
-}
-
-function Start-ExakitService {
-    param([Parameter(Mandatory)][string]$Id)
-    if ($Id -eq "database") { Confirm-ExakitRuntimeRunning -Deploy; return }
-    $addon = Get-ExakitMarketplaceAddon $Id
-    if ($addon -and $addon.PSObject.Properties["StartFn"] -and
-        (Get-Command $addon.StartFn -ErrorAction SilentlyContinue)) { [void](& $addon.StartFn) }
-}
-
-function Stop-ExakitService {
-    param([Parameter(Mandatory)][string]$Id)
-    if ($Id -eq "database") {
-        switch (Get-RuntimeType) {
-            "personal" { Stop-Personal }
-        }
-        return
-    }
-    $addon = Get-ExakitMarketplaceAddon $Id
-    if ($addon -and $addon.PSObject.Properties["StopFn"] -and
-        (Get-Command $addon.StopFn -ErrorAction SilentlyContinue)) { [void](& $addon.StopFn) }
-}
+# Get-ExakitServiceIds, Get-ExakitServiceStatus, Get-ExakitServiceUrl,
+# Start-ExakitService and Stop-ExakitService live in lib/exakit-common.ps1: an
+# add-on module (udf-devkit) stops and starts the services around a database
+# restart, and a module may be loaded by the installer, where this file is not.
 
 
 function Unregister-ExakitAutostart {
@@ -3849,6 +3799,11 @@ try {
         "notebook"     {
             if (-not (Get-Command Invoke-CmdNotebook -ErrorAction SilentlyContinue)) { Fail "The notebook module is missing from this kit copy. Repair with: exakit update" }
             Invoke-CmdNotebook -CmdArgs $RestArgs
+        }
+        { $_ -in @("udf-setup", "udf-use", "udf-build", "udf-file") } {
+            $udfFn = @{ "udf-setup" = "Invoke-CmdUdfSetup"; "udf-use" = "Invoke-CmdUdfUse"; "udf-build" = "Invoke-CmdUdfBuild"; "udf-file" = "Invoke-CmdUdfFile" }[$Command]
+            if (-not (Get-Command $udfFn -ErrorAction SilentlyContinue)) { Fail "The udf-devkit module is missing from this kit copy. Repair with: exakit update" }
+            & $udfFn -CmdArgs $RestArgs
         }
         "catalog"      {
             Assert-ExakitKnownOptions -CommandName "catalog" -Allowed @("--json", "-j") -Arguments $RestArgs

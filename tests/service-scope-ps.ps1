@@ -32,11 +32,16 @@ function Lacks($label, $needle, $haystack) {
 $wanted = @("Resolve-ExakitServiceScope", "Get-ExakitServiceIds", "Get-ExakitServiceStatus",
             "Start-ExakitService", "Stop-ExakitService", "Stop-ExakitDatabaseScoped",
             "Invoke-CmdStart", "Invoke-CmdStop")
-$tokens = $null; $errors = $null
-$ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repo "setup\exakit.ps1"), [ref]$tokens, [ref]$errors)
-if ($errors.Count -gt 0) { throw "setup/exakit.ps1 does not parse: $($errors[0].Message)" }
-$defs = @($ast.FindAll({ param($n) ($n -is [System.Management.Automation.Language.FunctionDefinitionAst]) -and ($wanted -contains $n.Name) }, $true))
-Check "every function under test is defined in exakit.ps1" $wanted.Count $defs.Count
+# The service set itself lives in lib/exakit-common.ps1 (an add-on module stops
+# and starts services around a restart); the scoped commands stay in the CLI.
+$defs = @()
+foreach ($file in @("setup\exakit.ps1", "setup\lib\exakit-common.ps1")) {
+    $tokens = $null; $errors = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repo $file), [ref]$tokens, [ref]$errors)
+    if ($errors.Count -gt 0) { throw "$file does not parse: $($errors[0].Message)" }
+    $defs += @($ast.FindAll({ param($n) ($n -is [System.Management.Automation.Language.FunctionDefinitionAst]) -and ($wanted -contains $n.Name) }, $true))
+}
+Check "every function under test is defined in exakit.ps1 or lib/exakit-common.ps1" $wanted.Count $defs.Count
 foreach ($d in $defs) { . ([scriptblock]::Create($d.Extent.Text)) }
 
 # --- the machine, replaced by echoes --------------------------------------------

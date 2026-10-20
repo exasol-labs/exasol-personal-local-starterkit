@@ -42,7 +42,7 @@
       "severity": "normal"
     },
     "skills": {
-      "version": "1.13.0",
+      "version": "1.14.0",
       "severity": "normal"
     },
     "dash-server": {
@@ -93,6 +93,10 @@
     "notebook": {
       "version": "3.1.0",
       "package": "exasol-notebook-connector",
+      "severity": "normal"
+    },
+    "udf-devkit": {
+      "version": "0.1.0",
       "severity": "normal"
     }
   }

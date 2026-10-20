@@ -88,7 +88,7 @@ jobs:
 
           expected = {"personal", "exapump", "mcp", "pyexasol", "skills",
                       "dash-server", "exasol-vscode", "json-tables",
-                      "exasol-scheduler", "dbt-exasol", "notebook"}
+                      "exasol-scheduler", "dbt-exasol", "notebook", "udf-devkit"}
           components = doc.get("components") or {}
           if set(components) != expected:
               problems.append("components must be exactly %s, found %s"
@@ -771,6 +771,13 @@ jobs:
         if: matrix.shard == 4
       - run: python3 tests/test_exasol_mlflow.py
         if: matrix.shard == 4
+      # The udf-devkit add-on: each container install confirmed, the services
+      # follow the restart, BucketFS never written outside the bucket; the
+      # shared rules (pins, bucket paths, aliases, the smoke UDF).
+      - run: bash tests/udf-devkit-addon.sh
+        if: matrix.shard == 4
+      - run: python3 tests/test_udf_tool.py
+        if: matrix.shard == 4
       - run: bash tests/reap-orphan-daemon.sh
         if: matrix.shard == 4
       - run: bash tests/service-scope.sh
@@ -862,6 +869,7 @@ jobs:
             pwsh -NoProfile -File tests/personal-s3-ps.ps1
             pwsh -NoProfile -File tests/personal-destroy-lock-ps.ps1
             pwsh -NoProfile -File tests/notebook-addon-ps.ps1
+            pwsh -NoProfile -File tests/udf-devkit-addon-ps.ps1
             pwsh -NoProfile -File tests/data-load-shapes-ps.ps1
           elif [ "${EXAKIT_REQUIRE_PS:-0}" = "1" ]; then
             echo "FAIL pwsh is missing on the runner that is supposed to have it" >&2

@@ -841,7 +841,7 @@ if grep -q 'exakit_service_ids()' "$ROOT/setup/lib/common.sh" && \
    grep -q 'dash_server_start()' "$ROOT/setup/lib/dash-server.sh" && \
    grep -q 'dash_server_autostart_command()' "$ROOT/setup/lib/dash-server.sh" && \
    grep -q 'autostart) shift; _with_notice cmd_autostart' "$ROOT/setup/exakit" && \
-   grep -q 'function Get-ExakitServiceIds' "$ROOT/setup/exakit.ps1" && \
+   grep -q 'function Get-ExakitServiceIds' "$ROOT/setup/lib/exakit-common.ps1" && \
    grep -q 'function Register-ExakitAutostart' "$ROOT/setup/lib/exakit-common.ps1" && \
    grep -q 'function Enable-ExakitAutostart' "$ROOT/setup/exakit.ps1" && \
    grep -q 'function Get-DashServerStatus' "$ROOT/setup/lib/dash-server.ps1" && \

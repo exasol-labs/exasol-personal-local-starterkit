@@ -485,6 +485,7 @@ has "dbt-exasol has a summary"      'function Get-DbtExasolSummary'      "$(cat 
 # Counted from the registry, so a new add-on that forgets its SummaryFn row
 # fails here by count even before its own has-check exists.
 has "notebook has a summary"        'function Get-NotebookSummary'        "$(cat "$ROOT/setup/lib/notebook.ps1")"
+has "udf-devkit has a summary"      'function Get-UdfDevkitSummary'      "$(cat "$ROOT/setup/lib/udf-devkit.ps1")"
 # The shell registry is the count, so adding an add-on needs no edit here.
 _addon_count="$(sed -n '/^exakit_marketplace_addons() {/,/^}/p' "$ROOT/setup/lib/common.sh" | grep -c "printf")"
 check "every add-on is registered" "$_addon_count" "$(printf '%s\n' "$COMMON_PS1" | grep -cE 'SummaryFn *= *"')"

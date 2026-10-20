@@ -140,7 +140,7 @@ cover_every_addon() {
 }
 
 echo "registry:"
-check "addons list carries every registered add-on" "dash-server dbt-exasol exasol-scheduler exasol-vscode json-tables notebook" \
+check "addons list carries every registered add-on" "dash-server dbt-exasol exasol-scheduler exasol-vscode json-tables notebook udf-devkit" \
     "$(exakit_marketplace_addons | cut -d'|' -f1 | tr '\n' ' ' | sed 's/ $//')"
 check "addon module is loaded" "yes" "$(exakit_marketplace_addon_available dash-server && echo yes || echo no)"
 check "component block" "components.dash-server" "$(_exakit_component_block dash-server)"
@@ -230,7 +230,7 @@ run_menu() ( # run_menu <env-answer> — echoes "installed:<ids>" + menu output
 )
 check "none installs nothing" "rc=0 called=" "$(run_menu none)"
 check "naming one addon installs only it" "rc=0 called=dash-server" "$(run_menu dash-server)"
-check "all installs every pending addon" "rc=0 called=dash-server dbt-exasol exasol-scheduler exasol-vscode json-tables notebook" "$(run_menu all)"
+check "all installs every pending addon" "rc=0 called=dash-server dbt-exasol exasol-scheduler exasol-vscode json-tables notebook udf-devkit" "$(run_menu all)"
 _unknown_out="$( (run_menu not-a-tool) 2>&1 || true)"
 check "an unknown id refuses" "yes" "$( (EXAKIT_MARKETPLACE_ADDONS=not-a-tool exakit_marketplace_menu >/dev/null 2>&1); [ $? -ne 0 ] && echo yes || echo no )"
 # An installer that fails must not report success.
@@ -2140,7 +2140,7 @@ check "json-tables' latest is pinned"          "pinned"   "$(exakit_component_la
 check "the scheduler's latest is looked up"    "upstream" "$(exakit_component_latest_source exasol-scheduler)"
 check "dash-server's latest is looked up"      "upstream" "$(exakit_component_latest_source dash-server)"
 check "a kit component's latest is looked up"  "upstream" "$(exakit_component_latest_source exapump)"
-check "the pinned set is exactly json-tables" "json-tables" \
+check "the pinned set is exactly json-tables and udf-devkit (the kit's own versions)" "json-tables udf-devkit" \
     "$(exakit_pinned_addons | tr '\n' ' ' | sed 's/ $//')"
 _pin_line="$(EXAKIT_VERSION_POLICY=latest exakit_print_versions_source_line 2>&1)"
 has   "the latest-policy source line still says where lookups go" "live upstream lookups" "$_pin_line"

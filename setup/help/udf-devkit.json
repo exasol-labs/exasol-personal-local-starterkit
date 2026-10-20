@@ -1,0 +1,94 @@
+{
+  "schema_version": 1,
+  "id": "udf-devkit",
+  "kind": "addon",
+  "title": "UDF dev kit",
+  "tagline": "Python UDFs on the local database, proven with a smoke test.",
+  "role": "A local Exasol Personal database ships with no script language container, so no Python UDF runs until one is installed, and it has no BucketFS upload service. The UDF dev kit drives the Exasol launcher's container commands for you, checks every install with a UDF that reports each package's version, and copies files a UDF reads into BucketFS.",
+  "docs": "https://github.com/exasol/exasol-personal#readme",
+  "installed_by": "exakit marketplace udf-devkit, or the ml-engineer persona. Installing it installs the official Python container, which restarts the database once.",
+  "platforms": "macOS on Apple silicon, Linux (x86_64 and Arm, including WSL) and Windows x86_64. Needs the Exasol launcher 2.3.0 or later; exakit update personal brings it. Building your own container (exakit udf-build) also needs a running Docker engine and the notebook add-on.",
+  "quickstart": [
+    {
+      "step": "Make Python UDFs work",
+      "run": "exakit udf-setup",
+      "note": "The official Python 3.12 container, alias PYTHON3. The database restarts once."
+    },
+    {
+      "step": "Add the machine-learning packages",
+      "run": "exakit udf-use default",
+      "note": "numpy, pandas and scikit-learn for your CPU, alias PYTHON3_ML."
+    },
+    {
+      "step": "Give a UDF a file",
+      "run": "exakit udf-file model.pkl models/model.pkl",
+      "note": "Prints the path the UDF opens, under /buckets."
+    }
+  ],
+  "commands": [
+    {
+      "command": "exakit udf-setup",
+      "options": "[--force] [--yes]",
+      "summary": "Install the official Python container and prove it.",
+      "examples": [
+        "exakit udf-setup"
+      ]
+    },
+    {
+      "command": "exakit udf-use",
+      "options": "default | <container.tar.gz> [--alias <NAME>] | --list",
+      "summary": "Install the prebuilt or your own container, or list them.",
+      "examples": [
+        "exakit udf-use default",
+        "exakit udf-use --list"
+      ]
+    },
+    {
+      "command": "exakit udf-build",
+      "options": "<requirements.txt> [--alias <NAME>]",
+      "summary": "Build a container with your pinned packages and install it.",
+      "examples": [
+        "exakit udf-build requirements.txt"
+      ]
+    },
+    {
+      "command": "exakit udf-file",
+      "options": "<file> [<path in the bucket>]",
+      "summary": "Copy a file into BucketFS and print the UDF path.",
+      "examples": [
+        "exakit udf-file lookup.csv"
+      ]
+    }
+  ],
+  "notes": [
+    "Every container install restarts the database. You are asked first; --yes answers, and so does a run with no terminal. Running add-on services (dash-server, the scheduler) are stopped before and started again after.",
+    "The smoke UDF lives in the EXAKIT_UDF schema and is replaced on every install. Drop the schema if you want it gone; the next install creates it again.",
+    "Write a UDF for a container with its alias: CREATE OR REPLACE PYTHON3_ML SCALAR SCRIPT ... The official container answers to PYTHON3.",
+    "Uninstalling the add-on leaves the containers in the database, because your UDFs may use them; exasol slc remove <alias> removes one.",
+    "Where BucketFS lives, the aliases and the schema are catalog settings (catalog/addons/udf-devkit/addon.json), so a launcher that changes them is a kit update, not a code change.",
+    "A new version of the UDF dev kit (a 2.0 included) arrives with exakit update, which records it and says when it is a major step. It never replaces a container your UDFs use: install the new prebuilt one when you are ready with exakit udf-use default."
+  ],
+  "troubleshooting": [
+    {
+      "symptom": "The UDF dev kit needs Exasol launcher 2.3.0 or later",
+      "remedy": "exakit update personal"
+    },
+    {
+      "symptom": "No prebuilt container is published for this machine yet",
+      "remedy": "exakit udf-build requirements.txt"
+    },
+    {
+      "symptom": "Building a container needs a running Docker engine (start Docker Desktop or Colima, then retry)",
+      "remedy": "exakit udf-build requirements.txt"
+    },
+    {
+      "symptom": "The database did not come back after the container install",
+      "remedy": "exakit start"
+    }
+  ],
+  "see_also": [
+    "exakit marketplace",
+    "notebook",
+    "exasol-runtime"
+  ]
+}

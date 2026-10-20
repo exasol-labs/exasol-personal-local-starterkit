@@ -2153,7 +2153,11 @@ _hd_missing() { # _hd_missing <file> <header-last-line> -> names not in the head
 import io, os, re, sys
 path = os.path.join(os.environ["ROOT"], os.environ["F"])
 src = io.open(path, encoding="utf-8").read()
-hdr = "\n".join(src.split("\n")[:int(os.environ["N"])])
+# The header is the leading comment block of the file, however long it grows (the
+# line count passed in is a floor, kept for the call sites).
+lines = src.split("\n")
+end = next((i for i, line in enumerate(lines) if i > 0 and not line.startswith("#")), len(lines))
+hdr = "\n".join(lines[:max(end, int(os.environ["N"]))])
 if path.endswith(".ps1"):
     body = re.search(r"switch \(\$Command\) \{(.*?)\n    \}\n", src, re.S).group(1)
     names = {m.group(1) for m in re.finditer(r"^\s{8}\"([a-z0-9-]+)\"", body, re.M)}

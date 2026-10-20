@@ -4773,6 +4773,19 @@ function Get-ExakitMarketplaceAddons {
             SummaryFn   = "Get-NotebookSummary"
             EnvVar      = "EXAKIT_NOTEBOOK_VERSION"
             FallbackVar = "NotebookVersionFallback"
+        },
+        [pscustomobject]@{
+            Id          = "udf-devkit"
+            Label       = "UDF dev kit (Python UDFs on Exasol)"
+            InstallFn   = "Install-UdfDevkit"
+            ValidateFn  = "Test-UdfDevkit"
+            UpdateFn    = "Update-UdfDevkit"
+            VersionFn   = "Get-UdfDevkitInstalledVersion"
+            UninstallFn = "Uninstall-UdfDevkit"
+            SummaryFn   = "Get-UdfDevkitSummary"
+            LatestFn    = "Get-UdfDevkitLatest"
+            EnvVar      = "EXAKIT_UDF_DEVKIT_VERSION"
+            FallbackVar = "UdfDevkitVersionFallback"
         }
     )
 }
@@ -6397,6 +6410,72 @@ function Get-ExakitUpdateTargets {
 }
 
 function Get-RuntimeType { return (Get-ExakitManifestValue "runtime.type") }
+
+# ---------------------------------------------------------------------------
+# Services (twin of the exakit_service_* set in common.sh). Every service
+# answers the same three questions - running, start, stop - and add-ons opt in
+# through the registry (StatusFn/StartFn/StopFn/AutostartFn). Here, not in the
+# CLI, because an add-on module stops and starts them around a restart.
+# ---------------------------------------------------------------------------
+function Get-ExakitServiceIds {
+    $ids = @()
+    if (Get-ExakitManifestValue "runtime.type") { $ids += "database" }
+    foreach ($addonId in (Get-ExakitMarketplaceInstalledAddons)) {
+        $addon = Get-ExakitMarketplaceAddon $addonId
+        if ($addon -and $addon.PSObject.Properties["StatusFn"] -and
+            (Get-Command $addon.StatusFn -ErrorAction SilentlyContinue)) { $ids += $addonId }
+    }
+    return $ids
+}
+
+function Get-ExakitServiceStatus {
+    param([Parameter(Mandatory)][string]$Id)
+    if ($Id -eq "database") {
+        switch (Get-RuntimeType) {
+            "personal" { return (Get-PersonalStatus) }
+        }
+        return "unknown"
+    }
+    $addon = Get-ExakitMarketplaceAddon $Id
+    if ($addon -and (Get-Command $addon.StatusFn -ErrorAction SilentlyContinue)) { return (& $addon.StatusFn) }
+    return "unknown"
+}
+
+# Get-ExakitServiceUrl - the address a service is reachable at, or "" when it
+# has none. Optional registry hook (UrlFn), resolved the same generic way as
+# StatusFn/StartFn, so a future add-on gets a `urls` row with no wiring here.
+# Twin of the `url` convention hook that cmd_status resolves via _exakit_addon_fn.
+function Get-ExakitServiceUrl {
+    param([Parameter(Mandatory)][string]$Id)
+    if ($Id -eq "database") { return "" }
+    $addon = Get-ExakitMarketplaceAddon $Id
+    if ($addon -and $addon.PSObject.Properties["UrlFn"] -and
+        (Get-Command $addon.UrlFn -ErrorAction SilentlyContinue)) {
+        try { return "$(& $addon.UrlFn)" } catch { return "" }
+    }
+    return ""
+}
+
+function Start-ExakitService {
+    param([Parameter(Mandatory)][string]$Id)
+    if ($Id -eq "database") { Confirm-ExakitRuntimeRunning -Deploy; return }
+    $addon = Get-ExakitMarketplaceAddon $Id
+    if ($addon -and $addon.PSObject.Properties["StartFn"] -and
+        (Get-Command $addon.StartFn -ErrorAction SilentlyContinue)) { [void](& $addon.StartFn) }
+}
+
+function Stop-ExakitService {
+    param([Parameter(Mandatory)][string]$Id)
+    if ($Id -eq "database") {
+        switch (Get-RuntimeType) {
+            "personal" { Stop-Personal }
+        }
+        return
+    }
+    $addon = Get-ExakitMarketplaceAddon $Id
+    if ($addon -and $addon.PSObject.Properties["StopFn"] -and
+        (Get-Command $addon.StopFn -ErrorAction SilentlyContinue)) { [void](& $addon.StopFn) }
+}
 
 # The recorded runtime types that belong to a kit OLDER than this one: a
 # database in a container, which this kit neither deploys nor drives.

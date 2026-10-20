@@ -33,7 +33,11 @@
       "title": "Add-ons",
       "commands": [
         "marketplace",
-        "notebook"
+        "notebook",
+        "udf-setup",
+        "udf-use",
+        "udf-build",
+        "udf-file"
       ]
     },
     {
@@ -295,6 +299,46 @@
         "exakit notebook --check",
         "exakit notebook --stop",
         "exakit notebook --port 8890"
+      ]
+    },
+    {
+      "command": "udf-setup",
+      "options": "[--force] [--yes]",
+      "summary": "Python UDFs: install the official Python container and prove it (the udf-devkit add-on).",
+      "description": "Installs the launcher's official Python script language container (alias PYTHON3) when it is missing (--force reinstalls it), then creates and runs a smoke UDF that reports the Python version. Installing a container restarts the database: you are asked first (--yes answers, and so does a run with no terminal), running add-on services are stopped and started again once the database answers. Needs Exasol launcher 2.3.0 or later.",
+      "examples": [
+        "exakit udf-setup",
+        "exakit udf-setup --force --yes"
+      ]
+    },
+    {
+      "command": "udf-use",
+      "options": "default | <container.tar.gz> [--alias <NAME>] [--yes] | --list",
+      "summary": "Install a script language container: the kit's prebuilt one, or a tarball of your own.",
+      "description": "udf-use <container.tar.gz> installs a container tarball under an alias (PYTHON3_CUSTOM unless --alias names one) and proves it with the smoke UDF; the database restarts. udf-use default installs the kit's prebuilt container with numpy, pandas and scikit-learn once one is published (until then it says so). --list shows the launcher's containers and which are installed.",
+      "examples": [
+        "exakit udf-use my-container.tar.gz --alias PYTHON3_ML",
+        "exakit udf-use --list"
+      ]
+    },
+    {
+      "command": "udf-build",
+      "options": "<requirements.txt> [--alias <NAME>] [--yes]",
+      "summary": "Build a container with your pinned packages and install it.",
+      "description": "Builds a script language container with every package of the requirements file (each pinned name==version, so the build is reproducible) using the notebook add-on's container tooling, installs it under an alias (PYTHON3_CUSTOM unless --alias names one) and proves every package with the smoke UDF; the database restarts. Needs the notebook add-on, a running Docker engine and about 25 GB free disk.",
+      "examples": [
+        "exakit udf-build requirements.txt",
+        "exakit udf-build requirements.txt --alias PYTHON3_NLP"
+      ]
+    },
+    {
+      "command": "udf-file",
+      "options": "<file> [<path in the bucket>]",
+      "summary": "Copy a file into BucketFS and print the path a UDF reads it from.",
+      "description": "A local database has no BucketFS upload service: its BucketFS is a folder in the deployment. This copies the file there (to the bucket's root, or the relative path you name - never outside the bucket) and prints the path a UDF opens, under /buckets/bfsdefault/default/.",
+      "examples": [
+        "exakit udf-file model.pkl",
+        "exakit udf-file model.pkl models/model.pkl"
       ]
     },
     {
