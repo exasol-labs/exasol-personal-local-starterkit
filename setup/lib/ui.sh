@@ -1678,7 +1678,14 @@ ui_table_menu() {
             IFS= read -rsn1 _utm_key || break
         fi
         case "$_utm_key" in
-            "") [ -n "$_utm_sel" ] && { EXAKIT_TABLE_CONFIRMED=1; break; } ;;
+            "")
+                # Enter on the exclusive row (Skip) answers Skip, whatever else
+                # is ticked: pending rows start ticked, so "move to Skip, press
+                # Enter" used to load them anyway.
+                if [ -n "${EXAKIT_TABLE_EXCLUSIVE:-}" ] && [ "$_utm_cur" = "$EXAKIT_TABLE_EXCLUSIVE" ]; then
+                    _utm_sel="$_utm_cur"
+                fi
+                [ -n "$_utm_sel" ] && { EXAKIT_TABLE_CONFIRMED=1; break; } ;;
             " ")
                 # A row that cannot be picked cannot be toggled either. The
                 # cursor never rests on one, so this catches only the keypress

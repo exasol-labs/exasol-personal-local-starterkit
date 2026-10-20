@@ -58,7 +58,7 @@ Flags do not travel through a pipe, so choices are env vars. They work on all pl
 |---|---|
 | `EXAKIT_MCP_CLIENTS=claude,cursor` | Which MCP clients to configure, by name: `claude` (= desktop app **and** Claude Code CLI), `claude_desktop`, `claude_code`, `codex`, `cursor`, `vscode_copilot` (also `copilot`), `gemini_cli` (also `gemini`), `opencode`, `continue`, `all`, `skip`. **`all` means every client detected on this machine**, the same set the interactive menu offers — it never writes a config (and the password inside it) for a tool that is not installed. "Detected" means the client's own program or app is present, or a config file with the client's own settings; a config that holds only the kit's entries is the kit's own work and does not count. A client named explicitly is configured whether or not it is installed |
 | `EXAKIT_SKIP_MCP=1` | Skip MCP client setup entirely (run `exakit mcp-setup` later) |
-| `EXAKIT_DATASETS=tpch,weather` | Which bundled datasets to load, by id: `tpch`, `energy`, `weather`. Takes precedence over `EXAKIT_LOAD_SAMPLE` |
+| `EXAKIT_DATASETS=tpch,weather` | Which bundled datasets to load, by id: one per folder in `data/datasets/` (`tpch`, `energy`, `weather`, `pharma_trials`, `banking_complaints`). Takes precedence over `EXAKIT_LOAD_SAMPLE` |
 | `EXAKIT_LOAD_SAMPLE=0\|1` | `0` skip data loading, `1` load the bundled sample (tpch) |
 | `EXAKIT_DATA_FILE=/abs/path/data.json` | Load this local CSV / Parquet / JSON file (skips the data menu; also works standalone: `EXAKIT_DATA_FILE=... exakit data-load`) |
 | `EXAKIT_DATA_TABLE=SCHEMA.TABLE` | Target table for `EXAKIT_DATA_FILE` (default `STARTER_KIT.<FILENAME>`; a nested JSON file fans out to `<TABLE>_*` tables) |

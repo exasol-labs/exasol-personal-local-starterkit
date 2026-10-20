@@ -1,0 +1,34 @@
+{
+  "id": "banking_complaints",
+  "source": {
+    "name": "Consumer Complaint Database (U.S. Consumer Financial Protection Bureau)",
+    "url": "https://www.consumerfinance.gov/data-research/consumer-complaints/search/api/v1/",
+    "query": {
+      "date_received_min": "2025-01-01",
+      "date_received_max": "2025-01-14",
+      "product": [
+        "Credit card",
+        "Mortgage",
+        "Checking or savings account"
+      ]
+    },
+    "builder": "tools/datasets/banking_complaints.py"
+  },
+  "terms": {
+    "url": "https://www.consumerfinance.gov/complaint/data-use/",
+    "license": "CC0 1.0 (the API answers with _meta.license = CC0)",
+    "summary": "Public domain dedication: free to copy, change and redistribute. The CFPB does not verify complaints; a complaint is not a finding against the company.",
+    "confirmed": false
+  },
+  "snapshot": "2026-10-20",
+  "files": {
+    "data/banking_complaints.csv": {
+      "rows": 6754,
+      "sha256": "9fe74d7208327da63e61e04b1a924b3b95c24de9b2067cf88f56e37bafb91315"
+    },
+    "data/banking_responses.csv": {
+      "rows": 6754,
+      "sha256": "abea347bda2df91eada6fa39d928466c377e32093cdf3b13ab70aa8f77f9824e"
+    }
+  }
+}

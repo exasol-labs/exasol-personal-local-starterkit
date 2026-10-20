@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "banking_complaints",
+  "fact_table": "BANKING.BANKING_COMPLAINTS",
+  "roles": {
+    "entity":   {"table": "BANKING.BANKING_COMPLAINTS", "column": "COMPANY"},
+    "category": {"table": "BANKING.BANKING_COMPLAINTS", "column": "PRODUCT"},
+    "date":     {"table": "BANKING.BANKING_COMPLAINTS", "column": "DATE_RECEIVED"},
+    "label":    {"table": "BANKING.BANKING_COMPLAINTS", "column": "MONETARY_RELIEF"},
+    "text":     [{"table": "BANKING.BANKING_COMPLAINTS", "column": "ISSUE"},
+                 {"table": "BANKING.BANKING_COMPLAINTS", "column": "SUB_ISSUE"},
+                 {"table": "BANKING.BANKING_COMPLAINTS", "column": "COMPANY_PUBLIC_RESPONSE"}]
+  }
+}

@@ -1609,7 +1609,13 @@ function Invoke-ExakitTableMenu {
         $confirmed = $false
         $handled = $true
         switch ($key.Key) {
-            "Enter"     { if ($sel.Count -gt 0) { $confirmed = $true; $script:ExakitTableConfirmed = $true } }
+            "Enter"     {
+                # Enter on the exclusive row (Skip) answers Skip, whatever else
+                # is ticked: pending rows start ticked, so "move to Skip, press
+                # Enter" used to load them anyway. Twin of ui_table_menu.
+                if ($ExclusiveIndex -ge 1 -and $cur -eq $ExclusiveIndex) { $sel.Clear(); [void]$sel.Add($ExclusiveIndex) }
+                if ($sel.Count -gt 0) { $confirmed = $true; $script:ExakitTableConfirmed = $true }
+            }
             "Spacebar"  {
                 # A row that cannot be picked cannot be toggled either. The cursor
                 # never rests on one, so this catches only the keypress that

@@ -755,6 +755,10 @@ jobs:
       # `unittest discover` -- tests/ is not an importable package.)
       - run: python3 tests/test_sample_data_schema.py
         if: matrix.shard == 4
+      # tools/dataset_check.py: every file defect named before a load; the live
+      # half against a fake exapump (refuse an existing schema, drop its own).
+      - run: python3 tests/test_dataset_check.py
+        if: matrix.shard == 4
       - run: bash tests/reap-orphan-daemon.sh
         if: matrix.shard == 4
       - run: bash tests/service-scope.sh

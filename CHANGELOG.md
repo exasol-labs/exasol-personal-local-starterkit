@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- **Two reference datasets.** `pharma_trials` (5,169 industry Phase 2/3 trials from ClinicalTrials.gov, in `PHARMA`, label: terminated early) and `banking_complaints` (6,754 CFPB complaints about cards, mortgages and accounts, in `BANKING`, label: monetary relief), each with a descriptor for the persona notebooks, a README with the data dictionary, source and terms, twelve example queries and a manifest with the digest of every file. They load like the others, in seconds. The CFPB no longer publishes complaint narratives, so the banking text is the issue, the sub-issue and the company's public response.
+- **Adding a dataset needs no code.** `python3 tools/dataset_check.py data/datasets/<id>` checks a folder's files (encoding, headers, row widths, empty required values, repeated keys, Exasol's reserved words, schema, markers, verify script, and for a reference dataset its descriptor, manifest, README and examples), then loads it into the database as `exakit data-load` does, verifies it and drops it again. `tests/test_sample_data_schema.py` runs the same file checks on every folder.
+- **Fix: Skip skips.** In the datasets, AI-clients and add-ons tables the rows on offer start ticked, so moving to Skip and pressing Enter went on with them - loading the datasets, or on a database that already had them, asking for a local file. Enter on Skip now answers Skip, on macOS/Linux and Windows.
+
 ## 0.2.2
 
 **The Personal launcher comes from Exasol's S3 bucket first, verified, with

@@ -21,11 +21,28 @@ without a per-schema grant. The `exakit data-load` menu discovers datasets from 
 folders and only offers ones **not already in the database** (verified against the marker
 tables, not just a manifest flag).
 
+**Adding a dataset needs no code.** Put its folder under `datasets/` and check it:
+
+```bash
+python3 tools/dataset_check.py data/datasets/<id>
+```
+
+The check reads the files first - UTF-8 without a byte-order mark, every CSV against its
+`CREATE TABLE` (names, order, row widths, empty `NOT NULL` values, repeated primary keys),
+Exasol's reserved words, the schema it creates, the markers and the verify script - then
+loads the dataset into your database as `exakit data-load` does, verifies it and drops it
+again (`--offline` skips the load; `--keep` leaves it; `--replace` reloads a schema that
+is already there). The kit offers every folder that has a `dataset.conf`. A reference
+dataset (one with a `descriptor.json`, for the persona notebooks) also needs a
+`README.md`, a `manifest.json` and at least ten example queries in `examples.sql`.
+
 | Dataset | Schema | Contents |
 |---|---|---|
 | [`datasets/tpch/`](datasets/tpch/) | `TPCH` | TPC-H retail benchmark (below) — the original sample |
 | [`datasets/energy/`](datasets/energy/) | `ENERGY` | 50 smart meters + 108,000 hourly readings (SQL-generated time series) |
 | [`datasets/weather/`](datasets/weather/) | `WEATHER` | 10 European cities, ~11k days of daily weather (2023–2025) |
+| [`datasets/pharma_trials/`](datasets/pharma_trials/) | `PHARMA` | 5,169 industry Phase 2/3 trials from ClinicalTrials.gov, with a label (terminated early) and a text summary ([README](datasets/pharma_trials/README.md)) |
+| [`datasets/banking_complaints/`](datasets/banking_complaints/) | `BANKING` | 6,754 CFPB consumer complaints about cards, mortgages and accounts, with a label (monetary relief) ([README](datasets/banking_complaints/README.md)) |
 
 ## The TPC-H dataset (`datasets/tpch/`)
 

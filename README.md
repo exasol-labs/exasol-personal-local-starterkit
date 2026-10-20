@@ -104,7 +104,7 @@ exakit mcp-setup
 
 The installer runs this for you, and you can run it again any time to add a client. It lists Claude, Codex, Cursor, GitHub Copilot, Gemini CLI, OpenCode and Continue, greys out the ones already connected or not installed, writes the config for the ones you pick and checks the connection. `exakit mcp-doctor` checks it again later.
 
-Three sample datasets are loaded for you: TPC-H retail in `TPCH`, smart-meter energy readings in `ENERGY` and daily city weather in `WEATHER`. The [data dictionary](data/data-dictionary.md) describes them, and [data/example-questions.md](data/example-questions.md) has 14 questions with reference SQL.
+Five sample datasets are loaded for you: TPC-H retail in `TPCH`, smart-meter energy readings in `ENERGY`, daily city weather in `WEATHER`, pharma clinical trials in `PHARMA` and banking complaints in `BANKING`. The [data dictionary](data/data-dictionary.md) describes them, and [data/example-questions.md](data/example-questions.md) has 14 questions with reference SQL.
 
 Try it: *"Which product category generated the most revenue? Show me the SQL before you run it."*
 

@@ -687,5 +687,12 @@ else
 fi
 rm -f "$_PS_ALL"
 
+printf '\n== Enter on the exclusive row (Skip) answers Skip, on both sides ==\n'
+# The shell side is replayed under a pty in tests/dataset-load-progress.sh; the
+# PowerShell menu reads [Console]::ReadKey, which no test can type into, so its
+# twin is pinned here: on Enter, the cursor on the exclusive row selects it alone.
+has "ui.sh: Enter on the exclusive row selects it alone" '[ "$_utm_cur" = "$EXAKIT_TABLE_EXCLUSIVE" ]' "$ROOT/setup/lib/ui.sh"
+has "ui.ps1: Enter on the exclusive row selects it alone" 'if ($ExclusiveIndex -ge 1 -and $cur -eq $ExclusiveIndex) { $sel.Clear(); [void]$sel.Add($ExclusiveIndex) }' "$ROOT/setup/lib/ui.ps1"
+
 printf '\n%d checks, %d failed\n' "$checks" "$fails"
 [ "$fails" -eq 0 ]

@@ -886,5 +886,19 @@ chmod +x "$EXAKIT_BIN_DIR/exapump"
 exakit_clear_table_listing
 check "a database of only-empty tables still answers" "EXAKIT.LISTING_ANSWERED" "$(exakit_table_listing)"
 
+# Enter on Skip skips. The pending datasets start ticked; a reader who moves to
+# Skip and presses Enter means Skip - the old menu loaded the ticked datasets.
+# And Enter anywhere else still confirms what is ticked.
+if command -v python3 >/dev/null 2>&1; then
+    check "Enter on Skip answers Skip" "SELECTION=none" \
+        "$(python3 "$ROOT/tests/lib/tty-replay.py" "$ROOT/tests/lib/skip-enter-scenario.sh" "$ROOT" \
+            "Datasets to load" 'jjjj\r' 2>&1 | grep '^SELECTION=' || echo 'replay failed')"
+    check "Enter on a dataset loads the ticked ones" "SELECTION=tpch,energy,weather" \
+        "$(python3 "$ROOT/tests/lib/tty-replay.py" "$ROOT/tests/lib/skip-enter-scenario.sh" "$ROOT" \
+            "Datasets to load" '\r' 2>&1 | grep '^SELECTION=' || echo 'replay failed')"
+else
+    check "Enter on Skip answers Skip" "skipped" "skipped"
+fi
+
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
