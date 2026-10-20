@@ -763,6 +763,10 @@ jobs:
       # two facts the Windows install on a laptop with WSL got wrong.
       - run: bash tests/personal-readiness.sh
         if: matrix.shard == 4
+      # A lock a crashed launcher left behind: released (diag unlock) and the
+      # destroy retried only when no launcher runs; the launcher's words quoted.
+      - run: bash tests/personal-destroy-lock.sh
+        if: matrix.shard == 4
       - run: bash tests/deploy-progress.sh
         if: matrix.shard == 3
       - run: bash tests/bulk-folder-load.sh
@@ -840,6 +844,7 @@ jobs:
             pwsh -NoProfile -File tests/runtime-personal-ps.ps1
             pwsh -NoProfile -File tests/service-scope-ps.ps1
             pwsh -NoProfile -File tests/personal-s3-ps.ps1
+            pwsh -NoProfile -File tests/personal-destroy-lock-ps.ps1
             pwsh -NoProfile -File tests/data-load-shapes-ps.ps1
           elif [ "${EXAKIT_REQUIRE_PS:-0}" = "1" ]; then
             echo "FAIL pwsh is missing on the runner that is supposed to have it" >&2

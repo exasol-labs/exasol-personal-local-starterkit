@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- **Fix: an uninstall no longer leaves the database behind after a launcher crash.** A launcher that crashed or was killed leaves a lock on the deployment, and every later `destroy` refused ("locked by another operation"): the database kept running and its folder - gigabytes - stayed. When no launcher process is running, the kit now releases that lock with `exasol diag unlock --auto-approve` and destroys again; a running launcher keeps its lock. When the destroy still fails, the warning quotes the launcher's own error and names the deployment folder, instead of pointing at `exakit logs`, which an uninstall has just removed. Same on macOS/Linux (`personal_destroy`) and Windows (`Invoke-PersonalDestroy`); `tests/personal-destroy-lock.sh` and `tests/personal-destroy-lock-ps.ps1` (also under Windows PowerShell 5.1 in CI).
+
 ## 0.2.2
 
 **The Personal launcher comes from Exasol's S3 bucket first, verified, with
