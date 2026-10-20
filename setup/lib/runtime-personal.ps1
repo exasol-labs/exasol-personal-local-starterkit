@@ -911,8 +911,8 @@ function Install-PersonalDeployment {
         # --auto-approve: destroy has its own [y/N] prompt, which a piped or
         # scripted install cannot answer; the consent came from the explicit
         # replace question (or EXAKIT_REPLACE_DB=1) just above.
-        if ((Invoke-ExakitLogged (Get-PersonalCli) destroy --remove --auto-approve) -ne 0) {
-            Warn2 "Could not fully remove the old deployment; the launcher will deploy over it."
+        if (-not (Invoke-PersonalDestroy)) {
+            Warn2 "Could not fully remove the old deployment (the launcher said: $($script:PersonalDestroyError)); it will deploy over it."
         }
     }
 
@@ -1097,6 +1097,71 @@ function Stop-Personal {
     Ok "Database stopped"
 }
 
+# The launcher's words for a deployment whose lock another run holds.
+$script:PersonalLockedText = "locked by another operation"
+$script:PersonalDestroyError = ""
+
+# Invoke-PersonalDestroyOnce - one `destroy --remove --auto-approve`; returns
+# @(exit code, output lines). The output also goes to the log. Twin of
+# _personal_destroy_once.
+function Invoke-PersonalDestroyOnce {
+    $cli = Get-PersonalCli
+    Write-ExakitLog "CMD" "$cli destroy --remove --auto-approve"
+    $previous = $ErrorActionPreference
+    $spinLabel = if ($script:ExakitActiveLabel) { $script:ExakitActiveLabel } else { "working" }
+    Start-ExakitSpinner $spinLabel
+    try {
+        $ErrorActionPreference = "Continue"
+        $lines = @(& $cli destroy --remove --auto-approve 2>&1 | ForEach-Object {
+            if ($_ -is [System.Management.Automation.ErrorRecord]) { "$($_.Exception.Message)" } else { "$_" }
+        })
+        $code = $LASTEXITCODE
+    } catch {
+        $lines = @("$_")
+        $code = 1
+    } finally {
+        $ErrorActionPreference = $previous
+        Stop-ExakitSpinner
+    }
+    if ($script:LogFile -and $lines.Count) { $lines | Add-Content -Path $script:LogFile }
+    return ,@($code, $lines)
+}
+
+# Unlock-PersonalStale - release the deployment's lock when no launcher holds
+# it (a launcher that crashed or was killed leaves it behind, and then even
+# destroy refuses). A running launcher keeps its lock; the database daemon runs
+# under another image name and does not count. Twin of personal_unlock_stale.
+function Unlock-PersonalStale {
+    $image = [System.IO.Path]::GetFileNameWithoutExtension((Get-PersonalCli))
+    if (Get-Process -Name $image -ErrorAction SilentlyContinue) {
+        Write-ExakitLog "WARN" "the deployment is locked and a launcher is running: not unlocking"
+        return $false
+    }
+    return ((Invoke-ExakitLogged (Get-PersonalCli) diag unlock --auto-approve) -eq 0)
+}
+
+# Invoke-PersonalDestroy - destroy the deployment and remove its folder; a stale
+# lock is released and the destroy tried once more. When it still fails,
+# $script:PersonalDestroyError holds the launcher's own last error line. Twin
+# of personal_destroy.
+function Invoke-PersonalDestroy {
+    $script:PersonalDestroyError = ""
+    $first = Invoke-PersonalDestroyOnce
+    if ($first[0] -eq 0) { return $true }
+    $lines = $first[1]
+    if ((($lines -join "`n") -like "*$($script:PersonalLockedText)*") -and (Unlock-PersonalStale)) {
+        $again = Invoke-PersonalDestroyOnce
+        if ($again[0] -eq 0) { return $true }
+        $lines = $again[1]
+    }
+    $said = @($lines | Where-Object { $_ -match '(?i)error|fail|cannot|could not|denied' } | Select-Object -Last 1)
+    if (-not $said.Count) { $said = @($lines | Where-Object { "$_".Trim() } | Select-Object -Last 1) }
+    $text = if ($said.Count) { "$($said[0])".Trim() } else { "nothing more" }
+    if ($text.Length -gt 300) { $text = $text.Substring(0, 300) }
+    $script:PersonalDestroyError = $text
+    return $false
+}
+
 # Remove-Personal - destroy the deployment and its data. The Podman machine is
 # deliberately untouched: it is shared host-wide, the launcher never
 # reconfigures an existing one, and it stays running after destroy - this
@@ -1106,8 +1171,8 @@ function Remove-Personal {
         Warn2 "An Exasol Personal deployment keeps the database software and your data together - removing it deletes every table you loaded."
         # --auto-approve: the launcher's destroy prompts for confirmation by
         # itself; the caller (uninstall) has already asked its own question.
-        if ((Invoke-ExakitLogged (Get-PersonalCli) destroy --remove --auto-approve) -ne 0) {
-            Warn2 "The launcher reported errors while destroying the deployment. What it said: exakit logs setup"
+        if (-not (Invoke-PersonalDestroy)) {
+            Warn2 "The launcher could not fully remove the deployment (it said: $($script:PersonalDestroyError)). If its folder $($script:PersonalDeployDir) or a database process is still there, restart the computer and delete the folder."
         }
     }
     Set-ExakitManifestValue "runtime.status" "removed"

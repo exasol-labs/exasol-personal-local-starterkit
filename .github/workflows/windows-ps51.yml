@@ -86,6 +86,12 @@ jobs:
         if: matrix.shard == 2
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/personal-s3-ps.ps1
+      # A stale launcher lock no longer blocks an uninstall, against a .cmd stub
+      # launcher and a real process holding the launcher's image name.
+      - name: destroy through a stale lock under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/personal-destroy-lock-ps.ps1
       # The crossing from a container database, executed on the engine that
       # exakit.cmd really runs under: the fault-injection engine and exapump
       # behind .cmd wrappers, every gate, both halves, and the coverage floor.
