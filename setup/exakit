@@ -62,6 +62,8 @@
 #   marketplace         browse optional add-ons (dash-server, ...) and install
 #                       the ones you select; installed add-ons then update
 #                       through `exakit update` like every other component
+#   persona             list | show <id> | apply <id> [--yes]: a named set of
+#                       datasets, AI clients and add-ons (data-scientist, ...)
 #   notebook            open JupyterLab connected to the database (the notebook
 #                       add-on); --check, --setup, --stop, --no-browser, --port N
 #   udf-setup           Python UDFs: install the official container (udf-devkit)
@@ -167,6 +169,7 @@ fi
 # pyexasol is an update target of its own (and its own repair command), so the
 # CLI needs the module even though it takes no part in the runtime commands.
 [ -f "$_lib_dir/pyexasol.sh" ] && . "$_lib_dir/pyexasol.sh"
+[ -f "$_lib_dir/persona.sh" ] && . "$_lib_dir/persona.sh"
 # Marketplace add-on modules: the CLI is where they are installed (exakit
 # marketplace) and updated (exakit update <addon>), so it loads every module
 # it ships. A missing file only makes the marketplace row unavailable.
@@ -2381,6 +2384,59 @@ cmd_whats_new() {
 # help documents every other screen uses (setup/help/*.json). --json keeps its
 # original shape: one object whose "commands" array carries tool/command/
 # options/description, so an agent can discover the CLI without parsing ANSI.
+# cmd_persona list | show <id> | apply <id> [--yes] — the `exakit persona`
+# command.
+cmd_persona() {
+    case "${1:-list}" in
+        list)
+            for _cp_id in $(exakit_persona_ids); do
+                printf '  %-16s %s\n' "$_cp_id" "$(exakit_persona_value "$_cp_id" title)"
+                printf '  %-16s %s\n' "" "$(exakit_persona_value "$_cp_id" summary)"
+            done
+            _cp_current="$(manifest_get persona.id 2>/dev/null || true)"
+            [ -n "$_cp_current" ] && info "This kit was set up as: $_cp_current"
+            info "Apply one with: exakit persona apply <id>"
+            ;;
+        show)
+            exakit_persona_known "${2:-}" || die "Name a persona: $(exakit_persona_ids | tr '\n' ' ')"
+            printf '%s\n  %s\n' "$(exakit_persona_value "$2" title)" "$(exakit_persona_value "$2" summary)"
+            printf '  datasets:     %s\n' "$(exakit_persona_value "$2" datasets)"
+            printf '  AI clients:   %s\n' "$(exakit_persona_value "$2" mcp_clients)"
+            printf '  add-ons:      %s\n' "$(exakit_persona_value "$2" addons)"
+            ;;
+        apply)
+            shift
+            _cp_id=""; _cp_yes=0
+            for _cp_arg in "$@"; do
+                case "$_cp_arg" in
+                    --yes|-y) _cp_yes=1 ;;
+                    -*) die "Unknown option for persona apply: $_cp_arg (supported: --yes)" ;;
+                    *) _cp_id="$_cp_arg" ;;
+                esac
+            done
+            exakit_persona_known "$_cp_id" || die "Name a persona: $(exakit_persona_ids | tr '\n' ' ')"
+            EXAKIT_PERSONA="$_cp_id"; EXAKIT_PERSONA_SOURCE=apply; export EXAKIT_PERSONA EXAKIT_PERSONA_SOURCE
+            exakit_persona_apply_env
+            if [ "$_cp_yes" != 1 ] && ! confirm "Load the datasets, connect the AI clients and install the add-ons above?" y; then
+                info "Nothing changed."
+                return 5
+            fi
+            # Each answer through its own command, which already honours it;
+            # one that fails does not stop the others.
+            _cp_failed=""
+            ( cmd_data_load ) || _cp_failed="$_cp_failed data-load"
+            ( cmd_mcp_setup ) || _cp_failed="$_cp_failed mcp-setup"
+            ( cmd_marketplace ) || _cp_failed="$_cp_failed marketplace"
+            if [ -n "$_cp_failed" ]; then
+                warn "Persona $_cp_id applied, except:$_cp_failed - re-run it with: exakit persona apply $_cp_id"
+                return 1
+            fi
+            ok "Persona $_cp_id applied"
+            ;;
+        *) die "Unknown persona command: $1 (use: exakit persona list | show <id> | apply <id> [--yes])" ;;
+    esac
+}
+
 cmd_catalog() {
     _cat_json=0
     _cat_args=""
@@ -2587,6 +2643,7 @@ case "${1:-help}" in
     sql)      shift; cmd_sql "$@" ;;
     logs)     shift; cmd_logs "$@" ;;
     catalog)  shift; _exakit_refuse_unknown_options catalog "--json,-j" "$@"; cmd_catalog "$@" ;;
+    persona)  shift; command -v cmd_persona >/dev/null 2>&1 || die "The persona module is missing from this kit copy. Repair with: exakit update"; cmd_persona "$@" ;;
     notebook) shift; command -v notebook_cmd >/dev/null 2>&1 || die "The notebook module is missing from this kit copy. Repair with: exakit update"; notebook_cmd "$@" ;;
     udf-setup|udf-use|udf-build|udf-file) _udf_cmd="cmd_$(printf '%s' "$1" | tr '-' '_')"; shift; command -v "$_udf_cmd" >/dev/null 2>&1 || die "The udf-devkit module is missing from this kit copy. Repair with: exakit update"; "$_udf_cmd" "$@" ;;
     # `exakit help --help` reaches this arm (the universal --help hook skips

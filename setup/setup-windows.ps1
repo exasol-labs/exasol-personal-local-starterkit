@@ -27,6 +27,7 @@ if (Test-Path $legacyModule) { . $legacyModule }
 . (Join-Path $LibDir "exapump.ps1")
 . (Join-Path $LibDir "mcp.ps1")
 . (Join-Path $LibDir "pyexasol.ps1")
+if (Test-Path (Join-Path $LibDir "persona.ps1")) { . (Join-Path $LibDir "persona.ps1") }
 # Marketplace add-on modules: sourcing installs NOTHING - the modules are
 # needed only so the closing marketplace offer can install what the user says
 # yes to. A module missing from an older kit copy just skips its row.
@@ -40,6 +41,9 @@ Initialize-ExakitManifest
 # The installer is the one process whose Fail() reason belongs in .last-failure.
 $script:ExakitRecordFailureNotes = $true
 Resolve-ExakitInstallVersions
+# A persona (EXAKIT_PERSONA) answers every question the user did not answer
+# explicitly; an unknown one stops here, before anything is installed.
+if (Get-Command Set-ExakitPersonaEnv -ErrorAction SilentlyContinue) { Set-ExakitPersonaEnv }
 
 if ($env:EXAKIT_BANNER_SHOWN -ne "1") { Write-ExakitBanner "Personal Local Starter Kit" }
 

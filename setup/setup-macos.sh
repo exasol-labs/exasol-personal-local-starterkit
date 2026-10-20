@@ -36,6 +36,7 @@ if [ -f "$LIB_DIR/legacy-crossing.sh" ]; then . "$LIB_DIR/legacy-crossing.sh" ||
 if [ -f "$LIB_DIR/exapump.sh" ];  then . "$LIB_DIR/exapump.sh"  || die "Could not load $LIB_DIR/exapump.sh (corrupted kit copy? re-download and re-run)"; fi
 if [ -f "$LIB_DIR/mcp.sh" ];      then . "$LIB_DIR/mcp.sh"      || die "Could not load $LIB_DIR/mcp.sh (corrupted kit copy? re-download and re-run)"; fi
 if [ -f "$LIB_DIR/pyexasol.sh" ]; then . "$LIB_DIR/pyexasol.sh" || die "Could not load $LIB_DIR/pyexasol.sh (corrupted kit copy? re-download and re-run)"; fi
+if [ -f "$LIB_DIR/persona.sh" ];  then . "$LIB_DIR/persona.sh"  || die "Could not load $LIB_DIR/persona.sh (corrupted kit copy? re-download and re-run)"; fi
 
 exakit_init_logging
 # Where the bootstrap time went, in the log: the installer stamps its start,
@@ -64,6 +65,9 @@ exakit_note_kit_upgrade "$KIT_ROOT" || true
 _kit_version="$(exakit_kit_version_at "$KIT_ROOT" 2>/dev/null || true)"
 [ -n "$_kit_version" ] && manifest_set kit.version "$_kit_version"
 exakit_resolve_install_versions
+# A persona (EXAKIT_PERSONA) answers every question the user did not answer
+# explicitly; an unknown one stops here, before anything is installed.
+command -v exakit_persona_apply_env >/dev/null 2>&1 && exakit_persona_apply_env
 
 # --- step 0: an installation this kit cannot manage -------------------------
 # An older kit could put the database in a container. This asks what to do with

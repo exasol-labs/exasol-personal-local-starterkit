@@ -39,6 +39,8 @@ Install the Exasol starter kit from https://github.com/exasol-labs/exasol-person
 
 </div>
 
+Set up for a role in one go: `curl https://www.exasol.com/install/starter-kit.sh | EXAKIT_PERSONA=ml-engineer sh` (or `data-scientist`) installs that role's datasets, AI clients and add-ons. See [personas/](personas/README.md).
+
 ---
 
 ## Overview

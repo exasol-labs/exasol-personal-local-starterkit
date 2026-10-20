@@ -88,6 +88,10 @@ jobs:
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/personal-s3-ps.ps1
       # A stale launcher lock no longer blocks an uninstall, against a .cmd stub
       # launcher and a real process holding the launcher's image name.
+      - name: personas under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/personas-ps.ps1
       - name: the udf-devkit add-on under 5.1
         if: matrix.shard == 2
         shell: powershell

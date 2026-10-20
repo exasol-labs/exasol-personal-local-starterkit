@@ -776,6 +776,11 @@ jobs:
       # shared rules (pins, bucket paths, aliases, the smoke UDF).
       - run: bash tests/udf-devkit-addon.sh
         if: matrix.shard == 4
+      # Personas (PRD P-1): every file valid and read the same by the shell,
+      # an explicit answer wins per variable, an unknown persona is refused
+      # by the installer before anything is installed.
+      - run: bash tests/personas.sh
+        if: matrix.shard == 4
       - run: python3 tests/test_udf_tool.py
         if: matrix.shard == 4
       - run: bash tests/reap-orphan-daemon.sh
@@ -870,6 +875,7 @@ jobs:
             pwsh -NoProfile -File tests/personal-destroy-lock-ps.ps1
             pwsh -NoProfile -File tests/notebook-addon-ps.ps1
             pwsh -NoProfile -File tests/udf-devkit-addon-ps.ps1
+            pwsh -NoProfile -File tests/personas-ps.ps1
             pwsh -NoProfile -File tests/data-load-shapes-ps.ps1
           elif [ "${EXAKIT_REQUIRE_PS:-0}" = "1" ]; then
             echo "FAIL pwsh is missing on the runner that is supposed to have it" >&2

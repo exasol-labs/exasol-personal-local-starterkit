@@ -552,6 +552,18 @@ if (-not $uiLoaded) {
     Write-Host ""
 }
 
+# A persona is a file in the kit. An unknown one is refused here, before
+# anything is installed - and a dry run says so too, since it never reaches
+# the setup script that applies it. Twin of the check in install.sh.
+if ($env:EXAKIT_PERSONA) {
+    $personaFile = Join-Path (Join-Path $KitDir "personas") "$($env:EXAKIT_PERSONA).json"
+    if (-not (Test-Path $personaFile)) {
+        $known = @(Get-ChildItem -Path (Join-Path $KitDir "personas") -Filter "*.json" -ErrorAction SilentlyContinue | ForEach-Object { $_.BaseName }) -join " "
+        throw "Unknown persona '$($env:EXAKIT_PERSONA)' (available: $known). Nothing was installed."
+    }
+    Write-Host "  * Persona: $($env:EXAKIT_PERSONA) (personas\$($env:EXAKIT_PERSONA).json) - it answers every choice you did not set yourself." -ForegroundColor Blue
+}
+
 if ($env:EXAKIT_DRY_RUN -eq "1") {
     Write-Host "  * Dry run requested (EXAKIT_DRY_RUN=1) - nothing was installed, and nothing under $ExakitHome was changed." -ForegroundColor Blue
     Write-Host "    The kit is unpacked for inspection in a temporary folder: $KitDir"

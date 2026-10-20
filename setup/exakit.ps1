@@ -57,6 +57,8 @@
 #   marketplace           browse optional add-ons (dash-server, ...) and install
 #                         the ones you select; installed add-ons then update
 #                         through `exakit update` like every other component
+#   persona               list | show <id> | apply <id> [--yes]: a named set of
+#                         datasets, AI clients and add-ons (data-scientist, ...)
 #   notebook              open JupyterLab connected to the database (the notebook
 #                         add-on); --check, --setup, --stop, --no-browser, --port N
 #   udf-setup             Python UDFs: install the official container (udf-devkit)
@@ -122,6 +124,7 @@ if (Test-Path (Join-Path $libDir "legacy-crossing.ps1")) { . (Join-Path $libDir 
 # pyexasol is an update target of its own (and its own repair command), so the
 # CLI needs the module even though it takes no part in the runtime commands.
 . (Join-Path $libDir "pyexasol.ps1")
+if (Test-Path (Join-Path $libDir "persona.ps1")) { . (Join-Path $libDir "persona.ps1") }
 # Marketplace add-on modules: the CLI is where they are installed (exakit
 # marketplace) and updated (exakit update <addon>). A missing file only makes
 # the marketplace row unavailable - it must not break every other command.
@@ -2219,6 +2222,63 @@ function Write-ExakitVersionNote {
 # marketplace dash-server` installs dash-server and nothing else - it used to
 # silently DISCARD the id and install the other pending add-ons instead.
 # Twin of cmd_marketplace in setup/exakit.
+# Invoke-CmdPersona - `exakit persona list | show <id> | apply <id> [--yes]`.
+# Twin of cmd_persona.
+function Invoke-CmdPersona {
+    param([string[]]$CmdArgs = @())
+    $verb = if ($CmdArgs.Count) { $CmdArgs[0] } else { "list" }
+    switch ($verb) {
+        "list" {
+            foreach ($id in (Get-ExakitPersonaIds)) {
+                Write-Host ("  {0,-16} {1}" -f $id, (Get-ExakitPersonaValue $id "title"))
+                Write-Host ("  {0,-16} {1}" -f "", (Get-ExakitPersonaValue $id "summary"))
+            }
+            $current = Get-ExakitManifestValue "persona.id"
+            if ($current) { Info "This kit was set up as: $current" }
+            Info "Apply one with: exakit persona apply <id>"
+        }
+        "show" {
+            $id = if ($CmdArgs.Count -gt 1) { $CmdArgs[1] } else { "" }
+            if (-not (Get-ExakitPersona $id)) { Fail "Name a persona: $((Get-ExakitPersonaIds) -join ' ')" }
+            Write-Host (Get-ExakitPersonaValue $id "title")
+            Write-Host "  $(Get-ExakitPersonaValue $id 'summary')"
+            Write-Host "  datasets:     $(Get-ExakitPersonaValue $id 'datasets')"
+            Write-Host "  AI clients:   $(Get-ExakitPersonaValue $id 'mcp_clients')"
+            Write-Host "  add-ons:      $(Get-ExakitPersonaValue $id 'addons')"
+        }
+        "apply" {
+            $id = ""; $yes = $false
+            foreach ($arg in @($CmdArgs | Select-Object -Skip 1)) {
+                if ($arg -in @("--yes", "-y")) { $yes = $true }
+                elseif ($arg.StartsWith("-")) { Fail "Unknown option for persona apply: $arg (supported: --yes)" }
+                else { $id = $arg }
+            }
+            if (-not (Get-ExakitPersona $id)) { Fail "Name a persona: $((Get-ExakitPersonaIds) -join ' ')" }
+            $env:EXAKIT_PERSONA = $id
+            $env:EXAKIT_PERSONA_SOURCE = "apply"
+            Set-ExakitPersonaEnv
+            if (-not $yes -and -not (Confirm-ExakitPrompt "Load the datasets, connect the AI clients and install the add-ons above" $true)) {
+                Info "Nothing changed."
+                return
+            }
+            # Each answer through its own command, which already honours it;
+            # one that fails does not stop the others.
+            $failed = @()
+            foreach ($step in @(@{ Name = "data-load"; Run = { Invoke-CmdDataLoad -Argument $null } },
+                                @{ Name = "mcp-setup"; Run = { Invoke-CmdMcpSetup } },
+                                @{ Name = "marketplace"; Run = { Invoke-CmdMarketplace -Arguments @() } })) {
+                try { & $step.Run } catch { $failed += $step.Name }
+            }
+            if ($failed.Count) {
+                Warn2 "Persona $id applied, except: $($failed -join ', ') - re-run it with: exakit persona apply $id"
+                return
+            }
+            Ok "Persona $id applied"
+        }
+        default { Fail "Unknown persona command: $verb (use: exakit persona list | show <id> | apply <id> [--yes])" }
+    }
+}
+
 function Invoke-CmdMarketplace {
     param([string[]]$Arguments = @())
     if (-not (Test-Path $script:ManifestPath)) { Fail "No installation found. Run the installer first." }
@@ -3796,6 +3856,7 @@ try {
             Invoke-CmdUninstall -Addon $unAddon -AssumeYes:($RestArgs -contains "-Yes" -or $RestArgs -contains "--yes" -or $RestArgs -contains "-y") -DryRun:($RestArgs -contains "-DryRun" -or $RestArgs -contains "--dry-run" -or $RestArgs -contains "-n") }
         "whats-new"    { Assert-ExakitKnownOptions -CommandName "whats-new" -Allowed @() -Arguments $RestArgs; Invoke-CmdWhatsNew -Version ($RestArgs | Select-Object -First 1) }
         "logs"         { Invoke-CmdLogs -LogArgs $RestArgs }
+        "persona"      { Invoke-CmdPersona -CmdArgs $RestArgs }
         "notebook"     {
             if (-not (Get-Command Invoke-CmdNotebook -ErrorAction SilentlyContinue)) { Fail "The notebook module is missing from this kit copy. Repair with: exakit update" }
             Invoke-CmdNotebook -CmdArgs $RestArgs
