@@ -41,7 +41,15 @@ together load each dataset and offer each add-on once; one naming `all` wins.
 
 ## Adding a persona
 
-One file, `personas/<id>.json`, and no code:
+One file, `personas/<id>.json`, and no code. Try it first, in a sandbox that changes
+nothing (`examples/analyst.json` is a ready-made one to start from):
+
+```bash
+bash tools/try_persona.sh personas/examples/analyst.json          # the checks, the question, the answers, the data table
+bash tools/try_persona.sh personas/examples/analyst.json --ask    # ...then the install question, live
+```
+
+The keys:
 
 | Key | Value |
 |---|---|

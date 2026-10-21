@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "id": "analyst",
+  "title": "Data Analyst",
+  "summary": "SQL and dashboards on the retail and energy samples.",
+  "picker": true,
+  "default": false,
+  "order": 15,
+  "datasets": ["tpch", "energy"],
+  "mcp_clients": "all",
+  "addons": ["dash-server", "dbt-exasol"]
+}
