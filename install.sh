@@ -238,12 +238,16 @@ main() {
     # A persona is a file in the kit. An unknown one is refused here, before
     # anything is installed - and a dry run says so too, since it never reaches
     # the setup scripts that apply it.
+    # Several personas are joined by commas (general,ml-engineer): each one is
+    # a file, checked the same way.
     if [ -n "${EXAKIT_PERSONA:-}" ]; then
-        if [ ! -f "$kit_dir/personas/$EXAKIT_PERSONA.json" ]; then
-            _known="$(ls "$kit_dir/personas" 2>/dev/null | sed -n 's/\.json$//p' | tr '\n' ' ')"
-            fail "Unknown persona '$EXAKIT_PERSONA' (available: ${_known:-none}). Nothing was installed."
-        fi
-        say "Persona: $EXAKIT_PERSONA (personas/$EXAKIT_PERSONA.json) - it answers every choice you did not set yourself."
+        for _persona in $(printf '%s' "$EXAKIT_PERSONA" | tr ',' ' '); do
+            if [ ! -f "$kit_dir/personas/$_persona.json" ]; then
+                _known="$(ls "$kit_dir/personas" 2>/dev/null | sed -n 's/\.json$//p' | tr '\n' ' ')"
+                fail "Unknown persona '$_persona' (available: ${_known:-none}). Nothing was installed."
+            fi
+        done
+        say "Persona: $EXAKIT_PERSONA - it answers every choice you did not set yourself."
     fi
 
     if [ "${EXAKIT_DRY_RUN:-0}" = "1" ]; then

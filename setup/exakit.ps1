@@ -2240,11 +2240,7 @@ function Invoke-CmdPersona {
         "show" {
             $id = if ($CmdArgs.Count -gt 1) { $CmdArgs[1] } else { "" }
             if (-not (Get-ExakitPersona $id)) { Fail "Name a persona: $((Get-ExakitPersonaIds) -join ' ')" }
-            Write-Host (Get-ExakitPersonaValue $id "title")
-            Write-Host "  $(Get-ExakitPersonaValue $id 'summary')"
-            Write-Host "  datasets:     $(Get-ExakitPersonaValue $id 'datasets')"
-            Write-Host "  AI clients:   $(Get-ExakitPersonaValue $id 'mcp_clients')"
-            Write-Host "  add-ons:      $(Get-ExakitPersonaValue $id 'addons')"
+            foreach ($line in @(Invoke-ExakitPersonaService "show" $id)) { Write-Host $line }
         }
         "apply" {
             $id = ""; $yes = $false
@@ -3145,10 +3141,15 @@ function Invoke-CmdDataLoad {
         if ($Argument -eq "-Force" -or $Argument -eq "--force") {
             $ForceFlag = $Argument
         } elseif ($Argument.StartsWith("-")) {
-            Stop-ExakitBadOption "Unknown option '$Argument' for data-load (pass -Force, or a file or folder path)."
+            Stop-ExakitBadOption "Unknown option '$Argument' for data-load (pass -Force, a file or folder path, or a dataset id)."
+        } elseif (-not (Test-Path $Argument) -and (@(Get-ExakitBundledDatasets | ForEach-Object { $_.Id }) -contains $Argument)) {
+            # A bundled dataset's id (exakit data-load fda_recalls) is the same
+            # answer as EXAKIT_DATASETS=fda_recalls - a file or folder of that
+            # name wins. Twin of cmd_data_load.
+            $env:EXAKIT_DATASETS = $Argument
         } else {
             $loadPath = Get-ExakitNormalizedPath $Argument
-            if (-not (Test-Path $loadPath)) { Fail "No such file or folder: $Argument" }
+            if (-not (Test-Path $loadPath)) { Fail "No such file, folder or dataset: $Argument (datasets: $((@(Get-ExakitBundledDatasets | ForEach-Object { $_.Id })) -join ' '))" }
             # Naming a path IS choosing the local-file row, which is exactly what
             # EXAKIT_DATA_FILE already means - so one contract covers the
             # argument and the variable, and the menu never draws for either.

@@ -1514,17 +1514,19 @@ echo "data-load's default row when every bundled dataset is in:"
 # row is what should be waiting under the cursor.
 . "$ROOT/setup/lib/exapump.sh"
 _dl_probe="$WORK/dl-default-label"
+# The data question asks the source first: with every sample in, "Your own file
+# or folder" is what waits under the cursor, and the samples table never opens.
+check "with every sample loaded, your own file is the answer Enter gives" "local" \
+    "$( (exakit_pending_datasets() { :; }; info() { :; }
+        exakit_data_load_select "Skip" >/dev/null 2>&1 </dev/null; printf '%s' "$EXAKIT_DATA_LOAD_SELECTION") )"
 (
     exakit_pending_datasets() { :; }          # everything already loaded
-    info() { :; }
-    # The screen is a live TABLE now: the defaults are row numbers into its
-    # state file, so the probe reads the label of whichever row is pre-ticked.
-    ui_table_menu() {
-        _dlp_row="${EXAKIT_TABLE_DEFAULTS%%,*}"
-        sed -n "${_dlp_row}p" "$1" | cut -d'|' -f2 > "$_dl_probe"
-        EXAKIT_TABLE_SELECTION="$EXAKIT_TABLE_DEFAULTS"
-    }
-    exakit_data_load_select "Skip" >/dev/null 2>&1
+    # The table, where a caller still draws its local-file row: the defaults
+    # are row numbers into its state file, so the probe reads the label of
+    # whichever row is pre-ticked.
+    exakit_data_table_build "$WORK/dl-table" "Skip"
+    _dlp_row="${EXAKIT_TABLE_DEFAULTS%%,*}"
+    sed -n "${_dlp_row}p" "$WORK/dl-table" | cut -d'|' -f2 > "$_dl_probe"
 )
 # The expected value is the label VERBATIM, and it moves when the label moves:
 # the folder-loading work widened this row to ", or a folder of them" and left

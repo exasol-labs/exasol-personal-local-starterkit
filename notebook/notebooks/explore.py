@@ -13,12 +13,28 @@
 # the *entity* a row is about, the *category* to compare, the *date*, the *label* to predict (0 or 1) and the *text*.
 # Every query below is built from those roles and printed before its result, so you always see the SQL behind a number.
 #
-# **Change one line to change the data.** `pharma_trials` and `banking_complaints` ship with the kit
-# (`exakit data-load pharma_trials`). For your own CSV or Parquet file: load it with `exakit data-load <file>`, write a
-# `descriptor.json` for its table (see `data/datasets/README.md` in the kit), and put the descriptor's path here.
+# **Change one line to change the data.** `fda_recalls`, `banking_complaints` and `pharma_trials` ship with the kit
+# (`exakit data-load fda_recalls`). For your own CSV or Parquet file, fill in "Your own file" below and set
+# `DATASET = "own-file"`; a table already in the database is a `descriptor.json` path (`data/datasets/README.md`).
 
 # %%
-DATASET = "pharma_trials"   # or "banking_complaints", or "~/my-data/descriptor.json"
+DATASET = "fda_recalls"   # or "banking_complaints", "pharma_trials", "~/my-data/descriptor.json", or "own-file" (the file below)
+
+# %% [markdown]
+# ## Your own file
+#
+# To run this notebook on your own CSV or Parquet file, say which column plays each role below and set
+# `DATASET = "own-file"` above - that one change, and no SQL. `exakit_nb.load_own_file` loads the file into the table
+# over the kit's connection (a second run loads nothing unless the file changed) and checks the roles by the same rules
+# as a kit dataset. The label must be 0 or 1 (true/false works too). The example is a generic transactions file.
+
+# %%
+OWN_FILE = {
+    "path": "~/my-data/transactions.csv",
+    "table": "MY_DATA.TRANSACTIONS",
+    "descriptor": {"entity": "CUSTOMER_ID", "category": "MERCHANT_CATEGORY", "date": "BOOKED_ON", "label": "DISPUTED",
+                   "text": ["MEMO"]},
+}
 
 # %% [markdown]
 # ## Connect and read the descriptor
@@ -30,7 +46,7 @@ DATASET = "pharma_trials"   # or "banking_complaints", or "~/my-data/descriptor.
 import exakit_nb
 
 conn = exakit_nb.connect()
-ds = exakit_nb.dataset(conn, DATASET)
+ds = exakit_nb.load_own_file(**OWN_FILE, conn=conn) if DATASET == "own-file" else exakit_nb.dataset(conn, DATASET)
 
 print(f"{ds.id}: one row of {ds.fact_table} per observation (descriptor sha256 {ds.digest[:12]}…)")
 for role, column in ds.roles():

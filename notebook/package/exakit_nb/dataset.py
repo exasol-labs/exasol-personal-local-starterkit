@@ -5,20 +5,21 @@ and the roles turned into SQL names, so one notebook runs unchanged on any datas
     ds = exakit_nb.dataset(conn, "~/data/descriptor.json") # or your own table, described by a descriptor file
     ds.col("label"), ds.text_sql(), ds.fact_table
 
-The rules are the kit's descriptor rules (``descriptor_rules``, shipped with this package: the 0.2.0 kit has no Python
-package to import them from; tools/dataset_check.py uses the same file). Nothing is guessed: a descriptor that is invalid, or names a table or
-column the database lacks, stops the notebook with the reason.
+The rules are the kit's descriptor rules (``descriptor_rules``, shipped with this package: the 0.2 kit has no Python
+package to import them from; tools/dataset_check.py uses the same file). Nothing is guessed: a descriptor that is
+invalid, or names a table or column the database lacks, stops the notebook with the reason.
 """
 
 from __future__ import annotations
 
 import hashlib
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-__all__ = ["Dataset", "dataset"]
+from ._kit import setting
+
+__all__ = ["Dataset", "checked", "dataset"]
 
 _ANSWERED = "EXAKIT_NB_COLUMNS"
 
@@ -36,7 +37,7 @@ def _locate(name: str) -> Path:
         return given
     if given.is_dir() and (given / "descriptor.json").is_file():
         return given / "descriptor.json"
-    folder = os.environ.get("EXAKIT_NB_DATASETS")
+    folder = setting("EXAKIT_NB_DATASETS")
     shipped = Path(folder) / name / "descriptor.json" if folder else None
     if shipped is not None and shipped.is_file():
         return shipped
@@ -52,7 +53,7 @@ class Dataset:
     id: str
     path: Path
     digest: str                       # SHA-256 of the descriptor file: the exact mapping a result came from
-    descriptor: Any                   # exakit.domain.descriptor.Descriptor
+    descriptor: Any                   # descriptor_rules.Descriptor
 
     @property
     def fact_table(self) -> str:
@@ -95,16 +96,22 @@ def _columns(conn, schemas: list[str]) -> set[str]:
 
 def dataset(conn, name: str) -> Dataset:
     """The dataset ``name`` (a kit dataset id, or a descriptor file or its folder), checked against the database."""
-    rules = _rules()
     path = _locate(name)
-    raw = path.read_bytes()
+    shipped = setting("EXAKIT_NB_DATASETS") and Path(setting("EXAKIT_NB_DATASETS")) in path.parents
+    remedy = "Load your file first (exakit data-load <file>) or correct the descriptor."
+    return checked(conn, path.read_bytes(), path, remedy=None if shipped else remedy)
+
+
+def checked(conn, raw: bytes, path: Path, remedy: str | None = None) -> Dataset:
+    """The descriptor in ``raw`` (read from, or describing, ``path``) validated by the kit's rules and held against the
+    database: every role resolves, all in the fact table, which has rows and a 0/1 label. ``remedy`` is the advice for a
+    role the database lacks (None: load the kit dataset)."""
+    rules = _rules()
     descriptor = rules.parse_descriptor(raw.decode("utf-8"), source=f"The descriptor {path}")
     problems = rules.missing_references(descriptor, _columns(conn, descriptor.schemas()))
     if problems:
-        shipped = os.environ.get("EXAKIT_NB_DATASETS") and Path(os.environ["EXAKIT_NB_DATASETS"]) in path.parents
         raise ValueError(f"The descriptor '{descriptor.id}' does not match the database: {'; '.join(problems)}. "
-                         + (f"Load it first: exakit data-load {descriptor.id}" if shipped
-                            else "Load your file first (exakit data-load <file>) or correct the descriptor."))
+                         + (remedy or f"Load it first: exakit data-load {descriptor.id}"))
     elsewhere = [f"{role} ({ref.table})" for role, ref in descriptor.references() if ref.table != descriptor.fact_table]
     if elsewhere:
         raise ValueError(f"The notebooks read every role from the fact table {descriptor.fact_table}; these are in "

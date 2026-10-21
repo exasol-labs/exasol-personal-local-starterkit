@@ -1,22 +1,31 @@
 ---
 name: notebook
 addon: notebook
-description: Open notebooks already connected to the local Exasol database with the notebook add-on, built on Exasol's notebook connector (the package AI Lab installs) — covering exakit notebook, --setup, --check and --stop, JupyterLab as an on-demand background service with its status, the Exasol (Starter Kit) kernel, why JupyterLab is offered and never installed unasked, the exakit_nb helpers, why no notebook ever holds a host, user or password, opt-in Langfuse tracing of model calls, and which AI Lab notebooks run on a local database. Triggers — "open a notebook", "start Jupyter", "JupyterLab on my Exasol", "notebook connected to the database", "install the notebook add-on", "exakit notebook", "stop JupyterLab", "is my notebook running", "use AI Lab notebooks locally", "trace my LLM calls to Langfuse", "my notebook cannot connect".
+description: Open notebooks already connected to the local Exasol database with the notebook add-on, built on Exasol's notebook connector (the package AI Lab installs) — covering exakit notebook, --marimo, --positron, --setup, --check and --stop, the install's checklist of notebook tools (JupyterLab, Marimo, Positron), JupyterLab and Marimo as on-demand background services with their status, the persona folders of the kit's notebooks, the Exasol (Starter Kit) kernel, why JupyterLab is offered and never installed unasked, the exakit_nb helpers, why no notebook ever holds a host, user or password, opt-in Langfuse tracing of model calls, and which AI Lab notebooks run on a local database. Triggers — "open a notebook", "start Jupyter", "open Marimo", "use Positron with Exasol", "where are the starter kit notebooks", "JupyterLab on my Exasol", "notebook connected to the database", "install the notebook add-on", "exakit notebook", "stop JupyterLab", "is my notebook running", "use AI Lab notebooks locally", "trace my LLM calls to Langfuse", "my notebook cannot connect".
 ---
 
-# notebook — JupyterLab connected to the local database
+# notebook — JupyterLab, Marimo or Positron connected to the local database
 
 `notebook` is a **marketplace add-on**. It installs Exasol's notebook connector
 (`exasol-notebook-connector`, the package Exasol's AI Lab is built on),
 pyexasol, the Langfuse and OpenAI clients, the kit's helper package `exakit_nb`
 and a Jupyter kernel, **Exasol (Starter Kit)**, in an environment of their own.
 
-**JupyterLab is the user's choice.** A JupyterLab already on the machine is used
-as it is, with the kit's kernel added (VS Code and other Jupyter front ends see
-it too). When there is none, the kit asks before installing one; a skip installs
-nothing and prints https://jupyter.org/install and the command to run after,
-`exakit notebook`. Never install JupyterLab for the user without asking them:
-pre-answer only on their word, with `EXAKIT_NOTEBOOK_JUPYTER=install` or `skip`.
+**The notebook tools are the user's choice: one checklist at the install, all
+three ticked.** JupyterLab: one already on the machine is used as it is, with the
+kit's kernel added (VS Code and other Jupyter front ends see it too); with none,
+the kit's is installed because it was ticked. Marimo: installed into the kit's
+notebook environment. Positron: never installed - when the user has it, the
+notebooks folder is set to the kit's Python (`.vscode/settings.json`, their other
+settings kept); when not, the folder is ready for it. Pre-answer only on the
+user's word: `EXAKIT_NOTEBOOK_FRONTENDS=jupyterlab,marimo,positron` (or `none`),
+or `EXAKIT_NOTEBOOK_JUPYTER=skip` / `EXAKIT_NOTEBOOK_MARIMO=skip` to leave one out.
+
+The kit's notebooks are in `~/.exasol-starter-kit/notebooks/starter-kit-notebooks/`,
+one folder per persona, with a README naming the end-to-end path:
+`general/start_here`, `data-scientist/explore`, `data-scientist/text_classification`,
+`ml-engineer/bank_marketing_mlflow`, `ml-engineer/train`. Marimo's copies are in
+`notebooks/marimo/<persona>/`. A file there is the user's: the kit never overwrites it.
 
 Install it with `exakit marketplace notebook`. Never tell a user to
 `pip install exasol-notebook-connector` themselves: that copy has no
@@ -26,7 +35,9 @@ connection, no helpers and no notebooks.
 
 ```bash
 exakit notebook                      # start JupyterLab in the background and open it in the browser
-exakit notebook --stop               # stop it
+exakit notebook --marimo             # the same notebooks in Marimo (installs it when the user says yes)
+exakit notebook --positron           # the user's Positron on the notebooks folder, with the kit's Python
+exakit notebook --stop               # stop JupyterLab and Marimo (--stop --marimo: only Marimo)
 exakit notebook --setup              # register the kernel, find or offer JupyterLab, start nothing
 exakit notebook --no-browser --port 8890
 exakit notebook --check              # connect and report (and whether JupyterLab runs), start nothing

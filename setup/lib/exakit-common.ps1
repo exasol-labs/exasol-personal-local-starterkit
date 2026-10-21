@@ -5138,6 +5138,7 @@ function Show-ExakitMarketplaceMenu {
         # Not applicable here and not installed: not an option on this machine,
         # so it is not shown at all - no row, no table line.
         if (-not (Test-ExakitAddonOfferable $addon.Id)) { continue }
+        if ($env:EXAKIT_MARKETPLACE_ONLY -and -not (@($env:EXAKIT_MARKETPLACE_ONLY -split ',') -contains $addon.Id)) { continue }
         # Every add-on gets BOTH a table row and a menu row. The menu row for a
         # state that cannot be installed is a disabled row ("!" prefix): shown,
         # dimmed, unselectable, saying why. That is what lets the table drop its
@@ -5784,6 +5785,15 @@ function Request-ExakitMarketplaceOffer {
     $softState = Get-Variable -Scope Script -Name ExakitSoftFailed -ErrorAction SilentlyContinue
     if ($softState -and $softState.Value -and $softState.Value.Count -gt 0) { $softFailed = $true }
     $interactive = ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected)
+    # Personas picked on screen: their add-ons, ticked, and nothing else - the
+    # rest of the marketplace is named once by Write-ExakitPersonaMarketplaceNote.
+    if ($env:EXAKIT_MARKETPLACE_PRESELECT -and -not $softFailed -and $interactive) {
+        Write-ExakitRule
+        Write-ExakitHeading "Add-ons for your personas"
+        $env:EXAKIT_MARKETPLACE_ONLY = $env:EXAKIT_MARKETPLACE_PRESELECT
+        try { Show-ExakitMarketplaceMenu } finally { Remove-Item env:EXAKIT_MARKETPLACE_ONLY -ErrorAction SilentlyContinue }
+        return
+    }
     if ($softFailed -or -not $interactive) {
         Info "Optional add-ons (dashboards & more): exakit marketplace"
         return

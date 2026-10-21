@@ -13,11 +13,27 @@
 # Exasol**, and this notebook logs the run to **your** MLflow: the parameters, the metrics, the training SQL, the model
 # file, and which database session and statement trained it. The UDF needs no MLflow credentials and no network.
 #
-# **Change one line to change the data**, as in `explore.ipynb`: a dataset the kit ships, or the path of the descriptor
-# you wrote for your own table (its label must be 0 or 1).
+# **Change one line to change the data**, as in `explore.ipynb`: a dataset the kit ships, your own CSV or Parquet file
+# ("Your own file" below), or the path of a descriptor for a table you loaded (its label must be 0 or 1).
 
 # %%
-DATASET = "pharma_trials"   # or "banking_complaints", or "~/my-data/descriptor.json"
+DATASET = "pharma_trials"   # or "banking_complaints", "~/my-data/descriptor.json", or "own-file" (the file below)
+
+# %% [markdown]
+# ## Your own file
+#
+# To run this notebook on your own CSV or Parquet file, say which column plays each role below and set
+# `DATASET = "own-file"` above - that one change, and no SQL. `exakit_nb.load_own_file` loads the file into the table
+# over the kit's connection (a second run loads nothing unless the file changed) and checks the roles by the same rules
+# as a kit dataset. The label must be 0 or 1 (true/false works too). The example is a generic transactions file.
+
+# %%
+OWN_FILE = {
+    "path": "~/my-data/transactions.csv",
+    "table": "MY_DATA.TRANSACTIONS",
+    "descriptor": {"entity": "CUSTOMER_ID", "category": "MERCHANT_CATEGORY", "date": "BOOKED_ON", "label": "DISPUTED",
+                   "text": ["MEMO"]},
+}
 
 # %% [markdown]
 # ## Where the run goes
@@ -40,7 +56,7 @@ import exakit_nb
 import exasol_mlflow
 
 conn = exakit_nb.connect()
-ds = exakit_nb.dataset(conn, DATASET)
+ds = exakit_nb.load_own_file(**OWN_FILE, conn=conn) if DATASET == "own-file" else exakit_nb.dataset(conn, DATASET)
 for role, column in ds.roles():
     print(f"  {role:<9} {column}")
 
@@ -70,14 +86,16 @@ print(training_sql)
 # %% [markdown]
 # ## Train and log
 #
-# The UDF's answer is checked before anything is logged: one result, every model chunk present, the model's SHA-256
-# matching. A broken answer stops here with the reason, and MLflow gets nothing.
+# `start_run` opens one MLflow run around the training statement: `run.execute` runs it, checks the UDF's answer (one
+# result, every model chunk present, the model's SHA-256 matching) and logs the parameters, the metrics, the training
+# SQL, the model file and the lineage tags. A broken answer stops here with the reason, and MLflow gets nothing.
 
 # %%
-run = exasol_mlflow.log_training(conn, training_sql, experiment=EXPERIMENT, run_name=f"{ds.id}-text-classifier",
-                                 tags={"exasol.dataset": ds.id, "exasol.descriptor_sha256": ds.digest})
+with exasol_mlflow.start_run(conn, params=PARAMS, experiment=EXPERIMENT, run_name=f"{ds.id}-text-classifier",
+                             tags={"exasol.dataset": ds.id, "exasol.descriptor_sha256": ds.digest}) as run:
+    run.execute(training_sql)
 print(f"run {run.run_id} in {run.tracking_uri}")
-print(f"artifacts: {run.artifact_uri}")
+print(f"model artefact: {run.artifact_uri}/model/model.pkl")
 for name, value in sorted(run.metrics.items()):
     print(f"  {name:<14} {value:.4f}")
 for name, value in sorted(run.tags.items()):

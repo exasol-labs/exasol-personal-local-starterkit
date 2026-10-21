@@ -214,6 +214,11 @@ try {
         # already said above - nothing more to add here
     } elseif ($exapumpSupported -and (Test-ExakitSoftFailed "exapump")) {
         Info "Skipping the sample data - it is loaded with exapump, which is not installed"
+    } elseif ($exapumpSupported -and (Get-Command Invoke-ExakitPersonaFlow -ErrorAction SilentlyContinue)) {
+        # THE SAMPLE DATA FOLLOWS THE PERSONA QUESTION NOW: the parts everyone
+        # needs first, then "What will you use this machine for?", whose answer
+        # ticks the datasets (Invoke-ExakitPersonaFlow, after the steps). Loaded
+        # here only by a kit copy without persona.ps1. Twin of kit_shared_steps.
     } elseif ($exapumpSupported) {
         # YOUR OWN DATA FIRST, THEN THE SAMPLE. The copy out of the old
         # container needs three things this point in the run is the first to
@@ -424,6 +429,17 @@ try {
         OkStep "exakit installed ($(Get-ExakitTilde (Join-Path $script:BinDir 'exakit.cmd')))"
     }
 
+    # --- the personas, then the data -------------------------------------------
+    # "What will you use this machine for?" comes after the parts everyone
+    # needs, and its answer ticks the datasets (and, at the close, the add-ons).
+    # With EXAKIT_PERSONA set it was answered before step 1. Twin of the call in
+    # setup-macos.sh / setup-linux.sh.
+    # It needs the database: without one it returns at once (the skip was said
+    # above, with the other database steps).
+    if ($exapumpSupported -and (Get-Command Invoke-ExakitPersonaFlow -ErrorAction SilentlyContinue)) {
+        Invoke-ExakitPersonaFlow -KitRoot $KitRoot
+    }
+
     # The upgrade news (Write-ExakitWhatsNewBox) and the closing summary
     # (Write-ExakitSoftFailures) are printed after the connection panel at the
     # very end of the run - not here, in the middle of the step output where
@@ -465,6 +481,7 @@ try {
         -Label "marketplace add-ons" `
         -Warning "The marketplace offer did not finish cleanly." `
         -Body { Request-ExakitMarketplaceOffer })
+    if (Get-Command Write-ExakitPersonaMarketplaceNote -ErrorAction SilentlyContinue) { Write-ExakitPersonaMarketplaceNote }
     # A rule, then a heading: the last line on screen is where the reader is
     # left, and run together with whatever the marketplace printed it read as
     # one more of its bullets. The rule gives it air; the green arrow says it

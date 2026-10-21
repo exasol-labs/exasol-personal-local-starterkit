@@ -3,6 +3,10 @@ built from them: one cell per ``# %%`` marker, markdown cells for ``# %% [markdo
 
     python3 tools/notebooks.py           # rebuild every notebook/notebooks/<name>.ipynb that has a <name>.py
     python3 tools/notebooks.py --check   # exit 1 when an .ipynb differs from its .py
+    python3 tools/notebooks.py --marimo  # also write the Marimo versions to notebook/marimo/ (needs uv: marimo, pinned)
+
+The Marimo versions are converted from the .ipynb by marimo itself (``marimo convert``, at the version the notebook
+add-on installs), so a reviewer still reads one source; they are committed, and the add-on copies them for its users.
 """
 
 from __future__ import annotations
@@ -12,6 +16,8 @@ import sys
 from pathlib import Path
 
 FOLDER = Path(__file__).resolve().parents[1] / "notebook" / "notebooks"
+MARIMO = FOLDER.parent / "marimo"
+CATALOG = FOLDER.parent / "catalog.json"
 KERNEL = {"display_name": "Exasol (Starter Kit)", "language": "python", "name": "exasol-starter-kit"}
 
 
@@ -53,6 +59,17 @@ def build(py: Path) -> str:
     return json.dumps(doc, indent=1, ensure_ascii=False) + "\n"
 
 
+def marimo(notebooks: list[Path]) -> None:
+    """Each built .ipynb converted to a Marimo notebook by the marimo the add-on pins (its lowest allowed version)."""
+    import subprocess
+    spec = json.loads(CATALOG.read_text(encoding="utf-8"))["marimo_package"]
+    pinned = spec.split(",")[0].replace(">=", "==")
+    MARIMO.mkdir(exist_ok=True)
+    for ipynb in notebooks:
+        subprocess.run(["uvx", "--from", pinned, "marimo", "convert", str(ipynb), "-o", str(MARIMO / f"{ipynb.stem}.py")],
+                       check=True, capture_output=True)
+
+
 def main(argv: list[str]) -> int:
     stale = []
     for py in sorted(FOLDER.glob("*.py")):
@@ -62,6 +79,8 @@ def main(argv: list[str]) -> int:
                 stale.append(target.name)
         else:
             target.write_text(text, encoding="utf-8")
+    if "--marimo" in argv:
+        marimo([py.with_suffix(".ipynb") for py in sorted(FOLDER.glob("*.py"))])
     if stale:
         print(f"out of date with their .py (run: python3 tools/notebooks.py): {', '.join(stale)}")
         return 1

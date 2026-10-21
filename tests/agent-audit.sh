@@ -733,7 +733,8 @@ lacks "...and no longer puts a command in the status field" \
 has "the twin marks add-on rows too" 'addon           = ($addonIds -contains $r.C)' "$_ps"
 has "...from the registry, not a hand-written set" 'Get-ExakitMarketplaceAddons | ForEach-Object { $_.Id }' "$_ps"
 has "the twin's status --json carries the service urls" 'urls            = $serviceUrls' "$_ps"
-has "...resolved through a registry hook, not a hardcoded id" 'function Get-ExakitServiceUrl' "$_ps"
+# The hook lives in the shared library: udf-devkit's restart uses it as well.
+has "...resolved through a registry hook, not a hardcoded id" 'function Get-ExakitServiceUrl' "$_ps$(cat "$ROOT/setup/lib/exakit-common.ps1")"
 has "dash-server registers its UrlFn" 'UrlFn       = "Get-DashServerUrl"' "$(cat "$ROOT/setup/lib/exakit-common.ps1")"
 has "...and defines it" "function Get-DashServerUrl" "$(cat "$ROOT/setup/lib/dash-server.ps1")"
 has "the shell side still carries urls" '"urls": umap' "$(cat "$CLI")"

@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "marimo_package": "marimo>=0.25.2,<0.26",
+  "folders": {
+    "jupyter": "starter-kit-notebooks",
+    "marimo": "marimo"
+  },
+  "sources": {
+    "jupyter": "notebook/notebooks",
+    "marimo": "notebook/marimo"
+  },
+  "notebooks": [
+    {
+      "id": "start_here",
+      "persona": "general",
+      "step": 1,
+      "title": "Start here",
+      "summary": "Connects, shows the time and session, lists the schemas (the sample data included) and the SQL behind the last result.",
+      "needs": "Nothing beyond the notebook add-on.",
+      "jupyter": "start_here.ipynb"
+    },
+    {
+      "id": "explore",
+      "persona": "data-scientist",
+      "step": 2,
+      "title": "Explore a dataset",
+      "summary": "Any described dataset: rows and label rate per category, over time and per entity, a small scikit-learn model on this computer, and an optional text step with your own model. Every query is printed before its result.",
+      "needs": "A described dataset: exakit data-load fda_recalls (or banking_complaints, pharma_trials), or your own CSV or Parquet file with DATASET = \"own-file\". Optional: EXAKIT_NB_MODEL with OPENAI_BASE_URL and OPENAI_API_KEY for the text step; LANGFUSE_* for tracing.",
+      "jupyter": "explore.ipynb",
+      "marimo": "explore.py"
+    },
+    {
+      "id": "text_classification",
+      "persona": "data-scientist",
+      "step": 3,
+      "title": "Classify text",
+      "summary": "Learns a dataset's category, then its label, from its free text (TF-IDF and logistic regression on this computer): per-class precision and recall, the confusion matrix, the telling words, and predictions for sentences you write.",
+      "needs": "A described dataset with text: exakit data-load fda_recalls (or banking_complaints, pharma_trials), or your own file.",
+      "jupyter": "text_classification.ipynb",
+      "marimo": "text_classification.py"
+    },
+    {
+      "id": "bank_marketing_mlflow",
+      "persona": "ml-engineer",
+      "step": 4,
+      "title": "Train, track and compare with MLflow",
+      "summary": "Reads the bank marketing clients from Exasol, trains four classifiers on this computer, logs every run to MLflow (parameters, ROC AUC, precision, recall, the SQL, the model) and names the best.",
+      "needs": "exakit data-load bank_marketing. Optional: MLFLOW_TRACKING_URI, else a local store in mlflow/ beside the notebook.",
+      "jupyter": "bank_marketing_mlflow.ipynb",
+      "marimo": "bank_marketing_mlflow.py"
+    },
+    {
+      "id": "train",
+      "persona": "ml-engineer",
+      "step": 5,
+      "title": "Train inside the database",
+      "summary": "A Python UDF trains a text classifier inside Exasol; the notebook logs the run with exasol-mlflow: parameters, metrics, the training SQL, the model file and the session that trained it.",
+      "needs": "The udf-devkit add-on with a Python container (exakit udf-setup) and a described dataset (exakit data-load pharma_trials). Optional: MLFLOW_TRACKING_URI, else a local store in mlflow/ beside the notebook.",
+      "jupyter": "train.ipynb",
+      "marimo": "train.py"
+    }
+  ]
+}

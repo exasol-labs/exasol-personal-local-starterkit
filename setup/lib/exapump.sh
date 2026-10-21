@@ -3451,16 +3451,78 @@ exakit_data_load_select() {
         EXAKIT_DATA_LOAD_SELECTION="local"
         return 0
     fi
+    # WHERE THE DATA COMES FROM FIRST. One short question - the sample datasets,
+    # your own file or folder, an external source (coming soon) - and only a
+    # ticked "Sample datasets" opens onto the datasets themselves. Someone
+    # loading their own file never has to read past a list of samples.
+    exakit_data_source_select
+    case "$EXAKIT_DATA_SOURCE" in
+        none) EXAKIT_DATA_LOAD_SELECTION="none"; EXAKIT_TABLE_STATE=""; return 0 ;;
+    esac
+    case ",$EXAKIT_DATA_SOURCE," in
+        *",external,"*) info "Connecting an external source - another database, cloud storage, a URL - is coming soon. For now, load a file or a folder: exakit data-load <path>" ;;
+    esac
+    EXAKIT_DATA_LOAD_SELECTION=""
+    case ",$EXAKIT_DATA_SOURCE," in
+        *",sample,"*) exakit_data_samples_select "$_dls_final_label" || return 1 ;;
+        *) EXAKIT_TABLE_STATE="" ;;
+    esac
+    case ",$EXAKIT_DATA_SOURCE," in
+        *",local,"*) EXAKIT_DATA_LOAD_SELECTION="${EXAKIT_DATA_LOAD_SELECTION:+$EXAKIT_DATA_LOAD_SELECTION,}local" ;;
+    esac
+    [ -n "$EXAKIT_DATA_LOAD_SELECTION" ] || EXAKIT_DATA_LOAD_SELECTION="none"
+    return 0
+}
+
+# exakit_data_source_select — the first data question: Sample datasets, Your own
+# file or folder, Connect an external source (coming soon), Skip. The answer is
+# EXAKIT_DATA_SOURCE: a csv of sample / local / external, or "none". Without a
+# terminal the defaults stand: the samples when any is still to load.
+EXAKIT_DATA_SOURCE=""
+exakit_data_source_select() {
+    _dss_pending="$(exakit_pending_datasets 2>/dev/null | grep -c '.')"
+    case "$_dss_pending" in ''|*[!0-9]*) _dss_pending=0 ;; esac
+    if [ "$_dss_pending" -gt 0 ]; then
+        _dss_sample="Sample datasets - $_dss_pending ready to load, picked next"
+        _dss_default="1"
+    else
+        _dss_sample="!Sample datasets - all of them are loaded already"
+        _dss_default="2"
+    fi
+    printf '\n'
+    EXAKIT_CHECKBOX_EXCLUSIVE=4
+    ui_checkbox_menu "Data to load" "$_dss_default" \
+        "$_dss_sample" \
+        "Your own file or folder - CSV, Parquet or JSON" \
+        "Connect an external source - coming soon" \
+        "Skip"
+    EXAKIT_DATA_SOURCE=""
+    for _dss_i in $(printf '%s' "${EXAKIT_CHECKBOX_SELECTION:-}" | tr ',' ' '); do
+        case "$_dss_i" in
+            1) EXAKIT_DATA_SOURCE="${EXAKIT_DATA_SOURCE:+$EXAKIT_DATA_SOURCE,}sample" ;;
+            2) EXAKIT_DATA_SOURCE="${EXAKIT_DATA_SOURCE:+$EXAKIT_DATA_SOURCE,}local" ;;
+            3) EXAKIT_DATA_SOURCE="${EXAKIT_DATA_SOURCE:+$EXAKIT_DATA_SOURCE,}external" ;;
+            4) EXAKIT_DATA_SOURCE="none"; break ;;
+        esac
+    done
+    [ -n "$EXAKIT_DATA_SOURCE" ] || EXAKIT_DATA_SOURCE="none"
+}
+
+# exakit_data_samples_select <final-label> — the second data question: which
+# sample datasets, in the table that then shows their progress. Each is named
+# with the personas it is for; the personas picked for this machine are ticked
+# (EXAKIT_DATASETS_PRESELECT), or every pending one when none was picked.
+exakit_data_samples_select() {
+    _dls_final_label="$1"
+    : "$_dls_final_label"
     # The selection is made in the TABLE that will show the progress, so the
-    # rows a reader ticks are the rows they then watch fill in. The final label
-    # is a parameter for the same reason it always was: the installer's opt-out
-    # reads "Skip", and so does the standalone command's.
+    # rows a reader ticks are the rows they then watch fill in.
     EXAKIT_TABLE_STATE="$(mktemp "${TMPDIR:-/tmp}/exakit-table.XXXXXX")" || {
         warn "Could not create a temporary file for the data table."
         EXAKIT_DATA_LOAD_SELECTION="none"
         return 1
     }
-    exakit_data_table_build "$EXAKIT_TABLE_STATE"
+    EXAKIT_DATA_TABLE_NO_LOCAL=1 exakit_data_table_build "$EXAKIT_TABLE_STATE"
     # Nothing said about the bundled datasets already being loaded. The table
     # below shows exactly what is on offer, and when they are all in it offers
     # the local-file row and Skip -- their absence IS the message. A sentence
@@ -3470,23 +3532,20 @@ exakit_data_load_select() {
        [ "$EXAKIT_TABLE_ROW_LOCAL" = "1" ]; then
         _exakit_log_file "INFO  Every bundled dataset is already loaded (replace with: exakit data-load --force, which drops and rebuilds their tables)."
     fi
-    UI_TABLE_TITLE="Datasets to load"
+    UI_TABLE_TITLE="Sample datasets"
     printf '\n'
     ui_table_menu "$EXAKIT_TABLE_STATE"
 
-    EXAKIT_DATA_LOAD_SELECTION=""
+    # Skip here skips the samples only: a file asked for in the first question
+    # still loads. The caller collects into EXAKIT_DATA_LOAD_SELECTION.
     case ",$EXAKIT_TABLE_SELECTION," in
-        *",$EXAKIT_TABLE_ROW_SKIP,"*)
-            EXAKIT_DATA_LOAD_SELECTION="none"
-            return 0
-            ;;
+        *",$EXAKIT_TABLE_ROW_SKIP,"*) return 0 ;;
     esac
     for _dls_row in $(printf '%s' "$EXAKIT_TABLE_SELECTION" | tr ',' ' '); do
         _dls_id="$(printf '%s\n' "$EXAKIT_TABLE_IDS" | sed -n "${_dls_row}p")"
         [ -n "$_dls_id" ] || continue
         EXAKIT_DATA_LOAD_SELECTION="${EXAKIT_DATA_LOAD_SELECTION:+$EXAKIT_DATA_LOAD_SELECTION,}$_dls_id"
     done
-    [ -n "$EXAKIT_DATA_LOAD_SELECTION" ] || EXAKIT_DATA_LOAD_SELECTION="none"
     return 0
 }
 
@@ -3514,6 +3573,10 @@ exakit_data_table_build() {
     # into a row of its own.
     _dtb_pend="$_dtb_f.pending"
     exakit_pending_datasets > "$_dtb_pend" 2>/dev/null || : > "$_dtb_pend"
+    # Which personas each dataset is for, from the persona service: a label
+    # suffix, so a reader sees why a row is ticked. Nothing when it cannot answer.
+    _dtb_hints=""
+    command -v exakit_persona_dataset_hints >/dev/null 2>&1 && _dtb_hints="$(exakit_persona_dataset_hints 2>/dev/null || true)"
     # NOT `grep -c ... || printf 0`: grep exits 1 when the count is zero, so the
     # fallback fired IN ADDITION and the count came out as "0\n0" — which every
     # later [ -gt ] then refused as a non-integer. The guard is the value, not
@@ -3534,8 +3597,9 @@ exakit_data_table_build() {
             # The label loses its trailing "(~175k rows)": the Status column
             # carries the real count when the row finishes, and an estimate
             # beside a measurement is the same fact twice, worse.
+            _dtb_for="$(printf '%s\n' "$_dtb_hints" | sed -n "s/^${_dtb_id}|//p" | head -n 1)"
             printf '%s|%s|1|idle|||||| \n' "$_dtb_kind" \
-                "$(printf '%s' "$_dtb_label" | sed 's/ *([^()]*)$//')" >> "$_dtb_f"
+                "$(printf '%s' "$_dtb_label" | sed 's/ *([^()]*)$//')${_dtb_for:+ - for $_dtb_for}" >> "$_dtb_f"
             EXAKIT_TABLE_IDS="$EXAKIT_TABLE_IDS$_dtb_id
 "
             _dtb_n=$(( _dtb_n + 1 ))
@@ -3547,16 +3611,25 @@ exakit_data_table_build() {
             EXAKIT_TABLE_DEFAULTS="${EXAKIT_TABLE_DEFAULTS:+$EXAKIT_TABLE_DEFAULTS,}$_dtb_i"
             _dtb_i=$(( _dtb_i + 1 ))
         done
+        # The personas picked for this machine tick their own datasets only (and
+        # Select All only when that is every row). No persona: all, as before.
+        [ -n "${EXAKIT_DATASETS_PRESELECT:-}" ] && \
+            EXAKIT_TABLE_DEFAULTS="$(_exakit_data_table_preselect "$EXAKIT_DATASETS_PRESELECT")"
     else
         EXAKIT_TABLE_GROUP=""
         EXAKIT_TABLE_DEFAULTS=""
     fi
     rm -f "$_dtb_pend"
-    printf 'plain|A local CSV / Parquet / JSON file, or a folder of them|0|idle|||||| \n' >> "$_dtb_f"
-    EXAKIT_TABLE_IDS="${EXAKIT_TABLE_IDS}local
+    # The local-file row: left out when the data question already asked for it
+    # (EXAKIT_DATA_TABLE_NO_LOCAL=1, the two-step question). 0 means no row.
+    EXAKIT_TABLE_ROW_LOCAL=0
+    if [ "${EXAKIT_DATA_TABLE_NO_LOCAL:-0}" != 1 ]; then
+        printf 'plain|A local CSV / Parquet / JSON file, or a folder of them|0|idle|||||| \n' >> "$_dtb_f"
+        EXAKIT_TABLE_IDS="${EXAKIT_TABLE_IDS}local
 "
-    _dtb_n=$(( _dtb_n + 1 ))
-    EXAKIT_TABLE_ROW_LOCAL="$_dtb_n"
+        _dtb_n=$(( _dtb_n + 1 ))
+        EXAKIT_TABLE_ROW_LOCAL="$_dtb_n"
+    fi
     printf 'plain|Skip|0|idle|||||| \n' >> "$_dtb_f"
     EXAKIT_TABLE_IDS="$EXAKIT_TABLE_IDS
 "
@@ -3567,6 +3640,28 @@ exakit_data_table_build() {
     # local-file row, which is the only thing this screen can still do.
     [ "$_dtb_count" -gt 0 ] || EXAKIT_TABLE_DEFAULTS="$EXAKIT_TABLE_ROW_LOCAL"
     return 0
+}
+
+# _exakit_data_table_preselect <ids_csv> — the table rows to tick for those
+# dataset ids (EXAKIT_TABLE_IDS gives each row's id), plus Select All when the
+# ids cover every dataset row.
+_exakit_data_table_preselect() {
+    _dtp_rows=""
+    _dtp_all=1
+    _dtp_i=0
+    while IFS= read -r _dtp_id; do
+        _dtp_i=$(( _dtp_i + 1 ))
+        [ "$_dtp_i" -gt 1 ] || continue                       # row 1: Select All
+        [ -n "$_dtp_id" ] || continue
+        case ",$1," in
+            *",$_dtp_id,"*) _dtp_rows="${_dtp_rows:+$_dtp_rows,}$_dtp_i" ;;
+            *) _dtp_all=0 ;;
+        esac
+    done <<EXAKIT_DTP_EOF
+$EXAKIT_TABLE_IDS
+EXAKIT_DTP_EOF
+    [ "$_dtp_all" = 1 ] && _dtp_rows="1${_dtp_rows:+,$_dtp_rows}"
+    printf '%s\n' "$_dtp_rows"
 }
 
 # exakit_data_table_row <dataset-id> — which row that dataset is on, or 0.

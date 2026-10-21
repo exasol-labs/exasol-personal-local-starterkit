@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "id": "general",
+  "title": "General",
+  "summary": "The database, the tools and every AI client, with the general samples: TPC-H, energy and weather.",
+  "picker": true,
+  "default": true,
+  "order": 10,
+  "datasets": ["tpch", "energy", "weather"],
+  "mcp_clients": "all",
+  "addons": []
+}

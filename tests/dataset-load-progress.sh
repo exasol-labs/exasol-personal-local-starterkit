@@ -892,10 +892,10 @@ check "a database of only-empty tables still answers" "EXAKIT.LISTING_ANSWERED" 
 if command -v python3 >/dev/null 2>&1; then
     check "Enter on Skip answers Skip" "SELECTION=none" \
         "$(python3 "$ROOT/tests/lib/tty-replay.py" "$ROOT/tests/lib/skip-enter-scenario.sh" "$ROOT" \
-            "Datasets to load" 'jjjj\r' 2>&1 | grep '^SELECTION=' || echo 'replay failed')"
+            "Sample datasets" 'jjj\r' 2>&1 | grep '^SELECTION=' || echo 'replay failed')"
     check "Enter on a dataset loads the ticked ones" "SELECTION=tpch,energy,weather" \
         "$(python3 "$ROOT/tests/lib/tty-replay.py" "$ROOT/tests/lib/skip-enter-scenario.sh" "$ROOT" \
-            "Datasets to load" '\r' 2>&1 | grep '^SELECTION=' || echo 'replay failed')"
+            "Sample datasets" '\r' 2>&1 | grep '^SELECTION=' || echo 'replay failed')"
 else
     check "Enter on Skip answers Skip" "skipped" "skipped"
 fi

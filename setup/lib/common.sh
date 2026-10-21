@@ -4276,6 +4276,10 @@ exakit_marketplace_menu() {
         # Not applicable here and not installed: it is not an option on this
         # machine, so it is not shown at all — no row, no table line.
         _exakit_addon_offerable "$_mm_id" || continue
+        # Only the personas' add-ons, when the closing offer is theirs.
+        if [ -n "${EXAKIT_MARKETPLACE_ONLY:-}" ]; then
+            case ",$EXAKIT_MARKETPLACE_ONLY," in *",$_mm_id,"*) ;; *) continue ;; esac
+        fi
         # Every add-on gets a STATE row; only an installable one also gets a
         # selection row. A state that cannot be installed is answered by the
         # "__disabled__" keeps the row in _mm_ids so the env answer can still
@@ -4668,6 +4672,16 @@ exakit_marketplace_offer() {
     if [ -n "${EXAKIT_MARKETPLACE_ADDONS:-}" ]; then
         exakit_marketplace_menu
         return $?
+    fi
+
+    # THE PERSONAS' ADD-ONS, picked on screen: offered straight away, ticked,
+    # and only those - the rest of the marketplace is one command away and the
+    # closing note says so. Enter installs them; Skip backs out.
+    if [ -n "${EXAKIT_MARKETPLACE_PRESELECT:-}" ] && [ -z "${EXAKIT_SOFT_FAILED:-}" ] && [ -n "$(_exakit_prompt_tty)" ]; then
+        ui_rule
+        heading "Add-ons for your personas"
+        EXAKIT_MARKETPLACE_ONLY="$EXAKIT_MARKETPLACE_PRESELECT" exakit_marketplace_menu || true
+        return 0
     fi
 
     # "Done and working" must be true before it is said: a run that recorded
@@ -10364,12 +10378,11 @@ kit_shared_steps() {
     fi
     _step_no=$((_step_no + 1))
 
-    # Load the sample data before any MCP configuration. exapump is now up
-    # (its only dependency), and doing this first means the read-only MCP
-    # user is provisioned, granted, and posture-checked against a schema
-    # that already holds the sample tables — and the AI client has data to
-    # query the moment it connects.
-    if [ "$_kss_nodb" = 1 ]; then
+    # THE SAMPLE DATA FOLLOWS THE PERSONA QUESTION NOW. The parts everyone needs
+    # run first, then "What will you use this machine for?", and its answer
+    # ticks the datasets: exakit_persona_flow, which the setup scripts call
+    # after these steps. Loaded here only by a kit copy without persona.sh.
+    if [ "$_kss_nodb" = 1 ] || command -v exakit_persona_flow >/dev/null 2>&1; then
         :
     elif exakit_soft_failed exapump; then
         info "Skipping the sample data — it is loaded with exapump, which is not installed"

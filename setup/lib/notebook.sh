@@ -19,9 +19,15 @@
 #     no kernel spec, notebook or output ever holds a host, a user or a
 #     password. The store is refreshed from the kit's record on every
 #     `exakit notebook`.
-#   - JupyterLab is NOT installed behind the user's back: one on PATH is used;
-#     with none the user is asked (EXAKIT_NOTEBOOK_JUPYTER=install|skip answers
-#     for a script), and a skip prints where to get it.
+#   - The notebook tools are one checklist at the install, all three ticked:
+#     JupyterLab (one on PATH is used; with none, the kit's is installed because
+#     it was ticked), Marimo (installed into the kit's notebook environment) and
+#     Positron (the user's own, only ever CONFIGURED: the notebooks folder names
+#     the kit's Python as its interpreter; the kit never installs Positron).
+#     EXAKIT_NOTEBOOK_FRONTENDS=jupyterlab,marimo,positron|none answers it for a
+#     script; EXAKIT_NOTEBOOK_JUPYTER=skip / EXAKIT_NOTEBOOK_MARIMO=skip leave one
+#     out. Untick one now, add it later: exakit notebook --setup | --marimo |
+#     --positron.
 #   - On demand, never a boot service: `exakit notebook` starts JupyterLab in
 #     the background on 127.0.0.1 with a token (kit credential, never printed)
 #     and opens it logged in; `exakit notebook --stop` stops it. That is why
@@ -33,8 +39,9 @@
 #
 #   - venv:      $EXAKIT_HOME/notebook-venv
 #   - store:     $EXAKIT_HOME/notebook/connection.scs
-#   - notebooks: $EXAKIT_HOME/notebooks  (copied once, never overwritten; kept
-#                by an uninstall)
+#   - notebooks: $EXAKIT_HOME/notebooks/starter-kit-notebooks/<persona>/ and
+#                .../marimo/<persona>/ (notebook/catalog.json; copied once, never
+#                overwritten; kept by an uninstall)
 #
 # Safe to re-run: an existing venv with the desired version installed is kept.
 
@@ -56,6 +63,13 @@ EXAKIT_NOTEBOOK_INSTALL_GUIDE="https://jupyter.org/install"
 # Kit credential names: the store's master password and JupyterLab's token.
 EXAKIT_NOTEBOOK_MASTER_CRED="notebook_store_master_password"
 EXAKIT_NOTEBOOK_TOKEN_CRED="notebook_jupyter_token"
+EXAKIT_NOTEBOOK_MARIMO_CRED="notebook_marimo_token"
+# Marimo, the second front end: its package (tests/notebook-addon.sh holds it
+# equal to notebook/catalog.json, which tools/notebooks.py converts with) and
+# where it serves. Positron is the user's own; this is where to get it.
+EXAKIT_NOTEBOOK_MARIMO_PACKAGE="marimo>=0.25.2,<0.26"
+EXAKIT_NOTEBOOK_MARIMO_PORT="${EXAKIT_MARIMO_PORT:-2718}"
+EXAKIT_NOTEBOOK_POSITRON_DOWNLOAD="https://positron.posit.co/download.html"
 
 notebook_venv_python() {
     printf '%s\n' "$EXAKIT_NOTEBOOK_VENV/bin/python"
@@ -101,10 +115,12 @@ _notebook_secret() {
     printf '%s' "$_nbs_value"
 }
 
-# _notebook_py <script> — run one of notebook/kit/*.py with the venv's Python.
-# The caller exports what the script reads.
+# _notebook_py <script> [args] — run one of notebook/kit/*.py with the venv's
+# Python. The caller exports what the script reads.
 _notebook_py() {
-    "$(notebook_venv_python)" "$(exakit_repo_root)/notebook/kit/$1"
+    _nbpy_script="$1"
+    shift
+    "$(notebook_venv_python)" "$(exakit_repo_root)/notebook/kit/$_nbpy_script" "$@"
 }
 
 # notebook_write_connection — the kit's current connection into the store;
@@ -131,16 +147,20 @@ notebook_connected() {
         _notebook_py check_connection.py >>"${EXAKIT_LOG_FILE:-/dev/null}" 2>&1
 }
 
-# notebook_copy_notebooks — the kit's notebooks into the user's folder; one
-# already there is the user's and is never overwritten. Prints what it added.
+# _notebook_folders <command> [args] — notebook/kit/notebooks.py, which places
+# the kit's notebooks and prepares the folder for Positron. Standard library
+# only, so any Python 3 runs it, before the venv is there too.
+_notebook_folders() {
+    run_python_any "$(exakit_repo_root)/notebook/kit/notebooks.py" "$@" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
+}
+
+# notebook_copy_notebooks [jupyter|marimo] — the kit's notebooks into their
+# persona folders, as notebook/catalog.json says: starter-kit-notebooks/<persona>/
+# (with a README naming the end-to-end path) or marimo/<persona>/. One already
+# there is the user's and is never overwritten. Prints persona/file per one added.
 notebook_copy_notebooks() {
     mkdir -p "$EXAKIT_NOTEBOOK_DIR" || return 1
-    for _nbc_src in "$(exakit_repo_root)"/notebook/notebooks/*.ipynb; do
-        [ -f "$_nbc_src" ] || continue
-        _nbc_name="$(basename "$_nbc_src")"
-        [ -e "$EXAKIT_NOTEBOOK_DIR/$_nbc_name" ] && continue
-        cp "$_nbc_src" "$EXAKIT_NOTEBOOK_DIR/$_nbc_name" && printf '%s\n' "$_nbc_name"
-    done
+    _notebook_folders copy "${1:-jupyter}" "$(exakit_repo_root)" "$EXAKIT_NOTEBOOK_DIR"
 }
 
 # notebook_register_kernel — the kernel any Jupyter front end on the machine
@@ -149,7 +169,7 @@ notebook_register_kernel() {
     _notebook_secret "$EXAKIT_NOTEBOOK_MASTER_CRED" >/dev/null
     EXAKIT_KERNEL_NAME="$EXAKIT_NOTEBOOK_KERNEL_NAME" EXAKIT_KERNEL_TITLE="$EXAKIT_NOTEBOOK_KERNEL_TITLE" \
         EXAKIT_NB_STORE="$(notebook_store_file)" EXAKIT_NB_MASTER_FILE="$EXAKIT_CREDS_DIR/$EXAKIT_NOTEBOOK_MASTER_CRED" \
-        EXAKIT_NB_DATASETS="$(exakit_repo_root)/data/datasets" \
+        EXAKIT_NB_KIT="$(exakit_repo_root)" EXAKIT_NB_DATASETS="$(exakit_repo_root)/data/datasets" \
         _notebook_py register_kernel.py >>"${EXAKIT_LOG_FILE:-/dev/null}" 2>&1
 }
 
@@ -199,6 +219,200 @@ notebook_offer_jupyter() {
     info "No JupyterLab: get it at $EXAKIT_NOTEBOOK_INSTALL_GUIDE, then run: exakit notebook"
     info "The kernel '$EXAKIT_NOTEBOOK_KERNEL_TITLE' is registered: VS Code or any Jupyter front end can use it now."
     return 1
+}
+
+# --- the notebook tools: the install's checklist, Marimo, Positron ------------
+
+# _notebook_skipped <value> — EXAKIT_NOTEBOOK_JUPYTER/MARIMO say leave it out.
+_notebook_skipped() {
+    case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in skip|no|0|false|none) return 0 ;; *) return 1 ;; esac
+}
+
+# notebook_choose_front_ends — which notebook tools, as one checklist with all
+# three ticked; sets NOTEBOOK_FRONT_ENDS (jupyterlab,marimo,positron or none).
+# EXAKIT_NOTEBOOK_FRONTENDS answers it; EXAKIT_NOTEBOOK_JUPYTER or
+# EXAKIT_NOTEBOOK_MARIMO=skip leaves one out; without a terminal the ticks stand.
+notebook_choose_front_ends() {
+    NOTEBOOK_FRONT_ENDS="$(printf '%s' "${EXAKIT_NOTEBOOK_FRONTENDS:-}" | tr '[:upper:]' '[:lower:]' | tr -d ' ')"
+    [ -n "$NOTEBOOK_FRONT_ENDS" ] && return 0
+    _ncf_defaults=""
+    _notebook_skipped "${EXAKIT_NOTEBOOK_JUPYTER:-}" || _ncf_defaults="1"
+    _notebook_skipped "${EXAKIT_NOTEBOOK_MARIMO:-}" || _ncf_defaults="${_ncf_defaults:+$_ncf_defaults,}2"
+    _ncf_defaults="${_ncf_defaults:+$_ncf_defaults,}3"
+    ui_checkbox_menu "Notebook tools - untick any you do not want" "$_ncf_defaults" \
+        "JupyterLab - notebooks in the browser with the kit's kernel; yours is used if you have one" \
+        "Marimo - reactive notebooks, installed into the kit's notebook environment" \
+        "Positron - your Positron, pointed at the kit's Python; never installed by the kit"
+    NOTEBOOK_FRONT_ENDS=""
+    for _ncf_i in $(printf '%s' "${EXAKIT_CHECKBOX_SELECTION:-}" | tr ',' ' '); do
+        case "$_ncf_i" in
+            1) NOTEBOOK_FRONT_ENDS="${NOTEBOOK_FRONT_ENDS:+$NOTEBOOK_FRONT_ENDS,}jupyterlab" ;;
+            2) NOTEBOOK_FRONT_ENDS="${NOTEBOOK_FRONT_ENDS:+$NOTEBOOK_FRONT_ENDS,}marimo" ;;
+            3) NOTEBOOK_FRONT_ENDS="${NOTEBOOK_FRONT_ENDS:+$NOTEBOOK_FRONT_ENDS,}positron" ;;
+        esac
+    done
+    [ -n "$NOTEBOOK_FRONT_ENDS" ] || NOTEBOOK_FRONT_ENDS="none"
+}
+
+# notebook_front_ends_setup — the install's notebook tools, one line each:
+# JupyterLab (the user's, or the kit's because it was ticked; the kernel is
+# registered either way), Marimo, and the user's Positron set to the kit's Python.
+notebook_front_ends_setup() {
+    notebook_choose_front_ends
+    case ",$NOTEBOOK_FRONT_ENDS," in
+        *,jupyterlab,*)
+            if _nfs_found="$(notebook_find_jupyter)"; then
+                case "$_nfs_found" in kit\ *) _nfs_whose="the kit's" ;; *) _nfs_whose="yours" ;; esac
+                ok "JupyterLab ($_nfs_whose: ${_nfs_found#* }) with the kernel '$EXAKIT_NOTEBOOK_KERNEL_TITLE' - open it with: exakit notebook"
+            else
+                EXAKIT_NOTEBOOK_JUPYTER=install notebook_offer_jupyter || true
+            fi ;;
+        *) info "JupyterLab not set up; the kernel '$EXAKIT_NOTEBOOK_KERNEL_TITLE' is registered for any Jupyter - add it any time: exakit notebook --setup" ;;
+    esac
+    case ",$NOTEBOOK_FRONT_ENDS," in
+        *,marimo,*)
+            if notebook_marimo_installed || notebook_install_marimo; then
+                ok "Marimo with the notebooks in $EXAKIT_NOTEBOOK_DIR/marimo - start it with: exakit notebook --marimo"
+            else
+                warn "Marimo could not be installed (see the log) - retry with: exakit notebook --marimo"
+            fi ;;
+        *) info "Marimo not installed - add it any time: exakit notebook --marimo" ;;
+    esac
+    case ",$NOTEBOOK_FRONT_ENDS," in
+        *,positron,*) notebook_positron_note ;;
+        *) info "Positron not set up - any time: exakit notebook --positron" ;;
+    esac
+    manifest_set components.notebook.front_ends "$NOTEBOOK_FRONT_ENDS"
+}
+
+notebook_marimo_command() {
+    printf '%s\n' "$EXAKIT_NOTEBOOK_VENV/bin/marimo"
+}
+
+notebook_marimo_installed() {
+    [ -x "$(notebook_marimo_command)" ]
+}
+
+# notebook_install_marimo — Marimo into the kit's notebook environment, then the
+# kit's Marimo notebooks into marimo/<persona>/.
+notebook_install_marimo() {
+    _nim_uv="$(_notebook_uv)" || return 1
+    EXAKIT_ACTIVE_LABEL="Installing Marimo"
+    run_logged "$_nim_uv" pip install --python "$(notebook_venv_python)" "$EXAKIT_NOTEBOOK_MARIMO_PACKAGE" || return 1
+    notebook_marimo_installed || return 1
+    notebook_copy_notebooks marimo >/dev/null || true
+    manifest_set components.notebook.marimo kit
+}
+
+_notebook_marimo_pidfile() { printf '%s\n' "$EXAKIT_NOTEBOOK_HOME/marimo.pid"; }
+_notebook_marimo_logfile() { printf '%s\n' "${EXAKIT_LOG_DIR:-$EXAKIT_HOME/logs}/notebook-marimo.log"; }
+
+# _notebook_marimo_answers <port> — Marimo's health check answers on this port.
+_notebook_marimo_answers() {
+    case "$(curl -s -m 3 -o /dev/null -w '%{http_code}' "http://127.0.0.1:$1/health" 2>/dev/null)" in
+        [234][0-9][0-9]) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+_notebook_marimo_port() {
+    _nmp_port="$(manifest_get components.notebook.marimo_port 2>/dev/null || true)"
+    [ -n "${EXAKIT_MARIMO_PORT:-}" ] && _nmp_port="$EXAKIT_MARIMO_PORT"
+    printf '%s\n' "${_nmp_port:-$EXAKIT_NOTEBOOK_MARIMO_PORT}"
+}
+
+# notebook_marimo_state — running|starting|stopped|not installed, from the
+# pidfile the kit wrote and the health check on the recorded port.
+notebook_marimo_state() {
+    notebook_marimo_installed || { printf 'not installed\n'; return 0; }
+    _nms_pid="$(cat "$(_notebook_marimo_pidfile)" 2>/dev/null || true)"
+    if [ -n "$_nms_pid" ] && kill -0 "$_nms_pid" 2>/dev/null; then
+        if _notebook_marimo_answers "$(_notebook_marimo_port)"; then printf 'running\n'; else printf 'starting\n'; fi
+        return 0
+    fi
+    printf 'stopped\n'
+}
+
+# notebook_marimo_start <port> — Marimo in the background on 127.0.0.1 over the
+# kit's Marimo notebooks. Its token is a kit credential marimo reads from the
+# FILE, and the wrapper masks it in the log: never on a command line or in a log.
+notebook_marimo_start() {
+    _nmt_port="$1"
+    if _notebook_marimo_answers "$_nmt_port"; then
+        warn "Port $_nmt_port already answers for another program - pick another with: exakit notebook --marimo --port <number>"
+        return 1
+    fi
+    _notebook_secret "$EXAKIT_NOTEBOOK_MARIMO_CRED" >/dev/null
+    _nmt_dir="$EXAKIT_NOTEBOOK_DIR/marimo"
+    _nmt_token="$EXAKIT_CREDS_DIR/$EXAKIT_NOTEBOOK_MARIMO_CRED"
+    mkdir -p "$_nmt_dir" "$EXAKIT_NOTEBOOK_HOME" "$(dirname "$(_notebook_marimo_logfile)")"
+    ( cd "$_nmt_dir" && nohup "$(notebook_venv_python)" "$(exakit_repo_root)/notebook/kit/marimo_wrapper.py" "$_nmt_token" \
+        "$(notebook_marimo_command)" edit "$_nmt_dir" --headless --host 127.0.0.1 --port "$_nmt_port" \
+        --token-password-file "$_nmt_token" --skip-update-check >>"$(_notebook_marimo_logfile)" 2>&1 &
+      echo $! > "$(_notebook_marimo_pidfile)" )
+    manifest_set components.notebook.marimo_port "$_nmt_port"
+    EXAKIT_ACTIVE_LABEL="Starting Marimo"
+    ui_spin_begin "Starting Marimo"
+    _nmt_i=0
+    while [ "$_nmt_i" -lt 60 ]; do
+        _notebook_marimo_answers "$_nmt_port" && { ui_spin_end; return 0; }
+        sleep 1; _nmt_i=$((_nmt_i + 1))
+    done
+    ui_spin_end
+    warn "Marimo did not answer within 60s - see $(_notebook_marimo_logfile)"
+    return 1
+}
+
+notebook_marimo_stop() {
+    _nmx_pid="$(cat "$(_notebook_marimo_pidfile)" 2>/dev/null || true)"
+    if [ -n "$_nmx_pid" ] && kill -0 "$_nmx_pid" 2>/dev/null; then
+        pkill -P "$_nmx_pid" 2>/dev/null || true
+        kill "$_nmx_pid" 2>/dev/null || true
+        ok "Marimo stopped (your notebooks are saved in their folder)"
+    else
+        [ "${1:-}" = quiet ] || info "Marimo is not running"
+    fi
+    rm -f "$(_notebook_marimo_pidfile)"
+}
+
+# notebook_find_positron — the command that opens Positron on a folder: its CLI
+# on PATH, else the installed app; nothing (return 1) when it is not there.
+notebook_find_positron() {
+    command -v positron 2>/dev/null && return 0
+    for _nfp_app in /Applications/Positron.app "$HOME/Applications/Positron.app" /usr/bin/positron /usr/share/positron/positron; do
+        [ -e "$_nfp_app" ] && { printf '%s\n' "$_nfp_app"; return 0; }
+    done
+    return 1
+}
+
+# notebook_prepare_positron — the notebooks folder as a Positron workspace whose
+# interpreter is the kit's notebook Python (.vscode/settings.json; its other
+# settings kept). Fails, leaving the file alone, when it is not valid JSON.
+notebook_prepare_positron() {
+    _notebook_folders positron "$EXAKIT_NOTEBOOK_DIR" "$(notebook_venv_python)" "$EXAKIT_NOTEBOOK_VENV" >/dev/null
+}
+
+# notebook_positron_note — configure the folder for Positron and say what came of
+# it. Positron itself is never installed.
+notebook_positron_note() {
+    if ! notebook_prepare_positron; then
+        warn "$EXAKIT_NOTEBOOK_DIR/.vscode/settings.json is not valid JSON, so it was left alone - choose the interpreter $(notebook_venv_python) in Positron yourself"
+        return 0
+    fi
+    if _npn_found="$(notebook_find_positron)"; then
+        ok "Positron ($_npn_found) opens the notebooks with the kit's Python: exakit notebook --positron"
+    else
+        info "Positron is not on this machine, so there is nothing to configure in it - the notebooks folder is ready for it: $EXAKIT_NOTEBOOK_POSITRON_DOWNLOAD"
+    fi
+}
+
+# notebook_open_positron — Positron on the notebooks folder.
+notebook_open_positron() {
+    _nop_cmd="$(notebook_find_positron)" || return 1
+    case "$_nop_cmd" in
+        *.app) open -a "$_nop_cmd" "$EXAKIT_NOTEBOOK_DIR" >/dev/null 2>&1 ;;
+        *) ( nohup "$_nop_cmd" "$EXAKIT_NOTEBOOK_DIR" >/dev/null 2>&1 & ) ;;
+    esac
 }
 
 _notebook_uv() {
@@ -258,7 +472,7 @@ notebook_install() {
         ok "Notebook connector installed: $EXAKIT_NOTEBOOK_VENV"
     fi
     _nbi_added="$(notebook_copy_notebooks | tr '\n' ' ')"
-    [ -n "$_nbi_added" ] && ok "Notebooks in $EXAKIT_NOTEBOOK_DIR: $_nbi_added"
+    [ -n "$_nbi_added" ] && ok "Notebooks in $EXAKIT_NOTEBOOK_DIR/starter-kit-notebooks: $_nbi_added"
     if ! notebook_register_kernel; then
         _notebook_not_installed "the Jupyter kernel could not be registered (see log)"
         return 1
@@ -269,8 +483,9 @@ notebook_install() {
     manifest_set components.notebook.python "$(notebook_venv_python)"
     manifest_set components.notebook.notebooks_dir "$EXAKIT_NOTEBOOK_DIR"
     manifest_set components.notebook.store_file "$(notebook_store_file)"
+    manifest_set components.notebook.master_file "$EXAKIT_CREDS_DIR/$EXAKIT_NOTEBOOK_MASTER_CRED"
     manifest_set components.notebook.kernel "$EXAKIT_NOTEBOOK_KERNEL_NAME"
-    notebook_offer_jupyter || true
+    notebook_front_ends_setup
     return 0
 }
 
@@ -306,6 +521,8 @@ notebook_update() {
     _nbu_current="$(notebook_installed_version 2>/dev/null || true)"
     if [ -n "$_nbu_current" ] && [ "$_nbu_current" = "$_nbu_available" ]; then
         notebook_copy_notebooks >/dev/null || true
+        notebook_marimo_installed && { notebook_copy_notebooks marimo >/dev/null || true; }
+        manifest_set components.notebook.master_file "$EXAKIT_CREDS_DIR/$EXAKIT_NOTEBOOK_MASTER_CRED"
         notebook_register_kernel || true
         notebook_validate || true
         ok "notebook is already current ($_nbu_current)"
@@ -402,12 +619,16 @@ _notebook_open_browser() {
     fi
 }
 
-# notebook_cmd [--check] [--setup] [--stop] [--no-browser] [--port N] — the
-# `exakit notebook` command.
+# notebook_cmd [--marimo|--positron] [--check] [--setup] [--stop] [--no-browser]
+# [--port N] — the `exakit notebook` command: JupyterLab, or with --marimo
+# Marimo, or with --positron the user's Positron on the notebooks folder.
 notebook_cmd() {
-    _nbc_check=0; _nbc_setup=0; _nbc_stop=0; _nbc_browser=1; _nbc_port=""
+    _nbc_check=0; _nbc_setup=0; _nbc_stop=0; _nbc_browser=1; _nbc_port=""; _nbc_front=""
     while [ $# -gt 0 ]; do
         case "$1" in
+            --marimo|--positron)
+                [ -z "$_nbc_front" ] || [ "$_nbc_front" = "${1#--}" ] || die "Pick one of --marimo and --positron"
+                _nbc_front="${1#--}" ;;
             --check) _nbc_check=1 ;;
             --setup) _nbc_setup=1 ;;
             --stop) _nbc_stop=1 ;;
@@ -422,7 +643,14 @@ notebook_cmd() {
         shift
     done
     notebook_installed_version >/dev/null || die "The notebook add-on is not installed. Install it with: exakit marketplace notebook"
-    if [ "$_nbc_stop" = 1 ]; then notebook_server_stop; return 0; fi
+    if [ "$_nbc_stop" = 1 ]; then
+        case "$_nbc_front" in
+            marimo) notebook_marimo_stop ;;
+            positron) info "Positron is yours to close; the kit does not run it" ;;
+            *) notebook_server_stop; notebook_marimo_stop quiet ;;
+        esac
+        return 0
+    fi
     exakit_db_reachable || die "The database is not running. Start it with: exakit start"
     [ "$(notebook_write_connection)" = "changed" ] && info "The database connection changed; the notebooks now use the new one"
     notebook_register_kernel || warn "The kernel could not be registered again (see the log)."
@@ -431,9 +659,13 @@ notebook_cmd() {
     if [ "$_nbc_check" = 1 ]; then
         notebook_connected || die "The notebook connector could not connect to the database. Repair with: exakit update notebook"
         ok "Notebooks connect to the database"
-        info "JupyterLab: $(notebook_server_state)   Notebooks: $EXAKIT_NOTEBOOK_DIR"
+        info "JupyterLab: $(notebook_server_state)   Marimo: $(notebook_marimo_state)   Notebooks: $EXAKIT_NOTEBOOK_DIR"
         return 0
     fi
+    case "$_nbc_front" in
+        marimo) notebook_marimo_cmd "$_nbc_setup" "$_nbc_browser" "$_nbc_port"; return $? ;;
+        positron) notebook_positron_cmd; return $? ;;
+    esac
     notebook_offer_jupyter || return 0
     if [ "$_nbc_setup" = 1 ]; then
         ok "Ready: $(notebook_find_jupyter | cut -d' ' -f2-) with the kernel '$EXAKIT_NOTEBOOK_KERNEL_TITLE'"
@@ -452,6 +684,57 @@ notebook_cmd() {
     return 0
 }
 
+# notebook_marimo_cmd <setup 0|1> <browser 0|1> [port] — `exakit notebook
+# --marimo`: Marimo installed when the user says yes (EXAKIT_NOTEBOOK_MARIMO=
+# install|skip answers for a script), then started and opened, logged in.
+notebook_marimo_cmd() {
+    if ! notebook_marimo_installed; then
+        _nmc_answer="$(printf '%s' "${EXAKIT_NOTEBOOK_MARIMO:-}" | tr '[:upper:]' '[:lower:]')"
+        if [ -z "$_nmc_answer" ]; then
+            if confirm "Marimo is not installed. Install it into the kit's notebook environment?" y; then _nmc_answer=install; else _nmc_answer=skip; fi
+        fi
+        if [ "$_nmc_answer" != install ]; then
+            info "Marimo was not installed. Add it any time with: exakit notebook --marimo"
+            return 0
+        fi
+        notebook_install_marimo || die "Marimo could not be installed - see ${EXAKIT_LOG_FILE:-the log}."
+        ok "Marimo installed into the kit's notebook environment"
+    fi
+    _nmc_added="$(notebook_copy_notebooks marimo | tr '\n' ' ')"
+    [ -n "$_nmc_added" ] && ok "New notebooks in $EXAKIT_NOTEBOOK_DIR/marimo: $_nmc_added"
+    if [ "$1" = 1 ]; then
+        ok "Ready: Marimo, with the kit's notebooks in $EXAKIT_NOTEBOOK_DIR/marimo"
+        return 0
+    fi
+    _nmc_port="${3:-$(_notebook_marimo_port)}"
+    if [ "$(notebook_marimo_state)" != "running" ]; then
+        notebook_marimo_start "$_nmc_port" || return 1
+    else
+        _nmc_port="$(_notebook_marimo_port)"
+    fi
+    ok "Marimo is running: http://127.0.0.1:$_nmc_port/   (stop it with: exakit notebook --stop --marimo)"
+    info "Marimo notebooks connect with: import exakit_nb; conn = exakit_nb.connect()"
+    if [ "$2" = 1 ]; then
+        _notebook_open_browser "http://127.0.0.1:$_nmc_port/?access_token=$(_notebook_secret "$EXAKIT_NOTEBOOK_MARIMO_CRED")" || \
+            info "Open http://127.0.0.1:$_nmc_port/ - the login token is in $EXAKIT_CREDS_DIR/$EXAKIT_NOTEBOOK_MARIMO_CRED"
+    fi
+    return 0
+}
+
+# notebook_positron_cmd — `exakit notebook --positron`: the notebooks folder
+# set to the kit's Python, then opened in the user's Positron. Never installs it.
+notebook_positron_cmd() {
+    notebook_prepare_positron || \
+        die "$EXAKIT_NOTEBOOK_DIR/.vscode/settings.json is not valid JSON, so the kit leaves it alone - choose the interpreter $(notebook_venv_python) in Positron yourself"
+    if notebook_open_positron; then
+        ok "Positron opened on $EXAKIT_NOTEBOOK_DIR with the kit's Python ($(notebook_venv_python))"
+    else
+        info "Positron is not on this machine. The folder is ready for it - get it at $EXAKIT_NOTEBOOK_POSITRON_DOWNLOAD, then run: exakit notebook --positron"
+    fi
+    info "In a notebook or script: import exakit_nb; conn = exakit_nb.connect()"
+    return 0
+}
+
 # notebook_uninstall [1] — the kernel, the venv, the store and the server go;
 # the notebooks folder and the user's own JupyterLab stay.
 notebook_uninstall() {
@@ -465,10 +748,12 @@ notebook_uninstall() {
         return 0
     fi
     notebook_server_stop >/dev/null 2>&1 || true
+    notebook_marimo_stop quiet >/dev/null 2>&1 || true
     notebook_remove_kernel
-    rm -rf "$EXAKIT_NOTEBOOK_VENV" "$(notebook_store_file)" "$(_notebook_pidfile)"
+    rm -rf "$EXAKIT_NOTEBOOK_VENV" "$(notebook_store_file)" "$(_notebook_pidfile)" "$(_notebook_marimo_pidfile)"
     rmdir "$EXAKIT_NOTEBOOK_HOME" 2>/dev/null || true
-    rm -f "$EXAKIT_CREDS_DIR/$EXAKIT_NOTEBOOK_MASTER_CRED" "$EXAKIT_CREDS_DIR/$EXAKIT_NOTEBOOK_TOKEN_CRED"
+    rm -f "$EXAKIT_CREDS_DIR/$EXAKIT_NOTEBOOK_MASTER_CRED" "$EXAKIT_CREDS_DIR/$EXAKIT_NOTEBOOK_TOKEN_CRED" \
+        "$EXAKIT_CREDS_DIR/$EXAKIT_NOTEBOOK_MARIMO_CRED"
     manifest_del components.notebook
     manifest_del desired.notebook
     info "Your notebooks stay in $EXAKIT_NOTEBOOK_DIR"

@@ -149,6 +149,12 @@ fi
 # --- steps 3-6: exapump, MCP server, pyexasol, exakit helper (shared) -------
 kit_shared_steps 3 6 "$SCRIPT_DIR" "$KIT_ROOT"
 
+# --- the personas, then the data ---------------------------------------------
+# "What will you use this machine for?" comes after the parts everyone needs,
+# and its answer ticks the datasets (and, at the close, the add-ons). With
+# EXAKIT_PERSONA set it was answered before step 1. See exakit_persona_flow.
+command -v exakit_persona_flow >/dev/null 2>&1 && exakit_persona_flow "$KIT_ROOT"
+
 # The other half of the crossing. Last, because it needs all three things the
 # steps above provide: a database that is up, an exapump binary, and a profile
 # pointing at the NEW database.
@@ -181,6 +187,7 @@ exakit_print_ready_line
 # the marketplace offer so an add-on installed from it joins the boot set.
 exakit_autostart_default_on || true
 ( exakit_marketplace_offer ) || true
+command -v exakit_persona_marketplace_note >/dev/null 2>&1 && exakit_persona_marketplace_note
 # A rule, then a heading: the last line on screen is where the reader is left,
 # and run together with whatever the marketplace printed it read as one more of
 # its bullets. The rule gives it air; the green arrow says it is not a step.

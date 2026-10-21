@@ -556,12 +556,15 @@ if (-not $uiLoaded) {
 # anything is installed - and a dry run says so too, since it never reaches
 # the setup script that applies it. Twin of the check in install.sh.
 if ($env:EXAKIT_PERSONA) {
-    $personaFile = Join-Path (Join-Path $KitDir "personas") "$($env:EXAKIT_PERSONA).json"
-    if (-not (Test-Path $personaFile)) {
-        $known = @(Get-ChildItem -Path (Join-Path $KitDir "personas") -Filter "*.json" -ErrorAction SilentlyContinue | ForEach-Object { $_.BaseName }) -join " "
-        throw "Unknown persona '$($env:EXAKIT_PERSONA)' (available: $known). Nothing was installed."
+    # Several personas are joined by commas (general,ml-engineer): each one is a file, checked the same way.
+    foreach ($personaId in ($env:EXAKIT_PERSONA -split ',' | Where-Object { $_ })) {
+        $personaFile = Join-Path (Join-Path $KitDir "personas") "$personaId.json"
+        if (-not (Test-Path $personaFile)) {
+            $known = @(Get-ChildItem -Path (Join-Path $KitDir "personas") -Filter "*.json" -ErrorAction SilentlyContinue | ForEach-Object { $_.BaseName }) -join " "
+            throw "Unknown persona '$personaId' (available: $known). Nothing was installed."
+        }
     }
-    Write-Host "  * Persona: $($env:EXAKIT_PERSONA) (personas\$($env:EXAKIT_PERSONA).json) - it answers every choice you did not set yourself." -ForegroundColor Blue
+    Write-Host "  * Persona: $($env:EXAKIT_PERSONA) - it answers every choice you did not set yourself." -ForegroundColor Blue
 }
 
 if ($env:EXAKIT_DRY_RUN -eq "1") {

@@ -39,7 +39,7 @@
 #                       the container is never removed
 #   autostart           whether everything comes back after a restart; shows
 #                       the current state and asks whether to change it
-#   data-load [--force|<path>]
+#   data-load [--force|<path>|<dataset>]
 #                       open focused data loading options; a file path loads that
 #                       file, a FOLDER path bulk-loads every CSV/Parquet/JSON file
 #                       in it (one table each); --force REPLACES bundled datasets
@@ -1661,14 +1661,22 @@ cmd_data_load() {
     case "${1:-}" in
         "")      ;;
         --force) _dl_force="--force" ;;
-        -*)      reject "Unknown option '$1' for data-load (pass --force, or a file or folder path)." ;;
+        -*)      reject "Unknown option '$1' for data-load (pass --force, a file or folder path, or a dataset id)." ;;
         *)       _dl_path="$1" ;;
     esac
     command -v exakit_load_sample_data >/dev/null 2>&1 || \
         die "The exapump data-loading module is not available in this kit build."
+    # A bundled dataset's id (exakit data-load fda_recalls) is the same answer
+    # as EXAKIT_DATASETS=fda_recalls - a file or folder of that name wins.
+    if [ -n "$_dl_path" ] && [ ! -e "$_dl_path" ] && \
+       exakit_bundled_datasets | cut -d'|' -f1 | grep -qx -- "$_dl_path"; then
+        EXAKIT_DATASETS="$_dl_path"
+        export EXAKIT_DATASETS
+        _dl_path=""
+    fi
     if [ -n "$_dl_path" ]; then
         _dl_norm="$(exakit_normalize_path "$_dl_path")"
-        [ -e "$_dl_norm" ] || die "No such file or folder: $_dl_path"
+        [ -e "$_dl_norm" ] || die "No such file, folder or dataset: $_dl_path (datasets: $(exakit_bundled_datasets | cut -d'|' -f1 | tr '\n' ' ' | sed 's/ $//'))"
         # Naming a path IS choosing the local-file row, which is exactly what
         # EXAKIT_DATA_FILE already means -- so one contract covers the argument
         # and the variable, and the menu never draws for either.
@@ -2399,10 +2407,7 @@ cmd_persona() {
             ;;
         show)
             exakit_persona_known "${2:-}" || die "Name a persona: $(exakit_persona_ids | tr '\n' ' ')"
-            printf '%s\n  %s\n' "$(exakit_persona_value "$2" title)" "$(exakit_persona_value "$2" summary)"
-            printf '  datasets:     %s\n' "$(exakit_persona_value "$2" datasets)"
-            printf '  AI clients:   %s\n' "$(exakit_persona_value "$2" mcp_clients)"
-            printf '  add-ons:      %s\n' "$(exakit_persona_value "$2" addons)"
+            _exakit_persona_service show "$2"
             ;;
         apply)
             shift

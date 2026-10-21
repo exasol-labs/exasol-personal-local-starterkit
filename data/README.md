@@ -43,6 +43,8 @@ dataset (one with a `descriptor.json`, for the persona notebooks) also needs a
 | [`datasets/weather/`](datasets/weather/) | `WEATHER` | 10 European cities, ~11k days of daily weather (2023–2025) |
 | [`datasets/pharma_trials/`](datasets/pharma_trials/) | `PHARMA` | 5,169 industry Phase 2/3 trials from ClinicalTrials.gov, with a label (terminated early) and a text summary ([README](datasets/pharma_trials/README.md)) |
 | [`datasets/banking_complaints/`](datasets/banking_complaints/) | `BANKING` | 6,754 CFPB consumer complaints about cards, mortgages and accounts, with a label (monetary relief) ([README](datasets/banking_complaints/README.md)) |
+| [`datasets/fda_recalls/`](datasets/fda_recalls/) | `FDA` | The FDA's 2024 food, drug and device recalls from openFDA, with the reason as text and a label (Class I, the serious ones) ([README](datasets/fda_recalls/README.md)) |
+| [`datasets/bank_marketing/`](datasets/bank_marketing/) | `BANKMKT` | 45,211 clients of a bank's term-deposit campaign (UCI), with a label (subscribed) ([README](datasets/bank_marketing/README.md)) |
 
 ## The TPC-H dataset (`datasets/tpch/`)
 

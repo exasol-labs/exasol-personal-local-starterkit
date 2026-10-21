@@ -278,7 +278,7 @@
       "command": "persona",
       "options": "list | show <id> | apply <id> [--yes]",
       "summary": "A named set of datasets, AI clients and add-ons: list them, show one, apply one.",
-      "description": "A persona is exactly a named set of the answers the installer already takes - which datasets to load, which AI clients to connect, which marketplace add-ons to install. data-scientist: the pharma and banking reference datasets, every AI client, the notebook add-on. ml-engineer: the same plus udf-devkit. Pick one at install time with EXAKIT_PERSONA=<id>, or later with exakit persona apply <id>, which loads the datasets, connects the clients and installs the add-ons through data-load, mcp-setup and marketplace (one that fails does not stop the others). An answer you give yourself always wins for that one variable: EXAKIT_PERSONA=data-scientist EXAKIT_DATASETS=pharma_trials loads only that dataset. An unknown persona is refused before anything is installed. Personas are files in personas/ (personas/README.md); adding one needs no code.",
+      "description": "A persona is exactly a named set of the answers the installer already takes - which datasets to load, which AI clients to connect, which marketplace add-ons to install. The kit ships general (TPC-H, energy, weather), data-scientist (FDA recalls, banking complaints; notebook, dash-server, json-tables) and ml-engineer (bank marketing, pharma trials; notebook, udf-devkit); several join with commas. Pick one at install time with EXAKIT_PERSONA=<id>, or later with exakit persona apply <id>, which loads the datasets, connects the clients and installs the add-ons through data-load, mcp-setup and marketplace (one that fails does not stop the others). An answer you give yourself always wins for that one variable: EXAKIT_PERSONA=data-scientist EXAKIT_DATASETS=fda_recalls loads only that dataset. An unknown persona is refused before anything is installed. Personas are files in personas/ (personas/README.md); adding one needs no code.",
       "examples": [
         "exakit persona list",
         "exakit persona show ml-engineer",
@@ -484,7 +484,7 @@
   "environment": [
     {
       "name": "EXAKIT_PERSONA",
-      "effect": "A named set of answers (personas/<id>.json): data-scientist or ml-engineer. It fills EXAKIT_DATASETS, EXAKIT_MCP_CLIENTS and EXAKIT_MARKETPLACE_ADDONS where you did not set them; an unknown persona is refused before anything is installed."
+      "effect": "A named set of answers (personas/<id>.json): general, data-scientist, ml-engineer, or several joined with commas. It fills EXAKIT_DATASETS, EXAKIT_MCP_CLIENTS and EXAKIT_MARKETPLACE_ADDONS where you did not set them; an unknown persona is refused before anything is installed."
     },
     {
       "name": "EXAKIT_MCP_CLIENTS",

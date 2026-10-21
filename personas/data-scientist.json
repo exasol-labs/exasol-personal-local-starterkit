@@ -1,9 +1,11 @@
 {
   "schema_version": 1,
   "id": "data-scientist",
-  "title": "Data Scientist (AI Scientist)",
-  "summary": "The pharma and banking reference datasets, every AI client on this machine, and notebooks connected to the database.",
-  "datasets": ["pharma_trials", "banking_complaints"],
+  "title": "AI / Data Scientist",
+  "summary": "Text data science: the FDA recalls and banking complaints, notebooks to explore and classify text, dashboards.",
+  "picker": true,
+  "order": 20,
+  "datasets": ["fda_recalls", "banking_complaints"],
   "mcp_clients": "all",
-  "addons": ["notebook"]
+  "addons": ["notebook", "dash-server", "json-tables"]
 }

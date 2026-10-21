@@ -10,6 +10,7 @@ kernel. Nothing here prints or returns a host, a user or a password.
     df = exakit_nb.sql(conn, "SELECT * FROM TPCH.NATION")
     exakit_nb.show_sql()
     ds = exakit_nb.dataset(conn, "pharma_trials")     # the roles of a dataset, checked against the database
+    ds = exakit_nb.load_own_file("~/data/sales.csv", "MY_DATA.SALES", {"entity": "CUSTOMER", ...})   # or your own file
 """
 
 from __future__ import annotations
@@ -20,9 +21,11 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+from ._kit import setting
 from .dataset import Dataset, dataset
+from .own_file import load_own_file
 
-__all__ = ["Dataset", "connect", "dataset", "model_client", "show_sql", "sql", "trace"]
+__all__ = ["Dataset", "connect", "dataset", "load_own_file", "model_client", "show_sql", "sql", "trace"]
 
 LANGFUSE_VARIABLES = ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_HOST")
 MODEL_VARIABLE = "EXAKIT_NB_MODEL"            # the model name; the endpoint and key are the OpenAI client's own OPENAI_* variables
@@ -32,13 +35,14 @@ _last: dict[str, str | None] = {"sql": None}
 def _store():
     from exasol.nb_connector.secret_store import Secrets
 
-    path, password = os.environ.get("EXAKIT_NB_STORE"), None
-    master = os.environ.get("EXAKIT_NB_MASTER_FILE")
+    path, password = setting("EXAKIT_NB_STORE"), None
+    master = setting("EXAKIT_NB_MASTER_FILE")
     if path and master and Path(master).is_file():
         password = Path(master).read_text(encoding="utf-8").strip()
-    if not path or not password:
-        raise RuntimeError("This notebook is not running on the kit's kernel, so it has no connection. Choose the kernel "
-                           "'Exasol (Starter Kit)', or open the notebooks with: exakit notebook")
+    if not path or not password or not Path(path).is_file():
+        raise RuntimeError("No connection to the kit's database was found. Run this with the kit's notebook Python "
+                           "(the kernel 'Exasol (Starter Kit)', or ~/.exasol-starter-kit/notebook-venv/bin/python), "
+                           "and if the notebook add-on is new: exakit notebook --check")
     return Secrets(Path(path), password)
 
 

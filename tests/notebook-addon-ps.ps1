@@ -35,16 +35,45 @@ try {
     Check "the kit's MLflow client package" (Join-Path (Join-Path $repo "packages") "exasol-mlflow") $specs[-1]
     Check "JupyterLab is not in it" 0 @($specs | Where-Object { $_ -match "jupyterlab" }).Count
 
-    Write-Host "notebooks are copied once, never over the user's:"
-    New-Item -ItemType Directory -Force -Path $script:NotebookDir | Out-Null
-    Set-Content -Path (Join-Path $script:NotebookDir "start_here.ipynb") -Value "mine" -NoNewline
-    $shipped = @(Get-ChildItem -Path (Join-Path (Join-Path $repo "notebook") "notebooks") -Filter "*.ipynb" | Where-Object { $_.Name -ne "start_here.ipynb" } | Sort-Object Name | ForEach-Object { $_.Name })
-    Check "what is missing comes" ($shipped -join ",") (@(Copy-NotebookContent) -join ",")
-    Check "the user's own stays" "mine" (Get-Content -Raw (Join-Path $script:NotebookDir "start_here.ipynb"))
+    Write-Host "notebooks are copied once, into persona folders, never over the user's:"
+    $nb = Join-Path $script:NotebookDir "starter-kit-notebooks"
+    New-Item -ItemType Directory -Force -Path (Join-Path $nb "general") | Out-Null
+    Set-Content -Path (Join-Path (Join-Path $nb "general") "start_here.ipynb") -Value "mine" -NoNewline
+    Check "what is missing comes, each in its persona's folder" `
+        "data-scientist/explore.ipynb,data-scientist/text_classification.ipynb,ml-engineer/bank_marketing_mlflow.ipynb,ml-engineer/train.ipynb" `
+        (@(Copy-NotebookContent) -join ",")
+    Check "the user's own stays" "mine" (Get-Content -Raw (Join-Path (Join-Path $nb "general") "start_here.ipynb"))
     Check "a second run adds nothing" 0 @(Copy-NotebookContent).Count
+    Check "a README names the end-to-end path" $true (Test-Path (Join-Path $nb "README.md"))
+    Check "the Marimo ones go to marimo/<persona>/" "data-scientist/explore.py,data-scientist/text_classification.py,ml-engineer/bank_marketing_mlflow.py,ml-engineer/train.py" `
+        (@(Copy-NotebookContent -Front marimo) -join ",")
+
+    Write-Host "the notebook tools: one checklist, all three ticked:"
+    foreach ($v in @("EXAKIT_NOTEBOOK_FRONTENDS", "EXAKIT_NOTEBOOK_JUPYTER", "EXAKIT_NOTEBOOK_MARIMO")) { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
+    function Test-ExakitInteractive { return $false }
+    Check "without a console the ticks stand" "jupyterlab,marimo,positron" (Get-NotebookFrontEnds)
+    $env:EXAKIT_NOTEBOOK_MARIMO = "skip"
+    Check "EXAKIT_NOTEBOOK_MARIMO=skip leaves Marimo out" "jupyterlab,positron" (Get-NotebookFrontEnds)
+    Remove-Item Env:EXAKIT_NOTEBOOK_MARIMO
+    $env:EXAKIT_NOTEBOOK_FRONTENDS = "Marimo, positron"
+    Check "EXAKIT_NOTEBOOK_FRONTENDS answers it" "marimo,positron" (Get-NotebookFrontEnds)
+    Remove-Item Env:EXAKIT_NOTEBOOK_FRONTENDS
+    $catalog = Get-Content -Raw (Join-Path (Join-Path $repo "notebook") "catalog.json") | ConvertFrom-Json
+    Check "Marimo's pin is the one notebook/catalog.json converts with" $catalog.marimo_package $script:NotebookMarimoPackage
+
+    Write-Host "Positron is configured, never installed:"
+    $vscode = Join-Path $script:NotebookDir ".vscode"
+    New-Item -ItemType Directory -Force -Path $vscode | Out-Null
+    Set-Content -Path (Join-Path $vscode "settings.json") -Value '{"editor.fontSize": 14}' -NoNewline
+    Check "the folder is prepared" $true (Set-NotebookPositronFolder)
+    $settings = Get-Content -Raw (Join-Path $vscode "settings.json") | ConvertFrom-Json
+    Check "the folder names the kit's Python" (Get-NotebookVenvPython) $settings."python.defaultInterpreterPath"
+    Check "the user's own settings stay" 14 $settings."editor.fontSize"
+    Set-Content -Path (Join-Path $vscode "settings.json") -Value '{not json' -NoNewline
+    Check "a file that is not JSON is left alone" "False|{not json" "$(Set-NotebookPositronFolder)|$(Get-Content -Raw (Join-Path $vscode 'settings.json'))"
 
     Write-Host "exakit notebook refuses what it does not know:"
-    foreach ($bad in @(@("--frob"), @("--port"), @("--port", "abc"), @("--port", "80"))) {
+    foreach ($bad in @(@("--frob"), @("--port"), @("--port", "abc"), @("--port", "80"), @("--marimo", "--positron"))) {
         $refused = $false
         try { Invoke-CmdNotebook -CmdArgs $bad } catch { $refused = "$_" -like "FAIL:*" }
         Check "refuses: $($bad -join ' ')" $true $refused
@@ -55,7 +84,7 @@ try {
 
     Write-Host "an uninstall keeps the notebooks:"
     [void](Uninstall-Notebook)
-    Check "the notebooks are still there" "mine" (Get-Content -Raw (Join-Path $script:NotebookDir "start_here.ipynb"))
+    Check "the notebooks are still there" "mine" (Get-Content -Raw (Join-Path (Join-Path $nb "general") "start_here.ipynb"))
 } finally {
     Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 }
