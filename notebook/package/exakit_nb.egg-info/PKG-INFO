@@ -1,6 +1,0 @@
-Metadata-Version: 2.4
-Name: exakit-nb
-Version: 0.1.0
-Summary: Helpers for the Exasol Personal Local Starter Kit's notebooks: the kit's connection, the SQL a cell ran, opt-in tracing.
-License-Expression: MIT
-Requires-Python: <3.13,>=3.11

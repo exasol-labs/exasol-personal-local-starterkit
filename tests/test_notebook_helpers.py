@@ -23,7 +23,8 @@ import exakit_nb  # noqa: E402
 
 nb_dataset = importlib.import_module("exakit_nb.dataset")    # the module; exakit_nb.dataset is the function
 
-PHARMA = ["PHARMA.PHARMA_TRIALS." + c for c in ("NCT_ID", "LEAD_SPONSOR", "PHASE", "START_DATE", "TERMINATED", "BRIEF_SUMMARY")]
+PHARMA = ["PHARMA.PHARMA_TRIALS." + c for c in ("NCT_ID", "LEAD_SPONSOR", "PHASE", "START_DATE", "TERMINATED", "BRIEF_SUMMARY",
+                                                "ELIGIBILITY_CRITERIA")]
 
 
 class FakeResult:
@@ -57,7 +58,7 @@ class DatasetTest(unittest.TestCase):
     def test_a_kit_dataset_by_id_gives_its_roles_and_digest(self):
         ds = exakit_nb.dataset(FakeConn(PHARMA), "pharma_trials")
         self.assertEqual((ds.id, ds.fact_table, ds.col("label"), ds.col("category")), ("pharma_trials", "PHARMA.PHARMA_TRIALS", "TERMINATED", "PHASE"))
-        self.assertEqual(ds.text_sql(), "COALESCE(BRIEF_SUMMARY, '')")
+        self.assertEqual(ds.text_sql(), "COALESCE(BRIEF_SUMMARY, '') || ' ' || COALESCE(ELIGIBILITY_CRITERIA, '')")
         self.assertEqual(len(ds.digest), 64)
         self.assertEqual(ds.tags(), {"exasol.dataset": "pharma_trials", "exasol.descriptor_sha256": ds.digest})
 

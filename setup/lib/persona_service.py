@@ -15,9 +15,11 @@ for. Standard library only, and Python 3.9 compatible: it runs on whatever Pytho
                                                                  says which are given)
     python3 persona_service.py <kit_root> dataset-hints          dataset|persona titles, for the data menu
     python3 persona_service.py <kit_root> show <id>              the lines `exakit persona show` prints
+    python3 persona_service.py <kit_root> problems               file|what is wrong, for each invalid persona file
 
 <ids> is one id or several joined by commas. Every value printed is an id, a list of ids or a title: no secrets, no
-paths. Exit codes: 0 done, 2 bad input (an unknown persona or key), 1 a persona file that cannot be read.
+paths. A persona file that is invalid is left out (and named on stderr) - the others still work. Exit codes: 0 done,
+2 bad input (an unknown or invalid persona, a bad command), 1 `problems` found an invalid file.
 """
 
 from __future__ import annotations
@@ -30,8 +32,10 @@ from pathlib import Path
 
 ID = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 LISTS = ("datasets", "mcp_clients", "addons", "notebook_tools")
+WORDS = {"datasets": ("all", "none"), "mcp_clients": ("all", "skip"), "addons": ("all", "none"), "notebook_tools": ("none",)}
+EMPTY = {"datasets": "none", "mcp_clients": "skip", "addons": "none", "notebook_tools": "none"}   # what [] means
 ANSWERS = (                       # (persona key, the installer variable it answers, variables that mean it was answered)
-    ("datasets", "EXAKIT_DATASETS", ("EXAKIT_DATASETS", "EXAKIT_LOAD_SAMPLE")),
+    ("datasets", "EXAKIT_DATASETS", ("EXAKIT_DATASETS",)),
     ("mcp_clients", "EXAKIT_MCP_CLIENTS", ("EXAKIT_MCP_CLIENTS",)),
     ("addons", "EXAKIT_MARKETPLACE_ADDONS", ("EXAKIT_MARKETPLACE_ADDONS",)),
     ("notebook_tools", "EXAKIT_NOTEBOOK_FRONTENDS", ("EXAKIT_NOTEBOOK_FRONTENDS",)),
@@ -42,40 +46,111 @@ class BadInput(Exception):
     """An unknown persona or key: exit 2."""
 
 
-def personas(root: Path) -> dict:
-    """Every persona file of the kit, by id, in the order the question offers them."""
-    found = {}
+def problems(path: Path, doc) -> list:
+    """What is wrong with one persona file; empty when it is valid. The shells read the service's lines split on | and
+    newlines, so a title or summary may hold neither, and every list item must be an id."""
+    if not isinstance(doc, dict):
+        return ["it is not a JSON object"]
+    found = []
+    if not ID.match(path.stem):
+        found.append("its file name must be a lowercase id (a-z, 0-9, - and _)")
+    elif doc.get("id") != path.stem:
+        found.append(f"its id must be its file name ('{path.stem}')")
+    if doc.get("schema_version", 1) != 1:
+        found.append("schema_version must be 1")
+    for key in ("title", "summary"):
+        if not isinstance(doc.get(key), str) or not doc[key].strip():
+            found.append(f"'{key}' must be a non-empty string")
+    for key in ("title", "summary", "first_prompt"):
+        text = doc.get(key)
+        if isinstance(text, str) and ("|" in text or "\n" in text or "\r" in text):
+            found.append(f"'{key}' must be one line without '|'")
+    if "order" in doc and (isinstance(doc["order"], bool) or not isinstance(doc["order"], int)):
+        found.append("'order' must be a whole number")
+    for key in ("picker", "default"):
+        if key in doc and not isinstance(doc[key], bool):
+            found.append(f"'{key}' must be true or false")
+    for key, words in WORDS.items():
+        if key not in doc:
+            continue
+        raw = doc[key]
+        if isinstance(raw, str):
+            if raw not in words:
+                found.append(f"'{key}' must be a list of ids or one of: {', '.join(words)}")
+        elif isinstance(raw, list):
+            bad = [item for item in raw if not isinstance(item, str) or not ID.match(item)]
+            if bad:
+                found.append(f"'{key}' holds {bad[0]!r}, which is not an id")
+        else:
+            found.append(f"'{key}' must be a list of ids or one of: {', '.join(words)}")
+    return found
+
+
+def load(root: Path) -> tuple:
+    """(valid personas by id in the question's order, invalid ones: file name -> what is wrong). One bad file never
+    takes the others down."""
+    valid, invalid = {}, {}
     for path in sorted((root / "personas").glob("*.json")):
+        if path.name.startswith("."):                # editor and Finder debris: ._x.json, .#x.json
+            continue
         try:
-            doc = json.loads(path.read_text(encoding="utf-8"))
+            doc = json.loads(path.read_text(encoding="utf-8-sig"))
         except (OSError, ValueError) as err:
-            raise OSError(f"{path} cannot be read ({err})") from err
-        if doc.get("id") != path.stem or not ID.match(path.stem):
-            raise OSError(f"{path}: its id must be its file name")
-        found[path.stem] = doc
-    return dict(sorted(found.items(), key=lambda item: (int(item[1].get("order", 100)), item[0])))
+            invalid[path.name] = f"not valid JSON ({err})"
+            continue
+        found = problems(path, doc)
+        if found:
+            invalid[path.name] = "; ".join(found)
+        else:
+            valid[path.stem] = doc
+    return dict(sorted(valid.items(), key=lambda item: (item[1].get("order", 100), item[0]))), invalid
+
+
+def personas(root: Path) -> dict:
+    """Every valid persona of the kit, by id, in the order the question offers them."""
+    return load(root)[0]
 
 
 def picked(root: Path, ids: str) -> list:
-    """The personas named, in the kit's order; BadInput naming an unknown one."""
-    known = personas(root)
+    """The personas named, in the kit's order; BadInput naming an unknown or invalid one."""
+    known, invalid = load(root)
     wanted = [i.strip() for i in ids.split(",") if i.strip()]
+    broken = [i for i in wanted if f"{i}.json" in invalid]
+    if broken:
+        raise BadInput(f"The persona file personas/{broken[0]}.json is invalid: {invalid[broken[0] + '.json']}.")
     unknown = [i for i in wanted if i not in known]
     if unknown or not wanted:
         raise BadInput(f"Unknown persona '{','.join(unknown) or ids}' (available: {' '.join(known)}).")
     return [known[i] for i in known if i in wanted]
 
 
+def one(root: Path, persona_id: str) -> dict:
+    """Exactly one persona; BadInput for a list."""
+    if "," in persona_id:
+        raise BadInput("Name one persona here, not several.")
+    return picked(root, persona_id)[0]
+
+
+def bundled_datasets(root: Path) -> list:
+    """The dataset ids the kit ships (data/datasets/<id>/dataset.conf), in their menu order."""
+    found = []
+    for conf in (root / "data" / "datasets").glob("*/dataset.conf"):
+        keys = dict(line.split("=", 1) for line in conf.read_text(encoding="utf-8").splitlines() if "=" in line)
+        order = keys.get("order", "").strip()
+        found.append((int(order) if order.isdigit() else 1000, keys.get("id", conf.parent.name).strip()))
+    return [ds for _, ds in sorted(found)]
+
+
 def combined(docs: list, key: str) -> str:
-    """What several personas say together: "all" when any says all, "none"/"skip" only when every one does, else the
-    union of their lists in order. A single persona's value comes back as it is."""
-    values = [doc.get(key) for doc in docs if doc.get(key) not in (None, "", [])]
+    """What several personas say together: "all" when any says all, the nothing-word (none/skip) only when every one
+    says it, else the union of their lists in order. [] is the nothing-word; a persona without the key says nothing."""
+    values = [EMPTY[key] if doc.get(key) == [] else doc.get(key) for doc in docs if doc.get(key) not in (None, "")]
     if not values:
         return ""
     if "all" in values:
         return "all"
     lists = [v for v in values if isinstance(v, list)]
-    if not lists:                                    # only words: none, skip
+    if not lists:                                    # only the nothing-word
         return str(values[0])
     seen = []
     for items in lists:
@@ -86,15 +161,20 @@ def combined(docs: list, key: str) -> str:
 
 
 def answers(root: Path, ids: str, env: dict) -> list:
-    """KEY=value lines for the answers the personas fill in: only the variables the user left unset."""
+    """KEY=value lines for the answers the personas fill in: only the variables the user left unset. "all" datasets
+    become the kit's dataset ids (EXAKIT_DATASETS takes ids), "none" becomes EXAKIT_LOAD_SAMPLE=0."""
     docs = picked(root, ids)
     lines = []
     for key, variable, given in ANSWERS:
         if any(env.get(name, "") for name in given):
             continue
+        if key == "datasets" and env.get("EXAKIT_LOAD_SAMPLE", "") in ("0", "1"):
+            continue                                 # the two values the installer reads; anything else is not an answer
         if variable == "EXAKIT_MCP_CLIENTS" and env.get("EXAKIT_SKIP_MCP") == "1":
             continue                                 # the AI bridge is skipped: no clients to answer
         value = combined(docs, key)
+        if key == "datasets" and value == "all":
+            value = ",".join(bundled_datasets(root)) or "all"
         if key == "datasets" and value == "none":
             lines.append("EXAKIT_LOAD_SAMPLE=0")
         elif value:
@@ -104,8 +184,8 @@ def answers(root: Path, ids: str, env: dict) -> list:
 
 
 def value(root: Path, persona_id: str, key: str) -> str:
-    """One key of one persona: a string as it is, a list joined by commas."""
-    doc = picked(root, persona_id)[0]
+    """One key of one persona: a string as it is, a list joined by commas; empty when the file has no such key."""
+    doc = one(root, persona_id)
     if key not in doc:
         return ""
     raw = doc[key]
@@ -124,7 +204,7 @@ def dataset_hints(root: Path) -> list:
 
 def show(root: Path, persona_id: str) -> list:
     """What a persona brings, as `exakit persona show` prints it."""
-    doc = picked(root, persona_id)[0]
+    doc = one(root, persona_id)
     rows = [doc["title"], doc.get("summary", ""), ""]
     for key, label in (("datasets", "Sample data"), ("addons", "Add-ons"), ("notebook_tools", "Notebook tools"), ("mcp_clients", "AI clients")):
         if key in doc:
@@ -159,20 +239,30 @@ def run(argv: list, env: dict) -> list:
         return dataset_hints(root)
     if command == "show":
         return show(root, args[0])
+    if command == "problems":
+        return [f"{name}|{what}" for name, what in load(root)[1].items()]
     raise BadInput(f"Unknown command '{command}'")
 
 
 def main() -> int:
+    # UTF-8 out, whatever the console's code page: a title with a non-ASCII letter must not crash a Windows pipe.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8", errors="replace")
     try:
-        for line in run(sys.argv[1:], dict(os.environ)):
-            print(line)
+        lines = run(sys.argv[1:], dict(os.environ))
     except BadInput as err:
         print(err, file=sys.stderr)
         return 2
     except OSError as err:
         print(f"The persona files cannot be read: {err}", file=sys.stderr)
-        return 1
-    return 0
+        return 2
+    if len(sys.argv) > 2 and sys.argv[2] != "problems" and Path(sys.argv[1]).is_dir():
+        for name, what in load(Path(sys.argv[1]))[1].items():
+            print(f"Ignored persona file personas/{name}: {what}", file=sys.stderr)
+    for line in lines:
+        print(line)
+    return 1 if (len(sys.argv) > 2 and sys.argv[2] == "problems" and lines) else 0
 
 
 if __name__ == "__main__":

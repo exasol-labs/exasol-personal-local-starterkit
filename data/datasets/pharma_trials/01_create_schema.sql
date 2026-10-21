@@ -26,7 +26,19 @@ CREATE OR REPLACE TABLE PHARMA_TRIALS (
     MASKING                 VARCHAR(12),
     HAS_RESULTS             DECIMAL(1,0)  NOT NULL,
     BRIEF_SUMMARY           VARCHAR(2100) NOT NULL,
+    ELIGIBILITY_CRITERIA    VARCHAR(2100),            -- who may take part; empty when a record has no criteria
     CONSTRAINT PHARMA_TRIALS_PK PRIMARY KEY (NCT_ID)
+);
+
+-- pharma_sponsors (who runs and who helps run a trial: the lead sponsor, then the collaborators).
+-- FK (documented, not enforced): nct_id -> pharma_trials. LEAD_SPONSOR in pharma_trials is its SEQ 1 row.
+CREATE OR REPLACE TABLE PHARMA_SPONSORS (
+    NCT_ID        VARCHAR(11)  NOT NULL,
+    SEQ           DECIMAL(4,0) NOT NULL,
+    SPONSOR_ROLE  VARCHAR(12)  NOT NULL,   -- LEAD / COLLABORATOR
+    SPONSOR_NAME  VARCHAR(200) NOT NULL,
+    SPONSOR_CLASS VARCHAR(12),             -- INDUSTRY, NIH, FED, OTHER_GOV, INDIV, NETWORK, AMBIG, OTHER, UNKNOWN
+    CONSTRAINT PHARMA_SPONSORS_PK PRIMARY KEY (NCT_ID, SEQ)
 );
 
 -- pharma_conditions (the conditions a trial studies). FK (documented, not enforced): nct_id -> pharma_trials.
@@ -71,6 +83,13 @@ COMMENT ON COLUMN PHARMA_TRIALS.PRIMARY_PURPOSE IS 'Primary purpose, e.g. TREATM
 COMMENT ON COLUMN PHARMA_TRIALS.MASKING IS 'Blinding: NONE, SINGLE, DOUBLE, TRIPLE or QUADRUPLE';
 COMMENT ON COLUMN PHARMA_TRIALS.HAS_RESULTS IS '1 when results are posted on ClinicalTrials.gov';
 COMMENT ON COLUMN PHARMA_TRIALS.BRIEF_SUMMARY IS 'Brief summary of the trial (whitespace folded, at most about 2000 characters)';
+COMMENT ON COLUMN PHARMA_TRIALS.ELIGIBILITY_CRITERIA IS 'Inclusion and exclusion criteria (whitespace folded, at most about 2000 characters)';
+COMMENT ON TABLE  PHARMA_SPONSORS IS 'Who runs a trial: the lead sponsor (SEQ 1), then its collaborators. PK (nct_id, seq).';
+COMMENT ON COLUMN PHARMA_SPONSORS.NCT_ID IS 'Trial (FK to pharma_trials)';
+COMMENT ON COLUMN PHARMA_SPONSORS.SEQ IS '1 for the lead sponsor, then the collaborators in record order';
+COMMENT ON COLUMN PHARMA_SPONSORS.SPONSOR_ROLE IS 'LEAD or COLLABORATOR';
+COMMENT ON COLUMN PHARMA_SPONSORS.SPONSOR_NAME IS 'Organisation name as the record gives it';
+COMMENT ON COLUMN PHARMA_SPONSORS.SPONSOR_CLASS IS 'Organisation class: INDUSTRY, NIH, FED, OTHER_GOV, INDIV, NETWORK, AMBIG, OTHER, UNKNOWN';
 COMMENT ON TABLE  PHARMA_CONDITIONS IS 'Conditions a trial studies, one row each. PK (nct_id, condition_name).';
 COMMENT ON COLUMN PHARMA_CONDITIONS.NCT_ID IS 'Trial (FK to pharma_trials)';
 COMMENT ON COLUMN PHARMA_CONDITIONS.CONDITION_NAME IS 'Condition as the sponsor named it';

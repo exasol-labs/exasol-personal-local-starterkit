@@ -10,13 +10,14 @@ them (17.7%) were terminated.
 exakit data-load pharma_trials
 ```
 
-It loads into the `PHARMA` schema in a few seconds (3.8 MB of CSV).
+It loads into the `PHARMA` schema in a few seconds (12.8 MB of CSV).
 
 ## Tables
 
 | Table | Rows | One row is |
 |---|---:|---|
 | `PHARMA.PHARMA_TRIALS` | 5,169 | a trial |
+| `PHARMA.PHARMA_SPONSORS` | 6,674 | the lead sponsor or a collaborator of a trial |
 | `PHARMA.PHARMA_CONDITIONS` | 7,291 | a condition a trial studies |
 | `PHARMA.PHARMA_INTERVENTIONS` | 12,384 | a drug, device or procedure a trial tests |
 | `PHARMA.PHARMA_STOP_REASONS` | 887 | the reason a sponsor gave for stopping |
@@ -41,7 +42,12 @@ It loads into the `PHARMA` schema in a few seconds (3.8 MB of CSV).
 | `MASKING` | VARCHAR(12) | blinding: `NONE`, `SINGLE`, `DOUBLE`, `TRIPLE`, `QUADRUPLE` |
 | `HAS_RESULTS` | DECIMAL(1,0) | 1 when results are posted |
 | `BRIEF_SUMMARY` | VARCHAR(2100) | the sponsor's summary, whitespace folded, cut at about 2,000 characters on a word (ending in `…`) |
+| `ELIGIBILITY_CRITERIA` | VARCHAR(2100) | inclusion and exclusion criteria, folded and cut the same way (every trial in this snapshot has them) |
 
+`PHARMA_SPONSORS`: `NCT_ID`, `SEQ` (1 is the lead sponsor - the same name as
+`LEAD_SPONSOR` - then the collaborators in record order), `SPONSOR_ROLE`
+(`LEAD` or `COLLABORATOR`), `SPONSOR_NAME`, `SPONSOR_CLASS` (`INDUSTRY`,
+`OTHER`, `NIH`, `FED`, `OTHER_GOV`, `NETWORK`, `INDIV`, `AMBIG`, `UNKNOWN`).
 `PHARMA_CONDITIONS`: `NCT_ID`, `CONDITION_NAME` (as the sponsor wrote it).
 `PHARMA_INTERVENTIONS`: `NCT_ID`, `SEQ` (protocol order, from 1),
 `INTERVENTION_TYPE` (`DRUG`, `BIOLOGICAL`, `DEVICE`, ...), `INTERVENTION_NAME`.
@@ -62,14 +68,15 @@ plays each role:
 | category | `PHASE` | the grouping to compare |
 | date | `START_DATE` | when the trial began |
 | label | `TERMINATED` | the outcome a model predicts |
-| text | `BRIEF_SUMMARY` | free text for the text step |
+| text | `BRIEF_SUMMARY`, `ELIGIBILITY_CRITERIA` | free text for the model and the text step, joined in this order |
 
 ## Example questions
 
-[`examples.sql`](examples.sql) has twelve queries, each runnable as it stands:
+[`examples.sql`](examples.sql) has fourteen queries, each runnable as it stands:
 outcomes, termination by phase, starts per quarter, the biggest sponsors, the
 commonest conditions, blinding, enrollment and duration, intervention types,
-placebo control, stop reasons, posted results and a text question.
+placebo control, stop reasons, posted results, collaborators and two text
+questions (summaries and eligibility criteria).
 
 ## Source, terms and reproducibility
 
@@ -86,7 +93,7 @@ placebo control, stop reasons, posted results and a text question.
   by the records sponsors updated since; the manifest records the snapshot date,
   the row counts and the SHA-256 of every file, and the kit's tests check that
   the shipped files match it.
-- **Transformations:** whitespace folded, summaries cut at about 2,000
-  characters, titles at 300; a month-only date is the first of that month;
+- **Transformations:** whitespace folded, summaries and eligibility criteria
+  cut at about 2,000 characters, titles at 300; a month-only date is the first of that month;
   trials without a summary are left out (none in this snapshot); nothing else
   is changed.

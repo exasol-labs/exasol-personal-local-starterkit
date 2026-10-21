@@ -1,5 +1,0 @@
-
-[mlflow]
-mlflow-skinny<4,>=2.14
-sqlalchemy<3,>=2
-alembic<2,>=1.13

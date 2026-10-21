@@ -7,6 +7,7 @@
     "category": {"table": "PHARMA.PHARMA_TRIALS", "column": "PHASE"},
     "date":     {"table": "PHARMA.PHARMA_TRIALS", "column": "START_DATE"},
     "label":    {"table": "PHARMA.PHARMA_TRIALS", "column": "TERMINATED"},
-    "text":     [{"table": "PHARMA.PHARMA_TRIALS", "column": "BRIEF_SUMMARY"}]
+    "text":     [{"table": "PHARMA.PHARMA_TRIALS", "column": "BRIEF_SUMMARY"},
+                 {"table": "PHARMA.PHARMA_TRIALS", "column": "ELIGIBILITY_CRITERIA"}]
   }
 }

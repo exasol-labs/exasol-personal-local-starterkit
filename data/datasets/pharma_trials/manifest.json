@@ -6,7 +6,7 @@
     "query": {
       "filter.advanced": "AREA[StudyType]INTERVENTIONAL AND AREA[Phase](PHASE2 OR PHASE3) AND AREA[StartDate]RANGE[2016-01-01,2018-12-31] AND AREA[LeadSponsorClass]INDUSTRY",
       "filter.overallStatus": "COMPLETED,TERMINATED",
-      "fields": "NCTId,BriefTitle,Phase,OverallStatus,StartDate,PrimaryCompletionDate,EnrollmentCount,LeadSponsorName,DesignAllocation,DesignPrimaryPurpose,DesignMasking,Condition,InterventionType,InterventionName,BriefSummary,WhyStopped,HasResults"
+      "fields": "NCTId,BriefTitle,Phase,OverallStatus,StartDate,PrimaryCompletionDate,EnrollmentCount,LeadSponsorName,LeadSponsorClass,CollaboratorName,CollaboratorClass,DesignAllocation,DesignPrimaryPurpose,DesignMasking,Condition,InterventionType,InterventionName,BriefSummary,EligibilityCriteria,WhyStopped,HasResults"
     },
     "builder": "tools/datasets/pharma_trials.py"
   },
@@ -17,10 +17,6 @@
   },
   "snapshot": "2026-10-20",
   "files": {
-    "data/pharma_trials.csv": {
-      "rows": 5169,
-      "sha256": "116b74f0df6535b764034d0a79168afbec1624f002827036a3ab2a7f54f5e54b"
-    },
     "data/pharma_conditions.csv": {
       "rows": 7291,
       "sha256": "1d92a2a2a07c024812bf634cfe8b8cc41028d8d6c45336ca12d415b59162e695"
@@ -29,9 +25,17 @@
       "rows": 12384,
       "sha256": "478d55aeb4b555e1c7ada1aa7f17a6da53144dbcb7de275c5f0bd7c14c0fce33"
     },
+    "data/pharma_sponsors.csv": {
+      "rows": 6674,
+      "sha256": "b5b88c7454f97b42f16c5e9380d00647ea3ec9ce7b3ee97219be6ce90aa330d9"
+    },
     "data/pharma_stop_reasons.csv": {
       "rows": 887,
       "sha256": "0e4988b47b2a6b21423bfe44e6d6bf4fd2aad1a9fac7f171beee59323b75d87b"
+    },
+    "data/pharma_trials.csv": {
+      "rows": 5169,
+      "sha256": "130646c020b1cd1a1c1de9a1374e4756854696ec2b7106f8b56b1e9dfd7cee5e"
     }
   }
 }
