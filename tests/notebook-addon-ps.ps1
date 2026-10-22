@@ -72,12 +72,12 @@ try {
     New-Item -ItemType Directory -Force -Path (Join-Path $nb "data-scientist") | Out-Null
     Set-Content -Path (Join-Path (Join-Path $nb "data-scientist") "00_quickstart.ipynb") -Value "mine" -NoNewline
     Check "what is missing comes, each in its persona's folder, the shared cells too" `
-        "00_shared/data_paths.ipynb,data-scientist/01_explore.ipynb,ml-engineer/00_quickstart.ipynb,ml-engineer/01_train.ipynb" `
+        "00_shared/data_paths.ipynb,data-scientist/01_explore.ipynb,ml-engineer/00_quickstart.ipynb,ml-engineer/01_train.ipynb,ml-engineer/02_score_external_model.ipynb" `
         (@(Copy-NotebookContent) -join ",")
     Check "the user's own stays" "mine" (Get-Content -Raw (Join-Path (Join-Path $nb "data-scientist") "00_quickstart.ipynb"))
     Check "a second run adds nothing" 0 @(Copy-NotebookContent).Count
     Contains "a README names each persona's order" "00. ``ml-engineer/00_quickstart.ipynb`` - Quickstart" (Get-Content -Raw (Join-Path $nb "README.md"))
-    Check "the Marimo ones go to marimo/<persona>/" "00_shared/data_paths.py,data-scientist/00_quickstart.py,data-scientist/01_explore.py,ml-engineer/00_quickstart.py,ml-engineer/01_train.py" `
+    Check "the Marimo ones go to marimo/<persona>/" "00_shared/data_paths.py,data-scientist/00_quickstart.py,data-scientist/01_explore.py,ml-engineer/00_quickstart.py,ml-engineer/01_train.py,ml-engineer/02_score_external_model.py" `
         (@(Copy-NotebookContent -Front marimo) -join ",")
 
     Write-Host "the notebook tools: one checklist, all three ticked:"

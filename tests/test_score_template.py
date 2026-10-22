@@ -255,8 +255,8 @@ class NotebookTest(unittest.TestCase):
             self.assertNotIn(table, code)
         self.assertIn("ds.col(", code)
         self.assertIn("ds.text_sql()", code)
-        self.assertIn("from exakit import nb as exakit_nb", code)
-        self.assertIn("import exakit_nb", code)
+        self.assertIn("import exakit.nb as nb", code)
+        self.assertNotIn("import exakit_nb", code)       # the alias still imports, but notebooks use the name
 
     def test_it_names_only_commands_that_exist(self):
         cli = (ROOT / "setup" / "exakit").read_text(encoding="utf-8")

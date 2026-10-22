@@ -355,7 +355,8 @@ class SwapTest(unittest.TestCase):
     """AC-DS3.2: a notebook's SQL rendered for Pharma, Banking and a synthetic file is byte-identical apart from the
     values the descriptor gives - so switching the data is the one DATASET assignment and no SQL."""
 
-    EXTRA = {"SAMPLE": 20000, "SAMPLE_TEXTS": 5, "period": "MONTH", "UDF_SCHEMA": "EXASOL_MLFLOW", "PARAMS": {"C": 1.0}}
+    EXTRA = {"SAMPLE": 20000, "SAMPLE_TEXTS": 5, "period": "MONTH", "UDF_SCHEMA": "EXASOL_MLFLOW", "PARAMS": {"C": 1.0},
+             "UDF": "EXAKIT_MODELS.SCORE_MODEL", "where": "1 = 1", "limit": 10, "extra": ""}
 
     def render(self, notebook: Path, descriptor) -> list[str]:
         """Every SQL f-string of the notebook, evaluated with its own role assignments on ``descriptor``."""

@@ -57,13 +57,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-try:
-    from exakit import nb as exakit_nb
-except ImportError:
-    import exakit_nb
+import exakit.nb as nb
 
-conn = exakit_nb.connect()
-ds = exakit_nb.dataset(conn, DATASET)
+conn = nb.connect()
+ds = nb.dataset(conn, DATASET)
 for role, column in ds.roles():
     print(f"  {role:<9} {column}")
 
@@ -88,7 +85,7 @@ def rows_sql(where: str, limit: int, extra: str = "") -> str:
 
 train_sql = rows_sql(f"NOT ({HELD_OUT})", TRAIN_ROWS)
 print(train_sql)
-train = exakit_nb.sql(conn, train_sql)
+train = nb.sql(conn, train_sql)
 print(f"\n{len(train)} training rows, label 1 share {train['LABEL'].mean():.2f}")
 
 # %% [markdown]
@@ -139,7 +136,7 @@ def exakit(*args: str) -> dict:
         bin_dir = Path(os.environ.get("EXAKIT_BIN_DIR") or Path.home() / ".local" / "bin")
         found = next((str(bin_dir / name) for name in ("exakit", "exakit.cmd") if (bin_dir / name).is_file()), None)
     if found is None:
-        raise RuntimeError("The exakit command is not on this kernel's PATH or in ~/.local/bin.")
+        raise RuntimeError("The exakit CLI is not on this kernel's PATH or in ~/.local/bin.")
     done = subprocess.run([found, *args, "--json"], capture_output=True, text=True)
     try:
         answer = json.loads(done.stdout)
@@ -188,7 +185,7 @@ print(f"UDF {UDF} is ready")
 # %%
 holdout_sql = rows_sql(HELD_OUT, HOLDOUT_ROWS, extra=f",\n       {UDF}({CATEGORY}, {TEXT}) AS DB_SCORE")
 print(holdout_sql)
-holdout = exakit_nb.sql(conn, holdout_sql)
+holdout = nb.sql(conn, holdout_sql)
 here = model.predict_proba(pd.DataFrame({"category": holdout["CATEGORY"], "text": holdout["DOC_TEXT"]}))[:, 1]
 there = holdout["DB_SCORE"].astype(float).to_numpy()
 gap = float(np.max(np.abs(here - there))) if len(here) else 0.0
@@ -210,7 +207,7 @@ GROUP BY CATEGORY
 ORDER BY ROWS_SCORED DESC
 LIMIT 15"""
 print(table_sql)
-exakit_nb.sql(conn, table_sql)
+nb.sql(conn, table_sql)
 
 # %% [markdown]
 # ## Next

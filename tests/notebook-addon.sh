@@ -99,12 +99,14 @@ mkdir -p "$NB/data-scientist"
 printf 'mine' > "$NB/data-scientist/00_quickstart.ipynb"
 added="$(notebook_copy_notebooks | tr '\n' ' ')"
 check "what is missing comes, each in its persona's folder, the shared cells too" \
-    "00_shared/data_paths.ipynb data-scientist/01_explore.ipynb ml-engineer/00_quickstart.ipynb ml-engineer/01_train.ipynb " "$added"
+    "00_shared/data_paths.ipynb data-scientist/01_explore.ipynb ml-engineer/00_quickstart.ipynb ml-engineer/01_train.ipynb ml-engineer/02_score_external_model.ipynb " "$added"
 check "the user's own stays" "mine" "$(cat "$NB/data-scientist/00_quickstart.ipynb")"
 check "a second run adds nothing" "" "$(notebook_copy_notebooks)"
 contains "a README names each persona's order" "00. \`ml-engineer/00_quickstart.ipynb\` - Quickstart" "$(cat "$NB/README.md")"
 contains "under the persona's title" "## ml-engineer/ (ML Engineer)" "$(cat "$NB/README.md")"
-check "the README names no notebook this kit copy lacks" "0" "$(grep -c '02_score_external_model' "$NB/README.md")"
+contains "...the score notebook last on the ML Engineer's path" "02_score_external_model.ipynb" "$(cat "$NB/README.md")"
+check "the README names no notebook this kit copy lacks" "" \
+    "$(grep -o '[0-9][0-9]_[a-z_]*\.ipynb' "$NB/README.md" | sort -u | while read -r f; do find "$ROOT/notebook/notebooks" -name "$f" | grep -q . || printf ' %s' "$f"; done)"
 check "every catalog entry ships its notebook (or its .py is not in the tree yet)" "" \
     "$(python3 "$ROOT/notebook/kit/notebooks.py" list "$ROOT" | while IFS='|' read -r _ p _ j m; do
         [ -f "$ROOT/notebook/notebooks/$p/${j%.ipynb}.py" ] || continue
@@ -114,7 +116,7 @@ check "the personas' first prompts name quickstarts that ship" "" \
     "$(for p in data-scientist ml-engineer; do [ -f "$ROOT/notebook/notebooks/$p/00_quickstart.ipynb" ] || printf ' %s' "$p"
         grep -q "$p/00_quickstart.ipynb" "$ROOT/personas/$p.json" || printf ' %s-prompt' "$p"; done)"
 check "the Marimo ones go to marimo/<persona>/, no README" \
-    "00_shared/data_paths.py data-scientist/00_quickstart.py data-scientist/01_explore.py ml-engineer/00_quickstart.py ml-engineer/01_train.py |no" \
+    "00_shared/data_paths.py data-scientist/00_quickstart.py data-scientist/01_explore.py ml-engineer/00_quickstart.py ml-engineer/01_train.py ml-engineer/02_score_external_model.py |no" \
     "$(notebook_copy_notebooks marimo | tr '\n' ' ')|$([ -e "$EXAKIT_NOTEBOOK_DIR/marimo/README.md" ] && echo yes || echo no)"
 
 echo "the notebook tools: one checklist, all three ticked:"
