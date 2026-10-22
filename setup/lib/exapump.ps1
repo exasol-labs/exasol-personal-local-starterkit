@@ -3722,6 +3722,13 @@ function New-ExakitDataTable {
     $script:ExakitTableGroupFirst = 0
     $script:ExakitTableGroupLast = 0
     $pending = @(Get-ExakitPendingDatasets)
+    # A PERSONA LISTS ITS OWN. Picked for this machine, the personas' datasets
+    # are the samples on offer; the rest stays one `exakit data-load` away. No
+    # persona: every sample. Twin of the same block in exakit_data_table_build.
+    if ($env:EXAKIT_PERSONA_ACTIVE -and $env:EXAKIT_DATASETS_PRESELECT -and $env:EXAKIT_DATASETS_PRESELECT -ne "none") {
+        $mine = @($env:EXAKIT_DATASETS_PRESELECT -split ',' | Where-Object { $_ })
+        $pending = @($pending | Where-Object { $mine -ccontains $_.Id })
+    }
     if ($pending.Count -gt 0) {
         # The parent row "Sample datasets" is itself a checkbox: pre-selected with
         # every dataset; unchecking it clears them all, after which they can be
@@ -3773,7 +3780,7 @@ function New-ExakitDataTable {
     # exakit_data_table_build.
     $script:ExakitTableRowLocal = 0
     if (-not $NoLocal) {
-        [void](Add-ExakitTableRow -Kind "plain" -Label "Your file or folder: CSV, Parquet, JSON")
+        [void](Add-ExakitTableRow -Kind "plain" -Label "Upload a file or folder: CSV/Parquet/JSON")
         [void]$ids.Add("local")
         $script:ExakitTableRowLocal = $ids.Count
         [void](Add-ExakitTableRow -Kind "plain" -Label "Connect an external source - coming soon")
@@ -3853,7 +3860,6 @@ function Select-ExakitDataLoad {
     } finally {
         if ($script:UiTable) { $script:UiTable.Col2 = "" }
     }
-    $script:ExakitDataPicked = @()
     if ($selection -contains $script:ExakitTableRowSkip) { return @("none") }
     $chosen = New-Object 'System.Collections.Generic.List[string]'
     foreach ($row in $selection) {
@@ -3862,7 +3868,6 @@ function Select-ExakitDataLoad {
         if ($id -and -not $chosen.Contains($id)) { [void]$chosen.Add($id) }
     }
     if ($chosen.Count -eq 0) { return @("none") }
-    $script:ExakitDataPicked = $chosen.ToArray()
     return $chosen.ToArray()
 }
 
@@ -3908,37 +3913,6 @@ function Show-ExakitDataLoadMenu {
 # installer's offer - have to drive it. That is the gap the shell side shipped
 # with: only the standalone command started the table, so during an install it
 # drew, stayed empty, and every dataset fell back to the single-line bar.
-# Limit-ExakitDataTableToPicked - once the reader has answered, the table shows
-# only what is being loaded: the datasets picked (and the file, when one was),
-# as plain rows. The rest of the choice - the datasets left unticked, the
-# parent, the external source, Skip - has no part in the progress. The row ids
-# follow, so each load still finds its row. Twin of exakit_data_table_keep_picked.
-$script:ExakitDataPicked = @()
-function Limit-ExakitDataTableToPicked {
-    $picked = @($script:ExakitDataPicked)
-    if ($picked.Count -eq 0 -or $null -eq $script:UiTable) { return }
-    $keptRows = New-Object System.Collections.ArrayList
-    $keptIds = New-Object 'System.Collections.Generic.List[string]'
-    for ($i = 0; $i -lt $script:ExakitTableIds.Count -and $i -lt $script:UiTable.Rows.Count; $i++) {
-        $id = $script:ExakitTableIds[$i]
-        if (-not $id -or ($picked -cnotcontains $id)) { continue }
-        $row = $script:UiTable.Rows[$i]
-        # A plain, ticked row: no tree without its parent.
-        $row.Kind = "plain"
-        $row.Tick = $true
-        [void]$keptRows.Add($row)
-        [void]$keptIds.Add($id)
-        if ($id -eq "local") { $script:ExakitTableRowLocal = $keptIds.Count }
-    }
-    if ($keptRows.Count -eq 0) { return }
-    $script:UiTable.Rows.Clear()
-    foreach ($row in $keptRows) { [void]$script:UiTable.Rows.Add($row) }
-    $script:ExakitTableIds = $keptIds.ToArray()
-    $script:ExakitTableGroupFirst = 0
-    $script:ExakitTableGroupLast = 0
-    $script:ExakitTableRowSkip = 0
-}
-
 function Start-ExakitDataTableRun {
     $script:ExakitTableRow = 0
     $script:ExakitTableLive = $false
@@ -3946,7 +3920,6 @@ function Start-ExakitDataTableRun {
     # screen without drawing one), and an empty box animating over nothing is
     # worse than no box. Twin of the `[ -n "$EXAKIT_TABLE_STATE" ]` guard.
     if ($script:ExakitTableIds.Count -lt 1) { return }
-    Limit-ExakitDataTableToPicked
     $script:ExakitTableLive = [bool](Start-ExakitTable)
 }
 function Stop-ExakitDataTableRun {

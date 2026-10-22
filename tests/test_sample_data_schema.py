@@ -237,8 +237,8 @@ class LoadWiringTests(unittest.TestCase):
         # Import-ExakitLocalJson), and the label was widened with it in
         # b792369. This assertion is the one that had to move with them; the
         # one-table data question renamed the row on both sides together.
-        self.assertIn("plain|Your file or folder: CSV, Parquet, JSON|", bash)
-        self.assertIn('-Label "Your file or folder: CSV, Parquet, JSON"', ps1)
+        self.assertIn("plain|Upload a file or folder: CSV/Parquet/JSON|", bash)
+        self.assertIn('-Label "Upload a file or folder: CSV/Parquet/JSON"', ps1)
         # The same table shows an external source, never pickable, on both.
         self.assertIn("plain|Connect an external source - coming soon|0|disabled|", bash)
         self.assertIn('-Label "Connect an external source - coming soon"', ps1)

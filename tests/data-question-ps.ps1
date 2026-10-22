@@ -91,13 +91,13 @@ try {
     Write-Host "the table's rows:"
     [void](Table @("tpch", "energy"))
     Check "parent, datasets, your file, external (disabled), Skip" `
-        "group|Sample datasets|idle;tee|tpch label|idle;corner|energy label|idle;plain|Your file or folder: CSV, Parquet, JSON|idle;plain|Connect an external source - coming soon|disabled;plain|Skip|idle~,tpch,energy,local,," `
+        "group|Sample datasets|idle;tee|tpch label|idle;corner|energy label|idle;plain|Upload a file or folder: CSV/Parquet/JSON|idle;plain|Connect an external source - coming soon|disabled;plain|Skip|idle~,tpch,energy,local,," `
         (Rows)
     Check "the parent spans the datasets" "2~3" "$($script:ExakitTableGroupFirst)~$($script:ExakitTableGroupLast)"
     Check "a dataset and the file row know their rows" "3~4" "$(Get-ExakitDataTableRow -Id 'energy')~$(Get-ExakitDataTableRow -Id 'local')"
     [void](Table @())
     Check "every sample loaded: the parent is a disabled row that says so" `
-        "plain|Sample datasets - all of them are loaded already|disabled;plain|Your file or folder: CSV, Parquet, JSON|idle;plain|Connect an external source - coming soon|disabled;plain|Skip|idle~,local,," `
+        "plain|Sample datasets - all of them are loaded already|disabled;plain|Upload a file or folder: CSV/Parquet/JSON|idle;plain|Connect an external source - coming soon|disabled;plain|Skip|idle~,local,," `
         (Rows)
     Check "...and no group" "0~0" "$($script:ExakitTableGroupFirst)~$($script:ExakitTableGroupLast)"
     Check "one screen: no separate source question" "False" "$($null -ne (Get-Command Select-ExakitDataSource -ErrorAction SilentlyContinue))"
@@ -149,7 +149,7 @@ try {
     Write-Host "who each dataset is for is a column, not a suffix:"
     Set-Pending @("tpch", "pharma_trials")
     New-ExakitDataTable -FinalLabel "Skip"
-    Check "the names stay names" "Sample datasets;tpch label;pharma_trials label;Your file or folder: CSV, Parquet, JSON;Connect an external source - coming soon;Skip" ((@($script:UiTable.Rows | ForEach-Object { $_.Label })) -join ";")
+    Check "the names stay names" "Sample datasets;tpch label;pharma_trials label;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - coming soon;Skip" ((@($script:UiTable.Rows | ForEach-Object { $_.Label })) -join ";")
     Check "the personas go in column 2" ";;AI Scientist, ML Engineer;;;" ((@($script:UiTable.Rows | ForEach-Object { $_.Col2 })) -join ";")
     Check "the table knows it has them" "True" "$($script:ExakitTableHasFor)"
     $chosen = @(Select-ExakitDataLoad -FinalLabel "Skip")

@@ -787,10 +787,7 @@ jobs:
       # install).
       - run: bash tests/addon-questions.sh
         if: matrix.shard == 4
-      # The data question's table keeps only what was picked once loading starts;
       # JupyterLab hides the Marimo copies and Marimo shows only its own.
-      - run: bash tests/data-keep-picked.sh
-        if: matrix.shard == 4
       - run: bash tests/notebook-separate-views.sh
         if: matrix.shard == 4
       # The notebook's tools as child rows of its row in the add-ons table (a

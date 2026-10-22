@@ -10029,7 +10029,6 @@ exakit_maybe_offer_data_load() {
     # the animator would see.
     EXAKIT_TABLE_LIVE=0
     if [ -n "${EXAKIT_TABLE_STATE:-}" ]; then
-        command -v exakit_data_table_keep_picked >/dev/null 2>&1 && exakit_data_table_keep_picked
         ui_table_begin "$EXAKIT_TABLE_STATE" && EXAKIT_TABLE_LIVE=1
     fi
     _data_notes=""

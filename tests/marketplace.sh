@@ -1532,7 +1532,7 @@ check "with every sample loaded, your own file is the answer Enter gives" "local
 # the assertion behind, which is what turned main red; the one-table data
 # question renamed it again. Kept as an equality check rather than loosened to a
 # prefix - this is the row the menu pre-selects and the wording is worth pinning.
-check "the local-file row is pre-selected" "Your file or folder: CSV, Parquet, JSON" "$(cat "$_dl_probe" 2>/dev/null)"
+check "the local-file row is pre-selected" "Upload a file or folder: CSV/Parquet/JSON" "$(cat "$_dl_probe" 2>/dev/null)"
 lacks "and Skip is not what Enter would take" "Skip" "$(cat "$_dl_probe" 2>/dev/null)"
 # The Windows twin draws the same live table now, so its pre-selection is a ROW
 # NUMBER in that table rather than an index into a label array. Same bug to

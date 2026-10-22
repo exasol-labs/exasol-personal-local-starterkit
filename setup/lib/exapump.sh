@@ -3577,7 +3577,7 @@ exakit_load_dataset_dir() {
 #
 #   [x] Sample datasets              <- the parent: ticks every dataset under it
 #   [x] ├─ <each dataset not loaded yet>          For: the personas it is for
-#   [ ] Your file or folder: CSV, Parquet, JSON
+#   [ ] Upload a file or folder: CSV/Parquet/JSON
 #       Connect an external source - coming soon  <- shown, never pickable
 #   [ ] <final_label>                <- mutually exclusive opt-out (Skip)
 #
@@ -3679,6 +3679,24 @@ exakit_data_table_build() {
     # into a row of its own.
     _dtb_pend="$_dtb_f.pending"
     exakit_pending_datasets > "$_dtb_pend" 2>/dev/null || : > "$_dtb_pend"
+    # A PERSONA LISTS ITS OWN. Picked for this machine, the personas' datasets
+    # are the samples on offer; the rest of the bundle stays one
+    # `exakit data-load` away. No persona: every sample, as always.
+    if [ -n "${EXAKIT_PERSONA_ACTIVE:-}" ]; then
+        case "${EXAKIT_DATASETS_PRESELECT:-}" in
+            ''|none) ;;
+            *)
+                _dtb_keep="$_dtb_f.keep"
+                : > "$_dtb_keep"
+                while IFS='|' read -r _dtb_kid _dtb_krest; do
+                    case ",$EXAKIT_DATASETS_PRESELECT," in
+                        *",$_dtb_kid,"*) printf '%s|%s\n' "$_dtb_kid" "$_dtb_krest" >> "$_dtb_keep" ;;
+                    esac
+                done < "$_dtb_pend"
+                mv "$_dtb_keep" "$_dtb_pend"
+                ;;
+        esac
+    fi
     # Which personas each dataset is for, from the persona service: a label
     # suffix, so a reader sees why a row is ticked. Nothing when it cannot answer.
     _dtb_hints=""
@@ -3746,7 +3764,7 @@ exakit_data_table_build() {
     # leaves the file row out. 0 means no row.
     EXAKIT_TABLE_ROW_LOCAL=0
     if [ "${EXAKIT_DATA_TABLE_NO_LOCAL:-0}" != 1 ]; then
-        printf 'plain|Your file or folder: CSV, Parquet, JSON|0|idle|||||| \n' >> "$_dtb_f"
+        printf 'plain|Upload a file or folder: CSV/Parquet/JSON|0|idle|||||| \n' >> "$_dtb_f"
         EXAKIT_TABLE_IDS="${EXAKIT_TABLE_IDS}local
 "
         _dtb_n=$(( _dtb_n + 1 ))
@@ -3812,39 +3830,6 @@ EXAKIT_DTR_EOF
     printf '0\n'
 }
 
-# exakit_data_table_keep_picked — once the reader has answered, the table shows
-# only what is being loaded: the datasets picked (and the file, when one was),
-# as plain rows. The rest of the choice - the datasets left unticked, the
-# parent, the external source, Skip - has no part in the progress. The row ids
-# (EXAKIT_TABLE_IDS) follow, so each load still finds its row.
-exakit_data_table_keep_picked() {
-    [ -n "${EXAKIT_TABLE_STATE:-}" ] && [ -f "$EXAKIT_TABLE_STATE" ] || return 0
-    case ",${EXAKIT_DATA_LOAD_SELECTION:-none}," in ,none,|,,) return 0 ;; esac
-    _dkp_new="$EXAKIT_TABLE_STATE.kept"
-    : > "$_dkp_new"
-    _dkp_ids=""
-    _dkp_row=0
-    _dkp_kept=0
-    while IFS= read -r _dkp_line; do
-        _dkp_row=$(( _dkp_row + 1 ))
-        _dkp_id="$(printf '%s\n' "$EXAKIT_TABLE_IDS" | sed -n "${_dkp_row}p")"
-        [ -n "$_dkp_id" ] || continue
-        case ",$EXAKIT_DATA_LOAD_SELECTION," in *",$_dkp_id,"*) ;; *) continue ;; esac
-        # A plain, ticked row: no tree without its parent.
-        printf '%s\n' "$_dkp_line" | awk -F'|' 'BEGIN { OFS = "|" } { $1 = "plain"; $3 = "1"; print }' >> "$_dkp_new"
-        _dkp_kept=$(( _dkp_kept + 1 ))
-        _dkp_ids="$_dkp_ids$_dkp_id
-"
-        [ "$_dkp_id" = local ] && EXAKIT_TABLE_ROW_LOCAL="$_dkp_kept"
-    done < "$EXAKIT_TABLE_STATE"
-    [ "$_dkp_kept" -gt 0 ] || { rm -f "$_dkp_new"; return 0; }
-    mv "$_dkp_new" "$EXAKIT_TABLE_STATE"
-    EXAKIT_TABLE_IDS="$_dkp_ids"
-    EXAKIT_TABLE_GROUP=""
-    EXAKIT_TABLE_ROW_SKIP=0
-    return 0
-}
-
 exakit_data_load_menu() {
     [ -n "$(manifest_get components.exapump.profile 2>/dev/null)" ] || \
         die "No exapump connection profile is recorded — re-run the installer, then retry."
@@ -3860,7 +3845,6 @@ exakit_data_load_menu() {
     # loaders narrate in plain lines exactly as they did before.
     EXAKIT_TABLE_LIVE=0
     if [ -n "$EXAKIT_TABLE_STATE" ]; then
-        exakit_data_table_keep_picked
         ui_table_begin "$EXAKIT_TABLE_STATE" && EXAKIT_TABLE_LIVE=1
     fi
     _menu_status=0

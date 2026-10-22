@@ -121,7 +121,7 @@ if command -v python3 >/dev/null 2>&1; then
     has "a For column" "For" "$(printf '%s\n' "$out" | grep 'Dataset')"
     has "the persona is shown in full" "AI Scientist, ML Engineer" "$out"
     has "and the dataset name is not cut" "Smart-meter energy readings" "$out"
-    has "nor your own file" "Your file or folder: CSV, Parquet, JSON" "$out"
+    has "nor your own file" "Upload a file or folder: CSV/Parquet/JSON" "$out"
     has "nor the external source" "Connect an external source - coming soon" "$out"
     lacks "nothing is truncated" "…" "$(printf '%s\n' "$out" | sed -n '/Data to load ─/,/╰/p')"
     has "the persona's dataset is the one picked" "SELECTION=banking_complaints" "$out"
@@ -140,10 +140,10 @@ rows() { # rows <pending-ids...> — kind|label|state per row, then the id per r
     )
 }
 check "parent, datasets, your file, external (disabled), Skip" \
-    "group|Sample datasets|idle;tee|tpch label|idle;corner|energy label|idle;plain|Your file or folder: CSV, Parquet, JSON|idle;plain|Connect an external source - coming soon|disabled;plain|Skip|idle;~,tpch,energy,local,,," \
+    "group|Sample datasets|idle;tee|tpch label|idle;corner|energy label|idle;plain|Upload a file or folder: CSV/Parquet/JSON|idle;plain|Connect an external source - coming soon|disabled;plain|Skip|idle;~,tpch,energy,local,,," \
     "$(rows tpch energy)"
 check "every sample loaded: the parent is a disabled row that says so" \
-    "plain|Sample datasets - all of them are loaded already|disabled;plain|Your file or folder: CSV, Parquet, JSON|idle;plain|Connect an external source - coming soon|disabled;plain|Skip|idle;~,local,,," \
+    "plain|Sample datasets - all of them are loaded already|disabled;plain|Upload a file or folder: CSV/Parquet/JSON|idle;plain|Connect an external source - coming soon|disabled;plain|Skip|idle;~,local,,," \
     "$(rows)"
 out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H\nenergy|Energy\n'; }; exakit_data_table_build "$WORK/table"
         printf '%s~%s~%s~%s' "$(exakit_data_table_row energy)" "$(exakit_data_table_row local)" "$EXAKIT_TABLE_GROUP" "$EXAKIT_TABLE_EXCLUSIVE") )"
@@ -195,7 +195,7 @@ out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H retail benchmark (~175k 
         exakit_data_table_build "$WORK/table"
         printf '%s~%s~%s' "$EXAKIT_TABLE_HAS_FOR" "$(cut -d'|' -f2 "$WORK/table" | tr '\n' ';')" "$(cut -d'|' -f11 "$WORK/table" | tr '\n' ';')") )"
 check "the names stay names; the personas go in column 2" \
-    "1~Sample datasets;TPC-H retail benchmark;Pharma clinical trials;Your file or folder: CSV, Parquet, JSON;Connect an external source - coming soon;Skip;~;;AI Scientist, ML Engineer;;;;" "$out"
+    "1~Sample datasets;TPC-H retail benchmark;Pharma clinical trials;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - coming soon;Skip;~;;AI Scientist, ML Engineer;;;;" "$out"
 out="$( (exakit_persona_dataset_hints() { :; }
         exakit_pending_datasets() { printf 'tpch|TPC-H retail benchmark\n'; }
         exakit_data_table_build "$WORK/table"; printf '%s' "$EXAKIT_TABLE_HAS_FOR") )"
