@@ -39,7 +39,7 @@ Install the Exasol starter kit from https://github.com/exasol-labs/exasol-person
 
 </div>
 
-Set up for a role in one go: `curl -fsSL https://www.exasol.com/install/starter-kit.sh | EXAKIT_PERSONA=data-scientist sh` installs the AI Scientist's set - the Pharma and Banking reference datasets, every AI client, the notebook add-on - and `EXAKIT_PERSONA=ml-engineer` adds the UDF dev kit. Without it, the installer asks (or installs the kit on its own when nobody is at the terminal). See [personas/](personas/README.md).
+Set up for a role in one go: `curl -fsSL https://www.exasol.com/install/starter-kit.sh | EXAKIT_PERSONA=data-scientist sh` installs the AI Scientist's set - the Pharma and Banking reference datasets, every AI client, the notebook add-on - and `EXAKIT_PERSONA=ml-engineer` adds the UDF dev kit. Without it, the installer asks (or installs the kit on its own when nobody is at the terminal). Add another one later with `exakit persona add ml-engineer`: the kit is then both, and what the new one brings is loaded, connected and installed without a question. See [personas/](personas/README.md).
 
 ---
 

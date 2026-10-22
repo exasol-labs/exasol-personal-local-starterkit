@@ -64,8 +64,9 @@ if (-not (Get-Command Start-ExakitSpinner -ErrorAction SilentlyContinue)) {
     # non-interactive run would have kept anyway.
     function Invoke-ExakitTableMenu($Table = $null, [int[]]$Defaults = @(),
         [int]$ExclusiveIndex = 0, [int]$GroupParent = 0, [int]$GroupFirst = 0,
-        [int]$GroupLast = 0, [string]$GroupMode = "any", [int]$OnScreen = 0) {
-        $script:ExakitTableConfirmed = $false
+        [int]$GroupLast = 0, [string]$GroupMode = "any", [int]$OnScreen = 0,
+        [switch]$Auto) {
+        $script:ExakitTableConfirmed = [bool]($Auto -or $env:UI_TABLE_AUTO -eq "1")
         return @($Defaults | Sort-Object)
     }
     function Get-ExakitTilde([string]$Path) { return $Path }
@@ -2876,6 +2877,21 @@ function Get-ExakitStepArtifactState {
     return "unknown"
 }
 
+# Write-ExakitStepHeading <title> - a step's header, the installer's look:
+# accent arrow and bold title, set off by a blank line. Begin-ExakitStep draws
+# its steps with it, and `exakit persona add` its three. Twin of
+# exakit_step_heading in common.sh.
+function Write-ExakitStepHeading {
+    param([Parameter(Mandatory)][string]$Title)
+    Write-Host ""
+    if ($script:UiFancy) {
+        Write-Host ("  {0}{1}{2} {3}{4}{5}" -f $script:UiAccent, $script:UiArrow, $script:UiReset, $script:UiBold, $Title, $script:UiReset)
+    } else {
+        Write-Host ("  {0} {1}" -f $script:UiArrow, $Title) -ForegroundColor Blue
+    }
+    Write-ExakitLog "STEP" $Title
+}
+
 # Begin-ExakitStep <name> <description> - announces a step, returns $false
 # (caller should skip) if already done AND what it installed is still there.
 #
@@ -2901,13 +2917,7 @@ function Begin-ExakitStep {
             return $false
         }
     }
-    Write-Host ""
-    if ($script:UiFancy) {
-        Write-Host ("  {0}{1}{2} {3}{4}{5}" -f $script:UiAccent, $script:UiArrow, $script:UiReset, $script:UiBold, $Description, $script:UiReset)
-    } else {
-        Write-Host ("  {0} {1}" -f $script:UiArrow, $Description) -ForegroundColor Blue
-    }
-    Write-ExakitLog "STEP" $Description
+    Write-ExakitStepHeading $Description
     if ($rerun) {
         Info "Recorded as done, but what it installed is missing - running it again"
     }
@@ -5306,7 +5316,9 @@ function Show-ExakitMarketplaceMenu {
     # browse into a full install with a live daemon. Installing without a
     # terminal takes an explicit answer: EXAKIT_MARKETPLACE_ADDONS, or ids on
     # the command line. Twin of the same guard in exakit_marketplace_menu.
-    if (-not (Test-ExakitInteractive)) {
+    # UI_TABLE_AUTO=1 is such an answer: `exakit persona add` installs the
+    # personas' add-ons, the ones this menu was narrowed to, without asking.
+    if (-not (Test-ExakitInteractive) -and $env:UI_TABLE_AUTO -ne "1") {
         Info "No terminal to ask on - nothing was installed."
         Info "See what is available (read-only): exakit marketplace --list   (--json for scripts)"
         Info "Install explicitly: exakit marketplace <id>   or set EXAKIT_MARKETPLACE_ADDONS=<ids>|all"

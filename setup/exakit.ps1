@@ -57,8 +57,9 @@
 #   marketplace           browse optional add-ons (dash-server, ...) and install
 #                         the ones you select; installed add-ons then update
 #                         through `exakit update` like every other component
-#   persona               list | show <id> | apply <id> [--yes]: a named set of
-#                         datasets, AI clients and add-ons (data-scientist, ...)
+#   persona               list | show <id> | plan [<id>] | add <id>: a named set of
+#                         datasets, AI clients and add-ons (data-scientist, ...);
+#                         add joins the ones this kit has and brings theirs in
 #   notebook              open JupyterLab connected to the database (the notebook
 #                         add-on); --check, --setup, --stop, --no-browser, --port N
 #   udf-setup             Python UDFs: install the official container (udf-devkit)
@@ -2244,7 +2245,8 @@ function Write-ExakitVersionNote {
 
 
 # Invoke-CmdPersona - `exakit persona list | show <id> | plan [<id>] [--json] |
-# apply <id>[,<id>] [--yes]`. Twin of cmd_persona.
+# add <id>[,<id>]`; `apply` is the old name of add, kept as an alias. Twin of
+# cmd_persona.
 function Invoke-CmdPersona {
     param([string[]]$CmdArgs = @())
     $verb = if ($CmdArgs.Count) { $CmdArgs[0] } else { "list" }
@@ -2257,8 +2259,12 @@ function Invoke-CmdPersona {
                 Write-Host ("  {0,-16} {1}" -f "", (Get-ExakitPersonaValue $id "summary"))
             }
             $current = Get-ExakitManifestValue "persona.id"
-            if ($current) { Info "This kit was set up as: $current" }
-            Info "Apply one with: exakit persona apply <id>"
+            if ($current) {
+                $currentTitle = (@(Invoke-ExakitPersonaService "title" $current) -join "")
+                if (-not $currentTitle) { $currentTitle = $current }
+                Info "This kit was set up as: $currentTitle"
+            }
+            Info "Add one with: exakit persona add <id>"
         }
         "show" {
             $id = if ($CmdArgs.Count -gt 1) { $CmdArgs[1] } else { "" }
@@ -2279,50 +2285,21 @@ function Invoke-CmdPersona {
             if (-not (Get-ExakitPersona $id)) { Fail $script:ExakitPersonaProblem }
             Show-ExakitPersonaPlan -Ids $id -Json:$json
         }
-        "apply" {
-            $id = ""; $yes = $false
+        { $_ -in @("add", "apply") } {
+            $id = ""
             foreach ($arg in @($CmdArgs | Select-Object -Skip 1)) {
-                if ($arg -in @("--yes", "-y")) { $yes = $true }
-                elseif ($arg.StartsWith("-")) { Fail "Unknown option for persona apply: $arg (supported: --yes)" }
-                elseif ($id) { Fail "Name the personas once, joined by commas: exakit persona apply $id,$arg" }
+                # Nothing is asked: --yes is accepted, so old scripts keep working.
+                if ($arg -in @("--yes", "-y")) { }
+                elseif ($arg.StartsWith("-")) { Fail "Unknown option for persona add: $arg (it asks nothing; --yes is accepted)" }
+                elseif ($id) { Fail "Name the personas once, joined by commas: exakit persona add $id,$arg" }
                 else { $id = $arg }
             }
             if (-not (Get-ExakitPersona $id)) { Fail $script:ExakitPersonaProblem }
-            $env:EXAKIT_PERSONA = $id
-            $env:EXAKIT_PERSONA_SOURCE = "apply"
-            Set-ExakitPersonaEnv -NoRecord
-            if (-not $yes) {
-                # Unattended, nothing changes without --yes (exit 5, like every
-                # command that needs a confirmation).
-                if (-not (Test-ExakitInteractive)) {
-                    Info "Nothing changed - without a terminal, confirm with: exakit persona apply $id --yes"
-                    exit 5
-                }
-                if (-not (Confirm-ExakitPrompt "Load the datasets, connect the AI clients and install the add-ons above" $true)) {
-                    Info "Nothing changed."
-                    exit 5
-                }
-            }
-            Set-ExakitPersonaRecord
-            # Each answer through its own command, which already honours it, in
-            # a process of its own: a command that ends with `exit` must not end
-            # this one, so one that fails does not stop the others.
-            $hostExe = (Get-Process -Id $PID).Path
-            $steps = @()
-            if ($env:EXAKIT_LOAD_SAMPLE -eq "0") { Info "No sample data for this persona" } else { $steps += "data-load" }
-            $steps += @("mcp-setup", "marketplace")
-            $failed = @()
-            foreach ($step in $steps) {
-                & $hostExe -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath $step
-                if ($LASTEXITCODE -ne 0) { $failed += $step }
-            }
-            if ($failed.Count) {
-                Warn2 "Persona $id applied, except: $($failed -join ', ') - re-run it with: exakit persona apply $id"
-                exit 1
-            }
-            Ok "Persona $id applied"
+            # Not captured: each step's output is its own, straight to the console.
+            Invoke-ExakitPersonaAdd -Ids $id -Cli $PSCommandPath
+            if (-not $script:ExakitPersonaAddOk) { exit 1 }
         }
-        default { Fail "Unknown persona command: $verb (use: exakit persona list | show <id> | plan [<id>] | apply <id> [--yes])" }
+        default { Fail "Unknown persona command: $verb (use: exakit persona list | show <id> | plan [<id>] | add <id>)" }
     }
 }
 

@@ -1595,12 +1595,27 @@ function Invoke-McpSetup {
         # A client with no id is one this machine cannot offer - it becomes a
         # disabled row carrying the reason, so the list is the whole answer rather
         # than a list that quietly omits things.
-        $defaults = @(1)
+        # $env:EXAKIT_MCP_PRESELECT (the personas' clients, from `exakit persona
+        # add`) ticks only the pending clients it names; "all" is every one.
+        # Twin of the same rule in exakit_mcp_setup.
+        $filter = [bool]($env:EXAKIT_MCP_PRESELECT -and $env:EXAKIT_MCP_PRESELECT -notmatch '^\s*(all|ALL|All)\s*$')
+        $pre = @()
+        if ($filter) { $pre = @(ConvertTo-McpClientSelection $env:EXAKIT_MCP_PRESELECT | Where-Object { $_ }) }
+        $defaults = @()
+        $every = $true
         for ($i = 0; $i -lt $clientCount; $i++) {
             $rowAt = $rowFirst + $i
-            if (@($menuIds[$i]).Count -gt 0) { $defaults += $rowAt }
+            if (@($menuIds[$i]).Count -gt 0) {
+                $want = $true
+                if ($filter) {
+                    $want = [bool](@($menuIds[$i]) | Where-Object { $pre -contains $_ })
+                }
+                if ($want) { $defaults += $rowAt } else { $every = $false }
+            }
             else { Disable-ExakitTableRow -Row $rowAt -Note $menuNotes[$i] -Table $script:McpTable }
         }
+        if ($defaults.Count -eq 0) { $defaults = @($rowSkip) }
+        elseif ($every) { $defaults = @(1) + $defaults }
         Write-Host ""
         # Loop so a not-confirmed skip returns the user to the menu.
         $onScreen = 0
@@ -1610,6 +1625,14 @@ function Invoke-McpSetup {
                 -ExclusiveIndex $rowSkip -GroupParent 1 -GroupFirst $rowFirst `
                 -GroupLast $rowLast -GroupMode "all" -OnScreen $onScreen)
             if ($selection -contains $rowSkip) {
+                # Taken without asking (UI_TABLE_AUTO): none of the clients named
+                # is on this machine to connect, which is no question. Twin of
+                # the same branch in exakit_mcp_setup.
+                if ($env:UI_TABLE_AUTO -eq "1") {
+                    Info "None of the AI clients named is waiting to be connected here - connect one any time with: exakit mcp-setup"
+                    Reset-McpClientTable
+                    return $true
+                }
                 Warn2 "No AI client will be connected to your database."
                 if (Confirm-ExakitPrompt "Are you sure you want to continue without an AI client?" $true) {
                     Info "Okay - you can connect one any time with: exakit mcp-setup"

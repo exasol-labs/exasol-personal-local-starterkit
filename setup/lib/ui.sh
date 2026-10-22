@@ -1694,6 +1694,11 @@ ui_animation_stop() {
 # table — frame plus anything printed under it — are ALREADY on screen, so a
 # re-ask overwrites them instead of drawing a second table below them. The MCP
 # step sets it when an unconfirmed "Skip" sends the reader back to the menu.
+#
+# UI_TABLE_AUTO=1: nobody is asked. The table is drawn once with its defaults
+# ticked, they are the answer, and it counts as confirmed - the caller was told
+# to do exactly this (`exakit persona add`). No key is read; ui_table_begin then
+# turns the same frame into the progress display.
 ui_table_menu() {
     _utm_f="$1"
     _utm_n=0
@@ -1740,6 +1745,14 @@ ui_table_menu() {
     # two apart, because "Enter alone installs what is on offer" is only a safe
     # posture while there is an Enter. See exakit_marketplace_menu.
     EXAKIT_TABLE_CONFIRMED=0
+    if [ "${UI_TABLE_AUTO:-0}" = 1 ]; then
+        ui_table_tick "$_utm_f" "$_utm_sel"
+        ui_table_render "$_utm_f" 0
+        EXAKIT_TABLE_SELECTION="${_utm_sel:-none}"
+        EXAKIT_TABLE_CONFIRMED=1
+        _UI_CHECKBOX_SELECTABLE=""
+        return 0
+    fi
     _utm_tty="$(_exakit_prompt_tty)"
     if [ -z "$_utm_tty" ] || [ "${UI_FANCY:-0}" != 1 ]; then
         # No terminal: the defaults stand, and the table is printed once so a

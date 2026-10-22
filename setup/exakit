@@ -62,8 +62,9 @@
 #   marketplace         browse optional add-ons (dash-server, ...) and install
 #                       the ones you select; installed add-ons then update
 #                       through `exakit update` like every other component
-#   persona             list | show <id> | apply <id> [--yes]: a named set of
-#                       datasets, AI clients and add-ons (data-scientist, ...)
+#   persona             list | show <id> | plan [<id>] | add <id>: a named set of
+#                       datasets, AI clients and add-ons (data-scientist, ...);
+#                       add joins the ones this kit has and brings theirs in
 #   notebook            open JupyterLab connected to the database (the notebook
 #                       add-on); --check, --setup, --stop, --no-browser, --port N
 #   udf-setup           Python UDFs: install the official container (udf-devkit)
@@ -2407,8 +2408,8 @@ cmd_whats_new() {
     fi
 }
 
-# cmd_persona list | show <id> | plan [<id>] [--json] | apply <id>[,<id>]
-# [--yes] — the `exakit persona` command.
+# cmd_persona list | show <id> | plan [<id>] [--json] | add <id>[,<id>] — the
+# `exakit persona` command. `apply` is the old name of add, kept as an alias.
 cmd_persona() {
     case "${1:-list}" in
         list)
@@ -2419,8 +2420,10 @@ cmd_persona() {
                 printf '  %-16s %s\n' "" "$(exakit_persona_value "$_cp_id" summary)"
             done
             _cp_current="$(manifest_get persona.id 2>/dev/null || true)"
-            [ -n "$_cp_current" ] && info "This kit was set up as: $_cp_current"
-            info "Apply one with: exakit persona apply <id>"
+            if [ -n "$_cp_current" ]; then
+                info "This kit was set up as: $(_exakit_persona_service title "$_cp_current" 2>/dev/null || printf '%s' "$_cp_current")"
+            fi
+            info "Add one with: exakit persona add <id>"
             ;;
         show)
             exakit_persona_known "${2:-}" || die "$EXAKIT_PERSONA_PROBLEM"
@@ -2441,47 +2444,21 @@ cmd_persona() {
             exakit_persona_known "$_cp_id" || die "$EXAKIT_PERSONA_PROBLEM"
             exakit_persona_plan "$_cp_id" "$_cp_json"
             ;;
-        apply)
+        add|apply)
             shift
-            _cp_id=""; _cp_yes=0
+            _cp_id=""
             for _cp_arg in "$@"; do
                 case "$_cp_arg" in
-                    --yes|-y) _cp_yes=1 ;;
-                    -*) die "Unknown option for persona apply: $_cp_arg (supported: --yes)" ;;
-                    *) [ -z "$_cp_id" ] || die "Name the personas once, joined by commas: exakit persona apply $_cp_id,$_cp_arg"
+                    --yes|-y) ;;              # nothing is asked: accepted, so old scripts keep working
+                    -*) die "Unknown option for persona add: $_cp_arg (it asks nothing; --yes is accepted)" ;;
+                    *) [ -z "$_cp_id" ] || die "Name the personas once, joined by commas: exakit persona add $_cp_id,$_cp_arg"
                        _cp_id="$_cp_arg" ;;
                 esac
             done
             exakit_persona_known "$_cp_id" || die "$EXAKIT_PERSONA_PROBLEM"
-            EXAKIT_PERSONA="$_cp_id"; EXAKIT_PERSONA_SOURCE=apply; export EXAKIT_PERSONA EXAKIT_PERSONA_SOURCE
-            exakit_persona_apply_env norecord
-            if [ "$_cp_yes" != 1 ]; then
-                # Unattended, nothing changes without --yes (exit 5, like every
-                # command that needs a confirmation).
-                [ -n "$(_exakit_prompt_tty)" ] || { info "Nothing changed - without a terminal, confirm with: exakit persona apply $_cp_id --yes"; return 5; }
-                if ! confirm "Load the datasets, connect the AI clients and install the add-ons above?" y; then
-                    info "Nothing changed."
-                    return 5
-                fi
-            fi
-            _exakit_persona_record
-            # Each answer through its own command, which already honours it;
-            # one that fails does not stop the others.
-            _cp_failed=""
-            if [ "${EXAKIT_LOAD_SAMPLE:-}" = 0 ]; then
-                info "No sample data for this persona"
-            else
-                ( cmd_data_load ) || _cp_failed="$_cp_failed data-load"
-            fi
-            ( cmd_mcp_setup ) || _cp_failed="$_cp_failed mcp-setup"
-            ( cmd_marketplace ) || _cp_failed="$_cp_failed marketplace"
-            if [ -n "$_cp_failed" ]; then
-                warn "Persona $_cp_id applied, except:$_cp_failed - re-run it with: exakit persona apply $_cp_id"
-                return 1
-            fi
-            ok "Persona $_cp_id applied"
+            exakit_persona_add "$_cp_id"
             ;;
-        *) die "Unknown persona command: $1 (use: exakit persona list | show <id> | plan [<id>] | apply <id> [--yes])" ;;
+        *) die "Unknown persona command: $1 (use: exakit persona list | show <id> | plan [<id>] | add <id>)" ;;
     esac
 }
 

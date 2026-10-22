@@ -46,10 +46,21 @@ without `EXAKIT_PERSONA`, the kit installs on its own with TPC-H, energy and
 weather, as before.
 
 On an installed kit: `exakit persona list`, `exakit persona show <id>`,
-`exakit persona apply <id>` (asks first; `--yes` for a script; without a
-terminal it changes nothing without `--yes`) and `exakit persona plan [<id>]
-[--json]`, which shows what a persona brings and what of it is still pending -
-after an `EXAKIT_PERSONA` install, nothing (AC-P1.1).
+`exakit persona add <id>` and `exakit persona plan [<id>] [--json]`, which
+shows what a persona brings and what of it is still pending - after an
+`EXAKIT_PERSONA` install, nothing (AC-P1.1).
+
+`exakit persona add ml-engineer` on a kit set up as AI Scientist makes it both:
+the record becomes `data-scientist,ml-engineer`, and what the two bring that is
+not here yet comes in - nothing is asked. Three steps, headed like the
+installer's (*Step 1/3 Sample data*, *2/3 AI clients*, *3/3 Add-ons*), each
+showing the installer's own table with its defaults ticked and filling it in as
+it works; what is already here is named in one line instead (*Already loaded:
+Pharma clinical trials*). Without a terminal the same happens in plain lines.
+A part that fails does not stop the others; the closing line says *Persona
+added: AI Scientist + ML Engineer*, or names each part that did not finish and
+the command that retries it (exit 1). `apply` is the same command, and `--yes`
+is accepted.
 
 An answer you give yourself always wins for that one variable:
 `EXAKIT_PERSONA=data-scientist EXAKIT_DATASETS=banking_complaints` loads only

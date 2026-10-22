@@ -17,6 +17,11 @@
 #     names who each is for
 #   - an explicit answer wins, per variable; an unknown persona stops the run
 #     before anything is installed; the persona is recorded in the manifest
+#   - exakit persona add (apply its alias) asks nothing: the personas named join
+#     the recorded ones (their union is recorded, source add), what is in
+#     already is one line, each part runs on its own and a failed one exits 1
+#     with its retry; on a pty it draws the installer's three tables, headed
+#     Step 1/3..3/3, each taken with its defaults and filled in, one at a time
 #
 # A sandboxed kit home; nothing is installed.
 
@@ -234,33 +239,122 @@ out="$( (exakit_pending_datasets() { printf 'banking_complaints|Banking\n'; }; e
         exakit_persona_plan ml-engineer 0 2>&1) )"
 contains "what is loaded and what is pending" "loaded: pharma_trials   pending: banking_complaints" "$out"
 contains "...add-ons the same way" "installed: notebook   pending: udf-devkit" "$out"
-contains "...and how to finish" "exakit persona apply ml-engineer" "$out"
+contains "...and how to finish" "exakit persona add ml-engineer" "$out"
 out="$( (exakit_pending_datasets() { :; }; exakit_marketplace_installed_addons() { printf 'notebook\nudf-devkit\n'; }
         exakit_persona_plan ml-engineer 1 2>/dev/null) )"
 check "--json after a complete install: nothing pending" "true" \
     "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(str(d["nothing_pending"]).lower() if not d["datasets"]["pending"] and not d["addons"]["pending"] else "pending")' 2>/dev/null)"
 
-echo "exakit persona apply:"
+echo "exakit persona add (apply is its alias): nothing asked, the personas join:"
 _cp_range='/^cmd_persona() {/,/^}/p'      # assigned first: bash 3.2 brace-expands it as an argument
 sed -n "$_cp_range" "$ROOT/setup/exakit" > "$WORK/cmd_persona.sh"
 . "$WORK/cmd_persona.sh"
-cmd_data_load() { echo "STEP data-load"; }; cmd_mcp_setup() { echo "STEP mcp-setup"; }; cmd_marketplace() { echo "STEP marketplace"; }
+# Each step says what it was handed, and whether anything in it could ask.
+cmd_data_load() { echo "STEP data-load datasets=${EXAKIT_DATASETS:-} tty=$(_exakit_prompt_tty)"; }
+cmd_mcp_setup() { echo "STEP mcp-setup clients=${EXAKIT_MCP_CLIENTS:-} tty=$(_exakit_prompt_tty)"; }
+cmd_marketplace() { echo "STEP marketplace addons=${EXAKIT_MARKETPLACE_ADDONS:-} tty=$(_exakit_prompt_tty)"; }
+# Pharma is in already and the notebook installed: neither is redone.
+exakit_pending_datasets() { printf 'banking_complaints|Banking complaints (CFPB, ~7k complaints)\n'; }
+exakit_marketplace_installed_addons() { echo notebook; }
+add() { ( _exakit_prompt_tty() { echo /dev/tty; }; confirm() { echo ASKED; return 1; }; cmd_persona "$@" 2>&1 ); echo "rc=$?"; }
+manifest_set persona.id data-scientist
+out="$(add add ml-engineer </dev/null)"
+contains "no --yes and no terminal: it runs" "rc=0" "$out"
+check "...and asks nothing" "" "$(printf '%s\n' "$out" | grep -E 'ASKED|\[Y/n\]|tty=/dev/tty')"
+check "the personas recorded are the union, in the kit's order" "data-scientist,ml-engineer|add" \
+    "$(manifest_get persona.id)|$(manifest_get persona.source)"
+contains "the title line names the persona added and the set it makes" \
+    "Adding persona: ML Engineer (now AI Scientist + ML Engineer)" "$out"
+check "three steps headed like the installer's" "Step 1/3  Sample data|Step 2/3  AI clients|Step 3/3  Add-ons" \
+    "$(printf '%s\n' "$out" | grep -o 'Step [0-9]/3  [A-Za-z -]*' | sed 's/ *$//' | tr '\n' '|' | sed 's/|$//')"
+contains "a dataset already loaded is said, not redone" "Already loaded: Pharma clinical trials" "$out"
+contains "...the data step loads only the rest" "STEP data-load datasets=banking_complaints tty=" "$out"
+contains "the AI clients are the personas' (every one detected)" "STEP mcp-setup clients=all tty=" "$out"
+contains "an add-on already installed is said, not redone" "Already installed: notebook" "$out"
+contains "...the add-ons step installs only the rest" "STEP marketplace addons=udf-devkit tty=" "$out"
+check "the steps run in order" "data-load mcp-setup marketplace" \
+    "$(printf '%s\n' "$out" | sed -n 's/^STEP \([a-z-]*\).*/\1/p' | tr '\n' ' ' | sed 's/ $//')"
+contains "one closing line names the whole set" "Persona added: AI Scientist + ML Engineer" "$out"
+out="$( (cmd_persona list 2>&1) )"
+contains "list says what this kit was set up as, by title" "This kit was set up as: AI Scientist + ML Engineer" "$out"
+contains "...and how to add one" "exakit persona add <id>" "$out"
+out="$( (exakit_pending_datasets() { :; }; exakit_marketplace_installed_addons() { printf 'notebook\nudf-devkit\n'; }
+        cmd_persona plan --json 2>/dev/null) )"
+check "plan with no id reports the combined set, nothing pending after the add" "data-scientist,ml-engineer|true" \
+    "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["persona"] + "|" + str(d["nothing_pending"]).lower())' 2>/dev/null)"
+out="$( (exakit_pending_datasets() { :; }; exakit_marketplace_installed_addons() { printf 'notebook\nudf-devkit\n'; }
+        cmd_persona add ml-engineer 2>&1); echo "rc=$?")"
+contains "added again with everything in: each part says so" "Already loaded: Pharma clinical trials, Banking complaints" "$out"
+check "...nothing is loaded or installed (the AI client step says for itself what is connected)" "STEP mcp-setup" \
+    "$(printf '%s\n' "$out" | sed -n 's/^\(STEP [a-z-]*\).*/\1/p' | tr '\n' ' ' | sed 's/ $//')"
+contains "...rc 0" "rc=0" "$out"
+manifest_set persona.id "general,data-scientist"
+out="$(add apply ml-engineer --yes)"
+contains "apply is the same command, and --yes is accepted" "rc=0" "$out"
+check "...a recorded persona this kit no longer ships is left out" "data-scientist,ml-engineer" "$(manifest_get persona.id)"
 manifest_set persona.id ""
-out="$( (_exakit_prompt_tty() { :; }; cmd_persona apply ml-engineer 2>&1); echo "rc=$?")"
-contains "no terminal and no --yes: nothing changes" "rc=5" "$out"
-check "...and nothing is recorded" "" "$(manifest_get persona.id 2>/dev/null)"
-out="$( (_exakit_prompt_tty() { echo /dev/tty; }; confirm() { return 1; }; cmd_persona apply ml-engineer 2>&1); echo "rc=$?")"
-contains "declined: exit 5" "rc=5" "$out"
-check "...and nothing is recorded" "" "$(manifest_get persona.id 2>/dev/null)"
-out="$( (cmd_persona apply ml-engineer --yes 2>&1); echo "rc=$?")"
-contains "with --yes every step runs" "STEP data-load" "$out"
-contains "...and the persona is recorded" "rc=0" "$out"
-check "...as apply" "ml-engineer|apply" "$(manifest_get persona.id)|$(manifest_get persona.source)"
-out="$( (cmd_persona apply data-scientist ml-engineer --yes 2>&1); echo "rc=$?")"
-contains "two ids as two words: refused, joined with a comma instead" "exakit persona apply data-scientist,ml-engineer" "$out"
-out="$( (exakit_repo_root() { printf '%s\n' "$WORK/kit3"; }; cmd_persona apply bare --yes 2>&1) )"
-contains "a persona without datasets loads none" "No sample data for this persona" "$out"
+out="$(add add data-scientist)"
+contains "nothing recorded before: the title line names just the one" "Adding persona: AI Scientist" "$out"
+check "...recorded on its own" "data-scientist" "$(manifest_get persona.id)"
+manifest_set persona.id data-scientist
+out="$( (cmd_data_load() { echo "STEP data-load"; exit 1; }; cmd_persona add ml-engineer 2>&1); echo "rc=$?")"
+contains "a step that dies: the command exits 1" "rc=1" "$out"
+contains "...the others still run" "STEP marketplace" "$out"
+contains "...the closing line says not everything finished" "Persona added: AI Scientist + ML Engineer - not everything finished" "$out"
+contains "...and the one command that retries the part" "Sample data did not finish - retry with: EXAKIT_DATASETS=banking_complaints exakit data-load" "$out"
+check "...only that part" "" "$(printf '%s\n' "$out" | grep -E '(AI clients|Add-ons) did not finish')"
+out="$( (cmd_marketplace() { return 1; }; cmd_persona add ml-engineer 2>&1); echo "rc=$?")"
+contains "a failed add-on install names its retry" "Add-ons did not finish - retry with: exakit marketplace udf-devkit" "$out"
 manifest_set persona.id ""
+out="$( (cmd_persona add data-scientist ml-engineer 2>&1); echo "rc=$?")"
+contains "two ids as two words: refused, joined with a comma instead" "exakit persona add data-scientist,ml-engineer" "$out"
+check "...and nothing is recorded" "" "$(manifest_get persona.id 2>/dev/null)"
+out="$( (cmd_persona add nope 2>&1); echo "rc=$?")"
+contains "an unknown persona: refused, naming the ones there are" "available: data-scientist ml-engineer" "$out"
+contains "...exit 1" "rc=1" "$out"
+out="$( (cmd_persona add ml-engineer --force 2>&1); echo "rc=$?")"
+contains "an unknown option: refused" "Unknown option for persona add: --force" "$out"
+check "...and nothing is recorded" "" "$(manifest_get persona.id 2>/dev/null)"
+out="$( (exakit_repo_root() { printf '%s\n' "$WORK/kit3"; }; cmd_persona add bare 2>&1) )"
+contains "a persona without datasets loads none" "No sample data for these personas" "$out"
+contains "...nor add-ons" "No add-ons for these personas" "$out"
+contains "...nor AI clients" "No AI clients for these personas" "$out"
+manifest_set persona.id ""
+
+echo "exakit persona add on a terminal: the installer's tables, with no key pressed:"
+# A real pty (tests/lib/tty-replay.py) and no keystroke at all: every table is
+# drawn with its defaults and filled in - one of each on screen, at every
+# instant (tests/lib/persona-add-scenario.sh).
+_pa_loc="$( . "$ROOT/tests/lib/utf8-locale.sh"; printf '%s' "$EXAKIT_TEST_UTF8_LOCALE")"
+if ! command -v python3 >/dev/null 2>&1 || [ -z "$_pa_loc" ]; then
+    check "python3 and a UTF-8 locale for the pty replay" "skipped" "skipped"
+else
+    for _pa_title in "Data to load" "AI clients to connect" "Marketplace add-ons"; do
+        OUT="$(env LANG="$_pa_loc" LC_ALL="$_pa_loc" python3 "$ROOT/tests/lib/tty-replay.py" \
+            "$ROOT/tests/lib/persona-add-scenario.sh" "$ROOT" "$_pa_title" "" 3 2>&1)"
+        check "one '$_pa_title' table on screen at every instant, three boxes in all" "0" "$?"
+    done
+    SCREEN="$(printf '%s\n' "$OUT" | sed -n '/=== FINAL SCREEN ===/,/=== tables on screen/p')"
+    contains "the title line"                          "Adding persona: ML Engineer (now AI Scientist + ML Engineer)" "$SCREEN"
+    check "the step headings, in order" "Step 1/3  Sample data|Step 2/3  AI clients|Step 3/3  Add-ons" \
+        "$(printf '%s\n' "$SCREEN" | grep -o 'Step [0-9]/3  [A-Za-z -]*' | sed 's/ *$//' | tr '\n' '|' | sed 's/|$//')"
+    check "each step's table under its own heading" "Step 1/3|Data to load|Step 2/3|AI clients to connect|Step 3/3|Marketplace add-ons" \
+        "$(printf '%s\n' "$SCREEN" | grep -o 'Step [0-9]/3\|╭─ [A-Za-z -]*[a-z]' | sed 's/^╭─ //' | tr '\n' '|' | sed 's/|$//')"
+    contains "the dataset already in is one line"      "Already loaded: Pharma clinical trials" "$SCREEN"
+    contains "the one still to load fills its row"     "└─ Banking complaints   ✓ completed" "$SCREEN"
+    contains "Claude, waiting, is configured"          "[✓] ├─ Claude          ✓ configured" "$SCREEN"
+    contains "Codex, already connected, says so"       "├─ Codex           already connected" "$SCREEN"
+    contains "the add-on already installed is one line" "Already installed: notebook" "$SCREEN"
+    contains "the one still missing fills its row"     "└─ udf-devkit  ✓ installed" "$SCREEN"
+    contains "one closing line"                        "✓ Persona added: AI Scientist + ML Engineer" "$SCREEN"
+    check "no menu hint and no question: nothing waited for a key" "" \
+        "$(printf '%s\n' "$OUT" | grep -E 'Space to toggle|\[Y/n\]|\[y/N\]')"
+    contains "the exit code"                           "RC=0" "$OUT"
+    contains "the personas recorded: both"             "RECORDED=data-scientist,ml-engineer|add" "$OUT"
+    contains "only the pending dataset was loaded"     "LOADED=banking_complaints" "$OUT"
+    contains "only the waiting client was configured"  "CLIENTS=claude_desktop,claude_code" "$OUT"
+    contains "only the missing add-on was installed"   "INSTALLED=udf-devkit" "$OUT"
+fi
 
 echo "the installer refuses an unknown persona before anything is installed:"
 # install.sh's dry run stops before the setup scripts, so it checks the persona

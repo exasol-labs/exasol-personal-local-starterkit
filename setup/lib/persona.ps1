@@ -296,5 +296,186 @@ function Show-ExakitPersonaPlan {
     Write-Host "$(@(Invoke-ExakitPersonaService 'title' $Ids) -join '') ($Ids)"
     Write-Host ("  {0,-12} loaded: {1}   pending: {2}" -f "Datasets", $(if ($plan.datasets.loaded.Count) { $plan.datasets.loaded -join ' ' } else { $none }), $(if ($plan.datasets.pending.Count) { $plan.datasets.pending -join ' ' } else { $none }))
     Write-Host ("  {0,-12} installed: {1}   pending: {2}" -f "Add-ons", $(if ($plan.addons.installed.Count) { $plan.addons.installed -join ' ' } else { $none }), $(if ($plan.addons.pending.Count) { $plan.addons.pending -join ' ' } else { $none }))
-    if ($plan.nothing_pending) { Ok "Nothing pending for $Ids" } else { Info "Pending - bring it in with: exakit persona apply $Ids" }
+    if ($plan.nothing_pending) { Ok "Nothing pending for $Ids" } else { Info "Pending - bring it in with: exakit persona add $Ids" }
+}
+
+# Get-ExakitPersonaRecorded - the personas this kit was set up as (persona.id),
+# in the kit's order; one this kit copy no longer ships is left out. Empty when
+# none is recorded. Twin of exakit_persona_recorded.
+function Get-ExakitPersonaRecorded {
+    $known = @()
+    foreach ($id in @("$(Get-ExakitManifestValue 'persona.id')" -split ',' | Where-Object { $_ })) {
+        if (@(Invoke-ExakitPersonaService "check" $id | Where-Object { $_ }).Count -gt 0) { $known += $id }
+    }
+    if ($known.Count -eq 0) { return "" }
+    return (@(Invoke-ExakitPersonaService "check" ($known -join ",")) -join "")
+}
+
+# Get-ExakitPersonaDatasetLabel <id> - the dataset's name as a line says it: its
+# label without the "(~5k rows)" estimate or the download size. Twin of
+# _exakit_persona_label.
+function Get-ExakitPersonaDatasetLabel {
+    param([Parameter(Mandatory)][string]$Id)
+    $ds = @(Get-ExakitBundledDatasets | Where-Object { $_.Id -ceq $Id }) | Select-Object -First 1
+    if (-not $ds) { return $Id }
+    return ([regex]::Replace(("" + $ds.Label), ' - [0-9.]+ MB download$', '') -replace ' *\([^()]*\)$', '')
+}
+
+# Invoke-ExakitPersonaChild -Cli <exakit.ps1> -Command <command> [-Env @{..}] -
+# one step of `exakit persona add`, as its own command in a process of its own:
+# a command that ends with `exit` must not end this one, so one that fails does
+# not stop the others. The variables in -Env are set for it alone ($null
+# removes one). Its input is not the console, so nothing in there can ask a
+# question (Test-ExakitInteractive); its output is, so its tables animate. Keys
+# typed meanwhile are dropped when it ends. The exit code lands in
+# $script:ExakitPersonaChildCode: this function's output is the child's own,
+# straight to the console, and capturing it would take the console away.
+# Twin of the ( cmd_... ) subshells in exakit_persona_add.
+$script:ExakitPersonaChildCode = 0
+function Invoke-ExakitPersonaChild {
+    param([Parameter(Mandatory)][string]$Cli, [Parameter(Mandatory)][string]$Command, [hashtable]$Env = @{})
+    $saved = @{}
+    foreach ($k in @($Env.Keys)) {
+        $saved[$k] = [Environment]::GetEnvironmentVariable($k, "Process")
+        [Environment]::SetEnvironmentVariable($k, $Env[$k], "Process")
+    }
+    $script:ExakitPersonaChildCode = 1
+    try {
+        $hostExe = (Get-Process -Id $PID).Path
+        $null | & $hostExe -NoProfile -ExecutionPolicy Bypass -File $Cli $Command
+        $script:ExakitPersonaChildCode = $LASTEXITCODE
+    } finally {
+        foreach ($k in @($Env.Keys)) { [Environment]::SetEnvironmentVariable($k, $saved[$k], "Process") }
+        try { while ([Console]::KeyAvailable) { [void][Console]::ReadKey($true) } } catch { }
+    }
+}
+
+# Invoke-ExakitPersonaAdd -Ids <ids> -Cli <exakit.ps1> - `exakit persona add`
+# (alias: apply). The personas named JOIN the ones this kit was set up as:
+# persona.id becomes their union, in the kit's order, and the union's answers
+# are the ones used. Nothing is asked. Three steps headed the way the installer
+# heads its own, each the installer's own table with its defaults taken
+# (UI_TABLE_AUTO) and animated while it works - plain lines without a console:
+# the sample data, the AI clients, the add-ons. What is here already is said in
+# one line, not redone. One closing line: the personas are added, or which parts
+# did not finish and the one command that retries each (exit 1). Whether it
+# all finished is in $script:ExakitPersonaAddOk, not in the output: that is the
+# steps' own, see Invoke-ExakitPersonaChild. Twin of exakit_persona_add in
+# persona.sh.
+$script:ExakitPersonaAddOk = $false
+function Invoke-ExakitPersonaAdd {
+    param([Parameter(Mandatory)][string]$Ids, [Parameter(Mandatory)][AllowEmptyString()][string]$Cli)
+    $script:ExakitPersonaAddOk = $false
+    $new = Get-ExakitPersona $Ids
+    if (-not $new) { Fail $script:ExakitPersonaProblem }
+    $was = Get-ExakitPersonaRecorded
+    $all = $new
+    if ($was) {
+        $both = Get-ExakitPersona "$was,$new"
+        if ($both) { $all = $both }
+    }
+    $title = (@(Invoke-ExakitPersonaService "title" $new) -join "")
+    if (-not $title) { $title = $new }
+    $allTitle = (@(Invoke-ExakitPersonaService "title" $all) -join "")
+    if (-not $allTitle) { $allTitle = $all }
+    $answers = Invoke-ExakitPersonaService "answers" $all
+    if ($null -eq $answers) { Fail "The persona files could not be read - repair the kit copy with: exakit update" }
+    Set-ExakitPersonaAnswers $answers
+    $env:EXAKIT_PERSONA_SOURCE = "add"
+    Set-ExakitPersonaRecord
+    Write-ExakitLog "INFO" "persona add $new -> $($env:EXAKIT_PERSONA): $(@($answers) -join ' ')"
+    Write-Host ""
+    if ($all -eq $new) { Write-ExakitHeading "Adding persona: $title" }
+    else { Write-ExakitHeading "Adding persona: $title (now $allTitle)" }
+    # The installer's tables where there is a console to animate them on.
+    $live = [bool]$script:UiFancy
+    $failed = @()                    # "<part>|<the command that retries it>"
+
+    Write-ExakitStepHeading "Step 1/3  Sample data"
+    $load = @(); $have = @()
+    if ($env:EXAKIT_LOAD_SAMPLE -ne "0" -and $env:EXAKIT_DATASETS) {
+        $known = @(Get-ExakitBundledDatasets | ForEach-Object { $_.Id })
+        $pendingIds = @(Get-ExakitPendingDatasets | ForEach-Object { $_.Id })
+        foreach ($d in @($env:EXAKIT_DATASETS -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
+            if ($known -cnotcontains $d) { Warn2 "Unknown dataset id '$d' in EXAKIT_DATASETS - left out"; continue }
+            if ($pendingIds -ccontains $d) { $load += $d } else { $have += (Get-ExakitPersonaDatasetLabel $d) }
+        }
+    }
+    if ($have.Count) { Ok "Already loaded: $($have -join ', ')" }
+    if ($load.Count) {
+        if ($live) {
+            # The data question's table, with only these datasets under Sample
+            # datasets (a persona lists its own), ticked.
+            $childEnv = @{ EXAKIT_DATASETS = $null; EXAKIT_DATA_FILE = $null; EXAKIT_LOAD_SAMPLE = $null
+                EXAKIT_PERSONA_ACTIVE = "1"; EXAKIT_DATASETS_PRESELECT = ($load -join ","); UI_TABLE_AUTO = "1" }
+        } else {
+            $childEnv = @{ EXAKIT_DATASETS = ($load -join ","); EXAKIT_DATA_FILE = $null; EXAKIT_LOAD_SAMPLE = $null }
+        }
+        Invoke-ExakitPersonaChild -Cli $Cli -Command "data-load" -Env $childEnv
+        if ($script:ExakitPersonaChildCode -ne 0) { $failed += "Sample data|`$env:EXAKIT_DATASETS = '$($load -join ',')'; exakit data-load" }
+    } elseif ($have.Count -eq 0) {
+        Info "No sample data for these personas"
+    }
+
+    Write-ExakitStepHeading "Step 2/3  AI clients"
+    if ($env:EXAKIT_SKIP_MCP -eq "1") {
+        Info "Skipping the AI clients (EXAKIT_SKIP_MCP=1) - connect them any time with: exakit mcp-setup"
+    } elseif (-not $env:EXAKIT_MCP_CLIENTS -or $env:EXAKIT_MCP_CLIENTS -match '^\s*(skip|none)\s*$') {
+        Info "No AI clients for these personas"
+    } else {
+        $childEnv = @{}
+        if ($live) {
+            # The installer's client table: the clients already connected are on
+            # it, saying so; the personas' pending ones are ticked ("all": every
+            # one on this machine).
+            $childEnv = @{ EXAKIT_MCP_PRESELECT = $env:EXAKIT_MCP_CLIENTS; EXAKIT_MCP_CLIENTS = $null; UI_TABLE_AUTO = "1" }
+        }
+        Invoke-ExakitPersonaChild -Cli $Cli -Command "mcp-setup" -Env $childEnv
+        if ($script:ExakitPersonaChildCode -ne 0) { $failed += "AI clients|exakit mcp-setup" }
+    }
+
+    Write-ExakitStepHeading "Step 3/3  Add-ons"
+    $ad = "" + $env:EXAKIT_MARKETPLACE_ADDONS
+    if ($ad -eq "none") { $ad = "" }
+    if ($ad -eq "all") { $ad = (@(Get-ExakitMarketplaceAddons | ForEach-Object { $_.Id }) -join ",") }
+    $installed = @(Get-ExakitMarketplaceInstalledAddons)
+    $get = @(); $got = @()
+    foreach ($a in @($ad -split ',' | Where-Object { $_ })) {
+        if ($installed -contains $a) { $got += $a } else { $get += $a }
+    }
+    if ($got.Count) { Ok "Already installed: $($got -join ', ')" }
+    if ($get.Count) {
+        if ($live) {
+            # The marketplace's table, narrowed to these add-ons, all ticked (the
+            # notebook's tools as its child rows, their own defaults).
+            $childEnv = @{ EXAKIT_MARKETPLACE_ONLY = ($get -join ","); EXAKIT_MARKETPLACE_ADDONS = $null; UI_TABLE_AUTO = "1" }
+        } else {
+            $childEnv = @{ EXAKIT_MARKETPLACE_ADDONS = ($get -join ",") }
+        }
+        Invoke-ExakitPersonaChild -Cli $Cli -Command "marketplace" -Env $childEnv
+        if ($script:ExakitPersonaChildCode -ne 0) { $failed += "Add-ons|exakit marketplace $($get -join ' ')" }
+    } elseif ($got.Count -eq 0) {
+        Info "No add-ons for these personas"
+    }
+
+    Write-Host ""
+    if ($failed.Count -eq 0) {
+        if ($script:UiFancy) {
+            Write-Host ("  {0}{1}{2} {3}Persona added: {4}{5}" -f $script:UiOk, $script:UiTick, $script:UiReset, $script:UiBold, $allTitle, $script:UiReset)
+        } else {
+            Write-Host ("  {0} Persona added: {1}" -f $script:UiTick, $allTitle)
+        }
+        Write-ExakitLog "OK" "persona added: $($env:EXAKIT_PERSONA)"
+        $script:ExakitPersonaAddOk = $true
+        return
+    }
+    if ($script:UiFancy) {
+        Write-Host ("  {0}{1}{2} {3}Persona added: {4}{5} - not everything finished" -f $script:UiErr, $script:UiCross, $script:UiReset, $script:UiBold, $allTitle, $script:UiReset)
+    } else {
+        Write-Host ("  {0} Persona added: {1} - not everything finished" -f $script:UiCross, $allTitle)
+    }
+    foreach ($f in $failed) {
+        $parts = $f -split '\|', 2
+        Warn2 "$($parts[0]) did not finish - retry with: $($parts[1])"
+    }
 }

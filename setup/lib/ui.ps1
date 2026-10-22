@@ -1512,6 +1512,12 @@ function Stop-ExakitAnimation {
 # of drawing a second table below them. The MCP step passes it when an
 # unconfirmed "Skip" sends the reader back to the menu. Twin of
 # UI_TABLE_MENU_ONSCREEN.
+#
+# -Auto (or $env:UI_TABLE_AUTO = "1", which reaches a child process): nobody is
+# asked. The table is drawn once with its defaults ticked, they are the answer,
+# and it counts as confirmed - the caller was told to do exactly this (`exakit
+# persona add`). No key is read; Start-ExakitTable then turns the same frame
+# into the progress display. Twin of UI_TABLE_AUTO in ui_table_menu.
 function Invoke-ExakitTableMenu {
     param(
         [hashtable]$Table = $null,
@@ -1520,7 +1526,8 @@ function Invoke-ExakitTableMenu {
         [int]$GroupParent = 0, [int]$GroupFirst = 0, [int]$GroupLast = 0,
         [string]$GroupMode = "any",
         [string[]]$Groups = @(),
-        [int]$OnScreen = 0
+        [int]$OnScreen = 0,
+        [switch]$Auto
     )
     if ($null -eq $Table) { $Table = $script:UiTable }
     if ($null -eq $Table) { return @() }
@@ -1568,6 +1575,12 @@ function Invoke-ExakitTableMenu {
     # wrong for one whose defaults are "everything". Twin of
     # EXAKIT_TABLE_CONFIRMED in ui.sh.
     $script:ExakitTableConfirmed = $false
+    if ($Auto -or $env:UI_TABLE_AUTO -eq "1") {
+        Set-ExakitTableTicks -Rows @($sel) -Table $Table
+        Show-ExakitTable -Table $Table -Cursor 0
+        $script:ExakitTableConfirmed = $true
+        return @($sel | Sort-Object)
+    }
     if (-not $interactive -or -not $script:UiFancy) {
         # No console to answer with: the defaults stand, and the table is printed
         # once so a log still shows what was chosen.

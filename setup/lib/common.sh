@@ -4589,7 +4589,9 @@ EXAKIT_MM_COVERED
     # agents that were told to look, not to install. Installing without a
     # terminal takes an explicit answer: EXAKIT_MARKETPLACE_ADDONS, or ids on
     # the command line. ⇄ twin: the same guard in Show-ExakitMarketplaceMenu.
-    if [ -z "$(_exakit_prompt_tty)" ]; then
+    # UI_TABLE_AUTO=1 is such an answer: `exakit persona add` installs the
+    # personas' add-ons, the ones this menu was narrowed to, without asking.
+    if [ -z "$(_exakit_prompt_tty)" ] && [ "${UI_TABLE_AUTO:-0}" != 1 ]; then
         info "No terminal to ask on — nothing was installed."
         info "See what is available (read-only): exakit marketplace --list   (--json for scripts)"
         info "Install explicitly: exakit marketplace <id>   or EXAKIT_MARKETPLACE_ADDONS=<ids>|all exakit marketplace"
@@ -7051,6 +7053,16 @@ step_version_drift() {
         "$_svd_id" "$_svd_have" "$_svd_want"
 }
 
+# exakit_step_heading <title> — a step's header, the installer's look: accent
+# arrow and bold title, set off by a blank line. begin_step draws its steps with
+# it, and `exakit persona add` its three. ⇄ twin: Write-ExakitStepHeading.
+exakit_step_heading() {
+    printf '\n  %s%s%s %s%s%s\n' \
+        "${UI_ACCENT:-}" "${UI_ARROW:->}" "${UI_RESET:-}" \
+        "${UI_BOLD:-}" "$1" "${UI_RESET:-}"
+    _exakit_log_file "STEP  $1"
+}
+
 begin_step() {
     EXAKIT_CURRENT_STEP="$1"
     EXAKIT_ACTIVE_LABEL="$2"     # spinner label for run_logged inside this step
@@ -7092,11 +7104,7 @@ begin_step() {
             return 1
         fi
     fi
-    # Styled step header: accent arrow + bold title, set off by a blank line.
-    printf '\n  %s%s%s %s%s%s\n' \
-        "${UI_ACCENT:-}" "${UI_ARROW:->}" "${UI_RESET:-}" \
-        "${UI_BOLD:-}" "$2" "${UI_RESET:-}"
-    _exakit_log_file "STEP  $2"
+    exakit_step_heading "$2"
     if [ "$_bs_rerun" -eq 1 ]; then
         info "Recorded as done, but ${EXAKIT_STEP_RERUN_REASON:-what it installed is missing — running it again}"
     fi
@@ -9637,17 +9645,41 @@ EOF
         # A client with no id is one this machine cannot offer — it becomes a
         # disabled row carrying the reason, so the list is the whole answer
         # rather than a list that quietly omits things.
-        _defaults="1"
+        # EXAKIT_MCP_PRESELECT (the personas' clients, from `exakit persona
+        # add`) ticks only the pending clients it names; "all" is every one.
+        _mcp_pre=""
+        case "${EXAKIT_MCP_PRESELECT:-all}" in
+            all|ALL|All) ;;
+            *) _mcp_pre=",$(exakit_parse_mcp_client_selection "$EXAKIT_MCP_PRESELECT" 2>/dev/null || true)," ;;
+        esac
+        _defaults=""
+        _mcp_every=1
         _menu_i=0
         while [ "$_menu_i" -lt "$_mcp_client_n" ]; do
             _mcp_row=$(( _mcp_row_first + _menu_i ))
             if [ -n "${_menu_ids[$_menu_i]}" ]; then
-                _defaults="$_defaults,$_mcp_row"
+                _mcp_want=1
+                if [ -n "$_mcp_pre" ]; then
+                    _mcp_want=0
+                    for _mcp_id in $(printf '%s' "${_menu_ids[$_menu_i]}" | tr ',' ' '); do
+                        case "$_mcp_pre" in *",$_mcp_id,"*) _mcp_want=1 ;; esac
+                    done
+                fi
+                if [ "$_mcp_want" = 1 ]; then
+                    _defaults="${_defaults:+$_defaults,}$_mcp_row"
+                else
+                    _mcp_every=0
+                fi
             else
                 ui_table_disable "$EXAKIT_MCP_TABLE_STATE" "$_mcp_row" "${_menu_notes[$_menu_i]}"
             fi
             _menu_i=$(( _menu_i + 1 ))
         done
+        if [ -z "$_defaults" ]; then
+            _defaults="$_mcp_row_skip"
+        elif [ "$_mcp_every" = 1 ]; then
+            _defaults="1,$_defaults"
+        fi
         EXAKIT_TABLE_GROUP="1:$_mcp_row_first:$_mcp_row_last:all"
         EXAKIT_TABLE_EXCLUSIVE="$_mcp_row_skip"
         EXAKIT_TABLE_DEFAULTS="$_defaults"
@@ -9661,6 +9693,13 @@ EOF
             ui_table_menu "$EXAKIT_MCP_TABLE_STATE"
             case ",$EXAKIT_TABLE_SELECTION," in
                 *",$_mcp_row_skip,"*)
+                    # Taken without asking (UI_TABLE_AUTO): none of the clients
+                    # named is on this machine to connect, which is no question.
+                    if [ "${UI_TABLE_AUTO:-0}" = 1 ]; then
+                        info "None of the AI clients named is waiting to be connected here - connect one any time with: exakit mcp-setup"
+                        _exakit_mcp_table_release
+                        return 0
+                    fi
                     warn "No AI client will be connected to your database."
                     if confirm "Are you sure you want to continue without an AI client?" y; then
                         info "Okay — you can connect one any time with: exakit mcp-setup"
