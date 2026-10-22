@@ -11091,11 +11091,25 @@ exakit_log_targets() {
     _lt_setup="$(ls -t "$EXAKIT_LOG_DIR"/install-*.log 2>/dev/null | head -1)"
     [ -n "$_lt_setup" ] && printf 'setup|Installer and setup runs|file|%s\n' "$_lt_setup"
 
+    # <id>_log_path prints a path (the target is the add-on's id), or for an
+    # add-on with more than one log, one "target|what|path" line each - the
+    # target being the id or "<id>-<name>" (notebook: JupyterLab and Marimo).
     for _lt_id in $(exakit_marketplace_installed_addons 2>/dev/null); do
         _lt_fn="$(_exakit_addon_fn "$_lt_id" log_path)"
         command -v "$_lt_fn" >/dev/null 2>&1 || continue
-        _lt_path="$("$_lt_fn" 2>/dev/null || true)"
-        [ -n "$_lt_path" ] && printf '%s|%s service|file|%s\n' "$_lt_id" "$_lt_id" "$_lt_path"
+        while IFS= read -r _lt_path; do
+            case "$_lt_path" in
+                '') ;;
+                *'|'*'|'*)
+                    _lt_target="${_lt_path%%|*}"
+                    case "$_lt_target" in "$_lt_id"|"$_lt_id"-*) ;; *) continue ;; esac
+                    _lt_rest="${_lt_path#*|}"
+                    printf '%s|%s|file|%s\n' "$_lt_target" "${_lt_rest%%|*}" "${_lt_rest#*|}" ;;
+                *) printf '%s|%s service|file|%s\n' "$_lt_id" "$_lt_id" "$_lt_path" ;;
+            esac
+        done <<EXAKIT_LT_EOF
+$("$_lt_fn" 2>/dev/null || true)
+EXAKIT_LT_EOF
     done
 
     # What the boot entries wrote at login — the only record of a start that
@@ -11972,11 +11986,24 @@ exakit_uninstall_run() {
                           libexec workflows migration .last-failure .install.lock; do
             [ -e "$1/$_un_marker" ] && return 0
         done
-        # Nothing of ours in it. Empty is still fine; anything else is not.
+        # Nothing of ours in it. Empty is still fine, and so is a home holding
+        # only the notebooks an earlier uninstall kept (step 5); anything else
+        # is not.
         for _un_entry in "$1"/* "$1"/.[!.]* "$1"/..?*; do
             [ -e "$_un_entry" ] || [ -L "$_un_entry" ] || continue
+            [ "$_un_entry" = "$1/notebooks" ] && [ -d "$_un_entry" ] && [ ! -L "$_un_entry" ] && continue
             return 1
         done
+        return 0
+    }
+    # _un_keep_notebooks — step 5 keeps $EXAKIT_HOME/notebooks: the user's own
+    # work (their notebooks, the kit's copies they edited, the MLflow stores
+    # beside them), not the kit's. EXAKIT_UNINSTALL_NOTEBOOKS=remove takes it
+    # too. Not EXAKIT_UNINSTALL_FULL: that one only tells add-on hooks a full
+    # uninstall is under way (it is set below on every full run).
+    _un_keep_notebooks() {
+        [ -d "$EXAKIT_HOME/notebooks" ] && [ ! -L "$EXAKIT_HOME/notebooks" ] || return 1
+        case "$(printf '%s' "${EXAKIT_UNINSTALL_NOTEBOOKS:-}" | tr '[:upper:]' '[:lower:]')" in remove) return 1 ;; esac
         return 0
     }
     _rm() { # _rm <path> — remove a path unless dry-run
@@ -12115,9 +12142,25 @@ exakit_uninstall_run() {
             fi
         fi
         # Checked by the guard at the top of this function, before step 0a.
-        _step "kit home $EXAKIT_HOME (credentials, logs, manifest, snapshots, pyexasol venv, add-ons)"
-        _rm "$EXAKIT_HOME"
-        _done "Kit home removed: $EXAKIT_HOME (credentials, logs, manifest, snapshots, pyexasol venv, add-on state)"
+        if _un_keep_notebooks; then
+            # Everything in the kit home but the notebooks folder. The home is
+            # left holding only that folder, which an install or an uninstall
+            # later accepts as a kit home (see _un_safe_target).
+            _step "kit home $EXAKIT_HOME (credentials, logs, manifest, snapshots, pyexasol venv, add-ons) - all but your notebooks"
+            info "  your notebooks stay in $EXAKIT_HOME/notebooks (EXAKIT_UNINSTALL_NOTEBOOKS=remove removes them too)"
+            if [ "$_dry" != "1" ]; then
+                for _un_entry in "$EXAKIT_HOME"/* "$EXAKIT_HOME"/.[!.]* "$EXAKIT_HOME"/..?*; do
+                    [ -e "$_un_entry" ] || [ -L "$_un_entry" ] || continue
+                    [ "$_un_entry" = "$EXAKIT_HOME/notebooks" ] && continue
+                    rm -rf "$_un_entry"
+                done
+            fi
+            _done "Kit home removed: $EXAKIT_HOME (credentials, logs, manifest, snapshots, pyexasol venv, add-on state); your notebooks were kept in $EXAKIT_HOME/notebooks"
+        else
+            _step "kit home $EXAKIT_HOME (credentials, logs, manifest, snapshots, pyexasol venv, add-ons)"
+            _rm "$EXAKIT_HOME"
+            _done "Kit home removed: $EXAKIT_HOME (credentials, logs, manifest, snapshots, pyexasol venv, add-on state)"
+        fi
     fi
 
     # 6) CLI binaries. Removed last so earlier steps can still call the launcher.

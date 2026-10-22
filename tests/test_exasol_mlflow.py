@@ -146,6 +146,42 @@ class LogTrainingTest(unittest.TestCase):
         self.assertEqual(log, [])
 
 
+class StartRunTest(unittest.TestCase):
+    """The API the shipped train notebook uses: ``with start_run(conn, ...) as run: run.execute(sql)``."""
+
+    def test_execute_logs_one_run_and_fills_in_the_run(self):
+        log: list = []
+        conn = FakeConn(answer(b"m"))
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(sys.modules, {"mlflow": fake_mlflow(log)}), \
+                mock.patch.dict(os.environ, {}, clear=True):
+            with exasol_mlflow.start_run(conn, params={"C": 2.0}, experiment="exp", tags={"exasol.dataset": "d"},
+                                         tracking_dir=tmp) as run:
+                result = run.execute("SELECT 1")
+        self.assertEqual((run.run_id, run.artifact_uri, run.metrics), ("r1", "file:///a", {"roc_auc": 0.8}))
+        self.assertTrue(run.tracking_uri.startswith("sqlite:///"))
+        self.assertEqual(result.run_id, run.run_id)
+        self.assertEqual(run.tags["exasol.dataset"], "d")
+        self.assertEqual(run.tags["exasol.statement_id"], "7")
+        self.assertIn(("params", {"C": 2.0}), log, "the caller's params win over the UDF's")
+
+    def test_nothing_is_there_before_execute_and_a_second_statement_is_refused(self):
+        log: list = []
+        with mock.patch.dict(sys.modules, {"mlflow": fake_mlflow(log)}), mock.patch.dict(os.environ, {"MLFLOW_TRACKING_URI": "http://m:5000"}):
+            with exasol_mlflow.start_run(FakeConn(answer()), experiment="exp") as run:
+                with self.assertRaises(RuntimeError):
+                    _ = run.run_id
+                run.execute("SELECT 1")
+                with self.assertRaises(RuntimeError):
+                    run.execute("SELECT 2")
+
+    def test_a_broken_answer_logs_nothing(self):
+        log: list = []
+        with mock.patch.dict(sys.modules, {"mlflow": fake_mlflow(log)}), self.assertRaises(exasol_mlflow.ResultContractError):
+            with exasol_mlflow.start_run(FakeConn(answer(sha="0" * 64)), experiment="exp") as run:
+                run.execute("SELECT 1")
+        self.assertEqual(log, [])
+
+
 class UdfTest(unittest.TestCase):
     def test_the_udf_is_a_set_script_with_the_contract_columns_and_no_network(self):
         script = exasol_mlflow.create_script("ml")

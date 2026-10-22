@@ -9,6 +9,10 @@ order) and, on part 0 only, ``TRAINING_RESULT`` - a JSON document::
      "model":   {"format": "sklearn-pickle", "sha256": "...", "bytes": 12345, "parts": 1,
                  "python": "3.12.3", "sklearn": "1.7.2"}}
 
+The model always travels inline: chunking lifts the size limit of one VARCHAR, and the other route - a file under the
+host folder a local deployment maps for BucketFS, read by the client - is closed, because a UDF sees BucketFS read-only
+and a local deployment serves no BucketFS endpoint to upload to.
+
 The client adds ``EXASOL_STATEMENT_ID`` (the statement that trained) when it runs the query. Anything else - a missing
 column, two TRAINING_RESULT rows, a gap in the parts, a digest that does not match - is a ResultContractError naming it, and
 nothing is logged.

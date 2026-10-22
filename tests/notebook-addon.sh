@@ -24,7 +24,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PASS=0
 FAIL=0
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
+
 
 check() { # check <label> <expected> <actual>
     if [ "$2" = "$3" ]; then
@@ -40,11 +40,23 @@ contains() { # contains <label> <needle> <haystack>
     esac
 }
 
-export HOME="$WORK/home" EXAKIT_HOME="$WORK/kit" EXAKIT_BIN_DIR="$WORK/bin"
+export HOME="$WORK/home" EXAKIT_HOME="$WORK/kit" EXAKIT_BIN_DIR="$WORK/bin" EXAKIT_EXAPUMP_CONFIG_DIR="$WORK/home/.exapump"
+unset EXAKIT_NOTEBOOK_VENV EXAKIT_NOTEBOOK_HOME EXAKIT_NOTEBOOK_DIR EXAKIT_UNINSTALL_NOTEBOOKS EXAKIT_MARIMO_PORT
 mkdir -p "$HOME" "$EXAKIT_HOME" "$EXAKIT_BIN_DIR"
 # shellcheck disable=SC1091
 . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/notebook.sh"
+run_python_any() { python3 "$@"; }
 EXAKIT_LOG_FILE="$WORK/log"; : > "$EXAKIT_LOG_FILE"
+manifest_init >/dev/null 2>&1
+# Whatever a check below leaves running goes when the suite ends.
+cleanup() {
+    for _cl_pidfile in "$EXAKIT_HOME/notebook/jupyter.pid" "$EXAKIT_HOME/notebook/marimo.pid"; do
+        [ -f "$_cl_pidfile" ] && kill "$(cat "$_cl_pidfile")" 2>/dev/null
+    done
+    pkill -f "$WORK/kit/notebook-venv/bin/" 2>/dev/null
+    rm -rf "$WORK"
+}
+trap cleanup EXIT
 
 echo "the install is one pinned resolution:"
 EXAKIT_NOTEBOOK_VERSION="3.1.0"
@@ -111,6 +123,193 @@ out="$(notebook_uninstall 1 2>&1)"
 contains "the dry run says so" "your notebooks stay in $EXAKIT_NOTEBOOK_DIR" "$out"
 notebook_uninstall >/dev/null 2>&1
 check "the notebooks are still there" "mine" "$(cat "$NB/general/start_here.ipynb")"
+
+echo "the copy: a notebook the user deleted stays deleted; one that cannot be copied is named:"
+rm -f "$NB/data-scientist/explore.ipynb"
+check "a deleted kit notebook is not copied again" "|no" "$(notebook_copy_notebooks)|$([ -e "$NB/data-scientist/explore.ipynb" ] && echo yes || echo no)"
+COPYDIR="$WORK/copy-blocked"; mkdir -p "$COPYDIR/starter-kit-notebooks"
+printf 'a file' > "$COPYDIR/starter-kit-notebooks/data-scientist"
+out="$( (EXAKIT_NOTEBOOK_DIR="$COPYDIR"; notebook_copy_notebooks; echo "rc=$?") 2>&1)"
+contains "a file where a persona folder should be is named" "could not copy data-scientist/explore.ipynb" "$out"
+contains "the copy says it failed" "rc=1" "$out"
+contains "the other personas are still copied" "ml-engineer/train.ipynb" "$out"
+out="$( (EXAKIT_NOTEBOOK_DIR="$COPYDIR"; _notebook_report_copied "$COPYDIR/starter-kit-notebooks") 2>&1)"
+contains "the command does not hide it" "could not be copied" "$out"
+check "copy wants the notebooks folder named" "2" "$(python3 "$ROOT/notebook/kit/notebooks.py" copy jupyter "$ROOT" >/dev/null 2>&1; echo $?)"
+
+echo "the notebook tools: a recorded choice stands, the variable is checked:"
+check "names in any case, jupyter as jupyterlab, any whitespace, unknown ones dropped" "jupyterlab,positron|1" \
+    "$(_notebook_front_ends_given "$(printf 'Jupyter\tPOSITRON ,frob')" 2>"$WORK/fe.err")|$(grep -c "'frob' is not a notebook tool" "$WORK/fe.err")"
+check "none alone is none" "none" "$(_notebook_front_ends_given " none ")"
+manifest_set components.notebook.front_ends "jupyterlab,positron"
+check "a reinstall keeps the recorded choice" "jupyterlab,positron" \
+    "$( (unset EXAKIT_NOTEBOOK_FRONTENDS; notebook_choose_front_ends >/dev/null 2>&1 </dev/null; printf '%s' "$NOTEBOOK_FRONT_ENDS") )"
+check "the variable still overrides it" "marimo" \
+    "$( (EXAKIT_NOTEBOOK_FRONTENDS="marimo"; notebook_choose_front_ends 2>/dev/null; printf '%s' "$NOTEBOOK_FRONT_ENDS") )"
+check "a variable naming nothing known falls back to the record" "jupyterlab,positron" \
+    "$( (EXAKIT_NOTEBOOK_FRONTENDS="frob"; notebook_choose_front_ends 2>/dev/null </dev/null; printf '%s' "$NOTEBOOK_FRONT_ENDS") )"
+_notebook_front_end_add marimo
+check "a tool added later joins the record" "jupyterlab,marimo,positron" "$(manifest_get components.notebook.front_ends)"
+manifest_del components.notebook.front_ends
+
+echo "an update reinstalls the kit's own packages, the connector pin unchanged:"
+check "the kit's packages are reinstalled, in the same resolution" \
+    "pip install --python $(notebook_venv_python) --reinstall-package exakit-nb --reinstall-package exasol-mlflow exasol-notebook-connector" \
+    "$( (run_logged() { shift; printf '%s ' "$@"; }; _notebook_uv() { echo uv; }; detect_os() { echo macos; }
+         notebook_sync_packages | cut -d'[' -f1) )"
+
+echo "the store's write keeps its exit status:"
+check "a failed write fails" "1" \
+    "$( (manifest_get() { case "$1" in (runtime.dsn) echo h:8563 ;; (runtime.password_file) echo /x ;; esac; }
+         _notebook_py() { echo partial; return 4; }; notebook_write_connection >/dev/null 2>&1; echo $?) )"
+
+echo "exakit logs notebook:"
+out="$( (exakit_marketplace_installed_addons() { echo notebook; }; exakit_log_targets) )"
+contains "JupyterLab's log is a target" "notebook|JupyterLab (exakit notebook)|file|$EXAKIT_LOG_DIR/notebook.log" "$out"
+contains "Marimo's log is a target" "notebook-marimo|Marimo (notebook --marimo)|file|$EXAKIT_LOG_DIR/notebook-marimo.log" "$out"
+out="$( (exakit_marketplace_installed_addons() { echo notebook; }; mkdir -p "$EXAKIT_LOG_DIR"; echo line1 > "$EXAKIT_LOG_DIR/notebook.log"; exakit_logs_show notebook) 2>&1)"
+check "exakit logs notebook shows it" "line1" "$out"
+
+echo "the servers: no inherited stdio, stale pids, one server, the token off the command line:"
+free_port() { python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])'; }
+# A stand-in JupyterLab and Marimo: Python scripts that answer like the real
+# ones (/api with a version, /health), so their command lines look like the real
+# ones too. STUB_DIE makes one exit at once; STUB_DELAY makes it slow to start.
+mkdir -p "$EXAKIT_NOTEBOOK_VENV/bin"
+ln -sf "$(command -v python3)" "$EXAKIT_NOTEBOOK_VENV/bin/python"
+cat > "$EXAKIT_NOTEBOOK_VENV/bin/jupyter-lab" <<'STUB'
+#!/usr/bin/env python3
+import http.server, os, sys, time
+port = int([a.split("=", 1)[1] for a in sys.argv if a.startswith("--ServerApp.port=") or a.startswith("--port=")][0])
+if os.environ.get("STUB_DIE"):
+    sys.exit(3)
+time.sleep(float(os.environ.get("STUB_DELAY", "0")))
+open(os.environ["STUB_SEEN"], "w").write("token in env: %s\n" % bool(os.environ.get("JUPYTER_TOKEN")))
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200); self.end_headers(); self.wfile.write(b'{"version": "stub"}')
+    def log_message(self, *args):
+        pass
+http.server.HTTPServer(("127.0.0.1", port), Handler).serve_forever()
+STUB
+sed 's/a.startswith("--ServerApp.port=") or a.startswith("--port=")/False/; s/^port = .*/port = int(sys.argv[sys.argv.index("--port") + 1])/' \
+    "$EXAKIT_NOTEBOOK_VENV/bin/jupyter-lab" > "$EXAKIT_NOTEBOOK_VENV/bin/marimo"
+chmod +x "$EXAKIT_NOTEBOOK_VENV/bin/jupyter-lab" "$EXAKIT_NOTEBOOK_VENV/bin/marimo"
+export STUB_SEEN="$WORK/stub-seen"
+notebook_installed_version() { echo 3.1.0; }
+exakit_db_reachable() { return 0; }
+notebook_write_connection() { echo same; }
+notebook_register_kernel() { return 0; }
+_notebook_open_browser() { printf '%s\n' "$1" > "$WORK/opened"; }
+EXAKIT_NOTEBOOK_START_TIMEOUT=20
+JPORT="$(free_port)"; MPORT="$(free_port)"
+# returns_within <seconds> <out file> <command...> — the command, piped into
+# cat, in the background; 0 when the pipe closed in time.
+returns_within() {
+    _rw_limit="$1"; _rw_out="$2"; shift 2
+    ( "$@" 2>&1 | cat > "$_rw_out" ) &
+    _rw_pid=$!
+    _rw_i=0
+    while kill -0 "$_rw_pid" 2>/dev/null && [ "$_rw_i" -lt $((_rw_limit * 2)) ]; do sleep 0.5; _rw_i=$((_rw_i + 1)); done
+    if kill -0 "$_rw_pid" 2>/dev/null; then kill "$_rw_pid" 2>/dev/null; return 1; fi
+    wait "$_rw_pid" 2>/dev/null
+    return 0
+}
+check "exakit notebook | cat returns (the server holds no pipe)" "0" "$(returns_within 25 "$WORK/j1" notebook_cmd --port "$JPORT"; echo $?)"
+contains "JupyterLab answers" "JupyterLab is running: http://127.0.0.1:$JPORT/lab" "$(cat "$WORK/j1")"
+jpid="$(cat "$(_notebook_pidfile)" 2>/dev/null)"
+contains "the pid file names the server itself" "jupyter-lab --no-browser --ServerApp.ip=127.0.0.1" "$(ps -p "$jpid" -o command= 2>/dev/null)"
+check "the token reached it through its environment" "token in env: True" "$(cat "$STUB_SEEN" 2>/dev/null)"
+tok="$(read_credential "$EXAKIT_NOTEBOOK_TOKEN_CRED")"
+check "and is on no command line" "0" "$(ps -ax -o command= | grep -c "[${tok%"${tok#?}"}]${tok#?}" | tr -d " ")"
+opened="$(cat "$WORK/opened" 2>/dev/null)"
+check "the browser is handed a file, not the address" "$(_notebook_open_file jupyter)" "$opened"
+check "the file is the user's only" "-rw-------" "$(ls -l "$opened" 2>/dev/null | cut -c1-10)"
+contains "the file carries the logged-in address" "lab?token=$(read_credential "$EXAKIT_NOTEBOOK_TOKEN_CRED")" "$(cat "$opened" 2>/dev/null)"
+OTHER="$(free_port)"
+out="$(notebook_cmd --no-browser --port "$OTHER" 2>&1)"
+contains "a second call names the port it runs on" "JupyterLab is running: http://127.0.0.1:$JPORT/lab" "$out"
+contains "and says the asked-for port is ignored" "--port $OTHER is ignored" "$out"
+check "and starts no second server" "$jpid" "$(cat "$(_notebook_pidfile)")"
+notebook_server_stop >/dev/null 2>&1
+check "stop stops it" "no" "$(kill -0 "$jpid" 2>/dev/null && echo yes || echo no)"
+check "and removes the login file" "no" "$([ -e "$opened" ] && echo yes || echo no)"
+
+sleep 60 &
+bystander=$!
+echo "$bystander" > "$(_notebook_pidfile)"
+check "a pid file naming another program is stale: stopped" "stopped" "$(notebook_server_state)"
+check "the stale pid file is gone" "no" "$([ -e "$(_notebook_pidfile)" ] && echo yes || echo no)"
+echo "$bystander" > "$(_notebook_pidfile)"
+contains "stop does not touch that program" "JupyterLab is not running" "$(notebook_server_stop 2>&1)"
+check "it is still running" "yes" "$(kill -0 "$bystander" 2>/dev/null && echo yes || echo no)"
+echo "$bystander" > "$(_notebook_marimo_pidfile)"
+notebook_marimo_stop quiet >/dev/null 2>&1
+check "neither does Marimo's stop" "yes" "$(kill -0 "$bystander" 2>/dev/null && echo yes || echo no)"
+kill "$bystander" 2>/dev/null; wait "$bystander" 2>/dev/null
+
+t0="$(date +%s)"
+out="$(STUB_DIE=1 notebook_cmd --no-browser --port "$(free_port)" 2>&1)"; rc=$?
+check "a server that dies while starting fails the command" "1" "$rc"
+contains "and is reported at once" "JupyterLab stopped while it was starting" "$out"
+check "without waiting out the timeout" "yes" "$([ $(( $(date +%s) - t0 )) -lt 15 ] && echo yes || echo no)"
+
+check "exakit notebook --marimo | cat returns" "0" "$(returns_within 25 "$WORK/m1" notebook_cmd --marimo --port "$MPORT"; echo $?)"
+contains "Marimo answers" "Marimo is running: http://127.0.0.1:$MPORT/" "$(cat "$WORK/m1")"
+mpid="$(cat "$(_notebook_marimo_pidfile)" 2>/dev/null)"
+contains "Marimo's pid file names its wrapper" "marimo_wrapper.py" "$(ps -p "$mpid" -o command= 2>/dev/null)"
+check "the browser is handed Marimo's file" "$(_notebook_open_file marimo)" "$(cat "$WORK/opened" 2>/dev/null)"
+notebook_marimo_stop >/dev/null 2>&1
+check "Marimo stops" "no" "$(kill -0 "$mpid" 2>/dev/null && echo yes || echo no)"
+
+MPORT="$(free_port)"
+( STUB_DELAY=3 notebook_cmd --marimo --no-browser --port "$MPORT" >"$WORK/m2" 2>&1 ) &
+first=$!
+sleep 1
+out="$(notebook_cmd --marimo --no-browser 2>&1)"
+wait "$first"
+contains "a second --marimo while the first starts waits for it" "Marimo is running: http://127.0.0.1:$MPORT/" "$out"
+check "and leaves one Marimo, not two" "1" "$(ps -ax -o command= | grep -c "[m]arimo_wrapper.py.*--port $MPORT" | tr -d ' ')"
+notebook_marimo_stop >/dev/null 2>&1
+check "which stops" "0" "$(ps -ax -o command= | grep -c "[m]arimo_wrapper.py.*--port $MPORT" | tr -d ' ')"
+
+echo "an uninstall takes the kit's settings out of the Positron folder, keeps the user's:"
+printf '{"editor.fontSize": 14}' > "$EXAKIT_NOTEBOOK_DIR/.vscode/settings.json"
+notebook_prepare_positron
+notebook_uninstall >/dev/null 2>&1
+check "only the user's setting is left" '{"editor.fontSize": 14}' "$(python3 -c 'import json,sys; print(json.dumps(json.load(open(sys.argv[1]))))' "$EXAKIT_NOTEBOOK_DIR/.vscode/settings.json")"
+
+echo "a full kit uninstall keeps the notebooks:"
+full_uninstall() { # full_uninstall <dry> — the real engine with the externals stubbed
+    ( exakit_service_ids() { :; }; exakit_mcp_operation() { :; }; exakit_mcp_clients_from_args() { :; }
+      _exakit_remove_installed_skills() { :; }; exakit_marketplace_installed_addons() { echo notebook; }
+      exakit_marketplace_addons() { echo "notebook|x"; }
+      exakit_uninstall_run "$1" )
+}
+seed_kit() {
+    manifest_init >/dev/null 2>&1
+    manifest_set components.notebook.version 3.1.0
+    mkdir -p "$EXAKIT_NOTEBOOK_DIR/my-work/mlflow" "$EXAKIT_HOME/logs" "$EXAKIT_HOME/pyexasol-venv"
+    printf 'precious' > "$EXAKIT_NOTEBOOK_DIR/my-work/analysis.ipynb"
+    printf 'runs' > "$EXAKIT_NOTEBOOK_DIR/my-work/mlflow/mlflow.db"
+}
+seed_kit
+out="$(full_uninstall 1 2>&1)"
+contains "the dry run says the notebooks stay" "your notebooks stay in $EXAKIT_HOME/notebooks" "$out"
+check "the dry run removes nothing" "yes" "$([ -f "$EXAKIT_HOME/manifest.json" ] && echo yes || echo no)"
+out="$(full_uninstall 0 2>&1)"
+contains "the real run says so" "your notebooks were kept in $EXAKIT_HOME/notebooks" "$out"
+check "the user's notebook and MLflow store are still there" "precious|runs" \
+    "$(cat "$EXAKIT_NOTEBOOK_DIR/my-work/analysis.ipynb" 2>/dev/null)|$(cat "$EXAKIT_NOTEBOOK_DIR/my-work/mlflow/mlflow.db" 2>/dev/null)"
+check "everything else in the kit home is gone" "notebooks" "$(ls -A "$EXAKIT_HOME" | tr '\n' ' ' | sed 's/ $//')"
+out="$(full_uninstall 1 2>&1)"; rc=$?
+check "a home holding only kept notebooks is still a kit home to the guard" "0" "$rc"
+seed_kit
+out="$(EXAKIT_UNINSTALL_NOTEBOOKS=remove full_uninstall 1 2>&1)"
+contains "EXAKIT_UNINSTALL_NOTEBOOKS=remove: the dry run says they go" "will remove: your notebooks in $EXAKIT_NOTEBOOK_DIR" "$out"
+EXAKIT_UNINSTALL_NOTEBOOKS=remove full_uninstall 0 >/dev/null 2>&1
+check "and the real run removes the whole kit home" "no" "$([ -e "$EXAKIT_HOME" ] && echo yes || echo no)"
+mkdir -p "$EXAKIT_HOME"
 
 echo "the shipped files hold no address and no credential:"
 found=""
