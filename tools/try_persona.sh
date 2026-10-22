@@ -44,8 +44,14 @@ if [ -z "$ID" ]; then
     t_bad "not valid JSON, or no \"id\" - nothing else can be checked"
     exit 1
 fi
-t_ok "valid JSON, id '$ID'"
-case "$ID" in [a-z0-9]*) ;; *) t_bad "the id must start with a lowercase letter or digit" ;; esac
+# The id names the file the sandbox writes: anything but a plain id stops here,
+# before a path like ../setup/help/exakit could reach a real file.
+if printf '%s' "$ID" | grep -Eq '^[a-z0-9][a-z0-9_-]*$'; then
+    t_ok "valid JSON, id '$ID'"
+else
+    t_bad "the id '$ID' must be lowercase letters, digits, - and _ (starting with a letter or digit)"
+    exit 1
+fi
 if [ -f "$ROOT/personas/$ID.json" ] && ! cmp -s "$FILE" "$ROOT/personas/$ID.json"; then
     printf '  note  personas/%s.json already exists: the sandbox uses your file in its place\n' "$ID"
 fi
@@ -72,6 +78,12 @@ SERVICE() { python3 "$KIT/setup/lib/persona_service.py" "$KIT" "$@"; }
 run_python_any() { python3 "$@"; }
 
 step "what tests/personas.sh will check"
+_problem="$(SERVICE problems 2>/dev/null | sed -n "s/^$ID\.json|//p")"
+if [ -n "$_problem" ]; then
+    t_bad "the persona service refuses it: $_problem"
+    printf '\n%d ok, %d failed\n' "$PASS" "$FAIL"
+    exit 1
+fi
 if out="$(SERVICE check "$ID" 2>&1)"; then t_ok "the persona service reads it"; else t_bad "the persona service refuses it: $out"; fi
 for key in title summary; do
     [ -n "$(SERVICE value "$ID" "$key" 2>/dev/null)" ] && t_ok "has a $key" || t_bad "no \"$key\""

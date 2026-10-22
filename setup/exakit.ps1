@@ -2211,6 +2211,77 @@ function Write-ExakitVersionNote {
 }
 
 
+# Invoke-CmdPersona - `exakit persona list | show <id> | apply <id>[,<id>]
+# [--yes]`. Twin of cmd_persona.
+function Invoke-CmdPersona {
+    param([string[]]$CmdArgs = @())
+    $verb = if ($CmdArgs.Count) { $CmdArgs[0] } else { "list" }
+    switch ($verb) {
+        "list" {
+            $ids = @(Get-ExakitPersonaIds)
+            if ($ids.Count -eq 0 -and -not (Get-ExakitPersona "general")) { Fail $script:ExakitPersonaProblem }
+            foreach ($id in $ids) {
+                Write-Host ("  {0,-16} {1}" -f $id, (Get-ExakitPersonaValue $id "title"))
+                Write-Host ("  {0,-16} {1}" -f "", (Get-ExakitPersonaValue $id "summary"))
+            }
+            $current = Get-ExakitManifestValue "persona.id"
+            if ($current) { Info "This kit was set up as: $current" }
+            Info "Apply one with: exakit persona apply <id>"
+        }
+        "show" {
+            $id = if ($CmdArgs.Count -gt 1) { $CmdArgs[1] } else { "" }
+            if (-not (Get-ExakitPersona $id)) { Fail $script:ExakitPersonaProblem }
+            $lines = Invoke-ExakitPersonaService "show" $id
+            if ($null -eq $lines) { Fail "Name one persona: exakit persona show <id>" }
+            foreach ($line in @($lines)) { Write-Host $line }
+        }
+        "apply" {
+            $id = ""; $yes = $false
+            foreach ($arg in @($CmdArgs | Select-Object -Skip 1)) {
+                if ($arg -in @("--yes", "-y")) { $yes = $true }
+                elseif ($arg.StartsWith("-")) { Fail "Unknown option for persona apply: $arg (supported: --yes)" }
+                elseif ($id) { Fail "Name the personas once, joined by commas: exakit persona apply $id,$arg" }
+                else { $id = $arg }
+            }
+            if (-not (Get-ExakitPersona $id)) { Fail $script:ExakitPersonaProblem }
+            $env:EXAKIT_PERSONA = $id
+            $env:EXAKIT_PERSONA_SOURCE = "apply"
+            Set-ExakitPersonaEnv -NoRecord
+            if (-not $yes) {
+                # Unattended, nothing changes without --yes (exit 5, like every
+                # command that needs a confirmation).
+                if (-not (Test-ExakitInteractive)) {
+                    Info "Nothing changed - without a terminal, confirm with: exakit persona apply $id --yes"
+                    exit 5
+                }
+                if (-not (Confirm-ExakitPrompt "Load the datasets, connect the AI clients and install the add-ons above" $true)) {
+                    Info "Nothing changed."
+                    exit 5
+                }
+            }
+            Set-ExakitPersonaRecord
+            # Each answer through its own command, which already honours it, in
+            # a process of its own: a command that ends with `exit` must not end
+            # this one, so one that fails does not stop the others.
+            $hostExe = (Get-Process -Id $PID).Path
+            $steps = @()
+            if ($env:EXAKIT_LOAD_SAMPLE -eq "0") { Info "No sample data for this persona" } else { $steps += "data-load" }
+            $steps += @("mcp-setup", "marketplace")
+            $failed = @()
+            foreach ($step in $steps) {
+                & $hostExe -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath $step
+                if ($LASTEXITCODE -ne 0) { $failed += $step }
+            }
+            if ($failed.Count) {
+                Warn2 "Persona $id applied, except: $($failed -join ', ') - re-run it with: exakit persona apply $id"
+                exit 1
+            }
+            Ok "Persona $id applied"
+        }
+        default { Fail "Unknown persona command: $verb (use: exakit persona list | show <id> | apply <id> [--yes])" }
+    }
+}
+
 # The marketplace core (registry, menu, apply, offer) lives in
 # setup/lib/exakit-common.ps1 so the installer's closing offer can use it too
 # - mirroring the bash side, where it all lives in common.sh. This file only
@@ -2222,59 +2293,6 @@ function Write-ExakitVersionNote {
 # marketplace dash-server` installs dash-server and nothing else - it used to
 # silently DISCARD the id and install the other pending add-ons instead.
 # Twin of cmd_marketplace in setup/exakit.
-# Invoke-CmdPersona - `exakit persona list | show <id> | apply <id> [--yes]`.
-# Twin of cmd_persona.
-function Invoke-CmdPersona {
-    param([string[]]$CmdArgs = @())
-    $verb = if ($CmdArgs.Count) { $CmdArgs[0] } else { "list" }
-    switch ($verb) {
-        "list" {
-            foreach ($id in (Get-ExakitPersonaIds)) {
-                Write-Host ("  {0,-16} {1}" -f $id, (Get-ExakitPersonaValue $id "title"))
-                Write-Host ("  {0,-16} {1}" -f "", (Get-ExakitPersonaValue $id "summary"))
-            }
-            $current = Get-ExakitManifestValue "persona.id"
-            if ($current) { Info "This kit was set up as: $current" }
-            Info "Apply one with: exakit persona apply <id>"
-        }
-        "show" {
-            $id = if ($CmdArgs.Count -gt 1) { $CmdArgs[1] } else { "" }
-            if (-not (Get-ExakitPersona $id)) { Fail "Name a persona: $((Get-ExakitPersonaIds) -join ' ')" }
-            foreach ($line in @(Invoke-ExakitPersonaService "show" $id)) { Write-Host $line }
-        }
-        "apply" {
-            $id = ""; $yes = $false
-            foreach ($arg in @($CmdArgs | Select-Object -Skip 1)) {
-                if ($arg -in @("--yes", "-y")) { $yes = $true }
-                elseif ($arg.StartsWith("-")) { Fail "Unknown option for persona apply: $arg (supported: --yes)" }
-                else { $id = $arg }
-            }
-            if (-not (Get-ExakitPersona $id)) { Fail "Name a persona: $((Get-ExakitPersonaIds) -join ' ')" }
-            $env:EXAKIT_PERSONA = $id
-            $env:EXAKIT_PERSONA_SOURCE = "apply"
-            Set-ExakitPersonaEnv
-            if (-not $yes -and -not (Confirm-ExakitPrompt "Load the datasets, connect the AI clients and install the add-ons above" $true)) {
-                Info "Nothing changed."
-                return
-            }
-            # Each answer through its own command, which already honours it;
-            # one that fails does not stop the others.
-            $failed = @()
-            foreach ($step in @(@{ Name = "data-load"; Run = { Invoke-CmdDataLoad -Argument $null } },
-                                @{ Name = "mcp-setup"; Run = { Invoke-CmdMcpSetup } },
-                                @{ Name = "marketplace"; Run = { Invoke-CmdMarketplace -Arguments @() } })) {
-                try { & $step.Run } catch { $failed += $step.Name }
-            }
-            if ($failed.Count) {
-                Warn2 "Persona $id applied, except: $($failed -join ', ') - re-run it with: exakit persona apply $id"
-                return
-            }
-            Ok "Persona $id applied"
-        }
-        default { Fail "Unknown persona command: $verb (use: exakit persona list | show <id> | apply <id> [--yes])" }
-    }
-}
-
 function Invoke-CmdMarketplace {
     param([string[]]$Arguments = @())
     if (-not (Test-Path $script:ManifestPath)) { Fail "No installation found. Run the installer first." }

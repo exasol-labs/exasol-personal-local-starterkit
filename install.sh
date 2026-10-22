@@ -239,15 +239,30 @@ main() {
     # anything is installed - and a dry run says so too, since it never reaches
     # the setup scripts that apply it.
     # Several personas are joined by commas (general,ml-engineer): each one is
-    # a file, checked the same way.
+    # a file, checked the same way. An id is lowercase letters, digits, - and _
+    # (the persona service's rule), so a path, a glob or another case never
+    # reaches a file test that a case-insensitive disk would wave through.
     if [ -n "${EXAKIT_PERSONA:-}" ]; then
-        for _persona in $(printf '%s' "$EXAKIT_PERSONA" | tr ',' ' '); do
-            if [ ! -f "$kit_dir/personas/$_persona.json" ]; then
-                _known="$(ls "$kit_dir/personas" 2>/dev/null | sed -n 's/\.json$//p' | tr '\n' ' ')"
+        _known="$(ls "$kit_dir/personas" 2>/dev/null | sed -n 's/^\([a-z0-9][a-z0-9_-]*\)\.json$/\1/p' | tr '\n' ' ' | sed 's/ $//')"
+        _personas=""
+        _persona_ifs="$IFS"; IFS=','
+        set -f
+        for _persona in $EXAKIT_PERSONA; do
+            _persona="$(printf '%s' "$_persona" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+            [ -n "$_persona" ] || continue
+            case "$_persona" in
+                [a-z0-9]*) case "$_persona" in *[!a-z0-9_-]*) _persona_ok=0 ;; *) _persona_ok=1 ;; esac ;;
+                *) _persona_ok=0 ;;
+            esac
+            if [ "$_persona_ok" = 0 ] || [ ! -f "$kit_dir/personas/$_persona.json" ]; then
+                set +f; IFS="$_persona_ifs"
                 fail "Unknown persona '$_persona' (available: ${_known:-none}). Nothing was installed."
             fi
+            _personas="${_personas:+$_personas,}$_persona"
         done
-        say "Persona: $EXAKIT_PERSONA - it answers every choice you did not set yourself."
+        set +f; IFS="$_persona_ifs"
+        [ -n "$_personas" ] || fail "EXAKIT_PERSONA names no persona (available: ${_known:-none}). Nothing was installed."
+        say "Persona: $_personas - it answers every choice you did not set yourself."
     fi
 
     if [ "${EXAKIT_DRY_RUN:-0}" = "1" ]; then

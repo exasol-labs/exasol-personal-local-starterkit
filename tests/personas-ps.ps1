@@ -21,7 +21,7 @@ function Check($label, $expected, $actual) {
     else { $script:FAIL++; Write-Host "  FAIL $($label): expected <$expected>, got <$actual>" }
 }
 function Fail([string]$Msg) { throw "FAIL: $Msg" }
-$vars = @("EXAKIT_PERSONA", "EXAKIT_PERSONA_ACTIVE", "EXAKIT_DATASETS", "EXAKIT_MCP_CLIENTS", "EXAKIT_MARKETPLACE_ADDONS", "EXAKIT_LOAD_SAMPLE", "EXAKIT_SKIP_MCP", "EXAKIT_PERSONA_SOURCE")
+$vars = @("EXAKIT_PERSONA", "EXAKIT_PERSONA_ACTIVE", "EXAKIT_NOTEBOOK_FRONTENDS", "EXAKIT_DATASETS", "EXAKIT_MCP_CLIENTS", "EXAKIT_MARKETPLACE_ADDONS", "EXAKIT_LOAD_SAMPLE", "EXAKIT_SKIP_MCP", "EXAKIT_PERSONA_SOURCE")
 function Clear-Answers { foreach ($v in $vars) { Remove-Item "Env:$v" -ErrorAction SilentlyContinue } }
 function Answers { return "$($env:EXAKIT_DATASETS)|$($env:EXAKIT_MCP_CLIENTS)|$($env:EXAKIT_MARKETPLACE_ADDONS)" }
 
@@ -69,6 +69,34 @@ try {
     Check "EXAKIT_LOAD_SAMPLE=0 and add-ons none win" "|all|none" (Answers)
     Clear-Answers; $env:EXAKIT_PERSONA = "data-scientist"; $env:EXAKIT_SKIP_MCP = "1"; Set-ExakitPersonaEnv
     Check "EXAKIT_SKIP_MCP=1 wins over the persona's clients" "" $env:EXAKIT_MCP_CLIENTS
+    Write-Host "the persona service's word, not a guess:"
+    Check "an unknown persona names the ones there are" $true (($null -eq (Get-ExakitPersona "nope")) -and ($script:ExakitPersonaProblem -like "*Unknown persona 'nope' (available: general data-scientist ml-engineer)*"))
+    Check "two words are not two personas" $null (Get-ExakitPersona "general general")
+    Write-Host "the install's persona section:"
+    foreach ($v in @("EXAKIT_DATASETS_PRESELECT", "EXAKIT_MARKETPLACE_PRESELECT")) { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
+    Clear-Answers
+    function Test-ExakitInteractive { return $false }
+    function Invoke-ExakitPersonaData { param($KitRoot) }
+    Invoke-ExakitPersonaFlow -KitRoot $repo
+    Check "no console, no persona: the default personas' datasets, nothing recorded" "tpch,energy,weather||" "$($env:EXAKIT_DATASETS_PRESELECT)|$($env:EXAKIT_MARKETPLACE_PRESELECT)|$($env:EXAKIT_PERSONA)"
+    Remove-Item Env:EXAKIT_DATASETS_PRESELECT -ErrorAction SilentlyContinue
+    Set-ExakitPersonaPreselect -Ids "data-scientist"
+    Check "picked on screen: the persona's datasets and add-ons are ticked" "fda_recalls,banking_complaints|notebook,dash-server,json-tables" "$($env:EXAKIT_DATASETS_PRESELECT)|$($env:EXAKIT_MARKETPLACE_PRESELECT)"
+    foreach ($v in @("EXAKIT_DATASETS_PRESELECT", "EXAKIT_MARKETPLACE_PRESELECT")) { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
+    $env:EXAKIT_PERSONA_ACTIVE = "1"
+    $note = (Write-ExakitPersonaMarketplaceNote 6>&1 | Out-String)
+    Check "no persona offer, no second marketplace pointer" "" $note.Trim()
+    Remove-Item Env:EXAKIT_PERSONA_ACTIVE -ErrorAction SilentlyContinue
+    Set-ExakitManifestValue "persona.id" "ml-engineer"
+    $script:menuDefaults = $null
+    function Read-ExakitCheckboxMenu { param($Title, $Options, $Defaults) $script:menuDefaults = ($Defaults -join ","); return @() }
+    function Write-ExakitRule { }
+    function Write-ExakitHeading { param($Text) }
+    Read-ExakitPersonaQuestion
+    Check "a re-run ticks the persona this kit was set up as" "3" $script:menuDefaults
+    Set-ExakitManifestValue "persona.id" ""
+    Clear-Answers; $env:EXAKIT_PERSONA = "ml-engineer"; Set-ExakitPersonaEnv -NoRecord
+    Check "-NoRecord answers without recording (persona apply asks first)" "" "$(Get-ExakitManifestValue 'persona.id')"
     Write-Host "an unknown persona is refused; a known one is recorded:"
     Clear-Answers; $env:EXAKIT_PERSONA = "nope"
     $said = ""

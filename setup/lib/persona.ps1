@@ -7,30 +7,65 @@
 
 function Get-ExakitPersonaDir { return (Join-Path (Get-ExakitRepoRoot) "personas") }
 
+# Get-ExakitPersonaPython - the Python 3.9+ on PATH the service runs on, or
+# $null (then uv's managed one is used). The service is standard library only.
+$script:ExakitPersonaPython = $null
+function Get-ExakitPersonaPython {
+    if ($null -ne $script:ExakitPersonaPython) { return $script:ExakitPersonaPython }
+    $script:ExakitPersonaPython = ""
+    if (Get-Command python -ErrorAction SilentlyContinue) {
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            $ok = & python -c "import sys; print(sys.version_info[:2] >= (3, 9))" 2>$null
+            if ($LASTEXITCODE -eq 0 -and ("$ok").Trim() -eq "True") { $script:ExakitPersonaPython = "python" }
+        } catch {
+        } finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+    }
+    return $script:ExakitPersonaPython
+}
+
 # Invoke-ExakitPersonaService - ask the persona service; its output lines, or
-# $null when it failed (the reason is in the log). Twin of _exakit_persona_service.
+# $null when it failed. Why it failed (its own message: an unknown or invalid
+# persona) is in $script:ExakitPersonaServiceError. Read as UTF-8, whatever the
+# console's code page. Twin of _exakit_persona_service.
 function Invoke-ExakitPersonaService {
     param([Parameter(ValueFromRemainingArguments)]$ServiceArgs)
     $root = Get-ExakitRepoRoot
     $service = Join-Path (Join-Path (Join-Path $root "setup") "lib") "persona_service.py"
     $previousErrorActionPreference = $ErrorActionPreference
+    $previousEncoding = [Console]::OutputEncoding
+    $script:ExakitPersonaServiceError = ""
+    $code = 1
+    $out = @()
     try {
         $ErrorActionPreference = "Continue"
-        if (Test-ExakitSystemPython) {
-            $out = & python $service $root @ServiceArgs 2>$null
+        try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false) } catch { }
+        $python = Get-ExakitPersonaPython
+        if ($python) {
+            $raw = @(& $python $service $root @ServiceArgs 2>&1)
         } else {
             $uv = Install-ExakitUv
-            $out = & $uv run --python $script:ManagedPythonVersion --no-project python $service $root @ServiceArgs 2>$null
+            $raw = @(& $uv run --python $script:ManagedPythonVersion --no-project python $service $root @ServiceArgs 2>&1)
         }
         $code = $LASTEXITCODE
+        $out = @($raw | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] } | ForEach-Object { "$_" })
+        $errs = @($raw | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] } | ForEach-Object { "$_" } |
+            Where-Object { $_ -and -not $_.StartsWith("Ignored persona file") })
+        if ($errs.Count) { $script:ExakitPersonaServiceError = $errs[-1] }
+    } catch {
+        $script:ExakitPersonaServiceError = "$_"
     } finally {
         $ErrorActionPreference = $previousErrorActionPreference
+        try { [Console]::OutputEncoding = $previousEncoding } catch { }
     }
     if ($code -ne 0) {
-        Write-ExakitLog "WARN" "persona service $($ServiceArgs -join ' ') exited $code"
+        Write-ExakitLog "WARN" "persona service $($ServiceArgs -join ' ') exited $($code): $($script:ExakitPersonaServiceError)"
         return $null
     }
-    return @($out | ForEach-Object { "$_" })
+    return $out
 }
 
 function Get-ExakitPersonaIds {
@@ -38,13 +73,20 @@ function Get-ExakitPersonaIds {
 }
 
 # Get-ExakitPersona - the ids, in the kit's order, when every persona named
-# exists; else $null. Twin of exakit_persona_known.
+# exists and its file is valid; else $null, with why in
+# $script:ExakitPersonaProblem (the service's words). Twin of exakit_persona_known.
 function Get-ExakitPersona {
     param([string]$Id)
-    if (-not $Id) { return $null }
+    $script:ExakitPersonaProblem = ""
+    if (-not $Id) {
+        $script:ExakitPersonaProblem = "Name a persona: $((Get-ExakitPersonaIds) -join ' ')"
+        return $null
+    }
     $ids = @(Invoke-ExakitPersonaService "check" $Id | Where-Object { $_ })
-    if ($ids.Count -eq 0) { return $null }
-    return $ids[0]
+    if ($ids.Count -gt 0) { return $ids[0] }
+    $script:ExakitPersonaProblem = $script:ExakitPersonaServiceError
+    if (-not $script:ExakitPersonaProblem) { $script:ExakitPersonaProblem = "The persona files could not be read - the kit needs Python 3 for them (see the log)" }
+    return $null
 }
 
 # Get-ExakitPersonaValue - a string as it is, a list as a comma-separated line.
@@ -84,13 +126,15 @@ function Set-ExakitPersonaRecord {
     Set-ExakitManifestValue "persona.requested_at" ((Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ"))
 }
 
-# Set-ExakitPersonaEnv - with EXAKIT_PERSONA set, set the personas' answers for
-# every variable the user did not set; Fail on an unknown persona, before
-# anything is installed. Records the persona. Twin of exakit_persona_apply_env.
+# Set-ExakitPersonaEnv [-NoRecord] - with EXAKIT_PERSONA set, set the personas'
+# answers for every variable the user did not set; Fail on an unknown or invalid
+# persona, before anything is installed. Records the persona unless -NoRecord.
+# Twin of exakit_persona_apply_env.
 function Set-ExakitPersonaEnv {
+    param([switch]$NoRecord)
     $id = $env:EXAKIT_PERSONA
     if (-not $id) { return }
-    if (-not (Get-ExakitPersona $id)) { Fail "Unknown persona '$id' (available: $((Get-ExakitPersonaIds) -join ' '))." }
+    if (-not (Get-ExakitPersona $id)) { Fail $script:ExakitPersonaProblem }
     $answers = Invoke-ExakitPersonaService "answers" $id
     if ($null -eq $answers) { Fail "The persona files could not be read - re-run the installer to repair the kit copy." }
     Set-ExakitPersonaAnswers $answers
@@ -99,12 +143,13 @@ function Set-ExakitPersonaEnv {
     $ad = if ($env:EXAKIT_MARKETPLACE_ADDONS) { $env:EXAKIT_MARKETPLACE_ADDONS } else { "none" }
     Info "Persona: $(@(Invoke-ExakitPersonaService 'title' $id) -join '') - datasets $ds; AI clients $cl; add-ons $ad"
     Write-ExakitLog "INFO" "persona $id answered: $(@($answers) -join ' ')"
-    Set-ExakitPersonaRecord
+    if (-not $NoRecord) { Set-ExakitPersonaRecord }
     $env:EXAKIT_PERSONA_ACTIVE = "1"
 }
 
 # Read-ExakitPersonaQuestion - "What will you use this machine for?": the
-# personas the kit offers, the "default": true ones ticked, as many as wanted.
+# personas the kit offers, as many as wanted. Ticked to begin with: the ones
+# this kit was set up as (a re-run), else the "default": true ones.
 # Twin of exakit_persona_question. Sets $env:EXAKIT_PERSONA.
 function Read-ExakitPersonaQuestion {
     $rows = @(Invoke-ExakitPersonaService "picker" | Where-Object { $_ })
@@ -112,12 +157,16 @@ function Read-ExakitPersonaQuestion {
     $ids = New-Object 'System.Collections.Generic.List[string]'
     $labels = New-Object 'System.Collections.Generic.List[string]'
     $defaults = New-Object 'System.Collections.Generic.List[int]'   # the files that say "default": true
+    $recorded = New-Object 'System.Collections.Generic.List[int]'   # ...or the ones a previous run recorded
+    $was = @("$(Get-ExakitManifestValue 'persona.id')" -split ',')
     foreach ($row in $rows) {
         $parts = "$row" -split '\|', 4
         [void]$ids.Add($parts[0])
         [void]$labels.Add("$($parts[1]) - $($parts[2])")
         if ($parts.Count -gt 3 -and $parts[3] -eq "1") { [void]$defaults.Add($ids.Count) }
+        if ($was -ccontains $parts[0]) { [void]$recorded.Add($ids.Count) }
     }
+    if ($recorded.Count -gt 0) { $defaults = $recorded }
     if ($defaults.Count -eq 0) { [void]$defaults.Add(1) }
     Write-ExakitRule
     Write-ExakitHeading "What will you use this machine for?"
@@ -130,28 +179,60 @@ function Read-ExakitPersonaQuestion {
 # Invoke-ExakitPersonaFlow - the install's persona section, after the parts
 # everyone needs: the personas (asked here unless EXAKIT_PERSONA answered it),
 # then the data. Picked on screen, their datasets come TICKED in the data
-# question and their add-ons ticked in the closing marketplace offer. Twin of
-# exakit_persona_flow.
+# question and their add-ons ticked in the closing marketplace offer. With no
+# console and no persona, the data question's defaults are the default
+# personas' datasets. Twin of exakit_persona_flow.
 function Invoke-ExakitPersonaFlow {
     param([Parameter(Mandatory)][string]$KitRoot)
-    # No database: nothing here can run, and the install already said so.
+    # No database or no exapump: nothing here can run, so nobody is asked.
     if (Test-ExakitSoftFailed "runtime") { return }
-    if (-not $env:EXAKIT_PERSONA -and $script:UiFancy -and (Test-ExakitInteractive)) {
-        Read-ExakitPersonaQuestion
-        if ($env:EXAKIT_PERSONA -and (Get-ExakitPersona $env:EXAKIT_PERSONA)) {
-            $answers = @(Invoke-ExakitPersonaService "answers" $env:EXAKIT_PERSONA)
-            $ds = ($answers | Where-Object { $_ -like "EXAKIT_DATASETS=*" } | ForEach-Object { $_.Substring(16) } | Select-Object -First 1)
-            $ad = ($answers | Where-Object { $_ -like "EXAKIT_MARKETPLACE_ADDONS=*" } | ForEach-Object { $_.Substring(26) } | Select-Object -First 1)
-            if ($ds -eq "all") { $ds = (@(Get-ExakitBundledDatasets | ForEach-Object { $_.Id }) -join ",") }
-            if ($ds) { $env:EXAKIT_DATASETS_PRESELECT = $ds }
-            if ($ad -and $ad -ne "none") { $env:EXAKIT_MARKETPLACE_PRESELECT = $ad }
-            Ok "Persona: $(@(Invoke-ExakitPersonaService 'title' $env:EXAKIT_PERSONA) -join '')"
-            Write-ExakitLog "INFO" "persona $($env:EXAKIT_PERSONA) picked on screen: datasets $ds; add-ons $ad"
-            Set-ExakitPersonaRecord
-            $env:EXAKIT_PERSONA_ACTIVE = "1"
+    if (Test-ExakitSoftFailed "exapump") { Invoke-ExakitPersonaData -KitRoot $KitRoot; return }
+    if (-not $env:EXAKIT_PERSONA) {
+        if ($script:UiFancy -and (Test-ExakitInteractive) -and -not (Test-ExakitPersonaAllAnswered)) {
+            Read-ExakitPersonaQuestion
+            if ($env:EXAKIT_PERSONA -and (Get-ExakitPersona $env:EXAKIT_PERSONA)) {
+                Set-ExakitPersonaPreselect -Ids $env:EXAKIT_PERSONA
+                Ok "Persona: $(@(Invoke-ExakitPersonaService 'title' $env:EXAKIT_PERSONA) -join '')"
+                Write-ExakitLog "INFO" "persona $($env:EXAKIT_PERSONA) picked on screen: datasets $($env:EXAKIT_DATASETS_PRESELECT); add-ons $($env:EXAKIT_MARKETPLACE_PRESELECT)"
+                Set-ExakitPersonaRecord
+                $env:EXAKIT_PERSONA_ACTIVE = "1"
+            } elseif ($env:EXAKIT_PERSONA) {
+                Warn2 "$($script:ExakitPersonaProblem) - carrying on without a persona"
+                Remove-Item Env:EXAKIT_PERSONA -ErrorAction SilentlyContinue
+            }
+        } else {
+            # Nobody to ask: the default personas' datasets, nothing recorded.
+            $defaults = @()
+            foreach ($row in @(Invoke-ExakitPersonaService "picker" | Where-Object { $_ })) {
+                $parts = "$row" -split '\|', 4
+                if ($parts.Count -gt 3 -and $parts[3] -eq "1") { $defaults += $parts[0] }
+            }
+            if ($defaults.Count) { Set-ExakitPersonaPreselect -Ids ($defaults -join ",") -DatasetsOnly }
         }
     }
     Invoke-ExakitPersonaData -KitRoot $KitRoot
+}
+
+# Test-ExakitPersonaAllAnswered - everything the persona question would answer
+# was answered in the environment already. Twin of _exakit_persona_all_answered.
+function Test-ExakitPersonaAllAnswered {
+    $data = ($env:EXAKIT_DATASETS -or $env:EXAKIT_LOAD_SAMPLE -eq "0" -or $env:EXAKIT_LOAD_SAMPLE -eq "1")
+    return [bool]($data -and $env:EXAKIT_MARKETPLACE_ADDONS)
+}
+
+# Set-ExakitPersonaPreselect - what the menus tick for these personas:
+# EXAKIT_DATASETS_PRESELECT (dataset ids, or "none") and, unless -DatasetsOnly,
+# EXAKIT_MARKETPLACE_PRESELECT (add-on ids, or "all"). Twin of
+# _exakit_persona_preselect.
+function Set-ExakitPersonaPreselect {
+    param([Parameter(Mandatory)][string]$Ids, [switch]$DatasetsOnly)
+    $answers = @(Invoke-ExakitPersonaService "answers" $Ids)
+    $ds = ($answers | Where-Object { $_ -like "EXAKIT_DATASETS=*" } | ForEach-Object { $_.Substring(16) } | Select-Object -First 1)
+    if ($answers -contains "EXAKIT_LOAD_SAMPLE=0") { $ds = "none" }
+    $ad = ($answers | Where-Object { $_ -like "EXAKIT_MARKETPLACE_ADDONS=*" } | ForEach-Object { $_.Substring(26) } | Select-Object -First 1)
+    if ($ds) { $env:EXAKIT_DATASETS_PRESELECT = $ds }
+    if ($DatasetsOnly) { return }
+    if ($ad -and $ad -ne "none") { $env:EXAKIT_MARKETPLACE_PRESELECT = $ad }
 }
 
 # Invoke-ExakitPersonaData - the sample-data section, booked as a soft step.
@@ -169,9 +250,10 @@ function Invoke-ExakitPersonaData {
         -Body { Request-ExakitDataLoadOffer -KitRoot $KitRoot })
 }
 
-# Write-ExakitPersonaMarketplaceNote - after a persona install, the marketplace
-# is named once. Twin of exakit_persona_marketplace_note.
+# Write-ExakitPersonaMarketplaceNote - after the closing offer showed only the
+# personas' add-ons, the rest of the marketplace is named once. Twin of
+# exakit_persona_marketplace_note.
 function Write-ExakitPersonaMarketplaceNote {
-    if (-not $env:EXAKIT_PERSONA_ACTIVE) { return }
+    if (-not $env:EXAKIT_PERSONA_ACTIVE -or -not $env:EXAKIT_MARKETPLACE_PRESELECT) { return }
     Info "More for any persona in the marketplace: exakit marketplace (dashboards, notebooks, dbt, the scheduler, Python UDFs, JSON tables)"
 }

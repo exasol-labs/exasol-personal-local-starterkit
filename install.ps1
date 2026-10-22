@@ -557,14 +557,20 @@ if (-not $uiLoaded) {
 # the setup script that applies it. Twin of the check in install.sh.
 if ($env:EXAKIT_PERSONA) {
     # Several personas are joined by commas (general,ml-engineer): each one is a file, checked the same way.
-    foreach ($personaId in ($env:EXAKIT_PERSONA -split ',' | Where-Object { $_ })) {
+    # An id is lowercase letters, digits, - and _ (the persona service's rule): a path, a wildcard or another
+    # case never reaches a file test that NTFS would wave through.
+    $known = @(Get-ChildItem -LiteralPath (Join-Path $KitDir "personas") -Filter "*.json" -ErrorAction SilentlyContinue |
+        ForEach-Object { $_.BaseName } | Where-Object { $_ -cmatch '^[a-z0-9][a-z0-9_-]*$' }) -join " "
+    $personaIds = @()
+    foreach ($personaId in ($env:EXAKIT_PERSONA -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
         $personaFile = Join-Path (Join-Path $KitDir "personas") "$personaId.json"
-        if (-not (Test-Path $personaFile)) {
-            $known = @(Get-ChildItem -Path (Join-Path $KitDir "personas") -Filter "*.json" -ErrorAction SilentlyContinue | ForEach-Object { $_.BaseName }) -join " "
+        if (-not ($personaId -cmatch '^[a-z0-9][a-z0-9_-]*$') -or -not (Test-Path -LiteralPath $personaFile)) {
             throw "Unknown persona '$personaId' (available: $known). Nothing was installed."
         }
+        $personaIds += $personaId
     }
-    Write-Host "  * Persona: $($env:EXAKIT_PERSONA) - it answers every choice you did not set yourself." -ForegroundColor Blue
+    if ($personaIds.Count -eq 0) { throw "EXAKIT_PERSONA names no persona (available: $known). Nothing was installed." }
+    Write-Host "  * Persona: $($personaIds -join ',') - it answers every choice you did not set yourself." -ForegroundColor Blue
 }
 
 if ($env:EXAKIT_DRY_RUN -eq "1") {

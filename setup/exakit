@@ -2388,16 +2388,14 @@ cmd_whats_new() {
     fi
 }
 
-# cmd_catalog [search] - the searchable command surface, rendered from the same
-# help documents every other screen uses (setup/help/*.json). --json keeps its
-# original shape: one object whose "commands" array carries tool/command/
-# options/description, so an agent can discover the CLI without parsing ANSI.
-# cmd_persona list | show <id> | apply <id> [--yes] — the `exakit persona`
-# command.
+# cmd_persona list | show <id> | apply <id>[,<id>] [--yes] — the `exakit
+# persona` command.
 cmd_persona() {
     case "${1:-list}" in
         list)
-            for _cp_id in $(exakit_persona_ids); do
+            _cp_ids="$(exakit_persona_ids)"
+            [ -n "$_cp_ids" ] || exakit_persona_known general || die "$EXAKIT_PERSONA_PROBLEM"
+            for _cp_id in $_cp_ids; do
                 printf '  %-16s %s\n' "$_cp_id" "$(exakit_persona_value "$_cp_id" title)"
                 printf '  %-16s %s\n' "" "$(exakit_persona_value "$_cp_id" summary)"
             done
@@ -2406,8 +2404,8 @@ cmd_persona() {
             info "Apply one with: exakit persona apply <id>"
             ;;
         show)
-            exakit_persona_known "${2:-}" || die "Name a persona: $(exakit_persona_ids | tr '\n' ' ')"
-            _exakit_persona_service show "$2"
+            exakit_persona_known "${2:-}" || die "$EXAKIT_PERSONA_PROBLEM"
+            _exakit_persona_service show "$2" 2>/dev/null || die "Name one persona: exakit persona show <id>"
             ;;
         apply)
             shift
@@ -2416,20 +2414,31 @@ cmd_persona() {
                 case "$_cp_arg" in
                     --yes|-y) _cp_yes=1 ;;
                     -*) die "Unknown option for persona apply: $_cp_arg (supported: --yes)" ;;
-                    *) _cp_id="$_cp_arg" ;;
+                    *) [ -z "$_cp_id" ] || die "Name the personas once, joined by commas: exakit persona apply $_cp_id,$_cp_arg"
+                       _cp_id="$_cp_arg" ;;
                 esac
             done
-            exakit_persona_known "$_cp_id" || die "Name a persona: $(exakit_persona_ids | tr '\n' ' ')"
+            exakit_persona_known "$_cp_id" || die "$EXAKIT_PERSONA_PROBLEM"
             EXAKIT_PERSONA="$_cp_id"; EXAKIT_PERSONA_SOURCE=apply; export EXAKIT_PERSONA EXAKIT_PERSONA_SOURCE
-            exakit_persona_apply_env
-            if [ "$_cp_yes" != 1 ] && ! confirm "Load the datasets, connect the AI clients and install the add-ons above?" y; then
-                info "Nothing changed."
-                return 5
+            exakit_persona_apply_env norecord
+            if [ "$_cp_yes" != 1 ]; then
+                # Unattended, nothing changes without --yes (exit 5, like every
+                # command that needs a confirmation).
+                [ -n "$(_exakit_prompt_tty)" ] || { info "Nothing changed - without a terminal, confirm with: exakit persona apply $_cp_id --yes"; return 5; }
+                if ! confirm "Load the datasets, connect the AI clients and install the add-ons above?" y; then
+                    info "Nothing changed."
+                    return 5
+                fi
             fi
+            _exakit_persona_record
             # Each answer through its own command, which already honours it;
             # one that fails does not stop the others.
             _cp_failed=""
-            ( cmd_data_load ) || _cp_failed="$_cp_failed data-load"
+            if [ "${EXAKIT_LOAD_SAMPLE:-}" = 0 ]; then
+                info "No sample data for this persona"
+            else
+                ( cmd_data_load ) || _cp_failed="$_cp_failed data-load"
+            fi
             ( cmd_mcp_setup ) || _cp_failed="$_cp_failed mcp-setup"
             ( cmd_marketplace ) || _cp_failed="$_cp_failed marketplace"
             if [ -n "$_cp_failed" ]; then
@@ -2442,6 +2451,10 @@ cmd_persona() {
     esac
 }
 
+# cmd_catalog [search] - the searchable command surface, rendered from the same
+# help documents every other screen uses (setup/help/*.json). --json keeps its
+# original shape: one object whose "commands" array carries tool/command/
+# options/description, so an agent can discover the CLI without parsing ANSI.
 cmd_catalog() {
     _cat_json=0
     _cat_args=""

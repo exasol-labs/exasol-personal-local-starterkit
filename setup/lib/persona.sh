@@ -42,9 +42,22 @@ exakit_persona_value() {
     _exakit_persona_service value "$1" "$2" 2>/dev/null
 }
 
-# exakit_persona_known <id>[,<id>] — every persona named exists.
+# exakit_persona_known <id>[,<id>] — every persona named exists and its file
+# is valid. When not, EXAKIT_PERSONA_PROBLEM says why, in the service's words:
+# the persona is unknown (naming the ones there are), its file is invalid, or
+# the service could not run at all (no Python 3).
 exakit_persona_known() {
-    [ -n "$1" ] && _exakit_persona_service check "$1" >/dev/null 2>&1
+    EXAKIT_PERSONA_PROBLEM=""
+    if [ -z "${1:-}" ]; then
+        EXAKIT_PERSONA_PROBLEM="Name a persona: $(exakit_persona_ids | tr '\n' ' ' | sed 's/ $//')"
+        return 1
+    fi
+    _epk_err="$(_exakit_persona_service check "$1" 2>&1 >/dev/null)" && return 0
+    EXAKIT_PERSONA_PROBLEM="$(printf '%s\n' "$_epk_err" | grep -v '^Ignored persona file' | tail -n 1)"
+    [ -n "$EXAKIT_PERSONA_PROBLEM" ] || \
+        EXAKIT_PERSONA_PROBLEM="The persona files could not be read - the kit needs Python 3 for them (see ${EXAKIT_LOG_FILE:-the log})"
+    _exakit_log_file "WARN  persona check '$1': $(printf '%s' "$_epk_err" | tr '\n' ' ')"
+    return 1
 }
 
 # exakit_persona_dataset_hints — dataset|persona titles, for the data menu.
@@ -74,27 +87,27 @@ _exakit_persona_record() {
     manifest_set persona.requested_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 
-# exakit_persona_apply_env — with EXAKIT_PERSONA set, export the personas'
-# answers for every variable the user did not set. Dies on an unknown persona,
-# before anything is installed. Records the persona in the manifest.
+# exakit_persona_apply_env [norecord] — with EXAKIT_PERSONA set, export the
+# personas' answers for every variable the user did not set. Dies on an unknown
+# or invalid persona, before anything is installed. Records the persona in the
+# manifest unless told not to.
 exakit_persona_apply_env() {
     [ -n "${EXAKIT_PERSONA:-}" ] || return 0
-    if ! exakit_persona_known "$EXAKIT_PERSONA"; then
-        die "Unknown persona '$EXAKIT_PERSONA' (available: $(exakit_persona_ids | tr '\n' ' ' | sed 's/ $//'))."
-    fi
+    exakit_persona_known "$EXAKIT_PERSONA" || die "$EXAKIT_PERSONA_PROBLEM"
     _epa_answers="$(_exakit_persona_service answers "$EXAKIT_PERSONA")" || \
         die "The persona files could not be read - re-run the installer to repair the kit copy."
     _exakit_persona_export "$_epa_answers"
     info "Persona: $(_exakit_persona_service title "$EXAKIT_PERSONA") - datasets ${EXAKIT_DATASETS:-none}; AI clients ${EXAKIT_MCP_CLIENTS:-asked}; add-ons ${EXAKIT_MARKETPLACE_ADDONS:-none}"
     _exakit_log_file "INFO  persona $EXAKIT_PERSONA answered: $(printf '%s' "$_epa_answers" | tr '\n' ' ')"
-    _exakit_persona_record
+    # `exakit persona apply` records only once the user said yes.
+    [ "${1:-}" = norecord ] || _exakit_persona_record
     export EXAKIT_PERSONA_ACTIVE=1
     return 0
 }
 
 # exakit_persona_question — "What will you use this machine for?": the personas
-# the kit offers ("picker": true), the "default": true ones ticked to begin
-# with, as many as wanted. Without a
+# the kit offers ("picker": true), as many as wanted. Ticked to begin with: the
+# personas this kit was set up as (a re-run), else the "default": true ones. Without a
 # terminal nobody can be asked: General. The answer is EXAKIT_PERSONA.
 exakit_persona_question() {
     _epq_rows="$(_exakit_persona_service picker 2>/dev/null)"
@@ -105,6 +118,8 @@ exakit_persona_question() {
     _epq_ids=()
     _epq_labels=()
     _epq_default=""                  # the personas whose file says "default": true
+    _epq_recorded=""                 # ...or the ones a previous run recorded
+    _epq_was=",$(manifest_get persona.id 2>/dev/null || true),"
     _epq_n=0
     while IFS='|' read -r _epq_id _epq_title _epq_summary _epq_ticked; do
         [ -n "$_epq_id" ] || continue
@@ -112,12 +127,13 @@ exakit_persona_question() {
         _epq_ids+=("$_epq_id")
         _epq_labels+=("$_epq_title - $_epq_summary")
         [ "$_epq_ticked" = 1 ] && _epq_default="${_epq_default:+$_epq_default,}$_epq_n"
+        case "$_epq_was" in *",$_epq_id,"*) _epq_recorded="${_epq_recorded:+$_epq_recorded,}$_epq_n" ;; esac
     done <<EXAKIT_EPQ_EOF
 $_epq_rows
 EXAKIT_EPQ_EOF
     ui_rule
     heading "What will you use this machine for?"
-    _epq_default="${_epq_default:-1}"
+    _epq_default="${_epq_recorded:-${_epq_default:-1}}"
     ui_checkbox_menu "Personas - tick one or more" "$_epq_default" "${_epq_labels[@]}"
     EXAKIT_PERSONA=""
     for _epq_i in $(printf '%s' "${EXAKIT_CHECKBOX_SELECTION:-}" | tr ',' ' '); do
@@ -134,31 +150,65 @@ EXAKIT_EPQ_EOF
 # it already), then the data. Picked on screen, their datasets come TICKED in
 # the data question and their add-ons ticked in the closing marketplace offer -
 # nothing is installed or loaded unasked. Named in the environment, they answer
-# as EXAKIT_DATASETS and EXAKIT_MARKETPLACE_ADDONS always did.
+# as EXAKIT_DATASETS and EXAKIT_MARKETPLACE_ADDONS always did. With no terminal
+# and no persona, the data question's defaults are the default personas'
+# datasets (General: TPC-H, energy, weather), not every bundled one.
 exakit_persona_flow() {
     _epf_root="$1"
-    # No database: nothing here can run, and the install already said so.
+    # No database or no exapump: nothing here can run (the data needs both, and
+    # the closing offer is not made after a soft failure), so nobody is asked.
+    # The database skip was said with the other database steps; the exapump one
+    # is said by exakit_persona_data.
     exakit_soft_failed runtime && return 0
-    if [ -z "${EXAKIT_PERSONA:-}" ] && [ -n "$(_exakit_prompt_tty)" ] && [ "${UI_FANCY:-0}" = 1 ]; then
-        exakit_persona_question
-        if [ -n "${EXAKIT_PERSONA:-}" ] && exakit_persona_known "$EXAKIT_PERSONA"; then
-            # Asked on screen: the answers become what the menus tick, not what
-            # runs without them. EXAKIT_* the user set still win.
-            _epf_answers="$(_exakit_persona_service answers "$EXAKIT_PERSONA" 2>/dev/null)"
-            _epf_ds="$(printf '%s\n' "$_epf_answers" | sed -n 's/^EXAKIT_DATASETS=//p')"
-            _epf_ad="$(printf '%s\n' "$_epf_answers" | sed -n 's/^EXAKIT_MARKETPLACE_ADDONS=//p')"
-            [ "$_epf_ds" = all ] && _epf_ds="$(exakit_bundled_datasets | cut -d'|' -f1 | tr '\n' ',' | sed 's/,$//')"
-            [ -n "$_epf_ds" ] && { EXAKIT_DATASETS_PRESELECT="$_epf_ds"; export EXAKIT_DATASETS_PRESELECT; }
-            [ -n "$_epf_ad" ] && [ "$_epf_ad" != none ] && { EXAKIT_MARKETPLACE_PRESELECT="$_epf_ad"; export EXAKIT_MARKETPLACE_PRESELECT; }
-            ok "Persona: $(_exakit_persona_service title "$EXAKIT_PERSONA")"
-            _exakit_log_file "INFO  persona $EXAKIT_PERSONA picked on screen: datasets ${_epf_ds:-none}; add-ons ${_epf_ad:-none}"
-            _exakit_persona_record
-            export EXAKIT_PERSONA_ACTIVE=1
+    if exakit_soft_failed exapump; then
+        exakit_persona_data "$_epf_root"
+        return 0
+    fi
+    if [ -z "${EXAKIT_PERSONA:-}" ]; then
+        if [ -n "$(_exakit_prompt_tty)" ] && [ "${UI_FANCY:-0}" = 1 ] && ! _exakit_persona_all_answered; then
+            exakit_persona_question
+            if [ -n "${EXAKIT_PERSONA:-}" ] && exakit_persona_known "$EXAKIT_PERSONA"; then
+                _exakit_persona_preselect "$EXAKIT_PERSONA"
+                ok "Persona: $(_exakit_persona_service title "$EXAKIT_PERSONA" 2>/dev/null)"
+                _exakit_log_file "INFO  persona $EXAKIT_PERSONA picked on screen: datasets ${EXAKIT_DATASETS_PRESELECT:-as asked}; add-ons ${EXAKIT_MARKETPLACE_PRESELECT:-as asked}"
+                _exakit_persona_record
+                export EXAKIT_PERSONA_ACTIVE=1
+            elif [ -n "${EXAKIT_PERSONA:-}" ]; then
+                warn "$EXAKIT_PERSONA_PROBLEM - carrying on without a persona"
+                EXAKIT_PERSONA=""
+            fi
+        else
+            # Nobody to ask: the data question's defaults are the default
+            # personas' datasets. Nothing is recorded - no persona was chosen.
+            _epf_defaults="$(_exakit_persona_service picker 2>/dev/null | awk -F'|' '$4 == 1 {print $1}' | tr '\n' ',' | sed 's/,$//')"
+            [ -n "$_epf_defaults" ] && _exakit_persona_preselect "$_epf_defaults" datasets
         fi
     fi
     # The data, with the personas' datasets ticked (or loaded, when named in the
     # environment). See exakit_maybe_offer_data_load.
     exakit_persona_data "$_epf_root"
+}
+
+# _exakit_persona_all_answered — everything the persona question would answer
+# was answered in the environment already, so asking would change nothing.
+_exakit_persona_all_answered() {
+    { [ -n "${EXAKIT_DATASETS:-}" ] || [ "${EXAKIT_LOAD_SAMPLE:-}" = 0 ] || [ "${EXAKIT_LOAD_SAMPLE:-}" = 1 ]; } && \
+        [ -n "${EXAKIT_MARKETPLACE_ADDONS:-}" ]
+}
+
+# _exakit_persona_preselect <ids> [datasets] — what the menus tick for these
+# personas: EXAKIT_DATASETS_PRESELECT (dataset ids, or "none") and, unless told
+# datasets only, EXAKIT_MARKETPLACE_PRESELECT (add-on ids, or "all"). Answers
+# the user set in the environment still win: they are not overwritten.
+_exakit_persona_preselect() {
+    _epp_answers="$(_exakit_persona_service answers "$1" 2>/dev/null)"
+    _epp_ds="$(printf '%s\n' "$_epp_answers" | sed -n 's/^EXAKIT_DATASETS=//p')"
+    printf '%s\n' "$_epp_answers" | grep -qx 'EXAKIT_LOAD_SAMPLE=0' && _epp_ds=none
+    _epp_ad="$(printf '%s\n' "$_epp_answers" | sed -n 's/^EXAKIT_MARKETPLACE_ADDONS=//p')"
+    [ -n "$_epp_ds" ] && { EXAKIT_DATASETS_PRESELECT="$_epp_ds"; export EXAKIT_DATASETS_PRESELECT; }
+    [ "${2:-}" = datasets ] && return 0
+    [ -n "$_epp_ad" ] && [ "$_epp_ad" != none ] && { EXAKIT_MARKETPLACE_PRESELECT="$_epp_ad"; export EXAKIT_MARKETPLACE_PRESELECT; }
+    return 0
 }
 
 # exakit_persona_data <kit_root> — the sample-data section, booked as a soft
@@ -181,9 +231,10 @@ exakit_persona_data() {
     return 0
 }
 
-# exakit_persona_marketplace_note — after a persona install, the marketplace is
-# named once: everything the personas did not bring is one command away.
+# exakit_persona_marketplace_note — after the closing offer showed only the
+# personas' add-ons, the rest of the marketplace is named once. (Without that
+# offer the closing lines already name the marketplace: no second pointer.)
 exakit_persona_marketplace_note() {
-    [ -n "${EXAKIT_PERSONA_ACTIVE:-}" ] || return 0
+    [ -n "${EXAKIT_PERSONA_ACTIVE:-}" ] && [ -n "${EXAKIT_MARKETPLACE_PRESELECT:-}" ] || return 0
     info "More for any persona in the marketplace: exakit marketplace (dashboards, notebooks, dbt, the scheduler, Python UDFs, JSON tables)"
 }

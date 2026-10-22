@@ -155,6 +155,86 @@ check "one unknown among several: refused" "1" "$([ "$rc" -ne 0 ] && echo 1 || e
 check "the manifest records the persona" "data-scientist|install" "$(manifest_get persona.id)|$(manifest_get persona.source)"
 check "no persona, no change" "" "$( (unset EXAKIT_PERSONA; exakit_persona_apply_env 2>&1) )"
 
+echo "a broken persona file is named and the others keep working:"
+mkdir -p "$WORK/kit3/personas"
+cp "$ROOT"/personas/*.json "$WORK/kit3/personas/"
+ln -s "$ROOT/data" "$WORK/kit3/data"; ln -s "$ROOT/setup" "$WORK/kit3/setup"
+printf '{' > "$WORK/kit3/personas/broken.json"
+printf '{"id":"pipe","title":"SQL | BI","summary":"x","picker":true}' > "$WORK/kit3/personas/pipe.json"
+printf '{"id":"inj","title":"Inj","summary":"x","datasets":["tpch\\nEXAKIT_MCP_CLIENTS=claude"]}' > "$WORK/kit3/personas/inj.json"
+printf '\xef\xbb\xbf{"id":"everything","title":"Everything","summary":"All of it.","datasets":"all","addons":"all"}' > "$WORK/kit3/personas/everything.json"
+printf '{"id":"bare","title":"Bare","summary":"Nothing.","datasets":[],"addons":[],"mcp_clients":[]}' > "$WORK/kit3/personas/bare.json"
+printf 'junk' > "$WORK/kit3/personas/._general.json"
+SVC3() { env -u EXAKIT_DATASETS -u EXAKIT_LOAD_SAMPLE -u EXAKIT_MARKETPLACE_ADDONS -u EXAKIT_MCP_CLIENTS -u EXAKIT_NOTEBOOK_FRONTENDS \
+    python3 "$ROOT/setup/lib/persona_service.py" "$WORK/kit3" "$@"; }
+check "the valid ones still answer (a BOM is fine, dotfiles are skipped)" "general data-scientist ml-engineer bare everything" \
+    "$(SVC3 ids 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
+check "each broken file is named with what is wrong" "broken.json inj.json pipe.json" \
+    "$(SVC3 problems | cut -d'|' -f1 | tr '\n' ' ' | sed 's/ $//')"
+contains "a title with | is refused" "'title' must be one line without '|'" "$(SVC3 problems)"
+contains "a list item that is not an id is refused" "which is not an id" "$(SVC3 problems)"
+contains "naming a broken persona says what is wrong with its file" "personas/pipe.json is invalid" "$(SVC3 check pipe 2>&1)"
+check "datasets \"all\" become the kit's dataset ids (EXAKIT_DATASETS takes ids)" \
+    "EXAKIT_DATASETS=$(exakit_bundled_datasets | cut -d'|' -f1 | tr '\n' ',' | sed 's/,$//')" "$(SVC3 answers everything 2>/dev/null | grep '^EXAKIT_DATASETS=')"
+check "[] answers the nothing-word for each key" "EXAKIT_LOAD_SAMPLE=0 EXAKIT_MCP_CLIENTS=skip EXAKIT_MARKETPLACE_ADDONS=none" \
+    "$(SVC3 answers bare 2>/dev/null | grep -v '^EXAKIT_PERSONA=' | tr '\n' ' ' | sed 's/ $//')"
+check "General's empty add-on list answers none" "EXAKIT_MARKETPLACE_ADDONS=none" "$(SVC3 answers general 2>/dev/null | grep '^EXAKIT_MARKETPLACE_ADDONS=')"
+check "an EXAKIT_LOAD_SAMPLE the installer does not read is not an answer" "EXAKIT_DATASETS=fda_recalls,banking_complaints" \
+    "$(EXAKIT_LOAD_SAMPLE=yes python3 "$ROOT/setup/lib/persona_service.py" "$ROOT" answers data-scientist 2>/dev/null | grep '^EXAKIT_DATASETS=')"
+check "one persona where one is meant" "2" "$(python3 "$ROOT/setup/lib/persona_service.py" "$ROOT" value general,ml-engineer title >/dev/null 2>&1; echo $?)"
+out="$( (EXAKIT_PERSONA=nope; exakit_persona_known nope; printf '%s' "$EXAKIT_PERSONA_PROBLEM") )"
+contains "an unknown persona is named with the ones there are" "Unknown persona 'nope' (available: general data-scientist ml-engineer)" "$out"
+out="$( (run_python_any() { return 127; }; exakit_persona_known general; printf '%s' "$EXAKIT_PERSONA_PROBLEM") )"
+contains "no Python: says so, not 'unknown persona'" "needs Python 3" "$out"
+
+echo "the install's persona section:"
+out="$( (unset EXAKIT_PERSONA EXAKIT_DATASETS EXAKIT_LOAD_SAMPLE EXAKIT_DATASETS_PRESELECT EXAKIT_MARKETPLACE_PRESELECT
+        exakit_persona_data() { :; }; exakit_persona_flow "$ROOT" </dev/null >/dev/null 2>&1
+        printf '%s|%s|%s' "${EXAKIT_DATASETS_PRESELECT:-}" "${EXAKIT_MARKETPLACE_PRESELECT:-}" "${EXAKIT_PERSONA:-}") )"
+check "no terminal, no persona: the default personas' datasets, nothing recorded" "tpch,energy,weather||" "$out"
+out="$( (unset EXAKIT_DATASETS_PRESELECT EXAKIT_MARKETPLACE_PRESELECT; exakit_repo_root() { printf '%s\n' "$WORK/kit3"; }
+        _exakit_persona_preselect bare; printf '%s|%s' "${EXAKIT_DATASETS_PRESELECT:-}" "${EXAKIT_MARKETPLACE_PRESELECT:-}") )"
+check "a persona with no datasets ticks none (and offers no add-ons)" "none|" "$out"
+out="$( (unset EXAKIT_DATASETS_PRESELECT EXAKIT_MARKETPLACE_PRESELECT; exakit_repo_root() { printf '%s\n' "$WORK/kit3"; }
+        _exakit_persona_preselect everything; printf '%s' "${EXAKIT_MARKETPLACE_PRESELECT:-}") )"
+check "a persona with every add-on offers all" "all" "$out"
+out="$( (exakit_soft_failed() { [ "$1" = exapump ]; }; exakit_persona_question() { echo ASKED; }
+        exakit_persona_data() { echo DATA; }; _exakit_prompt_tty() { echo /dev/tty; }; UI_FANCY=1; unset EXAKIT_PERSONA
+        exakit_persona_flow "$ROOT" 2>&1) )"
+check "exapump missing: nobody is asked, the data step says why" "DATA" "$out"
+out="$( (_exakit_prompt_tty() { echo /dev/tty; }; UI_FANCY=1; unset EXAKIT_PERSONA; exakit_persona_question() { echo ASKED; }
+        exakit_persona_data() { :; }; EXAKIT_DATASETS=tpch EXAKIT_MARKETPLACE_ADDONS=none exakit_persona_flow "$ROOT" 2>&1) )"
+check "everything already answered in the environment: not asked" "" "$out"
+out="$( (manifest_set persona.id ml-engineer
+        ui_checkbox_menu() { shift; printf '%s' "$1" > "$WORK/defaults"; EXAKIT_CHECKBOX_SELECTION=""; }
+        exakit_persona_question >/dev/null 2>&1; cat "$WORK/defaults") )"
+check "a re-run ticks the persona this kit was set up as" "3" "$out"
+out="$( (EXAKIT_PERSONA_ACTIVE=1; unset EXAKIT_MARKETPLACE_PRESELECT; exakit_persona_marketplace_note 2>&1) )"
+check "no persona offer, no second marketplace pointer" "" "$out"
+contains "...after a persona offer, one pointer" "exakit marketplace" \
+    "$( (EXAKIT_PERSONA_ACTIVE=1 EXAKIT_MARKETPLACE_PRESELECT=notebook exakit_persona_marketplace_note 2>&1) )"
+
+echo "exakit persona apply:"
+sed -n '/^cmd_persona() {/,/^}/p' "$ROOT/setup/exakit" > "$WORK/cmd_persona.sh"
+. "$WORK/cmd_persona.sh"
+cmd_data_load() { echo "STEP data-load"; }; cmd_mcp_setup() { echo "STEP mcp-setup"; }; cmd_marketplace() { echo "STEP marketplace"; }
+manifest_set persona.id ""
+out="$( (_exakit_prompt_tty() { :; }; cmd_persona apply ml-engineer 2>&1); echo "rc=$?")"
+contains "no terminal and no --yes: nothing changes" "rc=5" "$out"
+check "...and nothing is recorded" "" "$(manifest_get persona.id 2>/dev/null)"
+out="$( (_exakit_prompt_tty() { echo /dev/tty; }; confirm() { return 1; }; cmd_persona apply ml-engineer 2>&1); echo "rc=$?")"
+contains "declined: exit 5" "rc=5" "$out"
+check "...and nothing is recorded" "" "$(manifest_get persona.id 2>/dev/null)"
+out="$( (cmd_persona apply ml-engineer --yes 2>&1); echo "rc=$?")"
+contains "with --yes every step runs" "STEP data-load" "$out"
+contains "...and the persona is recorded" "rc=0" "$out"
+check "...as apply" "ml-engineer|apply" "$(manifest_get persona.id)|$(manifest_get persona.source)"
+out="$( (cmd_persona apply general ml-engineer --yes 2>&1); echo "rc=$?")"
+contains "two ids as two words: refused, joined with a comma instead" "exakit persona apply general,ml-engineer" "$out"
+out="$( (exakit_repo_root() { printf '%s\n' "$WORK/kit3"; }; cmd_persona apply bare --yes 2>&1) )"
+contains "a persona without datasets loads none" "No sample data for this persona" "$out"
+manifest_set persona.id ""
+
 echo "the installer refuses an unknown persona before anything is installed:"
 # install.sh's dry run stops before the setup scripts, so it checks the persona
 # itself; install.ps1 carries the same check (Windows only - pinned statically).
@@ -167,6 +247,12 @@ out="$(dry general,ml-engineer)"
 contains "install.sh: several personas joined by commas" "Persona: general,ml-engineer" "$out"
 out="$(dry general,nope)"
 contains "install.sh: one unknown among several is named" "Unknown persona 'nope'" "$out"
+for bad in GENERAL ../versions examples/analyst '*' 'general general'; do
+    out="$(dry "$bad")"; rc=$?
+    check "install.sh: '$bad' is not a persona id" "1" "$rc"
+done
+out="$(dry ' general , ml-engineer ')"
+contains "install.sh: spaces around the ids are fine" "Persona: general,ml-engineer" "$out"
 out="$(dry ml-engineer)"
 contains "install.sh: a known persona is named in the plan" "Persona: ml-engineer" "$out"
 check "install.ps1: the same refusal" "yes" \
