@@ -34,8 +34,10 @@ def _report(what: str, ok: bool, detail: str, fix: str = "") -> bool:
 def probe_script(alias: str, packages: tuple[str, ...]) -> str:
     """The CREATE SCRIPT of a UDF that reports Python, each package's version (or MISSING) and whether a path is a folder."""
     names = ", ".join(repr(p) for p in packages)
-    return (f"CREATE OR REPLACE {alias} SCALAR SCRIPT {PROBE_SCHEMA}.{PROBE}(path VARCHAR(2000)) "
-            "EMITS (NAME VARCHAR(200), VALUE VARCHAR(2000)) AS\n"
+    # No reserved word among the names: VALUE and PATH are reserved in Exasol, and a CREATE SCRIPT using them failed
+    # with a syntax error the check could only report as "did not run".
+    return (f"CREATE OR REPLACE {alias} SCALAR SCRIPT {PROBE_SCHEMA}.{PROBE}(probe_path VARCHAR(2000)) "
+            "EMITS (ITEM VARCHAR(200), DETAIL VARCHAR(2000)) AS\n"
             "import os\n"
             "import sys\n"
             "from importlib import metadata\n"
@@ -46,8 +48,8 @@ def probe_script(alias: str, packages: tuple[str, ...]) -> str:
             "            ctx.emit(name, metadata.version(name))\n"
             "        except Exception:\n"
             "            ctx.emit(name, 'MISSING')\n"
-            "    if ctx.path:\n"
-            "        ctx.emit('path', 'folder' if os.path.isdir(ctx.path) else 'missing')\n")
+            "    if ctx.probe_path:\n"
+            "        ctx.emit('path', 'folder' if os.path.isdir(ctx.probe_path) else 'missing')\n")
 
 
 def _probe(conn, alias: str = "PYTHON3", packages: tuple[str, ...] = TRAINING_PACKAGES, path: str = "") -> dict[str, str]:
@@ -59,12 +61,19 @@ def _probe(conn, alias: str = "PYTHON3", packages: tuple[str, ...] = TRAINING_PA
     return {str(row[0]): str(row[1]) for row in rows}
 
 
+def _reason(err: Exception) -> str:
+    """The database's own message, on one line: pyexasol's errors carry it in .message, and their text starts with a
+    blank line, so the first line of str(err) said nothing."""
+    message = getattr(err, "message", None) or next((line.strip() for line in str(err).splitlines() if line.strip()), "")
+    return str(message).splitlines()[0][:300] if message else type(err).__name__
+
+
 def check_container(conn, alias: str = "PYTHON3", packages: tuple[str, ...] = TRAINING_PACKAGES) -> bool:
     """The container behind ``alias`` runs a smoke UDF, and it has every package training needs."""
     try:
         found = _probe(conn, alias, packages)
     except Exception as err:                                   # the database's own message says why
-        reason = str(err).splitlines()[0][:300] if str(err) else type(err).__name__
+        reason = _reason(err)
         return _report("container", False, f"the smoke UDF on {alias} did not run ({reason}).",
                        "exakit udf-setup installs the Python container (the udf-devkit add-on: exakit marketplace udf-devkit).")
     missing = [p for p in packages if found.get(p, "MISSING") == "MISSING"]

@@ -728,5 +728,36 @@ class TextStepTest(unittest.TestCase):
         self.assertIn("live source (crm)", out.getvalue())
 
 
+
+class ProbeTest(unittest.TestCase):
+    """The ML Engineer quickstart's container check: its probe UDF must be valid Exasol SQL, and a failure must say why.
+    It used VALUE and PATH - both reserved - so CREATE SCRIPT failed, and the check printed an empty reason."""
+
+    def setUp(self):
+        from exakit_nb import checks
+        self.checks = checks
+        self.reserved = {w.strip().upper() for w in (ROOT / "tools" / "exasol_reserved_words.txt").read_text().splitlines() if w.strip()}
+
+    def test_no_reserved_word_names_a_parameter_or_column(self):
+        head = self.checks.probe_script("PYTHON3", ("scikit-learn", "pandas")).split(" AS\n")[0]
+        names = re.findall(r"\b([A-Za-z_][A-Za-z0-9_]*)\s+VARCHAR", head)
+        self.assertEqual(sorted(names), ["DETAIL", "ITEM", "probe_path"])
+        self.assertEqual([n for n in names if n.upper() in self.reserved], [])
+
+    def test_the_body_reads_the_parameter_it_declares(self):
+        sql = self.checks.probe_script("PYTHON3", ("pandas",))
+        self.assertIn("ctx.probe_path", sql)
+        self.assertNotIn("ctx.path", sql)
+
+    def test_a_pyexasol_error_is_reported_by_its_message(self):
+        class ExaQueryError(Exception):
+            message = "syntax error, unexpected VALUE_ [line 1, column 80]"
+        err = ExaQueryError("\n(\n    message => syntax error, unexpected VALUE_ [line 1, column 80]\n    dsn => x\n)")
+        self.assertEqual(self.checks._reason(err), "syntax error, unexpected VALUE_ [line 1, column 80]")
+
+    def test_a_plain_error_text_that_starts_blank_still_says_something(self):
+        self.assertEqual(self.checks._reason(RuntimeError("\n\nconnection lost\nmore")), "connection lost")
+        self.assertEqual(self.checks._reason(RuntimeError("")), "RuntimeError")
+
 if __name__ == "__main__":
     unittest.main()
