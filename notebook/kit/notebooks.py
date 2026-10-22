@@ -7,7 +7,8 @@ Standard library only; one file for setup/lib/notebook.sh and notebook.ps1, so t
     python notebooks.py list <kit_root>                                    step|persona|title|jupyter file|marimo file
 
 What goes where is notebook/catalog.json: the Jupyter notebooks into <notebooks_dir>/starter-kit-notebooks/<persona>/
-with a README naming the end-to-end path through them, the Marimo ones into <notebooks_dir>/marimo/<persona>/. A file
+(and the shared cells into its 00_shared/) with a README naming the order to open them in, the Marimo ones into
+<notebooks_dir>/marimo/<persona>/. A catalog entry whose file this kit copy does not carry is skipped. A file
 already there is the user's and is never overwritten; neither is the README. What the kit copied is recorded in
 .kit-copied in that folder, so a notebook the user deleted stays deleted. A notebook that cannot be copied (a file
 where its persona folder should be, a folder that is read-only) is named on stderr, the rest are still copied, and the
@@ -36,10 +37,19 @@ class SettingsError(ValueError):
 
 
 def catalog(kit: Path) -> dict:
-    """notebook/catalog.json, its notebooks in the order of the end-to-end path."""
+    """notebook/catalog.json, its notebooks grouped by persona (in the order they first appear) and in the order a new
+    user opens them within each."""
     doc = json.loads((kit / "notebook" / "catalog.json").read_text(encoding="utf-8"))
-    doc["notebooks"] = sorted(doc["notebooks"], key=lambda entry: int(entry.get("step", 0)))
+    personas = list(dict.fromkeys(entry["persona"] for entry in doc["notebooks"]))
+    doc["notebooks"] = sorted(doc["notebooks"], key=lambda entry: (personas.index(entry["persona"]), int(entry.get("step", 0))))
     return doc
+
+
+def _placed(doc: dict) -> list[tuple[str, dict]]:
+    """(folder, entry) for everything the copy places: the shared cells' folder first, then each persona's notebooks.
+    A source file lives at <source>/<folder>/<file> and is copied to <base>/<folder>/<file>."""
+    shared = doc.get("shared")
+    return ([(shared["folder"], shared)] if shared else []) + [(entry["persona"], entry) for entry in doc["notebooks"]]
 
 
 def persona_title(kit: Path, persona: str) -> str:
@@ -65,12 +75,12 @@ def copy(front: str, kit: Path, notebooks_dir: Path) -> tuple[list[str], list[st
     base = notebooks_dir / doc["folders"][front]
     before = _copied_before(base)
     added, problems, seen = [], [], set(before)
-    for entry in doc["notebooks"]:
+    for folder, entry in _placed(doc):
         name = entry.get(front)
-        if not name or not (source / name).is_file():
-            continue
-        key = f"{entry['persona']}/{name}"
-        target = base / entry["persona"] / name
+        if not name or not (source / folder / name).is_file():
+            continue                                     # a catalog entry this kit copy does not carry yet
+        key = f"{folder}/{name}"
+        target = base / folder / name
         if target.exists() or target.is_symlink():
             seen.add(key)                                # there (the kit's earlier copy, or the user's own): theirs
             continue
@@ -81,7 +91,7 @@ def copy(front: str, kit: Path, notebooks_dir: Path) -> tuple[list[str], list[st
             continue
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(source / name, target)
+            shutil.copyfile(source / folder / name, target)
         except OSError as err:
             problems.append(f"{key}: {err.strerror or err}")
             continue
@@ -101,17 +111,26 @@ def copy(front: str, kit: Path, notebooks_dir: Path) -> tuple[list[str], list[st
 
 
 def write_readme(kit: Path, doc: dict, folder: Path) -> None:
-    """A README naming each persona folder and the end-to-end path through them; written once, then the user's."""
+    """A README naming each persona folder and the order to open its notebooks in; written once, then the user's.
+    It names only the notebooks this kit copy carries."""
     readme = folder / "README.md"
     if readme.exists() or not folder.is_dir():
         return
-    lines = ["# The starter kit's notebooks", "", "One folder per persona. Together they are one path, end to end:", ""]
+    source = kit / doc["sources"]["jupyter"]
+    lines = ["# The starter kit's notebooks", "", "One folder per persona; open its notebooks in this order, `00_quickstart` first.", ""]
+    persona = None
     for entry in doc["notebooks"]:
-        if entry.get("jupyter"):
-            who = persona_title(kit, entry["persona"])
-            lines.append(f"{entry['step']}. `{entry['persona']}/{entry['jupyter']}` ({who}) - {entry['title']}: {entry['summary']}")
-            lines.append(f"   Needs: {entry['needs']}")
-    lines += ["", "Every notebook connects with `import exakit_nb; conn = exakit_nb.connect()` - no host, user or password.",
+        if not entry.get("jupyter") or not (source / entry["persona"] / entry["jupyter"]).is_file():
+            continue
+        if entry["persona"] != persona:
+            persona = entry["persona"]
+            lines += ([""] if lines[-1] else []) + [f"## {persona}/ ({persona_title(kit, persona)})", ""]
+        lines.append(f"{int(entry['step']):02d}. `{persona}/{entry['jupyter']}` - {entry['title']}: {entry['summary']}")
+        lines.append(f"    Needs: {entry['needs']}")
+    shared = doc.get("shared")
+    if shared and (source / shared["folder"] / shared["jupyter"]).is_file():
+        lines += ["", f"`{shared['folder']}/{shared['jupyter']}` - {shared['title']}: {shared['summary']}"]
+    lines += ["", "Every notebook connects with `import exakit.nb as nb; conn = nb.connect()` - no host, user or password.",
               "These files are yours: the kit never overwrites them, and one you delete is not copied again.",
               "Your own notebooks can go anywhere in the notebooks folder.",
               "", "Also: `exakit notebook --marimo` (the same notebooks in Marimo), `exakit notebook --positron` (this folder in",

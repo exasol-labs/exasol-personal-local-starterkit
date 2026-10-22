@@ -1,5 +1,5 @@
 """(run: python3 tests/test_exasol_mlflow.py) exasol-mlflow (PRD ML-2, ML-3): the UDF result contract, logging against a fake mlflow, the UDF that needs no network,
-and train.ipynb kept in step with its .py and free of any dataset's names."""
+and ml-engineer/01_train.ipynb kept in step with its .py and free of any dataset's names."""
 
 from __future__ import annotations
 
@@ -196,7 +196,7 @@ class UdfTest(unittest.TestCase):
 
 
 class ShippedTrainTest(unittest.TestCase):
-    NOTEBOOK = ROOT / "notebook" / "notebooks" / "train.py"
+    NOTEBOOK = ROOT / "notebook" / "notebooks" / "ml-engineer" / "01_train.py"
 
     def test_one_assignment_picks_the_data_and_no_dataset_is_named_in_the_code(self):
         text = self.NOTEBOOK.read_text(encoding="utf-8")

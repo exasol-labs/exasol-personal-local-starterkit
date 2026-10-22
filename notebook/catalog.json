@@ -1,6 +1,5 @@
 {
-  "schema_version": 1,
-  "marimo_package": "marimo>=0.25.2,<0.26",
+  "schema_version": 2,
   "folders": {
     "jupyter": "starter-kit-notebooks",
     "marimo": "marimo"
@@ -9,55 +8,63 @@
     "jupyter": "notebook/notebooks",
     "marimo": "notebook/marimo"
   },
+  "shared": {
+    "folder": "00_shared",
+    "title": "The shared cells",
+    "summary": "The cells both quickstarts are built with: the connection check, the schema listing, and one loader per way data comes in (a sample dataset, your own CSV, Parquet or JSON file, a connected source). Open your persona's quickstart instead.",
+    "jupyter": "data_paths.ipynb",
+    "marimo": "data_paths.py"
+  },
   "notebooks": [
     {
-      "id": "start_here",
+      "id": "data-scientist-quickstart",
       "persona": "data-scientist",
-      "step": 1,
-      "title": "Start here",
-      "summary": "Connects, shows the time and session, lists the schemas (the sample data included) and the SQL behind the last result.",
-      "needs": "Nothing beyond the notebook add-on.",
-      "jupyter": "start_here.ipynb"
+      "step": 0,
+      "title": "Quickstart",
+      "summary": "Opens connected. One cell for each way data comes in - a sample dataset, your own CSV, Parquet or JSON file, a connected source - then the descriptor's roles and a first query. Ends by opening 01_explore.",
+      "needs": "Nothing beyond the notebook add-on: the sample-dataset cell loads Pharma (or Banking) the first time.",
+      "jupyter": "00_quickstart.ipynb",
+      "marimo": "00_quickstart.py"
     },
     {
       "id": "explore",
       "persona": "data-scientist",
-      "step": 2,
+      "step": 1,
       "title": "Explore a dataset",
-      "summary": "Any described dataset: rows and label rate per category, over time and per entity, a small scikit-learn model on this computer, and an optional text step with your own model. Every query is printed before its result.",
-      "needs": "A described dataset: exakit data-load fda_recalls (or banking_complaints, pharma_trials), or your own CSV or Parquet file with DATASET = \"own-file\". Optional: EXAKIT_NB_MODEL with OPENAI_BASE_URL and OPENAI_API_KEY for the text step; LANGFUSE_* for tracing.",
-      "jupyter": "explore.ipynb",
-      "marimo": "explore.py"
+      "summary": "The domain's landscape question with the SQL visible, a small scikit-learn model on this computer, and a text step with your own model traced to your Langfuse. Another dataset or your own file is one assignment away.",
+      "needs": "A loaded dataset (pharma_trials as it ships, banking_complaints, or your own file with its roles beside it). Optional: EXAKIT_NB_MODEL with OPENAI_BASE_URL and OPENAI_API_KEY for the text step; LANGFUSE_* for tracing.",
+      "jupyter": "01_explore.ipynb",
+      "marimo": "01_explore.py"
     },
     {
-      "id": "text_classification",
-      "persona": "data-scientist",
-      "step": 3,
-      "title": "Classify text",
-      "summary": "Learns a dataset's category, then its label, from its free text (TF-IDF and logistic regression on this computer): per-class precision and recall, the confusion matrix, the telling words, and predictions for sentences you write.",
-      "needs": "A described dataset with text: exakit data-load fda_recalls (or banking_complaints, pharma_trials), or your own file.",
-      "jupyter": "text_classification.ipynb",
-      "marimo": "text_classification.py"
-    },
-    {
-      "id": "bank_marketing_mlflow",
+      "id": "ml-engineer-quickstart",
       "persona": "ml-engineer",
-      "step": 4,
-      "title": "Train, track and compare with MLflow",
-      "summary": "Reads the bank marketing clients from Exasol, trains four classifiers on this computer, logs every run to MLflow (parameters, ROC AUC, precision, recall, the SQL, the model) and names the best.",
-      "needs": "exakit data-load bank_marketing. Optional: MLFLOW_TRACKING_URI, else a local store in mlflow/ beside the notebook.",
-      "jupyter": "bank_marketing_mlflow.ipynb",
-      "marimo": "bank_marketing_mlflow.py"
+      "step": 0,
+      "title": "Quickstart",
+      "summary": "Opens connected. Checks, one cell each, that the container answers the smoke UDF, the MLflow server is reachable and the bucket directory is where the kit expects it, naming the fix when one fails; then the same loader cells. Ends by opening 01_train.",
+      "needs": "The udf-devkit add-on with a Python container (exakit udf-setup). Optional: MLFLOW_TRACKING_URI, else a local store in mlflow/ beside the notebook.",
+      "jupyter": "00_quickstart.ipynb",
+      "marimo": "00_quickstart.py"
     },
     {
       "id": "train",
       "persona": "ml-engineer",
-      "step": 5,
+      "step": 1,
       "title": "Train inside the database",
-      "summary": "A Python UDF trains a text classifier inside Exasol; the notebook logs the run with exasol-mlflow: parameters, metrics, the training SQL, the model file and the session that trained it.",
-      "needs": "The udf-devkit add-on with a Python container (exakit udf-setup) and a described dataset (exakit data-load pharma_trials). Optional: MLFLOW_TRACKING_URI, else a local store in mlflow/ beside the notebook.",
-      "jupyter": "train.ipynb",
-      "marimo": "train.py"
+      "summary": "Features in SQL from the descriptor's roles, a scikit-learn classifier trained inside a Python UDF under exasol_mlflow.start_run, and the run in your MLflow with its metrics, training SQL and model; ends by showing where the model landed.",
+      "needs": "A Python container with scikit-learn (exakit udf-setup) and a loaded dataset (pharma_trials as it ships). Optional: MLFLOW_TRACKING_URI, else a local store in mlflow/ beside the notebook.",
+      "jupyter": "01_train.ipynb",
+      "marimo": "01_train.py"
+    },
+    {
+      "id": "score-external-model",
+      "persona": "ml-engineer",
+      "step": 2,
+      "title": "Score a model trained elsewhere",
+      "summary": "Brings a model trained anywhere into the bucket directory with exakit model put, creates the scoring UDF from the template, scores a table and compares with the prediction on this computer.",
+      "needs": "A Python container with scikit-learn (exakit udf-setup) and a model file (01_train's, or your own scikit-learn pickle or ONNX file).",
+      "jupyter": "02_score_external_model.ipynb",
+      "marimo": "02_score_external_model.py"
     }
   ]
 }
