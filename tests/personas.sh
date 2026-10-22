@@ -232,7 +232,8 @@ check "--json after a complete install: nothing pending" "true" \
     "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(str(d["nothing_pending"]).lower() if not d["datasets"]["pending"] and not d["addons"]["pending"] else "pending")' 2>/dev/null)"
 
 echo "exakit persona apply:"
-sed -n '/^cmd_persona() {/,/^}/p' "$ROOT/setup/exakit" > "$WORK/cmd_persona.sh"
+_cp_range='/^cmd_persona() {/,/^}/p'      # assigned first: bash 3.2 brace-expands it as an argument
+sed -n "$_cp_range" "$ROOT/setup/exakit" > "$WORK/cmd_persona.sh"
 . "$WORK/cmd_persona.sh"
 cmd_data_load() { echo "STEP data-load"; }; cmd_mcp_setup() { echo "STEP mcp-setup"; }; cmd_marketplace() { echo "STEP marketplace"; }
 manifest_set persona.id ""

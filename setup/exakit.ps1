@@ -23,10 +23,10 @@
 #   stop [<service>]      stop them again, or one of them by id
 #   autostart             whether everything comes back after a restart; shows
 #                         the current state and asks whether to change it
-#   data-load [-Force|<path>]
+#   data-load [-Force] [<path>|<dataset>]
 #                         open focused data loading options; a file path loads that
 #                         file, a FOLDER path bulk-loads every CSV/Parquet file in
-#                         it (one table each); -Force reloads bundled datasets
+#                         it (one table each); -Force drops and rebuilds bundled datasets
 #   migrate docker-nano [--container NAME] [--engine docker|podman]
 #                         [--dsn HOST:PORT] [--user USER] [--password-file PATH]
 #                         [--yes] [--json]
@@ -3239,7 +3239,7 @@ function Invoke-CmdDataLoad {
             # -Force drops and rebuilds BUNDLED datasets. A file or folder has its
             # own answer for a table that already holds rows, and it is not this.
             if ($ForceFlag) {
-                Stop-ExakitBadOption "-Force reloads bundled datasets, not a file or folder. For a table that already holds rows: `$env:EXAKIT_ON_EXISTING = 'replace'; exakit data-load $target"
+                Stop-ExakitBadOption "-Force drops and rebuilds a bundled dataset, not a file or folder. For a table that already holds rows: `$env:EXAKIT_ON_EXISTING = 'replace'; exakit data-load $target"
             }
             $loadPath = Get-ExakitNormalizedPath $target
             if (-not (Test-Path $loadPath)) { Fail "No such file, folder or dataset: $target (datasets: $((@(Get-ExakitBundledDatasets | ForEach-Object { $_.Id })) -join ' '))" }

@@ -1688,7 +1688,7 @@ cmd_data_load() {
     # --force drops and rebuilds BUNDLED datasets. A file or folder has its own
     # answer for a table that already holds rows, and it is not this one.
     if [ -n "$_dl_force" ] && [ -n "$_dl_path" ]; then
-        reject "--force reloads bundled datasets, not a file or folder. For a table that already holds rows: EXAKIT_ON_EXISTING=replace exakit data-load $_dl_path"
+        reject "--force drops and rebuilds a bundled dataset, not a file or folder. For a table that already holds rows: EXAKIT_ON_EXISTING=replace exakit data-load $_dl_path"
     fi
     if [ -n "$_dl_path" ]; then
         _dl_norm="$(exakit_normalize_path "$_dl_path")"
