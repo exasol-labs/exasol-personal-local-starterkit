@@ -6,42 +6,53 @@ marketplace add-ons to offer. The rules live in one Python service,
 `setup/lib/persona_service.py`, which the shell and PowerShell installers both
 call; the screens are the kit's own menus.
 
-**On a terminal** the install asks, after the parts everyone needs (the
-database, exapump, the AI bridge):
+The kit ships the two personas of the requirements document (TDD/BRD v0.3,
+P-1), both on the two reference datasets, Pharma and Banking:
 
-1. *What will you use this machine for?* - tick one persona or several
-   (General is ticked to begin with).
-2. *Data to load* - sample datasets, your own file or folder, or an external
-   source (coming soon). The samples come next, each named with the personas
-   it is for, and the personas' own datasets ticked.
-3. At the end, *Add-ons for your personas* - only their add-ons, ticked;
-   Enter installs them, Skip backs out. The rest of the marketplace is one
-   command away: `exakit marketplace`.
+| Persona | Datasets | AI clients | Add-ons | First notebook |
+|---|---|---|---|---|
+| `data-scientist` (AI Scientist) | `pharma_trials`, `banking_complaints` | all detected | `notebook` | `data-scientist/00_quickstart.ipynb` |
+| `ml-engineer` (ML Engineer) | `pharma_trials`, `banking_complaints` | all detected | `notebook`, `udf-devkit` | `ml-engineer/00_quickstart.ipynb` |
 
-Nothing is loaded or installed without that screen. **Without a terminal**,
-name the personas instead and their answers are taken as given:
+Pick one with `EXAKIT_PERSONA` on the install command:
 
 ```bash
+curl -fsSL https://www.exasol.com/install/starter-kit.sh | EXAKIT_PERSONA=data-scientist sh
 curl -fsSL https://www.exasol.com/install/starter-kit.sh | EXAKIT_PERSONA=ml-engineer sh
-curl -fsSL https://www.exasol.com/install/starter-kit.sh | EXAKIT_PERSONA=general,data-scientist sh
 ```
 
-or later, on an installed kit: `exakit persona apply ml-engineer`.
+**On a terminal without `EXAKIT_PERSONA`** the install asks, after the parts
+everyone needs (the database, exapump, the AI bridge):
+
+1. *What will you use this machine for?* - AI Scientist, ML Engineer (one or
+   both), or None - just the kit, which is ticked to begin with.
+2. *Data to load* - sample datasets, your own file or folder, or an external
+   source (shown, coming soon). The samples come next, a For column naming the
+   persona each is for, and the picked personas' datasets ticked. With None,
+   the kit's own samples are ticked: TPC-H, energy, weather.
+3. At the end, *Add-ons for your personas* - only their add-ons, ticked; Enter
+   installs them, Skip backs out. The rest of the marketplace is one command
+   away: `exakit marketplace`.
+
+Nothing is loaded or installed without that screen. Without a terminal and
+without `EXAKIT_PERSONA`, the kit installs on its own with TPC-H, energy and
+weather, as before.
+
+On an installed kit: `exakit persona list`, `exakit persona show <id>`,
+`exakit persona apply <id>` (asks first; `--yes` for a script; without a
+terminal it changes nothing without `--yes`) and `exakit persona plan [<id>]
+[--json]`, which shows what a persona brings and what of it is still pending -
+after an `EXAKIT_PERSONA` install, nothing (AC-P1.1).
 
 An answer you give yourself always wins for that one variable:
-`EXAKIT_PERSONA=data-scientist EXAKIT_DATASETS=fda_recalls` loads only the
-FDA dataset and keeps the persona's clients and add-ons. Several personas
-together load each dataset and offer each add-on once; one naming `all` wins.
-
-| Persona | Datasets | AI clients | Add-ons |
-|---|---|---|---|
-| `general` | `tpch`, `energy`, `weather` | all detected | none |
-| `data-scientist` (AI / Data Scientist) | `fda_recalls`, `banking_complaints` | all detected | `notebook`, `dash-server`, `json-tables` |
-| `ml-engineer` | `bank_marketing`, `pharma_trials` | all detected | `notebook`, `udf-devkit` |
+`EXAKIT_PERSONA=data-scientist EXAKIT_DATASETS=banking_complaints` loads only
+the Banking dataset and keeps the persona's clients and add-ons. Several
+personas together load each dataset and offer each add-on once; one naming
+`all` wins.
 
 ## Adding a persona
 
-One file, `personas/<id>.json`, and no code. Try it first, in a sandbox that changes
+One file, `personas/<id>.json`, and no code in the installers (two lines in `tests/personas.sh` and `tests/personas-ps.ps1` list the shipped personas and must name it). Try it first, in a sandbox that changes
 nothing (`examples/analyst.json` is a ready-made one to start from):
 
 ```bash
@@ -57,12 +68,13 @@ The keys:
 | `id` | the file name without `.json` |
 | `title`, `summary` | what `exakit persona list` and the install question show |
 | `picker` | `true` to offer it in the install question |
-| `default` | `true` to tick it there to begin with (General does) |
+| `default` | `true` to tick it there to begin with (neither shipped persona does: None is ticked) |
 | `order` | where the question lists it (lowest first) |
 | `datasets` | a list of bundled dataset ids, or `"all"` / `"none"` |
 | `mcp_clients` | `"all"`, `"skip"`, or a list of client ids |
 | `addons` | a list of marketplace add-on ids, or `"all"` / `"none"` |
 | `notebook_tools` | optional: which notebook tools to tick, e.g. `["jupyterlab", "marimo"]` |
+| `first_prompt` | optional: what to do first, shown by `exakit persona show` (the shipped ones open their quickstart notebook) |
 
 No secrets and no machine paths: a persona names things, it never holds them.
 `tests/personas.sh` validates every file against the datasets and add-ons this

@@ -39,7 +39,7 @@ Install the Exasol starter kit from https://github.com/exasol-labs/exasol-person
 
 </div>
 
-Set up for a role in one go: `curl https://www.exasol.com/install/starter-kit.sh | EXAKIT_PERSONA=ml-engineer sh` (or `data-scientist`) installs that role's datasets, AI clients and add-ons. See [personas/](personas/README.md).
+Set up for a role in one go: `curl -fsSL https://www.exasol.com/install/starter-kit.sh | EXAKIT_PERSONA=data-scientist sh` installs the AI Scientist's set - the Pharma and Banking reference datasets, every AI client, the notebook add-on - and `EXAKIT_PERSONA=ml-engineer` adds the UDF dev kit. Without it, the installer asks (or installs the kit on its own when nobody is at the terminal). See [personas/](personas/README.md).
 
 ---
 
@@ -108,7 +108,7 @@ exakit mcp-setup
 
 The installer runs this for you, and you can run it again any time to add a client. It lists Claude, Codex, Cursor, GitHub Copilot, Gemini CLI, OpenCode and Continue, greys out the ones already connected or not installed, writes the config for the ones you pick and checks the connection. `exakit mcp-doctor` checks it again later.
 
-Five sample datasets are loaded for you: TPC-H retail in `TPCH`, smart-meter energy readings in `ENERGY`, daily city weather in `WEATHER`, pharma clinical trials in `PHARMA` and banking complaints in `BANKING`. The [data dictionary](data/data-dictionary.md) describes them, and [data/example-questions.md](data/example-questions.md) has 14 questions with reference SQL.
+Three sample datasets are loaded for you: TPC-H retail in `TPCH`, smart-meter energy readings in `ENERGY` and daily city weather in `WEATHER`. A persona adds the two reference datasets, pharma clinical trials in `PHARMA` and banking complaints in `BANKING`, downloaded as checksummed archives (`exakit data-load pharma_trials` brings one in any time). The [data dictionary](data/data-dictionary.md) describes them, and [data/example-questions.md](data/example-questions.md) has 14 questions with reference SQL.
 
 Try it: *"Which product category generated the most revenue? Show me the SQL before you run it."*
 

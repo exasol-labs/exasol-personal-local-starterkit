@@ -173,25 +173,29 @@
     },
     {
       "command": "data-load",
-      "options": "[--force | -Force] [<file-or-folder>]",
+      "options": "[--force | -Force] [<file-or-folder> | <dataset>]",
       "summary": "Load sample data, one file, or a whole folder.",
-      "description": "Opens the data-loading menu: the bundled datasets (one per folder in data/datasets) or your own data. Name a path to skip the menu. A FILE asks the same two things whatever its kind - the file, then SCHEMA.TABLE - and JSON is shredded into tables by an engine the kit installs for you. A FOLDER is a bulk load: every CSV / Parquet / JSON (.json, .geojson) file at its top level, one table each named after the file, asking for the schema once. Files go to the loader as they are - a ';'-separated CSV with its delimiter, a header with no rows skipped by name, a tabular .txt or .tsv listed with the rename to .csv that exapump needs. Subfolders are not scanned, files of other kinds are ignored, and duplicates - byte-identical files, or two names that resolve to the same table - are skipped with the reason. RUNNING A FOLDER AGAIN IS SAFE: a file already loaded from that folder is skipped rather than loaded on top of itself, a file a stopped run left half-written is reloaded from scratch, and a target table holding rows this kit did not load is left alone unless you say otherwise (EXAKIT_ON_EXISTING). A SINGLE FILE is held to the same rule: a target already holding rows this kit did not load is not loaded unless EXAKIT_ON_EXISTING says replace (drop and rebuild it) or append (load on top) - on a terminal you are asked, and a declined load exits 5 with nothing changed - and the same file loaded twice is recognised and left as it is. When the load finishes, every file is listed with the table it went into, the rows it landed, and - for one that did not load - the reason against it; a file the engine refuses leaves no empty table behind. --force REPLACES bundled datasets instead of skipping what is already there: their tables are dropped and rebuilt, so anything you changed in those schemas is lost. JSON is macOS, Linux and WSL only; on Windows a folder's JSON files are listed as skipped. Unattended, EXAKIT_DATASETS=tpch,energy,weather loads only what is not loaded yet and exits 0 when everything named is already there.",
+      "description": "Opens the data-loading menu: the bundled datasets (one per folder in data/datasets) or your own data. Name a path to skip the menu. A FILE asks the same two things whatever its kind - the file, then SCHEMA.TABLE - and JSON is shredded into tables by an engine the kit installs for you. A FOLDER is a bulk load: every CSV / Parquet / JSON (.json, .geojson) file at its top level, one table each named after the file, asking for the schema once. Files go to the loader as they are - a ';'-separated CSV with its delimiter, a header with no rows skipped by name, a tabular .txt or .tsv listed with the rename to .csv that exapump needs. Subfolders are not scanned, files of other kinds are ignored, and duplicates - byte-identical files, or two names that resolve to the same table - are skipped with the reason. RUNNING A FOLDER AGAIN IS SAFE: a file already loaded from that folder is skipped rather than loaded on top of itself, a file a stopped run left half-written is reloaded from scratch, and a target table holding rows this kit did not load is left alone unless you say otherwise (EXAKIT_ON_EXISTING). A SINGLE FILE is held to the same rule: a target already holding rows this kit did not load is not loaded unless EXAKIT_ON_EXISTING says replace (drop and rebuild it) or append (load on top) - on a terminal you are asked, and a declined load exits 5 with nothing changed - and the same file loaded twice is recognised and left as it is. When the load finishes, every file is listed with the table it went into, the rows it landed, and - for one that did not load - the reason against it; a file the engine refuses leaves no empty table behind. --force REPLACES bundled datasets instead of skipping what is already there: their tables are dropped and rebuilt, so anything you changed in those schemas is lost. JSON is macOS, Linux and WSL only; on Windows a folder's JSON files are listed as skipped. Unattended, EXAKIT_DATASETS=tpch,energy,weather loads only what is not loaded yet and exits 0 when everything named is already there. Name a bundled dataset by id (exakit data-load pharma_trials) to load just that one; --force with a dataset id drops and rebuilds that dataset, in either order. The reference datasets (pharma_trials, banking_complaints) are checksummed release archives: the kit downloads one when it is not cached, verifies its SHA-256 and every file's digest, and refuses a mismatch.",
       "environment": [
         "EXAKIT_DATASETS=tpch,energy,weather names exactly which bundled datasets to load",
         "EXAKIT_DATA_FILE=/path/file.json or /path/folder answers the local-data question, so a run without a terminal loads that file or folder",
         "EXAKIT_DATA_TABLE=SCHEMA.TABLE answers the target-table question for a single EXAKIT_DATA_FILE (default: STARTER_KIT.<filename>)",
         "EXAKIT_SCHEMA sets the default target schema",
-        "EXAKIT_ON_EXISTING=skip|replace|append decides what happens to a target table that already holds rows this kit did not load, for a single file and for every file in a folder alike (default: skip, which is also the answer without a terminal; a declined single-file load exits 5 with nothing changed)"
+        "EXAKIT_ON_EXISTING=skip|replace|append decides what happens to a target table that already holds rows this kit did not load, for a single file and for every file in a folder alike (default: skip, which is also the answer without a terminal; a declined single-file load exits 5 with nothing changed)",
+        "EXAKIT_DATASETS_MIRROR=<folder or https base URL> takes the reference dataset archives from there instead of the GitHub release (digests still checked)",
+        "EXAKIT_DATASETS_REPO=owner/name is the repository whose releases hold them"
       ],
       "examples": [
         "exakit data-load",
         "exakit data-load ~/exports",
         "exakit data-load ./sales.csv",
-        "exakit data-load --force",
         "EXAKIT_DATASETS=tpch exakit data-load",
         "EXAKIT_DATA_FILE=./sales.json EXAKIT_DATA_TABLE=STARTER_KIT.SALES exakit data-load",
         "EXAKIT_DATA_FILE=~/exports EXAKIT_SCHEMA=SALES exakit data-load",
-        "EXAKIT_ON_EXISTING=replace exakit data-load ~/exports"
+        "EXAKIT_ON_EXISTING=replace exakit data-load ~/exports",
+        "exakit data-load pharma_trials",
+        "exakit data-load --force banking_complaints",
+        "EXAKIT_DATASETS_MIRROR=~/dataset-archives exakit data-load pharma_trials"
       ]
     },
     {
@@ -276,12 +280,14 @@
     },
     {
       "command": "persona",
-      "options": "list | show <id> | apply <id> [--yes]",
+      "options": "list | show <id> | plan [<id>] [--json] | apply <id>[,<id>] [--yes]",
       "summary": "A named set of datasets, AI clients and add-ons: list them, show one, apply one.",
-      "description": "A persona is exactly a named set of the answers the installer already takes - which datasets to load, which AI clients to connect, which marketplace add-ons to install. The kit ships general (TPC-H, energy, weather), data-scientist (FDA recalls, banking complaints; notebook, dash-server, json-tables) and ml-engineer (bank marketing, pharma trials; notebook, udf-devkit); several join with commas. Pick one at install time with EXAKIT_PERSONA=<id>, or later with exakit persona apply <id>, which loads the datasets, connects the clients and installs the add-ons through data-load, mcp-setup and marketplace (one that fails does not stop the others). An answer you give yourself always wins for that one variable: EXAKIT_PERSONA=data-scientist EXAKIT_DATASETS=fda_recalls loads only that dataset. An unknown persona is refused before anything is installed. Personas are files in personas/ (personas/README.md); adding one needs no code.",
+      "description": "A persona is exactly a named set of the answers the installer already takes - which datasets to load, which AI clients to connect, which marketplace add-ons to install. The kit ships the two of the requirements document: data-scientist (AI Scientist: the Pharma and Banking reference datasets, every AI client, the notebook add-on) and ml-engineer (the same plus udf-devkit); both join with a comma. Pick one at install time with EXAKIT_PERSONA=<id>, or later with exakit persona apply <id>, which asks first (--yes for a script; without a terminal it changes nothing unless --yes, exit 5) and then loads the datasets, connects the clients and installs the add-ons through data-load, mcp-setup and marketplace (one that fails does not stop the others). exakit persona plan [<id>] shows what the persona brings and what of it is still pending here; after an EXAKIT_PERSONA install, nothing (--json for a script). An answer you give yourself always wins for that one variable: EXAKIT_PERSONA=data-scientist EXAKIT_DATASETS=banking_complaints loads only that dataset. An unknown persona is refused before anything is installed. Personas are files in personas/ (personas/README.md); adding one needs no installer code.",
       "examples": [
         "exakit persona list",
         "exakit persona show ml-engineer",
+        "exakit persona plan",
+        "exakit persona plan data-scientist --json",
         "exakit persona apply data-scientist --yes"
       ]
     },
@@ -484,7 +490,7 @@
   "environment": [
     {
       "name": "EXAKIT_PERSONA",
-      "effect": "A named set of answers (personas/<id>.json): general, data-scientist, ml-engineer, or several joined with commas. It fills EXAKIT_DATASETS, EXAKIT_MCP_CLIENTS and EXAKIT_MARKETPLACE_ADDONS where you did not set them; an unknown persona is refused before anything is installed."
+      "effect": "A named set of answers (personas/<id>.json): data-scientist (AI Scientist) or ml-engineer, or both joined with a comma. It fills EXAKIT_DATASETS, EXAKIT_MCP_CLIENTS and EXAKIT_MARKETPLACE_ADDONS where you did not set them; an unknown persona is refused before anything is installed."
     },
     {
       "name": "EXAKIT_MCP_CLIENTS",
@@ -496,7 +502,7 @@
     },
     {
       "name": "EXAKIT_DATASETS",
-      "effect": "Which bundled datasets to load, by id: one per folder in data/datasets (tpch, energy, weather, pharma_trials, banking_complaints)."
+      "effect": "Which bundled datasets to load, by id: one per folder in data/datasets (tpch, energy, weather, and the reference datasets pharma_trials, banking_complaints)."
     },
     {
       "name": "EXAKIT_LOAD_SAMPLE",
