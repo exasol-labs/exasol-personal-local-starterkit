@@ -83,7 +83,7 @@ if command -v python3 >/dev/null 2>&1; then
     echo "a persona's datasets: Skip when none of them is still to load:"
     out="$(replay '\r' EXAKIT_DATASETS_PRESELECT=none)"
     has "persona datasets none: Enter skips" "SELECTION=none" "$out"
-    out="$(replay '\r' EXAKIT_DATASETS_PRESELECT=fda_recalls)"
+    out="$(replay '\r' EXAKIT_DATASETS_PRESELECT=pharma_trials)"
     has "persona datasets all loaded already: Enter skips" "SELECTION=none" "$out"
     out="$(replay '\r\r' EXAKIT_DATASETS_PRESELECT=energy)"
     has "persona datasets still to load: Enter, Enter loads exactly those" "SELECTION=energy" "$out"
@@ -94,7 +94,7 @@ if command -v python3 >/dev/null 2>&1; then
     out="$(TTY_REPLAY_COLS=80 replay '\r\r' DQ_PERSONA=1 EXAKIT_DATASETS_PRESELECT=banking_complaints)"
     has "the table draws once" "1 top borders, 1 bottom borders" "$out"
     has "a For column" "For" "$(printf '%s\n' "$out" | grep 'Dataset')"
-    has "the persona is shown in full" "AI / Data Scientist" "$out"
+    has "the persona is shown in full" "AI Scientist, ML Engineer" "$out"
     has "and the dataset name is not cut" "Smart-meter energy readings" "$out"
     lacks "nothing is truncated" "…" "$(printf '%s\n' "$out" | sed -n '/Sample datasets ─/,/╰/p')"
     has "the persona's dataset is the one picked" "SELECTION=banking_complaints" "$out"
@@ -118,7 +118,7 @@ check "every sample loaded: the samples row is disabled, your own file the defau
     "DEFAULT=2 EXCL=4|!Sample datasets - all of them are loaded already" "$(printf '%s\n' "$out" | head -n 2 | tr '\n' '|' | sed 's/|$//')"
 out="$( exakit_pending_datasets() { printf 'tpch|TPC-H\n'; }; EXAKIT_DATASETS_PRESELECT=none rows | head -n 1 )"
 check "persona datasets none: Skip is the default" "DEFAULT=4 EXCL=4" "$out"
-out="$( exakit_pending_datasets() { printf 'tpch|TPC-H\n'; }; EXAKIT_DATASETS_PRESELECT=fda_recalls,energy rows | head -n 1 )"
+out="$( exakit_pending_datasets() { printf 'tpch|TPC-H\n'; }; EXAKIT_DATASETS_PRESELECT=pharma_trials,energy rows | head -n 1 )"
 check "persona datasets none of them pending: Skip is the default" "DEFAULT=4 EXCL=4" "$out"
 out="$( exakit_pending_datasets() { :; }; EXAKIT_DATASETS_PRESELECT=tpch rows | head -n 1 )"
 check "persona datasets all loaded and nothing pending: Skip, not your own file" "DEFAULT=4 EXCL=4" "$out"
@@ -139,18 +139,18 @@ table() { # table <pending-ids...> — EXAKIT_TABLE_DEFAULTS~EXAKIT_TABLE_ROW_SK
 }
 check "no persona: every pending row ticked" "1,2,3~4" "$(table tpch energy)"
 check "persona's dataset pending: that row" "3~4" "$(EXAKIT_DATASETS_PRESELECT=energy table tpch energy)"
-check "persona's datasets loaded already: Skip" "4~4" "$(EXAKIT_DATASETS_PRESELECT=fda_recalls table tpch energy)"
+check "persona's datasets loaded already: Skip" "4~4" "$(EXAKIT_DATASETS_PRESELECT=pharma_trials table tpch energy)"
 check "persona datasets none: Skip" "4~4" "$(EXAKIT_DATASETS_PRESELECT=none table tpch energy)"
 check "nothing pending and no file row: Skip, never row 0" "1~1" "$(table)"
 out="$( (exakit_pending_datasets() { :; }; exakit_data_table_build "$WORK/table"; printf '%s~%s' "$EXAKIT_TABLE_DEFAULTS" "$EXAKIT_TABLE_ROW_LOCAL") )"
 check "nothing pending with a file row: the file row, as before" "1~1" "$out"
 
 echo "who each dataset is for is a column, not a suffix:"
-out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H retail benchmark (~175k rows)\nfda_recalls|FDA recalls (openFDA, ~5k)\n'; }
+out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H retail benchmark (~175k rows)\npharma_trials|Pharma clinical trials (ClinicalTrials.gov, ~5k trials)\n'; }
         EXAKIT_DATA_TABLE_NO_LOCAL=1 exakit_data_table_build "$WORK/table"
         printf '%s~%s~%s' "$EXAKIT_TABLE_HAS_FOR" "$(cut -d'|' -f2 "$WORK/table" | tr '\n' ';')" "$(cut -d'|' -f11 "$WORK/table" | tr '\n' ';')") )"
 check "the names stay names; the personas go in column 2" \
-    "1~Select All;TPC-H retail benchmark;FDA recalls;Skip;~;General;AI / Data Scientist;;" "$out"
+    "1~Select All;TPC-H retail benchmark;Pharma clinical trials;Skip;~;;AI Scientist, ML Engineer;;" "$out"
 out="$( (exakit_persona_dataset_hints() { :; }
         exakit_pending_datasets() { printf 'tpch|TPC-H retail benchmark\n'; }
         EXAKIT_DATA_TABLE_NO_LOCAL=1 exakit_data_table_build "$WORK/table"; printf '%s' "$EXAKIT_TABLE_HAS_FOR") )"
@@ -183,14 +183,14 @@ dl() { # dl <pending-ids> <args...> — what cmd_data_load does, stubbed below t
         cmd_data_load "$@"
     ) 2>&1
 }
-check "--force <dataset> reloads exactly that dataset" "LOAD fda_recalls --force" "$(dl tpch --force fda_recalls | grep '^LOAD')"
-check "<dataset> --force, the other order, too" "LOAD fda_recalls --force" "$(dl tpch fda_recalls --force | grep '^LOAD')"
+check "--force <dataset> reloads exactly that dataset" "LOAD pharma_trials --force" "$(dl tpch --force pharma_trials | grep '^LOAD')"
+check "<dataset> --force, the other order, too" "LOAD pharma_trials --force" "$(dl tpch pharma_trials --force | grep '^LOAD')"
 check "bare --force still reloads the bundled sample" "LOAD tpch(sample) --force" "$(dl tpch --force | grep '^LOAD')"
-check "a dataset id wins over EXAKIT_DATA_FILE in the environment" "LOAD fda_recalls " \
-    "$(EXAKIT_DATA_FILE="$WORK" dl fda_recalls fda_recalls | grep -E '^(LOAD|MENU)')"
+check "a dataset id wins over EXAKIT_DATA_FILE in the environment" "LOAD pharma_trials " \
+    "$(EXAKIT_DATA_FILE="$WORK" dl pharma_trials pharma_trials | grep -E '^(LOAD|MENU)')"
 check "...and over EXAKIT_DATASETS" "LOAD energy " "$(EXAKIT_DATASETS=tpch dl "tpch energy" energy | grep -E '^(LOAD|MENU)')"
-out="$(dl tpch fda_recalls)"
-has "an id already loaded names the reload command for it" "exakit data-load --force fda_recalls" "$out"
+out="$(dl tpch pharma_trials)"
+has "an id already loaded names the reload command for it" "exakit data-load --force pharma_trials" "$out"
 has "two targets are refused" "REJECT: data-load takes one file, folder or dataset at a time" "$(dl tpch tpch energy)"
 has "--force with a file is refused, with the file's own answer" "EXAKIT_ON_EXISTING=replace" "$(dl tpch --force "$WORK")"
 has "an unknown option is refused" "REJECT: Unknown option '--nope'" "$(dl tpch --nope)"

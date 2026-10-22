@@ -2879,11 +2879,152 @@ exakit_bundled_datasets() {
         _bdr_order="$(_exakit_dataset_conf_get order "$_bdr_conf")"
         _bdr_schema="$(_exakit_dataset_conf_get schema "$_bdr_conf")"
         [ -n "$_bdr_id" ] && [ -n "$_bdr_label" ] || continue
+        # A dataset that will be downloaded says how big the download is, in
+        # every list that offers it ("... - 3.9 MB download").
+        _bdr_note="$(exakit_dataset_download_note "${_bdr_conf%/dataset.conf}")"
+        [ -n "$_bdr_note" ] && _bdr_label="$_bdr_label - $_bdr_note"
         [ -n "$_bdr_flag" ] || _bdr_flag="data.datasets.${_bdr_id}.loaded"
         [ -n "$_bdr_schema" ] || _bdr_schema="$(printf '%s' "$_bdr_id" | tr '[:lower:]' '[:upper:]')"
         case "$_bdr_order" in ''|*[!0-9]*) _bdr_order=50 ;; esac
         printf '%s|%s|%s|%s|%s|%s\n' "$_bdr_order" "$_bdr_id" "$_bdr_label" "$_bdr_flag" "$_bdr_markers" "$_bdr_schema"
     done | sort -t'|' -n -k1,1 | cut -d'|' -f2-
+}
+
+# --- reference datasets: CSVs from a checksummed release asset ---------------
+# A reference dataset (pharma_trials, banking_complaints) keeps its CSVs in git
+# but not in the kit archive users download (.gitattributes, export-ignore):
+# they ship as one deterministic <id>-<snapshot>.tar.gz per dataset, a release
+# asset whose SHA-256, size and URL are in the dataset's manifest.json
+# ("asset", written by tools/datasets/package.py). The decisions and the checks
+# live in ONE place both twins call, setup/lib/dataset_asset.py; the download
+# stays here, with curl's proxy and TLS handling (fetch). Twin:
+# Get-ExakitDatasetFiles in exapump.ps1.
+#
+#   EXAKIT_DATASETS_MIRROR  a folder (or file:// or https:// base URL) holding
+#                           <id>-<snapshot>.tar.gz: an offline or internal copy
+#   EXAKIT_DATASETS_REPO    owner/name whose release holds the asset (default:
+#                           the repository this kit was installed from)
+
+# _exakit_dataset_asset_field <manifest.json> <key> — one value of the asset
+# block, read without Python (the listing calls this for every dataset).
+# manifest.json is written by package.py, one key per line.
+_exakit_dataset_asset_field() {
+    [ -f "$1" ] || return 1
+    awk -v k="\"$2\":" '
+        /"asset": *\{/ { a = 1; next }
+        a && /^ *\}/   { exit }
+        a && index($0, k) { sub(/^[^:]*: */, ""); gsub(/[",]/, ""); print; exit }
+    ' "$1"
+}
+
+# exakit_dataset_download_note <dataset-dir> — "3.9 MB download" when loading
+# the dataset would download its asset, else nothing: no asset block, CSVs in
+# the kit copy (a checkout), or an extraction already verified in the cache.
+exakit_dataset_download_note() {
+    _ddn_sha="$(_exakit_dataset_asset_field "$1/manifest.json" sha256 2>/dev/null)"
+    [ -n "$_ddn_sha" ] || return 0
+    for _ddn_csv in "$1"/data/*.csv; do
+        [ -f "$_ddn_csv" ] && return 0
+    done
+    [ -f "$EXAKIT_CACHE_DIR/datasets/$(basename "$1")/$_ddn_sha/.verified" ] && return 0
+    _ddn_size="$(_exakit_dataset_asset_field "$1/manifest.json" size 2>/dev/null)"
+    case "$_ddn_size" in ''|*[!0-9]*) return 0 ;; esac
+    awk -v b="$_ddn_size" 'BEGIN { m = b / 1000000; if (m < 0.1) m = 0.1; printf "%.1f MB download\n", m }'
+}
+
+# exakit_dataset_files <kit_root> <dataset-dir> <id> — set
+# EXAKIT_DATASET_DATA_DIR to the folder holding the dataset's verified CSVs.
+# Returns 1 with the reason in EXAKIT_DATASET_FETCH_ERROR (one line, for die)
+# when they cannot be had: offline with nothing cached, a digest that does not
+# match, an archive that is unsafe. Nothing is loaded from a file that failed a
+# check, and a failed download is never cached.
+EXAKIT_DATASET_DATA_DIR=""
+EXAKIT_DATASET_FETCH_ERROR=""
+exakit_dataset_files() {
+    _edf_root="$1"; _edf_dir="$2"; _edf_id="$3"
+    EXAKIT_DATASET_DATA_DIR="$_edf_dir/data"
+    EXAKIT_DATASET_FETCH_ERROR=""
+    # No asset block: the kit copy, exactly as before - and no Python started.
+    grep -q '"asset"' "$_edf_dir/manifest.json" 2>/dev/null || return 0
+    _edf_py="$_edf_root/setup/lib/dataset_asset.py"
+    _edf_cache="$EXAKIT_CACHE_DIR/datasets"
+    _edf_plan="$(run_python_any "$_edf_py" resolve "$_edf_dir" "$_edf_cache" 2>>"${EXAKIT_LOG_FILE:-/dev/null}")" || _edf_plan=""
+    _edf_tab="$(printf '\t')"
+    case "$_edf_plan" in
+        kit) return 0 ;;
+        "dir$_edf_tab"*)
+            EXAKIT_DATASET_DATA_DIR="${_edf_plan#dir$_edf_tab}"
+            _exakit_log_file "INFO  $_edf_id: verified CSVs in $EXAKIT_DATASET_DATA_DIR"
+            return 0 ;;
+        "fetch$_edf_tab"*) ;;
+        *)
+            EXAKIT_DATASET_FETCH_ERROR="Could not read the '$_edf_id' dataset's manifest (a Python 3 is needed; details: exakit logs setup)."
+            return 1 ;;
+    esac
+    IFS="$_edf_tab" read -r _edf_word _edf_file _edf_sha _edf_size _edf_url <<EXAKIT_EDF_EOF
+$_edf_plan
+EXAKIT_EDF_EOF
+    : "$_edf_word" "$_edf_sha"
+    # owner/name only: the value lands in a URL.
+    _edf_repo="${EXAKIT_DATASETS_REPO:-${EXAKIT_KIT_REPO:-exasol-labs/exasol-personal-local-starterkit}}"
+    case "$_edf_repo" in
+        */*/*|/*|*/|*[!A-Za-z0-9._/-]*)
+            EXAKIT_DATASET_FETCH_ERROR="EXAKIT_DATASETS_REPO must be owner/name (got '$_edf_repo')."
+            return 1 ;;
+        */*) ;;
+        *)
+            EXAKIT_DATASET_FETCH_ERROR="EXAKIT_DATASETS_REPO must be owner/name (got '$_edf_repo')."
+            return 1 ;;
+    esac
+    _edf_src="$(printf '%s' "$_edf_url" | sed "s|{repo}|$_edf_repo|")"
+    _edf_local=""
+    if [ -n "${EXAKIT_DATASETS_MIRROR:-}" ]; then
+        case "$EXAKIT_DATASETS_MIRROR" in
+            https://*) _edf_src="${EXAKIT_DATASETS_MIRROR%/}/$_edf_file" ;;
+            file://*)  _edf_local="${EXAKIT_DATASETS_MIRROR#file://}"; _edf_local="${_edf_local%/}/$_edf_file"; _edf_src="$_edf_local" ;;
+            *://*)
+                EXAKIT_DATASET_FETCH_ERROR="EXAKIT_DATASETS_MIRROR must be a folder, a file:// URL or an https:// URL (got '$EXAKIT_DATASETS_MIRROR')."
+                return 1 ;;
+            *)         _edf_local="${EXAKIT_DATASETS_MIRROR%/}/$_edf_file"; _edf_src="$_edf_local" ;;
+        esac
+    fi
+    _edf_mb="$(awk -v b="$_edf_size" 'BEGIN { m = b / 1000000; if (m < 0.1) m = 0.1; printf "%.1f MB", m }')"
+    mkdir -p "$_edf_cache/$_edf_id" 2>/dev/null
+    _edf_part="$_edf_cache/$_edf_id/$_edf_file.part"
+    rm -f "$_edf_part"
+    if [ -n "${EXAKIT_TABLE_ROW:-}" ] && [ -n "${EXAKIT_TABLE_STATE:-}" ]; then
+        ui_table_set "$EXAKIT_TABLE_STATE" "$EXAKIT_TABLE_ROW" running 0 1 10 "$_edf_id · downloading $_edf_mb"
+        _exakit_log_file "INFO  Downloading the '$_edf_id' data ($_edf_mb) from $_edf_src"
+    else
+        info "Downloading the '$_edf_id' data ($_edf_mb, checked against its SHA-256)"
+        _exakit_log_file "INFO  from $_edf_src"
+    fi
+    if [ -n "$_edf_local" ]; then
+        cp "$_edf_local" "$_edf_part" 2>>"${EXAKIT_LOG_FILE:-/dev/null}" || rm -f "$_edf_part"
+    else
+        EXAKIT_ACTIVE_LABEL="Downloading the '$_edf_id' data ($_edf_mb)"
+        fetch_quiet "$_edf_src" "$_edf_part" || rm -f "$_edf_part"
+        EXAKIT_ACTIVE_LABEL=""
+    fi
+    if [ ! -s "$_edf_part" ]; then
+        rm -f "$_edf_part"
+        EXAKIT_DATASET_FETCH_ERROR="The '$_edf_id' data could not be fetched from $_edf_src and nothing is cached. Retry when online, or set EXAKIT_DATASETS_MIRROR to a folder or URL holding $_edf_file."
+        return 1
+    fi
+    _edf_err="$(mktemp "${TMPDIR:-/tmp}/exakit-asset.XXXXXX")" || _edf_err="/dev/null"
+    _edf_plan="$(run_python_any "$_edf_py" install "$_edf_dir" "$_edf_cache" "$_edf_part" 2>"$_edf_err")"
+    _edf_rc=$?
+    _edf_why="$(tail -n 1 "$_edf_err" 2>/dev/null)"
+    [ "$_edf_err" = /dev/null ] || { cat "$_edf_err" >> "${EXAKIT_LOG_FILE:-/dev/null}" 2>/dev/null; rm -f "$_edf_err"; }
+    rm -f "$_edf_part"
+    case "$_edf_rc:$_edf_plan" in
+        "0:dir$_edf_tab"*)
+            EXAKIT_DATASET_DATA_DIR="${_edf_plan#dir$_edf_tab}"
+            _exakit_log_file "OK    $_edf_id: $_edf_file verified (SHA-256) and cached in $EXAKIT_DATASET_DATA_DIR"
+            return 0 ;;
+    esac
+    EXAKIT_DATASET_FETCH_ERROR="The '$_edf_id' data from $_edf_src was refused: ${_edf_why:-it could not be verified}"
+    return 1
 }
 
 # exakit_db_reachable — can we run SQL right now?
@@ -3188,9 +3329,23 @@ exakit_load_dataset_dir() {
     # IS the narration now (see _exakit_dataset_progress). Nothing is lost —
     # every suppressed line still goes to the logfile, including the per-table
     # row counts, and a FAILED verification still prints in full.
+    # Which row of the table this dataset owns, if a table is on screen. Empty
+    # means there is none, and the single-line bar takes over.
+    EXAKIT_TABLE_ROW=""
+    if [ "${EXAKIT_TABLE_LIVE:-0}" = 1 ]; then
+        EXAKIT_TABLE_ROW="$(exakit_data_table_row "$_ld_id")"
+        [ "$EXAKIT_TABLE_ROW" = "0" ] && EXAKIT_TABLE_ROW=""
+    fi
+    # Where the CSVs come from. A reference dataset's ship as a checksummed
+    # release asset, not in the kit archive: the kit copy when it is there and
+    # matches the manifest, else the verified cache, else a download that is
+    # checked before anything is loaded (exakit_dataset_files). Every other
+    # dataset reads its own data/ as it always has.
+    exakit_dataset_files "$_ld_kit_root" "$_ld_dir" "$_ld_id" || die "$EXAKIT_DATASET_FETCH_ERROR"
+    _ld_data="$EXAKIT_DATASET_DATA_DIR"
     _ld_bytes=0
     _ld_files=0
-    for _ld_csv in "$_ld_dir"/data/*.csv; do
+    for _ld_csv in "$_ld_data"/*.csv; do
         [ -s "$_ld_csv" ] || continue
         _ld_bytes=$(( _ld_bytes + $(exakit_load_weight_of "$_ld_csv") ))
     done
@@ -3205,13 +3360,6 @@ exakit_load_dataset_dir() {
     _ld_t0="$(date +%s 2>/dev/null || echo 0)"
     _ld_state="$(mktemp "${TMPDIR:-/tmp}/exakit-load.XXXXXX")" || \
         die "Could not create a temporary file for the load progress."
-    # Which row of the table this dataset owns, if a table is on screen. Empty
-    # means there is none, and the single-line bar takes over.
-    EXAKIT_TABLE_ROW=""
-    if [ "${EXAKIT_TABLE_LIVE:-0}" = 1 ]; then
-        EXAKIT_TABLE_ROW="$(exakit_data_table_row "$_ld_id")"
-        [ "$EXAKIT_TABLE_ROW" = "0" ] && EXAKIT_TABLE_ROW=""
-    fi
     EXAKIT_UPLOAD_QUIET=1
     export EXAKIT_UPLOAD_QUIET
     exakit_load_step "$_ld_state" "$_ld_done_w" "$_ld_nominal" "$_ld_total_w" 2 \
@@ -3243,7 +3391,7 @@ exakit_load_dataset_dir() {
     # lever left: exapump upload cannot target more than one table per call,
     # and the server refuses IMPORT of local files over this protocol.
     _ld_csvs=""
-    for _ld_csv in "$_ld_dir"/data/*.csv; do
+    for _ld_csv in "$_ld_data"/*.csv; do
         [ -s "$_ld_csv" ] || continue
         _ld_table="$(basename "$_ld_csv" .csv | tr '[:lower:]' '[:upper:]')"
         _ld_tables="$_ld_tables $_ld_table"
@@ -3618,8 +3766,10 @@ exakit_data_table_build() {
             # the name: a suffix there was cut off on an 80-column terminal.
             _dtb_for="$(printf '%s\n' "$_dtb_hints" | sed -n "s/^${_dtb_id}|//p" | head -n 1)"
             [ -n "$_dtb_for" ] && EXAKIT_TABLE_HAS_FOR=1
+            # A download size the label ends with stays: it is not an estimate
+            # of the rows, it is what loading the row will cost.
             printf '%s|%s|1|idle|||||| |%s\n' "$_dtb_kind" \
-                "$(printf '%s' "$_dtb_label" | sed 's/ *([^()]*)$//')" "$_dtb_for" >> "$_dtb_f"
+                "$(printf '%s' "$_dtb_label" | sed 's/ *([^()]*)\( - [0-9.]* MB download\)\{0,1\}$/\1/')" "$_dtb_for" >> "$_dtb_f"
             EXAKIT_TABLE_IDS="$EXAKIT_TABLE_IDS$_dtb_id
 "
             _dtb_n=$(( _dtb_n + 1 ))

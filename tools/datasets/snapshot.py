@@ -2,6 +2,8 @@
 
 A reference dataset (data/README.md, "Reference datasets") ships its CSVs with a manifest.json that records the source,
 the terms, the snapshot date and the rows and SHA-256 of every file; tools/dataset_check.py checks the files against it.
+A rebuild writes a manifest without the release asset its old CSVs made: run tools/datasets/package.py next, then
+upload the new archive (data/README.md, "How a reference dataset reaches the database").
 """
 
 from __future__ import annotations

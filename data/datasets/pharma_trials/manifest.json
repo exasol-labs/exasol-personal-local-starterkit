@@ -16,6 +16,13 @@
     "confirmed": false
   },
   "snapshot": "2026-10-20",
+  "asset": {
+    "file": "pharma_trials-2026-10-20.tar.gz",
+    "sha256": "1c0934c4786ba216512c3ee360cc5ddf04d6ac28600cba67f4f5cea212a1fe0d",
+    "size": 3904755,
+    "tar_sha256": "43e2e7cac1bf8c5c985e07e6d0ad75ad0405b352800898ed95e85b4d79924bde",
+    "url": "https://github.com/{repo}/releases/download/datasets-pharma_trials-2026-10-20/pharma_trials-2026-10-20.tar.gz"
+  },
   "files": {
     "data/pharma_conditions.csv": {
       "rows": 7291,

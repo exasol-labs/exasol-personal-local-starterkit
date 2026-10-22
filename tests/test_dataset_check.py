@@ -4,6 +4,8 @@ dataset builders (tools/datasets) keep to their text rule and write exactly the 
 
 from __future__ import annotations
 
+import hashlib
+import json
 import shutil
 import sys
 import tempfile
@@ -196,7 +198,7 @@ class BuilderTest(unittest.TestCase):
     def test_each_builder_writes_the_tables_and_columns_the_dataset_ships(self):
         import csv
         import importlib
-        for builder in ("pharma_trials", "banking_complaints", "fda_recalls", "bank_marketing"):
+        for builder in ("pharma_trials", "banking_complaints"):
             folder = ROOT / "data" / "datasets" / builder
             built = importlib.import_module(builder).TABLES
             schema = dataset_check.tables(folder)
@@ -208,17 +210,298 @@ class BuilderTest(unittest.TestCase):
                 self.assertEqual(built, schema)
                 self.assertEqual(built, shipped)
 
-    def test_fda_names_fit_their_columns_whole(self):
+
+DESCRIPTOR = """schema_version: 1
+id: edge_demo
+fact_table: EDGE_DEMO.EDGE_ITEMS
+roles:
+  entity:   {table: EDGE_DEMO.EDGE_ITEMS, column: ITEM_ID}
+  category: {table: EDGE_DEMO.EDGE_ITEMS, column: NAME}
+  date:     {table: EDGE_DEMO.EDGE_ITEMS, column: ADDED_ON}
+  label:    {table: EDGE_DEMO.EDGE_ITEMS, column: FLAG}
+  text:     [{table: EDGE_DEMO.EDGE_ITEMS, column: NOTE}]
+"""
+REF_CREATE = CREATE.replace("    ADDED_ON DATE,", "    ADDED_ON DATE,\n    FLAG     DECIMAL(1,0),\n    NOTE     VARCHAR(20),")
+REF_CSV = "ITEM_ID,NAME,ADDED_ON,FLAG,NOTE\n1,a,2024-01-01,0,x\n2,b,2024-01-02,1,y\n3,c,2024-01-03,0,z\n"
+README = """# edge_demo
+
+## Data dictionary
+
+`EDGE_ITEMS`: `ITEM_ID`, `NAME`, `ADDED_ON`, `FLAG`, `NOTE`.
+
+## The descriptor
+
+[`descriptor.yaml`](descriptor.yaml)
+"""
+EXAMPLES = "-- examples.sql - header, not a question.\n\n" + "\n".join(
+    f"-- {n}. Question {n}?\nSELECT COUNT(*) FROM EDGE_DEMO.EDGE_ITEMS WHERE ITEM_ID > {n};\n" for n in range(1, 11))
+
+
+class ReferenceTest(unittest.TestCase):
+    """AC-DS2.2 offline: a reference dataset has a README with a data dictionary, at least ten example questions with
+    reference SQL, a descriptor that validates, a manifest with source, terms, snapshot and rows - and an asset block
+    that is the archive its CSVs make (tools/datasets/package.py)."""
+
+    def setUp(self) -> None:
+        sys.path.insert(0, str(ROOT / "tools" / "datasets"))
+        import package
+        self.package = package
+        self.folder = Folder()
+        self.addCleanup(self.folder.close)
+        self.dist = Path(self.folder.tmp) / "dist"
+        patch = mock.patch.object(package, "DIST", self.dist)
+        patch.start()
+        self.addCleanup(patch.stop)
+        f = self.folder.path
+        (f / "01_create_schema.sql").write_text(REF_CREATE)
+        self.folder.csv.write_text(REF_CSV)
+        (f / "descriptor.yaml").write_text(DESCRIPTOR)
+        (f / "README.md").write_text(README)
+        (f / "examples.sql").write_text(EXAMPLES)
+        dataset_check.write_manifest(f)
+        manifest = json.loads((f / "manifest.json").read_text())
+        manifest.update(source={"name": "Edge", "url": "https://example.org"}, snapshot="2026-01-02",
+                        terms={"url": "https://example.org/terms", "summary": "free", "confirmed": True})
+        (f / "manifest.json").write_text(json.dumps(manifest, indent=2))
+        self.asset = package.package(f, self.dist)
+
+    def problems(self) -> str:
+        return " | ".join(dataset_check.check(self.folder.path))
+
+    def manifest(self, **changes) -> None:
+        path = self.folder.path / "manifest.json"
+        doc = json.loads(path.read_text())
+        doc.update(changes)
+        path.write_text(json.dumps(doc, indent=2))
+
+    def test_a_complete_reference_dataset_passes(self):
+        self.assertEqual(self.problems(), "")
+
+    def test_the_data_dictionary_names_every_column(self):
+        (self.folder.path / "README.md").write_text(README.replace(", `NOTE`", ""))
+        self.assertIn("the data dictionary does not name EDGE_ITEMS.NOTE", self.problems())
+        (self.folder.path / "README.md").write_text("# edge_demo\n")
+        self.assertIn("no '## Data dictionary' section", self.problems())
+
+    def test_every_example_has_a_question_and_there_are_ten(self):
+        (self.folder.path / "examples.sql").write_text(EXAMPLES.replace("-- 4. Question 4?\n", ""))
+        self.assertIn("query 4 has no question", self.problems())
+        (self.folder.path / "examples.sql").write_text(EXAMPLES.split("-- 10.")[0])
+        self.assertIn("examples.sql has 9 queries", self.problems())
+
+    def test_the_manifest_names_source_terms_snapshot_and_rows(self):
+        self.manifest(terms={"url": "https://x", "summary": "y"})
+        self.assertIn("terms.confirmed must be true or false", self.problems())
+        self.manifest(source={"url": "https://x"})
+        self.assertIn("source.name is missing", self.problems())
+        self.manifest(snapshot="last week")
+        self.assertIn("snapshot must be a date", self.problems())
+
+    def test_the_asset_is_the_archive_these_csvs_make(self):
+        self.folder.csv.write_text(REF_CSV + "4,d,2024-01-04,0,w\n")
+        dataset_check.write_manifest(self.folder.path)         # files updated, the asset not
+        self.assertIn("tar_sha256 differs", self.problems())
+        self.package.package(self.folder.path, self.dist)
+        self.assertEqual(self.problems(), "")
+
+    def test_the_asset_block_is_required_and_well_formed(self):
+        path = self.folder.path / "manifest.json"
+        doc = json.loads(path.read_text())
+        asset = dict(doc["asset"])
+        self.manifest(asset=dict(asset, url="http://example.org/" + asset["file"]))
+        self.assertIn("asset.url must be", self.problems())
+        self.manifest(asset=dict(asset, file="other.tar.gz"))
+        self.assertIn("asset.file must be edge_demo-2026-01-02.tar.gz", self.problems())
+        self.manifest(asset=dict(asset, sha256="nope"))
+        self.assertIn("asset.sha256 is not a SHA-256", self.problems())
+        doc.pop("asset")
+        path.write_text(json.dumps(doc))
+        self.assertIn("has no asset block", self.problems())
+
+    def test_a_locally_built_archive_must_be_the_one_named(self):
+        archive = self.dist / self.asset["file"]
+        archive.write_bytes(archive.read_bytes() + b"x")
+        self.assertIn("is not the archive manifest.json names", self.problems())
+        archive.unlink()
+        self.assertEqual(self.problems(), "")                # no local build: the CSVs alone decide
+
+    def test_the_archive_is_deterministic(self):
+        import gzip
+        import tarfile
+        first = (self.dist / self.asset["file"]).read_bytes()
+        again = self.package.package(self.folder.path, self.dist)
+        self.assertEqual(first, (self.dist / again["file"]).read_bytes())
+        self.assertEqual(self.asset, again)
+        self.assertEqual(first[4:8], b"\0\0\0\0")             # gzip header mtime 0
+        with tarfile.open(self.dist / self.asset["file"]) as tar:
+            members = tar.getmembers()
+        self.assertEqual([m.name for m in members], ["data/edge_items.csv"])
+        self.assertEqual({(m.uid, m.gid, m.uname, m.gname, m.mode) for m in members}, {(0, 0, "", "", 0o644)})
+        self.assertEqual(hashlib.sha256(gzip.decompress(first)).hexdigest(), self.asset["tar_sha256"])
+
+    def test_package_refuses_a_manifest_that_does_not_match(self):
+        self.folder.csv.write_text(REF_CSV + "4,d,2024-01-04,0,w\n")
+        with self.assertRaises(ValueError):
+            self.package.package(self.folder.path, self.dist)
+
+    def test_the_example_questions_are_read_as_written(self):
+        found = dataset_check.example_questions(EXAMPLES)
+        self.assertEqual(len(found), 10)
+        self.assertEqual(found[0], ("1. Question 1?", "SELECT COUNT(*) FROM EDGE_DEMO.EDGE_ITEMS WHERE ITEM_ID > 1"))
+
+    def test_the_shipped_reference_datasets_have_ten_questions_each(self):
+        for name in ("pharma_trials", "banking_complaints"):
+            with self.subTest(dataset=name):
+                found = dataset_check.example_questions((ROOT / "data" / "datasets" / name / "examples.sql").read_text())
+                self.assertGreaterEqual(len(found), 10)
+                self.assertTrue(all(q for q, _sql in found))
+
+
+class DescriptorDocsTest(unittest.TestCase):
+    """AC-DS2.3: data/README.md documents the descriptor with one example per reference dataset and one for a user's
+    own file - and every example there is a descriptor that validates, the reference ones the very files shipped."""
+
+    def test_every_yaml_example_validates_and_the_reference_ones_are_the_shipped_files(self):
         import re
-        import fda_recalls
-        sql = (ROOT / "data" / "datasets" / "fda_recalls" / "01_create_schema.sql").read_text(encoding="utf-8")
-        widths = {m.group(1): int(m.group(2)) for m in re.finditer(r"^\s+(\w+)\s+VARCHAR\((\d+)\)", sql, re.M)}
-        self.assertEqual(fda_recalls.WIDTH, {c: widths[c] for c in fda_recalls.WIDTH})
-        for column, limit in fda_recalls.TEXT.items():
-            self.assertLessEqual(limit, widths[column], column)
-        self.assertEqual(fda_recalls._name("FIRM_STATE", "N/A"), "")
-        with self.assertRaises(SystemExit):
-            fda_recalls._name("RECALL_STATUS", "x" * 21)
+        from descriptor_rules import parse_descriptor, read_descriptor
+        text = (ROOT / "data" / "README.md").read_text(encoding="utf-8")
+        examples = [parse_descriptor(block, "data/README.md") for block in re.findall(r"```yaml\n(.*?)```", text, re.DOTALL)]
+        ids = [d.id for d in examples]
+        self.assertIn("pharma_trials", ids)
+        self.assertIn("banking_complaints", ids)
+        self.assertTrue(any(d.id not in ("pharma_trials", "banking_complaints") and d.source is None for d in examples),
+                        "an example for a user's own file")
+        self.assertTrue(any(d.source for d in examples), "an example with the optional source key")
+        for d in examples:
+            if d.id in ("pharma_trials", "banking_complaints"):
+                with self.subTest(dataset=d.id):
+                    self.assertEqual(d, read_descriptor(ROOT / "data" / "datasets" / d.id))
+
+
+class LiveReferenceTest(unittest.TestCase):
+    """The live check runs every example query of a reference dataset and wants rows back from each."""
+
+    def test_every_example_runs_and_an_empty_answer_is_a_problem(self):
+        class Answering(FakePump):
+            def sql(self, text, what):
+                self.calls.append(what)
+                if what.startswith("examples.sql query"):
+                    return "N\n0\n" if "> 3" not in text else ""
+                return super().sql(text, what)
+
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, folder)
+        (folder / "examples.sql").write_text(EXAMPLES)
+        pump, report = Answering(), dataset_live.Report()
+        dataset_live._run_examples(pump, folder, report)
+        self.assertEqual(sum(1 for c in pump.calls if c.startswith("examples.sql query")), 10)
+        self.assertEqual(report.problems, ["examples.sql query 3: returned no rows"])
+
+    def test_the_reference_check_reads_the_label_from_the_descriptor(self):
+        class Database(FakePump):
+            def sql(self, text, what):
+                self.calls.append(what)
+                if what == "reading the columns":
+                    return "T,C\n" + "".join(f"EDGE_DEMO.EDGE_ITEMS,{c}\n" for c in ("ITEM_ID", "NAME", "ADDED_ON", "FLAG", "NOTE"))
+                if what == "reading the label":
+                    return "V\n0\n1\n"
+                if what.startswith("examples.sql query"):
+                    return "N\n1\n"
+                return super().sql(text, what)
+
+        folder = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, folder)
+        (folder / "descriptor.yaml").write_text(DESCRIPTOR)
+        (folder / "examples.sql").write_text(EXAMPLES)
+        report = dataset_live.Report()
+        dataset_live._check_reference(Database(), folder, report)
+        self.assertEqual(report.problems, [])
+        self.assertIn("examples.sql: all 10 queries ran and returned rows", report.passed)
+
+
+class AssetServiceTest(unittest.TestCase):
+    """setup/lib/dataset_asset.py, the extraction both twins call: only plain data/<name>.csv members the manifest
+    lists, each once, all of them, each with its digest - anything else is refused and nothing is cached."""
+
+    def setUp(self) -> None:
+        sys.path.insert(0, str(ROOT / "setup" / "lib"))
+        import dataset_asset
+        self.service = dataset_asset
+        self.tmp = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.tmp)
+        self.folder = self.tmp / "demo"
+        (self.folder / "data").mkdir(parents=True)
+        self.cache = self.tmp / "cache"
+        self.body = b"A,B\n1,2\n"
+
+    def archive(self, members) -> Path:
+        """An archive of (name, kind) members and a manifest that trusts it (right digest, files listed)."""
+        import io
+        import tarfile
+        path = self.tmp / "demo.tar.gz"
+        with tarfile.open(path, "w:gz") as tar:
+            for name, kind in members:
+                info = tarfile.TarInfo(name)
+                if kind == "file":
+                    info.size = len(self.body)
+                    tar.addfile(info, io.BytesIO(self.body))
+                elif kind == "hardlink":
+                    info.type, info.linkname = tarfile.LNKTYPE, "data/a.csv"
+                    tar.addfile(info)
+                elif kind == "fifo":
+                    info.type = tarfile.FIFOTYPE
+                    tar.addfile(info)
+        digest = hashlib.sha256(self.body).hexdigest()
+        (self.folder / "manifest.json").write_text(json.dumps({
+            "id": "demo", "snapshot": "2026-01-02",
+            "asset": {"file": "demo.tar.gz", "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                      "size": path.stat().st_size, "url": "https://github.com/{repo}/x/demo.tar.gz"},
+            "files": {"data/a.csv": {"rows": 1, "sha256": digest}, "data/b.csv": {"rows": 1, "sha256": digest}}}))
+        return path
+
+    def install(self, members):
+        try:
+            return self.service.install(self.folder, self.cache, self.archive(members))
+        except self.service.Refused as err:
+            return f"refused {err.code}: {err}"
+
+    def test_a_good_archive_is_cached_and_then_reused(self):
+        found = self.install([("data/a.csv", "file"), ("data/b.csv", "file")])
+        self.assertTrue(found.startswith("dir\t"), found)
+        self.assertEqual(self.service.resolve(self.folder, self.cache), found)
+        self.assertFalse((self.tmp / "demo.tar.gz").exists())          # the download is deleted once used
+
+    def test_unsafe_or_unlisted_members_are_refused(self):
+        cases = {
+            "../x.csv": [("data/a.csv", "file"), ("../x.csv", "file")],
+            "/abs.csv": [("/abs.csv", "file")],
+            "hardlink": [("data/a.csv", "file"), ("data/b.csv", "hardlink")],
+            "fifo": [("data/a.csv", "fifo")],
+            "unlisted": [("data/a.csv", "file"), ("data/c.csv", "file")],
+            "twice": [("data/a.csv", "file"), ("data/a.csv", "file")],
+            "missing": [("data/a.csv", "file")],
+        }
+        for case, members in cases.items():
+            with self.subTest(case=case):
+                shutil.rmtree(self.cache, ignore_errors=True)
+                found = self.install(members)
+                self.assertTrue(found.startswith("refused 4"), found)
+                self.assertEqual(list((self.cache / "demo").iterdir()) if (self.cache / "demo").exists() else [], [])
+                self.assertFalse((self.tmp / "x.csv").exists())
+
+    def test_a_wrong_digest_is_refused_before_anything_is_read(self):
+        path = self.archive([("data/a.csv", "file"), ("data/b.csv", "file")])
+        path.write_bytes(path.read_bytes() + b"x")
+        with self.assertRaises(self.service.Refused) as caught:
+            self.service.install(self.folder, self.cache, path)
+        self.assertEqual(caught.exception.code, 3)
+        self.assertFalse(path.exists())
+        self.assertFalse((self.cache / "demo").exists() and any((self.cache / "demo").iterdir()))
+
+    def test_without_an_asset_block_the_kit_copy_is_used(self):
+        (self.folder / "manifest.json").write_text(json.dumps({"id": "demo", "files": {}}))
+        self.assertEqual(self.service.resolve(self.folder, self.cache), "kit")
+        self.assertEqual(self.service.resolve(self.tmp / "no-such", self.cache), "kit")
 
 
 if __name__ == "__main__":

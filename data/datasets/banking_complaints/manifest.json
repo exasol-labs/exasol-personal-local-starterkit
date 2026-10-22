@@ -21,6 +21,13 @@
     "confirmed": false
   },
   "snapshot": "2026-10-20",
+  "asset": {
+    "file": "banking_complaints-2026-10-20.tar.gz",
+    "sha256": "af96831b1ab51e153f9c7277e9adc8b23d02ecd9239bcc850cfc58bb812d95ce",
+    "size": 139875,
+    "tar_sha256": "230767db89db98caeb9f58ae9062acab5ec26f705a8878e77e562b280bd1f130",
+    "url": "https://github.com/{repo}/releases/download/datasets-banking_complaints-2026-10-20/banking_complaints-2026-10-20.tar.gz"
+  },
   "files": {
     "data/banking_complaints.csv": {
       "rows": 6754,

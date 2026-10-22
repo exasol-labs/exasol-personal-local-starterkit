@@ -29,3 +29,12 @@ versions.json text eol=lf
 # export-ignore keeps it in the repo (browsable, cloneable, linkable) while
 # dropping it from the archive GitHub builds with `git archive`.
 static/*.mp4 export-ignore
+
+# The reference datasets' CSVs (pharma_trials, banking_complaints) stay in the
+# repo - they are what the builders in tools/datasets produce, and a reviewer
+# reads them - but they are not part of the archive users install: exakit
+# data-load downloads them as one checksummed release asset per dataset
+# (manifest.json "asset", tools/datasets/package.py). A checkout still loads
+# them from here when their digests match the manifest.
+data/datasets/pharma_trials/data export-ignore
+data/datasets/banking_complaints/data export-ignore

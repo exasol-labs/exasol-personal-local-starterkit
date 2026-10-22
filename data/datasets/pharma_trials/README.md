@@ -10,7 +10,9 @@ them (17.7%) were terminated.
 exakit data-load pharma_trials
 ```
 
-It loads into the `PHARMA` schema in a few seconds (12.8 MB of CSV).
+It loads into the `PHARMA` schema in a few seconds (12.8 MB of CSV). An installed
+kit downloads the CSVs first, as one checksummed archive of 3.9 MB (see
+[Download](#download)).
 
 ## Tables
 
@@ -59,7 +61,7 @@ terminations; never use it as a model feature.
 
 ## The descriptor
 
-[`descriptor.json`](descriptor.json) tells the persona notebooks which column
+[`descriptor.yaml`](descriptor.yaml) tells the persona notebooks which column
 plays each role:
 
 | Role | Column | Why |
@@ -98,3 +100,18 @@ questions (summaries and eligibility criteria).
   month-only date is the first of that month;
   trials without a summary are left out (none in this snapshot); nothing else
   is changed.
+
+## Download
+
+The CSVs are in this folder in the repository, but not in the kit archive the
+installer downloads: `exakit data-load pharma_trials` fetches them as one
+release asset, `pharma_trials-<snapshot>.tar.gz`, whose SHA-256, size and URL
+are in [`manifest.json`](manifest.json) (`asset`). The archive is checked
+against that digest and every CSV against its own before anything is loaded,
+and the verified files are kept under
+`~/.exasol-starter-kit/cache/datasets/pharma_trials/`, so a reload does not
+download again. A checkout of the repository loads the CSVs here directly when
+they match the manifest. Offline, point `EXAKIT_DATASETS_MIRROR` at a folder (or
+an `https://` URL) holding the archive. `python3 tools/datasets/package.py
+pharma_trials` rebuilds the archive (the same CSVs give the same bytes) and the
+manifest's `asset` block.

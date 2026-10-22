@@ -149,7 +149,7 @@ def _check_reference(pump: Pump, folder: Path, report: Report) -> None:
     report.problems += [f"descriptor: the database has no column for {m}" for m in missing]
     if missing:
         return
-    fact, label = doc["fact_table"], doc["roles"]["label"]["column"]
+    fact, label = descriptor.fact_table, descriptor.column("label").column
     values = {r["V"] for r in pump.rows(f"SELECT DISTINCT CAST({label} AS VARCHAR(100)) AS V FROM {fact} WHERE {label} IS NOT NULL", "reading the label")}
     if not values or not values <= {"0", "1"}:
         report.problems.append(f"descriptor: the label {label} must be 0 or 1, found {sorted(values)[:5] or 'no values'}")
@@ -162,19 +162,26 @@ def _check_reference(pump: Pump, folder: Path, report: Report) -> None:
 
 
 def _run_examples(pump: Pump, folder: Path, report: Report) -> None:
+    """Every query of examples.sql, as dataset_check counts them; each must run and return at least one row (a
+    reference answer that comes back empty is not one)."""
+    from dataset_check import example_questions
     examples = folder / "examples.sql"
     if not examples.is_file():
         return
-    statements = [s.strip() for s in re.sub(r"--[^\n]*", "", examples.read_text(encoding="utf-8-sig")).split(";") if s.strip()]
+    statements = [sql for _question, sql in example_questions(examples.read_text(encoding="utf-8-sig"))]
     failed = 0
     for number, statement in enumerate(statements, 1):
         try:
-            pump.sql(statement + ";", f"examples.sql query {number}")
+            rows = pump.rows(statement + ";", f"examples.sql query {number}")
         except LiveError as err:
             failed += 1
             report.problems.append(str(err))
+            continue
+        if not rows:
+            failed += 1
+            report.problems.append(f"examples.sql query {number}: returned no rows")
     if not failed:
-        report.passed.append(f"examples.sql: all {len(statements)} queries ran")
+        report.passed.append(f"examples.sql: all {len(statements)} queries ran and returned rows")
 
 
 def live_check(folder: Path, schema: str, markers: list[str], *, profile: str, replace: bool = False, keep: bool = False) -> Report:

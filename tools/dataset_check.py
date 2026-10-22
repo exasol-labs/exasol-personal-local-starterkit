@@ -12,9 +12,12 @@ Adding a bundled dataset is three steps and no code (data/README.md):
 
 First the files, offline: dataset.conf, the CREATE TABLEs against every CSV (UTF-8, no BOM, the header's columns in
 order, every row as wide as the header, no empty NOT NULL value, no duplicate primary key), Exasol's reserved words,
-the verify script, and for a reference dataset (descriptor.yaml) the descriptor, the manifest's digests, the README and
-the examples. Then, unless --offline, the load (tools/dataset_live.py): the scripts and the CSVs through exapump as
-the kit loads them, the verification, the markers, the descriptor's roles and every example query - into the
+the verify script, and for a reference dataset (descriptor.yaml) the descriptor; the manifest's source, terms,
+snapshot date, row counts and digests; its asset block - the release archive tools/datasets/package.py makes from
+these CSVs (its URL template, and its digest when the archive was built here in dist/); the README with a data
+dictionary naming every column; and at least ten example questions, each a -- comment above its reference SQL. Then,
+unless --offline, the load (tools/dataset_live.py): the scripts and the CSVs through exapump as the kit loads them,
+the verification, the markers, the descriptor's roles and every example query, each returning rows - into the
 dataset's own schema, which must not exist yet (--replace reloads it and leaves it) and is dropped again afterwards
 (--keep leaves it loaded).
 
@@ -174,14 +177,113 @@ def _descriptor_problems(folder: Path, schema: str, schema_tables: dict[str, lis
         if ref.column not in known.get(ref.table, []):
             problems.append(f"{path.name}: {role} names {ref.table}.{ref.column}, not in 01_create_schema.sql")
     problems += _manifest_problems(folder)
-    if not (folder / "README.md").is_file():
-        problems.append("README.md is missing (source, terms and the data dictionary)")
+    problems += _asset_problems(folder)
+    problems += _readme_problems(folder, schema_tables)
     examples = folder / "examples.sql"
-    statements = [s for s in re.sub(r"--[^\n]*", "", examples.read_text(encoding="utf-8")).split(";") if s.strip()] if examples.is_file() else []
-    if len(statements) < MIN_EXAMPLES:
-        problems.append(f"examples.sql has {len(statements)} queries; a reference dataset has at least {MIN_EXAMPLES}")
-    problems += [f"examples.sql: query {n} is not a SELECT on {schema}" for n, s in enumerate(statements, 1)
+    questions = example_questions(examples.read_text(encoding="utf-8")) if examples.is_file() else []
+    if len(questions) < MIN_EXAMPLES:
+        problems.append(f"examples.sql has {len(questions)} queries; a reference dataset has at least {MIN_EXAMPLES}")
+    problems += [f"examples.sql: query {n} is not a SELECT on {schema}" for n, (_q, s) in enumerate(questions, 1)
                  if not s.lstrip().upper().startswith(("SELECT", "WITH")) or f"{schema}." not in s.upper()]
+    problems += [f"examples.sql: query {n} has no question (a -- comment line right above it)"
+                 for n, (q, _s) in enumerate(questions, 1) if not q]
+    return problems
+
+
+def example_questions(text: str) -> list[tuple[str, str]]:
+    """(question, SQL) for every query of an examples.sql: the question is the -- comment block right above the
+    query (empty when there is none), the SQL is the statement without its comments."""
+    found, comment, body = [], [], []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not body and stripped.startswith("--"):
+            comment.append(stripped.lstrip("-").strip())
+            continue
+        if not body and not stripped:
+            comment = []                        # a blank line ends a comment block that is not a query's question
+            continue
+        body.append(re.sub(r"--[^\n]*", "", line))
+        if stripped.endswith(";") or ";" in re.sub(r"--[^\n]*", "", line):
+            sql = "\n".join(body).strip().rstrip(";").strip()
+            if sql:
+                found.append((" ".join(c for c in comment if c), sql))
+            comment, body = [], []
+    tail = "\n".join(body).strip()
+    if tail:
+        found.append((" ".join(c for c in comment if c), tail))
+    return found
+
+
+def _readme_problems(folder: Path, schema_tables: dict[str, list[str]]) -> list[str]:
+    """README.md with a "## Data dictionary" section that names every table and every column of
+    01_create_schema.sql, and a link to the descriptor file the folder really holds."""
+    from descriptor_rules import descriptor_file
+    path = folder / "README.md"
+    if not path.is_file():
+        return ["README.md is missing (source, terms and the data dictionary)"]
+    text = path.read_text(encoding="utf-8")
+    section = re.search(r"^## Data dictionary\s*$(.*?)(?=^## |\Z)", text, re.MULTILINE | re.DOTALL)
+    if not section:
+        return ["README.md has no '## Data dictionary' section"]
+    named = set(re.findall(r"`([A-Za-z_][A-Za-z0-9_]*)`", section.group(1)))
+    named |= {n.split(".")[-1] for n in re.findall(r"`([A-Za-z_][A-Za-z0-9_.]*)`", section.group(1))}
+    problems = [f"README.md: the data dictionary does not name {t}.{c}" for t, cols in schema_tables.items()
+                for c in cols if c not in named]
+    problems += [f"README.md: the data dictionary does not name the table {t}" for t in schema_tables
+                 if t not in named and t not in text]
+    descriptor = descriptor_file(folder)
+    if descriptor is not None and f"({descriptor.name})" not in text:
+        problems.append(f"README.md does not link {descriptor.name}")
+    return problems[:10]
+
+
+def _asset_problems(folder: Path) -> list[str]:
+    """The manifest's asset block (tools/datasets/package.py): the archive these CSVs make (tar_sha256, which does
+    not depend on zlib), its name and URL template, and - when the archive was built here, in dist/ - its digest
+    and size."""
+    path = folder / "manifest.json"
+    if not path.is_file():
+        return []
+    builders = str(Path(__file__).resolve().parent / "datasets")
+    if builders not in sys.path:
+        sys.path.insert(0, builders)
+    import package
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    asset = manifest.get("asset")
+    rebuild = f"run: python3 tools/datasets/package.py {folder.name}"
+    if not isinstance(asset, dict):
+        return [f"manifest.json has no asset block (the CSVs ship as a release asset); {rebuild}"]
+    if not manifest.get("snapshot") or not manifest.get("id"):
+        return []                                # reported by _manifest_problems
+    problems = []
+    name = package.asset_name(manifest)
+    if asset.get("file") != name:
+        problems.append(f"manifest.json: asset.file must be {name}; {rebuild}")
+    for key in ("sha256", "tar_sha256"):
+        if not re.fullmatch(r"[0-9a-f]{64}", str(asset.get(key, ""))):
+            problems.append(f"manifest.json: asset.{key} is not a SHA-256; {rebuild}")
+    if not isinstance(asset.get("size"), int) or asset.get("size", 0) <= 0:
+        problems.append(f"manifest.json: asset.size is not a byte count; {rebuild}")
+    url = str(asset.get("url", ""))
+    if url != package.asset_url(manifest):
+        problems.append(f"manifest.json: asset.url must be {package.asset_url(manifest)}")
+    if not url.startswith("https://") or url.count("{repo}") != 1 or not url.endswith("/" + name):
+        problems.append("manifest.json: asset.url must be an https:// template with {repo} once, ending in the file name")
+    if problems:
+        return problems
+    raw = package.tar_bytes(folder, manifest["snapshot"])
+    if hashlib.sha256(raw).hexdigest() != asset["tar_sha256"]:
+        return [f"manifest.json: the asset is not the archive these CSVs make (tar_sha256 differs); {rebuild}, "
+                "then upload the new archive"]
+    built = package.DIST / name
+    if built.is_file():
+        data = built.read_bytes()
+        if hashlib.sha256(data).hexdigest() != asset["sha256"] or len(data) != asset["size"]:
+            problems.append(f"dist/{name} is not the archive manifest.json names (SHA-256 or size); {rebuild}")
+        else:
+            import gzip
+            if hashlib.sha256(gzip.decompress(data)).hexdigest() != asset["tar_sha256"]:
+                problems.append(f"dist/{name} does not hold these CSVs; {rebuild}")
     return problems
 
 
@@ -201,6 +303,15 @@ def _manifest_problems(folder: Path) -> list[str]:
         return ["manifest.json is missing (run with --manifest, then fill in source and terms)"]
     manifest = json.loads(path.read_text(encoding="utf-8"))
     problems = [f"manifest.json: '{k}' is missing" for k in ("source", "terms", "snapshot") if not manifest.get(k)]
+    if manifest.get("id") != folder.name:
+        problems.append(f"manifest.json: id must be '{folder.name}'")
+    source, terms = manifest.get("source") or {}, manifest.get("terms") or {}
+    problems += [f"manifest.json: source.{k} is missing" for k in ("name", "url") if source and not source.get(k)]
+    problems += [f"manifest.json: terms.{k} is missing" for k in ("url", "summary") if terms and not terms.get(k)]
+    if terms and not isinstance(terms.get("confirmed"), bool):
+        problems.append("manifest.json: terms.confirmed must be true or false (has the owner confirmed redistribution?)")
+    if manifest.get("snapshot") and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", str(manifest["snapshot"])):
+        problems.append("manifest.json: snapshot must be a date, YYYY-MM-DD")
     if manifest.get("files") != file_entries(folder):
         problems.append("manifest.json: files do not match the CSVs (rows or SHA-256); run with --manifest")
     return problems

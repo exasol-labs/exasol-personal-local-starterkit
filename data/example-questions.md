@@ -12,9 +12,9 @@ assistant to *"show me the SQL before you run it"* and compare.
 
 > **Revenue** (kit convention): `l_extendedprice * (1 - l_discount)` — net of line
 > discount, excludes tax, does not subtract returns. See
-> [data-dictionary.md](data-dictionary.md) for every table and column of all seven
-> bundled datasets; `pharma_trials`, `banking_complaints` and `fda_recalls` carry their
-> own example queries in `datasets/<id>/examples.sql`.
+> [data-dictionary.md](data-dictionary.md) for every table and column of all five
+> bundled datasets; the reference datasets `pharma_trials` and `banking_complaints` carry
+> their own example questions with reference SQL in `datasets/<id>/examples.sql`.
 
 ---
 

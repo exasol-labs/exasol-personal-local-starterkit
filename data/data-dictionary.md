@@ -1,8 +1,7 @@
-# Data dictionary — the seven bundled datasets
+# Data dictionary — the five bundled datasets
 
-TPCH (TPC-H at SF=0.02), ENERGY, WEATHER, PHARMA (`pharma_trials`), BANKING
-(`banking_complaints`), FDA (`fda_recalls`) and BANKMKT (`bank_marketing`). Each loads into
-its own schema; there are no joins across schemas.
+TPCH (TPC-H at SF=0.02), ENERGY, WEATHER, PHARMA (`pharma_trials`) and BANKING
+(`banking_complaints`). Each loads into its own schema; there are no joins across schemas.
 
 > The same descriptions ship **inside the database** as table and column comments
 > (`SYS.EXA_ALL_TABLES.TABLE_COMMENT`, `SYS.EXA_ALL_COLUMNS.COLUMN_COMMENT`) and are
@@ -10,8 +9,8 @@ its own schema; there are no joins across schemas.
 > shape of the data. This file adds the narrative: keys, joins and conventions.
 
 Reference for every table and column in this folder. Use it to write correct SQL
-(and to ground an AI assistant) without guessing what a column means. The four public-data
-datasets (PHARMA, BANKING, FDA, BANKMKT) also have a README of their own with the source, the
+(and to ground an AI assistant) without guessing what a column means. The two reference
+datasets (PHARMA, BANKING) also have a README of their own with the source, the
 terms and how the snapshot was taken; row counts here are the shipped snapshots'.
 
 ## TPCH — TPC-H retail benchmark (schema `TPCH`, dataset id `tpch`)
@@ -229,7 +228,7 @@ temperature range on a given day.
 5,169 industry-sponsored, interventional Phase 2 and Phase 3 trials from ClinicalTrials.gov
 that started in 2016-2018 and ended `COMPLETED` or `TERMINATED` (snapshot 2026-10-20).
 Source, terms and the full story: [datasets/pharma_trials/README.md](datasets/pharma_trials/README.md).
-A reference dataset: its [descriptor](datasets/pharma_trials/descriptor.json) names
+A reference dataset: its [descriptor](datasets/pharma_trials/descriptor.yaml) names
 `LEAD_SPONSOR` (entity), `PHASE` (category), `START_DATE` (date), `TERMINATED` (label) and
 `BRIEF_SUMMARY` + `ELIGIBILITY_CRITERIA` (text).
 
@@ -349,98 +348,13 @@ not enforced). The label is derived from it: read it, never use it as a feature.
 Typical questions: relief rate by product or company, the issues that pay, complaints per
 day, how fast companies get the complaint.
 
-## FDA — food, drug and device recalls (schema `FDA`, dataset id `fda_recalls`)
-
-5,459 recalled products the U.S. FDA reported in 2024 (openFDA recall enforcement reports,
-snapshot 2026-10-22): 3,393 devices, 1,409 foods, 657 drugs from 1,043 firms in 1,806 recall
-events. Source, terms and transformations: [datasets/fda_recalls/README.md](datasets/fda_recalls/README.md).
-Descriptor roles: `RECALLING_FIRM` (entity), `PRODUCT_TYPE` (category), `REPORT_DATE` (date),
-`SERIOUS` (label), `REASON_FOR_RECALL` + `PRODUCT_DESCRIPTION` (text).
-
-```
-fda_recalls 1─1 fda_classifications   (the label's source; never a feature)
-```
-
-A missing value is always NULL (openFDA's own `N/A` is loaded as NULL). openFDA delivers some
-special characters (`®`, `™`, `µ`, `°`, accented letters) as `¿` — 450 of them in 207 recalls,
-kept as they came.
-
-### FDA_RECALLS  (5,459 rows) — fact table
-Grain: one recalled product. **PK:** `RECALL_NUMBER`.
-
-| Column | Type | Description | Example / values |
-|---|---|---|---|
-| RECALL_NUMBER | VARCHAR(20) | FDA recall number (PK); the letter is the product type | F-1671-2024, D-0001-2025, Z-0001-2025 |
-| EVENT_ID | DECIMAL(10,0) | Recall event; one event can cover several products | 95418 |
-| PRODUCT_TYPE | VARCHAR(20) | Product type | Devices (3,393), Food (1,409), Drugs (657) |
-| RECALLING_FIRM | VARCHAR(200) | The firm that recalled it (1,043 distinct) | Nivagen Pharmaceuticals Inc |
-| FIRM_STATE | VARCHAR(40) | U.S. state (two letters) or a foreign region; NULL for 459 | CA |
-| FIRM_COUNTRY | VARCHAR(60) | Country | United States (4,997), China, India, Germany, ... |
-| VOLUNTARY_MANDATED | VARCHAR(60) | Who initiated it; NULL for 2 | Voluntary: Firm initiated (5,432), FDA Mandated (25) |
-| INITIAL_NOTIFICATION | VARCHAR(100) | How the firm first told its customers; NULL for 115 | Letter, E-Mail, Telephone, Press Release, Visit, Other, Two or more of the following: Email, Fax, Letter, Press Release, Telephone, Visit |
-| RECALL_STATUS | VARCHAR(20) | Status | Ongoing (3,799), Terminated (1,542), Completed (118) |
-| DISTRIBUTION_PATTERN | VARCHAR(420) | Where the product went, free text; cut on a word at 400 characters (` …` included) | Nationwide within the U.S |
-| PRODUCT_DESCRIPTION | VARCHAR(620) | The product in the FDA's words, free text; cut at 600 | — |
-| REASON_FOR_RECALL | VARCHAR(620) | Why it was recalled, free text; cut at 600 — the text the notebooks classify | Undeclared milk |
-| RECALL_INITIATION_DATE | DATE | When the firm started the recall (2020-12-24 to 2024-12-12) | 2024-05-02 |
-| REPORT_DATE | DATE | When the FDA published it in its enforcement report (all in 2024) | 2024-06-12 |
-| SERIOUS | DECIMAL(1,0) | 1 when the FDA classified it Class I (994, 18.2%), else 0 — **the label** | 0 |
-
-### FDA_CLASSIFICATIONS  (5,459 rows)
-Grain: one recall's classification. **PK:** `RECALL_NUMBER` (FK → `FDA_RECALLS`, documented,
-not enforced). The label is derived from it: read it, never use it as a feature.
-
-| Column | Type | Description | Values |
-|---|---|---|---|
-| RECALL_NUMBER | VARCHAR(20) | Recall (PK, FK) | F-1671-2024 |
-| CLASSIFICATION | VARCHAR(20) | FDA class: I = serious harm likely, II = temporary or reversible harm, III = harm unlikely | Class I (994), Class II (4,270), Class III (195) |
-| CLASSIFICATION_DATE | DATE | When the FDA classified it | 2024-10-02 |
-
-Typical questions: serious share by product type, recalls per month, the commonest reasons
-(contamination, undeclared allergens, sterility), days from initiation to report.
-
-## BANKMKT — bank term-deposit campaign (schema `BANKMKT`, dataset id `bank_marketing`)
-
-45,211 clients a Portuguese bank phoned in its term-deposit campaigns, May 2008 to November
-2010 (UCI Bank Marketing, Moro, Rita and Cortez 2014, CC BY 4.0; the `bank-full.csv` file).
-Columns renamed in plain words, yes/no as 1/0; values otherwise unchanged. No descriptor (no
-text, no full dates): the ML Engineer notebook `bank_marketing_mlflow` reads it directly.
-Source and terms: [datasets/bank_marketing/README.md](datasets/bank_marketing/README.md).
-
-### BANK_CLIENTS  (45,211 rows) — the only table
-Grain: one client the campaign phoned. **PK:** `CLIENT_ID`.
-
-| Column | Type | Description (UCI name) | Example / values |
-|---|---|---|---|
-| CLIENT_ID | DECIMAL(6,0) | Row number in the UCI file, which is in date order (PK) | 1 .. 45211 |
-| AGE | DECIMAL(3,0) | Age in years (`age`) | 18 .. 95 |
-| JOB | VARCHAR(20) | Type of job (`job`) | admin., blue-collar, entrepreneur, housemaid, management, retired, self-employed, services, student, technician, unemployed, unknown |
-| MARITAL | VARCHAR(10) | Marital status (`marital`); divorced includes widowed | married, single, divorced |
-| EDUCATION | VARCHAR(10) | Education (`education`) | primary, secondary, tertiary, unknown |
-| CREDIT_IN_DEFAULT | DECIMAL(1,0) | 1 when the client has credit in default (`default`) | 0 / 1 |
-| BALANCE | DECIMAL(9,0) | Average yearly balance, **euros** (`balance`); negative when overdrawn | -8019 .. 102127 |
-| HOUSING_LOAN | DECIMAL(1,0) | 1 when the client has a housing loan (`housing`) | 0 / 1 |
-| PERSONAL_LOAN | DECIMAL(1,0) | 1 when the client has a personal loan (`loan`) | 0 / 1 |
-| CONTACT_TYPE | VARCHAR(10) | How the client was last contacted (`contact`) | cellular, telephone, unknown |
-| LAST_CONTACT_DAY | DECIMAL(2,0) | Day of the month of the last contact (`day`) | 1 .. 31 |
-| LAST_CONTACT_MONTH | VARCHAR(3) | Month of the last contact (`month`); **no year** in the data | jan .. dec |
-| CALL_DURATION | DECIMAL(6,0) | Duration of the last contact, **seconds** (`duration`). Known only after the call: **leakage** — leave it out of a model meant to decide whom to call | 0 .. 4918 |
-| CAMPAIGN_CONTACTS | DECIMAL(3,0) | Contacts during this campaign, the last one included (`campaign`) | 1 .. 63 |
-| DAYS_SINCE_PREVIOUS | DECIMAL(4,0) | Days since the last contact in a previous campaign (`pdays`); **-1 = not previously contacted** | -1 .. 871 |
-| PREVIOUS_CONTACTS | DECIMAL(4,0) | Contacts before this campaign (`previous`) | 0 .. 275 |
-| PREVIOUS_OUTCOME | VARCHAR(10) | Outcome of the previous campaign (`poutcome`); unknown also when never contacted | success, failure, other, unknown |
-| SUBSCRIBED | DECIMAL(1,0) | 1 when the client subscribed a term deposit (`y`; 5,289, 11.7%) — **the label** | 0 / 1 |
-
-Typical questions: subscription rate by job, age band or previous outcome, whether more calls
-help (`CAMPAIGN_CONTACTS`), which month converts best.
-
 ## Writing SQL against this data (Exasol notes)
 
 - **Column names are UPPERCASE** and resolve unquoted (`p_type`, `l_extendedprice` — Exasol folds
   identifiers to uppercase). No double-quoting needed.
 - **Upper-case names everywhere:** every bundled table and column is upper-case
-  (`FDA.FDA_RECALLS.REASON_FOR_RECALL`), so unquoted SQL resolves it.
-- **0/1 labels:** `TERMINATED`, `MONETARY_RELIEF`, `SERIOUS` and `SUBSCRIBED` are
+  (`PHARMA.PHARMA_TRIALS.BRIEF_SUMMARY`), so unquoted SQL resolves it.
+- **0/1 labels:** `TERMINATED` and `MONETARY_RELIEF` are
   `DECIMAL(1,0)`, so `AVG(label)` is the rate and `SUM(label)` the count.
 - **Row limit:** Exasol uses `LIMIT n` (or `LIMIT n OFFSET m`) — **not** `FETCH FIRST … ROWS ONLY`
   or `TOP n`.
@@ -448,5 +362,5 @@ help (`CAMPAIGN_CONTACTS`), which month converts best.
   excludes tax, does not subtract returns. Add `WHERE l_returnflag <> 'R'` to exclude returned lines.
 
 See **[example-questions.md](example-questions.md)** for 14 ready-to-ask TPC-H questions with
-validated reference SQL you can inspect before running. PHARMA, BANKING and FDA each ship at least
+validated reference SQL you can inspect before running. PHARMA and BANKING each ship at least
 ten runnable example queries in `datasets/<id>/examples.sql`.

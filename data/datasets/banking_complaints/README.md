@@ -11,7 +11,9 @@ them (11.9%) did.
 exakit data-load banking_complaints
 ```
 
-It loads into the `BANKING` schema in a few seconds (1.9 MB of CSV).
+It loads into the `BANKING` schema in a few seconds (1.9 MB of CSV). An installed
+kit downloads the CSVs first, as one checksummed archive of 0.1 MB (see
+[Download](#download)).
 
 ## No complaint narratives
 
@@ -64,7 +66,7 @@ model feature.
 
 ## The descriptor
 
-[`descriptor.json`](descriptor.json) tells the persona notebooks which column
+[`descriptor.yaml`](descriptor.yaml) tells the persona notebooks which column
 plays each role:
 
 | Role | Column | Why |
@@ -102,3 +104,18 @@ channels, states, time to the company, public responses and a text question.
 - **Transformations:** company names and public responses have their
   whitespace folded; ZIP codes are left out; timestamps become dates; nothing
   else is changed.
+
+## Download
+
+The CSVs are in this folder in the repository, but not in the kit archive the
+installer downloads: `exakit data-load banking_complaints` fetches them as one
+release asset, `banking_complaints-<snapshot>.tar.gz`, whose SHA-256, size and
+URL are in [`manifest.json`](manifest.json) (`asset`). The archive is checked
+against that digest and every CSV against its own before anything is loaded,
+and the verified files are kept under
+`~/.exasol-starter-kit/cache/datasets/banking_complaints/`, so a reload does not
+download again. A checkout of the repository loads the CSVs here directly when
+they match the manifest. Offline, point `EXAKIT_DATASETS_MIRROR` at a folder (or
+an `https://` URL) holding the archive. `python3 tools/datasets/package.py
+banking_complaints` rebuilds the archive (the same CSVs give the same bytes) and
+the manifest's `asset` block.

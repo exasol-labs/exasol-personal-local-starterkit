@@ -2847,15 +2847,224 @@ function Get-ExakitBundledDatasets {
                 if ($line -match '^([a-z_]+)=(.*)$') { $kv[$Matches[1]] = $Matches[2] }
             }
             if (-not $kv.id -or -not $kv.label) { continue }
+            # A dataset that will be downloaded says how big the download is, in
+            # every list that offers it ("... - 3.9 MB download").
+            $label = $kv.label
+            $note = Get-ExakitDatasetDownloadNote -Dir (Split-Path $conf.FullName -Parent)
+            if ($note) { $label = "$label - $note" }
             $markers = @(($kv.markers -split ',') | Where-Object { $_ })
             $flag = if ($kv.flag) { $kv.flag } else { "data.datasets.$($kv.id).loaded" }
             $schema = if ($kv.schema) { $kv.schema } else { $kv.id.ToUpper() }
             $order = 50
             if ($kv.order -match '^[0-9]+$') { $order = [int]$kv.order }
-            $datasets += @{ Id = $kv.id; Label = $kv.label; Flag = $flag; Markers = $markers; Schema = $schema; Order = $order }
+            $datasets += @{ Id = $kv.id; Label = $label; Flag = $flag; Markers = $markers; Schema = $schema; Order = $order }
         }
     }
     return @($datasets | Sort-Object { $_.Order }, { $_.Id })
+}
+
+# --- reference datasets: CSVs from a checksummed release asset --------------
+# A reference dataset (pharma_trials, banking_complaints) keeps its CSVs in git
+# but not in the kit archive users download (.gitattributes, export-ignore):
+# they ship as one deterministic <id>-<snapshot>.tar.gz per dataset, a release
+# asset whose SHA-256, size and URL are in the dataset's manifest.json
+# ("asset", written by tools\datasets\package.py). The decisions and the checks
+# live in ONE place both twins call, setup\lib\dataset_asset.py; the download
+# stays here, with WebClient's proxy and TLS handling (Get-ExakitFile). Twin of
+# exakit_dataset_files in exapump.sh.
+#
+#   EXAKIT_DATASETS_MIRROR  a folder (or file:// or https:// base URL) holding
+#                           <id>-<snapshot>.tar.gz: an offline or internal copy
+#   EXAKIT_DATASETS_REPO    owner/name whose release holds the asset (default:
+#                           the repository this kit was installed from)
+
+# Get-ExakitDatasetAsset <dataset-dir> - the manifest's asset block, or $null.
+function Get-ExakitDatasetAsset {
+    param([Parameter(Mandatory)][string]$Dir)
+    $path = Join-Path $Dir "manifest.json"
+    if (-not (Test-Path -LiteralPath $path)) { return $null }
+    try {
+        $doc = Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
+        if ($doc.asset -and $doc.asset.sha256) { return $doc.asset }
+    } catch { }
+    return $null
+}
+
+# Get-ExakitMegabytes <bytes> - "3.9 MB", whatever the machine's locale.
+function Get-ExakitMegabytes {
+    param([long]$Bytes)
+    $mb = [double]$Bytes / 1000000
+    if ($mb -lt 0.1) { $mb = 0.1 }
+    return ($mb.ToString("0.0", [System.Globalization.CultureInfo]::InvariantCulture) + " MB")
+}
+
+# Get-ExakitDatasetDownloadNote <dataset-dir> - "3.9 MB download" when loading
+# the dataset would download its asset, else "": no asset block, CSVs in the
+# kit copy (a checkout), or an extraction already verified in the cache. Twin of
+# exakit_dataset_download_note.
+function Get-ExakitDatasetDownloadNote {
+    param([Parameter(Mandatory)][string]$Dir)
+    $asset = Get-ExakitDatasetAsset -Dir $Dir
+    if (-not $asset) { return "" }
+    if (@(Get-ChildItem -Path (Join-Path (Join-Path $Dir "data") "*.csv") -ErrorAction SilentlyContinue).Count -gt 0) { return "" }
+    $cached = Join-Path (Join-Path (Join-Path (Join-Path $script:CacheDir "datasets") (Split-Path $Dir -Leaf)) $asset.sha256) ".verified"
+    if (Test-Path -LiteralPath $cached) { return "" }
+    if (-not ("$($asset.size)" -match '^[0-9]+$')) { return "" }
+    return "$(Get-ExakitMegabytes ([long]$asset.size)) download"
+}
+
+# Get-ExakitDatasetPython - the Python 3.8+ on PATH that dataset_asset.py runs
+# on, or "" (then uv's managed one is used). The Microsoft Store alias answers
+# `python` too and fails every call, so the version is asked, not assumed.
+$script:ExakitDatasetPython = $null
+function Get-ExakitDatasetPython {
+    if ($null -ne $script:ExakitDatasetPython) { return $script:ExakitDatasetPython }
+    $script:ExakitDatasetPython = ""
+    foreach ($candidate in @("python", "python3")) {
+        if (-not (Get-Command $candidate -ErrorAction SilentlyContinue)) { continue }
+        $previousErrorActionPreference = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = "Continue"
+            $ok = & $candidate -c "import sys; print(sys.version_info[:2] >= (3, 8))" 2>$null
+            if ($LASTEXITCODE -eq 0 -and ("$ok").Trim() -eq "True") { $script:ExakitDatasetPython = $candidate; break }
+        } catch {
+        } finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+    }
+    return $script:ExakitDatasetPython
+}
+
+# Invoke-ExakitDatasetAssetService <args> - run setup\lib\dataset_asset.py.
+# @{ Code; Out (its stdout lines); Why (its last stderr line) }. Read as UTF-8,
+# whatever the console's code page: the paths it prints can be anything.
+function Invoke-ExakitDatasetAssetService {
+    param([Parameter(Mandatory)][string]$KitRoot, [Parameter(ValueFromRemainingArguments)]$ServiceArgs)
+    $service = Join-Path (Join-Path (Join-Path $KitRoot "setup") "lib") "dataset_asset.py"
+    $previousErrorActionPreference = $ErrorActionPreference
+    $previousEncoding = [Console]::OutputEncoding
+    $previousIo = $env:PYTHONIOENCODING
+    $result = @{ Code = 1; Out = @(); Why = "" }
+    try {
+        $ErrorActionPreference = "Continue"
+        $env:PYTHONIOENCODING = "utf-8"
+        try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false) } catch { }
+        $python = Get-ExakitDatasetPython
+        if ($python) {
+            $raw = @(& $python $service @ServiceArgs 2>&1)
+        } else {
+            $uv = Install-ExakitUv
+            $raw = @(& $uv run --python $script:ManagedPythonVersion --no-project python $service @ServiceArgs 2>&1)
+        }
+        $result.Code = $LASTEXITCODE
+        $result.Out = @($raw | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] } | ForEach-Object { "$_" })
+        $errs = @($raw | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] } | ForEach-Object { "$_" } | Where-Object { $_ })
+        foreach ($e in $errs) { Write-ExakitLog "INFO" "dataset_asset: $e" }
+        if ($errs.Count) { $result.Why = $errs[-1] }
+    } catch {
+        $result.Why = "$_"
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+        try { [Console]::OutputEncoding = $previousEncoding } catch { }
+        $env:PYTHONIOENCODING = $previousIo
+    }
+    return $result
+}
+
+# Get-ExakitDatasetFiles -KitRoot -Dir -Id - the folder holding the dataset's
+# verified CSVs. Fails (a soft failure to every caller, which catches it) with
+# one line naming the reason when they cannot be had: offline with nothing
+# cached, a digest that does not match, an archive that is unsafe. Nothing is
+# loaded from a file that failed a check, and a failed download is never
+# cached. Twin of exakit_dataset_files.
+function Get-ExakitDatasetFiles {
+    param([Parameter(Mandatory)][string]$KitRoot, [Parameter(Mandatory)][string]$Dir, [Parameter(Mandatory)][string]$Id)
+    $kitCopy = Join-Path $Dir "data"
+    # No asset block: the kit copy, exactly as before - and no Python started.
+    if (-not (Get-ExakitDatasetAsset -Dir $Dir)) { return $kitCopy }
+    $cache = Join-Path $script:CacheDir "datasets"
+    $plan = Invoke-ExakitDatasetAssetService $KitRoot "resolve" $Dir $cache
+    $line = "" + (@($plan.Out | Where-Object { $_ }) | Select-Object -Last 1)
+    $fields = $line -split "`t"
+    if ($plan.Code -ne 0 -or -not $line) {
+        Fail "Could not read the '$Id' dataset's manifest (a Python 3 is needed; details: exakit logs setup)."
+    }
+    if ($fields[0] -eq "kit") { return $kitCopy }
+    if ($fields[0] -eq "dir" -and $fields.Count -ge 2) {
+        Write-ExakitLog "INFO" "${Id}: verified CSVs in $($fields[1])"
+        return $fields[1]
+    }
+    if ($fields[0] -ne "fetch" -or $fields.Count -lt 5) {
+        Fail "Could not read the '$Id' dataset's manifest (details: exakit logs setup)."
+    }
+    $file = $fields[1]; $size = [long]$fields[3]; $url = $fields[4]
+    # owner/name only: the value lands in a URL.
+    $repo = $env:EXAKIT_DATASETS_REPO
+    if (-not $repo) { $repo = $script:KitRepo }
+    if (-not $repo) { $repo = "exasol-labs/exasol-personal-local-starterkit" }
+    if ($repo -notmatch '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$') {
+        Fail "EXAKIT_DATASETS_REPO must be owner/name (got '$repo')."
+    }
+    $source = $url.Replace("{repo}", $repo)
+    $local = ""
+    $mirror = $env:EXAKIT_DATASETS_MIRROR
+    if ($mirror) {
+        if ($mirror -match '^https://') {
+            $source = $mirror.TrimEnd('/') + "/" + $file
+        } elseif ($mirror -match '^file://') {
+            $local = $mirror.Substring(7)
+            # file:///C:/x reads as /C:/x; the drive letter is the path.
+            if ($local -match '^/[A-Za-z]:') { $local = $local.Substring(1) }
+            $local = Join-Path $local.TrimEnd('/', '\') $file
+            $source = $local
+        } elseif ($mirror -match '^[A-Za-z][A-Za-z0-9+.-]*://') {
+            Fail "EXAKIT_DATASETS_MIRROR must be a folder, a file:// URL or an https:// URL (got '$mirror')."
+        } else {
+            $local = Join-Path $mirror.TrimEnd('/', '\') $file
+            $source = $local
+        }
+    }
+    $mb = Get-ExakitMegabytes $size
+    $assetHome = Join-Path $cache $Id
+    New-Item -ItemType Directory -Force -Path $assetHome | Out-Null
+    $part = Join-Path $assetHome "$file.part"
+    Remove-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue
+    if ($script:ExakitTableRow -gt 0) {
+        Set-ExakitTableRow -Row $script:ExakitTableRow -State "running" -Pct 0 -Ceiling 1 -Secs 10 `
+            -Phase "$Id - downloading $mb"
+        Write-ExakitLog "INFO" "Downloading the '$Id' data ($mb) from $source"
+    } else {
+        Info "Downloading the '$Id' data ($mb, checked against its SHA-256)"
+        Write-ExakitLog "INFO" "from $source"
+    }
+    if ($local) {
+        try { Copy-Item -LiteralPath $local -Destination $part -Force -ErrorAction Stop } catch {
+            Write-ExakitLog "WARN" "Could not copy $local ($_)"
+            Remove-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue
+        }
+    } else {
+        # Three tries, each bounded (10 s to connect, 20 s between bytes): a
+        # blip is retried, an offline machine answers in seconds, not minutes.
+        for ($attempt = 1; $attempt -le 3; $attempt++) {
+            if (Get-ExakitFile -Url $source -Dest $part -Soft) { break }
+            if ($attempt -lt 3) { Start-Sleep -Seconds (2 * $attempt) }
+        }
+    }
+    if (-not (Test-Path -LiteralPath $part) -or (Get-Item -LiteralPath $part).Length -eq 0) {
+        Remove-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue
+        Fail "The '$Id' data could not be fetched from $source and nothing is cached. Retry when online, or set EXAKIT_DATASETS_MIRROR to a folder or URL holding $file."
+    }
+    $done = Invoke-ExakitDatasetAssetService $KitRoot "install" $Dir $cache $part
+    Remove-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue
+    $line = "" + (@($done.Out | Where-Object { $_ }) | Select-Object -Last 1)
+    $fields = $line -split "`t"
+    if ($done.Code -eq 0 -and $fields[0] -eq "dir" -and $fields.Count -ge 2) {
+        Write-ExakitLog "OK" "${Id}: $file verified (SHA-256) and cached in $($fields[1])"
+        return $fields[1]
+    }
+    $why = $done.Why
+    if (-not $why) { $why = "it could not be verified" }
+    Fail "The '$Id' data from $source was refused: $why"
 }
 
 # Test-ExakitDbReachable - can we run SQL right now?
@@ -3244,7 +3453,17 @@ function Invoke-ExakitDatasetDirLoad {
     $schemaSql = Join-Path $dir "01_create_schema.sql"
     $loadSql = Join-Path $dir "02_load_data.sql"
     $verifySql = Join-Path $dir "03_verify_setup.sql"
-    $csvFiles = @(Get-ChildItem -Path (Join-Path $dir "data\*.csv") -ErrorAction SilentlyContinue |
+    # Which row of the table this dataset owns, if a table is on screen. Zero
+    # means there is none, and the single-line bar takes over.
+    $script:ExakitTableRow = 0
+    if ($script:ExakitTableLive) { $script:ExakitTableRow = Get-ExakitDataTableRow -Id $Id }
+    # Where the CSVs come from. A reference dataset's ship as a checksummed
+    # release asset, not in the kit archive: the kit copy when it is there and
+    # matches the manifest, else the verified cache, else a download that is
+    # checked before anything is loaded (Get-ExakitDatasetFiles). Every other
+    # dataset reads its own data\ as it always has.
+    $dataDir = Get-ExakitDatasetFiles -KitRoot $KitRoot -Dir $dir -Id $Id
+    $csvFiles = @(Get-ChildItem -Path (Join-Path $dataDir "*.csv") -ErrorAction SilentlyContinue |
         Where-Object { $_.Length -gt 0 })
     $bytes = [long]0
     foreach ($csv in $csvFiles) { $bytes += [long]$csv.Length }
@@ -3255,10 +3474,6 @@ function Invoke-ExakitDatasetDirLoad {
     if ((Test-Path $verifySql) -and (Get-Item $verifySql).Length -gt 0) { $totalWeight += $nominal }
     $doneWeight = [long]0
     $started = Get-Date
-    # Which row of the table this dataset owns, if a table is on screen. Zero
-    # means there is none, and the single-line bar takes over.
-    $script:ExakitTableRow = 0
-    if ($script:ExakitTableLive) { $script:ExakitTableRow = Get-ExakitDataTableRow -Id $Id }
     if ($script:ExakitTableRow -gt 0) {
         Set-ExakitTableRow -Row $script:ExakitTableRow -State "running" `
             -Pct 0 -Ceiling 1 -Secs 2 -Phase "$Id - reading the dataset"
@@ -3368,7 +3583,7 @@ function Invoke-ExakitDatasetDirLoad {
 
     # Row-count summary over the dataset's tables (uploaded CSVs + markers).
     $tables = New-Object 'System.Collections.Generic.List[string]'
-    foreach ($csv in (Get-ChildItem -Path (Join-Path $dir "data\*.csv") -ErrorAction SilentlyContinue)) {
+    foreach ($csv in (Get-ChildItem -Path (Join-Path $dataDir "*.csv") -ErrorAction SilentlyContinue)) {
         $t = [System.IO.Path]::GetFileNameWithoutExtension($csv.Name).ToUpper()
         if (-not $tables.Contains($t)) { [void]$tables.Add($t) }
     }
@@ -3521,8 +3736,9 @@ function New-ExakitDataTable {
             # The label loses its trailing "(~175k rows)": the Status column
             # carries the real count when the row finishes, and an estimate beside
             # a measurement is the same fact twice, worse. Only a TRAILING
-            # parenthetical goes - "Orders (EU) by quarter" keeps its brackets.
-            $label = [regex]::Replace($pending[$i].Label, ' *\([^()]*\)$', '')
+            # parenthetical goes - "Orders (EU) by quarter" keeps its brackets -
+            # and a download size after it stays: that is what the row will cost.
+            $label = [regex]::Replace($pending[$i].Label, ' *\([^()]*\)( - [0-9.]+ MB download)?$', '$1')
             # Who it is for goes in its own column, not on the name: a
             # " - for <persona>" suffix was cut off on an 80-column console.
             $forWhom = ""

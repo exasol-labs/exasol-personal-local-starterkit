@@ -3227,8 +3227,8 @@ function Invoke-CmdDataLoad {
     if ($target) {
         # Case-sensitive, like the shell side's grep -qx: "TPCH" is not "tpch".
         if (-not (Test-Path $target) -and (@(Get-ExakitBundledDatasets | ForEach-Object { $_.Id }) -ccontains $target)) {
-            # A bundled dataset's id (exakit data-load fda_recalls) is the same
-            # answer as EXAKIT_DATASETS=fda_recalls - a file or folder of that
+            # A bundled dataset's id (exakit data-load pharma_trials) is the same
+            # answer as EXAKIT_DATASETS=pharma_trials - a file or folder of that
             # name wins. Named on the command line it is THE answer: it replaces
             # an EXAKIT_DATASETS and an EXAKIT_DATA_FILE left in the environment,
             # which would otherwise load something else instead. Twin of

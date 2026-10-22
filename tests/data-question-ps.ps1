@@ -71,7 +71,7 @@ try {
     Set-Pending @("tpch")
     $env:EXAKIT_DATASETS_PRESELECT = "none"; [void](Select-ExakitDataSource)
     Check "persona datasets none: Skip is the default" "4" $script:Asked.Defaults
-    $env:EXAKIT_DATASETS_PRESELECT = "fda_recalls,energy"; [void](Select-ExakitDataSource)
+    $env:EXAKIT_DATASETS_PRESELECT = "pharma_trials,energy"; [void](Select-ExakitDataSource)
     Check "persona datasets none of them pending: Skip is the default" "4" $script:Asked.Defaults
     $env:EXAKIT_DATASETS_PRESELECT = "TPCH"; [void](Select-ExakitDataSource)
     Check "dataset ids are matched case-sensitively, like the shell side" "4" $script:Asked.Defaults
@@ -94,7 +94,7 @@ try {
     Check "no persona: every pending row ticked" "1,2,3~4" (Table @("tpch", "energy"))
     $env:EXAKIT_DATASETS_PRESELECT = "energy"
     Check "persona's dataset pending: that row" "3~4" (Table @("tpch", "energy"))
-    $env:EXAKIT_DATASETS_PRESELECT = "fda_recalls"
+    $env:EXAKIT_DATASETS_PRESELECT = "pharma_trials"
     Check "persona's datasets loaded already: Skip" "4~4" (Table @("tpch", "energy"))
     $env:EXAKIT_DATASETS_PRESELECT = "none"
     Check "persona datasets none: Skip" "4~4" (Table @("tpch", "energy"))
@@ -106,10 +106,10 @@ try {
     Check "nothing pending with a file row: the file row, never Skip" "1~1~2" "$($script:ExakitTableDefaults -join ',')~$($script:ExakitTableRowLocal)~$($script:ExakitTableRowSkip)"
 
     Write-Host "who each dataset is for is a column, not a suffix:"
-    Set-Pending @("tpch", "fda_recalls")
+    Set-Pending @("tpch", "pharma_trials")
     New-ExakitDataTable -FinalLabel "Skip" -NoLocal
-    Check "the names stay names" "Select All;tpch label;fda_recalls label;Skip" ((@($script:UiTable.Rows | ForEach-Object { $_.Label })) -join ";")
-    Check "the personas go in column 2" ";General;AI / Data Scientist;" ((@($script:UiTable.Rows | ForEach-Object { $_.Col2 })) -join ";")
+    Check "the names stay names" "Select All;tpch label;pharma_trials label;Skip" ((@($script:UiTable.Rows | ForEach-Object { $_.Label })) -join ";")
+    Check "the personas go in column 2" ";;AI Scientist, ML Engineer;" ((@($script:UiTable.Rows | ForEach-Object { $_.Col2 })) -join ";")
     Check "the table knows it has them" "True" "$($script:ExakitTableHasFor)"
     function Select-ExakitDataSource { return @("sample") }
     function Invoke-ExakitTableMenu {
@@ -121,7 +121,7 @@ try {
     $chosen = @(Select-ExakitDataLoad -FinalLabel "Skip")
     Check "the For column is up while the reader picks" "For" $script:Col2AtMenu
     Check "...and gone again before the progress display" "" ("" + $script:UiTable.Col2)
-    Check "the picked rows still answer" "tpch,fda_recalls" ($chosen -join ",")
+    Check "the picked rows still answer" "tpch,pharma_trials" ($chosen -join ",")
 
     Write-Host "Enter on the exclusive row answers it alone:"
     # The keypress loop needs a console; the rule is pinned by its text, and
@@ -153,19 +153,19 @@ try {
         Remove-Item Env:EXAKIT_DATASETS, Env:EXAKIT_DATA_FILE -ErrorAction SilentlyContinue
         return "$($script:Did -join ';')|$said"
     }
-    Has "-Force <dataset> reloads exactly that dataset" "LOAD fda_recalls True|" (DataLoad @("tpch") @("--force", "fda_recalls"))
-    Has "<dataset> -Force, the other order, too" "LOAD fda_recalls True|" (DataLoad @("tpch") @("fda_recalls", "-Force"))
+    Has "-Force <dataset> reloads exactly that dataset" "LOAD pharma_trials True|" (DataLoad @("tpch") @("--force", "pharma_trials"))
+    Has "<dataset> -Force, the other order, too" "LOAD pharma_trials True|" (DataLoad @("tpch") @("pharma_trials", "-Force"))
     Has "bare -Force still reloads the bundled sample" "LOAD tpch(sample) True|" (DataLoad @("tpch") @("-Force"))
     $env:EXAKIT_DATA_FILE = $work
-    Has "a dataset id wins over EXAKIT_DATA_FILE in the environment" "LOAD fda_recalls False|" (DataLoad @("fda_recalls") @("fda_recalls"))
+    Has "a dataset id wins over EXAKIT_DATA_FILE in the environment" "LOAD pharma_trials False|" (DataLoad @("pharma_trials") @("pharma_trials"))
     $env:EXAKIT_DATASETS = "tpch"
     Has "...and over EXAKIT_DATASETS" "LOAD energy False|" (DataLoad @("tpch", "energy") @("energy"))
-    Has "an id already loaded names the reload command for it" "exakit data-load --force fda_recalls" (DataLoad @("tpch") @("fda_recalls"))
+    Has "an id already loaded names the reload command for it" "exakit data-load --force pharma_trials" (DataLoad @("tpch") @("pharma_trials"))
     Has "two targets are refused" "REJECT: data-load takes one file, folder or dataset at a time" (DataLoad @("tpch") @("tpch", "energy"))
     Has "-Force with a file is refused, with the file's own answer" "EXAKIT_ON_EXISTING" (DataLoad @("tpch") @("-Force", $work))
     Has "an unknown option is refused" "REJECT: Unknown option '--nope'" (DataLoad @("tpch") @("--nope"))
     Has "a dataset id is matched case-sensitively" "No such file, folder or dataset: TPCH" (DataLoad @("tpch") @("TPCH"))
-    Has "the one-argument form still works" "LOAD fda_recalls True|" ($(Set-Pending @("tpch"); $script:Did = @(); Invoke-CmdDataLoad -Argument "--force" -Arguments @("fda_recalls") 6>$null; "$($script:Did -join ';')|"))
+    Has "the one-argument form still works" "LOAD pharma_trials True|" ($(Set-Pending @("tpch"); $script:Did = @(); Invoke-CmdDataLoad -Argument "--force" -Arguments @("pharma_trials") 6>$null; "$($script:Did -join ';')|"))
 
     Write-Host "a scripted add-on that does not run here is skipped, the rest install:"
     function Get-ExakitMarketplaceAddonDescription { return "desc" }
