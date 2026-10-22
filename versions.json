@@ -93,7 +93,11 @@
     "notebook": {
       "version": "3.1.0",
       "package": "exasol-notebook-connector",
-      "severity": "normal"
+      "severity": "normal",
+      "frontends": {
+        "jupyterlab": "4.6.4",
+        "marimo": "0.25.2"
+      }
     },
     "udf-devkit": {
       "version": "0.1.0",

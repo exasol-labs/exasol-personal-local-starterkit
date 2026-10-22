@@ -34,18 +34,50 @@ try {
     Check "the kit's helper package" (Join-Path (Join-Path $repo "notebook") "package") $specs[-2]
     Check "the kit's MLflow client package" (Join-Path (Join-Path $repo "packages") "exasol-mlflow") $specs[-1]
     Check "JupyterLab is not in it" 0 @($specs | Where-Object { $_ -match "jupyterlab" }).Count
+    Check "Marimo is not in it" 0 @($specs | Where-Object { $_ -match "marimo" }).Count
+
+    Write-Host "the front ends are pinned in versions.json and join the one resolution:"
+    $versions = Get-Content -Raw (Join-Path $repo "versions.json") | ConvertFrom-Json
+    $pinJ = $versions.components.notebook.frontends.jupyterlab
+    $pinM = $versions.components.notebook.frontends.marimo
+    Check "the JupyterLab pin is read from versions.json" $pinJ (Get-NotebookFrontendPin "jupyterlab")
+    Check "the Marimo pin is read from versions.json" $pinM (Get-NotebookFrontendPin "marimo")
+    $env:EXAKIT_NOTEBOOK_MARIMO_VERSION = "0.26.1"
+    Check "EXAKIT_NOTEBOOK_MARIMO_VERSION outranks the pin" "0.26.1" (Get-NotebookFrontendPin "marimo")
+    $env:EXAKIT_NOTEBOOK_MARIMO_VERSION = "1; rm"
+    Check "a pin outside the safe charset is no pin" $null (Get-NotebookFrontendPin "marimo")
+    Remove-Item Env:EXAKIT_NOTEBOOK_MARIMO_VERSION
+    $script:NotebookAddJupyterLab = $true
+    $specs = @(Get-NotebookSpecs)
+    $script:NotebookAddJupyterLab = $false
+    Check "JupyterLab ticked: the connector's jupyter extra, no separate spec" "exasol-notebook-connector[bucketfs,ibis,pyexasol,sqlalchemy,jupyter]==3.1.0" $specs[0]
+    Check "and its version held by the pin" "jupyterlab==$pinJ" (@($specs | Where-Object { $_ -like "jupyterlab*" }) -join ",")
+    $script:NotebookAddMarimo = $true
+    Check "Marimo ticked: marimo at its pin" "marimo==$pinM" (@(Get-NotebookSpecs | Where-Object { $_ -like "marimo*" }) -join ",")
+    $script:NotebookAddMarimo = $false
+    $converts = & python3 -c "import sys; sys.path.insert(0, sys.argv[1]); import notebooks; print(notebooks.marimo_pin())" (Join-Path $repo "tools")
+    Check "tools/notebooks.py converts with the Marimo the add-on installs" "marimo==$(Get-NotebookFrontendPin 'marimo')" "$converts"
+    $realFind = ${function:Find-NotebookJupyter}
+    function Find-NotebookJupyter { return $null }
+    Set-NotebookFrontEndPlan "jupyterlab,marimo"
+    Check "ticked tools, no JupyterLab of the user's: the kit brings both" "True True" "$($script:NotebookAddJupyterLab) $($script:NotebookAddMarimo)"
+    function Find-NotebookJupyter { return ,@("own", "C:\Python\Scripts\jupyter-lab.exe") }
+    Set-NotebookFrontEndPlan "jupyterlab,positron"
+    Check "the user's own JupyterLab is used, not installed" "False False" "$($script:NotebookAddJupyterLab) $($script:NotebookAddMarimo)"
+    Set-Item -Path Function:\Find-NotebookJupyter -Value $realFind
+    $script:NotebookAddJupyterLab = $false; $script:NotebookAddMarimo = $false
 
     Write-Host "notebooks are copied once, into persona folders, never over the user's:"
     $nb = Join-Path $script:NotebookDir "starter-kit-notebooks"
     New-Item -ItemType Directory -Force -Path (Join-Path $nb "data-scientist") | Out-Null
-    Set-Content -Path (Join-Path (Join-Path $nb "data-scientist") "start_here.ipynb") -Value "mine" -NoNewline
-    Check "what is missing comes, each in its persona's folder" `
-        "data-scientist/explore.ipynb,data-scientist/text_classification.ipynb,ml-engineer/bank_marketing_mlflow.ipynb,ml-engineer/train.ipynb" `
+    Set-Content -Path (Join-Path (Join-Path $nb "data-scientist") "00_quickstart.ipynb") -Value "mine" -NoNewline
+    Check "what is missing comes, each in its persona's folder, the shared cells too" `
+        "00_shared/data_paths.ipynb,data-scientist/01_explore.ipynb,ml-engineer/00_quickstart.ipynb,ml-engineer/01_train.ipynb" `
         (@(Copy-NotebookContent) -join ",")
-    Check "the user's own stays" "mine" (Get-Content -Raw (Join-Path (Join-Path $nb "data-scientist") "start_here.ipynb"))
+    Check "the user's own stays" "mine" (Get-Content -Raw (Join-Path (Join-Path $nb "data-scientist") "00_quickstart.ipynb"))
     Check "a second run adds nothing" 0 @(Copy-NotebookContent).Count
-    Check "a README names the end-to-end path" $true (Test-Path (Join-Path $nb "README.md"))
-    Check "the Marimo ones go to marimo/<persona>/" "data-scientist/explore.py,data-scientist/text_classification.py,ml-engineer/bank_marketing_mlflow.py,ml-engineer/train.py" `
+    Contains "a README names each persona's order" "00. ``ml-engineer/00_quickstart.ipynb`` - Quickstart" (Get-Content -Raw (Join-Path $nb "README.md"))
+    Check "the Marimo ones go to marimo/<persona>/" "00_shared/data_paths.py,data-scientist/00_quickstart.py,data-scientist/01_explore.py,ml-engineer/00_quickstart.py,ml-engineer/01_train.py" `
         (@(Copy-NotebookContent -Front marimo) -join ",")
 
     Write-Host "the notebook tools: one checklist, all three ticked:"
@@ -58,8 +90,6 @@ try {
     $env:EXAKIT_NOTEBOOK_FRONTENDS = "Marimo, positron"
     Check "EXAKIT_NOTEBOOK_FRONTENDS answers it" "marimo,positron" (Get-NotebookFrontEnds)
     Remove-Item Env:EXAKIT_NOTEBOOK_FRONTENDS
-    $catalog = Get-Content -Raw (Join-Path (Join-Path $repo "notebook") "catalog.json") | ConvertFrom-Json
-    Check "Marimo's pin is the one notebook/catalog.json converts with" $catalog.marimo_package $script:NotebookMarimoPackage
 
     Write-Host "Positron is configured, never installed:"
     $vscode = Join-Path $script:NotebookDir ".vscode"
@@ -113,6 +143,35 @@ try {
     [void](Sync-NotebookPackages)
     Contains "with --reinstall-package for both" "--reinstall-package exakit-nb --reinstall-package exasol-mlflow" ($script:LoggedArgs -join " ")
 
+    Write-Host "a front end the kit installed follows its pin through an update:"
+    $scriptsDir = Join-Path $script:NotebookVenv "Scripts"
+    New-Item -ItemType Directory -Force -Path $scriptsDir | Out-Null
+    New-Item -ItemType File -Force -Path (Get-NotebookMarimoCommand) | Out-Null
+    New-Item -ItemType File -Force -Path (Join-Path $scriptsDir "jupyter-lab.exe") | Out-Null
+    $real = @{}
+    foreach ($fn in @("Get-ExakitComponentAvailable", "Get-NotebookInstalledVersion", "Copy-NotebookContent", "Register-NotebookKernel", "Test-Notebook")) {
+        $real[$fn] = (Get-Item "Function:\$fn").ScriptBlock
+    }
+    function Get-ExakitComponentAvailable { param($Component) return "3.1.0" }
+    function Get-NotebookInstalledVersion { return "3.1.0" }
+    function Copy-NotebookContent { param($Front) return @() }
+    function Register-NotebookKernel { return $true }
+    function Test-Notebook { }
+    Update-Notebook 6>$null
+    $logged = $script:LoggedArgs -join " "
+    Contains "the update's resolution keeps Marimo at the versions.json pin" "marimo==$pinM" $logged
+    Contains "and JupyterLab, through the connector's extra" "sqlalchemy,jupyter]==3.1.0" $logged
+    Contains "at its pin" "jupyterlab==$pinJ" $logged
+    $env:EXAKIT_NOTEBOOK_MARIMO_VERSION = "0.26.1"
+    try { Update-Notebook 6>$null } finally { Remove-Item Env:EXAKIT_NOTEBOOK_MARIMO_VERSION }
+    $logged = $script:LoggedArgs -join " "
+    Check "a changed Marimo pin is what the update installs" "True|False" "$($logged.Contains('marimo==0.26.1'))|$($logged.Contains("marimo==$pinM"))"
+    Remove-Item -Force (Get-NotebookMarimoCommand), (Join-Path $scriptsDir "jupyter-lab.exe")
+    Update-Notebook 6>$null
+    $logged = $script:LoggedArgs -join " "
+    Check "a front end the kit did not install stays out" "False|False" "$($logged.Contains('marimo'))|$($logged.Contains('jupyter'))"
+    foreach ($fn in @($real.Keys)) { Set-Item -Path "Function:\$fn" -Value $real[$fn] }
+
     Write-Host "exakit logs notebook: two targets:"
     $logs = @(Get-NotebookLogPath)
     Check "JupyterLab's log" "notebook|JupyterLab (exakit notebook)|$(Get-NotebookLogFile)" $logs[0]
@@ -150,7 +209,7 @@ try {
 
     Write-Host "an uninstall keeps the notebooks:"
     $said = (Uninstall-Notebook 6>&1 | Out-String)
-    Check "the notebooks are still there" "mine" (Get-Content -Raw (Join-Path (Join-Path $nb "data-scientist") "start_here.ipynb"))
+    Check "the notebooks are still there" "mine" (Get-Content -Raw (Join-Path (Join-Path $nb "data-scientist") "00_quickstart.ipynb"))
     Check "it does not say JupyterLab is not running" $false ($said -like "*JupyterLab is not running*")
 
     Write-Host "a full kit uninstall keeps the notebooks:"
@@ -182,7 +241,7 @@ try {
     Check "the dry run removes nothing" $true (Test-Path $script:ManifestPath)
     $said = (Invoke-ExakitUninstallRun 6>&1 | Out-String)
     Check "the user's notebook and MLflow store are still there" "mine|runs" `
-        "$(Get-Content -Raw (Join-Path (Join-Path $nb 'data-scientist') 'start_here.ipynb'))|$(Get-Content -Raw (Join-Path (Join-Path (Join-Path $script:NotebookDir 'my-work') 'mlflow') 'mlflow.db'))"
+        "$(Get-Content -Raw (Join-Path (Join-Path $nb 'data-scientist') '00_quickstart.ipynb'))|$(Get-Content -Raw (Join-Path (Join-Path (Join-Path $script:NotebookDir 'my-work') 'mlflow') 'mlflow.db'))"
     Check "everything else in the kit home is gone" "notebooks" ((@(Get-ChildItem -Force -LiteralPath $script:ExakitHome) | ForEach-Object { $_.Name }) -join " ")
     Check "a home holding only kept notebooks is still a kit home to the guard" $true (Test-ExakitSafeUninstallTarget $script:ExakitHome)
     Seed-Kit

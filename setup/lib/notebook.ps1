@@ -14,6 +14,11 @@
 #   - the notebook tools: one checklist at the first install, JupyterLab,
 #     Marimo and Positron all ticked; the answer is recorded and a reinstall or
 #     an update keeps it. Positron is only ever configured, never installed.
+#   - the front ends the kit installs are pinned in versions.json
+#     (components.notebook.frontends), EXAKIT_NOTEBOOK_JUPYTERLAB_VERSION and
+#     EXAKIT_NOTEBOOK_MARIMO_VERSION outranking the pin; they are in the one uv
+#     resolution with the connector (JupyterLab as its jupyter extra), so an
+#     update moves one the kit installed to a new pin.
 #   - the login token never reaches a command line (a 0600-style HTML file in
 #     the notebook home forwards the browser), and a pid file is trusted only
 #     while its process is still the server the kit started.
@@ -26,17 +31,20 @@ $script:NotebookHome = if ($env:EXAKIT_NOTEBOOK_HOME) { $env:EXAKIT_NOTEBOOK_HOM
 $script:NotebookDir = if ($env:EXAKIT_NOTEBOOK_DIR) { $env:EXAKIT_NOTEBOOK_DIR } else { Join-Path $script:ExakitHome "notebooks" }
 $script:NotebookPort = if ($env:EXAKIT_NOTEBOOK_PORT) { $env:EXAKIT_NOTEBOOK_PORT } else { "8888" }
 $script:NotebookExtras = "bucketfs,ibis,pyexasol,sqlalchemy"
-$script:NotebookPackages = @("ipykernel>=6.29,<8", "langfuse>=3,<4", "openai>=1.40,<3", "scikit-learn>=1.4,<2", "mlflow-skinny>=2.14,<4", "alembic>=1.13,<2")
+$script:NotebookPackages = @("ipykernel>=6.29,<8", "langfuse>=3,<4", "openai>=1.40,<3", "scikit-learn>=1.4,<2", "mlflow-skinny>=2.14,<4", "alembic>=1.13,<2", "pyarrow>=14")
 # The kit's own packages, by their distribution names (reinstalled every time).
 $script:NotebookOwnPackages = @("exakit-nb", "exasol-mlflow")
-$script:NotebookJupyterLab = "jupyterlab>=4.2,<5"
+# Which front ends the next resolution brings (Set-NotebookFrontEndPlan), and
+# the tools chosen at this install.
+$script:NotebookAddJupyterLab = $false
+$script:NotebookAddMarimo = $false
+$script:NotebookFrontEnds = ""
 $script:NotebookKernelName = "exasol-starter-kit"
 $script:NotebookKernelTitle = "Exasol (Starter Kit)"
 $script:NotebookInstallGuide = "https://jupyter.org/install"
 $script:NotebookMasterCred = "notebook_store_master_password"
 $script:NotebookTokenCred = "notebook_jupyter_token"
 $script:NotebookMarimoCred = "notebook_marimo_token"
-$script:NotebookMarimoPackage = "marimo>=0.25.2,<0.26"
 $script:NotebookMarimoPort = if ($env:EXAKIT_MARIMO_PORT) { $env:EXAKIT_MARIMO_PORT } else { "2718" }
 $script:NotebookPositronDownload = "https://positron.posit.co/download.html"
 # What a server's command line holds when it is the one the kit started (see
@@ -283,15 +291,16 @@ function Confirm-NotebookJupyter {
         if (Confirm-ExakitPrompt "No JupyterLab was found. Install JupyterLab into the kit's notebook environment" $false) { $answer = "install" } else { $answer = "skip" }
     }
     if ($answer -eq "install") {
-        $uv = Get-NotebookUv
-        if ($uv) {
-            $script:ExakitActiveLabel = "Installing JupyterLab"
-            if ((Invoke-ExakitLogged $uv "pip" "install" "--python" (Get-NotebookVenvPython) $script:NotebookJupyterLab) -eq 0) {
-                Set-ExakitManifestValue "components.notebook.jupyter" "kit"
-                Add-NotebookFrontEnd "jupyterlab"
-                Ok "JupyterLab installed into the kit's notebook environment"
-                return $true
-            }
+        # The connector's jupyter extra, in the one resolution with everything
+        # else (so an update keeps it, at the pinned version).
+        $script:ExakitActiveLabel = "Installing JupyterLab"
+        $script:NotebookAddJupyterLab = $true
+        try { $synced = Sync-NotebookPackages } finally { $script:NotebookAddJupyterLab = $false }
+        if ($synced -and (Test-Path (Join-Path (Join-Path $script:NotebookVenv "Scripts") "jupyter-lab.exe"))) {
+            Set-ExakitManifestValue "components.notebook.jupyter" "kit"
+            Add-NotebookFrontEnd "jupyterlab"
+            Ok "JupyterLab $(Get-NotebookFrontendPin 'jupyterlab') installed into the kit's notebook environment"
+            return $true
         }
         Warn2 "JupyterLab could not be installed (see the log)."
     }
@@ -379,14 +388,30 @@ function Get-NotebookFrontEnds {
     return ($chosen -join ",")
 }
 
-# Install-NotebookFrontEnds - the install's notebook tools, one line each.
-# Twin of notebook_front_ends_setup.
+# Set-NotebookFrontEndPlan - which front ends the install's one resolution
+# brings, from the ticked tools: JupyterLab when it is ticked and the user has
+# none of their own (one on PATH is used instead), Marimo when it is ticked.
+# Twin of notebook_plan_front_ends.
+function Set-NotebookFrontEndPlan {
+    param([string]$FrontEnds)
+    $fronts = @("$FrontEnds" -split ',')
+    $found = Find-NotebookJupyter
+    $script:NotebookAddJupyterLab = (($fronts -contains "jupyterlab") -and -not ($found -and $found[0] -eq "own"))
+    $script:NotebookAddMarimo = ($fronts -contains "marimo")
+}
+
+# Install-NotebookFrontEnds - the install's notebook tools, one line each. The
+# tools were chosen before the packages were installed (Install-Notebook), so
+# what the kit installs came with them; this settles what is left. Twin of
+# notebook_front_ends_setup.
 function Install-NotebookFrontEnds {
-    $fronts = @((Get-NotebookFrontEnds) -split ',')
+    if (-not $script:NotebookFrontEnds) { $script:NotebookFrontEnds = Get-NotebookFrontEnds }
+    $fronts = @($script:NotebookFrontEnds -split ',')
     if ($fronts -contains "jupyterlab") {
         $found = Find-NotebookJupyter
         if ($found) {
-            $whose = if ($found[0] -eq "kit") { "the kit's" } else { "yours" }
+            $whose = "yours"
+            if ($found[0] -eq "kit") { $whose = "the kit's"; Set-ExakitManifestValue "components.notebook.jupyter" "kit" }
             Ok "JupyterLab ($($whose): $($found[1])) with the kernel '$($script:NotebookKernelTitle)' - open it with: exakit notebook"
         } else {
             $saved = $env:EXAKIT_NOTEBOOK_JUPYTER
@@ -397,6 +422,10 @@ function Install-NotebookFrontEnds {
         Info "JupyterLab not set up; the kernel '$($script:NotebookKernelTitle)' is registered for any Jupyter - add it any time: exakit notebook --setup"
     }
     if ($fronts -contains "marimo") {
+        if (Test-Path (Get-NotebookMarimoCommand)) {
+            [void](Copy-NotebookContent -Front marimo)
+            Set-ExakitManifestValue "components.notebook.marimo" "kit"
+        }
         if ((Test-Path (Get-NotebookMarimoCommand)) -or (Install-NotebookMarimo)) {
             Ok "Marimo with the notebooks in $(Join-Path $script:NotebookDir 'marimo') - start it with: exakit notebook --marimo"
         } else {
@@ -409,13 +438,14 @@ function Install-NotebookFrontEnds {
     Set-ExakitManifestValue "components.notebook.front_ends" ($fronts -join ",")
 }
 
-# Install-NotebookMarimo - Marimo into the kit's notebook environment, then the
-# kit's Marimo notebooks into marimo\<persona>\. Twin of notebook_install_marimo.
+# Install-NotebookMarimo - Marimo, at its pin, into the kit's notebook
+# environment (the one resolution, so an update keeps it), then the kit's
+# Marimo notebooks into marimo\<persona>\. Twin of notebook_install_marimo.
 function Install-NotebookMarimo {
-    $uv = Get-NotebookUv
-    if (-not $uv) { return $false }
     $script:ExakitActiveLabel = "Installing Marimo"
-    if ((Invoke-ExakitLogged $uv "pip" "install" "--python" (Get-NotebookVenvPython) $script:NotebookMarimoPackage) -ne 0) { return $false }
+    $script:NotebookAddMarimo = $true
+    try { $synced = Sync-NotebookPackages } finally { $script:NotebookAddMarimo = $false }
+    if (-not $synced) { return $false }
     if (-not (Test-Path (Get-NotebookMarimoCommand))) { return $false }
     [void](Copy-NotebookContent -Front marimo)
     Set-ExakitManifestValue "components.notebook.marimo" "kit"
@@ -646,15 +676,69 @@ function Write-NotebookPositronNote {
     }
 }
 
+# Get-NotebookFrontendPin - the version of a front end the kit installs:
+# EXAKIT_NOTEBOOK_JUPYTERLAB_VERSION / EXAKIT_NOTEBOOK_MARIMO_VERSION when set,
+# else versions.json components.notebook.frontends.<name> - the advertised
+# document, then the kit copy's own. $null when neither names a version in the
+# safe charset: it goes on a uv command line. Twin of notebook_frontend_pin.
+function Get-NotebookFrontendPin {
+    param([Parameter(Mandatory)][ValidateSet("jupyterlab", "marimo")][string]$Name)
+    $version = $env:EXAKIT_NOTEBOOK_JUPYTERLAB_VERSION
+    if ($Name -eq "marimo") { $version = $env:EXAKIT_NOTEBOOK_MARIMO_VERSION }
+    if (-not $version) { $version = Get-ExakitVersionsValue -Path "components.notebook.frontends.$Name" }
+    if (-not $version) {
+        $baked = Get-ExakitVersionsBakedPath
+        if ($baked) { $version = Get-ExakitVersionsValue -Path "components.notebook.frontends.$Name" -DocPath $baked }
+    }
+    if ("$version" -notmatch '^[A-Za-z0-9._+-]+$') { return $null }
+    return "$version"
+}
+
+# Get-NotebookFrontendsInstalled - name -> version for each front end the kit's
+# venv holds (jupyterlab, marimo); empty without a venv. Twin of
+# _notebook_frontends_installed.
+function Get-NotebookFrontendsInstalled {
+    $found = @{}
+    $python = Get-NotebookVenvPython
+    if (-not (Test-Path $python)) { return $found }
+    $prevEap = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $code = "import sys`nfrom importlib.metadata import PackageNotFoundError, version`nfor name in sys.argv[1:]:`n    try:`n        print(name + '=' + version(name))`n    except PackageNotFoundError:`n        pass"
+        foreach ($line in @(& $python -c $code "jupyterlab" "marimo" 2>$null)) {
+            $parts = "$line".Trim().Split("=", 2)
+            if ($parts.Count -eq 2) { $found[$parts[0]] = $parts[1] }
+        }
+    } catch { } finally { $ErrorActionPreference = $prevEap }
+    return $found
+}
+
 # Get-NotebookSpecs - the connector with its extras, the companion packages,
-# the front ends the kit installed into the venv (so one resolution keeps
-# them), and the two packages the kit carries. Twin of _notebook_specs.
+# the front ends the kit installs (asked for now, or already in the venv) at
+# their pins, and the two packages the kit carries. JupyterLab is the
+# connector's jupyter extra, its version held by jupyterlab==<pin>; a front end
+# with no pin is warned about (JupyterLab then comes within the connector's
+# range, Marimo is left out). Twin of _notebook_specs.
 function Get-NotebookSpecs {
     $root = Get-ExakitRepoRoot
-    $specs = @("$($script:NotebookPackage)[$($script:NotebookExtras)]==$($script:NotebookVersion)")
+    $extras = $script:NotebookExtras
+    $fronts = @()
+    if ($script:NotebookAddJupyterLab -or (Test-Path (Join-Path (Join-Path $script:NotebookVenv "Scripts") "jupyter-lab.exe"))) {
+        $extras = "$extras,jupyter"
+        $pin = Get-NotebookFrontendPin "jupyterlab"
+        if ($pin) { $fronts += "jupyterlab==$pin" }
+        else { Warn2 "No JupyterLab version is pinned (versions.json components.notebook.frontends.jupyterlab) - the connector's range decides" }
+    }
+    if ($script:NotebookAddMarimo -or (Test-Path (Get-NotebookMarimoCommand))) {
+        $pin = Get-NotebookFrontendPin "marimo"
+        if ($pin) { $fronts += "marimo==$pin" }
+        else { Warn2 "No Marimo version is pinned (versions.json components.notebook.frontends.marimo) - Marimo is left out" }
+    }
+    $version = $script:NotebookVersion
+    if (-not $version) { $version = Get-NotebookPackageVersion }
+    $specs = @("$($script:NotebookPackage)[$extras]==$version")
     $specs += $script:NotebookPackages
-    if (Test-Path (Join-Path (Join-Path $script:NotebookVenv "Scripts") "jupyter-lab.exe")) { $specs += $script:NotebookJupyterLab }
-    if (Test-Path (Get-NotebookMarimoCommand)) { $specs += $script:NotebookMarimoPackage }
+    $specs += $fronts
     $specs += (Join-Path (Join-Path $root "notebook") "package")
     $specs += (Join-Path (Join-Path $root "packages") "exasol-mlflow")
     return $specs
@@ -662,15 +746,24 @@ function Get-NotebookSpecs {
 
 # Sync-NotebookPackages - the whole set into the venv in one resolution, with
 # the kit's own two packages REINSTALLED from this kit copy, so a new notebook
-# never runs against helpers an older kit installed. $true on success. Twin of
-# notebook_sync_packages.
+# never runs against helpers an older kit installed. A front end the kit
+# installed is in the set at its pin, so a pin that moved moves it too (said in
+# one line). $true on success. Twin of notebook_sync_packages.
 function Sync-NotebookPackages {
     $uv = Get-NotebookUv
     if (-not $uv) { return $false }
+    $before = Get-NotebookFrontendsInstalled
     $pipArgs = @("pip", "install", "--python", (Get-NotebookVenvPython))
     foreach ($own in $script:NotebookOwnPackages) { $pipArgs += @("--reinstall-package", $own) }
     $pipArgs += (Get-NotebookSpecs)
-    return ((Invoke-ExakitLogged $uv @pipArgs) -eq 0)
+    if ((Invoke-ExakitLogged $uv @pipArgs) -ne 0) { return $false }
+    $after = Get-NotebookFrontendsInstalled
+    foreach ($name in @($after.Keys)) {
+        if ($before.ContainsKey($name) -and $before[$name] -ne $after[$name]) {
+            Ok "$name $($before[$name]) -> $($after[$name]) (the version versions.json pins)"
+        }
+    }
+    return $true
 }
 
 function Install-Notebook {
@@ -682,6 +775,10 @@ function Install-Notebook {
     if (-not $uv) {
         return (Write-NotebookNotInstalled "uv (the Python tool runner) is not available - install it from https://docs.astral.sh/uv/ and re-run")
     }
+    # The notebook tools first: the front ends the kit installs join the
+    # connector's own resolution below.
+    $script:NotebookFrontEnds = Get-NotebookFrontEnds
+    Set-NotebookFrontEndPlan $script:NotebookFrontEnds
     $python = Get-NotebookVenvPython
     $current = Get-NotebookPackageVersion
     if ($current -and $current -eq $script:NotebookVersion -and $env:EXAKIT_FORCE_COMPONENT_INSTALL -ne "1") {
@@ -728,7 +825,7 @@ function Test-Notebook {
     $prevEap = $ErrorActionPreference
     try {
         $ErrorActionPreference = "Continue"
-        & $python -c "import exasol.nb_connector, exakit_nb, exasol_mlflow, ipykernel" 2>$null | Out-Null
+        & $python -c "import exasol.nb_connector, exakit.nb, exakit_nb, exasol_mlflow, ipykernel" 2>$null | Out-Null
         $imports = ($LASTEXITCODE -eq 0)
     } finally { $ErrorActionPreference = $prevEap }
     if (-not $imports) {
@@ -896,7 +993,7 @@ function Invoke-NotebookMarimoCmd {
         }
     }
     Ok "Marimo is running: http://127.0.0.1:$Port/   (stop it with: exakit notebook --stop --marimo)"
-    Info "Marimo notebooks connect with: import exakit_nb; conn = exakit_nb.connect()"
+    Info "Marimo notebooks connect with: import exakit.nb as nb; conn = nb.connect()"
     if ($Browser) {
         if (-not (Open-NotebookLoggedIn -Front "marimo" -Url "http://127.0.0.1:$Port/?access_token=$(Get-NotebookSecret $script:NotebookMarimoCred)")) {
             Info "Open http://127.0.0.1:$Port/ - the login token is in $(Join-Path $script:CredsDir $script:NotebookMarimoCred)"
@@ -920,7 +1017,7 @@ function Invoke-NotebookPositronCmd {
     } else {
         Info "Positron is not on this machine. The folder is ready for it - get it at $($script:NotebookPositronDownload), then run: exakit notebook --positron"
     }
-    Info "In a notebook or script: import exakit_nb; conn = exakit_nb.connect()"
+    Info "In a notebook or script: import exakit.nb as nb; conn = nb.connect()"
 }
 
 # Invoke-CmdNotebook - `exakit notebook [--marimo|--positron] [--check]

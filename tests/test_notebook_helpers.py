@@ -1,14 +1,20 @@
-"""(run: python3 tests/test_notebook_helpers.py) The descriptor-driven explore notebook (PRD DS-3, DS-4): exakit_nb.dataset() against a fake connection, the trace
-tags, the model switch, and the shipped notebook kept in step with its .py and free of any dataset's names."""
+"""(run: python3 tests/test_notebook_helpers.py) The descriptor-driven notebooks and their helpers (DS-1 to DS-4, ML-3):
+exakit.nb.dataset() against a fake connection, the exakit.nb / exakit_nb alias, own files (CSV, Parquet, JSON) and
+their descriptors (YAML), the quickstarts' shared steps and the ML Engineer's checks, the trace tags and the question
+before a live source's rows go to a model, the swap test (AC-DS3.2: the SQL is byte-identical apart from descriptor
+values on Pharma, Banking and a synthetic file), and the shipped explore notebook kept in step with its .py."""
 
 from __future__ import annotations
 
+import ast
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -20,6 +26,7 @@ sys.path.insert(0, str(ROOT / "notebook" / "package"))
 import importlib  # noqa: E402
 
 import exakit_nb  # noqa: E402
+from exakit_nb.dataset import Dataset  # noqa: E402
 
 nb_dataset = importlib.import_module("exakit_nb.dataset")    # the module; exakit_nb.dataset is the function
 
@@ -60,7 +67,7 @@ class DatasetTest(unittest.TestCase):
         self.assertEqual((ds.id, ds.fact_table, ds.col("label"), ds.col("category")), ("pharma_trials", "PHARMA.PHARMA_TRIALS", "TERMINATED", "PHASE"))
         self.assertEqual(ds.text_sql(), "COALESCE(BRIEF_SUMMARY, '') || ' ' || COALESCE(ELIGIBILITY_CRITERIA, '')")
         self.assertEqual(len(ds.digest), 64)
-        self.assertEqual(ds.tags(), {"exasol.dataset": "pharma_trials", "exasol.descriptor_sha256": ds.digest})
+        self.assertEqual(ds.tags(), {"exasol.dataset": "pharma_trials", "exasol.descriptor": ds.digest})
 
     def test_several_text_columns_join_into_one_expression(self):
         cols = ["BANKING.BANKING_COMPLAINTS." + c for c in ("COMPANY", "PRODUCT", "DATE_RECEIVED", "MONETARY_RELIEF", "ISSUE", "SUB_ISSUE",
@@ -207,13 +214,13 @@ class CopyTest(unittest.TestCase):
     def test_copied_once_then_the_users(self):
         with tempfile.TemporaryDirectory() as tmp:
             added, problems = kit_notebooks.copy("jupyter", ROOT, Path(tmp))
-            self.assertIn("data-scientist/start_here.ipynb", added)
+            self.assertIn("data-scientist/00_quickstart.ipynb", added)
             self.assertEqual(problems, [])
             base = Path(tmp) / "starter-kit-notebooks"
-            self.assertIn("data-scientist/start_here.ipynb", (base / ".kit-copied").read_text(encoding="utf-8").split())
-            (base / "data-scientist" / "start_here.ipynb").unlink()
+            self.assertIn("data-scientist/00_quickstart.ipynb", (base / ".kit-copied").read_text(encoding="utf-8").split())
+            (base / "data-scientist" / "00_quickstart.ipynb").unlink()
             self.assertEqual(kit_notebooks.copy("jupyter", ROOT, Path(tmp)), ([], []))
-            self.assertFalse((base / "data-scientist" / "start_here.ipynb").exists(), "deleted by the user: not copied again")
+            self.assertFalse((base / "data-scientist" / "00_quickstart.ipynb").exists(), "deleted by the user: not copied again")
 
     def test_a_kit_that_existed_before_the_record_counts_what_is_there(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -229,11 +236,11 @@ class CopyTest(unittest.TestCase):
             base.mkdir()
             (base / "ml-engineer").write_text("a file, not a folder", encoding="utf-8")
             added, problems = kit_notebooks.copy("jupyter", ROOT, Path(tmp))
-            self.assertIn("data-scientist/start_here.ipynb", added)
+            self.assertIn("data-scientist/00_quickstart.ipynb", added)
             self.assertTrue(problems and all(p.startswith("ml-engineer/") and "is a file" in p for p in problems), problems)
             with redirect_stderr(io.StringIO()) as err:
                 self.assertEqual(kit_notebooks.main(["copy", "jupyter", str(ROOT), tmp]), 1)
-            self.assertIn("could not copy ml-engineer/train.ipynb", err.getvalue())
+            self.assertIn("could not copy ml-engineer/01_train.ipynb", err.getvalue())
 
     def test_the_folder_must_be_named(self):
         with redirect_stderr(io.StringIO()):
@@ -276,7 +283,8 @@ class OwnFileTest(unittest.TestCase):
             path = Path(tmp) / name
             frame.to_parquet(path) if name.endswith(".parquet") else frame.to_csv(path, index=False)
             conn = _OwnConn()
-            exakit_nb.load_own_file(path, "MY_DATA.T", roles or self.ROLES, conn=conn)
+            with redirect_stdout(io.StringIO()):
+                exakit_nb.load_own_file(path, "MY_DATA.T", roles or self.ROLES, conn=conn)
             return next(s for s in conn.statements if s.startswith("CREATE OR REPLACE TABLE"))
 
     def test_a_header_that_is_a_reserved_word_is_quoted(self):
@@ -297,7 +305,7 @@ class OwnFileTest(unittest.TestCase):
 
 
 class ShippedExploreTest(unittest.TestCase):
-    NOTEBOOK = ROOT / "notebook" / "notebooks" / "explore.py"
+    NOTEBOOK = ROOT / "notebook" / "notebooks" / "data-scientist" / "01_explore.py"
 
     def test_the_ipynb_is_built_from_its_py(self):
         done = subprocess.run([sys.executable, str(ROOT / "tools" / "notebooks.py"), "--check"], capture_output=True, text=True, check=False)
@@ -314,6 +322,409 @@ class ShippedExploreTest(unittest.TestCase):
 
     def test_it_compiles(self):
         compile(self.NOTEBOOK.read_text(encoding="utf-8"), str(self.NOTEBOOK), "exec")
+
+
+rules = importlib.import_module("exakit_nb.descriptor_rules")
+own_file = importlib.import_module("exakit_nb.own_file")
+quickstart = importlib.import_module("exakit_nb.quickstart")
+checks = importlib.import_module("exakit_nb.checks")
+NOTEBOOKS = ROOT / "notebook" / "notebooks"
+SYNTHETIC = """# A file that resembles neither vertical: sensor readings.
+schema_version: 1
+id: sensor_readings
+fact_table: LAB.READINGS
+roles:
+  entity:   {table: LAB.READINGS, column: DEVICE}
+  category: {table: LAB.READINGS, column: KIND}
+  date:     {table: LAB.READINGS, column: TAKEN_ON}
+  label:    {table: LAB.READINGS, column: ALARM}
+  text:
+    - {table: LAB.READINGS, column: NOTE}
+    - {table: LAB.READINGS, column: OPERATOR_COMMENT}
+"""
+
+
+def _descriptors():
+    """(name, Descriptor) for the two reference datasets and the synthetic file."""
+    return [("pharma", rules.read_descriptor(ROOT / "data" / "datasets" / "pharma_trials")),
+            ("banking", rules.read_descriptor(ROOT / "data" / "datasets" / "banking_complaints")),
+            ("synthetic", rules.parse_descriptor(SYNTHETIC))]
+
+
+class SwapTest(unittest.TestCase):
+    """AC-DS3.2: a notebook's SQL rendered for Pharma, Banking and a synthetic file is byte-identical apart from the
+    values the descriptor gives - so switching the data is the one DATASET assignment and no SQL."""
+
+    EXTRA = {"SAMPLE": 20000, "SAMPLE_TEXTS": 5, "period": "MONTH", "UDF_SCHEMA": "EXASOL_MLFLOW", "PARAMS": {"C": 1.0}}
+
+    def render(self, notebook: Path, descriptor) -> list[str]:
+        """Every SQL f-string of the notebook, evaluated with its own role assignments on ``descriptor``."""
+        import exasol_mlflow  # noqa: F401  (packages/exasol-mlflow, on the path below)
+
+        tree = ast.parse(notebook.read_text(encoding="utf-8"))
+        ds = Dataset(descriptor.id, Path("descriptor.yaml"), "0" * 64, descriptor)
+        namespace = {"ds": ds, "json": json, "exasol_mlflow": sys.modules["exasol_mlflow"], **self.EXTRA}
+        for node in tree.body:                                    # the roles cell: ENTITY, ... = ds.col(...), TEXT = ...
+            if isinstance(node, ast.Assign) and "ds." in ast.unparse(node.value) and "nb." not in ast.unparse(node.value):
+                exec(compile(ast.Module([node], []), "roles", "exec"), namespace)
+        sql = [node for node in ast.walk(tree) if isinstance(node, ast.JoinedStr)
+               and any("FROM" in str(part.value) for part in node.values if isinstance(part, ast.Constant))]
+        self.assertTrue(sql, f"{notebook.name} has no SQL f-string")
+        return [eval(compile(ast.Expression(node), "sql", "eval"), namespace) for node in sql]
+
+    @staticmethod
+    def placeholders(text: str, descriptor) -> str:
+        """The rendered SQL with every value the descriptor gave replaced by its role's name."""
+        ds = Dataset(descriptor.id, Path("d"), "0" * 64, descriptor)
+        text = text.replace(ds.text_sql(), "<text>").replace(descriptor.fact_table, "<fact_table>")
+        for role in ("entity", "category", "date", "label"):
+            text = re.sub(rf"\b{re.escape(ds.col(role))}\b", f"<{role}>", text)
+        return text
+
+    def test_the_sql_differs_only_in_descriptor_values(self):
+        sys.path.insert(0, str(ROOT / "packages" / "exasol-mlflow"))
+        for notebook in sorted(NOTEBOOKS.glob("*/0*.py")):
+            if "[include]" in notebook.read_text(encoding="utf-8") and "ds." not in notebook.read_text(encoding="utf-8"):
+                continue
+            with self.subTest(notebook=notebook.relative_to(NOTEBOOKS).as_posix()):
+                rendered = {name: self.render(notebook, d) for name, d in _descriptors()}
+                self.assertNotEqual(rendered["pharma"], rendered["banking"], "the values do differ")
+                templated = {name: [self.placeholders(s, d) for s in rendered[name]] for name, d in _descriptors()}
+                self.assertEqual(templated["pharma"], templated["banking"])
+                self.assertEqual(templated["pharma"], templated["synthetic"])
+
+    def test_one_assignment_switches_the_data(self):
+        for name in ("data-scientist/01_explore.py", "ml-engineer/01_train.py"):
+            with self.subTest(notebook=name):
+                lines = (NOTEBOOKS / name).read_text(encoding="utf-8").splitlines()
+                self.assertEqual([l.split("#")[0].strip() for l in lines if l.startswith("DATASET = ")], ['DATASET = "pharma_trials"'])
+                self.assertIn("nb.dataset(conn, DATASET)", "\n".join(lines))
+
+
+class AliasTest(unittest.TestCase):
+    """exakit.nb is the helpers' name; exakit_nb keeps working - one module under both names."""
+
+    def test_every_spelling_reaches_the_one_module(self):
+        import exakit
+        import exakit.nb as nb
+        from exakit import nb as also
+
+        self.assertIs(nb, exakit_nb)
+        self.assertIs(also, exakit_nb)
+        self.assertIs(exakit.nb, exakit_nb)
+        self.assertIs(exakit.nb.trace, exakit_nb.trace)
+        self.assertIs(exakit.nb.load_own_file, exakit_nb.load_own_file)
+        self.assertIs(exakit.nb.show_sql, exakit_nb.show_sql)
+
+    def test_the_submodules_are_not_second_copies(self):
+        import exakit.nb.dataset  # noqa: F401
+        import exakit.nb.own_file  # noqa: F401
+
+        self.assertIs(sys.modules["exakit.nb.own_file"], own_file)
+        self.assertIs(sys.modules["exakit.nb.dataset"].Dataset, Dataset)
+        self.assertIs(sys.modules["exakit.nb.descriptor_rules"], rules)
+
+
+class DescriptorFileTest(unittest.TestCase):
+    """load_own_file and dataset() read a YAML (or JSON) descriptor file; the roles of a file are kept beside it."""
+
+    def test_a_yaml_descriptor_path_and_a_dataset_folder_read(self):
+        doc = own_file._descriptor_doc(ROOT / "data" / "datasets" / "pharma_trials" / "descriptor.yaml", None)
+        self.assertEqual(doc["fact_table"], "PHARMA.PHARMA_TRIALS")
+        self.assertEqual(own_file._descriptor_doc(ROOT / "data" / "datasets" / "banking_complaints", None)["id"], "banking_complaints")
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "d.json").write_text(json.dumps(doc), encoding="utf-8")
+            self.assertEqual(own_file._descriptor_doc(Path(tmp) / "d.json", None), doc)
+
+    def test_roles_need_a_table(self):
+        with self.assertRaises(ValueError):
+            own_file._descriptor_doc({"entity": "A"}, None)
+
+    def test_saved_roles_read_back_the_same(self):
+        doc = own_file._descriptor_doc({"entity": "ID", "category": "CAT", "date": "D", "label": "L", "text": ["MEMO", "BODY"]},
+                                       "MY_DATA.T")
+        with tempfile.TemporaryDirectory() as tmp:
+            path = own_file.save_descriptor(doc, Path(tmp) / "t.descriptor.yaml", "a test")
+            again = rules.read_descriptor(path)
+            self.assertEqual((again.id, again.fact_table, [r.column for r in again.roles["text"]]), ("t", "MY_DATA.T", ["MEMO", "BODY"]))
+            self.assertEqual(own_file.descriptor_beside(Path(tmp) / "t.csv"), path)
+            self.assertIsNone(own_file.descriptor_beside(Path(tmp) / "other.csv"))
+
+    def test_a_missing_file_is_skipped_with_one_line_when_asked(self):
+        with redirect_stdout(io.StringIO()) as out:
+            self.assertIsNone(exakit_nb.load_own_file("/no/such/file.csv", "S.T", {"entity": "A"}, conn=object(), missing_ok=True))
+        self.assertIn("skipped", out.getvalue())
+        with self.assertRaises(ValueError):
+            exakit_nb.load_own_file("/no/such/file.csv", "S.T", {"entity": "A"}, conn=object())
+
+    def test_dataset_names_a_data_file_with_its_roles_beside_it(self):
+        """DATASET = "<your file>": the descriptor beside it says the table; a file already loaded is not read again."""
+        with tempfile.TemporaryDirectory() as tmp:
+            data = Path(tmp) / "readings.csv"
+            data.write_text("DEVICE,KIND,TAKEN_ON,ALARM,NOTE,OPERATOR_COMMENT\nd1,a,2024-01-01,0,x,y\n", encoding="utf-8")
+            (Path(tmp) / "readings.descriptor.yaml").write_text(SYNTHETIC, encoding="utf-8")
+            mark = f"{own_file.MARK}{own_file._digest(data)} file={data.name}"
+
+            class Loaded(FakeConn):
+                def execute(self, statement):
+                    if "EXA_ALL_TABLES" in statement:
+                        self.statements.append(statement)
+                        return FakeResult([(mark,)])
+                    return super().execute(statement)
+
+            conn = Loaded(["LAB.READINGS." + c for c in ("DEVICE", "KIND", "TAKEN_ON", "ALARM", "NOTE", "OPERATOR_COMMENT")])
+            ds = exakit_nb.dataset(conn, str(data))
+            self.assertEqual((ds.id, ds.fact_table, ds.col("label")), ("sensor_readings", "LAB.READINGS", "ALARM"))
+            self.assertFalse([s for s in conn.statements if s.startswith(("CREATE", "COMMENT"))], "nothing reloaded")
+            with self.assertRaises(ValueError) as caught:
+                exakit_nb.dataset(conn, _undescribed(tmp))
+            self.assertIn("no descriptor beside it", str(caught.exception))
+
+
+def _undescribed(folder: str) -> str:
+    """A data file in a folder of its own with no descriptor."""
+    path = Path(folder) / "alone" / "x.json"
+    path.parent.mkdir()
+    path.write_text("[]", encoding="utf-8")
+    return str(path)
+
+
+@unittest.skipUnless(HAVE_PANDAS, "needs pandas (run with the notebook venv's Python)")
+class OwnJsonFileTest(unittest.TestCase):
+    """A JSON file - an array of records, or one record per line - loads like a CSV; nested values as JSON text."""
+
+    ROLES = {"entity": "ID", "category": "CAT", "date": "D", "label": "L", "text": ["MEMO"]}
+    RECORDS = [{"id": 1, "cat": "a", "d": "2024-01-01", "l": True, "memo": "x", "extra": {"k": [1, 2]}},
+               {"id": 2, "cat": "b", "d": "2024-02-01", "l": False, "memo": "yy", "extra": None}]
+
+    def load(self, name: str, text: str):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / name
+            path.write_text(text, encoding="utf-8")
+            conn = _OwnConn()
+            with redirect_stdout(io.StringIO()) as out:
+                ds = exakit_nb.load_own_file(path, "MY_DATA.T", self.ROLES, conn=conn)
+            saved = (Path(tmp) / f"{path.stem}.descriptor.yaml").read_text(encoding="utf-8")
+            ddl = next(s for s in conn.statements if s.startswith("CREATE OR REPLACE TABLE"))
+            return ds, ddl, conn.frame, saved, out.getvalue()
+
+    def test_an_array_of_records(self):
+        ds, ddl, frame, saved, said = self.load("f.json", json.dumps(self.RECORDS))
+        self.assertEqual(ds.fact_table, "MY_DATA.T")
+        for column in ('"ID" DECIMAL(18,0)', '"D" DATE', '"L" DECIMAL(1,0)', '"MEMO" VARCHAR(2)', '"EXTRA" VARCHAR'):
+            self.assertIn(column, ddl)
+        self.assertEqual(frame["EXTRA"][0], '{"k": [1, 2]}')
+        self.assertEqual(rules.parse_descriptor(saved).fact_table, "MY_DATA.T")
+        self.assertIn("DATASET = ", said)
+
+    def test_one_record_per_line(self):
+        for name in ("f.jsonl", "f.json"):
+            with self.subTest(name=name):
+                _, ddl, frame, _, _ = self.load(name, "\n".join(json.dumps(r) for r in self.RECORDS) + "\n")
+                self.assertEqual(len(frame), 2)
+                self.assertIn('"CAT" VARCHAR(1)', ddl)
+
+
+class _Frame(dict):
+    """Enough of a DataFrame for the helpers' printing: columns by name."""
+
+
+class QuickstartTest(unittest.TestCase):
+    """The shared quickstart steps, against a fake connection (nb.sql stubbed: no pandas needed)."""
+
+    def setUp(self):
+        patcher = mock.patch.dict(os.environ, {"EXAKIT_NB_DATASETS": str(ROOT / "data" / "datasets")})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def run_sql(self, answers):
+        """Patch the steps' SQL: each statement answered by the first (needle, frame) whose needle it holds."""
+        def answer(conn, statement):
+            return next(frame for needle, frame in answers if needle in statement)
+        return mock.patch.object(quickstart, "_sql", side_effect=answer)
+
+    def test_a_loaded_sample_is_used_as_it_is(self):
+        with mock.patch.object(quickstart, "_run_exakit") as run, redirect_stdout(io.StringIO()) as out:
+            ds = exakit_nb.load_sample(FakeConn(PHARMA), "pharma_trials")
+        run.assert_not_called()
+        self.assertEqual(ds.id, "pharma_trials")
+        self.assertIn("is loaded", out.getvalue())
+
+    def test_a_sample_not_loaded_runs_data_load_and_waits(self):
+        conn = FakeConn([])
+        def loaded(*args):
+            conn.columns = PHARMA
+            return 0
+        with mock.patch.object(quickstart, "_run_exakit", side_effect=loaded) as run, redirect_stdout(io.StringIO()):
+            ds = exakit_nb.load_sample(conn, "pharma_trials")
+        run.assert_called_once_with("data-load", "pharma_trials")
+        self.assertEqual(ds.fact_table, "PHARMA.PHARMA_TRIALS")
+        with mock.patch.object(quickstart, "_run_exakit", return_value=1), redirect_stdout(io.StringIO()), \
+                self.assertRaises(RuntimeError):
+            exakit_nb.load_sample(FakeConn([]), "pharma_trials")
+
+    def test_none_skips_and_an_unknown_id_names_the_ones_there_are(self):
+        with redirect_stdout(io.StringIO()) as out:
+            self.assertIsNone(exakit_nb.load_sample(None, None))
+        self.assertIn("skipped", out.getvalue())
+        with self.assertRaises(ValueError) as caught:
+            exakit_nb.load_sample(FakeConn(PHARMA), "no_such_set")
+        self.assertIn("banking_complaints", str(caught.exception))
+
+    def test_no_connected_source_says_so_and_skips(self):
+        with self.run_sql([("EXA_ALL_VIRTUAL_SCHEMAS", _Frame(SCHEMA_NAME=[]))]), redirect_stdout(io.StringIO()) as out:
+            self.assertIsNone(exakit_nb.load_source(object(), "~/x.descriptor.yaml"))
+        self.assertIn("No external source is connected", out.getvalue())
+        with self.run_sql([("EXA_ALL_VIRTUAL_SCHEMAS", _Frame(SCHEMA_NAME=["CRM"]))]), redirect_stdout(io.StringIO()) as out:
+            self.assertIsNone(exakit_nb.load_source(object(), None))
+        self.assertIn("Connected sources: CRM", out.getvalue())
+
+    def test_a_connected_source_is_named_as_live(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "orders.descriptor.yaml"
+            path.write_text(SYNTHETIC.replace("LAB.", "CRM.") + "source: crm_postgres\n", encoding="utf-8")
+            conn = FakeConn(["CRM.READINGS." + c for c in ("DEVICE", "KIND", "TAKEN_ON", "ALARM", "NOTE", "OPERATOR_COMMENT")])
+            with self.run_sql([("EXA_ALL_VIRTUAL_SCHEMAS", _Frame(SCHEMA_NAME=["CRM"]))]), redirect_stdout(io.StringIO()) as out:
+                ds = exakit_nb.load_source(conn, str(path))
+        self.assertEqual((ds.source, ds.tags()["exasol.source"]), ("crm_postgres", "crm_postgres"))
+        self.assertIn("is a live source (crm_postgres)", out.getvalue())
+
+    def test_the_first_loaded_wins_and_its_roles_print(self):
+        ds = exakit_nb.dataset(FakeConn(PHARMA), "pharma_trials")
+        self.assertIs(exakit_nb.first(None, None, ds), ds)
+        with self.assertRaises(ValueError):
+            exakit_nb.first(None, None)
+        with redirect_stdout(io.StringIO()) as out:
+            exakit_nb.show_roles(ds)
+        self.assertIn("label     PHARMA.PHARMA_TRIALS.TERMINATED", out.getvalue())
+
+    def test_the_connection_check_names_no_user_or_host(self):
+        frame = _Frame(NOW=["t"], SESSION_ID=["42"], DATABASE_VERSION=["2025.1.8"])
+        with self.run_sql([("EXA_METADATA", frame)]) as sql, redirect_stdout(io.StringIO()) as out:
+            exakit_nb.check_connection(object())
+        self.assertEqual(out.getvalue().strip(), "Connected: Exasol 2025.1.8, session 42.")
+        self.assertNotIn("CURRENT_USER", sql.call_args[0][1])
+
+
+class ChecksTest(unittest.TestCase):
+    """The ML Engineer's three checks: one line each, ok or FAIL with the fix, never an exception."""
+
+    class ProbeConn:
+        def __init__(self, rows=None, fail=None):
+            self.rows, self.fail, self.statements = rows or [], fail, []
+
+        def execute(self, statement):
+            self.statements.append(statement)
+            if self.fail and "CREATE OR REPLACE" in statement:
+                raise RuntimeError(self.fail)
+            return FakeResult(self.rows)
+
+    def said(self, call):
+        with redirect_stdout(io.StringIO()) as out:
+            result = call()
+        return result, out.getvalue().strip()
+
+    def test_the_container(self):
+        good = [("python", "3.12.3"), ("scikit-learn", "1.7.2"), ("pandas", "2.2.3"), ("numpy", "2.1.0")]
+        ok, line = self.said(lambda: exakit_nb.check_container(self.ProbeConn(good)))
+        self.assertTrue(ok)
+        self.assertTrue(line.startswith("ok   container:") and "scikit-learn 1.7.2" in line, line)
+        ok, line = self.said(lambda: exakit_nb.check_container(self.ProbeConn([("python", "3.12.3"), ("scikit-learn", "MISSING")])))
+        self.assertFalse(ok)
+        self.assertIn("lacks scikit-learn", line)
+        self.assertIn("Fix: exakit udf-use default", line)
+        ok, line = self.said(lambda: exakit_nb.check_container(self.ProbeConn(fail="script language PYTHON3 not found")))
+        self.assertFalse(ok)
+        self.assertIn("Fix: exakit udf-setup", line)
+
+    def test_mlflow(self):
+        with mock.patch.dict(sys.modules, {"mlflow": types.ModuleType("mlflow")}):
+            with mock.patch.dict(os.environ, {}, clear=True):
+                ok, line = self.said(exakit_nb.check_mlflow)
+            self.assertTrue(ok)
+            self.assertIn("local store", line)
+            with mock.patch.dict(os.environ, {"MLFLOW_TRACKING_URI": "http://me:s3cret@127.0.0.1:9"}):
+                ok, line = self.said(lambda: exakit_nb.check_mlflow(timeout=2))
+            self.assertFalse(ok)
+            self.assertIn("does not answer", line)
+            self.assertIn("Fix:", line)
+            self.assertNotIn("s3cret", line)
+            self.assertNotIn("me:", line)
+        with mock.patch.dict(sys.modules, {"mlflow": None}):
+            ok, line = self.said(exakit_nb.check_mlflow)
+        self.assertFalse(ok)
+        self.assertIn("exakit update notebook", line)
+
+    def test_the_bucket_directory(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            doc = {"bucket_dir": tmp, "udf_root": "/buckets/bfsdefault/default", "models": [{"name": "m.pkl"}]}
+            with mock.patch.object(checks, "model_list", return_value=doc):
+                ok, line = self.said(exakit_nb.check_bucket)
+                self.assertTrue(ok)
+                self.assertIn("1 model file(s)", line)
+                ok, line = self.said(lambda: exakit_nb.check_bucket(self.ProbeConn([("path", "folder")])))
+                self.assertTrue(ok)
+                self.assertIn("a UDF sees it", line)
+                ok, line = self.said(lambda: exakit_nb.check_bucket(self.ProbeConn([("path", "missing")])))
+                self.assertFalse(ok)
+            with mock.patch.object(checks, "model_list", return_value={**doc, "bucket_dir": str(Path(tmp) / "gone")}):
+                ok, line = self.said(exakit_nb.check_bucket)
+                self.assertFalse(ok)
+                self.assertIn("Fix: exakit start", line)
+        with mock.patch.object(checks, "model_list", side_effect=RuntimeError("exakit model list exited 2")):
+            ok, line = self.said(exakit_nb.check_bucket)
+        self.assertFalse(ok)
+        self.assertIn("exakit model list", line)
+
+    def test_model_list_reads_the_json_and_refuses_what_is_not(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            fake = Path(tmp) / "exakit"
+            fake.write_text('#!/bin/sh\necho \'{"bucket_dir": "/b", "udf_root": "/buckets/s/b", "models": []}\'\n', encoding="utf-8")
+            fake.chmod(0o755)
+            with mock.patch.object(checks, "exakit_command", return_value=[str(fake)]):
+                self.assertEqual(checks.model_list()["udf_root"], "/buckets/s/b")
+            fake.write_text("#!/bin/sh\necho no >&2\nexit 2\n", encoding="utf-8")
+            with mock.patch.object(checks, "exakit_command", return_value=[str(fake)]), self.assertRaises(RuntimeError) as caught:
+                checks.model_list()
+            self.assertIn("exited 2: no", str(caught.exception))
+
+
+class TextStepTest(unittest.TestCase):
+    """DS-4: what a trace carries, and the question before rows of a live source go to a model."""
+
+    class Conn:
+        def session_id(self):
+            return 4711
+
+    def setUp(self):
+        patcher = mock.patch.dict(os.environ, {"EXAKIT_NB_DATASETS": str(ROOT / "data" / "datasets")})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_the_trace_tags(self):
+        ds = exakit_nb.dataset(FakeConn(PHARMA), "pharma_trials")
+        tags = exakit_nb.trace_tags(self.Conn(), ds, "SELECT 1 FROM T")
+        self.assertEqual(tags, {"exasol.session_id": "4711", "exasol.sql": "SELECT 1 FROM T", "exasol.dataset": "pharma_trials",
+                                "exasol.descriptor": ds.digest})
+
+    def test_tracing_off_is_one_line_and_the_block_runs(self):
+        ran = []
+        with mock.patch.dict(os.environ, {}, clear=True), redirect_stdout(io.StringIO()) as out:
+            with exakit_nb.trace(self.Conn()) as span:
+                ran.append(span)
+        self.assertEqual(ran, [None])
+        self.assertEqual(len(out.getvalue().strip().splitlines()), 1)
+
+    def test_a_live_source_asks_before_rows_are_sent(self):
+        table = exakit_nb.dataset(FakeConn(PHARMA), "pharma_trials")
+        self.assertTrue(exakit_nb.confirm_send(table, 5))
+        live = Dataset("x", Path("d"), "0" * 64, rules.parse_descriptor(SYNTHETIC + "source: crm\n"))
+        with redirect_stdout(io.StringIO()) as out:
+            self.assertFalse(exakit_nb.confirm_send(live, 5, answer="n"))
+            self.assertTrue(exakit_nb.confirm_send(live, 5, answer="yes"))
+            with mock.patch("builtins.input", side_effect=EOFError):
+                self.assertFalse(exakit_nb.confirm_send(live, 5))
+        self.assertIn("live source (crm)", out.getvalue())
 
 
 if __name__ == "__main__":

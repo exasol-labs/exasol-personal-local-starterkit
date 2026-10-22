@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import sys
 from functools import lru_cache
 from pathlib import Path
@@ -46,3 +47,16 @@ def _from_files() -> dict[str, str]:
 def setting(name: str) -> str | None:
     """One of the four paths: the kernel's variable when set, else found from the kit's files, else None."""
     return os.environ.get(name) or _from_files().get(name)
+
+
+def exakit_command() -> list[str] | None:
+    """How to run the kit's ``exakit`` command from a notebook: on PATH (exakit.cmd on Windows), else in the kit's bin
+    folder (EXAKIT_BIN_DIR, else ~/.local/bin); None when there is none."""
+    found = shutil.which("exakit")
+    if found:
+        return [found]
+    folder = Path(os.environ.get("EXAKIT_BIN_DIR") or Path.home() / ".local" / "bin")
+    for name in ("exakit.cmd", "exakit") if os.name == "nt" else ("exakit",):
+        if (folder / name).is_file():
+            return [str(folder / name)]
+    return None

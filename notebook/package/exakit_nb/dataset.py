@@ -1,9 +1,10 @@
 """A dataset the notebooks run on: its descriptor read, validated by the kit's own rules, held against the database,
 and the roles turned into SQL names, so one notebook runs unchanged on any dataset whose descriptor is valid.
 
-    ds = exakit_nb.dataset(conn, "pharma_trials")          # a dataset the kit ships, by id
-    ds = exakit_nb.dataset(conn, "~/data/descriptor.yaml") # or your own table, described by a descriptor file
-    ds.col("label"), ds.text_sql(), ds.fact_table
+    ds = nb.dataset(conn, "pharma_trials")             # a dataset the kit ships, by id
+    ds = nb.dataset(conn, "~/data/descriptor.yaml")    # a table already in the database, described by a descriptor file
+    ds = nb.dataset(conn, "~/data/sales.csv")          # your own CSV, Parquet or JSON file, its descriptor beside it
+    ds.col("label"), ds.text_sql(), ds.fact_table, ds.source
 
 The rules are the kit's descriptor rules (``descriptor_rules``, shipped with this package: the 0.2 kit has no Python
 package to import them from). It is a copy of tools/descriptor_rules.py, which tools/dataset_check.py uses, and
@@ -20,9 +21,10 @@ from typing import Any
 
 from ._kit import setting
 
-__all__ = ["Dataset", "checked", "dataset"]
+__all__ = ["DATA_FILES", "Dataset", "checked", "dataset"]
 
 _ANSWERED = "EXAKIT_NB_COLUMNS"
+DATA_FILES = (".csv", ".parquet", ".pq", ".json", ".jsonl", ".ndjson")     # what load_own_file reads
 
 
 def _rules():
@@ -62,6 +64,11 @@ class Dataset:
         """``SCHEMA.TABLE`` that one row of analysis comes from."""
         return self.descriptor.fact_table
 
+    @property
+    def source(self) -> str | None:
+        """The external source's alias when the table is in a virtual schema (a live source), else None."""
+        return self.descriptor.source
+
     def col(self, role: str) -> str:
         """The column of a single-column role (entity, category, date, label)."""
         return self.descriptor.column(role).column
@@ -80,8 +87,12 @@ class Dataset:
         return [(role, ref.qualified) for role, ref in self.descriptor.references()]
 
     def tags(self) -> dict[str, str]:
-        """What a trace records about the data: the dataset and the descriptor's digest."""
-        return {"exasol.dataset": self.id, "exasol.descriptor_sha256": self.digest}
+        """What a trace or an MLflow run records about the data: the dataset and the descriptor's digest (and the
+        source's alias for a live source)."""
+        tags = {"exasol.dataset": self.id, "exasol.descriptor": self.digest}
+        if self.source:
+            tags["exasol.source"] = self.source
+        return tags
 
 
 def _columns(conn, schemas: list[str]) -> set[str]:
@@ -96,9 +107,19 @@ def _columns(conn, schemas: list[str]) -> set[str]:
     return found - {_ANSWERED}
 
 
-def dataset(conn, name: str) -> Dataset:
-    """The dataset ``name`` (a kit dataset id, or a descriptor file or its folder), checked against the database."""
-    path = _locate(name)
+def dataset(conn, name: str | Path) -> Dataset:
+    """The dataset ``name``, checked against the database: a kit dataset id, a descriptor file or its folder, or a data
+    file of your own (CSV, Parquet or JSON) with its descriptor beside it, which is loaded first (load_own_file)."""
+    given = Path(name).expanduser()
+    if given.is_file() and given.suffix.lower() in DATA_FILES:
+        from .own_file import descriptor_beside, load_own_file
+
+        described = descriptor_beside(given)
+        if described is None:
+            raise ValueError(f"{given.name} has no descriptor beside it ({given.stem}.descriptor.yaml or descriptor.yaml "
+                             "in its folder). Load it once with load_own_file(path, table, roles), which writes one.")
+        return load_own_file(given, None, described, conn=conn)
+    path = _locate(str(name))
     shipped = setting("EXAKIT_NB_DATASETS") and Path(setting("EXAKIT_NB_DATASETS")) in path.parents
     remedy = "Load your file first (exakit data-load <file>) or correct the descriptor."
     return checked(conn, path.read_bytes(), path, remedy=None if shipped else remedy)

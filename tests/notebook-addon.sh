@@ -6,7 +6,9 @@
 #
 # What it pins:
 #   - one uv resolution: the connector pinned with its extras, the companion
-#     packages, and the two packages the kit carries (exakit_nb, exasol-mlflow)
+#     packages, and the two packages the kit carries (exakit.nb, exasol-mlflow);
+#     the front ends the kit installs at their versions.json pins (JupyterLab
+#     through the connector's jupyter extra), which an update follows
 #   - the kit's notebooks are copied once into their persona folders (Jupyter
 #     and Marimo); one the user already has is never overwritten
 #   - the notebook tools are one checklist, all three ticked; the variables
@@ -68,23 +70,51 @@ contains "the MLflow client, not the server" "mlflow-skinny>=2.14,<4" "$specs"
 check "the kit's helper package" "$ROOT/notebook/package" "$(printf '%s\n' "$specs" | tail -2 | head -1)"
 check "the kit's MLflow client package" "$ROOT/packages/exasol-mlflow" "$(printf '%s\n' "$specs" | tail -1)"
 check "JupyterLab is not in it" "" "$(printf '%s\n' "$specs" | grep -i jupyterlab || true)"
+check "Marimo is not in it" "" "$(printf '%s\n' "$specs" | grep -i marimo || true)"
+
+echo "the front ends are pinned in versions.json and join the one resolution:"
+PIN_J="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["components"]["notebook"]["frontends"]["jupyterlab"])' "$ROOT/versions.json")"
+PIN_M="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["components"]["notebook"]["frontends"]["marimo"])' "$ROOT/versions.json")"
+check "the JupyterLab pin is read from versions.json" "$PIN_J" "$(notebook_frontend_pin jupyterlab)"
+check "the Marimo pin is read from versions.json" "$PIN_M" "$(notebook_frontend_pin marimo)"
+check "EXAKIT_NOTEBOOK_MARIMO_VERSION outranks the pin" "0.26.1" "$(EXAKIT_NOTEBOOK_MARIMO_VERSION=0.26.1 notebook_frontend_pin marimo)"
+check "a pin outside the safe charset is no pin" "1" "$(EXAKIT_NOTEBOOK_MARIMO_VERSION='1; rm' notebook_frontend_pin marimo >/dev/null; echo $?)"
+specs="$(NOTEBOOK_ADD_JUPYTERLAB=1 _notebook_specs)"
+check "JupyterLab ticked: the connector's jupyter extra, no separate spec" \
+    "exasol-notebook-connector[bucketfs,ibis,pyexasol,sqlalchemy,jupyter]==3.1.0" "$(printf '%s\n' "$specs" | head -1)"
+check "and its version held by the pin" "jupyterlab==$PIN_J" "$(printf '%s\n' "$specs" | grep '^jupyterlab')"
+check "Marimo ticked: marimo at its pin" "marimo==$PIN_M" "$(NOTEBOOK_ADD_MARIMO=1 _notebook_specs | grep '^marimo')"
+check "Marimo with no pin is left out, and said" "|1" \
+    "$( (notebook_frontend_pin() { return 1; }; NOTEBOOK_ADD_MARIMO=1 _notebook_specs 2>"$WORK/pin.err" | grep '^marimo'; printf '|%s' "$(grep -c 'No Marimo version is pinned' "$WORK/pin.err")") )"
+check "tools/notebooks.py converts with the Marimo the add-on installs" "marimo==$(notebook_frontend_pin marimo)" \
+    "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import notebooks; print(notebooks.marimo_pin())' "$ROOT/tools")"
+check "ticked tools, no JupyterLab of the user's: the kit brings both" "1 1" \
+    "$( (NOTEBOOK_FRONT_ENDS=jupyterlab,marimo; notebook_find_jupyter() { return 1; }; notebook_plan_front_ends; printf '%s %s' "$NOTEBOOK_ADD_JUPYTERLAB" "$NOTEBOOK_ADD_MARIMO") )"
+check "the user's own JupyterLab is used, not installed" "0 0" \
+    "$( (NOTEBOOK_FRONT_ENDS=jupyterlab,positron; notebook_find_jupyter() { echo "own /usr/local/bin/jupyter-lab"; }; notebook_plan_front_ends; printf '%s %s' "$NOTEBOOK_ADD_JUPYTERLAB" "$NOTEBOOK_ADD_MARIMO") )"
 
 echo "notebooks are copied once, into persona folders, never over the user's:"
 NB="$EXAKIT_NOTEBOOK_DIR/starter-kit-notebooks"
 mkdir -p "$NB/data-scientist"
-printf 'mine' > "$NB/data-scientist/start_here.ipynb"
+printf 'mine' > "$NB/data-scientist/00_quickstart.ipynb"
 added="$(notebook_copy_notebooks | tr '\n' ' ')"
-check "what is missing comes, each in its persona's folder" \
-    "data-scientist/explore.ipynb data-scientist/text_classification.ipynb ml-engineer/bank_marketing_mlflow.ipynb ml-engineer/train.ipynb " "$added"
-check "the user's own stays" "mine" "$(cat "$NB/data-scientist/start_here.ipynb")"
+check "what is missing comes, each in its persona's folder, the shared cells too" \
+    "00_shared/data_paths.ipynb data-scientist/01_explore.ipynb ml-engineer/00_quickstart.ipynb ml-engineer/01_train.ipynb " "$added"
+check "the user's own stays" "mine" "$(cat "$NB/data-scientist/00_quickstart.ipynb")"
 check "a second run adds nothing" "" "$(notebook_copy_notebooks)"
-contains "a README names the end-to-end path" "4. \`ml-engineer/bank_marketing_mlflow.ipynb\` (ML Engineer)" "$(cat "$NB/README.md")"
-check "every catalog entry ships its notebook" "" \
-    "$(python3 "$ROOT/notebook/kit/notebooks.py" list "$ROOT" | while IFS='|' read -r _ _ _ j m; do
-        [ -z "$j" ] || [ -f "$ROOT/notebook/notebooks/$j" ] || printf ' %s' "$j"
-        [ -z "$m" ] || [ -f "$ROOT/notebook/marimo/$m" ] || printf ' %s' "$m"; done)"
+contains "a README names each persona's order" "00. \`ml-engineer/00_quickstart.ipynb\` - Quickstart" "$(cat "$NB/README.md")"
+contains "under the persona's title" "## ml-engineer/ (ML Engineer)" "$(cat "$NB/README.md")"
+check "the README names no notebook this kit copy lacks" "0" "$(grep -c '02_score_external_model' "$NB/README.md")"
+check "every catalog entry ships its notebook (or its .py is not in the tree yet)" "" \
+    "$(python3 "$ROOT/notebook/kit/notebooks.py" list "$ROOT" | while IFS='|' read -r _ p _ j m; do
+        [ -f "$ROOT/notebook/notebooks/$p/${j%.ipynb}.py" ] || continue
+        [ -z "$j" ] || [ -f "$ROOT/notebook/notebooks/$p/$j" ] || printf ' %s' "$j"
+        [ -z "$m" ] || [ -f "$ROOT/notebook/marimo/$p/$m" ] || printf ' %s' "$m"; done)"
+check "the personas' first prompts name quickstarts that ship" "" \
+    "$(for p in data-scientist ml-engineer; do [ -f "$ROOT/notebook/notebooks/$p/00_quickstart.ipynb" ] || printf ' %s' "$p"
+        grep -q "$p/00_quickstart.ipynb" "$ROOT/personas/$p.json" || printf ' %s-prompt' "$p"; done)"
 check "the Marimo ones go to marimo/<persona>/, no README" \
-    "data-scientist/explore.py data-scientist/text_classification.py ml-engineer/bank_marketing_mlflow.py ml-engineer/train.py |no" \
+    "00_shared/data_paths.py data-scientist/00_quickstart.py data-scientist/01_explore.py ml-engineer/00_quickstart.py ml-engineer/01_train.py |no" \
     "$(notebook_copy_notebooks marimo | tr '\n' ' ')|$([ -e "$EXAKIT_NOTEBOOK_DIR/marimo/README.md" ] && echo yes || echo no)"
 
 echo "the notebook tools: one checklist, all three ticked:"
@@ -94,8 +124,6 @@ check "EXAKIT_NOTEBOOK_MARIMO=skip leaves Marimo out" "jupyterlab,positron" \
     "$( (unset EXAKIT_NOTEBOOK_FRONTENDS; EXAKIT_NOTEBOOK_MARIMO=skip; notebook_choose_front_ends >/dev/null 2>&1 </dev/null; printf '%s' "$NOTEBOOK_FRONT_ENDS") )"
 check "EXAKIT_NOTEBOOK_FRONTENDS answers it" "marimo,positron" \
     "$( (EXAKIT_NOTEBOOK_FRONTENDS="Marimo, positron"; notebook_choose_front_ends; printf '%s' "$NOTEBOOK_FRONT_ENDS") )"
-check "Marimo's pin is the one notebook/catalog.json converts with" "$EXAKIT_NOTEBOOK_MARIMO_PACKAGE" \
-    "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["marimo_package"])' "$ROOT/notebook/catalog.json")"
 
 echo "Positron is configured, never installed:"
 mkdir -p "$EXAKIT_NOTEBOOK_DIR/.vscode"
@@ -122,17 +150,17 @@ echo "an uninstall keeps the notebooks:"
 out="$(notebook_uninstall 1 2>&1)"
 contains "the dry run says so" "your notebooks stay in $EXAKIT_NOTEBOOK_DIR" "$out"
 notebook_uninstall >/dev/null 2>&1
-check "the notebooks are still there" "mine" "$(cat "$NB/data-scientist/start_here.ipynb")"
+check "the notebooks are still there" "mine" "$(cat "$NB/data-scientist/00_quickstart.ipynb")"
 
 echo "the copy: a notebook the user deleted stays deleted; one that cannot be copied is named:"
-rm -f "$NB/data-scientist/explore.ipynb"
-check "a deleted kit notebook is not copied again" "|no" "$(notebook_copy_notebooks)|$([ -e "$NB/data-scientist/explore.ipynb" ] && echo yes || echo no)"
+rm -f "$NB/data-scientist/01_explore.ipynb"
+check "a deleted kit notebook is not copied again" "|no" "$(notebook_copy_notebooks)|$([ -e "$NB/data-scientist/01_explore.ipynb" ] && echo yes || echo no)"
 COPYDIR="$WORK/copy-blocked"; mkdir -p "$COPYDIR/starter-kit-notebooks"
 printf 'a file' > "$COPYDIR/starter-kit-notebooks/data-scientist"
 out="$( (EXAKIT_NOTEBOOK_DIR="$COPYDIR"; notebook_copy_notebooks; echo "rc=$?") 2>&1)"
-contains "a file where a persona folder should be is named" "could not copy data-scientist/explore.ipynb" "$out"
+contains "a file where a persona folder should be is named" "could not copy data-scientist/00_quickstart.ipynb" "$out"
 contains "the copy says it failed" "rc=1" "$out"
-contains "the other personas are still copied" "ml-engineer/train.ipynb" "$out"
+contains "the other personas are still copied" "ml-engineer/01_train.ipynb" "$out"
 out="$( (EXAKIT_NOTEBOOK_DIR="$COPYDIR"; _notebook_report_copied "$COPYDIR/starter-kit-notebooks") 2>&1)"
 contains "the command does not hide it" "could not be copied" "$out"
 check "copy wants the notebooks folder named" "2" "$(python3 "$ROOT/notebook/kit/notebooks.py" copy jupyter "$ROOT" >/dev/null 2>&1; echo $?)"
@@ -157,6 +185,32 @@ check "the kit's packages are reinstalled, in the same resolution" \
     "pip install --python $(notebook_venv_python) --reinstall-package exakit-nb --reinstall-package exasol-mlflow exasol-notebook-connector" \
     "$( (run_logged() { shift; printf '%s ' "$@"; }; _notebook_uv() { echo uv; }; detect_os() { echo macos; }
          notebook_sync_packages | cut -d'[' -f1) )"
+
+echo "a front end the kit installed follows its pin through an update:"
+UPV="$WORK/upvenv"; mkdir -p "$UPV/bin"
+printf '#!/bin/sh\nexit 0\n' > "$UPV/bin/marimo"; cp "$UPV/bin/marimo" "$UPV/bin/jupyter-lab"; chmod +x "$UPV/bin/marimo" "$UPV/bin/jupyter-lab"
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$UV_LOG"\n' > "$WORK/uv-stub"; chmod +x "$WORK/uv-stub"
+update_with() { # update_with <log> [VAR=value ...] - exakit update notebook, the connector pin unchanged, uv stubbed
+    _uw_log="$1"; shift
+    ( export UV_LOG="$_uw_log" EXAKIT_NOTEBOOK_VENV="$UPV" "$@"
+      _notebook_uv() { printf '%s\n' "$WORK/uv-stub"; }; detect_os() { echo macos; }; run_logged() { "$@"; }
+      exakit_component_available() { echo 3.1.0; }; notebook_installed_version() { echo 3.1.0; }
+      notebook_copy_notebooks() { :; }; notebook_register_kernel() { :; }; notebook_validate() { :; }
+      notebook_update ) 2>&1
+}
+out="$(update_with "$WORK/uv1.log")"
+contains "the update says the add-on is current" "already current" "$out"
+check "its resolution keeps Marimo at the versions.json pin" "1" "$(grep -c "marimo==$PIN_M" "$WORK/uv1.log")"
+check "and JupyterLab, through the connector's extra" "1|1" \
+    "$(grep -c 'sqlalchemy,jupyter\]==3.1.0' "$WORK/uv1.log")|$(grep -c "jupyterlab==$PIN_J" "$WORK/uv1.log")"
+update_with "$WORK/uv2.log" EXAKIT_NOTEBOOK_MARIMO_VERSION=0.26.1 >/dev/null
+check "a changed Marimo pin is what the update installs" "1|0" \
+    "$(grep -c 'marimo==0.26.1' "$WORK/uv2.log")|$(grep -c "marimo==$PIN_M" "$WORK/uv2.log")"
+check "the kit's own packages are reinstalled in the same call" "1" "$(grep -c -- '--reinstall-package exakit-nb --reinstall-package exasol-mlflow' "$WORK/uv2.log")"
+rm -f "$UPV/bin/marimo" "$UPV/bin/jupyter-lab"
+update_with "$WORK/uv3.log" >/dev/null
+check "a front end the kit did not install stays out" "0|0" \
+    "$(grep -c 'marimo==' "$WORK/uv3.log")|$(grep -c 'jupyter' "$WORK/uv3.log")"
 
 echo "the store's write keeps its exit status:"
 check "a failed write fails" "1" \
@@ -313,7 +367,7 @@ mkdir -p "$EXAKIT_HOME"
 
 echo "the shipped files hold no address and no credential:"
 found=""
-for f in "$ROOT"/notebook/notebooks/* "$ROOT"/notebook/marimo/* "$ROOT"/notebook/package/exakit_nb/*.py "$ROOT"/notebook/kit/*.py; do
+for f in $(find "$ROOT/notebook/notebooks" "$ROOT/notebook/marimo" "$ROOT/notebook/package" "$ROOT/notebook/kit" -type f \( -name '*.py' -o -name '*.ipynb' -o -name '*.json' \) | sort); do
     for needle in 127.0.0.1 localhost :8563 'password=' 'dsn='; do
         grep -qF -- "$needle" "$f" && found="$found $(basename "$f"):$needle"
     done

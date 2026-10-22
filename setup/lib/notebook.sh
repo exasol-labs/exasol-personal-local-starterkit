@@ -9,12 +9,21 @@
 # notebook facts:
 #   - Exasol's notebook connector (PyPI `exasol-notebook-connector`, the
 #     package AI Lab is built on) in a venv of its own, with the kit's
-#     `exakit_nb` helpers (notebook/package), the `exasol-mlflow` client
-#     (packages/exasol-mlflow), ipykernel, scikit-learn and the Langfuse,
-#     OpenAI and MLflow clients. PyPI versions are immutable, so the version is
-#     the pin (as for dbt-exasol). The two packages the kit carries are
-#     reinstalled from the kit copy on every install and update, the pin
-#     unchanged or not, so the helpers always match the notebooks beside them.
+#     `exakit.nb` helpers (notebook/package; `exakit_nb` is the same module),
+#     the `exasol-mlflow` client (packages/exasol-mlflow), ipykernel,
+#     scikit-learn and the Langfuse, OpenAI and MLflow clients. PyPI versions
+#     are immutable, so the version is the pin (as for dbt-exasol). The two
+#     packages the kit carries are reinstalled from the kit copy on every
+#     install and update, the pin unchanged or not, so the helpers always match
+#     the notebooks beside them.
+#   - The front ends the kit installs are pinned in versions.json too
+#     (components.notebook.frontends.jupyterlab / .marimo), read here and by the
+#     PowerShell twin alike; EXAKIT_NOTEBOOK_JUPYTERLAB_VERSION and
+#     EXAKIT_NOTEBOOK_MARIMO_VERSION outrank the pin, as EXAKIT_<ID>_VERSION
+#     does for every component. Everything is ONE uv resolution: JupyterLab
+#     comes through the connector's own `jupyter` extra (the pin holds its
+#     version), Marimo as marimo==<pin>, so `exakit update notebook` moves a
+#     front end the kit installed to a new pin with everything else.
 #   - The connection lives in the connector's ENCRYPTED store. A Jupyter kernel
 #     named "Exasol (Starter Kit)" finds it through two file paths in its spec
 #     (the store, and the kit credential file holding its master password), so
@@ -23,7 +32,8 @@
 #     `exakit notebook`.
 #   - The notebook tools are one checklist at the install, all three ticked:
 #     JupyterLab (one on PATH is used; with none, the kit's is installed because
-#     it was ticked), Marimo (installed into the kit's notebook environment) and
+#     it was ticked - the connector's jupyter extra, in the same resolution as
+#     the connector), Marimo (installed into the kit's notebook environment) and
 #     Positron (the user's own, only ever CONFIGURED: the notebooks folder names
 #     the kit's Python as its interpreter; the kit never installs Positron).
 #     EXAKIT_NOTEBOOK_FRONTENDS=jupyterlab,marimo,positron|none answers it for a
@@ -65,12 +75,16 @@ EXAKIT_NOTEBOOK_HOME="${EXAKIT_NOTEBOOK_HOME:-$EXAKIT_HOME/notebook}"
 EXAKIT_NOTEBOOK_DIR="${EXAKIT_NOTEBOOK_DIR:-$EXAKIT_HOME/notebooks}"
 EXAKIT_NOTEBOOK_PORT="${EXAKIT_NOTEBOOK_PORT:-8888}"
 # What the venv holds besides the connector. Its extras are the ones its
-# connection module imports; the rest serve the kit's notebooks.
+# connection module imports (the jupyter extra joins them when the kit installs
+# JupyterLab); the rest serve the kit's notebooks.
 EXAKIT_NOTEBOOK_EXTRAS="bucketfs,ibis,pyexasol,sqlalchemy"
-EXAKIT_NOTEBOOK_PACKAGES="ipykernel>=6.29,<8 langfuse>=3,<4 openai>=1.40,<3 scikit-learn>=1.4,<2 mlflow-skinny>=2.14,<4 alembic>=1.13,<2"
+EXAKIT_NOTEBOOK_PACKAGES="ipykernel>=6.29,<8 langfuse>=3,<4 openai>=1.40,<3 scikit-learn>=1.4,<2 mlflow-skinny>=2.14,<4 alembic>=1.13,<2 pyarrow>=14"
 # The kit's own packages, by their distribution names (reinstalled every time).
 EXAKIT_NOTEBOOK_OWN_PACKAGES="exakit-nb exasol-mlflow"
-EXAKIT_NOTEBOOK_JUPYTERLAB="jupyterlab>=4.2,<5"
+# The front ends' versions: the pins in versions.json, unless one of these asks
+# for another (see notebook_frontend_pin).
+EXAKIT_NOTEBOOK_JUPYTERLAB_VERSION="${EXAKIT_NOTEBOOK_JUPYTERLAB_VERSION:-}"
+EXAKIT_NOTEBOOK_MARIMO_VERSION="${EXAKIT_NOTEBOOK_MARIMO_VERSION:-}"
 EXAKIT_NOTEBOOK_KERNEL_NAME="exasol-starter-kit"
 EXAKIT_NOTEBOOK_KERNEL_TITLE="Exasol (Starter Kit)"
 EXAKIT_NOTEBOOK_INSTALL_GUIDE="https://jupyter.org/install"
@@ -78,10 +92,9 @@ EXAKIT_NOTEBOOK_INSTALL_GUIDE="https://jupyter.org/install"
 EXAKIT_NOTEBOOK_MASTER_CRED="notebook_store_master_password"
 EXAKIT_NOTEBOOK_TOKEN_CRED="notebook_jupyter_token"
 EXAKIT_NOTEBOOK_MARIMO_CRED="notebook_marimo_token"
-# Marimo, the second front end: its package (tests/notebook-addon.sh holds it
-# equal to notebook/catalog.json, which tools/notebooks.py converts with) and
-# where it serves. Positron is the user's own; this is where to get it.
-EXAKIT_NOTEBOOK_MARIMO_PACKAGE="marimo>=0.25.2,<0.26"
+# Where Marimo, the second front end, serves (its version is the versions.json
+# pin tools/notebooks.py converts the Marimo notebooks with). Positron is the
+# user's own; this is where to get it.
 EXAKIT_NOTEBOOK_MARIMO_PORT="${EXAKIT_MARIMO_PORT:-2718}"
 EXAKIT_NOTEBOOK_POSITRON_DOWNLOAD="https://positron.posit.co/download.html"
 # What a server's command line holds when it is the one the kit started (see
@@ -261,12 +274,16 @@ notebook_offer_jupyter() {
         fi
     fi
     if [ "$_nbo_answer" = "install" ]; then
-        _nbo_uv="$(_notebook_uv)" || return 1
+        # The connector's jupyter extra, in the one resolution with everything
+        # else (so an update keeps it, at the pinned version).
         EXAKIT_ACTIVE_LABEL="Installing JupyterLab"
-        if run_logged "$_nbo_uv" pip install --python "$(notebook_venv_python)" "$EXAKIT_NOTEBOOK_JUPYTERLAB"; then
+        NOTEBOOK_ADD_JUPYTERLAB=1
+        notebook_sync_packages; _nbo_rc=$?
+        NOTEBOOK_ADD_JUPYTERLAB=0
+        if [ "$_nbo_rc" -eq 0 ] && [ -x "$EXAKIT_NOTEBOOK_VENV/bin/jupyter-lab" ]; then
             manifest_set components.notebook.jupyter kit
             _notebook_front_end_add jupyterlab
-            ok "JupyterLab installed into the kit's notebook environment"
+            ok "JupyterLab $(notebook_frontend_pin jupyterlab 2>/dev/null) installed into the kit's notebook environment"
             return 0
         fi
         warn "JupyterLab could not be installed (see the log)."
@@ -356,15 +373,34 @@ notebook_choose_front_ends() {
     [ -n "$NOTEBOOK_FRONT_ENDS" ] || NOTEBOOK_FRONT_ENDS="none"
 }
 
+# notebook_plan_front_ends — which front ends the install's one resolution
+# brings (NOTEBOOK_ADD_JUPYTERLAB, NOTEBOOK_ADD_MARIMO = 1 or 0), from the
+# ticked tools: JupyterLab when it is ticked and the user has none of their own
+# (a JupyterLab on PATH is used instead), Marimo when it is ticked.
+notebook_plan_front_ends() {
+    NOTEBOOK_ADD_JUPYTERLAB=0
+    NOTEBOOK_ADD_MARIMO=0
+    case ",$NOTEBOOK_FRONT_ENDS," in
+        *,jupyterlab,*)
+            case "$(notebook_find_jupyter 2>/dev/null || true)" in own\ *) ;; *) NOTEBOOK_ADD_JUPYTERLAB=1 ;; esac ;;
+    esac
+    case ",$NOTEBOOK_FRONT_ENDS," in *,marimo,*) NOTEBOOK_ADD_MARIMO=1 ;; esac
+}
+
 # notebook_front_ends_setup — the install's notebook tools, one line each:
 # JupyterLab (the user's, or the kit's because it was ticked; the kernel is
 # registered either way), Marimo, and the user's Positron set to the kit's Python.
+# The tools were chosen before the packages were installed (notebook_install),
+# so what the kit installs came with them; this settles what is left.
 notebook_front_ends_setup() {
-    notebook_choose_front_ends
+    [ -n "${NOTEBOOK_FRONT_ENDS:-}" ] || notebook_choose_front_ends
     case ",$NOTEBOOK_FRONT_ENDS," in
         *,jupyterlab,*)
             if _nfs_found="$(notebook_find_jupyter)"; then
-                case "$_nfs_found" in kit\ *) _nfs_whose="the kit's" ;; *) _nfs_whose="yours" ;; esac
+                case "$_nfs_found" in
+                    kit\ *) _nfs_whose="the kit's"; manifest_set components.notebook.jupyter kit ;;
+                    *) _nfs_whose="yours" ;;
+                esac
                 ok "JupyterLab ($_nfs_whose: ${_nfs_found#* }) with the kernel '$EXAKIT_NOTEBOOK_KERNEL_TITLE' - open it with: exakit notebook"
             else
                 EXAKIT_NOTEBOOK_JUPYTER=install notebook_offer_jupyter || true
@@ -373,6 +409,10 @@ notebook_front_ends_setup() {
     esac
     case ",$NOTEBOOK_FRONT_ENDS," in
         *,marimo,*)
+            if notebook_marimo_installed; then
+                notebook_copy_notebooks marimo >/dev/null || true
+                manifest_set components.notebook.marimo kit
+            fi
             if notebook_marimo_installed || notebook_install_marimo; then
                 ok "Marimo with the notebooks in $EXAKIT_NOTEBOOK_DIR/marimo - start it with: exakit notebook --marimo"
             else
@@ -395,12 +435,15 @@ notebook_marimo_installed() {
     [ -x "$(notebook_marimo_command)" ]
 }
 
-# notebook_install_marimo — Marimo into the kit's notebook environment, then the
-# kit's Marimo notebooks into marimo/<persona>/.
+# notebook_install_marimo — Marimo, at its pin, into the kit's notebook
+# environment (the one resolution, so an update keeps it), then the kit's
+# Marimo notebooks into marimo/<persona>/.
 notebook_install_marimo() {
-    _nim_uv="$(_notebook_uv)" || return 1
     EXAKIT_ACTIVE_LABEL="Installing Marimo"
-    run_logged "$_nim_uv" pip install --python "$(notebook_venv_python)" "$EXAKIT_NOTEBOOK_MARIMO_PACKAGE" || return 1
+    NOTEBOOK_ADD_MARIMO=1
+    notebook_sync_packages; _nim_rc=$?
+    NOTEBOOK_ADD_MARIMO=0
+    [ "$_nim_rc" -eq 0 ] || return 1
     notebook_marimo_installed || return 1
     notebook_copy_notebooks marimo >/dev/null || true
     manifest_set components.notebook.marimo kit
@@ -644,22 +687,89 @@ _notebook_uv() {
     fi
 }
 
+# notebook_frontend_pin <jupyterlab|marimo> — the version of a front end the kit
+# installs: EXAKIT_NOTEBOOK_JUPYTERLAB_VERSION / EXAKIT_NOTEBOOK_MARIMO_VERSION
+# when set, else versions.json components.notebook.frontends.<name> - the
+# advertised document, then the kit copy's own (an advertised document older
+# than this kit copy has no such key). Nothing (return 1) when neither names a
+# version in the safe charset: it goes on a uv command line.
+# ⇄ twin: Get-NotebookFrontendPin in notebook.ps1.
+notebook_frontend_pin() {
+    case "$1" in
+        jupyterlab) _nfp_v="${EXAKIT_NOTEBOOK_JUPYTERLAB_VERSION:-}" ;;
+        marimo) _nfp_v="${EXAKIT_NOTEBOOK_MARIMO_VERSION:-}" ;;
+        *) return 1 ;;
+    esac
+    [ -n "$_nfp_v" ] || _nfp_v="$(exakit_versions_value "components.notebook.frontends.$1" 2>/dev/null || true)"
+    if [ -z "$_nfp_v" ]; then
+        _nfp_doc="$(exakit_versions_baked_doc 2>/dev/null || true)"
+        [ -n "$_nfp_doc" ] && _nfp_v="$(exakit_versions_value "components.notebook.frontends.$1" "$_nfp_doc" 2>/dev/null || true)"
+    fi
+    case "$_nfp_v" in ''|*[!A-Za-z0-9._+-]*) return 1 ;; esac
+    printf '%s\n' "$_nfp_v"
+}
+
+# _notebook_frontends_installed — "<name>=<version>" for each front end the
+# kit's venv holds (jupyterlab, marimo), one per line; nothing without a venv.
+_notebook_frontends_installed() {
+    [ -x "$(notebook_venv_python)" ] || return 0
+    "$(notebook_venv_python)" -c 'import sys
+from importlib.metadata import PackageNotFoundError, version
+for name in sys.argv[1:]:
+    try:
+        print(name + "=" + version(name))
+    except PackageNotFoundError:
+        pass' jupyterlab marimo 2>/dev/null || true
+}
+
 # _notebook_specs — the connector with its extras, the companion packages, the
-# front ends the kit installed into the venv (so one resolution keeps them), and
-# the two packages the kit carries, one per line (for one uv resolution).
+# front ends the kit installs (asked for now: NOTEBOOK_ADD_JUPYTERLAB /
+# NOTEBOOK_ADD_MARIMO=1, or already in the venv) at their pins, and the two
+# packages the kit carries, one per line (for one uv resolution). JupyterLab is
+# the connector's jupyter extra, its version held by jupyterlab==<pin>. A front
+# end with no pin: JupyterLab comes within the connector's own range, Marimo is
+# left out, each with a warning.
 _notebook_specs() {
-    printf '%s[%s]==%s\n' "$EXAKIT_NOTEBOOK_PACKAGE" "$EXAKIT_NOTEBOOK_EXTRAS" "$EXAKIT_NOTEBOOK_VERSION"
-    for _nbs_pkg in $EXAKIT_NOTEBOOK_PACKAGES; do printf '%s\n' "$_nbs_pkg"; done
-    [ -x "$EXAKIT_NOTEBOOK_VENV/bin/jupyter-lab" ] && printf '%s\n' "$EXAKIT_NOTEBOOK_JUPYTERLAB"
-    notebook_marimo_installed && printf '%s\n' "$EXAKIT_NOTEBOOK_MARIMO_PACKAGE"
+    _nsp_extras="$EXAKIT_NOTEBOOK_EXTRAS"
+    _nsp_lines=""
+    if [ "${NOTEBOOK_ADD_JUPYTERLAB:-0}" = 1 ] || [ -x "$EXAKIT_NOTEBOOK_VENV/bin/jupyter-lab" ]; then
+        _nsp_extras="$_nsp_extras,jupyter"
+        if _nsp_pin="$(notebook_frontend_pin jupyterlab)"; then
+            _nsp_lines="jupyterlab==$_nsp_pin"
+        else
+            warn "No JupyterLab version is pinned (versions.json components.notebook.frontends.jupyterlab) - the connector's range decides"
+        fi
+    fi
+    if [ "${NOTEBOOK_ADD_MARIMO:-0}" = 1 ] || notebook_marimo_installed; then
+        if _nsp_pin="$(notebook_frontend_pin marimo)"; then
+            _nsp_lines="${_nsp_lines:+$_nsp_lines }marimo==$_nsp_pin"
+        else
+            warn "No Marimo version is pinned (versions.json components.notebook.frontends.marimo) - Marimo is left out"
+        fi
+    fi
+    printf '%s[%s]==%s\n' "$EXAKIT_NOTEBOOK_PACKAGE" "$_nsp_extras" "${EXAKIT_NOTEBOOK_VERSION:-$(notebook_package_version 2>/dev/null)}"
+    for _nbs_pkg in $EXAKIT_NOTEBOOK_PACKAGES $_nsp_lines; do printf '%s\n' "$_nbs_pkg"; done
     printf '%s\n' "$(exakit_repo_root)/notebook/package" "$(exakit_repo_root)/packages/exasol-mlflow"
+}
+
+# _notebook_report_frontends <before> — after a resolution: one line for each
+# front end whose version moved (a new pin), compared with <before>
+# (_notebook_frontends_installed's output from before it).
+_notebook_report_frontends() {
+    _notebook_frontends_installed | while IFS='=' read -r _nrf_name _nrf_now; do
+        _nrf_was="$(printf '%s\n' "$1" | sed -n "s/^$_nrf_name=//p")"
+        [ -n "$_nrf_was" ] && [ "$_nrf_was" != "$_nrf_now" ] && \
+            ok "$_nrf_name $_nrf_was -> $_nrf_now (the version versions.json pins)"
+    done
+    return 0
 }
 
 # notebook_sync_packages — the whole set into the venv in one resolution, with
 # the kit's own two packages REINSTALLED from this kit copy: their version
 # numbers rarely move, so uv would otherwise keep the copy an older kit
-# installed and a new notebook would run against old helpers. Cheap when
-# nothing else changed. ⇄ twin: Sync-NotebookPackages.
+# installed and a new notebook would run against old helpers. A front end the
+# kit installed is in the set at its pin, so a pin that moved moves it too
+# (said in one line). Cheap when nothing else changed. ⇄ twin: Sync-NotebookPackages.
 notebook_sync_packages() {
     _nsy_uv="$(_notebook_uv)" || return 1
     # CPU-only PyTorch on Linux: the default wheel pulls gigabytes of CUDA.
@@ -667,8 +777,10 @@ notebook_sync_packages() {
     [ "$(detect_os 2>/dev/null)" = "macos" ] || _nsy_torch="--torch-backend cpu"
     _nsy_reinstall=""
     for _nsy_pkg in $EXAKIT_NOTEBOOK_OWN_PACKAGES; do _nsy_reinstall="$_nsy_reinstall --reinstall-package $_nsy_pkg"; done
+    _nsy_before="$(_notebook_frontends_installed)"
     # shellcheck disable=SC2046,SC2086
-    run_logged "$_nsy_uv" pip install --python "$(notebook_venv_python)" $_nsy_torch $_nsy_reinstall $(_notebook_specs)
+    run_logged "$_nsy_uv" pip install --python "$(notebook_venv_python)" $_nsy_torch $_nsy_reinstall $(_notebook_specs) || return 1
+    _notebook_report_frontends "$_nsy_before"
 }
 
 notebook_install() {
@@ -681,6 +793,10 @@ notebook_install() {
         _notebook_not_installed "uv (the Python tool runner) is not available — install it from https://docs.astral.sh/uv/ and re-run"
         return 1
     }
+    # The notebook tools first: the front ends the kit installs join the
+    # connector's own resolution below.
+    notebook_choose_front_ends
+    notebook_plan_front_ends
     _nbi_current="$(notebook_package_version || true)"
     if [ -n "$_nbi_current" ] && [ "$_nbi_current" = "$EXAKIT_NOTEBOOK_VERSION" ] && \
        [ "${EXAKIT_FORCE_COMPONENT_INSTALL:-0}" != "1" ]; then
@@ -728,7 +844,7 @@ notebook_install() {
 # connects from the store. Soft: records validated and returns 0.
 notebook_validate() {
     [ -x "$(notebook_venv_python)" ] || return 0
-    if ! "$(notebook_venv_python)" -c 'import exasol.nb_connector, exakit_nb, exasol_mlflow, ipykernel' >>"${EXAKIT_LOG_FILE:-/dev/null}" 2>&1; then
+    if ! "$(notebook_venv_python)" -c 'import exasol.nb_connector, exakit.nb, exakit_nb, exasol_mlflow, ipykernel' >>"${EXAKIT_LOG_FILE:-/dev/null}" 2>&1; then
         warn "The notebook environment does not import - repair with: exakit update notebook"
         manifest_set components.notebook.validated false
         return 0
@@ -970,7 +1086,7 @@ notebook_marimo_cmd() {
         fi
     fi
     ok "Marimo is running: http://127.0.0.1:$_nmc_port/   (stop it with: exakit notebook --stop --marimo)"
-    info "Marimo notebooks connect with: import exakit_nb; conn = exakit_nb.connect()"
+    info "Marimo notebooks connect with: import exakit.nb as nb; conn = nb.connect()"
     if [ "$2" = 1 ]; then
         _notebook_open_logged_in marimo "http://127.0.0.1:$_nmc_port/?access_token=$(_notebook_secret "$EXAKIT_NOTEBOOK_MARIMO_CRED")" || \
             info "Open http://127.0.0.1:$_nmc_port/ - the login token is in $EXAKIT_CREDS_DIR/$EXAKIT_NOTEBOOK_MARIMO_CRED"
@@ -989,7 +1105,7 @@ notebook_positron_cmd() {
     else
         info "Positron is not on this machine. The folder is ready for it - get it at $EXAKIT_NOTEBOOK_POSITRON_DOWNLOAD, then run: exakit notebook --positron"
     fi
-    info "In a notebook or script: import exakit_nb; conn = exakit_nb.connect()"
+    info "In a notebook or script: import exakit.nb as nb; conn = nb.connect()"
     return 0
 }
 

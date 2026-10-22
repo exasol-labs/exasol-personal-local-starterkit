@@ -1,16 +1,21 @@
-"""Helpers for the Exasol Personal Local Starter Kit's notebooks.
+"""Helpers for the Exasol Personal Local Starter Kit's notebooks: ``exakit.nb`` (this module; ``exakit_nb`` is the
+same module under its older name).
 
 The connection comes from the kit. Its Jupyter kernel ("Exasol (Starter Kit)") carries two paths: the encrypted
 configuration store, and the kit's credential file holding the store's master password, readable by the user only.
-These helpers open the database from there, in any JupyterLab, VS Code or other Jupyter front end that runs that
-kernel. Nothing here prints or returns a host, a user or a password.
+These helpers open the database from there, in JupyterLab, Marimo, Positron, VS Code or any front end that runs the
+kit's notebook Python. Nothing here prints or returns a host, a user or a password.
 
-    import exakit_nb
-    conn = exakit_nb.connect()
-    df = exakit_nb.sql(conn, "SELECT * FROM TPCH.NATION")
-    exakit_nb.show_sql()
-    ds = exakit_nb.dataset(conn, "pharma_trials")     # the roles of a dataset, checked against the database
-    ds = exakit_nb.load_own_file("~/data/sales.csv", "MY_DATA.SALES", {"entity": "CUSTOMER", ...})   # or your own file
+    import exakit.nb as nb
+    conn = nb.connect()
+    df = nb.sql(conn, "SELECT * FROM TPCH.NATION")
+    nb.show_sql()
+    ds = nb.dataset(conn, "pharma_trials")           # the roles of a dataset, checked against the database
+    ds = nb.load_own_file("~/data/sales.json", "MY_DATA.SALES", {"entity": "CUSTOMER", ...})   # or your own file
+    with nb.trace(conn, dataset=ds): ...              # model calls as one trace in your Langfuse (opt-in)
+
+The quickstarts' shared steps (check_connection, list_schemas, load_sample, load_source, ...) are in quickstart.py;
+the ML Engineer's checks (check_container, check_mlflow, check_bucket) in checks.py.
 """
 
 from __future__ import annotations
@@ -22,10 +27,14 @@ from pathlib import Path
 from typing import Any
 
 from ._kit import setting
+from .checks import check_bucket, check_container, check_mlflow, model_list
 from .dataset import Dataset, dataset
-from .own_file import load_own_file
+from .own_file import load_own_file, save_descriptor
+from .quickstart import check_connection, connected_sources, first, list_schemas, load_sample, load_source, show_roles
 
-__all__ = ["Dataset", "connect", "dataset", "load_own_file", "model_client", "show_sql", "sql", "trace"]
+__all__ = ["Dataset", "check_bucket", "check_connection", "check_container", "check_mlflow", "confirm_send", "connect",
+           "connected_sources", "dataset", "first", "list_schemas", "load_own_file", "load_sample", "load_source",
+           "model_client", "model_list", "save_descriptor", "show_roles", "show_sql", "sql", "trace", "tracing"]
 
 LANGFUSE_VARIABLES = ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_HOST")
 MODEL_VARIABLE = "EXAKIT_NB_MODEL"            # the model name; the endpoint and key are the OpenAI client's own OPENAI_* variables
@@ -93,15 +102,24 @@ def model_client():
     return OpenAI(api_key=key), model
 
 
-@contextlib.contextmanager
-def trace(conn, name: str, dataset: Dataset | None = None, **metadata: Any) -> Iterator[Any]:
-    """Group the model calls made inside the block into one trace in the user's own Langfuse project, tagged with the
-    database session, the last SQL and, given a dataset, its id and descriptor digest. Opt-in: without the LANGFUSE_*
-    variables it says so and does nothing else.
+def trace_tags(conn, dataset: Dataset | None = None, sql: str | None = None, **metadata: Any) -> dict[str, str]:
+    """What a trace carries: exasol.session_id, exasol.sql (the sample SQL; default the last statement sql() ran) and,
+    given a dataset, exasol.dataset and exasol.descriptor (its descriptor's SHA-256), plus any metadata given."""
+    return {"exasol.session_id": str(conn.session_id()), "exasol.sql": sql if sql is not None else (_last["sql"] or ""),
+            **(dataset.tags() if dataset else {}), **{k: str(v) for k, v in metadata.items()}}
 
-    Make the calls with the client model_client() returns (Langfuse's drop-in when tracing is on).
+
+@contextlib.contextmanager
+def trace(conn, name: str = "exakit-notebook", dataset: Dataset | None = None, sql: str | None = None,
+          **metadata: Any) -> Iterator[Any]:
+    """Group the model calls made inside the block into one trace in the user's own Langfuse project, tagged with the
+    database session, the sample SQL and, given a dataset, its id and descriptor digest (trace_tags). Opt-in: without
+    the LANGFUSE_* variables it says so in one line and does nothing else - no exception, no prompt.
+
+    Make the calls with the client model_client() returns (Langfuse's drop-in when tracing is on), so each call's
+    input, output, token usage and latency land in the trace without changes to the calling code.
     """
-    missing = [name for name in LANGFUSE_VARIABLES if not os.environ.get(name)]
+    missing = [variable for variable in LANGFUSE_VARIABLES if not os.environ.get(variable)]
     if missing:
         print(f"Tracing is off ({', '.join(missing)} not set before exakit notebook); the cell runs as usual.")
         yield None
@@ -109,9 +127,28 @@ def trace(conn, name: str, dataset: Dataset | None = None, **metadata: Any) -> I
     from langfuse import get_client
 
     client = get_client()
-    tags = {"exasol.session_id": str(conn.session_id()), "exasol.sql": _last["sql"] or "", **(dataset.tags() if dataset else {}),
-            **{k: str(v) for k, v in metadata.items()}}
+    tags = trace_tags(conn, dataset, sql, **metadata)
+    labels = ["exasol-starter-kit", *(f"{key}={tags[key]}" for key in ("exasol.dataset", "exasol.descriptor", "exasol.session_id")
+                                      if tags.get(key))]
     with client.start_as_current_span(name=name) as span:
-        span.update_trace(metadata=tags, tags=["exasol-starter-kit"])
+        span.update_trace(metadata=tags, tags=labels)
         yield span
     client.flush()
+
+
+def confirm_send(ds: Dataset, rows: int, answer: str | None = None) -> bool:
+    """Before sampled rows go to a model endpoint: True at once for a table in the database; for a live source (the
+    descriptor names a source) it names the source and asks, and only a yes sends. ``answer`` answers for a script;
+    with no one to ask (a headless run) the answer is no."""
+    if not ds.source:
+        return True
+    print(f"{ds.fact_table} is a live source ({ds.source}): its rows are read from there as you query them.")
+    if answer is None:
+        try:
+            answer = input(f"Send {rows} sampled rows from {ds.source} to your model endpoint? [y/N] ")
+        except (EOFError, OSError, RuntimeError):
+            answer = ""
+    if answer.strip().lower() in ("y", "yes"):
+        return True
+    print("Not sent: the text step is skipped.")
+    return False
