@@ -116,9 +116,10 @@ check "a persona's datasets are the rows ticked" "4,5" "$(_exakit_data_table_pre
 check "datasets covering every row tick Select All too" "1,2,3,4,5" "$(_exakit_data_table_preselect tpch,energy,pharma_trials,banking_complaints)"
 out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H retail benchmark (~175k rows)\npharma_trials|Pharma clinical trials (ClinicalTrials.gov, ~5k)\n'; }
         EXAKIT_DATASETS_PRESELECT=pharma_trials; EXAKIT_DATA_TABLE_NO_LOCAL=1 exakit_data_table_build "$WORK/table"
-        printf '%s~%s~%s' "$EXAKIT_TABLE_DEFAULTS" "$EXAKIT_TABLE_ROW_LOCAL" "$(cut -d'|' -f2 "$WORK/table" | tr '\n' ';')") )"
-check "the samples table: the persona's row ticked, no file row, each named for its persona" \
-    "3~0~Select All;TPC-H retail benchmark;Pharma clinical trials - for AI Scientist, ML Engineer;Skip;" "$out"
+        printf '%s~%s~%s~%s' "$EXAKIT_TABLE_DEFAULTS" "$EXAKIT_TABLE_ROW_LOCAL" "$(cut -d'|' -f2 "$WORK/table" | tr '\n' ';')" \
+            "$(cut -d'|' -f11 "$WORK/table" | tr '\n' ';')") )"
+check "the samples table: the persona's row ticked, no file row, each named for its persona in the For column" \
+    "3~0~Select All;TPC-H retail benchmark;Pharma clinical trials;Skip;~;;AI Scientist, ML Engineer;;" "$out"
 out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H\n'; }
         exakit_data_source_select >/dev/null 2>&1; printf '%s' "$EXAKIT_DATA_SOURCE") )"
 check "without a terminal the samples are the answer" "sample" "$out"

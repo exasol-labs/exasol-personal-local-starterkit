@@ -6,7 +6,7 @@
   "picker": true,
   "default": false,
   "order": 15,
-  "datasets": ["tpch", "energy"],
+  "datasets": ["tpch", "pharma_trials"],
   "mcp_clients": "all",
   "addons": ["dash-server", "dbt-exasol"]
 }

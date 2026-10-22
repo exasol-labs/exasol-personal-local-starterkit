@@ -53,9 +53,10 @@ try {
     $env:EXAKIT_DATASETS_PRESELECT = "pharma_trials"
     New-ExakitDataTable -FinalLabel "Skip" -NoLocal
     $labels = (@($script:UiTable.Rows | ForEach-Object { $_.Label }) -join ";")
-    Check "the persona's row ticked, no file row, each named for its persona" `
-        "3~0~Select All;TPC-H retail benchmark;Pharma clinical trials - for AI Scientist, ML Engineer;Skip" `
-        "$($script:ExakitTableDefaults -join ',')~$($script:ExakitTableRowLocal)~$labels"
+    $for = (@($script:UiTable.Rows | ForEach-Object { $_.Col2 }) -join ";")
+    Check "the persona's row ticked, no file row, each named for its persona in the For column" `
+        "3~0~Select All;TPC-H retail benchmark;Pharma clinical trials;Skip~;;AI Scientist, ML Engineer;" `
+        "$($script:ExakitTableDefaults -join ',')~$($script:ExakitTableRowLocal)~$labels~$for"
     $env:EXAKIT_DATASETS_PRESELECT = "tpch,pharma_trials"
     New-ExakitDataTable -FinalLabel "Skip" -NoLocal
     Check "datasets covering every row tick Select All too" "1,2,3" ($script:ExakitTableDefaults -join ",")

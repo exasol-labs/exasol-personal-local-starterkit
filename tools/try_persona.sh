@@ -139,13 +139,13 @@ title="$(SERVICE title "$ID" 2>/dev/null)"
     [ "$EXAKIT_DATASETS_PRESELECT" = all ] && EXAKIT_DATASETS_PRESELECT="$(exakit_bundled_datasets | cut -d'|' -f1 | tr '\n' ',' | sed 's/,$//')"
     EXAKIT_DATA_TABLE_NO_LOCAL=1 exakit_data_table_build "$WORK/table" >/dev/null 2>&1
     n=0
-    while IFS='|' read -r _ label _; do
+    while IFS='|' read -r _ label _ _ _ _ _ _ _ _ for _; do
         n=$((n + 1))
         case ",$EXAKIT_TABLE_DEFAULTS," in *",$n,"*) mark="[x]" ;; *) mark="[ ]" ;; esac
-        printf '        %s %s\n' "$mark" "$label"
+        printf '        %s %-34s %s\n' "$mark" "$label" "${for:+for $for}"
     done < "$WORK/table"
 )
-[ -n "$title" ] && printf '        (rows naming "%s" are the ones it is for)\n' "$title"
+[ -n "$title" ] && printf '        (rows "for %s" are the ones it is for)\n' "$title"
 
 step "the installer's dry run (EXAKIT_PERSONA=$ID, nothing installed)"
 out="$(HOME="$WORK/dryhome" EXAKIT_HOME="$WORK/dryhome/kit" EXAKIT_BIN_DIR="$WORK/dryhome/bin" \
