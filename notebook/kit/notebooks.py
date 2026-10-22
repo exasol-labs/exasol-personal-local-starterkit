@@ -133,7 +133,7 @@ def write_readme(kit: Path, doc: dict, folder: Path) -> None:
     lines += ["", "Every notebook connects with `import exakit.nb as nb; conn = nb.connect()` - no host, user or password.",
               "These files are yours: the kit never overwrites them, and one you delete is not copied again.",
               "Your own notebooks can go anywhere in the notebooks folder.",
-              "", "Also: `exakit notebook --marimo` (the same notebooks in Marimo), `exakit notebook --positron` (this folder in",
+              "", "Also: `exakit notebook marimo` (the same notebooks in Marimo), `exakit notebook positron` (this folder in",
               "Positron, with the kit's Python).", ""]
     readme.write_text("\n".join(lines), encoding="utf-8")
 

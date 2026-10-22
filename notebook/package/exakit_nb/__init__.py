@@ -51,7 +51,7 @@ def _store():
     if not path or not password or not Path(path).is_file():
         raise RuntimeError("No connection to the kit's database was found. Run this with the kit's notebook Python "
                            "(the kernel 'Exasol (Starter Kit)', or ~/.exasol-starter-kit/notebook-venv/bin/python), "
-                           "and if the notebook add-on is new: exakit notebook --check")
+                           "and if the notebook add-on is new: exakit notebook check")
     return Secrets(Path(path), password)
 
 

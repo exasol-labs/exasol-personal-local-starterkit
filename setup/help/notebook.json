@@ -20,39 +20,40 @@
     {
       "step": "Open the notebooks",
       "run": "exakit notebook",
-      "note": "JupyterLab in the background, opened in your browser, logged in, on ~/.exasol-starter-kit/notebooks. The kit's notebooks are in starter-kit-notebooks/, one folder per persona (general, data-scientist, ml-engineer), with a README naming the end-to-end path."
+      "note": "On a terminal it asks which tools to open - one multi-select, each row saying its tool's state (running, ready, missing, not installed; Positron found, or where to get it) - and opens each one picked: JupyterLab and Marimo in the background, opened in your browser, logged in, Positron on the folder. Without a terminal it opens JupyterLab. The notebooks are in ~/.exasol-starter-kit/notebooks: the kit's in starter-kit-notebooks/, one folder per persona (general, data-scientist, ml-engineer), with a README naming the end-to-end path."
     },
     {
       "step": "Or in Marimo",
-      "run": "exakit notebook --marimo",
+      "run": "exakit notebook marimo",
       "note": "The same notebooks as Marimo notebooks, from notebooks/marimo/<persona>/."
     },
     {
       "step": "Or in Positron",
-      "run": "exakit notebook --positron",
+      "run": "exakit notebook positron",
       "note": "Your Positron, opened on the notebooks folder with the kit's Python as the interpreter."
     },
     {
       "step": "Stop them",
-      "run": "exakit notebook --stop"
+      "run": "exakit notebook stop"
     }
   ],
   "commands": [
     {
       "command": "exakit notebook",
-      "options": "[--marimo | --positron] [--check] [--setup] [--stop] [--no-browser] [--port <number>]",
-      "summary": "Start JupyterLab in the background, connected, and open it; --marimo does the same for Marimo (installing it when you say yes), --positron opens your Positron on the notebooks with the kit's Python; --stop stops JupyterLab and Marimo (--stop --marimo only Marimo); --check proves the connection; --setup settles a tool without starting it.",
+      "options": "[jupyterlab | marimo | positron] [check] [setup] [stop] [--no-browser] [--port <number>]",
+      "summary": "On a terminal, ask which notebook tools to open (JupyterLab, Marimo, Positron - each row saying its state, Skip opens nothing) and open them; without one, start JupyterLab in the background, connected, and open it. Before anything opens it checks the notebook environment, the database, the connection store, the kernel and the notebooks folder, and fixes or offers what is wrong. marimo does the same for Marimo (installing it when you say yes), positron opens your Positron on the notebooks with the kit's Python; stop stops JupyterLab and Marimo (stop marimo only Marimo); check proves the connection; setup settles a tool without starting it; --port names JupyterLab's port (no menu).",
       "examples": [
         "exakit notebook",
-        "exakit notebook --marimo",
-        "exakit notebook --positron",
-        "exakit notebook --check",
-        "exakit notebook --stop"
+        "exakit notebook marimo",
+        "exakit notebook positron",
+        "exakit notebook check",
+        "exakit notebook stop"
       ]
     }
   ],
   "notes": [
-    "The notebook tools are child rows of the notebook in the marketplace's add-ons table, all three ticked: each says before anything installs what will become of it, and then how it settled (a scripted install that draws no table asks one checklist instead). A JupyterLab already on your machine is used as it is; the kit only adds its kernel, 'Exasol (Starter Kit)', which VS Code and other Jupyter front ends offer too. Marimo goes into the kit's notebook environment. Positron is never installed: when it is there, the notebooks folder is set to the kit's Python (.vscode/settings.json, your other settings kept); when it is not, the folder is ready for it (https://positron.posit.co/download.html). For a script: EXAKIT_NOTEBOOK_FRONTENDS=jupyterlab,marimo,positron (or none); EXAKIT_NOTEBOOK_JUPYTER=skip or EXAKIT_NOTEBOOK_MARIMO=skip leaves one out. Untick one now, add it later with exakit notebook --setup, --marimo or --positron.",
+    "exakit notebook on a terminal asks 'Open which notebook tools?': JupyterLab ('running at http://127.0.0.1:<port>/lab', 'ready (the kit's <version>)', 'ready (yours: <path>)' or 'missing - reinstall it into the kit's environment'), Marimo ('running at ...', 'ready' or 'not installed - installs it') and Positron ('found - opens on the notebooks folder', or a row that cannot be picked saying where to get it), with Skip to open nothing. The tools you chose at install are ticked (JupyterLab when none). Each one picked opens in turn, one line each with its address, then one line says how to stop them. Without a terminal (a script, an AI agent) nothing is asked: it opens JupyterLab, and a problem it cannot fix there is one line naming the command that does, with a non-zero exit.",
+    "The notebook tools are child rows of the notebook in the marketplace's add-ons table, all three ticked: each says before anything installs what will become of it, and then how it settled (a scripted install that draws no table asks one checklist instead). A JupyterLab already on your machine is used as it is; the kit only adds its kernel, 'Exasol (Starter Kit)', which VS Code and other Jupyter front ends offer too. Marimo goes into the kit's notebook environment. Positron is never installed: when it is there, the notebooks folder is set to the kit's Python (.vscode/settings.json, your other settings kept); when it is not, the folder is ready for it (https://positron.posit.co/download.html). For a script: EXAKIT_NOTEBOOK_FRONTENDS=jupyterlab,marimo,positron (or none); EXAKIT_NOTEBOOK_JUPYTER=skip or EXAKIT_NOTEBOOK_MARIMO=skip leaves one out. Untick one now, add it later with exakit notebook setup, marimo or positron.",
     "In Jupyter choose the kernel 'Exasol (Starter Kit)' for a notebook of your own. In Marimo, Positron or a plain script the kit's notebook Python finds the connection by itself.",
     "In a notebook: import exakit.nb as nb; conn = nb.connect() opens the database, nb.sql(conn, '...') runs a query into a DataFrame and remembers it, and nb.show_sql() prints the last statement. nb.load_own_file(path, table, descriptor) loads your own CSV, Parquet or JSON file the same way the reference datasets are described. (exakit_nb, the older name, still imports.)",
     "Model-call tracing is opt-in: with LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY and LANGFUSE_HOST set before exakit notebook, nb.trace(...) records the calls in your own Langfuse project. Without them it says tracing is off and does nothing else.",
@@ -67,12 +68,48 @@
   ],
   "troubleshooting": [
     {
-      "symptom": "JupyterLab is not installed, so the notebooks have nothing to open in",
-      "remedy": "exakit notebook --setup"
+      "symptom": "exakit notebook says the database is not running, or the connection to it was lost",
+      "remedy": "exakit start - On a terminal exakit notebook offers to start it itself, then rewrites the notebooks' connection and checks it; if the notebooks still cannot connect nothing is opened - see exakit status and exakit logs."
+    },
+    {
+      "symptom": "JupyterLab was deleted, or is not installed, so the notebooks have nothing to open in",
+      "remedy": "exakit notebook setup - Its row in the menu says 'missing'; picking it offers to reinstall the kit's JupyterLab at its pinned version. Without a terminal, setup installs it without asking."
+    },
+    {
+      "symptom": "Marimo was deleted from the kit's notebook environment",
+      "remedy": "exakit notebook marimo - It offers to install it again (yes is the default, and the answer without a terminal)."
+    },
+    {
+      "symptom": "The notebook environment is missing or broken (its Python is gone, or the connector does not import)",
+      "remedy": "exakit update notebook - On a terminal exakit notebook offers the same repair: the notebook environment installed again (about 1 GB)."
+    },
+    {
+      "symptom": "Positron shows as 'not on this machine'",
+      "remedy": "Get it at https://positron.posit.co/download.html. The notebooks folder keeps its Positron settings; once Positron is back, exakit notebook positron opens it."
+    },
+    {
+      "symptom": "Port 8888 (or Marimo's 2718) is in use by another program",
+      "remedy": "exakit notebook - Without --port the next free port (up to 20 above) is used, said, and remembered. A port named with --port is refused when it is taken: pick another, e.g. exakit notebook --port 8890."
+    },
+    {
+      "symptom": "The notebooks folder was deleted",
+      "remedy": "exakit notebook - It is made again with the kit's notebooks. A single kit notebook you deleted from a folder that is still there is not copied back."
+    },
+    {
+      "symptom": "The notebooks' connection store or its master password was deleted",
+      "remedy": "exakit notebook - A new store is written from the kit's connection (the old one cannot be read without its master password; one that would not open is kept as connection.scs.unreadable)."
+    },
+    {
+      "symptom": "The kernel 'Exasol (Starter Kit)' is gone from Jupyter",
+      "remedy": "exakit notebook setup - Every exakit notebook registers it again."
+    },
+    {
+      "symptom": "The browser does not open",
+      "remedy": "exakit notebook --no-browser - It prints the address; the login token is in ~/.exasol-starter-kit/credentials (notebook_jupyter_token, notebook_marimo_token) - never paste it anywhere else."
     },
     {
       "symptom": "No connection to the kit's database was found",
-      "remedy": "exakit notebook --check"
+      "remedy": "exakit notebook check"
     },
     {
       "symptom": "exakit notebook says the add-on is not installed",
@@ -80,11 +117,7 @@
     },
     {
       "symptom": "A notebook cannot connect",
-      "remedy": "exakit notebook --check"
-    },
-    {
-      "symptom": "JupyterLab does not start because another Jupyter answers on the port",
-      "remedy": "exakit notebook --port 8890"
+      "remedy": "exakit notebook check"
     },
     {
       "symptom": "import exakit.nb fails",

@@ -1,7 +1,7 @@
 ---
 name: notebook
 addon: notebook
-description: Open notebooks already connected to the local Exasol database with the notebook add-on, built on Exasol's notebook connector (the package AI Lab installs) — covering exakit notebook, --marimo, --positron, --setup, --check and --stop, the notebook tools (JupyterLab, Marimo, Positron) as child rows of the notebook in the marketplace's add-ons table, JupyterLab and Marimo as on-demand background services with their status, the persona folders of the kit's notebooks (AI Scientist and ML Engineer quickstarts, explore, train, score), the Exasol (Starter Kit) kernel, the exakit.nb helpers, why no notebook ever holds a host, user or password, opt-in Langfuse tracing of model calls, and which AI Lab notebooks run on a local database. Triggers — "open a notebook", "start Jupyter", "open Marimo", "use Positron with Exasol", "where are the starter kit notebooks", "JupyterLab on my Exasol", "notebook connected to the database", "install the notebook add-on", "exakit notebook", "stop JupyterLab", "is my notebook running", "use AI Lab notebooks locally", "trace my LLM calls to Langfuse", "my notebook cannot connect".
+description: Open notebooks already connected to the local Exasol database with the notebook add-on, built on Exasol's notebook connector (the package AI Lab installs) — covering exakit notebook (on a terminal a multi-select of the notebook tools, each saying its state), marimo, positron, setup, check and stop, what it repairs before it opens anything (the database stopped or the connection lost, JupyterLab or Marimo deleted, the notebook environment broken, a port taken, the notebooks folder or the connection store deleted), the notebook tools (JupyterLab, Marimo, Positron) as child rows of the notebook in the marketplace's add-ons table, JupyterLab and Marimo as on-demand background services with their status, the persona folders of the kit's notebooks (AI Scientist and ML Engineer quickstarts, explore, train, score), the Exasol (Starter Kit) kernel, the exakit.nb helpers, why no notebook ever holds a host, user or password, opt-in Langfuse tracing of model calls, and which AI Lab notebooks run on a local database. Triggers — "open a notebook", "start Jupyter", "open Marimo", "use Positron with Exasol", "where are the starter kit notebooks", "JupyterLab on my Exasol", "notebook connected to the database", "install the notebook add-on", "exakit notebook", "stop JupyterLab", "is my notebook running", "I deleted JupyterLab", "exakit notebook says the database is not running", "use AI Lab notebooks locally", "trace my LLM calls to Langfuse", "my notebook cannot connect".
 ---
 
 # notebook — JupyterLab, Marimo or Positron connected to the local database
@@ -39,20 +39,33 @@ connection, no helpers and no notebooks.
 ## Open it
 
 ```bash
-exakit notebook                      # start JupyterLab in the background and open it in the browser
-exakit notebook --marimo             # the same notebooks in Marimo (installs it when the user says yes)
-exakit notebook --positron           # the user's Positron on the notebooks folder, with the kit's Python
-exakit notebook --stop               # stop JupyterLab and Marimo (--stop --marimo: only Marimo)
-exakit notebook --setup              # register the kernel, find or offer JupyterLab, start nothing
+exakit notebook                      # on a terminal: pick the tools to open; without one: JupyterLab
+exakit notebook marimo             # the same notebooks in Marimo (installs it when the user says yes)
+exakit notebook positron           # the user's Positron on the notebooks folder, with the kit's Python
+exakit notebook stop               # stop JupyterLab and Marimo (stop marimo: only Marimo)
+exakit notebook setup              # register the kernel, find or offer JupyterLab, start nothing
 exakit notebook --no-browser --port 8890
-exakit notebook --check              # connect and report (and whether JupyterLab runs), start nothing
+exakit notebook check              # connect and report (and whether JupyterLab runs), start nothing
 ```
+
+**On a terminal, plain `exakit notebook` asks one multi-select, "Open which
+notebook tools?"**, each row saying its tool's state before anything happens:
+JupyterLab `running at http://127.0.0.1:<port>/lab`, `ready (the kit's <version>)`,
+`ready (yours: <path>)` or `missing - reinstall it into the kit's environment`;
+Marimo `running at ...`, `ready` or `not installed - installs it`; Positron
+`found - opens on the notebooks folder`, or a row that cannot be picked saying
+where to get it; and `Skip - open nothing`. The tools the user chose at install
+are ticked (JupyterLab when none). Each one picked opens in turn - one line each
+with its address - then one line says how to stop them. **Without a terminal
+(an agent's shell) it never asks**: plain `exakit notebook` opens JupyterLab, as
+it always did; `--port N` also means JupyterLab, without the menu. An agent
+should name the tool it means: `exakit notebook`, `marimo` or `positron`.
 
 JupyterLab runs in the background until it is stopped, so `exakit notebook`
 returns at once; with `--no-browser` it opens no browser and prints the address
 (without the token). It is an on-demand
 service: `exakit start` (everything) does not start it and it never starts at
-login. `exakit notebook --check` says whether it runs.
+login. `exakit notebook check` says whether it runs.
 Start it only when the user asks for notebooks; never print the login token
 (it lives in the kit's credentials folder; the address `exakit notebook` prints has
 none, and only the browser gets the logged-in address).
@@ -117,12 +130,31 @@ anywhere with the udf-devkit's scoring template.
 
 ## When something is wrong
 
+Before it opens anything, `exakit notebook` checks what the notebooks need and
+says each problem in one line. On a terminal it offers the fix (yes is the
+default); without one it asks nothing, names the one command that fixes it, and
+exits non-zero when nothing could open. Relay that command to the user.
+
+| What happened | On a terminal | Without one |
+|---|---|---|
+| The database is stopped, or the connection was lost | offers to start it (as `exakit start` does), rewrites the notebooks' connection and checks it; still no connection: nothing opens, see `exakit status`, `exakit logs` | `exakit start` |
+| JupyterLab deleted (the kit's, or the user's own gone from PATH) | the row says `missing`; picking it offers to reinstall the kit's at its pin | `exakit notebook setup` (installs it, no question) |
+| Marimo deleted | the row says `missing`; picking it offers to reinstall it | `exakit notebook marimo` (installs it) |
+| The notebook environment deleted or not importing | offers the repair (the install again, about 1 GB) | `exakit update notebook` |
+| Positron uninstalled | a row that cannot be picked; its folder settings stay | - |
+| Another program holds the port | the next free port (up to 20 above), said and recorded; with `--port N` it refuses instead | the same |
+| The notebooks folder deleted | made again with the kit's notebooks (one notebook deleted from a folder that is still there stays deleted) | the same |
+| The connection store or its master password deleted | a new store is written from the kit's connection | the same |
+| The kernel removed | registered again on every launch | the same |
+| The browser cannot open | the address, and the file the login token is in | the same |
+| A tool is already running | opened where it runs, no second server | the same |
+
 | Symptom | Do this |
 |---|---|
 | "The notebook add-on is not installed" | `exakit marketplace notebook` |
-| "JupyterLab is not installed" (the user unticked it) | `exakit notebook --setup` |
-| "No connection to the kit's database was found" | Run it with the kit's notebook Python (the kernel Exasol (Starter Kit)); a new add-on: `exakit notebook --check` |
-| A notebook cannot connect | `exakit notebook --check` |
-| Another Jupyter answers on the port | `exakit notebook --port 8890` |
-| Is it running? where is it? | `exakit notebook --check`; its logs: `exakit logs notebook`, `exakit logs notebook-marimo` |
+| "JupyterLab is not installed" (the user unticked it) | `exakit notebook setup` |
+| "No connection to the kit's database was found" | Run it with the kit's notebook Python (the kernel Exasol (Starter Kit)); a new add-on: `exakit notebook check` |
+| A notebook cannot connect | `exakit notebook check` |
+| "Port N is in use by another program" (it was given with `--port`) | `exakit notebook --port <another>`, or leave `--port` out and a free one is used |
+| Is it running? where is it? | `exakit notebook check`; its logs: `exakit logs notebook`, `exakit logs notebook-marimo` |
 | `import exakit.nb` fails | `exakit update notebook` (it refreshes the kit's helpers) |

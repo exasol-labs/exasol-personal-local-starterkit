@@ -103,7 +103,7 @@ try {
     Check "a file that is not JSON is left alone" "False|{not json" "$(Set-NotebookPositronFolder)|$(Get-Content -Raw (Join-Path $vscode 'settings.json'))"
 
     Write-Host "exakit notebook refuses what it does not know:"
-    foreach ($bad in @(@("--frob"), @("--port"), @("--port", "abc"), @("--port", "80"), @("--marimo", "--positron"))) {
+    foreach ($bad in @(@("--frob"), @("--port"), @("--port", "abc"), @("--port", "80"), @("--marimo", "--positron"), @("marimo", "positron"), @("jupyterlab", "marimo"), @("Marimo"))) {
         $refused = $false
         try { Invoke-CmdNotebook -CmdArgs $bad } catch { $refused = "$_" -like "FAIL:*" }
         Check "refuses: $($bad -join ' ')" $true $refused
@@ -175,7 +175,7 @@ try {
     Write-Host "exakit logs notebook: two targets:"
     $logs = @(Get-NotebookLogPath)
     Check "JupyterLab's log" "notebook|JupyterLab (exakit notebook)|$(Get-NotebookLogFile)" $logs[0]
-    Check "Marimo's log" "notebook-marimo|Marimo (notebook --marimo)|$(Get-NotebookMarimoLogFile)" $logs[1]
+    Check "Marimo's log" "notebook-marimo|Marimo (notebook marimo)|$(Get-NotebookMarimoLogFile)" $logs[1]
 
     Write-Host "a pid file is trusted only while its process is the kit's server:"
     $python = (Get-Command python3).Source
@@ -262,6 +262,14 @@ try {
 
     Write-Host "a server that could not be started makes the command exit 1, as on the shell side:"
     function Get-NotebookInstalledVersion { return "3.1.0" }
+    Initialize-ExakitManifest
+    Set-ExakitManifestValue "components.notebook.version" "3.1.0"
+    # The launcher's own checks are tests/notebook-launcher-ps.ps1's: here the
+    # environment imports, nobody is at a console and every port is free.
+    function Get-NotebookEnvState { return "ok" }
+    function Test-NotebookOnTerminal { return $false }
+    function Test-NotebookPortInUse { param($Port) return $false }
+    function Confirm-NotebookJupyterReady { param($Setup) return 0 }
     function Test-ExakitDbReachable { return $true }
     function Write-NotebookConnection { return "same" }
     function Register-NotebookKernel { return $true }

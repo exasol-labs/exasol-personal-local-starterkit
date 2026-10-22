@@ -746,7 +746,10 @@ ui_checkbox_menu() {
             printf '\033[%dA\033[0J' "$_cb_drawn"
         fi
         _cb_first=0
-        _cb_cols="$(_ui_term_cols)"
+        # One column short of the width: a row that fills the last column
+        # leaves the cursor pending a wrap, and some terminals then add a
+        # blank line that the redraw does not count (the frames stack).
+        _cb_cols=$(( $(_ui_term_cols) - 1 ))
         _cb_drawn=0
         _cb_i=1
         for _cb_label in "$@"; do

@@ -140,7 +140,7 @@ check "a file that is not JSON is left alone" "1|{not json" \
 check "no positron and no app: none found" "1" "$( (PATH=/usr/bin:/bin; HOME="$WORK/nohome"; notebook_find_positron >/dev/null && echo 0 || echo 1) )"
 
 echo "exakit notebook refuses what it does not know:"
-for args in "--frob" "--port" "--port abc" "--port 80" "--marimo --positron"; do
+for args in "--frob" "--port" "--port abc" "--port 80" "--marimo --positron" "marimo positron" "jupyterlab marimo" "Marimo"; do
     # shellcheck disable=SC2086
     out="$( (notebook_cmd $args) 2>&1)"; rc=$?
     check "refuses: $args" "1" "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
@@ -222,7 +222,7 @@ check "a failed write fails" "1" \
 echo "exakit logs notebook:"
 out="$( (exakit_marketplace_installed_addons() { echo notebook; }; exakit_log_targets) )"
 contains "JupyterLab's log is a target" "notebook|JupyterLab (exakit notebook)|file|$EXAKIT_LOG_DIR/notebook.log" "$out"
-contains "Marimo's log is a target" "notebook-marimo|Marimo (notebook --marimo)|file|$EXAKIT_LOG_DIR/notebook-marimo.log" "$out"
+contains "Marimo's log is a target" "notebook-marimo|Marimo (notebook marimo)|file|$EXAKIT_LOG_DIR/notebook-marimo.log" "$out"
 out="$( (exakit_marketplace_installed_addons() { echo notebook; }; mkdir -p "$EXAKIT_LOG_DIR"; echo line1 > "$EXAKIT_LOG_DIR/notebook.log"; exakit_logs_show notebook) 2>&1)"
 check "exakit logs notebook shows it" "line1" "$out"
 
@@ -253,6 +253,11 @@ sed 's/a.startswith("--ServerApp.port=") or a.startswith("--port=")/False/; s/^p
 chmod +x "$EXAKIT_NOTEBOOK_VENV/bin/jupyter-lab" "$EXAKIT_NOTEBOOK_VENV/bin/marimo"
 export STUB_SEEN="$WORK/stub-seen"
 notebook_installed_version() { echo 3.1.0; }
+manifest_set components.notebook.version 3.1.0
+# The launcher's own checks are tests/notebook-launcher.sh's: here the
+# environment imports and nobody is at a terminal.
+notebook_env_state() { echo ok; }
+_notebook_on_terminal() { return 1; }
 exakit_db_reachable() { return 0; }
 notebook_write_connection() { echo same; }
 notebook_register_kernel() { return 0; }
@@ -310,7 +315,7 @@ check "a server that dies while starting fails the command" "1" "$rc"
 contains "and is reported at once" "JupyterLab stopped while it was starting" "$out"
 check "without waiting out the timeout" "yes" "$([ $(( $(date +%s) - t0 )) -lt 15 ] && echo yes || echo no)"
 
-check "exakit notebook --marimo | cat returns" "0" "$(returns_within 25 "$WORK/m1" notebook_cmd --marimo --port "$MPORT"; echo $?)"
+check "exakit notebook marimo | cat returns" "0" "$(returns_within 25 "$WORK/m1" notebook_cmd --marimo --port "$MPORT"; echo $?)"
 contains "Marimo answers" "Marimo is running: http://127.0.0.1:$MPORT/" "$(cat "$WORK/m1")"
 mpid="$(cat "$(_notebook_marimo_pidfile)" 2>/dev/null)"
 contains "Marimo's pid file names its wrapper" "marimo_wrapper.py" "$(ps -p "$mpid" -o command= 2>/dev/null)"
@@ -321,7 +326,10 @@ check "Marimo stops" "no" "$(kill -0 "$mpid" 2>/dev/null && echo yes || echo no)
 MPORT="$(free_port)"
 ( STUB_DELAY=3 notebook_cmd --marimo --no-browser --port "$MPORT" >"$WORK/m2" 2>&1 ) &
 first=$!
-sleep 1
+# The second call comes once the first has started its Marimo (its pid file is
+# there), not after a fixed second: the copy before the start can take longer.
+_w=0
+while [ ! -s "$(_notebook_marimo_pidfile)" ] && [ "$_w" -lt 40 ]; do sleep 0.25; _w=$((_w + 1)); done
 out="$(notebook_cmd --marimo --no-browser 2>&1)"
 wait "$first"
 contains "a second --marimo while the first starts waits for it" "Marimo is running: http://127.0.0.1:$MPORT/" "$out"
