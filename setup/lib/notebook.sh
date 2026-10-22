@@ -30,12 +30,16 @@
 #     no kernel spec, notebook or output ever holds a host, a user or a
 #     password. The store is refreshed from the kit's record on every
 #     `exakit notebook`.
-#   - The notebook tools are one checklist at the install, all three ticked:
-#     JupyterLab (one on PATH is used; with none, the kit's is installed because
-#     it was ticked - the connector's jupyter extra, in the same resolution as
-#     the connector), Marimo (installed into the kit's notebook environment) and
-#     Positron (the user's own, only ever CONFIGURED: the notebooks folder names
-#     the kit's Python as its interpreter; the kit never installs Positron).
+#   - The notebook tools are the notebook row's three CHILD ROWS in the
+#     marketplace's add-ons table, all three ticked, each saying before anything
+#     installs what will become of it (notebook_table_children): JupyterLab (one
+#     on PATH is used; with none, the kit's is installed because it was ticked -
+#     the connector's jupyter extra, in the same resolution as the connector),
+#     Marimo (installed into the kit's notebook environment) and Positron (the
+#     user's own, only ever CONFIGURED: the notebooks folder names the kit's
+#     Python as its interpreter; the kit never installs Positron). Each row then
+#     shows how its tool settled. A run that draws no table asks one checklist
+#     instead (notebook_questions), where a terminal is there to answer it.
 #     EXAKIT_NOTEBOOK_FRONTENDS=jupyterlab,marimo,positron|none answers it for a
 #     script; EXAKIT_NOTEBOOK_JUPYTER=skip / EXAKIT_NOTEBOOK_MARIMO=skip leave one
 #     out. The answer is recorded (components.notebook.front_ends) and a
@@ -337,26 +341,42 @@ _notebook_front_end_add() {
     manifest_set components.notebook.front_ends "$(_notebook_front_ends_given "$_nfa_now,$1" 2>/dev/null)"
 }
 
-# notebook_choose_front_ends — which notebook tools; sets NOTEBOOK_FRONT_ENDS
-# (jupyterlab,marimo,positron or none). EXAKIT_NOTEBOOK_FRONTENDS answers it;
-# else a reinstall or an update keeps the recorded choice; else (the first
-# install) one checklist with all three ticked, where EXAKIT_NOTEBOOK_JUPYTER or
-# EXAKIT_NOTEBOOK_MARIMO=skip leaves one out and without a terminal the ticks stand.
-notebook_choose_front_ends() {
+# notebook_default_front_ends — the notebook tools WITHOUT asking; sets
+# NOTEBOOK_FRONT_ENDS (jupyterlab,marimo,positron or none). EXAKIT_NOTEBOOK_FRONTENDS
+# answers it; else a reinstall or an update keeps the recorded choice; else all
+# three, less any EXAKIT_NOTEBOOK_JUPYTER or EXAKIT_NOTEBOOK_MARIMO=skip leaves
+# out. Returns 0 when that is an ANSWER (the variable or the record), 1 when it
+# is only where a question would start: the checklist below, and the ticks of
+# the tools' rows in the add-ons table (notebook_table_children).
+# ⇄ twin: Get-NotebookDefaultFrontEnds in notebook.ps1.
+notebook_default_front_ends() {
     NOTEBOOK_FRONT_ENDS=""
     if [ -n "${EXAKIT_NOTEBOOK_FRONTENDS:-}" ]; then
         NOTEBOOK_FRONT_ENDS="$(_notebook_front_ends_given "$EXAKIT_NOTEBOOK_FRONTENDS")"
         [ -n "$NOTEBOOK_FRONT_ENDS" ] && return 0
         warn "EXAKIT_NOTEBOOK_FRONTENDS names no notebook tool, so it is not used"
     fi
-    _ncf_recorded="$(manifest_get components.notebook.front_ends 2>/dev/null || true)"
-    if [ -n "$_ncf_recorded" ]; then
-        NOTEBOOK_FRONT_ENDS="$(_notebook_front_ends_given "$_ncf_recorded" "the recorded notebook tools" 2>/dev/null)"
+    _ndf_recorded="$(manifest_get components.notebook.front_ends 2>/dev/null || true)"
+    if [ -n "$_ndf_recorded" ]; then
+        NOTEBOOK_FRONT_ENDS="$(_notebook_front_ends_given "$_ndf_recorded" "the recorded notebook tools" 2>/dev/null)"
         [ -n "$NOTEBOOK_FRONT_ENDS" ] && return 0
     fi
+    _notebook_skipped "${EXAKIT_NOTEBOOK_JUPYTER:-}" || NOTEBOOK_FRONT_ENDS="jupyterlab"
+    _notebook_skipped "${EXAKIT_NOTEBOOK_MARIMO:-}" || NOTEBOOK_FRONT_ENDS="${NOTEBOOK_FRONT_ENDS:+$NOTEBOOK_FRONT_ENDS,}marimo"
+    NOTEBOOK_FRONT_ENDS="${NOTEBOOK_FRONT_ENDS:+$NOTEBOOK_FRONT_ENDS,}positron"
+    return 1
+}
+
+# notebook_choose_front_ends — which notebook tools; sets NOTEBOOK_FRONT_ENDS
+# (jupyterlab,marimo,positron or none). notebook_default_front_ends answers it
+# when it can (the variable, or the recorded choice); else (the first install,
+# with no table that already asked) one checklist starting from its ticks, and
+# without a terminal the ticks stand.
+notebook_choose_front_ends() {
+    notebook_default_front_ends && return 0
     _ncf_defaults=""
-    _notebook_skipped "${EXAKIT_NOTEBOOK_JUPYTER:-}" || _ncf_defaults="1"
-    _notebook_skipped "${EXAKIT_NOTEBOOK_MARIMO:-}" || _ncf_defaults="${_ncf_defaults:+$_ncf_defaults,}2"
+    case ",$NOTEBOOK_FRONT_ENDS," in *,jupyterlab,*) _ncf_defaults="1" ;; esac
+    case ",$NOTEBOOK_FRONT_ENDS," in *,marimo,*) _ncf_defaults="${_ncf_defaults:+$_ncf_defaults,}2" ;; esac
     _ncf_defaults="${_ncf_defaults:+$_ncf_defaults,}3"
     ui_checkbox_menu "Notebook tools - untick any you do not want" "$_ncf_defaults" \
         "JupyterLab - notebooks in the browser with the kit's kernel; yours is used if you have one" \
@@ -376,10 +396,59 @@ notebook_choose_front_ends() {
 # notebook_questions — the marketplace's QUESTIONS FIRST hook: the notebook
 # tools are asked before the install table animates (a checklist asked under a
 # live table is redrawn over), and the answer is exported so the install that
-# follows takes it without asking again.
+# follows takes it without asking again. Only reached on a run whose table did
+# not carry the tools as rows (a scripted EXAKIT_MARKETPLACE_ADDONS): where it
+# did, the rows were the question (notebook_table_children_picked).
 notebook_questions() {
     notebook_choose_front_ends
     EXAKIT_NOTEBOOK_FRONTENDS="$NOTEBOOK_FRONT_ENDS"
+    export EXAKIT_NOTEBOOK_FRONTENDS
+}
+
+# notebook_table_children — the notebook tools as CHILD ROWS of the notebook's
+# row in the marketplace's add-ons table (the optional <id>_table_children
+# hook), one "<key>|<label>|<version>|<description>|<tick>" line each. The
+# description says, before anything installs, what will become of each tool
+# - from the find helpers alone, no network - and the ticks are
+# notebook_default_front_ends'. The version is the pin the kit installs at;
+# Positron has none, the kit never installs it.
+# ⇄ twin: Get-NotebookTableChildren in notebook.ps1.
+notebook_table_children() {
+    notebook_default_front_ends || true
+    _ntc_fronts=",$NOTEBOOK_FRONT_ENDS,"
+    case "$(notebook_find_jupyter 2>/dev/null || true)" in
+        own\ *)
+            _ntc_jpath="$(notebook_find_jupyter 2>/dev/null)"
+            _ntc_jdesc="yours ($(ui_tilde "${_ntc_jpath#own }")) is used as it is" ;;
+        kit\ *) _ntc_jdesc="already in the kit's notebook environment" ;;
+        *) _ntc_jdesc="not on this machine: installed into the kit's notebook environment" ;;
+    esac
+    if notebook_marimo_installed; then
+        _ntc_mdesc="already installed"
+    else
+        _ntc_mdesc="installed into the kit's notebook environment"
+    fi
+    if notebook_find_positron >/dev/null 2>&1; then
+        _ntc_pdesc="yours: pointed at the kit's Python"
+    else
+        _ntc_pdesc="not on this machine: the notebooks folder is prepared for it (positron.posit.co)"
+    fi
+    _ntc_tick() { case "$_ntc_fronts" in *",$1,"*) printf 1 ;; *) printf 0 ;; esac; }
+    # A "|" would end the field in the table's state file.
+    printf 'jupyterlab|JupyterLab|%s|%s|%s\n' "$(notebook_frontend_pin jupyterlab 2>/dev/null)" \
+        "$(printf '%s' "$_ntc_jdesc" | tr '|' '/')" "$(_ntc_tick jupyterlab)"
+    printf 'marimo|Marimo|%s|%s|%s\n' "$(notebook_frontend_pin marimo 2>/dev/null)" \
+        "$_ntc_mdesc" "$(_ntc_tick marimo)"
+    printf 'positron|Positron||%s|%s\n' "$_ntc_pdesc" "$(_ntc_tick positron)"
+}
+
+# notebook_table_children_picked <keys-csv> — the ticked tool rows ARE the
+# answer: exported as EXAKIT_NOTEBOOK_FRONTENDS ("none" when no tool row was
+# ticked), so the install takes it without asking.
+# ⇄ twin: Set-NotebookTableChildrenPicked in notebook.ps1.
+notebook_table_children_picked() {
+    EXAKIT_NOTEBOOK_FRONTENDS="$(_notebook_front_ends_given "${1:-}" 2>/dev/null)"
+    [ -n "$EXAKIT_NOTEBOOK_FRONTENDS" ] || EXAKIT_NOTEBOOK_FRONTENDS="none"
     export EXAKIT_NOTEBOOK_FRONTENDS
 }
 
@@ -402,20 +471,29 @@ notebook_plan_front_ends() {
 # registered either way), Marimo, and the user's Positron set to the kit's Python.
 # The tools were chosen before the packages were installed (notebook_install),
 # so what the kit installs came with them; this settles what is left.
+#
+# Under the marketplace's live add-ons table each tool also settles its own
+# row there (exakit_addon_table_child): the lines below then go to the logfile,
+# as every detail of an install narrated by the table does.
 notebook_front_ends_setup() {
     [ -n "${NOTEBOOK_FRONT_ENDS:-}" ] || notebook_choose_front_ends
     case ",$NOTEBOOK_FRONT_ENDS," in
         *,jupyterlab,*)
             if _nfs_found="$(notebook_find_jupyter)"; then
                 case "$_nfs_found" in
-                    kit\ *) _nfs_whose="the kit's"; manifest_set components.notebook.jupyter kit ;;
-                    *) _nfs_whose="yours" ;;
+                    kit\ *) _nfs_whose="the kit's"; manifest_set components.notebook.jupyter kit
+                           _nfs_row="installed$(_notebook_pin_suffix jupyterlab)" ;;
+                    *) _nfs_whose="yours"; _nfs_row="yours, kernel added" ;;
                 esac
                 ok "JupyterLab ($_nfs_whose: ${_nfs_found#* }) with the kernel '$EXAKIT_NOTEBOOK_KERNEL_TITLE' - open it with: exakit notebook"
+                exakit_addon_table_child jupyterlab done "$_nfs_row" || true
+            elif EXAKIT_NOTEBOOK_JUPYTER=install notebook_offer_jupyter; then
+                exakit_addon_table_child jupyterlab done "installed$(_notebook_pin_suffix jupyterlab)" || true
             else
-                EXAKIT_NOTEBOOK_JUPYTER=install notebook_offer_jupyter || true
+                exakit_addon_table_child jupyterlab failed "not installed - see the log" || true
             fi ;;
-        *) info "JupyterLab not set up; the kernel '$EXAKIT_NOTEBOOK_KERNEL_TITLE' is registered for any Jupyter - add it any time: exakit notebook --setup" ;;
+        *) info "JupyterLab not set up; the kernel '$EXAKIT_NOTEBOOK_KERNEL_TITLE' is registered for any Jupyter - add it any time: exakit notebook --setup"
+           exakit_addon_table_child jupyterlab skipped "" || true ;;
     esac
     case ",$NOTEBOOK_FRONT_ENDS," in
         *,marimo,*)
@@ -425,16 +503,33 @@ notebook_front_ends_setup() {
             fi
             if notebook_marimo_installed || notebook_install_marimo; then
                 ok "Marimo with the notebooks in $EXAKIT_NOTEBOOK_DIR/marimo - start it with: exakit notebook --marimo"
+                exakit_addon_table_child marimo done "installed$(_notebook_pin_suffix marimo)" || true
             else
                 warn "Marimo could not be installed (see the log) - retry with: exakit notebook --marimo"
+                exakit_addon_table_child marimo failed "not installed - see the log" || true
             fi ;;
-        *) info "Marimo not installed - add it any time: exakit notebook --marimo" ;;
+        *) info "Marimo not installed - add it any time: exakit notebook --marimo"
+           exakit_addon_table_child marimo skipped "" || true ;;
     esac
     case ",$NOTEBOOK_FRONT_ENDS," in
-        *,positron,*) notebook_positron_note ;;
-        *) info "Positron not set up - any time: exakit notebook --positron" ;;
+        *,positron,*)
+            notebook_positron_note
+            case $? in
+                0) exakit_addon_table_child positron done "configured" || true ;;
+                2) exakit_addon_table_child positron skipped "not on this machine - folder ready" || true ;;
+                *) exakit_addon_table_child positron failed "folder not prepared - see the log" || true ;;
+            esac ;;
+        *) info "Positron not set up - any time: exakit notebook --positron"
+           exakit_addon_table_child positron skipped "" || true ;;
     esac
     manifest_set components.notebook.front_ends "$NOTEBOOK_FRONT_ENDS"
+}
+
+# _notebook_pin_suffix <jupyterlab|marimo> — " <pin>" for a tool's table row,
+# nothing when no version is pinned.
+_notebook_pin_suffix() {
+    _nps_v="$(notebook_frontend_pin "$1" 2>/dev/null)" || return 0
+    printf ' %s' "$_nps_v"
 }
 
 notebook_marimo_command() {
@@ -668,14 +763,18 @@ notebook_prepare_positron() {
 }
 
 # notebook_positron_note — configure the folder for Positron and say what came of
-# it. Positron itself is never installed.
+# it. Positron itself is never installed. Returns 0 when Positron is here and
+# now opens the folder with the kit's Python, 2 when it is not on this machine
+# (the folder is ready for it), 1 when the folder could not be prepared (the
+# reason warned) - so the tool's row in the add-ons table can say which.
 notebook_positron_note() {
-    notebook_prepare_positron || return 0
+    notebook_prepare_positron || return 1
     if _npn_found="$(notebook_find_positron)"; then
         ok "Positron ($_npn_found) opens the notebooks with the kit's Python: exakit notebook --positron"
-    else
-        info "Positron is not on this machine, so there is nothing to configure in it - the notebooks folder is ready for it: $EXAKIT_NOTEBOOK_POSITRON_DOWNLOAD"
+        return 0
     fi
+    info "Positron is not on this machine, so there is nothing to configure in it - the notebooks folder is ready for it: $EXAKIT_NOTEBOOK_POSITRON_DOWNLOAD"
+    return 2
 }
 
 # notebook_open_positron — Positron on the notebooks folder.
@@ -944,6 +1043,17 @@ notebook_server_state() {
     printf 'stopped\n'
 }
 
+# _notebook_jupyter_config — the kit's JupyterLab settings file, written fresh
+# on every start, and its path: the file browser hides the Marimo copies (the
+# marimo/ folder - they open in Marimo, `exakit notebook --marimo`) beside
+# Jupyter's own defaults (caches, checkpoints). Jupyter reads it through
+# --config, so a JupyterLab of the user's own is never configured globally.
+_notebook_jupyter_config() {
+    _njc="$EXAKIT_NOTEBOOK_HOME/jupyter_server_config.json"
+    printf '%s\n' '{"ContentsManager": {"hide_globs": ["__pycache__", "*.pyc", "*.pyo", ".DS_Store", "*~", ".ipynb_checkpoints", "marimo"]}}' > "$_njc" || return 1
+    printf '%s\n' "$_njc"
+}
+
 # notebook_server_start <port> — JupyterLab in the background on 127.0.0.1,
 # rooted at the notebooks folder, with the token in its environment only.
 notebook_server_start() {
@@ -958,7 +1068,8 @@ notebook_server_start() {
     JUPYTER_TOKEN="$(_notebook_secret "$EXAKIT_NOTEBOOK_TOKEN_CRED")" \
         _notebook_spawn "$EXAKIT_NOTEBOOK_DIR" "$(_notebook_pidfile)" "$(_notebook_logfile)" \
         "$_nst_cmd" --no-browser --ServerApp.ip=127.0.0.1 "--ServerApp.port=$_nst_port" \
-        --ServerApp.port_retries=0 "--ServerApp.root_dir=$EXAKIT_NOTEBOOK_DIR"
+        --ServerApp.port_retries=0 "--ServerApp.root_dir=$EXAKIT_NOTEBOOK_DIR" \
+        "--config=$(_notebook_jupyter_config)"
     manifest_set components.notebook.port "$_nst_port"
     _notebook_wait_up _notebook_api_answers "$_nst_port" "$(_notebook_pidfile)" \
         "$EXAKIT_NOTEBOOK_JUPYTER_MATCH" JupyterLab "$(_notebook_logfile)"

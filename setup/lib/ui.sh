@@ -791,8 +791,12 @@ ui_bar() {
 #   <kind>|<label>|<tick>|<state>|<pct>|<ceiling>|<secs>|<segment-start>|<phase>|<final>|<col2>|<col3>
 #
 #   kind    group | tee | corner | plain   — the tree connector to draw
+#           tee-tee | tee-corner | corner-tee | corner-corner — a row one level
+#           DEEPER: the first word is its parent's connector (whose spine it
+#           carries on, or not), the second its own. "│  ├─ JupyterLab" is a
+#           tee-tee: a child of a tee row, and not the last of its siblings.
 #   tick    1 while the row is selected
-#   state   idle | waiting | running | done | failed | disabled
+#   state   idle | waiting | running | done | failed | skipped | disabled
 #   final   what the Status column says once the row is finished
 #   col2    the second column's cell, drawn only when UI_TABLE_COL2 names one
 #   col3    the third column's cell, drawn only when UI_TABLE_COL3 names one
@@ -944,11 +948,35 @@ ui_table_widths() {
     # FIXED, never measured: the Description column wraps to fill it rather than
     # growing to fit the longest About.
     [ -n "${UI_TABLE_COL3:-}" ] && UI_TABLE_COL3_W="${UI_TABLE_COL3_FIXED:-44}"
+    # Which rows have rows one level deeper hanging off them, for the frame:
+    # a wrapped description under such a row draws the start of that inner
+    # spine, so the children do not hang from nothing. Collected here because
+    # this pass already reads every row, and a parent is simply the row in
+    # front of its first child.
+    _UI_TABLE_PARENTS=" "
+    _utw_i=0
+    _utw_prevkind=""
     while IFS='|' read -r _utw_kind _utw_label _utw_tick _utw_state _utw_pct \
                           _utw_ceil _utw_secs _utw_t0 _utw_phase _utw_final \
                           _utw_c2 _utw_c3; do
         [ -n "$_utw_kind" ] || continue
-        case "$_utw_kind" in tee|corner) _utw_len=$(( ${#_utw_label} + 3 )) ;; *) _utw_len="${#_utw_label}" ;; esac
+        _utw_i=$(( _utw_i + 1 ))
+        case "$_utw_kind" in
+            *-tee|*-corner)
+                case "$_utw_prevkind" in
+                    *-tee|*-corner) ;;
+                    *) _UI_TABLE_PARENTS="$_UI_TABLE_PARENTS$(( _utw_i - 1 )) " ;;
+                esac ;;
+        esac
+        _utw_prevkind="$_utw_kind"
+        # The connector is part of the name cell: "├─ " is 3 columns, and a row
+        # one level deeper carries its parent's spine in front of its own --
+        # "│  ├─ " -- which is 6. Measured short, the deeper label would be cut.
+        case "$_utw_kind" in
+            tee|corner) _utw_len=$(( ${#_utw_label} + 3 )) ;;
+            *-tee|*-corner) _utw_len=$(( ${#_utw_label} + 6 )) ;;
+            *) _utw_len="${#_utw_label}" ;;
+        esac
         [ "$_utw_len" -gt "$UI_TABLE_NAME_W" ] && UI_TABLE_NAME_W="$_utw_len"
         if [ "$UI_TABLE_COL2_W" -gt 0 ] && [ "${#_utw_c2}" -gt "$UI_TABLE_COL2_W" ]; then
             UI_TABLE_COL2_W="${#_utw_c2}"
@@ -965,6 +993,8 @@ ui_table_widths() {
         case "$_utw_state" in
             ''|idle|disabled) ;;
             *)
+                # A skipped row with nothing to add says "skipped".
+                [ "$_utw_state" = skipped ] && [ -z "$_utw_final" ] && _utw_final=skipped
                 _utw_flen=$(( ${#_utw_final} + ${#UI_TICK} + 1 ))
                 [ "$_utw_flen" -gt "$UI_TABLE_STAT_W" ] && UI_TABLE_STAT_W="$_utw_flen"
                 ;;
@@ -1121,6 +1151,14 @@ _ui_table_cell() {
         failed)
             UI_TABLE_CELL="${UI_ERR:-}${UI_CROSS:-[x]}${UI_RESET:-} $7"
             UI_TABLE_CELL_LEN=$(( ${#UI_CROSS} + 1 + ${#7} )) ;;
+        skipped)
+            # Settled, but nothing was done: no glyph, dim, and indented by the
+            # tick's width so the words still line up with the finished rows
+            # above and below ("skipped" when the caller has nothing to add).
+            _utc_sk="${7:-skipped}"
+            _utc_skpad=$(( ${#UI_TICK} + 1 ))
+            UI_TABLE_CELL="${_UI_TABLE_SP:0:$_utc_skpad}${UI_DIM:-}${_utc_sk}${UI_RESET:-}"
+            UI_TABLE_CELL_LEN=$(( _utc_skpad + ${#_utc_sk} )) ;;
         disabled)
             # No glyph: this is not an outcome of anything that ran, it is a
             # standing fact about the row. Dim, like the name beside it.
@@ -1204,10 +1242,28 @@ ui_table_frame() {
                           _utr_c2 _utr_c3; do
         [ -n "$_utr_kind" ] || continue
         _utr_i=$(( _utr_i + 1 ))
+        # _utr_spine is what a wrapped description's continuation lines draw in
+        # the name cell: every spine that carries on PAST this row. A tee's
+        # spine goes on to its next sibling; a corner's ends with it. A row one
+        # level deeper draws its parent's spine (when that one goes on) and its
+        # own, three columns in.
         case "$_utr_kind" in
-            tee)    _utr_conn="${UI_TEE:-|-} "; _utr_spine=1 ;;
-            corner) _utr_conn="${UI_CORNER:-\`-} "; _utr_spine=0 ;;
-            *)      _utr_conn=""; _utr_spine=0 ;;
+            tee)           _utr_conn="${UI_TEE:-|-} "; _utr_spine="${UI_VB:-|}" ;;
+            corner)        _utr_conn="${UI_CORNER:-\`-} "; _utr_spine="" ;;
+            tee-tee)       _utr_conn="${UI_VB:-|}  ${UI_TEE:-|-} "; _utr_spine="${UI_VB:-|}  ${UI_VB:-|}" ;;
+            tee-corner)    _utr_conn="${UI_VB:-|}  ${UI_CORNER:-\`-} "; _utr_spine="${UI_VB:-|}" ;;
+            corner-tee)    _utr_conn="   ${UI_TEE:-|-} "; _utr_spine="   ${UI_VB:-|}" ;;
+            corner-corner) _utr_conn="   ${UI_CORNER:-\`-} "; _utr_spine="" ;;
+            *)             _utr_conn=""; _utr_spine="" ;;
+        esac
+        # A row with children: its continuation lines also start the children's
+        # spine, three columns in, under the first letter of its name.
+        case "$_UI_TABLE_PARENTS" in
+            *" $_utr_i "*)
+                case "$_utr_kind" in
+                    tee) _utr_spine="${UI_VB:-|}  ${UI_VB:-|}" ;;
+                    corner) _utr_spine="   ${UI_VB:-|}" ;;
+                esac ;;
         esac
         # A row nobody can pick: no checkbox at all, because an empty one
         # invites the reader to try. It keeps its COLUMNS though. It used to
@@ -1309,11 +1365,11 @@ ui_table_frame() {
             # after the corner the tree has ended and a spine below it would
             # point at nothing. Built cell by cell and MEASURED as it goes, so
             # the width is arithmetic rather than a count of escape bytes.
-            if [ "${_utr_spine:-0}" = 1 ]; then
-                _utr_wleft="     ${UI_VB:-|}${_UI_TABLE_SP:0:$(( UI_TABLE_NAME_W - 1 ))}"
-            else
-                _utr_wleft="${_UI_TABLE_SP:0:$(( 5 + UI_TABLE_NAME_W ))}"
-            fi
+            # Rows one level deeper carry their parent's spine as well as their
+            # own (see _utr_spine above); every glyph in it is one column.
+            _utr_wsp=$(( UI_TABLE_NAME_W - ${#_utr_spine} ))
+            [ "$_utr_wsp" -ge 0 ] || _utr_wsp=0
+            _utr_wleft="     ${_utr_spine}${_UI_TABLE_SP:0:$_utr_wsp}"
             _utr_wlen=$(( 5 + UI_TABLE_NAME_W ))
             if [ "$UI_TABLE_COL2_W" -gt 0 ]; then
                 _utr_wleft="${_utr_wleft}${_UI_TABLE_SEP}${_UI_TABLE_SP:0:$UI_TABLE_COL2_W}"

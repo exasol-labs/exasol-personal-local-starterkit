@@ -601,8 +601,12 @@ function Get-ExakitBar {
 #            overwrites in place rather than clearing while both are unchanged
 #   Rows     one hashtable per row:
 #              Kind    group | tee | corner | plain   - the tree connector
+#                      tee-tee | tee-corner | corner-tee | corner-corner - a
+#                      row one level DEEPER: the first word is its parent's
+#                      connector (whose spine it carries on, or not), the
+#                      second its own. Twin of the kinds in ui.sh.
 #              Tick    $true while the row is selected
-#              State   idle | waiting | running | done | failed | disabled
+#              State   idle | waiting | running | done | failed | skipped | disabled
 #              Final   what the Status column says once the row is finished
 #
 # A "disabled" row is one the reader can look at but never pick - an AI client
@@ -670,12 +674,13 @@ function New-ExakitTable {
     return $t
 }
 
-# Add-ExakitTableRow -Kind <group|tee|corner|plain> -Label <text> [-Ticked]
+# Add-ExakitTableRow -Kind <group|tee|corner|plain|tee-tee|...> -Label <text> [-Ticked]
 # One row, appended in the order it will be drawn. Returns its 1-based number,
 # which is how every later call names it.
 function Add-ExakitTableRow {
     param(
-        [ValidateSet("group", "tee", "corner", "plain")][string]$Kind = "plain",
+        [ValidateSet("group", "tee", "corner", "plain", "tee-tee", "tee-corner",
+                     "corner-tee", "corner-corner")][string]$Kind = "plain",
         [Parameter(Mandatory)][string]$Label,
         [string]$Col2 = "",
         [string]$Col3 = "",
@@ -778,8 +783,11 @@ function Get-ExakitTableWidths {
     foreach ($row in $Table.Rows.ToArray()) {
         $len = $row.Label.Length
         if ($col2W -gt 0 -and ("" + $row.Col2).Length -gt $col2W) { $col2W = ("" + $row.Col2).Length }
-        # The tree connector plus its space is 3 columns of the name cell.
+        # The tree connector plus its space is 3 columns of the name cell, and a
+        # row one level deeper carries its parent's spine in front of its own -
+        # 6. Measured short, the deeper label would be cut.
         if ($row.Kind -eq "tee" -or $row.Kind -eq "corner") { $len += 3 }
+        elseif ($row.Kind -like "*-tee" -or $row.Kind -like "*-corner") { $len += 6 }
         if ($len -gt $nameW) { $nameW = $len }
         # Measured the way Get-ExakitTableCell RENDERS it, not as stored: a
         # finished cell is "<tick> <final>", so a column sized to the bare string
@@ -790,6 +798,11 @@ function Get-ExakitTableWidths {
         # measuring it would reintroduce the column withheld above.
         if ($row.Final -and $row.State -and $row.State -ne "idle" -and $row.State -ne "disabled") {
             $finalLen = $row.Final.Length + $script:UiTick.Length + 1
+            if ($finalLen -gt $statW) { $statW = $finalLen }
+        }
+        # A skipped row with nothing to add says "skipped".
+        if (-not $row.Final -and $row.State -eq "skipped") {
+            $finalLen = 7 + $script:UiTick.Length + 1
             if ($finalLen -gt $statW) { $statW = $finalLen }
         }
     }
@@ -933,6 +946,16 @@ function Get-ExakitTableCell {
             $cell.Text = $script:UiErr + $script:UiCross + $script:UiReset + " " + $Row.Final
             $cell.Len = $script:UiCross.Length + 1 + ("" + $Row.Final).Length
         }
+        "skipped" {
+            # Settled, but nothing was done: no glyph, dim, and indented by the
+            # tick's width so the words still line up with the finished rows
+            # above and below ("skipped" when the caller has nothing to add).
+            $said = "" + $Row.Final
+            if (-not $said) { $said = "skipped" }
+            $pad = $script:UiTick.Length + 1
+            $cell.Text = (" " * $pad) + $script:UiDim + $said + $script:UiReset
+            $cell.Len = $pad + $said.Length
+        }
         "disabled" {
             # No glyph: not an outcome of anything that ran, a standing fact
             # about the row. ONLY where a Status column exists - a disabled row
@@ -1022,13 +1045,34 @@ function Get-ExakitTableFrame {
         (" " * $headTail) + $script:UiAccent + $script:UiVB + $script:UiReset)
 
     $now = Get-Date
+    $allRows = $Table.Rows.ToArray()
     $i = 0
-    foreach ($row in $Table.Rows.ToArray()) {
+    foreach ($row in $allRows) {
         $i++
+        # $spine is what a wrapped description's continuation lines draw in the
+        # name cell: every spine that carries on PAST this row. A tee's spine
+        # goes on to its next sibling; a corner's ends with it. A row one level
+        # deeper draws its parent's spine (when that one goes on) and its own,
+        # three columns in. Twin of _utr_spine in ui_table_frame.
         $conn = ""
-        $spine = $false
-        if ($row.Kind -eq "tee") { $conn = $script:UiTee + " "; $spine = $true }
-        elseif ($row.Kind -eq "corner") { $conn = $script:UiCorner + " " }
+        $spine = ""
+        $vb = $script:UiVB
+        switch ($row.Kind) {
+            "tee"           { $conn = $script:UiTee + " "; $spine = $vb }
+            "corner"        { $conn = $script:UiCorner + " " }
+            "tee-tee"       { $conn = $vb + "  " + $script:UiTee + " "; $spine = $vb + "  " + $vb }
+            "tee-corner"    { $conn = $vb + "  " + $script:UiCorner + " "; $spine = $vb }
+            "corner-tee"    { $conn = "   " + $script:UiTee + " "; $spine = "   " + $vb }
+            "corner-corner" { $conn = "   " + $script:UiCorner + " " }
+        }
+        # A row with children: its continuation lines also start the children's
+        # spine, three columns in, under the first letter of its name.
+        if ($i -lt $allRows.Count -and ($row.Kind -eq "tee" -or $row.Kind -eq "corner")) {
+            $nextKind = "" + $allRows[$i].Kind
+            if ($nextKind -like "*-tee" -or $nextKind -like "*-corner") {
+                if ($row.Kind -eq "tee") { $spine = $vb + "  " + $vb } else { $spine = "   " + $vb }
+            }
+        }
         # A row nobody can pick: no checkbox at all (an empty one invites the
         # reader to try), and the note reads straight on from the label -
         # "Cursor - not installed" is one sentence. Putting the note in the Status
@@ -1118,11 +1162,11 @@ function Get-ExakitTableFrame {
             # after the corner the tree has ended and a spine below it would
             # point at nothing. Built cell by cell and MEASURED as it goes, so
             # the width is arithmetic rather than a count of escape bytes.
-            if ($spine) {
-                $wleft = (" " * 5) + $script:UiVB + (" " * ($nameW - 1))
-            } else {
-                $wleft = " " * (5 + $nameW)
-            }
+            # Rows one level deeper carry their parent's spine as well as their
+            # own (see $spine above); every glyph in it is one column.
+            $spinePad = $nameW - $spine.Length
+            if ($spinePad -lt 0) { $spinePad = 0 }
+            $wleft = (" " * 5) + $spine + (" " * $spinePad)
             $wlen = 5 + $nameW
             if ($col2W -gt 0) {
                 $wleft += $sep + (" " * $col2W)
@@ -1223,7 +1267,7 @@ function Update-ExakitTable {
 function Set-ExakitTableRow {
     param(
         [Parameter(Mandatory)][int]$Row,
-        [Parameter(Mandatory)][ValidateSet("idle", "waiting", "running", "done", "failed")][string]$State,
+        [Parameter(Mandatory)][ValidateSet("idle", "waiting", "running", "done", "failed", "skipped")][string]$State,
         [int]$Pct = 0, [int]$Ceiling = 0, [int]$Secs = 0,
         [string]$Phase = "", [string]$Final = "",
         [hashtable]$Table = $null
@@ -1456,6 +1500,13 @@ function Stop-ExakitAnimation {
 # hint, same group and exclusive semantics, so there is one thing to learn.
 # Twin of ui_table_menu in ui.sh.
 #
+# -Groups (optional): further "parent:first:last[:mode]" specs, applied IN ORDER
+# and BEFORE the single -GroupParent group - innermost first, so a nested group
+# settles its own parent before the group above re-reads that parent as one of
+# its children. Read-ExakitCheckboxMenu's -Groups, and the whitespace-separated
+# EXAKIT_TABLE_GROUP in ui.sh. The marketplace's add-ons table is the case: the
+# notebook row is a "claim" parent of its tools, inside Select All.
+#
 # -OnScreen (optional): how many lines of this table - frame plus anything
 # printed under it - are ALREADY on screen, so a re-ask overwrites them instead
 # of drawing a second table below them. The MCP step passes it when an
@@ -1468,6 +1519,7 @@ function Invoke-ExakitTableMenu {
         [int]$ExclusiveIndex = 0,
         [int]$GroupParent = 0, [int]$GroupFirst = 0, [int]$GroupLast = 0,
         [string]$GroupMode = "any",
+        [string[]]$Groups = @(),
         [int]$OnScreen = 0
     )
     if ($null -eq $Table) { $Table = $script:UiTable }
@@ -1524,42 +1576,67 @@ function Invoke-ExakitTableMenu {
         return @($sel | Sort-Object)
     }
 
-    # Toggling the group parent ON selects every child, OFF clears them all;
-    # toggling a child re-derives the parent per $GroupMode - "all" makes it a
-    # MASTER toggle (checked only while EVERY child is), "any" a group header.
+    # Toggling a group parent ON selects every child, OFF clears them all;
+    # toggling a child re-derives the parent per its mode - "all" makes it a
+    # MASTER toggle (checked only while EVERY child is), "any" a group header,
+    # "master" is "all" downward only (a child may release the parent, never
+    # claim it), and "claim" the other way round: a child going ON ticks the
+    # parent, one going OFF leaves it as it was - a parent its children need but
+    # that stands on its own. Every group, innermost first: the -Groups specs,
+    # then the single named one.
+    $groupSpecs = @()
+    foreach ($g in $Groups) {
+        $parts = ("" + $g).Split(":")
+        if ($parts.Count -lt 3) { continue }
+        $gm = "any"
+        if ($parts.Count -ge 4) { $gm = $parts[3] }
+        $groupSpecs += @{ Parent = [int]$parts[0]; First = [int]$parts[1]; Last = [int]$parts[2]; Mode = $gm }
+    }
+    if ($GroupParent -ge 1) {
+        $groupSpecs += @{ Parent = $GroupParent; First = $GroupFirst; Last = $GroupLast; Mode = $GroupMode }
+    }
     $applyGroup = {
         param($toggled)
-        if ($GroupParent -lt 1 -or $GroupFirst -lt 1 -or $GroupLast -lt $GroupFirst) { return }
-        if ($toggled -eq $GroupParent) {
-            $parentOn = $sel.Contains($GroupParent)
-            for ($c = $GroupFirst; $c -le $GroupLast; $c++) {
-                if ($c -lt 1 -or $c -gt $n) { continue }
-                # A disabled row can sit inside the range (a group spans a small
-                # tree), so Select All has to step over it rather than tick it.
-                if (-not $pickable.Contains($c)) { [void]$sel.Remove($c); continue }
-                if ($parentOn) { if (-not $sel.Contains($c)) { [void]$sel.Add($c) } }
-                else { [void]$sel.Remove($c) }
-            }
-        } elseif ($toggled -ge $GroupFirst -and $toggled -le $GroupLast) {
-            $on = $false
-            if ($GroupMode -eq "all") {
-                $on = $true
-                for ($c = $GroupFirst; $c -le $GroupLast; $c++) {
+        foreach ($spec in $groupSpecs) {
+            $gp = [int]$spec.Parent; $gf = [int]$spec.First; $gl = [int]$spec.Last; $gmode = [string]$spec.Mode
+            if ($gp -lt 1 -or $gf -lt 1 -or $gl -lt $gf) { continue }
+            if ($toggled -eq $gp) {
+                $parentOn = $sel.Contains($gp)
+                for ($c = $gf; $c -le $gl; $c++) {
                     if ($c -lt 1 -or $c -gt $n) { continue }
-                    # ...and the all-children rule must not wait for one either,
-                    # or a machine missing one client could never tick Select All.
-                    if (-not $pickable.Contains($c)) { continue }
-                    if (-not $sel.Contains($c)) { $on = $false; break }
+                    # A disabled row can sit inside the range (a group spans a
+                    # small tree), so Select All has to step over it rather than
+                    # tick it.
+                    if (-not $pickable.Contains($c)) { [void]$sel.Remove($c); continue }
+                    if ($parentOn) { if (-not $sel.Contains($c)) { [void]$sel.Add($c) } }
+                    else { [void]$sel.Remove($c) }
                 }
-            } else {
-                for ($c = $GroupFirst; $c -le $GroupLast; $c++) {
-                    if ($c -lt 1 -or $c -gt $n) { continue }
-                    if (-not $pickable.Contains($c)) { continue }
-                    if ($sel.Contains($c)) { $on = $true; break }
+            } elseif ($toggled -ge $gf -and $toggled -le $gl) {
+                if ($gmode -eq "master" -and $sel.Contains($toggled)) { continue }
+                if ($gmode -eq "claim" -and -not $sel.Contains($toggled)) { continue }
+                $on = $false
+                if ($gmode -eq "all") {
+                    $on = $true
+                    for ($c = $gf; $c -le $gl; $c++) {
+                        if ($c -lt 1 -or $c -gt $n) { continue }
+                        # ...and the all-children rule must not wait for one
+                        # either, or a machine missing one client could never
+                        # tick Select All.
+                        if (-not $pickable.Contains($c)) { continue }
+                        if (-not $sel.Contains($c)) { $on = $false; break }
+                    }
+                } elseif ($gmode -eq "claim") {
+                    $on = $true
+                } elseif ($gmode -ne "master") {
+                    for ($c = $gf; $c -le $gl; $c++) {
+                        if ($c -lt 1 -or $c -gt $n) { continue }
+                        if (-not $pickable.Contains($c)) { continue }
+                        if ($sel.Contains($c)) { $on = $true; break }
+                    }
                 }
+                if ($on) { if (-not $sel.Contains($gp)) { [void]$sel.Add($gp) } }
+                else { [void]$sel.Remove($gp) }
             }
-            if ($on) { if (-not $sel.Contains($GroupParent)) { [void]$sel.Add($GroupParent) } }
-            else { [void]$sel.Remove($GroupParent) }
         }
     }
     # An option that cannot be combined with the others - think "Skip". Selecting

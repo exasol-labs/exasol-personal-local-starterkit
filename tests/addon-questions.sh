@@ -55,6 +55,15 @@ has "...and so does the twin" 'Invoke-ExakitMarketplaceQuestions -Ids $Ids' \
 has "the notebook add-on asks through the hook" "notebook_questions()" "$(cat "$ROOT/setup/lib/notebook.sh")"
 has "...its twin is registered" 'QuestionsFn = "Read-NotebookQuestions"' "$ECOMMON"
 has "...and exports the answer the install reads" 'EXAKIT_NOTEBOOK_FRONTENDS="$NOTEBOOK_FRONT_ENDS"' "$(cat "$ROOT/setup/lib/notebook.sh")"
+# Where the table carried the add-on's own child rows (the notebook's tools),
+# those rows were the question: the hook is not asked again, and the frame is
+# left for the progress to fill in. tests/notebook-tools-table.sh drives it.
+_q_range='/^_exakit_marketplace_questions() {/,/^}/p'       # assigned first: bash 3.2
+_q_ps_range='/^function Invoke-ExakitMarketplaceQuestions {/,/^}/p'
+has "an add-on whose child rows answered is not asked again" '_exakit_addon_table_child_rows "$_mq_id"' \
+    "$(sed -n "$_q_range" "$ROOT/setup/lib/common.sh")"
+has "...nor on Windows" 'Get-ExakitAddonTableChildRows -Id $addon.Id' \
+    "$(sed -n "$_q_ps_range" "$ROOT/setup/lib/exakit-common.ps1")"
 
 printf '\naddon-questions.sh: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

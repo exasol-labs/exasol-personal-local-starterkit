@@ -4,7 +4,7 @@
   "kind": "addon",
   "title": "Notebooks",
   "tagline": "Notebooks connected to the local database, in JupyterLab, Marimo or your Positron - one folder per persona.",
-  "role": "Installs Exasol's notebook connector (the package AI Lab is built on), pyexasol, the Langfuse and OpenAI clients, the kit's notebook helpers and a Jupyter kernel named 'Exasol (Starter Kit)' in an environment of their own, then asks which notebook tools, all three ticked: JupyterLab (yours is used; with none, the kit's is installed because it was ticked), Marimo (installed into the kit's notebook environment) and Positron (yours, only ever configured: the notebooks folder names the kit's Python as its interpreter; the kit never installs Positron).",
+  "role": "Installs Exasol's notebook connector (the package AI Lab is built on), pyexasol, the Langfuse and OpenAI clients, the kit's notebook helpers and a Jupyter kernel named 'Exasol (Starter Kit)' in an environment of their own, and its notebook tools - child rows under it in the marketplace's add-ons table, all three ticked: JupyterLab (yours is used; with none, the kit's is installed because it was ticked), Marimo (installed into the kit's notebook environment) and Positron (yours, only ever configured: the notebooks folder names the kit's Python as its interpreter; the kit never installs Positron).",
   "repo": "exasol/notebook-connector",
   "docs": "https://github.com/exasol/notebook-connector#readme",
   "package": "exasol-notebook-connector",
@@ -15,7 +15,7 @@
     {
       "step": "Install it",
       "run": "exakit marketplace notebook",
-      "note": "About 1 GB: the connector brings PyTorch for its transformer features (the CPU-only build on Linux). Then one checklist: JupyterLab, Marimo, Positron - all ticked; untick any you do not want."
+      "note": "About 1 GB: the connector brings PyTorch for its transformer features (the CPU-only build on Linux). Its notebook tools are child rows under it in the add-ons table: JupyterLab, Marimo, Positron - all ticked, each saying what will become of it; untick any you do not want."
     },
     {
       "step": "Open the notebooks",
@@ -52,7 +52,7 @@
     }
   ],
   "notes": [
-    "The notebook tools are one checklist at the install, all three ticked. A JupyterLab already on your machine is used as it is; the kit only adds its kernel, 'Exasol (Starter Kit)', which VS Code and other Jupyter front ends offer too. Marimo goes into the kit's notebook environment. Positron is never installed: when it is there, the notebooks folder is set to the kit's Python (.vscode/settings.json, your other settings kept); when it is not, the folder is ready for it (https://positron.posit.co/download.html). For a script: EXAKIT_NOTEBOOK_FRONTENDS=jupyterlab,marimo,positron (or none); EXAKIT_NOTEBOOK_JUPYTER=skip or EXAKIT_NOTEBOOK_MARIMO=skip leaves one out. Untick one now, add it later with exakit notebook --setup, --marimo or --positron.",
+    "The notebook tools are child rows of the notebook in the marketplace's add-ons table, all three ticked: each says before anything installs what will become of it, and then how it settled (a scripted install that draws no table asks one checklist instead). A JupyterLab already on your machine is used as it is; the kit only adds its kernel, 'Exasol (Starter Kit)', which VS Code and other Jupyter front ends offer too. Marimo goes into the kit's notebook environment. Positron is never installed: when it is there, the notebooks folder is set to the kit's Python (.vscode/settings.json, your other settings kept); when it is not, the folder is ready for it (https://positron.posit.co/download.html). For a script: EXAKIT_NOTEBOOK_FRONTENDS=jupyterlab,marimo,positron (or none); EXAKIT_NOTEBOOK_JUPYTER=skip or EXAKIT_NOTEBOOK_MARIMO=skip leaves one out. Untick one now, add it later with exakit notebook --setup, --marimo or --positron.",
     "In Jupyter choose the kernel 'Exasol (Starter Kit)' for a notebook of your own. In Marimo, Positron or a plain script the kit's notebook Python finds the connection by itself.",
     "In a notebook: import exakit.nb as nb; conn = nb.connect() opens the database, nb.sql(conn, '...') runs a query into a DataFrame and remembers it, and nb.show_sql() prints the last statement. nb.load_own_file(path, table, descriptor) loads your own CSV, Parquet or JSON file the same way the reference datasets are described. (exakit_nb, the older name, still imports.)",
     "Model-call tracing is opt-in: with LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY and LANGFUSE_HOST set before exakit notebook, nb.trace(...) records the calls in your own Langfuse project. Without them it says tracing is off and does nothing else.",

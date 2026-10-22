@@ -11,9 +11,12 @@
 #                never overwritten, one the user deleted not copied again; kept
 #                by an uninstall, the full one too unless
 #                EXAKIT_UNINSTALL_NOTEBOOKS=remove)
-#   - the notebook tools: one checklist at the first install, JupyterLab,
-#     Marimo and Positron all ticked; the answer is recorded and a reinstall or
-#     an update keeps it. Positron is only ever configured, never installed.
+#   - the notebook tools: the notebook row's three child rows in the
+#     marketplace's add-ons table (one checklist on a run that draws no table),
+#     JupyterLab, Marimo and Positron all ticked, each saying before anything
+#     installs what will become of it and then how it settled; the answer is
+#     recorded and a reinstall or an update keeps it. Positron is only ever
+#     configured, never installed.
 #   - the front ends the kit installs are pinned in versions.json
 #     (components.notebook.frontends), EXAKIT_NOTEBOOK_JUPYTERLAB_VERSION and
 #     EXAKIT_NOTEBOOK_MARIMO_VERSION outranking the pin; they are in the one uv
@@ -356,32 +359,52 @@ function Add-NotebookFrontEnd {
 
 # Read-NotebookQuestions - the marketplace's QUESTIONS FIRST hook: the notebook
 # tools are asked before the install table animates, and the answer is set for
-# the install that follows. Twin of notebook_questions.
+# the install that follows. Only reached on a run whose table did not carry the
+# tools as rows (a scripted EXAKIT_MARKETPLACE_ADDONS): where it did, the rows
+# were the question (Set-NotebookTableChildrenPicked). Twin of notebook_questions.
 function Read-NotebookQuestions {
     $env:EXAKIT_NOTEBOOK_FRONTENDS = Get-NotebookFrontEnds
 }
 
-# Get-NotebookFrontEnds - which notebook tools: jupyterlab, marimo, positron
-# (or none). EXAKIT_NOTEBOOK_FRONTENDS answers it; else a reinstall or an
-# update keeps the recorded choice; else (the first install) one checklist with
-# all three ticked, where EXAKIT_NOTEBOOK_JUPYTER / EXAKIT_NOTEBOOK_MARIMO=skip
-# leave one out and without a console the ticks stand. Twin of
-# notebook_choose_front_ends.
-function Get-NotebookFrontEnds {
+# Get-NotebookDefaultFrontEnds - the notebook tools WITHOUT asking:
+# @{ FrontEnds = "jupyterlab,marimo,positron" (or a subset, or none); Decided }.
+# EXAKIT_NOTEBOOK_FRONTENDS answers it; else a reinstall or an update keeps the
+# recorded choice; else all three, less any EXAKIT_NOTEBOOK_JUPYTER /
+# EXAKIT_NOTEBOOK_MARIMO=skip leaves out. Decided is $true for an ANSWER (the
+# variable or the record), $false for only where a question would start: the
+# checklist below, and the ticks of the tools' rows in the add-ons table
+# (Get-NotebookTableChildren). Twin of notebook_default_front_ends.
+function Get-NotebookDefaultFrontEnds {
     if ($env:EXAKIT_NOTEBOOK_FRONTENDS) {
         $given = ConvertTo-NotebookFrontEnds $env:EXAKIT_NOTEBOOK_FRONTENDS
-        if ($given) { return $given }
+        if ($given) { return @{ FrontEnds = $given; Decided = $true } }
         Warn2 "EXAKIT_NOTEBOOK_FRONTENDS names no notebook tool, so it is not used"
     }
     $recorded = Get-ExakitManifestValue "components.notebook.front_ends"
     if ($recorded) {
         $kept = ConvertTo-NotebookFrontEnds "$recorded" -Quiet
-        if ($kept) { return $kept }
+        if ($kept) { return @{ FrontEnds = $kept; Decided = $true } }
     }
+    $fronts = @()
+    if (-not (Test-NotebookSkipped $env:EXAKIT_NOTEBOOK_JUPYTER)) { $fronts += "jupyterlab" }
+    if (-not (Test-NotebookSkipped $env:EXAKIT_NOTEBOOK_MARIMO)) { $fronts += "marimo" }
+    $fronts += "positron"
+    return @{ FrontEnds = ($fronts -join ","); Decided = $false }
+}
+
+# Get-NotebookFrontEnds - which notebook tools: jupyterlab, marimo, positron
+# (or none). Get-NotebookDefaultFrontEnds answers it when it can (the variable,
+# or the recorded choice); else (the first install, with no table that already
+# asked) one checklist starting from its ticks, and without a console the
+# ticks stand. Twin of notebook_choose_front_ends.
+function Get-NotebookFrontEnds {
+    $start = Get-NotebookDefaultFrontEnds
+    if ($start.Decided) { return $start.FrontEnds }
     $keys = @("jupyterlab", "marimo", "positron")
+    $startWith = @($start.FrontEnds -split ',')
     $defaults = @()
-    if (-not (Test-NotebookSkipped $env:EXAKIT_NOTEBOOK_JUPYTER)) { $defaults += 1 }
-    if (-not (Test-NotebookSkipped $env:EXAKIT_NOTEBOOK_MARIMO)) { $defaults += 2 }
+    if ($startWith -contains "jupyterlab") { $defaults += 1 }
+    if ($startWith -contains "marimo") { $defaults += 2 }
     $defaults += 3
     $picked = $defaults
     if (Test-ExakitInteractive) {
@@ -393,6 +416,44 @@ function Get-NotebookFrontEnds {
     $chosen = @($picked | Where-Object { $_ -ge 1 -and $_ -le 3 } | Sort-Object -Unique | ForEach-Object { $keys[$_ - 1] })
     if ($chosen.Count -eq 0) { return "none" }
     return ($chosen -join ",")
+}
+
+# Get-NotebookTableChildren - the notebook tools as CHILD ROWS of the notebook's
+# row in the marketplace's add-ons table (the registry's ChildrenFn), one object
+# each: Key, Label, Version, Description, Ticked. The description says, before
+# anything installs, what will become of each tool - from the find helpers
+# alone, no network - and the ticks are Get-NotebookDefaultFrontEnds'. The
+# version is the pin the kit installs at; Positron has none, the kit never
+# installs it. Twin of notebook_table_children.
+function Get-NotebookTableChildren {
+    $fronts = @((Get-NotebookDefaultFrontEnds).FrontEnds -split ',')
+    $found = Find-NotebookJupyter
+    if ($found -and $found[0] -eq "own") { $jdesc = "yours ($(Get-ExakitTilde $found[1])) is used as it is" }
+    elseif ($found) { $jdesc = "already in the kit's notebook environment" }
+    else { $jdesc = "not on this machine: installed into the kit's notebook environment" }
+    if (Test-Path (Get-NotebookMarimoCommand)) { $mdesc = "already installed" }
+    else { $mdesc = "installed into the kit's notebook environment" }
+    if (Find-NotebookPositron) { $pdesc = "yours: pointed at the kit's Python" }
+    else { $pdesc = "not on this machine: the notebooks folder is prepared for it (positron.posit.co)" }
+    return @(
+        [pscustomobject]@{ Key = "jupyterlab"; Label = "JupyterLab"; Version = ("" + (Get-NotebookFrontendPin "jupyterlab"))
+            Description = $jdesc; Ticked = ($fronts -contains "jupyterlab") },
+        [pscustomobject]@{ Key = "marimo"; Label = "Marimo"; Version = ("" + (Get-NotebookFrontendPin "marimo"))
+            Description = $mdesc; Ticked = ($fronts -contains "marimo") },
+        [pscustomobject]@{ Key = "positron"; Label = "Positron"; Version = ""
+            Description = $pdesc; Ticked = ($fronts -contains "positron") }
+    )
+}
+
+# Set-NotebookTableChildrenPicked -Keys <keys> - the ticked tool rows ARE the
+# answer: set as EXAKIT_NOTEBOOK_FRONTENDS ("none" when no tool row was
+# ticked), so the install takes it without asking. Twin of
+# notebook_table_children_picked.
+function Set-NotebookTableChildrenPicked {
+    param([string[]]$Keys = @())
+    $given = ConvertTo-NotebookFrontEnds ($Keys -join ",") -Quiet
+    if (-not $given) { $given = "none" }
+    $env:EXAKIT_NOTEBOOK_FRONTENDS = $given
 }
 
 # Set-NotebookFrontEndPlan - which front ends the install's one resolution
@@ -409,7 +470,10 @@ function Set-NotebookFrontEndPlan {
 
 # Install-NotebookFrontEnds - the install's notebook tools, one line each. The
 # tools were chosen before the packages were installed (Install-Notebook), so
-# what the kit installs came with them; this settles what is left. Twin of
+# what the kit installs came with them; this settles what is left. Under the
+# marketplace's live add-ons table each tool also settles its own row there
+# (Set-ExakitAddonTableChild); the lines then go to the logfile, as every
+# detail of an install narrated by the table does. Twin of
 # notebook_front_ends_setup.
 function Install-NotebookFrontEnds {
     if (-not $script:NotebookFrontEnds) { $script:NotebookFrontEnds = Get-NotebookFrontEnds }
@@ -418,15 +482,27 @@ function Install-NotebookFrontEnds {
         $found = Find-NotebookJupyter
         if ($found) {
             $whose = "yours"
-            if ($found[0] -eq "kit") { $whose = "the kit's"; Set-ExakitManifestValue "components.notebook.jupyter" "kit" }
+            $said = "yours, kernel added"
+            if ($found[0] -eq "kit") {
+                $whose = "the kit's"; $said = "installed" + (Get-NotebookPinSuffix "jupyterlab")
+                Set-ExakitManifestValue "components.notebook.jupyter" "kit"
+            }
             Ok "JupyterLab ($($whose): $($found[1])) with the kernel '$($script:NotebookKernelTitle)' - open it with: exakit notebook"
+            [void](Set-ExakitAddonTableChild -Key "jupyterlab" -State "done" -Final $said)
         } else {
             $saved = $env:EXAKIT_NOTEBOOK_JUPYTER
             $env:EXAKIT_NOTEBOOK_JUPYTER = "install"
-            try { [void](Confirm-NotebookJupyter) } finally { $env:EXAKIT_NOTEBOOK_JUPYTER = $saved }
+            # The LAST thing it returns is the answer; anything a step inside it
+            # let fall into the pipeline comes before.
+            $got = $false
+            try { $r = @(Confirm-NotebookJupyter); $got = ($r.Count -gt 0 -and $r[-1] -eq $true) }
+            finally { $env:EXAKIT_NOTEBOOK_JUPYTER = $saved }
+            if ($got) { [void](Set-ExakitAddonTableChild -Key "jupyterlab" -State "done" -Final ("installed" + (Get-NotebookPinSuffix "jupyterlab"))) }
+            else { [void](Set-ExakitAddonTableChild -Key "jupyterlab" -State "failed" -Final "not installed - see the log") }
         }
     } else {
         Info "JupyterLab not set up; the kernel '$($script:NotebookKernelTitle)' is registered for any Jupyter - add it any time: exakit notebook --setup"
+        [void](Set-ExakitAddonTableChild -Key "jupyterlab" -State "skipped")
     }
     if ($fronts -contains "marimo") {
         if (Test-Path (Get-NotebookMarimoCommand)) {
@@ -435,14 +511,34 @@ function Install-NotebookFrontEnds {
         }
         if ((Test-Path (Get-NotebookMarimoCommand)) -or (Install-NotebookMarimo)) {
             Ok "Marimo with the notebooks in $(Join-Path $script:NotebookDir 'marimo') - start it with: exakit notebook --marimo"
+            [void](Set-ExakitAddonTableChild -Key "marimo" -State "done" -Final ("installed" + (Get-NotebookPinSuffix "marimo")))
         } else {
             Warn2 "Marimo could not be installed (see the log) - retry with: exakit notebook --marimo"
+            [void](Set-ExakitAddonTableChild -Key "marimo" -State "failed" -Final "not installed - see the log")
         }
     } else {
         Info "Marimo not installed - add it any time: exakit notebook --marimo"
+        [void](Set-ExakitAddonTableChild -Key "marimo" -State "skipped")
     }
-    if ($fronts -contains "positron") { Write-NotebookPositronNote } else { Info "Positron not set up - any time: exakit notebook --positron" }
+    if ($fronts -contains "positron") {
+        $how = "" + @(Write-NotebookPositronNote)[-1]
+        if ($how -eq "configured") { [void](Set-ExakitAddonTableChild -Key "positron" -State "done" -Final "configured") }
+        elseif ($how -eq "absent") { [void](Set-ExakitAddonTableChild -Key "positron" -State "skipped" -Final "not on this machine - folder ready") }
+        else { [void](Set-ExakitAddonTableChild -Key "positron" -State "failed" -Final "folder not prepared - see the log") }
+    } else {
+        Info "Positron not set up - any time: exakit notebook --positron"
+        [void](Set-ExakitAddonTableChild -Key "positron" -State "skipped")
+    }
     Set-ExakitManifestValue "components.notebook.front_ends" ($fronts -join ",")
+}
+
+# Get-NotebookPinSuffix <jupyterlab|marimo> - " <pin>" for a tool's table row,
+# "" when no version is pinned. Twin of _notebook_pin_suffix.
+function Get-NotebookPinSuffix {
+    param([Parameter(Mandatory)][string]$Name)
+    $pin = Get-NotebookFrontendPin $Name
+    if ($pin) { return " $pin" }
+    return ""
 }
 
 # Install-NotebookMarimo - Marimo, at its pin, into the kit's notebook
@@ -672,15 +768,20 @@ function Set-NotebookPositronFolder {
 }
 
 # Write-NotebookPositronNote - configure the folder for Positron and say what
-# came of it. Twin of notebook_positron_note.
+# came of it: "configured" (Positron is here and now opens the folder with the
+# kit's Python), "absent" (it is not on this machine; the folder is ready for
+# it) or "failed" (the folder could not be prepared, the reason warned) - so
+# the tool's row in the add-ons table can say which. Twin of
+# notebook_positron_note.
 function Write-NotebookPositronNote {
-    if (-not (Set-NotebookPositronFolder)) { return }
+    if (-not (Set-NotebookPositronFolder)) { return "failed" }
     $found = Find-NotebookPositron
     if ($found) {
         Ok "Positron ($found) opens the notebooks with the kit's Python: exakit notebook --positron"
-    } else {
-        Info "Positron is not on this machine, so there is nothing to configure in it - the notebooks folder is ready for it: $($script:NotebookPositronDownload)"
+        return "configured"
     }
+    Info "Positron is not on this machine, so there is nothing to configure in it - the notebooks folder is ready for it: $($script:NotebookPositronDownload)"
+    return "absent"
 }
 
 # Get-NotebookFrontendPin - the version of a front end the kit installs:
@@ -919,6 +1020,17 @@ function Get-NotebookServerState {
     return "stopped"
 }
 
+# Write-NotebookJupyterConfig - the kit's JupyterLab settings file, written
+# fresh on every start, and its path: the file browser hides the Marimo copies
+# (the marimo folder) beside Jupyter's own defaults. Read through --config, so a
+# JupyterLab of the user's own is never configured globally. Twin of
+# _notebook_jupyter_config.
+function Write-NotebookJupyterConfig {
+    $path = Join-Path $script:NotebookHome "jupyter_server_config.json"
+    Set-Content -Path $path -Encoding Ascii -Value '{"ContentsManager": {"hide_globs": ["__pycache__", "*.pyc", "*.pyo", ".DS_Store", "*~", ".ipynb_checkpoints", "marimo"]}}'
+    return $path
+}
+
 # Start-NotebookServer - JupyterLab in the background on 127.0.0.1, rooted at
 # the notebooks folder, with the token in its environment only. Twin of
 # notebook_server_start.
@@ -939,7 +1051,7 @@ function Start-NotebookServer {
     try {
         $proc = Start-Process -FilePath $found[1] -WorkingDirectory $script:NotebookDir -WindowStyle Hidden -PassThru `
             -RedirectStandardOutput (Get-NotebookOutFile) -RedirectStandardError $log `
-            -ArgumentList @("--no-browser", "--ServerApp.ip=127.0.0.1", "--ServerApp.port=$Port", "--ServerApp.port_retries=0", "--ServerApp.root_dir=`"$($script:NotebookDir)`"")
+            -ArgumentList @("--no-browser", "--ServerApp.ip=127.0.0.1", "--ServerApp.port=$Port", "--ServerApp.port_retries=0", "--ServerApp.root_dir=`"$($script:NotebookDir)`"", "--config=`"$(Write-NotebookJupyterConfig)`"")
     } finally {
         $env:JUPYTER_TOKEN = $saved
     }

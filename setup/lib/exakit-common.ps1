@@ -641,7 +641,9 @@ function Read-ExakitCheckboxMenu {
     # is checked (a group header), "all" only while EVERY child is checked - a
     # MASTER toggle - and "master" is "all" downward only: the children may
     # RELEASE the parent but never claim it, for a parent that is a SCOPE rather
-    # than an aggregate.
+    # than an aggregate. "claim" is the other way round: a child going ON ticks
+    # the parent and one going OFF leaves it, for a parent its children need
+    # but that stands on its own (the notebook add-on and its tools).
     # $Groups (optional): further "parent:first:last[:mode]" specs, applied IN
     # ORDER and BEFORE the single group above. That is what nests them - an
     # inner group has to settle its own parent before the outer group re-reads
@@ -702,10 +704,13 @@ function Read-ExakitCheckboxMenu {
                 # leaves the parent alone, so ticking every child never comes to
                 # mean the parent's own scope. "any" is the group-header rule.
                 if ($gmode -eq "master" -and $sel.Contains($toggled)) { continue }
+                if ($gmode -eq "claim" -and -not $sel.Contains($toggled)) { continue }
                 $on = $false
                 if ($gmode -eq "all") {
                     $on = $true
                     foreach ($c in $children) { if (-not $sel.Contains($c)) { $on = $false; break } }
+                } elseif ($gmode -eq "claim") {
+                    $on = $true
                 } elseif ($gmode -eq "master") {
                     $on = $false
                 } else {
@@ -4780,6 +4785,8 @@ function Get-ExakitMarketplaceAddons {
             VersionFn   = "Get-NotebookInstalledVersion"
             UninstallFn = "Uninstall-Notebook"
             QuestionsFn = "Read-NotebookQuestions"
+            ChildrenFn  = "Get-NotebookTableChildren"
+            ChildrenPickedFn = "Set-NotebookTableChildrenPicked"
             LogFn       = "Get-NotebookLogPath"
             SummaryFn   = "Get-NotebookSummary"
             EnvVar      = "EXAKIT_NOTEBOOK_VERSION"
@@ -5198,11 +5205,20 @@ function Show-ExakitMarketplaceMenu {
             # depends on. Still resolved only on the path that draws it, so a
             # scripted answer (EXAKIT_MARKETPLACE_ADDONS) never pays for it.
             $cell = ""
+            # The add-on's own CHILD ROWS (an optional ChildrenFn): the
+            # notebook's tools, each saying what will become of it, ticked in the
+            # same table rather than asked about later. Local probes only, and
+            # like the description only on the path that draws them. Twin of the
+            # <id>_table_children hook in exakit_marketplace_menu.
+            $kids = @()
             if (-not $env:EXAKIT_MARKETPLACE_ADDONS) {
                 $cell = "" + (Get-ExakitMarketplaceAddonDescription $addon.Id)
+                if ($addon.PSObject.Properties["ChildrenFn"] -and (Get-Command $addon.ChildrenFn -ErrorAction SilentlyContinue)) {
+                    $kids = @(& $addon.ChildrenFn)
+                }
             }
             $rows += @{ Id = $addon.Id; Label = $addon.Id
-                Version = (Get-ExakitVersionPlain $advertised); Description = $cell }
+                Version = (Get-ExakitVersionPlain $advertised); Description = $cell; Children = $kids }
         }
     }
 
@@ -5325,6 +5341,15 @@ function Show-ExakitMarketplaceMenu {
     [void]$addonIds.Add("")
     $addonCount = $selectable.Count
     $coveredCount = $covered.Count
+    # The defaults and the inner group specs the child rows add as they are
+    # drawn: an add-on with child rows is their "claim" parent (a child ticks
+    # it, unticking it unticks them, and it may stand with none ticked), and
+    # Select All spans them too. Their ids are "<id>:<key>", which no add-on id
+    # matches. Twin of _exakit_addon_table_build in common.sh.
+    $defaults = @(1)
+    $innerGroups = @()
+    $allTicked = $true
+    $kidCount = 0
     for ($i = 0; $i -lt $addonCount; $i++) {
         # The corner belongs to the last row of the TREE: with disabled rows
         # after the installable ones, the last installable one is a tee.
@@ -5333,9 +5358,22 @@ function Show-ExakitMarketplaceMenu {
         # cell would make the row two lines tall - which is the frame-height
         # invariant the redraw depends on.
         $desc = ("" + $selectable[$i].Description) -replace "`r?`n", " "
-        [void](Add-ExakitTableRow -Kind $kind -Label $selectable[$i].Id `
-            -Col2 ("" + $selectable[$i].Version) -Col3 $desc -Table $script:ExakitAddonTable)
+        $parentRow = Add-ExakitTableRow -Kind $kind -Label $selectable[$i].Id `
+            -Col2 ("" + $selectable[$i].Version) -Col3 $desc -Table $script:ExakitAddonTable
         [void]$addonIds.Add($selectable[$i].Id)
+        $defaults += $parentRow
+        $kids = @($selectable[$i].Children | Where-Object { $_ })
+        if ($kids.Count -eq 0) { continue }
+        for ($k = 0; $k -lt $kids.Count; $k++) {
+            if ($k -eq ($kids.Count - 1)) { $kk = "corner" } else { $kk = "tee" }
+            $at = Add-ExakitTableRow -Kind "$kind-$kk" -Label ("" + $kids[$k].Label) `
+                -Col2 ("" + $kids[$k].Version) -Col3 ("" + $kids[$k].Description) -Table $script:ExakitAddonTable
+            [void]$addonIds.Add($selectable[$i].Id + ":" + $kids[$k].Key)
+            if ($kids[$k].Ticked) { $defaults += $at } else { $allTicked = $false }
+        }
+        $kidCount += $kids.Count
+        # Innermost first: the add-on row settles before Select All re-reads it.
+        $innerGroups += ("{0}:{1}:{2}:claim" -f $parentRow, ($parentRow + 1), ($parentRow + $kids.Count))
     }
     for ($i = 0; $i -lt $coveredCount; $i++) {
         if ($i -eq ($coveredCount - 1)) { $kind = "corner" } else { $kind = "tee" }
@@ -5349,7 +5387,7 @@ function Show-ExakitMarketplaceMenu {
     }
     [void](Add-ExakitTableRow -Kind "plain" -Label "Skip" -Table $script:ExakitAddonTable)
     [void]$addonIds.Add("")
-    $rowSkip = $addonCount + $coveredCount + 2
+    $rowSkip = $addonCount + $kidCount + $coveredCount + 2
     $script:ExakitAddonTableIds = $addonIds.ToArray()
     # Default: the group AND every available add-on pre-selected - the same
     # posture as the data-load menu, where Enter alone acts on what is on offer
@@ -5358,11 +5396,14 @@ function Show-ExakitMarketplaceMenu {
     # "all" makes the parent a MASTER toggle, checked only while EVERY child is.
     # Under the default "any" it stayed checked with one child ticked, so the
     # summary row read "everything is selected" when it was not - on the row a
-    # user glances at to confirm what is about to be installed.
-    $defaults = @(1..($addonCount + 1))
+    # user glances at to confirm what is about to be installed. Its range takes
+    # in the add-ons' own child rows, so Select All means every row - and a
+    # child row its add-on starts unticked (a choice recorded earlier) leaves
+    # Select All unticked too, which is what "all" means.
+    if (-not $allTicked) { $defaults = @($defaults | Where-Object { $_ -ne 1 }) }
     $selection = @(Invoke-ExakitTableMenu -Table $script:ExakitAddonTable -Defaults $defaults `
-        -ExclusiveIndex $rowSkip -GroupParent 1 `
-        -GroupFirst 2 -GroupLast ($addonCount + 1) -GroupMode "all")
+        -ExclusiveIndex $rowSkip -Groups $innerGroups -GroupParent 1 `
+        -GroupFirst 2 -GroupLast ($addonCount + $kidCount + 1) -GroupMode "all")
     # ONLY A PRESSED ENTER INSTALLS - the defaults standing without a console
     # would install every add-on on a machine where nobody chose anything.
     # Twin of the same gate in _exakit_marketplace_menu (common.sh).
@@ -5393,17 +5434,34 @@ function Show-ExakitMarketplaceMenu {
         return
     }
     $picked = @()
+    # The ticked CHILD rows, as "<id>:<key>": answers to an add-on's own
+    # question, not add-ons of their own.
+    $pickedKids = @()
     foreach ($idx in $selection) {
         if ($idx -lt 1 -or $idx -gt $script:ExakitAddonTableIds.Count) { continue }
         $id = $script:ExakitAddonTableIds[$idx - 1]
         # The group row and the opt-out carry no id: they are answers about the
         # other rows, not add-ons of their own.
-        if ($id -and ($picked -notcontains $id)) { $picked += $id }
+        if (-not $id) { continue }
+        if ($id.Contains(":")) { $pickedKids += $id; continue }
+        if ($picked -notcontains $id) { $picked += $id }
     }
     if ($picked.Count -eq 0) {
         Reset-ExakitAddonTable
         Info "Nothing selected - nothing was installed."
         return
+    }
+    # Each picked add-on that drew child rows takes its ticked ones as its
+    # answer (an optional ChildrenPickedFn, given the ticked keys): the notebook
+    # sets EXAKIT_NOTEBOOK_FRONTENDS, so its install asks nothing. Twin of the
+    # <id>_table_children_picked loop in exakit_marketplace_menu.
+    foreach ($id in $picked) {
+        if ((Get-ExakitAddonTableChildRows -Id $id).Count -eq 0) { continue }
+        $addon = Get-ExakitMarketplaceAddon $id
+        if (-not $addon -or -not $addon.PSObject.Properties["ChildrenPickedFn"]) { continue }
+        if (-not (Get-Command $addon.ChildrenPickedFn -ErrorAction SilentlyContinue)) { continue }
+        $keys = @($pickedKids | Where-Object { $_.StartsWith($id + ":") } | ForEach-Object { $_.Substring($id.Length + 1) })
+        & $addon.ChildrenPickedFn -Keys $keys
     }
     Invoke-ExakitMarketplaceApply -Ids $picked
 }
@@ -5490,6 +5548,7 @@ function Show-ExakitMarketplaceList {
 $script:ExakitAddonTable = $null
 $script:ExakitAddonTableIds = @()   # the add-on id per row ("" where the row is not an add-on)
 $script:ExakitAddonTableRow = 0     # the row the add-on being installed owns, or 0
+$script:ExakitAddonTableChildRows = @{}   # key -> row of that add-on's child rows, while it installs
 $script:ExakitAddonTableLive = $false
 $script:ExakitAddonNotes = @()      # lines held back while the table is on screen
 
@@ -5501,6 +5560,7 @@ function Reset-ExakitAddonTable {
     $script:ExakitAddonTable = $null
     $script:ExakitAddonTableIds = @()
     $script:ExakitAddonTableRow = 0
+    $script:ExakitAddonTableChildRows = @{}
     $script:ExakitAddonTableLive = $false
 }
 
@@ -5512,6 +5572,43 @@ function Get-ExakitAddonTableRow {
         if ($script:ExakitAddonTableIds[$i] -eq $Id) { return ($i + 1) }
     }
     return 0
+}
+
+# Get-ExakitAddonTableChildRows <id> - key -> row for that add-on's child rows in
+# the table (see Show-ExakitMarketplaceMenu), empty when it has none.
+# Twin of _exakit_addon_table_child_rows in common.sh.
+function Get-ExakitAddonTableChildRows {
+    param([Parameter(Mandatory)][string]$Id)
+    $out = @{}
+    for ($i = 0; $i -lt @($script:ExakitAddonTableIds).Count; $i++) {
+        $rid = "" + $script:ExakitAddonTableIds[$i]
+        if ($rid.StartsWith($Id + ":")) { $out[$rid.Substring($Id.Length + 1)] = $i + 1 }
+    }
+    return $out
+}
+
+# Set-ExakitAddonTableChild -Key <key> -State <done|failed|skipped> [-Final] - an
+# add-on that brought child rows says, from inside its own install, how one of
+# them settled, and that row's Status column shows it. $false when there is no
+# such row on screen (no live table, a scripted answer, a key the table does
+# not carry): the caller's own line is then the record, exactly as before - and
+# the line it prints anyway goes to the logfile while the table narrates.
+# Twin of exakit_addon_table_child in common.sh.
+function Set-ExakitAddonTableChild {
+    param(
+        [Parameter(Mandatory)][string]$Key,
+        [Parameter(Mandatory)][ValidateSet("done", "failed", "skipped")][string]$State,
+        [string]$Final = ""
+    )
+    if (-not $script:ExakitAddonTableLive -or $null -eq $script:ExakitAddonTable) { return $false }
+    if (-not $script:ExakitAddonTableChildRows.ContainsKey($Key)) { return $false }
+    # Cut to the column's floor, for the reason Get-ExakitAddonTableCell gives:
+    # a final that overruns the column is a row that wraps.
+    $room = 44 - $script:UiTick.Length - 1
+    if ($Final.Length -gt $room) { $Final = $Final.Substring(0, $room - $script:UiEllipsis.Length) + $script:UiEllipsis }
+    Set-ExakitTableRow -Row ([int]$script:ExakitAddonTableChildRows[$Key]) -State $State -Final $Final `
+        -Table $script:ExakitAddonTable
+    return $true
 }
 
 # Get-ExakitAddonTableCell <summary> <seconds> - the Status column for a finished
@@ -5620,11 +5717,14 @@ function Set-ExakitAddonProgress {
 # add-on asks which notebook tools); it is asked HERE, before the progress table
 # animates - a question asked under a live table is redrawn over by it. The
 # selection frame is cleared first, so the table then draws fresh below the
-# answers. Twin of _exakit_marketplace_questions.
+# answers. An add-on whose CHILD ROWS were in the table had its question
+# answered there and is not asked again; the frame then stays for the progress
+# to fill in. Twin of _exakit_marketplace_questions.
 function Invoke-ExakitMarketplaceQuestions {
     param([Parameter(Mandatory)][string[]]$Ids)
     $askers = @()
     foreach ($addon in @(Get-ExakitMarketplaceAddons | Where-Object { $Ids -contains $_.Id })) {
+        if ($null -ne $script:ExakitAddonTable -and (Get-ExakitAddonTableChildRows -Id $addon.Id).Count -gt 0) { continue }
         if ($addon.PSObject.Properties["QuestionsFn"] -and (Get-Command $addon.QuestionsFn -ErrorAction SilentlyContinue)) {
             $askers += $addon.QuestionsFn
         }
@@ -5663,8 +5763,11 @@ function Invoke-ExakitMarketplaceApply {
         # Which row this add-on owns, if a table is on screen. 0 means there is
         # none and the single-line bar takes over, unchanged.
         $script:ExakitAddonTableRow = 0
+        $script:ExakitAddonTableChildRows = @{}
         if ($script:ExakitAddonTableLive) {
             $script:ExakitAddonTableRow = [int](Get-ExakitAddonTableRow -Id $id)
+            # ...and the rows one level deeper, for the install to settle.
+            $script:ExakitAddonTableChildRows = Get-ExakitAddonTableChildRows -Id $id
         }
         Info "Installing add-on: $id"
         $t0 = Get-Date
@@ -5775,6 +5878,7 @@ function Invoke-ExakitMarketplaceApply {
             $failed += 1
         }
         $script:ExakitAddonTableRow = 0
+        $script:ExakitAddonTableChildRows = @{}
     }
     # The table stops redrawing BEFORE anything is said over it, and only then is
     # what was collected on the way said.
@@ -5844,7 +5948,8 @@ function Request-ExakitMarketplaceOffer {
     # the offer with "Everything available is already covered." Twin of
     # exakit_marketplace_offer.
     if ($env:EXAKIT_MARKETPLACE_PRESELECT -and -not $softFailed -and $interactive) {
-        Write-ExakitRule
+        # No rule above it: the personas' add-ons carry on from their data, as
+        # one setup, rather than reading as a separate offer.
         Write-ExakitHeading "Add-ons for your personas"
         $only = ("" + $env:EXAKIT_MARKETPLACE_PRESELECT).ToLower().Replace(" ", "")
         if ($only -eq "all") {

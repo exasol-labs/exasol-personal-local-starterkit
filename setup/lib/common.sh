@@ -493,6 +493,12 @@ _ui_checkbox_toggle() {
 #                          uninstall menu is one -- it removes the database,
 #                          which no row above it represents, so "every add-on is
 #                          ticked" must never come to mean "remove the kit".
+#   mode "claim"         — the other way round: a child going ON ticks the
+#                          parent, a child going OFF leaves it as it was. For a
+#                          parent its children NEED but that stands on its own:
+#                          the notebook add-on and its tools in the add-ons
+#                          table -- a tool cannot be installed without the
+#                          add-on, and the add-on may be installed with no tool.
 # SEVERAL specs may be given, separated by whitespace, and they are applied IN
 # ORDER. That is what nests them: the uninstall menu has "Add-ons only" as a
 # master over the add-ons listed under it, and "EVERYTHING" as a master over
@@ -591,6 +597,14 @@ _ui_checkbox_apply_one_group() {
             case ",$_cg_sel," in
                 *",$_cg_toggled,"*) printf '%s' "$_cg_sel"; return 0 ;;
             esac
+        elif [ "$_cg_mode" = "claim" ]; then
+            # A child that just went OFF leaves the parent exactly as it was;
+            # one going ON claims it.
+            case ",$_cg_sel," in
+                *",$_cg_toggled,"*) ;;
+                *) printf '%s' "$_cg_sel"; return 0 ;;
+            esac
+            _cg_on=1
         elif [ "$_cg_mode" = "all" ]; then
             _cg_on=1
             for _cg_i in $_cg_children; do
@@ -3995,10 +4009,26 @@ EXAKIT_ADDON_NOTES_EOF
 # would be the same fact twice — the data-load table leaves already-loaded
 # datasets out for exactly that reason. This is also what keeps the group's
 # child range contiguous.
+#
+# An add-on may bring CHILD ROWS of its own, one level deeper under its row
+# (the notebook add-on's tools: JupyterLab, Marimo, Positron), passed in through
+# EXAKIT_ADDON_TABLE_CHILDREN as "<id>|<key>|<label>|<version>|<description>|<tick>"
+# lines -- resolved by the caller, for the same reason as the metadata below.
+# Each is ticked right there; the add-on row is their parent ("claim": a child
+# ticks it, unticking it unticks them, and it may stand with none ticked), and
+# Select All spans them too. Their ids are "<id>:<key>", which no add-on id
+# matches, so nothing that looks an add-on's row up finds one of them.
 _exakit_addon_table_build() {
     _atb_f="$1"; shift
     : > "$_atb_f"
     _atb_n=$#
+    # Rows drawn so far (the group row is 1), and the defaults and inner group
+    # specs the children add as they are drawn.
+    _atb_row=1
+    _atb_kids=0
+    _atb_kdefaults=""
+    _atb_inner=""
+    _atb_allticked=1
     printf 'group|Select All|1|idle|||||| \n' >> "$_atb_f"
     # Via a newline-separated STRING, one line per row, so a row that is not an
     # add-on is an EMPTY line rather than a gap a space-separated list would
@@ -4044,6 +4074,40 @@ EXAKIT_ATB_META
             "$_atb_ver" "$_atb_desc" >> "$_atb_f"
         EXAKIT_ADDON_TABLE_IDS="$EXAKIT_ADDON_TABLE_IDS$_atb_id
 "
+        _atb_row=$(( _atb_row + 1 ))
+        _atb_prow="$_atb_row"
+        _atb_kdefaults="${_atb_kdefaults:+$_atb_kdefaults,}$_atb_row"
+        # This add-on's child rows, counted first: the last one is the corner.
+        _atb_kn=0
+        while IFS='|' read -r _atb_kp _atb_krest; do
+            [ "$_atb_kp" = "$_atb_id" ] && _atb_kn=$(( _atb_kn + 1 ))
+        done <<EXAKIT_ATB_KCOUNT
+${EXAKIT_ADDON_TABLE_CHILDREN:-}
+EXAKIT_ATB_KCOUNT
+        [ "$_atb_kn" -gt 0 ] || continue
+        _atb_ki=0
+        while IFS='|' read -r _atb_kp _atb_kkey _atb_klabel _atb_kver _atb_kdesc _atb_ktick; do
+            [ "$_atb_kp" = "$_atb_id" ] || continue
+            _atb_ki=$(( _atb_ki + 1 ))
+            if [ "$_atb_ki" -eq "$_atb_kn" ]; then _atb_kk=corner; else _atb_kk=tee; fi
+            printf '%s-%s|%s|0|idle|||||| |%s|%s\n' "$_atb_kind" "$_atb_kk" "$_atb_klabel" \
+                "$_atb_kver" "$_atb_kdesc" >> "$_atb_f"
+            EXAKIT_ADDON_TABLE_IDS="$EXAKIT_ADDON_TABLE_IDS$_atb_id:$_atb_kkey
+"
+            _atb_row=$(( _atb_row + 1 ))
+            if [ "${_atb_ktick:-1}" = 1 ]; then
+                _atb_kdefaults="$_atb_kdefaults,$_atb_row"
+            else
+                _atb_allticked=0
+            fi
+        done <<EXAKIT_ATB_KIDS
+${EXAKIT_ADDON_TABLE_CHILDREN:-}
+EXAKIT_ATB_KIDS
+        _atb_kids=$(( _atb_kids + _atb_kn ))
+        # Innermost first: _ui_checkbox_apply_group applies the specs in order,
+        # and this one has to settle the add-on row before Select All re-reads
+        # it as one of its own children.
+        _atb_inner="$_atb_inner$_atb_prow:$(( _atb_prow + 1 )):$_atb_row:claim "
     done
     # The add-ons that cannot be installed, AFTER the installable ones so the
     # group's child range stays contiguous, and unpickable so a checkbox never
@@ -4068,21 +4132,20 @@ EXAKIT_ATB_DISABLED
     printf 'plain|Skip|0|idle|||||| \n' >> "$_atb_f"
     EXAKIT_ADDON_TABLE_IDS="$EXAKIT_ADDON_TABLE_IDS
 "
-    EXAKIT_ADDON_TABLE_ROW_SKIP=$(( _atb_n + _atb_d + 2 ))
+    EXAKIT_ADDON_TABLE_ROW_SKIP=$(( _atb_n + _atb_kids + _atb_d + 2 ))
     EXAKIT_TABLE_EXCLUSIVE="$EXAKIT_ADDON_TABLE_ROW_SKIP"
     # "all": the parent is a master toggle, checked only while EVERY child is.
     # Under the default "any" it stayed checked with one child ticked, so the
     # summary row read "everything is selected" when it was not — on the row a
-    # user glances at to confirm what is about to be installed.
-    EXAKIT_TABLE_GROUP="1:2:$(( _atb_n + 1 )):all"
+    # user glances at to confirm what is about to be installed. Its range takes
+    # in the add-ons' own child rows, so Select All means every row.
+    EXAKIT_TABLE_GROUP="${_atb_inner}1:2:$(( _atb_n + _atb_kids + 1 )):all"
     # The group AND every add-on pre-selected, so Enter alone installs what is
     # on offer and Skip is the explicit opt-out. Mirrors exakit_data_load_select.
-    EXAKIT_TABLE_DEFAULTS=""
-    _atb_i=1
-    while [ "$_atb_i" -le $(( _atb_n + 1 )) ]; do
-        EXAKIT_TABLE_DEFAULTS="${EXAKIT_TABLE_DEFAULTS:+$EXAKIT_TABLE_DEFAULTS,}$_atb_i"
-        _atb_i=$(( _atb_i + 1 ))
-    done
+    # A child row its add-on starts unticked (a choice recorded earlier) leaves
+    # Select All unticked too, which is what "all" means.
+    EXAKIT_TABLE_DEFAULTS="$_atb_kdefaults"
+    [ "$_atb_allticked" = 1 ] && EXAKIT_TABLE_DEFAULTS="1${EXAKIT_TABLE_DEFAULTS:+,$EXAKIT_TABLE_DEFAULTS}"
     # Every row here can be checked, and saying so is not optional:
     # _UI_CHECKBOX_SELECTABLE is published by ui_checkbox_menu and never cleared,
     # so the offer's two-row "Explore ?" question leaves "1 2" behind — and the
@@ -4102,6 +4165,52 @@ _exakit_addon_table_row() {
 $EXAKIT_ADDON_TABLE_IDS
 EXAKIT_ATR_EOF
     printf '0\n'
+}
+
+# _exakit_addon_table_child_rows <id> — "<key>:<row>,..." for that add-on's
+# child rows in the table (see _exakit_addon_table_build), empty when it has
+# none.
+_exakit_addon_table_child_rows() {
+    _atk_i=0
+    _atk_out=""
+    while IFS= read -r _atk_id; do
+        _atk_i=$(( _atk_i + 1 ))
+        case "$_atk_id" in
+            "$1":*) _atk_out="${_atk_out:+$_atk_out,}${_atk_id#"$1":}:$_atk_i" ;;
+        esac
+    done <<EXAKIT_ATK_EOF
+$EXAKIT_ADDON_TABLE_IDS
+EXAKIT_ATK_EOF
+    printf '%s\n' "$_atk_out"
+}
+
+# EXAKIT_ADDON_TABLE_CHILD_ROWS — "<key>:<row>,..." for the add-on being
+# installed: where its child rows are in the live table, so its install can say
+# how each one settled (exakit_addon_table_child). Empty when no table is live.
+EXAKIT_ADDON_TABLE_CHILD_ROWS=""
+
+# exakit_addon_table_child <key> <done|failed|skipped> [final] — an add-on that
+# brought child rows says, from inside its own install, how one of them
+# settled, and that row's Status column shows it. Returns 1 when there is no
+# such row on screen (no live table, a scripted answer, a key the table does
+# not carry): the caller's own line is then the record, exactly as before. The
+# line it prints anyway is not lost either way -- under a live table it goes to
+# the logfile, like every other detail of the install.
+exakit_addon_table_child() {
+    _exakit_addon_table_live || return 1
+    [ -n "${EXAKIT_ADDON_TABLE_STATE:-}" ] || return 1
+    _atx_row=""
+    for _atx_pair in $(printf '%s' "${EXAKIT_ADDON_TABLE_CHILD_ROWS:-}" | tr ',' ' '); do
+        [ "${_atx_pair%:*}" = "$1" ] && _atx_row="${_atx_pair##*:}"
+    done
+    [ -n "$_atx_row" ] || return 1
+    # Cut to the column's floor, for the reason _exakit_addon_table_cell gives:
+    # a final that overruns the column is a row that wraps.
+    _atx_text="${3:-}"
+    _atx_tick="${UI_TICK:-[ok]}"
+    _atx_room=$(( ${UI_TABLE_STAT_MIN:-44} - ${#_atx_tick} - 1 ))
+    [ "${#_atx_text}" -le "$_atx_room" ] || _atx_text="${_atx_text:0:$(( _atx_room - 1 ))}…"
+    ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$_atx_row" "$2" "" "" "" "" "$_atx_text"
 }
 
 # _exakit_addon_table_cell <summary> <seconds> — the Status column for a
@@ -4143,6 +4252,11 @@ _exakit_addon_table_cleanup() {
     rm -f "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_STATE.new" \
           "$EXAKIT_ADDON_TABLE_STATE.lines" "$EXAKIT_ADDON_TABLE_STATE.stop"
     EXAKIT_ADDON_TABLE_STATE=""
+    # The rows' ids and the child rows go with it: a later scripted run in the
+    # same shell must not find this table's children and skip a question.
+    EXAKIT_ADDON_TABLE_IDS=""
+    EXAKIT_ADDON_TABLE_CHILDREN=""
+    EXAKIT_ADDON_TABLE_CHILD_ROWS=""
     return 0
 }
 
@@ -4279,6 +4393,9 @@ exakit_marketplace_menu() {
     # "<id>|<version>|<description>" for each installable add-on, handed to the
     # row builder so it never has to look either up itself.
     _mm_meta=""
+    # "<id>|<key>|<label>|<version>|<description>|<tick>" for each child row an
+    # add-on brings (the optional <id>_table_children hook), likewise.
+    _mm_children=""
     while IFS='|' read -r _mm_id _mm_label <&3; do
         [ -n "$_mm_id" ] || continue
         # Not applicable here and not installed: it is not an option on this
@@ -4342,6 +4459,22 @@ exakit_marketplace_menu() {
                 _mm_adv="$(exakit_component_available "$_mm_id" 2>/dev/null || printf 'unknown')"
                 _mm_meta="$_mm_meta$_mm_id|$(exakit_version_plain "${_mm_adv:-unknown}")|$(printf '%s' "$_mm_mdesc" | tr '\n' ' ')
 "
+                # The add-on's own child rows (the optional <id>_table_children
+                # hook, one "<key>|<label>|<version>|<description>|<tick>" line
+                # each): the notebook's tools, each saying what will become of
+                # it, ticked in the same table rather than asked about later.
+                # Local probes only, and like the description only on the path
+                # that draws them.
+                _mm_kfn="$(_exakit_addon_fn "$_mm_id" table_children)"
+                if command -v "$_mm_kfn" >/dev/null 2>&1; then
+                    while IFS= read -r _mm_kline; do
+                        [ -n "$_mm_kline" ] || continue
+                        _mm_children="$_mm_children$_mm_id|$_mm_kline
+"
+                    done <<EXAKIT_MM_KIDS
+$("$_mm_kfn")
+EXAKIT_MM_KIDS
+                fi
             fi
             _mm_ids+=("$_mm_id")
             _mm_selectable=$((_mm_selectable + 1))
@@ -4492,6 +4625,7 @@ EXAKIT_MM_COVERED
     done
     EXAKIT_ADDON_TABLE_DISABLED="$_mm_covered"
     EXAKIT_ADDON_TABLE_META="$_mm_meta"
+    EXAKIT_ADDON_TABLE_CHILDREN="$_mm_children"
     # Above the table, not under it: the Description column is a repository's
     # About line, which is a table cell and not a reference. The reference is
     # the help document, and nothing on this screen named it. ⇄ twin:
@@ -4530,12 +4664,18 @@ EXAKIT_MM_COVERED
             ;;
     esac
     _mm_picked=""
+    # The ticked CHILD rows, as "<id>:<key>": answers to an add-on's own
+    # question, not add-ons of their own.
+    _mm_kids=""
     for _mm_idx in $(printf '%s' "$EXAKIT_TABLE_SELECTION" | tr ',' ' '); do
         # "none" is a selection too (a read that hit EOF), and it would reach sed
         # as a line address it cannot parse.
         case "$_mm_idx" in ''|*[!0-9]*) continue ;; esac
         _mm_id="$(printf '%s\n' "$EXAKIT_ADDON_TABLE_IDS" | sed -n "${_mm_idx}p")"
         [ -n "$_mm_id" ] || continue
+        case "$_mm_id" in
+            *:*) _mm_kids="$_mm_kids $_mm_id"; continue ;;
+        esac
         _mm_picked="${_mm_picked:+$_mm_picked,}$_mm_id"
     done
     if [ -z "$_mm_picked" ]; then
@@ -4543,6 +4683,24 @@ EXAKIT_MM_COVERED
         info "Nothing selected — nothing was installed."
         return 0
     fi
+    # Each picked add-on that drew child rows takes its ticked ones as its
+    # answer (the optional <id>_table_children_picked hook, given the ticked
+    # keys as a csv, empty for none): the notebook sets EXAKIT_NOTEBOOK_FRONTENDS,
+    # so its install asks nothing. An unticked add-on's children cannot be
+    # ticked ("claim"), so there is nothing to hand an add-on that is not
+    # being installed.
+    for _mm_id in $(printf '%s' "$_mm_picked" | tr ',' ' '); do
+        [ -n "$(_exakit_addon_table_child_rows "$_mm_id")" ] || continue
+        _mm_kfn="$(_exakit_addon_fn "$_mm_id" table_children_picked)"
+        command -v "$_mm_kfn" >/dev/null 2>&1 || continue
+        _mm_keys=""
+        for _mm_kid in $_mm_kids; do
+            case "$_mm_kid" in
+                "$_mm_id":*) _mm_keys="${_mm_keys:+$_mm_keys,}${_mm_kid#"$_mm_id":}" ;;
+            esac
+        done
+        "$_mm_kfn" "$_mm_keys"
+    done
     _exakit_marketplace_apply "$_mm_picked"
 }
 
@@ -4701,7 +4859,8 @@ exakit_marketplace_offer() {
     # ticked: "all" is not an id, and as a filter it matched nothing, which
     # ended the offer with "Everything available is already covered."
     if [ -n "${EXAKIT_MARKETPLACE_PRESELECT:-}" ] && [ -z "${EXAKIT_SOFT_FAILED:-}" ] && [ -n "$(_exakit_prompt_tty)" ]; then
-        ui_rule
+        # No rule above it: the personas' add-ons carry on from their data, as
+        # one setup, rather than reading as a separate offer.
         heading "Add-ons for your personas"
         _mo_only="$(printf '%s' "$EXAKIT_MARKETPLACE_PRESELECT" | tr '[:upper:]' '[:lower:]' | tr -d ' ')"
         [ "$_mo_only" = all ] && _mo_only=""
@@ -4758,9 +4917,18 @@ exakit_marketplace_offer() {
 # by it, which left two frames and the question's text bleeding through. The
 # selection frame is cleared first, so the progress table then draws fresh
 # below the answers. The hook exports its answers for the install to read.
+#
+# An add-on whose CHILD ROWS were in the table has had its question answered
+# there (see _exakit_addon_table_build), so it is not asked again - and the
+# selection frame is then left where it is, for the progress to fill in. The
+# hook stays for a run that drew no table (a scripted EXAKIT_MARKETPLACE_ADDONS).
 _exakit_marketplace_questions() {
     _mq_ids=""
     for _mq_id in $(printf '%s' "$1" | tr ',' ' '); do
+        if [ -n "${EXAKIT_ADDON_TABLE_STATE:-}" ] && \
+           [ -n "$(_exakit_addon_table_child_rows "$_mq_id")" ]; then
+            continue
+        fi
         command -v "$(_exakit_addon_fn "$_mq_id" questions)" >/dev/null 2>&1 && _mq_ids="$_mq_ids $_mq_id"
     done
     [ -n "$_mq_ids" ] || return 0
@@ -4800,9 +4968,12 @@ _exakit_marketplace_apply() {
         # Which row this add-on owns, if a table is on screen. Empty means there
         # is none and the single-line bar takes over, unchanged.
         EXAKIT_ADDON_TABLE_ROW=""
+        EXAKIT_ADDON_TABLE_CHILD_ROWS=""
         if _exakit_addon_table_live; then
             EXAKIT_ADDON_TABLE_ROW="$(_exakit_addon_table_row "$_mp_id")"
             [ "$EXAKIT_ADDON_TABLE_ROW" = "0" ] && EXAKIT_ADDON_TABLE_ROW=""
+            # ...and the rows one level deeper, for the install to settle.
+            EXAKIT_ADDON_TABLE_CHILD_ROWS="$(_exakit_addon_table_child_rows "$_mp_id")"
         fi
         info "Installing add-on: $_mp_id"
         _mp_t0="$(date +%s 2>/dev/null || echo 0)"
@@ -4846,6 +5017,7 @@ _exakit_marketplace_apply() {
             _mp_status=1
         fi
         EXAKIT_ADDON_TABLE_ROW=""
+        EXAKIT_ADDON_TABLE_CHILD_ROWS=""
     done
     # The table stops redrawing BEFORE anything is said over it, and only then is
     # what was collected on the way said.
@@ -9857,6 +10029,7 @@ exakit_maybe_offer_data_load() {
     # the animator would see.
     EXAKIT_TABLE_LIVE=0
     if [ -n "${EXAKIT_TABLE_STATE:-}" ]; then
+        command -v exakit_data_table_keep_picked >/dev/null 2>&1 && exakit_data_table_keep_picked
         ui_table_begin "$EXAKIT_TABLE_STATE" && EXAKIT_TABLE_LIVE=1
     fi
     _data_notes=""

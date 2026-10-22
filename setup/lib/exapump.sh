@@ -3812,6 +3812,39 @@ EXAKIT_DTR_EOF
     printf '0\n'
 }
 
+# exakit_data_table_keep_picked — once the reader has answered, the table shows
+# only what is being loaded: the datasets picked (and the file, when one was),
+# as plain rows. The rest of the choice - the datasets left unticked, the
+# parent, the external source, Skip - has no part in the progress. The row ids
+# (EXAKIT_TABLE_IDS) follow, so each load still finds its row.
+exakit_data_table_keep_picked() {
+    [ -n "${EXAKIT_TABLE_STATE:-}" ] && [ -f "$EXAKIT_TABLE_STATE" ] || return 0
+    case ",${EXAKIT_DATA_LOAD_SELECTION:-none}," in ,none,|,,) return 0 ;; esac
+    _dkp_new="$EXAKIT_TABLE_STATE.kept"
+    : > "$_dkp_new"
+    _dkp_ids=""
+    _dkp_row=0
+    _dkp_kept=0
+    while IFS= read -r _dkp_line; do
+        _dkp_row=$(( _dkp_row + 1 ))
+        _dkp_id="$(printf '%s\n' "$EXAKIT_TABLE_IDS" | sed -n "${_dkp_row}p")"
+        [ -n "$_dkp_id" ] || continue
+        case ",$EXAKIT_DATA_LOAD_SELECTION," in *",$_dkp_id,"*) ;; *) continue ;; esac
+        # A plain, ticked row: no tree without its parent.
+        printf '%s\n' "$_dkp_line" | awk -F'|' 'BEGIN { OFS = "|" } { $1 = "plain"; $3 = "1"; print }' >> "$_dkp_new"
+        _dkp_kept=$(( _dkp_kept + 1 ))
+        _dkp_ids="$_dkp_ids$_dkp_id
+"
+        [ "$_dkp_id" = local ] && EXAKIT_TABLE_ROW_LOCAL="$_dkp_kept"
+    done < "$EXAKIT_TABLE_STATE"
+    [ "$_dkp_kept" -gt 0 ] || { rm -f "$_dkp_new"; return 0; }
+    mv "$_dkp_new" "$EXAKIT_TABLE_STATE"
+    EXAKIT_TABLE_IDS="$_dkp_ids"
+    EXAKIT_TABLE_GROUP=""
+    EXAKIT_TABLE_ROW_SKIP=0
+    return 0
+}
+
 exakit_data_load_menu() {
     [ -n "$(manifest_get components.exapump.profile 2>/dev/null)" ] || \
         die "No exapump connection profile is recorded — re-run the installer, then retry."
@@ -3827,6 +3860,7 @@ exakit_data_load_menu() {
     # loaders narrate in plain lines exactly as they did before.
     EXAKIT_TABLE_LIVE=0
     if [ -n "$EXAKIT_TABLE_STATE" ]; then
+        exakit_data_table_keep_picked
         ui_table_begin "$EXAKIT_TABLE_STATE" && EXAKIT_TABLE_LIVE=1
     fi
     _menu_status=0

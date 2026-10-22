@@ -787,6 +787,17 @@ jobs:
       # install).
       - run: bash tests/addon-questions.sh
         if: matrix.shard == 4
+      # The data question's table keeps only what was picked once loading starts;
+      # JupyterLab hides the Marimo copies and Marimo shows only its own.
+      - run: bash tests/data-keep-picked.sh
+        if: matrix.shard == 4
+      - run: bash tests/notebook-separate-views.sh
+        if: matrix.shard == 4
+      # The notebook's tools as child rows of its row in the add-ons table (a
+      # real pty: the tree at 80 columns, the ticks reaching the install, each
+      # tool's own status in the one table).
+      - run: bash tests/notebook-tools-table.sh
+        if: matrix.shard == 4
       # exakit model put / list / template and the scoring UDF template (ML-4).
       - run: bash tests/model-commands.sh
         if: matrix.shard == 4
@@ -901,6 +912,7 @@ jobs:
             pwsh -NoProfile -File tests/personas-ps.ps1
             pwsh -NoProfile -File tests/dataset-asset-ps.ps1
             pwsh -NoProfile -File tests/data-question-ps.ps1
+            pwsh -NoProfile -File tests/notebook-tools-table-ps.ps1
             pwsh -NoProfile -File tests/model-commands-ps.ps1
             pwsh -NoProfile -File tests/data-load-shapes-ps.ps1
           elif [ "${EXAKIT_REQUIRE_PS:-0}" = "1" ]; then

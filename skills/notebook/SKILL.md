@@ -1,7 +1,7 @@
 ---
 name: notebook
 addon: notebook
-description: Open notebooks already connected to the local Exasol database with the notebook add-on, built on Exasol's notebook connector (the package AI Lab installs) — covering exakit notebook, --marimo, --positron, --setup, --check and --stop, the install's checklist of notebook tools (JupyterLab, Marimo, Positron), JupyterLab and Marimo as on-demand background services with their status, the persona folders of the kit's notebooks (AI Scientist and ML Engineer quickstarts, explore, train, score), the Exasol (Starter Kit) kernel, the exakit.nb helpers, why no notebook ever holds a host, user or password, opt-in Langfuse tracing of model calls, and which AI Lab notebooks run on a local database. Triggers — "open a notebook", "start Jupyter", "open Marimo", "use Positron with Exasol", "where are the starter kit notebooks", "JupyterLab on my Exasol", "notebook connected to the database", "install the notebook add-on", "exakit notebook", "stop JupyterLab", "is my notebook running", "use AI Lab notebooks locally", "trace my LLM calls to Langfuse", "my notebook cannot connect".
+description: Open notebooks already connected to the local Exasol database with the notebook add-on, built on Exasol's notebook connector (the package AI Lab installs) — covering exakit notebook, --marimo, --positron, --setup, --check and --stop, the notebook tools (JupyterLab, Marimo, Positron) as child rows of the notebook in the marketplace's add-ons table, JupyterLab and Marimo as on-demand background services with their status, the persona folders of the kit's notebooks (AI Scientist and ML Engineer quickstarts, explore, train, score), the Exasol (Starter Kit) kernel, the exakit.nb helpers, why no notebook ever holds a host, user or password, opt-in Langfuse tracing of model calls, and which AI Lab notebooks run on a local database. Triggers — "open a notebook", "start Jupyter", "open Marimo", "use Positron with Exasol", "where are the starter kit notebooks", "JupyterLab on my Exasol", "notebook connected to the database", "install the notebook add-on", "exakit notebook", "stop JupyterLab", "is my notebook running", "use AI Lab notebooks locally", "trace my LLM calls to Langfuse", "my notebook cannot connect".
 ---
 
 # notebook — JupyterLab, Marimo or Positron connected to the local database
@@ -11,8 +11,10 @@ description: Open notebooks already connected to the local Exasol database with 
 pyexasol, the Langfuse and OpenAI clients, the kit's helper package `exakit.nb`
 (`exakit_nb` still imports) and a Jupyter kernel, **Exasol (Starter Kit)**, in an environment of their own.
 
-**The notebook tools are the user's choice: one checklist at the install, all
-three ticked.** JupyterLab: one already on the machine is used as it is, with the
+**The notebook tools are the user's choice: they are the notebook row's child
+rows in the marketplace's add-ons table, all three ticked, each saying before
+anything installs what will become of it and then how it settled** (a scripted
+install that draws no table asks one checklist instead). JupyterLab: one already on the machine is used as it is, with the
 kit's kernel added (VS Code and other Jupyter front ends see it too); with none,
 the kit's is installed (the connector's `[jupyter]` extra) because it was ticked. Marimo: installed into the kit's
 notebook environment. Positron: never installed - when the user has it, the

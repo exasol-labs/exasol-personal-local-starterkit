@@ -108,6 +108,10 @@ jobs:
         if: matrix.shard == 2
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/data-question-ps.ps1
+      - name: the notebook's tools in the add-ons table under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/notebook-tools-table-ps.ps1
       - name: exakit model under 5.1
         if: matrix.shard == 2
         shell: powershell
