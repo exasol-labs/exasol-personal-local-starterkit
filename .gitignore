@@ -13,3 +13,4 @@ setup-test-*.log
 build/
 *.egg-info/
 __pycache__/
+dist/

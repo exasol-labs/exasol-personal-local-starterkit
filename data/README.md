@@ -150,8 +150,8 @@ roles:
 ```
 
 ```python
-from exakit_nb import load_own_file
-data = load_own_file("~/Downloads/tickets.csv", "MY_DATA.TICKETS", "~/Downloads/tickets.yaml")
+import exakit.nb as nb
+data = nb.load_own_file("~/Downloads/tickets.csv", "MY_DATA.TICKETS", "~/Downloads/tickets.yaml")
 ```
 
 **A table in a virtual schema** - the same shape, with `source` naming the external

@@ -100,6 +100,18 @@ jobs:
         if: matrix.shard == 2
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/notebook-addon-ps.ps1
+      - name: the reference dataset assets under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/dataset-asset-ps.ps1
+      - name: the data question under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/data-question-ps.ps1
+      - name: exakit model under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/model-commands-ps.ps1
       - name: destroy through a stale lock under 5.1
         if: matrix.shard == 2
         shell: powershell

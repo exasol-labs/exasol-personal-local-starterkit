@@ -764,12 +764,30 @@ jobs:
         if: matrix.shard == 4
       # The notebook add-on: one pinned resolution, notebooks never
       # overwritten, the command's refusals, uninstall keeps the notebooks;
-      # the exakit_nb helpers and exasol-mlflow against fakes.
+      # the exakit.nb helpers and exasol-mlflow against fakes; every notebook
+      # calls only what exists and its SQL differs per dataset only in the
+      # descriptor's values (TDD/BRD AC-DS3.2).
       - run: bash tests/notebook-addon.sh
         if: matrix.shard == 4
       - run: python3 tests/test_notebook_helpers.py
         if: matrix.shard == 4
+      - run: python3 tests/test_notebook_contents.py
+        if: matrix.shard == 4
       - run: python3 tests/test_exasol_mlflow.py
+        if: matrix.shard == 4
+      # The reference datasets as checksummed release assets (DS-2): kit copy,
+      # cache, download through a mirror, tampered archives refused; the data
+      # question (source first, Enter on Skip skips, the For column).
+      - run: bash tests/dataset-asset.sh
+        if: matrix.shard == 4
+      - run: bash tests/data-question.sh
+        if: matrix.shard == 4
+      # exakit model put / list / template and the scoring UDF template (ML-4).
+      - run: bash tests/model-commands.sh
+        if: matrix.shard == 4
+      - run: python3 tests/test_model_tool.py
+        if: matrix.shard == 4
+      - run: python3 tests/test_score_template.py
         if: matrix.shard == 4
       # The udf-devkit add-on: each container install confirmed, the services
       # follow the restart, BucketFS never written outside the bucket; the
@@ -876,6 +894,9 @@ jobs:
             pwsh -NoProfile -File tests/notebook-addon-ps.ps1
             pwsh -NoProfile -File tests/udf-devkit-addon-ps.ps1
             pwsh -NoProfile -File tests/personas-ps.ps1
+            pwsh -NoProfile -File tests/dataset-asset-ps.ps1
+            pwsh -NoProfile -File tests/data-question-ps.ps1
+            pwsh -NoProfile -File tests/model-commands-ps.ps1
             pwsh -NoProfile -File tests/data-load-shapes-ps.ps1
           elif [ "${EXAKIT_REQUIRE_PS:-0}" = "1" ]; then
             echo "FAIL pwsh is missing on the runner that is supposed to have it" >&2

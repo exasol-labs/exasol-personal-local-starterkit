@@ -55,7 +55,7 @@ tool that is not on the machine is worse than not shipping the skill at all.
 |---|---|
 | [`exasol-marketplace`](exasol-marketplace/SKILL.md) | Choosing, installing, updating or removing add-ons; explaining why one is not offered at all. |
 | [`dbt-exasol`](dbt-exasol/SKILL.md) | Building SQL models with dbt against the local database; the generated profile, why `~/.dbt` is never touched, and why the command is `dbt-exasol` and not `dbt`. |
-| [`notebook`](notebook/SKILL.md) | Notebooks connected to the local database: `exakit notebook`, the Exasol (Starter Kit) kernel, JupyterLab offered never imposed, the `exakit_nb` helpers, the descriptor-driven `explore.ipynb` and `train.ipynb` (train inside the database, log to MLflow), opt-in Langfuse tracing. |
+| [`notebook`](notebook/SKILL.md) | Notebooks connected to the local database: `exakit notebook`, the Exasol (Starter Kit) kernel, JupyterLab, Marimo or Positron, the `exakit.nb` helpers, the descriptor-driven persona notebooks (quickstarts, explore, train inside the database and log to MLflow, score a model trained anywhere), opt-in Langfuse tracing. |
 | [`udf-devkit`](udf-devkit/SKILL.md) | Python UDFs on the local database: `exakit udf-setup` (the official container), `udf-use` (a tarball, or the kit's prebuilt one when published), `udf-build` from a pinned requirements file, `udf-file` into BucketFS; the restart every container install brings, and the smoke UDF that proves each. |
 | [`dash-server`](dash-server/SKILL.md) | Building live dashboards the agent drives over an MCP control plane while the user opens a browser URL. |
 | [`json-tables`](json-tables/SKILL.md) | Loading JSON into the database (exapump takes CSV and Parquet only); the prebuilt engine that means no Rust toolchain. |

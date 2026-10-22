@@ -8,7 +8,7 @@
   "repo": "exasol/notebook-connector",
   "docs": "https://github.com/exasol/notebook-connector#readme",
   "package": "exasol-notebook-connector",
-  "credentials": "The connection lives in the connector's encrypted configuration store (~/.exasol-starter-kit/notebook/connection.scs). Its master password and the JupyterLab token are kit credentials in ~/.exasol-starter-kit/credentials, readable by you only. The kernel's spec names only those two file paths, and the helpers read them, so no kernel spec, notebook or output ever holds a secret. The notebooks connect as the kit's admin user, because building tables and UDFs needs it.",
+  "credentials": "The connection lives in the connector's encrypted configuration store (~/.exasol-starter-kit/notebook/connection.scs). Its master password and the JupyterLab and Marimo login tokens are kit credentials in ~/.exasol-starter-kit/credentials, readable by you only. The kernel's spec names only those two file paths, and the helpers read them, so no kernel spec, notebook or output ever holds a secret. The notebooks connect as the kit's admin user, because building tables and UDFs needs it.",
   "installed_by": "exakit marketplace notebook (EXAKIT_MARKETPLACE_ADDONS=notebook for a script).",
   "platforms": "macOS on Apple silicon, Linux x86_64 (including WSL) and Windows x86_64. The connector supports Python 3.11 and 3.12; the kit's managed interpreter is 3.12. Linux on Arm is not offered: one of the connector's dependencies publishes no Linux Arm build.",
   "quickstart": [
@@ -54,14 +54,16 @@
   "notes": [
     "The notebook tools are one checklist at the install, all three ticked. A JupyterLab already on your machine is used as it is; the kit only adds its kernel, 'Exasol (Starter Kit)', which VS Code and other Jupyter front ends offer too. Marimo goes into the kit's notebook environment. Positron is never installed: when it is there, the notebooks folder is set to the kit's Python (.vscode/settings.json, your other settings kept); when it is not, the folder is ready for it (https://positron.posit.co/download.html). For a script: EXAKIT_NOTEBOOK_FRONTENDS=jupyterlab,marimo,positron (or none); EXAKIT_NOTEBOOK_JUPYTER=skip or EXAKIT_NOTEBOOK_MARIMO=skip leaves one out. Untick one now, add it later with exakit notebook --setup, --marimo or --positron.",
     "In Jupyter choose the kernel 'Exasol (Starter Kit)' for a notebook of your own. In Marimo, Positron or a plain script the kit's notebook Python finds the connection by itself.",
-    "In a notebook: import exakit_nb; conn = exakit_nb.connect() opens the database, exakit_nb.sql(conn, '...') runs a query into a DataFrame and remembers it, and exakit_nb.show_sql() prints the last statement.",
-    "Model-call tracing is opt-in: with LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY and LANGFUSE_HOST set before exakit notebook, exakit_nb.trace(...) records the calls in your own Langfuse project. Without them it says tracing is off and does nothing else.",
+    "In a notebook: import exakit.nb as nb; conn = nb.connect() opens the database, nb.sql(conn, '...') runs a query into a DataFrame and remembers it, and nb.show_sql() prints the last statement. nb.load_own_file(path, table, descriptor) loads your own CSV, Parquet or JSON file the same way the reference datasets are described. (exakit_nb, the older name, still imports.)",
+    "Model-call tracing is opt-in: with LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY and LANGFUSE_HOST set before exakit notebook, nb.trace(...) records the calls in your own Langfuse project. Without them it says tracing is off and does nothing else.",
     "Exasol's AI Lab notebooks that use only the database run here. Those that upload to BucketFS, install the Transformers or Text AI extensions or deploy a container through BucketFS do not: a local Exasol Personal database has no BucketFS upload service. Use exakit udf-file and exakit udf-use instead.",
     "A notebook you edited is never overwritten: an update copies only notebooks you do not have yet.",
     "An AI Lab or a JupyterLab of your own on the same machine is left alone.",
-    "explore.ipynb runs on any dataset with a descriptor: set DATASET in its first code cell to pharma_trials, banking_complaints, or the path of your own descriptor.json, and every query is built from the descriptor's roles and printed before its result. A small scikit-learn model trains on this computer. Its text step sends a few rows to your own model endpoint only when EXAKIT_NB_MODEL (the model name) is set before exakit notebook, with the endpoint and key in OPENAI_BASE_URL and OPENAI_API_KEY; with the LANGFUSE_* variables set too, those calls are one trace tagged with the dataset, the descriptor's digest, the database session and the SQL.",
-    "train.ipynb trains a text classifier inside the database with a Python UDF (the database's own Python and scikit-learn) and logs the run with exasol-mlflow from the notebook: parameters, metrics, the training SQL, the model file and the session, statement and deployment it came from. The run goes to MLFLOW_TRACKING_URI when set before exakit notebook, else to a local MLflow store in the mlflow folder beside the notebook. The UDF holds no MLflow credentials and needs no network.",
-    "The kit's notebooks, one folder per persona, in the order of the end-to-end path: general/start_here, data-scientist/explore, data-scientist/text_classification (classify the FDA recalls' or the banking complaints' text), ml-engineer/bank_marketing_mlflow (four classifiers on the bank marketing clients, every run logged to MLflow) and ml-engineer/train. What goes where is notebook/catalog.json in the kit: adding a notebook is one entry there and its file, no code."
+    "data-scientist/01_explore runs on any dataset with a descriptor: set DATASET in its first code cell to pharma_trials, banking_complaints, the path of your own descriptor.yaml, or a CSV/Parquet/JSON file with <name>.descriptor.yaml beside it - one assignment and no SQL changes. Every query is built from the descriptor's roles and printed before its result; a small scikit-learn model trains on this computer; its text step sends a few rows to your own model endpoint only when EXAKIT_NB_MODEL is set (endpoint and key in OPENAI_BASE_URL and OPENAI_API_KEY), traced to your Langfuse when the LANGFUSE_* variables are set, and it asks before sending rows of a live (virtual schema) source.",
+    "ml-engineer/01_train trains a text classifier inside the database with a Python UDF and logs the run with exasol-mlflow from the notebook (with exasol_mlflow.start_run(conn, ...) as run: run.execute(sql)): parameters, metrics, the training SQL, the model file and the session, statement and deployment it came from. The run goes to MLFLOW_TRACKING_URI when set before exakit notebook, else to a local MLflow store in the mlflow folder beside the notebook. ml-engineer/02_score_external_model brings a model trained anywhere in with exakit model put and scores it with the udf-devkit's scoring UDF template.",
+    "The kit's notebooks, one folder per persona, in the order to open them (the requirements document's catalogue): data-scientist/00_quickstart and 01_explore (AI Scientist), ml-engineer/00_quickstart, 01_train and 02_score_external_model (ML Engineer); 00_shared holds the cells both quickstarts use (connection check, schemas, one loader per way data arrives: a sample dataset, your own file, a connected source). Each quickstart checks what its persona depends on first. What goes where is notebook/catalog.json in the kit: adding a notebook is one entry there and its file, no code.",
+    "Versions: the connector is pinned in the kit's versions.json (components.notebook), and so are the JupyterLab and Marimo the kit installs (components.notebook.frontends; JupyterLab comes in through the connector's [jupyter] extra). exakit update notebook moves them to new pins and always refreshes the kit's own helpers. EXAKIT_NOTEBOOK_VERSION, EXAKIT_NOTEBOOK_JUPYTERLAB_VERSION and EXAKIT_NOTEBOOK_MARIMO_VERSION override a pin.",
+    "exakit uninstall keeps your notebooks (~/.exasol-starter-kit/notebooks, the mlflow stores beside them included); EXAKIT_UNINSTALL_NOTEBOOKS=remove removes them too."
   ],
   "troubleshooting": [
     {
@@ -69,8 +71,8 @@
       "remedy": "exakit notebook --setup"
     },
     {
-      "symptom": "This notebook is not running on the kit's kernel",
-      "remedy": "exakit notebook"
+      "symptom": "No connection to the kit's database was found",
+      "remedy": "exakit notebook --check"
     },
     {
       "symptom": "exakit notebook says the add-on is not installed",
@@ -85,7 +87,7 @@
       "remedy": "exakit notebook --port 8890"
     },
     {
-      "symptom": "import exakit_nb fails",
+      "symptom": "import exakit.nb fails",
       "remedy": "exakit update notebook"
     },
     {
@@ -93,7 +95,7 @@
       "remedy": "exakit logs notebook"
     },
     {
-      "symptom": "explore.ipynb says the descriptor does not match the database",
+      "symptom": "01_explore says the descriptor does not match the database",
       "remedy": "exakit data-load pharma_trials"
     }
   ],
