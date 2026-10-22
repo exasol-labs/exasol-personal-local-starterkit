@@ -11,6 +11,11 @@
 #   - an old launcher is refused with the remedy, before anything runs
 #   - udf-file copies into the deployment's BucketFS folder (never outside the
 #     bucket) and prints the path a UDF reads
+#   - the install is refused on a launcher older than 2.3.0, with the remedy
+#     and nothing recorded (ML-1 preflight)
+#   - udf-build checks for a running Docker or Podman (whose API socket it
+#     hands to the build) and for the free disk estimate before anything
+#     heavy runs (AC-ML1.3)
 #   - udf-use default says no prebuilt container is published; every command
 #     refuses what it does not know, and names the marketplace when the add-on
 #     is not installed
@@ -47,6 +52,7 @@ scenario() { # scenario <body>
     (
         # shellcheck disable=SC1091
         . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/udf-devkit.sh"
+        run_python_any() { python3 "$@"; }
         EXAKIT_LOG_FILE="$WORK/log"; : > "$EXAKIT_LOG_FILE"
         CALLS="$WORK/calls"; : > "$CALLS"
         manifest_init >/dev/null 2>&1
@@ -107,6 +113,55 @@ out="$(scenario 'manifest_set components.udf_devkit.version 0.1.0; cmd_udf_setup
 contains "udf-setup refuses an unknown option" "takes --force" "$out"
 out="$(scenario 'manifest_del components.udf_devkit; cmd_udf_setup' 2>&1)"
 contains "not installed names the marketplace" "exakit marketplace udf-devkit" "$out"
+
+echo "the install itself is refused on an old launcher (ML-1 preflight):"
+out="$(STUB_LAUNCHER=2.2.9 scenario 'manifest_del components.udf_devkit; udf_devkit_install; echo "rc=$?"; manifest_get components.udf_devkit.version || echo "no record"' 2>&1)"
+contains "the install fails" "rc=1" "$out"
+contains "naming the version it needs and the one it found" "needs Exasol launcher 2.3.0 or later; this machine has 2.2.9" "$out"
+contains "and the remedy" "exakit update personal" "$out"
+contains "nothing is recorded" "no record" "$out"
+check "and nothing runs" "" "$(cat "$WORK/calls")"
+out="$(STUB_LAUNCHER="" scenario 'personal_launcher_version() { return 1; }; manifest_del components.udf_devkit; udf_devkit_install; echo "rc=$?"' 2>&1)"
+contains "no launcher answering is refused too" "this machine has none" "$out"
+out="$(STUB_LAUNCHER=2.3.0 scenario 'exakit_db_reachable() { return 1; }; manifest_del components.udf_devkit; udf_devkit_install; echo "rc=$?"; manifest_get components.udf_devkit.version' 2>&1)"
+contains "2.3.0 is enough" "rc=0" "$out"
+
+echo "udf-build checks the container engine and the free disk before it starts (AC-ML1.3):"
+STUBS="$WORK/stubs"; mkdir -p "$STUBS"
+stub() { # stub <name> <body>
+    printf '#!/bin/sh\n%s\n' "$2" > "$STUBS/$1"; chmod +x "$STUBS/$1"
+}
+printf 'numpy==1.26.4\n' > "$WORK/pinned.txt"
+build() { # build <extra scenario code> — udf-build up to its first heavy step, which is stubbed to stop it
+    PATH="$STUBS:$PATH" scenario 'manifest_set components.udf_devkit.version 0.1.0
+        notebook_installed_version() { echo 1.0.0; }
+        _notebook_uv() { echo "preflight passed DOCKER_HOST=${DOCKER_HOST:-unset}" >&2; return 1; }
+        '"$1"'
+        cmd_udf_build "$WORK/pinned.txt" --yes' 2>&1
+}
+stub docker 'exit 1'
+stub podman 'exit 1'
+stub df 'echo "Filesystem 1024-blocks Used Available Capacity Mounted"; echo "/dev/x 999999999 1 524288000 1% /"'
+out="$(build '')"
+contains "no engine answers: refused, naming both" "needs a running container engine, Docker or Podman, and none answers" "$out"
+lacks_out="$(printf '%s' "$out" | grep -c 'preflight passed' || true)"
+check "and nothing after the check runs" "0" "$lacks_out"
+stub podman 'case "$*" in *"--format"*) echo /nonexistent/podman.sock ;; esac; exit 0'
+out="$(build 'unset DOCKER_HOST')"
+contains "Podman without its API socket: refused, with the remedy" "Podman answers, but not its Docker-compatible API" "$out"
+python3 -c 'import socket, sys; s = socket.socket(socket.AF_UNIX); s.bind(sys.argv[1])' "$WORK/podman.sock"
+stub podman 'case "$*" in *"machine inspect"*) echo "'"$WORK"'/podman.sock" ;; *"--format"*) echo /nonexistent ;; esac; exit 0'
+out="$(build 'unset DOCKER_HOST')"
+contains "the Podman the launcher installed is enough: its socket is handed to the build" "preflight passed DOCKER_HOST=unix://$WORK/podman.sock" "$out"
+stub docker 'exit 0'
+out="$(build '')"
+contains "a running Docker passes" "preflight passed" "$out"
+stub df 'echo "Filesystem 1024-blocks Used Available Capacity Mounted"; echo "/dev/x 999999999 1 1048576 1% /"'
+out="$(build '')"
+contains "too little free disk: refused with the estimate and what is free" "needs about 25 GB free" "$out"
+contains "...what is free" "has 1 GB" "$out"
+check "and nothing after the check runs" "0" "$(printf '%s' "$out" | grep -c 'preflight passed' || true)"
+rm -f "$STUBS/df" "$STUBS/docker" "$STUBS/podman"
 
 echo "an uninstall leaves the containers to the launcher:"
 out="$(scenario 'manifest_set components.udf_devkit.version 0.1.0; udf_devkit_uninstall 1' 2>&1)"

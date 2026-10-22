@@ -70,6 +70,9 @@
 #   udf-use             install a container: default, or a tarball; --list
 #   udf-build           build a container from a pinned requirements.txt
 #   udf-file            copy a file into BucketFS; prints the path a UDF reads
+#   model put <file> [--replace] [--json] | list [--json] | template [--json]
+#                       model files in the bucket directory, digests recorded;
+#                       put prints the /buckets path the scoring UDF opens
 #   upgrade-kit2        add the Kit 2 trust assets (Trusted AI Workflow add-on)
 #                       on top of this install; nothing is reinstalled
 #   rollback-kit2       remove exactly what upgrade-kit2 added; the database and
@@ -2530,8 +2533,12 @@ _with_notice() {
 # COMMAND with an option, not a request for a topic literally named "--help".
 # It used to fall in here, be rendered as a command page for that topic, and
 # print grep's usage block instead of the JSON document an agent asked for.
+#
+# `model` renders its own pages (cmd_model): they live in the udf-devkit
+# document as "exakit model put|list|template", which a bare "model" topic
+# does not find, and `exakit model put --help` should show put's page alone.
 case "${1:-}" in
-    help|--help|-h) _help_skip=1 ;;
+    help|--help|-h|model) _help_skip=1 ;;
     *)              _help_skip=0 ;;
 esac
 if [ $# -ge 2 ] && [ "$1" != "sql" ] && [ "$_help_skip" -eq 0 ]; then
@@ -2694,7 +2701,7 @@ case "${1:-help}" in
     catalog)  shift; _exakit_refuse_unknown_options catalog "--json,-j" "$@"; cmd_catalog "$@" ;;
     persona)  shift; command -v cmd_persona >/dev/null 2>&1 || die "The persona module is missing from this kit copy. Repair with: exakit update"; cmd_persona "$@" ;;
     notebook) shift; command -v notebook_cmd >/dev/null 2>&1 || die "The notebook module is missing from this kit copy. Repair with: exakit update"; notebook_cmd "$@" ;;
-    udf-setup|udf-use|udf-build|udf-file) _udf_cmd="cmd_$(printf '%s' "$1" | tr '-' '_')"; shift; command -v "$_udf_cmd" >/dev/null 2>&1 || die "The udf-devkit module is missing from this kit copy. Repair with: exakit update"; "$_udf_cmd" "$@" ;;
+    udf-setup|udf-use|udf-build|udf-file|model) _udf_cmd="cmd_$(printf '%s' "$1" | tr '-' '_')"; shift; command -v "$_udf_cmd" >/dev/null 2>&1 || die "The udf-devkit module is missing from this kit copy. Repair with: exakit update"; "$_udf_cmd" "$@" ;;
     # `exakit help --help` reaches this arm (the universal --help hook skips
     # the help command on purpose), so --help/-h are options here and name
     # the help command's own page, like every other command's --help does.

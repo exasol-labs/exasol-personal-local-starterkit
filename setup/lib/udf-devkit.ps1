@@ -1,7 +1,8 @@
 # udf-devkit.ps1 - udf-devkit (Python UDFs on the local database): managed
-# install + validation + the `exakit udf-setup | udf-use | udf-build | udf-file`
-# commands. Twin of setup/lib/udf-devkit.sh; read that header for the facts.
-# The rules and the database steps are setup/udf/udf_tool.py, shared by both.
+# install + validation + the `exakit udf-setup | udf-use | udf-build | udf-file
+# | model` commands. Twin of setup/lib/udf-devkit.sh; read that header for the
+# facts. The rules and the database steps are setup/udf/udf_tool.py, the model
+# files' rules setup/udf/model_tool.py, both shared by the two twins.
 
 $script:UdfDevkitVersionFallback = if ($env:EXAKIT_UDF_DEVKIT_VERSION_FALLBACK) { $env:EXAKIT_UDF_DEVKIT_VERSION_FALLBACK } else { "0.1.0" }
 $script:UdfDevkitVersion = if ($env:EXAKIT_UDF_DEVKIT_VERSION) { $env:EXAKIT_UDF_DEVKIT_VERSION } else { "" }
@@ -32,8 +33,11 @@ function Get-UdfDevkitInstalledVersion { return (Get-ExakitManifestValue "compon
 # Invoke-UdfTool - setup/udf/udf_tool.py with the pyexasol venv's Python,
 # connected as the kit's admin user (the password is read from its file by the
 # child). @(exit code, stdout lines, stderr text). Twin of _udf_tool.
+# -Script model_tool.py -NoConnection runs the model files' tool instead, with
+# no connection settings in its environment (twin of _model_tool).
 function Invoke-UdfTool {
-    param([Parameter(Mandatory)][string[]]$ToolArgs, [string]$StdIn = "", [string]$Python = "")
+    param([Parameter(Mandatory)][string[]]$ToolArgs, [string]$StdIn = "", [string]$Python = "",
+          [string]$Script = "udf_tool.py", [switch]$NoConnection)
     if (-not $Python) {
         $Python = if (Get-Command Get-PyexasolVenvPython -ErrorAction SilentlyContinue) { Get-PyexasolVenvPython } else { "" }
         if (-not ($Python -and (Test-Path $Python))) {
@@ -41,11 +45,15 @@ function Invoke-UdfTool {
             $Python = if ($found) { $found.Source } else { "python" }
         }
     }
-    $tool = Join-Path (Join-Path (Join-Path (Get-ExakitRepoRoot) "setup") "udf") "udf_tool.py"
+    $tool = $Script
+    if (-not [System.IO.Path]::IsPathRooted($Script)) { $tool = Join-Path (Join-Path (Join-Path (Get-ExakitRepoRoot) "setup") "udf") $Script }
     $saved = @{}
-    $envs = @{ EXAKIT_PYX_DSN = (Get-ExakitManifestValue "runtime.dsn"); EXAKIT_PYX_USER = (Get-ExakitManifestValue "runtime.user")
-               EXAKIT_PYX_PWFILE = (Get-ExakitManifestValue "runtime.password_file") }
-    if (-not $envs.EXAKIT_PYX_USER) { $envs.EXAKIT_PYX_USER = "sys" }
+    $envs = @{}
+    if (-not $NoConnection) {
+        $envs = @{ EXAKIT_PYX_DSN = (Get-ExakitManifestValue "runtime.dsn"); EXAKIT_PYX_USER = (Get-ExakitManifestValue "runtime.user")
+                   EXAKIT_PYX_PWFILE = (Get-ExakitManifestValue "runtime.password_file") }
+        if (-not $envs.EXAKIT_PYX_USER) { $envs.EXAKIT_PYX_USER = "sys" }
+    }
     foreach ($key in $envs.Keys) {
         $saved[$key] = [Environment]::GetEnvironmentVariable($key, "Process")
         [Environment]::SetEnvironmentVariable($key, [string]$envs[$key], "Process")
@@ -77,6 +85,27 @@ function Invoke-UdfSlc {
     } finally { $ErrorActionPreference = $prevEap }
     if ($script:LogFile -and $out.Count) { $out | Add-Content -Path $script:LogFile }
     return ,@($code, $out)
+}
+
+# Get-UdfBucketLocation - where the deployment's bucket is, resolved in this one
+# place for every command that hands a UDF a file (udf-file, model put | list;
+# the external-sources work stages its drivers through the same mapping).
+# @{ Dir = the folder on this machine; UdfRoot = /buckets/<service>/<bucket>;
+# Error = why there is none, or "" }. Twin of udf_bucket_locate.
+function Get-UdfBucketLocation {
+    $root = Join-Path $script:PersonalDeployDir $script:UdfBucketfsDir
+    if (-not (Test-Path (Split-Path -Parent $root))) {
+        return [pscustomobject]@{ Dir = ""; UdfRoot = ""
+            Error = "The deployment has no BucketFS folder at $root; is the database deployed by this launcher? (exakit status)" }
+    }
+    # One separator: the setting is written with backslashes, which pwsh on
+    # macOS or Linux accepts but the Python tool given this path would not.
+    $dir = (Join-Path (Join-Path $root $script:UdfBucketfsService) $script:UdfBucketfsBucket).Replace([char]'\', [System.IO.Path]::DirectorySeparatorChar)
+    return [pscustomobject]@{
+        Dir     = $dir
+        UdfRoot = "$($script:UdfBucketfsRoot)/$($script:UdfBucketfsService)/$($script:UdfBucketfsBucket)"
+        Error   = ""
+    }
 }
 
 function Test-UdfDevkitLauncher {
@@ -204,6 +233,7 @@ function Uninstall-UdfDevkit {
     if ($DryRun) {
         if (Test-Path $script:UdfDevkitHome) { Info "  will remove: $($script:UdfDevkitHome)" }
         Info "  containers stay installed in the database (exasol slc remove <alias> removes one)"
+        Info "  model files stay in the deployment's bucket directory; only their record goes"
         return $true
     }
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $script:UdfDevkitHome
@@ -278,6 +308,33 @@ function Invoke-CmdUdfUse {
     Install-UdfTarball -Tarball (Resolve-Path $what).Path -Alias (Get-UdfIdentifier $alias) -Source $what
 }
 
+# Find-UdfContainerRuntime - the engine udf-build's exaslct talks to, checked
+# before anything is built (AC-ML1.3): "docker" when the Docker CLI answers;
+# "podman" when Podman answers and its Docker-compatible API is known
+# (DOCKER_HOST already set, or the machine's pipe or socket, set here for
+# exaslct) - so the Podman the launcher installed is enough; "podman-no-api"
+# when Podman answers without one; "" when no engine answers. Bounded: `podman
+# info` can block while a machine is still coming up. Twin of
+# _udf_container_runtime.
+function Find-UdfContainerRuntime {
+    $docker = Get-Command docker -ErrorAction SilentlyContinue
+    if ($docker -and $null -ne (Invoke-ExakitBounded -FilePath $docker.Source -Arguments @("info") -TimeoutSeconds 20)) { return "docker" }
+    $podman = Get-Command podman -ErrorAction SilentlyContinue
+    if (-not $podman -or $null -eq (Invoke-ExakitBounded -FilePath $podman.Source -Arguments @("info") -TimeoutSeconds 20)) { return "" }
+    if ($env:DOCKER_HOST) { return "podman" }
+    $pipe = ("" + (Invoke-ExakitBounded -FilePath $podman.Source -Arguments @("machine", "inspect", "--format", "{{.ConnectionInfo.PodmanPipe.Path}}") -TimeoutSeconds 20)).Trim()
+    if ($pipe -match '^\\\\\.\\pipe\\(.+)$') {
+        $env:DOCKER_HOST = "npipe:////./pipe/$($Matches[1])"
+        return "podman"
+    }
+    $sock = ("" + (Invoke-ExakitBounded -FilePath $podman.Source -Arguments @("machine", "inspect", "--format", "{{.ConnectionInfo.PodmanSocket.Path}}") -TimeoutSeconds 20)).Trim()
+    if ($sock -and (Test-Path $sock)) {
+        $env:DOCKER_HOST = "unix://$sock"
+        return "podman"
+    }
+    return "podman-no-api"
+}
+
 function Invoke-CmdUdfBuild {
     param([string[]]$CmdArgs = @())
     $req = ""; $alias = ""
@@ -301,13 +358,9 @@ function Invoke-CmdUdfBuild {
     }
     if (-not (Test-ExakitDbReachable)) { Fail "The database is not running. Start it with: exakit start" }
     if (-not (Test-UdfDevkitLauncher)) { Fail "The Exasol launcher is too old for containers." }
-    $docker = Get-Command docker -ErrorAction SilentlyContinue
-    $dockerOk = $false
-    if ($docker) {
-        $prevEap = $ErrorActionPreference
-        try { $ErrorActionPreference = "Continue"; & docker info 2>$null | Out-Null; $dockerOk = ($LASTEXITCODE -eq 0) } finally { $ErrorActionPreference = $prevEap }
-    }
-    if (-not $dockerOk) { Fail "Building a container needs a running Docker engine, and none answers (start Docker Desktop)." }
+    $runtime = Find-UdfContainerRuntime
+    if ($runtime -eq "podman-no-api") { Fail "Podman answers, but not its Docker-compatible API, which the container build talks to. Start Podman's machine again (podman machine start) or point DOCKER_HOST at its API, then run this again." }
+    if (-not $runtime) { Fail "Building a container needs a running container engine, Docker or Podman, and none answers (start Docker Desktop, or Podman's machine: podman machine start)." }
     $work = Join-Path $script:UdfDevkitHome "build"
     New-Item -ItemType Directory -Force -Path $work | Out-Null
     $drive = (Get-Item $work).PSDrive
@@ -323,7 +376,7 @@ function Invoke-CmdUdfBuild {
     if (-not (Write-NotebookConnection)) { Fail "The notebook connection store could not be written." }
     $packages = @($pins[1] | Where-Object { $_ } | ForEach-Object { ,@(($_ -split "==", 2)) })
     $doc = @{ work_dir = $work; name = $script:UdfBuildName; flavor = $script:UdfBuildFlavor; packages = $packages } | ConvertTo-Json -Compress -Depth 4
-    Info "Building a container with $($packages.Count) package(s); this takes a while the first time"
+    Info "Building a container with $($packages.Count) package(s) on $runtime; this takes a while the first time"
     $saved = @{ EXAKIT_UDF_BUILD = $env:EXAKIT_UDF_BUILD; SCS_FILE = $env:SCS_FILE; SCS_MASTER_PASSWORD = $env:SCS_MASTER_PASSWORD }
     $env:EXAKIT_UDF_BUILD = $doc; $env:SCS_FILE = Get-NotebookStoreFile; $env:SCS_MASTER_PASSWORD = Get-NotebookSecret $script:NotebookMasterCred
     try {
@@ -348,12 +401,161 @@ function Invoke-CmdUdfFile {
     $rel = Invoke-UdfTool -ToolArgs @("relative", $target)
     if ($rel[0] -ne 0) { Fail $rel[2] }
     $relative = @($rel[1])[0]
-    $root = Join-Path $script:PersonalDeployDir $script:UdfBucketfsDir
-    if (-not (Test-Path (Split-Path -Parent $root))) { Fail "The deployment has no BucketFS folder at $root; is the database deployed by this launcher? (exakit status)" }
-    $dest = Join-Path (Join-Path (Join-Path $root $script:UdfBucketfsService) $script:UdfBucketfsBucket) ($relative -replace "/", "\")
+    $bucket = Get-UdfBucketLocation
+    if ($bucket.Error) { Fail $bucket.Error }
+    $dest = Join-Path $bucket.Dir ($relative -replace "/", "\")
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dest) | Out-Null
     Copy-Item -Path $source -Destination "$dest.part" -Force
     Move-Item -Path "$dest.part" -Destination $dest -Force
     Ok "Copied into BucketFS: $dest"
-    Info "A UDF reads it as: $($script:UdfBucketfsRoot)/$($script:UdfBucketfsService)/$($script:UdfBucketfsBucket)/$relative"
+    Info "A UDF reads it as: $($bucket.UdfRoot)/$relative"
+}
+
+# --- exakit model put | list | template ---------------------------------------
+# Twin of the block of the same name in udf-devkit.sh; read its comment for the
+# rules. The model files' tool is setup/udf/model_tool.py, shared by both.
+
+# Exit-UdfModel - stop with the kit's exit code for what went wrong (3 no
+# deployment, 4 not installed, 5 not confirmed). No failure note: nothing of
+# the install failed. With --json, one object on stdout. Twin of _model_refuse.
+function Exit-UdfModel {
+    param([Parameter(Mandatory)][int]$Code, [Parameter(Mandatory)][string]$Message, $Remedy = $null)
+    if ($script:ExakitRefusalJson) {
+        Write-Output ([ordered]@{ ok = $false; error = $Message; remedy = $Remedy } | ConvertTo-Json -Compress)
+        exit $Code
+    }
+    Write-Host ""
+    Write-Host ("  {0} {1}" -f $script:UiCross, $Message) -ForegroundColor Red
+    if ($Remedy) { Write-Host "    Run: $Remedy" }
+    exit $Code
+}
+
+# Assert-UdfModelReady - the add-on installed and a deployment to put files
+# into; the bucket location. Twin of _model_ready.
+function Assert-UdfModelReady {
+    if (-not (Get-UdfDevkitInstalledVersion)) { Exit-UdfModel -Code 4 -Message "The UDF dev kit is not installed." -Remedy "exakit marketplace udf-devkit" }
+    $bucket = Get-UdfBucketLocation
+    if ($bucket.Error) { Exit-UdfModel -Code 3 -Message $bucket.Error -Remedy "exakit status" }
+    return $bucket
+}
+
+# Get-UdfModelRecord - the recorded models as one JSON object ({} when none yet).
+function Get-UdfModelRecord {
+    $record = Get-ExakitManifestValue "components.udf_devkit.models"
+    if ($null -eq $record -or $record -isnot [System.Management.Automation.PSCustomObject]) { return "{}" }
+    return ($record | ConvertTo-Json -Depth 6 -Compress)
+}
+
+function Invoke-CmdModel {
+    param([string[]]$CmdArgs = @())
+    $sub = ""
+    if ($CmdArgs.Count -gt 0) { $sub = $CmdArgs[0] }
+    $rest = @()
+    if ($CmdArgs.Count -gt 1) { $rest = @($CmdArgs[1..($CmdArgs.Count - 1)]) }
+    # One page per command: Show-ExakitHelpCommand renders the first match only.
+    if ($sub -in @("--help", "-h")) {
+        foreach ($each in @("put", "list", "template")) { Show-ExakitHelpCommand -Name "exakit model $each" | Out-Null }
+        return
+    }
+    if ($sub -in @("put", "list", "template") -and ($rest -contains "--help" -or $rest -contains "-h")) {
+        Show-ExakitHelpCommand -Name "exakit model $sub" | Out-Null; return
+    }
+    switch ($sub) {
+        "put"      { Invoke-CmdModelPut -CmdArgs $rest }
+        "list"     { Invoke-CmdModelList -CmdArgs $rest }
+        "template" { Invoke-CmdModelTemplate -CmdArgs $rest }
+        ""         { Deny-ExakitInput "Name what to do: exakit model put <file> | exakit model list | exakit model template (exakit model --help)." }
+        default    { Deny-ExakitInput "Unknown model command '$sub' (supported: put, list, template)." }
+    }
+}
+
+function Invoke-CmdModelPut {
+    param([string[]]$CmdArgs = @())
+    $file = ""; $replace = $false; $json = $false
+    foreach ($arg in $CmdArgs) {
+        if ($arg -eq "--replace") { $replace = $true }
+        elseif ($arg -in @("--json", "-j")) { $json = $true; $script:ExakitRefusalJson = $true }
+        elseif ($arg.StartsWith("-")) { Deny-ExakitInput "Unknown option '$arg' for model put (supported: --replace --json)." }
+        elseif ($file) { Deny-ExakitInput "Name one model file: exakit model put <file> [--replace]" }
+        else { $file = $arg }
+    }
+    if (-not $file) { Deny-ExakitInput "Name the model file: exakit model put <file> [--replace] [--json]" }
+    $bucket = Assert-UdfModelReady
+    if (-not (Test-Path $file -PathType Leaf)) { Deny-ExakitInput "$file is not a file." }
+    $replaceArg = "0"
+    if ($replace) { $replaceArg = "1" }
+    $result = Invoke-UdfTool -Script "model_tool.py" -NoConnection -StdIn (Get-UdfModelRecord) `
+        -ToolArgs @("put", (Resolve-Path $file).Path, $bucket.Dir, $bucket.UdfRoot, $replaceArg)
+    if ($result[0] -eq 5) { Exit-UdfModel -Code 5 -Message $result[2] -Remedy "exakit model put $file --replace" }
+    if ($result[0] -eq 2) { Deny-ExakitInput $result[2] }
+    if ($result[0] -ne 0) { Fail "Could not put $file into the bucket directory: $($result[2])" }
+    $lines = @($result[1])
+    $action = $lines[0]
+    Set-ExakitManifestValue "components.udf_devkit.models" ($lines[2] | ConvertFrom-Json)
+    if ($json) { Write-Output $lines[1]; return }
+    $answer = $lines[1] | ConvertFrom-Json
+    $dest = Join-Path (Join-Path $bucket.Dir "models") $answer.name
+    if ($action -eq "unchanged") { Ok "$($answer.name) is already in the bucket directory with the same digest; nothing was copied" }
+    elseif ($action -eq "replaced") { Ok "Replaced $($answer.name) in the bucket directory: $dest" }
+    else { Ok "Copied $($answer.name) into the bucket directory: $dest" }
+    Info "sha256 $($answer.sha256), $($answer.size) bytes, recorded"
+    Info "A UDF reads it as: $($answer.path)"
+}
+
+function Invoke-CmdModelList {
+    param([string[]]$CmdArgs = @())
+    $json = $false
+    foreach ($arg in $CmdArgs) {
+        if ($arg -in @("--json", "-j")) { $json = $true; $script:ExakitRefusalJson = $true }
+        else { Deny-ExakitInput "Unknown argument '$arg' for model list (supported: --json)." }
+    }
+    $bucket = Assert-UdfModelReady
+    $result = Invoke-UdfTool -Script "model_tool.py" -NoConnection -StdIn (Get-UdfModelRecord) `
+        -ToolArgs @("list", $bucket.Dir, $bucket.UdfRoot)
+    if ($result[0] -ne 0) { Fail "Could not list the bucket directory: $($result[2])" }
+    $text = (@($result[1]) -join "`n")
+    # The tool's own JSON, as it printed it: a round trip through ConvertFrom-Json
+    # and back would turn an empty "models": [] into null on PowerShell 5.1.
+    if ($json) { Write-Output $text; return }
+    $doc = $text | ConvertFrom-Json
+    Write-Host "  Bucket directory: $($doc.bucket_dir)"
+    Write-Host "  UDFs read it as:  $($doc.udf_root)"
+    Write-Host ""
+    $models = @($doc.models | Where-Object { $_ })
+    if ($models.Count -eq 0) { Write-Host "  No models yet. Put one with: exakit model put <file>" }
+    foreach ($m in $models) {
+        $note = ""
+        if ($m.status -eq "changed") { $note = "  ! CHANGED since it was put (recorded $("$($m.recorded_sha256)".Substring(0, 12))...)" }
+        elseif ($m.status -eq "unrecorded") { $note = "  (not put with exakit model put)" }
+        Write-Host ("  {0,-28} {1,10} bytes  sha256 {2}...{3}" -f $m.name, $m.size, $m.sha256.Substring(0, 12), $note)
+        Write-Host "      $($m.path)"
+    }
+    foreach ($name in @($doc.missing | Where-Object { $_ })) {
+        Write-Host ("  {0,-28} recorded, but no longer in the bucket directory" -f $name)
+    }
+}
+
+function Invoke-CmdModelTemplate {
+    param([string[]]$CmdArgs = @())
+    $json = $false
+    foreach ($arg in $CmdArgs) {
+        if ($arg -in @("--json", "-j")) { $json = $true }
+        else { Deny-ExakitInput "Unknown argument '$arg' for model template (supported: --json)." }
+    }
+    $dir = Join-Path (Join-Path (Get-ExakitRepoRoot) "udf") "templates"
+    $renderer = Join-Path $dir "render.py"
+    if (-not (Test-Path $renderer -PathType Leaf)) { Fail "The UDF templates are missing from this kit copy ($dir). Repair with: exakit update" }
+    $template = Join-Path $dir "score_model.sql"
+    $found = Invoke-UdfTool -Script $renderer -NoConnection -ToolArgs @("--placeholders")
+    $places = @($found[1] | Where-Object { $_ })
+    if ($json) {
+        Write-Output ([ordered]@{ template = $template; renderer = $renderer; placeholders = $places; usage = "python $renderer --help" } | ConvertTo-Json -Compress)
+        return
+    }
+    Info "Scoring UDF template: $template"
+    Info "Placeholders: $($places -join ' ')"
+    Info "Fill them with the renderer (every value is checked; none may be left unfilled):"
+    Write-Host "    python $renderer ``"
+    Write-Host "      --schema SCORING --name SCORE_MODEL --model-path <the path exakit model put printed> ``"
+    Write-Host "      --input category:VARCHAR(2000) --input doc_text:VARCHAR(2000000):text --output DOUBLE --method predict_proba"
 }
