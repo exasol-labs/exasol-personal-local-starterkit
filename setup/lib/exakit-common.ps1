@@ -4779,6 +4779,7 @@ function Get-ExakitMarketplaceAddons {
             UpdateFn    = "Update-Notebook"
             VersionFn   = "Get-NotebookInstalledVersion"
             UninstallFn = "Uninstall-Notebook"
+            QuestionsFn = "Read-NotebookQuestions"
             LogFn       = "Get-NotebookLogPath"
             SummaryFn   = "Get-NotebookSummary"
             EnvVar      = "EXAKIT_NOTEBOOK_VERSION"
@@ -5614,9 +5615,32 @@ function Set-ExakitAddonProgress {
 }
 
 # Install each picked add-on in turn. One failure does not strand the rest.
+# Invoke-ExakitMarketplaceQuestions - QUESTIONS FIRST. An add-on that asks
+# something at install names a QuestionsFn in its registry entry (the notebook
+# add-on asks which notebook tools); it is asked HERE, before the progress table
+# animates - a question asked under a live table is redrawn over by it. The
+# selection frame is cleared first, so the table then draws fresh below the
+# answers. Twin of _exakit_marketplace_questions.
+function Invoke-ExakitMarketplaceQuestions {
+    param([Parameter(Mandatory)][string[]]$Ids)
+    $askers = @()
+    foreach ($addon in @(Get-ExakitMarketplaceAddons | Where-Object { $Ids -contains $_.Id })) {
+        if ($addon.PSObject.Properties["QuestionsFn"] -and (Get-Command $addon.QuestionsFn -ErrorAction SilentlyContinue)) {
+            $askers += $addon.QuestionsFn
+        }
+    }
+    if ($askers.Count -eq 0) { return }
+    if ($null -ne $script:ExakitAddonTable -and [int]$script:ExakitAddonTable.Lines -gt 0) {
+        try { [Console]::Write("`r$($script:UiEsc)[$([int]$script:ExakitAddonTable.Lines)A$($script:UiEsc)[0J") } catch { }
+        $script:ExakitAddonTable.Lines = 0
+    }
+    foreach ($fn in $askers) { & $fn }
+}
+
 function Invoke-ExakitMarketplaceApply {
     param([Parameter(Mandatory)][string[]]$Ids)
     $failed = 0
+    Invoke-ExakitMarketplaceQuestions -Ids $Ids
     # The SAME table the selection was just made in becomes the progress display:
     # the rows do not move, so nobody has to map one screen onto another. It
     # animates only where there is a console to animate on, and a scripted answer

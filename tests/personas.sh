@@ -13,7 +13,8 @@
 #     the two personas of the TDD/BRD: AI Scientist (data-scientist: Pharma and
 #     Banking, the notebook add-on) and ML Engineer (the same plus udf-devkit)
 #   - the persona service (setup/lib/persona_service.py) combines several, and
-#     the data question ticks their datasets and names who each is for
+#     the data question (one "Data to load" table) ticks their datasets and
+#     names who each is for
 #   - an explicit answer wins, per variable; an unknown persona stops the run
 #     before anything is installed; the persona is recorded in the manifest
 #
@@ -105,7 +106,9 @@ check "their datasets and add-ons together, each once" "pharma_trials,banking_co
 check "each dataset is named with the personas it is for" "pharma_trials|AI Scientist, ML Engineer" \
     "$(exakit_persona_dataset_hints | grep '^pharma_trials|')"
 
-echo "the data question: the source first, then the samples with the personas' ticked:"
+echo "the data question: one table, the personas' datasets ticked:"
+# The ids as _exakit_data_table_preselect sees them: the parent and the
+# datasets (the table builder asks before the file, external and Skip rows).
 EXAKIT_TABLE_IDS="
 tpch
 energy
@@ -113,18 +116,19 @@ pharma_trials
 banking_complaints
 "
 check "a persona's datasets are the rows ticked" "4,5" "$(_exakit_data_table_preselect pharma_trials,banking_complaints)"
-check "datasets covering every row tick Select All too" "1,2,3,4,5" "$(_exakit_data_table_preselect tpch,energy,pharma_trials,banking_complaints)"
+check "datasets covering every dataset row tick the Sample datasets parent too" "1,2,3,4,5" "$(_exakit_data_table_preselect tpch,energy,pharma_trials,banking_complaints)"
+check "a persona that wants none ticks nothing (the table then ticks Skip)" "" "$(_exakit_data_table_preselect none)"
 out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H retail benchmark (~175k rows)\npharma_trials|Pharma clinical trials (ClinicalTrials.gov, ~5k)\n'; }
-        EXAKIT_DATASETS_PRESELECT=pharma_trials; EXAKIT_DATA_TABLE_NO_LOCAL=1 exakit_data_table_build "$WORK/table"
+        EXAKIT_DATASETS_PRESELECT=pharma_trials; exakit_data_table_build "$WORK/table"
         printf '%s~%s~%s~%s' "$EXAKIT_TABLE_DEFAULTS" "$EXAKIT_TABLE_ROW_LOCAL" "$(cut -d'|' -f2 "$WORK/table" | tr '\n' ';')" \
             "$(cut -d'|' -f11 "$WORK/table" | tr '\n' ';')") )"
-check "the samples table: the persona's row ticked, no file row, each named for its persona in the For column" \
-    "3~0~Select All;TPC-H retail benchmark;Pharma clinical trials;Skip;~;;AI Scientist, ML Engineer;;" "$out"
-out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H\n'; }
-        exakit_data_source_select >/dev/null 2>&1; printf '%s' "$EXAKIT_DATA_SOURCE") )"
-check "without a terminal the samples are the answer" "sample" "$out"
-out="$( (exakit_pending_datasets() { :; }
-        exakit_data_source_select >/dev/null 2>&1; printf '%s' "$EXAKIT_DATA_SOURCE") )"
+check "the persona's row ticked, the file and external rows after the datasets, each named for its persona in the For column" \
+    "3~4~Sample datasets;TPC-H retail benchmark;Pharma clinical trials;Your file or folder: CSV, Parquet, JSON;Connect an external source - coming soon;Skip;~;;AI Scientist, ML Engineer;;;;" "$out"
+out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H\n'; }; _exakit_prompt_tty() { :; }
+        exakit_data_load_select Skip >/dev/null 2>&1; printf '%s' "$EXAKIT_DATA_LOAD_SELECTION") )"
+check "without a terminal the pending samples are the answer" "tpch" "$out"
+out="$( (exakit_pending_datasets() { :; }; _exakit_prompt_tty() { :; }
+        exakit_data_load_select Skip >/dev/null 2>&1; printf '%s' "$EXAKIT_DATA_LOAD_SELECTION") )"
 check "with every sample loaded, your own file is the default" "local" "$out"
 
 echo "an explicit answer wins, per variable:"

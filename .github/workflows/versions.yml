@@ -782,6 +782,11 @@ jobs:
         if: matrix.shard == 4
       - run: bash tests/data-question.sh
         if: matrix.shard == 4
+      # An add-on's install question is asked before the progress table animates,
+      # never under it (a real pty: one table on screen, the answer reaches the
+      # install).
+      - run: bash tests/addon-questions.sh
+        if: matrix.shard == 4
       # exakit model put / list / template and the scoring UDF template (ML-4).
       - run: bash tests/model-commands.sh
         if: matrix.shard == 4

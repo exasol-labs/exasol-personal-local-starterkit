@@ -245,11 +245,12 @@ exakit_pending_datasets() {
 TBL="$WORK/table"
 exakit_data_table_build "$TBL"
 
-check "a row per dataset, plus the group, the file row and Skip" "6" "$(grep -c '.' "$TBL")"
-check "the group row leads"        "group"      "$(sed -n 1p "$TBL" | cut -d'|' -f1)"
+check "a row per dataset, plus the parent, your file, the external source and Skip" "7" "$(grep -c '.' "$TBL")"
+check "the parent row leads"       "group|Sample datasets" "$(sed -n 1p "$TBL" | cut -d'|' -f1,2)"
 check "the last dataset corners"   "corner"     "$(sed -n 4p "$TBL" | cut -d'|' -f1)"
 check "the file row is 5"          "5"          "$EXAKIT_TABLE_ROW_LOCAL"
-check "Skip is 6, and exclusive"   "6"          "$EXAKIT_TABLE_EXCLUSIVE"
+check "the external source is 6, shown but disabled" "Connect an external source - coming soon|disabled" "$(sed -n 6p "$TBL" | cut -d'|' -f2,4)"
+check "Skip is 7, and exclusive"   "7"          "$EXAKIT_TABLE_EXCLUSIVE"
 check "the group is all-or-none"   "1:2:4:all"  "$EXAKIT_TABLE_GROUP"
 check "everything loadable is pre-ticked" "1,2,3,4" "$EXAKIT_TABLE_DEFAULTS"
 # A label with spaces in it is ONE row: an accumulator split on whitespace turned
@@ -262,6 +263,7 @@ check "and a non-dataset does not"       "0" "$(exakit_data_table_row nonesuch)"
 # only thing the screen can still do. Enter must never be a no-op.
 exakit_pending_datasets() { :; }
 exakit_data_table_build "$TBL"
+check "nothing pending: the parent stays, disabled, saying why" "Sample datasets - all of them are loaded already|disabled" "$(sed -n 1p "$TBL" | cut -d'|' -f2,4)"
 check "nothing pending: the file row is pre-ticked" "$EXAKIT_TABLE_ROW_LOCAL" "$EXAKIT_TABLE_DEFAULTS"
 lacks "...and Skip is not"  ",$EXAKIT_TABLE_ROW_SKIP," ",$EXAKIT_TABLE_DEFAULTS,"
 
@@ -888,14 +890,16 @@ check "a database of only-empty tables still answers" "EXAKIT.LISTING_ANSWERED" 
 
 # Enter on Skip skips. The pending datasets start ticked; a reader who moves to
 # Skip and presses Enter means Skip - the old menu loaded the ticked datasets.
-# And Enter anywhere else still confirms what is ticked.
+# The cursor starts on the first dataset; four Downs pass the other two, your
+# own file, and step over the disabled external source onto Skip. Enter anywhere
+# else still confirms what is ticked.
 if command -v python3 >/dev/null 2>&1; then
     check "Enter on Skip answers Skip" "SELECTION=none" \
         "$(python3 "$ROOT/tests/lib/tty-replay.py" "$ROOT/tests/lib/skip-enter-scenario.sh" "$ROOT" \
-            "Sample datasets" 'jjj\r' 2>&1 | grep '^SELECTION=' || echo 'replay failed')"
+            "Data to load" 'jjjj\r' 2>&1 | grep '^SELECTION=' || echo 'replay failed')"
     check "Enter on a dataset loads the ticked ones" "SELECTION=tpch,energy,weather" \
         "$(python3 "$ROOT/tests/lib/tty-replay.py" "$ROOT/tests/lib/skip-enter-scenario.sh" "$ROOT" \
-            "Sample datasets" '\r' 2>&1 | grep '^SELECTION=' || echo 'replay failed')"
+            "Data to load" '\r' 2>&1 | grep '^SELECTION=' || echo 'replay failed')"
 else
     check "Enter on Skip answers Skip" "skipped" "skipped"
 fi

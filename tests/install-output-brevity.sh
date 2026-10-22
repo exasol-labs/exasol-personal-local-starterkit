@@ -209,12 +209,14 @@ MCP_PS1_ALL="$(cat "$ROOT/setup/lib/mcp.ps1")"
 # The add-on and data-load screens are live TABLES now; each writes its parent
 # row into the table's own state file rather than into a label array.
 has "the add-on group row"  "printf 'group|Select All|1|idle" "$COMMON"
-has "the dataset group row" "printf 'group|Select All|1|idle" "$EXAPUMP_SH"
+# ...except the data question's, whose parent is one of three ways data comes
+# in (the samples, your own file, an external source), so it names them.
+has "the dataset group row" "printf 'group|Sample datasets|1|idle" "$EXAPUMP_SH"
 # Windows draws the same live table now - for all three selections, not only
 # datasets - so every parent row is a table row rather than an entry in a label
 # array.
 has "...and on Windows"     'Add-ExakitTableRow -Kind "group" -Label "Select All" -Table $script:ExakitAddonTable' "$COMMON_PS1"
-has "...for datasets too"   'Add-ExakitTableRow -Kind "group" -Label "Select All"' "$EXAPUMP_PS1"
+has "...for datasets too"   'Add-ExakitTableRow -Kind "group" -Label "Sample datasets" -Ticked' "$EXAPUMP_PS1"
 has "...and for AI clients" 'Add-ExakitTableRow -Kind "group" -Label "Select All" -Table $script:McpTable' "$MCP_PS1_ALL"
 
 # One word for the opt-out row, in every menu that has one. Five call sites on

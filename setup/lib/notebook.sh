@@ -373,6 +373,16 @@ notebook_choose_front_ends() {
     [ -n "$NOTEBOOK_FRONT_ENDS" ] || NOTEBOOK_FRONT_ENDS="none"
 }
 
+# notebook_questions — the marketplace's QUESTIONS FIRST hook: the notebook
+# tools are asked before the install table animates (a checklist asked under a
+# live table is redrawn over), and the answer is exported so the install that
+# follows takes it without asking again.
+notebook_questions() {
+    notebook_choose_front_ends
+    EXAKIT_NOTEBOOK_FRONTENDS="$NOTEBOOK_FRONT_ENDS"
+    export EXAKIT_NOTEBOOK_FRONTENDS
+}
+
 # notebook_plan_front_ends — which front ends the install's one resolution
 # brings (NOTEBOOK_ADD_JUPYTERLAB, NOTEBOOK_ADD_MARIMO = 1 or 0), from the
 # ticked tools: JupyterLab when it is ticked and the user has none of their own

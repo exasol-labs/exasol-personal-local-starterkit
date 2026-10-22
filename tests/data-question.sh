@@ -4,19 +4,27 @@
 #   bash tests/data-question.sh
 #
 # What it pins:
-#   - Enter on the exclusive row of ANY checkbox menu answers that row alone
-#     (the first data question's Skip, an either/or menu's No), under a real pty
-#   - the first data question keeps Skip on row 4: "Connect an external source"
-#     is shown disabled, and so is "Sample datasets" once every sample is in
-#   - a persona that wants no samples, or only ones already loaded, makes Skip
-#     the default answer of both data questions (Enter never does nothing)
-#   - who each dataset is for is a "For" column on the samples table, so a
-#     name is never cut off at 80 columns
+#   - the data question is ONE table, "Data to load": the "Sample datasets"
+#     parent with the pending datasets under it, your own file or folder, an
+#     external source (shown disabled, coming soon) and Skip - drawn once
+#   - under a real pty: Enter keeps what is ticked, Enter on Skip answers none,
+#     Up past the first row wraps to Skip, the cursor steps over the disabled
+#     external row, ticking the file row with the samples answers "<ids>,local",
+#     ticking the parent ticks every dataset; Enter on the exclusive row of ANY
+#     checkbox menu answers that row alone
+#   - with every sample in, the parent is a disabled row that says so and your
+#     own file is the default
+#   - a persona's datasets are the rows ticked (the parent only when they are
+#     every one); a persona that wants none, or only ones already loaded, makes
+#     Skip the default (Enter never does nothing)
+#   - who each dataset is for is a "For" column, so a name is never cut off at
+#     80 columns
 #   - data-load [--force] [<file-or-folder>|<dataset>] in either order; an id
 #     on the command line wins over EXAKIT_DATA_FILE / EXAKIT_DATASETS
 #
 # The Windows twin is tests/data-question-ps.ps1. A sandboxed kit home; nothing
 # is installed or loaded.
+
 
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -55,109 +63,146 @@ run_python_any() { python3 "$@"; }
 EXAKIT_LOG_FILE="$WORK/log"; : > "$EXAKIT_LOG_FILE"
 manifest_init >/dev/null 2>&1
 
-replay() { # replay <keys> [VAR=value ...] — the scenario's answer lines
+replay() { # replay <keys> [VAR=value ...] — the scenario's final screen and answer
     _rp_keys="$1"; shift
     env "$@" python3 "$ROOT/tests/lib/tty-replay.py" "$ROOT/tests/lib/data-question-scenario.sh" "$ROOT" \
-        "Sample datasets" "$_rp_keys" 2>&1
+        "Data to load" "$_rp_keys" 2>&1
 }
 
-echo "Enter on the exclusive row answers it alone (a real pty):"
+# The scenario's rows, with tpch, energy and banking_complaints still to load:
+#   1 Sample datasets (parent)  2 tpch  3 energy  4 banking_complaints
+#   5 Your file or folder       6 Connect an external source (disabled)  7 Skip
+# The cursor starts on row 2, past the parent.
+echo "one table answers the data question (a real pty):"
 if command -v python3 >/dev/null 2>&1; then
-    # Down, down: row 3 is disabled, so the cursor lands on Skip. "Sample
-    # datasets" stays ticked; Enter on Skip used to load the samples anyway.
-    out="$(replay 'jj\r')"
-    has "Enter on Skip in the first question skips" "SELECTION=none" "$out"
-    has "...and asks nothing more" "SOURCE=none" "$out"
-    check "...without a samples table" "" "$(printf '%s\n' "$out" | grep -c '^  ╭─ Sample datasets' | grep -v '^0$')"
-    out="$(replay 'k\r')"
+    out="$(replay '\r')"
+    has "Enter keeps what is ticked: every pending dataset" "SELECTION=tpch,energy,banking_complaints" "$out"
+    has "the table draws once, and nothing else is boxed" "1 top borders, 1 bottom borders" "$out"
+    check "...one box on the final screen" "1" "$(printf '%s\n' "$out" | sed -n '/=== FINAL SCREEN ===/,/^SELECTION=/p' | grep -c '╭')"
+    has "the parent row is Sample datasets" "Sample datasets" "$out"
+    lacks "...and the old source question is gone" "ready to load, picked next" "$out"
+    out="$(replay 'jjjj\r')"
+    has "Down steps over the disabled external row onto Skip, and Enter skips" "SELECTION=none" "$out"
+    out="$(replay 'kk\r')"
     has "Up from the first row wraps to Skip, and Enter skips" "SELECTION=none" "$out"
-    out="$(replay '\r\r')"
-    has "Enter on the samples still opens them, all ticked" "SELECTION=tpch,energy,banking_complaints" "$out"
-    out="$(replay 'j\r\r')"
-    has "Enter on a row that is not exclusive confirms what is ticked" "SOURCE=sample" "$out"
+    out="$(replay 'jjj\r')"
+    has "Enter on the unticked file row confirms what is ticked" "SELECTION=tpch,energy,banking_complaints" "$out"
+    out="$(replay 'jjj \r')"
+    has "the file row picked with the samples: <ids>,local" "SELECTION=tpch,energy,banking_complaints,local" "$out"
+    out="$(replay ' \r')"
+    has "unticking one dataset releases the parent, the rest still load" "SELECTION=energy,banking_complaints" "$out"
     out="$(replay 'j\r' DQ_SCENE=yesno)"
     has "an either/or menu: Enter on No is No" "SELECTION=2" "$out"
     out="$(replay '\r' DQ_SCENE=yesno)"
     has "...and Enter on Yes is still Yes" "SELECTION=1" "$out"
+
+    echo "every sample loaded already:"
+    out="$(replay '\r' DQ_PENDING=none)"
+    has "the cursor waits on your own file, ticked: Enter answers local" "SELECTION=local" "$out"
+    has "the parent says why it cannot be picked" "Sample datasets - all" "$out"
+    out="$(replay 'k\r' DQ_PENDING=none)"
+    has "Up steps over the disabled parent and wraps to Skip" "SELECTION=none" "$out"
 
     echo "a persona's datasets: Skip when none of them is still to load:"
     out="$(replay '\r' EXAKIT_DATASETS_PRESELECT=none)"
     has "persona datasets none: Enter skips" "SELECTION=none" "$out"
     out="$(replay '\r' EXAKIT_DATASETS_PRESELECT=pharma_trials)"
     has "persona datasets all loaded already: Enter skips" "SELECTION=none" "$out"
-    out="$(replay '\r\r' EXAKIT_DATASETS_PRESELECT=energy)"
-    has "persona datasets still to load: Enter, Enter loads exactly those" "SELECTION=energy" "$out"
-    out="$(replay ' \r\r' EXAKIT_DATASETS_PRESELECT=none)"
-    has "...and with none wanted, the samples can still be picked" "SOURCE=sample" "$out"
+    out="$(replay '\r' EXAKIT_DATASETS_PRESELECT=energy)"
+    has "persona datasets still to load: Enter loads exactly those" "SELECTION=energy" "$out"
+    out="$(replay ' \r' EXAKIT_DATASETS_PRESELECT=none)"
+    has "...and with none wanted, a sample can still be picked" "SELECTION=tpch" "$out"
+    out="$(replay 'k \r' EXAKIT_DATASETS_PRESELECT=energy)"
+    has "ticking the parent ticks every dataset" "SELECTION=tpch,energy,banking_complaints" "$out"
 
     echo "who each dataset is for, whole, at 80 columns:"
-    out="$(TTY_REPLAY_COLS=80 replay '\r\r' DQ_PERSONA=1 EXAKIT_DATASETS_PRESELECT=banking_complaints)"
+    out="$(TTY_REPLAY_COLS=80 replay '\r' DQ_PERSONA=1 EXAKIT_DATASETS_PRESELECT=banking_complaints)"
     has "the table draws once" "1 top borders, 1 bottom borders" "$out"
     has "a For column" "For" "$(printf '%s\n' "$out" | grep 'Dataset')"
     has "the persona is shown in full" "AI Scientist, ML Engineer" "$out"
     has "and the dataset name is not cut" "Smart-meter energy readings" "$out"
-    lacks "nothing is truncated" "…" "$(printf '%s\n' "$out" | sed -n '/Sample datasets ─/,/╰/p')"
+    has "nor your own file" "Your file or folder: CSV, Parquet, JSON" "$out"
+    has "nor the external source" "Connect an external source - coming soon" "$out"
+    lacks "nothing is truncated" "…" "$(printf '%s\n' "$out" | sed -n '/Data to load ─/,/╰/p')"
     has "the persona's dataset is the one picked" "SELECTION=banking_complaints" "$out"
 else
     check "pty replays need python3" "skipped" "skipped"
 fi
 
-echo "the first question's rows (Skip stays row 4):"
-rows() { # the labels and defaults the first question is asked with
-    (
-        ui_checkbox_menu() { printf 'DEFAULT=%s EXCL=%s\n' "$2" "$EXAKIT_CHECKBOX_EXCLUSIVE"; shift 2; printf '%s\n' "$@"; EXAKIT_CHECKBOX_SELECTION="$EXAKIT_CHECKBOX_EXCLUSIVE"; }
-        exakit_data_source_select 2>/dev/null
-    ) | sed '/^$/d'
-}
-out="$( exakit_pending_datasets() { printf 'tpch|TPC-H\n'; }; rows )"
-check "four rows, external disabled, Skip exclusive" \
-    "DEFAULT=1 EXCL=4|Sample datasets - 1 ready to load, picked next|Your own file or folder - CSV, Parquet or JSON|!Connect an external source - coming soon|Skip|" \
-    "$(printf '%s\n' "$out" | tr '\n' '|')"
-out="$( exakit_pending_datasets() { :; }; rows )"
-check "every sample loaded: the samples row is disabled, your own file the default" \
-    "DEFAULT=2 EXCL=4|!Sample datasets - all of them are loaded already" "$(printf '%s\n' "$out" | head -n 2 | tr '\n' '|' | sed 's/|$//')"
-out="$( exakit_pending_datasets() { printf 'tpch|TPC-H\n'; }; EXAKIT_DATASETS_PRESELECT=none rows | head -n 1 )"
-check "persona datasets none: Skip is the default" "DEFAULT=4 EXCL=4" "$out"
-out="$( exakit_pending_datasets() { printf 'tpch|TPC-H\n'; }; EXAKIT_DATASETS_PRESELECT=pharma_trials,energy rows | head -n 1 )"
-check "persona datasets none of them pending: Skip is the default" "DEFAULT=4 EXCL=4" "$out"
-out="$( exakit_pending_datasets() { :; }; EXAKIT_DATASETS_PRESELECT=tpch rows | head -n 1 )"
-check "persona datasets all loaded and nothing pending: Skip, not your own file" "DEFAULT=4 EXCL=4" "$out"
-out="$( exakit_pending_datasets() { printf 'tpch|TPC-H\nenergy|Energy\n'; }; EXAKIT_DATASETS_PRESELECT=energy rows | head -n 1 )"
-check "persona datasets pending: the samples are the default" "DEFAULT=1 EXCL=4" "$out"
-out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H\n'; }
-        EXAKIT_DATASETS_PRESELECT=none exakit_data_source_select >/dev/null 2>&1 </dev/null; printf '%s' "$EXAKIT_DATA_SOURCE") )"
-check "without a terminal the persona's none stands" "none" "$out"
-
-echo "the samples table: Skip when nothing on offer is wanted:"
-table() { # table <pending-ids...> — EXAKIT_TABLE_DEFAULTS~EXAKIT_TABLE_ROW_SKIP
+echo "the table's rows:"
+rows() { # rows <pending-ids...> — kind|label|state per row, then the id per row
     (
         _tb_ids="$*"
         exakit_pending_datasets() { for _i in $_tb_ids; do printf '%s|%s label\n' "$_i" "$_i"; done; }
-        EXAKIT_DATA_TABLE_NO_LOCAL=1 exakit_data_table_build "$WORK/table"
-        printf '%s~%s' "$EXAKIT_TABLE_DEFAULTS" "$EXAKIT_TABLE_ROW_SKIP"
+        exakit_data_table_build "$WORK/table"
+        cut -d'|' -f1,2,4 "$WORK/table" | tr '\n' ';'
+        printf '~%s' "$(printf '%s' "$EXAKIT_TABLE_IDS" | tr '\n' ',')"
     )
 }
-check "no persona: every pending row ticked" "1,2,3~4" "$(table tpch energy)"
-check "persona's dataset pending: that row" "3~4" "$(EXAKIT_DATASETS_PRESELECT=energy table tpch energy)"
-check "persona's datasets loaded already: Skip" "4~4" "$(EXAKIT_DATASETS_PRESELECT=pharma_trials table tpch energy)"
-check "persona datasets none: Skip" "4~4" "$(EXAKIT_DATASETS_PRESELECT=none table tpch energy)"
-check "nothing pending and no file row: Skip, never row 0" "1~1" "$(table)"
-out="$( (exakit_pending_datasets() { :; }; exakit_data_table_build "$WORK/table"; printf '%s~%s' "$EXAKIT_TABLE_DEFAULTS" "$EXAKIT_TABLE_ROW_LOCAL") )"
-check "nothing pending with a file row: the file row, as before" "1~1" "$out"
+check "parent, datasets, your file, external (disabled), Skip" \
+    "group|Sample datasets|idle;tee|tpch label|idle;corner|energy label|idle;plain|Your file or folder: CSV, Parquet, JSON|idle;plain|Connect an external source - coming soon|disabled;plain|Skip|idle;~,tpch,energy,local,,," \
+    "$(rows tpch energy)"
+check "every sample loaded: the parent is a disabled row that says so" \
+    "plain|Sample datasets - all of them are loaded already|disabled;plain|Your file or folder: CSV, Parquet, JSON|idle;plain|Connect an external source - coming soon|disabled;plain|Skip|idle;~,local,,," \
+    "$(rows)"
+out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H\nenergy|Energy\n'; }; exakit_data_table_build "$WORK/table"
+        printf '%s~%s~%s~%s' "$(exakit_data_table_row energy)" "$(exakit_data_table_row local)" "$EXAKIT_TABLE_GROUP" "$EXAKIT_TABLE_EXCLUSIVE") )"
+check "a dataset and the file row know their rows; the parent spans the datasets; Skip is exclusive" "3~4~1:2:3:all~6" "$out"
+check "one screen: no separate source question" "" "$(command -v exakit_data_source_select)"
+
+echo "the defaults: Skip when nothing on offer is wanted:"
+table() { # table <pending-ids...> — EXAKIT_TABLE_DEFAULTS~EXAKIT_TABLE_ROW_LOCAL~EXAKIT_TABLE_ROW_SKIP
+    (
+        _tb_ids="$*"
+        exakit_pending_datasets() { for _i in $_tb_ids; do printf '%s|%s label\n' "$_i" "$_i"; done; }
+        exakit_data_table_build "$WORK/table"
+        printf '%s~%s~%s' "$EXAKIT_TABLE_DEFAULTS" "$EXAKIT_TABLE_ROW_LOCAL" "$EXAKIT_TABLE_ROW_SKIP"
+    )
+}
+check "no persona: the parent and every pending row ticked" "1,2,3~4~6" "$(table tpch energy)"
+check "persona's dataset pending: that row only" "3~4~6" "$(EXAKIT_DATASETS_PRESELECT=energy table tpch energy)"
+check "persona's datasets are every one: the parent too" "1,2,3~4~6" "$(EXAKIT_DATASETS_PRESELECT=tpch,energy table tpch energy)"
+check "persona's datasets loaded already: Skip" "6~4~6" "$(EXAKIT_DATASETS_PRESELECT=pharma_trials table tpch energy)"
+check "persona datasets none: Skip" "6~4~6" "$(EXAKIT_DATASETS_PRESELECT=none table tpch energy)"
+check "ids are matched exactly" "6~4~6" "$(EXAKIT_DATASETS_PRESELECT=ENERGY table tpch energy)"
+check "nothing pending: your own file, never Skip" "2~2~4" "$(table)"
+# The file row is the default with every sample in whoever the persona is: the
+# persona's datasets are not on offer, but the file row is the only thing this
+# screen can still do.
+check "nothing pending, a persona: Skip (nothing it asked for is left)" "4~2~4" "$(EXAKIT_DATASETS_PRESELECT=tpch table)"
+check "nothing pending and no file row: Skip, never row 0" "2~0~2" "$(EXAKIT_DATA_TABLE_NO_LOCAL=1 table)"
+
+echo "without a terminal the defaults are the answer:"
+answer() { # answer <pending-ids...> — EXAKIT_DATA_LOAD_SELECTION, no terminal
+    (
+        _tb_ids="$*"
+        exakit_pending_datasets() { for _i in $_tb_ids; do printf '%s|%s label\n' "$_i" "$_i"; done; }
+        _exakit_prompt_tty() { :; }
+        exakit_data_load_select Skip >/dev/null 2>&1 </dev/null
+        printf '%s' "$EXAKIT_DATA_LOAD_SELECTION"
+    )
+}
+check "every pending sample" "tpch,energy" "$(answer tpch energy)"
+check "the persona's" "energy" "$(EXAKIT_DATASETS_PRESELECT=energy answer tpch energy)"
+check "the persona's none stands" "none" "$(EXAKIT_DATASETS_PRESELECT=none answer tpch energy)"
+check "every sample loaded: your own file" "local" "$(answer)"
+check "EXAKIT_DATA_FILE bypasses the table" "local~" \
+    "$( (exakit_pending_datasets() { printf 'tpch|TPC-H\n'; }; EXAKIT_DATA_FILE="$WORK" exakit_data_load_select Skip >/dev/null 2>&1
+        printf '%s~%s' "$EXAKIT_DATA_LOAD_SELECTION" "$EXAKIT_TABLE_STATE") )"
 
 echo "who each dataset is for is a column, not a suffix:"
 out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H retail benchmark (~175k rows)\npharma_trials|Pharma clinical trials (ClinicalTrials.gov, ~5k trials)\n'; }
-        EXAKIT_DATA_TABLE_NO_LOCAL=1 exakit_data_table_build "$WORK/table"
+        exakit_data_table_build "$WORK/table"
         printf '%s~%s~%s' "$EXAKIT_TABLE_HAS_FOR" "$(cut -d'|' -f2 "$WORK/table" | tr '\n' ';')" "$(cut -d'|' -f11 "$WORK/table" | tr '\n' ';')") )"
 check "the names stay names; the personas go in column 2" \
-    "1~Select All;TPC-H retail benchmark;Pharma clinical trials;Skip;~;;AI Scientist, ML Engineer;;" "$out"
+    "1~Sample datasets;TPC-H retail benchmark;Pharma clinical trials;Your file or folder: CSV, Parquet, JSON;Connect an external source - coming soon;Skip;~;;AI Scientist, ML Engineer;;;;" "$out"
 out="$( (exakit_persona_dataset_hints() { :; }
         exakit_pending_datasets() { printf 'tpch|TPC-H retail benchmark\n'; }
-        EXAKIT_DATA_TABLE_NO_LOCAL=1 exakit_data_table_build "$WORK/table"; printf '%s' "$EXAKIT_TABLE_HAS_FOR") )"
+        exakit_data_table_build "$WORK/table"; printf '%s' "$EXAKIT_TABLE_HAS_FOR") )"
 check "no persona service, no For column" "0" "$out"
 out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H\n'; }
         _exakit_prompt_tty() { :; }
-        EXAKIT_DATA_LOAD_SELECTION=""; exakit_data_samples_select Skip >/dev/null 2>&1
+        exakit_data_load_select Skip >/dev/null 2>&1
         printf '[%s]' "${UI_TABLE_COL2:-}") )"
 check "the For column is gone again before the progress display" "[]" "$out"
 

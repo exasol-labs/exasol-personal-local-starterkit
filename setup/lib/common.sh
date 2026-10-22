@@ -4751,10 +4751,36 @@ exakit_marketplace_offer() {
     return 0
 }
 
+# _exakit_marketplace_questions <ids_csv> — QUESTIONS FIRST. An add-on that
+# asks something at install defines the optional hook <id>_questions (the
+# notebook add-on asks which notebook tools); it is asked HERE, before the
+# progress table animates - a question asked under a live table is redrawn over
+# by it, which left two frames and the question's text bleeding through. The
+# selection frame is cleared first, so the progress table then draws fresh
+# below the answers. The hook exports its answers for the install to read.
+_exakit_marketplace_questions() {
+    _mq_ids=""
+    for _mq_id in $(printf '%s' "$1" | tr ',' ' '); do
+        command -v "$(_exakit_addon_fn "$_mq_id" questions)" >/dev/null 2>&1 && _mq_ids="$_mq_ids $_mq_id"
+    done
+    [ -n "$_mq_ids" ] || return 0
+    _mq_lines="${UI_TABLE_LINES:-0}"
+    case "$_mq_lines" in ''|*[!0-9]*) _mq_lines=0 ;; esac
+    if [ -n "${EXAKIT_ADDON_TABLE_STATE:-}" ] && [ "$_mq_lines" -gt 0 ]; then
+        printf '\r\033[%sA\033[J' "$_mq_lines"
+        UI_TABLE_LINES=0
+    fi
+    for _mq_id in $_mq_ids; do
+        "$(_exakit_addon_fn "$_mq_id" questions)" || true
+    done
+    return 0
+}
+
 # _exakit_marketplace_apply <ids_csv> — install each picked add-on in turn. One
 # failure does not strand the rest; the exit status says whether all made it.
 _exakit_marketplace_apply() {
     _mp_status=0
+    _exakit_marketplace_questions "$1"
     # The SAME table the selection was just made in becomes the progress display:
     # the rows do not move, so nobody has to map one screen onto another. It
     # animates only where there is a terminal to animate on, and a scripted

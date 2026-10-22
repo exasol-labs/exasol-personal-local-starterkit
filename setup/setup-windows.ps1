@@ -76,6 +76,24 @@ if (Test-Path $earlyPs1) {
     } catch { }
 }
 
+# Invoke-ExakitClosingOffer - automatic start (on by default for a fresh install:
+# the kit's promise is a database that is simply there; only applied when the
+# manifest has no opinion yet, so `exakit autostart off` survives a re-run;
+# before the offer, so an add-on installed from it joins the boot set), then the
+# marketplace offer, asked once, only on an interactive run whose steps all
+# completed and only while something is on offer. Best-effort: nothing in it may
+# end an install that already succeeded.
+function Invoke-ExakitClosingOffer {
+    [void](Invoke-ExakitBestEffort -Component "autostart" -Repair "exakit autostart" `
+        -Label "automatic start" `
+        -Warning "Automatic start could not be turned on." `
+        -Body { Enable-ExakitAutostartDefault })
+    [void](Invoke-ExakitBestEffort -Component "marketplace" -Repair "exakit marketplace" `
+        -Label "marketplace add-ons" `
+        -Warning "The marketplace offer did not finish cleanly." `
+        -Body { Request-ExakitMarketplaceOffer })
+}
+
 try {
     # One setup run at a time; the lock's pid is how `exakit status` tells a live
     # install from one that crashed. Twin of exakit_enable_failure_handling.
@@ -453,6 +471,15 @@ try {
         Invoke-LegacyCrossingAfter
     }
 
+    # A PERSONA INSTALL CLOSES ON ITS PANEL. The personas' own add-ons are part
+    # of what was asked for, so they are offered first, and the connection panel
+    # and the ready line are what the reader is left with. Without a persona the
+    # marketplace stays the optional extra it always was, after the panel. Twin
+    # of setup-macos.sh / setup-linux.sh.
+    if ($env:EXAKIT_PERSONA_ACTIVE) {
+        Invoke-ExakitClosingOffer
+        if (Get-Command Write-ExakitPersonaMarketplaceNote -ErrorAction SilentlyContinue) { Write-ExakitPersonaMarketplaceNote }
+    }
     Show-ExakitConnectionSummary
     # Only when the kit version moved during this run, and never able to fail it:
     # every reader inside degrades to silence.
@@ -474,15 +501,7 @@ try {
     # took it away. Only applied when the manifest has no opinion yet, so
     # `exakit autostart off` survives a re-run. Before the offer, so an add-on
     # installed from it joins the boot set.
-    [void](Invoke-ExakitBestEffort -Component "autostart" -Repair "exakit autostart" `
-        -Label "automatic start" `
-        -Warning "Automatic start could not be turned on." `
-        -Body { Enable-ExakitAutostartDefault })
-    [void](Invoke-ExakitBestEffort -Component "marketplace" -Repair "exakit marketplace" `
-        -Label "marketplace add-ons" `
-        -Warning "The marketplace offer did not finish cleanly." `
-        -Body { Request-ExakitMarketplaceOffer })
-    if (Get-Command Write-ExakitPersonaMarketplaceNote -ErrorAction SilentlyContinue) { Write-ExakitPersonaMarketplaceNote }
+    if (-not $env:EXAKIT_PERSONA_ACTIVE) { Invoke-ExakitClosingOffer }
     # A rule, then a heading: the last line on screen is where the reader is
     # left, and run together with whatever the marketplace printed it read as
     # one more of its bullets. The rule gives it air; the green arrow says it

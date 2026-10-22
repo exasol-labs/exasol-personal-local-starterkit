@@ -164,6 +164,15 @@ command -v exakit_persona_flow >/dev/null 2>&1 && exakit_persona_flow "$KIT_ROOT
 if command -v legacy_crossing_after >/dev/null 2>&1; then legacy_crossing_after; fi
 
 exakit_finish
+# A PERSONA INSTALL CLOSES ON ITS PANEL. The personas' own add-ons are part of
+# what was asked for, so they are offered first, and the connection panel and
+# the ready line are what the reader is left with. Without a persona the
+# marketplace stays the optional extra it always was, after the panel.
+if [ -n "${EXAKIT_PERSONA_ACTIVE:-}" ]; then
+    exakit_autostart_default_on || true
+    ( exakit_marketplace_offer ) || true
+    command -v exakit_persona_marketplace_note >/dev/null 2>&1 && exakit_persona_marketplace_note
+fi
 connection_summary
 # Only when the kit version moved during this run, and never able to fail it: the
 # trap is already released and every reader inside degrades to silence.
@@ -185,9 +194,10 @@ exakit_print_ready_line
 # took it away. Only ever applied when the manifest has no opinion yet, so
 # `exakit autostart off` survives a re-run of the installer. This runs BEFORE
 # the marketplace offer so an add-on installed from it joins the boot set.
-exakit_autostart_default_on || true
-( exakit_marketplace_offer ) || true
-command -v exakit_persona_marketplace_note >/dev/null 2>&1 && exakit_persona_marketplace_note
+if [ -z "${EXAKIT_PERSONA_ACTIVE:-}" ]; then
+    exakit_autostart_default_on || true
+    ( exakit_marketplace_offer ) || true
+fi
 # A rule, then a heading: the last line on screen is where the reader is left,
 # and run together with whatever the marketplace printed it read as one more of
 # its bullets. The rule gives it air; the green arrow says it is not a step.

@@ -26,13 +26,17 @@ everyone needs (the database, exapump, the AI bridge):
 
 1. *What will you use this machine for?* - AI Scientist, ML Engineer (one or
    both), or None - just the kit, which is ticked to begin with.
-2. *Data to load* - sample datasets, your own file or folder, or an external
-   source (shown, coming soon). The samples come next, a For column naming the
-   persona each is for, and the picked personas' datasets ticked. With None,
-   the kit's own samples are ticked: TPC-H, energy, weather.
-3. At the end, *Add-ons for your personas* - only their add-ons, ticked; Enter
-   installs them, Skip backs out. The rest of the marketplace is one command
-   away: `exakit marketplace`.
+2. *Data to load* - one table: **Sample datasets** is the parent row with the
+   datasets under it (a For column names the persona each is for, and the
+   picked personas' datasets are ticked), then your own file or folder, an
+   external source (shown, coming soon) and Skip. Enter starts the load in the
+   same table. With None, the kit's own samples are ticked: TPC-H, energy,
+   weather.
+3. *Add-ons for your personas* - only their add-ons, ticked; Enter installs
+   them, Skip backs out. Then the connection panel and "Your starter kit is
+   ready to use" close the install. The rest of the marketplace is one command
+   away: `exakit marketplace`. (Without a persona, the marketplace offer comes
+   after the panel, as before.)
 
 Nothing is loaded or installed without that screen. Without a terminal and
 without `EXAKIT_PERSONA`, the kit installs on its own with TPC-H, energy and

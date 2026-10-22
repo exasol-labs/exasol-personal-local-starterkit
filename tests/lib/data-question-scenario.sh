@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# The FIRST data question ("Data to load") under a real pty (tests/lib/tty-replay.py
-# types the keys), then - when the samples are picked - the samples table. The
-# answers land on one line each, SOURCE= and SELECTION=, for tests/data-question.sh.
+# The data question ("Data to load") under a real pty (tests/lib/tty-replay.py
+# types the keys). It is ONE table: the "Sample datasets" parent with the
+# pending datasets under it, your own file or folder, an external source (shown
+# disabled, coming soon) and Skip. The answer lands on one line, SELECTION=,
+# for tests/data-question.sh.
 #
 #   DQ_SCENE=source    the whole data question (exakit_data_load_select)
 #   DQ_SCENE=yesno     a two-row either/or checkbox menu (Yes / No, No exclusive)
+#   DQ_PENDING=none    every sample is loaded already (nothing pending)
 #   DQ_PERSONA=1       the persona service names who each dataset is for
 #   EXAKIT_DATASETS_PRESELECT passes through, as the persona flow sets it
 set -u
@@ -16,6 +19,7 @@ EXAKIT_HOME="$W/kit"; EXAKIT_BIN_DIR="$W/bin"; mkdir -p "$EXAKIT_HOME" "$EXAKIT_
 run_python_any() { python3 "$@"; }
 EXAKIT_LOG_FILE="$W/log"; : > "$EXAKIT_LOG_FILE"
 exakit_pending_datasets() {
+    [ "${DQ_PENDING:-}" = none ] && return 0
     printf 'tpch|TPC-H retail benchmark\nenergy|Smart-meter energy readings\nbanking_complaints|Banking complaints (CFPB, ~7k complaints)\n'
 }
 case "${DQ_SCENE:-source}" in
@@ -26,7 +30,6 @@ case "${DQ_SCENE:-source}" in
         ;;
     *)
         exakit_data_load_select "Skip"
-        printf 'SOURCE=%s\n' "$EXAKIT_DATA_SOURCE"
         printf 'SELECTION=%s\n' "$EXAKIT_DATA_LOAD_SELECTION"
         ;;
 esac

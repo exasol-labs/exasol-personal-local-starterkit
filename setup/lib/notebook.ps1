@@ -354,6 +354,13 @@ function Add-NotebookFrontEnd {
     Set-ExakitManifestValue "components.notebook.front_ends" (ConvertTo-NotebookFrontEnds "$now,$Name" -Quiet)
 }
 
+# Read-NotebookQuestions - the marketplace's QUESTIONS FIRST hook: the notebook
+# tools are asked before the install table animates, and the answer is set for
+# the install that follows. Twin of notebook_questions.
+function Read-NotebookQuestions {
+    $env:EXAKIT_NOTEBOOK_FRONTENDS = Get-NotebookFrontEnds
+}
+
 # Get-NotebookFrontEnds - which notebook tools: jupyterlab, marimo, positron
 # (or none). EXAKIT_NOTEBOOK_FRONTENDS answers it; else a reinstall or an
 # update keeps the recorded choice; else (the first install) one checklist with

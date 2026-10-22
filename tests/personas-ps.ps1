@@ -1,7 +1,7 @@
 #!/usr/bin/env pwsh
 # personas-ps.ps1 - the Windows twin of tests/personas.sh: setup/lib/persona.ps1
 # reads every persona the way the shell reader does, an explicit answer wins
-# per variable, several personas combine, the samples table ticks theirs, an
+# per variable, several personas combine, the data table ticks theirs, an
 # unknown persona is refused, the persona is recorded. Runs
 # under Windows PowerShell 5.1 and pwsh; a sandboxed kit home.
 $ErrorActionPreference = "Stop"
@@ -47,19 +47,22 @@ try {
     Clear-Answers; $env:EXAKIT_PERSONA = "data-scientist,ml-engineer"; Set-ExakitPersonaEnv
     Check "their datasets and add-ons together, each once" "pharma_trials,banking_complaints|all|notebook,udf-devkit" (Answers)
     Check "each dataset is named with the personas it is for" "AI Scientist, ML Engineer" ((Get-ExakitPersonaDatasetHints)["pharma_trials"])
-    Write-Host "the samples table ticks the personas' datasets:"
+    Write-Host "the data question (one table) ticks the personas' datasets:"
     function Get-ExakitPendingDatasets { return @([pscustomobject]@{ Id = "tpch"; Label = "TPC-H retail benchmark (~175k rows)" },
                                                   [pscustomobject]@{ Id = "pharma_trials"; Label = "Pharma clinical trials (ClinicalTrials.gov, ~5k)" }) }
     $env:EXAKIT_DATASETS_PRESELECT = "pharma_trials"
-    New-ExakitDataTable -FinalLabel "Skip" -NoLocal
+    New-ExakitDataTable -FinalLabel "Skip"
     $labels = (@($script:UiTable.Rows | ForEach-Object { $_.Label }) -join ";")
     $for = (@($script:UiTable.Rows | ForEach-Object { $_.Col2 }) -join ";")
-    Check "the persona's row ticked, no file row, each named for its persona in the For column" `
-        "3~0~Select All;TPC-H retail benchmark;Pharma clinical trials;Skip~;;AI Scientist, ML Engineer;" `
+    Check "the persona's row ticked, the file and external rows after the datasets, each named for its persona in the For column" `
+        "3~4~Sample datasets;TPC-H retail benchmark;Pharma clinical trials;Your file or folder: CSV, Parquet, JSON;Connect an external source - coming soon;Skip~;;AI Scientist, ML Engineer;;;" `
         "$($script:ExakitTableDefaults -join ',')~$($script:ExakitTableRowLocal)~$labels~$for"
     $env:EXAKIT_DATASETS_PRESELECT = "tpch,pharma_trials"
-    New-ExakitDataTable -FinalLabel "Skip" -NoLocal
-    Check "datasets covering every row tick Select All too" "1,2,3" ($script:ExakitTableDefaults -join ",")
+    New-ExakitDataTable -FinalLabel "Skip"
+    Check "datasets covering every dataset row tick the Sample datasets parent too" "1,2,3" ($script:ExakitTableDefaults -join ",")
+    $env:EXAKIT_DATASETS_PRESELECT = "none"
+    New-ExakitDataTable -FinalLabel "Skip"
+    Check "a persona that wants none: Skip is the default" "6~6" "$($script:ExakitTableDefaults -join ',')~$($script:ExakitTableRowSkip)"
     Remove-Item Env:EXAKIT_DATASETS_PRESELECT -ErrorAction SilentlyContinue
     Write-Host "an explicit answer wins, per variable:"
     Clear-Answers; $env:EXAKIT_PERSONA = "ml-engineer"; Set-ExakitPersonaEnv
