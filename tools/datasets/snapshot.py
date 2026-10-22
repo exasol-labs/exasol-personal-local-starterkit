@@ -1,4 +1,8 @@
-"""What every reference-dataset builder shares: one-line text, the CSVs and the manifest that names them (docs/design.md D68)."""
+"""What every reference-dataset builder shares: one-line text, the CSVs and the manifest that names them.
+
+A reference dataset (data/README.md, "Reference datasets") ships its CSVs with a manifest.json that records the source,
+the terms, the snapshot date and the rows and SHA-256 of every file; tools/dataset_check.py checks the files against it.
+"""
 
 from __future__ import annotations
 
@@ -11,11 +15,18 @@ from pathlib import Path
 DATASETS = Path(__file__).resolve().parents[2] / "data" / "datasets"
 
 
+ELLIPSIS = " …"
+
+
 def clean(text: str | None, limit: int = 0) -> str:
-    """One line of plain text: newlines and runs of spaces folded, cut to ``limit`` characters at a word."""
+    """One line of plain text: newlines and runs of spaces folded; longer than ``limit`` characters, it is cut at a word
+    and ends in " …", the whole at most ``limit`` characters (a single word longer than that is cut inside it)."""
     words = " ".join((text or "").split())
     if limit and len(words) > limit:
-        words = words[:limit].rsplit(" ", 1)[0] + " …"
+        room = limit - len(ELLIPSIS)
+        head = words[:room + 1]                       # one more: a space right after the room keeps the last word whole
+        head = head.rsplit(" ", 1)[0] if " " in head else words[:room]
+        words = head + ELLIPSIS
     return words
 
 

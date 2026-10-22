@@ -1,11 +1,11 @@
 """Check a dataset folder before the kit offers it: its files, then a real load into the database - everything the
 loader, the notebooks and the tests rely on.
 
-Adding a bundled dataset is three steps and no code (data/datasets/README.md):
+Adding a bundled dataset is three steps and no code (data/README.md):
 
     1. put the folder in data/datasets/<id>/ (dataset.conf, 01_create_schema.sql, data/*.csv, ...)
     2. python3 tools/dataset_check.py data/datasets/<id>        # checks the files, then loads it and checks the load
-    3. nothing else: the kit discovers every folder with a dataset.conf (data/datasets/README.md)
+    3. nothing else: the kit discovers every folder with a dataset.conf (data/README.md)
 
     python3 tools/dataset_check.py <folder>... [--offline] [--profile NAME] [--replace] [--keep] [--manifest]
     python3 tools/dataset_check.py --all --offline               # every folder, files only, as the tests do
@@ -158,7 +158,7 @@ def _table_problems(folder: Path, schema_tables: dict[str, list[str]]) -> list[s
 
 def _descriptor_problems(folder: Path, schema: str, schema_tables: dict[str, list[str]]) -> list[str]:
     """A dataset with descriptor.json is a reference dataset: valid descriptor, a manifest that matches, a README and
-    at least ten read-only example queries on its own schema (docs/design.md D68)."""
+    at least ten read-only example queries on its own schema (data/README.md, "Reference datasets")."""
     path = folder / "descriptor.json"
     if not path.is_file():
         return []

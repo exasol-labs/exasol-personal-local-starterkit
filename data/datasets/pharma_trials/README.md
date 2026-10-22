@@ -28,7 +28,7 @@ It loads into the `PHARMA` schema in a few seconds (12.8 MB of CSV).
 
 | Column | Type | Meaning |
 |---|---|---|
-| `NCT_ID` | VARCHAR(11) | ClinicalTrials.gov identifier, e.g. `NCT02684435` (primary key) |
+| `NCT_ID` | VARCHAR(11) | ClinicalTrials.gov identifier, e.g. `NCT01336660` (primary key) |
 | `BRIEF_TITLE` | VARCHAR(400) | short title |
 | `PHASE` | VARCHAR(20) | `PHASE2`, `PHASE3`, `PHASE1/PHASE2` or `PHASE2/PHASE3` |
 | `OVERALL_STATUS` | VARCHAR(12) | `COMPLETED` or `TERMINATED` |
@@ -41,7 +41,7 @@ It loads into the `PHARMA` schema in a few seconds (12.8 MB of CSV).
 | `PRIMARY_PURPOSE` | VARCHAR(40) | e.g. `TREATMENT`, `PREVENTION`, `DIAGNOSTIC` |
 | `MASKING` | VARCHAR(12) | blinding: `NONE`, `SINGLE`, `DOUBLE`, `TRIPLE`, `QUADRUPLE` |
 | `HAS_RESULTS` | DECIMAL(1,0) | 1 when results are posted |
-| `BRIEF_SUMMARY` | VARCHAR(2100) | the sponsor's summary, whitespace folded, cut at about 2,000 characters on a word (ending in `…`) |
+| `BRIEF_SUMMARY` | VARCHAR(2100) | the sponsor's summary, whitespace folded; a longer one is cut on a word and ends in ` …`, at most 2,000 characters in all |
 | `ELIGIBILITY_CRITERIA` | VARCHAR(2100) | inclusion and exclusion criteria, folded and cut the same way (every trial in this snapshot has them) |
 
 `PHARMA_SPONSORS`: `NCT_ID`, `SEQ` (1 is the lead sponsor - the same name as
@@ -87,13 +87,14 @@ questions (summaries and eligibility criteria).
   are offered by NLM; cite ClinicalTrials.gov as the source and do not imply
   NLM endorsement. **Redistribution in the kit is still to be confirmed by the
   owner** (`terms.confirmed` in the manifest); until then this dataset is a
-  release blocker for 0.3.0.
+  release blocker.
 - **Rebuild:** `python3 tools/datasets/pharma_trials.py` fetches the same
   query again and rewrites the CSVs and the manifest. A later run can differ
   by the records sponsors updated since; the manifest records the snapshot date,
   the row counts and the SHA-256 of every file, and the kit's tests check that
   the shipped files match it.
-- **Transformations:** whitespace folded, summaries and eligibility criteria
-  cut at about 2,000 characters, titles at 300; a month-only date is the first of that month;
+- **Transformations:** whitespace folded; summaries and eligibility criteria
+  cut on a word at 2,000 characters (the ` …` included), titles at 300; a
+  month-only date is the first of that month;
   trials without a summary are left out (none in this snapshot); nothing else
   is changed.

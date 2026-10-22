@@ -1,5 +1,6 @@
 """tools/dataset_check.py and tools/dataset_live.py (run: python3 tests/test_dataset_check.py): every file defect is named before a load, and the live check
-loads, verifies and cleans up - refusing a schema it did not create, dropping its own even when a step fails."""
+loads, verifies and cleans up - refusing a schema it did not create, dropping its own even when a step fails. The
+dataset builders (tools/datasets) keep to their text rule and write exactly the tables the shipped datasets have."""
 
 from __future__ import annotations
 
@@ -169,6 +170,55 @@ class LiveTest(unittest.TestCase):
         pump = FakePump()
         self.run_with(pump, keep=True)
         self.assertNotIn("dropping EDGE_DEMO", pump.calls)
+
+
+class BuilderTest(unittest.TestCase):
+    """tools/datasets: the shared text rule, and every builder against the dataset it writes (no network)."""
+
+    @classmethod
+    def setUpClass(cls):
+        sys.path.insert(0, str(ROOT / "tools" / "datasets"))
+
+    def test_clean_never_exceeds_its_limit_and_cuts_on_a_word(self):
+        from snapshot import clean
+        self.assertEqual(clean("  one\n two  "), "one two")
+        self.assertEqual(clean("short", 10), "short")
+        self.assertEqual(clean("aaa bbb ccc", 9), "aaa bbb …")         # a space right after the room keeps the word
+        self.assertEqual(clean("aaa bbbb ccc", 9), "aaa …")
+        self.assertEqual(clean("abcdefghijkl", 6), "abcd …")            # one long word is cut inside it
+        for limit in range(3, 40):
+            for text in ("x " * 30, "word " * 12, "a bb ccc dddd eeeee " * 3, "y" * 50):
+                cut = clean(text, limit)
+                self.assertLessEqual(len(cut), limit, (text, limit, cut))
+                if len(" ".join(text.split())) > limit:
+                    self.assertTrue(cut.endswith(" …"))
+
+    def test_each_builder_writes_the_tables_and_columns_the_dataset_ships(self):
+        import csv
+        import importlib
+        for builder in ("pharma_trials", "banking_complaints", "fda_recalls", "bank_marketing"):
+            folder = ROOT / "data" / "datasets" / builder
+            built = importlib.import_module(builder).TABLES
+            schema = dataset_check.tables(folder)
+            shipped = {}
+            for path in (folder / "data").glob("*.csv"):
+                with path.open(encoding="utf-8") as handle:
+                    shipped[path.stem.upper()] = next(csv.reader(handle))
+            with self.subTest(builder=builder):
+                self.assertEqual(built, schema)
+                self.assertEqual(built, shipped)
+
+    def test_fda_names_fit_their_columns_whole(self):
+        import re
+        import fda_recalls
+        sql = (ROOT / "data" / "datasets" / "fda_recalls" / "01_create_schema.sql").read_text(encoding="utf-8")
+        widths = {m.group(1): int(m.group(2)) for m in re.finditer(r"^\s+(\w+)\s+VARCHAR\((\d+)\)", sql, re.M)}
+        self.assertEqual(fda_recalls.WIDTH, {c: widths[c] for c in fda_recalls.WIDTH})
+        for column, limit in fda_recalls.TEXT.items():
+            self.assertLessEqual(limit, widths[column], column)
+        self.assertEqual(fda_recalls._name("FIRM_STATE", "N/A"), "")
+        with self.assertRaises(SystemExit):
+            fda_recalls._name("RECALL_STATUS", "x" * 21)
 
 
 if __name__ == "__main__":

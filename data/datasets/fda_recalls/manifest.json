@@ -19,15 +19,15 @@
     "summary": "Free to copy, change and redistribute. openFDA says its data is not for clinical use; a recall report is the FDA's record of a firm's action, not medical advice.",
     "confirmed": false
   },
-  "snapshot": "2026-10-21",
+  "snapshot": "2026-10-22",
   "files": {
-    "data/fda_recalls.csv": {
-      "rows": 5459,
-      "sha256": "d8276e07ec1e6a7e5465b45ed702787eac787bb11e1838f7f186bfcd6d44c036"
-    },
     "data/fda_classifications.csv": {
       "rows": 5459,
       "sha256": "751d7164c975e8bf07feaf4f45a11591019507f1eb7a6d309937fcd6b3ce4676"
+    },
+    "data/fda_recalls.csv": {
+      "rows": 5459,
+      "sha256": "8fb8d1d8cf60e16bec491241bfb978aa9b05b6ab83a85d7bb1bf28c02aa4bb1f"
     }
   }
 }

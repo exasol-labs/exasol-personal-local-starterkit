@@ -82,8 +82,8 @@ COMMENT ON COLUMN PHARMA_TRIALS.ALLOCATION IS 'RANDOMIZED, NON_RANDOMIZED or NA'
 COMMENT ON COLUMN PHARMA_TRIALS.PRIMARY_PURPOSE IS 'Primary purpose, e.g. TREATMENT, PREVENTION';
 COMMENT ON COLUMN PHARMA_TRIALS.MASKING IS 'Blinding: NONE, SINGLE, DOUBLE, TRIPLE or QUADRUPLE';
 COMMENT ON COLUMN PHARMA_TRIALS.HAS_RESULTS IS '1 when results are posted on ClinicalTrials.gov';
-COMMENT ON COLUMN PHARMA_TRIALS.BRIEF_SUMMARY IS 'Brief summary of the trial (whitespace folded, at most about 2000 characters)';
-COMMENT ON COLUMN PHARMA_TRIALS.ELIGIBILITY_CRITERIA IS 'Inclusion and exclusion criteria (whitespace folded, at most about 2000 characters)';
+COMMENT ON COLUMN PHARMA_TRIALS.BRIEF_SUMMARY IS 'Brief summary of the trial (whitespace folded; a longer one is cut on a word and ends in …, at most 2000 characters)';
+COMMENT ON COLUMN PHARMA_TRIALS.ELIGIBILITY_CRITERIA IS 'Inclusion and exclusion criteria (whitespace folded; longer ones are cut on a word and end in …, at most 2000 characters)';
 COMMENT ON TABLE  PHARMA_SPONSORS IS 'Who runs a trial: the lead sponsor (SEQ 1), then its collaborators. PK (nct_id, seq).';
 COMMENT ON COLUMN PHARMA_SPONSORS.NCT_ID IS 'Trial (FK to pharma_trials)';
 COMMENT ON COLUMN PHARMA_SPONSORS.SEQ IS '1 for the lead sponsor, then the collaborators in record order';

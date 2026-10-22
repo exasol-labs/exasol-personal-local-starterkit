@@ -51,7 +51,7 @@ COMMENT ON COLUMN BANKING_COMPLAINTS.ISSUE IS 'Issue the consumer chose';
 COMMENT ON COLUMN BANKING_COMPLAINTS.SUB_ISSUE IS 'Sub-issue the consumer chose';
 COMMENT ON COLUMN BANKING_COMPLAINTS.COMPANY IS 'Company the complaint is about';
 COMMENT ON COLUMN BANKING_COMPLAINTS.CONSUMER_STATE IS 'U.S. state of the consumer (two letters)';
-COMMENT ON COLUMN BANKING_COMPLAINTS.SUBMITTED_VIA IS 'Channel: Web, Phone, Referral, ...';
+COMMENT ON COLUMN BANKING_COMPLAINTS.SUBMITTED_VIA IS 'How the complaint was submitted: Web, Phone, Referral or Postal mail';
 COMMENT ON COLUMN BANKING_COMPLAINTS.TAGS IS 'Servicemember and/or Older American, when given';
 COMMENT ON COLUMN BANKING_COMPLAINTS.TIMELY IS '1 when the company responded in time';
 COMMENT ON COLUMN BANKING_COMPLAINTS.MONETARY_RELIEF IS '1 when the complaint was closed with monetary relief, else 0 (the label to predict)';

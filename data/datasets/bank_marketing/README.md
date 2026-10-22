@@ -10,7 +10,7 @@ subscribed** - 5,289 did (11.7%).
 exakit data-load bank_marketing
 ```
 
-It loads into the `BANKMKT` schema in a few seconds (3.6 MB of CSV).
+It loads into the `BANKMKT` schema in a few seconds (3.7 MB of CSV).
 
 It is the ML Engineer persona's dataset: the notebook
 `ml-engineer/bank_marketing_mlflow.ipynb` reads it from Exasol, trains several

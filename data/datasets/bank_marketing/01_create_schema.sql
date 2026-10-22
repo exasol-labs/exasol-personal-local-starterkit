@@ -32,9 +32,25 @@ CREATE OR REPLACE TABLE BANK_CLIENTS (
     CONSTRAINT BANK_CLIENTS_PK PRIMARY KEY (CLIENT_ID)
 );
 
+-- Semantics travel WITH the tables (see the note in tpch/01_create_schema.sql):
+-- the MCP describe path reads these comments. COMMENT is idempotent.
+
 COMMENT ON TABLE  BANK_CLIENTS IS 'Clients a Portuguese bank phoned in its term-deposit campaigns, May 2008 - Nov 2010 (Moro, Rita and Cortez 2014, UCI Bank Marketing, CC BY 4.0). PK client_id; SUBSCRIBED is the label.';
-COMMENT ON COLUMN BANK_CLIENTS.CLIENT_ID IS 'Row number (PK)';
-COMMENT ON COLUMN BANK_CLIENTS.BALANCE IS 'Average yearly balance in euros';
-COMMENT ON COLUMN BANK_CLIENTS.CALL_DURATION IS 'Seconds of the last call. Known only after the call ends and strongly tied to the outcome: leave it out of a model meant to choose whom to call';
-COMMENT ON COLUMN BANK_CLIENTS.DAYS_SINCE_PREVIOUS IS 'Days since the client was last contacted in a previous campaign; -1 when never';
-COMMENT ON COLUMN BANK_CLIENTS.SUBSCRIBED IS '1 when the client subscribed a term deposit, else 0: the label';
+COMMENT ON COLUMN BANK_CLIENTS.CLIENT_ID IS 'Row number in the UCI file bank-full.csv, 1 to 45211 (PK); the file is in date order, May 2008 first';
+COMMENT ON COLUMN BANK_CLIENTS.AGE IS 'Age in years (18 to 95)';
+COMMENT ON COLUMN BANK_CLIENTS.JOB IS 'Type of job: admin., blue-collar, entrepreneur, housemaid, management, retired, self-employed, services, student, technician, unemployed or unknown';
+COMMENT ON COLUMN BANK_CLIENTS.MARITAL IS 'Marital status: married, single or divorced (divorced includes widowed)';
+COMMENT ON COLUMN BANK_CLIENTS.EDUCATION IS 'Education level: primary, secondary, tertiary or unknown';
+COMMENT ON COLUMN BANK_CLIENTS.CREDIT_IN_DEFAULT IS '1 when the client has credit in default, else 0 (UCI column default)';
+COMMENT ON COLUMN BANK_CLIENTS.BALANCE IS 'Average yearly balance in euros; negative when overdrawn (-8019 to 102127)';
+COMMENT ON COLUMN BANK_CLIENTS.HOUSING_LOAN IS '1 when the client has a housing loan, else 0 (UCI column housing)';
+COMMENT ON COLUMN BANK_CLIENTS.PERSONAL_LOAN IS '1 when the client has a personal loan, else 0 (UCI column loan)';
+COMMENT ON COLUMN BANK_CLIENTS.CONTACT_TYPE IS 'How the client was last contacted: cellular, telephone or unknown (UCI column contact)';
+COMMENT ON COLUMN BANK_CLIENTS.LAST_CONTACT_DAY IS 'Day of the month of the last contact, 1 to 31 (UCI column day)';
+COMMENT ON COLUMN BANK_CLIENTS.LAST_CONTACT_MONTH IS 'Month of the last contact as jan .. dec; the data carry no year (UCI column month)';
+COMMENT ON COLUMN BANK_CLIENTS.CALL_DURATION IS 'Duration of the last contact in seconds (UCI column duration). Known only after the call ends and strongly tied to the outcome (0 seconds always means no): leakage, so leave it out of a model meant to choose whom to call';
+COMMENT ON COLUMN BANK_CLIENTS.CAMPAIGN_CONTACTS IS 'Contacts with this client during this campaign, the last contact included, 1 to 63 (UCI column campaign)';
+COMMENT ON COLUMN BANK_CLIENTS.DAYS_SINCE_PREVIOUS IS 'Days since the client was last contacted in a previous campaign; -1 when not previously contacted (UCI column pdays)';
+COMMENT ON COLUMN BANK_CLIENTS.PREVIOUS_CONTACTS IS 'Contacts with this client before this campaign, 0 to 275 (UCI column previous)';
+COMMENT ON COLUMN BANK_CLIENTS.PREVIOUS_OUTCOME IS 'Outcome of the previous campaign: success, failure, other or unknown (unknown also when never contacted; UCI column poutcome)';
+COMMENT ON COLUMN BANK_CLIENTS.SUBSCRIBED IS '1 when the client subscribed a term deposit, else 0: the label (UCI column y)';

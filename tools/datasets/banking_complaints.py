@@ -4,7 +4,7 @@ data/datasets/banking_complaints.
 The snapshot is every complaint about a credit card, a mortgage or a checking or savings account that the CFPB received
 in the first two weeks of January 2025 - a few thousand rows whose outcome (closed with monetary relief or not) is
 settled. The CFPB stopped publishing complaint narratives in 2026, so the text columns are the issue, the sub-issue and
-the company's public response (docs/design.md D69).
+the company's public response (see data/datasets/banking_complaints/README.md, "No complaint narratives").
 
     python3 tools/datasets/banking_complaints.py       # writes data/datasets/banking_complaints/data/*.csv and manifest.json
 """
