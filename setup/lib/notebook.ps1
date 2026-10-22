@@ -1,16 +1,22 @@
 # notebook.ps1 - notebook (Jupyter notebooks connected to the local database):
 # managed install + validation + the `exakit notebook` command. Twin of
 # setup/lib/notebook.sh; read that header for the facts. The Python steps (the
-# encrypted store, the kernel, the connection check) are the shared scripts in
-# notebook/kit/, so the two sides cannot drift there.
+# encrypted store, the kernel, the connection check, placing the notebooks) are
+# the shared scripts in notebook/kit/, so the two sides cannot drift there.
 #
 #   - venv:      $ExakitHome\notebook-venv
 #   - store:     $ExakitHome\notebook\connection.scs
 #   - notebooks: $ExakitHome\notebooks\starter-kit-notebooks\<persona>\ and
 #                ...\marimo\<persona>\ (notebook\catalog.json; copied once,
-#                never overwritten; kept by an uninstall)
-#   - the notebook tools: one checklist at the install, JupyterLab, Marimo and
-#     Positron all ticked; Positron is only ever configured, never installed.
+#                never overwritten, one the user deleted not copied again; kept
+#                by an uninstall, the full one too unless
+#                EXAKIT_UNINSTALL_NOTEBOOKS=remove)
+#   - the notebook tools: one checklist at the first install, JupyterLab,
+#     Marimo and Positron all ticked; the answer is recorded and a reinstall or
+#     an update keeps it. Positron is only ever configured, never installed.
+#   - the login token never reaches a command line (a 0600-style HTML file in
+#     the notebook home forwards the browser), and a pid file is trusted only
+#     while its process is still the server the kit started.
 
 $script:NotebookPackage = "exasol-notebook-connector"
 $script:NotebookVersionFallback = if ($env:EXAKIT_NOTEBOOK_VERSION_FALLBACK) { $env:EXAKIT_NOTEBOOK_VERSION_FALLBACK } else { "3.1.0" }
@@ -21,6 +27,8 @@ $script:NotebookDir = if ($env:EXAKIT_NOTEBOOK_DIR) { $env:EXAKIT_NOTEBOOK_DIR }
 $script:NotebookPort = if ($env:EXAKIT_NOTEBOOK_PORT) { $env:EXAKIT_NOTEBOOK_PORT } else { "8888" }
 $script:NotebookExtras = "bucketfs,ibis,pyexasol,sqlalchemy"
 $script:NotebookPackages = @("ipykernel>=6.29,<8", "langfuse>=3,<4", "openai>=1.40,<3", "scikit-learn>=1.4,<2", "mlflow-skinny>=2.14,<4", "alembic>=1.13,<2")
+# The kit's own packages, by their distribution names (reinstalled every time).
+$script:NotebookOwnPackages = @("exakit-nb", "exasol-mlflow")
 $script:NotebookJupyterLab = "jupyterlab>=4.2,<5"
 $script:NotebookKernelName = "exasol-starter-kit"
 $script:NotebookKernelTitle = "Exasol (Starter Kit)"
@@ -31,17 +39,39 @@ $script:NotebookMarimoCred = "notebook_marimo_token"
 $script:NotebookMarimoPackage = "marimo>=0.25.2,<0.26"
 $script:NotebookMarimoPort = if ($env:EXAKIT_MARIMO_PORT) { $env:EXAKIT_MARIMO_PORT } else { "2718" }
 $script:NotebookPositronDownload = "https://positron.posit.co/download.html"
+# What a server's command line holds when it is the one the kit started (see
+# Test-NotebookProcessOurs), and how long a start may take, in seconds.
+$script:NotebookJupyterMatch = "*jupyter*--ServerApp.ip=127.0.0.1*"
+$script:NotebookMarimoMatch = "*marimo_wrapper.py*"
+$script:NotebookStartTimeout = if ($env:EXAKIT_NOTEBOOK_START_TIMEOUT) { [int]$env:EXAKIT_NOTEBOOK_START_TIMEOUT } else { 60 }
+$script:NotebookCopyCode = 0
 
 function Get-NotebookVenvPython { return (Join-Path $script:NotebookVenv "Scripts\python.exe") }
 function Get-NotebookStoreFile { return (Join-Path $script:NotebookHome "connection.scs") }
 function Get-NotebookPidFile { return (Join-Path $script:NotebookHome "jupyter.pid") }
-function Get-NotebookLogFile {
-    $dir = if ($script:LogDir) { $script:LogDir } else { Join-Path $script:ExakitHome "logs" }
-    return (Join-Path $dir "notebook.log")
+function Get-NotebookLogDir {
+    if ($script:LogDir) { return $script:LogDir }
+    return (Join-Path $script:ExakitHome "logs")
 }
+# JupyterLab logs to stderr, so stderr is notebook.log; Marimo's wrapper merges
+# Marimo's output into its stdout, so stdout is notebook-marimo.log.
+function Get-NotebookLogFile { return (Join-Path (Get-NotebookLogDir) "notebook.log") }
+function Get-NotebookOutFile { return (Join-Path (Get-NotebookLogDir) "notebook.out.log") }
 function Get-NotebookMarimoPidFile { return (Join-Path $script:NotebookHome "marimo.pid") }
-function Get-NotebookMarimoLogFile { return (Join-Path (Split-Path -Parent (Get-NotebookLogFile)) "notebook-marimo.log") }
+function Get-NotebookMarimoLogFile { return (Join-Path (Get-NotebookLogDir) "notebook-marimo.log") }
+function Get-NotebookMarimoErrFile { return (Join-Path (Get-NotebookLogDir) "notebook-marimo.err.log") }
 function Get-NotebookMarimoCommand { return (Join-Path (Join-Path $script:NotebookVenv "Scripts") "marimo.exe") }
+function Get-NotebookOpenFile {
+    param([Parameter(Mandatory)][string]$Front)
+    return (Join-Path $script:NotebookHome "open-$Front.html")
+}
+
+# Get-NotebookLogPath - what `exakit logs` shows for this add-on, one
+# "target|what|path" per log. Twin of notebook_log_path.
+function Get-NotebookLogPath {
+    return @("notebook|JupyterLab (exakit notebook)|$(Get-NotebookLogFile)",
+             "notebook-marimo|Marimo (notebook --marimo)|$(Get-NotebookMarimoLogFile)")
+}
 
 # Get-NotebookPackageVersion - what the venv says about the connector. Twin of
 # notebook_package_version.
@@ -146,42 +176,67 @@ function Test-NotebookConnected {
 }
 
 # Invoke-NotebookFolders - notebook\kit\notebooks.py, which places the kit's
-# notebooks and prepares the folder for Positron: standard library only, so
-# the venv's Python, the system one or uv's runs it. Returns @(exit code,
-# output lines). Twin of _notebook_folders.
+# notebooks and prepares the folder for Positron: standard library only, so the
+# venv's Python runs it, and before the venv is there the system one or uv's.
+# Its stderr goes to the log and, when it fails, to the screen as warnings too
+# (it names what could not be done). Returns @(exit code, output lines). Twin
+# of _notebook_folders.
 function Invoke-NotebookFolders {
     param([Parameter(ValueFromRemainingArguments)]$FolderArgs)
     $script = Join-Path (Join-Path (Join-Path (Get-ExakitRepoRoot) "notebook") "kit") "notebooks.py"
     $prevEap = $ErrorActionPreference
+    $all = @()
     try {
         $ErrorActionPreference = "Continue"
         $venvPython = Get-NotebookVenvPython
         if (Test-Path $venvPython) {
-            $lines = @(& $venvPython $script @FolderArgs 2>$null | ForEach-Object { "$_" })
+            $all = @(& $venvPython $script @FolderArgs 2>&1)
         } elseif (Test-ExakitSystemPython) {
-            $lines = @(& python $script @FolderArgs 2>$null | ForEach-Object { "$_" })
+            $all = @(& python $script @FolderArgs 2>&1)
         } else {
             $uv = Get-NotebookUv
-            $lines = @(& $uv run --python $script:ManagedPythonVersion --no-project python $script @FolderArgs 2>$null | ForEach-Object { "$_" })
+            $all = @(& $uv run --python $script:ManagedPythonVersion --no-project python $script @FolderArgs 2>&1)
         }
         $code = $LASTEXITCODE
     } catch {
-        $lines = @(); $code = 1
+        $all = @(); $code = 1
     } finally {
         $ErrorActionPreference = $prevEap
     }
+    $lines = @($all | Where-Object { -not ($_ -is [System.Management.Automation.ErrorRecord]) } | ForEach-Object { "$_" })
+    $errors = @($all | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] } | ForEach-Object { "$($_.Exception.Message)" } | Where-Object { $_ })
+    if ($script:LogFile -and $errors.Count) { $errors | Add-Content -Path $script:LogFile }
+    if ($code -ne 0) { foreach ($line in $errors) { Warn2 $line } }
     return ,@($code, $lines)
 }
 
 # Copy-NotebookContent [-Front jupyter|marimo] - the kit's notebooks into their
 # persona folders, as notebook\catalog.json says; one already there is the
-# user's and is never overwritten. Returns persona/file per one added. Twin of
-# notebook_copy_notebooks.
+# user's and is never overwritten, one the kit copied before and the user
+# deleted is not copied again. Returns persona/file per one added; the exit
+# code is left in $script:NotebookCopyCode (non-zero when some could not be
+# copied - each is warned about). Twin of notebook_copy_notebooks.
 function Copy-NotebookContent {
     param([ValidateSet("jupyter", "marimo")][string]$Front = "jupyter")
-    New-Item -ItemType Directory -Force -Path $script:NotebookDir | Out-Null
+    try {
+        New-Item -ItemType Directory -Force -Path $script:NotebookDir -ErrorAction Stop | Out-Null
+    } catch {
+        Warn2 "The notebooks folder $($script:NotebookDir) could not be created"
+        $script:NotebookCopyCode = 1
+        return @()
+    }
     $result = Invoke-NotebookFolders "copy" $Front (Get-ExakitRepoRoot) $script:NotebookDir
+    $script:NotebookCopyCode = $result[0]
     return @($result[1] | Where-Object { $_ })
+}
+
+# Write-NotebookCopied - copy, then say what came: one line for the new ones,
+# one warning when some could not be copied. Twin of _notebook_report_copied.
+function Write-NotebookCopied {
+    param([Parameter(Mandatory)][string]$Folder, [ValidateSet("jupyter", "marimo")][string]$Front = "jupyter")
+    $added = @(Copy-NotebookContent -Front $Front)
+    if ($added.Count) { Ok "New notebooks in $($Folder): $($added -join ' ')" }
+    if ($script:NotebookCopyCode -ne 0) { Warn2 "Some of the kit's notebooks could not be copied into $Folder (named above)." }
 }
 
 function Register-NotebookKernel {
@@ -233,6 +288,7 @@ function Confirm-NotebookJupyter {
             $script:ExakitActiveLabel = "Installing JupyterLab"
             if ((Invoke-ExakitLogged $uv "pip" "install" "--python" (Get-NotebookVenvPython) $script:NotebookJupyterLab) -eq 0) {
                 Set-ExakitManifestValue "components.notebook.jupyter" "kit"
+                Add-NotebookFrontEnd "jupyterlab"
                 Ok "JupyterLab installed into the kit's notebook environment"
                 return $true
             }
@@ -251,13 +307,61 @@ function Test-NotebookSkipped {
     return (@("skip", "no", "0", "false", "none") -contains "$Value".ToLower())
 }
 
-# Get-NotebookFrontEnds - which notebook tools, as one checklist with all three
-# ticked: jupyterlab, marimo, positron (or none). EXAKIT_NOTEBOOK_FRONTENDS
-# answers it; EXAKIT_NOTEBOOK_JUPYTER / EXAKIT_NOTEBOOK_MARIMO=skip leave one
-# out; without a console the ticks stand. Twin of notebook_choose_front_ends.
+# ConvertTo-NotebookFrontEnds - a list of notebook tools made canonical:
+# jupyterlab (jupyter is the same), marimo, positron, or none; any case,
+# separated by commas or any whitespace. An unknown name is warned about
+# (naming -Source) and dropped; "" when no known name is left. Twin of
+# _notebook_front_ends_given.
+function ConvertTo-NotebookFrontEnds {
+    param([string]$Value, [string]$Source = "EXAKIT_NOTEBOOK_FRONTENDS", [switch]$Quiet)
+    $j = $false; $m = $false; $p = $false; $none = $false
+    foreach ($token in @("$Value".ToLower() -split '[,;\s]+')) {
+        if (-not $token) { continue }
+        switch -CaseSensitive ($token) {
+            "jupyterlab" { $j = $true }
+            "jupyter" { $j = $true }
+            "marimo" { $m = $true }
+            "positron" { $p = $true }
+            "none" { $none = $true }
+            default { if (-not $Quiet) { Warn2 "$($Source): '$token' is not a notebook tool (jupyterlab, marimo, positron or none) - ignored" } }
+        }
+    }
+    $out = @()
+    if ($j) { $out += "jupyterlab" }
+    if ($m) { $out += "marimo" }
+    if ($p) { $out += "positron" }
+    if ($out.Count -eq 0 -and $none) { return "none" }
+    return ($out -join ",")
+}
+
+# Add-NotebookFrontEnd - a tool added after the install (exakit notebook
+# --setup | --marimo | --positron) joins the recorded choice, so an update
+# keeps it. Twin of _notebook_front_end_add.
+function Add-NotebookFrontEnd {
+    param([Parameter(Mandatory)][string]$Name)
+    $now = Get-ExakitManifestValue "components.notebook.front_ends"
+    if (-not $now) { return }
+    if ($now -eq "none") { $now = "" }
+    Set-ExakitManifestValue "components.notebook.front_ends" (ConvertTo-NotebookFrontEnds "$now,$Name" -Quiet)
+}
+
+# Get-NotebookFrontEnds - which notebook tools: jupyterlab, marimo, positron
+# (or none). EXAKIT_NOTEBOOK_FRONTENDS answers it; else a reinstall or an
+# update keeps the recorded choice; else (the first install) one checklist with
+# all three ticked, where EXAKIT_NOTEBOOK_JUPYTER / EXAKIT_NOTEBOOK_MARIMO=skip
+# leave one out and without a console the ticks stand. Twin of
+# notebook_choose_front_ends.
 function Get-NotebookFrontEnds {
-    $given = ("$env:EXAKIT_NOTEBOOK_FRONTENDS".ToLower() -replace '\s', '')
-    if ($given) { return $given }
+    if ($env:EXAKIT_NOTEBOOK_FRONTENDS) {
+        $given = ConvertTo-NotebookFrontEnds $env:EXAKIT_NOTEBOOK_FRONTENDS
+        if ($given) { return $given }
+        Warn2 "EXAKIT_NOTEBOOK_FRONTENDS names no notebook tool, so it is not used"
+    }
+    $recorded = Get-ExakitManifestValue "components.notebook.front_ends"
+    if ($recorded) {
+        $kept = ConvertTo-NotebookFrontEnds "$recorded" -Quiet
+        if ($kept) { return $kept }
+    }
     $keys = @("jupyterlab", "marimo", "positron")
     $defaults = @()
     if (-not (Test-NotebookSkipped $env:EXAKIT_NOTEBOOK_JUPYTER)) { $defaults += 1 }
@@ -315,13 +419,121 @@ function Install-NotebookMarimo {
     if (-not (Test-Path (Get-NotebookMarimoCommand))) { return $false }
     [void](Copy-NotebookContent -Front marimo)
     Set-ExakitManifestValue "components.notebook.marimo" "kit"
+    Add-NotebookFrontEnd "marimo"
     return $true
 }
+
+# --- the servers: pid files, starting, waiting, stopping, logging in --------------
+
+# Get-NotebookProcessCommandLine - the command line of a process, "" when it
+# cannot be read. Win32_Process on Windows; ps where there is no CIM (pwsh on
+# macOS or Linux, where the tests run).
+function Get-NotebookProcessCommandLine {
+    param([Parameter(Mandatory)][int]$Id)
+    if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) {
+        try {
+            $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$Id" -ErrorAction Stop
+            if ($proc) { return "$($proc.CommandLine)" }
+            return ""
+        } catch { }
+    }
+    $prevEap = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $line = & ps -p $Id -o command= 2>$null
+        if ($LASTEXITCODE -eq 0) { return ("$line").Trim() }
+    } catch { } finally { $ErrorActionPreference = $prevEap }
+    return ""
+}
+
+# Test-NotebookProcessOurs - the process is alive AND its command line matches
+# -Pattern (a -like pattern), so it is still the server the kit started. A pid
+# file outlives its process and the number goes to someone else; that program
+# is never reported as ours, waited for, or stopped. Twin of _notebook_proc_ours.
+function Test-NotebookProcessOurs {
+    param([string]$PidText, [Parameter(Mandatory)][string]$Pattern)
+    if ("$PidText" -notmatch '^\d{1,9}$') { return $false }
+    if (-not (Get-Process -Id ([int]$PidText) -ErrorAction SilentlyContinue)) { return $false }
+    return ((Get-NotebookProcessCommandLine -Id ([int]$PidText)) -like $Pattern)
+}
+
+# Get-NotebookLivePid - the pid in the file while it is still ours; otherwise
+# the file is stale: removed, and $null returned. Twin of _notebook_live_pid.
+function Get-NotebookLivePid {
+    param([Parameter(Mandatory)][string]$PidFile, [Parameter(Mandatory)][string]$Pattern)
+    $pidText = ""
+    if (Test-Path $PidFile) { $pidText = "$(Get-Content $PidFile -ErrorAction SilentlyContinue | Select-Object -First 1)".Trim() }
+    if (Test-NotebookProcessOurs -PidText $pidText -Pattern $Pattern) { return [int]$pidText }
+    Remove-Item -Force -ErrorAction SilentlyContinue $PidFile
+    return $null
+}
+
+# Wait-NotebookUp - wait until the server answers. Gives up at once when its
+# process is gone, and after EXAKIT_NOTEBOOK_START_TIMEOUT seconds of wall time
+# (not attempts: a port that accepts but never answers makes each probe slow).
+# Twin of _notebook_wait_up.
+function Wait-NotebookUp {
+    param([Parameter(Mandatory)][scriptblock]$Answers, [Parameter(Mandatory)][string]$Port,
+          [Parameter(Mandatory)][string]$PidFile, [Parameter(Mandatory)][string]$Pattern,
+          [Parameter(Mandatory)][string]$Label, [Parameter(Mandatory)][string]$Log)
+    $clock = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($true) {
+        if (& $Answers $Port) { return $true }
+        if ($null -eq (Get-NotebookLivePid -PidFile $PidFile -Pattern $Pattern)) {
+            Warn2 "$Label stopped while it was starting - see $Log"
+            return $false
+        }
+        if ($clock.Elapsed.TotalSeconds -ge $script:NotebookStartTimeout) { break }
+        Start-Sleep -Seconds 1
+    }
+    Warn2 "$Label did not answer within $($script:NotebookStartTimeout)s - see $Log"
+    return $false
+}
+
+# Stop-NotebookProcess - the process and its children: taskkill /T on Windows,
+# Stop-Process elsewhere (the tests).
+function Stop-NotebookProcess {
+    param([Parameter(Mandatory)][int]$Id)
+    $prevEap = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        if (Get-Command taskkill -ErrorAction SilentlyContinue) {
+            & taskkill /PID $Id /T /F 2>$null | Out-Null
+        } else {
+            Stop-Process -Id $Id -Force -ErrorAction SilentlyContinue
+        }
+    } catch { } finally { $ErrorActionPreference = $prevEap }
+}
+
+# Open-NotebookLoggedIn - the browser opens a short HTML file that forwards to
+# the address with its token, as Jupyter does: a token on Start-Process's
+# command line is readable by every process on the machine. The file sits in
+# the notebook home, readable by the user only, and goes when the server
+# stops. $false when no browser could be opened. Twin of
+# _notebook_open_logged_in.
+function Open-NotebookLoggedIn {
+    param([Parameter(Mandatory)][string]$Front, [Parameter(Mandatory)][string]$Url)
+    if ($Url -match '["<>]') { return $false }
+    $file = Get-NotebookOpenFile $Front
+    $href = $Url.Replace("&", "&amp;")
+    try {
+        New-Item -ItemType Directory -Force -Path $script:NotebookHome | Out-Null
+        Remove-Item -Force -ErrorAction SilentlyContinue $file
+        [System.IO.File]::WriteAllText($file, "<!DOCTYPE html>`n<html><head><meta charset=`"utf-8`"><meta http-equiv=`"refresh`" content=`"0;url=$href`">`n<title>Opening the notebooks</title></head>`n<body><p><a href=`"$href`">Open the notebooks</a></p></body></html>`n")
+        Protect-ExakitFile $file
+        Start-Process -FilePath $file | Out-Null
+        return $true
+    } catch {
+        return $false
+    }
+}
+
+# --- Marimo on demand --------------------------------------------------------------
 
 function Test-NotebookMarimoAnswers {
     param([string]$Port)
     try {
-        [void](Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 3)
+        [void](Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/health" -TimeoutSec 2)
         return $true
     } catch {
         $response = $_.Exception.Response
@@ -329,6 +541,8 @@ function Test-NotebookMarimoAnswers {
     }
 }
 
+# Get-NotebookMarimoPort - where Marimo starts next: EXAKIT_MARIMO_PORT, else
+# the recorded port, else the default.
 function Get-NotebookMarimoPort {
     if ($env:EXAKIT_MARIMO_PORT) { return $env:EXAKIT_MARIMO_PORT }
     $recorded = Get-ExakitManifestValue "components.notebook.marimo_port"
@@ -336,14 +550,20 @@ function Get-NotebookMarimoPort {
     return $script:NotebookMarimoPort
 }
 
+# Get-NotebookMarimoRunningPort - where the Marimo the kit started serves: the
+# port recorded when it started.
+function Get-NotebookMarimoRunningPort {
+    $recorded = Get-ExakitManifestValue "components.notebook.marimo_port"
+    if ($recorded) { return "$recorded" }
+    return $script:NotebookMarimoPort
+}
+
 # Get-NotebookMarimoState - running|starting|stopped|not installed. Twin of
 # notebook_marimo_state.
 function Get-NotebookMarimoState {
     if (-not (Test-Path (Get-NotebookMarimoCommand))) { return "not installed" }
-    $pidFile = Get-NotebookMarimoPidFile
-    $pidText = if (Test-Path $pidFile) { (Get-Content $pidFile -ErrorAction SilentlyContinue | Select-Object -First 1) } else { "" }
-    if ($pidText -and (Get-Process -Id ([int]$pidText) -ErrorAction SilentlyContinue)) {
-        if (Test-NotebookMarimoAnswers (Get-NotebookMarimoPort)) { return "running" }
+    if ($null -ne (Get-NotebookLivePid -PidFile (Get-NotebookMarimoPidFile) -Pattern $script:NotebookMarimoMatch)) {
+        if (Test-NotebookMarimoAnswers (Get-NotebookMarimoRunningPort)) { return "running" }
         return "starting"
     }
     return "stopped"
@@ -365,35 +585,31 @@ function Start-NotebookMarimo {
     foreach ($folder in @($dir, $script:NotebookHome, (Split-Path -Parent $log))) { New-Item -ItemType Directory -Force -Path $folder | Out-Null }
     $wrapper = Join-Path (Join-Path (Join-Path (Get-ExakitRepoRoot) "notebook") "kit") "marimo_wrapper.py"
     $proc = Start-Process -FilePath (Get-NotebookVenvPython) -WorkingDirectory $dir -WindowStyle Hidden -PassThru `
-        -RedirectStandardOutput $log -RedirectStandardError "$log.err" `
+        -RedirectStandardOutput $log -RedirectStandardError (Get-NotebookMarimoErrFile) `
         -ArgumentList @("`"$wrapper`"", "`"$token`"", "`"$(Get-NotebookMarimoCommand)`"", "edit", "`"$dir`"", "--headless",
                         "--host", "127.0.0.1", "--port", $Port, "--token-password-file", "`"$token`"", "--skip-update-check")
     Set-Content -Path (Get-NotebookMarimoPidFile) -Value $proc.Id -Encoding Ascii
     Set-ExakitManifestValue "components.notebook.marimo_port" $Port
-    for ($i = 0; $i -lt 60; $i++) {
-        if (Test-NotebookMarimoAnswers $Port) { return $true }
-        Start-Sleep -Seconds 1
-    }
-    Warn2 "Marimo did not answer within 60s - see $log"
-    return $false
+    return (Wait-NotebookUp -Answers ${function:Test-NotebookMarimoAnswers} -Port $Port -PidFile (Get-NotebookMarimoPidFile) `
+        -Pattern $script:NotebookMarimoMatch -Label "Marimo" -Log $log)
 }
 
+# Stop-NotebookMarimo [-Quiet] - stop the Marimo the kit started; a stale pid
+# file is only removed. Twin of notebook_marimo_stop.
 function Stop-NotebookMarimo {
     param([switch]$Quiet)
-    $pidFile = Get-NotebookMarimoPidFile
-    $pidText = if (Test-Path $pidFile) { (Get-Content $pidFile -ErrorAction SilentlyContinue | Select-Object -First 1) } else { "" }
-    if ($pidText -and (Get-Process -Id ([int]$pidText) -ErrorAction SilentlyContinue)) {
-        $prevEap = $ErrorActionPreference
-        try {
-            $ErrorActionPreference = "Continue"
-            & taskkill /PID $pidText /T /F 2>$null | Out-Null
-        } finally { $ErrorActionPreference = $prevEap }
+    $live = Get-NotebookLivePid -PidFile (Get-NotebookMarimoPidFile) -Pattern $script:NotebookMarimoMatch
+    if ($null -ne $live) {
+        Stop-NotebookProcess -Id $live
         Ok "Marimo stopped (your notebooks are saved in their folder)"
     } elseif (-not $Quiet) {
         Info "Marimo is not running"
     }
-    Remove-Item -Force -ErrorAction SilentlyContinue $pidFile
+    Remove-Item -Force -ErrorAction SilentlyContinue (Get-NotebookMarimoPidFile)
+    Remove-Item -Force -ErrorAction SilentlyContinue (Get-NotebookOpenFile "marimo")
 }
+
+# --- Positron ------------------------------------------------------------------------
 
 # Find-NotebookPositron - Positron's CLI on PATH, else the installed app; $null
 # when it is not there. Twin of notebook_find_positron.
@@ -409,8 +625,10 @@ function Find-NotebookPositron {
 }
 
 # Set-NotebookPositronFolder - the notebooks folder as a Positron workspace
-# whose interpreter is the kit's notebook Python; $false (the file left alone)
-# when its settings file is not valid JSON. Twin of notebook_prepare_positron.
+# whose interpreter is the kit's notebook Python. VS Code's JSON with comments
+# is read; a file with comments is never rewritten, so $false (the file left
+# alone, the reason warned) unless it already names the kit's Python. Twin of
+# notebook_prepare_positron.
 function Set-NotebookPositronFolder {
     $result = Invoke-NotebookFolders "positron" $script:NotebookDir (Get-NotebookVenvPython) $script:NotebookVenv
     return ($result[0] -eq 0)
@@ -419,10 +637,7 @@ function Set-NotebookPositronFolder {
 # Write-NotebookPositronNote - configure the folder for Positron and say what
 # came of it. Twin of notebook_positron_note.
 function Write-NotebookPositronNote {
-    if (-not (Set-NotebookPositronFolder)) {
-        Warn2 "$(Join-Path $script:NotebookDir '.vscode\settings.json') is not valid JSON, so it was left alone - choose the interpreter $(Get-NotebookVenvPython) in Positron yourself"
-        return
-    }
+    if (-not (Set-NotebookPositronFolder)) { return }
     $found = Find-NotebookPositron
     if ($found) {
         Ok "Positron ($found) opens the notebooks with the kit's Python: exakit notebook --positron"
@@ -431,13 +646,31 @@ function Write-NotebookPositronNote {
     }
 }
 
+# Get-NotebookSpecs - the connector with its extras, the companion packages,
+# the front ends the kit installed into the venv (so one resolution keeps
+# them), and the two packages the kit carries. Twin of _notebook_specs.
 function Get-NotebookSpecs {
     $root = Get-ExakitRepoRoot
     $specs = @("$($script:NotebookPackage)[$($script:NotebookExtras)]==$($script:NotebookVersion)")
     $specs += $script:NotebookPackages
+    if (Test-Path (Join-Path (Join-Path $script:NotebookVenv "Scripts") "jupyter-lab.exe")) { $specs += $script:NotebookJupyterLab }
+    if (Test-Path (Get-NotebookMarimoCommand)) { $specs += $script:NotebookMarimoPackage }
     $specs += (Join-Path (Join-Path $root "notebook") "package")
     $specs += (Join-Path (Join-Path $root "packages") "exasol-mlflow")
     return $specs
+}
+
+# Sync-NotebookPackages - the whole set into the venv in one resolution, with
+# the kit's own two packages REINSTALLED from this kit copy, so a new notebook
+# never runs against helpers an older kit installed. $true on success. Twin of
+# notebook_sync_packages.
+function Sync-NotebookPackages {
+    $uv = Get-NotebookUv
+    if (-not $uv) { return $false }
+    $pipArgs = @("pip", "install", "--python", (Get-NotebookVenvPython))
+    foreach ($own in $script:NotebookOwnPackages) { $pipArgs += @("--reinstall-package", $own) }
+    $pipArgs += (Get-NotebookSpecs)
+    return ((Invoke-ExakitLogged $uv @pipArgs) -eq 0)
 }
 
 function Install-Notebook {
@@ -453,6 +686,8 @@ function Install-Notebook {
     $current = Get-NotebookPackageVersion
     if ($current -and $current -eq $script:NotebookVersion -and $env:EXAKIT_FORCE_COMPONENT_INSTALL -ne "1") {
         Ok "notebook $current already installed: $script:NotebookVenv"
+        $script:ExakitActiveLabel = "Refreshing the kit's notebook helpers"
+        if (-not (Sync-NotebookPackages)) { Warn2 "The kit's notebook helpers could not be refreshed (see the log) - retry with: exakit update notebook" }
     } else {
         $script:ExakitActiveLabel = "Installing the notebook connector $($script:NotebookVersion)"
         Info "Installing the notebook connector $($script:NotebookVersion) (about 1 GB: it brings PyTorch for its transformer features)"
@@ -461,8 +696,7 @@ function Install-Notebook {
                 return (Write-NotebookNotInstalled "the virtual environment at $script:NotebookVenv could not be created (see log)")
             }
         }
-        $args = @("pip", "install", "--python", $python) + (Get-NotebookSpecs)
-        if ((Invoke-ExakitLogged $uv @args) -ne 0) {
+        if (-not (Sync-NotebookPackages)) {
             return (Write-NotebookNotInstalled "installing $($script:NotebookPackage)==$($script:NotebookVersion) and its companions failed (see log)")
         }
         if (-not (Get-NotebookPackageVersion)) {
@@ -470,8 +704,7 @@ function Install-Notebook {
         }
         Ok "Notebook connector installed: $script:NotebookVenv"
     }
-    $added = @(Copy-NotebookContent)
-    if ($added.Count) { Ok "Notebooks in $(Join-Path $script:NotebookDir 'starter-kit-notebooks'): $($added -join ', ')" }
+    Write-NotebookCopied -Folder (Join-Path $script:NotebookDir "starter-kit-notebooks")
     if (-not (Register-NotebookKernel)) {
         return (Write-NotebookNotInstalled "the Jupyter kernel could not be registered (see log)")
     }
@@ -524,12 +757,18 @@ function Update-Notebook {
     if (-not $available) { Fail "Could not resolve the advertised notebook connector version." }
     $current = Get-NotebookInstalledVersion
     if ($current -and $current -eq $available) {
+        # The connector pin stands still, but this kit copy may carry new
+        # notebooks, new helpers or a new companion package: bring the venv in
+        # line with it before the notebooks are copied.
+        $script:NotebookVersion = $current
+        $script:ExakitActiveLabel = "Refreshing the kit's notebook helpers"
+        if (-not (Sync-NotebookPackages)) { Warn2 "The kit's notebook helpers could not be refreshed (see the log) - retry with: exakit update notebook" }
         [void](Copy-NotebookContent)
         if (Test-Path (Get-NotebookMarimoCommand)) { [void](Copy-NotebookContent -Front marimo) }
         Set-ExakitManifestValue "components.notebook.master_file" (Join-Path $script:CredsDir $script:NotebookMasterCred)
         [void](Register-NotebookKernel)
         Test-Notebook
-        Ok "notebook is already current ($current)"
+        Ok "notebook is already current ($current); the kit's notebook helpers were refreshed"
         return
     }
     Info "Updating notebook $(if ($current) { $current } else { 'not installed' }) -> $available"
@@ -552,19 +791,25 @@ function Get-NotebookSummary { return "notebooks: exakit notebook" }
 function Test-NotebookApiAnswers {
     param([string]$Port)
     try {
-        $answer = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/api" -TimeoutSec 3
+        $answer = Invoke-WebRequest -UseBasicParsing -Uri "http://127.0.0.1:$Port/api" -TimeoutSec 2
         return ("$($answer.Content)" -like '*"version"*')
     } catch { return $false }
 }
 
-# Get-NotebookServerState - running|starting|stopped, from the pid the kit
-# recorded and the API on the recorded port. Twin of notebook_server_state.
-function Get-NotebookServerState {
-    $pidText = if (Test-Path (Get-NotebookPidFile)) { (Get-Content (Get-NotebookPidFile) -ErrorAction SilentlyContinue | Select-Object -First 1) } else { "" }
+# Get-NotebookServerPort - where the JupyterLab the kit started serves: the
+# port recorded when it started.
+function Get-NotebookServerPort {
     $port = Get-ExakitManifestValue "components.notebook.port"
-    if (-not $port) { $port = $script:NotebookPort }
-    if ($pidText -and (Get-Process -Id ([int]$pidText) -ErrorAction SilentlyContinue)) {
-        if (Test-NotebookApiAnswers $port) { return "running" }
+    if ($port) { return "$port" }
+    return $script:NotebookPort
+}
+
+# Get-NotebookServerState - running|starting|stopped, from the pid the kit
+# recorded (its process still the JupyterLab the kit started) and the API on
+# the recorded port. Twin of notebook_server_state.
+function Get-NotebookServerState {
+    if ($null -ne (Get-NotebookLivePid -PidFile (Get-NotebookPidFile) -Pattern $script:NotebookJupyterMatch)) {
+        if (Test-NotebookApiAnswers (Get-NotebookServerPort)) { return "running" }
         return "starting"
     }
     return "stopped"
@@ -582,46 +827,43 @@ function Start-NotebookServer {
         return $false
     }
     New-Item -ItemType Directory -Force -Path $script:NotebookHome | Out-Null
+    New-Item -ItemType Directory -Force -Path $script:NotebookDir | Out-Null
     $log = Get-NotebookLogFile
     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $log) | Out-Null
     $saved = $env:JUPYTER_TOKEN
     $env:JUPYTER_TOKEN = Get-NotebookSecret $script:NotebookTokenCred
     try {
         $proc = Start-Process -FilePath $found[1] -WorkingDirectory $script:NotebookDir -WindowStyle Hidden -PassThru `
-            -RedirectStandardOutput $log -RedirectStandardError "$log.err" `
+            -RedirectStandardOutput (Get-NotebookOutFile) -RedirectStandardError $log `
             -ArgumentList @("--no-browser", "--ServerApp.ip=127.0.0.1", "--ServerApp.port=$Port", "--ServerApp.port_retries=0", "--ServerApp.root_dir=`"$($script:NotebookDir)`"")
     } finally {
         $env:JUPYTER_TOKEN = $saved
     }
     Set-Content -Path (Get-NotebookPidFile) -Value $proc.Id -Encoding Ascii
     Set-ExakitManifestValue "components.notebook.port" $Port
-    for ($i = 0; $i -lt 60; $i++) {
-        if (Test-NotebookApiAnswers $Port) { return $true }
-        Start-Sleep -Seconds 1
-    }
-    Warn2 "JupyterLab did not answer within 60s - see $log"
-    return $false
+    return (Wait-NotebookUp -Answers ${function:Test-NotebookApiAnswers} -Port $Port -PidFile (Get-NotebookPidFile) `
+        -Pattern $script:NotebookJupyterMatch -Label "JupyterLab" -Log $log)
 }
 
+# Stop-NotebookServer [-Quiet] - stop the JupyterLab the kit started; a stale
+# pid file is only removed. Twin of notebook_server_stop.
 function Stop-NotebookServer {
-    $pidFile = Get-NotebookPidFile
-    $pidText = if (Test-Path $pidFile) { (Get-Content $pidFile -ErrorAction SilentlyContinue | Select-Object -First 1) } else { "" }
-    if ($pidText -and (Get-Process -Id ([int]$pidText) -ErrorAction SilentlyContinue)) {
-        $prevEap = $ErrorActionPreference
-        try {
-            $ErrorActionPreference = "Continue"
-            & taskkill /PID $pidText /T /F 2>$null | Out-Null
-        } finally { $ErrorActionPreference = $prevEap }
+    param([switch]$Quiet)
+    $live = Get-NotebookLivePid -PidFile (Get-NotebookPidFile) -Pattern $script:NotebookJupyterMatch
+    if ($null -ne $live) {
+        Stop-NotebookProcess -Id $live
         Ok "JupyterLab stopped"
-    } else {
+    } elseif (-not $Quiet) {
         Info "JupyterLab is not running"
     }
-    Remove-Item -Force -ErrorAction SilentlyContinue $pidFile
+    Remove-Item -Force -ErrorAction SilentlyContinue (Get-NotebookPidFile)
+    Remove-Item -Force -ErrorAction SilentlyContinue (Get-NotebookOpenFile "jupyter")
 }
 
 # Invoke-NotebookMarimoCmd - `exakit notebook --marimo`: Marimo installed when
 # the user says yes (EXAKIT_NOTEBOOK_MARIMO=install|skip answers), then started
-# and opened, logged in. Twin of notebook_marimo_cmd.
+# and opened, logged in. $false when it could not be started. Twin of
+# notebook_marimo_cmd.
 function Invoke-NotebookMarimoCmd {
     param([bool]$Setup, [bool]$Browser, [string]$Port)
     if (-not (Test-Path (Get-NotebookMarimoCommand))) {
@@ -629,29 +871,38 @@ function Invoke-NotebookMarimoCmd {
         if (-not $answer) {
             if (Confirm-ExakitPrompt "Marimo is not installed. Install it into the kit's notebook environment" $true) { $answer = "install" } else { $answer = "skip" }
         }
-        if ($answer -ne "install") { Info "Marimo was not installed. Add it any time with: exakit notebook --marimo"; return }
+        if ($answer -ne "install") { Info "Marimo was not installed. Add it any time with: exakit notebook --marimo"; return $true }
         if (-not (Install-NotebookMarimo)) { Fail "Marimo could not be installed - see the log." }
         Ok "Marimo installed into the kit's notebook environment"
     }
     $dir = Join-Path $script:NotebookDir "marimo"
-    $added = @(Copy-NotebookContent -Front marimo)
-    if ($added.Count) { Ok "New notebooks in $($dir): $($added -join ', ')" }
-    if ($Setup) { Ok "Ready: Marimo, with the kit's notebooks in $dir"; return }
-    if (-not $Port) { $Port = Get-NotebookMarimoPort }
-    if ((Get-NotebookMarimoState) -ne "running") {
-        if (-not (Start-NotebookMarimo $Port)) { return }
+    Write-NotebookCopied -Folder $dir -Front marimo
+    if ($Setup) { Ok "Ready: Marimo, with the kit's notebooks in $dir"; return $true }
+    $state = Get-NotebookMarimoState
+    if ($state -eq "stopped") {
+        if (-not $Port) { $Port = Get-NotebookMarimoPort }
+        if (-not (Start-NotebookMarimo $Port)) { return $false }
     } else {
-        $Port = Get-NotebookMarimoPort
+        # Up, or coming up (a second --marimo right after the first): wait for
+        # that one rather than start another over its pid file.
+        $running = Get-NotebookMarimoRunningPort
+        if ($Port -and $Port -ne $running) {
+            Info "Marimo is already running on port $running, so --port $Port is ignored (to move it: exakit notebook --stop --marimo, then exakit notebook --marimo --port $Port)"
+        }
+        $Port = $running
+        if ($state -eq "starting") {
+            if (-not (Wait-NotebookUp -Answers ${function:Test-NotebookMarimoAnswers} -Port $Port -PidFile (Get-NotebookMarimoPidFile) `
+                    -Pattern $script:NotebookMarimoMatch -Label "Marimo" -Log (Get-NotebookMarimoLogFile))) { return $false }
+        }
     }
     Ok "Marimo is running: http://127.0.0.1:$Port/   (stop it with: exakit notebook --stop --marimo)"
     Info "Marimo notebooks connect with: import exakit_nb; conn = exakit_nb.connect()"
     if ($Browser) {
-        try {
-            Start-Process "http://127.0.0.1:$Port/?access_token=$(Get-NotebookSecret $script:NotebookMarimoCred)"
-        } catch {
+        if (-not (Open-NotebookLoggedIn -Front "marimo" -Url "http://127.0.0.1:$Port/?access_token=$(Get-NotebookSecret $script:NotebookMarimoCred)")) {
             Info "Open http://127.0.0.1:$Port/ - the login token is in $(Join-Path $script:CredsDir $script:NotebookMarimoCred)"
         }
     }
+    return $true
 }
 
 # Invoke-NotebookPositronCmd - `exakit notebook --positron`: the notebooks
@@ -659,8 +910,9 @@ function Invoke-NotebookMarimoCmd {
 # installs it. Twin of notebook_positron_cmd.
 function Invoke-NotebookPositronCmd {
     if (-not (Set-NotebookPositronFolder)) {
-        Fail "$(Join-Path $script:NotebookDir '.vscode\settings.json') is not valid JSON, so the kit leaves it alone - choose the interpreter $(Get-NotebookVenvPython) in Positron yourself"
+        Fail "The kit leaves $(Join-Path (Join-Path $script:NotebookDir '.vscode') 'settings.json') alone (see above) - choose the interpreter $(Get-NotebookVenvPython) in Positron yourself"
     }
+    Add-NotebookFrontEnd "positron"
     $found = Find-NotebookPositron
     if ($found) {
         Start-Process -FilePath $found -ArgumentList @("`"$($script:NotebookDir)`"") | Out-Null
@@ -672,13 +924,15 @@ function Invoke-NotebookPositronCmd {
 }
 
 # Invoke-CmdNotebook - `exakit notebook [--marimo|--positron] [--check]
-# [--setup] [--stop] [--no-browser] [--port N]`. Twin of notebook_cmd.
+# [--setup] [--stop] [--no-browser] [--port N]`. Options are matched exactly,
+# case and all, as the shell side does. A server that could not be started
+# makes the command exit 1. Twin of notebook_cmd.
 function Invoke-CmdNotebook {
     param([string[]]$CmdArgs = @())
     $check = $false; $setup = $false; $stop = $false; $browser = $true; $port = ""; $front = ""
     for ($i = 0; $i -lt $CmdArgs.Count; $i++) {
-        switch ($CmdArgs[$i]) {
-            { $_ -eq "--marimo" -or $_ -eq "--positron" } {
+        switch -CaseSensitive ($CmdArgs[$i]) {
+            { $_ -ceq "--marimo" -or $_ -ceq "--positron" } {
                 $wanted = $CmdArgs[$i].Substring(2)
                 if ($front -and $front -ne $wanted) { Fail "Pick one of --marimo and --positron" }
                 $front = $wanted
@@ -689,8 +943,9 @@ function Invoke-CmdNotebook {
             "--no-browser" { $browser = $false }
             "--port" {
                 $i++
-                $value = if ($i -lt $CmdArgs.Count) { $CmdArgs[$i] } else { "" }
-                if ($value -notmatch '^\d+$' -or [int]$value -lt 1024 -or [int]$value -gt 65535) { Fail "--port needs a number between 1024 and 65535" }
+                $value = if ($i -lt $CmdArgs.Count) { "$($CmdArgs[$i])" } else { "" }
+                # Checked as text first: [int] of a long string of digits throws.
+                if ($value -notmatch '^\d{1,5}$' -or [int]$value -lt 1024 -or [int]$value -gt 65535) { Fail "--port needs a number between 1024 and 65535" }
                 $port = $value
             }
             default { Fail "Unknown option for exakit notebook: $($CmdArgs[$i]) (see: exakit help notebook)" }
@@ -704,54 +959,94 @@ function Invoke-CmdNotebook {
         return
     }
     if (-not (Test-ExakitDbReachable)) { Fail "The database is not running. Start it with: exakit start" }
-    if ((Write-NotebookConnection) -eq "changed") { Info "The database connection changed; the notebooks now use the new one" }
+    $connection = Write-NotebookConnection
+    if ($null -eq $connection) { Warn2 "The notebooks' connection could not be refreshed (see the log) - repair with: exakit update notebook" }
+    elseif ($connection -eq "changed") { Info "The database connection changed; the notebooks now use the new one" }
     if (-not (Register-NotebookKernel)) { Warn2 "The kernel could not be registered again (see the log)." }
-    $added = @(Copy-NotebookContent)
-    if ($added.Count) { Ok "New notebooks in $($script:NotebookDir): $($added -join ', ')" }
+    Write-NotebookCopied -Folder (Join-Path $script:NotebookDir "starter-kit-notebooks")
     if ($check) {
         if (-not (Test-NotebookConnected)) { Fail "The notebook connector could not connect to the database. Repair with: exakit update notebook" }
         Ok "Notebooks connect to the database"
         Info "JupyterLab: $(Get-NotebookServerState)   Marimo: $(Get-NotebookMarimoState)   Notebooks: $($script:NotebookDir)"
         return
     }
-    if ($front -eq "marimo") { Invoke-NotebookMarimoCmd -Setup $setup -Browser $browser -Port $port; return }
+    if ($front -eq "marimo") {
+        if (-not (Invoke-NotebookMarimoCmd -Setup $setup -Browser $browser -Port $port)) { $script:PendingExitCode = 1 }
+        return
+    }
     if ($front -eq "positron") { Invoke-NotebookPositronCmd; return }
     if (-not (Confirm-NotebookJupyter)) { return }
     if ($setup) {
+        Add-NotebookFrontEnd "jupyterlab"
         Ok "Ready: $((Find-NotebookJupyter)[1]) with the kernel '$($script:NotebookKernelTitle)'"
         return
     }
-    if (-not $port) { $port = Get-ExakitManifestValue "components.notebook.port" }
-    if (-not $port) { $port = $script:NotebookPort }
-    if ((Get-NotebookServerState) -ne "running") {
-        if (-not (Start-NotebookServer $port)) { return }
+    $state = Get-NotebookServerState
+    if ($state -eq "stopped") {
+        if (-not $port) { $port = Get-NotebookServerPort }
+        if (-not (Start-NotebookServer $port)) { $script:PendingExitCode = 1; return }
+    } else {
+        # One the kit started is up, or coming up (a second `exakit notebook`
+        # right after the first): use it, on the port it was started on, and
+        # never start a second one over its pid file.
+        $running = Get-NotebookServerPort
+        if ($port -and $port -ne $running) {
+            Info "JupyterLab is already running on port $running, so --port $port is ignored (to move it: exakit notebook --stop, then exakit notebook --port $port)"
+        }
+        $port = $running
+        if ($state -eq "starting") {
+            if (-not (Wait-NotebookUp -Answers ${function:Test-NotebookApiAnswers} -Port $port -PidFile (Get-NotebookPidFile) `
+                    -Pattern $script:NotebookJupyterMatch -Label "JupyterLab" -Log (Get-NotebookLogFile))) { $script:PendingExitCode = 1; return }
+        }
     }
     Ok "JupyterLab is running: http://127.0.0.1:$port/lab   (stop it with: exakit notebook --stop)"
     if ($browser) {
-        try {
-            Start-Process "http://127.0.0.1:$port/lab?token=$(Get-NotebookSecret $script:NotebookTokenCred)"
-        } catch {
+        if (-not (Open-NotebookLoggedIn -Front "jupyter" -Url "http://127.0.0.1:$port/lab?token=$(Get-NotebookSecret $script:NotebookTokenCred)")) {
             Info "Open http://127.0.0.1:$port/lab - the login token is in $(Join-Path $script:CredsDir $script:NotebookTokenCred)"
         }
     }
 }
 
-# Uninstall-Notebook - the kernel, the venv, the store and the server go; the
-# notebooks folder and the user's own JupyterLab stay. Twin of
+# Test-NotebookNotebooksGo - does this uninstall delete the notebooks folder?
+# Only a full kit uninstall ($script:ExakitUninstallFull) asked to with
+# EXAKIT_UNINSTALL_NOTEBOOKS=remove, and only for a folder inside the kit home.
+# Twin of _notebook_notebooks_go.
+function Test-NotebookNotebooksGo {
+    if (-not $script:ExakitUninstallFull) { return $false }
+    if ("$env:EXAKIT_UNINSTALL_NOTEBOOKS".ToLower() -ne "remove") { return $false }
+    try {
+        $kitHome = [System.IO.Path]::GetFullPath($script:ExakitHome).TrimEnd('\', '/')
+        $dir = [System.IO.Path]::GetFullPath($script:NotebookDir)
+    } catch { return $false }
+    return $dir.StartsWith($kitHome + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)
+}
+
+# Uninstall-Notebook - the kernel, the venv, the store and the servers go, and
+# the kit's two settings come out of the notebooks folder's
+# .vscode\settings.json; the notebooks folder (with any MLflow store beside
+# the notebooks) and the user's own JupyterLab stay. A full kit uninstall keeps
+# the folder too, unless EXAKIT_UNINSTALL_NOTEBOOKS=remove. Twin of
 # notebook_uninstall.
 function Uninstall-Notebook {
     param([switch]$DryRun)
+    $settings = Join-Path (Join-Path $script:NotebookDir ".vscode") "settings.json"
     foreach ($path in @($script:NotebookVenv, (Get-NotebookStoreFile))) {
         if ($DryRun -and (Test-Path $path)) { Info "  will remove: $path" }
     }
     if ($DryRun) {
-        Info "  your notebooks stay in $($script:NotebookDir)"
+        if (Test-Path $settings) { Info "  will remove: the kit's interpreter settings from $settings" }
+        if (Test-NotebookNotebooksGo) { Info "  will remove: your notebooks in $($script:NotebookDir) (EXAKIT_UNINSTALL_NOTEBOOKS=remove)" }
+        elseif (Test-Path $script:NotebookDir) { Info "  your notebooks stay in $($script:NotebookDir)" }
         return $true
     }
-    Stop-NotebookServer | Out-Null
+    Stop-NotebookServer -Quiet | Out-Null
     Stop-NotebookMarimo -Quiet | Out-Null
     Unregister-NotebookKernel
-    foreach ($path in @($script:NotebookVenv, (Get-NotebookStoreFile), (Get-NotebookPidFile), (Get-NotebookMarimoPidFile))) {
+    if (Test-Path $settings) {
+        [void](Invoke-NotebookFolders "positron-remove" $script:NotebookDir (Get-NotebookVenvPython) $script:NotebookVenv)
+    }
+    foreach ($path in @($script:NotebookVenv, (Get-NotebookStoreFile), (Get-NotebookPidFile), (Get-NotebookMarimoPidFile),
+                        (Get-NotebookOpenFile "jupyter"), (Get-NotebookOpenFile "marimo"))) {
         Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $path
     }
     if ((Test-Path $script:NotebookHome) -and -not @(Get-ChildItem -Force -Path $script:NotebookHome -ErrorAction SilentlyContinue).Count) {
@@ -762,7 +1057,8 @@ function Uninstall-Notebook {
     }
     Remove-ExakitManifestValue "components.notebook"
     Remove-ExakitManifestValue "desired.notebook"
-    Info "Your notebooks stay in $($script:NotebookDir)"
+    if (Test-NotebookNotebooksGo) { Info "Your notebooks in $($script:NotebookDir) go with the kit home (EXAKIT_UNINSTALL_NOTEBOOKS=remove)" }
+    elseif (Test-Path $script:NotebookDir) { Info "Your notebooks stay in $($script:NotebookDir)" }
     OkStep "notebook removed - reinstall any time with: exakit marketplace notebook"
     return $true
 }

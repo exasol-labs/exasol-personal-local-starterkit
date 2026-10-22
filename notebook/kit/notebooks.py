@@ -3,12 +3,20 @@ Standard library only; one file for setup/lib/notebook.sh and notebook.ps1, so t
 
     python notebooks.py copy <jupyter|marimo> <kit_root> <notebooks_dir>   prints persona/file for each one added
     python notebooks.py positron <notebooks_dir> <python> <venv>           .vscode/settings.json names the kit's Python
+    python notebooks.py positron-remove <notebooks_dir> <python> <venv>    takes the kit's two settings out again
     python notebooks.py list <kit_root>                                    step|persona|title|jupyter file|marimo file
 
 What goes where is notebook/catalog.json: the Jupyter notebooks into <notebooks_dir>/starter-kit-notebooks/<persona>/
 with a README naming the end-to-end path through them, the Marimo ones into <notebooks_dir>/marimo/<persona>/. A file
-already there is the user's and is never overwritten; neither is the README. Exit 2 for bad input, 3 when the Positron
-settings file is not valid JSON (it is left alone).
+already there is the user's and is never overwritten; neither is the README. What the kit copied is recorded in
+.kit-copied in that folder, so a notebook the user deleted stays deleted. A notebook that cannot be copied (a file
+where its persona folder should be, a folder that is read-only) is named on stderr, the rest are still copied, and the
+exit status is 1.
+
+The Positron settings file is read as VS Code writes it (JSON with // and /* */ comments and trailing commas). One
+with comments is never rewritten, because rewriting would drop them: when it does not already name the kit's Python,
+the exit status is 3 and stderr says which two settings to add by hand. Exit 2 for bad input, 3 when the settings file
+is not valid JSON either (it is left alone).
 """
 
 from __future__ import annotations
@@ -17,6 +25,14 @@ import json
 import shutil
 import sys
 from pathlib import Path
+
+STATE = ".kit-copied"                      # one persona/file per line: what the kit has copied into this folder
+INTERPRETER = "python.defaultInterpreterPath"
+INCLUDE = "python.interpreters.include"
+
+
+class SettingsError(ValueError):
+    """The Positron settings file is left alone; the message says why and what to do instead."""
 
 
 def catalog(kit: Path) -> dict:
@@ -34,25 +50,54 @@ def persona_title(kit: Path, persona: str) -> str:
         return persona
 
 
-def copy(front: str, kit: Path, notebooks_dir: Path) -> list[str]:
-    """The kit's notebooks for a front end into their persona folders; the ones added, as persona/file."""
+def _copied_before(base: Path) -> set[str]:
+    try:
+        return {line.strip() for line in (base / STATE).read_text(encoding="utf-8").splitlines() if line.strip()}
+    except OSError:
+        return set()
+
+
+def copy(front: str, kit: Path, notebooks_dir: Path) -> tuple[list[str], list[str]]:
+    """The kit's notebooks for a front end into their persona folders: (the ones added as persona/file, the problems).
+    One already there is the user's; one the kit copied before and the user deleted is not brought back."""
     doc = catalog(kit)
     source = kit / doc["sources"][front]
     base = notebooks_dir / doc["folders"][front]
-    added = []
+    before = _copied_before(base)
+    added, problems, seen = [], [], set(before)
     for entry in doc["notebooks"]:
         name = entry.get(front)
         if not name or not (source / name).is_file():
             continue
+        key = f"{entry['persona']}/{name}"
         target = base / entry["persona"] / name
-        if target.exists():
+        if target.exists() or target.is_symlink():
+            seen.add(key)                                # there (the kit's earlier copy, or the user's own): theirs
             continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(source / name, target)
-        added.append(f"{entry['persona']}/{name}")
+        if key in before:
+            continue                                     # copied once, then deleted by the user: it stays deleted
+        if target.parent.exists() and not target.parent.is_dir():
+            problems.append(f"{key}: {target.parent} is a file where its folder should be")
+            continue
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source / name, target)
+        except OSError as err:
+            problems.append(f"{key}: {err.strerror or err}")
+            continue
+        added.append(key)
+        seen.add(key)
     if front == "jupyter":                           # Marimo would list a README as a notebook of its own
-        write_readme(kit, doc, base)
-    return added
+        try:
+            write_readme(kit, doc, base)
+        except OSError as err:
+            problems.append(f"README.md: {err.strerror or err}")
+    if seen != before and base.is_dir():
+        try:
+            (base / STATE).write_text("".join(f"{key}\n" for key in sorted(seen)), encoding="utf-8")
+        except OSError as err:
+            problems.append(f"{STATE}: {err.strerror or err}")
+    return added, problems
 
 
 def write_readme(kit: Path, doc: dict, folder: Path) -> None:
@@ -67,38 +112,167 @@ def write_readme(kit: Path, doc: dict, folder: Path) -> None:
             lines.append(f"{entry['step']}. `{entry['persona']}/{entry['jupyter']}` ({who}) - {entry['title']}: {entry['summary']}")
             lines.append(f"   Needs: {entry['needs']}")
     lines += ["", "Every notebook connects with `import exakit_nb; conn = exakit_nb.connect()` - no host, user or password.",
-              "These files are yours: the kit never overwrites them. Your own notebooks can go anywhere in the notebooks folder.",
+              "These files are yours: the kit never overwrites them, and one you delete is not copied again.",
+              "Your own notebooks can go anywhere in the notebooks folder.",
               "", "Also: `exakit notebook --marimo` (the same notebooks in Marimo), `exakit notebook --positron` (this folder in",
               "Positron, with the kit's Python).", ""]
     readme.write_text("\n".join(lines), encoding="utf-8")
 
 
+def _strip_jsonc(text: str) -> tuple[str, bool]:
+    """JSON from VS Code's JSONC: comments outside strings and trailing commas removed. Returns (json, had comments)."""
+    out, i, n, comments = [], 0, len(text), False
+    while i < n:
+        ch = text[i]
+        if ch == '"':                                    # a string, copied as it is, escapes included
+            j = i + 1
+            while j < n and text[j] != '"':
+                j += 2 if text[j] == "\\" else 1
+            out.append(text[i:j + 1])
+            i = j + 1
+        elif text.startswith("//", i):
+            comments = True
+            while i < n and text[i] not in "\r\n":
+                i += 1
+        elif text.startswith("/*", i):
+            comments = True
+            end = text.find("*/", i + 2)
+            if end < 0:
+                raise SettingsError("has a /* comment that is never closed")
+            out.append(" ")
+            i = end + 2
+        elif ch == ",":                                  # a trailing comma: the next thing that is not blank closes
+            j = i + 1
+            while j < n:
+                if text[j].isspace():
+                    j += 1
+                elif text.startswith("//", j):
+                    while j < n and text[j] not in "\r\n":
+                        j += 1
+                elif text.startswith("/*", j):
+                    end = text.find("*/", j + 2)
+                    j = n if end < 0 else end + 2
+                else:
+                    break
+            if j >= n or text[j] not in "}]":
+                out.append(ch)
+            i += 1
+        else:
+            out.append(ch)
+            i += 1
+    return "".join(out), comments
+
+
+def _read_settings(path: Path) -> tuple[dict, bool]:
+    """The settings file as a dict ({} when it is missing or blank) and whether it holds comments."""
+    if not path.is_file():
+        return {}, False
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeDecodeError) as err:
+        raise SettingsError(f"cannot be read ({err})") from err
+    if not text.strip():
+        return {}, False
+    plain, comments = _strip_jsonc(text)
+    try:
+        doc = json.loads(plain) if plain.strip() else {}
+    except ValueError as err:
+        raise SettingsError(f"is not valid JSON ({err})") from err
+    if not isinstance(doc, dict):
+        raise SettingsError("is not a JSON object")
+    return doc, comments
+
+
+def _includes(value) -> list[str]:
+    """python.interpreters.include as a list of paths, whatever shape the file gave it."""
+    if isinstance(value, str):
+        return [value] if value else []
+    if isinstance(value, list):
+        return [item for item in value if isinstance(item, str) and item]
+    return []
+
+
 def positron(notebooks_dir: Path, python: str, venv: str) -> Path:
     """The notebooks folder as a Positron workspace whose interpreter is the kit's notebook Python; the file's other
-    settings stay. ValueError when the file is not valid JSON."""
+    settings stay. SettingsError, the file untouched, when it cannot be rewritten safely."""
     path = notebooks_dir / ".vscode" / "settings.json"
-    doc: dict = {}
-    if path.is_file():
-        doc = json.loads(path.read_text(encoding="utf-8") or "{}")
-        if not isinstance(doc, dict):
-            raise ValueError(f"{path} is not a JSON object")
-    doc["python.defaultInterpreterPath"] = python
-    doc["python.interpreters.include"] = sorted({*doc.get("python.interpreters.include", []), venv})
+    doc, comments = _read_settings(path)
+    includes = _includes(doc.get(INCLUDE))
+    if doc.get(INTERPRETER) == python and venv in includes and isinstance(doc.get(INCLUDE), list):
+        return path                                      # already set: nothing to write
+    if comments:
+        raise SettingsError(f"has comments, which rewriting it would lose. Add these two settings to it yourself: "
+                            f"\"{INTERPRETER}\": {json.dumps(python)} and \"{INCLUDE}\": [{json.dumps(venv)}]")
+    doc[INTERPRETER] = python
+    doc[INCLUDE] = includes + ([venv] if venv not in includes else [])
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
     return path
 
 
-def main(argv: list[str]) -> int:
-    if len(argv) >= 3 and argv[0] == "copy" and argv[1] in ("jupyter", "marimo"):
-        for line in copy(argv[1], Path(argv[2]), Path(argv[3]) if len(argv) > 3 else Path(".")):
-            print(line)
-        return 0
-    if len(argv) == 4 and argv[0] == "positron":
+def positron_remove(notebooks_dir: Path, python: str, venv: str) -> str:
+    """The kit's two settings out of the folder's settings file again (an uninstall): the interpreter only when it is
+    the kit's Python, the kit's venv from the include list. The user's other settings stay; a file left empty goes.
+    Returns what was done: removed|unchanged|absent."""
+    path = notebooks_dir / ".vscode" / "settings.json"
+    if not path.is_file():
+        return "absent"
+    doc, comments = _read_settings(path)
+    changed = dict(doc)
+    if changed.get(INTERPRETER) == python:
+        del changed[INTERPRETER]
+    if INCLUDE in changed:
+        includes = _includes(changed[INCLUDE])
+        if venv in includes:
+            includes = [item for item in includes if item != venv]
+            if includes:
+                changed[INCLUDE] = includes
+            else:
+                del changed[INCLUDE]
+    if changed == doc:
+        return "unchanged"
+    if comments:
+        raise SettingsError(f"has comments, so the kit leaves it alone. Remove \"{INTERPRETER}\" and \"{INCLUDE}\" "
+                            "from it yourself: they name the notebook environment the uninstall removed")
+    if changed:
+        path.write_text(json.dumps(changed, indent=2) + "\n", encoding="utf-8")
+    else:
+        path.unlink()
         try:
-            print(positron(Path(argv[1]), argv[2], argv[3]))
-        except ValueError as err:
-            print(f"{err} - the kit leaves it alone; choose the interpreter {argv[2]} in Positron yourself", file=sys.stderr)
+            path.parent.rmdir()
+        except OSError:
+            pass
+    return "removed"
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) == 4 and argv[0] == "copy" and argv[1] in ("jupyter", "marimo"):
+        try:
+            added, problems = copy(argv[1], Path(argv[2]), Path(argv[3]))
+        except (OSError, ValueError, KeyError) as err:
+            print(f"the kit's notebooks could not be placed: {err}", file=sys.stderr)
+            return 1
+        for line in added:
+            print(line)
+        for problem in problems:
+            print(f"could not copy {problem}", file=sys.stderr)
+        return 1 if problems else 0
+    if len(argv) == 4 and argv[0] in ("positron", "positron-remove"):
+        settings = Path(argv[1]) / ".vscode" / "settings.json"
+        try:
+            if argv[0] == "positron":
+                print(positron(Path(argv[1]), argv[2], argv[3]))
+            else:
+                print(positron_remove(Path(argv[1]), argv[2], argv[3]))
+        except SettingsError as err:
+            if argv[0] == "positron":
+                print(f"{settings} {err} - the kit leaves it alone; choose the interpreter {argv[2]} in Positron yourself",
+                      file=sys.stderr)
+            else:
+                print(f"{settings} {err}", file=sys.stderr)
+            return 3
+        except OSError as err:
+            print(f"{settings} could not be written: {err}", file=sys.stderr)
             return 3
         return 0
     if len(argv) == 2 and argv[0] == "list":

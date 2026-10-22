@@ -11,7 +11,16 @@
 On a machine, `exakit marketplace notebook` copies each notebook into
 `~/.exasol-starter-kit/notebooks/starter-kit-notebooks/<persona>/` (and the
 Marimo ones into `notebooks/marimo/<persona>/`), with a README naming the
-end-to-end path. A file already there is the user's and is never overwritten.
+end-to-end path. A file already there is the user's and is never overwritten,
+and one the user deletes is not copied again (`.kit-copied` in each folder
+records what the kit copied). The notebooks folder is the user's work: an
+uninstall keeps it, the full `exakit uninstall` too unless
+`EXAKIT_UNINSTALL_NOTEBOOKS=remove`.
+
+Every notebook here, `start_here` included, has its `.py` source;
+`python3 tools/notebooks.py --check` fails when an `.ipynb` is not built from
+it (`--check --marimo` also compares `marimo/` with a fresh conversion when uv
+is installed). `--check` never writes.
 
 ## Adding a notebook
 

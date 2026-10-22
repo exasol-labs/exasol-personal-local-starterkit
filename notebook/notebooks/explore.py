@@ -15,7 +15,8 @@
 #
 # **Change one line to change the data.** `fda_recalls`, `banking_complaints` and `pharma_trials` ship with the kit
 # (`exakit data-load fda_recalls`). For your own CSV or Parquet file, fill in "Your own file" below and set
-# `DATASET = "own-file"`; a table already in the database is a `descriptor.json` path (`data/datasets/README.md`).
+# `DATASET = "own-file"`; a table already in the database is a `descriptor.json`
+# path (the kit's own, in `data/datasets/<id>/descriptor.json`, show its shape).
 
 # %%
 DATASET = "fda_recalls"   # or "banking_complaints", "pharma_trials", "~/my-data/descriptor.json", or "own-file" (the file below)

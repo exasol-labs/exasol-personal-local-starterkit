@@ -5,7 +5,7 @@ assignments, and checked by the same rules as a kit dataset - so the notebooks r
                                  {"entity": "CUSTOMER_ID", "category": "MERCHANT_TYPE", "date": "BOOKED_ON",
                                   "label": "DISPUTED", "text": ["MEMO"]})
 
-The descriptor is that mapping of role to column, or a descriptor file (data/datasets/README.md has the schema). The
+The descriptor is that mapping of role to column, or a descriptor file (data/datasets/<id>/descriptor.json in the kit shows the shape). The
 rows travel over pyexasol's import on the open connection: no host, user or password here, as everywhere in exakit_nb.
 Column types come from the file; the date role's column becomes a DATE and a true/false column 0 or 1. The table is
 marked as loaded from the file (its comment holds the file's SHA-256), so running the cell again loads nothing when the
@@ -108,7 +108,8 @@ def _prepare(frame, descriptor) -> list[tuple[str, str]]:
             out.append((name, "TIMESTAMP"))
         else:
             frame[name] = column.where(column.isna(), column.astype(str))
-            width = int(frame[name].dropna().str.len().max() or 1)
+            lengths = frame[name].dropna().str.len()
+            width = int(lengths.max()) if len(lengths) else 1      # a column with no value at all is still a column
             out.append((name, f"VARCHAR({min(max(width, 1), MAX_VARCHAR)})"))
     return out
 
@@ -121,10 +122,17 @@ def _comment(conn, table: str) -> str | None:
     return str(rows[0][0]) if rows else None
 
 
+def _quoted(name: str) -> str:
+    """A column name as a quoted SQL identifier."""
+    return '"' + name.replace('"', '""') + '"'
+
+
 def _load(conn, frame, columns: list[tuple[str, str]], table: str, mark: str) -> None:
     schema, name = table.split(".")
     conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
-    conn.execute(f"CREATE OR REPLACE TABLE {table} ({', '.join(f'{c} {t}' for c, t in columns)})")
+    # Quoted: a file's header is not bound to avoid SQL's reserved words (DATE, USER, SELECT, ...). The names are
+    # already upper case with only letters, digits and _, so the quoted name is the name the descriptor uses.
+    conn.execute(f"CREATE OR REPLACE TABLE {table} ({', '.join(f'{_quoted(c)} {t}' for c, t in columns)})")
     conn.import_from_pandas(frame, (schema, name))
     conn.execute(f"COMMENT ON TABLE {table} IS '{mark}'")
 

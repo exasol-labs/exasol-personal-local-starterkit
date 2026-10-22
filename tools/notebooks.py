@@ -2,8 +2,10 @@
 built from them: one cell per ``# %%`` marker, markdown cells for ``# %% [markdown]``. No jupytext needed.
 
     python3 tools/notebooks.py           # rebuild every notebook/notebooks/<name>.ipynb that has a <name>.py
-    python3 tools/notebooks.py --check   # exit 1 when an .ipynb differs from its .py
-    python3 tools/notebooks.py --marimo  # also write the Marimo versions to notebook/marimo/ (needs uv: marimo, pinned)
+    python3 tools/notebooks.py --check           # exit 1 when an .ipynb differs from its .py; writes nothing
+    python3 tools/notebooks.py --marimo          # also write the Marimo versions to notebook/marimo/ (needs uv: marimo, pinned)
+    python3 tools/notebooks.py --check --marimo  # also compare notebook/marimo/ with a fresh conversion in a temp folder
+                                                 # (skipped, with a note, when uv is not there); writes nothing
 
 The Marimo versions are converted from the .ipynb by marimo itself (``marimo convert``, at the version the notebook
 add-on installs), so a reviewer still reads one source; they are committed, and the add-on copies them for its users.
@@ -59,30 +61,69 @@ def build(py: Path) -> str:
     return json.dumps(doc, indent=1, ensure_ascii=False) + "\n"
 
 
-def marimo(notebooks: list[Path]) -> None:
-    """Each built .ipynb converted to a Marimo notebook by the marimo the add-on pins (its lowest allowed version)."""
+def marimo(notebooks: list[Path], into: Path = MARIMO) -> None:
+    """Each .ipynb converted to a Marimo notebook in ``into`` by the marimo the add-on pins (its lowest allowed version)."""
     import subprocess
     spec = json.loads(CATALOG.read_text(encoding="utf-8"))["marimo_package"]
     pinned = spec.split(",")[0].replace(">=", "==")
-    MARIMO.mkdir(exist_ok=True)
+    into.mkdir(exist_ok=True)
     for ipynb in notebooks:
-        subprocess.run(["uvx", "--from", pinned, "marimo", "convert", str(ipynb), "-o", str(MARIMO / f"{ipynb.stem}.py")],
+        subprocess.run(["uvx", "--from", pinned, "marimo", "convert", str(ipynb), "-o", str(into / f"{ipynb.stem}.py")],
                        check=True, capture_output=True)
 
 
+def _marimo_sources() -> list[str]:
+    """The notebook names the catalog ships a Marimo version of (``<name>.py``)."""
+    doc = json.loads(CATALOG.read_text(encoding="utf-8"))
+    return sorted(entry["marimo"] for entry in doc["notebooks"] if entry.get("marimo"))
+
+
+def check_marimo() -> list[str]:
+    """The Marimo files that differ from a fresh conversion of their .py, converted in a temp folder: from the .ipynb
+    built in memory, so a stale .ipynb in the tree cannot hide a stale Marimo file. Nothing in the tree is written."""
+    import shutil
+    import tempfile
+    if not shutil.which("uvx"):
+        print("note: uv is not installed, so notebook/marimo/ was not compared (install uv to check it)", file=sys.stderr)
+        return []
+    stale = []
+    with tempfile.TemporaryDirectory() as tmp:
+        built = []
+        for name in _marimo_sources():
+            source = FOLDER / name
+            if not source.is_file():
+                stale.append(f"marimo/{name} (no notebook/notebooks/{name})")
+                continue
+            ipynb = Path(tmp) / f"{source.stem}.ipynb"
+            ipynb.write_text(build(source), encoding="utf-8")
+            built.append(ipynb)
+        out = Path(tmp) / "marimo"
+        marimo(built, out)
+        for ipynb in built:
+            fresh, shipped = out / f"{ipynb.stem}.py", MARIMO / f"{ipynb.stem}.py"
+            if not shipped.is_file() or shipped.read_text(encoding="utf-8") != fresh.read_text(encoding="utf-8"):
+                stale.append(f"marimo/{ipynb.stem}.py")
+    return stale
+
+
 def main(argv: list[str]) -> int:
+    check = "--check" in argv
     stale = []
     for py in sorted(FOLDER.glob("*.py")):
         target, text = py.with_suffix(".ipynb"), build(py)
-        if "--check" in argv:
+        if check:
             if not target.exists() or target.read_text(encoding="utf-8") != text:
                 stale.append(target.name)
         else:
             target.write_text(text, encoding="utf-8")
     if "--marimo" in argv:
-        marimo([py.with_suffix(".ipynb") for py in sorted(FOLDER.glob("*.py"))])
+        if check:
+            stale += check_marimo()
+        else:
+            marimo([FOLDER / f"{Path(name).stem}.ipynb" for name in _marimo_sources()])
     if stale:
-        print(f"out of date with their .py (run: python3 tools/notebooks.py): {', '.join(stale)}")
+        regen = "python3 tools/notebooks.py --marimo" if any(s.startswith("marimo/") for s in stale) else "python3 tools/notebooks.py"
+        print(f"out of date with their .py (run: {regen}): {', '.join(stale)}")
         return 1
     return 0
 

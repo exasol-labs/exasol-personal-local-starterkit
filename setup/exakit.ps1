@@ -1363,9 +1363,22 @@ function Test-ExakitSafeUninstallTarget([string]$Path) {
                           "libexec", "workflows", "migration", ".last-failure", ".install.lock")) {
         if (Test-Path -LiteralPath (Join-Path $full $marker)) { return $true }
     }
-    # Nothing of ours in it. Empty is still fine; anything else is not.
-    $anyEntry = Get-ChildItem -LiteralPath $full -Force -ErrorAction SilentlyContinue | Select-Object -First 1
+    # Nothing of ours in it. Empty is still fine, and so is a home holding only
+    # the notebooks an earlier uninstall kept (step 5); anything else is not.
+    $anyEntry = Get-ChildItem -LiteralPath $full -Force -ErrorAction SilentlyContinue |
+        Where-Object { -not ($_.PSIsContainer -and $_.Name -eq "notebooks") } | Select-Object -First 1
     return ($null -eq $anyEntry)
+}
+
+# Test-ExakitUninstallKeepsNotebooks - a full uninstall keeps $ExakitHome\notebooks:
+# the user's own work (their notebooks, the kit's copies they edited, the MLflow
+# stores beside them). EXAKIT_UNINSTALL_NOTEBOOKS=remove takes it too. Not
+# $script:ExakitUninstallFull: that only tells add-on hooks a full uninstall is
+# under way. Twin of _un_keep_notebooks in exakit_uninstall_run.
+function Test-ExakitUninstallKeepsNotebooks {
+    $notebooks = Join-Path $script:ExakitHome "notebooks"
+    if (-not (Test-Path -LiteralPath $notebooks -PathType Container)) { return $false }
+    return ("$env:EXAKIT_UNINSTALL_NOTEBOOKS".ToLower() -ne "remove")
 }
 
 function Invoke-ExakitUninstallRun {
@@ -1530,9 +1543,25 @@ function Invoke-ExakitUninstallRun {
                 Info "AI client config snapshots kept at $keep (delete it when you are sure)"
             } catch { }
         }
-        if ($DryRun) { Info "  will remove: kit home $script:ExakitHome (credentials, logs, manifest, snapshots)" }
-        else { Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $script:ExakitHome }
-        RecordRemoved "Kit home removed: $script:ExakitHome (credentials, logs, manifest, snapshots, pyexasol venv, add-on state)"
+        if (Test-ExakitUninstallKeepsNotebooks) {
+            # Everything in the kit home but the notebooks folder; the home is
+            # left holding only that, which Test-ExakitSafeUninstallTarget
+            # accepts as a kit home later.
+            $keptNotebooks = Join-Path $script:ExakitHome "notebooks"
+            if ($DryRun) { Info "  will remove: kit home $script:ExakitHome (credentials, logs, manifest, snapshots) - all but your notebooks" }
+            Info "  your notebooks stay in $keptNotebooks (EXAKIT_UNINSTALL_NOTEBOOKS=remove removes them too)"
+            if (-not $DryRun) {
+                foreach ($entry in @(Get-ChildItem -LiteralPath $script:ExakitHome -Force -ErrorAction SilentlyContinue)) {
+                    if ($entry.PSIsContainer -and $entry.Name -eq "notebooks") { continue }
+                    Remove-Item -LiteralPath $entry.FullName -Recurse -Force -ErrorAction SilentlyContinue
+                }
+            }
+            RecordRemoved "Kit home removed: $script:ExakitHome (credentials, logs, manifest, snapshots, pyexasol venv, add-on state); your notebooks were kept in $keptNotebooks"
+        } else {
+            if ($DryRun) { Info "  will remove: kit home $script:ExakitHome (credentials, logs, manifest, snapshots)" }
+            else { Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $script:ExakitHome }
+            RecordRemoved "Kit home removed: $script:ExakitHome (credentials, logs, manifest, snapshots, pyexasol venv, add-on state)"
+        }
     }
 
     # 6) CLI binaries. Removed last so earlier steps can still call them.
@@ -3027,9 +3056,18 @@ function Get-ExakitLogTargets {
         $addon = Get-ExakitMarketplaceAddon $addonId
         if (-not ($addon -and $addon.PSObject.Properties["LogFn"] -and
                   (Get-Command $addon.LogFn -ErrorAction SilentlyContinue))) { continue }
-        $path = & $addon.LogFn
-        if ($path) {
-            $targets += [pscustomobject]@{ Id = $addonId; Label = "$addonId service"; Kind = "file"; Source = $path }
+        # A LogFn returns a path (the target is the add-on's id), or for an
+        # add-on with more than one log, one "target|what|path" string each -
+        # the target being the id or "<id>-<name>". Twin of exakit_log_targets.
+        foreach ($path in @(& $addon.LogFn)) {
+            if (-not $path) { continue }
+            $parts = @("$path" -split '\|', 3)
+            if ($parts.Count -eq 3) {
+                if ($parts[0] -ne $addonId -and -not $parts[0].StartsWith("$addonId-")) { continue }
+                $targets += [pscustomobject]@{ Id = $parts[0]; Label = $parts[1]; Kind = "file"; Source = $parts[2] }
+            } else {
+                $targets += [pscustomobject]@{ Id = $addonId; Label = "$addonId service"; Kind = "file"; Source = "$path" }
+            }
         }
     }
     return $targets

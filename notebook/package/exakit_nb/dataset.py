@@ -6,8 +6,9 @@ and the roles turned into SQL names, so one notebook runs unchanged on any datas
     ds.col("label"), ds.text_sql(), ds.fact_table
 
 The rules are the kit's descriptor rules (``descriptor_rules``, shipped with this package: the 0.2 kit has no Python
-package to import them from; tools/dataset_check.py uses the same file). Nothing is guessed: a descriptor that is
-invalid, or names a table or column the database lacks, stops the notebook with the reason.
+package to import them from). It is a copy of tools/descriptor_rules.py, which tools/dataset_check.py uses, and
+tests/test_notebook_contents.py holds the two byte-identical. Nothing is guessed: a descriptor that is invalid, or
+names a table or column the database lacks, stops the notebook with the reason.
 """
 
 from __future__ import annotations
