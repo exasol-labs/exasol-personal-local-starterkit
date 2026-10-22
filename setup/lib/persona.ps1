@@ -148,8 +148,9 @@ function Set-ExakitPersonaEnv {
 }
 
 # Read-ExakitPersonaQuestion - "What will you use this machine for?": the
-# personas the kit offers, as many as wanted. Ticked to begin with: the ones
-# this kit was set up as (a re-run), else the "default": true ones.
+# personas the kit offers, as many as wanted, or None. Ticked to begin with: the
+# ones this kit was set up as (a re-run), else the "default": true ones, else
+# None.
 # Twin of exakit_persona_question. Sets $env:EXAKIT_PERSONA.
 function Read-ExakitPersonaQuestion {
     $rows = @(Invoke-ExakitPersonaService "picker" | Where-Object { $_ })
@@ -166,22 +167,26 @@ function Read-ExakitPersonaQuestion {
         if ($parts.Count -gt 3 -and $parts[3] -eq "1") { [void]$defaults.Add($ids.Count) }
         if ($was -ccontains $parts[0]) { [void]$recorded.Add($ids.Count) }
     }
+    # The last row is the kit on its own, no persona - exclusive, and ticked to
+    # begin with unless a file says "default": true or a previous run recorded one.
+    $none = $ids.Count + 1
+    [void]$labels.Add("None - just the kit, with the TPC-H, energy and weather samples")
     if ($recorded.Count -gt 0) { $defaults = $recorded }
-    if ($defaults.Count -eq 0) { [void]$defaults.Add(1) }
+    if ($defaults.Count -eq 0) { [void]$defaults.Add($none) }
     Write-ExakitRule
     Write-ExakitHeading "What will you use this machine for?"
-    $picked = @(Read-ExakitCheckboxMenu -Title "Personas - tick one or more" -Options $labels.ToArray() -Defaults $defaults.ToArray())
+    $picked = @(Read-ExakitCheckboxMenu -Title "Personas - tick one or more, or None" -Options $labels.ToArray() -Defaults $defaults.ToArray() -ExclusiveIndex $none)
     $chosen = @($picked | Where-Object { $_ -ge 1 -and $_ -le $ids.Count } | ForEach-Object { $ids[$_ - 1] })
-    if ($chosen.Count -eq 0) { $chosen = @($ids[$defaults[0] - 1]) }
+    if ($chosen.Count -eq 0) { Remove-Item Env:EXAKIT_PERSONA -ErrorAction SilentlyContinue; return }
     $env:EXAKIT_PERSONA = ($chosen -join ",")
 }
 
 # Invoke-ExakitPersonaFlow - the install's persona section, after the parts
 # everyone needs: the personas (asked here unless EXAKIT_PERSONA answered it),
 # then the data. Picked on screen, their datasets come TICKED in the data
-# question and their add-ons ticked in the closing marketplace offer. With no
-# console and no persona, the data question's defaults are the default
-# personas' datasets. Twin of exakit_persona_flow.
+# question and their add-ons ticked in the closing marketplace offer. No
+# persona (None picked, or nobody to ask): the kit's own default datasets.
+# Twin of exakit_persona_flow.
 function Invoke-ExakitPersonaFlow {
     param([Parameter(Mandatory)][string]$KitRoot)
     # No database or no exapump: nothing here can run, so nobody is asked.
@@ -201,16 +206,20 @@ function Invoke-ExakitPersonaFlow {
                 Remove-Item Env:EXAKIT_PERSONA -ErrorAction SilentlyContinue
             }
         } else {
-            # Nobody to ask: the default personas' datasets, nothing recorded.
-            $defaults = @()
-            foreach ($row in @(Invoke-ExakitPersonaService "picker" | Where-Object { $_ })) {
-                $parts = "$row" -split '\|', 4
-                if ($parts.Count -gt 3 -and $parts[3] -eq "1") { $defaults += $parts[0] }
-            }
-            if ($defaults.Count) { Set-ExakitPersonaPreselect -Ids ($defaults -join ",") -DatasetsOnly }
+            Set-ExakitPersonaKitDefaults
         }
     }
+    # Asked, and the answer was None: the kit's own default datasets.
+    if (-not $env:EXAKIT_PERSONA -and -not $env:EXAKIT_DATASETS_PRESELECT) { Set-ExakitPersonaKitDefaults }
     Invoke-ExakitPersonaData -KitRoot $KitRoot
+}
+
+# Set-ExakitPersonaKitDefaults - no persona: the data question ticks the
+# datasets the kit loads on its own (default=yes in their dataset.conf).
+# Nothing is recorded. Twin of _exakit_persona_kit_defaults.
+function Set-ExakitPersonaKitDefaults {
+    $ds = (@(Invoke-ExakitPersonaService "default-datasets") -join "").Trim()
+    if ($ds) { $env:EXAKIT_DATASETS_PRESELECT = $ds }
 }
 
 # Test-ExakitPersonaAllAnswered - everything the persona question would answer
@@ -256,4 +265,36 @@ function Invoke-ExakitPersonaData {
 function Write-ExakitPersonaMarketplaceNote {
     if (-not $env:EXAKIT_PERSONA_ACTIVE -or -not $env:EXAKIT_MARKETPLACE_PRESELECT) { return }
     Info "More for any persona in the marketplace: exakit marketplace (dashboards, notebooks, dbt, the scheduler, Python UDFs, JSON tables)"
+}
+
+# Show-ExakitPersonaPlan - what these personas bring and what of it is still
+# pending here: their datasets (loaded or not) and add-ons (installed or not).
+# Read-only. Twin of exakit_persona_plan.
+function Show-ExakitPersonaPlan {
+    param([Parameter(Mandatory)][string]$Ids, [switch]$Json)
+    # The personas' own answers, not this process's: what they bring, whatever was set.
+    $names = @("EXAKIT_DATASETS", "EXAKIT_LOAD_SAMPLE", "EXAKIT_MARKETPLACE_ADDONS", "EXAKIT_MCP_CLIENTS", "EXAKIT_NOTEBOOK_FRONTENDS", "EXAKIT_SKIP_MCP")
+    $saved = @{}
+    foreach ($n in $names) { $saved[$n] = [Environment]::GetEnvironmentVariable($n, "Process"); [Environment]::SetEnvironmentVariable($n, $null, "Process") }
+    try { $answers = @(Invoke-ExakitPersonaService "answers" $Ids) }
+    finally { foreach ($n in $names) { [Environment]::SetEnvironmentVariable($n, $saved[$n], "Process") } }
+    $ds = @($answers | Where-Object { $_ -like "EXAKIT_DATASETS=*" } | ForEach-Object { $_.Substring(16) -split ',' } | Where-Object { $_ })
+    $ad = ($answers | Where-Object { $_ -like "EXAKIT_MARKETPLACE_ADDONS=*" } | ForEach-Object { $_.Substring(26) } | Select-Object -First 1)
+    if (-not $ad -or $ad -eq "none") { $addons = @() }
+    elseif ($ad -eq "all") { $addons = @(Get-ExakitMarketplaceAddons | ForEach-Object { $_.Id }) }
+    else { $addons = @($ad -split ',' | Where-Object { $_ }) }
+    $pendingIds = @(Get-ExakitPendingDatasets | ForEach-Object { $_.Id })
+    $installed = @(Get-ExakitMarketplaceInstalledAddons)
+    $plan = [ordered]@{
+        persona  = $Ids
+        datasets = [ordered]@{ loaded = @($ds | Where-Object { $pendingIds -cnotcontains $_ }); pending = @($ds | Where-Object { $pendingIds -ccontains $_ }) }
+        addons   = [ordered]@{ installed = @($addons | Where-Object { $installed -ccontains $_ }); pending = @($addons | Where-Object { $installed -cnotcontains $_ }) }
+    }
+    $plan.nothing_pending = ($plan.datasets.pending.Count -eq 0 -and $plan.addons.pending.Count -eq 0)
+    if ($Json) { Write-Output ($plan | ConvertTo-Json -Depth 4); return }
+    $none = "none"
+    Write-Host "$(@(Invoke-ExakitPersonaService 'title' $Ids) -join '') ($Ids)"
+    Write-Host ("  {0,-12} loaded: {1}   pending: {2}" -f "Datasets", $(if ($plan.datasets.loaded.Count) { $plan.datasets.loaded -join ' ' } else { $none }), $(if ($plan.datasets.pending.Count) { $plan.datasets.pending -join ' ' } else { $none }))
+    Write-Host ("  {0,-12} installed: {1}   pending: {2}" -f "Add-ons", $(if ($plan.addons.installed.Count) { $plan.addons.installed -join ' ' } else { $none }), $(if ($plan.addons.pending.Count) { $plan.addons.pending -join ' ' } else { $none }))
+    if ($plan.nothing_pending) { Ok "Nothing pending for $Ids" } else { Info "Pending - bring it in with: exakit persona apply $Ids" }
 }

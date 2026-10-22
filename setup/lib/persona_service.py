@@ -16,6 +16,7 @@ for. Standard library only, and Python 3.9 compatible: it runs on whatever Pytho
     python3 persona_service.py <kit_root> dataset-hints          dataset|persona titles, for the data menu
     python3 persona_service.py <kit_root> show <id>              the lines `exakit persona show` prints
     python3 persona_service.py <kit_root> problems               file|what is wrong, for each invalid persona file
+    python3 persona_service.py <kit_root> default-datasets       the datasets a kit without a persona loads (a,b,c)
 
 <ids> is one id or several joined by commas. Every value printed is an id, a list of ids or a title: no secrets, no
 paths. A persona file that is invalid is left out (and named on stderr) - the others still work. Exit codes: 0 done,
@@ -131,13 +132,16 @@ def one(root: Path, persona_id: str) -> dict:
     return picked(root, persona_id)[0]
 
 
-def bundled_datasets(root: Path) -> list:
-    """The dataset ids the kit ships (data/datasets/<id>/dataset.conf), in their menu order."""
+def bundled_datasets(root: Path, defaults_only: bool = False) -> list:
+    """The dataset ids the kit ships (data/datasets/<id>/dataset.conf), in their menu order; with defaults_only, the
+    ones a kit without a persona loads (default=yes)."""
     found = []
     for conf in (root / "data" / "datasets").glob("*/dataset.conf"):
-        keys = dict(line.split("=", 1) for line in conf.read_text(encoding="utf-8").splitlines() if "=" in line)
-        order = keys.get("order", "").strip()
-        found.append((int(order) if order.isdigit() else 1000, keys.get("id", conf.parent.name).strip()))
+        keys = {k.strip(): v.strip() for k, v in (line.split("=", 1) for line in conf.read_text(encoding="utf-8").splitlines() if "=" in line)}
+        if defaults_only and keys.get("default", "").lower() not in ("yes", "true", "1"):
+            continue
+        order = keys.get("order", "")
+        found.append((int(order) if order.isdigit() else 1000, keys.get("id", conf.parent.name)))
     return [ds for _, ds in sorted(found)]
 
 
@@ -239,6 +243,8 @@ def run(argv: list, env: dict) -> list:
         return dataset_hints(root)
     if command == "show":
         return show(root, args[0])
+    if command == "default-datasets":
+        return [",".join(bundled_datasets(root, defaults_only=True))]
     if command == "problems":
         return [f"{name}|{what}" for name, what in load(root)[1].items()]
     raise BadInput(f"Unknown command '{command}'")

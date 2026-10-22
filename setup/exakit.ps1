@@ -2211,8 +2211,8 @@ function Write-ExakitVersionNote {
 }
 
 
-# Invoke-CmdPersona - `exakit persona list | show <id> | apply <id>[,<id>]
-# [--yes]`. Twin of cmd_persona.
+# Invoke-CmdPersona - `exakit persona list | show <id> | plan [<id>] [--json] |
+# apply <id>[,<id>] [--yes]`. Twin of cmd_persona.
 function Invoke-CmdPersona {
     param([string[]]$CmdArgs = @())
     $verb = if ($CmdArgs.Count) { $CmdArgs[0] } else { "list" }
@@ -2234,6 +2234,18 @@ function Invoke-CmdPersona {
             $lines = Invoke-ExakitPersonaService "show" $id
             if ($null -eq $lines) { Fail "Name one persona: exakit persona show <id>" }
             foreach ($line in @($lines)) { Write-Host $line }
+        }
+        "plan" {
+            $id = ""; $json = $false
+            foreach ($arg in @($CmdArgs | Select-Object -Skip 1)) {
+                if ($arg -eq "--json") { $json = $true }
+                elseif ($arg.StartsWith("-")) { Stop-ExakitBadOption "Unknown option for persona plan: $arg (supported: --json)" }
+                else { $id = $arg }
+            }
+            if (-not $id) { $id = Get-ExakitManifestValue "persona.id" }
+            if (-not $id) { Fail "No persona is recorded for this kit - name one: exakit persona plan <id>" }
+            if (-not (Get-ExakitPersona $id)) { Fail $script:ExakitPersonaProblem }
+            Show-ExakitPersonaPlan -Ids $id -Json:$json
         }
         "apply" {
             $id = ""; $yes = $false
@@ -2278,7 +2290,7 @@ function Invoke-CmdPersona {
             }
             Ok "Persona $id applied"
         }
-        default { Fail "Unknown persona command: $verb (use: exakit persona list | show <id> | apply <id> [--yes])" }
+        default { Fail "Unknown persona command: $verb (use: exakit persona list | show <id> | plan [<id>] | apply <id> [--yes])" }
     }
 }
 

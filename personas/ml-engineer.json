@@ -2,10 +2,11 @@
   "schema_version": 1,
   "id": "ml-engineer",
   "title": "ML Engineer",
-  "summary": "Train and track models: bank marketing with MLflow, a text classifier trained in the database with Python UDFs.",
+  "summary": "Train models inside the database with Python UDFs on the Pharma and Banking reference datasets, runs logged to your MLflow.",
   "picker": true,
-  "order": 30,
-  "datasets": ["bank_marketing", "pharma_trials"],
+  "order": 20,
+  "datasets": ["pharma_trials", "banking_complaints"],
   "mcp_clients": "all",
-  "addons": ["notebook", "udf-devkit"]
+  "addons": ["notebook", "udf-devkit"],
+  "first_prompt": "Open the ML Engineer quickstart: run exakit notebook and open ml-engineer/00_quickstart.ipynb."
 }

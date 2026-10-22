@@ -2388,8 +2388,8 @@ cmd_whats_new() {
     fi
 }
 
-# cmd_persona list | show <id> | apply <id>[,<id>] [--yes] — the `exakit
-# persona` command.
+# cmd_persona list | show <id> | plan [<id>] [--json] | apply <id>[,<id>]
+# [--yes] — the `exakit persona` command.
 cmd_persona() {
     case "${1:-list}" in
         list)
@@ -2406,6 +2406,21 @@ cmd_persona() {
         show)
             exakit_persona_known "${2:-}" || die "$EXAKIT_PERSONA_PROBLEM"
             _exakit_persona_service show "$2" 2>/dev/null || die "Name one persona: exakit persona show <id>"
+            ;;
+        plan)
+            shift
+            _cp_id=""; _cp_json=0
+            for _cp_arg in "$@"; do
+                case "$_cp_arg" in
+                    --json) _cp_json=1 ;;
+                    -*) reject "Unknown option for persona plan: $_cp_arg (supported: --json)" ;;
+                    *) _cp_id="$_cp_arg" ;;
+                esac
+            done
+            [ -n "$_cp_id" ] || _cp_id="$(manifest_get persona.id 2>/dev/null || true)"
+            [ -n "$_cp_id" ] || die "No persona is recorded for this kit - name one: exakit persona plan <id>"
+            exakit_persona_known "$_cp_id" || die "$EXAKIT_PERSONA_PROBLEM"
+            exakit_persona_plan "$_cp_id" "$_cp_json"
             ;;
         apply)
             shift
@@ -2447,7 +2462,7 @@ cmd_persona() {
             fi
             ok "Persona $_cp_id applied"
             ;;
-        *) die "Unknown persona command: $1 (use: exakit persona list | show <id> | apply <id> [--yes])" ;;
+        *) die "Unknown persona command: $1 (use: exakit persona list | show <id> | plan [<id>] | apply <id> [--yes])" ;;
     esac
 }
 

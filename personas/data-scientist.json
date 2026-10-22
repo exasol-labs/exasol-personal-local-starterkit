@@ -1,11 +1,12 @@
 {
   "schema_version": 1,
   "id": "data-scientist",
-  "title": "AI / Data Scientist",
-  "summary": "Text data science: the FDA recalls and banking complaints, notebooks to explore and classify text, dashboards.",
+  "title": "AI Scientist",
+  "summary": "Explore the Pharma and Banking reference datasets in notebooks connected to the database, with model calls traced to your Langfuse.",
   "picker": true,
-  "order": 20,
-  "datasets": ["fda_recalls", "banking_complaints"],
+  "order": 10,
+  "datasets": ["pharma_trials", "banking_complaints"],
   "mcp_clients": "all",
-  "addons": ["notebook", "dash-server", "json-tables"]
+  "addons": ["notebook"],
+  "first_prompt": "Open the AI Scientist quickstart: run exakit notebook and open data-scientist/00_quickstart.ipynb."
 }
