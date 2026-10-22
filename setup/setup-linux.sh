@@ -152,11 +152,11 @@ kit_shared_steps 3 6 "$SCRIPT_DIR" "$KIT_ROOT"
 # EXAKIT_PERSONA set it was answered before step 1. See exakit_persona_flow.
 command -v exakit_persona_flow >/dev/null 2>&1 && exakit_persona_flow "$KIT_ROOT"
 
-# The other half of the crossing runs inside the shared steps, immediately
-# before the sample-data load (see exakit_maybe_offer_data_load): a user's own
-# tables come back before the kit's demo data, not after the whole install.
-# This call is the safety net for a run that skipped that point altogether, and
-# is a no-op once the restore has happened.
+# The other half of the crossing runs at the start of the sample-data offer
+# (exakit_maybe_offer_data_load, reached through the persona flow above): a
+# user's own tables come back before the kit's demo data, not after the whole
+# install. This call is the safety net for a run that skipped that point
+# altogether, and is a no-op once the restore has happened.
 if command -v legacy_crossing_after >/dev/null 2>&1; then legacy_crossing_after; fi
 
 exakit_finish

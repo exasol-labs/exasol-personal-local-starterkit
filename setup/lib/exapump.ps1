@@ -3484,6 +3484,7 @@ function Invoke-ExakitDatasetDirLoad {
 $script:ExakitTableIds = @()          # the dataset id per row ("" for the rest)
 $script:ExakitTableRowLocal = 0
 $script:ExakitTableRowSkip = 0
+$script:ExakitTableHasFor = $false   # does any row name the personas it is for
 $script:ExakitTableDefaults = @()
 $script:ExakitTableGroupFirst = 0
 $script:ExakitTableGroupLast = 0
@@ -3496,8 +3497,10 @@ $script:ExakitTableRow = 0            # the row the dataset being loaded owns
 function New-ExakitDataTable {
     param([Parameter(Mandatory)][string]$FinalLabel, [switch]$NoLocal)
     [void](New-ExakitTable -Title "Sample datasets")
-    # Which personas each dataset is for (the persona service): a label suffix.
+    # Which personas each dataset is for (the persona service): the row's second
+    # column, shown as "For" while the reader picks (Select-ExakitDataLoad).
     $hints = @{}
+    $script:ExakitTableHasFor = $false
     if (Get-Command Get-ExakitPersonaDatasetHints -ErrorAction SilentlyContinue) { $hints = Get-ExakitPersonaDatasetHints }
     $ids = New-Object 'System.Collections.Generic.List[string]'
     $defaults = New-Object 'System.Collections.Generic.List[int]'
@@ -3520,8 +3523,11 @@ function New-ExakitDataTable {
             # a measurement is the same fact twice, worse. Only a TRAILING
             # parenthetical goes - "Orders (EU) by quarter" keeps its brackets.
             $label = [regex]::Replace($pending[$i].Label, ' *\([^()]*\)$', '')
-            if ($hints.ContainsKey($pending[$i].Id)) { $label = "$label - for $($hints[$pending[$i].Id])" }
-            [void](Add-ExakitTableRow -Kind $kind -Label $label -Ticked)
+            # Who it is for goes in its own column, not on the name: a
+            # " - for <persona>" suffix was cut off on an 80-column console.
+            $forWhom = ""
+            if ($hints.ContainsKey($pending[$i].Id)) { $forWhom = "" + $hints[$pending[$i].Id]; $script:ExakitTableHasFor = $true }
+            [void](Add-ExakitTableRow -Kind $kind -Label $label -Col2 $forWhom -Ticked)
             [void]$ids.Add($pending[$i].Id)
         }
         $script:ExakitTableGroupFirst = 2
@@ -3534,7 +3540,7 @@ function New-ExakitDataTable {
             $defaults.Clear()
             $all = $true
             for ($i = 0; $i -lt $pending.Count; $i++) {
-                if ($wanted -contains $pending[$i].Id) { [void]$defaults.Add($i + 2) } else { $all = $false }
+                if ($wanted -ccontains $pending[$i].Id) { [void]$defaults.Add($i + 2) } else { $all = $false }
             }
             if ($all) { $defaults.Insert(0, 1) }
         }
@@ -3562,6 +3568,10 @@ function New-ExakitDataTable {
         $defaults.Clear()
         [void]$defaults.Add($script:ExakitTableRowLocal)
     }
+    # Nothing ticked - the personas' datasets are all loaded already, a persona
+    # wants none, or there is no local-file row to fall back on - is Skip, so
+    # Enter answers instead of doing nothing. Twin of exakit_data_table_build.
+    if ($defaults.Count -eq 0) { [void]$defaults.Add($script:ExakitTableRowSkip) }
     $script:ExakitTableIds = $ids.ToArray()
     $script:ExakitTableDefaults = $defaults.ToArray()
 }
@@ -3596,24 +3606,30 @@ function Select-ExakitDataLoad {
         return @("local")
     }
     # WHERE THE DATA COMES FROM FIRST: the sample datasets, your own file or
-    # folder, an external source (coming soon); only "Sample datasets" opens onto
-    # the datasets. Twin of exakit_data_source_select / exakit_data_samples_select.
+    # folder (an external source is shown, coming soon); only "Sample datasets"
+    # opens onto the datasets. Twin of exakit_data_source_select /
+    # exakit_data_samples_select.
     $sources = @(Select-ExakitDataSource)
     $script:ExakitTableIds = @()
     if ($sources -contains "none") { return @("none") }
-    if ($sources -contains "external") {
-        Info "Connecting an external source - another database, cloud storage, a URL - is coming soon. For now, load a file or a folder: exakit data-load <path>"
-    }
     $chosen = New-Object 'System.Collections.Generic.List[string]'
     if ($sources -contains "sample") {
         New-ExakitDataTable -FinalLabel $FinalLabel -NoLocal
         $groupParent = 0
         if ($script:ExakitTableGroupFirst -gt 0) { $groupParent = 1 }
+        # Who each dataset is for gets a column of its own while the reader
+        # picks, and only then: the progress display that follows has no room
+        # for it, and needs none. Twin of exakit_data_samples_select.
+        if ($script:ExakitTableHasFor -and $script:UiTable) { $script:UiTable.Col2 = "For" }
         Write-Host ""
-        $selection = @(Invoke-ExakitTableMenu -Defaults $script:ExakitTableDefaults `
-            -ExclusiveIndex $script:ExakitTableRowSkip `
-            -GroupParent $groupParent -GroupFirst $script:ExakitTableGroupFirst `
-            -GroupLast $script:ExakitTableGroupLast -GroupMode "all")
+        try {
+            $selection = @(Invoke-ExakitTableMenu -Defaults $script:ExakitTableDefaults `
+                -ExclusiveIndex $script:ExakitTableRowSkip `
+                -GroupParent $groupParent -GroupFirst $script:ExakitTableGroupFirst `
+                -GroupLast $script:ExakitTableGroupLast -GroupMode "all")
+        } finally {
+            if ($script:UiTable) { $script:UiTable.Col2 = "" }
+        }
         # Skip here skips the samples only: a file asked for first still loads.
         if (-not ($selection -contains $script:ExakitTableRowSkip)) {
             foreach ($row in $selection) {
@@ -3628,25 +3644,43 @@ function Select-ExakitDataLoad {
     return $chosen.ToArray()
 }
 
-# Select-ExakitDataSource - the first data question: "sample", "local",
-# "external", or "none". Without a terminal the defaults stand: the samples
-# when any is still to load, else your own file.
+# Select-ExakitDataSource - the first data question: "sample", "local", or
+# "none". Without a terminal the defaults stand: the samples when any is still
+# to load, else your own file.
+#
+# The rows never move, so Skip is always row 4: a row that cannot be picked
+# (every sample loaded already, the external source that is not built yet) is
+# shown DISABLED ("!") rather than left out. Twin of exakit_data_source_select.
 function Select-ExakitDataSource {
     $pending = @(Get-ExakitPendingDatasets)
-    $options = New-Object 'System.Collections.Generic.List[string]'
-    $keys = New-Object 'System.Collections.Generic.List[string]'
+    $default = 1
     if ($pending.Count -gt 0) {
-        [void]$options.Add("Sample datasets - $($pending.Count) ready to load, picked next"); [void]$keys.Add("sample")
+        $sample = "Sample datasets - $($pending.Count) ready to load, picked next"
+    } else {
+        $sample = "!Sample datasets - all of them are loaded already"
+        $default = 2
     }
-    [void]$options.Add("Your own file or folder - CSV, Parquet or JSON"); [void]$keys.Add("local")
-    [void]$options.Add("Connect an external source - coming soon"); [void]$keys.Add("external")
-    [void]$options.Add("Skip"); [void]$keys.Add("none")
+    # The personas picked on screen want no samples (none), or only ones that
+    # are in already: Skip is the default, so Enter does not walk into a table
+    # with nothing ticked. The samples can still be ticked here.
+    if ($env:EXAKIT_DATASETS_PRESELECT) {
+        $wanted = @($env:EXAKIT_DATASETS_PRESELECT -split ',' | Where-Object { $_ })
+        $any = $false
+        foreach ($p in $pending) { if ($wanted -ccontains $p.Id) { $any = $true; break } }
+        if (-not $any) { $default = 4 }
+    }
+    $options = @($sample,
+        "Your own file or folder - CSV, Parquet or JSON",
+        "!Connect an external source - coming soon",
+        "Skip")
+    $keys = @("sample", "local", "external", "none")
     Write-Host ""
-    $picked = @(Read-ExakitCheckboxMenu -Title "Data to load" -Options $options.ToArray() -Defaults @(1) -ExclusiveIndex $options.Count)
+    $picked = @(Read-ExakitCheckboxMenu -Title "Data to load" -Options $options -Defaults @($default) -ExclusiveIndex 4)
     $answer = New-Object 'System.Collections.Generic.List[string]'
     foreach ($i in $picked) {
-        if ($i -lt 1 -or $i -gt $keys.Count) { continue }
-        if ($keys[$i - 1] -eq "none") { return @("none") }
+        if ($i -eq 4) { return @("none") }
+        # Rows 1 and 2 are the answers; 3 is shown, never picked.
+        if ($i -lt 1 -or $i -gt 2) { continue }
         [void]$answer.Add($keys[$i - 1])
     }
     if ($answer.Count -eq 0) { return @("none") }
@@ -3751,7 +3785,7 @@ function Request-ExakitDataLoadOffer {
         foreach ($envId in ($env:EXAKIT_DATASETS -split ',')) {
             $envId = $envId.Trim()
             if (-not $envId) { continue }
-            if ($knownIds -contains $envId) {
+            if ($knownIds -ccontains $envId) {
                 $validAny = $true
                 Info "Loading dataset '$envId' (EXAKIT_DATASETS)."
                 try {

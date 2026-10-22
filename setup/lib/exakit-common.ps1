@@ -631,7 +631,8 @@ function Read-ExakitCheckboxMenu {
     )
     # $ExclusiveIndex (1-based, 0 = none): an option that cannot be combined
     # with the others - think "Skip". Selecting it clears every other
-    # choice; selecting any other choice clears it.
+    # choice; selecting any other choice clears it. Enter with the cursor ON
+    # it answers it alone, whatever else is ticked.
     # $GroupParent/$GroupFirst/$GroupLast (optional): row $GroupParent is a
     # group checkbox whose children are rows $GroupFirst..$GroupLast (header
     # and disabled rows in that range are skipped). Toggling the parent ON
@@ -789,7 +790,15 @@ function Read-ExakitCheckboxMenu {
         $key = [Console]::ReadKey($true)
         $handled = $true
         switch ($key.Key) {
-            "Enter"     { if ($sel.Count -gt 0) { return @($sel | Sort-Object) } }
+            "Enter"     {
+                # Enter ON the exclusive row (Skip, No, Nothing) answers that row
+                # alone, whatever else is ticked: the other rows usually start
+                # ticked, so "move to Skip, press Enter" used to confirm them
+                # instead. Twin of ui_checkbox_menu; same rule as
+                # Invoke-ExakitTableMenu.
+                if ($ExclusiveIndex -ge 1 -and $script:cbCur -eq $ExclusiveIndex) { $sel.Clear(); [void]$sel.Add($ExclusiveIndex) }
+                if ($sel.Count -gt 0) { return @($sel | Sort-Object) }
+            }
             "Spacebar"  {
                 if ($sel.Contains($script:cbCur)) { [void]$sel.Remove($script:cbCur) } else { [void]$sel.Add($script:cbCur) }
                 & $applyGroup $script:cbCur
@@ -5200,6 +5209,7 @@ function Show-ExakitMarketplaceMenu {
         $answer = ("" + $env:EXAKIT_MARKETPLACE_ADDONS).ToLower().Replace(" ", "")
         if ($answer -eq "none") { Info "EXAKIT_MARKETPLACE_ADDONS=none - installing nothing."; return }
         $picked = @()
+        $skipped = $false
         if ($answer -eq "all") {
             foreach ($row in $rows) { if ($row.Id) { $picked += $row.Id } }
         } else {
@@ -5208,12 +5218,29 @@ function Show-ExakitMarketplaceMenu {
                 if (-not $token) { continue }
                 if ($rows | Where-Object { $_.Id -eq $token }) { $picked += $token }
                 elseif ($known -contains $token -and -not (Test-ExakitAddonApplicable $token)) {
+                    # A real add-on that does not run here. One such id (a
+                    # persona's list is written for every platform) used to end
+                    # the answer before anything installed; it is skipped with
+                    # the reason, and the rest go ahead. Twin of
+                    # exakit_marketplace_menu.
                     $why = Get-ExakitAddonApplicableReason $token
-                    Fail ("$token is not available on this machine" + $(if ($why) { ": $why" } else { "" }))
+                    $msg = "Skipping $token - it is not available on this machine"
+                    if ($why) { $msg = "${msg}: $why" }
+                    Warn2 $msg
+                    $skipped = $true
+                }
+                elseif ($rows | Where-Object { $_.Label -eq $token -and $_.Why -eq "not in this kit copy" }) {
+                    Warn2 "Skipping $token - its module is not part of this kit copy; update the kit first: exakit update"
+                    $skipped = $true
                 }
                 elseif ($known -contains $token) { Info "$token is already present - a kit-managed one updates with: exakit update" }
                 else { Fail "Unknown marketplace add-on in EXAKIT_MARKETPLACE_ADDONS: '$token' (known: $($known -join ' '))" }
             }
+        }
+        if ($picked.Count -eq 0 -and $skipped) {
+            # The warnings above already said why each one was left out.
+            Info "Nothing to install on this machine."
+            return
         }
         if ($picked.Count -eq 0) {
             # Say WHY this is a refusal and not a failure. A reader who arrives
@@ -5787,10 +5814,20 @@ function Request-ExakitMarketplaceOffer {
     $interactive = ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected)
     # Personas picked on screen: their add-ons, ticked, and nothing else - the
     # rest of the marketplace is named once by Write-ExakitPersonaMarketplaceNote.
+    # A persona whose add-ons are "all" is the whole marketplace, every row
+    # ticked: "all" is not an id, and as a filter it matched nothing, which ended
+    # the offer with "Everything available is already covered." Twin of
+    # exakit_marketplace_offer.
     if ($env:EXAKIT_MARKETPLACE_PRESELECT -and -not $softFailed -and $interactive) {
         Write-ExakitRule
         Write-ExakitHeading "Add-ons for your personas"
-        $env:EXAKIT_MARKETPLACE_ONLY = $env:EXAKIT_MARKETPLACE_PRESELECT
+        $only = ("" + $env:EXAKIT_MARKETPLACE_PRESELECT).ToLower().Replace(" ", "")
+        if ($only -eq "all") {
+            Remove-Item env:EXAKIT_MARKETPLACE_ONLY -ErrorAction SilentlyContinue
+            Show-ExakitMarketplaceMenu
+            return
+        }
+        $env:EXAKIT_MARKETPLACE_ONLY = $only
         try { Show-ExakitMarketplaceMenu } finally { Remove-Item env:EXAKIT_MARKETPLACE_ONLY -ErrorAction SilentlyContinue }
         return
     }

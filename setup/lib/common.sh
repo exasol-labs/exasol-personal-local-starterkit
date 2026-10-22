@@ -473,6 +473,7 @@ _ui_checkbox_toggle() {
 # EXAKIT_CHECKBOX_EXCLUSIVE (optional, cleared after each call): 1-based index
 # of an option that cannot be combined with the others — think "Skip".
 # Selecting it clears every other choice; selecting any other choice clears it.
+# Enter with the cursor ON it answers it alone, whatever else is ticked.
 # "a" (select all) selects all non-exclusive options.
 #
 # EXAKIT_CHECKBOX_GROUP (optional, cleared after each call):
@@ -787,6 +788,13 @@ ui_checkbox_menu() {
         fi
         case "$_cb_key" in
             "")                                          # Enter → confirm, next step
+                # Enter ON the exclusive row (Skip, No, Nothing) answers that
+                # row alone, whatever else is ticked: the other rows usually
+                # start ticked, so "move to Skip, press Enter" used to confirm
+                # them instead. Same rule as ui_table_menu.
+                if [ -n "${EXAKIT_CHECKBOX_EXCLUSIVE:-}" ] && [ "$_cb_cur" = "$EXAKIT_CHECKBOX_EXCLUSIVE" ]; then
+                    _cb_sel="$_cb_cur"
+                fi
                 [ -n "$_cb_sel" ] && break
                 continue                                 # at least one selection required
                 ;;
@@ -4346,6 +4354,7 @@ EXAKIT_MM_EOF
     if [ -n "${EXAKIT_MARKETPLACE_ADDONS:-}" ]; then
         _mm_answer="$(printf '%s' "$EXAKIT_MARKETPLACE_ADDONS" | tr '[:upper:]' '[:lower:]' | tr -d ' ')"
         _mm_picked=""
+        _mm_skipped=0
         case "$_mm_answer" in
             none) info "EXAKIT_MARKETPLACE_ADDONS=none — installing nothing."; return 0 ;;
             all)
@@ -4370,19 +4379,30 @@ EXAKIT_MM_EOF
                     elif _exakit_addon_registered "$_mm_tok" && _exakit_addon_system_present "$_mm_tok"; then
                         info "$_mm_tok is already on this system — the kit leaves it alone"
                     elif _exakit_addon_registered "$_mm_tok" && ! _exakit_addon_applicable "$_mm_tok"; then
+                        # A real add-on that does not run here. One such id
+                        # (a persona's list is written for every platform)
+                        # used to end the answer before anything installed; it
+                        # is skipped with the reason, and the rest go ahead.
                         _mm_why="$(_exakit_addon_applicable_reason "$_mm_tok")"
-                        die "$_mm_tok is not available on this machine${_mm_why:+: $_mm_why}"
+                        warn "Skipping $_mm_tok — it is not available on this machine${_mm_why:+: $_mm_why}"
+                        _mm_skipped=1
                     elif _exakit_addon_registered "$_mm_tok"; then
                         # Registered but no module in this kit copy: a real
                         # add-on the user asked for by name — say what fixes it
-                        # instead of calling it unknown.
-                        die "The $_mm_tok module is not part of this kit copy — update the kit first: exakit update"
+                        # instead of calling it unknown, and install the rest.
+                        warn "Skipping $_mm_tok — its module is not part of this kit copy; update the kit first: exakit update"
+                        _mm_skipped=1
                     else
                         die "Unknown marketplace add-on in EXAKIT_MARKETPLACE_ADDONS: '$_mm_tok' (known: $(exakit_marketplace_addons | cut -d'|' -f1 | tr '\n' ' ' | sed 's/ $//'))"
                     fi
                 done
                 ;;
         esac
+        if [ -z "$_mm_picked" ] && [ "$_mm_skipped" = 1 ]; then
+            # The warnings above already said why each one was left out.
+            info "Nothing to install on this machine."
+            return 0
+        fi
         if [ -z "$_mm_picked" ]; then
             # Say WHY this is a refusal and not a failure. A reader who arrives
             # here straight after an add-on failed to install reads "nothing to
@@ -4677,10 +4697,15 @@ exakit_marketplace_offer() {
     # THE PERSONAS' ADD-ONS, picked on screen: offered straight away, ticked,
     # and only those - the rest of the marketplace is one command away and the
     # closing note says so. Enter installs them; Skip backs out.
+    # A persona whose add-ons are "all" is the whole marketplace, every row
+    # ticked: "all" is not an id, and as a filter it matched nothing, which
+    # ended the offer with "Everything available is already covered."
     if [ -n "${EXAKIT_MARKETPLACE_PRESELECT:-}" ] && [ -z "${EXAKIT_SOFT_FAILED:-}" ] && [ -n "$(_exakit_prompt_tty)" ]; then
         ui_rule
         heading "Add-ons for your personas"
-        EXAKIT_MARKETPLACE_ONLY="$EXAKIT_MARKETPLACE_PRESELECT" exakit_marketplace_menu || true
+        _mo_only="$(printf '%s' "$EXAKIT_MARKETPLACE_PRESELECT" | tr '[:upper:]' '[:lower:]' | tr -d ' ')"
+        [ "$_mo_only" = all ] && _mo_only=""
+        EXAKIT_MARKETPLACE_ONLY="$_mo_only" exakit_marketplace_menu || true
         return 0
     fi
 
@@ -9898,10 +9923,12 @@ EXAKIT_DATA_NOTES_EOF
 
 # kit_shared_steps <first-step-no> <total-steps> <script-dir> <kit-root>
 # The steps every platform runs after its runtime is up, in order: exapump,
-# the sample-data load offer, the MCP server, the exakit helper, and the MCP
-# client setup offer. Data is loaded before MCP so the read-only user is
-# provisioned against a populated schema. One implementation so the per-OS
-# setup scripts cannot drift apart.
+# the MCP server (with the AI client and skills offers), pyexasol and the exakit
+# helper. The sample data is not one of them any more: it follows the persona
+# question, which the setup scripts ask after these steps (exakit_persona_flow).
+# Only a kit copy without persona.sh still loads it here, between exapump and
+# the MCP server. One implementation so the per-OS setup scripts cannot drift
+# apart.
 # exakit_soft_step <component> <repair-command> <label> <function...> — run one
 # component's install without letting it end the run.
 #
@@ -10395,7 +10422,9 @@ kit_shared_steps() {
         # MCP package is a network download and an unpack; the load below is a
         # local database reading local files. Neither needs the other, so the
         # download runs underneath the load and the AI bridge step collects a
-        # finished one. See mcp_prefetch_begin.
+        # finished one. See mcp_prefetch_begin. Only this branch starts it: with
+        # the data after the steps there is no load for it to run under, and the
+        # AI bridge step primes the package itself when nothing was prefetched.
         if command -v mcp_prefetch_begin >/dev/null 2>&1; then
             mcp_prefetch_begin || true
         fi

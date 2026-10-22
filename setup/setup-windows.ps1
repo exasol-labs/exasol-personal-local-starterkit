@@ -204,12 +204,11 @@ try {
         Info "Step 3/6  exapump - not part of this installation, skipping"
     }
 
-    # Load the sample data before any MCP configuration. exapump is now up
-    # (its only dependency), and doing this first means the read-only MCP
-    # user is provisioned, granted, and posture-checked against a schema
-    # that already holds the sample tables - and the AI client has data to
-    # query the moment it connects. Wrapped so a failed/declined load never
-    # aborts the rest of setup (mirrors kit_shared_steps' `|| true` in bash).
+    # The sample data. With persona.ps1 in the kit it follows the persona
+    # question after every step (Invoke-ExakitPersonaFlow, below), so this
+    # branch is the fallback for a kit copy without it, which still loads here,
+    # before the AI bridge. Wrapped so a failed/declined load never aborts the
+    # rest of setup (mirrors kit_shared_steps in bash).
     if (-not $dbReady) {
         # already said above - nothing more to add here
     } elseif ($exapumpSupported -and (Test-ExakitSoftFailed "exapump")) {
@@ -234,6 +233,8 @@ try {
         # local database reading local files. Neither needs the other, so the
         # download runs underneath the load and Step 4 collects a finished one.
         # See Start-ExakitMcpPrefetch. Twin of the same call in kit_shared_steps.
+        # Only this branch starts it; without a prefetch Step 4 primes the
+        # package itself (Receive-ExakitMcpPrefetch answers $null).
         if (Get-Command Start-ExakitMcpPrefetch -ErrorAction SilentlyContinue) {
             try { Start-ExakitMcpPrefetch } catch { }
         }
