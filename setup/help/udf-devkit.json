@@ -5,6 +5,7 @@
   "title": "UDF dev kit",
   "tagline": "Python UDFs on the local database, proven with a smoke test.",
   "role": "A local Exasol Personal database ships with no script language container, so no Python UDF runs until one is installed, and it has no BucketFS upload service. The UDF dev kit drives the Exasol launcher's container commands for you, checks every install with a UDF that reports each package's version, and copies files a UDF reads into BucketFS.",
+  "repo": "exasol/script-languages-release",
   "docs": "https://github.com/exasol/exasol-personal#readme",
   "installed_by": "exakit marketplace udf-devkit, or the ml-engineer persona. Installing it installs the official Python container, which restarts the database once.",
   "platforms": "macOS on Apple silicon, Linux (x86_64 and Arm, including WSL) and Windows x86_64. Needs the Exasol launcher 2.3.0 or later; exakit update personal brings it. Building your own container (exakit udf-build) also needs a running Docker engine and the notebook add-on.",
@@ -16,8 +17,8 @@
     },
     {
       "step": "Add the machine-learning packages",
-      "run": "exakit udf-use default",
-      "note": "numpy, pandas and scikit-learn for your CPU, alias PYTHON3_ML."
+      "run": "exakit udf-build requirements.txt",
+      "note": "numpy, pandas, scikit-learn - each pinned name==version in the file; alias PYTHON3_CUSTOM. Needs Docker and the notebook add-on. Once a prebuilt container is published, exakit udf-use default installs one instead (alias PYTHON3_ML)."
     },
     {
       "step": "Give a UDF a file",
@@ -65,7 +66,7 @@
     "The smoke UDF lives in the EXAKIT_UDF schema and is replaced on every install. Drop the schema if you want it gone; the next install creates it again.",
     "Write a UDF for a container with its alias: CREATE OR REPLACE PYTHON3_ML SCALAR SCRIPT ... The official container answers to PYTHON3.",
     "Uninstalling the add-on leaves the containers in the database, because your UDFs may use them; exasol slc remove <alias> removes one.",
-    "Where BucketFS lives, the aliases and the schema are catalog settings (catalog/addons/udf-devkit/addon.json), so a launcher that changes them is a kit update, not a code change.",
+    "Where BucketFS lives, the aliases, the schema and the build flavor (template-Exasol-all-python-3.12, from exasol/script-languages-release) are settings at the top of setup/lib/udf-devkit.sh and its PowerShell twin setup/lib/udf-devkit.ps1, so a launcher that moves them needs a kit update that changes those values, not new logic.",
     "A new version of the UDF dev kit (a 2.0 included) arrives with exakit update, which records it and says when it is a major step. It never replaces a container your UDFs use: install the new prebuilt one when you are ready with exakit udf-use default."
   ],
   "troubleshooting": [

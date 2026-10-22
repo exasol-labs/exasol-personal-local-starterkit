@@ -377,7 +377,7 @@ class DatabaseReadinessTests(unittest.TestCase):
 
 class EveryDatasetPassesTheCheckTests(unittest.TestCase):
     """Every folder under data/datasets passes tools/dataset_check.py's file checks - the rules a contributor runs
-    before adding a dataset (data/datasets/README.md): encoding, headers, row widths, keys, reserved words, the
+    before adding a dataset (data/README.md): encoding, headers, row widths, keys, reserved words, the
     verify script, and for a reference dataset its descriptor, manifest, README and examples."""
 
     def test_every_folder_passes_the_dataset_check(self) -> None:

@@ -34,17 +34,58 @@ loads the dataset into your database as `exakit data-load` does, verifies it and
 again (`--offline` skips the load; `--keep` leaves it; `--replace` reloads a schema that
 is already there). The kit offers every folder that has a `dataset.conf`. A reference
 dataset (one with a `descriptor.json`, for the persona notebooks) also needs a
-`README.md`, a `manifest.json` and at least ten example queries in `examples.sql`.
+`README.md`, a `manifest.json` and at least ten example queries in `examples.sql` - see
+[Reference datasets](#reference-datasets) below.
+
+The kit bundles seven datasets:
 
 | Dataset | Schema | Contents |
 |---|---|---|
 | [`datasets/tpch/`](datasets/tpch/) | `TPCH` | TPC-H retail benchmark (below) — the original sample |
 | [`datasets/energy/`](datasets/energy/) | `ENERGY` | 50 smart meters + 108,000 hourly readings (SQL-generated time series) |
 | [`datasets/weather/`](datasets/weather/) | `WEATHER` | 10 European cities, ~11k days of daily weather (2023–2025) |
-| [`datasets/pharma_trials/`](datasets/pharma_trials/) | `PHARMA` | 5,169 industry Phase 2/3 trials from ClinicalTrials.gov, with a label (terminated early) and a text summary ([README](datasets/pharma_trials/README.md)) |
-| [`datasets/banking_complaints/`](datasets/banking_complaints/) | `BANKING` | 6,754 CFPB consumer complaints about cards, mortgages and accounts, with a label (monetary relief) ([README](datasets/banking_complaints/README.md)) |
-| [`datasets/fda_recalls/`](datasets/fda_recalls/) | `FDA` | The FDA's 2024 food, drug and device recalls from openFDA, with the reason as text and a label (Class I, the serious ones) ([README](datasets/fda_recalls/README.md)) |
-| [`datasets/bank_marketing/`](datasets/bank_marketing/) | `BANKMKT` | 45,211 clients of a bank's term-deposit campaign (UCI), with a label (subscribed) ([README](datasets/bank_marketing/README.md)) |
+| [`datasets/pharma_trials/`](datasets/pharma_trials/) | `PHARMA` | 5,169 industry Phase 2/3 trials from ClinicalTrials.gov (started 2016-2018), with a label (terminated early), the brief summary and eligibility criteria as text, and tables of sponsors and collaborators, conditions, interventions and stop reasons; 12.8 MB ([README](datasets/pharma_trials/README.md)) |
+| [`datasets/banking_complaints/`](datasets/banking_complaints/) | `BANKING` | 6,754 CFPB consumer complaints about cards, mortgages and accounts (1-14 January 2025), with a label (monetary relief) and the company responses apart; 1.9 MB ([README](datasets/banking_complaints/README.md)) |
+| [`datasets/fda_recalls/`](datasets/fda_recalls/) | `FDA` | 5,459 food, drug and device recalls the FDA reported in 2024 (openFDA), with the reason as text, a label (Class I, the serious ones) and the classifications apart; 3.5 MB ([README](datasets/fda_recalls/README.md)) |
+| [`datasets/bank_marketing/`](datasets/bank_marketing/) | `BANKMKT` | 45,211 clients of a Portuguese bank's term-deposit campaigns (UCI Bank Marketing, 2008-2010), with a label (subscribed); 3.7 MB, no descriptor ([README](datasets/bank_marketing/README.md)) |
+
+The first three are the original samples. The other four come from public sources and carry
+a `README.md` (source, terms, data dictionary) and a `manifest.json` (source query, snapshot
+date, rows and SHA-256 of every CSV); the builders that fetch them again live in
+[`tools/datasets/`](../tools/datasets/). Every table and column has a `COMMENT` in its
+`01_create_schema.sql`, so the database itself describes the data; the narrative and the join
+map for all seven are in [data-dictionary.md](data-dictionary.md).
+
+## Reference datasets
+
+`pharma_trials`, `banking_complaints` and `fda_recalls` are *reference datasets*: each has a
+`descriptor.json` that tells the persona notebooks (`explore`, `train`, `text_classification`)
+which column plays which role, so the same notebook runs on any of them - or on a user's own
+table with its own descriptor:
+
+```json
+{
+  "schema_version": 1,
+  "id": "fda_recalls",
+  "fact_table": "FDA.FDA_RECALLS",
+  "roles": {
+    "entity":   {"table": "FDA.FDA_RECALLS", "column": "RECALLING_FIRM"},
+    "category": {"table": "FDA.FDA_RECALLS", "column": "PRODUCT_TYPE"},
+    "date":     {"table": "FDA.FDA_RECALLS", "column": "REPORT_DATE"},
+    "label":    {"table": "FDA.FDA_RECALLS", "column": "SERIOUS"},
+    "text":     [{"table": "FDA.FDA_RECALLS", "column": "REASON_FOR_RECALL"},
+                 {"table": "FDA.FDA_RECALLS", "column": "PRODUCT_DESCRIPTION"}]
+  }
+}
+```
+
+`id` is the folder name and `fact_table` is `SCHEMA.TABLE`. `entity`, `category`, `date` and
+`label` take exactly one column each, `text` one or more (joined in that order); no column may
+play two roles, and every column must exist in `01_create_schema.sql`. The rules are in
+[`tools/descriptor_rules.py`](../tools/descriptor_rules.py). A reference dataset also ships
+its `README.md`, a `manifest.json` whose `files` match the CSVs (`python3
+tools/dataset_check.py data/datasets/<id> --manifest` rewrites them) and at least ten read-only
+`SELECT`s on its own schema in `examples.sql`; `tools/dataset_check.py` checks all of it.
 
 ## The TPC-H dataset (`datasets/tpch/`)
 
@@ -85,7 +126,7 @@ part ───────────────< lineitem
 ## Column reference
 
 See **[data-dictionary.md](data-dictionary.md)** for the full per-column reference —
-name, type, description, keys, and allowed values for every table.
+name, type, description, keys, and allowed values for every table of all seven datasets.
 
 ## Regenerating at a different size (optional)
 

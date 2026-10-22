@@ -11,7 +11,7 @@ them (11.9%) did.
 exakit data-load banking_complaints
 ```
 
-It loads into the `BANKING` schema in a few seconds (2.3 MB of CSV).
+It loads into the `BANKING` schema in a few seconds (1.9 MB of CSV).
 
 ## No complaint narratives
 
@@ -23,9 +23,10 @@ phrases. The notebooks' text step works on them, but expect short, repetitive
 text rather than prose. For long free text, use `pharma_trials`.
 
 The public response is written when the company answers, so it could hint at
-the outcome. In this snapshot it hardly does: the relief rate behind each
-response ranges from 0% to 16% against 12% overall (example 11), so the
-notebooks' model reads it with the other text.
+the outcome. In this snapshot it hardly does: behind each response given
+ten times or more, the relief rate ranges from 0% to 16% against 12% overall
+(example 11; the rarer phrases, given one to six times, are too few to read),
+so the notebooks' model reads it with the other text.
 
 ## Tables
 

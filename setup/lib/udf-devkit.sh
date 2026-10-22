@@ -37,6 +37,8 @@ EXAKIT_UDF_DEFAULT_ALIAS="PYTHON3_ML"
 EXAKIT_UDF_BUILD_ALIAS="PYTHON3_CUSTOM"
 EXAKIT_UDF_LANGUAGE="python"
 EXAKIT_UDF_SCHEMA="EXAKIT_UDF"
+# The prebuilt container's packages (exakit udf-use default): unused until one is published.
+# shellcheck disable=SC2034
 EXAKIT_UDF_DEFAULT_PACKAGES="numpy pandas scikit-learn"
 EXAKIT_UDF_INSTALL_TIMEOUT="${EXAKIT_UDF_INSTALL_TIMEOUT:-3600}"
 # BucketFS of a local deployment: a folder inside the deployment directory,
@@ -297,22 +299,26 @@ cmd_udf_build() {
     _ucb_pins="$(_udf_tool pinned "$_ucb_req" 2>"$EXAKIT_HOME/.udf-pins.err")" || die "$(cat "$EXAKIT_HOME/.udf-pins.err")"
     rm -f "$EXAKIT_HOME/.udf-pins.err"
     _ucb_alias="$(_udf_tool identifier "${_ucb_alias:-$EXAKIT_UDF_BUILD_ALIAS}")" || exit 2
-    command -v notebook_installed_version >/dev/null 2>&1 && notebook_installed_version >/dev/null || \
+    if ! { command -v notebook_installed_version >/dev/null 2>&1 && notebook_installed_version >/dev/null; }; then
         die "Building a container uses the notebook add-on's tooling, which is not installed. Install it with: exakit marketplace notebook"
+    fi
     exakit_db_reachable || die "The database is not running. Start it with: exakit start"
     udf_devkit_require_launcher || exit 1
-    command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 || \
+    if ! { command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; }; then
         die "Building a container needs a running Docker engine, and none answers (start Docker Desktop or Colima; with Podman, start its machine and point DOCKER_HOST at its socket)."
+    fi
     _ucb_work="$EXAKIT_UDF_DEVKIT_HOME/build"
     mkdir -p "$_ucb_work"
     _ucb_free="$(df -Pk "$_ucb_work" | awk 'NR==2 {print int($4/1048576)}')"
     [ "${_ucb_free:-0}" -ge "$EXAKIT_UDF_BUILD_MIN_FREE_GB" ] || \
         die "Building a container needs about $EXAKIT_UDF_BUILD_MIN_FREE_GB GB free; $_ucb_work has ${_ucb_free:-0} GB."
     _ucb_uv="$(_notebook_uv)" || die "uv (the Python tool runner) is not available."
+    # Read by run_logged's spinner in common.sh.
+    # shellcheck disable=SC2034
     EXAKIT_ACTIVE_LABEL="Adding the container build tooling to the notebook environment"
     # shellcheck disable=SC2086
     run_logged "$_ucb_uv" pip install --python "$(notebook_venv_python)" \
-        "$EXAKIT_NOTEBOOK_PACKAGE[$EXAKIT_NOTEBOOK_EXTRAS,slc]==$(notebook_package_version)" || \
+        "${EXAKIT_NOTEBOOK_PACKAGE}[$EXAKIT_NOTEBOOK_EXTRAS,slc]==$(notebook_package_version)" || \
         die "The container build tooling could not be added to the notebook environment (see the log)."
     notebook_write_connection >/dev/null || die "The notebook connection store could not be written."
     _ucb_doc="$(printf '%s\n' "$_ucb_pins" | python3 -c '
@@ -342,7 +348,9 @@ cmd_udf_file() {
     [ -d "$(dirname "$_ucf_root")" ] || die "The deployment has no BucketFS folder at $_ucf_root; is the database deployed by this launcher? (exakit status)"
     _ucf_dest="$_ucf_root/$EXAKIT_UDF_BUCKETFS_SERVICE/$EXAKIT_UDF_BUCKETFS_BUCKET/$_ucf_rel"
     mkdir -p "$(dirname "$_ucf_dest")" || die "Could not create $(dirname "$_ucf_dest")"
-    cp "$1" "$_ucf_dest.part" && mv "$_ucf_dest.part" "$_ucf_dest" || die "Could not copy $1 into BucketFS."
+    if ! { cp "$1" "$_ucf_dest.part" && mv "$_ucf_dest.part" "$_ucf_dest"; }; then
+        die "Could not copy $1 into BucketFS."
+    fi
     ok "Copied into BucketFS: $_ucf_dest"
     info "A UDF reads it as: $EXAKIT_UDF_BUCKETFS_ROOT/$EXAKIT_UDF_BUCKETFS_SERVICE/$EXAKIT_UDF_BUCKETFS_BUCKET/$_ucf_rel"
 }

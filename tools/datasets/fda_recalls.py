@@ -7,6 +7,11 @@ one (a reasonable probability of serious harm), so the label is "Class I or not"
 learns it - and the product type - from the reason's words. The classification itself sits in a table of its own, as the
 banking dataset keeps its company responses apart: the label is derived from it, so it is for reading, never a feature.
 
+Free text (where the product went, the product, the reason) is folded to one line and cut on a word (snapshot.clean).
+Names and categories (the firm, its state and country, voluntary or mandated, the first notification, the status) are
+never cut: a value wider than its column in 01_create_schema.sql stops the build instead. openFDA writes "N/A" where it
+has no value in those fields; the snapshot keeps that as empty (NULL), the same as a field openFDA leaves out.
+
     python3 tools/datasets/fda_recalls.py       # writes data/datasets/fda_recalls/data/*.csv and manifest.json
 """
 
@@ -34,6 +39,9 @@ TABLES = {
                     "PRODUCT_DESCRIPTION", "REASON_FOR_RECALL", "RECALL_INITIATION_DATE", "REPORT_DATE", "SERIOUS"],
     "FDA_CLASSIFICATIONS": ["RECALL_NUMBER", "CLASSIFICATION", "CLASSIFICATION_DATE"],   # the label's source
 }
+TEXT = {"DISTRIBUTION_PATTERN": 400, "PRODUCT_DESCRIPTION": 600, "REASON_FOR_RECALL": 600}   # cut on a word
+WIDTH = {"RECALLING_FIRM": 200, "FIRM_STATE": 40, "FIRM_COUNTRY": 60, "VOLUNTARY_MANDATED": 60,      # never cut: the
+         "INITIAL_NOTIFICATION": 100, "RECALL_STATUS": 20}                                          # VARCHAR widths
 
 
 def _date(value: str | None) -> str:
@@ -57,14 +65,27 @@ def fetch(kind: str) -> list[dict]:
         time.sleep(0.5)
 
 
+def _name(column: str, value: str | None) -> str:
+    """A name or a category, whole: one line, "N/A" as empty; a value wider than its column is an error, never cut."""
+    value = clean(value)
+    if value.upper() == "N/A":
+        return ""
+    if len(value) > WIDTH[column]:
+        raise SystemExit(f"{column}: {value!r} is {len(value)} characters, wider than VARCHAR({WIDTH[column]}) - "
+                         "widen the column in 01_create_schema.sql and WIDTH here")
+    return value
+
+
 def row(r: dict) -> list:
     """One recall as a row of FDA_RECALLS (its classification goes to FDA_CLASSIFICATIONS)."""
     return [r["recall_number"], int(r["event_id"]) if str(r.get("event_id", "")).isdigit() else "", r["product_type"],
-            clean(r["recalling_firm"], 200), clean(r.get("state"), 40), clean(r.get("country"), 60),
-            clean(r.get("voluntary_mandated"), 60), clean(r.get("initial_firm_notification"), 80), clean(r.get("status"), 20),
-            clean(r.get("distribution_pattern"), 400), clean(r.get("product_description"), 600),
-            clean(r.get("reason_for_recall"), 600), _date(r.get("recall_initiation_date")), _date(r["report_date"]),
-            1 if r.get("classification") == "Class I" else 0]
+            _name("RECALLING_FIRM", r["recalling_firm"]), _name("FIRM_STATE", r.get("state")),
+            _name("FIRM_COUNTRY", r.get("country")), _name("VOLUNTARY_MANDATED", r.get("voluntary_mandated")),
+            _name("INITIAL_NOTIFICATION", r.get("initial_firm_notification")), _name("RECALL_STATUS", r.get("status")),
+            clean(r.get("distribution_pattern"), TEXT["DISTRIBUTION_PATTERN"]),
+            clean(r.get("product_description"), TEXT["PRODUCT_DESCRIPTION"]),
+            clean(r.get("reason_for_recall"), TEXT["REASON_FOR_RECALL"]), _date(r.get("recall_initiation_date")),
+            _date(r["report_date"]), 1 if r.get("classification") == "Class I" else 0]
 
 
 def main() -> int:

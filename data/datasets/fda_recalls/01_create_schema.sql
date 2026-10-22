@@ -16,14 +16,14 @@ CREATE OR REPLACE TABLE FDA_RECALLS (
     EVENT_ID               DECIMAL(10,0) NOT NULL,   -- one recall event can recall several products
     PRODUCT_TYPE           VARCHAR(20)   NOT NULL,   -- Food / Drugs / Devices
     RECALLING_FIRM         VARCHAR(200)  NOT NULL,
-    FIRM_STATE             VARCHAR(40),
+    FIRM_STATE             VARCHAR(40),              -- empty (NULL) when openFDA has none or says N/A
     FIRM_COUNTRY           VARCHAR(60),
-    VOLUNTARY_MANDATED     VARCHAR(60),
-    INITIAL_NOTIFICATION   VARCHAR(80),
+    VOLUNTARY_MANDATED     VARCHAR(60),              -- Voluntary: Firm initiated / FDA Mandated
+    INITIAL_NOTIFICATION   VARCHAR(100),             -- Letter / E-Mail / Telephone / ... (never cut)
     RECALL_STATUS          VARCHAR(20),              -- Ongoing / Completed / Terminated
-    DISTRIBUTION_PATTERN   VARCHAR(420),
-    PRODUCT_DESCRIPTION    VARCHAR(620)  NOT NULL,
-    REASON_FOR_RECALL      VARCHAR(620)  NOT NULL,
+    DISTRIBUTION_PATTERN   VARCHAR(420),             -- free text, cut on a word at 400 characters
+    PRODUCT_DESCRIPTION    VARCHAR(620)  NOT NULL,   -- free text, cut on a word at 600 characters
+    REASON_FOR_RECALL      VARCHAR(620)  NOT NULL,   -- free text, cut on a word at 600 characters
     RECALL_INITIATION_DATE DATE,
     REPORT_DATE            DATE          NOT NULL,
     SERIOUS                DECIMAL(1,0)  NOT NULL,   -- 1 when the FDA classified it Class I: the label
@@ -48,14 +48,14 @@ COMMENT ON COLUMN FDA_RECALLS.RECALL_NUMBER IS 'FDA recall number (PK), e.g. F-1
 COMMENT ON COLUMN FDA_RECALLS.EVENT_ID IS 'Recall event; one event can cover several recalled products';
 COMMENT ON COLUMN FDA_RECALLS.PRODUCT_TYPE IS 'Food, Drugs or Devices';
 COMMENT ON COLUMN FDA_RECALLS.RECALLING_FIRM IS 'The firm that recalled the product';
-COMMENT ON COLUMN FDA_RECALLS.FIRM_STATE IS 'The firm''s state or region';
-COMMENT ON COLUMN FDA_RECALLS.FIRM_COUNTRY IS 'The firm''s country';
-COMMENT ON COLUMN FDA_RECALLS.VOLUNTARY_MANDATED IS 'Firm initiated, FDA requested or FDA mandated';
-COMMENT ON COLUMN FDA_RECALLS.INITIAL_NOTIFICATION IS 'How the firm first told its customers (letter, e-mail, phone...)';
+COMMENT ON COLUMN FDA_RECALLS.FIRM_STATE IS 'The firm''s U.S. state (two letters) or a foreign region; NULL when openFDA gives none (its N/A included)';
+COMMENT ON COLUMN FDA_RECALLS.FIRM_COUNTRY IS 'The firm''s country, e.g. United States, China, India';
+COMMENT ON COLUMN FDA_RECALLS.VOLUNTARY_MANDATED IS 'Voluntary: Firm initiated or FDA Mandated; NULL when openFDA gives none (its N/A included)';
+COMMENT ON COLUMN FDA_RECALLS.INITIAL_NOTIFICATION IS 'How the firm first told its customers: Letter, E-Mail, Telephone, Press Release, Visit, Other, or Two or more of the following: Email, Fax, Letter, Press Release, Telephone, Visit; NULL when openFDA gives none (its N/A included)';
 COMMENT ON COLUMN FDA_RECALLS.RECALL_STATUS IS 'Ongoing, Completed or Terminated';
-COMMENT ON COLUMN FDA_RECALLS.DISTRIBUTION_PATTERN IS 'Where the product went, in the FDA''s words';
-COMMENT ON COLUMN FDA_RECALLS.PRODUCT_DESCRIPTION IS 'The recalled product, in the FDA''s words (free text)';
-COMMENT ON COLUMN FDA_RECALLS.REASON_FOR_RECALL IS 'Why it was recalled (free text): the text the notebooks classify';
+COMMENT ON COLUMN FDA_RECALLS.DISTRIBUTION_PATTERN IS 'Where the product went, in the FDA''s words (free text, cut on a word at 400 characters, ending in …)';
+COMMENT ON COLUMN FDA_RECALLS.PRODUCT_DESCRIPTION IS 'The recalled product, in the FDA''s words (free text, cut on a word at 600 characters, ending in …)';
+COMMENT ON COLUMN FDA_RECALLS.REASON_FOR_RECALL IS 'Why it was recalled (free text, cut on a word at 600 characters, ending in …): the text the notebooks classify';
 COMMENT ON COLUMN FDA_RECALLS.RECALL_INITIATION_DATE IS 'When the firm started the recall';
 COMMENT ON COLUMN FDA_RECALLS.REPORT_DATE IS 'When the FDA published the recall in its enforcement report';
 COMMENT ON COLUMN FDA_RECALLS.SERIOUS IS '1 when the FDA classified the recall Class I (a reasonable probability of serious harm), else 0: the label';
