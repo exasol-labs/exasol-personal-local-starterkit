@@ -38,7 +38,8 @@
         "udf-setup",
         "udf-use",
         "udf-build",
-        "udf-file"
+        "udf-file",
+        "model"
       ]
     },
     {
@@ -357,6 +358,18 @@
       "examples": [
         "exakit udf-file model.pkl",
         "exakit udf-file model.pkl models/model.pkl"
+      ]
+    },
+    {
+      "command": "model",
+      "options": "put <file> [--replace] [--json] | list [--json] | template [--json]",
+      "summary": "Model files in the bucket directory: put one (digest recorded, /buckets path printed), list them, find the scoring UDF template.",
+      "description": "exakit model put copies a model file trained anywhere to models/<name> in the deployment's bucket directory, records its sha256, size and time, and prints the /buckets path a UDF reads; a different file of the same name is refused (exit 5) unless --replace, the same file again changes nothing. exakit model list shows what is there and flags a file changed since it was put. exakit model template names udf/templates/score_model.sql and its renderer, which fill in a scoring UDF for scikit-learn pickles, joblib or ONNX files. Part of the udf-devkit add-on: exakit model --help.",
+      "examples": [
+        "exakit model put churn.pkl",
+        "exakit model put churn.pkl --replace",
+        "exakit model list --json",
+        "exakit model template"
       ]
     },
     {

@@ -1,7 +1,7 @@
 ---
 name: udf-devkit
 addon: udf-devkit
-description: Make Python UDFs work on the local Exasol Personal database with the udf-devkit add-on — covering why a local database runs no UDF until a script language container is installed, exakit udf-setup for the official container, exakit udf-use for the prebuilt machine-learning one or your own tarball, exakit udf-build from a pinned requirements file, the smoke UDF that proves each install, the database restart every install brings, and exakit udf-file because a local database has no BucketFS upload service. Triggers — "run a Python UDF", "my UDF says the script language is not found", "install a script language container", "add scikit-learn to my UDFs", "build a custom container", "install udf-devkit", "upload a model to BucketFS", "where do UDF files go", "PYTHON3 alias".
+description: Make Python UDFs work on the local Exasol Personal database with the udf-devkit add-on — covering why a local database runs no UDF until a script language container is installed, exakit udf-setup for the official container, exakit udf-use for the prebuilt machine-learning one or your own tarball, exakit udf-build from a pinned requirements file, the smoke UDF that proves each install, the database restart every install brings, and exakit udf-file because a local database has no BucketFS upload service. Triggers — "score a model in the database", "upload a model for a UDF", "exakit model put", "run a Python UDF", "my UDF says the script language is not found", "install a script language container", "add scikit-learn to my UDFs", "build a custom container", "install udf-devkit", "upload a model to BucketFS", "where do UDF files go", "PYTHON3 alias".
 ---
 
 # udf-devkit — Python UDFs on the local database
@@ -44,7 +44,22 @@ exakit udf-file model.pkl models/model.pkl
 # prints: /buckets/bfsdefault/default/models/model.pkl
 ```
 
-Open that path inside the UDF. No restart is needed. Never tell a user to
+Open that path inside the UDF. No restart is needed.
+
+### Model files (a model trained anywhere)
+
+```bash
+exakit model put churn.pkl            # prints /buckets/bfsdefault/default/models/churn.pkl, digest recorded
+exakit model put churn.pkl --replace  # a DIFFERENT file of the same name: exit 5 without --replace
+exakit model list --json              # what is there; a file changed since it was put is flagged "changed"
+exakit model template                 # where the scoring UDF template and its renderer are
+python3 <kit>/udf/templates/render.py --schema S --name SCORE --model-path /buckets/bfsdefault/default/models/churn.pkl \
+    --input category:VARCHAR(2000) --input doc_text:VARCHAR(2000000):text --output DOUBLE --method predict_proba
+```
+
+The template loads the model once per UDF instance (pickle, joblib or ONNX).
+TEXT is a reserved word: a model column named `text` comes in as parameter
+`doc_text`. The notebook `ml-engineer/02_score_external_model` walks through it. Never tell a user to
 upload to BucketFS over HTTP, with `exasol-bucketfs` or with curl on port 2580
 or 2581: a local deployment does not serve it.
 
@@ -54,6 +69,6 @@ or 2581: a local deployment does not serve it.
 |---|---|
 | "needs Exasol launcher 2.3.0 or later" | `exakit update personal` |
 | "No prebuilt container is published for this machine yet" | `exakit udf-build requirements.txt` |
-| "needs a running Docker engine" | Start Docker Desktop or Colima, then retry |
+| "needs a running Docker engine" | Start Docker Desktop, Colima or the Podman machine, then retry |
 | The database did not come back after an install | `exakit start` |
 | A package is reported MISSING | Pin it in requirements.txt and run `exakit udf-build` |

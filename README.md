@@ -72,7 +72,7 @@ The base install stays small. When you want more, you pick an add-on by the outc
 | [Exasol&nbsp;Scheduler](https://github.com/exasol-labs/exasol-scheduler) | SQL that runs on a timetable inside the database. The jobs are rows in a table |
 | [dbt-exasol](https://github.com/exasol/dbt-exasol) | Repeatable SQL models built, tested and documented with dbt against the local database |
 | [Notebooks](https://github.com/exasol/notebook-connector) | JupyterLab connected to the local database (no password in any notebook): `explore.ipynb` runs on any described dataset, `train.ipynb` trains inside the database and logs to your MLflow. Open with `exakit notebook` |
-| UDF&nbsp;dev&nbsp;kit | Python UDFs on the local database: `exakit udf-setup` installs the Python container (the database restarts), `udf-build` builds one from your pinned requirements, `udf-file` puts a model file where a UDF reads it |
+| UDF&nbsp;dev&nbsp;kit | Python UDFs on the local database: `exakit udf-setup` installs the Python container (the database restarts), `udf-build` builds one from your pinned requirements, `model put` brings in a model trained anywhere (digest recorded) and `model template` makes the scoring UDF for it |
 
 
 ### JSON support
