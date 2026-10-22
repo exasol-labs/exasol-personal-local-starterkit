@@ -137,26 +137,27 @@ def _verify(pump: Pump, folder: Path, schema: str, markers: list[str], report: R
 
 def _check_reference(pump: Pump, folder: Path, report: Report) -> None:
     """A reference dataset: the descriptor's roles in the database, a 0/1 label, rows with text, and every example."""
-    doc = json.loads((folder / "descriptor.json").read_text(encoding="utf-8"))
-    refs = [(role, v) for role, value in doc["roles"].items() for v in (value if isinstance(value, list) else [value])]
-    schemas = sorted({r["table"].split(".")[0].upper() for _, r in refs})
+    from descriptor_rules import descriptor_file, read_descriptor
+    descriptor = read_descriptor(descriptor_file(folder))
+    refs = [(role, {"table": ref.table, "column": ref.column}) for role, ref in descriptor.references()]
+    schemas = descriptor.schemas()
     names = ", ".join(f"'{s}'" for s in schemas)
     columns = {f"{r['T']}.{r['C']}" for r in pump.rows(
         f"SELECT COLUMN_SCHEMA || '.' || COLUMN_TABLE AS T, COLUMN_NAME AS C FROM SYS.EXA_ALL_COLUMNS WHERE COLUMN_SCHEMA IN ({names})",
         "reading the columns")}
     missing = [f"{role} -> {r['table']}.{r['column']}" for role, r in refs if f"{r['table'].upper()}.{r['column'].upper()}" not in columns]
-    report.problems += [f"descriptor.json: the database has no column for {m}" for m in missing]
+    report.problems += [f"descriptor: the database has no column for {m}" for m in missing]
     if missing:
         return
     fact, label = doc["fact_table"], doc["roles"]["label"]["column"]
     values = {r["V"] for r in pump.rows(f"SELECT DISTINCT CAST({label} AS VARCHAR(100)) AS V FROM {fact} WHERE {label} IS NOT NULL", "reading the label")}
     if not values or not values <= {"0", "1"}:
-        report.problems.append(f"descriptor.json: the label {label} must be 0 or 1, found {sorted(values)[:5] or 'no values'}")
+        report.problems.append(f"descriptor: the label {label} must be 0 or 1, found {sorted(values)[:5] or 'no values'}")
     text = " || ".join(f"COALESCE(CAST({r['column']} AS VARCHAR(2000000)), '')" for role, r in refs if role == "text")
     with_text = pump.rows(f"SELECT COUNT(*) AS N FROM {fact} WHERE LENGTH(TRIM({text})) > 0", "reading the text")
     if not with_text or with_text[0]["N"] == "0":
-        report.problems.append("descriptor.json: no row has any text in the text columns")
-    report.passed.append("descriptor.json: every role resolves in the database")
+        report.problems.append("descriptor: no row has any text in the text columns")
+    report.passed.append("descriptor: every role resolves in the database")
     _run_examples(pump, folder, report)
 
 
@@ -193,7 +194,8 @@ def live_check(folder: Path, schema: str, markers: list[str], *, profile: str, r
         (report.problems if total > LOAD_BUDGET else report.passed).append(
             f"loaded in {total}s" + (f", over the {LOAD_BUDGET}s budget" if total > LOAD_BUDGET else ""))
         _verify(pump, folder, schema, markers, report)
-        if (folder / "descriptor.json").is_file():
+        from descriptor_rules import descriptor_file
+        if descriptor_file(folder) is not None:
             _check_reference(pump, folder, report)
     except LiveError as err:
         report.problems.append(str(err))

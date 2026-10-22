@@ -2,7 +2,7 @@
 and the roles turned into SQL names, so one notebook runs unchanged on any dataset whose descriptor is valid.
 
     ds = exakit_nb.dataset(conn, "pharma_trials")          # a dataset the kit ships, by id
-    ds = exakit_nb.dataset(conn, "~/data/descriptor.json") # or your own table, described by a descriptor file
+    ds = exakit_nb.dataset(conn, "~/data/descriptor.yaml") # or your own table, described by a descriptor file
     ds.col("label"), ds.text_sql(), ds.fact_table
 
 The rules are the kit's descriptor rules (``descriptor_rules``, shipped with this package: the 0.2 kit has no Python
@@ -36,13 +36,14 @@ def _locate(name: str) -> Path:
     given = Path(name).expanduser()
     if given.is_file():
         return given
-    if given.is_dir() and (given / "descriptor.json").is_file():
-        return given / "descriptor.json"
+    rules = _rules()
+    if given.is_dir() and rules.descriptor_file(given) is not None:
+        return rules.descriptor_file(given)
     folder = setting("EXAKIT_NB_DATASETS")
-    shipped = Path(folder) / name / "descriptor.json" if folder else None
-    if shipped is not None and shipped.is_file():
+    shipped = rules.descriptor_file(Path(folder) / name) if folder and (Path(folder) / name).is_dir() else None
+    if shipped is not None:
         return shipped
-    known = sorted(p.parent.name for p in Path(folder).glob("*/descriptor.json")) if folder else []
+    known = sorted(p.name for p in Path(folder).iterdir() if p.is_dir() and rules.descriptor_file(p)) if folder else []
     raise ValueError(f"No descriptor for '{name}': not a file, and not a dataset the kit ships"
                      + (f" (those with a descriptor: {', '.join(known)})" if known else "") + ".")
 

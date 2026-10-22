@@ -207,13 +207,13 @@ class CopyTest(unittest.TestCase):
     def test_copied_once_then_the_users(self):
         with tempfile.TemporaryDirectory() as tmp:
             added, problems = kit_notebooks.copy("jupyter", ROOT, Path(tmp))
-            self.assertIn("general/start_here.ipynb", added)
+            self.assertIn("data-scientist/start_here.ipynb", added)
             self.assertEqual(problems, [])
             base = Path(tmp) / "starter-kit-notebooks"
-            self.assertIn("general/start_here.ipynb", (base / ".kit-copied").read_text(encoding="utf-8").split())
-            (base / "general" / "start_here.ipynb").unlink()
+            self.assertIn("data-scientist/start_here.ipynb", (base / ".kit-copied").read_text(encoding="utf-8").split())
+            (base / "data-scientist" / "start_here.ipynb").unlink()
             self.assertEqual(kit_notebooks.copy("jupyter", ROOT, Path(tmp)), ([], []))
-            self.assertFalse((base / "general" / "start_here.ipynb").exists(), "deleted by the user: not copied again")
+            self.assertFalse((base / "data-scientist" / "start_here.ipynb").exists(), "deleted by the user: not copied again")
 
     def test_a_kit_that_existed_before_the_record_counts_what_is_there(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -229,7 +229,7 @@ class CopyTest(unittest.TestCase):
             base.mkdir()
             (base / "ml-engineer").write_text("a file, not a folder", encoding="utf-8")
             added, problems = kit_notebooks.copy("jupyter", ROOT, Path(tmp))
-            self.assertIn("general/start_here.ipynb", added)
+            self.assertIn("data-scientist/start_here.ipynb", added)
             self.assertTrue(problems and all(p.startswith("ml-engineer/") and "is a file" in p for p in problems), problems)
             with redirect_stderr(io.StringIO()) as err:
                 self.assertEqual(kit_notebooks.main(["copy", "jupyter", str(ROOT), tmp]), 1)

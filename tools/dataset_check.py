@@ -12,7 +12,7 @@ Adding a bundled dataset is three steps and no code (data/README.md):
 
 First the files, offline: dataset.conf, the CREATE TABLEs against every CSV (UTF-8, no BOM, the header's columns in
 order, every row as wide as the header, no empty NOT NULL value, no duplicate primary key), Exasol's reserved words,
-the verify script, and for a reference dataset (descriptor.json) the descriptor, the manifest's digests, the README and
+the verify script, and for a reference dataset (descriptor.yaml) the descriptor, the manifest's digests, the README and
 the examples. Then, unless --offline, the load (tools/dataset_live.py): the scripts and the CSVs through exapump as
 the kit loads them, the verification, the markers, the descriptor's roles and every example query - into the
 dataset's own schema, which must not exist yet (--replace reloads it and leaves it) and is dropped again afterwards
@@ -157,21 +157,22 @@ def _table_problems(folder: Path, schema_tables: dict[str, list[str]]) -> list[s
 
 
 def _descriptor_problems(folder: Path, schema: str, schema_tables: dict[str, list[str]]) -> list[str]:
-    """A dataset with descriptor.json is a reference dataset: valid descriptor, a manifest that matches, a README and
-    at least ten read-only example queries on its own schema (data/README.md, "Reference datasets")."""
-    path = folder / "descriptor.json"
-    if not path.is_file():
+    """A dataset with a descriptor (descriptor.yaml) is a reference dataset: valid descriptor, a manifest that
+    matches, a README and at least ten read-only example queries on its own schema (data/README.md, "Reference
+    datasets")."""
+    from descriptor_rules import BadInput, descriptor_file, parse_descriptor
+    path = descriptor_file(folder)
+    if path is None:
         return []
-    from descriptor_rules import BadInput, parse_descriptor
     try:
-        descriptor = parse_descriptor(path.read_text(encoding="utf-8"), "descriptor.json")
+        descriptor = parse_descriptor(path.read_text(encoding="utf-8-sig"), path.name)
     except BadInput as err:
         return [str(err)]
-    problems = [] if descriptor.id == folder.name else [f"descriptor.json: id must be '{folder.name}'"]
+    problems = [] if descriptor.id == folder.name else [f"{path.name}: id must be '{folder.name}'"]
     known = {f"{schema}.{t}": cols for t, cols in schema_tables.items()}
     for role, ref in descriptor.references():
         if ref.column not in known.get(ref.table, []):
-            problems.append(f"descriptor.json: {role} names {ref.table}.{ref.column}, not in 01_create_schema.sql")
+            problems.append(f"{path.name}: {role} names {ref.table}.{ref.column}, not in 01_create_schema.sql")
     problems += _manifest_problems(folder)
     if not (folder / "README.md").is_file():
         problems.append("README.md is missing (source, terms and the data dictionary)")
