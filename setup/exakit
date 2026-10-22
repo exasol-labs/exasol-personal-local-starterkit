@@ -1651,28 +1651,44 @@ cmd_logs() {
     exakit_logs_show "$_log_target" "$_log_follow" "$_log_lines" "$_log_path_only"
 }
 
+# cmd_data_load [--force] [<file-or-folder>|<dataset>] — in either order.
 cmd_data_load() {
     _require_install
-    # data-load takes either --force or a PATH. A path names what to load
-    # without walking the menu to type it in -- and a folder path is the bulk
-    # load: every CSV/Parquet/JSON file in it, one table each.
+    # data-load takes --force, a PATH, or a dataset id - --force together with a
+    # dataset id, in either order. A path names what to load without walking the
+    # menu to type it in -- and a folder path is the bulk load: every
+    # CSV/Parquet/JSON file in it, one table each.
     _dl_force=""
     _dl_path=""
-    case "${1:-}" in
-        "")      ;;
-        --force) _dl_force="--force" ;;
-        -*)      reject "Unknown option '$1' for data-load (pass --force, a file or folder path, or a dataset id)." ;;
-        *)       _dl_path="$1" ;;
-    esac
+    while [ "$#" -gt 0 ]; do
+        case "$1" in
+            "")      ;;
+            --force) _dl_force="--force" ;;
+            -*)      reject "Unknown option '$1' for data-load (pass --force, a file or folder path, or a dataset id)." ;;
+            *)       [ -n "$_dl_path" ] && \
+                         reject "data-load takes one file, folder or dataset at a time (got '$_dl_path' and '$1'); several datasets: EXAKIT_DATASETS=tpch,energy exakit data-load"
+                     _dl_path="$1" ;;
+        esac
+        shift
+    done
     command -v exakit_load_sample_data >/dev/null 2>&1 || \
         die "The exapump data-loading module is not available in this kit build."
     # A bundled dataset's id (exakit data-load fda_recalls) is the same answer
-    # as EXAKIT_DATASETS=fda_recalls - a file or folder of that name wins.
+    # as EXAKIT_DATASETS=fda_recalls - a file or folder of that name wins. Named
+    # on the command line it is THE answer: it replaces an EXAKIT_DATASETS and
+    # an EXAKIT_DATA_FILE left in the environment, which would otherwise load
+    # something else instead (the file won over the id without a word).
     if [ -n "$_dl_path" ] && [ ! -e "$_dl_path" ] && \
        exakit_bundled_datasets | cut -d'|' -f1 | grep -qx -- "$_dl_path"; then
         EXAKIT_DATASETS="$_dl_path"
         export EXAKIT_DATASETS
+        unset EXAKIT_DATA_FILE
         _dl_path=""
+    fi
+    # --force drops and rebuilds BUNDLED datasets. A file or folder has its own
+    # answer for a table that already holds rows, and it is not this one.
+    if [ -n "$_dl_force" ] && [ -n "$_dl_path" ]; then
+        reject "--force reloads bundled datasets, not a file or folder. For a table that already holds rows: EXAKIT_ON_EXISTING=replace exakit data-load $_dl_path"
     fi
     if [ -n "$_dl_path" ]; then
         _dl_norm="$(exakit_normalize_path "$_dl_path")"
@@ -1739,7 +1755,7 @@ cmd_data_load() {
                             info "Loading dataset '$_dl_id' (EXAKIT_DATASETS)."
                             exakit_load_dataset "$_kit_root" "$_dl_id" || _dl_failed=1
                             ;;
-                        *) ok "Dataset '$_dl_id' is already loaded — nothing to do (replace it with: exakit data-load --force, which drops and rebuilds its tables)" ;;
+                        *) ok "Dataset '$_dl_id' is already loaded — nothing to do (replace it with: exakit data-load --force $_dl_id, which drops and rebuilds its tables)" ;;
                     esac
                     ;;
                 *)
@@ -2652,7 +2668,7 @@ case "${1:-help}" in
     repair-runtime) shift; cmd_repair_runtime "$@" ;;
     migrate)  shift; cmd_migrate "$@" ;;
     autostart) shift; _with_notice cmd_autostart "$@" ;;
-    data-load) shift; _with_notice cmd_data_load "${1:-}" ;;
+    data-load) shift; _with_notice cmd_data_load "$@" ;;
     mcp-setup) shift; _with_notice cmd_mcp_setup "$@" ;;
     mcp-doctor) shift; _exakit_refuse_unknown_options mcp-doctor "--json,-j" "$@"; _with_notice cmd_mcp_doctor "$@" ;;
     mcp-remove) shift; _exakit_refuse_unknown_options mcp-remove "" "$@"; _with_notice cmd_mcp_remove "$@" ;;

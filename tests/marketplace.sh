@@ -1542,8 +1542,11 @@ lacks "and Skip is not what Enter would take" "Skip" "$(cat "$_dl_probe" 2>/dev/
 _dl_ps1="$(sed -n '/^function New-ExakitDataTable/,/^}/p' "$ROOT/setup/lib/exapump.ps1")"
 has "the PowerShell twin pre-ticks the local-file row" \
     '[void]$defaults.Add($script:ExakitTableRowLocal)' "$_dl_ps1"
-lacks "...and never the opt-out row" \
-    '[void]$defaults.Add($script:ExakitTableRowSkip)' "$_dl_ps1"
+# The opt-out is ticked only when NOTHING else is (a persona that wants none of
+# what is on offer, or no local-file row to fall back on) - never in place of
+# the local-file row. Behaviourally in tests/data-question-ps.ps1.
+has "...and the opt-out row only when nothing else is ticked" \
+    'if ($defaults.Count -eq 0) { [void]$defaults.Add($script:ExakitTableRowSkip) }' "$_dl_ps1"
 
 echo "data-load routes JSON through the add-on:"
 . "$ROOT/setup/lib/exapump.sh"
@@ -2400,6 +2403,64 @@ has "the shell half asks dbt for the connection alone" \
     'exakit_run_bounded 60 "$_ddo_dbt" debug --connection' "$(cat "$ROOT/setup/lib/dbt-exasol.sh")"
 has "the Windows twin asks the same question" \
     'Invoke-ExakitLogged $exe "debug" "--connection"' "$(cat "$ROOT/setup/lib/dbt-exasol.ps1")"
+
+echo
+echo "a scripted add-on that does not run here is skipped, the rest install:"
+# A persona's add-on list is written for every platform. One id it names that
+# does not apply here used to end the env answer (die) before anything was
+# installed. Unknown ids still refuse - that is bad input, checked above.
+_mm_partial="$( (
+    _exakit_marketplace_apply() { printf 'INSTALLED %s\n' "$1"; }
+    exakit_marketplace_addon_installed() { return 1; }
+    _exakit_addon_system_present() { return 1; }
+    _exakit_marketplace_addon_present() { return 1; }
+    _exakit_addon_applicable() { [ "$1" != dash-server ]; }
+    _exakit_addon_applicable_reason() { printf 'not on this platform (test)'; }
+    EXAKIT_MARKETPLACE_ADDONS=dash-server,json-tables exakit_marketplace_menu 2>&1
+    printf 'rc=%s\n' "$?"
+) )"
+has  "the rest are installed"              "INSTALLED json-tables" "$_mm_partial"
+lacks "the inapplicable one is not"        "INSTALLED dash-server" "$_mm_partial"
+has  "it is named, with the reason"        "Skipping dash-server" "$_mm_partial"
+has  "...the reason itself"                "not on this platform (test)" "$_mm_partial"
+has  "and the answer succeeds"             "rc=0" "$_mm_partial"
+_mm_none_here="$( (
+    _exakit_marketplace_apply() { printf 'INSTALLED %s\n' "$1"; }
+    exakit_marketplace_addon_installed() { return 1; }
+    _exakit_addon_system_present() { return 1; }
+    _exakit_marketplace_addon_present() { return 1; }
+    _exakit_addon_applicable() { return 1; }
+    _exakit_addon_applicable_reason() { :; }
+    EXAKIT_MARKETPLACE_ADDONS=dash-server exakit_marketplace_menu 2>&1
+    printf 'rc=%s\n' "$?"
+) )"
+lacks "nothing applicable: nothing installs"    "INSTALLED" "$_mm_none_here"
+has  "...it says so, not 'already present'"     "Nothing to install on this machine" "$_mm_none_here"
+has  "...and it is not an error"                "rc=0" "$_mm_none_here"
+check "an unknown id among them still refuses" "yes" "$( (
+    _exakit_marketplace_apply() { :; }
+    EXAKIT_MARKETPLACE_ADDONS=json-tables,not-a-tool exakit_marketplace_menu >/dev/null 2>&1
+    ); [ $? -ne 0 ] && echo yes || echo no )"
+
+echo
+echo "a persona whose add-ons are all gets the whole marketplace:"
+offer() { # offer <preselect> — the filter exakit_marketplace_offer hands the menu
+    (
+        _exakit_marketplace_load_modules() { :; }
+        exakit_marketplace_has_pending() { return 0; }
+        _exakit_marketplace_warm_about() { :; }
+        _exakit_prompt_tty() { printf '/dev/tty'; }
+        ui_rule() { :; }
+        heading() { printf 'HEADING %s\n' "$1"; }
+        exakit_marketplace_menu() { printf 'MENU ONLY=[%s]\n' "${EXAKIT_MARKETPLACE_ONLY:-}"; }
+        unset EXAKIT_MARKETPLACE_ADDONS EXAKIT_SOFT_FAILED
+        EXAKIT_MARKETPLACE_PRESELECT="$1" exakit_marketplace_offer
+    )
+}
+check "all: every add-on, no filter"      "HEADING Add-ons for your personas|MENU ONLY=[]" "$(offer all | tr '\n' '|' | sed 's/|$//')"
+check "a list: only those"                "MENU ONLY=[notebook,udf-devkit]" "$(offer notebook,udf-devkit | grep MENU)"
+_ps_offer="$(sed -n '/^function Request-ExakitMarketplaceOffer/,/^}/p' "$ROOT/setup/lib/exakit-common.ps1")"
+has "the Windows twin treats all the same way" 'if ($only -eq "all")' "$_ps_offer"
 
 echo "passed: $PASS, failed: $FAIL"
 [ "$FAIL" -eq 0 ]

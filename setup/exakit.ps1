@@ -3159,27 +3159,52 @@ function Invoke-CmdLogs {
     Show-ExakitLog -Target $target -Follow:$follow -Lines $lines -PathOnly:$pathOnly
 }
 
+# Invoke-CmdDataLoad [-Arguments <--force|-Force> <file-or-folder|dataset>] -
+# the arguments in either order. -Argument (one word) is kept for the callers
+# that pass a single one.
 function Invoke-CmdDataLoad {
-    param([string]$Argument = "")
+    param([string]$Argument = "", [string[]]$Arguments = @())
     Assert-ExakitInstalled
-    # data-load takes either -Force or a PATH. A path names what to load without
-    # walking the menu to type it in - and a folder path is the bulk load: every
-    # CSV/Parquet file in it, one table each. Twin of cmd_data_load in exakit.
+    # data-load takes -Force, a PATH, or a dataset id - -Force together with a
+    # dataset id, in either order. A path names what to load without walking the
+    # menu to type it in - and a folder path is the bulk load: every CSV/Parquet
+    # file in it, one table each. Twin of cmd_data_load in exakit.
     $ForceFlag = ""
     $loadPath = ""
-    if ($Argument) {
-        if ($Argument -eq "-Force" -or $Argument -eq "--force") {
-            $ForceFlag = $Argument
-        } elseif ($Argument.StartsWith("-")) {
-            Stop-ExakitBadOption "Unknown option '$Argument' for data-load (pass -Force, a file or folder path, or a dataset id)."
-        } elseif (-not (Test-Path $Argument) -and (@(Get-ExakitBundledDatasets | ForEach-Object { $_.Id }) -contains $Argument)) {
+    $target = ""
+    $all = @()
+    if ($Argument) { $all += $Argument }
+    foreach ($a in @($Arguments)) { if ($a) { $all += ("" + $a) } }
+    foreach ($a in $all) {
+        if ($a -eq "-Force" -or $a -eq "--force") {
+            $ForceFlag = $a
+        } elseif ($a.StartsWith("-")) {
+            Stop-ExakitBadOption "Unknown option '$a' for data-load (pass -Force, a file or folder path, or a dataset id)."
+        } elseif ($target) {
+            Stop-ExakitBadOption "data-load takes one file, folder or dataset at a time (got '$target' and '$a'); several datasets: `$env:EXAKIT_DATASETS = 'tpch,energy'; exakit data-load"
+        } else {
+            $target = $a
+        }
+    }
+    if ($target) {
+        # Case-sensitive, like the shell side's grep -qx: "TPCH" is not "tpch".
+        if (-not (Test-Path $target) -and (@(Get-ExakitBundledDatasets | ForEach-Object { $_.Id }) -ccontains $target)) {
             # A bundled dataset's id (exakit data-load fda_recalls) is the same
             # answer as EXAKIT_DATASETS=fda_recalls - a file or folder of that
-            # name wins. Twin of cmd_data_load.
-            $env:EXAKIT_DATASETS = $Argument
+            # name wins. Named on the command line it is THE answer: it replaces
+            # an EXAKIT_DATASETS and an EXAKIT_DATA_FILE left in the environment,
+            # which would otherwise load something else instead. Twin of
+            # cmd_data_load.
+            $env:EXAKIT_DATASETS = $target
+            Remove-Item Env:EXAKIT_DATA_FILE -ErrorAction SilentlyContinue
         } else {
-            $loadPath = Get-ExakitNormalizedPath $Argument
-            if (-not (Test-Path $loadPath)) { Fail "No such file, folder or dataset: $Argument (datasets: $((@(Get-ExakitBundledDatasets | ForEach-Object { $_.Id })) -join ' '))" }
+            # -Force drops and rebuilds BUNDLED datasets. A file or folder has its
+            # own answer for a table that already holds rows, and it is not this.
+            if ($ForceFlag) {
+                Stop-ExakitBadOption "-Force reloads bundled datasets, not a file or folder. For a table that already holds rows: `$env:EXAKIT_ON_EXISTING = 'replace'; exakit data-load $target"
+            }
+            $loadPath = Get-ExakitNormalizedPath $target
+            if (-not (Test-Path $loadPath)) { Fail "No such file, folder or dataset: $target (datasets: $((@(Get-ExakitBundledDatasets | ForEach-Object { $_.Id })) -join ' '))" }
             # Naming a path IS choosing the local-file row, which is exactly what
             # EXAKIT_DATA_FILE already means - so one contract covers the
             # argument and the variable, and the menu never draws for either.
@@ -3201,7 +3226,7 @@ function Invoke-CmdDataLoad {
             $known = @(Get-ExakitBundledDatasets | ForEach-Object { $_.Id })
             $any = $false
             foreach ($id in ($env:EXAKIT_DATASETS -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
-                if ($known -contains $id) {
+                if ($known -ccontains $id) {
                     $any = $true
                     Info "Reloading dataset '$id' (EXAKIT_DATASETS, -Force)"
                     Invoke-ExakitDatasetLoad -KitRoot $kitRoot -Id $id -Force
@@ -3228,13 +3253,13 @@ function Invoke-CmdDataLoad {
         $any = $false
         $failed = $false
         foreach ($id in ($env:EXAKIT_DATASETS -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
-            if ($known -contains $id) {
+            if ($known -ccontains $id) {
                 $any = $true
-                if ($pendingIds -contains $id) {
+                if ($pendingIds -ccontains $id) {
                     Info "Loading dataset '$id' (EXAKIT_DATASETS)."
                     try { Invoke-ExakitDatasetLoad -KitRoot $kitRoot -Id $id } catch { $failed = $true; Warn2 "Dataset '$id' did not load: $_" }
                 } else {
-                    Ok "Dataset '$id' is already loaded - nothing to do (reload it with: exakit data-load --force)"
+                    Ok "Dataset '$id' is already loaded - nothing to do (replace it with: exakit data-load --force $id, which drops and rebuilds its tables)"
                 }
             } else {
                 Warn2 "Unknown dataset id '$id' in EXAKIT_DATASETS (available: $($known -join ', '))."
@@ -3776,7 +3801,7 @@ try {
                 -Json:([bool]($RestArgs -contains "--json" -or $RestArgs -contains "-j"))
         }
         "autostart"    { Invoke-CmdAutostart -Action (($RestArgs | Select-Object -First 1)) }
-        "data-load"    { Invoke-CmdDataLoad -Argument ($RestArgs | Select-Object -First 1) }
+        "data-load"    { Invoke-CmdDataLoad -Arguments @($RestArgs) }
         "mcp-setup"    {
             # Options are refused, not ignored: `mcp-setup --clients x` used to run
             # the plain setup, say "already connected" and exit 0. Twin of cmd_mcp_setup.
