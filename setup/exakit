@@ -2413,7 +2413,7 @@ cmd_persona() {
     case "${1:-list}" in
         list)
             _cp_ids="$(exakit_persona_ids)"
-            [ -n "$_cp_ids" ] || exakit_persona_known general || die "$EXAKIT_PERSONA_PROBLEM"
+            [ -n "$_cp_ids" ] || die "No persona can be read from this kit copy ($(_exakit_persona_service problems 2>/dev/null | head -n 1 | tr '|' ':' || true)) - the persona service needs Python 3. Repair with: exakit update"
             for _cp_id in $_cp_ids; do
                 printf '  %-16s %s\n' "$_cp_id" "$(exakit_persona_value "$_cp_id" title)"
                 printf '  %-16s %s\n' "" "$(exakit_persona_value "$_cp_id" summary)"

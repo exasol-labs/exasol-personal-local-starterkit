@@ -2251,7 +2251,7 @@ function Invoke-CmdPersona {
     switch ($verb) {
         "list" {
             $ids = @(Get-ExakitPersonaIds)
-            if ($ids.Count -eq 0 -and -not (Get-ExakitPersona "general")) { Fail $script:ExakitPersonaProblem }
+            if ($ids.Count -eq 0) { Fail "No persona can be read from this kit copy ($((@(Invoke-ExakitPersonaService 'problems') | Select-Object -First 1) -replace '\|', ':')) - the persona service needs Python 3. Repair with: exakit update" }
             foreach ($id in $ids) {
                 Write-Host ("  {0,-16} {1}" -f $id, (Get-ExakitPersonaValue $id "title"))
                 Write-Host ("  {0,-16} {1}" -f "", (Get-ExakitPersonaValue $id "summary"))
