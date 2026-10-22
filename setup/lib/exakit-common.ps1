@@ -4779,6 +4779,7 @@ function Get-ExakitMarketplaceAddons {
             UpdateFn    = "Update-Notebook"
             VersionFn   = "Get-NotebookInstalledVersion"
             UninstallFn = "Uninstall-Notebook"
+            LogFn       = "Get-NotebookLogPath"
             SummaryFn   = "Get-NotebookSummary"
             EnvVar      = "EXAKIT_NOTEBOOK_VERSION"
             FallbackVar = "NotebookVersionFallback"

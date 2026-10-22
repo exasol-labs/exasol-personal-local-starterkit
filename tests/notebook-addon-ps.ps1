@@ -37,12 +37,12 @@ try {
 
     Write-Host "notebooks are copied once, into persona folders, never over the user's:"
     $nb = Join-Path $script:NotebookDir "starter-kit-notebooks"
-    New-Item -ItemType Directory -Force -Path (Join-Path $nb "general") | Out-Null
-    Set-Content -Path (Join-Path (Join-Path $nb "general") "start_here.ipynb") -Value "mine" -NoNewline
+    New-Item -ItemType Directory -Force -Path (Join-Path $nb "data-scientist") | Out-Null
+    Set-Content -Path (Join-Path (Join-Path $nb "data-scientist") "start_here.ipynb") -Value "mine" -NoNewline
     Check "what is missing comes, each in its persona's folder" `
         "data-scientist/explore.ipynb,data-scientist/text_classification.ipynb,ml-engineer/bank_marketing_mlflow.ipynb,ml-engineer/train.ipynb" `
         (@(Copy-NotebookContent) -join ",")
-    Check "the user's own stays" "mine" (Get-Content -Raw (Join-Path (Join-Path $nb "general") "start_here.ipynb"))
+    Check "the user's own stays" "mine" (Get-Content -Raw (Join-Path (Join-Path $nb "data-scientist") "start_here.ipynb"))
     Check "a second run adds nothing" 0 @(Copy-NotebookContent).Count
     Check "a README names the end-to-end path" $true (Test-Path (Join-Path $nb "README.md"))
     Check "the Marimo ones go to marimo/<persona>/" "data-scientist/explore.py,data-scientist/text_classification.py,ml-engineer/bank_marketing_mlflow.py,ml-engineer/train.py" `
@@ -150,7 +150,7 @@ try {
 
     Write-Host "an uninstall keeps the notebooks:"
     $said = (Uninstall-Notebook 6>&1 | Out-String)
-    Check "the notebooks are still there" "mine" (Get-Content -Raw (Join-Path (Join-Path $nb "general") "start_here.ipynb"))
+    Check "the notebooks are still there" "mine" (Get-Content -Raw (Join-Path (Join-Path $nb "data-scientist") "start_here.ipynb"))
     Check "it does not say JupyterLab is not running" $false ($said -like "*JupyterLab is not running*")
 
     Write-Host "a full kit uninstall keeps the notebooks:"
@@ -182,7 +182,7 @@ try {
     Check "the dry run removes nothing" $true (Test-Path $script:ManifestPath)
     $said = (Invoke-ExakitUninstallRun 6>&1 | Out-String)
     Check "the user's notebook and MLflow store are still there" "mine|runs" `
-        "$(Get-Content -Raw (Join-Path (Join-Path $nb 'general') 'start_here.ipynb'))|$(Get-Content -Raw (Join-Path (Join-Path (Join-Path $script:NotebookDir 'my-work') 'mlflow') 'mlflow.db'))"
+        "$(Get-Content -Raw (Join-Path (Join-Path $nb 'data-scientist') 'start_here.ipynb'))|$(Get-Content -Raw (Join-Path (Join-Path (Join-Path $script:NotebookDir 'my-work') 'mlflow') 'mlflow.db'))"
     Check "everything else in the kit home is gone" "notebooks" ((@(Get-ChildItem -Force -LiteralPath $script:ExakitHome) | ForEach-Object { $_.Name }) -join " ")
     Check "a home holding only kept notebooks is still a kit home to the guard" $true (Test-ExakitSafeUninstallTarget $script:ExakitHome)
     Seed-Kit

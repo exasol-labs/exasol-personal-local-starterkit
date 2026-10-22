@@ -71,12 +71,12 @@ check "JupyterLab is not in it" "" "$(printf '%s\n' "$specs" | grep -i jupyterla
 
 echo "notebooks are copied once, into persona folders, never over the user's:"
 NB="$EXAKIT_NOTEBOOK_DIR/starter-kit-notebooks"
-mkdir -p "$NB/general"
-printf 'mine' > "$NB/general/start_here.ipynb"
+mkdir -p "$NB/data-scientist"
+printf 'mine' > "$NB/data-scientist/start_here.ipynb"
 added="$(notebook_copy_notebooks | tr '\n' ' ')"
 check "what is missing comes, each in its persona's folder" \
     "data-scientist/explore.ipynb data-scientist/text_classification.ipynb ml-engineer/bank_marketing_mlflow.ipynb ml-engineer/train.ipynb " "$added"
-check "the user's own stays" "mine" "$(cat "$NB/general/start_here.ipynb")"
+check "the user's own stays" "mine" "$(cat "$NB/data-scientist/start_here.ipynb")"
 check "a second run adds nothing" "" "$(notebook_copy_notebooks)"
 contains "a README names the end-to-end path" "4. \`ml-engineer/bank_marketing_mlflow.ipynb\` (ML Engineer)" "$(cat "$NB/README.md")"
 check "every catalog entry ships its notebook" "" \
@@ -122,7 +122,7 @@ echo "an uninstall keeps the notebooks:"
 out="$(notebook_uninstall 1 2>&1)"
 contains "the dry run says so" "your notebooks stay in $EXAKIT_NOTEBOOK_DIR" "$out"
 notebook_uninstall >/dev/null 2>&1
-check "the notebooks are still there" "mine" "$(cat "$NB/general/start_here.ipynb")"
+check "the notebooks are still there" "mine" "$(cat "$NB/data-scientist/start_here.ipynb")"
 
 echo "the copy: a notebook the user deleted stays deleted; one that cannot be copied is named:"
 rm -f "$NB/data-scientist/explore.ipynb"

@@ -12,7 +12,7 @@
   "notebooks": [
     {
       "id": "start_here",
-      "persona": "general",
+      "persona": "data-scientist",
       "step": 1,
       "title": "Start here",
       "summary": "Connects, shows the time and session, lists the schemas (the sample data included) and the SQL behind the last result.",
