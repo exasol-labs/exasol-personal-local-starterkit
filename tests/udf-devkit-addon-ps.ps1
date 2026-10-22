@@ -89,6 +89,32 @@ try {
     $said = ""
     try { Invoke-CmdUdfBuild -CmdArgs @($req) } catch { $said = "$_" }
     Contains "udf-build refuses an unpinned package before anything heavy" "not pinned" $said
+    Write-Host "udf-build checks the container engine before it starts (AC-ML1.3):"
+    $pinnedReq = Join-Path $work "pinned.txt"
+    Set-Content -Path $pinnedReq -Value "numpy==1.26.4"
+    function Get-NotebookInstalledVersion { return "1.0.0" }
+    function Get-NotebookUv { throw "preflight passed" }
+    foreach ($case in @(@{ Runtime = ""; Needle = "needs a running container engine, Docker or Podman, and none answers" },
+                        @{ Runtime = "podman-no-api"; Needle = "Podman answers, but not its Docker-compatible API" },
+                        @{ Runtime = "podman"; Needle = "preflight passed" },
+                        @{ Runtime = "docker"; Needle = "preflight passed" })) {
+        $script:stubRuntime = $case.Runtime
+        function Find-UdfContainerRuntime { return $script:stubRuntime }
+        $said = ""
+        try { Invoke-CmdUdfBuild -CmdArgs @($pinnedReq) } catch { $said = "$_" }
+        if ($case.Needle -eq "preflight passed" -and $said -like "*GB free*") { $said = "preflight passed (stopped at the disk check)" }
+        Contains "engine '$($case.Runtime)'" $case.Needle $said
+    }
+
+    Write-Host "the install itself is refused on an old launcher (ML-1 preflight):"
+    Remove-ExakitManifestValue "components.udf_devkit"
+    $script:launcher = "2.2.9"
+    Reset-Calls
+    Check "the install fails" "False" (Install-UdfDevkit)
+    Check "nothing is recorded" "" (Get-ExakitManifestValue "components.udf_devkit.version")
+    Check "and nothing runs" "" ($script:calls -join "|")
+    $script:launcher = "2.3.0"
+
     Remove-ExakitManifestValue "components.udf_devkit"
     $said = ""
     try { Invoke-CmdUdfSetup } catch { $said = "$_" }

@@ -4,11 +4,11 @@
   "kind": "addon",
   "title": "UDF dev kit",
   "tagline": "Python UDFs on the local database, proven with a smoke test.",
-  "role": "A local Exasol Personal database ships with no script language container, so no Python UDF runs until one is installed, and it has no BucketFS upload service. The UDF dev kit drives the Exasol launcher's container commands for you, checks every install with a UDF that reports each package's version, and copies files a UDF reads into BucketFS.",
+  "role": "A local Exasol Personal database ships with no script language container, so no Python UDF runs until one is installed, and it has no BucketFS upload service. The UDF dev kit drives the Exasol launcher's container commands for you, checks every install with a UDF that reports each package's version, and copies files a UDF reads into BucketFS: model files with their digest recorded (exakit model put), scored by a UDF made from its template (exakit model template).",
   "repo": "exasol/script-languages-release",
   "docs": "https://github.com/exasol/exasol-personal#readme",
   "installed_by": "exakit marketplace udf-devkit, or the ml-engineer persona. Installing it installs the official Python container, which restarts the database once.",
-  "platforms": "macOS on Apple silicon, Linux (x86_64 and Arm, including WSL) and Windows x86_64. Needs the Exasol launcher 2.3.0 or later; exakit update personal brings it. Building your own container (exakit udf-build) also needs a running Docker engine and the notebook add-on.",
+  "platforms": "macOS on Apple silicon, Linux (x86_64 and Arm, including WSL) and Windows x86_64. Needs the Exasol launcher 2.3.0 or later; exakit update personal brings it. Building your own container (exakit udf-build) also needs a running Docker or Podman engine (the Podman the launcher installs counts) and the notebook add-on.",
   "quickstart": [
     {
       "step": "Make Python UDFs work",
@@ -18,12 +18,17 @@
     {
       "step": "Add the machine-learning packages",
       "run": "exakit udf-build requirements.txt",
-      "note": "numpy, pandas, scikit-learn - each pinned name==version in the file; alias PYTHON3_CUSTOM. Needs Docker and the notebook add-on. Once a prebuilt container is published, exakit udf-use default installs one instead (alias PYTHON3_ML)."
+      "note": "numpy, pandas, scikit-learn - each pinned name==version in the file; alias PYTHON3_CUSTOM. Needs Docker or Podman and the notebook add-on. Once a prebuilt container is published, exakit udf-use default installs one instead (alias PYTHON3_ML)."
     },
     {
       "step": "Give a UDF a file",
       "run": "exakit udf-file model.pkl models/model.pkl",
       "note": "Prints the path the UDF opens, under /buckets."
+    },
+    {
+      "step": "Score with a model trained elsewhere",
+      "run": "exakit model put churn.pkl",
+      "note": "Records its digest and prints its /buckets path; exakit model template shows how to create the scoring UDF for it."
     }
   ],
   "commands": [
@@ -59,6 +64,49 @@
       "examples": [
         "exakit udf-file lookup.csv"
       ]
+    },
+    {
+      "command": "exakit model put",
+      "options": "<file> [--replace] [--json]",
+      "summary": "Bring a model file into the bucket directory and print the /buckets path a UDF reads.",
+      "description": "Copies the file to models/<its name> in the deployment's bucket directory (local/runtime/exa/bucketfs/bfsdefault/default/ on this machine, /buckets/bfsdefault/default/ inside the database), records its sha256, size and time in the kit's manifest (components.udf_devkit.models), and prints the path the scoring UDF opens. A file of the same name with a different digest is not overwritten unless --replace is given; the same file again changes nothing. Nothing is uploaded over a network and no credential is read, printed or stored: a local deployment has no BucketFS password. --json prints one object: name, path, sha256, size, replaced.",
+      "exit_codes": {
+        "0": "copied, replaced, or already there with the same digest",
+        "2": "bad input: no file, not a file, a name the bucket cannot hold, an unknown option",
+        "3": "no deployment to put the file into (exakit status)",
+        "4": "the UDF dev kit is not installed (exakit marketplace udf-devkit)",
+        "5": "a different file of that name is there and --replace was not given; nothing was copied"
+      },
+      "examples": [
+        "exakit model put churn.pkl",
+        "exakit model put churn.pkl --replace --json"
+      ]
+    },
+    {
+      "command": "exakit model list",
+      "options": "[--json]",
+      "summary": "List the model files in the bucket directory, flagging one that changed since it was put.",
+      "description": "Every file under models/ in the bucket directory with its size and sha256, held against the digest exakit model put recorded: status ok, changed (the file is not the one that was put) or unrecorded (copied there another way). An empty list until something is put. --json prints {\"bucket_dir\", \"udf_root\", \"models\": [{\"name\", \"path\", \"sha256\", \"size\", \"recorded_sha256\", \"status\"}], \"missing\"}; missing names recorded files that are gone.",
+      "exit_codes": {
+        "0": "listed (possibly empty)",
+        "2": "an unknown option",
+        "3": "no deployment (exakit status)",
+        "4": "the UDF dev kit is not installed (exakit marketplace udf-devkit)"
+      },
+      "examples": [
+        "exakit model list",
+        "exakit model list --json"
+      ]
+    },
+    {
+      "command": "exakit model template",
+      "options": "[--json]",
+      "summary": "Show where the scoring UDF template and its renderer are, and how to fill it.",
+      "description": "The template is udf/templates/score_model.sql in the kit: a scalar Python UDF that loads a scikit-learn pickle, a joblib file or an ONNX file once per UDF instance and scores each row. udf/templates/render.py fills its placeholders (schema, script name, model path, input columns and types, output type, method, container alias), checks every value, and refuses any placeholder left unfilled; python3 render.py --help shows how, and a notebook imports it and calls render(...).",
+      "examples": [
+        "exakit model template",
+        "exakit model template --json"
+      ]
     }
   ],
   "notes": [
@@ -79,12 +127,20 @@
       "remedy": "exakit udf-build requirements.txt"
     },
     {
-      "symptom": "Building a container needs a running Docker engine (start Docker Desktop or Colima, then retry)",
+      "symptom": "Building a container needs a running container engine, Docker or Podman, and none answers",
       "remedy": "exakit udf-build requirements.txt"
     },
     {
       "symptom": "The database did not come back after the container install",
       "remedy": "exakit start"
+    },
+    {
+      "symptom": "exakit model put: a different file of that name is already there",
+      "remedy": "exakit model put <file> --replace"
+    },
+    {
+      "symptom": "exakit model list flags a model as CHANGED since it was put",
+      "remedy": "exakit model put <the original file> --replace"
     }
   ],
   "see_also": [

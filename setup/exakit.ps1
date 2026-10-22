@@ -65,6 +65,9 @@
 #   udf-use               install a container: default, or a tarball; --list
 #   udf-build             build a container from a pinned requirements.txt
 #   udf-file              copy a file into BucketFS; prints the path a UDF reads
+#   model put <file> [--replace] [--json] | list [--json] | template [--json]
+#                         model files in the bucket directory, digests recorded;
+#                         put prints the /buckets path the scoring UDF opens
 #   upgrade-kit2          add the Kit 2 trust assets (bash paths only for now)
 #   rollback-kit2         remove what upgrade-kit2 added (bash paths only for now)
 #   uninstall [<addon-id>] [-Yes] [-DryRun]
@@ -3635,8 +3638,12 @@ $script:ExakitRefusalJson = ($Command -ne "sql") -and
 # here looking like "the help command, asked for its own help page" and was
 # answered with the human page for `help` - swallowing the --json an agent
 # asked for. A help flag on the help command is the help command.
+#
+# `model` renders its own pages (Invoke-CmdModel): they live in the udf-devkit
+# document as "exakit model put|list|template", which a bare "model" topic does
+# not find, and `exakit model put --help` shows put's page alone.
 $_helpSelf = @("help", "--help", "-h", "-?") -contains "$Command"
-if ($Command -and $Command -ne "sql" -and -not $_helpSelf -and ($RestArgs -contains "--help" -or $RestArgs -contains "-h")) {
+if ($Command -and $Command -ne "sql" -and $Command -ne "model" -and -not $_helpSelf -and ($RestArgs -contains "--help" -or $RestArgs -contains "-h")) {
     if (Test-ExakitHelpId $Command) {
         Show-ExakitHelpComponent -Id $Command | Out-Null
     } else {
@@ -3955,8 +3962,8 @@ try {
             if (-not (Get-Command Invoke-CmdNotebook -ErrorAction SilentlyContinue)) { Fail "The notebook module is missing from this kit copy. Repair with: exakit update" }
             Invoke-CmdNotebook -CmdArgs $RestArgs
         }
-        { $_ -in @("udf-setup", "udf-use", "udf-build", "udf-file") } {
-            $udfFn = @{ "udf-setup" = "Invoke-CmdUdfSetup"; "udf-use" = "Invoke-CmdUdfUse"; "udf-build" = "Invoke-CmdUdfBuild"; "udf-file" = "Invoke-CmdUdfFile" }[$Command]
+        { $_ -in @("udf-setup", "udf-use", "udf-build", "udf-file", "model") } {
+            $udfFn = @{ "udf-setup" = "Invoke-CmdUdfSetup"; "udf-use" = "Invoke-CmdUdfUse"; "udf-build" = "Invoke-CmdUdfBuild"; "udf-file" = "Invoke-CmdUdfFile"; "model" = "Invoke-CmdModel" }[$Command]
             if (-not (Get-Command $udfFn -ErrorAction SilentlyContinue)) { Fail "The udf-devkit module is missing from this kit copy. Repair with: exakit update" }
             & $udfFn -CmdArgs $RestArgs
         }
