@@ -461,7 +461,41 @@ ui_step_fail() {
 # Restore the cursor if we died mid-spin. NOT wired to a trap here on
 # purpose: the installer owns `trap ... EXIT` (exakit_on_failure), which
 # calls this itself, so a trap here would clobber the installer's cleanup.
-ui_restore_cursor() { [ "$UI_FANCY" = 1 ] && printf '\033[?25h'; return 0; }
+ui_restore_cursor() { [ "$UI_FANCY" = 1 ] && printf '\033[?25h'; _ui_input_release; return 0; }
+
+# _ui_input_hold / _ui_input_release — while a table animates, the keys a reader
+# types are not echoed, and when it ends they are thrown away. An Enter echoed
+# under a live table moved the cursor down a line; the next frame then drew one
+# line too low and left the last one stacked above it. A key typed meanwhile
+# could also answer the NEXT question on its own. Only the terminal the kit is
+# talking to (/dev/tty) is touched, and only when there is one.
+_UI_STTY_SAVED=''
+_UI_STTY_DEV=''
+_ui_input_hold() {
+    [ -z "$_UI_STTY_SAVED" ] || return 0
+    # The terminal the reader types into: stdin when it is one, else /dev/tty
+    # (an installer piped from curl reads its answers there).
+    if [ -t 0 ]; then
+        _UI_STTY_DEV=/dev/stdin
+    elif (: < /dev/tty) 2>/dev/null; then
+        _UI_STTY_DEV=/dev/tty
+    else
+        return 0
+    fi
+    _UI_STTY_SAVED="$(stty -g < "$_UI_STTY_DEV" 2>/dev/null)" || { _UI_STTY_SAVED=''; return 0; }
+    stty -echo < "$_UI_STTY_DEV" 2>/dev/null || true
+    return 0
+}
+_ui_input_release() {
+    [ -n "${_UI_STTY_SAVED:-}" ] || return 0
+    # Whatever was typed meanwhile is read without waiting for more, and dropped.
+    if stty -icanon min 0 time 0 < "$_UI_STTY_DEV" 2>/dev/null; then
+        dd if="$_UI_STTY_DEV" of=/dev/null bs=4096 count=1 2>/dev/null || true
+    fi
+    stty "$_UI_STTY_SAVED" < "$_UI_STTY_DEV" 2>/dev/null || true
+    _UI_STTY_SAVED=''
+    return 0
+}
 
 # --- the progress line -----------------------------------------------------
 # ui_progress_creep <pct> <ceiling> <seconds> <elapsed-in-segment> — where
@@ -1452,6 +1486,8 @@ ui_table_begin() {
         _ui_step_stop_spinner
     fi
     printf '\033[?25l'
+    # Keys typed while it animates are neither echoed nor kept (_ui_input_hold).
+    _ui_input_hold
     # How many lines are ALREADY on screen. The selection phase leaves its table
     # drawn, and the first frame has to overwrite it rather than print a second
     # one underneath.
@@ -1512,7 +1548,7 @@ ui_table_end() {
 # animation of its own. _UI_SPIN_PID cannot serve that purpose, because detach
 # has to clear it (see ui_table_detach).
 _UI_LINE_BUSY=''
-    [ -n "${_UI_SPIN_PID:-}" ] || return 0
+    [ -n "${_UI_SPIN_PID:-}" ] || { _ui_input_release; return 0; }
     # ASKED to stop, not shot. The animator finishes the frame it is drawing and
     # exits, which is the only way the cursor is guaranteed to be at a frame
     # boundary when this function starts counting lines. A kill is still the
@@ -1529,6 +1565,7 @@ _UI_LINE_BUSY=''
     _UI_SPIN_OWNER=''
     _UI_SPIN_NESTED=0
     printf '\033[?25h'
+    _ui_input_release
     _ute_lines="$(cat "$1.lines" 2>/dev/null || echo '')"
     case "$_ute_lines" in ''|*[!0-9]*) _ute_lines="${UI_TABLE_LINES:-0}" ;; esac
     case "$_ute_lines" in ''|*[!0-9]*) _ute_lines=0 ;; esac
@@ -1561,6 +1598,10 @@ ui_table_abort() {
 # through the state FILE, which is shared on purpose.
 ui_table_detach() {
     _UI_TABLE_ACTIVE=''
+    # The terminal's settings belong to the parent, which restores them when its
+    # table ends; a subshell restoring them on its way out would echo keys under
+    # the table that is still animating.
+    _UI_STTY_SAVED=''
     _UI_SPIN_PID=''
     _UI_SPIN_NESTED=0
     _UI_SPIN_OWNER=''

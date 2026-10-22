@@ -1425,6 +1425,10 @@ function Stop-ExakitTable {
     $script:UiTableHandle = $null
     $script:UiSpinNested = 0
     try { [Console]::Write("$($script:UiEsc)[?25h") } catch { }
+    # Keys typed while it animated are thrown away, so a stray Enter cannot
+    # answer the next question on its own. (The console does not echo them while
+    # nothing reads, so the frame itself stays put.) Twin of _ui_input_release.
+    try { while ([Console]::KeyAvailable) { [void][Console]::ReadKey($true) } } catch { }
     # The animator can be stopped part-way through a frame, so the last thing
     # drawn is redrawn deliberately rather than trusted.
     if ($null -ne $Table) { Update-ExakitTable -Table $Table -Cursor 0 }

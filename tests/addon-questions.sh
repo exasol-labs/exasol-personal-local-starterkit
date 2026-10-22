@@ -30,6 +30,20 @@ else
     check "python3 for the pty replay" "skipped" "skipped"
 fi
 
+echo "keys typed while the table animates do not move it:"
+if command -v python3 >/dev/null 2>&1; then
+    # Three Enters while the installs run: echoed, each moved the cursor a line
+    # and the next frame drew below the last - four frames stacked on screen.
+    out="$(python3 "$ROOT/tests/lib/tty-replay.py" "$ROOT/tests/lib/addon-table-scenario.sh" "$ROOT" "Add-ons to install" '\r\r\r' 2 2>&1)"
+    has "one table on screen, Enter pressed three times during the install" "tables on screen: 1 top borders" "$out"
+    has "...at every instant" "worst instant: 1 tables on screen" "$out"
+fi
+_begin_range='/^ui_table_begin() {/,/^}/p'      # assigned first: bash 3.2
+_end_range='/^ui_table_end() {/,/^}/p'
+has "the shell twin holds the keys while it animates" "_ui_input_hold" "$(sed -n "$_begin_range" "$ROOT/setup/lib/ui.sh")"
+has "...and lets go (and drops them) when it ends" "_ui_input_release" "$(sed -n "$_end_range" "$ROOT/setup/lib/ui.sh")"
+has "the Windows twin drops them too" "while ([Console]::KeyAvailable)" "$(cat "$ROOT/setup/lib/ui.ps1")"
+
 echo "the hook, in both twins:"
 ECOMMON="$(cat "$ROOT/setup/lib/exakit-common.ps1")"
 _apply_range='/^_exakit_marketplace_apply() {/,/ui_table_begin/p'          # assigned first: bash 3.2
