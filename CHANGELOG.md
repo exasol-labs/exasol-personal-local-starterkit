@@ -46,6 +46,24 @@ about** (`EXAKIT_REPLACE_DB=1`, as on macOS and Linux), and on both sides its
 `--json` answer reports `failed` rather than `repaired` when the rebuild left
 no database.
 
+**A dry run no longer leaves the kit behind in TMPDIR, and nothing else the
+kit makes there does either.** `EXAKIT_DRY_RUN=1` unpacked the kit into
+`$TMPDIR/exakit-dry-run.*` (`%TEMP%\exakit-dry-run-*` on Windows) and never
+removed it; with `EXAKIT_LOCAL_KIT` the copy was the whole checkout, `.git`,
+`.claude` worktrees and caches included, about 500 MB a run. One developer's
+Mac had 435 of them, 135 GB. Both installers now remove the folder on the
+way out - after the plan, on a failure, and on Ctrl+C or a kill (an EXIT trap
+in install.sh, a `finally` in install.ps1) - and `EXAKIT_DRY_RUN_KEEP=1`
+keeps it for reading. A local-kit copy takes what git would ship (tracked
+files plus new, unignored ones), so ~65 MB instead of ~500 MB, on real
+installs too. The data table's state file (`exakit-table.*`) is removed once
+the table closes, where nothing removed it before, and it, the add-ons table
+(`exakit-addons.*`) and the launcher download (`exakit-personal.*`) are swept
+on `die()` and on exit by a new `exakit_track_tmp` registry; the `exakit`
+command sets an EXIT trap for it. Pinned by `tests/temp-cleanup.sh` and
+`tests/temp-cleanup-ps.ps1`.
+
+
 ## 0.2.2
 
 **The Personal launcher comes from Exasol's S3 bucket first, verified, with

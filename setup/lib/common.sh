@@ -869,6 +869,46 @@ exakit_sweep_sensitive_tmp() {
     EXAKIT_SENSITIVE_TMP=""
 }
 
+# Scratch files and folders in TMPDIR, the same way: a table's state file, a
+# download's unpack folder. Removed on the happy path by their owners, and
+# swept here on die() and on EXIT for every other path. Without this, each
+# die() or Ctrl+C mid-step left one behind, and the data table's state file
+# was never removed at all: hundreds of exakit-table.*, exakit-addons.* and
+# exakit-personal.* piled up in one developer's TMPDIR.
+#
+# Each entry records the subshell level it was made at, and a sweep removes
+# only its own level's. The loads run in subshells while the parent's table
+# animates from its state file; a die() in one of them must not delete that
+# file from under the parent. bash 3.2 has no BASHPID, but BASH_SUBSHELL is
+# enough: a subshell sees its parent's entries only at lower levels. The
+# animator's sidecar files (.new .lines .stop .fatal) go with their table.
+EXAKIT_SCRATCH_TMP=""
+exakit_track_tmp() {
+    [ -n "${1:-}" ] || return 0
+    EXAKIT_SCRATCH_TMP="${EXAKIT_SCRATCH_TMP}${BASH_SUBSHELL:-0} $1
+"
+}
+exakit_sweep_tmp() {
+    [ -n "${EXAKIT_SCRATCH_TMP:-}" ] || return 0
+    _est_level="${BASH_SUBSHELL:-0}"
+    _est_keep=""
+    while IFS= read -r _est_line; do
+        [ -n "$_est_line" ] || continue
+        _est_path="${_est_line#* }"
+        if [ "${_est_line%% *}" = "$_est_level" ] && [ -n "$_est_path" ]; then
+            rm -rf "$_est_path" "$_est_path.new" "$_est_path.lines" \
+                "$_est_path.stop" "$_est_path.fatal" 2>/dev/null
+        else
+            _est_keep="$_est_keep$_est_line
+"
+        fi
+    done <<EXAKIT_SCRATCH_EOF
+$EXAKIT_SCRATCH_TMP
+EXAKIT_SCRATCH_EOF
+    EXAKIT_SCRATCH_TMP="$_est_keep"
+    return 0
+}
+
 # --- failure notes ----------------------------------------------------------
 # A step that fails is run inside a subshell (see exakit_soft_step), so it
 # cannot hand its reason back in a shell variable — the subshell's exports die
@@ -1008,6 +1048,7 @@ die() {
         exakit_note_failure "$*"
         printf 'fatal|%s\n' "$*" >> "$EXAKIT_DEFER_ERRORS" 2>/dev/null
         _exakit_log_file "FATAL $*"
+        exakit_sweep_tmp
         exit 1
     fi
     # Nothing is deferring: stop any animation first, or the message below is
@@ -1019,6 +1060,8 @@ die() {
         printf '    %s%s Log: %s%s\n' "${UI_DIM:-}" "${UI_VB:-|}" "$EXAKIT_LOG_FILE" "${UI_RESET:-}" >&2
     fi
     _exakit_log_file "FATAL $*"
+    # After the animation stopped above: a table's state file is one of these.
+    exakit_sweep_tmp
     exit 1
 }
 
@@ -4455,6 +4498,9 @@ EXAKIT_MM_COVERED
         warn "Could not create a temporary file for the add-ons table."
         return 1
     }
+    # _exakit_addon_table_cleanup removes it on every path out that returns;
+    # this covers a die() or Ctrl+C on the way.
+    exakit_track_tmp "$EXAKIT_ADDON_TABLE_STATE"
     _mm_pick_ids=()
     _mm_i=0
     while [ "$_mm_i" -lt "${#_mm_ids[@]}" ]; do
@@ -6874,6 +6920,7 @@ exakit_on_failure() {
     # process, and a run that is ending does not get to leave one downloading.
     if command -v mcp_prefetch_stop >/dev/null 2>&1; then mcp_prefetch_stop 2>/dev/null || true; fi
     exakit_sweep_sensitive_tmp     # never leave credential temp files behind
+    exakit_sweep_tmp
     [ $_status -eq 0 ] && return 0
     # Same "card" shape as die(): prominent ✗ header, dim gutter details.
     printf '\n  %s%s %s%s%s\n' "${UI_ERR:-}" "${UI_CROSS:-[x]}" "${UI_BOLD:-}" \
@@ -6950,6 +6997,7 @@ exakit_enable_failure_handling() {
 # Call at the very end of a successful run.
 exakit_finish() {
     trap - EXIT
+    exakit_sweep_tmp
     # A prefetch that never got collected (the MCP step was skipped, or the run
     # is ending early) must not outlive the installer. No-op when there is none.
     if command -v mcp_prefetch_stop >/dev/null 2>&1; then mcp_prefetch_stop || true; fi
@@ -9831,6 +9879,7 @@ exakit_maybe_offer_data_load() {
         rm -f "$EXAKIT_DEFER_ERRORS"
     fi
     EXAKIT_DEFER_ERRORS=""
+    exakit_data_table_release
     # The local file / folder load, now that the box has stopped moving.
     #
     # This is the INSTALLER's copy of the data-load loop -- `exakit data-load`

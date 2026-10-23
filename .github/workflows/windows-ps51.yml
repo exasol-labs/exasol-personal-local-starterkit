@@ -78,6 +78,13 @@ jobs:
         if: matrix.shard == 2
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/runtime-personal-ps.ps1
+      # install.ps1's dry run, run as users run it (a string through iex):
+      # nothing left in %TEMP% after success or a failure, and a local-kit
+      # copy without the checkout's .git, .claude worktrees and caches.
+      - name: dry run leaves nothing in TEMP under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/temp-cleanup-ps.ps1
       - name: start and stop one service under 5.1
         if: matrix.shard == 2
         shell: powershell

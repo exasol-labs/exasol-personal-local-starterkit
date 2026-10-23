@@ -805,6 +805,10 @@ jobs:
         if: matrix.shard == 3
       - run: bash tests/whats-new.sh
         if: matrix.shard == 3
+      # Nothing the kit makes in TMPDIR outlives its run: dry runs, the data and
+      # add-ons tables, the launcher download - on success, die(), and signals.
+      - run: bash tests/temp-cleanup.sh
+        if: matrix.shard == 3
       # The two PowerShell-native suites had NO caller anywhere -- not this
       # workflow, not their shell siblings, not a script. They document
       # themselves as `pwsh tests/<name>.ps1` and were simply never run by
@@ -841,6 +845,7 @@ jobs:
             pwsh -NoProfile -File tests/service-scope-ps.ps1
             pwsh -NoProfile -File tests/personal-s3-ps.ps1
             pwsh -NoProfile -File tests/data-load-shapes-ps.ps1
+            pwsh -NoProfile -File tests/temp-cleanup-ps.ps1
           elif [ "${EXAKIT_REQUIRE_PS:-0}" = "1" ]; then
             echo "FAIL pwsh is missing on the runner that is supposed to have it" >&2
             exit 1

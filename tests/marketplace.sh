@@ -1521,6 +1521,9 @@ _dl_probe="$WORK/dl-default-label"
         EXAKIT_TABLE_SELECTION="$EXAKIT_TABLE_DEFAULTS"
     }
     exakit_data_load_select "Skip" >/dev/null 2>&1
+    # The selection hands its table to the caller for the progress display;
+    # this probe is the caller, so it lets go of it.
+    exakit_data_table_release
 )
 # The expected value is the label VERBATIM, and it moves when the label moves:
 # the folder-loading work widened this row to ", or a folder of them" and left
