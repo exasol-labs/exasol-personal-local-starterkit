@@ -60,9 +60,11 @@ personal_heal_rootless_podman() {
     _phr_why="$(detect_rootless_podman_gap 2>/dev/null || true)"
 
     case "$_phr_kind" in
-        cgroups)
-            # No process can turn this on. Say so, and say it in the words of
-            # the platform the reader is actually on.
+        cgroups|pids)
+            # No process can turn this on - cgroups v2 is a boot setting, and
+            # a pids controller is a systemd delegation or, under WSL 2.9+, an
+            # upstream fix. Say so, in the words of the platform the reader is
+            # actually on, and let the deploy (and its container error) judge.
             warn "Rootless Podman: ${_phr_why}"
             return 0
             ;;
@@ -1365,14 +1367,21 @@ personal_recover_slow_first_boot() {
     info "The launcher stopped waiting after its own short budget, but the deployment exists — waiting up to ${_prs_budget}s for the database"
     _prs_t0="$(date +%s 2>/dev/null || echo 0)"
     _prs_tries=0
+    PERSONAL_CONTAINER_ERROR=""
     until personal_tls_answers; do
         _prs_tries=$(( _prs_tries + 1 ))
         _prs_elapsed=$(( $(date +%s 2>/dev/null || echo 0) - _prs_t0 ))
         [ "$_prs_elapsed" -ge "$_prs_budget" ] && return 1
         [ "$_prs_tries" -ge $(( _prs_budget / 5 + 1 )) ] && return 1
+        # The same early exit as the readiness probe: a container that refused
+        # to start is not slow.
+        if [ $(( _prs_tries % 3 )) -eq 0 ]; then
+            _personal_container_refused && return 1
+        fi
         sleep 5
     done
     ok "The database answered after $(( $(date +%s 2>/dev/null || echo 0) - _prs_t0 ))s"
+    personal_set_first_boot_pending 0
     EXAKIT_ACTIVE_LABEL="Reconciling the launcher's record"
     # THE RECONCILE IS THE OWNERSHIP PROOF. A handshake says a database answers
     # on the port, not whose: with Windows and WSL sharing one network stack it
@@ -1435,6 +1444,140 @@ personal_podman_running() {
     return 1
 }
 
+# personal_container_error — the error podman recorded for this deployment's
+# container when it never ran ("created") or died ("exited"), first line only;
+# empty otherwise. THE REAL ERROR, which the launcher never repeats: a
+# container can sit in "created" with "crun: controller 'pids' is not
+# available" while the kit waits out its whole budget and then says "never
+# answered". Nothing is reported while any of the containers runs - a stale
+# one from an earlier deployment is not this one's error. Linux and WSL only:
+# the macOS launcher runs its own VM, and a podman there is somebody else's.
+# Twin of Get-PersonalContainerError.
+personal_container_error() {
+    case "$(detect_os 2>/dev/null)" in
+        linux|wsl) : ;;
+        *) return 0 ;;
+    esac
+    command -v podman >/dev/null 2>&1 || return 0
+    _pce_list="$(exakit_run_bounded 15 podman ps -a --filter name=exasol-db --format '{{.Names}} {{.State}}' 2>/dev/null)" || return 0
+    case " $_pce_list " in
+        *" running"*) return 0 ;;
+    esac
+    printf '%s\n' "$_pce_list" | head -3 | while read -r _pce_name _pce_state _pce_rest; do
+        case "$_pce_state" in
+            created|exited|stopped) : ;;
+            *) continue ;;
+        esac
+        _pce_err="$(exakit_run_bounded 15 podman inspect --format '{{.State.Error}}' "$_pce_name" 2>/dev/null | grep -v '^[[:space:]]*$' | head -1)"
+        if [ -n "$_pce_err" ]; then
+            printf '%s\n' "$_pce_err"
+            break
+        fi
+    done
+    return 0
+}
+
+# _personal_short <text> — one line of foreign output, cut to what a terminal
+# row can carry; the pids error alone names a cgroup path 150 characters deep.
+_personal_short() {
+    printf '%s\n' "$1" | head -1 | cut -c1-240
+}
+
+# personal_known_cause <text> — "cause|remedy" for an error the kit recognises
+# in a container's State.Error or in the launcher's output, in the words of
+# this platform; nothing, and 1, for anything else. Twin of
+# Get-PersonalKnownCause (whose remedies are the Windows machine's).
+personal_known_cause() {
+    _pkc_os="$(detect_os 2>/dev/null || true)"
+    case "$1" in
+        *"controller "?"pids"?" is not available"*)
+            printf "rootless Podman gets no 'pids' cgroup controller, so the database container cannot start (podman-container-tools/podman#29909)|"
+            if [ "$_pkc_os" = "wsl" ]; then
+                printf "this is a known WSL 2.9+ problem that only a WSL or Podman update fixes - follow the issue; 'podman info --format {{.Host.CgroupControllers}}' must list pids before a re-run can work\n"
+            else
+                printf "delegate it to your user ('[Service]' and 'Delegate=cpu cpuset io memory pids' in /etc/systemd/system/user@.service.d/delegate.conf, 'sudo systemctl daemon-reload', log in again), then re-run the installer\n"
+            fi
+            return 0
+            ;;
+        *"Temporary failure in name resolution"*|*"lookup registry"*)
+            printf 'this machine cannot resolve registry-1.docker.io, so the database image cannot be downloaded|'
+            if [ "$_pkc_os" = "wsl" ]; then
+                printf "on the WINDOWS side add 'dnsTunneling=true' under [wsl2] in %%USERPROFILE%%\\\\.wslconfig, run 'wsl --shutdown', then re-run the installer\n"
+            else
+                printf "fix this machine's DNS ('getent hosts registry-1.docker.io' must answer), then re-run the installer\n"
+            fi
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+# personal_explain_failure [launcher-output-file] — after a deploy or start
+# that failed: the container's own error when it has one, and the cause and
+# the fix when the kit recognises it there or in what the launcher said. The
+# cause is left in PERSONAL_FAILURE_CAUSE (": ..." form, empty when nothing
+# more is known) for the caller's failure note. Twin of
+# Show-PersonalFailureCause.
+personal_explain_failure() {
+    PERSONAL_FAILURE_CAUSE=""
+    _pef_err="${PERSONAL_CONTAINER_ERROR:-}"
+    if [ -z "$_pef_err" ]; then
+        _pef_err="$(personal_container_error 2>/dev/null || true)"
+        [ -n "$_pef_err" ] && warn "The database container could not start: $(_personal_short "$_pef_err")"
+    fi
+    [ -n "$_pef_err" ] && PERSONAL_FAILURE_CAUSE=": the database container could not start ($(_personal_short "$_pef_err"))"
+    _pef_text="$_pef_err"
+    if [ -n "${1:-}" ] && [ -s "$1" ]; then
+        _pef_text="$_pef_text
+$(cat "$1")"
+    fi
+    _pef_known="$(personal_known_cause "$_pef_text")" || return 0
+    warn "${_pef_known%%|*}."
+    info "Fix: ${_pef_known#*|}"
+    [ -n "$PERSONAL_FAILURE_CAUSE" ] || PERSONAL_FAILURE_CAUSE=": ${_pef_known%%|*}"
+    return 0
+}
+
+# _personal_container_refused — has the database container failed for good?
+# Asked from inside every wait, so a terminal error ends the wait at once
+# instead of spending the rest of its budget. Kept in PERSONAL_CONTAINER_ERROR
+# for the failure reason, said once. Twin of Test-PersonalContainerRefused.
+_personal_container_refused() {
+    _pcr_err="$(personal_container_error 2>/dev/null || true)"
+    [ -n "$_pcr_err" ] || return 1
+    PERSONAL_CONTAINER_ERROR="$_pcr_err"
+    # The wait's spinner owns its line: paused for the warning, not ended -
+    # ending it is the wait's own job.
+    command -v ui_spin_pause >/dev/null 2>&1 && ui_spin_pause
+    warn "The database container could not start: $(_personal_short "$_pcr_err")"
+    command -v ui_spin_resume >/dev/null 2>&1 && ui_spin_resume
+    return 0
+}
+
+# personal_first_boot_pending / personal_set_first_boot_pending 1|0 — did the
+# KIT create this deployment and never see its database answer? Recorded right
+# before the kit's own `install local` and cleared the first time the database
+# answers, so a deployment the kit did not make - or one that has EVER
+# answered, and so may hold data - never reads as pending. The never-booted
+# branch of personal_deploy_local rests on it. Twin of
+# Test-PersonalFirstBootPending.
+personal_first_boot_pending() {
+    case "$(manifest_get runtime.first_boot_pending 2>/dev/null || true)" in
+        true|True|1) return 0 ;;
+    esac
+    return 1
+}
+
+personal_set_first_boot_pending() {
+    [ -f "${EXAKIT_MANIFEST:-}" ] || return 0
+    if [ "$1" = 1 ]; then
+        ( manifest_set runtime.first_boot_pending true ) >/dev/null 2>&1 || true
+    elif [ -n "$(manifest_get runtime.first_boot_pending 2>/dev/null || true)" ]; then
+        ( manifest_del runtime.first_boot_pending ) >/dev/null 2>&1 || true
+    fi
+    return 0
+}
+
 # personal_deploy_local — run the local deployment. This is the long step
 # (usually under 2 minutes); output stays visible and is logged.
 personal_deploy_local() {
@@ -1485,7 +1628,10 @@ personal_deploy_local() {
     # before the answer. The one exception is a deployment that will not
     # start at all (a crashed VM): that is replaced — announced, never
     # silently — because there is nothing left to reuse.
-    if personal_deployment_exists; then
+    _pdl_never_booted_replaced=0
+    _pdl_exists=0
+    personal_deployment_exists && _pdl_exists=1
+    if [ "$_pdl_exists" = 1 ]; then
         # A FIRST BOOT THE LAUNCHER GAVE UP ON is not a stopped deployment. In
         # "deployment_failed" its start and stop do nothing, so the
         # start-and-reuse path below would report success over a record that
@@ -1496,6 +1642,7 @@ personal_deploy_local() {
         if [ "$(personal_launcher_state 2>/dev/null || true)" = "deployment_failed" ]; then
             info "The launcher records this deployment as failed - retrying its deploy."
             EXAKIT_ACTIVE_LABEL="Retrying the deployment"
+            PERSONAL_CONTAINER_ERROR=""
             if run_logged "$(personal_cli)" deploy $(personal_auto_approve_flag deploy) || \
                personal_recover_slow_first_boot; then
                 ok "Reusing the existing Exasol deployment (deployed again)"
@@ -1504,7 +1651,34 @@ personal_deploy_local() {
                 return 0
             fi
             warn "The failed deployment could not be brought up.$(personal_foreign_db_hint)"
+            personal_explain_failure
+            # A DEPLOYMENT THAT NEVER STARTED HOLDS NO DATA, so the ladder below
+            # asks the wrong questions of it: "start it and keep its data" is a
+            # no-op in this state, and "DELETE ... and its data" defaulting to
+            # no left the user with nothing either way. The kit made it and has
+            # never seen it answer (personal_first_boot_pending), so it is
+            # offered for replacement, default yes - still a consent prompt,
+            # still answered by EXAKIT_REPLACE_DB. A deployment that ever
+            # answered, one the kit did not make, and an explicit
+            # EXAKIT_REUSE_DB=1 all keep the ladder unchanged.
+            case "${EXAKIT_REUSE_DB:-}" in
+                1|y|Y|yes|YES|Yes) _pdl_reuse_asked=1 ;;
+                *) _pdl_reuse_asked=0 ;;
+            esac
+            if [ "$_pdl_reuse_asked" = 0 ] && personal_first_boot_pending; then
+                if ! confirm_env EXAKIT_REPLACE_DB "This deployment never started, so it holds no data. Remove it and deploy a fresh one?" y; then
+                    info "Nothing was deleted. Diagnose it with 'exakit status', or re-run with EXAKIT_REPLACE_DB=1 to replace it: $(exakit_install_command)"
+                    exakit_note_failure "A deployment that never started could not be brought up, and replacing it was declined"
+                    return 1
+                fi
+                info "Removing the deployment that never started, and deploying a fresh one."
+                run_logged "$(personal_cli)" destroy --remove --auto-approve || \
+                    warn "Could not fully remove the old deployment; the launcher will deploy over it."
+                _pdl_never_booted_replaced=1
+            fi
         fi
+    fi
+    if [ "$_pdl_exists" = 1 ] && [ "$_pdl_never_booted_replaced" = 0 ]; then
         info "An Exasol deployment was found, not running."
         if confirm_env EXAKIT_REUSE_DB "Start the existing database and keep its data?" y; then
             personal_note_guest_rebuild
@@ -1611,6 +1785,11 @@ personal_deploy_local() {
     : > "$_deploy_notice"
 
     EXAKIT_DEPLOY_LIVE=0
+    PERSONAL_CONTAINER_ERROR=""
+    # Recorded BEFORE the deploy: a deployment the launcher creates and never
+    # boots is the one the never-booted branch above may later offer to
+    # replace as empty. The first answer from its database clears it.
+    personal_set_first_boot_pending 1
     ui_progress_begin "$_deploy_state" "$_deploy_t0" && EXAKIT_DEPLOY_LIVE=1
     # --auto-approve: 2.3 fails a non-interactive host preparation rather than
     # proceeding without approval, and this pipeline is the definition of one.
@@ -1636,14 +1815,17 @@ personal_deploy_local() {
             rm -rf "$_deploy_tmp"
         else
             _personal_deploy_print_tail "$_deploy_tail"
-            rm -rf "$_deploy_tmp"
             # DISARMED, NOT FIRED. The destroy pushed above is the right undo
             # for a run that is ending; this run is not ending, and a partial
             # deployment is what a retry needs to look at.
             rollback_clear
             warn "Local deployment failed.$(personal_foreign_db_hint)"
+            # WHAT ACTUALLY WENT WRONG: the container's own error, and the fix
+            # when the kit recognises it there or in the launcher's tail.
+            personal_explain_failure "$_deploy_tail"
+            rm -rf "$_deploy_tmp"
             info "Retry it by re-running the installer - completed steps are skipped: $(exakit_install_command)"
-            exakit_note_failure "The launcher could not deploy the database locally"
+            exakit_note_failure "The launcher could not deploy the database locally${PERSONAL_FAILURE_CAUSE}"
             return 1
         fi
     fi
@@ -1712,6 +1894,7 @@ _personal_wait_ready_probe() {
     # To STDERR: a caller composing a --json answer on stdout must not find
     # progress lines spliced into it.
     _pwr_last_note=0
+    PERSONAL_CONTAINER_ERROR=""
     while [ "$_pwr_elapsed" -lt "$_pwr_budget" ] && [ "$_tries" -lt "$_pwr_maxtries" ]; do
         # A HANDSHAKE, NOT AN OPEN PORT. Under rootless Podman the port is
         # pasta's from the moment the container starts, and `exasol info`
@@ -1721,12 +1904,19 @@ _personal_wait_ready_probe() {
         if personal_tls_answers; then
             ui_spin_end
             ok "Deployment is reachable"
+            personal_set_first_boot_pending 0
             # The database answered under this launcher, so whatever rebuild
             # that first start owed is paid. Recorded so the notice does not
             # announce it again for the same launcher.
             _pwr_lv="$(personal_launcher_version 2>/dev/null || true)"
             [ -n "$_pwr_lv" ] && manifest_set runtime.guest_rebuilt_for "$_pwr_lv" 2>/dev/null
             return 0
+        fi
+        # A CONTAINER THAT REFUSED TO START WILL NOT ANSWER LATER. Asked every
+        # third try (15 s): two podman calls, and the point is to stop the wait
+        # early, not to race it.
+        if [ $(( (_tries + 1) % 3 )) -eq 0 ]; then
+            _personal_container_refused && break
         fi
         sleep 5
         _tries=$((_tries + 1))
@@ -1753,6 +1943,10 @@ _personal_wait_ready_probe() {
 # refusal back instead of ending the run.
 personal_wait_ready() {
     _personal_wait_ready_probe && return 0
+    if [ -n "${PERSONAL_CONTAINER_ERROR:-}" ]; then
+        personal_explain_failure
+        die "The database could not start${PERSONAL_FAILURE_CAUSE}. Read the state with 'exakit status'; once the cause is fixed: exakit start"
+    fi
     die "The deployment did not answer within ${_pwr_spent} seconds (the ceiling is ${_pwr_budget}s; raise it with ${_pwr_raise}). Read the state with 'exakit status', then 'exakit start' to retry - a deployment stuck in 'interrupted' is repaired with 'exakit repair-runtime' (destructive, it asks first)."
 }
 
@@ -1776,6 +1970,14 @@ personal_wait_ready() {
 # the install records it and carries on.
 personal_wait_ready_or_deploy() {
     _personal_wait_ready_probe && return 0
+    # A CONTAINER THAT REFUSED TO START is not fixed by deploying it again: the
+    # deploy would recreate it and the same error would refuse it the same
+    # way. Its cause is the answer.
+    if [ -n "${PERSONAL_CONTAINER_ERROR:-}" ]; then
+        personal_explain_failure
+        exakit_note_failure "The database never answered${PERSONAL_FAILURE_CAUSE}"
+        return 1
+    fi
     warn "The database did not answer after the launcher accepted the start."
     info "In some states the launcher's start does nothing and its deploy is the fix - running that now."
     EXAKIT_ACTIVE_LABEL="Deploying the existing database"
@@ -1786,7 +1988,9 @@ personal_wait_ready_or_deploy() {
     fi
     EXAKIT_ACTIVE_LABEL=""
     _personal_wait_ready_probe && { ok "The database answered after the launcher's deploy"; return 0; }
-    exakit_note_failure "The database never answered, even after the launcher deployed it again"
+    PERSONAL_FAILURE_CAUSE=""
+    [ -n "${PERSONAL_CONTAINER_ERROR:-}" ] && personal_explain_failure
+    exakit_note_failure "The database never answered, even after the launcher deployed it again${PERSONAL_FAILURE_CAUSE}"
     return 1
 }
 
@@ -1887,6 +2091,9 @@ print("%s:%s\t%s" % (c.get("host", "127.0.0.1"), c.get("dbPort", 8563), c.get("u
     # Never assert health without either having just seen it or probing for it.
     [ -n "$_prm_status" ] || _prm_status="$(personal_status 2>/dev/null || true)"
     manifest_set runtime.status "${_prm_status:-unknown}"
+    # A database that has been seen healthy may hold data from now on.
+    [ "$_prm_status" = "healthy" ] && personal_set_first_boot_pending 0
+    return 0
 }
 
 # --- lifecycle (used by exakit) ---------------------------------------------
@@ -2068,17 +2275,23 @@ personal_status() {
 
 personal_start() {
     if personal_launcher_supports start; then
+        # PODMAN FIRST, as the install does: a podman that cannot run anything
+        # fails the start inside the launcher, naming neither. No-op on macOS.
+        # Twin of the readiness check at the top of Start-Personal.
+        personal_podman_running || die "Podman cannot run the database right now (the reason is above). Once 'podman info' answers: exakit start"
         # In "deployment_failed" the launcher's start (and stop) do nothing and
         # exit 0, so this reported "Database started" over a database that was
         # never asked to start and then waited its whole budget for it. The
         # launcher's own retry for that state is its deploy.
         if [ "$(personal_launcher_state 2>/dev/null || true)" = "deployment_failed" ]; then
             info "The launcher records this deployment as failed - retrying its deploy instead of a start it would ignore."
+            PERSONAL_CONTAINER_ERROR=""
             if run_logged "$(personal_cli)" deploy $(personal_auto_approve_flag deploy); then
                 ok "Database started"
                 return 0
             fi
-            die "The deployment could not be brought up.$(personal_foreign_db_hint) Check the log above; if it fails the same way, repair with: $(personal_repair_command)"
+            personal_explain_failure
+            die "The deployment could not be brought up${PERSONAL_FAILURE_CAUSE}.$(personal_foreign_db_hint) Check the log above; if it fails the same way, repair with: $(personal_repair_command)"
         fi
         personal_note_guest_rebuild
         # A STOPPED DEPLOYMENT CAN STILL BE HOLDING ITS OWN PORT. The 2.3
@@ -2103,7 +2316,9 @@ personal_start() {
             if [ "$(personal_status 2>/dev/null)" = "conflict" ]; then
                 die "Port $(personal_db_port) is held by another process$(personal_port_holder_hint), so the database cannot start. Stop that process, then: exakit start"
             fi
-            die "Failed to start the database. Check the log above, then retry with 'exakit start'; if it fails the same way, repair with: $(personal_repair_command)"
+            PERSONAL_CONTAINER_ERROR=""
+            personal_explain_failure
+            die "Failed to start the database${PERSONAL_FAILURE_CAUSE}. Check the log above, then retry with 'exakit start'; if it fails the same way, repair with: $(personal_repair_command)"
         fi
         ok "Database started"
     else
