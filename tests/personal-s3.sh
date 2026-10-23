@@ -4,6 +4,9 @@ set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
+# The launcher download's scratch folder goes under WORK too: the stubbed
+# die() below cannot sweep it, and it used to pile up in the real TMPDIR.
+TMPDIR="$WORK/tmp"; mkdir -p "$TMPDIR"; export TMPDIR
 EXAKIT_BIN_DIR="$WORK/bin"
 EXAKIT_PERSONAL_VERSION=2.3.0
 EXAKIT_PERSONAL_REPO=exasol/exasol-personal

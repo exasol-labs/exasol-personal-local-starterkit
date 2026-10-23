@@ -707,6 +707,10 @@ personal_install_launcher() {
     personal_refuse_launcher_downgrade
 
     _tmp="$(mktemp -d "${TMPDIR:-/tmp}/exakit-personal.XXXXXX")"
+    # Removed below once the launcher is in place; every die() between here and
+    # there (a failed download, a bad checksum, a full disk) sweeps it instead.
+    # Guarded: the suites load this module without common.sh.
+    command -v exakit_track_tmp >/dev/null 2>&1 && exakit_track_tmp "$_tmp"
 
     # The whole step on ONE line. begin_step already set a spinner label, and
     # fetch/run_logged animate it, so every stage here was narrated twice: once

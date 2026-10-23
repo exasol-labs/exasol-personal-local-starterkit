@@ -170,6 +170,14 @@ fi
 [ -f "$_lib_dir/json-tables.sh" ] && . "$_lib_dir/json-tables.sh"
 [ -f "$_lib_dir/exasol-scheduler.sh" ] && . "$_lib_dir/exasol-scheduler.sh"
 
+# Scratch files a command made in TMPDIR (exakit_track_tmp) go with it, however
+# it ends: return, die(), or Ctrl+C - bash runs the EXIT trap on a fatal signal
+# too. ui_table_abort first, because it is what ui.sh traps EXIT with when
+# nothing else has, and a table must stop drawing before its state file goes.
+# A command that turns on the installer's failure handling replaces this with
+# exakit_on_failure, which sweeps as well.
+trap 'command -v ui_table_abort >/dev/null 2>&1 && ui_table_abort; exakit_sweep_tmp' EXIT
+
 _runtime_type() {
     manifest_get runtime.type 2>/dev/null
 }
