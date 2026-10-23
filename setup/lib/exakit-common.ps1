@@ -1819,6 +1819,39 @@ function Write-ExakitFailureNote {
     } catch { }
 }
 
+# Get-ExakitRuntimeStatus - the runtime's status; with Start-ExakitRuntime
+# (exakit.ps1) the runtime-agnostic pair the inline offer needs. Anything
+# unrecognised answers "" for "cannot tell", which is not the same as "not
+# running". Twin of exakit_runtime_status in setup/lib/common.sh.
+function Get-ExakitRuntimeStatus {
+    switch (Get-RuntimeType) {
+        "personal" { try { return (Get-PersonalStatus) } catch { return "" } }
+    }
+    return ""
+}
+
+# Start-ExakitDatabase - the database half of `exakit start`: self-heal
+# semantics for the runtime (a stopped one is started, a missing one created -
+# `exakit start` promises a running database). Shared by the bare form, by
+# `exakit start database` and by `exakit notebook` (so it lives here, where the
+# notebook module can reach it), so they cannot drift. Twin of _start_database.
+function Start-ExakitDatabase {
+    if ((Get-RuntimeType) -eq "personal" -and (Test-PersonalDeploymentRunning)) {
+        Ok "Database is already running"
+    } elseif ((Get-RuntimeType) -eq "personal" -and (Get-PersonalStatus) -eq "conflict") {
+        # Port open is not database up: with another program on the port this
+        # said "already running" and exited 0 while status said stopped. Twin
+        # of the same arm in cmd_start (setup/exakit).
+        Fail "Port $(Get-PersonalDbPort) is held by another process, not by Exasol, so the database cannot start. Stop that process, then: exakit start"
+    } else {
+        Confirm-ExakitRuntimeRunning -Deploy
+    }
+    # The database is up, so a note left by an earlier start that could not is
+    # no longer true. Only a runtime note goes; an install-step note stays.
+    try { if ((Get-ExakitRuntimeStatus) -like "running*") { Clear-ExakitRuntimeFailureNote } } catch { }
+}
+
+
 # Read, not consumed: `status` reports the note without clearing it, exactly as
 # the bash status does. Both fields are empty when there is no note.
 # Twin of exakit_clear_runtime_failure_note: retire the note only if it is about

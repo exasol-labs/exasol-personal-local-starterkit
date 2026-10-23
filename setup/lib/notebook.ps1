@@ -1233,17 +1233,13 @@ function Repair-NotebookEnv {
 }
 
 # Start-NotebookDatabase - the database started the way `exakit start database`
-# starts it (Start-ExakitDatabase in exakit.ps1: a stopped one is started, a
+# starts it (Start-ExakitDatabase in exakit-common.ps1: a stopped one is started, a
 # missing deployment made), a Fail inside it caught; then asked again whether
 # it answers SQL. Twin of _notebook_start_database.
 function Start-NotebookDatabase {
     try {
-        if (Get-Command Start-ExakitDatabase -ErrorAction SilentlyContinue) {
-            try { [void](Initialize-ExakitLogging) } catch { }
-            [void](Start-ExakitDatabase)
-        } else {
-            [void](Confirm-ExakitRuntimeRunning -Deploy)
-        }
+        try { [void](Initialize-ExakitLogging) } catch { }
+        [void](Start-ExakitDatabase)
     } catch { }
     if (Get-Command Clear-ExakitDbReachable -ErrorAction SilentlyContinue) { Clear-ExakitDbReachable }
     return [bool](Test-ExakitDbReachable)
