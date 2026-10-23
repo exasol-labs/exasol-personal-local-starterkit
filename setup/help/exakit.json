@@ -464,6 +464,18 @@
       "remedy": "Run: podman machine start - then re-run the installer."
     },
     {
+      "symptom": "Podman cannot apply the pids limit",
+      "remedy": "A rootless machine under WSL 2.9+ has no pids cgroup controller (podman-container-tools/podman#29909). Make it rootful: podman machine stop; podman machine set --rootful; podman machine start - then re-run the installer. The installer offers this itself (unattended: EXAKIT_PODMAN_SELFHEAL=1)."
+    },
+    {
+      "symptom": "Podman machine cannot resolve registry-1.docker.io",
+      "remedy": "Windows 11 22H2+: add dnsTunneling=true under [wsl2] in %USERPROFILE%\\.wslconfig, then: wsl --shutdown; podman machine start (this stops every WSL distro). Older Windows: podman machine stop; podman machine set --user-mode-networking; podman machine start. The installer offers the first itself (unattended: EXAKIT_PODMAN_SELFHEAL=1)."
+    },
+    {
+      "symptom": "Database container stays Created",
+      "remedy": "Read its error: podman inspect --format \"{{.State.Error}}\" <exasol-db-...>. The kit shows it on a failed deploy or start; a pids error is fixed by a rootful machine (see above). A deployment that never started holds no data, and the installer offers to replace it (EXAKIT_REPLACE_DB=0 keeps it)."
+    },
+    {
       "symptom": "Port 8563 is already in use",
       "remedy": "Stop the other app, or re-run with EXAKIT_DB_PORT=8564."
     },

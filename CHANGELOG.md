@@ -2,6 +2,50 @@
 
 ## Unreleased
 
+**Rootful and rootless Podman machines are both supported on Windows.** The
+requirements gate (and so `exakit preflight`, which is now read-only) reports
+the machine's mode instead of refusing a rootful machine or switching it, and
+`EXAKIT_FORCE` is back to meaning RAM and disk. The 0.2.0 refusal rested on a
+measurement that holds only for Podman 6.0.0 to 6.1.0, whose rootful machines
+do not forward published ports to Windows (fixed in 6.1.1); on 5.x the rootful
+port is forwarded, and rootful is the one mode that runs the database where WSL
+2.9+ gives rootless Podman no `pids` controller. A container that runs but does
+not answer on 127.0.0.1 is now diagnosed: that Podman version is named with its
+fix (upgrade, recreate the machine), and otherwise switching to rootless is
+offered as one option, with consent.
+
+**Podman is checked before every deploy and start, and what the kit can fix it
+offers to fix.** Windows: the machine is started if it is off (also on
+`exakit start` after a reboot); before a fresh pull the machine must resolve
+`registry-1.docker.io`, and on Windows 11 22H2+ the kit offers to set
+`dnsTunneling=true` in `%USERPROFILE%\.wslconfig` (edited in place, idempotent)
+and restart WSL; a machine with no `pids` cgroup controller
+(podman-container-tools/podman#29909) is offered a switch to rootful and asked
+again. Every change needs a yes at the terminal or `EXAKIT_PODMAN_SELFHEAL=1`;
+what remains is a soft failure with the cause named, never a deploy that cannot
+succeed. Linux and WSL: preflight and the install name a missing `pids`
+controller (with the systemd delegation, or the WSL issue).
+
+**The real error, not "never answered".** The waits read the database
+container's own `State.Error` and stop at once when it has failed for good, and
+every deploy and start failure carries it as its reason; known errors (`pids`,
+name resolution) come with their fix. A failed Windows deploy prints the
+launcher's last lines, and a Podman that does not answer prints what it said.
+`exakit status` adds the launcher's "deployment failed" record and the
+container's error to a stopped deployment's line and `remedy_hints`.
+
+**A deployment that never started is offered for replacement, default yes.**
+It holds no data, so "Start the existing database and keep its data?" (a no-op
+in that state) and "DELETE ... [y/N]" were the wrong questions. Only a
+deployment the kit created and never saw answer qualifies; `EXAKIT_REPLACE_DB=0`
+or `EXAKIT_REUSE_DB=1` keeps the old questions, which every deployment that
+ever booted still gets.
+
+**`exakit repair-runtime` on Windows consents to the deletion it asked
+about** (`EXAKIT_REPLACE_DB=1`, as on macOS and Linux), and on both sides its
+`--json` answer reports `failed` rather than `repaired` when the rebuild left
+no database.
+
 ## 0.2.2
 
 **The Personal launcher comes from Exasol's S3 bucket first, verified, with
