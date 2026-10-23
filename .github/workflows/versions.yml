@@ -838,7 +838,6 @@ jobs:
             pwsh -NoProfile -File tests/noninteractive-answers.ps1
             pwsh -NoProfile -File tests/uninstall-ps.ps1
             pwsh -NoProfile -File tests/runtime-personal-ps.ps1
-            pwsh -NoProfile -File tests/dry-run-cleanup-ps.ps1
             pwsh -NoProfile -File tests/service-scope-ps.ps1
             pwsh -NoProfile -File tests/personal-s3-ps.ps1
             pwsh -NoProfile -File tests/data-load-shapes-ps.ps1
@@ -866,7 +865,4 @@ jobs:
           fi
       # Dry run only without EXAKIT_SMOKE_FULL=1: no install, no database.
       - run: bash tests/smoke-test.sh
-        if: matrix.shard == 2
-      # A dry run leaves at most one staging folder and copies only the kit.
-      - run: bash tests/dry-run-cleanup.sh
         if: matrix.shard == 2

@@ -78,10 +78,6 @@ jobs:
         if: matrix.shard == 2
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/runtime-personal-ps.ps1
-      - name: the dry run's staging folder and local copy under 5.1
-        if: matrix.shard == 2
-        shell: powershell
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/dry-run-cleanup-ps.ps1
       - name: start and stop one service under 5.1
         if: matrix.shard == 2
         shell: powershell

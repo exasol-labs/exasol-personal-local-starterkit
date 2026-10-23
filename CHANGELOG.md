@@ -2,17 +2,6 @@
 
 ## Unreleased
 
-**A dry run no longer fills the disk.** `EXAKIT_DRY_RUN=1` left its staging
-folder in the temp directory on every run, and with `EXAKIT_LOCAL_KIT` it copied
-the whole checkout - `.git`, agent worktrees under `.claude`, caches - so a test
-suite that dry-runs per scenario left hundreds of ~500 MB folders. A dry run now
-removes earlier dry-run folders once they are 10 minutes old (the latest stays
-for inspection), and an install or dry run from a local checkout copies only the
-files git tracks plus new ones it does not ignore (without git: everything but
-`.git`, `.claude`, `node_modules` and caches) - 537 MB became 66 MB on the
-checkout that showed it. Both installers; `tests/dry-run-cleanup.sh` and
-`tests/dry-run-cleanup-ps.ps1`.
-
 **Rootful and rootless Podman machines are both supported on Windows.** The
 requirements gate (and so `exakit preflight`, which is now read-only) reports
 the machine's mode instead of refusing a rootful machine or switching it, and

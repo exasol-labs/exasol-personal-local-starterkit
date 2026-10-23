@@ -124,74 +124,12 @@ $env:EXAKIT_HOME = $ExakitHome
 $Repo       = if ($env:EXAKIT_REPO) { $env:EXAKIT_REPO } else { "exasol-labs/exasol-personal-local-starterkit" }
 $Ref        = if ($env:EXAKIT_REF)  { $env:EXAKIT_REF }  else { "main" }
 $KitDir     = Join-Path $ExakitHome "kit"
-
-# Remove-ExakitOldDryRuns - ONE DRY RUN'S FOLDER AT A TIME. Each dry run leaves
-# its copy in %TEMP% for inspection, and nothing ever removed one: a test suite
-# that dry-runs the installer per scenario left hundreds behind. Earlier ones go
-# when a new dry run starts; the age keeps one still running elsewhere out of
-# reach. Twin of the find sweep in install.sh.
-function Remove-ExakitOldDryRuns {
-    param([string]$TempPath = [System.IO.Path]::GetTempPath(), [int]$Minutes = 10)
-    $cutoff = (Get-Date).AddMinutes(-$Minutes)
-    Get-ChildItem -LiteralPath $TempPath -Directory -Filter "exakit-dry-run-*" -ErrorAction SilentlyContinue |
-        Where-Object { $_.LastWriteTime -lt $cutoff } |
-        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
-}
-
-# Copy-ExakitLocalKit - THE KIT'S FILES, NOT THE FOLDER. A developer's checkout
-# holds far more than the kit: .git, agent worktrees under .claude, build
-# output, caches - one had 432 MB of worktrees in a 537 MB checkout, and every
-# install or dry run from it copied all of it. In a git checkout only the files
-# git tracks, plus new ones it does not ignore, are copied (deleted ones
-# skipped); without git, everything but the known checkout-only folders. Twin of
-# copy_local_kit in install.sh.
-function Copy-ExakitLocalKit {
-    param([Parameter(Mandatory)][string]$Source, [Parameter(Mandatory)][string]$Destination)
-    $files = $null
-    $git = Get-Command git -ErrorAction SilentlyContinue
-    if ($git) {
-        # Continue, not this script's Stop: on 5.1 a native command writing to a
-        # redirected stderr (git outside a checkout does) is otherwise a
-        # terminating error before $LASTEXITCODE can be read.
-        $prevEap = $ErrorActionPreference
-        $ErrorActionPreference = "Continue"
-        try {
-            $inside = & $git.Source -C $Source rev-parse --is-inside-work-tree 2>$null
-            if ($LASTEXITCODE -eq 0 -and ("" + $inside).Trim() -eq "true") {
-                $files = @(& $git.Source -C $Source -c core.quotepath=off ls-files --cached --others --exclude-standard 2>$null)
-                if ($LASTEXITCODE -ne 0) { $files = $null }
-            }
-        } finally {
-            $ErrorActionPreference = $prevEap
-        }
-    }
-    if ($null -ne $files) {
-        foreach ($rel in $files) {
-            if (-not $rel -or $rel.StartsWith(".claude/")) { continue }
-            $from = Join-Path $Source $rel
-            if (-not (Test-Path -LiteralPath $from -PathType Leaf)) { continue }
-            $to = Join-Path $Destination $rel
-            $dir = Split-Path -Parent $to
-            if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
-            [System.IO.File]::Copy($from, $to, $true)
-        }
-        return
-    }
-    $skip = @(".git", ".claude", "node_modules", "__pycache__", ".ruff_cache")
-    Get-ChildItem -LiteralPath $Source -Force | Where-Object { $skip -notcontains $_.Name } |
-        ForEach-Object { Copy-Item -LiteralPath $_.FullName -Destination $Destination -Recurse -Force }
-    Get-ChildItem -LiteralPath $Destination -Recurse -Force -Directory -ErrorAction SilentlyContinue |
-        Where-Object { $skip -contains $_.Name } |
-        ForEach-Object { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction SilentlyContinue }
-}
-
 # A DRY RUN WRITES NOTHING UNDER EXAKIT_HOME. It used to swap the download into
 # $ExakitHome\kit - the copy an installed exakit loads its code from - and then
 # say "nothing was installed". It stages under a temp folder instead, so a dry
 # run over a working install changes nothing about it. Twin of install.sh.
 $StageBase  = $ExakitHome
 if ($env:EXAKIT_DRY_RUN -eq "1") {
-    Remove-ExakitOldDryRuns
     $StageBase = Join-Path ([System.IO.Path]::GetTempPath()) "exakit-dry-run-$([System.Guid]::NewGuid().ToString('N').Substring(0, 8))"
     $KitDir    = Join-Path $StageBase "kit"
 }
@@ -511,7 +449,9 @@ try {
             # it does for an archive, which unpacks into one top-level folder.
             $localDest = Join-Path $incoming "kit"
             New-Item -ItemType Directory -Force -Path $localDest | Out-Null
-            Copy-ExakitLocalKit -Source $LocalKit -Destination $localDest
+            Copy-Item -Path (Join-Path $LocalKit "*") -Destination $localDest -Recurse -Force
+            # .git is the checkout's, not the kit's, and it is large.
+            Remove-Item -Recurse -Force (Join-Path $localDest ".git") -ErrorAction SilentlyContinue
         } else {
             Expand-Archive -Path $tmpZip -DestinationPath $incoming
         }
@@ -614,7 +554,7 @@ if (-not $uiLoaded) {
 
 if ($env:EXAKIT_DRY_RUN -eq "1") {
     Write-Host "  * Dry run requested (EXAKIT_DRY_RUN=1) - nothing was installed, and nothing under $ExakitHome was changed." -ForegroundColor Blue
-    Write-Host "    The kit is unpacked for inspection in a temporary folder: $KitDir (the next dry run removes it once it is 10 minutes old)"
+    Write-Host "    The kit is unpacked for inspection in a temporary folder: $KitDir"
     Write-Host "    To install, run the same command again without EXAKIT_DRY_RUN."
     Write-Host ""
     return
