@@ -199,7 +199,7 @@ $script:ExapumpRepo     = "exasol-labs/exapump"
 $script:McpPackage      = if ($env:EXAKIT_MCP_PACKAGE) { $env:EXAKIT_MCP_PACKAGE } else { "exasol-mcp-server" }
 $script:McpVersion      = if ($env:EXAKIT_MCP_VERSION) { $env:EXAKIT_MCP_VERSION } else { "" }
 $script:PyexasolPackage = if ($env:EXAKIT_PYEXASOL_PACKAGE) { $env:EXAKIT_PYEXASOL_PACKAGE } else { "pyexasol" }
-$script:PyexasolVersionFallback = if ($env:EXAKIT_PYEXASOL_VERSION_FALLBACK) { $env:EXAKIT_PYEXASOL_VERSION_FALLBACK } else { "2.4.1" }
+$script:PyexasolVersionFallback = if ($env:EXAKIT_PYEXASOL_VERSION_FALLBACK) { $env:EXAKIT_PYEXASOL_VERSION_FALLBACK } else { "3.0.1" }
 $script:PyexasolVersion = if ($env:EXAKIT_PYEXASOL_VERSION) { $env:EXAKIT_PYEXASOL_VERSION } else { "" }
 # Marketplace add-ons (dash-server, ...) carry their own version constants in
 # their module files - they are not part of the install flow, so nothing here
