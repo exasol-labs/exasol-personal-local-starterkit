@@ -1030,7 +1030,9 @@ function Show-PersonalFailureCause {
     $known = Get-PersonalKnownCause ((@($err) + @($script:PersonalLauncherOutput)) -join "`n")
     if ($known) {
         Warn2 "$($known.Cause)."
-        Info "Fix: $($known.Remedy)"
+        # InfoStep, not Info: this is printed from inside the deploy's quiet
+        # bracket, and a fix nobody sees is no fix.
+        InfoStep "Fix: $($known.Remedy)"
         if (-not $suffix) { $suffix = ": $($known.Cause)" }
     }
     return $suffix
@@ -1050,8 +1052,8 @@ function Confirm-PersonalPodmanSelfHeal {
         return $false
     }
     if (("" + $env:EXAKIT_PODMAN_SELFHEAL) -cmatch '^(1|y|Y|yes|YES|Yes)$') { return $true }
-    Info "The kit can fix this, but it changes Podman's machine, which everything else on this host shares,"
-    Info "so an unattended run has to opt in:  EXAKIT_PODMAN_SELFHEAL=1"
+    InfoStep "The kit can fix this, but it changes Podman's machine, which everything else on this host shares,"
+    InfoStep "so an unattended run has to opt in:  EXAKIT_PODMAN_SELFHEAL=1"
     return $false
 }
 
@@ -1067,7 +1069,7 @@ function Set-PersonalPodmanRootful {
     $mode = "rootless"
     $flag = "--rootful=false"
     if ($Rootful) { $mode = "rootful"; $flag = "--rootful" }
-    Info "Switching Podman's default machine to $mode"
+    InfoStep "Switching Podman's default machine to $mode"
     $script:ExakitActiveLabel = "Switching Podman's machine to $mode"
     try {
         [void](Invoke-ExakitBounded -FilePath $podman.Source -Arguments @("machine", "stop") -TimeoutSeconds 120)
@@ -1086,7 +1088,7 @@ function Set-PersonalPodmanRootful {
     } finally {
         $script:ExakitActiveLabel = ""
     }
-    Ok "Podman's default machine is $mode now"
+    OkStep "Podman's default machine is $mode now"
     return $true
 }
 
@@ -1277,15 +1279,15 @@ function Resolve-PersonalUnreachableDatabase {
     $server = (Get-PersonalPodmanVersion).Server
     if ($mode -eq "rootful" -and (Test-PersonalPodmanForwardingRegression $server)) {
         Warn2 "The database container is running, but Podman $server does not forward a rootful machine's ports to Windows - a known regression in Podman 6.0.0 to 6.1.0, fixed in 6.1.1."
-        Info "Fix: upgrade Podman to 6.1.1 or later and recreate its machine (podman machine rm; podman machine init; podman machine start), then re-run the installer: $(Get-ExakitInstallCommand)"
+        InfoStep "Fix: upgrade Podman to 6.1.1 or later and recreate its machine (podman machine rm; podman machine init; podman machine start), then re-run the installer: $(Get-ExakitInstallCommand)"
         $script:PersonalUnreachableCause = "Podman $server does not forward a rootful machine's ports to Windows (upgrade to 6.1.1 or later and recreate the machine)"
         return $false
     }
     Warn2 "The database container is running in Podman's machine, but nothing answers on 127.0.0.1:$port from Windows."
-    Info "Options: restart the machine (podman machine stop; podman machine start), then: exakit start"
+    InfoStep "Options: restart the machine (podman machine stop; podman machine start), then: exakit start"
     $script:PersonalUnreachableCause = "the database container runs, but its port $port is not forwarded to Windows"
     if ($mode -ne "rootful") { return $false }
-    Info "...or switch the machine to rootless (podman machine set --rootful=false), whose ports WSL forwards - unless WSL gives rootless Podman no pids controller, which is checked first."
+    InfoStep "...or switch the machine to rootless (podman machine set --rootful=false), whose ports WSL forwards - unless WSL gives rootless Podman no pids controller, which is checked first."
     if (-not (Confirm-PersonalPodmanSelfHeal "Switch Podman's default machine to rootless and deploy the database there? It stops and restarts the machine, and containers made in rootful mode are not visible in rootless mode (separate storage - nothing is deleted)")) { return $false }
     if (-not (Set-PersonalPodmanRootful $false)) { return $false }
     # ONE WALL MUST NOT BE TRADED FOR ANOTHER. Where rootless Podman has no

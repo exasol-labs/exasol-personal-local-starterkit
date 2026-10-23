@@ -1533,7 +1533,9 @@ $(cat "$1")"
     fi
     _pef_known="$(personal_known_cause "$_pef_text")" || return 0
     warn "${_pef_known%%|*}."
-    info "Fix: ${_pef_known#*|}"
+    # info_step, not info: this can be printed inside the deploy's quiet
+    # bracket, and a fix nobody sees is no fix.
+    if command -v info_step >/dev/null 2>&1; then info_step "Fix: ${_pef_known#*|}"; else info "Fix: ${_pef_known#*|}"; fi
     [ -n "$PERSONAL_FAILURE_CAUSE" ] || PERSONAL_FAILURE_CAUSE=": ${_pef_known%%|*}"
     return 0
 }

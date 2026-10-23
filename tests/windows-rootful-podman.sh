@@ -32,7 +32,7 @@ check() { if [ "$2" = "$3" ]; then PASS=$((PASS+1)); echo "  ok   $1 = $3"
           else FAIL=$((FAIL+1)); echo "  FAIL $1: expected $2, got $3"; fi; }
 has()   { case "$3" in *"$2"*) check "$1" present present ;; *) check "$1" present MISSING ;; esac; }
 lacks() { case "$3" in *"$2"*) check "$1" absent PRESENT ;; *) check "$1" absent absent ;; esac; }
-fn()    { printf '%s\n' "$RTP" | sed -n "/^function $1 {/,/^}\$/p"; }
+fn()    { _fn_range="/^function $1 {/,/^}\$/p"; printf '%s\n' "$RTP" | sed -n "$_fn_range"; }
 
 RTP="$(cat "$ROOT/setup/lib/runtime-personal.ps1")"
 WIN="$(cat "$ROOT/setup/setup-windows.ps1")"
