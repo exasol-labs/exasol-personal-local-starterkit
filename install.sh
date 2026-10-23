@@ -99,6 +99,31 @@ main() {
         exit 1
     }
 
+    # copy_local_kit <checkout> <dest> - THE KIT'S FILES, NOT THE FOLDER. A
+    # developer's checkout holds far more than the kit: .git, agent worktrees
+    # under .claude, build output, caches - one had 432 MB of worktrees in a
+    # 537 MB checkout, and every install or dry run from it copied all of it.
+    # In a git checkout only the files git tracks, plus new ones it does not
+    # ignore, are copied (deleted ones skipped); without git, everything but
+    # the known checkout-only folders. Twin of Copy-ExakitLocalKit in install.ps1.
+    copy_local_kit() {
+        _clk_src="$1"; _clk_dest="$2"
+        if command -v git >/dev/null 2>&1 && git -C "$_clk_src" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+            _clk_list="$(mktemp "${TMPDIR:-/tmp}/exakit-kit-files.XXXXXX")" || return 1
+            ( cd "$_clk_src" && git -c core.quotepath=off ls-files --cached --others --exclude-standard \
+                | while IFS= read -r _clk_f; do
+                    case "$_clk_f" in .claude/*) continue ;; esac
+                    if [ -f "$_clk_f" ] || [ -L "$_clk_f" ]; then printf '%s\n' "$_clk_f"; fi
+                done ) > "$_clk_list"
+            ( cd "$_clk_src" && tar -cf - -T "$_clk_list" ) | tar -xf - -C "$_clk_dest"
+            _clk_rc=$?
+            rm -f "$_clk_list"
+            return $_clk_rc
+        fi
+        ( cd "$_clk_src" && tar -cf - --exclude=.git --exclude=.claude --exclude=node_modules \
+            --exclude=__pycache__ --exclude=.ruff_cache . ) | tar -xf - -C "$_clk_dest"
+    }
+
     # Banner + plan: reuse the kit's shared visual layer (setup/lib/ui.sh) so
     # the EXASOL wordmark and palette match the rest of the install exactly.
     # install.sh is POSIX sh and can't source that bash lib, so bridge through
@@ -176,6 +201,13 @@ main() {
     # scratch directory instead, so a dry run over a working install changes
     # nothing about it.
     if [ "${EXAKIT_DRY_RUN:-0}" = "1" ]; then
+        # ONE DRY RUN'S FOLDER AT A TIME. Each run leaves its copy behind for
+        # inspection, and nothing ever removed one: a test suite that dry-runs
+        # the installer per scenario left hundreds behind. Earlier ones go
+        # here; the 10-minute age keeps a dry run that is still running in
+        # another terminal out of reach.
+        find "${TMPDIR:-/tmp}" -maxdepth 1 -type d -name 'exakit-dry-run.*' -user "$(id -u)" -mmin +10 \
+            -exec rm -rf {} + 2>/dev/null
         kit_dir="$(mktemp -d "${TMPDIR:-/tmp}/exakit-dry-run.XXXXXX")" \
             || fail "Could not create a temporary directory for the dry run. Check that ${TMPDIR:-/tmp} is writable and the disk is not full."
     fi
@@ -192,8 +224,8 @@ main() {
         export EXAKIT_KIT_SOURCE
         say "Using local kit checkout: $EXAKIT_LOCAL_KIT"
         find "$kit_dir" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null
-        cp -R "$EXAKIT_LOCAL_KIT"/. "$kit_dir/"
-        rm -rf "$kit_dir/.git"
+        copy_local_kit "$EXAKIT_LOCAL_KIT" "$kit_dir" \
+            || fail "Could not copy the local kit checkout from $EXAKIT_LOCAL_KIT into $kit_dir. Check the disk is not full."
     else
         EXAKIT_KIT_SOURCE="$EXAKIT_REPO@$EXAKIT_REF"
         export EXAKIT_KIT_SOURCE
@@ -237,7 +269,7 @@ main() {
 
     if [ "${EXAKIT_DRY_RUN:-0}" = "1" ]; then
         say "Dry run requested (EXAKIT_DRY_RUN=1) — nothing was installed, and nothing under $EXAKIT_HOME was changed."
-        say "The kit is unpacked for inspection in a temporary folder: $kit_dir"
+        say "The kit is unpacked for inspection in a temporary folder: $kit_dir (the next dry run removes it once it is 10 minutes old)"
         say "To install, run the same command again without EXAKIT_DRY_RUN=1."
         exit 0
     fi
