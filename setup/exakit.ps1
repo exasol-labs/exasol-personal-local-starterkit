@@ -1093,6 +1093,13 @@ function Invoke-CmdRepairRuntime {
     # destructive answered itself with "keep the existing database".
     # Twin of the same export in cmd_repair_runtime (setup/exakit).
     $env:EXAKIT_REUSE_DB = "0"
+    # AND THE DELETION'S OWN CONSENT. Declining reuse is harmless on purpose:
+    # the deployment step then asks a separate DELETE question, default no -
+    # so without this the repair the user had just confirmed as destructive
+    # answered that second question with "no" in an unattended run and
+    # repaired nothing. This command may answer it because it just asked its
+    # own. Twin of the same export in cmd_repair_runtime.
+    $env:EXAKIT_REPLACE_DB = "1"
     if ($Json) {
         # One object on stdout and nothing else: the rebuild's own narration is
         # routed to stderr. Twin of the --json branch in cmd_repair_runtime.
@@ -1114,14 +1121,24 @@ function Invoke-CmdRepairRuntime {
         } finally {
             $ErrorActionPreference = $prevRepairEap
         }
-        if ($repairCode -eq 0) {
+        # EXIT 0 IS NOT A DATABASE. The setup script finishes with 0 when the
+        # database step was recorded as not finished (a Podman that cannot run
+        # it, a deploy that failed) - the rest of the kit still installs - so
+        # "repaired" is claimed only when the runtime step completed again.
+        # Twin of the same check in cmd_repair_runtime.
+        if ($repairCode -eq 0 -and (Test-ExakitStepDone "runtime")) {
             [ordered]@{ ok = $true; status = "repaired"; changed = $true; remedy = $null } |
                 ConvertTo-Json -Compress | Write-Output
             exit 0
         }
+        # The step's own recorded reason when there is one (the soft failure
+        # the setup script wrote), so the answer says WHY, not only "see logs".
+        $repairWhy = "the rebuild did not finish (see exakit logs)"
+        $repairSoft = "" + (Get-ExakitManifestValue "install.soft_failures.runtime.reason")
+        if ($repairSoft) { $repairWhy = "the database was not rebuilt: $repairSoft" }
         [ordered]@{
             ok = $false; status = "failed"; changed = $true
-            reason = "the rebuild did not finish (see exakit logs)"
+            reason = $repairWhy
             remedy = (Get-ExakitInstallCommand)
         } | ConvertTo-Json -Compress | Write-Output
         exit 3

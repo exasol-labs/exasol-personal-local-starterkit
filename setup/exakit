@@ -1203,7 +1203,11 @@ cmd_repair_runtime() {
         # the log; stdout carries one object and nothing else.
         bash "$_rr_kit/$_rr_setup" >&2
         _rr_rc=$?
-        if [ "$_rr_rc" -eq 0 ]; then
+        # EXIT 0 IS NOT A DATABASE. The setup script finishes with 0 when the
+        # database step was recorded as not finished (a Podman that cannot run
+        # it, a deploy that failed) - the rest of the kit still installs - so
+        # "repaired" is claimed only when the runtime step completed again.
+        if [ "$_rr_rc" -eq 0 ] && step_done runtime; then
             exakit_json_out '{"ok": true, "status": "repaired", "changed": true, "remedy": null}\n'
             return 0
         fi
