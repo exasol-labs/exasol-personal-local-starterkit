@@ -351,6 +351,22 @@ cmd_status() {
     if [ "$_cs_json" -eq 0 ]; then ui_spin_end; fi
     _cs_running=0
     case "$_cs_db" in running*) _cs_running=1 ;; esac
+    # A FIRST BOOT THE LAUNCHER GAVE UP ON reads as "stopped" - its port is
+    # silent - and "stopped" alone sends the reader to `exakit start` with no
+    # word of why it failed. The status word stays (it is pinned everywhere);
+    # the reason rides beside it: the launcher's own record, and the
+    # container's error when podman kept one. Asked only for a stopped personal
+    # deployment, so a running database costs nothing extra.
+    _cs_failed=""
+    if [ "$_type" = "personal" ] && [ "$_cs_db" = "stopped" ]; then
+        if [ "$_cs_json" -eq 0 ]; then ui_spin_begin "Asking the launcher why it is stopped"; fi
+        if [ "$(personal_launcher_state 2>/dev/null || true)" = "deployment_failed" ]; then
+            _cs_failed="the launcher records this deployment as failed (it never finished starting)"
+            _cs_cerr="$(personal_container_error 2>/dev/null || true)"
+            [ -n "$_cs_cerr" ] && _cs_failed="$_cs_failed; the database container could not start: $(_personal_short "$_cs_cerr")"
+        fi
+        if [ "$_cs_json" -eq 0 ]; then ui_spin_end; fi
+    fi
     # REALITY, NOT THE RECORDED INTENT. This read the manifest's
     # autostart.enabled, which is what the user last ASKED for - so a machine
     # whose boot entry had since gone reported "autostart: true" for a database
@@ -437,11 +453,12 @@ cmd_status() {
         run_python_any - "$(manifest_get kit_level 2>/dev/null)" "${_type:-}" "$_cs_db"             "${_cs_autostart:-false}" "$_cs_datasets" "${_cs_pyx:-}" "$EXAKIT_MANIFEST"             "$(manifest_get steps_completed 2>/dev/null)" "$_cs_services" "$_cs_note" "$_cs_note_at" \
             "$_cs_installing" "$_cs_step" "$_cs_urls" "$(exakit_install_command)" \
             "$_cs_legacy_c" "$_cs_legacy_e" "$_cs_legacy_choice" "$_cs_legacy_restored" "$_cs_legacy_sample" \
-            "$(detect_os 2>/dev/null || true)" "$(detect_wsl_version 2>/dev/null || true)" <<'EXAKIT_SJ_PY'
+            "$(detect_os 2>/dev/null || true)" "$(detect_wsl_version 2>/dev/null || true)" "$_cs_failed" <<'EXAKIT_SJ_PY'
 import json, sys
 kit, rtype, db, autostart, datasets, pyx, manifest, steps, services, note, note_at, installing, step, urls, install_cmd = sys.argv[1:16]
 legacy_c, legacy_e, legacy_choice, legacy_restored, legacy_sample = (sys.argv[16:21] + [""] * 5)[:5]
 host_platform, wsl_version = (sys.argv[21:23] + [""] * 2)[:2]
+failed_detail = (sys.argv[23:24] + [""])[0]
 installing = installing == "1"
 try:
     steps_list = json.loads(steps) if steps else []
@@ -487,6 +504,10 @@ if not running:
         remedy_hints["database"] = "the launcher is installed but no database is deployed; this deploys one"
     else:
         remedies["database"] = "exakit start"
+        # A deployment the launcher records as failed: the remedy stays the
+        # command that retries it, and the hint says why it is needed.
+        if failed_detail:
+            remedy_hints["database"] = failed_detail + " - exakit start retries the launcher's deploy"
 if db.startswith("conflict"):
     # Something else is on the SQL port. `exakit start` cannot help until it is gone.
     remedies["database"] = "exakit start"
@@ -672,6 +693,7 @@ EXAKIT_SJ_PY
     ui_panel_line "$(_cs_pad 'Database' "$(manifest_get runtime.dsn 2>/dev/null || printf 'unknown')$(
         if [ "$_cs_running" -eq 1 ]; then printf ' · reachable'
         elif [ "$_cs_db" = "conflict" ]; then printf ' · port held by another process (not Exasol) — stop it, then: exakit start'
+        elif [ -n "$_cs_failed" ]; then printf ' · not reachable — %s' "$_cs_failed"
         else printf ' · not reachable'; fi)")"
     if [ "$_cs_installing" -eq 1 ]; then
         ui_panel_line "$(_cs_pad 'Install' "in progress · step: $_cs_step — poll: exakit status")"

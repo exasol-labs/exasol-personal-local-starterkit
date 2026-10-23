@@ -240,6 +240,24 @@ function Invoke-CmdStatus {
         switch ($type) { "personal" { Get-PersonalStatus } default { "not installed" } }
     }
     $running = "$status".StartsWith("running")
+    # A FIRST BOOT THE LAUNCHER GAVE UP ON reads as "stopped" - its port is
+    # silent - and "stopped" alone sends the reader to `exakit start` with no
+    # word of why it failed. The status word stays; the reason rides beside
+    # it: the launcher's own record, and the container's error when podman kept
+    # one. Asked only for a stopped personal deployment. Twin of _cs_failed in
+    # cmd_status.
+    $failedDetail = ""
+    if ($type -eq "personal" -and "$status" -eq "stopped") {
+        $failedDetail = Invoke-ExakitWithSpinner -Quiet:$Json -Label "Asking the launcher why it is stopped" -Body {
+            $detail = ""
+            if ((Get-PersonalLauncherState) -eq "deployment_failed") {
+                $detail = "the launcher records this deployment as failed (it never finished starting)"
+                $containerError = Get-PersonalContainerError
+                if ($containerError) { $detail = "$detail; the database container could not start: $(Get-PersonalShortText $containerError)" }
+            }
+            $detail
+        }
+    }
     $steps = @(Get-ExakitManifestValue "steps_completed")
     # An install in progress is its own state: Begin-ExakitStep records the step
     # and the setup script clears it when done. Twin of the same read in cmd_status.
@@ -314,6 +332,8 @@ function Invoke-CmdStatus {
                 $remedyHints["database"] = "no database is deployed; the installer resumes at the unfinished step"
             } else {
                 $remedies["database"] = "exakit start"
+                # The remedy stays the command that retries it; the hint says why.
+                if ($failedDetail) { $remedyHints["database"] = "$failedDetail - exakit start retries the launcher's deploy" }
             }
         }
         if ($installing) {
@@ -485,7 +505,7 @@ function Invoke-CmdStatus {
     }
     $dsn = Get-ExakitManifestValue "runtime.dsn"
     if (-not $dsn) { $dsn = "unknown" }
-    if ($running) { $reach = "reachable" } else { $reach = "not reachable" }
+    if ($running) { $reach = "reachable" } elseif ($failedDetail) { $reach = "not reachable - $failedDetail" } else { $reach = "not reachable" }
     Write-StatusPanelRow "Database" "$dsn - $reach"
     # The install state, which the JSON has carried since the poll contract was
     # written and this screen never showed: it said "Start it: exakit start"

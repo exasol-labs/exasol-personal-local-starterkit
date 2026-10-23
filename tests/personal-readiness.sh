@@ -327,6 +327,16 @@ case "$(cat "$TMP/calls")" in *destroy*) check "  ...and deletes nothing unasked
 _out="$(_dl STUB_PENDING=1 EXAKIT_REUSE_DB=1)"
 case "$_out" in *"never started"*) check "EXAKIT_REUSE_DB=1 keeps the old ladder" ladder never ;; *) check "EXAKIT_REUSE_DB=1 keeps the old ladder" ladder ladder ;; esac
 
+echo "exakit status: a deployment the launcher records as failed says why, beside the unchanged word"
+_st_sh="$(sed -n '/^cmd_status()/,/^}/p' "$ROOT/setup/exakit")"
+contains "sh asks the launcher only for a stopped personal deployment" '[ "$_type" = "personal" ] && [ "$_cs_db" = "stopped" ]' "$_st_sh"
+contains "  ...names the container's error" 'personal_container_error' "$_st_sh"
+contains "  ...in the JSON hint, keeping exakit start as the remedy" "failed_detail + \" - exakit start retries the launcher's deploy\"" "$_st_sh"
+contains "  ...and on the screen" 'not reachable — %s' "$(cat "$ROOT/setup/exakit")"
+_st_ps="$(sed -n '/^function Invoke-CmdStatus/,/^}/p' "$ROOT/setup/exakit.ps1")"
+contains "the Windows twin does the same" 'if ($type -eq "personal" -and "$status" -eq "stopped")' "$_st_ps"
+contains "  ...with the container's error" 'Get-PersonalContainerError' "$_st_ps"
+
 echo ""
 echo "personal-readiness.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
