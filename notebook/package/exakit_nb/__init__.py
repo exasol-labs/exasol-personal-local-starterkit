@@ -28,13 +28,13 @@ from typing import Any
 
 from ._kit import setting
 from .checks import check_bucket, check_container, check_mlflow, model_list
-from .dataset import Dataset, dataset
+from .dataset import Dataset, DescriptorNotApproved, dataset
+from .descriptor_store import current_version, descriptor_store_dir, list_versions
 from .own_file import load_own_file, save_descriptor
 from .quickstart import check_connection, connected_sources, first, list_schemas, load_sample, load_source, show_roles
+from .workflow import current_workflow, log_event, log_sql, workflow
 
-__all__ = ["Dataset", "check_bucket", "check_connection", "check_container", "check_mlflow", "confirm_send", "connect",
-           "connected_sources", "dataset", "first", "list_schemas", "load_own_file", "load_sample", "load_source",
-           "model_client", "model_list", "save_descriptor", "show_roles", "show_sql", "sql", "trace", "tracing"]
+__all__ = ["check_bucket", "check_connection", "check_container", "check_mlflow", "confirm_send", "connect", "connected_sources", "current_version", "current_workflow", "Dataset", "dataset", "descriptor_store_dir", "DescriptorNotApproved", "first", "list_schemas", "list_versions", "load_own_file", "load_sample", "load_source", "log_event", "log_sql", "model_client", "model_list", "save_descriptor", "show_roles", "show_sql", "sql", "trace", "tracing", "workflow"]
 
 LANGFUSE_VARIABLES = ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_HOST")
 MODEL_VARIABLE = "EXAKIT_NB_MODEL"            # the model name; the endpoint and key are the OpenAI client's own OPENAI_* variables
@@ -72,7 +72,9 @@ def sql(conn, statement: str, params: dict | None = None):
 
     _last["sql"] = statement
     result = conn.execute(statement, params) if params else conn.execute(statement)
-    return pd.DataFrame(result.fetchall(), columns=result.column_names())
+    df = pd.DataFrame(result.fetchall(), columns=result.column_names())
+    log_sql(conn, statement, len(df))   # the workflow log, when one is active (X-1); a no-op otherwise
+    return df
 
 
 def show_sql() -> None:

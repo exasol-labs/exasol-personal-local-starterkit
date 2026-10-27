@@ -30,7 +30,9 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "notebook" / "package"
 sys.path.insert(0, str(PACKAGE))
 
-from exakit_nb import _kit, workflow as wf  # noqa: E402
+from exakit_nb import _kit  # noqa: E402
+import importlib  # noqa: E402
+wf = importlib.import_module("exakit_nb.workflow")  # the package exports workflow() the function under the module's name
 
 ID = re.compile(r"^wf-\d{8}-[0-9a-f]{6}$")
 
