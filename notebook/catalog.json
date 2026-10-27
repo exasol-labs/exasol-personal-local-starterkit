@@ -37,6 +37,16 @@
       "marimo": "01_explore.py"
     },
     {
+      "id": "questions",
+      "persona": "data-scientist",
+      "step": 2,
+      "title": "Ask your data",
+      "summary": "Draft SQL from an approved descriptor, inspect and edit it, then explicitly approve the exact query before it runs with the read-only database identity.",
+      "needs": "An approved descriptor. Optional: EXAKIT_NB_MODEL and an OpenAI-compatible endpoint for SQL drafting. No model is needed for the starter question.",
+      "jupyter": "02_ask_your_data.ipynb",
+      "marimo": "02_ask_your_data.py"
+    },
+    {
       "id": "ml-engineer-quickstart",
       "persona": "ml-engineer",
       "step": 0,

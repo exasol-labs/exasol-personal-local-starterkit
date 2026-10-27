@@ -201,6 +201,14 @@ class TestLogEvent(WorkflowCase):
         wf.log_event(wf.HANDOFF, where="exa+websocket://127.0.0.1:8563", note="user:pass@ without a scheme is text")
         self.assertEqual(len(wf.read_log(wid)), 2)
 
+    def test_credential_sql_is_not_logged(self):
+        wid, _ = self.start()
+        for statement in ("CREATE USER X IDENTIFIED BY 'secret'", "SELECT PASSWORD FROM T",
+                          "SELECT API_KEY FROM CONFIG"):
+            with self.subTest(statement=statement), self.assertRaisesRegex(ValueError, "credential-bearing SQL"):
+                wf.log_event(wf.SQL, sql=statement)
+        self.assertEqual(len(wf.read_log(wid)), 1)
+
     def test_unwritable_log_warns(self):
         wid, _ = self.start()
         with mock.patch("exakit_nb.workflow.os.open", side_effect=OSError(28, "No space left on device")):
@@ -213,7 +221,7 @@ class TestLogEvent(WorkflowCase):
 
     def test_kinds(self):
         self.assertEqual(wf.KINDS, ("start", "describe.draft", "describe.approve", "sql", "trace", "mlflow.run",
-                                    "handoff", "dashboard.revision", "model.put"))
+                                    "handoff", "dashboard.revision", "model.put", "ask.approve", "ask.answer"))
 
 
 class TestLogSql(WorkflowCase):

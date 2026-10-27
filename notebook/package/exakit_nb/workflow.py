@@ -12,9 +12,8 @@ from a notebook) inherits it. The log is ``$EXAKIT_HOME/workflows/<id>.jsonl`` (
 0700 and the file 0600, each line one O_APPEND write so two kernels on one workflow never interleave. A log that
 cannot be written warns and the cell goes on: logging never fails the work it describes.
 
-The log never holds a credential: a payload key named password, token, secret or api_key is refused, and so is a
-value shaped like a DSN with a password in it. SQL text is allowed (it is the user's own query, and the point of the
-log is to find it again); the kit's secret-grep test covers the folder.
+The log never holds a credential: secret-named keys, a DSN containing a password, and SQL containing credential
+clauses are refused. Other SQL text is kept so the user can find the query again.
 
 ``python -m exakit_nb.workflow list|show <id> [--json]`` is what ``exakit workflow`` runs.
 """
@@ -53,11 +52,15 @@ MLFLOW_RUN = "mlflow.run"
 HANDOFF = "handoff"
 DASHBOARD_REVISION = "dashboard.revision"
 MODEL_PUT = "model.put"
-KINDS = (START, DESCRIBE_DRAFT, DESCRIBE_APPROVE, SQL, TRACE, MLFLOW_RUN, HANDOFF, DASHBOARD_REVISION, MODEL_PUT)
+ASK_APPROVE = "ask.approve"
+ASK_ANSWER = "ask.answer"
+KINDS = (START, DESCRIBE_DRAFT, DESCRIBE_APPROVE, SQL, TRACE, MLFLOW_RUN, HANDOFF, DASHBOARD_REVISION,
+         MODEL_PUT, ASK_APPROVE, ASK_ANSWER)
 
 # What a payload may never be named, and what a value may never look like (user:password@ inside a URL).
 _SECRET_KEY = re.compile(r"(^|[^a-z0-9])(password|passwd|token|secret|api_key|apikey)([^a-z0-9]|$)")
 _DSN_PASSWORD = re.compile(r"://[^/\s@:]+:[^/\s@]+@")
+_SQL_CREDENTIAL = re.compile(r"\b(?:IDENTIFIED\s+BY|PASSWORD|PASSWD|API[_ ]?KEY|ACCESS[_ ]?TOKEN)\b", re.I)
 
 
 def home() -> Path:
@@ -144,6 +147,8 @@ def _refuse_secrets(payload: dict[str, Any]) -> None:
         if _SECRET_KEY.search(str(key).lower()):
             raise ValueError(f"The workflow log never holds a credential: refusing payload key {key!r}")
         _refuse_dsn(value, key)
+        if key.lower() in ("sql", "statement", "query") and isinstance(value, str) and _SQL_CREDENTIAL.search(value):
+            raise ValueError("The workflow log never holds credential-bearing SQL; statement was not logged")
 
 
 def _refuse_dsn(value: Any, key: str) -> None:
