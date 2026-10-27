@@ -28,12 +28,22 @@ import hashlib
 import json
 import os
 import re
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from .dataset import Dataset, _rules, checked
 
-__all__ = ["descriptor_beside", "descriptor_owner", "load_own_file", "save_descriptor"]
+__all__ = ["LoadedTable", "descriptor_beside", "descriptor_owner", "load_own_file", "save_descriptor"]
+
+
+@dataclass(frozen=True)
+class LoadedTable:
+    """A file that has been loaded but has not yet received an approved descriptor."""
+
+    id: str
+    fact_table: str
+    path: Path
 
 OWNER_VARIABLE = "EXAKIT_DESCRIPTOR_OWNER"      # who a descriptor written here belongs to; the OS user otherwise
 
@@ -250,20 +260,38 @@ def _read(path: Path):
     return frame
 
 
-def _prepare(frame, descriptor) -> list[tuple[str, str]]:
+def _prepare(frame, descriptor=None) -> list[tuple[str, str]]:
     """Make each column loadable (in place) and return (column, SQL type) in file order: the date role a DATE, a
     true/false column 0 or 1, whole numbers DECIMAL, text VARCHAR as wide as its longest value."""
     import pandas as pd
     from pandas.api import types
 
-    missing = [f"{role} ({ref.column})" for role, ref in descriptor.references() if ref.column not in frame.columns]
-    if missing:
-        raise ValueError(f"The file has no column for: {', '.join(missing)}. Its columns: {', '.join(frame.columns)}.")
-    date = descriptor.column("date").column
-    try:
-        frame[date] = pd.to_datetime(frame[date]).dt.date
-    except (ValueError, TypeError) as err:
-        raise ValueError(f"The date role's column {date} holds values that are not dates ({err}).") from err
+    date = None
+    if descriptor is not None:
+        missing = [f"{role} ({ref.column})" for role, ref in descriptor.references() if ref.column not in frame.columns]
+        if missing:
+            raise ValueError(f"The file has no column for: {', '.join(missing)}. Its columns: {', '.join(frame.columns)}.")
+        if descriptor.has("date"):
+            date = descriptor.column("date").column
+            try:
+                frame[date] = pd.to_datetime(frame[date]).dt.date
+            except (ValueError, TypeError) as err:
+                raise ValueError(f"The date role's column {date} holds values that are not dates ({err}).") from err
+    else:
+        # First load precedes profiling. Preserve likely dates as DATE so the draft and later notebooks agree on
+        # the column type, without asking the user to map roles before the role picker appears.
+        for name in frame.columns:
+            column = frame[name]
+            if not types.is_object_dtype(column) or column.dropna().empty:
+                continue
+            sample = column.dropna().astype(str).head(1000)
+            if not sample.str.contains(r"[-/:]", regex=True).mean() >= 0.9:
+                continue
+            parsed = pd.to_datetime(sample, errors="coerce")
+            if parsed.notna().mean() >= 0.9:
+                frame[name] = pd.to_datetime(column, errors="coerce").dt.date
+                date = name
+                break
     out = []
     for name in frame.columns:
         column = frame[name]
@@ -321,8 +349,8 @@ def _keep_roles(file: Path, doc: dict[str, Any]) -> None:
     print(f"Roles saved in {beside}: DATASET = {str(file)!r} in a notebook opens this file again.")
 
 
-def load_own_file(path: str | Path, table: str | None, descriptor: Any, *, conn=None, replace: bool = False,
-                  missing_ok: bool = False) -> Dataset | None:
+def load_own_file(path: str | Path, table: str | None, descriptor: Any = None, *, conn=None, replace: bool = False,
+                  missing_ok: bool = False) -> Dataset | LoadedTable | None:
     """Load a CSV, Parquet or JSON file into ``table`` (SCHEMA.TABLE) and return it as a Dataset the notebooks run on.
     ``descriptor`` maps each role to a column of the file (``text`` may name several), or is a descriptor mapping or
     file (YAML or JSON; its fact_table names the table when ``table`` is None). ``conn`` defaults to a new
@@ -336,11 +364,13 @@ def load_own_file(path: str | Path, table: str | None, descriptor: Any, *, conn=
     named = rules.qualified_table(table) if table is not None else None
     if table is not None and named is None:
         raise ValueError(f"'{table}' is not SCHEMA.TABLE (plain SQL names).")
-    doc = _descriptor_doc(descriptor, named, file)
-    raw = json.dumps(doc, indent=2, sort_keys=True).encode("utf-8")
-    parsed = rules.parse_descriptor(raw.decode("utf-8"), source="The descriptor")
+    if descriptor is None and named is None:
+        raise ValueError("Name the table to load the file into (SCHEMA.TABLE); the role picker follows the load.")
+    doc = _descriptor_doc(descriptor, named, file) if descriptor is not None else None
+    raw = json.dumps(doc, indent=2, sort_keys=True).encode("utf-8") if doc is not None else None
+    parsed = rules.parse_descriptor(raw.decode("utf-8"), source="The descriptor") if raw is not None else None
     target = named or parsed.fact_table
-    if parsed.fact_table != target:
+    if parsed is not None and parsed.fact_table != target:
         raise ValueError(f"The descriptor describes {parsed.fact_table}; the file loads into {target}. Name the same table.")
     if conn is None:
         from . import connect
@@ -354,6 +384,8 @@ def load_own_file(path: str | Path, table: str | None, descriptor: Any, *, conn=
     if found != mark:
         frame = _read(file)
         _load(conn, frame, _prepare(frame, parsed), target, mark.replace("'", "''"))
+    if parsed is None:
+        return LoadedTable(re.sub(r"_+", "_", target.replace(".", "_").lower()).strip("_"), target, file)
     beside = Path(descriptor).expanduser() if isinstance(descriptor, (str, Path)) else None
     ds = checked(conn, raw, file, remedy="Correct the descriptor's roles or the file.",
                  descriptor_path=beside if beside is not None and beside.is_file() else None,

@@ -49,6 +49,8 @@ bucket_ok = nb.check_bucket(conn)
 
 # %% [include] ../00_shared/data_paths.py load
 
+# %% [include] ../00_shared/data_paths.py review
+
 # %% [markdown]
 # ## A first query
 #

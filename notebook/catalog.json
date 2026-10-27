@@ -11,7 +11,7 @@
   "shared": {
     "folder": "00_shared",
     "title": "The shared cells",
-    "summary": "The cells both quickstarts are built with: the connection check, the schema listing, and one loader per way data comes in (a sample dataset, your own CSV, Parquet or JSON file, a connected source). Open your persona's quickstart instead.",
+    "summary": "The cells both quickstarts are built with: connection, a loader for each source, and a role review that profiles and approves the selected table. Open your persona's quickstart instead.",
     "jupyter": "data_paths.ipynb",
     "marimo": "data_paths.py"
   },
@@ -21,7 +21,7 @@
       "persona": "data-scientist",
       "step": 0,
       "title": "Quickstart",
-      "summary": "Opens connected. One cell for each way data comes in - a sample dataset, your own CSV, Parquet or JSON file, a connected source - then the descriptor's roles and a first query. Ends by opening 01_explore.",
+      "summary": "Opens connected. Load a sample, your own CSV, Parquet or JSON file, or a connected source; review the proposed column roles and approve them before the first query. Ends by opening 01_explore.",
       "needs": "Nothing beyond the notebook add-on: the sample-dataset cell loads Pharma (or Banking) the first time.",
       "jupyter": "00_quickstart.ipynb",
       "marimo": "00_quickstart.py"
@@ -41,7 +41,7 @@
       "persona": "ml-engineer",
       "step": 0,
       "title": "Quickstart",
-      "summary": "Opens connected. Checks, one cell each, that the container answers the smoke UDF, the MLflow server is reachable and the bucket directory is where the kit expects it, naming the fix when one fails; then the same loader cells. Ends by opening 01_train.",
+      "summary": "Opens connected. Checks the container, MLflow server and bucket directory; loads data, then lets you review and approve proposed column roles. Ends by opening 01_train.",
       "needs": "The udf-devkit add-on with a Python container (exakit udf-setup). Optional: MLFLOW_TRACKING_URI, else a local store in mlflow/ beside the notebook.",
       "jupyter": "00_quickstart.ipynb",
       "marimo": "00_quickstart.py"

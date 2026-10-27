@@ -36,7 +36,7 @@ NOTEBOOKS = sorted(SOURCES.glob("*/*.py")) + sorted((ROOT / "notebook" / "marimo
 HELPERS = sorted((ROOT / "notebook" / "package").glob("*/**/*.py")) + sorted((ROOT / "notebook" / "kit").glob("*.py"))
 # Commands other work items add to this kit in parallel: `exakit model put|list` (ML-4) is named by the ML Engineer's
 # checks before its dispatch arm lands.
-PENDING_COMMANDS = {"model"}     # describe: task T4 (the helpers already name it)
+PENDING_COMMANDS = {"model", "mlflow"}     # MLflow dispatch lands with T15
 SPRINT_NOTEBOOKS = {"data-scientist": ["00_quickstart.ipynb", "01_explore.ipynb"],
                     "ml-engineer": ["00_quickstart.ipynb", "01_train.ipynb", "03_score_external_model.ipynb"]}
 
@@ -174,6 +174,17 @@ class NotebookShapeTest(unittest.TestCase):
                 cells = [(c["cell_type"], c["source"]) for c in _built_cells(SOURCES / persona / "00_quickstart.py")
                          if c["metadata"].get("tags")]
                 self.assertEqual(cells, shared)
+
+    def test_role_review_follows_selection_and_precedes_queries(self):
+        for persona in ("data-scientist", "ml-engineer"):
+            cells = ["".join(c["source"]) for c in _built_cells(SOURCES / persona / "00_quickstart.py")]
+            selected = next(i for i, cell in enumerate(cells) if "nb.first(source, own, sample)" in cell)
+            review = next(i for i, cell in enumerate(cells) if "nb.review_roles(conn, ds)" in cell)
+            approved = next(i for i, cell in enumerate(cells) if "ds = review.dataset()" in cell)
+            query = next(i for i, cell in enumerate(cells) if "first_rows = nb.sql(" in cell)
+            self.assertLess(selected, review)
+            self.assertLess(review, approved)
+            self.assertLess(approved, query)
 
     def test_the_ml_quickstart_checks_before_it_loads(self):
         sources = ["".join(c["source"]) for c in _built_cells(SOURCES / "ml-engineer" / "00_quickstart.py")]

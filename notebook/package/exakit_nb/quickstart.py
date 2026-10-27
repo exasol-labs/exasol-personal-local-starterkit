@@ -21,6 +21,7 @@ from pathlib import Path
 
 from ._kit import exakit_command
 from .dataset import Dataset, _locate, dataset
+from .own_file import LoadedTable
 
 __all__ = ["check_connection", "connected_sources", "first", "list_schemas", "load_sample", "load_source", "show_roles"]
 
@@ -95,7 +96,7 @@ GROUP BY S.SCHEMA_NAME
 ORDER BY S.SCHEMA_NAME""")
 
 
-def load_source(conn, descriptor: str | Path | None) -> Dataset | None:
+def load_source(conn, descriptor: str | Path | None) -> Dataset | LoadedTable | None:
     """A table in a connected external source (a virtual schema), described by ``descriptor`` (a descriptor file whose
     fact_table is in that schema; its ``source`` names the source). With no virtual schema in the database it says so
     and returns None, as it does when no descriptor is given (then it lists the sources there are)."""
@@ -107,6 +108,14 @@ def load_source(conn, descriptor: str | Path | None) -> Dataset | None:
         print(f"Connected sources: {', '.join(names)}. To use a table of one, set SOURCE to a descriptor.yaml whose "
               "fact_table is that table and whose source names it.")
         return None
+    from .descriptor_rules import qualified_table
+    name = qualified_table(str(descriptor))
+    if name is not None:
+        schema = name.split(".", 1)[0]
+        if schema not in names:
+            raise ValueError(f"{name} is not in a connected source ({', '.join(names)}).")
+        print(f"{name} is a live source. The next cell will draft and approve its roles.")
+        return LoadedTable(name.replace(".", "_").lower(), name, Path("."))
     ds = dataset(conn, descriptor)
     schema = ds.fact_table.split(".", 1)[0]
     if schema not in names:
@@ -116,7 +125,7 @@ def load_source(conn, descriptor: str | Path | None) -> Dataset | None:
     return ds
 
 
-def first(*candidates: Dataset | None) -> Dataset:
+def first(*candidates: Dataset | LoadedTable | None) -> Dataset | LoadedTable:
     """The first dataset that was loaded, in the order given."""
     for candidate in candidates:
         if candidate is not None:

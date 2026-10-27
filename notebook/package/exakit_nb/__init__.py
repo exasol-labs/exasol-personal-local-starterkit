@@ -34,12 +34,13 @@ from .dataset import Dataset, DescriptorNotApproved, dataset
 from .describe import Draft, describe
 from .descriptor_store import current_version, descriptor_store_dir, list_versions
 from .handoff import handoff_from, handoff_is_stale, read_handoff, write_handoff
-from .own_file import load_own_file, save_descriptor
+from .own_file import LoadedTable, load_own_file, save_descriptor
 from .quickstart import check_connection, connected_sources, first, list_schemas, load_sample, load_source, show_roles
+from .role_picker import RoleReview, review_roles
 from .workflow import TRACE as TRACE_KIND
 from .workflow import current_workflow, log_event, log_sql, workflow
 
-__all__ = ["check_bucket", "check_connection", "check_container", "check_mlflow", "confirm_send", "connect", "connected_sources", "current_version", "current_workflow", "dataset", "Dataset", "describe", "descriptor_store_dir", "DescriptorNotApproved", "Draft", "first", "handoff_from", "handoff_is_stale", "list_schemas", "list_versions", "load_own_file", "load_sample", "load_source", "log_event", "log_sql", "model_client", "model_list", "read_handoff", "save_descriptor", "show_roles", "show_sql", "sql", "trace", "tracing", "workflow", "write_handoff"]
+__all__ = ["check_bucket", "check_connection", "check_container", "check_mlflow", "confirm_send", "connect", "connected_sources", "current_version", "current_workflow", "dataset", "Dataset", "describe", "descriptor_store_dir", "DescriptorNotApproved", "Draft", "first", "handoff_from", "handoff_is_stale", "list_schemas", "list_versions", "LoadedTable", "load_own_file", "load_sample", "load_source", "log_event", "log_sql", "model_client", "model_list", "read_handoff", "RoleReview", "review_roles", "save_descriptor", "show_roles", "show_sql", "sql", "trace", "tracing", "workflow", "write_handoff"]
 
 LANGFUSE_VARIABLES = ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_BASE_URL")
 LANGFUSE_HOST_VARIABLE = "LANGFUSE_HOST"      # the SDK 3/4 name of LANGFUSE_BASE_URL; still accepted when BASE_URL is unset

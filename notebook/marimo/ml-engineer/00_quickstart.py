@@ -136,10 +136,8 @@ def _(conn, nb):
 def _(mo):
     # Cell tags: load
     mo.md(r"""
-    **Your own file**: CSV, Parquet or JSON (an array of records, or one record per line). Name the table it goes into
-    and the column that plays each role: the *entity* a row is about, the *category* to compare, the *date*, the
-    *label* to predict (0 or 1; true/false works too) and one or more *text* columns. The roles are saved beside the file
-    as `<name>.descriptor.yaml`, so the next notebook opens the file with one assignment.
+    **Your own file**: CSV, Parquet or JSON (an array of records, or one record per line). Name the table it goes into.
+    The next cell profiles its columns and lets you choose their roles; you do not have to write a descriptor.
     """)
     return
 
@@ -149,9 +147,7 @@ def _(conn, nb):
     # Cell tags: load
     OWN_FILE = "~/my-data/transactions.csv"   # .csv, .parquet or .json
     OWN_TABLE = "MY_DATA.TRANSACTIONS"
-    OWN_ROLES = {"entity": "CUSTOMER_ID", "category": "MERCHANT_CATEGORY", "date": "BOOKED_ON", "label": "DISPUTED",
-                 "text": ["MEMO"]}
-    own = nb.load_own_file(OWN_FILE, OWN_TABLE, OWN_ROLES, conn=conn, missing_ok=True)
+    own = nb.load_own_file(OWN_FILE, OWN_TABLE, conn=conn, missing_ok=True)
     return (own,)
 
 
@@ -159,9 +155,8 @@ def _(conn, nb):
 def _(mo):
     # Cell tags: load
     mo.md(r"""
-    **A connected source**: a table in a virtual schema, an external database Exasol reads live. Describe the table with
-    a descriptor.yaml whose `fact_table` is that table and whose `source` names the source. With no source connected,
-    the cell says so and skips.
+    **A connected source**: a table in a virtual schema, an external database Exasol reads live. Name it as
+    SCHEMA.TABLE; the next cell profiles a sample and lets you review the roles. With no source connected, it skips.
     """)
     return
 
@@ -169,7 +164,7 @@ def _(mo):
 @app.cell
 def _(conn, nb):
     # Cell tags: load
-    SOURCE = None   # e.g. "~/my-data/orders.descriptor.yaml"
+    SOURCE = None   # e.g. "VS_SALES.ORDERS"
     source = nb.load_source(conn, SOURCE)
     return (source,)
 
@@ -178,7 +173,7 @@ def _(conn, nb):
 def _(mo):
     # Cell tags: load
     mo.md(r"""
-    The data used from here on, and the role each of its columns plays (the descriptor):
+    The data used from here on. A source wins over your file, which wins over the sample:
     """)
     return
 
@@ -187,8 +182,35 @@ def _(mo):
 def _(nb, own, sample, source):
     # Cell tags: load
     ds = nb.first(source, own, sample)
-    nb.show_roles(ds)
     return (ds,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    # Cell tags: review
+    mo.md(r"""
+    ## Review and approve the roles
+
+    The kit profiles the chosen table and shows the evidence behind each proposed role. Pick a role for each column,
+    then click **Approve descriptor**. The next cell waits for your approval; it does not run on a draft. In Marimo or
+    a plain Python session, call `review.approve({"COLUMN": "role", ...})` instead.
+    """)
+    return
+
+
+@app.cell
+def _(conn, ds, nb):
+    # Cell tags: review
+    review = nb.review_roles(conn, ds)
+    return (review,)
+
+
+@app.cell
+def _(nb, review):
+    # Cell tags: review
+    ds_1 = review.dataset()
+    nb.show_roles(ds_1)
+    return (ds_1,)
 
 
 @app.cell(hide_code=True)
@@ -202,15 +224,8 @@ def _(mo):
 
 
 @app.cell
-def _(conn, ds, nb):
-    first_rows = nb.sql(conn, f"""
-    SELECT {ds.col("category")} AS CATEGORY,
-           COUNT(*) AS N,
-           SUM({ds.col("label")}) AS LABEL_1
-    FROM {ds.fact_table}
-    GROUP BY {ds.col("category")}
-    ORDER BY N DESC
-    LIMIT 10""")
+def _(conn, ds_1, nb):
+    first_rows = nb.sql(conn, f"\nSELECT {ds_1.col('category')} AS CATEGORY,\n       COUNT(*) AS N,\n       SUM({ds_1.col('label')}) AS LABEL_1\nFROM {ds_1.fact_table}\nGROUP BY {ds_1.col('category')}\nORDER BY N DESC\nLIMIT 10")
     nb.show_sql()
     first_rows
     return
