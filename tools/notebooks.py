@@ -235,7 +235,7 @@ def _run_environment() -> dict[str, str]:
     person's Langfuse). MLFLOW_TRACKING_URI, the model variables and everything else pass through."""
     import os
     return {**{k: v for k, v in os.environ.items() if not k.startswith(LANGFUSE_PREFIX)},
-            "EXAKIT_NB_AUTO_APPROVE": "1"}
+            "EXAKIT_NB_AUTO_APPROVE": "1", "EXAKIT_NB_STRICT": "1"}
 
 
 def _plain(text: str) -> str:

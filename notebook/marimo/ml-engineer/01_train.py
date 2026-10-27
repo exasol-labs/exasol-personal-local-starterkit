@@ -14,135 +14,120 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    # Train inside the database, track the run in MLflow
+    # Train inside Exasol from the Data Scientist's handoff
 
-    - **Dataset:** the Pharma sample (`pharma_trials`, ClinicalTrials.gov studies) as it ships; the Banking sample
-      (`banking_complaints`) or your own file by changing the one assignment below.
-    - **What must be loaded:** that dataset (`00_quickstart.ipynb` loads it), and a Python container with scikit-learn
-      in the database (`exakit udf-setup`; the quickstart's container check says whether it is there).
-    - **How long:** about five minutes; the training statement itself takes one to three.
+    - **Dataset:** `pharma_trials` as it ships; change one assignment for `banking_complaints` or a file you loaded.
+    - **What must be loaded:** an approved descriptor, the handoff written by `data-scientist/01_explore`, and the Python
+      UDF container (`exakit udf-setup`). Run `exakit mlflow start` to see the run in the local MLflow UI.
+    - **How long:** about five minutes, depending on the dataset and container.
 
-    SQL builds the training rows from the dataset's **descriptor** roles, a Python UDF trains a scikit-learn classifier
-    **inside Exasol**, and this notebook logs the run to **your** MLflow with `exasol_mlflow.start_run`: the parameters,
-    the metrics, the training SQL, the model file, and the database session and statement that trained it. The UDF needs
-    no MLflow credentials and no network.
+    The handoff records the exact descriptor version, data digest, feature view, label and time split. This notebook
+    refuses a stale handoff before creating a view or running training SQL.
     """)
     return
 
 
 @app.cell
 def _():
-    DATASET = "pharma_trials"   # or "banking_complaints", or your own file ("~/my-data/transactions.csv", roles beside it)
+    DATASET = "pharma_trials"  # or "banking_complaints", or "~/my-data/transactions.csv" with approved roles beside it
     return (DATASET,)
 
 
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Where the run goes
+    ## Load and check the handoff
 
-    With `MLFLOW_TRACKING_URI` set before `exakit notebook`, the run goes to that MLflow server. Without it, it goes to
-    a local MLflow store in the `mlflow` folder next to this notebook; open it with
-    `mlflow ui --backend-store-uri sqlite:///mlflow/mlflow.db` (the full `mlflow` package has the UI).
+    `01_explore` wrote it with `nb.write_handoff(conn, ds)`. A changed descriptor or table stops here and says to rerun
+    explore. The earliest 80% by the date role train the classifier; the latest 20% test it. Without a date role the
+    handoff records a reproducible hash split and explains why.
     """)
     return
 
 
 @app.cell
-def _():
-    EXPERIMENT = "exasol-starter-kit"
-    UDF_SCHEMA = "EXASOL_MLFLOW"        # where the training UDF is created; nothing else is written there
-    return EXPERIMENT, UDF_SCHEMA
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ## Connect, read the descriptor, create the training UDF
-
-    As in `data-scientist/01_explore`: a kit dataset by its id, or your own CSV, Parquet or JSON file by its path, with
-    its roles in `<name>.descriptor.yaml` beside it - the same descriptor, the same cells.
-    """)
-    return
-
-
-@app.cell
-def _(DATASET, UDF_SCHEMA):
-    import json
-
+def _(DATASET):
     import exakit.nb as nb
     import exasol_mlflow
 
     conn = nb.connect()
-    ds = nb.dataset(conn, DATASET)
-    nb.show_roles(ds)
+    ds = nb.dataset(conn, DATASET).require_approved("training")
+    handoff = nb.read_handoff(ds.id)
+    reason = nb.handoff_is_stale(conn, handoff, ds)
+    if reason:
+        raise ValueError(reason)
+    print(f"handoff: {ds.id} v{ds.version}; {handoff['rows']} rows; {handoff['split']['kind']} split")
+    print(f"data digest: {handoff['data_digest']}")
+    return conn, ds, exasol_mlflow, handoff, nb
 
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## Build the feature view and training UDF
+
+    Every feature is made in SQL from an approved role. The view and its training SELECT are checked against the
+    current descriptor. Constant features are dropped before fitting. The UDF trains a logistic regression with a
+    fixed seed, and sends its model, metrics and coefficients back to this notebook; it has no network or credentials.
+    """)
+    return
+
+
+@app.cell
+def _(conn, ds, handoff, nb):
+    UDF_SCHEMA = "EXASOL_MLFLOW"
+    UDF_NAME = "TRAIN_FROM_HANDOFF"
+    SEED = 0
+    REGULARIZATION_C = 1.0
+
+    plan = nb.prepare_training(conn, ds, handoff, schema=UDF_SCHEMA, name=UDF_NAME,
+                               seed=SEED, C=REGULARIZATION_C)
     conn.execute(f"CREATE SCHEMA IF NOT EXISTS {UDF_SCHEMA}")
-    conn.execute(exasol_mlflow.create_script(UDF_SCHEMA))
-    print(f"UDF {exasol_mlflow.call(UDF_SCHEMA)} is ready; it runs on the database's Python script language container")
-    return conn, ds, exasol_mlflow, json
+    conn.execute(plan.create_script)
+    print(f"features ({len(plan.features)}): {', '.join(plan.features)}")
+    print(plan.training_sql)
+    return (plan,)
 
 
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## The features, in SQL
+    ## Train and compare with the majority baseline
 
-    One row per observation, every column from a role: the label, the category and the text, plus the training
-    parameters as one JSON value. The UDF sees every row and trains one model (a SET script called without GROUP BY).
+    `start_run` checks the tracking server before the training SELECT. If MLflow goes away after training, it keeps a
+    spool record; `exakit mlflow replay` logs it when the server returns. A database restart marks the run FAILED.
+
+    Accuracy and macro-F1 come from the later 20%, beside a majority-class baseline on the same rows. The MLflow run
+    stores `training.sql`, the model, coefficients, descriptor version and data digest.
     """)
     return
 
 
 @app.cell
-def _(UDF_SCHEMA, ds, exasol_mlflow, json):
-    PARAMS = dict(exasol_mlflow.DEFAULT_PARAMS)      # max_features, ngram_max, C, test_size, seed - change any of them
-    PARAMS["C"] = 1.0
+def _(conn, ds, exasol_mlflow, handoff, plan):
+    EXPERIMENT = "exasol-starter-kit"
+    with exasol_mlflow.start_run(conn, params=plan.params, experiment=EXPERIMENT,
+                                 run_name=f"{ds.id}-v{ds.version}-logistic", tags=ds.tags(),
+                                 handoff=handoff) as run:
+        run.execute(plan.training_sql)
 
-    training_sql = f"""SELECT {exasol_mlflow.call(UDF_SCHEMA)}(
-             {ds.col("label")},
-             CAST({ds.col("category")} AS VARCHAR(2000)),
-             {ds.text_sql()},
-             '{json.dumps(PARAMS)}')
-    FROM {ds.fact_table}
-    WHERE {ds.col("label")} IS NOT NULL"""
-    print(training_sql)
-    return PARAMS, training_sql
-
-
-@app.cell(hide_code=True)
-def _(mo):
-    mo.md(r"""
-    ## Train and log
-
-    `start_run` opens one MLflow run around the training statement: `run.execute` runs it, checks the UDF's answer (one
-    result, every model chunk present, the model's SHA-256 matching) and logs the parameters, the metrics, the training
-    SQL, the model file and the lineage tags `exasol.session_id`, `exasol.statement_id` and `exasol.deployment`, with the
-    dataset and its descriptor's digest. A broken answer stops here with the reason, and MLflow gets nothing.
-    """)
-    return
-
-
-@app.cell
-def _(EXPERIMENT, PARAMS, conn, ds, exasol_mlflow, training_sql):
-    with exasol_mlflow.start_run(conn, params=PARAMS, experiment=EXPERIMENT, run_name=f"{ds.id}-text-classifier",
-                                 tags=ds.tags()) as run:
-        run.execute(training_sql)
+    f1 = run.metrics["macro_f1"]
+    baseline = run.metrics["baseline_macro_f1"]
     print(f"run {run.run_id} in {run.tracking_uri}")
-    for metric, value in sorted(run.metrics.items()):
-        print(f"  {metric:<14} {value:.4f}")
-    for tag, value in sorted(run.tags.items()):
-        print(f"  {tag:<26} {value}")
+    print(f"accuracy: {run.metrics['accuracy']:.4f}")
+    print(f"macro-F1: {f1:.4f}; majority baseline: {baseline:.4f}")
+    print("beats baseline" if f1 > baseline else "does not beat baseline; inspect features or the split")
     return (run,)
 
 
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Where the model landed
+    ## Model and coefficient artifacts
 
-    The model file is an artefact of the run (`model/model.pkl`, a scikit-learn pipeline), beside `training.sql`. On a
-    local store that is a file on this computer.
+    `model/model.pkl` is the fitted scikit-learn pipeline; `coefficients.json` holds weights for the raw feature
+    columns (the scaler has been folded in), ready for the Rust scoring notebook. The run records the container and
+    package versions so a model moved to another container can be checked before use.
     """)
     return
 
@@ -151,10 +136,10 @@ def _(mo):
 def _(run):
     from urllib.parse import unquote, urlparse
 
-    model_uri = f"{run.artifact_uri}/model/model.pkl"
-    print(f"model artefact: {model_uri}")
-    if urlparse(model_uri).scheme == "file":
-        print(f"on this computer: {unquote(urlparse(model_uri).path)}")
+    print(f"model: {run.artifact_uri}/model/model.pkl")
+    print(f"coefficients: {run.artifact_uri}/coefficients.json")
+    if urlparse(run.artifact_uri).scheme == "file":
+        print(f"on this computer: {unquote(urlparse(run.artifact_uri).path)}")
     return
 
 
@@ -163,11 +148,9 @@ def _(mo):
     mo.md(r"""
     ## Next
 
-    - Change `PARAMS` and run the last cells again: each run is one more row in the MLflow experiment, so runs compare
-      side by side.
-    - The model was trained with the database container's Python and scikit-learn - the run's tags say which - so load it
-      where those match.
-    - Packages beyond the container's own: `exakit udf-build <requirements.txt>` (the `udf-devkit` add-on).
+    Change `REGULARIZATION_C` and rerun the last cells to compare a new MLflow run. `02_rust_score.ipynb` scores from
+    the exported coefficients when a Rust container is installed. For a model trained elsewhere, open
+    `03_score_external_model.ipynb`.
     """)
     return
 

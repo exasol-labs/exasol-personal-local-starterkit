@@ -51,8 +51,8 @@
       "persona": "ml-engineer",
       "step": 1,
       "title": "Train inside the database",
-      "summary": "Features in SQL from the descriptor's roles, a scikit-learn classifier trained inside a Python UDF under exasol_mlflow.start_run, and the run in your MLflow with its metrics, training SQL and model; ends by showing where the model landed.",
-      "needs": "A Python container with scikit-learn (exakit udf-setup) and a loaded dataset (pharma_trials as it ships). Optional: MLFLOW_TRACKING_URI, else a local store in mlflow/ beside the notebook.",
+      "summary": "Checks the Data Scientist's handoff, builds its SQL feature view, trains a logistic regression inside a Python UDF, and logs metrics, baseline, model and coefficients to MLflow.",
+      "needs": "An approved descriptor, a fresh handoff from 01_explore, a Python container (exakit udf-setup), and the kit's MLflow server (exakit mlflow start) or a local store.",
       "jupyter": "01_train.ipynb",
       "marimo": "01_train.py"
     },

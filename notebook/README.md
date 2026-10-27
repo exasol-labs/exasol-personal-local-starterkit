@@ -4,7 +4,7 @@
 |---|---|
 | `catalog.json` | Which notebooks the kit ships, for which persona, in which order (the requirements' notebook catalogue) |
 | `notebooks/<persona>/<NN>_<name>.py` | A notebook's source (jupytext percent format); `<NN>_<name>.ipynb` is built from it |
-| `notebooks/00_shared/data_paths.py` | The cells both quickstarts are built with: connection check, schema listing, one loader per way data comes in |
+| `notebooks/00_shared/data_paths.py` | The cells both quickstarts are built with: connection, three load paths, and column-role review and approval |
 | `marimo/<persona>/<NN>_<name>.py` | The same notebook for Marimo, converted from the `.ipynb` |
 | `package/exakit_nb/` | The helpers every notebook imports as `exakit.nb`: `import exakit.nb as nb; conn = nb.connect()` |
 | `package/exakit/` | The `exakit.nb` name: the very same module as `exakit_nb`, which older notebooks keep importing |
@@ -14,10 +14,10 @@ The notebooks, in the order a new user opens them (numbers are never reused):
 
 | Folder | Notebook | What it does |
 |---|---|---|
-| `data-scientist/` | `00_quickstart` | Opens connected; one cell per way data comes in (a sample dataset, your own CSV, Parquet or JSON file, a connected source); the descriptor's roles; a first query |
+| `data-scientist/` | `00_quickstart` | Opens connected; one cell per way data comes in (a sample dataset, your own file, a connected source); review and approve the proposed column roles; a first query |
 | | `01_explore` | The landscape question with the SQL visible, a small scikit-learn model, the text step traced to your Langfuse; another dataset or your own file is one assignment; ends by writing the handoff for the ML Engineer |
-| `ml-engineer/` | `00_quickstart` | The container, MLflow and the bucket directory, one check each with its fix; then the same loader cells |
-| | `01_train` | Features in SQL from the descriptor, a classifier trained inside a Python UDF under `exasol_mlflow.start_run`, the run in your MLflow |
+| `ml-engineer/` | `00_quickstart` | The container, MLflow and the bucket directory, one check each with its fix; then the same loader and role-review cells |
+| | `01_train` | Checks the handoff, builds its SQL feature view, trains a classifier inside a Python UDF, compares macro-F1 with a majority baseline, and logs the model and coefficients to MLflow |
 | | `03_score_external_model` | A model trained elsewhere, dropped with `exakit model put` and scored by a UDF |
 
 Numbers follow the requirements document's Appendix B and are never reused: the ML
@@ -76,7 +76,8 @@ python3 tools/notebooks.py --run --output /tmp/executed           # keep each ex
   dropped (nothing headless writes to anyone's Langfuse). `EXAKIT_NB_MODEL`,
   `OPENAI_BASE_URL` and `OPENAI_API_KEY` pass through, so the text step runs
   when they point at an endpoint; `MLFLOW_TRACKING_URI` passes through when
-  set, else MLflow uses its local store. Each run has a temporary folder as its
+  set, else MLflow uses the kit's server if running or its local store. Role proposals are approved automatically in
+  a headless run; failed container, MLflow or bucket checks raise an error. Each run has a temporary folder as its
   working directory (`mlflow/`, `models/` land there, never in the tree).
 - Exit 0 when every cell of every run finished; 1 with the failing cell's
   index, source and traceback printed; 2 when the run itself could not start

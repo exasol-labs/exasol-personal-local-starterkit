@@ -32,8 +32,9 @@ container_ok = nb.check_container(conn)
 # %% [markdown]
 # ## The MLflow server is reachable
 #
-# `MLFLOW_TRACKING_URI`, set before `exakit notebook`, names your MLflow server; without it the runs go to a local
-# store in the `mlflow` folder beside the notebook, which needs no server.
+# `exakit mlflow start` runs the kit's local server; `exakit mlflow url` shows its address. Set
+# `MLFLOW_TRACKING_URI` before `exakit notebook` to use another server instead. If neither is running, runs still
+# go to the kit's local store under `~/.exasol-starter-kit/mlflow/`.
 
 # %%
 mlflow_ok = nb.check_mlflow()
@@ -72,6 +73,6 @@ first_rows
 # ## Next: `01_train.ipynb`
 #
 # Open `01_train.ipynb` in this folder: features in SQL from these roles, a scikit-learn classifier trained inside the
-# database, and the run in your MLflow with its metrics, training SQL and model. It runs on the dataset its first
-# assignment names (`pharma_trials` as it ships); set it to the dataset id, or to your file's path, to use what you
-# loaded here.
+# database, and the run in your MLflow with its metrics, training SQL and model. Run the Data Scientist's
+# `01_explore.ipynb` first to write the handoff. Then set the one DATASET assignment in `01_train` to the dataset id
+# or your file's path.

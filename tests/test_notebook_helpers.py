@@ -392,6 +392,11 @@ class SwapTest(unittest.TestCase):
     def test_the_sql_differs_only_in_descriptor_values(self):
         sys.path.insert(0, str(ROOT / "packages" / "exasol-mlflow"))
         for notebook in sorted(NOTEBOOKS.glob("*/0*.py")):
+            if notebook.name == "01_train.py":
+                # Its SQL is produced from the handoff by exakit_nb.ml_train; test_ml_train and test_handoff
+                # pin that path. It deliberately has no inline SQL f-string to substitute here.
+                self.assertIn("nb.prepare_training(conn, ds, handoff", notebook.read_text(encoding="utf-8"))
+                continue
             if "[include]" in notebook.read_text(encoding="utf-8") and "ds." not in notebook.read_text(encoding="utf-8"):
                 continue
             with self.subTest(notebook=notebook.relative_to(NOTEBOOKS).as_posix()):
@@ -679,6 +684,11 @@ class ChecksTest(unittest.TestCase):
             ok, line = self.said(exakit_nb.check_mlflow)
         self.assertFalse(ok)
         self.assertIn("exakit update notebook", line)
+
+    def test_strict_check_fails_the_headless_run(self):
+        with mock.patch.dict(os.environ, {"EXAKIT_NB_STRICT": "1"}):
+            with self.assertRaisesRegex(RuntimeError, "Fix: exakit udf-setup"):
+                self.said(lambda: exakit_nb.check_container(self.ProbeConn(fail="script language PYTHON3 not found")))
 
     def test_the_bucket_directory(self):
         with tempfile.TemporaryDirectory() as tmp:

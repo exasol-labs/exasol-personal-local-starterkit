@@ -28,6 +28,8 @@ TRAINING_PACKAGES = ("scikit-learn", "pandas", "numpy")
 
 def _report(what: str, ok: bool, detail: str, fix: str = "") -> bool:
     print(f"ok   {what}: {detail}" if ok else f"FAIL {what}: {detail}" + (f" Fix: {fix}" if fix else ""))
+    if not ok and os.environ.get("EXAKIT_NB_STRICT") == "1":
+        raise RuntimeError(f"{what}: {detail}" + (f" Fix: {fix}" if fix else ""))
     return ok
 
 
