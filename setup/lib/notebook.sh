@@ -100,7 +100,7 @@ EXAKIT_NOTEBOOK_PORT="${EXAKIT_NOTEBOOK_PORT:-8888}"
 # major 5 (trace() uses its API; Python >=3.11) and MLflow to 3.x (the client,
 # mlflow-skinny; the server is the exasol-mlflow[server] extra).
 EXAKIT_NOTEBOOK_EXTRAS="bucketfs,ibis,pyexasol,sqlalchemy,notebook-dependencies"
-EXAKIT_NOTEBOOK_PACKAGES="ipykernel>=6.29,<8 langfuse>=5,<6 openai>=1.40,<3 scikit-learn==1.9.0 mlflow-skinny>=3,<4 alembic>=1.13,<2 pyarrow>=14"
+EXAKIT_NOTEBOOK_PACKAGES="ipykernel>=6.29,<8 langfuse>=5,<6 openai>=1.40,<3 mlflow-skinny>=3,<4 alembic>=1.13,<2 pyarrow>=14"
 # The kit's own packages, by their distribution names (reinstalled every time).
 EXAKIT_NOTEBOOK_OWN_PACKAGES="exakit-nb exasol-mlflow"
 # The front ends' versions: the pins in versions.json, unless one of these asks
@@ -963,6 +963,13 @@ _notebook_specs() {
         fi
     fi
     printf '%s[%s]==%s\n' "$EXAKIT_NOTEBOOK_PACKAGE" "$_nsp_extras" "${EXAKIT_NOTEBOOK_VERSION:-$(notebook_package_version 2>/dev/null)}"
+    _nsp_sklearn="$(run_python_any -c 'import json,sys
+d=json.load(open(sys.argv[1],encoding="utf-8"))
+rows=d["components"]["udf-devkit"]["containers"]
+versions={r["packages"]["scikit-learn"] for r in rows if r.get("language")=="python"}
+if len(versions)!=1: raise SystemExit("Python container rows need one shared scikit-learn pin")
+print(next(iter(versions)))' "$(exakit_repo_root)/versions.json")" || return 1
+    printf 'scikit-learn==%s\n' "$_nsp_sklearn"
     for _nbs_pkg in $EXAKIT_NOTEBOOK_PACKAGES $_nsp_lines; do printf '%s\n' "$_nbs_pkg"; done
     printf '%s\n' "$(exakit_repo_root)/notebook/package" "$(exakit_repo_root)/packages/exasol-mlflow"
 }

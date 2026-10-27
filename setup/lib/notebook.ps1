@@ -46,7 +46,7 @@ $script:NotebookPort = if ($env:EXAKIT_NOTEBOOK_PORT) { $env:EXAKIT_NOTEBOOK_POR
 $script:NotebookExtras = "bucketfs,ibis,pyexasol,sqlalchemy,notebook-dependencies"
 # The store's schema: the kit's own, STARTER_KIT, unless EXAKIT_NOTEBOOK_SCHEMA names another.
 $script:NotebookSchema = if ($env:EXAKIT_NOTEBOOK_SCHEMA) { $env:EXAKIT_NOTEBOOK_SCHEMA } else { "STARTER_KIT" }
-$script:NotebookPackages = @("ipykernel>=6.29,<8", "langfuse>=5,<6", "openai>=1.40,<3", "scikit-learn==1.9.0", "mlflow-skinny>=3,<4", "alembic>=1.13,<2", "pyarrow>=14")
+$script:NotebookPackages = @("ipykernel>=6.29,<8", "langfuse>=5,<6", "openai>=1.40,<3", "mlflow-skinny>=3,<4", "alembic>=1.13,<2", "pyarrow>=14")
 # The kit's own packages, by their distribution names (reinstalled every time).
 $script:NotebookOwnPackages = @("exakit-nb", "exasol-mlflow")
 # Which front ends the next resolution brings (Set-NotebookFrontEndPlan), and
@@ -947,6 +947,10 @@ function Get-NotebookSpecs {
     $version = $script:NotebookVersion
     if (-not $version) { $version = Get-NotebookPackageVersion }
     $specs = @("$($script:NotebookPackage)[$extras]==$version")
+    $versionDoc = Get-Content -Raw (Join-Path $root "versions.json") | ConvertFrom-Json
+    $sklearnPins = @($versionDoc.components.'udf-devkit'.containers | Where-Object { $_.language -eq "python" } | ForEach-Object { $_.packages.'scikit-learn' } | Sort-Object -Unique)
+    if ($sklearnPins.Count -ne 1 -or -not $sklearnPins[0]) { throw "Python container rows need one shared scikit-learn pin" }
+    $specs += "scikit-learn==$($sklearnPins[0])"
     $specs += $script:NotebookPackages
     $specs += $fronts
     $specs += (Join-Path (Join-Path $root "notebook") "package")

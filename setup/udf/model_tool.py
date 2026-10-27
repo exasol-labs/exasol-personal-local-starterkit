@@ -25,7 +25,7 @@ import os
 import re
 import sys
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 MODELS = "models"                                  # the folder inside the bucket every model lands in
@@ -190,6 +190,48 @@ def remove(name: str, bucket_dir: str, udf_root: str, record: dict) -> tuple[dic
     return {"name": name, "path": f"{udf_root.rstrip('/')}/{MODELS}/{name}", "removed": True}, updated
 
 
+def prune(bucket_dir: str, udf_root: str, kit_home: str, days: int, apply: bool, record: dict) -> tuple[dict, dict]:
+    """Find old unreferenced records. A model with training provenance is kept because its MLflow run may be remote."""
+    if days < 1:
+        raise Refused("--older-than must be at least one day.")
+    threshold = datetime.now(timezone.utc) - timedelta(days=days)
+    handoffs = Path(kit_home) / "handoffs"
+    handoff_text = "\n".join(p.read_text(encoding="utf-8", errors="replace") for p in handoffs.glob("*.json")) \
+        if handoffs.is_dir() else ""
+    candidates, kept, removed = [], [], []
+    updated = dict(record)
+    for name, entry in sorted(record.items()):
+        if not isinstance(entry, dict):
+            kept.append({"name": name, "reason": "invalid record"})
+            continue
+        try:
+            put_at = datetime.fromisoformat(str(entry["put_at"]).replace("Z", "+00:00"))
+        except (KeyError, ValueError):
+            kept.append({"name": name, "reason": "unknown age"})
+            continue
+        if put_at > threshold:
+            kept.append({"name": name, "reason": "recent"})
+            continue
+        provenance = entry.get("provenance")
+        if isinstance(provenance, dict) and provenance.get("run_id"):
+            kept.append({"name": name, "reason": "MLflow run"})
+            continue
+        if name in handoff_text or str(entry.get("sha256")) in handoff_text:
+            kept.append({"name": name, "reason": "handoff"})
+            continue
+        dest = Path(bucket_dir) / MODELS / name
+        if dest.is_symlink() or (dest.is_file() and digest(dest)[0] != entry.get("sha256")):
+            kept.append({"name": name, "reason": "changed or symlink"})
+            continue
+        candidates.append(name)
+        if apply:
+            remove(name, bucket_dir, udf_root, updated)
+            updated.pop(name)
+            removed.append(name)
+    return {"dry_run": not apply, "older_than_days": days, "candidates": candidates, "removed": removed,
+            "kept": kept}, updated
+
+
 def listing(bucket_dir: str, udf_root: str, record: dict) -> dict:
     """What is in the bucket's models folder, each file's digest held against the record."""
     folder = Path(bucket_dir) / MODELS
@@ -223,6 +265,14 @@ def main(argv: list[str]) -> int:
             return 0
         if command == "rm" and len(args) == 3:
             answer, updated = remove(args[0], args[1], args[2], read_record(sys.stdin.read()))
+            print(json.dumps(answer))
+            print(json.dumps(updated, sort_keys=True))
+            return 0
+        if command == "prune" and len(args) == 5:
+            if not args[3].isdigit():
+                raise Refused("--older-than must be a positive number of days.")
+            answer, updated = prune(args[0], args[1], args[2], int(args[3]), args[4] == "1",
+                                    read_record(sys.stdin.read()))
             print(json.dumps(answer))
             print(json.dumps(updated, sort_keys=True))
             return 0

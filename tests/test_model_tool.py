@@ -127,6 +127,33 @@ class ModelToolTest(unittest.TestCase):
         self.assertIn("500 MB", err)
         self.assertFalse((self.bucket / "models" / "churn.pkl").exists())
 
+    def test_prune_is_dry_run_then_removes_old_unreferenced_model(self):
+        _, out, _ = self.put(self.model)
+        record = json.loads(out.splitlines()[2])
+        record["churn.pkl"]["put_at"] = "2020-01-01T00:00:00Z"
+        arguments = ("prune", str(self.bucket), ROOT_UDF, str(self.dir), "30")
+        code, out, _ = run(*arguments, "0", stdin=json.dumps(record))
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out.splitlines()[0])["candidates"], ["churn.pkl"])
+        self.assertTrue((self.bucket / "models" / "churn.pkl").exists())
+        code, out, _ = run(*arguments, "1", stdin=json.dumps(record))
+        self.assertEqual(code, 0)
+        self.assertFalse((self.bucket / "models" / "churn.pkl").exists())
+        self.assertEqual(json.loads(out.splitlines()[1]), {})
+
+    def test_prune_keeps_models_with_run_or_handoff(self):
+        _, out, _ = self.put(self.model)
+        record = json.loads(out.splitlines()[2])
+        record["churn.pkl"].update(put_at="2020-01-01T00:00:00Z", provenance={"run_id": "abc"})
+        answer, _ = model_tool.prune(str(self.bucket), ROOT_UDF, str(self.dir), 30, True, record)
+        self.assertEqual(answer["candidates"], [])
+        record["churn.pkl"]["provenance"] = None
+        handoffs = self.dir / "handoffs"
+        handoffs.mkdir()
+        (handoffs / "h.json").write_text('{"model":"churn.pkl"}')
+        answer, _ = model_tool.prune(str(self.bucket), ROOT_UDF, str(self.dir), 30, True, record)
+        self.assertEqual(answer["candidates"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

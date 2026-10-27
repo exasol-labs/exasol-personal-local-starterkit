@@ -883,19 +883,20 @@ function Invoke-CmdModel {
     if ($CmdArgs.Count -gt 1) { $rest = @($CmdArgs[1..($CmdArgs.Count - 1)]) }
     # One page per command: Show-ExakitHelpCommand renders the first match only.
     if ($sub -in @("--help", "-h")) {
-        foreach ($each in @("put", "list", "rm", "template")) { Show-ExakitHelpCommand -Name "exakit model $each" | Out-Null }
+        foreach ($each in @("put", "list", "rm", "prune", "template")) { Show-ExakitHelpCommand -Name "exakit model $each" | Out-Null }
         return
     }
-    if ($sub -in @("put", "list", "rm", "template") -and ($rest -contains "--help" -or $rest -contains "-h")) {
+    if ($sub -in @("put", "list", "rm", "prune", "template") -and ($rest -contains "--help" -or $rest -contains "-h")) {
         Show-ExakitHelpCommand -Name "exakit model $sub" | Out-Null; return
     }
     switch ($sub) {
         "put"      { Invoke-CmdModelPut -CmdArgs $rest }
         "list"     { Invoke-CmdModelList -CmdArgs $rest }
         "rm"       { Invoke-CmdModelRm -CmdArgs $rest }
+        "prune"    { Invoke-CmdModelPrune -CmdArgs $rest }
         "template" { Invoke-CmdModelTemplate -CmdArgs $rest }
-        ""         { Deny-ExakitInput "Name what to do: exakit model put <file> | exakit model list | exakit model rm <name> | exakit model template (exakit model --help)." }
-        default    { Deny-ExakitInput "Unknown model command '$sub' (supported: put, list, rm, template)." }
+        ""         { Deny-ExakitInput "Name what to do: exakit model put <file> | list | rm <name> | prune | template (exakit model --help)." }
+        default    { Deny-ExakitInput "Unknown model command '$sub' (supported: put, list, rm, prune, template)." }
     }
 }
 
@@ -954,6 +955,38 @@ function Invoke-CmdModelRm {
     Set-ExakitManifestValue "components.udf_devkit.models" ($lines[1] | ConvertFrom-Json)
     if ($json) { Write-Output $lines[0] }
     else { Ok "Removed $name from the bucket directory and the kit's record" }
+}
+
+function Invoke-CmdModelPrune {
+    param([string[]]$CmdArgs = @())
+    $days = "30"; $yes = "0"; $json = $false
+    for ($i = 0; $i -lt $CmdArgs.Count; $i++) {
+        $arg = $CmdArgs[$i]
+        if ($arg -eq "--older-than") {
+            $i++
+            if ($i -ge $CmdArgs.Count) { Deny-ExakitInput "--older-than needs days" }
+            $days = $CmdArgs[$i]
+        }
+        elseif ($arg -eq "--yes") { $yes = "1" }
+        elseif ($arg -in @("--json", "-j")) { $json = $true; $script:ExakitRefusalJson = $true }
+        else { Deny-ExakitInput "Unknown option '$arg' for model prune (supported: --older-than DAYS --yes --json)." }
+    }
+    if ($days -notmatch '^[0-9]+$' -or $days -eq "0") { Deny-ExakitInput "--older-than must be a positive number of days" }
+    $bucket = Assert-UdfModelReady
+    $result = Invoke-UdfTool -Script "model_tool.py" -NoConnection -StdIn (Get-UdfModelRecord) `
+        -ToolArgs @("prune", $bucket.Dir, $bucket.UdfRoot, $env:EXAKIT_HOME, $days, $yes)
+    if ($result[0] -eq 2) { Deny-ExakitInput $result[2] }
+    if ($result[0] -ne 0) { Fail "Could not prune models: $($result[2])" }
+    $lines = @($result[1])
+    if ($yes -eq "1") { Set-ExakitManifestValue "components.udf_devkit.models" ($lines[1] | ConvertFrom-Json) }
+    if ($json) { Write-Output $lines[0]; return }
+    $answer = $lines[0] | ConvertFrom-Json
+    foreach ($name in @($answer.candidates)) {
+        if ($yes -eq "1") { Info "Removed $name" } else { Info "Would remove $name" }
+    }
+    if (-not @($answer.candidates).Count) { Info "No old unreferenced models found." }
+    elseif ($yes -eq "1") { Ok "Pruned." }
+    else { Info "Dry run; pass --yes to remove these models." }
 }
 
 function Invoke-CmdModelList {

@@ -205,6 +205,24 @@ check "rm JSON names the file" "disposable.pkl" "$(printf '%s' "$out" | jq_py 'd
 check "rm deletes the file" "no" "$([ -e "$BUCKET/models/disposable.pkl" ] && printf yes || printf no)"
 check "rm deletes its record" "False" "$(record | jq_py '"disposable.pkl" in d')"
 
+echo "prune previews before removing an old model:"
+printf 'old' > "$WORK/old.pkl"
+cli model put "$WORK/old.pkl" --json >/dev/null
+python3 - "$EXAKIT_HOME/manifest.json" <<'PY'
+import json,sys
+p=sys.argv[1]
+d=json.load(open(p))
+d["components"]["udf_devkit"]["models"]["old.pkl"]["put_at"]="2020-01-01T00:00:00Z"
+with open(p,"w") as f: json.dump(d,f)
+PY
+out="$(cli model prune --json)"; rc=$?
+check "prune dry run exit 0" "0" "$rc"
+check "prune previews old model" "['old.pkl']" "$(printf '%s' "$out" | jq_py 'd["candidates"]')"
+check "prune dry run keeps file" "yes" "$([ -f "$BUCKET/models/old.pkl" ] && printf yes || printf no)"
+out="$(cli model prune --yes --json)"; rc=$?
+check "prune apply exit 0" "0" "$rc"
+check "prune removes old model" "no" "$([ -f "$BUCKET/models/old.pkl" ] && printf yes || printf no)"
+
 echo "udf-file and model share the bucket helper:"
 check "one resolver, used by both" "2" "$(grep -c 'udf_bucket_locate ||' "$ROOT/setup/lib/udf-devkit.sh")"
 check "and no other code spells out the bucket's path" "2" "$(grep -c '\$EXAKIT_UDF_BUCKETFS_SERVICE' "$ROOT/setup/lib/udf-devkit.sh")"

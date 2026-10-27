@@ -179,6 +179,19 @@ try {
         Check "rm exit 0" "0" $run[0]
         Check "rm JSON names the file" "disposable.pkl" (($run[1] | ConvertFrom-Json).name)
         Check "rm deletes the file" "False" (Test-Path (Join-Path $models "disposable.pkl"))
+        $old = Join-Path $work "old.pkl"
+        Set-Content -NoNewline -Path $old -Value "old"
+        $null = Invoke-Cli model put $old --json
+        $record = Get-Record
+        $record.'old.pkl'.put_at = "2020-01-01T00:00:00Z"
+        Set-ExakitManifestValue "components.udf_devkit.models" $record
+        $run = Invoke-Cli model prune --json
+        Check "prune dry run exit 0" "0" $run[0]
+        Check "prune previews old model" "old.pkl" (($run[1] | ConvertFrom-Json).candidates[0])
+        Check "prune dry run keeps file" "True" (Test-Path (Join-Path $models "old.pkl"))
+        $run = Invoke-Cli model prune --yes --json
+        Check "prune apply exit 0" "0" $run[0]
+        Check "prune removes old model" "False" (Test-Path (Join-Path $models "old.pkl"))
         Check "an unknown model command: exit 2" "2" (Invoke-Cli model frob)[0]
         Contains "model --help shows the pages" "exakit model template" (Invoke-Cli model --help)[1]
         $env:EXAKIT_PERSONAL_DEPLOY_DIR = Join-Path $work "none"

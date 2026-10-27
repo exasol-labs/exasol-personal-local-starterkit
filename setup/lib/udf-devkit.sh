@@ -844,13 +844,13 @@ cmd_model() {
     [ $# -gt 0 ] && shift
     case "$_cm_sub" in
         --help|-h) exakit_help_render command "exakit model" ;;
-        put|list|rm|template)
+        put|list|rm|prune|template)
             case " $* " in
                 *" --help "*|*" -h "*) exakit_help_render command "exakit model $_cm_sub"; return $? ;;
             esac
             "_cmd_model_$_cm_sub" "$@" ;;
-        "") reject "Name what to do: exakit model put <file> | exakit model list | exakit model rm <name> | exakit model template (exakit model --help)." ;;
-        *) reject "Unknown model command '$_cm_sub' (supported: put, list, rm, template)." ;;
+        "") reject "Name what to do: exakit model put <file> | list | rm <name> | prune | template (exakit model --help)." ;;
+        *) reject "Unknown model command '$_cm_sub' (supported: put, list, rm, prune, template)." ;;
     esac
 }
 
@@ -927,6 +927,35 @@ _cmd_model_rm() {
     else
         ok "Removed $_cmr_name from the bucket directory and the kit's record"
     fi
+}
+
+_cmd_model_prune() {
+    _cmpn_days=30; _cmpn_yes=0; _cmpn_json=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --older-than) shift; [ -n "${1:-}" ] || reject "--older-than needs days"; _cmpn_days="$1" ;;
+            --yes) _cmpn_yes=1 ;;
+            --json|-j) _cmpn_json=1; EXAKIT_REFUSAL_JSON=1 ;;
+            *) reject "Unknown option '$1' for model prune (supported: --older-than DAYS --yes --json)." ;;
+        esac
+        shift
+    done
+    case "$_cmpn_days" in *[!0-9]*|"") reject "--older-than must be a positive number of days" ;; esac
+    _model_ready
+    _cmpn_err="$EXAKIT_HOME/.model-prune.err"
+    _cmpn_out="$(_model_record | _model_tool prune "$UDF_BUCKET_DIR" "$UDF_BUCKET_UDF_ROOT" "$EXAKIT_HOME" "$_cmpn_days" "$_cmpn_yes" 2>"$_cmpn_err")"
+    _cmpn_rc=$?
+    _cmpn_why="$(cat "$_cmpn_err" 2>/dev/null)"; rm -f "$_cmpn_err"
+    case "$_cmpn_rc" in 0) ;; 2) reject "$_cmpn_why" ;; *) die "Could not prune models: ${_cmpn_why:-no reason given}" ;; esac
+    _cmpn_answer="$(printf '%s\n' "$_cmpn_out" | sed -n 1p)"
+    if [ "$_cmpn_yes" = 1 ]; then
+        manifest_set components.udf_devkit.models "$(printf '%s\n' "$_cmpn_out" | sed -n 2p)"
+    fi
+    if [ "$_cmpn_json" = 1 ]; then exakit_json_pretty "$_cmpn_answer"; return 0; fi
+    printf '%s\n' "$_cmpn_answer" | run_python_any -c 'import json,sys
+d=json.load(sys.stdin)
+for name in d["candidates"]: print(("Removed " if not d["dry_run"] else "Would remove ")+name)
+print("No old unreferenced models found." if not d["candidates"] else ("Pruned." if not d["dry_run"] else "Dry run; pass --yes to remove these models."))'
 }
 
 # exakit model list [--json]

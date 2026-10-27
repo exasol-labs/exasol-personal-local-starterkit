@@ -133,6 +133,16 @@
       ]
     },
     {
+      "command": "exakit model prune",
+      "options": "[--older-than DAYS] [--yes] [--json]",
+      "summary": "Preview old unreferenced models, then remove them with --yes.",
+      "description": "Dry run by default. Keeps recent files, changed files, symlinks, models with an MLflow run in their provenance, and models named or digested in a local handoff. --older-than defaults to 30 days. --yes removes candidates from the bucket and the kit's record. A remote MLflow run without provenance cannot be detected; inspect the dry run before --yes.",
+      "examples": [
+        "exakit model prune --json",
+        "exakit model prune --older-than 90 --yes"
+      ]
+    },
+    {
       "command": "exakit model template",
       "options": "[--json]",
       "summary": "Show where the scoring UDF template and its renderer are, and how to fill it.",
