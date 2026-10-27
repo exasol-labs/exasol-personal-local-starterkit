@@ -2171,7 +2171,7 @@ print(" ".join(sorted(n for n in names if not n.startswith("-") and n not in hdr
 }
 check "every command the Windows CLI dispatches is in its header" "" "$(_hd_missing setup/exakit.ps1 79)"
 check "...and the same holds for the shell CLI"                   "" "$(_hd_missing setup/exakit 88)"
-_hd_ps="$(sed -n '4,79p' "$ROOT/setup/exakit.ps1")"
+_hd_ps="$(sed -n '4,80p' "$ROOT/setup/exakit.ps1")"
 has "the Windows header documents the add-on uninstall" 'uninstall [<addon-id>]' "$_hd_ps"
 
 # DOC-03: the shell header advertised the staged major-upgrade route with no

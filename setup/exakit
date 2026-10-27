@@ -75,6 +75,7 @@
 #   udf-setup           Python (or --language rust) UDFs: install the container
 #   udf-use             install a container: default, or a tarball; --list, --json
 #   udf-build           build a container from a pinned requirements.txt
+#   rust-udf            new | build | deploy a Rust UDF against the pinned container
 #   udf-file            copy a file into BucketFS; prints the path a UDF reads
 #   model put <file> [--replace] [--json] | list [--json] | template [--json]
 #                       model files in the bucket directory, digests recorded;
