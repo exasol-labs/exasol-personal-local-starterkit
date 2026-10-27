@@ -419,7 +419,8 @@ echo "the shipped files and the generated workflow logs hold no address and no c
 PYTHONPATH="$ROOT/notebook/package" python3 -c 'import importlib; w = importlib.import_module("exakit_nb.workflow"); w.workflow("secret-grep"); w.log_event(w.SQL, sql="SELECT 1", rows=1)' >/dev/null
 found=""
 for f in $(find "$ROOT/notebook/notebooks" "$ROOT/notebook/marimo" "$ROOT/notebook/package" "$ROOT/notebook/kit" -type f \( -name '*.py' -o -name '*.ipynb' -o -name '*.json' \) | sort) \
-         $(find "$EXAKIT_HOME/workflows" -type f -name '*.jsonl' 2>/dev/null | sort); do
+         $(find "$EXAKIT_HOME/workflows" -type f -name '*.jsonl' 2>/dev/null | sort) \
+         $(find "$EXAKIT_HOME/handoffs" -type f -name '*.json' 2>/dev/null | sort); do
     for needle in 127.0.0.1 localhost :8563 'password=' 'dsn='; do
         grep -qF -- "$needle" "$f" && found="$found $(basename "$f"):$needle"
     done
