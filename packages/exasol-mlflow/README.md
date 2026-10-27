@@ -1,35 +1,45 @@
 # exasol-mlflow
 
-Train inside Exasol with a Python UDF, and log the run to **your** MLflow from
-the client: the parameters, the metrics, the training SQL, the model file and
-the lineage tags `exasol.session_id`, `exasol.statement_id` and
-`exasol.deployment`. The UDF needs no MLflow credentials and no network.
+Train inside Exasol and log from the client to MLflow. The database UDF needs no network access or MLflow credentials.
+
+The Starter Kit's training template is `udf/templates/train_model.sql`. Render it from an approved descriptor's
+handoff, then run its training query:
 
 ```python
+from udf.templates import render
 import exasol_mlflow
-conn.execute(exasol_mlflow.create_script("ML"))          # the training UDF
-with exasol_mlflow.start_run(conn, params={"C": 1.0}, experiment="my-experiment") as run:
-    run.execute(f"""
-        SELECT {exasol_mlflow.call("ML")}(LABEL_COL, CATEGORY_COL, TEXT_COL, '{{"C": 1.0, ...}}')
-        FROM MY.TABLE""")
-run.run_id, run.metrics, run.artifact_uri
+
+create = render.render_train(
+    schema="STARTER_KIT", name="TRAIN_MODEL",
+    features=[item["name"] for item in handoff["input_schema"]],
+    label=handoff["label"]["column"], positive=handoff["label"]["positive"],
+)
+query = render.train_sql(
+    schema="STARTER_KIT", name="TRAIN_MODEL",
+    training_sql=handoff["training_sql"], run_key="dataset-v1",
+    label=handoff["label"]["column"],
+    features=[item["name"] for item in handoff["input_schema"]],
+)
+conn.execute(handoff["feature_view"]["sql"])
+conn.execute(create)
+with exasol_mlflow.start_run(conn, handoff=handoff, experiment="my-experiment") as run:
+    run.execute(query)
+print(run.run_id, run.metrics, run.artifact_uri)
 ```
 
-`run.execute` checks the UDF's answer before it opens the MLflow run, which
-stays open until the `with` block ends (log more inside it; an error marks it
-failed). One training statement per run. `log_training(conn, sql,
-experiment=...)` does the same in one call.
+The kit's text-classifier example is also available through `create_script(schema)` and `call(schema)`.
 
-- **Where the run goes:** `MLFLOW_TRACKING_URI` when set; otherwise a local
-  store (`mlflow/mlflow.db` and `mlflow/artifacts`), which
-  `mlflow ui --backend-store-uri sqlite:///mlflow/mlflow.db` opens.
-- **Your own UDF:** any UDF that emits `PART`, `CHUNK` and, on part 0,
-  `TRAINING_RESULT` (the contract in `exasol_mlflow/contract.py`) can be
-  logged the same way. A result that breaks the contract raises
-  `ResultContractError` and logs nothing.
-- **The model travels inline**, base64 in chunks of 1.9 million characters,
-  so its size is not limited by one value. A path under the host folder a
-  local deployment maps for BucketFS is not used: a UDF sees BucketFS
-  read-only, and a local deployment has no BucketFS endpoint to upload to.
-- **Install:** `pip install "exasol-mlflow[mlflow]"`; the Exasol Personal
-  Local Starter Kit's notebook add-on installs it for you.
+Each UDF result has a run key, JSON parameters and metrics, a model or an error, language, container digest,
+package versions and optional coefficients. `contract.py` validates every field and names the broken field. A
+valid grouped result logs one MLflow run per key. Models up to 1 MiB travel inline; larger models use a
+`/buckets/...` path, whose bytes and SHA-256 the client checks before logging.
+
+`MLFLOW_TRACKING_URI` selects a remote server. The client accepts `MLFLOW_TRACKING_USERNAME` and
+`MLFLOW_TRACKING_PASSWORD` for Basic authentication, or `MLFLOW_TRACKING_TOKEN` for Bearer authentication.
+Unset, it uses the kit's local server when `exakit mlflow start` has recorded one, then the local SQLite store.
+The health check runs before training SQL. A database disconnect marks the run failed. If logging fails after a
+valid result, the record stays under `$EXAKIT_HOME/mlflow/spool/`; `python -m exasol_mlflow replay` sends it
+again. `python -m exasol_mlflow status --json` lists pending records.
+
+Install the client with `pip install "exasol-mlflow[mlflow]"`. A local server needs
+`pip install "exasol-mlflow[server]"`; the kit's notebook and ML Engineer persona manage these packages.

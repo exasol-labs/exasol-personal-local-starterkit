@@ -1,6 +1,4 @@
-"""(run: python3 tests/test_exasol_mlflow.py) exasol-mlflow (PRD ML-2, ML-3): the UDF result contract, logging against a fake mlflow, the UDF that needs no network,
-and ml-engineer/01_train.ipynb kept in step with its .py and free of any dataset's names."""
-
+"""The MLflow contract and failure recovery (python3 tests/test_exasol_mlflow.py)."""
 from __future__ import annotations
 
 import base64
@@ -8,7 +6,7 @@ import hashlib
 import importlib.util
 import json
 import os
-import re
+import socket
 import sys
 import tempfile
 import types
@@ -18,248 +16,295 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "packages" / "exasol-mlflow"))
-
 import exasol_mlflow  # noqa: E402
-from exasol_mlflow import contract  # noqa: E402
+from exasol_mlflow import contract, records, tracking  # noqa: E402
 
-COLUMNS = ["EXASOL_STATEMENT_ID", "PART", "CHUNK", "TRAINING_RESULT"]
+COLUMNS = [contract.STATEMENT_COLUMN, *contract.COLUMNS]
 
 
-def answer(blob: bytes = b"model-bytes", *, parts: int = 1, metrics=None, sha: str | None = None, statement="7"):
-    """Rows a well-behaved training UDF returns, split into ``parts`` chunks."""
-    text = base64.b64encode(blob).decode()
-    size = max(1, -(-len(text) // parts))
-    chunks = [text[i:i + size] for i in range(0, len(text), size)]
-    doc = {"contract": 1, "metrics": metrics if metrics is not None else {"roc_auc": 0.8},
-           "params": {"C": 1.0}, "model": {"format": "sklearn-pickle", "sha256": sha or hashlib.sha256(blob).hexdigest(),
-                                           "parts": len(chunks), "python": "3.12.3", "sklearn": "1.7.2"}}
-    return [(statement, i, c, json.dumps(doc) if i == 0 else None) for i, c in enumerate(chunks)]
+def answer(blob=b"model-bytes", *, metrics=None, sha=None, statement="7", key="run-1", model_path=None):
+    values = {"RUN_KEY": key, "PARAMS": json.dumps({"C": 1.0}),
+              "METRICS": json.dumps(metrics if metrics is not None else {"roc_auc": 0.8}),
+              "MODEL_B64": None if model_path else base64.b64encode(blob).decode(),
+              "MODEL_PATH": model_path, "MODEL_SHA256": sha or hashlib.sha256(blob).hexdigest(),
+              "LANGUAGE": "python", "CONTAINER_DIGEST": "container-123",
+              "VERSIONS": json.dumps({"python": "3.12.3", "scikit-learn": "1.9.0"}),
+              "EXTRAS": json.dumps({"coefficients": {"features": ["X"], "coef": [[1]], "intercept": [0], "classes": ["0", "1"]}})}
+    return [(statement, *(values[name] for name in contract.COLUMNS))]
 
 
 class ContractTest(unittest.TestCase):
-    def test_a_good_answer_gives_the_metrics_the_bytes_and_the_statement(self):
-        done = contract.check(COLUMNS, answer(b"x" * 5000, parts=3))
-        self.assertEqual((done.metrics, done.model_bytes, done.statement_id), ({"roc_auc": 0.8}, b"x" * 5000, "7"))
+    def test_valid_row(self):
+        done, = contract.parse(COLUMNS, answer(b"x" * 5000))
+        self.assertEqual((done.metrics, done.model_bytes, done.statement_id, done.run_key),
+                         ({"roc_auc": 0.8}, b"x" * 5000, "7", "run-1"))
 
-    def test_every_broken_answer_is_refused_with_its_reason(self):
-        good = answer()
+    def test_invalid_fields_name_the_problem(self):
+        row = answer()[0]
         cases = {
-            "no TRAINING_RESULT column": (["EXASOL_STATEMENT_ID", "PART", "CHUNK"], [r[:3] for r in good]),
-            "no rows": (COLUMNS, []),
-            "exactly one row must carry": (COLUMNS, [*good, ("7", 1, "", good[0][3])]),
-            "not JSON": (COLUMNS, [("7", 0, good[0][2], "{oops")]),
-            "finite numbers": (COLUMNS, answer(metrics={"roc_auc": float("nan")})),
-            "parts must be": (COLUMNS, [("7", 1, good[0][2], good[0][3])]),
-            "do not match": (COLUMNS, answer(sha="0" * 64)),
-            "not base64": (COLUMNS, [("7", 0, "***", good[0][3])]),
-            "more than one statement": (COLUMNS, [("8", *r[1:]) if r[1] else r for r in answer(b"y" * 3000, parts=2)]),
+            "metrics is not JSON": [(*row[:3], "{oops", *row[4:])],
+            "model_sha256 does not match": answer(sha="0" * 64),
+            "model_b64 is not base64": [(*row[:4], "***", *row[5:])],
+            "run_key": answer(key="../escape"),
+            "model_path": answer(model_path="/tmp/model.pkl"),
+            "appears twice": [*answer(), *answer()],
+            "more than one statement": [*answer(), *answer(statement="8", key="run-2")],
+            "inline limit": answer(b"x" * (contract.INLINE_LIMIT + 1)),
         }
-        for reason, (columns, rows) in cases.items():
-            with self.subTest(reason=reason), self.assertRaises(exasol_mlflow.ResultContractError) as caught:
-                contract.check(columns, rows)
+        for reason, rows in cases.items():
+            with self.subTest(reason=reason), self.assertRaises(contract.ContractError) as caught:
+                contract.parse(COLUMNS, rows)
             self.assertIn(reason, str(caught.exception))
 
-    def test_a_metric_that_is_a_bool_or_text_is_refused(self):
-        for bad in (True, "0.8"):
-            with self.subTest(bad=bad), self.assertRaises(exasol_mlflow.ResultContractError):
-                contract.check(COLUMNS, answer(metrics={"roc_auc": bad}))
+    def test_no_model_needs_an_error(self):
+        row = list(answer()[0])
+        row[COLUMNS.index("MODEL_B64")] = None
+        row[COLUMNS.index("MODEL_SHA256")] = None
+        with self.assertRaisesRegex(contract.ContractError, "metrics.error"):
+            contract.parse(COLUMNS, [tuple(row)])
+        row[COLUMNS.index("METRICS")] = json.dumps({"error": "cannot train"})
+        self.assertFalse(contract.parse(COLUMNS, [tuple(row)])[0].has_model)
+
+
+class TrackingTest(unittest.TestCase):
+    def test_remote_auth_is_read_only_in_the_client(self):
+        with mock.patch.dict(os.environ, {"MLFLOW_TRACKING_USERNAME": "me", "MLFLOW_TRACKING_PASSWORD": "private",
+                                           "MLFLOW_TRACKING_TOKEN": "other"}, clear=True):
+            headers = tracking._auth_headers()
+            self.assertEqual(base64.b64decode(headers["Authorization"].split()[1]), b"me:private")
+            self.assertNotIn("other", str(headers))
+        with mock.patch.dict(os.environ, {"MLFLOW_TRACKING_TOKEN": "other"}, clear=True):
+            self.assertEqual(tracking._auth_headers()["Authorization"], "Bearer other")
+        self.assertEqual(tracking.redacted("https://me:private@example.invalid:5000"), "https://example.invalid:5000")
 
 
 class FakeResult:
     def __init__(self, columns, rows):
         self.columns, self.rows = columns, rows
-
     def column_names(self):
         return self.columns
-
     def fetchall(self):
         return self.rows
 
 
 class FakeConn:
-    def __init__(self, rows):
-        self.rows, self.statements = rows, []
-
+    def __init__(self, rows=None, failure=None):
+        self.rows, self.failure, self.statements = rows if rows is not None else answer(), failure, []
     def execute(self, sql):
         self.statements.append(sql)
         if "EXA_METADATA" in sql:
-            return FakeResult(["PARAM_NAME", "PARAM_VALUE"], [("databaseProductName", "EXASolution"), ("databaseProductVersion", "2026.2.0")])
+            return FakeResult(["PARAM_NAME", "PARAM_VALUE"], [("databaseProductName", "EXASolution"),
+                                                               ("databaseProductVersion", "2026.2.0")])
+        if self.failure:
+            raise self.failure
         return FakeResult(COLUMNS, self.rows)
-
     def session_id(self):
         return 4242
 
 
-def fake_mlflow(log: list):
-    """A stand-in for the mlflow module that records each call."""
+def fake_mlflow(log):
     run = types.SimpleNamespace(info=types.SimpleNamespace(run_id="r1", experiment_id="e1", artifact_uri="file:///a"))
-
     class Started:
+        info = run.info
         def __enter__(self):
+            log.append(("start",))
             return run
-
         def __exit__(self, *exc):
+            log.append(("end",))
             return False
+    m = types.ModuleType("mlflow")
+    m.set_tracking_uri = lambda uri: log.append(("uri", uri))
+    m.get_experiment_by_name = lambda name: None
+    m.create_experiment = lambda name, artifact_location: log.append(("create", name, artifact_location))
+    m.set_experiment = lambda name: log.append(("experiment", name))
+    m.start_run = lambda run_name=None: Started()
+    m.end_run = lambda status="FINISHED": log.append(("end_run", status))
+    m.log_params = lambda p: log.append(("params", p))
+    m.log_metrics = lambda p: log.append(("metrics", p))
+    m.set_tags = lambda p: log.append(("tags", p))
+    m.log_text = lambda p, name: log.append(("text", name, p))
+    m.log_artifact = lambda path, artifact_path=None: log.append(("artifact", artifact_path, Path(path).read_bytes()))
+    m.log_dict = lambda p, name: log.append(("dict", name, p))
+    return m
 
-    module = types.ModuleType("mlflow")
-    module.set_tracking_uri = lambda uri: log.append(("uri", uri))
-    module.get_experiment_by_name = lambda name: None
-    module.create_experiment = lambda name, artifact_location: log.append(("create", name, artifact_location))
-    module.set_experiment = lambda name: log.append(("experiment", name))
-    module.start_run = lambda run_name=None: Started()
-    module.log_params = lambda p: log.append(("params", p))
-    module.log_metrics = lambda m: log.append(("metrics", m))
-    module.set_tags = lambda t: log.append(("tags", t))
-    module.log_text = lambda text, name: log.append(("text", name, text))
-    module.log_artifact = lambda path, artifact_path=None: log.append(("artifact", artifact_path, Path(path).read_bytes()))
-    return module
 
-
-class LogTrainingTest(unittest.TestCase):
-    def test_one_run_carries_params_metrics_sql_model_and_lineage(self):
-        log: list = []
-        conn = FakeConn(answer(b"the-model"))
+class RunTest(unittest.TestCase):
+    def test_run_logs_model_sql_metrics_and_lineage(self):
+        log, conn = [], FakeConn()
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(sys.modules, {"mlflow": fake_mlflow(log)}), \
-                mock.patch.dict(os.environ, {}, clear=True):
-            run = exasol_mlflow.log_training(conn, "SELECT X FROM S.T;", experiment="exp", params={"extra": 1}, tracking_dir=tmp)
-            self.assertTrue(run.tracking_uri.startswith("sqlite:///") and run.tracking_uri.endswith("mlflow.db"))
-        self.assertIn("CURRENT_STATEMENT AS EXASOL_STATEMENT_ID", conn.statements[0])
-        self.assertTrue(conn.statements[0].rstrip().endswith(") T"), "the user's SQL runs inside the wrapper, its ; dropped")
-        kinds = {entry[0]: entry[1:] for entry in log}
-        self.assertEqual(kinds["params"], ({"C": 1.0, "extra": 1},))
-        self.assertEqual(kinds["metrics"], ({"roc_auc": 0.8},))
-        self.assertEqual(kinds["text"], ("training.sql", "SELECT X FROM S.T;\n"))
-        self.assertEqual(kinds["artifact"], ("model", b"the-model"))
-        tags = kinds["tags"][0]
-        self.assertEqual((tags["exasol.session_id"], tags["exasol.statement_id"], tags["exasol.deployment"]), ("4242", "7", "exasolution 2026.2.0"))
+                mock.patch.dict(os.environ, {"EXAKIT_HOME": tmp}, clear=True):
+            run = exasol_mlflow.log_training(conn, "SELECT X FROM S.T;", experiment="exp", tracking_dir=tmp,
+                handoff={"descriptor": {"id": "d", "version": 2}, "data_digest": "abc"})
+            self.assertEqual(records.pending(), [])
         self.assertEqual(run.run_id, "r1")
+        self.assertTrue(any("CURRENT_STATEMENT AS EXASOL_STATEMENT_ID" in sql for sql in conn.statements))
+        self.assertIn(("metrics", {"roc_auc": 0.8}), log)
+        self.assertIn(("artifact", "model", b"model-bytes"), log)
+        self.assertIn(("text", "training.sql", "SELECT X FROM S.T;\n"), log)
+        tags = next(entry[1] for entry in log if entry[0] == "tags")
+        self.assertEqual((tags["exasol.descriptor_version"], tags["exasol.data_digest"]), ("2", "abc"))
 
-    def test_a_tracking_server_in_the_environment_is_used_as_it_is(self):
-        log: list = []
-        with mock.patch.dict(sys.modules, {"mlflow": fake_mlflow(log)}), mock.patch.dict(os.environ, {"MLFLOW_TRACKING_URI": "http://mlflow.example:5000"}):
-            run = exasol_mlflow.log_training(FakeConn(answer()), "SELECT 1", experiment="exp")
-        self.assertEqual(run.tracking_uri, "http://mlflow.example:5000")
-        self.assertNotIn("create", [e[0] for e in log])
-
-    def test_a_broken_answer_logs_nothing(self):
-        log: list = []
-        with mock.patch.dict(sys.modules, {"mlflow": fake_mlflow(log)}), self.assertRaises(exasol_mlflow.ResultContractError):
-            exasol_mlflow.log_training(FakeConn(answer(sha="0" * 64)), "SELECT 1", experiment="exp")
-        self.assertEqual(log, [])
-
-
-class StartRunTest(unittest.TestCase):
-    """The API the shipped train notebook uses: ``with start_run(conn, ...) as run: run.execute(sql)``."""
-
-    def test_execute_logs_one_run_and_fills_in_the_run(self):
-        log: list = []
-        conn = FakeConn(answer(b"m"))
+    def test_grouped_statement_ends_each_run_before_the_next(self):
+        log = []
         with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(sys.modules, {"mlflow": fake_mlflow(log)}), \
-                mock.patch.dict(os.environ, {}, clear=True):
-            with exasol_mlflow.start_run(conn, params={"C": 2.0}, experiment="exp", tags={"exasol.dataset": "d"},
+                mock.patch.dict(os.environ, {"EXAKIT_HOME": tmp}, clear=True):
+            with exasol_mlflow.start_run(FakeConn([*answer(), *answer(key="run-2")]), experiment="exp",
                                          tracking_dir=tmp) as run:
-                result = run.execute("SELECT 1")
-        self.assertEqual((run.run_id, run.artifact_uri, run.metrics), ("r1", "file:///a", {"roc_auc": 0.8}))
-        self.assertTrue(run.tracking_uri.startswith("sqlite:///"))
-        self.assertEqual(result.run_id, run.run_id)
-        self.assertEqual(run.tags["exasol.dataset"], "d")
-        self.assertEqual(run.tags["exasol.statement_id"], "7")
-        self.assertIn(("params", {"C": 2.0}), log, "the caller's params win over the UDF's")
-
-    def test_nothing_is_there_before_execute_and_a_second_statement_is_refused(self):
-        log: list = []
-        with mock.patch.dict(sys.modules, {"mlflow": fake_mlflow(log)}), mock.patch.dict(os.environ, {"MLFLOW_TRACKING_URI": "http://m:5000"}):
-            with exasol_mlflow.start_run(FakeConn(answer()), experiment="exp") as run:
-                with self.assertRaises(RuntimeError):
-                    _ = run.run_id
                 run.execute("SELECT 1")
-                with self.assertRaises(RuntimeError):
-                    run.execute("SELECT 2")
+                self.assertEqual([entry.run_key for entry in run.runs], ["run-1", "run-2"])
+        events = [e[0] for e in log if e[0] in ("start", "end")]
+        self.assertEqual(events, ["start", "end", "start", "end"])
 
-    def test_a_broken_answer_logs_nothing(self):
-        log: list = []
-        with mock.patch.dict(sys.modules, {"mlflow": fake_mlflow(log)}), self.assertRaises(exasol_mlflow.ResultContractError):
-            with exasol_mlflow.start_run(FakeConn(answer(sha="0" * 64)), experiment="exp") as run:
-                run.execute("SELECT 1")
-        self.assertEqual(log, [])
+    def test_large_model_is_read_from_bucket_and_digest_checked(self):
+        log = []
+        blob = b"x" * (contract.INLINE_LIMIT + 1)
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(sys.modules, {"mlflow": fake_mlflow(log)}), \
+                mock.patch.dict(os.environ, {"EXAKIT_HOME": tmp}, clear=True), \
+                mock.patch.object(exasol_mlflow, "bucket_mapping", return_value=(Path(tmp), "/buckets/bfsdefault/default")):
+            model = Path(tmp) / "models" / "large.pkl"
+            model.parent.mkdir()
+            model.write_bytes(blob)
+            path = "/buckets/bfsdefault/default/models/large.pkl"
+            row = answer(blob, model_path=path)
+            run = exasol_mlflow.log_training(FakeConn(row), "SELECT 1", experiment="exp", tracking_dir=tmp)
+            self.assertEqual(run.metrics["roc_auc"], 0.8)
+            self.assertIn(("artifact", "model", blob), log)
+            model.write_bytes(b"changed")
+            with self.assertRaisesRegex(contract.ContractError, "model_sha256"):
+                exasol_mlflow.log_training(FakeConn(row), "SELECT 1", experiment="exp", tracking_dir=tmp)
 
+    def test_server_offline_stops_before_sql(self):
+        conn = FakeConn()
+        with mock.patch.dict(os.environ, {"MLFLOW_TRACKING_URI": "http://unreachable.invalid:5000"}), \
+                mock.patch.object(tracking, "urlopen", side_effect=OSError("offline")), \
+                self.assertRaises(tracking.TrackingUnavailable):
+            with exasol_mlflow.start_run(conn):
+                pass
+        self.assertEqual(conn.statements, [])
 
-class PinTest(unittest.TestCase):
-    """MLflow 3.x (requirements §0): the client extra pins mlflow-skinny to it, the server extra the full package, and
-    the notebook add-on installs the same client range on both platforms (with Langfuse SDK 5)."""
+    def test_database_restart_marks_failed_without_spool(self):
+        log = []
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(sys.modules, {"mlflow": fake_mlflow(log)}), \
+                mock.patch.dict(os.environ, {"EXAKIT_HOME": tmp}, clear=True), \
+                mock.patch.object(records, "write_spool") as spool, \
+                self.assertRaises(exasol_mlflow.DatabaseRestarted):
+            exasol_mlflow.log_training(FakeConn(failure=ConnectionError("database closed")), "SELECT 1",
+                                       experiment="exp", tracking_dir=tmp)
+        spool.assert_not_called()
+        self.assertIn(("end_run", "FAILED"), log)
 
-    def test_the_package_declares_the_client_and_server_ranges(self):
-        import tomllib
+    def test_logging_failure_spools_and_replay_clears_it(self):
+        log, broken = [], fake_mlflow([])
+        broken.log_metrics = lambda p: (_ for _ in ()).throw(OSError("server stopped"))
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"EXAKIT_HOME": tmp}, clear=True):
+            with mock.patch.dict(sys.modules, {"mlflow": broken}), self.assertRaises(tracking.TrackingUnavailable):
+                exasol_mlflow.log_training(FakeConn(), "SELECT 1", experiment="exp", tracking_dir=tmp)
+            self.assertEqual(len(records.pending()), 1)
+            self.assertTrue(records.pending()[0].name.startswith("run-1-"))
+            with mock.patch.dict(sys.modules, {"mlflow": fake_mlflow(log)}):
+                self.assertEqual(records.replay(tracking_dir=tmp), ["r1"])
+            self.assertEqual(records.pending(), [])
 
-        project = tomllib.loads((ROOT / "packages" / "exasol-mlflow" / "pyproject.toml").read_text(encoding="utf-8"))
-        extras = project["project"]["optional-dependencies"]
-        self.assertIn("mlflow-skinny>=3,<4", extras["mlflow"])
-        self.assertEqual(extras["server"], ["mlflow>=3,<4"])
-        self.assertFalse([spec for spec in extras["mlflow"] if spec.startswith("mlflow>")], "the client extra stays skinny")
-
-    def test_the_notebook_add_on_pins_the_same_range_on_both_platforms(self):
-        sh = re.search(r'^EXAKIT_NOTEBOOK_PACKAGES="([^"]*)"', (ROOT / "setup" / "lib" / "notebook.sh").read_text(encoding="utf-8"), re.M)
-        ps = re.search(r'^\$script:NotebookPackages = @\(([^)]*)\)', (ROOT / "setup" / "lib" / "notebook.ps1").read_text(encoding="utf-8"), re.M)
-        sh_specs = sh.group(1).split()
-        ps_specs = re.findall(r'"([^"]*)"', ps.group(1))
-        self.assertEqual(sh_specs, ps_specs)
-        self.assertIn("mlflow-skinny>=3,<4", sh_specs)
-        self.assertIn("langfuse>=5,<6", sh_specs)
-
-
-@unittest.skipUnless(importlib.util.find_spec("mlflow") and importlib.util.find_spec("sqlalchemy") and importlib.util.find_spec("alembic"),
-                     "mlflow (with sqlalchemy and alembic for the local store) is not installed here")
-class RealMlflowTest(unittest.TestCase):
-    """With MLflow installed (the kit's notebook venv; CI's matrix runs 3.0 and the latest 3.x): the local SQLite store
-    fallback and every call log_training() makes work on this version, and the run holds what AC-ML2.1 asks for."""
-
-    def test_a_run_lands_in_the_local_store_on_this_mlflow(self):
-        import mlflow
-        from mlflow import MlflowClient
-
-        self.assertEqual(int(mlflow.__version__.split(".")[0]), 3, mlflow.__version__)
-        env = {k: v for k, v in os.environ.items() if not k.startswith("MLFLOW_")}
-        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, env, clear=True):
-            run = exasol_mlflow.log_training(FakeConn(answer()), "SELECT X FROM S.T", experiment="pins", params={"extra": 1},
-                                             tags={"exasol.workflow_id": "wf-20261027-abcdef"}, tracking_dir=tmp)
-            self.assertEqual(run.tracking_uri, f"sqlite:///{Path(tmp).resolve() / 'mlflow.db'}")
-            self.assertTrue((Path(tmp) / "mlflow.db").is_file())
-            client = MlflowClient(tracking_uri=run.tracking_uri)
-            logged = client.get_run(run.run_id)
-            self.assertEqual(logged.data.params, {"C": "1.0", "extra": "1"})
-            self.assertEqual(logged.data.metrics, {"roc_auc": 0.8})
-            for tag in ("exasol.session_id", "exasol.statement_id", "exasol.deployment", "exasol.workflow_id"):
-                self.assertIn(tag, logged.data.tags)
-            artifacts = {a.path for a in client.list_artifacts(run.run_id)} | {a.path for a in client.list_artifacts(run.run_id, "model")}
-            self.assertEqual(artifacts, {"training.sql", "model", "model/model.pkl"})
-            self.assertTrue(logged.info.artifact_uri.startswith((Path(tmp).resolve() / "artifacts").as_uri()))
+    def test_two_offline_attempts_keep_both_results(self):
+        broken = fake_mlflow([])
+        broken.log_metrics = lambda p: (_ for _ in ()).throw(OSError("server stopped"))
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"EXAKIT_HOME": tmp}, clear=True), \
+                mock.patch.dict(sys.modules, {"mlflow": broken}):
+            for _ in range(2):
+                with self.assertRaises(tracking.TrackingUnavailable):
+                    exasol_mlflow.log_training(FakeConn(), "SELECT 1", experiment="exp", tracking_dir=tmp)
+            self.assertEqual(len(records.pending()), 2)
 
 
 class UdfTest(unittest.TestCase):
-    def test_the_udf_is_a_set_script_with_the_contract_columns_and_no_network(self):
+    def test_both_udfs_emit_the_contract_without_network(self):
         script = exasol_mlflow.create_script("ml")
-        self.assertTrue(script.startswith("CREATE OR REPLACE PYTHON3 SET SCRIPT ML.EXASOL_MLFLOW_TRAIN_TEXT_CLASSIFIER("))
-        self.assertIn("EMITS (PART DECIMAL(9,0), CHUNK VARCHAR(2000000), TRAINING_RESULT VARCHAR(2000000))", script)
-        for word in ("mlflow", "requests", "urllib", "socket", "http", "password"):
-            with self.subTest(word=word):
-                self.assertNotIn(word, script.split(" AS", 1)[1].lower())
-        compile(script.split(" AS", 1)[1], "udf", "exec")
-        with self.assertRaises(ValueError):
-            exasol_mlflow.create_script("ml; DROP")
+        self.assertIn("EMITS (RUN_KEY VARCHAR(64)", script)
+        body = script.split(" AS\n", 1)[1]
+        compile(body, "udf", "exec")
+        for word in ("requests", "urllib", "socket", "http", "password"):
+            self.assertNotIn(word, body.lower())
+        template = (ROOT / "udf/templates/train_model.sql").read_text()
+        self.assertIn("MODEL_SHA256 VARCHAR(64)", template)
+        self.assertNotIn("import mlflow", template)
+
+    def test_train_template_renders_and_validates_handoff_inputs(self):
+        path = ROOT / "udf/templates/render.py"
+        spec = importlib.util.spec_from_file_location("exakit_udf_render", path)
+        renderer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(renderer)
+        create = renderer.render_train(schema="STARTER_KIT", name="TRAIN_TEST", features=["YEAR", "MONTH"],
+                                       label="IS_POSITIVE", positive="1", seed=11)
+        self.assertIn("f0 DOUBLE, f1 DOUBLE", create)
+        self.assertNotIn("{{", create)
+        compile(create.split(" AS\n", 1)[1], "train-model", "exec")
+        sql = renderer.train_sql(schema="STARTER_KIT", name="TRAIN_TEST",
+                                 training_sql="SELECT * FROM STARTER_KIT.FEATURES",
+                                 run_key="test-v1", label="IS_POSITIVE", features=["YEAR", "MONTH"])
+        self.assertIn('GROUP BY "RUN_KEY"', sql)
+        self.assertIn('CAST("YEAR" AS DOUBLE)', sql)
+        with self.assertRaises(renderer.Refused):
+            renderer.train_sql(schema="STARTER_KIT", name="TRAIN_TEST", training_sql="DROP TABLE T",
+                               run_key="test-v1", label="IS_POSITIVE", features=["YEAR"])
+
+    @unittest.skipUnless(importlib.util.find_spec("sklearn"), "scikit-learn is not installed here")
+    def test_training_udf_emits_a_model_with_outbound_network_disabled(self):
+        path = ROOT / "udf/templates/render.py"
+        spec = importlib.util.spec_from_file_location("exakit_udf_render", path)
+        renderer = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(renderer)
+        script = renderer.render_train(schema="STARTER_KIT", name="TRAIN_TEST", features=["F0"],
+                                       label="LABEL", positive="1")
+        namespace = {}
+        exec(script.split(" AS\n", 1)[1], namespace)
+        rows = [("train", str(i % 2), float(i % 2)) for i in range(20)]
+        rows += [("test", str(i % 2), float(i % 2)) for i in range(10)]
+        class Ctx:
+            def __init__(self):
+                self.index = 0
+                self.emitted = []
+            @property
+            def run_key(self):
+                return "network-off"
+            @property
+            def split_(self):
+                return rows[self.index][0]
+            @property
+            def label(self):
+                return rows[self.index][1]
+            @property
+            def f0(self):
+                return rows[self.index][2]
+            def next(self):
+                self.index += 1
+                return self.index < len(rows)
+            def emit(self, *values):
+                self.emitted.append(values)
+        ctx = Ctx()
+        with mock.patch.object(socket, "socket", side_effect=AssertionError("outbound network from the UDF")):
+            namespace["run"](ctx)
+        self.assertEqual(len(ctx.emitted), 1)
+        result = contract.parse(COLUMNS, [("7", *ctx.emitted[0])])[0]
+        self.assertTrue(result.has_model)
+        self.assertEqual(result.metrics["rows_train"], 20.0)
 
 
-class ShippedTrainTest(unittest.TestCase):
-    NOTEBOOK = ROOT / "notebook" / "notebooks" / "ml-engineer" / "01_train.py"
-
-    def test_one_assignment_picks_the_data_and_no_dataset_is_named_in_the_code(self):
-        text = self.NOTEBOOK.read_text(encoding="utf-8")
-        self.assertEqual(sum(1 for line in text.splitlines() if line.startswith("DATASET = ")), 1)
-        code = "\n".join(line for line in text.splitlines() if not line.startswith(("#", "DATASET = ")))
-        for name in ("PHARMA", "BANKING", "TERMINATED", "MONETARY_RELIEF", "BRIEF_SUMMARY"):
-            with self.subTest(name=name):
-                self.assertNotIn(name, code)
-        compile(text, str(self.NOTEBOOK), "exec")
-        self.assertTrue(self.NOTEBOOK.with_suffix(".ipynb").exists())
+@unittest.skipUnless(importlib.util.find_spec("mlflow") and importlib.util.find_spec("sqlalchemy"),
+                     "MLflow and SQLite dependencies are not installed here")
+class RealMlflowTest(unittest.TestCase):
+    def test_local_store_has_metrics_model_and_lineage(self):
+        import mlflow
+        from mlflow import MlflowClient
+        self.assertEqual(int(mlflow.__version__.split(".")[0]), 3)
+        env = {k: v for k, v in os.environ.items() if not k.startswith("MLFLOW_")}
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {**env, "EXAKIT_HOME": tmp}, clear=True):
+            run = exasol_mlflow.log_training(FakeConn(), "SELECT 1", experiment="pins", tracking_dir=tmp)
+            client = MlflowClient(tracking_uri=run.tracking_uri)
+            logged = client.get_run(run.run_id)
+            self.assertEqual(logged.data.metrics["roc_auc"], 0.8)
+            self.assertEqual(logged.data.tags["exasol.container_digest"], "container-123")
+            paths = [a.path for a in client.list_artifacts(run.run_id, "model")]
+            self.assertIn("model/model.pkl", paths)
 
 
 if __name__ == "__main__":

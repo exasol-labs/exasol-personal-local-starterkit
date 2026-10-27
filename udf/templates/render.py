@@ -21,6 +21,20 @@ From a terminal (the statement ends with a line holding only '/', which SQL clie
 An input is (parameter, SQL type) or (parameter, SQL type, model feature): the parameter is the UDF's argument, the
 feature the column name the model was trained on (the parameter's own name when left out). TEXT, DATA and VALUE are
 reserved words in Exasol, so a model trained on a "text" column takes a parameter such as doc_text with feature "text".
+
+The training template (train_model.sql, the exasol-mlflow run contract) is rendered from Python only, from the
+handoff's feature view (exakit.nb.read_handoff):
+
+    create = render.render_train(schema="STARTER_KIT", name="TRAIN_PHARMA", features=[f["name"] for f in handoff["input_schema"]],
+                                 label=handoff["label"]["column"], positive=handoff["label"]["positive"], seed=0)
+    select = render.train_sql(schema="STARTER_KIT", name="TRAIN_PHARMA", training_sql=handoff["training_sql"],
+                              run_key="pharma-v1", label=handoff["label"]["column"], features=[...])
+    conn.execute(create)
+    with exasol_mlflow.start_run(conn, handoff=handoff) as run:
+        run.execute(select)
+
+Feature and label names there are COLUMN names (any text; train_sql double-quotes them), not parameter names: the UDF
+takes them positionally as f0, f1, ... DOUBLE after run_key, split_ and label.
 """
 
 from __future__ import annotations
@@ -32,7 +46,13 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 TEMPLATE = "score_model.sql"
+TRAIN_TEMPLATE = "train_model.sql"
 METHODS = ("predict", "predict_proba")
+MODEL_DIR = "/buckets/bfsdefault/default/models"            # where a model over 1 MB is written (see train_model.sql)
+SPLIT_COLUMN = "SPLIT_"                                     # the handoff training SQL's split column: 'train' | 'test'
+RUN_KEY_COLUMN = "RUN_KEY"
+_RUN_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+_COLUMN = re.compile(r"^[^\x00-\x1f]{1,128}$")
 _PLACEHOLDER = re.compile(r"\{\{([A-Z_]+)\}\}")
 _IDENT = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,127}$")
 _TYPE = re.compile(r"^(BOOLEAN|BOOL|CHAR|CHARACTER|VARCHAR|CHARACTER VARYING|NVARCHAR|VARCHAR2|DECIMAL|DEC|NUMERIC|"
@@ -123,6 +143,12 @@ def render(schema=None, name=None, model_path=None, inputs=None, output=None, me
         "INPUTS": repr(pairs),
         "METHOD": repr(method),
     }
+    return _fill(template, values)
+
+
+def _fill(template: str, values: dict[str, str]) -> str:
+    """The template with every placeholder replaced by its checked value; the comment header dropped (the statement
+    starts at CREATE); a placeholder the renderer does not know, or one left unfilled, is refused by name."""
     text = (HERE / template).read_text(encoding="utf-8")
     unknown = [p for p in placeholders(template) if p not in values]
     if unknown:
@@ -131,11 +157,99 @@ def render(schema=None, name=None, model_path=None, inputs=None, output=None, me
     left = _PLACEHOLDER.findall(rendered)
     if left:
         raise Refused(f"Placeholders left unfilled: {', '.join(sorted(set(left)))}.")
-    # The comment header is for the reader of the template; the statement starts at CREATE.
     lines = rendered.splitlines()
     while lines and (lines[0].startswith("--") or not lines[0].strip()):
         lines.pop(0)
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _column(value, what: str) -> str:
+    """A column name as the data has it (any text without control characters, up to 128 characters); it is always
+    double-quoted in SQL, so case and reserved words do not matter."""
+    text = "" if value is None else str(value)
+    if not text.strip():
+        raise Refused(f"{what} is not filled.")
+    if not _COLUMN.match(text) or '"' in text:
+        raise Refused(f"{what} '{text}' is not a column name (no control characters or double quotes, up to 128 characters).")
+    return text
+
+
+def quoted(name: str) -> str:
+    """The column name as a double-quoted SQL identifier."""
+    return '"' + name + '"'
+
+
+def _features(features) -> list[str]:
+    names = [_column(f, "A feature") for f in (features or [])]
+    if not names:
+        raise Refused("FEATURES is not filled: name at least one feature column (the handoff's input_schema).")
+    if len(set(names)) != len(names):
+        raise Refused("A feature is named twice: " + ", ".join(sorted({n for n in names if names.count(n) > 1})) + ".")
+    return names
+
+
+def _number(value, what: str, kind, low=None):
+    try:
+        number = kind(value)
+    except (TypeError, ValueError) as err:
+        raise Refused(f"{what} {value!r} is not a {kind.__name__}.") from err
+    if isinstance(number, float) and number != number:
+        raise Refused(f"{what} must be a number.")
+    if low is not None and number < low:
+        raise Refused(f"{what} must be at least {low}, not {number}.")
+    return number
+
+
+def render_train(schema=None, name=None, features=None, label=None, positive=None, seed=0, C=1.0, max_iter=1000,
+                 language="PYTHON3", model_dir=MODEL_DIR, template: str = TRAIN_TEMPLATE) -> str:
+    """The CREATE statement of a training UDF (train_model.sql) for the feature columns in ``features`` (in order: the
+    coefficient vector follows it) and the label column ``label``; ``positive`` is the positive class as text (roc_auc
+    refers to it; None takes the last class). The UDF's parameters are positional (run_key, split_, label, f0, f1, ...),
+    so train_sql() must list the same features in the same order."""
+    reserved = _reserved()
+    names = _features(features)
+    columns = ["run_key VARCHAR(64)", "split_ VARCHAR(8)", "label VARCHAR(2000)"] + [f"f{i} DOUBLE" for i in range(len(names))]
+    folder = "" if model_dir is None else str(model_dir).strip()
+    if not _BUCKETS.match(folder) or "/../" in folder + "/" or "/./" in folder + "/":
+        raise Refused(f"MODEL_DIR '{folder}' is not a /buckets folder such as {MODEL_DIR}.")
+    values = {
+        "LANGUAGE": _name(language, "LANGUAGE", reserved).upper(),
+        "SCHEMA": _name(schema, "SCHEMA", reserved).upper(),
+        "SCRIPT_NAME": _name(name, "SCRIPT_NAME", reserved).upper(),
+        "INPUT_COLUMNS": ", ".join(columns),
+        "FEATURES": repr(names),
+        "LABEL": repr(_column(label, "LABEL")),
+        "POSITIVE": repr(None if positive is None else str(positive)),
+        "SEED": repr(_number(seed, "SEED", int, 0)),
+        "C": repr(_number(C, "C", float, 0.0)),
+        "MAX_ITER": repr(_number(max_iter, "MAX_ITER", int, 1)),
+        "MODEL_DIR": repr(folder),
+    }
+    values["ALIAS"] = repr(values["LANGUAGE"])
+    return _fill(template, values)
+
+
+def train_sql(schema=None, name=None, training_sql=None, run_key=None, label=None, features=None,
+              split_column=SPLIT_COLUMN) -> str:
+    """The SELECT that trains: the UDF render_train() created, over the handoff's training SQL (a SELECT whose rows
+    carry the label, the features and the split column), one group per ``run_key`` (a key the run is filed under:
+    letters, digits, . _ -; up to 64 characters). Every column reference is double-quoted; the label is passed as text
+    and every feature as DOUBLE, which is what the UDF's parameters expect."""
+    reserved = _reserved()
+    key = "" if run_key is None else str(run_key).strip()
+    if not _RUN_KEY.match(key):
+        raise Refused(f"RUN_KEY '{key}' is not a run key (letters, digits, . _ -; up to 64 characters).")
+    sql = "" if training_sql is None else str(training_sql).strip().rstrip(";").strip()
+    if not sql.upper().startswith(("SELECT", "WITH")):
+        raise Refused("TRAINING_SQL is not filled: the handoff's training SQL (a SELECT).")
+    names = _features(features)
+    arguments = [quoted(RUN_KEY_COLUMN), quoted(_column(split_column, "SPLIT_COLUMN")),
+                 f"CAST({quoted(_column(label, 'LABEL'))} AS VARCHAR(2000))"] + [f"CAST({quoted(n)} AS DOUBLE)" for n in names]
+    udf = f"{_name(schema, 'SCHEMA', reserved).upper()}.{_name(name, 'SCRIPT_NAME', reserved).upper()}"
+    inner = "\n".join("        " + line for line in sql.splitlines())
+    return (f"SELECT {udf}(\n    " + ",\n    ".join(arguments) + "\n)\n"
+            f"FROM (\n    SELECT '{key}' AS {quoted(RUN_KEY_COLUMN)}, T.* FROM (\n{inner}\n    ) T\n)\n"
+            f"GROUP BY {quoted(RUN_KEY_COLUMN)}")
 
 
 def _input(text: str) -> tuple[str, ...]:

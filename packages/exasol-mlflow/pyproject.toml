@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "exasol-mlflow"
-version = "0.2.0"
+version = "0.3.0"
 description = "Train inside Exasol with a Python UDF and log the run - parameters, metrics, training SQL, model and lineage - to your MLflow from the client."
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
