@@ -93,7 +93,7 @@ notebook_venv_python() { printf '%s\n' "$STUB"; }
 
 echo "list and show read the logs through the kit's notebook Python:"
 run list;                check "no workflows yet is still exit 0" "0" "$CODE"; contains "and says so" "No workflows yet" "$OUT"
-WF="$("$STUB" -c 'import exakit_nb.workflow as w; wid = w.workflow("demo"); w.log_event(w.SQL, sql="SELECT 1", rows=1)' | sed 's/^Workflow \([^:]*\):.*/\1/')"
+WF="$("$STUB" -c 'import importlib; w = importlib.import_module('exakit_nb.workflow'); wid = w.workflow("demo"); w.log_event(w.SQL, sql="SELECT 1", rows=1)' | sed 's/^Workflow \([^:]*\):.*/\1/')"
 contains "the helper started a workflow" "wf-" "$WF"
 check "its log is under the kit home" "yes" "$([ -f "$EXAKIT_HOME/workflows/$WF.jsonl" ] && echo yes || echo no)"
 run list;                check "list" "0" "$CODE"; contains "has the id" "$WF" "$OUT"; contains "and the name" "demo" "$OUT"

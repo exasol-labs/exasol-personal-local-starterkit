@@ -31,13 +31,14 @@ from typing import Any
 from ._kit import setting
 from .checks import check_bucket, check_container, check_mlflow, model_list
 from .dataset import Dataset, DescriptorNotApproved, dataset
+from .describe import Draft, describe
 from .descriptor_store import current_version, descriptor_store_dir, list_versions
 from .own_file import load_own_file, save_descriptor
 from .quickstart import check_connection, connected_sources, first, list_schemas, load_sample, load_source, show_roles
 from .workflow import TRACE as TRACE_KIND
 from .workflow import current_workflow, log_event, log_sql, workflow
 
-__all__ = ["check_bucket", "check_connection", "check_container", "check_mlflow", "confirm_send", "connect", "connected_sources", "current_version", "current_workflow", "Dataset", "dataset", "descriptor_store_dir", "DescriptorNotApproved", "first", "list_schemas", "list_versions", "load_own_file", "load_sample", "load_source", "log_event", "log_sql", "model_client", "model_list", "save_descriptor", "show_roles", "show_sql", "sql", "trace", "tracing", "workflow"]
+__all__ = ["check_bucket", "check_connection", "check_container", "check_mlflow", "confirm_send", "connect", "connected_sources", "current_version", "current_workflow", "dataset", "Dataset", "describe", "descriptor_store_dir", "DescriptorNotApproved", "Draft", "first", "list_schemas", "list_versions", "load_own_file", "load_sample", "load_source", "log_event", "log_sql", "model_client", "model_list", "save_descriptor", "show_roles", "show_sql", "sql", "trace", "tracing", "workflow"]
 
 LANGFUSE_VARIABLES = ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_BASE_URL")
 LANGFUSE_HOST_VARIABLE = "LANGFUSE_HOST"      # the SDK 3/4 name of LANGFUSE_BASE_URL; still accepted when BASE_URL is unset

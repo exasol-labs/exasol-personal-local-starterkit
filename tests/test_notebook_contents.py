@@ -36,7 +36,7 @@ NOTEBOOKS = sorted(SOURCES.glob("*/*.py")) + sorted((ROOT / "notebook" / "marimo
 HELPERS = sorted((ROOT / "notebook" / "package").glob("*/**/*.py")) + sorted((ROOT / "notebook" / "kit").glob("*.py"))
 # Commands other work items add to this kit in parallel: `exakit model put|list` (ML-4) is named by the ML Engineer's
 # checks before its dispatch arm lands.
-PENDING_COMMANDS = {"model", "describe"}     # describe: task T4 (the helpers already name it)
+PENDING_COMMANDS = {"model"}     # describe: task T4 (the helpers already name it)
 SPRINT_NOTEBOOKS = {"data-scientist": ["00_quickstart.ipynb", "01_explore.ipynb"],
                     "ml-engineer": ["00_quickstart.ipynb", "01_train.ipynb", "03_score_external_model.ipynb"]}
 

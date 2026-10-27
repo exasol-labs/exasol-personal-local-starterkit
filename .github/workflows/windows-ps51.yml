@@ -104,6 +104,10 @@ jobs:
         if: matrix.shard == 2
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/workflow-command-ps.ps1
+      - name: exakit describe under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/describe-command-ps.ps1
       - name: the notebook launcher under 5.1
         if: matrix.shard == 2
         shell: powershell
