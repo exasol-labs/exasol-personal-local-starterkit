@@ -65,10 +65,10 @@
 #   workflow              list | show <id> [--json]: the workflow logs the notebook
 #                         helpers write, one JSON line per step (X-1)
 #   mlflow                start | stop | status | url | replay: local model run server
-#   describe <table>      profile SCHEMA.TABLE and draft its descriptor (roles with
-#                         evidence); --sample N, --id slug, --json, --write <path>
-#   udf-setup             Python UDFs: install the official container (udf-devkit)
-#   udf-use               install a container: default, or a tarball; --list
+#   describe <table>      profile SCHEMA.TABLE and draft its descriptor, or approve
+#                         one: --sample N, --id, --json, --write, --approve, --versions
+#   udf-setup             Python (or --language rust) UDFs: install the container
+#   udf-use               install a container: default, or a tarball; --list, --json
 #   udf-build             build a container from a pinned requirements.txt
 #   udf-file              copy a file into BucketFS; prints the path a UDF reads
 #   model put <file> [--replace] [--json] | list [--json] | template [--json]
