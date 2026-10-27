@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "ml-engineer",
   "title": "ML Engineer",
-  "summary": "Train models inside the database with Python UDFs on the Pharma and Banking reference datasets, runs logged to your MLflow.",
+  "summary": "Train models inside the database with Python UDFs - or score them with Rust UDFs - on the Pharma and Banking reference datasets, runs logged to the kit's MLflow.",
   "picker": true,
   "order": 20,
   "datasets": ["pharma_trials", "banking_complaints"],
