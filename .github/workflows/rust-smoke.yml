@@ -75,6 +75,7 @@ jobs:
             -v "$PWD/udf/rust-smoke:/work" -v "$PWD/.cargo-home:/cargo-home" -v "$PWD/dist:/dist" \
             -e CARGO_HOME=/cargo-home -w /work "$RUST_IMAGE" bash -eu -c '
               rustc --version; cargo --version
+              export PATH="$CARGO_HOME/bin:$PATH"
               # The image ships 1.98.1 under the "1.98.1" rustup name as well, so
               # rust-toolchain.toml resolves without a download.
               command -v cargo-exasol-udf >/dev/null 2>&1 || \
@@ -104,6 +105,26 @@ jobs:
             echo "  sha256: $sha"
             echo "  size:   $size"
           } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: compile the generated scoring UDF on the same architecture
+        run: |
+          set -eu
+          mkdir -p dist/scoring-fixture
+          cat > dist/scoring-fixture/coefficients.json <<'JSON'
+          {"features":["DATE_YEAR","CAT_A"],"coef":[[0.5,-1.25]],"intercept":[2.0],"classes":[0,1],"positive_class":1}
+          JSON
+          EXAKIT_HOME="$PWD/dist/scoring-fixture" python3 setup/udf/rust_udf_tool.py \
+            new score_model --coefficients "$PWD/dist/scoring-fixture/coefficients.json" --json
+          docker run --rm --platform "${{ matrix.platform }}" \
+            -v "$PWD/dist/scoring-fixture/rust-udfs/score_model:/score" \
+            -v "$PWD/.cargo-home:/cargo-home" -e CARGO_HOME=/cargo-home \
+            -w /score "$RUST_IMAGE" bash -eu -c '
+              export PATH="$CARGO_HOME/bin:$PATH"
+              command -v cargo-exasol-udf >/dev/null 2>&1 || \
+                cargo install cargo-exasol-udf --version "=${{ env.CARGO_EXASOL_UDF }}" --locked
+              cargo exasol-udf build /score
+              cargo exasol-udf validate /score/target/release/libscore_model.so --deny-unknown-deps
+            '
 
       - uses: actions/upload-artifact@v4
         with:
