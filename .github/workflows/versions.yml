@@ -1049,6 +1049,19 @@ jobs:
       - name: every notebook headless on both datasets
         env:
           EXAKIT_REQUIRE_DB: "1"
+          EXAKIT_NOTEBOOK_AI_LAB: "0"
+          EXAKIT_NOTEBOOK_RUN_OUTPUT: ${{ runner.temp }}/executed-notebooks
+        run: bash tests/notebooks-run.sh
+      - name: the AI Lab notebook, as the connector ships it, connects from the kit's store
+        # AC-DS1.4: first_steps.ipynb from exasol-notebook-connector 3.1.0, a
+        # copy in a temporary folder, run on the kit's kernel through its
+        # connection cell (tests/notebooks-run.sh explains the one cell that
+        # stands in for the access-store widget's Open button). Its own step,
+        # so a red here reads as the AI Lab notebook, not as a kit notebook.
+        if: success() || failure()
+        env:
+          EXAKIT_REQUIRE_DB: "1"
+          EXAKIT_NOTEBOOK_AI_LAB: only
           EXAKIT_NOTEBOOK_RUN_OUTPUT: ${{ runner.temp }}/executed-notebooks
         run: bash tests/notebooks-run.sh
       - name: keep the kit's logs and the executed notebooks

@@ -95,6 +95,25 @@ sets it, so CI can never skip silently). `EXAKIT_NOTEBOOK_DATASETS`,
 `EXAKIT_NOTEBOOK_CELL_TIMEOUT` and `EXAKIT_NOTEBOOK_RUN_OUTPUT` adjust it; the
 executed notebooks are the job's artifact when it fails.
 
+The same script then runs one AI Lab notebook as the connector ships it
+(AC-DS1.4): `first_steps.ipynb` from `exasol-notebook-connector` 3.1.0
+(`exasol/nb_connector/resources/notebooks/`, what `ai-lab start` deploys),
+copied unchanged into a temporary folder and executed on the kit's kernel
+through its connection cell (`jupysql.init(ai_lab_config)`), with its bytes
+checked against the package's afterwards. AI Lab notebooks open their store
+with a widget (a path, a password, an Open button that pushes `ai_lab_config`
+into the kernel), which nobody can click headless, so the run starts with one
+cell that does what that button does, on the kit's store, and then runs the
+notebook's own cells in order. `EXAKIT_NOTEBOOK_AI_LAB=only|0` runs just that
+notebook or leaves it out (the CI job runs it as its own step),
+`EXAKIT_AI_LAB_NOTEBOOK` names another notebook from that folder, and
+`EXAKIT_AI_LAB_CELLS=all` runs every cell (for `first_steps` that needs the
+Internet: its data is imported from a public CSV and an S3 bucket). The
+connection is re-read on every `exakit notebook` (AC-DS1.5): the launcher
+writes the kit's recorded host and port into the store each time, which
+`tests/notebook-addon.sh` and its PowerShell twin prove with a port that
+changes between two launches.
+
 ## The rules every notebook follows
 
 - **Descriptor-driven.** Every query is built from the descriptor's roles

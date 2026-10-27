@@ -220,6 +220,34 @@ check "a failed write fails" "1" \
     "$( (manifest_get() { case "$1" in (runtime.dsn) echo h:8563 ;; (runtime.password_file) echo /x ;; esac; }
          _notebook_py() { echo partial; return 4; }; notebook_write_connection >/dev/null 2>&1; echo $?) )"
 
+echo "the connection is re-read on every launch: a changed database port reaches the store (AC-DS1.5):"
+# The launch path (_notebook_preflight, what exakit notebook runs before any
+# server starts) writes the kit's recorded connection into the connector's
+# store every time. Here the manifest's runtime.dsn changes between two
+# launches - what a database moved to another port looks like (a language
+# container install and a port change leave the kit's record as the only
+# truth) - and write_store.py, stubbed, records the host:port it was handed.
+# No database, no real store: the assertion is on the launcher's arguments.
+: > "$WORK/store-writes"
+launch_store_write() { # launch_store_write <dsn> <what the write answers> - the preflight with the launcher's other steps stubbed; its output
+    ( manifest_set runtime.dsn "$1"; manifest_set runtime.user sys; manifest_set runtime.password_file "$WORK/pw"
+      _lsw_answer="$2"
+      _notebook_py() { printf '%s %s:%s\n' "$1" "$EXAKIT_NB_HOST" "$EXAKIT_NB_PORT" >> "$WORK/store-writes"; printf '%s\n' "$_lsw_answer"; }
+      notebook_env_state() { echo ok; }; _notebook_on_terminal() { return 1; }; exakit_db_reachable() { return 0; }
+      notebook_register_kernel() { return 0; }; _notebook_report_copied() { :; }; notebook_copy_notebooks() { :; }
+      _notebook_preflight; echo "rc=$?" ) 2>&1
+}
+out="$(launch_store_write 127.0.0.1:8563 same)"
+contains "the first launch runs through" "rc=0" "$out"
+check "and hands the store the recorded port" "write_store.py 127.0.0.1:8563" "$(cat "$WORK/store-writes")"
+out="$(launch_store_write 127.0.0.1:8564 changed)"
+contains "the next launch runs through too" "rc=0" "$out"
+check "the store is written again, now with the new port: nothing is cached between launches" \
+    "write_store.py 127.0.0.1:8563|write_store.py 127.0.0.1:8564" "$(tr '\n' '|' < "$WORK/store-writes" | sed 's/|$//')"
+contains "and the launch says the notebooks use the new connection" "The database connection changed; the notebooks now use the new one" "$out"
+check "the master password is in no argument the launcher records" "0" "$(grep -c "$(cat "$EXAKIT_CREDS_DIR/$EXAKIT_NOTEBOOK_MASTER_CRED")" "$WORK/store-writes" | tr -d ' ')"
+manifest_del runtime.dsn; manifest_del runtime.user; manifest_del runtime.password_file
+
 echo "exakit logs notebook:"
 out="$( (exakit_marketplace_installed_addons() { echo notebook; }; exakit_log_targets) )"
 contains "JupyterLab's log is a target" "notebook|JupyterLab (exakit notebook)|file|$EXAKIT_LOG_DIR/notebook.log" "$out"

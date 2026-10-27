@@ -261,6 +261,45 @@ try {
     Check "notebook and notebook-marimo" "notebook,notebook-marimo" (($targets | ForEach-Object { $_.Id }) -join ",")
     Check "with their files" (Get-NotebookMarimoLogFile) $targets[1].Source
 
+    Write-Host "the connection is re-read on every launch: a changed database port reaches the store (AC-DS1.5):"
+    # The launch path (Invoke-NotebookPreflight, what exakit notebook runs before
+    # any server starts) writes the kit's recorded connection into the
+    # connector's store every time. The manifest's runtime.dsn changes between
+    # two launches - a database moved to another port - and write_store.py,
+    # stubbed, records the host:port it was handed. No database, no real store.
+    Initialize-ExakitManifest
+    Set-ExakitManifestValue "runtime.user" "sys"
+    Set-ExakitManifestValue "runtime.password_file" (Join-Path $work "pw")
+    New-Item -ItemType Directory -Force -Path (Join-Path $script:NotebookDir "starter-kit-notebooks") | Out-Null
+    $script:StoreWrites = @()
+    $script:StoreAnswer = "same"
+    $realInvokePy = ${function:Invoke-NotebookPy}
+    function Invoke-NotebookPy {
+        param([Parameter(Mandatory)][string]$Script, [hashtable]$Env = @{})
+        $script:StoreWrites += "$Script $($Env.EXAKIT_NB_HOST):$($Env.EXAKIT_NB_PORT)"
+        return ,@(0, @($script:StoreAnswer))
+    }
+    function Get-NotebookEnvState { return "ok" }
+    function Test-NotebookOnTerminal { return $false }
+    function Test-ExakitDbReachable { return $true }
+    function Register-NotebookKernel { return $true }
+    function Write-NotebookCopied { param($Folder, $Front) }
+    Set-ExakitManifestValue "runtime.dsn" "127.0.0.1:8563"
+    $said = (Invoke-NotebookPreflight 6>&1 | Out-String)
+    Check "the first launch runs through" $true ($said -like "*True*")
+    Check "and hands the store the recorded port" "write_store.py 127.0.0.1:8563" ($script:StoreWrites -join ",")
+    Set-ExakitManifestValue "runtime.dsn" "127.0.0.1:8564"
+    $script:StoreAnswer = "changed"
+    $said = (Invoke-NotebookPreflight 6>&1 | Out-String)
+    Check "the next launch runs through too" $true ($said -like "*True*")
+    Check "the store is written again, now with the new port: nothing is cached between launches" `
+        "write_store.py 127.0.0.1:8563,write_store.py 127.0.0.1:8564" ($script:StoreWrites -join ",")
+    Contains "and the launch says the notebooks use the new connection" "The database connection changed; the notebooks now use the new one" $said
+    $master = Get-Content -Raw (Join-Path $script:CredsDir $script:NotebookMasterCred)
+    Check "the master password is in no argument the launcher records" $false (($script:StoreWrites -join ",").Contains($master.Trim()))
+    Set-Item -Path Function:\Invoke-NotebookPy -Value $realInvokePy
+    Remove-ExakitManifestValue "runtime"
+
     Write-Host "a server that could not be started makes the command exit 1, as on the shell side:"
     function Get-NotebookInstalledVersion { return "3.1.0" }
     Initialize-ExakitManifest

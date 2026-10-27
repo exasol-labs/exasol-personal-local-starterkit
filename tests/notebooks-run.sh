@@ -28,6 +28,27 @@
 #   EXAKIT_NOTEBOOK_CELL_TIMEOUT seconds one cell may take (default 900)
 #   EXAKIT_NOTEBOOK_RUN_OUTPUT   folder for the executed .ipynb files (default: none kept)
 #   EXAKIT_NOTEBOOK_PYTHON       the kit's notebook Python (default: the manifest's, else EXAKIT_HOME/notebook-venv)
+#
+# The AI Lab notebook (AC-DS1.4): after the kit's notebooks (or alone, or not
+# at all - EXAKIT_NOTEBOOK_AI_LAB=1|only|0, 1 unless a notebook is named on the
+# command line), one example notebook exasol-notebook-connector 3.1.0 ships
+# (exasol/nb_connector/resources/notebooks/, what `ai-lab start` deploys) is
+# run as shipped - a copy in a temporary folder, its bytes checked against the
+# package's after the run - on the kit's kernel from the kit's store. Every AI
+# Lab notebook opens its store with a widget (a path and a password typed in,
+# an Open button that pushes `ai_lab_config` into the kernel), which nobody
+# can click headless, so the run starts with one cell that does what that
+# button does - `ai_lab_config` opened on the kit's store - and then runs the
+# notebook's own cells, unchanged, in order. Default: first_steps.ipynb
+# (EXAKIT_AI_LAB_NOTEBOOK names another, relative to that folder) through its
+# connection cell (`jupysql.init(ai_lab_config)`; EXAKIT_AI_LAB_CELLS=all runs
+# every cell, which for first_steps needs the Internet: its data is imported
+# from a public CSV and an S3 bucket). The connector ships no example that
+# runs on the local database alone, so the connection cell is the check.
+#
+#   EXAKIT_NOTEBOOK_AI_LAB       1 (default), only, or 0
+#   EXAKIT_AI_LAB_NOTEBOOK       the notebook, under the connector's resources/notebooks/ (default first_steps.ipynb)
+#   EXAKIT_AI_LAB_CELLS          connect (default: through the connection cell) or all
 
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -113,17 +134,114 @@ else
 fi
 
 # --- the run -------------------------------------------------------------------
-set -- "$@"
-_args=""
-for _ds in $DATASETS; do _args="$_args --dataset $_ds"; done
+AI_LAB="${EXAKIT_NOTEBOOK_AI_LAB:-1}"
+[ $# -gt 0 ] && [ "$AI_LAB" = 1 ] && AI_LAB=0        # named notebooks: only those
 _out=""
 [ -n "${EXAKIT_NOTEBOOK_RUN_OUTPUT:-}" ] && { mkdir -p "$EXAKIT_NOTEBOOK_RUN_OUTPUT"; _out="--output $EXAKIT_NOTEBOOK_RUN_OUTPUT"; }
-# shellcheck disable=SC2086
-"$NB_PY" "$ROOT/tools/notebooks.py" --run "$@" $_args --timeout "${EXAKIT_NOTEBOOK_CELL_TIMEOUT:-900}" $_out
-rc=$?
-if [ "$rc" -eq 0 ]; then
-    echo "PASS every notebook ran on: $DATASETS"
-else
-    echo "FAIL (exit $rc): see the failing cell above" >&2
+rc=0
+if [ "$AI_LAB" != only ]; then
+    set -- "$@"
+    _args=""
+    for _ds in $DATASETS; do _args="$_args --dataset $_ds"; done
+    # shellcheck disable=SC2086
+    "$NB_PY" "$ROOT/tools/notebooks.py" --run "$@" $_args --timeout "${EXAKIT_NOTEBOOK_CELL_TIMEOUT:-900}" $_out
+    rc=$?
+    if [ "$rc" -eq 0 ]; then
+        echo "PASS every notebook ran on: $DATASETS"
+    else
+        echo "FAIL (exit $rc): see the failing cell above" >&2
+    fi
+fi
+
+# --- the AI Lab notebook, as the connector ships it (AC-DS1.4) --------------------
+# tools/notebooks.py's execute() runs it: the same nbclient on the same kernel,
+# the same environment (LANGFUSE_* dropped) and a temporary working folder, as
+# the kit's notebooks above. The .ipynb is taken as a file (--run builds from
+# .py sources), so the notebook is never rebuilt, rewritten or tagged: the
+# bytes that ran are the bytes the package ships, and the run checks that.
+if [ "$AI_LAB" != 0 ]; then
+    "$NB_PY" - "$ROOT" "${EXAKIT_AI_LAB_NOTEBOOK:-first_steps.ipynb}" "${EXAKIT_AI_LAB_CELLS:-connect}" \
+        "${EXAKIT_NOTEBOOK_CELL_TIMEOUT:-900}" "${EXAKIT_NOTEBOOK_RUN_OUTPUT:-}" <<'PY'
+import hashlib
+import json
+import os
+import shutil
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+root, name, cells_mode, timeout, output = sys.argv[1:6]
+sys.path.insert(0, str(Path(root) / "tools"))
+import notebooks                                    # noqa: E402  the kit's headless runner (execute, KERNEL)
+import exasol.nb_connector.resources as resources   # noqa: E402  the AI Lab notebooks live in this package
+
+CONNECT = "jupysql.init(ai_lab_config)"             # every AI Lab notebook's connection cell
+shipped = Path(resources.__file__).parent / "notebooks" / name
+label = f"AI Lab {name}"
+if not shipped.is_file():
+    print(f"FAIL {label}: the connector ships no such notebook under {shipped.parent}")
+    sys.exit(2)
+kernel = os.environ.get("EXAKIT_NOTEBOOK_KERNEL") or notebooks.KERNEL["name"]
+digest = hashlib.sha256(shipped.read_bytes()).hexdigest()
+# What the notebook's own access-store widget does when its Open button is
+# clicked: ai_lab_config, a Secrets on the store, pushed into the kernel. The
+# store is the kit's (the kernel's environment names it, as the kit's helpers
+# read it); the password is read from its file, never printed.
+opener = {"cell_type": "code", "metadata": {"tags": ["exakit-store"]}, "outputs": [], "execution_count": None,
+          "source": ["# exakit: what the Open button of the access-store widget below does, for a run with nobody at it\n",
+                     "from pathlib import Path\n",
+                     "from exakit_nb._kit import setting\n",
+                     "from exasol.nb_connector.secret_store import Secrets\n",
+                     "ai_lab_config = Secrets(Path(setting('EXAKIT_NB_STORE')), "
+                     "Path(setting('EXAKIT_NB_MASTER_FILE')).read_text(encoding='utf-8').strip())\n"]}
+with tempfile.TemporaryDirectory(prefix="exakit-ai-lab-") as folder:
+    copy = Path(folder) / shipped.name
+    shutil.copyfile(shipped, copy)
+    beside = shipped.with_suffix("")                # first_steps/ holds the files first_steps.ipynb reads
+    if beside.is_dir():
+        shutil.copytree(beside, Path(folder) / beside.name)
+    doc = json.loads(copy.read_text(encoding="utf-8"))
+    cells = doc["cells"]
+    if cells_mode == "all":
+        last, through = len(cells) - 1, "every cell"
+    else:
+        last = next((i for i, c in enumerate(cells) if c["cell_type"] == "code" and CONNECT in "".join(c["source"])), None)
+        if last is None:
+            print(f"FAIL {label}: no cell holds {CONNECT}, so there is no connection cell to run")
+            sys.exit(2)
+        through = f"its cells 0-{last}, through the connection cell"
+    doc["cells"] = [opener] + cells[: last + 1]
+    code = sum(c["cell_type"] == "code" for c in cells[: last + 1])
+    print(f"run  {label}: {through} ({code} code cells, after the store-opening cell) on kernel {kernel}, in {folder}",
+          flush=True)
+    started = time.monotonic()
+    try:
+        executed, problem = notebooks.execute(doc, kernel, Path(folder), int(timeout))
+    except Exception as broken:                     # not a cell: the kernel
+        print(f"FAIL {label}: the run on kernel {kernel!r} did not finish ({type(broken).__name__}: {broken})")
+        sys.exit(2)
+    seconds = time.monotonic() - started
+    unchanged = hashlib.sha256(copy.read_bytes()).hexdigest() == digest
+if output:
+    target = Path(output) / "ai-lab" / shipped.name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps(executed, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+if problem:
+    print(f"FAIL {label} after {seconds:.0f}s (cell 0 is the store-opening cell, so the notebook's own cell k is "
+          f"cell k+1 here): {problem}", flush=True)
+    sys.exit(1)
+if not unchanged:
+    print(f"FAIL {label}: the notebook changed while it ran (its bytes differ from the package's)")
+    sys.exit(1)
+print(f"ok   {label} ({through}, unchanged, {seconds:.0f}s)")
+PY
+    ai_rc=$?
+    if [ "$ai_rc" -eq 0 ]; then
+        echo "PASS the AI Lab notebook ran as the connector ships it"
+    else
+        echo "FAIL (exit $ai_rc): the AI Lab notebook, see above" >&2
+        [ "$rc" -eq 0 ] && rc="$ai_rc"
+    fi
 fi
 exit "$rc"
