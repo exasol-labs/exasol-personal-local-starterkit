@@ -32,19 +32,38 @@ def _load():
     global _model
     if _model is None:
         if not os.path.isfile(MODEL_PATH):
-            raise RuntimeError(MODEL_PATH + " is not visible to this UDF: put the file with exakit model put "
-                               "and use the path it printed (exakit model list shows what is there)")
+            raise RuntimeError(MODEL_PATH + ": file missing in the UDF bucket directory; run exakit model put or exakit model list")
         lowered = MODEL_PATH.lower()
-        if lowered.endswith(".onnx"):
-            import onnxruntime
-            _model = onnxruntime.InferenceSession(MODEL_PATH, providers=["CPUExecutionProvider"])
-        elif lowered.endswith(".joblib"):
-            import joblib
-            _model = joblib.load(MODEL_PATH)
-        else:
-            import pickle
-            with open(MODEL_PATH, "rb") as handle:
-                _model = pickle.load(handle)
+        try:
+            if lowered.endswith(".onnx"):
+                import onnxruntime
+                _model = onnxruntime.InferenceSession(MODEL_PATH, providers=["CPUExecutionProvider"])
+            elif lowered.endswith(".joblib"):
+                import joblib
+                _model = joblib.load(MODEL_PATH)
+            else:
+                import pickle
+                with open(MODEL_PATH, "rb") as handle:
+                    _model = pickle.load(handle)
+        except Exception as error:
+            import json
+            import importlib.metadata
+            from pathlib import Path
+            sidecar = Path(MODEL_PATH + ".provenance.json")
+            try:
+                source = json.loads(sidecar.read_text(encoding="utf-8")) if sidecar.is_file() else {}
+            except Exception:
+                source = {}
+            try:
+                runtime_version = importlib.metadata.version("scikit-learn")
+            except Exception:
+                runtime_version = "unknown"
+            origin_version = source.get("scikit-learn") or "unknown"
+            cause = str(error).splitlines()[0][:300]
+            raise RuntimeError(MODEL_PATH + ": cannot load model (" + cause + "); pickled with scikit-learn "
+                               + origin_version + ", container has " + runtime_version) from None
+        if not hasattr(_model, "get_inputs") and not hasattr(_model, "predict"):
+            raise RuntimeError(MODEL_PATH + ": loaded object is not a scikit-learn estimator")
     return _model
 
 

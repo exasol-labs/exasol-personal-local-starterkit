@@ -883,18 +883,19 @@ function Invoke-CmdModel {
     if ($CmdArgs.Count -gt 1) { $rest = @($CmdArgs[1..($CmdArgs.Count - 1)]) }
     # One page per command: Show-ExakitHelpCommand renders the first match only.
     if ($sub -in @("--help", "-h")) {
-        foreach ($each in @("put", "list", "template")) { Show-ExakitHelpCommand -Name "exakit model $each" | Out-Null }
+        foreach ($each in @("put", "list", "rm", "template")) { Show-ExakitHelpCommand -Name "exakit model $each" | Out-Null }
         return
     }
-    if ($sub -in @("put", "list", "template") -and ($rest -contains "--help" -or $rest -contains "-h")) {
+    if ($sub -in @("put", "list", "rm", "template") -and ($rest -contains "--help" -or $rest -contains "-h")) {
         Show-ExakitHelpCommand -Name "exakit model $sub" | Out-Null; return
     }
     switch ($sub) {
         "put"      { Invoke-CmdModelPut -CmdArgs $rest }
         "list"     { Invoke-CmdModelList -CmdArgs $rest }
+        "rm"       { Invoke-CmdModelRm -CmdArgs $rest }
         "template" { Invoke-CmdModelTemplate -CmdArgs $rest }
-        ""         { Deny-ExakitInput "Name what to do: exakit model put <file> | exakit model list | exakit model template (exakit model --help)." }
-        default    { Deny-ExakitInput "Unknown model command '$sub' (supported: put, list, template)." }
+        ""         { Deny-ExakitInput "Name what to do: exakit model put <file> | exakit model list | exakit model rm <name> | exakit model template (exakit model --help)." }
+        default    { Deny-ExakitInput "Unknown model command '$sub' (supported: put, list, rm, template)." }
     }
 }
 
@@ -916,6 +917,7 @@ function Invoke-CmdModelPut {
     $result = Invoke-UdfTool -Script "model_tool.py" -NoConnection -StdIn (Get-UdfModelRecord) `
         -ToolArgs @("put", (Resolve-Path $file).Path, $bucket.Dir, $bucket.UdfRoot, $replaceArg)
     if ($result[0] -eq 5) { Exit-UdfModel -Code 5 -Message $result[2] -Remedy "exakit model put $file --replace" }
+    if ($result[0] -eq 6) { Exit-UdfModel -Code 6 -Message $result[2] }
     if ($result[0] -eq 2) { Deny-ExakitInput $result[2] }
     if ($result[0] -ne 0) { Fail "Could not put $file into the bucket directory: $($result[2])" }
     $lines = @($result[1])
@@ -929,6 +931,29 @@ function Invoke-CmdModelPut {
     else { Ok "Copied $($answer.name) into the bucket directory: $dest" }
     Info "sha256 $($answer.sha256), $($answer.size) bytes, recorded"
     Info "A UDF reads it as: $($answer.path)"
+    if ($answer.warning) { Info "Warning: $($answer.warning)" }
+}
+
+function Invoke-CmdModelRm {
+    param([string[]]$CmdArgs = @())
+    $name = ""; $json = $false
+    foreach ($arg in $CmdArgs) {
+        if ($arg -in @("--json", "-j")) { $json = $true; $script:ExakitRefusalJson = $true }
+        elseif ($arg.StartsWith("-")) { Deny-ExakitInput "Unknown option '$arg' for model rm (supported: --json)." }
+        elseif ($name) { Deny-ExakitInput "Name one model: exakit model rm <name>" }
+        else { $name = $arg }
+    }
+    if (-not $name) { Deny-ExakitInput "Name the model: exakit model rm <name>" }
+    $bucket = Assert-UdfModelReady
+    $result = Invoke-UdfTool -Script "model_tool.py" -NoConnection -StdIn (Get-UdfModelRecord) `
+        -ToolArgs @("rm", $name, $bucket.Dir, $bucket.UdfRoot)
+    if ($result[0] -eq 5) { Exit-UdfModel -Code 5 -Message $result[2] }
+    if ($result[0] -eq 2) { Deny-ExakitInput $result[2] }
+    if ($result[0] -ne 0) { Fail "Could not remove $name`: $($result[2])" }
+    $lines = @($result[1])
+    Set-ExakitManifestValue "components.udf_devkit.models" ($lines[1] | ConvertFrom-Json)
+    if ($json) { Write-Output $lines[0] }
+    else { Ok "Removed $name from the bucket directory and the kit's record" }
 }
 
 function Invoke-CmdModelList {

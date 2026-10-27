@@ -174,6 +174,26 @@ class UdfBodyTest(unittest.TestCase):
             run_udf(render.render(**GOOD), Path("/buckets/none/models/x.pkl"), [{"category": "A", "doc_text": "t"}])
         self.assertIn("exakit model put", str(caught.exception))
 
+    def test_unreadable_pickle_names_bucket_path_and_versions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            model_file = Path(tmp, "bad.pkl")
+            model_file.write_bytes(b"not a pickle")
+            Path(str(model_file) + ".provenance.json").write_text('{"scikit-learn":"1.9.0"}')
+            with self.assertRaises(RuntimeError) as caught:
+                run_udf(render.render(**GOOD), model_file, [{"category": "A", "doc_text": "t"}])
+            message = str(caught.exception)
+            self.assertIn(str(model_file), message)
+            self.assertIn("pickled with scikit-learn 1.9.0", message)
+            self.assertIn("container has", message)
+
+    def test_non_estimator_is_named(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            model_file = Path(tmp, "list.pkl")
+            model_file.write_bytes(pickle.dumps([1, 2, 3]))
+            with self.assertRaises(RuntimeError) as caught:
+                run_udf(render.render(**GOOD), model_file, [{"category": "A", "doc_text": "t"}])
+            self.assertIn("not a scikit-learn estimator", str(caught.exception))
+
     def test_an_onnx_file_is_scored_through_onnxruntime(self):
         seen = {}
 
@@ -264,7 +284,7 @@ class NotebookTest(unittest.TestCase):
         commands = {name for arm in re.findall(r"^    ([a-z0-9|-]+)\)", dispatch, flags=re.M) for name in arm.split("|")}
         module = (ROOT / "setup" / "lib" / "udf-devkit.sh").read_text(encoding="utf-8")
         model_subs = set(re.findall(r"^_cmd_model_([a-z]+)\(\)", module, flags=re.M))
-        self.assertEqual(model_subs, {"put", "list", "template"})
+        self.assertEqual(model_subs, {"put", "list", "rm", "template"})
         named = re.findall(r"`exakit ([a-z][a-z-]*)(?: ([a-z][a-z-]*))?", self.text)
         for node in ast.walk(ast.parse(self.text)):
             if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "exakit":

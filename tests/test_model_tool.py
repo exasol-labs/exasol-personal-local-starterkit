@@ -47,8 +47,10 @@ class ModelToolTest(unittest.TestCase):
         action, answer, record = out.splitlines()
         self.assertEqual(action, "copied")
         self.assertEqual(json.loads(answer), {"name": "churn.pkl", "path": f"{ROOT_UDF}/models/churn.pkl",
-                                              "sha256": model_tool.digest(self.model)[0], "size": 3, "replaced": False})
-        self.assertEqual(sorted(json.loads(record)["churn.pkl"]), ["path", "put_at", "sha256", "size"])
+                                              "sha256": model_tool.digest(self.model)[0], "size": 3, "replaced": False,
+                                              "trusted_origin": False,
+                                              "warning": "Only load pickle or joblib models from a source you trust."})
+        self.assertEqual(sorted(json.loads(record)["churn.pkl"]), ["path", "provenance", "put_at", "sha256", "size"])
         self.assertEqual((self.bucket / "models" / "churn.pkl").read_bytes(), b"one")
 
     def test_other_records_are_kept(self):
@@ -106,6 +108,24 @@ class ModelToolTest(unittest.TestCase):
     def test_unknown_usage_exits_2(self):
         self.assertEqual(run("frob")[0], 2)
         self.assertEqual(run("put", "x")[0], 2)
+
+    def test_matching_provenance_and_remove(self):
+        sidecar = Path(str(self.model) + ".provenance.json")
+        sidecar.write_text(json.dumps({"sha256": model_tool.digest(self.model)[0], "python": "3.12", "scikit-learn": "1.9.0"}))
+        _, out, _ = self.put(self.model)
+        self.assertTrue(json.loads(out.splitlines()[1])["trusted_origin"])
+        record = out.splitlines()[2]
+        code, out, err = run("rm", "churn.pkl", str(self.bucket), ROOT_UDF, stdin=record)
+        self.assertEqual((code, err), (0, ""))
+        self.assertFalse((self.bucket / "models" / "churn.pkl").exists())
+        self.assertEqual(json.loads(out.splitlines()[1]), {})
+
+    def test_size_limit_before_copy(self):
+        with mock.patch.object(model_tool, "MAX_MODEL_BYTES", 2):
+            code, _, err = self.put(self.model)
+        self.assertEqual(code, 6)
+        self.assertIn("500 MB", err)
+        self.assertFalse((self.bucket / "models" / "churn.pkl").exists())
 
 
 if __name__ == "__main__":

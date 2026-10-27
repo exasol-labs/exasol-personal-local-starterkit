@@ -23,14 +23,15 @@ import hashlib
 import json
 import os
 import re
-import shutil
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 MODELS = "models"                                  # the folder inside the bucket every model lands in
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$")
 _PART = ".part"                                    # a copy in progress; never listed, never a model
+MAX_MODEL_BYTES = 500_000_000
 
 
 class Refused(ValueError):
@@ -43,6 +44,10 @@ class NotConfirmed(Refused):
     """A different file of the same name is there and --replace was not given. Exit 5, like every unconfirmed step."""
 
     code = 5
+
+
+class TooLarge(Refused):
+    code = 6
 
 
 def model_name(source: str) -> str:
@@ -82,11 +87,24 @@ def put(source: str, bucket_dir: str, udf_root: str, replace: bool, record: dict
     src = Path(source).expanduser()
     if not src.is_file():
         raise Refused(f"{source} is not a file.")
+    if src.stat().st_size > MAX_MODEL_BYTES:
+        raise TooLarge(f"{source} exceeds the 500 MB model limit; nothing was copied.")
     name = model_name(str(src))
     folder = Path(bucket_dir) / MODELS
     dest = folder / name
     path = f"{udf_root.rstrip('/')}/{MODELS}/{name}"
     sha, size = digest(src)
+    if size > MAX_MODEL_BYTES:
+        raise TooLarge(f"{source} exceeds the 500 MB model limit; nothing was copied.")
+    provenance_file = Path(str(src) + ".provenance.json")
+    provenance = None
+    if provenance_file.is_file():
+        try:
+            candidate = json.loads(provenance_file.read_text(encoding="utf-8"))
+            if isinstance(candidate, dict) and candidate.get("sha256") == sha:
+                provenance = candidate
+        except (OSError, ValueError):
+            pass
     action = "copied"
     if dest.is_file():
         there, _ = digest(dest)
@@ -99,22 +117,77 @@ def put(source: str, bucket_dir: str, udf_root: str, replace: bool, record: dict
             action = "replaced"
     if action != "unchanged":
         folder.mkdir(parents=True, exist_ok=True)
-        part = dest.with_name(dest.name + _PART)
+        part = None
         try:
-            shutil.copyfile(src, part)
+            with tempfile.NamedTemporaryFile(prefix="." + name + _PART + "-", dir=folder, delete=False) as output:
+                part = Path(output.name)
+                with src.open("rb") as source_file:
+                    for block in iter(lambda: source_file.read(1 << 20), b""):
+                        output.write(block)
+                output.flush()
+                os.fsync(output.fileno())
+            if digest(part)[0] != sha:
+                raise OSError(f"the copy at {part} does not match {source}")
             os.replace(part, dest)
+            if os.name != "nt":
+                directory_fd = os.open(folder, os.O_RDONLY)
+                try:
+                    os.fsync(directory_fd)
+                finally:
+                    os.close(directory_fd)
         finally:
-            if part.exists():
+            if part is not None and part.exists():
                 part.unlink()
         if digest(dest)[0] != sha:
             raise OSError(f"the copy at {dest} does not match {source}; put it again")
+    dest_sidecar = Path(str(dest) + ".provenance.json")
+    if provenance is not None:
+        folder.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(mode="w", prefix="." + name + _PART + "-", dir=folder,
+                                         encoding="utf-8", delete=False) as output:
+            sidecar_part = Path(output.name)
+            json.dump({key: provenance.get(key) for key in
+                       ("sha256", "run_id", "workflow_id", "python", "scikit-learn")}, output)
+            output.flush()
+            os.fsync(output.fileno())
+        try:
+            os.replace(sidecar_part, dest_sidecar)
+        finally:
+            if sidecar_part.exists():
+                sidecar_part.unlink()
+    elif dest_sidecar.exists():
+        dest_sidecar.unlink()
     previous = record.get(name) if isinstance(record.get(name), dict) else {}
     updated = dict(record)
-    updated[name] = {"sha256": sha, "size": size, "path": path,
+    updated[name] = {"sha256": sha, "size": size, "path": path, "provenance": provenance,
                      "put_at": previous.get("put_at") if action == "unchanged" and previous.get("sha256") == sha
                      else _now()}
-    answer = {"name": name, "path": path, "sha256": sha, "size": size, "replaced": action == "replaced"}
+    answer = {"name": name, "path": path, "sha256": sha, "size": size, "replaced": action == "replaced",
+              "trusted_origin": provenance is not None,
+              "warning": None if provenance else "Only load pickle or joblib models from a source you trust."}
     return action, answer, updated
+
+
+def remove(name: str, bucket_dir: str, udf_root: str, record: dict) -> tuple[dict, dict]:
+    """Remove one recorded model, refusing symlinks and unrecorded files."""
+    if model_name(name) != name:
+        raise Refused("Name one model file, without a directory.")
+    dest = Path(bucket_dir) / MODELS / name
+    if name not in record:
+        raise Refused(f"{name} is not recorded by exakit model put.")
+    if dest.is_symlink():
+        raise Refused(f"{name} is a symlink; remove it manually after inspection.")
+    if dest.is_file():
+        actual, _ = digest(dest)
+        if actual != record[name].get("sha256"):
+            raise NotConfirmed(f"{name} changed since it was put; inspect it before removal.")
+        dest.unlink()
+    sidecar = Path(str(dest) + ".provenance.json")
+    if sidecar.is_file():
+        sidecar.unlink()
+    updated = dict(record)
+    updated.pop(name)
+    return {"name": name, "path": f"{udf_root.rstrip('/')}/{MODELS}/{name}", "removed": True}, updated
 
 
 def listing(bucket_dir: str, udf_root: str, record: dict) -> dict:
@@ -122,7 +195,8 @@ def listing(bucket_dir: str, udf_root: str, record: dict) -> dict:
     folder = Path(bucket_dir) / MODELS
     models = []
     if folder.is_dir():
-        for path in sorted(p for p in folder.rglob("*") if p.is_file() and not p.name.endswith(_PART)):
+        for path in sorted(p for p in folder.rglob("*") if p.is_file() and _PART not in p.name
+                           and not p.name.endswith(".provenance.json")):
             name = path.relative_to(folder).as_posix()
             sha, size = digest(path)
             known = record.get(name) if isinstance(record.get(name), dict) else None
@@ -146,6 +220,11 @@ def main(argv: list[str]) -> int:
             return 0
         if command == "list" and len(args) == 2:
             print(json.dumps(listing(args[0], args[1], read_record(sys.stdin.read()))))
+            return 0
+        if command == "rm" and len(args) == 3:
+            answer, updated = remove(args[0], args[1], args[2], read_record(sys.stdin.read()))
+            print(json.dumps(answer))
+            print(json.dumps(updated, sort_keys=True))
             return 0
     except Refused as err:
         print(str(err), file=sys.stderr)

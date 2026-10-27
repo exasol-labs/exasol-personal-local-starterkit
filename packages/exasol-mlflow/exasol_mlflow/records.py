@@ -149,6 +149,21 @@ def log_record(mlflow, doc: dict[str, Any], model_bytes: bytes | None, stack=Non
                 model = Path(folder) / MODEL_FILE
                 model.write_bytes(model_bytes)
                 mlflow.log_artifact(str(model), artifact_path="model")
+                versions_text = doc["tags"].get("exasol.package_versions", "{}")
+                try:
+                    versions = json.loads(versions_text)
+                except (TypeError, ValueError):
+                    versions = {}
+                provenance = {
+                    "sha256": hashlib.sha256(model_bytes).hexdigest(),
+                    "run_id": run.info.run_id,
+                    "workflow_id": doc["tags"].get("exasol.workflow_id"),
+                    "python": versions.get("python"),
+                    "scikit-learn": versions.get("scikit-learn"),
+                }
+                sidecar = Path(folder) / (MODEL_FILE + ".provenance.json")
+                sidecar.write_text(json.dumps(provenance, sort_keys=True), encoding="utf-8")
+                mlflow.log_artifact(str(sidecar), artifact_path="model")
         extras = doc.get("extras") or {}
         if isinstance(extras.get("coefficients"), dict):
             mlflow.log_dict(extras["coefficients"], COEFFICIENTS_FILE)

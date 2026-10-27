@@ -844,13 +844,13 @@ cmd_model() {
     [ $# -gt 0 ] && shift
     case "$_cm_sub" in
         --help|-h) exakit_help_render command "exakit model" ;;
-        put|list|template)
+        put|list|rm|template)
             case " $* " in
                 *" --help "*|*" -h "*) exakit_help_render command "exakit model $_cm_sub"; return $? ;;
             esac
             "_cmd_model_$_cm_sub" "$@" ;;
-        "") reject "Name what to do: exakit model put <file> | exakit model list | exakit model template (exakit model --help)." ;;
-        *) reject "Unknown model command '$_cm_sub' (supported: put, list, template)." ;;
+        "") reject "Name what to do: exakit model put <file> | exakit model list | exakit model rm <name> | exakit model template (exakit model --help)." ;;
+        *) reject "Unknown model command '$_cm_sub' (supported: put, list, rm, template)." ;;
     esac
 }
 
@@ -875,6 +875,7 @@ _cmd_model_put() {
     case "$_cmp_rc" in
         0) ;;
         5) _model_refuse 5 "exakit model put $_cmp_file --replace" "$_cmp_why" ;;
+        6) _model_refuse 6 "" "$_cmp_why" ;;
         2) reject "$_cmp_why" ;;
         *) die "Could not put $_cmp_file into the bucket directory: ${_cmp_why:-no reason given}" ;;
     esac
@@ -896,6 +897,36 @@ print("\n".join(str(a[k]) for k in ("name", "path", "sha256", "size")))')"
     esac
     info "sha256 $(printf '%s\n' "$_cmp_fields" | sed -n 3p), $(printf '%s\n' "$_cmp_fields" | sed -n 4p) bytes, recorded"
     info "A UDF reads it as: $(printf '%s\n' "$_cmp_fields" | sed -n 2p)"
+    printf '%s\n' "$_cmp_answer" | run_python_any -c 'import json,sys; w=json.load(sys.stdin).get("warning"); print("  Warning: "+w if w else "")' | sed '/^$/d'
+}
+
+_cmd_model_rm() {
+    _cmr_name=""; _cmr_json=0
+    for _cmr_arg in "$@"; do
+        case "$_cmr_arg" in
+            --json|-j) _cmr_json=1; EXAKIT_REFUSAL_JSON=1 ;;
+            -*) reject "Unknown option '$_cmr_arg' for model rm (supported: --json)." ;;
+            *) [ -z "$_cmr_name" ] || reject "Name one model: exakit model rm <name>"; _cmr_name="$_cmr_arg" ;;
+        esac
+    done
+    [ -n "$_cmr_name" ] || reject "Name the model: exakit model rm <name>"
+    _model_ready
+    _cmr_err="$EXAKIT_HOME/.model-rm.err"
+    _cmr_out="$(_model_record | _model_tool rm "$_cmr_name" "$UDF_BUCKET_DIR" "$UDF_BUCKET_UDF_ROOT" 2>"$_cmr_err")"
+    _cmr_rc=$?
+    _cmr_why="$(cat "$_cmr_err" 2>/dev/null)"; rm -f "$_cmr_err"
+    case "$_cmr_rc" in
+        0) ;;
+        5) _model_refuse 5 "" "$_cmr_why" ;;
+        2) reject "$_cmr_why" ;;
+        *) die "Could not remove $_cmr_name: ${_cmr_why:-no reason given}" ;;
+    esac
+    manifest_set components.udf_devkit.models "$(printf '%s\n' "$_cmr_out" | sed -n 2p)"
+    if [ "$_cmr_json" = 1 ]; then
+        exakit_json_pretty "$(printf '%s\n' "$_cmr_out" | sed -n 1p)"
+    else
+        ok "Removed $_cmr_name from the bucket directory and the kit's record"
+    fi
 }
 
 # exakit model list [--json]

@@ -96,14 +96,14 @@ check "the file is in the bucket under models/" "weights-v1" "$(cat "$BUCKET/mod
 contains "the UDF path is printed" "/buckets/bfsdefault/default/models/churn.pkl" "$out"
 SHA1="$(python3 -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$WORK/churn.pkl")"
 check "the digest is recorded" "$SHA1" "$(record | jq_py 'd["churn.pkl"]["sha256"]')"
-check "with the size, the path and the time" "['path', 'put_at', 'sha256', 'size']" "$(record | jq_py 'sorted(d["churn.pkl"])')"
+check "with the size, path, provenance and time" "['path', 'provenance', 'put_at', 'sha256', 'size']" "$(record | jq_py 'sorted(d["churn.pkl"])')"
 check "no copy in progress left behind" "" "$(ls "$BUCKET/models" | grep '\.part$' || true)"
 
 echo "the same file again changes nothing:"
 put_at="$(record | jq_py 'd["churn.pkl"]["put_at"]')"
 out="$(cli model put "$WORK/churn.pkl" --json 2>&1)"; rc=$?
 check "exit 0" "0" "$rc"
-check "--json is exactly name, path, sha256, size, replaced" "['name', 'path', 'replaced', 'sha256', 'size']" "$(printf '%s' "$out" | jq_py 'sorted(d)')"
+check "--json includes origin status" "['name', 'path', 'replaced', 'sha256', 'size', 'trusted_origin', 'warning']" "$(printf '%s' "$out" | jq_py 'sorted(d)')"
 check "not replaced" "False" "$(printf '%s' "$out" | jq_py 'd["replaced"]')"
 check "the record keeps its time" "$put_at" "$(record | jq_py 'd["churn.pkl"]["put_at"]')"
 
@@ -195,6 +195,15 @@ out="$(cli model put --help 2>&1)"
 contains "model put --help shows put" "--replace" "$out"
 lacks "and only put" "exakit model list" "$out"
 contains "the catalog lists the commands" "model put" "$(cli catalog model 2>&1)"
+
+echo "rm removes a recorded model:"
+printf 'disposable' > "$WORK/disposable.pkl"
+cli model put "$WORK/disposable.pkl" --json >/dev/null
+out="$(cli model rm disposable.pkl --json)"; rc=$?
+check "rm exit 0" "0" "$rc"
+check "rm JSON names the file" "disposable.pkl" "$(printf '%s' "$out" | jq_py 'd["name"]')"
+check "rm deletes the file" "no" "$([ -e "$BUCKET/models/disposable.pkl" ] && printf yes || printf no)"
+check "rm deletes its record" "False" "$(record | jq_py '"disposable.pkl" in d')"
 
 echo "udf-file and model share the bucket helper:"
 check "one resolver, used by both" "2" "$(grep -c 'udf_bucket_locate ||' "$ROOT/setup/lib/udf-devkit.sh")"

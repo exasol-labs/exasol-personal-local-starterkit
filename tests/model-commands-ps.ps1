@@ -68,11 +68,11 @@ try {
     $answer = (Invoke-CmdModelPut -CmdArgs @($v1, "--json")) | ConvertFrom-Json
     Check "the file is in the bucket under models/" "weights-v1" (Get-Content -Raw (Join-Path $models "churn.pkl"))
     Check "the UDF path" "/buckets/bfsdefault/default/models/churn.pkl" $answer.path
-    Check "--json is exactly name, path, sha256, size, replaced" "name path replaced sha256 size" (($answer.PSObject.Properties.Name | Sort-Object) -join " ")
+    Check "--json includes origin status" "name path replaced sha256 size trusted_origin warning" (($answer.PSObject.Properties.Name | Sort-Object) -join " ")
     $sha1 = Get-Sha $v1
     Check "the digest" $sha1 $answer.sha256
     Check "the digest is recorded" $sha1 (Get-Record).'churn.pkl'.sha256
-    Check "with the size, the path and the time" "path put_at sha256 size" (((Get-Record).'churn.pkl'.PSObject.Properties.Name | Sort-Object) -join " ")
+    Check "with the size, path, provenance and time" "path provenance put_at sha256 size" (((Get-Record).'churn.pkl'.PSObject.Properties.Name | Sort-Object) -join " ")
 
     Write-Host "the same file again changes nothing:"
     $putAt = (Get-Record).'churn.pkl'.put_at
@@ -172,6 +172,13 @@ try {
         $run = Invoke-Cli model list --json
         Check "list --json: exit 0" "0" $run[0]
         Check "with the UDF root" "/buckets/bfsdefault/default" (($run[1] | ConvertFrom-Json).udf_root)
+        $disposable = Join-Path $work "disposable.pkl"
+        Set-Content -NoNewline -Path $disposable -Value "disposable"
+        $null = Invoke-Cli model put $disposable --json
+        $run = Invoke-Cli model rm disposable.pkl --json
+        Check "rm exit 0" "0" $run[0]
+        Check "rm JSON names the file" "disposable.pkl" (($run[1] | ConvertFrom-Json).name)
+        Check "rm deletes the file" "False" (Test-Path (Join-Path $models "disposable.pkl"))
         Check "an unknown model command: exit 2" "2" (Invoke-Cli model frob)[0]
         Contains "model --help shows the pages" "exakit model template" (Invoke-Cli model --help)[1]
         $env:EXAKIT_PERSONAL_DEPLOY_DIR = Join-Path $work "none"

@@ -92,13 +92,14 @@
       "command": "exakit model put",
       "options": "<file> [--replace] [--json]",
       "summary": "Bring a model file into the bucket directory and print the /buckets path a UDF reads.",
-      "description": "Copies the file to models/<its name> in the deployment's bucket directory (local/runtime/exa/bucketfs/bfsdefault/default/ on this machine, /buckets/bfsdefault/default/ inside the database), records its sha256, size and time in the kit's manifest (components.udf_devkit.models), and prints the path the scoring UDF opens. A file of the same name with a different digest is not overwritten unless --replace is given; the same file again changes nothing. Nothing is uploaded over a network and no credential is read, printed or stored: a local deployment has no BucketFS password. --json prints one object: name, path, sha256, size, replaced.",
+      "description": "Copies at most 500 MB to models/<its name> with a unique temporary file, fsync and atomic rename. Records sha256, size, time and a matching .provenance.json sidecar in the kit's manifest. A file of the same name with a different digest requires --replace. A pickle or joblib file without matching provenance gets a trust warning. --json includes name, path, sha256, size, replaced, trusted_origin and warning. No credential is read or stored.",
       "exit_codes": {
         "0": "copied, replaced, or already there with the same digest",
         "2": "bad input: no file, not a file, a name the bucket cannot hold, an unknown option",
         "3": "no deployment to put the file into (exakit status)",
         "4": "the UDF dev kit is not installed (exakit marketplace udf-devkit)",
-        "5": "a different file of that name is there and --replace was not given; nothing was copied"
+        "5": "a different file of that name is there and --replace was not given; nothing was copied",
+        "6": "the file exceeds 500 MB; nothing was copied"
       },
       "examples": [
         "exakit model put churn.pkl",
@@ -119,6 +120,16 @@
       "examples": [
         "exakit model list",
         "exakit model list --json"
+      ]
+    },
+    {
+      "command": "exakit model rm",
+      "options": "<name> [--json]",
+      "summary": "Remove a recorded model and its provenance sidecar from the bucket directory.",
+      "description": "Refuses a model whose digest changed since it was put, or a symlink. Removes the kit's record with the file. --json prints the name, path and removed status.",
+      "examples": [
+        "exakit model rm churn.pkl",
+        "exakit model rm churn.pkl --json"
       ]
     },
     {
