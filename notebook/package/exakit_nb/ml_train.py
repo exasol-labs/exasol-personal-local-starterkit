@@ -1,7 +1,8 @@
 """Prepare the ML Engineer's in-database training from an approved, fresh handoff (ML-3, design 7).
 
+    CONTAINER = nb.ml_train.udf_container()                        # the container alias training runs on (PYTHON3_ML, else PYTHON3)
     handoff = nb.ml_train.training_handoff(conn, ds)               # explore's file (stale: refused), else built from the descriptor
-    plan = nb.prepare_training(conn, ds, handoff, seed=0)          # refuses a stale handoff or an unasked-for random split
+    plan = nb.prepare_training(conn, ds, handoff, container=CONTAINER, seed=0)   # refuses a stale handoff or an unasked-for random split
     conn.execute(plan.create_script); run.execute(plan.training_sql)
     path = nb.ml_train.export_coefficients(run, handoff)           # <id>-v<n>.coefficients.json beside the handoff
 
@@ -24,12 +25,22 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 from urllib.request import url2pathname
 
-from ._kit import setting
+from ._kit import _home, setting
 from .dataset import Dataset
 from .handoff import SPLITS, feature_view, handoff_from, handoff_is_stale, handoffs_dir, read_handoff, training_sql
 
-__all__ = ["COEFFICIENTS_FILE", "TrainingPlan", "coefficients_of", "coefficients_path", "export_coefficients",
-           "prepare_training", "training_handoff", "write_coefficients"]
+__all__ = ["COEFFICIENTS_FILE", "CONTAINER_VARIABLE", "PYTHON_CONTAINERS", "TrainingPlan", "coefficients_of",
+           "coefficients_path", "container_fix", "export_coefficients", "installed_containers", "prepare_training",
+           "training_handoff", "udf_container", "write_coefficients"]
+
+# The Python container a training UDF runs on, by its alias in the database. The udf-devkit add-on installs two: the
+# kit's pre-built one from the container matrix (exakit udf-use default; alias PYTHON3_ML, the packages pinned) and the
+# official one (exakit udf-setup; alias PYTHON3). Preferred first.
+CONTAINER_VARIABLE = "EXAKIT_UDF_CONTAINER"               # set to an alias: it wins over the manifest
+PYTHON_CONTAINERS = ("PYTHON3_ML", "PYTHON3")
+CONTAINER_INSTALLS = {"PYTHON3_ML": "exakit udf-use default", "PYTHON3": "exakit udf-setup"}
+ADDON_NOTE = "the udf-devkit add-on: exakit marketplace udf-devkit"
+_ALIAS = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 
 COEFFICIENTS_FILE = "coefficients.json"                 # the MLflow artefact exasol_mlflow logs from the UDF's extras
 COEFFICIENTS_SUFFIX = ".coefficients.json"              # <id>-v<n>.coefficients.json in the handoffs folder (02_rust_score reads it)
@@ -72,6 +83,74 @@ def _nonconstant(conn, view: str, features: list[str]) -> list[str]:
     if not kept:
         raise ValueError(f"Every feature in {view} is constant; review the descriptor or choose another dataset.")
     return kept
+
+
+# --- which container trains (G2 C2: the check and its fix must name the same alias) ----------------------------------
+
+def container_fix(alias: str) -> str:
+    """The command that installs the container behind ``alias``: udf-use default for the pre-built PYTHON3_ML, udf-setup
+    for the official PYTHON3; for any other alias, the two ways to install one under it."""
+    name = str(alias).upper()
+    if name in CONTAINER_INSTALLS:
+        kind = "pre-built" if name == "PYTHON3_ML" else "official"
+        return f"{CONTAINER_INSTALLS[name]} installs the {kind} {name} container ({ADDON_NOTE})."
+    return (f"exakit udf-use <tarball> installs a container of yours under the alias {name}; the kit's are PYTHON3_ML "
+            f"(exakit udf-use default) and PYTHON3 (exakit udf-setup): set CONTAINER (or {CONTAINER_VARIABLE}) to the one "
+            "to use.")
+
+
+def _udf_devkit_record() -> dict[str, Any] | None:
+    """``components.udf_devkit`` of the kit's manifest; None when there is no kit here or the add-on never recorded."""
+    home = _home()
+    if home is None:
+        return None
+    try:
+        doc = json.loads((home / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    record = (doc.get("components") or {}).get("udf_devkit") if isinstance(doc, dict) else None
+    return record if isinstance(record, dict) else None
+
+
+def installed_containers(record: dict[str, Any] | None = None) -> list[str]:
+    """The container aliases the kit's manifest records as installed (``components.udf_devkit``, written by exakit
+    udf-setup / udf-use): the keys of ``containers`` (PYTHON3_ML, RUST, a tarball of your own under its alias) and
+    PYTHON3 when the official container was installed - udf-setup records the language (``languages`` names python),
+    not an alias; a record from before the container matrix (no ``languages``) that was validated is the official
+    container too. ``record`` stands in for the manifest's block (tests, a copy you hold); [] without a record."""
+    if record is None:
+        record = _udf_devkit_record()
+    if not isinstance(record, dict):
+        return []
+    containers = record.get("containers")
+    found = [str(alias).upper() for alias in containers] if isinstance(containers, dict) else []
+    languages = record.get("languages")
+    official = ("python" in str(languages).lower().split(",")) if languages is not None else bool(record.get("validated"))
+    if official and "PYTHON3" not in found:
+        found.append("PYTHON3")
+    return found
+
+
+def udf_container(record: dict[str, Any] | None = None, *, prefer: tuple[str, ...] = PYTHON_CONTAINERS) -> str:
+    """The alias of the Python container the ML notebooks train on (their one CONTAINER assignment): ``EXAKIT_UDF_CONTAINER``
+    when set (an alias, upper-cased), else the first of ``prefer`` (PYTHON3_ML, then PYTHON3) that the kit's manifest
+    records as installed. With none installed, a RuntimeError naming the fix - the notebook stops before a check or a
+    training UDF could fail on a container that is not there."""
+    override = os.environ.get(CONTAINER_VARIABLE, "").strip()
+    if override:
+        if not _ALIAS.fullmatch(override):
+            raise ValueError(f"{CONTAINER_VARIABLE}={override!r} is not a container alias (letters, digits and _, starting "
+                             "with a letter, such as PYTHON3_ML).")
+        return override.upper()
+    installed = installed_containers(record)
+    for alias in prefer:
+        if alias in installed:
+            return alias
+    have = ", ".join(installed) if installed else "none"
+    raise RuntimeError(f"No Python UDF container for training is installed (the kit's manifest records: {have}). Fix: "
+                       f"{CONTAINER_INSTALLS['PYTHON3_ML']} installs the pre-built PYTHON3_ML container, "
+                       f"{CONTAINER_INSTALLS['PYTHON3']} the official PYTHON3 ({ADDON_NOTE}); or set "
+                       f"{CONTAINER_VARIABLE} to the alias of a container you installed.")
 
 
 def training_handoff(conn, ds: Dataset, *, name: str | None = None, split: str | None = None) -> dict[str, Any]:
@@ -125,13 +204,21 @@ def _split_refusal(handoff: dict[str, Any], ds: Dataset) -> str | None:
 
 
 def prepare_training(conn, ds: Dataset, handoff: dict[str, Any], *, schema: str = "EXASOL_MLFLOW",
-                     name: str = "TRAIN_FROM_HANDOFF", seed: int = 0, C: float = 1.0,
+                     name: str = "TRAIN_FROM_HANDOFF", container: str | None = None, seed: int = 0, C: float = 1.0,
                      max_iter: int = 1000, model_dir: str | None = None) -> TrainingPlan:
     """Refuse stale input, create the view, drop constant features and render the UDF and training SELECT.
 
     The caller creates ``create_script`` then passes ``training_sql`` to exasol_mlflow.start_run().
-    ``model_dir`` is the UDF-visible /buckets directory; small models are returned inline.
+    ``container`` is the alias of the Python container the UDF runs on (the notebook's CONTAINER); None resolves it
+    with udf_container() - PYTHON3_ML before PYTHON3 from the kit's manifest, EXAKIT_UDF_CONTAINER first - and raises
+    with the fix when none is installed, before anything is written. ``model_dir`` is the UDF-visible /buckets
+    directory; small models are returned inline.
     """
+    if container is None:
+        container = udf_container()
+    elif not isinstance(container, str) or not _ALIAS.fullmatch(container.strip()):
+        raise ValueError(f"container={container!r} is not a container alias (such as PYTHON3_ML or PYTHON3).")
+    container = container.strip().upper()
     ds.require_approved("training")
     stale = handoff_is_stale(conn, handoff, ds)
     if stale:
@@ -148,7 +235,7 @@ def prepare_training(conn, ds: Dataset, handoff: dict[str, Any], *, schema: str 
     conn.execute(view["sql"])
     features = _nonconstant(conn, view["name"], [item["name"] for item in handoff["input_schema"]])
     render = _renderer()
-    options = {"schema": schema, "name": name, "features": features,
+    options = {"schema": schema, "name": name, "language": container, "features": features,
                "label": handoff["label"]["column"], "positive": handoff["label"]["positive"],
                "seed": seed, "C": C, "max_iter": max_iter}
     if model_dir is not None:
@@ -158,7 +245,7 @@ def prepare_training(conn, ds: Dataset, handoff: dict[str, Any], *, schema: str 
                               run_key=f"{ds.id}-v{ds.version}", label=handoff["label"]["column"], features=features)
     return TrainingPlan(view["name"], tuple(features), create, select,
                         {"C": C, "seed": seed, "max_iter": max_iter, "train_share": handoff["split"]["train_share"],
-                         "features": len(features)}, handoff)
+                         "features": len(features), "container": container}, handoff)
 
 
 # --- the coefficients beside the handoff (design 7: "and into the handoff dir") -------------------------------------

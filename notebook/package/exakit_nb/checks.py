@@ -70,19 +70,31 @@ def _reason(err: Exception) -> str:
     return str(message).splitlines()[0][:300] if message else type(err).__name__
 
 
-def check_container(conn, alias: str = "PYTHON3", packages: tuple[str, ...] = TRAINING_PACKAGES) -> bool:
-    """The container behind ``alias`` runs a smoke UDF, and it has every package training needs."""
+def check_container(conn, alias: str | None = None, packages: tuple[str, ...] = TRAINING_PACKAGES) -> bool:
+    """The container behind ``alias`` runs a smoke UDF, and it has every package training needs. The line names the
+    alias probed and the fix for that alias (PYTHON3_ML: exakit udf-use default; PYTHON3: exakit udf-setup), so the
+    fix installs the container the check looks at. ``alias`` None is the notebook's default, ml_train.udf_container():
+    PYTHON3_ML before PYTHON3 from the kit's manifest, EXAKIT_UDF_CONTAINER first; none installed is a FAIL line."""
+    from .ml_train import CONTAINER_INSTALLS, container_fix, udf_container
+
+    if alias is None:
+        try:
+            alias = udf_container()
+        except (RuntimeError, ValueError) as err:            # the message carries the fix
+            return _report("container", False, str(err))
     try:
         found = _probe(conn, alias, packages)
     except Exception as err:                                   # the database's own message says why
         reason = _reason(err)
-        return _report("container", False, f"the smoke UDF on {alias} did not run ({reason}).",
-                       "exakit udf-setup installs the Python container (the udf-devkit add-on: exakit marketplace udf-devkit).")
+        return _report("container", False, f"the smoke UDF on {alias} did not run ({reason}).", container_fix(alias))
     missing = [p for p in packages if found.get(p, "MISSING") == "MISSING"]
     versions = ", ".join(f"{p} {found[p]}" for p in packages if p not in missing)
     if missing:
-        return _report("container", False, f"Python {found.get('python', '?')} on {alias} lacks {', '.join(missing)}.",
-                       "exakit udf-use default (the pre-built container with them), or exakit udf-build <requirements.txt>.")
+        fix = (f"{CONTAINER_INSTALLS['PYTHON3_ML']} again (the pre-built container ships them)"
+               if alias.upper() == "PYTHON3_ML" else
+               f"{CONTAINER_INSTALLS['PYTHON3_ML']} installs the pre-built container with them as PYTHON3_ML "
+               "(then CONTAINER = \"PYTHON3_ML\")") + ", or exakit udf-build <requirements.txt>."
+        return _report("container", False, f"Python {found.get('python', '?')} on {alias} lacks {', '.join(missing)}.", fix)
     return _report("container", True, f"the smoke UDF answers on {alias}: Python {found.get('python', '?')}, {versions}.")
 
 

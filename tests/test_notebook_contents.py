@@ -194,6 +194,42 @@ class NotebookShapeTest(unittest.TestCase):
         for check in ("nb.check_container", "nb.check_mlflow", "nb.check_bucket"):
             self.assertEqual(sum(check in s for s in sources), 1, f"{check} in one cell of its own")
 
+    def test_the_ml_notebooks_set_the_container_alias_once_and_pass_it_on(self):
+        """G2 C2: one CONTAINER assignment near the top of each ML notebook, defaulting to the manifest's installed
+        alias (ml_train.udf_container: PYTHON3_ML before PYTHON3); the quickstart's container check probes that
+        alias and 01_train's plan creates the UDF on it, so the check's fix installs the container training uses."""
+        for name, user in (("00_quickstart.py", "nb.check_container(conn, alias=CONTAINER)"),
+                           ("01_train.py", "container=CONTAINER")):
+            with self.subTest(notebook=name):
+                cells = _built_cells(SOURCES / "ml-engineer" / name)
+                code = ["".join(c["source"]) for c in cells if c["cell_type"] == "code"]
+                assigned = [i for i, s in enumerate(code) if re.search(r"^CONTAINER = ", s, flags=re.M)]
+                self.assertEqual(len(assigned), 1, "one CONTAINER assignment")
+                self.assertLessEqual(assigned[0], 1, "near the top: the first or second code cell")
+                self.assertIn("CONTAINER = nb.ml_train.udf_container()", code[assigned[0]])
+                used = [i for i, s in enumerate(code) if user in s]
+                self.assertEqual(len(used), 1, f"{user} in one cell")
+                self.assertLess(assigned[0], used[0])
+                text = "".join(code)
+                self.assertNotIn("nb.check_container(conn)", text, "the check never falls back to a default alias here")
+                self.assertNotIn('"PYTHON3")', text.replace('"PYTHON3_ML"', ""), "no alias is hard-wired")
+                markdown = "".join("".join(c["source"]) for c in cells if c["cell_type"] == "markdown")
+                for needle in ("`PYTHON3_ML`", "`exakit udf-use default`", "`PYTHON3`", "`exakit udf-setup`", "`EXAKIT_UDF_CONTAINER`"):
+                    self.assertIn(needle, markdown, "the markdown names both aliases, their installers and the override")
+
+    def test_the_ml_quickstarts_first_query_guards_its_roles(self):
+        """AC-DS5.3 in the ML quickstart (T8b leftover): the first query falls back to the entity and leaves the label
+        count out, printing the reason, instead of raising on a missing category or label role."""
+        code = ["".join(c["source"]) for c in _built_cells(SOURCES / "ml-engineer" / "00_quickstart.py") if c["cell_type"] == "code"]
+        cell = next(s for s in code if "first_rows = nb.sql(" in s)
+        self.assertIn('BY = ds.col("category") if ds.has("category") else ds.col("entity")', cell)
+        self.assertIn("if ds.has(\"label\") else \"\"", cell)
+        self.assertIn('SUM({ds.col(\'label\')}) AS LABEL_1', cell)
+        self.assertIn("ds.missing", cell)
+        self.assertIn("skipped[role]", cell)
+        self.assertNotIn('SUM({ds.col("label")})', cell, "no unguarded label column")
+        self.assertNotIn('GROUP BY {ds.col("category")}', cell, "no unguarded category column")
+
     def test_the_quickstart_has_one_cell_per_way_data_comes_in(self):
         sources = ["".join(c["source"]) for c in _built_cells(SOURCES / "data-scientist" / "00_quickstart.py")]
         for loader in ("nb.load_sample(", "nb.load_own_file(", "nb.load_source("):

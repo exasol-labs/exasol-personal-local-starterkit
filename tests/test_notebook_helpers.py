@@ -663,16 +663,67 @@ class ChecksTest(unittest.TestCase):
 
     def test_the_container(self):
         good = [("python", "3.12.3"), ("scikit-learn", "1.7.2"), ("pandas", "2.2.3"), ("numpy", "2.1.0")]
-        ok, line = self.said(lambda: exakit_nb.check_container(self.ProbeConn(good)))
+        ok, line = self.said(lambda: exakit_nb.check_container(self.ProbeConn(good), alias="PYTHON3"))
         self.assertTrue(ok)
         self.assertTrue(line.startswith("ok   container:") and "scikit-learn 1.7.2" in line, line)
-        ok, line = self.said(lambda: exakit_nb.check_container(self.ProbeConn([("python", "3.12.3"), ("scikit-learn", "MISSING")])))
+        self.assertIn("answers on PYTHON3:", line, "the alias probed is named")
+        ok, line = self.said(lambda: exakit_nb.check_container(self.ProbeConn([("python", "3.12.3"), ("scikit-learn", "MISSING")]), alias="PYTHON3"))
         self.assertFalse(ok)
-        self.assertIn("lacks scikit-learn", line)
+        self.assertIn("on PYTHON3 lacks scikit-learn", line)
         self.assertIn("Fix: exakit udf-use default", line)
-        ok, line = self.said(lambda: exakit_nb.check_container(self.ProbeConn(fail="script language PYTHON3 not found")))
+        self.assertIn('CONTAINER = "PYTHON3_ML"', line, "the notebook must then switch its alias")
+        ok, line = self.said(lambda: exakit_nb.check_container(self.ProbeConn(fail="script language PYTHON3 not found"), alias="PYTHON3"))
         self.assertFalse(ok)
         self.assertIn("Fix: exakit udf-setup", line)
+
+    def test_the_container_fix_names_the_alias_it_probed(self):
+        """G2 C2: the fix installs the very alias the check probed - udf-use default for PYTHON3_ML, udf-setup for
+        PYTHON3 - and the CREATE SCRIPT goes to that alias."""
+        conn = self.ProbeConn(fail="script language PYTHON3_ML not found")
+        ok, line = self.said(lambda: exakit_nb.check_container(conn, alias="PYTHON3_ML"))
+        self.assertFalse(ok)
+        self.assertIn("the smoke UDF on PYTHON3_ML did not run", line)
+        self.assertIn("Fix: exakit udf-use default installs the pre-built PYTHON3_ML container", line)
+        self.assertNotIn("udf-setup", line)
+        self.assertTrue(any(s.startswith("CREATE OR REPLACE PYTHON3_ML SCALAR SCRIPT") for s in conn.statements))
+        ok, line = self.said(lambda: exakit_nb.check_container(self.ProbeConn(fail="not found"), alias="PYTHON3"))
+        self.assertIn("Fix: exakit udf-setup installs the official PYTHON3 container", line)
+        self.assertNotIn("udf-use", line)
+        ok, line = self.said(lambda: exakit_nb.check_container(self.ProbeConn(fail="not found"), alias="MY_SKLEARN"))
+        self.assertIn("on MY_SKLEARN did not run", line)
+        self.assertIn("Fix: exakit udf-use <tarball>", line)
+        ok, line = self.said(lambda: exakit_nb.check_container(self.ProbeConn([("python", "3.12.3"), ("numpy", "MISSING")]), alias="PYTHON3_ML"))
+        self.assertIn("on PYTHON3_ML lacks scikit-learn, pandas, numpy", line)
+        self.assertIn("Fix: exakit udf-use default again", line)
+
+    def test_without_an_alias_the_check_resolves_the_notebooks_default(self):
+        """alias None: ml_train.udf_container() - the override, else the manifest; none installed is a FAIL line with
+        the fix, not an exception (EXAKIT_NB_STRICT raises it, as for every check)."""
+        from exakit_nb import ml_train
+        good = [("python", "3.12.3"), ("scikit-learn", "1.9.0"), ("pandas", "2.3.3"), ("numpy", "2.4.6")]
+        with mock.patch.dict(os.environ, {ml_train.CONTAINER_VARIABLE: "python3_ml"}):
+            conn = self.ProbeConn(good)
+            ok, line = self.said(lambda: exakit_nb.check_container(conn))
+        self.assertTrue(ok)
+        self.assertIn("answers on PYTHON3_ML:", line)
+        self.assertTrue(conn.statements[1].startswith("CREATE OR REPLACE PYTHON3_ML SCALAR SCRIPT"), conn.statements)
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop(ml_train.CONTAINER_VARIABLE, None)
+            with mock.patch.object(ml_train, "_udf_devkit_record", return_value={"languages": "rust"}):
+                conn = self.ProbeConn(good)
+                ok, line = self.said(lambda: exakit_nb.check_container(conn))
+                self.assertFalse(ok)
+                self.assertTrue(line.startswith("FAIL container: No Python UDF container for training is installed"), line)
+                self.assertIn("Fix: exakit udf-use default installs the pre-built PYTHON3_ML container", line)
+                self.assertEqual(conn.statements, [], "nothing probed")
+                with mock.patch.dict(os.environ, {"EXAKIT_NB_STRICT": "1"}):
+                    with self.assertRaisesRegex(RuntimeError, "Fix: exakit udf-use default"):
+                        self.said(lambda: exakit_nb.check_container(self.ProbeConn(good)))
+            with mock.patch.object(ml_train, "_udf_devkit_record", return_value={"validated": True}):
+                conn = self.ProbeConn(good)
+                ok, line = self.said(lambda: exakit_nb.check_container(conn))
+                self.assertTrue(ok)
+                self.assertIn("answers on PYTHON3:", line, "a pre-matrix record is the official container")
 
     def test_mlflow(self):
         with mock.patch.dict(sys.modules, {"mlflow": types.ModuleType("mlflow")}):
@@ -695,7 +746,7 @@ class ChecksTest(unittest.TestCase):
     def test_strict_check_fails_the_headless_run(self):
         with mock.patch.dict(os.environ, {"EXAKIT_NB_STRICT": "1"}):
             with self.assertRaisesRegex(RuntimeError, "Fix: exakit udf-setup"):
-                self.said(lambda: exakit_nb.check_container(self.ProbeConn(fail="script language PYTHON3 not found")))
+                self.said(lambda: exakit_nb.check_container(self.ProbeConn(fail="script language PYTHON3 not found"), alias="PYTHON3"))
 
     def test_the_bucket_directory(self):
         with tempfile.TemporaryDirectory() as tmp:

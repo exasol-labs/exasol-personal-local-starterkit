@@ -5,7 +5,10 @@ training SQL, and a random split the handoff does not mark as asked for (an expl
 on two builds and the rendered UDF trains to the same metrics and coefficients twice, rows shuffled, when scikit-learn
 is installed here (AC-ML3.4; the live twin is tests/lib/live_train_twice.py); the coefficients land beside the handoff
 as <id>-v<n>.coefficients.json, 0600, the very content of the MLflow artefact, read from a file store or through
-mlflow's artefact download.
+mlflow's artefact download. The container alias (G2 C2): udf_container() takes EXAKIT_UDF_CONTAINER first, else the
+manifest's installed aliases PYTHON3_ML before PYTHON3 (udf-setup records the language, not an alias; a pre-matrix
+validated record is the official container), and names both fixes when none is installed; the plan creates the UDF on
+the alias it is given (or resolves) and records it in the run's params.
 """
 from __future__ import annotations
 
@@ -14,9 +17,11 @@ import contextlib
 import importlib.util
 import io
 import json
+import os
 import random
 import re
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -44,8 +49,100 @@ class TrainConn(FakeConn):
 
 
 def _plan(conn, ds, record, **options):
+    options.setdefault("container", "PYTHON3")                 # the alias given, so no test reads this machine's manifest
     with contextlib.redirect_stdout(io.StringIO()):
         return prepare_training(conn, ds, record, **options)
+
+
+class ContainerTest(unittest.TestCase):
+    """udf_container(): the alias the ML notebooks' CONTAINER assignment defaults to."""
+
+    def setUp(self):
+        self.env = mock.patch.dict(os.environ, {}, clear=False)
+        self.env.start()
+        os.environ.pop(ml_train.CONTAINER_VARIABLE, None)
+        self.addCleanup(self.env.stop)
+
+    def test_the_pre_built_container_wins_over_the_official_one(self):
+        both = {"languages": "python", "containers": {"PYTHON3_ML": "https://example.invalid/x.tar.gz"}, "validated": True}
+        self.assertEqual(ml_train.udf_container(both), "PYTHON3_ML")
+        self.assertEqual(ml_train.installed_containers(both), ["PYTHON3_ML", "PYTHON3"])
+        official_only = {"languages": "python", "validated": True}
+        self.assertEqual(ml_train.udf_container(official_only), "PYTHON3")
+        self.assertEqual(ml_train.installed_containers({"languages": "rust,python", "containers": {"RUST": "u"}}), ["RUST", "PYTHON3"])
+
+    def test_a_record_from_before_the_matrix_is_the_official_container(self):
+        self.assertEqual(ml_train.udf_container({"version": "0.1.0", "validated": True, "models": {}}), "PYTHON3")
+        self.assertEqual(ml_train.installed_containers({"version": "0.1.0", "validated": False}), [])
+
+    def test_the_environment_overrides_the_manifest(self):
+        os.environ[ml_train.CONTAINER_VARIABLE] = "my_sklearn"
+        self.assertEqual(ml_train.udf_container({"containers": {"PYTHON3_ML": "u"}}), "MY_SKLEARN")
+        self.assertEqual(ml_train.udf_container(None), "MY_SKLEARN", "no manifest is read")
+        os.environ[ml_train.CONTAINER_VARIABLE] = "no-dash"
+        with self.assertRaisesRegex(ValueError, "EXAKIT_UDF_CONTAINER='no-dash' is not a container alias"):
+            ml_train.udf_container({"containers": {"PYTHON3_ML": "u"}})
+
+    def test_none_installed_names_both_fixes(self):
+        for record in ({}, {"languages": "rust", "containers": {"RUST": "u"}}, {"validated": False}):
+            with self.subTest(record=record), self.assertRaises(RuntimeError) as caught:
+                ml_train.udf_container(record)
+            said = str(caught.exception)
+            self.assertIn("No Python UDF container for training is installed", said)
+            self.assertIn("Fix: exakit udf-use default installs the pre-built PYTHON3_ML container", said)
+            self.assertIn("exakit udf-setup the official PYTHON3", said)
+            self.assertIn("exakit marketplace udf-devkit", said)
+            self.assertIn("EXAKIT_UDF_CONTAINER", said)
+        with self.assertRaisesRegex(RuntimeError, r"records: RUST\)"):
+            ml_train.udf_container({"languages": "rust", "containers": {"RUST": "u"}})
+
+    def test_the_manifest_is_read_from_the_kit_home(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            (home / "kit").mkdir()
+            with mock.patch.object(ml_train, "_home", return_value=home):
+                self.assertEqual(ml_train.installed_containers(), [], "no manifest yet")
+                with self.assertRaises(RuntimeError):
+                    ml_train.udf_container()
+                (home / "manifest.json").write_text(json.dumps({"components": {"udf_devkit": {
+                    "languages": "python", "containers": {"PYTHON3_ML": "https://example.invalid/c.tar.gz"}}}}), encoding="utf-8")
+                self.assertEqual(ml_train.udf_container(), "PYTHON3_ML")
+                (home / "manifest.json").write_text(json.dumps({"components": {"notebook": {}}}), encoding="utf-8")
+                with self.assertRaisesRegex(RuntimeError, "records: none"):
+                    ml_train.udf_container()
+            with mock.patch.object(ml_train, "_home", return_value=None):
+                self.assertEqual(ml_train.installed_containers(), [])
+
+    def test_the_fix_names_the_command_for_the_alias(self):
+        self.assertEqual(ml_train.container_fix("PYTHON3"), "exakit udf-setup installs the official PYTHON3 container (the udf-devkit add-on: exakit marketplace udf-devkit).")
+        self.assertEqual(ml_train.container_fix("python3_ml"), "exakit udf-use default installs the pre-built PYTHON3_ML container (the udf-devkit add-on: exakit marketplace udf-devkit).")
+        other = ml_train.container_fix("MY_SKLEARN")
+        self.assertIn("exakit udf-use <tarball>", other)
+        self.assertIn("MY_SKLEARN", other)
+        self.assertIn("PYTHON3_ML (exakit udf-use default) and PYTHON3 (exakit udf-setup)", other)
+
+    def test_the_plan_creates_the_udf_on_the_alias_and_records_it(self):
+        ds = _ds()
+        record = handoff.handoff_from(TrainConn(), ds)
+        plan = _plan(TrainConn(), ds, record, container="python3_ml")
+        self.assertIn("CREATE OR REPLACE PYTHON3_ML SET SCRIPT EXASOL_MLFLOW.TRAIN_FROM_HANDOFF", plan.create_script)
+        self.assertEqual(plan.params["container"], "PYTHON3_ML")
+        self.assertIn("ALIAS = 'PYTHON3_ML'", plan.create_script)
+        os.environ[ml_train.CONTAINER_VARIABLE] = "PYTHON3_ML"
+        with contextlib.redirect_stdout(io.StringIO()):
+            resolved = prepare_training(TrainConn(), ds, record)          # container=None: udf_container()
+        self.assertEqual(resolved.params["container"], "PYTHON3_ML")
+        with self.assertRaisesRegex(ValueError, "container='PY THON' is not a container alias"):
+            _plan(TrainConn(), ds, record, container="PY THON")
+
+    def test_none_installed_refuses_the_plan_before_any_write(self):
+        ds, conn = _ds(), TrainConn()
+        record = handoff.handoff_from(conn, ds)
+        before = len(conn.statements)
+        with mock.patch.object(ml_train, "_udf_devkit_record", return_value={"languages": "rust"}):
+            with self.assertRaisesRegex(RuntimeError, "Fix: exakit udf-use default"), contextlib.redirect_stdout(io.StringIO()):
+                prepare_training(conn, ds, record)
+        self.assertEqual(len(conn.statements), before, "nothing written")
 
 
 class TrainPlanTest(HandoffCase):

@@ -17,21 +17,30 @@ def _(mo):
     # Train inside Exasol from the Data Scientist's handoff
 
     - **Dataset:** `pharma_trials` as it ships; change one assignment for `banking_complaints` or a file you loaded.
-    - **What must be loaded:** an approved descriptor, the handoff written by `data-scientist/01_explore`, and the Python
-      UDF container (`exakit udf-setup`). Run `exakit mlflow start` to see the run in the local MLflow UI.
+    - **What must be loaded:** an approved descriptor, the handoff written by `data-scientist/01_explore`, and a Python
+      UDF container (`exakit udf-use default`). Run `exakit mlflow start` to see the run in the local MLflow UI.
     - **How long:** about five minutes, depending on the dataset and container.
 
     The handoff records the exact descriptor version, data digest, feature view, label and time split. This notebook
     refuses a stale handoff before creating a view or running training SQL. With no handoff file at all (a fresh
     machine), it builds one from the approved descriptor and says so.
+
+    Two assignments: the dataset, and the alias of the Python container the training UDF runs on. `CONTAINER` defaults
+    to what the kit recorded as installed - `PYTHON3_ML` (`exakit udf-use default`) before `PYTHON3` (`exakit udf-setup`),
+    `EXAKIT_UDF_CONTAINER` overriding - and stops here, naming the fix, when there is none; `00_quickstart` checks the
+    same alias answers a smoke UDF.
     """)
     return
 
 
 @app.cell
 def _():
+    import exakit.nb as nb
+    import exasol_mlflow
+
     DATASET = "pharma_trials"  # or "banking_complaints", or "~/my-data/transactions.csv" with approved roles beside it
-    return (DATASET,)
+    CONTAINER = nb.ml_train.udf_container()   # or "PYTHON3_ML", "PYTHON3", or the alias of a container you installed
+    return CONTAINER, DATASET, exasol_mlflow, nb
 
 
 @app.cell(hide_code=True)
@@ -50,10 +59,7 @@ def _(mo):
 
 
 @app.cell
-def _(DATASET):
-    import exakit.nb as nb
-    import exasol_mlflow
-
+def _(DATASET, nb):
     SPLIT = None  # None: the time split by the date role; "random": a hash split, only when there is no handoff file yet
 
     conn = nb.connect()
@@ -62,7 +68,7 @@ def _(DATASET):
     print(f"handoff: {ds.id} v{ds.version}; {handoff['rows']} rows; {handoff['split']['kind']} split"
           + (" (asked for)" if handoff['split'].get('explicit') else ""))
     print(f"data digest: {handoff['data_digest']}")
-    return conn, ds, exasol_mlflow, handoff, nb
+    return conn, ds, handoff
 
 
 @app.cell(hide_code=True)
@@ -71,24 +77,25 @@ def _(mo):
     ## Build the feature view and training UDF
 
     Every feature is made in SQL from an approved role. The view and its training SELECT are checked against the
-    current descriptor. Constant features are dropped before fitting. The UDF trains a logistic regression with a
-    fixed seed, and sends its model, metrics and coefficients back to this notebook; it has no network or credentials.
+    current descriptor. Constant features are dropped before fitting. The UDF is created on the `CONTAINER` alias and
+    trains a logistic regression with a fixed seed, then sends its model, metrics and coefficients back to this
+    notebook; it has no network or credentials.
     """)
     return
 
 
 @app.cell
-def _(conn, ds, handoff, nb):
+def _(CONTAINER, conn, ds, handoff, nb):
     UDF_SCHEMA = "EXASOL_MLFLOW"
     UDF_NAME = "TRAIN_FROM_HANDOFF"
     SEED = 0
     REGULARIZATION_C = 1.0
 
-    plan = nb.prepare_training(conn, ds, handoff, schema=UDF_SCHEMA, name=UDF_NAME,
+    plan = nb.prepare_training(conn, ds, handoff, schema=UDF_SCHEMA, name=UDF_NAME, container=CONTAINER,
                                seed=SEED, C=REGULARIZATION_C)
     conn.execute(f"CREATE SCHEMA IF NOT EXISTS {UDF_SCHEMA}")
     conn.execute(plan.create_script)
-    print(f"features ({len(plan.features)}): {', '.join(plan.features)}")
+    print(f"UDF {UDF_SCHEMA}.{UDF_NAME} on {CONTAINER}; features ({len(plan.features)}): {', '.join(plan.features)}")
     print(plan.training_sql)
     return (plan,)
 

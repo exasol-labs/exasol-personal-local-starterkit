@@ -12,7 +12,7 @@
 # - **Dataset:** the Pharma sample (`pharma_trials`, ClinicalTrials.gov studies) unless you pick another below: the
 #   Banking sample (`banking_complaints`), your own CSV, Parquet or JSON file, or a table in a connected source.
 # - **What must be loaded:** nothing beforehand. The sample-dataset cell loads it with `exakit data-load` the first
-#   time. Training needs a Python container in the database: `exakit udf-setup` (the `udf-devkit` add-on).
+#   time. Training needs a Python container in the database: `exakit udf-use default` (the `udf-devkit` add-on).
 # - **How long:** about five minutes, most of it loading the sample the first time.
 #
 # First the three things training depends on, one cell each: each prints `ok` with what it found, or `FAIL` with the
@@ -33,16 +33,29 @@ import exakit.nb as nb
 wid = nb.workflow("ml-engineer-quickstart", resume=os.environ.get("EXAKIT_WORKFLOW_ID"))
 print(f"Every step below is logged under it: exakit workflow show {wid}")
 
+# %% [markdown]
+# ## Which container trains
+#
+# A training UDF runs on a Python container in the database, named by its **alias**. The `udf-devkit` add-on installs
+# two: `exakit udf-use default` puts the kit's pre-built one (scikit-learn, pandas and numpy pinned) in as
+# `PYTHON3_ML`; `exakit udf-setup` installs the official `PYTHON3`. This one assignment is the alias the container
+# check below and `01_train` use. Its default reads what the kit recorded as installed, `PYTHON3_ML` before `PYTHON3`
+# (`EXAKIT_UDF_CONTAINER` overrides it); with none installed it stops here and names the fix.
+
+# %%
+CONTAINER = nb.ml_train.udf_container()   # or "PYTHON3_ML", "PYTHON3", or the alias of a container you installed
+print(f"container alias: {CONTAINER}")
+
 # %% [include] ../00_shared/data_paths.py connect
 
 # %% [markdown]
 # ## The container answers the smoke UDF
 #
-# A small Python UDF runs on the database's Python container (`PYTHON3`) and reports Python and the packages the
-# training UDF needs.
+# A small Python UDF runs on the container behind `CONTAINER` and reports Python and the packages the training UDF
+# needs. A `FAIL` line names the alias it probed and the command that installs that very container.
 
 # %%
-container_ok = nb.check_container(conn)
+container_ok = nb.check_container(conn, alias=CONTAINER)
 
 # %% [markdown]
 # ## The MLflow server is reachable
@@ -70,15 +83,23 @@ bucket_ok = nb.check_bucket(conn)
 # %% [markdown]
 # ## A first query
 #
-# Rows and label rate per category, built from the descriptor's roles - the label is what `01_train` learns to predict.
+# Rows and positive labels per category, built from the descriptor's roles - the label is what `01_train` learns to
+# predict. A role no column fits (the descriptor's `missing`, with the profiler's reason) is not guessed: without a
+# category the rows are counted per entity, without a label the label count is left out, and the cell says so.
 
 # %%
+skipped = {m["role"]: m["reason"] for m in ds.missing}
+for role, instead in (("category", "rows are counted per entity instead"),
+                      ("label", "the label count is left out, and 01_train has nothing to predict until a label role is approved")):
+    if role in skipped:
+        print(f"No {role} role ({skipped[role]}): {instead}; the steps that need it later say so.")
+BY = ds.col("category") if ds.has("category") else ds.col("entity")
+LABEL_1 = f",\n       SUM({ds.col('label')}) AS LABEL_1" if ds.has("label") else ""
 first_rows = nb.sql(conn, f"""
-SELECT {ds.col("category")} AS CATEGORY,
-       COUNT(*) AS N,
-       SUM({ds.col("label")}) AS LABEL_1
+SELECT {BY} AS CATEGORY,
+       COUNT(*) AS N{LABEL_1}
 FROM {ds.fact_table}
-GROUP BY {ds.col("category")}
+GROUP BY {BY}
 ORDER BY N DESC
 LIMIT 10""")
 nb.show_sql()
