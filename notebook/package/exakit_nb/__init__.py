@@ -43,7 +43,7 @@ from .ml_train import TrainingPlan, prepare_training
 from .workflow import TRACE as TRACE_KIND
 from .workflow import current_workflow, log_event, log_sql, workflow
 
-__all__ = ['ask', 'Proposal', 'check_bucket', 'check_connection', 'check_container', 'check_mlflow', 'confirm_send', 'connect', 'connected_sources', 'current_version', 'current_workflow', 'dataset', 'Dataset', 'describe', 'descriptor_store_dir', 'DescriptorNotApproved', 'Draft', 'first', 'handoff_from', 'handoff_is_stale', 'list_schemas', 'list_versions', 'load_own_file', 'load_sample', 'load_source', 'LoadedTable', 'log_event', 'log_sql', 'model_client', 'model_list', 'prepare_training', 'read_handoff', 'review_roles', 'RoleReview', 'save_descriptor', 'share', 'ShareDraft', 'show_roles', 'show_sql', 'sql', 'trace', 'tracing', 'TrainingPlan', 'workflow', 'write_handoff']
+__all__ = ['ask', 'check_bucket', 'check_connection', 'check_container', 'check_mlflow', 'confirm_send', 'connect', 'connected_sources', 'current_version', 'current_workflow', 'dataset', 'Dataset', 'describe', 'descriptor_store_dir', 'DescriptorNotApproved', 'Draft', 'first', 'handoff_from', 'handoff_is_stale', 'list_schemas', 'list_versions', 'load_own_file', 'load_sample', 'load_source', 'LoadedTable', 'log_event', 'log_sql', 'model_client', 'model_list', 'prepare_training', 'Proposal', 'read_handoff', 'review_roles', 'RoleReview', 'save_descriptor', 'share', 'ShareDraft', 'show_roles', 'show_sql', 'sql', 'trace', 'tracing', 'TrainingPlan', 'workflow', 'write_handoff']
 
 LANGFUSE_VARIABLES = ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_BASE_URL")
 LANGFUSE_HOST_VARIABLE = "LANGFUSE_HOST"      # the SDK 3/4 name of LANGFUSE_BASE_URL; still accepted when BASE_URL is unset
@@ -184,8 +184,9 @@ def trace(conn, name: str = "exakit-notebook", dataset: Dataset | None = None, s
     SDK 5) to it and to every observation opened within, so each call the client model_client() returns makes -
     Langfuse's OpenAI drop-in when tracing is on - lands in this one trace with its input, output, token usage and
     latency, without changes to the calling code. The span is yielded; the client is flushed when the block ends.
-    The active workflow's log gets one ``trace`` line with the trace id (X-1). Nothing here prints or records the
-    secret key.
+    The active workflow's log gets one ``trace`` line with the trace id (X-1), and when the block ends one line is
+    printed - ``traced: <trace id> (<url or base URL>)`` - so the trace can be found in Langfuse. Nothing here prints
+    or records the secret key.
     """
     if _langfuse_missing():
         print(f"tracing is off (set {', '.join(LANGFUSE_VARIABLES[:-1])} and {LANGFUSE_VARIABLES[-1]} before exakit "
@@ -204,9 +205,32 @@ def trace(conn, name: str = "exakit-notebook", dataset: Dataset | None = None, s
                                                                        "exasol.workflow_id") if tags.get(key))]
     with client.start_as_current_observation(as_type="span", name=name) as span, \
             propagate_attributes(trace_name=name, session_id=tags["exasol.session_id"], tags=labels, metadata=tags):
-        log_event(TRACE_KIND, name=name, trace_id=str(client.get_current_trace_id() or ""))
+        trace_id = str(client.get_current_trace_id() or "")
+        log_event(TRACE_KIND, name=name, trace_id=trace_id)
         yield span
     client.flush()
+    print(_traced_line(client, trace_id, settings["base_url"]))
+
+
+def _trace_url(client: Any, trace_id: str) -> str | None:
+    """The trace's page in the Langfuse UI, when the SDK can say (SDK 5's ``Langfuse.get_trace_url`` asks the server
+    for the project id, so it is None - or fails - against an endpoint that does not answer); else None."""
+    get_url = getattr(client, "get_trace_url", None)
+    if not callable(get_url) or not trace_id:
+        return None
+    try:
+        url = get_url(trace_id=trace_id)
+    except Exception:          # noqa: BLE001 - the line is a courtesy; the trace is already recorded
+        return None
+    return str(url) if url else None
+
+
+def _traced_line(client: Any, trace_id: str, base_url: str) -> str:
+    """The one line trace() prints when the block ends (AC-DS4.5): the trace id and where to find it - its URL when
+    the SDK can build one, else the Langfuse base URL and a pointer to the project. Never the keys."""
+    url = _trace_url(client, trace_id)
+    where = url or f"{base_url}, project in your Langfuse"
+    return f"traced: {trace_id or '(no trace id)'} ({where})"
 
 
 def confirm_send(ds: Dataset, rows: int, answer: str | None = None) -> bool:

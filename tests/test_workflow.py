@@ -4,7 +4,8 @@
 
 What it pins: the id's shape and that a new one is a start line in a 0600 file in a 0700 folder; the id reaches the
 session store and EXAKIT_WORKFLOW_ID (so a child process inherits it); resume continues an existing log and refuses a
-bad id or a log that is not there, naming the path; a line's shape; a credential-shaped payload is refused, so the
+bad id or a log that is not there, naming the path; a line's shape; a credential-named key or a DSN with a password is
+refused, credential-like SQL is logged redacted with a warning (the logger never fails the query it records), so the
 log never holds one; nothing is written without a workflow; read/list; a log that cannot be written warns and does
 not raise; log_sql takes the session and statement ids from the connection; the module's command line.
 No database, no kit home: EXAKIT_HOME is a temporary folder.
@@ -201,13 +202,30 @@ class TestLogEvent(WorkflowCase):
         wf.log_event(wf.HANDOFF, where="exa+websocket://127.0.0.1:8563", note="user:pass@ without a scheme is text")
         self.assertEqual(len(wf.read_log(wid)), 2)
 
-    def test_credential_sql_is_not_logged(self):
+    def test_credential_sql_is_logged_redacted_and_the_call_does_not_raise(self):
         wid, _ = self.start()
-        for statement in ("CREATE USER X IDENTIFIED BY 'secret'", "SELECT PASSWORD FROM T",
-                          "SELECT API_KEY FROM CONFIG"):
-            with self.subTest(statement=statement), self.assertRaisesRegex(ValueError, "credential-bearing SQL"):
-                wf.log_event(wf.SQL, sql=statement)
-        self.assertEqual(len(wf.read_log(wid)), 1)
+        statements = ("CREATE USER X IDENTIFIED BY 'secret'", "SELECT PASSWORD FROM T", "SELECT API_KEY FROM CONFIG",
+                      "IMPORT FROM EXA AT 'exa+ws://sys:exasol@10.0.0.1:8563' TABLE T")
+        for statement in statements:
+            with self.subTest(statement=statement), warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                wf.log_event(wf.SQL, sql=statement, sql_digest=hashlib.sha256(statement.encode()).hexdigest(), rows=1)
+            self.assertEqual(len(caught), 1)
+            self.assertIn("credential-like SQL", str(caught[0].message))
+        events = wf.read_log(wid)[1:]
+        self.assertEqual(len(events), len(statements))
+        text = wf.log_path(wid).read_text(encoding="utf-8")
+        for statement, event in zip(statements, events):
+            self.assertEqual(event["sql"], wf.REDACTED_SQL)
+            self.assertIs(event["redacted"], True)
+            self.assertEqual(event["sql_digest"], hashlib.sha256(statement.encode()).hexdigest())
+            self.assertEqual(event["rows"], 1)
+        for word in ("secret", "PASSWORD", "API_KEY", "exasol@"):
+            self.assertNotIn(word, text)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")                                   # plain SQL: no warning, no redaction
+            wf.log_event(wf.SQL, sql="SELECT 1", rows=1)
+        self.assertNotIn("redacted", wf.read_log(wid)[-1])
 
     def test_unwritable_log_warns(self):
         wid, _ = self.start()
@@ -254,6 +272,60 @@ class TestLogSql(WorkflowCase):
 
         wf.log_sql(Broken(), "SELECT 1", None)
         self.assertIsNone(wf.read_log(wid)[1]["statement_id"])
+
+    def test_a_password_column_is_logged_redacted_without_raising(self):
+        wid, _ = self.start()
+        statement = 'SELECT "USER_NAME", "PASSWORD" FROM "APP"."ACCOUNTS"'
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            wf.log_sql(FakeConnection(), statement, 3)
+        self.assertEqual([str(w.message)[:40] for w in caught], ["The workflow log never holds credential-"])
+        event = wf.read_log(wid)[1]
+        self.assertEqual((event["kind"], event["sql"], event["redacted"], event["rows"], event["statement_id"]),
+                         (wf.SQL, wf.REDACTED_SQL, True, 3, "41"))
+        self.assertEqual(event["sql_digest"], hashlib.sha256(statement.encode()).hexdigest())
+        self.assertNotIn("PASSWORD", wf.log_path(wid).read_text(encoding="utf-8"))
+
+    def test_nb_sql_returns_the_frame_when_the_statement_names_a_password_column(self):
+        """The bug: nb.sql() raised from the logger after the query had already run on any table with such a column.
+        pandas is stood in for (sql() imports it when called), so this runs without it."""
+        import types
+
+        import exakit_nb
+
+        class DataFrame:
+            def __init__(self, rows, columns=None):
+                self.rows, self.columns = list(rows), list(columns or [])
+
+            def __len__(self):
+                return len(self.rows)
+
+        pandas = types.ModuleType("pandas")
+        pandas.DataFrame = DataFrame
+
+        class Result:
+            def fetchall(self):
+                return [("ann", "x"), ("bob", "y")]
+
+            def column_names(self):
+                return ["USER_NAME", "PASSWORD"]
+
+        class Conn(FakeConnection):
+            def execute(self, statement, params=None):
+                self.statements.append(statement)
+                return Result() if "ACCOUNTS" in statement else FakeResult(self.current_statement)
+
+        wid, _ = self.start()
+        statement = 'SELECT "USER_NAME", "PASSWORD" FROM "APP"."ACCOUNTS"'
+        with mock.patch.dict(sys.modules, {"pandas": pandas}), warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            frame = exakit_nb.sql(Conn(), statement)
+        self.assertEqual(list(frame.columns), ["USER_NAME", "PASSWORD"])
+        self.assertEqual(len(frame), 2)
+        self.assertEqual(len(caught), 1)
+        event = wf.read_log(wid)[1]
+        self.assertEqual((event["kind"], event["sql"], event["redacted"], event["rows"]), (wf.SQL, wf.REDACTED_SQL, True, 2))
+        self.assertEqual(event["sql_digest"], hashlib.sha256(statement.encode()).hexdigest())
 
 
 class TestReadList(WorkflowCase):

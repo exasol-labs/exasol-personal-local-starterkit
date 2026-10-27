@@ -12,8 +12,12 @@ from a notebook) inherits it. The log is ``$EXAKIT_HOME/workflows/<id>.jsonl`` (
 0700 and the file 0600, each line one O_APPEND write so two kernels on one workflow never interleave. A log that
 cannot be written warns and the cell goes on: logging never fails the work it describes.
 
-The log never holds a credential: secret-named keys, a DSN containing a password, and SQL containing credential
-clauses are refused. Other SQL text is kept so the user can find the query again.
+The log never holds a credential: a secret-named payload key or a DSN containing a password is refused (a
+ValueError - the caller's mistake, before anything is written). SQL text is screened rather than refused: a statement
+that mentions PASSWORD, API_KEY, IDENTIFIED BY and the like - or carries a DSN with a password - is logged with its
+text replaced by ``<redacted: credential-like SQL>`` and ``redacted: true``, its digest kept, and one warning; the
+logger never fails the query it records, which has already run. Other SQL text is kept so the user can find the
+query again.
 
 ``python -m exakit_nb.workflow list|show <id> [--json]`` is what ``exakit workflow`` runs.
 """
@@ -35,8 +39,8 @@ from typing import Any
 from ._kit import recall, remember
 
 __all__ = ["DASHBOARD_REVISION", "DESCRIBE_APPROVE", "DESCRIBE_DRAFT", "ENV_VARIABLE", "HANDOFF", "KINDS", "MLFLOW_RUN",
-           "MODEL_PUT", "SQL", "START", "TRACE", "current_workflow", "list_workflows", "log_event", "log_path", "log_sql",
-           "read_log", "workflow"]
+           "MODEL_PUT", "REDACTED_SQL", "SQL", "START", "TRACE", "current_workflow", "list_workflows", "log_event", "log_path",
+           "log_sql", "read_log", "workflow"]
 
 ENV_VARIABLE = "EXAKIT_WORKFLOW_ID"
 SESSION_KEY = "workflow_id"
@@ -61,6 +65,8 @@ KINDS = (START, DESCRIBE_DRAFT, DESCRIBE_APPROVE, SQL, TRACE, MLFLOW_RUN, HANDOF
 _SECRET_KEY = re.compile(r"(^|[^a-z0-9])(password|passwd|token|secret|api_key|apikey)([^a-z0-9]|$)")
 _DSN_PASSWORD = re.compile(r"://[^/\s@:]+:[^/\s@]+@")
 _SQL_CREDENTIAL = re.compile(r"\b(?:IDENTIFIED\s+BY|PASSWORD|PASSWD|API[_ ]?KEY|ACCESS[_ ]?TOKEN)\b", re.I)
+_SQL_KEYS = ("sql", "statement", "query")
+REDACTED_SQL = "<redacted: credential-like SQL>"     # what the log holds instead of credential-like statement text
 
 
 def home() -> Path:
@@ -142,13 +148,25 @@ def current_workflow() -> str | None:
     return inherited if ID_PATTERN.match(inherited) else None
 
 
-def _refuse_secrets(payload: dict[str, Any]) -> None:
+def _screen(payload: dict[str, Any]) -> dict[str, Any]:
+    """The payload as the log may hold it. A secret-named key or a DSN with a password in a value is a ValueError
+    (the caller named a credential: a programming error, caught before anything is written). Statement text under
+    ``sql``/``statement``/``query`` is never refused - the statement has already run, and a logger must not fail the
+    call it records: when it looks credential-bearing (PASSWORD, API_KEY, IDENTIFIED BY, a DSN with a password ...)
+    the text becomes REDACTED_SQL, ``redacted`` is set, any ``sql_digest`` stays, and one warning says so."""
+    screened = dict(payload)
     for key, value in payload.items():
         if _SECRET_KEY.search(str(key).lower()):
             raise ValueError(f"The workflow log never holds a credential: refusing payload key {key!r}")
+        if key.lower() in _SQL_KEYS and isinstance(value, str):
+            if _SQL_CREDENTIAL.search(value) or _DSN_PASSWORD.search(value):
+                screened[key] = REDACTED_SQL
+                screened["redacted"] = True
+                warnings.warn(f"The workflow log never holds credential-like SQL: {key!r} was logged as {REDACTED_SQL} "
+                              "(its digest is kept)", RuntimeWarning, stacklevel=3)
+            continue
         _refuse_dsn(value, key)
-        if key.lower() in ("sql", "statement", "query") and isinstance(value, str) and _SQL_CREDENTIAL.search(value):
-            raise ValueError("The workflow log never holds credential-bearing SQL; statement was not logged")
+    return screened
 
 
 def _refuse_dsn(value: Any, key: str) -> None:
@@ -164,12 +182,14 @@ def _refuse_dsn(value: Any, key: str) -> None:
 
 
 def log_event(kind: str, **payload: Any) -> None:
-    """Append one line to the active workflow's log; nothing when no workflow is active. A credential-shaped payload is
-    a ValueError (the caller's mistake); a log that cannot be written is a warning (the environment's)."""
+    """Append one line to the active workflow's log; nothing when no workflow is active. A credential-named payload
+    key or a DSN with a password is a ValueError (the caller's mistake); credential-like statement text is logged
+    redacted with a warning (never an exception: the statement already ran); a log that cannot be written is a warning
+    (the environment's)."""
     workflow_id = current_workflow()
     if workflow_id is None:
         return
-    _refuse_secrets(payload)
+    payload = _screen(payload)
     line = json.dumps({"ts": _now(), "workflow_id": workflow_id, "kind": kind, **payload}, default=str) + "\n"
     path = log_path(workflow_id)
     try:
@@ -197,8 +217,9 @@ def _statement_id(conn) -> str | None:
 
 def log_sql(conn, statement: str, rows: int | None, statement_id: str | None = None) -> None:
     """Log a statement sql() ran: the session and statement ids that find it in the database's audit log, the
-    statement's SHA-256 (what traces and runs carry), how many rows came back, and the statement text. No-op without a
-    workflow; the statement id is looked up on the connection unless given."""
+    statement's SHA-256 (what traces and runs carry), how many rows came back, and the statement text - redacted, with
+    a warning, when it looks credential-bearing (a PASSWORD or API_KEY column, say); this never raises, the query has
+    already run. No-op without a workflow; the statement id is looked up on the connection unless given."""
     if current_workflow() is None:
         return
     try:

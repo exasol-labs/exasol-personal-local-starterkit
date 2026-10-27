@@ -845,7 +845,7 @@ class TraceSdk5Test(unittest.TestCase):
         env = {**self.ENV, "EXAKIT_WORKFLOW_ID": "wf-20261027-abcdef"}
         span, _, output = self._trace(env, name="explore-text-step", dataset=ds, sql="SELECT 1 FROM T", step="text")
         self.assertEqual(span.trace_id, "trace-1")
-        self.assertEqual(output, "")                                        # tracing on: nothing printed
+        self.assertEqual(output, "traced: trace-1 (https://langfuse.example, project in your Langfuse)\n")   # the one success line
         self.assertEqual([entry[0] for entry in self.log], ["client", "observation", "propagate", "observation-end", "flush"])
         self.assertEqual(self.log[0][1], {"public_key": "pk-lf-public", "secret_key": self.SECRET, "base_url": "https://langfuse.example"})
         self.assertEqual(self.log[1], ("observation", "span", "explore-text-step"))
@@ -878,10 +878,11 @@ class TraceSdk5Test(unittest.TestCase):
             self.assertTrue(exakit_nb.tracing())
         _, _, output = self._trace(env)
         self.assertEqual(self.log[0][1]["base_url"], "https://old.example")
-        self.assertEqual(len(output.strip().splitlines()), 1)
-        self.assertIn("LANGFUSE_HOST", output)
-        self.assertIn("LANGFUSE_BASE_URL", output)
-        self.assertNotIn("old.example", output)
+        note, traced = output.strip().splitlines()                          # the note, then the success line
+        self.assertIn("LANGFUSE_HOST", note)
+        self.assertIn("LANGFUSE_BASE_URL", note)
+        self.assertNotIn("old.example", note)
+        self.assertEqual(traced, "traced: trace-1 (https://old.example, project in your Langfuse)")
 
     def test_the_secret_key_is_in_no_output_tag_or_log(self):
         ds = exakit_nb.dataset(FakeConn(PHARMA), "pharma_trials")
@@ -907,6 +908,33 @@ class TraceSdk5Test(unittest.TestCase):
         _, inside, _ = self._trace({**self.ENV, "EXAKIT_NB_MODEL": "m", "OPENAI_API_KEY": "key"})
         self.assertEqual(inside, (("langfuse.openai", {"api_key": "key"}), "m"))
 
+    def test_the_success_line_is_the_trace_url_when_the_sdk_builds_one(self):
+        """AC-DS4.5: SDK 5's Langfuse.get_trace_url() gives the trace's page (it asks the server for the project id);
+        when it answers, the line carries that URL; when it is None or fails, the id and the base URL."""
+        url = "https://langfuse.example/project/p-1/traces/trace-1"
+        self.langfuse.Langfuse.get_trace_url = lambda self, *, trace_id=None: f"https://langfuse.example/project/p-1/traces/{trace_id}"
+        _, _, output = self._trace(self.ENV)
+        self.assertEqual(output, f"traced: trace-1 ({url})\n")
+        self.assertEqual([entry[0] for entry in self.log][-2:], ["observation-end", "flush"])    # printed after the flush
+
+        def failing(self, *, trace_id=None):
+            raise ConnectionError("no answer")
+
+        self.langfuse.Langfuse.get_trace_url = failing
+        _, _, output = self._trace(self.ENV)
+        self.assertEqual(output, "traced: trace-1 (https://langfuse.example, project in your Langfuse)\n")
+        self.langfuse.Langfuse.get_trace_url = lambda self, *, trace_id=None: None
+        _, _, output = self._trace(self.ENV)
+        self.assertEqual(output, "traced: trace-1 (https://langfuse.example, project in your Langfuse)\n")
+
+    def test_a_failing_block_prints_no_success_line(self):
+        out = io.StringIO()
+        with mock.patch.dict(os.environ, {**self.ENV, "EXAKIT_HOME": self.home.name}, clear=True), redirect_stdout(out):
+            with self.assertRaises(RuntimeError):
+                with exakit_nb.trace(self.Conn()):
+                    raise RuntimeError("the cell failed")
+        self.assertEqual(out.getvalue(), "")
+
     def test_long_sql_is_clipped_to_the_propagation_limit_and_digested_whole(self):
         statement = "SELECT " + ", ".join(f'"COL_{i}"' for i in range(60)) + "\nFROM \"S\".\"T\"\nWHERE X = 'y'"
         tags = exakit_nb.trace_tags(self.Conn(), None, statement)
@@ -931,7 +959,7 @@ class RealLangfuseTest(unittest.TestCase):
 
         self.assertEqual(int(langfuse.__version__.split(".")[0]), 5, langfuse.__version__)
         self.assertIn("base_url", inspect.signature(Langfuse.__init__).parameters)
-        for method in ("start_as_current_observation", "get_current_trace_id", "flush"):
+        for method in ("start_as_current_observation", "get_current_trace_id", "get_trace_url", "flush"):
             self.assertTrue(callable(getattr(Langfuse, method)), method)
         self.assertEqual({"trace_name", "session_id", "tags", "metadata"} - set(inspect.signature(propagate_attributes).parameters), set())
         self.assertTrue(callable(importlib.import_module("langfuse.openai").OpenAI))
