@@ -855,6 +855,12 @@ jobs:
       # shared rules (pins, bucket paths, aliases, the smoke UDF).
       - run: bash tests/udf-devkit-addon.sh
         if: matrix.shard == 4
+      # exakit mlflow: start/stop/disable against a stub server, server.json,
+      # the enabled flag exakit start honours, and the lifecycle's own rules.
+      - run: bash tests/mlflow-command.sh
+        if: matrix.shard == 4
+      - run: python3 tests/test_mlflow_service.py
+        if: matrix.shard == 4
       # Personas (PRD P-1): every file valid and read the same by the shell,
       # an explicit answer wins per variable, an unknown persona is refused
       # by the installer before anything is installed.
@@ -957,6 +963,7 @@ jobs:
             pwsh -NoProfile -File tests/describe-command-ps.ps1
             pwsh -NoProfile -File tests/notebook-launcher-ps.ps1
             pwsh -NoProfile -File tests/udf-devkit-addon-ps.ps1
+            pwsh -NoProfile -File tests/mlflow-command-ps.ps1
             pwsh -NoProfile -File tests/personas-ps.ps1
             pwsh -NoProfile -File tests/dataset-asset-ps.ps1
             pwsh -NoProfile -File tests/data-question-ps.ps1

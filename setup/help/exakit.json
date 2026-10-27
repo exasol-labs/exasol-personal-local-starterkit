@@ -337,9 +337,9 @@
     },
     {
       "command": "mlflow",
-      "options": "start [--port N] [--json] | stop [--json] | status [--json] | url [--json] | replay [--json]",
+      "options": "start [--port N] [--json] | stop [--disable] [--json] | disable [--json] | status [--json] | url [--json] | replay [--json]",
       "summary": "Start or stop the local MLflow server, show its address, or replay pending runs.",
-      "description": "The server listens on 127.0.0.1, starting at port 5000. Its SQLite store, artifacts, log and pending run spool live under ~/.exasol-starter-kit/mlflow. The notebook add-on supplies the client and the UDF dev kit enables the service. Starting installs the full MLflow server package into the notebook environment if needed. exakit stop stops the server; exakit logs mlflow shows its log. Replay sends spooled runs to MLFLOW_TRACKING_URI, the kit server, or the local store, and removes only records logged successfully.",
+      "description": "The server listens on 127.0.0.1, starting at port 5000. Its SQLite store, artifacts, log and pending run spool live under ~/.exasol-starter-kit/mlflow. The notebook add-on supplies the client and the UDF dev kit enables the service. Starting installs the full MLflow server package into the notebook environment if needed. Starting it records that you want it: exakit start brings it back after that, and never starts it for a udf-devkit user who has not asked for it. A plain stop is for the session; exakit mlflow disable (or stop --disable) stops it and keeps it off until the next exakit mlflow start. exakit stop stops the server; exakit logs mlflow shows its log. Replay sends spooled runs to MLFLOW_TRACKING_URI, the kit server, or the local store, and removes only records logged successfully.",
       "examples": ["exakit mlflow start", "exakit mlflow status --json", "exakit mlflow replay"]
     },
     {

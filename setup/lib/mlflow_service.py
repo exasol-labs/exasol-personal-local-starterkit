@@ -58,8 +58,13 @@ def ours(doc: dict) -> bool:
         command = process_command(int(doc.get("pid") or 0))
     except (ValueError, TypeError):
         return False
+    # The server is started with the resolved, forward-slash path (the sqlite URI), so that is the form its
+    # command line holds. A plain str() has backslashes on Windows, where it never matched: status said stopped
+    # for a running server and stop left it running.
+    database = folder() / "mlflow.db"
+    forms = {str(database), database.as_posix(), database.resolve().as_posix()}
     return bool(command and "mlflow" in command.lower() and "server" in command.lower()
-                and str(folder() / "mlflow.db") in command)
+                and any(form in command for form in forms))
 
 
 def healthy(url: str) -> bool:
