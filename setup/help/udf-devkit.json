@@ -4,10 +4,10 @@
   "kind": "addon",
   "title": "UDF dev kit",
   "tagline": "Python and Rust UDFs on the local database, proven with a smoke test.",
-  "role": "A local Exasol Personal database ships with no script language container, so no Python or Rust UDF runs until one is installed, and it has no BucketFS upload service. The UDF dev kit drives the Exasol launcher's container commands for you - the official Python container, the kit's prebuilt machine-learning one (scikit-learn, pandas, numpy, scipy) picked for your database's architecture and version and verified against its pinned digest, the pinned Rust container, or one built from your requirements - checks every Python install with a UDF that reports each package's version against the pin, and copies files a UDF reads into BucketFS: model files with their digest recorded (exakit model put), scored by a UDF made from its template (exakit model template).",
+  "role": "A local Exasol Personal database ships with no script language container, so no Python or Rust UDF runs until one is installed, and it has no BucketFS upload service. The UDF dev kit drives the Exasol launcher's container commands for you - the official Python container, the kit's prebuilt machine-learning one (scikit-learn, pandas, numpy, scipy) picked for your database's architecture and version and verified against its pinned digest, the pinned Rust container (proven by the kit's prebuilt Rust smoke UDF, which reports the container, rustc and exasol-udf-sdk versions against the pin), or one built from your requirements - checks every Python install with a UDF that reports each package's version against the pin, and copies files a UDF reads into BucketFS: model files with their digest recorded (exakit model put), scored by a UDF made from its template (exakit model template).",
   "repo": "exasol/script-languages-release",
   "docs": "https://github.com/exasol/exasol-personal#readme",
-  "installed_by": "exakit marketplace udf-devkit, or the ml-engineer persona. Installing it installs the official Python container (EXAKIT_UDF_LANGUAGE=rust: the Rust container, alias RUST, instead), which restarts the database once.",
+  "installed_by": "exakit marketplace udf-devkit, or the ml-engineer persona. Installing it installs the official Python container (EXAKIT_UDF_LANGUAGE=rust: the Rust container, alias RUST, proven by the Rust smoke UDF, instead), which restarts the database once.",
   "platforms": "macOS on Apple silicon, Linux (x86_64 and Arm, including WSL) and Windows x86_64. Needs the Exasol launcher 2.3.0 or later; exakit update personal brings it. Building your own container (exakit udf-build) also needs a running Docker or Podman engine (the Podman the launcher installs counts) and the notebook add-on.",
   "quickstart": [
     {
@@ -36,26 +36,27 @@
       "command": "exakit udf-setup",
       "options": "[--language python|rust] [--force] [--yes] [--json]",
       "summary": "Install the official Python container (or the Rust one) and prove it.",
-      "description": "python (the default, or EXAKIT_UDF_LANGUAGE): the launcher's official Python 3.12 container, alias PYTHON3, then the smoke UDF. rust: the pinned Rust container from the matrix in versions.json for your database's architecture and version, downloaded once into the cache, verified against its sha256 and size, installed as alias RUST (updated when it is already there); its smoke UDF arrives with the next kit step, so the add-on is recorded as not validated until then. --force reinstalls the Python container. --json prints one object: {\"ok\": true, \"language\", \"alias\", \"container\": {\"url\", \"sha256\", \"arch\", \"db_versions\"} (null fields for the launcher's own container), \"smoke\": [{\"package\", \"version\"}]} or {\"ok\": false, \"language\", \"step\", \"reason\", \"remedy\"} with step one of select-container, download, verify, install, smoke.",
+      "description": "python (the default, or EXAKIT_UDF_LANGUAGE): the launcher's official Python 3.12 container, alias PYTHON3, then the smoke UDF. rust: the pinned Rust container from the matrix in versions.json for your database's architecture and version, downloaded once into the cache, verified against its sha256 and size, installed as alias RUST (one already there is proven without a reinstall; --force reinstalls), then proven by the kit's Rust smoke UDF: the row's smoke_asset (libexakit_smoke.so built by CI for your architecture with the container's rustc 1.98.1 and exasol-udf-sdk 0.33.0) is downloaded and verified against its sha256 BEFORE the install, copied into the bucket directory as udf/libexakit_smoke.so, registered as STARTER_KIT.EXAKIT_SMOKE(x BIGINT) RETURNS VARCHAR(2000) AS %udf_object /buckets/bfsdefault/default/udf/libexakit_smoke.so and run once; it answers the container, rustc and sdk versions, which are held against the row (--json smoke: container, rustc, sdk, rustc_full). A kit whose Rust row still carries the smoke_asset placeholders (before the first CI build) installs the container and exits 7 at step smoke saying the pin is missing. --force reinstalls the Python container too. --json prints one object: {\"ok\": true, \"language\", \"alias\", \"container\": {\"url\", \"sha256\", \"arch\", \"db_versions\"} (null fields for the launcher's own container), \"smoke\": [{\"package\", \"version\"}]} or {\"ok\": false, \"language\", \"step\", \"reason\", \"remedy\"} with step one of select-container, download, verify, install, smoke.",
       "exit_codes": {
         "0": "the container is installed and, for Python, the smoke UDF passed",
         "2": "bad arguments: a language that is not python or rust, an unknown option",
         "3": "the smoke UDF found a declared package missing",
         "4": "no container in the matrix for this language, architecture or database version, or the downloaded file does not match its pinned digest (removed; run again)",
-        "5": "not ready: the add-on is not installed, the database is not running, the launcher is older than 2.3.0, the download did not arrive, the install was not confirmed",
+        "5": "not ready: the add-on is not installed, the database is not running, the launcher is older than 2.3.0, the download did not arrive, the install was not confirmed, no bucket directory to put the Rust smoke library into",
         "6": "the launcher could not install the container (exakit logs)",
-        "7": "the smoke UDF did not run, or reported a version other than the pinned one"
+        "7": "the smoke UDF did not run, or reported a version other than the pinned one (Rust: the rustc or exasol-udf-sdk differ, both named; or the container refused the library with F-UDF-CL-RUST-9001, its ABI fingerprint SDK_VERSION:RUSTC_VERSION not matching the container's; or the row's smoke library is not pinned yet)"
       },
       "examples": [
         "exakit udf-setup",
-        "exakit udf-setup --language rust --yes --json"
+        "exakit udf-setup --language rust --yes --json",
+        "exakit udf-setup --language rust --force --yes"
       ]
     },
     {
       "command": "exakit udf-use",
       "options": "default [--language python|rust] | <container.tar.gz> [--alias <NAME>] [--language python|rust] | --list; [--yes] [--json]",
       "summary": "Install the prebuilt container for this database, or your own, or list them.",
-      "description": "default: the matrix row (versions.json, components.udf-devkit.containers) for the language, your DATABASE's architecture (an Apple-silicon Mac runs an aarch64 database, Windows an x86_64 one) and its version; downloaded once into $EXAKIT_HOME/cache/containers (EXAKIT_UDF_CONTAINERS_MIRROR, a folder or base URL, instead of the release), verified against its pinned sha256 and size before the launcher sees it, installed as PYTHON3_ML (python) or RUST (rust); the Python smoke UDF compares every package's version with the pin. A tarball of yours is installed under --alias (PYTHON3_CUSTOM unless named) and proven the same way. --list shows the launcher's containers and which are installed. --json: the same objects and exit codes as udf-setup.",
+      "description": "default: the matrix row (versions.json, components.udf-devkit.containers) for the language, your DATABASE's architecture (an Apple-silicon Mac runs an aarch64 database, Windows an x86_64 one) and its version; downloaded once into $EXAKIT_HOME/cache/containers (EXAKIT_UDF_CONTAINERS_MIRROR, a folder or base URL, instead of the release), verified against its pinned sha256 and size before the launcher sees it, installed as PYTHON3_ML (python) or RUST (rust; an installed RUST is updated); the Python smoke UDF compares every package's version with the pin, the Rust one (see udf-setup) the container's rustc and exasol-udf-sdk. A Rust tarball of your own is installed, not proven: the Rust smoke library is built for the kit's pinned container only. A tarball of yours is installed under --alias (PYTHON3_CUSTOM unless named) and proven the same way. --list shows the launcher's containers and which are installed. --json: the same objects and exit codes as udf-setup.",
       "exit_codes": {
         "0": "installed and proven",
         "2": "bad arguments: not a tarball, not a file, a bad alias, a language that is not python or rust",
@@ -63,7 +64,7 @@
         "4": "no container for this language, architecture or database version, or a digest mismatch (the file is removed; run again)",
         "5": "not ready: the add-on, the database, the launcher, the download or the disk; or not confirmed",
         "6": "the launcher could not install the container (exakit logs)",
-        "7": "the smoke UDF did not run, or reported a version other than the pinned one"
+        "7": "the smoke UDF did not run, or reported a version other than the pinned one (Rust: see udf-setup)"
       },
       "examples": [
         "exakit udf-use default",
@@ -155,7 +156,8 @@
   ],
   "notes": [
     "Every container install restarts the database. You are asked first; --yes answers, and so does a run with no terminal. Running add-on services (dash-server, the scheduler) are stopped before and started again after.",
-    "The smoke UDF lives in the EXAKIT_UDF schema and is replaced on every install. Drop the schema if you want it gone; the next install creates it again.",
+    "The Python smoke UDF lives in the EXAKIT_UDF schema and is replaced on every install; the Rust one is STARTER_KIT.EXAKIT_SMOKE over udf/libexakit_smoke.so in the bucket directory, the same folder a Rust UDF of yours goes to (exakit rust-udf, the next kit step). Drop a schema if you want its smoke UDF gone; the next install creates it again.",
+    "The Rust smoke library is built only by CI (.github/workflows/rust-smoke.yml, from udf/rust-smoke, inside docker.io/library/rust:1.98.1-trixie with cargo-exasol-udf 0.33.0, for x86_64 and aarch64), because the database checks a library's ABI fingerprint (SDK_VERSION:RUSTC_VERSION) when it loads it and refuses any other build (F-UDF-CL-RUST-9001). Its url, sha256 and size are the Rust rows' smoke_asset in versions.json, taken from the rust-smoke-v* release; the kit downloads it like a container (cache, EXAKIT_UDF_CONTAINERS_MIRROR by file name, digest verified first). On success the manifest records components.udf_devkit.rust (validated, rustc, sdk).",
     "Write a UDF for a container with its alias: CREATE OR REPLACE PYTHON3_ML SCALAR SCRIPT ... The official container answers to PYTHON3, the Rust one to RUST.",
     "Containers: the prebuilt ones are a matrix in versions.json (components.udf-devkit.containers), one row per language and architecture with the database versions it runs on, its runtime (Python 3.12, rustc 1.98.1), the pinned packages or crates, url, sha256 and size. The row is chosen by the DATABASE's architecture (aarch64 on an Apple-silicon Mac, x86_64 on Windows and most Linux; EXAKIT_UDF_ARCH=x86_64|aarch64 overrides) and its version; a mismatch is refused (exit 4) rather than guessed. The digest is verified before any install; the file stays in $EXAKIT_HOME/cache/containers and is reused once verified. EXAKIT_UDF_CONTAINERS_MIRROR (a folder, a file:// or https:// base URL holding the file by name) serves it offline. EXAKIT_UDF_LANGUAGE=python|rust is the default language for the commands and the persona install.",
     "Uninstalling the add-on leaves the containers in the database, because your UDFs may use them; exasol slc remove <alias> removes one.",
@@ -180,8 +182,16 @@
       "remedy": "The container answering to PYTHON3_ML is not the one the kit pinned: remove it from $EXAKIT_HOME/cache/containers and run exakit udf-use default again (exakit udf-use --list shows what is installed)"
     },
     {
-      "symptom": "Rust: the RUST container is installed but there is no smoke UDF yet",
-      "remedy": "exasol slc list shows RUST; the Rust smoke UDF and exakit rust-udf arrive with the next kit step"
+      "symptom": "Rust: the smoke UDF reported rustc X, pinned 1.98.1, or the container refused the library (F-UDF-CL-RUST-9001) - exit 7, step smoke",
+      "remedy": "The library in the cache was built for another toolchain than the RUST container: remove $EXAKIT_HOME/cache/containers/libexakit_smoke-<arch>.so and run exakit udf-setup --language rust again; if it repeats, the kit's versions.json pins a library that does not match its container - exakit update"
+    },
+    {
+      "symptom": "Rust: the smoke UDF library is not pinned in this kit's versions.json yet (exit 7, step smoke)",
+      "remedy": "exakit update - the RUST container is installed (exasol slc list) and usable; the kit proves it once a release carries the library's digest"
+    },
+    {
+      "symptom": "Rust: the smoke UDF library does not match its pinned digest (exit 4, step verify)",
+      "remedy": "exakit udf-setup --language rust - the file was removed and is downloaded afresh; the container was not touched"
     },
     {
       "symptom": "Building a container needs a running container engine, Docker or Podman, and none answers",

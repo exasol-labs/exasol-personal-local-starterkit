@@ -52,6 +52,23 @@ function Exit-UdfRefusal {
     throw "EXIT $($Code): $Language/$($Step): $Message | $Remedy"
 }
 function Get-UdfDbVersion { return $script:dbVersion }
+# The Rust smoke UDF needs a database: its tool call is recorded and answered
+# with what the kit library reports (stubRustc: the rustc it was built with;
+# stubRustLoadError: the database refused it); every other tool call is real.
+$script:stubRustc = "1.98.1"
+$script:stubRustLoadError = ""
+$script:realInvokeUdfTool = ${function:Invoke-UdfTool}
+function Invoke-UdfTool {
+    param([string[]]$ToolArgs, [string]$StdIn = "", [string]$Python = "", [string]$Script = "udf_tool.py", [switch]$NoConnection)
+    if ($ToolArgs[0] -eq "smoke-rust") {
+        [void]$script:calls.Add("smoke-rust " + ($ToolArgs -join " "))
+        if ($script:stubRustLoadError) { return ,@(7, @(), $script:stubRustLoadError) }
+        $lines = @("container RUST", "rustc $($script:stubRustc)", "sdk 0.33.0", "rustc_full rustc $($script:stubRustc) (48a229cea 2026-09-01)")
+        if ($script:stubRustc -ne "1.98.1") { return ,@(7, $lines, "rustc reported $($script:stubRustc), pinned 1.98.1") }
+        return ,@(0, $lines, "")
+    }
+    return (& $script:realInvokeUdfTool @PSBoundParameters)
+}
 $script:dbVersion = "2026.2.0-nano.3"
 function Invoke-UdfSlc {
     param([string[]]$SlcArgs)
@@ -151,20 +168,29 @@ try {
     $rsFake = Join-Path $mirror "lc-rust-fake.tar.gz"
     [System.IO.File]::WriteAllText($pyFake, "fake python container")
     [System.IO.File]::WriteAllText($rsFake, "fake rust container")
+    foreach ($a in @("x86_64", "aarch64")) { [System.IO.File]::WriteAllText((Join-Path $mirror "libexakit_smoke-$a.so"), "fake rust smoke $a") }
     $pySha = (Get-FileHash -Path $pyFake -Algorithm SHA256).Hash.ToLowerInvariant()
     $rsSha = (Get-FileHash -Path $rsFake -Algorithm SHA256).Hash.ToLowerInvariant()
     # A test copy of the kit's versions.json: the same document, its container
-    # rows replaced by ones that point at the fake tarballs (sha256 and size real).
-    function New-Matrix($Path, $PythonSha, $Arches) {
+    # rows replaced by ones that point at the fake tarballs (sha256 and size
+    # real); the Rust rows' smoke_asset points at the fake smoke library of the
+    # arch (SmokeMode: ok, bad = a wrong sha256, placeholder = the pre-CI ones).
+    function New-Matrix($Path, $PythonSha, $Arches, $SmokeMode = "ok") {
         $doc = Get-Content -Raw (Join-Path $repo "versions.json") | ConvertFrom-Json
         $rows = @()
         foreach ($arch in $Arches) {
             $rows += [ordered]@{ language = "python"; alias = "PYTHON3_ML"; kind = "prebuilt"; arch = $arch; db_versions = ">=2026.1"
                                  runtime = [ordered]@{ python = "3.12" }; packages = [ordered]@{ "scikit-learn" = "1.9.0"; numpy = "2.4.6" }
                                  url = "https://example.invalid/containers/py-fake.tar.gz"; sha256 = $PythonSha; size = (Get-Item $pyFake).Length }
+            $lib = Join-Path $mirror "libexakit_smoke-$arch.so"
+            $smoke = [ordered]@{ url = "https://example.invalid/smoke/libexakit_smoke-$arch.so"
+                                 sha256 = (Get-FileHash -Path $lib -Algorithm SHA256).Hash.ToLowerInvariant(); size = (Get-Item $lib).Length }
+            if ($SmokeMode -eq "bad") { $smoke.sha256 = ("0" * 64) }
+            elseif ($SmokeMode -eq "placeholder") { $smoke.sha256 = "set after the first CI build"; $smoke.size = "set after the first CI build" }
             $rows += [ordered]@{ language = "rust"; alias = "RUST"; kind = "prebuilt"; arch = $arch; db_versions = ">=2026.1"
                                  runtime = [ordered]@{ rustc = "1.98.1" }; crates = [ordered]@{ "exasol-udf-sdk" = "0.33.0" }
-                                 url = "https://example.invalid/containers/lc-rust-fake.tar.gz"; sha256 = $rsSha; size = (Get-Item $rsFake).Length }
+                                 url = "https://example.invalid/containers/lc-rust-fake.tar.gz"; sha256 = $rsSha; size = (Get-Item $rsFake).Length
+                                 validated = $false; smoke_asset = $smoke }
         }
         $doc.components.'udf-devkit' | Add-Member -NotePropertyName containers -NotePropertyValue $rows -Force
         [System.IO.File]::WriteAllText($Path, ($doc | ConvertTo-Json -Depth 12))
@@ -172,15 +198,22 @@ try {
     $goodDoc = Join-Path $work "versions.json"
     $badDoc = Join-Path $work "versions-bad-digest.json"
     $armDoc = Join-Path $work "versions-aarch64-only.json"
+    $badSmokeDoc = Join-Path $work "versions-bad-smoke.json"
+    $unpinnedSmokeDoc = Join-Path $work "versions-unpinned-smoke.json"
     New-Matrix $goodDoc $pySha @("x86_64", "aarch64")
     New-Matrix $badDoc ("0" * 64) @("x86_64", "aarch64")
     New-Matrix $armDoc $pySha @("aarch64")
+    New-Matrix $badSmokeDoc $pySha @("x86_64", "aarch64") "bad"
+    New-Matrix $unpinnedSmokeDoc $pySha @("x86_64", "aarch64") "placeholder"
+    $bucketUdf = Join-Path (Join-Path (Join-Path (Join-Path (Join-Path $script:PersonalDeployDir "local\runtime\exa\bucketfs") "bfsdefault") "default") "udf") "libexakit_smoke.so"
     $script:VersionsDocPath = $goodDoc
     $env:EXAKIT_UDF_CONTAINERS_MIRROR = $mirror
     $env:EXAKIT_UDF_ARCH = "aarch64"
     $cache = $script:UdfContainerCache
     $cachedPy = Join-Path $cache "py-fake.tar.gz"
     $cachedRs = Join-Path $cache "lc-rust-fake.tar.gz"
+    $cachedSo = Join-Path $cache "libexakit_smoke-aarch64.so"
+    $smokeCall = "smoke-rust smoke-rust RUST STARTER_KIT /buckets/bfsdefault/default/udf/libexakit_smoke.so 1.98.1 0.33.0"
     Remove-Item -Recurse -Force $cache -ErrorAction SilentlyContinue
     Reset-Calls
     Invoke-CmdUdfUse -CmdArgs @("default")
@@ -234,31 +267,78 @@ try {
     Contains "a mirror without the file: exit 5, step download" "EXIT 5: python/download: The container py-fake.tar.gz is not in EXAKIT_UDF_CONTAINERS_MIRROR" $said
     $env:EXAKIT_UDF_CONTAINERS_MIRROR = $mirror
 
-    Write-Host "EXAKIT_UDF_LANGUAGE=rust takes the Rust row (alias RUST), with no smoke UDF yet:"
+    Write-Host "EXAKIT_UDF_LANGUAGE=rust takes the Rust row (alias RUST) and proves it with the Rust smoke UDF (AC-ML1.5):"
     Remove-Item -Recurse -Force $cache -ErrorAction SilentlyContinue
+    Remove-Item -Force $bucketUdf -ErrorAction SilentlyContinue
     Remove-ExakitManifestValue "components.udf_devkit"
     $script:UdfLanguage = "rust"
     Reset-Calls
     Check "the install succeeds" "True" (Install-UdfDevkit)
-    Check "the install goes down the rust path: slc custom install --alias RUST --language rust, no smoke" `
-        "stop dash-server|launcher slc custom install --source $cachedRs --alias RUST --language rust --auto-approve|wait|start dash-server" ($script:calls -join "|")
+    Check "the install goes down the rust path: slc custom install --alias RUST --language rust, then the smoke UDF over the library's /buckets path, held against the row's rustc and sdk" `
+        "stop dash-server|launcher slc custom install --source $cachedRs --alias RUST --language rust --auto-approve|wait|start dash-server|$smokeCall" ($script:calls -join "|")
+    Check "the smoke library was verified into the cache before the install" "fake rust smoke aarch64" ([System.IO.File]::ReadAllText($cachedSo))
+    Check "and copied into the bucket directory under udf/" "fake rust smoke aarch64" ([System.IO.File]::ReadAllText($bucketUdf))
     Check "the language is recorded" "rust" (Get-ExakitManifestValue "components.udf_devkit.languages")
     Check "the url under the alias" "https://example.invalid/containers/lc-rust-fake.tar.gz" (Get-ExakitManifestValue "components.udf_devkit.containers.RUST")
-    Check "validated false until the smoke UDF exists" "False" ("" + (Get-ExakitManifestValue "components.udf_devkit.validated"))
+    Check "validated, with the reported rustc and sdk" "True 1.98.1 0.33.0" ("" + (Get-ExakitManifestValue "components.udf_devkit.rust.validated") + " " + (Get-ExakitManifestValue "components.udf_devkit.rust.rustc") + " " + (Get-ExakitManifestValue "components.udf_devkit.rust.sdk"))
+    Check "...and the add-on's flag" "True" ("" + (Get-ExakitManifestValue "components.udf_devkit.validated"))
     Contains "and the summary names both languages" "Rust UDFs: alias RUST" (Get-UdfDevkitSummary)
     $script:UdfLanguage = "python"
     Set-ExakitManifestValue "components.udf_devkit.languages" "python"
     $json = Invoke-CmdUdfSetup -CmdArgs @("--language", "rust", "--json")
     $d = "$json" | ConvertFrom-Json
-    Check "udf-setup --language rust --json: ok, alias RUST, an empty smoke list" "True rust RUST 0" "$($d.ok) $($d.language) $($d.alias) $(@($d.smoke).Count)"
+    Check "udf-setup --language rust --json: ok, alias RUST, the smoke lines (container, rustc, sdk)" "True rust RUST container=RUST,rustc=1.98.1,sdk=0.33.0,rustc_full=rustc 1.98.1 (48a229cea 2026-09-01)" `
+        "$($d.ok) $($d.language) $($d.alias) $((@($d.smoke) | ForEach-Object { "$($_.package)=$($_.version)" }) -join ',')"
     Check "a second language joins the record" "python,rust" (Get-ExakitManifestValue "components.udf_devkit.languages")
     $script:ExakitRefusalJson = $false; $script:UdfJson = $false; $script:ExakitQuietDetail = $false
     $script:installedAliases = @("RUST")
     function Get-UdfDevkitInstalledAliases { return $script:installedAliases }
     Reset-Calls
     Invoke-CmdUdfUse -CmdArgs @("default", "--language", "rust", "--yes")
-    Contains "an installed RUST is updated, not installed twice" "slc custom update --source $cachedRs --alias RUST" ($script:calls -join "|")
+    Contains "udf-use default updates an installed RUST, not installs it twice" "slc custom update --source $cachedRs --alias RUST" ($script:calls -join "|")
+    Reset-Calls
+    Invoke-CmdUdfSetup -CmdArgs @("--language", "rust", "--yes")
+    Check "udf-setup proves an installed RUST without a reinstall: no launcher call, the smoke UDF runs" $smokeCall ($script:calls -join "|")
+    Reset-Calls
+    Invoke-CmdUdfSetup -CmdArgs @("--language", "rust", "--yes", "--force")
+    Contains "--force reinstalls it" "slc custom update --source $cachedRs --alias RUST" ($script:calls -join "|")
     $script:installedAliases = @()
+
+    Write-Host "a rustc other than the pinned one, or a library the container refuses, is exit 7 at step smoke naming both:"
+    $script:stubRustc = "1.97.0"
+    $said = ""
+    try { Invoke-CmdUdfSetup -CmdArgs @("--language", "rust", "--yes") } catch { $said = "$_" }
+    Contains "exit 7, step smoke, both versions" "EXIT 7: rust/smoke: The Rust smoke UDF on RUST did not pass: rustc reported 1.97.0, pinned 1.98.1 | exakit udf-setup --language rust" $said
+    Check "and the record says not validated" "False" ("" + (Get-ExakitManifestValue "components.udf_devkit.rust.validated"))
+    $script:stubRustc = "1.98.1"
+    $script:stubRustLoadError = "the RUST container refused to load the smoke library (F-UDF-CL-RUST-9001: ABI fingerprint mismatch): the library was built for another exasol-udf-sdk or rustc than the container's 0.33.0:rustc_1.98.1 - F-UDF-CL-RUST-9001"
+    $said = ""
+    try { Invoke-CmdUdfSetup -CmdArgs @("--language", "rust", "--yes") } catch { $said = "$_" }
+    Contains "the container refusing the library (F-UDF-CL-RUST-9001): exit 7, step smoke, the fingerprint named" "EXIT 7: rust/smoke: The Rust smoke UDF on RUST did not pass: the RUST container refused to load the smoke library (F-UDF-CL-RUST-9001" $said
+    Contains "..." "0.33.0:rustc_1.98.1" $said
+    $script:stubRustLoadError = ""
+
+    Write-Host "a smoke library whose digest does not match is refused before the launcher runs:"
+    Remove-Item -Recurse -Force $cache -ErrorAction SilentlyContinue
+    $script:VersionsDocPath = $badSmokeDoc
+    Reset-Calls
+    $said = ""
+    try { Invoke-CmdUdfSetup -CmdArgs @("--language", "rust", "--yes") } catch { $said = "$_" }
+    Contains "exit 4, step verify, naming the library" "EXIT 4: rust/verify: The smoke UDF library libexakit_smoke-aarch64.so does not match its pinned digest (sha256 expected 0000" $said
+    Check "the launcher saw nothing" "" ($script:calls -join "|")
+    Check "and the library is gone from the cache (the container stays)" "False True" "$(Test-Path $cachedSo) $(Test-Path $cachedRs)"
+
+    Write-Host "a row whose smoke_asset is still a placeholder installs the container and stops at step smoke:"
+    Remove-Item -Recurse -Force $cache -ErrorAction SilentlyContinue
+    $script:VersionsDocPath = $unpinnedSmokeDoc
+    Set-ExakitManifestValue "components.udf_devkit.validated" $true
+    Reset-Calls
+    $said = ""
+    try { Invoke-CmdUdfSetup -CmdArgs @("--language", "rust", "--yes") } catch { $said = "$_" }
+    Contains "exit 7, step smoke, saying the pin is missing, exakit update as the remedy" "EXIT 7: rust/smoke: The Rust smoke UDF library for aarch64 is not pinned in this kit's versions.json yet (its sha256 is a placeholder (set after the first CI build)): the RUST container is installed (exasol slc list) but not proven. A kit update brings the pin. | exakit update" $said
+    Check "the container was installed, nothing ran as a smoke UDF" "stop dash-server|launcher slc custom install --source $cachedRs --alias RUST --language rust --auto-approve|wait|start dash-server" ($script:calls -join "|")
+    Check "the add-on is not validated" "False" ("" + (Get-ExakitManifestValue "components.udf_devkit.validated"))
+    $script:VersionsDocPath = $goodDoc
 
     Write-Host "udf-setup --json answers with the same shape for the official container:"
     $json = Invoke-CmdUdfSetup -CmdArgs @("--json")

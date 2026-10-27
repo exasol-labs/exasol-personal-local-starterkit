@@ -10,6 +10,13 @@ smoke UDF that proves a container, and the container build.
                                                           create and run the smoke UDF; "name version" per line,
                                                           exit 3 when a declared package is missing, 7 when one
                                                           pinned ==version is reported with another version
+    python udf_tool.py smoke-rust <alias> <schema> </buckets/... .so> <rustc> [sdk]
+                                                          create and run the Rust smoke UDF over the library at
+                                                          that bucket path; "container RUST", "rustc <version>",
+                                                          "sdk <version>" lines; exit 7 when the reported rustc
+                                                          (or sdk) is not the pinned one, or the container
+                                                          refused the library (F-UDF-CL-RUST-9001), both
+                                                          versions named on stderr
     python udf_tool.py dbversion                          the database version (for a prebuilt container's check)
     python udf_tool.py arch <uname -m> <os>               the DATABASE's architecture, x86_64 or aarch64 (EXAKIT_UDF_ARCH
                                                           overrides); exit 2 for a machine it does not know
@@ -267,6 +274,105 @@ def smoke_verdict(found: dict, pins: list[tuple[str, str]]) -> int:
     return 7 if differs else 0
 
 
+# --- the Rust smoke UDF (design 5, AC-ML1.5) ------------------------------------------------------------------------
+#
+# udf/rust-smoke is one scalar UDF, EXAKIT_SMOKE(x BIGINT) RETURNS VARCHAR(2000), built by CI for each architecture
+# and copied into the bucket by the kit; it answers {"container": "RUST", "rustc": "rustc 1.98.1 (...)", "sdk":
+# "0.33.0", "x": 1}. The database checks the library's ABI fingerprint (SDK_VERSION:RUSTC_VERSION) when it loads it
+# and refuses another build with F-UDF-CL-RUST-9001; the kit maps that to step smoke, exit 7, naming both sides.
+
+_BUCKET_SO = re.compile(r"^/buckets/[A-Za-z0-9_][A-Za-z0-9_./-]*\.so$")
+_SEMVER = re.compile(r"\d+\.\d+\.\d+")
+RUST_LOAD_ERROR = "F-UDF-CL-RUST-9001"
+RUST_SMOKE_NAME = "EXAKIT_SMOKE"
+
+
+def rust_smoke_script(alias: str, schema: str, udf_path: str) -> str:
+    """The CREATE SCRIPT for the Rust smoke UDF over the library at ``udf_path`` (a /buckets/... .so path, nothing
+    else reaches the SQL)."""
+    if not _BUCKET_SO.match(udf_path or ""):
+        raise Refused(f"'{udf_path}' is not a /buckets/... path to a .so file.")
+    return (f"CREATE OR REPLACE {identifier(alias, 'The container alias')} SCALAR SCRIPT "
+            f"{identifier(schema, 'The schema')}.{RUST_SMOKE_NAME}(x BIGINT) RETURNS VARCHAR(2000) AS\n"
+            f"%udf_object {udf_path};\n")
+
+
+def rustc_semver(text: str) -> str:
+    """"rustc 1.98.1 (48a229cea 2026-09-01)" -> "1.98.1"; a bare version passes through; "" when none."""
+    match = _SEMVER.search(text or "")
+    return match.group(0) if match else ""
+
+
+def rust_smoke_report(text: str) -> dict:
+    """The UDF's answer as a dict; refused when it is not the JSON object the kit's library returns."""
+    try:
+        report = json.loads(text or "")
+    except ValueError:
+        raise Refused(f"the smoke UDF answered '{text}', not a JSON object") from None
+    if not isinstance(report, dict) or "rustc" not in report:
+        raise Refused(f"the smoke UDF answered '{text}', not {{container, rustc, sdk}}")
+    return report
+
+
+def rust_smoke_verdict(report: dict, rustc_pin: str, sdk_pin: str = "") -> tuple[list[str], int]:
+    """("name version" lines, 0 or 7): the lines the kit prints (container, rustc as x.y.z, sdk, rustc_full) and 7
+    when the reported rustc (or the sdk, when pinned) is not the pinned one, the two versions on stderr."""
+    rustc_full = str(report.get("rustc") or "")
+    rustc = rustc_semver(rustc_full) or rustc_full
+    sdk = str(report.get("sdk") or "")
+    lines = [f"container {report.get('container') or 'RUST'}", f"rustc {rustc or 'unknown'}", f"sdk {sdk or 'unknown'}"]
+    if rustc_full and rustc_full != rustc:
+        lines.append(f"rustc_full {rustc_full}")
+    code = 0
+    if rustc_semver(rustc_pin) and rustc != rustc_semver(rustc_pin):
+        print(f"rustc reported {rustc or 'nothing'}, pinned {rustc_semver(rustc_pin)}", file=sys.stderr)
+        code = 7
+    if sdk_pin and sdk != sdk_pin:
+        print(f"exasol-udf-sdk reported {sdk or 'nothing'}, pinned {sdk_pin}", file=sys.stderr)
+        code = 7
+    return lines, code
+
+
+def rust_load_reason(error: str, rustc_pin: str, sdk_pin: str) -> str:
+    """One line for a database error while creating or running the smoke UDF: an ABI refusal (F-UDF-CL-RUST-9001)
+    is named as such, with the fingerprint the container expects (sdk:rustc), so the user knows the library and the
+    container disagree rather than the database being broken."""
+    text = " ".join(str(error or "").split())
+    if RUST_LOAD_ERROR in text:
+        return (f"the RUST container refused to load the smoke library ({RUST_LOAD_ERROR}: ABI fingerprint mismatch): "
+                f"the library was built for another exasol-udf-sdk or rustc than the container's "
+                f"{sdk_pin or '?'}:rustc_{rustc_semver(rustc_pin) or '?'} - {text}")
+    return f"the smoke UDF did not run: {text}"
+
+
+def smoke_rust(alias: str, schema: str, udf_path: str, rustc_pin: str, sdk_pin: str = "") -> int:
+    """Create the Rust smoke UDF over the library in the bucket, run it once, print the "name version" lines; 7 with
+    both versions on stderr when the reported rustc or sdk is not the pinned one or the container refused the
+    library."""
+    script = rust_smoke_script(alias, schema, udf_path)
+    schema = identifier(schema, "The schema")
+    conn = _connect()
+    try:
+        try:
+            conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
+            conn.execute(script)
+            rows = conn.execute(f"SELECT {schema}.{RUST_SMOKE_NAME}(1) AS ANSWER").fetchall()
+        except Exception as err:  # the driver's error carries the database's message
+            print(rust_load_reason(str(err), rustc_pin, sdk_pin), file=sys.stderr)
+            return 7
+    finally:
+        conn.close()
+    answer = str(rows[0]["ANSWER"]) if rows else ""
+    try:
+        report = rust_smoke_report(answer)
+    except Refused as err:
+        print(str(err), file=sys.stderr)
+        return 7
+    lines, code = rust_smoke_verdict(report, rustc_pin, sdk_pin)
+    print("\n".join(lines))
+    return code
+
+
 def db_version() -> str:
     conn = _connect()
     try:
@@ -330,6 +436,8 @@ def main(argv: list[str]) -> int:
             return 0
         if command == "smoke" and len(args) >= 2:
             return smoke(args[0], args[1], args[2:])
+        if command == "smoke-rust" and len(args) in (4, 5):
+            return smoke_rust(args[0], args[1], args[2], args[3], args[4] if len(args) == 5 else "")
         if command == "dbversion":
             print(db_version())
             return 0

@@ -42,7 +42,7 @@
       "severity": "normal"
     },
     "skills": {
-      "version": "1.18.4",
+      "version": "1.18.5",
       "severity": "normal"
     },
     "dash-server": {
@@ -155,7 +155,14 @@
           },
           "url": "https://github.com/exasol-labs/language-container-rs/releases/download/v0.33.0/lc-rust-0.33.0.tar.gz",
           "sha256": "eeedf5f2f8f7a4ad3a329065e516f93106412f270280bf47dede8e5023985245",
-          "size": 10238906
+          "size": 10238906,
+          "validated": false,
+          "smoke_asset": {
+            "url": "https://github.com/exasol-labs/exasol-personal-local-starterkit/releases/download/rust-smoke-v0.33.0/libexakit_smoke-x86_64.so",
+            "sha256": "set after the first CI build (rust-smoke.yml: the sha256 it prints for this arch)",
+            "size": "set after the first CI build (rust-smoke.yml: the size it prints for this arch)",
+            "note": "libexakit_smoke.so built by .github/workflows/rust-smoke.yml inside rust:1.98.1-trixie with cargo-exasol-udf 0.33.0; placeholders until the rust-smoke-v0.33.0 tag is built - udf-setup --language rust installs the container and reports exit 7 (step smoke) until then"
+          }
         },
         {
           "language": "rust",
@@ -171,7 +178,14 @@
           },
           "url": "https://github.com/exasol-labs/language-container-rs/releases/download/v0.33.0/lc-rust-0.33.0-aarch64.tar.gz",
           "sha256": "de311ae8acadd30579373820d00b92364866880c15bf2edf8284567a8aaa5f8e",
-          "size": 9574265
+          "size": 9574265,
+          "validated": false,
+          "smoke_asset": {
+            "url": "https://github.com/exasol-labs/exasol-personal-local-starterkit/releases/download/rust-smoke-v0.33.0/libexakit_smoke-aarch64.so",
+            "sha256": "set after the first CI build (rust-smoke.yml: the sha256 it prints for this arch)",
+            "size": "set after the first CI build (rust-smoke.yml: the size it prints for this arch)",
+            "note": "libexakit_smoke.so built by .github/workflows/rust-smoke.yml inside rust:1.98.1-trixie with cargo-exasol-udf 0.33.0; placeholders until the rust-smoke-v0.33.0 tag is built - udf-setup --language rust installs the container and reports exit 7 (step smoke) until then"
+          }
         }
       ]
     }

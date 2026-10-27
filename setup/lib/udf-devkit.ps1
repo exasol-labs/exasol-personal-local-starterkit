@@ -2,7 +2,8 @@
 # managed install + validation + the `exakit udf-setup | udf-use | udf-build |
 # udf-file | model` commands. Twin of setup/lib/udf-devkit.sh; read that header
 # for the facts (the container matrix in versions.json, the database's
-# architecture, the digest check, --json and the exit codes). The rules and the
+# architecture, the digest check, the Rust smoke UDF built by CI and held
+# against the row, --json and the exit codes). The rules and the
 # database steps are setup/udf/udf_tool.py, the model files' rules
 # setup/udf/model_tool.py, both shared by the two twins.
 
@@ -18,6 +19,11 @@ $script:UdfRustAlias = "RUST"
 # says otherwise; validated where it is read (Get-UdfLanguageProblem).
 $script:UdfLanguage = if ($env:EXAKIT_UDF_LANGUAGE) { $env:EXAKIT_UDF_LANGUAGE } else { "python" }
 $script:UdfSchema = "EXAKIT_UDF"
+# The Rust smoke UDF (design 5): where its library lands in the bucket, the
+# schema it is registered in, its name (udf_tool.py: EXAKIT_SMOKE).
+$script:UdfRustSmokeSchema = "STARTER_KIT"
+$script:UdfRustSmokeDir = "udf"
+$script:UdfRustSmokeLib = "libexakit_smoke.so"
 # Downloaded prebuilt containers, kept by file name so a second install
 # verifies the cached file instead of downloading it again.
 $script:UdfContainerCache = if ($env:EXAKIT_UDF_CONTAINER_CACHE) { $env:EXAKIT_UDF_CONTAINER_CACHE } else { Join-Path (Join-Path $script:ExakitHome "cache") "containers" }
@@ -30,6 +36,13 @@ $script:UdfFail = $null
 # file (Get-UdfContainerFile), and the smoke UDF's "name version" lines.
 $script:UdfContainer = $null
 $script:UdfContainerFile = ""
+# The last asset Get-UdfVerifiedFile brought into the cache; the Rust row's
+# smoke library (Get-UdfRustSmokeAsset: url, sha256, size; UdfSmokeWhy says
+# why there is none) once Install-UdfDevkitRust fetched it.
+$script:UdfFetchedFile = ""
+$script:UdfSmokeAsset = $null
+$script:UdfSmokeWhy = ""
+$script:UdfSmokeFile = ""
 $script:UdfSmokeLines = @()
 $script:UdfDeclined = $false
 $script:UdfBucketfsDir = "local\runtime\exa\bucketfs"
@@ -366,27 +379,38 @@ function Get-UdfDownload {
 
 # Get-UdfContainerFile - the selected row's tarball into the cache
 # (UdfContainerFile), verified against its pinned size and sha256 before
-# anything installs it: a cached file that verifies is reused; otherwise it is
-# downloaded or copied from EXAKIT_UDF_CONTAINERS_MIRROR (a folder, file:// or
-# https:// base URL holding the file by name) into a .part that is renamed
-# only once it verifies. A mismatch is Set-UdfFail 4 (step verify) and the
-# file is removed, so running the command again downloads it afresh; a
-# download that did not arrive is 5 (step download). Twin of
-# _udf_fetch_container.
+# anything installs it (Get-UdfVerifiedFile). Twin of _udf_fetch_container.
 function Get-UdfContainerFile {
     param([Parameter(Mandatory)][string]$Language)
     $c = $script:UdfContainer
-    $name = Split-Path -Leaf ("" + $c.url)
-    $script:UdfContainerFile = Join-Path $script:UdfContainerCache $name
+    if (-not (Get-UdfVerifiedFile -Language $Language -What "container" -Url ("" + $c.url) -Sha256 ("" + $c.sha256) -Size ("" + $c.size) -Remedy "exakit udf-use default")) { return $false }
+    $script:UdfContainerFile = $script:UdfFetchedFile
+    return $true
+}
+
+# Get-UdfVerifiedFile - a pinned release asset (the container tarball, the
+# Rust smoke library) into the cache (UdfFetchedFile), verified against its
+# pinned size and sha256 before anything uses it: a cached file that verifies
+# is reused; otherwise it is downloaded or copied from
+# EXAKIT_UDF_CONTAINERS_MIRROR (a folder, file:// or https:// base URL holding
+# the file by name) into a .part that is renamed only once it verifies. A
+# mismatch is Set-UdfFail 4 (step verify) and the file is removed, so running
+# the command again downloads it afresh; a download that did not arrive is 5
+# (step download). Twin of _udf_fetch_verified.
+function Get-UdfVerifiedFile {
+    param([Parameter(Mandatory)][string]$Language, [Parameter(Mandatory)][string]$What, [Parameter(Mandatory)][string]$Url,
+          [Parameter(Mandatory)][string]$Sha256, [Parameter(Mandatory)][string]$Size, [AllowEmptyString()][string]$Remedy = "")
+    $name = Split-Path -Leaf $Url
+    $script:UdfFetchedFile = Join-Path $script:UdfContainerCache $name
     try { New-Item -ItemType Directory -Force -Path $script:UdfContainerCache -ErrorAction Stop | Out-Null } catch {
         return (Set-UdfFail -Code 5 -Step "download" -Remedy "" -Message "Could not create the container cache $($script:UdfContainerCache).")
     }
-    $verifyArgs = @("verify", $script:UdfContainerFile, ("" + $c.sha256), ("" + $c.size))
-    if ((Test-Path $script:UdfContainerFile -PathType Leaf) -and (Invoke-UdfTool -NoConnection -ToolArgs $verifyArgs)[0] -eq 0) {
-        Ok "Using the cached container $($script:UdfContainerFile) (digest verified)"
+    $verifyArgs = @("verify", $script:UdfFetchedFile, $Sha256, $Size)
+    if ((Test-Path $script:UdfFetchedFile -PathType Leaf) -and (Invoke-UdfTool -NoConnection -ToolArgs $verifyArgs)[0] -eq 0) {
+        Ok "Using the cached $What $($script:UdfFetchedFile) (digest verified)"
         return $true
     }
-    $source = "" + $c.url
+    $source = $Url
     $local = ""
     $mirror = $env:EXAKIT_UDF_CONTAINERS_MIRROR
     if ($mirror) {
@@ -405,32 +429,106 @@ function Get-UdfContainerFile {
             $source = $local
         }
     }
-    $mb = "{0} MB" -f [math]::Floor([double]$c.size / 1000000)
-    $part = "$($script:UdfContainerFile).part"
-    Remove-Item -Force $script:UdfContainerFile, $part -ErrorAction SilentlyContinue
+    $bytes = 0.0
+    try { $bytes = [double]$Size } catch { $bytes = 0.0 }
+    $mb = "{0} MB" -f [math]::Floor($bytes / 1000000)
+    $part = "$($script:UdfFetchedFile).part"
+    Remove-Item -Force $script:UdfFetchedFile, $part -ErrorAction SilentlyContinue
     if ($local) {
-        Info "Copying the $Language container ($mb) from $local"
+        Info "Copying the $Language $What ($mb) from $local"
         try { Copy-Item -LiteralPath $local -Destination $part -Force -ErrorAction Stop } catch {
             Remove-Item -Force $part -ErrorAction SilentlyContinue
-            return (Set-UdfFail -Code 5 -Step "download" -Remedy "" -Message "The container $name is not in EXAKIT_UDF_CONTAINERS_MIRROR ($local).")
+            return (Set-UdfFail -Code 5 -Step "download" -Remedy "" -Message "The $What $name is not in EXAKIT_UDF_CONTAINERS_MIRROR ($local).")
         }
     } else {
-        Info "Downloading the $Language container ($mb, checked against its SHA-256) from $source"
-        $script:ExakitActiveLabel = "Downloading the $Language container ($mb)"
+        Info "Downloading the $Language $What ($mb, checked against its SHA-256) from $source"
+        $script:ExakitActiveLabel = "Downloading the $Language $What ($mb)"
         $got = Get-UdfDownload -Url $source -Dest $part
         $script:ExakitActiveLabel = ""
         if (-not $got) {
-            return (Set-UdfFail -Code 5 -Step "download" -Remedy "exakit udf-use default" -Message "The container could not be downloaded from $source. Retry when online, or set EXAKIT_UDF_CONTAINERS_MIRROR to a folder or URL holding $name.")
+            return (Set-UdfFail -Code 5 -Step "download" -Remedy $Remedy -Message "The $What could not be downloaded from $source. Retry when online, or set EXAKIT_UDF_CONTAINERS_MIRROR to a folder or URL holding $name.")
         }
     }
-    $verified = Invoke-UdfTool -NoConnection -ToolArgs @("verify", $part, ("" + $c.sha256), ("" + $c.size))
+    $verified = Invoke-UdfTool -NoConnection -ToolArgs @("verify", $part, $Sha256, $Size)
     if ($verified[0] -ne 0) {
         Remove-Item -Force $part -ErrorAction SilentlyContinue
-        return (Set-UdfFail -Code 4 -Step "verify" -Remedy "exakit udf-use default" -Message "The container $name does not match its pinned digest ($($verified[2])); it was removed. Run this again to download it afresh; if it fails again the release asset changed and the kit needs an update.")
+        return (Set-UdfFail -Code 4 -Step "verify" -Remedy $Remedy -Message "The $What $name does not match its pinned digest ($($verified[2])); it was removed. Run this again to download it afresh; if it fails again the release asset changed and the kit needs an update.")
     }
-    Move-Item -LiteralPath $part -Destination $script:UdfContainerFile -Force
-    $short = ("" + $c.sha256).Substring(0, 12)
-    Ok "Verified $name (sha256 $short..., $($c.size) bytes)"
+    Move-Item -LiteralPath $part -Destination $script:UdfFetchedFile -Force
+    $short = $Sha256
+    if ($short.Length -gt 12) { $short = $short.Substring(0, 12) }
+    Ok "Verified $name (sha256 $short..., $Size bytes)"
+    return $true
+}
+
+# Get-UdfRustSmokeAsset - the selected Rust row's smoke_asset (url, sha256,
+# size) into UdfSmokeAsset; $false with UdfSmokeWhy when the row carries no
+# pinned asset yet (the placeholders a kit ships before the first CI build: no
+# url, a sha256 that is not 64 hex digits, a size that is not a number). Twin
+# of _udf_rust_smoke_asset.
+function Get-UdfRustSmokeAsset {
+    $script:UdfSmokeAsset = $null
+    $script:UdfSmokeWhy = ""
+    $asset = $script:UdfContainer.smoke_asset
+    if (-not $asset) { $script:UdfSmokeWhy = "the row has no smoke_asset"; return $false }
+    $url = "" + $asset.url
+    $sha = ("" + $asset.sha256).ToLowerInvariant()
+    $size = "" + $asset.size
+    if ($url -notmatch '^https?://') { $script:UdfSmokeWhy = "its url is not set"; return $false }
+    if ($sha -notmatch '^[0-9a-f]+$') { $script:UdfSmokeWhy = "its sha256 is a placeholder (set after the first CI build)"; return $false }
+    if ($sha.Length -ne 64) { $script:UdfSmokeWhy = "its sha256 is not 64 hex digits"; return $false }
+    if ($size -notmatch '^[0-9]+$') { $script:UdfSmokeWhy = "its size is a placeholder (set after the first CI build)"; return $false }
+    $script:UdfSmokeAsset = [pscustomobject]@{ url = $url; sha256 = $sha; size = $size }
+    return $true
+}
+
+# Test-UdfDevkitSmokeRust - prove the Rust container with the kit's prebuilt
+# smoke library (UdfSmokeFile, fetched and verified by Install-UdfDevkitRust):
+# copy it into the deployment's bucket directory as udf/libexakit_smoke.so,
+# register STARTER_KIT.EXAKIT_SMOKE(x BIGINT) over it and run it once; the
+# "name version" lines (container, rustc, sdk) are kept in UdfSmokeLines (for
+# --json) and the rustc and sdk are held against the selected row (udf_tool.py
+# smoke-rust). Set-UdfFail 7 (step smoke, both versions in the reason) when
+# they differ or the container refused the library (F-UDF-CL-RUST-9001); 5
+# when there is no bucket directory to put the library into. On success the
+# manifest records the row as validated (components.udf_devkit.rust). Twin of
+# udf_devkit_smoke_rust.
+function Test-UdfDevkitSmokeRust {
+    param([Parameter(Mandatory)][string]$Alias)
+    $script:UdfSmokeLines = @()
+    $bucket = Get-UdfBucketLocation
+    if ($bucket.Error) { return (Set-UdfFail -Code 5 -Step "smoke" -Remedy "exakit status" -Message $bucket.Error) }
+    $destDir = Join-Path $bucket.Dir $script:UdfRustSmokeDir
+    $dest = Join-Path $destDir $script:UdfRustSmokeLib
+    try {
+        New-Item -ItemType Directory -Force -Path $destDir -ErrorAction Stop | Out-Null
+        Copy-Item -LiteralPath $script:UdfSmokeFile -Destination "$dest.part" -Force -ErrorAction Stop
+        Move-Item -LiteralPath "$dest.part" -Destination $dest -Force -ErrorAction Stop
+    } catch {
+        Remove-Item -Force "$dest.part" -ErrorAction SilentlyContinue
+        return (Set-UdfFail -Code 5 -Step "smoke" -Remedy "exakit status" -Message "Could not copy the smoke library into the bucket directory ($dest).")
+    }
+    $udfPath = "$($bucket.UdfRoot)/$($script:UdfRustSmokeDir)/$($script:UdfRustSmokeLib)"
+    $rustc = "" + $script:UdfContainer.runtime.rustc
+    $sdk = (@(Get-UdfContainerPins -Language "rust") | Where-Object { $_ -like "exasol-udf-sdk==*" } | Select-Object -First 1) -replace "^.*==", ""
+    Info "Running the Rust smoke UDF $($script:UdfRustSmokeSchema).EXAKIT_SMOKE over $udfPath"
+    $result = Invoke-UdfTool -ToolArgs @("smoke-rust", $Alias, $script:UdfRustSmokeSchema, $udfPath, $rustc, ("" + $sdk))
+    $script:UdfSmokeLines = @($result[1] | Where-Object { $_ })
+    if ($result[0] -ne 0) {
+        $why = "The Rust smoke UDF on $Alias did not pass: " + ((("" + $result[2]) -split "`n") -join " ").Trim()
+        if (-not ("" + $result[2]).Trim()) { $why = "The Rust smoke UDF on $Alias did not pass: no output" }
+        Warn2 $why
+        Set-ExakitManifestValue "components.udf_devkit.rust.validated" $false
+        return (Set-UdfFail -Code 7 -Step "smoke" -Remedy "exakit udf-setup --language rust" -Message $why)
+    }
+    $gotRustc = ("" + ($script:UdfSmokeLines | Where-Object { $_ -like "rustc *" } | Select-Object -First 1)) -replace "^rustc ", ""
+    $gotSdk = ("" + ($script:UdfSmokeLines | Where-Object { $_ -like "sdk *" } | Select-Object -First 1)) -replace "^sdk ", ""
+    Ok "Rust UDFs run on $Alias (rustc $gotRustc, exasol-udf-sdk $gotSdk - as pinned)"
+    Info "Use it in SQL: CREATE OR REPLACE $Alias SCALAR SCRIPT ... AS %udf_object $($bucket.UdfRoot)/$($script:UdfRustSmokeDir)/lib<name>.so;"
+    Set-ExakitManifestValue "components.udf_devkit.rust.validated" $true
+    Set-ExakitManifestValue "components.udf_devkit.rust.rustc" $gotRustc
+    Set-ExakitManifestValue "components.udf_devkit.rust.sdk" $gotSdk
+    Set-ExakitManifestValue "components.udf_devkit.validated" $true
     return $true
 }
 
@@ -509,31 +607,50 @@ function Install-UdfDevkitDefault {
     return $true
 }
 
-# Install-UdfDevkitRust - the Rust container of the matrix (alias RUST): the
-# same select, download, verify and launcher install, through the restart. No
-# smoke UDF yet: it arrives with the next kit step, so the add-on is recorded
-# as not validated until then. $false with UdfFail set. Twin of
+# Install-UdfDevkitRust - the Rust container of the matrix (alias RUST):
+# select, download and verify the container AND the row's smoke library (so a
+# bad download never costs a restart), the launcher install through the
+# restart (skipped when RUST is already installed, unless -Force: udf-setup
+# proves what is there, udf-use default updates it), then the Rust smoke UDF.
+# A row whose smoke_asset is still a placeholder (before the first CI build)
+# installs the container and stops at step smoke (7), so the container is
+# never reported as proven when it was not. $false with UdfFail set. Twin of
 # udf_devkit_setup_rust.
 function Install-UdfDevkitRust {
+    param([bool]$Force = $false)
     if (-not (Test-UdfReady -Step "select-container")) { return $false }
     if (-not (Select-UdfContainer -Language "rust")) { return $false }
     if (-not (Get-UdfContainerFile -Language "rust")) { return $false }
+    $script:UdfSmokeFile = ""
+    if (Get-UdfRustSmokeAsset) {
+        $a = $script:UdfSmokeAsset
+        if (-not (Get-UdfVerifiedFile -Language "rust" -What "smoke UDF library" -Url $a.url -Sha256 $a.sha256 -Size $a.size -Remedy "exakit udf-setup --language rust")) { return $false }
+        $script:UdfSmokeFile = $script:UdfFetchedFile
+    }
     $verb = "install"
     if (@(Get-UdfDevkitInstalledAliases) -contains $script:UdfRustAlias) { $verb = "update" }
-    $file = $script:UdfContainerFile
-    $done = Invoke-UdfWithRestart -What "Installing the $($script:UdfRustAlias) container" -Action {
-        (Invoke-UdfSlc -SlcArgs @("custom", $verb, "--source", $file, "--alias", $script:UdfRustAlias, "--language", "rust", "--auto-approve"))[0] -eq 0 }
-    if (-not $done) {
-        if ($script:UdfDeclined) { return (Set-UdfFail -Code 5 -Step "install" -Remedy "exakit udf-setup --language rust --yes" -Message "The install was not confirmed; nothing changed.") }
-        return (Set-UdfFail -Code 6 -Step "install" -Remedy "exakit logs" -Message "The launcher could not install the $($script:UdfRustAlias) container (see: exakit logs).")
+    if ($verb -eq "update" -and -not $Force) {
+        Ok "The $($script:UdfRustAlias) container is already installed"
+    } else {
+        $file = $script:UdfContainerFile
+        $done = Invoke-UdfWithRestart -What "Installing the $($script:UdfRustAlias) container" -Action {
+            (Invoke-UdfSlc -SlcArgs @("custom", $verb, "--source", $file, "--alias", $script:UdfRustAlias, "--language", "rust", "--auto-approve"))[0] -eq 0 }
+        if (-not $done) {
+            if ($script:UdfDeclined) { return (Set-UdfFail -Code 5 -Step "install" -Remedy "exakit udf-setup --language rust --yes" -Message "The install was not confirmed; nothing changed.") }
+            return (Set-UdfFail -Code 6 -Step "install" -Remedy "exakit logs" -Message "The launcher could not install the $($script:UdfRustAlias) container (see: exakit logs).")
+        }
+        Set-ExakitManifestValue "components.udf_devkit.containers.$($script:UdfRustAlias)" ("" + $script:UdfContainer.url)
+        $sdk = (@(Get-UdfContainerPins -Language "rust") | Where-Object { $_ -like "exasol-udf-sdk==*" } | Select-Object -First 1) -replace "^.*==", ""
+        Ok "Rust UDFs: the $($script:UdfRustAlias) container is installed (rustc $($script:UdfContainer.runtime.rustc), exasol-udf-sdk $sdk)"
     }
-    Set-ExakitManifestValue "components.udf_devkit.containers.$($script:UdfRustAlias)" ("" + $script:UdfContainer.url)
     Add-UdfLanguage "rust"
-    Set-ExakitManifestValue "components.udf_devkit.validated" $false
     $script:UdfSmokeLines = @()
-    $sdk = (@(Get-UdfContainerPins -Language "rust") | Where-Object { $_ -like "exasol-udf-sdk==*" } | Select-Object -First 1) -replace "^.*==", ""
-    Ok "Rust UDFs: the $($script:UdfRustAlias) container is installed (rustc $($script:UdfContainer.runtime.rustc), exasol-udf-sdk $sdk)"
-    Info "The Rust smoke UDF arrives with the next kit step; until then: exasol slc list shows $($script:UdfRustAlias)"
+    if (-not $script:UdfSmokeFile) {
+        Set-ExakitManifestValue "components.udf_devkit.rust.validated" $false
+        Set-ExakitManifestValue "components.udf_devkit.validated" $false
+        return (Set-UdfFail -Code 7 -Step "smoke" -Remedy "exakit update" -Message "The Rust smoke UDF library for $($script:UdfContainer.DbArch) is not pinned in this kit's versions.json yet ($($script:UdfSmokeWhy)): the $($script:UdfRustAlias) container is installed (exasol slc list) but not proven. A kit update brings the pin.")
+    }
+    if (-not (Test-UdfDevkitSmokeRust -Alias $script:UdfRustAlias)) { return $false }
     return $true
 }
 
@@ -562,19 +679,33 @@ function Install-UdfDevkit {
     $script:UdfYes = $true
     try {
         if ($script:UdfLanguage -eq "rust") {
-            if (-not (Install-UdfDevkitRust)) { Warn2 "Rust UDFs are not set up yet ($($script:UdfFail.Message)) - run: exakit udf-setup --language rust" }
+            if (-not (Install-UdfDevkitRust)) { Warn2 "Rust UDFs are not proven yet ($($script:UdfFail.Message)) - run: exakit udf-setup --language rust" }
         } elseif (-not (Install-UdfDevkitOfficial)) { Warn2 "Python UDFs are not set up yet - run: exakit udf-setup" }
     } finally { $script:UdfYes = $false }
     return $true
 }
 
+# Test-UdfDevkit - the installed containers proven again, quietly: the
+# official Python one by its smoke UDF, the Rust one by its smoke library when
+# that is in the cache (Install-UdfDevkitRust fetched it); otherwise the record
+# says not validated. Twin of udf_devkit_validate.
 function Test-UdfDevkit {
     if (-not (Test-ExakitDbReachable)) { return }
-    if (@(Get-UdfDevkitInstalledAliases) -contains $script:UdfOfficialAlias) {
-        if (-not (Test-UdfDevkitSmoke -Alias $script:UdfOfficialAlias)) { Set-ExakitManifestValue "components.udf_devkit.validated" $false }
-    } else {
-        Set-ExakitManifestValue "components.udf_devkit.validated" $false
+    $aliases = @(Get-UdfDevkitInstalledAliases)
+    $proven = $false
+    if ($aliases -contains $script:UdfOfficialAlias) {
+        if (Test-UdfDevkitSmoke -Alias $script:UdfOfficialAlias) { $proven = $true }
     }
+    if ($aliases -contains $script:UdfRustAlias) {
+        if ((Select-UdfContainer -Language "rust") -and (Get-UdfRustSmokeAsset)) {
+            $a = $script:UdfSmokeAsset
+            $script:UdfSmokeFile = Join-Path $script:UdfContainerCache (Split-Path -Leaf $a.url)
+            if ((Test-Path $script:UdfSmokeFile -PathType Leaf) -and
+                (Invoke-UdfTool -NoConnection -ToolArgs @("verify", $script:UdfSmokeFile, $a.sha256, $a.size))[0] -eq 0 -and
+                (Test-UdfDevkitSmokeRust -Alias $script:UdfRustAlias)) { $proven = $true }
+        }
+    }
+    if (-not $proven) { Set-ExakitManifestValue "components.udf_devkit.validated" $false }
 }
 
 function Update-UdfDevkit {
@@ -650,16 +781,19 @@ function Install-UdfTarball {
         return (Set-UdfFail -Code 6 -Step "install" -Remedy "exakit logs" -Message "The launcher could not install the container as $Alias (see: exakit logs).")
     }
     if ($Language -eq "rust") {
+        # The Rust smoke library is built for the kit's pinned container; a
+        # tarball of yours is recorded as installed, not proven.
         Set-ExakitManifestValue "components.udf_devkit.validated" $false
         $script:UdfSmokeLines = @()
-        Info "The Rust smoke UDF arrives with the next kit step; until then: exasol slc list shows $Alias"
+        Info "A Rust container of your own has no smoke UDF (the kit's proves its pinned one: exakit udf-setup --language rust); exasol slc list shows $Alias"
     } elseif (-not (Test-UdfDevkitSmoke -Alias $Alias -Packages $Packages)) { return $false }
     Set-ExakitManifestValue "components.udf_devkit.containers.$Alias" $Source
     return $true
 }
 
 # Invoke-CmdUdfSetup [--language python|rust] [--force] [--yes] [--json] - the
-# official Python container (PYTHON3) or the matrix's Rust container (RUST).
+# official Python container (PYTHON3) or the matrix's Rust container (RUST),
+# each proven by its smoke UDF; --force reinstalls one that is there.
 function Invoke-CmdUdfSetup {
     param([string[]]$CmdArgs = @())
     $force = $false; $language = $script:UdfLanguage; $json = $false
@@ -676,7 +810,7 @@ function Invoke-CmdUdfSetup {
     if ($json) { Enable-UdfJson }
     Assert-UdfDevkitInstalledFor -Language $language
     if ($language -eq "rust") {
-        if (-not (Install-UdfDevkitRust)) { Exit-UdfLastFail -Language "rust" }
+        if (-not (Install-UdfDevkitRust -Force $force)) { Exit-UdfLastFail -Language "rust" }
         Write-UdfDone -Language "rust" -Alias $script:UdfRustAlias
     } else {
         if (-not (Install-UdfDevkitOfficial -Force $force)) { Exit-UdfLastFail -Language "python" }
@@ -719,7 +853,7 @@ function Invoke-CmdUdfUse {
     Assert-UdfDevkitInstalledFor -Language $language
     if ($what -eq "default") {
         if ($language -eq "rust") {
-            if (-not (Install-UdfDevkitRust)) { Exit-UdfLastFail -Language "rust" }
+            if (-not (Install-UdfDevkitRust -Force $true)) { Exit-UdfLastFail -Language "rust" }
             Write-UdfDone -Language "rust" -Alias $script:UdfRustAlias
         } else {
             if (-not (Install-UdfDevkitDefault)) { Exit-UdfLastFail -Language "python" }

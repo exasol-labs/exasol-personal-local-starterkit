@@ -88,6 +88,59 @@ class RulesTest(unittest.TestCase):
         with redirect_stderr(io.StringIO()):
             self.assertEqual(udf_tool.smoke_verdict(found, [("numpy", "2.4.0"), ("scipy", "1.18.0")]), 3)
 
+    def test_the_rust_smoke_udf_is_one_script_over_a_bucket_library(self):
+        # The library's /buckets path is the only text that reaches the SQL, and only a .so under /buckets does.
+        script = udf_tool.rust_smoke_script("rust", "starter_kit", "/buckets/bfsdefault/default/udf/libexakit_smoke.so")
+        self.assertEqual(script, "CREATE OR REPLACE RUST SCALAR SCRIPT STARTER_KIT.EXAKIT_SMOKE(x BIGINT) RETURNS VARCHAR(2000) AS\n"
+                                 "%udf_object /buckets/bfsdefault/default/udf/libexakit_smoke.so;\n")
+        for bad in ("/tmp/x.so", "/buckets/a/b.so; DROP", "/buckets/a/lib.tar.gz", "", "/buckets/../etc/x.so"):
+            with self.subTest(path=bad):
+                with self.assertRaises(udf_tool.Refused):
+                    udf_tool.rust_smoke_script("RUST", "S", bad)
+        with self.assertRaises(udf_tool.Refused):
+            udf_tool.rust_smoke_script("x;drop", "S", "/buckets/a/b.so")
+
+    def test_the_rust_smoke_verdict_holds_rustc_and_sdk_against_the_pins(self):
+        # The library reports rustc --version in full; the kit compares the x.y.z and keeps the full string too.
+        report = udf_tool.rust_smoke_report('{"container": "RUST", "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)", "sdk": "0.33.0", "x": 1}')
+        self.assertEqual(udf_tool.rustc_semver(report["rustc"]), "1.98.1")
+        with redirect_stderr(io.StringIO()) as err:
+            lines, code = udf_tool.rust_smoke_verdict(report, "1.98.1", "0.33.0")
+        self.assertEqual((lines, code, err.getvalue()),
+                         (["container RUST", "rustc 1.98.1", "sdk 0.33.0", "rustc_full rustc 1.98.1 (48a229cea 2026-09-01)"], 0, ""))
+        with redirect_stderr(io.StringIO()) as err:
+            lines, code = udf_tool.rust_smoke_verdict({"rustc": "rustc 1.97.0 (abc 2026-01-01)", "sdk": "0.33.0"}, "1.98.1", "0.33.0")
+        self.assertEqual((code, lines[1], err.getvalue().strip()), (7, "rustc 1.97.0", "rustc reported 1.97.0, pinned 1.98.1"))
+        with redirect_stderr(io.StringIO()) as err:
+            _, code = udf_tool.rust_smoke_verdict({"rustc": "1.98.1", "sdk": "0.32.0"}, "1.98.1", "0.33.0")
+        self.assertEqual((code, err.getvalue().strip()), (7, "exasol-udf-sdk reported 0.32.0, pinned 0.33.0"))
+        # An unpinned sdk is reported, not compared.
+        with redirect_stderr(io.StringIO()):
+            self.assertEqual(udf_tool.rust_smoke_verdict({"rustc": "1.98.1", "sdk": "0.32.0"}, "1.98.1")[1], 0)
+        for text in ("not json", '"a string"', '{"container": "RUST"}'):
+            with self.subTest(text=text):
+                with self.assertRaises(udf_tool.Refused):
+                    udf_tool.rust_smoke_report(text)
+
+    def test_a_container_refusing_the_library_names_the_fingerprint(self):
+        # F-UDF-CL-RUST-9001 is the database's ABI fingerprint check (SDK_VERSION:RUSTC_VERSION): the reason says so
+        # and what the container expects, so the user knows the library and the container disagree.
+        reason = udf_tool.rust_load_reason("ExaQueryError: F-UDF-CL-RUST-9001: fingerprint 0.33.0:rustc_1.97.0\n  (Session: 7)", "1.98.1", "0.33.0")
+        self.assertTrue(reason.startswith("the RUST container refused to load the smoke library (F-UDF-CL-RUST-9001: ABI fingerprint mismatch)"))
+        self.assertIn("than the container's 0.33.0:rustc_1.98.1 - ExaQueryError: F-UDF-CL-RUST-9001: fingerprint 0.33.0:rustc_1.97.0 (Session: 7)", reason)
+        self.assertEqual(udf_tool.rust_load_reason("object STARTER_KIT.EXAKIT_SMOKE not found", "1.98.1", "0.33.0"),
+                         "the smoke UDF did not run: object STARTER_KIT.EXAKIT_SMOKE not found")
+
+    def test_smoke_rust_takes_four_or_five_arguments(self):
+        # Fewer than four is the usage; the database step itself is not run here.
+        code, _, err = run("smoke-rust", "RUST", "STARTER_KIT", "/buckets/bfsdefault/default/udf/libexakit_smoke.so")
+        self.assertEqual(code, 2)
+        self.assertIn("udf_tool.py smoke-rust", err)
+        with mock.patch.object(udf_tool, "_connect", side_effect=AssertionError("no database in this test")):
+            code, _, err = run("smoke-rust", "RUST", "STARTER_KIT", "/tmp/escape.so", "1.98.1")
+        self.assertEqual(code, 2)
+        self.assertIn("not a /buckets/... path to a .so file", err)
+
     def test_an_unknown_command_prints_the_usage(self):
         code, _, err = run("frob")
         self.assertEqual(code, 2)

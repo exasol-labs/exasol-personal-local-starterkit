@@ -27,7 +27,18 @@
 #     select-container, naming what did not match; a decline is exit 5
 #   - EXAKIT_UDF_LANGUAGE=rust at install (and --language rust) takes the Rust
 #     row to `slc custom install --alias RUST --language rust`, records the
-#     language and says the smoke UDF is the next step; --language frob is exit 2
+#     language, and proves it with the Rust smoke UDF (AC-ML1.5): the row's
+#     smoke_asset (libexakit_smoke.so for the arch) is taken from the mirror
+#     and verified BEFORE the install, copied into the bucket directory under
+#     udf/, registered as STARTER_KIT.EXAKIT_SMOKE over its /buckets path, and
+#     the reported rustc and sdk recorded as validated; a rustc other than the
+#     pinned one, or a library the container refuses (F-UDF-CL-RUST-9001), is
+#     exit 7 at step smoke naming both; a smoke library whose digest does not
+#     match is exit 4 at step verify with the launcher never run; a row whose
+#     smoke_asset is still a placeholder installs the container and is exit 7
+#     at step smoke saying the pin is missing; an installed RUST is proven
+#     without a reinstall by udf-setup (--force reinstalls) and updated by
+#     udf-use default; --language frob is exit 2
 #   - every command refuses what it does not know, and names the marketplace
 #     when the add-on is not installed
 #
@@ -184,24 +195,37 @@ echo "udf-use default: the matrix row for this database, verified before it is i
 MIRROR="$WORK/mirror"; mkdir -p "$MIRROR"
 printf 'fake python container' > "$MIRROR/py-fake.tar.gz"
 printf 'fake rust container' > "$MIRROR/lc-rust-fake.tar.gz"
+printf 'fake rust smoke aarch64' > "$MIRROR/libexakit_smoke-aarch64.so"
+printf 'fake rust smoke x86_64' > "$MIRROR/libexakit_smoke-x86_64.so"
 fake_sha() { shasum -a 256 "$1" | awk '{print $1}'; }
 fake_size() { wc -c < "$1" | tr -d ' '; }
 # A test copy of the kit's versions.json: the same document, its container rows
-# replaced by ones that point at the fake tarballs (sha256 and size real).
-matrix() { # matrix <out-file> <python sha256> [arches]
+# replaced by ones that point at the fake tarballs (sha256 and size real); the
+# Rust rows' smoke_asset points at the fake smoke library of the arch (smoke
+# mode: ok, bad = a wrong sha256, placeholder = the pre-CI placeholders).
+matrix() { # matrix <out-file> <python sha256> [arches] [smoke mode]
     python3 - "$ROOT/versions.json" "$1" "$2" "$(fake_size "$MIRROR/py-fake.tar.gz")" \
-        "$(fake_sha "$MIRROR/lc-rust-fake.tar.gz")" "$(fake_size "$MIRROR/lc-rust-fake.tar.gz")" "${3:-x86_64 aarch64}" <<'MATRIX'
-import json, sys
-src, out, py_sha, py_size, rs_sha, rs_size, arches = sys.argv[1:]
+        "$(fake_sha "$MIRROR/lc-rust-fake.tar.gz")" "$(fake_size "$MIRROR/lc-rust-fake.tar.gz")" "${3:-x86_64 aarch64}" "${4:-ok}" "$MIRROR" <<'MATRIX'
+import hashlib, json, os, sys
+src, out, py_sha, py_size, rs_sha, rs_size, arches, smoke_mode, mirror = sys.argv[1:]
 doc = json.load(open(src))
 rows = []
 for arch in arches.split():
     rows.append({"language": "python", "alias": "PYTHON3_ML", "kind": "prebuilt", "arch": arch, "db_versions": ">=2026.1",
                  "runtime": {"python": "3.12"}, "packages": {"scikit-learn": "1.9.0", "numpy": "2.4.6"},
                  "url": "https://example.invalid/containers/py-fake.tar.gz", "sha256": py_sha, "size": int(py_size)})
+    lib = os.path.join(mirror, f"libexakit_smoke-{arch}.so")
+    smoke = {"url": f"https://example.invalid/smoke/libexakit_smoke-{arch}.so",
+             "sha256": hashlib.sha256(open(lib, "rb").read()).hexdigest(), "size": os.path.getsize(lib)}
+    if smoke_mode == "bad":
+        smoke["sha256"] = "0" * 64
+    elif smoke_mode == "placeholder":
+        smoke["sha256"] = "set after the first CI build"
+        smoke["size"] = "set after the first CI build"
     rows.append({"language": "rust", "alias": "RUST", "kind": "prebuilt", "arch": arch, "db_versions": ">=2026.1",
                  "runtime": {"rustc": "1.98.1"}, "crates": {"exasol-udf-sdk": "0.33.0"},
-                 "url": "https://example.invalid/containers/lc-rust-fake.tar.gz", "sha256": rs_sha, "size": int(rs_size)})
+                 "url": "https://example.invalid/containers/lc-rust-fake.tar.gz", "sha256": rs_sha, "size": int(rs_size),
+                 "validated": False, "smoke_asset": smoke})
 doc["components"]["udf-devkit"]["containers"] = rows
 json.dump(doc, open(out, "w"), indent=2)
 MATRIX
@@ -209,6 +233,9 @@ MATRIX
 matrix "$WORK/versions.json" "$(fake_sha "$MIRROR/py-fake.tar.gz")"
 matrix "$WORK/versions-bad-digest.json" "$(printf '0%.0s' $(seq 1 64))"
 matrix "$WORK/versions-aarch64-only.json" "$(fake_sha "$MIRROR/py-fake.tar.gz")" aarch64
+matrix "$WORK/versions-bad-smoke.json" "$(fake_sha "$MIRROR/py-fake.tar.gz")" "x86_64 aarch64" bad
+matrix "$WORK/versions-unpinned-smoke.json" "$(fake_sha "$MIRROR/py-fake.tar.gz")" "x86_64 aarch64" placeholder
+BUCKET="$EXAKIT_PERSONAL_DEPLOY_DIR/local/runtime/exa/bucketfs/bfsdefault/default"
 export EXAKIT_UDF_CONTAINERS_MIRROR="$MIRROR" EXAKIT_UDF_ARCH=aarch64
 CACHE="$EXAKIT_HOME/cache/containers"
 # The matrix scenario: the test versions document, a database that answers its
@@ -220,6 +247,20 @@ mscenario() { # mscenario <versions doc> <body>
 scikit-learn 1.9.0
 numpy 2.4.6"; }
         confirm() { return "${STUB_DECLINE:-0}"; }
+        _udf_tool() {
+            # The Rust smoke UDF needs a database: its tool call is recorded and
+            # answered with what the kit library reports (STUB_RUSTC: the rustc
+            # it was built with; STUB_RUST_LOAD_ERROR: the database refused it).
+            case "$1" in
+                smoke-rust)
+                    echo "smoke-rust $*" >> "$CALLS"
+                    if [ -n "${STUB_RUST_LOAD_ERROR:-}" ]; then printf "%s\n" "$STUB_RUST_LOAD_ERROR" >&2; return 7; fi
+                    printf "container RUST\nrustc %s\nsdk 0.33.0\nrustc_full rustc %s (48a229cea 2026-09-01)\n" "${STUB_RUSTC:-1.98.1}" "${STUB_RUSTC:-1.98.1}"
+                    [ "${STUB_RUSTC:-1.98.1}" = 1.98.1 ] || { echo "rustc reported ${STUB_RUSTC}, pinned 1.98.1" >&2; return 7; }
+                    return 0 ;;
+                *) python3 "$ROOT/setup/udf/udf_tool.py" "$@" ;;
+            esac
+        }
         manifest_set components.udf_devkit.version 0.1.0
         '"$2"
 }
@@ -275,25 +316,69 @@ out="$(EXAKIT_UDF_CONTAINERS_MIRROR="$WORK/empty-mirror" mscenario "$WORK/versio
 check "a mirror without the file: exit 5" "5" "$rc"
 contains "step download" '"step": "download"' "$out"
 
-echo "EXAKIT_UDF_LANGUAGE=rust takes the Rust row (alias RUST), with no smoke UDF yet:"
-rm -rf "$CACHE"
-out="$(EXAKIT_UDF_LANGUAGE=rust mscenario "$WORK/versions.json" 'manifest_del components.udf_devkit; udf_devkit_install; echo "rc=$?"; echo "languages=$(manifest_get components.udf_devkit.languages)"; manifest_get components.udf_devkit.containers.RUST; echo "validated=$(manifest_get components.udf_devkit.validated)"; udf_devkit_summary' 2>&1)"
+echo "EXAKIT_UDF_LANGUAGE=rust takes the Rust row (alias RUST) and proves it with the Rust smoke UDF (AC-ML1.5):"
+rm -rf "$CACHE" "$BUCKET/udf"
+out="$(EXAKIT_UDF_LANGUAGE=rust mscenario "$WORK/versions.json" 'manifest_del components.udf_devkit; udf_devkit_install; echo "rc=$?"; echo "languages=$(manifest_get components.udf_devkit.languages)"; manifest_get components.udf_devkit.containers.RUST; echo "validated=$(manifest_get components.udf_devkit.validated)"; echo "rust=$(manifest_get components.udf_devkit.rust.validated) $(manifest_get components.udf_devkit.rust.rustc) $(manifest_get components.udf_devkit.rust.sdk)"; udf_devkit_summary' 2>&1)"
 calls="$(grep -v "slc list" "$WORK/calls" | tr '\n' '|')"
-check "the install goes down the rust path: slc custom install --alias RUST --language rust, no smoke" \
-    "stop dash-server|launcher slc custom install --source $CACHE/lc-rust-fake.tar.gz --alias RUST --language rust --auto-approve --deployment-dir $EXAKIT_PERSONAL_DEPLOY_DIR|wait|start dash-server|" "$calls"
+check "the install goes down the rust path: slc custom install --alias RUST --language rust, then the smoke UDF over the library's /buckets path, held against the row's rustc and sdk" \
+    "stop dash-server|launcher slc custom install --source $CACHE/lc-rust-fake.tar.gz --alias RUST --language rust --auto-approve --deployment-dir $EXAKIT_PERSONAL_DEPLOY_DIR|wait|start dash-server|smoke-rust smoke-rust RUST STARTER_KIT /buckets/bfsdefault/default/udf/libexakit_smoke.so 1.98.1 0.33.0|" "$calls"
 contains "the install succeeds" "rc=0" "$out"
+contains "the smoke library is taken from the mirror and verified before the install" "Verified libexakit_smoke-aarch64.so (sha256" "$out"
+check "...before: the verification precedes the restart" "1" "$(printf '%s\n' "$out" | awk '/Verified libexakit_smoke-aarch64.so/ {v=NR} /Waiting for the database/ {w=NR} END {print (v && w && v < w) ? 1 : 0}')"
+check "the library is in the bucket directory under udf/" "fake rust smoke aarch64" "$(cat "$BUCKET/udf/libexakit_smoke.so" 2>/dev/null)"
 contains "rustc and the sdk crate are named" "rustc 1.98.1, exasol-udf-sdk 0.33.0" "$out"
-contains "the smoke UDF is the next step" "The Rust smoke UDF arrives with the next kit step; until then: exasol slc list shows RUST" "$out"
+contains "the smoke UDF passes, naming what it reported" "Rust UDFs run on RUST (rustc 1.98.1, exasol-udf-sdk 0.33.0 - as pinned)" "$out"
+contains "and how to write one" "AS %udf_object /buckets/bfsdefault/default/udf/lib<name>.so;" "$out"
 contains "the language is recorded" "languages=rust" "$out"
 contains "the url under the alias" "lc-rust-fake.tar.gz" "$out"
-contains "validated false until the smoke UDF exists" "validated=false" "$out"
+contains "validated, with the reported rustc and sdk" "rust=true 1.98.1 0.33.0" "$out"
+contains "...and the add-on's flag" "validated=true" "$out"
 contains "and the summary names both languages" "Rust UDFs: alias RUST" "$out"
 out="$(mscenario "$WORK/versions.json" 'manifest_set components.udf_devkit.languages python; cmd_udf_setup --language rust --json; manifest_get components.udf_devkit.languages >&2' 2>"$WORK/err")"
-check "udf-setup --language rust --json: ok, alias RUST, an empty smoke list" "True rust RUST []" \
-    "$(printf '%s' "$out" | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["ok"], d["language"], d["alias"], d["smoke"])' 2>&1)"
+check "udf-setup --language rust --json: ok, alias RUST, the smoke lines (container, rustc, sdk)" "True rust RUST [('container', 'RUST'), ('rustc', '1.98.1'), ('sdk', '0.33.0'), ('rustc_full', 'rustc 1.98.1 (48a229cea 2026-09-01)')]" \
+    "$(printf '%s' "$out" | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["ok"], d["language"], d["alias"], [(s["package"], s["version"]) for s in d["smoke"]])' 2>&1)"
 contains "a second language joins the record" "python,rust" "$(cat "$WORK/err")"
+out="$(mscenario "$WORK/versions.json" 'cmd_udf_setup --language rust --yes' 2>&1)"
+contains "the cached smoke library is reused" "Using the cached smoke UDF library $CACHE/libexakit_smoke-aarch64.so (digest verified)" "$out"
 out="$(mscenario "$WORK/versions.json" 'udf_devkit_installed_aliases() { echo RUST; }; cmd_udf_use default --language rust --yes' 2>&1)"
-contains "an installed RUST is updated, not installed twice" "slc custom update --source $CACHE/lc-rust-fake.tar.gz --alias RUST" "$(cat "$WORK/calls")"
+contains "udf-use default updates an installed RUST, not installs it twice" "slc custom update --source $CACHE/lc-rust-fake.tar.gz --alias RUST" "$(cat "$WORK/calls")"
+out="$(mscenario "$WORK/versions.json" 'udf_devkit_installed_aliases() { echo RUST; }; cmd_udf_setup --language rust --yes' 2>&1)"
+check "udf-setup proves an installed RUST without a reinstall: no launcher call, the smoke UDF runs" "smoke-rust smoke-rust RUST STARTER_KIT /buckets/bfsdefault/default/udf/libexakit_smoke.so 1.98.1 0.33.0|" "$(grep -v "slc list" "$WORK/calls" | tr '\n' '|')"
+contains "and says so" "The RUST container is already installed" "$out"
+out="$(mscenario "$WORK/versions.json" 'udf_devkit_installed_aliases() { echo RUST; }; cmd_udf_setup --language rust --yes --force' 2>&1)"
+contains "--force reinstalls it" "slc custom update --source $CACHE/lc-rust-fake.tar.gz --alias RUST" "$(cat "$WORK/calls")"
+
+echo "a rustc other than the pinned one, or a library the container refuses, is exit 7 at step smoke naming both:"
+out="$(STUB_RUSTC=1.97.0 mscenario "$WORK/versions.json" 'cmd_udf_setup --language rust --yes; echo "rc=$?"' 2>&1)"; rc=$?
+check "exit 7" "7" "$rc"
+contains "naming both versions" "rustc reported 1.97.0, pinned 1.98.1" "$out"
+json="$(STUB_RUSTC=1.97.0 mscenario "$WORK/versions.json" 'cmd_udf_setup --language rust --json' 2>/dev/null)"; rc=$?
+check "--json: exit 7, step smoke, both versions in the reason, the remedy" "7 False rust smoke True exakit udf-setup --language rust" \
+    "$rc $(printf '%s' "$json" | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["ok"], d["language"], d["step"], "rustc reported 1.97.0, pinned 1.98.1" in d["reason"], d["remedy"])' 2>&1)"
+check "and the record says not validated" "false" "$(scenario 'manifest_get components.udf_devkit.rust.validated' 2>/dev/null)"
+json="$(STUB_RUST_LOAD_ERROR="the RUST container refused to load the smoke library (F-UDF-CL-RUST-9001: ABI fingerprint mismatch): the library was built for another exasol-udf-sdk or rustc than the container's 0.33.0:rustc_1.98.1 - F-UDF-CL-RUST-9001: fingerprint 0.33.0:rustc_1.97.0" mscenario "$WORK/versions.json" 'cmd_udf_setup --language rust --json' 2>/dev/null)"; rc=$?
+check "the container refusing the library (F-UDF-CL-RUST-9001): exit 7, step smoke, the fingerprint named" "7 smoke True True" \
+    "$rc $(printf '%s' "$json" | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["step"], "F-UDF-CL-RUST-9001" in d["reason"], "0.33.0:rustc_1.98.1" in d["reason"])' 2>&1)"
+out="$(mscenario "$WORK/versions.json" 'udf_bucket_locate() { UDF_BUCKET_ERROR="The deployment has no BucketFS folder"; return 1; }; cmd_udf_setup --language rust --json' 2>/dev/null)"; rc=$?
+check "no bucket directory to put the library into: exit 5, step smoke" "5 smoke exakit status" \
+    "$rc $(printf '%s' "$out" | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["step"], d["remedy"])' 2>&1)"
+
+echo "a smoke library whose digest does not match is refused before the launcher runs:"
+rm -rf "$CACHE"
+json="$(mscenario "$WORK/versions-bad-smoke.json" 'cmd_udf_setup --language rust --json' 2>/dev/null)"; rc=$?
+check "exit 4, step verify, naming the library" "4 False rust verify True" \
+    "$rc $(printf '%s' "$json" | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["ok"], d["language"], d["step"], d["reason"].startswith("The smoke UDF library libexakit_smoke-aarch64.so does not match its pinned digest (sha256 expected 0000"))' 2>&1)"
+check "the launcher saw nothing" "" "$(grep -v "slc list" "$WORK/calls")"
+check "and the library is gone from the cache (the container stays)" "lc-rust-fake.tar.gz" "$(ls "$CACHE" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
+
+echo "a row whose smoke_asset is still a placeholder installs the container and stops at step smoke:"
+rm -rf "$CACHE"
+json="$(mscenario "$WORK/versions-unpinned-smoke.json" 'manifest_del components.udf_devkit.languages; manifest_set components.udf_devkit.validated true; cmd_udf_setup --language rust --json' 2>/dev/null)"; rc=$?
+check "exit 7, step smoke, saying the pin is missing, exakit update as the remedy" "7 rust smoke True exakit update" \
+    "$rc $(printf '%s' "$json" | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["language"], d["step"], "is not pinned in this kit'"'"'s versions.json yet (its sha256 is a placeholder (set after the first CI build))" in d["reason"], d["remedy"])' 2>&1)"
+contains "the container was installed" "slc custom install --source $CACHE/lc-rust-fake.tar.gz --alias RUST --language rust" "$(cat "$WORK/calls")"
+check "and nothing ran as a smoke UDF" "" "$(grep smoke-rust "$WORK/calls")"
+check "the language is recorded, the add-on is not validated" "languages=rust validated=false" "$(scenario 'echo "languages=$(manifest_get components.udf_devkit.languages) validated=$(manifest_get components.udf_devkit.validated)"' 2>/dev/null)"
 
 echo "udf-setup --json answers with the same shape for the official container:"
 json="$(mscenario "$WORK/versions.json" 'cmd_udf_setup --json' 2>/dev/null)"; rc=$?

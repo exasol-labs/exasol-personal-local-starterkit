@@ -35,7 +35,14 @@
 #     verifies size and digest before the launcher sees it, installs it as
 #     PYTHON3_ML and has the smoke UDF compare each package's version with the
 #     pin. EXAKIT_UDF_LANGUAGE=rust (or --language rust) takes the Rust row the
-#     same way, alias RUST; its smoke UDF is the next kit step.
+#     same way, alias RUST, and proves it with the kit's prebuilt Rust smoke
+#     UDF: the row's smoke_asset (libexakit_smoke.so for the arch, built by
+#     CI in .github/workflows/rust-smoke.yml from udf/rust-smoke with the
+#     container's rustc) is downloaded and verified before the install,
+#     copied into the bucket directory under udf/ and registered as
+#     STARTER_KIT.EXAKIT_SMOKE(x BIGINT); it reports the container, rustc and
+#     exasol-udf-sdk versions, held against the row (exit 7 on a mismatch, or
+#     when the container refuses the library: F-UDF-CL-RUST-9001).
 #     EXAKIT_UDF_CONTAINERS_MIRROR (a folder or base URL) and EXAKIT_UDF_ARCH
 #     point elsewhere, for tests and offline installs. The add-on's version is
 #     the kit's.
@@ -64,6 +71,11 @@ EXAKIT_UDF_RUST_ALIAS="RUST"
 # says otherwise; validated where it is read (_udf_language).
 EXAKIT_UDF_LANGUAGE="${EXAKIT_UDF_LANGUAGE:-python}"
 EXAKIT_UDF_SCHEMA="EXAKIT_UDF"
+# The Rust smoke UDF (design 5): where its library lands in the bucket, the
+# schema it is registered in, its name (udf_tool.py: EXAKIT_SMOKE).
+EXAKIT_UDF_RUST_SMOKE_SCHEMA="STARTER_KIT"
+EXAKIT_UDF_RUST_SMOKE_DIR="udf"
+EXAKIT_UDF_RUST_SMOKE_LIB="libexakit_smoke.so"
 # Downloaded prebuilt containers, kept by file name so a second install (or
 # another alias of the same row) verifies the cached file instead of
 # downloading it again.
@@ -281,24 +293,34 @@ _udf_row() {
 
 # _udf_fetch_container <language> — the selected row's tarball into the cache
 # (UDF_CONTAINER_FILE), verified against its pinned size and sha256 before
-# anything installs it: a cached file that verifies is reused; otherwise it is
-# downloaded (resumed and retried by fetch) or copied from
+# anything installs it (_udf_fetch_verified).
+_udf_fetch_container() {
+    _udf_fetch_verified "$1" container "$UDF_CONTAINER_URL" "$UDF_CONTAINER_SHA256" "$UDF_CONTAINER_SIZE" "exakit udf-use default" || return 1
+    UDF_CONTAINER_FILE="$UDF_FETCHED_FILE"
+}
+
+# _udf_fetch_verified <language> <what> <url> <sha256> <size> <retry remedy> —
+# a pinned release asset (the container tarball, the Rust smoke library) into
+# the cache (UDF_FETCHED_FILE), verified against its pinned size and sha256
+# before anything uses it: a cached file that verifies is reused; otherwise it
+# is downloaded (resumed and retried by fetch) or copied from
 # EXAKIT_UDF_CONTAINERS_MIRROR (a folder, file:// or https:// base URL holding
 # the file by name) into a .part that is renamed only once it verifies. A
 # mismatch is _udf_fail 4 (step verify) and the file is removed, so running
 # the command again downloads it afresh; a download that did not arrive is 5
 # (step download).
-_udf_fetch_container() {
-    _ufc_lang="$1"
-    _ufc_name="$(basename "$UDF_CONTAINER_URL")"
-    UDF_CONTAINER_FILE="$EXAKIT_UDF_CONTAINER_CACHE/$_ufc_name"
+_udf_fetch_verified() {
+    _ufc_lang="$1"; _ufc_what="$2"; _ufc_sha="$4"; _ufc_size="$5"; _ufc_remedy="$6"
+    _ufc_url="$3"
+    _ufc_name="$(basename "$_ufc_url")"
+    UDF_FETCHED_FILE="$EXAKIT_UDF_CONTAINER_CACHE/$_ufc_name"
     mkdir -p "$EXAKIT_UDF_CONTAINER_CACHE" 2>/dev/null || {
         _udf_fail 5 download "" "Could not create the container cache $EXAKIT_UDF_CONTAINER_CACHE."; return 1; }
-    if [ -f "$UDF_CONTAINER_FILE" ] && _udf_rules verify "$UDF_CONTAINER_FILE" "$UDF_CONTAINER_SHA256" "$UDF_CONTAINER_SIZE" 2>/dev/null; then
-        ok "Using the cached container $UDF_CONTAINER_FILE (digest verified)"
+    if [ -f "$UDF_FETCHED_FILE" ] && _udf_rules verify "$UDF_FETCHED_FILE" "$_ufc_sha" "$_ufc_size" 2>/dev/null; then
+        ok "Using the cached $_ufc_what $UDF_FETCHED_FILE (digest verified)"
         return 0
     fi
-    _ufc_src="$UDF_CONTAINER_URL"; _ufc_local=""
+    _ufc_src="$_ufc_url"; _ufc_local=""
     if [ -n "${EXAKIT_UDF_CONTAINERS_MIRROR:-}" ]; then
         case "$EXAKIT_UDF_CONTAINERS_MIRROR" in
             https://*) _ufc_src="${EXAKIT_UDF_CONTAINERS_MIRROR%/}/$_ufc_name" ;;
@@ -307,33 +329,54 @@ _udf_fetch_container() {
             *)         _ufc_local="${EXAKIT_UDF_CONTAINERS_MIRROR%/}/$_ufc_name"; _ufc_src="$_ufc_local" ;;
         esac
     fi
-    _ufc_mb="$(awk -v b="${UDF_CONTAINER_SIZE:-0}" 'BEGIN { printf "%d MB", b / 1000000 }')"
-    _ufc_part="$UDF_CONTAINER_FILE.part"
-    rm -f "$UDF_CONTAINER_FILE"
+    _ufc_mb="$(awk -v b="${_ufc_size:-0}" 'BEGIN { printf "%d MB", b / 1000000 }')"
+    _ufc_part="$UDF_FETCHED_FILE.part"
+    rm -f "$UDF_FETCHED_FILE"
     if [ -n "$_ufc_local" ]; then
-        info "Copying the $_ufc_lang container ($_ufc_mb) from $_ufc_local"
+        info "Copying the $_ufc_lang $_ufc_what ($_ufc_mb) from $_ufc_local"
         cp "$_ufc_local" "$_ufc_part" 2>>"${EXAKIT_LOG_FILE:-/dev/null}" || {
             rm -f "$_ufc_part"
-            _udf_fail 5 download "" "The container $_ufc_name is not in EXAKIT_UDF_CONTAINERS_MIRROR ($_ufc_local)."; return 1; }
+            _udf_fail 5 download "" "The $_ufc_what $_ufc_name is not in EXAKIT_UDF_CONTAINERS_MIRROR ($_ufc_local)."; return 1; }
     else
-        info "Downloading the $_ufc_lang container ($_ufc_mb, checked against its SHA-256) from $_ufc_src"
-        EXAKIT_ACTIVE_LABEL="Downloading the $_ufc_lang container ($_ufc_mb)"
+        info "Downloading the $_ufc_lang $_ufc_what ($_ufc_mb, checked against its SHA-256) from $_ufc_src"
+        EXAKIT_ACTIVE_LABEL="Downloading the $_ufc_lang $_ufc_what ($_ufc_mb)"
         # The read-only flag keeps a miss out of the failure note; the refusal
         # below is the answer. fetch retries and resumes on its own.
         EXAKIT_READONLY_QUERY=1 fetch_quiet "$_ufc_src" "$_ufc_part" || {
             rm -f "$_ufc_part"
             EXAKIT_ACTIVE_LABEL=""
-            _udf_fail 5 download "exakit udf-use default" "The container could not be downloaded from $_ufc_src. Retry when online, or set EXAKIT_UDF_CONTAINERS_MIRROR to a folder or URL holding $_ufc_name."; return 1; }
+            _udf_fail 5 download "$_ufc_remedy" "The $_ufc_what could not be downloaded from $_ufc_src. Retry when online, or set EXAKIT_UDF_CONTAINERS_MIRROR to a folder or URL holding $_ufc_name."; return 1; }
         EXAKIT_ACTIVE_LABEL=""
     fi
     _ufc_err="$EXAKIT_HOME/.udf-verify.err"
-    if ! _udf_rules verify "$_ufc_part" "$UDF_CONTAINER_SHA256" "$UDF_CONTAINER_SIZE" 2>"$_ufc_err"; then
+    if ! _udf_rules verify "$_ufc_part" "$_ufc_sha" "$_ufc_size" 2>"$_ufc_err"; then
         _ufc_why="$(cat "$_ufc_err" 2>/dev/null)"; rm -f "$_ufc_err" "$_ufc_part"
-        _udf_fail 4 verify "exakit udf-use default" "The container $_ufc_name does not match its pinned digest (${_ufc_why:-size or sha256 differ}); it was removed. Run this again to download it afresh; if it fails again the release asset changed and the kit needs an update."; return 1
+        _udf_fail 4 verify "$_ufc_remedy" "The $_ufc_what $_ufc_name does not match its pinned digest (${_ufc_why:-size or sha256 differ}); it was removed. Run this again to download it afresh; if it fails again the release asset changed and the kit needs an update."; return 1
     fi
     rm -f "$_ufc_err"
-    mv -f "$_ufc_part" "$UDF_CONTAINER_FILE" || { _udf_fail 5 download "" "Could not keep $UDF_CONTAINER_FILE."; return 1; }
-    ok "Verified $_ufc_name (sha256 $(printf '%s' "$UDF_CONTAINER_SHA256" | cut -c1-12)..., $UDF_CONTAINER_SIZE bytes)"
+    mv -f "$_ufc_part" "$UDF_FETCHED_FILE" || { _udf_fail 5 download "" "Could not keep $UDF_FETCHED_FILE."; return 1; }
+    ok "Verified $_ufc_name (sha256 $(printf '%s' "$_ufc_sha" | cut -c1-12)..., $_ufc_size bytes)"
+    return 0
+}
+
+# _udf_rust_smoke_asset — the selected Rust row's smoke_asset (url, sha256,
+# size) into UDF_SMOKE_URL, UDF_SMOKE_SHA256 and UDF_SMOKE_SIZE; 1 when the
+# row carries no pinned asset yet (the placeholders a kit ships before the
+# first CI build: no url, a sha256 that is not 64 hex digits, a size that is
+# not a number), with UDF_SMOKE_WHY saying so.
+_udf_rust_smoke_asset() {
+    UDF_SMOKE_URL=""; UDF_SMOKE_SHA256=""; UDF_SMOKE_SIZE=""; UDF_SMOKE_WHY=""
+    _ursa_asset="$(_udf_row smoke_asset)"
+    [ -n "$_ursa_asset" ] || { UDF_SMOKE_WHY="the row has no smoke_asset"; return 1; }
+    UDF_SMOKE_URL="$(printf '%s' "$_ursa_asset" | _udf_rules field url 2>/dev/null)"
+    UDF_SMOKE_SHA256="$(printf '%s' "$_ursa_asset" | _udf_rules field sha256 2>/dev/null | tr '[:upper:]' '[:lower:]')"
+    UDF_SMOKE_SIZE="$(printf '%s' "$_ursa_asset" | _udf_rules field size 2>/dev/null)"
+    case "$UDF_SMOKE_URL" in https://*|http://*) ;; *) UDF_SMOKE_WHY="its url is not set"; return 1 ;; esac
+    case "$UDF_SMOKE_SHA256" in
+        *[!0-9a-f]*|"") UDF_SMOKE_WHY="its sha256 is a placeholder (set after the first CI build)"; return 1 ;;
+    esac
+    [ "${#UDF_SMOKE_SHA256}" -eq 64 ] || { UDF_SMOKE_WHY="its sha256 is not 64 hex digits"; return 1; }
+    case "$UDF_SMOKE_SIZE" in *[!0-9]*|"") UDF_SMOKE_WHY="its size is a placeholder (set after the first CI build)"; return 1 ;; esac
     return 0
 }
 
@@ -379,6 +422,50 @@ udf_devkit_smoke() {
         printf '      %-24s %s\n' "$_us_name" "$_us_version"
     done
     info "Use it in SQL: CREATE OR REPLACE $_us_alias SCALAR SCRIPT ..."
+    manifest_set components.udf_devkit.validated true
+    return 0
+}
+
+# udf_devkit_smoke_rust <alias> — prove the Rust container with the kit's
+# prebuilt smoke library (UDF_SMOKE_FILE, fetched and verified by
+# udf_devkit_setup_rust): copy it into the deployment's bucket directory as
+# udf/libexakit_smoke.so (the same folder a user's Rust UDF goes to), register
+# STARTER_KIT.EXAKIT_SMOKE(x BIGINT) over it and run it once; the "name
+# version" lines (container, rustc, sdk) are kept in UDF_SMOKE_LINES (for
+# --json) and the rustc and sdk are held against the selected row (udf_tool.py
+# smoke-rust). 7 (step smoke, both versions in the reason) when they differ or
+# the container refused the library (F-UDF-CL-RUST-9001); 5 when there is no
+# bucket directory to put the library into. On success the manifest records
+# the row as validated (components.udf_devkit.rust: validated, rustc, sdk).
+udf_devkit_smoke_rust() {
+    _usr_alias="$1"
+    UDF_SMOKE_LINES=""
+    udf_bucket_locate || { _udf_fail 5 smoke "exakit status" "$UDF_BUCKET_ERROR"; return 1; }
+    _usr_dest="$UDF_BUCKET_DIR/$EXAKIT_UDF_RUST_SMOKE_DIR/$EXAKIT_UDF_RUST_SMOKE_LIB"
+    mkdir -p "$(dirname "$_usr_dest")" 2>/dev/null && cp "$UDF_SMOKE_FILE" "$_usr_dest.part" && mv -f "$_usr_dest.part" "$_usr_dest" || {
+        rm -f "$_usr_dest.part"
+        _udf_fail 5 smoke "exakit status" "Could not copy the smoke library into the bucket directory ($_usr_dest)."; return 1; }
+    _usr_path="$UDF_BUCKET_UDF_ROOT/$EXAKIT_UDF_RUST_SMOKE_DIR/$EXAKIT_UDF_RUST_SMOKE_LIB"
+    _usr_rustc="$(_udf_row runtime | sed 's/.*"rustc": *"\([^"]*\)".*/\1/')"
+    _usr_sdk="$(_udf_rules pins "$(exakit_versions_active_doc)" rust "$UDF_CONTAINER_ARCH" "$UDF_CONTAINER_DB" 2>/dev/null | awk '$1 == "exasol-udf-sdk" {print $2}')"
+    info "Running the Rust smoke UDF $EXAKIT_UDF_RUST_SMOKE_SCHEMA.EXAKIT_SMOKE over $_usr_path"
+    _usr_out="$(_udf_tool smoke-rust "$_usr_alias" "$EXAKIT_UDF_RUST_SMOKE_SCHEMA" "$_usr_path" "$_usr_rustc" "$_usr_sdk" 2>"$EXAKIT_HOME/.udf-smoke.err")"
+    _usr_rc=$?
+    _usr_err="$(tr '\n' ' ' < "$EXAKIT_HOME/.udf-smoke.err" 2>/dev/null | sed 's/ *$//')"; rm -f "$EXAKIT_HOME/.udf-smoke.err"
+    UDF_SMOKE_LINES="$_usr_out"
+    if [ "$_usr_rc" -ne 0 ]; then
+        warn "The Rust smoke UDF on $_usr_alias did not pass: ${_usr_err:-no output}"
+        manifest_set components.udf_devkit.rust.validated false
+        _udf_fail 7 smoke "exakit udf-setup --language rust" "The Rust smoke UDF on $_usr_alias did not pass: ${_usr_err:-no output}"
+        return 1
+    fi
+    _usr_got_rustc="$(printf '%s\n' "$_usr_out" | sed -n 's/^rustc //p' | head -1)"
+    _usr_got_sdk="$(printf '%s\n' "$_usr_out" | sed -n 's/^sdk //p' | head -1)"
+    ok "Rust UDFs run on $_usr_alias (rustc $_usr_got_rustc, exasol-udf-sdk $_usr_got_sdk - as pinned)"
+    info "Use it in SQL: CREATE OR REPLACE $_usr_alias SCALAR SCRIPT ... AS %udf_object $UDF_BUCKET_UDF_ROOT/$EXAKIT_UDF_RUST_SMOKE_DIR/lib<name>.so;"
+    manifest_set components.udf_devkit.rust.validated true
+    manifest_set components.udf_devkit.rust.rustc "$_usr_got_rustc"
+    manifest_set components.udf_devkit.rust.sdk "$_usr_got_sdk"
     manifest_set components.udf_devkit.validated true
     return 0
 }
@@ -443,29 +530,48 @@ udf_devkit_setup_default() {
     _udf_record_language python
 }
 
-# udf_devkit_setup_rust — the Rust container of the matrix (alias RUST): the
-# same select, download, verify and launcher install, through the restart. No
-# smoke UDF yet: it arrives with the next kit step, so the add-on is recorded
-# as not validated until then. Non-zero with UDF_FAIL_* set.
+# udf_devkit_setup_rust [force] — the Rust container of the matrix (alias
+# RUST): select, download and verify the container AND the row's smoke
+# library (so a bad download never costs a restart), the launcher install
+# through the restart (skipped when RUST is already installed, unless forced:
+# udf-setup proves what is there, udf-use default updates it), then the Rust
+# smoke UDF. A row whose smoke_asset is still a placeholder (before the first
+# CI build) installs the container and stops at step smoke (7), so the
+# container is never reported as proven when it was not. Non-zero with
+# UDF_FAIL_* set.
 udf_devkit_setup_rust() {
     _udf_ready select-container || return 1
     _udf_select_container rust || return 1
     _udf_fetch_container rust || return 1
+    UDF_SMOKE_FILE=""
+    if _udf_rust_smoke_asset; then
+        _udf_fetch_verified rust "smoke UDF library" "$UDF_SMOKE_URL" "$UDF_SMOKE_SHA256" "$UDF_SMOKE_SIZE" "exakit udf-setup --language rust" || return 1
+        UDF_SMOKE_FILE="$UDF_FETCHED_FILE"
+    fi
     _usr_verb=install
     udf_devkit_installed_aliases | grep -qx "$EXAKIT_UDF_RUST_ALIAS" && _usr_verb=update
-    _udf_with_restart "Installing the $EXAKIT_UDF_RUST_ALIAS container" \
-        _udf_slc custom "$_usr_verb" --source "$UDF_CONTAINER_FILE" --alias "$EXAKIT_UDF_RUST_ALIAS" --language rust --auto-approve
-    case $? in
-        0) ;;
-        5) _udf_fail 5 install "exakit udf-setup --language rust --yes" "The install was not confirmed; nothing changed."; return 1 ;;
-        *) _udf_fail 6 install "exakit logs" "The launcher could not install the $EXAKIT_UDF_RUST_ALIAS container (see: exakit logs)."; return 1 ;;
-    esac
-    manifest_set "components.udf_devkit.containers.$EXAKIT_UDF_RUST_ALIAS" "$UDF_CONTAINER_URL"
+    if [ "$_usr_verb" = update ] && [ "${1:-0}" != 1 ]; then
+        ok "The $EXAKIT_UDF_RUST_ALIAS container is already installed"
+    else
+        _udf_with_restart "Installing the $EXAKIT_UDF_RUST_ALIAS container" \
+            _udf_slc custom "$_usr_verb" --source "$UDF_CONTAINER_FILE" --alias "$EXAKIT_UDF_RUST_ALIAS" --language rust --auto-approve
+        case $? in
+            0) ;;
+            5) _udf_fail 5 install "exakit udf-setup --language rust --yes" "The install was not confirmed; nothing changed."; return 1 ;;
+            *) _udf_fail 6 install "exakit logs" "The launcher could not install the $EXAKIT_UDF_RUST_ALIAS container (see: exakit logs)."; return 1 ;;
+        esac
+        manifest_set "components.udf_devkit.containers.$EXAKIT_UDF_RUST_ALIAS" "$UDF_CONTAINER_URL"
+        ok "Rust UDFs: the $EXAKIT_UDF_RUST_ALIAS container is installed (rustc $(_udf_row runtime | sed 's/.*"rustc": *"\([^"]*\)".*/\1/'), exasol-udf-sdk $(_udf_rules pins "$(exakit_versions_active_doc)" rust "$UDF_CONTAINER_ARCH" "$UDF_CONTAINER_DB" 2>/dev/null | awk '$1 == "exasol-udf-sdk" {print $2}'))"
+    fi
     _udf_record_language rust
-    manifest_set components.udf_devkit.validated false
     UDF_SMOKE_LINES=""
-    ok "Rust UDFs: the $EXAKIT_UDF_RUST_ALIAS container is installed (rustc $(_udf_row runtime | sed 's/.*"rustc": *"\([^"]*\)".*/\1/'), exasol-udf-sdk $(_udf_rules pins "$(exakit_versions_active_doc)" rust "$UDF_CONTAINER_ARCH" "$UDF_CONTAINER_DB" 2>/dev/null | awk '$1 == "exasol-udf-sdk" {print $2}'))"
-    info "The Rust smoke UDF arrives with the next kit step; until then: exasol slc list shows $EXAKIT_UDF_RUST_ALIAS"
+    if [ -z "$UDF_SMOKE_FILE" ]; then
+        manifest_set components.udf_devkit.rust.validated false
+        manifest_set components.udf_devkit.validated false
+        _udf_fail 7 smoke "exakit update" "The Rust smoke UDF library for $UDF_CONTAINER_ARCH is not pinned in this kit's versions.json yet ($UDF_SMOKE_WHY): the $EXAKIT_UDF_RUST_ALIAS container is installed (exasol slc list) but not proven. A kit update brings the pin."
+        return 1
+    fi
+    udf_devkit_smoke_rust "$EXAKIT_UDF_RUST_ALIAS" || return 1
     return 0
 }
 
@@ -489,20 +595,31 @@ udf_devkit_install() {
     if ! exakit_db_reachable; then
         info "Start the database, then set up $_udi_lang UDFs with: exakit udf-setup --language $_udi_lang"
     elif [ "$_udi_lang" = rust ]; then
-        _UDF_YES=1 udf_devkit_setup_rust || warn "Rust UDFs are not set up yet (${UDF_FAIL_MSG:-see the log}) - run: exakit udf-setup --language rust"
+        _UDF_YES=1 udf_devkit_setup_rust 0 || warn "Rust UDFs are not proven yet (${UDF_FAIL_MSG:-see the log}) - run: exakit udf-setup --language rust"
     else
         _UDF_YES=1 udf_devkit_setup_container 0 || warn "Python UDFs are not set up yet - run: exakit udf-setup"
     fi
     return 0
 }
 
+# udf_devkit_validate — the installed containers proven again, quietly: the
+# official Python one by its smoke UDF, the Rust one by its smoke library when
+# that is in the cache (udf_devkit_setup_rust fetched it); otherwise the
+# record says not validated.
 udf_devkit_validate() {
     exakit_db_reachable || return 0
-    if udf_devkit_installed_aliases | grep -qx "$EXAKIT_UDF_OFFICIAL_ALIAS"; then
-        udf_devkit_smoke "$EXAKIT_UDF_OFFICIAL_ALIAS" >/dev/null 2>&1 || manifest_set components.udf_devkit.validated false
-    else
-        manifest_set components.udf_devkit.validated false
+    _udv_aliases="$(udf_devkit_installed_aliases)"
+    _udv_ok=0
+    if printf '%s\n' "$_udv_aliases" | grep -qx "$EXAKIT_UDF_OFFICIAL_ALIAS"; then
+        udf_devkit_smoke "$EXAKIT_UDF_OFFICIAL_ALIAS" >/dev/null 2>&1 && _udv_ok=1
     fi
+    if printf '%s\n' "$_udv_aliases" | grep -qx "$EXAKIT_UDF_RUST_ALIAS"; then
+        _udf_select_container rust >/dev/null 2>&1 && _udf_rust_smoke_asset \
+            && UDF_SMOKE_FILE="$EXAKIT_UDF_CONTAINER_CACHE/$(basename "$UDF_SMOKE_URL")" \
+            && _udf_rules verify "$UDF_SMOKE_FILE" "$UDF_SMOKE_SHA256" "$UDF_SMOKE_SIZE" >/dev/null 2>&1 \
+            && udf_devkit_smoke_rust "$EXAKIT_UDF_RUST_ALIAS" >/dev/null 2>&1 && _udv_ok=1
+    fi
+    [ "$_udv_ok" = 1 ] || manifest_set components.udf_devkit.validated false
     return 0
 }
 
@@ -575,9 +692,11 @@ _udf_install_tarball() {
         *) _udf_fail 6 install "exakit logs" "The launcher could not install the container as $_uit_alias (see: exakit logs)."; return 1 ;;
     esac
     if [ "$_uit_language" = rust ]; then
+        # The Rust smoke library is built for the kit's pinned container; a
+        # tarball of yours is recorded as installed, not proven.
         manifest_set components.udf_devkit.validated false
         UDF_SMOKE_LINES=""
-        info "The Rust smoke UDF arrives with the next kit step; until then: exasol slc list shows $_uit_alias"
+        info "A Rust container of your own has no smoke UDF (the kit's proves its pinned one: exakit udf-setup --language rust); exasol slc list shows $_uit_alias"
     else
         udf_devkit_smoke "$_uit_alias" "$@" || return 1
     fi
@@ -585,7 +704,8 @@ _udf_install_tarball() {
 }
 
 # cmd_udf_setup [--language python|rust] [--force] [--yes] [--json] — the
-# official Python container (PYTHON3) or the matrix's Rust container (RUST).
+# official Python container (PYTHON3) or the matrix's Rust container (RUST),
+# each proven by its smoke UDF; --force reinstalls one that is there.
 cmd_udf_setup() {
     _ucs_force=0; _ucs_lang="$EXAKIT_UDF_LANGUAGE"; _ucs_json=0
     while [ $# -gt 0 ]; do
@@ -602,7 +722,7 @@ cmd_udf_setup() {
     [ "$_ucs_json" = 1 ] && _udf_json_mode
     _udf_require_installed_for "$_ucs_lang"
     if [ "$_ucs_lang" = rust ]; then
-        udf_devkit_setup_rust || _udf_raise_fail rust
+        udf_devkit_setup_rust "$_ucs_force" || _udf_raise_fail rust
         _udf_done rust "$EXAKIT_UDF_RUST_ALIAS"
     else
         udf_devkit_setup_container "$_ucs_force" || _udf_raise_fail python
@@ -645,7 +765,7 @@ cmd_udf_use() {
     _udf_require_installed_for "$_ucu_lang"
     if [ "$_ucu_what" = default ]; then
         if [ "$_ucu_lang" = rust ]; then
-            udf_devkit_setup_rust || _udf_raise_fail rust
+            udf_devkit_setup_rust 1 || _udf_raise_fail rust
             _udf_done rust "$EXAKIT_UDF_RUST_ALIAS"
         else
             udf_devkit_setup_default || _udf_raise_fail python

@@ -1,0 +1,136 @@
+name: rust-smoke
+
+# The udf-devkit add-on's Rust smoke UDF (udf/rust-smoke, design 5, AC-ML1.5):
+# libexakit_smoke.so built for the two architectures the RUST container is
+# published for, inside the same rustc the container was built with
+# (docker.io/library/rust:1.98.1-trixie) and with cargo-exasol-udf 0.33.0
+# (= exasol-udf-sdk 0.33.0), because the database checks the ABI fingerprint
+# SDK_VERSION:RUSTC_VERSION at load and refuses any other build
+# (F-UDF-CL-RUST-9001). A macOS host cannot produce a Linux .so, so this job is
+# the only build path: every run uploads the two libraries and their sha256 as
+# workflow artifacts; a tag rust-smoke-v* also attaches them to that release,
+# whose asset url, sha256 and size go into versions.json
+# (components.udf-devkit.containers, the Rust rows' smoke_asset).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "udf/rust-smoke/**"
+      - ".github/workflows/rust-smoke.yml"
+    tags:
+      - "rust-smoke-v*"
+  pull_request:
+    paths:
+      - "udf/rust-smoke/**"
+      - ".github/workflows/rust-smoke.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  RUST_IMAGE: docker.io/library/rust:1.98.1-trixie
+  CARGO_EXASOL_UDF: "0.33.0"
+
+jobs:
+  build:
+    name: libexakit_smoke.so (${{ matrix.arch }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            platform: linux/amd64
+          - arch: aarch64
+            platform: linux/arm64
+    steps:
+      - uses: actions/checkout@v7
+
+      # aarch64 is built under QEMU on the x86_64 runner: slower, but the same
+      # image, toolchain and tool as the x86_64 build, with no cross-linker to
+      # keep in step.
+      - name: enable QEMU for the other architecture
+        if: matrix.arch == 'aarch64'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      # cargo-exasol-udf and the registry are cached per architecture: the
+      # tool is compiled once (minutes under QEMU), then reused.
+      - name: cache the cargo home of the build container
+        uses: actions/cache@v4
+        with:
+          path: ${{ github.workspace }}/.cargo-home
+          key: rust-smoke-cargo-${{ matrix.arch }}-${{ env.CARGO_EXASOL_UDF }}-${{ hashFiles('udf/rust-smoke/Cargo.lock') }}
+          restore-keys: |
+            rust-smoke-cargo-${{ matrix.arch }}-${{ env.CARGO_EXASOL_UDF }}-
+
+      - name: build and validate inside ${{ env.RUST_IMAGE }}
+        run: |
+          set -eu
+          mkdir -p .cargo-home dist
+          docker run --rm --platform "${{ matrix.platform }}" \
+            -v "$PWD/udf/rust-smoke:/work" -v "$PWD/.cargo-home:/cargo-home" -v "$PWD/dist:/dist" \
+            -e CARGO_HOME=/cargo-home -w /work "$RUST_IMAGE" bash -eu -c '
+              rustc --version; cargo --version
+              # The image ships 1.98.1 under the "1.98.1" rustup name as well, so
+              # rust-toolchain.toml resolves without a download.
+              command -v cargo-exasol-udf >/dev/null 2>&1 || \
+                cargo install cargo-exasol-udf --version "=${{ env.CARGO_EXASOL_UDF }}" --locked
+              cargo exasol-udf build .
+              so="$(find target -path "*/release/libexakit_smoke.so" | head -1)"
+              [ -n "$so" ] || { echo "no libexakit_smoke.so was produced" >&2; exit 1; }
+              cargo exasol-udf validate "$so"
+              cp "$so" "/dist/libexakit_smoke-${{ matrix.arch }}.so"
+            '
+          cd dist
+          sha256sum "libexakit_smoke-${{ matrix.arch }}.so" > "libexakit_smoke-${{ matrix.arch }}.so.sha256"
+          cat "libexakit_smoke-${{ matrix.arch }}.so.sha256"
+          stat -c '%n %s bytes' "libexakit_smoke-${{ matrix.arch }}.so"
+
+      - name: the versions.json lines for this build
+        run: |
+          set -eu
+          cd dist
+          sha="$(awk '{print $1}' "libexakit_smoke-${{ matrix.arch }}.so.sha256")"
+          size="$(stat -c '%s' "libexakit_smoke-${{ matrix.arch }}.so")"
+          tag="${GITHUB_REF_NAME}"
+          case "$GITHUB_REF" in refs/tags/rust-smoke-v*) ;; *) tag="rust-smoke-v<tag>" ;; esac
+          {
+            echo "smoke_asset for the ${{ matrix.arch }} Rust row of versions.json:"
+            echo "  url:    https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/libexakit_smoke-${{ matrix.arch }}.so"
+            echo "  sha256: $sha"
+            echo "  size:   $size"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: libexakit_smoke-${{ matrix.arch }}
+          path: |
+            dist/libexakit_smoke-${{ matrix.arch }}.so
+            dist/libexakit_smoke-${{ matrix.arch }}.so.sha256
+          if-no-files-found: error
+
+  release:
+    name: attach to the rust-smoke release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/rust-smoke-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - run: ls -l dist && cat dist/*.sha256
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/libexakit_smoke-x86_64.so
+            dist/libexakit_smoke-x86_64.so.sha256
+            dist/libexakit_smoke-aarch64.so
+            dist/libexakit_smoke-aarch64.so.sha256
+          fail_on_unmatched_files: true
