@@ -397,6 +397,10 @@ class SwapTest(unittest.TestCase):
                 # pin that path. It deliberately has no inline SQL f-string to substitute here.
                 self.assertIn("nb.prepare_training(conn, ds, handoff", notebook.read_text(encoding="utf-8"))
                 continue
+            if notebook.name == "02_rust_score.py":
+                # Its SQL is the handoff's training SQL over the deployed Rust UDF: no role is rendered inline.
+                self.assertIn('handoff["training_sql"]', notebook.read_text(encoding="utf-8"))
+                continue
             if "[include]" in notebook.read_text(encoding="utf-8") and "ds." not in notebook.read_text(encoding="utf-8"):
                 continue
             with self.subTest(notebook=notebook.relative_to(NOTEBOOKS).as_posix()):
@@ -411,7 +415,10 @@ class SwapTest(unittest.TestCase):
             with self.subTest(notebook=name):
                 lines = (NOTEBOOKS / name).read_text(encoding="utf-8").splitlines()
                 self.assertEqual([l.split("#")[0].strip() for l in lines if l.startswith("DATASET = ")], ['DATASET = "pharma_trials"'])
-                self.assertIn("nb.dataset(conn, DATASET)", "\n".join(lines))
+                # train opens the descriptor; explore opens it through the review, so a file with no roles beside it
+                # is loaded and drafted right there instead of stopping (T8b)
+                opened = "nb.review_roles(conn, DATASET)" if name.startswith("data-scientist") else "nb.dataset(conn, DATASET)"
+                self.assertIn(opened, "\n".join(lines))
 
 
 class AliasTest(unittest.TestCase):
@@ -994,6 +1001,135 @@ class ProbeTest(unittest.TestCase):
     def test_a_plain_error_text_that_starts_blank_still_says_something(self):
         self.assertEqual(self.checks._reason(RuntimeError("\n\nconnection lost\nmore")), "connection lost")
         self.assertEqual(self.checks._reason(RuntimeError("")), "RuntimeError")
+
+_spec = importlib.util.spec_from_file_location("exakit_build_tool", ROOT / "tools" / "notebooks.py")
+build_tool = importlib.util.module_from_spec(_spec)         # tools/notebooks.py: the .ipynb built from a .py, cell by cell
+_spec.loader.exec_module(build_tool)
+
+
+def _code_cells(py: Path) -> list[str]:
+    return ["".join(c["source"]) for c in json.loads(build_tool.build(py))["cells"] if c["cell_type"] == "code"]
+
+
+class NotebookWorkflowTest(unittest.TestCase):
+    """T-new-15 (AC-X1.1): the quickstarts' first cell starts a workflow and prints its id with the exakit workflow
+    show line, or continues the one EXAKIT_WORKFLOW_ID names; explore does the same before it opens the data. The
+    cells are the built notebooks' own, run with the real workflow helper on a temporary kit home."""
+
+    QUICKSTARTS = {"data-scientist": "data-scientist-quickstart", "ml-engineer": "ml-engineer-quickstart"}
+
+    def setUp(self):
+        self.home = tempfile.TemporaryDirectory()
+        self.addCleanup(self.home.cleanup)
+        env = mock.patch.dict(os.environ, {"EXAKIT_HOME": self.home.name})
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop("EXAKIT_WORKFLOW_ID", None)
+        kit = importlib.import_module("exakit_nb._kit")
+        kit.SESSION.pop("workflow_id", None)
+        self.addCleanup(lambda: (kit.SESSION.pop("workflow_id", None), os.environ.pop("EXAKIT_WORKFLOW_ID", None)))
+
+    def run_cell(self, source: str, namespace: dict | None = None) -> tuple[dict, str]:
+        namespace = namespace if namespace is not None else {}
+        with redirect_stdout(io.StringIO()) as out:
+            exec(compile(source, "cell", "exec"), namespace)
+        return namespace, out.getvalue()
+
+    def log(self, workflow_id: str) -> list[dict]:
+        path = Path(self.home.name) / "workflows" / f"{workflow_id}.jsonl"
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+    def test_the_quickstarts_first_cell_starts_a_workflow_and_prints_how_to_show_it(self):
+        for persona, name in self.QUICKSTARTS.items():
+            with self.subTest(persona=persona):
+                os.environ.pop("EXAKIT_WORKFLOW_ID", None)
+                importlib.import_module("exakit_nb._kit").SESSION.pop("workflow_id", None)
+                first = _code_cells(NOTEBOOKS / persona / "00_quickstart.py")[0]
+                self.assertIn(f'nb.workflow("{name}"', first)
+                namespace, out = self.run_cell(first)
+                wid = namespace["wid"]
+                self.assertRegex(wid, r"^wf-\d{8}-[0-9a-f]{6}$")
+                self.assertIn(f"exakit workflow show {wid}", out)
+                self.assertEqual(os.environ["EXAKIT_WORKFLOW_ID"], wid, "a child process inherits it")
+                self.assertEqual([(e["kind"], e.get("name")) for e in self.log(wid)], [("start", name)])
+
+    def test_a_kernel_started_under_a_workflow_continues_it(self):
+        first = _code_cells(NOTEBOOKS / "data-scientist" / "00_quickstart.py")[0]
+        namespace, _ = self.run_cell(first)
+        started = namespace["wid"]
+        importlib.import_module("exakit_nb._kit").SESSION.pop("workflow_id", None)       # another kernel, same environment
+        os.environ["EXAKIT_WORKFLOW_ID"] = started
+        for persona in self.QUICKSTARTS:
+            with self.subTest(persona=persona):
+                namespace, out = self.run_cell(_code_cells(NOTEBOOKS / persona / "00_quickstart.py")[0])
+                self.assertEqual(namespace["wid"], started)
+                self.assertIn(f"exakit workflow show {started}", out)
+        self.assertEqual([e["kind"] for e in self.log(started)], ["start"], "resuming adds no second start line")
+
+    def test_explore_continues_the_workflow_before_it_opens_the_data(self):
+        first = _code_cells(NOTEBOOKS / "data-scientist" / "01_explore.py")[1]        # after DATASET = ...
+        self.assertIn('nb.workflow("explore", resume=WORKFLOW_ID or os.environ.get("EXAKIT_WORKFLOW_ID"))', first)
+        self.assertLess(first.index("nb.workflow("), first.index("nb.connect()"))
+        ds = exakit_nb.dataset(FakeConn(PHARMA), "pharma_trials")
+        review = mock.Mock(**{"dataset.return_value": ds})
+        with mock.patch.object(exakit_nb, "connect", return_value=FakeConn(PHARMA)), \
+                mock.patch.object(exakit_nb, "review_roles", return_value=review) as reviewed:
+            namespace, out = self.run_cell(first, {"DATASET": "pharma_trials"})
+        self.assertEqual([e["kind"] for e in self.log(namespace["wid"])], ["start"])
+        reviewed.assert_called_once_with(mock.ANY, "pharma_trials")
+        review.dataset.assert_called_once_with(draft_ok=True)
+        self.assertEqual(namespace["LABEL"], "TERMINATED")
+        importlib.import_module("exakit_nb._kit").SESSION.pop("workflow_id", None)
+        os.environ["EXAKIT_WORKFLOW_ID"] = namespace["wid"]
+        with mock.patch.object(exakit_nb, "connect", return_value=FakeConn(PHARMA)), \
+                mock.patch.object(exakit_nb, "review_roles", return_value=review):
+            again, _ = self.run_cell(first, {"DATASET": "pharma_trials"})
+        self.assertEqual(again["wid"], namespace["wid"])
+
+
+class MissingRoleTest(unittest.TestCase):
+    """AC-DS5.3: the quickstart's first query does not guess a role no column fits - without a category it counts
+    per entity, without a label it leaves the rate out - and says which steps skip, with the profiler's reason."""
+
+    def descriptor(self, roles: dict, missing: list):
+        doc = {"schema_version": 2, "id": "readings", "fact_table": "LAB.READINGS", "version": 1, "status": "draft",
+               "owner": "me", "created": "2026-10-27T10:00:00Z",
+               "roles": {role: ([{"table": "LAB.READINGS", "column": c} for c in column] if role == "text"
+                                else {"table": "LAB.READINGS", "column": column}) for role, column in roles.items()},
+               "missing": missing}
+        parsed = rules.parse_descriptor(json.dumps(doc))
+        return Dataset(parsed.id, Path("d"), "0" * 64, parsed)
+
+    def query_cell(self) -> str:
+        cells = ["".join(c["source"]) for c in json.loads(build_tool.build(NOTEBOOKS / "data-scientist" / "00_quickstart.py"))["cells"]]
+        return next(c for c in cells if "first_rows = nb.sql(" in c)
+
+    def run_query(self, ds) -> tuple[str, str]:
+        statements = []
+        fake_nb = types.SimpleNamespace(sql=lambda conn, statement: statements.append(statement) or _Frame(),
+                                        show_sql=lambda: None)
+        with redirect_stdout(io.StringIO()) as out:
+            exec(compile(self.query_cell(), "cell", "exec"), {"nb": fake_nb, "conn": object(), "ds": ds})
+        return statements[0], out.getvalue()
+
+    def test_every_role_present_is_the_full_query(self):
+        ds = self.descriptor({"entity": "DEVICE", "category": "KIND", "date": "TAKEN_ON", "label": "ALARM", "text": ["NOTE"]}, [])
+        sql, out = self.run_query(ds)
+        self.assertIn("SELECT KIND AS CATEGORY", sql)
+        self.assertIn("ROUND(100 * AVG(ALARM), 1) AS LABEL_1_PCT", sql)
+        self.assertEqual(out, "")
+
+    def test_a_missing_label_and_category_do_not_stop_the_query(self):
+        ds = self.descriptor({"entity": "DEVICE", "date": "TAKEN_ON", "text": ["NOTE"]},
+                             [{"role": "label", "reason": "no 0/1 column"}, {"role": "category", "reason": "no column with 3-50 values"}])
+        self.assertFalse(ds.has("label"))
+        sql, out = self.run_query(ds)
+        self.assertIn("SELECT DEVICE AS CATEGORY", sql)
+        self.assertIn("GROUP BY DEVICE", sql)
+        self.assertNotIn("AVG", sql)
+        self.assertIn("No category role (no column with 3-50 values): rows are counted per entity", out)
+        self.assertIn("No label role (no 0/1 column): the label rate is left out", out)
+
 
 if __name__ == "__main__":
     unittest.main()

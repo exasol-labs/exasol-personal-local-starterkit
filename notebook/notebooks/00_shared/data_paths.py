@@ -13,7 +13,7 @@
 # two cannot drift apart. Open your persona's quickstart rather than this notebook; it runs on its own all the same.
 #
 # **Dataset:** the Pharma sample (`pharma_trials`) unless you pick another below. **Loaded beforehand:** nothing.
-# **Run time:** about five minutes, most of it loading the sample the first time.
+# **Run time:** about ten minutes, most of it loading the sample the first time.
 
 # %% [markdown] tags=["connect"]
 # ## Connected?
@@ -70,9 +70,13 @@ ds = nb.first(source, own, sample)
 # %% [markdown] tags=["review"]
 # ## Review and approve the roles
 #
-# The kit profiles the chosen table and shows the evidence behind each proposed role. Pick a role for each column,
-# then click **Approve descriptor**. The next cell waits for your approval; it does not run on a draft. In Marimo or
-# a plain Python session, call `review.approve({"COLUMN": "role", ...})` instead.
+# The kit profiles the chosen table and shows the evidence behind each proposed role: one dropdown per column,
+# labelled with its type, null share and distinct values or span, the runner-up for its role under it. Pick a role
+# for each column, then click **Approve descriptor**. The next cell waits for your approval; it does not run on a
+# draft (in Marimo it stops until the button is clicked, then runs on its own). In a plain Python session, call
+# `review.approve({"COLUMN": "role", ...})` instead. A headless run (`EXAKIT_NB_AUTO_APPROVE=1`) approves only a
+# proposal equal to the current approved version, writing nothing; any other proposal stays a draft and the run
+# says why (`=force` approves it anyway).
 
 # %% tags=["review"]
 review = nb.review_roles(conn, ds)

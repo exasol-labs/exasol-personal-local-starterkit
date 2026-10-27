@@ -45,16 +45,28 @@ def _(mo):
     own-file cell writes that file), and the file is loaded into its table the first time. A descriptor file of a table
     already in the database works too. The descriptor is checked by the kit's own rules and against the database: a role
     that names a missing table or column stops here, naming it.
+
+    A file with **no descriptor beside it** does not stop here: the next cell loads it into `MY_DATA.<FILE NAME>`,
+    proposes its roles with the evidence and saves that proposal beside the file as a draft, which this notebook explores
+    as it is (exploring does not need an approval; training and asking do). To approve the roles, use the picker it
+    shows, or the quickstart's `OWN_FILE` cell with this file, or `exakit describe <id> --approve`; a headless run
+    approves them only with `EXAKIT_NB_AUTO_APPROVE=force`.
+
+    Paste the quickstart's workflow id into `WORKFLOW_ID` below to continue its log
+    in this notebook's separate kernel. Otherwise this notebook starts its own log.
     """)
     return
 
 
 @app.cell
 def _(DATASET):
+    import os
     import exakit.nb as nb
 
+    WORKFLOW_ID = None  # paste the quickstart's wf-... id to continue its log
+    wid = nb.workflow("explore", resume=WORKFLOW_ID or os.environ.get("EXAKIT_WORKFLOW_ID"))
     conn = nb.connect()
-    ds = nb.dataset(conn, DATASET)
+    ds = nb.review_roles(conn, DATASET).dataset(draft_ok=True)
     nb.show_roles(ds)
 
     ENTITY, CATEGORY, DATE, LABEL = ds.col("entity"), ds.col("category"), ds.col("date"), ds.col("label")
@@ -262,7 +274,9 @@ def _(mo):
     `01_train` starts from without opening the descriptor - which descriptor version and digest this was, a digest of the
     data, the feature view built from the roles (SQL only - category one-hot, date parts, text lengths, entity
     frequency - so a Rust scorer can reproduce it over the same view), the label and its positive class, the training SQL
-    with a time split by the date role (random, with the reason, when there is none) and the input and output schemas.
+    with a time split by the date role and the input and output schemas. Without a date role there is no time split and
+    the cell refuses, naming the two ways on: ask for a reproducible hash split, `nb.write_handoff(conn, ds,
+    split="random")`, or add a date role to the descriptor and approve it.
     Training refuses a handoff whose descriptor has changed since, so run this cell again after a new approval.
     """)
     return

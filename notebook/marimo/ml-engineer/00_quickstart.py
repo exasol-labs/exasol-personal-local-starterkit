@@ -30,6 +30,29 @@ def _(mo):
 
 @app.cell(hide_code=True)
 def _(mo):
+    mo.md(r"""
+    ## One workflow id on everything
+
+    The first cell starts a **workflow**: every step below - each check, each query, the role proposal and its approval -
+    appends one line carrying this id to `~/.exasol-starter-kit/workflows/<id>.jsonl`, and `01_train` tags its MLflow run
+    with it (`exakit workflow show <id>`). A kernel started with `EXAKIT_WORKFLOW_ID` set - the Data Scientist's, say -
+    continues that workflow instead of starting one.
+    """)
+    return
+
+
+@app.cell
+def _():
+    import os
+    import exakit.nb as nb
+
+    wid = nb.workflow("ml-engineer-quickstart", resume=os.environ.get("EXAKIT_WORKFLOW_ID"))
+    print(f"Every step below is logged under it: exakit workflow show {wid}")
+    return (nb,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
     # Cell tags: connect
     mo.md(r"""
     ## Connected?
@@ -41,13 +64,11 @@ def _(mo):
 
 
 @app.cell
-def _():
+def _(nb):
     # Cell tags: connect
-    import exakit.nb as nb
-
     conn = nb.connect()
     nb.check_connection(conn)
-    return conn, nb
+    return (conn,)
 
 
 @app.cell
@@ -192,9 +213,13 @@ def _(mo):
     mo.md(r"""
     ## Review and approve the roles
 
-    The kit profiles the chosen table and shows the evidence behind each proposed role. Pick a role for each column,
-    then click **Approve descriptor**. The next cell waits for your approval; it does not run on a draft. In Marimo or
-    a plain Python session, call `review.approve({"COLUMN": "role", ...})` instead.
+    The kit profiles the chosen table and shows the evidence behind each proposed role: one dropdown per column,
+    labelled with its type, null share and distinct values or span, the runner-up for its role under it. Pick a role
+    for each column, then click **Approve descriptor**. The next cell waits for your approval; it does not run on a
+    draft (in Marimo it stops until the button is clicked, then runs on its own). In a plain Python session, call
+    `review.approve({"COLUMN": "role", ...})` instead. A headless run (`EXAKIT_NB_AUTO_APPROVE=1`) approves only a
+    proposal equal to the current approved version, writing nothing; any other proposal stays a draft and the run
+    says why (`=force` approves it anyway).
     """)
     return
 

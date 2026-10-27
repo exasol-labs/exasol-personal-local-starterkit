@@ -29,7 +29,9 @@ rewrites the notebook's one dataset assignment (``DATASET = "..."`` in explore/t
 quickstarts' shared load cell) to that id - the "one assignment switches" promise, exercised rather than assumed;
 given several, each notebook runs once per dataset. A cell tagged ``skip-ci`` is left out of the run. The kernel sees
 the caller's environment except the LANGFUSE_* variables, which are dropped (a headless run never writes to anyone's
-Langfuse); MLFLOW_TRACKING_URI passes through when set, else MLflow uses its local store in the run folder. The run
+Langfuse); MLFLOW_TRACKING_URI passes through when set, else MLflow uses its local store in the run folder. The role
+review runs as EXAKIT_NB_AUTO_APPROVE=1 (a proposal equal to the approved version is used, nothing is written; another
+stays a draft) unless the caller exported it; ``force`` approves whatever is proposed. The run
 folder is a temporary directory per notebook and dataset (``mlflow/``, ``models/`` land there, never in the tree);
 ``--output DIR`` keeps the executed .ipynb, outputs included, for a CI artifact. Needs nbclient in the kit's notebook
 environment: when the Python running this has none, ``--run`` re-runs itself with the kit's notebook Python
@@ -230,12 +232,18 @@ def run_document(py: Path, dataset: str | None, skip_tag: str = SKIP_TAG) -> dic
     return doc
 
 
+AUTO_APPROVE = "EXAKIT_NB_AUTO_APPROVE"                    # 1: approve a proposal equal to the approved version (writes nothing);
+                                                            # force: approve whatever is proposed (a scripted approval)
+
+
 def _run_environment() -> dict[str, str]:
     """The kernel's environment: this process's, without the LANGFUSE_* variables (nothing headless traces to a
-    person's Langfuse). MLFLOW_TRACKING_URI, the model variables and everything else pass through."""
+    person's Langfuse). MLFLOW_TRACKING_URI, the model variables and everything else pass through. The role review
+    runs headless as EXAKIT_NB_AUTO_APPROVE=1 - a proposal whose roles equal the current approved version's is used
+    as approved and nothing is written, any other stays a draft - unless the caller set it (``force`` approves)."""
     import os
     return {**{k: v for k, v in os.environ.items() if not k.startswith(LANGFUSE_PREFIX)},
-            "EXAKIT_NB_AUTO_APPROVE": "1", "EXAKIT_NB_STRICT": "1"}
+            AUTO_APPROVE: os.environ.get(AUTO_APPROVE) or "1", "EXAKIT_NB_STRICT": "1"}
 
 
 def _plain(text: str) -> str:

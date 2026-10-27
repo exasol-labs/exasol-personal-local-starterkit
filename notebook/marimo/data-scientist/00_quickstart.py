@@ -20,11 +20,35 @@ def _(mo):
       Banking sample (`banking_complaints`), your own CSV, Parquet or JSON file, or a table in a connected source.
     - **What must be loaded:** nothing beforehand. The sample-dataset cell loads it with `exakit data-load` the first
       time; your own file is loaded by its cell.
-    - **How long:** about five minutes, most of it loading the sample the first time (seconds after that).
+    - **How long:** about ten minutes, most of it loading the sample the first time (seconds after that).
 
     Run the cells top to bottom. The notebook is already connected: there is no host, user or password in it.
     """)
     return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## One workflow id on everything
+
+    The first cell starts a **workflow**: every step below - each query, the role proposal and its approval, a trace -
+    appends one line carrying this id to `~/.exasol-starter-kit/workflows/<id>.jsonl`, so a result can be traced back
+    through every step that made it (`exakit workflow show <id>`). Copy the printed `wf-...` id into `WORKFLOW_ID`
+    in Explore, Ask and Share: Jupyter opens each notebook in a separate kernel. A kernel started with
+    `EXAKIT_WORKFLOW_ID` already set also continues that workflow.
+    """)
+    return
+
+
+@app.cell
+def _():
+    import os
+    import exakit.nb as nb
+
+    wid = nb.workflow("data-scientist-quickstart", resume=os.environ.get("EXAKIT_WORKFLOW_ID"))
+    print(f"Every step below is logged under it: exakit workflow show {wid}")
+    return (nb,)
 
 
 @app.cell(hide_code=True)
@@ -40,13 +64,11 @@ def _(mo):
 
 
 @app.cell
-def _():
+def _(nb):
     # Cell tags: connect
-    import exakit.nb as nb
-
     conn = nb.connect()
     nb.check_connection(conn)
-    return conn, nb
+    return (conn,)
 
 
 @app.cell
@@ -139,9 +161,13 @@ def _(mo):
     mo.md(r"""
     ## Review and approve the roles
 
-    The kit profiles the chosen table and shows the evidence behind each proposed role. Pick a role for each column,
-    then click **Approve descriptor**. The next cell waits for your approval; it does not run on a draft. In Marimo or
-    a plain Python session, call `review.approve({"COLUMN": "role", ...})` instead.
+    The kit profiles the chosen table and shows the evidence behind each proposed role: one dropdown per column,
+    labelled with its type, null share and distinct values or span, the runner-up for its role under it. Pick a role
+    for each column, then click **Approve descriptor**. The next cell waits for your approval; it does not run on a
+    draft (in Marimo it stops until the button is clicked, then runs on its own). In a plain Python session, call
+    `review.approve({"COLUMN": "role", ...})` instead. A headless run (`EXAKIT_NB_AUTO_APPROVE=1`) approves only a
+    proposal equal to the current approved version, writing nothing; any other proposal stays a draft and the run
+    says why (`=force` approves it anyway).
     """)
     return
 
@@ -167,14 +193,22 @@ def _(mo):
     ## A first query
 
     Rows per category, built from the descriptor's roles - the same query on any dataset. `nb.show_sql()` prints the
-    statement behind the result.
+    statement behind the result. A role no column fits (the descriptor's `missing`, with the profiler's reason) is
+    not guessed: without a category the rows are counted per entity, without a label the label rate is left out, and
+    the cell says so.
     """)
     return
 
 
 @app.cell
 def _(conn, ds_1, nb):
-    first_rows = nb.sql(conn, f"\nSELECT {ds_1.col('category')} AS CATEGORY,\n       COUNT(*) AS N,\n       ROUND(100 * AVG({ds_1.col('label')}), 1) AS LABEL_1_PCT\nFROM {ds_1.fact_table}\nGROUP BY {ds_1.col('category')}\nORDER BY N DESC\nLIMIT 10")
+    skipped = {m['role']: m['reason'] for m in ds_1.missing}
+    for role, instead in (('category', 'rows are counted per entity instead'), ('label', 'the label rate is left out')):
+        if role in skipped:
+            print(f'No {role} role ({skipped[role]}): {instead}; the steps that need it later say so.')
+    BY = ds_1.col('category') if ds_1.has('category') else ds_1.col('entity')
+    LABEL_PCT = f",\n       ROUND(100 * AVG({ds_1.col('label')}), 1) AS LABEL_1_PCT" if ds_1.has('label') else ''
+    first_rows = nb.sql(conn, f'\nSELECT {BY} AS CATEGORY,\n       COUNT(*) AS N{LABEL_PCT}\nFROM {ds_1.fact_table}\nGROUP BY {BY}\nORDER BY N DESC\nLIMIT 10')
     nb.show_sql()
     first_rows
     return

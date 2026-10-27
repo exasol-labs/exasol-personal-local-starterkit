@@ -18,6 +18,21 @@
 # First the three things training depends on, one cell each: each prints `ok` with what it found, or `FAIL` with the
 # reason and the fix. Then the same loader cells as the Data Scientist's quickstart.
 
+# %% [markdown]
+# ## One workflow id on everything
+#
+# The first cell starts a **workflow**: every step below - each check, each query, the role proposal and its approval -
+# appends one line carrying this id to `~/.exasol-starter-kit/workflows/<id>.jsonl`, and `01_train` tags its MLflow run
+# with it (`exakit workflow show <id>`). A kernel started with `EXAKIT_WORKFLOW_ID` set - the Data Scientist's, say -
+# continues that workflow instead of starting one.
+
+# %%
+import os
+import exakit.nb as nb
+
+wid = nb.workflow("ml-engineer-quickstart", resume=os.environ.get("EXAKIT_WORKFLOW_ID"))
+print(f"Every step below is logged under it: exakit workflow show {wid}")
+
 # %% [include] ../00_shared/data_paths.py connect
 
 # %% [markdown]

@@ -24,6 +24,15 @@
 # is written in the tree. The executed notebooks, outputs included, land in
 # EXAKIT_NOTEBOOK_RUN_OUTPUT when it is set (CI keeps them as an artifact).
 #
+# Every run of the kit's notebooks on one dataset happens under one workflow
+# (AC-X1.1): the script starts it with the kit's helper, hands its id to the
+# kernels as EXAKIT_WORKFLOW_ID (the quickstarts resume it rather than start
+# their own, as explore and train do), and after the run asserts that its log,
+# $EXAKIT_HOME/workflows/<id>.jsonl, exists and holds at least one `sql` line -
+# so the notebooks provably log, not just run. The role review runs headless
+# with EXAKIT_NB_AUTO_APPROVE=1: a proposal equal to the approved descriptor is
+# used and nothing is written (the run is idempotent); any other stays a draft.
+#
 #   EXAKIT_NOTEBOOK_DATASETS     space-separated ids (default: both reference datasets)
 #   EXAKIT_NOTEBOOK_CELL_TIMEOUT seconds one cell may take (default 900)
 #   EXAKIT_NOTEBOOK_RUN_OUTPUT   folder for the executed .ipynb files (default: none kept)
@@ -138,18 +147,55 @@ AI_LAB="${EXAKIT_NOTEBOOK_AI_LAB:-1}"
 [ $# -gt 0 ] && [ "$AI_LAB" = 1 ] && AI_LAB=0        # named notebooks: only those
 _out=""
 [ -n "${EXAKIT_NOTEBOOK_RUN_OUTPUT:-}" ] && { mkdir -p "$EXAKIT_NOTEBOOK_RUN_OUTPUT"; _out="--output $EXAKIT_NOTEBOOK_RUN_OUTPUT"; }
+# A fresh workflow for one run, started with the kit's own helper (so its log
+# has the start line a notebook's would); only the id is printed.
+start_workflow() {
+    "$NB_PY" - "$1" <<'PY'
+import contextlib, importlib, io, sys
+wf = importlib.import_module("exakit_nb.workflow")       # the module (the package exports the function under its name)
+with contextlib.redirect_stdout(io.StringIO()):
+    wid = wf.workflow(sys.argv[1])
+print(wid)
+PY
+}
+
+# The log of one run holds at least one sql line: the notebooks logged under the id they were given.
+assert_workflow_log() {
+    _log="$EXAKIT_HOME/workflows/$1.jsonl"
+    if [ ! -f "$_log" ]; then
+        echo "FAIL workflow $1: no log at $_log after the run on $2" >&2
+        return 1
+    fi
+    _sql="$(grep -c '"kind": "sql"' "$_log" 2>/dev/null || true)"
+    if [ "${_sql:-0}" -lt 1 ]; then
+        echo "FAIL workflow $1: $_log holds no sql line after the run on $2 (lines: $(wc -l < "$_log" | tr -d ' '))" >&2
+        return 1
+    fi
+    echo "ok   workflow $1: $_sql sql lines logged for the run on $2 (exakit workflow show $1)"
+}
+
 rc=0
 if [ "$AI_LAB" != only ]; then
     set -- "$@"
-    _args=""
-    for _ds in $DATASETS; do _args="$_args --dataset $_ds"; done
-    # shellcheck disable=SC2086
-    "$NB_PY" "$ROOT/tools/notebooks.py" --run "$@" $_args --timeout "${EXAKIT_NOTEBOOK_CELL_TIMEOUT:-900}" $_out
-    rc=$?
+    for _ds in $DATASETS; do
+        WID="$(start_workflow "notebooks-run-$_ds" 2>/dev/null | tail -1)"
+        case "$WID" in
+            wf-*) ;;
+            *) echo "FAIL could not start a workflow with $NB_PY: $WID" >&2; rc=1; continue ;;
+        esac
+        echo "workflow $WID: every notebook on $_ds runs under it (EXAKIT_WORKFLOW_ID)"
+        # shellcheck disable=SC2086
+        EXAKIT_WORKFLOW_ID="$WID" "$NB_PY" "$ROOT/tools/notebooks.py" --run "$@" --dataset "$_ds" \
+            --timeout "${EXAKIT_NOTEBOOK_CELL_TIMEOUT:-900}" $_out
+        _rc=$?
+        if [ "$_rc" -ne 0 ]; then
+            echo "FAIL (exit $_rc) on $_ds: see the failing cell above" >&2
+            [ "$rc" -eq 0 ] && rc="$_rc"
+        fi
+        assert_workflow_log "$WID" "$_ds" || { [ "$rc" -eq 0 ] && rc=1; }
+    done
     if [ "$rc" -eq 0 ]; then
-        echo "PASS every notebook ran on: $DATASETS"
-    else
-        echo "FAIL (exit $rc): see the failing cell above" >&2
+        echo "PASS every notebook ran, and logged its SQL under one workflow, on: $DATASETS"
     fi
 fi
 
