@@ -28,7 +28,7 @@ The JupyterLab and Marimo versions are pinned in the kit's `versions.json`
 The kit's notebooks are in `~/.exasol-starter-kit/notebooks/starter-kit-notebooks/`,
 one folder per persona, with a README naming the order to open them in:
 `data-scientist/00_quickstart` then `01_explore` (Data Scientist), and
-`ml-engineer/00_quickstart`, `01_train`, `02_score_external_model` (ML Engineer);
+`ml-engineer/00_quickstart`, `01_train`, `03_score_external_model` (ML Engineer);
 `00_shared/` holds the cells both quickstarts use. Marimo's copies are in
 `notebooks/marimo/<persona>/`. A file there is the user's: the kit never overwrites it.
 
@@ -125,7 +125,7 @@ AI Lab notebooks that use only the database run here. Those that upload to
 BucketFS, install the Transformers or Text AI extensions, or deploy a container
 through BucketFS do not: a local Exasol Personal database has no BucketFS
 upload service. For UDFs use the udf-devkit add-on (`exakit udf-setup`,
-`exakit udf-use`, `exakit model put`); `ml-engineer/02_score_external_model` scores a model trained
+`exakit udf-use`, `exakit model put`); `ml-engineer/03_score_external_model` scores a model trained
 anywhere with the udf-devkit's scoring template.
 
 ## When something is wrong

@@ -18,7 +18,10 @@ The notebooks, in the order a new user opens them (numbers are never reused):
 | | `01_explore` | The landscape question with the SQL visible, a small scikit-learn model, the text step traced to your Langfuse; another dataset or your own file is one assignment |
 | `ml-engineer/` | `00_quickstart` | The container, MLflow and the bucket directory, one check each with its fix; then the same loader cells |
 | | `01_train` | Features in SQL from the descriptor, a classifier trained inside a Python UDF under `exasol_mlflow.start_run`, the run in your MLflow |
-| | `02_score_external_model` | A model trained elsewhere, dropped with `exakit model put` and scored by a UDF |
+| | `03_score_external_model` | A model trained elsewhere, dropped with `exakit model put` and scored by a UDF |
+
+Numbers follow the requirements document's Appendix B and are never reused: the ML
+Engineer's `02` is `02_rust_score` (to come), so the score notebook is `03`.
 
 On a machine, `exakit marketplace notebook` copies each notebook into
 `~/.exasol-starter-kit/notebooks/starter-kit-notebooks/<persona>/` (the shared

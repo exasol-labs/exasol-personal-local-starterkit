@@ -59,12 +59,12 @@
     {
       "id": "score-external-model",
       "persona": "ml-engineer",
-      "step": 2,
+      "step": 3,
       "title": "Score a model trained elsewhere",
       "summary": "Brings a model trained anywhere into the bucket directory with exakit model put, creates the scoring UDF from the template, scores a table and compares with the prediction on this computer.",
       "needs": "A Python container with scikit-learn (exakit udf-setup) and a model file (01_train's, or your own scikit-learn pickle or ONNX file).",
-      "jupyter": "02_score_external_model.ipynb",
-      "marimo": "02_score_external_model.py"
+      "jupyter": "03_score_external_model.ipynb",
+      "marimo": "03_score_external_model.py"
     }
   ]
 }

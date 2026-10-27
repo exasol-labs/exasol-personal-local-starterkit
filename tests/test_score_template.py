@@ -20,7 +20,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 TEMPLATES = ROOT / "udf" / "templates"
-NOTEBOOK = ROOT / "notebook" / "notebooks" / "ml-engineer" / "02_score_external_model.py"
+NOTEBOOK = ROOT / "notebook" / "notebooks" / "ml-engineer" / "03_score_external_model.py"
 
 _spec = importlib.util.spec_from_file_location("exakit_udf_render", TEMPLATES / "render.py")
 render = importlib.util.module_from_spec(_spec)

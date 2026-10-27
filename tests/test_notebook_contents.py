@@ -38,7 +38,7 @@ HELPERS = sorted((ROOT / "notebook" / "package").glob("*/**/*.py")) + sorted((RO
 # checks before its dispatch arm lands.
 PENDING_COMMANDS = {"model", "describe"}     # describe: task T4 (the helpers already name it)
 SPRINT_NOTEBOOKS = {"data-scientist": ["00_quickstart.ipynb", "01_explore.ipynb"],
-                    "ml-engineer": ["00_quickstart.ipynb", "01_train.ipynb", "02_score_external_model.ipynb"]}
+                    "ml-engineer": ["00_quickstart.ipynb", "01_train.ipynb", "03_score_external_model.ipynb"]}
 
 
 def _members(cls) -> set[str]:
@@ -134,7 +134,7 @@ class CatalogTest(unittest.TestCase):
     def test_the_catalog_names_files_that_exist(self):
         """Each entry's files are there - except an entry whose .py is not in the tree yet (built when it lands)."""
         pending = set(build_tool.pending())
-        self.assertLessEqual(pending, {"ml-engineer/02_score_external_model.py"}, "only the ML-4 notebook may be pending")
+        self.assertLessEqual(pending, {"ml-engineer/03_score_external_model.py"}, "only the ML-4 notebook may be pending")
         for folder, jupyter, marimo in build_tool.catalog_files():
             if f"{folder}/{Path(jupyter).stem}.py" in pending:
                 continue

@@ -59,7 +59,7 @@ python3 <kit>/udf/templates/render.py --schema S --name SCORE --model-path /buck
 
 The template loads the model once per UDF instance (pickle, joblib or ONNX).
 TEXT is a reserved word: a model column named `text` comes in as parameter
-`doc_text`. The notebook `ml-engineer/02_score_external_model` walks through it. Never tell a user to
+`doc_text`. The notebook `ml-engineer/03_score_external_model` walks through it. Never tell a user to
 upload to BucketFS over HTTP, with `exasol-bucketfs` or with curl on port 2580
 or 2581: a local deployment does not serve it.
 
