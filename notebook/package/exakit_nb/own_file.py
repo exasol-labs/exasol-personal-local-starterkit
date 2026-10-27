@@ -137,6 +137,9 @@ def _yaml_scalar(value: Any) -> str:
     if isinstance(value, (int, float)):
         return repr(value)
     text = str(value)
+    # A number-like string ("0", "1e3") must stay a string: plain, the reader would take it as a number.
+    if re.fullmatch(r"-?\d+(\.\d+)?([eE][+-]?\d+)?", text):
+        return json.dumps(text)
     return text if re.fullmatch(r"[A-Za-z0-9_.-]+", text) and text not in ("null", "true", "false") else json.dumps(text)
 
 

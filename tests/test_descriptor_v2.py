@@ -471,3 +471,13 @@ class WriterTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class YamlScalarTest(unittest.TestCase):
+    def test_number_like_strings_stay_strings(self):
+        from exakit_nb.own_file import _yaml_scalar
+        for text in ("0", "12", "1e3", "-4.5"):
+            with self.subTest(text=text):
+                self.assertEqual(_yaml_scalar(text), '"%s"' % text)
+        self.assertEqual(_yaml_scalar(0), "0")
+        self.assertEqual(_yaml_scalar("PHARMA.TRIALS"), "PHARMA.TRIALS")
