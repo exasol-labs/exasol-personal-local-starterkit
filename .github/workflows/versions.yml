@@ -769,6 +769,11 @@ jobs:
       # descriptor's values (TDD/BRD AC-DS3.2).
       - run: bash tests/notebook-addon.sh
         if: matrix.shard == 4
+      # exakit workflow list|show: the CLI over the logs the helpers write.
+      - run: bash tests/workflow-command.sh
+        if: matrix.shard == 4
+      - run: python3 tests/test_workflow.py
+        if: matrix.shard == 4
       - run: bash tests/notebook-launcher.sh
         if: matrix.shard == 4
       - run: python3 tests/test_notebook_helpers.py
@@ -907,6 +912,7 @@ jobs:
             pwsh -NoProfile -File tests/personal-s3-ps.ps1
             pwsh -NoProfile -File tests/personal-destroy-lock-ps.ps1
             pwsh -NoProfile -File tests/notebook-addon-ps.ps1
+            pwsh -NoProfile -File tests/workflow-command-ps.ps1
             pwsh -NoProfile -File tests/notebook-launcher-ps.ps1
             pwsh -NoProfile -File tests/udf-devkit-addon-ps.ps1
             pwsh -NoProfile -File tests/personas-ps.ps1

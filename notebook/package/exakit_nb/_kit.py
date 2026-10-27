@@ -19,6 +19,20 @@ from pathlib import Path
 
 VARIABLES = ("EXAKIT_NB_STORE", "EXAKIT_NB_MASTER_FILE", "EXAKIT_NB_KIT", "EXAKIT_NB_DATASETS")
 
+# The session store: what the helpers remember for the life of this Python process (the active workflow id, for one),
+# as opposed to the paths above, which come from files. A plain dict so a notebook can inspect it; never written to disk.
+SESSION: dict[str, object] = {}
+
+
+def remember(key: str, value: object) -> None:
+    """Keep a value for the rest of this session."""
+    SESSION[key] = value
+
+
+def recall(key: str, default: object = None) -> object:
+    """A value remember() kept, or the default."""
+    return SESSION.get(key, default)
+
 
 def _home() -> Path | None:
     """The kit's home: the folder that holds manifest.json and the kit copy."""

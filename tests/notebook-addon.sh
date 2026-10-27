@@ -375,14 +375,21 @@ EXAKIT_UNINSTALL_NOTEBOOKS=remove full_uninstall 0 >/dev/null 2>&1
 check "and the real run removes the whole kit home" "no" "$([ -e "$EXAKIT_HOME" ] && echo yes || echo no)"
 mkdir -p "$EXAKIT_HOME"
 
-echo "the shipped files hold no address and no credential:"
+echo "the shipped files and the generated workflow logs hold no address and no credential:"
+# The workflow logs the helpers write ($EXAKIT_HOME/workflows/*.jsonl, X-1) are
+# generated files too: one written here, with a statement in it, joins the
+# sweep, so the log's own refusals (tests/test_workflow.py) are backed by the
+# same grep that covers everything else the kit generates (AC-DS1.2, X1.2).
+PYTHONPATH="$ROOT/notebook/package" python3 -c 'import exakit_nb.workflow as w; w.workflow("secret-grep"); w.log_event(w.SQL, sql="SELECT 1", rows=1)' >/dev/null
 found=""
-for f in $(find "$ROOT/notebook/notebooks" "$ROOT/notebook/marimo" "$ROOT/notebook/package" "$ROOT/notebook/kit" -type f \( -name '*.py' -o -name '*.ipynb' -o -name '*.json' \) | sort); do
+for f in $(find "$ROOT/notebook/notebooks" "$ROOT/notebook/marimo" "$ROOT/notebook/package" "$ROOT/notebook/kit" -type f \( -name '*.py' -o -name '*.ipynb' -o -name '*.json' \) | sort) \
+         $(find "$EXAKIT_HOME/workflows" -type f -name '*.jsonl' 2>/dev/null | sort); do
     for needle in 127.0.0.1 localhost :8563 'password=' 'dsn='; do
         grep -qF -- "$needle" "$f" && found="$found $(basename "$f"):$needle"
     done
 done
 check "no address or credential" "" "$found"
+check "a workflow log was in the sweep" "yes" "$([ -n "$(find "$EXAKIT_HOME/workflows" -name 'wf-*.jsonl' 2>/dev/null)" ] && echo yes || echo no)"
 
 if command -v python3 >/dev/null 2>&1; then
     check "the kit scripts compile" "ok" "$(python3 -m py_compile "$ROOT"/notebook/kit/*.py && echo ok)"

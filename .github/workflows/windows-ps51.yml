@@ -100,6 +100,10 @@ jobs:
         if: matrix.shard == 2
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/notebook-addon-ps.ps1
+      - name: the workflow command under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/workflow-command-ps.ps1
       - name: the notebook launcher under 5.1
         if: matrix.shard == 2
         shell: powershell

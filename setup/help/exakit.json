@@ -35,6 +35,7 @@
         "persona",
         "marketplace",
         "notebook",
+        "workflow",
         "udf-setup",
         "udf-use",
         "udf-build",
@@ -318,6 +319,18 @@
         "exakit notebook check",
         "exakit notebook stop",
         "exakit notebook --port 8890"
+      ]
+    },
+    {
+      "command": "workflow",
+      "options": "list | show <id> [--json | -j]",
+      "summary": "The workflow logs the notebook helpers write: list them, show one.",
+      "description": "A notebook starts a workflow with nb.workflow('name') and gets an id, wf-YYYYMMDD-xxxxxx, that it prints with the log's path; nb.workflow(resume='wf-...') continues one from another kernel. While a workflow is active every step the helpers run - a statement (its session and statement ids, its SHA-256 and text), a Langfuse trace, an MLflow run, a descriptor draft or approval, a handoff, a dashboard revision, a model put - appends one JSON line carrying the id to ~/.exasol-starter-kit/workflows/<id>.jsonl, so a result can be traced back through every step that made it. Without a workflow nothing is written. The log never holds a credential: the helpers refuse a password, token, secret or api_key field and a DSN with a password in it. list shows one row per workflow (id, first and last timestamp, line count, name); show <id> prints its lines in order; --json gives the same as JSON. Exit 0; 1 when the add-on is not installed or there is no such workflow; 2 on bad arguments. Needs the notebook add-on, whose helpers write the log: exakit marketplace notebook.",
+      "examples": [
+        "exakit workflow list",
+        "exakit workflow list --json",
+        "exakit workflow show wf-20261027-3f9a1c",
+        "exakit workflow show wf-20261027-3f9a1c --json"
       ]
     },
     {

@@ -67,6 +67,8 @@
 #                       add joins the ones this kit has and brings theirs in
 #   notebook            open JupyterLab connected to the database (the notebook
 #                       add-on); --check, --setup, --stop, --no-browser, --port N
+#   workflow            list | show <id> [--json]: the workflow logs the notebook
+#                       helpers write, one JSON line per step (X-1)
 #   udf-setup           Python UDFs: install the official container (udf-devkit)
 #   udf-use             install a container: default, or a tarball; --list
 #   udf-build           build a container from a pinned requirements.txt
@@ -183,6 +185,7 @@ fi
 [ -f "$_lib_dir/json-tables.sh" ] && . "$_lib_dir/json-tables.sh"
 [ -f "$_lib_dir/exasol-scheduler.sh" ] && . "$_lib_dir/exasol-scheduler.sh"
 [ -f "$_lib_dir/notebook.sh" ] && . "$_lib_dir/notebook.sh"
+[ -f "$_lib_dir/workflow.sh" ] && . "$_lib_dir/workflow.sh"
 [ -f "$_lib_dir/udf-devkit.sh" ] && . "$_lib_dir/udf-devkit.sh"
 
 _runtime_type() {
@@ -2678,6 +2681,7 @@ case "${1:-help}" in
     catalog)  shift; _exakit_refuse_unknown_options catalog "--json,-j" "$@"; cmd_catalog "$@" ;;
     persona)  shift; command -v cmd_persona >/dev/null 2>&1 || die "The persona module is missing from this kit copy. Repair with: exakit update"; cmd_persona "$@" ;;
     notebook) shift; command -v notebook_cmd >/dev/null 2>&1 || die "The notebook module is missing from this kit copy. Repair with: exakit update"; notebook_cmd "$@" ;;
+    workflow) shift; command -v cmd_workflow >/dev/null 2>&1 || die "The workflow module is missing from this kit copy. Repair with: exakit update"; cmd_workflow "$@" ;;
     udf-setup|udf-use|udf-build|udf-file|model) _udf_cmd="cmd_$(printf '%s' "$1" | tr '-' '_')"; shift; command -v "$_udf_cmd" >/dev/null 2>&1 || die "The udf-devkit module is missing from this kit copy. Repair with: exakit update"; "$_udf_cmd" "$@" ;;
     # `exakit help --help` reaches this arm (the universal --help hook skips
     # the help command on purpose), so --help/-h are options here and name
