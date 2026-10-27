@@ -1014,9 +1014,11 @@ jobs:
     # and Python against fakes; this deploys Exasol Personal on the runner
     # through the kit's own installer (the launcher runs the database in a
     # rootless Podman container on Linux), then runs the two suites that need
-    # it: the read-only MCP user proven empirically (TPC-H), and every shipped
-    # notebook executed headless on both reference datasets with the text step
-    # on a stub model and MLflow on a local store (TDD/BRD AC-DS3.1, AC-ML3.1).
+    # it: the read-only MCP user proven empirically (TPC-H), and the four core
+    # quickstart/explore/train notebooks on both reference datasets with the
+    # text step on a stub model (TDD/BRD AC-DS3.1, AC-ML3.1). Ask requires an
+    # explicit SQL approval; Share requires Dash Server and a figure check;
+    # Rust scoring requires its separate pinned SLC. They have their own gates.
     # Both suites skip without a database; EXAKIT_REQUIRE_DB=1 turns that into
     # a failure here, so a runner that could not deploy is red, never green.
     # Every push to main or a release branch; a pull request only when it
@@ -1073,12 +1075,17 @@ jobs:
           exakit notebook check
       - name: the read-only MCP user can read everything and write nothing
         run: EXAKIT_REQUIRE_DB=1 bash tests/mcp-readonly-sql-matrix.sh
-      - name: every notebook headless on both datasets
+      - name: core notebooks headless on both datasets
         env:
           EXAKIT_REQUIRE_DB: "1"
           EXAKIT_NOTEBOOK_AI_LAB: "0"
           EXAKIT_NOTEBOOK_RUN_OUTPUT: ${{ runner.temp }}/executed-notebooks
-        run: bash tests/notebooks-run.sh
+        run: |
+          bash tests/notebooks-run.sh \
+            notebook/notebooks/data-scientist/00_quickstart.py \
+            notebook/notebooks/data-scientist/01_explore.py \
+            notebook/notebooks/ml-engineer/00_quickstart.py \
+            notebook/notebooks/ml-engineer/01_train.py
       - name: the AI Lab notebook, as the connector ships it, connects from the kit's store
         # AC-DS1.4: first_steps.ipynb from exasol-notebook-connector 3.1.0, a
         # copy in a temporary folder, run on the kit's kernel through its
