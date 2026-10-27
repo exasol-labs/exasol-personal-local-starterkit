@@ -1,0 +1,364 @@
+{
+  "table": "PHARMA.PHARMA_TRIALS",
+  "schema": "PHARMA",
+  "name": "PHARMA_TRIALS",
+  "virtual": false,
+  "rows": 5169,
+  "sampled": false,
+  "sample": 10000,
+  "profiled_rows": 5169,
+  "statements": 4,
+  "columns": [
+    {
+      "column": "NCT_ID",
+      "position": 1,
+      "type": "VARCHAR(11) UTF8",
+      "kind": "text",
+      "width": 11,
+      "null_rate": 0.0,
+      "distinct": 5169,
+      "distinct_ratio": 1.0,
+      "all_null": false,
+      "constant": false,
+      "avg_len": 11.0,
+      "max_len": 11,
+      "date_parse_rate": 0.0
+    },
+    {
+      "column": "BRIEF_TITLE",
+      "position": 2,
+      "type": "VARCHAR(400) UTF8",
+      "kind": "text",
+      "width": 400,
+      "null_rate": 0.0,
+      "distinct": 5152,
+      "distinct_ratio": 0.9967,
+      "all_null": false,
+      "constant": false,
+      "avg_len": 112.0,
+      "max_len": 300,
+      "date_parse_rate": 0.0
+    },
+    {
+      "column": "PHASE",
+      "position": 3,
+      "type": "VARCHAR(20) UTF8",
+      "kind": "text",
+      "width": 20,
+      "null_rate": 0.0,
+      "distinct": 4,
+      "distinct_ratio": 0.0008,
+      "all_null": false,
+      "constant": false,
+      "avg_len": 7.1,
+      "max_len": 13,
+      "date_parse_rate": 0.0,
+      "values": [
+        {
+          "value": "PHASE2",
+          "share": 0.4268
+        },
+        {
+          "value": "PHASE3",
+          "share": 0.4219
+        },
+        {
+          "value": "PHASE1/PHASE2",
+          "share": 0.1219
+        },
+        {
+          "value": "PHASE2/PHASE3",
+          "share": 0.0294
+        }
+      ],
+      "min_share": 0.0294
+    },
+    {
+      "column": "OVERALL_STATUS",
+      "position": 4,
+      "type": "VARCHAR(12) UTF8",
+      "kind": "text",
+      "width": 12,
+      "null_rate": 0.0,
+      "distinct": 2,
+      "distinct_ratio": 0.0004,
+      "all_null": false,
+      "constant": false,
+      "avg_len": 9.2,
+      "max_len": 10,
+      "date_parse_rate": 0.0,
+      "values": [
+        {
+          "value": "COMPLETED",
+          "share": 0.823
+        },
+        {
+          "value": "TERMINATED",
+          "share": 0.177
+        }
+      ],
+      "min_share": 0.177
+    },
+    {
+      "column": "TERMINATED",
+      "position": 5,
+      "type": "DECIMAL(1,0)",
+      "kind": "integer",
+      "width": null,
+      "null_rate": 0.0,
+      "distinct": 2,
+      "distinct_ratio": 0.0004,
+      "all_null": false,
+      "constant": false,
+      "min": "0",
+      "max": "1",
+      "values": [
+        {
+          "value": "0",
+          "share": 0.823
+        },
+        {
+          "value": "1",
+          "share": 0.177
+        }
+      ],
+      "min_share": 0.177
+    },
+    {
+      "column": "START_DATE",
+      "position": 6,
+      "type": "DATE",
+      "kind": "date",
+      "width": null,
+      "null_rate": 0.0,
+      "distinct": 889,
+      "distinct_ratio": 0.172,
+      "all_null": false,
+      "constant": false,
+      "min": "2016-01-01",
+      "max": "2018-12-31",
+      "span_days": 1095
+    },
+    {
+      "column": "PRIMARY_COMPLETION_DATE",
+      "position": 7,
+      "type": "DATE",
+      "kind": "date",
+      "width": null,
+      "null_rate": 0.0,
+      "distinct": 1901,
+      "distinct_ratio": 0.3678,
+      "all_null": false,
+      "constant": false,
+      "min": "2016-01-01",
+      "max": "2026-09-15",
+      "span_days": 3910
+    },
+    {
+      "column": "ENROLLMENT",
+      "position": 8,
+      "type": "DECIMAL(9,0)",
+      "kind": "integer",
+      "width": null,
+      "null_rate": 0.0006,
+      "distinct": 1013,
+      "distinct_ratio": 0.1961,
+      "all_null": false,
+      "constant": false,
+      "min": "1",
+      "max": "20099"
+    },
+    {
+      "column": "LEAD_SPONSOR",
+      "position": 9,
+      "type": "VARCHAR(200) UTF8",
+      "kind": "text",
+      "width": 200,
+      "null_rate": 0.0,
+      "distinct": 1575,
+      "distinct_ratio": 0.3047,
+      "all_null": false,
+      "constant": false,
+      "avg_len": 20.5,
+      "max_len": 105,
+      "date_parse_rate": 0.0
+    },
+    {
+      "column": "ALLOCATION",
+      "position": 10,
+      "type": "VARCHAR(20) UTF8",
+      "kind": "text",
+      "width": 20,
+      "null_rate": 0.0023,
+      "distinct": 3,
+      "distinct_ratio": 0.0006,
+      "all_null": false,
+      "constant": false,
+      "avg_len": 8.8,
+      "max_len": 14,
+      "date_parse_rate": 0.0,
+      "values": [
+        {
+          "value": "RANDOMIZED",
+          "share": 0.7053
+        },
+        {
+          "value": "NA",
+          "share": 0.1964
+        },
+        {
+          "value": "NON_RANDOMIZED",
+          "share": 0.0983
+        }
+      ],
+      "min_share": 0.0983
+    },
+    {
+      "column": "PRIMARY_PURPOSE",
+      "position": 11,
+      "type": "VARCHAR(40) UTF8",
+      "kind": "text",
+      "width": 40,
+      "null_rate": 0.0012,
+      "distinct": 9,
+      "distinct_ratio": 0.0017,
+      "all_null": false,
+      "constant": false,
+      "avg_len": 9.1,
+      "max_len": 24,
+      "date_parse_rate": 0.0,
+      "values": [
+        {
+          "value": "TREATMENT",
+          "share": 0.902
+        },
+        {
+          "value": "PREVENTION",
+          "share": 0.062
+        },
+        {
+          "value": "OTHER",
+          "share": 0.0145
+        },
+        {
+          "value": "DIAGNOSTIC",
+          "share": 0.0103
+        },
+        {
+          "value": "SUPPORTIVE_CARE",
+          "share": 0.0068
+        },
+        {
+          "value": "BASIC_SCIENCE",
+          "share": 0.0039
+        },
+        {
+          "value": "DEVICE_FEASIBILITY",
+          "share": 0.0002
+        },
+        {
+          "value": "HEALTH_SERVICES_RESEARCH",
+          "share": 0.0002
+        },
+        {
+          "value": "SCREENING",
+          "share": 0.0002
+        }
+      ],
+      "min_share": 0.0002
+    },
+    {
+      "column": "MASKING",
+      "position": 12,
+      "type": "VARCHAR(12) UTF8",
+      "kind": "text",
+      "width": 12,
+      "null_rate": 0.0008,
+      "distinct": 5,
+      "distinct_ratio": 0.001,
+      "all_null": false,
+      "constant": false,
+      "avg_len": 6.0,
+      "max_len": 9,
+      "date_parse_rate": 0.0,
+      "values": [
+        {
+          "value": "NONE",
+          "share": 0.4147
+        },
+        {
+          "value": "QUADRUPLE",
+          "share": 0.2784
+        },
+        {
+          "value": "DOUBLE",
+          "share": 0.1742
+        },
+        {
+          "value": "TRIPLE",
+          "share": 0.1013
+        },
+        {
+          "value": "SINGLE",
+          "share": 0.0314
+        }
+      ],
+      "min_share": 0.0314
+    },
+    {
+      "column": "HAS_RESULTS",
+      "position": 13,
+      "type": "DECIMAL(1,0)",
+      "kind": "integer",
+      "width": null,
+      "null_rate": 0.0,
+      "distinct": 2,
+      "distinct_ratio": 0.0004,
+      "all_null": false,
+      "constant": false,
+      "min": "0",
+      "max": "1",
+      "values": [
+        {
+          "value": "1",
+          "share": 0.7317
+        },
+        {
+          "value": "0",
+          "share": 0.2683
+        }
+      ],
+      "min_share": 0.2683
+    },
+    {
+      "column": "BRIEF_SUMMARY",
+      "position": 14,
+      "type": "VARCHAR(2100) UTF8",
+      "kind": "text",
+      "width": 2100,
+      "null_rate": 0.0,
+      "distinct": 5113,
+      "distinct_ratio": 0.9892,
+      "all_null": false,
+      "constant": false,
+      "avg_len": 376.6,
+      "max_len": 2000,
+      "date_parse_rate": 0.0
+    },
+    {
+      "column": "ELIGIBILITY_CRITERIA",
+      "position": 15,
+      "type": "VARCHAR(2100) UTF8",
+      "kind": "text",
+      "width": 2100,
+      "null_rate": 0.0,
+      "distinct": 5114,
+      "distinct_ratio": 0.9894,
+      "all_null": false,
+      "constant": false,
+      "avg_len": 1636.9,
+      "max_len": 2000,
+      "date_parse_rate": 0.0
+    }
+  ]
+}

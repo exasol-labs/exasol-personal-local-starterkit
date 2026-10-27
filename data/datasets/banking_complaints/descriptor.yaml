@@ -19,5 +19,19 @@ roles:
     - {table: BANKING.BANKING_COMPLAINTS, column: ISSUE}
     - {table: BANKING.BANKING_COMPLAINTS, column: SUB_ISSUE}
     - {table: BANKING.BANKING_COMPLAINTS, column: COMPANY_PUBLIC_RESPONSE}
-evidence: {}        # the profiler's numbers per role, filled in by exakit describe (AC-DS5.1)
+evidence:           # the profiler's numbers per role (exakit describe; AC-DS5.1 checks a fresh draft against the roles)
+  date: {column: DATE_RECEIVED, type: DATE, null_rate: 0.0, distinct: 14, distinct_ratio: 0.0021, min: 2025-01-01, max: 2025-01-14, span_days: 13, score: 1.0, runner_up: {column: DATE_SENT_TO_COMPANY, score: 0.6}}
+  label: {column: MONETARY_RELIEF, type: "DECIMAL(1,0)", null_rate: 0.0, distinct: 2, distinct_ratio: 0.0003, min_share: 0.1186, top: [{value: "0", share: 0.8814}, {value: "1", share: 0.1186}], score: 1.0, runner_up: {column: PRODUCT, score: 0.7}}
+  category: {column: PRODUCT, type: "VARCHAR(60) UTF8", null_rate: 0.0, distinct: 3, distinct_ratio: 0.0004, min_share: 0.1412, top: [{value: "Credit card", share: 0.511}, {value: "Checking or savings account", share: 0.3478}, {value: Mortgage, share: 0.1412}], score: 1.0, runner_up: {column: SUBMITTED_VIA, score: 0.8}}
+  entity: {column: COMPANY, type: "VARCHAR(200) UTF8", null_rate: 0.0, distinct: 324, distinct_ratio: 0.048, avg_len: 24.5, max_len: 78, score: 1.0, runner_up: {column: SUB_ISSUE, score: 0.59}}
+  text: {columns: [{column: ISSUE, type: "VARCHAR(120) UTF8", null_rate: 0.0, avg_len: 32.6, max_len: 63, score: 0.5}, {column: SUB_ISSUE, type: "VARCHAR(200) UTF8", null_rate: 0.0003, avg_len: 39.5, max_len: 145, score: 0.5}, {column: COMPANY_PUBLIC_RESPONSE, type: "VARCHAR(300) UTF8", null_rate: 0.4973, avg_len: 92.8, max_len: 119, score: 0.5}], runner_up: {column: SUB_PRODUCT, score: 0.0}}
+  excluded: {}
+  table:
+    rows: 6754
+    profiled_rows: 6754
+    sampled: false
+    sample: 10000
+    virtual: false
+    statements: 4
+    columns: 14
 missing: []

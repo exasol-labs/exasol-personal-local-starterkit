@@ -1,0 +1,722 @@
+{
+  "table": "BANKING.BANKING_COMPLAINTS",
+  "schema": "BANKING",
+  "name": "BANKING_COMPLAINTS",
+  "virtual": false,
+  "rows": 6754,
+  "sampled": false,
+  "sample": 10000,
+  "profiled_rows": 6754,
+  "statements": 4,
+  "columns": [
+    {
+      "column": "COMPLAINT_ID",
+      "position": 1,
+      "type": "DECIMAL(12,0)",
+      "kind": "integer",
+      "width": null,
+      "null_rate": 0.0,
+      "distinct": 6754,
+      "distinct_ratio": 1.0,
+      "all_null": false,
+      "constant": false,
+      "min": "11333660",
+      "max": "12333806"
+    },
+    {
+      "column": "DATE_RECEIVED",
+      "position": 2,
+      "type": "DATE",
+      "kind": "date",
+      "width": null,
+      "null_rate": 0.0,
+      "distinct": 14,
+      "distinct_ratio": 0.0021,
+      "all_null": false,
+      "constant": false,
+      "min": "2025-01-01",
+      "max": "2025-01-14",
+      "span_days": 13,
+      "values": [
+        {
+          "value": "2025-01-14",
+          "share": 0.1044
+        },
+        {
+          "value": "2025-01-03",
+          "share": 0.1007
+        },
+        {
+          "value": "2025-01-07",
+          "share": 0.0949
+        },
+        {
+          "value": "2025-01-13",
+          "share": 0.0906
+        },
+        {
+          "value": "2025-01-08",
+          "share": 0.0878
+        },
+        {
+          "value": "2025-01-02",
+          "share": 0.0875
+        },
+        {
+          "value": "2025-01-09",
+          "share": 0.0866
+        },
+        {
+          "value": "2025-01-06",
+          "share": 0.0819
+        },
+        {
+          "value": "2025-01-10",
+          "share": 0.0773
+        },
+        {
+          "value": "2025-01-04",
+          "share": 0.0456
+        },
+        {
+          "value": "2025-01-11",
+          "share": 0.0428
+        },
+        {
+          "value": "2025-01-01",
+          "share": 0.0348
+        },
+        {
+          "value": "2025-01-05",
+          "share": 0.0336
+        },
+        {
+          "value": "2025-01-12",
+          "share": 0.0315
+        }
+      ],
+      "min_share": 0.0315
+    },
+    {
+      "column": "DATE_SENT_TO_COMPANY",
+      "position": 3,
+      "type": "DATE",
+      "kind": "date",
+      "width": null,
+      "null_rate": 0.0,
+      "distinct": 43,
+      "distinct_ratio": 0.0064,
+      "all_null": false,
+      "constant": false,
+      "min": "2025-01-01",
+      "max": "2025-05-01",
+      "span_days": 120,
+      "values": [
+        {
+          "value": "2025-01-14",
+          "share": 0.1044
+        },
+        {
+          "value": "2025-01-07",
+          "share": 0.0979
+        },
+        {
+          "value": "2025-01-03",
+          "share": 0.0946
+        },
+        {
+          "value": "2025-01-08",
+          "share": 0.0845
+        },
+        {
+          "value": "2025-01-09",
+          "share": 0.0841
+        },
+        {
+          "value": "2025-01-13",
+          "share": 0.084
+        },
+        {
+          "value": "2025-01-10",
+          "share": 0.0805
+        },
+        {
+          "value": "2025-01-02",
+          "share": 0.0798
+        },
+        {
+          "value": "2025-01-06",
+          "share": 0.0754
+        },
+        {
+          "value": "2025-01-04",
+          "share": 0.0428
+        },
+        {
+          "value": "2025-01-11",
+          "share": 0.0403
+        },
+        {
+          "value": "2025-01-05",
+          "share": 0.0324
+        },
+        {
+          "value": "2025-01-01",
+          "share": 0.0318
+        },
+        {
+          "value": "2025-01-12",
+          "share": 0.0296
+        },
+        {
+          "value": "2025-01-15",
+          "share": 0.0068
+        },
+        {
+          "value": "2025-01-21",
+          "share": 0.0047
+        },
+        {
+          "value": "2025-01-24",
+          "share": 0.0037
+        },
+        {
+          "value": "2025-01-23",
+          "share": 0.0036
+        },
+        {
+          "value": "2025-01-22",
+          "share": 0.0033
+        },
+        {
+          "value": "2025-01-16",
+          "share": 0.0025
+        },
+        {
+          "value": "2025-01-17",
+          "share": 0.0021
+        },
+        {
+          "value": "2025-01-27",
+          "share": 0.0019
+        },
+        {
+          "value": "2025-01-28",
+          "share": 0.001
+        },
+        {
+          "value": "2025-01-30",
+          "share": 0.001
+        },
+        {
+          "value": "2025-02-06",
+          "share": 0.001
+        },
+        {
+          "value": "2025-02-03",
+          "share": 0.0007
+        },
+        {
+          "value": "2025-03-06",
+          "share": 0.0007
+        },
+        {
+          "value": "2025-01-18",
+          "share": 0.0006
+        },
+        {
+          "value": "2025-02-05",
+          "share": 0.0006
+        },
+        {
+          "value": "2025-01-29",
+          "share": 0.0004
+        },
+        {
+          "value": "2025-03-04",
+          "share": 0.0004
+        },
+        {
+          "value": "2025-03-17",
+          "share": 0.0004
+        },
+        {
+          "value": "2025-02-07",
+          "share": 0.0003
+        },
+        {
+          "value": "2025-03-05",
+          "share": 0.0003
+        },
+        {
+          "value": "2025-03-12",
+          "share": 0.0003
+        },
+        {
+          "value": "2025-03-21",
+          "share": 0.0003
+        },
+        {
+          "value": "2025-01-25",
+          "share": 0.0001
+        },
+        {
+          "value": "2025-02-04",
+          "share": 0.0001
+        },
+        {
+          "value": "2025-03-19",
+          "share": 0.0001
+        },
+        {
+          "value": "2025-03-20",
+          "share": 0.0001
+        },
+        {
+          "value": "2025-03-25",
+          "share": 0.0001
+        },
+        {
+          "value": "2025-03-27",
+          "share": 0.0001
+        },
+        {
+          "value": "2025-05-01",
+          "share": 0.0001
+        }
+      ],
+      "min_share": 0.0001
+    },
+    {
+      "column": "PRODUCT",
+      "position": 4,
+      "type": "VARCHAR(60) UTF8",
+      "kind": "text",
+      "width": 60,
+      "null_rate": 0.0,
+      "distinct": 3,
+      "distinct_ratio": 0.0004,
+      "all_null": false,
+      "constant": false,
+      "avg_len": 16.1,
+      "max_len": 27,
+      "date_parse_rate": 0.0,
+      "values": [
+        {
+          "value": "Credit card",
+          "share": 0.511
+        },
+        {
+          "value": "Checking or savings account",
+          "share": 0.3478
+        },
+        {
+          "value": "Mortgage",
+          "share": 0.1412
+        }
+      ],
+      "min_share": 0.1412
+    },
+    {
+      "column": "SUB_PRODUCT",
+      "position": 5,
+      "type": "VARCHAR(100) UTF8",
+      "kind": "text",
+      "width": 100,
+      "null_rate": 0.0,
+      "distinct": 14,
+      "distinct_ratio": 0.0021,
+      "all_null": false,
+      "constant": false,
+      "avg_len": 29.5,
+      "max_len": 42,
+      "date_parse_rate": 0.0,
+      "values": [
+        {
+          "value": "General-purpose credit card or charge card",
+          "share": 0.4551
+        },
+        {
+          "value": "Checking account",
+          "share": 0.273
+        },
+        {
+          "value": "Conventional home mortgage",
+          "share": 0.081
+        },
+        {
+          "value": "Store credit card",
+          "share": 0.0558
+        },
+        {
+          "value": "Other banking product or service",
+          "share": 0.0376
+        },
+        {
+          "value": "Savings account",
+          "share": 0.0301
+        },
+        {
+          "value": "FHA mortgage",
+          "share": 0.0256
+        },
+        {
+          "value": "VA mortgage",
+          "share": 0.0141
+        },
+        {
+          "value": "Home equity loan or line of credit (HELOC)",
+          "share": 0.0111
+        },
+        {
+          "value": "CD (Certificate of Deposit)",
+          "share": 0.0071
+        },
+        {
+          "value": "Other type of mortgage",
+          "share": 0.0033
+        },
+        {
+          "value": "Manufactured home loan",
+          "share": 0.003
+        },
+        {
+          "value": "Reverse mortgage",
+          "share": 0.0018
+        },
+        {
+          "value": "USDA mortgage",
+          "share": 0.0015
+        }
+      ],
+      "min_share": 0.0015
+    },
+    {
+      "column": "ISSUE",
+      "position": 6,
+      "type": "VARCHAR(120) UTF8",
+      "kind": "text",
+      "width": 120,
+      "null_rate": 0.0,
+      "distinct": 24,
+      "distinct_ratio": 0.0036,
+      "all_null": false,
+      "constant": false,
+      "avg_len": 32.6,
+      "max_len": 63,
+      "date_parse_rate": 0.0,
+      "values": [
+        {
+          "value": "Managing an account",
+          "share": 0.192
+        },
+        {
+          "value": "Problem with a company's investigation into an existing problem",
+          "share": 0.0967
+        },
+        {
+          "value": "Problem with a purchase shown on your statement",
+          "share": 0.0837
+        },
+        {
+          "value": "Trouble during payment process",
+          "share": 0.0835
+        },
+        {
+          "value": "Incorrect information on your report",
+          "share": 0.0677
+        },
+        {
+          "value": "Getting a credit card",
+          "share": 0.0585
+        },
+        {
+          "value": "Other features, terms, or problems",
+          "share": 0.0506
+        },
+        {
+          "value": "Closing an account",
+          "share": 0.0487
+        },
+        {
+          "value": "Fees or interest",
+          "share": 0.0465
+        },
+        {
+          "value": "Problem with a lender or other company charging your account",
+          "share": 0.0425
+        },
+        {
+          "value": "Opening an account",
+          "share": 0.0366
+        },
+        {
+          "value": "Problem when making payments",
+          "share": 0.0358
+        },
+        {
+          "value": "Closing your account",
+          "share": 0.0302
+        },
+        {
+          "value": "Struggling to pay mortgage",
+          "share": 0.0293
+        },
+        {
+          "value": "Problem caused by your funds being low",
+          "share": 0.0262
+        },
+        {
+          "value": "Advertising and marketing, including promotional offers",
+          "share": 0.0188
+        },
+        {
+          "value": "Trouble using your card",
+          "share": 0.0145
+        },
+        {
+          "value": "Applying for a mortgage or refinancing an existing mortgage",
+          "share": 0.0123
+        },
+        {
+          "value": "Closing on a mortgage",
+          "share": 0.0095
+        },
+        {
+          "value": "Improper use of your report",
+          "share": 0.0077
+        },
+        {
+          "value": "Struggling to pay your bill",
+          "share": 0.0061
+        },
+        {
+          "value": "Credit monitoring or identity theft protection services",
+          "share": 0.0018
+        },
+        {
+          "value": "Unable to get your credit report or credit score",
+          "share": 0.0006
+        },
+        {
+          "value": "Problem with fraud alerts or security freezes",
+          "share": 0.0003
+        }
+      ],
+      "min_share": 0.0003
+    },
+    {
+      "column": "SUB_ISSUE",
+      "position": 7,
+      "type": "VARCHAR(200) UTF8",
+      "kind": "text",
+      "width": 200,
+      "null_rate": 0.0003,
+      "distinct": 100,
+      "distinct_ratio": 0.0148,
+      "all_null": false,
+      "constant": false,
+      "avg_len": 39.5,
+      "max_len": 145,
+      "date_parse_rate": 0.0
+    },
+    {
+      "column": "COMPANY",
+      "position": 8,
+      "type": "VARCHAR(200) UTF8",
+      "kind": "text",
+      "width": 200,
+      "null_rate": 0.0,
+      "distinct": 324,
+      "distinct_ratio": 0.048,
+      "all_null": false,
+      "constant": false,
+      "avg_len": 24.5,
+      "max_len": 78,
+      "date_parse_rate": 0.0
+    },
+    {
+      "column": "CONSUMER_STATE",
+      "position": 9,
+      "type": "VARCHAR(2) UTF8",
+      "kind": "text",
+      "width": 2,
+      "null_rate": 0.0055,
+      "distinct": 55,
+      "distinct_ratio": 0.0082,
+      "all_null": false,
+      "constant": false,
+      "avg_len": 2.0,
+      "max_len": 2,
+      "date_parse_rate": 0.0
+    },
+    {
+      "column": "SUBMITTED_VIA",
+      "position": 10,
+      "type": "VARCHAR(20) UTF8",
+      "kind": "text",
+      "width": 20,
+      "null_rate": 0.0,
+      "distinct": 4,
+      "distinct_ratio": 0.0006,
+      "all_null": false,
+      "constant": false,
+      "avg_len": 3.3,
+      "max_len": 11,
+      "date_parse_rate": 0.0,
+      "values": [
+        {
+          "value": "Web",
+          "share": 0.9134
+        },
+        {
+          "value": "Phone",
+          "share": 0.0444
+        },
+        {
+          "value": "Referral",
+          "share": 0.0378
+        },
+        {
+          "value": "Postal mail",
+          "share": 0.0044
+        }
+      ],
+      "min_share": 0.0044
+    },
+    {
+      "column": "TAGS",
+      "position": 11,
+      "type": "VARCHAR(40) UTF8",
+      "kind": "text",
+      "width": 40,
+      "null_rate": 0.8399,
+      "distinct": 3,
+      "distinct_ratio": 0.0028,
+      "all_null": false,
+      "constant": false,
+      "avg_len": 15.5,
+      "max_len": 29,
+      "date_parse_rate": 0.0,
+      "values": [
+        {
+          "value": "Older American",
+          "share": 0.445
+        },
+        {
+          "value": "Servicemember",
+          "share": 0.4265
+        },
+        {
+          "value": "Older American, Servicemember",
+          "share": 0.1286
+        }
+      ],
+      "min_share": 0.1286
+    },
+    {
+      "column": "TIMELY",
+      "position": 12,
+      "type": "DECIMAL(1,0)",
+      "kind": "integer",
+      "width": null,
+      "null_rate": 0.0,
+      "distinct": 2,
+      "distinct_ratio": 0.0003,
+      "all_null": false,
+      "constant": false,
+      "min": "0",
+      "max": "1",
+      "values": [
+        {
+          "value": "1",
+          "share": 0.9963
+        },
+        {
+          "value": "0",
+          "share": 0.0037
+        }
+      ],
+      "min_share": 0.0037
+    },
+    {
+      "column": "MONETARY_RELIEF",
+      "position": 13,
+      "type": "DECIMAL(1,0)",
+      "kind": "integer",
+      "width": null,
+      "null_rate": 0.0,
+      "distinct": 2,
+      "distinct_ratio": 0.0003,
+      "all_null": false,
+      "constant": false,
+      "min": "0",
+      "max": "1",
+      "values": [
+        {
+          "value": "0",
+          "share": 0.8814
+        },
+        {
+          "value": "1",
+          "share": 0.1186
+        }
+      ],
+      "min_share": 0.1186
+    },
+    {
+      "column": "COMPANY_PUBLIC_RESPONSE",
+      "position": 14,
+      "type": "VARCHAR(300) UTF8",
+      "kind": "text",
+      "width": 300,
+      "null_rate": 0.4973,
+      "distinct": 9,
+      "distinct_ratio": 0.0027,
+      "all_null": false,
+      "constant": false,
+      "avg_len": 92.8,
+      "max_len": 119,
+      "date_parse_rate": 0.0,
+      "values": [
+        {
+          "value": "Company has responded to the consumer and the CFPB and chooses not to provide a public response",
+          "share": 0.8984
+        },
+        {
+          "value": "Company believes it acted appropriately as authorized by contract or law",
+          "share": 0.0892
+        },
+        {
+          "value": "Company believes the complaint provided an opportunity to answer consumer's questions",
+          "share": 0.0044
+        },
+        {
+          "value": "Company believes complaint represents an opportunity for improvement to better serve consumers",
+          "share": 0.0029
+        },
+        {
+          "value": "Company believes complaint is the result of an isolated error",
+          "share": 0.0018
+        },
+        {
+          "value": "Company believes the complaint is the result of a misunderstanding",
+          "share": 0.0012
+        },
+        {
+          "value": "Company disputes the facts presented in the complaint",
+          "share": 0.0012
+        },
+        {
+          "value": "Company believes complaint caused principally by actions of third party outside the control or direction of the company",
+          "share": 0.0006
+        },
+        {
+          "value": "Company can't verify or dispute the facts in the complaint",
+          "share": 0.0003
+        }
+      ],
+      "min_share": 0.0003
+    }
+  ]
+}

@@ -101,6 +101,26 @@ a draft or approved, who owns it, when it was written and what it was approved o
 | `notes` | no | per column, one line of text a model wrote about it; never decisive |
 | `missing` | no | the roles no column fits, each `{role, reason}`; *such a role may be absent from `roles`, and the steps that need it skip with the reason |
 
+`exakit describe SCHEMA.TABLE` (and `exakit.nb.describe()` in a notebook) drafts a descriptor
+from a **profile** of the table - a handful of SELECTs: the column list, `COUNT(*)`, one
+aggregate statement per batch of columns and one `GROUPING SETS` statement for the values of
+the low-cardinality columns; a virtual table, or a regular one past 5 million rows, is
+profiled on a random sample (10,000 rows unless `--sample` says otherwise) and the evidence
+says so. The scoring is deterministic and offline (the same table gives the same draft, with
+or without a model); roles are assigned in the order date, label, category, entity, text, a
+column one role took never offered to the next; the best column takes the role, the second
+best is its `runner_up`; a role whose best score is under **0.5** goes under `missing` with
+the reason. All-null and constant columns are excluded first (`evidence.excluded`). A name
+hint adds a little and never decides on its own.
+
+| Role | Qualifies when | Score |
+|---|---|---|
+| `date` | `DATE`/`TIMESTAMP`, or text with 95%+ parseable dates (`YYYY-MM-DD`, `DD.MM.YYYY`, `MM/DD/YYYY`, `YYYY-MM-DD HH24:MI:SS`) | 0.8 for a date type, 0.7 x parse rate for text; a name saying the row's own event (start, received, created, opened...) +0.2, a follow-up (end, completion, sent, closed, due...) -0.2; 20%+ nulls -0.2; ties: the widest span, then the earlier column |
+| `label` | `BOOLEAN`, or 2-3 distinct values with under 20% nulls | 0.5; a 0/1 or true/false column +0.1; a name saying an outcome (terminated, outcome, disputed, timely, churn, default...) +0.2, a state (is_, has_, flag, status) +0.1; the smallest class 5% or more +0.2, else -0.2 |
+| `category` | 3-50 distinct values that repeat (distinct ratio under 0.05), under 20% nulls, not the label | 0.5; under 1% nulls +0.2; the smallest class 1% or more +0.2; 12 values or fewer +0.1; ties: the earlier column |
+| `entity` | text or integer, distinct ratio 0.01-0.6 (it repeats, but is not one of a few values), under 5% nulls | 0.5; a name hint (id, name, sponsor, company, customer, account...) +0.2; up to +0.3 by distinct count relative to the most distinct candidate - a unique key is no entity, it names rows |
+| `text` | `VARCHAR`, in table order, every column that scores 0.5 or more | average length 40+ with values of 200+ characters +0.3, else average 30+ in a column declared 100+ wide +0.2; average 150+ +0.2; a name saying text (summary, description, criteria, issue, response, comment, note...) +0.3 |
+
 Each role is `{table: SCHEMA.TABLE, column: NAME}`. No column may play two roles, a role
 that takes one column takes exactly one, and a key the schema does not know is refused
 rather than ignored; nothing is inferred - a missing role is named and the notebook stops,

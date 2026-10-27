@@ -36,6 +36,7 @@
         "marketplace",
         "notebook",
         "workflow",
+        "describe",
         "udf-setup",
         "udf-use",
         "udf-build",
@@ -331,6 +332,18 @@
         "exakit workflow list --json",
         "exakit workflow show wf-20261027-3f9a1c",
         "exakit workflow show wf-20261027-3f9a1c --json"
+      ]
+    },
+    {
+      "command": "describe",
+      "options": "<SCHEMA.TABLE> [--sample <rows>] [--id <slug>] [--json] [--write <path>]",
+      "summary": "Profile a table and draft its descriptor: a role per column, with the evidence.",
+      "description": "Profiles SCHEMA.TABLE with a handful of SELECTs (the column list, COUNT(*), one aggregate statement per batch of columns, one for the values of the low-cardinality columns; nothing is written) and prints a draft descriptor (schema_version 2, status draft, version 1, owner EXAKIT_DESCRIPTOR_OWNER or the OS user): for each role - date, label, category, entity, text - the column whose numbers fit best (type, null rate, distinct count, date-parse rate, text length, class shares; a name hint adds a little, never decides) with its score and the runner-up, and under missing every role no column fits, with the reason, so dependent steps can skip it instead of guessing. The scoring is deterministic and offline: the same table gives the same draft, with or without a model. When EXAKIT_NB_MODEL and OPENAI_BASE_URL are set, one call with the column names and numbers (never a row) adds a one-line note per column; a failed call is one warning and the draft is unchanged. A virtual table, or one past 5 million rows, is profiled on a random sample (--sample, 10000 rows by default) and says so in the evidence. --json prints the same draft as one JSON object; --write saves the YAML to a path the notebooks can read (exakit.nb.dataset). Exit 0; 1 when the notebook add-on is not installed; 2 on bad arguments; 3 when the table is not there; 4 when the database is not reachable. Approving a draft (--approve, --show, --versions) is coming; until then a draft is read by the notebooks as a draft. Needs the notebook add-on, whose Python runs the profiler: exakit marketplace notebook.",
+      "examples": [
+        "exakit describe PHARMA.PHARMA_TRIALS",
+        "exakit describe BANKING.BANKING_COMPLAINTS --json",
+        "exakit describe SALES.ORDERS --id orders --write ~/orders.descriptor.yaml",
+        "exakit describe VS_SALES.ORDERS --sample 20000"
       ]
     },
     {

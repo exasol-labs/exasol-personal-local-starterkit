@@ -64,6 +64,8 @@
 #                         add-on); --check, --setup, --stop, --no-browser, --port N
 #   workflow              list | show <id> [--json]: the workflow logs the notebook
 #                         helpers write, one JSON line per step (X-1)
+#   describe <table>      profile SCHEMA.TABLE and draft its descriptor (roles with
+#                         evidence); --sample N, --id slug, --json, --write <path>
 #   udf-setup             Python UDFs: install the official container (udf-devkit)
 #   udf-use               install a container: default, or a tarball; --list
 #   udf-build             build a container from a pinned requirements.txt
@@ -141,6 +143,7 @@ if (Test-Path (Join-Path $libDir "json-tables.ps1")) { . (Join-Path $libDir "jso
 if (Test-Path (Join-Path $libDir "exasol-scheduler.ps1")) { . (Join-Path $libDir "exasol-scheduler.ps1") }
 if (Test-Path (Join-Path $libDir "notebook.ps1")) { . (Join-Path $libDir "notebook.ps1") }
 if (Test-Path (Join-Path $libDir "workflow.ps1")) { . (Join-Path $libDir "workflow.ps1") }
+if (Test-Path (Join-Path $libDir "describe.ps1")) { . (Join-Path $libDir "describe.ps1") }
 if (Test-Path (Join-Path $libDir "udf-devkit.ps1")) { . (Join-Path $libDir "udf-devkit.ps1") }
 if (Test-Path (Join-Path $libDir "help.ps1")) { . (Join-Path $libDir "help.ps1") }
 
@@ -3917,6 +3920,10 @@ try {
         "workflow"     {
             if (-not (Get-Command Invoke-CmdWorkflow -ErrorAction SilentlyContinue)) { Fail "The workflow module is missing from this kit copy. Repair with: exakit update" }
             Invoke-CmdWorkflow -CmdArgs $RestArgs
+        }
+        "describe"     {
+            if (-not (Get-Command Invoke-CmdDescribe -ErrorAction SilentlyContinue)) { Fail "The describe module is missing from this kit copy. Repair with: exakit update" }
+            Invoke-CmdDescribe -CmdArgs $RestArgs
         }
         { $_ -in @("udf-setup", "udf-use", "udf-build", "udf-file", "model") } {
             $udfFn = @{ "udf-setup" = "Invoke-CmdUdfSetup"; "udf-use" = "Invoke-CmdUdfUse"; "udf-build" = "Invoke-CmdUdfBuild"; "udf-file" = "Invoke-CmdUdfFile"; "model" = "Invoke-CmdModel" }[$Command]
