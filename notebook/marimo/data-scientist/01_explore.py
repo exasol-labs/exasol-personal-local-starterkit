@@ -44,7 +44,9 @@ def _(mo):
     CSV, Parquet or JSON file is named by its path; its roles are in `<name>.descriptor.yaml` beside it (the quickstart's
     own-file cell writes that file), and the file is loaded into its table the first time. A descriptor file of a table
     already in the database works too. The descriptor is checked by the kit's own rules and against the database: a role
-    that names a missing table or column stops here, naming it.
+    that names a missing table or column stops here, naming it. A role **no column fits** (the descriptor's `missing`,
+    with the profiler's reason) is not guessed: the steps that need it are skipped below, each saying why, and the text
+    step runs on the text roles alone.
 
     A file with **no descriptor beside it** does not stop here: the next cell loads it into `MY_DATA.<FILE NAME>`,
     proposes its roles with the evidence and saves that proposal beside the file as a draft, which this notebook explores
@@ -69,9 +71,16 @@ def _(DATASET):
     ds = nb.review_roles(conn, DATASET).dataset(draft_ok=True)
     nb.show_roles(ds)
 
-    ENTITY, CATEGORY, DATE, LABEL = ds.col("entity"), ds.col("category"), ds.col("date"), ds.col("label")
-    TEXT = ds.text_sql()
-    return CATEGORY, DATE, ENTITY, LABEL, TEXT, conn, ds, nb
+    ENTITY, CATEGORY, TEXT = ds.col("entity"), ds.col("category"), ds.text_sql()
+    DATE = ds.col("date") if ds.has("date") else None      # a role no column fits is None here, never guessed
+    LABEL = ds.col("label") if ds.has("label") else None
+    skipped = {m["role"]: m["reason"] for m in ds.missing if m["role"] in ("date", "label")}
+    missing_line = "; ".join(f"no {role} role: {reason}" for role, reason in skipped.items())
+    for role, steps in (("date", "the over-time step and the small model are"),
+                        ("label", "the landscape, the over-time step and the small model are")):
+        if role in skipped:
+            print(f"No {role} role ({skipped[role]}): {steps} skipped below; the text step needs only the text roles.")
+    return CATEGORY, DATE, ENTITY, LABEL, TEXT, conn, ds, missing_line, nb
 
 
 @app.cell(hide_code=True)
@@ -86,8 +95,12 @@ def _(mo):
 
 
 @app.cell
-def _(CATEGORY, ENTITY, LABEL, conn, ds, nb):
-    landscape = nb.sql(conn, f"""
+def _(CATEGORY, ENTITY, LABEL, conn, ds, missing_line, nb):
+    landscape = pivot = None
+    if not ds.has("label"):
+        print(f"Skipped - the landscape counts how often the label is 1, and no column plays the label role ({missing_line}).")
+    else:
+        landscape = nb.sql(conn, f"""
     WITH TOP_ENTITIES AS (
         SELECT {ENTITY} AS ENTITY, COUNT(*) AS N_ROWS
         FROM {ds.fact_table}
@@ -102,8 +115,9 @@ def _(CATEGORY, ENTITY, LABEL, conn, ds, nb):
     JOIN TOP_ENTITIES T ON F.{ENTITY} = T.ENTITY
     GROUP BY T.ENTITY, F.{CATEGORY}
     ORDER BY T.ENTITY, N DESC""")
-    nb.show_sql()
-    landscape.pivot_table(index="ENTITY", columns="CATEGORY", values="N", fill_value=0, aggfunc="sum")
+        nb.show_sql()
+        pivot = landscape.pivot_table(index="ENTITY", columns="CATEGORY", values="N", fill_value=0, aggfunc="sum")
+    pivot
     return
 
 
@@ -111,25 +125,29 @@ def _(CATEGORY, ENTITY, LABEL, conn, ds, nb):
 def _(mo):
     mo.md(r"""
     Over time: rows and label rate per period. The period follows the span of the data - days for a few weeks,
-    months for a few years, years beyond that.
+    months for a few years, years beyond that. Without a date role (or a label role) this step is skipped, saying why.
     """)
     return
 
 
 @app.cell
-def _(DATE, LABEL, conn, ds, nb):
-    span = nb.sql(conn, f"SELECT DAYS_BETWEEN(MAX({DATE}), MIN({DATE})) AS DAYS FROM {ds.fact_table}")
-    days = int(span["DAYS"][0] or 0)
-    period = "DAY" if days <= 62 else "MONTH" if days <= 3 * 366 else "YEAR"
+def _(DATE, LABEL, conn, ds, missing_line, nb):
+    over_time = None
+    if not (ds.has("date") and ds.has("label")):
+        print(f"Skipped - rows and label rate per period need the date and label roles ({missing_line}).")
+    else:
+        span = nb.sql(conn, f"SELECT DAYS_BETWEEN(MAX({DATE}), MIN({DATE})) AS DAYS FROM {ds.fact_table}")
+        days = int(span["DAYS"][0] or 0)
+        period = "DAY" if days <= 62 else "MONTH" if days <= 3 * 366 else "YEAR"
 
-    over_time = nb.sql(conn, f"""
+        over_time = nb.sql(conn, f"""
     SELECT CAST(DATE_TRUNC('{period}', {DATE}) AS DATE) AS PERIOD,
            COUNT(*) AS N,
            ROUND(100 * AVG({LABEL}), 1) AS LABEL_1_PCT
     FROM {ds.fact_table}
     GROUP BY 1
     ORDER BY 1""")
-    nb.show_sql()
+        nb.show_sql()
     over_time
     return
 
@@ -140,16 +158,22 @@ def _(mo):
     ## A small model, on this computer
 
     Can the text and the category predict the label? A logistic regression over word counts, trained on this machine
-    with scikit-learn - no model service needed. The rows come from the database with the SQL printed below.
+    with scikit-learn - no model service needed. The rows come from the database with the SQL printed below: the newest
+    ones by the date role, so the model needs the label and date roles and is skipped, saying why, without them.
     """)
     return
 
 
 @app.cell
-def _(CATEGORY, DATE, ENTITY, LABEL, TEXT, conn, ds, nb):
+def _(CATEGORY, DATE, ENTITY, LABEL, TEXT, conn, ds, missing_line, nb):
     SAMPLE = 20000
 
-    rows = nb.sql(conn, f"""
+    model = None
+    if not (ds.has("date") and ds.has("label")):
+        print(f"Skipped - the small model predicts the label from the newest {SAMPLE} rows, which needs the label and date "
+              f"roles ({missing_line}).")
+    else:
+        rows = nb.sql(conn, f"""
     SELECT {TEXT} AS TEXT_,
            CAST({CATEGORY} AS VARCHAR(2000)) AS CATEGORY_,
            {LABEL} AS LABEL_
@@ -157,35 +181,35 @@ def _(CATEGORY, DATE, ENTITY, LABEL, TEXT, conn, ds, nb):
     WHERE {LABEL} IS NOT NULL
     ORDER BY {DATE} DESC, {ENTITY}
     LIMIT {SAMPLE}""")
-    nb.show_sql()
+        nb.show_sql()
 
-    from sklearn.compose import ColumnTransformer
-    from sklearn.feature_extraction.text import TfidfVectorizer
-    from sklearn.linear_model import LogisticRegression
-    from sklearn.metrics import roc_auc_score
-    from sklearn.model_selection import train_test_split
-    from sklearn.pipeline import Pipeline
-    from sklearn.preprocessing import OneHotEncoder
+        from sklearn.compose import ColumnTransformer
+        from sklearn.feature_extraction.text import TfidfVectorizer
+        from sklearn.linear_model import LogisticRegression
+        from sklearn.metrics import roc_auc_score
+        from sklearn.model_selection import train_test_split
+        from sklearn.pipeline import Pipeline
+        from sklearn.preprocessing import OneHotEncoder
 
-    X, y = rows[["TEXT_", "CATEGORY_"]].fillna(""), rows["LABEL_"].astype(int)
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=0, stratify=y)
-    model = Pipeline([
-        ("features", ColumnTransformer([
-            ("text", TfidfVectorizer(max_features=20000, ngram_range=(1, 2), min_df=2, stop_words="english"), "TEXT_"),
-            ("category", OneHotEncoder(handle_unknown="ignore"), ["CATEGORY_"]),
-        ])),
-        ("classifier", LogisticRegression(max_iter=1000, class_weight="balanced")),
-    ])
-    model.fit(X_train, y_train)
-    auc = roc_auc_score(y_test, model.predict_proba(X_test)[:, 1])
-    print(f"{len(rows)} rows, {y.mean():.1%} with label 1; ROC AUC on the held-out quarter: {auc:.3f} (0.5 is guessing)")
+        X, y = rows[["TEXT_", "CATEGORY_"]].fillna(""), rows["LABEL_"].astype(int)
+        X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=0, stratify=y)
+        model = Pipeline([
+            ("features", ColumnTransformer([
+                ("text", TfidfVectorizer(max_features=20000, ngram_range=(1, 2), min_df=2, stop_words="english"), "TEXT_"),
+                ("category", OneHotEncoder(handle_unknown="ignore"), ["CATEGORY_"]),
+            ])),
+            ("classifier", LogisticRegression(max_iter=1000, class_weight="balanced")),
+        ])
+        model.fit(X_train, y_train)
+        auc = roc_auc_score(y_test, model.predict_proba(X_test)[:, 1])
+        print(f"{len(rows)} rows, {y.mean():.1%} with label 1; ROC AUC on the held-out quarter: {auc:.3f} (0.5 is guessing)")
     return (model,)
 
 
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    The words that push a prediction towards 1 and towards 0:
+    The words that push a prediction towards 1 and towards 0 (nothing to show when the model was skipped):
     """)
     return
 
@@ -194,11 +218,12 @@ def _(mo):
 def _(model):
     import numpy as np
 
-    names = model.named_steps["features"].get_feature_names_out()
-    weights = model.named_steps["classifier"].coef_[0]
-    order = np.argsort(weights)
-    print("towards 1:", ", ".join(n.split("__", 1)[1] for n in names[order[-12:]][::-1]))
-    print("towards 0:", ", ".join(n.split("__", 1)[1] for n in names[order[:12]]))
+    if model is not None:
+        names = model.named_steps["features"].get_feature_names_out()
+        weights = model.named_steps["classifier"].coef_[0]
+        order = np.argsort(weights)
+        print("towards 1:", ", ".join(n.split("__", 1)[1] for n in names[order[-12:]][::-1]))
+        print("towards 0:", ", ".join(n.split("__", 1)[1] for n in names[order[:12]]))
     return
 
 
@@ -218,19 +243,22 @@ def _(mo):
     and latency - tagged `exasol.dataset`, `exasol.descriptor` (the descriptor's digest), `exasol.descriptor_version`,
     `exasol.workflow_id` (when a workflow is active), `exasol.session_id` and the sample SQL. Without them the step runs
     untraced and says so in one line. When the table is a live source (a virtual schema), the step names the source and
-    asks before any row is sent.
+    asks before any row is sent. This step needs only the text roles: the label beside each theme, and label-1 rows
+    first and the newest next in the sample, appear when those roles exist.
     """)
     return
 
 
 @app.cell
-def _(DATE, ENTITY, LABEL, TEXT, conn, ds, nb):
+def _(ENTITY, TEXT, conn, ds, nb):
     SAMPLE_TEXTS = 5
+    LABEL_COL = f"{ds.col('label')} AS LABEL_, " if ds.has("label") else ""
+    SAMPLE_ORDER = ", ".join([f"{ds.col(role)} DESC" for role in ("label", "date") if ds.has(role)] + [ENTITY])
     SAMPLE_SQL = f"""
-    SELECT {ENTITY} AS ENTITY, {LABEL} AS LABEL_, {TEXT} AS TEXT_
+    SELECT {ENTITY} AS ENTITY, {LABEL_COL}{TEXT} AS TEXT_
     FROM {ds.fact_table}
     WHERE LENGTH(TRIM({TEXT})) > 0
-    ORDER BY {LABEL} DESC, {DATE} DESC, {ENTITY}
+    ORDER BY {SAMPLE_ORDER}
     LIMIT {SAMPLE_TEXTS}"""
 
     text_sample = nb.sql(conn, SAMPLE_SQL)

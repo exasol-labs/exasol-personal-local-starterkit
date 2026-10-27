@@ -25,9 +25,25 @@ The notebooks, in the order a new user opens them (numbers are never reused):
 
 Numbers follow the requirements document's Appendix B and are never reused.
 
-The model lifecycle is *Develop → Train → Track → Validate → Register → Deploy → Score → Monitor*. This kit covers
-training, tracking and validation. Its MLflow run stores the model artifact and environment tags needed by a later
-registry; registration, serving and monitoring are separate work.
+## Where the kit stops in the model lifecycle
+
+The model lifecycle is *Develop → Train → Track → Validate → Register → Deploy → Score → Monitor*. The kit's
+notebooks cover the path up to **Track** and **Validate**: `01_explore` develops the question and writes the handoff,
+`01_train` trains inside the database, tracks the run in MLflow and validates it against a majority baseline on a
+held-out split. **Register**, **Deploy** and **Monitor** are not built: there is no model registry, no serving
+endpoint and no drift check in the kit, and no cell promotes a run to a stage.
+
+What a tracked run already holds, so a registry can take it later without retraining: the model artefact
+(`model/model.pkl`, the fitted pipeline), `coefficients.json` (the weights over the raw feature view, also copied
+beside the handoff), `training.sql`, the metrics, and the environment tags `exasol.kit_version`,
+`exasol.launcher_version`, `exasol.db_version`, `exasol.language`, `exasol.container_digest`,
+`exasol.package_versions`, `exasol.descriptor_id`, `exasol.descriptor_version`, `exasol.data_digest`,
+`exasol.workflow_id`, `exasol.session_id` and `exasol.statement_id` - the last two tie the run to the database
+session and statement that trained it, so the audit log can confirm what ran.
+
+**Score** is a manual step today: `02_rust_score` builds a scorer from the run's coefficients, and a model trained
+anywhere is dropped into the bucket with `exakit model put` and scored by a UDF in `03_score_external_model`. Nothing
+registers the model or watches its scores afterwards; that is the user's platform, not the kit.
 
 The Share notebook prepares `app.py`, a live SQL query, and `REVISION.json` with the workflow id, descriptor version
 and query digest. Its `ShareDraft.preview(tool)` drives the registered Dash Server MCP control plane: validate the
@@ -90,8 +106,9 @@ python3 tools/notebooks.py --run --output /tmp/executed           # keep each ex
   dropped (nothing headless writes to anyone's Langfuse). `EXAKIT_NB_MODEL`,
   `OPENAI_BASE_URL` and `OPENAI_API_KEY` pass through, so the text step runs
   when they point at an endpoint; `MLFLOW_TRACKING_URI` passes through when
-  set, else MLflow uses the kit's server if running or its local store. Role proposals are approved automatically in
-  a headless run; failed container, MLflow or bucket checks raise an error. Each run has a temporary folder as its
+  set, else MLflow uses the kit's server if running or its local store. Role proposals are approved automatically
+  only when the draft's roles equal the current approved version (`EXAKIT_NB_AUTO_APPROVE=force` approves the
+  draft); failed container, MLflow or bucket checks raise an error. Each run has a temporary folder as its
   working directory (`mlflow/`, `models/` land there, never in the tree).
 - Exit 0 when every cell of every run finished; 1 with the failing cell's
   index, source and traceback printed; 2 when the run itself could not start

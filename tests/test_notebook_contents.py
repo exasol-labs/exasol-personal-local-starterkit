@@ -220,6 +220,37 @@ class NotebookShapeTest(unittest.TestCase):
         summary = next(e["summary"] for e in CatalogTest.DOC["notebooks"] if e["id"] == "explore")
         self.assertIn("handoff", summary)
 
+    def test_explore_skips_what_a_missing_role_needs_and_says_why(self):
+        """AC-DS5.3 / design 2.4: a role no column fits does not stop explore. The roles cell takes the date and label
+        through ds.has() and prints the descriptor's reason (ds.missing) with the steps it skips; the landscape, the
+        over-time step and the small model are each wrapped in a ds.has() guard that prints that reason, with the SQL
+        text inside untouched (AC-DS3.2 is held by SwapTest); the text step runs on the text roles alone, its label
+        column and ordering coming from ds.has() fragments; the handoff is left to its own refusal."""
+        cells = ["".join(c["source"]) for c in _built_cells(SOURCES / "data-scientist" / "01_explore.py")
+                 if c["cell_type"] == "code"]
+        roles = next(c for c in cells if "nb.review_roles(conn, DATASET)" in c)
+        for needle in ('ds.col("date") if ds.has("date") else None', 'ds.col("label") if ds.has("label") else None',
+                       "for m in ds.missing", "skipped below"):
+            self.assertIn(needle, roles)
+        self.assertNotIn('ds.col("date"),', roles, "the date and label are no longer read unguarded")
+        guarded = {"landscape = nb.sql(": 'if not ds.has("label"):',
+                   "over_time = nb.sql(": 'if not (ds.has("date") and ds.has("label")):',
+                   "rows = nb.sql(": 'if not (ds.has("date") and ds.has("label")):'}
+        for sql, guard in guarded.items():
+            with self.subTest(cell=sql):
+                cell = next(c for c in cells if sql in c)
+                self.assertIn(guard, cell)
+                self.assertLess(cell.index(guard), cell.index(sql), "the guard comes first and wraps the SQL")
+                self.assertIn("missing_line", cell[cell.index(guard):cell.index(sql)], "the skip line carries the reason")
+        words = next(c for c in cells if "get_feature_names_out" in c)
+        self.assertIn("if model is not None:", words)
+        text_step = next(c for c in cells if "SAMPLE_SQL = " in c)
+        self.assertNotIn("if not ds.has", text_step, "the text step is never skipped for a date or label")
+        self.assertIn('if ds.has("label") else ""', text_step)
+        self.assertIn('for role in ("label", "date") if ds.has(role)', text_step)
+        for role in ("date", "label"):
+            self.assertNotIn("{" + role.upper() + "}", text_step, f"the {role} is in the text SQL only when it exists")
+
     def test_no_dataset_is_named_in_the_code(self):
         for py in SOURCES.glob("*/*.py"):
             text = py.read_text(encoding="utf-8")
