@@ -62,6 +62,27 @@ class RustUdfTests(unittest.TestCase):
         with self.assertRaisesRegex(rust.Refused, "changed"):
             rust.deploy("score_model", "SCORING")
 
+    def test_mac_build_uses_matching_linux_image_and_cached_cargo(self):
+        result = rust.create("score_model", None)
+        project = Path(result["project"])
+        artifact = project / "target/release/libscore_model.so"
+        seen = []
+
+        def built(args, *, cwd=None):
+            seen.extend(args)
+            artifact.parent.mkdir(parents=True)
+            artifact.write_bytes(b"ELF fixture")
+
+        with patch.object(rust.platform, "system", return_value="Darwin"), \
+                patch.object(rust, "architecture", return_value="aarch64"), \
+                patch.object(rust, "container_runtime", return_value="docker"), \
+                patch.object(rust, "_run", side_effect=built):
+            record = rust.build("score_model")
+        self.assertEqual(record["arch"], "aarch64")
+        self.assertIn("linux/arm64", seen)
+        self.assertIn("exakit-rust-cargo-aarch64:/cargo-home", seen)
+        self.assertIn(rust.IMAGE, seen)
+
 
 if __name__ == "__main__":
     unittest.main()

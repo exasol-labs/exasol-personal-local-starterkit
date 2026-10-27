@@ -23,6 +23,7 @@ COEFFICIENTS_FILE = None  # or a local coefficients.json exported from 01_train'
 UDF_NAME = "score_pharma"  # choose a new plain lowercase name for a new coefficient revision
 UDF_SCHEMA = "EXAKIT_SCORING"
 TEST_ROWS = 500
+WORKFLOW_ID = None  # paste the ML quickstart's wf-... id to continue its log
 
 # %%
 import json
@@ -34,6 +35,11 @@ from pathlib import Path
 import numpy as np
 from scipy.special import expit
 import exakit.nb as nb
+
+if WORKFLOW_ID:
+    nb.workflow(resume=WORKFLOW_ID)
+elif not nb.current_workflow():
+    nb.workflow("rust-scoring")
 
 conn = nb.connect()
 ds = nb.dataset(conn, DATASET).require_approved("rust scoring")
@@ -49,6 +55,7 @@ if stale:
 # remote MLflow server, the client downloads the artifact into the kit home.
 
 # %%
+source_run_id = None
 if COEFFICIENTS_FILE is None:
     from mlflow.tracking import MlflowClient
     from exasol_mlflow import tracking
@@ -58,12 +65,14 @@ if COEFFICIENTS_FILE is None:
     if experiment is None:
         raise FileNotFoundError("No MLflow experiment from 01_train. Run it first, or set COEFFICIENTS_FILE.")
     runs = client.search_runs([experiment.experiment_id],
-                              filter_string=f"tags.exasol.descriptor_id = '{ds.id}'",
+                              filter_string=(f"tags.exasol.descriptor_id = '{ds.id}' "
+                                             "AND tags.exasol.language = 'python'"),
                               order_by=["attributes.start_time DESC"], max_results=20)
     matching = [item for item in runs if item.info.status == "FINISHED" and
                 item.data.tags.get("exasol.descriptor_version") == str(ds.version)]
     if not matching:
         raise FileNotFoundError("No finished MLflow run for this descriptor version. Run 01_train again.")
+    source_run_id = matching[0].info.run_id
     download_dir = Path(os.environ.get("EXAKIT_HOME") or Path.home() / ".exasol-starter-kit") / "rust-udfs" / "artifacts"
     download_dir.mkdir(parents=True, exist_ok=True)
     COEFFICIENTS_FILE = client.download_artifacts(matching[0].info.run_id, "coefficients.json", str(download_dir))
@@ -128,3 +137,52 @@ print(f"{len(test)} test rows; largest probability difference {gap:.3e}; labels 
 if gap >= 1e-9 or not labels_match:
     raise AssertionError("Rust and Python predictions differ; inspect coefficient order, container and input values.")
 print("Rust and Python scoring agree on the held-out rows.")
+
+# %% [markdown]
+# ## Record the validated Rust run
+#
+# The MLflow run holds the source training run (when available), descriptor,
+# container and compiler pins, Cargo.lock digest, library digest, row count and
+# parity result. The project manifest and build record are attached as artifacts.
+
+# %%
+import hashlib
+from mlflow.tracking import MlflowClient
+from exasol_mlflow import tracking
+
+kit_home = Path(os.environ.get("EXAKIT_HOME") or Path.home() / ".exasol-starter-kit")
+matrix = json.loads((kit_home / "kit" / "versions.json").read_text(encoding="utf-8"))
+container = next((row for row in matrix["components"]["udf-devkit"]["containers"]
+                  if row["language"] == "rust" and row["arch"] == built["arch"]), None)
+if container is None:
+    raise RuntimeError(f"No pinned Rust container for {built['arch']}.")
+project_dir = Path(project["project"])
+lock_file = project_dir / "Cargo.lock"
+if not lock_file.is_file():
+    raise RuntimeError("The Rust build did not leave Cargo.lock; the run cannot be reproduced.")
+lock_digest = hashlib.sha256(lock_file.read_bytes()).hexdigest()
+client = MlflowClient(tracking_uri=tracking.resolve().uri)
+experiment = client.get_experiment_by_name("exasol-starter-kit")
+experiment_id = experiment.experiment_id if experiment else client.create_experiment("exasol-starter-kit")
+tags = {"exasol.language": "rust", "exasol.container_alias": container["alias"],
+        "exasol.container_digest": container["sha256"], "exasol.rustc": built["rustc"],
+        "exasol.sdk": built["sdk"], "exasol.cargo_lock_sha256": lock_digest,
+        "exasol.udf_sha256": built["sha256"], "exasol.descriptor_id": ds.id,
+        "exasol.descriptor_version": str(ds.version), "exasol.workflow_id": nb.current_workflow() or ""}
+if source_run_id:
+    tags["exasol.source_run_id"] = source_run_id
+rust_run = client.create_run(experiment_id, tags=tags)
+try:
+    client.log_metric(rust_run.info.run_id, "rust_parity_max_abs_diff", gap)
+    client.log_metric(rust_run.info.run_id, "rust_parity_rows", len(test))
+    client.log_metric(rust_run.info.run_id, "rust_labels_agree", int(labels_match))
+    for artifact_file in (lock_file, project_dir / "exakit-rust.json", project_dir / "build.json"):
+        client.log_artifact(rust_run.info.run_id, str(artifact_file), artifact_path="rust")
+except Exception:
+    client.set_terminated(rust_run.info.run_id, status="FAILED")
+    raise
+client.set_terminated(rust_run.info.run_id, status="FINISHED")
+nb.log_event("mlflow.run", run_id=rust_run.info.run_id, language="rust", descriptor_id=ds.id,
+             descriptor_version=ds.version, container_digest=container["sha256"],
+             cargo_lock_sha256=lock_digest, udf_sha256=built["sha256"])
+print("Rust scoring MLflow run:", rust_run.info.run_id)

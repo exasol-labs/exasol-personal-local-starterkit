@@ -177,13 +177,13 @@ def build(name: str) -> dict:
         runtime = container_runtime()
         platform_arg = "linux/arm64" if arch == "aarch64" else "linux/amd64"
         # The command text is fixed; name and path travel as argv / mount args.
-        script = ("set -e; mkdir -p /work/.cargo-tools; "
-                  "if [ ! -x /work/.cargo-tools/bin/cargo-exasol-udf ]; then "
-                  f"cargo install cargo-exasol-udf --version ={SDK} --locked --root /work/.cargo-tools; fi; "
-                  "export PATH=/work/.cargo-tools/bin:$PATH; "
+        script = ("set -e; export PATH=$CARGO_HOME/bin:$PATH; "
+                  "if [ ! -x $CARGO_HOME/bin/cargo-exasol-udf ]; then "
+                  f"cargo install cargo-exasol-udf --version ={SDK} --locked; fi; "
                   "cargo exasol-udf build /work; "
                   f"cargo exasol-udf validate /work/target/release/lib{name}.so --deny-unknown-deps")
         _run([runtime, "run", "--rm", "--platform", platform_arg, "-v", f"{project}:/work",
+              "-v", f"exakit-rust-cargo-{arch}:/cargo-home", "-e", "CARGO_HOME=/cargo-home",
               "-w", "/work", IMAGE, "sh", "-c", script], cwd=project)
     else:
         try:
