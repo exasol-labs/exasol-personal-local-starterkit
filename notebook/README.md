@@ -15,7 +15,7 @@ The notebooks, in the order a new user opens them (numbers are never reused):
 | Folder | Notebook | What it does |
 |---|---|---|
 | `data-scientist/` | `00_quickstart` | Opens connected; one cell per way data comes in (a sample dataset, your own CSV, Parquet or JSON file, a connected source); the descriptor's roles; a first query |
-| | `01_explore` | The landscape question with the SQL visible, a small scikit-learn model, the text step traced to your Langfuse; another dataset or your own file is one assignment |
+| | `01_explore` | The landscape question with the SQL visible, a small scikit-learn model, the text step traced to your Langfuse; another dataset or your own file is one assignment; ends by writing the handoff for the ML Engineer |
 | `ml-engineer/` | `00_quickstart` | The container, MLflow and the bucket directory, one check each with its fix; then the same loader cells |
 | | `01_train` | Features in SQL from the descriptor, a classifier trained inside a Python UDF under `exasol_mlflow.start_run`, the run in your MLflow |
 | | `03_score_external_model` | A model trained elsewhere, dropped with `exakit model put` and scored by a UDF |
@@ -113,6 +113,38 @@ connection is re-read on every `exakit notebook` (AC-DS1.5): the launcher
 writes the kit's recorded host and port into the store each time, which
 `tests/notebook-addon.sh` and its PowerShell twin prove with a port that
 changes between two launches.
+
+## The handoff from explore to train
+
+`01_explore` ends by writing the **handoff**, `nb.write_handoff(conn, ds)`:
+one JSON file, `~/.exasol-starter-kit/handoffs/<descriptor id>-v<n>.json`
+(0600, under `EXAKIT_HOME`), that the ML Engineer's `01_train` starts from
+without opening the descriptor. It holds the descriptor's id, version and
+digest (`digest_kind` says whether that is the table digest the descriptor was
+approved on or, until one is computed, the descriptor file's SHA-256), a
+digest of the data (`data_digest_kind`: the table digest, else one over the
+row count and the span of the date role - one `COUNT`, so the file costs three
+statements), the **feature view** built from the roles as `CREATE OR REPLACE
+VIEW STARTER_KIT.<ID>_FEATURES_V<n>` SQL - category one-hot over the top-20
+values plus `CAT_OTHER` (the values from one `GROUP BY`, recorded in the
+file), date to `DATE_YEAR`, `DATE_MONTH`, `DATE_DOW` (ISO) and
+`DATE_DAYS_SINCE_MIN`, entity to `ENTITY_FREQ`, each text column to its
+`LENGTH` - the label with its positive class (the minority class from the
+profiler's evidence, else from one query), the split, the **training SQL**
+(every view column for the labelled rows, `SPLIT_` train for the earliest
+`train_share` by `PERCENT_RANK()` over the date role, so train and test are
+the same on every run) and the input and output schemas. The view is SQL only
+on purpose: a model that is linear over its columns can be scored by a Rust
+UDF on the very same view, so TF-IDF stays out of it (token flags computed in
+SQL are recorded as deferred). The view is not created by explore; train
+creates it. Every identifier in the generated SQL is double-quoted. Without a
+date role the split is `random` with the reason (a hash of the row's role
+columns orders it, reproducibly). `nb.read_handoff("pharma_trials")` reads
+the latest one (`"<id>-v<n>"` or a path reads one), `nb.handoff_from(conn,
+ds)` builds the record from an approved descriptor without explore, and
+`nb.handoff_is_stale(conn, handoff, ds)` is the check train runs: `None`, or
+one line naming what changed (descriptor version, descriptor digest, data)
+and the fix. An active workflow logs one `handoff` line with the path.
 
 ## The rules every notebook follows
 

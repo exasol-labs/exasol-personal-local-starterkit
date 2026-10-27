@@ -31,7 +31,7 @@
       "persona": "data-scientist",
       "step": 1,
       "title": "Explore a dataset",
-      "summary": "The domain's landscape question with the SQL visible, a small scikit-learn model on this computer, and a text step with your own model traced to your Langfuse. Another dataset or your own file is one assignment away.",
+      "summary": "The domain's landscape question with the SQL visible, a small scikit-learn model on this computer, and a text step with your own model traced to your Langfuse. Another dataset or your own file is one assignment away. Ends by writing the handoff the ML Engineer's 01_train starts from.",
       "needs": "A loaded dataset (pharma_trials as it ships, banking_complaints, or your own file with its roles beside it). Optional: EXAKIT_NB_MODEL with OPENAI_BASE_URL and OPENAI_API_KEY for the text step; LANGFUSE_* for tracing.",
       "jupyter": "01_explore.ipynb",
       "marimo": "01_explore.py"

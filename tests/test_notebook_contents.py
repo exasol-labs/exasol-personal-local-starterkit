@@ -190,6 +190,24 @@ class NotebookShapeTest(unittest.TestCase):
                 self.assertEqual(sum(loader in s for s in sources), 1)
         self.assertIn("01_explore", sources[-1])
 
+    def test_explore_ends_by_writing_the_handoff(self):
+        """AC-DS3.4: explore's last cell writes the handoff for the ML Engineer and reads it back to say what it holds;
+        the markdown names Langfuse's SDK 5 variable (LANGFUSE_BASE_URL) with LANGFUSE_HOST only as its alias."""
+        cells = _built_cells(SOURCES / "data-scientist" / "01_explore.py")
+        last = "".join(cells[-1]["source"])
+        self.assertEqual(cells[-1]["cell_type"], "code")
+        self.assertIn("nb.write_handoff(conn, ds)", last)
+        self.assertIn("nb.read_handoff(", last)
+        self.assertIn("01_train", last)
+        self.assertEqual(sum("nb.write_handoff(" in "".join(c["source"]) for c in cells), 1, "written once, at the end")
+        self.assertIn("Hand off to the ML Engineer", "".join(cells[-2]["source"]))
+        text = (SOURCES / "data-scientist" / "01_explore.py").read_text(encoding="utf-8")
+        self.assertIn("`LANGFUSE_BASE_URL`", text)
+        for match in re.finditer("LANGFUSE_HOST", text):
+            self.assertIn("alias", text[match.end():match.end() + 80], "LANGFUSE_HOST is named only as the alias of LANGFUSE_BASE_URL")
+        summary = next(e["summary"] for e in CatalogTest.DOC["notebooks"] if e["id"] == "explore")
+        self.assertIn("handoff", summary)
+
     def test_no_dataset_is_named_in_the_code(self):
         for py in SOURCES.glob("*/*.py"):
             text = py.read_text(encoding="utf-8")

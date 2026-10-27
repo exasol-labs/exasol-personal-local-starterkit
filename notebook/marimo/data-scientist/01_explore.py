@@ -201,9 +201,10 @@ def _(mo):
     - `EXAKIT_NB_MODEL` - the model name, e.g. `gpt-4o-mini`, or `llama3.1` on a local Ollama
     - `OPENAI_BASE_URL` and `OPENAI_API_KEY` - the endpoint and its key, as the OpenAI client reads them
 
-    With `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and `LANGFUSE_HOST` set too, the calls are one trace in your
-    Langfuse project - every call's input, output, token usage and latency - tagged `exasol.dataset`,
-    `exasol.descriptor` (the descriptor's digest), `exasol.session_id` and the sample SQL. Without them the step runs
+    With `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and `LANGFUSE_BASE_URL` set too (`LANGFUSE_HOST`, the SDK 3 name,
+    is accepted as an alias), the calls are one trace in your Langfuse project - every call's input, output, token usage
+    and latency - tagged `exasol.dataset`, `exasol.descriptor` (the descriptor's digest), `exasol.descriptor_version`,
+    `exasol.workflow_id` (when a workflow is active), `exasol.session_id` and the sample SQL. Without them the step runs
     untraced and says so in one line. When the table is a live source (a virtual schema), the step names the source and
     asks before any row is sent.
     """)
@@ -249,6 +250,33 @@ def _(mo):
     - Train inside the database and track the run in MLflow: the ML Engineer's notebooks (`ml-engineer/` beside this
       folder), with the `udf-devkit` add-on (`exakit marketplace udf-devkit`).
     """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## Hand off to the ML Engineer
+
+    The last cell writes the **handoff**: one JSON file under `~/.exasol-starter-kit/handoffs/` that the ML Engineer's
+    `01_train` starts from without opening the descriptor - which descriptor version and digest this was, a digest of the
+    data, the feature view built from the roles (SQL only - category one-hot, date parts, text lengths, entity
+    frequency - so a Rust scorer can reproduce it over the same view), the label and its positive class, the training SQL
+    with a time split by the date role (random, with the reason, when there is none) and the input and output schemas.
+    Training refuses a handoff whose descriptor has changed since, so run this cell again after a new approval.
+    """)
+    return
+
+
+@app.cell
+def _(conn, ds, nb):
+    handoff_path = nb.write_handoff(conn, ds)
+    handoff = nb.read_handoff(handoff_path)
+    print(f"Handoff written: {handoff_path}")
+    print(f"It holds descriptor {handoff['descriptor']['id']} v{handoff['descriptor']['version']}, the feature view "
+          f"{handoff['feature_view']['name']} ({len(handoff['input_schema'])} features), the label "
+          f"{handoff['label']['column']} (positive: {handoff['label']['positive']}) and a {handoff['split']['kind']} split; "
+          "ml-engineer/01_train starts from it.")
     return
 
 
