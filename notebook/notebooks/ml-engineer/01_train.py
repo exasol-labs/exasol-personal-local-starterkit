@@ -26,9 +26,14 @@
 # %%
 import exakit.nb as nb
 import exasol_mlflow
+import os
 
 DATASET = "pharma_trials"  # or "banking_complaints", or "~/my-data/transactions.csv" with approved roles beside it
 CONTAINER = nb.ml_train.udf_container()   # or "PYTHON3_ML", "PYTHON3", or the alias of a container you installed
+if os.environ.get("EXAKIT_WORKFLOW_ID"):
+    nb.workflow(resume=os.environ["EXAKIT_WORKFLOW_ID"])
+elif not nb.current_workflow():
+    nb.workflow("train-" + DATASET)
 
 # %% [markdown]
 # ## Load and check the handoff
@@ -67,7 +72,9 @@ REGULARIZATION_C = 1.0
 plan = nb.prepare_training(conn, ds, handoff, schema=UDF_SCHEMA, name=UDF_NAME, container=CONTAINER,
                            seed=SEED, C=REGULARIZATION_C)
 conn.execute(f"CREATE SCHEMA IF NOT EXISTS {UDF_SCHEMA}")
+nb.log_sql(conn, f"CREATE SCHEMA IF NOT EXISTS {UDF_SCHEMA}", None)
 conn.execute(plan.create_script)
+nb.log_sql(conn, plan.create_script, None)
 print(f"UDF {UDF_SCHEMA}.{UDF_NAME} on {CONTAINER}; features ({len(plan.features)}): {', '.join(plan.features)}")
 print(plan.training_sql)
 
@@ -86,6 +93,7 @@ with exasol_mlflow.start_run(conn, params=plan.params, experiment=EXPERIMENT,
                              run_name=f"{ds.id}-v{ds.version}-logistic", tags=ds.tags(),
                              handoff=handoff) as run:
     run.execute(plan.training_sql)
+    nb.log_sql(conn, plan.training_sql, 1)
 
 f1 = run.metrics["macro_f1"]
 baseline = run.metrics["baseline_macro_f1"]

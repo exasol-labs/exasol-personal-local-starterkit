@@ -28,6 +28,7 @@ from urllib.request import url2pathname
 from ._kit import _home, setting
 from .dataset import Dataset
 from .handoff import SPLITS, feature_view, handoff_from, handoff_is_stale, handoffs_dir, read_handoff, training_sql
+from .workflow import log_sql
 
 __all__ = ["COEFFICIENTS_FILE", "CONTAINER_VARIABLE", "PYTHON_CONTAINERS", "TrainingPlan", "coefficients_of",
            "coefficients_path", "container_fix", "export_coefficients", "installed_containers", "prepare_training",
@@ -79,6 +80,7 @@ def _nonconstant(conn, view: str, features: list[str]) -> list[str]:
     statement = "SELECT " + ", ".join(f'MIN("{name}"), MAX("{name}")' for name in features) + f" FROM {view}"
     print(statement)
     row = conn.execute(statement).fetchall()[0]
+    log_sql(conn, statement, 1)
     kept = [name for index, name in enumerate(features) if row[2 * index] != row[2 * index + 1]]
     if not kept:
         raise ValueError(f"Every feature in {view} is constant; review the descriptor or choose another dataset.")
@@ -230,9 +232,12 @@ def prepare_training(conn, ds: Dataset, handoff: dict[str, Any], *, schema: str 
     expected = feature_view(conn, ds)
     if view != expected or handoff.get("training_sql") != training_sql(expected["name"], ds, handoff["split"]):
         raise ValueError("The handoff's view or training SQL differs from the descriptor; re-run 01_explore to write it again.")
-    conn.execute("CREATE SCHEMA IF NOT EXISTS STARTER_KIT")
+    schema_sql = "CREATE SCHEMA IF NOT EXISTS STARTER_KIT"
+    conn.execute(schema_sql)
+    log_sql(conn, schema_sql, None)
     print(view["sql"])
     conn.execute(view["sql"])
+    log_sql(conn, view["sql"], None)
     features = _nonconstant(conn, view["name"], [item["name"] for item in handoff["input_schema"]])
     render = _renderer()
     options = {"schema": schema, "name": name, "language": container, "features": features,
