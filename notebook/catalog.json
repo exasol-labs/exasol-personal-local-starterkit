@@ -77,6 +77,16 @@
       "marimo": "01_train.py"
     },
     {
+      "id": "rust-score",
+      "persona": "ml-engineer",
+      "step": 2,
+      "title": "Score with Rust",
+      "summary": "Build a Rust UDF from 01_train's coefficients and compare its predictions with Python on the same test rows.",
+      "needs": "A fresh approved handoff, a finished 01_train MLflow run, the Rust UDF container and Docker or Podman on macOS and Windows.",
+      "jupyter": "02_rust_score.ipynb",
+      "marimo": "02_rust_score.py"
+    },
+    {
       "id": "score-external-model",
       "persona": "ml-engineer",
       "step": 3,

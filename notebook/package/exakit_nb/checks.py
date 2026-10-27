@@ -19,7 +19,7 @@ from typing import Any
 
 from ._kit import exakit_command
 
-__all__ = ["check_bucket", "check_container", "check_mlflow", "model_list"]
+__all__ = ["check_bucket", "check_container", "check_mlflow", "check_model_compatibility", "model_list"]
 
 PROBE_SCHEMA = "EXAKIT_UDF"                   # the udf-devkit add-on's schema; the probe is a script of its own there
 PROBE = "EXAKIT_NB_PROBE"
@@ -84,6 +84,22 @@ def check_container(conn, alias: str = "PYTHON3", packages: tuple[str, ...] = TR
         return _report("container", False, f"Python {found.get('python', '?')} on {alias} lacks {', '.join(missing)}.",
                        "exakit udf-use default (the pre-built container with them), or exakit udf-build <requirements.txt>.")
     return _report("container", True, f"the smoke UDF answers on {alias}: Python {found.get('python', '?')}, {versions}.")
+
+
+def check_model_compatibility(conn, model_version: str, alias: str = "PYTHON3", model_path: str = "model.pkl") -> bool:
+    """Refuse a pickle whose scikit-learn version differs before any scoring SQL runs."""
+    try:
+        found = _probe(conn, alias, ("scikit-learn",))
+        container_version = found.get("scikit-learn", "MISSING")
+    except Exception as error:
+        print(f"Cannot score {model_path}: the {alias} container version check failed ({_reason(error)}). Run exakit udf-use default.")
+        return False
+    if container_version != model_version:
+        print(f"Cannot score {model_path}: pickled with scikit-learn {model_version}, but the {alias} container has "
+              f"{container_version}. Train with the container's version and put the model again.")
+        return False
+    print(f"Model version matches {alias}: scikit-learn {container_version}.")
+    return True
 
 
 def _shown(uri: str) -> str:

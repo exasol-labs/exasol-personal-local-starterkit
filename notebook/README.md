@@ -20,10 +20,10 @@ The notebooks, in the order a new user opens them (numbers are never reused):
 | | `03_share` | Prepare a Dash Server app from checked SQL, inspect a healthy preview, then explicitly promote the revision |
 | `ml-engineer/` | `00_quickstart` | The container, MLflow and the bucket directory, one check each with its fix; then the same loader and role-review cells |
 | | `01_train` | Checks the handoff, builds its SQL feature view, trains a classifier inside a Python UDF, compares macro-F1 with a majority baseline, and logs the model and coefficients to MLflow |
+| | `02_rust_score` | Builds a Rust UDF from the trained coefficients and checks its labels and probabilities on the same test rows |
 | | `03_score_external_model` | A model trained elsewhere, dropped with `exakit model put` and scored by a UDF |
 
-Numbers follow the requirements document's Appendix B and are never reused: the ML
-Engineer's `02` is `02_rust_score` (to come), so the score notebook is `03`.
+Numbers follow the requirements document's Appendix B and are never reused.
 
 The model lifecycle is *Develop → Train → Track → Validate → Register → Deploy → Score → Monitor*. This kit covers
 training, tracking and validation. Its MLflow run stores the model artifact and environment tags needed by a later

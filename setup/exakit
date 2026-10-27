@@ -191,6 +191,7 @@ fi
 [ -f "$_lib_dir/workflow.sh" ] && . "$_lib_dir/workflow.sh"
 [ -f "$_lib_dir/describe.sh" ] && . "$_lib_dir/describe.sh"
 [ -f "$_lib_dir/udf-devkit.sh" ] && . "$_lib_dir/udf-devkit.sh"
+[ -f "$_lib_dir/rust-udf.sh" ] && . "$_lib_dir/rust-udf.sh"
 [ -f "$_lib_dir/mlflow.sh" ] && . "$_lib_dir/mlflow.sh"
 
 _runtime_type() {
@@ -2689,6 +2690,7 @@ case "${1:-help}" in
     workflow) shift; command -v cmd_workflow >/dev/null 2>&1 || die "The workflow module is missing from this kit copy. Repair with: exakit update"; cmd_workflow "$@" ;;
     mlflow) shift; command -v cmd_mlflow >/dev/null 2>&1 || die "The MLflow module is missing from this kit copy. Repair with: exakit update"; cmd_mlflow "$@" ;;
     describe) shift; command -v cmd_describe >/dev/null 2>&1 || die "The describe module is missing from this kit copy. Repair with: exakit update"; cmd_describe "$@" ;;
+    rust-udf) shift; command -v cmd_rust_udf >/dev/null 2>&1 || die "The Rust UDF module is missing from this kit copy. Repair with: exakit update"; cmd_rust_udf "$@" ;;
     udf-setup|udf-use|udf-build|udf-file|model) _udf_cmd="cmd_$(printf '%s' "$1" | tr '-' '_')"; shift; command -v "$_udf_cmd" >/dev/null 2>&1 || die "The udf-devkit module is missing from this kit copy. Repair with: exakit update"; "$_udf_cmd" "$@" ;;
     # `exakit help --help` reaches this arm (the universal --help hook skips
     # the help command on purpose), so --help/-h are options here and name

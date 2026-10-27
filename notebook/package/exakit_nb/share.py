@@ -1,7 +1,7 @@
 """Prepare a governed Dash Server dashboard and promote only a reviewed preview.
 
-``tool`` is a callable for the registered dash-server MCP tools. Agents pass their
-MCP tool adapter; notebooks can export the exact requests for an agent to run.
+``tool`` is a callable for the registered dash-server MCP tools. Notebook cells
+use the kit-managed MCP endpoint through ``dash_tools()``.
 The dashboard itself queries Exasol through Dash Server's server-side profile.
 """
 
@@ -86,6 +86,7 @@ class ShareDraft:
     title: str
     name: str
     query_digest: str
+    workflow_id: str
     files: list[dict[str, str]]
     revision_number: int | None = None
     preview_url: str | None = None
@@ -104,6 +105,8 @@ class ShareDraft:
 
     def preview(self, tool: Tool, profile_name: str = "starter-kit", windows: bool | None = None) -> str:
         """Create and health-check a preview; on Windows use build + healthcheck."""
+        if current_workflow() != self.workflow_id:
+            raise RuntimeError(f"Resume workflow {self.workflow_id} before previewing this dashboard.")
         manifest = json.loads((home() / "manifest.json").read_text(encoding="utf-8"))
         readonly = manifest["components"]["mcp_server"]["connection"]
         if readonly.get("validated") is not True or not readonly.get("user"):
@@ -138,11 +141,15 @@ class ShareDraft:
         self.preview_url = app.get("preview_path") or f"/preview/{self.name}/{self.revision_number}"
         log_event(DASHBOARD_REVISION, app=self.name, revision=self.revision_number,
                   descriptor_id=self.dataset.id, descriptor_version=self.dataset.version,
-                  query_digest=self.query_digest, workflow_id=current_workflow(), state="preview")
+                  query_digest=self.query_digest, sql=self.sql,
+                  source_table=getattr(self.dataset, "fact_table", None),
+                  preview_path=self.preview_url, state="preview")
         return self.preview_url
 
     def confirm(self, tool: Tool, figures_checked: bool = False) -> str:
         """Promote the exact healthy preview after a human checks its figures."""
+        if current_workflow() != self.workflow_id:
+            raise RuntimeError(f"Resume workflow {self.workflow_id} before promoting this dashboard.")
         if not figures_checked or not self.healthy or self.revision_number is None:
             raise RuntimeError("Open the healthy preview, verify the figures against the SQL, then confirm with figures_checked=True.")
         promoted = _unwrap(tool("app_promote_revision", {"name": self.name,
@@ -154,12 +161,16 @@ class ShareDraft:
             raise RuntimeError("The live dashboard failed its health check; use app_rollback in Dash Server.")
         log_event(DASHBOARD_REVISION, app=self.name, revision=self.revision_number,
                   descriptor_id=self.dataset.id, descriptor_version=self.dataset.version,
-                  query_digest=self.query_digest, workflow_id=current_workflow(), state="live")
+                  query_digest=self.query_digest, sql=self.sql,
+                  source_table=getattr(self.dataset, "fact_table", None), state="live")
         return promoted.get("app", {}).get("route") or f"/apps/{self.name}"
 
 
 def share(dataset: Any, sql: str, title: str, name: str) -> ShareDraft:
     """Make a draft from approved data and an inspected read-only SQL query."""
+    workflow_id = current_workflow()
+    if workflow_id is None:
+        raise RuntimeError("Start a workflow with nb.workflow(name) before preparing a dashboard.")
     dataset.require_approved("share")
     if not _NAME.fullmatch(name):
         raise ValueError("Dashboard name must use lowercase letters, numbers and hyphens, starting with a letter.")
@@ -167,7 +178,7 @@ def share(dataset: Any, sql: str, title: str, name: str) -> ShareDraft:
         raise ValueError("Give the dashboard a title.")
     statement = _read_sql(sql)
     digest = hashlib.sha256(statement.encode("utf-8")).hexdigest()
-    lineage = {"workflow_id": current_workflow() or "none", "descriptor_id": dataset.id,
+    lineage = {"workflow_id": workflow_id, "descriptor_id": dataset.id,
                "descriptor_version": str(dataset.version), "query_digest": digest}
     print("Dashboard SQL to validate against its figures:\n" + statement)
     files = [
@@ -175,4 +186,4 @@ def share(dataset: Any, sql: str, title: str, name: str) -> ShareDraft:
         {"path": "queries/business/result.sql", "content": statement + "\n"},
         {"path": "REVISION.json", "content": json.dumps(lineage, indent=2) + "\n"},
     ]
-    return ShareDraft(dataset, statement, title.strip(), name, digest, files)
+    return ShareDraft(dataset, statement, title.strip(), name, digest, workflow_id, files)

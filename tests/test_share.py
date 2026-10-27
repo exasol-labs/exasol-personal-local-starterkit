@@ -10,11 +10,14 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "notebook/package"))
 from exakit_nb.share import share
+from exakit_nb.dash_mcp import dash_server_url
+from exakit_nb.workflow import read_log, workflow
 
 
 class Dataset:
     id = "example"
     version = 4
+    fact_table = "EXAMPLE.FACT"
     approved = True
 
     def require_approved(self, purpose):
@@ -55,6 +58,7 @@ class ShareTests(unittest.TestCase):
         self.env = patch.dict(os.environ, {"EXAKIT_HOME": str(home)}, clear=False)
         self.env.start()
         self.addCleanup(self.env.stop)
+        self.workflow_id = workflow("share-test")
 
     def test_preview_then_confirm(self):
         draft = share(Dataset(), "SELECT CATEGORY, COUNT(*) AS N FROM T GROUP BY 1", "Example", "example")
@@ -70,6 +74,10 @@ class ShareTests(unittest.TestCase):
         self.assertIn("SELECT CATEGORY", files["queries/business/result.sql"])
         self.assertEqual(json.loads(files["REVISION.json"])["descriptor_version"], "4")
         self.assertNotIn("PASSWORD", files["app.py"])
+        events = [event for event in read_log(self.workflow_id) if event["kind"] == "dashboard.revision"]
+        self.assertEqual([event["state"] for event in events], ["preview", "live"])
+        self.assertEqual(events[0]["sql"], draft.sql)
+        self.assertEqual(events[0]["source_table"], "EXAMPLE.FACT")
 
     def test_wrong_profile_refused_before_app_creation(self):
         draft = share(Dataset(), "SELECT 1", "Example", "example")
@@ -103,6 +111,15 @@ class ShareTests(unittest.TestCase):
             draft.preview(tool)
         with self.assertRaisesRegex(RuntimeError, "healthy preview"):
             draft.confirm(tool, figures_checked=True)
+
+    def test_dash_endpoint_comes_from_status_and_stays_local(self):
+        class Result:
+            stdout = '{"urls":{"dash-server":"http://127.0.0.1:5101"}}'
+        with patch("exakit_nb.dash_mcp.subprocess.run", return_value=Result()):
+            self.assertEqual(dash_server_url(), "http://127.0.0.1:5101")
+            Result.stdout = '{"urls":{"dash-server":"https://remote.example"}}'
+            with self.assertRaisesRegex(RuntimeError, "unexpected"):
+                dash_server_url()
 
 
 if __name__ == "__main__":

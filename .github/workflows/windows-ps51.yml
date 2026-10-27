@@ -132,6 +132,10 @@ jobs:
         if: matrix.shard == 2
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/model-commands-ps.ps1
+      - name: Rust UDF command twin
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/rust-udf-ps.ps1
       - name: destroy through a stale lock under 5.1
         if: matrix.shard == 2
         shell: powershell

@@ -38,7 +38,7 @@ HELPERS = sorted((ROOT / "notebook" / "package").glob("*/**/*.py")) + sorted((RO
 # checks before its dispatch arm lands.
 PENDING_COMMANDS = {"model"}
 SPRINT_NOTEBOOKS = {"data-scientist": ["00_quickstart.ipynb", "01_explore.ipynb", "02_ask_your_data.ipynb", "03_share.ipynb"],
-                    "ml-engineer": ["00_quickstart.ipynb", "01_train.ipynb", "03_score_external_model.ipynb"]}
+                    "ml-engineer": ["00_quickstart.ipynb", "01_train.ipynb", "02_rust_score.ipynb", "03_score_external_model.ipynb"]}
 
 
 def _members(cls) -> set[str]:

@@ -42,6 +42,7 @@
         "udf-use",
         "udf-build",
         "udf-file",
+        "rust-udf",
         "model"
       ]
     },
@@ -430,6 +431,17 @@
       "examples": [
         "exakit udf-file model.pkl",
         "exakit udf-file model.pkl models/model.pkl"
+      ]
+    },
+    {
+      "command": "rust-udf",
+      "options": "new <name> [--coefficients <file>] | build <name> | deploy <name> [--schema <SCHEMA>] [--json]",
+      "summary": "Create, build and deploy a Rust scoring UDF from exported coefficients.",
+      "description": "The new step creates a pinned exasol-udf-sdk 0.33.0 project under the kit home; --coefficients reads the 01_train coefficients.json. Build uses Rust 1.98.1 in a Linux Docker or Podman container matching the database architecture on macOS and Windows, then validates the .so. Deploy verifies its digest, copies it into the deployment's bucket directory and registers a RUST scalar script. A database restart is not attempted automatically.",
+      "examples": [
+        "exakit rust-udf new score_model --coefficients coefficients.json",
+        "exakit rust-udf build score_model --json",
+        "exakit rust-udf deploy score_model --schema EXAKIT_SCORING"
       ]
     },
     {

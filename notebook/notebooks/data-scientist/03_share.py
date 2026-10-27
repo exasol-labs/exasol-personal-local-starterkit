@@ -17,8 +17,7 @@
 # kit's read-only Exasol user; it contains no password or copied data.
 #
 # Start the dash-server add-on with `exakit marketplace dash-server`, then
-# `exakit mcp-setup` and `exakit start`. In your AI client, run the MCP requests
-# prepared below. The tool adapter must call the registered `dash-server` tools.
+# `exakit mcp-setup` and `exakit start`. The cells call its MCP control plane.
 
 # %%
 import exakit.nb as nb
@@ -26,6 +25,12 @@ import exakit.nb as nb
 DATASET = "pharma_trials"  # or banking_complaints or an approved descriptor of your own
 TITLE = "Category overview"
 APP_NAME = "category-overview"
+WORKFLOW_ID = None  # Set an existing workflow id to continue it.
+
+if WORKFLOW_ID:
+    nb.workflow(resume=WORKFLOW_ID)
+elif not nb.current_workflow():
+    nb.workflow("share-" + APP_NAME)
 
 conn = nb.connect()
 ds = nb.dataset(conn, DATASET)
@@ -39,20 +44,13 @@ print("Descriptor version:", ds.version)
 # %% [markdown]
 # ## Preview
 #
-# Ask your AI client to run `draft.requests()` through its registered Dash Server
-# MCP control plane, or pass its tool-call adapter below. The adapter accepts
-# `(tool_name, arguments)` and returns the MCP result. Read-only profile
-# validation and a green preview health check are required.
+# The notebook calls Dash Server's MCP tools. It validates the read-only profile
+# and waits for a green preview health check before showing the preview URL.
 
 # %%
-DASH_TOOL = None  # Set to your client's registered Dash Server MCP tool adapter.
-if DASH_TOOL is not None:
-    preview_path = draft.preview(DASH_TOOL)
-    print("Preview:", preview_path)
-else:
-    print("Run these requests with the dash-server MCP tools in your AI client:")
-    for tool_name, arguments in draft.requests():
-        print(tool_name, arguments if tool_name != "app_put_files" else "(app.py, SQL and revision metadata from draft.files)")
+DASH_TOOL = nb.dash_tools()
+preview_path = draft.preview(DASH_TOOL)
+print("Preview:", DASH_TOOL.url + preview_path)
 
 # %% [markdown]
 # ## Check the numbers, then publish
@@ -64,8 +62,8 @@ else:
 
 # %%
 FIGURES_CHECKED = False
-if DASH_TOOL is not None and FIGURES_CHECKED:
+if FIGURES_CHECKED:
     live_path = draft.confirm(DASH_TOOL, figures_checked=True)
-    print("Live dashboard:", live_path)
+    print("Live dashboard:", DASH_TOOL.url + live_path)
 else:
     print("Open the healthy preview and check the figures before promoting.")

@@ -1,0 +1,130 @@
+# ---
+# jupyter:
+#   kernelspec:
+#     display_name: Exasol (Starter Kit)
+#     language: python
+#     name: exasol-starter-kit
+# ---
+
+# %% [markdown]
+# # Score the same test rows with Rust
+#
+# - **Dataset:** Pharma, Banking, or your own approved descriptor and handoff.
+# - **How long:** about fifteen minutes on the first Rust build, less on later builds.
+#
+# `01_train` exports raw-feature coefficients to MLflow. This notebook retrieves
+# the newest run for this descriptor, builds a Linux Rust UDF for the database's
+# architecture, and compares its probabilities and labels with the Python
+# formula on the same held-out rows. A stale handoff is refused before building.
+
+# %%
+DATASET = "pharma_trials"  # or banking_complaints, or your own approved descriptor
+COEFFICIENTS_FILE = None  # or a local coefficients.json exported from 01_train's MLflow run
+UDF_NAME = "score_pharma"  # choose a new plain lowercase name for a new coefficient revision
+UDF_SCHEMA = "EXAKIT_SCORING"
+TEST_ROWS = 500
+
+# %%
+import json
+import os
+import shutil
+import subprocess
+from pathlib import Path
+
+import numpy as np
+from scipy.special import expit
+import exakit.nb as nb
+
+conn = nb.connect()
+ds = nb.dataset(conn, DATASET).require_approved("rust scoring")
+handoff = nb.read_handoff(ds.id)
+stale = nb.handoff_is_stale(conn, handoff, ds)
+if stale:
+    raise ValueError(stale)
+
+# %% [markdown]
+# ## Find the exact coefficient artifact
+#
+# The newest finished run must carry this descriptor id and version. For a
+# remote MLflow server, the client downloads the artifact into the kit home.
+
+# %%
+if COEFFICIENTS_FILE is None:
+    from mlflow.tracking import MlflowClient
+    from exasol_mlflow import tracking
+
+    client = MlflowClient(tracking_uri=tracking.resolve().uri)
+    experiment = client.get_experiment_by_name("exasol-starter-kit")
+    if experiment is None:
+        raise FileNotFoundError("No MLflow experiment from 01_train. Run it first, or set COEFFICIENTS_FILE.")
+    runs = client.search_runs([experiment.experiment_id],
+                              filter_string=f"tags.exasol.descriptor_id = '{ds.id}'",
+                              order_by=["attributes.start_time DESC"], max_results=20)
+    matching = [item for item in runs if item.info.status == "FINISHED" and
+                item.data.tags.get("exasol.descriptor_version") == str(ds.version)]
+    if not matching:
+        raise FileNotFoundError("No finished MLflow run for this descriptor version. Run 01_train again.")
+    download_dir = Path(os.environ.get("EXAKIT_HOME") or Path.home() / ".exasol-starter-kit") / "rust-udfs" / "artifacts"
+    download_dir.mkdir(parents=True, exist_ok=True)
+    COEFFICIENTS_FILE = client.download_artifacts(matching[0].info.run_id, "coefficients.json", str(download_dir))
+coefficients = json.loads(Path(COEFFICIENTS_FILE).expanduser().read_text(encoding="utf-8"))
+features = coefficients["features"]
+if features != [item["name"] for item in handoff["input_schema"] if item["name"] in features]:
+    raise ValueError("Coefficient feature order differs from this handoff; rerun 01_train.")
+print("features in coefficient order:", ", ".join(features))
+
+# %% [markdown]
+# ## Build and deploy
+#
+# The command pins exasol-udf-sdk 0.33.0 and rustc 1.98.1. On macOS it builds
+# inside the matching Linux Docker or Podman image, validates the `.so`, copies
+# it into the deployment bucket directory and registers the RUST script.
+
+# %%
+def exakit(*arguments):
+    found = shutil.which("exakit") or shutil.which("exakit.cmd")
+    if found is None:
+        home = Path(os.environ.get("EXAKIT_BIN_DIR") or Path.home() / ".local/bin")
+        found = next((str(home / name) for name in ("exakit", "exakit.cmd") if (home / name).is_file()), None)
+    if found is None:
+        raise RuntimeError("The kit command is absent from this kernel's PATH and ~/.local/bin.")
+    completed = subprocess.run([found, *arguments, "--json"], capture_output=True, text=True, check=False)
+    try:
+        answer = json.loads(completed.stdout)
+    except ValueError as error:
+        raise RuntimeError("The kit command returned invalid JSON: " + (completed.stderr or completed.stdout)[:300]) from error
+    if completed.returncode:
+        raise RuntimeError(answer.get("error", "Rust UDF command failed") +
+                           ("; run: " + answer["remedy"] if answer.get("remedy") else ""))
+    return answer
+
+project = exakit("rust-udf", "new", UDF_NAME, "--coefficients", str(Path(COEFFICIENTS_FILE).expanduser()))
+built = exakit("rust-udf", "build", UDF_NAME)
+deployed = exakit("rust-udf", "deploy", UDF_NAME, "--schema", UDF_SCHEMA)
+print("Rust UDF:", deployed["udf"], "sha256", deployed["sha256"])
+
+# %% [markdown]
+# ## Compare on the same later 20 percent
+#
+# The handoff's split expression selects the test rows. Its SQL is printed
+# before interpreting the result. Differences above 1e-9 or any differing
+# class label fail the check.
+
+# %%
+arguments = ", ".join(f'CAST(T."{feature}" AS DOUBLE)' for feature in features)
+test_sql = (f'SELECT T.*, {deployed["udf"]}({arguments}) AS RUST_P '
+            f'FROM ({handoff["training_sql"]}) T WHERE T."SPLIT_" = \'test\' LIMIT {TEST_ROWS}')
+print(test_sql)
+test = nb.sql(conn, test_sql)
+matrix = test[features].astype(float).to_numpy()
+weights = np.asarray(coefficients["coef"][0], dtype=float)
+expected = expit(matrix @ weights + float(coefficients["intercept"][0]))
+actual = test["RUST_P"].astype(float).to_numpy()
+if len(test) == 0:
+    raise ValueError("The handoff has no later test rows; review its split.")
+gap = float(np.max(np.abs(expected - actual)))
+labels_match = np.array_equal(expected >= 0.5, actual >= 0.5)
+print(f"{len(test)} test rows; largest probability difference {gap:.3e}; labels agree: {labels_match}")
+if gap >= 1e-9 or not labels_match:
+    raise AssertionError("Rust and Python predictions differ; inspect coefficient order, container and input values.")
+print("Rust and Python scoring agree on the held-out rows.")

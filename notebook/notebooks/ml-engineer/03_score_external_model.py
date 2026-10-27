@@ -47,11 +47,13 @@ HOLDOUT_ROWS = 500                  # held-out rows the two predictions are comp
 
 # %%
 import importlib.util
+import hashlib
 import json
 import os
 import pickle
 import shutil
 import subprocess
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -116,8 +118,32 @@ if MODEL_FILE is None:
     model_path.write_bytes(pickle.dumps(stand_in))
 else:
     model_path = Path(MODEL_FILE).expanduser()
-model = pickle.loads(model_path.read_bytes())
-print(f"{model_path} ({model_path.stat().st_size} bytes), scikit-learn {sklearn.__version__} on this computer")
+try:
+    with warnings.catch_warnings(record=True) as pickle_warnings:
+        warnings.simplefilter("always")
+        model = pickle.loads(model_path.read_bytes())
+except Exception as error:
+    model = None
+    pickle_warnings = []
+    print(f"Cannot score {model_path}: this computer cannot load the pickle ({type(error).__name__}: {error}). "
+          "Use a matching Python and scikit-learn version, then put the model again.")
+if model is not None:
+    print(f"{model_path} ({model_path.stat().st_size} bytes), scikit-learn {sklearn.__version__} on this computer")
+provenance_file = Path(str(model_path) + ".provenance.json")
+model_version = sklearn.__version__
+for message in pickle_warnings:
+    original = getattr(message.message, "original_sklearn_version", None)
+    if original:
+        model_version = str(original)
+if provenance_file.is_file():
+    try:
+        provenance = json.loads(provenance_file.read_text(encoding="utf-8"))
+        if provenance.get("sha256") == hashlib.sha256(model_path.read_bytes()).hexdigest():
+            model_version = provenance.get("scikit-learn") or model_version
+    except ValueError:
+        pass
+MODEL_COMPATIBLE = model is not None and nb.check_model_compatibility(
+    conn, model_version, alias=CONTAINER, model_path=f"/buckets/bfsdefault/default/models/{model_path.name}")
 
 # %% [markdown]
 # ## Put it into the bucket directory
@@ -148,9 +174,13 @@ def exakit(*args: str) -> dict:
     return answer
 
 
-put = exakit("model", "put", str(model_path), "--replace")
-print(f"sha256 {put['sha256']}, {put['size']} bytes{' (replaced the earlier file)' if put['replaced'] else ''}")
-print(f"the UDF reads it at: {put['path']}")
+if MODEL_COMPATIBLE:
+    put = exakit("model", "put", str(model_path), "--replace")
+    print(f"sha256 {put['sha256']}, {put['size']} bytes{' (replaced the earlier file)' if put['replaced'] else ''}")
+    print(f"the UDF reads it at: {put['path']}")
+else:
+    put = None
+    print("Scoring skipped until the model and container versions match.")
 
 # %% [markdown]
 # ## Create the scoring UDF from the template
@@ -161,19 +191,19 @@ print(f"the UDF reads it at: {put['path']}")
 # column.
 
 # %%
-template = exakit("model", "template")
-spec = importlib.util.spec_from_file_location("exakit_udf_render", template["renderer"])
-render = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(render)
-
-create_sql = render.render(schema=SCORING_SCHEMA, name=UDF_NAME, model_path=put["path"], language=CONTAINER,
-                           inputs=[("category", "VARCHAR(2000)"), ("doc_text", "VARCHAR(2000000)", "text")],
-                           output="DOUBLE", method="predict_proba")
-print("\n".join(create_sql.splitlines()[:8]) + "\n...")
-conn.execute(f"CREATE SCHEMA IF NOT EXISTS {SCORING_SCHEMA}")
-conn.execute(create_sql)
-UDF = f"{SCORING_SCHEMA}.{UDF_NAME}"
-print(f"UDF {UDF} is ready")
+if MODEL_COMPATIBLE:
+    template = exakit("model", "template")
+    spec = importlib.util.spec_from_file_location("exakit_udf_render", template["renderer"])
+    render = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(render)
+    create_sql = render.render(schema=SCORING_SCHEMA, name=UDF_NAME, model_path=put["path"], language=CONTAINER,
+                               inputs=[("category", "VARCHAR(2000)"), ("doc_text", "VARCHAR(2000000)", "text")],
+                               output="DOUBLE", method="predict_proba")
+    print("\n".join(create_sql.splitlines()[:8]) + "\n...")
+    conn.execute(f"CREATE SCHEMA IF NOT EXISTS {SCORING_SCHEMA}")
+    conn.execute(create_sql)
+    UDF = f"{SCORING_SCHEMA}.{UDF_NAME}"
+    print(f"UDF {UDF} is ready")
 
 # %% [markdown]
 # ## Score the held-out rows in the database, and here
@@ -183,16 +213,17 @@ print(f"UDF {UDF} is ready")
 # one the model was pickled with.
 
 # %%
-holdout_sql = rows_sql(HELD_OUT, HOLDOUT_ROWS, extra=f",\n       {UDF}({CATEGORY}, {TEXT}) AS DB_SCORE")
-print(holdout_sql)
-holdout = nb.sql(conn, holdout_sql)
-here = model.predict_proba(pd.DataFrame({"category": holdout["CATEGORY"], "text": holdout["DOC_TEXT"]}))[:, 1]
-there = holdout["DB_SCORE"].astype(float).to_numpy()
-gap = float(np.max(np.abs(here - there))) if len(here) else 0.0
-print(f"\n{len(holdout)} held-out rows; largest difference between the database and this computer: {gap:.2e}")
-print("the predictions match" if np.allclose(here, there, atol=1e-9) else
-      "the predictions DIFFER: train the model with the container's Python and scikit-learn versions")
-print(f"accuracy on the held-out rows: {float(((there >= 0.5).astype(int) == holdout['LABEL'].astype(int)).mean()):.3f}")
+if MODEL_COMPATIBLE:
+    holdout_sql = rows_sql(HELD_OUT, HOLDOUT_ROWS, extra=f",\n       {UDF}({CATEGORY}, {TEXT}) AS DB_SCORE")
+    print(holdout_sql)
+    holdout = nb.sql(conn, holdout_sql)
+    here = model.predict_proba(pd.DataFrame({"category": holdout["CATEGORY"], "text": holdout["DOC_TEXT"]}))[:, 1]
+    there = holdout["DB_SCORE"].astype(float).to_numpy()
+    gap = float(np.max(np.abs(here - there))) if len(here) else 0.0
+    print(f"\n{len(holdout)} held-out rows; largest difference between the database and this computer: {gap:.2e}")
+    print("the predictions match" if np.allclose(here, there, atol=1e-9) else
+          "the predictions DIFFER: train the model with the container's Python and scikit-learn versions")
+    print(f"accuracy on the held-out rows: {float(((there >= 0.5).astype(int) == holdout['LABEL'].astype(int)).mean()):.3f}")
 
 # %% [markdown]
 # ## Score the table
@@ -201,13 +232,14 @@ print(f"accuracy on the held-out rows: {float(((there >= 0.5).astype(int) == hol
 # beside the share of label 1 actually there.
 
 # %%
-table_sql = f"""SELECT CATEGORY, COUNT(*) AS ROWS_SCORED, AVG(SCORE) AS MEAN_SCORE, AVG({LABEL}) AS LABEL_1_SHARE
+if MODEL_COMPATIBLE:
+    table_sql = f"""SELECT CATEGORY, COUNT(*) AS ROWS_SCORED, AVG(SCORE) AS MEAN_SCORE, AVG({LABEL}) AS LABEL_1_SHARE
 FROM (SELECT {CATEGORY} AS CATEGORY, {LABEL}, {UDF}({CATEGORY}, {TEXT}) AS SCORE FROM {ds.fact_table})
 GROUP BY CATEGORY
 ORDER BY ROWS_SCORED DESC
 LIMIT 15"""
-print(table_sql)
-nb.sql(conn, table_sql)
+    print(table_sql)
+    nb.sql(conn, table_sql)
 
 # %% [markdown]
 # ## Next

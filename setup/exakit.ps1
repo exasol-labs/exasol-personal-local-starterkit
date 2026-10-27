@@ -146,6 +146,7 @@ if (Test-Path (Join-Path $libDir "notebook.ps1")) { . (Join-Path $libDir "notebo
 if (Test-Path (Join-Path $libDir "workflow.ps1")) { . (Join-Path $libDir "workflow.ps1") }
 if (Test-Path (Join-Path $libDir "describe.ps1")) { . (Join-Path $libDir "describe.ps1") }
 if (Test-Path (Join-Path $libDir "udf-devkit.ps1")) { . (Join-Path $libDir "udf-devkit.ps1") }
+if (Test-Path (Join-Path $libDir "rust-udf.ps1")) { . (Join-Path $libDir "rust-udf.ps1") }
 if (Test-Path (Join-Path $libDir "mlflow.ps1")) { . (Join-Path $libDir "mlflow.ps1") }
 if (Test-Path (Join-Path $libDir "help.ps1")) { . (Join-Path $libDir "help.ps1") }
 
@@ -3931,6 +3932,10 @@ try {
         "describe"     {
             if (-not (Get-Command Invoke-CmdDescribe -ErrorAction SilentlyContinue)) { Fail "The describe module is missing from this kit copy. Repair with: exakit update" }
             Invoke-CmdDescribe -CmdArgs $RestArgs
+        }
+        "rust-udf"     {
+            if (-not (Get-Command Invoke-CmdRustUdf -ErrorAction SilentlyContinue)) { Fail "The Rust UDF module is missing from this kit copy. Repair with: exakit update" }
+            Invoke-CmdRustUdf -CmdArgs $RestArgs
         }
         { $_ -in @("udf-setup", "udf-use", "udf-build", "udf-file", "model") } {
             $udfFn = @{ "udf-setup" = "Invoke-CmdUdfSetup"; "udf-use" = "Invoke-CmdUdfUse"; "udf-build" = "Invoke-CmdUdfBuild"; "udf-file" = "Invoke-CmdUdfFile"; "model" = "Invoke-CmdModel" }[$Command]
