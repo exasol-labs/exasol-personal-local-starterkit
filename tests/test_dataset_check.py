@@ -9,6 +9,7 @@ import json
 import shutil
 import sys
 import tempfile
+import dataclasses
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -375,7 +376,10 @@ class DescriptorDocsTest(unittest.TestCase):
         for d in examples:
             if d.id in ("pharma_trials", "banking_complaints"):
                 with self.subTest(dataset=d.id):
-                    self.assertEqual(d, read_descriptor(ROOT / "data" / "datasets" / d.id))
+                    # The README example is the shipped descriptor without its profiler evidence: the
+                    # numbers behind each role (T4) belong in the file, not in a page meant to be read.
+                    shipped = read_descriptor(ROOT / "data" / "datasets" / d.id)
+                    self.assertEqual(dataclasses.replace(d, evidence={}), dataclasses.replace(shipped, evidence={}))
 
 
 class LiveReferenceTest(unittest.TestCase):
