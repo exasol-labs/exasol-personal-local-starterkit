@@ -111,7 +111,7 @@ into a notebook, and never print the store's contents.
 
 ## Tracing model calls (opt-in)
 
-With `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and `LANGFUSE_HOST` exported
+With `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and `LANGFUSE_BASE_URL` exported (`LANGFUSE_HOST` is accepted as an alias)
 before `exakit notebook`, `nb.trace(conn, "label")` records the model
 calls made inside it in the user's own Langfuse project, tagged with the
 database session and the last SQL; `trace(conn, "label", dataset=ds)` adds the
