@@ -76,6 +76,7 @@ exakit_component_available() { printf '1.0.0\n'; }
 exakit_component_current() { printf '1.0.0\n'; }
 exakit_install_addon_skills() { :; }
 udf_devkit_install() { printf 'udf-devkit ' >> "$W/installed"; sleep 1; return 0; }
+cmd_mlflow() { [ "${1:-}" = start ]; }
 
 cmd_persona add ml-engineer
 printf 'RC=%s\n' "$?"

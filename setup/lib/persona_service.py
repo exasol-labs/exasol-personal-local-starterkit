@@ -33,6 +33,7 @@ from pathlib import Path
 
 ID = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 LISTS = ("datasets", "mcp_clients", "addons", "notebook_tools")
+SERVICES = ("mlflow",)
 WORDS = {"datasets": ("all", "none"), "mcp_clients": ("all", "skip"), "addons": ("all", "none"), "notebook_tools": ("none",)}
 EMPTY = {"datasets": "none", "mcp_clients": "skip", "addons": "none", "notebook_tools": "none"}   # what [] means
 ANSWERS = (                       # (persona key, the installer variable it answers, variables that mean it was answered)
@@ -40,6 +41,7 @@ ANSWERS = (                       # (persona key, the installer variable it answ
     ("mcp_clients", "EXAKIT_MCP_CLIENTS", ("EXAKIT_MCP_CLIENTS",)),
     ("addons", "EXAKIT_MARKETPLACE_ADDONS", ("EXAKIT_MARKETPLACE_ADDONS",)),
     ("notebook_tools", "EXAKIT_NOTEBOOK_FRONTENDS", ("EXAKIT_NOTEBOOK_FRONTENDS",)),
+    ("udf_language", "EXAKIT_UDF_LANGUAGE", ("EXAKIT_UDF_LANGUAGE",)),
 )
 
 
@@ -84,6 +86,11 @@ def problems(path: Path, doc) -> list:
                 found.append(f"'{key}' holds {bad[0]!r}, which is not an id")
         else:
             found.append(f"'{key}' must be a list of ids or one of: {', '.join(words)}")
+    if "services" in doc:
+        if not isinstance(doc["services"], list) or any(item not in SERVICES for item in doc["services"]):
+            found.append(f"'services' must be a list of known services: {', '.join(SERVICES)}")
+    if "udf_language" in doc and doc["udf_language"] not in ("python", "rust"):
+        found.append("'udf_language' must be python or rust")
     return found
 
 
@@ -176,7 +183,7 @@ def answers(root: Path, ids: str, env: dict) -> list:
             continue                                 # the two values the installer reads; anything else is not an answer
         if variable == "EXAKIT_MCP_CLIENTS" and env.get("EXAKIT_SKIP_MCP") == "1":
             continue                                 # the AI bridge is skipped: no clients to answer
-        value = combined(docs, key)
+        value = combined(docs, key) if key in EMPTY else next((doc[key] for doc in docs if doc.get(key)), "")
         if key == "datasets" and value == "all":
             value = ",".join(bundled_datasets(root)) or "all"
         if key == "datasets" and value == "none":
@@ -194,6 +201,10 @@ def value(root: Path, persona_id: str, key: str) -> str:
         return ""
     raw = doc[key]
     return ",".join(str(v) for v in raw) if isinstance(raw, list) else str(raw)
+
+
+def selected_services(root: Path, ids: str) -> list[str]:
+    return list(dict.fromkeys(service for doc in picked(root, ids) for service in doc.get("services", [])))
 
 
 def dataset_hints(root: Path) -> list:
@@ -223,7 +234,7 @@ def show(root: Path, persona_id: str) -> list:
     """What a persona brings, as `exakit persona show` prints it."""
     doc = one(root, persona_id)
     rows = [doc["title"], doc.get("summary", ""), ""]
-    for key, label in (("datasets", "Sample data"), ("addons", "Add-ons"), ("notebook_tools", "Notebook tools"), ("mcp_clients", "AI clients")):
+    for key, label in (("datasets", "Sample data"), ("addons", "Add-ons"), ("notebook_tools", "Notebook tools"), ("mcp_clients", "AI clients"), ("services", "Services"), ("udf_language", "UDF language")):
         if key in doc:
             rows.append(f"  {label:<15} {value(root, persona_id, key) or 'none'}")
     if doc.get("first_prompt"):
@@ -252,6 +263,8 @@ def run(argv: list, env: dict) -> list:
         return [value(root, args[0], args[1])]
     if command == "answers":
         return answers(root, args[0], env)
+    if command == "services":
+        return selected_services(root, args[0])
     if command == "dataset-hints":
         return dataset_hints(root)
     if command == "show":

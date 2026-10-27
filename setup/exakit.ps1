@@ -64,6 +64,7 @@
 #                         add-on); --check, --setup, --stop, --no-browser, --port N
 #   workflow              list | show <id> [--json]: the workflow logs the notebook
 #                         helpers write, one JSON line per step (X-1)
+#   mlflow                start | stop | status | url | replay: local model run server
 #   describe <table>      profile SCHEMA.TABLE and draft its descriptor (roles with
 #                         evidence); --sample N, --id slug, --json, --write <path>
 #   udf-setup             Python UDFs: install the official container (udf-devkit)
@@ -145,6 +146,7 @@ if (Test-Path (Join-Path $libDir "notebook.ps1")) { . (Join-Path $libDir "notebo
 if (Test-Path (Join-Path $libDir "workflow.ps1")) { . (Join-Path $libDir "workflow.ps1") }
 if (Test-Path (Join-Path $libDir "describe.ps1")) { . (Join-Path $libDir "describe.ps1") }
 if (Test-Path (Join-Path $libDir "udf-devkit.ps1")) { . (Join-Path $libDir "udf-devkit.ps1") }
+if (Test-Path (Join-Path $libDir "mlflow.ps1")) { . (Join-Path $libDir "mlflow.ps1") }
 if (Test-Path (Join-Path $libDir "help.ps1")) { . (Join-Path $libDir "help.ps1") }
 
 
@@ -3149,6 +3151,7 @@ function Invoke-CmdLogs {
         if ($json) { Show-ExakitLogsOverviewJson; return }
         Show-ExakitLogsOverview; return
     }
+    if ($target -eq "mlflow") { $target = "udf-devkit-mlflow" }
     if ($json) {
         Fail "--json lists the log targets; it does not apply to one target's contents. Use: exakit logs --json, then exakit logs $target --path"
     }
@@ -3920,6 +3923,10 @@ try {
         "workflow"     {
             if (-not (Get-Command Invoke-CmdWorkflow -ErrorAction SilentlyContinue)) { Fail "The workflow module is missing from this kit copy. Repair with: exakit update" }
             Invoke-CmdWorkflow -CmdArgs $RestArgs
+        }
+        "mlflow"       {
+            if (-not (Get-Command Invoke-CmdMlflow -ErrorAction SilentlyContinue)) { Fail "The MLflow module is missing from this kit copy. Repair with: exakit update" }
+            Invoke-CmdMlflow -CmdArgs $RestArgs
         }
         "describe"     {
             if (-not (Get-Command Invoke-CmdDescribe -ErrorAction SilentlyContinue)) { Fail "The describe module is missing from this kit copy. Repair with: exakit update" }

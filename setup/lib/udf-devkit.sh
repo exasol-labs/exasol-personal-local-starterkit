@@ -536,6 +536,7 @@ udf_devkit_uninstall() {
         info "  model files stay in the deployment's bucket directory; only their record goes"
         return 0
     fi
+    command -v udf_devkit_stop >/dev/null 2>&1 && udf_devkit_stop || true
     rm -rf "$EXAKIT_UDF_DEVKIT_HOME"
     manifest_del components.udf_devkit
     manifest_del desired.udf_devkit

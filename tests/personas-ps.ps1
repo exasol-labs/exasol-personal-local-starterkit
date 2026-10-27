@@ -136,7 +136,7 @@ try {
     $script:Steps = @()
     $script:FailStep = ""
     function Invoke-ExakitPersonaChild {
-        param([string]$Cli, [string]$Command, [hashtable]$Env = @{})
+        param([string]$Cli, [string]$Command, [string[]]$Arguments = @(), [hashtable]$Env = @{})
         $view = @{}
         foreach ($n in @("EXAKIT_DATASETS", "EXAKIT_DATASETS_PRESELECT", "EXAKIT_MCP_CLIENTS", "EXAKIT_MCP_PRESELECT", "EXAKIT_MARKETPLACE_ADDONS", "EXAKIT_MARKETPLACE_ONLY", "UI_TABLE_AUTO")) {
             $view[$n] = [Environment]::GetEnvironmentVariable($n, "Process")
@@ -146,6 +146,7 @@ try {
             "data-load"   { $script:Steps += "data-load datasets=$($view.EXAKIT_DATASETS) preselect=$($view.EXAKIT_DATASETS_PRESELECT) auto=$($view.UI_TABLE_AUTO)" }
             "mcp-setup"   { $script:Steps += "mcp-setup clients=$($view.EXAKIT_MCP_CLIENTS) preselect=$($view.EXAKIT_MCP_PRESELECT) auto=$($view.UI_TABLE_AUTO)" }
             "marketplace" { $script:Steps += "marketplace addons=$($view.EXAKIT_MARKETPLACE_ADDONS) only=$($view.EXAKIT_MARKETPLACE_ONLY) auto=$($view.UI_TABLE_AUTO)" }
+            "mlflow" { $script:Steps += "mlflow action=$($Arguments -join ',')" }
         }
         if ($script:FailStep -eq $Command) { $script:ExakitPersonaChildCode = 1 } else { $script:ExakitPersonaChildCode = 0 }
     }
@@ -170,7 +171,7 @@ try {
     Check "a dataset already loaded is said, not redone" $true ($said -like "*Already loaded: Pharma clinical trials*")
     Check "an add-on already installed is said, not redone" $true ($said -like "*Already installed: notebook*")
     Check "the steps, in order, each handed only what is missing (no console: plain lines)" `
-        "data-load datasets=banking_complaints preselect= auto=;mcp-setup clients=all preselect= auto=;marketplace addons=udf-devkit only= auto=" ($script:Steps -join ";")
+        "data-load datasets=banking_complaints preselect= auto=;mcp-setup clients=all preselect= auto=;marketplace addons=udf-devkit only= auto=;mlflow action=start" ($script:Steps -join ";")
     Check "one closing line names the whole set" $true ($said -like "*Persona added: Data Scientist + ML Engineer*")
     $said = (& { Invoke-CmdPersona -CmdArgs @("list") } 6>&1 | Out-String)
     Check "list says what this kit was set up as, by title" $true ($said -like "*This kit was set up as: Data Scientist + ML Engineer*")
@@ -181,7 +182,7 @@ try {
     $script:UiFancy = $true
     try { [void](PersonaCmd @("add", "ml-engineer")) } finally { $script:UiFancy = $wasFancy }
     Check "on a console each step gets its table's defaults instead of the variable" `
-        "data-load datasets= preselect=banking_complaints auto=1;mcp-setup clients= preselect=all auto=1;marketplace addons= only=udf-devkit auto=1" ($script:Steps -join ";")
+        "data-load datasets= preselect=banking_complaints auto=1;mcp-setup clients= preselect=all auto=1;marketplace addons= only=udf-devkit auto=1;mlflow action=start" ($script:Steps -join ";")
     function Get-ExakitPendingDatasets { return @() }
     function Get-ExakitMarketplaceInstalledAddons { return @("notebook", "udf-devkit") }
     Clear-Answers
@@ -189,7 +190,7 @@ try {
     Check "plan for the recorded set after the add: nothing pending" "data-scientist,ml-engineer|True" "$($plan.persona)|$($plan.nothing_pending)"
     $said = PersonaCmd @("add", "ml-engineer")
     Check "added again with everything in: each part says so" $true ($said -like "*Already loaded: Pharma clinical trials, Banking complaints*")
-    Check "...nothing is loaded or installed (the AI client step says for itself what is connected)" "mcp-setup" (($script:Steps | ForEach-Object { ($_ -split ' ')[0] }) -join " ")
+    Check "...nothing is loaded or installed (the AI client step says for itself what is connected)" "mcp-setup mlflow" (($script:Steps | ForEach-Object { ($_ -split ' ')[0] }) -join " ")
     function Get-ExakitPendingDatasets { return @([pscustomobject]@{ Id = "banking_complaints"; Label = "Banking complaints (CFPB, ~7k complaints)" }) }
     function Get-ExakitMarketplaceInstalledAddons { return @("notebook") }
     Set-ExakitManifestValue "persona.id" "general,data-scientist"
@@ -202,7 +203,7 @@ try {
     $said = (& { Invoke-ExakitPersonaAdd -Ids "ml-engineer" -Cli "exakit.ps1" } 6>&1 | Out-String)
     $script:FailStep = ""
     Check "a step that fails: not finished (the command exits 1)" $false $script:ExakitPersonaAddOk
-    Check "...the others still run" "data-load mcp-setup marketplace" (($script:Steps | ForEach-Object { ($_ -split ' ')[0] }) -join " ")
+    Check "...the others still run" "data-load mcp-setup marketplace mlflow" (($script:Steps | ForEach-Object { ($_ -split ' ')[0] }) -join " ")
     Check "...the closing line says not everything finished" $true ($said -like "*Persona added: Data Scientist + ML Engineer - not everything finished*")
     Check "...and the one command that retries the part" $true ($said -like "*Sample data did not finish - retry with: `$env:EXAKIT_DATASETS = 'banking_complaints'; exakit data-load*")
     Check "...only that part" $false ($said -like "*AI clients did not finish*" -or $said -like "*Add-ons did not finish*")

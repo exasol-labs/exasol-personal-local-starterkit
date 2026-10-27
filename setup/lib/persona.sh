@@ -70,7 +70,7 @@ exakit_persona_dataset_hints() {
 _exakit_persona_export() {
     while IFS='=' read -r _epe_key _epe_value; do
         case "$_epe_key" in
-            EXAKIT_DATASETS|EXAKIT_LOAD_SAMPLE|EXAKIT_MCP_CLIENTS|EXAKIT_MARKETPLACE_ADDONS|EXAKIT_NOTEBOOK_FRONTENDS|EXAKIT_PERSONA)
+            EXAKIT_DATASETS|EXAKIT_LOAD_SAMPLE|EXAKIT_MCP_CLIENTS|EXAKIT_MARKETPLACE_ADDONS|EXAKIT_NOTEBOOK_FRONTENDS|EXAKIT_UDF_LANGUAGE|EXAKIT_PERSONA)
                 eval "$_epe_key=\"\$_epe_value\""
                 export "${_epe_key?}"
                 ;;
@@ -456,6 +456,17 @@ exakit_persona_add() {
     elif [ -z "$_epd_got" ]; then
         info "No add-ons for these personas"
     fi
+
+    # Services are declared by the persona, and start only after its add-ons
+    # have been installed. Reapplying a persona is safe: start is idempotent.
+    for _epd_service in $(_exakit_persona_service services "$_epd_new" 2>/dev/null); do
+        case "$_epd_service" in
+            mlflow)
+                if ( _exakit_prompt_tty() { :; }; cmd_mlflow start ); then :
+                else _epd_failed="${_epd_failed}MLflow service|exakit mlflow start
+"; fi ;;
+        esac
+    done
 
     printf '\n'
     if [ -z "$_epd_failed" ]; then

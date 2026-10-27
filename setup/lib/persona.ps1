@@ -13,12 +13,13 @@ $script:ExakitPersonaPython = $null
 function Get-ExakitPersonaPython {
     if ($null -ne $script:ExakitPersonaPython) { return $script:ExakitPersonaPython }
     $script:ExakitPersonaPython = ""
-    if (Get-Command python -ErrorAction SilentlyContinue) {
+    foreach ($candidate in @("python", "python3")) {
+        if (-not (Get-Command $candidate -ErrorAction SilentlyContinue)) { continue }
         $previousErrorActionPreference = $ErrorActionPreference
         try {
             $ErrorActionPreference = "Continue"
-            $ok = & python -c "import sys; print(sys.version_info[:2] >= (3, 9))" 2>$null
-            if ($LASTEXITCODE -eq 0 -and ("$ok").Trim() -eq "True") { $script:ExakitPersonaPython = "python" }
+            $ok = & $candidate -c "import sys; print(sys.version_info[:2] >= (3, 9))" 2>$null
+            if ($LASTEXITCODE -eq 0 -and ("$ok").Trim() -eq "True") { $script:ExakitPersonaPython = $candidate; break }
         } catch {
         } finally {
             $ErrorActionPreference = $previousErrorActionPreference
@@ -333,7 +334,8 @@ function Get-ExakitPersonaDatasetLabel {
 # Twin of the ( cmd_... ) subshells in exakit_persona_add.
 $script:ExakitPersonaChildCode = 0
 function Invoke-ExakitPersonaChild {
-    param([Parameter(Mandatory)][string]$Cli, [Parameter(Mandatory)][string]$Command, [hashtable]$Env = @{})
+    param([Parameter(Mandatory)][string]$Cli, [Parameter(Mandatory)][string]$Command,
+          [string[]]$Arguments = @(), [hashtable]$Env = @{})
     $saved = @{}
     foreach ($k in @($Env.Keys)) {
         $saved[$k] = [Environment]::GetEnvironmentVariable($k, "Process")
@@ -342,7 +344,7 @@ function Invoke-ExakitPersonaChild {
     $script:ExakitPersonaChildCode = 1
     try {
         $hostExe = (Get-Process -Id $PID).Path
-        $null | & $hostExe -NoProfile -ExecutionPolicy Bypass -File $Cli $Command
+        $null | & $hostExe -NoProfile -ExecutionPolicy Bypass -File $Cli $Command @Arguments
         $script:ExakitPersonaChildCode = $LASTEXITCODE
     } finally {
         foreach ($k in @($Env.Keys)) { [Environment]::SetEnvironmentVariable($k, $saved[$k], "Process") }
@@ -456,6 +458,13 @@ function Invoke-ExakitPersonaAdd {
         if ($script:ExakitPersonaChildCode -ne 0) { $failed += "Add-ons|exakit marketplace $($get -join ' ')" }
     } elseif ($got.Count -eq 0) {
         Info "No add-ons for these personas"
+    }
+
+    foreach ($service in @(Invoke-ExakitPersonaService "services" $new)) {
+        if ($service -eq "mlflow") {
+            Invoke-ExakitPersonaChild -Cli $Cli -Command "mlflow" -Arguments @("start")
+            if ($script:ExakitPersonaChildCode -ne 0) { $failed += "MLflow service|exakit mlflow start" }
+        }
     }
 
     Write-Host ""

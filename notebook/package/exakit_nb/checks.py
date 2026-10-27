@@ -95,33 +95,22 @@ def _shown(uri: str) -> str:
 
 
 def check_mlflow(timeout: float = 5.0) -> bool:
-    """MLflow is importable, and the server MLFLOW_TRACKING_URI names answers its health check; without the variable,
-    runs go to a local store beside the notebook, which needs no server."""
+    """Check the destination runs will really use: configured server, kit server, or local store."""
     try:
         import mlflow  # noqa: F401
     except ImportError:
         return _report("mlflow", False, "the MLflow client is not in the notebook environment.", "exakit update notebook")
-    uri = os.environ.get("MLFLOW_TRACKING_URI", "").strip()
-    if not uri:
-        return _report("mlflow", True, "MLFLOW_TRACKING_URI is not set, so runs go to the local store mlflow/ beside the "
-                                       "notebook (open it with: mlflow ui --backend-store-uri sqlite:///mlflow/mlflow.db).")
-    shown = _shown(uri)
-    if not uri.startswith(("http://", "https://")):
-        return _report("mlflow", True, f"tracking store {shown} (not a server; nothing to reach).")
+    from exasol_mlflow import tracking
+
+    destination = tracking.resolve()
+    shown = tracking.redacted(destination.uri)
+    if not destination.is_http:
+        return _report("mlflow", True, f"local store {shown} (no server needed).")
     try:
-        with urllib.request.urlopen(uri.rstrip("/") + "/health", timeout=timeout) as answer:
-            status = answer.status
-    except urllib.error.HTTPError as err:
-        status = err.code
-    except (urllib.error.URLError, OSError) as err:
-        reason = getattr(err, "reason", err)
-        return _report("mlflow", False, f"the server at {shown} does not answer ({reason}).",
-                       "start it (mlflow server --port 5000), or set MLFLOW_TRACKING_URI to the one you use, or unset it "
-                       "for a local store - before exakit notebook.")
-    if 200 <= status < 300:
-        return _report("mlflow", True, f"the server at {shown} answers.")
-    return _report("mlflow", False, f"the server at {shown} answers HTTP {status} to its health check.",
-                   "check that MLFLOW_TRACKING_URI names an MLflow tracking server.")
+        tracking.check(destination, timeout=timeout)
+    except tracking.TrackingUnavailable as err:
+        return _report("mlflow", False, str(err), "exakit mlflow start" if destination.source == tracking.KIT_SERVER else "check MLFLOW_TRACKING_URI")
+    return _report("mlflow", True, f"the server at {shown} answers.")
 
 
 def model_list(timeout: float = 120.0) -> dict[str, Any]:

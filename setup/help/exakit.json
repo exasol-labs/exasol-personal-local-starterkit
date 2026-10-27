@@ -36,6 +36,7 @@
         "marketplace",
         "notebook",
         "workflow",
+        "mlflow",
         "describe",
         "udf-setup",
         "udf-use",
@@ -333,6 +334,13 @@
         "exakit workflow show wf-20261027-3f9a1c",
         "exakit workflow show wf-20261027-3f9a1c --json"
       ]
+    },
+    {
+      "command": "mlflow",
+      "options": "start [--port N] [--json] | stop [--json] | status [--json] | url [--json] | replay [--json]",
+      "summary": "Start or stop the local MLflow server, show its address, or replay pending runs.",
+      "description": "The server listens on 127.0.0.1, starting at port 5000. Its SQLite store, artifacts, log and pending run spool live under ~/.exasol-starter-kit/mlflow. The notebook add-on supplies the client and the UDF dev kit enables the service. Starting installs the full MLflow server package into the notebook environment if needed. exakit stop stops the server; exakit logs mlflow shows its log. Replay sends spooled runs to MLFLOW_TRACKING_URI, the kit server, or the local store, and removes only records logged successfully.",
+      "examples": ["exakit mlflow start", "exakit mlflow status --json", "exakit mlflow replay"]
     },
     {
       "command": "describe",

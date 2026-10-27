@@ -604,6 +604,7 @@ function Uninstall-UdfDevkit {
         Info "  model files stay in the deployment's bucket directory; only their record goes"
         return $true
     }
+    if (Get-Command Stop-UdfDevkit -ErrorAction SilentlyContinue) { Stop-UdfDevkit }
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $script:UdfDevkitHome
     Remove-ExakitManifestValue "components.udf_devkit"
     Remove-ExakitManifestValue "desired.udf_devkit"

@@ -24,6 +24,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "notebook" / "package"))
+sys.path.insert(0, str(ROOT / "packages" / "exasol-mlflow"))
 
 import importlib
 import importlib.util  # noqa: E402

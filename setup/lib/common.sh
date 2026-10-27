@@ -11487,6 +11487,7 @@ EXAKIT_LO_EOF
 # exakit_logs_show <target> [follow] [lines] [path_only]
 exakit_logs_show() {
     _lsh_target="$1"
+    [ "$_lsh_target" = mlflow ] && _lsh_target=udf-devkit-mlflow
     _lsh_follow="${2:-0}"
     _lsh_lines="${3:-200}"
     _lsh_path_only="${4:-0}"

@@ -253,6 +253,7 @@ sed -n "$_cp_range" "$ROOT/setup/exakit" > "$WORK/cmd_persona.sh"
 cmd_data_load() { echo "STEP data-load datasets=${EXAKIT_DATASETS:-} tty=$(_exakit_prompt_tty)"; }
 cmd_mcp_setup() { echo "STEP mcp-setup clients=${EXAKIT_MCP_CLIENTS:-} tty=$(_exakit_prompt_tty)"; }
 cmd_marketplace() { echo "STEP marketplace addons=${EXAKIT_MARKETPLACE_ADDONS:-} tty=$(_exakit_prompt_tty)"; }
+cmd_mlflow() { echo "STEP mlflow action=${1:-} tty=$(_exakit_prompt_tty)"; }
 # Pharma is in already and the notebook installed: neither is redone.
 exakit_pending_datasets() { printf 'banking_complaints|Banking complaints (CFPB, ~7k complaints)\n'; }
 exakit_marketplace_installed_addons() { echo notebook; }
@@ -273,7 +274,8 @@ contains "the AI clients are the personas' (every one detected)" "STEP mcp-setup
 contains "an add-on already installed is said, not redone" "Already installed: notebook" "$out"
 contains "...the add-ons step installs only the rest" "STEP marketplace addons=udf-devkit tty=" "$out"
 check "the steps run in order" "data-load mcp-setup marketplace" \
-    "$(printf '%s\n' "$out" | sed -n 's/^STEP \([a-z-]*\).*/\1/p' | tr '\n' ' ' | sed 's/ $//')"
+    "$(printf '%s\n' "$out" | sed -n 's/^STEP \([a-z-]*\).*/\1/p' | tr '\n' ' ' | sed 's/ $//' | sed 's/ mlflow$//')"
+contains "the ML Engineer starts its MLflow service" "STEP mlflow action=start tty=" "$out"
 contains "one closing line names the whole set" "Persona added: Data Scientist + ML Engineer" "$out"
 out="$( (cmd_persona list 2>&1) )"
 contains "list says what this kit was set up as, by title" "This kit was set up as: Data Scientist + ML Engineer" "$out"
@@ -286,7 +288,7 @@ out="$( (exakit_pending_datasets() { :; }; exakit_marketplace_installed_addons()
         cmd_persona add ml-engineer 2>&1); echo "rc=$?")"
 contains "added again with everything in: each part says so" "Already loaded: Pharma clinical trials, Banking complaints" "$out"
 check "...nothing is loaded or installed (the AI client step says for itself what is connected)" "STEP mcp-setup" \
-    "$(printf '%s\n' "$out" | sed -n 's/^\(STEP [a-z-]*\).*/\1/p' | tr '\n' ' ' | sed 's/ $//')"
+    "$(printf '%s\n' "$out" | sed -n 's/^\(STEP [a-z-]*\).*/\1/p' | tr '\n' ' ' | sed 's/ $//' | sed 's/ STEP mlflow$//')"
 contains "...rc 0" "rc=0" "$out"
 manifest_set persona.id "general,data-scientist"
 out="$(add apply ml-engineer --yes)"

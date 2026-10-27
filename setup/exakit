@@ -69,6 +69,7 @@
 #                       add-on); --check, --setup, --stop, --no-browser, --port N
 #   workflow            list | show <id> [--json]: the workflow logs the notebook
 #                       helpers write, one JSON line per step (X-1)
+#   mlflow              start | stop | status | url | replay: local model run server
 #   describe <table>    profile SCHEMA.TABLE and draft its descriptor (roles with
 #                       evidence); --sample N, --id slug, --json, --write <path>
 #   udf-setup           Python UDFs: install the official container (udf-devkit)
@@ -190,6 +191,7 @@ fi
 [ -f "$_lib_dir/workflow.sh" ] && . "$_lib_dir/workflow.sh"
 [ -f "$_lib_dir/describe.sh" ] && . "$_lib_dir/describe.sh"
 [ -f "$_lib_dir/udf-devkit.sh" ] && . "$_lib_dir/udf-devkit.sh"
+[ -f "$_lib_dir/mlflow.sh" ] && . "$_lib_dir/mlflow.sh"
 
 _runtime_type() {
     manifest_get runtime.type 2>/dev/null
@@ -2685,6 +2687,7 @@ case "${1:-help}" in
     persona)  shift; command -v cmd_persona >/dev/null 2>&1 || die "The persona module is missing from this kit copy. Repair with: exakit update"; cmd_persona "$@" ;;
     notebook) shift; command -v notebook_cmd >/dev/null 2>&1 || die "The notebook module is missing from this kit copy. Repair with: exakit update"; notebook_cmd "$@" ;;
     workflow) shift; command -v cmd_workflow >/dev/null 2>&1 || die "The workflow module is missing from this kit copy. Repair with: exakit update"; cmd_workflow "$@" ;;
+    mlflow) shift; command -v cmd_mlflow >/dev/null 2>&1 || die "The MLflow module is missing from this kit copy. Repair with: exakit update"; cmd_mlflow "$@" ;;
     describe) shift; command -v cmd_describe >/dev/null 2>&1 || die "The describe module is missing from this kit copy. Repair with: exakit update"; cmd_describe "$@" ;;
     udf-setup|udf-use|udf-build|udf-file|model) _udf_cmd="cmd_$(printf '%s' "$1" | tr '-' '_')"; shift; command -v "$_udf_cmd" >/dev/null 2>&1 || die "The udf-devkit module is missing from this kit copy. Repair with: exakit update"; "$_udf_cmd" "$@" ;;
     # `exakit help --help` reaches this arm (the universal --help hook skips
