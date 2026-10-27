@@ -726,18 +726,18 @@ class ChecksTest(unittest.TestCase):
                 self.assertIn("answers on PYTHON3:", line, "a pre-matrix record is the official container")
 
     def test_mlflow(self):
-        with mock.patch.dict(sys.modules, {"mlflow": types.ModuleType("mlflow")}):
-            with mock.patch.dict(os.environ, {}, clear=True):
+        with tempfile.TemporaryDirectory() as kit_home, mock.patch.dict(sys.modules, {"mlflow": types.ModuleType("mlflow")}):
+            with mock.patch.dict(os.environ, {"EXAKIT_HOME": kit_home}, clear=True):
                 ok, line = self.said(exakit_nb.check_mlflow)
-            self.assertTrue(ok)
-            self.assertIn("local store", line)
-            with mock.patch.dict(os.environ, {"MLFLOW_TRACKING_URI": "http://me:s3cret@127.0.0.1:9"}):
-                ok, line = self.said(lambda: exakit_nb.check_mlflow(timeout=2))
-            self.assertFalse(ok)
-            self.assertIn("does not answer", line)
-            self.assertIn("Fix:", line)
-            self.assertNotIn("s3cret", line)
-            self.assertNotIn("me:", line)
+                self.assertTrue(ok)
+                self.assertIn("local store", line)
+                with mock.patch.dict(os.environ, {"MLFLOW_TRACKING_URI": "http://me:s3cret@127.0.0.1:9"}):
+                    ok, line = self.said(lambda: exakit_nb.check_mlflow(timeout=2))
+                self.assertFalse(ok)
+                self.assertIn("does not answer", line)
+                self.assertIn("Fix:", line)
+                self.assertNotIn("s3cret", line)
+                self.assertNotIn("me:", line)
         with mock.patch.dict(sys.modules, {"mlflow": None}):
             ok, line = self.said(exakit_nb.check_mlflow)
         self.assertFalse(ok)

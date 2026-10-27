@@ -652,6 +652,11 @@ udf_devkit_setup_rust() {
         manifest_set components.udf_devkit.python_alias "$EXAKIT_UDF_OFFICIAL_ALIAS"
         UDF_DONE_STEPS="$UDF_DONE_STEPS, {\"language\": \"python\", \"alias\": \"$EXAKIT_UDF_OFFICIAL_ALIAS\", \"step\": \"install\", \"action\": \"installed\"}"
     else
+        # Older kit manifests may not record a Python container already known
+        # to the launcher. Prove and adopt it so 01_train can select it.
+        udf_devkit_smoke "$_usr_python" || return 1
+        _udf_record_language python
+        manifest_set components.udf_devkit.python_alias "$_usr_python"
         ok "Python UDFs keep running on $_usr_python (training needs them); Rust adds to it"
         UDF_DONE_STEPS="$UDF_DONE_STEPS, {\"language\": \"python\", \"alias\": \"$_usr_python\", \"step\": \"install\", \"action\": \"kept\"}"
     fi

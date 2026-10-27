@@ -117,9 +117,9 @@ def _udf_devkit_record() -> dict[str, Any] | None:
 def installed_containers(record: dict[str, Any] | None = None) -> list[str]:
     """The container aliases the kit's manifest records as installed (``components.udf_devkit``, written by exakit
     udf-setup / udf-use): the keys of ``containers`` (PYTHON3_ML, RUST, a tarball of your own under its alias) and
-    PYTHON3 when the official container was installed - udf-setup records the language (``languages`` names python),
-    not an alias; a record from before the container matrix (no ``languages``) that was validated is the official
-    container too. ``record`` stands in for the manifest's block (tests, a copy you hold); [] without a record."""
+    the recorded ``python_alias`` when a Python container was adopted or installed - udf-setup records the language
+    (``languages`` names python); a record from before the container matrix (no ``languages``) that was validated
+    falls back to PYTHON3. ``record`` stands in for the manifest's block (tests, a copy you hold); [] without one."""
     if record is None:
         record = _udf_devkit_record()
     if not isinstance(record, dict):
@@ -128,8 +128,10 @@ def installed_containers(record: dict[str, Any] | None = None) -> list[str]:
     found = [str(alias).upper() for alias in containers] if isinstance(containers, dict) else []
     languages = record.get("languages")
     official = ("python" in str(languages).lower().split(",")) if languages is not None else bool(record.get("validated"))
-    if official and "PYTHON3" not in found:
-        found.append("PYTHON3")
+    if official:
+        alias = str(record.get("python_alias") or "PYTHON3").upper()
+        if alias not in found:
+            found.append(alias)
     return found
 
 

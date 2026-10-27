@@ -279,11 +279,11 @@ try {
     $script:UdfLanguage = "rust"
     Reset-Calls
     Check "the install succeeds" "True" (Install-UdfDevkit)
-    Check "the install goes down the rust path: slc custom install --alias RUST --language rust, then the smoke UDF over the library's /buckets path, held against the row's rustc and sdk" `
-        "stop dash-server|launcher slc custom install --source $cachedRs --alias RUST --language rust --auto-approve|wait|start dash-server|$smokeCall" ($script:calls -join "|")
+    Check "Rust and Python install with one restart, then both smoke UDFs run" `
+        "stop dash-server|launcher slc custom install --source $cachedRs --alias RUST --language rust --auto-approve --no-restart|launcher slc install PYTHON3 --auto-approve|wait|start dash-server|smoke PYTHON3|$smokeCall" ($script:calls -join "|")
     Check "the smoke library was verified into the cache before the install" "fake rust smoke aarch64" ([System.IO.File]::ReadAllText($cachedSo))
     Check "and copied into the bucket directory under udf/" "fake rust smoke aarch64" ([System.IO.File]::ReadAllText($bucketUdf))
-    Check "the language is recorded" "rust" (Get-ExakitManifestValue "components.udf_devkit.languages")
+    Check "both languages are recorded" "rust,python" (Get-ExakitManifestValue "components.udf_devkit.languages")
     Check "the url under the alias" "https://example.invalid/containers/lc-rust-fake.tar.gz" (Get-ExakitManifestValue "components.udf_devkit.containers.RUST")
     Check "validated, with the reported rustc and sdk" "True 1.98.1 0.33.0" ("" + (Get-ExakitManifestValue "components.udf_devkit.rust.validated") + " " + (Get-ExakitManifestValue "components.udf_devkit.rust.rustc") + " " + (Get-ExakitManifestValue "components.udf_devkit.rust.sdk"))
     Check "...and the add-on's flag" "True" ("" + (Get-ExakitManifestValue "components.udf_devkit.validated"))
@@ -294,6 +294,7 @@ try {
     $d = "$json" | ConvertFrom-Json
     Check "udf-setup --language rust --json: ok, alias RUST, the smoke lines (container, rustc, sdk)" "True rust RUST container=RUST,rustc=1.98.1,sdk=0.33.0,rustc_full=rustc 1.98.1 (48a229cea 2026-09-01)" `
         "$($d.ok) $($d.language) $($d.alias) $((@($d.smoke) | ForEach-Object { "$($_.package)=$($_.version)" }) -join ',')"
+    Check "the JSON names both language actions" "rust:installed|python:kept" ((@($d.steps) | ForEach-Object { "$($_.language):$($_.action)" }) -join "|")
     Check "a second language joins the record" "python,rust" (Get-ExakitManifestValue "components.udf_devkit.languages")
     $script:ExakitRefusalJson = $false; $script:UdfJson = $false; $script:ExakitQuietDetail = $false
     $script:installedAliases = @("RUST")
@@ -303,7 +304,7 @@ try {
     Contains "udf-use default updates an installed RUST, not installs it twice" "slc custom update --source $cachedRs --alias RUST" ($script:calls -join "|")
     Reset-Calls
     Invoke-CmdUdfSetup -CmdArgs @("--language", "rust", "--yes")
-    Check "udf-setup proves an installed RUST without a reinstall: no launcher call, the smoke UDF runs" $smokeCall ($script:calls -join "|")
+    Check "udf-setup proves both installed languages without a reinstall" "smoke PYTHON3|$smokeCall" ($script:calls -join "|")
     Reset-Calls
     Invoke-CmdUdfSetup -CmdArgs @("--language", "rust", "--yes", "--force")
     Contains "--force reinstalls it" "slc custom update --source $cachedRs --alias RUST" ($script:calls -join "|")
@@ -341,7 +342,7 @@ try {
     $said = ""
     try { Invoke-CmdUdfSetup -CmdArgs @("--language", "rust", "--yes") } catch { $said = "$_" }
     Contains "exit 7, step smoke, saying the pin is missing, exakit update as the remedy" "EXIT 7: rust/smoke: The Rust smoke UDF library for aarch64 is not pinned in this kit's versions.json yet (its sha256 is a placeholder (set after the first CI build)): the RUST container is installed (exasol slc list) but not proven. A kit update brings the pin. | exakit update" $said
-    Check "the container was installed, nothing ran as a smoke UDF" "stop dash-server|launcher slc custom install --source $cachedRs --alias RUST --language rust --auto-approve|wait|start dash-server" ($script:calls -join "|")
+    Check "the Rust smoke did not run after the missing asset" "stop dash-server|launcher slc custom install --source $cachedRs --alias RUST --language rust --auto-approve|wait|start dash-server|smoke PYTHON3" ($script:calls -join "|")
     Check "the add-on is not validated" "False" ("" + (Get-ExakitManifestValue "components.udf_devkit.validated"))
     $script:VersionsDocPath = $goodDoc
 

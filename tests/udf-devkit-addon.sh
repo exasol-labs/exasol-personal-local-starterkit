@@ -344,7 +344,7 @@ contains "the cached smoke library is reused" "Using the cached smoke UDF librar
 out="$(mscenario "$WORK/versions.json" 'udf_devkit_installed_aliases() { echo RUST; }; cmd_udf_use default --language rust --yes' 2>&1)"
 contains "udf-use default updates an installed RUST, not installs it twice" "slc custom update --source $CACHE/lc-rust-fake.tar.gz --alias RUST" "$(cat "$WORK/calls")"
 out="$(mscenario "$WORK/versions.json" 'udf_devkit_installed_aliases() { echo RUST; }; cmd_udf_setup --language rust --yes' 2>&1)"
-check "udf-setup proves an installed RUST without a reinstall: no launcher call, the smoke UDF runs" "smoke-rust smoke-rust RUST STARTER_KIT /buckets/bfsdefault/default/udf/libexakit_smoke.so 1.98.1 0.33.0|" "$(grep -v "slc list" "$WORK/calls" | tr '\n' '|')"
+check "udf-setup proves both installed languages without a reinstall" "smoke PYTHON3|smoke-rust smoke-rust RUST STARTER_KIT /buckets/bfsdefault/default/udf/libexakit_smoke.so 1.98.1 0.33.0|" "$(grep -v "slc list" "$WORK/calls" | tr '\n' '|')"
 contains "and says so" "The RUST container is already installed" "$out"
 out="$(mscenario "$WORK/versions.json" 'udf_devkit_installed_aliases() { echo RUST; }; cmd_udf_setup --language rust --yes --force' 2>&1)"
 contains "--force reinstalls it" "slc custom update --source $CACHE/lc-rust-fake.tar.gz --alias RUST" "$(cat "$WORK/calls")"

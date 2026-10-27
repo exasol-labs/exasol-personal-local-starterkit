@@ -281,7 +281,9 @@ function Write-UdfDone {
         if ($c.DbArch) { $container.arch = "" + $c.DbArch }
         if ($c.db_versions) { $container.db_versions = "" + $c.db_versions }
     }
-    Write-Output ([ordered]@{ ok = $true; language = $Language; alias = $Alias; container = $container; smoke = @($smoke) } | ConvertTo-Json -Compress -Depth 5)
+    $answer = [ordered]@{ ok = $true; language = $Language; alias = $Alias; container = $container; smoke = @($smoke) }
+    if ($Language -eq "rust" -and $script:UdfDoneSteps) { $answer.steps = @($script:UdfDoneSteps) }
+    Write-Output ($answer | ConvertTo-Json -Compress -Depth 5)
 }
 
 # Get-UdfLanguageProblem - "" when the value is python or rust, else the reason.
@@ -682,23 +684,66 @@ function Install-UdfDevkitRust {
     } elseif ($script:UdfSmokeCorrupt) {
         return (Set-UdfFail -Code 7 -Step "verify" -Remedy "exakit update" -Message "Rust smoke library refused: $($script:UdfSmokeWhy)")
     }
-    $verb = "install"
-    if (@(Get-UdfDevkitInstalledAliases) -contains $script:UdfRustAlias) { $verb = "update" }
+    $aliases = @(Get-UdfDevkitInstalledAliases)
+    $verb = if ($aliases -contains $script:UdfRustAlias) { "update" } else { "install" }
+    $pythonAlias = ""
+    foreach ($candidate in @($script:UdfOfficialAlias, $script:UdfDefaultAlias, $script:UdfBuildAlias)) {
+        if ($aliases -contains $candidate) { $pythonAlias = $candidate; break }
+    }
+    if (-not $pythonAlias -and (("" + (Get-ExakitManifestValue "components.udf_devkit.languages")) -split "," -contains "python")) {
+        $pythonAlias = "" + (Get-ExakitManifestValue "components.udf_devkit.python_alias")
+        if (-not $pythonAlias) { $pythonAlias = $script:UdfOfficialAlias }
+    }
+    $addPython = -not $pythonAlias
+    $script:UdfDoneSteps = @()
+    $rustAction = "kept"
     if ($verb -eq "update" -and -not $Force) {
         Ok "The $($script:UdfRustAlias) container is already installed"
+        if ($addPython) {
+            Info "Rust adds to Python, never replaces it: installing the official $($script:UdfOfficialAlias) container for training"
+            $done = Invoke-UdfWithRestart -What "Installing the official $($script:UdfOfficialAlias) container beside $($script:UdfRustAlias)" -Action {
+                (Invoke-UdfSlc -SlcArgs @("install", $script:UdfOfficialAlias, "--auto-approve"))[0] -eq 0 }
+            if (-not $done) {
+                if ($script:UdfDeclined) { return (Set-UdfFail -Code 5 -Step "install" -Remedy "exakit udf-setup --language rust --yes" -Message "The install was not confirmed; nothing changed.") }
+                return (Set-UdfFail -Code 6 -Step "install" -Remedy "exakit logs" -Message "The launcher could not install the $($script:UdfOfficialAlias) container (see: exakit logs).")
+            }
+        }
     } else {
+        $rustAction = "installed"
         $file = $script:UdfContainerFile
-        $done = Invoke-UdfWithRestart -What "Installing the $($script:UdfRustAlias) container" -Action {
-            (Invoke-UdfSlc -SlcArgs @("custom", $verb, "--source", $file, "--alias", $script:UdfRustAlias, "--language", "rust", "--auto-approve"))[0] -eq 0 }
+        $what = "Installing the $($script:UdfRustAlias) container"
+        if ($addPython) {
+            Info "Rust adds to Python, never replaces it: installing both containers with one restart"
+            $what = "Installing the $($script:UdfRustAlias) and $($script:UdfOfficialAlias) containers"
+        }
+        $done = Invoke-UdfWithRestart -What $what -Action {
+            $command = @("custom", $verb, "--source", $file, "--alias", $script:UdfRustAlias, "--language", "rust", "--auto-approve")
+            if ($addPython) { $command += "--no-restart" }
+            if ((Invoke-UdfSlc -SlcArgs $command)[0] -ne 0) { return $false }
+            if ($addPython) { return ((Invoke-UdfSlc -SlcArgs @("install", $script:UdfOfficialAlias, "--auto-approve"))[0] -eq 0) }
+            return $true
+        }
         if (-not $done) {
             if ($script:UdfDeclined) { return (Set-UdfFail -Code 5 -Step "install" -Remedy "exakit udf-setup --language rust --yes" -Message "The install was not confirmed; nothing changed.") }
-            return (Set-UdfFail -Code 6 -Step "install" -Remedy "exakit logs" -Message "The launcher could not install the $($script:UdfRustAlias) container (see: exakit logs).")
+            return (Set-UdfFail -Code 6 -Step "install" -Remedy "exakit logs" -Message "The launcher could not install the $($script:UdfRustAlias) or $($script:UdfOfficialAlias) container (see: exakit logs).")
         }
         Set-ExakitManifestValue "components.udf_devkit.containers.$($script:UdfRustAlias)" ("" + $script:UdfContainer.url)
         $sdk = (@(Get-UdfContainerPins -Language "rust") | Where-Object { $_ -like "exasol-udf-sdk==*" } | Select-Object -First 1) -replace "^.*==", ""
         Ok "Rust UDFs: the $($script:UdfRustAlias) container is installed (rustc $($script:UdfContainer.runtime.rustc), exasol-udf-sdk $sdk)"
     }
     Add-UdfLanguage "rust"
+    $script:UdfDoneSteps += [ordered]@{ language = "rust"; alias = $script:UdfRustAlias; step = "install"; action = $rustAction }
+    if ($addPython) {
+        if (-not (Test-UdfDevkitSmoke -Alias $script:UdfOfficialAlias)) { return $false }
+        Add-UdfLanguage "python"
+        Set-ExakitManifestValue "components.udf_devkit.python_alias" $script:UdfOfficialAlias
+        $script:UdfDoneSteps += [ordered]@{ language = "python"; alias = $script:UdfOfficialAlias; step = "install"; action = "installed" }
+    } else {
+        if (-not (Test-UdfDevkitSmoke -Alias $pythonAlias)) { return $false }
+        Add-UdfLanguage "python"
+        Set-ExakitManifestValue "components.udf_devkit.python_alias" $pythonAlias
+        $script:UdfDoneSteps += [ordered]@{ language = "python"; alias = $pythonAlias; step = "install"; action = "kept" }
+    }
     $script:UdfSmokeLines = @()
     if (-not $script:UdfSmokeFile) {
         Set-ExakitManifestValue "components.udf_devkit.rust.validated" $false

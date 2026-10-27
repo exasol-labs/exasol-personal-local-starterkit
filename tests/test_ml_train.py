@@ -70,6 +70,8 @@ class ContainerTest(unittest.TestCase):
         official_only = {"languages": "python", "validated": True}
         self.assertEqual(ml_train.udf_container(official_only), "PYTHON3")
         self.assertEqual(ml_train.installed_containers({"languages": "rust,python", "containers": {"RUST": "u"}}), ["RUST", "PYTHON3"])
+        self.assertEqual(ml_train.installed_containers({"languages": "rust,python", "python_alias": "PYTHON3_CUSTOM",
+                                                         "containers": {"RUST": "u"}}), ["RUST", "PYTHON3_CUSTOM"])
 
     def test_a_record_from_before_the_matrix_is_the_official_container(self):
         self.assertEqual(ml_train.udf_container({"version": "0.1.0", "validated": True, "models": {}}), "PYTHON3")
