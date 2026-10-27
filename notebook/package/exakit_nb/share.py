@@ -108,13 +108,15 @@ class ShareDraft:
         if current_workflow() != self.workflow_id:
             raise RuntimeError(f"Resume workflow {self.workflow_id} before previewing this dashboard.")
         manifest = json.loads((home() / "manifest.json").read_text(encoding="utf-8"))
-        readonly = manifest["components"]["mcp_server"]["connection"]
-        if readonly.get("validated") is not True or not readonly.get("user"):
+        readonly = (manifest.get("components", {}).get("mcp_server") or {}).get("connection") or {}
+        admin = manifest.get("runtime", {}).get("user", "")
+        if (readonly.get("validated") is not True or not readonly.get("user")
+                or readonly["user"].upper() == admin.upper()):
             raise RuntimeError("The read-only identity is not validated. Run exakit mcp-doctor.")
         profile = _unwrap(tool("exasol_profile_validate", {"name": profile_name}))
         bound = profile.get("profile", {})
         if (not profile.get("is_valid") or bound.get("user", "").upper() != readonly["user"].upper()
-                or bound.get("dsn") != manifest["runtime"]["dsn"]):
+                or bound.get("dsn") != manifest.get("runtime", {}).get("dsn")):
             raise RuntimeError("Dash Server profile must validate as the kit's read-only user and database. Run exakit mcp-setup and restart dash-server.")
         if windows is None:
             windows = sys.platform == "win32"

@@ -39,6 +39,8 @@ def dash_server_url() -> str:
     url = status.get("urls", {}).get("dash-server")
     if not isinstance(url, str):
         raise RuntimeError("Dash Server is not running. Run exakit marketplace dash-server, exakit mcp-setup, and exakit start.")
+    if status.get("services", {}).get("dash-server") != "running":
+        raise RuntimeError("Dash Server is stopped. Run exakit start dash-server and retry.")
     return _local_url(url)
 
 

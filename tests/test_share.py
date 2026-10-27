@@ -57,7 +57,7 @@ class ShareTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         home = Path(self.temp.name)
-        (home / "manifest.json").write_text(json.dumps({"runtime": {"dsn": "127.0.0.1:8563"},
+        (home / "manifest.json").write_text(json.dumps({"runtime": {"dsn": "127.0.0.1:8563", "user": "SYS"},
             "components": {"mcp_server": {"connection": {"validated": True, "user": "MCP_READONLY"}}}}))
         self.env = patch.dict(os.environ, {"EXAKIT_HOME": str(home)}, clear=False)
         self.env.start()
@@ -90,6 +90,22 @@ class ShareTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "read-only user"):
             draft.preview(tool)
         self.assertEqual(len(tool.calls), 1)
+
+    def test_missing_or_admin_mcp_identity_refused_before_tool_call(self):
+        draft = share(Dataset(), "SELECT 1", "Example", "example")
+        path = Path(self.temp.name) / "manifest.json"
+        manifest = json.loads(path.read_text())
+        manifest["components"].pop("mcp_server")
+        path.write_text(json.dumps(manifest))
+        tool = Tools()
+        with self.assertRaisesRegex(RuntimeError, "mcp-doctor"):
+            draft.preview(tool)
+        self.assertFalse(tool.calls)
+        manifest["components"]["mcp_server"] = {"connection": {"validated": True, "user": "SYS"}}
+        path.write_text(json.dumps(manifest))
+        with self.assertRaisesRegex(RuntimeError, "mcp-doctor"):
+            draft.preview(tool)
+        self.assertFalse(tool.calls)
 
     def test_draft_or_write_sql_refused(self):
         dataset = Dataset()
@@ -126,10 +142,13 @@ class ShareTests(unittest.TestCase):
 
     def test_dash_endpoint_comes_from_status_and_stays_local(self):
         class Result:
-            stdout = '{"urls":{"dash-server":"http://127.0.0.1:5101"}}'
+            stdout = '{"urls":{"dash-server":"http://127.0.0.1:5101"},"services":{"dash-server":"running"}}'
         with patch("exakit_nb.dash_mcp.subprocess.run", return_value=Result()):
             self.assertEqual(dash_server_url(), "http://127.0.0.1:5101")
-            Result.stdout = '{"urls":{"dash-server":"https://remote.example"}}'
+            Result.stdout = '{"urls":{"dash-server":"http://127.0.0.1:5101"},"services":{"dash-server":"stopped"}}'
+            with self.assertRaisesRegex(RuntimeError, "stopped"):
+                dash_server_url()
+            Result.stdout = '{"urls":{"dash-server":"https://remote.example"},"services":{"dash-server":"running"}}'
             with self.assertRaisesRegex(RuntimeError, "unexpected"):
                 dash_server_url()
 
