@@ -83,7 +83,7 @@ try {
 
     Write-Host "list and show read the logs through the kit's notebook Python:"
     Run @("list");            Check "no workflows yet is still exit 0" 0 $CODE; Contains "and says so" "No workflows yet" $OUT
-    $started = & $script:StubPython -c 'import exakit_nb.workflow as w; wid = w.workflow("demo"); w.log_event(w.SQL, sql="SELECT 1", rows=1)'
+    $started = & $script:StubPython -c 'import importlib; w = importlib.import_module("exakit_nb.workflow"); wid = w.workflow("demo"); w.log_event(w.SQL, sql="SELECT 1", rows=1)'
     $wf = ("$started" -replace '^Workflow ([^:]*):.*$', '$1').Trim()
     Contains "the helper started a workflow" "wf-" $wf
     Check "its log is under the kit home" $true (Test-Path (Join-Path (Join-Path $env:EXAKIT_HOME "workflows") "$wf.jsonl"))
