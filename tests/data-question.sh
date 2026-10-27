@@ -119,7 +119,7 @@ if command -v python3 >/dev/null 2>&1; then
     out="$(TTY_REPLAY_COLS=80 replay '\r' DQ_PERSONA=1 EXAKIT_DATASETS_PRESELECT=banking_complaints)"
     has "the table draws once" "1 top borders, 1 bottom borders" "$out"
     has "a For column" "For" "$(printf '%s\n' "$out" | grep 'Dataset')"
-    has "the persona is shown in full" "Data Scientist, ML Engineer" "$out"
+    has "the persona is shown in full" "both personas" "$out"
     has "and the dataset name is not cut" "Smart-meter energy readings" "$out"
     has "nor your own file" "Upload a file or folder: CSV/Parquet/JSON" "$out"
     has "nor the external source" "Connect an external source - coming soon" "$out"
@@ -195,7 +195,7 @@ out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H retail benchmark (~175k 
         exakit_data_table_build "$WORK/table"
         printf '%s~%s~%s' "$EXAKIT_TABLE_HAS_FOR" "$(cut -d'|' -f2 "$WORK/table" | tr '\n' ';')" "$(cut -d'|' -f11 "$WORK/table" | tr '\n' ';')") )"
 check "the names stay names; the personas go in column 2" \
-    "1~Sample datasets;TPC-H retail benchmark;Pharma clinical trials;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - coming soon;Skip;~;;Data Scientist, ML Engineer;;;;" "$out"
+    "1~Sample datasets;TPC-H retail benchmark;Pharma clinical trials;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - coming soon;Skip;~;;both personas;;;;" "$out"
 out="$( (exakit_persona_dataset_hints() { :; }
         exakit_pending_datasets() { printf 'tpch|TPC-H retail benchmark\n'; }
         exakit_data_table_build "$WORK/table"; printf '%s' "$EXAKIT_TABLE_HAS_FOR") )"

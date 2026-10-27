@@ -150,7 +150,7 @@ try {
     Set-Pending @("tpch", "pharma_trials")
     New-ExakitDataTable -FinalLabel "Skip"
     Check "the names stay names" "Sample datasets;tpch label;pharma_trials label;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - coming soon;Skip" ((@($script:UiTable.Rows | ForEach-Object { $_.Label })) -join ";")
-    Check "the personas go in column 2" ";;Data Scientist, ML Engineer;;;" ((@($script:UiTable.Rows | ForEach-Object { $_.Col2 })) -join ";")
+    Check "the personas go in column 2" ";;both personas;;;" ((@($script:UiTable.Rows | ForEach-Object { $_.Col2 })) -join ";")
     Check "the table knows it has them" "True" "$($script:ExakitTableHasFor)"
     $chosen = @(Select-ExakitDataLoad -FinalLabel "Skip")
     Check "the For column is up while the reader picks" "For" $script:Col2AtMenu

@@ -197,13 +197,26 @@ def value(root: Path, persona_id: str, key: str) -> str:
 
 
 def dataset_hints(root: Path) -> list:
-    """dataset|titles of the offered personas that name it (a persona naming "all" is not listed: it names everything)."""
+    """dataset|titles of the offered personas that name it (a persona naming "all" is not listed: it names everything).
+
+    A dataset every offered persona names says "both personas" (or "all personas" with three or more) instead of
+    the titles: "Data Scientist, ML Engineer" is 27 columns, and in the data table's For column that pushed the
+    41-column upload and external-source labels past 80 columns, where the name column yields first and both
+    were cut short. The short form says the same thing and leaves the names whole."""
     hints: dict = {}
+    offered = 0
     for doc in personas(root).values():
         if doc.get("picker") and isinstance(doc.get("datasets"), list):
+            offered += 1
             for ds in doc["datasets"]:
                 hints.setdefault(ds, []).append(doc["title"])
-    return [f"{ds}|{', '.join(titles)}" for ds, titles in hints.items()]
+    out = []
+    for ds, titles in hints.items():
+        if offered > 1 and len(titles) == offered:
+            out.append(f"{ds}|{'both' if offered == 2 else 'all'} personas")
+        else:
+            out.append(f"{ds}|{', '.join(titles)}")
+    return out
 
 
 def show(root: Path, persona_id: str) -> list:

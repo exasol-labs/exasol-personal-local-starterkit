@@ -48,7 +48,7 @@ try {
     Check "one unknown among several is not known" "" "$(Get-ExakitPersona 'data-scientist,nope')"
     Clear-Answers; $env:EXAKIT_PERSONA = "data-scientist,ml-engineer"; Set-ExakitPersonaEnv
     Check "their datasets and add-ons together, each once" "pharma_trials,banking_complaints|all|notebook,udf-devkit" (Answers)
-    Check "each dataset is named with the personas it is for" "Data Scientist, ML Engineer" ((Get-ExakitPersonaDatasetHints)["pharma_trials"])
+    Check "each dataset is named with the personas it is for" "both personas" ((Get-ExakitPersonaDatasetHints)["pharma_trials"])
     Write-Host "the data question (one table) ticks the personas' datasets:"
     function Get-ExakitPendingDatasets { return @([pscustomobject]@{ Id = "tpch"; Label = "TPC-H retail benchmark (~175k rows)" },
                                                   [pscustomobject]@{ Id = "pharma_trials"; Label = "Pharma clinical trials (ClinicalTrials.gov, ~5k)" }) }
@@ -58,7 +58,7 @@ try {
     $labels = (@($script:UiTable.Rows | ForEach-Object { $_.Label }) -join ";")
     $for = (@($script:UiTable.Rows | ForEach-Object { $_.Col2 }) -join ";")
     Check "the persona's row ticked, the file and external rows after the datasets, each named for its persona in the For column" `
-        "3~4~Sample datasets;TPC-H retail benchmark;Pharma clinical trials;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - coming soon;Skip~;;Data Scientist, ML Engineer;;;" `
+        "3~4~Sample datasets;TPC-H retail benchmark;Pharma clinical trials;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - coming soon;Skip~;;both personas;;;" `
         "$($script:ExakitTableDefaults -join ',')~$($script:ExakitTableRowLocal)~$labels~$for"
     $env:EXAKIT_PERSONA_ACTIVE = "1"
     New-ExakitDataTable -FinalLabel "Skip"

@@ -108,7 +108,7 @@ out="$( (unset EXAKIT_DATASETS EXAKIT_MCP_CLIENTS EXAKIT_MARKETPLACE_ADDONS EXAK
         export EXAKIT_PERSONA=data-scientist,ml-engineer; exakit_persona_apply_env >/dev/null 2>&1
         printf '%s|%s|%s' "$EXAKIT_DATASETS" "$EXAKIT_MCP_CLIENTS" "$EXAKIT_MARKETPLACE_ADDONS") )"
 check "their datasets and add-ons together, each once" "pharma_trials,banking_complaints|all|notebook,udf-devkit" "$out"
-check "each dataset is named with the personas it is for" "pharma_trials|Data Scientist, ML Engineer" \
+check "each dataset is named with the personas it is for" "pharma_trials|both personas" \
     "$(exakit_persona_dataset_hints | grep '^pharma_trials|')"
 
 echo "the data question: one table, the personas' datasets ticked:"
@@ -128,7 +128,7 @@ out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H retail benchmark (~175k 
         printf '%s~%s~%s~%s' "$EXAKIT_TABLE_DEFAULTS" "$EXAKIT_TABLE_ROW_LOCAL" "$(cut -d'|' -f2 "$WORK/table" | tr '\n' ';')" \
             "$(cut -d'|' -f11 "$WORK/table" | tr '\n' ';')") )"
 check "the persona's row ticked, the file and external rows after the datasets, each named for its persona in the For column" \
-    "3~4~Sample datasets;TPC-H retail benchmark;Pharma clinical trials;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - coming soon;Skip;~;;Data Scientist, ML Engineer;;;;" "$out"
+    "3~4~Sample datasets;TPC-H retail benchmark;Pharma clinical trials;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - coming soon;Skip;~;;both personas;;;;" "$out"
 out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H retail benchmark (~175k rows)\npharma_trials|Pharma clinical trials (ClinicalTrials.gov, ~5k)\n'; }
         EXAKIT_PERSONA_ACTIVE=1 EXAKIT_DATASETS_PRESELECT=pharma_trials; exakit_data_table_build "$WORK/table"
         printf '%s~%s' "$EXAKIT_TABLE_DEFAULTS" "$(cut -d'|' -f2 "$WORK/table" | tr '\n' ';')") )"
