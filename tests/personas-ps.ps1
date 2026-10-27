@@ -37,18 +37,18 @@ try {
         Check "$($id): add-ons" ((@($doc.addons)) -join ",") (Get-ExakitPersonaValue $id "addons")
     }
     Write-Host "the three personas the install question offers, each with its own data:"
-    Check "the question offers AI Scientist, then ML Engineer" "data-scientist,ml-engineer" `
+    Check "the question offers Data Scientist, then ML Engineer" "data-scientist,ml-engineer" `
         ((@(Invoke-ExakitPersonaService "picker") | ForEach-Object { ("$_" -split '\|')[0] }) -join ",")
     Check "no persona: the kit's own samples (default=yes)" "tpch,energy,weather" (@(Invoke-ExakitPersonaService "default-datasets") -join "")
     Check "data-scientist: Pharma and Banking" "pharma_trials,banking_complaints" (Get-ExakitPersonaValue "data-scientist" "datasets")
     Check "ml-engineer: Pharma and Banking" "pharma_trials,banking_complaints" (Get-ExakitPersonaValue "ml-engineer" "datasets")
     Write-Host "several personas ticked together are combined by the service:"
-    Check "the title names each" "AI Scientist + ML Engineer" (@(Invoke-ExakitPersonaService "title" "ml-engineer,data-scientist") -join "")
+    Check "the title names each" "Data Scientist + ML Engineer" (@(Invoke-ExakitPersonaService "title" "ml-engineer,data-scientist") -join "")
     Check "a known list reads back in the kit's order" "data-scientist,ml-engineer" (Get-ExakitPersona "ml-engineer,data-scientist")
     Check "one unknown among several is not known" "" "$(Get-ExakitPersona 'data-scientist,nope')"
     Clear-Answers; $env:EXAKIT_PERSONA = "data-scientist,ml-engineer"; Set-ExakitPersonaEnv
     Check "their datasets and add-ons together, each once" "pharma_trials,banking_complaints|all|notebook,udf-devkit" (Answers)
-    Check "each dataset is named with the personas it is for" "AI Scientist, ML Engineer" ((Get-ExakitPersonaDatasetHints)["pharma_trials"])
+    Check "each dataset is named with the personas it is for" "Data Scientist, ML Engineer" ((Get-ExakitPersonaDatasetHints)["pharma_trials"])
     Write-Host "the data question (one table) ticks the personas' datasets:"
     function Get-ExakitPendingDatasets { return @([pscustomobject]@{ Id = "tpch"; Label = "TPC-H retail benchmark (~175k rows)" },
                                                   [pscustomobject]@{ Id = "pharma_trials"; Label = "Pharma clinical trials (ClinicalTrials.gov, ~5k)" }) }
@@ -58,7 +58,7 @@ try {
     $labels = (@($script:UiTable.Rows | ForEach-Object { $_.Label }) -join ";")
     $for = (@($script:UiTable.Rows | ForEach-Object { $_.Col2 }) -join ";")
     Check "the persona's row ticked, the file and external rows after the datasets, each named for its persona in the For column" `
-        "3~4~Sample datasets;TPC-H retail benchmark;Pharma clinical trials;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - coming soon;Skip~;;AI Scientist, ML Engineer;;;" `
+        "3~4~Sample datasets;TPC-H retail benchmark;Pharma clinical trials;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - coming soon;Skip~;;Data Scientist, ML Engineer;;;" `
         "$($script:ExakitTableDefaults -join ',')~$($script:ExakitTableRowLocal)~$labels~$for"
     $env:EXAKIT_PERSONA_ACTIVE = "1"
     New-ExakitDataTable -FinalLabel "Skip"
@@ -165,15 +165,15 @@ try {
     $said = PersonaCmd @("add", "ml-engineer")
     Check "no --yes, no console: it runs" $true ($said -notlike "*THREW*" -and $script:ExakitPersonaAddOk)
     Check "the personas recorded are the union, in the kit's order" "data-scientist,ml-engineer|add" "$(Get-ExakitManifestValue 'persona.id')|$(Get-ExakitManifestValue 'persona.source')"
-    Check "the title line names the persona added and the set it makes" $true ($said -like "*Adding persona: ML Engineer (now AI Scientist + ML Engineer)*")
+    Check "the title line names the persona added and the set it makes" $true ($said -like "*Adding persona: ML Engineer (now Data Scientist + ML Engineer)*")
     Check "three steps headed like the installer's" $true ($said -like "*Step 1/3  Sample data*Step 2/3  AI clients*Step 3/3  Add-ons*")
     Check "a dataset already loaded is said, not redone" $true ($said -like "*Already loaded: Pharma clinical trials*")
     Check "an add-on already installed is said, not redone" $true ($said -like "*Already installed: notebook*")
     Check "the steps, in order, each handed only what is missing (no console: plain lines)" `
         "data-load datasets=banking_complaints preselect= auto=;mcp-setup clients=all preselect= auto=;marketplace addons=udf-devkit only= auto=" ($script:Steps -join ";")
-    Check "one closing line names the whole set" $true ($said -like "*Persona added: AI Scientist + ML Engineer*")
+    Check "one closing line names the whole set" $true ($said -like "*Persona added: Data Scientist + ML Engineer*")
     $said = (& { Invoke-CmdPersona -CmdArgs @("list") } 6>&1 | Out-String)
-    Check "list says what this kit was set up as, by title" $true ($said -like "*This kit was set up as: AI Scientist + ML Engineer*")
+    Check "list says what this kit was set up as, by title" $true ($said -like "*This kit was set up as: Data Scientist + ML Engineer*")
     Check "...and how to add one" $true ($said -like "*exakit persona add <id>*")
     # On a console the steps draw the installer's tables, taken without asking.
     Set-ExakitManifestValue "persona.id" "data-scientist"
@@ -203,7 +203,7 @@ try {
     $script:FailStep = ""
     Check "a step that fails: not finished (the command exits 1)" $false $script:ExakitPersonaAddOk
     Check "...the others still run" "data-load mcp-setup marketplace" (($script:Steps | ForEach-Object { ($_ -split ' ')[0] }) -join " ")
-    Check "...the closing line says not everything finished" $true ($said -like "*Persona added: AI Scientist + ML Engineer - not everything finished*")
+    Check "...the closing line says not everything finished" $true ($said -like "*Persona added: Data Scientist + ML Engineer - not everything finished*")
     Check "...and the one command that retries the part" $true ($said -like "*Sample data did not finish - retry with: `$env:EXAKIT_DATASETS = 'banking_complaints'; exakit data-load*")
     Check "...only that part" $false ($said -like "*AI clients did not finish*" -or $said -like "*Add-ons did not finish*")
     Set-ExakitManifestValue "persona.id" ""

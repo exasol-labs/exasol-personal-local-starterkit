@@ -11,7 +11,7 @@ P-1), both on the two reference datasets, Pharma and Banking:
 
 | Persona | Datasets | AI clients | Add-ons | First notebook |
 |---|---|---|---|---|
-| `data-scientist` (AI Scientist) | `pharma_trials`, `banking_complaints` | all detected | `notebook` | `data-scientist/00_quickstart.ipynb` |
+| `data-scientist` (Data Scientist) | `pharma_trials`, `banking_complaints` | all detected | `notebook` | `data-scientist/00_quickstart.ipynb` |
 | `ml-engineer` (ML Engineer) | `pharma_trials`, `banking_complaints` | all detected | `notebook`, `udf-devkit` | `ml-engineer/00_quickstart.ipynb` |
 
 Pick one with `EXAKIT_PERSONA` on the install command:
@@ -24,7 +24,7 @@ curl -fsSL https://www.exasol.com/install/starter-kit.sh | EXAKIT_PERSONA=ml-eng
 **On a terminal without `EXAKIT_PERSONA`** the install asks, after the parts
 everyone needs (the database, exapump, the AI bridge):
 
-1. *What will you use this machine for?* - AI Scientist, ML Engineer (one or
+1. *What will you use this machine for?* - Data Scientist, ML Engineer (one or
    both), or None - just the kit, which is ticked to begin with.
 2. *Data to load* - one table: **Sample datasets** is the parent row with the
    datasets under it (a For column names the persona each is for, and the
@@ -50,7 +50,7 @@ On an installed kit: `exakit persona list`, `exakit persona show <id>`,
 shows what a persona brings and what of it is still pending - after an
 `EXAKIT_PERSONA` install, nothing (AC-P1.1).
 
-`exakit persona add ml-engineer` on a kit set up as AI Scientist makes it both:
+`exakit persona add ml-engineer` on a kit set up as Data Scientist makes it both:
 the record becomes `data-scientist,ml-engineer`, and what the two bring that is
 not here yet comes in - nothing is asked. Three steps, headed like the
 installer's (*Step 1/3 Sample data*, *2/3 AI clients*, *3/3 Add-ons*), each
@@ -58,7 +58,7 @@ showing the installer's own table with its defaults ticked and filling it in as
 it works; what is already here is named in one line instead (*Already loaded:
 Pharma clinical trials*). Without a terminal the same happens in plain lines.
 A part that fails does not stop the others; the closing line says *Persona
-added: AI Scientist + ML Engineer*, or names each part that did not finish and
+added: Data Scientist + ML Engineer*, or names each part that did not finish and
 the command that retries it (exit 1). `apply` is the same command, and `--yes`
 is accepted.
 

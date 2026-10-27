@@ -23,7 +23,7 @@ def _(mo):
     - **How long:** about five minutes, most of it loading the sample the first time.
 
     First the three things training depends on, one cell each: each prints `ok` with what it found, or `FAIL` with the
-    reason and the fix. Then the same loader cells as the AI Scientist's quickstart.
+    reason and the fix. Then the same loader cells as the Data Scientist's quickstart.
     """)
     return
 

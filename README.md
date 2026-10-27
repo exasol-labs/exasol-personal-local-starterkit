@@ -39,7 +39,7 @@ Install the Exasol starter kit from https://github.com/exasol-labs/exasol-person
 
 </div>
 
-Set up for a role in one go: `curl -fsSL https://www.exasol.com/install/starter-kit.sh | EXAKIT_PERSONA=data-scientist sh` installs the AI Scientist's set - the Pharma and Banking reference datasets, every AI client, the notebook add-on - and `EXAKIT_PERSONA=ml-engineer` adds the UDF dev kit. Without it, the installer asks (or installs the kit on its own when nobody is at the terminal). Add another one later with `exakit persona add ml-engineer`: the kit is then both, and what the new one brings is loaded, connected and installed without a question. See [personas/](personas/README.md).
+Set up for a role in one go: `curl -fsSL https://www.exasol.com/install/starter-kit.sh | EXAKIT_PERSONA=data-scientist sh` installs the Data Scientist's set - the Pharma and Banking reference datasets, every AI client, the notebook add-on - and `EXAKIT_PERSONA=ml-engineer` adds the UDF dev kit. Without it, the installer asks (or installs the kit on its own when nobody is at the terminal). Add another one later with `exakit persona add ml-engineer`: the kit is then both, and what the new one brings is loaded, connected and installed without a question. See [personas/](personas/README.md).
 
 ---
 
@@ -71,7 +71,7 @@ The base install stays small. When you want more, you pick an add-on by the outc
 | [JSON&nbsp;Tables](https://github.com/exasol-labs/exasol-json-tables) | JSON files, nested ones included, turned into tables you can query |
 | [Exasol&nbsp;Scheduler](https://github.com/exasol-labs/exasol-scheduler) | SQL that runs on a timetable inside the database. The jobs are rows in a table |
 | [dbt-exasol](https://github.com/exasol/dbt-exasol) | Repeatable SQL models built, tested and documented with dbt against the local database |
-| [Notebooks](https://github.com/exasol/notebook-connector) | JupyterLab connected to the local database (no password in any notebook): a quickstart and an explore notebook for the AI Scientist, a quickstart, a training notebook (runs logged to your MLflow) and a scoring notebook for the ML Engineer, all on any described dataset. JupyterLab, Marimo or your Positron: `exakit notebook` |
+| [Notebooks](https://github.com/exasol/notebook-connector) | JupyterLab connected to the local database (no password in any notebook): a quickstart and an explore notebook for the Data Scientist, a quickstart, a training notebook (runs logged to your MLflow) and a scoring notebook for the ML Engineer, all on any described dataset. JupyterLab, Marimo or your Positron: `exakit notebook` |
 | UDF&nbsp;dev&nbsp;kit | Python UDFs on the local database: `exakit udf-setup` installs the Python container (the database restarts), `udf-build` builds one from your pinned requirements, `model put` brings in a model trained anywhere (digest recorded) and `model template` makes the scoring UDF for it |
 
 

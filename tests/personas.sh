@@ -10,7 +10,7 @@
 #     machine path; and the Python-free shell reader reads it the way a JSON
 #     parser does
 #   - the three personas the install question offers, each with its own data:
-#     the two personas of the TDD/BRD: AI Scientist (data-scientist: Pharma and
+#     the two personas of the TDD/BRD: Data Scientist (data-scientist: Pharma and
 #     Banking, the notebook add-on) and ML Engineer (the same plus udf-devkit)
 #   - the persona service (setup/lib/persona_service.py) combines several, and
 #     the data question (one "Data to load" table) ticks their datasets and
@@ -82,7 +82,7 @@ for id in $ids; do
 done
 
 echo "the three personas the install question offers, each with its own data:"
-check "the question offers AI Scientist, then ML Engineer" "data-scientist,ml-engineer" \
+check "the question offers Data Scientist, then ML Engineer" "data-scientist,ml-engineer" \
     "$(_exakit_persona_service picker | cut -d'|' -f1 | tr '\n' ',' | sed 's/,$//')"
 check "no persona: the kit's own samples (default=yes)" "tpch,energy,weather" "$(_exakit_persona_service default-datasets)"
 check "data-scientist: Pharma and Banking" "pharma_trials,banking_complaints" "$(exakit_persona_value data-scientist datasets)"
@@ -103,12 +103,12 @@ check "the notebook catalog names only personas the kit ships" "" \
     "$(python3 "$ROOT/notebook/kit/notebooks.py" list "$ROOT" | cut -d'|' -f2 | sort -u | while read -r p; do [ -f "$ROOT/personas/$p.json" ] || printf ' %s' "$p"; done)"
 
 echo "several personas ticked together are combined by the service:"
-check "the title names each" "AI Scientist + ML Engineer" "$(_exakit_persona_service title ml-engineer,data-scientist)"
+check "the title names each" "Data Scientist + ML Engineer" "$(_exakit_persona_service title ml-engineer,data-scientist)"
 out="$( (unset EXAKIT_DATASETS EXAKIT_MCP_CLIENTS EXAKIT_MARKETPLACE_ADDONS EXAKIT_LOAD_SAMPLE
         export EXAKIT_PERSONA=data-scientist,ml-engineer; exakit_persona_apply_env >/dev/null 2>&1
         printf '%s|%s|%s' "$EXAKIT_DATASETS" "$EXAKIT_MCP_CLIENTS" "$EXAKIT_MARKETPLACE_ADDONS") )"
 check "their datasets and add-ons together, each once" "pharma_trials,banking_complaints|all|notebook,udf-devkit" "$out"
-check "each dataset is named with the personas it is for" "pharma_trials|AI Scientist, ML Engineer" \
+check "each dataset is named with the personas it is for" "pharma_trials|Data Scientist, ML Engineer" \
     "$(exakit_persona_dataset_hints | grep '^pharma_trials|')"
 
 echo "the data question: one table, the personas' datasets ticked:"
@@ -128,7 +128,7 @@ out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H retail benchmark (~175k 
         printf '%s~%s~%s~%s' "$EXAKIT_TABLE_DEFAULTS" "$EXAKIT_TABLE_ROW_LOCAL" "$(cut -d'|' -f2 "$WORK/table" | tr '\n' ';')" \
             "$(cut -d'|' -f11 "$WORK/table" | tr '\n' ';')") )"
 check "the persona's row ticked, the file and external rows after the datasets, each named for its persona in the For column" \
-    "3~4~Sample datasets;TPC-H retail benchmark;Pharma clinical trials;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - coming soon;Skip;~;;AI Scientist, ML Engineer;;;;" "$out"
+    "3~4~Sample datasets;TPC-H retail benchmark;Pharma clinical trials;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - coming soon;Skip;~;;Data Scientist, ML Engineer;;;;" "$out"
 out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H retail benchmark (~175k rows)\npharma_trials|Pharma clinical trials (ClinicalTrials.gov, ~5k)\n'; }
         EXAKIT_PERSONA_ACTIVE=1 EXAKIT_DATASETS_PRESELECT=pharma_trials; exakit_data_table_build "$WORK/table"
         printf '%s~%s' "$EXAKIT_TABLE_DEFAULTS" "$(cut -d'|' -f2 "$WORK/table" | tr '\n' ';')") )"
@@ -264,7 +264,7 @@ check "...and asks nothing" "" "$(printf '%s\n' "$out" | grep -E 'ASKED|\[Y/n\]|
 check "the personas recorded are the union, in the kit's order" "data-scientist,ml-engineer|add" \
     "$(manifest_get persona.id)|$(manifest_get persona.source)"
 contains "the title line names the persona added and the set it makes" \
-    "Adding persona: ML Engineer (now AI Scientist + ML Engineer)" "$out"
+    "Adding persona: ML Engineer (now Data Scientist + ML Engineer)" "$out"
 check "three steps headed like the installer's" "Step 1/3  Sample data|Step 2/3  AI clients|Step 3/3  Add-ons" \
     "$(printf '%s\n' "$out" | grep -o 'Step [0-9]/3  [A-Za-z -]*' | sed 's/ *$//' | tr '\n' '|' | sed 's/|$//')"
 contains "a dataset already loaded is said, not redone" "Already loaded: Pharma clinical trials" "$out"
@@ -274,9 +274,9 @@ contains "an add-on already installed is said, not redone" "Already installed: n
 contains "...the add-ons step installs only the rest" "STEP marketplace addons=udf-devkit tty=" "$out"
 check "the steps run in order" "data-load mcp-setup marketplace" \
     "$(printf '%s\n' "$out" | sed -n 's/^STEP \([a-z-]*\).*/\1/p' | tr '\n' ' ' | sed 's/ $//')"
-contains "one closing line names the whole set" "Persona added: AI Scientist + ML Engineer" "$out"
+contains "one closing line names the whole set" "Persona added: Data Scientist + ML Engineer" "$out"
 out="$( (cmd_persona list 2>&1) )"
-contains "list says what this kit was set up as, by title" "This kit was set up as: AI Scientist + ML Engineer" "$out"
+contains "list says what this kit was set up as, by title" "This kit was set up as: Data Scientist + ML Engineer" "$out"
 contains "...and how to add one" "exakit persona add <id>" "$out"
 out="$( (exakit_pending_datasets() { :; }; exakit_marketplace_installed_addons() { printf 'notebook\nudf-devkit\n'; }
         cmd_persona plan --json 2>/dev/null) )"
@@ -294,13 +294,13 @@ contains "apply is the same command, and --yes is accepted" "rc=0" "$out"
 check "...a recorded persona this kit no longer ships is left out" "data-scientist,ml-engineer" "$(manifest_get persona.id)"
 manifest_set persona.id ""
 out="$(add add data-scientist)"
-contains "nothing recorded before: the title line names just the one" "Adding persona: AI Scientist" "$out"
+contains "nothing recorded before: the title line names just the one" "Adding persona: Data Scientist" "$out"
 check "...recorded on its own" "data-scientist" "$(manifest_get persona.id)"
 manifest_set persona.id data-scientist
 out="$( (cmd_data_load() { echo "STEP data-load"; exit 1; }; cmd_persona add ml-engineer 2>&1); echo "rc=$?")"
 contains "a step that dies: the command exits 1" "rc=1" "$out"
 contains "...the others still run" "STEP marketplace" "$out"
-contains "...the closing line says not everything finished" "Persona added: AI Scientist + ML Engineer - not everything finished" "$out"
+contains "...the closing line says not everything finished" "Persona added: Data Scientist + ML Engineer - not everything finished" "$out"
 contains "...and the one command that retries the part" "Sample data did not finish - retry with: EXAKIT_DATASETS=banking_complaints exakit data-load" "$out"
 check "...only that part" "" "$(printf '%s\n' "$out" | grep -E '(AI clients|Add-ons) did not finish')"
 out="$( (cmd_marketplace() { return 1; }; cmd_persona add ml-engineer 2>&1); echo "rc=$?")"
@@ -335,7 +335,7 @@ else
         check "one '$_pa_title' table on screen at every instant, three boxes in all" "0" "$?"
     done
     SCREEN="$(printf '%s\n' "$OUT" | sed -n '/=== FINAL SCREEN ===/,/=== tables on screen/p')"
-    contains "the title line"                          "Adding persona: ML Engineer (now AI Scientist + ML Engineer)" "$SCREEN"
+    contains "the title line"                          "Adding persona: ML Engineer (now Data Scientist + ML Engineer)" "$SCREEN"
     check "the step headings, in order" "Step 1/3  Sample data|Step 2/3  AI clients|Step 3/3  Add-ons" \
         "$(printf '%s\n' "$SCREEN" | grep -o 'Step [0-9]/3  [A-Za-z -]*' | sed 's/ *$//' | tr '\n' '|' | sed 's/|$//')"
     check "each step's table under its own heading" "Step 1/3|Data to load|Step 2/3|AI clients to connect|Step 3/3|Marketplace add-ons" \
@@ -346,7 +346,7 @@ else
     contains "Codex, already connected, says so"       "├─ Codex           already connected" "$SCREEN"
     contains "the add-on already installed is one line" "Already installed: notebook" "$SCREEN"
     contains "the one still missing fills its row"     "└─ udf-devkit  ✓ installed" "$SCREEN"
-    contains "one closing line"                        "✓ Persona added: AI Scientist + ML Engineer" "$SCREEN"
+    contains "one closing line"                        "✓ Persona added: Data Scientist + ML Engineer" "$SCREEN"
     check "no menu hint and no question: nothing waited for a key" "" \
         "$(printf '%s\n' "$OUT" | grep -E 'Space to toggle|\[Y/n\]|\[y/N\]')"
     contains "the exit code"                           "RC=0" "$OUT"
