@@ -349,7 +349,9 @@ function Test-UdfReady {
 function Select-UdfContainer {
     param([Parameter(Mandatory)][string]$Language)
     $script:UdfContainer = $null
-    $doc = Resolve-ExakitVersionsDoc
+    # Keep the matrix tied to the installed UDF code. A newer cached release
+    # catalog can omit a container that this kit already ships and validates.
+    $doc = Get-ExakitVersionsBakedPath
     if (-not $doc) { return (Set-UdfFail -Code 4 -Step "select-container" -Remedy "exakit update" -Message "This kit copy has no readable versions.json to pick a container from.") }
     $arch = Get-UdfArch
     if (-not $arch[0]) { return (Set-UdfFail -Code 4 -Step "select-container" -Remedy "" -Message ("" + $arch[1])) }
@@ -363,6 +365,7 @@ function Select-UdfContainer {
     $row | Add-Member -NotePropertyName DbArch -NotePropertyValue $arch[1]
     $row | Add-Member -NotePropertyName DbVersion -NotePropertyValue $db
     $script:UdfContainer = $row
+    $script:UdfContainerDoc = $doc
     Info "Container for $Language on $($arch[1]), database $($db): $(Split-Path -Leaf $row.url)"
     return $true
 }
@@ -371,7 +374,7 @@ function Select-UdfContainer {
 function Get-UdfContainerPins {
     param([Parameter(Mandatory)][string]$Language)
     $c = $script:UdfContainer
-    $result = Invoke-UdfTool -NoConnection -ToolArgs @("pins", (Resolve-ExakitVersionsDoc), $Language, $c.DbArch, $c.DbVersion)
+    $result = Invoke-UdfTool -NoConnection -ToolArgs @("pins", $script:UdfContainerDoc, $Language, $c.DbArch, $c.DbVersion)
     if ($result[0] -ne 0) { return @() }
     return @($result[1] | Where-Object { $_ } | ForEach-Object { $_ -replace " ", "==" })
 }

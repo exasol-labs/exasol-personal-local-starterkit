@@ -241,7 +241,8 @@ CACHE="$EXAKIT_HOME/cache/containers"
 # The matrix scenario: the test versions document, a database that answers its
 # version, the smoke UDF stubbed with what it would report.
 mscenario() { # mscenario <versions doc> <body>
-    scenario '_EXAKIT_VERSIONS_DOC="'"$1"'"
+    scenario 'exakit_versions_baked_doc() { printf "%s\n" "'"$1"'"; }
+        exakit_versions_active_doc() { printf "%s\n" "'"$WORK"'/stale-versions.json"; }
         _udf_db_version() { printf "%s\n" "${STUB_DB:-2026.2.0-nano.3}"; }
         udf_devkit_smoke() { echo "smoke $*" >> "$CALLS"; UDF_SMOKE_LINES="python 3.12.3
 scikit-learn 1.9.0

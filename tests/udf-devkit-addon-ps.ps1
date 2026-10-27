@@ -13,6 +13,11 @@ $env:EXAKIT_HOME = Join-Path $work "home"
 $env:EXAKIT_BIN_DIR = Join-Path $work "bin"
 . (Join-Path $repo "setup/lib/exakit-common.ps1")
 . (Join-Path $repo "setup/lib/udf-devkit.ps1")
+$script:realGetExakitVersionsBakedPath = ${function:Get-ExakitVersionsBakedPath}
+function Get-ExakitVersionsBakedPath {
+    if ($script:VersionsDocPath) { return $script:VersionsDocPath }
+    return (& $script:realGetExakitVersionsBakedPath)
+}
 $script:LogFile = $null
 $script:PersonalDeployDir = Join-Path $work "deployment"
 New-Item -ItemType Directory -Force -Path (Join-Path $script:PersonalDeployDir "local\runtime\exa\bucketfs") | Out-Null

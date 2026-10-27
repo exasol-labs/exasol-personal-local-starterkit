@@ -270,7 +270,10 @@ _udf_select_container() {
     _usc_lang="$1"
     UDF_CONTAINER_ROW=""; UDF_CONTAINER_URL=""; UDF_CONTAINER_SHA256=""; UDF_CONTAINER_SIZE=""
     UDF_CONTAINER_ARCH=""; UDF_CONTAINER_DB_VERSIONS=""
-    _usc_doc="$(exakit_versions_active_doc 2>/dev/null)" || {
+    # A cached release catalog may predate this installed kit's UDF matrix even
+    # when its publication date is newer. The container and smoke pins belong
+    # to the code shipping with this kit, so resolve them from that copy.
+    UDF_CONTAINER_DOC="$(exakit_versions_baked_doc 2>/dev/null)" || {
         _udf_fail 4 select-container "exakit update" "This kit copy has no readable versions.json to pick a container from."; return 1; }
     _usc_err="$EXAKIT_HOME/.udf-select.err"
     _usc_arch="$(_udf_rules arch "$(uname -m 2>/dev/null || true)" "$(_udf_os)" 2>"$_usc_err")" || {
@@ -278,7 +281,7 @@ _udf_select_container() {
         _udf_fail 4 select-container "" "${_usc_why:-The architecture of this machine is not known.}"; return 1; }
     _usc_db="$(_udf_db_version)"
     [ -n "$_usc_db" ] || { rm -f "$_usc_err"; _udf_fail 5 select-container "exakit status" "The database version is not known: is the database running?"; return 1; }
-    UDF_CONTAINER_ROW="$(_udf_rules resolve "$_usc_doc" "$_usc_lang" "$_usc_arch" "$_usc_db" 2>"$_usc_err")" || {
+    UDF_CONTAINER_ROW="$(_udf_rules resolve "$UDF_CONTAINER_DOC" "$_usc_lang" "$_usc_arch" "$_usc_db" 2>"$_usc_err")" || {
         _usc_why="$(cat "$_usc_err" 2>/dev/null)"; rm -f "$_usc_err"
         _udf_fail 4 select-container "exakit update" "No prebuilt $_usc_lang container fits this database ($_usc_arch, version $_usc_db): ${_usc_why:-no row matched}. A kit update may bring one."; return 1; }
     rm -f "$_usc_err"
@@ -491,7 +494,7 @@ udf_devkit_smoke_rust() {
         _udf_fail 5 smoke "exakit status" "Could not copy the smoke library into the bucket directory ($_usr_dest)."; return 1; }
     _usr_path="$UDF_BUCKET_UDF_ROOT/$EXAKIT_UDF_RUST_SMOKE_DIR/$EXAKIT_UDF_RUST_SMOKE_LIB"
     _usr_rustc="$(_udf_row runtime | sed 's/.*"rustc": *"\([^"]*\)".*/\1/')"
-    _usr_sdk="$(_udf_rules pins "$(exakit_versions_active_doc)" rust "$UDF_CONTAINER_ARCH" "$UDF_CONTAINER_DB" 2>/dev/null | awk '$1 == "exasol-udf-sdk" {print $2}')"
+    _usr_sdk="$(_udf_rules pins "$UDF_CONTAINER_DOC" rust "$UDF_CONTAINER_ARCH" "$UDF_CONTAINER_DB" 2>/dev/null | awk '$1 == "exasol-udf-sdk" {print $2}')"
     info "Running the Rust smoke UDF $EXAKIT_UDF_RUST_SMOKE_SCHEMA.EXAKIT_SMOKE over $_usr_path"
     _usr_out="$(_udf_tool smoke-rust "$_usr_alias" "$EXAKIT_UDF_RUST_SMOKE_SCHEMA" "$_usr_path" "$_usr_rustc" "$_usr_sdk" 2>"$EXAKIT_HOME/.udf-smoke.err")"
     _usr_rc=$?
@@ -568,7 +571,7 @@ udf_devkit_setup_default() {
     _udf_ready select-container || return 1
     _udf_select_container python || return 1
     _udf_fetch_container python || return 1
-    _usd_pins="$(_udf_rules pins "$(exakit_versions_active_doc)" python "$UDF_CONTAINER_ARCH" "$UDF_CONTAINER_DB" 2>/dev/null | sed 's/ /==/')"
+    _usd_pins="$(_udf_rules pins "$UDF_CONTAINER_DOC" python "$UDF_CONTAINER_ARCH" "$UDF_CONTAINER_DB" 2>/dev/null | sed 's/ /==/')"
     # shellcheck disable=SC2086 -- one name==version per word
     _udf_install_tarball "$UDF_CONTAINER_FILE" "$EXAKIT_UDF_DEFAULT_ALIAS" python "$UDF_CONTAINER_URL" $_usd_pins || return 1
     _udf_record_language python
@@ -637,7 +640,7 @@ udf_devkit_setup_rust() {
             *) _udf_fail 6 install "exakit logs" "The launcher could not install the $EXAKIT_UDF_RUST_ALIAS container${_usr_add_python:+ or the official $EXAKIT_UDF_OFFICIAL_ALIAS one beside it} (see: exakit logs)."; return 1 ;;
         esac
         manifest_set "components.udf_devkit.containers.$EXAKIT_UDF_RUST_ALIAS" "$UDF_CONTAINER_URL"
-        ok "Rust UDFs: the $EXAKIT_UDF_RUST_ALIAS container is installed (rustc $(_udf_row runtime | sed 's/.*"rustc": *"\([^"]*\)".*/\1/'), exasol-udf-sdk $(_udf_rules pins "$(exakit_versions_active_doc)" rust "$UDF_CONTAINER_ARCH" "$UDF_CONTAINER_DB" 2>/dev/null | awk '$1 == "exasol-udf-sdk" {print $2}'))"
+        ok "Rust UDFs: the $EXAKIT_UDF_RUST_ALIAS container is installed (rustc $(_udf_row runtime | sed 's/.*"rustc": *"\([^"]*\)".*/\1/'), exasol-udf-sdk $(_udf_rules pins "$UDF_CONTAINER_DOC" rust "$UDF_CONTAINER_ARCH" "$UDF_CONTAINER_DB" 2>/dev/null | awk '$1 == "exasol-udf-sdk" {print $2}'))"
     fi
     _udf_record_language rust
     UDF_DONE_STEPS="{\"language\": \"rust\", \"alias\": \"$EXAKIT_UDF_RUST_ALIAS\", \"step\": \"install\", \"action\": \"$_usr_rust_action\"}"
