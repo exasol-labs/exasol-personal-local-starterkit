@@ -30,7 +30,9 @@ function Invoke-WorkflowModule {
     try {
         [Environment]::SetEnvironmentVariable("EXAKIT_HOME", [string]$script:ExakitHome, "Process")
         $ErrorActionPreference = "Continue"
-        & $python -m exakit_nb.workflow @ModuleArgs
+        # Not -m exakit_nb.workflow: the package exports workflow() under the module's name, and runpy
+        # re-executing the module prints a RuntimeWarning. main() runs on the module the package imported.
+        & $python -c 'import importlib, sys; sys.exit(importlib.import_module("exakit_nb.workflow").main(sys.argv[1:]))' @ModuleArgs
         if ($LASTEXITCODE -ne 0) { $script:PendingExitCode = $LASTEXITCODE }
     } finally {
         $ErrorActionPreference = $prevEap

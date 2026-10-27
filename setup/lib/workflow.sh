@@ -29,7 +29,10 @@ workflow_run() {
     command -v notebook_venv_python >/dev/null 2>&1 || die "The notebook module is missing from this kit copy. Repair with: exakit update"
     _wfr_python="$(notebook_venv_python)"
     [ -x "$_wfr_python" ] || die "The notebook environment is missing ($_wfr_python). Repair it with: exakit notebook setup"
-    EXAKIT_HOME="$EXAKIT_HOME" "$_wfr_python" -m exakit_nb.workflow "$@"
+    # Not `-m exakit_nb.workflow`: the package exports workflow() under the
+    # module's name, so runpy re-executing the module prints a RuntimeWarning
+    # on stderr. main() is called on the module the package already imported.
+    EXAKIT_HOME="$EXAKIT_HOME" "$_wfr_python" -c 'import importlib, sys; sys.exit(importlib.import_module("exakit_nb.workflow").main(sys.argv[1:]))' "$@"
 }
 
 # exakit workflow list [--json] | show <id> [--json]
