@@ -121,8 +121,23 @@ class ShareDraft:
         if windows is None:
             windows = sys.platform == "win32"
         requests = self.requests(profile_name)
-        for method, params in requests[:2]:
-            _unwrap(tool(method, params))
+        created = tool(*requests[0])
+        if created.get("isError") or created.get("is_error"):
+            category = (created.get("structuredContent") or created.get("structured_content") or {}).get("error", {}).get("category")
+            if category != "app_conflict":
+                _unwrap(created)
+            # Put files changes only the draft. Before touching an existing
+            # workspace, prove that this notebook owns its lineage and that it
+            # belongs to the same approved dataset.
+            try:
+                saved = _unwrap(tool("app_read_file", {"name": self.name, "path": "REVISION.json"}))
+                lineage = json.loads(saved["content"])
+            except (KeyError, TypeError, ValueError, RuntimeError) as error:
+                raise RuntimeError(f"Dashboard {self.name} already exists without readable starter-kit lineage; choose another APP_NAME.") from error
+            if (not isinstance(lineage, dict) or lineage.get("descriptor_id") != self.dataset.id
+                    or not all(lineage.get(key) for key in ("workflow_id", "descriptor_version", "query_digest"))):
+                raise RuntimeError(f"Dashboard {self.name} belongs to a different dataset or has incomplete lineage; choose another APP_NAME.")
+        _unwrap(tool(*requests[1]))
         if windows:
             built = _unwrap(tool("app_build", {"name": self.name}))
             revision = built.get("revision", {}).get("revision_number")

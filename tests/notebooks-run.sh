@@ -159,19 +159,32 @@ print(wid)
 PY
 }
 
-# The log of one run holds at least one sql line: the notebooks logged under the id they were given.
+# The log of one run holds a query event: ordinary notebooks log sql; a Dash
+# Server notebook logs the SQL it placed into the immutable revision.
 assert_workflow_log() {
     _log="$EXAKIT_HOME/workflows/$1.jsonl"
     if [ ! -f "$_log" ]; then
         echo "FAIL workflow $1: no log at $_log after the run on $2" >&2
         return 1
     fi
-    _sql="$(grep -c '"kind": "sql"' "$_log" 2>/dev/null || true)"
+    _sql="$("$NB_PY" - "$_log" <<'PY'
+import json, sys
+count = 0
+for line in open(sys.argv[1], encoding="utf-8"):
+    try:
+        event = json.loads(line)
+    except ValueError:
+        continue
+    if event.get("kind") == "sql" or (event.get("kind") == "dashboard.revision" and event.get("sql")):
+        count += 1
+print(count)
+PY
+)"
     if [ "${_sql:-0}" -lt 1 ]; then
-        echo "FAIL workflow $1: $_log holds no sql line after the run on $2 (lines: $(wc -l < "$_log" | tr -d ' '))" >&2
+        echo "FAIL workflow $1: $_log holds no SQL-bearing event after the run on $2 (lines: $(wc -l < "$_log" | tr -d ' '))" >&2
         return 1
     fi
-    echo "ok   workflow $1: $_sql sql lines logged for the run on $2 (exakit workflow show $1)"
+    echo "ok   workflow $1: $_sql SQL-bearing events logged for the run on $2 (exakit workflow show $1)"
 }
 
 rc=0

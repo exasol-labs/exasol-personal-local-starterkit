@@ -26,16 +26,21 @@ class Dataset:
 
 
 class Tools:
-    def __init__(self, readonly_user="MCP_READONLY", healthy=True, changed_path=None):
+    def __init__(self, readonly_user="MCP_READONLY", healthy=True, changed_path=None, existing_lineage=None):
         self.calls = []
         self.readonly_user = readonly_user
         self.healthy = healthy
         self.changed_path = changed_path
+        self.existing_lineage = existing_lineage
 
     def __call__(self, name, args):
         self.calls.append((name, args))
         if name == "exasol_profile_validate":
             return {"is_valid": True, "profile": {"user": self.readonly_user, "dsn": "127.0.0.1:8563"}}
+        if name == "app_create_exasol_dashboard" and self.existing_lineage is not None:
+            return {"isError": True, "structuredContent": {"error": {"category": "app_conflict"}}}
+        if name == "app_read_file":
+            return {"content": json.dumps(self.existing_lineage)}
         if name == "app_deploy_draft":
             return {"build": {"revision": {"revision_number": 3}}, "app": {"preview_path": "/preview/example/3"}}
         if name == "app_build":
@@ -83,6 +88,23 @@ class ShareTests(unittest.TestCase):
         self.assertEqual([event["state"] for event in events], ["preview", "live"])
         self.assertEqual(events[0]["sql"], draft.sql)
         self.assertEqual(events[0]["source_table"], "EXAMPLE.FACT")
+
+    def test_existing_managed_dashboard_gets_a_new_draft(self):
+        draft = share(Dataset(), "SELECT 1", "Example", "example")
+        tool = Tools(existing_lineage={"workflow_id": "wf-old", "descriptor_id": "example",
+                                       "descriptor_version": "3", "query_digest": "old-digest"})
+        self.assertEqual(draft.preview(tool), "/preview/example/3")
+        self.assertEqual([name for name, _ in tool.calls[:3]],
+                         ["exasol_profile_validate", "app_create_exasol_dashboard", "app_read_file"])
+        self.assertIn("app_put_files", [name for name, _ in tool.calls])
+
+    def test_existing_unrelated_dashboard_is_left_alone(self):
+        draft = share(Dataset(), "SELECT 1", "Example", "example")
+        tool = Tools(existing_lineage={"workflow_id": "wf-old", "descriptor_id": "other",
+                                       "descriptor_version": "3", "query_digest": "old-digest"})
+        with self.assertRaisesRegex(RuntimeError, "different dataset"):
+            draft.preview(tool)
+        self.assertNotIn("app_put_files", [name for name, _ in tool.calls])
 
     def test_wrong_profile_refused_before_app_creation(self):
         draft = share(Dataset(), "SELECT 1", "Example", "example")
