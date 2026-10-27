@@ -42,6 +42,59 @@ every cell of that file tagged `<tag>` (`tags=["connect"]`, `tags=["load"]`), so
 both quickstarts carry the very same cells and each built notebook stands on its
 own in JupyterLab, Marimo and Positron alike.
 
+## Running the notebooks headless
+
+`python3 tools/notebooks.py --run` executes the notebooks without a front end,
+on the kit's own kernel (**Exasol (Starter Kit)**, the one the add-on
+registers; `EXAKIT_NOTEBOOK_KERNEL` names another) against the local database,
+so the cells run exactly as a user runs them: same kernel, same connection from
+the kit's store, same environment. It needs an installed kit with a running
+database and the notebook add-on, plus `nbclient` in the add-on's environment
+(`uv pip install --python ~/.exasol-starter-kit/notebook-venv/bin/python
+nbclient`; the add-on does not ship it, and `--run` says so when it is missing).
+Run with any Python: when the one running it has no nbclient, `--run` re-runs
+itself with the kit's notebook Python (`EXAKIT_NOTEBOOK_PYTHON`, else
+`$EXAKIT_HOME/notebook-venv`).
+
+```bash
+python3 tools/notebooks.py --run                                   # every catalog notebook, each on its own dataset
+python3 tools/notebooks.py --run --dataset pharma_trials --dataset banking_complaints
+python3 tools/notebooks.py --run notebook/notebooks/data-scientist/01_explore.py --dataset banking_complaints --timeout 600
+python3 tools/notebooks.py --run --output /tmp/executed           # keep each executed .ipynb, outputs included
+```
+
+- `--dataset <id>` rewrites the notebook's one dataset assignment (`DATASET = "..."`
+  in explore, train and score; `SAMPLE = "..."` in the quickstarts' shared load
+  cell) to that id, so the "one assignment switches the data" promise is
+  exercised rather than assumed; given several, each notebook runs once per
+  dataset. A notebook with no such assignment refuses the option.
+- A cell tagged `skip-ci` (`# %% tags=["skip-ci"]` in the `.py`) is left out
+  of the run: for a cell that needs a person (a picker, a question) or a
+  service the runner does not have. Tag sparingly: a skipped cell is not
+  proven.
+- The kernel sees the caller's environment except `LANGFUSE_*`, which are
+  dropped (nothing headless writes to anyone's Langfuse). `EXAKIT_NB_MODEL`,
+  `OPENAI_BASE_URL` and `OPENAI_API_KEY` pass through, so the text step runs
+  when they point at an endpoint; `MLFLOW_TRACKING_URI` passes through when
+  set, else MLflow uses its local store. Each run has a temporary folder as its
+  working directory (`mlflow/`, `models/` land there, never in the tree).
+- Exit 0 when every cell of every run finished; 1 with the failing cell's
+  index, source and traceback printed; 2 when the run itself could not start
+  (no nbclient, no such kernel, no such file).
+
+`bash tests/notebooks-run.sh` is the CI form (AC-DS3.1, AC-ML3.1): it starts
+`tests/lib/stub_model_server.py` - a standard-library stand-in for an
+OpenAI-compatible endpoint (`POST /v1/chat/completions`, `GET /v1/models`),
+answering each prompt with a fixed theme chosen by the prompt's hash so two runs
+compare equal - points the model variables at it, and runs every shipped
+notebook on `pharma_trials` and `banking_complaints`. Without a database that
+answers it prints `SKIP` and exits 0, with the same probe
+`tests/mcp-readonly-sql-matrix.sh` uses; `EXAKIT_REQUIRE_DB=1` makes that a
+failure with exit 3 (the `notebooks-live` job in `.github/workflows/versions.yml`
+sets it, so CI can never skip silently). `EXAKIT_NOTEBOOK_DATASETS`,
+`EXAKIT_NOTEBOOK_CELL_TIMEOUT` and `EXAKIT_NOTEBOOK_RUN_OUTPUT` adjust it; the
+executed notebooks are the job's artifact when it fails.
+
 ## The rules every notebook follows
 
 - **Descriptor-driven.** Every query is built from the descriptor's roles

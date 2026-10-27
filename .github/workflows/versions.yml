@@ -24,6 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       versions: ${{ steps.detect.outputs.versions }}
+      notebooks: ${{ steps.detect.outputs.notebooks }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -46,6 +47,16 @@ jobs:
             echo "versions=false" >> "$GITHUB_OUTPUT"
           fi
           printf 'versions.json changed: %s\n' "$(printf '%s\n' "$changed" | grep -cx 'versions.json')"
+          # The notebooks-live job (a database on the runner) runs on a pull
+          # request only when it touches what that job proves: the notebooks,
+          # the reference datasets, the helper packages, or the job's own files.
+          nb_paths='^(notebook/|data/datasets/|packages/|tools/notebooks\.py$|tests/notebooks-run\.sh$|tests/lib/stub_model_server\.py$|tests/mcp-readonly-sql-matrix\.sh$|\.github/workflows/versions\.yml$)'
+          if printf '%s\n' "$changed" | grep -qE "$nb_paths"; then
+            echo "notebooks=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "notebooks=false" >> "$GITHUB_OUTPUT"
+          fi
+          printf 'notebook, dataset or helper files changed: %s\n' "$(printf '%s\n' "$changed" | grep -cE "$nb_paths")"
 
   validate:
     name: validate versions.json
@@ -778,10 +789,32 @@ jobs:
         if: matrix.shard == 4
       - run: python3 tests/test_notebook_helpers.py
         if: matrix.shard == 4
+      # The same helpers with the real Langfuse SDK 5 installed (the add-on pins
+      # langfuse>=5,<6), so RealLangfuseTest runs instead of being skipped. A
+      # venv of its own: the runner's python3 is externally managed.
+      - name: exakit.nb helpers against the Langfuse SDK 5
+        if: matrix.shard == 4
+        run: |
+          python3 -m venv "$RUNNER_TEMP/langfuse-venv"
+          "$RUNNER_TEMP/langfuse-venv/bin/python" -m pip install --quiet "langfuse>=5,<6"
+          "$RUNNER_TEMP/langfuse-venv/bin/python" -m unittest tests.test_notebook_helpers
       - run: python3 tests/test_notebook_contents.py
         if: matrix.shard == 4
       - run: python3 tests/test_exasol_mlflow.py
         if: matrix.shard == 4
+      # exasol-mlflow at both ends of the MLflow 3.x range it pins (mlflow-skinny
+      # >=3,<4): the oldest 3.0 and the latest 3.x, each in a venv of its own, so
+      # the store test runs against the real package rather than being skipped.
+      - name: exasol-mlflow against MLflow 3.0 and the latest 3.x
+        if: matrix.shard == 4
+        run: |
+          for pin in "mlflow-skinny==3.0.*" "mlflow-skinny>=3,<4"; do
+            rm -rf "$RUNNER_TEMP/mlflow-venv"
+            python3 -m venv "$RUNNER_TEMP/mlflow-venv"
+            "$RUNNER_TEMP/mlflow-venv/bin/python" -m pip install --quiet "$pin" "sqlalchemy>=2,<3" "alembic>=1.13,<2"
+            "$RUNNER_TEMP/mlflow-venv/bin/python" -c 'import mlflow; print("mlflow", mlflow.__version__)'
+            "$RUNNER_TEMP/mlflow-venv/bin/python" -m unittest tests.test_exasol_mlflow
+          done
       # The reference datasets as checksummed release assets (DS-2): kit copy,
       # cache, download through a mirror, tampered archives refused; the data
       # question (source first, Enter on Skip skips, the For column).
@@ -946,3 +979,84 @@ jobs:
       # Dry run only without EXAKIT_SMOKE_FULL=1: no install, no database.
       - run: bash tests/smoke-test.sh
         if: matrix.shard == 2
+
+  notebooks-live:
+    name: notebooks headless on a live database (Linux)
+    needs: changes
+    # THE ONE JOB WITH A DATABASE. Everything else in this workflow runs shell
+    # and Python against fakes; this deploys Exasol Personal on the runner
+    # through the kit's own installer (the launcher runs the database in a
+    # rootless Podman container on Linux), then runs the two suites that need
+    # it: the read-only MCP user proven empirically (TPC-H), and every shipped
+    # notebook executed headless on both reference datasets with the text step
+    # on a stub model and MLflow on a local store (TDD/BRD AC-DS3.1, AC-ML3.1).
+    # Both suites skip without a database; EXAKIT_REQUIRE_DB=1 turns that into
+    # a failure here, so a runner that could not deploy is red, never green.
+    # Every push to main or a release branch; a pull request only when it
+    # touches the notebooks, the reference datasets, the helper packages or
+    # this job's own files (the changes job's filter). A real gate: no
+    # continue-on-error, time-boxed to forty minutes.
+    if: >-
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release')))
+      || (github.event_name == 'pull_request' && needs.changes.outputs.notebooks == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      EXAKIT_NO_FANCY: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - name: Podman
+        # Installed here rather than by the kit, so the sudo step is this
+        # workflow's and not the installer's (EXAKIT_INSTALL_PODMAN=0 below).
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman uidmap slirp4netns fuse-overlayfs
+          podman info --format '{{.Host.Arch}} podman {{.Version.Version}}'
+          df -h "$HOME" | tail -1
+          free -g | head -2
+      - name: install the kit from this checkout
+        env:
+          EXAKIT_LOCAL_KIT: ${{ github.workspace }}
+          EXAKIT_PERSONA: data-scientist,ml-engineer
+          EXAKIT_DATASETS: tpch,pharma_trials,banking_complaints
+          EXAKIT_MARKETPLACE_ADDONS: notebook,udf-devkit
+          EXAKIT_SKIP_MCP: "1"
+          EXAKIT_NOTEBOOK_FRONTENDS: none
+          EXAKIT_INSTALL_PODMAN: "0"
+          EXAKIT_PODMAN_SELFHEAL: "1"
+          EXAKIT_PERSONAL_READY_TIMEOUT: "600"
+          EXAKIT_PERSONAL_MIN_DISK_GB: "10"
+        run: |
+          sh install.sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: the database answers
+        run: |
+          for _ in $(seq 1 60); do
+            exakit status --json > "$RUNNER_TEMP/status.json" 2>/dev/null && break
+            sleep 10
+          done
+          exakit status
+          python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); print("status:", d["status"]); sys.exit(0 if d["status"] == "running" else 1)' "$RUNNER_TEMP/status.json"
+      - name: nbclient into the kit's notebook environment
+        # tools/notebooks.py --run executes with nbclient on the kit's own kernel;
+        # the add-on does not ship it (a user never runs a notebook headless).
+        run: |
+          py="$(python3 -c 'import json, os; print(json.load(open(os.path.expanduser("~/.exasol-starter-kit/manifest.json")))["components"]["notebook"]["python"])')"
+          uv pip install --python "$py" "nbclient>=0.10,<1"
+          exakit notebook check
+      - name: the read-only MCP user can read everything and write nothing
+        run: EXAKIT_REQUIRE_DB=1 bash tests/mcp-readonly-sql-matrix.sh
+      - name: every notebook headless on both datasets
+        env:
+          EXAKIT_REQUIRE_DB: "1"
+          EXAKIT_NOTEBOOK_RUN_OUTPUT: ${{ runner.temp }}/executed-notebooks
+        run: bash tests/notebooks-run.sh
+      - name: keep the kit's logs and the executed notebooks
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: notebooks-live-logs
+          path: |
+            ~/.exasol-starter-kit/logs
+            ${{ runner.temp }}/executed-notebooks
+          if-no-files-found: ignore
