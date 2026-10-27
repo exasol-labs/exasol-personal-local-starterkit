@@ -15,7 +15,7 @@ $env:EXAKIT_BIN_DIR = Join-Path $work "bin"
 . (Join-Path $repo "setup/lib/udf-devkit.ps1")
 $script:LogFile = $null
 $script:PersonalDeployDir = Join-Path $work "deployment"
-New-Item -ItemType Directory -Force -Path (Join-Path $script:PersonalDeployDir "local\runtime\exa") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path $script:PersonalDeployDir "local\runtime\exa\bucketfs") | Out-Null
 $script:PASS = 0
 $script:FAIL = 0
 function Check($label, $expected, $actual) {

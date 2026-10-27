@@ -6,6 +6,11 @@ metrics, tags and artefacts, then removes it.
 A record holds the run's params, metrics, tags, the training SQL, the model (base64 inline, or the host path of the
 file the UDF wrote with its SHA-256, checked again on replay) and the extras. It never holds a tracking URI or a
 credential: replay resolves the server the way start_run() does.
+
+The store on this machine is also what ``exakit model prune`` and ``model put`` consult (``model_digests``,
+``run_exists``): the kit's server and the local store both keep ``mlflow.db`` and ``artifacts/`` under
+``$EXAKIT_HOME/mlflow``, read here with sqlite3 and the file system - no MLflow client, no network. A remote
+``MLFLOW_TRACKING_URI`` is never queried: those answer None, and the caller says the runs were not consulted.
 """
 
 from __future__ import annotations
@@ -14,6 +19,7 @@ import base64
 import hashlib
 import json
 import os
+import sqlite3
 import sys
 import tempfile
 import uuid
@@ -198,3 +204,78 @@ def replay(tracking_uri: str | None = None, tracking_dir: str | os.PathLike | No
         done.append(run.info.run_id)
         path.unlink()
     return done
+
+
+# --- the store on this machine, read without an MLflow client (exakit model put / prune) ------------------------------
+
+def local_store_dir(target: tracking.Tracking | None = None) -> Path | None:
+    """The folder holding ``mlflow.db`` and ``artifacts/`` for the resolved tracking target when it is on this machine
+    (the kit's server, the local store, or a sqlite:/// or file store named in MLFLOW_TRACKING_URI); None for a remote
+    server."""
+    target = target or tracking.resolve()
+    if target.source == tracking.LOCAL_STORE:
+        return Path(target.artifacts).parent if target.artifacts else tracking.mlflow_dir()
+    if target.source == tracking.KIT_SERVER:
+        return tracking.mlflow_dir()
+    uri = target.uri
+    if uri.startswith("sqlite:///"):
+        return Path(uri[len("sqlite:///"):]).expanduser().parent
+    if uri.startswith("file://"):
+        return Path(uri[len("file://"):]).expanduser()
+    if not target.is_http and "://" not in uri:
+        return Path(uri).expanduser()
+    return None
+
+
+def _runs_db(folder: Path) -> Path | None:
+    db = folder / "mlflow.db"
+    return db if db.is_file() else None
+
+
+def run_exists(run_id: str, target: tracking.Tracking | None = None) -> bool | None:
+    """Whether the store on this machine holds the run: its row in ``runs`` (sqlite), else a run folder of that id
+    among the artifacts or a file store's experiments. None when the store is remote and cannot be consulted."""
+    folder = local_store_dir(target)
+    if folder is None:
+        return None
+    db = _runs_db(folder)
+    if db is not None:
+        try:
+            with sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True) as conn:
+                row = conn.execute("SELECT 1 FROM runs WHERE run_uuid = ?", (run_id,)).fetchone()
+            if row is not None:
+                return True
+        except sqlite3.Error:
+            pass
+    if not folder.is_dir():
+        return False
+    return any(p.is_dir() for pattern in (f"artifacts/*/{run_id}", f"*/{run_id}") for p in folder.glob(pattern))
+
+
+def model_digests(target: tracking.Tracking | None = None) -> tuple[set[str] | None, str]:
+    """(the sha256 of every model the store's runs logged, where that was read) - from each run's
+    ``exasol.model_sha256`` tag and from the ``model.pkl.provenance.json`` sidecars among the artifacts. (None,
+    reason) when the store is a remote server, which is not consulted."""
+    target = target or tracking.resolve()
+    folder = local_store_dir(target)
+    if folder is None:
+        return None, f"the MLflow server at {tracking.redacted(target.uri)} (MLFLOW_TRACKING_URI) is remote; its runs were not consulted"
+    found: set[str] = set()
+    db = _runs_db(folder)
+    if db is not None:
+        try:
+            with sqlite3.connect(f"file:{db.as_posix()}?mode=ro", uri=True) as conn:
+                for (value,) in conn.execute("SELECT value FROM tags WHERE key = ?", ("exasol.model_sha256",)):
+                    if value:
+                        found.add(str(value))
+        except sqlite3.Error:
+            pass
+    if folder.is_dir():
+        for sidecar in folder.rglob("*" + MODEL_FILE + ".provenance.json"):
+            try:
+                doc = json.loads(sidecar.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if isinstance(doc, dict) and doc.get("sha256"):
+                found.add(str(doc["sha256"]))
+    return found, f"MLflow runs in {folder} consulted"

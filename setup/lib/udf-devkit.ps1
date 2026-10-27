@@ -126,16 +126,43 @@ function Invoke-UdfSlc {
 # Error = why there is none, or "" }. Twin of udf_bucket_locate.
 function Get-UdfBucketLocation {
     $root = Join-Path $script:PersonalDeployDir $script:UdfBucketfsDir
-    if (-not (Test-Path (Split-Path -Parent $root))) {
+    $exa = Split-Path -Parent $root
+    if (-not (Test-Path $exa -PathType Container) -or -not (Test-Path $root -PathType Container)) {
         return [pscustomobject]@{ Dir = ""; UdfRoot = ""
             Error = "The deployment has no BucketFS folder at $root; is the database deployed by this launcher? (exakit status)" }
     }
+    $dir = Join-Path (Join-Path $root $script:UdfBucketfsService) $script:UdfBucketfsBucket
+    $udfRoot = "$($script:UdfBucketfsRoot)/$($script:UdfBucketfsService)/$($script:UdfBucketfsBucket)"
+    $mapping = "default"
+    $conf = Join-Path $exa "bucketfs.conf"
+    if (Test-Path $conf -PathType Leaf) {
+        $match = @(Get-Content $conf | ForEach-Object {
+            $parts = @($_ -split '\s+' | Where-Object { $_ })
+            if ($parts.Count -ge 4 -and $parts[1] -eq $script:UdfBucketfsService -and $parts[2] -eq $script:UdfBucketfsBucket) { ,$parts }
+        } | Select-Object -First 1)
+        if ($match.Count -eq 0) {
+            return [pscustomobject]@{ Dir = ""; UdfRoot = ""; Error = "$conf maps no bucket $($script:UdfBucketfsService)/$($script:UdfBucketfsBucket) (exakit status)" }
+        }
+        $inside = $match[0][0]
+        if ($inside -notmatch '^/exa/(?!.*(?:^|/)\.\.(?:/|$))[A-Za-z0-9_./-]+$') {
+            return [pscustomobject]@{ Dir = ""; UdfRoot = ""; Error = "$conf maps the bucket outside the deployment's exa folder (exakit status)" }
+        }
+        $dir = Join-Path $exa ($inside.Substring(5).Replace('/', [System.IO.Path]::DirectorySeparatorChar))
+        if ($match[0][3] -match '^/buckets/[A-Za-z0-9_./-]+$') { $udfRoot = $match[0][3] }
+        $mapping = "bucketfs.conf"
+    }
+    try {
+        if (-not (Test-Path $dir -PathType Container)) { New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null }
+    } catch {
+        return [pscustomobject]@{ Dir = ""; UdfRoot = ""; Error = "The bucket folder $dir could not be created (check permissions; exakit status)" }
+    }
     # One separator: the setting is written with backslashes, which pwsh on
     # macOS or Linux accepts but the Python tool given this path would not.
-    $dir = (Join-Path (Join-Path $root $script:UdfBucketfsService) $script:UdfBucketfsBucket).Replace([char]'\', [System.IO.Path]::DirectorySeparatorChar)
+    $dir = $dir.Replace([char]'\', [System.IO.Path]::DirectorySeparatorChar)
     return [pscustomobject]@{
         Dir     = $dir
-        UdfRoot = "$($script:UdfBucketfsRoot)/$($script:UdfBucketfsService)/$($script:UdfBucketfsBucket)"
+        UdfRoot = $udfRoot
+        Mapping = $mapping
         Error   = ""
     }
 }
@@ -469,16 +496,36 @@ function Get-UdfVerifiedFile {
 function Get-UdfRustSmokeAsset {
     $script:UdfSmokeAsset = $null
     $script:UdfSmokeWhy = ""
+    $script:UdfSmokeCorrupt = $false
     $asset = $script:UdfContainer.smoke_asset
     if (-not $asset) { $script:UdfSmokeWhy = "the row has no smoke_asset"; return $false }
     $url = "" + $asset.url
     $sha = ("" + $asset.sha256).ToLowerInvariant()
     $size = "" + $asset.size
-    if ($url -notmatch '^https?://') { $script:UdfSmokeWhy = "its url is not set"; return $false }
     if ($sha -notmatch '^[0-9a-f]+$') { $script:UdfSmokeWhy = "its sha256 is a placeholder (set after the first CI build)"; return $false }
     if ($sha.Length -ne 64) { $script:UdfSmokeWhy = "its sha256 is not 64 hex digits"; return $false }
     if ($size -notmatch '^[0-9]+$') { $script:UdfSmokeWhy = "its size is a placeholder (set after the first CI build)"; return $false }
-    $script:UdfSmokeAsset = [pscustomobject]@{ url = $url; sha256 = $sha; size = $size }
+    $bundled = ""
+    $relative = "" + $asset.bundled_path
+    if ($relative) {
+        if ($relative -notmatch '^udf/rust-smoke/prebuilt/[A-Za-z0-9_-][A-Za-z0-9._-]*\.so$') {
+            $script:UdfSmokeWhy = "its bundled_path is outside the Rust smoke assets"
+            $script:UdfSmokeCorrupt = $true
+            return $false
+        }
+        $candidate = Join-Path (Get-ExakitRepoRoot) $relative
+        if (Test-Path $candidate -PathType Leaf) {
+            $checked = Invoke-UdfTool -NoConnection -ToolArgs @("verify", $candidate, $sha, $size)
+            if ($checked[0] -ne 0) {
+                $script:UdfSmokeWhy = "the bundled library failed its size or SHA-256 check"
+                $script:UdfSmokeCorrupt = $true
+                return $false
+            }
+            $bundled = $candidate
+        }
+    }
+    if (-not $bundled -and $url -notmatch '^https?://') { $script:UdfSmokeWhy = "its url is not set"; return $false }
+    $script:UdfSmokeAsset = [pscustomobject]@{ url = $url; sha256 = $sha; size = $size; bundled = $bundled }
     return $true
 }
 
@@ -624,8 +671,13 @@ function Install-UdfDevkitRust {
     $script:UdfSmokeFile = ""
     if (Get-UdfRustSmokeAsset) {
         $a = $script:UdfSmokeAsset
-        if (-not (Get-UdfVerifiedFile -Language "rust" -What "smoke UDF library" -Url $a.url -Sha256 $a.sha256 -Size $a.size -Remedy "exakit udf-setup --language rust")) { return $false }
-        $script:UdfSmokeFile = $script:UdfFetchedFile
+        if ($a.bundled) { $script:UdfSmokeFile = $a.bundled }
+        else {
+            if (-not (Get-UdfVerifiedFile -Language "rust" -What "smoke UDF library" -Url $a.url -Sha256 $a.sha256 -Size $a.size -Remedy "exakit udf-setup --language rust")) { return $false }
+            $script:UdfSmokeFile = $script:UdfFetchedFile
+        }
+    } elseif ($script:UdfSmokeCorrupt) {
+        return (Set-UdfFail -Code 7 -Step "verify" -Remedy "exakit update" -Message "Rust smoke library refused: $($script:UdfSmokeWhy)")
     }
     $verb = "install"
     if (@(Get-UdfDevkitInstalledAliases) -contains $script:UdfRustAlias) { $verb = "update" }
@@ -699,7 +751,7 @@ function Test-UdfDevkit {
     if ($aliases -contains $script:UdfRustAlias) {
         if ((Select-UdfContainer -Language "rust") -and (Get-UdfRustSmokeAsset)) {
             $a = $script:UdfSmokeAsset
-            $script:UdfSmokeFile = Join-Path $script:UdfContainerCache (Split-Path -Leaf $a.url)
+            $script:UdfSmokeFile = if ($a.bundled) { $a.bundled } else { Join-Path $script:UdfContainerCache (Split-Path -Leaf $a.url) }
             if ((Test-Path $script:UdfSmokeFile -PathType Leaf) -and
                 (Invoke-UdfTool -NoConnection -ToolArgs @("verify", $script:UdfSmokeFile, $a.sha256, $a.size))[0] -eq 0 -and
                 (Test-UdfDevkitSmokeRust -Alias $script:UdfRustAlias)) { $proven = $true }

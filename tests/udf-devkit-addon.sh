@@ -69,7 +69,7 @@ contains() { # contains <label> <needle> <haystack>
 
 export HOME="$WORK/home" EXAKIT_HOME="$WORK/kit" EXAKIT_BIN_DIR="$WORK/bin"
 export EXAKIT_PERSONAL_DEPLOY_DIR="$WORK/deployment"
-mkdir -p "$HOME" "$EXAKIT_HOME" "$EXAKIT_BIN_DIR" "$EXAKIT_PERSONAL_DEPLOY_DIR/local/runtime/exa"
+mkdir -p "$HOME" "$EXAKIT_HOME" "$EXAKIT_BIN_DIR" "$EXAKIT_PERSONAL_DEPLOY_DIR/local/runtime/exa/bucketfs"
 
 # One scenario per subshell: the real modules, the machine stubbed at its seams.
 scenario() { # scenario <body>
@@ -320,8 +320,8 @@ echo "EXAKIT_UDF_LANGUAGE=rust takes the Rust row (alias RUST) and proves it wit
 rm -rf "$CACHE" "$BUCKET/udf"
 out="$(EXAKIT_UDF_LANGUAGE=rust mscenario "$WORK/versions.json" 'manifest_del components.udf_devkit; udf_devkit_install; echo "rc=$?"; echo "languages=$(manifest_get components.udf_devkit.languages)"; manifest_get components.udf_devkit.containers.RUST; echo "validated=$(manifest_get components.udf_devkit.validated)"; echo "rust=$(manifest_get components.udf_devkit.rust.validated) $(manifest_get components.udf_devkit.rust.rustc) $(manifest_get components.udf_devkit.rust.sdk)"; udf_devkit_summary' 2>&1)"
 calls="$(grep -v "slc list" "$WORK/calls" | tr '\n' '|')"
-check "the install goes down the rust path: slc custom install --alias RUST --language rust, then the smoke UDF over the library's /buckets path, held against the row's rustc and sdk" \
-    "stop dash-server|launcher slc custom install --source $CACHE/lc-rust-fake.tar.gz --alias RUST --language rust --auto-approve --deployment-dir $EXAKIT_PERSONAL_DEPLOY_DIR|wait|start dash-server|smoke-rust smoke-rust RUST STARTER_KIT /buckets/bfsdefault/default/udf/libexakit_smoke.so 1.98.1 0.33.0|" "$calls"
+check "the Rust and Python containers install with one restart, then both smoke UDFs run" \
+    "stop dash-server|launcher slc custom install --source $CACHE/lc-rust-fake.tar.gz --alias RUST --language rust --auto-approve --no-restart --deployment-dir $EXAKIT_PERSONAL_DEPLOY_DIR|launcher slc install PYTHON3 --auto-approve --deployment-dir $EXAKIT_PERSONAL_DEPLOY_DIR|wait|start dash-server|smoke PYTHON3|smoke-rust smoke-rust RUST STARTER_KIT /buckets/bfsdefault/default/udf/libexakit_smoke.so 1.98.1 0.33.0|" "$calls"
 contains "the install succeeds" "rc=0" "$out"
 contains "the smoke library is taken from the mirror and verified before the install" "Verified libexakit_smoke-aarch64.so (sha256" "$out"
 check "...before: the verification precedes the restart" "1" "$(printf '%s\n' "$out" | awk '/Verified libexakit_smoke-aarch64.so/ {v=NR} /Waiting for the database/ {w=NR} END {print (v && w && v < w) ? 1 : 0}')"
@@ -378,7 +378,7 @@ check "exit 7, step smoke, saying the pin is missing, exakit update as the remed
     "$rc $(printf '%s' "$json" | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["language"], d["step"], "is not pinned in this kit'"'"'s versions.json yet (its sha256 is a placeholder (set after the first CI build))" in d["reason"], d["remedy"])' 2>&1)"
 contains "the container was installed" "slc custom install --source $CACHE/lc-rust-fake.tar.gz --alias RUST --language rust" "$(cat "$WORK/calls")"
 check "and nothing ran as a smoke UDF" "" "$(grep smoke-rust "$WORK/calls")"
-check "the language is recorded, the add-on is not validated" "languages=rust validated=false" "$(scenario 'echo "languages=$(manifest_get components.udf_devkit.languages) validated=$(manifest_get components.udf_devkit.validated)"' 2>/dev/null)"
+check "both languages are recorded, the add-on is not validated" "languages=rust,python validated=false" "$(scenario 'echo "languages=$(manifest_get components.udf_devkit.languages) validated=$(manifest_get components.udf_devkit.validated)"' 2>/dev/null)"
 
 echo "udf-setup --json answers with the same shape for the official container:"
 json="$(mscenario "$WORK/versions.json" 'cmd_udf_setup --json' 2>/dev/null)"; rc=$?

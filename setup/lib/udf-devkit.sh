@@ -215,7 +215,8 @@ _udf_json_mode() {
 
 # _udf_done <language> <alias> — the commands' success: with --json the object
 # (the container from UDF_CONTAINER_*, the smoke UDF's lines as package and
-# version); otherwise the steps have already said it.
+# version, and - a Rust setup - "steps", one per language it installed or
+# kept, UDF_DONE_STEPS); otherwise the steps have already said it.
 _udf_done() {
     [ "$_UDF_STDOUT" = 3 ] || return 0
     _ud_smoke=""; _ud_sep=""
@@ -231,8 +232,10 @@ EOF
     [ -z "${UDF_CONTAINER_SHA256:-}" ] || _ud_sha="\"$(_exakit_json_string "$UDF_CONTAINER_SHA256")\""
     [ -z "${UDF_CONTAINER_ARCH:-}" ] || _ud_arch="\"$(_exakit_json_string "$UDF_CONTAINER_ARCH")\""
     [ -z "${UDF_CONTAINER_DB_VERSIONS:-}" ] || _ud_range="\"$(_exakit_json_string "$UDF_CONTAINER_DB_VERSIONS")\""
-    exakit_json_out '{"ok": true, "language": "%s", "alias": "%s", "container": {"url": %s, "sha256": %s, "arch": %s, "db_versions": %s}, "smoke": [%s]}\n' \
-        "$1" "$2" "$_ud_url" "$_ud_sha" "$_ud_arch" "$_ud_range" "$_ud_smoke" >&"$_UDF_STDOUT"
+    _ud_steps=""
+    [ -z "${UDF_DONE_STEPS:-}" ] || _ud_steps=", \"steps\": [$UDF_DONE_STEPS]"
+    exakit_json_out '{"ok": true, "language": "%s", "alias": "%s", "container": {"url": %s, "sha256": %s, "arch": %s, "db_versions": %s}, "smoke": [%s]%s}\n' \
+        "$1" "$2" "$_ud_url" "$_ud_sha" "$_ud_arch" "$_ud_range" "$_ud_smoke" "$_ud_steps" >&"$_UDF_STDOUT"
 }
 
 # udf_devkit_launcher_problem — prints why the launcher cannot install
@@ -366,17 +369,39 @@ _udf_fetch_verified() {
 # not a number), with UDF_SMOKE_WHY saying so.
 _udf_rust_smoke_asset() {
     UDF_SMOKE_URL=""; UDF_SMOKE_SHA256=""; UDF_SMOKE_SIZE=""; UDF_SMOKE_WHY=""
+    UDF_SMOKE_BUNDLED=""; UDF_SMOKE_CORRUPT=0
     _ursa_asset="$(_udf_row smoke_asset)"
     [ -n "$_ursa_asset" ] || { UDF_SMOKE_WHY="the row has no smoke_asset"; return 1; }
     UDF_SMOKE_URL="$(printf '%s' "$_ursa_asset" | _udf_rules field url 2>/dev/null)"
     UDF_SMOKE_SHA256="$(printf '%s' "$_ursa_asset" | _udf_rules field sha256 2>/dev/null | tr '[:upper:]' '[:lower:]')"
     UDF_SMOKE_SIZE="$(printf '%s' "$_ursa_asset" | _udf_rules field size 2>/dev/null)"
-    case "$UDF_SMOKE_URL" in https://*|http://*) ;; *) UDF_SMOKE_WHY="its url is not set"; return 1 ;; esac
     case "$UDF_SMOKE_SHA256" in
         *[!0-9a-f]*|"") UDF_SMOKE_WHY="its sha256 is a placeholder (set after the first CI build)"; return 1 ;;
     esac
     [ "${#UDF_SMOKE_SHA256}" -eq 64 ] || { UDF_SMOKE_WHY="its sha256 is not 64 hex digits"; return 1; }
     case "$UDF_SMOKE_SIZE" in *[!0-9]*|"") UDF_SMOKE_WHY="its size is a placeholder (set after the first CI build)"; return 1 ;; esac
+    _ursa_path="$(printf '%s' "$_ursa_asset" | _udf_rules field bundled_path 2>/dev/null)"
+    if [ -n "$_ursa_path" ]; then
+        case "$_ursa_path" in
+            udf/rust-smoke/prebuilt/*)
+                _ursa_name="${_ursa_path##*/}"
+                case "$_ursa_name" in *[!A-Za-z0-9._-]*|""|.*) UDF_SMOKE_WHY="its bundled_path has an unsafe name"; UDF_SMOKE_CORRUPT=1; return 1 ;; esac
+                [ "$_ursa_path" = "udf/rust-smoke/prebuilt/$_ursa_name" ] || { UDF_SMOKE_WHY="its bundled_path is nested"; UDF_SMOKE_CORRUPT=1; return 1; }
+                ;;
+            *) UDF_SMOKE_WHY="its bundled_path is outside the Rust smoke assets"; UDF_SMOKE_CORRUPT=1; return 1 ;;
+        esac
+        _ursa_file="$(exakit_repo_root)/$_ursa_path"
+        if [ -f "$_ursa_file" ]; then
+            if ! _udf_rules verify "$_ursa_file" "$UDF_SMOKE_SHA256" "$UDF_SMOKE_SIZE" >/dev/null 2>&1; then
+                UDF_SMOKE_WHY="the bundled library failed its size or SHA-256 check"
+                UDF_SMOKE_CORRUPT=1
+                return 1
+            fi
+            UDF_SMOKE_BUNDLED="$_ursa_file"
+            return 0
+        fi
+    fi
+    case "$UDF_SMOKE_URL" in https://*|http://*) ;; *) UDF_SMOKE_WHY="its url is not set"; return 1 ;; esac
     return 0
 }
 
@@ -397,6 +422,25 @@ _udf_record_language() {
 # udf_devkit_installed_aliases — the aliases of the installed containers.
 udf_devkit_installed_aliases() {
     _udf_slc list --json 2>>"${EXAKIT_LOG_FILE:-/dev/null}" | _udf_tool aliases
+}
+
+# _udf_python_alias — the alias of an installed Python container (the kit's
+# three, official first), or nothing. Training is Python-only, so a Rust
+# install adds the official one when this says nothing (design 5: rust adds,
+# never replaces). The record's language list counts too: a Python container
+# of the user's own (udf-use <tarball> --alias X) was recorded by the kit.
+_udf_python_alias() {
+    _upa_aliases="$(udf_devkit_installed_aliases)"
+    for _upa_alias in "$EXAKIT_UDF_OFFICIAL_ALIAS" "$EXAKIT_UDF_DEFAULT_ALIAS" "$EXAKIT_UDF_BUILD_ALIAS"; do
+        if printf '%s\n' "$_upa_aliases" | grep -qx "$_upa_alias"; then
+            printf '%s\n' "$_upa_alias"
+            return 0
+        fi
+    done
+    case ",$(manifest_get components.udf_devkit.languages 2>/dev/null || true)," in
+        *,python,*) printf '%s\n' "$(manifest_get components.udf_devkit.python_alias 2>/dev/null || printf '%s' "$EXAKIT_UDF_OFFICIAL_ALIAS")"; return 0 ;;
+    esac
+    return 1
 }
 
 # udf_devkit_smoke <alias> [package[==version] ...] — create and run the smoke
@@ -545,25 +589,69 @@ udf_devkit_setup_rust() {
     _udf_fetch_container rust || return 1
     UDF_SMOKE_FILE=""
     if _udf_rust_smoke_asset; then
-        _udf_fetch_verified rust "smoke UDF library" "$UDF_SMOKE_URL" "$UDF_SMOKE_SHA256" "$UDF_SMOKE_SIZE" "exakit udf-setup --language rust" || return 1
-        UDF_SMOKE_FILE="$UDF_FETCHED_FILE"
+        if [ -n "$UDF_SMOKE_BUNDLED" ]; then
+            UDF_SMOKE_FILE="$UDF_SMOKE_BUNDLED"
+        else
+            _udf_fetch_verified rust "smoke UDF library" "$UDF_SMOKE_URL" "$UDF_SMOKE_SHA256" "$UDF_SMOKE_SIZE" "exakit udf-setup --language rust" || return 1
+            UDF_SMOKE_FILE="$UDF_FETCHED_FILE"
+        fi
+    elif [ "$UDF_SMOKE_CORRUPT" = 1 ]; then
+        _udf_fail 7 verify "exakit update" "Rust smoke library refused: $UDF_SMOKE_WHY"
+        return 1
     fi
     _usr_verb=install
     udf_devkit_installed_aliases | grep -qx "$EXAKIT_UDF_RUST_ALIAS" && _usr_verb=update
+    # Rust adds, never replaces (design 5, G2 C1): training runs Python UDFs,
+    # so when no Python container is installed the official one goes in with
+    # the same restart - the Rust install is recorded without a restart
+    # (--no-restart) and the Python install's restart activates both. Said up
+    # front, in the one confirmation.
+    _usr_python="$(_udf_python_alias || true)"
+    _usr_add_python=0
+    [ -n "$_usr_python" ] || _usr_add_python=1
+    UDF_DONE_STEPS=""
+    _usr_rust_action=kept
     if [ "$_usr_verb" = update ] && [ "${1:-0}" != 1 ]; then
         ok "The $EXAKIT_UDF_RUST_ALIAS container is already installed"
+        if [ "$_usr_add_python" = 1 ]; then
+            info "Rust adds to Python, never replaces it: no Python container is installed, and training runs Python UDFs - the official $EXAKIT_UDF_OFFICIAL_ALIAS container goes in now"
+            _udf_with_restart "Installing the official $EXAKIT_UDF_OFFICIAL_ALIAS container beside $EXAKIT_UDF_RUST_ALIAS" \
+                _udf_slc install "$EXAKIT_UDF_OFFICIAL_ALIAS" --auto-approve
+            case $? in
+                0) ;;
+                5) _udf_fail 5 install "exakit udf-setup --language rust --yes" "The install was not confirmed; nothing changed."; return 1 ;;
+                *) _udf_fail 6 install "exakit logs" "The launcher could not install the $EXAKIT_UDF_OFFICIAL_ALIAS container beside $EXAKIT_UDF_RUST_ALIAS (see: exakit logs)."; return 1 ;;
+            esac
+        fi
     else
-        _udf_with_restart "Installing the $EXAKIT_UDF_RUST_ALIAS container" \
-            _udf_slc custom "$_usr_verb" --source "$UDF_CONTAINER_FILE" --alias "$EXAKIT_UDF_RUST_ALIAS" --language rust --auto-approve
+        _usr_rust_action=installed
+        _usr_what="Installing the $EXAKIT_UDF_RUST_ALIAS container"
+        if [ "$_usr_add_python" = 1 ]; then
+            info "Rust adds to Python, never replaces it: no Python container is installed, and training runs Python UDFs - the official $EXAKIT_UDF_OFFICIAL_ALIAS container goes in with the same restart"
+            _usr_what="Installing the $EXAKIT_UDF_RUST_ALIAS container and the official $EXAKIT_UDF_OFFICIAL_ALIAS container (one restart for both)"
+        fi
+        _udf_with_restart "$_usr_what" _udf_slc_rust_then_python "$_usr_verb" "$_usr_add_python"
         case $? in
             0) ;;
             5) _udf_fail 5 install "exakit udf-setup --language rust --yes" "The install was not confirmed; nothing changed."; return 1 ;;
-            *) _udf_fail 6 install "exakit logs" "The launcher could not install the $EXAKIT_UDF_RUST_ALIAS container (see: exakit logs)."; return 1 ;;
+            *) _udf_fail 6 install "exakit logs" "The launcher could not install the $EXAKIT_UDF_RUST_ALIAS container${_usr_add_python:+ or the official $EXAKIT_UDF_OFFICIAL_ALIAS one beside it} (see: exakit logs)."; return 1 ;;
         esac
         manifest_set "components.udf_devkit.containers.$EXAKIT_UDF_RUST_ALIAS" "$UDF_CONTAINER_URL"
         ok "Rust UDFs: the $EXAKIT_UDF_RUST_ALIAS container is installed (rustc $(_udf_row runtime | sed 's/.*"rustc": *"\([^"]*\)".*/\1/'), exasol-udf-sdk $(_udf_rules pins "$(exakit_versions_active_doc)" rust "$UDF_CONTAINER_ARCH" "$UDF_CONTAINER_DB" 2>/dev/null | awk '$1 == "exasol-udf-sdk" {print $2}'))"
     fi
     _udf_record_language rust
+    UDF_DONE_STEPS="{\"language\": \"rust\", \"alias\": \"$EXAKIT_UDF_RUST_ALIAS\", \"step\": \"install\", \"action\": \"$_usr_rust_action\"}"
+    if [ "$_usr_add_python" = 1 ]; then
+        # The Python container just added is proven by its smoke UDF, and
+        # recorded, before the Rust smoke: both languages must be there.
+        udf_devkit_smoke "$EXAKIT_UDF_OFFICIAL_ALIAS" || return 1
+        _udf_record_language python
+        manifest_set components.udf_devkit.python_alias "$EXAKIT_UDF_OFFICIAL_ALIAS"
+        UDF_DONE_STEPS="$UDF_DONE_STEPS, {\"language\": \"python\", \"alias\": \"$EXAKIT_UDF_OFFICIAL_ALIAS\", \"step\": \"install\", \"action\": \"installed\"}"
+    else
+        ok "Python UDFs keep running on $_usr_python (training needs them); Rust adds to it"
+        UDF_DONE_STEPS="$UDF_DONE_STEPS, {\"language\": \"python\", \"alias\": \"$_usr_python\", \"step\": \"install\", \"action\": \"kept\"}"
+    fi
     UDF_SMOKE_LINES=""
     if [ -z "$UDF_SMOKE_FILE" ]; then
         manifest_set components.udf_devkit.rust.validated false
@@ -573,6 +661,19 @@ udf_devkit_setup_rust() {
     fi
     udf_devkit_smoke_rust "$EXAKIT_UDF_RUST_ALIAS" || return 1
     return 0
+}
+
+# _udf_slc_rust_then_python <install|update> <add python 0|1> — the launcher
+# commands of one Rust setup, run inside one _udf_with_restart: the Rust
+# container recorded without a restart (--no-restart) when the official Python
+# container follows, whose own install restarts the database once for both.
+_udf_slc_rust_then_python() {
+    if [ "$2" = 1 ]; then
+        _udf_slc custom "$1" --source "$UDF_CONTAINER_FILE" --alias "$EXAKIT_UDF_RUST_ALIAS" --language rust --auto-approve --no-restart || return $?
+        _udf_slc install "$EXAKIT_UDF_OFFICIAL_ALIAS" --auto-approve
+    else
+        _udf_slc custom "$1" --source "$UDF_CONTAINER_FILE" --alias "$EXAKIT_UDF_RUST_ALIAS" --language rust --auto-approve
+    fi
 }
 
 udf_devkit_install() {
@@ -595,6 +696,7 @@ udf_devkit_install() {
     if ! exakit_db_reachable; then
         info "Start the database, then set up $_udi_lang UDFs with: exakit udf-setup --language $_udi_lang"
     elif [ "$_udi_lang" = rust ]; then
+        info "EXAKIT_UDF_LANGUAGE=rust: the Rust container is added beside a Python one (installed with it when none is there - training runs Python UDFs); one database restart"
         _UDF_YES=1 udf_devkit_setup_rust 0 || warn "Rust UDFs are not proven yet (${UDF_FAIL_MSG:-see the log}) - run: exakit udf-setup --language rust"
     else
         _UDF_YES=1 udf_devkit_setup_container 0 || warn "Python UDFs are not set up yet - run: exakit udf-setup"
@@ -615,7 +717,7 @@ udf_devkit_validate() {
     fi
     if printf '%s\n' "$_udv_aliases" | grep -qx "$EXAKIT_UDF_RUST_ALIAS"; then
         _udf_select_container rust >/dev/null 2>&1 && _udf_rust_smoke_asset \
-            && UDF_SMOKE_FILE="$EXAKIT_UDF_CONTAINER_CACHE/$(basename "$UDF_SMOKE_URL")" \
+            && UDF_SMOKE_FILE="${UDF_SMOKE_BUNDLED:-$EXAKIT_UDF_CONTAINER_CACHE/$(basename "$UDF_SMOKE_URL")}" \
             && _udf_rules verify "$UDF_SMOKE_FILE" "$UDF_SMOKE_SHA256" "$UDF_SMOKE_SIZE" >/dev/null 2>&1 \
             && udf_devkit_smoke_rust "$EXAKIT_UDF_RUST_ALIAS" >/dev/null 2>&1 && _udv_ok=1
     fi
@@ -871,24 +973,73 @@ print(json.dumps({"work_dir": sys.argv[1], "name": sys.argv[2], "flavor": sys.ar
 }
 
 # udf_bucket_locate — where the deployment's bucket is, resolved in this one
-# place for every command that hands a UDF a file (udf-file, model put | list;
-# the external-sources work stages its drivers through the same mapping). The
-# layout belongs to the launcher, so nothing else spells it out. Sets
-# UDF_BUCKET_DIR (the folder on this machine) and UDF_BUCKET_UDF_ROOT (that
-# folder as a UDF sees it, /buckets/<service>/<bucket>); returns 1 with
-# UDF_BUCKET_ERROR saying why when there is no deployment to put a file into.
-# Globals rather than printed lines: the two paths travel together, and a
-# subshell per value would resolve them twice.
+# place for every command that hands a UDF a file (udf-file, model put | list,
+# the Rust smoke library; the external-sources work stages its drivers through
+# the same mapping). The layout belongs to the launcher, so nothing else spells
+# it out: the deployment's runtime folder (local/runtime/exa) must exist and so
+# must its BucketFS folder (bucketfs, which the launcher creates - a missing
+# one is a FAIL: no deployment to put a file into); the bucket folder itself
+# (bfsdefault/default) is NOT created by the launcher - the database makes it
+# on the first file - so a missing one under an existing bucketfs is fine and
+# is created here (0755), UDF_BUCKET_CREATED=1 for the caller to say so. The
+# mapping comes from the deployment's bucketfs.conf when it is there (one line
+# per bucket: <path in the database> <service> <bucket> <path a UDF reads>
+# ...; the database path's /exa/ is local/runtime/exa/ on this machine), else
+# the default mapping is assumed; a conf that maps no such bucket is a FAIL
+# naming it. Sets UDF_BUCKET_DIR (the folder on this machine),
+# UDF_BUCKET_UDF_ROOT (that folder as a UDF sees it, /buckets/<service>/<bucket>)
+# and UDF_BUCKET_MAPPING (bucketfs.conf | default); returns 1 with
+# UDF_BUCKET_ERROR saying why. Globals rather than printed lines: the paths
+# travel together, and a subshell per value would resolve them twice.
 udf_bucket_locate() {
-    UDF_BUCKET_DIR=""; UDF_BUCKET_UDF_ROOT=""; UDF_BUCKET_ERROR=""
+    UDF_BUCKET_DIR=""; UDF_BUCKET_UDF_ROOT=""; UDF_BUCKET_ERROR=""; UDF_BUCKET_CREATED=0; UDF_BUCKET_MAPPING=default
     _ubl_root="$EXAKIT_PERSONAL_DEPLOY_DIR/$EXAKIT_UDF_BUCKETFS_DIR"
-    if [ ! -d "$(dirname "$_ubl_root")" ]; then
+    _ubl_exa="$(dirname "$_ubl_root")"
+    if [ ! -d "$_ubl_exa" ]; then
         UDF_BUCKET_ERROR="The deployment has no BucketFS folder at $_ubl_root; is the database deployed by this launcher? (exakit status)"
+        return 1
+    fi
+    if [ ! -d "$_ubl_root" ]; then
+        UDF_BUCKET_ERROR="The deployment has no BucketFS folder at $_ubl_root (the launcher creates it with the database); is the database deployed by this launcher? (exakit status)"
         return 1
     fi
     UDF_BUCKET_DIR="$_ubl_root/$EXAKIT_UDF_BUCKETFS_SERVICE/$EXAKIT_UDF_BUCKETFS_BUCKET"
     UDF_BUCKET_UDF_ROOT="$EXAKIT_UDF_BUCKETFS_ROOT/$EXAKIT_UDF_BUCKETFS_SERVICE/$EXAKIT_UDF_BUCKETFS_BUCKET"
+    _ubl_conf="$_ubl_exa/bucketfs.conf"
+    if [ -f "$_ubl_conf" ]; then
+        _ubl_line="$(awk -v s="$EXAKIT_UDF_BUCKETFS_SERVICE" -v b="$EXAKIT_UDF_BUCKETFS_BUCKET" '$2 == s && $3 == b { print; exit }' "$_ubl_conf" 2>/dev/null)"
+        if [ -z "$_ubl_line" ]; then
+            UDF_BUCKET_ERROR="$_ubl_conf maps no bucket $EXAKIT_UDF_BUCKETFS_SERVICE/$EXAKIT_UDF_BUCKETFS_BUCKET (it lists: $(awk '$2 != "__builtin__" { printf "%s/%s ", $2, $3 }' "$_ubl_conf" 2>/dev/null | sed 's/ $//')); the kit expects the launcher's default bucket - exakit update, or exakit status"
+            return 1
+        fi
+        _ubl_inside="$(printf '%s\n' "$_ubl_line" | awk '{ print $1 }')"
+        _ubl_seen="$(printf '%s\n' "$_ubl_line" | awk '{ print $4 }')"
+        case "$_ubl_inside" in
+            /exa/*) UDF_BUCKET_DIR="$_ubl_exa/${_ubl_inside#/exa/}" ;;
+            *) UDF_BUCKET_ERROR="$_ubl_conf keeps bucket $EXAKIT_UDF_BUCKETFS_SERVICE/$EXAKIT_UDF_BUCKETFS_BUCKET at $_ubl_inside, outside the deployment's exa folder the kit can write to (exakit status)"; return 1 ;;
+        esac
+        case "$_ubl_seen" in
+            /*) UDF_BUCKET_UDF_ROOT="$_ubl_seen" ;;
+        esac
+        UDF_BUCKET_MAPPING=bucketfs.conf
+    fi
+    if [ ! -d "$UDF_BUCKET_DIR" ]; then
+        if ! mkdir -p "$UDF_BUCKET_DIR" 2>/dev/null || ! chmod 755 "$UDF_BUCKET_DIR" 2>/dev/null; then
+            UDF_BUCKET_ERROR="The bucket folder $UDF_BUCKET_DIR is missing and could not be created (check the folder's permissions; exakit status)"
+            return 1
+        fi
+        UDF_BUCKET_CREATED=1
+        _exakit_log_file "UDF   created the bucket folder $UDF_BUCKET_DIR (mapping: $UDF_BUCKET_MAPPING)"
+    fi
     return 0
+}
+
+# udf_bucket_note — the one line a command says when udf_bucket_locate has just
+# created the bucket folder (not with --json: the answer is one object).
+udf_bucket_note() {
+    [ "${UDF_BUCKET_CREATED:-0}" = 1 ] || return 0
+    [ "${EXAKIT_REFUSAL_JSON:-0}" = 1 ] && return 0
+    info "Created the bucket folder $UDF_BUCKET_DIR (the launcher leaves it to the first file; UDFs read it at $UDF_BUCKET_UDF_ROOT)"
 }
 
 # cmd_udf_file <file> [<path in the bucket>] — copy a file into BucketFS and
@@ -899,6 +1050,7 @@ cmd_udf_file() {
     [ -f "$1" ] || die "$1 is not a file."
     _ucf_rel="$(_udf_tool relative "${2:-$(basename "$1")}" 2>&1)" || die "$_ucf_rel"
     udf_bucket_locate || die "$UDF_BUCKET_ERROR"
+    udf_bucket_note
     _ucf_dest="$UDF_BUCKET_DIR/$_ucf_rel"
     mkdir -p "$(dirname "$_ucf_dest")" || die "Could not create $(dirname "$_ucf_dest")"
     if ! { cp "$1" "$_ucf_dest.part" && mv "$_ucf_dest.part" "$_ucf_dest"; }; then
@@ -949,6 +1101,7 @@ _model_ready() {
     [ -n "$(udf_devkit_installed_version || true)" ] || \
         _model_refuse 4 "exakit marketplace udf-devkit" "The UDF dev kit is not installed."
     udf_bucket_locate || _model_refuse 3 "exakit status" "$UDF_BUCKET_ERROR"
+    udf_bucket_note
 }
 
 # _model_record — the recorded models as one JSON object ({} when none yet).
@@ -964,32 +1117,88 @@ cmd_model() {
     [ $# -gt 0 ] && shift
     case "$_cm_sub" in
         --help|-h) exakit_help_render command "exakit model" ;;
-        put|list|rm|prune|template)
+        put|list|rm|prune|inspect|template)
             case " $* " in
                 *" --help "*|*" -h "*) exakit_help_render command "exakit model $_cm_sub"; return $? ;;
             esac
             "_cmd_model_$_cm_sub" "$@" ;;
-        "") reject "Name what to do: exakit model put <file> | list | rm <name> | prune | template (exakit model --help)." ;;
-        *) reject "Unknown model command '$_cm_sub' (supported: put, list, rm, prune, template)." ;;
+        "") reject "Name what to do: exakit model put <file> | list | rm <name> | prune | inspect <file> | template (exakit model --help)." ;;
+        *) reject "Unknown model command '$_cm_sub' (supported: put, list, rm, prune, inspect, template)." ;;
     esac
 }
 
-# exakit model put <file> [--replace] [--json]
+# _model_inspect <file> — model_tool.py inspect: what the file is and whether
+# its provenance is trusted, as one JSON object in _MODEL_INSPECT (exit 2 with
+# the reason when the tool refuses it).
+_model_inspect() {
+    _mi_err="$EXAKIT_HOME/.model-inspect.err"
+    _MODEL_INSPECT="$(_model_tool inspect "$1" "$UDF_BUCKET_DIR" "$EXAKIT_HOME" 2>"$_mi_err")"
+    _mi_rc=$?
+    _mi_why="$(cat "$_mi_err" 2>/dev/null)"; rm -f "$_mi_err"
+    case "$_mi_rc" in
+        0) ;;
+        2) reject "$_mi_why" ;;
+        *) die "Could not read $1: ${_mi_why:-no reason given}" ;;
+    esac
+}
+
+# _model_inspect_field <name> — one field of _MODEL_INSPECT (True/False for a boolean).
+_model_inspect_field() {
+    printf '%s\n' "$_MODEL_INSPECT" | run_python_any -c 'import json, sys
+v = json.load(sys.stdin).get(sys.argv[1])
+print("" if v is None else v)' "$1"
+}
+
+# The prompt and the refusal before a pickle without trusted provenance is put
+# (design 9, T21b). Loading a pickle or joblib file runs code from the file, so
+# one whose provenance sidecar does not match an MLflow run or a workflow of
+# this kit is confirmed first: on a terminal the question below (default no;
+# a decline is exit 5, nothing copied); without one - or with --json - it is
+# refused with exit 6 unless --yes or EXAKIT_MODEL_TRUST=1 says the source is
+# trusted. The same file already in the bucket (same digest) asks nothing: the
+# UDF loads nothing new.
+EXAKIT_MODEL_TRUST_PROMPT="Loading a pickle runs code from the file. Continue?"
+
+# _model_trust_gate <file> <name> <yes 0|1> <json 0|1> — leaves when the put may
+# go on; exits 5 (declined) or 6 (refused without a terminal) otherwise.
+_model_trust_gate() {
+    [ "$(_model_inspect_field loads_code)" = True ] || return 0
+    [ "$(_model_inspect_field trusted)" = True ] && return 0
+    [ "$(_model_inspect_field in_bucket)" = same ] && return 0
+    if [ "$3" = 1 ] || [ "${EXAKIT_MODEL_TRUST:-0}" = 1 ]; then
+        _exakit_log_file "UDF   model put $2: pickle without trusted provenance, confirmed by --yes or EXAKIT_MODEL_TRUST=1"
+        return 0
+    fi
+    _mtg_why="$(_model_inspect_field reason)"
+    if [ "$4" != 1 ] && [ -n "$(_exakit_prompt_tty)" ]; then
+        warn "$2 is a $(_model_inspect_field kind) file without trusted provenance ($_mtg_why)."
+        if confirm "$EXAKIT_MODEL_TRUST_PROMPT" n; then
+            return 0
+        fi
+        _model_refuse 5 "exakit model put $1 --yes" "Not confirmed; nothing was copied."
+    fi
+    _model_refuse 6 "exakit model put $1 --yes" "Loading a pickle runs code from the file, and $2 carries no trusted provenance ($_mtg_why). Nothing was copied; confirm with --yes, or EXAKIT_MODEL_TRUST=1, when you trust its source."
+}
+
+# exakit model put <file> [--replace] [--yes] [--json]
 _cmd_model_put() {
-    _cmp_file=""; _cmp_replace=0; _cmp_json=0
+    _cmp_file=""; _cmp_replace=0; _cmp_json=0; _cmp_yes=0
     for _cmp_arg in "$@"; do
         case "$_cmp_arg" in
             --replace) _cmp_replace=1 ;;
+            --yes|-y) _cmp_yes=1 ;;
             --json|-j) _cmp_json=1; EXAKIT_REFUSAL_JSON=1 ;;
-            -*) reject "Unknown option '$_cmp_arg' for model put (supported: --replace --json)." ;;
-            *) [ -z "$_cmp_file" ] || reject "Name one model file: exakit model put <file> [--replace]"; _cmp_file="$_cmp_arg" ;;
+            -*) reject "Unknown option '$_cmp_arg' for model put (supported: --replace --yes --json)." ;;
+            *) [ -z "$_cmp_file" ] || reject "Name one model file: exakit model put <file> [--replace] [--yes]"; _cmp_file="$_cmp_arg" ;;
         esac
     done
-    [ -n "$_cmp_file" ] || reject "Name the model file: exakit model put <file> [--replace] [--json]"
+    [ -n "$_cmp_file" ] || reject "Name the model file: exakit model put <file> [--replace] [--yes] [--json]"
     _model_ready
     [ -f "$_cmp_file" ] || reject "$_cmp_file is not a file."
+    _model_inspect "$_cmp_file"
+    _model_trust_gate "$_cmp_file" "$(_model_inspect_field name)" "$_cmp_yes" "$_cmp_json"
     _cmp_err="$EXAKIT_HOME/.model-put.err"
-    _cmp_out="$(_model_record | _model_tool put "$_cmp_file" "$UDF_BUCKET_DIR" "$UDF_BUCKET_UDF_ROOT" "$_cmp_replace" 2>"$_cmp_err")"
+    _cmp_out="$(_model_record | _model_tool put "$_cmp_file" "$UDF_BUCKET_DIR" "$UDF_BUCKET_UDF_ROOT" "$_cmp_replace" "$EXAKIT_HOME" 2>"$_cmp_err")"
     _cmp_rc=$?
     _cmp_why="$(cat "$_cmp_err" 2>/dev/null)"; rm -f "$_cmp_err"
     case "$_cmp_rc" in
@@ -1017,7 +1226,49 @@ print("\n".join(str(a[k]) for k in ("name", "path", "sha256", "size")))')"
     esac
     info "sha256 $(printf '%s\n' "$_cmp_fields" | sed -n 3p), $(printf '%s\n' "$_cmp_fields" | sed -n 4p) bytes, recorded"
     info "A UDF reads it as: $(printf '%s\n' "$_cmp_fields" | sed -n 2p)"
-    printf '%s\n' "$_cmp_answer" | run_python_any -c 'import json,sys; w=json.load(sys.stdin).get("warning"); print("  Warning: "+w if w else "")' | sed '/^$/d'
+    printf '%s\n' "$_cmp_answer" | run_python_any -c 'import json,sys
+a = json.load(sys.stdin)
+p = a.get("provenance") or {}
+if a.get("trusted_origin"):
+    print("  Provenance: trusted (" + ", ".join(k + " " + str(p[k]) for k in ("run_id", "workflow_id") if p.get(k)) + ")")
+elif p.get("scikit-learn"):
+    print("  Pickled with scikit-learn " + str(p["scikit-learn"]) + " (pickle protocol " + str(p.get("pickle_protocol")) + "), recorded in its provenance sidecar")
+w = a.get("warning")
+if w: print("  Warning: " + w)'
+}
+
+# exakit model inspect <file> [--json] — what the file is and whether its
+# provenance is trusted, before it is put: kind, sha256, size, the versions its
+# header or sidecar name, the trust verdict with its reason, and whether the
+# bucket already holds it.
+_cmd_model_inspect() {
+    _cmi_file=""; _cmi_json=0
+    for _cmi_arg in "$@"; do
+        case "$_cmi_arg" in
+            --json|-j) _cmi_json=1; EXAKIT_REFUSAL_JSON=1 ;;
+            -*) reject "Unknown option '$_cmi_arg' for model inspect (supported: --json)." ;;
+            *) [ -z "$_cmi_file" ] || reject "Name one model file: exakit model inspect <file>"; _cmi_file="$_cmi_arg" ;;
+        esac
+    done
+    [ -n "$_cmi_file" ] || reject "Name the model file: exakit model inspect <file> [--json]"
+    _model_ready
+    [ -f "$_cmi_file" ] || reject "$_cmi_file is not a file."
+    _model_inspect "$_cmi_file"
+    if [ "$_cmi_json" = 1 ]; then
+        exakit_json_pretty "$_MODEL_INSPECT"
+        return 0
+    fi
+    printf '%s\n' "$_MODEL_INSPECT" | run_python_any -c 'import json, sys
+d = json.load(sys.stdin)
+p = d.get("provenance") or {}
+print("  %s: %s file, %d bytes, sha256 %s" % (d["name"], d["kind"], d["size"], d["sha256"]))
+if p:
+    print("  Provenance (%s): scikit-learn %s, python %s, pickle protocol %s, run_id %s, workflow_id %s" % (
+        p.get("source"), p.get("scikit-learn") or "unknown", p.get("python") or "unknown", p.get("pickle_protocol"),
+        p.get("run_id") or "-", p.get("workflow_id") or "-"))
+print("  Trusted: %s (%s)" % ("yes" if d["trusted"] else "no", d["reason"]))
+print("  In the bucket directory: %s" % {"same": "yes, this file", "different": "a different file of this name", "absent": "no"}[d["in_bucket"]])
+if d.get("warning"): print("  Warning: " + d["warning"] + " exakit model put asks before copying it (--yes or EXAKIT_MODEL_TRUST=1 answers).")'
 }
 
 _cmd_model_rm() {
@@ -1075,7 +1326,8 @@ _cmd_model_prune() {
     printf '%s\n' "$_cmpn_answer" | run_python_any -c 'import json,sys
 d=json.load(sys.stdin)
 for name in d["candidates"]: print(("Removed " if not d["dry_run"] else "Would remove ")+name)
-print("No old unreferenced models found." if not d["candidates"] else ("Pruned." if not d["dry_run"] else "Dry run; pass --yes to remove these models."))'
+print("No old unreferenced models found." if not d["candidates"] else ("Pruned." if not d["dry_run"] else "Dry run; pass --yes to remove these models."))
+if d.get("mlflow"): print("(" + d["mlflow"] + ")")'
 }
 
 # exakit model list [--json]
@@ -1089,7 +1341,7 @@ _cmd_model_list() {
     done
     _model_ready
     _cml_err="$EXAKIT_HOME/.model-list.err"
-    _cml_doc="$(_model_record | _model_tool list "$UDF_BUCKET_DIR" "$UDF_BUCKET_UDF_ROOT" 2>"$_cml_err")"
+    _cml_doc="$(_model_record | _model_tool list "$UDF_BUCKET_DIR" "$UDF_BUCKET_UDF_ROOT" "${UDF_BUCKET_CREATED:-0}" "${UDF_BUCKET_MAPPING:-default}" 2>"$_cml_err")"
     _cml_rc=$?
     _cml_why="$(cat "$_cml_err" 2>/dev/null)"; rm -f "$_cml_err"
     [ "$_cml_rc" -eq 0 ] || die "Could not list the bucket directory: ${_cml_why:-no reason given}"
@@ -1099,8 +1351,8 @@ _cmd_model_list() {
     fi
     printf '%s\n' "$_cml_doc" | run_python_any -c 'import json, sys
 d = json.load(sys.stdin)
-print("  Bucket directory: %s" % d["bucket_dir"])
-print("  UDFs read it as:  %s" % d["udf_root"])
+print("  Bucket directory: %s%s" % (d["bucket_dir"], " (created now)" if d.get("created") else ""))
+print("  UDFs read it as:  %s (mapping: %s)" % (d["udf_root"], d.get("mapping", "default")))
 print("")
 if not d["models"]:
     print("  No models yet. Put one with: exakit model put <file>")

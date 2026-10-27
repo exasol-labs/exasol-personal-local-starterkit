@@ -284,7 +284,7 @@ class NotebookTest(unittest.TestCase):
         commands = {name for arm in re.findall(r"^    ([a-z0-9|-]+)\)", dispatch, flags=re.M) for name in arm.split("|")}
         module = (ROOT / "setup" / "lib" / "udf-devkit.sh").read_text(encoding="utf-8")
         model_subs = set(re.findall(r"^_cmd_model_([a-z]+)\(\)", module, flags=re.M))
-        self.assertEqual(model_subs, {"put", "list", "rm", "prune", "template"})
+        self.assertEqual(model_subs, {"put", "list", "rm", "prune", "template", "inspect"})
         named = re.findall(r"`exakit ([a-z][a-z-]*)(?: ([a-z][a-z-]*))?", self.text)
         for node in ast.walk(ast.parse(self.text)):
             if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "exakit":

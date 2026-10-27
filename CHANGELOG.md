@@ -6,7 +6,7 @@
 
 - Data Scientist and ML Engineer notebooks now share approved descriptor versions, workflow logs and a handoff. The Data Scientist can review generated SQL before a read-only MCP query runs, then prepare a Dash Server preview and explicitly promote a healthy revision after checking its figures.
 - The ML Engineer path adds a managed MLflow server, a validated UDF return contract with replay recovery, a time-split training notebook, model upload and removal controls, a Rust scoring project command and a parity notebook. Notebook model scoring checks the container's scikit-learn version before uploading a pickle.
-- The Rust build uses the pinned Exasol SDK and Rust toolchain inside a matching Linux container on macOS and Windows. PowerShell command paths and tests are included. A real Rust build and Windows deployment remain to be verified on those machines.
+- The Rust build uses the pinned Exasol SDK and Rust toolchain inside a matching Linux container on macOS and Windows, records its Cargo lockfile digest, and checks the installed container before deployment. The Arm scorer and both architecture-specific smoke libraries compiled and passed `cargo exasol-udf validate` on macOS. The smoke libraries are bundled with size, SHA-256 and ELF architecture checks. The PowerShell path is checked with local tests; live Windows deployment remains for the user's later verification.
 - Release gate plans are in `tests/manual/gate-g1.md`, `gate-g2.md` and `gate-g3.md`. Their pass criteria require observed practitioner sessions; none is declared passed by this changelog.
 
 

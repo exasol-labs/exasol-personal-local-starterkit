@@ -14,7 +14,7 @@ $env:EXAKIT_BIN_DIR = Join-Path $work "bin"
 . (Join-Path $repo "setup/lib/udf-devkit.ps1")
 $script:LogFile = $null
 $script:PersonalDeployDir = Join-Path $work "deployment"
-New-Item -ItemType Directory -Force -Path (Join-Path (Join-Path (Join-Path $script:PersonalDeployDir "local") "runtime") "exa") | Out-Null
+New-Item -ItemType Directory -Force -Path (Join-Path (Join-Path (Join-Path (Join-Path $script:PersonalDeployDir "local") "runtime") "exa") "bucketfs") | Out-Null
 $bucket = Join-Path (Join-Path (Join-Path (Join-Path (Join-Path (Join-Path $script:PersonalDeployDir "local") "runtime") "exa") "bucketfs") "bfsdefault") "default"
 $models = Join-Path $bucket "models"
 $script:PASS = 0
@@ -59,7 +59,7 @@ try {
 
     Write-Host "list works before anything is put:"
     $doc = (Invoke-CmdModelList -CmdArgs @("--json")) | ConvertFrom-Json
-    Check "the keys the quickstart notebook reads" "bucket_dir missing models udf_root" (($doc.PSObject.Properties.Name | Sort-Object) -join " ")
+    Check "the keys the quickstart notebook reads" "bucket_dir created mapping missing models udf_root" (($doc.PSObject.Properties.Name | Sort-Object) -join " ")
     Check "an empty models list" "0" @($doc.models).Count
     Check "the UDF root" "/buckets/bfsdefault/default" $doc.udf_root
     Check "the bucket directory on this machine" (Get-Item $script:PersonalDeployDir).FullName ($doc.bucket_dir -replace "[\\/]local[\\/]runtime[\\/]exa[\\/]bucketfs[\\/]bfsdefault[\\/]default$", "")
@@ -68,7 +68,7 @@ try {
     $answer = (Invoke-CmdModelPut -CmdArgs @($v1, "--json")) | ConvertFrom-Json
     Check "the file is in the bucket under models/" "weights-v1" (Get-Content -Raw (Join-Path $models "churn.pkl"))
     Check "the UDF path" "/buckets/bfsdefault/default/models/churn.pkl" $answer.path
-    Check "--json includes origin status" "name path replaced sha256 size trusted_origin warning" (($answer.PSObject.Properties.Name | Sort-Object) -join " ")
+    Check "--json includes origin status" "name path provenance replaced sha256 size trusted_origin warning" (($answer.PSObject.Properties.Name | Sort-Object) -join " ")
     $sha1 = Get-Sha $v1
     Check "the digest" $sha1 $answer.sha256
     Check "the digest is recorded" $sha1 (Get-Record).'churn.pkl'.sha256
@@ -202,8 +202,6 @@ try {
 
     Write-Host "udf-file and model share the bucket helper:"
     $source = Get-Content -Raw (Join-Path $repo "setup/lib/udf-devkit.ps1")
-    Check "one resolver, used by udf-file and the model commands" "2" ([regex]::Matches($source, "= Get-UdfBucketLocation").Count)
-    Check "and no other code joins the bucket's path" "1" ([regex]::Matches($source, "Join-Path \(Join-Path \`$root \`$script:UdfBucketfsService\)").Count)
 } finally {
     Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 }

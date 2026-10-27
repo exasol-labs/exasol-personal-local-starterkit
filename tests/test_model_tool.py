@@ -38,8 +38,8 @@ class ModelToolTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def put(self, source: Path, replace: str = "0", record: str = "{}"):
-        return run("put", str(source), str(self.bucket), ROOT_UDF, replace, stdin=record)
+    def put(self, source: Path, replace: str = "0", record: str = "{}", kit_home: str = ""):
+        return run("put", str(source), str(self.bucket), ROOT_UDF, replace, kit_home, stdin=record)
 
     def test_put_answers_in_three_lines(self):
         code, out, err = self.put(self.model)
@@ -48,7 +48,7 @@ class ModelToolTest(unittest.TestCase):
         self.assertEqual(action, "copied")
         self.assertEqual(json.loads(answer), {"name": "churn.pkl", "path": f"{ROOT_UDF}/models/churn.pkl",
                                               "sha256": model_tool.digest(self.model)[0], "size": 3, "replaced": False,
-                                              "trusted_origin": False,
+                                              "trusted_origin": False, "provenance": None,
                                               "warning": "Only load pickle or joblib models from a source you trust."})
         self.assertEqual(sorted(json.loads(record)["churn.pkl"]), ["path", "provenance", "put_at", "sha256", "size"])
         self.assertEqual((self.bucket / "models" / "churn.pkl").read_bytes(), b"one")
@@ -109,10 +109,16 @@ class ModelToolTest(unittest.TestCase):
         self.assertEqual(run("frob")[0], 2)
         self.assertEqual(run("put", "x")[0], 2)
 
-    def test_matching_provenance_and_remove(self):
+    def test_matching_provenance_needs_a_known_workflow_and_remove(self):
         sidecar = Path(str(self.model) + ".provenance.json")
-        sidecar.write_text(json.dumps({"sha256": model_tool.digest(self.model)[0], "python": "3.12", "scikit-learn": "1.9.0"}))
-        _, out, _ = self.put(self.model)
+        sidecar.write_text(json.dumps({"sha256": model_tool.digest(self.model)[0], "python": "3.12",
+                                       "scikit-learn": "1.9.0", "workflow_id": "wf-test"}))
+        _, out, _ = self.put(self.model, kit_home=str(self.dir))
+        self.assertFalse(json.loads(out.splitlines()[1])["trusted_origin"])
+        workflows = self.dir / "workflows"
+        workflows.mkdir()
+        (workflows / "wf-test.jsonl").write_text('{"event":"workflow.start"}\n')
+        _, out, _ = self.put(self.model, kit_home=str(self.dir))
         self.assertTrue(json.loads(out.splitlines()[1])["trusted_origin"])
         record = out.splitlines()[2]
         code, out, err = run("rm", "churn.pkl", str(self.bucket), ROOT_UDF, stdin=record)

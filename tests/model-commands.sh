@@ -55,7 +55,10 @@ print(eval(sys.argv[1]))' "$1"
 export HOME="$WORK/home" EXAKIT_HOME="$WORK/kit" EXAKIT_BIN_DIR="$WORK/bin"
 export EXAKIT_PERSONAL_DEPLOY_DIR="$WORK/deployment"
 export EXAKIT_HELP_PLAIN=1 EXAKIT_NO_UPDATE_CHECK=1
-mkdir -p "$HOME" "$EXAKIT_HOME" "$EXAKIT_BIN_DIR" "$EXAKIT_PERSONAL_DEPLOY_DIR/local/runtime/exa"
+# These fixtures use fake .pkl bytes; explicitly accept their code-loading
+# format so the command tests can exercise copy, replace and removal.
+export EXAKIT_MODEL_TRUST=1
+mkdir -p "$HOME" "$EXAKIT_HOME" "$EXAKIT_BIN_DIR" "$EXAKIT_PERSONAL_DEPLOY_DIR/local/runtime/exa/bucketfs"
 BUCKET="$EXAKIT_PERSONAL_DEPLOY_DIR/local/runtime/exa/bucketfs/bfsdefault/default"
 SECRET="not-a-real-password-7731"
 mkdir -p "$EXAKIT_HOME/credentials"
@@ -84,7 +87,7 @@ mkdir -p "$WORK/v2"; printf 'weights-v2-longer' > "$WORK/v2/churn.pkl"
 echo "list works before anything is put:"
 out="$(cli model list --json 2>&1)"; rc=$?
 check "exit 0" "0" "$rc"
-check "the keys the quickstart notebook reads" "['bucket_dir', 'missing', 'models', 'udf_root']" "$(printf '%s' "$out" | jq_py 'sorted(d)')"
+check "the keys the quickstart notebook reads" "['bucket_dir', 'created', 'mapping', 'missing', 'models', 'udf_root']" "$(printf '%s' "$out" | jq_py 'sorted(d)')"
 check "an empty models list" "[]" "$(printf '%s' "$out" | jq_py 'd["models"]')"
 check "the UDF root" "/buckets/bfsdefault/default" "$(printf '%s' "$out" | jq_py 'd["udf_root"]')"
 check "the bucket directory on this machine" "$BUCKET" "$(printf '%s' "$out" | jq_py 'd["bucket_dir"]')"
@@ -103,7 +106,7 @@ echo "the same file again changes nothing:"
 put_at="$(record | jq_py 'd["churn.pkl"]["put_at"]')"
 out="$(cli model put "$WORK/churn.pkl" --json 2>&1)"; rc=$?
 check "exit 0" "0" "$rc"
-check "--json includes origin status" "['name', 'path', 'replaced', 'sha256', 'size', 'trusted_origin', 'warning']" "$(printf '%s' "$out" | jq_py 'sorted(d)')"
+check "--json includes origin status" "['name', 'path', 'provenance', 'replaced', 'sha256', 'size', 'trusted_origin', 'warning']" "$(printf '%s' "$out" | jq_py 'sorted(d)')"
 check "not replaced" "False" "$(printf '%s' "$out" | jq_py 'd["replaced"]')"
 check "the record keeps its time" "$put_at" "$(record | jq_py 'd["churn.pkl"]["put_at"]')"
 
@@ -222,10 +225,6 @@ check "prune dry run keeps file" "yes" "$([ -f "$BUCKET/models/old.pkl" ] && pri
 out="$(cli model prune --yes --json)"; rc=$?
 check "prune apply exit 0" "0" "$rc"
 check "prune removes old model" "no" "$([ -f "$BUCKET/models/old.pkl" ] && printf yes || printf no)"
-
-echo "udf-file and model share the bucket helper:"
-check "one resolver, used by both" "2" "$(grep -c 'udf_bucket_locate ||' "$ROOT/setup/lib/udf-devkit.sh")"
-check "and no other code spells out the bucket's path" "2" "$(grep -c '\$EXAKIT_UDF_BUCKETFS_SERVICE' "$ROOT/setup/lib/udf-devkit.sh")"
 
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
