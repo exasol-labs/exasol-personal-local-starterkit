@@ -98,6 +98,10 @@ class AskTest(unittest.TestCase):
             self.assertEqual(environment["EXA_USER"], "mcp_readonly")
             self.assertEqual(environment["EXA_DSN"], "127.0.0.1:8563")
             self.assertEqual(environment["EXA_SSL_CERT_VALIDATION"], "no")
+            settings = json.loads(environment["EXA_MCP_SETTINGS"])
+            self.assertTrue(settings["enable_read_query"])
+            self.assertFalse(settings["enable_write_query"])
+            self.assertFalse(settings["enable_write_bucketfs"])
 
     def test_mcp_protocol_calls_read_query_tool_after_handshake(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -51,7 +51,12 @@ def _mcp_settings() -> tuple[list[str], dict[str, str]]:
         loopback = False
     environment = os.environ.copy()
     environment.update(EXA_DSN=dsn, EXA_USER=user, EXA_PASSWORD=password_file.read_text(encoding="utf-8").strip(),
-                       EXA_SSL_CERT_VALIDATION="no" if loopback else "yes")
+                       EXA_SSL_CERT_VALIDATION="no" if loopback else "yes",
+                       # Match mcp/runtime/exakit.py. The official server hides
+                       # execute_exasol_query unless read queries are enabled.
+                       EXA_MCP_SETTINGS=json.dumps({"enable_read_query": True,
+                           "enable_summarize_table": True, "enable_query_profiling": True,
+                           "enable_write_query": False, "enable_write_bucketfs": False}))
     if server.get("openssl_armcap_workaround"):
         environment["OPENSSL_armcap"] = "0"
     return [str(command), f"{package}@{version}"], environment
