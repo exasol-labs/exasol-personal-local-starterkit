@@ -42,7 +42,7 @@
 #   - launcher: $EXAKIT_BIN_DIR/exasol-json-tables
 
 EXAKIT_JSON_TABLES_VERSION="${EXAKIT_JSON_TABLES_VERSION:-}"
-EXAKIT_JSON_TABLES_VERSION_FALLBACK="${EXAKIT_JSON_TABLES_VERSION_FALLBACK:-v0.3.2}"
+EXAKIT_JSON_TABLES_VERSION_FALLBACK="${EXAKIT_JSON_TABLES_VERSION_FALLBACK:-v0.4.0}"
 EXAKIT_JSON_TABLES_PACKAGE="${EXAKIT_JSON_TABLES_PACKAGE:-exasol-json-tables}"
 # Upstream source, used only to restore package data the wheel omits (see
 # _json_tables_restore_package_data). Not where the wheel or engine come from.
