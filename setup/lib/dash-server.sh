@@ -394,16 +394,15 @@ _dash_server_ensure_pip() {
 }
 
 # _dash_server_credentials — "user<TAB>password_file" for the launcher's
-# profile bootstrap. Prefers the kit's dedicated read-only MCP user (dashboards
-# read, they do not write — same least-privilege posture as the MCP server);
-# falls back to the runtime admin user only when no read-only user exists yet.
+# profile bootstrap. Dashboards use the validated read-only MCP identity only.
+# No profile is bootstrapped until mcp-setup has established that identity.
 _dash_server_credentials() {
-    if command -v mcp_credentials >/dev/null 2>&1; then
-        mcp_credentials
-        return 0
+    _readonly_validated="$(manifest_get components.mcp_server.connection.validated 2>/dev/null || true)"
+    _readonly_user="$(manifest_get components.mcp_server.connection.user 2>/dev/null || true)"
+    _readonly_pwfile="$(manifest_get components.mcp_server.connection.password_file 2>/dev/null || true)"
+    if [ "$_readonly_validated" = true ] && [ -n "$_readonly_user" ] && [ -n "$_readonly_pwfile" ]; then
+        printf '%s\t%s\n' "$_readonly_user" "$_readonly_pwfile"
     fi
-    printf '%s\t%s\n' "$(manifest_get runtime.user 2>/dev/null)" \
-        "$(manifest_get runtime.password_file 2>/dev/null)"
 }
 
 # dash_server_write_launcher — generate $EXAKIT_BIN_DIR/dash-server. The

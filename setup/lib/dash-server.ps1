@@ -241,12 +241,10 @@ function Write-DashServerLauncher {
     $dsn = Get-ExakitManifestValue "runtime.dsn"
     $user = Get-ExakitManifestValue "components.mcp_server.connection.user"
     $pwfile = Get-ExakitManifestValue "components.mcp_server.connection.password_file"
-    if (-not $user -or -not $pwfile) {
-        # Dashboards read, they do not write: prefer the dedicated read-only
-        # user (same posture as the MCP server); the runtime admin user is the
-        # fallback for installs made before the read-only user existed.
-        $user = Get-ExakitManifestValue "runtime.user"
-        $pwfile = Get-ExakitManifestValue "runtime.password_file"
+    $validated = Get-ExakitManifestValue "components.mcp_server.connection.validated"
+    if ($validated -ne 'true' -or -not $user -or -not $pwfile) {
+        $user = $null
+        $pwfile = $null
     }
     $instance = Join-Path $script:DashServerHome "instance"
     $exe = Join-Path $script:DashServerVenv "Scripts\dash-server.exe"

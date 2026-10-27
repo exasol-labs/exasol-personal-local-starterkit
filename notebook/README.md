@@ -17,6 +17,7 @@ The notebooks, in the order a new user opens them (numbers are never reused):
 | `data-scientist/` | `00_quickstart` | Opens connected; one cell per way data comes in (a sample dataset, your own file, a connected source); review and approve the proposed column roles; a first query |
 | | `01_explore` | The landscape question with the SQL visible, a small scikit-learn model, the text step traced to your Langfuse; another dataset or your own file is one assignment; ends by writing the handoff for the ML Engineer |
 | | `02_ask_your_data` | Draft SQL from approved roles, inspect and approve it, then execute under the dedicated read-only database identity |
+| | `03_share` | Prepare a Dash Server app from checked SQL, inspect a healthy preview, then explicitly promote the revision |
 | `ml-engineer/` | `00_quickstart` | The container, MLflow and the bucket directory, one check each with its fix; then the same loader and role-review cells |
 | | `01_train` | Checks the handoff, builds its SQL feature view, trains a classifier inside a Python UDF, compares macro-F1 with a majority baseline, and logs the model and coefficients to MLflow |
 | | `03_score_external_model` | A model trained elsewhere, dropped with `exakit model put` and scored by a UDF |
@@ -27,6 +28,14 @@ Engineer's `02` is `02_rust_score` (to come), so the score notebook is `03`.
 The model lifecycle is *Develop → Train → Track → Validate → Register → Deploy → Score → Monitor*. This kit covers
 training, tracking and validation. Its MLflow run stores the model artifact and environment tags needed by a later
 registry; registration, serving and monitoring are separate work.
+
+The Share notebook prepares `app.py`, a live SQL query, and `REVISION.json` with the workflow id, descriptor version
+and query digest. Its `ShareDraft.preview(tool)` drives the registered Dash Server MCP control plane: validate the
+read-only profile, scaffold, put files, deploy to preview and run a health check. `confirm(tool,
+figures_checked=True)` promotes the same revision after the reader checks the figures against the SQL. On Windows
+the preview uses `app_build` then `app_start_preview`, because the Windows deploy shortcut has a known path issue.
+The tool callable is supplied by the AI client hosting Dash Server MCP; the notebook prints the requests when one
+is not attached. The kit never puts database credentials in the dashboard source.
 
 On a machine, `exakit marketplace notebook` copies each notebook into
 `~/.exasol-starter-kit/notebooks/starter-kit-notebooks/<persona>/` (the shared

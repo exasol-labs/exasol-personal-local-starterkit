@@ -66,7 +66,7 @@ specs="$(_notebook_specs)"
 check "the connector, pinned, with its extras (notebook-dependencies: ipywidgets, ipyfilechooser, matplotlib, wordcloud, stopwatch.py - the AI Lab notebooks' first cell)" \
     "exasol-notebook-connector[bucketfs,ibis,pyexasol,sqlalchemy,notebook-dependencies]==3.1.0" "$(printf '%s\n' "$specs" | head -1)"
 contains "the kernel package" "ipykernel>=6.29,<8" "$specs"
-contains "the client model library" "scikit-learn>=1.4,<2" "$specs"
+contains "the client model library matches the container" "scikit-learn==1.9.0" "$specs"
 contains "the MLflow client, not the server" "mlflow-skinny>=3,<4" "$specs"
 contains "Langfuse SDK major 5" "langfuse>=5,<6" "$specs"
 check "the kit's helper package" "$ROOT/notebook/package" "$(printf '%s\n' "$specs" | tail -2 | head -1)"
@@ -101,7 +101,7 @@ mkdir -p "$NB/data-scientist"
 printf 'mine' > "$NB/data-scientist/00_quickstart.ipynb"
 added="$(notebook_copy_notebooks | tr '\n' ' ')"
 check "what is missing comes, each in its persona's folder, the shared cells too" \
-    "00_shared/data_paths.ipynb data-scientist/01_explore.ipynb ml-engineer/00_quickstart.ipynb ml-engineer/01_train.ipynb ml-engineer/03_score_external_model.ipynb " "$added"
+    "00_shared/data_paths.ipynb data-scientist/01_explore.ipynb data-scientist/02_ask_your_data.ipynb data-scientist/03_share.ipynb ml-engineer/00_quickstart.ipynb ml-engineer/01_train.ipynb ml-engineer/03_score_external_model.ipynb " "$added"
 check "the user's own stays" "mine" "$(cat "$NB/data-scientist/00_quickstart.ipynb")"
 check "a second run adds nothing" "" "$(notebook_copy_notebooks)"
 contains "a README names each persona's order" "00. \`ml-engineer/00_quickstart.ipynb\` - Quickstart" "$(cat "$NB/README.md")"
@@ -118,7 +118,7 @@ check "the personas' first prompts name quickstarts that ship" "" \
     "$(for p in data-scientist ml-engineer; do [ -f "$ROOT/notebook/notebooks/$p/00_quickstart.ipynb" ] || printf ' %s' "$p"
         grep -q "$p/00_quickstart.ipynb" "$ROOT/personas/$p.json" || printf ' %s-prompt' "$p"; done)"
 check "the Marimo ones go to marimo/<persona>/, no README" \
-    "00_shared/data_paths.py data-scientist/00_quickstart.py data-scientist/01_explore.py ml-engineer/00_quickstart.py ml-engineer/01_train.py ml-engineer/03_score_external_model.py |no" \
+    "00_shared/data_paths.py data-scientist/00_quickstart.py data-scientist/01_explore.py data-scientist/02_ask_your_data.py data-scientist/03_share.py ml-engineer/00_quickstart.py ml-engineer/01_train.py ml-engineer/03_score_external_model.py |no" \
     "$(notebook_copy_notebooks marimo | tr '\n' ' ')|$([ -e "$EXAKIT_NOTEBOOK_DIR/marimo/README.md" ] && echo yes || echo no)"
 
 echo "the notebook tools: one checklist, all three ticked:"

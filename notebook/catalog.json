@@ -47,6 +47,16 @@
       "marimo": "02_ask_your_data.py"
     },
     {
+      "id": "share",
+      "persona": "data-scientist",
+      "step": 3,
+      "title": "Share a checked result",
+      "summary": "Prepare a Dash Server dashboard from approved roles and visible SQL, inspect its preview, and promote only after checking the figures.",
+      "needs": "An approved descriptor and the dash-server add-on with its registered MCP tools and read-only Exasol profile.",
+      "jupyter": "03_share.ipynb",
+      "marimo": "03_share.py"
+    },
+    {
       "id": "ml-engineer-quickstart",
       "persona": "ml-engineer",
       "step": 0,
