@@ -248,6 +248,9 @@ chmod 600 "$WORK/pwfile"
 manifest_set runtime.dsn "127.0.0.1:8563"
 manifest_set runtime.user "sys"
 manifest_set runtime.password_file "$WORK/pwfile"
+manifest_set components.mcp_server.connection.user "mcp_readonly"
+manifest_set components.mcp_server.connection.password_file "$WORK/pwfile"
+manifest_set components.mcp_server.connection.validated true
 ( dash_server_write_launcher >/dev/null 2>&1 )
 _launcher="$EXAKIT_BIN_DIR/dash-server"
 check "launcher exists and is executable" "yes" "$([ -x "$_launcher" ] && echo yes || echo no)"
@@ -2183,6 +2186,10 @@ echo "exasol-scheduler installs straight from upstream's release:"
 # digest versions.json pins, and the engine is unpacked out of it.
 _sch_adv="$(python3 -c 'import json; print(json.load(open("'"$ROOT"'/versions.json"))["components"]["exasol-scheduler"]["version"])')"
 _sch_pin="$(python3 -c 'import json; print(json.load(open("'"$ROOT"'/versions.json"))["components"]["exasol-scheduler"]["sha256"]["macos-arm64"])')"
+# Earlier cases may have resolved a newer cached manifest. This section
+# checks the release and digest shipped by this checkout, so pin its document.
+_sch_previous_doc="${_EXAKIT_VERSIONS_DOC:-}"
+_EXAKIT_VERSIONS_DOC="$ROOT/versions.json"
 check "versions.json names the upstream repo" "exasol-labs/exasol-scheduler" \
     "$(python3 -c 'import json; print(json.load(open("'"$ROOT"'/versions.json"))["components"]["exasol-scheduler"].get("repo", ""))')"
 check "...and no kit-repo release any more" "absent" \
@@ -2230,6 +2237,7 @@ lacks "...with no mirror repository"                 'MirrorRepo'               
 lacks "...and no pinned latest"                      'function Get-ExasolSchedulerLatest'     "$_sch_ps"
 
 echo
+_EXAKIT_VERSIONS_DOC="$_sch_previous_doc"
 echo "the Windows registry dispatches the same per-add-on hooks as the shell:"
 # THE PARITY GAP THIS PINS: the PS registry had no field for the per-add-on
 # hooks the shell registry dispatches to. Get-JsonTablesSystemPresent and
