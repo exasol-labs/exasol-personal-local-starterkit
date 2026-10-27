@@ -133,6 +133,12 @@ class ShareDraft:
             self.revision_number = deployed.get("build", {}).get("revision", {}).get("revision_number")
         if not isinstance(self.revision_number, int):
             raise RuntimeError("Dash Server did not return a preview revision number.")
+        compared = _unwrap(tool("app_diff_draft_vs_artifact", {"name": self.name,
+            "revision_number": self.revision_number}))
+        snapshotted = {row.get("path"): row.get("status") for row in compared.get("files", [])}
+        if any(snapshotted.get(path) != "unchanged" for path in
+               ("app.py", "queries/business/result.sql", "REVISION.json")):
+            raise RuntimeError("The built Dash Server revision does not contain the approved SQL and lineage files unchanged.")
         checked = _unwrap(tool(*requests[3]))
         if checked.get("health", {}).get("status") != "healthy":
             raise RuntimeError("Dash Server preview is unhealthy; inspect its health check before publishing.")

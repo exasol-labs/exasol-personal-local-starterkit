@@ -18,6 +18,7 @@
 #
 # Start the dash-server add-on with `exakit marketplace dash-server`, then
 # `exakit mcp-setup` and `exakit start`. The cells call its MCP control plane.
+# Paste the quickstart's workflow id below to continue its log in this kernel.
 
 # %%
 import exakit.nb as nb
@@ -25,7 +26,7 @@ import exakit.nb as nb
 DATASET = "pharma_trials"  # or banking_complaints or an approved descriptor of your own
 TITLE = "Category overview"
 APP_NAME = "category-overview"
-WORKFLOW_ID = None  # Set an existing workflow id to continue it.
+WORKFLOW_ID = None  # paste the quickstart's wf-... id to continue its log
 
 if WORKFLOW_ID:
     nb.workflow(resume=WORKFLOW_ID)

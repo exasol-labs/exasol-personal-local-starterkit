@@ -22,6 +22,8 @@ def _(mo):
     Draft a question from an **approved** descriptor. Read the SQL and assumptions first. Edit the SQL if needed;
     approval applies to the exact text you reviewed. Only then does it run, using the kit's dedicated read-only identity.
     The SQL, row count and any model doubts are recorded under the active workflow id.
+    Copy the workflow id printed by the quickstart into WORKFLOW_ID to keep the
+    same log when this notebook runs in a separate kernel.
     """)
     return
 
@@ -33,6 +35,12 @@ def _():
     DATASET = "pharma_trials"  # or "banking_complaints", or your own approved descriptor
     QUESTION = "How many rows are in each category?"
     DRAFT_WITH_MODEL = False  # set True after EXAKIT_NB_MODEL is configured; no rows are sent to draft SQL
+    WORKFLOW_ID = None  # paste the quickstart's wf-... id to continue its log
+
+    if WORKFLOW_ID:
+        nb.workflow(resume=WORKFLOW_ID)
+    elif not nb.current_workflow():
+        nb.workflow("questions")
 
     conn = nb.connect()
     ds = nb.dataset(conn, DATASET)

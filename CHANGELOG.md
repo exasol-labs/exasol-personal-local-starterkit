@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### v0.5 candidate work
+
+- Data Scientist and ML Engineer notebooks now share approved descriptor versions, workflow logs and a handoff. The Data Scientist can review generated SQL before a read-only MCP query runs, then prepare a Dash Server preview and explicitly promote a healthy revision after checking its figures.
+- The ML Engineer path adds a managed MLflow server, a validated UDF return contract with replay recovery, a time-split training notebook, model upload and removal controls, a Rust scoring project command and a parity notebook. Notebook model scoring checks the container's scikit-learn version before uploading a pickle.
+- The Rust build uses the pinned Exasol SDK and Rust toolchain inside a matching Linux container on macOS and Windows. PowerShell command paths and tests are included. A real Rust build and Windows deployment remain to be verified on those machines.
+- Release gate plans are in `tests/manual/gate-g1.md`, `gate-g2.md` and `gate-g3.md`. Their pass criteria require observed practitioner sessions; none is declared passed by this changelog.
+
+
 The persona-based starter kit of the requirements document (TDD/BRD v0.3: Data Scientist and ML Engineer), on the 0.2.2
 kit's shell and PowerShell twins.
 

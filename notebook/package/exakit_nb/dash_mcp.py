@@ -13,6 +13,19 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 
+def _local_url(url: str) -> str:
+    parts = urlsplit(url)
+    try:
+        local = ipaddress.ip_address(parts.hostname or "").is_loopback
+        valid_port = parts.port is not None
+    except ValueError:
+        local, valid_port = False, False
+    if (parts.scheme != "http" or not local or not valid_port or parts.username or parts.password
+            or parts.path not in {"", "/"} or parts.query or parts.fragment):
+        raise RuntimeError("The kit reported an unexpected Dash Server URL; inspect exakit status --json.")
+    return url.rstrip("/")
+
+
 def dash_server_url() -> str:
     """Take the dashboard URL from exakit status, never from a guessed port."""
     launcher = Path.home() / ".local" / "bin" / ("exakit.cmd" if sys.platform == "win32" else "exakit")
@@ -26,21 +39,14 @@ def dash_server_url() -> str:
     url = status.get("urls", {}).get("dash-server")
     if not isinstance(url, str):
         raise RuntimeError("Dash Server is not running. Run exakit marketplace dash-server, exakit mcp-setup, and exakit start.")
-    parts = urlsplit(url)
-    try:
-        local = ipaddress.ip_address(parts.hostname or "").is_loopback
-    except ValueError:
-        local = False
-    if parts.scheme != "http" or not local or parts.path not in {"", "/"}:
-        raise RuntimeError("The kit reported an unexpected Dash Server URL; inspect exakit status --json.")
-    return url.rstrip("/")
+    return _local_url(url)
 
 
 class DashTools:
     """Synchronous adapter for notebook cells, which already run an event loop."""
 
     def __init__(self, url: str | None = None):
-        self.url = (url or dash_server_url()).rstrip("/")
+        self.url = _local_url(url) if url is not None else dash_server_url()
 
     def __call__(self, name: str, arguments: dict) -> dict:
         async def call() -> dict:

@@ -26,10 +26,11 @@ class Dataset:
 
 
 class Tools:
-    def __init__(self, readonly_user="MCP_READONLY", healthy=True):
+    def __init__(self, readonly_user="MCP_READONLY", healthy=True, changed_path=None):
         self.calls = []
         self.readonly_user = readonly_user
         self.healthy = healthy
+        self.changed_path = changed_path
 
     def __call__(self, name, args):
         self.calls.append((name, args))
@@ -43,6 +44,9 @@ class Tools:
             return {"app": {"preview_path": "/preview/example/3"}}
         if name == "app_run_healthcheck":
             return {"health": {"status": "healthy" if self.healthy else "degraded"}}
+        if name == "app_diff_draft_vs_artifact":
+            return {"files": [{"path": path, "status": "changed" if path == self.changed_path else "unchanged"} for path in
+                    ("app.py", "queries/business/result.sql", "REVISION.json")]}
         if name == "app_promote_revision":
             return {"app": {"mounted": True, "route": "/apps/example"}}
         return {}
@@ -69,7 +73,8 @@ class ShareTests(unittest.TestCase):
         self.assertEqual(draft.confirm(tool, figures_checked=True), "/apps/example")
         self.assertEqual([name for name, _ in tool.calls], [
             "exasol_profile_validate", "app_create_exasol_dashboard", "app_put_files",
-            "app_deploy_draft", "app_run_healthcheck", "app_promote_revision", "app_run_healthcheck"])
+            "app_deploy_draft", "app_diff_draft_vs_artifact", "app_run_healthcheck",
+            "app_promote_revision", "app_run_healthcheck"])
         files = dict((item["path"], item["content"]) for item in draft.files)
         self.assertIn("SELECT CATEGORY", files["queries/business/result.sql"])
         self.assertEqual(json.loads(files["REVISION.json"])["descriptor_version"], "4")
@@ -111,6 +116,13 @@ class ShareTests(unittest.TestCase):
             draft.preview(tool)
         with self.assertRaisesRegex(RuntimeError, "healthy preview"):
             draft.confirm(tool, figures_checked=True)
+
+    def test_changed_lineage_file_blocks_preview(self):
+        draft = share(Dataset(), "SELECT 1", "Example", "example")
+        tool = Tools(changed_path="REVISION.json")
+        with self.assertRaisesRegex(RuntimeError, "lineage files"):
+            draft.preview(tool)
+        self.assertNotIn("app_run_healthcheck", [name for name, _ in tool.calls])
 
     def test_dash_endpoint_comes_from_status_and_stays_local(self):
         class Result:

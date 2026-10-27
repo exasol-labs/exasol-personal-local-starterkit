@@ -210,7 +210,8 @@ class NotebookShapeTest(unittest.TestCase):
         self.assertIn("nb.write_handoff(conn, ds)", last)
         self.assertIn("nb.read_handoff(", last)
         self.assertIn("01_train", last)
-        self.assertEqual(sum("nb.write_handoff(" in "".join(c["source"]) for c in cells), 1, "written once, at the end")
+        self.assertEqual(sum("nb.write_handoff(" in "".join(c["source"]) for c in cells
+                             if c["cell_type"] == "code"), 1, "written once, at the end")
         self.assertIn("Hand off to the ML Engineer", "".join(cells[-2]["source"]))
         text = (SOURCES / "data-scientist" / "01_explore.py").read_text(encoding="utf-8")
         self.assertIn("`LANGFUSE_BASE_URL`", text)
