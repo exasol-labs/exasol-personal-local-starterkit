@@ -15,7 +15,8 @@
 # - **How long:** about five minutes, depending on the dataset and container.
 #
 # The handoff records the exact descriptor version, data digest, feature view, label and time split. This notebook
-# refuses a stale handoff before creating a view or running training SQL.
+# refuses a stale handoff before creating a view or running training SQL. With no handoff file at all (a fresh
+# machine), it builds one from the approved descriptor and says so.
 
 # %%
 DATASET = "pharma_trials"  # or "banking_complaints", or "~/my-data/transactions.csv" with approved roles beside it
@@ -24,20 +25,23 @@ DATASET = "pharma_trials"  # or "banking_complaints", or "~/my-data/transactions
 # ## Load and check the handoff
 #
 # `01_explore` wrote it with `nb.write_handoff(conn, ds)`. A changed descriptor or table stops here and says to rerun
-# explore. The earliest 80% by the date role train the classifier; the latest 20% test it. Without a date role the
-# handoff records a reproducible hash split and explains why.
+# explore. When no file exists, `training_handoff` builds the same record from the approved descriptor
+# (`nb.handoff_from`) and prints that it did. The earliest 80% by the date role train the classifier; the latest 20%
+# test it. Without a date role there is no time split: the handoff is refused with the fix - ask explore (or this
+# cell, `SPLIT = "random"`) for a reproducible hash split, or add a date role - and a random split that nobody asked
+# for is refused here too.
 
 # %%
 import exakit.nb as nb
 import exasol_mlflow
 
+SPLIT = None  # None: the time split by the date role; "random": a hash split, only when there is no handoff file yet
+
 conn = nb.connect()
 ds = nb.dataset(conn, DATASET).require_approved("training")
-handoff = nb.read_handoff(ds.id)
-reason = nb.handoff_is_stale(conn, handoff, ds)
-if reason:
-    raise ValueError(reason)
-print(f"handoff: {ds.id} v{ds.version}; {handoff['rows']} rows; {handoff['split']['kind']} split")
+handoff = nb.ml_train.training_handoff(conn, ds, split=SPLIT)
+print(f"handoff: {ds.id} v{ds.version}; {handoff['rows']} rows; {handoff['split']['kind']} split"
+      + (" (asked for)" if handoff['split'].get('explicit') else ""))
 print(f"data digest: {handoff['data_digest']}")
 
 # %% [markdown]
@@ -88,7 +92,9 @@ print("beats baseline" if f1 > baseline else "does not beat baseline; inspect fe
 #
 # `model/model.pkl` is the fitted scikit-learn pipeline; `coefficients.json` holds weights for the raw feature
 # columns (the scaler has been folded in), ready for the Rust scoring notebook. The run records the container and
-# package versions so a model moved to another container can be checked before use.
+# package versions so a model moved to another container can be checked before use. The same coefficients are copied
+# beside the handoff, `~/.exasol-starter-kit/handoffs/<id>-v<n>.coefficients.json`, so `02_rust_score` reads them
+# without MLflow. Rerun the training cell with the same seed: the metrics and these coefficients come out identical.
 
 # %%
 from urllib.parse import unquote, urlparse
@@ -97,6 +103,8 @@ print(f"model: {run.artifact_uri}/model/model.pkl")
 print(f"coefficients: {run.artifact_uri}/coefficients.json")
 if urlparse(run.artifact_uri).scheme == "file":
     print(f"on this computer: {unquote(urlparse(run.artifact_uri).path)}")
+coefficients_path = nb.ml_train.export_coefficients(run, handoff)
+print(f"coefficients beside the handoff: {coefficients_path}")
 
 # %% [markdown]
 # ## Next

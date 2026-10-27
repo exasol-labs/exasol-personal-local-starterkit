@@ -6,8 +6,9 @@ What it pins, on a fake connection and a temporary EXAKIT_HOME: the record's sha
 view SQL built from the roles with every identifier double-quoted - category one-hot over the top-20 values plus
 OTHER (values from one query, quotes escaped), date parts and days since the first date, entity frequency, text
 LENGTH only (TF-IDF deferred and recorded as such); the training SQL's reproducible window split; the label's
-positive class from the evidence, from one query when there is none, or the value given; a missing date role turns a
-time split random with the reason; the file's path and mode (0600 in a 0700 folder) and that it holds no credential;
+positive class from the evidence, from one query when there is none, or the value given; a missing date role refuses
+the handoff with the fix unless split="random" is asked for (then the file keeps the reason and marks the split
+explicit); the file's path and mode (0600 in a 0700 folder) and that it holds no credential;
 read_handoff by path, by <id>-v<n> and by id (highest version); staleness on the version, on the digest and on the
 data; the workflow log's handoff line when a workflow is active and no line without one.
 """
@@ -226,11 +227,30 @@ class FeatureViewTest(HandoffCase):
         self.assertEqual(record["split"]["train_share"], 0.8)
         self.assertIn("0.7 THEN", handoff.handoff_from(FakeConn(), _ds(), train_share=0.7)["training_sql"])
 
-    def test_a_missing_date_role_makes_the_split_random_with_the_reason(self):
-        record = handoff.handoff_from(FakeConn(), _ds(NO_DATE))
+    def test_a_missing_date_role_refuses_the_handoff_with_the_fix(self):
+        """Design 2.4 / 7: no date role, no time split - and no silent fallback. The line says why and names both
+        fixes: split="random", or a date role. Nothing is written."""
+        expected = ("sensor_readings has no date role (no column parses as a date), so there is no time split for the "
+                    "handoff: ask for a reproducible hash split instead, nb.write_handoff(conn, ds, split=\"random\"), or "
+                    "add a date role to the descriptor and approve it (exakit describe sensor_readings).")
+        with self.assertRaises(ValueError) as caught:
+            handoff.handoff_from(FakeConn(), _ds(NO_DATE))
+        self.assertEqual(str(caught.exception), expected)
+        with self.assertRaises(ValueError) as caught:
+            handoff.handoff_from(FakeConn(), _ds(NO_DATE), split="time")
+        self.assertEqual(str(caught.exception), expected)
+        with self.assertRaises(ValueError) as caught:
+            handoff.write_handoff(FakeConn(), _ds(NO_DATE))
+        self.assertEqual(str(caught.exception), expected)
+        self.assertFalse((self.home / "handoffs").exists(), "a refused handoff writes nothing")
+        self.assertEqual(handoff.no_time_split(_ds(NO_DATE)), expected)
+
+    def test_a_missing_date_role_with_an_explicit_random_split_keeps_the_reason(self):
+        record = handoff.handoff_from(FakeConn(), _ds(NO_DATE), split="random")
         split = record["split"]
-        self.assertEqual(split["kind"], "random")
+        self.assertEqual((split["kind"], split["explicit"]), ("random", True))
         self.assertIn("no column parses as a date", split["reason"])
+        self.assertIn('split="random" was asked for', split["reason"])
         self.assertIsNone(split["date_column"])
         self.assertIn('PERCENT_RANK() OVER (ORDER BY HASH_MD5(', record["training_sql"])
         self.assertIn('COALESCE(CAST("DEVICE" AS VARCHAR(2000)), \'\')', record["training_sql"])
@@ -238,15 +258,26 @@ class FeatureViewTest(HandoffCase):
         self.assertFalse(any(n.startswith("DATE_") for n in names), names)
         self.assertNotIn("TAKEN_ON", record["feature_view"]["sql"])
         self.assertEqual(record["data_digest_kind"], "rowcount")
+        path = handoff.write_handoff(FakeConn(), _ds(NO_DATE), split="random")
+        self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["split"]["explicit"], True, "the file keeps the choice")
 
-    def test_an_explicit_random_split_is_kept(self):
+    def test_the_split_records_whether_it_was_asked_for(self):
+        self.assertEqual(handoff.handoff_from(FakeConn(), _ds())["split"]["explicit"], False, "the default time split")
+        self.assertEqual(handoff.handoff_from(FakeConn(), _ds(), split="time")["split"]["explicit"], True)
         split = handoff.handoff_from(FakeConn(), _ds(), split="random")["split"]
-        self.assertEqual(split["kind"], "random")
-        self.assertNotIn("reason", split)
+        self.assertEqual((split["kind"], split["explicit"]), ("random", True))
+        self.assertNotIn("reason", split, "with a date role there is nothing to explain")
         with self.assertRaises(ValueError):
             handoff.handoff_from(FakeConn(), _ds(), split="stratified")
         with self.assertRaises(ValueError):
             handoff.handoff_from(FakeConn(), _ds(), train_share=1.5)
+
+    def test_the_record_is_the_same_on_two_builds(self):
+        """AC-ML3.4's first half: the handoff - the feature order above all - is a function of the roles and the data."""
+        one = handoff.handoff_from(FakeConn(), _ds())
+        two = handoff.handoff_from(FakeConn(), _ds())
+        one.pop("written_at"), two.pop("written_at")
+        self.assertEqual(one, two)
 
 
 class LabelTest(HandoffCase):

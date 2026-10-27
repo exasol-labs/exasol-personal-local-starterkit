@@ -1,7 +1,9 @@
 """The handoff from the Data Scientist to the ML Engineer (DS-3 -> ML-3, design 4): one JSON file that holds everything
 ``01_train`` needs to train without opening the descriptor - which descriptor version and digest it came from, a digest
 of the data, the feature view built from the roles (as ``CREATE OR REPLACE VIEW`` SQL), the label and its positive
-class, the training SELECT with a reproducible time split, and the input and output schemas.
+class, the training SELECT with a reproducible time split, and the input and output schemas. A descriptor without a date
+role has no time split: the handoff is refused with the fix (``split="random"`` for a reproducible hash split, or a
+date role) - a random split is never silent, and ``01_train`` refuses one the file does not mark as asked for.
 
     path = nb.write_handoff(conn, ds)          # explore's last cell: ~/.exasol-starter-kit/handoffs/<id>-v<n>.json
     handoff = nb.read_handoff("pharma_trials")  # the latest one for that descriptor (or a path, or "<id>-v2")
@@ -34,7 +36,8 @@ from .descriptor_store import kit_home
 from .workflow import HANDOFF, current_workflow, log_event
 
 __all__ = ["FOLDER", "OUTPUT_SCHEMA", "TOP_CATEGORIES", "VIEW_SCHEMA", "WRITTEN_BY", "feature_view", "handoff_from",
-           "handoff_is_stale", "handoff_path", "handoffs_dir", "read_handoff", "training_sql", "write_handoff"]
+           "handoff_is_stale", "handoff_path", "handoffs_dir", "no_time_split", "read_handoff", "training_sql",
+           "write_handoff"]
 
 FOLDER = "handoffs"
 WRITTEN_BY = "01_explore"
@@ -169,17 +172,32 @@ def feature_view(conn, ds: Dataset) -> dict[str, Any]:
             "date_min": date_min, "deferred": list(DEFERRED)}
 
 
-def _split(ds: Dataset, split: str, train_share: float) -> dict[str, Any]:
-    """``{kind, date_column, train_share, order_by, reason}``: a time split over the date role when there is one, else
-    a random one by a hash of the row's role columns (reproducible: the same rows give the same split)."""
-    if split not in SPLITS:
+def no_time_split(ds: Dataset) -> str:
+    """The line a handoff without a date role is refused with: the reason and the two fixes (design 2.4 / 7)."""
+    reason = ds.descriptor.missing_reason("date") or "the descriptor has no date role"
+    return (f"{ds.id} has no date role ({reason}), so there is no time split for the handoff: ask for a reproducible "
+            f"hash split instead, nb.write_handoff(conn, ds, split=\"random\"), or add a date role to the descriptor and "
+            f"approve it (exakit describe {ds.id}).")
+
+
+def _split(ds: Dataset, split: str | None, train_share: float) -> dict[str, Any]:
+    """``{kind, explicit, date_column, train_share, order_by, note[, reason]}``: a time split over the date role
+    (``split`` None or "time"), or a random one by a hash of the row's role columns when the caller asked for it
+    (``split="random"``; reproducible: the same rows give the same split). ``explicit`` records whether the caller
+    named the kind. Without a date role a time split is refused with no_time_split(): the fallback is never silent, and
+    ``reason`` keeps why there was no time split when a random one was asked for instead."""
+    explicit = split is not None
+    kind = "time" if split is None else split
+    if kind not in SPLITS:
         raise ValueError(f"split must be one of {', '.join(SPLITS)}, not {split!r}")
     if not 0 < float(train_share) < 1:
         raise ValueError(f"train_share must be between 0 and 1, not {train_share!r}")
-    record: dict[str, Any] = {"kind": split, "date_column": None, "train_share": float(train_share)}
-    if split == "time" and not ds.has("date"):
+    record: dict[str, Any] = {"kind": kind, "explicit": explicit, "date_column": None, "train_share": float(train_share)}
+    if not ds.has("date"):
+        if kind == "time":
+            raise ValueError(no_time_split(ds))
         reason = ds.descriptor.missing_reason("date") or "the descriptor has no date role"
-        record.update(kind="random", reason=f"no time split: {reason}; the split is random, by a hash of the row's role columns")
+        record["reason"] = f"no time split: {reason}; split=\"random\" was asked for, so the split is a hash of the row's role columns"
     if record["kind"] == "time":
         record["date_column"] = ds.col("date")
         record["order_by"] = _q(ds.col("date"))
@@ -267,13 +285,14 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
-def handoff_from(conn, ds: Dataset, label: str | None = None, split: str = "time", train_share: float = 0.8,
+def handoff_from(conn, ds: Dataset, label: str | None = None, split: str | None = None, train_share: float = 0.8,
                  workflow_id: str | None = None, written_by: str = WRITTEN_BY) -> dict[str, Any]:
     """The handoff record for ``ds`` as design 4 shapes it, built now and returned, nothing written: the descriptor's
     id, version, digest (``digest_kind`` says whether it is the table digest or the file's) and source; the data
     digest (``data_digest_kind``); the feature view; the label and its positive class (``label`` overrides it);
-    the split (``time`` over the date role - ``random`` with the reason when there is none - and ``train_share``);
-    the training SQL; input and output schemas. ``workflow_id`` defaults to the active workflow's."""
+    the split (``time`` over the date role by default; ``split="random"`` for a hash split, the only way to get one -
+    without a date role and without that, a ValueError names the fix; ``split.explicit`` records the choice) and
+    ``train_share``; the training SQL; input and output schemas. ``workflow_id`` defaults to the active workflow's."""
     if not ds.has("label"):
         raise ValueError(f"The handoff needs a label role: {ds.descriptor.missing_reason('label') or 'the descriptor has none'}.")
     view = feature_view(conn, ds)
@@ -298,7 +317,7 @@ def handoff_from(conn, ds: Dataset, label: str | None = None, split: str = "time
     }
 
 
-def write_handoff(conn, ds: Dataset, label: str | None = None, split: str = "time", train_share: float = 0.8,
+def write_handoff(conn, ds: Dataset, label: str | None = None, split: str | None = None, train_share: float = 0.8,
                   workflow_id: str | None = None, written_by: str = WRITTEN_BY) -> Path:
     """Build the handoff (handoff_from) and write it to ``$EXAKIT_HOME/handoffs/<id>-v<n>.json`` - the folder 0700,
     the file 0600, replaced whole (a temporary file renamed over it) so a reader never sees half of one. The active
