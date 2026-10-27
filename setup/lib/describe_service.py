@@ -13,12 +13,21 @@ notebook package, so it runs wherever the kit copy is.
     python describe_service.py evidence-check <descriptor.yaml> [--sample N] [--json]
         re-profiles the descriptor's fact table and says, role by role, whether a fresh draft proposes the columns the
         file ships (AC-DS5.1); exit 0 when every role agrees, 1 when one differs.
+    python describe_service.py approve <draft.yaml|id> [--role <role>=<COLUMN> ...] [--owner <who>] [--no-comments] [--json]
+        approves a draft (a file, or the latest version of <id> in the kit's store, else the descriptor the kit ships):
+        validates the roles with the descriptor rules, computes the table digest and writes the next version into the
+        store, then writes the roles into the table's column comments (a view for a virtual table). See APPROVE below.
+    python describe_service.py show <id> [--version n] [--json]      one version's descriptor (the current one by default)
+    python describe_service.py versions <id> [--json]                every version with its status, owner and digest
+    python describe_service.py comments <id> [--json]                write the current version's roles into the comments again
 
-Exit codes: 0 ok; 2 bad arguments; 3 the table is not there; 4 the database is not reachable.
+Exit codes: 0 ok; 2 bad arguments or roles (the message names the role and the reason); 3 the table or the id is not
+there; 4 the database is not reachable; 5 a version conflict (another writer took the next version number twice).
 
 The database steps connect through pyexasol as the kit's admin user: EXAKIT_PYX_DSN, EXAKIT_PYX_USER and
 EXAKIT_PYX_PWFILE (the FILE holding the password - the password itself never reaches a command line, an output or a
-log). Only SELECTs run; nothing is written to the database.
+log). Profiling and the digest are SELECTs. Approving writes to the database only through comments: COMMENT ON COLUMN
+on the described table's role columns, and for a virtual table one view in the kit's own schema, STARTER_KIT.
 
 THE PROFILE (profile()) is a few statements, never one per column: the column list (with whether the table is
 virtual), COUNT(*), one aggregate statement per batch of columns (COUNT, COUNT(DISTINCT), MIN/MAX for dates and
@@ -34,13 +43,45 @@ column takes the role, the second best is kept as its runner_up; a role whose be
 under `missing` with the reason, never guessed. All-null and constant columns are excluded first, each with its reason
 under evidence.excluded. An optional model (EXAKIT_NB_MODEL + OPENAI_BASE_URL set) is asked ONCE for one line per
 column from the column names and the profile's numbers - never a row - and writes `notes`; a failed call is one
-warning line, the draft unchanged.
+warning line, the draft unchanged. A table or a role column whose name is not a plain upper-case SQL name (the reader
+upper-cases what it reads and the notebooks write it into SQL unquoted) is refused at draft time with the column, the
+reason and the remedy (a view with plain names); the profile itself quotes every identifier and runs on any name.
+
+THE DIGEST (digest(), design 2.3) is sha256 over a canonical JSON document: the fact table's name, its columns with
+their types in order, the row count, the digest's scope and a content hash of the role columns. The content hash is
+one statement, order-independent, so two tables with the same rows in any order digest the same:
+
+    SELECT COUNT(*) AS N, SUM(TO_NUMBER(SUBSTR(H, 1, 12), 'XXXXXXXXXXXX')) AS S0, ... S4   -- five 48-bit slices
+    FROM (SELECT HASH_SHA256(COALESCE(<canonical role column>, '<null>') || CHR(31) || ...) AS H FROM <table>)
+
+where a DATE is TO_CHAR'd as YYYY-MM-DD, a TIMESTAMP with its microseconds, and anything else CAST to VARCHAR, so the
+session's date format plays no part. A regular table is hashed whole (scope full); a virtual table is hashed over its
+first `sample` rows (the inner FROM is `(SELECT ... FROM <table> LIMIT n)`, scope sample): the external source is read
+no further than the sample (AC-DS5.5), at the price that a change past those rows goes unseen - the row count, read
+with COUNT(*), still enters the digest. Measured on the shipped datasets: 0.05 s (pharma, 5,169 rows) and 0.03 s
+(banking, 6,754 rows).
+
+APPROVE (approve()) takes a draft document (a file, the store's latest version of an id, or the shipped descriptor)
+and the corrections given as roles, sets status approved, the owner (--owner, else EXAKIT_DESCRIPTOR_OWNER or the OS
+user), created now and the digest, keeps the draft's evidence, notes, source and drafted_by, validates the result with
+the descriptor rules (the reader's own) and checks every role column against the database, then writes
+~/.exasol-starter-kit/descriptors/<id>/v<n+1>.yaml (n: the highest version in the store, 1 for a dataset the kit
+ships when the store is empty, else 0; the file is created exclusively, so a version is never overwritten - a v<n+1>
+that appears meanwhile makes it recompute n once, then give up with exit 5) and `current` (a temp file renamed over
+it). Approving the roles the current approved version already has writes nothing and says so (unchanged). Then the
+roles go into the database as column comments: `role: <role> (starter kit, descriptor <id> v<n>)` appended to the
+column's existing comment (an earlier role tag replaced; a column that lost its role loses its tag). Exasol takes
+comments on a view's columns only in CREATE VIEW, so a virtual table gets CREATE OR REPLACE VIEW
+STARTER_KIT.<ID>_DESCRIBED (<column> COMMENT IS '...', ...) AS SELECT ... FROM <virtual table> COMMENT IS '...'. A
+comment that cannot be written (no rights, a read-only source) is a warning naming the reason and the retry
+(exakit describe <id> --comments); the descriptor is approved all the same.
 """
 
 from __future__ import annotations
 
 import datetime as dt
 import getpass
+import hashlib
 import json
 import math
 import os
@@ -73,7 +114,16 @@ HINTS = {
     "text": r"(summary|descri|criteria|text|comment|narrat|issue|response|note|remark|review|message|body|reason|complaint|detail|explan)",
 }
 _IDENT = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,127}$")
+_PLAIN = re.compile(r"^[A-Z][A-Z0-9_]{0,127}$")       # what the descriptor reader keeps as written: a plain upper-case name
 _ID = re.compile(r"^[a-z0-9]+([-_][a-z0-9]+)*$")
+
+STORE_FOLDER = "descriptors"                          # under the kit's home: <id>/v<n>.yaml + current
+CURRENT = "current"
+KIT_SCHEMA = "STARTER_KIT"                            # where a virtual table's described view goes
+DIGEST_SLICES = 5                                     # 48-bit slices of each row hash summed (60 of the 64 hex chars)
+NULL_MARK = "<null>"
+_TAG = re.compile(r"\s*\|?\s*role: [a-z]+ \(starter kit, descriptor [a-z0-9_-]+ v[0-9]+\)")
+_VERSION_FILE = re.compile(r"^v([1-9][0-9]*)\.yaml$")
 
 
 class Refused(ValueError):
@@ -83,7 +133,7 @@ class Refused(ValueError):
 
 
 class NotFound(Refused):
-    """The table is not in the database. Exit 3."""
+    """The table (or the descriptor id) is not there. Exit 3."""
 
     code = 3
 
@@ -92,6 +142,12 @@ class Unreachable(RuntimeError):
     """The database could not be reached, or the connection settings are not there. Exit 4."""
 
     code = 4
+
+
+class Conflict(RuntimeError):
+    """The next version number was taken twice while approving. Exit 5."""
+
+    code = 5
 
 
 # --- identifiers and the connection --------------------------------------------------------------------------------
@@ -354,17 +410,26 @@ def profile(conn, table: str, sample: int = SAMPLE) -> dict[str, Any]:
     statements += 1
     sampled = virtual or rows > FULL_PROFILE_ROWS
     if sampled:
-        p = min(1.0, 1.2 * sample / rows) if rows else 1.0
+        # A virtual table is read no further than the sample (AC-DS5.5): its first n rows, since `WHERE RANDOM() < p`
+        # makes the external source hand over every row and the filter runs here. A huge regular table is local, so
+        # it takes the random slice the design asks for.
         select = ", ".join(quoted(c["column"]) for c in columns)
-        fetched = _rows(conn, f"SELECT {select} FROM {ref} WHERE RANDOM() < {p!r} LIMIT {int(sample)}")
+        if virtual:
+            fetched = _rows(conn, f"SELECT {select} FROM {ref} LIMIT {int(sample)}")
+        else:
+            p = min(1.0, 1.2 * sample / rows) if rows else 1.0
+            fetched = _rows(conn, f"SELECT {select} FROM {ref} WHERE RANDOM() < {p!r} LIMIT {int(sample)}")
         statements += 1
         records, profiled = _profile_rows(columns, fetched), len(fetched)
     else:
         records, used = _profile_full(conn, ref, columns, rows)
         statements += used
         profiled = rows
-    return {"table": f"{schema}.{name}", "schema": schema, "name": name, "virtual": virtual, "rows": rows, "sampled": sampled,
-            "sample": sample, "profiled_rows": profiled, "statements": statements, "columns": records}
+    out = {"table": f"{schema}.{name}", "schema": schema, "name": name, "virtual": virtual, "rows": rows, "sampled": sampled,
+           "sample": sample, "profiled_rows": profiled, "statements": statements, "columns": records}
+    if sampled:
+        out["sample_method"] = "first rows" if virtual else "random"
+    return out
 
 
 # --- the scoring ---------------------------------------------------------------------------------------------------
@@ -552,6 +617,10 @@ def draft(profile: dict[str, Any], table: str | None = None, id: str | None = No
     slug = id or _slug(table)
     if not _ID.match(slug):
         raise Refused(f"--id takes a dataset id (lower-case letters and digits, joined by - or _), not '{slug}'.")
+    parts = (profile.get("schema"), profile.get("name")) if profile.get("schema") else tuple(table.split(".", 1))
+    if not all(_PLAIN.match(p or "") for p in parts):
+        raise Refused(f"The table {table} is not named by plain upper-case SQL names, which is what the kit's descriptors and the "
+                      f"notebooks' SQL take. {_plain_remedy(profile, table)}")
     excluded: dict[str, str] = {}
     candidates = []
     for c in profile["columns"]:
@@ -589,14 +658,45 @@ def draft(profile: dict[str, Any], table: str | None = None, id: str | None = No
     else:
         reason = MISSING_REASONS["text"] + (f" (best: {ranked[0][1]['column']} at {ranked[0][0]})" if ranked else "")
         missing.append({"role": "text", "reason": reason})
+    odd = [(role, c) for role, c in _role_columns(roles) if not _PLAIN.match(c)]
+    if odd:
+        raise Refused("A role went to a column that is not a plain upper-case SQL name, which is what the kit's descriptors and "
+                      "the notebooks' SQL take: " + ", ".join(f"{role} -> \"{c}\"" for role, c in odd) + f". {_plain_remedy(profile, table)}")
     evidence["excluded"] = excluded
     evidence["table"] = {"rows": profile["rows"], "profiled_rows": profile["profiled_rows"], "sampled": profile["sampled"],
                          "sample": profile["sample"], "virtual": profile["virtual"], "statements": profile["statements"],
                          "columns": len(profile["columns"])}
+    if profile.get("sample_method"):
+        evidence["table"]["sample_method"] = profile["sample_method"]
     source = shipped_source(table, root) or (f"vs:{schema}" if profile.get("virtual") else table)
     return {"schema_version": 2, "id": slug, "fact_table": table, "source": source, "version": 1, "status": "draft",
             "owner": descriptor_owner(), "created": _now(), "drafted_by": "profile", "digest": None,
             "roles": roles, "evidence": evidence, "missing": missing}
+
+
+def _role_columns(roles: dict[str, Any]) -> list[tuple[str, str]]:
+    """(role, column) for every role column in role order: entity, category, date, label, then the text columns."""
+    out = []
+    for role in ("entity", "category", "date", "label", "text"):
+        ref = roles.get(role)
+        if ref is None:
+            continue
+        for item in (ref if isinstance(ref, list) else [ref]):
+            out.append((role, item["column"] if isinstance(item, dict) else str(item)))
+    return out
+
+
+def _plain_remedy(profile: dict[str, Any], table: str) -> str:
+    """How to describe a table whose names are not plain: a view in the kit's schema that renames them."""
+    schema, name = (profile.get("schema"), profile.get("name")) if profile.get("schema") else tuple(table.split(".", 1))
+    view = re.sub(r"[^A-Z0-9_]+", "_", str(name).upper()).strip("_") or "TABLE"
+    renamed = []
+    for c in profile.get("columns", [])[:3]:
+        plain = re.sub(r"[^A-Z0-9_]+", "_", c["column"].upper()).strip("_")
+        renamed.append(quoted(c["column"]) + ("" if plain == c["column"] else f" AS {plain}"))
+    select = ", ".join(renamed) + (", ..." if len(profile.get("columns", [])) > 3 else "")
+    return (f"Describe a view with plain names instead, for example: CREATE VIEW {KIT_SCHEMA}.{view} AS SELECT {select} "
+            f"FROM {table_ref(str(schema), str(name))}; then: exakit describe {KIT_SCHEMA}.{view}")
 
 
 # --- the model note ------------------------------------------------------------------------------------------------
@@ -741,15 +841,391 @@ def evidence_check(conn, path: Path, sample: int = SAMPLE) -> dict[str, Any]:
             "roles": roles, "evidence": fresh["evidence"]}
 
 
+# --- the kit's descriptor store ------------------------------------------------------------------------------------
+
+def store_home() -> Path:
+    """The kit's home: EXAKIT_HOME when set, else ~/.exasol-starter-kit (the notebook package's descriptor_store agrees)."""
+    given = os.environ.get("EXAKIT_HOME")
+    return Path(given).expanduser() if given else Path.home() / ".exasol-starter-kit"
+
+
+def store_dir(id: str) -> Path:
+    """``<kit home>/descriptors/<id>``; an id that is no dataset id is refused, so no path is built from it."""
+    if not isinstance(id, str) or not _ID.match(id):
+        raise Refused(f"'{id}' is not a dataset id (lower-case letters and digits, joined by - or _).")
+    return store_home() / STORE_FOLDER / id
+
+
+def store_versions(id: str) -> list[int]:
+    """Every version number stored for ``id`` (the v<n>.yaml files), ascending."""
+    folder = store_dir(id)
+    if not folder.is_dir():
+        return []
+    return sorted(int(m.group(1)) for p in folder.iterdir() if p.is_file() and (m := _VERSION_FILE.match(p.name)))
+
+
+def store_current(id: str) -> int | None:
+    """The number in ``current``, or None."""
+    try:
+        text = (store_dir(id) / CURRENT).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return int(text) if re.fullmatch(r"[1-9][0-9]*", text) else None
+
+
+def shipped_descriptor(id: str, root: Path | None = None) -> Path | None:
+    """The descriptor the kit ships for a dataset id (data/datasets/<id>/descriptor.yaml), or None."""
+    if not _ID.match(id or ""):
+        return None
+    folder = (root or kit_root()) / "data" / "datasets" / id
+    return next((folder / name for name in ("descriptor.yaml", "descriptor.yml", "descriptor.json") if (folder / name).is_file()), None)
+
+
+def read_document(path: Path) -> dict[str, Any]:
+    """A descriptor file as the document it holds (YAML through the reader's own subset, or JSON), not yet validated."""
+    rules = _rules()
+    try:
+        text = Path(path).read_text(encoding="utf-8-sig")
+        doc = json.loads(text) if text.lstrip().startswith("{") else rules.load_yaml(text)
+    except (OSError, ValueError) as err:
+        raise Refused(f"The descriptor {path} cannot be read ({err}).") from err
+    if not isinstance(doc, dict):
+        raise Refused(f"The descriptor {path} is not a mapping of keys to values.")
+    return doc
+
+
+def versions(id: str, root: Path | None = None) -> list[dict[str, Any]]:
+    """Every version of ``id`` the kit knows, ascending: the store's v<n>.yaml files and, as version 1 when the store
+    has no v1, the descriptor the kit ships; each with its status, owner, created, digest, path and whether it is
+    the current one. NotFound when there is none at all."""
+    rules = _rules()
+    current = store_current(id)
+    found: dict[int, tuple[Path, str]] = {n: (store_dir(id) / f"v{n}.yaml", "store") for n in store_versions(id)}
+    shipped = shipped_descriptor(id, root)
+    if shipped is not None and 1 not in found:
+        found[1] = (shipped, "shipped")
+    if not found:
+        raise NotFound(f"No descriptor '{id}': nothing approved in the kit's store ({store_dir(id)}) and no dataset the kit ships "
+                       "by that id. Draft one with: exakit describe SCHEMA.TABLE --id " + id)
+    out = []
+    for n in sorted(found):
+        path, origin = found[n]
+        entry: dict[str, Any] = {"version": n, "path": str(path), "origin": origin, "current": n == current if current else origin == "shipped"}
+        try:
+            d = rules.read_descriptor(path)
+            entry.update(status=d.status, owner=d.owner, created=d.created, digest=d.digest, drafted_by=d.drafted_by)
+        except rules.BadInput as err:
+            entry.update(status="invalid", problem=str(err))
+        out.append(entry)
+    return out
+
+
+def show(id: str, version: int | None = None, root: Path | None = None) -> dict[str, Any]:
+    """One version's descriptor: its text, document and record; the current version (or the only one) by default."""
+    known = versions(id, root)
+    if version is None:
+        entry = next((e for e in known if e["current"]), known[-1])
+    else:
+        entry = next((e for e in known if e["version"] == version), None)
+        if entry is None:
+            raise NotFound(f"No version {version} of '{id}' (the versions are {', '.join(str(e['version']) for e in known)}).")
+    path = Path(entry["path"])
+    return dict(entry, text=path.read_text(encoding="utf-8-sig"), document=read_document(path))
+
+
+# --- the table digest ----------------------------------------------------------------------------------------------
+
+def _canonical(col: dict[str, Any]) -> str:
+    """A column as text the way every session prints it: dates by TO_CHAR, the rest by CAST."""
+    q = quoted(col["column"])
+    if col["kind"] == "date":
+        return f"TO_CHAR({q}, 'YYYY-MM-DD')"
+    if col["kind"] == "timestamp":
+        return f"TO_CHAR({q}, 'YYYY-MM-DD HH24:MI:SS.FF6')"
+    return f"CAST({q} AS VARCHAR(2000000))"
+
+
+def digest_sql(ref: str, columns: list[dict[str, Any]], limit: int | None = None) -> str:
+    """The order-independent content hash statement over ``columns`` (see THE DIGEST in the module doc); with
+    ``limit``, over the table's first ``limit`` rows only."""
+    hashed = " || CHR(31) || ".join(f"COALESCE({_canonical(c)}, '{NULL_MARK}')" for c in columns)
+    sums = ", ".join(f"SUM(TO_NUMBER(SUBSTR(H, {1 + 12 * i}, 12), 'XXXXXXXXXXXX')) AS S{i}" for i in range(DIGEST_SLICES))
+    inner = f"(SELECT {', '.join(quoted(c['column']) for c in columns)} FROM {ref} LIMIT {int(limit)})" if limit else ref
+    return f"SELECT COUNT(*) AS N, {sums} FROM (SELECT HASH_SHA256({hashed}) AS H FROM {inner})"
+
+
+def digest(conn, table: str, roles: dict[str, Any], sample: int = SAMPLE) -> dict[str, Any]:
+    """The table digest for ``roles`` ({role: column | [columns]}, the draft's shape, or {role: {table, column}}):
+    ``digest`` (sha256:...), ``scope`` (full, or sample for a virtual table hashed over its first ``sample`` rows),
+    ``rows``, ``hashed_rows``, ``statements`` and the ``sql`` of the content hash. A role column the table lacks is
+    refused naming the role; a table that is not there is NotFound."""
+    schema, name = split_table(table)
+    ref = table_ref(schema, name)
+    columns, virtual = _columns(conn, schema, name)
+    by_name = {c["column"]: c for c in columns}
+    wanted = _role_columns(roles)
+    lacking = [(role, c) for role, c in wanted if c not in by_name]
+    if lacking:
+        raise Refused(f"{schema}.{name} has no column " + ", ".join(f"{c} (the {role} role)" for role, c in lacking)
+                      + f"; it has: {', '.join(by_name)}.")
+    if not wanted:
+        raise Refused("No role names a column, so there is nothing to digest.")
+    hashed = [by_name[c] for _role, c in wanted]
+    statements = 1
+    if virtual:
+        rows = int(_rows(conn, f"SELECT COUNT(*) AS N FROM {ref}")[0]["N"])
+        statements += 1
+        sql = digest_sql(ref, hashed, sample)
+    else:
+        sql = digest_sql(ref, hashed)
+    row = _rows(conn, sql)[0]
+    statements += 1
+    if not virtual:
+        rows = int(row["N"])
+    content = [int(row.get(f"S{i}") or 0) for i in range(DIGEST_SLICES)]
+    scope = "sample" if virtual else "full"
+    canonical = {"table": f"{schema}.{name}", "columns": [[c["column"], c["type"]] for c in columns], "rows": rows,
+                 "scope": scope, "role_columns": [c["column"] for c in hashed], "hashed_rows": int(row["N"]), "content": content}
+    value = "sha256:" + hashlib.sha256(json.dumps(canonical, separators=(",", ":"), sort_keys=True).encode("utf-8")).hexdigest()
+    return {"digest": value, "scope": scope, "rows": rows, "hashed_rows": int(row["N"]), "sample": sample if virtual else None,
+            "virtual": virtual, "statements": statements, "sql": sql, "columns": columns}
+
+
+# --- approve -------------------------------------------------------------------------------------------------------
+
+def parse_role(text: str) -> tuple[str, list[str]]:
+    """``role=COLUMN`` (text: ``text=A,B``) as (role, columns); anything else is refused naming the role."""
+    match = re.fullmatch(r"\s*([a-z]+)\s*=\s*(.+?)\s*", text or "")
+    if not match or match.group(1) not in ROLES:
+        raise Refused(f"--role takes role=COLUMN with the role one of {', '.join(ROLES)} (text takes A,B,...), not '{text}'.")
+    role, columns = match.group(1), [c.strip() for c in match.group(2).split(",") if c.strip()]
+    if role in SINGLE_ROLES and len(columns) != 1:
+        raise Refused(f"The '{role}' role takes exactly one column, not '{match.group(2)}'.")
+    for c in columns:
+        if not _PLAIN.match(c.upper()) or not _IDENT.match(c):
+            raise Refused(f"The '{role}' role: '{c}' is not a plain SQL column name (letters, digits and _, starting with a letter).")
+    return role, [c.upper() for c in columns]
+
+
+def _with_roles(doc: dict[str, Any], roles: dict[str, list[str]]) -> dict[str, Any]:
+    """The document with the roles given set by the user (each leaving ``missing``, its evidence marked set_by user)."""
+    out = json.loads(json.dumps(doc))
+    table = out["fact_table"]
+    out.setdefault("roles", {})
+    evidence = out.get("evidence") if isinstance(out.get("evidence"), dict) else {}
+    for role, columns in roles.items():
+        refs = [{"table": table, "column": c} for c in columns]
+        out["roles"][role] = refs if role == "text" else refs[0]
+        chosen = evidence.get(role) if isinstance(evidence.get(role), dict) else {}
+        evidence[role] = dict(chosen, set_by="user", column=columns[0] if role != "text" else chosen.get("column"))
+        if role == "text":
+            evidence[role]["columns"] = [{"column": c} for c in columns]
+        out["missing"] = [m for m in (out.get("missing") or []) if not (isinstance(m, dict) and m.get("role") == role)]
+    if evidence:
+        out["evidence"] = evidence
+    return out
+
+
+def resolve_draft(what: str, root: Path | None = None) -> tuple[dict[str, Any], str]:
+    """The document to approve and where it came from: a file path ("file"), else the latest version of the id in
+    the store ("store"), else the descriptor the kit ships ("shipped"); NotFound names the three places."""
+    path = Path(what).expanduser()
+    if path.is_file():
+        return read_document(path), "file"
+    if not _ID.match(what or ""):
+        raise Refused(f"Name a draft file or a dataset id (lower-case letters and digits, joined by - or _), not '{what}'.")
+    stored = store_versions(what)
+    if stored:
+        return read_document(store_dir(what) / f"v{stored[-1]}.yaml"), "store"
+    shipped = shipped_descriptor(what, root)
+    if shipped is not None:
+        return read_document(shipped), "shipped"
+    raise NotFound(f"No descriptor '{what}': not a file, nothing in the kit's store ({store_dir(what)}) and no dataset the kit "
+                   f"ships by that id. Draft one with: exakit describe SCHEMA.TABLE --id {what} --write <path>")
+
+
+def next_version(id: str, root: Path | None = None) -> int:
+    """n + 1: n the highest version in the store, 1 when the kit ships the id and the store is empty, else 0."""
+    stored = store_versions(id)
+    if stored:
+        return stored[-1] + 1
+    return 2 if shipped_descriptor(id, root) is not None else 1
+
+
+def _write_version(id: str, doc: dict[str, Any], about: str, root: Path | None = None) -> tuple[int, Path]:
+    """v<n+1>.yaml created exclusively (never over an existing version) and ``current`` renamed into place; a number
+    taken meanwhile is recomputed once, then Conflict."""
+    folder = store_dir(id)
+    folder.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        folder.parent.chmod(0o700)
+    except OSError:
+        pass
+    folder.mkdir(parents=True, exist_ok=True)
+    for attempt in range(2):
+        number = next_version(id, root)
+        doc["version"] = number
+        path = folder / f"v{number}.yaml"
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        except FileExistsError:
+            if attempt:
+                raise Conflict(f"Version {number} of '{id}' was written by someone else twice in a row ({path}); "
+                               "approve again when the other approve is done.")
+            continue
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(to_yaml(doc, about))
+        temp = folder / f".{CURRENT}.{os.getpid()}.tmp"
+        temp.write_text(f"{number}\n", encoding="utf-8")
+        os.replace(temp, folder / CURRENT)
+        return number, path
+    raise Conflict(f"Could not take a version number for '{id}'.")      # not reached
+
+
+def approve(conn, doc: dict[str, Any], *, roles: dict[str, list[str]] | None = None, owner: str | None = None,
+            comments: bool = True, sample: int = SAMPLE, root: Path | None = None) -> dict[str, Any]:
+    """Approve ``doc`` (see APPROVE in the module doc): the result names the id, version, path, digest and scope,
+    ``unchanged`` when the current approved version already has these roles, and under ``comments`` what was written
+    to the database and the warnings for what was not."""
+    rules = _rules()
+    doc = _with_roles(doc, roles or {})
+    doc["status"] = "approved"
+    doc["owner"] = owner or descriptor_owner()
+    doc["created"] = _now()
+    doc["drafted_by"] = doc.get("drafted_by") or "user"
+    doc["schema_version"] = 2
+    doc.setdefault("version", 1)
+    doc.setdefault("digest", None)
+    if doc.get("source") and not isinstance(doc["source"], str):
+        doc["source"] = str(doc["source"])
+    problems = rules.validate_descriptor(doc)
+    if problems:
+        raise Refused("The descriptor cannot be approved: " + "; ".join(problems) + ".")
+    id = doc["id"]
+    wanted = draft_roles(doc)
+    current = store_current(id)
+    if current is not None and (store_dir(id) / f"v{current}.yaml").is_file():
+        have = read_document(store_dir(id) / f"v{current}.yaml")
+        if have.get("status") == "approved" and draft_roles(have) == wanted:
+            return {"id": id, "version": current, "path": str(store_dir(id) / f"v{current}.yaml"), "unchanged": True,
+                    "digest": have.get("digest"), "message": f"v{current} is already approved with these roles"}
+    measured = digest(conn, doc["fact_table"], wanted, sample)
+    doc["digest"] = measured["digest"]
+    table_facts = doc.setdefault("evidence", {}).setdefault("table", {})
+    if isinstance(table_facts, dict):
+        table_facts["digest_scope"] = measured["scope"]
+        table_facts["rows"] = measured["rows"]
+    number, path = _write_version(id, doc, f"Which column of {doc['fact_table']} plays which role; approved by exakit describe.", root)
+    result: dict[str, Any] = {"id": id, "version": number, "path": str(path), "unchanged": False, "digest": measured["digest"],
+                              "scope": measured["scope"], "rows": measured["rows"], "owner": doc["owner"], "roles": wanted,
+                              "statements": measured["statements"]}
+    if comments:
+        result["comments"] = write_comments(conn, doc, measured["columns"], measured["virtual"])
+    else:
+        result["comments"] = {"written": [], "warnings": [], "skipped": True}
+    return result
+
+
+# --- the comment write-back ----------------------------------------------------------------------------------------
+
+def _literal(text: str) -> str:
+    return "'" + text.replace("'", "''") + "'"
+
+
+def role_tag(role: str, id: str, version: int) -> str:
+    return f"role: {role} (starter kit, descriptor {id} v{version})"
+
+
+def _tagged(existing: str | None, tag: str | None) -> str | None:
+    """A column's comment with the kit's role tag: the existing text (an earlier tag removed) and the tag after a
+    ' | '; None when nothing is left to write."""
+    base = _TAG.sub("", existing or "").strip()
+    if tag:
+        return f"{base} | {tag}" if base else tag
+    return base or None
+
+
+def _existing_comments(conn, schema: str, name: str) -> dict[str, str | None]:
+    sql = ("SELECT COLUMN_NAME, COLUMN_COMMENT FROM EXA_ALL_COLUMNS "
+           f"WHERE COLUMN_SCHEMA = '{schema.replace(chr(39), chr(39) * 2)}' AND COLUMN_TABLE = '{name.replace(chr(39), chr(39) * 2)}'")
+    return {str(r["COLUMN_NAME"]): r.get("COLUMN_COMMENT") for r in _rows(conn, sql)}
+
+
+def write_comments(conn, doc: dict[str, Any], columns: list[dict[str, Any]], virtual: bool) -> dict[str, Any]:
+    """The roles into the database: COMMENT ON COLUMN per role column of a regular table (a column that lost its
+    role loses its tag), or for a virtual table CREATE OR REPLACE VIEW STARTER_KIT.<ID>_DESCRIBED with the comments
+    on its columns. Every statement that fails is one warning naming the reason; nothing raises."""
+    id, version = doc["id"], int(doc["version"])
+    schema, name = split_table(doc["fact_table"])
+    tags = {c: role_tag(role, id, version) for role, c in _role_columns(doc.get("roles") or {})}
+    written: list[str] = []
+    warnings: list[str] = []
+    retry = f"roles not written to column comments; retry with: exakit describe {id} --comments"
+
+    def run(sql: str) -> bool:
+        try:
+            conn.execute(sql)
+        except Exception as err:            # noqa: BLE001 - whatever the database said: the descriptor stays approved
+            warnings.append(f"{_first_line(err)} ({sql[:60]}...); {retry}")
+            return False
+        written.append(sql)
+        return True
+
+    if virtual:
+        view = re.sub(r"[^A-Z0-9_]+", "_", id.upper()).strip("_") + "_DESCRIBED"
+        parts = [quoted(c["column"]) + (f" COMMENT IS {_literal(tags[c['column']])}" if c["column"] in tags else "") for c in columns]
+        about = (f"starter kit: descriptor {id} v{version} of the virtual table {schema}.{name}; roles: "
+                 + ", ".join(f"{role}={c}" for role, c in _role_columns(doc.get("roles") or {})))
+        if run(f"CREATE SCHEMA IF NOT EXISTS {quoted(KIT_SCHEMA)}"):
+            run(f"CREATE OR REPLACE VIEW {quoted(KIT_SCHEMA)}.{quoted(view)} ({', '.join(parts)}) AS SELECT "
+                f"{', '.join(quoted(c['column']) for c in columns)} FROM {table_ref(schema, name)} COMMENT IS {_literal(about)}")
+        return {"written": written, "warnings": warnings, "view": f"{KIT_SCHEMA}.{view}"}
+    try:
+        existing = _existing_comments(conn, schema, name)
+    except Exception as err:                # noqa: BLE001
+        existing = {}
+        warnings.append(f"the existing comments could not be read ({_first_line(err)}); writing the role tags alone")
+    for c in columns:
+        column = c["column"]
+        before, after = existing.get(column), _tagged(existing.get(column), tags.get(column))
+        if column in tags or (before and _TAG.search(before)):
+            run(f"COMMENT ON COLUMN {table_ref(schema, name)}.{quoted(column)} IS {_literal(after or '')}")
+    return {"written": written, "warnings": warnings}
+
+
+def _first_line(err: BaseException) -> str:
+    text = str(err).strip()
+    match = re.search(r"message\s*=>\s*(.+)", text)
+    line = (match.group(1) if match else text).splitlines()[0] if text else type(err).__name__
+    return line.strip()[:200]
+
+
+def comments(conn, id: str, root: Path | None = None) -> dict[str, Any]:
+    """Write the current approved version's roles into the comments again (after a failed write-back)."""
+    entry = show(id, None, root)
+    doc = entry["document"]
+    if doc.get("status") != "approved":
+        raise Refused(f"v{entry['version']} of '{id}' is a draft; approve it first: exakit describe {id} --approve")
+    schema, name = split_table(doc["fact_table"])
+    columns, virtual = _columns(conn, schema, name)
+    return dict(write_comments(conn, doc, columns, virtual), id=id, version=entry["version"])
+
+
 # --- the command line ----------------------------------------------------------------------------------------------
 
 USAGE = ("usage: describe_service.py draft <SCHEMA.TABLE> [--sample N] [--id <slug>] [--json] [--write <path>]\n"
          "       describe_service.py profile <SCHEMA.TABLE> [--sample N]\n"
-         "       describe_service.py evidence-check <descriptor.yaml> [--sample N] [--json]")
+         "       describe_service.py evidence-check <descriptor.yaml> [--sample N] [--json]\n"
+         "       describe_service.py approve <draft.yaml|id> [--role <role>=<COLUMN> ...] [--owner <who>] [--no-comments] [--json]\n"
+         "       describe_service.py show <id> [--version n] [--json]\n"
+         "       describe_service.py versions <id> [--json]\n"
+         "       describe_service.py comments <id> [--json]")
 
 
-def _options(argv: list[str], flags: tuple[str, ...], values: tuple[str, ...]) -> tuple[list[str], dict[str, Any]]:
-    """Positionals and options; an unknown option, a repeated one or a missing value is refused."""
+def _options(argv: list[str], flags: tuple[str, ...], values: tuple[str, ...],
+             repeated: tuple[str, ...] = ()) -> tuple[list[str], dict[str, Any]]:
+    """Positionals and options; an unknown option, a repeated one (unless listed under ``repeated``, collected as a
+    list) or a missing value is refused."""
     positional: list[str] = []
     options: dict[str, Any] = {}
     i = 0
@@ -757,15 +1233,18 @@ def _options(argv: list[str], flags: tuple[str, ...], values: tuple[str, ...]) -
         arg = argv[i]
         if arg in flags:
             options[arg] = True
-        elif arg in values:
+        elif arg in values or arg in repeated:
             if i + 1 >= len(argv) or argv[i + 1].startswith("--"):
                 raise Refused(f"{arg} needs a value.")
-            if arg in options:
+            if arg in repeated:
+                options.setdefault(arg, []).append(argv[i + 1])
+            elif arg in options:
                 raise Refused(f"{arg} was given twice.")
-            options[arg] = argv[i + 1]
+            else:
+                options[arg] = argv[i + 1]
             i += 1
         elif arg.startswith("-") and arg != "-":
-            raise Refused(f"Unknown option '{arg}' (supported: {', '.join(flags + values)}).")
+            raise Refused(f"Unknown option '{arg}' (supported: {', '.join(flags + values + repeated)}).")
         else:
             positional.append(arg)
         i += 1
@@ -773,7 +1252,35 @@ def _options(argv: list[str], flags: tuple[str, ...], values: tuple[str, ...]) -
         if not re.fullmatch(r"[1-9][0-9]*", options["--sample"]):
             raise Refused(f"--sample takes the number of rows to profile (a positive integer), not '{options['--sample']}'.")
         options["--sample"] = int(options["--sample"])
+    if "--version" in options:
+        if not re.fullmatch(r"[1-9][0-9]*", options["--version"]):
+            raise Refused(f"--version takes a version number (a positive integer), not '{options['--version']}'.")
+        options["--version"] = int(options["--version"])
     return positional, options
+
+
+def _approve_lines(result: dict[str, Any]) -> list[str]:
+    if result.get("unchanged"):
+        return [result["message"]]
+    lines = [f"Approved {result['id']} v{result['version']} (owner {result['owner']}, digest {result['digest'][:19]}..., "
+             f"{result['scope']} scope over {result['rows']} rows): {result['path']}"]
+    for role, column in result["roles"].items():
+        lines.append(f"  {role:9} {', '.join(column) if isinstance(column, list) else column}")
+    lines += _comment_lines(result["comments"])
+    return lines
+
+
+def _comment_lines(done: dict[str, Any]) -> list[str]:
+    lines = []
+    if done.get("skipped"):
+        lines.append("Column comments not written (--no-comments).")
+    elif done.get("view"):
+        lines.append(f"Roles written as column comments on the view {done['view']}.")
+    elif done.get("written"):
+        lines.append(f"Roles written as column comments ({len(done['written'])} columns).")
+    for warning in done.get("warnings", []):
+        lines.append(f"Warning: {warning}")
+    return lines
 
 
 def main(argv: list[str]) -> int:
@@ -841,11 +1348,68 @@ def main(argv: list[str]) -> int:
                 print(f"{'Every role agrees' if result['ok'] else 'A role differs'}: {result['fact_table']} "
                       f"({result['evidence']['table']['statements']} statements)")
             return 0 if result["ok"] else 1
-        raise Refused(f"Unknown command '{command}' (draft, profile, evidence-check).")
+        if command == "approve":
+            positional, options = _options(rest, ("--json", "--no-comments"), ("--owner", "--sample"), ("--role",))
+            if len(positional) != 1:
+                raise Refused("Name one draft file or dataset id: describe_service.py approve <draft.yaml|id> [--role role=COLUMN ...] [--owner who] [--no-comments] [--json]")
+            given: dict[str, list[str]] = {}
+            for text in options.get("--role", []):
+                role, columns = parse_role(text)
+                if role in given:
+                    raise Refused(f"--role {role}= was given twice.")
+                given[role] = columns
+            if "--owner" in options and not options["--owner"].strip():
+                raise Refused("--owner needs a name.")
+            doc, _origin = resolve_draft(positional[0])
+            conn = connect()
+            try:
+                result = approve(conn, doc, roles=given, owner=options.get("--owner"), comments="--no-comments" not in options,
+                                 sample=options.get("--sample", SAMPLE))
+            finally:
+                conn.close()
+            if options.get("--json"):
+                print(json.dumps(result, indent=2))
+            else:
+                print("\n".join(_approve_lines(result)))
+            return 0
+        if command in ("show", "versions", "comments"):
+            positional, options = _options(rest, ("--json",), ("--version",) if command == "show" else ())
+            if len(positional) != 1 or not _ID.match(positional[0]):
+                raise Refused(f"Name one dataset id (lower-case letters and digits, joined by - or _): describe_service.py {command} <id>"
+                              + (" [--version n]" if command == "show" else "") + " [--json]")
+            id = positional[0]
+            if command == "versions":
+                found = versions(id)
+                if options.get("--json"):
+                    print(json.dumps(found, indent=2))
+                else:
+                    for e in found:
+                        mark = "*" if e["current"] else " "
+                        print(f"{mark} v{e['version']:<3} {e.get('status', '?'):9} owner {e.get('owner', '?')}  created {e.get('created') or '-'}  "
+                              f"digest {(e.get('digest') or 'null')[:19]}  {e['origin']}: {e['path']}")
+                return 0
+            if command == "show":
+                entry = show(id, options.get("--version"))
+                if options.get("--json"):
+                    print(json.dumps({k: v for k, v in entry.items() if k != "text"}, indent=2))
+                else:
+                    sys.stdout.write(entry["text"])
+                return 0
+            conn = connect()
+            try:
+                result = comments(conn, id)
+            finally:
+                conn.close()
+            if options.get("--json"):
+                print(json.dumps(result, indent=2))
+            else:
+                print("\n".join([f"{result['id']} v{result['version']}:"] + (_comment_lines(result) or ["nothing to write"])))
+            return 0
+        raise Refused(f"Unknown command '{command}' (draft, profile, evidence-check, approve, show, versions, comments).")
     except Refused as err:
         print(f"{err}\n{USAGE}" if err.code == 2 else str(err), file=sys.stderr)
         return err.code
-    except Unreachable as err:
+    except (Unreachable, Conflict) as err:
         print(str(err), file=sys.stderr)
         return err.code
 

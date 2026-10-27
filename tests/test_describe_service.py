@@ -2,8 +2,12 @@
 AC-DS5.1/5.3/5.5): the role scoring on synthetic profiles - the five roles, ties, a missing date, all-null and
 constant columns, quoted names; the profile from a virtual (sampled) and a regular table through a fake connection,
 with the statement count; no model note without a model, one warning and an unchanged draft when the call fails;
-the YAML the service writes round-trips through the descriptor reader; and the shipped datasets' profiles
-(test_data/describe, captured from the local database) draft the roles the shipped descriptors carry."""
+the YAML the service writes round-trips through the descriptor reader; the shipped datasets' profiles
+(test_data/describe, captured from the local database) draft the roles the shipped descriptors carry; and the approve
+half (design 2.2/2.3, AC-DS5.2/5.4/5.5): the table digest (deterministic, order-independent, its SQL, a sample scope
+for a virtual table), approve into the kit's store (v<n+1> + current, a shipped id as v2, idempotent, a conflict
+retried once, the owner, bad roles named), the comment write-back (COMMENT ON COLUMN with the existing comment kept,
+the view for a virtual table, a failure as a warning) and the row budget of a virtual table."""
 
 from __future__ import annotations
 
@@ -81,26 +85,47 @@ class FakeStatement:
 
 class FakeConn:
     """Answers the profiler's statements over rows held here: the column list, COUNT(*), the sample fetch, the
-    aggregates (computed from the rows) and the GROUPING SETS values."""
+    aggregates (computed from the rows) and the GROUPING SETS values; the digest statement (each row hashed here the
+    way the database would, over the columns the statement names, the first LIMIT rows when it has one); the
+    existing comments; and the DDL of the write-back (recorded, or refused when ``ddl_error`` is set). ``fetched``
+    counts the rows handed out by statements that read the table's rows."""
 
-    def __init__(self, columns: list[tuple[str, str]], rows: list[dict], virtual: bool = False, tuples: bool = False):
+    def __init__(self, columns: list[tuple[str, str]], rows: list[dict], virtual: bool = False, tuples: bool = False,
+                 comments: dict | None = None, ddl_error: Exception | None = None):
         self.columns, self.rows, self.virtual, self.tuples = columns, rows, virtual, tuples
+        self.comments, self.ddl_error = dict(comments or {}), ddl_error
         self.statements: list[str] = []
+        self.fetched = 0
 
     def execute(self, sql: str):
         self.statements.append(sql)
         return FakeStatement(self._answer(sql), self.tuples)
 
+    def close(self):
+        pass
+
     def _answer(self, sql: str) -> list[dict]:
+        if not sql.startswith("SELECT"):
+            if self.ddl_error is not None:
+                raise self.ddl_error
+            done = re.fullmatch(r'COMMENT ON COLUMN "[^"]+"\."[^"]+"\."([^"]+)" IS \'((?:[^\']|\'\')*)\'', sql)
+            if done:                                                                 # the comment takes, as in the database
+                self.comments[done.group(1)] = done.group(2).replace("''", "'") or None
+            return []
         if "EXA_ALL_COLUMNS" in sql:
             if "'NOPE'" in sql:
                 return []
+            if "COLUMN_COMMENT" in sql:
+                return [{"COLUMN_NAME": n, "COLUMN_COMMENT": self.comments.get(n)} for n, _t in self.columns]
             return [{"COLUMN_NAME": n, "COLUMN_TYPE": t, "COLUMN_ORDINAL_POSITION": i, "IS_VIRTUAL": int(self.virtual)}
                     for i, (n, t) in enumerate(self.columns, 1)]
+        if sql.startswith("SELECT COUNT(*) AS N, SUM(TO_NUMBER"):
+            return [self._digest(sql)]
         if sql.startswith("SELECT COUNT(*) AS N"):
             return [{"N": len(self.rows)}]
-        if "RANDOM()" in sql:
+        if "RANDOM()" in sql or re.search(r'FROM "[^"]+"\."[^"]+" LIMIT \d+$', sql):
             limit = int(re.search(r"LIMIT (\d+)", sql).group(1))
+            self.fetched += min(limit, len(self.rows))
             return [dict(r) for r in self.rows[:limit]]
         if "GROUPING SETS" in sql:
             names = re.findall(r'GROUPING\("((?:[^"]|"")+)"\)', sql)
@@ -129,7 +154,22 @@ class FakeConn:
                 row[f"AL{i}"] = sum(map(len, texts)) / len(texts)
                 row[f"ML{i}"] = max(map(len, texts))
                 row[f"P{i}"] = sum(1 for t in texts if svc._parses(t))
+        self.fetched += len(self.rows)
         return [row]
+
+    def _digest(self, sql: str) -> dict:
+        import hashlib
+        names = re.findall(r'(?:CAST|TO_CHAR)\("((?:[^"]|"")+)"', sql)
+        limit = re.search(r"LIMIT (\d+)\)\)$", sql)
+        rows = self.rows[:int(limit.group(1))] if limit else self.rows
+        self.fetched += len(rows)
+        sums = [0] * svc.DIGEST_SLICES
+        for r in rows:
+            text = "\x1f".join(svc.NULL_MARK if r.get(n) is None else str(r[n]) for n in names)
+            h = hashlib.sha256(text.encode("utf-8")).hexdigest()
+            for i in range(svc.DIGEST_SLICES):
+                sums[i] += int(h[12 * i:12 * i + 12], 16)
+        return dict({"N": len(rows)}, **{f"S{i}": str(v) for i, v in enumerate(sums)})
 
 
 def fake_openai(answer: str | None = None, error: Exception | None = None) -> types.ModuleType:
@@ -313,13 +353,29 @@ class QuotedNames(unittest.TestCase):
         self.assertIn('IS_DATE("select", \'YYYY-MM-DD\')', aggregate)
         self.assertIn('FROM "my schema"."order data"', aggregate)
         self.assertIn('GROUPING("select")', next(s for s in conn.statements if "GROUPING SETS" in s))
-        doc = svc.draft(prof)
-        self.assertEqual(doc["roles"]["date"], {"table": "my schema.order data", "column": "order date"})
-        self.assertEqual(doc["roles"]["category"]["column"], "select")
-        self.assertEqual(doc["roles"]["label"]["column"], "ok")
-        text = svc.to_yaml(doc)
-        self.assertIn('date: {table: "my schema.order data", column: "order date"}', text)
-        self.assertEqual(rules.load_yaml(text)["roles"]["date"]["column"], "order date")
+        # The draft refuses such names: the reader keeps a plain upper-case name only, the notebooks write it into
+        # SQL unquoted, so a descriptor with "order date" could never run. The remedy is a view with plain names.
+        with self.assertRaises(svc.Refused) as caught:
+            svc.draft(prof)
+        self.assertIn("my schema.order data is not named by plain upper-case SQL names", str(caught.exception))
+        self.assertIn('CREATE VIEW STARTER_KIT.ORDER_DATA AS SELECT "order date" AS ORDER_DATE, "select" AS SELECT, "customer name" AS CUSTOMER_NAME, ... FROM "my schema"."order data"', str(caught.exception))
+        self.assertIn("exakit describe STARTER_KIT.ORDER_DATA", str(caught.exception))
+
+    def test_a_plain_table_with_a_role_column_that_needs_quotes_is_refused_naming_it(self):
+        columns = [("ID", "DECIMAL(9,0)"), ("order date", "DATE"), ("KIND", "VARCHAR(20) UTF8"), ("ok", "BOOLEAN")]
+        rows = [{"ID": n, "order date": f"2024-01-{1 + n % 28:02d}", "KIND": ["a", "b", "c"][n % 3], "ok": n % 5 == 0} for n in range(400)]
+        prof = svc.profile(FakeConn(columns, rows), "LAB.READINGS")
+        with self.assertRaises(svc.Refused) as caught:
+            svc.draft(prof)
+        self.assertIn('date -> "order date"', str(caught.exception))
+        self.assertIn('label -> "ok"', str(caught.exception))
+        self.assertIn('"order date" AS ORDER_DATE', str(caught.exception))
+        self.assertEqual(caught.exception.code, 2)
+        self.assertEqual(svc.parse_role("entity=name"), ("entity", ["NAME"]))
+        for bad in ("entity=order date", "entity=1x", "owner=X", "entity=", "entity=A,B", "text="):
+            with self.assertRaises(svc.Refused):
+                svc.parse_role(bad)
+        self.assertEqual(svc.parse_role("text=a, b"), ("text", ["A", "B"]))
 
 
 class Profiles(unittest.TestCase):
@@ -355,12 +411,15 @@ class Profiles(unittest.TestCase):
         prof = svc.profile(conn, "LAB.READINGS", sample=300)
         self.assertEqual((prof["sampled"], prof["virtual"], prof["profiled_rows"], prof["statements"]), (True, True, 300, 3))
         fetch = conn.statements[-1]
-        self.assertRegex(fetch, r'^SELECT "ID", "NAME", .* FROM "LAB"\."READINGS" WHERE RANDOM\(\) < 0\.18 LIMIT 300$')
+        self.assertRegex(fetch, r'^SELECT "ID", "NAME", .* FROM "LAB"\."READINGS" LIMIT 300$')     # the first rows: no RANDOM() filter,
+        self.assertNotIn("RANDOM", fetch)                                                           # which would read the source whole
+        self.assertEqual((prof["sample_method"], conn.fetched), ("first rows", 300))
         by = {c["column"]: c for c in prof["columns"]}
         self.assertEqual((by["KIND"]["distinct"], by["ID"]["distinct_ratio"], by["EMPTY"]["all_null"]), (3, 1.0, True))
         self.assertEqual(by["TAKEN_ON"]["span_days"], 362)
         doc = svc.draft(prof)
         self.assertEqual((doc["source"], doc["evidence"]["table"]["sampled"], doc["evidence"]["table"]["statements"]), ("vs:LAB", True, 3))
+        self.assertEqual(doc["evidence"]["table"]["sample_method"], "first rows")
         self.assertEqual(svc.draft_roles(doc)["entity"], "NAME")
 
     def test_a_huge_regular_table_is_sampled_too(self):
@@ -371,7 +430,8 @@ class Profiles(unittest.TestCase):
         conn = Huge(self.COLUMNS, self.rows(50))
         prof = svc.profile(conn, "LAB.READINGS", sample=20)
         self.assertEqual((prof["rows"], prof["sampled"], prof["virtual"], prof["profiled_rows"]), (6_000_000, True, False, 20))
-        self.assertIn("RANDOM() < 4e-06", conn.statements[-1])
+        self.assertIn("RANDOM() < 4e-06", conn.statements[-1])        # a local table: the random slice the design asks for
+        self.assertEqual(prof["sample_method"], "random")
 
     def test_rows_as_tuples_read_the_same(self):
         conn = FakeConn(self.COLUMNS, self.rows(), tuples=True)
@@ -491,6 +551,327 @@ class ShippedDatasets(unittest.TestCase):
                 self.assertEqual(shipped.evidence["table"]["statements"], 4)
 
 
+# --- the approve half ----------------------------------------------------------------------------------------------
+
+def kit_home():
+    """A temporary EXAKIT_HOME for the descriptor store (the owner fixed, no model)."""
+    folder = tempfile.TemporaryDirectory()
+    patch = mock.patch.dict(os.environ, {"EXAKIT_HOME": folder.name, "EXAKIT_DESCRIPTOR_OWNER": "dana", "EXAKIT_NB_MODEL": "", "OPENAI_BASE_URL": ""})
+    return folder, patch
+
+
+def readings_draft(conn=None) -> dict:
+    conn = conn or FakeConn(Profiles.COLUMNS, Profiles.rows())
+    return svc.draft(svc.profile(conn, "LAB.READINGS"), "LAB.READINGS", "readings")
+
+
+class Digest(unittest.TestCase):
+    ROLES = {"entity": "NAME", "category": "KIND", "date": "TAKEN_ON", "label": "ALARM", "text": ["NOTE"]}
+
+    def test_the_digest_is_deterministic_and_order_independent_and_sees_a_change(self):
+        rows = Profiles.rows()
+        first = svc.digest(FakeConn(Profiles.COLUMNS, rows), "LAB.READINGS", self.ROLES)
+        again = svc.digest(FakeConn(Profiles.COLUMNS, rows), "lab.readings", self.ROLES)
+        shuffled = svc.digest(FakeConn(Profiles.COLUMNS, list(reversed(rows))), "LAB.READINGS", self.ROLES)
+        self.assertEqual(first["digest"], again["digest"])
+        self.assertEqual(first["digest"], shuffled["digest"])
+        self.assertRegex(first["digest"], r"^sha256:[0-9a-f]{64}$")
+        self.assertEqual((first["scope"], first["rows"], first["hashed_rows"], first["statements"]), ("full", 500, 500, 2))
+        changed = [dict(r) for r in rows]
+        changed[7]["KIND"] = "steam"
+        self.assertNotEqual(first["digest"], svc.digest(FakeConn(Profiles.COLUMNS, changed), "LAB.READINGS", self.ROLES)["digest"])
+        self.assertNotEqual(first["digest"], svc.digest(FakeConn(Profiles.COLUMNS, rows[:-1]), "LAB.READINGS", self.ROLES)["digest"])
+        other = svc.digest(FakeConn(Profiles.COLUMNS, rows), "LAB.READINGS", dict(self.ROLES, entity="ID"))
+        self.assertNotEqual(first["digest"], other["digest"])                      # the role columns are part of it
+        self.assertEqual(first["digest"], svc.digest(FakeConn(Profiles.COLUMNS, rows), "LAB.READINGS",
+                                                     {r: {"table": "LAB.READINGS", "column": c} for r, c in self.ROLES.items() if r != "text"}
+                                                     | {"text": [{"table": "LAB.READINGS", "column": "NOTE"}]})["digest"])
+
+    def test_the_digest_sql(self):
+        conn = FakeConn(Profiles.COLUMNS, Profiles.rows())
+        sql = svc.digest(conn, "LAB.READINGS", self.ROLES)["sql"]
+        self.assertTrue(sql.startswith("SELECT COUNT(*) AS N, SUM(TO_NUMBER(SUBSTR(H, 1, 12), 'XXXXXXXXXXXX')) AS S0, "))
+        self.assertIn("SUM(TO_NUMBER(SUBSTR(H, 49, 12), 'XXXXXXXXXXXX')) AS S4 FROM (SELECT HASH_SHA256(", sql)
+        self.assertIn('COALESCE(CAST("NAME" AS VARCHAR(2000000)), \'<null>\') || CHR(31) || COALESCE(CAST("KIND" AS VARCHAR(2000000)), \'<null>\') '
+                      '|| CHR(31) || COALESCE(TO_CHAR("TAKEN_ON", \'YYYY-MM-DD\'), \'<null>\') || CHR(31) || COALESCE(CAST("ALARM" AS VARCHAR(2000000)), \'<null>\') '
+                      '|| CHR(31) || COALESCE(CAST("NOTE" AS VARCHAR(2000000)), \'<null>\')) AS H FROM "LAB"."READINGS")', sql)
+        self.assertNotIn("ORDER BY", sql)
+        self.assertNotIn("RANDOM", sql)
+        self.assertEqual(sum(1 for s in conn.statements if s.startswith("SELECT COUNT(*) AS N, SUM")), 1)
+        ts = svc.digest_sql('"A"."B"', [{"column": "AT", "kind": "timestamp", "type": "TIMESTAMP"}])
+        self.assertIn("TO_CHAR(\"AT\", 'YYYY-MM-DD HH24:MI:SS.FF6')", ts)
+
+    def test_a_virtual_table_is_hashed_over_its_first_sample_rows(self):
+        conn = FakeConn(Profiles.COLUMNS, Profiles.rows(2000), virtual=True)
+        out = svc.digest(conn, "LAB.READINGS", self.ROLES, sample=300)
+        self.assertEqual((out["scope"], out["rows"], out["hashed_rows"], out["sample"], out["statements"]), ("sample", 2000, 300, 300, 3))
+        self.assertTrue(out["sql"].endswith('FROM (SELECT "NAME", "KIND", "TAKEN_ON", "ALARM", "NOTE" FROM "LAB"."READINGS" LIMIT 300))'))
+        self.assertEqual(conn.fetched, 300)
+        self.assertEqual(out["digest"], svc.digest(FakeConn(Profiles.COLUMNS, Profiles.rows(2000), virtual=True), "LAB.READINGS", self.ROLES, sample=300)["digest"])
+
+    def test_a_role_column_the_table_lacks_is_refused_naming_the_role(self):
+        with self.assertRaises(svc.Refused) as caught:
+            svc.digest(FakeConn(Profiles.COLUMNS, Profiles.rows()), "LAB.READINGS", dict(self.ROLES, entity="NOPE"))
+        self.assertIn("no column NOPE (the entity role)", str(caught.exception))
+        with self.assertRaises(svc.NotFound):
+            svc.digest(FakeConn(Profiles.COLUMNS, []), "LAB.NOPE", self.ROLES)
+        with self.assertRaises(svc.Refused):
+            svc.digest(FakeConn(Profiles.COLUMNS, Profiles.rows()), "LAB.READINGS", {})
+
+
+class Approve(unittest.TestCase):
+    def setUp(self):
+        self.folder, patch = kit_home()
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.addCleanup(self.folder.cleanup)
+        self.home = Path(self.folder.name)
+
+    def stored(self, id: str, n: int) -> dict:
+        return svc.read_document(self.home / "descriptors" / id / f"v{n}.yaml")
+
+    def test_the_first_approve_writes_v1_and_current(self):
+        conn = FakeConn(Profiles.COLUMNS, Profiles.rows())
+        draft = readings_draft(conn)
+        before = len(conn.statements)
+        result = svc.approve(conn, draft, comments=False)
+        self.assertEqual((result["id"], result["version"], result["unchanged"], result["owner"], result["scope"], result["rows"]),
+                         ("readings", 1, False, "dana", "full", 500))
+        self.assertEqual(result["path"], str(self.home / "descriptors" / "readings" / "v1.yaml"))
+        self.assertEqual((self.home / "descriptors" / "readings" / "current").read_text(), "1\n")
+        self.assertEqual(svc.store_versions("readings"), [1])
+        read = rules.read_descriptor(Path(result["path"]))
+        self.assertEqual((read.status, read.version, read.owner, read.drafted_by, read.digest, read.source), ("approved", 1, "dana", "profile", result["digest"], "LAB.READINGS"))
+        self.assertEqual(svc.shipped_roles(read), svc.draft_roles(draft))
+        self.assertEqual(read.evidence["entity"]["column"], "NAME")                   # the draft's evidence is kept
+        self.assertEqual(read.evidence["table"]["digest_scope"], "full")
+        self.assertTrue(read.created and read.created.endswith("Z"))
+        self.assertEqual(draft["status"], "draft", "the draft given is not changed")
+        self.assertEqual([s for s in conn.statements[before:] if not s.startswith("SELECT")], [], "no comments on --no-comments")
+        self.assertTrue(result["comments"]["skipped"])
+        self.assertEqual(svc.show("readings")["version"], 1)
+
+    def test_a_shipped_dataset_approves_as_v2_and_the_shipped_file_stays(self):
+        prof = json.loads((FIXTURES / "pharma_trials.profile.json").read_text(encoding="utf-8"))
+        columns = [(c["column"], c["type"]) for c in prof["columns"]]
+        rows = [{c["column"]: (f"2017-0{1 + n % 9}-01" if c["kind"] == "date" else n % 2 if c["kind"] in ("integer", "number") else f"v{n % 7}")
+                 for c in prof["columns"]} for n in range(40)]
+        conn = FakeConn(columns, rows)
+        doc, origin = svc.resolve_draft("pharma_trials", ROOT)
+        self.assertEqual((origin, doc["version"], doc["status"]), ("shipped", 1, "approved"))
+        self.assertEqual(svc.next_version("pharma_trials", ROOT), 2)
+        result = svc.approve(conn, doc, root=ROOT)
+        self.assertEqual((result["version"], result["unchanged"]), (2, False))
+        self.assertEqual(svc.store_versions("pharma_trials"), [2])
+        shipped = rules.read_descriptor(ROOT / "data" / "datasets" / "pharma_trials" / "descriptor.yaml")
+        self.assertEqual((shipped.version, shipped.owner), (1, "kit"))
+        read = rules.read_descriptor(Path(result["path"]))
+        self.assertEqual((read.version, read.owner, read.drafted_by, read.source, shipped.roles), (2, "dana", "shipped", "pharma_trials", read.roles))
+        listed = svc.versions("pharma_trials", ROOT)
+        self.assertEqual([(e["version"], e["origin"], e["current"], e["owner"]) for e in listed], [(1, "shipped", False, "kit"), (2, "store", True, "dana")])
+        self.assertEqual(svc.show("pharma_trials", 1, ROOT)["path"], str(ROOT / "data" / "datasets" / "pharma_trials" / "descriptor.yaml"))
+        self.assertEqual(svc.show("pharma_trials", None, ROOT)["version"], 2)
+        with self.assertRaises(svc.NotFound):
+            svc.show("pharma_trials", 3, ROOT)
+        self.assertIn('COMMENT ON COLUMN "PHARMA"."PHARMA_TRIALS"."PHASE" IS \'role: category (starter kit, descriptor pharma_trials v2)\'', conn.statements)
+
+    def test_approving_the_same_roles_again_is_a_no_op(self):
+        conn = FakeConn(Profiles.COLUMNS, Profiles.rows())
+        draft = readings_draft(conn)
+        svc.approve(conn, draft, comments=False)
+        before = len(conn.statements)
+        again = svc.approve(conn, draft, comments=False)
+        self.assertEqual((again["unchanged"], again["version"], again["message"]), (True, 1, "v1 is already approved with these roles"))
+        self.assertEqual(svc.store_versions("readings"), [1])
+        self.assertEqual(len(conn.statements), before, "nothing is asked of the database")
+        self.assertEqual(svc.approve(conn, draft, roles={"entity": ["NAME"]}, comments=False)["unchanged"], True)
+
+    def test_a_correction_writes_the_next_version_and_the_old_one_stays_readable(self):
+        conn = FakeConn(Profiles.COLUMNS, Profiles.rows())
+        draft = readings_draft(conn)
+        svc.approve(conn, draft, comments=False)
+        result = svc.approve(conn, draft, roles={"category": ["NAME"], "entity": ["ID"], "text": ["NOTE", "KIND"]}, owner="lee", comments=False)
+        self.assertEqual((result["version"], result["owner"], result["roles"]["category"], result["roles"]["text"]), (2, "lee", "NAME", ["NOTE", "KIND"]))
+        self.assertEqual(svc.store_versions("readings"), [1, 2])
+        self.assertEqual(svc.store_current("readings"), 2)
+        v2 = rules.read_descriptor(Path(result["path"]))
+        self.assertEqual((v2.evidence["category"]["set_by"], v2.evidence["category"]["column"], v2.evidence["text"]["set_by"]), ("user", "NAME", "user"))
+        self.assertEqual(v2.evidence["category"]["type"], "VARCHAR(20) UTF8", "the draft's numbers for the role stay beside the correction")
+        self.assertEqual(self.stored("readings", 1)["roles"]["category"]["column"], "KIND")
+        self.assertNotEqual(self.stored("readings", 1)["digest"], v2.digest, "another set of role columns: another digest")
+        third = svc.approve(conn, svc.resolve_draft("readings")[0], comments=False)
+        self.assertEqual((third["unchanged"], third["version"]), (True, 2))
+
+    def test_a_role_the_profiler_listed_as_missing_can_be_set(self):
+        columns = [("ID", "DECIMAL(9,0)"), ("NAME", "VARCHAR(100) UTF8"), ("KIND", "VARCHAR(20) UTF8"), ("ALARM", "BOOLEAN"), ("NOTE", "VARCHAR(2000) UTF8"), ("WHEN_TXT", "VARCHAR(30) UTF8")]
+        rows = [{k: v for k, v in r.items() if k in dict(columns)} | {"WHEN_TXT": f"day {i}"} for i, r in enumerate(Profiles.rows())]
+        conn = FakeConn(columns, rows)
+        draft = svc.draft(svc.profile(conn, "LAB.READINGS"), "LAB.READINGS", "readings")
+        self.assertEqual([m["role"] for m in draft["missing"]], ["date"])
+        result = svc.approve(conn, draft, roles={"date": ["WHEN_TXT"]}, comments=False)
+        read = rules.read_descriptor(Path(result["path"]))
+        self.assertEqual((read.missing, read.roles["date"][0].column), ((), "WHEN_TXT"))
+
+    def test_bad_roles_are_refused_naming_the_role_and_the_reason(self):
+        conn = FakeConn(Profiles.COLUMNS, Profiles.rows())
+        draft = readings_draft(conn)
+        with self.assertRaises(svc.Refused) as caught:
+            svc.approve(conn, draft, roles={"entity": ["KIND"]}, comments=False)
+        self.assertIn("column LAB.READINGS.KIND is assigned to more than one role (entity, category)", str(caught.exception))
+        with self.assertRaises(svc.Refused) as caught:
+            svc.approve(conn, draft, roles={"label": ["NOPE"]}, comments=False)
+        self.assertIn("no column NOPE (the label role)", str(caught.exception))
+        self.assertEqual(caught.exception.code, 2)
+        bad = dict(draft, roles={})
+        with self.assertRaises(svc.Refused) as caught:
+            svc.approve(conn, bad, comments=False)
+        self.assertIn("the 'entity' role is missing", str(caught.exception))
+        self.assertEqual(svc.store_versions("readings"), [], "nothing was written")
+        with self.assertRaises(svc.NotFound):
+            svc.approve(FakeConn(Profiles.COLUMNS, []), dict(draft, fact_table="LAB.NOPE"), comments=False)
+        with self.assertRaises(svc.NotFound) as caught:
+            svc.resolve_draft("nowhere", ROOT)
+        self.assertIn("exakit describe SCHEMA.TABLE --id nowhere", str(caught.exception))
+        with self.assertRaises(svc.Refused):
+            svc.resolve_draft("Not An Id", ROOT)
+
+    def test_the_owner_is_the_environment_then_the_os_user_unless_given(self):
+        conn = FakeConn(Profiles.COLUMNS, Profiles.rows())
+        draft = dict(readings_draft(conn), owner="someone-else")
+        self.assertEqual(svc.approve(conn, draft, comments=False)["owner"], "dana")
+        with mock.patch.dict(os.environ, {"EXAKIT_DESCRIPTOR_OWNER": ""}), mock.patch.object(svc.getpass, "getuser", return_value="osuser"):
+            self.assertEqual(svc.approve(conn, draft, roles={"entity": ["ID"]}, comments=False)["owner"], "osuser")
+        self.assertEqual(svc.approve(conn, draft, roles={"entity": ["NAME"], "category": ["KIND"]}, owner="lee", comments=False)["owner"], "lee")
+
+    def test_a_version_taken_meanwhile_is_retried_once_then_a_conflict(self):
+        conn = FakeConn(Profiles.COLUMNS, Profiles.rows())
+        draft = readings_draft(conn)
+        folder = self.home / "descriptors" / "readings"
+        real = svc.next_version
+        collided = []
+
+        def taken(id, root=None):
+            number = real(id, root)
+            if not collided:                                                                # once: the first retry succeeds
+                collided.append(number)
+                folder.mkdir(parents=True, exist_ok=True)
+                (folder / f"v{number}.yaml").write_text("# someone else\n", encoding="utf-8")   # appears between the count and the create
+            return number
+
+        with mock.patch.object(svc, "next_version", side_effect=taken):
+            result = svc.approve(conn, draft, comments=False)
+        self.assertEqual(result["version"], 2, "v1 was taken, so the retry wrote v2")
+        self.assertEqual((folder / "v1.yaml").read_text(), "# someone else\n")
+        self.assertEqual(svc.store_current("readings"), 2)
+
+        def always_taken(id, root=None):
+            number = real(id, root)
+            (folder / f"v{number}.yaml").write_text("# someone else\n", encoding="utf-8")
+            return number
+
+        with mock.patch.object(svc, "next_version", side_effect=always_taken):
+            with self.assertRaises(svc.Conflict) as caught:
+                svc.approve(conn, draft, roles={"entity": ["ID"]}, comments=False)
+        self.assertEqual(caught.exception.code, 5)
+        self.assertEqual(svc.store_current("readings"), 2, "current is untouched by a failed approve")
+
+    def test_a_draft_file_is_approved_from_its_path(self):
+        conn = FakeConn(Profiles.COLUMNS, Profiles.rows())
+        path = self.home / "readings.yaml"
+        path.write_text(svc.to_yaml(readings_draft(conn)), encoding="utf-8")
+        doc, origin = svc.resolve_draft(str(path))
+        self.assertEqual(origin, "file")
+        self.assertEqual(svc.approve(conn, doc, comments=False)["version"], 1)
+        self.assertEqual(svc.resolve_draft("readings")[1], "store")
+
+
+class Comments(unittest.TestCase):
+    def setUp(self):
+        self.folder, patch = kit_home()
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.addCleanup(self.folder.cleanup)
+
+    def test_comment_on_column_keeps_the_existing_comment_and_quotes_it(self):
+        existing = {"KIND": "The reading's kind: gas, water or power", "NAME": None, "ID": "Primary key | role: entity (starter kit, descriptor readings v1)"}
+        conn = FakeConn(Profiles.COLUMNS, Profiles.rows(), comments=existing)
+        result = svc.approve(conn, readings_draft(conn))
+        ddl = [s for s in conn.statements if s.startswith("COMMENT")]
+        self.assertEqual(ddl, [
+            'COMMENT ON COLUMN "LAB"."READINGS"."ID" IS \'Primary key\'',                       # ID lost its role: the old tag goes, the text stays
+            'COMMENT ON COLUMN "LAB"."READINGS"."NAME" IS \'role: entity (starter kit, descriptor readings v1)\'',
+            'COMMENT ON COLUMN "LAB"."READINGS"."KIND" IS \'The reading\'\'s kind: gas, water or power | role: category (starter kit, descriptor readings v1)\'',
+            'COMMENT ON COLUMN "LAB"."READINGS"."TAKEN_ON" IS \'role: date (starter kit, descriptor readings v1)\'',
+            'COMMENT ON COLUMN "LAB"."READINGS"."ALARM" IS \'role: label (starter kit, descriptor readings v1)\'',
+            'COMMENT ON COLUMN "LAB"."READINGS"."NOTE" IS \'role: text (starter kit, descriptor readings v1)\'',
+        ])
+        self.assertEqual((result["comments"]["written"], result["comments"]["warnings"]), (ddl, []))
+        self.assertEqual(svc._tagged("Trial phase | role: category (starter kit, descriptor pharma_trials v2)", svc.role_tag("category", "pharma_trials", 3)),
+                         "Trial phase | role: category (starter kit, descriptor pharma_trials v3)")
+        self.assertIsNone(svc._tagged("role: date (starter kit, descriptor x v1)", None))
+
+    def test_a_virtual_table_gets_a_view_in_starter_kit_with_the_comments(self):
+        conn = FakeConn(Profiles.COLUMNS, Profiles.rows(2000), virtual=True)
+        draft = svc.draft(svc.profile(conn, "VS_LAB.READINGS", sample=300), "VS_LAB.READINGS", "lab-readings")
+        result = svc.approve(conn, draft, sample=300)
+        ddl = [s for s in conn.statements if not s.startswith("SELECT")]
+        self.assertEqual(ddl[0], 'CREATE SCHEMA IF NOT EXISTS "STARTER_KIT"')
+        self.assertEqual(ddl[1], 'CREATE OR REPLACE VIEW "STARTER_KIT"."LAB_READINGS_DESCRIBED" ('
+                         '"ID", "NAME" COMMENT IS \'role: entity (starter kit, descriptor lab-readings v1)\', '
+                         '"KIND" COMMENT IS \'role: category (starter kit, descriptor lab-readings v1)\', '
+                         '"TAKEN_ON" COMMENT IS \'role: date (starter kit, descriptor lab-readings v1)\', '
+                         '"ALARM" COMMENT IS \'role: label (starter kit, descriptor lab-readings v1)\', '
+                         '"NOTE" COMMENT IS \'role: text (starter kit, descriptor lab-readings v1)\', "EMPTY", "SHAPE") '
+                         'AS SELECT "ID", "NAME", "KIND", "TAKEN_ON", "ALARM", "NOTE", "EMPTY", "SHAPE" FROM "VS_LAB"."READINGS" '
+                         'COMMENT IS \'starter kit: descriptor lab-readings v1 of the virtual table VS_LAB.READINGS; roles: entity=NAME, category=KIND, date=TAKEN_ON, label=ALARM, text=NOTE\'')
+        self.assertEqual(len(ddl), 2, "no COMMENT ON COLUMN: Exasol takes a view's comments only in CREATE VIEW")
+        self.assertEqual((result["comments"]["view"], result["scope"], result["comments"]["warnings"]), ("STARTER_KIT.LAB_READINGS_DESCRIBED", "sample", []))
+        self.assertEqual(rules.read_descriptor(Path(result["path"])).evidence["table"]["digest_scope"], "sample")
+
+    def test_a_failed_comment_is_a_warning_and_the_descriptor_is_approved_all_the_same(self):
+        conn = FakeConn(Profiles.COLUMNS, Profiles.rows(), ddl_error=RuntimeError("insufficient privileges for commenting on table LAB.READINGS"))
+        result = svc.approve(conn, readings_draft(conn))
+        self.assertEqual((result["version"], result["comments"]["written"]), (1, []))
+        self.assertEqual(len(result["comments"]["warnings"]), 5)
+        self.assertIn("insufficient privileges", result["comments"]["warnings"][0])
+        self.assertIn("exakit describe readings --comments", result["comments"]["warnings"][0])
+        self.assertEqual(svc.store_current("readings"), 1)
+        # --comments writes them again, from the current version
+        retry = FakeConn(Profiles.COLUMNS, Profiles.rows())
+        again = svc.comments(retry, "readings")
+        self.assertEqual((again["version"], len(again["written"]), again["warnings"]), (1, 5, []))
+        self.assertIn("role: category (starter kit, descriptor readings v1)", again["written"][1])
+        with self.assertRaises(svc.NotFound):
+            svc.comments(retry, "nowhere")
+
+    def test_comments_on_a_draft_are_refused(self):
+        conn = FakeConn(Profiles.COLUMNS, Profiles.rows())
+        folder = Path(os.environ["EXAKIT_HOME"]) / "descriptors" / "readings"
+        folder.mkdir(parents=True)
+        (folder / "v1.yaml").write_text(svc.to_yaml(readings_draft(conn)), encoding="utf-8")
+        (folder / "current").write_text("1\n")
+        with self.assertRaises(svc.Refused) as caught:
+            svc.comments(conn, "readings")
+        self.assertIn("exakit describe readings --approve", str(caught.exception))
+
+
+class Budget(unittest.TestCase):
+    """AC-DS5.5: a virtual table is read no further than the sample - by the profile and by the digest."""
+
+    def test_profiling_and_approving_a_virtual_table_read_at_most_the_sample(self):
+        folder, patch = kit_home()
+        with folder, patch:
+            conn = FakeConn(Profiles.COLUMNS, Profiles.rows(5000), virtual=True)
+            draft = svc.draft(svc.profile(conn, "VS_LAB.READINGS", sample=250), "VS_LAB.READINGS", "lab-readings")
+            svc.approve(conn, draft, sample=250, comments=False)
+        reads = [s for s in conn.statements if '"VS_LAB"."READINGS"' in s and not s.startswith("SELECT COUNT(*) AS N FROM")]
+        self.assertEqual(len(reads), 2, "one sample fetch for the profile, one hash over the sample for the digest")
+        for sql in reads:
+            self.assertIn('FROM "VS_LAB"."READINGS" LIMIT 250', sql)
+            self.assertNotIn("RANDOM", sql)
+        self.assertEqual(conn.fetched, 500, "250 rows twice; the COUNT(*) statements fetch no row")
+
+
 class CommandLine(unittest.TestCase):
     def run_main(self, *argv: str, env: dict | None = None) -> tuple[int, str, str]:
         out, err = io.StringIO(), io.StringIO()
@@ -559,6 +940,57 @@ class CommandLine(unittest.TestCase):
                 code, out, _err = self.run_main("evidence-check", str(path), "--json")
             self.assertEqual(code, 1)
             self.assertEqual((json.loads(out)["ok"], json.loads(out)["roles"]["entity"]["same"], json.loads(out)["roles"]["date"]["same"]), (False, False, True))
+
+    def test_approve_show_versions_and_comments_on_the_command_line(self):
+        folder, patch = kit_home()
+        with folder, patch:
+            conn = FakeConn(Profiles.COLUMNS, Profiles.rows(), comments={"KIND": "the kind"})
+            path = Path(folder.name) / "readings.yaml"
+            path.write_text(svc.to_yaml(readings_draft(conn)), encoding="utf-8")
+            with mock.patch.object(svc, "connect", return_value=conn):
+                code, out, err = self.run_main("approve", str(path), "--role", "entity=id", "--owner", "lee", "--json")
+                self.assertEqual((code, err), (0, ""))
+                result = json.loads(out)
+                self.assertEqual((result["version"], result["owner"], result["roles"]["entity"], result["unchanged"]), (1, "lee", "ID", False))
+                self.assertIn('COMMENT ON COLUMN "LAB"."READINGS"."KIND" IS \'the kind | role: category (starter kit, descriptor readings v1)\'', result["comments"]["written"])
+                code, out, _err = self.run_main("approve", "readings", "--no-comments")
+                self.assertEqual(code, 0)
+                self.assertEqual(out.strip(), "v1 is already approved with these roles")
+                code, out, _err = self.run_main("approve", "readings", "--role", "entity=NAME", "--no-comments")
+                self.assertEqual(code, 0)
+                self.assertIn("Approved readings v2 (owner dana, digest sha256:", out)
+                self.assertIn("Column comments not written (--no-comments).", out)
+                code, out, _err = self.run_main("comments", "readings", "--json")
+                self.assertEqual((code, json.loads(out)["version"], len(json.loads(out)["written"])), (0, 2, 6))
+                code, _out, err = self.run_main("approve", "readings", "--role", "entity=KIND")
+                self.assertEqual(code, 2)
+                self.assertIn("more than one role (entity, category)", err)
+                for argv in (("approve",), ("approve", "readings", "--role", "owner=X"), ("approve", "readings", "--role"), ("approve", "readings", "--owner", ""),
+                             ("approve", "readings", "--role", "entity=A", "--role", "entity=B"), ("show", "readings", "--version", "x"), ("versions",), ("show", "Not Id")):
+                    with self.subTest(argv=argv):
+                        self.assertEqual(self.run_main(*argv)[0], 2)
+                code, _out, err = self.run_main("approve", "nowhere")
+                self.assertEqual((code, "No descriptor 'nowhere'" in err), (3, True))
+                code, _out, err = self.run_main("comments", "nowhere")
+                self.assertEqual(code, 3)
+                with mock.patch.object(svc, "_write_version", side_effect=svc.Conflict("taken twice")):
+                    code, _out, err = self.run_main("approve", "readings", "--role", "entity=ID", "--no-comments")
+                self.assertEqual((code, err.strip()), (5, "taken twice"))
+            code, out, _err = self.run_main("versions", "readings")
+            self.assertEqual(code, 0)
+            self.assertRegex(out, r"^  v1   approved  owner lee .*\n\* v2   approved  owner dana")
+            code, out, _err = self.run_main("versions", "readings", "--json")
+            self.assertEqual([(e["version"], e["current"]) for e in json.loads(out)], [(1, False), (2, True)])
+            code, out, _err = self.run_main("show", "readings")
+            self.assertEqual(code, 0)
+            self.assertIn("version: 2\nstatus: approved\nowner: dana", out)
+            code, out, _err = self.run_main("show", "readings", "--version", "1", "--json")
+            self.assertEqual((code, json.loads(out)["document"]["roles"]["entity"]["column"], json.loads(out)["owner"]), (0, "ID", "lee"))
+            self.assertEqual(self.run_main("show", "readings", "--version", "9")[0], 3)
+            code, _out, err = self.run_main("show", "nowhere")
+            self.assertEqual(code, 3)
+            code, _out, err = self.run_main("approve", "readings", env={"EXAKIT_PYX_DSN": "", "EXAKIT_PYX_PWFILE": ""})
+            self.assertEqual(code, 4)
 
 
 if __name__ == "__main__":

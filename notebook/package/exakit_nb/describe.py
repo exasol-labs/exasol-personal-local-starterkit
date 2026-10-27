@@ -1,12 +1,15 @@
 """Describe a table from a notebook (DS-5, design 2.2): ``describe(table_or_dataset, sample=10000)`` profiles the
 table and returns a ``Draft`` - the descriptor the kit proposes, a role per column with the evidence that chose it
 and the roles no column fits - for the user to look at (``show()``), correct (``set(role, column)``), keep
-(``save(path)``, ``to_dict()``) and, once the approve step lands, approve.
+(``save(path)``, ``to_dict()``) and approve (``approve(owner=None, comments=True) -> Dataset``: the next version in
+the kit's store with the table digest, the roles written into the column comments, and the dataset read back from
+the store, so ``ds.status == "approved"`` and the steps that need an approved descriptor go on).
 
-The profiling and the scoring are the kit's own service, setup/lib/describe_service.py in the kit copy (the same
-code `exakit describe` runs), loaded from its file and run in this process over the kit's connection; when the kit
-copy is not found, `exakit describe --json` runs as a child process instead. The draft is deterministic: the same
-table gives the same roles, offline, with or without a model (a model only adds ``notes``, one line per column).
+The profiling, the scoring and the approving are the kit's own service, setup/lib/describe_service.py in the kit
+copy (the same code `exakit describe` runs), loaded from its file and run in this process over the kit's connection;
+when the kit copy is not found, `exakit describe --json` runs as a child process instead. The draft is
+deterministic: the same table gives the same roles, offline, with or without a model (a model only adds ``notes``,
+one line per column).
 """
 
 from __future__ import annotations
@@ -100,7 +103,7 @@ class Draft:
     """A drafted descriptor (schema_version 2, status draft): ``roles`` is what the kit proposes, ``evidence`` the
     numbers behind each role (with its runner-up), ``missing`` the roles no column fits. ``show()`` prints it,
     ``set(role, column)`` corrects a role, ``save(path)`` writes the YAML the notebooks read, ``to_dict()`` is the
-    document. ``approve()`` is the next step and is not here yet."""
+    document, ``approve()`` writes the next approved version into the kit's store and returns the Dataset."""
 
     def __init__(self, doc: dict[str, Any], profile: dict[str, Any] | None = None):
         self.doc = doc
@@ -177,13 +180,52 @@ class Draft:
         return copy.deepcopy(self.doc)
 
     def save(self, path: str | Path) -> Path:
-        """Write the draft as YAML in the kit's descriptor layout; exakit.nb.dataset(conn, path) reads it back."""
+        """Write the draft as YAML in the kit's descriptor layout; exakit.nb.dataset(conn, path) reads it back. The
+        service's writer is used when the kit copy is there (it keeps a number-like value such as "0" a string);
+        else the package's own save_descriptor."""
+        about = f"Which column of {self.table} plays which role; drafted by exakit.nb.describe."
+        service = describe_service()
+        target = Path(path).expanduser()
+        if service is not None:
+            target.write_text(service.to_yaml(self.to_dict(), about), encoding="utf-8")
+            return target
         from .own_file import save_descriptor
-        return save_descriptor(self.to_dict(), path, f"Which column of {self.table} plays which role; drafted by exakit.nb.describe.")
+        return save_descriptor(self.to_dict(), target, about)
 
-    def approve(self, owner: str | None = None):
-        """Approving a draft is the next step of this work (T7): the version, digest and column comments."""
-        raise NotImplementedError("T7")
+    def approve(self, owner: str | None = None, comments: bool = True, *, conn=None, sample: int = SAMPLE):
+        """Approve this draft (design 2.2): the roles validated by the descriptor rules, the table digest computed,
+        version n+1 written into the kit's store (``~/.exasol-starter-kit/descriptors/<id>/``) with ``current``,
+        then the roles written into the table's column comments (a view in STARTER_KIT for a virtual table; a
+        comment that cannot be written is a printed warning, the descriptor approved all the same; ``comments=False``
+        skips them). ``owner`` defaults to EXAKIT_DESCRIPTOR_OWNER or the OS user. Approving the roles the current
+        approved version already has writes nothing and says so. Returns the Dataset read back from the store, so
+        ``ds.status == "approved"``. Uses the connection given, else opens the kit's."""
+        from .dataset import dataset
+
+        service = describe_service()
+        if service is None:
+            raise RuntimeError("The kit's describe service was not found (no kit copy beside this Python); approve on the command line: "
+                               f"exakit describe {self.id} --approve")
+        own = conn is None
+        if own:
+            from . import connect
+            conn = connect()
+        try:
+            kit = setting("EXAKIT_NB_KIT")
+            result = service.approve(conn, self.to_dict(), owner=owner, comments=comments, sample=sample,
+                                     root=Path(kit) if kit else None)
+            if result.get("unchanged"):
+                print(result["message"])
+            else:
+                print(f"Approved {result['id']} v{result['version']} (owner {result['owner']}, digest {result['digest'][:19]}...): {result['path']}")
+                for warning in result["comments"].get("warnings", []):
+                    print(f"Warning: {warning}")
+            self.doc.update(status="approved", version=result["version"], owner=result.get("owner", self.doc.get("owner")),
+                            digest=result.get("digest"))
+            return dataset(conn, self.id)
+        finally:
+            if own:
+                conn.close()
 
     def _lines(self) -> list[str]:
         evidence = self.evidence

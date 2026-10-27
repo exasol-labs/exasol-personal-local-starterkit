@@ -1,7 +1,8 @@
 #!/usr/bin/env pwsh
 # describe-command-ps.ps1 - the Windows twin of tests/describe-command.sh:
 # `exakit describe <table> [--sample N] [--id <slug>] [--json] [--write <path>]`
-# in setup/lib/describe.ps1. Runs under Windows PowerShell 5.1 and pwsh; a
+# and the approve half (--approve/--show/--versions/--comments) in
+# setup/lib/describe.ps1. Runs under Windows PowerShell 5.1 and pwsh; a
 # sandboxed kit home, no database, no network, no real venv: the venv's Python
 # is this machine's python3, and the kit copy is a sandbox whose
 # describe_service.py is test_data/describe/stub_service.py.
@@ -86,8 +87,28 @@ try {
     Run @("LAB.READINGS", "--id", "Bad Id");     Check "--id that is no dataset id" 2 $CODE; Contains "says the shape" "lower-case letters and digits" $OUT
     Run @("LAB.READINGS", "--id", "UPPER");      Check "an upper-case id is no dataset id" 2 $CODE
     Run @("LAB.READINGS", "--write");            Check "--write without a path" 2 $CODE
-    Run @("LAB.READINGS", "--approve");          Check "--approve is not here yet" 2 $CODE; Contains "and says so" "not in this kit yet" $OUT
-    Run @("LAB.READINGS", "--versions");         Check "--versions too" 2 $CODE
+    Run @("LAB.READINGS", "--approve");          Check "--approve on a table name (no id, no file)" 2 $CODE; Contains "says what it takes" "--approve takes a dataset id" $OUT
+    Run @("LAB.READINGS", "--versions");         Check "--versions on a table name" 2 $CODE
+    Run @("readings", "--approve", "--show");    Check "two modes" 2 $CODE; Contains "names both" "--approve and --show are two different things" $OUT
+    Run @("readings", "--approve", "--role");    Check "--role without a value" 2 $CODE
+    Run @("readings", "--approve", "--role", "owner=X"); Check "--role with no such role" 2 $CODE; Contains "names the roles" "one of entity, category, date, label, text" $OUT
+    Run @("readings", "--approve", "--role", "entity=1x"); Check "--role with a column that is no plain name" 2 $CODE
+    Run @("readings", "--approve", "--role", "entity=A B"); Check "--role with a space" 2 $CODE
+    Run @("readings", "--approve", "--owner");   Check "--owner without a value" 2 $CODE
+    Run @("readings", "--approve", "--owner", "a", "--owner", "b"); Check "--owner twice" 2 $CODE
+    Run @("readings", "--approve", "--id", "x"); Check "--id does not go with --approve" 2 $CODE; Contains "says so" "do not go with --approve" $OUT
+    Run @("readings", "--approve", "--version", "2"); Check "nor --version" 2 $CODE
+    Run @("--approve");                          Check "--approve without a target" 2 $CODE; Contains "asks for the draft" "Name the draft to approve" $OUT
+    Run @("Bad.Id", "--approve");                Check "--approve with neither an id nor a file" 2 $CODE
+    Run @("LAB.READINGS", "--role", "entity=ID"); Check "--role without --approve" 2 $CODE; Contains "says where it goes" "go with --approve" $OUT
+    Run @("LAB.READINGS", "--no-comments");      Check "--no-comments without --approve" 2 $CODE
+    Run @("readings", "--show", "--version", "x"); Check "--show --version with a word" 2 $CODE; Contains "says positive integer" "positive integer" $OUT
+    Run @("readings", "--show", "--version", "0"); Check "--show --version 0" 2 $CODE
+    Run @("readings", "--show", "--role", "entity=ID"); Check "--show with --role" 2 $CODE; Contains "says what --show takes" "--show takes a dataset id and --version n and --json" $OUT
+    Run @("readings", "--versions", "--version", "2"); Check "--versions with --version" 2 $CODE; Contains "says --version goes with --show" "--version goes with --show" $OUT
+    Run @("readings", "--comments", "--sample", "5"); Check "--comments with --sample" 2 $CODE
+    Run @("--versions");                         Check "--versions without an id" 2 $CODE; Contains "asks for the id" "Name the dataset id" $OUT
+    Run @("Readings", "--versions");             Check "--versions with an upper-case id" 2 $CODE; Contains "says the shape" "lower-case letters and digits" $OUT
     Run @("LAB.READINGS", "--json", "--bogus");  Check "with --json the refusal is still exit 2" 2 $CODE
     Check "and the refusal is flagged for JSON" $true $script:ExakitRefusalJson
 
@@ -120,6 +141,26 @@ try {
     $env:STUB_EXIT = "4"
     Run @("LAB.READINGS");                       Check "and 4: database unreachable" 4 $CODE
     Remove-Item Env:STUB_EXIT -ErrorAction SilentlyContinue
+    Write-Host "the approve half passes through the same way:"
+    Run @("readings", "--approve");              Check "approve, the id" "approve readings" (Asked "args")
+    Run @("readings", "--approve", "--role", "entity=ID", "--role", "text=A,B", "--owner", "lee", "--no-comments", "--json", "--sample", "500")
+    Check "every approve option, in the service's order" "approve readings --sample 500 --owner lee --no-comments --json --role entity=ID --role text=A,B" (Asked "args")
+    $draftPath = Join-Path $work "draft.yaml"
+    Set-Content -Path $draftPath -Value "schema_version: 2"
+    Run @($draftPath, "--approve");              Check "a draft file by its path" "approve $draftPath" (Asked "args")
+    Run @("readings", "--show");                 Check "show" "show readings" (Asked "args")
+    Run @("readings", "--show", "--version", "2", "--json"); Check "show with a version and --json" "show readings --version 2 --json" (Asked "args")
+    Run @("readings", "--show", "--show");       Check "the same mode twice is one mode" "show readings" (Asked "args")
+    Run @("readings", "--versions");             Check "versions" "versions readings" (Asked "args")
+    Run @("readings", "--comments", "-j");       Check "comments" "comments readings --json" (Asked "args")
+    Check "the dsn reaches the approve half too" "127.0.0.1:8563" (Asked "dsn")
+    $env:STUB_EXIT = "2"
+    Run @("readings", "--approve", "--role", "entity=NOPE"); Check "the service's 2 (a bad role) is the command's" 2 $CODE
+    $env:STUB_EXIT = "3"
+    Run @("nowhere", "--versions");              Check "3: no such id" 3 $CODE
+    $env:STUB_EXIT = "5"
+    Run @("readings", "--approve");              Check "5: a version conflict" 5 $CODE
+    Remove-Item Env:STUB_EXIT -ErrorAction SilentlyContinue
     Run @("--help");                             Check "--help renders the page" 0 $CODE; Check "the command's own" "describe" $script:HelpAsked
     $script:HelpAsked = ""
     Run @("LAB.READINGS", "--help");             Check "so does <table> --help" 0 $CODE; Check "the same page" "describe" $script:HelpAsked
@@ -139,6 +180,15 @@ try {
     $help = Get-Content -Raw (Join-Path $repo "setup/help/exakit.json") | ConvertFrom-Json
     Check "the help document has the command" 1 @($help.commands | Where-Object { $_.command -eq "describe" }).Count
     Check "in the add-ons group" $true ((@($help.groups | Where-Object { $_.title -eq "Add-ons" })[0].commands) -contains "describe")
+    $page = @($help.commands | Where-Object { $_.command -eq "describe" })[0]
+    foreach ($opt in @("--approve", "--role", "--owner", "--no-comments", "--show", "--version", "--versions", "--comments")) {
+        Contains "the options list $opt" $opt $page.options
+    }
+    Contains "the page says what approve writes" "descriptors/<id>/v<n>.yaml" $page.description
+    Contains "and the comment it writes" "role: <role> (starter kit, descriptor <id> v<n>)" $page.description
+    Contains "and the view for a virtual table" "STARTER_KIT.<ID>_DESCRIBED" $page.description
+    Contains "and exit 5" "5 when another approve" $page.description
+    Contains "with an approve example" "exakit describe orders --approve" ($page.examples -join "`n")
 } finally {
     Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 }

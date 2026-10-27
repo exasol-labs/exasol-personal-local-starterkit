@@ -2,7 +2,9 @@
 reader takes a version-1 file as approved by the kit and a version-2 file with its record; each record key that is
 missing or wrong is a problem naming the key; an unknown schema_version is one line; a Dataset resolves its
 descriptor in order (a path, the kit's store under EXAKIT_HOME, the shipped file) and says which; a draft is refused
-by require_approved with how to approve it; the store's versions list; save_descriptor writes version 2."""
+by require_approved with how to approve it; the store's versions list; save_descriptor writes version 2; and the
+approve flow (AC-DS2.5 whole): a draft written by describe()+save() is refused by require_approved("training") and,
+after Draft.approve(), the Dataset read back from the store is approved, with the table digest."""
 
 from __future__ import annotations
 
@@ -18,6 +20,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "notebook" / "package"))
+sys.path.insert(0, str(ROOT))
 
 import exakit_nb  # noqa: E402
 from exakit_nb import descriptor_rules as rules  # noqa: E402
@@ -331,6 +334,81 @@ class GatingTest(unittest.TestCase):
         loaded = self.dataset(V2)
         self.assertNotIn("exasol.source", loaded.tags())
         self.assertTrue(exakit_nb.confirm_send(loaded, 3))
+
+
+class ApproveFlowTest(unittest.TestCase):
+    """AC-DS2.5 end to end in a notebook: describe() -> save() is a draft the training step refuses; approve() writes
+    the store's version 1 and hands back an approved Dataset."""
+
+    class FlowConn:
+        """The service's fake (the profile, the digest, the comments) behind the Dataset's own two statements."""
+
+        def __init__(self, inner):
+            self.inner = inner
+
+        def execute(self, statement):
+            if statement.startswith("SELECT 'EXAKIT_NB_COLUMNS'"):
+                return FakeResult([("EXAKIT_NB_COLUMNS",), *[(f"LAB.READINGS.{n}",) for n, _t in self.inner.columns]])
+            if statement.startswith("SELECT DISTINCT CAST("):
+                return FakeResult([("0",), ("1",)])
+            return self.inner.execute(statement)
+
+        def close(self):
+            pass
+
+    def test_a_draft_is_refused_until_approve_and_then_accepted(self):
+        from tests.test_describe_service import FakeConn, Profiles
+
+        with tempfile.TemporaryDirectory() as home, mock.patch.dict(os.environ, {
+                "EXAKIT_HOME": home, "EXAKIT_DESCRIPTOR_OWNER": "dana", "EXAKIT_NB_MODEL": "", "OPENAI_BASE_URL": ""}):
+            conn = self.FlowConn(FakeConn(Profiles.COLUMNS, Profiles.rows()))
+            draft = exakit_nb.describe("LAB.READINGS", conn=conn, id="readings")
+            path = draft.save(Path(home) / "readings.yaml")
+            ds = exakit_nb.dataset(conn, path)
+            self.assertEqual((ds.status, ds.version, ds.descriptor_origin, ds.table_digest), ("draft", 1, "explicit", None))
+            with self.assertRaises(DescriptorNotApproved) as caught:
+                ds.require_approved("training")
+            self.assertEqual(str(caught.exception), "training needs an approved descriptor: readings is a draft (v1). Approve it: in the "
+                                                    "quickstart run approve(), or: exakit describe readings --approve")
+            self.assertEqual(store.list_versions("readings"), [])
+            out = io.StringIO()
+            with redirect_stdout(out):
+                approved = draft.approve(conn=conn)
+            self.assertIsInstance(approved, Dataset)
+            self.assertEqual((approved.status, approved.version, approved.owner, approved.descriptor_origin, approved.id),
+                             ("approved", 1, "dana", "store", "readings"))
+            self.assertIs(approved.require_approved("training"), approved)
+            self.assertRegex(approved.table_digest, r"^sha256:[0-9a-f]{64}$")
+            self.assertEqual(approved.current_table_digest(conn), approved.table_digest)
+            self.assertEqual((store.list_versions("readings"), store.current_version("readings")), ([1], 1))
+            self.assertEqual(approved.descriptor_path, store.current_descriptor("readings"))
+            self.assertEqual(approved.evidence["entity"]["column"], "NAME", "the draft's evidence travels into the approved version")
+            self.assertIn("Approved readings v1 (owner dana, digest sha256:", out.getvalue())
+            self.assertIn('COMMENT ON COLUMN "LAB"."READINGS"."NAME" IS \'role: entity (starter kit, descriptor readings v1)\'', conn.inner.statements)
+            self.assertEqual((draft.doc["status"], draft.doc["version"]), ("approved", 1))
+            self.assertEqual(exakit_nb.dataset(conn, "readings").status, "approved", "the id now resolves to the store")
+            self.assertEqual(exakit_nb.dataset(conn, path).status, "draft", "the file written by save() stays a draft")
+            with redirect_stdout(out):
+                again = draft.approve(conn=conn)
+            self.assertEqual((again.version, store.list_versions("readings")), (1, [1]))
+            self.assertIn("v1 is already approved with these roles", out.getvalue())
+            changed = conn.inner.rows[3]
+            changed["KIND"] = "steam"
+            self.assertNotEqual(approved.current_table_digest(conn), approved.table_digest, "a changed row changes the digest")
+
+    def test_save_keeps_a_number_like_value_a_string(self):
+        doc = {"schema_version": 2, "id": "readings", "fact_table": "LAB.READINGS", "version": 1, "status": "draft", "owner": "dana",
+               "created": "2026-10-27T10:12:03Z", "drafted_by": "profile", "digest": None,
+               "roles": {"entity": {"table": "LAB.READINGS", "column": "DEVICE"}, "category": {"table": "LAB.READINGS", "column": "KIND"},
+                         "date": {"table": "LAB.READINGS", "column": "TAKEN_ON"}, "label": {"table": "LAB.READINGS", "column": "ALARM"},
+                         "text": [{"table": "LAB.READINGS", "column": "NOTE"}]},
+               "evidence": {"label": {"column": "ALARM", "top": [{"value": "0", "share": 0.8}, {"value": "1", "share": 0.2}], "score": 1.0}}}
+        with tempfile.TemporaryDirectory() as folder:
+            path = exakit_nb.Draft(doc).save(Path(folder) / "d.yaml")
+            text = path.read_text(encoding="utf-8")
+        self.assertIn('top: [{value: "0", share: 0.8}, {value: "1", share: 0.2}]', text)
+        self.assertEqual(rules.load_yaml(text)["evidence"]["label"]["top"][0]["value"], "0")
+        self.assertEqual(rules.parse_descriptor(text).evidence["label"]["top"][1], {"value": "1", "share": 0.2})
 
 
 class WriterTest(unittest.TestCase):

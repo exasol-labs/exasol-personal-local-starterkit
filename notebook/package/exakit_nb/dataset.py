@@ -123,9 +123,23 @@ class Dataset:
 
     @property
     def table_digest(self) -> str | None:
-        """The digest of the table the descriptor was approved on (its ``digest`` key), None until it is computed.
-        ``digest`` is the descriptor file's own SHA-256."""
+        """The digest of the table the descriptor was approved on (its ``digest`` key, design 2.3: sha256 over the
+        table's name, its columns and types, the row count and an order-independent content hash of the role
+        columns), None until approve computes it. ``digest`` is the descriptor file's own SHA-256."""
         return self.descriptor.digest
+
+    def current_table_digest(self, conn) -> str:
+        """The table's digest as it is now, computed the way approve computed ``table_digest``; a value that differs
+        from ``table_digest`` means the data changed since the descriptor was approved (a virtual table's digest
+        covers its first sample rows and the row count). Runs the kit's describe service in this process."""
+        from .describe import describe_service
+
+        service = describe_service()
+        if service is None:
+            raise RuntimeError("The kit's describe service was not found (no kit copy beside this Python); install the notebook "
+                               "add-on: exakit marketplace notebook")
+        roles = {role: ([ref.column for ref in refs] if role == "text" else refs[0].column) for role, refs in self.descriptor.roles.items()}
+        return service.digest(conn, self.fact_table, roles)["digest"]
 
     @property
     def drafted_by(self) -> str:
