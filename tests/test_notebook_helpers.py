@@ -68,6 +68,9 @@ class DatasetTest(unittest.TestCase):
         self.assertEqual(ds.text_sql(), "COALESCE(BRIEF_SUMMARY, '') || ' ' || COALESCE(ELIGIBILITY_CRITERIA, '')")
         self.assertEqual(len(ds.digest), 64)
         self.assertEqual(ds.tags(), {"exasol.dataset": "pharma_trials", "exasol.descriptor": ds.digest})
+        self.assertEqual((ds.status, ds.version, ds.owner, ds.source, ds.source_ref, ds.descriptor_origin),
+                         ("approved", 1, "kit", None, "pharma_trials", "shipped"), "shipped: approved by the kit, not a live source")
+        self.assertIs(ds.require_approved("training"), ds)
 
     def test_several_text_columns_join_into_one_expression(self):
         cols = ["BANKING.BANKING_COMPLAINTS." + c for c in ("COMPANY", "PRODUCT", "DATE_RECEIVED", "MONETARY_RELIEF", "ISSUE", "SUB_ISSUE",
@@ -442,14 +445,26 @@ class DescriptorFileTest(unittest.TestCase):
             own_file._descriptor_doc({"entity": "A"}, None)
 
     def test_saved_roles_read_back_the_same(self):
-        doc = own_file._descriptor_doc({"entity": "ID", "category": "CAT", "date": "D", "label": "L", "text": ["MEMO", "BODY"]},
-                                       "MY_DATA.T")
+        """Written as schema_version 2: a draft, version 1, by the user (tests/test_descriptor_v2.py has the rest)."""
+        with mock.patch.dict(os.environ, {"EXAKIT_DESCRIPTOR_OWNER": "tester"}):
+            doc = own_file._descriptor_doc({"entity": "ID", "category": "CAT", "date": "D", "label": "L", "text": ["MEMO", "BODY"]},
+                                           "MY_DATA.T", Path("/data/t.csv"))
         with tempfile.TemporaryDirectory() as tmp:
             path = own_file.save_descriptor(doc, Path(tmp) / "t.descriptor.yaml", "a test")
+            text = path.read_text(encoding="utf-8")
+            self.assertTrue(text.startswith("# a test\nschema_version: 2\nid: t\nfact_table: MY_DATA.T\nsource: \"file:/data/t.csv\"\n"
+                                            "version: 1\nstatus: draft\nowner: tester\ncreated: "), text)
+            self.assertIn("\ndrafted_by: user\ndigest: null\nroles:\n", text)
             again = rules.read_descriptor(path)
             self.assertEqual((again.id, again.fact_table, [r.column for r in again.roles["text"]]), ("t", "MY_DATA.T", ["MEMO", "BODY"]))
+            self.assertEqual((again.schema_version, again.version, again.status, again.owner, again.drafted_by, again.live_source),
+                             (2, 1, "draft", "tester", "user", None))
             self.assertEqual(own_file.descriptor_beside(Path(tmp) / "t.csv"), path)
             self.assertIsNone(own_file.descriptor_beside(Path(tmp) / "other.csv"))
+
+    def test_the_rules_shipped_with_the_helpers_are_the_tools_copy(self):
+        self.assertEqual((ROOT / "notebook" / "package" / "exakit_nb" / "descriptor_rules.py").read_bytes(),
+                         (ROOT / "tools" / "descriptor_rules.py").read_bytes(), "keep tools/descriptor_rules.py byte-identical")
 
     def test_a_missing_file_is_skipped_with_one_line_when_asked(self):
         with redirect_stdout(io.StringIO()) as out:
@@ -476,6 +491,8 @@ class DescriptorFileTest(unittest.TestCase):
             conn = Loaded(["LAB.READINGS." + c for c in ("DEVICE", "KIND", "TAKEN_ON", "ALARM", "NOTE", "OPERATOR_COMMENT")])
             ds = exakit_nb.dataset(conn, str(data))
             self.assertEqual((ds.id, ds.fact_table, ds.col("label")), ("sensor_readings", "LAB.READINGS", "ALARM"))
+            self.assertEqual((ds.descriptor_origin, ds.descriptor_path, ds.path), ("beside", Path(tmp) / "readings.descriptor.yaml", data))
+            self.assertEqual((ds.version, ds.status, ds.owner), (1, "approved", "kit"), "a schema_version 1 file")
             self.assertFalse([s for s in conn.statements if s.startswith(("CREATE", "COMMENT"))], "nothing reloaded")
             with self.assertRaises(ValueError) as caught:
                 exakit_nb.dataset(conn, _undescribed(tmp))
@@ -515,7 +532,10 @@ class OwnJsonFileTest(unittest.TestCase):
         for column in ('"ID" DECIMAL(18,0)', '"D" DATE', '"L" DECIMAL(1,0)', '"MEMO" VARCHAR(2)', '"EXTRA" VARCHAR'):
             self.assertIn(column, ddl)
         self.assertEqual(frame["EXTRA"][0], '{"k": [1, 2]}')
-        self.assertEqual(rules.parse_descriptor(saved).fact_table, "MY_DATA.T")
+        kept = rules.parse_descriptor(saved)
+        self.assertEqual((kept.fact_table, kept.schema_version, kept.status, kept.version, kept.drafted_by), ("MY_DATA.T", 2, "draft", 1, "user"))
+        self.assertTrue(kept.source.startswith("file:") and kept.source.endswith("f.json"), kept.source)
+        self.assertEqual((ds.status, ds.source, ds.source_ref), ("draft", None, kept.source), "the Dataset is the draft that was written")
         self.assertIn("DATASET = ", said)
 
     def test_one_record_per_line(self):

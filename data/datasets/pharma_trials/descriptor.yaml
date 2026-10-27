@@ -1,8 +1,15 @@
 # Pharma clinical trials (ClinicalTrials.gov): which column plays which role. The notebooks and the training
 # template are written against these roles, never against this dataset (data/README.md).
-schema_version: 1
+schema_version: 2
 id: pharma_trials
 fact_table: PHARMA.PHARMA_TRIALS
+source: pharma_trials
+version: 1
+status: approved
+owner: kit
+created: 2026-10-27T00:00:00Z
+drafted_by: shipped
+digest: null
 roles:
   entity:   {table: PHARMA.PHARMA_TRIALS, column: LEAD_SPONSOR}
   category: {table: PHARMA.PHARMA_TRIALS, column: PHASE}
@@ -11,3 +18,5 @@ roles:
   text:
     - {table: PHARMA.PHARMA_TRIALS, column: BRIEF_SUMMARY}
     - {table: PHARMA.PHARMA_TRIALS, column: ELIGIBILITY_CRITERIA}
+evidence: {}        # the profiler's numbers per role, filled in by exakit describe (AC-DS5.1)
+missing: []

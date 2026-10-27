@@ -5,11 +5,18 @@ and the roles turned into SQL names, so one notebook runs unchanged on any datas
     ds = nb.dataset(conn, "~/data/descriptor.yaml")    # a table already in the database, described by a descriptor file
     ds = nb.dataset(conn, "~/data/sales.csv")          # your own CSV, Parquet or JSON file, its descriptor beside it
     ds.col("label"), ds.text_sql(), ds.fact_table, ds.source
+    ds.version, ds.status, ds.owner, ds.created, ds.table_digest    # the descriptor's record (schema_version 2)
+    ds.require_approved("training")                    # a draft stops here with how to approve it
 
 The rules are the kit's descriptor rules (``descriptor_rules``, shipped with this package: the 0.2 kit has no Python
 package to import them from). It is a copy of tools/descriptor_rules.py, which tools/dataset_check.py uses, and
 tests/test_notebook_contents.py holds the two byte-identical. Nothing is guessed: a descriptor that is invalid, or
 names a table or column the database lacks, stops the notebook with the reason.
+
+Which descriptor a name resolves to, in order: a path given (a file, or a folder holding descriptor.yaml); for a
+data file of your own, ``<name>.descriptor.yaml`` beside it; for an id, the approved version in the kit's store
+(``~/.exasol-starter-kit/descriptors/<id>/current``, descriptor_store), then the descriptor the kit ships under
+``data/datasets/<id>/``. ``ds.descriptor_path`` and ``ds.descriptor_origin`` say which one was used.
 """
 
 from __future__ import annotations
@@ -21,7 +28,7 @@ from typing import Any
 
 from ._kit import setting
 
-__all__ = ["DATA_FILES", "Dataset", "checked", "dataset"]
+__all__ = ["DATA_FILES", "Dataset", "DescriptorNotApproved", "checked", "dataset"]
 
 _ANSWERED = "EXAKIT_NB_COLUMNS"
 DATA_FILES = (".csv", ".parquet", ".pq", ".json", ".jsonl", ".ndjson")     # what load_own_file reads
@@ -33,21 +40,35 @@ def _rules():
     return descriptor_rules
 
 
-def _locate(name: str) -> Path:
-    """A descriptor file: a path that exists, else the descriptor of the kit's dataset with that id."""
+class DescriptorNotApproved(Exception):
+    """A step that needs an approved descriptor was given a draft; the message says how to approve it."""
+
+
+ORIGINS = ("explicit", "beside", "store", "shipped")    # where a descriptor was read from, see the module docstring
+
+
+def _locate(name: str) -> tuple[Path, str]:
+    """(descriptor file, origin): a path that exists ("explicit"), else the approved version in the kit's store
+    ("store"), else the descriptor of the kit's dataset with that id ("shipped")."""
     given = Path(name).expanduser()
     if given.is_file():
-        return given
+        return given, "explicit"
     rules = _rules()
     if given.is_dir() and rules.descriptor_file(given) is not None:
-        return rules.descriptor_file(given)
+        return rules.descriptor_file(given), "explicit"
+    if rules._ID.match(name):
+        from .descriptor_store import current_descriptor
+
+        stored = current_descriptor(name)
+        if stored is not None:
+            return stored, "store"
     folder = setting("EXAKIT_NB_DATASETS")
     shipped = rules.descriptor_file(Path(folder) / name) if folder and (Path(folder) / name).is_dir() else None
     if shipped is not None:
-        return shipped
+        return shipped, "shipped"
     known = sorted(p.name for p in Path(folder).iterdir() if p.is_dir() and rules.descriptor_file(p)) if folder else []
-    raise ValueError(f"No descriptor for '{name}': not a file, and not a dataset the kit ships"
-                     + (f" (those with a descriptor: {', '.join(known)})" if known else "") + ".")
+    raise ValueError(f"No descriptor for '{name}': not a file, not approved in the kit's store, and not a dataset the "
+                     "kit ships" + (f" (those with a descriptor: {', '.join(known)})" if known else "") + ".")
 
 
 @dataclass(frozen=True)
@@ -58,6 +79,8 @@ class Dataset:
     path: Path
     digest: str                       # SHA-256 of the descriptor file: the exact mapping a result came from
     descriptor: Any                   # descriptor_rules.Descriptor
+    descriptor_path: Path | None = None      # the file the descriptor was read from (``path`` for a descriptor file;
+    descriptor_origin: str = "explicit"      # for a data file the one beside it), and where it came from (ORIGINS)
 
     @property
     def fact_table(self) -> str:
@@ -66,8 +89,72 @@ class Dataset:
 
     @property
     def source(self) -> str | None:
-        """The external source's alias when the table is in a virtual schema (a live source), else None."""
+        """The external source's alias when the table is in a virtual schema (a live source), else None - what
+        confirm_send and the quickstart ask about. ``source_ref`` is the descriptor's source as written."""
+        return self.descriptor.live_source
+
+    @property
+    def source_ref(self) -> str | None:
+        """The descriptor's ``source`` as written: a dataset id, ``file:<path>``, ``vs:<alias>`` (or a schema_version
+        1 file's bare alias), or None."""
         return self.descriptor.source
+
+    # --- the descriptor's record (schema_version 2; a schema_version 1 file reads as version 1, approved, by the kit)
+
+    @property
+    def version(self) -> int:
+        """The descriptor's version: 1 for a first draft or a shipped file; approving writes the next."""
+        return self.descriptor.version
+
+    @property
+    def status(self) -> str:
+        """``draft`` (proposed, not yet confirmed) or ``approved``."""
+        return self.descriptor.status
+
+    @property
+    def owner(self) -> str:
+        """Who drafted or approved it (``kit`` for a shipped descriptor)."""
+        return self.descriptor.owner
+
+    @property
+    def created(self) -> str | None:
+        """When this version was written (ISO-8601), None for a schema_version 1 file."""
+        return self.descriptor.created
+
+    @property
+    def table_digest(self) -> str | None:
+        """The digest of the table the descriptor was approved on (its ``digest`` key), None until it is computed.
+        ``digest`` is the descriptor file's own SHA-256."""
+        return self.descriptor.digest
+
+    @property
+    def drafted_by(self) -> str:
+        """``profile`` (exakit describe), ``shipped`` (the kit) or ``user`` (roles given by hand)."""
+        return self.descriptor.drafted_by
+
+    @property
+    def evidence(self) -> dict[str, dict[str, Any]]:
+        """Per role, the numbers that chose its column (what the profiler recorded; empty for roles given by hand)."""
+        return self.descriptor.evidence
+
+    @property
+    def notes(self) -> dict[str, str]:
+        """Per column, a model-written line about it (never decisive; empty without a model)."""
+        return self.descriptor.notes
+
+    @property
+    def missing(self) -> tuple[dict[str, str], ...]:
+        """The roles no column fits, each ``{role, reason}``; the notebooks skip what depends on them with the reason."""
+        return self.descriptor.missing
+
+    def require_approved(self, purpose: str) -> "Dataset":
+        """This dataset when its descriptor is approved; a draft raises DescriptorNotApproved saying how to approve
+        it. ``purpose`` names the step that needs it ("training", "the question step", ...)."""
+        if self.status != "approved":
+            raise DescriptorNotApproved(
+                f"{purpose} needs an approved descriptor: {self.id} is a draft (v{self.version}). Approve it: in the "
+                f"quickstart run approve(), or: exakit describe {self.id} --approve")
+        return self
 
     def col(self, role: str) -> str:
         """The column of a single-column role (entity, category, date, label)."""
@@ -85,6 +172,10 @@ class Dataset:
     def roles(self) -> list[tuple[str, str]]:
         """(role, SCHEMA.TABLE.COLUMN) for every role, for a table the notebook prints."""
         return [(role, ref.qualified) for role, ref in self.descriptor.references()]
+
+    def has(self, role: str) -> bool:
+        """Whether a column plays ``role`` (False for one listed under ``missing``)."""
+        return role in self.descriptor.roles
 
     def tags(self) -> dict[str, str]:
         """What a trace or an MLflow run records about the data: the dataset and the descriptor's digest (and the
@@ -119,16 +210,17 @@ def dataset(conn, name: str | Path) -> Dataset:
             raise ValueError(f"{given.name} has no descriptor beside it ({given.stem}.descriptor.yaml or descriptor.yaml "
                              "in its folder). Load it once with load_own_file(path, table, roles), which writes one.")
         return load_own_file(given, None, described, conn=conn)
-    path = _locate(str(name))
-    shipped = setting("EXAKIT_NB_DATASETS") and Path(setting("EXAKIT_NB_DATASETS")) in path.parents
+    path, origin = _locate(str(name))
     remedy = "Load your file first (exakit data-load <file>) or correct the descriptor."
-    return checked(conn, path.read_bytes(), path, remedy=None if shipped else remedy)
+    return checked(conn, path.read_bytes(), path, remedy=None if origin == "shipped" else remedy, origin=origin)
 
 
-def checked(conn, raw: bytes, path: Path, remedy: str | None = None) -> Dataset:
+def checked(conn, raw: bytes, path: Path, remedy: str | None = None, *, descriptor_path: Path | None = None,
+            origin: str = "explicit") -> Dataset:
     """The descriptor in ``raw`` (read from, or describing, ``path``) validated by the kit's rules and held against the
     database: every role resolves, all in the fact table, which has rows and a 0/1 label. ``remedy`` is the advice for a
-    role the database lacks (None: load the kit dataset)."""
+    role the database lacks (None: load the kit dataset). ``descriptor_path`` is the file the descriptor was read from
+    when that is not ``path`` (a data file's descriptor beside it), ``origin`` one of ORIGINS."""
     rules = _rules()
     descriptor = rules.parse_descriptor(raw.decode("utf-8"), source=f"The descriptor {path}")
     problems = rules.missing_references(descriptor, _columns(conn, descriptor.schemas()))
@@ -140,11 +232,15 @@ def checked(conn, raw: bytes, path: Path, remedy: str | None = None) -> Dataset:
         raise ValueError(f"The notebooks read every role from the fact table {descriptor.fact_table}; these are in "
                          f"another table: {', '.join(elsewhere)}. Describe a table (or a view) that holds them all.")
     _check_rows(conn, descriptor)
-    return Dataset(descriptor.id, path, hashlib.sha256(raw).hexdigest(), descriptor)
+    return Dataset(descriptor.id, path, hashlib.sha256(raw).hexdigest(), descriptor,
+                   descriptor_path=descriptor_path if descriptor_path is not None else path, descriptor_origin=origin)
 
 
 def _check_rows(conn, descriptor) -> None:
-    """The fact table holds rows, and the label is 0 or 1 in every row that has one: the notebooks count and model it."""
+    """The fact table holds rows, and the label is 0 or 1 in every row that has one: the notebooks count and model it.
+    A descriptor whose label is listed as missing has nothing to check here; the steps that need it say so."""
+    if "label" not in descriptor.roles:
+        return
     label = descriptor.column("label").column
     found = conn.execute(f"SELECT DISTINCT CAST({label} AS VARCHAR(100)) FROM {descriptor.fact_table} "
                          f"WHERE {label} IS NOT NULL LIMIT 3").fetchall()

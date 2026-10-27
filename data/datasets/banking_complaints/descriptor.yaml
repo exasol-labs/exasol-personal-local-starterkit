@@ -1,8 +1,15 @@
 # Banking complaints (CFPB): which column plays which role. The notebooks and the training
 # template are written against these roles, never against this dataset (data/README.md).
-schema_version: 1
+schema_version: 2
 id: banking_complaints
 fact_table: BANKING.BANKING_COMPLAINTS
+source: banking_complaints
+version: 1
+status: approved
+owner: kit
+created: 2026-10-27T00:00:00Z
+drafted_by: shipped
+digest: null
 roles:
   entity:   {table: BANKING.BANKING_COMPLAINTS, column: COMPANY}
   category: {table: BANKING.BANKING_COMPLAINTS, column: PRODUCT}
@@ -12,3 +19,5 @@ roles:
     - {table: BANKING.BANKING_COMPLAINTS, column: ISSUE}
     - {table: BANKING.BANKING_COMPLAINTS, column: SUB_ISSUE}
     - {table: BANKING.BANKING_COMPLAINTS, column: COMPANY_PUBLIC_RESPONSE}
+evidence: {}        # the profiler's numbers per role, filled in by exakit describe (AC-DS5.1)
+missing: []

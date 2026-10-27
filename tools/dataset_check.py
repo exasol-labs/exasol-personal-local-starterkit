@@ -12,7 +12,8 @@ Adding a bundled dataset is three steps and no code (data/README.md):
 
 First the files, offline: dataset.conf, the CREATE TABLEs against every CSV (UTF-8, no BOM, the header's columns in
 order, every row as wide as the header, no empty NOT NULL value, no duplicate primary key), Exasol's reserved words,
-the verify script, and for a reference dataset (descriptor.yaml) the descriptor; the manifest's source, terms,
+the verify script, and for a reference dataset (descriptor.yaml) the descriptor (schema_version 1 or 2; a shipped
+one is approved, version 1 or more, drafted_by shipped, with no missing role); the manifest's source, terms,
 snapshot date, row counts and digests; its asset block - the release archive tools/datasets/package.py makes from
 these CSVs (its URL template, and its digest when the archive was built here in dist/); the README with a data
 dictionary naming every column; and at least ten example questions, each a -- comment above its reference SQL. Then,
@@ -172,6 +173,15 @@ def _descriptor_problems(folder: Path, schema: str, schema_tables: dict[str, lis
     except BadInput as err:
         return [str(err)]
     problems = [] if descriptor.id == folder.name else [f"{path.name}: id must be '{folder.name}'"]
+    if descriptor.status != "approved":
+        problems.append(f"{path.name}: a shipped descriptor must be approved (status: {descriptor.status})")
+    if descriptor.version < 1:
+        problems.append(f"{path.name}: version must be 1 or more (version: {descriptor.version})")
+    if descriptor.schema_version == 2 and descriptor.drafted_by != "shipped":
+        problems.append(f"{path.name}: a shipped descriptor is drafted_by: shipped (has {descriptor.drafted_by})")
+    if descriptor.missing:
+        problems.append(f"{path.name}: a reference dataset has every role (missing: "
+                        f"{', '.join(m['role'] for m in descriptor.missing)})")
     known = {f"{schema}.{t}": cols for t, cols in schema_tables.items()}
     for role, ref in descriptor.references():
         if ref.column not in known.get(ref.table, []):

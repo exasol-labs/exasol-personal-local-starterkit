@@ -76,34 +76,60 @@ it; each must return rows.
 The notebooks and the training template never name a dataset's tables or columns. They
 read a short YAML descriptor beside the data that names the **fact table** and the column
 that plays each **role**, and build their SQL from those roles - so the same notebook runs
-on Pharma, on Banking, on a user's own file, or on a table in a virtual schema.
+on Pharma, on Banking, on a user's own file, or on a table in a virtual schema. Since
+`schema_version: 2` the descriptor is also a **record**: which version it is, whether it is
+a draft or approved, who owns it, when it was written and what it was approved on.
 
 | Key | Required | Value |
 |---|---|---|
-| `schema_version` | yes | `1` |
+| `schema_version` | yes | `2` (a `1` file still reads, see below) |
 | `id` | yes | the dataset id: lower-case letters and digits joined by `-` or `_` (a reference dataset's is its folder name) |
 | `fact_table` | yes | `SCHEMA.TABLE`, plain SQL names: the table the rows to analyse are in |
-| `roles.entity` | yes | the one column naming *who* (a sponsor, a company, a customer) |
-| `roles.category` | yes | the one column to group and compare by |
-| `roles.date` | yes | the one column saying *when* |
-| `roles.label` | yes | the one 0/1 column a model predicts |
-| `roles.text` | yes | one or more free-text columns, joined in the order given |
-| `source` | no | where the table lives when it is not loaded data: the alias of an external source (`exakit connect`) whose virtual schema holds `fact_table`; the notebook then says it is querying a live source |
+| `source` | no | what the data is: a dataset id (`pharma_trials`), `file:<path>` (an own file, what `load_own_file` writes) or `vs:<alias>` (the alias of an external source from `exakit connect` whose virtual schema holds `fact_table`; the notebook then says it is querying a live source and asks before rows go to a model) |
+| `version` | yes | an integer from `1`; approving writes version n+1 and n stays readable |
+| `status` | yes | `draft` (proposed, not yet confirmed) or `approved`; training, the question step and sharing refuse a draft, exploring prints it |
+| `owner` | yes | who drafted or approved it: `kit` for a shipped descriptor, else `EXAKIT_DESCRIPTOR_OWNER` or the OS user |
+| `created` | yes | when this version was written, ISO-8601 (`2026-10-27T10:12:03Z`) |
+| `digest` | no | the digest of the table the descriptor was approved on (`sha256:...`), `null` until `exakit describe --approve` computes it |
+| `drafted_by` | no | `profile` (`exakit describe`), `shipped` (the kit) or `user` (roles given by hand) |
+| `roles.entity` | yes* | the one column naming *who* (a sponsor, a company, a customer) |
+| `roles.category` | yes* | the one column to group and compare by |
+| `roles.date` | yes* | the one column saying *when* |
+| `roles.label` | yes* | the one 0/1 column a model predicts |
+| `roles.text` | yes* | one or more free-text columns, joined in the order given |
+| `evidence` | no | per role, a mapping with the numbers that chose its column (type, null rate, distinct count, date-parse rate, score, runner-up); the profiler writes it, hand-written descriptors leave it out |
+| `notes` | no | per column, one line of text a model wrote about it; never decisive |
+| `missing` | no | the roles no column fits, each `{role, reason}`; *such a role may be absent from `roles`, and the steps that need it skip with the reason |
 
 Each role is `{table: SCHEMA.TABLE, column: NAME}`. No column may play two roles, a role
 that takes one column takes exactly one, and a key the schema does not know is refused
-rather than ignored; nothing is inferred - a missing role is named and the notebook stops.
-The file is YAML read by a strict standard-library reader (block and inline mappings and
-lists, quoted and plain scalars, comments; anchors, tags and multi-line strings are refused
-with their line); a JSON descriptor reads too. The rules are in
+rather than ignored; nothing is inferred - a missing role is named and the notebook stops,
+unless `missing` says why no column plays it. The file is YAML read by a strict
+standard-library reader (block and inline mappings and lists, quoted and plain scalars,
+integers and decimals, comments; anchors, tags and multi-line strings are refused with
+their line); a JSON descriptor reads too. The rules are in
 [`tools/descriptor_rules.py`](../tools/descriptor_rules.py).
+
+**Where a descriptor is read from.** `nb.dataset(conn, name)` takes, in this order: a path
+(a descriptor file, or a folder holding `descriptor.yaml`); for a data file of your own,
+`<name>.descriptor.yaml` beside it; for an id, the approved version in the kit's store
+(`~/.exasol-starter-kit/descriptors/<id>/current` names it, the versions are `v<n>.yaml`
+beside it; `EXAKIT_HOME` moves the store), then the descriptor the kit ships under
+`data/datasets/<id>/`. `ds.descriptor_path` and `ds.descriptor_origin` say which was used.
 
 **Pharma** ([`datasets/pharma_trials/descriptor.yaml`](datasets/pharma_trials/descriptor.yaml)):
 
 ```yaml
-schema_version: 1
+schema_version: 2
 id: pharma_trials
 fact_table: PHARMA.PHARMA_TRIALS
+source: pharma_trials
+version: 1
+status: approved
+owner: kit
+created: 2026-10-27T00:00:00Z
+drafted_by: shipped
+digest: null
 roles:
   entity:   {table: PHARMA.PHARMA_TRIALS, column: LEAD_SPONSOR}
   category: {table: PHARMA.PHARMA_TRIALS, column: PHASE}
@@ -112,14 +138,23 @@ roles:
   text:
     - {table: PHARMA.PHARMA_TRIALS, column: BRIEF_SUMMARY}
     - {table: PHARMA.PHARMA_TRIALS, column: ELIGIBILITY_CRITERIA}
+evidence: {}
+missing: []
 ```
 
 **Banking** ([`datasets/banking_complaints/descriptor.yaml`](datasets/banking_complaints/descriptor.yaml)):
 
 ```yaml
-schema_version: 1
+schema_version: 2
 id: banking_complaints
 fact_table: BANKING.BANKING_COMPLAINTS
+source: banking_complaints
+version: 1
+status: approved
+owner: kit
+created: 2026-10-27T00:00:00Z
+drafted_by: shipped
+digest: null
 roles:
   entity:   {table: BANKING.BANKING_COMPLAINTS, column: COMPANY}
   category: {table: BANKING.BANKING_COMPLAINTS, column: PRODUCT}
@@ -129,16 +164,24 @@ roles:
     - {table: BANKING.BANKING_COMPLAINTS, column: ISSUE}
     - {table: BANKING.BANKING_COMPLAINTS, column: SUB_ISSUE}
     - {table: BANKING.BANKING_COMPLAINTS, column: COMPANY_PUBLIC_RESPONSE}
+evidence: {}
+missing: []
 ```
 
 **Your own file** - a CSV of support tickets with the columns `TICKET_ID`, `CUSTOMER_ID`,
-`CHANNEL`, `OPENED_ON`, `ESCALATED` (0 or 1), `SUBJECT` and `BODY`, described in
-`tickets.yaml` beside it and loaded into a table of your choosing:
+`CHANNEL`, `OPENED_ON`, `ESCALATED` (0 or 1), `SUBJECT` and `BODY`, described by hand in
+`tickets.yaml` beside it and loaded into a table of your choosing. A hand-written
+descriptor is a draft until you approve it; the profiler's `evidence` is not needed:
 
 ```yaml
-schema_version: 1
+schema_version: 2
 id: support-tickets
 fact_table: MY_DATA.TICKETS
+version: 1
+status: draft
+owner: dana
+created: 2026-10-27T10:12:03Z
+drafted_by: user
 roles:
   entity:   {table: MY_DATA.TICKETS, column: CUSTOMER_ID}
   category: {table: MY_DATA.TICKETS, column: CHANNEL}
@@ -154,21 +197,49 @@ import exakit.nb as nb
 data = nb.load_own_file("~/Downloads/tickets.csv", "MY_DATA.TICKETS", "~/Downloads/tickets.yaml")
 ```
 
-**A table in a virtual schema** - the same shape, with `source` naming the external
-source's alias; `fact_table` is the table in its virtual schema:
+Given the roles as a mapping instead (`{"entity": "CUSTOMER_ID", ...}`), `load_own_file`
+writes this same shape beside the file as `tickets.descriptor.yaml`, with
+`source: "file:<the file's path>"`, `owner` from `EXAKIT_DESCRIPTOR_OWNER` or the OS user,
+and `status: draft`.
+
+**A table in a virtual schema** - the same shape, with `source: vs:<alias>` naming the
+external source's alias; `fact_table` is the table in its virtual schema. This one was
+drafted by `exakit describe`, so it carries the profiler's evidence, and no column held
+parseable dates, so the `date` role is listed as missing with the reason instead:
 
 ```yaml
-schema_version: 1
+schema_version: 2
 id: crm-orders
 fact_table: VS_SALES.ORDERS
-source: SALES_DB
+source: vs:SALES_DB
+version: 2
+status: approved
+owner: dana
+created: 2026-10-27T11:40:12Z
+drafted_by: profile
+digest: null
 roles:
   entity:   {table: VS_SALES.ORDERS, column: CUSTOMER_NAME}
   category: {table: VS_SALES.ORDERS, column: REGION}
-  date:     {table: VS_SALES.ORDERS, column: ORDER_DATE}
   label:    {table: VS_SALES.ORDERS, column: RETURNED}
   text:     [{table: VS_SALES.ORDERS, column: ORDER_NOTE}]
+evidence:
+  entity:   {column: CUSTOMER_NAME, type: VARCHAR, null_rate: 0.0, distinct: 812, distinct_ratio: 0.08, score: 0.91}
+  category: {column: REGION, type: VARCHAR, null_rate: 0.0, distinct: 6, distinct_ratio: 0.001, score: 0.88}
+  label:    {column: RETURNED, type: BOOLEAN, null_rate: 0.0, distinct: 2, score: 1.0}
+  text:     {column: ORDER_NOTE, type: VARCHAR, avg_len: 143, max_len: 1920, score: 0.8}
+notes:
+  CUSTOMER_NAME: "The account that placed the order."
+missing:
+  - {role: date, reason: "no column has >=95% parseable dates"}
 ```
+
+**Schema version 1.** A `schema_version: 1` descriptor (the 0.2 kit's shape: the keys
+down to `roles`, and `source` as a bare source alias) still reads everywhere. It is
+treated as `version: 1`, `status: approved`, `owner: kit`, `drafted_by: shipped`, with no
+`digest` and no `created`; the record keys are not accepted in a version-1 file - to use
+them, write `schema_version: 2`. The first approve of a version-1 file writes version 2 in
+the new shape, its bare `source` alias as `vs:<alias>`.
 
 ### How a reference dataset reaches the database
 

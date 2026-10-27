@@ -7,9 +7,12 @@ role assignments, and checked by the same rules as a kit dataset - so the notebo
 
 The descriptor is that mapping of role to column, a descriptor mapping (``schema_version``, ``id``, ``fact_table``,
 ``roles``), or a descriptor file - YAML or JSON; ``data/datasets/<id>/descriptor.yaml`` in the kit shows the shape -
-whose fact_table then names the table (``table`` may be None). Given as a mapping of roles, they are also written
-beside the file as ``<name>.descriptor.yaml`` (when no descriptor is there yet), so ``DATASET = "<the file>"`` in a
-notebook opens it again with that one assignment. The rows travel over pyexasol's import on the open connection: no
+whose fact_table then names the table (``table`` may be None). Given as a mapping of roles, they become a
+schema_version 2 **draft** (version 1, drafted by the user, owned by EXAKIT_DESCRIPTOR_OWNER or the OS user, its
+``source`` the file) and are written beside the file as ``<name>.descriptor.yaml`` (when no descriptor is there yet),
+so ``DATASET = "<the file>"`` in a notebook opens it again with that one assignment; approving it (the quickstart's
+approve(), or exakit describe <id> --approve) is what the training and question steps wait for, exploring does not.
+The rows travel over pyexasol's import on the open connection: no
 host, user or password here, as everywhere in exakit.nb. Column types come from the file; the date role's column
 becomes a DATE and a true/false column 0 or 1; a JSON file is an array of records or one record per line, its nested
 values kept as JSON text. The table is marked as loaded from the file (its comment holds the file's SHA-256), so
@@ -19,15 +22,20 @@ name that this did not create is refused unless ``replace=True``.
 
 from __future__ import annotations
 
+import datetime as dt
+import getpass
 import hashlib
 import json
+import os
 import re
 from pathlib import Path
 from typing import Any
 
 from .dataset import Dataset, _rules, checked
 
-__all__ = ["descriptor_beside", "load_own_file", "save_descriptor"]
+__all__ = ["descriptor_beside", "descriptor_owner", "load_own_file", "save_descriptor"]
+
+OWNER_VARIABLE = "EXAKIT_DESCRIPTOR_OWNER"      # who a descriptor written here belongs to; the OS user otherwise
 
 FORMATS = {".csv": "csv", ".parquet": "parquet", ".pq": "parquet", ".json": "json", ".jsonl": "json", ".ndjson": "json"}
 BESIDE = (".descriptor.yaml", ".descriptor.yml", ".descriptor.json")   # <file name without its extension><one of these>
@@ -68,8 +76,36 @@ def _read_doc(path: Path) -> Any:
         raise rules.BadInput(f"The descriptor {path} cannot be read ({err}).") from err
 
 
-def _descriptor_doc(descriptor: Any, table: str | None) -> dict[str, Any]:
-    """A full descriptor document from a descriptor file, a full document, or a mapping of role to column(s) of ``table``."""
+def descriptor_owner() -> str:
+    """Who owns a descriptor written here: EXAKIT_DESCRIPTOR_OWNER when set, else the OS user."""
+    given = os.environ.get(OWNER_VARIABLE, "").strip()
+    if given:
+        return given
+    try:
+        return getpass.getuser()
+    except (OSError, KeyError, ImportError):
+        return "unknown"
+
+
+def _now() -> str:
+    """The time now, ISO-8601 in UTC to the second, as a descriptor's ``created``."""
+    return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _record(status: str, source: str | None) -> dict[str, Any]:
+    """The schema_version 2 record of a descriptor drafted here from roles given by hand: version 1, by the user."""
+    if status not in _rules().STATUSES:
+        raise ValueError(f"status must be draft or approved, not '{status}'.")
+    record: dict[str, Any] = {"version": 1, "status": status, "owner": descriptor_owner(), "created": _now(),
+                              "drafted_by": "user", "digest": None}
+    if source:
+        record["source"] = source
+    return record
+
+
+def _descriptor_doc(descriptor: Any, table: str | None, file: Path | None = None) -> dict[str, Any]:
+    """A full descriptor document from a descriptor file, a full document, or a mapping of role to column(s) of
+    ``table`` - the last a schema_version 2 draft whose source is ``file`` when given."""
     if isinstance(descriptor, (str, Path)):
         doc = _read_doc(Path(descriptor))
         if not isinstance(doc, dict):
@@ -86,25 +122,73 @@ def _descriptor_doc(descriptor: Any, table: str | None) -> dict[str, Any]:
         return {"table": table, "column": column} if isinstance(column, str) else column
 
     name = re.sub(r"_+", "_", table.split(".", 1)[-1].lower()).strip("_")
-    return {"schema_version": 1, "id": name, "fact_table": table,
+    return {"schema_version": _rules().SCHEMA_VERSION, "id": name, "fact_table": table,
+            **_record("draft", f"file:{file}" if file is not None else None),
             "roles": {role: [ref(c) for c in value] if isinstance(value, list) else ref(value) for role, value in descriptor.items()}}
 
 
 def _yaml_scalar(value: Any) -> str:
-    """A value as the descriptor reader reads it back: plain when it is a plain SQL or dataset name, else quoted."""
+    """A value as the descriptor reader reads it back: null, true/false and numbers plain, a plain SQL or dataset name
+    plain, any other text quoted."""
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return repr(value)
     text = str(value)
-    return text if re.fullmatch(r"[A-Za-z0-9_.-]+", text) else json.dumps(text)
+    return text if re.fullmatch(r"[A-Za-z0-9_.-]+", text) and text not in ("null", "true", "false") else json.dumps(text)
 
 
-def save_descriptor(doc: dict[str, Any], path: str | Path, about: str = "") -> Path:
-    """Write a descriptor document as YAML, in the layout of the kit's own descriptor.yaml files."""
+def _yaml_flow(value: Any) -> str:
+    """A mapping or list inline, ``{k: v, ...}`` / ``[a, ...]``, its scalars as _yaml_scalar writes them."""
+    if isinstance(value, dict):
+        return "{" + ", ".join(f"{_yaml_scalar(k)}: {_yaml_flow(v)}" for k, v in value.items()) + "}"
+    if isinstance(value, (list, tuple)):
+        return "[" + ", ".join(_yaml_flow(v) for v in value) + "]"
+    return _yaml_scalar(value)
+
+
+def _yaml_block(key: str, value: Any, indent: str = "") -> list[str]:
+    """``key:`` and its value as block lines: a mapping one key per line (a long flat nested mapping on lines of its
+    own, the rest inline), a list one ``- {...}`` per item, an empty one or a scalar inline."""
+    if isinstance(value, dict) and value:
+        lines = [f"{indent}{_yaml_scalar(key)}:"]
+        for k, v in value.items():
+            if isinstance(v, dict) and len(v) > 4 and all(not isinstance(x, (dict, list, tuple)) for x in v.values()):
+                lines += _yaml_block(k, v, indent + "  ")
+            else:
+                lines.append(f"{indent}  {_yaml_scalar(k)}: {_yaml_flow(v)}")
+        return lines
+    if isinstance(value, (list, tuple)) and value:
+        return [f"{indent}{_yaml_scalar(key)}:"] + [f"{indent}  - {_yaml_flow(item)}" for item in value]
+    return [f"{indent}{_yaml_scalar(key)}: {_yaml_flow(value)}"]
+
+
+def save_descriptor(doc: dict[str, Any], path: str | Path, about: str = "", *, status: str | None = None,
+                    source: str | None = None) -> Path:
+    """Write a descriptor document as YAML, in the layout of the kit's own descriptor.yaml files - always as
+    schema_version 2: a schema_version 1 document (or one without the record keys) is written as version 1 with
+    ``status`` (draft unless the document, or ``status``, says approved), the owner (EXAKIT_DESCRIPTOR_OWNER, else the
+    OS user), created now, drafted by the user and, when given, ``source`` (``file:<path>`` for a file's descriptor).
+    What the document already records is kept as it is."""
     def ref(item: dict[str, Any]) -> str:
         return f"{{table: {_yaml_scalar(item['table'])}, column: {_yaml_scalar(item['column'])}}}"
 
-    lines = [f"# {about or 'Which column plays which role (exakit.nb).'}", f"schema_version: {doc['schema_version']}",
+    rules = _rules()
+    record = dict(_record(status or "draft", source), **{k: v for k, v in doc.items()
+                                                         if k in rules.RECORD_KEYS + ("digest", "drafted_by") and v is not None})
+    if status is not None:
+        record["status"] = status
+    if source is not None:
+        record["source"] = source
+    elif doc.get("source"):                      # a schema_version 1 source is a live source's bare alias: vs:<alias> in 2
+        record["source"] = doc["source"] if doc.get("schema_version") != 1 else f"{rules._LIVE}{doc['source']}"
+    lines = [f"# {about or 'Which column plays which role (exakit.nb).'}", f"schema_version: {rules.SCHEMA_VERSION}",
              f"id: {_yaml_scalar(doc['id'])}", f"fact_table: {_yaml_scalar(doc['fact_table'])}"]
-    if doc.get("source"):
-        lines.append(f"source: {_yaml_scalar(doc['source'])}")
+    if record.get("source"):
+        lines.append(f"source: {_yaml_scalar(record['source'])}")
+    lines += [f"{key}: {_yaml_scalar(record[key])}" for key in ("version", "status", "owner", "created", "drafted_by", "digest")]
     lines.append("roles:")
     for role, value in doc["roles"].items():
         if isinstance(value, list):
@@ -112,6 +196,9 @@ def save_descriptor(doc: dict[str, Any], path: str | Path, about: str = "") -> P
             lines += [f"    - {ref(item)}" for item in value]
         else:
             lines.append(f"  {role}: {ref(value)}")
+    for key in ("evidence", "notes", "missing"):
+        if key in doc and doc[key] is not None:
+            lines += _yaml_block(key, doc[key])
     target = Path(path).expanduser()
     target.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return target
@@ -246,7 +333,7 @@ def load_own_file(path: str | Path, table: str | None, descriptor: Any, *, conn=
     named = rules.qualified_table(table) if table is not None else None
     if table is not None and named is None:
         raise ValueError(f"'{table}' is not SCHEMA.TABLE (plain SQL names).")
-    doc = _descriptor_doc(descriptor, named)
+    doc = _descriptor_doc(descriptor, named, file)
     raw = json.dumps(doc, indent=2, sort_keys=True).encode("utf-8")
     parsed = rules.parse_descriptor(raw.decode("utf-8"), source="The descriptor")
     target = named or parsed.fact_table
@@ -264,7 +351,10 @@ def load_own_file(path: str | Path, table: str | None, descriptor: Any, *, conn=
     if found != mark:
         frame = _read(file)
         _load(conn, frame, _prepare(frame, parsed), target, mark.replace("'", "''"))
-    ds = checked(conn, raw, file, remedy="Correct the descriptor's roles or the file.")
+    beside = Path(descriptor).expanduser() if isinstance(descriptor, (str, Path)) else None
+    ds = checked(conn, raw, file, remedy="Correct the descriptor's roles or the file.",
+                 descriptor_path=beside if beside is not None and beside.is_file() else None,
+                 origin="beside" if beside is not None else "explicit")
     if isinstance(descriptor, dict) and "roles" not in descriptor and descriptor_beside(file) is None:
         _keep_roles(file, doc)
     return ds
