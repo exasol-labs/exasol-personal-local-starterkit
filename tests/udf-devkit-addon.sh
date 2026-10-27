@@ -16,11 +16,24 @@
 #   - udf-build checks for a running Docker or Podman (whose API socket it
 #     hands to the build) and for the free disk estimate before anything
 #     heavy runs (AC-ML1.3)
-#   - udf-use default says no prebuilt container is published; every command
-#     refuses what it does not know, and names the marketplace when the add-on
-#     is not installed
+#   - udf-use default picks the matrix row for the database's architecture
+#     and version, takes the tarball from EXAKIT_UDF_CONTAINERS_MIRROR, verifies
+#     size and sha256 before the launcher sees it, installs it as PYTHON3_ML
+#     --language python, hands the pinned name==version to the smoke UDF and
+#     records the url; the cached file is reused; --json is one object
+#     (AC-ML1.2, AC-ML1.6)
+#   - a digest that does not match is exit 4, step verify, and the file is gone;
+#     no row for the architecture or the database version is exit 4, step
+#     select-container, naming what did not match; a decline is exit 5
+#   - EXAKIT_UDF_LANGUAGE=rust at install (and --language rust) takes the Rust
+#     row to `slc custom install --alias RUST --language rust`, records the
+#     language and says the smoke UDF is the next step; --language frob is exit 2
+#   - every command refuses what it does not know, and names the marketplace
+#     when the add-on is not installed
 #
-# A sandboxed kit home and deployment folder, a stub launcher; no database.
+# A sandboxed kit home and deployment folder, a stub launcher, a test copy of
+# versions.json whose rows point at a tiny fake tarball in a mirror folder; no
+# database.
 
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -102,8 +115,12 @@ contains "never outside the bucket" "not a path inside the bucket" "$out"
 check "nothing written outside" "" "$(ls "$EXAKIT_PERSONAL_DEPLOY_DIR/local/runtime/exa/bucketfs/bfsdefault/" 2>/dev/null | grep escape || true)"
 
 echo "the commands refuse what they do not know:"
-out="$(scenario 'manifest_set components.udf_devkit.version 0.1.0; cmd_udf_use default' 2>&1)"
-contains "default says none is published" "No prebuilt container" "$out"
+out="$(scenario 'manifest_set components.udf_devkit.version 0.1.0; cmd_udf_use default --language frob' 2>&1)"; rc=$?
+contains "--language frob is refused" "must be python or rust, not 'frob'" "$out"
+check "with exit 2" "2" "$rc"
+out="$(EXAKIT_UDF_LANGUAGE=frob scenario 'manifest_set components.udf_devkit.version 0.1.0; cmd_udf_setup' 2>&1)"; rc=$?
+contains "so is EXAKIT_UDF_LANGUAGE=frob" "EXAKIT_UDF_LANGUAGE" "$out"
+check "with exit 2" "2" "$rc"
 out="$(scenario 'manifest_set components.udf_devkit.version 0.1.0; cmd_udf_use nope.zip' 2>&1)"
 contains "a tarball must be a tarball" "is not a container tarball" "$out"
 printf 'numpy>=1\n' > "$WORK/req.txt"
@@ -162,6 +179,134 @@ contains "too little free disk: refused with the estimate and what is free" "nee
 contains "...what is free" "has 1 GB" "$out"
 check "and nothing after the check runs" "0" "$(printf '%s' "$out" | grep -c 'preflight passed' || true)"
 rm -f "$STUBS/df" "$STUBS/docker" "$STUBS/podman"
+
+echo "udf-use default: the matrix row for this database, verified before it is installed (AC-ML1.2):"
+MIRROR="$WORK/mirror"; mkdir -p "$MIRROR"
+printf 'fake python container' > "$MIRROR/py-fake.tar.gz"
+printf 'fake rust container' > "$MIRROR/lc-rust-fake.tar.gz"
+fake_sha() { shasum -a 256 "$1" | awk '{print $1}'; }
+fake_size() { wc -c < "$1" | tr -d ' '; }
+# A test copy of the kit's versions.json: the same document, its container rows
+# replaced by ones that point at the fake tarballs (sha256 and size real).
+matrix() { # matrix <out-file> <python sha256> [arches]
+    python3 - "$ROOT/versions.json" "$1" "$2" "$(fake_size "$MIRROR/py-fake.tar.gz")" \
+        "$(fake_sha "$MIRROR/lc-rust-fake.tar.gz")" "$(fake_size "$MIRROR/lc-rust-fake.tar.gz")" "${3:-x86_64 aarch64}" <<'MATRIX'
+import json, sys
+src, out, py_sha, py_size, rs_sha, rs_size, arches = sys.argv[1:]
+doc = json.load(open(src))
+rows = []
+for arch in arches.split():
+    rows.append({"language": "python", "alias": "PYTHON3_ML", "kind": "prebuilt", "arch": arch, "db_versions": ">=2026.1",
+                 "runtime": {"python": "3.12"}, "packages": {"scikit-learn": "1.9.0", "numpy": "2.4.6"},
+                 "url": "https://example.invalid/containers/py-fake.tar.gz", "sha256": py_sha, "size": int(py_size)})
+    rows.append({"language": "rust", "alias": "RUST", "kind": "prebuilt", "arch": arch, "db_versions": ">=2026.1",
+                 "runtime": {"rustc": "1.98.1"}, "crates": {"exasol-udf-sdk": "0.33.0"},
+                 "url": "https://example.invalid/containers/lc-rust-fake.tar.gz", "sha256": rs_sha, "size": int(rs_size)})
+doc["components"]["udf-devkit"]["containers"] = rows
+json.dump(doc, open(out, "w"), indent=2)
+MATRIX
+}
+matrix "$WORK/versions.json" "$(fake_sha "$MIRROR/py-fake.tar.gz")"
+matrix "$WORK/versions-bad-digest.json" "$(printf '0%.0s' $(seq 1 64))"
+matrix "$WORK/versions-aarch64-only.json" "$(fake_sha "$MIRROR/py-fake.tar.gz")" aarch64
+export EXAKIT_UDF_CONTAINERS_MIRROR="$MIRROR" EXAKIT_UDF_ARCH=aarch64
+CACHE="$EXAKIT_HOME/cache/containers"
+# The matrix scenario: the test versions document, a database that answers its
+# version, the smoke UDF stubbed with what it would report.
+mscenario() { # mscenario <versions doc> <body>
+    scenario '_EXAKIT_VERSIONS_DOC="'"$1"'"
+        _udf_db_version() { printf "%s\n" "${STUB_DB:-2026.2.0-nano.3}"; }
+        udf_devkit_smoke() { echo "smoke $*" >> "$CALLS"; UDF_SMOKE_LINES="python 3.12.3
+scikit-learn 1.9.0
+numpy 2.4.6"; }
+        confirm() { return "${STUB_DECLINE:-0}"; }
+        manifest_set components.udf_devkit.version 0.1.0
+        '"$2"
+}
+rm -rf "$CACHE"
+out="$(mscenario "$WORK/versions.json" 'cmd_udf_use default; echo "rc=$?"; manifest_get components.udf_devkit.containers.PYTHON3_ML; manifest_get components.udf_devkit.languages' 2>&1)"
+calls="$(grep -v "slc list" "$WORK/calls" | tr '\n' '|')"
+check "the mirror's tarball goes to the launcher as PYTHON3_ML, --language python, then the pins to the smoke UDF" \
+    "stop dash-server|launcher slc custom install --source $CACHE/py-fake.tar.gz --alias PYTHON3_ML --language python --auto-approve --deployment-dir $EXAKIT_PERSONAL_DEPLOY_DIR|wait|start dash-server|smoke PYTHON3_ML scikit-learn==1.9.0 numpy==2.4.6|" "$calls"
+contains "the row is the database's (aarch64, its version)" "Container for python on aarch64, database 2026.2.0-nano.3: py-fake.tar.gz" "$out"
+contains "verified before the install" "Verified py-fake.tar.gz (sha256" "$out"
+contains "exit 0" "rc=0" "$out"
+contains "the container's url is recorded under its alias" "https://example.invalid/containers/py-fake.tar.gz" "$out"
+check "and the language" "python" "$(printf '%s\n' "$out" | tail -1)"
+check "the verified file is in the cache" "fake python container" "$(cat "$CACHE/py-fake.tar.gz" 2>/dev/null)"
+out="$(mscenario "$WORK/versions.json" 'cmd_udf_use default' 2>&1)"
+contains "a second run reuses the cached file" "Using the cached container $CACHE/py-fake.tar.gz (digest verified)" "$out"
+json="$(mscenario "$WORK/versions.json" 'cmd_udf_use default --json' 2>/dev/null)"; rc=$?
+check "--json: exit 0" "0" "$rc"
+check "--json: one object - ok, language, alias, container (url, sha256, arch, db_versions), smoke (package, version)" \
+    "True python PYTHON3_ML ['arch', 'db_versions', 'sha256', 'url'] aarch64 >=2026.1 https://example.invalid/containers/py-fake.tar.gz [('python', '3.12.3'), ('scikit-learn', '1.9.0'), ('numpy', '2.4.6')]" \
+    "$(printf '%s' "$json" | python3 -c 'import json, sys; d = json.load(sys.stdin); c = d["container"]; print(d["ok"], d["language"], d["alias"], sorted(c), c["arch"], c["db_versions"], c["url"], [(s["package"], s["version"]) for s in d["smoke"]])' 2>&1)"
+
+echo "a digest that does not match is refused before the launcher sees the file:"
+rm -rf "$CACHE"
+out="$(mscenario "$WORK/versions-bad-digest.json" 'cmd_udf_use default' 2>&1)"; rc=$?
+check "exit 4" "4" "$rc"
+contains "naming the mismatch" "does not match its pinned digest (sha256 expected 0000" "$out"
+contains "and the remedy" "Run this again" "$out"
+check "the launcher saw nothing" "" "$(grep -v "slc list" "$WORK/calls")"
+check "and the file is gone" "" "$(ls "$CACHE" 2>/dev/null)"
+json="$(mscenario "$WORK/versions-bad-digest.json" 'cmd_udf_use default --json' 2>/dev/null)"; rc=$?
+check "--json: exit 4" "4" "$rc"
+check "--json: ok false, language, step verify, reason, remedy" "False python verify True exakit udf-use default" \
+    "$(printf '%s' "$json" | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["ok"], d["language"], d["step"], "pinned digest" in d["reason"], d["remedy"])' 2>&1)"
+
+echo "no row for this architecture or database version is refused, naming what did not match:"
+out="$(EXAKIT_UDF_ARCH=x86_64 mscenario "$WORK/versions-aarch64-only.json" 'cmd_udf_use default' 2>&1)"; rc=$?
+check "exit 4" "4" "$rc"
+contains "no row for the arch" "no python container for x86_64" "$out"
+json="$(EXAKIT_UDF_ARCH=x86_64 mscenario "$WORK/versions-aarch64-only.json" 'cmd_udf_use default --json' 2>/dev/null)"
+check "--json: step select-container" "False python select-container exakit update" \
+    "$(printf '%s' "$json" | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["ok"], d["language"], d["step"], d["remedy"])' 2>&1)"
+out="$(STUB_DB=2025.3 mscenario "$WORK/versions.json" 'cmd_udf_use default' 2>&1)"; rc=$?
+check "an older database: exit 4" "4" "$rc"
+contains "naming the range and the version" "container needs database >=2026.1, this one is 2025.3" "$out"
+out="$(mscenario "$WORK/versions.json" '_udf_db_version() { :; }; cmd_udf_use default' 2>&1)"; rc=$?
+check "no database version: exit 5" "5" "$rc"
+contains "asks for the status" "exakit status" "$out"
+out="$(STUB_DECLINE=1 mscenario "$WORK/versions.json" 'cmd_udf_use default' 2>&1)"; rc=$?
+check "a decline: exit 5" "5" "$rc"
+contains "and nothing changed" "nothing changed" "$out"
+out="$(EXAKIT_UDF_CONTAINERS_MIRROR="$WORK/empty-mirror" mscenario "$WORK/versions.json" 'rm -rf "$CACHE"; cmd_udf_use default --json' 2>/dev/null)"; rc=$?
+check "a mirror without the file: exit 5" "5" "$rc"
+contains "step download" '"step": "download"' "$out"
+
+echo "EXAKIT_UDF_LANGUAGE=rust takes the Rust row (alias RUST), with no smoke UDF yet:"
+rm -rf "$CACHE"
+out="$(EXAKIT_UDF_LANGUAGE=rust mscenario "$WORK/versions.json" 'manifest_del components.udf_devkit; udf_devkit_install; echo "rc=$?"; echo "languages=$(manifest_get components.udf_devkit.languages)"; manifest_get components.udf_devkit.containers.RUST; echo "validated=$(manifest_get components.udf_devkit.validated)"; udf_devkit_summary' 2>&1)"
+calls="$(grep -v "slc list" "$WORK/calls" | tr '\n' '|')"
+check "the install goes down the rust path: slc custom install --alias RUST --language rust, no smoke" \
+    "stop dash-server|launcher slc custom install --source $CACHE/lc-rust-fake.tar.gz --alias RUST --language rust --auto-approve --deployment-dir $EXAKIT_PERSONAL_DEPLOY_DIR|wait|start dash-server|" "$calls"
+contains "the install succeeds" "rc=0" "$out"
+contains "rustc and the sdk crate are named" "rustc 1.98.1, exasol-udf-sdk 0.33.0" "$out"
+contains "the smoke UDF is the next step" "The Rust smoke UDF arrives with the next kit step; until then: exasol slc list shows RUST" "$out"
+contains "the language is recorded" "languages=rust" "$out"
+contains "the url under the alias" "lc-rust-fake.tar.gz" "$out"
+contains "validated false until the smoke UDF exists" "validated=false" "$out"
+contains "and the summary names both languages" "Rust UDFs: alias RUST" "$out"
+out="$(mscenario "$WORK/versions.json" 'manifest_set components.udf_devkit.languages python; cmd_udf_setup --language rust --json; manifest_get components.udf_devkit.languages >&2' 2>"$WORK/err")"
+check "udf-setup --language rust --json: ok, alias RUST, an empty smoke list" "True rust RUST []" \
+    "$(printf '%s' "$out" | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["ok"], d["language"], d["alias"], d["smoke"])' 2>&1)"
+contains "a second language joins the record" "python,rust" "$(cat "$WORK/err")"
+out="$(mscenario "$WORK/versions.json" 'udf_devkit_installed_aliases() { echo RUST; }; cmd_udf_use default --language rust --yes' 2>&1)"
+contains "an installed RUST is updated, not installed twice" "slc custom update --source $CACHE/lc-rust-fake.tar.gz --alias RUST" "$(cat "$WORK/calls")"
+
+echo "udf-setup --json answers with the same shape for the official container:"
+json="$(mscenario "$WORK/versions.json" 'cmd_udf_setup --json' 2>/dev/null)"; rc=$?
+check "exit 0" "0" "$rc"
+check "ok, python, PYTHON3, no url (the launcher's own), the smoke lines" "True python PYTHON3 None aarch64 3" \
+    "$(printf '%s' "$json" | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["ok"], d["language"], d["alias"], d["container"]["url"], d["container"]["arch"], len(d["smoke"]))' 2>&1)"
+json="$(STUB_LAUNCHER=2.2.0 mscenario "$WORK/versions.json" 'cmd_udf_setup --json' 2>/dev/null)"; rc=$?
+check "an old launcher: exit 5, step install" "5 install exakit update personal" \
+    "$rc $(printf '%s' "$json" | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["step"], d["remedy"])' 2>&1)"
+json="$(mscenario "$WORK/versions.json" 'manifest_del components.udf_devkit; cmd_udf_use default --json' 2>/dev/null)"; rc=$?
+check "not installed: exit 5 naming the marketplace" "5 exakit marketplace udf-devkit" \
+    "$rc $(printf '%s' "$json" | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["remedy"])' 2>&1)"
+unset EXAKIT_UDF_CONTAINERS_MIRROR EXAKIT_UDF_ARCH
 
 echo "an uninstall leaves the containers to the launcher:"
 out="$(scenario 'manifest_set components.udf_devkit.version 0.1.0; udf_devkit_uninstall 1' 2>&1)"

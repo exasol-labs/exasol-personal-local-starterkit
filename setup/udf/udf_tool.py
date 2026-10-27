@@ -6,9 +6,20 @@ smoke UDF that proves a container, and the container build.
     python udf_tool.py aliases                            the installed aliases in `exasol slc list --json` (stdin)
     python udf_tool.py pinned <requirements.txt>          "name==version" per line, or exit 2 with the reason
     python udf_tool.py relative <path>                    the path inside the bucket, or exit 2 with the reason
-    python udf_tool.py smoke <alias> <schema> [pkg ...]   create and run the smoke UDF; "name version" per line,
-                                                          exit 3 when a declared package is missing
+    python udf_tool.py smoke <alias> <schema> [pkg[==version] ...]
+                                                          create and run the smoke UDF; "name version" per line,
+                                                          exit 3 when a declared package is missing, 7 when one
+                                                          pinned ==version is reported with another version
     python udf_tool.py dbversion                          the database version (for a prebuilt container's check)
+    python udf_tool.py arch <uname -m> <os>               the DATABASE's architecture, x86_64 or aarch64 (EXAKIT_UDF_ARCH
+                                                          overrides); exit 2 for a machine it does not know
+    python udf_tool.py resolve <versions.json> <language> <arch> <db-version>
+                                                          the matching container row as one JSON line, or exit 4
+                                                          naming what did not match
+    python udf_tool.py pins <versions.json> <language> <arch> [db-version]
+                                                          "name version" per line: the row's pinned packages
+    python udf_tool.py field <name>                       one field of the JSON row on stdin (strings bare)
+    python udf_tool.py verify <file> <sha256> <size>      exit 0 when both match, 4 naming the one that does not
     python udf_tool.py build                              build a container (run with the notebook venv's Python)
 
 The database steps connect through pyexasol as the kit's admin user: EXAKIT_PYX_DSN, EXAKIT_PYX_USER and
@@ -18,6 +29,7 @@ EXAKIT_PYX_PWFILE (the FILE holding the password - the password itself never rea
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -94,6 +106,108 @@ def bucket_relative(path: str) -> PurePosixPath:
     return PurePosixPath(*parts)
 
 
+_ARCHES = ("x86_64", "aarch64")
+_RANGE = re.compile(r"^(>=|<|==)\s*([0-9][0-9.]*)$")
+
+
+def database_arch(machine: str, system: str, override: str = "") -> str:
+    """The architecture of the DATABASE this machine runs, which is what a container must be built for: an aarch64 VM
+    on an Apple-silicon Mac, Podman's x86_64 WSL machine on Windows, the host itself on Linux. EXAKIT_UDF_ARCH wins."""
+    if override:
+        if override not in _ARCHES:
+            raise Refused(f"EXAKIT_UDF_ARCH must be x86_64 or aarch64, not '{override}'.")
+        return override
+    machine, system = (machine or "").lower(), (system or "").lower()
+    if system == "darwin":
+        return "aarch64" if machine in ("arm64", "aarch64") else "x86_64"
+    if system == "windows":
+        return "x86_64"
+    if system == "linux":
+        if machine in ("x86_64", "amd64"):
+            return "x86_64"
+        if machine in ("arm64", "aarch64"):
+            return "aarch64"
+        raise Refused(f"No container is built for a {machine} Linux machine (x86_64 and aarch64 are).")
+    raise Refused(f"No container is built for a '{system}' machine (macOS, Linux and Windows are).")
+
+
+def version_in_range(version: str, spec: str) -> bool:
+    """True when the dotted numeric ``version`` satisfies every comma-separated comparator in ``spec`` (>=, <, ==);
+    an empty spec matches everything. ``==`` compares as many parts as it names: ==2026.2 takes 2026.2.5."""
+    have = _key(version)
+    for part in [p.strip() for p in (spec or "").split(",") if p.strip()]:
+        match = _RANGE.match(part)
+        if not match:
+            raise Refused(f"'{part}' is not a version comparator (>=, < or == a dotted number).")
+        op, want_text = match.group(1), match.group(2)
+        want = _key(want_text)
+        if op == ">=" and not have >= want:
+            return False
+        if op == "<" and not have < want:
+            return False
+        if op == "==":
+            depth = len(re.findall(r"\d+", want_text)[:3])
+            if have[:depth] != want[:depth]:
+                return False
+    return True
+
+
+def container_rows(doc: dict) -> list[dict]:
+    rows = ((doc.get("components") or {}).get("udf-devkit") or {}).get("containers")
+    return [r for r in (rows or []) if isinstance(r, dict)]
+
+
+def resolve_container(doc: dict, language: str, arch: str, db_version: str) -> dict:
+    """The container row for this language, the database's architecture and its version; refused with the thing that
+    did not match named, so the user knows whether to wait for a kit update or for a container."""
+    for_language = [r for r in container_rows(doc) if r.get("language") == language]
+    if not for_language:
+        raise Refused(f"no {language} container is published in this kit's versions.json")
+    for_arch = [r for r in for_language if r.get("arch") == arch]
+    if not for_arch:
+        raise Refused(f"no {language} container for {arch}")
+    if not db_version:
+        raise Refused("the database version is not known (is it running? exakit status)")
+    for row in for_arch:
+        if version_in_range(db_version, str(row.get("db_versions") or "")):
+            return row
+    ranges = ", ".join(str(r.get("db_versions") or "any") for r in for_arch)
+    raise Refused(f"container needs database {ranges}, this one is {db_version}")
+
+
+def container_pins(row: dict) -> list[tuple[str, str]]:
+    """(name, version) of a row's pinned packages (Python) or crates (Rust)."""
+    pinned_set = row.get("packages") or row.get("crates") or {}
+    return [(str(n), str(v)) for n, v in pinned_set.items()]
+
+
+def verify_file(path: str, sha256: str, size: int) -> None:
+    """Refused unless the file has exactly this size and digest. Size first: a truncated download is the usual case
+    and the message says how far it got, which a resumed download fixes."""
+    file = Path(path)
+    if not file.is_file():
+        raise Refused(f"{path} is not there")
+    actual_size = file.stat().st_size
+    if actual_size != int(size):
+        raise Refused(f"expected {size} bytes, got {actual_size}")
+    digest = hashlib.sha256()
+    with file.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    actual = digest.hexdigest()
+    if actual != str(sha256).lower():
+        raise Refused(f"sha256 expected {sha256}, got {actual}")
+
+
+def split_pins(packages: list[str]) -> list[tuple[str, str]]:
+    """"name==version" -> (name, version); a bare name -> (name, "")."""
+    out: list[tuple[str, str]] = []
+    for item in packages:
+        name, _, version = item.partition("==")
+        out.append((name.strip(), version.strip()))
+    return out
+
+
 def smoke_script(alias: str, schema: str, packages: list[str]) -> str:
     """The CREATE SCRIPT for a UDF that reports each distribution's version, or MISSING, one row each."""
     names = ", ".join(repr(p) for p in packages)
@@ -123,23 +237,34 @@ def _connect():
 
 
 def smoke(alias: str, schema: str, packages: list[str]) -> int:
-    """Create and run the smoke UDF; print "name version" lines; 3 when a declared package is missing."""
+    """Create and run the smoke UDF; print "name version" lines; 3 when a declared package is missing, 7 when one
+    given as name==version is there with another version (the container is not the one the kit pinned)."""
     schema = identifier(schema, "The schema")
+    pins = split_pins(packages)
+    names = [name for name, _ in pins]
     conn = _connect()
     try:
         conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema}")
-        conn.execute(smoke_script(alias, schema, packages))
+        conn.execute(smoke_script(alias, schema, names))
         rows = conn.execute(f"SELECT {schema}.EXAKIT_SMOKE()").fetchall()
     finally:
         conn.close()
     found = {str(r.get("PACKAGE")): str(r.get("VERSION")) for r in rows}
     for name, version in found.items():
         print(f"{name} {version}")
-    missing = [p for p in packages if found.get(p, "MISSING") == "MISSING"]
+    return smoke_verdict(found, pins)
+
+
+def smoke_verdict(found: dict, pins: list[tuple[str, str]]) -> int:
+    """0, or 3 (a package missing) before 7 (a pinned version not the reported one), the reasons on stderr."""
+    missing = [name for name, _ in pins if found.get(name, "MISSING") == "MISSING"]
     if missing:
         print(f"missing: {', '.join(missing)}", file=sys.stderr)
         return 3
-    return 0
+    differs = [(name, found[name], want) for name, want in pins if want and found[name] != want]
+    for name, got, want in differs:
+        print(f"{name} reported {got}, pinned {want}", file=sys.stderr)
+    return 7 if differs else 0
 
 
 def db_version() -> str:
@@ -172,6 +297,13 @@ def build() -> int:
     return 0
 
 
+def _load_json(path: str) -> dict:
+    doc = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(doc, dict):
+        raise Refused(f"{path} is not a JSON object")
+    return doc
+
+
 def main(argv: list[str]) -> int:
     command, args = (argv[0], argv[1:]) if argv else ("", [])
     try:
@@ -200,6 +332,41 @@ def main(argv: list[str]) -> int:
             return smoke(args[0], args[1], args[2:])
         if command == "dbversion":
             print(db_version())
+            return 0
+        if command == "arch" and len(args) == 2:
+            print(database_arch(args[0], args[1], os.environ.get("EXAKIT_UDF_ARCH", "")))
+            return 0
+        if command == "resolve" and len(args) == 4:
+            try:
+                print(json.dumps(resolve_container(_load_json(args[0]), args[1], args[2], args[3])))
+            except Refused as err:
+                print(str(err), file=sys.stderr)
+                return 4
+            return 0
+        if command == "pins" and len(args) in (3, 4):
+            doc = _load_json(args[0])
+            rows = [r for r in container_rows(doc) if r.get("language") == args[1] and r.get("arch") == args[2]]
+            if len(args) == 4:
+                rows = [r for r in rows if version_in_range(args[3], str(r.get("db_versions") or ""))]
+            if not rows:
+                print(f"no {args[1]} container for {args[2]}", file=sys.stderr)
+                return 4
+            for name, version in container_pins(rows[0]):
+                print(f"{name} {version}")
+            return 0
+        if command == "field" and len(args) == 1:
+            row = json.loads(sys.stdin.read() or "{}")
+            value = row.get(args[0]) if isinstance(row, dict) else None
+            if value is None:
+                return 1
+            print(value if isinstance(value, str) else json.dumps(value))
+            return 0
+        if command == "verify" and len(args) == 3:
+            try:
+                verify_file(args[0], args[1], int(args[2]))
+            except Refused as err:
+                print(str(err), file=sys.stderr)
+                return 4
             return 0
         if command == "build":
             return build()

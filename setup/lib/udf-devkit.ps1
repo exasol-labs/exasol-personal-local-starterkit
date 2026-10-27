@@ -1,8 +1,10 @@
-# udf-devkit.ps1 - udf-devkit (Python UDFs on the local database): managed
-# install + validation + the `exakit udf-setup | udf-use | udf-build | udf-file
-# | model` commands. Twin of setup/lib/udf-devkit.sh; read that header for the
-# facts. The rules and the database steps are setup/udf/udf_tool.py, the model
-# files' rules setup/udf/model_tool.py, both shared by the two twins.
+# udf-devkit.ps1 - udf-devkit (Python and Rust UDFs on the local database):
+# managed install + validation + the `exakit udf-setup | udf-use | udf-build |
+# udf-file | model` commands. Twin of setup/lib/udf-devkit.sh; read that header
+# for the facts (the container matrix in versions.json, the database's
+# architecture, the digest check, --json and the exit codes). The rules and the
+# database steps are setup/udf/udf_tool.py, the model files' rules
+# setup/udf/model_tool.py, both shared by the two twins.
 
 $script:UdfDevkitVersionFallback = if ($env:EXAKIT_UDF_DEVKIT_VERSION_FALLBACK) { $env:EXAKIT_UDF_DEVKIT_VERSION_FALLBACK } else { "0.1.0" }
 $script:UdfDevkitVersion = if ($env:EXAKIT_UDF_DEVKIT_VERSION) { $env:EXAKIT_UDF_DEVKIT_VERSION } else { "" }
@@ -11,8 +13,25 @@ $script:UdfMinLauncher = "2.3.0"
 $script:UdfOfficialAlias = "PYTHON3"
 $script:UdfDefaultAlias = "PYTHON3_ML"
 $script:UdfBuildAlias = "PYTHON3_CUSTOM"
-$script:UdfLanguage = "python"
+$script:UdfRustAlias = "RUST"
+# The language a persona install and the commands set up unless --language
+# says otherwise; validated where it is read (Get-UdfLanguageProblem).
+$script:UdfLanguage = if ($env:EXAKIT_UDF_LANGUAGE) { $env:EXAKIT_UDF_LANGUAGE } else { "python" }
 $script:UdfSchema = "EXAKIT_UDF"
+# Downloaded prebuilt containers, kept by file name so a second install
+# verifies the cached file instead of downloading it again.
+$script:UdfContainerCache = if ($env:EXAKIT_UDF_CONTAINER_CACHE) { $env:EXAKIT_UDF_CONTAINER_CACHE } else { Join-Path (Join-Path $script:ExakitHome "cache") "containers" }
+# --json: the answer is one object on stdout (Write-Output); the steps' detail
+# lines are gated to the log (ExakitQuietDetail).
+$script:UdfJson = $false
+# Why the last setup step stopped (Set-UdfFail): Code, Step, Remedy, Message.
+$script:UdfFail = $null
+# The selected matrix row (Select-UdfContainer) with DbArch and DbVersion, its verified
+# file (Get-UdfContainerFile), and the smoke UDF's "name version" lines.
+$script:UdfContainer = $null
+$script:UdfContainerFile = ""
+$script:UdfSmokeLines = @()
+$script:UdfDeclined = $false
 $script:UdfBucketfsDir = "local\runtime\exa\bucketfs"
 $script:UdfBucketfsService = "bfsdefault"
 $script:UdfBucketfsBucket = "default"
@@ -109,10 +128,9 @@ function Get-UdfBucketLocation {
 }
 
 function Test-UdfDevkitLauncher {
-    $version = Get-PersonalLauncherVersion
-    if (-not $version) { $version = "0" }
-    if ((Invoke-UdfTool -ToolArgs @("atleast", $version, $script:UdfMinLauncher))[0] -eq 0) { return $true }
-    Warn2 "The UDF dev kit needs Exasol launcher $($script:UdfMinLauncher) or later; this machine has $version. Update it with: exakit update personal"
+    $why = Get-UdfLauncherProblem
+    if (-not $why) { return $true }
+    Warn2 $why
     return $false
 }
 
@@ -124,23 +142,306 @@ function Get-UdfDevkitInstalledAliases {
 }
 
 # Test-UdfDevkitSmoke - create and run the smoke UDF; $true when every declared
-# package is there. Twin of udf_devkit_smoke.
+# package is there and each one pinned name==version is reported with that
+# version. The "name version" lines are kept in UdfSmokeLines (for --json); a
+# miss is Set-UdfFail 3 (missing) or 7 (another version, or the UDF did not
+# run). Twin of udf_devkit_smoke.
 function Test-UdfDevkitSmoke {
     param([Parameter(Mandatory)][string]$Alias, [string[]]$Packages = @())
+    $script:UdfSmokeLines = @()
     $result = Invoke-UdfTool -ToolArgs (@("smoke", $Alias, $script:UdfSchema) + $Packages)
+    $script:UdfSmokeLines = @($result[1] | Where-Object { $_ })
     if ($result[0] -ne 0) {
-        Warn2 "The smoke UDF on $Alias did not pass: $(@($result[2] -split "`n")[-1])"
-        return $false
+        $why = "The smoke UDF on $Alias did not pass: $(@($result[2] -split "`n")[-1])"
+        Warn2 $why
+        $code = 7
+        if ($result[0] -eq 3) { $code = 3 }
+        return (Set-UdfFail -Code $code -Step "smoke" -Remedy "exakit udf-use default" -Message $why)
     }
     $python = ($result[1] | Where-Object { $_ -like "python *" } | Select-Object -First 1) -replace "^python ", ""
     Ok "Python UDFs run on $Alias (Python $python)"
-    foreach ($line in @($result[1] | Where-Object { $_ -notlike "python *" })) {
-        $parts = $line -split " ", 2
-        Write-Host ("      {0,-24} {1}" -f $parts[0], $parts[1])
+    if (-not $script:ExakitQuietDetail) {
+        foreach ($line in @($result[1] | Where-Object { $_ -notlike "python *" })) {
+            $parts = $line -split " ", 2
+            Write-Host ("      {0,-24} {1}" -f $parts[0], $parts[1])
+        }
     }
     Info "Use it in SQL: CREATE OR REPLACE $Alias SCALAR SCRIPT ..."
     Set-ExakitManifestValue "components.udf_devkit.validated" $true
     return $true
+}
+
+# Set-UdfFail - note why a setup step stopped, for the caller to turn into a
+# refusal (the commands) or a warning (the persona install, which must not
+# exit). Always $false. Twin of _udf_fail.
+function Set-UdfFail {
+    param([Parameter(Mandatory)][int]$Code, [Parameter(Mandatory)][string]$Step, [AllowEmptyString()][string]$Remedy = "",
+          [Parameter(Mandatory)][string]$Message)
+    $script:UdfFail = [pscustomobject]@{ Code = $Code; Step = $Step; Remedy = $Remedy; Message = $Message }
+    if (Get-Command Write-ExakitLog -ErrorAction SilentlyContinue) { Write-ExakitLog "UDF" "$Step ($Code): $Message" }
+    return $false
+}
+
+# Exit-UdfRefusal - stop with the exit code for what went wrong (AC-ML1.6): 2
+# bad arguments, 3 a package the smoke UDF did not find, 4 no container for
+# this database (language, arch or version) or a digest that did not match, 5
+# not ready (the add-on, the database, the launcher, the download or the
+# disk), 6 the launcher's install failed, 7 the smoke UDF did not pass or
+# reported a version other than the pinned one. The JSON names the language
+# and the step (select-container, download, verify, install, smoke) so an
+# agent branches on both. No failure note: nothing of the install failed. Twin
+# of _udf_refuse.
+function Exit-UdfRefusal {
+    param([Parameter(Mandatory)][int]$Code, [Parameter(Mandatory)][string]$Language, [Parameter(Mandatory)][string]$Step,
+          [Parameter(Mandatory)][string]$Message, $Remedy = $null)
+    if (Get-Command Write-ExakitLog -ErrorAction SilentlyContinue) { Write-ExakitLog "REFUSE" "udf $Language/$Step ($Code): $Message" }
+    if ($script:ExakitRefusalJson) {
+        Write-Output ([ordered]@{ ok = $false; language = $Language; step = $Step; reason = $Message; remedy = $Remedy } | ConvertTo-Json -Compress)
+        exit $Code
+    }
+    Write-Host ""
+    Write-Host ("  {0} {1}" -f $script:UiCross, $Message) -ForegroundColor Red
+    if ($Remedy) { Write-Host "    Run: $Remedy" }
+    exit $Code
+}
+
+# Exit-UdfLastFail - the refusal for the last Set-UdfFail. Twin of _udf_raise_fail.
+function Exit-UdfLastFail {
+    param([Parameter(Mandatory)][string]$Language)
+    $f = $script:UdfFail
+    if (-not $f) { $f = [pscustomobject]@{ Code = 1; Step = "install"; Remedy = ""; Message = "The step did not finish (see: exakit logs)." } }
+    $remedy = $null
+    if ($f.Remedy) { $remedy = $f.Remedy }
+    Exit-UdfRefusal -Code $f.Code -Language $Language -Step $f.Step -Message $f.Message -Remedy $remedy
+}
+
+# Enable-UdfJson - --json: refusals and the answer as one object, detail to the log.
+function Enable-UdfJson {
+    $script:UdfJson = $true
+    $script:ExakitRefusalJson = $true
+    $script:ExakitQuietDetail = $true
+}
+
+# Write-UdfDone - the commands' success: with --json the object (the container
+# from the selected row, the smoke UDF's lines as package and version);
+# otherwise the steps have already said it. Twin of _udf_done.
+function Write-UdfDone {
+    param([Parameter(Mandatory)][string]$Language, [Parameter(Mandatory)][string]$Alias)
+    if (-not $script:UdfJson) { return }
+    $smoke = @()
+    foreach ($line in @($script:UdfSmokeLines)) {
+        $parts = "$line" -split " ", 2
+        if ($parts[0]) { $smoke += [ordered]@{ package = $parts[0]; version = "" + $parts[1] } }
+    }
+    $c = $script:UdfContainer
+    $container = [ordered]@{ url = $null; sha256 = $null; arch = $null; db_versions = $null }
+    if ($c) {
+        if ($c.url) { $container.url = "" + $c.url }
+        if ($c.sha256) { $container.sha256 = "" + $c.sha256 }
+        if ($c.DbArch) { $container.arch = "" + $c.DbArch }
+        if ($c.db_versions) { $container.db_versions = "" + $c.db_versions }
+    }
+    Write-Output ([ordered]@{ ok = $true; language = $Language; alias = $Alias; container = $container; smoke = @($smoke) } | ConvertTo-Json -Compress -Depth 5)
+}
+
+# Get-UdfLanguageProblem - "" when the value is python or rust, else the reason.
+function Get-UdfLanguageProblem {
+    param([AllowEmptyString()][string]$Value)
+    if ($Value -in @("python", "rust")) { return "" }
+    return "The UDF language must be python or rust, not '$Value' (--language, or EXAKIT_UDF_LANGUAGE)."
+}
+
+# Get-UdfDbVersion - the running database's version, for the container matrix.
+function Get-UdfDbVersion {
+    $result = Invoke-UdfTool -ToolArgs @("dbversion")
+    if ($result[0] -ne 0) { return "" }
+    return ("" + @($result[1])[0]).Trim()
+}
+
+# Get-UdfOs - this machine as the matrix names it: darwin, linux or windows.
+function Get-UdfOs {
+    if ($env:OS -eq "Windows_NT") { return "windows" }
+    if ($IsMacOS) { return "darwin" }
+    if ($IsLinux) { return "linux" }
+    return "windows"
+}
+
+# Get-UdfMachine - what `uname -m` says, or Windows' processor architecture.
+function Get-UdfMachine {
+    $uname = Get-Command uname -ErrorAction SilentlyContinue
+    if ($uname -and (Get-UdfOs) -ne "windows") {
+        try { return ("" + (& $uname.Source -m 2>$null)).Trim() } catch { }
+    }
+    return "" + $env:PROCESSOR_ARCHITECTURE
+}
+
+# Get-UdfArch - the DATABASE's architecture (x86_64 | aarch64), which is what a
+# container is built for: the rule is in udf_tool.py; EXAKIT_UDF_ARCH
+# overrides. @(ok, value or reason). Twin of _udf_arch.
+function Get-UdfArch {
+    $result = Invoke-UdfTool -NoConnection -ToolArgs @("arch", (Get-UdfMachine), (Get-UdfOs))
+    if ($result[0] -ne 0) { return ,@($false, $result[2]) }
+    return ,@($true, ("" + @($result[1])[0]).Trim())
+}
+
+# Get-UdfLauncherProblem - why the launcher cannot install containers, or "".
+function Get-UdfLauncherProblem {
+    $version = Get-PersonalLauncherVersion
+    if (-not $version) { $version = "0" }
+    if ((Invoke-UdfTool -NoConnection -ToolArgs @("atleast", $version, $script:UdfMinLauncher))[0] -eq 0) { return "" }
+    return "The UDF dev kit needs Exasol launcher $($script:UdfMinLauncher) or later; this machine has $version. Update it with: exakit update personal"
+}
+
+# Test-UdfReady - the database running and the launcher able to install
+# containers, or a Set-UdfFail (5) naming which. Twin of _udf_ready.
+function Test-UdfReady {
+    param([Parameter(Mandatory)][string]$Step)
+    if (-not (Test-ExakitDbReachable)) { return (Set-UdfFail -Code 5 -Step $Step -Remedy "exakit start" -Message "The database is not running.") }
+    $why = Get-UdfLauncherProblem
+    if ($why) { return (Set-UdfFail -Code 5 -Step $Step -Remedy "exakit update personal" -Message $why) }
+    return $true
+}
+
+# Select-UdfContainer - the matrix row for this language, the database's
+# architecture and its version (udf_tool.py resolve) into UdfContainer, with
+# DbArch and DbVersion added; a Set-UdfFail (4, step select-container) names what did
+# not match. Twin of _udf_select_container.
+function Select-UdfContainer {
+    param([Parameter(Mandatory)][string]$Language)
+    $script:UdfContainer = $null
+    $doc = Resolve-ExakitVersionsDoc
+    if (-not $doc) { return (Set-UdfFail -Code 4 -Step "select-container" -Remedy "exakit update" -Message "This kit copy has no readable versions.json to pick a container from.") }
+    $arch = Get-UdfArch
+    if (-not $arch[0]) { return (Set-UdfFail -Code 4 -Step "select-container" -Remedy "" -Message ("" + $arch[1])) }
+    $db = Get-UdfDbVersion
+    if (-not $db) { return (Set-UdfFail -Code 5 -Step "select-container" -Remedy "exakit status" -Message "The database version is not known: is the database running?") }
+    $result = Invoke-UdfTool -NoConnection -ToolArgs @("resolve", $doc, $Language, $arch[1], $db)
+    if ($result[0] -ne 0) {
+        return (Set-UdfFail -Code 4 -Step "select-container" -Remedy "exakit update" -Message "No prebuilt $Language container fits this database ($($arch[1]), version $db): $($result[2]). A kit update may bring one.")
+    }
+    $row = (@($result[1]) -join "") | ConvertFrom-Json
+    $row | Add-Member -NotePropertyName DbArch -NotePropertyValue $arch[1]
+    $row | Add-Member -NotePropertyName DbVersion -NotePropertyValue $db
+    $script:UdfContainer = $row
+    Info "Container for $Language on $($arch[1]), database $($db): $(Split-Path -Leaf $row.url)"
+    return $true
+}
+
+# Get-UdfContainerPins - the selected row's "name==version" pins (packages or crates).
+function Get-UdfContainerPins {
+    param([Parameter(Mandatory)][string]$Language)
+    $c = $script:UdfContainer
+    $result = Invoke-UdfTool -NoConnection -ToolArgs @("pins", (Resolve-ExakitVersionsDoc), $Language, $c.DbArch, $c.DbVersion)
+    if ($result[0] -ne 0) { return @() }
+    return @($result[1] | Where-Object { $_ } | ForEach-Object { $_ -replace " ", "==" })
+}
+
+# Get-UdfDownload - a release asset streamed to disk (WebClient, as
+# Get-ExakitFile: Invoke-WebRequest on 5.1 buffers the whole response), three
+# attempts; $false when it did not arrive, with no failure note.
+function Get-UdfDownload {
+    param([Parameter(Mandatory)][string]$Url, [Parameter(Mandatory)][string]$Dest)
+    try {
+        [System.Net.ServicePointManager]::SecurityProtocol =
+            [System.Net.ServicePointManager]::SecurityProtocol -bor [System.Net.SecurityProtocolType]::Tls12
+    } catch { }
+    for ($attempt = 1; $attempt -le 3; $attempt++) {
+        try {
+            $wc = New-Object System.Net.WebClient
+            try {
+                $wc.Proxy = [System.Net.WebRequest]::DefaultWebProxy
+                if ($wc.Proxy) { $wc.Proxy.Credentials = [System.Net.CredentialCache]::DefaultCredentials }
+                $wc.Headers.Add("User-Agent", "exakit")
+                $wc.DownloadFile($Url, $Dest)
+            } finally { $wc.Dispose() }
+            return $true
+        } catch {
+            Remove-Item -Force $Dest -ErrorAction SilentlyContinue
+            if (Get-Command Write-ExakitLog -ErrorAction SilentlyContinue) { Write-ExakitLog "WARN" "Download attempt $attempt failed: $Url ($_)" }
+            if ($attempt -lt 3) { Start-Sleep -Seconds (5 * $attempt) }
+        }
+    }
+    return $false
+}
+
+# Get-UdfContainerFile - the selected row's tarball into the cache
+# (UdfContainerFile), verified against its pinned size and sha256 before
+# anything installs it: a cached file that verifies is reused; otherwise it is
+# downloaded or copied from EXAKIT_UDF_CONTAINERS_MIRROR (a folder, file:// or
+# https:// base URL holding the file by name) into a .part that is renamed
+# only once it verifies. A mismatch is Set-UdfFail 4 (step verify) and the
+# file is removed, so running the command again downloads it afresh; a
+# download that did not arrive is 5 (step download). Twin of
+# _udf_fetch_container.
+function Get-UdfContainerFile {
+    param([Parameter(Mandatory)][string]$Language)
+    $c = $script:UdfContainer
+    $name = Split-Path -Leaf ("" + $c.url)
+    $script:UdfContainerFile = Join-Path $script:UdfContainerCache $name
+    try { New-Item -ItemType Directory -Force -Path $script:UdfContainerCache -ErrorAction Stop | Out-Null } catch {
+        return (Set-UdfFail -Code 5 -Step "download" -Remedy "" -Message "Could not create the container cache $($script:UdfContainerCache).")
+    }
+    $verifyArgs = @("verify", $script:UdfContainerFile, ("" + $c.sha256), ("" + $c.size))
+    if ((Test-Path $script:UdfContainerFile -PathType Leaf) -and (Invoke-UdfTool -NoConnection -ToolArgs $verifyArgs)[0] -eq 0) {
+        Ok "Using the cached container $($script:UdfContainerFile) (digest verified)"
+        return $true
+    }
+    $source = "" + $c.url
+    $local = ""
+    $mirror = $env:EXAKIT_UDF_CONTAINERS_MIRROR
+    if ($mirror) {
+        if ($mirror -match '^https://') {
+            $source = $mirror.TrimEnd('/') + "/" + $name
+        } elseif ($mirror -match '^file://') {
+            $local = $mirror.Substring(7)
+            # file:///C:/x reads as /C:/x; the drive letter is the path.
+            if ($local -match '^/[A-Za-z]:') { $local = $local.Substring(1) }
+            $local = Join-Path $local.TrimEnd('/', '\') $name
+            $source = $local
+        } elseif ($mirror -match '^[A-Za-z][A-Za-z0-9+.-]*://') {
+            return (Set-UdfFail -Code 5 -Step "download" -Remedy "" -Message "EXAKIT_UDF_CONTAINERS_MIRROR must be a folder, a file:// URL or an https:// URL (got '$mirror').")
+        } else {
+            $local = Join-Path $mirror.TrimEnd('/', '\') $name
+            $source = $local
+        }
+    }
+    $mb = "{0} MB" -f [math]::Floor([double]$c.size / 1000000)
+    $part = "$($script:UdfContainerFile).part"
+    Remove-Item -Force $script:UdfContainerFile, $part -ErrorAction SilentlyContinue
+    if ($local) {
+        Info "Copying the $Language container ($mb) from $local"
+        try { Copy-Item -LiteralPath $local -Destination $part -Force -ErrorAction Stop } catch {
+            Remove-Item -Force $part -ErrorAction SilentlyContinue
+            return (Set-UdfFail -Code 5 -Step "download" -Remedy "" -Message "The container $name is not in EXAKIT_UDF_CONTAINERS_MIRROR ($local).")
+        }
+    } else {
+        Info "Downloading the $Language container ($mb, checked against its SHA-256) from $source"
+        $script:ExakitActiveLabel = "Downloading the $Language container ($mb)"
+        $got = Get-UdfDownload -Url $source -Dest $part
+        $script:ExakitActiveLabel = ""
+        if (-not $got) {
+            return (Set-UdfFail -Code 5 -Step "download" -Remedy "exakit udf-use default" -Message "The container could not be downloaded from $source. Retry when online, or set EXAKIT_UDF_CONTAINERS_MIRROR to a folder or URL holding $name.")
+        }
+    }
+    $verified = Invoke-UdfTool -NoConnection -ToolArgs @("verify", $part, ("" + $c.sha256), ("" + $c.size))
+    if ($verified[0] -ne 0) {
+        Remove-Item -Force $part -ErrorAction SilentlyContinue
+        return (Set-UdfFail -Code 4 -Step "verify" -Remedy "exakit udf-use default" -Message "The container $name does not match its pinned digest ($($verified[2])); it was removed. Run this again to download it afresh; if it fails again the release asset changed and the kit needs an update.")
+    }
+    Move-Item -LiteralPath $part -Destination $script:UdfContainerFile -Force
+    $short = ("" + $c.sha256).Substring(0, 12)
+    Ok "Verified $name (sha256 $short..., $($c.size) bytes)"
+    return $true
+}
+
+# Add-UdfLanguage - components.udf_devkit.languages, a comma list, each
+# language once. Twin of _udf_record_language.
+function Add-UdfLanguage {
+    param([Parameter(Mandatory)][string]$Language)
+    $have = "" + (Get-ExakitManifestValue "components.udf_devkit.languages")
+    if (@($have -split ",") -contains $Language) { return }
+    if ($have) { Set-ExakitManifestValue "components.udf_devkit.languages" "$have,$Language" }
+    else { Set-ExakitManifestValue "components.udf_devkit.languages" $Language }
 }
 
 # Invoke-UdfWithRestart - confirm, stop the running add-on services, run the
@@ -148,8 +449,10 @@ function Test-UdfDevkitSmoke {
 # _udf_with_restart.
 function Invoke-UdfWithRestart {
     param([Parameter(Mandatory)][string]$What, [Parameter(Mandatory)][scriptblock]$Action)
+    $script:UdfDeclined = $false
     if (-not $script:UdfYes -and -not (Confirm-ExakitPrompt "$What restarts the database (running add-ons are stopped and started again). Continue" $true)) {
         Info "$What was not started; nothing changed."
+        $script:UdfDeclined = $true
         return $false
     }
     $running = @()
@@ -168,21 +471,70 @@ function Invoke-UdfWithRestart {
     return [bool]$ok
 }
 
+# Install-UdfDevkitOfficial - the official Python container when it is missing
+# (or forced), then the smoke UDF. $false with UdfFail set. Twin of
+# udf_devkit_setup_container.
 function Install-UdfDevkitOfficial {
     param([bool]$Force = $false)
-    if (-not (Test-ExakitDbReachable)) { Warn2 "The database is not running. Start it with: exakit start"; return $false }
-    if (-not (Test-UdfDevkitLauncher)) { return $false }
+    $script:UdfContainer = $null
+    $arch = Get-UdfArch
+    if ($arch[0]) { $script:UdfContainer = [pscustomobject]@{ url = ""; sha256 = ""; db_versions = ""; DbArch = $arch[1] } }
+    if (-not (Test-UdfReady -Step "install")) { return $false }
     if ($Force -or -not (@(Get-UdfDevkitInstalledAliases) -contains $script:UdfOfficialAlias)) {
         $done = Invoke-UdfWithRestart -What "Installing the official $($script:UdfOfficialAlias) container" -Action {
             (Invoke-UdfSlc -SlcArgs @("install", $script:UdfOfficialAlias, "--auto-approve"))[0] -eq 0 }
         if (-not $done) {
-            Warn2 "The launcher could not install the $($script:UdfOfficialAlias) container (see the log)."
-            return $false
+            if ($script:UdfDeclined) { return (Set-UdfFail -Code 5 -Step "install" -Remedy "exakit udf-setup --yes" -Message "The install was not confirmed; nothing changed.") }
+            return (Set-UdfFail -Code 6 -Step "install" -Remedy "exakit logs" -Message "The launcher could not install the $($script:UdfOfficialAlias) container (see: exakit logs).")
         }
     } else {
         Ok "The official $($script:UdfOfficialAlias) container is already installed"
     }
-    return (Test-UdfDevkitSmoke -Alias $script:UdfOfficialAlias)
+    if (-not (Test-UdfDevkitSmoke -Alias $script:UdfOfficialAlias)) { return $false }
+    Add-UdfLanguage "python"
+    return $true
+}
+
+# Install-UdfDevkitDefault - the prebuilt Python container of the matrix for
+# this database (ML1.2): select, download or reuse the cache, verify, install
+# as PYTHON3_ML, and the smoke UDF compares each package's version with the
+# pin. $false with UdfFail set. Twin of udf_devkit_setup_default.
+function Install-UdfDevkitDefault {
+    if (-not (Test-UdfReady -Step "select-container")) { return $false }
+    if (-not (Select-UdfContainer -Language "python")) { return $false }
+    if (-not (Get-UdfContainerFile -Language "python")) { return $false }
+    $pins = Get-UdfContainerPins -Language "python"
+    if (-not (Install-UdfTarball -Tarball $script:UdfContainerFile -Alias $script:UdfDefaultAlias -Language "python" -Source ("" + $script:UdfContainer.url) -Packages $pins)) { return $false }
+    Add-UdfLanguage "python"
+    return $true
+}
+
+# Install-UdfDevkitRust - the Rust container of the matrix (alias RUST): the
+# same select, download, verify and launcher install, through the restart. No
+# smoke UDF yet: it arrives with the next kit step, so the add-on is recorded
+# as not validated until then. $false with UdfFail set. Twin of
+# udf_devkit_setup_rust.
+function Install-UdfDevkitRust {
+    if (-not (Test-UdfReady -Step "select-container")) { return $false }
+    if (-not (Select-UdfContainer -Language "rust")) { return $false }
+    if (-not (Get-UdfContainerFile -Language "rust")) { return $false }
+    $verb = "install"
+    if (@(Get-UdfDevkitInstalledAliases) -contains $script:UdfRustAlias) { $verb = "update" }
+    $file = $script:UdfContainerFile
+    $done = Invoke-UdfWithRestart -What "Installing the $($script:UdfRustAlias) container" -Action {
+        (Invoke-UdfSlc -SlcArgs @("custom", $verb, "--source", $file, "--alias", $script:UdfRustAlias, "--language", "rust", "--auto-approve"))[0] -eq 0 }
+    if (-not $done) {
+        if ($script:UdfDeclined) { return (Set-UdfFail -Code 5 -Step "install" -Remedy "exakit udf-setup --language rust --yes" -Message "The install was not confirmed; nothing changed.") }
+        return (Set-UdfFail -Code 6 -Step "install" -Remedy "exakit logs" -Message "The launcher could not install the $($script:UdfRustAlias) container (see: exakit logs).")
+    }
+    Set-ExakitManifestValue "components.udf_devkit.containers.$($script:UdfRustAlias)" ("" + $script:UdfContainer.url)
+    Add-UdfLanguage "rust"
+    Set-ExakitManifestValue "components.udf_devkit.validated" $false
+    $script:UdfSmokeLines = @()
+    $sdk = (@(Get-UdfContainerPins -Language "rust") | Where-Object { $_ -like "exasol-udf-sdk==*" } | Select-Object -First 1) -replace "^.*==", ""
+    Ok "Rust UDFs: the $($script:UdfRustAlias) container is installed (rustc $($script:UdfContainer.runtime.rustc), exasol-udf-sdk $sdk)"
+    Info "The Rust smoke UDF arrives with the next kit step; until then: exasol slc list shows $($script:UdfRustAlias)"
+    return $true
 }
 
 function Install-UdfDevkit {
@@ -191,16 +543,28 @@ function Install-UdfDevkit {
         Set-ExakitFailureReason "the Exasol launcher is older than $($script:UdfMinLauncher)"
         return $false
     }
+    # EXAKIT_UDF_LANGUAGE picks what the install sets up; a value that is
+    # neither language is refused before anything is recorded.
+    $problem = Get-UdfLanguageProblem $script:UdfLanguage
+    if ($problem) {
+        Warn2 $problem
+        Set-ExakitFailureReason "EXAKIT_UDF_LANGUAGE is not python or rust"
+        return $false
+    }
     Set-ExakitManifestValue "components.udf_devkit.version" $script:UdfDevkitVersion
     Set-ExakitManifestValue "components.udf_devkit.schema" $script:UdfSchema
-    if (Test-ExakitDbReachable) {
-        $script:UdfYes = $true
-        try {
-            if (-not (Install-UdfDevkitOfficial)) { Warn2 "Python UDFs are not set up yet - run: exakit udf-setup" }
-        } finally { $script:UdfYes = $false }
-    } else {
-        Info "Start the database, then set up Python UDFs with: exakit udf-setup"
+    # The container is part of the install; with no database up, it is the
+    # first thing `exakit udf-setup` does.
+    if (-not (Test-ExakitDbReachable)) {
+        Info "Start the database, then set up $($script:UdfLanguage) UDFs with: exakit udf-setup --language $($script:UdfLanguage)"
+        return $true
     }
+    $script:UdfYes = $true
+    try {
+        if ($script:UdfLanguage -eq "rust") {
+            if (-not (Install-UdfDevkitRust)) { Warn2 "Rust UDFs are not set up yet ($($script:UdfFail.Message)) - run: exakit udf-setup --language rust" }
+        } elseif (-not (Install-UdfDevkitOfficial)) { Warn2 "Python UDFs are not set up yet - run: exakit udf-setup" }
+    } finally { $script:UdfYes = $false }
     return $true
 }
 
@@ -226,7 +590,11 @@ function Update-UdfDevkit {
     Ok "udf-devkit $(if ($current) { $current } else { 'not installed' }) -> $target"
 }
 
-function Get-UdfDevkitSummary { return "Python UDFs: exakit udf-setup" }
+function Get-UdfDevkitSummary {
+    $languages = @(("" + (Get-ExakitManifestValue "components.udf_devkit.languages")) -split ",")
+    if ($languages -contains "rust") { return "Python UDFs: exakit udf-setup; Rust UDFs: alias $($script:UdfRustAlias) (exasol slc list)" }
+    return "Python UDFs: exakit udf-setup"
+}
 
 function Uninstall-UdfDevkit {
     param([switch]$DryRun)
@@ -239,7 +607,7 @@ function Uninstall-UdfDevkit {
     Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $script:UdfDevkitHome
     Remove-ExakitManifestValue "components.udf_devkit"
     Remove-ExakitManifestValue "desired.udf_devkit"
-    Info "Containers stay installed in the database; remove one with: exasol slc remove <alias> ($($script:UdfDefaultAlias), $($script:UdfBuildAlias))"
+    Info "Containers stay installed in the database; remove one with: exasol slc remove <alias> ($($script:UdfDefaultAlias), $($script:UdfBuildAlias), $($script:UdfRustAlias))"
     OkStep "udf-devkit removed - reinstall any time with: exakit marketplace udf-devkit"
     return $true
 }
@@ -252,60 +620,118 @@ function Assert-UdfDevkitInstalled {
 
 function Get-UdfIdentifier {
     param([string]$Name)
-    $result = Invoke-UdfTool -ToolArgs @("identifier", $Name)
-    if ($result[0] -ne 0) { Fail $result[2] }
+    $result = Invoke-UdfTool -NoConnection -ToolArgs @("identifier", $Name)
+    if ($result[0] -ne 0) { Deny-ExakitInput $result[2] }
     return @($result[1])[0]
 }
 
+# Assert-UdfDevkitInstalledFor - the udf-setup and udf-use form of the check: a
+# refusal (5, step select-container) with the marketplace as remedy.
+function Assert-UdfDevkitInstalledFor {
+    param([Parameter(Mandatory)][string]$Language)
+    if (-not (Get-UdfDevkitInstalledVersion)) {
+        Exit-UdfRefusal -Code 5 -Language $Language -Step "select-container" -Message "The UDF dev kit is not installed." -Remedy "exakit marketplace udf-devkit"
+    }
+}
+
+# Install-UdfTarball - the launcher installs (or updates) the container under
+# the alias through the restart, the smoke UDF proves it (Python; a Rust
+# container has no smoke UDF yet and is recorded as not validated), and the
+# alias is recorded with where the container came from. $false with UdfFail
+# set. Twin of _udf_install_tarball.
 function Install-UdfTarball {
-    param([string]$Tarball, [string]$Alias, [string]$Source, [string[]]$Packages = @())
+    param([string]$Tarball, [string]$Alias, [string]$Language, [string]$Source, [string[]]$Packages = @())
     $verb = if (@(Get-UdfDevkitInstalledAliases) -contains $Alias) { "update" } else { "install" }
     $done = Invoke-UdfWithRestart -What "Installing the container as $Alias" -Action {
-        (Invoke-UdfSlc -SlcArgs @("custom", $verb, "--source", $Tarball, "--alias", $Alias, "--language", $script:UdfLanguage, "--auto-approve"))[0] -eq 0 }
-    if (-not $done) { Fail "The launcher could not install the container as $Alias (see: exakit logs)." }
-    if (Test-UdfDevkitSmoke -Alias $Alias -Packages $Packages) {
-        Set-ExakitManifestValue "components.udf_devkit.containers.$Alias" $Source
+        (Invoke-UdfSlc -SlcArgs @("custom", $verb, "--source", $Tarball, "--alias", $Alias, "--language", $Language, "--auto-approve"))[0] -eq 0 }
+    if (-not $done) {
+        if ($script:UdfDeclined) { return (Set-UdfFail -Code 5 -Step "install" -Remedy "" -Message "The install was not confirmed; nothing changed.") }
+        return (Set-UdfFail -Code 6 -Step "install" -Remedy "exakit logs" -Message "The launcher could not install the container as $Alias (see: exakit logs).")
     }
+    if ($Language -eq "rust") {
+        Set-ExakitManifestValue "components.udf_devkit.validated" $false
+        $script:UdfSmokeLines = @()
+        Info "The Rust smoke UDF arrives with the next kit step; until then: exasol slc list shows $Alias"
+    } elseif (-not (Test-UdfDevkitSmoke -Alias $Alias -Packages $Packages)) { return $false }
+    Set-ExakitManifestValue "components.udf_devkit.containers.$Alias" $Source
+    return $true
 }
 
+# Invoke-CmdUdfSetup [--language python|rust] [--force] [--yes] [--json] - the
+# official Python container (PYTHON3) or the matrix's Rust container (RUST).
 function Invoke-CmdUdfSetup {
     param([string[]]$CmdArgs = @())
-    $force = $false
-    foreach ($arg in $CmdArgs) {
-        switch ($arg) {
-            "--force" { $force = $true }
-            { $_ -in @("--yes", "-y") } { $script:UdfYes = $true }
-            default { Fail "udf-setup takes --force (reinstall the container) and --yes, nothing else: $arg" }
-        }
+    $force = $false; $language = $script:UdfLanguage; $json = $false
+    for ($i = 0; $i -lt $CmdArgs.Count; $i++) {
+        $arg = $CmdArgs[$i]
+        if ($arg -eq "--force") { $force = $true }
+        elseif ($arg -in @("--yes", "-y")) { $script:UdfYes = $true }
+        elseif ($arg -in @("--json", "-j")) { $json = $true; $script:ExakitRefusalJson = $true }
+        elseif ($arg -eq "--language") { $i++; if ($i -ge $CmdArgs.Count) { Deny-ExakitInput "--language needs python or rust" }; $language = $CmdArgs[$i] }
+        else { Deny-ExakitInput "udf-setup takes --force (reinstall the container), --language python|rust, --yes and --json, nothing else: $arg" }
     }
-    Assert-UdfDevkitInstalled
-    [void](Install-UdfDevkitOfficial -Force $force)
+    $problem = Get-UdfLanguageProblem $language
+    if ($problem) { Deny-ExakitInput $problem }
+    if ($json) { Enable-UdfJson }
+    Assert-UdfDevkitInstalledFor -Language $language
+    if ($language -eq "rust") {
+        if (-not (Install-UdfDevkitRust)) { Exit-UdfLastFail -Language "rust" }
+        Write-UdfDone -Language "rust" -Alias $script:UdfRustAlias
+    } else {
+        if (-not (Install-UdfDevkitOfficial -Force $force)) { Exit-UdfLastFail -Language "python" }
+        Write-UdfDone -Language "python" -Alias $script:UdfOfficialAlias
+    }
 }
 
+# Invoke-CmdUdfUse default|<container.tar.gz> [--language python|rust] [--alias
+# NAME] [--yes] [--json] | --list - default is the matrix's container for this
+# database (Python: PYTHON3_ML; rust: RUST); a tarball is yours.
 function Invoke-CmdUdfUse {
     param([string[]]$CmdArgs = @())
-    $what = ""; $alias = ""; $list = $false
+    $what = ""; $alias = ""; $list = $false; $language = $script:UdfLanguage; $json = $false
     for ($i = 0; $i -lt $CmdArgs.Count; $i++) {
         $arg = $CmdArgs[$i]
         if ($arg -eq "--list") { $list = $true }
         elseif ($arg -in @("--yes", "-y")) { $script:UdfYes = $true }
-        elseif ($arg -eq "--alias") { $i++; if ($i -ge $CmdArgs.Count) { Fail "--alias needs a name" }; $alias = $CmdArgs[$i] }
-        elseif ($arg.StartsWith("-")) { Fail "Unknown option for udf-use: $arg (supported: --alias, --list, --yes)" }
-        elseif ($what) { Fail "Name one thing to install: default, or one container tarball" }
+        elseif ($arg -in @("--json", "-j")) { $json = $true; $script:ExakitRefusalJson = $true }
+        elseif ($arg -eq "--alias") { $i++; if ($i -ge $CmdArgs.Count) { Deny-ExakitInput "--alias needs a name" }; $alias = $CmdArgs[$i] }
+        elseif ($arg -eq "--language") { $i++; if ($i -ge $CmdArgs.Count) { Deny-ExakitInput "--language needs python or rust" }; $language = $CmdArgs[$i] }
+        elseif ($arg.StartsWith("-")) { Deny-ExakitInput "Unknown option for udf-use: $arg (supported: --alias, --language, --list, --yes, --json)" }
+        elseif ($what) { Deny-ExakitInput "Name one thing to install: default, or one container tarball" }
         else { $what = $arg }
     }
-    Assert-UdfDevkitInstalled
-    if ($list) { (Invoke-UdfSlc -SlcArgs @("list"))[1] | ForEach-Object { Write-Host $_ }; return }
-    if (-not $what) { Fail "Name what to install: exakit udf-use default, or exakit udf-use <container.tar.gz>." }
-    if (-not (Test-ExakitDbReachable)) { Fail "The database is not running. Start it with: exakit start" }
-    if (-not (Test-UdfDevkitLauncher)) { Fail "The Exasol launcher is too old for containers." }
-    if ($what -eq "default") {
-        Fail "No prebuilt container $(Get-UdfDevkitLatest) is published for this machine yet. Build one from a requirements file with: exakit udf-build requirements.txt - or install your own tarball with: exakit udf-use <file>"
+    $problem = Get-UdfLanguageProblem $language
+    if ($problem) { Deny-ExakitInput $problem }
+    if ($list) {
+        Assert-UdfDevkitInstalled
+        (Invoke-UdfSlc -SlcArgs @("list"))[1] | ForEach-Object { Write-Host $_ }
+        return
     }
-    if (-not ($what.EndsWith(".tar.gz") -or $what.EndsWith(".tgz"))) { Fail "$what is not a container tarball (.tar.gz)." }
-    if (-not (Test-Path $what -PathType Leaf)) { Fail "$what is not a file." }
-    if (-not $alias) { $alias = $script:UdfBuildAlias }
-    Install-UdfTarball -Tarball (Resolve-Path $what).Path -Alias (Get-UdfIdentifier $alias) -Source $what
+    if (-not $what) { Deny-ExakitInput "Name what to install: exakit udf-use default, or exakit udf-use <container.tar.gz>." }
+    if ($what -ne "default") {
+        if (-not ($what.EndsWith(".tar.gz") -or $what.EndsWith(".tgz"))) { Deny-ExakitInput "$what is not a container tarball (.tar.gz)." }
+        if (-not (Test-Path $what -PathType Leaf)) { Deny-ExakitInput "$what is not a file." }
+        if (-not $alias) { $alias = $script:UdfBuildAlias }
+        $alias = Get-UdfIdentifier $alias
+    }
+    if ($json) { Enable-UdfJson }
+    Assert-UdfDevkitInstalledFor -Language $language
+    if ($what -eq "default") {
+        if ($language -eq "rust") {
+            if (-not (Install-UdfDevkitRust)) { Exit-UdfLastFail -Language "rust" }
+            Write-UdfDone -Language "rust" -Alias $script:UdfRustAlias
+        } else {
+            if (-not (Install-UdfDevkitDefault)) { Exit-UdfLastFail -Language "python" }
+            Write-UdfDone -Language "python" -Alias $script:UdfDefaultAlias
+        }
+        return
+    }
+    $script:UdfContainer = $null
+    $arch = Get-UdfArch
+    if ($arch[0]) { $script:UdfContainer = [pscustomobject]@{ url = ""; sha256 = ""; db_versions = ""; DbArch = $arch[1] } }
+    if (-not (Test-UdfReady -Step "install")) { Exit-UdfLastFail -Language $language }
+    if (-not (Install-UdfTarball -Tarball (Resolve-Path $what).Path -Alias $alias -Language $language -Source $what)) { Exit-UdfLastFail -Language $language }
+    Write-UdfDone -Language $language -Alias $alias
 }
 
 # Find-UdfContainerRuntime - the engine udf-build's exaslct talks to, checked
@@ -388,7 +814,9 @@ function Invoke-CmdUdfBuild {
     if ($built[0] -ne 0) { Fail "The container build failed (see: exakit logs)." }
     $tarball = ((@($built[1])[-1]) | ConvertFrom-Json).tarball
     if (-not ($tarball -and (Test-Path $tarball))) { Fail "The container build did not report its tarball (see: exakit logs)." }
-    Install-UdfTarball -Tarball $tarball -Alias $alias -Source $req -Packages @($packages | ForEach-Object { $_[0] })
+    if (-not (Install-UdfTarball -Tarball $tarball -Alias $alias -Language "python" -Source $req -Packages @($packages | ForEach-Object { $_[0] }))) {
+        if ($script:UdfFail.Step -ne "smoke") { Fail $script:UdfFail.Message }
+    }
 }
 
 function Invoke-CmdUdfFile {

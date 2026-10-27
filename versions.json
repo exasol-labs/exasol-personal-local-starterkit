@@ -42,7 +42,7 @@
       "severity": "normal"
     },
     "skills": {
-      "version": "1.18.3",
+      "version": "1.18.4",
       "severity": "normal"
     },
     "dash-server": {
@@ -101,7 +101,79 @@
     },
     "udf-devkit": {
       "version": "0.1.0",
-      "severity": "normal"
+      "severity": "normal",
+      "containers": [
+        {
+          "language": "python",
+          "alias": "PYTHON3_ML",
+          "kind": "prebuilt",
+          "arch": "x86_64",
+          "db_versions": ">=2026.1",
+          "runtime": {
+            "python": "3.12"
+          },
+          "packages": {
+            "scikit-learn": "1.9.0",
+            "pandas": "2.3.3",
+            "numpy": "2.4.6",
+            "scipy": "1.18.0"
+          },
+          "url": "https://github.com/exasol/script-languages-release/releases/download/12.0.0/standard-EXASOL-all-python-3.12_release_x64_12.0.0.tar.gz",
+          "sha256": "c16106076dc9932104cb2662ee758d011c9a220e72435cac16b03e5bc96399e7",
+          "size": 866462911
+        },
+        {
+          "language": "python",
+          "alias": "PYTHON3_ML",
+          "kind": "prebuilt",
+          "arch": "aarch64",
+          "db_versions": ">=2026.1",
+          "runtime": {
+            "python": "3.12"
+          },
+          "packages": {
+            "scikit-learn": "1.9.0",
+            "pandas": "2.3.3",
+            "numpy": "2.4.6",
+            "scipy": "1.18.0"
+          },
+          "url": "https://github.com/exasol/script-languages-release/releases/download/12.0.0/standard-EXASOL-all-python-3.12_release_arm64_12.0.0.tar.gz",
+          "sha256": "35d7903e4a8cac398ad33a7b351da80dfe9d8a860283adaf715b65ac4b69cd6b",
+          "size": 842133548
+        },
+        {
+          "language": "rust",
+          "alias": "RUST",
+          "kind": "prebuilt",
+          "arch": "x86_64",
+          "db_versions": ">=2026.1",
+          "runtime": {
+            "rustc": "1.98.1"
+          },
+          "crates": {
+            "exasol-udf-sdk": "0.33.0"
+          },
+          "url": "https://github.com/exasol-labs/language-container-rs/releases/download/v0.33.0/lc-rust-0.33.0.tar.gz",
+          "sha256": "eeedf5f2f8f7a4ad3a329065e516f93106412f270280bf47dede8e5023985245",
+          "size": 10238906
+        },
+        {
+          "language": "rust",
+          "alias": "RUST",
+          "kind": "prebuilt",
+          "arch": "aarch64",
+          "db_versions": ">=2026.1",
+          "runtime": {
+            "rustc": "1.98.1"
+          },
+          "crates": {
+            "exasol-udf-sdk": "0.33.0"
+          },
+          "url": "https://github.com/exasol-labs/language-container-rs/releases/download/v0.33.0/lc-rust-0.33.0-aarch64.tar.gz",
+          "sha256": "de311ae8acadd30579373820d00b92364866880c15bf2edf8284567a8aaa5f8e",
+          "size": 9574265
+        }
+      ]
     }
   }
 }

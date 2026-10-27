@@ -72,7 +72,7 @@ The base install stays small. When you want more, you pick an add-on by the outc
 | [Exasol&nbsp;Scheduler](https://github.com/exasol-labs/exasol-scheduler) | SQL that runs on a timetable inside the database. The jobs are rows in a table |
 | [dbt-exasol](https://github.com/exasol/dbt-exasol) | Repeatable SQL models built, tested and documented with dbt against the local database |
 | [Notebooks](https://github.com/exasol/notebook-connector) | JupyterLab connected to the local database (no password in any notebook): a quickstart and an explore notebook for the Data Scientist, a quickstart, a training notebook (runs logged to your MLflow) and a scoring notebook for the ML Engineer, all on any described dataset. JupyterLab, Marimo or your Positron: `exakit notebook` |
-| UDF&nbsp;dev&nbsp;kit | Python UDFs on the local database: `exakit udf-setup` installs the Python container (the database restarts), `udf-build` builds one from your pinned requirements, `model put` brings in a model trained anywhere (digest recorded) and `model template` makes the scoring UDF for it |
+| UDF&nbsp;dev&nbsp;kit | Python and Rust UDFs on the local database: `exakit udf-setup` installs the Python container (the database restarts), `udf-use default` the prebuilt machine-learning one picked for your database's architecture and verified against its pinned digest (scikit-learn, pandas, numpy, scipy), `--language rust` the pinned Rust container, `udf-build` builds one from your pinned requirements, `model put` brings in a model trained anywhere (digest recorded) and `model template` makes the scoring UDF for it |
 
 
 ### JSON support
