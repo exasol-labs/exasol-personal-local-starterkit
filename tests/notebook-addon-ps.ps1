@@ -28,7 +28,7 @@ try {
     Write-Host "the install is one pinned resolution:"
     $script:NotebookVersion = "3.1.0"
     $specs = @(Get-NotebookSpecs)
-    Check "the connector, pinned, with its extras" "exasol-notebook-connector[bucketfs,ibis,pyexasol,sqlalchemy]==3.1.0" $specs[0]
+    Check "the connector, pinned, with its extras (notebook-dependencies: ipywidgets, ipyfilechooser, matplotlib, wordcloud, stopwatch.py - the AI Lab notebooks' first cell)" "exasol-notebook-connector[bucketfs,ibis,pyexasol,sqlalchemy,notebook-dependencies]==3.1.0" $specs[0]
     Contains "the kernel package" "ipykernel>=6.29,<8" ($specs -join " ")
     Contains "the MLflow client, not the server" "mlflow-skinny>=3,<4" ($specs -join " ")
     Contains "Langfuse SDK major 5" "langfuse>=5,<6" ($specs -join " ")
@@ -51,7 +51,7 @@ try {
     $script:NotebookAddJupyterLab = $true
     $specs = @(Get-NotebookSpecs)
     $script:NotebookAddJupyterLab = $false
-    Check "JupyterLab ticked: the connector's jupyter extra, no separate spec" "exasol-notebook-connector[bucketfs,ibis,pyexasol,sqlalchemy,jupyter]==3.1.0" $specs[0]
+    Check "JupyterLab ticked: the connector's jupyter extra, no separate spec" "exasol-notebook-connector[bucketfs,ibis,pyexasol,sqlalchemy,notebook-dependencies,jupyter]==3.1.0" $specs[0]
     Check "and its version held by the pin" "jupyterlab==$pinJ" (@($specs | Where-Object { $_ -like "jupyterlab*" }) -join ",")
     $script:NotebookAddMarimo = $true
     Check "Marimo ticked: marimo at its pin" "marimo==$pinM" (@(Get-NotebookSpecs | Where-Object { $_ -like "marimo*" }) -join ",")
@@ -161,7 +161,7 @@ try {
     Update-Notebook 6>$null
     $logged = $script:LoggedArgs -join " "
     Contains "the update's resolution keeps Marimo at the versions.json pin" "marimo==$pinM" $logged
-    Contains "and JupyterLab, through the connector's extra" "sqlalchemy,jupyter]==3.1.0" $logged
+    Contains "and JupyterLab, through the connector's extra" "sqlalchemy,notebook-dependencies,jupyter]==3.1.0" $logged
     Contains "at its pin" "jupyterlab==$pinJ" $logged
     $env:EXAKIT_NOTEBOOK_MARIMO_VERSION = "0.26.1"
     try { Update-Notebook 6>$null } finally { Remove-Item Env:EXAKIT_NOTEBOOK_MARIMO_VERSION }
@@ -277,6 +277,7 @@ try {
     function Invoke-NotebookPy {
         param([Parameter(Mandatory)][string]$Script, [hashtable]$Env = @{})
         $script:StoreWrites += "$Script $($Env.EXAKIT_NB_HOST):$($Env.EXAKIT_NB_PORT)"
+        $script:StoreSchema = $Env.EXAKIT_NB_SCHEMA
         return ,@(0, @($script:StoreAnswer))
     }
     function Get-NotebookEnvState { return "ok" }
@@ -297,6 +298,14 @@ try {
     Contains "and the launch says the notebooks use the new connection" "The database connection changed; the notebooks now use the new one" $said
     $master = Get-Content -Raw (Join-Path $script:CredsDir $script:NotebookMasterCred)
     Check "the master password is in no argument the launcher records" $false (($script:StoreWrites -join ",").Contains($master.Trim()))
+    # The store's schema: the connector's jupysql.init reads db_schema, so the
+    # write carries one - the kit's STARTER_KIT, or EXAKIT_NOTEBOOK_SCHEMA.
+    Check "the store write carries the kit's schema, STARTER_KIT, by default" "STARTER_KIT" $script:StoreSchema
+    $script:NotebookSchema = "MY_SCHEMA"
+    $said = (Invoke-NotebookPreflight 6>&1 | Out-String)
+    Check "a launch with EXAKIT_NOTEBOOK_SCHEMA runs through" $true ($said -like "*True*")
+    Check "and hands the store that schema" "MY_SCHEMA" $script:StoreSchema
+    $script:NotebookSchema = "STARTER_KIT"
     Set-Item -Path Function:\Invoke-NotebookPy -Value $realInvokePy
     Remove-ExakitManifestValue "runtime"
 

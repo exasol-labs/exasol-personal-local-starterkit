@@ -92,11 +92,14 @@ EXAKIT_NOTEBOOK_HOME="${EXAKIT_NOTEBOOK_HOME:-$EXAKIT_HOME/notebook}"
 EXAKIT_NOTEBOOK_DIR="${EXAKIT_NOTEBOOK_DIR:-$EXAKIT_HOME/notebooks}"
 EXAKIT_NOTEBOOK_PORT="${EXAKIT_NOTEBOOK_PORT:-8888}"
 # What the venv holds besides the connector. Its extras are the ones its
-# connection module imports (the jupyter extra joins them when the kit installs
-# JupyterLab); the rest serve the kit's notebooks. Langfuse is pinned to SDK
+# connection module imports, plus notebook-dependencies: what the AI Lab
+# notebooks it ships import in their first cell (ipywidgets, ipyfilechooser,
+# matplotlib, wordcloud, stopwatch.py) and what the kit's own role picker
+# needs (ipywidgets). The jupyter extra joins them when the kit installs
+# JupyterLab; the rest serve the kit's notebooks. Langfuse is pinned to SDK
 # major 5 (trace() uses its API; Python >=3.11) and MLflow to 3.x (the client,
 # mlflow-skinny; the server is the exasol-mlflow[server] extra).
-EXAKIT_NOTEBOOK_EXTRAS="bucketfs,ibis,pyexasol,sqlalchemy"
+EXAKIT_NOTEBOOK_EXTRAS="bucketfs,ibis,pyexasol,sqlalchemy,notebook-dependencies"
 EXAKIT_NOTEBOOK_PACKAGES="ipykernel>=6.29,<8 langfuse>=5,<6 openai>=1.40,<3 scikit-learn>=1.4,<2 mlflow-skinny>=3,<4 alembic>=1.13,<2 pyarrow>=14"
 # The kit's own packages, by their distribution names (reinstalled every time).
 EXAKIT_NOTEBOOK_OWN_PACKAGES="exakit-nb exasol-mlflow"
@@ -219,10 +222,13 @@ notebook_write_connection() {
 
 # _notebook_store_write — write_store.py with the connection notebook_write_connection
 # read (its _nbw_* variables); its output, and its status.
+# The store's schema (what the connector's jupysql.init and connections open)
+# is the kit's own, STARTER_KIT, unless EXAKIT_NOTEBOOK_SCHEMA names another.
 _notebook_store_write() {
     SCS_FILE="$_nbw_store" SCS_MASTER_PASSWORD="$(_notebook_secret "$EXAKIT_NOTEBOOK_MASTER_CRED")" \
         EXAKIT_NB_HOST="$_nbw_host" EXAKIT_NB_PORT="$_nbw_port" EXAKIT_NB_USER="${_nbw_user:-sys}" \
-        EXAKIT_NB_PWFILE="$_nbw_pw" _notebook_py write_store.py 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
+        EXAKIT_NB_PWFILE="$_nbw_pw" EXAKIT_NB_SCHEMA="${EXAKIT_NOTEBOOK_SCHEMA:-STARTER_KIT}" \
+        _notebook_py write_store.py 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
 }
 
 # notebook_connected — the connector opens the database from the store.

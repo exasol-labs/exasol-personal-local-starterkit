@@ -40,7 +40,12 @@ $script:NotebookVenv = if ($env:EXAKIT_NOTEBOOK_VENV) { $env:EXAKIT_NOTEBOOK_VEN
 $script:NotebookHome = if ($env:EXAKIT_NOTEBOOK_HOME) { $env:EXAKIT_NOTEBOOK_HOME } else { Join-Path $script:ExakitHome "notebook" }
 $script:NotebookDir = if ($env:EXAKIT_NOTEBOOK_DIR) { $env:EXAKIT_NOTEBOOK_DIR } else { Join-Path $script:ExakitHome "notebooks" }
 $script:NotebookPort = if ($env:EXAKIT_NOTEBOOK_PORT) { $env:EXAKIT_NOTEBOOK_PORT } else { "8888" }
-$script:NotebookExtras = "bucketfs,ibis,pyexasol,sqlalchemy"
+# The connector's extras: what its connection module imports, plus
+# notebook-dependencies (what the AI Lab notebooks it ships import in their
+# first cell, and the ipywidgets the kit's role picker needs).
+$script:NotebookExtras = "bucketfs,ibis,pyexasol,sqlalchemy,notebook-dependencies"
+# The store's schema: the kit's own, STARTER_KIT, unless EXAKIT_NOTEBOOK_SCHEMA names another.
+$script:NotebookSchema = if ($env:EXAKIT_NOTEBOOK_SCHEMA) { $env:EXAKIT_NOTEBOOK_SCHEMA } else { "STARTER_KIT" }
 $script:NotebookPackages = @("ipykernel>=6.29,<8", "langfuse>=5,<6", "openai>=1.40,<3", "scikit-learn>=1.4,<2", "mlflow-skinny>=3,<4", "alembic>=1.13,<2", "pyarrow>=14")
 # The kit's own packages, by their distribution names (reinstalled every time).
 $script:NotebookOwnPackages = @("exakit-nb", "exasol-mlflow")
@@ -202,7 +207,7 @@ function Write-NotebookConnection {
         Invoke-NotebookPy -Script "write_store.py" -Env @{
             SCS_FILE = $store; SCS_MASTER_PASSWORD = (Get-NotebookSecret $script:NotebookMasterCred)
             EXAKIT_NB_HOST = $dsn.Substring(0, $colon); EXAKIT_NB_PORT = $dsn.Substring($colon + 1)
-            EXAKIT_NB_USER = $user; EXAKIT_NB_PWFILE = $pwFile }
+            EXAKIT_NB_USER = $user; EXAKIT_NB_PWFILE = $pwFile; EXAKIT_NB_SCHEMA = $script:NotebookSchema }
     }
     $result = & $write
     if ($result[0] -ne 0) {

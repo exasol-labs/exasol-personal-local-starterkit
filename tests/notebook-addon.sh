@@ -63,7 +63,8 @@ trap cleanup EXIT
 echo "the install is one pinned resolution:"
 EXAKIT_NOTEBOOK_VERSION="3.1.0"
 specs="$(_notebook_specs)"
-check "the connector, pinned, with its extras" "exasol-notebook-connector[bucketfs,ibis,pyexasol,sqlalchemy]==3.1.0" "$(printf '%s\n' "$specs" | head -1)"
+check "the connector, pinned, with its extras (notebook-dependencies: ipywidgets, ipyfilechooser, matplotlib, wordcloud, stopwatch.py - the AI Lab notebooks' first cell)" \
+    "exasol-notebook-connector[bucketfs,ibis,pyexasol,sqlalchemy,notebook-dependencies]==3.1.0" "$(printf '%s\n' "$specs" | head -1)"
 contains "the kernel package" "ipykernel>=6.29,<8" "$specs"
 contains "the client model library" "scikit-learn>=1.4,<2" "$specs"
 contains "the MLflow client, not the server" "mlflow-skinny>=3,<4" "$specs"
@@ -82,7 +83,7 @@ check "EXAKIT_NOTEBOOK_MARIMO_VERSION outranks the pin" "0.26.1" "$(EXAKIT_NOTEB
 check "a pin outside the safe charset is no pin" "1" "$(EXAKIT_NOTEBOOK_MARIMO_VERSION='1; rm' notebook_frontend_pin marimo >/dev/null; echo $?)"
 specs="$(NOTEBOOK_ADD_JUPYTERLAB=1 _notebook_specs)"
 check "JupyterLab ticked: the connector's jupyter extra, no separate spec" \
-    "exasol-notebook-connector[bucketfs,ibis,pyexasol,sqlalchemy,jupyter]==3.1.0" "$(printf '%s\n' "$specs" | head -1)"
+    "exasol-notebook-connector[bucketfs,ibis,pyexasol,sqlalchemy,notebook-dependencies,jupyter]==3.1.0" "$(printf '%s\n' "$specs" | head -1)"
 check "and its version held by the pin" "jupyterlab==$PIN_J" "$(printf '%s\n' "$specs" | grep '^jupyterlab')"
 check "Marimo ticked: marimo at its pin" "marimo==$PIN_M" "$(NOTEBOOK_ADD_MARIMO=1 _notebook_specs | grep '^marimo')"
 check "Marimo with no pin is left out, and said" "|1" \
@@ -205,7 +206,7 @@ out="$(update_with "$WORK/uv1.log")"
 contains "the update says the add-on is current" "already current" "$out"
 check "its resolution keeps Marimo at the versions.json pin" "1" "$(grep -c "marimo==$PIN_M" "$WORK/uv1.log")"
 check "and JupyterLab, through the connector's extra" "1|1" \
-    "$(grep -c 'sqlalchemy,jupyter\]==3.1.0' "$WORK/uv1.log")|$(grep -c "jupyterlab==$PIN_J" "$WORK/uv1.log")"
+    "$(grep -c 'sqlalchemy,notebook-dependencies,jupyter\]==3.1.0' "$WORK/uv1.log")|$(grep -c "jupyterlab==$PIN_J" "$WORK/uv1.log")"
 update_with "$WORK/uv2.log" EXAKIT_NOTEBOOK_MARIMO_VERSION=0.26.1 >/dev/null
 check "a changed Marimo pin is what the update installs" "1|0" \
     "$(grep -c 'marimo==0.26.1' "$WORK/uv2.log")|$(grep -c "marimo==$PIN_M" "$WORK/uv2.log")"
@@ -232,7 +233,7 @@ echo "the connection is re-read on every launch: a changed database port reaches
 launch_store_write() { # launch_store_write <dsn> <what the write answers> - the preflight with the launcher's other steps stubbed; its output
     ( manifest_set runtime.dsn "$1"; manifest_set runtime.user sys; manifest_set runtime.password_file "$WORK/pw"
       _lsw_answer="$2"
-      _notebook_py() { printf '%s %s:%s\n' "$1" "$EXAKIT_NB_HOST" "$EXAKIT_NB_PORT" >> "$WORK/store-writes"; printf '%s\n' "$_lsw_answer"; }
+      _notebook_py() { printf '%s %s:%s\n' "$1" "$EXAKIT_NB_HOST" "$EXAKIT_NB_PORT" >> "$WORK/store-writes"; printf '%s\n' "$EXAKIT_NB_SCHEMA" > "$WORK/store-schema"; printf '%s\n' "$_lsw_answer"; }
       notebook_env_state() { echo ok; }; _notebook_on_terminal() { return 1; }; exakit_db_reachable() { return 0; }
       notebook_register_kernel() { return 0; }; _notebook_report_copied() { :; }; notebook_copy_notebooks() { :; }
       _notebook_preflight; echo "rc=$?" ) 2>&1
@@ -246,6 +247,12 @@ check "the store is written again, now with the new port: nothing is cached betw
     "write_store.py 127.0.0.1:8563|write_store.py 127.0.0.1:8564" "$(tr '\n' '|' < "$WORK/store-writes" | sed 's/|$//')"
 contains "and the launch says the notebooks use the new connection" "The database connection changed; the notebooks now use the new one" "$out"
 check "the master password is in no argument the launcher records" "0" "$(grep -c "$(cat "$EXAKIT_CREDS_DIR/$EXAKIT_NOTEBOOK_MASTER_CRED")" "$WORK/store-writes" | tr -d ' ')"
+# The store's schema: the connector's jupysql.init reads db_schema, so the
+# write carries one - the kit's STARTER_KIT, or EXAKIT_NOTEBOOK_SCHEMA.
+check "the store write carries the kit's schema, STARTER_KIT, by default" "STARTER_KIT" "$(cat "$WORK/store-schema")"
+out="$(EXAKIT_NOTEBOOK_SCHEMA=MY_SCHEMA launch_store_write 127.0.0.1:8564 same)"
+contains "a launch with EXAKIT_NOTEBOOK_SCHEMA runs through" "rc=0" "$out"
+check "and hands the store that schema" "MY_SCHEMA" "$(cat "$WORK/store-schema")"
 manifest_del runtime.dsn; manifest_del runtime.user; manifest_del runtime.password_file
 
 echo "exakit logs notebook:"
