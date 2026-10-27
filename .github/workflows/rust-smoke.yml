@@ -48,6 +48,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: verify both bundled smoke asset pins and ELF architectures
+        run: python3 tests/test_rust_smoke_assets.py
+
       # aarch64 is built under QEMU on the x86_64 runner: slower, but the same
       # image, toolchain and tool as the x86_64 build, with no cross-linker to
       # keep in step.
@@ -84,6 +87,7 @@ jobs:
               so="$(find target -path "*/release/libexakit_smoke.so" | head -1)"
               [ -n "$so" ] || { echo "no libexakit_smoke.so was produced" >&2; exit 1; }
               cargo exasol-udf validate "$so"
+              cargo exasol-udf validate "/work/prebuilt/libexakit_smoke-${{ matrix.arch }}.so" --deny-unknown-deps
               cp "$so" "/dist/libexakit_smoke-${{ matrix.arch }}.so"
             '
           cd dist

@@ -1,4 +1,6 @@
 import importlib.util
+import contextlib
+import io
 import json
 import os
 import sys
@@ -33,6 +35,8 @@ class RustUdfTests(unittest.TestCase):
         self.assertIn("ctx.get_f64(index)?", code)
         self.assertIn("[0.5, -1.25]", code)
         self.assertEqual(json.loads((project / "exakit-rust.json").read_text())["features"], ["DATE_YEAR", "CAT_A"])
+        self.assertTrue(rust.create("score_model", str(source))["reused"])
+        source.write_text(source.read_text().replace("0.5", "0.6"))
         with self.assertRaisesRegex(rust.Refused, "already exists"):
             rust.create("score_model", str(source))
 
@@ -72,6 +76,7 @@ class RustUdfTests(unittest.TestCase):
             seen.extend(args)
             artifact.parent.mkdir(parents=True)
             artifact.write_bytes(b"ELF fixture")
+            (project / "Cargo.lock").write_text("# pinned fixture\n")
 
         with patch.object(rust.platform, "system", return_value="Darwin"), \
                 patch.object(rust, "architecture", return_value="aarch64"), \
@@ -82,6 +87,42 @@ class RustUdfTests(unittest.TestCase):
         self.assertIn("linux/arm64", seen)
         self.assertIn("exakit-rust-cargo-aarch64:/cargo-home", seen)
         self.assertIn(rust.IMAGE, seen)
+        self.assertEqual(len(record["cargo_lock_sha256"]), 64)
+
+    def test_deploy_requires_validated_rust_container(self):
+        result = rust.create("score_model", None)
+        project = Path(result["project"])
+        artifact = project / "target/release/libscore_model.so"
+        artifact.parent.mkdir(parents=True)
+        artifact.write_bytes(b"ELF fixture")
+        lock = project / "Cargo.lock"
+        lock.write_text("# pinned fixture\n")
+        row = rust.rust_pins(rust.architecture())
+        (project / "build.json").write_text(json.dumps({"artifact": str(artifact),
+            "sha256": __import__("hashlib").sha256(artifact.read_bytes()).hexdigest(),
+            "arch": rust.architecture(), "sdk": row["crates"]["exasol-udf-sdk"],
+            "rustc": row["runtime"]["rustc"],
+            "cargo_lock_sha256": __import__("hashlib").sha256(lock.read_bytes()).hexdigest(),
+            "container_sha256": row["sha256"]}))
+        with self.assertRaisesRegex(rust.Refused, "validated RUST container"):
+            rust.deploy("score_model", "SCORING")
+
+    def test_cli_bad_arguments_keep_json_contract(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = rust.main(["deploy", "--json"])
+        self.assertEqual(code, 2)
+        answer = json.loads(output.getvalue())
+        self.assertFalse(answer["ok"])
+        self.assertEqual(answer["step"], "deploy")
+        self.assertEqual(answer["language"], "rust")
+        self.assertEqual(answer["reason"], answer["error"])
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = rust.main(["new", "missing_model", "--coefficients",
+                              str(Path(self.temp.name) / "missing.json"), "--json"])
+        self.assertEqual(code, 2)
+        self.assertIn("Cannot read the coefficients file", json.loads(output.getvalue())["reason"])
 
 
 if __name__ == "__main__":

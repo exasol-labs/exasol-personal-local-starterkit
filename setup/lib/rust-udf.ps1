@@ -25,7 +25,9 @@ function Invoke-CmdRustUdf {
     }
     foreach ($line in @($result[1])) { Write-Output $line }
     if ($result[0] -ne 0) {
-        if ($result[2]) { Write-Error $result[2] }
+        # Write-Error becomes a terminating exception under the launcher's
+        # ErrorActionPreference=Stop, hiding the Python tool's precise exit code.
+        if ($result[2]) { [Console]::Error.WriteLine($result[2]) }
         exit ([int]$result[0])
     }
 }

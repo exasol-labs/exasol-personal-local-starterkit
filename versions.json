@@ -158,10 +158,11 @@
           "size": 10238906,
           "validated": false,
           "smoke_asset": {
-            "url": "https://github.com/exasol-labs/exasol-personal-local-starterkit/releases/download/rust-smoke-v0.33.0/libexakit_smoke-x86_64.so",
-            "sha256": "set after the first CI build (rust-smoke.yml: the sha256 it prints for this arch)",
-            "size": "set after the first CI build (rust-smoke.yml: the size it prints for this arch)",
-            "note": "libexakit_smoke.so built by .github/workflows/rust-smoke.yml inside rust:1.98.1-trixie with cargo-exasol-udf 0.33.0; placeholders until the rust-smoke-v0.33.0 tag is built - udf-setup --language rust installs the container and reports exit 7 (step smoke) until then"
+            "url": null,
+            "bundled_path": "udf/rust-smoke/prebuilt/libexakit_smoke-x86_64.so",
+            "sha256": "c2ca03ed34155e24bc61c1f8c591ac85a1ecd8c60c53b2901fa552aae6cc7434",
+            "size": 326536,
+            "note": "Built and validated inside docker.io/library/rust:1.98.1-trixie with cargo-exasol-udf 0.33.0. The kit verifies the bundled library before use."
           }
         },
         {
@@ -181,10 +182,11 @@
           "size": 9574265,
           "validated": false,
           "smoke_asset": {
-            "url": "https://github.com/exasol-labs/exasol-personal-local-starterkit/releases/download/rust-smoke-v0.33.0/libexakit_smoke-aarch64.so",
-            "sha256": "set after the first CI build (rust-smoke.yml: the sha256 it prints for this arch)",
-            "size": "set after the first CI build (rust-smoke.yml: the size it prints for this arch)",
-            "note": "libexakit_smoke.so built by .github/workflows/rust-smoke.yml inside rust:1.98.1-trixie with cargo-exasol-udf 0.33.0; placeholders until the rust-smoke-v0.33.0 tag is built - udf-setup --language rust installs the container and reports exit 7 (step smoke) until then"
+            "url": null,
+            "bundled_path": "udf/rust-smoke/prebuilt/libexakit_smoke-aarch64.so",
+            "sha256": "ece7c98550614fd318bdf3614c31126bd2316a2cb235875d147904314cc36b91",
+            "size": 332280,
+            "note": "Built and validated inside docker.io/library/rust:1.98.1-trixie with cargo-exasol-udf 0.33.0. The kit verifies the bundled library before use."
           }
         }
       ]

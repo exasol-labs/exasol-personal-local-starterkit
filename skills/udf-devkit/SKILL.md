@@ -50,8 +50,8 @@ proven by the kit's **prebuilt Rust smoke UDF**: `libexakit_smoke.so`, built by
 CI (`.github/workflows/rust-smoke.yml` from `udf/rust-smoke`, inside
 `rust:1.98.1-trixie` with `cargo-exasol-udf` 0.33.0, one per architecture) and
 pinned as the Rust row's `smoke_asset` in `versions.json`. `exakit udf-setup
---language rust` downloads and verifies it *before* the install (a wrong digest
-is exit 4, step `verify`, and the database is not restarted), copies it into
+--language rust` verifies the bundled Linux library *before* the install (a
+wrong digest is exit 7, step `verify`, and the database is not restarted), copies it into
 the bucket directory as `udf/libexakit_smoke.so`, registers
 `STARTER_KIT.EXAKIT_SMOKE(x BIGINT) RETURNS VARCHAR(2000) AS %udf_object
 /buckets/bfsdefault/default/udf/libexakit_smoke.so`, runs it once and holds
@@ -60,12 +60,11 @@ the reported rustc and sdk against the row (`--json` `smoke`: `container`,
 reinstall (`--force` reinstalls; `udf-use default --language rust` updates it).
 A library the database refuses (`F-UDF-CL-RUST-9001`: its ABI fingerprint
 `SDK_VERSION:RUSTC_VERSION` is not the container's) or a rustc other than the
-pinned one is exit 7, step `smoke`, both versions in the reason. A kit whose
-Rust row still carries the `smoke_asset` placeholders (before the first CI
-build) installs the container and exits 7 at step `smoke` saying the pin is
-missing: the container is usable, not yet proven. Never build the smoke library
-on a Mac: a macOS host cannot emit a Linux `.so`, and only the CI toolchain
-matches the container's fingerprint. A Rust UDF of the user's own is `exakit
+pinned one is exit 7, step `smoke`, both versions in the reason. The kit ships
+both architecture-specific smoke libraries and their SHA-256 and size pins;
+a release URL can be added later as a verified fallback. Build
+inside the pinned Linux image, including when driving Docker from a Mac: a
+macOS host cannot emit a Linux `.so`. A Rust UDF of the user's own is `exakit
 rust-udf` (the next kit step); the smoke UDF's `udf/` folder in the bucket is
 where it goes too.
 

@@ -23,15 +23,21 @@ from pathlib import Path
 
 SDK = "0.33.0"
 RUSTC = "1.98.1"
-IMAGE = "rust:1.98.1-trixie"
+IMAGE = "docker.io/library/rust:1.98.1-trixie"
 NAME = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
 FEATURE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,127}$")
 
 
 class Refused(Exception):
-    def __init__(self, message: str, code: int = 2, remedy: str | None = None):
+    def __init__(self, message: str, code: int = 2, remedy: str | None = None,
+                 step: str | None = None):
         super().__init__(message)
-        self.code, self.remedy = code, remedy
+        self.code, self.remedy, self.step = code, remedy, step
+
+
+class ArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        raise Refused(message)
 
 
 def kit_home() -> Path:
@@ -91,7 +97,27 @@ pub fn {name}(ctx: &mut dyn UdfContext) -> Result<Option<f64>, UdfError> {{
 
 def create(name: str, source: str | None) -> dict:
     project = project_path(name)
+    row = rust_pins(architecture())
+    sdk = row["crates"]["exasol-udf-sdk"]
+    rustc = row["runtime"]["rustc"]
+    if source:
+        try:
+            source_digest = hashlib.sha256(Path(source).expanduser().read_bytes()).hexdigest()
+        except OSError as error:
+            raise Refused(f"Cannot read the coefficients file {source}: {error}") from error
+    else:
+        source_digest = None
     if project.exists():
+        try:
+            recorded = json.loads((project / "exakit-rust.json").read_text(encoding="utf-8"))
+            if (recorded.get("coefficients_source_sha256") == source_digest
+                    and recorded.get("sdk") == sdk and recorded.get("rustc") == rustc
+                    and (project / "Cargo.toml").is_file() and (project / "src/lib.rs").is_file()):
+                return {"ok": True, "name": name, "project": str(project),
+                        "features": recorded["features"], "reused": True,
+                        "next": f"exakit rust-udf build {name}"}
+        except (OSError, ValueError, KeyError):
+            pass
         raise Refused(f"{project} already exists; choose another name. Nothing was overwritten.", 5)
     if source:
         names, weights, bias = coefficients(Path(source).expanduser())
@@ -108,14 +134,13 @@ edition = "2024"
 crate-type = ["cdylib"]
 
 [dependencies]
-exasol-udf-sdk = "={SDK}"
-exasol-udf-macros = "={SDK}"
+exasol-udf-sdk = "={sdk}"
+exasol-udf-macros = "={sdk}"
 ''', encoding="utf-8")
-    (project / "rust-toolchain.toml").write_text(f'[toolchain]\nchannel = "{RUSTC}"\n', encoding="utf-8")
+    (project / "rust-toolchain.toml").write_text(f'[toolchain]\nchannel = "{rustc}"\n', encoding="utf-8")
     (project / "src" / "lib.rs").write_text(rust_source(name, weights, bias), encoding="utf-8")
     manifest = {"name": name, "features": names, "weights": weights, "intercept": bias,
-                "sdk": SDK, "rustc": RUSTC, "coefficients_source_sha256":
-                hashlib.sha256(Path(source).expanduser().read_bytes()).hexdigest() if source else None}
+                "sdk": sdk, "rustc": rustc, "coefficients_source_sha256": source_digest}
     (project / "exakit-rust.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     (project / "README.md").write_text(
         f"# {name}\n\nThe SQL arguments follow `exakit-rust.json` features in order. "
@@ -126,19 +151,46 @@ exasol-udf-macros = "={SDK}"
 
 
 def architecture() -> str:
-    chosen = os.environ.get("EXAKIT_UDF_ARCH", "")
-    if chosen:
-        if chosen not in ("aarch64", "x86_64"):
-            raise Refused("EXAKIT_UDF_ARCH must be aarch64 or x86_64")
-        return chosen
-    machine = platform.machine().lower()
-    if platform.system() == "Windows":
-        return "x86_64"
-    if machine in ("arm64", "aarch64"):
-        return "aarch64"
-    if machine in ("amd64", "x86_64"):
-        return "x86_64"
-    raise Refused(f"No Rust container is pinned for {machine}.", 4, "exakit udf-setup --language rust")
+    # Keep the build target identical to udf-setup's database target, including
+    # the EXAKIT_UDF_ARCH override for non-native deployments.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from udf_tool import database_arch
+    try:
+        return database_arch(platform.machine(), platform.system(), os.environ.get("EXAKIT_UDF_ARCH", ""))
+    except ValueError as error:
+        raise Refused(str(error), 4, "exakit udf-setup --language rust") from error
+
+
+def rust_pins(arch: str) -> dict:
+    versions = Path(__file__).resolve().parents[2] / "versions.json"
+    try:
+        rows = json.loads(versions.read_text(encoding="utf-8"))["components"]["udf-devkit"]["containers"]
+        matches = [row for row in rows if row.get("language") == "rust" and row.get("arch") == arch]
+        if len(matches) != 1:
+            raise ValueError(f"expected one Rust container row for {arch}, found {len(matches)}")
+        row = matches[0]
+        rustc = row["runtime"]["rustc"]
+        sdk = row["crates"]["exasol-udf-sdk"]
+        if not rustc or not sdk or row.get("alias") != "RUST":
+            raise ValueError("Rust runtime, SDK or alias pin is missing")
+        return row
+    except (OSError, KeyError, TypeError, ValueError) as error:
+        raise Refused(f"This kit has no usable Rust pins for {arch}: {error}", 4,
+                      "exakit update") from error
+
+
+def rust_installed(row: dict) -> None:
+    try:
+        manifest = json.loads((kit_home() / "manifest.json").read_text(encoding="utf-8"))
+        installed = manifest["components"]["udf_devkit"]
+        proved = installed["rust"]
+        if (proved.get("validated") is not True or proved.get("rustc") != row["runtime"]["rustc"]
+                or proved.get("sdk") != row["crates"]["exasol-udf-sdk"]
+                or not installed.get("containers", {}).get(row["alias"])):
+            raise ValueError("the RUST container is not installed and validated at the pinned SDK and rustc")
+    except (OSError, KeyError, TypeError, ValueError) as error:
+        raise Refused(f"Rust deployment requires a validated RUST container: {error}", 5,
+                      "exakit udf-setup --language rust") from error
 
 
 def _run(args: list[str], *, cwd: Path | None = None) -> None:
@@ -146,8 +198,9 @@ def _run(args: list[str], *, cwd: Path | None = None) -> None:
     if completed.returncode:
         lines = (completed.stderr or completed.stdout).strip().splitlines()
         detail = lines[-1][:400] if lines else "no diagnostic"
-        raise Refused(f"Rust build or validation failed: {detail}", 7,
-                      "exakit rust-udf build " + (cwd.name if cwd else "<name>"))
+        stage = "validate" if "EXAKIT_STAGE=validate" in (completed.stderr or "") else "build"
+        raise Refused(f"Rust {stage} failed: {detail}", 7,
+                      "exakit rust-udf build " + (cwd.name if cwd else "<name>"), stage)
 
 
 def container_runtime() -> str:
@@ -171,35 +224,40 @@ def build(name: str) -> dict:
     if not (project / "Cargo.toml").is_file():
         raise Refused(f"No Rust project at {project}. Create it with: exakit rust-udf new {name}", 4)
     arch = architecture()
+    row = rust_pins(arch)
+    sdk = row["crates"]["exasol-udf-sdk"]
+    rustc = row["runtime"]["rustc"]
+    try:
+        project_meta = json.loads((project / "exakit-rust.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise Refused(f"Rust project metadata is missing or invalid: {error}", 7,
+                      f"exakit rust-udf new {name}") from error
+    if project_meta.get("sdk") != sdk or project_meta.get("rustc") != rustc:
+        raise Refused(f"Rust project SDK/rustc differs from the container pins {sdk}/{rustc}; create a new project with the current kit.", 7)
     artifact = project / "target" / "release" / f"lib{name}.so"
-    system = platform.system()
-    if system in ("Darwin", "Windows"):
-        runtime = container_runtime()
-        platform_arg = "linux/arm64" if arch == "aarch64" else "linux/amd64"
-        # The command text is fixed; name and path travel as argv / mount args.
-        script = ("set -e; export PATH=$CARGO_HOME/bin:$PATH; "
-                  "if [ ! -x $CARGO_HOME/bin/cargo-exasol-udf ]; then "
-                  f"cargo install cargo-exasol-udf --version ={SDK} --locked; fi; "
-                  "cargo exasol-udf build /work; "
-                  f"cargo exasol-udf validate /work/target/release/lib{name}.so --deny-unknown-deps")
-        _run([runtime, "run", "--rm", "--platform", platform_arg, "-v", f"{project}:/work",
-              "-v", f"exakit-rust-cargo-{arch}:/cargo-home", "-e", "CARGO_HOME=/cargo-home",
-              "-w", "/work", IMAGE, "sh", "-c", script], cwd=project)
-    else:
-        try:
-            found = subprocess.run(["rustc", "--version"], capture_output=True, text=True, check=False)
-        except FileNotFoundError as error:
-            raise Refused(f"Rust UDF needs rustc {RUSTC}; rustc is not installed.", 5,
-                          "exakit rust-udf build " + name) from error
-        if found.returncode or not found.stdout.startswith(f"rustc {RUSTC} "):
-            raise Refused(f"Rust UDF needs rustc {RUSTC}, found {found.stdout.strip() or 'none'}.", 7,
-                          "exakit rust-udf build " + name)
-        _run(["cargo", "exasol-udf", "build", str(project)], cwd=project)
-        _run(["cargo", "exasol-udf", "validate", str(artifact), "--deny-unknown-deps"], cwd=project)
+    runtime = container_runtime()
+    platform_arg = "linux/arm64" if arch == "aarch64" else "linux/amd64"
+    # The pinned Linux image avoids a newer host glibc even on Linux. The
+    # command text is fixed; name and path travel as argv / mount args.
+    script = ("set -e; export PATH=$CARGO_HOME/bin:$PATH; "
+              "if [ ! -x $CARGO_HOME/bin/cargo-exasol-udf ]; then "
+              f"cargo install cargo-exasol-udf --version ={sdk} --locked; fi; "
+              "cargo generate-lockfile; "
+              "echo EXAKIT_STAGE=build >&2; cargo exasol-udf build /work; "
+              "echo EXAKIT_STAGE=validate >&2; "
+              f"cargo exasol-udf validate /work/target/release/lib{name}.so --deny-unknown-deps")
+    _run([runtime, "run", "--rm", "--platform", platform_arg, "-v", f"{project}:/work",
+          "-v", f"exakit-rust-cargo-{arch}:/cargo-home", "-e", "CARGO_HOME=/cargo-home",
+          "-w", "/work", IMAGE, "sh", "-c", script], cwd=project)
     if not artifact.is_file():
         raise Refused(f"The build returned without {artifact}; inspect the build log.", 7)
     digest = hashlib.sha256(artifact.read_bytes()).hexdigest()
-    record = {"sha256": digest, "arch": arch, "sdk": SDK, "rustc": RUSTC, "artifact": str(artifact)}
+    lock = project / "Cargo.lock"
+    if not lock.is_file():
+        raise Refused("The Rust build did not record Cargo.lock; the result is not reproducible.", 7)
+    record = {"sha256": digest, "arch": arch, "sdk": sdk, "rustc": rustc, "artifact": str(artifact),
+              "cargo_lock_sha256": hashlib.sha256(lock.read_bytes()).hexdigest(),
+              "container_sha256": row["sha256"], "image": IMAGE}
     (project / "build.json").write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
     return {"ok": True, "name": name, **record, "next": f"exakit rust-udf deploy {name}"}
 
@@ -231,11 +289,23 @@ def deploy(name: str, schema: str) -> dict:
     except (OSError, ValueError) as error:
         raise Refused(f"{name} has no validated build record: {error}", 4,
                       f"exakit rust-udf build {name}") from error
+    if not isinstance(built, dict) or not isinstance(meta, dict) or not built.get("artifact") or not meta.get("features"):
+        raise Refused("The Rust build record or project metadata is incomplete; rebuild the UDF.", 7,
+                      f"exakit rust-udf build {name}")
     artifact = Path(built["artifact"])
+    arch = architecture()
+    row = rust_pins(arch)
     if (not artifact.is_file() or hashlib.sha256(artifact.read_bytes()).hexdigest() != built["sha256"]
-            or built.get("arch") != architecture() or built.get("sdk") != SDK or built.get("rustc") != RUSTC):
+            or built.get("arch") != arch or built.get("sdk") != row["crates"]["exasol-udf-sdk"]
+            or built.get("rustc") != row["runtime"]["rustc"]):
         raise Refused("The compiled Rust library changed or has the wrong architecture, SDK or rustc; rebuild it.", 7,
                       f"exakit rust-udf build {name}")
+    lock = project / "Cargo.lock"
+    if (not lock.is_file() or built.get("cargo_lock_sha256") != hashlib.sha256(lock.read_bytes()).hexdigest()
+            or built.get("container_sha256") != row["sha256"]):
+        raise Refused("The Cargo lockfile or pinned Rust container changed; rebuild the library.", 7,
+                      f"exakit rust-udf build {name}")
+    rust_installed(row)
     bucket = Path(os.environ.get("EXAKIT_RUST_BUCKET_DIR", ""))
     root = os.environ.get("EXAKIT_RUST_UDF_ROOT", "")
     if not bucket.is_dir() or not root.startswith("/buckets/"):
@@ -270,7 +340,7 @@ def deploy(name: str, schema: str) -> dict:
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="exakit rust-udf")
+    parser = ArgumentParser(prog="exakit rust-udf")
     parser.add_argument("action", choices=("new", "build", "deploy"))
     parser.add_argument("name")
     parser.add_argument("--coefficients")
@@ -293,7 +363,8 @@ def main(argv: list[str]) -> int:
                     print(f"  {key}: {value}")
         return 0
     except Refused as error:
-        payload = {"ok": False, "error": str(error), "step": argv[0] if argv else None,
+        payload = {"ok": False, "error": str(error), "reason": str(error),
+                   "step": error.step or (argv[0] if argv else None),
                    "language": "rust", "remedy": error.remedy}
         if "--json" in argv:
             print(json.dumps(payload))
