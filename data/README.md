@@ -49,7 +49,7 @@ The kit offers five datasets:
 
 The first three are the kit's own samples: they ship inside the kit and are what a kit
 without a persona loads (`default=yes` in their `dataset.conf`). The other two are the
-*reference datasets* the AI Scientist and ML Engineer personas load: public data with a
+*reference datasets* the Data Scientist and ML Engineer personas load: public data with a
 `README.md` (source, terms, data dictionary), a `manifest.json` (source query, terms,
 snapshot date, rows and SHA-256 of every CSV, and the release asset they ship as) and a
 descriptor; the builders that fetch them again live in [`tools/datasets/`](../tools/datasets/).
