@@ -93,9 +93,11 @@ EXAKIT_NOTEBOOK_DIR="${EXAKIT_NOTEBOOK_DIR:-$EXAKIT_HOME/notebooks}"
 EXAKIT_NOTEBOOK_PORT="${EXAKIT_NOTEBOOK_PORT:-8888}"
 # What the venv holds besides the connector. Its extras are the ones its
 # connection module imports (the jupyter extra joins them when the kit installs
-# JupyterLab); the rest serve the kit's notebooks.
+# JupyterLab); the rest serve the kit's notebooks. Langfuse is pinned to SDK
+# major 5 (trace() uses its API; Python >=3.11) and MLflow to 3.x (the client,
+# mlflow-skinny; the server is the exasol-mlflow[server] extra).
 EXAKIT_NOTEBOOK_EXTRAS="bucketfs,ibis,pyexasol,sqlalchemy"
-EXAKIT_NOTEBOOK_PACKAGES="ipykernel>=6.29,<8 langfuse>=3,<4 openai>=1.40,<3 scikit-learn>=1.4,<2 mlflow-skinny>=2.14,<4 alembic>=1.13,<2 pyarrow>=14"
+EXAKIT_NOTEBOOK_PACKAGES="ipykernel>=6.29,<8 langfuse>=5,<6 openai>=1.40,<3 scikit-learn>=1.4,<2 mlflow-skinny>=3,<4 alembic>=1.13,<2 pyarrow>=14"
 # The kit's own packages, by their distribution names (reinstalled every time).
 EXAKIT_NOTEBOOK_OWN_PACKAGES="exakit-nb exasol-mlflow"
 # The front ends' versions: the pins in versions.json, unless one of these asks

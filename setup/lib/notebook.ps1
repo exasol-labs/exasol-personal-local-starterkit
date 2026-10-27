@@ -41,7 +41,7 @@ $script:NotebookHome = if ($env:EXAKIT_NOTEBOOK_HOME) { $env:EXAKIT_NOTEBOOK_HOM
 $script:NotebookDir = if ($env:EXAKIT_NOTEBOOK_DIR) { $env:EXAKIT_NOTEBOOK_DIR } else { Join-Path $script:ExakitHome "notebooks" }
 $script:NotebookPort = if ($env:EXAKIT_NOTEBOOK_PORT) { $env:EXAKIT_NOTEBOOK_PORT } else { "8888" }
 $script:NotebookExtras = "bucketfs,ibis,pyexasol,sqlalchemy"
-$script:NotebookPackages = @("ipykernel>=6.29,<8", "langfuse>=3,<4", "openai>=1.40,<3", "scikit-learn>=1.4,<2", "mlflow-skinny>=2.14,<4", "alembic>=1.13,<2", "pyarrow>=14")
+$script:NotebookPackages = @("ipykernel>=6.29,<8", "langfuse>=5,<6", "openai>=1.40,<3", "scikit-learn>=1.4,<2", "mlflow-skinny>=3,<4", "alembic>=1.13,<2", "pyarrow>=14")
 # The kit's own packages, by their distribution names (reinstalled every time).
 $script:NotebookOwnPackages = @("exakit-nb", "exasol-mlflow")
 # Which front ends the next resolution brings (Set-NotebookFrontEndPlan), and

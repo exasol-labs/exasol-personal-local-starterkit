@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "exakit-nb"
 version = "0.2.0"
 description = "Helpers for the Exasol Personal Local Starter Kit's notebooks (exakit.nb, also importable as exakit_nb): the kit's connection, the ways data comes in, the SQL a cell ran, opt-in tracing."
-requires-python = ">=3.11,<3.13"
+requires-python = ">=3.11,<3.13"   # Langfuse SDK 5 needs >=3.11; the notebook connector has no 3.13 yet
 license = "MIT"
 
 [tool.setuptools]

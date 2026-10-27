@@ -12,7 +12,8 @@ license = "MIT"
 dependencies = []
 
 [project.optional-dependencies]
-mlflow = ["mlflow-skinny>=2.14,<4", "sqlalchemy>=2,<3", "alembic>=1.13,<2"]   # the client, and the local SQLite store
+mlflow = ["mlflow-skinny>=3,<4", "sqlalchemy>=2,<3", "alembic>=1.13,<2"]   # the client (MLflow 3.x), and the local SQLite store
+server = ["mlflow>=3,<4"]                                                    # the full package: `mlflow server` for exakit mlflow start (skinny cannot serve)
 
 [tool.setuptools]
 packages = ["exasol_mlflow"]

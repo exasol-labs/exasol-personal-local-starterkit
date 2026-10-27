@@ -66,7 +66,8 @@ specs="$(_notebook_specs)"
 check "the connector, pinned, with its extras" "exasol-notebook-connector[bucketfs,ibis,pyexasol,sqlalchemy]==3.1.0" "$(printf '%s\n' "$specs" | head -1)"
 contains "the kernel package" "ipykernel>=6.29,<8" "$specs"
 contains "the client model library" "scikit-learn>=1.4,<2" "$specs"
-contains "the MLflow client, not the server" "mlflow-skinny>=2.14,<4" "$specs"
+contains "the MLflow client, not the server" "mlflow-skinny>=3,<4" "$specs"
+contains "Langfuse SDK major 5" "langfuse>=5,<6" "$specs"
 check "the kit's helper package" "$ROOT/notebook/package" "$(printf '%s\n' "$specs" | tail -2 | head -1)"
 check "the kit's MLflow client package" "$ROOT/packages/exasol-mlflow" "$(printf '%s\n' "$specs" | tail -1)"
 check "JupyterLab is not in it" "" "$(printf '%s\n' "$specs" | grep -i jupyterlab || true)"
@@ -380,7 +381,7 @@ echo "the shipped files and the generated workflow logs hold no address and no c
 # generated files too: one written here, with a statement in it, joins the
 # sweep, so the log's own refusals (tests/test_workflow.py) are backed by the
 # same grep that covers everything else the kit generates (AC-DS1.2, X1.2).
-PYTHONPATH="$ROOT/notebook/package" python3 -c 'import exakit_nb.workflow as w; w.workflow("secret-grep"); w.log_event(w.SQL, sql="SELECT 1", rows=1)' >/dev/null
+PYTHONPATH="$ROOT/notebook/package" python3 -c 'import importlib; w = importlib.import_module("exakit_nb.workflow"); w.workflow("secret-grep"); w.log_event(w.SQL, sql="SELECT 1", rows=1)' >/dev/null
 found=""
 for f in $(find "$ROOT/notebook/notebooks" "$ROOT/notebook/marimo" "$ROOT/notebook/package" "$ROOT/notebook/kit" -type f \( -name '*.py' -o -name '*.ipynb' -o -name '*.json' \) | sort) \
          $(find "$EXAKIT_HOME/workflows" -type f -name '*.jsonl' 2>/dev/null | sort); do

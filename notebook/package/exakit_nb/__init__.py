@@ -21,6 +21,8 @@ the ML Engineer's checks (check_container, check_mlflow, check_bucket) in checks
 from __future__ import annotations
 
 import contextlib
+import hashlib
+import json
 import os
 from collections.abc import Iterator
 from pathlib import Path
@@ -32,11 +34,14 @@ from .dataset import Dataset, DescriptorNotApproved, dataset
 from .descriptor_store import current_version, descriptor_store_dir, list_versions
 from .own_file import load_own_file, save_descriptor
 from .quickstart import check_connection, connected_sources, first, list_schemas, load_sample, load_source, show_roles
+from .workflow import TRACE as TRACE_KIND
 from .workflow import current_workflow, log_event, log_sql, workflow
 
 __all__ = ["check_bucket", "check_connection", "check_container", "check_mlflow", "confirm_send", "connect", "connected_sources", "current_version", "current_workflow", "Dataset", "dataset", "descriptor_store_dir", "DescriptorNotApproved", "first", "list_schemas", "list_versions", "load_own_file", "load_sample", "load_source", "log_event", "log_sql", "model_client", "model_list", "save_descriptor", "show_roles", "show_sql", "sql", "trace", "tracing", "workflow"]
 
-LANGFUSE_VARIABLES = ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_HOST")
+LANGFUSE_VARIABLES = ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_BASE_URL")
+LANGFUSE_HOST_VARIABLE = "LANGFUSE_HOST"      # the SDK 3/4 name of LANGFUSE_BASE_URL; still accepted when BASE_URL is unset
+METADATA_LIMIT = 200                           # Langfuse SDK 5: a propagated value is at most 200 characters once JSON-encoded
 MODEL_VARIABLE = "EXAKIT_NB_MODEL"            # the model name; the endpoint and key are the OpenAI client's own OPENAI_* variables
 _last: dict[str, str | None] = {"sql": None}
 
@@ -82,9 +87,27 @@ def show_sql() -> None:
     print(_last["sql"] or "No statement has run yet.")
 
 
+def _langfuse_settings() -> dict[str, str]:
+    """The three Langfuse settings as the SDK 5 client takes them (public_key, secret_key, base_url), read from
+    LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY and LANGFUSE_BASE_URL - or LANGFUSE_HOST, the SDK 3/4 name, when BASE_URL is
+    unset. Only the keys that are set are in the result, so the missing ones can be named."""
+    found = {}
+    for variable, key in zip(LANGFUSE_VARIABLES, ("public_key", "secret_key", "base_url")):
+        value = os.environ.get(variable) or (os.environ.get(LANGFUSE_HOST_VARIABLE) if key == "base_url" else None)
+        if value:
+            found[key] = value
+    return found
+
+
+def _langfuse_missing() -> list[str]:
+    settings = _langfuse_settings()
+    return [variable for variable, key in zip(LANGFUSE_VARIABLES, ("public_key", "secret_key", "base_url")) if key not in settings]
+
+
 def tracing() -> bool:
-    """Whether the LANGFUSE_* variables are all set, so trace() records to the user's Langfuse."""
-    return all(os.environ.get(name) for name in LANGFUSE_VARIABLES)
+    """Whether LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY and LANGFUSE_BASE_URL (or LANGFUSE_HOST) are all set, so trace()
+    records to the user's Langfuse."""
+    return not _langfuse_missing()
 
 
 def model_client():
@@ -104,36 +127,78 @@ def model_client():
     return OpenAI(api_key=key), model
 
 
+def _encoded(text: str) -> int:
+    """How long Langfuse SDK 5 sees a metadata value: JSON-encoded (quotes and escapes count) before its 200-character
+    limit, over which the value is dropped with a warning."""
+    return len(json.dumps(text, ensure_ascii=False, separators=(",", ":")))
+
+
+def _clip(value: Any, limit: int = METADATA_LIMIT) -> str:
+    """A metadata value as Langfuse SDK 5 keeps it: a string whose JSON encoding is at most ``limit`` characters, cut
+    with ``...`` when longer (the sample SQL; its digest carries the whole statement)."""
+    text = str(value)
+    if _encoded(text) <= limit:
+        return text
+    keep = limit - 5                                     # the quotes and the three dots
+    while keep > 0 and _encoded(text[:keep] + "...") > limit:
+        keep -= 1
+    return text[:keep] + "..."
+
+
 def trace_tags(conn, dataset: Dataset | None = None, sql: str | None = None, **metadata: Any) -> dict[str, str]:
-    """What a trace carries: exasol.session_id, exasol.sql (the sample SQL; default the last statement sql() ran) and,
-    given a dataset, exasol.dataset and exasol.descriptor (its descriptor's SHA-256), plus any metadata given."""
-    return {"exasol.session_id": str(conn.session_id()), "exasol.sql": sql if sql is not None else (_last["sql"] or ""),
-            **(dataset.tags() if dataset else {}), **{k: str(v) for k, v in metadata.items()}}
+    """What a trace carries: exasol.session_id, exasol.sql (the sample SQL - default the last statement sql() ran - cut
+    to 200 characters, the Langfuse limit for a propagated value) with exasol.sql_digest (the SHA-256 of the whole
+    statement), exasol.workflow_id when a workflow is active (X-1) and, given a dataset, exasol.dataset and
+    exasol.descriptor (its descriptor's SHA-256) with exasol.descriptor_id and exasol.descriptor_version, plus any
+    metadata given. Every value is a string of at most 200 characters."""
+    statement = sql if sql is not None else (_last["sql"] or "")
+    tags = {"exasol.session_id": str(conn.session_id()), "exasol.sql": statement,
+            "exasol.sql_digest": hashlib.sha256(statement.encode("utf-8")).hexdigest()}
+    workflow_id = current_workflow()
+    if workflow_id:
+        tags["exasol.workflow_id"] = workflow_id
+    if dataset:
+        tags.update(dataset.tags())
+        tags["exasol.descriptor_id"] = dataset.id
+        tags["exasol.descriptor_version"] = str(dataset.version)
+    tags.update(metadata)
+    return {key: _clip(value) for key, value in tags.items()}
 
 
 @contextlib.contextmanager
 def trace(conn, name: str = "exakit-notebook", dataset: Dataset | None = None, sql: str | None = None,
           **metadata: Any) -> Iterator[Any]:
     """Group the model calls made inside the block into one trace in the user's own Langfuse project, tagged with the
-    database session, the sample SQL and, given a dataset, its id and descriptor digest (trace_tags). Opt-in: without
-    the LANGFUSE_* variables it says so in one line and does nothing else - no exception, no prompt.
+    database session, the sample SQL, the workflow id and, given a dataset, its id, descriptor digest and descriptor
+    version (trace_tags). Opt-in: without LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY and LANGFUSE_BASE_URL (LANGFUSE_HOST,
+    the SDK 3/4 name, still counts) it says so in one line and does nothing else - no exception, no prompt.
 
-    Make the calls with the client model_client() returns (Langfuse's drop-in when tracing is on), so each call's
-    input, output, token usage and latency land in the trace without changes to the calling code.
+    Langfuse SDK 5: the block is one observation (``Langfuse.start_as_current_observation``) and, right inside it, the
+    trace name, session id, tags and metadata are propagated (``langfuse.propagate_attributes``, a module function in
+    SDK 5) to it and to every observation opened within, so each call the client model_client() returns makes -
+    Langfuse's OpenAI drop-in when tracing is on - lands in this one trace with its input, output, token usage and
+    latency, without changes to the calling code. The span is yielded; the client is flushed when the block ends.
+    The active workflow's log gets one ``trace`` line with the trace id (X-1). Nothing here prints or records the
+    secret key.
     """
-    missing = [variable for variable in LANGFUSE_VARIABLES if not os.environ.get(variable)]
-    if missing:
-        print(f"Tracing is off ({', '.join(missing)} not set before exakit notebook); the cell runs as usual.")
+    if _langfuse_missing():
+        print(f"tracing is off (set {', '.join(LANGFUSE_VARIABLES[:-1])} and {LANGFUSE_VARIABLES[-1]} before exakit "
+              "notebook); the cell runs as usual.")
         yield None
         return
-    from langfuse import get_client
+    from langfuse import Langfuse, propagate_attributes
 
-    client = get_client()
+    settings = _langfuse_settings()
+    if not os.environ.get(LANGFUSE_VARIABLES[-1]):
+        print(f"{LANGFUSE_HOST_VARIABLE} is the SDK 3 name; Langfuse SDK 5 reads {LANGFUSE_VARIABLES[-1]} - using it as that.")
+    client = Langfuse(public_key=settings["public_key"], secret_key=settings["secret_key"], base_url=settings["base_url"])
     tags = trace_tags(conn, dataset, sql, **metadata)
-    labels = ["exasol-starter-kit", *(f"{key}={tags[key]}" for key in ("exasol.dataset", "exasol.descriptor", "exasol.session_id")
-                                      if tags.get(key))]
-    with client.start_as_current_span(name=name) as span:
-        span.update_trace(metadata=tags, tags=labels)
+    labels = ["exasol-starter-kit", *(f"{key}={tags[key]}" for key in ("exasol.dataset", "exasol.descriptor", "exasol.descriptor_id",
+                                                                       "exasol.descriptor_version", "exasol.session_id",
+                                                                       "exasol.workflow_id") if tags.get(key))]
+    with client.start_as_current_observation(as_type="span", name=name) as span, \
+            propagate_attributes(trace_name=name, session_id=tags["exasol.session_id"], tags=labels, metadata=tags):
+        log_event(TRACE_KIND, name=name, trace_id=str(client.get_current_trace_id() or ""))
         yield span
     client.flush()
 

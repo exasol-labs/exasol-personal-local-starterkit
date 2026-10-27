@@ -7,6 +7,8 @@ values on Pharma, Banking and a synthetic file), and the shipped explore noteboo
 from __future__ import annotations
 
 import ast
+import contextlib
+import hashlib
 import io
 import json
 import os
@@ -23,7 +25,8 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "notebook" / "package"))
 
-import importlib  # noqa: E402
+import importlib
+import importlib.util  # noqa: E402
 
 import exakit_nb  # noqa: E402
 from exakit_nb.dataset import Dataset  # noqa: E402
@@ -725,8 +728,9 @@ class TextStepTest(unittest.TestCase):
     def test_the_trace_tags(self):
         ds = exakit_nb.dataset(FakeConn(PHARMA), "pharma_trials")
         tags = exakit_nb.trace_tags(self.Conn(), ds, "SELECT 1 FROM T")
-        self.assertEqual(tags, {"exasol.session_id": "4711", "exasol.sql": "SELECT 1 FROM T", "exasol.dataset": "pharma_trials",
-                                "exasol.descriptor": ds.digest})
+        self.assertEqual(tags, {"exasol.session_id": "4711", "exasol.sql": "SELECT 1 FROM T",
+                                "exasol.sql_digest": hashlib.sha256(b"SELECT 1 FROM T").hexdigest(), "exasol.dataset": "pharma_trials",
+                                "exasol.descriptor": ds.digest, "exasol.descriptor_id": "pharma_trials", "exasol.descriptor_version": "1"})
 
     def test_tracing_off_is_one_line_and_the_block_runs(self):
         ran = []
@@ -747,6 +751,179 @@ class TextStepTest(unittest.TestCase):
                 self.assertFalse(exakit_nb.confirm_send(live, 5))
         self.assertIn("live source (crm)", out.getvalue())
 
+
+
+def fake_langfuse(log: list):
+    """A stand-in for the Langfuse SDK 5 surface trace() uses - ``Langfuse(public_key=, secret_key=, base_url=)``,
+    ``start_as_current_observation``, ``get_current_trace_id``, ``flush``, the module function ``propagate_attributes``
+    and the ``langfuse.openai`` drop-in - recording each call. (langfuse, langfuse.openai) for sys.modules."""
+    span = types.SimpleNamespace(trace_id="trace-1")
+
+    class Langfuse:
+        def __init__(self, **kwargs):
+            log.append(("client", kwargs))
+
+        @contextlib.contextmanager
+        def start_as_current_observation(self, *, name, as_type="span", **_):
+            log.append(("observation", as_type, name))
+            yield span
+            log.append(("observation-end", name))
+
+        def get_current_trace_id(self):
+            return span.trace_id
+
+        def flush(self):
+            log.append(("flush",))
+
+    @contextlib.contextmanager
+    def propagate_attributes(**kwargs):
+        log.append(("propagate", kwargs))
+        yield
+
+    module = types.ModuleType("langfuse")
+    module.__version__ = "5.0.4"
+    module.Langfuse, module.propagate_attributes = Langfuse, propagate_attributes
+    drop_in = types.ModuleType("langfuse.openai")
+    drop_in.OpenAI = lambda **kwargs: ("langfuse.openai", kwargs)
+    module.openai = drop_in
+    return module, drop_in
+
+
+def fake_openai():
+    module = types.ModuleType("openai")
+    module.OpenAI = lambda **kwargs: ("openai", kwargs)
+    return module
+
+
+class TraceSdk5Test(unittest.TestCase):
+    """DS-4 on Langfuse SDK 5: one observation with the trace attributes propagated into it, the SDK 3 variable name
+    still accepted, the secret key in no output, the workflow id and descriptor version as tags, metadata within the
+    SDK's 200-character rule, and the OpenAI drop-in only when tracing is on."""
+
+    SECRET = "sk-lf-SECRET-9f3a7c"
+    ENV = {"LANGFUSE_PUBLIC_KEY": "pk-lf-public", "LANGFUSE_SECRET_KEY": SECRET, "LANGFUSE_BASE_URL": "https://langfuse.example",
+           "EXAKIT_NB_DATASETS": str(ROOT / "data" / "datasets")}
+
+    class Conn:
+        def session_id(self):
+            return 4711
+
+    def setUp(self):
+        from exakit_nb import _kit
+
+        self.home = tempfile.TemporaryDirectory()
+        self.addCleanup(self.home.cleanup)
+        _kit.SESSION.clear()
+        self.addCleanup(_kit.SESSION.clear)
+        self.log = []
+        self.langfuse, drop_in = fake_langfuse(self.log)
+        self.openai = fake_openai()
+        patcher = mock.patch.dict(sys.modules, {"langfuse": self.langfuse, "langfuse.openai": drop_in, "openai": self.openai})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _trace(self, env: dict, **kwargs):
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.dict(os.environ, {**env, "EXAKIT_HOME": self.home.name}, clear=True), redirect_stdout(out), redirect_stderr(err):
+            with exakit_nb.trace(self.Conn(), **kwargs) as span:
+                inside = exakit_nb.model_client() if os.environ.get("EXAKIT_NB_MODEL") else None
+        return span, inside, out.getvalue() + err.getvalue()
+
+    def test_one_observation_with_the_attributes_propagated_and_the_workflow_logged(self):
+        ds = exakit_nb.dataset(FakeConn(PHARMA), "pharma_trials")
+        env = {**self.ENV, "EXAKIT_WORKFLOW_ID": "wf-20261027-abcdef"}
+        span, _, output = self._trace(env, name="explore-text-step", dataset=ds, sql="SELECT 1 FROM T", step="text")
+        self.assertEqual(span.trace_id, "trace-1")
+        self.assertEqual(output, "")                                        # tracing on: nothing printed
+        self.assertEqual([entry[0] for entry in self.log], ["client", "observation", "propagate", "observation-end", "flush"])
+        self.assertEqual(self.log[0][1], {"public_key": "pk-lf-public", "secret_key": self.SECRET, "base_url": "https://langfuse.example"})
+        self.assertEqual(self.log[1], ("observation", "span", "explore-text-step"))
+        propagated = self.log[2][1]
+        self.assertEqual(propagated["trace_name"], "explore-text-step")
+        self.assertEqual(propagated["session_id"], "4711")
+        with mock.patch.dict(os.environ, env):
+            self.assertEqual(propagated["metadata"], exakit_nb.trace_tags(self.Conn(), ds, "SELECT 1 FROM T", step="text"))
+        self.assertEqual(propagated["metadata"]["exasol.workflow_id"], "wf-20261027-abcdef")
+        self.assertEqual(propagated["metadata"]["exasol.descriptor_version"], "1")
+        self.assertEqual(propagated["metadata"]["step"], "text")
+        for label in ("exasol-starter-kit", "exasol.dataset=pharma_trials", "exasol.descriptor_id=pharma_trials",
+                      "exasol.descriptor_version=1", "exasol.session_id=4711", "exasol.workflow_id=wf-20261027-abcdef",
+                      f"exasol.descriptor={ds.digest}"):
+            self.assertIn(label, propagated["tags"])
+        lines = [json.loads(line) for line in (Path(self.home.name) / "workflows" / "wf-20261027-abcdef.jsonl").read_text().splitlines()]
+        self.assertEqual([(line["kind"], line["trace_id"], line["name"]) for line in lines], [("trace", "trace-1", "explore-text-step")])
+
+    def test_no_workflow_no_dataset_means_no_such_tags(self):
+        self._trace(self.ENV, sql="SELECT 2")
+        propagated = self.log[2][1]
+        self.assertEqual(set(propagated["metadata"]), {"exasol.session_id", "exasol.sql", "exasol.sql_digest"})
+        self.assertEqual(propagated["tags"], ["exasol-starter-kit", "exasol.session_id=4711"])
+        self.assertFalse(list((Path(self.home.name) / "workflows").glob("*")) if (Path(self.home.name) / "workflows").exists() else [])
+
+    def test_langfuse_host_still_counts_as_the_base_url_with_one_line(self):
+        env = {k: v for k, v in self.ENV.items() if k != "LANGFUSE_BASE_URL"}
+        env["LANGFUSE_HOST"] = "https://old.example"
+        with mock.patch.dict(os.environ, env, clear=True):
+            self.assertTrue(exakit_nb.tracing())
+        _, _, output = self._trace(env)
+        self.assertEqual(self.log[0][1]["base_url"], "https://old.example")
+        self.assertEqual(len(output.strip().splitlines()), 1)
+        self.assertIn("LANGFUSE_HOST", output)
+        self.assertIn("LANGFUSE_BASE_URL", output)
+        self.assertNotIn("old.example", output)
+
+    def test_the_secret_key_is_in_no_output_tag_or_log(self):
+        ds = exakit_nb.dataset(FakeConn(PHARMA), "pharma_trials")
+        env = {**self.ENV, "EXAKIT_WORKFLOW_ID": "wf-20261027-abcdef", "EXAKIT_NB_MODEL": "m", "LANGFUSE_HOST": "https://h"}
+        _, _, output = self._trace(env, dataset=ds)
+        self.assertNotIn(self.SECRET, output)
+        self.assertNotIn(self.SECRET, repr(self.log[1:]))                      # only the client constructor gets it
+        self.assertNotIn(self.SECRET, repr(exakit_nb.trace_tags(self.Conn(), ds)))
+        for path in (Path(self.home.name) / "workflows").glob("*.jsonl"):
+            self.assertNotIn(self.SECRET, path.read_text())
+        self.assertNotIn(self.SECRET, repr(self.langfuse.openai.OpenAI(api_key="k")))
+
+    def test_tracing_off_names_the_three_variables_and_uses_the_plain_client(self):
+        env = {"LANGFUSE_PUBLIC_KEY": "pk", "LANGFUSE_SECRET_KEY": self.SECRET, "EXAKIT_NB_MODEL": "m"}
+        span, inside, output = self._trace(env)
+        self.assertIsNone(span)
+        self.assertEqual(self.log, [])
+        self.assertEqual(output.strip(), "tracing is off (set LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY and LANGFUSE_BASE_URL before "
+                                         "exakit notebook); the cell runs as usual.")
+        self.assertEqual(inside[0][0], "openai")
+
+    def test_tracing_on_uses_the_langfuse_drop_in(self):
+        _, inside, _ = self._trace({**self.ENV, "EXAKIT_NB_MODEL": "m", "OPENAI_API_KEY": "key"})
+        self.assertEqual(inside, (("langfuse.openai", {"api_key": "key"}), "m"))
+
+    def test_long_sql_is_clipped_to_the_propagation_limit_and_digested_whole(self):
+        statement = "SELECT " + ", ".join(f'"COL_{i}"' for i in range(60)) + "\nFROM \"S\".\"T\"\nWHERE X = 'y'"
+        tags = exakit_nb.trace_tags(self.Conn(), None, statement)
+        self.assertTrue(tags["exasol.sql"].endswith("..."))
+        self.assertTrue(statement.startswith(tags["exasol.sql"][:-3]))
+        self.assertEqual(tags["exasol.sql_digest"], hashlib.sha256(statement.encode()).hexdigest())
+        for key, value in tags.items():
+            self.assertLessEqual(len(json.dumps(value, ensure_ascii=False, separators=(",", ":"))), 200, key)
+        self.assertEqual(exakit_nb.trace_tags(self.Conn(), None, "x" * 198)["exasol.sql"], "x" * 198)     # 200 encoded: kept whole
+        self.assertTrue(exakit_nb.trace_tags(self.Conn(), None, "x" * 199)["exasol.sql"].endswith("..."))  # 201 encoded: cut
+
+
+@unittest.skipUnless(importlib.util.find_spec("langfuse"), "the Langfuse SDK is not installed here")
+class RealLangfuseTest(unittest.TestCase):
+    """With the SDK installed (the kit's notebook venv, CI): it is major 5 and has the surface trace() relies on."""
+
+    def test_the_installed_sdk_has_the_shape_trace_uses(self):
+        import inspect
+
+        import langfuse
+        from langfuse import Langfuse, propagate_attributes
+
+        self.assertEqual(int(langfuse.__version__.split(".")[0]), 5, langfuse.__version__)
+        self.assertIn("base_url", inspect.signature(Langfuse.__init__).parameters)
+        for method in ("start_as_current_observation", "get_current_trace_id", "flush"):
+            self.assertTrue(callable(getattr(Langfuse, method)), method)
+        self.assertEqual({"trace_name", "session_id", "tags", "metadata"} - set(inspect.signature(propagate_attributes).parameters), set())
+        self.assertTrue(callable(importlib.import_module("langfuse.openai").OpenAI))
 
 
 class ProbeTest(unittest.TestCase):

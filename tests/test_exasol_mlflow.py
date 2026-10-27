@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import importlib.util
 import json
 import os
+import re
 import sys
 import tempfile
 import types
@@ -180,6 +182,57 @@ class StartRunTest(unittest.TestCase):
             with exasol_mlflow.start_run(FakeConn(answer(sha="0" * 64)), experiment="exp") as run:
                 run.execute("SELECT 1")
         self.assertEqual(log, [])
+
+
+class PinTest(unittest.TestCase):
+    """MLflow 3.x (requirements §0): the client extra pins mlflow-skinny to it, the server extra the full package, and
+    the notebook add-on installs the same client range on both platforms (with Langfuse SDK 5)."""
+
+    def test_the_package_declares_the_client_and_server_ranges(self):
+        import tomllib
+
+        project = tomllib.loads((ROOT / "packages" / "exasol-mlflow" / "pyproject.toml").read_text(encoding="utf-8"))
+        extras = project["project"]["optional-dependencies"]
+        self.assertIn("mlflow-skinny>=3,<4", extras["mlflow"])
+        self.assertEqual(extras["server"], ["mlflow>=3,<4"])
+        self.assertFalse([spec for spec in extras["mlflow"] if spec.startswith("mlflow>")], "the client extra stays skinny")
+
+    def test_the_notebook_add_on_pins_the_same_range_on_both_platforms(self):
+        sh = re.search(r'^EXAKIT_NOTEBOOK_PACKAGES="([^"]*)"', (ROOT / "setup" / "lib" / "notebook.sh").read_text(encoding="utf-8"), re.M)
+        ps = re.search(r'^\$script:NotebookPackages = @\(([^)]*)\)', (ROOT / "setup" / "lib" / "notebook.ps1").read_text(encoding="utf-8"), re.M)
+        sh_specs = sh.group(1).split()
+        ps_specs = re.findall(r'"([^"]*)"', ps.group(1))
+        self.assertEqual(sh_specs, ps_specs)
+        self.assertIn("mlflow-skinny>=3,<4", sh_specs)
+        self.assertIn("langfuse>=5,<6", sh_specs)
+
+
+@unittest.skipUnless(importlib.util.find_spec("mlflow") and importlib.util.find_spec("sqlalchemy") and importlib.util.find_spec("alembic"),
+                     "mlflow (with sqlalchemy and alembic for the local store) is not installed here")
+class RealMlflowTest(unittest.TestCase):
+    """With MLflow installed (the kit's notebook venv; CI's matrix runs 3.0 and the latest 3.x): the local SQLite store
+    fallback and every call log_training() makes work on this version, and the run holds what AC-ML2.1 asks for."""
+
+    def test_a_run_lands_in_the_local_store_on_this_mlflow(self):
+        import mlflow
+        from mlflow import MlflowClient
+
+        self.assertEqual(int(mlflow.__version__.split(".")[0]), 3, mlflow.__version__)
+        env = {k: v for k, v in os.environ.items() if not k.startswith("MLFLOW_")}
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, env, clear=True):
+            run = exasol_mlflow.log_training(FakeConn(answer()), "SELECT X FROM S.T", experiment="pins", params={"extra": 1},
+                                             tags={"exasol.workflow_id": "wf-20261027-abcdef"}, tracking_dir=tmp)
+            self.assertEqual(run.tracking_uri, f"sqlite:///{Path(tmp).resolve() / 'mlflow.db'}")
+            self.assertTrue((Path(tmp) / "mlflow.db").is_file())
+            client = MlflowClient(tracking_uri=run.tracking_uri)
+            logged = client.get_run(run.run_id)
+            self.assertEqual(logged.data.params, {"C": "1.0", "extra": "1"})
+            self.assertEqual(logged.data.metrics, {"roc_auc": 0.8})
+            for tag in ("exasol.session_id", "exasol.statement_id", "exasol.deployment", "exasol.workflow_id"):
+                self.assertIn(tag, logged.data.tags)
+            artifacts = {a.path for a in client.list_artifacts(run.run_id)} | {a.path for a in client.list_artifacts(run.run_id, "model")}
+            self.assertEqual(artifacts, {"training.sql", "model", "model/model.pkl"})
+            self.assertTrue(logged.info.artifact_uri.startswith((Path(tmp).resolve() / "artifacts").as_uri()))
 
 
 class UdfTest(unittest.TestCase):

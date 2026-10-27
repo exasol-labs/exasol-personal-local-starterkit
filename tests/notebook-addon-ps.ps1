@@ -30,7 +30,8 @@ try {
     $specs = @(Get-NotebookSpecs)
     Check "the connector, pinned, with its extras" "exasol-notebook-connector[bucketfs,ibis,pyexasol,sqlalchemy]==3.1.0" $specs[0]
     Contains "the kernel package" "ipykernel>=6.29,<8" ($specs -join " ")
-    Contains "the MLflow client, not the server" "mlflow-skinny>=2.14,<4" ($specs -join " ")
+    Contains "the MLflow client, not the server" "mlflow-skinny>=3,<4" ($specs -join " ")
+    Contains "Langfuse SDK major 5" "langfuse>=5,<6" ($specs -join " ")
     Check "the kit's helper package" (Join-Path (Join-Path $repo "notebook") "package") $specs[-2]
     Check "the kit's MLflow client package" (Join-Path (Join-Path $repo "packages") "exasol-mlflow") $specs[-1]
     Check "JupyterLab is not in it" 0 @($specs | Where-Object { $_ -match "jupyterlab" }).Count
