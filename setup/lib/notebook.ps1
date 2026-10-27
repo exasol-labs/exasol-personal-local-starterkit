@@ -949,6 +949,7 @@ function Get-NotebookSpecs {
     $specs = @("$($script:NotebookPackage)[$extras]==$version")
     $versionDoc = Get-Content -Raw (Join-Path $root "versions.json") | ConvertFrom-Json
     $sklearnPins = @($versionDoc.components.'udf-devkit'.containers | Where-Object { $_.language -eq "python" } | ForEach-Object { $_.packages.'scikit-learn' } | Sort-Object -Unique)
+    if (-not $versionDoc.components.'udf-devkit'.containers) { throw "This kit copy has no Python container pins; update the kit before updating notebook" }
     if ($sklearnPins.Count -ne 1 -or -not $sklearnPins[0]) { throw "Python container rows need one shared scikit-learn pin" }
     $specs += "scikit-learn==$($sklearnPins[0])"
     $specs += $script:NotebookPackages
@@ -998,7 +999,10 @@ function Install-Notebook {
     if ($current -and $current -eq $script:NotebookVersion -and $env:EXAKIT_FORCE_COMPONENT_INSTALL -ne "1") {
         Ok "notebook $current already installed: $script:NotebookVenv"
         $script:ExakitActiveLabel = "Refreshing the kit's notebook helpers"
-        if (-not (Sync-NotebookPackages)) { Warn2 "The kit's notebook helpers could not be refreshed (see the log) - retry with: exakit update notebook" }
+        if (-not (Sync-NotebookPackages)) {
+            Warn2 "The kit's notebook helpers could not be refreshed (see the log) - update the kit, then retry: exakit update notebook"
+            return $false
+        }
     } else {
         $script:ExakitActiveLabel = "Installing the notebook connector $($script:NotebookVersion)"
         Info "Installing the notebook connector $($script:NotebookVersion) (about 1 GB: it brings PyTorch for its transformer features)"
@@ -1080,7 +1084,10 @@ function Update-Notebook {
         # line with it before the notebooks are copied.
         $script:NotebookVersion = $current
         $script:ExakitActiveLabel = "Refreshing the kit's notebook helpers"
-        if (-not (Sync-NotebookPackages)) { Warn2 "The kit's notebook helpers could not be refreshed (see the log) - retry with: exakit update notebook" }
+        if (-not (Sync-NotebookPackages)) {
+            Warn2 "The kit's notebook helpers could not be refreshed (see the log) - update the kit, then retry: exakit update notebook"
+            Fail "Notebook refresh failed; the existing environment was kept."
+        }
         [void](Copy-NotebookContent)
         if (Test-Path (Get-NotebookMarimoCommand)) { [void](Copy-NotebookContent -Front marimo) }
         Set-ExakitManifestValue "components.notebook.master_file" (Join-Path $script:CredsDir $script:NotebookMasterCred)

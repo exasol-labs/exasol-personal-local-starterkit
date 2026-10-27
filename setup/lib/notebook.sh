@@ -965,7 +965,8 @@ _notebook_specs() {
     printf '%s[%s]==%s\n' "$EXAKIT_NOTEBOOK_PACKAGE" "$_nsp_extras" "${EXAKIT_NOTEBOOK_VERSION:-$(notebook_package_version 2>/dev/null)}"
     _nsp_sklearn="$(run_python_any -c 'import json,sys
 d=json.load(open(sys.argv[1],encoding="utf-8"))
-rows=d["components"]["udf-devkit"]["containers"]
+rows=d.get("components",{}).get("udf-devkit",{}).get("containers")
+if not rows: raise SystemExit("This kit copy has no Python container pins; update the kit before updating notebook")
 versions={r["packages"]["scikit-learn"] for r in rows if r.get("language")=="python"}
 if len(versions)!=1: raise SystemExit("Python container rows need one shared scikit-learn pin")
 print(next(iter(versions)))' "$(exakit_repo_root)/versions.json")" || return 1
@@ -1000,8 +1001,9 @@ notebook_sync_packages() {
     _nsy_reinstall=""
     for _nsy_pkg in $EXAKIT_NOTEBOOK_OWN_PACKAGES; do _nsy_reinstall="$_nsy_reinstall --reinstall-package $_nsy_pkg"; done
     _nsy_before="$(_notebook_frontends_installed)"
-    # shellcheck disable=SC2046,SC2086
-    run_logged "$_nsy_uv" pip install --python "$(notebook_venv_python)" $_nsy_torch $_nsy_reinstall $(_notebook_specs) || return 1
+    _nsy_specs="$(_notebook_specs)" || return 1
+    # shellcheck disable=SC2086
+    run_logged "$_nsy_uv" pip install --python "$(notebook_venv_python)" $_nsy_torch $_nsy_reinstall $_nsy_specs || return 1
     _notebook_report_frontends "$_nsy_before"
 }
 
@@ -1024,7 +1026,10 @@ notebook_install() {
        [ "${EXAKIT_FORCE_COMPONENT_INSTALL:-0}" != "1" ]; then
         ok "notebook $_nbi_current already installed: $EXAKIT_NOTEBOOK_VENV"
         EXAKIT_ACTIVE_LABEL="Refreshing the kit's notebook helpers"
-        notebook_sync_packages || warn "The kit's notebook helpers could not be refreshed (see the log) - retry with: exakit update notebook"
+        notebook_sync_packages || {
+            warn "The kit's notebook helpers could not be refreshed (see the log) - update the kit, then retry: exakit update notebook"
+            return 1
+        }
     else
         EXAKIT_ACTIVE_LABEL="Installing the notebook connector $EXAKIT_NOTEBOOK_VERSION"
         info "Installing the notebook connector $EXAKIT_NOTEBOOK_VERSION (about 1 GB: it brings PyTorch for its transformer features)"
@@ -1044,7 +1049,7 @@ notebook_install() {
         fi
         if ! notebook_sync_packages; then
             _notebook_not_installed "installing ${EXAKIT_NOTEBOOK_PACKAGE}==${EXAKIT_NOTEBOOK_VERSION} and its companions failed (see log)"
-            return 1
+            die "Notebook refresh failed; the existing environment was kept."
         fi
         if [ -z "$(notebook_package_version || true)" ]; then
             _notebook_not_installed "the venv cannot report a ${EXAKIT_NOTEBOOK_PACKAGE} version after the install (see log)"
@@ -1105,7 +1110,10 @@ notebook_update() {
         # line with it before the notebooks are copied.
         EXAKIT_NOTEBOOK_VERSION="$_nbu_current"
         EXAKIT_ACTIVE_LABEL="Refreshing the kit's notebook helpers"
-        notebook_sync_packages || warn "The kit's notebook helpers could not be refreshed (see the log) - retry with: exakit update notebook"
+        notebook_sync_packages || {
+            warn "The kit's notebook helpers could not be refreshed (see the log) - update the kit, then retry: exakit update notebook"
+            die "Notebook refresh failed; the existing environment was kept."
+        }
         notebook_copy_notebooks >/dev/null || true
         notebook_marimo_installed && { notebook_copy_notebooks marimo >/dev/null || true; }
         manifest_set components.notebook.master_file "$EXAKIT_CREDS_DIR/$EXAKIT_NOTEBOOK_MASTER_CRED"
