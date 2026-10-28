@@ -97,8 +97,20 @@ def copy(front: str, kit: Path, notebooks_dir: Path) -> tuple[list[str], list[st
             continue
         added.append(key)
         seen.add(key)
-    # Attribution and the example guide travel with the adapted notebooks.
-    for name in ("EXAMPLE-GUIDE.md", "UPSTREAM-LICENSE.txt", "upstream-sources.json"):
+    # Runnable notebooks are the bundle. The source manifest stays in the
+    # kit, outside the user's notebook browser. Remove only our unchanged old
+    # manifest copy; a file the user edited remains theirs.
+    legacy = base / "upstream-sources.json"
+    origin = kit / "notebook" / legacy.name
+    if legacy.name in before and legacy.is_file() and not legacy.is_symlink() and origin.is_file():
+        try:
+            if legacy.read_bytes() == origin.read_bytes():
+                legacy.unlink()
+                seen.discard(legacy.name)
+        except OSError as err:
+            problems.append(f"{legacy.name}: {err.strerror or err}")
+    # Keep the lesson guide and required license notices alongside the bundle.
+    for name in ("EXAMPLE-GUIDE.md", "UPSTREAM-LICENSE.txt"):
         origin, target = kit / "notebook" / name, base / name
         if not origin.is_file() or target.exists() or target.is_symlink() or name in before:
             continue

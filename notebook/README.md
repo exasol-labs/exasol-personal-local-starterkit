@@ -57,8 +57,8 @@ Four additional local lessons adapt the Notebook Connector examples used by AI L
 `04_sql_and_dataframes` and `05_decision_tree_baseline` for Data Scientist;
 `04_udf_package_check` and `05_decision_tree_udf` for ML Engineer. Each ships
 as Jupyter and Marimo. See [EXAMPLE-GUIDE.md](EXAMPLE-GUIDE.md) for the lesson
-order and the upstream sources and license. The guide, source manifest and
-MIT notices are copied alongside each notebook collection.
+order and the upstream sources and license. The guide and MIT notices are copied alongside each notebook collection;
+source metadata stays inside the kit.
 
 The notebook environment explicitly includes scikit-learn (matching the ML
 container's pin), pandas, NumPy, SciPy and joblib. Other libraries keep compatible

@@ -194,7 +194,7 @@ function Get-UdfDevkitInstalledAliases {
 # run). Twin of udf_devkit_smoke.
 function Test-UdfDevkitSmoke {
     param([Parameter(Mandatory)][string]$Alias, [string[]]$Packages = @())
-    Set-ExakitAddonActivity -Message "Checking Python packages inside $Alias"
+    Set-ExakitAddonActivity -Message "Checking packages in $Alias"
     $script:UdfSmokeLines = @()
     $result = Invoke-UdfTool -ToolArgs (@("smoke", $Alias, $script:UdfSchema) + $Packages)
     $script:UdfSmokeLines = @($result[1] | Where-Object { $_ })
@@ -488,7 +488,7 @@ function Get-UdfVerifiedFile {
             return (Set-UdfFail -Code 5 -Step "download" -Remedy $Remedy -Message "The $What could not be downloaded from $source. Retry when online, or set EXAKIT_UDF_CONTAINERS_MIRROR to a folder or URL holding $name.")
         }
     }
-    Set-ExakitAddonActivity -Message "Verifying $name size and SHA-256"
+    Set-ExakitAddonActivity -Message "Verifying download checksum"
     $verified = Invoke-UdfTool -NoConnection -ToolArgs @("verify", $part, $Sha256, $Size)
     if ($verified[0] -ne 0) {
         Remove-Item -Force $part -ErrorAction SilentlyContinue
@@ -622,7 +622,7 @@ function Invoke-UdfWithRestart {
     $script:ExakitActiveLabel = $What
     $ok = & $Action
     Info "Waiting for the database to answer after the restart"
-    Set-ExakitAddonActivity -Message "Waiting for the database to restart"
+    Set-ExakitAddonActivity -Message "Waiting for database restart"
     Wait-PersonalReady
     foreach ($id in $running) {
         try { Start-ExakitService $id | Out-Null } catch { Warn2 "$id did not start again - start it with: exakit start $id" }
@@ -664,7 +664,7 @@ function Install-UdfDevkitOfficial {
 function Prepare-UdfMlContainer {
     $name = (Split-Path -Leaf $script:UdfContainerFile) -replace '\.tar\.gz$', ''
     $script:UdfContainerInstallFile = Join-Path $script:UdfContainerCache "$name-$($script:UdfDefaultAlias).tar.gz"
-    Set-ExakitAddonActivity -Message "Preparing isolated Python ML container aliases"
+    Set-ExakitAddonActivity -Message "Preparing the Python ML runtime"
     $result = Invoke-UdfTool -NoConnection -Script "slc_archive.py" -ToolArgs @($script:UdfContainerFile, $script:UdfContainerInstallFile, $script:UdfDefaultAlias, ("" + $script:UdfContainer.sha256))
     if ($result[0] -ne 0) {
         return (Set-UdfFail -Code 5 -Step "verify" -Remedy "exakit logs" -Message "Could not prepare the isolated ML container: $($result[2])")

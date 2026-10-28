@@ -1237,6 +1237,17 @@ ui_table_frame() {
 "
     _utr_lines=2
     _utr_now="$(date +%s 2>/dev/null || echo 0)"
+    # One reserved activity line follows the active add-on, directly above
+    # its bar. Moving it between rows keeps the total frame height constant.
+    _utr_activity_row=0; _utr_activity=""
+    if [ -f "$1.activity" ]; then
+        _utr_activity_row=2
+        _utr_activity_record="$(head -n 1 "$1.activity" 2>/dev/null)"
+        case "$_utr_activity_record" in
+            *'|'*) _utr_activity_row="${_utr_activity_record%%|*}"; _utr_activity="${_utr_activity_record#*|}" ;;
+        esac
+        case "$_utr_activity_row" in ''|*[!0-9]*) _utr_activity_row=2 ;; esac
+    fi
     _utr_i=0
     while IFS='|' read -r _utr_kind _utr_label _utr_tick _utr_state _utr_pct \
                           _utr_ceil _utr_secs _utr_t0 _utr_phase _utr_final \
@@ -1341,6 +1352,17 @@ ui_table_frame() {
             _utr_used=$(( _utr_used + UI_TABLE_COL3_W + _UI_TABLE_SEP_W ))
         fi
         _utr_rpad=$(( _utr_inner - _utr_used )); [ "$_utr_rpad" -ge 0 ] || _utr_rpad=0
+        if [ "$_utr_i" = "$_utr_activity_row" ]; then
+            _utr_activity_left=$(( 5 + UI_TABLE_NAME_W + _utr_statsep_w ))
+            [ "$UI_TABLE_COL2_W" -gt 0 ] && _utr_activity_left=$(( _utr_activity_left + _UI_TABLE_SEP_W + UI_TABLE_COL2_W ))
+            [ "$UI_TABLE_COL3_W" -gt 0 ] && _utr_activity_left=$(( _utr_activity_left + _UI_TABLE_SEP_W + UI_TABLE_COL3_W ))
+            _utr_activity_width=$(( _utr_inner - _utr_activity_left ))
+            _utr_activity_text="${_utr_activity:0:$_utr_activity_width}"
+            _utr_activity_pad=$(( _utr_activity_width - ${#_utr_activity_text} ))
+            _utr_f="$_utr_f  ${UI_ACCENT:-}${UI_VB:-|}${UI_RESET:-}${_UI_TABLE_SP:0:$_utr_activity_left}${UI_DIM:-}${_utr_activity_text}${UI_RESET:-}${_UI_TABLE_SP:0:$_utr_activity_pad}${UI_ACCENT:-}${UI_VB:-|}${UI_RESET:-}
+"
+            _utr_lines=$(( _utr_lines + 1 ))
+        fi
         _utr_f="$_utr_f  ${UI_ACCENT:-}${UI_VB:-|}${UI_RESET:-}${_utr_ptr}${_utr_box} ${_utr_name}${_UI_TABLE_SP:0:$_utr_npad}${_utr_mid}${_utr_statsep}${UI_TABLE_CELL}${_UI_TABLE_SP:0:$_utr_rpad}${UI_ACCENT:-}${UI_VB:-|}${UI_RESET:-}
 "
         _utr_lines=$(( _utr_lines + 1 ))
@@ -1386,23 +1408,14 @@ ui_table_frame() {
         done
     done < "$1"
     # The frame is still ONE height in every state, and now structurally so
-    # rather than by arrangement: every row is exactly one line whatever it is
-    # doing, so there is nothing left to reserve. That property is what the
+    # rather than by arrangement: data rows stay one line, with one reserved
+    # activity line shared by the add-ons. That property is what the
     # redraw depends on -- a frame that grows by a line pushes the terminal to
     # scroll, and once the screen has scrolled a cursor-up by the frame height
     # no longer lands at the frame's top. Every redraw after that is off by one
     # and the error accumulates, which is what left four lines of an old frame
     # stranded above the new one near the bottom of a screen.
     _utr_f="$_utr_f  ${UI_ACCENT:-}${UI_BL:-+}${_UI_TABLE_HR:0:$_utr_inner}${UI_BR:-+}${UI_RESET:-}"
-    # Marketplace reserves one line above the box for the current operation.
-    # Pad it so a shorter next phase erases the previous one without flicker.
-    if [ -f "$1.activity" ]; then
-        _utr_activity="$(head -n 1 "$1.activity" 2>/dev/null)"
-        _utr_activity="${_utr_activity:0:$_utr_inner}"
-        _utr_f="  ${UI_DIM:-}${_utr_activity}${UI_RESET:-}${_UI_TABLE_SP:0:$(( _utr_inner + 2 - ${#_utr_activity} ))}
-$_utr_f"
-        _utr_lines=$(( _utr_lines + 1 ))
-    fi
     UI_TABLE_FRAME="$_utr_f"
     UI_TABLE_LINES=$(( _utr_lines + 1 ))
     # Reported so a redraw can tell whether the geometry moved. Same height and

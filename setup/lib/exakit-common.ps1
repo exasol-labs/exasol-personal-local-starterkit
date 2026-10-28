@@ -5748,6 +5748,7 @@ function Show-ExakitAddonNotes {
 function Set-ExakitAddonActivity {
     param([string]$Message)
     if ($script:ExakitAddonTableRow -gt 0 -and $null -ne $script:ExakitAddonTable) {
+        $script:ExakitAddonTable.ActivityRow = $script:ExakitAddonTableRow
         $script:ExakitAddonTable.Activity = $Message
     }
 }
@@ -5758,7 +5759,7 @@ function Set-ExakitAddonProgress {
         [Parameter(Mandatory)][int]$Ceiling, [Parameter(Mandatory)][int]$Secs,
         [Parameter(Mandatory)][string]$Phase
     )
-    Set-ExakitAddonActivity -Message "$Id`: $Phase"
+    Set-ExakitAddonActivity -Message $Phase
     # An add-on being installed from the TABLE reports into its ROW; the row
     # already names it, so the "<id> - " prefix the one-line bar needs would be
     # the same fact twice, in a cell that has to spell a phase in a fixed width.

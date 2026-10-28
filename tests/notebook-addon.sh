@@ -102,7 +102,7 @@ mkdir -p "$NB/data-scientist"
 printf 'mine' > "$NB/data-scientist/00_quickstart.ipynb"
 added="$(notebook_copy_notebooks | tr '\n' ' ')"
 check "what is missing comes, each in its persona's folder, the shared cells too" \
-    "00_shared/data_paths.ipynb data-scientist/01_explore.ipynb data-scientist/02_ask_your_data.ipynb data-scientist/03_share.ipynb data-scientist/04_sql_and_dataframes.ipynb data-scientist/05_decision_tree_baseline.ipynb ml-engineer/00_quickstart.ipynb ml-engineer/01_train.ipynb ml-engineer/02_rust_score.ipynb ml-engineer/03_score_external_model.ipynb ml-engineer/04_udf_package_check.ipynb ml-engineer/05_decision_tree_udf.ipynb EXAMPLE-GUIDE.md UPSTREAM-LICENSE.txt upstream-sources.json " "$added"
+    "00_shared/data_paths.ipynb data-scientist/01_explore.ipynb data-scientist/02_ask_your_data.ipynb data-scientist/03_share.ipynb data-scientist/04_sql_and_dataframes.ipynb data-scientist/05_decision_tree_baseline.ipynb ml-engineer/00_quickstart.ipynb ml-engineer/01_train.ipynb ml-engineer/02_rust_score.ipynb ml-engineer/03_score_external_model.ipynb ml-engineer/04_udf_package_check.ipynb ml-engineer/05_decision_tree_udf.ipynb EXAMPLE-GUIDE.md UPSTREAM-LICENSE.txt " "$added"
 check "the user's own stays" "mine" "$(cat "$NB/data-scientist/00_quickstart.ipynb")"
 check "a second run adds nothing" "" "$(notebook_copy_notebooks)"
 contains "a README names each persona's order" "00. \`ml-engineer/00_quickstart.ipynb\` - Quickstart" "$(cat "$NB/README.md")"
@@ -119,7 +119,7 @@ check "the personas' first prompts name quickstarts that ship" "" \
     "$(for p in data-scientist ml-engineer; do [ -f "$ROOT/notebook/notebooks/$p/00_quickstart.ipynb" ] || printf ' %s' "$p"
         grep -q "$p/00_quickstart.ipynb" "$ROOT/personas/$p.json" || printf ' %s-prompt' "$p"; done)"
 check "the Marimo ones go to marimo/<persona>/, no README" \
-    "00_shared/data_paths.py data-scientist/00_quickstart.py data-scientist/01_explore.py data-scientist/02_ask_your_data.py data-scientist/03_share.py data-scientist/04_sql_and_dataframes.py data-scientist/05_decision_tree_baseline.py ml-engineer/00_quickstart.py ml-engineer/01_train.py ml-engineer/02_rust_score.py ml-engineer/03_score_external_model.py ml-engineer/04_udf_package_check.py ml-engineer/05_decision_tree_udf.py EXAMPLE-GUIDE.md UPSTREAM-LICENSE.txt upstream-sources.json |no" \
+    "00_shared/data_paths.py data-scientist/00_quickstart.py data-scientist/01_explore.py data-scientist/02_ask_your_data.py data-scientist/03_share.py data-scientist/04_sql_and_dataframes.py data-scientist/05_decision_tree_baseline.py ml-engineer/00_quickstart.py ml-engineer/01_train.py ml-engineer/02_rust_score.py ml-engineer/03_score_external_model.py ml-engineer/04_udf_package_check.py ml-engineer/05_decision_tree_udf.py EXAMPLE-GUIDE.md UPSTREAM-LICENSE.txt |no" \
     "$(notebook_copy_notebooks marimo | tr '\n' ' ')|$([ -e "$EXAKIT_NOTEBOOK_DIR/marimo/README.md" ] && echo yes || echo no)"
 
 echo "the notebook tools: one checklist, all three ticked:"

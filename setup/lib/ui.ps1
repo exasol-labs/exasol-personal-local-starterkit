@@ -1003,10 +1003,10 @@ function Get-ExakitTableFrame {
     $inner += $statSepW + $statW
     $lines = New-Object 'System.Collections.Generic.List[string]'
 
+    $activityRow = 0
     if ($Table.ContainsKey("Activity")) {
-        $activity = ("" + $Table.Activity) -replace "[\r\n]", " "
-        if ($activity.Length -gt $inner) { $activity = $activity.Substring(0, $inner) }
-        [void]$lines.Add("  " + $script:UiDim + $activity + $script:UiReset + (" " * ($inner + 2 - $activity.Length)))
+        $activityRow = 2
+        if ($Table.ContainsKey("ActivityRow") -and [int]$Table.ActivityRow -gt 0) { $activityRow = [int]$Table.ActivityRow }
     }
 
     $title = " " + $Table.Title + " "
@@ -1146,6 +1146,17 @@ function Get-ExakitTableFrame {
         }
         $tail = $inner - $used
         if ($tail -lt 0) { $tail = 0 }
+        if ($i -eq $activityRow) {
+            $activityLeft = 5 + $nameW + $statSepW
+            if ($col2W -gt 0) { $activityLeft += $sepW + $col2W }
+            if ($col3W -gt 0) { $activityLeft += $sepW + $col3W }
+            $activityWidth = $inner - $activityLeft
+            $activity = ("" + $Table.Activity) -replace "[\r\n]", " "
+            if ($activity.Length -gt $activityWidth) { $activity = $activity.Substring(0, $activityWidth) }
+            [void]$lines.Add("  " + $script:UiAccent + $script:UiVB + $script:UiReset + (" " * $activityLeft) +
+                $script:UiDim + $activity + $script:UiReset + (" " * ($activityWidth - $activity.Length)) +
+                $script:UiAccent + $script:UiVB + $script:UiReset)
+        }
         [void]$lines.Add("  " + $script:UiAccent + $script:UiVB + $script:UiReset + $ptr + $box + " " +
             $name + (" " * $namePad) + $mid + $statSep + $cell.Text + (" " * $tail) +
             $script:UiAccent + $script:UiVB + $script:UiReset)

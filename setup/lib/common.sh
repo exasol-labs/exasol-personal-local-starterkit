@@ -4362,12 +4362,12 @@ _exakit_marketplace_install_one() {
 exakit_addon_activity() {
     [ -n "${EXAKIT_ADDON_TABLE_STATE:-}" ] && [ -n "${EXAKIT_ADDON_TABLE_ROW:-}" ] || return 0
     # One writer (the install), one reader (the table animator).
-    printf '%s\n' "$1" | tr '\r\n' '  ' > "$EXAKIT_ADDON_TABLE_STATE.activity.new"
+    printf '%s|%s\n' "$EXAKIT_ADDON_TABLE_ROW" "$1" | tr '\r\n' '  ' > "$EXAKIT_ADDON_TABLE_STATE.activity.new"
     mv -f "$EXAKIT_ADDON_TABLE_STATE.activity.new" "$EXAKIT_ADDON_TABLE_STATE.activity"
 }
 
 _exakit_addon_progress() {
-    exakit_addon_activity "$2: $6"
+    exakit_addon_activity "$6"
     # An add-on being installed from the TABLE reports into its ROW; the row
     # already names it, so the "<id> · " prefix the one-line bar needs would be
     # the same fact twice, in a cell that has to spell a phase in a fixed width.

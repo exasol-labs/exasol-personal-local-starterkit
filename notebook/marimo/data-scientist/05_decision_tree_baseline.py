@@ -19,7 +19,7 @@ def _(mo):
     **Dataset:** Pharma or Banking; **How long:** five minutes. Adapted from the
     Notebook Connector / AI Lab telescope training lesson, with approved roles
     instead of the telescope tables. This fits locally; 01_train fits inside Exasol.
-    Upstream attribution and MIT license: `notebook/upstream-sources.json`.
+    Upstream attribution and MIT license: `EXAMPLE-GUIDE.md`.
     """)
     return
 

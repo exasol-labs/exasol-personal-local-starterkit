@@ -1,6 +1,8 @@
-# More examples from Exasol
+# Bundled practice notebooks
 
-These local adaptations follow the examples distributed by
+These runnable notebooks are included with the kit for both JupyterLab and
+Marimo. Open the files listed below; no source manifest or download is needed.
+They adapt examples distributed by
 [Exasol Notebook Connector](https://github.com/exasol/notebook-connector) and
 used by [Exasol AI Lab](https://github.com/exasol/ai-lab). They use the kit's
 secure connection, approved Pharma or Banking roles and installed Python UDF
@@ -24,8 +26,9 @@ Use `03_share` on Dash Server to turn a validated result into a dashboard.
 The original upstream notebooks cover additional services such as BucketFS HTTP,
 GPU, Transformers and cloud deployments; those need their own environments.
 These local copies replace their setup steps and use the bundled reference data.
-The exact upstream revisions, source links and original notebook digests are in
-`upstream-sources.json`. The upstream MIT notices are in `UPSTREAM-LICENSE.txt`.
+Source revisions and original digests are kept internally in the kit at
+`notebook/upstream-sources.json`. The MIT notices travel with the notebooks in
+`UPSTREAM-LICENSE.txt`.
 
 ## Verification on macOS (28 October 2026)
 

@@ -133,8 +133,8 @@ In either JupyterLab or Marimo, open the persona folder and run these in order:
 
 Jupyter files end in `.ipynb`; Marimo files end in `.py`. Repeat with
 `DATASET = "banking_complaints"`. The source links and MIT notices are copied
-beside the notebooks in `EXAMPLE-GUIDE.md`, `upstream-sources.json` and
-`UPSTREAM-LICENSE.txt`. A copied notebook you edited is preserved.
+beside the notebooks in `EXAMPLE-GUIDE.md` and `UPSTREAM-LICENSE.txt`. Source
+metadata stays inside the kit; the notebook folders contain the runnable examples. A copied notebook you edited is preserved.
 
 The UDF add-on now installs the pinned `PYTHON3_ML` runtime as well as the
 selected language setup. It verifies scikit-learn, pandas, NumPy and SciPy
@@ -143,7 +143,7 @@ For an older installation, run `exakit udf-use default` to add that runtime
 (allow the database restart). Training and external-model scoring select
 `PYTHON3_ML` automatically when it is installed.
 
-During an interactive add-on install, the small line above the progress table
+During an interactive add-on install, the small line immediately above the active progress bar, inside the table
 names the current operation: download, checksum verification, container install,
 database restart or package check. Full package installer output goes to the
 setup log; use `exakit logs setup` if a step fails.

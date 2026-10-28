@@ -20,7 +20,7 @@ def _(mo):
     pattern from Exasol's Notebook Connector / AI Lab examples, using the kit's
     bundled data and encrypted connection. No download or external source is needed.
     Adapted from `pyexasol/roundtrip_import_and_export.ipynb`; upstream versions,
-    links and the MIT license are recorded in `notebook/upstream-sources.json`.
+    links and the MIT license are recorded in `EXAMPLE-GUIDE.md`.
     """)
     return
 

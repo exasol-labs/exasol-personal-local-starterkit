@@ -19,7 +19,7 @@ def _(mo):
     **Dataset:** Pharma or Banking; **How long:** two minutes. Compare the notebook's
     Python packages with the packages actually imported by the database runtime.
     Adapted from the Notebook Connector / AI Lab runtime and scikit-learn lessons.
-    Sources and MIT license: `notebook/upstream-sources.json`.
+    Sources and MIT license: `EXAMPLE-GUIDE.md`.
     """)
     return
 

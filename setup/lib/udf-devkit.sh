@@ -354,7 +354,7 @@ _udf_fetch_verified() {
             _udf_fail 5 download "$_ufc_remedy" "The $_ufc_what could not be downloaded from $_ufc_src. Retry when online, or set EXAKIT_UDF_CONTAINERS_MIRROR to a folder or URL holding $_ufc_name."; return 1; }
         EXAKIT_ACTIVE_LABEL=""
     fi
-    exakit_addon_activity "Verifying $_ufc_name size and SHA-256"
+    exakit_addon_activity "Verifying download checksum"
     _ufc_err="$EXAKIT_HOME/.udf-verify.err"
     if ! _udf_rules verify "$_ufc_part" "$_ufc_sha" "$_ufc_size" 2>"$_ufc_err"; then
         _ufc_why="$(cat "$_ufc_err" 2>/dev/null)"; rm -f "$_ufc_err" "$_ufc_part"
@@ -454,7 +454,7 @@ _udf_python_alias() {
 # run (UDF_FAIL_* say which).
 udf_devkit_smoke() {
     _us_alias="$1"; shift
-    exakit_addon_activity "Checking Python packages inside $_us_alias"
+    exakit_addon_activity "Checking packages in $_us_alias"
     UDF_SMOKE_LINES=""
     _us_out="$(_udf_tool smoke "$_us_alias" "$EXAKIT_UDF_SCHEMA" "$@" 2>"$EXAKIT_HOME/.udf-smoke.err")"
     _us_rc=$?
@@ -537,7 +537,7 @@ _udf_with_restart() {
     run_logged "$@"
     _uwr_rc=$?
     info "Waiting for the database to answer after the restart"
-    exakit_addon_activity "Waiting for the database to restart"
+    exakit_addon_activity "Waiting for database restart"
     personal_wait_ready
     for _uwr_id in $_uwr_running; do
         exakit_service_start "$_uwr_id" >/dev/null 2>&1 || warn "$_uwr_id did not start again - start it with: exakit start $_uwr_id"
@@ -572,8 +572,8 @@ udf_devkit_setup_container() {
 # original; the shared helper records both digests beside its cached derivative.
 _udf_prepare_ml_container() {
     UDF_CONTAINER_INSTALL_FILE="$EXAKIT_UDF_CONTAINER_CACHE/$(basename "$UDF_CONTAINER_FILE" .tar.gz)-$EXAKIT_UDF_DEFAULT_ALIAS.tar.gz"
-    exakit_addon_activity "Preparing isolated Python ML container aliases"
-    EXAKIT_ACTIVE_LABEL="Preparing isolated Python ML container aliases"
+    exakit_addon_activity "Preparing the Python ML runtime"
+    EXAKIT_ACTIVE_LABEL="Preparing the Python ML runtime"
     run_logged run_python_any "$(exakit_repo_root)/setup/udf/slc_archive.py" \
         "$UDF_CONTAINER_FILE" "$UDF_CONTAINER_INSTALL_FILE" "$EXAKIT_UDF_DEFAULT_ALIAS" "$UDF_CONTAINER_SHA256" || {
         _udf_fail 5 verify "exakit logs" "Could not prepare the isolated ML container (see: exakit logs)."

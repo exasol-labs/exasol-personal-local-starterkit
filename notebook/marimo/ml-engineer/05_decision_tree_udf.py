@@ -20,7 +20,7 @@ def _(mo):
     Notebook Connector / AI Lab scikit-learn training lesson. Reuse the approved
     handoff's SQL features and time split, but fit a decision tree inside a Python
     SET UDF. This lesson returns evaluation metrics; use 01_train for the full
-    model-artifact and MLflow contract. Sources: `notebook/upstream-sources.json`.
+    model-artifact and MLflow contract. Sources: `EXAMPLE-GUIDE.md`.
     """)
     return
 
