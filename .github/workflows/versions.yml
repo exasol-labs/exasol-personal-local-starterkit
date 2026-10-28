@@ -863,6 +863,7 @@ jobs:
       # The udf-devkit add-on: each container install confirmed, the services
       # follow the restart, BucketFS never written outside the bucket; the
       # shared rules (pins, bucket paths, aliases, the smoke UDF).
+      - run: bash tests/addon-activity.sh
       - run: bash tests/udf-devkit-addon.sh
         if: matrix.shard == 4
       # exakit mlflow: start/stop/disable against a stub server, server.json,
@@ -877,6 +878,7 @@ jobs:
       - run: bash tests/personas.sh
         if: matrix.shard == 4
       - run: python3 tests/test_udf_tool.py
+      - run: python3 tests/test_slc_archive.py
         if: matrix.shard == 4
       - run: bash tests/reap-orphan-daemon.sh
         if: matrix.shard == 4
@@ -972,6 +974,7 @@ jobs:
             pwsh -NoProfile -File tests/workflow-command-ps.ps1
             pwsh -NoProfile -File tests/describe-command-ps.ps1
             pwsh -NoProfile -File tests/notebook-launcher-ps.ps1
+            pwsh -NoProfile -File tests/addon-activity-ps.ps1
             pwsh -NoProfile -File tests/udf-devkit-addon-ps.ps1
             pwsh -NoProfile -File tests/mlflow-command-ps.ps1
             pwsh -NoProfile -File tests/personas-ps.ps1

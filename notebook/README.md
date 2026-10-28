@@ -53,6 +53,21 @@ the preview uses `app_build` then `app_start_preview`, because the Windows deplo
 The tool callable is supplied by the AI client hosting Dash Server MCP; the notebook prints the requests when one
 is not attached. The kit never puts database credentials in the dashboard source.
 
+Four additional local lessons adapt the Notebook Connector examples used by AI Lab:
+`04_sql_and_dataframes` and `05_decision_tree_baseline` for Data Scientist;
+`04_udf_package_check` and `05_decision_tree_udf` for ML Engineer. Each ships
+as Jupyter and Marimo. See [EXAMPLE-GUIDE.md](EXAMPLE-GUIDE.md) for the lesson
+order and the upstream sources and license. The guide, source manifest and
+MIT notices are copied alongside each notebook collection.
+
+The notebook environment explicitly includes scikit-learn (matching the ML
+container's pin), pandas, NumPy, SciPy and joblib. Other libraries keep compatible
+ranges so the connector's optional dependencies can resolve. Installing a library
+here does not install it in the database: `udf-devkit` prepares and checks the
+separate `PYTHON3_ML` runtime for in-database training and scoring. The verified
+upstream archive is retained; a cached derivative isolates its language alias
+so it can coexist with the official Python container, with both digests recorded.
+
 On a machine, `exakit marketplace notebook` copies each notebook into
 `~/.exasol-starter-kit/notebooks/starter-kit-notebooks/<persona>/` (the shared
 cells into its `00_shared/`, and the Marimo ones into `notebooks/marimo/<persona>/`),

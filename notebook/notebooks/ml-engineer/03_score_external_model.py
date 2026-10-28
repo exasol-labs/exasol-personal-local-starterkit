@@ -18,11 +18,14 @@
 # **descriptor** roles - the category, the text and the label - so the notebook runs unchanged on either.
 #
 # **What it needs:** the dataset loaded (`exakit data-load pharma_trials`), the `udf-devkit` add-on with Python UDFs set
-# up (`exakit marketplace udf-devkit`, then `exakit udf-setup`), and scikit-learn in this notebook's environment.
+# up (`exakit marketplace udf-devkit`; older installations can add it with `exakit udf-use default`), and
+# scikit-learn in this notebook's environment.
 # **Run time:** about three minutes; the first scoring query is the slowest, because each UDF instance loads the model
 # once.
 
 # %%
+import exakit.nb as nb
+
 DATASET = "pharma_trials"   # or "banking_complaints", or the path of a descriptor for a table you loaded
 
 # %% [markdown]
@@ -38,7 +41,7 @@ DATASET = "pharma_trials"   # or "banking_complaints", or the path of a descript
 MODEL_FILE = None                   # or "~/Downloads/model.pkl"
 SCORING_SCHEMA = "EXAKIT_SCORING"   # where the scoring UDF is created; nothing else is written there
 UDF_NAME = "SCORE_TEXT_MODEL"
-CONTAINER = "PYTHON3"               # the container alias the UDF runs on: PYTHON3, or one you installed
+CONTAINER = nb.ml_train.udf_container()  # prefer the installed PYTHON3_ML runtime
 TRAIN_ROWS = 4000                   # rows the stand-in model learns from
 HOLDOUT_ROWS = 500                  # held-out rows the two predictions are compared on
 
@@ -58,8 +61,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-
-import exakit.nb as nb
 
 conn = nb.connect()
 ds = nb.dataset(conn, DATASET)
@@ -152,7 +153,10 @@ MODEL_COMPATIBLE = model is not None and nb.check_model_compatibility(
 # under `/buckets`. `exakit model put` copies the file there, records its SHA-256, and prints the path the UDF opens. A
 # second run with the same file changes nothing; a **different** file of the same name is refused unless `--replace` is
 # given (exit code 5), so a model is never swapped silently. This cell passes `--replace` on purpose: running the
-# notebook again should put the model it has just trained. `exakit model list` shows what is there.
+# notebook again should put the model it has just trained. The stand-in created by this notebook is also
+# preconfirmed with `--yes`: its source is the code just run here. A supplied `MODEL_FILE` is not preconfirmed;
+# inspect and approve its origin with `exakit model inspect <file>` and `exakit model put <file> --yes` first.
+# `exakit model list` shows what is there.
 
 # %%
 def exakit(*args: str) -> dict:
@@ -175,7 +179,10 @@ def exakit(*args: str) -> dict:
 
 
 if MODEL_COMPATIBLE:
-    put = exakit("model", "put", str(model_path), "--replace")
+    put_options = ["--replace"]
+    if MODEL_FILE is None:  # Trust only the stand-in trained and pickled in this notebook.
+        put_options.append("--yes")
+    put = exakit("model", "put", str(model_path), *put_options)
     print(f"sha256 {put['sha256']}, {put['size']} bytes{' (replaced the earlier file)' if put['replaced'] else ''}")
     print(f"the UDF reads it at: {put['path']}")
 else:

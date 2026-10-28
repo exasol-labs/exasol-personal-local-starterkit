@@ -354,6 +354,7 @@ _udf_fetch_verified() {
             _udf_fail 5 download "$_ufc_remedy" "The $_ufc_what could not be downloaded from $_ufc_src. Retry when online, or set EXAKIT_UDF_CONTAINERS_MIRROR to a folder or URL holding $_ufc_name."; return 1; }
         EXAKIT_ACTIVE_LABEL=""
     fi
+    exakit_addon_activity "Verifying $_ufc_name size and SHA-256"
     _ufc_err="$EXAKIT_HOME/.udf-verify.err"
     if ! _udf_rules verify "$_ufc_part" "$_ufc_sha" "$_ufc_size" 2>"$_ufc_err"; then
         _ufc_why="$(cat "$_ufc_err" 2>/dev/null)"; rm -f "$_ufc_err" "$_ufc_part"
@@ -453,6 +454,7 @@ _udf_python_alias() {
 # run (UDF_FAIL_* say which).
 udf_devkit_smoke() {
     _us_alias="$1"; shift
+    exakit_addon_activity "Checking Python packages inside $_us_alias"
     UDF_SMOKE_LINES=""
     _us_out="$(_udf_tool smoke "$_us_alias" "$EXAKIT_UDF_SCHEMA" "$@" 2>"$EXAKIT_HOME/.udf-smoke.err")"
     _us_rc=$?
@@ -535,6 +537,7 @@ _udf_with_restart() {
     run_logged "$@"
     _uwr_rc=$?
     info "Waiting for the database to answer after the restart"
+    exakit_addon_activity "Waiting for the database to restart"
     personal_wait_ready
     for _uwr_id in $_uwr_running; do
         exakit_service_start "$_uwr_id" >/dev/null 2>&1 || warn "$_uwr_id did not start again - start it with: exakit start $_uwr_id"
@@ -563,6 +566,21 @@ udf_devkit_setup_container() {
     _udf_record_language python
 }
 
+# Standard Python archives declare PYTHON3/PYTHON312 inside the archive, even
+# when the launcher is given a different --alias. Isolate that declaration so
+# the ML runtime can coexist with the official container. Keep the verified
+# original; the shared helper records both digests beside its cached derivative.
+_udf_prepare_ml_container() {
+    UDF_CONTAINER_INSTALL_FILE="$EXAKIT_UDF_CONTAINER_CACHE/$(basename "$UDF_CONTAINER_FILE" .tar.gz)-$EXAKIT_UDF_DEFAULT_ALIAS.tar.gz"
+    exakit_addon_activity "Preparing isolated Python ML container aliases"
+    EXAKIT_ACTIVE_LABEL="Preparing isolated Python ML container aliases"
+    run_logged run_python_any "$(exakit_repo_root)/setup/udf/slc_archive.py" \
+        "$UDF_CONTAINER_FILE" "$UDF_CONTAINER_INSTALL_FILE" "$EXAKIT_UDF_DEFAULT_ALIAS" "$UDF_CONTAINER_SHA256" || {
+        _udf_fail 5 verify "exakit logs" "Could not prepare the isolated ML container (see: exakit logs)."
+        return 1
+    }
+}
+
 # udf_devkit_setup_default — the prebuilt Python container of the matrix for
 # this database (ML1.2): select, download or reuse the cache, verify, install
 # as PYTHON3_ML, and the smoke UDF compares each package's version with the
@@ -571,10 +589,26 @@ udf_devkit_setup_default() {
     _udf_ready select-container || return 1
     _udf_select_container python || return 1
     _udf_fetch_container python || return 1
+    _udf_prepare_ml_container || return 1
     _usd_pins="$(_udf_rules pins "$UDF_CONTAINER_DOC" python "$UDF_CONTAINER_ARCH" "$UDF_CONTAINER_DB" 2>/dev/null | sed 's/ /==/')"
     # shellcheck disable=SC2086 -- one name==version per word
-    _udf_install_tarball "$UDF_CONTAINER_FILE" "$EXAKIT_UDF_DEFAULT_ALIAS" python "$UDF_CONTAINER_URL" $_usd_pins || return 1
+    _udf_install_tarball "$UDF_CONTAINER_INSTALL_FILE" "$EXAKIT_UDF_DEFAULT_ALIAS" python "$UDF_CONTAINER_URL" $_usd_pins || return 1
     _udf_record_language python
+}
+
+# The add-on promises an ML-ready UDF runtime, independently of the notebook
+# venv. Reuse and prove an existing ML alias; download it only when missing.
+udf_devkit_ensure_ml() {
+    if udf_devkit_installed_aliases | grep -qx "$EXAKIT_UDF_DEFAULT_ALIAS"; then
+        _udf_select_container python || return 1
+        _uem_pins="$(_udf_rules pins "$UDF_CONTAINER_DOC" python "$UDF_CONTAINER_ARCH" "$UDF_CONTAINER_DB" 2>/dev/null | sed 's/ /==/')"
+        # shellcheck disable=SC2086
+        udf_devkit_smoke "$EXAKIT_UDF_DEFAULT_ALIAS" $_uem_pins || return 1
+        manifest_set components.udf_devkit.python_alias "$EXAKIT_UDF_DEFAULT_ALIAS"
+    else
+        exakit_addon_activity "Preparing scikit-learn, pandas, NumPy and SciPy for UDFs"
+        udf_devkit_setup_default || return 1
+    fi
 }
 
 # udf_devkit_setup_rust [force] — the Rust container of the matrix (alias
@@ -701,14 +735,23 @@ udf_devkit_install() {
     manifest_set components.udf_devkit.schema "$EXAKIT_UDF_SCHEMA"
     # The container is part of the install; with no database up, it is the
     # first thing `exakit udf-setup` does.
+    _udi_primary_ok=1
     if ! exakit_db_reachable; then
         info "Start the database, then set up $_udi_lang UDFs with: exakit udf-setup --language $_udi_lang"
     elif [ "$_udi_lang" = rust ]; then
-        info "EXAKIT_UDF_LANGUAGE=rust: the Rust container is added beside a Python one (installed with it when none is there - training runs Python UDFs); one database restart"
-        _UDF_YES=1 udf_devkit_setup_rust 0 || warn "Rust UDFs are not proven yet (${UDF_FAIL_MSG:-see the log}) - run: exakit udf-setup --language rust"
+        info "EXAKIT_UDF_LANGUAGE=rust: the Rust container is added beside a Python one (installed with it when none is there - training runs Python UDFs); the ML container is prepared next"
+        _UDF_YES=1 udf_devkit_setup_rust 0 || { _udi_primary_ok=0; warn "Rust UDFs are not proven yet (${UDF_FAIL_MSG:-see the log}) - run: exakit udf-setup --language rust"; }
     else
-        _UDF_YES=1 udf_devkit_setup_container 0 || warn "Python UDFs are not set up yet - run: exakit udf-setup"
+        _UDF_YES=1 udf_devkit_setup_container 0 || { _udi_primary_ok=0; warn "Python UDFs are not set up yet - run: exakit udf-setup"; }
     fi
+    if exakit_db_reachable; then
+        _UDF_YES=1 udf_devkit_ensure_ml || {
+            manifest_set components.udf_devkit.validated false
+            warn "The ML packages are not ready inside the database - retry: exakit udf-use default"
+            return 1
+        }
+    fi
+    [ "$_udi_primary_ok" = 1 ] || { manifest_set components.udf_devkit.validated false; return 1; }
     return 0
 }
 
@@ -722,6 +765,10 @@ udf_devkit_validate() {
     _udv_ok=0
     if printf '%s\n' "$_udv_aliases" | grep -qx "$EXAKIT_UDF_OFFICIAL_ALIAS"; then
         udf_devkit_smoke "$EXAKIT_UDF_OFFICIAL_ALIAS" >/dev/null 2>&1 && _udv_ok=1
+    fi
+    if printf '%s\n' "$_udv_aliases" | grep -qx "$EXAKIT_UDF_DEFAULT_ALIAS"; then
+        udf_devkit_ensure_ml >/dev/null 2>&1 || { manifest_set components.udf_devkit.validated false; return 0; }
+        _udv_ok=1
     fi
     if printf '%s\n' "$_udv_aliases" | grep -qx "$EXAKIT_UDF_RUST_ALIAS"; then
         _udf_select_container rust >/dev/null 2>&1 && _udf_rust_smoke_asset \
@@ -1017,19 +1064,25 @@ udf_bucket_locate() {
     if [ -f "$_ubl_conf" ]; then
         _ubl_line="$(awk -v s="$EXAKIT_UDF_BUCKETFS_SERVICE" -v b="$EXAKIT_UDF_BUCKETFS_BUCKET" '$2 == s && $3 == b { print; exit }' "$_ubl_conf" 2>/dev/null)"
         if [ -z "$_ubl_line" ]; then
-            UDF_BUCKET_ERROR="$_ubl_conf maps no bucket $EXAKIT_UDF_BUCKETFS_SERVICE/$EXAKIT_UDF_BUCKETFS_BUCKET (it lists: $(awk '$2 != "__builtin__" { printf "%s/%s ", $2, $3 }' "$_ubl_conf" 2>/dev/null | sed 's/ $//')); the kit expects the launcher's default bucket - exakit update, or exakit status"
-            return 1
+            # The launcher writes only its internal SLC mapping on a fresh
+            # deployment. User bucket directories are still visible under
+            # /buckets as soon as they are created; this is the default mapping.
+            if awk '$0 !~ /^[[:space:]]*(#|$)/ && $2 != "__builtin__" { found=1 } END { exit !found }' "$_ubl_conf"; then
+                UDF_BUCKET_ERROR="$_ubl_conf maps no bucket $EXAKIT_UDF_BUCKETFS_SERVICE/$EXAKIT_UDF_BUCKETFS_BUCKET; the kit expects the launcher's default bucket (exakit status)"
+                return 1
+            fi
+        else
+            _ubl_inside="$(printf '%s\n' "$_ubl_line" | awk '{ print $1 }')"
+            _ubl_seen="$(printf '%s\n' "$_ubl_line" | awk '{ print $4 }')"
+            case "$_ubl_inside" in
+                /exa/*) UDF_BUCKET_DIR="$_ubl_exa/${_ubl_inside#/exa/}" ;;
+                *) UDF_BUCKET_ERROR="$_ubl_conf keeps bucket $EXAKIT_UDF_BUCKETFS_SERVICE/$EXAKIT_UDF_BUCKETFS_BUCKET at $_ubl_inside, outside the deployment's exa folder the kit can write to (exakit status)"; return 1 ;;
+            esac
+            case "$_ubl_seen" in
+                /*) UDF_BUCKET_UDF_ROOT="$_ubl_seen" ;;
+            esac
+            UDF_BUCKET_MAPPING=bucketfs.conf
         fi
-        _ubl_inside="$(printf '%s\n' "$_ubl_line" | awk '{ print $1 }')"
-        _ubl_seen="$(printf '%s\n' "$_ubl_line" | awk '{ print $4 }')"
-        case "$_ubl_inside" in
-            /exa/*) UDF_BUCKET_DIR="$_ubl_exa/${_ubl_inside#/exa/}" ;;
-            *) UDF_BUCKET_ERROR="$_ubl_conf keeps bucket $EXAKIT_UDF_BUCKETFS_SERVICE/$EXAKIT_UDF_BUCKETFS_BUCKET at $_ubl_inside, outside the deployment's exa folder the kit can write to (exakit status)"; return 1 ;;
-        esac
-        case "$_ubl_seen" in
-            /*) UDF_BUCKET_UDF_ROOT="$_ubl_seen" ;;
-        esac
-        UDF_BUCKET_MAPPING=bucketfs.conf
     fi
     if [ ! -d "$UDF_BUCKET_DIR" ]; then
         if ! mkdir -p "$UDF_BUCKET_DIR" 2>/dev/null || ! chmod 755 "$UDF_BUCKET_DIR" 2>/dev/null; then

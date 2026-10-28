@@ -4024,6 +4024,7 @@ EXAKIT_ADDON_NOTES_EOF
 _exakit_addon_table_build() {
     _atb_f="$1"; shift
     : > "$_atb_f"
+    : > "$_atb_f.activity"
     _atb_n=$#
     # Rows drawn so far (the group row is 1), and the defaults and inner group
     # specs the children add as they are drawn.
@@ -4253,7 +4254,8 @@ _exakit_addon_table_cell() {
 _exakit_addon_table_cleanup() {
     [ -n "$EXAKIT_ADDON_TABLE_STATE" ] || return 0
     rm -f "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_STATE.new" \
-          "$EXAKIT_ADDON_TABLE_STATE.lines" "$EXAKIT_ADDON_TABLE_STATE.stop"
+          "$EXAKIT_ADDON_TABLE_STATE.lines" "$EXAKIT_ADDON_TABLE_STATE.stop" \
+          "$EXAKIT_ADDON_TABLE_STATE.activity" "$EXAKIT_ADDON_TABLE_STATE.activity.new"
     EXAKIT_ADDON_TABLE_STATE=""
     # The rows' ids and the child rows go with it: a later scripted run in the
     # same shell must not find this table's children and skip a question.
@@ -4357,7 +4359,15 @@ _exakit_marketplace_install_one() {
 # capped below the next stage, so a slow PyPI resolve makes the bar wait rather
 # than walk into "validating".
 # ⇄ twin: Set-ExakitAddonProgress in exakit-common.ps1.
+exakit_addon_activity() {
+    [ -n "${EXAKIT_ADDON_TABLE_STATE:-}" ] && [ -n "${EXAKIT_ADDON_TABLE_ROW:-}" ] || return 0
+    # One writer (the install), one reader (the table animator).
+    printf '%s\n' "$1" | tr '\r\n' '  ' > "$EXAKIT_ADDON_TABLE_STATE.activity.new"
+    mv -f "$EXAKIT_ADDON_TABLE_STATE.activity.new" "$EXAKIT_ADDON_TABLE_STATE.activity"
+}
+
 _exakit_addon_progress() {
+    exakit_addon_activity "$2: $6"
     # An add-on being installed from the TABLE reports into its ROW; the row
     # already names it, so the "<id> · " prefix the one-line bar needs would be
     # the same fact twice, in a cell that has to spell a phase in a fixed width.

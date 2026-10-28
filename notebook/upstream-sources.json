@@ -1,0 +1,50 @@
+{
+  "schema_version": 1,
+  "license": "MIT",
+  "connector_revision": "14e2c7ad088b7109aa21d283e98f3126bbbe27e5",
+  "ai_lab_revision": "caec105aa678962736e8ba2e6466bbc1be5eaef3",
+  "ai_lab_url": "https://github.com/exasol/ai-lab/tree/caec105aa678962736e8ba2e6466bbc1be5eaef3",
+  "note": "AI Lab deploys the Notebook Connector example collection. These are local adaptations of that shared collection, with upstream code and license attribution.",
+  "notebooks": [
+    {
+      "notebook": "data-scientist/04_sql_and_dataframes",
+      "source": "https://github.com/exasol/notebook-connector/blob/14e2c7ad088b7109aa21d283e98f3126bbbe27e5/exasol/nb_connector/resources/notebooks/pyexasol/roundtrip_import_and_export.ipynb",
+      "sha256": "562e425f94c890b233ad5f24d91dacda366a85b6e4b9e580ced2613646c519c0",
+      "adaptations": [
+        "Use the kit secure connection and approved reference dataset roles.",
+        "Replace downloads, BucketFS HTTP and interactive AI Lab setup with the existing local kit paths.",
+        "Use text and table evaluation; dashboards remain on Dash Server."
+      ]
+    },
+    {
+      "notebook": "data-scientist/05_decision_tree_baseline",
+      "source": "https://github.com/exasol/notebook-connector/blob/14e2c7ad088b7109aa21d283e98f3126bbbe27e5/exasol/nb_connector/resources/notebooks/sklearn/sklearn_train_telescope.ipynb",
+      "sha256": "8ffba7aca9e5425b813b0e2bb83e06c7aaca14a295b96e25caada8c888dfd66d",
+      "adaptations": [
+        "Use the kit secure connection and approved reference dataset roles.",
+        "Replace downloads, BucketFS HTTP and interactive AI Lab setup with the existing local kit paths.",
+        "Use text and table evaluation; dashboards remain on Dash Server."
+      ]
+    },
+    {
+      "notebook": "ml-engineer/04_udf_package_check",
+      "source": "https://github.com/exasol/notebook-connector/blob/14e2c7ad088b7109aa21d283e98f3126bbbe27e5/exasol/nb_connector/resources/notebooks/script_languages_container/test_slc.ipynb",
+      "sha256": "c17a8fc1a4770976ad53b0298f76d38a2715f4e23b9aeca6ee95221815647752",
+      "adaptations": [
+        "Use the kit secure connection and approved reference dataset roles.",
+        "Replace downloads, BucketFS HTTP and interactive AI Lab setup with the existing local kit paths.",
+        "Use text and table evaluation; dashboards remain on Dash Server."
+      ]
+    },
+    {
+      "notebook": "ml-engineer/05_decision_tree_udf",
+      "source": "https://github.com/exasol/notebook-connector/blob/14e2c7ad088b7109aa21d283e98f3126bbbe27e5/exasol/nb_connector/resources/notebooks/sklearn/sklearn_train_telescope.ipynb",
+      "sha256": "8ffba7aca9e5425b813b0e2bb83e06c7aaca14a295b96e25caada8c888dfd66d",
+      "adaptations": [
+        "Use the kit secure connection and approved reference dataset roles.",
+        "Replace downloads, BucketFS HTTP and interactive AI Lab setup with the existing local kit paths.",
+        "Use text and table evaluation; dashboards remain on Dash Server."
+      ]
+    }
+  ]
+}

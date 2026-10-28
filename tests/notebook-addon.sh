@@ -67,6 +67,7 @@ check "the connector, pinned, with its extras (notebook-dependencies: ipywidgets
     "exasol-notebook-connector[bucketfs,ibis,pyexasol,sqlalchemy,notebook-dependencies]==3.1.0" "$(printf '%s\n' "$specs" | head -1)"
 contains "the kernel package" "ipykernel>=6.29,<8" "$specs"
 contains "the client model library matches the container" "scikit-learn==1.9.0" "$specs"
+for pkg in 'pandas>=2,<3' 'numpy>=1.26,<3' 'scipy>=1.10,<2' 'joblib>=1.5,<2'; do contains "the notebook explicitly brings $pkg" "$pkg" "$specs"; done
 contains "the MLflow client, not the server" "mlflow-skinny>=3,<4" "$specs"
 contains "Langfuse SDK major 5" "langfuse>=5,<6" "$specs"
 check "the kit's helper package" "$ROOT/notebook/package" "$(printf '%s\n' "$specs" | tail -2 | head -1)"
@@ -101,12 +102,12 @@ mkdir -p "$NB/data-scientist"
 printf 'mine' > "$NB/data-scientist/00_quickstart.ipynb"
 added="$(notebook_copy_notebooks | tr '\n' ' ')"
 check "what is missing comes, each in its persona's folder, the shared cells too" \
-    "00_shared/data_paths.ipynb data-scientist/01_explore.ipynb data-scientist/02_ask_your_data.ipynb data-scientist/03_share.ipynb ml-engineer/00_quickstart.ipynb ml-engineer/01_train.ipynb ml-engineer/02_rust_score.ipynb ml-engineer/03_score_external_model.ipynb " "$added"
+    "00_shared/data_paths.ipynb data-scientist/01_explore.ipynb data-scientist/02_ask_your_data.ipynb data-scientist/03_share.ipynb data-scientist/04_sql_and_dataframes.ipynb data-scientist/05_decision_tree_baseline.ipynb ml-engineer/00_quickstart.ipynb ml-engineer/01_train.ipynb ml-engineer/02_rust_score.ipynb ml-engineer/03_score_external_model.ipynb ml-engineer/04_udf_package_check.ipynb ml-engineer/05_decision_tree_udf.ipynb EXAMPLE-GUIDE.md UPSTREAM-LICENSE.txt upstream-sources.json " "$added"
 check "the user's own stays" "mine" "$(cat "$NB/data-scientist/00_quickstart.ipynb")"
 check "a second run adds nothing" "" "$(notebook_copy_notebooks)"
 contains "a README names each persona's order" "00. \`ml-engineer/00_quickstart.ipynb\` - Quickstart" "$(cat "$NB/README.md")"
 contains "under the persona's title" "## ml-engineer/ (ML Engineer)" "$(cat "$NB/README.md")"
-contains "...the score notebook last on the ML Engineer's path" "03_score_external_model.ipynb" "$(cat "$NB/README.md")"
+contains "...the external scoring notebook is included on the ML Engineer's path" "03_score_external_model.ipynb" "$(cat "$NB/README.md")"
 check "the README names no notebook this kit copy lacks" "" \
     "$(grep -o '[0-9][0-9]_[a-z_]*\.ipynb' "$NB/README.md" | sort -u | while read -r f; do find "$ROOT/notebook/notebooks" -name "$f" | grep -q . || printf ' %s' "$f"; done)"
 check "every catalog entry ships its notebook (or its .py is not in the tree yet)" "" \
@@ -118,7 +119,7 @@ check "the personas' first prompts name quickstarts that ship" "" \
     "$(for p in data-scientist ml-engineer; do [ -f "$ROOT/notebook/notebooks/$p/00_quickstart.ipynb" ] || printf ' %s' "$p"
         grep -q "$p/00_quickstart.ipynb" "$ROOT/personas/$p.json" || printf ' %s-prompt' "$p"; done)"
 check "the Marimo ones go to marimo/<persona>/, no README" \
-    "00_shared/data_paths.py data-scientist/00_quickstart.py data-scientist/01_explore.py data-scientist/02_ask_your_data.py data-scientist/03_share.py ml-engineer/00_quickstart.py ml-engineer/01_train.py ml-engineer/02_rust_score.py ml-engineer/03_score_external_model.py |no" \
+    "00_shared/data_paths.py data-scientist/00_quickstart.py data-scientist/01_explore.py data-scientist/02_ask_your_data.py data-scientist/03_share.py data-scientist/04_sql_and_dataframes.py data-scientist/05_decision_tree_baseline.py ml-engineer/00_quickstart.py ml-engineer/01_train.py ml-engineer/02_rust_score.py ml-engineer/03_score_external_model.py ml-engineer/04_udf_package_check.py ml-engineer/05_decision_tree_udf.py EXAMPLE-GUIDE.md UPSTREAM-LICENSE.txt upstream-sources.json |no" \
     "$(notebook_copy_notebooks marimo | tr '\n' ' ')|$([ -e "$EXAKIT_NOTEBOOK_DIR/marimo/README.md" ] && echo yes || echo no)"
 
 echo "the notebook tools: one checklist, all three ticked:"

@@ -136,20 +136,26 @@ function Get-UdfBucketLocation {
     $mapping = "default"
     $conf = Join-Path $exa "bucketfs.conf"
     if (Test-Path $conf -PathType Leaf) {
-        $match = @(Get-Content $conf | ForEach-Object {
+        $rows = @(Get-Content $conf | ForEach-Object {
             $parts = @($_ -split '\s+' | Where-Object { $_ })
-            if ($parts.Count -ge 4 -and $parts[1] -eq $script:UdfBucketfsService -and $parts[2] -eq $script:UdfBucketfsBucket) { ,$parts }
-        } | Select-Object -First 1)
+            if ($parts.Count -gt 0 -and -not $parts[0].StartsWith("#")) { ,$parts }
+        })
+        $match = @($rows | Where-Object { $_.Count -ge 4 -and $_[1] -eq $script:UdfBucketfsService -and $_[2] -eq $script:UdfBucketfsBucket } | Select-Object -First 1)
         if ($match.Count -eq 0) {
-            return [pscustomobject]@{ Dir = ""; UdfRoot = ""; Error = "$conf maps no bucket $($script:UdfBucketfsService)/$($script:UdfBucketfsBucket) (exakit status)" }
+            # Internal SLC metadata does not disable the directory-based default bucket.
+            $externalMappings = @($rows | Where-Object { $_.Count -lt 2 -or $_[1] -ne "__builtin__" })
+            if ($externalMappings.Count -gt 0) {
+                return [pscustomobject]@{ Dir = ""; UdfRoot = ""; Error = "$conf maps no bucket $($script:UdfBucketfsService)/$($script:UdfBucketfsBucket) (exakit status)" }
+            }
+        } else {
+            $inside = $match[0][0]
+            if ($inside -notmatch '^/exa/(?!.*(?:^|/)\.\.(?:/|$))[A-Za-z0-9_./-]+$') {
+                return [pscustomobject]@{ Dir = ""; UdfRoot = ""; Error = "$conf maps the bucket outside the deployment's exa folder (exakit status)" }
+            }
+            $dir = Join-Path $exa ($inside.Substring(5).Replace('/', [System.IO.Path]::DirectorySeparatorChar))
+            if ($match[0][3] -match '^/buckets/[A-Za-z0-9_./-]+$') { $udfRoot = $match[0][3] }
+            $mapping = "bucketfs.conf"
         }
-        $inside = $match[0][0]
-        if ($inside -notmatch '^/exa/(?!.*(?:^|/)\.\.(?:/|$))[A-Za-z0-9_./-]+$') {
-            return [pscustomobject]@{ Dir = ""; UdfRoot = ""; Error = "$conf maps the bucket outside the deployment's exa folder (exakit status)" }
-        }
-        $dir = Join-Path $exa ($inside.Substring(5).Replace('/', [System.IO.Path]::DirectorySeparatorChar))
-        if ($match[0][3] -match '^/buckets/[A-Za-z0-9_./-]+$') { $udfRoot = $match[0][3] }
-        $mapping = "bucketfs.conf"
     }
     try {
         if (-not (Test-Path $dir -PathType Container)) { New-Item -ItemType Directory -Path $dir -Force -ErrorAction Stop | Out-Null }
@@ -188,6 +194,7 @@ function Get-UdfDevkitInstalledAliases {
 # run). Twin of udf_devkit_smoke.
 function Test-UdfDevkitSmoke {
     param([Parameter(Mandatory)][string]$Alias, [string[]]$Packages = @())
+    Set-ExakitAddonActivity -Message "Checking Python packages inside $Alias"
     $script:UdfSmokeLines = @()
     $result = Invoke-UdfTool -ToolArgs (@("smoke", $Alias, $script:UdfSchema) + $Packages)
     $script:UdfSmokeLines = @($result[1] | Where-Object { $_ })
@@ -481,6 +488,7 @@ function Get-UdfVerifiedFile {
             return (Set-UdfFail -Code 5 -Step "download" -Remedy $Remedy -Message "The $What could not be downloaded from $source. Retry when online, or set EXAKIT_UDF_CONTAINERS_MIRROR to a folder or URL holding $name.")
         }
     }
+    Set-ExakitAddonActivity -Message "Verifying $name size and SHA-256"
     $verified = Invoke-UdfTool -NoConnection -ToolArgs @("verify", $part, $Sha256, $Size)
     if ($verified[0] -ne 0) {
         Remove-Item -Force $part -ErrorAction SilentlyContinue
@@ -614,6 +622,7 @@ function Invoke-UdfWithRestart {
     $script:ExakitActiveLabel = $What
     $ok = & $Action
     Info "Waiting for the database to answer after the restart"
+    Set-ExakitAddonActivity -Message "Waiting for the database to restart"
     Wait-PersonalReady
     foreach ($id in $running) {
         try { Start-ExakitService $id | Out-Null } catch { Warn2 "$id did not start again - start it with: exakit start $id" }
@@ -649,12 +658,27 @@ function Install-UdfDevkitOfficial {
 # this database (ML1.2): select, download or reuse the cache, verify, install
 # as PYTHON3_ML, and the smoke UDF compares each package's version with the
 # pin. $false with UdfFail set. Twin of udf_devkit_setup_default.
+# Standard archives declare PYTHON3 inside the package as well as the chosen
+# launcher alias. Prepare a cached derivative with an isolated ML declaration;
+# the shared helper verifies the original and records both SHA-256 digests.
+function Prepare-UdfMlContainer {
+    $name = (Split-Path -Leaf $script:UdfContainerFile) -replace '\.tar\.gz$', ''
+    $script:UdfContainerInstallFile = Join-Path $script:UdfContainerCache "$name-$($script:UdfDefaultAlias).tar.gz"
+    Set-ExakitAddonActivity -Message "Preparing isolated Python ML container aliases"
+    $result = Invoke-UdfTool -NoConnection -Script "slc_archive.py" -ToolArgs @($script:UdfContainerFile, $script:UdfContainerInstallFile, $script:UdfDefaultAlias, ("" + $script:UdfContainer.sha256))
+    if ($result[0] -ne 0) {
+        return (Set-UdfFail -Code 5 -Step "verify" -Remedy "exakit logs" -Message "Could not prepare the isolated ML container: $($result[2])")
+    }
+    return $true
+}
+
 function Install-UdfDevkitDefault {
     if (-not (Test-UdfReady -Step "select-container")) { return $false }
     if (-not (Select-UdfContainer -Language "python")) { return $false }
     if (-not (Get-UdfContainerFile -Language "python")) { return $false }
+    if (-not (Prepare-UdfMlContainer)) { return $false }
     $pins = Get-UdfContainerPins -Language "python"
-    if (-not (Install-UdfTarball -Tarball $script:UdfContainerFile -Alias $script:UdfDefaultAlias -Language "python" -Source ("" + $script:UdfContainer.url) -Packages $pins)) { return $false }
+    if (-not (Install-UdfTarball -Tarball $script:UdfContainerInstallFile -Alias $script:UdfDefaultAlias -Language "python" -Source ("" + $script:UdfContainer.url) -Packages $pins)) { return $false }
     Add-UdfLanguage "python"
     return $true
 }
@@ -754,6 +778,18 @@ function Install-UdfDevkitRust {
     return $true
 }
 
+function Assert-UdfDevkitMl {
+    if (@(Get-UdfDevkitInstalledAliases) -contains $script:UdfDefaultAlias) {
+        if (-not (Select-UdfContainer -Language "python")) { return $false }
+        $pins = Get-UdfContainerPins -Language "python"
+        if (-not (Test-UdfDevkitSmoke -Alias $script:UdfDefaultAlias -Packages $pins)) { return $false }
+        Set-ExakitManifestValue "components.udf_devkit.python_alias" $script:UdfDefaultAlias
+        return $true
+    }
+    Set-ExakitAddonActivity -Message "Preparing scikit-learn, pandas, NumPy and SciPy for UDFs"
+    return (Install-UdfDevkitDefault)
+}
+
 function Install-UdfDevkit {
     if (-not $script:UdfDevkitVersion) { $script:UdfDevkitVersion = Get-UdfDevkitLatest }
     if (-not (Test-UdfDevkitLauncher)) {
@@ -777,11 +813,21 @@ function Install-UdfDevkit {
         return $true
     }
     $script:UdfYes = $true
+    $primaryOk = $true
     try {
         if ($script:UdfLanguage -eq "rust") {
-            if (-not (Install-UdfDevkitRust)) { Warn2 "Rust UDFs are not proven yet ($($script:UdfFail.Message)) - run: exakit udf-setup --language rust" }
-        } elseif (-not (Install-UdfDevkitOfficial)) { Warn2 "Python UDFs are not set up yet - run: exakit udf-setup" }
+            if (-not (Install-UdfDevkitRust)) { $primaryOk = $false; Warn2 "Rust UDFs are not proven yet ($($script:UdfFail.Message)) - run: exakit udf-setup --language rust" }
+        } elseif (-not (Install-UdfDevkitOfficial)) { $primaryOk = $false; Warn2 "Python UDFs are not set up yet - run: exakit udf-setup" }
+        if (-not (Assert-UdfDevkitMl)) {
+            Set-ExakitManifestValue "components.udf_devkit.validated" $false
+            Warn2 "The ML packages are not ready inside the database - retry: exakit udf-use default"
+            return $false
+        }
     } finally { $script:UdfYes = $false }
+    if (-not $primaryOk) {
+        Set-ExakitManifestValue "components.udf_devkit.validated" $false
+        return $false
+    }
     return $true
 }
 
@@ -795,6 +841,10 @@ function Test-UdfDevkit {
     $proven = $false
     if ($aliases -contains $script:UdfOfficialAlias) {
         if (Test-UdfDevkitSmoke -Alias $script:UdfOfficialAlias) { $proven = $true }
+    }
+    if ($aliases -contains $script:UdfDefaultAlias) {
+        if (-not (Assert-UdfDevkitMl)) { Set-ExakitManifestValue "components.udf_devkit.validated" $false; return }
+        $proven = $true
     }
     if ($aliases -contains $script:UdfRustAlias) {
         if ((Select-UdfContainer -Language "rust") -and (Get-UdfRustSmokeAsset)) {

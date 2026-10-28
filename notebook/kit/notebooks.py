@@ -97,6 +97,18 @@ def copy(front: str, kit: Path, notebooks_dir: Path) -> tuple[list[str], list[st
             continue
         added.append(key)
         seen.add(key)
+    # Attribution and the example guide travel with the adapted notebooks.
+    for name in ("EXAMPLE-GUIDE.md", "UPSTREAM-LICENSE.txt", "upstream-sources.json"):
+        origin, target = kit / "notebook" / name, base / name
+        if not origin.is_file() or target.exists() or target.is_symlink() or name in before:
+            continue
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(origin, target)
+            seen.add(name)
+            added.append(name)
+        except OSError as err:
+            problems.append(f"{name}: {err.strerror or err}")
     if front == "jupyter":                           # Marimo would list a README as a notebook of its own
         try:
             write_readme(kit, doc, base)
@@ -127,6 +139,8 @@ def write_readme(kit: Path, doc: dict, folder: Path) -> None:
             lines += ([""] if lines[-1] else []) + [f"## {persona}/ ({persona_title(kit, persona)})", ""]
         lines.append(f"{int(entry['step']):02d}. `{persona}/{entry['jupyter']}` - {entry['title']}: {entry['summary']}")
         lines.append(f"    Needs: {entry['needs']}")
+        if entry.get("upstream"):
+            lines.append(f"    Adapted from [Exasol Notebook Connector / AI Lab]({entry['upstream']}); see UPSTREAM-LICENSE.txt.")
     shared = doc.get("shared")
     if shared and (source / shared["folder"] / shared["jupyter"]).is_file():
         lines += ["", f"`{shared['folder']}/{shared['jupyter']}` - {shared['title']}: {shared['summary']}"]

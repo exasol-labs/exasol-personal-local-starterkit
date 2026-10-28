@@ -92,9 +92,53 @@
       "step": 3,
       "title": "Score a model trained elsewhere",
       "summary": "Brings a model trained anywhere into the bucket directory with exakit model put, creates the scoring UDF from the template, scores a table and compares with the prediction on this computer.",
-      "needs": "A Python container with scikit-learn (exakit udf-setup) and a model file (01_train's, or your own scikit-learn pickle or ONNX file).",
+      "needs": "The ML Python container (exakit marketplace udf-devkit; older installs: exakit udf-use default) and a model file (01_train's, or your own scikit-learn pickle or ONNX file).",
       "jupyter": "03_score_external_model.ipynb",
       "marimo": "03_score_external_model.py"
+    },
+    {
+      "id": "sql-dataframes",
+      "persona": "data-scientist",
+      "step": 4,
+      "title": "SQL results as pandas DataFrames",
+      "summary": "Learn the SQL-to-DataFrame pattern and validate totals on the bundled reference data.",
+      "needs": "An approved reference dataset; notebook add-on.",
+      "jupyter": "04_sql_and_dataframes.ipynb",
+      "marimo": "04_sql_and_dataframes.py",
+      "upstream": "https://github.com/exasol/notebook-connector/blob/14e2c7ad088b7109aa21d283e98f3126bbbe27e5/exasol/nb_connector/resources/notebooks/pyexasol/roundtrip_import_and_export.ipynb"
+    },
+    {
+      "id": "decision-tree-baseline",
+      "persona": "data-scientist",
+      "step": 5,
+      "title": "Build a decision-tree baseline",
+      "summary": "Fit and evaluate a reproducible local classifier using approved category and label roles.",
+      "needs": "An approved dataset with category and binary label roles; notebook add-on.",
+      "jupyter": "05_decision_tree_baseline.ipynb",
+      "marimo": "05_decision_tree_baseline.py",
+      "upstream": "https://github.com/exasol/notebook-connector/blob/14e2c7ad088b7109aa21d283e98f3126bbbe27e5/exasol/nb_connector/resources/notebooks/sklearn/sklearn_train_telescope.ipynb"
+    },
+    {
+      "id": "udf-package-check",
+      "persona": "ml-engineer",
+      "step": 4,
+      "title": "Check the packages inside a Python UDF",
+      "summary": "Import scikit-learn, pandas, NumPy, SciPy and joblib inside Exasol and report their versions.",
+      "needs": "The udf-devkit ML runtime; an approved reference dataset.",
+      "jupyter": "04_udf_package_check.ipynb",
+      "marimo": "04_udf_package_check.py",
+      "upstream": "https://github.com/exasol/notebook-connector/blob/14e2c7ad088b7109aa21d283e98f3126bbbe27e5/exasol/nb_connector/resources/notebooks/script_languages_container/test_slc.ipynb"
+    },
+    {
+      "id": "decision-tree-udf",
+      "persona": "ml-engineer",
+      "step": 5,
+      "title": "Train a decision tree inside Exasol",
+      "summary": "Reuse the handoff feature view and held-out split to evaluate an alternative model inside a SET UDF.",
+      "needs": "A fresh approved handoff and the udf-devkit ML runtime.",
+      "jupyter": "05_decision_tree_udf.ipynb",
+      "marimo": "05_decision_tree_udf.py",
+      "upstream": "https://github.com/exasol/notebook-connector/blob/14e2c7ad088b7109aa21d283e98f3126bbbe27e5/exasol/nb_connector/resources/notebooks/sklearn/sklearn_train_telescope.ipynb"
     }
   ]
 }

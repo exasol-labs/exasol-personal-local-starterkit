@@ -66,9 +66,9 @@ exakit_print_mcp_setup_summary() { info "Restart Claude to load the updated MCP 
 exakit_print_mcp_ready_panel() { ok "MCP server 'exasol' - read-only, started by your AI client on demand"; }
 
 # The add-ons: the notebook installed, udf-devkit not.
-exakit_marketplace_addons() { printf 'notebook|Notebooks\nudf-devkit|Python UDFs\n'; }
+exakit_marketplace_addons() { printf 'notebook|Notebooks\njson-tables|JSON Tables\ndash-server|Dash Server\nudf-devkit|Python UDFs\n'; }
 _exakit_addon_offerable() { return 0; }
-exakit_marketplace_addon_installed() { [ "$1" = notebook ]; }
+exakit_marketplace_addon_installed() { case "$1" in notebook|json-tables|dash-server) return 0 ;; *) return 1 ;; esac; }
 _exakit_addon_system_present() { return 1; }
 exakit_marketplace_addon_available() { return 0; }
 exakit_marketplace_addon_description() { printf 'Python UDFs in the database'; }

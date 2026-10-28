@@ -5387,6 +5387,7 @@ function Show-ExakitMarketplaceMenu {
     Info "Details on any add-on: exakit help <id>"
     $script:ExakitAddonTable = New-ExakitTable -Title "Marketplace add-ons" -Col1 "Add-on" `
         -Col2 "Version" -Col3 "Description"
+    $script:ExakitAddonTable.Activity = ""
     [void](Add-ExakitTableRow -Kind "group" -Label "Select All" -Table $script:ExakitAddonTable)
     [void]$addonIds.Add("")
     $addonCount = $selectable.Count
@@ -5744,12 +5745,20 @@ function Show-ExakitAddonNotes {
 # almost none. The seconds are what the creep fills the gaps with, capped below
 # the next stage - so a slow PyPI resolve makes the bar wait rather than walk
 # into "validating". Twin of _exakit_addon_progress in common.sh.
+function Set-ExakitAddonActivity {
+    param([string]$Message)
+    if ($script:ExakitAddonTableRow -gt 0 -and $null -ne $script:ExakitAddonTable) {
+        $script:ExakitAddonTable.Activity = $Message
+    }
+}
+
 function Set-ExakitAddonProgress {
     param(
         [Parameter(Mandatory)][string]$Id, [Parameter(Mandatory)][int]$Pct,
         [Parameter(Mandatory)][int]$Ceiling, [Parameter(Mandatory)][int]$Secs,
         [Parameter(Mandatory)][string]$Phase
     )
+    Set-ExakitAddonActivity -Message "$Id`: $Phase"
     # An add-on being installed from the TABLE reports into its ROW; the row
     # already names it, so the "<id> - " prefix the one-line bar needs would be
     # the same fact twice, in a cell that has to spell a phase in a fixed width.

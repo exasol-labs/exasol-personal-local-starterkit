@@ -42,12 +42,14 @@ try {
     Check "no persona: the kit's own samples (default=yes)" "tpch,energy,weather" (@(Invoke-ExakitPersonaService "default-datasets") -join "")
     Check "data-scientist: Pharma and Banking" "pharma_trials,banking_complaints" (Get-ExakitPersonaValue "data-scientist" "datasets")
     Check "ml-engineer: Pharma and Banking" "pharma_trials,banking_complaints" (Get-ExakitPersonaValue "ml-engineer" "datasets")
+    Check "data-scientist: notebook, JSON loading and Share" "notebook,json-tables,dash-server" (Get-ExakitPersonaValue "data-scientist" "addons")
+    Check "ml-engineer: notebook, JSON loading and UDFs" "notebook,json-tables,udf-devkit" (Get-ExakitPersonaValue "ml-engineer" "addons")
     Write-Host "several personas ticked together are combined by the service:"
     Check "the title names each" "Data Scientist + ML Engineer" (@(Invoke-ExakitPersonaService "title" "ml-engineer,data-scientist") -join "")
     Check "a known list reads back in the kit's order" "data-scientist,ml-engineer" (Get-ExakitPersona "ml-engineer,data-scientist")
     Check "one unknown among several is not known" "" "$(Get-ExakitPersona 'data-scientist,nope')"
     Clear-Answers; $env:EXAKIT_PERSONA = "data-scientist,ml-engineer"; Set-ExakitPersonaEnv
-    Check "their datasets and add-ons together, each once" "pharma_trials,banking_complaints|all|notebook,udf-devkit" (Answers)
+    Check "their datasets and add-ons together, each once" "pharma_trials,banking_complaints|all|notebook,json-tables,dash-server,udf-devkit" (Answers)
     Check "each dataset is named with the personas it is for" "both personas" ((Get-ExakitPersonaDatasetHints)["pharma_trials"])
     Write-Host "the data question (one table) ticks the personas' datasets:"
     function Get-ExakitPendingDatasets { return @([pscustomobject]@{ Id = "tpch"; Label = "TPC-H retail benchmark (~175k rows)" },
@@ -75,9 +77,9 @@ try {
     Remove-Item Env:EXAKIT_DATASETS_PRESELECT -ErrorAction SilentlyContinue
     Write-Host "an explicit answer wins, per variable:"
     Clear-Answers; $env:EXAKIT_PERSONA = "ml-engineer"; Set-ExakitPersonaEnv
-    Check "the persona answers everything left open" "pharma_trials,banking_complaints|all|notebook,udf-devkit" (Answers)
+    Check "the persona answers everything left open" "pharma_trials,banking_complaints|all|notebook,json-tables,udf-devkit" (Answers)
     Clear-Answers; $env:EXAKIT_PERSONA = "ml-engineer"; $env:EXAKIT_DATASETS = "pharma_trials"; Set-ExakitPersonaEnv
-    Check "EXAKIT_DATASETS wins, the rest stays the persona's" "pharma_trials|all|notebook,udf-devkit" (Answers)
+    Check "EXAKIT_DATASETS wins, the rest stays the persona's" "pharma_trials|all|notebook,json-tables,udf-devkit" (Answers)
     Clear-Answers; $env:EXAKIT_PERSONA = "data-scientist"; $env:EXAKIT_LOAD_SAMPLE = "0"; $env:EXAKIT_MARKETPLACE_ADDONS = "none"; Set-ExakitPersonaEnv
     Check "EXAKIT_LOAD_SAMPLE=0 and add-ons none win" "|all|none" (Answers)
     Clear-Answers; $env:EXAKIT_PERSONA = "data-scientist"; $env:EXAKIT_SKIP_MCP = "1"; Set-ExakitPersonaEnv
@@ -94,7 +96,7 @@ try {
     Check "no console, no persona: the default personas' datasets, nothing recorded" "tpch,energy,weather||" "$($env:EXAKIT_DATASETS_PRESELECT)|$($env:EXAKIT_MARKETPLACE_PRESELECT)|$($env:EXAKIT_PERSONA)"
     Remove-Item Env:EXAKIT_DATASETS_PRESELECT -ErrorAction SilentlyContinue
     Set-ExakitPersonaPreselect -Ids "data-scientist"
-    Check "picked on screen: the persona's datasets and add-ons are ticked" "pharma_trials,banking_complaints|notebook" "$($env:EXAKIT_DATASETS_PRESELECT)|$($env:EXAKIT_MARKETPLACE_PRESELECT)"
+    Check "picked on screen: the persona's datasets and add-ons are ticked" "pharma_trials,banking_complaints|notebook,json-tables,dash-server" "$($env:EXAKIT_DATASETS_PRESELECT)|$($env:EXAKIT_MARKETPLACE_PRESELECT)"
     foreach ($v in @("EXAKIT_DATASETS_PRESELECT", "EXAKIT_MARKETPLACE_PRESELECT")) { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
     $env:EXAKIT_PERSONA_ACTIVE = "1"
     $note = (Write-ExakitPersonaMarketplaceNote 6>&1 | Out-String)
@@ -152,7 +154,7 @@ try {
     }
     # Pharma is in already and the notebook installed: neither is redone.
     function Get-ExakitPendingDatasets { return @([pscustomobject]@{ Id = "banking_complaints"; Label = "Banking complaints (CFPB, ~7k complaints)" }) }
-    function Get-ExakitMarketplaceInstalledAddons { return @("notebook") }
+    function Get-ExakitMarketplaceInstalledAddons { return @("notebook", "json-tables", "dash-server") }
     # The question test above silenced the heading; the title line uses it.
     function Write-ExakitHeading([string]$Msg) { Write-Host "  > $Msg" }
     function PersonaCmd([string[]]$CmdArgs) {
@@ -184,7 +186,7 @@ try {
     Check "on a console each step gets its table's defaults instead of the variable" `
         "data-load datasets= preselect=banking_complaints auto=1;mcp-setup clients= preselect=all auto=1;marketplace addons= only=udf-devkit auto=1;mlflow action=start" ($script:Steps -join ";")
     function Get-ExakitPendingDatasets { return @() }
-    function Get-ExakitMarketplaceInstalledAddons { return @("notebook", "udf-devkit") }
+    function Get-ExakitMarketplaceInstalledAddons { return @("notebook", "json-tables", "dash-server", "udf-devkit") }
     Clear-Answers
     $plan = (Show-ExakitPersonaPlan -Ids (Get-ExakitManifestValue "persona.id") -Json | Out-String) | ConvertFrom-Json
     Check "plan for the recorded set after the add: nothing pending" "data-scientist,ml-engineer|True" "$($plan.persona)|$($plan.nothing_pending)"
@@ -192,7 +194,7 @@ try {
     Check "added again with everything in: each part says so" $true ($said -like "*Already loaded: Pharma clinical trials, Banking complaints*")
     Check "...nothing is loaded or installed (the AI client step says for itself what is connected)" "mcp-setup mlflow" (($script:Steps | ForEach-Object { ($_ -split ' ')[0] }) -join " ")
     function Get-ExakitPendingDatasets { return @([pscustomobject]@{ Id = "banking_complaints"; Label = "Banking complaints (CFPB, ~7k complaints)" }) }
-    function Get-ExakitMarketplaceInstalledAddons { return @("notebook") }
+    function Get-ExakitMarketplaceInstalledAddons { return @("notebook", "json-tables", "dash-server") }
     Set-ExakitManifestValue "persona.id" "general,data-scientist"
     $said = PersonaCmd @("apply", "ml-engineer", "--yes")
     Check "apply is the same command, and --yes is accepted" $true ($said -notlike "*THREW*" -and $script:ExakitPersonaAddOk)

@@ -2,11 +2,11 @@
   "schema_version": 1,
   "id": "data-scientist",
   "title": "Data Scientist",
-  "summary": "Explore the Pharma and Banking reference datasets in notebooks connected to the database, with model calls traced to your Langfuse.",
+  "summary": "Explore Pharma, Banking or your own files in connected notebooks, trace model calls to your Langfuse, and share checked results on Dash Server.",
   "picker": true,
   "order": 10,
   "datasets": ["pharma_trials", "banking_complaints"],
   "mcp_clients": "all",
-  "addons": ["notebook"],
+  "addons": ["notebook", "json-tables", "dash-server"],
   "first_prompt": "Open the Data Scientist quickstart: run exakit notebook and open data-scientist/00_quickstart.ipynb."
 }

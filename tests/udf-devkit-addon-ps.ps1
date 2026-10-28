@@ -81,6 +81,7 @@ function Invoke-UdfSlc {
     [void]$script:calls.Add("launcher slc $($SlcArgs -join ' ')")
     return ,@(0, @())
 }
+function Prepare-UdfMlContainer { $script:UdfContainerInstallFile = $script:UdfContainerFile; return $true }
 function Reset-Calls { $script:calls.Clear() }
 
 try {
@@ -118,6 +119,15 @@ try {
     $said = ""
     try { Invoke-CmdUdfFile -CmdArgs @($model, "../escape.pkl") } catch { $said = "$_" }
     Contains "never outside the bucket" "not a path inside the bucket" $said
+
+    Write-Host "an internal SLC mapping keeps the default directory bucket usable:"
+    $conf = Join-Path $script:PersonalDeployDir "local/runtime/exa/bucketfs.conf"
+    Set-Content $conf "/exa/slc __builtin__ slc /exa/slc internal"
+    $location = Get-UdfBucketLocation
+    Check "internal-only configuration uses the default directory mapping" "default /buckets/bfsdefault/default " "$($location.Mapping) $($location.UdfRoot) $($location.Error)"
+    Set-Content $conf "/exa/other other bucket /buckets/other/bucket internal"
+    Contains "an explicit different bucket is still refused" "maps no bucket" (Get-UdfBucketLocation).Error
+    Remove-Item $conf
 
     Write-Host "the commands refuse what they do not know:"
     function Deny-ExakitInput { param([string]$Message, $Remedy = $null) throw "EXIT 2: $Message" }
@@ -236,6 +246,23 @@ try {
     Check "--json: the cached file was reused (no second download)" "True" (Test-Path $cachedPy)
     $script:ExakitRefusalJson = $false; $script:UdfJson = $false; $script:ExakitQuietDetail = $false
 
+    Write-Host "an existing ML runtime is proved without reinstalling or restarting:"
+    $originalAliases = ${function:Get-UdfDevkitInstalledAliases}
+    $originalSmoke = ${function:Test-UdfDevkitSmoke}
+    try {
+        function Get-UdfDevkitInstalledAliases { return @("PYTHON3_ML") }
+        Reset-Calls
+        Check "the existing alias passes" "True" (Assert-UdfDevkitMl)
+        Check "only the package smoke ran" "smoke PYTHON3_ML scikit-learn==1.9.0 numpy==2.4.6" ($script:calls -join "|")
+        Check "the selected alias is recorded" "PYTHON3_ML" (Get-ExakitManifestValue "components.udf_devkit.python_alias")
+        function Test-UdfDevkitSmoke { param([string]$Alias, [string[]]$Packages = @()); return ($Alias -ne "PYTHON3_ML") }
+        Check "a missing ML package fails the add-on" "False" (Install-UdfDevkit)
+        Check "and it is not marked validated" "False" (Get-ExakitManifestValue "components.udf_devkit.validated")
+    } finally {
+        ${function:Get-UdfDevkitInstalledAliases} = $originalAliases
+        ${function:Test-UdfDevkitSmoke} = $originalSmoke
+    }
+
     Write-Host "a digest that does not match is refused before the launcher sees the file:"
     Remove-Item -Recurse -Force $cache -ErrorAction SilentlyContinue
     $script:VersionsDocPath = $badDoc
@@ -279,8 +306,8 @@ try {
     $script:UdfLanguage = "rust"
     Reset-Calls
     Check "the install succeeds" "True" (Install-UdfDevkit)
-    Check "Rust and Python install with one restart, then both smoke UDFs run" `
-        "stop dash-server|launcher slc custom install --source $cachedRs --alias RUST --language rust --auto-approve --no-restart|launcher slc install PYTHON3 --auto-approve|wait|start dash-server|smoke PYTHON3|$smokeCall" ($script:calls -join "|")
+    Check "Rust and Python install together, then the ML runtime installs and checks every declared package" `
+        "stop dash-server|launcher slc custom install --source $cachedRs --alias RUST --language rust --auto-approve --no-restart|launcher slc install PYTHON3 --auto-approve|wait|start dash-server|smoke PYTHON3|$smokeCall|stop dash-server|launcher slc custom install --source $cachedPy --alias PYTHON3_ML --language python --auto-approve|wait|start dash-server|smoke PYTHON3_ML scikit-learn==1.9.0 numpy==2.4.6" ($script:calls -join "|")
     Check "the smoke library was verified into the cache before the install" "fake rust smoke aarch64" ([System.IO.File]::ReadAllText($cachedSo))
     Check "and copied into the bucket directory under udf/" "fake rust smoke aarch64" ([System.IO.File]::ReadAllText($bucketUdf))
     Check "both languages are recorded" "rust,python" (Get-ExakitManifestValue "components.udf_devkit.languages")

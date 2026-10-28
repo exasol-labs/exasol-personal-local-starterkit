@@ -285,6 +285,31 @@ class _OwnConn:
 class OwnFileTest(unittest.TestCase):
     ROLES = {"entity": "ID", "category": "CAT", "date": "D", "label": "L", "text": ["MEMO"]}
 
+    def test_personal_release_version_is_normalized_only_during_import(self):
+        class PersonalConn(_OwnConn):
+            def __init__(self, fail=False):
+                super().__init__()
+                self.login_info = {"releaseVersion": "2026.2.0-nano.3"}
+                self.import_version = None
+                self.fail = fail
+
+            def import_from_pandas(self, frame, target):
+                self.import_version = self.login_info["releaseVersion"]
+                if self.fail:
+                    raise RuntimeError("import failed")
+                super().import_from_pandas(frame, target)
+
+        conn = PersonalConn()
+        frame = pandas.DataFrame({"ID": [1]})
+        own_file._load(conn, frame, [("ID", "DECIMAL(18,0)")], "MY_DATA.T", "scratch")
+        self.assertEqual(conn.import_version, "2026.2.0")
+        self.assertEqual(conn.login_info["releaseVersion"], "2026.2.0-nano.3")
+        self.assertEqual(conn.frame["ID"].tolist(), [1])
+        failed = PersonalConn(fail=True)
+        with self.assertRaisesRegex(RuntimeError, "import failed"):
+            own_file._load(failed, frame, [("ID", "DECIMAL(18,0)")], "MY_DATA.T", "scratch")
+        self.assertEqual(failed.login_info["releaseVersion"], "2026.2.0-nano.3")
+
     def load(self, name, frame, roles=None):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / name
@@ -392,10 +417,15 @@ class SwapTest(unittest.TestCase):
     def test_the_sql_differs_only_in_descriptor_values(self):
         sys.path.insert(0, str(ROOT / "packages" / "exasol-mlflow"))
         for notebook in sorted(NOTEBOOKS.glob("*/0*.py")):
-            if notebook.name == "01_train.py":
+            if notebook.name in ("01_train.py", "05_decision_tree_udf.py"):
                 # Its SQL is produced from the handoff by exakit_nb.ml_train; test_ml_train and test_handoff
                 # pin that path. It deliberately has no inline SQL f-string to substitute here.
                 self.assertIn("nb.prepare_training(conn, ds, handoff", notebook.read_text(encoding="utf-8"))
+                continue
+            if notebook.name == "04_udf_package_check.py":
+                # The package diagnostic's SQL is independent of the reference dataset.
+                self.assertIn("ds = nb.dataset(conn, DATASET).require_approved", notebook.read_text())
+                self.assertIn("SELECT EXAKIT_EXAMPLES.ML_PACKAGES(1)", notebook.read_text())
                 continue
             if notebook.name == "02_rust_score.py":
                 # Its SQL is the handoff's training SQL over the deployed Rust UDF: no role is rendered inline.

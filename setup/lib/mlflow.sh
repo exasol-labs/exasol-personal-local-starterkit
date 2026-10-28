@@ -27,8 +27,12 @@ mlflow_require_server() {
     [ -x "$(notebook_venv_python)" ] || die "The notebook add-on is needed for MLflow. Install it with: exakit marketplace notebook"
     if ! "$(notebook_venv_python)" -c 'import mlflow.server' >/dev/null 2>&1; then
         _mrs_uv="$(_notebook_uv)" || die "The notebook package installer is missing. Repair with: exakit update notebook"
+        exakit_init_logging
+        _mrs_previous_label="${EXAKIT_ACTIVE_LABEL:-}"
+        EXAKIT_ACTIVE_LABEL="Installing the local MLflow server"
         run_logged "$_mrs_uv" pip install --python "$(notebook_venv_python)" 'mlflow>=3,<4' || \
             die "MLflow server could not be installed. Read: exakit logs setup"
+        EXAKIT_ACTIVE_LABEL="$_mrs_previous_label"
     fi
 }
 

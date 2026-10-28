@@ -12,7 +12,16 @@ fails until one is installed. And it has
 **no BucketFS upload service**: its BucketFS is a folder in the deployment,
 which the database reads under `/buckets`. The `udf-devkit` marketplace add-on
 handles both through the Exasol launcher (2.3.0 or later). The ml-engineer
-persona installs it.
+persona installs it. The add-on also installs the pinned `PYTHON3_ML`
+container, including scikit-learn, pandas, NumPy and SciPy; these live inside
+the database, independently of the notebook environment. An existing ML
+container is checked against every package pin without a restart. Standard
+archives also declare the official Python aliases internally; the kit prepares
+a cached copy with only `PYTHON3_ML` in that declaration so both runtimes can
+coexist. It keeps the verified original and records both SHA-256 digests.
+A missing package fails the add-on and names `exakit udf-use default` as the retry.
+Rust adds `RUST` alongside the Python ML runtime. A fresh install can restart
+the database more than once while these containers are installed.
 
 ## Every container install restarts the database
 

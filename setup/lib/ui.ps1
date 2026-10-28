@@ -279,6 +279,7 @@ $script:UiSpinNested = 0
 $script:UiTableLive = $false
 
 function Start-ExakitSpinner([string]$Label) {
+    if (Get-Command Set-ExakitAddonActivity -ErrorAction SilentlyContinue) { Set-ExakitAddonActivity -Message $Label }
     # A live table is the same single slot: it is already redrawing these rows, so
     # a spinner underneath it takes a reference and draws nothing. Without this a
     # dataset load's first Invoke-ExakitLogged would paint a spinner over the
@@ -1001,6 +1002,12 @@ function Get-ExakitTableFrame {
     if ($col3W -gt 0) { $inner += $sepW + $col3W }
     $inner += $statSepW + $statW
     $lines = New-Object 'System.Collections.Generic.List[string]'
+
+    if ($Table.ContainsKey("Activity")) {
+        $activity = ("" + $Table.Activity) -replace "[\r\n]", " "
+        if ($activity.Length -gt $inner) { $activity = $activity.Substring(0, $inner) }
+        [void]$lines.Add("  " + $script:UiDim + $activity + $script:UiReset + (" " * ($inner + 2 - $activity.Length)))
+    }
 
     $title = " " + $Table.Title + " "
     $fill = $inner - $title.Length - 1

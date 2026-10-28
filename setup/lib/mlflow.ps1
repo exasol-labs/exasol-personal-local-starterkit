@@ -44,9 +44,14 @@ function Assert-MlflowServer {
     if ($probe -ne 0) {
         $uv = Get-NotebookUv
         if (-not $uv) { Fail "The notebook package installer is missing. Repair with: exakit update notebook" }
-        if ((Invoke-ExakitLogged $uv "pip" "install" "--python" $python "mlflow>=3,<4") -ne 0) {
-            Fail "MLflow server could not be installed. Read: exakit logs setup"
-        }
+        Initialize-ExakitLogging
+        $previousLabel = $script:ExakitActiveLabel
+        $script:ExakitActiveLabel = "Installing the local MLflow server"
+        try {
+            if ((Invoke-ExakitLogged $uv "pip" "install" "--python" $python "mlflow>=3,<4") -ne 0) {
+                Fail "MLflow server could not be installed. Read: exakit logs setup"
+            }
+        } finally { $script:ExakitActiveLabel = $previousLabel }
     }
 }
 

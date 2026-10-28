@@ -322,6 +322,7 @@ _UI_SPIN_OWNER=''
 # it re-checks `-t 1` at call time so a spinner can never leak into a
 # $(command substitution) capture, even when UI_FANCY was 1 at load time.
 ui_spin_begin() {
+    command -v exakit_addon_activity >/dev/null 2>&1 && exakit_addon_activity "$1"
     # Something is already animating this line: take a reference, draw nothing.
     # _UI_LINE_BUSY is checked as well as the pid because the loads run in
     # subshells that had to drop the pid, and run_logged starts one of these for
@@ -1393,6 +1394,15 @@ ui_table_frame() {
     # and the error accumulates, which is what left four lines of an old frame
     # stranded above the new one near the bottom of a screen.
     _utr_f="$_utr_f  ${UI_ACCENT:-}${UI_BL:-+}${_UI_TABLE_HR:0:$_utr_inner}${UI_BR:-+}${UI_RESET:-}"
+    # Marketplace reserves one line above the box for the current operation.
+    # Pad it so a shorter next phase erases the previous one without flicker.
+    if [ -f "$1.activity" ]; then
+        _utr_activity="$(head -n 1 "$1.activity" 2>/dev/null)"
+        _utr_activity="${_utr_activity:0:$_utr_inner}"
+        _utr_f="  ${UI_DIM:-}${_utr_activity}${UI_RESET:-}${_UI_TABLE_SP:0:$(( _utr_inner + 2 - ${#_utr_activity} ))}
+$_utr_f"
+        _utr_lines=$(( _utr_lines + 1 ))
+    fi
     UI_TABLE_FRAME="$_utr_f"
     UI_TABLE_LINES=$(( _utr_lines + 1 ))
     # Reported so a redraw can tell whether the geometry moved. Same height and

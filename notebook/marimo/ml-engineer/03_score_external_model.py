@@ -25,7 +25,8 @@ def _(mo):
     **descriptor** roles - the category, the text and the label - so the notebook runs unchanged on either.
 
     **What it needs:** the dataset loaded (`exakit data-load pharma_trials`), the `udf-devkit` add-on with Python UDFs set
-    up (`exakit marketplace udf-devkit`, then `exakit udf-setup`), and scikit-learn in this notebook's environment.
+    up (`exakit marketplace udf-devkit`; older installations can add it with `exakit udf-use default`), and
+    scikit-learn in this notebook's environment.
     **Run time:** about three minutes; the first scoring query is the slowest, because each UDF instance loads the model
     once.
     """)
@@ -34,8 +35,10 @@ def _(mo):
 
 @app.cell
 def _():
+    import exakit.nb as nb
+
     DATASET = "pharma_trials"   # or "banking_complaints", or the path of a descriptor for a table you loaded
-    return (DATASET,)
+    return DATASET, nb
 
 
 @app.cell(hide_code=True)
@@ -53,11 +56,11 @@ def _(mo):
 
 
 @app.cell
-def _():
+def _(nb):
     MODEL_FILE = None                   # or "~/Downloads/model.pkl"
     SCORING_SCHEMA = "EXAKIT_SCORING"   # where the scoring UDF is created; nothing else is written there
     UDF_NAME = "SCORE_TEXT_MODEL"
-    CONTAINER = "PYTHON3"               # the container alias the UDF runs on: PYTHON3, or one you installed
+    CONTAINER = nb.ml_train.udf_container()  # prefer the installed PYTHON3_ML runtime
     TRAIN_ROWS = 4000                   # rows the stand-in model learns from
     HOLDOUT_ROWS = 500                  # held-out rows the two predictions are compared on
     return (
@@ -79,7 +82,7 @@ def _(mo):
 
 
 @app.cell
-def _(DATASET):
+def _(DATASET, nb):
     import importlib.util
     import hashlib
     import json
@@ -93,8 +96,6 @@ def _(DATASET):
     import numpy as np
     import pandas as pd
 
-    import exakit.nb as nb
-
     conn = nb.connect()
     ds = nb.dataset(conn, DATASET)
     for role, column in ds.roles():
@@ -106,7 +107,6 @@ def _(DATASET):
         hashlib,
         importlib,
         json,
-        nb,
         np,
         os,
         pd,
@@ -234,13 +234,25 @@ def _(mo):
     under `/buckets`. `exakit model put` copies the file there, records its SHA-256, and prints the path the UDF opens. A
     second run with the same file changes nothing; a **different** file of the same name is refused unless `--replace` is
     given (exit code 5), so a model is never swapped silently. This cell passes `--replace` on purpose: running the
-    notebook again should put the model it has just trained. `exakit model list` shows what is there.
+    notebook again should put the model it has just trained. The stand-in created by this notebook is also
+    preconfirmed with `--yes`: its source is the code just run here. A supplied `MODEL_FILE` is not preconfirmed;
+    inspect and approve its origin with `exakit model inspect <file>` and `exakit model put <file> --yes` first.
+    `exakit model list` shows what is there.
     """)
     return
 
 
 @app.cell
-def _(MODEL_COMPATIBLE, Path, json, model_path, os, shutil, subprocess):
+def _(
+    MODEL_COMPATIBLE,
+    MODEL_FILE,
+    Path,
+    json,
+    model_path,
+    os,
+    shutil,
+    subprocess,
+):
     def exakit(*args: str) -> dict:
         """Run one `exakit ... --json` command and return its answer; a refusal stops the notebook with its reason."""
         found = shutil.which("exakit") or shutil.which("exakit.cmd")
@@ -261,7 +273,10 @@ def _(MODEL_COMPATIBLE, Path, json, model_path, os, shutil, subprocess):
 
 
     if MODEL_COMPATIBLE:
-        put = exakit("model", "put", str(model_path), "--replace")
+        put_options = ["--replace"]
+        if MODEL_FILE is None:  # Trust only the stand-in trained and pickled in this notebook.
+            put_options.append("--yes")
+        put = exakit("model", "put", str(model_path), *put_options)
         print(f"sha256 {put['sha256']}, {put['size']} bytes{' (replaced the earlier file)' if put['replaced'] else ''}")
         print(f"the UDF reads it at: {put['path']}")
     else:

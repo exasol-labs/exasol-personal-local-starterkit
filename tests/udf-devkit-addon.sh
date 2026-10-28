@@ -125,6 +125,16 @@ out="$(scenario 'manifest_set components.udf_devkit.version 0.1.0; cmd_udf_file 
 contains "never outside the bucket" "not a path inside the bucket" "$out"
 check "nothing written outside" "" "$(ls "$EXAKIT_PERSONAL_DEPLOY_DIR/local/runtime/exa/bucketfs/bfsdefault/" 2>/dev/null | grep escape || true)"
 
+echo "the fresh launcher's internal SLC mapping keeps the default file bucket usable:"
+conf="$EXAKIT_PERSONAL_DEPLOY_DIR/local/runtime/exa/bucketfs.conf"
+printf '/exa/slc __builtin__ slc /exa/slc internal\n' > "$conf"
+out="$(scenario 'udf_bucket_locate; echo "rc=$? mapping=$UDF_BUCKET_MAPPING root=$UDF_BUCKET_UDF_ROOT"' 2>&1)"
+contains "internal-only configuration uses the default directory mapping" "rc=0 mapping=default root=/buckets/bfsdefault/default" "$out"
+printf '/exa/other other bucket /buckets/other/bucket internal\n' > "$conf"
+out="$(scenario 'udf_bucket_locate; echo "rc=$? $UDF_BUCKET_ERROR"' 2>&1)"
+contains "an explicit different bucket is still refused" "rc=1" "$out"
+rm -f "$conf"
+
 echo "the commands refuse what they do not know:"
 out="$(scenario 'manifest_set components.udf_devkit.version 0.1.0; cmd_udf_use default --language frob' 2>&1)"; rc=$?
 contains "--language frob is refused" "must be python or rust, not 'frob'" "$out"
@@ -243,6 +253,7 @@ CACHE="$EXAKIT_HOME/cache/containers"
 mscenario() { # mscenario <versions doc> <body>
     scenario 'exakit_versions_baked_doc() { printf "%s\n" "'"$1"'"; }
         exakit_versions_active_doc() { printf "%s\n" "'"$WORK"'/stale-versions.json"; }
+        _udf_prepare_ml_container() { UDF_CONTAINER_INSTALL_FILE="$UDF_CONTAINER_FILE"; }
         _udf_db_version() { printf "%s\n" "${STUB_DB:-2026.2.0-nano.3}"; }
         udf_devkit_smoke() { echo "smoke $*" >> "$CALLS"; UDF_SMOKE_LINES="python 3.12.3
 scikit-learn 1.9.0
@@ -284,6 +295,14 @@ check "--json: one object - ok, language, alias, container (url, sha256, arch, d
     "True python PYTHON3_ML ['arch', 'db_versions', 'sha256', 'url'] aarch64 >=2026.1 https://example.invalid/containers/py-fake.tar.gz [('python', '3.12.3'), ('scikit-learn', '1.9.0'), ('numpy', '2.4.6')]" \
     "$(printf '%s' "$json" | python3 -c 'import json, sys; d = json.load(sys.stdin); c = d["container"]; print(d["ok"], d["language"], d["alias"], sorted(c), c["arch"], c["db_versions"], c["url"], [(s["package"], s["version"]) for s in d["smoke"]])' 2>&1)"
 
+echo "the add-on reuses and proves an existing ML runtime without a restart:"
+out="$(mscenario "$WORK/versions.json" 'udf_devkit_installed_aliases() { echo PYTHON3_ML; }; udf_devkit_ensure_ml; echo "rc=$? alias=$(manifest_get components.udf_devkit.python_alias)"' 2>&1)"
+check "only the package smoke ran" "smoke PYTHON3_ML scikit-learn==1.9.0 numpy==2.4.6|" "$(grep -v "slc list" "$WORK/calls" | tr '\n' '|')"
+contains "the selected alias is recorded" "rc=0 alias=PYTHON3_ML" "$out"
+out="$(mscenario "$WORK/versions.json" 'udf_devkit_installed_aliases() { echo PYTHON3; }; udf_devkit_smoke() { case "$1" in PYTHON3_ML) return 1 ;; esac; }; udf_devkit_install; echo "rc=$? validated=$(manifest_get components.udf_devkit.validated)"' 2>&1)"
+contains "a missing ML package fails the add-on instead of reporting it ready" "rc=1 validated=false" "$out"
+contains "and names the ML container retry" "retry: exakit udf-use default" "$out"
+
 echo "a digest that does not match is refused before the launcher sees the file:"
 rm -rf "$CACHE"
 out="$(mscenario "$WORK/versions-bad-digest.json" 'cmd_udf_use default' 2>&1)"; rc=$?
@@ -321,8 +340,8 @@ echo "EXAKIT_UDF_LANGUAGE=rust takes the Rust row (alias RUST) and proves it wit
 rm -rf "$CACHE" "$BUCKET/udf"
 out="$(EXAKIT_UDF_LANGUAGE=rust mscenario "$WORK/versions.json" 'manifest_del components.udf_devkit; udf_devkit_install; echo "rc=$?"; echo "languages=$(manifest_get components.udf_devkit.languages)"; manifest_get components.udf_devkit.containers.RUST; echo "validated=$(manifest_get components.udf_devkit.validated)"; echo "rust=$(manifest_get components.udf_devkit.rust.validated) $(manifest_get components.udf_devkit.rust.rustc) $(manifest_get components.udf_devkit.rust.sdk)"; udf_devkit_summary' 2>&1)"
 calls="$(grep -v "slc list" "$WORK/calls" | tr '\n' '|')"
-check "the Rust and Python containers install with one restart, then both smoke UDFs run" \
-    "stop dash-server|launcher slc custom install --source $CACHE/lc-rust-fake.tar.gz --alias RUST --language rust --auto-approve --no-restart --deployment-dir $EXAKIT_PERSONAL_DEPLOY_DIR|launcher slc install PYTHON3 --auto-approve --deployment-dir $EXAKIT_PERSONAL_DEPLOY_DIR|wait|start dash-server|smoke PYTHON3|smoke-rust smoke-rust RUST STARTER_KIT /buckets/bfsdefault/default/udf/libexakit_smoke.so 1.98.1 0.33.0|" "$calls"
+check "Rust and Python install together, then the ML runtime installs and checks every declared package" \
+    "stop dash-server|launcher slc custom install --source $CACHE/lc-rust-fake.tar.gz --alias RUST --language rust --auto-approve --no-restart --deployment-dir $EXAKIT_PERSONAL_DEPLOY_DIR|launcher slc install PYTHON3 --auto-approve --deployment-dir $EXAKIT_PERSONAL_DEPLOY_DIR|wait|start dash-server|smoke PYTHON3|smoke-rust smoke-rust RUST STARTER_KIT /buckets/bfsdefault/default/udf/libexakit_smoke.so 1.98.1 0.33.0|stop dash-server|launcher slc custom install --source $CACHE/py-fake.tar.gz --alias PYTHON3_ML --language python --auto-approve --deployment-dir $EXAKIT_PERSONAL_DEPLOY_DIR|wait|start dash-server|smoke PYTHON3_ML scikit-learn==1.9.0 numpy==2.4.6|" "$calls"
 contains "the install succeeds" "rc=0" "$out"
 contains "the smoke library is taken from the mirror and verified before the install" "Verified libexakit_smoke-aarch64.so (sha256" "$out"
 check "...before: the verification precedes the restart" "1" "$(printf '%s\n' "$out" | awk '/Verified libexakit_smoke-aarch64.so/ {v=NR} /Waiting for the database/ {w=NR} END {print (v && w && v < w) ? 1 : 0}')"

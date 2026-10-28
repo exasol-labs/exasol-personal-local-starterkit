@@ -334,7 +334,20 @@ def _load(conn, frame, columns: list[tuple[str, str]], table: str, mark: str) ->
     # Quoted: a file's header is not bound to avoid SQL's reserved words (DATE, USER, SELECT, ...). The names are
     # already upper case with only letters, digits and _, so the quoted name is the name the descriptor uses.
     conn.execute(f"CREATE OR REPLACE TABLE {table} ({', '.join(f'{_quoted(c)} {t}' for c, t in columns)})")
-    conn.import_from_pandas(frame, (schema, name))
+    # pyexasol 2.4.1 parses releaseVersion with packaging.Version while
+    # preparing its IMPORT. Personal reports e.g. 2026.2.0-nano.3, which is
+    # not a PEP 440 version. Normalize only for that import, then restore the
+    # server's actual login metadata for the rest of the session.
+    login = getattr(conn, "login_info", None)
+    release = login.get("releaseVersion") if isinstance(login, dict) else None
+    match = re.fullmatch(r"(\d+\.\d+\.\d+)-nano\.\d+", release) if isinstance(release, str) else None
+    if match:
+        login["releaseVersion"] = match.group(1)
+    try:
+        conn.import_from_pandas(frame, (schema, name))
+    finally:
+        if match:
+            login["releaseVersion"] = release
     conn.execute(f"COMMENT ON TABLE {table} IS '{mark}'")
 
 

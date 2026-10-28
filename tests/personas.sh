@@ -11,7 +11,8 @@
 #     parser does
 #   - the three personas the install question offers, each with its own data:
 #     the two personas of the TDD/BRD: Data Scientist (data-scientist: Pharma and
-#     Banking, the notebook add-on) and ML Engineer (the same plus udf-devkit)
+#     Banking, Notebook, JSON Tables and Dash Server) and ML Engineer
+#     (Pharma and Banking, Notebook, JSON Tables and udf-devkit)
 #   - the persona service (setup/lib/persona_service.py) combines several, and
 #     the data question (one "Data to load" table) ticks their datasets and
 #     names who each is for
@@ -86,9 +87,9 @@ check "the question offers Data Scientist, then ML Engineer" "data-scientist,ml-
     "$(_exakit_persona_service picker | cut -d'|' -f1 | tr '\n' ',' | sed 's/,$//')"
 check "no persona: the kit's own samples (default=yes)" "tpch,energy,weather" "$(_exakit_persona_service default-datasets)"
 check "data-scientist: Pharma and Banking" "pharma_trials,banking_complaints" "$(exakit_persona_value data-scientist datasets)"
-check "data-scientist: the notebook add-on" "notebook" "$(exakit_persona_value data-scientist addons)"
+check "data-scientist: notebook, JSON loading and Share" "notebook,json-tables,dash-server" "$(exakit_persona_value data-scientist addons)"
 check "ml-engineer: Pharma and Banking" "pharma_trials,banking_complaints" "$(exakit_persona_value ml-engineer datasets)"
-check "ml-engineer: notebook and udf-devkit" "notebook,udf-devkit" "$(exakit_persona_value ml-engineer addons)"
+check "ml-engineer: notebook, JSON loading and UDFs" "notebook,json-tables,udf-devkit" "$(exakit_persona_value ml-engineer addons)"
 
 echo "a new persona is one file and no code:"
 mkdir -p "$WORK/kit2/personas"
@@ -107,7 +108,7 @@ check "the title names each" "Data Scientist + ML Engineer" "$(_exakit_persona_s
 out="$( (unset EXAKIT_DATASETS EXAKIT_MCP_CLIENTS EXAKIT_MARKETPLACE_ADDONS EXAKIT_LOAD_SAMPLE
         export EXAKIT_PERSONA=data-scientist,ml-engineer; exakit_persona_apply_env >/dev/null 2>&1
         printf '%s|%s|%s' "$EXAKIT_DATASETS" "$EXAKIT_MCP_CLIENTS" "$EXAKIT_MARKETPLACE_ADDONS") )"
-check "their datasets and add-ons together, each once" "pharma_trials,banking_complaints|all|notebook,udf-devkit" "$out"
+check "their datasets and add-ons together, each once" "pharma_trials,banking_complaints|all|notebook,json-tables,dash-server,udf-devkit" "$out"
 check "each dataset is named with the personas it is for" "pharma_trials|both personas" \
     "$(exakit_persona_dataset_hints | grep '^pharma_trials|')"
 
@@ -145,11 +146,11 @@ echo "an explicit answer wins, per variable:"
 out="$( (unset EXAKIT_DATASETS EXAKIT_MCP_CLIENTS EXAKIT_MARKETPLACE_ADDONS EXAKIT_LOAD_SAMPLE
         export EXAKIT_PERSONA=ml-engineer; exakit_persona_apply_env >/dev/null 2>&1
         printf '%s|%s|%s' "$EXAKIT_DATASETS" "$EXAKIT_MCP_CLIENTS" "$EXAKIT_MARKETPLACE_ADDONS") )"
-check "the persona answers everything left open" "pharma_trials,banking_complaints|all|notebook,udf-devkit" "$out"
+check "the persona answers everything left open" "pharma_trials,banking_complaints|all|notebook,json-tables,udf-devkit" "$out"
 out="$( (unset EXAKIT_MCP_CLIENTS EXAKIT_MARKETPLACE_ADDONS EXAKIT_LOAD_SAMPLE
         export EXAKIT_DATASETS=pharma_trials EXAKIT_PERSONA=ml-engineer; exakit_persona_apply_env >/dev/null 2>&1
         printf '%s|%s|%s' "$EXAKIT_DATASETS" "$EXAKIT_MCP_CLIENTS" "$EXAKIT_MARKETPLACE_ADDONS") )"
-check "EXAKIT_DATASETS wins, the rest stays the persona's" "pharma_trials|all|notebook,udf-devkit" "$out"
+check "EXAKIT_DATASETS wins, the rest stays the persona's" "pharma_trials|all|notebook,json-tables,udf-devkit" "$out"
 out="$( (unset EXAKIT_DATASETS EXAKIT_MCP_CLIENTS EXAKIT_MARKETPLACE_ADDONS
         export EXAKIT_LOAD_SAMPLE=0 EXAKIT_MARKETPLACE_ADDONS=none EXAKIT_PERSONA=data-scientist; exakit_persona_apply_env >/dev/null 2>&1
         printf '%s|%s|%s' "${EXAKIT_DATASETS:-unset}" "$EXAKIT_MCP_CLIENTS" "$EXAKIT_MARKETPLACE_ADDONS") )"
@@ -235,12 +236,12 @@ contains "...after a persona offer, one pointer" "exakit marketplace" \
     "$( (EXAKIT_PERSONA_ACTIVE=1 EXAKIT_MARKETPLACE_PRESELECT=notebook exakit_persona_marketplace_note 2>&1) )"
 
 echo "exakit persona plan (AC-P1.1: nothing pending after a persona install):"
-out="$( (exakit_pending_datasets() { printf 'banking_complaints|Banking\n'; }; exakit_marketplace_installed_addons() { echo notebook; }
+out="$( (exakit_pending_datasets() { printf 'banking_complaints|Banking\n'; }; exakit_marketplace_installed_addons() { printf 'notebook\njson-tables\ndash-server\n'; }
         exakit_persona_plan ml-engineer 0 2>&1) )"
 contains "what is loaded and what is pending" "loaded: pharma_trials   pending: banking_complaints" "$out"
-contains "...add-ons the same way" "installed: notebook   pending: udf-devkit" "$out"
+contains "...add-ons the same way" "installed: notebook json-tables   pending: udf-devkit" "$out"
 contains "...and how to finish" "exakit persona add ml-engineer" "$out"
-out="$( (exakit_pending_datasets() { :; }; exakit_marketplace_installed_addons() { printf 'notebook\nudf-devkit\n'; }
+out="$( (exakit_pending_datasets() { :; }; exakit_marketplace_installed_addons() { printf 'notebook\njson-tables\ndash-server\nudf-devkit\n'; }
         exakit_persona_plan ml-engineer 1 2>/dev/null) )"
 check "--json after a complete install: nothing pending" "true" \
     "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(str(d["nothing_pending"]).lower() if not d["datasets"]["pending"] and not d["addons"]["pending"] else "pending")' 2>/dev/null)"
@@ -256,7 +257,7 @@ cmd_marketplace() { echo "STEP marketplace addons=${EXAKIT_MARKETPLACE_ADDONS:-}
 cmd_mlflow() { echo "STEP mlflow action=${1:-} tty=$(_exakit_prompt_tty)"; }
 # Pharma is in already and the notebook installed: neither is redone.
 exakit_pending_datasets() { printf 'banking_complaints|Banking complaints (CFPB, ~7k complaints)\n'; }
-exakit_marketplace_installed_addons() { echo notebook; }
+exakit_marketplace_installed_addons() { printf 'notebook\njson-tables\ndash-server\n'; }
 add() { ( _exakit_prompt_tty() { echo /dev/tty; }; confirm() { echo ASKED; return 1; }; cmd_persona "$@" 2>&1 ); echo "rc=$?"; }
 manifest_set persona.id data-scientist
 out="$(add add ml-engineer </dev/null)"
@@ -280,11 +281,11 @@ contains "one closing line names the whole set" "Persona added: Data Scientist +
 out="$( (cmd_persona list 2>&1) )"
 contains "list says what this kit was set up as, by title" "This kit was set up as: Data Scientist + ML Engineer" "$out"
 contains "...and how to add one" "exakit persona add <id>" "$out"
-out="$( (exakit_pending_datasets() { :; }; exakit_marketplace_installed_addons() { printf 'notebook\nudf-devkit\n'; }
+out="$( (exakit_pending_datasets() { :; }; exakit_marketplace_installed_addons() { printf 'notebook\njson-tables\ndash-server\nudf-devkit\n'; }
         cmd_persona plan --json 2>/dev/null) )"
 check "plan with no id reports the combined set, nothing pending after the add" "data-scientist,ml-engineer|true" \
     "$(printf '%s' "$out" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["persona"] + "|" + str(d["nothing_pending"]).lower())' 2>/dev/null)"
-out="$( (exakit_pending_datasets() { :; }; exakit_marketplace_installed_addons() { printf 'notebook\nudf-devkit\n'; }
+out="$( (exakit_pending_datasets() { :; }; exakit_marketplace_installed_addons() { printf 'notebook\njson-tables\ndash-server\nudf-devkit\n'; }
         cmd_persona add ml-engineer 2>&1); echo "rc=$?")"
 contains "added again with everything in: each part says so" "Already loaded: Pharma clinical trials, Banking complaints" "$out"
 check "...nothing is loaded or installed (the AI client step says for itself what is connected)" "STEP mcp-setup" \

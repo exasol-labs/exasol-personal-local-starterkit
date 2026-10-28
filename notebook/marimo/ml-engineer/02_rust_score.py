@@ -92,7 +92,7 @@ def _(COEFFICIENTS_FILE, Path, ds, handoff, json, os):
         _experiment = _client.get_experiment_by_name('exasol-starter-kit')
         if _experiment is None:
             raise FileNotFoundError('No MLflow experiment from 01_train. Run it first, or set COEFFICIENTS_FILE.')
-        runs = _client.search_runs([_experiment.experiment_id], filter_string=f"tags.exasol.descriptor_id = '{ds.id}'", order_by=['attributes.start_time DESC'], max_results=20)
+        runs = _client.search_runs([_experiment.experiment_id], filter_string=f"tags.exasol.descriptor_id = '{ds.id}' AND tags.exasol.language = 'python'", order_by=['attributes.start_time DESC'], max_results=20)
         matching = [item for item in runs if item.info.status == 'FINISHED' and item.data.tags.get('exasol.descriptor_version') == str(ds.version)]
         if not matching:
             raise FileNotFoundError('No finished MLflow run for this descriptor version. Run 01_train again.')

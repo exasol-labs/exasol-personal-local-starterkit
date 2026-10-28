@@ -37,8 +37,8 @@ HELPERS = sorted((ROOT / "notebook" / "package").glob("*/**/*.py")) + sorted((RO
 # Commands other work items add to this kit in parallel: `exakit model put|list` (ML-4) is named by the ML Engineer's
 # checks before its dispatch arm lands.
 PENDING_COMMANDS = {"model"}
-SPRINT_NOTEBOOKS = {"data-scientist": ["00_quickstart.ipynb", "01_explore.ipynb", "02_ask_your_data.ipynb", "03_share.ipynb"],
-                    "ml-engineer": ["00_quickstart.ipynb", "01_train.ipynb", "02_rust_score.ipynb", "03_score_external_model.ipynb"]}
+SPRINT_NOTEBOOKS = {"data-scientist": ["00_quickstart.ipynb", "01_explore.ipynb", "02_ask_your_data.ipynb", "03_share.ipynb", "04_sql_and_dataframes.ipynb", "05_decision_tree_baseline.ipynb"],
+                    "ml-engineer": ["00_quickstart.ipynb", "01_train.ipynb", "02_rust_score.ipynb", "03_score_external_model.ipynb", "04_udf_package_check.ipynb", "05_decision_tree_udf.ipynb"]}
 
 
 def _members(cls) -> set[str]:
@@ -130,6 +130,24 @@ class CatalogTest(unittest.TestCase):
             with self.subTest(entry=entry["id"]):
                 self.assertTrue(entry["jupyter"].startswith(f"{int(entry['step']):02d}_"), "the file's number is its step")
                 self.assertEqual(Path(entry["jupyter"]).stem, Path(entry["marimo"]).stem)
+
+    def test_adapted_examples_have_pinned_sources_and_license(self):
+        provenance = json.loads((ROOT / "notebook" / "upstream-sources.json").read_text())
+        self.assertRegex(provenance["connector_revision"], r"^[0-9a-f]{40}$")
+        self.assertRegex(provenance["ai_lab_revision"], r"^[0-9a-f]{40}$")
+        examples = {entry["notebook"]: entry for entry in provenance["notebooks"]}
+        for entry in self.DOC["notebooks"]:
+            if "upstream" not in entry:
+                continue
+            key = f"{entry['persona']}/{Path(entry['jupyter']).stem}"
+            source = examples.pop(key)
+            self.assertEqual(source["source"], entry["upstream"])
+            self.assertIn(provenance["connector_revision"], source["source"])
+            self.assertRegex(source["sha256"], r"^[0-9a-f]{64}$")
+        self.assertEqual(examples, {})
+        license_text = (ROOT / "notebook" / "UPSTREAM-LICENSE.txt").read_text()
+        self.assertIn("Permission is hereby granted", license_text)
+        self.assertIn("Exasol", license_text)
 
     def test_the_catalog_names_files_that_exist(self):
         """Each entry's files are there - except an entry whose .py is not in the tree yet (built when it lands)."""
