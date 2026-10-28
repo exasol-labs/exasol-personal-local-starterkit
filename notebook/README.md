@@ -243,3 +243,5 @@ No code. Three steps:
 
 A new persona is one file in `personas/` (see `personas/README.md`); a new
 dataset is one folder in `data/datasets/` (see `data/README.md`).
+
+The full official 50-notebook collection is prebundled under `examples/` for both tools, with a categorized start page and supporting files. See [INSTALL-AND-UPDATE.md](INSTALL-AND-UPDATE.md) for installation and update behavior.

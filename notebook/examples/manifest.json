@@ -1,0 +1,431 @@
+{
+  "schema_version": 1,
+  "revision": "14e2c7ad088b7109aa21d283e98f3126bbbe27e5",
+  "repository": "https://github.com/exasol/notebook-connector",
+  "notebooks": [
+    {
+      "path": "cloud/01_import_data.ipynb",
+      "title": "Importing data from cloud storage",
+      "category": "cloud",
+      "requirements": "Reference only: cloud storage and virtual-schema integration belong to separate work. These cells are not enabled by the local kit.",
+      "source_sha256": "cdbd1b6b212b6503c7f166daf34e189d1017fbef56a657f848f00393ecbe9cb8",
+      "cells": 16
+    },
+    {
+      "path": "cloud/02_s3_vs_reuters.ipynb",
+      "title": "Create Virtual Schema",
+      "category": "cloud",
+      "requirements": "Reference only: cloud storage and virtual-schema integration belong to separate work. These cells are not enabled by the local kit.",
+      "source_sha256": "1f2b3ffa15091efa0eae19e63c68e9cd72b5dd4447130d7681d692ec6a0dfc18",
+      "cells": 21
+    },
+    {
+      "path": "cloud/cloud_store_config.ipynb",
+      "title": "Cloud Storage Extension Configuration",
+      "category": "cloud",
+      "requirements": "Reference only: cloud storage and virtual-schema integration belong to separate work. These cells are not enabled by the local kit.",
+      "source_sha256": "48ce2905b0bba5c83726b8ad9cf2e80251c0a0d1087735bbdf4b49a4760a7b4e",
+      "cells": 3
+    },
+    {
+      "path": "cloud/s3_vs_setup.ipynb",
+      "title": "S3 Virtual Schema configuration",
+      "category": "cloud",
+      "requirements": "Reference only: cloud storage and virtual-schema integration belong to separate work. These cells are not enabled by the local kit.",
+      "source_sha256": "2761392b402bcb7bbc4b56849d5406714d4954fba12eb12462e0aa66b8ab9c0c",
+      "cells": 4
+    },
+    {
+      "path": "data/data_abalone.ipynb",
+      "title": "Abalone",
+      "category": "data",
+      "requirements": "Downloads the tutorial dataset when you run the loader. Tutorial tables are kept in EXAKIT_EXAMPLES, separately from the persona datasets.",
+      "source_sha256": "afed7c78fc4c64113be80a2f8992e45a16138d6d2e72b3b144c7f66cfb2918e8",
+      "cells": 7
+    },
+    {
+      "path": "data/data_content.ipynb",
+      "title": "List of available data to load",
+      "category": "data",
+      "requirements": "Downloads the tutorial dataset when you run the loader. Tutorial tables are kept in EXAKIT_EXAMPLES, separately from the persona datasets.",
+      "source_sha256": "8afd3b7ed8791ba5384da2ae69fa456c26d5abbd5b9271a70435196844248e8b",
+      "cells": 2
+    },
+    {
+      "path": "data/data_customer_support.ipynb",
+      "title": "Customer Support Ticket Dataset",
+      "category": "data",
+      "requirements": "Downloads the tutorial dataset when you run the loader. Tutorial tables are kept in EXAKIT_EXAMPLES, separately from the persona datasets.",
+      "source_sha256": "91ebd2158a768aca1c11ed1f8a00cc8d866da96243873fbd0a1370e368cde842",
+      "cells": 8
+    },
+    {
+      "path": "data/data_flights.ipynb",
+      "title": "US Flights",
+      "category": "data",
+      "requirements": "Downloads the tutorial dataset when you run the loader. Tutorial tables are kept in EXAKIT_EXAMPLES, separately from the persona datasets.",
+      "source_sha256": "570fbc8f7ce6b9252ef963e2f550500ae9d18a2cbacfff4d23d6ff923a28845a",
+      "cells": 12
+    },
+    {
+      "path": "data/data_telescope.ipynb",
+      "title": "MAGIC Gamma Telescope",
+      "category": "data",
+      "requirements": "Downloads the tutorial dataset when you run the loader. Tutorial tables are kept in EXAKIT_EXAMPLES, separately from the persona datasets.",
+      "source_sha256": "e70426fbeefffa6315f0cf539d91fab2e00493a7ccc80ce356b8495582369285",
+      "cells": 7
+    },
+    {
+      "path": "data/utils/flight_utils.ipynb",
+      "title": "Flight Utils",
+      "category": "data",
+      "requirements": "Downloads the tutorial dataset when you run the loader. Tutorial tables are kept in EXAKIT_EXAMPLES, separately from the persona datasets.",
+      "source_sha256": "80e1b1a7cec330a0ff32df3526cdf2eb9f40e58ba041c69d93f35c83b3a1b4d8",
+      "cells": 3
+    },
+    {
+      "path": "first_steps.ipynb",
+      "title": "First Steps",
+      "category": "(start)",
+      "requirements": "Uses the kit encrypted connection. Database examples use EXAKIT_EXAMPLES. Later sections may need tutorial downloads or the ML UDF add-on.",
+      "source_sha256": "77e82c4a04a57e376b5d9d658d34988780fa9eba073369732b8b9ee423baa990",
+      "cells": 56
+    },
+    {
+      "path": "gpu_in_udf/advanced_udf_with_gpu.ipynb",
+      "title": "Advanced Udf With Gpu",
+      "category": "gpu_in_udf",
+      "requirements": "Requires a GPU-capable Exasol host and GPU SLC. The local Mac kit does not provision these.",
+      "source_sha256": "1a0d51a8809e30ad0d911f8968f7304a555df2fb7c13c61dabfc1b3c2340c5bc",
+      "cells": 18
+    },
+    {
+      "path": "gpu_in_udf/basic_udf_with_gpu.ipynb",
+      "title": "Basic Udf With Gpu",
+      "category": "gpu_in_udf",
+      "requirements": "Requires a GPU-capable Exasol host and GPU SLC. The local Mac kit does not provision these.",
+      "source_sha256": "8c1b41106d68c65885999efe7b76672af3f321205008715f2f3752c3b123d6f0",
+      "cells": 13
+    },
+    {
+      "path": "gpu_in_udf/gpu_resource_considerations.ipynb",
+      "title": "GPU Resource Considerations",
+      "category": "gpu_in_udf",
+      "requirements": "Requires a GPU-capable Exasol host and GPU SLC. The local Mac kit does not provision these.",
+      "source_sha256": "202ebdeeb39efdde9c2c75a8b0226f234d0f5bb00b04b80ddeefe2627323463a",
+      "cells": 34
+    },
+    {
+      "path": "gpu_in_udf/setup.ipynb",
+      "title": "Setup Script Language Container with GPU Support",
+      "category": "gpu_in_udf",
+      "requirements": "Requires a GPU-capable Exasol host and GPU SLC. The local Mac kit does not provision these.",
+      "source_sha256": "570b0c2f1586ee44a6a0c412ae2cf2f33b7a175c1a3edc5c0d2b1c6a77a336c7",
+      "cells": 16
+    },
+    {
+      "path": "gpu_in_udf/using_gpu_in_udf.ipynb",
+      "title": "Using GPU's in UDF's",
+      "category": "gpu_in_udf",
+      "requirements": "Requires a GPU-capable Exasol host and GPU SLC. The local Mac kit does not provision these.",
+      "source_sha256": "061e3eb5b3a578fa2ef796291fa79c007bba177a56be807953a191fc2e82df1e",
+      "cells": 3
+    },
+    {
+      "path": "ibis/quickstart.ipynb",
+      "title": "Working with Exasol using IBIS dataframe library.",
+      "category": "ibis",
+      "requirements": "Requires the US_FLIGHTS and US_AIRLINES tutorial tables. Run first_steps or the flight data loader first.",
+      "source_sha256": "88fafe43342868a406e70e3e5f8a9c428d84f3e4cc3425b5e6ff25d401773f2c",
+      "cells": 22
+    },
+    {
+      "path": "jupysql/quickstart.ipynb",
+      "title": "Working with Exasol using JupySQL",
+      "category": "jupysql",
+      "requirements": "Requires the US_FLIGHTS and US_AIRLINES tutorial tables. SQL magics are supported in Jupyter and the Marimo cell runner.",
+      "source_sha256": "bcc7a932a1022b843d9399e8a36a4dc62d42d44ba82f3a68a18674c23846a90a",
+      "cells": 45
+    },
+    {
+      "path": "main_config.ipynb",
+      "title": "Main Configuration",
+      "category": "(start)",
+      "requirements": "Uses the kit encrypted connection. Database examples use EXAKIT_EXAMPLES. Later sections may need tutorial downloads or the ML UDF add-on.",
+      "source_sha256": "4273bfab15153ade747ba8a8bfba8b9fd2cab59365abab5f52131ec523e58f1b",
+      "cells": 12
+    },
+    {
+      "path": "pyexasol/roundtrip_import_and_export.ipynb",
+      "title": "Working with Exasol Using the PyExasol Connector",
+      "category": "pyexasol",
+      "requirements": "Requires the flight tutorial tables. Reads and writes tutorial tables and local export files.",
+      "source_sha256": "562e425f94c890b233ad5f24d91dacda366a85b6e4b9e580ced2613646c519c0",
+      "cells": 59
+    },
+    {
+      "path": "script_languages_container/advanced.ipynb",
+      "title": "Advanced topics",
+      "category": "script_languages_container",
+      "requirements": "Requires Docker or Podman, SLC tooling and substantial free disk. Container installation can restart the database. Prefer exakit udf-build for the kit flow.",
+      "source_sha256": "5c4ebbfc780bae684cba4e6128650b6cd8e74e44db604a6ff5f3a86ff623831a",
+      "cells": 31
+    },
+    {
+      "path": "script_languages_container/configure_slc_repository.ipynb",
+      "title": "Configure Tutorial Script Languages Container",
+      "category": "script_languages_container",
+      "requirements": "Requires Docker or Podman, SLC tooling and substantial free disk. Container installation can restart the database. Prefer exakit udf-build for the kit flow.",
+      "source_sha256": "bf337c741910f3c4ad9146a9bcbd073bf95ebd2130894ee37df1cac7f2af6542",
+      "cells": 13
+    },
+    {
+      "path": "script_languages_container/customize.ipynb",
+      "title": "Customize a flavor",
+      "category": "script_languages_container",
+      "requirements": "Requires Docker or Podman, SLC tooling and substantial free disk. Container installation can restart the database. Prefer exakit udf-build for the kit flow.",
+      "source_sha256": "752e209e40e46580ef21b07bde3a1d1f32fabe00739e4e244e7eb6573706fc5f",
+      "cells": 28
+    },
+    {
+      "path": "script_languages_container/export_as_is.ipynb",
+      "title": "Export the flavor as is",
+      "category": "script_languages_container",
+      "requirements": "Requires Docker or Podman, SLC tooling and substantial free disk. Container installation can restart the database. Prefer exakit udf-build for the kit flow.",
+      "source_sha256": "561bd8fae21d33b69c1abebee3c94550bfbb97edef26113410cd5ff06cfa6f74",
+      "cells": 15
+    },
+    {
+      "path": "script_languages_container/test_slc.ipynb",
+      "title": "Test the new Script-Languages-Container",
+      "category": "script_languages_container",
+      "requirements": "Requires Docker or Podman, SLC tooling and substantial free disk. Container installation can restart the database. Prefer exakit udf-build for the kit flow.",
+      "source_sha256": "c17a8fc1a4770976ad53b0298f76d38a2715f4e23b9aeca6ee95221815647752",
+      "cells": 21
+    },
+    {
+      "path": "script_languages_container/using_the_script_languages_container_tool.ipynb",
+      "title": "Using the Script-Languages Container Tool",
+      "category": "script_languages_container",
+      "requirements": "Requires Docker or Podman, SLC tooling and substantial free disk. Container installation can restart the database. Prefer exakit udf-build for the kit flow.",
+      "source_sha256": "a63cf190e9abb8fd99800a94b8cefbedc87398e53c888e8d08e474b3f94303de",
+      "cells": 3
+    },
+    {
+      "path": "script_languages_container/utils/file_system_ui.ipynb",
+      "title": "File System Ui",
+      "category": "script_languages_container",
+      "requirements": "Requires Docker or Podman, SLC tooling and substantial free disk. Container installation can restart the database. Prefer exakit udf-build for the kit flow.",
+      "source_sha256": "82d8e4b478c4f5bfa4d07806457b6703ff47ff575212fc1b24c39a15a4f9042c",
+      "cells": 2
+    },
+    {
+      "path": "sklearn/sklearn_fix_version.ipynb",
+      "title": "Fix the Version of Python Library Scikit-learn",
+      "category": "sklearn",
+      "requirements": "Load the matching Abalone or Telescope data notebook first. Prediction requires udf-devkit and the PYTHON3_ML runtime. Models use the local file bucket.",
+      "source_sha256": "b218f8b23d328918cd32008fdb72a8b20433b3c6dc337b4637eca5e67e20c862",
+      "cells": 7
+    },
+    {
+      "path": "sklearn/sklearn_introduction.ipynb",
+      "title": "Introduction",
+      "category": "sklearn",
+      "requirements": "Load the matching Abalone or Telescope data notebook first. Prediction requires udf-devkit and the PYTHON3_ML runtime. Models use the local file bucket.",
+      "source_sha256": "29a730dc8dd8ba394eace5eaf6d7d7ad89e9240b52f94723479571ab211e66f9",
+      "cells": 2
+    },
+    {
+      "path": "sklearn/sklearn_predict_abalone.ipynb",
+      "title": "Predicting with Regression Model",
+      "category": "sklearn",
+      "requirements": "Load the matching Abalone or Telescope data notebook first. Prediction requires udf-devkit and the PYTHON3_ML runtime. Models use the local file bucket.",
+      "source_sha256": "ecac7dbc5d32e083f1311bed9ccc9925ad3acc743082e60ce293ad1181ffde94",
+      "cells": 7
+    },
+    {
+      "path": "sklearn/sklearn_predict_telescope.ipynb",
+      "title": "Predicting with Classification Model",
+      "category": "sklearn",
+      "requirements": "Load the matching Abalone or Telescope data notebook first. Prediction requires udf-devkit and the PYTHON3_ML runtime. Models use the local file bucket.",
+      "source_sha256": "672a5f032013c14e46d821721548f9073a839b491bb945cbddbda6c7820c353c",
+      "cells": 7
+    },
+    {
+      "path": "sklearn/sklearn_predict_udf.ipynb",
+      "title": "Generic Prediction UDF",
+      "category": "sklearn",
+      "requirements": "Load the matching Abalone or Telescope data notebook first. Prediction requires udf-devkit and the PYTHON3_ML runtime. Models use the local file bucket.",
+      "source_sha256": "413c35aa6299aa39111e3377fc7ea51314c03362beb415255d38d612e24e15e3",
+      "cells": 5
+    },
+    {
+      "path": "sklearn/sklearn_train_abalone.ipynb",
+      "title": "Training Regression Model",
+      "category": "sklearn",
+      "requirements": "Load the matching Abalone or Telescope data notebook first. Prediction requires udf-devkit and the PYTHON3_ML runtime. Models use the local file bucket.",
+      "source_sha256": "4c17653e6ab42384a0a2674e494d09e42f45ce6d440d482433bad9c3e2f5c09c",
+      "cells": 18
+    },
+    {
+      "path": "sklearn/sklearn_train_telescope.ipynb",
+      "title": "Training Classification Model",
+      "category": "sklearn",
+      "requirements": "Load the matching Abalone or Telescope data notebook first. Prediction requires udf-devkit and the PYTHON3_ML runtime. Models use the local file bucket.",
+      "source_sha256": "8ffba7aca9e5425b813b0e2bb83e06c7aaca14a295b96e25caada8c888dfd66d",
+      "cells": 13
+    },
+    {
+      "path": "start.ipynb",
+      "title": "Welcome to the Exasol AI Lab",
+      "category": "(start)",
+      "requirements": "Uses the kit encrypted connection. Database examples use EXAKIT_EXAMPLES. Later sections may need tutorial downloads or the ML UDF add-on.",
+      "source_sha256": "532bd0fd563f0a6003a94edbd09c9d5b837c536402e05a2ed728cb1ac38a31ba",
+      "cells": 1
+    },
+    {
+      "path": "text_ai/txaie_analytics.ipynb",
+      "title": "Data Analysis with Text AI",
+      "category": "text_ai",
+      "requirements": "Requires a configured Text AI Extension and its database objects. These services are not installed by opening a notebook.",
+      "source_sha256": "08141b9b75d7d950517a44812b88c0b00f58f9b4ce15df4b5289569dec868c2e",
+      "cells": 35
+    },
+    {
+      "path": "text_ai/txaie_init.ipynb",
+      "title": "Text AI Extension Initialization",
+      "category": "text_ai",
+      "requirements": "Requires a configured Text AI Extension and its database objects. These services are not installed by opening a notebook.",
+      "source_sha256": "98479831405f32868e68c74ae4153a1e7afb593bcc13fe6581d088a1f4a6ee73",
+      "cells": 5
+    },
+    {
+      "path": "text_ai/txaie_introduction.ipynb",
+      "title": "Introduction",
+      "category": "text_ai",
+      "requirements": "Requires a configured Text AI Extension and its database objects. These services are not installed by opening a notebook.",
+      "source_sha256": "f97ddde19bef3309dd8cb18d455653c76d821901fa7054bd8449aaeb4f5b1242",
+      "cells": 1
+    },
+    {
+      "path": "text_ai/txaie_preprocessing.ipynb",
+      "title": "Text AI Preprocessing",
+      "category": "text_ai",
+      "requirements": "Requires a configured Text AI Extension and its database objects. These services are not installed by opening a notebook.",
+      "source_sha256": "7795c937797db13d75a3cb634c10ae2b4f986ca774e4d3f6235289800cc9f21b",
+      "cells": 83
+    },
+    {
+      "path": "transformers/masked_modelling.ipynb",
+      "title": "Fill-Mask model",
+      "category": "transformers",
+      "requirements": "Requires a configured Transformers Extension, model downloads and its language container. These services are not installed by opening a notebook.",
+      "source_sha256": "68abe731504c6f4c94c52461f9f249ba08e9fba65ddbccc9487f0521949bc3ca",
+      "cells": 12
+    },
+    {
+      "path": "transformers/model_management.ipynb",
+      "title": "Model Management",
+      "category": "transformers",
+      "requirements": "Requires a configured Transformers Extension, model downloads and its language container. These services are not installed by opening a notebook.",
+      "source_sha256": "3d9f1f4b3b720cd536b60af8dd1dd5dcc1a56db879268dbf44f8da86d5fafbd6",
+      "cells": 14
+    },
+    {
+      "path": "transformers/question_answering.ipynb",
+      "title": "Question answering with text generation model",
+      "category": "transformers",
+      "requirements": "Requires a configured Transformers Extension, model downloads and its language container. These services are not installed by opening a notebook.",
+      "source_sha256": "1c9386885aa3b3de5ed4338e53048bbf859b77087330e865e08a1ed8abf29bd8",
+      "cells": 19
+    },
+    {
+      "path": "transformers/sequence_classification.ipynb",
+      "title": "Text classification model",
+      "category": "transformers",
+      "requirements": "Requires a configured Transformers Extension, model downloads and its language container. These services are not installed by opening a notebook.",
+      "source_sha256": "6de84e59dd29390d6a18994f77aab5a115d59d8b43b2ddd00d3eef58ffd79dba",
+      "cells": 16
+    },
+    {
+      "path": "transformers/te_init.ipynb",
+      "title": "Transformer Extension initialization",
+      "category": "transformers",
+      "requirements": "Requires a configured Transformers Extension, model downloads and its language container. These services are not installed by opening a notebook.",
+      "source_sha256": "1850fc040084a52f4ff686e439a2bef2b2faec34aa5079c280265c8ddec71b42",
+      "cells": 7
+    },
+    {
+      "path": "transformers/te_introduction.ipynb",
+      "title": "Introduction",
+      "category": "transformers",
+      "requirements": "Requires a configured Transformers Extension, model downloads and its language container. These services are not installed by opening a notebook.",
+      "source_sha256": "a305ba9ea9220e5445c4d3deed8033500fec3b412b004a91b2750405e9412e3c",
+      "cells": 1
+    },
+    {
+      "path": "transformers/text_generation.ipynb",
+      "title": "Generative text model",
+      "category": "transformers",
+      "requirements": "Requires a configured Transformers Extension, model downloads and its language container. These services are not installed by opening a notebook.",
+      "source_sha256": "fa927796e3f10360653583fd5ec8f531b9affceb6a0d54d9f24d5c7b9057d72e",
+      "cells": 12
+    },
+    {
+      "path": "transformers/token_classification.ipynb",
+      "title": "Token classifier model",
+      "category": "transformers",
+      "requirements": "Requires a configured Transformers Extension, model downloads and its language container. These services are not installed by opening a notebook.",
+      "source_sha256": "77ffaf14a52ba0d301fe71932ce747c863e43943099a29ffcd6d9d33fec6d0ba",
+      "cells": 16
+    },
+    {
+      "path": "transformers/translation.ipynb",
+      "title": "Translation model",
+      "category": "transformers",
+      "requirements": "Requires a configured Transformers Extension, model downloads and its language container. These services are not installed by opening a notebook.",
+      "source_sha256": "c9dc8c38f90663de432fc9257cfa9b8b43dd9912dd1d9d452f3f366c73794321",
+      "cells": 16
+    },
+    {
+      "path": "transformers/utils/te_init_ui.ipynb",
+      "title": "Hugging Face credentials UI",
+      "category": "transformers",
+      "requirements": "Requires a configured Transformers Extension, model downloads and its language container. These services are not installed by opening a notebook.",
+      "source_sha256": "82d1031320165e05992d8cb7b9b45fc5fd95bc0ae3cbd4b7a46fbee3159e693a",
+      "cells": 3
+    },
+    {
+      "path": "transformers/zero_shot_classification.ipynb",
+      "title": "Zero-shot classification model",
+      "category": "transformers",
+      "requirements": "Requires a configured Transformers Extension, model downloads and its language container. These services are not installed by opening a notebook.",
+      "source_sha256": "0eee95d5d27dd96892f285e0f9beb868c1f25c38264a0378b99d37f31be5d218",
+      "cells": 18
+    }
+  ],
+  "assets": [
+    "cloud/.gitignore",
+    "cloud/reuters-edml.json",
+    "cloud/reuters-prepare.py",
+    "first_steps/pyexasol.csv",
+    "first_steps/sqlalchemy.csv",
+    "script_languages_container/slc_main_build_steps.svg",
+    "text_ai/images/Document_and_annotaions_with_id.drawio.png",
+    "text_ai/images/data_model_1.drawio.png",
+    "text_ai/images/data_model_2.drawio",
+    "text_ai/images/data_model_2.drawio.png",
+    "text_ai/images/document_annotated.drawio",
+    "text_ai/images/document_annotated.drawio.png",
+    "text_ai/images/document_with_annotations_and_id.drawio",
+    "text_ai/images/entity_span.drawio",
+    "text_ai/images/entity_span.drawio.png",
+    "text_ai/images/keywords.drawio",
+    "text_ai/images/keywords.drawio.png",
+    "text_ai/images/keywords_a_lot.drawio",
+    "text_ai/images/keywords_a_lot.drawio.png",
+    "text_ai/images/topics.drawio",
+    "text_ai/images/topics.drawio.png",
+    "work_in_progress/.gitkeep"
+  ]
+}

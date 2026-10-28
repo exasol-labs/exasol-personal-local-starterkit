@@ -97,6 +97,31 @@ def copy(front: str, kit: Path, notebooks_dir: Path) -> tuple[list[str], list[st
             continue
         added.append(key)
         seen.add(key)
+    # The full official example library is prebuilt into this kit copy.
+    # It is optional only for older kit copies; installation never fetches it.
+    library = kit / "notebook" / "examples" / front
+    library_added = False
+    if library.is_dir():
+        for origin in sorted(library.rglob("*")):
+            if not origin.is_file():
+                continue
+            relative = origin.relative_to(library).as_posix()
+            key = relative if relative.startswith("public/") else "exasol-examples/" + relative
+            target = base / key
+            if target.exists() or target.is_symlink():
+                seen.add(key)
+                continue
+            if key in before:
+                continue
+            try:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(origin, target)
+                seen.add(key)
+                library_added = True
+            except OSError as err:
+                problems.append(f"{key}: {err.strerror or err}")
+        if library_added:
+            added.append("exasol-examples")
     # Runnable notebooks are the bundle. The source manifest stays in the
     # kit, outside the user's notebook browser. Remove only our unchanged old
     # manifest copy; a file the user edited remains theirs.
@@ -110,7 +135,7 @@ def copy(front: str, kit: Path, notebooks_dir: Path) -> tuple[list[str], list[st
         except OSError as err:
             problems.append(f"{legacy.name}: {err.strerror or err}")
     # Keep the lesson guide and required license notices alongside the bundle.
-    for name in ("EXAMPLE-GUIDE.md", "UPSTREAM-LICENSE.txt"):
+    for name in ("EXAMPLE-GUIDE.md", "UPSTREAM-LICENSE.txt", "INSTALL-AND-UPDATE.md"):
         origin, target = kit / "notebook" / name, base / name
         if not origin.is_file() or target.exists() or target.is_symlink() or name in before:
             continue
@@ -153,6 +178,10 @@ def write_readme(kit: Path, doc: dict, folder: Path) -> None:
         lines.append(f"    Needs: {entry['needs']}")
         if entry.get("upstream"):
             lines.append(f"    Adapted from [Exasol Notebook Connector / AI Lab]({entry['upstream']}); see UPSTREAM-LICENSE.txt.")
+    if (kit / "notebook/examples/jupyter/00_library.ipynb").is_file():
+        lines += ["", "## Full Exasol example library", "",
+                  "Open [exasol-examples/00_library.ipynb](exasol-examples/00_library.ipynb) for all 50 official lessons,",
+                  "their prerequisites and the recommended order. The same library is bundled for Marimo."]
     shared = doc.get("shared")
     if shared and (source / shared["folder"] / shared["jupyter"]).is_file():
         lines += ["", f"`{shared['folder']}/{shared['jupyter']}` - {shared['title']}: {shared['summary']}"]

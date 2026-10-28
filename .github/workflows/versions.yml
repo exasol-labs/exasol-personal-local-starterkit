@@ -818,6 +818,7 @@ jobs:
           "$RUNNER_TEMP/langfuse-venv/bin/python" -m unittest tests.test_notebook_helpers
       - run: python3 tests/test_notebook_contents.py
       - run: python3 tests/test_notebook_bundle.py
+      - run: python3 tests/test_example_library.py
         if: matrix.shard == 4
       - run: python3 tests/test_exasol_mlflow.py
         if: matrix.shard == 4

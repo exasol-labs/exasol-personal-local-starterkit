@@ -1,5 +1,12 @@
 # Bundled practice notebooks
 
+The complete 50-lesson official collection is also included. Open
+`exasol-examples/00_library.ipynb` in JupyterLab or
+`exasol-examples/00_library.py` in Marimo for its full categorized index.
+See the kit's `notebook/INSTALL-AND-UPDATE.md` for how the connector, environments
+and bundled files are installed and updated.
+
+
 These runnable notebooks are included with the kit for both JupyterLab and
 Marimo. Open the files listed below; no source manifest or download is needed.
 They adapt examples distributed by
