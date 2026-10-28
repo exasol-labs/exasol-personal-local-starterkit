@@ -20,7 +20,7 @@
 #   - a copy the user already installed from the VS Code Marketplace counts as
 #     "on this system": the kit never offers a second one and never manages it.
 
-$script:ExasolVscodeVersionFallback = if ($env:EXAKIT_EXASOL_VSCODE_VERSION_FALLBACK) { $env:EXAKIT_EXASOL_VSCODE_VERSION_FALLBACK } else { "1.8.0" }
+$script:ExasolVscodeVersionFallback = if ($env:EXAKIT_EXASOL_VSCODE_VERSION_FALLBACK) { $env:EXAKIT_EXASOL_VSCODE_VERSION_FALLBACK } else { "1.9.0" }
 $script:ExasolVscodeVersion = if ($env:EXAKIT_EXASOL_VSCODE_VERSION) { $env:EXAKIT_EXASOL_VSCODE_VERSION } else { "" }
 $script:ExasolVscodeRepo = if ($env:EXAKIT_EXASOL_VSCODE_REPO) { $env:EXAKIT_EXASOL_VSCODE_REPO } else { "exasol-labs/exasol-vscode" }
 $script:ExasolVscodeExtId = if ($env:EXAKIT_EXASOL_VSCODE_EXT_ID) { $env:EXAKIT_EXASOL_VSCODE_EXT_ID } else { "exasol.exasol-vscode" }

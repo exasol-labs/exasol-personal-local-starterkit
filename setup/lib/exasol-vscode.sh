@@ -25,7 +25,7 @@
 # Safe to re-run: an installed extension at the desired version is kept.
 
 EXAKIT_EXASOL_VSCODE_VERSION="${EXAKIT_EXASOL_VSCODE_VERSION:-}"
-EXAKIT_EXASOL_VSCODE_VERSION_FALLBACK="${EXAKIT_EXASOL_VSCODE_VERSION_FALLBACK:-1.8.0}"
+EXAKIT_EXASOL_VSCODE_VERSION_FALLBACK="${EXAKIT_EXASOL_VSCODE_VERSION_FALLBACK:-1.9.0}"
 EXAKIT_EXASOL_VSCODE_REPO="${EXAKIT_EXASOL_VSCODE_REPO:-exasol-labs/exasol-vscode}"
 EXAKIT_EXASOL_VSCODE_EXT_ID="${EXAKIT_EXASOL_VSCODE_EXT_ID:-exasol.exasol-vscode}"
 # Optional extensions-dir override: tests point this at a sandbox so a real

@@ -17,7 +17,7 @@ from .paths import RuntimePaths
 
 DEFAULT_MCP_COMMAND = "uvx"
 DEFAULT_MCP_PACKAGE = "exasol-mcp-server"
-DEFAULT_MCP_VERSION = "2.2.0"
+DEFAULT_MCP_VERSION = "2.3.0"
 DEFAULT_SERVER_NAME = "exasol"
 # The dash-server add-on's MCP control plane. dash-server speaks Streamable
 # HTTP on a port it records at install time (5100 unless something already held
