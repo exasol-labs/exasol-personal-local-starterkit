@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated": "2026-10-27",
+  "updated": "2026-10-28",
   "kit": {
     "version": "0.2.2"
   },
@@ -20,19 +20,19 @@
       }
     },
     "exapump": {
-      "version": "0.13.0",
+      "version": "0.13.1",
       "repo": "exasol-labs/exapump",
       "severity": "normal",
       "sha256": {
-        "linux-aarch64": "f23a955caf131f26833471dcac0e40e524b825e75277cdda68dfb157acb806bf",
-        "linux-x86_64": "69a5a9bc63aa07ff7b95d00b8786ec1c67c3dff6e7f3fbac5f09b110c8d288db",
-        "macos-aarch64": "819a3c0c7e024069c8e1ee76c931cf6ea3701e7335c72d97431b2e06d7234c71",
-        "macos-x86_64": "38507010bb903573029991e56af3ad846830b328f90cd2f04d048ca684e29ec9",
-        "windows-x86_64": "b6eccf50732f4f2d3d4f6edb34789e6e24e94d9c6dbd50f5f080104b375aa838"
+        "linux-aarch64": "7c70992fffe272332e855b02c2070c4d12fff92cc421858fb471954b9f261d73",
+        "linux-x86_64": "663225d45fd121d274ffac559cd8c703672ff1e8d4e8e88e37e70797b91004cc",
+        "macos-aarch64": "131e81d32cf658d7d3a2e151fd35deab78ddd5aa61f585079e68dc4bab74da04",
+        "macos-x86_64": "1a43954f5f51b16c068d024ea3d88f7f3375b47e6c2145c7a662c8b361928edd",
+        "windows-x86_64": "17ecc7557ced3ec619fbee35ad025ea38c0f86613e451e350dc6b869a761cf41"
       }
     },
     "mcp": {
-      "version": "2.2.0",
+      "version": "2.3.0",
       "package": "exasol-mcp-server",
       "severity": "normal"
     },
@@ -46,7 +46,7 @@
       "severity": "normal"
     },
     "dash-server": {
-      "version": "0.1.1",
+      "version": "0.2.1",
       "repo": "exasol-labs/dash-server",
       "package": "dash-server",
       "severity": "normal"
@@ -64,11 +64,11 @@
       }
     },
     "exasol-vscode": {
-      "version": "1.8.0",
+      "version": "1.9.0",
       "repo": "exasol-labs/exasol-vscode",
       "severity": "normal",
       "sha256": {
-        "vsix": "da442768b544a29b15e1f8cc7ae4b42d1dd6462312f044461be49298be82ecd5"
+        "vsix": "4c127a8b15e29f2010270199ea924e8903314e2deebddeca816ce2b41bd055eb"
       }
     },
     "json-tables": {
