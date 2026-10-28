@@ -144,6 +144,24 @@ try {
     [void](Sync-NotebookPackages)
     Contains "with --reinstall-package for both" "--reinstall-package exakit-nb --reinstall-package exasol-mlflow" ($script:LoggedArgs -join " ")
 
+    $dirtyKit = Join-Path $work "dirty-kit"
+    $buildA = Join-Path $dirtyKit "notebook/package/build"
+    $buildB = Join-Path $dirtyKit "packages/exasol-mlflow/build"
+    New-Item -ItemType Directory -Force -Path $buildA, $buildB | Out-Null
+    $currentSource = Join-Path $dirtyKit "packages/exasol-mlflow/current.py"
+    Set-Content -Path $currentSource -Value "current helper" -NoNewline
+    $cleaned = & {
+        function Get-ExakitRepoRoot { return $dirtyKit }
+        function Get-NotebookSpecs { return @("local-package") }
+        function Get-NotebookFrontendsInstalled { return @{} }
+        function Invoke-ExakitLogged { param($Cmd, [Parameter(ValueFromRemainingArguments)]$Rest)
+            if ((Test-Path $buildA) -or (Test-Path $buildB)) { return 1 }; return 0
+        }
+        Sync-NotebookPackages
+    }
+    Check "a local checkout's stale build output is removed before packaging" $true $cleaned
+    Check "current package source is kept" "current helper" (Get-Content -Raw $currentSource)
+
     Write-Host "a front end the kit installed follows its pin through an update:"
     $scriptsDir = Join-Path $script:NotebookVenv "Scripts"
     New-Item -ItemType Directory -Force -Path $scriptsDir | Out-Null

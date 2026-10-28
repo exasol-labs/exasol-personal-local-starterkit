@@ -191,6 +191,15 @@ check "the kit's packages are reinstalled, in the same resolution" \
          notebook_sync_packages | cut -d'[' -f1) )"
 
 echo "a front end the kit installed follows its pin through an update:"
+DIRTY_KIT="$WORK/dirty-kit"
+mkdir -p "$DIRTY_KIT/notebook/package/build/lib" "$DIRTY_KIT/packages/exasol-mlflow/build/lib"
+printf 'current helper' > "$DIRTY_KIT/packages/exasol-mlflow/current.py"
+printf 'old helper' > "$DIRTY_KIT/packages/exasol-mlflow/build/lib/old.py"
+check "a local checkout's stale build output is removed before packaging, source kept" "clean|current helper" \
+    "$( (exakit_repo_root() { printf '%s' "$DIRTY_KIT"; }; _notebook_specs() { printf 'local-package'; }
+         _notebook_frontends_installed() { :; }; _notebook_uv() { echo uv; }; detect_os() { echo macos; }
+         run_logged() { if [ -d "$DIRTY_KIT/notebook/package/build" ] || [ -d "$DIRTY_KIT/packages/exasol-mlflow/build" ]; then printf stale; else printf clean; fi; }
+         notebook_sync_packages; printf '|'; cat "$DIRTY_KIT/packages/exasol-mlflow/current.py") )"
 UPV="$WORK/upvenv"; mkdir -p "$UPV/bin"
 printf '#!/bin/sh\nexit 0\n' > "$UPV/bin/marimo"; cp "$UPV/bin/marimo" "$UPV/bin/jupyter-lab"; chmod +x "$UPV/bin/marimo" "$UPV/bin/jupyter-lab"
 printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "$UV_LOG"\n' > "$WORK/uv-stub"; chmod +x "$WORK/uv-stub"

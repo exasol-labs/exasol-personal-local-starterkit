@@ -995,6 +995,14 @@ _notebook_report_frontends() {
 # (said in one line). Cheap when nothing else changed. ⇄ twin: Sync-NotebookPackages.
 notebook_sync_packages() {
     _nsy_uv="$(_notebook_uv)" || return 1
+    # EXAKIT_LOCAL_KIT copies ignored build output too. The copy makes an old
+    # setuptools build/lib newer than its source, so even --reinstall-package
+    # can install an old API. Discard only generated output for our packages.
+    _nsy_root="$(exakit_repo_root)"
+    rm -rf "$_nsy_root/notebook/package/build" "$_nsy_root/packages/exasol-mlflow/build" || {
+        warn "Could not clear stale notebook package build files; no packages were installed."
+        return 1
+    }
     # CPU-only PyTorch on Linux: the default wheel pulls gigabytes of CUDA.
     _nsy_torch=""
     [ "$(detect_os 2>/dev/null)" = "macos" ] || _nsy_torch="--torch-backend cpu"

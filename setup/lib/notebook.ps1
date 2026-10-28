@@ -967,6 +967,18 @@ function Get-NotebookSpecs {
 function Sync-NotebookPackages {
     $uv = Get-NotebookUv
     if (-not $uv) { return $false }
+    # A copied local checkout can contain old setuptools build/lib output with
+    # a newer timestamp than the source. Reinstall must build from source.
+    $root = Get-ExakitRepoRoot
+    try {
+        foreach ($relative in @("notebook/package/build", "packages/exasol-mlflow/build")) {
+            $generated = Join-Path $root $relative
+            if (Test-Path $generated) { Remove-Item -Recurse -Force -ErrorAction Stop $generated }
+        }
+    } catch {
+        Warn2 "Could not clear stale notebook package build files; no packages were installed."
+        return $false
+    }
     $before = Get-NotebookFrontendsInstalled
     $pipArgs = @("pip", "install", "--python", (Get-NotebookVenvPython))
     foreach ($own in $script:NotebookOwnPackages) { $pipArgs += @("--reinstall-package", $own) }
