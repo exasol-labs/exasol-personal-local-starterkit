@@ -14,15 +14,15 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    # Quickstart: connected, data in, a first query
+    # Start an investigation with data you can explain
 
-    - **Dataset:** the Pharma sample (`pharma_trials`, ClinicalTrials.gov studies) unless you pick another below: the
-      Banking sample (`banking_complaints`), your own CSV, Parquet or JSON file, or a table in a connected source.
-    - **What must be loaded:** nothing beforehand. The sample-dataset cell loads it with `exakit data-load` the first
-      time; your own file is loaded by its cell.
-    - **How long:** about ten minutes, most of it loading the sample the first time (seconds after that).
+    **Dataset:** `pharma_trials` by default; `banking_complaints` or your own file can follow the same path. **How long:** about ten minutes on the first load.
 
-    Run the cells top to bottom. The notebook is already connected: there is no host, user or password in it.
+    Imagine a team asks you to understand outcomes: which trial phases and sponsors have more terminations, or which complaint products and companies receive monetary relief. Start by checking the data and agreeing what its columns mean.
+
+    **By the end:** you will have a working connection, an approved column map and a first grouped result you can explain. Run top to bottom and use this as the starting notebook for your own investigation.
+
+    **Optional AI:** an LLM endpoint is optional. The connection, table-based role suggestions and first SQL query work as supplied. Later, Explore can summarize text and Ask can draft SQL with your configured model.
     """)
     return
 
@@ -30,13 +30,13 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## One workflow id on everything
+    ## Keep a trail of the investigation
 
-    The first cell starts a **workflow**: every step below - each query, the role proposal and its approval, a trace -
-    appends one line carrying this id to `~/.exasol-starter-kit/workflows/<id>.jsonl`, so a result can be traced back
-    through every step that made it (`exakit workflow show <id>`). Copy the printed `wf-...` id into `WORKFLOW_ID`
-    in Explore, Ask and Share: Jupyter opens each notebook in a separate kernel. A kernel started with
-    `EXAKIT_WORKFLOW_ID` already set also continues that workflow.
+    A colleague should be able to follow a result back to the data and decisions behind it. The next cell starts a **workflow**, a record of your queries, role review and later handoffs.
+
+    **Do now:** keep the printed `wf-...` identifier. Paste it into `WORKFLOW_ID` in Explore, Ask and Share when those notebooks open in separate kernels.
+
+    **Technical note:** the log lives in `~/.exasol-starter-kit/workflows/<id>.jsonl`. `exakit workflow show <id>` reads it; `EXAKIT_WORKFLOW_ID` can continue it from a new kernel.
     """)
     return
 
@@ -55,10 +55,11 @@ def _():
 def _(mo):
     # Cell tags: connect
     mo.md(r"""
-    ## Connected?
+    ## Meet the data where it lives
 
-    The kernel **Exasol (Starter Kit)** opens the database from the kit's encrypted store: there is no host, user or
-    password in this notebook. The second cell lists what the database holds; a virtual schema is a connected source.
+    Before interpreting a number, check that the notebook can reach your local Exasol database. The next cell connects using the kit's saved connection and runs a small check. Then you can see the available schemas, which are folders of database tables.
+
+    **Technical note:** `nb.connect()` reads the kit's connection store. You can reuse this cell in your own notebook without copying connection credentials into it.
     """)
     return
 
@@ -82,14 +83,13 @@ def _(conn, nb):
 def _(mo):
     # Cell tags: load
     mo.md(r"""
-    ## Bring data in: one cell for each way
+    ## Choose a starting dataset
 
-    Set up the ones you want; a cell you leave as it is says so and skips. The data used from here on is the first
-    that loaded, in this order: a connected source, your own file, the sample dataset.
+    Start with the bundled sample so you can learn the flow with known data. Pharma asks about trial outcomes; Banking asks about complaint outcomes. Later you can use the same pattern with a file of your own.
 
-    **A sample dataset** the kit ships: `pharma_trials` (ClinicalTrials.gov studies) or `banking_complaints` (CFPB
-    consumer complaints). The cell loads it with `exakit data-load` the first time (a few minutes) and uses it as it is
-    after that. `None` skips it.
+    Each loading cell has its own setting. Leave unused paths at their defaults. For this local walkthrough, keep `SOURCE = None`. The final selection cell tells the rest of the notebook which dataset to use.
+
+    **Start here: use the bundled sample.** Keep `SAMPLE = "pharma_trials"` for trial data, or change it to `"banking_complaints"` for complaint data. The helper loads a missing sample and reuses one already loaded. Set it to `None` when you later want to work only with your own file.
     """)
     return
 
@@ -106,8 +106,7 @@ def _(conn, nb):
 def _(mo):
     # Cell tags: load
     mo.md(r"""
-    **Your own file**: CSV, Parquet or JSON (an array of records, or one record per line). Name the table it goes into.
-    The next cell profiles its columns and lets you choose their roles; you do not have to write a descriptor.
+    **Make this your own later.** Set `OWN_FILE` to a CSV, Parquet or JSON file and choose a new `OWN_TABLE`, such as `MY_DATA.TRANSACTIONS`. The loader brings its records into Exasol; the review step below suggests how to use its columns. A default path that does not exist is skipped, so you can finish the sample story first.
     """)
     return
 
@@ -159,15 +158,23 @@ def _(nb, own, sample, source):
 def _(mo):
     # Cell tags: review
     mo.md(r"""
-    ## Review and approve the roles
+    ## Give the columns a meaning for this question
 
-    The kit profiles the chosen table and shows the evidence behind each proposed role: one dropdown per column,
-    labelled with its type, null share and distinct values or span, the runner-up for its role under it. Pick a role
-    for each column, then click **Approve descriptor**. The next cell waits for your approval; it does not run on a
-    draft (in Marimo it stops until the button is clicked, then runs on its own). In a plain Python session, call
-    `review.approve({"COLUMN": "role", ...})` instead. A headless run (`EXAKIT_NB_AUTO_APPROVE=1`) approves only a
-    proposal equal to the current approved version, writing nothing; any other proposal stays a draft and the run
-    says why (`=force` approves it anyway).
+    A table stores values. A **role** tells these notebooks how you want to use a column. The kit suggests roles from the real column names, types and measured values, then shows its reasons. You decide whether those suggestions fit your goal.
+
+    | Role | Meaning | Pharma example | Banking example |
+    |---|---|---|---|
+    | `entity` | Who or what to compare | `LEAD_SPONSOR` | `COMPANY` |
+    | `category` | Groups to compare | `PHASE` | `PRODUCT` |
+    | `date` | The event timeline | `START_DATE` | `DATE_RECEIVED` |
+    | `label` | The outcome to predict | `TERMINATED` | `MONETARY_RELIEF` |
+    | `text` | Written descriptions | `BRIEF_SUMMARY` | `ISSUE` |
+
+    **Your most important choice is the label.** A model using `TERMINATED` learns about trial termination. A model using `HAS_RESULTS` answers whether results were published. Both can contain 0/1; the business question decides which is useful.
+
+    **Do now:** read the reasons, keep or change the dropdowns, leave unrelated columns as **—**, then click **Approve descriptor**. A close alternative deserves a second look. A rule-match score measures how well a column fits the rules, not certainty about its meaning.
+
+    **Technical note:** approval saves a versioned **descriptor**, the column map used by Explore, Ask, Train and Share. The next cell waits for approval; Marimo resumes it after the button is clicked. Plain Python can use `review.approve({"COLUMN": "role", ...})`. Automated `EXAKIT_NB_AUTO_APPROVE=1` reuses an unchanged approved map; `force` accepts a new proposal deliberately. Use the button for this walkthrough.
     """)
     return
 
@@ -190,12 +197,13 @@ def _(nb, review):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## A first query
+    ## Read the first answer before building a model
 
-    Rows per category, built from the descriptor's roles - the same query on any dataset. `nb.show_sql()` prints the
-    statement behind the result. A role no column fits (the descriptor's `missing`, with the profiler's reason) is
-    not guessed: without a category the rows are counted per entity, without a label the label rate is left out, and
-    the cell says so.
+    Count the observations in each category. For Pharma these are trials by phase; for Banking they are complaints by product. The result also shows the share whose approved outcome is 1, when a label is available.
+
+    **Read the result:** a large group has more records, while a high label percentage has more of the selected outcome. Those are different observations. Counts and associations alone do not explain why an outcome happened.
+
+    **Technical note:** the SQL uses your role map rather than hard-coded dataset columns. Without a category it groups by entity; without a label it leaves out the outcome rate and explains the omission. `nb.show_sql()` reveals the query behind the result.
     """)
     return
 
@@ -217,12 +225,11 @@ def _(conn, ds_1, nb):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Next: `01_explore.ipynb`
+    ## Continue the story
 
-    Open `01_explore.ipynb` in this folder: the landscape of this dataset with the SQL visible, a small model on this
-    computer, and a text step with your own model, traced to your Langfuse. It runs on the dataset its first assignment
-    names (`pharma_trials` as it ships); to run it on what you loaded here, set that one assignment to the dataset id, or
-    to your file's path - its roles were saved beside it.
+    Open `01_explore.ipynb` to compare groups, follow outcomes over time and try a small local model. Keep the sample first; changing its `DATASET` assignment later lets you reuse the notebook with Banking or the path to your own described file.
+
+    The next chapters are `02_ask_your_data.ipynb` for a reviewed question and `03_share.ipynb` for a checked dashboard on Dash Server. Bring your workflow ID along.
     """)
     return
 

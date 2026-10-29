@@ -15,7 +15,7 @@ The notebooks, in the order a new user opens them (numbers are never reused):
 | Folder | Notebook | What it does |
 |---|---|---|
 | `data-scientist/` | `00_quickstart` | Opens connected; one cell per way data comes in (a sample dataset, your own file, a connected source); review and approve the proposed column roles; a first query |
-| | `01_explore` | The landscape question with the SQL visible, a small scikit-learn model, the text step traced to your Langfuse; another dataset or your own file is one assignment; ends by writing the handoff for the ML Engineer |
+| | `01_explore` | Compare groups and trends with visible SQL, try a local scikit-learn model, optionally add AI text themes and Langfuse tracing; another dataset or your own file is one assignment; ends by writing the handoff for the ML Engineer |
 | | `02_ask_your_data` | Draft SQL from approved roles, inspect and approve it, then execute under the dedicated read-only database identity |
 | | `03_share` | Prepare a Dash Server app from checked SQL, inspect a healthy preview, then explicitly promote the revision |
 | `ml-engineer/` | `00_quickstart` | The container, MLflow and the bucket directory, one check each with its fix; then the same loader and role-review cells |
@@ -24,6 +24,35 @@ The notebooks, in the order a new user opens them (numbers are never reused):
 | | `03_score_external_model` | A model trained elsewhere, dropped with `exakit model put` and scored by a UDF |
 
 Numbers follow the requirements document's Appendix B and are never reused.
+
+## Follow one investigation across the notebooks
+
+Start with a question: which Pharma trial groups have more terminations, or
+which Banking complaint groups receive monetary relief? The quickstart opens
+the data and explains the proposed column meanings. Explore compares groups,
+checks changes over time and writes a **handoff**, the saved recipe for the
+ML Engineer. Ask turns a follow-up question into SQL you inspect. Share takes
+a checked result to a Dash Server preview that you review before publishing.
+
+The ML Engineer picks up that recipe, checks the database's Python environment,
+trains a reproducible model and records its metrics and artifacts in MLflow.
+The scoring lessons check whether another implementation gives the same
+predictions. Matching predictions prove consistency; the baseline comparison
+is a separate check of model usefulness.
+
+Each lesson explains the question, what to do, how to read the result and the
+technical details behind it. Use the supplied code as a starting point, then
+adapt it to your own approved column map. The four practice lessons in
+[EXAMPLE-GUIDE.md](EXAMPLE-GUIDE.md) teach individual parts of that journey.
+
+The supplied analysis and ML code needs no LLM endpoint. Explore starts with
+`USE_AI_THEMES = False`; enable it explicitly to summarize a small text sample.
+Ask starts with `DRAFT_WITH_MODEL = False` and supplies SQL you can edit yourself.
+Their optional AI sections explain endpoint configuration, what is sent and
+how to check the result. Langfuse tracing is another opt-in. Configuring a model
+can also enable optional profiling notes; it never assigns or approves roles.
+Role suggestions use measured table statistics and column-name rules, and the
+review screen explains their evidence and close alternatives.
 
 ## Where the kit stops in the model lifecycle
 
@@ -77,6 +106,13 @@ folder records what the kit copied). A catalog entry whose notebook this kit cop
 does not carry yet is skipped. The notebooks folder is the user's work: an
 uninstall keeps it, the full `exakit uninstall` too unless
 `EXAKIT_UNINSTALL_NOTEBOOKS=remove`.
+
+After updating, existing working copies keep their older text and your edits.
+To use a revised lesson, open its current original under
+`~/.exasol-starter-kit/kit/notebook/notebooks/` (Jupyter) or
+`~/.exasol-starter-kit/kit/notebook/marimo/`, then save a new working copy with a
+different name. A source checkout has the same originals under `notebook/`.
+In Jupyter choose the **Exasol (Starter Kit)** kernel.
 
 Every notebook has its `.py` source; `python3 tools/notebooks.py --check` fails
 when an `.ipynb` is not built from it (`--check --marimo` also compares `marimo/`

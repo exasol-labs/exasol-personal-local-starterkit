@@ -14,16 +14,15 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    # Ask your data
+    # Ask a question and keep control of the answer
 
-    - **Dataset:** Pharma, Banking, or your own approved descriptor.
-    - **How long:** about five minutes to draft, inspect, approve and validate one question.
+    **Dataset:** Pharma, Banking or your own approved descriptor. **How long:** about five minutes.
 
-    Draft a question from an **approved** descriptor. Read the SQL and assumptions first. Edit the SQL if needed;
-    approval applies to the exact text you reviewed. Only then does it run, using the kit's dedicated read-only identity.
-    The SQL, row count and any model doubts are recorded under the active workflow id.
-    Copy the workflow id printed by the quickstart into WORKFLOW_ID to keep the
-    same log when this notebook runs in a separate kernel.
+    A colleague asks how records are distributed across categories. You will inspect a proposed query, decide whether it answers the question and approve the exact SQL before it runs. In Pharma that means trial phases; in Banking it means complaint products.
+
+    **By the end:** you will have a read-only answer and a record of the SQL you approved. Paste the quickstart's workflow ID into `WORKFLOW_ID` to connect it to the earlier investigation.
+
+    **Optional AI:** the supplied query works with `DRAFT_WITH_MODEL = False`. A configured model can draft a different query when you opt in; you still inspect and approve it.
     """)
     return
 
@@ -52,10 +51,11 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Draft and inspect
+    ## Start from a question you can check
 
-    The starter query uses the descriptor's category role. With DRAFT_WITH_MODEL=True, the opted-in model proposes SQL
-    from the question, table and roles. It receives no table rows. The model may be wrong; check every table and number.
+    The supplied question counts records per category. Read the SQL, assumptions and doubts before approving anything. Does it use the intended table and grouping? Would the result actually answer the question?
+
+    **Technical note:** in the supplied mode, the SQL template determines the answer; changing `QUESTION` alone does not rewrite it. Edit the proposed SQL to ask a different manual question. With `DRAFT_WITH_MODEL = True`, your configured endpoint drafts from the question and approved table/role metadata, without receiving table rows. Treat its proposal as something to review.
     """)
     return
 
@@ -72,10 +72,13 @@ def _(DRAFT_WITH_MODEL, QUESTION, ds, nb):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Approve this SQL, then run
+    ## Make the execution an explicit decision
 
-    Edit `proposal.edit("SELECT …")` if needed. Set APPROVE_SQL=True only after reading the printed query. Editing it
-    afterwards removes approval. A Draft descriptor, write statement, or unapproved query is refused.
+    First run the next cell with `APPROVE_SQL = False`: it should say that no query ran. After inspecting the proposal, set it to `True` and rerun the cell. Compare the returned counts with the exploration results.
+
+    **Technical note:** approval belongs to the exact SQL text. `proposal.edit("SELECT ...")` removes an earlier approval. The execution uses the kit's read-only identity; write statements, unapproved SQL and draft descriptors are refused. The workflow records the query and row count.
+
+    **Continue:** use `03_share.ipynb` when the result is worth showing to someone else.
     """)
     return
 

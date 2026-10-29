@@ -7,24 +7,24 @@
 # ---
 
 # %% [markdown]
-# # Quickstart: connected, data in, a first query
+# # Start an investigation with data you can explain
 #
-# - **Dataset:** the Pharma sample (`pharma_trials`, ClinicalTrials.gov studies) unless you pick another below: the
-#   Banking sample (`banking_complaints`), your own CSV, Parquet or JSON file, or a table in a connected source.
-# - **What must be loaded:** nothing beforehand. The sample-dataset cell loads it with `exakit data-load` the first
-#   time; your own file is loaded by its cell.
-# - **How long:** about ten minutes, most of it loading the sample the first time (seconds after that).
+# **Dataset:** `pharma_trials` by default; `banking_complaints` or your own file can follow the same path. **How long:** about ten minutes on the first load.
 #
-# Run the cells top to bottom. The notebook is already connected: there is no host, user or password in it.
+# Imagine a team asks you to understand outcomes: which trial phases and sponsors have more terminations, or which complaint products and companies receive monetary relief. Start by checking the data and agreeing what its columns mean.
+#
+# **By the end:** you will have a working connection, an approved column map and a first grouped result you can explain. Run top to bottom and use this as the starting notebook for your own investigation.
+#
+# **Optional AI:** an LLM endpoint is optional. The connection, table-based role suggestions and first SQL query work as supplied. Later, Explore can summarize text and Ask can draft SQL with your configured model.
 
 # %% [markdown]
-# ## One workflow id on everything
+# ## Keep a trail of the investigation
 #
-# The first cell starts a **workflow**: every step below - each query, the role proposal and its approval, a trace -
-# appends one line carrying this id to `~/.exasol-starter-kit/workflows/<id>.jsonl`, so a result can be traced back
-# through every step that made it (`exakit workflow show <id>`). Copy the printed `wf-...` id into `WORKFLOW_ID`
-# in Explore, Ask and Share: Jupyter opens each notebook in a separate kernel. A kernel started with
-# `EXAKIT_WORKFLOW_ID` already set also continues that workflow.
+# A colleague should be able to follow a result back to the data and decisions behind it. The next cell starts a **workflow**, a record of your queries, role review and later handoffs.
+#
+# **Do now:** keep the printed `wf-...` identifier. Paste it into `WORKFLOW_ID` in Explore, Ask and Share when those notebooks open in separate kernels.
+#
+# **Technical note:** the log lives in `~/.exasol-starter-kit/workflows/<id>.jsonl`. `exakit workflow show <id>` reads it; `EXAKIT_WORKFLOW_ID` can continue it from a new kernel.
 
 # %%
 import os
@@ -40,12 +40,13 @@ print(f"Every step below is logged under it: exakit workflow show {wid}")
 # %% [include] ../00_shared/data_paths.py review
 
 # %% [markdown]
-# ## A first query
+# ## Read the first answer before building a model
 #
-# Rows per category, built from the descriptor's roles - the same query on any dataset. `nb.show_sql()` prints the
-# statement behind the result. A role no column fits (the descriptor's `missing`, with the profiler's reason) is
-# not guessed: without a category the rows are counted per entity, without a label the label rate is left out, and
-# the cell says so.
+# Count the observations in each category. For Pharma these are trials by phase; for Banking they are complaints by product. The result also shows the share whose approved outcome is 1, when a label is available.
+#
+# **Read the result:** a large group has more records, while a high label percentage has more of the selected outcome. Those are different observations. Counts and associations alone do not explain why an outcome happened.
+#
+# **Technical note:** the SQL uses your role map rather than hard-coded dataset columns. Without a category it groups by entity; without a label it leaves out the outcome rate and explains the omission. `nb.show_sql()` reveals the query behind the result.
 
 # %%
 skipped = {m["role"]: m["reason"] for m in ds.missing}
@@ -65,9 +66,8 @@ nb.show_sql()
 first_rows
 
 # %% [markdown]
-# ## Next: `01_explore.ipynb`
+# ## Continue the story
 #
-# Open `01_explore.ipynb` in this folder: the landscape of this dataset with the SQL visible, a small model on this
-# computer, and a text step with your own model, traced to your Langfuse. It runs on the dataset its first assignment
-# names (`pharma_trials` as it ships); to run it on what you loaded here, set that one assignment to the dataset id, or
-# to your file's path - its roles were saved beside it.
+# Open `01_explore.ipynb` to compare groups, follow outcomes over time and try a small local model. Keep the sample first; changing its `DATASET` assignment later lets you reuse the notebook with Banking or the path to your own described file.
+#
+# The next chapters are `02_ask_your_data.ipynb` for a reviewed question and `03_share.ipynb` for a checked dashboard on Dash Server. Bring your workflow ID along.

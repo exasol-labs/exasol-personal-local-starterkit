@@ -14,21 +14,17 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    # Score a model trained elsewhere
+    # Bring a trusted model file into SQL
 
-    A model trained **anywhere** - a laptop, a colleague's notebook, `01_train.ipynb` - arrives as a file. This notebook
-    puts it into the database's bucket directory with `exakit model put`, creates a scoring UDF for it from the kit's
-    template, scores a table **inside Exasol**, and checks that the database's predictions match the same model run here,
-    row for row, on a held-out sample.
+    **Dataset:** `pharma_trials` by default; change `DATASET` for Banking or a compatible described table.
 
-    **Dataset:** `pharma_trials` (or `banking_complaints`: change one line below). Every query is built from the dataset's
-    **descriptor** roles - the category, the text and the label - so the notebook runs unchanged on either.
+    Sometimes a model is trained on a laptop and arrives as a file. You want to call it from SQL without changing its predictions. This lesson provides a local stand-in model, copies it into the shared model directory and compares database scores with local scores.
 
-    **What it needs:** the dataset loaded (`exakit data-load pharma_trials`), the `udf-devkit` add-on with Python UDFs set
-    up (`exakit marketplace udf-devkit`; older installations can add it with `exakit udf-use default`), and
-    scikit-learn in this notebook's environment.
-    **Run time:** about three minutes; the first scoring query is the slowest, because each UDF instance loads the model
-    once.
+    **By the end:** you will know which model file was used, whether its Python packages are compatible and whether both environments score the held-out sample consistently.
+
+    **What it needs:** approved roles, the Python ML runtime and a working shared bucket. **Run time:** about three minutes after setup.
+
+    **Optional AI:** no LLM endpoint is required. Here 'external model' means a local model file; it does not configure an external data source.
     """)
     return
 
@@ -44,13 +40,11 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Where the model comes from
+    ## Use the supplied model first, then adapt the input contract
 
-    Leave `MODEL_FILE = None` and the next cells train a small text classifier here, standing in for a model trained
-    elsewhere. Or point it at a scikit-learn pickle you already have: one that takes a table with the columns `category`
-    and `text` and has `predict_proba` - the `model/model.pkl` artefact of an `01_train.ipynb` run is one. The database
-    unpickles the file with **its** container's Python and scikit-learn, so train with the same versions; the check at
-    the end shows it when they disagree.
+    Keep `MODEL_FILE = None` for the walkthrough. The notebook trains a small category-and-text classifier locally, standing in for a model someone hands you. Later, supply a trusted scikit-learn model file with compatible inputs and `predict_proba`.
+
+    **Technical note:** this template sends fields named `category` and `text`. The numeric-feature pipeline from `01_train` has a different input contract and needs an adapted feature query/template before it can be used here. A matching filename alone does not establish compatibility.
     """)
     return
 
@@ -76,7 +70,11 @@ def _(nb):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Connect and read the descriptor
+    ## Agree what data the file will receive
+
+    Open the approved role map and check that category, text and label mean the same things the model was trained to use. Pharma supplies phase and trial descriptions; Banking supplies product and complaint descriptions.
+
+    **Technical note:** the connection comes from the kit store. `DATASET` selects the descriptor; its mapped column names supply the SQL expressions below.
     """)
     return
 
@@ -120,11 +118,11 @@ def _(DATASET, nb):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## The rows, from the roles
+    ## Keep some records away from the supplied training example
 
-    One row per observation: the category and the text the model reads, and the label. A row is **held out** when a hash
-    of its text falls in one bucket of five, so the stand-in model never sees the rows it is checked on, and the split is
-    the same on every run.
+    The built-in stand-in learns from one set of records and is checked on another. This avoids judging it only on records it has just seen.
+
+    **Technical note:** a fixed hash of category/text selects the held-out bucket, while the complement supplies the stand-in's training rows. The same expressions select either dataset. Null labels are excluded; text fields are combined and missing text becomes empty.
     """)
     return
 
@@ -152,11 +150,11 @@ def _(TRAIN_ROWS, conn, ds, nb):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## The model file
+    ## Check the file and the runtime before using it
 
-    With `MODEL_FILE = None` this trains the stand-in on this computer and pickles it into `models/` next to the
-    notebook: the same shape of model `01_train.ipynb` trains inside the database (TF-IDF on the text, the category one-hot
-    encoded, a logistic regression), taking a table with the columns `category` and `text`.
+    The next cell trains and saves the stand-in, or opens the trusted file you supplied. Inspect the package-compatibility result before scoring. A skipped check or an incompatible version leaves the scoring lesson incomplete.
+
+    **Technical note:** the helper compares the model's scikit-learn version with the selected database runtime. When a local provenance sidecar matches the file's SHA-256, its scikit-learn version supplies that check; the digest does not prove who created the file. Python and other package compatibility still need the loading and scoring tests below. A pickle can execute code when opened, so use files whose origin you trust. The notebook's own stand-in is created by the visible code you just ran.
     """)
     return
 
@@ -228,16 +226,11 @@ def _(
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Put it into the bucket directory
+    ## Make the same file visible to the scoring function
 
-    A local database has no upload service for its files: its BucketFS is a folder of the deployment, which UDFs read
-    under `/buckets`. `exakit model put` copies the file there, records its SHA-256, and prints the path the UDF opens. A
-    second run with the same file changes nothing; a **different** file of the same name is refused unless `--replace` is
-    given (exit code 5), so a model is never swapped silently. This cell passes `--replace` on purpose: running the
-    notebook again should put the model it has just trained. The stand-in created by this notebook is also
-    preconfirmed with `--yes`: its source is the code just run here. A supplied `MODEL_FILE` is not preconfirmed;
-    inspect and approve its origin with `exakit model inspect <file>` and `exakit model put <file> --yes` first.
-    `exakit model list` shows what is there.
+    A file on your laptop must be placed where a database UDF can read it. The next cell copies it into the deployment's shared model directory and prints the UDF-visible path and digest.
+
+    **Technical note:** `exakit model put` makes an atomic copy and records SHA-256. This lesson intentionally allows replacement of its just-trained example on reruns. A supplied `MODEL_FILE` needs a separate origin/trust confirmation using `exakit model inspect` and `exakit model put ... --yes`. `exakit model list` shows recorded files. Rust's bucketless fallback does not provide a Python model-file route.
     """)
     return
 
@@ -288,12 +281,11 @@ def _(
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Create the scoring UDF from the template
+    ## Turn the file into a function a query can call
 
-    The template is `udf/templates/score_model.sql` in the kit; its renderer fills the placeholders and refuses a value
-    that does not belong in SQL, or one left unfilled. The UDF loads the model **once per UDF instance** and scores one row
-    per call. `TEXT` is a reserved word in Exasol, so the parameter is `doc_text`, handed to the model as its `text`
-    column.
+    The generated scoring function accepts a category and description, loads the model and returns its positive-class probability. Read the printed definition before creating it.
+
+    **Technical note:** the checked renderer fills `udf/templates/score_model.sql` and rejects invalid or missing placeholders. Each UDF instance loads the model once. The SQL argument `doc_text` is passed to the pipeline's `text` field; adapting a model requires preserving its feature names, types and order.
     """)
     return
 
@@ -328,11 +320,11 @@ def _(
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Score the held-out rows in the database, and here
+    ## Compare predictions before scoring more rows
 
-    The database scores rows the stand-in never saw. The same model scores the very rows the database returned, on this
-    computer; the two must agree (AC-ML4.2). A difference beyond rounding means the container's scikit-learn is not the
-    one the model was pickled with.
+    The same held-out records are scored inside Exasol and on your computer. Read the row count, largest difference and comparison message. A skipped comparison is not a portability pass.
+
+    **Technical note:** the notebook compares probabilities using NumPy's numerical comparison and reports the maximum difference as well. Investigate mismatches in package versions, input preparation and model provenance. Matching implementations establish portability on the tested records; the printed accuracy is a separate measure of the model's quality.
     """)
     return
 
@@ -369,10 +361,13 @@ def _(
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Score the table
+    ## Use the verified scorer in an ordinary query
 
-    The UDF is SQL now: any query can call it. Here, the mean predicted probability per category over the whole table,
-    beside the share of label 1 actually there.
+    Once the comparison is satisfactory, inspect the average predicted probability and actual outcome share per category. Pharma groups by phase; Banking groups by product.
+
+    **Read the result:** a predicted probability is a model estimate, while the actual label share is observed data. Disagreement can reveal calibration or coverage problems worth investigating.
+
+    **Technical note:** the query calls the scoring UDF for each selected row and aggregates the results. Keep the feature preparation consistent with the earlier comparison.
     """)
     return
 
@@ -393,13 +388,11 @@ def _(CATEGORY, LABEL, MODEL_COMPATIBLE, TEXT, UDF, conn, ds, nb):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Next
+    ## Reuse the pattern for a model you own
 
-    - Your own model: set `MODEL_FILE`, run the notebook again. A model with other inputs takes other `inputs=` in the
-      render cell, `(parameter, SQL type, model column)` each; `python3 render.py --help` (path: `exakit model template`)
-      shows the options, including ONNX files and `method="predict"` for a class rather than a probability.
-    - `exakit model list` shows every model in the bucket directory and flags one changed since it was put.
-    - Drop the UDF when done: `DROP SCRIPT EXAKIT_SCORING.SCORE_TEXT_MODEL`.
+    Start from the supplied example, then change `MODEL_FILE` and adapt the feature query and renderer inputs to your model's contract. Repeat the compatibility and held-out comparison before relying on its scores.
+
+    Use `exakit model list` to inspect model provenance. When you are finished with this example, the SQL function can be removed deliberately with `DROP SCRIPT EXAKIT_SCORING.SCORE_TEXT_MODEL`. Use the kit's model commands for managed files. A chart or published result belongs in the checked Dash Server Share flow.
     """)
     return
 

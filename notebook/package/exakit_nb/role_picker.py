@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from html import escape
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,13 @@ AUTO_APPROVE = "EXAKIT_NB_AUTO_APPROVE"
 FORCE = "force"
 DEFAULT_SCHEMA = "MY_DATA"             # where a data file named by a notebook's assignment loads, as the quickstart's OWN_TABLE
 NONE_LABEL = "—"                  # the dropdown entry for a column that plays no role
+ROLE_PURPOSES = {
+    "entity": "the organisation, person or item you want to compare",
+    "category": "the groups you want to compare",
+    "date": "the event date used for trends and earlier/later records",
+    "label": "the outcome you want the model to predict",
+    "text": "the written descriptions you want to explore",
+}
 
 
 def _rules():
@@ -151,6 +159,56 @@ class RoleReview:
                 runner = f"runner-up for {role}: {candidate['column']}{score}"
             out[column] = (summary, runner)
         return out
+
+    def guide(self) -> str:
+        """Explain what is measured and what the user must decide, in every front end."""
+        facts = self.draft.evidence.get("table") or {}
+        measured, total = facts.get("profiled_rows"), facts.get("rows")
+        scope = (f"Measured {measured:,} of {total:,} rows. "
+                 if isinstance(measured, int) and isinstance(total, int) else "")
+        return (f"Review column suggestions for {self.draft.table}\n"
+                "These suggestions come from your table's column names and measured values. " + scope +
+                "The rules compare types, missing values, repeated values, dates and text lengths.\n" +
+                "\n".join(f"  {role}: {purpose}." for role, purpose in ROLE_PURPOSES.items()) +
+                "\nYou choose the prediction target (label): for example, TERMINATED predicts trial termination; "
+                "HAS_RESULTS predicts whether results were published. Both can contain 0/1.\n"
+                "A rule-match score compares candidates; it is not a probability that their business meaning is correct. "
+                "Keep useful suggestions, change the others, and leave irrelevant columns as —. "
+                "Approve descriptor saves this column map for the next notebooks.")
+
+    def explanations(self) -> dict[str, str]:
+        """Plain reasons beside the existing technical evidence; ties never imply certainty."""
+        profiled, evidence = self._profiled(), self.draft.evidence
+        excluded = evidence.get("excluded") or {}
+        result = {}
+        for column, role in self.suggestions().items():
+            if column in excluded:
+                result[column] = f"No automatic role: {excluded[column]}. Leave it unassigned unless you need it."
+                continue
+            if role is None:
+                result[column] = "No strong automatic match. Choose a role if it fits your question, or leave it unassigned."
+                continue
+            entry = evidence.get(role) or {}
+            numbers = profiled.get(column) or entry
+            distinct = numbers.get("distinct")
+            if role == "text":
+                reason = "Descriptive text can supply word features or optional AI summaries."
+            elif role == "date":
+                reason = "Date-like values can order events. Check that this is the event date your question needs."
+            elif role == "label":
+                reason = "Two outcome values make this a prediction candidate. You decide whether it is the outcome you want."
+            elif role == "category":
+                reason = f"{distinct} distinct values form repeated groups to compare." if distinct else "Repeated groups can be compared."
+            else:
+                reason = (f"{distinct} distinct names or identifiers can group observations by who or what they concern."
+                          if distinct else "Names or identifiers can group observations by who or what they concern.")
+            alternate = entry.get("runner_up") if isinstance(entry, dict) else None
+            if (isinstance(alternate, dict) and isinstance(entry.get("score"), (int, float))
+                    and isinstance(alternate.get("score"), (int, float))
+                    and alternate["score"] >= 0.5 and abs(round(entry["score"] - alternate["score"], 2)) <= 0.1):
+                reason += f" Close alternative: {alternate['column']}. Review which meaning fits your question."
+            result[column] = reason
+        return result
 
     # --- approving -------------------------------------------------------------------------------------------------
 
@@ -269,6 +327,7 @@ class RoleReview:
 
     def show(self):
         """Print the proposal with its evidence, then the picker the front end has (or the headless decision)."""
+        print(self.guide())
         self.draft.show()
         mode = os.environ.get(AUTO_APPROVE, "")
         if mode:
@@ -297,15 +356,16 @@ class RoleReview:
     def build_jupyter_picker(self, widgets):
         """One dropdown per column, labelled with the column, its evidence and the runner-up under it, then the
         Approve button. ``widgets`` is the ipywidgets module (or a stand-in)."""
-        labels = self.labels()
+        labels, explanations = self.labels(), self.explanations()
         pickers, rows = {}, []
         for column, role in self.suggestions().items():
             summary, runner = labels[column]
             picker = widgets.Dropdown(options=[(NONE_LABEL, None), *[(r, r) for r in ROLES]], value=role,
                                       description=column, style={"description_width": "180px"})
             pickers[column] = picker
-            note = " &middot; ".join(part for part in (summary, runner) if part)
-            rows.append(widgets.VBox([picker, widgets.HTML(f"<small>{note}</small>")]) if note else picker)
+            note = " &middot; ".join(escape(part) for part in (summary, runner) if part)
+            why = escape(explanations[column])
+            rows.append(widgets.VBox([picker, widgets.HTML(f"{why}<br><small>Technical evidence: {note}</small>")]))
         button = widgets.Button(description="Approve descriptor", button_style="success")
         output = widgets.Output()
 
@@ -330,11 +390,13 @@ def marimo_review(mo, draft: Draft, conn, file: Path | None = None) -> RoleRevie
     class MarimoRoleReview(RoleReview, mo.ui.dictionary):
         def __init__(self, draft, conn, file):
             RoleReview.__init__(self, draft, conn, file)
-            labels = self.labels()
+            labels, explanations = self.labels(), self.explanations()
             dropdowns = {}
             for column, role in self.suggestions().items():
                 summary, runner = labels[column]
-                label = f"**{column}**" + (f" &middot; {summary}" if summary else "") + (f"<br>{runner}" if runner else "")
+                label = (f"**{escape(column)}**<br>{escape(explanations[column])}" +
+                         (f"<br>Technical evidence: {escape(summary)}" if summary else "") +
+                         (f"<br>{escape(runner)}" if runner else ""))
                 dropdowns[column] = mo.ui.dropdown(options={NONE_LABEL: None, **{r: r for r in ROLES}},
                                                    value=role or NONE_LABEL, label=label)
             mo.ui.dictionary.__init__(self, {"roles": mo.ui.dictionary(dropdowns),
@@ -357,6 +419,7 @@ def marimo_review(mo, draft: Draft, conn, file: Path | None = None) -> RoleRevie
             raise RuntimeError("Approve the roles first.")          # not reached: mo.stop raises
 
         def show(self):
+            print(self.guide())
             self.draft.show()
             mode = os.environ.get(AUTO_APPROVE, "")
             if mode:

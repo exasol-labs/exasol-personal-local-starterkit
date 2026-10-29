@@ -7,40 +7,30 @@
 # ---
 
 # %% [markdown]
-# # Explore a dataset
+# # Explore patterns, then prepare a reproducible handoff
 #
-# - **Dataset:** the Pharma sample (`pharma_trials`, ClinicalTrials.gov studies) as it ships; the Banking sample
-#   (`banking_complaints`, CFPB consumer complaints) or your own file by changing the one assignment below.
-# - **What must be loaded:** that dataset. `00_quickstart.ipynb` loads either sample (or `exakit data-load
-#   pharma_trials` in a terminal); your own file is loaded by the next cell.
-# - **How long:** about two minutes; the text step adds a few seconds per row with your own model.
+# **Dataset:** `pharma_trials` by default; change `DATASET` for `banking_complaints` or your own described file. **How long:** about two minutes, plus time for optional model calls.
 #
-# The notebook runs on any dataset that has a **descriptor**: a short YAML file naming which column plays each role -
-# the *entity* a row is about, the *category* to compare, the *date*, the *label* to predict (0 or 1) and the *text*.
-# Every query is built from those roles and printed before its result, so you always see the SQL behind a number.
+# You have agreed what the columns mean. Now investigate where outcomes are concentrated, whether they change over time and whether a small model finds useful patterns. Pharma compares sponsors and phases; Banking compares companies and products.
+#
+# **By the end:** you will have visible SQL, descriptive results, a local baseline model and a handoff the ML Engineer can reproduce. Start with the supplied code, then adapt the questions to your project.
+#
+# **Optional AI:** `USE_AI_THEMES = False` keeps the optional LLM text summaries off. The supplied scikit-learn model runs on your computer without an LLM service. Turn themes on only after configuring your model endpoint; Langfuse tracing is a further opt-in.
 
 # %%
 DATASET = "pharma_trials"   # or "banking_complaints", or your own file ("~/my-data/transactions.csv", roles beside it)
+USE_AI_THEMES = False  # optional LLM summaries; configure your endpoint before enabling
 
 # %% [markdown]
-# ## Connect and read the descriptor
+# ## Reuse the column map instead of rewriting every query
 #
-# **Change one line to change the data**: the assignment above, and no SQL. A kit dataset is named by its id. Your own
-# CSV, Parquet or JSON file is named by its path; its roles are in `<name>.descriptor.yaml` beside it (the quickstart's
-# own-file cell writes that file), and the file is loaded into its table the first time. A descriptor file of a table
-# already in the database works too. The descriptor is checked by the kit's own rules and against the database: a role
-# that names a missing table or column stops here, naming it. A role **no column fits** (the descriptor's `missing`,
-# with the profiler's reason) is not guessed: the steps that need it are skipped below, each saying why, and the text
-# step runs on the text roles alone.
+# Keep `DATASET = "pharma_trials"` for the first run. A sample ID opens its table; a CSV, Parquet or JSON path opens the descriptor saved beside that file. This is how the same analysis can travel between domains.
 #
-# A file with **no descriptor beside it** does not stop here: the next cell loads it into `MY_DATA.<FILE NAME>`,
-# proposes its roles with the evidence and saves that proposal beside the file as a draft, which this notebook explores
-# as it is (exploring does not need an approval; training and asking do). To approve the roles, use the picker it
-# shows, or the quickstart's `OWN_FILE` cell with this file, or `exakit describe <id> --approve`; a headless run
-# approves them only with `EXAKIT_NB_AUTO_APPROVE=force`.
+# **Do now:** review the suggested meanings and check the label still matches the outcome you want to investigate. Exploration can inspect a draft. The final training handoff, Ask and Share need an approved descriptor.
 #
-# Paste the quickstart's workflow id into `WORKFLOW_ID` below to continue its log
-# in this notebook's separate kernel. Otherwise this notebook starts its own log.
+# **Technical note:** the helper validates the mapped columns against the database. An undescribed file can be loaded and profiled here; approve its map in the picker before making a handoff. Date- or label-dependent steps explain why they skip when that role is missing. Keep entity, category and text roles for the main path.
+#
+# Set `WORKFLOW_ID` to the quickstart's identifier to keep one investigation log. With no identifier, this notebook starts its own.
 
 # %%
 import os
@@ -63,10 +53,13 @@ for role, steps in (("date", "the over-time step and the small model are"),
         print(f"No {role} role ({skipped[role]}): {steps} skipped below; the text step needs only the text roles.")
 
 # %% [markdown]
-# ## The landscape
+# ## Find the groups worth investigating
 #
-# The domain's landscape question: the entities with the most rows, by category, and how often the label is 1 for
-# each - sponsors by trial phase for the Pharma sample, companies by product for the Banking one.
+# Start with the busiest entities and their categories. For Pharma, compare trial counts and termination shares across sponsors and phases. For Banking, compare complaint counts and monetary-relief shares across companies and products.
+#
+# **Read the result:** `N` is the size of a group; `LABEL_1_PCT` is the percentage with your chosen outcome. A small group with a high percentage deserves different caution from a large group with a stable rate. This is a descriptive comparison, not a causal finding.
+#
+# **Technical note:** the query selects the ten entities with the most records, aggregates them by the category role and returns a pandas table. The SQL is printed so you can inspect how the numbers were made.
 
 # %%
 landscape = pivot = None
@@ -90,11 +83,20 @@ GROUP BY T.ENTITY, F.{CATEGORY}
 ORDER BY T.ENTITY, N DESC""")
     nb.show_sql()
     pivot = landscape.pivot_table(index="ENTITY", columns="CATEGORY", values="N", fill_value=0, aggfunc="sum")
+landscape
+
+# %% [markdown]
+# The first table keeps counts and outcome percentages together. This second view puts each category in a column so you can compare the number of records across entities. It shows counts only; use the first table for outcome rates.
+
+# %%
 pivot
 
 # %% [markdown]
-# Over time: rows and label rate per period. The period follows the span of the data - days for a few weeks,
-# months for a few years, years beyond that. Without a date role (or a label role) this step is skipped, saying why.
+# ## Check whether the pattern changes over time
+#
+# A single total can hide changes in the mix of records. The next result follows counts and outcome rates across the approved event date. Consider whether a busy period or a different group mix could affect your earlier comparison.
+#
+# **Technical note:** the notebook chooses day, month or year periods from the date span. It needs date and label roles; without them it prints the reason for skipping this step.
 
 # %%
 over_time = None
@@ -116,11 +118,13 @@ ORDER BY 1""")
 over_time
 
 # %% [markdown]
-# ## A small model, on this computer
+# ## Try a modest baseline before making a bigger claim
 #
-# Can the text and the category predict the label? A logistic regression over word counts, trained on this machine
-# with scikit-learn - no model service needed. The rows come from the database with the SQL printed below: the newest
-# ones by the date role, so the model needs the label and date roles and is skipped, saying why, without them.
+# Can the descriptions and category help distinguish the two outcomes? The next cell fits a small text classifier on your computer. In Pharma the outcome is trial termination; in Banking it is monetary relief.
+#
+# **Read the result:** ROC AUC measures how well the model ranks the two outcomes; 0.5 is chance-level ranking. A higher score is evidence from this sample, not proof that the model is ready for a real decision or explains causes.
+#
+# **Technical note:** SQL selects up to 20,000 recent labelled rows. scikit-learn combines TF-IDF word features with a one-hot category, then fits logistic regression. A fixed, stratified random split holds out a quarter of this sample. This client demonstration uses a different split from the later time-based in-database training notebook.
 
 # %%
 SAMPLE = 20000
@@ -162,7 +166,11 @@ LIMIT {SAMPLE}""")
     print(f"{len(rows)} rows, {y.mean():.1%} with label 1; ROC AUC on the held-out quarter: {auc:.3f} (0.5 is guessing)")
 
 # %% [markdown]
-# The words that push a prediction towards 1 and towards 0 (nothing to show when the model was skipped):
+# ## Inspect the clues the model used
+#
+# Read the words associated with predictions toward 1 and toward 0. Use them to form questions about the data: are they plausible domain signals, boilerplate or information that would only be known after the outcome?
+#
+# **Technical note:** these are the largest positive and negative coefficients in the fitted linear model. They describe this model's associations. The table remains empty if the model step was skipped.
 
 # %%
 import numpy as np
@@ -175,21 +183,13 @@ if model is not None:
     print("towards 0:", ", ".join(n.split("__", 1)[1] for n in names[order[:12]]))
 
 # %% [markdown]
-# ## The text step, with your own model
+# ## Optional AI: add short themes to a small text sample
 #
-# A sample of the text column goes to **your** model endpoint, which names each row's theme in a few words. Set these
-# before `exakit notebook` to turn it on (nothing is sent otherwise):
+# You can complete the investigation without this step. If you want help reading descriptions, configure `EXAKIT_NB_MODEL`, `OPENAI_BASE_URL` and `OPENAI_API_KEY` before starting the kernel, then set `USE_AI_THEMES = True` near the top.
 #
-# - `EXAKIT_NB_MODEL` - the model name, e.g. `gpt-4o-mini`, or `llama3.1` on a local Ollama
-# - `OPENAI_BASE_URL` and `OPENAI_API_KEY` - the endpoint and its key, as the OpenAI client reads them
+# The code sends up to five selected descriptions to your endpoint and asks for short themes. Read those themes against the original text; they are suggestions to check, not established facts. Use the printed sample SQL to see exactly which records were selected.
 #
-# With `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and `LANGFUSE_BASE_URL` set too (`LANGFUSE_HOST`, the SDK 3 name,
-# is accepted as an alias), the calls are one trace in your Langfuse project - every call's input, output, token usage
-# and latency - tagged `exasol.dataset`, `exasol.descriptor` (the descriptor's digest), `exasol.descriptor_version`,
-# `exasol.workflow_id` (when a workflow is active), `exasol.session_id` and the sample SQL. Without them the step runs
-# untraced and says so in one line. When the table is a live source (a virtual schema), the step names the source and
-# asks before any row is sent. This step needs only the text roles: the label beside each theme, and label-1 rows
-# first and the newest next in the sample, appear when those roles exist.
+# **Optional tracing:** set `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and `LANGFUSE_BASE_URL` before launching notebooks to group the model calls in your Langfuse project. This records inputs/outputs, usage, timing and workflow/descriptor/session/SQL tags. Keep keys in the environment. Configuring a model can also enable optional column-description notes during profiling; the role assignments still come from fixed rules and require your approval.
 
 # %%
 SAMPLE_TEXTS = 5
@@ -205,7 +205,9 @@ LIMIT {SAMPLE_TEXTS}"""
 text_sample = nb.sql(conn, SAMPLE_SQL)
 nb.show_sql()
 
-endpoint = nb.model_client()
+endpoint = nb.model_client() if USE_AI_THEMES else None
+if not USE_AI_THEMES:
+    print("Optional AI themes are off. The SQL analysis, local model and handoff remain available.")
 if endpoint is not None and nb.confirm_send(ds, len(text_sample)):
     client, model_name = endpoint
     themes = []
@@ -220,24 +222,20 @@ if endpoint is not None and nb.confirm_send(ds, len(text_sample)):
 text_sample
 
 # %% [markdown]
-# ## Next
+# ## Decide what deserves the next experiment
 #
-# - Change `DATASET` at the top and run everything again: the same cells work on any described dataset, your own
-#   file included.
-# - Train inside the database and track the run in MLflow: the ML Engineer's notebooks (`ml-engineer/` beside this
-#   folder), with the `udf-devkit` add-on (`exakit marketplace udf-devkit`).
+# Review the group comparisons, time pattern and local model together. Keep a useful question, note a limitation and decide what you would need to validate next. Optional AI themes can help you read the text, while the visible SQL and measured results remain the evidence.
+#
+# To repeat this investigation with Banking or your own described file, change `DATASET` and rerun. Keep the same workflow ID when it is the same investigation.
 
 # %% [markdown]
-# ## Hand off to the ML Engineer
+# ## Hand off to the ML Engineer: a recipe someone else can run
 #
-# The last cell writes the **handoff**: one JSON file under `~/.exasol-starter-kit/handoffs/` that the ML Engineer's
-# `01_train` starts from without opening the descriptor - which descriptor version and digest this was, a digest of the
-# data, the feature view built from the roles (SQL only - category one-hot, date parts, text lengths, entity
-# frequency - so a Rust scorer can reproduce it over the same view), the label and its positive class, the training SQL
-# with a time split by the date role and the input and output schemas. Without a date role there is no time split and
-# the cell refuses, naming the two ways on: ask for a reproducible hash split, `nb.write_handoff(conn, ds,
-# split="random")`, or add a date role to the descriptor and approve it.
-# Training refuses a handoff whose descriptor has changed since, so run this cell again after a new approval.
+# The ML Engineer needs more than a screenshot of your results. The next cell writes a **handoff**: the chosen dataset, approved column-map version, data fingerprint, feature recipe, target and train/test split.
+#
+# **Read the result:** keep the printed handoff path and check its descriptor ID/version and label. Open `ml-engineer/01_train.ipynb` to train inside Exasol from this recipe. If you change the approved map or data later, create a fresh handoff.
+#
+# **Technical note:** features are reproducible SQL inputs: category flags, date parts, text lengths and entity frequency. The time split uses the earliest 80% for training and later 20% for evaluation. Without a date, explicitly request `nb.write_handoff(conn, ds, split="random")` or approve a date role. A stale or unapproved handoff is refused.
 
 # %%
 handoff_path = nb.write_handoff(conn, ds)

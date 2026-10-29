@@ -7,21 +7,19 @@
 # ---
 
 # %% [markdown]
-# # Train inside Exasol from the Data Scientist's handoff
+# # Turn the approved investigation into a repeatable model
 #
-# - **Dataset:** `pharma_trials` as it ships; change one assignment for `banking_complaints` or a file you loaded.
-# - **What must be loaded:** an approved descriptor, the handoff written by `data-scientist/01_explore`, and a Python
-#   UDF container (`exakit udf-use default`). Run `exakit mlflow start` to see the run in the local MLflow UI.
-# - **How long:** about five minutes, depending on the dataset and container.
+# **Dataset:** `pharma_trials` by default; change `DATASET` for Banking or your own approved file. **How long:** about five minutes after runtime setup.
 #
-# The handoff records the exact descriptor version, data digest, feature view, label and time split. This notebook
-# refuses a stale handoff before creating a view or running training SQL. With no handoff file at all (a fresh
-# machine), it builds one from the approved descriptor and says so.
+# The Data Scientist has agreed what the columns mean and saved a handoff. You will train a small model inside Exasol, test it on later records and keep an experiment record another person can inspect.
 #
-# Two assignments: the dataset, and the alias of the Python container the training UDF runs on. `CONTAINER` defaults
-# to what the kit recorded as installed - `PYTHON3_ML` (`exakit udf-use default`) before `PYTHON3` (`exakit udf-setup`),
-# `EXAKIT_UDF_CONTAINER` overriding - and stops here, naming the fix, when there is none; `00_quickstart` checks the
-# same alias answers a smoke UDF.
+# **By the end:** MLflow will hold the training SQL, settings, metrics, model and coefficients. You can rerun the same recipe to check repeatability, then verify its scorer in the Rust chapter.
+#
+# **Run first:** an approved descriptor, the Explore handoff and a Python ML runtime (`exakit udf-use default`). Start local MLflow with `exakit mlflow start` for its browser UI.
+#
+# **Runtime choice:** `exakit udf-use default` installs `PYTHON3_ML` with the ML packages; `exakit udf-setup` installs the official `PYTHON3` alternative. The default prefers `PYTHON3_ML` when installed. `EXAKIT_UDF_CONTAINER` selects another installed alias; its package check must pass before training.
+#
+# **Optional AI:** the supplied SQL/scikit-learn training path needs no LLM endpoint. Use it as a baseline before asking an assistant to suggest a new feature or parameter; every new experiment still needs the same evaluation.
 
 # %%
 import exakit.nb as nb
@@ -36,14 +34,11 @@ elif not nb.current_workflow():
     nb.workflow("train-" + DATASET)
 
 # %% [markdown]
-# ## Load and check the handoff
+# ## Start from the same recipe the Data Scientist approved
 #
-# `01_explore` wrote it with `nb.write_handoff(conn, ds)`. A changed descriptor or table stops here and says to rerun
-# explore. When no file exists, `training_handoff` builds the same record from the approved descriptor
-# (`nb.handoff_from`) and prints that it did. The earliest 80% by the date role train the classifier; the latest 20%
-# test it. Without a date role there is no time split: the handoff is refused with the fix - ask explore (or this
-# cell, `SPLIT = "random"`) for a reproducible hash split, or add a date role - and a random split that nobody asked
-# for is refused here too.
+# The handoff records the chosen target, feature recipe, column-map version and data fingerprint. Check the printed ID and split before training. A change in the data or map means the old recipe should be reviewed again.
+#
+# **Technical note:** a stale handoff is refused. With no handoff file, the helper can build a recipe from the approved descriptor and says it has done so. The earliest 80% of records by the date role train the model; the later 20% evaluate it. With no date, explicitly ask for `SPLIT = "random"` when making a new handoff, or approve an appropriate date role. An existing handoff keeps its recorded split.
 
 # %%
 SPLIT = None  # None: the time split by the date role; "random": a hash split, only when there is no handoff file yet
@@ -56,12 +51,13 @@ print(f"handoff: {ds.id} v{ds.version}; {handoff['rows']} rows; {handoff['split'
 print(f"data digest: {handoff['data_digest']}")
 
 # %% [markdown]
-# ## Build the feature view and training UDF
+# ## Turn the role map into numbers the model can learn from
 #
-# Every feature is made in SQL from an approved role. The view and its training SELECT are checked against the
-# current descriptor. Constant features are dropped before fitting. The UDF is created on the `CONTAINER` alias and
-# trains a logistic regression with a fixed seed, then sends its model, metrics and coefficients back to this
-# notebook; it has no network or credentials.
+# Words such as phase, sponsor and complaint product must become model inputs called **features**. The next cell creates a SQL feature view and a training function inside the selected Exasol runtime.
+#
+# **Read the result:** inspect the printed feature names and SQL. Check that the target itself has not become an input and that each input would be available when you intend to make a prediction.
+#
+# **Technical note:** the approved recipe supplies category flags, date parts, text lengths and entity frequency. Constant features are dropped. Logistic regression uses the fixed `SEED` and `REGULARIZATION_C`; the UDF returns its model, metrics and raw-feature coefficients to the client.
 
 # %%
 UDF_SCHEMA = "EXASOL_MLFLOW"
@@ -79,13 +75,13 @@ print(f"UDF {UDF_SCHEMA}.{UDF_NAME} on {CONTAINER}; features ({len(plan.features
 print(plan.training_sql)
 
 # %% [markdown]
-# ## Train and compare with the majority baseline
+# ## Make the model beat a simple alternative
 #
-# `start_run` checks the tracking server before the training SELECT. If MLflow goes away after training, it keeps a
-# spool record; `exakit mlflow replay` logs it when the server returns. A database restart marks the run FAILED.
+# Train once, then compare its result with a model that always predicts the most common training class. That **majority baseline** is important when one outcome is rare: high accuracy alone can be misleading.
 #
-# Accuracy and macro-F1 come from the later 20%, beside a majority-class baseline on the same rows. The MLflow run
-# stores `training.sql`, the model, coefficients, descriptor version and data digest.
+# **Read the result:** compare macro-F1 with `baseline_macro_f1`, using the same later test records. A model that fails to improve is an experiment result to investigate, not evidence of useful prediction. The current Banking reference run is deterministic but matches its majority baseline; that acceptance check remains open. The last checked Pharma run beat its baseline by a small margin.
+#
+# **Technical note:** `start_run` checks tracking readiness before executing the training SQL. MLflow records the query, descriptor/version, data digest, settings and returned artifacts. If tracking fails after training, a spool record can be replayed with `exakit mlflow replay`; a database restart fails the active run.
 
 # %%
 EXPERIMENT = "exasol-starter-kit"
@@ -103,13 +99,11 @@ print(f"macro-F1: {f1:.4f}; majority baseline: {baseline:.4f}")
 print("beats baseline" if f1 > baseline else "does not beat baseline; inspect features or the split")
 
 # %% [markdown]
-# ## Model and coefficient artifacts
+# ## Keep the files that make the result reproducible
 #
-# `model/model.pkl` is the fitted scikit-learn pipeline; `coefficients.json` holds weights for the raw feature
-# columns (the scaler has been folded in), ready for the Rust scoring notebook. The run records the container and
-# package versions so a model moved to another container can be checked before use. The same coefficients are copied
-# beside the handoff, `~/.exasol-starter-kit/handoffs/<id>-v<n>.coefficients.json`, so `02_rust_score` reads them
-# without MLflow. Rerun the training cell with the same seed: the metrics and these coefficients come out identical.
+# A metric without its recipe and model is hard to reuse. Inspect the artifact paths printed below and open the run in MLflow. Rerun training with the same seed, data and handoff; compare both metrics and coefficients.
+#
+# **Technical note:** `model/model.pkl` is the fitted Python pipeline. `coefficients.json` contains weights for the raw SQL feature columns, with scaling folded into them. The same coefficients are written beside the handoff as `<id>-v<n>.coefficients.json`, ready for the Rust scorer. Package/container versions help explain portability problems.
 
 # %%
 from urllib.parse import unquote, urlparse
@@ -122,8 +116,8 @@ coefficients_path = nb.ml_train.export_coefficients(run, handoff)
 print(f"coefficients beside the handoff: {coefficients_path}")
 
 # %% [markdown]
-# ## Next
+# ## Choose the next experiment deliberately
 #
-# Change `REGULARIZATION_C` and rerun the last cells to compare a new MLflow run. `02_rust_score.ipynb` scores from
-# the exported coefficients when a Rust container is installed. For a model trained elsewhere, open
-# `03_score_external_model.ipynb`.
+# Open `02_rust_score.ipynb` to test whether a compiled scorer reproduces this trained model. Use `03_score_external_model.ipynb` for the separate trusted-file scoring lesson.
+#
+# To investigate model quality, change one setting such as `REGULARIZATION_C`, rerun and compare the MLflow records. Optional AI can suggest experiments or explain code. Keep the test split and acceptance criteria fixed while assessing those suggestions; a new story about a metric is not a measured improvement.

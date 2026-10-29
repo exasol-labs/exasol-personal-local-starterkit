@@ -14,13 +14,15 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    # Train a decision tree inside Exasol
+    # Run an alternative training experiment inside Exasol
 
-    **Dataset:** Pharma or Banking; **How long:** five minutes. Adapted from the
-    Notebook Connector / AI Lab scikit-learn training lesson. Reuse the approved
-    handoff's SQL features and time split, but fit a decision tree inside a Python
-    SET UDF. This lesson returns evaluation metrics; use 01_train for the full
-    model-artifact and MLflow contract. Sources: `EXAMPLE-GUIDE.md`.
+    **Dataset:** Pharma or Banking. **How long:** five minutes.
+
+    You have a reproducible feature recipe from the core training flow. Reuse it to try a decision tree in the database, then compare its held-out metrics with a majority baseline. This is an educational alternative, not an automatic model upgrade.
+
+    **By the end:** you will have a database-side training result and know which train/test records it used. **Optional AI:** no LLM endpoint is required. Suggestions for a different model should still pass the same comparison.
+
+    Adapted from Notebook Connector / AI Lab scikit-learn training. Use `01_train` for the complete model-artifact/MLflow contract; this lesson returns evaluation metrics. Sources: `EXAMPLE-GUIDE.md`.
     """)
     return
 
@@ -42,10 +44,13 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Build the alternative training script
+    ## Change the learner while keeping the data recipe visible
 
-    The feature view is the same SQL feature view used by 01_train. The UDF reads
-    at most 10,000 reference rows from each split for this lesson. It needs no network or keys.
+    The handoff and feature view stay the starting point. The next code creates a decision-tree SET UDF, then calls it over a bounded sample from each recorded split.
+
+    **Read the result:** check that both row counts are positive and compare macro-F1 with `BASELINE_F1`. An improvement is evidence for this experiment; an equal or worse result tells you to investigate the features or approach.
+
+    **Technical note:** a SET UDF receives a group of rows for fitting rather than scoring one row at a time. This lesson selects at most 10,000 rows per split, uses depth/leaf limits and a fixed seed, and returns metrics. It does not export the full tracked model contract used by `01_train`.
     """)
     return
 

@@ -14,12 +14,15 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    # Build a decision-tree baseline on this computer
+    # Try a different small model and compare it fairly
 
-    **Dataset:** Pharma or Banking; **How long:** five minutes. Adapted from the
-    Notebook Connector / AI Lab telescope training lesson, with approved roles
-    instead of the telescope tables. This fits locally; 01_train fits inside Exasol.
-    Upstream attribution and MIT license: `EXAMPLE-GUIDE.md`.
+    **Dataset:** Pharma or Banking. **How long:** five minutes.
+
+    Can the category alone tell us anything useful about the chosen outcome? Train a small decision tree on your computer and compare it with always choosing the majority class. The result gives you a starting experiment, even when the tree does not improve the baseline.
+
+    **By the end:** you will have held-out metrics and a per-class report. **Optional AI:** no LLM endpoint is required. Ask for experiment suggestions later, while keeping the same evaluation rules.
+
+    Adapted from the Notebook Connector / AI Lab telescope training lesson, using the kit's approved roles. Upstream attribution and MIT notices: `EXAMPLE-GUIDE.md`.
     """)
     return
 
@@ -51,11 +54,13 @@ def _(conn, ds, nb):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Fit a reproducible baseline and check held-out predictions
+    ## Evaluate the idea on records the tree did not learn from
 
-    Missing categories become one explicit value; unseen categories are ignored
-    by the encoder. The fixed split and tree seed make repeats comparable. These
-    are predictive associations, not causal explanations.
+    Read the printed row count first. Category is the input; the approved label is the outcome. The next cell fits the tree on one portion and evaluates another.
+
+    **Read the result:** compare macro-F1 with the majority baseline and inspect performance for each class. Accuracy can look strong while rare outcomes are missed. These are predictive associations, not causal explanations.
+
+    **Technical note:** the sample is bounded at 10,000 labelled rows. A one-hot encoder represents categories, a fixed stratified split holds out 20%, and a fixed tree seed makes comparisons repeatable. This local teaching example uses a different split from the core time-based training recipe in `ml-engineer/01_train`.
     """)
     return
 

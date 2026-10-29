@@ -110,6 +110,7 @@ HINTS = {
     "date_followup": r"(end|complet|finish|sent|clos|due|updat|modif|resolv|expir|deliver)",
     "label_outcome": r"(terminat|outcome|disput|timely|churn|default|fraud|relief|resolv|target|label|convert|cancel|return)",
     "label_state": r"(^is_|^has_|flag|status)",
+    "category": r"(^|_)(category|segment|product|phase|type|group|class|channel)(_|$)",
     "entity": r"(^|_)(id|name|sponsor|company|customer|account|vendor|supplier|merchant|user|member|patient|provider|party|org|client)(_|$)|id$",
     "text": r"(summary|descri|criteria|text|comment|narrat|issue|response|note|remark|review|message|body|reason|complaint|detail|explan)",
 }
@@ -458,15 +459,18 @@ def score_date(c: dict[str, Any]) -> float | None:
 
 
 def _binary(c: dict[str, Any]) -> bool:
-    values = {v["value"].upper() for v in c.get("values", [])}
+    values = {str(v["value"]).strip().upper() for v in c.get("values", [])}
     return c["kind"] == "boolean" or bool(values) and (values <= {"0", "1"} or values <= {"TRUE", "FALSE"})
 
 
 def score_label(c: dict[str, Any]) -> float | None:
-    """label: BOOLEAN, or 2-3 distinct values with under 20% nulls, scores 0.5; a 0/1 or true/false column +0.1; a
+    """label: BOOLEAN or two observed 0/1 values with under 20% nulls scores 0.5; a binary column +0.1; a
     name that says an outcome (terminated, outcome, disputed, timely, churn, default...) +0.2, a state (is_, has_,
     flag, status) +0.1; balanced classes (the smallest class 5% or more) +0.2, else -0.2."""
-    if not (c["kind"] == "boolean" or (c["kind"] in ("text", "integer", "number") and c["distinct"] in (2, 3) and c["null_rate"] < 0.2)):
+    values = {str(v["value"]).strip() for v in c.get("values", [])}
+    if (c["distinct"] != 2 or c["null_rate"] >= 0.2 or
+            not (c["kind"] == "boolean" or
+                 c["kind"] in ("text", "integer", "number") and values == {"0", "1"})):
         return None
     score = 0.5 + (0.1 if _binary(c) else 0.0)
     if _hint("label_outcome", c["column"]):
@@ -478,10 +482,10 @@ def score_label(c: dict[str, Any]) -> float | None:
 
 
 def score_category(c: dict[str, Any]) -> float | None:
-    """category: 3-50 distinct values that repeat (distinct ratio under 0.05) with under 20% nulls scores 0.5; under
+    """category: 2-50 distinct values that repeat (distinct ratio under 0.05) with under 20% nulls scores 0.5; under
     1% nulls +0.2; no tiny class (the smallest 1% or more) +0.2; 12 values or fewer (a chart shows them whole) +0.1.
-    Ties: the earlier column (a table names its main dimensions first)."""
-    if not (c["kind"] in ("text", "integer") and c["distinct"] and 3 <= c["distinct"] <= LOW_CARDINALITY
+    Ties: a category-like column name, then the earlier column."""
+    if not (c["kind"] in ("text", "integer") and c["distinct"] and 2 <= c["distinct"] <= LOW_CARDINALITY
             and c["distinct_ratio"] < 0.05 and c["null_rate"] < 0.2):
         return None
     score = 0.5
@@ -531,16 +535,15 @@ def score_text(c: dict[str, Any]) -> float | None:
 
 MISSING_REASONS = {
     "date": "no column has a DATE/TIMESTAMP type or 95% parseable dates",
-    "label": "no column has 2-3 distinct values (or BOOLEAN) with under 20% nulls",
-    "category": "no column has 3-50 distinct values that repeat (distinct ratio under 0.05) with under 20% nulls",
+    "label": "no column has two 0/1 outcome values (or BOOLEAN) with under 20% nulls",
+    "category": "no column has 2-50 distinct values that repeat (distinct ratio under 0.05) with under 20% nulls",
     "entity": "no column repeats the way an entity does (distinct ratio 0.01-0.6, under 5% nulls)",
     "text": "no VARCHAR column holds free text (average length 40+ with values of 200+ characters, or a shorter text column whose name says so)",
 }
 
 
 def _ranked(role: str, candidates: list[dict[str, Any]]) -> list[tuple[float, dict[str, Any]]]:
-    """(score, column) for every column the role's scorer accepts, best first: score, then (dates) the widest span,
-    then the earlier column."""
+    """(score, column), best first: score, then the widest date span or a category-like name, then table order."""
     scored = []
     most = max((c["distinct"] for c in candidates if _entity_candidate(c)), default=0)
     scorers = {"date": score_date, "label": score_label, "category": score_category, "text": score_text}
@@ -548,7 +551,9 @@ def _ranked(role: str, candidates: list[dict[str, Any]]) -> list[tuple[float, di
         score = score_entity(c, most) if role == "entity" else scorers[role](c)
         if score is not None:
             scored.append((score, c))
-    scored.sort(key=lambda sc: (-sc[0], -(sc[1].get("span_days") or 0) if role == "date" else 0, sc[1]["position"]))
+    scored.sort(key=lambda sc: (-sc[0], -(sc[1].get("span_days") or 0) if role == "date" else 0,
+                               -int(_hint("category", sc[1]["column"])) if role == "category" else 0,
+                               sc[1]["position"]))
     return scored
 
 

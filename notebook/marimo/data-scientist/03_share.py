@@ -14,18 +14,15 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    # Share a checked result
+    # Share a result another person can inspect
 
-    - **Dataset:** Pharma, Banking, or your own approved descriptor.
-    - **How long:** about five minutes after the data and Dash Server are ready.
+    **Dataset:** Pharma, Banking or your own approved descriptor. **How long:** about five minutes after Dash Server is ready.
 
-    This notebook prepares a live Exasol dashboard for Dash Server. Review the SQL and
-    figures in the preview before promoting its revision. The dashboard uses the
-    kit's read-only Exasol user; it contains no password or copied data.
+    You have checked a category comparison and want a colleague to see a live result. This notebook prepares a dashboard, gives you a preview, and publishes only after you confirm the figures.
 
-    Start the dash-server add-on with `exakit marketplace dash-server`, then
-    `exakit mcp-setup` and `exakit start`. The cells call its MCP control plane.
-    Paste the quickstart's workflow id below to continue its log in this kernel.
+    **By the end:** you will have a Dash Server URL linked to its SQL, descriptor version and workflow. No LLM endpoint is required. You can use this small dashboard as the base for a larger question after validating the first result.
+
+    **Run first:** `exakit marketplace dash-server`, `exakit mcp-setup`, then `exakit start dash-server`. Paste the earlier workflow ID below. Choose a distinct `APP_NAME` for a separate investigation.
     """)
     return
 
@@ -58,10 +55,11 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Preview
+    ## See what a colleague would see before publishing
 
-    The notebook calls Dash Server's MCP tools. It validates the read-only profile
-    and waits for a green preview health check before showing the preview URL.
+    Open the preview URL printed by the next cell. Compare its categories and counts with the SQL and the data you explored. Check that the dashboard title describes the result fairly.
+
+    **Technical note:** the notebook drives Dash Server's MCP control plane, checks its read-only database profile and waits for a healthy preview. The draft carries the query digest and approved descriptor version for later tracing.
     """)
     return
 
@@ -77,12 +75,13 @@ def _(draft, nb):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Check the numbers, then publish
+    ## Publish after you have checked the figures
 
-    Open the preview, compare its numbers with the SQL above and the data you
-    explored. Promotion is refused until `figures_checked=True` is explicit.
-    The workflow log records the same descriptor version and query digest as
-    `REVISION.json` in the dashboard workspace.
+    Leave `FIGURES_CHECKED = False` while reviewing the preview. Set it to `True` only when the displayed result matches the query, then run the last cell. Open the live URL and keep it with your workflow ID.
+
+    **Technical note:** promotion is a separate action from preview. The workflow log and dashboard revision metadata retain the same descriptor version and query digest. A healthy page proves it runs; your comparison establishes that it shows the intended figures.
+
+    **Make it your own:** change the approved dataset and reviewed query, preview the new result, and validate it before publishing another revision.
     """)
     return
 

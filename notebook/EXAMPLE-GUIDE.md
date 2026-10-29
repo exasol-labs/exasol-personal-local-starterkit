@@ -26,6 +26,13 @@ In Marimo, open the matching persona folder and `.py` filename. Change
 `DATASET` to `banking_complaints` to repeat a lesson on Banking. Run each
 persona's quickstart first; ML lessons need `udf-devkit` and its ML packages.
 
+Each lesson starts with a practical question, explains what to read in the
+result and keeps a technical note beside the relevant code. No LLM endpoint is
+needed for these four lessons. Use them as small building blocks: check a SQL
+total, establish a local baseline, inspect database packages, then try a model
+inside Exasol. The core persona notebooks connect those steps into a complete
+investigation and a tracked training run.
+
 The decision-tree UDF lesson returns evaluation metrics. `01_train` remains
 the full tracked training flow with model artifacts, MLflow and Rust coefficients.
 Use `03_share` on Dash Server to turn a validated result into a dashboard.

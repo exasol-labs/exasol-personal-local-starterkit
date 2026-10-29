@@ -7,15 +7,15 @@
 # ---
 
 # %% [markdown]
-# # Score the same test rows with Rust
+# # Give the same trained model a Rust scorer
 #
-# - **Dataset:** Pharma, Banking, or your own approved descriptor and handoff.
-# - **How long:** about fifteen minutes on the first Rust build, less on later builds.
+# **Dataset:** Pharma, Banking or your own approved descriptor and handoff. **How long:** about fifteen minutes for a first build, less for later builds.
 #
-# `01_train` exports raw-feature coefficients to MLflow. This notebook retrieves
-# the newest run for this descriptor, builds a Linux Rust UDF for the database's
-# architecture, and compares its probabilities and labels with the Python
-# formula on the same held-out rows. A stale handoff is refused before building.
+# You already trained a linear model in Python. Now test whether a compiled Rust function can score the same later records with the same probabilities and labels. This checks a second implementation of the model; it does not train a new model or establish that the original model is useful.
+#
+# **By the end:** you will have a validated Linux library, a callable SQL scoring function, a parity result and a Rust record in MLflow.
+#
+# **Run first:** `01_train`, the `RUST` container (`exakit udf-setup --language rust`) and a running Docker or Podman Linux build engine. **Optional AI:** no LLM endpoint is required. Use an assistant to review the formula if helpful, then rely on the numerical comparison.
 
 # %%
 DATASET = "pharma_trials"  # or banking_complaints, or your own approved descriptor
@@ -50,10 +50,13 @@ if stale:
     raise ValueError(stale)
 
 # %% [markdown]
-# ## Find the exact coefficient artifact
+# ## Bring the exact coefficients, not a similar experiment
 #
-# The newest finished run must carry this descriptor id and version. For a
-# remote MLflow server, the client downloads the artifact into the kit home.
+# Choose the model tied to this approved descriptor version. The default finds the newest finished Python run for that version and downloads its coefficients. You can instead set `COEFFICIENTS_FILE` to the file exported by training.
+#
+# **Read the result:** check the ordered feature list. Each coefficient must multiply the same input column in Python and Rust. A stale handoff or different feature order stops this step.
+#
+# **Technical note:** the artifact carries raw-feature coefficients, intercept and class order. The source MLflow run is retained for lineage. Choose a new `UDF_NAME` for a different coefficient revision so an existing project is preserved.
 
 # %%
 source_run_id = None
@@ -84,11 +87,13 @@ if features != [item["name"] for item in handoff["input_schema"] if item["name"]
 print("features in coefficient order:", ", ".join(features))
 
 # %% [markdown]
-# ## Build and deploy
+# ## Build for the database, then choose the deployment route
 #
-# The command pins exasol-udf-sdk 0.33.0 and rustc 1.98.1. On macOS it builds
-# inside the matching Linux Docker or Podman image, validates the `.so`, copies
-# it into the deployment bucket directory and registers the RUST script.
+# The scorer runs inside the database's Linux runtime, including when you work on a Mac. The next cell creates the project, builds and validates its `.so` library, then deploys a SQL function.
+#
+# **Read the result:** a usable shared bucket gives the normal file route. Without one, the kit can package the library into the RUST runtime. Keep `ALLOW_DATABASE_RESTART = False` until you are ready to permit that update; set it to `True` deliberately and rerun deployment when prompted. A verified unchanged packaged library can be reused without another restart.
+#
+# **Technical note:** the build pins exasol-udf-sdk 0.33.0 and rustc 1.98.1 and targets the database architecture. Deployment verifies library digests and actual UDF visibility, or uses the consented container fallback. The returned deployment details identify the route and resulting container digest.
 
 # %%
 def exakit(*arguments):
@@ -115,11 +120,11 @@ deployed = exakit("rust-udf", "deploy", UDF_NAME, "--schema", UDF_SCHEMA, *deplo
 print("Rust UDF:", deployed["udf"], "sha256", deployed["sha256"])
 
 # %% [markdown]
-# ## Compare on the same later 20 percent
+# ## Test the claim that both scorers are equivalent
 #
-# The handoff's split expression selects the test rows. Its SQL is printed
-# before interpreting the result. Differences above 1e-9 or any differing
-# class label fail the check.
+# Look at the largest probability difference and whether the predicted labels agree. If either check fails, investigate feature ordering, missing inputs, coefficients and runtime compatibility before using the scorer.
+#
+# **Technical note:** the query uses the handoff's later test partition and compares up to `TEST_ROWS` records, 500 by default. The Python formula is a sigmoid over the exported raw-feature weights. Every tested label must match and the largest probability difference must be below `1e-9`. This is evidence for the tested rows; adjust the row limit when your verification needs broader coverage.
 
 # %%
 arguments = ", ".join(f'CAST(T."{feature}" AS DOUBLE)' for feature in features)
@@ -141,11 +146,11 @@ if gap >= 1e-9 or not labels_match:
 print("Rust and Python scoring agree on the held-out rows.")
 
 # %% [markdown]
-# ## Record the validated Rust run
+# ## Leave a trail from the scorer back to its training run
 #
-# The MLflow run holds the source training run (when available), descriptor,
-# container and compiler pins, Cargo.lock digest, library digest, row count and
-# parity result. The project manifest and build record are attached as artifacts.
+# After a passing comparison, inspect the Rust run in MLflow. It should lead back to the source Python run and the descriptor version. This lets a colleague identify which library and recipe produced the scores.
+#
+# **Technical note:** the run records the actual scoring-container digest, its base-container digest, rustc/SDK pins, Cargo.lock and library hashes, comparison row count and maximum difference. Build records are attached as artifacts. A successful parity check preserves the original model's behaviour; model-quality acceptance remains a separate check.
 
 # %%
 import hashlib

@@ -7,13 +7,15 @@
 # ---
 
 # %% [markdown]
-# # SQL results as pandas DataFrames
+# # Take a database result into Python and check it
 #
-# **Dataset:** Pharma or Banking; **How long:** five minutes. Learn the SQL-to-DataFrame
-# pattern from Exasol's Notebook Connector / AI Lab examples, using the kit's
-# bundled data and encrypted connection. No download or external source is needed.
-# Adapted from `pyexasol/roundtrip_import_and_export.ipynb`; upstream versions,
-# links and the MIT license are recorded in `EXAMPLE-GUIDE.md`.
+# **Dataset:** Pharma or Banking. **How long:** five minutes.
+#
+# A colleague wants category shares in a Python table. Begin with counts computed in Exasol, then calculate shares in pandas and verify the total independently. Pharma groups by phase; Banking groups by product.
+#
+# **By the end:** you will have a small result, the SQL behind it and a simple validation check you can reuse in your own notebook. **Optional AI:** no LLM endpoint is required; an assistant can help propose a different aggregate after you understand this one.
+#
+# Adapted from Notebook Connector / AI Lab's `pyexasol/roundtrip_import_and_export.ipynb`. Sources and MIT notices are in `EXAMPLE-GUIDE.md`.
 
 # %%
 import exakit.nb as nb
@@ -24,10 +26,11 @@ ds = nb.dataset(conn, DATASET).require_approved("SQL and DataFrames")
 nb.workflow("sql-and-dataframes")
 
 # %% [markdown]
-# ## Read a small result with the SQL visible
+# ## Ask the database for the useful summary
 #
-# Query an aggregate in Exasol before bringing the result into memory. The
-# category role chooses the correct column for either reference dataset.
+# You need a category comparison, so bring back category counts rather than every source row. Inspect the printed SQL and the category names in the result.
+#
+# **Technical note:** the approved category role selects `PHASE` or `PRODUCT`. `nb.sql` executes the aggregate and returns a pandas DataFrame. This keeps the same code useful when the dataset changes.
 
 # %%
 if not ds.has("category"):
@@ -38,10 +41,11 @@ counts = nb.sql(conn, counts_sql)
 print(counts.to_string(index=False))
 
 # %% [markdown]
-# ## Validate the aggregate in Python
+# ## Check the number before using it in a story
 #
-# pandas computes shares from the returned counts. Compare their sum with an
-# independent COUNT in Exasol before sharing a result. Use 03_share for a chart.
+# The next cell calculates each category's share in Python and checks that the category counts add up to an independent database count. A failing assertion means you should investigate the grouping or data before sharing the result.
+#
+# **Technical note:** pandas calculates shares from the returned counts, while a separate `COUNT(*)` checks the total. Matching totals support this aggregate; they do not establish every possible data-quality claim. Use `data-scientist/03_share` for a reviewed dashboard on Dash Server.
 
 # %%
 shares = counts.assign(SHARE=counts["N"].astype(float) / counts["N"].astype(float).sum())

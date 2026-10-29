@@ -7,24 +7,24 @@
 # ---
 
 # %% [markdown]
-# # Quickstart: container, MLflow, bucket directory, data in
+# # Prepare a trustworthy place to train
 #
-# - **Dataset:** the Pharma sample (`pharma_trials`, ClinicalTrials.gov studies) unless you pick another below: the
-#   Banking sample (`banking_complaints`), your own CSV, Parquet or JSON file, or a table in a connected source.
-# - **What must be loaded:** nothing beforehand. The sample-dataset cell loads it with `exakit data-load` the first
-#   time. Training needs a Python container in the database: `exakit udf-use default` (the `udf-devkit` add-on).
-# - **How long:** about five minutes, most of it loading the sample the first time.
+# **Dataset:** `pharma_trials` by default; Banking or your own described file can follow. **How long:** about five minutes once the required runtimes are installed.
 #
-# First the three things training depends on, one cell each: each prints `ok` with what it found, or `FAIL` with the
-# reason and the fix. Then the same loader cells as the Data Scientist's quickstart.
+# The Data Scientist has identified a question and a column map. Your job is to turn that work into a repeatable training and scoring flow. Start by checking the environment before interpreting any model metric.
+#
+# **By the end:** you will know whether the database can run Python, where training runs are recorded, whether shared model files are visible and which outcome the first query describes. The following chapters train in Exasol, verify a Rust scorer and try a trusted model file.
+#
+# **Optional AI:** this path uses SQL and scikit-learn as supplied; an LLM endpoint is optional. An assistant can help you inspect code or propose a later experiment, while the checks and measured results remain yours to validate.
+#
+# **Run first:** install the ML Engineer persona or UDF devkit. `exakit udf-use default` supplies the ML runtime; a container installation can restart the database.
 
 # %% [markdown]
-# ## One workflow id on everything
+# ## Keep the investigation connected to the training run
 #
-# The first cell starts a **workflow**: every step below - each check, each query, the role proposal and its approval -
-# appends one line carrying this id to `~/.exasol-starter-kit/workflows/<id>.jsonl`, and `01_train` tags its MLflow run
-# with it (`exakit workflow show <id>`). A kernel started with `EXAKIT_WORKFLOW_ID` set - the Data Scientist's, say -
-# continues that workflow instead of starting one.
+# Use one workflow ID to follow the approved data, checks and model runs. If you continue the Data Scientist's investigation, start the kernel with its `EXAKIT_WORKFLOW_ID`; otherwise this cell creates a fresh workflow.
+#
+# **Technical note:** each logged step carries the same identifier, and MLflow runs can carry it as a tag. Keep the printed `exakit workflow show ...` command so you can inspect the trail later.
 
 # %%
 import os
@@ -34,13 +34,13 @@ wid = nb.workflow("ml-engineer-quickstart", resume=os.environ.get("EXAKIT_WORKFL
 print(f"Every step below is logged under it: exakit workflow show {wid}")
 
 # %% [markdown]
-# ## Which container trains
+# ## Choose the Python that runs inside the database
 #
-# A training UDF runs on a Python container in the database, named by its **alias**. The `udf-devkit` add-on installs
-# two: `exakit udf-use default` puts the kit's pre-built one (scikit-learn, pandas and numpy pinned) in as
-# `PYTHON3_ML`; `exakit udf-setup` installs the official `PYTHON3`. This one assignment is the alias the container
-# check below and `01_train` use. Its default reads what the kit recorded as installed, `PYTHON3_ML` before `PYTHON3`
-# (`EXAKIT_UDF_CONTAINER` overrides it); with none installed it stops here and names the fix.
+# The notebook's Python prepares the work. A separate Python runtime inside Exasol executes the training UDF, which is a function you call from SQL. It needs its own copies of scikit-learn and the other training packages.
+#
+# **Read the result:** keep the default `CONTAINER` for the first run. The printed alias identifies the runtime the next check and training notebook will use.
+#
+# **Technical note:** `exakit udf-use default` installs `PYTHON3_ML` with the ML packages; `exakit udf-setup` installs the official `PYTHON3` alternative. `PYTHON3_ML` is preferred when installed. `EXAKIT_UDF_CONTAINER` can select another installed alias. If none is ready, the helper stops and names the installation command.
 
 # %%
 CONTAINER = nb.ml_train.udf_container()   # or "PYTHON3_ML", "PYTHON3", or the alias of a container you installed
@@ -49,29 +49,37 @@ print(f"container alias: {CONTAINER}")
 # %% [include] ../00_shared/data_paths.py connect
 
 # %% [markdown]
-# ## The container answers the smoke UDF
+# ## Prove the database can import its training packages
 #
-# A small Python UDF runs on the container behind `CONTAINER` and reports Python and the packages the training UDF
-# needs. A `FAIL` line names the alias it probed and the command that installs that very container.
+# A package working in Jupyter does not establish that it works inside Exasol. The next cell runs a small UDF in the selected runtime and checks what it imports.
+#
+# **Read the result:** continue when the check reports success. If it prints a failure, use the command it names for that exact alias and repeat the check before training.
+#
+# **Technical note:** this is a smoke test of the database-side Python and required package versions. The useful lesson `01_udf_package_check` shows a fuller package report.
 
 # %%
 container_ok = nb.check_container(conn, alias=CONTAINER)
 
 # %% [markdown]
-# ## The MLflow server is reachable
+# ## Decide where the experiment record goes
 #
-# `exakit mlflow start` runs the kit's local server; `exakit mlflow url` shows its address. Set
-# `MLFLOW_TRACKING_URI` before `exakit notebook` to use another server instead. If neither is running, runs still
-# go to the kit's local store under `~/.exasol-starter-kit/mlflow/`.
+# A useful experiment includes its inputs, settings, metrics and model files. MLflow is the experiment record you can inspect and compare after training; it is independent of any optional LLM endpoint.
+#
+# **Read the result:** the check reports the destination this notebook will actually use. For the local browser UI, run `exakit mlflow start` and open the address from `exakit mlflow url`.
+#
+# **Technical note:** `MLFLOW_TRACKING_URI` selects another configured server. Otherwise the helper uses the kit server or its local store under `~/.exasol-starter-kit/mlflow/`. The client records the UDF's result; database training does not need MLflow credentials.
 
 # %%
 mlflow_ok = nb.check_mlflow()
 
 # %% [markdown]
-# ## The bucket directory is where the kit expects it
+# ## Check the path a scoring function will read
 #
-# On a local deployment the database's bucket is a folder on this computer, read by UDFs under `/buckets`. The kit
-# names it (`exakit model list --json`); this checks the folder is there and that a UDF sees it.
+# A trained model can be a file on your computer, but a database function must see that file from inside its runtime. The next check tests the kit's shared model directory and its visibility in a UDF.
+#
+# **Read the result:** success makes the shared-file scoring route available. Record a failed check and its reason. Rust has a separate container-packaging fallback that asks before a needed restart; Python model-file scoring still needs a working shared directory.
+#
+# **Technical note:** `exakit model list --json` reports the host directory and the `/buckets/...` path a UDF uses. This check does not make a missing shared directory pass by assumption.
 
 # %%
 bucket_ok = nb.check_bucket(conn)
@@ -81,11 +89,13 @@ bucket_ok = nb.check_bucket(conn)
 # %% [include] ../00_shared/data_paths.py review
 
 # %% [markdown]
-# ## A first query
+# ## Confirm the outcome before teaching a model
 #
-# Rows and positive labels per category, built from the descriptor's roles - the label is what `01_train` learns to
-# predict. A role no column fits (the descriptor's `missing`, with the profiler's reason) is not guessed: without a
-# category the rows are counted per entity, without a label the label count is left out, and the cell says so.
+# Count the records and positive outcomes in each category. Pharma's label is trial termination; Banking's is monetary relief. Check that this matches the question handed to you.
+#
+# **Read the result:** a positive label means the chosen outcome occurred. It does not mean that the outcome is desirable. The query shows which groups and class balance the later training recipe will encounter.
+#
+# **Technical note:** the query uses the approved role map. Missing category or label roles produce the explained fallback rather than an invented column.
 
 # %%
 skipped = {m["role"]: m["reason"] for m in ds.missing}
@@ -106,9 +116,8 @@ nb.show_sql()
 first_rows
 
 # %% [markdown]
-# ## Next: `01_train.ipynb`
+# ## Move from readiness to a repeatable experiment
 #
-# Open `01_train.ipynb` in this folder: features in SQL from these roles, a scikit-learn classifier trained inside the
-# database, and the run in your MLflow with its metrics, training SQL and model. Run the Data Scientist's
-# `01_explore.ipynb` first to write the handoff. Then set the one DATASET assignment in `01_train` to the dataset id
-# or your file's path.
+# Run `data-scientist/01_explore.ipynb` through its handoff cell for the chosen dataset, then open `01_train.ipynb`. A **handoff** is the saved recipe tying the approved column map, data fingerprint, features and split together.
+#
+# Change one `DATASET` assignment in the training notebook to follow Banking or your own described file. Keep the default runtime until the first experiment is working.

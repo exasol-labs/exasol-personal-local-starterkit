@@ -55,6 +55,25 @@ def approve_as_dict(this, **kwargs):
 
 
 class ReviewTest(unittest.TestCase):
+    def test_the_review_explains_its_source_and_the_human_decision(self):
+        review = RoleReview(draft(), object())
+        guide = review.guide()
+        self.assertIn("column names and measured values", guide)
+        self.assertIn("prediction target", guide)
+        self.assertIn("not a probability", guide)
+        self.assertIn("entity", guide)
+        self.assertIn("category", guide)
+        self.assertIn("leave", guide)
+        explanation = review.explanations()
+        self.assertIn("120", explanation["A"])
+        self.assertIn("4", explanation["B"])
+        self.assertIn("constant", explanation["D"])
+
+    def test_close_alternatives_are_marked_for_review(self):
+        proposal = draft()
+        proposal.doc["evidence"]["category"]["runner_up"] = {"column": "C", "score": 0.9}
+        self.assertIn("Close alternative", RoleReview(proposal, object()).explanations()["B"])
+
     def test_corrections_approve_without_editing_a_file(self):
         review = RoleReview(draft(), object())
         self.assertEqual(review.suggestions(), {"A": "entity", "B": "category", "C": None, "D": None})

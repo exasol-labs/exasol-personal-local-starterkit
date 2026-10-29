@@ -14,12 +14,15 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    # Check the packages inside a Python UDF
+    # Verify the libraries where the model will actually run
 
-    **Dataset:** Pharma or Banking; **How long:** two minutes. Compare the notebook's
-    Python packages with the packages actually imported by the database runtime.
-    Adapted from the Notebook Connector / AI Lab runtime and scikit-learn lessons.
-    Sources and MIT license: `EXAMPLE-GUIDE.md`.
+    **Dataset:** Pharma or Banking. **How long:** two minutes.
+
+    The notebook can import scikit-learn, but the scoring function runs inside Exasol's Python runtime. Check that runtime before debugging a model that depends on missing or incompatible libraries.
+
+    **By the end:** you will have package versions returned by a real database UDF. **Optional AI:** no LLM endpoint is required; this is a direct runtime check you can reuse before training.
+
+    Adapted from Notebook Connector / AI Lab runtime and scikit-learn lessons. Sources and MIT notices: `EXAMPLE-GUIDE.md`.
     """)
     return
 
@@ -41,11 +44,13 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Import the libraries inside Exasol
+    ## Read evidence from inside Exasol
 
-    This script runs in the UDF container. Installing a library in Jupyter's
-    environment alone does not make it available here. The ML-ready alias is
-    preferred automatically; EXAKIT_UDF_CONTAINER can select another installed one.
+    The next cell creates a small SQL-callable Python function. That function imports scikit-learn, pandas, NumPy, SciPy and joblib inside the database, then returns their versions.
+
+    **Read the result:** these versions describe the UDF runtime, not the notebook kernel. Use them when checking a saved model's compatibility. A missing import is a readiness failure to fix before continuing.
+
+    **Technical note:** `CONTAINER` defaults to the installed ML runtime, usually `PYTHON3_ML`. The function is created under `EXAKIT_EXAMPLES` and called by the printed SQL. `EXAKIT_UDF_CONTAINER` can select another installed runtime.
     """)
     return
 

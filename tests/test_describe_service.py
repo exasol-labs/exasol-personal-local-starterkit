@@ -194,6 +194,33 @@ def fake_openai(answer: str | None = None, error: Exception | None = None) -> ty
 
 
 class Scoring(unittest.TestCase):
+    def test_category_values_do_not_become_an_unusable_prediction_target(self):
+        product = col("PRODUCT", distinct=3, **shares(0.5, 0.3, 0.2))
+        product["values"] = [{"value": name, "share": share} for name, share in
+                             [("Mortgage", 0.5), ("Credit card", 0.3), ("Savings", 0.2)]]
+        doc = svc.draft(profile_of(product))
+        self.assertNotIn("label", doc["roles"])
+        self.assertEqual(doc["roles"]["category"]["column"], "PRODUCT")
+
+    def test_a_two_value_category_is_offered_as_a_grouping(self):
+        segment = col("SEGMENT", distinct=2, **shares(0.6, 0.4))
+        segment["values"] = [{"value": "Retail", "share": 0.6}, {"value": "Business", "share": 0.4}]
+        doc = svc.draft(profile_of(segment))
+        self.assertNotIn("label", doc["roles"])
+        self.assertEqual(doc["roles"]["category"]["column"], "SEGMENT")
+
+    def test_a_target_name_cannot_turn_nonbinary_values_into_a_label(self):
+        status = col("TARGET_STATUS", distinct=2, **shares(0.5, 0.5))
+        status["values"] = [{"value": "Open", "share": 0.5}, {"value": "Closed", "share": 0.5}]
+        self.assertIsNone(svc.score_label(status))
+
+    def test_a_binary_outcome_with_some_missing_rows_remains_a_candidate(self):
+        outcome = col("OUTCOME", "integer", distinct=2, null_rate=0.1, **shares(0.8, 0.2))
+        outcome["values"] = [{"value": "0", "share": 0.8}, {"value": "1", "share": 0.2}]
+        self.assertEqual(svc.score_label(outcome), 1.0)
+        outcome["null_rate"] = 0.2
+        self.assertIsNone(svc.score_label(outcome))
+
     def test_the_five_roles(self):
         doc = svc.draft(typical(), TABLE, "readings")
         self.assertEqual(svc.draft_roles(doc), {"date": "ORDER_DATE", "label": "CHURNED", "category": "SEGMENT",
@@ -247,7 +274,7 @@ class Scoring(unittest.TestCase):
         d = col("D", "date", span_days=400)
         self.assertEqual(svc.draft(profile_of(d, c))["roles"]["date"]["column"], "D")      # positions 1 and 2
 
-    def test_a_category_tie_takes_the_earlier_column(self):
+    def test_a_category_tie_prefers_a_grouping_name_then_the_earlier_column(self):
         label = col("TERMINATED", "boolean", distinct=2, **shares(0.8, 0.2))      # the label, so ALLOCATION is not it
         first = col("PHASE", distinct=4, **shares(0.43, 0.42, 0.12, 0.03))
         second = col("ALLOCATION", distinct=3, **shares(0.7, 0.2, 0.1))
@@ -256,7 +283,16 @@ class Scoring(unittest.TestCase):
         self.assertEqual(doc["evidence"]["category"]["runner_up"], {"column": "ALLOCATION", "score": 1.0})
         swapped = profile_of(col("TERMINATED", "boolean", distinct=2, **shares(0.8, 0.2)),
                              col("ALLOCATION", distinct=3, **shares(0.7, 0.2, 0.1)), col("PHASE", distinct=4, **shares(0.43, 0.42, 0.12, 0.03)))
-        self.assertEqual(svc.draft(swapped)["roles"]["category"]["column"], "ALLOCATION")
+        self.assertEqual(svc.draft(swapped)["roles"]["category"]["column"], "PHASE")
+        tied = profile_of(col("A", distinct=3, **shares(0.6, 0.3, 0.1)),
+                          col("B", distinct=3, **shares(0.6, 0.3, 0.1)))
+        self.assertEqual(svc.draft(tied)["roles"]["category"]["column"], "A")
+
+    def test_a_small_company_list_does_not_displace_a_named_category(self):
+        company = col("COMPANY", distinct=5, **shares(0.2, 0.2, 0.2, 0.2, 0.2))
+        category = col("CATEGORY", distinct=2, **shares(0.5, 0.5))
+        doc = svc.draft(profile_of(company, category))
+        self.assertEqual(doc["roles"]["category"]["column"], "CATEGORY")
 
     def test_a_tiny_class_or_nulls_cost_a_category(self):
         self.assertEqual(svc.score_category(col("PURPOSE", distinct=9, **shares(0.9, 0.06, 0.02, 0.01, 0.005, 0.003, 0.001, 0.0005, 0.0005))), 0.8)
@@ -266,6 +302,7 @@ class Scoring(unittest.TestCase):
 
     def test_the_label_column_is_not_offered_as_the_category(self):
         label = col("STATUS", distinct=2, **shares(0.8, 0.2))
+        label["values"] = [{"value": "0", "share": 0.8}, {"value": "1", "share": 0.2}]
         other = col("KIND", distinct=3, **shares(0.5, 0.3, 0.2))
         doc = svc.draft(profile_of(label, other))
         self.assertEqual((doc["roles"]["label"]["column"], doc["roles"]["category"]["column"]), ("STATUS", "KIND"))
