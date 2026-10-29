@@ -3,8 +3,8 @@
 Prepared 2026-10-29 for the follow-up to [persona PR #1](https://github.com/ranjanm-chn/exasol-personal-local-starterkit-backup/pull/1).
 
 - Previous PR head: [`8054221`](https://github.com/ranjanm-chn/exasol-personal-local-starterkit-backup/commit/8054221a165c762166588a4bbae295b00e76e341) (`feat/tdd-brd-personas-notebooks`).
-- Implementation head: [`bdbec2a`](https://github.com/ranjanm-chn/exasol-personal-local-starterkit-backup/commit/bdbec2a271836e4091e69b873386221de2000b32) (`codex/persona-v05-completion`).
-- Implementation history: **64 commits** after the previous PR. The publication commit adds this changelog and updates `CHANGELOG.md`.
+- Latest implementation head: [`6715a3a`](https://github.com/ranjanm-chn/exasol-personal-local-starterkit-backup/commit/6715a3a99524e2f0b546511a357eebb6d36ad600) (`codex/persona-v05-completion`).
+- Recorded history: **66 commits**, including implementation and documentation, after the previous PR. The final changelog publication update follows this recorded range.
 - Review base: the previous PR's branch, so the follow-up contains the work added since PR #1. PR #1 remains open and neither its branch nor `main` is modified by publishing this follow-up.
 
 ## Personas and installation
@@ -53,6 +53,14 @@ Prepared 2026-10-29 for the follow-up to [persona PR #1](https://github.com/ranj
 - Store kit exapump profiles privately beneath the kit home and retain shared user profiles. Preserve explicitly recorded user component paths beneath the kit home during full uninstall, including broken add-ons whose version probes fail.
 - Update the bundled lifecycle, Python and exapump guidance and the Mac manual runbook for ownership-aware removal and local-checkout installation.
 
+## Review update: complete add-on help and UDF install progress
+
+- All seven add-on pages now expose positional arguments, option descriptions, defaults, valid choices, examples and environment settings in shell, PowerShell and JSON help. Native package help remains the complete version-specific reference for forwarded commands.
+- Correct previously omitted model inspection/trust confirmation, custom-build confirmation, MLflow replay destinations/timeouts and Rust project options. Correct the dbt command prefix and show complete model-family help and exit codes on PowerShell.
+- Add [the add-on command guide](ADDON-COMMANDS.md), with everyday flows and the observed first-time UDF install breakdown: 842 MB download plus official/ML container installs and restarts. Replace the generic installing phase with named milestones; percentages remain estimates, not byte counters.
+- The installed Mac help/progress files were refreshed with backups. All seven installed help pages were checked without changing the installation manifest; no packages, containers or services were reinstalled/restarted for this update.
+- New coverage includes six Python help/metadata/parser tests, PowerShell help-family checks, and shell/PowerShell tests observing the real restart wrapper with a fake launcher. Existing UDF suites passed 104 shell / 75 PowerShell checks; models passed 72 / 60; marketplace 459, agent operability 648, table parity 203, and update command surface 39. PowerShell 5.1 CI entries were added; live Windows verification remains deferred.
+
 ## Validation and limits
 
 Recent observed checks include:
@@ -77,9 +85,9 @@ Live Windows verification, including its bucket-directory check, is deferred at 
 
 No virtual-schema adapter or external-source integration implementation is added by this follow-up. The existing external-model scoring notebook concerns a local model file, not an external database connection.
 
-## Complete implementation commit history
+## Complete recorded commit history
 
-The links below include every implementation commit since PR #1, oldest first. Long subjects are retained as recorded in Git.
+Every commit since PR #1, oldest first, up to the latest implementation above. Long subjects are retained as recorded in Git. The final documentation commit publishes this refreshed list.
 
 - [`f7baa0f`](https://github.com/ranjanm-chn/exasol-personal-local-starterkit-backup/commit/f7baa0fcb4b6e8c6525c8a672aaf424803ca0b1f) Rename the data-scientist persona's title to Data Scientist
 - [`cbc86ca`](https://github.com/ranjanm-chn/exasol-personal-local-starterkit-backup/commit/cbc86ca3ce867077a62be2f27596d0a6003cac3c) Descriptor schema_version 2: the reader takes a version-1 file as approved by the kit and a version-2 file with its record (version, status, owner, created, digest, drafted_by, evidence, notes, missing - each problem names its key; an unknown schema_version is one line; a role listed under missing may be absent with its reason); the shipped pharma and banking descriptors move to version 2 (approved, version 1, shipped, evidence left for the profiler); Dataset exposes the record, require_approved(purpose) refuses a draft with how to approve it, and a name resolves in order - a path, the kit's store under EXAKIT_HOME (descriptor_store, read-only), the shipped file - and says which; source is a dataset id, file:&lt;path&gt; or vs:&lt;alias&gt;, and only a vs: source is a live one; save_descriptor writes version 2 (a draft by EXAKIT_DESCRIPTOR_OWNER or the OS user, the file as source); dataset_check wants shipped descriptors approved; data/README.md documents every key with one example per reference dataset, an own file, a virtual table and the version-1 note
@@ -145,3 +153,5 @@ The links below include every implementation commit since PR #1, oldest first. L
 - [`59d33a0`](https://github.com/ranjanm-chn/exasol-personal-local-starterkit-backup/commit/59d33a0bbd96119e366fb148b10a1c7ca9275b8e) Bundle runnable notebooks and place activity above each active bar
 - [`8648f04`](https://github.com/ranjanm-chn/exasol-personal-local-starterkit-backup/commit/8648f04b2c858cb2b4a0584b5328227ba07eeeb5) Bundle all official Notebook Connector lessons for both notebook tools
 - [`bdbec2a`](https://github.com/ranjanm-chn/exasol-personal-local-starterkit-backup/commit/bdbec2a271836e4091e69b873386221de2000b32) Track component ownership and preserve reused installations
+- [`e80dc2d`](https://github.com/ranjanm-chn/exasol-personal-local-starterkit-backup/commit/e80dc2dac8a44f5730f6f9af7deb30a84cb938c3) Document all changes since persona PR #1
+- [`6715a3a`](https://github.com/ranjanm-chn/exasol-personal-local-starterkit-backup/commit/6715a3a99524e2f0b546511a357eebb6d36ad600) Document all add-on parameters and expose UDF install stages
