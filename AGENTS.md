@@ -1,5 +1,9 @@
 # Agent guide: Exasol Personal Local Starter Kit
 
+## Git naming and attribution
+
+Use descriptive `feat/`, `fix/` or `docs/` branch names. Never put an AI client or provider name in a branch name or add AI-client author/co-author credits. Preserve the actual human contributors and their existing attribution.
+
 This repo installs a complete local analytics stack with one command: an Exasol database on the user's machine, the `exapump` data/SQL CLI, an MCP server with a dedicated read-only database user, and the `pyexasol` Python driver. If a user asks you to "install this repo", this file is your runbook.
 
 ## The contract in 20 lines

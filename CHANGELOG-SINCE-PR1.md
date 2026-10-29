@@ -3,9 +3,9 @@
 Prepared 2026-10-29 for the follow-up to [persona PR #1](https://github.com/ranjanm-chn/exasol-personal-local-starterkit-backup/pull/1).
 
 - Previous PR head: [`8054221`](https://github.com/ranjanm-chn/exasol-personal-local-starterkit-backup/commit/8054221a165c762166588a4bbae295b00e76e341) (`feat/tdd-brd-personas-notebooks`).
-- Latest implementation head: [`abd899b`](https://github.com/ranjanm-chn/exasol-personal-local-starterkit-backup/commit/abd899b83db1cd3a721b6b53372dadb34eefa30e) (`codex/persona-v05-completion`).
-- Recorded history: **68 commits**, including implementation and documentation, after the previous PR. The final shared-metadata and changelog publication update follows this recorded range.
-- Review base: the previous PR's branch, so the follow-up contains the work added since PR #1. PR #1 remains open and neither its branch nor `main` is modified by publishing this follow-up.
+- Latest implementation head: [`3d415f9`](https://github.com/ranjanm-chn/exasol-personal-local-starterkit-backup/commit/3d415f937888c3f6c60444c09a4ffcdac1cb7a87) (`feat/persona-v05-completion`).
+- Recorded history: **82 commits** since the original PR #1 head, including the existing Windows/cleanup parent and the two integration merges. The final branch-naming and stack-documentation publication follows this range.
+- Review base: PR #1 at `7b82598` (`feat/tdd-brd-personas-notebooks`), now based on PR #2 (`fix/windows-podman-selfheal`). The completion layer has 70 commits relative to that integrated parent before this documentation publication. No change is merged to `main`.
 
 ## Personas and installation
 
@@ -69,6 +69,16 @@ Prepared 2026-10-29 for the follow-up to [persona PR #1](https://github.com/ranj
 - Implement the PowerShell model inspection and put trust-confirmation handlers advertised by the help; reject unconfirmed pickle copies without changing files. Refuse unsupported MLflow start flags before server preparation. Prevent PowerShell help/catalog from creating empty kit directories.
 - Verified on macOS: 15 Python discovery/parity tests (including real PowerShell entrypoints and a future add-on fixture); 24 PowerShell help checks; model handlers 72 shell / 68 PowerShell; MLflow wrappers 42 / 30; model helper 12; marketplace 459; agent operability 648; table parity 203; update surface 39. The installed CLI passed 21 equivalent add-on JSON help forms, four exact action checks and unknown-action refusal with its manifest unchanged. Live Windows remains deferred.
 
+## PR stack and branch naming
+
+The dependency order is `main` → PR #2 (Windows self-heal, including closed PR #3) → PR #1 (personas/notebooks) → the completion PR on `feat/persona-v05-completion`. The renamed completion PR replaces PR #4; its earlier discussion remains in that closed PR.
+
+Parent branches are integrated into their children with merge commits so the original review history and merge-only resolutions remain intact. PR #2's commit and file tree are unchanged. Conflicts combine temporary-file cleanup with the persona installer/data chooser, and database ownership protection with Podman preflight and first-boot recovery. Notebook contents and external-source/virtual-schema integration code are unchanged by this restack.
+
+The naming policy uses `feat/`, `fix/` or `docs/` and preserves actual human attribution, with no AI-client branch names or author/co-author credits. Langfuse changes have not been started; the existing notebook SDK integration is unchanged.
+
+Integration checks observed on macOS: persona flow 143; shell/PowerShell temporary cleanup 29/10; ownership 32/30; PowerShell runtime 121; Windows-rootful command fixtures 34; add-on discovery 15; agent operability 651; marketplace 459. All PowerShell sources parse. These are isolated fixtures and do not replace live Windows verification.
+
 ## Validation and limits
 
 Recent observed checks include:
@@ -95,7 +105,7 @@ No virtual-schema adapter or external-source integration implementation is added
 
 ## Complete recorded commit history
 
-Every commit since PR #1, oldest first, up to the implementation head above. The following publication commit synchronizes shared help metadata and publishes this refreshed list.
+Every commit since PR #1's original head, oldest first in topological order, through the implementation head above. This includes the existing Windows/cleanup parent and integration merges. The following documentation commit publishes the refreshed branch and stack record.
 
 - [`f7baa0f`](https://github.com/ranjanm-chn/exasol-personal-local-starterkit-backup/commit/f7baa0fcb4b6e8c6525c8a672aaf424803ca0b1f) Rename the data-scientist persona's title to Data Scientist
 - [`cbc86ca`](https://github.com/ranjanm-chn/exasol-personal-local-starterkit-backup/commit/cbc86ca3ce867077a62be2f27596d0a6003cac3c) Descriptor schema_version 2: the reader takes a version-1 file as approved by the kit and a version-2 file with its record (version, status, owner, created, digest, drafted_by, evidence, notes, missing - each problem names its key; an unknown schema_version is one line; a role listed under missing may be absent with its reason); the shipped pharma and banking descriptors move to version 2 (approved, version 1, shipped, evidence left for the profiler); Dataset exposes the record, require_approved(purpose) refuses a draft with how to approve it, and a name resolves in order - a path, the kit's store under EXAKIT_HOME (descriptor_store, read-only), the shipped file - and says which; source is a dataset id, file:<path> or vs:<alias>, and only a vs: source is a live one; save_descriptor writes version 2 (a draft by EXAKIT_DESCRIPTOR_OWNER or the OS user, the file as source); dataset_check wants shipped descriptors approved; data/README.md documents every key with one example per reference dataset, an own file, a virtual table and the version-1 note
@@ -165,3 +175,17 @@ Every commit since PR #1, oldest first, up to the implementation head above. The
 - [`6715a3a`](https://github.com/ranjanm-chn/exasol-personal-local-starterkit-backup/commit/6715a3a99524e2f0b546511a357eebb6d36ad600) Document all add-on parameters and expose UDF install stages
 - [`ec79e5e`](https://github.com/ranjanm-chn/exasol-personal-local-starterkit-backup/commit/ec79e5eec2df6a893ee642b6ae66c6b05947a424) Refresh PR changelog with add-on help and install timing fixes
 - [`abd899b`](https://github.com/ranjanm-chn/exasol-personal-local-starterkit-backup/commit/abd899b83db1cd3a721b6b53372dadb34eefa30e) Unify add-on command discovery and PowerShell action parity
+- [`6672ca3`](https://github.com/ranjanm-chn/exasol-personal-local-starterkit-backup/commit/6672ca3e73d53ac9ad376435850595bbe4616935) Synchronize shared help metadata and refresh PR changelog
+- [`5ddc7d3`](https://github.com/ranjanm-chn/exasol-personal-local-starterkit-backup/commit/5ddc7d342cbde3bb9e2fc6a4eb2a81040128b538) repair-runtime: consent to the replace it asked about, and report a rebuild that left no database
+- [`a8d7e75`](https://github.com/ranjanm-chn/exasol-personal-local-starterkit-backup/commit/a8d7e75cf640d2381fb344717644e666cc9add44) Windows: support rootful and rootless Podman machines, and check Podman before every deploy and start
+- [`89f0b8f`](https://github.com/ranjanm-chn/exasol-personal-local-starterkit-backup/commit/89f0b8fd7303df236153f18c0f345541577d506d) Linux/WSL: name a missing pids controller, surface the container's own error, replace a never-booted deployment by default
+- [`614f680`](https://github.com/ranjanm-chn/exasol-personal-local-starterkit-backup/commit/614f680b1b4a6982f1d957543ba20436df380f59) Show the Podman fixes inside the deploy's quiet bracket
+- [`ae67b05`](https://github.com/ranjanm-chn/exasol-personal-local-starterkit-backup/commit/ae67b059edc44dac4cd350fbabbc7778121e0463) exakit status: say why a stopped deployment the launcher records as failed is not running
+- [`05cd86e`](https://github.com/ranjanm-chn/exasol-personal-local-starterkit-backup/commit/05cd86e57ce52c84d43f7c09a86572cdd9f97ecb) Docs: rootful and rootless both supported; the pids, DNS and stays-Created fixes
+- [`cf43308`](https://github.com/ranjanm-chn/exasol-personal-local-starterkit-backup/commit/cf43308feb58f8020511d2262b1eb349d7135f5d) Manual test plan for the Windows Podman self-heal: fifteen cases for a real Windows machine, with the exact messages to expect
+- [`a03df55`](https://github.com/ranjanm-chn/exasol-personal-local-starterkit-backup/commit/a03df5587385988b81b1fe3982d37c8e180b2d07) A dry run no longer fills the disk: it removes earlier dry-run folders once they are 10 minutes old, and an install or dry run from a local checkout copies only the kit's files (tracked plus new unignored ones, never .git or .claude) instead of the whole folder - both installers, with a test each side
+- [`37516d0`](https://github.com/ranjanm-chn/exasol-personal-local-starterkit-backup/commit/37516d0491ad5aca674b8db25e11465049bd2af3) Revert "A dry run no longer fills the disk: it removes earlier dry-run folders once they are 10 minutes old, and an install or dry run from a local checkout copies only the kit's files (tracked plus new unignored ones, never .git or .claude) instead of the whole folder - both installers, with a test each side"
+- [`3afb22b`](https://github.com/ranjanm-chn/exasol-personal-local-starterkit-backup/commit/3afb22b27228f6b5e51acbd047c60c39b7d94f05) Dry runs and the kit's tables no longer leave scratch folders in TMPDIR
+- [`ee108f8`](https://github.com/ranjanm-chn/exasol-personal-local-starterkit-backup/commit/ee108f894628175a3ebddbd2bc84231677f1b2dc) Merge remote-tracking branch 'staging/fix/temp-dir-cleanup' into fix/windows-podman-selfheal
+- [`7b82598`](https://github.com/ranjanm-chn/exasol-personal-local-starterkit-backup/commit/7b825984d23032c1484be73a60af993fc08c1caa) Integrate Windows and cleanup fixes beneath persona workflows
+- [`3d415f9`](https://github.com/ranjanm-chn/exasol-personal-local-starterkit-backup/commit/3d415f937888c3f6c60444c09a4ffcdac1cb7a87) Stack completion workflows on the integrated Windows and persona fixes

@@ -4,7 +4,7 @@ Gate G1 of the v0.5 plan (`.plan/requirements.md` §2.1 step 12, §3 DS-1..DS-5;
 
 | Item | Detail |
 |---|---|
-| Branch | `codex/persona-v05-completion` (or the release it becomes) |
+| Branch | `feat/persona-v05-completion` (or the release it becomes) |
 | Covers | §2.1 steps 1 Install, 2 Load data, 3 Open notebook, 4 Draft, 5 Approve, 7 Explore, 8 Text step traced, 9 Own data (steps 6, 10, 11 are G3) |
 | Pass criterion | **2 of 3 participants finish all eight steps within 30 minutes**, uncoached. A participant who stops at any step, or passes 30:00 before step 9's rerun shows rows, fails. |
 | Participants | three practitioners; at least one Pharma and one Banking background; at least one macOS and one Windows machine; none has installed this kit before |

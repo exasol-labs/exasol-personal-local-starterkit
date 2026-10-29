@@ -4,7 +4,7 @@ Run this once on a Windows 11 laptop and once on a macOS machine against Launche
 
 | Item | Detail |
 |---|---|
-| Branch | `codex/persona-v05-completion` (or the release it becomes) |
+| Branch | `feat/persona-v05-completion` (or the release it becomes) |
 | Covers | `.plan/requirements.md` ML-4 AC4.1, "Bucket directory" principle (§2.2); `.plan/design.md` §6 (writability), §9 (`model put`/`rm`) |
 | Pass criterion | step 4 returns the file's size and sha256 unchanged on **both** platforms. Step 5 has no pass/fail: its answer is recorded. |
 | Known so far | macOS (T16, 2026-10-27): read via `/buckets` yes; write `OSError(30)` read-only. Windows and Linux: unknown. |
