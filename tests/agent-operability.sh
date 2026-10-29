@@ -1016,22 +1016,26 @@ has "...and names the deliberate write path" "exakit sql --write" \
     "$(sed -n '/insufficient privileges/,+8p' "$ROOT/setup/lib/common.sh")"
 # SAY-08: the documented Personal major-upgrade route is accepted by the
 # option guard instead of being a phantom.
-_su="$WORK/say08"; mkdir -p "$_su"
-printf '{\n  "runtime": {\n    "type": "personal"\n  }\n}\n' > "$_su/manifest.json"
+_su="$WORK/say08"; mkdir -p "$_su/bin"
+# This is a kit-owned launcher deliberately behind the advertised version,
+# independent of the developer's real PATH and ownership receipts.
+printf '#!/bin/sh\nprintf "exasol 2.2.0\\n"\n' > "$_su/bin/exasol"
+chmod +x "$_su/bin/exasol"
+printf '{"runtime":{"type":"personal","version":"2.2.0","ownership":"kit"},"components":{"personal":{"ownership":"kit","ownership_path":"%s/bin/exasol"}}}\n' "$_su" > "$_su/manifest.json"
+_su_before="$(cat "$_su/bin/exasol")"
 # EXAKIT_BIN_DIR sandboxed too, and not only for tidiness: this fixture runs
 # the REAL update path, and that path deletes $EXAKIT_PERSONAL_BIN before
 # installing. Unscrubbed it inherits the developer's ~/.local/bin and takes
 # their launcher with it - which is exactly what happened, downgrading a
 # working machine mid-test-run.
-_su_out="$(EXAKIT_HOME="$_su" EXAKIT_BIN_DIR="$_su/bin" bash "$ROOT/setup/exakit" update runtime --plan 2>&1)"
+_su_out="$(EXAKIT_HOME="$_su" EXAKIT_BIN_DIR="$_su/bin" EXAKIT_VERSION_POLICY=pinned EXAKIT_PERSONAL_VERSION=2.3.0 PATH="$_su/bin:$PATH" bash "$ROOT/setup/exakit" update runtime --plan 2>&1)"
 lacks "update runtime --plan is not refused" "Unknown option" "$_su_out"
 # ...and --plan DESCRIBES. It used to describe only across a major gap and
 # install across every other one, so the flag that promises to touch nothing
 # replaced the launcher binary without asking.
 lacks "update runtime --plan installs nothing" "Installing launcher" "$_su_out"
 has "...and says how to apply it instead" "Apply it with: exakit update personal" "$_su_out"
-check "...leaving no launcher behind" "absent" \
-    "$([ -e "$_su/bin/exasol" ] && echo PRESENT || echo absent)"
+check "...leaving the existing launcher unchanged" "$_su_before" "$(cat "$_su/bin/exasol")"
 # AGK-02: a DEAD installer answers with installing:false, the step it died at,
 # and remedies.install naming the re-run - the exact shape AGENTS.md promises.
 printf '{\n  "runtime": {\n    "type": "personal"\n  },\n  "install": {\n    "current_step": "mcp"\n  }\n}\n' > "$_su/manifest.json"

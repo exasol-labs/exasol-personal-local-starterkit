@@ -26,32 +26,281 @@
   "commands": [
     {
       "command": "exakit data-load",
-      "options": "",
+      "options": "[<file-or-folder-or-dataset>] [--force]",
       "summary": "The normal way in - hand it a .json file.",
       "examples": [
-        "exakit data-load"
+        "exakit data-load ./events.json",
+        "EXAKIT_DATA_TABLE=STARTER_KIT.EVENTS exakit data-load ./events.json"
+      ],
+      "parameters": [
+        {
+          "name": "<file-or-folder-or-dataset>",
+          "description": "Load a CSV, Parquet, JSON/NDJSON file, a folder, or a bundled dataset ID. JSON Tables is selected automatically for JSON.",
+          "default": "interactive choice or EXAKIT_DATA_FILE / EXAKIT_DATASETS",
+          "required": false
+        },
+        {
+          "name": "--force",
+          "description": "Reload bundled datasets even if their load receipt already exists; inspect replacement behavior before using it.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything.",
+          "default": "off",
+          "required": false
+        }
       ]
     },
     {
       "command": "exasol-json-tables ingest",
-      "options": "--input <file.json> --output-dir <dir>",
+      "options": "--input <file.json> [--output-dir <dir>] [ingest options]",
       "summary": "Shred JSON into Parquet by hand.",
-      "examples": []
+      "examples": [
+        "exasol-json-tables ingest --help",
+        "exasol-json-tables ingest --input ./events.json --output-dir ./events-parquet --schema-sql --json"
+      ],
+      "parameters": [
+        {
+          "name": "--input FILE",
+          "description": "Input JSON or NDJSON file.",
+          "default": null,
+          "required": true
+        },
+        {
+          "name": "--output-dir DIR",
+          "description": "Where to write generated Parquet and SQL files.",
+          "default": "artifact directory or native engine default",
+          "required": false
+        },
+        {
+          "name": "--artifact-dir DIR",
+          "description": "Directory for source-manifest artifacts.",
+          "default": "native CLI default",
+          "required": false
+        },
+        {
+          "name": "--manifest-output FILE",
+          "description": "Explicit source-manifest output path.",
+          "default": "<artifact-dir>/<input-stem>.source_manifest.json",
+          "required": false
+        },
+        {
+          "name": "--no-source-manifest",
+          "description": "Do not emit a source manifest.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--schema-sql",
+          "description": "Emit Exasol DDL for generated tables.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--exasol URL",
+          "description": "Optional direct Exasol connection URL. Prefer exakit data-load for the kit-managed connection; avoid exposing credentials in shell history.",
+          "default": "local output only",
+          "required": false
+        },
+        {
+          "name": "--exasol-http-tls",
+          "description": "Use TLS for the HTTP import transport. Keep disabled for local Exasol Personal.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--exasol-temp-dir DIR",
+          "description": "Directory for staged Parquet files during direct import.",
+          "default": "native CLI default",
+          "required": false
+        },
+        {
+          "name": "--exasol-cleanup",
+          "description": "Remove staged Parquet files after direct upload.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--tls / --no-tls",
+          "description": "Enable/disable TLS when constructing the direct database URL.",
+          "default": "TLS enabled",
+          "required": false
+        },
+        {
+          "name": "--validate-server-certificate",
+          "description": "Validate the database certificate for direct ingest.",
+          "default": "off for the local self-signed runtime",
+          "required": false
+        },
+        {
+          "name": "--cargo-manifest-path FILE",
+          "description": "Advanced source-build override for the ingest crate; not required for the shipped prebuilt engine.",
+          "default": "not set",
+          "required": false
+        },
+        {
+          "name": "--json",
+          "description": "Print a JSON summary; progress goes to stderr.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ]
     },
     {
       "command": "exakit update",
-      "options": "",
+      "options": "[<component>] [--yes] [--json]",
       "summary": "Update the engine and wheel.",
       "examples": [
-        "exakit update"
+        "exakit update json-tables"
+      ],
+      "parameters": [
+        {
+          "name": "<component>",
+          "description": "Update a kit-owned component or add-on; user-owned components are preserved.",
+          "default": "all",
+          "required": false
+        },
+        {
+          "name": "--yes, -y",
+          "description": "Allow a pending runtime update that stops and restarts the database; not permission to remove user-owned resources.",
+          "default": "ask on a terminal; defer runtime changes without a terminal",
+          "required": false
+        },
+        {
+          "name": "--json, -j",
+          "description": "Print machine-readable output rather than decorated text.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything.",
+          "default": "off",
+          "required": false
+        }
       ]
     },
     {
       "command": "exakit logs",
-      "options": "json-tables [-f]",
+      "options": "[<target>] [-f] [--lines N] [--path] [--json]",
       "summary": "What the ingest wrote.",
       "examples": [
-        "exakit logs json-tables -f"
+        "exakit logs json-tables --lines 100 -f"
+      ],
+      "parameters": [
+        {
+          "name": "<target>",
+          "description": "A log ID, for example setup, notebook, notebook-marimo, dash-server, json-tables or udf-devkit-mlflow. UDF container operations are in setup.",
+          "default": "list available log targets",
+          "required": false
+        },
+        {
+          "name": "-f, --follow",
+          "description": "Continue showing new lines until Ctrl+C.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--lines N, -n N",
+          "description": "Number of existing lines shown before following or returning.",
+          "default": "200",
+          "required": false
+        },
+        {
+          "name": "--path",
+          "description": "Print the selected log filename without its contents.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--json, -j",
+          "description": "List available log targets as JSON. Cannot be combined with a target.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything.",
+          "default": "off",
+          "required": false
+        }
+      ]
+    },
+    {
+      "command": "exakit marketplace",
+      "options": "[<addon-id>...] | --list [--json]",
+      "summary": "Install this add-on by ID.",
+      "parameters": [
+        {
+          "name": "<addon-id>...",
+          "description": "Install only these registered add-ons. Without IDs, open the chooser on a terminal; install nothing without a terminal.",
+          "default": "interactive chooser",
+          "required": false
+        },
+        {
+          "name": "--list",
+          "description": "List add-ons and ownership without installing. Cannot be combined with install IDs.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--json",
+          "description": "List add-ons as JSON; read-only and cannot be combined with install IDs.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything.",
+          "default": "off",
+          "required": false
+        }
+      ],
+      "examples": [
+        "exakit marketplace json-tables"
+      ]
+    },
+    {
+      "command": "exakit uninstall",
+      "options": "[<addon-id>] [--dry-run] [--yes]",
+      "summary": "Preview or remove this kit-owned add-on; preserve user-owned copies.",
+      "parameters": [
+        {
+          "name": "<addon-id>",
+          "description": "Remove one kit-owned add-on. Without an ID, choose components interactively; --yes without an ID selects the whole kit. User-owned resources are preserved.",
+          "default": "interactive chooser",
+          "required": false
+        },
+        {
+          "name": "--dry-run",
+          "description": "Preview removal without deleting anything.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--yes, -y",
+          "description": "Confirm removal. With no addon ID, remove the full kit and kit-owned database data.",
+          "default": "ask for confirmation",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything.",
+          "default": "off",
+          "required": false
+        }
+      ],
+      "examples": [
+        "exakit uninstall json-tables --dry-run",
+        "exakit uninstall json-tables"
       ]
     }
   ],
@@ -112,6 +361,20 @@
       "title": "Beyond the kit: query JSON syntax instead of joins (upstream feature)",
       "language": "sql",
       "code": "-- `exakit data-load` runs the INGEST half only, so you get the relational\n-- tables above. The upstream tool can also install a JSON-friendly wrapper\n-- surface over them - dotted paths, array expansion, TO_JSON - which the\n-- kit does not set up for you:\n--\n--   exasol-json-tables ingest-and-wrap --input <file.json> ...\n--\n-- Then activate the preprocessor in the session that needs the syntax:\nALTER SESSION SET SQL_PREPROCESSOR_SCRIPT = JVS_WRAP_PP.JSON_WRAPPER_PREPROCESSOR;\n\nSELECT \"meta.info.note\", \"tags[LAST]\", TO_JSON(*) AS DOC\nFROM   JSON_VIEW.SAMPLE\nORDER  BY \"_id\";"
+    }
+  ],
+  "environment": [
+    {
+      "name": "EXAKIT_DATA_TABLE",
+      "effect": "Target SCHEMA.TABLE for a kit-managed single JSON file load; default STARTER_KIT.<FILENAME>."
+    },
+    {
+      "name": "EXAKIT_ON_EXISTING",
+      "effect": "skip (default), replace or append for existing untracked target data."
+    },
+    {
+      "name": "EXAKIT_JSON_TABLES_VERSION",
+      "effect": "Override the tested JSON Tables version for install/update."
     }
   ]
 }

@@ -36,6 +36,34 @@ $script:UdfFail = $null
 # file (Get-UdfContainerFile), and the smoke UDF's "name version" lines.
 $script:UdfContainer = $null
 $script:UdfContainerFile = ""
+$script:UdfProgressSection = ""
+$script:UdfProgressLast = 0
+
+# Stage estimates for the long first-time container install, not download bytes.
+function Set-UdfInstallStage {
+    param([string]$Stage, [string]$Message)
+    Set-ExakitAddonActivity -Message $Message
+    if (-not $script:UdfProgressSection) { return }
+    if (-not (($script:ExakitAddonTableRow -gt 0 -and $null -ne $script:ExakitAddonTable) -or $script:ExakitAddonBarLive)) { return }
+    $segment = switch ("$($script:UdfProgressSection):$Stage") {
+        'primary:download' { @(2,12,240) }
+        'primary:verify' { @(12,14,10) }
+        'primary:install' { @(14,19,240) }
+        'primary:restart' { @(19,20,30) }
+        'primary:smoke' { @(20,23,10) }
+        'ml:download' { @(23,46,330) }
+        'ml:verify' { @(46,50,10) }
+        'ml:prepare' { @(50,54,30) }
+        'ml:install' { @(54,62,90) }
+        'ml:restart' { @(62,63,30) }
+        'ml:smoke' { @(63,65,10) }
+        default { return }
+    }
+    $pct = [Math]::Max([int]$segment[0], [int]$script:UdfProgressLast)
+    $ceiling = [Math]::Max([int]$segment[1], $pct + 1)
+    $script:UdfProgressLast = $pct
+    Set-ExakitAddonProgress -Id 'udf-devkit' -Pct $pct -Ceiling $ceiling -Secs $segment[2] -Phase $Message
+}
 # The last asset Get-UdfVerifiedFile brought into the cache; the Rust row's
 # smoke library (Get-UdfRustSmokeAsset: url, sha256, size; UdfSmokeWhy says
 # why there is none) once Install-UdfDevkitRust fetched it.
@@ -194,7 +222,7 @@ function Get-UdfDevkitInstalledAliases {
 # run). Twin of udf_devkit_smoke.
 function Test-UdfDevkitSmoke {
     param([Parameter(Mandatory)][string]$Alias, [string[]]$Packages = @())
-    Set-ExakitAddonActivity -Message "Checking packages in $Alias"
+    Set-UdfInstallStage -Stage smoke -Message "Checking packages in $Alias"
     $script:UdfSmokeLines = @()
     $result = Invoke-UdfTool -ToolArgs (@("smoke", $Alias, $script:UdfSchema) + $Packages)
     $script:UdfSmokeLines = @($result[1] | Where-Object { $_ })
@@ -472,6 +500,7 @@ function Get-UdfVerifiedFile {
     try { $bytes = [double]$Size } catch { $bytes = 0.0 }
     $mb = "{0} MB" -f [math]::Floor($bytes / 1000000)
     $part = "$($script:UdfFetchedFile).part"
+    Set-UdfInstallStage -Stage download -Message "Fetching $Language $What ($mb)"
     Remove-Item -Force $script:UdfFetchedFile, $part -ErrorAction SilentlyContinue
     if ($local) {
         Info "Copying the $Language $What ($mb) from $local"
@@ -488,7 +517,7 @@ function Get-UdfVerifiedFile {
             return (Set-UdfFail -Code 5 -Step "download" -Remedy $Remedy -Message "The $What could not be downloaded from $source. Retry when online, or set EXAKIT_UDF_CONTAINERS_MIRROR to a folder or URL holding $name.")
         }
     }
-    Set-ExakitAddonActivity -Message "Verifying download checksum"
+    Set-UdfInstallStage -Stage verify -Message "Verifying download checksum"
     $verified = Invoke-UdfTool -NoConnection -ToolArgs @("verify", $part, $Sha256, $Size)
     if ($verified[0] -ne 0) {
         Remove-Item -Force $part -ErrorAction SilentlyContinue
@@ -571,6 +600,7 @@ function Test-UdfDevkitSmokeRust {
     $udfPath = "$($bucket.UdfRoot)/$($script:UdfRustSmokeDir)/$($script:UdfRustSmokeLib)"
     $rustc = "" + $script:UdfContainer.runtime.rustc
     $sdk = (@(Get-UdfContainerPins -Language "rust") | Where-Object { $_ -like "exasol-udf-sdk==*" } | Select-Object -First 1) -replace "^.*==", ""
+    Set-UdfInstallStage -Stage smoke -Message "Checking Rust smoke UDF"
     Info "Running the Rust smoke UDF $($script:UdfRustSmokeSchema).EXAKIT_SMOKE over $udfPath"
     $result = Invoke-UdfTool -ToolArgs @("smoke-rust", $Alias, $script:UdfRustSmokeSchema, $udfPath, $rustc, ("" + $sdk))
     $script:UdfSmokeLines = @($result[1] | Where-Object { $_ })
@@ -620,9 +650,10 @@ function Invoke-UdfWithRestart {
         try { Stop-ExakitService $id | Out-Null; $running += $id } catch { }
     }
     $script:ExakitActiveLabel = $What
+    Set-UdfInstallStage -Stage install -Message $What
     $ok = & $Action
     Info "Waiting for the database to answer after the restart"
-    Set-ExakitAddonActivity -Message "Waiting for database restart"
+    Set-UdfInstallStage -Stage restart -Message "Waiting for database restart"
     Wait-PersonalReady
     foreach ($id in $running) {
         try { Start-ExakitService $id | Out-Null } catch { Warn2 "$id did not start again - start it with: exakit start $id" }
@@ -664,7 +695,7 @@ function Install-UdfDevkitOfficial {
 function Prepare-UdfMlContainer {
     $name = (Split-Path -Leaf $script:UdfContainerFile) -replace '\.tar\.gz$', ''
     $script:UdfContainerInstallFile = Join-Path $script:UdfContainerCache "$name-$($script:UdfDefaultAlias).tar.gz"
-    Set-ExakitAddonActivity -Message "Preparing the Python ML runtime"
+    Set-UdfInstallStage -Stage prepare -Message "Preparing the Python ML runtime"
     $result = Invoke-UdfTool -NoConnection -Script "slc_archive.py" -ToolArgs @($script:UdfContainerFile, $script:UdfContainerInstallFile, $script:UdfDefaultAlias, ("" + $script:UdfContainer.sha256))
     if ($result[0] -ne 0) {
         return (Set-UdfFail -Code 5 -Step "verify" -Remedy "exakit logs" -Message "Could not prepare the isolated ML container: $($result[2])")
@@ -814,16 +845,19 @@ function Install-UdfDevkit {
     }
     $script:UdfYes = $true
     $primaryOk = $true
+    $script:UdfProgressSection = 'primary'
+    $script:UdfProgressLast = 0
     try {
         if ($script:UdfLanguage -eq "rust") {
             if (-not (Install-UdfDevkitRust)) { $primaryOk = $false; Warn2 "Rust UDFs are not proven yet ($($script:UdfFail.Message)) - run: exakit udf-setup --language rust" }
         } elseif (-not (Install-UdfDevkitOfficial)) { $primaryOk = $false; Warn2 "Python UDFs are not set up yet - run: exakit udf-setup" }
+        $script:UdfProgressSection = 'ml'
         if (-not (Assert-UdfDevkitMl)) {
             Set-ExakitManifestValue "components.udf_devkit.validated" $false
             Warn2 "The ML packages are not ready inside the database - retry: exakit udf-use default"
             return $false
         }
-    } finally { $script:UdfYes = $false }
+    } finally { $script:UdfYes = $false; $script:UdfProgressSection = '' }
     if (-not $primaryOk) {
         Set-ExakitManifestValue "components.udf_devkit.validated" $false
         return $false
@@ -872,9 +906,12 @@ function Update-UdfDevkit {
 }
 
 function Get-UdfDevkitSummary {
+    if ((Get-ExakitManifestValue 'components.udf_devkit.validated') -ne $true) {
+        return 'Runtime setup pending: exakit udf-setup'
+    }
     $languages = @(("" + (Get-ExakitManifestValue "components.udf_devkit.languages")) -split ",")
-    if ($languages -contains "rust") { return "Python UDFs: exakit udf-setup; Rust UDFs: alias $($script:UdfRustAlias) (exasol slc list)" }
-    return "Python UDFs: exakit udf-setup"
+    if ($languages -contains "rust") { return "Python/ML ready: $($script:UdfDefaultAlias); Rust UDFs: alias $($script:UdfRustAlias)" }
+    return "Python/ML ready: $($script:UdfDefaultAlias); help: exakit help udf-devkit"
 }
 
 function Uninstall-UdfDevkit {

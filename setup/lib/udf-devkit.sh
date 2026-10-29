@@ -106,6 +106,32 @@ udf_devkit_installed_version() {
     manifest_get components.udf_devkit.version 2>/dev/null
 }
 
+# Add-on progress is stage-based, not bytes downloaded. Keep direct udf-setup
+# calls and the later validation stage out of the marketplace install range.
+_udf_install_stage() {
+    exakit_addon_activity "$2"
+    [ -n "${_UDF_PROGRESS_SECTION:-}" ] || return 0
+    if [ -z "${EXAKIT_ADDON_TABLE_STATE:-}" ] && [ ! -f "${_mi_state:-}" ]; then return 0; fi
+    case "$_UDF_PROGRESS_SECTION:$1" in
+        primary:download) _uip_pct=2; _uip_end=12; _uip_secs=240 ;;
+        primary:verify) _uip_pct=12; _uip_end=14; _uip_secs=10 ;;
+        primary:install) _uip_pct=14; _uip_end=19; _uip_secs=240 ;;
+        primary:restart) _uip_pct=19; _uip_end=20; _uip_secs=30 ;;
+        primary:smoke) _uip_pct=20; _uip_end=23; _uip_secs=10 ;;
+        ml:download) _uip_pct=23; _uip_end=46; _uip_secs=330 ;;
+        ml:verify) _uip_pct=46; _uip_end=50; _uip_secs=10 ;;
+        ml:prepare) _uip_pct=50; _uip_end=54; _uip_secs=30 ;;
+        ml:install) _uip_pct=54; _uip_end=62; _uip_secs=90 ;;
+        ml:restart) _uip_pct=62; _uip_end=63; _uip_secs=30 ;;
+        ml:smoke) _uip_pct=63; _uip_end=65; _uip_secs=10 ;;
+        *) return 0 ;;
+    esac
+    [ "$_uip_pct" -ge "${_UDF_PROGRESS_LAST:-0}" ] || _uip_pct="$_UDF_PROGRESS_LAST"
+    [ "$_uip_end" -gt "$_uip_pct" ] || _uip_end=$(( _uip_pct + 1 ))
+    _UDF_PROGRESS_LAST="$_uip_pct"
+    _exakit_addon_progress "${_mi_state:-}" udf-devkit "$_uip_pct" "$_uip_end" "$_uip_secs" "$2"
+}
+
 # _udf_tool <command> [args] — setup/udf/udf_tool.py with the pyexasol venv's
 # Python (it has pyexasol for the database steps), connected as the kit's admin
 # user; the password is read from its file by the child.
@@ -338,6 +364,7 @@ _udf_fetch_verified() {
     _ufc_mb="$(awk -v b="${_ufc_size:-0}" 'BEGIN { printf "%d MB", b / 1000000 }')"
     _ufc_part="$UDF_FETCHED_FILE.part"
     rm -f "$UDF_FETCHED_FILE"
+    _udf_install_stage download "Fetching $_ufc_lang $_ufc_what ($_ufc_mb)"
     if [ -n "$_ufc_local" ]; then
         info "Copying the $_ufc_lang $_ufc_what ($_ufc_mb) from $_ufc_local"
         cp "$_ufc_local" "$_ufc_part" 2>>"${EXAKIT_LOG_FILE:-/dev/null}" || {
@@ -354,7 +381,7 @@ _udf_fetch_verified() {
             _udf_fail 5 download "$_ufc_remedy" "The $_ufc_what could not be downloaded from $_ufc_src. Retry when online, or set EXAKIT_UDF_CONTAINERS_MIRROR to a folder or URL holding $_ufc_name."; return 1; }
         EXAKIT_ACTIVE_LABEL=""
     fi
-    exakit_addon_activity "Verifying download checksum"
+    _udf_install_stage verify "Verifying download checksum"
     _ufc_err="$EXAKIT_HOME/.udf-verify.err"
     if ! _udf_rules verify "$_ufc_part" "$_ufc_sha" "$_ufc_size" 2>"$_ufc_err"; then
         _ufc_why="$(cat "$_ufc_err" 2>/dev/null)"; rm -f "$_ufc_err" "$_ufc_part"
@@ -454,7 +481,7 @@ _udf_python_alias() {
 # run (UDF_FAIL_* say which).
 udf_devkit_smoke() {
     _us_alias="$1"; shift
-    exakit_addon_activity "Checking packages in $_us_alias"
+    _udf_install_stage smoke "Checking packages in $_us_alias"
     UDF_SMOKE_LINES=""
     _us_out="$(_udf_tool smoke "$_us_alias" "$EXAKIT_UDF_SCHEMA" "$@" 2>"$EXAKIT_HOME/.udf-smoke.err")"
     _us_rc=$?
@@ -497,6 +524,7 @@ udf_devkit_smoke_rust() {
     _usr_path="$UDF_BUCKET_UDF_ROOT/$EXAKIT_UDF_RUST_SMOKE_DIR/$EXAKIT_UDF_RUST_SMOKE_LIB"
     _usr_rustc="$(_udf_row runtime | sed 's/.*"rustc": *"\([^"]*\)".*/\1/')"
     _usr_sdk="$(_udf_rules pins "$UDF_CONTAINER_DOC" rust "$UDF_CONTAINER_ARCH" "$UDF_CONTAINER_DB" 2>/dev/null | awk '$1 == "exasol-udf-sdk" {print $2}')"
+    _udf_install_stage smoke "Checking Rust smoke UDF"
     info "Running the Rust smoke UDF $EXAKIT_UDF_RUST_SMOKE_SCHEMA.EXAKIT_SMOKE over $_usr_path"
     _usr_out="$(_udf_tool smoke-rust "$_usr_alias" "$EXAKIT_UDF_RUST_SMOKE_SCHEMA" "$_usr_path" "$_usr_rustc" "$_usr_sdk" 2>"$EXAKIT_HOME/.udf-smoke.err")"
     _usr_rc=$?
@@ -534,10 +562,11 @@ _udf_with_restart() {
         exakit_service_stop "$_uwr_id" >/dev/null 2>&1 && _uwr_running="$_uwr_running $_uwr_id"
     done
     EXAKIT_ACTIVE_LABEL="$_uwr_what"
+    _udf_install_stage install "$_uwr_what"
     run_logged "$@"
     _uwr_rc=$?
     info "Waiting for the database to answer after the restart"
-    exakit_addon_activity "Waiting for database restart"
+    _udf_install_stage restart "Waiting for database restart"
     personal_wait_ready
     for _uwr_id in $_uwr_running; do
         exakit_service_start "$_uwr_id" >/dev/null 2>&1 || warn "$_uwr_id did not start again - start it with: exakit start $_uwr_id"
@@ -572,7 +601,7 @@ udf_devkit_setup_container() {
 # original; the shared helper records both digests beside its cached derivative.
 _udf_prepare_ml_container() {
     UDF_CONTAINER_INSTALL_FILE="$EXAKIT_UDF_CONTAINER_CACHE/$(basename "$UDF_CONTAINER_FILE" .tar.gz)-$EXAKIT_UDF_DEFAULT_ALIAS.tar.gz"
-    exakit_addon_activity "Preparing the Python ML runtime"
+    _udf_install_stage prepare "Preparing the Python ML runtime"
     EXAKIT_ACTIVE_LABEL="Preparing the Python ML runtime"
     run_logged run_python_any "$(exakit_repo_root)/setup/udf/slc_archive.py" \
         "$UDF_CONTAINER_FILE" "$UDF_CONTAINER_INSTALL_FILE" "$EXAKIT_UDF_DEFAULT_ALIAS" "$UDF_CONTAINER_SHA256" || {
@@ -733,6 +762,8 @@ udf_devkit_install() {
     }
     manifest_set components.udf_devkit.version "$EXAKIT_UDF_DEVKIT_VERSION"
     manifest_set components.udf_devkit.schema "$EXAKIT_UDF_SCHEMA"
+    _UDF_PROGRESS_SECTION=primary
+    _UDF_PROGRESS_LAST=0
     # The container is part of the install; with no database up, it is the
     # first thing `exakit udf-setup` does.
     _udi_primary_ok=1
@@ -745,12 +776,15 @@ udf_devkit_install() {
         _UDF_YES=1 udf_devkit_setup_container 0 || { _udi_primary_ok=0; warn "Python UDFs are not set up yet - run: exakit udf-setup"; }
     fi
     if exakit_db_reachable; then
+        _UDF_PROGRESS_SECTION=ml
         _UDF_YES=1 udf_devkit_ensure_ml || {
+            _UDF_PROGRESS_SECTION=""
             manifest_set components.udf_devkit.validated false
             warn "The ML packages are not ready inside the database - retry: exakit udf-use default"
             return 1
         }
     fi
+    _UDF_PROGRESS_SECTION=""
     [ "$_udi_primary_ok" = 1 ] || { manifest_set components.udf_devkit.validated false; return 1; }
     return 0
 }
@@ -797,9 +831,13 @@ udf_devkit_update() {
 }
 
 udf_devkit_summary() {
+    if [ "$(manifest_get components.udf_devkit.validated 2>/dev/null || true)" != true ]; then
+        printf 'Runtime setup pending: exakit udf-setup\n'
+        return 0
+    fi
     case ",$(manifest_get components.udf_devkit.languages 2>/dev/null || true)," in
-        *,rust,*) printf 'Python UDFs: exakit udf-setup; Rust UDFs: alias %s (exasol slc list)\n' "$EXAKIT_UDF_RUST_ALIAS" ;;
-        *) printf 'Python UDFs: exakit udf-setup\n' ;;
+        *,rust,*) printf 'Python/ML ready: %s; Rust UDFs: alias %s\n' "$EXAKIT_UDF_DEFAULT_ALIAS" "$EXAKIT_UDF_RUST_ALIAS" ;;
+        *) printf 'Python/ML ready: %s; help: exakit help udf-devkit\n' "$EXAKIT_UDF_DEFAULT_ALIAS" ;;
     esac
 }
 

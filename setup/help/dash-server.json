@@ -11,7 +11,7 @@
   "binary": "~/.local/bin/dash-server",
   "url": "http://127.0.0.1:5100 by default. If something else already holds that port the install moves to the next free one and records it - so to see where yours is actually serving, run dash-server: it prints the address, and if a copy is already up it says so and prints that one's address rather than starting a second.",
   "control_plane": "The same address with /mcp on the end. exakit mcp-setup registers it as an MCP server named dash-server, so its tools sit beside the exasol ones once the client restarts - Cursor, Claude Code, Codex, GitHub Copilot, Gemini CLI, OpenCode and Continue. Claude Desktop is the one left out: its config file has no shape for a remote MCP server (the app takes those through its own Connectors settings), so setup prints one note naming the URL and the run is not affected.",
-  "installed_by": "Never by the installer. Only through exakit marketplace.",
+  "installed_by": "exakit marketplace dash-server, or the Data Scientist persona.",
   "warning": "The control plane at /mcp is unauthenticated and bound to 127.0.0.1. Anything that can reach loopback on this machine - any other session on a shared box, any script, any browser page - can build, deploy and pip-install dependencies for Dash apps as you. That is fine on a personal laptop; on a shared or multi-user machine, stop dash-server when you are not using it (exakit stop). Never put this port on a LAN or behind a public tunnel.",
   "db_user": "Reuses the kit's read-only mcp_readonly user - dashboards read, they do not write.",
   "quickstart": [
@@ -38,46 +38,220 @@
       "summary": "Start the server.",
       "description": "A second copy will not bind: the first one (often started at login) is already serving.",
       "examples": [
-        "dash-server"
-      ]
+        "dash-server",
+        "exakit status --json"
+      ],
+      "parameters": [],
+      "parameter_note": "The kit launcher starts the managed Dash service and prints its recorded address. It has no kit-specific flags. Set the port through the environment below; use exakit start/stop/status for lifecycle."
     },
     {
       "command": "exakit start",
-      "options": "",
+      "options": "[<service>]",
       "summary": "Starts the database and every service, including this one.",
       "examples": [
-        "exakit start"
+        "exakit start dash-server"
+      ],
+      "parameters": [
+        {
+          "name": "<service>",
+          "description": "Start only this service. Omit it to start the database and enabled add-on services.",
+          "default": "all",
+          "required": false,
+          "choices": [
+            "database",
+            "dash-server",
+            "exasol-scheduler",
+            "udf-devkit"
+          ]
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything.",
+          "default": "off",
+          "required": false
+        }
       ]
     },
     {
       "command": "exakit status",
-      "options": "",
+      "options": "[--json]",
       "summary": "Shows running, stopped, or the port held by someone else.",
       "examples": [
-        "exakit status"
+        "exakit status --json"
+      ],
+      "parameters": [
+        {
+          "name": "--json, -j",
+          "description": "Print machine-readable output rather than decorated text.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything.",
+          "default": "off",
+          "required": false
+        }
       ]
     },
     {
       "command": "exakit logs",
-      "options": "dash-server [-f]",
+      "options": "[<target>] [-f] [--lines N] [--path] [--json]",
       "summary": "What the service wrote.",
       "examples": [
-        "exakit logs dash-server -f"
+        "exakit logs dash-server --lines 100 -f"
+      ],
+      "parameters": [
+        {
+          "name": "<target>",
+          "description": "A log ID, for example setup, notebook, notebook-marimo, dash-server, json-tables or udf-devkit-mlflow. UDF container operations are in setup.",
+          "default": "list available log targets",
+          "required": false
+        },
+        {
+          "name": "-f, --follow",
+          "description": "Continue showing new lines until Ctrl+C.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--lines N, -n N",
+          "description": "Number of existing lines shown before following or returning.",
+          "default": "200",
+          "required": false
+        },
+        {
+          "name": "--path",
+          "description": "Print the selected log filename without its contents.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--json, -j",
+          "description": "List available log targets as JSON. Cannot be combined with a target.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything.",
+          "default": "off",
+          "required": false
+        }
       ]
     },
     {
       "command": "exakit update",
-      "options": "",
+      "options": "[<component>] [--yes] [--json]",
       "summary": "Update it, and regenerate its launcher.",
       "examples": [
-        "exakit update"
+        "exakit update dash-server"
+      ],
+      "parameters": [
+        {
+          "name": "<component>",
+          "description": "Update a kit-owned component or add-on; user-owned components are preserved.",
+          "default": "all",
+          "required": false
+        },
+        {
+          "name": "--yes, -y",
+          "description": "Allow a pending runtime update that stops and restarts the database; not permission to remove user-owned resources.",
+          "default": "ask on a terminal; defer runtime changes without a terminal",
+          "required": false
+        },
+        {
+          "name": "--json, -j",
+          "description": "Print machine-readable output rather than decorated text.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything.",
+          "default": "off",
+          "required": false
+        }
+      ]
+    },
+    {
+      "command": "exakit marketplace",
+      "options": "[<addon-id>...] | --list [--json]",
+      "summary": "Install this add-on by ID.",
+      "parameters": [
+        {
+          "name": "<addon-id>...",
+          "description": "Install only these registered add-ons. Without IDs, open the chooser on a terminal; install nothing without a terminal.",
+          "default": "interactive chooser",
+          "required": false
+        },
+        {
+          "name": "--list",
+          "description": "List add-ons and ownership without installing. Cannot be combined with install IDs.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--json",
+          "description": "List add-ons as JSON; read-only and cannot be combined with install IDs.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything.",
+          "default": "off",
+          "required": false
+        }
+      ],
+      "examples": [
+        "exakit marketplace dash-server"
+      ]
+    },
+    {
+      "command": "exakit uninstall",
+      "options": "[<addon-id>] [--dry-run] [--yes]",
+      "summary": "Preview or remove this kit-owned add-on; preserve user-owned copies.",
+      "parameters": [
+        {
+          "name": "<addon-id>",
+          "description": "Remove one kit-owned add-on. Without an ID, choose components interactively; --yes without an ID selects the whole kit. User-owned resources are preserved.",
+          "default": "interactive chooser",
+          "required": false
+        },
+        {
+          "name": "--dry-run",
+          "description": "Preview removal without deleting anything.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--yes, -y",
+          "description": "Confirm removal. With no addon ID, remove the full kit and kit-owned database data.",
+          "default": "ask for confirmation",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything.",
+          "default": "off",
+          "required": false
+        }
+      ],
+      "examples": [
+        "exakit uninstall dash-server --dry-run",
+        "exakit uninstall dash-server"
       ]
     }
   ],
   "environment": [
     {
       "name": "EXAKIT_DASH_SERVER_PORT",
-      "effect": "Serve on a different port: EXAKIT_DASH_SERVER_PORT=5200 exakit update."
+      "effect": "Requested loopback port when writing the kit launcher. Default 5100; a free fallback is recorded when needed. Example: EXAKIT_DASH_SERVER_PORT=5200 exakit update dash-server."
+    },
+    {
+      "name": "EXAKIT_DASH_SERVER_VERSION",
+      "effect": "Override the advertised package version for install/update. Existing user-owned copies stay unmanaged."
     }
   ],
   "notes": [

@@ -193,7 +193,7 @@ def with_hidden_marked(doc):
 # Every binary the kit documents. A command whose first word is one of these is
 # already spelled out ("exakit start" on the runtime page); anything else is a
 # bare subcommand and gets its document's prefix put in front.
-KNOWN_TOOLS = ("exakit", "exapump", "exasol", "dash-server",
+KNOWN_TOOLS = ("exakit", "exapump", "exasol", "dash-server", "dbt-exasol",
                "exasol-json-tables", "exasol-mcp-server", "exasol-mcp-server-http")
 
 def invocation(doc_id, entry):
@@ -223,6 +223,20 @@ def find_command(doc, name):
             prefix.append(entry)
     return exact or prefix
 
+def render_parameters(entry, indent="    "):
+    for parameter in entry.get("parameters", []):
+        out(indent + parameter["name"])
+        detail = parameter.get("description", "")
+        if parameter.get("required"):
+            detail += " Required."
+        if parameter.get("choices"):
+            detail += " Values: " + ", ".join(parameter["choices"]) + "."
+        if parameter.get("default") is not None:
+            detail += " Default: " + str(parameter["default"]) + "."
+        para(detail, indent=indent + "  ")
+    if not entry.get("parameters") and entry.get("parameter_note"):
+        para(entry["parameter_note"], indent=indent)
+
 def render_command_detail(doc, entry, prefix=""):
     label = ("%s %s" % (prefix, entry.get("command", ""))).strip()
     opts = entry.get("options", "")
@@ -230,6 +244,10 @@ def render_command_detail(doc, entry, prefix=""):
     out("  %s%s%s%s" % (B, label, (" " + opts) if opts else "", R))
     out()
     para(entry.get("description") or entry.get("summary", ""), indent="    ")
+    if "parameters" in entry:
+        out()
+        out("    %sParameters and options%s" % (DIM, R))
+        render_parameters(entry, indent="      ")
     if entry.get("warning"):
         out()
         para(entry["warning"], indent="    ", first="    %s!%s " % (YL, R) + "")
@@ -411,6 +429,17 @@ def render_component(key):
         for entry in commands_of(doc):
             cmd_line("", invocation_with_options(key, entry), "",
                      entry.get("summary") or entry.get("description", ""), pad=34)
+
+    reference = [entry for entry in commands_of(doc) if "parameters" in entry]
+    if reference:
+        section("Parameters and options")
+        for entry in reference:
+            out("    %s%s%s" % (B, invocation_with_options(key, entry), R))
+            render_parameters(entry, indent="      ")
+            for example in entry.get("examples", []):
+                out("      %sExample: %s%s" % (CY, example, R))
+            out()
+        para("Flags apply only to the command that lists them. For full behavior and exit codes: exakit help <command>. Help never installs or restarts anything.", indent="    ")
 
     if doc.get("snippets"):
         # Blank line BETWEEN blocks, not after the last one: several examples

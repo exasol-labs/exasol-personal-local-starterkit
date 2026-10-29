@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+### Add-on command reference and UDF installation stages
+
+- Every add-on help page now includes argument/option descriptions, defaults, valid values, examples and environment settings, shared by shell, PowerShell and JSON help. Correct the dbt command prefix and document previously omitted `model inspect`, `model put --yes`, `udf-build --yes`, MLflow replay options and Rust arguments.
+- Split the UDF add-on's generic installing progress into container download, checksum, ML archive preparation, install/restart and smoke-check milestones. The completion message names the ready ML runtime. Document the observed 842 MB download and two installs behind the eleven-minute Mac run; percentages are estimates rather than download measurements.
+- Add parser-to-help coverage and shell/PowerShell progress tests, including Windows PowerShell 5.1 CI entries. The update changes help and progress only; it does not reinstall live containers or change virtual-schema/external-source integrations.
+
 ### Follow-up to persona PR #1 (2026-10-29)
 
 The full grouped changelog and all implementation commits since the previous PR are in [CHANGELOG-SINCE-PR1.md](CHANGELOG-SINCE-PR1.md).

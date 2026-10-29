@@ -820,6 +820,8 @@ jobs:
       - run: python3 tests/test_notebook_bundle.py
       - run: python3 tests/test_example_library.py
         if: matrix.shard == 4
+      - run: python3 tests/test_addon_help.py
+        if: matrix.shard == 4
       - run: python3 tests/test_exasol_mlflow.py
         if: matrix.shard == 4
       # exasol-mlflow at both ends of the MLflow 3.x range it pins (mlflow-skinny
@@ -866,6 +868,8 @@ jobs:
       # follow the restart, BucketFS never written outside the bucket; the
       # shared rules (pins, bucket paths, aliases, the smoke UDF).
       - run: bash tests/addon-activity.sh
+      - run: bash tests/udf-install-progress.sh
+        if: matrix.shard == 4
       - run: bash tests/udf-devkit-addon.sh
         if: matrix.shard == 4
       # exakit mlflow: start/stop/disable against a stub server, server.json,
@@ -980,6 +984,8 @@ jobs:
             pwsh -NoProfile -File tests/describe-command-ps.ps1
             pwsh -NoProfile -File tests/notebook-launcher-ps.ps1
             pwsh -NoProfile -File tests/addon-activity-ps.ps1
+            pwsh -NoProfile -File tests/addon-help-ps.ps1
+            pwsh -NoProfile -File tests/udf-install-progress-ps.ps1
             pwsh -NoProfile -File tests/udf-devkit-addon-ps.ps1
             pwsh -NoProfile -File tests/mlflow-command-ps.ps1
             pwsh -NoProfile -File tests/personas-ps.ps1

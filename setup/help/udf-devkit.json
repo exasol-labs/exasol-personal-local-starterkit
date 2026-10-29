@@ -8,7 +8,7 @@
   "repo": "exasol/script-languages-release",
   "docs": "https://github.com/exasol/exasol-personal#readme",
   "installed_by": "exakit marketplace udf-devkit, or the ml-engineer persona. Installing it prepares the official Python container and the pinned PYTHON3_ML container with scikit-learn, pandas, NumPy and SciPy. EXAKIT_UDF_LANGUAGE=rust also prepares RUST and proves it with its smoke UDF. Each container installation can restart the database; existing ML packages are checked without reinstalling. Missing packages fail the add-on and name the retry.",
-  "platforms": "macOS on Apple silicon, Linux (x86_64 and Arm, including WSL) and Windows x86_64. Needs the Exasol launcher 2.3.0 or later; exakit update personal brings it. Building your own container (exakit udf-build) also needs a running Docker or Podman engine (the Podman the launcher installs counts) and the notebook add-on.",
+  "platforms": "macOS on Apple silicon, Linux (x86_64 and Arm, including WSL) and Windows x86_64. Needs the Exasol launcher 2.3.0 or later; update a kit-owned launcher with exakit update personal; update a user-owned launcher with its original installer. Building your own container (exakit udf-build) also needs a running Docker or Podman engine (the Podman the launcher installs counts) and the notebook add-on.",
   "quickstart": [
     {
       "step": "Make Python UDFs work",
@@ -50,11 +50,47 @@
         "exakit udf-setup",
         "exakit udf-setup --language rust --yes --json",
         "exakit udf-setup --language rust --force --yes"
+      ],
+      "parameters": [
+        {
+          "name": "--language <language>",
+          "description": "Choose the script language.",
+          "default": "EXAKIT_UDF_LANGUAGE, otherwise python",
+          "required": false,
+          "choices": [
+            "python",
+            "rust"
+          ]
+        },
+        {
+          "name": "--force",
+          "description": "Reinstall even when the official container is already present; causes a database restart.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--yes, -y",
+          "description": "Confirm the database restart for container installation.",
+          "default": "ask on a terminal; unattended container installs proceed",
+          "required": false
+        },
+        {
+          "name": "--json, -j",
+          "description": "Print machine-readable output rather than decorated text.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
       ]
     },
     {
       "command": "exakit udf-use",
-      "options": "default [--language python|rust] | <container.tar.gz> [--alias <NAME>] [--language python|rust] | --list; [--yes] [--json]",
+      "options": "default [--language python|rust] [--yes] [--json] | <container.tar.gz> [--alias NAME] [--language python|rust] [--yes] [--json] | --list",
       "summary": "Install the prebuilt container for this database, or your own, or list them.",
       "description": "default: the matrix row (versions.json, components.udf-devkit.containers) for the language, your DATABASE's architecture (an Apple-silicon Mac runs an aarch64 database, Windows an x86_64 one) and its version; downloaded once into $EXAKIT_HOME/cache/containers (EXAKIT_UDF_CONTAINERS_MIRROR, a folder or base URL, instead of the release), verified against its pinned sha256 and size before the launcher sees it, installed as PYTHON3_ML (python) or RUST (rust; an installed RUST is updated); the Python smoke UDF compares every package's version with the pin, the Rust one (see udf-setup) the container's rustc and exasol-udf-sdk. A Rust tarball of your own is installed, not proven: the Rust smoke library is built for the kit's pinned container only. A tarball of yours is installed under --alias (PYTHON3_CUSTOM unless named) and proven the same way. --list shows the launcher's containers and which are installed. --json: the same objects and exit codes as udf-setup.",
       "exit_codes": {
@@ -67,18 +103,91 @@
         "7": "the smoke UDF did not run, or reported a version other than the pinned one (Rust: see udf-setup)"
       },
       "examples": [
-        "exakit udf-use default",
-        "exakit udf-use default --language rust --yes",
-        "exakit udf-use default --json",
-        "exakit udf-use --list"
+        "exakit udf-use --list",
+        "exakit udf-use default --yes --json",
+        "exakit udf-use ./custom.tar.gz --alias PYTHON3_CUSTOM --language python --yes"
+      ],
+      "parameters": [
+        {
+          "name": "<default|container.tar.gz>",
+          "description": "Required for installation: choose the pinned default (PYTHON3_ML or RUST) or a local .tar.gz/.tgz archive. Omit this positional argument when using --list.",
+          "default": null,
+          "required": false
+        },
+        {
+          "name": "--language <language>",
+          "description": "Choose the script language.",
+          "default": "EXAKIT_UDF_LANGUAGE, otherwise python",
+          "required": false,
+          "choices": [
+            "python",
+            "rust"
+          ]
+        },
+        {
+          "name": "--alias <NAME>",
+          "description": "SQL language alias for a custom tarball or custom build; ignored for the pinned default container. Use an Exasol identifier.",
+          "default": "PYTHON3_CUSTOM",
+          "required": false
+        },
+        {
+          "name": "--list",
+          "description": "List launcher containers. This returns human launcher output; --json is not a JSON-list mode. Do not combine it with install arguments.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--yes, -y",
+          "description": "Confirm the database restart for container installation.",
+          "default": "ask on a terminal; unattended container installs proceed",
+          "required": false
+        },
+        {
+          "name": "--json, -j",
+          "description": "Print machine-readable output rather than decorated text.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
       ]
     },
     {
       "command": "exakit udf-build",
-      "options": "<requirements.txt> [--alias <NAME>]",
+      "options": "<requirements.txt> [--alias <NAME>] [--yes]",
       "summary": "Build a container with your pinned packages and install it.",
       "examples": [
-        "exakit udf-build requirements.txt"
+        "exakit udf-build ./requirements.txt --alias PYTHON3_CUSTOM --yes"
+      ],
+      "parameters": [
+        {
+          "name": "<requirements.txt>",
+          "description": "Every package must be pinned as name==version. The build needs Notebook, Docker or Podman and about 25 GB free disk.",
+          "default": null,
+          "required": true
+        },
+        {
+          "name": "--alias <NAME>",
+          "description": "SQL language alias for a custom tarball or custom build; ignored for the pinned default container. Use an Exasol identifier.",
+          "default": "PYTHON3_CUSTOM",
+          "required": false
+        },
+        {
+          "name": "--yes, -y",
+          "description": "Confirm the database restart for container installation.",
+          "default": "ask on a terminal; unattended container installs proceed",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
       ]
     },
     {
@@ -86,25 +195,106 @@
       "options": "<file> [<path in the bucket>]",
       "summary": "Copy a file into BucketFS and print the UDF path.",
       "examples": [
-        "exakit udf-file lookup.csv"
+        "exakit udf-file ./lookup.csv lookup/lookup.csv"
+      ],
+      "parameters": [
+        {
+          "name": "<file>",
+          "description": "Existing local file to copy into the deployment file bucket.",
+          "default": null,
+          "required": true
+        },
+        {
+          "name": "<path-in-bucket>",
+          "description": "Relative destination path, for example models/churn.pkl. Absolute paths and .. are refused.",
+          "default": "source filename",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
       ]
     },
     {
       "command": "exakit model put",
-      "options": "<file> [--replace] [--json]",
+      "options": "<file> [--replace] [--yes] [--json]",
       "summary": "Bring a model file into the bucket directory and print the /buckets path a UDF reads.",
-      "description": "Copies at most 500 MB to models/<its name> with a unique temporary file, fsync and atomic rename. Records sha256, size, time and a matching .provenance.json sidecar in the kit's manifest. A file of the same name with a different digest requires --replace. A pickle or joblib file without matching provenance gets a trust warning. --json includes name, path, sha256, size, replaced, trusted_origin and warning. No credential is read or stored.",
+      "description": "Inspect a local model without executing it, enforce the 500 MB limit, ask before trusting an unproven pickle/joblib file, copy atomically into models/, and record its digest and provenance. --replace permits a same-name replacement; --yes independently confirms trust. A matching existing file is reused.",
       "exit_codes": {
         "0": "copied, replaced, or already there with the same digest",
         "2": "bad input: no file, not a file, a name the bucket cannot hold, an unknown option",
         "3": "no deployment to put the file into (exakit status)",
         "4": "the UDF dev kit is not installed (exakit marketplace udf-devkit)",
         "5": "a different file of that name is there and --replace was not given; nothing was copied",
-        "6": "the file exceeds 500 MB; nothing was copied"
+        "6": "untrusted model was not confirmed without a terminal, or the file exceeds 500 MB; nothing copied"
       },
       "examples": [
-        "exakit model put churn.pkl",
-        "exakit model put churn.pkl --replace --json"
+        "exakit model inspect ./churn.pkl --json",
+        "exakit model put ./churn.pkl --yes --json",
+        "exakit model put ./churn.pkl --replace --yes"
+      ],
+      "parameters": [
+        {
+          "name": "<file>",
+          "description": "Existing local model file; inspect provenance before trusting a pickle/joblib file.",
+          "default": null,
+          "required": true
+        },
+        {
+          "name": "--replace",
+          "description": "Replace a different file with the same name.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--yes, -y",
+          "description": "Confirm trust in a pickle/joblib file without trusted kit provenance. This is separate from --replace.",
+          "default": "prompt on a terminal; refuse an untrusted model unattended",
+          "required": false
+        },
+        {
+          "name": "--json, -j",
+          "description": "Print machine-readable output rather than decorated text.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ]
+    },
+    {
+      "command": "exakit model inspect",
+      "options": "<file> [--json]",
+      "summary": "Inspect a local model and its trust/provenance without copying or loading it.",
+      "parameters": [
+        {
+          "name": "<file>",
+          "description": "Existing local model file. Inspection does not unpickle or execute it.",
+          "default": null,
+          "required": true
+        },
+        {
+          "name": "--json, -j",
+          "description": "Print machine-readable output rather than decorated text.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ],
+      "examples": [
+        "exakit model inspect ./churn.pkl --json"
       ]
     },
     {
@@ -121,6 +311,20 @@
       "examples": [
         "exakit model list",
         "exakit model list --json"
+      ],
+      "parameters": [
+        {
+          "name": "--json, -j",
+          "description": "Print machine-readable output rather than decorated text.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
       ]
     },
     {
@@ -131,6 +335,26 @@
       "examples": [
         "exakit model rm churn.pkl",
         "exakit model rm churn.pkl --json"
+      ],
+      "parameters": [
+        {
+          "name": "<name>",
+          "description": "Recorded model filename only, for example churn.pkl. Changed files and symlinks are refused.",
+          "default": null,
+          "required": true
+        },
+        {
+          "name": "--json, -j",
+          "description": "Print machine-readable output rather than decorated text.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
       ]
     },
     {
@@ -141,6 +365,32 @@
       "examples": [
         "exakit model prune --json",
         "exakit model prune --older-than 90 --yes"
+      ],
+      "parameters": [
+        {
+          "name": "--older-than DAYS",
+          "description": "Minimum age for a removal candidate. Recent, changed, symlinked or referenced files stay.",
+          "default": "30",
+          "required": false
+        },
+        {
+          "name": "--yes",
+          "description": "Remove the candidates; without this flag, only preview.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--json, -j",
+          "description": "Print machine-readable output rather than decorated text.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
       ]
     },
     {
@@ -151,13 +401,255 @@
       "examples": [
         "exakit model template",
         "exakit model template --json"
+      ],
+      "parameters": [
+        {
+          "name": "--json, -j",
+          "description": "Print machine-readable output rather than decorated text.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ]
+    },
+    {
+      "command": "exakit marketplace",
+      "options": "[<addon-id>...] | --list [--json]",
+      "summary": "Install this add-on by ID.",
+      "parameters": [
+        {
+          "name": "<addon-id>...",
+          "description": "Install only these registered add-ons. Without IDs, open the chooser on a terminal; install nothing without a terminal.",
+          "default": "interactive chooser",
+          "required": false
+        },
+        {
+          "name": "--list",
+          "description": "List add-ons and ownership without installing. Cannot be combined with install IDs.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--json",
+          "description": "List add-ons as JSON; read-only and cannot be combined with install IDs.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything.",
+          "default": "off",
+          "required": false
+        }
+      ],
+      "examples": [
+        "exakit marketplace udf-devkit"
+      ]
+    },
+    {
+      "command": "exakit update",
+      "options": "[<component>] [--yes] [--json]",
+      "summary": "Update or repair this kit-owned add-on.",
+      "parameters": [
+        {
+          "name": "<component>",
+          "description": "Update a kit-owned component or add-on; user-owned components are preserved.",
+          "default": "all",
+          "required": false
+        },
+        {
+          "name": "--yes, -y",
+          "description": "Allow a pending runtime update that stops and restarts the database; not permission to remove user-owned resources.",
+          "default": "ask on a terminal; defer runtime changes without a terminal",
+          "required": false
+        },
+        {
+          "name": "--json, -j",
+          "description": "Print machine-readable output rather than decorated text.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything.",
+          "default": "off",
+          "required": false
+        }
+      ],
+      "examples": [
+        "exakit update udf-devkit"
+      ]
+    },
+    {
+      "command": "exakit uninstall",
+      "options": "[<addon-id>] [--dry-run] [--yes]",
+      "summary": "Preview or remove this kit-owned add-on; preserve user-owned copies.",
+      "parameters": [
+        {
+          "name": "<addon-id>",
+          "description": "Remove one kit-owned add-on. Without an ID, choose components interactively; --yes without an ID selects the whole kit. User-owned resources are preserved.",
+          "default": "interactive chooser",
+          "required": false
+        },
+        {
+          "name": "--dry-run",
+          "description": "Preview removal without deleting anything.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--yes, -y",
+          "description": "Confirm removal. With no addon ID, remove the full kit and kit-owned database data.",
+          "default": "ask for confirmation",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything.",
+          "default": "off",
+          "required": false
+        }
+      ],
+      "examples": [
+        "exakit uninstall udf-devkit --dry-run",
+        "exakit uninstall udf-devkit"
+      ]
+    },
+    {
+      "command": "exakit mlflow",
+      "options": "start|stop|disable|status|url|replay [action options]",
+      "summary": "Start or stop the local MLflow server, show its address, or replay pending runs.",
+      "description": "The server listens on 127.0.0.1, starting at port 5000. Its SQLite store, artifacts, log and pending run spool live under ~/.exasol-starter-kit/mlflow. The notebook add-on supplies the client and the UDF dev kit enables the service. Starting installs the full MLflow server package into the notebook environment if needed. Starting it records that you want it: exakit start brings it back after that, and never starts it for a udf-devkit user who has not asked for it. A plain stop is for the session; exakit mlflow disable (or stop --disable) stops it and keeps it off until the next exakit mlflow start. exakit stop stops the server; exakit logs mlflow shows its log. Replay sends spooled runs to MLFLOW_TRACKING_URI, the kit server, or the local store, and removes only records logged successfully.",
+      "examples": [
+        "exakit mlflow start --port 5000 --json",
+        "exakit mlflow status --json",
+        "exakit mlflow stop --disable",
+        "exakit mlflow replay --timeout 5 --json"
+      ],
+      "parameters": [
+        {
+          "name": "<action>",
+          "description": "Choose the server operation, or replay pending MLflow run records.",
+          "default": null,
+          "required": true,
+          "choices": [
+            "start",
+            "stop",
+            "disable",
+            "status",
+            "url",
+            "replay"
+          ]
+        },
+        {
+          "name": "--port N",
+          "description": "start only: loopback port for a new MLflow server. An already-running server keeps its current port.",
+          "default": "EXAKIT_MLFLOW_PORT, otherwise 5000",
+          "required": false
+        },
+        {
+          "name": "--disable",
+          "description": "stop only: also prevent automatic restart with exakit start. The disable action has the same effect.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--json",
+          "description": "Print the action result as JSON.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--tracking-uri URI",
+          "description": "replay only: send pending records to this MLflow server.",
+          "default": "MLFLOW_TRACKING_URI or the kit server",
+          "required": false
+        },
+        {
+          "name": "--tracking-dir PATH",
+          "description": "replay only: log to a local MLflow store in this folder.",
+          "default": "not set",
+          "required": false
+        },
+        {
+          "name": "--timeout SECONDS",
+          "description": "replay only: server health-check timeout.",
+          "default": "3",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ]
+    },
+    {
+      "command": "exakit rust-udf",
+      "options": "new <name> [--coefficients <file>] | build <name> | deploy <name> [--schema <SCHEMA>] [--json]",
+      "summary": "Create, build and deploy a Rust scoring UDF from exported coefficients.",
+      "description": "The new step creates a pinned exasol-udf-sdk 0.33.0 project under the kit home; --coefficients reads the 01_train coefficients.json. Build uses Rust 1.98.1 in a Linux Docker or Podman container matching the database architecture on macOS and Windows, then validates the .so. Deploy verifies its digest, copies it into the deployment's bucket directory and registers a RUST scalar script. A database restart is not attempted automatically.",
+      "examples": [
+        "exakit rust-udf new score_model --coefficients coefficients.json",
+        "exakit rust-udf build score_model --json",
+        "exakit rust-udf deploy score_model --schema EXAKIT_SCORING"
+      ],
+      "parameters": [
+        {
+          "name": "<action>",
+          "description": "Create a project, build its Linux shared library, or deploy it to the local bucket and database.",
+          "default": null,
+          "required": true,
+          "choices": [
+            "new",
+            "build",
+            "deploy"
+          ]
+        },
+        {
+          "name": "<name>",
+          "description": "Project and UDF name; use a valid identifier.",
+          "default": null,
+          "required": true
+        },
+        {
+          "name": "--coefficients FILE",
+          "description": "new only: initialise the scoring project from the exported training coefficients.",
+          "default": "not set",
+          "required": false
+        },
+        {
+          "name": "--schema SCHEMA",
+          "description": "deploy only: database schema for the scoring UDF.",
+          "default": "EXAKIT_SCORING",
+          "required": false
+        },
+        {
+          "name": "--json",
+          "description": "Print the operation result as JSON.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
       ]
     }
   ],
   "notes": [
+    "First-time setup installs two large containers with database restarts. The ML archive alone is about 842 MB on Arm. The progress percentage is an estimate between setup milestones, not a measured download percentage. Keep the verified cache and installed aliases for subsequent runs; follow the install log with exakit logs setup -f.",
     "Every container install restarts the database. You are asked first; --yes answers, and so does a run with no terminal. Running add-on services (dash-server, the scheduler) are stopped before and started again after.",
     "The Python smoke UDF lives in the EXAKIT_UDF schema and is replaced on every install; the Rust one is STARTER_KIT.EXAKIT_SMOKE over udf/libexakit_smoke.so in the bucket directory, the same folder a Rust UDF of yours goes to (exakit rust-udf, the next kit step). Drop a schema if you want its smoke UDF gone; the next install creates it again.",
-    "The Rust smoke library is built only by CI (.github/workflows/rust-smoke.yml, from udf/rust-smoke, inside docker.io/library/rust:1.98.1-trixie with cargo-exasol-udf 0.33.0, for x86_64 and aarch64), because the database checks a library's ABI fingerprint (SDK_VERSION:RUSTC_VERSION) when it loads it and refuses any other build (F-UDF-CL-RUST-9001). Its url, sha256 and size are the Rust rows' smoke_asset in versions.json, taken from the rust-smoke-v* release; the kit downloads it like a container (cache, EXAKIT_UDF_CONTAINERS_MIRROR by file name, digest verified first). On success the manifest records components.udf_devkit.rust (validated, rustc, sdk).",
+    "The kit ships architecture-specific Rust smoke libraries with SHA-256 and size pins in versions.json. A matching bundled library is verified before use; a configured release or mirror asset is a verified fallback. Builds must use the pinned Linux image, rustc and Exasol SDK; a host macOS build is not a Linux UDF library.",
     "Write a UDF for a container with its alias: CREATE OR REPLACE PYTHON3_ML SCALAR SCRIPT ... The official container answers to PYTHON3, the Rust one to RUST.",
     "Containers: the prebuilt ones are a matrix in versions.json (components.udf-devkit.containers), one row per language and architecture with the database versions it runs on, its runtime (Python 3.12, rustc 1.98.1), the pinned packages or crates, url, sha256 and size. The row is chosen by the DATABASE's architecture (aarch64 on an Apple-silicon Mac, x86_64 on Windows and most Linux; EXAKIT_UDF_ARCH=x86_64|aarch64 overrides) and its version; a mismatch is refused (exit 4) rather than guessed. The digest is verified before any install; the file stays in $EXAKIT_HOME/cache/containers and is reused once verified. EXAKIT_UDF_CONTAINERS_MIRROR (a folder, a file:// or https:// base URL holding the file by name) serves it offline. EXAKIT_UDF_LANGUAGE=python|rust is the default language for the commands and the persona install.",
     "Uninstalling the add-on leaves the containers in the database, because your UDFs may use them; exasol slc remove <alias> removes one.",
@@ -167,7 +659,7 @@
   "troubleshooting": [
     {
       "symptom": "The UDF dev kit needs Exasol launcher 2.3.0 or later",
-      "remedy": "exakit update personal"
+      "remedy": "Check Owner in exakit version. Update a kit-owned launcher with exakit update personal; update a user-owned launcher with its original installer."
     },
     {
       "symptom": "The container does not match its pinned digest (exit 4, step verify)",
@@ -214,5 +706,39 @@
     "exakit marketplace",
     "notebook",
     "exasol-runtime"
+  ],
+  "environment": [
+    {
+      "name": "EXAKIT_UDF_LANGUAGE",
+      "effect": "Default python or rust; --language overrides it. Default python."
+    },
+    {
+      "name": "EXAKIT_UDF_ARCH",
+      "effect": "Override the detected database architecture: x86_64 or aarch64. Normally leave unset."
+    },
+    {
+      "name": "EXAKIT_UDF_CONTAINERS_MIRROR",
+      "effect": "Local directory, file:// directory or HTTPS base URL containing the pinned assets. Size and SHA-256 checks still apply."
+    },
+    {
+      "name": "EXAKIT_UDF_CONTAINER_CACHE",
+      "effect": "Container cache directory. Default $EXAKIT_HOME/cache/containers; retain it to avoid downloading the 842 MB ML archive again."
+    },
+    {
+      "name": "EXAKIT_UDF_INSTALL_TIMEOUT",
+      "effect": "Seconds allowed for a launcher container installation. Default 3600; this is an install budget, not a download-speed setting."
+    },
+    {
+      "name": "EXAKIT_MODEL_TRUST",
+      "effect": "Set to 1 to confirm the source of an unproven pickle/joblib model. Equivalent to model put --yes; unrelated to overwriting."
+    },
+    {
+      "name": "MLFLOW_TRACKING_URI",
+      "effect": "Optional MLflow destination for notebook runs/replay. Leave unset to use the kit-managed service or local fallback."
+    },
+    {
+      "name": "EXAKIT_MLFLOW_PORT",
+      "effect": "Preferred local MLflow port, default 5000. exakit mlflow start --port overrides it."
+    }
   ]
 }

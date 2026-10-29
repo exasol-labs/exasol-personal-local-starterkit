@@ -60,7 +60,7 @@ function Get-ExakitHelpDocuments {
 # already spelled out ("exakit start" on the runtime page); anything else is a
 # bare subcommand and gets its document's prefix put in front. Twin of
 # KNOWN_TOOLS / invocation() in help.sh.
-$script:ExakitHelpKnownTools = @("exakit", "exapump", "exasol", "dash-server",
+$script:ExakitHelpKnownTools = @("exakit", "exapump", "exasol", "dash-server", "dbt-exasol",
     "exasol-json-tables", "exasol-mcp-server", "exasol-mcp-server-http")
 
 # Twin of commands_of() in help.sh: an entry marked "hidden": true keeps its
@@ -174,6 +174,22 @@ function Write-ExakitHelpCommand {
     } else {
         Write-Host "$Indent$Label" -ForegroundColor Green
         if ($Summary) { Write-ExakitHelpWrapped -Text $Summary -Indent ($Indent + "  ") }
+    }
+}
+
+function Write-ExakitHelpParameters {
+    param($Entry, [string]$Indent = "      ")
+    foreach ($parameter in @($Entry.parameters)) {
+        if ($null -eq $parameter) { continue }
+        Write-Host ($Indent + $parameter.name)
+        $detail = "" + $parameter.description
+        if ($parameter.required) { $detail += " Required." }
+        if ($parameter.choices) { $detail += " Values: " + ($parameter.choices -join ", ") + "." }
+        if ($null -ne $parameter.default) { $detail += " Default: " + $parameter.default + "." }
+        Write-ExakitHelpWrapped -Text $detail -Indent ($Indent + "  ")
+    }
+    if (-not $Entry.parameters -and $Entry.parameter_note) {
+        Write-ExakitHelpWrapped -Text $Entry.parameter_note -Indent $Indent
     }
 }
 
@@ -344,6 +360,17 @@ function Show-ExakitHelpComponent {
     # Twin of the snippets block in help.sh. Without it the Examples section -
     # the SQL a reader needs most on the json-tables and pyexasol pages -
     # silently vanished on Windows.
+    $reference = @(Get-ExakitHelpVisibleCommands $doc | Where-Object { $_.PSObject.Properties['parameters'] })
+    if ($reference.Count -gt 0) {
+        Write-ExakitHelpSection "Parameters and options"
+        foreach ($entry in $reference) {
+            Write-Host ("    " + (Get-ExakitHelpInvocationWithOptions -DocId $Id -Entry $entry -Doc $doc))
+            Write-ExakitHelpParameters -Entry $entry
+            foreach ($example in $entry.examples) { Write-Host "      Example: $example" -ForegroundColor Cyan }
+            Write-Host ""
+        }
+        Write-ExakitHelpWrapped -Text "Flags apply only to the command that lists them. For full behavior and exit codes: exakit help <command>. Help never installs or restarts anything." -Indent "    "
+    }
     if ($doc.snippets) {
         Write-ExakitHelpSection "Examples"
         $first = $true
@@ -491,9 +518,11 @@ function Show-ExakitHelpCommand {
     $needle = $Name.ToLowerInvariant()
     foreach ($key in (@("exakit") + ($docs.Keys | Sort-Object))) {
         if (-not $docs.ContainsKey($key)) { continue }
+        $shown = $false
         foreach ($entry in $docs[$key].commands) {
             $command = $entry.command.ToLowerInvariant()
             if ($command -ne $needle -and -not $command.StartsWith("$needle ")) { continue }
+            $shown = $true
             $label = $entry.command
             if ($key -eq "exakit") { $label = "exakit $($entry.command)" }
             Write-Host ""
@@ -506,9 +535,26 @@ function Show-ExakitHelpCommand {
             $text = $entry.description
             if (-not $text) { $text = $entry.summary }
             Write-ExakitHelpWrapped -Text $text -Indent "    "
+            if ($entry.PSObject.Properties['parameters']) {
+                Write-Host ""
+                Write-Host "    Parameters and options" -ForegroundColor DarkGray
+                Write-ExakitHelpParameters -Entry $entry
+            }
             if ($entry.warning) {
                 Write-Host ""
                 Write-ExakitHelpWrapped -Text ("! " + $entry.warning) -Indent "    "
+            }
+            if ($entry.exit_codes) {
+                Write-Host ""
+                Write-Host "    Exit codes" -ForegroundColor DarkGray
+                foreach ($property in ($entry.exit_codes.PSObject.Properties | Sort-Object { [int]$_.Name })) {
+                    Write-ExakitHelpWrapped -Text ($property.Name + '  ' + $property.Value) -Indent "      "
+                }
+            }
+            if ($entry.environment) {
+                Write-Host ""
+                Write-Host "    Environment" -ForegroundColor DarkGray
+                foreach ($line in $entry.environment) { Write-ExakitHelpWrapped -Text ("" + $line) -Indent "      " }
             }
             if ($entry.examples) {
                 Write-Host ""
@@ -516,8 +562,8 @@ function Show-ExakitHelpCommand {
                 foreach ($example in $entry.examples) { Write-Host "      $example" -ForegroundColor Cyan }
             }
             Write-Host ""
-            return 0
         }
+        if ($shown) { return 0 }
     }
     if (Test-ExakitHelpId $Name) { return (Show-ExakitHelpComponent -Id $Name) }
     Write-Host ""

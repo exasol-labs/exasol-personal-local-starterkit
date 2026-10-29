@@ -45,6 +45,8 @@ Set up for a role in one go: `curl -fsSL https://www.exasol.com/install/starter-
 
 ## Overview
 
+For add-on arguments, defaults and copyable examples, use `exakit --help <addon-id>` or read [the add-on command guide](ADDON-COMMANDS.md). Command-specific help is available through forms such as `exakit udf-use --help` and `exakit model put --help`.
+
 Existing compatible components are reused. The kit records whether each component belongs to the kit or the user, shows ownership in `exakit version`, and preserves user-installed components during updates and uninstall. See [component ownership and reuse](COMPONENT-OWNERSHIP.md).
 
 This kit sets up an analytics database on your own machine and connects your AI assistant to it. Everything runs locally, so your data stays with you. You see every SQL statement before it runs and can check each answer yourself.
