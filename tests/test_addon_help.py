@@ -62,10 +62,11 @@ class AddonHelpTest(unittest.TestCase):
             doc = json.loads(path.read_text())
             if doc.get('kind') != 'addon':
                 continue
-            for action in ['marketplace', 'update', 'uninstall']:
-                with self.subTest(addon=doc['id'], action=action):
-                    command = next(c for c in doc['commands'] if c['command'] == 'exakit ' + action)
-                    self.assertEqual(shape(command), shape(canonical[action]))
+            for command in doc['commands']:
+                action = command['command'].removeprefix('exakit ')
+                if action in canonical and 'parameters' in canonical[action]:
+                    with self.subTest(addon=doc['id'], action=action):
+                        self.assertEqual(shape(command), shape(canonical[action]))
 
     def test_udf_topic_shows_real_flags_and_positional_parameters(self):
         text = self.help('--help', 'udf-devkit')

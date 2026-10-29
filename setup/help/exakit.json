@@ -104,6 +104,12 @@
           "description": "Print machine-readable output rather than decorated text.",
           "default": "off",
           "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything.",
+          "default": "off",
+          "required": false
         }
       ]
     },
@@ -135,6 +141,12 @@
         {
           "name": "--json, -j",
           "description": "Print machine-readable output rather than decorated text.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything.",
           "default": "off",
           "required": false
         }
@@ -170,6 +182,12 @@
             "exasol-scheduler",
             "udf-devkit"
           ]
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything.",
+          "default": "off",
+          "required": false
         }
       ]
     },
@@ -195,6 +213,12 @@
             "exasol-scheduler",
             "udf-devkit"
           ]
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything.",
+          "default": "off",
+          "required": false
         }
       ]
     },
@@ -258,6 +282,12 @@
           "description": "Reload bundled datasets even if their load receipt already exists; inspect replacement behavior before using it.",
           "default": "off",
           "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything.",
+          "default": "off",
+          "required": false
         }
       ]
     },
@@ -299,6 +329,12 @@
         {
           "name": "--json, -j",
           "description": "List available log targets as JSON. Cannot be combined with a target.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything.",
           "default": "off",
           "required": false
         }
