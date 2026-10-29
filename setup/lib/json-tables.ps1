@@ -34,7 +34,7 @@
 #   - shim:     $EXAKIT_HOME\json-tables\shim\cargo.exe
 #   - launcher: $BinDir\exasol-json-tables.cmd
 
-$script:JsonTablesVersionFallback = if ($env:EXAKIT_JSON_TABLES_VERSION_FALLBACK) { $env:EXAKIT_JSON_TABLES_VERSION_FALLBACK } else { "v0.4.0" }
+$script:JsonTablesVersionFallback = if ($env:EXAKIT_JSON_TABLES_VERSION_FALLBACK) { $env:EXAKIT_JSON_TABLES_VERSION_FALLBACK } else { "v0.4.1" }
 $script:JsonTablesVersion = if ($env:EXAKIT_JSON_TABLES_VERSION) { $env:EXAKIT_JSON_TABLES_VERSION } else { "" }
 # An explicit release tag (tests, or pointing an install at one specific build);
 # empty means the tag versions.json names - see Get-JsonTablesReleaseTag.
