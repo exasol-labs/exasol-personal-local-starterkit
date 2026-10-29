@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+### Follow-up to persona PR #1 (2026-10-29)
+
+The full grouped changelog and all implementation commits since the previous PR are in [CHANGELOG-SINCE-PR1.md](CHANGELOG-SINCE-PR1.md).
+
+- Complete the Data Scientist and ML Engineer bundles with JSON Tables, role-specific Dash Server / UDF devkit, the MLflow service and scientific Python dependencies.
+- Bundle all 50 official Notebook Connector lessons for Jupyter and Marimo, with indexes and supporting assets, kit connections and explicit Run controls. Preserve notebook edits and document connector/package/file updates.
+- Fix stale notebook helper packaging behind the MLflow `handoff` argument error; complete descriptor approval, shared workflows/handoffs, governed Ask and Dash Server Share, model hardening and pinned Rust build/smoke paths.
+- Show the current UDF/add-on installation activity above the active progress bar.
+- Track component ownership and binary receipts. Reuse user-installed components, preserve shared profiles and unknown shared installations, and remove only kit-owned resources. Expose ownership in component listings and isolate the kit's exapump profile store.
+- Update the manual Mac runbook, ownership guidance and shell/PowerShell regression coverage. Live Windows and practitioner-gate verification remain explicitly deferred/pending.
+
 ### v0.5 candidate work
 
 - Data Scientist and ML Engineer notebooks now share approved descriptor versions, workflow logs and a handoff. The Data Scientist can review generated SQL before a read-only MCP query runs, then prepare a Dash Server preview and explicitly promote a healthy revision after checking its figures.
