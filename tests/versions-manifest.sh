@@ -457,6 +457,7 @@ soft_fail="$( EXAKIT_HOME="$WORK/pyx-home"
     EXAKIT_PYEXASOL_VERSION="$V_PYEXASOL"
     mkdir -p "$EXAKIT_HOME"
     . "$ROOT/setup/lib/pyexasol.sh"
+    pyexasol_existing_python() { return 1; } # fixture has no pre-existing driver
     manifest_init >/dev/null 2>&1
     PATH="$WORK/failing-uv:$PATH"
     if pyexasol_install >/dev/null 2>&1; then printf 'installed '; else printf 'soft-failed '; fi
@@ -476,6 +477,7 @@ completed="$( EXAKIT_HOME="$WORK/kss-home"
     EXAKIT_PYEXASOL_VERSION="$V_PYEXASOL"
     mkdir -p "$EXAKIT_HOME"
     . "$ROOT/setup/lib/pyexasol.sh"
+    pyexasol_existing_python() { return 1; } # fixture has no pre-existing driver
     manifest_init >/dev/null 2>&1
     # Out of scope for this test: data load, MCP client setup, skills, PATH hints.
     exakit_maybe_offer_data_load() { :; }
@@ -502,6 +504,7 @@ rerun="$( EXAKIT_HOME="$WORK/rerun-home"
     EXAKIT_PYEXASOL_VERSION="$V_PYEXASOL"
     mkdir -p "$EXAKIT_HOME" "$EXAKIT_BIN_DIR"
     . "$ROOT/setup/lib/pyexasol.sh"
+    pyexasol_existing_python() { return 1; } # fixture has no pre-existing driver
     manifest_init >/dev/null 2>&1
     exakit_maybe_offer_data_load() { :; }
     exakit_maybe_offer_mcp_setup() { :; }
@@ -534,6 +537,7 @@ noop="$( EXAKIT_HOME="$WORK/noop-home"
     EXAKIT_PYEXASOL_VERSION="$V_PYEXASOL"
     mkdir -p "$EXAKIT_HOME" "$EXAKIT_BIN_DIR"
     . "$ROOT/setup/lib/pyexasol.sh"
+    pyexasol_existing_python() { return 1; } # fixture has no pre-existing driver
     manifest_init >/dev/null 2>&1
     exakit_maybe_offer_data_load() { :; }
     exakit_maybe_offer_mcp_setup() { :; }
@@ -573,20 +577,21 @@ cat > "$UC/manifest.json" <<EOF
     "version": "0.2.0",
     "source": "example/starter-kit@main"
   },
-  "runtime": {
+  "runtime": { "ownership": "kit",
     "type": "personal",
     "version": "2.2.0"
   },
   "components": {
-    "exapump": {
+    "personal": {"ownership": "kit"},
+    "exapump": { "ownership": "kit",
       "version": "0.13.0",
       "path": "$UC/bin/exapump"
     },
-    "mcp_server": {
+    "mcp_server": { "ownership": "kit",
       "package": "exasol-mcp-server",
       "version": "1.10.1"
     },
-    "pyexasol": {
+    "pyexasol": { "ownership": "kit",
       "validated": false
     }
   },
@@ -633,7 +638,7 @@ row() {
     printf '%s\n' "$1" \
         | sed "s/$(printf '\033')\[[0-9;]*m//g" \
         | sed 's/^ *[|│] //; s/ *[|│] *$//' \
-        | grep -m1 "^$2 " | tr -s ' ' | sed 's/ *$//'
+        | grep -m1 "^$2 " | tr -s ' ' | sed -E 's/ (kit|user|unknown|-) / /; s/ *$//'
 }
 
 # has <label> <needle> <haystack>
@@ -660,8 +665,8 @@ uc_table="$( EXAKIT_HOME="$UC"
 # The header line itself, squeezed. `exakit version` and `exakit update-check`
 # were merged into one command, so there is one table and it has three columns:
 # what to name in a command, what is on the machine, and what is waiting.
-check "the table is Component / Version / Status" \
-    "Component Version Status" "$(row "$uc_table" Component)"
+check "the table is Component / Version / Owner / Status" \
+    "Component Version Owner Status" "$(row "$uc_table" Component)"
 lacks "the old Installed header is gone" "Installed " "$uc_table"
 lacks "the old Tagged column is gone" "Tagged" "$uc_table"
 lacks "the old Latest header is gone" "Latest" "$uc_table"
@@ -742,7 +747,7 @@ has "version reports the installed kit version" "Version " "$version_out"
 has "version reports the installed kit version value" "0.2.0" "$version_out"
 has "version keeps the Kit panel" "Kit" "$version_out"
 # The merge, guarded from both sides: version renders the table itself...
-has "version renders the comparison table" "Component Version Status" \
+has "version renders the comparison table" "Component Version Owner Status" \
     "$(row "$version_out" Component)"
 has "version names what is waiting" "1.11.0 available" "$version_out"
 has "version promotes update-all" "Bring everything up to date with: exakit update" "$version_out"
@@ -1001,11 +1006,12 @@ cat > "$LIVE/manifest.json" <<EOF
   "manifest_version": 1,
   "kit_level": 1,
   "kit": { "version": "0.2.0" },
-  "runtime": { "type": "personal", "version": "2.0.0-rc4" },
+  "runtime": { "ownership": "kit", "type": "personal", "version": "2.0.0-rc4" },
   "components": {
-    "exapump": { "version": "0.11.2", "path": "$LIVE/bin/exapump" },
-    "mcp_server": { "version": "1.10.1" },
-    "pyexasol": { "version": "2.2.2", "python": "$LIVE/venv/bin/python" }
+    "personal": {"ownership": "kit"},
+    "exapump": { "ownership": "kit", "version": "0.11.2", "path": "$LIVE/bin/exapump" },
+    "mcp_server": { "ownership": "kit", "version": "1.10.1" },
+    "pyexasol": { "ownership": "kit", "version": "2.2.2", "python": "$LIVE/venv/bin/python" }
   },
   "steps_completed": []
 }
@@ -1139,12 +1145,13 @@ cat > "$DIV/manifest.json" <<EOF
 {
   "manifest_version": 1,
   "kit_level": 1,
-  "runtime": {
+  "runtime": { "ownership": "kit",
     "type": "personal",
     "version": "2.2.0"
   },
   "components": {
-    "mcp_server": {
+    "personal": {"ownership": "kit"},
+    "mcp_server": { "ownership": "kit",
       "package": "exasol-mcp-server",
       "version": "2.0.0"
     }
@@ -1225,12 +1232,13 @@ cat > "$XP/manifest.json" <<EOF
 {
   "manifest_version": 1,
   "kit_level": 1,
-  "runtime": {
+  "runtime": { "ownership": "kit",
     "type": "personal",
     "version": "2.2.0"
   },
   "components": {
-    "exapump": {
+    "personal": {"ownership": "kit"},
+    "exapump": { "ownership": "kit",
       "version": "8.2.0",
       "path": "$XP/bin/exapump"
     }
@@ -1319,11 +1327,12 @@ drift_manifest() {
   "manifest_version": 1,
   "kit_level": 1,
   "kit": { "version": "0.2.0" },
-  "runtime": { "type": "personal", "version": "2.2.0" },
+  "runtime": { "ownership": "kit", "type": "personal", "version": "2.2.0" },
   "components": {
-    "exapump": { "version": "$1", "path": "$DR/bin/exapump" },
-    "mcp_server": { "package": "exasol-mcp-server", "version": "1.10.1" },
-    "pyexasol": { "version": "$2", "python": "$DR/venv/bin/python" }
+    "personal": {"ownership": "kit"},
+    "exapump": { "ownership": "kit", "version": "$1", "path": "$DR/bin/exapump" },
+    "mcp_server": { "ownership": "kit", "package": "exasol-mcp-server", "version": "1.10.1" },
+    "pyexasol": { "ownership": "kit", "version": "$2", "python": "$DR/venv/bin/python" }
   },
   "steps_completed": []
 }
@@ -1492,6 +1501,7 @@ soft="$( EXAKIT_HOME="$WORK/soft-home"
     EXAKIT_BIN_DIR="$WORK/soft-home/bin"
     mkdir -p "$EXAKIT_HOME"
     . "$ROOT/setup/lib/pyexasol.sh"
+    pyexasol_existing_python() { return 1; } # fixture has no pre-existing driver
     manifest_init >/dev/null 2>&1
     # exapump dies the way a bad download does; MCP works; pyexasol misses softly.
     exapump_install() { die "Could not install exapump"; }
@@ -1525,6 +1535,7 @@ quiet="$( EXAKIT_HOME="$WORK/soft-ok-home"
     EXAKIT_BIN_DIR="$WORK/soft-ok-home/bin"
     mkdir -p "$EXAKIT_HOME"
     . "$ROOT/setup/lib/pyexasol.sh"
+    pyexasol_existing_python() { return 1; } # fixture has no pre-existing driver
     manifest_init >/dev/null 2>&1
     exapump_install() { :; }
     exapump_create_profile() { :; }
@@ -1808,16 +1819,17 @@ cat > "$NT/manifest.json" <<EOF
   "kit": {
     "version": "$NOTICE_KIT_VERSION"
   },
-  "runtime": {
+  "runtime": { "ownership": "kit",
     "type": "personal",
     "version": "2.2.0"
   },
   "components": {
-    "exapump": {
+    "personal": {"ownership": "kit"},
+    "exapump": { "ownership": "kit",
       "version": "$NOTICE_INSTALLED_EXAPUMP",
       "path": "$NT/bin/exapump"
     },
-    "mcp_server": {
+    "mcp_server": { "ownership": "kit",
       "version": "$NOTICE_INSTALLED_MCP"
     }
   },
@@ -2119,11 +2131,12 @@ cat > "$K2/manifest.json" <<'EOF'
   "kit": {
     "version": "0.2.0"
   },
-  "runtime": {
+  "runtime": { "ownership": "kit",
     "type": "personal",
     "version": "2.2.0"
   },
-  "components": {},
+  "components": {
+    "personal": {"ownership": "kit"}},
   "steps_completed": []
 }
 EOF
@@ -2393,8 +2406,8 @@ if command -v pwsh >/dev/null 2>&1; then
         EXAKIT_VERSIONS_CACHE="$UC/cache/versions.json" \
         EXAKIT_VERSIONS_URL="http://offline.invalid/versions.json" \
         pwsh -NoProfile -File "$ROOT/setup/exakit.ps1" version 2>&1 | tr -d '\r')"
-    check "powershell: Component / Version / Status" \
-        "Component Version Status" "$(row "$ps_table" Component)"
+    check "powershell: Component / Version / Owner / Status" \
+        "Component Version Owner Status" "$(row "$ps_table" Component)"
     has "powershell: kit row is comparable" "exakit 0.2.0 current" "$(row "$ps_table" exakit)"
     has "powershell: installed stays installed" "exapump 0.13.0" "$(row "$ps_table" exapump)"
     has "powershell: a waiting update names the version" \
@@ -2540,7 +2553,7 @@ PSEOF
         pwsh -NoProfile -File "$ROOT/setup/exakit.ps1" version 2>&1 | tr -d '\r')"
     has "powershell: version reports the kit version" "Version " "$ps_version"
     has "powershell: version reports the kit version value" "0.2.0" "$ps_version"
-    has "powershell: version renders the table" "Component Version Status" "$(row "$ps_version" Component)"
+    has "powershell: version renders the table" "Component Version Owner Status" "$(row "$ps_version" Component)"
     has "powershell: version promotes update-all" "Bring everything up to date with: exakit update" "$ps_version"
     lacks "powershell: version prints no separate updates panel" "Updates available" "$ps_version"
     lacks "powershell: and points at no update-check" "update-check" "$ps_version"
@@ -2548,7 +2561,7 @@ else
     check "powershell(versions_manifest)" "skipped" "skipped"
     check "powershell(non_https_refused)" "skipped" "skipped"
     check "powershell(runtime_offer_decisions)" "skipped" "skipped"
-    for _skipped in "Component / Version / Status" "kit row is comparable" "installed stays installed" \
+    for _skipped in "Component / Version / Owner / Status" "kit row is comparable" "installed stays installed" \
                     "a waiting update names the version" "older advertised version" "critical severity" \
                     "maintainer note" "repair status for a missing component" \
                     "promotes update-all" \

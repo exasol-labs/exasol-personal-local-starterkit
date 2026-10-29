@@ -1422,6 +1422,23 @@ function Invoke-ExakitUninstallRun {
     }
     try {
 
+    $preservedComponentPaths = @(Get-ExakitPreservedComponentPaths)
+    $protectedBinNames = @()
+    $ownedCoreBinPaths = @{
+        'exasol.exe' = Get-ExakitManifestValue 'components.personal.ownership_path'
+        'exapump.exe' = Get-ExakitManifestValue 'components.exapump.ownership_path'
+    }
+    foreach ($id in (@('exasol','exapump') + @(Get-ExakitMarketplaceAddons | ForEach-Object { $_.Id }))) {
+        if (-not (Test-ExakitComponentManaged $id)) { $protectedBinNames += $id }
+    }
+    function Test-PreservedEntry([string]$Entry) {
+        foreach ($kept in $preservedComponentPaths) {
+            if ($kept -eq $Entry -or $kept.StartsWith($Entry + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or
+                $Entry.StartsWith($kept + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { return $true }
+        }
+        return $false
+    }
+
     # 0a) Boot entries first: a Startup entry left behind would try to start
     #     something that no longer exists at the next login.
     foreach ($svcId in (Get-ExakitServiceIds)) {
@@ -1440,6 +1457,7 @@ function Invoke-ExakitUninstallRun {
     # to keep something step 5 is about to delete (dash-server's instance).
     $script:ExakitUninstallFull = $true
     foreach ($addonId in (Get-ExakitMarketplaceInstalledAddons)) {
+        if (-not (Test-ExakitComponentManaged $addonId)) { Write-ExakitPreservedComponent $addonId; continue }
         $addonEntry = Get-ExakitMarketplaceAddon $addonId
         if ($addonEntry -and $addonEntry.PSObject.Properties["UninstallFn"] -and
             (Get-Command $addonEntry.UninstallFn -ErrorAction SilentlyContinue)) {
@@ -1452,7 +1470,9 @@ function Invoke-ExakitUninstallRun {
 
     # 1) Database + all data.
     $type = Get-RuntimeType
-    if ($type) {
+    if ($type -and -not (Test-ExakitComponentManaged "database")) {
+        Write-ExakitPreservedComponent "database"
+    } elseif ($type) {
         if ($DryRun) {
             Info "  will remove: local Exasol $type deployment and ALL its data"
         } else {
@@ -1516,12 +1536,11 @@ function Invoke-ExakitUninstallRun {
         if ("$removedRules" -match '^REMOVED ([1-9]\d*)$') { Info "exakit permission rules removed from ~\.claude\settings.json" }
     }
 
-    # 4) exapump profile store (the kit created it; the binary goes in step 6).
-    # Every candidate home, not just $HOME: see Get-ExakitExapumpProfileDirs.
-    foreach ($exapumpDir in (Get-ExakitExapumpProfileDirs)) {
-        if (-not (Test-Path $exapumpDir)) { continue }
-        if ($DryRun) { Info "  will remove: exapump profiles at $exapumpDir" }
-        else { Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $exapumpDir }
+    # Only kit-private profiles are removed; shared user profiles are preserved.
+    $kitProfileDir = Join-Path $script:ExakitHome "exapump"
+    if ((Test-Path $kitProfileDir) -and -not (Test-PreservedEntry $kitProfileDir)) {
+        if ($DryRun) { Info "  will remove: kit exapump profiles at $kitProfileDir" }
+        else { Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $kitProfileDir }
     }
 
     # 5) Kit home: credentials, logs, manifest, cached kit copy, MCP snapshots.
@@ -1537,20 +1556,22 @@ function Invoke-ExakitUninstallRun {
                 Info "AI client config snapshots kept at $keep (delete it when you are sure)"
             } catch { }
         }
-        if (Test-ExakitUninstallKeepsNotebooks) {
+        if ((Test-ExakitUninstallKeepsNotebooks) -or $preservedComponentPaths.Count -gt 0) {
             # Everything in the kit home but the notebooks folder; the home is
             # left holding only that, which Test-ExakitSafeUninstallTarget
             # accepts as a kit home later.
             $keptNotebooks = Join-Path $script:ExakitHome "notebooks"
             if ($DryRun) { Info "  will remove: kit home $script:ExakitHome (credentials, logs, manifest, snapshots) - all but your notebooks" }
-            Info "  your notebooks stay in $keptNotebooks (EXAKIT_UNINSTALL_NOTEBOOKS=remove removes them too)"
+            if (Test-ExakitUninstallKeepsNotebooks) { Info "  your notebooks stay in $keptNotebooks (EXAKIT_UNINSTALL_NOTEBOOKS=remove removes them too)" }
+            if ($preservedComponentPaths.Count -gt 0) { Info "  reused component files under the kit home are preserved" }
             if (-not $DryRun) {
                 foreach ($entry in @(Get-ChildItem -LiteralPath $script:ExakitHome -Force -ErrorAction SilentlyContinue)) {
-                    if ($entry.PSIsContainer -and $entry.Name -eq "notebooks") { continue }
+                    if ($entry.PSIsContainer -and $entry.Name -eq "notebooks" -and (Test-ExakitUninstallKeepsNotebooks)) { continue }
+                    if (Test-PreservedEntry $entry.FullName) { continue }
                     Remove-Item -LiteralPath $entry.FullName -Recurse -Force -ErrorAction SilentlyContinue
                 }
             }
-            RecordRemoved "Kit home removed: $script:ExakitHome (credentials, logs, manifest, snapshots, pyexasol venv, add-on state); your notebooks were kept in $keptNotebooks"
+            RecordRemoved "Kit-owned files removed from $script:ExakitHome; notebooks and reused resources were preserved"
         } else {
             if ($DryRun) { Info "  will remove: kit home $script:ExakitHome (credentials, logs, manifest, snapshots)" }
             else { Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $script:ExakitHome }
@@ -1572,6 +1593,8 @@ function Invoke-ExakitUninstallRun {
     }
     foreach ($bin in $binNames) {
         $p = Join-Path $script:BinDir $bin
+        if (([IO.Path]::GetFileNameWithoutExtension($p)) -in $protectedBinNames) { Info "Keeping $p (not installed by this kit)."; continue }
+        if ($ownedCoreBinPaths.ContainsKey($bin) -and $ownedCoreBinPaths[$bin]) { $p = $ownedCoreBinPaths[$bin] }
         if (Test-Path $p) {
             if ($DryRun) { Info "  will remove: CLI binary $p" }
             else { $binPaths += $p }
@@ -1580,7 +1603,7 @@ function Invoke-ExakitUninstallRun {
     if (-not $DryRun -and $binPaths.Count -gt 0) {
         Remove-ExakitBinariesDeferred -Paths $binPaths
         $binNamesGone = @($binPaths | ForEach-Object { Split-Path -Leaf $_ })
-        RecordRemoved "Commands removed from $($script:BinDir): $($binNamesGone -join ', ')"
+        RecordRemoved "Kit-owned commands removed: $($binNamesGone -join ', ')"
     }
     } finally {
         Stop-ExakitSpinner
@@ -1654,6 +1677,7 @@ function Invoke-CmdUninstall {
             Info "$Addon is not installed - nothing to remove."
             return
         }
+        if (-not (Test-ExakitComponentManaged $Addon)) { Write-ExakitPreservedComponent $Addon; return }
         if ($DryRun) {
             # The add-on's own hook narrates its plan. Twin of cmd_uninstall.
             Info "Dry run - removing the $Addon add-on would:"
@@ -1835,6 +1859,9 @@ function Show-ExakitUninstallMenu {
 # _exakit_uninstall_component in setup/lib/common.sh.
 function Invoke-ExakitUninstallComponent {
     param([Parameter(Mandatory)][string]$Key)
+    if ($Key -in @('database','launcher','personal','exapump','pyexasol') -or (Get-ExakitMarketplaceAddon $Key)) {
+        if (-not (Test-ExakitComponentManaged $Key)) { Write-ExakitPreservedComponent $Key; return }
+    }
     switch ($Key) {
         "database" {
             # NO shared-engine warning here any more: by this line the user has
@@ -1865,10 +1892,10 @@ function Invoke-ExakitUninstallComponent {
         }
         "exapump" {
             Info "Removing exapump and its profiles"
-            Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $script:BinDir "exapump.exe")
-            foreach ($exapumpDir in (Get-ExakitExapumpProfileDirs)) {
-                Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $exapumpDir
-            }
+            $ownedBin = Get-ExakitManifestValue 'components.exapump.ownership_path'
+            if (-not $ownedBin) { $ownedBin = Join-Path $script:BinDir 'exapump.exe' }
+            Remove-Item -Force -ErrorAction SilentlyContinue $ownedBin
+            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue (Join-Path $script:ExakitHome "exapump")
             Remove-ExakitManifestValue "components.exapump"
             Remove-ExakitStepDone "exapump"
         }
@@ -2008,6 +2035,10 @@ function Invoke-CmdVersion {
             # update to something that is not on the machine.
             $status = "exakit marketplace"
             $severity = ""
+        } elseif ($installed -ne "not installed" -and -not (Test-ExakitComponentManaged $actual)) {
+            $status = "external"
+            $severity = ""
+            $rowNote = "Reused; updates and removal stay with the owner."
         } elseif ($available -eq "unknown" -or $installed -eq "unknown") {
             $status = "unknown - check: exakit status"
         } elseif ($installed -eq "not installed" -and (Test-ExakitComponentHeavy $actual)) {
@@ -2103,6 +2134,8 @@ function Invoke-CmdVersion {
             $components += [ordered]@{
                 component       = $r.C
                 addon           = ($addonIds -contains $r.C)
+                ownership       = $(if ($r.V -in @("not installed", "not available", "")) { $null } else { Get-ExakitComponentOwnership $r.C })
+                installed_by_kit = ($r.V -notin @("not installed", "not available", "") -and (Test-ExakitComponentManaged $r.C))
                 installed       = $(if ($r.V -in @("not installed", "not available", "")) { $null } else { $r.V })
                 installed_label = $r.V
                 advertised      = $(if ($r.A -in @("unknown", "")) { $null } else { $r.A })
@@ -2135,9 +2168,10 @@ function Invoke-CmdVersion {
     # measures with Get-ExakitVisibleLength, so the coloured severity suffix does
     # not throw the border off the way a byte count would.
     Start-ExakitPanel "Components"
-    Write-ExakitPanelLine ("{0} {1} {2}" -f "Component".PadRight($compWidth), "Version".PadRight($verWidth), "Status")
+    Write-ExakitPanelLine ("{0} {1} {2} {3}" -f "Component".PadRight($compWidth), "Version".PadRight($verWidth), "Owner".PadRight(7), "Status")
     foreach ($r in $rows) {
-        Write-ExakitPanelLine ("{0} {1} {2}" -f $r.C.PadRight($compWidth), $r.V.PadRight($verWidth), $r.S)
+        $owner = if ($r.V -in @("not installed", "not available", "")) { "-" } else { Get-ExakitComponentOwnership $r.C }
+        Write-ExakitPanelLine ("{0} {1} {2} {3}" -f $r.C.PadRight($compWidth), $r.V.PadRight($verWidth), $owner.PadRight(7), $r.S)
         Write-ExakitVersionNote $r.N
         Write-ExakitVersionNote $r.M
     }
@@ -2813,6 +2847,11 @@ function Invoke-ExakitUpdateRun {
         $actual = Get-ExakitActualTarget $component
         $current = Get-ExakitComponentCurrent $actual
         $available = Get-ExakitComponentAvailable $actual
+        if ($current -and $current -ne "not installed" -and -not (Test-ExakitComponentManaged $actual)) {
+            Write-ExakitPreservedComponent $actual
+            Add-ExakitUpdateNote -Component $actual -Outcome "skipped" -From $current -To $available
+            continue
+        }
         # No build for this machine: a routine update stays quiet about it (there is
         # nothing the user can do), and an explicit target says why rather than
         # failing deep inside the installer.
@@ -2903,7 +2942,6 @@ function Invoke-ExakitUpdateRun {
             "exapump" {
                 if ($available) {
                     $script:ExapumpVersion = $available
-                    Remove-Item -Force (Get-ExapumpCli) -ErrorAction SilentlyContinue
                     Install-Exapump
                     New-ExapumpProfile
                     Set-ExakitManifestValue "desired.exapump" $script:ExapumpVersion

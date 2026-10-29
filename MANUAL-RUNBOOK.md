@@ -4,7 +4,7 @@ Run these steps in Terminal. They test the bundled Pharma and Banking data, Pyth
 
 ## 1. Remove the previous installation
 
-**This removes the local database, its data, dashboards and notebooks. Save anything you need first.** Preview the removal, then run it and choose **EVERYTHING** in the menu:
+**This removes kit-owned components, including a database the kit created and its data, dashboards and notebooks. Save anything you need first.** Reused user-installed components and databases are kept. Preview the removal, then run it and choose **EVERYTHING** in the menu:
 
 ```sh
 export PATH="$HOME/.local/bin:$PATH"
@@ -13,6 +13,8 @@ EXAKIT_UNINSTALL_NOTEBOOKS=remove exakit uninstall
 ```
 
 If `exakit` is not installed, start at step 2. Keep the source checkout on your Desktop.
+
+For a completely fresh database, use a machine with no existing Exasol deployment, or remove your own deployment separately using its original management tool. The kit deliberately keeps reused deployments. `exakit version` shows the component owner; see [component ownership](COMPONENT-OWNERSHIP.md).
 
 ## 2. Install with curl
 

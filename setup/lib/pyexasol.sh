@@ -17,6 +17,10 @@ EXAKIT_PYEXASOL_PACKAGE="${EXAKIT_PYEXASOL_PACKAGE:-pyexasol}"
 EXAKIT_PYEXASOL_VENV="${EXAKIT_PYEXASOL_VENV:-$EXAKIT_HOME/pyexasol-venv}"
 
 pyexasol_venv_python() {
+    if [ "$(exakit_component_ownership pyexasol)" = user ]; then
+        _pvp_existing="$(manifest_get components.pyexasol.python 2>/dev/null || true)"
+        [ -z "$_pvp_existing" ] || { printf '%s\n' "$_pvp_existing"; return 0; }
+    fi
     printf '%s\n' "$EXAKIT_PYEXASOL_VENV/bin/python"
 }
 
@@ -46,7 +50,34 @@ _pyexasol_not_installed() {
     return 1
 }
 
+pyexasol_existing_python() {
+    command -v python3 >/dev/null 2>&1 || return 1
+    _pyx_probe="$(command -v python3)"
+    "$_pyx_probe" -c 'from importlib.metadata import version; version("pyexasol")' >/dev/null 2>&1 || return 1
+    printf '%s' "$_pyx_probe"
+}
+
 pyexasol_install() {
+    if [ "$(exakit_component_ownership pyexasol)" = user ]; then
+        [ -n "$(pyexasol_installed_version || true)" ] && { exakit_preserve_component pyexasol; return 0; }
+        warn "The reused pyexasol no longer works. Repair its Python environment outside the kit."
+        return 1
+    fi
+    # Reuse a working driver from the user's Python without installing into
+    # or changing that environment. Notebook dependencies stay in their own venv.
+    if [ ! -x "$EXAKIT_PYEXASOL_VENV/bin/python" ] && _pyx_external="$(pyexasol_existing_python)"; then
+        exakit_record_ownership pyexasol user "$_pyx_external"
+        manifest_set components.pyexasol.python "$_pyx_external"
+        _pyx_external_version="$("$_pyx_external" -c 'import pyexasol; print(pyexasol.__version__)' 2>/dev/null || true)"
+        if [ -n "$_pyx_external_version" ]; then
+            manifest_set components.pyexasol.version "$_pyx_external_version"
+            manifest_del components.pyexasol.venv
+            ok "Reusing user-owned pyexasol $_pyx_external_version"
+            return 0
+        fi
+        warn "A user-owned pyexasol installation was found but cannot import. Repair it outside the kit; it was not replaced."
+        return 1
+    fi
     # uv is normally present already (the MCP step installs it and it is a
     # hard dependency of the kit); bootstrap it here only if this step runs
     # in a build without the MCP module. exakit_ensure_uv, not mcp_uv_install:
@@ -86,6 +117,7 @@ pyexasol_install() {
     fi
 
     manifest_set components.pyexasol.version "$EXAKIT_PYEXASOL_VERSION"
+    exakit_record_ownership pyexasol kit "$EXAKIT_PYEXASOL_VENV"
     manifest_set components.pyexasol.venv "$EXAKIT_PYEXASOL_VENV"
     manifest_set components.pyexasol.python "$(pyexasol_venv_python)"
 }
@@ -95,6 +127,7 @@ pyexasol_install() {
 # `exakit status` or `exakit version` reports pyexasol as missing. Asked for
 # explicitly, so a failure here IS a failure.
 pyexasol_update() {
+    if [ "$(exakit_component_ownership pyexasol)" = user ]; then exakit_preserve_component pyexasol; return 0; fi
     _pyu_available="$(exakit_component_available pyexasol 2>/dev/null || true)"
     [ -n "$_pyu_available" ] || die "Could not resolve the advertised pyexasol version."
     _pyu_current="$(pyexasol_installed_version 2>/dev/null || true)"

@@ -681,8 +681,10 @@ personal_refuse_launcher_downgrade() {
 # preset (older releases do not); otherwise the resolved version is installed
 # alongside it and preferred.
 personal_install_launcher() {
-    if [ "${EXAKIT_FORCE_COMPONENT_INSTALL:-0}" != "1" ] && command -v exasol >/dev/null 2>&1; then
+    if command -v exasol >/dev/null 2>&1; then exakit_reuse_ownership personal "$(command -v exasol)"; fi
+    if { [ "${EXAKIT_FORCE_COMPONENT_INSTALL:-0}" != "1" ] || ! exakit_component_is_managed personal; } && command -v exasol >/dev/null 2>&1; then
         _existing="$(command -v exasol)"
+        exakit_reuse_ownership personal "$_existing"
         # BOUNDED, and anchored to a subcommand line. Bounded because a wedged
         # launcher answers `install --help` no faster than it answers anything
         # else and this is the first thing the installer runs; anchored because
@@ -693,6 +695,10 @@ personal_install_launcher() {
                 | personal_help_names_token "local"; then
             ok "Exasol launcher already installed: $_existing"
             return 0
+        fi
+        if ! exakit_component_is_managed personal; then
+            warn "The user-owned Exasol launcher is not compatible with this kit; update it outside the kit. It was not replaced."
+            return 1
         fi
         warn "The installed Exasol launcher ($_existing) does not support the 'local' preset (too old)."
         info "Installing launcher v${EXAKIT_PERSONAL_VERSION} to $EXAKIT_PERSONAL_BIN — your existing launcher is left untouched"
@@ -778,6 +784,7 @@ personal_install_launcher() {
     install -m 755 "$_binary" "$EXAKIT_PERSONAL_BIN" \
         || die "Could not install the Exasol launcher to $EXAKIT_PERSONAL_BIN (is it writable? is the disk full?)."
     push_rollback "rm -f \"$EXAKIT_PERSONAL_BIN\""
+    exakit_record_ownership personal kit "$EXAKIT_PERSONAL_BIN"
     rm -rf "$_tmp"
 
     # Prove the downloaded binary can actually be executed before anything
@@ -1458,6 +1465,7 @@ personal_deploy_local() {
     if personal_deployment_running; then
         info "An Exasol database is already running on port $(personal_db_port)."
         if confirm_env EXAKIT_REUSE_DB "Use it instead of deploying a new one?" y; then
+            exakit_reuse_ownership database "$EXAKIT_PERSONAL_DEPLOY_DIR"
             ok "Reusing the existing Exasol deployment"
             # personal_deployment_running just answered a real SELECT.
             personal_record_manifest "healthy"
@@ -1486,6 +1494,7 @@ personal_deploy_local() {
     # start at all (a crashed VM): that is replaced — announced, never
     # silently — because there is nothing left to reuse.
     if personal_deployment_exists; then
+        exakit_reuse_ownership database "$EXAKIT_PERSONAL_DEPLOY_DIR"
         # A FIRST BOOT THE LAUNCHER GAVE UP ON is not a stopped deployment. In
         # "deployment_failed" its start and stop do nothing, so the
         # start-and-reuse path below would report success over a record that
@@ -1543,6 +1552,10 @@ personal_deploy_local() {
         if ! confirm_env EXAKIT_REPLACE_DB "DELETE the stopped deployment and its data, and deploy a fresh one? This cannot be undone." n; then
             info "Nothing was deleted. Start it yourself with 'exakit start', diagnose with 'exakit status', repair with 'exakit repair-runtime' - or re-run with EXAKIT_REPLACE_DB=1 to replace it, deleting its data."
             exakit_note_failure "A stopped deployment could not be started, and deleting it was declined"
+            return 1
+        fi
+        if ! exakit_component_is_managed database; then
+            warn "The user-owned deployment was not replaced; repair it with its own launcher, then retry."
             return 1
         fi
         info "Replacing the existing deployment — its previous data is not recoverable."
@@ -1615,9 +1628,14 @@ personal_deploy_local() {
     # --auto-approve: 2.3 fails a non-interactive host preparation rather than
     # proceeding without approval, and this pipeline is the definition of one.
     # Omitted on launchers that do not take it — see personal_auto_approve_flag.
+    _pdl_fresh=0
+    personal_deployment_exists || _pdl_fresh=1
     "$(personal_cli)" install local $(personal_auto_approve_flag install) 2>&1 | \
         _personal_deploy_collect "$_deploy_state" "$_deploy_tail" "$_deploy_notice"
     _deploy_rc=${PIPESTATUS[0]}
+    if [ "$_pdl_fresh" = 1 ] && personal_deployment_exists; then
+        exakit_record_ownership database kit "$EXAKIT_PERSONAL_DEPLOY_DIR"
+    fi
     ui_progress_end
     EXAKIT_DEPLOY_LIVE=0
 
@@ -1669,6 +1687,7 @@ personal_deploy_local() {
     _personal_deploy_print_notice "$_deploy_notice"
     rm -rf "$_deploy_tmp"
 
+    exakit_record_ownership database kit "$EXAKIT_PERSONAL_DEPLOY_DIR"
     personal_record_manifest "healthy"
 }
 
@@ -2251,6 +2270,7 @@ personal_upgrade_backup() {
 }
 
 personal_update() {
+    if ! exakit_component_is_managed personal; then exakit_preserve_component personal; return 0; fi
     _mode="default"
     while [ "$#" -gt 0 ]; do
         case "$1" in
@@ -2349,7 +2369,6 @@ personal_update() {
     EXAKIT_PERSONAL_VERSION="$_latest"
     EXAKIT_FORCE_COMPONENT_INSTALL=1
     export EXAKIT_PERSONAL_VERSION EXAKIT_FORCE_COMPONENT_INSTALL
-    rm -f "$EXAKIT_PERSONAL_BIN"
     personal_install_launcher
     personal_record_manifest
     manifest_set desired.runtime.personal "$EXAKIT_PERSONAL_VERSION"

@@ -184,8 +184,10 @@ The files live in `~/.exasol-starter-kit/credentials/`.
 ## Uninstalling — preview first, always
 
 `exakit uninstall` is the one destructive command here. A full uninstall removes
-the database **and its data**, the managed AI-client configs, the skills the kit
-placed and the binaries.
+kit-owned components, including a database the kit created **and its data**,
+managed AI-client configs and skills. Reused user-installed binaries and
+databases, shared exapump profiles and unknown shared installations are kept.
+Check ownership with `exakit version` before interpreting the removal plan.
 
 ```bash
 exakit uninstall --dry-run        # the full plan; changes nothing

@@ -43,6 +43,9 @@ function Ok { param($Text) }
 function Warn2 { param($Text) }
 function OkStep { param($Text) }
 function Write-ExakitLog { param($Kind, $Text) }
+function Set-ExakitReusedOwnership { param($Id, $OwnedPath) } # fixture launcher belongs to the kit
+function Test-ExakitComponentManaged { param($Id) return $true }
+function Set-ExakitComponentOwnership { param($Id, $Ownership, $OwnedPath) }
 function Test-ExakitStdoutIsTerminal { return $false }
 function Get-ExakitTilde { param($Path) return $Path }
 function Get-ExakitSha256 {

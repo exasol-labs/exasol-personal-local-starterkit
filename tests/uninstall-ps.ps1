@@ -46,6 +46,13 @@ $fns = $ast.FindAll({ param($n)
     $n.Extent.Text -match '^\s*(function|filter)\s' }, $true)
 if (-not $fns) { throw "no function definitions found in exakit.ps1" }
 foreach ($f in $fns) { Invoke-Expression $f.Extent.Text }
+# Load ownership helpers as definitions, without running shared module setup.
+$commonAst = [System.Management.Automation.Language.Parser]::ParseFile(
+    (Join-Path $repo "setup/lib/exakit-common.ps1"), [ref]$tokens, [ref]$errors)
+foreach ($name in @('Get-ExakitOwnershipKey','Get-ExakitComponentOwnership','Test-ExakitComponentManaged','Get-ExakitPreservedComponentPaths','Write-ExakitPreservedComponent')) {
+    $definition = $commonAst.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq $name }, $true)
+    Invoke-Expression $definition.Extent.Text
+}
 if (-not (Get-Command Invoke-ExakitUninstallRun -ErrorAction SilentlyContinue)) {
     throw "Invoke-ExakitUninstallRun not found"
 }
@@ -70,7 +77,11 @@ function Info($m) {}; function Ok($m) {}; function OkStep($m) {}; function InfoS
 # is that a warning was said at all, and when.
 $script:warnings = @()
 function Warn2($m) { $script:warnings += "$m" }
-function Get-ExakitManifestValue { param([string]$Path) return "" }
+function Get-ExakitManifestValue {
+    param([string]$Path)
+    if ($Path -in @('runtime.ownership','components.personal.ownership','components.exapump.ownership')) { return 'kit' }
+    return ""
+}
 function Get-RuntimeType { "personal" }
 function Get-ExakitRepoRoot { return $null }   # force fallback skill list
 function Get-ExakitProfileHome { return $fakeProfile }
@@ -159,9 +170,9 @@ Check "real: mcp uninstall"     "uninstall" ("" + $script:markers.mcp)
 # after this suite was written, and the suite had no caller to notice.
 Check "real: autostart unregistered" "database" ("" + $script:markers.autostart)
 Check "real: kit home gone"     "no"  (Ex $script:ExakitHome)
-Check "real: exapump gone"      "no"  (Ex (Join-Path $fakeHome ".exapump"))
+Check "real: user's exapump profiles kept" "yes" (Ex (Join-Path $fakeHome ".exapump"))
 # The one an ordinary machine cannot tell apart from the line above.
-Check "real: exapump under the profile home gone" "no" (Ex (Join-Path $fakeProfile ".exapump"))
+Check "real: user's profile-home exapump profiles kept" "yes" (Ex (Join-Path $fakeProfile ".exapump"))
 Check "real: exapump.exe gone"  "no"  (Ex (Join-Path $script:BinDir "exapump.exe"))
 Check "real: exakit.cmd gone"   "no"  (Ex (Join-Path $script:BinDir "exakit.cmd"))
 Check "real: skill A gone"      "no"  (Ex "$fakeHome\.claude\skills\local-agent-ready-starter")

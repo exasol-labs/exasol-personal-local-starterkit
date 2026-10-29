@@ -16,6 +16,10 @@
 $script:PyexasolVenv = if ($env:EXAKIT_PYEXASOL_VENV) { $env:EXAKIT_PYEXASOL_VENV } else { Join-Path $script:ExakitHome "pyexasol-venv" }
 
 function Get-PyexasolVenvPython {
+    if ((Get-ExakitComponentOwnership "pyexasol") -eq "user") {
+        $existing = Get-ExakitManifestValue "components.pyexasol.python"
+        if ($existing) { return $existing }
+    }
     return (Join-Path $script:PyexasolVenv "Scripts\python.exe")
 }
 
@@ -56,6 +60,35 @@ function Write-PyexasolNotInstalled {
 }
 
 function Install-Pyexasol {
+    if ((Get-ExakitComponentOwnership "pyexasol") -eq "user") {
+        if (Get-PyexasolInstalledVersion) { Write-ExakitPreservedComponent "pyexasol"; return $true }
+        return (Write-PyexasolNotInstalled "the reused driver no longer works; repair its Python environment outside the kit")
+    }
+    if (-not (Test-Path (Join-Path $script:PyexasolVenv "Scripts/python.exe"))) {
+        $external = Get-Command python -ErrorAction SilentlyContinue
+        if ($external) {
+            $previous = $ErrorActionPreference
+            try {
+                $ErrorActionPreference = "Continue"
+                $externalVersion = (& $external.Source -c "import pyexasol; print(pyexasol.__version__)" 2>$null | Out-String).Trim()
+                if ($LASTEXITCODE -eq 0 -and $externalVersion) {
+                    Set-ExakitComponentOwnership "pyexasol" "user" $external.Source
+                    Set-ExakitManifestValue "components.pyexasol.python" $external.Source
+                    Set-ExakitManifestValue "components.pyexasol.version" $externalVersion
+                    Remove-ExakitManifestValue "components.pyexasol.venv"
+                    Ok "Reusing user-owned pyexasol $externalVersion"
+                    return $true
+                }
+                $installedDistribution = (& $external.Source -c "from importlib.metadata import version; print(version('pyexasol'))" 2>$null | Out-String).Trim()
+                if ($LASTEXITCODE -eq 0 -and $installedDistribution) {
+                    Set-ExakitComponentOwnership "pyexasol" "user" $external.Source
+                    Set-ExakitManifestValue "components.pyexasol.python" $external.Source
+                    Set-ExakitManifestValue "components.pyexasol.version" $installedDistribution
+                    return (Write-PyexasolNotInstalled "a user-owned driver is installed but cannot import; repair it outside the kit")
+                }
+            } finally { $ErrorActionPreference = $previous }
+        }
+    }
     # Install-ExakitUv fails hard on its own; this step may not end the run, so
     # the throw is caught and turned into a soft miss.
     try {
@@ -86,6 +119,7 @@ function Install-Pyexasol {
     }
 
     Set-ExakitManifestValue "components.pyexasol.version" $script:PyexasolVersion
+    Set-ExakitComponentOwnership "pyexasol" "kit" $script:PyexasolVenv
     Set-ExakitManifestValue "components.pyexasol.venv" $script:PyexasolVenv
     Set-ExakitManifestValue "components.pyexasol.python" $python
     return $true
@@ -96,6 +130,7 @@ function Install-Pyexasol {
 # `exakit status` or `exakit version` reports pyexasol as missing. Asked for
 # explicitly, so a failure here IS a failure. Twin of pyexasol_update.
 function Update-Pyexasol {
+    if ((Get-ExakitComponentOwnership "pyexasol") -eq "user") { Write-ExakitPreservedComponent "pyexasol"; return $true }
     $available = Get-ExakitComponentAvailable "pyexasol"
     if (-not $available) { Fail "Could not resolve the advertised pyexasol version." }
     $current = Get-PyexasolInstalledVersion

@@ -158,6 +158,79 @@ $script:McpDir       = Join-Path $script:ExakitHome "mcp"
 # step of the trust loop into a mkdir it has to guess at.
 $script:WorkflowsDir = Join-Path $script:ExakitHome "workflows"
 $script:BinDir       = if ($env:EXAKIT_BIN_DIR) { $env:EXAKIT_BIN_DIR } else { Join-Path $script:ExakitHomeBase ".local\bin" }
+# Ownership records provenance. Shared binaries/deployments are never inferred
+# to be kit-owned from a matching filename or a completed installation step.
+function Get-ExakitOwnershipKey {
+    param([string]$Id)
+    switch ($Id) {
+        { $_ -in @('database','runtime') } { return 'runtime' }
+        { $_ -in @('personal','launcher','exasol') } { return 'components.personal' }
+        'mcp' { return 'components.mcp_server' }
+        default { return ('components.' + $Id.Replace('-','_')) }
+    }
+}
+function Get-ExakitComponentOwnership {
+    param([string]$Id)
+    if ($Id -in @('exakit','kit2','skills')) { return 'kit' }
+    $key = Get-ExakitOwnershipKey $Id
+    $owner = Get-ExakitManifestValue "$key.ownership"
+    if ($owner -eq 'kit') {
+        $file = Get-ExakitManifestValue "$key.ownership_path"
+        $digest = Get-ExakitManifestValue "$key.ownership_sha256"
+        $live = ""
+        if ($Id -in @('personal','launcher','exasol') -and (Get-Command Get-PersonalCli -ErrorAction SilentlyContinue)) { $live = Get-PersonalCli }
+        elseif ($Id -eq 'exapump' -and (Get-Command Get-ExapumpCli -ErrorAction SilentlyContinue)) { $live = Get-ExapumpCli }
+        elseif ($Id -in @('database','runtime')) { $live = $script:PersonalDeployDir }
+        if ($file -and $live -and $file -ne $live) { $owner = 'user' }
+        if ($digest -and $file -and (Test-Path -LiteralPath $file -PathType Leaf)) {
+            try { if ((Get-FileHash -LiteralPath $file -Algorithm SHA256).Hash -ne $digest) { $owner = 'user' } }
+            catch { $owner = 'unknown' }
+        }
+    }
+    if ($owner -in @('kit','user','unknown')) { return $owner }
+    if ($Id -notin @('personal','launcher','exasol','database','runtime','exapump')) {
+        foreach ($field in @('venv','home','python','path')) {
+            $p = Get-ExakitManifestValue "$key.$field"
+            if ($p -and $p.StartsWith($script:ExakitHome + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { return 'kit' }
+        }
+    }
+    return 'unknown'
+}
+function Set-ExakitComponentOwnership {
+    param([string]$Id, [ValidateSet('kit','user','unknown')][string]$Ownership, [string]$OwnedPath = "")
+    Set-ExakitManifestValue "$(Get-ExakitOwnershipKey $Id).ownership" "unknown"
+    if ($OwnedPath) { Set-ExakitManifestValue "$(Get-ExakitOwnershipKey $Id).ownership_path" $OwnedPath }
+    else { Remove-ExakitManifestValue "$(Get-ExakitOwnershipKey $Id).ownership_path" }
+    if ($Ownership -eq 'kit' -and $OwnedPath -and (Test-Path -LiteralPath $OwnedPath -PathType Leaf)) {
+        Set-ExakitManifestValue "$(Get-ExakitOwnershipKey $Id).ownership_sha256" (Get-FileHash -LiteralPath $OwnedPath -Algorithm SHA256).Hash
+    } else { Remove-ExakitManifestValue "$(Get-ExakitOwnershipKey $Id).ownership_sha256" }
+    Set-ExakitManifestValue "$(Get-ExakitOwnershipKey $Id).ownership" $Ownership
+}
+function Set-ExakitReusedOwnership {
+    param([string]$Id, [string]$OwnedPath = "")
+    $receipt = Get-ExakitManifestValue "$(Get-ExakitOwnershipKey $Id).ownership_path"
+    if ((Get-ExakitComponentOwnership $Id) -ne 'kit' -or ($OwnedPath -and $receipt -ne $OwnedPath)) { Set-ExakitComponentOwnership $Id 'user' $OwnedPath }
+}
+function Test-ExakitComponentManaged {
+    param([string]$Id)
+    return ((Get-ExakitComponentOwnership $Id) -eq 'kit')
+}
+function Get-ExakitPreservedComponentPaths {
+    $ids = @('database','personal','exapump','pyexasol','mcp') + @(Get-ExakitMarketplaceAddons | ForEach-Object { $_.Id })
+    foreach ($id in $ids) {
+        if (Test-ExakitComponentManaged $id) { continue }
+        $key = Get-ExakitOwnershipKey $id
+        foreach ($field in @('ownership_path','deployment_dir','path','venv','home','python')) {
+            $candidate = Get-ExakitManifestValue "$key.$field"
+            if ($candidate -and $candidate.StartsWith($script:ExakitHome + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { $candidate }
+        }
+    }
+}
+function Write-ExakitPreservedComponent {
+    param([string]$Id)
+    Info "Keeping $Id ($(Get-ExakitComponentOwnership $Id)-owned; not installed by this kit)."
+}
+
 # Where the reason an install died is left for the NEXT process to find. Twin of
 # exakit_failure_note_file in common.sh, including the file name, so the two
 # platforms describe the same install the same way.
@@ -3161,6 +3234,7 @@ function Get-ExakitNoticeStillBehind {
             continue
         }
         $now = Get-ExakitComponentCurrent $name
+        if (-not (Test-ExakitComponentManaged $name)) { continue }
         if (-not $now -or $now -eq "unknown" -or $now -eq $want) { continue }
         # "Caught up" is not only "landed on exactly the advertised version" - an
         # install that overshot it has nothing pending either. Testing equality
@@ -3288,6 +3362,7 @@ function Show-ExakitUpdateNotice {
             $available = Get-ExakitComponentAvailable $actual
             if (-not $available) { continue }
             $current = Get-ExakitComponentCurrent $actual
+            if (-not (Test-ExakitComponentManaged $actual)) { continue }
             if (-not $current -or $current -eq "unknown" -or $current -eq "not installed") { continue }
             if ($current -eq $available) { continue }
             # Different is not the same as behind. An install that is PAST the
@@ -5556,6 +5631,11 @@ function Show-ExakitMarketplaceList {
         }
         $version = Get-ExakitVersionPlain ("" + $version)
         $entry = [ordered]@{ id = $addon.Id; status = $status; installed = ($status -eq "installed") }
+        $owner = $null
+        if ($status -eq 'installed') { $owner = Get-ExakitComponentOwnership $addon.Id }
+        elseif ($status -eq 'managed outside the kit') { $owner = 'user' }
+        $entry.ownership = $owner
+        $entry.installed_by_kit = ($owner -eq 'kit')
         # version joins repo and docs below: always present, null when unknown.
         if ($version) { $entry.version = $version } else { $entry.version = $null }
         if ($reason) { $entry.reason = $reason }
@@ -5865,6 +5945,7 @@ function Invoke-ExakitMarketplaceApply {
             $installed = $false
         }
         if ($installed) {
+            Set-ExakitComponentOwnership $id "kit"
             if ($addon.ValidateFn -and (Get-Command $addon.ValidateFn -ErrorAction SilentlyContinue)) {
                 try {
                     Set-ExakitAddonProgress -Id $id -Pct 65 -Ceiling 90 -Secs 8 -Phase "validating"

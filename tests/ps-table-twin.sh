@@ -639,7 +639,7 @@ for ps_module in exakit-common.ps1 exapump.ps1 mcp.ps1 runtime-personal.ps1 pyex
 done
 has "the profile-home resolver exists"        'function Get-ExakitProfileHome' "$COMMON_PS1"
 has "the agent home is the same resolver"     'return (Get-ExakitProfileHome)' "$COMMON_PS1"
-has "the exapump profile follows it"          'Join-Path (Get-ExakitProfileHome) ".exapump\config.toml"' "$PUMP_PS1"
+has "the kit profile is private"             'Join-Path $script:ExakitHome "exapump\config.toml"' "$PUMP_PS1"
 has "so does uv's installer directory"        'Join-Path (Get-ExakitProfileHome) ".local\bin\uv.exe"' "$COMMON_PS1"
 
 

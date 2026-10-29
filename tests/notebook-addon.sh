@@ -399,6 +399,7 @@ full_uninstall() { # full_uninstall <dry> — the real engine with the externals
 seed_kit() {
     manifest_init >/dev/null 2>&1
     manifest_set components.notebook.version 3.1.0
+    exakit_record_ownership notebook kit
     mkdir -p "$EXAKIT_NOTEBOOK_DIR/my-work/mlflow" "$EXAKIT_HOME/logs" "$EXAKIT_HOME/pyexasol-venv"
     printf 'precious' > "$EXAKIT_NOTEBOOK_DIR/my-work/analysis.ipynb"
     printf 'runs' > "$EXAKIT_NOTEBOOK_DIR/my-work/mlflow/mlflow.db"

@@ -14,6 +14,7 @@ set -u
 ROOT="$1"; W="$(mktemp -d)"; export HOME="$W/home"; mkdir -p "$HOME"
 EXAKIT_HOME="$W/kit"; EXAKIT_BIN_DIR="$W/bin"; mkdir -p "$EXAKIT_HOME" "$EXAKIT_BIN_DIR"
 . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"
+manifest_init >/dev/null 2>&1
 
 # Three add-ons: two that install, one that fails, so the warn a failure owes the
 # reader is proved to land BELOW the finished table rather than inside the frame.

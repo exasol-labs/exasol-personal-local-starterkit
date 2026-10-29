@@ -6,8 +6,9 @@ description: Use exapump, the starter kit's SQL and bulk-load CLI for the local 
 # exapump — SQL and bulk loading
 
 `exapump` is the kit's command-line path into the local database: one-off SQL,
-an interactive shell, and bulk file loading. It is installed by the kit and
-lives on `PATH` (`~/.local/bin/exapump`).
+an interactive shell, and bulk file loading. It reuses an existing compatible
+binary or installs one at `~/.local/bin/exapump`. `exakit version` reports the
+owner. A reused user binary and the user's existing profiles are preserved.
 
 ## Read this before you run anything
 
@@ -32,6 +33,16 @@ Two rules follow, and they are not negotiable:
 - **Show the user the SQL before you run it through exapump**, every time.
 
 ## Running SQL
+
+`exakit sql` selects the kit's private profile automatically. Before direct
+exapump commands, select that profile store in the current shell:
+
+```bash
+export EXAPUMP_CONFIG="${EXAKIT_HOME:-$HOME/.exasol-starter-kit}/exapump/config.toml"
+```
+
+On PowerShell, set `$env:EXAPUMP_CONFIG` to `exapump/config.toml` beneath the
+kit home. The kit does not replace the user's shared `~/.exapump` profiles.
 
 ```bash
 exakit sql 'SELECT CURRENT_TIMESTAMP'                      # prefer this

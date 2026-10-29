@@ -157,6 +157,10 @@ Without MCP tools — always the case in the session that ran the install — di
 
 It is **not** a sandbox — it connects as the admin user, exactly like `exapump sql -p starter-kit`. The enforced read-only boundary is the MCP user and nothing else.
 
+## Component ownership
+
+Reuse compatible user-installed components without reinstalling them. Ownership receipts in `manifest.json` distinguish `kit`, `user` and `unknown`; launcher and database receipts are separate. `exakit version` shows an Owner column, and version/marketplace JSON includes `ownership` and `installed_by_kit`. Reused installed version rows use `status: "external"` and no update remedy. User-owned components and untracked shared installations survive update and uninstall. The kit's exapump profile is private at `$EXAKIT_HOME/exapump/config.toml`; shared `~/.exapump` profiles are preserved. See [COMPONENT-OWNERSHIP.md](COMPONENT-OWNERSHIP.md).
+
 ## Updates
 
 The kit installs a **tested set** of versions published by the maintainers, not the newest of each component. Two commands cover everything:
@@ -173,7 +177,7 @@ What an agent needs to know:
 - The runtime update keeps your data: the container is recreated over the same data volume and the previous image is put back if the new one does not come up. There is no data backup step because nothing deletes data. The one exception is an Exasol Personal **major** upgrade, which is a real data migration: `exakit update` reports it, never starts it, and points at the Exasol Personal migration guidance for that version.
 - Nothing here can hang. Version resolution degrades to a cached copy, then to the copy that shipped with the kit; no command fails because an update check could not reach the network.
 - `exakit version` is the one command that reports versions: one row per component and add-on, each with what is installed and whether something newer is advertised. There is no separate `update-check` — it was merged into `version`.
-- In `exakit version --json`, every row in `components` carries **`addon`**: `true` for an optional tool from the marketplace, `false` for a part of the kit itself. Branch on it before you act on `status` — an add-on that reads `available` was never installed and nothing is wrong, while a kit component that reads `missing` is a gap `remedy` will close. Each row's `status` is one of `current`, `ahead`, `unsupported`, `unknown`, `available`, `blocked_on_kit`, `missing`, `update_available`, and `remedy` is the command for it or `null`.
+- In `exakit version --json`, every row in `components` carries **`addon`**: `true` for an optional tool from the marketplace, `false` for a part of the kit itself. Branch on it before you act on `status` — an add-on that reads `available` was never installed and nothing is wrong, while a kit component that reads `missing` is a gap `remedy` will close. Each row's `status` is one of `current`, `ahead`, `unsupported`, `unknown`, `available`, `blocked_on_kit`, `missing`, `update_available`, `external`, and `remedy` is the command for it or `null`.
 - If the advertised version is **older** than the installed one, nothing is offered and nothing is applied: `exakit version --json` reports that row's `status` as **`ahead`** (the human table prints it as `none` — the JSON token is the one to branch on), and asking for that component by name succeeds and does nothing. The kit has no downgrade path, by any route or override. To withdraw a faulty release, publish a higher version.
 - A component that reports `not installed` (most often `pyexasol`, whose install step is deliberately non-fatal) is repaired by the same command: `exakit update`.
 

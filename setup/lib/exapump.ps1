@@ -22,7 +22,8 @@ $script:ExapumpBinPath = if ($env:EXAKIT_EXAPUMP_BIN) { $env:EXAKIT_EXAPUMP_BIN 
 # the former and nothing passes --config or EXAPUMP_CONFIG, so on a domain
 # machine with a redirected home the kit wrote H:\.exapump\config.toml while the
 # binary read C:\Users\<you>\.exapump\config.toml and reported no such profile.
-$script:ExapumpConfigPath = Join-Path (Get-ExakitProfileHome) ".exapump\config.toml"
+$script:ExapumpConfigPath = Join-Path $script:ExakitHome "exapump\config.toml"
+$env:EXAPUMP_CONFIG = $script:ExapumpConfigPath
 
 # Test-ExapumpSucceeded - decide whether an exapump invocation succeeded.
 #
@@ -239,15 +240,21 @@ function Install-Exapump {
             } catch { } finally {
                 $ErrorActionPreference = $previousEAP
             }
-            if ($have -and $have -ne $script:ExapumpVersion -and $existing -eq $script:ExapumpBinPath) {
+            Set-ExakitReusedOwnership "exapump" $existing
+            if ((Test-ExakitComponentManaged "exapump") -and $have -and $have -ne $script:ExapumpVersion -and $existing -eq $script:ExapumpBinPath) {
                 Info "exapump $have is installed; this kit ships $($script:ExapumpVersion) - replacing it"
                 Remove-Item -Force $existing -ErrorAction SilentlyContinue
             } else {
                 Ok "exapump already installed: $existing"
                 Set-ExapumpManifest
+                if ($have) { Set-ExakitManifestValue "components.exapump.version" $have }
                 return
             }
         } else {
+            Set-ExakitReusedOwnership "exapump" $existing
+            if (-not (Test-ExakitComponentManaged "exapump")) {
+                Fail "The user-owned exapump cannot run. Repair it outside the kit; it was not replaced."
+            }
             Warn2 "Existing exapump binary does not run (interrupted download?) - reinstalling"
             Remove-Item -Force $existing -ErrorAction SilentlyContinue
         }
@@ -297,6 +304,7 @@ function Install-Exapump {
 
     New-Item -ItemType Directory -Force -Path $script:BinDir | Out-Null
     Move-Item -Force $tmp $script:ExapumpBinPath
+    Set-ExakitComponentOwnership "exapump" "kit" $script:ExapumpBinPath
     Confirm-ExakitOnPath $script:BinDir
     # Smoke-test the freshly installed binary BEFORE reporting success - the twin
     # of exapump_verify_runs, which the sh side has always had and this side

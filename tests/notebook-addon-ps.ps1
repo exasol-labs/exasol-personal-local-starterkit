@@ -249,6 +249,7 @@ try {
     function Seed-Kit {
         Initialize-ExakitManifest
         Set-ExakitManifestValue "components.notebook.version" "3.1.0"
+        Set-ExakitComponentOwnership "notebook" "kit"
         $work2 = Join-Path (Join-Path $script:NotebookDir "my-work") "mlflow"
         New-Item -ItemType Directory -Force -Path $work2 | Out-Null
         Set-Content -Path (Join-Path $work2 "mlflow.db") -Value "runs" -NoNewline

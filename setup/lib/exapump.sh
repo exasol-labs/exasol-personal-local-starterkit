@@ -28,8 +28,9 @@ EXAKIT_EXAPUMP_BIN="${EXAKIT_EXAPUMP_BIN:-$EXAKIT_BIN_DIR/exapump}"
 # said so later, as `Profile 'starter-kit' not found in config` from a command
 # that had worked ten minutes earlier. Every reader and the remover now share
 # this variable, so sandboxing it once is enough.
-EXAKIT_EXAPUMP_CONFIG_DIR="${EXAKIT_EXAPUMP_CONFIG_DIR:-$HOME/.exapump}"
+EXAKIT_EXAPUMP_CONFIG_DIR="${EXAKIT_EXAPUMP_CONFIG_DIR:-$EXAKIT_HOME/exapump}"
 EXAPUMP_CONFIG="$EXAKIT_EXAPUMP_CONFIG_DIR/config.toml"
+export EXAPUMP_CONFIG
 
 exapump_asset_name() {
     _ver="$EXAKIT_EXAPUMP_VERSION"
@@ -142,10 +143,11 @@ exapump_cli() {
 }
 
 exapump_install() {
+    if [ -e "$(exapump_cli)" ]; then exakit_reuse_ownership exapump "$(exapump_cli)"; fi
     [ "$(detect_arch)" != "unsupported" ] || \
         die "Unsupported CPU architecture: $(uname -m). exapump binaries exist for x86_64 and arm64 only."
 
-    if [ "${EXAKIT_FORCE_COMPONENT_INSTALL:-0}" != "1" ] && { command -v exapump >/dev/null 2>&1 || [ -x "$EXAKIT_EXAPUMP_BIN" ]; }; then
+    if { [ "${EXAKIT_FORCE_COMPONENT_INSTALL:-0}" != "1" ] || ! exakit_component_is_managed exapump; } && { command -v exapump >/dev/null 2>&1 || [ -e "$EXAKIT_EXAPUMP_BIN" ]; }; then
         # Trust the existing binary only if it actually runs — an interrupted
         # earlier download can leave a broken file at the same path.
         if _exi_out="$("$(exapump_cli)" --version 2>/dev/null)"; then
@@ -156,16 +158,24 @@ exapump_install() {
             # exapump fix in between missing. A binary elsewhere on PATH is
             # the user's and is left alone; only the kit's own is replaced.
             _exi_have="$(printf '%s' "$_exi_out" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
-            if [ -n "$_exi_have" ] && [ "$_exi_have" != "$EXAKIT_EXAPUMP_VERSION" ] && \
+            exakit_reuse_ownership exapump "$(exapump_cli)"
+            if exakit_component_is_managed exapump && [ -n "$_exi_have" ] && [ "$_exi_have" != "$EXAKIT_EXAPUMP_VERSION" ] && \
                [ "$(exapump_cli)" = "$EXAKIT_EXAPUMP_BIN" ]; then
                 info "exapump $_exi_have is installed; this kit ships $EXAKIT_EXAPUMP_VERSION - replacing it"
                 rm -f "$EXAKIT_EXAPUMP_BIN"
             else
                 ok "exapump already installed: $(exapump_cli)"
                 exapump_record_manifest
+                [ -z "$_exi_have" ] || manifest_set components.exapump.version "$_exi_have"
                 return 0
             fi
         else
+        exakit_reuse_ownership exapump "$(exapump_cli)"
+        if ! exakit_component_is_managed exapump; then
+            exakit_reuse_ownership exapump "$(exapump_cli)"
+            warn "The existing user-owned exapump cannot run; repair it outside the kit. It was not replaced."
+            return 1
+        fi
         # A binary that fails on the dynamic linker is not a broken download —
         # it is intact but needs a newer glibc than this system has. Shim it
         # in place instead of re-downloading the same incompatible bytes.
@@ -176,6 +186,7 @@ exapump_install() {
             case "$_existing_err" in
                 *GLIBC_*)
                     exapump_install_glibc_shim
+                    exakit_record_ownership exapump kit "$EXAKIT_EXAPUMP_BIN"
                     exapump_record_manifest
                     return 0
                     ;;
@@ -238,6 +249,7 @@ exapump_install() {
     install -m 755 "$_tmp" "$EXAKIT_EXAPUMP_BIN" \
         || die "Could not install exapump to $EXAKIT_EXAPUMP_BIN (is it writable? is the disk full?)."
     push_rollback "rm -f \"$EXAKIT_EXAPUMP_BIN\""
+    exakit_record_ownership exapump kit "$EXAKIT_EXAPUMP_BIN"
     rm -f "$_tmp"
     ensure_path_hint "$EXAKIT_BIN_DIR"
     # Smoke-test the freshly installed binary BEFORE reporting success. A
@@ -247,6 +259,7 @@ exapump_install() {
     # un-launchable binary would otherwise surface 30s later as an opaque
     # "SELECT 1 failed" after the connection retries.
     exapump_verify_runs
+    exakit_record_ownership exapump kit "$EXAKIT_EXAPUMP_BIN"
     ok_step "exapump v${EXAKIT_EXAPUMP_VERSION} installed to $(ui_tilde "$EXAKIT_EXAPUMP_BIN") ($(( $(date +%s 2>/dev/null || echo 0) - _exi_t0 ))s)"
     exapump_record_manifest
 }
@@ -1273,6 +1286,7 @@ exapump_confirm_installed_version() {
 }
 
 exapump_update() {
+    if ! exakit_component_is_managed exapump; then exakit_preserve_component exapump; return 0; fi
     _latest="$(exakit_component_available exapump)"
     [ -n "$_latest" ] || die "Could not resolve the advertised exapump version."
     # The already-current guard reads the same thing `exakit version` prints in

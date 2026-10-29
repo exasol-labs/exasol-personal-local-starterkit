@@ -232,7 +232,7 @@ printf '\n== update --json reports what happened, one object, nothing else ==\n'
 # is deferred (no --yes under --json means no prompt and no stop), exakit and
 # pyexasol are current. The object has to say all of that, and the exit code
 # has to be 1 because one updater failed.
-mkdir -p "$_UCS_HOME/kit" && printf '{"runtime":{"type":"personal"},"kit":{"version":"0.2.0"}}\n' > "$_UCS_HOME/kit/manifest.json"
+mkdir -p "$_UCS_HOME/kit" && printf '{"runtime":{"type":"personal","ownership":"kit"},"kit":{"version":"0.2.0"},"components":{"personal":{"ownership":"kit"},"exapump":{"ownership":"kit"},"mcp_server":{"ownership":"kit"},"pyexasol":{"ownership":"kit"}}}\n' > "$_UCS_HOME/kit/manifest.json"
 _ucs_json="$(HOME="$_UCS_HOME" EXAKIT_HOME="$_UCS_HOME/kit" EXAKIT_BIN_DIR="$_UCS_HOME/bin" bash -c '
 . "'"$ROOT"'/setup/lib/common.sh" 2>/dev/null
 exakit_print_versions_source_line() { info "versions: stubbed"; }

@@ -560,13 +560,20 @@ function Get-PersonalS3Source {
 }
 
 function Install-PersonalLauncher {
-    if ($env:EXAKIT_FORCE_COMPONENT_INSTALL -ne "1") {
+    $candidate = Get-Command exasol -ErrorAction SilentlyContinue
+    if ($candidate) { Set-ExakitReusedOwnership "personal" $candidate.Source }
+    if ($env:EXAKIT_FORCE_COMPONENT_INSTALL -ne "1" -or -not (Test-ExakitComponentManaged "personal")) {
         $existing = Get-Command exasol -ErrorAction SilentlyContinue
         if ($existing) {
+            Set-ExakitReusedOwnership "personal" $existing.Source
             $help = Invoke-ExakitBounded -FilePath $existing.Source -Arguments @("install", "--help") -TimeoutSeconds $script:PersonalProbeTimeout
             if ($help -and ($help -match '(?m)^\s*(-[-a-zA-Z0-9]+,\s*)?local(\s|,|$)')) {
+                Set-ExakitReusedOwnership "personal" $existing.Source
                 Ok "Exasol launcher already installed: $($existing.Source)"
                 return
+            }
+            if (-not (Test-ExakitComponentManaged "personal")) {
+                Fail "The user-owned Exasol launcher is incompatible. Update it outside the kit; it was not replaced."
             }
             Warn2 "The installed Exasol launcher ($($existing.Source)) does not support the 'local' preset (too old)."
             Info "Installing launcher v$(Get-PersonalTargetVersion) to $(Get-ExakitTilde $script:PersonalBinPath) - your existing launcher is left untouched"
@@ -652,6 +659,7 @@ function Install-PersonalLauncher {
         Info "Installing launcher to $(Get-ExakitTilde $script:PersonalBinPath)"
         New-Item -ItemType Directory -Force -Path $script:BinDir | Out-Null
         Move-Item -Force $binaryPath $script:PersonalBinPath
+        Set-ExakitComponentOwnership "personal" "kit" $script:PersonalBinPath
         OkStep "Exasol launcher v$version installed to $(Get-ExakitTilde $script:PersonalBinPath)"
     } finally {
         # The flag is restored in the SAME finally that cleans the temp dir:
@@ -842,6 +850,7 @@ function Invoke-PersonalInstallLocal {
 }
 
 function Install-PersonalDeployment {
+    if (Test-PersonalDeploymentExists) { Set-ExakitReusedOwnership "database" $script:PersonalDeployDir }
     if (Test-PersonalDeploymentRunning) {
         Info "An Exasol database is already running on port $(Get-PersonalDbPort)."
         if (Confirm-ExakitEnvPrompt "EXAKIT_REUSE_DB" "Use it instead of deploying a new one?" $true) {
@@ -907,6 +916,9 @@ function Install-PersonalDeployment {
             $script:PersonalNoDatabase = $true
             return
         }
+        if (-not (Test-ExakitComponentManaged "database")) {
+            Fail "The user-owned deployment could not start. Repair it outside the kit; it was not replaced."
+        }
         Info "Replacing the existing deployment - its previous data is not recoverable."
         # --auto-approve: destroy has its own [y/N] prompt, which a piped or
         # scripted install cannot answer; the consent came from the explicit
@@ -964,7 +976,12 @@ function Install-PersonalDeployment {
     $flag = Get-PersonalAutoApproveFlag "install"
     if ($flag) { $installArgs += $flag }
     $script:ExakitActiveLabel = "Deploying Exasol Personal locally"
-    if ((Invoke-PersonalInstallLocal $installArgs) -ne 0) {
+    $freshDeployment = -not (Test-PersonalDeploymentExists)
+    $installResult = Invoke-PersonalInstallLocal $installArgs
+    if ($freshDeployment -and (Test-PersonalDeploymentExists)) {
+        Set-ExakitComponentOwnership "database" "kit" $script:PersonalDeployDir
+    }
+    if ($installResult -ne 0) {
         # A DEPLOYMENT THAT EXISTS IS GIVEN THE KIT'S OWN BUDGET FIRST: the
         # launcher waits 27 seconds for a first boot, and a first boot in a
         # fresh Podman machine takes longer. Twin of the same branch in
@@ -1007,6 +1024,7 @@ function Install-PersonalDeployment {
     } finally {
         $script:ExakitQuietDetail = $prevDeployQuiet
     }
+    Set-ExakitComponentOwnership "database" "kit" $script:PersonalDeployDir
     Ok "Exasol Personal deployed and answering on 127.0.0.1:$(Get-PersonalDbPort)"
     Set-PersonalManifest "healthy"
 }
@@ -1184,6 +1202,7 @@ function Remove-Personal {
 # the note here fires again right before the start that performs it.
 function Update-Personal {
     param([string]$Advertised = "")
+    if (-not (Test-ExakitComponentManaged "personal")) { Write-ExakitPreservedComponent "personal"; return }
     if (-not $Advertised) { $Advertised = Get-PersonalTargetVersion }
     $env:EXAKIT_PERSONAL_VERSION = $Advertised
     $env:EXAKIT_FORCE_COMPONENT_INSTALL = "1"

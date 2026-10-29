@@ -262,7 +262,7 @@ EOF
 #    step 5 of the same function deletes that logfile. An unquieted run would
 #    print those lines from info() and pass this for the wrong reason.
 un_out="$(common_sh '
-manifest_get() { case "$1" in runtime.type) printf "personal\n" ;; *) return 1 ;; esac; }
+manifest_get() { case "$1" in runtime.type) printf "personal\n" ;; runtime.ownership) printf "kit\n" ;; *) return 1 ;; esac; }
 personal_teardown() { return 0; }
 exakit_mcp_operation() { return 0; }
 : > "$EXAKIT_BIN_DIR/exakit"
@@ -382,7 +382,7 @@ done
 #     PowerShell's $HOME is the account's home-directory attribute, which on a
 #     domain machine is H:\ or \\server\share\user -- neither can be
 #     bind-mounted, so the install could not run at all.
-head="$(code_only "$(tr -d '\r' < "$ROOT/setup/lib/exakit-common.ps1" | sed -n '1,200p')")"
+head="$(code_only "$(tr -d '\r' < "$ROOT/setup/lib/exakit-common.ps1" | sed -n '1,300p')")"
 if has "$head" 'USERPROFILE'; then
     pass "the Windows kit home prefers the local user profile"
 else

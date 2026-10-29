@@ -50,6 +50,107 @@ EXAKIT_MANAGED_PYTHON_VERSION="${EXAKIT_MANAGED_PYTHON_VERSION:-3.12}"
 EXAKIT_MCP_READONLY_USER="${EXAKIT_MCP_READONLY_USER:-mcp_readonly}"
 EXAKIT_MCP_READONLY_SCHEMAS="${EXAKIT_MCP_READONLY_SCHEMAS:-STARTER_KIT}"
 
+# Component ownership is installation provenance, not a PATH/location guess.
+# A launcher and its deployment are separate resources. Missing receipts are
+# unknown and are preserved. Private legacy venvs remain recognizable as kit
+# resources; shared binaries/deployments never acquire ownership by inference.
+exakit_ownership_key() {
+    case "$1" in
+        database|runtime) printf runtime ;;
+        personal|launcher|exasol) printf components.personal ;;
+        mcp) printf components.mcp_server ;;
+        *) printf 'components.%s' "$(printf '%s' "$1" | tr '-' '_')" ;;
+    esac
+}
+
+exakit_component_ownership() {
+    case "$1" in exakit|kit2|skills) printf kit; return 0 ;; esac
+    _eco_key="$(exakit_ownership_key "$1")"
+    _eco_owner="$(manifest_get "$_eco_key.ownership" 2>/dev/null || true)"
+    if [ "$_eco_owner" = kit ]; then
+        _eco_file="$(manifest_get "$_eco_key.ownership_path" 2>/dev/null || true)"
+        _eco_digest="$(manifest_get "$_eco_key.ownership_sha256" 2>/dev/null || true)"
+        _eco_live=""
+        case "$1" in
+            personal|launcher|exasol)
+                if command -v personal_cli >/dev/null 2>&1; then _eco_live="$(personal_cli)"; fi ;;
+            exapump)
+                if command -v exapump_cli >/dev/null 2>&1; then _eco_live="$(exapump_cli)"; fi ;;
+            database|runtime) _eco_live="${EXAKIT_PERSONAL_DEPLOY_DIR:-}" ;;
+        esac
+        if [ -n "$_eco_file" ] && [ -n "$_eco_live" ] && [ "$_eco_file" != "$_eco_live" ]; then _eco_owner=user; fi
+        # A user can replace a binary at the same path. A filename alone must
+        # not let an old receipt claim and remove that replacement.
+        if [ -n "$_eco_digest" ] && [ -f "$_eco_file" ]; then
+            _eco_now="$(sha256_of "$_eco_file" 2>/dev/null || true)"
+            [ "$_eco_now" = "$_eco_digest" ] || _eco_owner=user
+        fi
+    fi
+    case "$_eco_owner" in kit|user|unknown) printf '%s' "$_eco_owner"; return 0 ;; esac
+    # Legacy package environments under the private kit home were created by
+    # the kit. This never applies to a shared binary or database directory.
+    case "$1" in
+        personal|launcher|exasol|database|runtime|exapump) ;;
+        *)
+            for _eco_field in venv home python path; do
+                _eco_path="$(manifest_get "$_eco_key.$_eco_field" 2>/dev/null || true)"
+                case "$_eco_path" in "$EXAKIT_HOME"/*) printf kit; return 0 ;; esac
+            done ;;
+    esac
+    printf unknown
+}
+
+exakit_record_ownership() {
+    _ero_key="$(exakit_ownership_key "$1")"
+    case "$2" in kit|user|unknown) ;; *) return 2 ;; esac
+    # Publish kit ownership last. An interrupted receipt write must leave the
+    # conservative state, never a kit claim over a previous user's path.
+    manifest_set "$_ero_key.ownership" unknown || return 1
+    if [ -n "${3:-}" ]; then manifest_set "$_ero_key.ownership_path" "$3" || return 1
+    else manifest_del "$_ero_key.ownership_path" || return 1; fi
+    if [ "$2" = kit ] && [ -f "${3:-}" ]; then
+        _ero_digest="$(sha256_of "$3")" || return 1
+        [ -n "$_ero_digest" ] || return 1
+        manifest_set "$_ero_key.ownership_sha256" "$_ero_digest" || return 1
+    else
+        manifest_del "$_ero_key.ownership_sha256" || return 1
+    fi
+    manifest_set "$_ero_key.ownership" "$2"
+}
+
+exakit_reuse_ownership() {
+    # Preserve an existing kit receipt on a repeat install. Reuse never turns
+    # an untracked/user installation into a kit installation.
+    _ero_existing="$(exakit_component_ownership "$1")"
+    _ero_receipt="$(manifest_get "$(exakit_ownership_key "$1").ownership_path" 2>/dev/null || true)"
+    if [ "$_ero_existing" != kit ] || { [ -n "${2:-}" ] && [ "$_ero_receipt" != "$2" ]; }; then
+        exakit_record_ownership "$1" user "${2:-}"
+    fi
+}
+
+exakit_component_is_managed() {
+    [ "$(exakit_component_ownership "$1")" = kit ]
+}
+
+# Private paths of explicitly reused resources also survive a full kit-home
+# sweep. The returned paths are data, never shell commands.
+exakit_preserved_component_paths() {
+    # Include broken/unavailable add-ons too: a failed version probe must not
+    # make a recorded user resource disappear from the preservation set.
+    for _epc_id in database personal exapump pyexasol mcp $(exakit_marketplace_addons 2>/dev/null | cut -d'|' -f1); do
+        exakit_component_is_managed "$_epc_id" && continue
+        _epc_key="$(exakit_ownership_key "$_epc_id")"
+        for _epc_field in ownership_path deployment_dir path venv home python; do
+            _epc_path="$(manifest_get "$_epc_key.$_epc_field" 2>/dev/null || true)"
+            case "$_epc_path" in "$EXAKIT_HOME"/*) printf '%s\n' "$_epc_path" ;; esac
+        done
+    done
+}
+
+exakit_preserve_component() {
+    info "Keeping $1 ($(exakit_component_ownership "$1")-owned; not installed by this kit)."
+}
+
 # ---------------------------------------------------------------------------
 # Component version policy
 # ---------------------------------------------------------------------------
@@ -4317,6 +4418,7 @@ _exakit_marketplace_install_one() {
         EXAKIT_ACTIVE_LABEL="$_mi_prev_label"
         return 1
     fi
+    exakit_record_ownership "$1" kit
     if command -v "$_mi_validate" >/dev/null 2>&1; then
         [ -n "$_mi_state" ] && _exakit_addon_progress "$_mi_state" "$1" 65 90 8 "validating"
         "$_mi_validate" || true
@@ -4733,6 +4835,13 @@ _exakit_marketplace_json_compact() {
         printf '    {"id": "%s", "status": "%s", "installed": %s' \
             "$_ml_id" "$_ml_status" \
             "$([ "$_ml_status" = "installed" ] && echo true || echo false)"
+        _ml_owner=""
+        case "$_ml_status" in
+            installed) _ml_owner="$(exakit_component_ownership "$_ml_id")" ;;
+            "managed outside the kit") _ml_owner=user ;;
+        esac
+        if [ -n "$_ml_owner" ]; then printf ', "ownership": "%s"' "$_ml_owner"; else printf ', "ownership": null'; fi
+        printf ', "installed_by_kit": %s' "$([ "$_ml_owner" = kit ] && echo true || echo false)"
         if [ -n "$_ml_ver" ]; then printf ', "version": "%s"' "$_ml_ver"; else printf ', "version": null'; fi
         [ -n "$_ml_reason" ] && printf ', "reason": "%s"' \
             "$(printf '%s' "$_ml_reason" | sed 's/\\/\\\\/g; s/"/\\"/g')"
@@ -5380,6 +5489,7 @@ exakit_notice_after_command() {
         _notice_avail="$(exakit_component_available "$_notice_actual" 2>/dev/null || true)"
         [ -n "$_notice_avail" ] || continue
         _notice_cur="$(exakit_component_current "$_notice_actual" 2>/dev/null || true)"
+        exakit_component_is_managed "$_notice_actual" || continue
         [ -n "$_notice_cur" ] && [ "$_notice_cur" != "unknown" ] || continue
         [ "$_notice_cur" != "$_notice_avail" ] || continue
         # Different is not the same as behind. An install that is PAST the
@@ -5440,6 +5550,7 @@ _exakit_notice_still_behind() {
         # trim the space after a comma
         _nsb_entry="${_nsb_entry# }"
         _nsb_name="${_nsb_entry%%:*}"
+        exakit_component_is_managed "$_nsb_name" || continue
         _nsb_want="${_nsb_entry#*:}"
         [ -n "$_nsb_name" ] || continue
         if [ -z "$_nsb_want" ] || [ "$_nsb_want" = "$_nsb_name" ]; then
@@ -5617,6 +5728,10 @@ exakit_print_version_table() {
             # update to something that is not on the machine.
             _status="exakit marketplace"
             _row_severity=""
+        elif [ "$_row_installed" != "not installed" ] && ! exakit_component_is_managed "$_row_component"; then
+            _status="external"
+            _row_severity=""
+            _row_note="Reused; updates and removal stay with the owner."
         elif [ "$_row_available" = "unknown" ] || [ "$_row_installed" = "unknown" ]; then
             _status="inspect"
         elif [ "$_row_installed" = "not installed" ] && exakit_component_is_heavy "$_row_component"; then
@@ -5682,7 +5797,7 @@ exakit_print_version_table() {
         _uvt_tmp="$(mktemp "${TMPDIR:-/tmp}/exakit-version.XXXXXX")" || die "Could not create a temporary file for --json."
         _uvt_i=0
         while [ "$_uvt_i" -lt "${#_uc_comp[@]}" ]; do
-            printf '%s\n' "${_uc_comp[$_uvt_i]}$_uvt_tab${_uc_ver[$_uvt_i]}$_uvt_tab${_uc_avail[$_uvt_i]}$_uvt_tab${_uc_raw[$_uvt_i]}$_uvt_tab${_uc_sev[$_uvt_i]}$_uvt_tab${_uc_maint[$_uvt_i]}$_uvt_tab${_uc_note[$_uvt_i]}" >> "$_uvt_tmp"
+            printf '%s\n' "${_uc_comp[$_uvt_i]}$_uvt_tab${_uc_ver[$_uvt_i]}$_uvt_tab${_uc_avail[$_uvt_i]}$_uvt_tab${_uc_raw[$_uvt_i]}$_uvt_tab${_uc_sev[$_uvt_i]}$_uvt_tab${_uc_maint[$_uvt_i]}$_uvt_tab${_uc_note[$_uvt_i]}$_uvt_tab$(exakit_component_ownership "${_uc_comp[$_uvt_i]}")" >> "$_uvt_tmp"
             _uvt_i=$((_uvt_i + 1))
         done
         run_python - "$_uvt_tmp" "$_pending" "$(exakit_component_current exakit 2>/dev/null || printf unknown)" \
@@ -5701,7 +5816,7 @@ with open(sys.argv[1], encoding="utf-8") as handle:
         line = line.rstrip("\n")
         if not line:
             continue
-        comp, ver, avail, status, sev, maint, note = (line.split("\t") + [""] * 7)[:7]
+        comp, ver, avail, status, sev, maint, note, owner = (line.split("\t") + [""] * 8)[:8]
         # The raw cell doubles as the HUMAN Action column, so it carried
         # whatever a human should do next - "exakit marketplace",
         # "2.2.0 available (repair)" - which is a command or a sentence, not a
@@ -5729,6 +5844,8 @@ with open(sys.argv[1], encoding="utf-8") as handle:
         rows.append({
             "component": comp,
             "addon": comp in addon_ids,
+            "ownership": owner if ver not in ("not installed", "not available", "") else None,
+            "installed_by_kit": owner == "kit" and ver not in ("not installed", "not available", ""),
             "installed": None if ver in ("not installed", "not available", "") else ver,
             "installed_label": ver,
             "advertised": None if avail in ("unknown", "") else avail,
@@ -5758,11 +5875,13 @@ EXAKIT_VJ_PY
     # with _ui_visible_len, so the coloured severity suffix does not throw the
     # border off the way a byte count would.
     ui_panel_begin "Components"
-    ui_panel_line "$(printf '%-*s %-*s %s' "$_uc_cw" "Component" "$_uc_vw" "Version" "Status")"
+    ui_panel_line "$(printf '%-*s %-*s %-7s %s' "$_uc_cw" "Component" "$_uc_vw" "Version" "Owner" "Status")"
     _uc_i=0
     while [ "$_uc_i" -lt "${#_uc_comp[@]}" ]; do
-        ui_panel_line "$(printf '%-*s %-*s %s' \
-            "$_uc_cw" "${_uc_comp[$_uc_i]}" "$_uc_vw" "${_uc_ver[$_uc_i]}" "${_uc_status[$_uc_i]}")"
+        _uc_owner="$(exakit_component_ownership "${_uc_comp[$_uc_i]}")"
+        case "${_uc_ver[$_uc_i]}" in "not installed"|"not available") _uc_owner="-" ;; esac
+        ui_panel_line "$(printf '%-*s %-*s %-7s %s' \
+            "$_uc_cw" "${_uc_comp[$_uc_i]}" "$_uc_vw" "${_uc_ver[$_uc_i]}" "$_uc_owner" "${_uc_status[$_uc_i]}")"
         _exakit_version_note_lines "${_uc_note[$_uc_i]}"
         _exakit_version_note_lines "${_uc_maint[$_uc_i]}"
         _uc_i=$((_uc_i + 1))
@@ -6645,6 +6764,11 @@ _exakit_update_run() {
         _upd_actual="$(exakit_update_actual_target "$_component" 2>/dev/null || printf '%s\n' "$_component")"
         _cur="$(exakit_component_current "$_upd_actual" 2>/dev/null || true)"
         _avail="$(exakit_component_available "$_upd_actual" 2>/dev/null || true)"
+        if [ -n "$_cur" ] && [ "$_cur" != "not installed" ] && ! exakit_component_is_managed "$_upd_actual"; then
+            exakit_preserve_component "$_upd_actual"
+            _exakit_update_note "$_upd_actual" skipped "$_cur" "$_avail"
+            continue
+        fi
         # No build for this machine: a routine update stays quiet about it (there is
         # nothing the user can do), and an explicit target says why rather than
         # failing deep inside the installer.
@@ -11269,6 +11393,17 @@ _exakit_uninstall_component() {
     _uc_key="$1"
     _uc_dry="${2:-0}"
     case "$_uc_key" in
+        database|launcher|personal|exapump|pyexasol)
+            if ! exakit_component_is_managed "$_uc_key"; then
+                exakit_preserve_component "$_uc_key"
+                return 0
+            fi ;;
+    esac
+    if _exakit_addon_registered "$_uc_key" && ! exakit_component_is_managed "$_uc_key"; then
+        exakit_preserve_component "$_uc_key"
+        return 0
+    fi
+    case "$_uc_key" in
         database)
             _uc_type="$(manifest_get runtime.type 2>/dev/null || true)"
             if [ "$_uc_dry" = "1" ]; then
@@ -11298,15 +11433,16 @@ _exakit_uninstall_component() {
             ;;
         exapump)
             if [ "$_uc_dry" = "1" ]; then
-                info "  will remove: exapump ($EXAKIT_BIN_DIR/exapump and the profiles at ~/.exapump)"
+                info "  will remove: exapump ($EXAKIT_BIN_DIR/exapump and kit profiles at $EXAKIT_HOME/exapump)"
                 return 0
             fi
             info "Removing exapump and its profiles"
-            rm -f "$EXAKIT_BIN_DIR/exapump"
+            _uc_bin="$(manifest_get components.exapump.ownership_path 2>/dev/null || true)"
+            rm -f "${_uc_bin:-$EXAKIT_BIN_DIR/exapump}"
             # Through the shared variable, never a bare "$HOME/.exapump": a
             # caller that sandboxes EXAKIT_HOME but not HOME would otherwise
             # delete the real profile directory (a test suite did exactly that).
-            rm -rf "${EXAKIT_EXAPUMP_CONFIG_DIR:-$HOME/.exapump}" "$EXAKIT_HOME/libexec"
+            rm -rf "$EXAKIT_HOME/exapump" "$EXAKIT_HOME/libexec"
             manifest_del components.exapump
             exakit_unmark_step exapump
             ;;
@@ -12307,6 +12443,26 @@ exakit_uninstall_run() {
         die "Unsafe EXAKIT_HOME: $EXAKIT_HOME"
     fi
 
+    _un_preserved_paths="$(exakit_preserved_component_paths)"
+    _un_entry_preserved() {
+        while IFS= read -r _un_kept_path; do
+            [ -n "$_un_kept_path" ] || continue
+            case "$_un_kept_path" in "$1"|"$1"/*) return 0 ;; esac
+            case "$1" in "$_un_kept_path"/*) return 0 ;; esac
+        done <<EXAKIT_PRESERVED_PATHS_EOF
+$_un_preserved_paths
+EXAKIT_PRESERVED_PATHS_EOF
+        return 1
+    }
+    _un_protected_bins=""
+    _un_exasol_path="$(manifest_get components.personal.ownership_path 2>/dev/null || true)"
+    _un_exapump_path="$(manifest_get components.exapump.ownership_path 2>/dev/null || true)"
+    for _un_bin in exasol exapump $(exakit_marketplace_addons 2>/dev/null | cut -d'|' -f1); do
+        if ! exakit_component_is_managed "$_un_bin"; then
+            _un_protected_bins="$_un_protected_bins $_un_bin "
+        fi
+    done
+
     # 0a) Boot entries first: a LaunchAgent or systemd unit left behind would
     #     try to start something that no longer exists on the next login.
     if command -v exakit_service_ids >/dev/null 2>&1; then
@@ -12331,6 +12487,7 @@ exakit_uninstall_run() {
     EXAKIT_UNINSTALL_FULL=1
     if command -v exakit_marketplace_installed_addons >/dev/null 2>&1; then
         for _un_id in $(exakit_marketplace_installed_addons 2>/dev/null); do
+            if ! exakit_component_is_managed "$_un_id"; then exakit_preserve_component "$_un_id"; continue; fi
             _un_fn="$(_exakit_addon_fn "$_un_id" uninstall)"
             command -v "$_un_fn" >/dev/null 2>&1 || continue
             if "$_un_fn" "$_dry"; then
@@ -12345,7 +12502,9 @@ exakit_uninstall_run() {
     # 1) Database + all data. Uses the runtime removal helper (always --data),
     #    which for Personal also reaps any orphaned runner daemon on the DB port.
     _type="$(manifest_get runtime.type 2>/dev/null || true)"
-    if [ -n "$_type" ]; then
+    if [ -n "$_type" ] && ! exakit_component_is_managed database; then
+        exakit_preserve_component database
+    elif [ -n "$_type" ]; then
         # Named BEFORE the removal, not only in the record line after it: on
         # `--yes` there is no gate to read, so this line is the last chance to
         # see what is about to be deleted.
@@ -12401,9 +12560,9 @@ exakit_uninstall_run() {
     _exakit_remove_installed_skills "$_dry"
 
     # 4) exapump profile store (the kit created it; the binary goes in step 6).
-    if [ -e "${EXAKIT_EXAPUMP_CONFIG_DIR:-$HOME/.exapump}" ]; then
-        _step "exapump profiles at ${EXAKIT_EXAPUMP_CONFIG_DIR:-$HOME/.exapump}"
-        _rm "${EXAKIT_EXAPUMP_CONFIG_DIR:-$HOME/.exapump}"
+    if [ -e "$EXAKIT_HOME/exapump" ] && ! _un_entry_preserved "$EXAKIT_HOME/exapump"; then
+        _step "kit exapump profiles at $EXAKIT_HOME/exapump"
+        _rm "$EXAKIT_HOME/exapump"
     fi
 
     # 5) Kit home: credentials, logs, manifest, cached kit copy, MCP snapshots,
@@ -12422,20 +12581,26 @@ exakit_uninstall_run() {
             fi
         fi
         # Checked by the guard at the top of this function, before step 0a.
-        if _un_keep_notebooks; then
+        if _un_keep_notebooks || [ -n "$_un_preserved_paths" ]; then
             # Everything in the kit home but the notebooks folder. The home is
             # left holding only that folder, which an install or an uninstall
             # later accepts as a kit home (see _un_safe_target).
             _step "kit home $EXAKIT_HOME (credentials, logs, manifest, snapshots, pyexasol venv, add-ons) - all but your notebooks"
-            info "  your notebooks stay in $EXAKIT_HOME/notebooks (EXAKIT_UNINSTALL_NOTEBOOKS=remove removes them too)"
+            _un_keep_notebooks && info "  your notebooks stay in $EXAKIT_HOME/notebooks (EXAKIT_UNINSTALL_NOTEBOOKS=remove removes them too)"
+            [ -z "$_un_preserved_paths" ] || info "  reused component files under the kit home are preserved"
             if [ "$_dry" != "1" ]; then
                 for _un_entry in "$EXAKIT_HOME"/* "$EXAKIT_HOME"/.[!.]* "$EXAKIT_HOME"/..?*; do
                     [ -e "$_un_entry" ] || [ -L "$_un_entry" ] || continue
-                    [ "$_un_entry" = "$EXAKIT_HOME/notebooks" ] && continue
+                    if [ "$_un_entry" = "$EXAKIT_HOME/notebooks" ] && _un_keep_notebooks; then continue; fi
+                    _un_entry_preserved "$_un_entry" && continue
                     rm -rf "$_un_entry"
                 done
             fi
-            _done "Kit home removed: $EXAKIT_HOME (credentials, logs, manifest, snapshots, pyexasol venv, add-on state); your notebooks were kept in $EXAKIT_HOME/notebooks"
+            if _un_keep_notebooks; then
+                _done "Kit-owned files removed from $EXAKIT_HOME; your notebooks were kept in $EXAKIT_HOME/notebooks; reused resources were preserved"
+            else
+                _done "Kit-owned files removed from $EXAKIT_HOME; reused resources were preserved"
+            fi
         else
             _step "kit home $EXAKIT_HOME (credentials, logs, manifest, snapshots, pyexasol venv, add-ons)"
             _rm "$EXAKIT_HOME"
@@ -12454,13 +12619,19 @@ exakit_uninstall_run() {
     fi
     _un_bins_gone=""
     for _bin in $_bins; do
-        if [ -e "$EXAKIT_BIN_DIR/$_bin" ]; then
-            _step "CLI binary $EXAKIT_BIN_DIR/$_bin"
-            _rm "$EXAKIT_BIN_DIR/$_bin"
+        case "$_un_protected_bins" in *" $_bin "*) info "Keeping $_bin (not installed by this kit)."; continue ;; esac
+        _un_bin_path="$EXAKIT_BIN_DIR/$_bin"
+        case "$_bin" in
+            exasol) _un_bin_path="${_un_exasol_path:-$_un_bin_path}" ;;
+            exapump) _un_bin_path="${_un_exapump_path:-$_un_bin_path}" ;;
+        esac
+        if [ -e "$_un_bin_path" ]; then
+            _step "CLI binary $_un_bin_path"
+            _rm "$_un_bin_path"
             _un_bins_gone="${_un_bins_gone:+$_un_bins_gone, }$_bin"
         fi
     done
-    [ -n "$_un_bins_gone" ] && _done "Commands removed from $EXAKIT_BIN_DIR: $_un_bins_gone"
+    [ -n "$_un_bins_gone" ] && _done "Kit-owned commands removed: $_un_bins_gone"
     ui_spin_end
     EXAKIT_QUIET_DETAIL="$_un_prev_quiet"
     # Said last, and said plainly, because it is the one thing the reader cannot

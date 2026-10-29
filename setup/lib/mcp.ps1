@@ -241,6 +241,7 @@ function Install-Mcp {
     Set-ExakitManifestValue "components.mcp_server.command" (Get-McpCommandPath)
     Set-ExakitManifestValue "components.mcp_server.package" $script:McpPackage
     Set-ExakitManifestValue "components.mcp_server.version" $script:McpVersion
+    Set-ExakitComponentOwnership "mcp" "kit"
     # Not announced: "cached" above and "answers over stdio" below are the two
     # facts, and this said neither of them again.
     Write-ExakitLog "OK" "MCP server ready to run via uvx"

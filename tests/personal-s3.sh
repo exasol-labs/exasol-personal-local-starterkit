@@ -37,6 +37,9 @@ _exakit_log_file() { :; }
 ui_tilde() { printf '%s\n' "$1"; }
 push_rollback() { :; }
 ensure_path_hint() { :; }
+exakit_reuse_ownership() { :; } # these download fixtures represent a kit-owned launcher
+exakit_component_is_managed() { return 0; }
+exakit_record_ownership() { :; }
 personal_refuse_launcher_downgrade() { :; }
 exakit_run_bounded() { return 0; }
 exakit_unsigned_binary_hint() { return 1; }

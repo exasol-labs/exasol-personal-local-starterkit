@@ -201,6 +201,7 @@ mcp_install() {
     manifest_set components.mcp_server.command "$(mcp_command_path)"
     manifest_set components.mcp_server.package "$EXAKIT_MCP_PACKAGE"
     manifest_set components.mcp_server.version "$EXAKIT_MCP_VERSION"
+    exakit_record_ownership mcp kit
     # Not announced: "cached" above and "answers over stdio" below are the two
     # facts, and this said neither of them again.
     _exakit_log_file "OK    MCP server ready to run via uvx"

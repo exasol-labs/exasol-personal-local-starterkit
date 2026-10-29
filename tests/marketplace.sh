@@ -1033,10 +1033,12 @@ _UI_CHECKBOX_SELECTABLE=""
 
 echo "the selectable uninstall (registry-driven, zero wiring per add-on):"
 check "the executor dispatches an add-on to its own hook" "hook-ran" "$( (
+    exakit_record_ownership dash-server kit
     dash_server_uninstall() { printf 'hook-ran'; }
     _exakit_uninstall_component dash-server 0
 ) )"
 check "an add-on without a hook explains instead of failing" "yes" "$( (
+    exakit_record_ownership exasol-vscode kit
     unset -f exasol_vscode_uninstall
     _exakit_uninstall_component exasol-vscode 0 2>&1 | grep -q "update the kit" && echo yes || echo no
 ) )"
