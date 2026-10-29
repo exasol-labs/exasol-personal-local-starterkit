@@ -1,5 +1,15 @@
 # Changelog
 
+## Consistent add-on discovery
+
+- Give all seven add-ons the same management reference in human and JSON help; automatically include future add-on documents.
+- Publish exact invocations, usage, parameter/default/choice metadata, examples and help commands in the JSON catalog. Normalize native executable names without duplicated prefixes.
+- Keep multiword help paths and support JSON through the same help forms on shell and PowerShell. Register notebook controls, MLflow actions and Rust scoring actions separately with their own parameters.
+- Reject unknown help actions with exit 2 and a catalog remedy instead of guessing a parent. Keep keyword search in `catalog`.
+- Add registration, lifecycle argument, action lookup and complete shell/PowerShell JSON parity checks. Document the required help contract for new add-ons.
+- Implement the advertised PowerShell model inspection and `put --yes` trust confirmation, including no-copy refusals for unconfirmed pickle files. Validate MLflow start flags before installing or starting its server.
+- Keep PowerShell help/catalog discovery from creating empty installation folders.
+
 ## Unreleased
 
 ### Add-on command reference and UDF installation stages

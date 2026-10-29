@@ -612,8 +612,32 @@ as the text needs, so nothing is cut off. A long About costs table rows rather
 than meaning -- but the checkbox list below the table shows ids only, because the
 shared checkbox layer keeps every menu row to exactly one terminal line.
 
-Skipping this document is allowed — the row then reads
-`Details: exakit help my-tool` — but the screen is worse for it.
+Every registered add-on must ship this document. CI discovers the marketplace
+registry and checks that its IDs exactly match the add-on help documents, so a
+new add-on cannot silently arrive without help.
+
+Add a `commands` array. Each command needs its exact invocation, syntax in
+`options`, a summary, runnable `examples`, and a `parameters` array (empty when
+there are no arguments). Each parameter has `name`, `description`, `required`
+(boolean), `default` (a value or `null`), and optional `choices`. Document every
+flag in `options`; explain native argument forwarding instead of inventing a
+partial list of upstream options. Give independently callable actions their own
+entries, for example `exakit my-tool start`, so agents can request that action's
+help without guessing which flags belong to it.
+
+The renderers discover these files automatically on both platforms. They add
+the same `management` commands to every add-on page and JSON document, and
+publish canonical invocations, usage, parameter metadata, examples and exact
+`help_command` values in `exakit catalog --json`. No extra list of help topics is
+needed. Existing binary prefixes are recognized; a new native tool can declare
+`invocation_prefix` when its executable differs from its document ID.
+
+Keep shared lifecycle arguments identical to `exakit.json`; contextual summaries
+and examples may differ. Run `python3 tests/test_addon_help.py` and
+`pwsh -NoProfile -File tests/addon-help-ps.ps1` before shipping. These check
+registration coverage, argument metadata, lifecycle consistency, exact action
+lookup, rejection of unknown actions, and shell/PowerShell JSON parity. See
+[ADDON-COMMANDS.md](ADDON-COMMANDS.md) for the user and agent discovery contract.
 
 ### 5. Optional: ship an AI skill with it
 

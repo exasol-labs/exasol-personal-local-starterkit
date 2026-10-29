@@ -13,6 +13,42 @@ exakit marketplace --list --json
 
 Each add-on page now shows command syntax, positional arguments, options, defaults, valid values, examples and environment settings. Individual command pages also give their behavior and available exit codes. Flags belong to the command that lists them: for example, `--replace` belongs to `model put`, not `udf-use`. A requirements file is a positional argument, **not a `--requirements` flag**. Quote file paths containing spaces.
 
+## The same discovery flow for every add-on
+
+Use the same words on macOS, Linux and PowerShell (Windows uses the `exakit.cmd` launcher). Substitute a registered add-on ID for `notebook`:
+
+```sh
+exakit marketplace --list --json
+exakit help notebook
+exakit notebook --help
+exakit --help notebook
+exakit help notebook --json
+exakit marketplace notebook
+exakit update notebook
+exakit uninstall notebook --dry-run
+```
+
+The three human help forms show the same page. Adding `--json` to any of them returns the same document, including a `management` object with install, help, JSON help, update, uninstall preview and uninstall commands. Reading help never installs an add-on. A page describes the shipped interface; use `marketplace --list --json` or `version --json` to discover what is installed and who owns it.
+
+Agents should discover commands before invoking them:
+
+```sh
+exakit catalog --json
+exakit help model put --json
+exakit help "exakit model put" --json
+exakit model put --help --json
+exakit mlflow start --help --json
+exakit notebook stop marimo --help --json
+```
+
+Each catalog row includes an exact `invocation`, `usage`, `source`, `hidden` flag and runnable `help_command`; documented parameters, defaults, choices, examples, warnings and exit codes accompany it. Existing field names remain compatible with schema version 1. Internal repair commands remain marked `hidden` and are not for normal agent use.
+
+Command help resolves command names and their documented children. It does not search descriptions or silently substitute a parent for an unknown action. Unknown help returns exit **2**; JSON carries `ok: false`, an empty `commands` array and the remedy `exakit catalog --json`. Use `exakit catalog <text> --json` for a keyword search. A command family can return several rows; an exact leaf command returns its own row. The input spelling is retained in `search`, so compare the `commands` array when comparing equivalent spellings.
+
+Use only the flags listed for that action: for example, MLflow `start` lists `--port`, while `replay` lists its tracking-store and timeout options. Native tools that forward arguments, such as dbt, point to their own installed-version help. A documented add-on ID does not imply that it is an executable subcommand: install through `marketplace`, then use the operations listed in its page.
+
+The same model inspection and `put --yes` trust confirmation run through the PowerShell handlers. MLflow start rejects unsupported flags before it prepares the server. Automated checks cover actual handlers as well as help output; live Windows verification remains a separate manual check.
+
 ## Find each add-on's full reference
 
 | Add-on | Help command | Main operation |

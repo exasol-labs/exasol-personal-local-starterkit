@@ -64,8 +64,22 @@ try {
     Check "the UDF root" "/buckets/bfsdefault/default" $doc.udf_root
     Check "the bucket directory on this machine" (Get-Item $script:PersonalDeployDir).FullName ($doc.bucket_dir -replace "[\\/]local[\\/]runtime[\\/]exa[\\/]bucketfs[\\/]bfsdefault[\\/]default$", "")
 
+    Write-Host "inspect and trust confirmation match the shell commands:"
+    $inspection = (Invoke-CmdModel -CmdArgs @('inspect', $v1, '--json')) | ConvertFrom-Json
+    Check "inspect reports the file kind without loading it" "pickle" $inspection.kind
+    Check "inspect reports the digest" (Get-Sha $v1) $inspection.sha256
+    Check "inspect does not copy the file" "False" (Test-Path (Join-Path $models 'churn.pkl'))
+    $savedTrust = $env:EXAKIT_MODEL_TRUST
+    $env:EXAKIT_MODEL_TRUST = '0'
+    try {
+        $said = Invoke-Refused { Invoke-CmdModelPut -CmdArgs @($v1, '--json') }
+        Contains "unconfirmed pickle exits 6" "EXIT 6:" $said
+        Contains "trust refusal names --yes" "--yes" $said
+        Check "refused put copies nothing" "False" (Test-Path (Join-Path $models 'churn.pkl'))
+    } finally { $env:EXAKIT_MODEL_TRUST = $savedTrust }
+
     Write-Host "put copies, records and prints the /buckets path:"
-    $answer = (Invoke-CmdModelPut -CmdArgs @($v1, "--json")) | ConvertFrom-Json
+    $answer = (Invoke-CmdModelPut -CmdArgs @($v1, "--yes", "--json")) | ConvertFrom-Json
     Check "the file is in the bucket under models/" "weights-v1" (Get-Content -Raw (Join-Path $models "churn.pkl"))
     Check "the UDF path" "/buckets/bfsdefault/default/models/churn.pkl" $answer.path
     Check "--json includes origin status" "name path provenance replaced sha256 size trusted_origin warning" (($answer.PSObject.Properties.Name | Sort-Object) -join " ")
@@ -81,14 +95,14 @@ try {
     Check "the record keeps its time" $putAt (Get-Record).'churn.pkl'.put_at
 
     Write-Host "a different file of the same name is refused without --replace:"
-    $said = Invoke-Refused { Invoke-CmdModelPut -CmdArgs @($v2) }
+    $said = Invoke-Refused { Invoke-CmdModelPut -CmdArgs @($v2, '--yes') }
     Contains "exit 5 (not confirmed)" "EXIT 5:" $said
     Contains "the remedy is --replace" "--replace" $said
     Check "nothing was copied" "weights-v1" (Get-Content -Raw (Join-Path $models "churn.pkl"))
     Check "the record is unchanged" $sha1 (Get-Record).'churn.pkl'.sha256
 
     Write-Host "--replace overwrites it and says so:"
-    $replaced = (Invoke-CmdModelPut -CmdArgs @($v2, "--replace", "--json")) | ConvertFrom-Json
+    $replaced = (Invoke-CmdModelPut -CmdArgs @($v2, "--replace", "--yes", "--json")) | ConvertFrom-Json
     Check "replaced" "True" $replaced.replaced
     Check "the new content is there" "weights-v2-longer" (Get-Content -Raw (Join-Path $models "churn.pkl"))
     Check "the record follows" (Get-Sha $v2) (Get-Record).'churn.pkl'.sha256
@@ -135,7 +149,7 @@ try {
     Set-ExakitManifestValue "components.udf_devkit.version" "0.1.0"
 
     Write-Host "no credential is read, printed or recorded:"
-    $all = (@(Invoke-CmdModelPut -CmdArgs @($v1, "--replace", "--json")) + @(Invoke-CmdModelList -CmdArgs @("--json")) + @(Invoke-CmdModelPut -CmdArgs @($v1, "--json"))) -join "`n"
+    $all = (@(Invoke-CmdModelPut -CmdArgs @($v1, "--replace", "--yes", "--json")) + @(Invoke-CmdModelList -CmdArgs @("--json")) + @(Invoke-CmdModelPut -CmdArgs @($v1, "--json"))) -join "`n"
     Lacks "the password is never printed" $secret $all
     Lacks "nor the password file's path" "db-password" $all
     $recordText = (Get-Record) | ConvertTo-Json -Depth 6 -Compress
@@ -163,10 +177,13 @@ try {
         } finally { $ErrorActionPreference = $prevEap }
     }
     try {
-        $run = Invoke-Cli model put $v1 --json
+        $run = Invoke-Cli model inspect $v1 --json
+        Check "inspect --json: exit 0" "0" $run[0]
+        Check "inspect returns the file kind" "pickle" (($run[1] | ConvertFrom-Json).kind)
+        $run = Invoke-Cli model put $v1 --yes --json
         Check "put --json: exit 0" "0" $run[0]
         Check "and one object on stdout" "churn.pkl" (($run[1] | ConvertFrom-Json).name)
-        $run = Invoke-Cli model put $v2 --json
+        $run = Invoke-Cli model put $v2 --yes --json
         Check "a different file: exit 5" "5" $run[0]
         Check "with one refusal object" "False" (($run[1] | ConvertFrom-Json).ok)
         $run = Invoke-Cli model list --json
@@ -174,14 +191,14 @@ try {
         Check "with the UDF root" "/buckets/bfsdefault/default" (($run[1] | ConvertFrom-Json).udf_root)
         $disposable = Join-Path $work "disposable.pkl"
         Set-Content -NoNewline -Path $disposable -Value "disposable"
-        $null = Invoke-Cli model put $disposable --json
+        $null = Invoke-Cli model put $disposable --yes --json
         $run = Invoke-Cli model rm disposable.pkl --json
         Check "rm exit 0" "0" $run[0]
         Check "rm JSON names the file" "disposable.pkl" (($run[1] | ConvertFrom-Json).name)
         Check "rm deletes the file" "False" (Test-Path (Join-Path $models "disposable.pkl"))
         $old = Join-Path $work "old.pkl"
         Set-Content -NoNewline -Path $old -Value "old"
-        $null = Invoke-Cli model put $old --json
+        $null = Invoke-Cli model put $old --yes --json
         $record = Get-Record
         $record.'old.pkl'.put_at = "2020-01-01T00:00:00Z"
         Set-ExakitManifestValue "components.udf_devkit.models" $record

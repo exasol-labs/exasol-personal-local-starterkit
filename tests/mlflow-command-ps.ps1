@@ -116,11 +116,18 @@ try {
     foreach ($case in @(@{ Args = @("frob"); Needle = "replay, disable" },
                         @{ Args = @("stop", "--frob"); Needle = "--disable" },
                         @{ Args = @("status", "--port", "1"); Needle = "Only --json" })) {
-        $said = ""
-        try { Invoke-CmdMlflow -CmdArgs $case.Args } catch { $said = "$_" }
-        Contains "exakit mlflow $($case.Args -join ' ')" $case.Needle $said
+        $denialText = ""
+        try { Invoke-CmdMlflow -CmdArgs $case.Args } catch { $denialText = "$_" }
+        Contains "exakit mlflow $($case.Args -join ' ')" $case.Needle $denialText
     }
     Check "the log target is udf-devkit-mlflow" "udf-devkit-mlflow|MLflow server|$(Join-Path $env:EXAKIT_HOME 'mlflow/server.log')" (Get-UdfDevkitLogPath)
+    foreach ($badArgs in @(@('start','--port'), @('start','--executable','other.exe'))) {
+        Reset-Calls
+        $denialText = ''
+        try { Invoke-CmdMlflow -CmdArgs $badArgs } catch { $denialText = "$_" }
+        Check 'invalid start arguments are refused' $true ([bool]$denialText)
+        Check 'invalid start never installs or starts the service' '' ($script:calls -join '|')
+    }
 } finally {
     $env:HOME = $oldHome; $env:EXAKIT_HOME = $oldKit
     Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue

@@ -51,6 +51,9 @@ function Get-ExakitHelpDocuments {
         $doc = Get-ExakitHelpDocument -Id $id
         if ($doc) { $map[$id] = $doc }
     }
+    $script:ExakitHelpDocumentTools = @($map.Keys) + @($map.Values | ForEach-Object {
+        if ($_.invocation_prefix) { $_.invocation_prefix }
+    })
     return $map
 }
 
@@ -100,7 +103,19 @@ function Get-ExakitHelpDocWithHiddenMarked {
         }
         $copy.commands = $marked
     }
+    if ($Doc.kind -eq 'addon') {
+        $copy | Add-Member -NotePropertyName management -NotePropertyValue (Get-ExakitAddonManagement $Doc.id) -Force
+    }
     return $copy
+}
+
+function Get-ExakitAddonManagement {
+    param([string]$Id)
+    return [ordered]@{
+        install = "exakit marketplace $Id"; help = "exakit help $Id"
+        help_json = "exakit help $Id --json"; update = "exakit update $Id"
+        uninstall_preview = "exakit uninstall $Id --dry-run"; uninstall = "exakit uninstall $Id"
+    }
 }
 
 function Get-ExakitHelpInvocation {
@@ -108,7 +123,13 @@ function Get-ExakitHelpInvocation {
     $command = ""
     if ($Entry.command) { $command = ([string]$Entry.command).Trim() }
     $parts = $command -split '\s+'
-    if ($parts.Count -gt 0 -and $script:ExakitHelpKnownTools -contains $parts[0]) {
+    if ($DocId -eq 'exakit') {
+        if ($parts[0] -eq 'exakit') { return $command }
+        return ("exakit $command").Trim()
+    }
+    $knownTools = @($script:ExakitHelpKnownTools) + @($script:ExakitHelpDocumentTools) + @(Get-ExakitHelpIds)
+    if ($Doc -and $Doc.invocation_prefix) { $knownTools += $Doc.invocation_prefix }
+    if ($parts.Count -gt 0 -and $knownTools -contains $parts[0]) {
         return $command
     }
     $prefix = $DocId
@@ -312,6 +333,13 @@ function Show-ExakitHelpComponent {
     Write-ExakitHelpHeader $doc.title $doc.tagline
     Write-Host ""
     Write-ExakitHelpWrapped -Text $doc.role -Indent "   "
+    if ($doc.kind -eq 'addon') {
+        Write-ExakitHelpSection 'Manage this add-on'
+        $management = Get-ExakitAddonManagement $Id
+        foreach ($action in $management.Keys) {
+            Write-ExakitHelpWrapped -Text ($action.PadRight(20) + $management[$action])
+        }
+    }
 
     $facts = [ordered]@{
         "Repository" = $doc.repo; "Package" = $doc.package; "Binary" = $doc.binary
@@ -418,13 +446,11 @@ function Get-ExakitHelpRows {
     foreach ($key in ($docs.Keys | Sort-Object)) {
         $doc = $docs[$key]
         foreach ($entry in (Get-ExakitHelpVisibleCommands $doc -IncludeHidden:$IncludeHidden)) {
-            $tool = $key
-            $command = $entry.command
-            $parts = $command -split '\s+'
-            if ($parts.Count -gt 1 -and @("exakit", "exapump", "exasol") -contains $parts[0] -and $key -ne $parts[0]) {
-                $tool = $parts[0]
-                $command = ($parts[1..($parts.Count - 1)] -join " ")
-            }
+            $full = Get-ExakitHelpInvocation -DocId $key -Entry $entry -Doc $doc
+            $parts = $full -split '\s+', 2
+            $tool = $parts[0]
+            $command = ""
+            if ($parts.Count -gt 1) { $command = $parts[1] }
             $text = $entry.summary
             if (-not $text) { $text = $entry.description }
             # Dedupe on (tool, command) WITHOUT options. Keying on options too
@@ -437,14 +463,24 @@ function Get-ExakitHelpRows {
             $dedupe = "$tool|$command"
             $row = [pscustomobject]@{
                 tool = $tool; command = $command; options = $entry.options
-                description = $text; invocation = ("$tool $command").Trim()
+                description = $text; invocation = $full
+                usage = (Get-ExakitHelpInvocationWithOptions -DocId $key -Entry $entry -Doc $doc)
+                help_command = ('exakit help "' + $full + '" --json')
                 source = $key
+                topics = @($key)
                 hidden = [bool]($entry.PSObject.Properties["hidden"] -and $entry.hidden)
+            }
+            foreach ($field in @('parameters','parameter_note','examples','exit_codes','environment','warning')) {
+                if ($entry.PSObject.Properties[$field]) {
+                    $row | Add-Member -NotePropertyName $field -NotePropertyValue $entry.$field
+                }
             }
             if ($seen.ContainsKey($dedupe)) {
                 $keptAt = $seen[$dedupe]
                 $kept = $rows[$keptAt]
-                if ($tool -eq $key -and $kept.source -ne $kept.tool) { $rows[$keptAt] = $row }
+                $topics = @(@($kept.topics) + @($row.topics) | Sort-Object -Unique)
+                if ($tool -eq $key -and $kept.source -ne $kept.tool) { $row.topics = $topics; $rows[$keptAt] = $row }
+                else { $kept.topics = $topics }
                 continue
             }
             $seen[$dedupe] = $rows.Count
@@ -460,7 +496,7 @@ function Show-ExakitHelpCatalog {
     if ($Search) {
         $needle = $Search.ToLowerInvariant()
         $rows = @($rows | Where-Object {
-            ("$($_.tool) $($_.command) $($_.options) $($_.description)").ToLowerInvariant().Contains($needle)
+            ("$($_.tool) $($_.command) $($_.options) $($_.description) " + ($_.topics -join ' ')).ToLowerInvariant().Contains($needle)
         })
     }
     if ($Search) {
@@ -505,88 +541,109 @@ function Show-ExakitHelpCatalog {
         foreach ($e in $entries) { if ("$($e.command)".Length -gt $pad) { $pad = "$($e.command)".Length } }
         if ($pad -gt 30) { $pad = 30 }
         foreach ($row in ($entries | Sort-Object { "$($_.command)" })) {
-            Write-ExakitHelpCommand -Label $row.command -Summary $row.description -Pad $pad
+            $label = $row.command
+            if (-not $label) { $label = $row.tool }
+            Write-ExakitHelpCommand -Label $label -Summary $row.description -Pad $pad
         }
     }
     Write-Host ""
     return 0
 }
 
+function Get-ExakitHelpCommandRows {
+    param([string]$Name)
+    $needle = (($Name.Trim() -split '\s+') -join ' ').ToLowerInvariant()
+    if (-not $needle) { return @() }
+    $rows = @(Get-ExakitHelpRows -IncludeHidden)
+    $knownTools = @($rows | ForEach-Object { $_.tool } | Select-Object -Unique)
+    if ($knownTools -notcontains ($needle -split ' ')[0]) { $needle = "exakit $needle" }
+    return @($rows | Where-Object {
+        $full = $_.invocation.ToLowerInvariant()
+        $full -eq $needle -or $full.StartsWith("$needle ")
+    })
+}
+
 function Show-ExakitHelpCommand {
     param([string]$Name)
     $docs = Get-ExakitHelpDocuments
-    $needle = $Name.ToLowerInvariant()
-    foreach ($key in (@("exakit") + ($docs.Keys | Sort-Object))) {
-        if (-not $docs.ContainsKey($key)) { continue }
-        $shown = $false
-        foreach ($entry in $docs[$key].commands) {
-            $command = $entry.command.ToLowerInvariant()
-            if ($command -ne $needle -and -not $command.StartsWith("$needle ")) { continue }
-            $shown = $true
-            $label = $entry.command
-            if ($key -eq "exakit") { $label = "exakit $($entry.command)" }
-            Write-Host ""
-            if ($entry.options) {
-                Write-Host "  $label $($entry.options)"
-            } else {
-                Write-Host "  $label"
-            }
-            Write-Host ""
-            $text = $entry.description
-            if (-not $text) { $text = $entry.summary }
-            Write-ExakitHelpWrapped -Text $text -Indent "    "
-            if ($entry.PSObject.Properties['parameters']) {
-                Write-Host ""
-                Write-Host "    Parameters and options" -ForegroundColor DarkGray
-                Write-ExakitHelpParameters -Entry $entry
-            }
-            if ($entry.warning) {
-                Write-Host ""
-                Write-ExakitHelpWrapped -Text ("! " + $entry.warning) -Indent "    "
-            }
-            if ($entry.exit_codes) {
-                Write-Host ""
-                Write-Host "    Exit codes" -ForegroundColor DarkGray
-                foreach ($property in ($entry.exit_codes.PSObject.Properties | Sort-Object { [int]$_.Name })) {
-                    Write-ExakitHelpWrapped -Text ($property.Name + '  ' + $property.Value) -Indent "      "
-                }
-            }
-            if ($entry.environment) {
-                Write-Host ""
-                Write-Host "    Environment" -ForegroundColor DarkGray
-                foreach ($line in $entry.environment) { Write-ExakitHelpWrapped -Text ("" + $line) -Indent "      " }
-            }
-            if ($entry.examples) {
-                Write-Host ""
-                Write-Host "    Examples" -ForegroundColor DarkGray
-                foreach ($example in $entry.examples) { Write-Host "      $example" -ForegroundColor Cyan }
-            }
-            Write-Host ""
+    $matches = @(Get-ExakitHelpCommandRows $Name)
+    foreach ($row in $matches) {
+        $key = $row.source
+        $entry = @($docs[$key].commands | Where-Object {
+            (Get-ExakitHelpInvocation -DocId $key -Entry $_ -Doc $docs[$key]) -eq $row.invocation
+        })[0]
+        $label = $row.invocation
+        Write-Host ""
+        if ($entry.options) {
+            Write-Host "  $label $($entry.options)"
+        } else {
+            Write-Host "  $label"
         }
-        if ($shown) { return 0 }
+        Write-Host ""
+        $text = $entry.description
+        if (-not $text) { $text = $entry.summary }
+        Write-ExakitHelpWrapped -Text $text -Indent "    "
+        if ($entry.PSObject.Properties['parameters']) {
+            Write-Host ""
+            Write-Host "    Parameters and options" -ForegroundColor DarkGray
+            Write-ExakitHelpParameters -Entry $entry
+        }
+        if ($entry.warning) {
+            Write-Host ""
+            Write-ExakitHelpWrapped -Text ("! " + $entry.warning) -Indent "    "
+        }
+        if ($entry.exit_codes) {
+            Write-Host ""
+            Write-Host "    Exit codes" -ForegroundColor DarkGray
+            foreach ($property in ($entry.exit_codes.PSObject.Properties | Sort-Object { [int]$_.Name })) {
+                Write-ExakitHelpWrapped -Text ($property.Name + '  ' + $property.Value) -Indent "      "
+            }
+        }
+        if ($entry.environment) {
+            Write-Host ""
+            Write-Host "    Environment" -ForegroundColor DarkGray
+            foreach ($line in $entry.environment) { Write-ExakitHelpWrapped -Text ("" + $line) -Indent "      " }
+        }
+        if ($entry.examples) {
+            Write-Host ""
+            Write-Host "    Examples" -ForegroundColor DarkGray
+            foreach ($example in $entry.examples) { Write-Host "      $example" -ForegroundColor Cyan }
+        }
+        Write-Host ""
     }
+    if ($matches.Count -gt 0) { return 0 }
     if (Test-ExakitHelpId $Name) { return (Show-ExakitHelpComponent -Id $Name) }
     Write-Host ""
     Write-Host "  No help entry for '$Name'."
     Write-Host "  Try: exakit catalog $Name   or   exakit help --all"
     Write-Host ""
-    return 1
+    return 2
 }
 
 function Show-ExakitHelpJson {
-    param([string]$Which)
+    param([string]$Which, [switch]$CommandHelp, [switch]$CatalogSearch)
+    $script:ExakitHelpExitCode = 0
     $docs = Get-ExakitHelpDocuments
     $rows = Get-ExakitHelpRows -IncludeHidden
     if (-not $Which -or $Which -eq "all") {
         $visibleDocs = [ordered]@{}
         foreach ($k in ($docs.Keys | Sort-Object)) { $visibleDocs[$k] = Get-ExakitHelpDocWithHiddenMarked $docs[$k] }
         $payload = [ordered]@{ schema_version = 1; search = $null; count = $rows.Count; commands = $rows; documents = $visibleDocs }
-    } elseif ($docs.ContainsKey($Which)) {
+    } elseif (-not $CatalogSearch -and $docs.ContainsKey($Which)) {
         $payload = Get-ExakitHelpDocWithHiddenMarked $docs[$Which]
+    } elseif ($CommandHelp) {
+        $hit = @(Get-ExakitHelpCommandRows $Which)
+        $payload = [ordered]@{ schema_version = 1; search = $Which; count = $hit.Count; commands = $hit }
+        if ($hit.Count -eq 0) {
+            $payload.ok = $false
+            $payload.error = "No help entry for '$Which'."
+            $payload.remedy = 'exakit catalog --json'
+            $script:ExakitHelpExitCode = 2
+        }
     } else {
         $needle = $Which.ToLowerInvariant()
         $hit = @($rows | Where-Object {
-            ("$($_.tool) $($_.command) $($_.options) $($_.description)").ToLowerInvariant().Contains($needle)
+            ("$($_.tool) $($_.command) $($_.options) $($_.description) " + ($_.topics -join ' ')).ToLowerInvariant().Contains($needle)
         })
         $payload = [ordered]@{ schema_version = 1; search = $Which; count = $hit.Count; commands = $hit }
     }

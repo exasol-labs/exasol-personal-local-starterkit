@@ -1202,42 +1202,86 @@ function Invoke-CmdModel {
     if ($CmdArgs.Count -gt 0) { $sub = $CmdArgs[0] }
     $rest = @()
     if ($CmdArgs.Count -gt 1) { $rest = @($CmdArgs[1..($CmdArgs.Count - 1)]) }
-    # One page per command: Show-ExakitHelpCommand renders the first match only.
+    # The registry resolves a whole family or one exact action on both platforms.
     if ($sub -in @("--help", "-h")) {
-        foreach ($each in @("put", "list", "rm", "prune", "template")) { Show-ExakitHelpCommand -Name "exakit model $each" | Out-Null }
+        Show-ExakitHelpCommand -Name "exakit model" | Out-Null
         return
     }
-    if ($sub -in @("put", "list", "rm", "prune", "template") -and ($rest -contains "--help" -or $rest -contains "-h")) {
+    if ($sub -in @("put", "inspect", "list", "rm", "prune", "template") -and ($rest -contains "--help" -or $rest -contains "-h")) {
         Show-ExakitHelpCommand -Name "exakit model $sub" | Out-Null; return
     }
     switch ($sub) {
         "put"      { Invoke-CmdModelPut -CmdArgs $rest }
+        "inspect"  { Invoke-CmdModelInspect -CmdArgs $rest }
         "list"     { Invoke-CmdModelList -CmdArgs $rest }
         "rm"       { Invoke-CmdModelRm -CmdArgs $rest }
         "prune"    { Invoke-CmdModelPrune -CmdArgs $rest }
         "template" { Invoke-CmdModelTemplate -CmdArgs $rest }
-        ""         { Deny-ExakitInput "Name what to do: exakit model put <file> | list | rm <name> | prune | template (exakit model --help)." }
-        default    { Deny-ExakitInput "Unknown model command '$sub' (supported: put, list, rm, prune, template)." }
+        ""         { Deny-ExakitInput "Name what to do: exakit model put <file> | inspect <file> | list | rm <name> | prune | template (exakit model --help)." }
+        default    { Deny-ExakitInput "Unknown model command '$sub' (supported: put, inspect, list, rm, prune, template)." }
     }
+}
+
+function Get-UdfModelInspection {
+    param([string]$File, $Bucket)
+    $result = Invoke-UdfTool -Script "model_tool.py" -NoConnection `
+        -ToolArgs @("inspect", (Resolve-Path $File).Path, $Bucket.Dir, $script:ExakitHome)
+    if ($result[0] -eq 2) { Deny-ExakitInput $result[2] }
+    if ($result[0] -ne 0) { Fail "Could not inspect $File`: $($result[2])" }
+    return ((@($result[1]) -join "`n") | ConvertFrom-Json)
+}
+
+function Invoke-CmdModelInspect {
+    param([string[]]$CmdArgs = @())
+    $file = ""; $json = $false
+    foreach ($arg in $CmdArgs) {
+        if ($arg -in @("--json", "-j")) { $json = $true; $script:ExakitRefusalJson = $true }
+        elseif ($arg.StartsWith("-")) { Deny-ExakitInput "Unknown option '$arg' for model inspect (supported: --json)." }
+        elseif ($file) { Deny-ExakitInput "Name one model file: exakit model inspect <file>" }
+        else { $file = $arg }
+    }
+    if (-not $file) { Deny-ExakitInput "Name the model file: exakit model inspect <file> [--json]" }
+    $bucket = Assert-UdfModelReady
+    if (-not (Test-Path $file -PathType Leaf)) { Deny-ExakitInput "$file is not a file." }
+    $answer = Get-UdfModelInspection -File $file -Bucket $bucket
+    if ($json) { Write-Output ($answer | ConvertTo-Json -Depth 8); return }
+    Info "$($answer.name): $($answer.kind) file, $($answer.size) bytes, sha256 $($answer.sha256)"
+    Info "Trusted: $($answer.trusted) ($($answer.reason))"
+    Info "In the bucket directory: $($answer.in_bucket)"
+    if ($answer.provenance) { Info ("Provenance: " + ($answer.provenance | ConvertTo-Json -Compress)) }
+    if ($answer.warning) { Info "Warning: $($answer.warning) exakit model put asks before copying it (--yes or EXAKIT_MODEL_TRUST=1 answers)." }
 }
 
 function Invoke-CmdModelPut {
     param([string[]]$CmdArgs = @())
-    $file = ""; $replace = $false; $json = $false
+    $file = ""; $replace = $false; $json = $false; $yes = $false
     foreach ($arg in $CmdArgs) {
         if ($arg -eq "--replace") { $replace = $true }
+        elseif ($arg -in @("--yes", "-y")) { $yes = $true }
         elseif ($arg -in @("--json", "-j")) { $json = $true; $script:ExakitRefusalJson = $true }
-        elseif ($arg.StartsWith("-")) { Deny-ExakitInput "Unknown option '$arg' for model put (supported: --replace --json)." }
-        elseif ($file) { Deny-ExakitInput "Name one model file: exakit model put <file> [--replace]" }
+        elseif ($arg.StartsWith("-")) { Deny-ExakitInput "Unknown option '$arg' for model put (supported: --replace --yes --json)." }
+        elseif ($file) { Deny-ExakitInput "Name one model file: exakit model put <file> [--replace] [--yes]" }
         else { $file = $arg }
     }
-    if (-not $file) { Deny-ExakitInput "Name the model file: exakit model put <file> [--replace] [--json]" }
+    if (-not $file) { Deny-ExakitInput "Name the model file: exakit model put <file> [--replace] [--yes] [--json]" }
     $bucket = Assert-UdfModelReady
     if (-not (Test-Path $file -PathType Leaf)) { Deny-ExakitInput "$file is not a file." }
+    $inspection = Get-UdfModelInspection -File $file -Bucket $bucket
+    if ($inspection.loads_code -and -not $inspection.trusted -and $inspection.in_bucket -ne 'same') {
+        if (-not $yes -and $env:EXAKIT_MODEL_TRUST -ne '1') {
+            if (-not $json -and (Test-ExakitInteractive)) {
+                if (-not (Confirm-ExakitPrompt "Loading a pickle runs code from the file. Continue" $false)) {
+                    Exit-UdfModel -Code 5 -Message 'Not confirmed; nothing was copied.' -Remedy "exakit model put `"$file`" --yes"
+                }
+            } else {
+                Exit-UdfModel -Code 6 -Message "Loading a pickle runs code from the file, and $($inspection.name) carries no trusted provenance ($($inspection.reason)). Nothing was copied; confirm with --yes, or EXAKIT_MODEL_TRUST=1, when you trust its source." -Remedy "exakit model put `"$file`" --yes"
+            }
+        }
+    }
     $replaceArg = "0"
     if ($replace) { $replaceArg = "1" }
     $result = Invoke-UdfTool -Script "model_tool.py" -NoConnection -StdIn (Get-UdfModelRecord) `
-        -ToolArgs @("put", (Resolve-Path $file).Path, $bucket.Dir, $bucket.UdfRoot, $replaceArg)
+        -ToolArgs @("put", (Resolve-Path $file).Path, $bucket.Dir, $bucket.UdfRoot, $replaceArg, $script:ExakitHome)
     if ($result[0] -eq 5) { Exit-UdfModel -Code 5 -Message $result[2] -Remedy "exakit model put $file --replace" }
     if ($result[0] -eq 6) { Exit-UdfModel -Code 6 -Message $result[2] }
     if ($result[0] -eq 2) { Deny-ExakitInput $result[2] }

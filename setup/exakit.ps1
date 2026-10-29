@@ -124,6 +124,10 @@ if (Test-Path (Join-Path $scriptDir "lib\exakit-common.ps1")) {
     }
 }
 
+# Discovery reads shipped documents and must not create an installation merely
+# by importing common helpers. SQL arguments are text, so do not scan them.
+$script:ExakitReadOnlyHelp = (@('help','catalog','--help','-h','-?') -contains $Command) -or
+    ($Command -ne 'sql' -and ($RestArgs -contains '--help' -or $RestArgs -contains '-h'))
 . (Join-Path $libDir "exakit-common.ps1")
 . (Join-Path $libDir "runtime-personal.ps1")
 . (Join-Path $libDir "exapump.ps1")
@@ -3337,7 +3341,7 @@ function Invoke-CmdCatalog {
     # (setup/help/*.json - see help.ps1). -Json keeps its original shape: one
     # object whose "commands" array carries tool/command/options/description.
     if ($Json) {
-        Show-ExakitHelpJson -Which $Search
+        Show-ExakitHelpJson -Which $Search -CatalogSearch
         return
     }
     Show-ExakitHelpCatalog -Search $Search | Out-Null
@@ -3609,13 +3613,15 @@ function Show-ExakitUsage {
     # document to a script instead of drawing it.
     if ($Topic -eq "--all" -or $Topic -eq "-a") { $All = $true; $Topic = "" }
     if ($Json) {
-        if ($Topic) { Show-ExakitHelpJson -Which $Topic } else { Show-ExakitHelpJson -Which "all" }
+        if ($Topic) { Show-ExakitHelpJson -Which $Topic -CommandHelp } else { Show-ExakitHelpJson -Which "all" }
+        if ($script:ExakitHelpExitCode) { exit $script:ExakitHelpExitCode }
         return
     }
     if ($All) { Show-ExakitHelpAll | Out-Null; return }
     if (-not $Topic) { Show-ExakitHelpOverview | Out-Null; return }
     if (Test-ExakitHelpId $Topic) { Show-ExakitHelpComponent -Id $Topic | Out-Null; return }
-    Show-ExakitHelpCommand -Name $Topic | Out-Null
+    $helpResult = Show-ExakitHelpCommand -Name $Topic
+    if ($helpResult) { exit $helpResult }
 }
 
 # `exakit <thing> --help` answers from the help documents - the same single
@@ -3637,16 +3643,16 @@ $script:ExakitRefusalJson = ($Command -ne "sql") -and
 # answered with the human page for `help` - swallowing the --json an agent
 # asked for. A help flag on the help command is the help command.
 #
-# `model` renders its own pages (Invoke-CmdModel): they live in the udf-devkit
-# document as "exakit model put|list|template", which a bare "model" topic does
-# not find, and `exakit model put --help` shows put's page alone.
+# Keep the complete command path and use the same registry for human and JSON
+# help. Child action help must be intercepted before anything executes.
 $_helpSelf = @("help", "--help", "-h", "-?") -contains "$Command"
-if ($Command -and $Command -ne "sql" -and $Command -ne "model" -and -not $_helpSelf -and ($RestArgs -contains "--help" -or $RestArgs -contains "-h")) {
-    if (Test-ExakitHelpId $Command) {
-        Show-ExakitHelpComponent -Id $Command | Out-Null
-    } else {
-        Show-ExakitHelpCommand -Name $Command | Out-Null
+if ($Command -and $Command -ne "sql" -and -not $_helpSelf -and ($RestArgs -contains "--help" -or $RestArgs -contains "-h")) {
+    $helpWords = @($Command)
+    foreach ($word in $RestArgs) {
+        if ("$word" -like '-*') { break }
+        $helpWords += $word
     }
+    Show-ExakitUsage -Topic ($helpWords -join ' ') -Json:($RestArgs -contains '--json' -or $RestArgs -contains '-j')
     exit 0
 }
 
@@ -3988,11 +3994,8 @@ try {
             Invoke-CmdCatalog -Search $catSearch -Json:$catJson
         }
         { $_ -in @("help", "-h", "--help") } {
-            # First non-flag argument is the topic: a component id or a command.
-            $helpTopic = ""
-            foreach ($a in $RestArgs) {
-                if ($a -notlike "-*") { $helpTopic = $a; break }
-            }
+            # Keep the complete command path, including unquoted child words.
+            $helpTopic = (@($RestArgs | Where-Object { $_ -notlike '-*' }) -join ' ')
             Show-ExakitUsage -Topic $helpTopic `
                 -All:($RestArgs -contains "--all" -or $RestArgs -contains "-a") `
                 -Json:($RestArgs -contains "--json" -or $RestArgs -contains "-j")

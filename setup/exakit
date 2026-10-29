@@ -2054,14 +2054,14 @@ usage() {
         case "$_u_arg" in
             --json|-j) _u_json=1 ;;
             --help|-h) [ -n "$_u_topic" ] || _u_topic="help" ;;
-            *) [ -n "$_u_topic" ] || _u_topic="$_u_arg" ;;
+            *) _u_topic="${_u_topic:+$_u_topic }$_u_arg" ;;
         esac
     done
     if [ "$_u_json" -eq 1 ]; then
         exakit_can_run_python || die "python3 is needed for --json."
         case "$_u_topic" in
             --all|-a|"") exakit_help_render json all ;;
-            *)           exakit_help_render json "$_u_topic" ;;
+            *)           exakit_help_render command-json "$_u_topic" ;;
         esac
         return $?
     fi
@@ -2521,23 +2521,27 @@ _with_notice() {
 # It used to fall in here, be rendered as a command page for that topic, and
 # print grep's usage block instead of the JSON document an agent asked for.
 #
-# `model` renders its own pages (cmd_model): they live in the udf-devkit
-# document as "exakit model put|list|template", which a bare "model" topic
-# does not find, and `exakit model put --help` should show put's page alone.
+# Keep child words (model put, mlflow start, notebook stop marimo). The
+# registry resolves the same path for human and JSON help before execution.
 case "${1:-}" in
-    help|--help|-h|model) _help_skip=1 ;;
+    help|--help|-h) _help_skip=1 ;;
     *)              _help_skip=0 ;;
 esac
 if [ $# -ge 2 ] && [ "$1" != "sql" ] && [ "$_help_skip" -eq 0 ]; then
     for _help_arg in "$@"; do
         case "$_help_arg" in
             --help|-h)
-                _help_topic="$1"
-                if exakit_help_is_id "$_help_topic"; then
-                    exakit_help_render component "$_help_topic"
-                else
-                    exakit_help_render command "$_help_topic"
-                fi
+                _help_topic=""; _help_json=""; _help_path_done=0
+                for _help_word in "$@"; do
+                    case "$_help_word" in
+                        --json|-j) _help_json=--json; _help_path_done=1 ;;
+                        -*) _help_path_done=1 ;;
+                        *) if [ "$_help_path_done" -eq 0 ]; then
+                               _help_topic="${_help_topic:+$_help_topic }$_help_word"
+                           fi ;;
+                    esac
+                done
+                usage "$_help_topic" ${_help_json:+"$_help_json"}
                 exit $?
                 ;;
         esac

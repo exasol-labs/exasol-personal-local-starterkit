@@ -207,6 +207,291 @@
         "exakit uninstall notebook --dry-run",
         "exakit uninstall notebook"
       ]
+    },
+    {
+      "command": "exakit notebook jupyterlab",
+      "options": "[check | setup | stop] [--no-browser] [--port N]",
+      "summary": "Open JupyterLab in the kit notebook environment.",
+      "parameters": [
+        {
+          "name": "check, --check",
+          "description": "Check the environment and database connection without opening a tool.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "setup, --setup",
+          "description": "Prepare or repair the notebook environment and connection.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "stop, --stop",
+          "description": "Stop the selected tool, or both notebook servers when no tool is named.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--marimo / --positron",
+          "description": "Compatibility aliases for the tool words. Prefer marimo or positron.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--no-browser",
+          "description": "Start the server without opening a browser window.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--port N",
+          "description": "JupyterLab/Marimo loopback port, 1024..65535. A running server keeps its current port; stop it first to move it.",
+          "default": "EXAKIT_NOTEBOOK_PORT (8888) or EXAKIT_MARIMO_PORT (2718)",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ],
+      "examples": [
+        "exakit notebook jupyterlab"
+      ]
+    },
+    {
+      "command": "exakit notebook marimo",
+      "options": "[check | setup | stop] [--no-browser] [--port N]",
+      "summary": "Open Marimo in the kit notebook environment.",
+      "parameters": [
+        {
+          "name": "check, --check",
+          "description": "Check the environment and database connection without opening a tool.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "setup, --setup",
+          "description": "Prepare or repair the notebook environment and connection.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "stop, --stop",
+          "description": "Stop the selected tool, or both notebook servers when no tool is named.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--marimo / --positron",
+          "description": "Compatibility aliases for the tool words. Prefer marimo or positron.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--no-browser",
+          "description": "Start the server without opening a browser window.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--port N",
+          "description": "JupyterLab/Marimo loopback port, 1024..65535. A running server keeps its current port; stop it first to move it.",
+          "default": "EXAKIT_NOTEBOOK_PORT (8888) or EXAKIT_MARIMO_PORT (2718)",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ],
+      "examples": [
+        "exakit notebook marimo"
+      ]
+    },
+    {
+      "command": "exakit notebook positron",
+      "options": "[check | setup | stop] [--no-browser] [--port N]",
+      "summary": "Open Positron using the kit notebook environment.",
+      "parameters": [
+        {
+          "name": "check, --check",
+          "description": "Check the environment and database connection without opening a tool.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "setup, --setup",
+          "description": "Prepare or repair the notebook environment and connection.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "stop, --stop",
+          "description": "Stop the selected tool, or both notebook servers when no tool is named.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--marimo / --positron",
+          "description": "Compatibility aliases for the tool words. Prefer marimo or positron.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--no-browser",
+          "description": "Start the server without opening a browser window.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--port N",
+          "description": "JupyterLab/Marimo loopback port, 1024..65535. A running server keeps its current port; stop it first to move it.",
+          "default": "EXAKIT_NOTEBOOK_PORT (8888) or EXAKIT_MARIMO_PORT (2718)",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ],
+      "examples": [
+        "exakit notebook positron"
+      ]
+    },
+    {
+      "command": "exakit notebook check",
+      "options": "[jupyterlab | marimo | positron]",
+      "summary": "Check the notebook environment and database connection.",
+      "parameters": [
+        {
+          "name": "<tool>",
+          "description": "Open one tool; use at most one. With no tool, show the chooser on a terminal and use JupyterLab without a terminal.",
+          "default": "chooser or jupyterlab",
+          "required": false,
+          "choices": [
+            "jupyterlab",
+            "marimo",
+            "positron"
+          ]
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ],
+      "examples": [
+        "exakit notebook check"
+      ]
+    },
+    {
+      "command": "exakit notebook setup",
+      "options": "[jupyterlab | marimo | positron]",
+      "summary": "Prepare or repair the notebook environment without starting a server.",
+      "parameters": [
+        {
+          "name": "<tool>",
+          "description": "Open one tool; use at most one. With no tool, show the chooser on a terminal and use JupyterLab without a terminal.",
+          "default": "chooser or jupyterlab",
+          "required": false,
+          "choices": [
+            "jupyterlab",
+            "marimo",
+            "positron"
+          ]
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ],
+      "examples": [
+        "exakit notebook setup"
+      ]
+    },
+    {
+      "command": "exakit notebook stop",
+      "options": "[jupyterlab | marimo | positron]",
+      "summary": "Stop notebook servers; name a tool to stop just that server.",
+      "parameters": [
+        {
+          "name": "<tool>",
+          "description": "Open one tool; use at most one. With no tool, show the chooser on a terminal and use JupyterLab without a terminal.",
+          "default": "chooser or jupyterlab",
+          "required": false,
+          "choices": [
+            "jupyterlab",
+            "marimo",
+            "positron"
+          ]
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ],
+      "examples": [
+        "exakit notebook stop"
+      ]
+    },
+    {
+      "command": "exakit notebook stop jupyterlab",
+      "options": "",
+      "summary": "Stop only the jupyterlab notebook server.",
+      "parameters": [
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ],
+      "examples": [
+        "exakit notebook stop jupyterlab"
+      ]
+    },
+    {
+      "command": "exakit notebook stop marimo",
+      "options": "",
+      "summary": "Stop only the marimo notebook server.",
+      "parameters": [
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ],
+      "examples": [
+        "exakit notebook stop marimo"
+      ]
+    },
+    {
+      "command": "exakit notebook stop positron",
+      "options": "",
+      "summary": "Stop positron (Positron is closed by its user).",
+      "parameters": [
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ],
+      "examples": [
+        "exakit notebook stop positron"
+      ]
     }
   ],
   "notes": [

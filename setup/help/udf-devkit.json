@@ -643,6 +643,279 @@
           "required": false
         }
       ]
+    },
+    {
+      "command": "exakit mlflow start",
+      "options": "[--port N] [--json]",
+      "summary": "Start the local MLflow server and enable it for exakit start.",
+      "description": "The server listens on 127.0.0.1, starting at port 5000. Its SQLite store, artifacts, log and pending run spool live under ~/.exasol-starter-kit/mlflow. The notebook add-on supplies the client and the UDF dev kit enables the service. Starting installs the full MLflow server package into the notebook environment if needed. Starting it records that you want it: exakit start brings it back after that, and never starts it for a udf-devkit user who has not asked for it. A plain stop is for the session; exakit mlflow disable (or stop --disable) stops it and keeps it off until the next exakit mlflow start. exakit stop stops the server; exakit logs mlflow shows its log. Replay sends spooled runs to MLFLOW_TRACKING_URI, the kit server, or the local store, and removes only records logged successfully.",
+      "parameters": [
+        {
+          "name": "--port N",
+          "description": "start only: loopback port for a new MLflow server. An already-running server keeps its current port.",
+          "default": "EXAKIT_MLFLOW_PORT, otherwise 5000",
+          "required": false
+        },
+        {
+          "name": "--json",
+          "description": "Print the action result as JSON.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ],
+      "examples": [
+        "exakit mlflow start --json"
+      ]
+    },
+    {
+      "command": "exakit mlflow stop",
+      "options": "[--disable] [--json]",
+      "summary": "Stop MLflow for this session, or also disable automatic start.",
+      "description": "The server listens on 127.0.0.1, starting at port 5000. Its SQLite store, artifacts, log and pending run spool live under ~/.exasol-starter-kit/mlflow. The notebook add-on supplies the client and the UDF dev kit enables the service. Starting installs the full MLflow server package into the notebook environment if needed. Starting it records that you want it: exakit start brings it back after that, and never starts it for a udf-devkit user who has not asked for it. A plain stop is for the session; exakit mlflow disable (or stop --disable) stops it and keeps it off until the next exakit mlflow start. exakit stop stops the server; exakit logs mlflow shows its log. Replay sends spooled runs to MLFLOW_TRACKING_URI, the kit server, or the local store, and removes only records logged successfully.",
+      "parameters": [
+        {
+          "name": "--disable",
+          "description": "stop only: also prevent automatic restart with exakit start. The disable action has the same effect.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--json",
+          "description": "Print the action result as JSON.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ],
+      "examples": [
+        "exakit mlflow stop --json"
+      ]
+    },
+    {
+      "command": "exakit mlflow disable",
+      "options": "[--json]",
+      "summary": "Stop MLflow and disable automatic start.",
+      "description": "The server listens on 127.0.0.1, starting at port 5000. Its SQLite store, artifacts, log and pending run spool live under ~/.exasol-starter-kit/mlflow. The notebook add-on supplies the client and the UDF dev kit enables the service. Starting installs the full MLflow server package into the notebook environment if needed. Starting it records that you want it: exakit start brings it back after that, and never starts it for a udf-devkit user who has not asked for it. A plain stop is for the session; exakit mlflow disable (or stop --disable) stops it and keeps it off until the next exakit mlflow start. exakit stop stops the server; exakit logs mlflow shows its log. Replay sends spooled runs to MLFLOW_TRACKING_URI, the kit server, or the local store, and removes only records logged successfully.",
+      "parameters": [
+        {
+          "name": "--disable",
+          "description": "stop only: also prevent automatic restart with exakit start. The disable action has the same effect.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--json",
+          "description": "Print the action result as JSON.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ],
+      "examples": [
+        "exakit mlflow disable --json"
+      ]
+    },
+    {
+      "command": "exakit mlflow status",
+      "options": "[--json]",
+      "summary": "Report the local MLflow server state.",
+      "description": "The server listens on 127.0.0.1, starting at port 5000. Its SQLite store, artifacts, log and pending run spool live under ~/.exasol-starter-kit/mlflow. The notebook add-on supplies the client and the UDF dev kit enables the service. Starting installs the full MLflow server package into the notebook environment if needed. Starting it records that you want it: exakit start brings it back after that, and never starts it for a udf-devkit user who has not asked for it. A plain stop is for the session; exakit mlflow disable (or stop --disable) stops it and keeps it off until the next exakit mlflow start. exakit stop stops the server; exakit logs mlflow shows its log. Replay sends spooled runs to MLFLOW_TRACKING_URI, the kit server, or the local store, and removes only records logged successfully.",
+      "parameters": [
+        {
+          "name": "--json",
+          "description": "Print the action result as JSON.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ],
+      "examples": [
+        "exakit mlflow status --json"
+      ]
+    },
+    {
+      "command": "exakit mlflow url",
+      "options": "[--json]",
+      "summary": "Show the local MLflow server address.",
+      "description": "The server listens on 127.0.0.1, starting at port 5000. Its SQLite store, artifacts, log and pending run spool live under ~/.exasol-starter-kit/mlflow. The notebook add-on supplies the client and the UDF dev kit enables the service. Starting installs the full MLflow server package into the notebook environment if needed. Starting it records that you want it: exakit start brings it back after that, and never starts it for a udf-devkit user who has not asked for it. A plain stop is for the session; exakit mlflow disable (or stop --disable) stops it and keeps it off until the next exakit mlflow start. exakit stop stops the server; exakit logs mlflow shows its log. Replay sends spooled runs to MLFLOW_TRACKING_URI, the kit server, or the local store, and removes only records logged successfully.",
+      "parameters": [
+        {
+          "name": "--json",
+          "description": "Print the action result as JSON.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ],
+      "examples": [
+        "exakit mlflow url --json"
+      ]
+    },
+    {
+      "command": "exakit mlflow replay",
+      "options": "[--tracking-uri URI | --tracking-dir PATH] [--timeout SECONDS] [--json]",
+      "summary": "Replay pending experiment records to a tracking store.",
+      "description": "The server listens on 127.0.0.1, starting at port 5000. Its SQLite store, artifacts, log and pending run spool live under ~/.exasol-starter-kit/mlflow. The notebook add-on supplies the client and the UDF dev kit enables the service. Starting installs the full MLflow server package into the notebook environment if needed. Starting it records that you want it: exakit start brings it back after that, and never starts it for a udf-devkit user who has not asked for it. A plain stop is for the session; exakit mlflow disable (or stop --disable) stops it and keeps it off until the next exakit mlflow start. exakit stop stops the server; exakit logs mlflow shows its log. Replay sends spooled runs to MLFLOW_TRACKING_URI, the kit server, or the local store, and removes only records logged successfully.",
+      "parameters": [
+        {
+          "name": "--json",
+          "description": "Print the action result as JSON.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--tracking-uri URI",
+          "description": "replay only: send pending records to this MLflow server.",
+          "default": "MLFLOW_TRACKING_URI or the kit server",
+          "required": false
+        },
+        {
+          "name": "--tracking-dir PATH",
+          "description": "replay only: log to a local MLflow store in this folder.",
+          "default": "not set",
+          "required": false
+        },
+        {
+          "name": "--timeout SECONDS",
+          "description": "replay only: server health-check timeout.",
+          "default": "3",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ],
+      "examples": [
+        "exakit mlflow replay --json"
+      ]
+    },
+    {
+      "command": "exakit rust-udf new",
+      "options": "<name> [--coefficients FILE] [--json]",
+      "summary": "Create a pinned Rust scoring project.",
+      "description": "The new step creates a pinned exasol-udf-sdk 0.33.0 project under the kit home; --coefficients reads the 01_train coefficients.json. Build uses Rust 1.98.1 in a Linux Docker or Podman container matching the database architecture on macOS and Windows, then validates the .so. Deploy verifies its digest, copies it into the deployment's bucket directory and registers a RUST scalar script. A database restart is not attempted automatically.",
+      "parameters": [
+        {
+          "name": "<name>",
+          "description": "Project and UDF name; use a valid identifier.",
+          "default": null,
+          "required": true
+        },
+        {
+          "name": "--coefficients FILE",
+          "description": "new only: initialise the scoring project from the exported training coefficients.",
+          "default": "not set",
+          "required": false
+        },
+        {
+          "name": "--json",
+          "description": "Print the operation result as JSON.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ],
+      "examples": [
+        "exakit rust-udf new score_model --json"
+      ]
+    },
+    {
+      "command": "exakit rust-udf build",
+      "options": "<name> [--json]",
+      "summary": "Build and validate a Linux Rust UDF library for the database architecture.",
+      "description": "The new step creates a pinned exasol-udf-sdk 0.33.0 project under the kit home; --coefficients reads the 01_train coefficients.json. Build uses Rust 1.98.1 in a Linux Docker or Podman container matching the database architecture on macOS and Windows, then validates the .so. Deploy verifies its digest, copies it into the deployment's bucket directory and registers a RUST scalar script. A database restart is not attempted automatically.",
+      "parameters": [
+        {
+          "name": "<name>",
+          "description": "Project and UDF name; use a valid identifier.",
+          "default": null,
+          "required": true
+        },
+        {
+          "name": "--json",
+          "description": "Print the operation result as JSON.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ],
+      "examples": [
+        "exakit rust-udf build score_model --json"
+      ]
+    },
+    {
+      "command": "exakit rust-udf deploy",
+      "options": "<name> [--schema SCHEMA] [--json]",
+      "summary": "Verify and deploy the built Rust scoring UDF.",
+      "description": "The new step creates a pinned exasol-udf-sdk 0.33.0 project under the kit home; --coefficients reads the 01_train coefficients.json. Build uses Rust 1.98.1 in a Linux Docker or Podman container matching the database architecture on macOS and Windows, then validates the .so. Deploy verifies its digest, copies it into the deployment's bucket directory and registers a RUST scalar script. A database restart is not attempted automatically.",
+      "parameters": [
+        {
+          "name": "<name>",
+          "description": "Project and UDF name; use a valid identifier.",
+          "default": null,
+          "required": true
+        },
+        {
+          "name": "--schema SCHEMA",
+          "description": "deploy only: database schema for the scoring UDF.",
+          "default": "EXAKIT_SCORING",
+          "required": false
+        },
+        {
+          "name": "--json",
+          "description": "Print the operation result as JSON.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ],
+      "examples": [
+        "exakit rust-udf deploy score_model --json"
+      ]
     }
   ],
   "notes": [

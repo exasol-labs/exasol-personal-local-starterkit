@@ -389,7 +389,9 @@ function Set-ExakitAcl {
     }
 }
 
-New-Item -ItemType Directory -Force -Path $script:ExakitHome, $script:LogDir, $script:CredsDir, $script:BinDir | Out-Null
+if (-not $script:ExakitReadOnlyHelp) {
+    New-Item -ItemType Directory -Force -Path $script:ExakitHome, $script:LogDir, $script:CredsDir, $script:BinDir | Out-Null
+}
 # Best-effort: a home on a network share can refuse Set-Acl outright, and that
 # is not a reason to stop the CLI from running. The files keep their own ACL.
 try { Protect-ExakitDirectory $script:CredsDir } catch { }

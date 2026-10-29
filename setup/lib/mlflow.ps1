@@ -93,6 +93,16 @@ function Invoke-CmdMlflow {
     }
     $serviceArgs = @($action)
     if ($action -eq "start") {
+        # Same public flags as the shell wrapper. Reject bad input before
+        # asserting/installing the server; --executable is an internal argument.
+        for ($i = 0; $i -lt $rest.Count; $i++) {
+            if ($rest[$i] -eq '--port') {
+                $i++
+                if ($i -ge $rest.Count) { Deny-ExakitInput 'Name a port after --port' }
+            } elseif ($rest[$i] -ne '--json') {
+                Deny-ExakitInput "Unknown option '$($rest[$i])' for exakit mlflow start"
+            }
+        }
         Assert-MlflowServer
         $serviceArgs += @("--executable", (Get-MlflowExecutable))
         $serviceArgs += $rest

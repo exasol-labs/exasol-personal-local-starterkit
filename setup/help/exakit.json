@@ -419,6 +419,12 @@
           "description": "List add-ons as JSON; read-only and cannot be combined with install IDs.",
           "default": "off",
           "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything. Combine with --json for structured help.",
+          "default": "off",
+          "required": false
         }
       ]
     },
@@ -909,6 +915,12 @@
           "description": "Print machine-readable output rather than decorated text.",
           "default": "off",
           "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything. Combine with --json for structured help.",
+          "default": "off",
+          "required": false
         }
       ]
     },
@@ -988,29 +1000,71 @@
           "description": "Confirm removal. With no addon ID, remove the full kit and kit-owned database data.",
           "default": "ask for confirmation",
           "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything. Combine with --json for structured help.",
+          "default": "off",
+          "required": false
         }
       ]
     },
     {
       "command": "help",
-      "options": "[--all] [<component>]",
+      "options": "[<component> | <command> [<action>...]] [--all] [--json]",
       "summary": "This screen.",
-      "description": "exakit help shows the everyday commands. --all lists every command. exakit help <component> (or exakit <component> --help) opens the full reference for one component.",
+      "description": "Discover the shipped interface without installing or starting anything. Name an add-on/component for its page, or a complete command path for its own arguments. --all lists every public command. Add --json to any help form for structured metadata. Unknown command help exits 2; catalog provides keyword search.",
       "examples": [
-        "exakit help",
-        "exakit help --all",
-        "exakit help exapump"
+        "exakit help notebook",
+        "exakit --help udf-devkit",
+        "exakit help model put --json",
+        "exakit mlflow start --help --json",
+        "exakit help --all --json"
+      ],
+      "parameters": [
+        {
+          "name": "<component> | <command> [<action>...]",
+          "description": "A registered help topic or exact command path. The exakit prefix is optional. Command families include documented children.",
+          "required": false,
+          "default": "overview"
+        },
+        {
+          "name": "--all, -a",
+          "description": "List all public commands; with --json include the complete command registry and documents.",
+          "required": false,
+          "default": "off"
+        },
+        {
+          "name": "--json, -j",
+          "description": "Return one JSON document. Unknown command help exits 2 with an error and a catalog remedy.",
+          "required": false,
+          "default": "off"
+        }
       ]
     },
     {
       "command": "catalog",
       "options": "[search] [--json | -j]",
       "summary": "Browse or search every command.",
-      "description": "Every exakit, exapump and exasol command in one searchable screen. --json prints the whole command surface as one machine-readable object.",
+      "description": "Search the shipped command registry by command name, syntax, description or component topic. --json returns canonical invocations, usage, documented argument metadata, examples and help_command links. This is command discovery, not installation or liveness status.",
       "examples": [
         "exakit catalog",
-        "exakit catalog mcp",
+        "exakit catalog udf --json",
         "exakit catalog --json"
+      ],
+      "parameters": [
+        {
+          "name": "<search>",
+          "description": "Search command names, syntax and descriptions by substring. Use help for exact command lookup.",
+          "required": false,
+          "default": "all commands"
+        },
+        {
+          "name": "--json, -j",
+          "description": "Return canonical invocations, usage, parameter metadata and help commands in one JSON object.",
+          "required": false,
+          "default": "off"
+        }
       ]
     },
     {

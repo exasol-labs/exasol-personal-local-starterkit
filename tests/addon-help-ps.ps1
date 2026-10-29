@@ -12,6 +12,11 @@ try {
         $text = (Show-ExakitHelpComponent $id 6>&1 | Out-String)
         if (-not $text.Contains('Parameters and options')) { throw "$id has no parameter reference" }
         if (-not $text.Contains('Example:')) { throw "$id has no examples" }
+        if (-not $text.Contains('Manage this add-on')) { throw "$id has no standard lifecycle reference" }
+        $page = Show-ExakitHelpJson $id | ConvertFrom-Json
+        if ($page.management.install -ne "exakit marketplace $id" -or $page.management.uninstall_preview -ne "exakit uninstall $id --dry-run") {
+            throw "$id management command drift"
+        }
         if ($id -eq 'dbt-exasol' -and $text.Contains('dbt-exasol dbt-exasol')) { throw 'duplicated native command' }
         $checks += 2
     }
@@ -27,6 +32,14 @@ try {
     $json = Show-ExakitHelpJson 'udf-devkit' | ConvertFrom-Json
     $put = @($json.commands | Where-Object { $_.command -eq 'exakit model put' })[0]
     if (-not (@($put.parameters | Where-Object { $_.name -like '--yes*' }).Count)) { throw 'JSON lost parameter metadata' }
+    foreach ($topic in @('model put','mlflow start','rust-udf build','notebook stop marimo')) {
+        $json = Show-ExakitHelpJson $topic -CommandHelp | ConvertFrom-Json
+        if ($json.commands[0].invocation -ne "exakit $topic") { throw "wrong command for $topic" }
+        if (-not $json.commands[0].parameters) { throw "no arguments for $topic" }
+        $checks++
+    }
+    $json = Show-ExakitHelpJson 'model imaginary-action' -CommandHelp | ConvertFrom-Json
+    if ($json.ok -ne $false -or $json.count -ne 0 -or $script:ExakitHelpExitCode -ne 2) { throw 'unknown child guessed a parent' }
     if (Test-Path $script:ExakitHome) { throw 'help created an installation' }
     Write-Host "PASS $checks add-on page/family checks, command/JSON parity and no install side effects"
 } finally { Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue }
