@@ -1610,8 +1610,14 @@ has "windows asks podman whether it works too" "Test-PersonalPodmanAnswers" "$_p
 has "...and starts a machine that is merely stopped" '"machine" "start"' "$_p2winrun"
 has "...only when it really is stopped" 'machine", "list"' "$_p2winrun"
 has "...putting the whole error in the log" 'Invoke-ExakitLogged $podman.Source "info"' "$_p2winrun"
+has "...and its last line on screen, like the sh side" "What it said" "$_p2winrun"
 has "...and naming the command that finishes the job" "re-run the installer" "$_p2winrun"
-has "the windows deploy asks before it deploys"     "elseif (-not (Test-PersonalPodmanRunning))" "$(cat "$ROOT/setup/lib/runtime-personal.ps1")"
+# ...and before ANY branch: the readiness check (machine up, DNS for a fresh
+# pull, the pids controller) heads the deployment and the start alike, so a
+# broken Podman is named before anything waits on it or is replaced.
+has "the windows deploy asks before it deploys"     'if (-not (Test-PersonalPodmanReady -Fresh:$fresh))' "$(sed -n '/^function Install-PersonalDeployment/,/^}/p' "$ROOT/setup/lib/runtime-personal.ps1")"
+has "...and so does the windows start"     'Test-PersonalPodmanReady' "$(sed -n '/^function Start-Personal/,/^}/p' "$ROOT/setup/lib/runtime-personal.ps1")"
+has "...which starts with the machine itself"     'Test-PersonalPodmanRunning' "$(sed -n '/^function Test-PersonalPodmanReady/,/^}/p' "$ROOT/setup/lib/runtime-personal.ps1")"
 
 # ---------------------------------------------------------------------------
 # A START THE LAUNCHER ACCEPTED IS NOT A DATABASE
@@ -1693,7 +1699,7 @@ lacks "...while Start-Personal stays a nudge" "Wait-PersonalReadyOrDeploy" \
 # ONE FLAG, because it stopped meaning "no podman" the moment a declined reuse
 # and a failed deploy started using it.
 lacks "...under one name for every cause" "PersonalNoPodman" "$_p2winh"
-check "...set by each cause that leaves no database" "9" \
+check "...set by each cause that leaves no database" "10" \
     "$(printf '%s' "$_p2winh" | grep -c 'PersonalNoDatabase = $true')"
 has "the windows resume arm survives a start that cannot finish" \
     'Invoke-ExakitSoftStep -Component "runtime" -Repair "exakit start"' \

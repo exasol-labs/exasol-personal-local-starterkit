@@ -39,6 +39,8 @@ What happens, in order:
 
 Podman's default machine is one machine for the whole computer. The Exasol launcher uses it, never reconfigures one that already exists, and leaves it running after `exakit stop` and even after an uninstall. The kit owns the **deployment** (the database and its data) and nothing else, so if you use Podman for other work, that work is not affected.
 
+Rootful and rootless machines are both supported. The kit changes the machine only when it finds a specific problem and you agree (in an unattended install, only with `EXAKIT_PODMAN_SELFHEAL=1`): it can turn on WSL DNS tunneling when the machine can't resolve the image registry, switch a rootless machine to rootful when it has no `pids` cgroup controller, or offer rootless mode when the database container runs but Windows can't reach it. See the [Podman troubleshooting guide](podman.md#windows-rootful-and-rootless-machines).
+
 ## Verify
 
 ```powershell
@@ -74,12 +76,15 @@ For the full detail, see [Staying up to date](../README.md#staying-up-to-date).
 
 ## Windows notes
 
-For help with the Podman machine, rootless mode or WSL2 errors, see the [Podman troubleshooting guide](podman.md).
+For help with the Podman machine, rootful and rootless modes or WSL2 errors, see the [Podman troubleshooting guide](podman.md).
 
 | Issue | Fix |
 |---|---|
 | The Podman install asked for administrator approval | That is Windows Package Manager installing Podman, once, and the installer tells you before it happens. Approve it, or install Podman yourself first (`winget install RedHat.Podman`; you may need to reboot) and re-run. The kit itself never needs admin rights. If you refuse the approval, the kit reports Podman as the cause rather than the database, skips the database step and carries on. Everything that doesn't need a database still installs, and re-running the install command afterwards finishes the job (completed steps are skipped) |
-| "Podman is installed, but it cannot run containers" | Podman on Windows is a Linux machine under WSL, and it is off after a reboot. The kit runs `podman info` before deploying and starts the machine if it is only stopped. If Podman still doesn't answer, fix what `podman info` reports (`podman machine start`, or `podman machine init` if there is no machine at all) and re-run the install command |
+| "Podman is installed, but it cannot run containers" | Podman on Windows is a Linux machine under WSL, and it is off after a reboot. The kit runs `podman info` before deploying and starts the machine if it is only stopped. If Podman still doesn't answer, fix what `podman info` reports (`podman machine start`, or `podman machine init` if there is no machine at all) and re-run the install command. `exakit start` runs the same check, so after a reboot it starts the machine first |
+| "offers no 'pids' cgroup controller" / the container stays `Created` with `controller 'pids' is not available` | A rootless machine under WSL 2.9+ can get no cgroup controllers ([podman-container-tools/podman#29909](https://github.com/podman-container-tools/podman/issues/29909)). The kit offers to switch the machine to rootful, which works for now: `podman machine stop`, `podman machine set --rootful`, `podman machine start`. See [the pids controller](podman.md#windows-the-pids-controller) |
+| "cannot resolve registry-1.docker.io" | The image is pulled inside Podman's machine. On Windows 11 22H2+, add `dnsTunneling=true` under `[wsl2]` in `%USERPROFILE%\.wslconfig`, then `wsl --shutdown` (stops every WSL distro) and `podman machine start`. The kit offers to do this for you. See [DNS inside the machine](podman.md#windows-dns-inside-the-machine) |
+| "This deployment never started, so it holds no data" | The first boot failed and no data was ever written, so the installer offers to remove it and deploy a fresh one (default yes). `EXAKIT_REPLACE_DB=0` keeps it. A deployment that ever started keeps the old questions, and deleting it still defaults to no |
 | "Port 8563 is already in use" | The launcher picks the deployment's port itself, and the kit uses whichever port it picked. If the port holds a running Exasol Personal that this launcher deployed, the kit adopts it. Anything else is reported: stop that application and re-run |
 | "It answers like an Exasol database this kit did not deploy" | Windows and WSL share one network stack, so an Exasol Personal running **inside a WSL distro** holds port 8563 for Windows too, and the other way round. The kit never adopts a database it cannot log in to. Stop it on the other side first (`exakit stop` in that distro, or in PowerShell when installing into WSL), then re-run |
 | `TLS error: tls handshake eof` right after an install or start | The database is still booting behind its published port. Under rootless Podman the port opens as soon as the container starts, a minute or more before the database inside accepts connections. The kit waits for a completed handshake before it reports the deployment as reachable. If you see this error from your own client, wait a minute and check `exakit status` |

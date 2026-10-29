@@ -7,6 +7,13 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
+# Everything this suite's stubs leave in TMPDIR (the launcher download's
+# exakit-personal.* folders, behind a stubbed die() that cannot sweep them)
+# goes with the run instead of piling up in the developer's real TMPDIR.
+_SUITE_TMP="$(mktemp -d)"
+trap 'rm -rf "$_SUITE_TMP"' EXIT
+TMPDIR="$_SUITE_TMP"; export TMPDIR
+
 # A failure note that was ALREADY in the developer's kit home before this suite
 # started is not pollution this suite caused - any real command of theirs that
 # failed leaves one. Remember what was there, so the check at the end can tell

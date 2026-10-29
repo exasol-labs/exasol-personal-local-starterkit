@@ -3618,12 +3618,16 @@ exakit_data_samples_select() {
     _dls_final_label="$1"
     : "$_dls_final_label"
     # The selection is made in the TABLE that will show the progress, so the
-    # rows a reader ticks are the rows they then watch fill in.
+    # rows a reader ticks are the rows they then watch fill in. The final label
+    # is a parameter for the same reason it always was: the installer's opt-out
+    # reads "Skip", and so does the standalone command's.
+    exakit_data_table_release
     EXAKIT_TABLE_STATE="$(mktemp "${TMPDIR:-/tmp}/exakit-table.XXXXXX")" || {
         warn "Could not create a temporary file for the data table."
         EXAKIT_DATA_LOAD_SELECTION="none"
         return 1
     }
+    exakit_track_tmp "$EXAKIT_TABLE_STATE"
     exakit_data_table_build "$EXAKIT_TABLE_STATE"
     UI_TABLE_TITLE="Data to load"
     # Who each dataset is for gets a column of its own while the reader picks:
@@ -3643,13 +3647,28 @@ exakit_data_samples_select() {
 
     # Skip answers none; the caller collects into EXAKIT_DATA_LOAD_SELECTION.
     case ",$EXAKIT_TABLE_SELECTION," in
-        *",$EXAKIT_TABLE_ROW_SKIP,"*) EXAKIT_DATA_LOAD_SELECTION="none"; return 0 ;;
+        *",$EXAKIT_TABLE_ROW_SKIP,"*) EXAKIT_DATA_LOAD_SELECTION="none"; exakit_data_table_release; return 0 ;;
     esac
     for _dls_row in $(printf '%s' "$EXAKIT_TABLE_SELECTION" | tr ',' ' '); do
         _dls_id="$(printf '%s\n' "$EXAKIT_TABLE_IDS" | sed -n "${_dls_row}p")"
         [ -n "$_dls_id" ] || continue
         EXAKIT_DATA_LOAD_SELECTION="${EXAKIT_DATA_LOAD_SELECTION:+$EXAKIT_DATA_LOAD_SELECTION,}$_dls_id"
     done
+    # Nothing picked, nothing to show progress in: the table is done.
+    [ -n "$EXAKIT_DATA_LOAD_SELECTION" ] || exakit_data_table_release
+    return 0
+}
+
+# exakit_data_table_release — the data table's state file and the animator's
+# sidecars go once the table has closed. The state file used to stay in TMPDIR
+# after every data-load and every install that offered data, with nothing that
+# ever removed it. Callers release it after ui_table_end; the EXIT sweep
+# (exakit_track_tmp) covers a die() or Ctrl+C before that.
+exakit_data_table_release() {
+    [ -n "${EXAKIT_TABLE_STATE:-}" ] || return 0
+    rm -f "$EXAKIT_TABLE_STATE" "$EXAKIT_TABLE_STATE.new" "$EXAKIT_TABLE_STATE.lines" \
+          "$EXAKIT_TABLE_STATE.stop" "$EXAKIT_TABLE_STATE.fatal"
+    EXAKIT_TABLE_STATE=""
     return 0
 }
 
@@ -3907,6 +3926,7 @@ exakit_data_load_menu() {
         rm -f "$EXAKIT_DEFER_ERRORS"
     fi
     EXAKIT_DEFER_ERRORS=""
+    exakit_data_table_release
     # The local file / folder load, now that the box is closed.
     #
     # It is the one selection made entirely of QUESTIONS -- the path, then the

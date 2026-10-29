@@ -1526,6 +1526,8 @@ check "with every sample loaded, your own file is the answer Enter gives" "local
     exakit_data_table_build "$WORK/dl-table" "Skip"
     _dlp_row="${EXAKIT_TABLE_DEFAULTS%%,*}"
     sed -n "${_dlp_row}p" "$WORK/dl-table" | cut -d'|' -f2 > "$_dl_probe"
+    EXAKIT_TABLE_STATE="$WORK/dl-table"
+    exakit_data_table_release
 )
 # The expected value is the label VERBATIM, and it moves when the label moves:
 # the folder-loading work widened this row to ", or a folder of them" and left

@@ -18,32 +18,98 @@ If `exakit` isn't available yet, start with the Podman commands. `exakit status 
 
 ## Common installation blockers
 
-- [Windows: rootful machine and unreachable database](#windows-rootful-machine)
+- [Windows: rootful and rootless machines](#windows-rootful-and-rootless-machines)
+- [Windows: the pids controller](#windows-the-pids-controller)
+- [Windows: DNS inside the machine](#windows-dns-inside-the-machine)
+- [Windows: database container stays Created](#windows-database-container-stays-created)
 - [Windows: Podman is installed but cannot connect](#windows-connection-failures)
 - [WSL2 and virtualization errors](#wsl2-and-virtualization)
 - [Linux/WSL: missing rootless ID ranges or helpers](#linux-and-wsl-rootless-permissions)
 
-### Windows rootful machine
+### Windows rootful and rootless machines
 
-On Windows, the kit's default Podman machine must be rootless for the database port to be reachable. Check the setting in PowerShell:
+The kit supports both rootful and rootless Podman machines. It reports the mode in the compatibility check and doesn't switch it unless it finds a specific problem and you agree. Check the mode in PowerShell:
 
 ```powershell
 podman machine inspect --format "{{.Rootful}}"
+podman version
 ```
 
-If it returns `true`, you can accept the installer's offer to switch to rootless mode or run the commands below yourself. Finish other work on the machine first. **These commands stop and restart it, interrupting its containers.**
+If the database container runs but nothing answers on `127.0.0.1:8563` from Windows, the kit tells you why:
+
+- **Podman 6.0.0 to 6.1.0 on a rootful machine.** These versions don't forward a rootful machine's published ports to Windows. The bug is fixed in 6.1.1, but a machine only gets the fix when you recreate it. Upgrade Podman, then recreate the machine. **This deletes the machine and every container and image in it.**
+
+  ```powershell
+  podman machine rm
+  podman machine init
+  podman machine start
+  ```
+
+- **Any other version.** Restart the machine with `podman machine stop` and `podman machine start`, then run `exakit start`. As another option, the kit offers to switch the machine to rootless mode. It switches back if rootless mode has no `pids` controller (see below), because the database can't start there.
+
+Switching modes stops and restarts the machine, interrupting its containers. Containers, images and volumes created in one mode aren't visible in the other. They haven't been deleted or migrated. See [Podman's rootful/rootless setting](https://docs.podman.io/en/latest/markdown/podman-machine-set.1.html#rootful).
+
+For an unattended Windows install, set `$env:EXAKIT_PODMAN_SELFHEAL = '1'` before running the installer only if you can allow the machine to restart. Without it, the installer names the cause and the commands but changes nothing. `EXAKIT_FORCE=1` has nothing to do with the machine's mode.
+
+### Windows: the pids controller
+
+The database container runs with a process (`pids`) limit. Since WSL 2.9, a rootless Podman machine can get no cgroup controllers at all, so the container stays `Created` with `crun: controller 'pids' is not available ... OCI runtime error`. This is a known upstream issue: [podman-container-tools/podman#29909](https://github.com/podman-container-tools/podman/issues/29909). Check the machine:
+
+```powershell
+podman info --format "{{.Host.CgroupControllers}}"
+```
+
+If the list doesn't contain `pids`, a rootful machine is the current workaround. The installer offers to make the switch for you. To do it yourself:
 
 ```powershell
 podman machine stop
-podman machine set --rootful=false
+podman machine set --rootful
 podman machine start
-podman machine inspect --format "{{.Rootful}}"
-podman info
+podman info --format "{{.Host.CgroupControllers}}"
 ```
 
-The inspection should now return `false`, and you can re-run the starter-kit install. Containers, images and volumes created in rootful mode are no longer visible through the rootless connection. They haven't been deleted or migrated. See [Podman's rootful/rootless setting](https://docs.podman.io/en/latest/markdown/podman-machine-set.1.html#rootful).
+Then re-run the starter-kit install. If a rootful machine still lists no `pids`, the database can't start in this machine until WSL or Podman fixes the issue. The kit stops before deploying and names the cause instead of waiting for a database that can't start.
 
-For an unattended Windows install, set `$env:EXAKIT_PODMAN_SELFHEAL = '1'` before running the installer only if you can allow the machine to restart. This lets the installer switch it to rootless mode for you. `EXAKIT_FORCE=1` won't fix port forwarding.
+### Windows: DNS inside the machine
+
+The image is pulled inside Podman's machine, which can fail to resolve names even when Windows can. The error reads `lookup registry-1.docker.io: Temporary failure in name resolution`. Before a fresh deploy, the kit checks this with:
+
+```powershell
+podman machine ssh getent hosts registry-1.docker.io
+```
+
+On Windows 11 22H2 and later, turn on WSL DNS tunneling. Add this to `%USERPROFILE%\.wslconfig`, keeping any settings already in the file:
+
+```ini
+[wsl2]
+dnsTunneling=true
+```
+
+Then restart WSL and the machine. **`wsl --shutdown` stops every running WSL distribution**, so save your work first:
+
+```powershell
+wsl --shutdown
+podman machine start
+```
+
+The installer offers to make this edit and restart for you. On older Windows, switch the machine to user-mode networking instead:
+
+```powershell
+podman machine stop
+podman machine set --user-mode-networking
+podman machine start
+```
+
+### Windows: database container stays Created
+
+When a deploy or start fails, the kit reads the container's own error and shows it, along with the launcher's last lines. You can check it yourself:
+
+```powershell
+podman ps -a --filter name=exasol-db
+podman inspect --format "{{.State.Error}}" <container-name>
+```
+
+A `pids` error is covered [above](#windows-the-pids-controller). A deployment that never started holds no data, so the installer offers to remove it and deploy a fresh one. That question defaults to yes. Set `EXAKIT_REPLACE_DB=0` to keep it.
 
 ### Windows connection failures
 
@@ -126,7 +192,9 @@ Once Podman works, re-run the starter-kit install command. It skips completed st
 
 The kit's rootless deployment needs cgroups v2. Run `exakit preflight` for the steps that apply to your platform. On Linux, you may need to change the boot configuration and reboot. On WSL, edit `%USERPROFILE%\.wslconfig` on Windows as instructed, then restart WSL. Keep the file's existing settings and save your work before running `wsl --shutdown`, which stops all distributions.
 
-`EXAKIT_PODMAN_SELFHEAL=1` doesn't change kernel boot settings, and `EXAKIT_FORCE=1` can't provide missing kernel capabilities. Ask your system administrator if you can't change them yourself.
+On Linux and inside WSL, `exakit preflight` also checks that rootless Podman gets a `pids` cgroup controller. On Linux, delegate it to your user: create `/etc/systemd/system/user@.service.d/delegate.conf` containing `[Service]` and `Delegate=cpu cpuset io memory pids`, run `sudo systemctl daemon-reload`, then log in again. Inside WSL 2.9 and later, this is the known issue [podman-container-tools/podman#29909](https://github.com/podman-container-tools/podman/issues/29909).
+
+`EXAKIT_PODMAN_SELFHEAL=1` doesn't change kernel boot settings or cgroup delegation, and `EXAKIT_FORCE=1` can't provide missing kernel capabilities. Ask your system administrator if you can't change them yourself.
 
 ### Proxy, VPN and certificate errors
 

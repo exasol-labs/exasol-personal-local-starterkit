@@ -39,6 +39,9 @@ $script:PersonalBinPath         = Join-Path $script:BinDir "exasol.exe"
 # exakit-common.ps1, which is dot-sourced before this file.
 $script:PersonalDeployDir       = if ($env:EXAKIT_PERSONAL_DEPLOY_DIR) { $env:EXAKIT_PERSONAL_DEPLOY_DIR } else { Join-Path (Get-ExakitProfileHome) ".exasol\personal\deployments\default" }
 $script:PersonalRebuildNoted    = $false
+# Seconds between the waits' looks at the container's own error (see
+# Test-PersonalContainerRefused): two podman calls each, so not every 5 s.
+$script:PersonalContainerLookEvery = 15
 
 # Get-PersonalTargetVersion - the launcher version this kit installs or updates
 # to: the env override, the advertised manifest, the fallback - the same
@@ -339,6 +342,8 @@ function Test-PersonalReadyProbe {
         $raise = "EXAKIT_PERSONAL_REBUILD_TIMEOUT"
     }
     $t0 = [DateTime]::UtcNow
+    $script:PersonalContainerError = ""
+    $lastLook = $t0
     while (([DateTime]::UtcNow - $t0).TotalSeconds -lt $budget) {
         # A HANDSHAKE, NOT AN OPEN PORT. Under rootless Podman the port is
         # pasta's from the moment the container starts, and `exasol info`
@@ -347,6 +352,7 @@ function Test-PersonalReadyProbe {
         # connection, and the next step's SELECT 1 paid for it six times.
         if (Test-PersonalTlsAnswers) {
             Ok "Deployment is reachable"
+            Set-PersonalFirstBootPending $false
             # The database answered under this launcher, so whatever rebuild that
             # first start owed is paid - recorded so the notice retires itself.
             $done = Get-PersonalLauncherVersion
@@ -357,6 +363,14 @@ function Test-PersonalReadyProbe {
             # else it emits joins that answer.
             [void](Set-ExakitManifestValue "runtime.guest_rebuilt_for" $done)
             return $true
+        }
+        # A CONTAINER THAT REFUSED TO START WILL NOT ANSWER LATER. Asked every
+        # 15 s rather than every 5 (PersonalContainerLookEvery): it costs two
+        # podman calls, and the point is to stop a 150 s wait early, not to
+        # race it.
+        if (([DateTime]::UtcNow - $lastLook).TotalSeconds -ge $script:PersonalContainerLookEvery) {
+            $lastLook = [DateTime]::UtcNow
+            if (Test-PersonalContainerRefused) { break }
         }
         Start-Sleep -Seconds 5
     }
@@ -375,6 +389,10 @@ function Wait-PersonalReady {
     $spent  = $script:PersonalReadySpent
     $budget = $script:PersonalReadyBudget
     $raise  = $script:PersonalReadyRaise
+    if ($script:PersonalContainerError) {
+        $cause = Show-PersonalFailureCause
+        Fail "The database could not start$cause. Read the state with 'exakit status'; once the cause is fixed: exakit start"
+    }
     Fail "The deployment did not answer within ${spent} seconds (the ceiling is ${budget}s; raise it with ${raise}). Read the state with 'exakit status', then 'exakit start' to retry - a deployment stuck in 'interrupted' is repaired with 'exakit repair-runtime' (destructive, it asks first)."
 }
 
@@ -396,6 +414,14 @@ function Wait-PersonalReady {
 # personal_wait_ready_or_deploy.
 function Wait-PersonalReadyOrDeploy {
     if (Test-PersonalReadyProbe) { return $true }
+    # A CONTAINER THAT REFUSED TO START is not fixed by deploying it again: the
+    # deploy would recreate it and the same error would refuse it the same way.
+    # Its cause is the answer.
+    if ($script:PersonalContainerError) {
+        $cause = Show-PersonalFailureCause
+        Set-ExakitFailureReason "The database never answered$cause"
+        return $false
+    }
     Warn2 "The database did not answer after the launcher accepted the start."
     Info "In some states the launcher's start does nothing and its deploy is the fix - running that now."
     $deployArgs = @("deploy")
@@ -405,14 +431,25 @@ function Wait-PersonalReadyOrDeploy {
     $rc = Invoke-ExakitLogged (Get-PersonalCli) @deployArgs
     $script:ExakitActiveLabel = ""
     if ($rc -ne 0) {
-        Set-ExakitFailureReason "The database never answered, and the launcher's deploy could not bring it up"
+        $cause = Show-PersonalFailureCause
+        Set-ExakitFailureReason "The database never answered, and the launcher's deploy could not bring it up$cause"
         return $false
     }
     if (Test-PersonalReadyProbe) {
         Ok "The database answered after the launcher's deploy"
         return $true
     }
-    Set-ExakitFailureReason "The database never answered, even after the launcher deployed it again"
+    if ($script:PersonalContainerError) {
+        $cause = Show-PersonalFailureCause
+        Set-ExakitFailureReason "The database never answered, even after the launcher deployed it again$cause"
+        return $false
+    }
+    # THE CONTAINER MAY BE RUNNING AND STILL UNREACHABLE from Windows - a
+    # forwarding problem, not a database problem. Diagnosed, not timed out.
+    if (Resolve-PersonalUnreachableDatabase) { return $true }
+    $cause = ""
+    if ($script:PersonalUnreachableCause) { $cause = ": $($script:PersonalUnreachableCause)" }
+    Set-ExakitFailureReason "The database never answered, even after the launcher deployed it again$cause"
     return $false
 }
 
@@ -450,31 +487,19 @@ function Test-PersonalRequirements {
     # can appear - which is where a reader can act on it. A line at the gate
     # was an announcement about a step that had not started.
     #
-    # ONE THING ABOUT A MACHINE THAT IS ALREADY THERE, though. Podman Desktop
-    # creates the default machine ROOTFUL, and a rootful container publishes
-    # its port as an iptables rule inside the machine - no listener, so neither
-    # WSL's localhost relay nor gvproxy ever forwards it to Windows. The
-    # launcher then deploys a database that answers inside the machine and
-    # never on 127.0.0.1:8563, and every start waits 150 s for it. A machine
-    # Podman creates itself is rootless and publishes through a real listener,
-    # which the relay forwards. Found by running both on one laptop; refused
-    # here, before anything is downloaded, with the fix named.
-    $podmanCmd = Get-Command podman -ErrorAction SilentlyContinue
-    if ($podmanCmd -and $env:EXAKIT_FORCE -ne "1") {
-        $rootful = ("" + (Invoke-ExakitBounded -FilePath $podmanCmd.Source -Arguments @("machine", "inspect", "--format", "{{.Rootful}}") -TimeoutSeconds 20)).Trim()
-        if ($rootful -eq "true") {
-            # OFFER TO FIX IT, rather than hand over three commands and stop.
-            # Every new Windows install where Podman Desktop made the machine
-            # hits this, so "here is what to type" is the whole experience of
-            # the product for those users.
-            if (Repair-PersonalRootfulPodmanMachine) {
-                $rootful = ("" + (Invoke-ExakitBounded -FilePath $podmanCmd.Source -TimeoutSeconds 30 `
-                    -Arguments @("machine", "inspect", "--format", "{{.Rootful}}"))).Trim()
-            }
-        }
-        if ($rootful -eq "true") {
-            Fail "Podman's default machine is rootful, and a database published from a rootful machine is not reachable from Windows (the port is an iptables rule inside the machine, which nothing forwards). Make it rootless first: podman machine stop; podman machine set --rootful=false; podman machine start - or remove it and let the launcher create one (podman machine rm podman-machine-default). Force past this check with EXAKIT_FORCE=1."
-        }
+    # THE MACHINE'S MODE IS REPORTED, NEVER JUDGED. This gate used to refuse a
+    # rootful machine and offer to make it rootless, on the theory that a
+    # rootful machine never forwards its ports to Windows. That is true only of
+    # Podman 6.0.0 to 6.1.0 (a regression fixed in 6.1.1); on 5.x the rootful
+    # port is a real listener that WSL's relay forwards. And rootful is the
+    # one mode that works at all where WSL 2.9+ gives rootless Podman no pids
+    # controller. So both modes deploy, and preflight - which runs this gate -
+    # stays read-only: the evidence-driven checks live in Test-PersonalPodmanReady
+    # and in the unreachable-database diagnosis, after a deploy, not here.
+    $mode = Get-PersonalPodmanMode
+    if ($mode) {
+        Ok "Compatibility check passed (windows $arch, ${ramGb} GB RAM, Podman machine $mode)"
+        return
     }
     Ok "Compatibility check passed (windows $arch, ${ramGb} GB RAM)"
 }
@@ -483,68 +508,6 @@ function Test-PersonalRequirements {
 # the release's checksums file, and place exasol.exe under the kit's bin dir. A
 # launcher already on PATH that knows the 'local' preset is kept as it always
 # was. Twin of personal_install_launcher.
-# Repair-PersonalRootfulPodmanMachine - switch Podman's default machine to
-# rootless, with consent. Returns $true when it believes it changed something.
-#
-# WHY THIS BLOCKS EVERY NEW WINDOWS INSTALL. Podman Desktop creates the default
-# machine ROOTFUL, and a rootful container publishes its port as an iptables
-# rule inside the machine - no listener, so nothing forwards it to Windows. The
-# database then answers inside the machine and never on 127.0.0.1:8563. The
-# check that catches it was right to exist and wrong to stop there: it printed
-# three commands and gave up, which is the entire experience of this product for
-# anyone whose machine Podman Desktop had already made.
-#
-# CONSENT IS EXPLICIT, because this is not ours to change quietly. The default
-# machine is shared host-wide: restarting it interrupts anything else using
-# Podman, and containers created under the rootful machine are not visible from
-# the rootless one afterwards. They are not deleted - the connection changes,
-# not the storage - but a reader has to be told before, not discover it after.
-# So a terminal is asked and defaults to yes; a run with no terminal must set
-# EXAKIT_PODMAN_SELFHEAL=1, the same opt-in the Linux rootless fix uses.
-function Repair-PersonalRootfulPodmanMachine {
-    $podman = Get-Command podman -ErrorAction SilentlyContinue
-    if (-not $podman) { return $false }
-
-    Warn2 "Podman's default machine is rootful, and a database published from one is not reachable from Windows."
-    $question = "Let the kit switch Podman's default machine to rootless? It stops and restarts the machine, and containers made under the rootful one will not be visible afterwards"
-
-    if (Test-ExakitInteractive) {
-        if (-not (Confirm-ExakitPrompt $question $true)) {
-            Info "Not changed."
-            return $false
-        }
-    } else {
-        switch ("" + $env:EXAKIT_PODMAN_SELFHEAL) {
-            { $_ -in @("1", "y", "yes", "Y", "YES", "Yes") } { }
-            default {
-                Info "The kit can switch it for you, but it restarts a machine shared with everything else"
-                Info "on this host, so an unattended run has to opt in:  EXAKIT_PODMAN_SELFHEAL=1"
-                return $false
-            }
-        }
-    }
-
-    # Stop, set, start - in that order, because set refuses on a running
-    # machine. A stop that fails because it was already stopped is not an
-    # error, so only the set and the start are judged.
-    Info "Switching Podman's default machine to rootless"
-    [void](Invoke-ExakitBounded -FilePath $podman.Source -Arguments @("machine", "stop") -TimeoutSeconds 120)
-    $set = Invoke-ExakitLogged $podman.Source "machine" "set" "--rootful=false"
-    if ($set -ne 0) {
-        Warn2 "Could not switch the machine to rootless (podman machine set exited $set)."
-        return $false
-    }
-    $start = Invoke-ExakitLogged $podman.Source "machine" "start"
-    if ($start -ne 0) {
-        # The setting took even though the start did not; say both, because the
-        # next run needs to know which half to retry.
-        Warn2 "The machine is set to rootless but would not start (podman machine start exited $start). Start it yourself: podman machine start"
-        return $false
-    }
-    Ok "Podman's default machine is rootless now"
-    return $true
-}
-
 function Get-PersonalS3Source {
     param([Parameter(Mandatory)][string]$Version)
     # The pin is for the raw Windows executable, not the GitHub ZIP. An
@@ -748,6 +711,8 @@ function Set-PersonalManifest {
     # Never assert health without either having just seen it or probing for it.
     if (-not $Status) { $Status = Get-PersonalStatus }
     Set-ExakitManifestValue "runtime.status" $Status
+    # A database that has been seen healthy may hold data from now on.
+    if ($Status -eq "healthy") { Set-PersonalFirstBootPending $false }
 }
 
 # Install-PersonalDeployment - run the local deployment, the long step. The
@@ -780,7 +745,7 @@ function Test-PersonalPodmanAnswers {
 # which it can do no work for anyone. Twin of personal_podman_running, which
 # has no machine to start and so only asks.
 function Test-PersonalPodmanRunning {
-    $podman = Get-Command podman -ErrorAction SilentlyContinue
+    $podman = Get-PersonalPodman
     # Not installed is a different failure, and the launcher's to fix.
     if (-not $podman) { return $true }
     if (Test-PersonalPodmanAnswers $podman) { return $true }
@@ -798,13 +763,574 @@ function Test-PersonalPodmanRunning {
         }
     }
 
-    # THE WHOLE ERROR TO THE LOG. The bounded probe above keeps only the exit
-    # code, and "podman info failed" with nothing else is not diagnosable.
+    # THE WHOLE ERROR TO THE LOG, AND ITS LAST LINE TO THE SCREEN. The bounded
+    # probe above keeps only the exit code, and "podman info failed" with
+    # nothing else is not diagnosable. Twin of "What it said" in
+    # personal_podman_running.
+    $mark = Get-PersonalLogLineCount
     [void](Invoke-ExakitLogged $podman.Source "info")
+    $said = @(Get-PersonalLogSince $mark) | Select-Object -Last 1
     Warn2 "Podman is installed, but it cannot run containers on this machine."
+    if ($said) { Info "What it said: $(Get-PersonalShortText $said)" }
     Info "Check it with 'podman info' (and 'podman machine start' if its machine is off)."
     Info "Once that answers, re-run the installer to finish the install: $(Get-ExakitInstallCommand)"
     return $false
+}
+
+# Get-PersonalLogLineCount / Get-PersonalLogSince <line> - the log as a cursor.
+# Invoke-ExakitLogged sends a command's whole output to the log and none of it
+# to the screen, so showing or classifying what ONE command said means
+# remembering where the log ended before it ran. The kit's own timestamped
+# lines are left out: what is wanted is the tool's words.
+function Get-PersonalLogLineCount {
+    if ($script:LogFile -and (Test-Path $script:LogFile)) { return @(Get-Content -Path $script:LogFile).Count }
+    return 0
+}
+
+function Get-PersonalLogSince {
+    param([int]$Line = 0)
+    if (-not $script:LogFile -or -not (Test-Path $script:LogFile)) { return @() }
+    return @(Get-Content -Path $script:LogFile | Select-Object -Skip $Line |
+        Where-Object { "$_".Trim() -and "$_" -notmatch '^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d ' })
+}
+
+# Get-PersonalShortText <text> - one line of foreign output, cut to a length a
+# terminal row can carry. The pids error alone names a cgroup path 150
+# characters deep.
+function Get-PersonalShortText {
+    param([AllowEmptyString()][string]$Text)
+    $one = ("$Text" -split "`r?`n")[0].Trim()
+    if ($one.Length -gt 240) { $one = $one.Substring(0, 237) + "..." }
+    return $one
+}
+
+# Show-PersonalLauncherTail - the launcher's own last words after a failed
+# deploy, in the dim gutter foreign output has always used here. The deploy's
+# output goes to the log, so without this a failure was left with nothing but
+# "Local deployment failed" and a log path. Twin of _personal_deploy_print_tail.
+function Show-PersonalLauncherTail {
+    $lines = @($script:PersonalLauncherOutput | Select-Object -Last 12)
+    if ($lines.Count -eq 0) { return }
+    $rule = $script:UiHr
+    if (-not $rule) { $rule = "-" }
+    Write-Host ("      {0}{1} last lines from the exasol launcher{2}" -f $script:UiDim, $rule, $script:UiReset)
+    foreach ($line in $lines) {
+        $shown = "$line".TrimEnd()
+        if ($shown.Length -gt 300) { $shown = $shown.Substring(0, 297) + "..." }
+        Write-Host ("      {0}{1} {2}{3}" -f $script:UiDim, $script:UiVB, $shown, $script:UiReset)
+    }
+}
+
+# ---------------------------------------------------------------------------
+# PODMAN READINESS AND SELF-HEAL
+#
+# Three things stop a Windows deploy before the database ever runs, and each
+# used to surface as "Local deployment failed", or as 150 seconds of "never
+# answered", naming none of them: a machine that is off, a machine that cannot
+# resolve the image registry, and a machine whose cgroup gives the container no
+# 'pids' controller. Test-PersonalPodmanReady asks all three BEFORE a deploy or
+# a start. What the kit can fix it offers to fix - with the consent the Linux
+# rootless fix uses, EXAKIT_PODMAN_SELFHEAL - and then asks again; what it
+# cannot fix is a soft failure with the cause named, never a deploy that
+# cannot succeed.
+#
+# BOTH MODES ARE SUPPORTED. Rootful and rootless machines both run the
+# database; neither is refused or switched quietly. A switch happens only on
+# evidence (a missing controller, a running container Windows cannot reach)
+# and only with consent.
+# ---------------------------------------------------------------------------
+
+$script:PersonalRegistryHost = "registry-1.docker.io"
+$script:PersonalPidsIssue    = "podman-container-tools/podman#29909"
+
+# Get-PersonalPodman - podman on PATH, or $null. The one question every helper
+# below starts from, asked in one place.
+function Get-PersonalPodman {
+    return (Get-Command podman -ErrorAction SilentlyContinue)
+}
+
+# Get-PersonalPodmanMode - "rootful" or "rootless" for Podman's default
+# machine, "" when there is none or it cannot say. Reported, never judged.
+function Get-PersonalPodmanMode {
+    $podman = Get-PersonalPodman
+    if (-not $podman) { return "" }
+    $out = "" + (Invoke-ExakitBounded -FilePath $podman.Source -TimeoutSeconds 15 `
+        -Arguments @("machine", "inspect", "--format", "{{.Rootful}}"))
+    $first = @($out -split "`r?`n" | Where-Object { "$_".Trim() }) | Select-Object -First 1
+    switch ("$first".Trim().ToLowerInvariant()) {
+        "true"  { return "rootful" }
+        "false" { return "rootless" }
+    }
+    return ""
+}
+
+# Get-PersonalPodmanVersion - the client's and the machine's Podman versions,
+# "" each when unknown. They differ in practice (a 5.8.3 client drove a 5.8.9
+# machine in the incident this section was written for), and it is the
+# MACHINE's version whose behaviour decides the port forwarding.
+function Get-PersonalPodmanVersion {
+    $result = [pscustomobject]@{ Client = ""; Server = "" }
+    $podman = Get-PersonalPodman
+    if (-not $podman) { return $result }
+    $out = "" + (Invoke-ExakitBounded -FilePath $podman.Source -TimeoutSeconds 15 `
+        -Arguments @("version", "--format", "{{.Client.Version}}|{{.Server.Version}}"))
+    $first = @($out -split "`r?`n" | Where-Object { "$_".Trim() }) | Select-Object -First 1
+    if ("$first" -match '^\s*([^|]*)\|(.*)$') {
+        $result.Client = $Matches[1].Trim()
+        $result.Server = $Matches[2].Trim()
+    }
+    return $result
+}
+
+# Test-PersonalPodmanForwardingRegression <version> - is this the Podman whose
+# rootful machine does not forward published ports to Windows? 6.0.0 to 6.1.0
+# (podman#29377; fixed by force_port_listen in 6.1.1, which a machine only gets
+# when it is recreated). Every other version - 5.x included - binds a real
+# listener that WSL's localhost relay forwards.
+function Test-PersonalPodmanForwardingRegression {
+    param([AllowEmptyString()][string]$Version)
+    $v = "$Version".Trim() -replace '^v', ''
+    return [bool]($v -match '^6\.0(\.|$)' -or $v -match '^6\.1\.0($|[^0-9])')
+}
+
+# Write-PersonalPodmanFacts - mode and both versions, to the log only. They are
+# for whoever reads a failed install's log; a diagnosis that needs them names
+# them itself.
+function Write-PersonalPodmanFacts {
+    $mode = Get-PersonalPodmanMode
+    if (-not $mode) { $mode = "mode unknown" }
+    $version = Get-PersonalPodmanVersion
+    $client = $version.Client
+    if (-not $client) { $client = "unknown" }
+    $server = $version.Server
+    if (-not $server) { $server = "unknown" }
+    Write-ExakitLog "INFO" "Podman: client $client, machine $server, $mode"
+}
+
+# Get-PersonalPodmanCgroupControllers - what `podman info` lists as the cgroup
+# controllers this connection may use ("[cpu io memory pids]"), or $null when
+# podman cannot say. Test-PersonalPidsMissing reads it: only a real list that
+# lacks pids is a gap - an older podman without the field, or one that does
+# not answer, is unknown, and unknown is never evidence.
+function Get-PersonalPodmanCgroupControllers {
+    $podman = Get-PersonalPodman
+    if (-not $podman) { return $null }
+    $out = Invoke-ExakitBounded -FilePath $podman.Source -TimeoutSeconds 30 `
+        -Arguments @("info", "--format", "{{.Host.CgroupControllers}}")
+    if ($null -eq $out) { return $null }
+    return ("" + $out).Trim()
+}
+
+function Test-PersonalPidsMissing {
+    param([AllowNull()][AllowEmptyString()][string]$Controllers)
+    if ("$Controllers" -notmatch '^\[') { return $false }
+    return (-not ("$Controllers" -match '(^|[\s\[])pids([\s\]]|$)'))
+}
+
+# Get-PersonalWindowsBuild - the Windows build number; 0 when it cannot say.
+function Get-PersonalWindowsBuild {
+    try { return [int][Environment]::OSVersion.Version.Build } catch { return 0 }
+}
+
+# Get-PersonalDnsRemedy - the fix for a machine that cannot resolve names, for
+# THIS Windows: WSL's DNS tunneling exists from Windows 11 22H2 (build 22621);
+# before it, the machine's user-mode networking is the road.
+function Get-PersonalDnsRemedy {
+    if ((Get-PersonalWindowsBuild) -ge 22621) {
+        return "add 'dnsTunneling=true' under [wsl2] in %USERPROFILE%\.wslconfig, then run: wsl --shutdown; podman machine start"
+    }
+    return "switch Podman's machine to user-mode networking: podman machine stop; podman machine set --user-mode-networking; podman machine start"
+}
+
+# Get-PersonalKnownCause <text> - the cause and the fix for an error the kit
+# recognises, in a container's State.Error or in the launcher's output; $null
+# for anything else. Twin of personal_known_cause.
+function Get-PersonalKnownCause {
+    param([AllowEmptyString()][string]$Text)
+    if ("$Text" -match "controller .pids. is not available") {
+        return [pscustomobject]@{
+            Kind   = "pids"
+            Cause  = "Podman's machine gives the container no 'pids' cgroup controller, so the database cannot start ($($script:PersonalPidsIssue))"
+            Remedy = "make the machine rootful, where the limit works: podman machine stop; podman machine set --rootful; podman machine start - then re-run the installer"
+        }
+    }
+    if ("$Text" -match "Temporary failure in name resolution|lookup registry") {
+        return [pscustomobject]@{
+            Kind   = "dns"
+            Cause  = "Podman's machine cannot resolve $($script:PersonalRegistryHost), so the database image cannot be downloaded"
+            Remedy = (Get-PersonalDnsRemedy)
+        }
+    }
+    return $null
+}
+
+# Get-PersonalContainers - this deployment's containers, as Name/State pairs.
+# The launcher names them exasol-db-<id>.
+function Get-PersonalContainers {
+    $podman = Get-PersonalPodman
+    if (-not $podman) { return @() }
+    $out = "" + (Invoke-ExakitBounded -FilePath $podman.Source -TimeoutSeconds 15 `
+        -Arguments @("ps", "-a", "--filter", "name=exasol-db", "--format", "{{.Names}} {{.State}}"))
+    $found = @()
+    foreach ($line in @($out -split "`r?`n")) {
+        $parts = @("$line".Trim() -split '\s+')
+        if ($parts.Count -ge 2 -and $parts[0]) {
+            $found += [pscustomobject]@{ Name = $parts[0]; State = $parts[1].ToLowerInvariant() }
+        }
+    }
+    return $found
+}
+
+# Get-PersonalContainerError - the error podman recorded for a container that
+# never ran ("created") or died ("exited"), first line only; "" otherwise. THE
+# REAL ERROR, which the launcher never repeats: in the incident behind this, a
+# container sat in "created" with "crun: controller 'pids' is not available"
+# while the kit waited 150 seconds, three times, and then said "never
+# answered". Nothing is reported while any of the containers runs: a stale
+# one left by an earlier deployment is not this one's error. Twin of
+# personal_container_error.
+function Get-PersonalContainerError {
+    $containers = @(Get-PersonalContainers)
+    if (@($containers | Where-Object { $_.State -eq "running" }).Count -gt 0) { return "" }
+    $podman = Get-PersonalPodman
+    foreach ($c in @($containers | Select-Object -First 3)) {
+        if ($c.State -notmatch '^(created|exited|stopped)$') { continue }
+        $err = "" + (Invoke-ExakitBounded -FilePath $podman.Source -TimeoutSeconds 15 `
+            -Arguments @("inspect", "--format", "{{.State.Error}}", $c.Name))
+        $first = @($err -split "`r?`n" | Where-Object { "$_".Trim() }) | Select-Object -First 1
+        if ($first) { return "$first".Trim() }
+    }
+    return ""
+}
+
+# Test-PersonalContainerRefused - has the database container failed for good?
+# Asked from inside every wait, so a terminal error ends the wait at once
+# instead of spending the rest of its budget; the error is kept for the
+# failure reason and said once.
+function Test-PersonalContainerRefused {
+    $err = Get-PersonalContainerError
+    if (-not $err) { return $false }
+    $script:PersonalContainerError = $err
+    Warn2 "The database container could not start: $(Get-PersonalShortText $err)"
+    return $true
+}
+
+# Show-PersonalFailureCause - after a deploy or start that failed: the
+# container's own error when it has one, and the cause and the fix when the kit
+# recognises it there or in what the launcher said. Returns the cause as a
+# suffix for the failure reason (": ..."), "" when nothing more is known.
+function Show-PersonalFailureCause {
+    $err = $script:PersonalContainerError
+    $suffix = ""
+    if (-not $err) {
+        $err = Get-PersonalContainerError
+        if ($err) { Warn2 "The database container could not start: $(Get-PersonalShortText $err)" }
+    }
+    if ($err) { $suffix = ": the database container could not start ($(Get-PersonalShortText $err))" }
+    $known = Get-PersonalKnownCause ((@($err) + @($script:PersonalLauncherOutput)) -join "`n")
+    if ($known) {
+        Warn2 "$($known.Cause)."
+        # InfoStep, not Info: this is printed from inside the deploy's quiet
+        # bracket, and a fix nobody sees is no fix.
+        InfoStep "Fix: $($known.Remedy)"
+        if (-not $suffix) { $suffix = ": $($known.Cause)" }
+    }
+    return $suffix
+}
+
+# Confirm-PersonalPodmanSelfHeal <question> - the one consent every Podman
+# self-heal asks for. The machine is shared host-wide, so a change to it is not
+# the kit's to make quietly: a terminal is asked (default yes, the fix the
+# reader came for - EXAKIT_PODMAN_SELFHEAL answers it in advance either way);
+# a run with no terminal changes nothing unless EXAKIT_PODMAN_SELFHEAL=1 opted
+# in. Twin of the consent block in personal_heal_rootless_podman.
+function Confirm-PersonalPodmanSelfHeal {
+    param([Parameter(Mandatory)][string]$Question)
+    if (Test-ExakitInteractive) {
+        if (Confirm-ExakitEnvPrompt "EXAKIT_PODMAN_SELFHEAL" $Question $true) { return $true }
+        Info "Not changed."
+        return $false
+    }
+    if (("" + $env:EXAKIT_PODMAN_SELFHEAL) -cmatch '^(1|y|Y|yes|YES|Yes)$') { return $true }
+    InfoStep "The kit can fix this, but it changes Podman's machine, which everything else on this host shares,"
+    InfoStep "so an unattended run has to opt in:  EXAKIT_PODMAN_SELFHEAL=1"
+    return $false
+}
+
+# Set-PersonalPodmanRootful <bool> - switch Podman's default machine to rootful
+# or rootless: stop, set, start, in the only order that works (set refuses on a
+# running machine). A stop that fails because the machine was already stopped
+# is not an error, so only set and start are judged. Asks nothing - every
+# caller has asked first. $true when the machine is running in the new mode.
+function Set-PersonalPodmanRootful {
+    param([Parameter(Mandatory)][bool]$Rootful)
+    $podman = Get-PersonalPodman
+    if (-not $podman) { return $false }
+    $mode = "rootless"
+    $flag = "--rootful=false"
+    if ($Rootful) { $mode = "rootful"; $flag = "--rootful" }
+    InfoStep "Switching Podman's default machine to $mode"
+    $script:ExakitActiveLabel = "Switching Podman's machine to $mode"
+    try {
+        [void](Invoke-ExakitBounded -FilePath $podman.Source -Arguments @("machine", "stop") -TimeoutSeconds 120)
+        $set = Invoke-ExakitLogged $podman.Source "machine" "set" $flag
+        if ($set -ne 0) {
+            Warn2 "Could not switch the machine to $mode (podman machine set exited $set)."
+            return $false
+        }
+        $start = Invoke-ExakitLogged $podman.Source "machine" "start"
+        if ($start -ne 0) {
+            # The setting took even though the start did not; say both, because
+            # the next run needs to know which half to retry.
+            Warn2 "The machine is set to $mode but would not start (podman machine start exited $start). Start it yourself: podman machine start"
+            return $false
+        }
+    } finally {
+        $script:ExakitActiveLabel = ""
+    }
+    OkStep "Podman's default machine is $mode now"
+    return $true
+}
+
+# Test-PersonalPodmanResolves - can the machine resolve the image registry?
+# $true when it can, AND when the question cannot be asked (no ssh into the
+# machine): an unknown is never a reason to stop a deploy.
+function Test-PersonalPodmanResolves {
+    $podman = Get-PersonalPodman
+    if (-not $podman) { return $true }
+    $out = Invoke-ExakitBounded -FilePath $podman.Source -TimeoutSeconds 30 `
+        -Arguments @("machine", "ssh", "getent", "hosts", $script:PersonalRegistryHost)
+    if ($null -ne $out -and "$out".Trim()) { return $true }
+    # The name, or the asking? A machine that cannot run `true` over ssh has
+    # said nothing about DNS.
+    if ($null -eq (Invoke-ExakitBounded -FilePath $podman.Source -TimeoutSeconds 30 -Arguments @("machine", "ssh", "true"))) { return $true }
+    return $false
+}
+
+# Set-PersonalWslDnsTunneling [path] - make .wslconfig say dnsTunneling=true
+# under [wsl2] and change nothing else: an existing key is set, an existing
+# [wsl2] section gets the key, a file without one gets the section appended,
+# a missing file is created. Idempotent - a file that already says it is not
+# rewritten. $true when the file says it afterwards.
+function Set-PersonalWslDnsTunneling {
+    param([string]$Path = "")
+    if (-not $Path) { $Path = Join-Path $env:USERPROFILE ".wslconfig" }
+    $raw = ""
+    if (Test-Path $Path) {
+        try { $raw = [System.IO.File]::ReadAllText($Path) } catch { return $false }
+    }
+    # The file's own line endings are kept; a new file gets Windows ones.
+    $eol = "`r`n"
+    if ($raw -and $raw -notmatch "`r`n" -and $raw -match "`n") { $eol = "`n" }
+    $lines = New-Object System.Collections.Generic.List[string]
+    if ($raw) { foreach ($l in ($raw -split "`r?`n")) { $lines.Add($l) } }
+    # A trailing newline splits into one empty element; dropped, or every
+    # rewrite would grow the file by a blank line.
+    if ($lines.Count -gt 0 -and $lines[$lines.Count - 1] -eq "") { $lines.RemoveAt($lines.Count - 1) }
+    $section = -1
+    $key = -1
+    $value = ""
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        $t = $lines[$i].Trim()
+        if ($t -match '^\[\s*([^\]]*?)\s*\]') {
+            if ($section -ge 0) { break }
+            if ($Matches[1] -eq "wsl2") { $section = $i }
+            continue
+        }
+        if ($section -ge 0 -and $t -match '^dnsTunneling\s*=\s*(.*?)\s*$') { $key = $i; $value = $Matches[1] }
+    }
+    if ($key -ge 0 -and $value -eq "true") { return $true }
+    if ($key -ge 0) {
+        $lines[$key] = "dnsTunneling=true"
+    } elseif ($section -ge 0) {
+        $lines.Insert($section + 1, "dnsTunneling=true")
+    } else {
+        if ($lines.Count -gt 0 -and $lines[$lines.Count - 1].Trim()) { $lines.Add("") }
+        $lines.Add("[wsl2]")
+        $lines.Add("dnsTunneling=true")
+    }
+    try {
+        [System.IO.File]::WriteAllText($Path, (($lines -join $eol) + $eol), (New-Object System.Text.UTF8Encoding($false)))
+    } catch {
+        return $false
+    }
+    return $true
+}
+
+# Repair-PersonalWslDns - turn on DNS tunneling and restart WSL so the machine
+# picks it up. `wsl --shutdown` is the only way a .wslconfig change takes
+# effect, and it stops EVERY running distribution - which is why the question
+# that leads here says so.
+function Repair-PersonalWslDns {
+    $podman = Get-PersonalPodman
+    if (-not (Set-PersonalWslDnsTunneling)) {
+        Warn2 "Could not write %USERPROFILE%\.wslconfig - add the setting yourself."
+        return $false
+    }
+    Info "DNS tunneling is on in .wslconfig - restarting WSL and Podman's machine"
+    try {
+        $script:ExakitActiveLabel = "Restarting WSL"
+        [void](Invoke-ExakitLogged "wsl.exe" "--shutdown")
+        $script:ExakitActiveLabel = "Starting Podman's machine"
+        $start = Invoke-ExakitLogged $podman.Source "machine" "start"
+    } finally {
+        $script:ExakitActiveLabel = ""
+    }
+    if ($start -ne 0) {
+        Warn2 "Podman's machine would not start again (podman machine start exited $start). Start it yourself: podman machine start"
+        return $false
+    }
+    return $true
+}
+
+# Test-PersonalPodmanDns - DNS INSIDE THE MACHINE, before a deploy that still
+# has an image to pull. In the incident behind this, the pull failed with
+# "lookup registry-1.docker.io: Temporary failure in name resolution" and the
+# kit said "Local deployment failed"; the cure was one WSL setting, offered
+# here with consent and then checked again. Windows only: on Linux the host
+# resolves for Podman itself.
+function Test-PersonalPodmanDns {
+    if (Test-PersonalPodmanResolves) { return $true }
+    $cause = "Podman's machine cannot resolve $($script:PersonalRegistryHost), so the database image cannot be downloaded"
+    Warn2 "$cause."
+    if ((Get-PersonalWindowsBuild) -ge 22621) {
+        if (Confirm-PersonalPodmanSelfHeal "Turn on WSL DNS tunneling (dnsTunneling=true in .wslconfig) and restart WSL? 'wsl --shutdown' stops every running WSL distribution, not only Podman's") {
+            if ((Repair-PersonalWslDns) -and (Test-PersonalPodmanResolves)) {
+                Ok "Podman's machine resolves $($script:PersonalRegistryHost) now"
+                return $true
+            }
+            Warn2 "Podman's machine still cannot resolve $($script:PersonalRegistryHost)."
+        }
+    }
+    Info "Fix: $(Get-PersonalDnsRemedy) - then re-run the installer: $(Get-ExakitInstallCommand)"
+    Set-ExakitFailureReason $cause
+    return $false
+}
+
+# Test-PersonalPodmanPids - THE pids CONTROLLER. The database container runs
+# with a pids limit, and WSL 2.9+ puts Podman's distribution under a
+# non-systemd cgroup subtree that delegates no controllers to rootless Podman:
+# crun refuses the container ("controller 'pids' is not available") and it
+# sits in "created" for good. Upstream's answer for now is a rootful machine
+# (podman#29966), so that is what is offered - and then the controller is
+# asked for again, on the rootful connection. Twin of the pids kind in
+# detect_rootless_podman_gap_kind, which on Linux can only advise.
+function Test-PersonalPodmanPids {
+    if (-not (Test-PersonalPidsMissing (Get-PersonalPodmanCgroupControllers))) { return $true }
+    $cause = "Podman's machine has no 'pids' cgroup controller, so the database container cannot start ($($script:PersonalPidsIssue))"
+    Warn2 "Podman's machine offers no 'pids' cgroup controller, so the database container cannot start in it ($($script:PersonalPidsIssue))."
+    $mode = Get-PersonalPodmanMode
+    if ($mode -eq "rootless") {
+        if (Confirm-PersonalPodmanSelfHeal "Switch Podman's default machine to rootful, where the limit works? It stops and restarts the machine, and images and containers made in rootless mode are not visible in rootful mode (separate storage - nothing is deleted)") {
+            if (Set-PersonalPodmanRootful $true) {
+                if (-not (Test-PersonalPidsMissing (Get-PersonalPodmanCgroupControllers))) {
+                    Ok "Podman's rootful machine offers the pids controller"
+                    return $true
+                }
+                Warn2 "Podman's machine is rootful now, and still offers no 'pids' controller."
+                $mode = "rootful"
+            }
+        }
+    }
+    if ($mode -eq "rootless") {
+        Info "Fix: podman machine stop; podman machine set --rootful; podman machine start - then re-run the installer: $(Get-ExakitInstallCommand)"
+    } else {
+        Info "This needs a fix in WSL or Podman ($($script:PersonalPidsIssue)); until then the database cannot start in this machine. Check 'podman info' after updating either, then re-run the installer: $(Get-ExakitInstallCommand)"
+    }
+    Set-ExakitFailureReason $cause
+    return $false
+}
+
+# Test-PersonalPodmanReady [-Fresh] - can Podman run the database at all? Asked
+# before every deploy and every start: the machine is up (started when it is
+# merely stopped), it can resolve the registry (-Fresh only: a deploy with an
+# image still to pull), and it can apply the pids limit. $true when nothing
+# stands in the way - or when Podman is not installed, which is the launcher's
+# to install; $false with the reason set and already explained. Twin of
+# personal_podman_running, which asks the Linux half of the same questions.
+function Test-PersonalPodmanReady {
+    param([switch]$Fresh)
+    if (-not (Get-PersonalPodman)) { return $true }
+    if (-not (Test-PersonalPodmanRunning)) {
+        Set-ExakitFailureReason "Podman is installed but not usable ('podman info' failed; its machine may be stopped)"
+        return $false
+    }
+    Write-PersonalPodmanFacts
+    if ($Fresh -and -not (Test-PersonalPodmanDns)) { return $false }
+    return (Test-PersonalPodmanPids)
+}
+
+# Resolve-PersonalUnreachableDatabase - the container RUNS and Windows still
+# cannot reach it. Diagnosed from evidence rather than reported as a timeout:
+# the container's state, the machine's mode, the machine's Podman version.
+# Leaves $script:PersonalUnreachableCause for the failure reason; $true only
+# when a consented fix brought the database up.
+#
+# ROOTFUL IS NOT THE CAUSE ON ITS OWN. On Podman 5.x conmon binds a real
+# listener for a rootful published port and WSL's localhost relay forwards it.
+# 6.0.0 to 6.1.0 stopped doing that, so that version is named with its fix;
+# anything else gets the options, switching to rootless being ONE of them -
+# offered on this evidence, never forced and never in preflight.
+function Resolve-PersonalUnreachableDatabase {
+    $script:PersonalUnreachableCause = ""
+    if (@(Get-PersonalContainers | Where-Object { $_.State -eq "running" }).Count -eq 0) { return $false }
+    $port = Get-PersonalDbPort
+    $mode = Get-PersonalPodmanMode
+    $server = (Get-PersonalPodmanVersion).Server
+    if ($mode -eq "rootful" -and (Test-PersonalPodmanForwardingRegression $server)) {
+        Warn2 "The database container is running, but Podman $server does not forward a rootful machine's ports to Windows - a known regression in Podman 6.0.0 to 6.1.0, fixed in 6.1.1."
+        InfoStep "Fix: upgrade Podman to 6.1.1 or later and recreate its machine (podman machine rm; podman machine init; podman machine start), then re-run the installer: $(Get-ExakitInstallCommand)"
+        $script:PersonalUnreachableCause = "Podman $server does not forward a rootful machine's ports to Windows (upgrade to 6.1.1 or later and recreate the machine)"
+        return $false
+    }
+    Warn2 "The database container is running in Podman's machine, but nothing answers on 127.0.0.1:$port from Windows."
+    InfoStep "Options: restart the machine (podman machine stop; podman machine start), then: exakit start"
+    $script:PersonalUnreachableCause = "the database container runs, but its port $port is not forwarded to Windows"
+    if ($mode -ne "rootful") { return $false }
+    InfoStep "...or switch the machine to rootless (podman machine set --rootful=false), whose ports WSL forwards - unless WSL gives rootless Podman no pids controller, which is checked first."
+    if (-not (Confirm-PersonalPodmanSelfHeal "Switch Podman's default machine to rootless and deploy the database there? It stops and restarts the machine, and containers made in rootful mode are not visible in rootless mode (separate storage - nothing is deleted)")) { return $false }
+    if (-not (Set-PersonalPodmanRootful $false)) { return $false }
+    # ONE WALL MUST NOT BE TRADED FOR ANOTHER. Where rootless Podman has no
+    # pids controller the database cannot start there at all, so the machine
+    # goes back to the mode that at least runs it.
+    if (Test-PersonalPidsMissing (Get-PersonalPodmanCgroupControllers)) {
+        Warn2 "Rootless mode here offers no 'pids' controller ($($script:PersonalPidsIssue)), so the database cannot start in it - switching the machine back to rootful."
+        [void](Set-PersonalPodmanRootful $true)
+        return $false
+    }
+    $deployArgs = @("deploy")
+    $flag = Get-PersonalAutoApproveFlag "deploy"
+    if ($flag) { $deployArgs += $flag }
+    $script:ExakitActiveLabel = "Deploying the database in the rootless machine"
+    $rc = Invoke-ExakitLogged (Get-PersonalCli) @deployArgs
+    $script:ExakitActiveLabel = ""
+    if ($rc -eq 0 -and (Test-PersonalReadyProbe)) {
+        $script:PersonalUnreachableCause = ""
+        Ok "The database answers from the rootless machine"
+        return $true
+    }
+    return $false
+}
+
+# Test-PersonalFirstBootPending / Set-PersonalFirstBootPending - did the KIT
+# create this deployment and never see its database answer? Recorded right
+# before the kit's own `install local` and cleared the first time the database
+# answers, so a deployment the kit did not make - or one that has EVER
+# answered, and so may hold data - never reads as pending. The never-booted
+# branch of Install-PersonalDeployment rests on it. Twin of
+# personal_first_boot_pending.
+function Test-PersonalFirstBootPending {
+    return ("" + (Get-ExakitManifestValue "runtime.first_boot_pending")) -eq "true"
+}
+
+function Set-PersonalFirstBootPending {
+    param([bool]$Pending)
+    if (-not (Test-Path $script:ManifestPath)) { return }
+    if ($Pending) {
+        [void](Set-ExakitManifestValue "runtime.first_boot_pending" "true")
+    } elseif ($null -ne (Get-ExakitManifestValue "runtime.first_boot_pending")) {
+        [void](Remove-ExakitManifestValue "runtime.first_boot_pending")
+    }
 }
 
 # Invoke-PersonalInstallLocal <args> - `exasol install local`, retried when it
@@ -820,20 +1346,21 @@ function Test-PersonalPodmanRunning {
 # retry is short and only fires on that signature: any other failure is real and
 # goes straight back to the caller. Nothing to undo in between - the launcher
 # failed in initialisation, before creating a deployment.
+# What the last attempt said is kept in $script:PersonalLauncherOutput, for the
+# failure's tail and its diagnosis.
 # Windows only: POSIX rename replaces an open file, so the sh side has no twin.
 function Invoke-PersonalInstallLocal {
     param([string[]]$InstallArgs)
     $attempts = 3
+    $script:PersonalLauncherOutput = @()
     for ($attempt = 1; $attempt -le $attempts; $attempt++) {
-        $logBefore = 0
-        if ($script:LogFile -and (Test-Path $script:LogFile)) {
-            $logBefore = @(Get-Content -Path $script:LogFile).Count
-        }
+        $logBefore = Get-PersonalLogLineCount
         $rc = Invoke-ExakitLogged (Get-PersonalCli) @InstallArgs
+        $script:PersonalLauncherOutput = @(Get-PersonalLogSince $logBefore)
         if ($rc -eq 0) { return 0 }
         if ($attempt -eq $attempts -or -not $script:LogFile) { return $rc }
         if (Test-PersonalDeploymentExists) { return $rc }
-        $output = @(Get-Content -Path $script:LogFile | Select-Object -Skip $logBefore) -join "`n"
+        $output = $script:PersonalLauncherOutput -join "`n"
         if ($output -notmatch 'Access is denied|being used by another process') { return $rc }
         Write-ExakitLog "WARN" "exasol install local hit a file lock (attempt $attempt of $attempts) - retrying"
         Start-Sleep -Seconds (3 * $attempt)
@@ -842,6 +1369,22 @@ function Invoke-PersonalInstallLocal {
 }
 
 function Install-PersonalDeployment {
+    # PODMAN FIRST, before any branch below can wait on it. A machine that is
+    # off, cannot resolve the registry or cannot apply the pids limit fails
+    # every one of them - minutes in, naming none of those - and a broken
+    # Podman must be diagnosed before anything is offered for replacement.
+    # The DNS question only matters to a deploy with an image still to pull:
+    # no deployment yet, or one that never booted. Twin of the podman lines at
+    # the top of personal_deploy_local.
+    $deployed = Test-PersonalDeploymentExists
+    if (Get-PersonalPodman) {
+        $fresh = (-not $deployed) -or (Test-PersonalFirstBootPending)
+        if (-not (Test-PersonalPodmanReady -Fresh:$fresh)) {
+            $script:PersonalNoDatabase = $true
+            return
+        }
+    }
+
     if (Test-PersonalDeploymentRunning) {
         Info "An Exasol database is already running on port $(Get-PersonalDbPort)."
         if (Confirm-ExakitEnvPrompt "EXAKIT_REUSE_DB" "Use it instead of deploying a new one?" $true) {
@@ -858,7 +1401,8 @@ function Install-PersonalDeployment {
         return
     }
 
-    if (Test-PersonalDeploymentExists) {
+    $neverBootedReplaced = $false
+    if ($deployed) {
         # A FIRST BOOT THE LAUNCHER GAVE UP ON is not a stopped deployment. In
         # "deployment_failed" its start and stop do nothing, so the
         # start-and-reuse path below would report success over a record that
@@ -872,14 +1416,43 @@ function Install-PersonalDeployment {
             $flag = Get-PersonalAutoApproveFlag "deploy"
             if ($flag) { $deployArgs += $flag }
             $script:ExakitActiveLabel = "Retrying the deployment"
+            $script:PersonalContainerError = ""
+            $mark = Get-PersonalLogLineCount
             if (((Invoke-ExakitLogged (Get-PersonalCli) @deployArgs) -eq 0) -or (Wait-PersonalSlowFirstBoot)) {
                 Ok "Reusing the existing Exasol deployment (deployed again)"
                 if (-not (Wait-PersonalReadyOrDeploy)) { $script:PersonalNoDatabase = $true; return }
                 Set-PersonalManifest "healthy"
                 return
             }
+            $script:PersonalLauncherOutput = @(Get-PersonalLogSince $mark)
             Warn2 "The failed deployment could not be brought up.$(Get-PersonalForeignDbHint)"
+            [void](Show-PersonalFailureCause)
+            # A DEPLOYMENT THAT NEVER STARTED HOLDS NO DATA, so the ladder below
+            # asks the wrong questions of it: "start it and keep its data" is a
+            # no-op in this state, and "DELETE ... and its data" defaulting to
+            # no left the user with nothing either way. The kit made it and has
+            # never seen it answer (Test-PersonalFirstBootPending), so it is
+            # offered for replacement, default yes - still a consent prompt,
+            # still answered by EXAKIT_REPLACE_DB. A deployment that ever
+            # answered, one the kit did not make, and an explicit
+            # EXAKIT_REUSE_DB=1 all keep the ladder unchanged.
+            $reuseAsked = ("" + $env:EXAKIT_REUSE_DB) -cmatch '^(1|y|Y|yes|YES|Yes)$'
+            if ((Test-PersonalFirstBootPending) -and -not $reuseAsked) {
+                if (-not (Confirm-ExakitEnvPrompt "EXAKIT_REPLACE_DB" "This deployment never started, so it holds no data. Remove it and deploy a fresh one?" $true)) {
+                    Info "Nothing was deleted. Diagnose it with 'exakit status', or re-run with EXAKIT_REPLACE_DB=1 to replace it: $(Get-ExakitInstallCommand)"
+                    Set-ExakitFailureReason "A deployment that never started could not be brought up, and replacing it was declined"
+                    $script:PersonalNoDatabase = $true
+                    return
+                }
+                Info "Removing the deployment that never started, and deploying a fresh one."
+                if ((Invoke-ExakitLogged (Get-PersonalCli) destroy --remove --auto-approve) -ne 0) {
+                    Warn2 "Could not fully remove the old deployment; the launcher will deploy over it."
+                }
+                $neverBootedReplaced = $true
+            }
         }
+    }
+    if ($deployed -and -not $neverBootedReplaced) {
         Info "An Exasol deployment was found, not running."
         if (Confirm-ExakitEnvPrompt "EXAKIT_REUSE_DB" "Start the existing database and keep its data?" $true) {
             Show-PersonalGuestRebuildNote
@@ -945,18 +1518,12 @@ function Install-PersonalDeployment {
     # the first the user heard of it was the launcher's own error, mid-deploy,
     # with no mention of Podman at all. Twin of personal_install_podman, which
     # does the installing itself where the kit owns that job.
-    if (-not (Get-Command podman -ErrorAction SilentlyContinue)) {
+    # An installed Podman that cannot run the database was stopped at the top
+    # of this function (Test-PersonalPodmanReady), before any branch waited on it.
+    if (-not (Get-PersonalPodman)) {
         Warn2 "Podman is not installed on this machine, and the database runs through it."
         Info "The Exasol launcher installs it as part of this step, and Windows may ask for administrator approval."
         Info "If that is refused or fails: install it yourself with 'winget install RedHat.Podman' (a reboot may be needed), then re-run the installer."
-    } elseif (-not (Test-PersonalPodmanRunning)) {
-        # Installed, and still no database: same soft failure as a podman that
-        # was never installed, because the user is in the same position - one
-        # command away from a database, and better told now than after the
-        # launcher has spent five minutes discovering it.
-        Set-ExakitFailureReason "Podman is installed but not usable ('podman info' failed; its machine may be stopped)"
-        $script:PersonalNoDatabase = $true
-        return
     }
     Info "Deploying Exasol Personal locally - the database runs through Podman's default machine, which the launcher prepares."
 
@@ -964,6 +1531,11 @@ function Install-PersonalDeployment {
     $flag = Get-PersonalAutoApproveFlag "install"
     if ($flag) { $installArgs += $flag }
     $script:ExakitActiveLabel = "Deploying Exasol Personal locally"
+    $script:PersonalContainerError = ""
+    # Recorded BEFORE the deploy: a deployment the launcher creates and never
+    # boots is the one Install-PersonalDeployment may later offer to replace
+    # as empty. The first answer from its database clears it.
+    Set-PersonalFirstBootPending $true
     if ((Invoke-PersonalInstallLocal $installArgs) -ne 0) {
         # A DEPLOYMENT THAT EXISTS IS GIVEN THE KIT'S OWN BUDGET FIRST: the
         # launcher waits 27 seconds for a first boot, and a first boot in a
@@ -973,7 +1545,7 @@ function Install-PersonalDeployment {
             # THE LIKELIEST CAUSE FIRST. A deploy that fails with Podman still
             # missing failed at installing Podman, and "Local deployment
             # failed" sends the reader to look at the database instead.
-            if (-not (Get-Command podman -ErrorAction SilentlyContinue)) {
+            if (-not (Get-PersonalPodman)) {
                 # NOT Fail. This is the one deployment failure the install can
                 # carry on from, and the twin of personal_deploy_local's single
                 # non-zero return: nothing has been created, nothing is half
@@ -988,13 +1560,19 @@ function Install-PersonalDeployment {
                 return
             }
             Warn2 "Local deployment failed.$(Get-PersonalForeignDbHint)"
+            # WHAT ACTUALLY WENT WRONG, which "Local deployment failed" never
+            # said: the launcher's last lines, the container's own error, and
+            # the fix when the kit knows it. Twin of _personal_deploy_print_tail
+            # and personal_explain_failure.
+            Show-PersonalLauncherTail
+            $cause = Show-PersonalFailureCause
             # The INSTALLER, not `exakit update`: update only moves components
             # that have a newer advertised version, so a deployment that never
             # happened is "already current" to it - and on the Nano-to-Personal
             # crossing the manifest still names nano, which it skips outright.
             # A re-run resumes at this step. Twin of personal_deploy_local.
             Info "Retry it by re-running the installer - completed steps are skipped: $(Get-ExakitInstallCommand)"
-            Set-ExakitFailureReason "The launcher could not deploy the database locally"
+            Set-ExakitFailureReason "The launcher could not deploy the database locally$cause"
             $script:PersonalNoDatabase = $true
             return
         }
@@ -1022,11 +1600,20 @@ function Wait-PersonalSlowFirstBoot {
     if ($env:EXAKIT_PERSONAL_READY_TIMEOUT) { $budget = [int]$env:EXAKIT_PERSONAL_READY_TIMEOUT }
     Info "The launcher stopped waiting after its own short budget, but the deployment exists - waiting up to ${budget}s for the database"
     $t0 = [DateTime]::UtcNow
+    $lastLook = $t0
+    $script:PersonalContainerError = ""
     while (-not (Test-PersonalTlsAnswers)) {
         if (([DateTime]::UtcNow - $t0).TotalSeconds -ge $budget) { return $false }
+        # The same early exit as Test-PersonalReadyProbe: a container that
+        # refused to start is not slow.
+        if (([DateTime]::UtcNow - $lastLook).TotalSeconds -ge $script:PersonalContainerLookEvery) {
+            $lastLook = [DateTime]::UtcNow
+            if (Test-PersonalContainerRefused) { return $false }
+        }
         Start-Sleep -Seconds 5
     }
     Ok "The database answered after $([int]([DateTime]::UtcNow - $t0).TotalSeconds)s"
+    Set-PersonalFirstBootPending $false
     # THE RECONCILE IS THE OWNERSHIP PROOF. A handshake says a database answers
     # on the port, not whose: with Windows and WSL sharing one network stack it
     # may be the other side's. The launcher's deploy connects with this
@@ -1054,6 +1641,14 @@ function Start-Personal {
         Info "Check the database with: $(Get-PersonalCli) info"
         return
     }
+    # PODMAN FIRST. After a reboot its machine is off, and a start against it
+    # fails inside the launcher naming neither; the same readiness questions
+    # the install asks, so `exakit start` (and autostart) starts the machine
+    # and names a pids or DNS gap instead of waiting on it. The DNS question
+    # only for a deployment that has never pulled its image.
+    if (-not (Test-PersonalPodmanReady -Fresh:(Test-PersonalFirstBootPending))) {
+        Fail "$(Get-ExakitFailureReason). Once that is fixed: exakit start"
+    }
     # In "deployment_failed" the launcher's start (and stop) do nothing and
     # exit 0, so this reported "Database started" over a database that was
     # never asked to start and then waited its whole budget for it. The
@@ -1063,11 +1658,16 @@ function Start-Personal {
         $deployArgs = @("deploy")
         $flag = Get-PersonalAutoApproveFlag "deploy"
         if ($flag) { $deployArgs += $flag }
+        $mark = Get-PersonalLogLineCount
+        $script:PersonalContainerError = ""
         if ((Invoke-ExakitLogged (Get-PersonalCli) @deployArgs) -eq 0) {
             Ok "Database started"
             return
         }
-        Fail "The deployment could not be brought up.$(Get-PersonalForeignDbHint) Check the log; if it fails the same way, repair with: exakit repair-runtime"
+        $script:PersonalLauncherOutput = @(Get-PersonalLogSince $mark)
+        Show-PersonalLauncherTail
+        $cause = Show-PersonalFailureCause
+        Fail "The deployment could not be brought up$cause.$(Get-PersonalForeignDbHint) Check the log; if it fails the same way, repair with: exakit repair-runtime"
     }
     Show-PersonalGuestRebuildNote
     $startArgs = @("start")
@@ -1080,7 +1680,9 @@ function Start-Personal {
         if ((Get-PersonalStatus) -eq "conflict") {
             Fail "Port $(Get-PersonalDbPort) is held by another process, so the database cannot start. Stop that process, then: exakit start"
         }
-        Fail "Failed to start the database. Check the log, then retry with 'exakit start'; if it fails the same way, repair with: exakit repair-runtime"
+        $script:PersonalContainerError = ""
+        $cause = Show-PersonalFailureCause
+        Fail "Failed to start the database$cause. Check the log, then retry with 'exakit start'; if it fails the same way, repair with: exakit repair-runtime"
     }
     Ok "Database started"
 }
