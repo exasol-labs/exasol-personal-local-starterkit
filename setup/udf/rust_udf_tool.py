@@ -19,6 +19,8 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tarfile
+import time
 from pathlib import Path
 
 SDK = "0.33.0"
@@ -265,6 +267,9 @@ def build(name: str) -> dict:
 def create_sql(name: str, schema: str, features: list[str], path: str) -> str:
     if not FEATURE.fullmatch(schema):
         raise Refused("Schema must be a plain SQL name.")
+    if (not isinstance(features, list) or not features
+            or not all(isinstance(item, str) and FEATURE.fullmatch(item) for item in features)):
+        raise Refused("Rust feature names must be plain SQL identifiers.")
     inputs = ", ".join(f'"{item}" DOUBLE' for item in features)
     return (f"CREATE OR REPLACE RUST SCALAR SCRIPT {schema.upper()}.{name.upper()}({inputs}) "
             f"RETURNS DOUBLE AS\n%udf_object {path};")
@@ -281,7 +286,43 @@ def _connect():
     return pyexasol.connect(encryption=True, websocket_sslopt={"cert_reqs": ssl.CERT_NONE}, **options)
 
 
-def deploy(name: str, schema: str) -> dict:
+def install_container_library(row: dict, artifact: Path, sha256: str) -> dict:
+    from rust_container import install
+    try:
+        deployment = os.environ.get("EXAKIT_RUST_DEPLOYMENT", "")
+        if not deployment:
+            raise ValueError("The kit deployment directory is unavailable; run exakit status.")
+        return install(kit_home(), row, artifact, sha256,
+                       os.environ.get("EXAKIT_RUST_LAUNCHER", ""),
+                       Path(deployment))
+    except (OSError, ValueError, KeyError, TypeError, tarfile.TarError) as error:
+        raise Refused(str(error) if isinstance(error, ValueError) else
+                      "The Rust container fallback could not be prepared; check the launcher, disk and container mirror.",
+                      6, "exakit status", "install") from error
+
+
+def _ready_after_restart():
+    deadline = time.monotonic() + 150
+    while True:
+        conn = None
+        try:
+            conn = _connect()
+            conn.execute("SELECT 1")
+            return conn
+        except Exception:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            if time.monotonic() >= deadline:
+                raise Refused("The database did not become ready after the Rust container update.", 5,
+                              "exakit status", "restart") from None
+            time.sleep(2)
+
+
+def deploy(name: str, schema: str, *, yes: bool = False) -> dict:
+    from rust_container import bucket_visible, installed_library, current_receipt
     project = project_path(name)
     try:
         built = json.loads((project / "build.json").read_text(encoding="utf-8"))
@@ -293,6 +334,9 @@ def deploy(name: str, schema: str) -> dict:
         raise Refused("The Rust build record or project metadata is incomplete; rebuild the UDF.", 7,
                       f"exakit rust-udf build {name}")
     artifact = Path(built["artifact"])
+    if artifact.absolute() != (project / "target/release" / f"lib{name}.so").absolute():
+        raise Refused("The Rust artifact path is outside this project's build output; rebuild it.", 7,
+                      f"exakit rust-udf build {name}")
     arch = architecture()
     row = rust_pins(arch)
     if (not artifact.is_file() or hashlib.sha256(artifact.read_bytes()).hexdigest() != built["sha256"]
@@ -305,12 +349,58 @@ def deploy(name: str, schema: str) -> dict:
             or built.get("container_sha256") != row["sha256"]):
         raise Refused("The Cargo lockfile or pinned Rust container changed; rebuild the library.", 7,
                       f"exakit rust-udf build {name}")
+    create_sql(name, schema, meta["features"], "/opt/exakit/udf/" + artifact.name)
     rust_installed(row)
     bucket = Path(os.environ.get("EXAKIT_RUST_BUCKET_DIR", ""))
     root = os.environ.get("EXAKIT_RUST_UDF_ROOT", "")
-    if not bucket.is_dir() or not root.startswith("/buckets/"):
-        raise Refused("The deployment's bucket directory is unavailable; the Rust library was not deployed.", 5,
-                      "exakit model list")
+    fallback = not bucket.is_dir() or not root.startswith("/buckets/")
+    conn = None
+    if not fallback:
+        _copy_library(bucket, artifact, built["sha256"])
+        conn = _connect()
+        try:
+            fallback = not bucket_visible(conn, f"{root.rstrip('/')}/udf/{artifact.name}", built["sha256"])
+        except Exception:
+            conn.close()
+            raise
+    retained = installed_library(kit_home(), row, artifact.name, built["sha256"]) if fallback else {}
+    if fallback and not retained and not yes:
+        if conn is not None:
+            conn.close()
+        raise Refused("The shared bucket is unavailable. Packing the Rust library into its container restarts the database; confirm with --yes.",
+                      5, f"exakit rust-udf deploy {name} --schema {schema.upper()} --yes", "confirm")
+    restarted = False
+    if fallback:
+        if conn is not None:
+            conn.close()
+        if retained:
+            result = retained
+            conn = _connect()
+        else:
+            print("The shared bucket is unavailable; updating the RUST container with this library restarts the database.", file=sys.stderr)
+            result = install_container_library(row, artifact, built["sha256"])
+            restarted = True
+            conn = _ready_after_restart()
+        udf_path = f"/opt/exakit/udf/{artifact.name}"
+    else:
+        result = current_receipt(kit_home(), row) or {"container_sha256": row["sha256"]}
+        udf_path = f"{root.rstrip('/')}/udf/{artifact.name}"
+    sql = create_sql(name, schema, meta["features"], udf_path)
+    conn = conn or _connect()
+    try:
+        conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema.upper()}")
+        conn.execute(sql)
+        # Loading the library is part of deployment success, not left for the notebook.
+        conn.execute(f"SELECT {schema.upper()}.{name.upper()}(" + ", ".join("0.0" for _ in meta["features"]) + ")").fetchall()
+    finally:
+        conn.close()
+    return {"ok": True, "name": name, "schema": schema.upper(), "udf": f"{schema.upper()}.{name.upper()}",
+            "path": udf_path, "sha256": built["sha256"], "features": meta["features"],
+            "deployment": "container" if fallback else "bucket", **result,
+            "database_restart_requested": restarted}
+
+
+def _copy_library(bucket: Path, artifact: Path, expected: str) -> None:
     folder = bucket / "udf"
     folder.mkdir(parents=True, exist_ok=True)
     destination = folder / artifact.name
@@ -325,18 +415,8 @@ def deploy(name: str, schema: str) -> dict:
     finally:
         if part.exists():
             part.unlink()
-    if hashlib.sha256(destination.read_bytes()).hexdigest() != built["sha256"]:
+    if hashlib.sha256(destination.read_bytes()).hexdigest() != expected:
         raise Refused("The copied Rust library failed SHA-256 verification.", 7)
-    udf_path = f"{root.rstrip('/')}/udf/{artifact.name}"
-    sql = create_sql(name, schema, meta["features"], udf_path)
-    conn = _connect()
-    try:
-        conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema.upper()}")
-        conn.execute(sql)
-    finally:
-        conn.close()
-    return {"ok": True, "name": name, "schema": schema.upper(), "udf": f"{schema.upper()}.{name.upper()}",
-            "path": udf_path, "sha256": built["sha256"], "features": meta["features"]}
 
 
 def main(argv: list[str]) -> int:
@@ -346,14 +426,17 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--coefficients")
     parser.add_argument("--schema", default="EXAKIT_SCORING")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument("--yes", action="store_true")
     try:
         args = parser.parse_args(argv)
         if args.action != "new" and args.coefficients:
             raise Refused("--coefficients belongs to rust-udf new.")
         if args.action != "deploy" and args.schema != "EXAKIT_SCORING":
             raise Refused("--schema belongs to rust-udf deploy.")
+        if args.yes and args.action != "deploy":
+            raise Refused("--yes belongs to rust-udf deploy.")
         answer = (create(args.name, args.coefficients) if args.action == "new" else
-                  build(args.name) if args.action == "build" else deploy(args.name, args.schema))
+                  build(args.name) if args.action == "build" else deploy(args.name, args.schema, yes=args.yes))
         if args.json:
             print(json.dumps(answer))
         else:
@@ -362,7 +445,12 @@ def main(argv: list[str]) -> int:
                 if key not in ("ok", "name"):
                     print(f"  {key}: {value}")
         return 0
-    except Refused as error:
+    except Exception as failure:
+        # Driver/launcher exceptions can include connection options. Keep the
+        # public error contract useful without exposing their raw diagnostic.
+        error = failure if isinstance(failure, Refused) else Refused(
+            "The Rust UDF command failed; check exakit status and the project build record.",
+            6, "exakit status", "deploy" if argv and argv[0] == "deploy" else "build")
         payload = {"ok": False, "error": str(error), "reason": str(error),
                    "step": error.step or (argv[0] if argv else None),
                    "language": "rust", "remedy": error.remedy}

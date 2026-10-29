@@ -290,8 +290,9 @@ RUST_SMOKE_NAME = "EXAKIT_SMOKE"
 def rust_smoke_script(alias: str, schema: str, udf_path: str) -> str:
     """The CREATE SCRIPT for the Rust smoke UDF over the library at ``udf_path`` (a /buckets/... .so path, nothing
     else reaches the SQL)."""
-    if not _BUCKET_SO.match(udf_path or ""):
-        raise Refused(f"'{udf_path}' is not a /buckets/... path to a .so file.")
+    packaged = re.fullmatch(r"/opt/exakit/udf/lib[A-Za-z0-9_.-]+\.so", udf_path or "")
+    if (not _BUCKET_SO.match(udf_path or "") and not packaged) or ".." in Path(udf_path).parts:
+        raise Refused(f"'{udf_path}' is not a bucket or packaged Rust library path.")
     return (f"CREATE OR REPLACE {identifier(alias, 'The container alias')} SCALAR SCRIPT "
             f"{identifier(schema, 'The schema')}.{RUST_SMOKE_NAME}(x BIGINT) RETURNS VARCHAR(2000) AS\n"
             f"%udf_object {udf_path};\n")
@@ -478,6 +479,13 @@ def main(argv: list[str]) -> int:
             return 0
         if command == "build":
             return build()
+        if command == "bucket-file" and len(args) == 2:
+            from rust_container import bucket_visible
+            conn = _connect()
+            try:
+                return 0 if bucket_visible(conn, args[0], args[1]) else 1
+            finally:
+                conn.close()
     except Refused as err:
         print(str(err), file=sys.stderr)
         return 2

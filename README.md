@@ -39,15 +39,15 @@ Install the Exasol starter kit from https://github.com/exasol-labs/exasol-person
 
 </div>
 
-Set up for a role in one go: `curl -fsSL https://www.exasol.com/install/starter-kit.sh | EXAKIT_PERSONA=data-scientist sh` installs the Data Scientist's set - the Pharma and Banking reference datasets, every detected AI client, Notebook, JSON Tables and Dash Server. `EXAKIT_PERSONA=ml-engineer` selects Notebook, JSON Tables and the UDF devkit, with a local MLflow server. Without it, the installer asks (or installs the kit on its own when nobody is at the terminal). Add another one later with `exakit persona add ml-engineer`: the kit is then both, and what the new one brings is loaded, connected and installed without a question. See [personas/](personas/README.md).
+Set up for a role in one go: `curl -fsSL https://www.exasol.com/install/starter-kit.sh | EXAKIT_PERSONA=data-scientist sh` installs the Data Scientist's set - the Pharma and Banking reference datasets, every detected AI client, Notebook. `EXAKIT_PERSONA=ml-engineer` selects Notebook and the UDF devkit, with a local MLflow server. Without it, the installer asks (or installs the kit on its own when nobody is at the terminal). Add another one later with `exakit persona add ml-engineer`: the kit is then both, and what the new one brings is loaded, connected and installed without a question. See [personas/](personas/README.md).
 
 ---
 
 ## Overview
 
-For add-on arguments, defaults and copyable examples, use `exakit --help <addon-id>` or read [the add-on command guide](ADDON-COMMANDS.md). Command-specific help is available through forms such as `exakit udf-use --help` and `exakit model put --help`.
+For add-on arguments, defaults and copyable examples, use `exakit --help <addon-id>` or read [the add-on command guide](docs/ADDON-COMMANDS.md). Command-specific help is available through forms such as `exakit udf-use --help` and `exakit model put --help`.
 
-Existing compatible components are reused. The kit records whether each component belongs to the kit or the user, shows ownership in `exakit version`, and preserves user-installed components during updates and uninstall. See [component ownership and reuse](COMPONENT-OWNERSHIP.md).
+Existing compatible components are reused. The kit records whether each component belongs to the kit or the user, shows ownership in `exakit version`, and preserves user-installed components during updates and uninstall. See [component ownership and reuse](docs/COMPONENT-OWNERSHIP.md).
 
 This kit sets up an analytics database on your own machine and connects your AI assistant to it. Everything runs locally, so your data stays with you. You see every SQL statement before it runs and can check each answer yourself.
 

@@ -147,6 +147,16 @@ _udf_tool() {
 
 # _udf_slc <args> — the launcher's container commands for this deployment.
 _udf_slc() {
+    if [ "${1:-}" = custom ]; then
+        _usl_previous=""; _usl_rust=0
+        for _usl_arg in "$@"; do
+            [ "$_usl_previous" != --alias ] || [ "$_usl_arg" != RUST ] || _usl_rust=1
+            _usl_previous="$_usl_arg"
+        done
+        if [ "$_usl_rust" = 1 ]; then
+            run_python_any "$(exakit_repo_root)/setup/udf/rust_container.py" invalidate "$EXAKIT_HOME" || return 6
+        fi
+    fi
     "$(personal_cli)" slc "$@" --deployment-dir "$EXAKIT_PERSONAL_DEPLOY_DIR"
 }
 
@@ -510,18 +520,36 @@ udf_devkit_smoke() {
 # version" lines (container, rustc, sdk) are kept in UDF_SMOKE_LINES (for
 # --json) and the rustc and sdk are held against the selected row (udf_tool.py
 # smoke-rust). 7 (step smoke, both versions in the reason) when they differ or
-# the container refused the library (F-UDF-CL-RUST-9001); 5 when there is no
-# bucket directory to put the library into. On success the manifest records
+# the container refused the library (F-UDF-CL-RUST-9001). Without a shared
+# bucket, package the library into RUST after restart consent. The manifest records
 # the row as validated (components.udf_devkit.rust: validated, rustc, sdk).
 udf_devkit_smoke_rust() {
     _usr_alias="$1"
     UDF_SMOKE_LINES=""
-    udf_bucket_locate || { _udf_fail 5 smoke "exakit status" "$UDF_BUCKET_ERROR"; return 1; }
-    _usr_dest="$UDF_BUCKET_DIR/$EXAKIT_UDF_RUST_SMOKE_DIR/$EXAKIT_UDF_RUST_SMOKE_LIB"
+    if udf_bucket_locate; then
+      _usr_dest="$UDF_BUCKET_DIR/$EXAKIT_UDF_RUST_SMOKE_DIR/$EXAKIT_UDF_RUST_SMOKE_LIB"
     mkdir -p "$(dirname "$_usr_dest")" 2>/dev/null && cp "$UDF_SMOKE_FILE" "$_usr_dest.part" && mv -f "$_usr_dest.part" "$_usr_dest" || {
         rm -f "$_usr_dest.part"
         _udf_fail 5 smoke "exakit status" "Could not copy the smoke library into the bucket directory ($_usr_dest)."; return 1; }
-    _usr_path="$UDF_BUCKET_UDF_ROOT/$EXAKIT_UDF_RUST_SMOKE_DIR/$EXAKIT_UDF_RUST_SMOKE_LIB"
+      _usr_path="$UDF_BUCKET_UDF_ROOT/$EXAKIT_UDF_RUST_SMOKE_DIR/$EXAKIT_UDF_RUST_SMOKE_LIB"
+      _udf_tool bucket-file "$_usr_path" "$UDF_SMOKE_SHA256" >/dev/null 2>&1 || _usr_path=""
+    else
+      _usr_path=""
+    fi
+    if [ -z "$_usr_path" ]; then
+      info "The shared bucket is unavailable; the Rust smoke library will be packaged into RUST."
+      _usr_pack_rc=0
+      if ! _udf_rust_smoke_packaged; then
+          _udf_with_restart "Packaging the Rust smoke library into RUST" _udf_pack_rust_smoke
+          _usr_pack_rc=$?
+      fi
+      if [ "$_usr_pack_rc" -ne 0 ]; then
+          [ "$_usr_pack_rc" -eq 5 ] || _usr_pack_rc=6
+          _udf_fail "$_usr_pack_rc" install "exakit udf-setup --language rust --yes" "The Rust smoke container fallback did not finish."
+          return 1
+      fi
+      _usr_path="/opt/exakit/udf/$(basename "$UDF_SMOKE_FILE")"
+    fi
     _usr_rustc="$(_udf_row runtime | sed 's/.*"rustc": *"\([^"]*\)".*/\1/')"
     _usr_sdk="$(_udf_rules pins "$UDF_CONTAINER_DOC" rust "$UDF_CONTAINER_ARCH" "$UDF_CONTAINER_DB" 2>/dev/null | awk '$1 == "exasol-udf-sdk" {print $2}')"
     _udf_install_stage smoke "Checking Rust smoke UDF"
@@ -539,12 +567,26 @@ udf_devkit_smoke_rust() {
     _usr_got_rustc="$(printf '%s\n' "$_usr_out" | sed -n 's/^rustc //p' | head -1)"
     _usr_got_sdk="$(printf '%s\n' "$_usr_out" | sed -n 's/^sdk //p' | head -1)"
     ok "Rust UDFs run on $_usr_alias (rustc $_usr_got_rustc, exasol-udf-sdk $_usr_got_sdk - as pinned)"
-    info "Use it in SQL: CREATE OR REPLACE $_usr_alias SCALAR SCRIPT ... AS %udf_object $UDF_BUCKET_UDF_ROOT/$EXAKIT_UDF_RUST_SMOKE_DIR/lib<name>.so;"
+    info "Deploy a library and get its SQL path with: exakit rust-udf deploy <name>"
     manifest_set components.udf_devkit.rust.validated true
     manifest_set components.udf_devkit.rust.rustc "$_usr_got_rustc"
     manifest_set components.udf_devkit.rust.sdk "$_usr_got_sdk"
     manifest_set components.udf_devkit.validated true
     return 0
+}
+
+_udf_pack_rust_smoke() {
+    _urs_python="$(pyexasol_venv_python 2>/dev/null || command -v python3)"
+    "$_urs_python" "$(exakit_repo_root)/setup/udf/rust_container.py" \
+        "$UDF_SMOKE_FILE" "$UDF_SMOKE_SHA256" "$UDF_CONTAINER_DOC" "$UDF_CONTAINER_ARCH" \
+        "$EXAKIT_HOME" "$(personal_cli)" "$EXAKIT_PERSONAL_DEPLOY_DIR" >/dev/null
+}
+
+_udf_rust_smoke_packaged() {
+    _urs_python="$(pyexasol_venv_python 2>/dev/null || command -v python3)"
+    "$_urs_python" "$(exakit_repo_root)/setup/udf/rust_container.py" check \
+        "$UDF_SMOKE_FILE" "$UDF_SMOKE_SHA256" "$UDF_CONTAINER_DOC" "$UDF_CONTAINER_ARCH" \
+        "$EXAKIT_HOME" "" "" >/dev/null 2>&1
 }
 
 # _udf_with_restart <what> <command ...> — confirm, stop the running add-on

@@ -36,13 +36,13 @@
       "command": "exakit udf-setup",
       "options": "[--language python|rust] [--force] [--yes] [--json]",
       "summary": "Install the official Python container (or the Rust one) and prove it.",
-      "description": "python (the default, or EXAKIT_UDF_LANGUAGE): the launcher's official Python 3.12 container, alias PYTHON3, then the smoke UDF. rust: the pinned Rust container from the matrix in versions.json for your database's architecture and version, downloaded once into the cache, verified against its sha256 and size, installed as alias RUST (one already there is proven without a reinstall; --force reinstalls), then proven by the kit's Rust smoke UDF: the row's smoke_asset (libexakit_smoke.so built by CI for your architecture with the container's rustc 1.98.1 and exasol-udf-sdk 0.33.0) is shipped for both architectures and verified against its sha256 BEFORE the install, copied into the bucket directory as udf/libexakit_smoke.so, registered as STARTER_KIT.EXAKIT_SMOKE(x BIGINT) RETURNS VARCHAR(2000) AS %udf_object /buckets/bfsdefault/default/udf/libexakit_smoke.so and run once; it answers the container, rustc and sdk versions, which are held against the row (--json smoke: container, rustc, sdk, rustc_full). --force reinstalls the Python container too. --json prints one object: {\"ok\": true, \"language\", \"alias\", \"container\": {\"url\", \"sha256\", \"arch\", \"db_versions\"} (null fields for the launcher's own container), \"smoke\": [{\"package\", \"version\"}]} or {\"ok\": false, \"language\", \"step\", \"reason\", \"remedy\"} with step one of select-container, download, verify, install, smoke.",
+      "description": "python (the default, or EXAKIT_UDF_LANGUAGE): the launcher's official Python 3.12 container, alias PYTHON3, then the smoke UDF. rust: the pinned Rust container from the matrix in versions.json for your database's architecture and version, downloaded once into the cache, verified against its sha256 and size, installed as alias RUST (one already there is proven without a reinstall; --force reinstalls), then proven by the kit's Rust smoke UDF: the row's smoke_asset (libexakit_smoke.so built by CI for your architecture with the container's rustc 1.98.1 and exasol-udf-sdk 0.33.0) is shipped for both architectures and verified against its sha256 BEFORE the install, copied into the bucket directory as udf/libexakit_smoke.so, registered as STARTER_KIT.EXAKIT_SMOKE(x BIGINT) RETURNS VARCHAR(2000) AS %udf_object /buckets/bfsdefault/default/udf/libexakit_smoke.so and run once; it answers the container, rustc and sdk versions, which are held against the row (--json smoke: container, rustc, sdk, rustc_full). --force reinstalls the Python container too. --json prints one object: {\"ok\": true, \"language\", \"alias\", \"container\": {\"url\", \"sha256\", \"arch\", \"db_versions\"} (null fields for the launcher's own container), \"smoke\": [{\"package\", \"version\"}]} or {\"ok\": false, \"language\", \"step\", \"reason\", \"remedy\"} with step one of select-container, download, verify, install, smoke. When the shared bucket is unavailable, the smoke library is packaged under /opt/exakit/udf and the RUST container is updated through the same restart-confirmation flow before the smoke UDF runs.",
       "exit_codes": {
         "0": "the container is installed and, for Python, the smoke UDF passed",
         "2": "bad arguments: a language that is not python or rust, an unknown option",
         "3": "the smoke UDF found a declared package missing",
         "4": "no container in the matrix for this language, architecture or database version, or the downloaded file does not match its pinned digest (removed; run again)",
-        "5": "not ready: the add-on is not installed, the database is not running, the launcher is older than 2.3.0, the download did not arrive, the install was not confirmed, no bucket directory to put the Rust smoke library into",
+        "5": "not ready: add-on, database, launcher, download or restart consent",
         "6": "the launcher could not install the container (exakit logs)",
         "7": "the smoke UDF did not run, or reported a version other than the pinned one (Rust: the rustc or exasol-udf-sdk differ, both named; or the container refused the library with F-UDF-CL-RUST-9001, its ABI fingerprint SDK_VERSION:RUSTC_VERSION not matching the container's; or the row's smoke library is not pinned yet)"
       },
@@ -592,13 +592,14 @@
     },
     {
       "command": "exakit rust-udf",
-      "options": "new <name> [--coefficients <file>] | build <name> | deploy <name> [--schema <SCHEMA>] [--json]",
+      "options": "new <name> [--coefficients <file>] | build <name> | deploy <name> [--schema <SCHEMA>] [--yes] [--json]",
       "summary": "Create, build and deploy a Rust scoring UDF from exported coefficients.",
-      "description": "The new step creates a pinned exasol-udf-sdk 0.33.0 project under the kit home; --coefficients reads the 01_train coefficients.json. Build uses Rust 1.98.1 in a Linux Docker or Podman container matching the database architecture on macOS and Windows, then validates the .so. Deploy verifies its digest, copies it into the deployment's bucket directory and registers a RUST scalar script. A database restart is not attempted automatically.",
+      "description": "The new step creates a pinned exasol-udf-sdk 0.33.0 project under the kit home; --coefficients reads the 01_train coefficients.json. Build uses Rust 1.98.1 in a Linux Docker or Podman container matching the database architecture on macOS and Windows, then validates the .so. Deploy verifies its digest, copies it into the deployment's bucket directory and registers a RUST scalar script. If the shared bucket is unavailable, deploy requires --yes, packages the verified library into the pinned RUST container under /opt/exakit/udf, and runs exasol slc custom update, which restarts the database. Previously deployed kit libraries are retained and verified. JSON reports deployment (bucket or container), database_restart_requested and the container digest when updated.",
       "examples": [
         "exakit rust-udf new score_model --coefficients coefficients.json",
         "exakit rust-udf build score_model --json",
-        "exakit rust-udf deploy score_model --schema EXAKIT_SCORING"
+        "exakit rust-udf deploy score_model --schema EXAKIT_SCORING",
+        "exakit rust-udf deploy score_model --schema EXAKIT_SCORING --yes --json"
       ],
       "parameters": [
         {
@@ -633,6 +634,12 @@
         {
           "name": "--json",
           "description": "Print the operation result as JSON.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--yes",
+          "description": "deploy only: confirm a database restart if the shared bucket is unavailable and a container update is required.",
           "default": "off",
           "required": false
         },
@@ -822,7 +829,7 @@
       "command": "exakit rust-udf new",
       "options": "<name> [--coefficients FILE] [--json]",
       "summary": "Create a pinned Rust scoring project.",
-      "description": "The new step creates a pinned exasol-udf-sdk 0.33.0 project under the kit home; --coefficients reads the 01_train coefficients.json. Build uses Rust 1.98.1 in a Linux Docker or Podman container matching the database architecture on macOS and Windows, then validates the .so. Deploy verifies its digest, copies it into the deployment's bucket directory and registers a RUST scalar script. A database restart is not attempted automatically.",
+      "description": "The new step creates a pinned exasol-udf-sdk 0.33.0 project under the kit home; --coefficients reads the 01_train coefficients.json. Build uses Rust 1.98.1 in a Linux Docker or Podman container matching the database architecture on macOS and Windows, then validates the .so. Deploy verifies its digest, copies it into the deployment's bucket directory and registers a RUST scalar script. If the shared bucket is unavailable, deploy requires --yes, packages the verified library into the pinned RUST container under /opt/exakit/udf, and runs exasol slc custom update, which restarts the database. Previously deployed kit libraries are retained and verified. JSON reports deployment (bucket or container), database_restart_requested and the container digest when updated.",
       "parameters": [
         {
           "name": "<name>",
@@ -857,7 +864,7 @@
       "command": "exakit rust-udf build",
       "options": "<name> [--json]",
       "summary": "Build and validate a Linux Rust UDF library for the database architecture.",
-      "description": "The new step creates a pinned exasol-udf-sdk 0.33.0 project under the kit home; --coefficients reads the 01_train coefficients.json. Build uses Rust 1.98.1 in a Linux Docker or Podman container matching the database architecture on macOS and Windows, then validates the .so. Deploy verifies its digest, copies it into the deployment's bucket directory and registers a RUST scalar script. A database restart is not attempted automatically.",
+      "description": "The new step creates a pinned exasol-udf-sdk 0.33.0 project under the kit home; --coefficients reads the 01_train coefficients.json. Build uses Rust 1.98.1 in a Linux Docker or Podman container matching the database architecture on macOS and Windows, then validates the .so. Deploy verifies its digest, copies it into the deployment's bucket directory and registers a RUST scalar script. If the shared bucket is unavailable, deploy requires --yes, packages the verified library into the pinned RUST container under /opt/exakit/udf, and runs exasol slc custom update, which restarts the database. Previously deployed kit libraries are retained and verified. JSON reports deployment (bucket or container), database_restart_requested and the container digest when updated.",
       "parameters": [
         {
           "name": "<name>",
@@ -884,9 +891,9 @@
     },
     {
       "command": "exakit rust-udf deploy",
-      "options": "<name> [--schema SCHEMA] [--json]",
+      "options": "<name> [--schema SCHEMA] [--yes] [--json]",
       "summary": "Verify and deploy the built Rust scoring UDF.",
-      "description": "The new step creates a pinned exasol-udf-sdk 0.33.0 project under the kit home; --coefficients reads the 01_train coefficients.json. Build uses Rust 1.98.1 in a Linux Docker or Podman container matching the database architecture on macOS and Windows, then validates the .so. Deploy verifies its digest, copies it into the deployment's bucket directory and registers a RUST scalar script. A database restart is not attempted automatically.",
+      "description": "The new step creates a pinned exasol-udf-sdk 0.33.0 project under the kit home; --coefficients reads the 01_train coefficients.json. Build uses Rust 1.98.1 in a Linux Docker or Podman container matching the database architecture on macOS and Windows, then validates the .so. Deploy verifies its digest, copies it into the deployment's bucket directory and registers a RUST scalar script. If the shared bucket is unavailable, deploy requires --yes, packages the verified library into the pinned RUST container under /opt/exakit/udf, and runs exasol slc custom update, which restarts the database. Previously deployed kit libraries are retained and verified. JSON reports deployment (bucket or container), database_restart_requested and the container digest when updated.",
       "parameters": [
         {
           "name": "<name>",
@@ -907,6 +914,12 @@
           "required": false
         },
         {
+          "name": "--yes",
+          "description": "deploy only: confirm a database restart if the shared bucket is unavailable and a container update is required.",
+          "default": "off",
+          "required": false
+        },
+        {
           "name": "--help, -h",
           "description": "Show this command reference; install nothing and change no services.",
           "default": "off",
@@ -914,7 +927,8 @@
         }
       ],
       "examples": [
-        "exakit rust-udf deploy score_model --json"
+        "exakit rust-udf deploy score_model --json",
+        "exakit rust-udf deploy score_model --schema EXAKIT_SCORING --yes --json"
       ]
     }
   ],
@@ -927,7 +941,8 @@
     "Containers: the prebuilt ones are a matrix in versions.json (components.udf-devkit.containers), one row per language and architecture with the database versions it runs on, its runtime (Python 3.12, rustc 1.98.1), the pinned packages or crates, url, sha256 and size. The row is chosen by the DATABASE's architecture (aarch64 on an Apple-silicon Mac, x86_64 on Windows and most Linux; EXAKIT_UDF_ARCH=x86_64|aarch64 overrides) and its version; a mismatch is refused (exit 4) rather than guessed. The digest is verified before any install; the file stays in $EXAKIT_HOME/cache/containers and is reused once verified. EXAKIT_UDF_CONTAINERS_MIRROR (a folder, a file:// or https:// base URL holding the file by name) serves it offline. EXAKIT_UDF_LANGUAGE=python|rust is the default language for the commands and the persona install.",
     "Uninstalling the add-on leaves the containers in the database, because your UDFs may use them; exasol slc remove <alias> removes one.",
     "Where BucketFS lives, the aliases, the schema and the build flavor (template-Exasol-all-python-3.12, from exasol/script-languages-release) are settings at the top of setup/lib/udf-devkit.sh and its PowerShell twin setup/lib/udf-devkit.ps1, so a launcher that moves them needs a kit update that changes those values, not new logic.",
-    "A new version of the UDF dev kit (a 2.0 included) arrives with exakit update, which records it and says when it is a major step. It never replaces a container your UDFs use: install the new prebuilt one when you are ready with exakit udf-use default."
+    "A new version of the UDF dev kit (a 2.0 included) arrives with exakit update, which records it and says when it is a major step. It never replaces a container your UDFs use: install the new prebuilt one when you are ready with exakit udf-use default.",
+    "Rust bucketless fallback: exakit rust-udf deploy <name> --yes updates RUST and restarts the database. A needed update without --yes exits 5 at step confirm before restarting; the bucket probe may stage a library and helper UDF. An unchanged verified packaged library is reused without a restart. Python model put still requires a shared bucket directory."
   ],
   "troubleshooting": [
     {

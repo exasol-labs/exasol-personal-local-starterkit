@@ -128,13 +128,15 @@ def build(py: Path) -> str:
 
 def sources() -> list[Path]:
     """Every notebook source: the .py files in notebook/notebooks/<folder>/."""
-    return sorted(FOLDER.glob("*/*.py"))
+    return sorted(FOLDER.glob("**/*.py"))
 
 
 def catalog_files() -> list[tuple[str, str, str]]:
     """(folder, Jupyter file, Marimo file or "") for the shared cells and every catalog notebook."""
     doc = json.loads(CATALOG.read_text(encoding="utf-8"))
-    entries = [(doc["shared"]["folder"], doc["shared"])] + [(entry["persona"], entry) for entry in doc["notebooks"]]
+    entries = ([(doc["shared"]["folder"], doc["shared"])]
+               + [(entry["persona"], entry) for entry in doc["notebooks"]]
+               + [(entry["folder"], entry) for entry in doc.get("examples", [])])
     return [(folder, entry["jupyter"], entry.get("marimo", "")) for folder, entry in entries]
 
 

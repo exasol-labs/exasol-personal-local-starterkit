@@ -37,6 +37,7 @@ $script:calls = New-Object System.Collections.ArrayList
 $script:launcher = "2.3.0"
 $script:confirmAnswer = $true
 function Get-PersonalLauncherVersion { return $script:launcher }
+function Get-PersonalCli { return "test-launcher" }
 function Test-ExakitDbReachable { return $true }
 function Wait-PersonalReady { [void]$script:calls.Add("wait") }
 function Get-ExakitServiceIds { return @("database", "dash-server", "exasol-scheduler") }
@@ -62,9 +63,23 @@ function Get-UdfDbVersion { return $script:dbVersion }
 # stubRustLoadError: the database refused it); every other tool call is real.
 $script:stubRustc = "1.98.1"
 $script:stubRustLoadError = ""
+$script:packagedSmoke = $false
 $script:realInvokeUdfTool = ${function:Invoke-UdfTool}
 function Invoke-UdfTool {
     param([string[]]$ToolArgs, [string]$StdIn = "", [string]$Python = "", [string]$Script = "udf_tool.py", [switch]$NoConnection)
+    if ($Script -eq "rust_container.py") {
+        if ($ToolArgs[0] -eq "check") {
+            if ($script:packagedSmoke) { return ,@(0, @(), "") }
+            return ,@(1, @(), "")
+        }
+        if (-not $NoConnection -or $ToolArgs.Count -ne 7 -or $ToolArgs[1] -ne $script:UdfSmokeAsset.sha256) {
+            throw "The fallback must use the verified smoke digest without database credentials."
+        }
+        [void]$script:calls.Add("pack-rust")
+        $script:packagedSmoke = $true
+        return ,@(0, @('{"ok":true}'), "")
+    }
+    if ($ToolArgs[0] -eq "bucket-file") { return ,@(0, @(), "") }
     if ($ToolArgs[0] -eq "smoke-rust") {
         [void]$script:calls.Add("smoke-rust " + ($ToolArgs -join " "))
         if ($script:stubRustLoadError) { return ,@(7, @(), $script:stubRustLoadError) }
@@ -315,6 +330,28 @@ try {
     Check "validated, with the reported rustc and sdk" "True 1.98.1 0.33.0" ("" + (Get-ExakitManifestValue "components.udf_devkit.rust.validated") + " " + (Get-ExakitManifestValue "components.udf_devkit.rust.rustc") + " " + (Get-ExakitManifestValue "components.udf_devkit.rust.sdk"))
     Check "...and the add-on's flag" "True" ("" + (Get-ExakitManifestValue "components.udf_devkit.validated"))
     Contains "and the summary names both languages" "Rust UDFs: alias RUST" (Get-UdfDevkitSummary)
+    Write-Host "a missing shared bucket uses the verified container fallback after consent:"
+    $savedBucketLocation = ${function:Get-UdfBucketLocation}
+    try {
+        if (-not (Select-UdfContainer -Language "rust")) { throw "Rust fixture row is missing." }
+        function Get-UdfBucketLocation { return [pscustomobject]@{ Error = "no shared bucket" } }
+        Reset-Calls
+        Check "fallback smoke succeeds" "True" (Test-UdfDevkitSmokeRust -Alias "RUST")
+        Check "services surround the container restart, then smoke uses its packaged path" `
+            "stop dash-server|pack-rust|wait|start dash-server|smoke-rust smoke-rust RUST STARTER_KIT /opt/exakit/udf/libexakit_smoke-aarch64.so 1.98.1 0.33.0" ($script:calls -join "|")
+        Reset-Calls
+        Check "repeat validation reuses the packaged library" "True" (Test-UdfDevkitSmokeRust -Alias "RUST")
+        Check "repeat validation does not restart" "smoke-rust smoke-rust RUST STARTER_KIT /opt/exakit/udf/libexakit_smoke-aarch64.so 1.98.1 0.33.0" ($script:calls -join "|")
+        Reset-Calls
+        $script:packagedSmoke = $false
+        $script:UdfYes = $false; $script:confirmAnswer = $false
+        Check "declined fallback is refused" "False" (Test-UdfDevkitSmokeRust -Alias "RUST")
+        Check "decline packs nothing and stops nothing" "" ($script:calls -join "|")
+        Check "decline has code 5" "5" $script:UdfFail.Code
+    } finally {
+        ${function:Get-UdfBucketLocation} = $savedBucketLocation
+        $script:confirmAnswer = $true
+    }
     $script:UdfLanguage = "python"
     Set-ExakitManifestValue "components.udf_devkit.languages" "python"
     $json = Invoke-CmdUdfSetup -CmdArgs @("--language", "rust", "--json")

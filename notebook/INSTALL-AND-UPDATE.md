@@ -50,4 +50,4 @@ python3 tools/bundle_connector_notebooks.py /path/to/notebook-connector
 
 The tool bundles all 50 notebooks, supporting files, source revision and MIT notices; adapts the local connection; and builds Marimo apps that retain IPython magics. The generated files are tested and released with the kit. Source bookkeeping remains inside the kit, outside the notebook folders shown to users.
 
-These additions are currently local work. Use the local-checkout install command in `MANUAL-RUNBOOK.md` until this version is published.
+These additions are currently local work. Use the local-checkout install command in [the manual runbook](../docs/MANUAL-RUNBOOK.md) until this version is published.

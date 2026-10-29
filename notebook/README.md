@@ -54,8 +54,8 @@ The tool callable is supplied by the AI client hosting Dash Server MCP; the note
 is not attached. The kit never puts database credentials in the dashboard source.
 
 Four additional local lessons adapt the Notebook Connector examples used by AI Lab:
-`04_sql_and_dataframes` and `05_decision_tree_baseline` for Data Scientist;
-`04_udf_package_check` and `05_decision_tree_udf` for ML Engineer. Each ships
+`01_sql_and_dataframes` and `02_decision_tree_baseline` for Data Scientist;
+`01_udf_package_check` and `02_decision_tree_udf` for ML Engineer. Each ships
 as Jupyter and Marimo. See [EXAMPLE-GUIDE.md](EXAMPLE-GUIDE.md) for the lesson
 order and the upstream sources and license. The guide and MIT notices are copied alongside each notebook collection;
 source metadata stays inside the kit.

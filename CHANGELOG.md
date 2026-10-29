@@ -1,5 +1,15 @@
 # Changelog
 
+## BRD alignment and deployment fixes
+
+- Fix own-file CSV, Parquet, JSON and JSON-lines loading when a descriptor has a date role.
+- Match persona defaults to the BRD: Notebook for Data Scientist; Notebook, UDF devkit and local MLflow for ML Engineer. Both select Pharma and Banking. JSON Tables and Dash Server remain explicit add-ons.
+- Move the four utility lessons into `useful-notebooks/`, preserving edited copies and leaving the BRD's reserved notebook positions free.
+- Add the Rust fallback for unavailable shared buckets. Verify file visibility inside a UDF, package libraries into the pinned runtime, require restart consent, preserve previous libraries and reuse unchanged overlays. Record the resulting container digest in scoring lineage.
+- Move the installation, add-on and ownership guides into `docs/` and remove superseded root-level notes.
+
+Release acceptance remains open. Live Windows, Rust parity, service integration and practitioner gates still need evidence. The Banking reference model currently matches its majority baseline on the held-out temporal split; this is an unresolved acceptance check.
+
 ## Consistent add-on discovery
 
 - Give all seven add-ons the same management reference in human and JSON help; automatically include future add-on documents.
@@ -79,9 +89,9 @@ command sets an EXIT trap for it. Pinned by `tests/temp-cleanup.sh` and
 - Split the UDF add-on's generic installing progress into container download, checksum, ML archive preparation, install/restart and smoke-check milestones. The completion message names the ready ML runtime. Document the observed 842 MB download and two installs behind the eleven-minute Mac run; percentages are estimates rather than download measurements.
 - Add parser-to-help coverage and shell/PowerShell progress tests, including Windows PowerShell 5.1 CI entries. The update changes help and progress only; it does not reinstall live containers or change virtual-schema/external-source integrations.
 
-### Follow-up to persona PR #1 (2026-10-29)
+### v0.3.0 change evidence (2026-10-29)
 
-The full grouped changelog and all implementation commits since the previous PR are in [CHANGELOG-SINCE-PR1.md](CHANGELOG-SINCE-PR1.md).
+The candidate follows the BRD requirements. Live Windows verification and practitioner acceptance remain pending; this changelog does not declare release acceptance.
 
 - Complete the Data Scientist and ML Engineer bundles with JSON Tables, role-specific Dash Server / UDF devkit, the MLflow service and scientific Python dependencies.
 - Bundle all 50 official Notebook Connector lessons for Jupyter and Marimo, with indexes and supporting assets, kit connections and explicit Run controls. Preserve notebook edits and document connector/package/file updates.

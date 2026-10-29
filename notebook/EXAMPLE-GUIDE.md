@@ -17,10 +17,10 @@ runtime. They require no external data connection or cloud account.
 
 | Persona | Notebook in JupyterLab | Lesson |
 |---|---|---|
-| Data Scientist | `data-scientist/04_sql_and_dataframes.ipynb` | SQL aggregates to pandas; validate totals |
-| Data Scientist | `data-scientist/05_decision_tree_baseline.ipynb` | A reproducible local scikit-learn baseline |
-| ML Engineer | `ml-engineer/04_udf_package_check.ipynb` | Prove which packages are inside the database |
-| ML Engineer | `ml-engineer/05_decision_tree_udf.ipynb` | Train and evaluate a decision tree in a SET UDF |
+| Data Scientist | `useful-notebooks/data-scientist/01_sql_and_dataframes.ipynb` | SQL aggregates to pandas; validate totals |
+| Data Scientist | `useful-notebooks/data-scientist/02_decision_tree_baseline.ipynb` | A reproducible local scikit-learn baseline |
+| ML Engineer | `useful-notebooks/ml-engineer/01_udf_package_check.ipynb` | Prove which packages are inside the database |
+| ML Engineer | `useful-notebooks/ml-engineer/02_decision_tree_udf.ipynb` | Train and evaluate a decision tree in a SET UDF |
 
 In Marimo, open the matching persona folder and `.py` filename. Change
 `DATASET` to `banking_complaints` to repeat a lesson on Banking. Run each

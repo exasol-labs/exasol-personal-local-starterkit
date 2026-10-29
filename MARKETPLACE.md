@@ -637,7 +637,7 @@ and examples may differ. Run `python3 tests/test_addon_help.py` and
 `pwsh -NoProfile -File tests/addon-help-ps.ps1` before shipping. These check
 registration coverage, argument metadata, lifecycle consistency, exact action
 lookup, rejection of unknown actions, and shell/PowerShell JSON parity. See
-[ADDON-COMMANDS.md](ADDON-COMMANDS.md) for the user and agent discovery contract.
+[the add-on command guide](docs/ADDON-COMMANDS.md) for the user and agent discovery contract.
 
 ### 5. Optional: ship an AI skill with it
 

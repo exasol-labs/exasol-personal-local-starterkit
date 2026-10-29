@@ -7,21 +7,28 @@ function Invoke-CmdRustUdf {
     if (-not (Get-UdfDevkitInstalledVersion)) {
         Exit-UdfModel -Code 4 -Message "The UDF dev kit is not installed." -Remedy "exakit marketplace udf-devkit"
     }
-    $bucket = ""; $root = ""
+    $bucket = ""; $root = ""; $launcher = ""; $deployment = ""
     if ($CmdArgs[0] -eq "deploy") {
         $found = Get-UdfBucketLocation
-        if ($found.Error) { Exit-UdfModel -Code 3 -Message $found.Error -Remedy "exakit status" }
-        $bucket = $found.Dir; $root = $found.UdfRoot
+        if (-not $found.Error) { $bucket = $found.Dir; $root = $found.UdfRoot }
+        $launcher = Get-PersonalCli
+        $deployment = $script:PersonalDeployDir
     }
     $oldBucket = [Environment]::GetEnvironmentVariable("EXAKIT_RUST_BUCKET_DIR", "Process")
     $oldRoot = [Environment]::GetEnvironmentVariable("EXAKIT_RUST_UDF_ROOT", "Process")
+    $oldLauncher = [Environment]::GetEnvironmentVariable("EXAKIT_RUST_LAUNCHER", "Process")
+    $oldDeployment = [Environment]::GetEnvironmentVariable("EXAKIT_RUST_DEPLOYMENT", "Process")
     try {
         [Environment]::SetEnvironmentVariable("EXAKIT_RUST_BUCKET_DIR", $bucket, "Process")
         [Environment]::SetEnvironmentVariable("EXAKIT_RUST_UDF_ROOT", $root, "Process")
+        [Environment]::SetEnvironmentVariable("EXAKIT_RUST_LAUNCHER", $launcher, "Process")
+        [Environment]::SetEnvironmentVariable("EXAKIT_RUST_DEPLOYMENT", $deployment, "Process")
         $result = Invoke-UdfTool -Script "rust_udf_tool.py" -ToolArgs $CmdArgs
     } finally {
         [Environment]::SetEnvironmentVariable("EXAKIT_RUST_BUCKET_DIR", $oldBucket, "Process")
         [Environment]::SetEnvironmentVariable("EXAKIT_RUST_UDF_ROOT", $oldRoot, "Process")
+        [Environment]::SetEnvironmentVariable("EXAKIT_RUST_LAUNCHER", $oldLauncher, "Process")
+        [Environment]::SetEnvironmentVariable("EXAKIT_RUST_DEPLOYMENT", $oldDeployment, "Process")
     }
     foreach ($line in @($result[1])) { Write-Output $line }
     if ($result[0] -ne 0) {

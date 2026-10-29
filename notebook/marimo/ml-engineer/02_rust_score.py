@@ -34,8 +34,10 @@ def _():
     UDF_NAME = "score_pharma"  # choose a new plain lowercase name for a new coefficient revision
     UDF_SCHEMA = "EXAKIT_SCORING"
     TEST_ROWS = 500
+    ALLOW_DATABASE_RESTART = False  # set True to consent if the shared bucket is unavailable
     WORKFLOW_ID = None  # paste the ML quickstart's wf-... id to continue its log
     return (
+        ALLOW_DATABASE_RESTART,
         COEFFICIENTS_FILE,
         DATASET,
         TEST_ROWS,
@@ -129,6 +131,7 @@ def _(mo):
 
 @app.cell
 def _(
+    ALLOW_DATABASE_RESTART,
     COEFFICIENTS_FILE_1,
     Path,
     UDF_NAME,
@@ -155,7 +158,8 @@ def _(
         return answer
     project = exakit('rust-udf', 'new', UDF_NAME, '--coefficients', str(Path(COEFFICIENTS_FILE_1).expanduser()))
     built = exakit('rust-udf', 'build', UDF_NAME)
-    deployed = exakit('rust-udf', 'deploy', UDF_NAME, '--schema', UDF_SCHEMA)
+    deploy_options = ['--yes'] if ALLOW_DATABASE_RESTART else []
+    deployed = exakit('rust-udf', 'deploy', UDF_NAME, '--schema', UDF_SCHEMA, *deploy_options)
     print('Rust UDF:', deployed['udf'], 'sha256', deployed['sha256'])
     return built, deployed, project
 
@@ -220,6 +224,7 @@ def _(
     MlflowClient,
     Path,
     built,
+    deployed,
     ds,
     gap,
     json,
@@ -245,7 +250,8 @@ def _(
     _client = MlflowClient(tracking_uri=tracking.resolve().uri)
     _experiment = _client.get_experiment_by_name('exasol-starter-kit')
     experiment_id = _experiment.experiment_id if _experiment else _client.create_experiment('exasol-starter-kit')
-    tags = {'exasol.language': 'rust', 'exasol.container_alias': container['alias'], 'exasol.container_digest': container['sha256'], 'exasol.rustc': built['rustc'], 'exasol.sdk': built['sdk'], 'exasol.cargo_lock_sha256': lock_digest, 'exasol.udf_sha256': built['sha256'], 'exasol.descriptor_id': ds.id, 'exasol.descriptor_version': str(ds.version), 'exasol.workflow_id': nb.current_workflow() or ''}
+    container_digest = deployed.get('container_sha256', container['sha256'])
+    tags = {'exasol.language': 'rust', 'exasol.container_alias': container['alias'], 'exasol.container_digest': container_digest, 'exasol.base_container_digest': container['sha256'], 'exasol.rustc': built['rustc'], 'exasol.sdk': built['sdk'], 'exasol.cargo_lock_sha256': lock_digest, 'exasol.udf_sha256': built['sha256'], 'exasol.descriptor_id': ds.id, 'exasol.descriptor_version': str(ds.version), 'exasol.workflow_id': nb.current_workflow() or ''}
     if source_run_id:
         tags['exasol.source_run_id'] = source_run_id
     rust_run = _client.create_run(experiment_id, tags=tags)
@@ -259,7 +265,7 @@ def _(
         _client.set_terminated(rust_run.info.run_id, status='FAILED')
         raise
     _client.set_terminated(rust_run.info.run_id, status='FINISHED')
-    nb.log_event('mlflow.run', run_id=rust_run.info.run_id, language='rust', descriptor_id=ds.id, descriptor_version=ds.version, container_digest=container['sha256'], cargo_lock_sha256=lock_digest, udf_sha256=built['sha256'])
+    nb.log_event('mlflow.run', run_id=rust_run.info.run_id, language='rust', descriptor_id=ds.id, descriptor_version=ds.version, container_digest=container_digest, cargo_lock_sha256=lock_digest, udf_sha256=built['sha256'])
     print('Rust scoring MLflow run:', rust_run.info.run_id)
     return
 

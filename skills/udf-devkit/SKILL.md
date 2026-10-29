@@ -75,7 +75,7 @@ a release URL can be added later as a verified fallback. Build
 inside the pinned Linux image, including when driving Docker from a Mac: a
 macOS host cannot emit a Linux `.so`. A Rust UDF of the user's own is `exakit
 rust-udf` (the next kit step); the smoke UDF's `udf/` folder in the bucket is
-where it goes too.
+where it goes too when shared buckets work. Without one, Rust setup packages the smoke library into RUST and confirms the container update/restart. A user library uses `exakit rust-udf deploy <name> --yes`: the fallback preserves earlier libraries, runs `exasol slc custom update`, and reports `deployment: container`, its digest and `database_restart_requested: true`. Without `--yes`, a needed container update exits 5 at step `confirm` before any restart; checking an existing bucket may stage the library and a helper UDF. A verified unchanged packaged library is reused without restarting. The shared-bucket path reports `deployment: bucket` and does not restart.
 
 Both commands take `--json` and answer `{ok, language, alias, container: {url,
 sha256, arch, db_versions}, smoke: [{package, version}]}` or `{ok: false,

@@ -93,6 +93,8 @@ class RulesTest(unittest.TestCase):
         script = udf_tool.rust_smoke_script("rust", "starter_kit", "/buckets/bfsdefault/default/udf/libexakit_smoke.so")
         self.assertEqual(script, "CREATE OR REPLACE RUST SCALAR SCRIPT STARTER_KIT.EXAKIT_SMOKE(x BIGINT) RETURNS VARCHAR(2000) AS\n"
                                  "%udf_object /buckets/bfsdefault/default/udf/libexakit_smoke.so;\n")
+        self.assertIn("%udf_object /opt/exakit/udf/libexakit_smoke.so;",
+                      udf_tool.rust_smoke_script("RUST", "STARTER_KIT", "/opt/exakit/udf/libexakit_smoke.so"))
         for bad in ("/tmp/x.so", "/buckets/a/b.so; DROP", "/buckets/a/lib.tar.gz", "", "/buckets/../etc/x.so"):
             with self.subTest(path=bad):
                 with self.assertRaises(udf_tool.Refused):
@@ -139,7 +141,7 @@ class RulesTest(unittest.TestCase):
         with mock.patch.object(udf_tool, "_connect", side_effect=AssertionError("no database in this test")):
             code, _, err = run("smoke-rust", "RUST", "STARTER_KIT", "/tmp/escape.so", "1.98.1")
         self.assertEqual(code, 2)
-        self.assertIn("not a /buckets/... path to a .so file", err)
+        self.assertIn("not a bucket or packaged Rust library path", err)
 
     def test_an_unknown_command_prints_the_usage(self):
         code, _, err = run("frob")

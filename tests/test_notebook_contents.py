@@ -32,13 +32,13 @@ build_tool = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(build_tool)
 
 SOURCES = ROOT / "notebook" / "notebooks"
-NOTEBOOKS = sorted(SOURCES.glob("*/*.py")) + sorted((ROOT / "notebook" / "marimo").glob("*/*.py"))
+NOTEBOOKS = sorted(SOURCES.glob("**/*.py")) + sorted((ROOT / "notebook" / "marimo").glob("**/*.py"))
 HELPERS = sorted((ROOT / "notebook" / "package").glob("*/**/*.py")) + sorted((ROOT / "notebook" / "kit").glob("*.py"))
 # Commands other work items add to this kit in parallel: `exakit model put|list` (ML-4) is named by the ML Engineer's
 # checks before its dispatch arm lands.
 PENDING_COMMANDS = {"model"}
-SPRINT_NOTEBOOKS = {"data-scientist": ["00_quickstart.ipynb", "01_explore.ipynb", "02_ask_your_data.ipynb", "03_share.ipynb", "04_sql_and_dataframes.ipynb", "05_decision_tree_baseline.ipynb"],
-                    "ml-engineer": ["00_quickstart.ipynb", "01_train.ipynb", "02_rust_score.ipynb", "03_score_external_model.ipynb", "04_udf_package_check.ipynb", "05_decision_tree_udf.ipynb"]}
+SPRINT_NOTEBOOKS = {"data-scientist": ["00_quickstart.ipynb", "01_explore.ipynb", "02_ask_your_data.ipynb", "03_share.ipynb"],
+                    "ml-engineer": ["00_quickstart.ipynb", "01_train.ipynb", "02_rust_score.ipynb", "03_score_external_model.ipynb"]}
 
 
 def _members(cls) -> set[str]:
@@ -136,10 +136,10 @@ class CatalogTest(unittest.TestCase):
         self.assertRegex(provenance["connector_revision"], r"^[0-9a-f]{40}$")
         self.assertRegex(provenance["ai_lab_revision"], r"^[0-9a-f]{40}$")
         examples = {entry["notebook"]: entry for entry in provenance["notebooks"]}
-        for entry in self.DOC["notebooks"]:
+        for entry in self.DOC.get("examples", []):
             if "upstream" not in entry:
                 continue
-            key = f"{entry['persona']}/{Path(entry['jupyter']).stem}"
+            key = f"{entry['folder']}/{Path(entry['jupyter']).stem}"
             source = examples.pop(key)
             self.assertEqual(source["source"], entry["upstream"])
             self.assertIn(provenance["connector_revision"], source["source"])
@@ -162,19 +162,29 @@ class CatalogTest(unittest.TestCase):
 
     def test_no_notebook_ships_that_the_catalog_does_not_name(self):
         named = {f"{folder}/{Path(jupyter).stem}" for folder, jupyter, _ in build_tool.catalog_files()}
-        for py in SOURCES.glob("*/*.py"):
+        for py in SOURCES.glob("**/*.py"):
             with self.subTest(notebook=py.relative_to(SOURCES).as_posix()):
-                self.assertIn(f"{py.parent.name}/{py.stem}", named)
+                self.assertIn(py.relative_to(SOURCES).with_suffix("").as_posix(), named)
         for path in (ROOT / "notebook" / "marimo").glob("**/*.py"):
             with self.subTest(marimo=path.relative_to(ROOT).as_posix()):
-                self.assertIn(f"{path.parent.name}/{path.stem}", named)
+                self.assertIn(path.relative_to(ROOT / "notebook/marimo").with_suffix("").as_posix(), named)
 
-    def test_the_personas_first_prompts_open_a_quickstart_that_ships(self):
+    def test_personas_hold_no_notebook_paths_and_the_quickstart_ships(self):
         for persona in SPRINT_NOTEBOOKS:
             with self.subTest(persona=persona):
-                prompt = json.loads((ROOT / "personas" / f"{persona}.json").read_text(encoding="utf-8"))["first_prompt"]
-                self.assertIn(f"{persona}/00_quickstart.ipynb", prompt)
+                doc = json.loads((ROOT / "personas" / f"{persona}.json").read_text(encoding="utf-8"))
+                self.assertNotIn("first_prompt", doc)
                 self.assertTrue((SOURCES / persona / "00_quickstart.ipynb").is_file())
+
+    def test_extra_lessons_leave_all_brd_reserved_slots_free(self):
+        examples = self.DOC["examples"]
+        self.assertEqual(len(examples), 4)
+        for entry in examples:
+            self.assertEqual(entry["folder"], "useful-notebooks/" + entry["persona"])
+        for persona in SPRINT_NOTEBOOKS:
+            for front in ("notebooks", "marimo"):
+                files = list((ROOT / "notebook" / front / persona).glob("0[45]_*"))
+                self.assertEqual(files, [], "BRD backlog slots must not hold unrelated utility lessons")
 
 
 class NotebookShapeTest(unittest.TestCase):

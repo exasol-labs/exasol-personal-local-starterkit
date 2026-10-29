@@ -137,6 +137,11 @@ function Invoke-UdfTool {
 # @(exit code, output). Twin of _udf_slc.
 function Invoke-UdfSlc {
     param([Parameter(Mandatory)][string[]]$SlcArgs)
+    $aliasIndex = [Array]::IndexOf($SlcArgs, "--alias")
+    if ($SlcArgs[0] -eq "custom" -and $aliasIndex -ge 0 -and $aliasIndex + 1 -lt $SlcArgs.Count -and $SlcArgs[$aliasIndex + 1] -eq "RUST") {
+        $invalidated = Invoke-UdfTool -NoConnection -Script "rust_container.py" -ToolArgs @("invalidate", $script:ExakitHome)
+        if ($invalidated[0] -ne 0) { return ,@(6, @("Could not deactivate the retained Rust overlay record.")) }
+    }
     $prevEap = $ErrorActionPreference
     try {
         $ErrorActionPreference = "Continue"
@@ -578,16 +583,16 @@ function Get-UdfRustSmokeAsset {
 # "name version" lines (container, rustc, sdk) are kept in UdfSmokeLines (for
 # --json) and the rustc and sdk are held against the selected row (udf_tool.py
 # smoke-rust). Set-UdfFail 7 (step smoke, both versions in the reason) when
-# they differ or the container refused the library (F-UDF-CL-RUST-9001); 5
-# when there is no bucket directory to put the library into. On success the
+# they differ or the container refused the library (F-UDF-CL-RUST-9001).
+# Without a shared bucket, package the library into RUST after restart consent. The
 # manifest records the row as validated (components.udf_devkit.rust). Twin of
 # udf_devkit_smoke_rust.
 function Test-UdfDevkitSmokeRust {
     param([Parameter(Mandatory)][string]$Alias)
     $script:UdfSmokeLines = @()
     $bucket = Get-UdfBucketLocation
-    if ($bucket.Error) { return (Set-UdfFail -Code 5 -Step "smoke" -Remedy "exakit status" -Message $bucket.Error) }
-    $destDir = Join-Path $bucket.Dir $script:UdfRustSmokeDir
+    if (-not $bucket.Error) {
+      $destDir = Join-Path $bucket.Dir $script:UdfRustSmokeDir
     $dest = Join-Path $destDir $script:UdfRustSmokeLib
     try {
         New-Item -ItemType Directory -Force -Path $destDir -ErrorAction Stop | Out-Null
@@ -598,6 +603,29 @@ function Test-UdfDevkitSmokeRust {
         return (Set-UdfFail -Code 5 -Step "smoke" -Remedy "exakit status" -Message "Could not copy the smoke library into the bucket directory ($dest).")
     }
     $udfPath = "$($bucket.UdfRoot)/$($script:UdfRustSmokeDir)/$($script:UdfRustSmokeLib)"
+    $probe = Invoke-UdfTool -ToolArgs @("bucket-file", $udfPath, $script:UdfSmokeAsset.sha256)
+    if ($probe[0] -ne 0) { $udfPath = "" }
+    } else {
+      $udfPath = ""
+    }
+    if (-not $udfPath) {
+      Info "The shared bucket is unavailable; the Rust smoke library will be packaged into RUST."
+      $check = Invoke-UdfTool -NoConnection -Script "rust_container.py" -ToolArgs @("check",
+          $script:UdfSmokeFile, $script:UdfSmokeAsset.sha256, $script:UdfContainerDoc, $script:UdfContainer.DbArch,
+          $script:ExakitHome, "", "")
+      $done = $check[0] -eq 0
+      if (-not $done) { $done = Invoke-UdfWithRestart -What "Packaging the Rust smoke library into RUST" -Action {
+          $result = Invoke-UdfTool -NoConnection -Script "rust_container.py" -ToolArgs @(
+              $script:UdfSmokeFile, $script:UdfSmokeAsset.sha256, $script:UdfContainerDoc, $script:UdfContainer.DbArch,
+              $script:ExakitHome, (Get-PersonalCli), $script:PersonalDeployDir)
+          return ($result[0] -eq 0)
+      } }
+      if (-not $done) {
+          $code = if ($script:UdfDeclined) { 5 } else { 6 }
+          return (Set-UdfFail -Code $code -Step "install" -Remedy "exakit udf-setup --language rust --yes" -Message "The Rust smoke container fallback did not finish.")
+      }
+      $udfPath = "/opt/exakit/udf/" + (Split-Path -Leaf $script:UdfSmokeFile)
+    }
     $rustc = "" + $script:UdfContainer.runtime.rustc
     $sdk = (@(Get-UdfContainerPins -Language "rust") | Where-Object { $_ -like "exasol-udf-sdk==*" } | Select-Object -First 1) -replace "^.*==", ""
     Set-UdfInstallStage -Stage smoke -Message "Checking Rust smoke UDF"
@@ -614,7 +642,7 @@ function Test-UdfDevkitSmokeRust {
     $gotRustc = ("" + ($script:UdfSmokeLines | Where-Object { $_ -like "rustc *" } | Select-Object -First 1)) -replace "^rustc ", ""
     $gotSdk = ("" + ($script:UdfSmokeLines | Where-Object { $_ -like "sdk *" } | Select-Object -First 1)) -replace "^sdk ", ""
     Ok "Rust UDFs run on $Alias (rustc $gotRustc, exasol-udf-sdk $gotSdk - as pinned)"
-    Info "Use it in SQL: CREATE OR REPLACE $Alias SCALAR SCRIPT ... AS %udf_object $($bucket.UdfRoot)/$($script:UdfRustSmokeDir)/lib<name>.so;"
+    Info "Deploy a library and get its SQL path with: exakit rust-udf deploy <name>"
     Set-ExakitManifestValue "components.udf_devkit.rust.validated" $true
     Set-ExakitManifestValue "components.udf_devkit.rust.rustc" $gotRustc
     Set-ExakitManifestValue "components.udf_devkit.rust.sdk" $gotSdk

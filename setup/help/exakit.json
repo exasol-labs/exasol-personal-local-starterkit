@@ -832,13 +832,14 @@
     },
     {
       "command": "rust-udf",
-      "options": "new <name> [--coefficients <file>] | build <name> | deploy <name> [--schema <SCHEMA>] [--json]",
+      "options": "new <name> [--coefficients <file>] | build <name> | deploy <name> [--schema <SCHEMA>] [--yes] [--json]",
       "summary": "Create, build and deploy a Rust scoring UDF from exported coefficients.",
-      "description": "The new step creates a pinned exasol-udf-sdk 0.33.0 project under the kit home; --coefficients reads the 01_train coefficients.json. Build uses Rust 1.98.1 in a Linux Docker or Podman container matching the database architecture on macOS and Windows, then validates the .so. Deploy verifies its digest, copies it into the deployment's bucket directory and registers a RUST scalar script. A database restart is not attempted automatically.",
+      "description": "The new step creates a pinned exasol-udf-sdk 0.33.0 project under the kit home; --coefficients reads the 01_train coefficients.json. Build uses Rust 1.98.1 in a Linux Docker or Podman container matching the database architecture on macOS and Windows, then validates the .so. Deploy verifies its digest, copies it into the deployment's bucket directory and registers a RUST scalar script. If the shared bucket is unavailable, deploy requires --yes, packages the verified library into the pinned RUST container under /opt/exakit/udf, and runs exasol slc custom update, which restarts the database. Previously deployed kit libraries are retained and verified. JSON reports deployment (bucket or container), database_restart_requested and the container digest when updated.",
       "examples": [
         "exakit rust-udf new score_model --coefficients coefficients.json",
         "exakit rust-udf build score_model --json",
-        "exakit rust-udf deploy score_model --schema EXAKIT_SCORING"
+        "exakit rust-udf deploy score_model --schema EXAKIT_SCORING",
+        "exakit rust-udf deploy score_model --schema EXAKIT_SCORING --yes --json"
       ],
       "parameters": [
         {
@@ -873,6 +874,12 @@
         {
           "name": "--json",
           "description": "Print the operation result as JSON.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--yes",
+          "description": "deploy only: confirm a database restart if the shared bucket is unavailable and a container update is required.",
           "default": "off",
           "required": false
         },

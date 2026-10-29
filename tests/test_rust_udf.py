@@ -1,6 +1,7 @@
 import importlib.util
 import contextlib
 import io
+import hashlib
 import json
 import os
 import sys
@@ -8,6 +9,7 @@ import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from unittest.mock import MagicMock
 
 SOURCE = Path(__file__).resolve().parents[1] / "setup/udf/rust_udf_tool.py"
 spec = importlib.util.spec_from_file_location("rust_udf_tool", SOURCE)
@@ -123,6 +125,86 @@ class RustUdfTests(unittest.TestCase):
                               str(Path(self.temp.name) / "missing.json"), "--json"])
         self.assertEqual(code, 2)
         self.assertIn("Cannot read the coefficients file", json.loads(output.getvalue())["reason"])
+
+    def validated_project(self):
+        project = Path(rust.create("score_model", None)["project"])
+        artifact = project / "target/release/libscore_model.so"
+        artifact.parent.mkdir(parents=True)
+        artifact.write_bytes(b"validated ELF fixture")
+        lock = project / "Cargo.lock"
+        lock.write_text("# pinned fixture\n")
+        row = rust.rust_pins(rust.architecture())
+        (project / "build.json").write_text(json.dumps({"artifact": str(artifact),
+            "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(), "arch": rust.architecture(),
+            "sdk": row["crates"]["exasol-udf-sdk"], "rustc": row["runtime"]["rustc"],
+            "cargo_lock_sha256": hashlib.sha256(lock.read_bytes()).hexdigest(), "container_sha256": row["sha256"]}))
+        return project
+
+    def test_bucketless_deploy_requires_restart_consent_before_mutation(self):
+        self.validated_project()
+        with patch.dict(os.environ, {"EXAKIT_RUST_BUCKET_DIR": "", "EXAKIT_RUST_UDF_ROOT": ""}), \
+                patch.object(rust, "rust_installed"), patch.object(rust, "_connect") as connect:
+            with self.assertRaises(rust.Refused) as caught:
+                rust.deploy("score_model", "SCORING")
+        self.assertEqual(caught.exception.code, 5)
+        self.assertEqual(caught.exception.step, "confirm")
+        self.assertIn("restarts the database", str(caught.exception))
+        self.assertIn("--yes", caught.exception.remedy)
+        connect.assert_not_called()
+
+    def test_bucketless_deploy_packages_before_reconnecting_and_creating_sql(self):
+        self.validated_project()
+        connection = MagicMock()
+        connection.execute.return_value.fetchall.return_value = [("8.39.0",)]
+        with patch.dict(os.environ, {"EXAKIT_RUST_BUCKET_DIR": "", "EXAKIT_RUST_UDF_ROOT": ""}), \
+                patch.object(rust, "rust_installed"), patch.object(rust, "_connect", return_value=connection), \
+                patch.object(rust, "install_container_library", return_value={"container_sha256": "a"*64}) as install:
+            answer = rust.deploy("score_model", "SCORING", yes=True)
+        install.assert_called_once()
+        sql = "\n".join(str(call.args[0]) for call in connection.execute.call_args_list)
+        self.assertIn("%udf_object /opt/exakit/udf/libscore_model.so", sql)
+        self.assertEqual(answer["deployment"], "container")
+        self.assertTrue(answer["database_restart_requested"])
+
+    def test_invalid_schema_never_restarts_database(self):
+        self.validated_project()
+        with patch.object(rust, "rust_installed"), patch.object(rust, "_connect") as connect:
+            with self.assertRaisesRegex(rust.Refused, "Schema"):
+                rust.deploy("score_model", "bad;drop", yes=True)
+        connect.assert_not_called()
+
+    def test_host_bucket_that_is_invisible_to_a_udf_uses_fallback(self):
+        self.validated_project()
+        import rust_container
+        bucket = Path(self.temp.name) / "bucket"; bucket.mkdir()
+        with patch.dict(os.environ, {"EXAKIT_RUST_BUCKET_DIR": str(bucket), "EXAKIT_RUST_UDF_ROOT": "/buckets/bfs/default"}), \
+                patch.object(rust, "rust_installed"), patch.object(rust, "_connect", return_value=MagicMock()), \
+                patch.object(rust_container, "bucket_visible", return_value=False), \
+                patch.object(rust, "install_container_library", return_value={"container_sha256": "a"*64}) as install:
+            result = rust.deploy("score_model", "SCORING", yes=True)
+        install.assert_called_once()
+        self.assertEqual(result["deployment"], "container")
+
+    def test_matching_packaged_library_can_be_reused_without_restart_consent(self):
+        self.validated_project()
+        import rust_container
+        with patch.dict(os.environ, {"EXAKIT_RUST_BUCKET_DIR": "", "EXAKIT_RUST_UDF_ROOT": ""}), \
+                patch.object(rust, "rust_installed"), patch.object(rust, "_connect", return_value=MagicMock()), \
+                patch.object(rust_container, "installed_library", return_value={"container_sha256": "a"*64}), \
+                patch.object(rust, "install_container_library") as install:
+            result = rust.deploy("score_model", "SCORING")
+        install.assert_not_called()
+        self.assertFalse(result["database_restart_requested"])
+        self.assertEqual(result["container_sha256"], "a"*64)
+
+    def test_driver_failures_keep_private_details_out_of_json(self):
+        output = io.StringIO()
+        with patch.object(rust, "deploy", side_effect=RuntimeError("password=private-value")), \
+                contextlib.redirect_stdout(output):
+            code = rust.main(["deploy", "score_model", "--json"])
+        self.assertEqual(code, 6)
+        self.assertNotIn("private-value", output.getvalue())
+        self.assertEqual(json.loads(output.getvalue())["remedy"], "exakit status")
 
 
 if __name__ == "__main__":

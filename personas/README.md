@@ -6,20 +6,20 @@ marketplace add-ons to offer. The rules live in one Python service,
 `setup/lib/persona_service.py`, which the shell and PowerShell installers both
 call; the screens are the kit's own menus.
 
-The kit ships two personas for the complete local flows, including Data Scientist
-Share and CLI JSON loading, both on the reference datasets Pharma and Banking:
+The kit ships the two BRD persona baselines, both on the reference datasets Pharma and Banking:
 
 | Persona | Datasets | AI clients | Add-ons | First notebook |
 |---|---|---|---|---|
-| `data-scientist` (Data Scientist) | `pharma_trials`, `banking_complaints` | all detected | `notebook`, `json-tables`, `dash-server` | `data-scientist/00_quickstart.ipynb` |
-| `ml-engineer` (ML Engineer) | `pharma_trials`, `banking_complaints` | all detected | `notebook`, `json-tables`, `udf-devkit` | `ml-engineer/00_quickstart.ipynb` |
+| `data-scientist` (Data Scientist) | `pharma_trials`, `banking_complaints` | all detected | `notebook` | `data-scientist/00_quickstart.ipynb` |
+| `ml-engineer` (ML Engineer) | `pharma_trials`, `banking_complaints` | all detected | `notebook`, `udf-devkit` | `ml-engineer/00_quickstart.ipynb` |
 
-JSON Tables supplies `exakit data-load`'s JSON ingestion engine. Dash Server
-supplies the Data Scientist's preview and publish flow. The ML Engineer persona
-also starts local MLflow through udf-devkit and installs the selected UDF runtime.
-Together the personas install each of these four add-ons once. dbt, Scheduler and
-the VS Code extension remain optional: transformation projects, scheduled jobs
-and editor integration are not prerequisites for these notebook journeys.
+The ML Engineer persona also starts local MLflow and installs the selected UDF runtime.
+JSON Tables and Dash Server stay available separately, without expanding the BRD baseline:
+`exakit marketplace json-tables` adds CLI JSON ingestion; `exakit marketplace dash-server`
+adds the Data Scientist's Share flow. The notebook own-file loader handles flat JSON
+without that CLI add-on. To select the extended bundle during install, set
+`EXAKIT_MARKETPLACE_ADDONS=notebook,json-tables,dash-server` for Data Scientist,
+or `EXAKIT_MARKETPLACE_ADDONS=notebook,json-tables,udf-devkit` for ML Engineer.
 
 Pick one with `EXAKIT_PERSONA` on the install command:
 

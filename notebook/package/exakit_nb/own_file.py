@@ -271,7 +271,7 @@ def _prepare(frame, descriptor=None) -> list[tuple[str, str]]:
         missing = [f"{role} ({ref.column})" for role, ref in descriptor.references() if ref.column not in frame.columns]
         if missing:
             raise ValueError(f"The file has no column for: {', '.join(missing)}. Its columns: {', '.join(frame.columns)}.")
-        if descriptor.has("date"):
+        if "date" in descriptor.roles:
             date = descriptor.column("date").column
             try:
                 frame[date] = pd.to_datetime(frame[date]).dt.date

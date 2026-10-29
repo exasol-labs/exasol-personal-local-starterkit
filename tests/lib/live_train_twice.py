@@ -40,7 +40,7 @@ def main(argv: list[str]) -> int:
     try:
         conn = nb.connect()
     except Exception as err:  # noqa: BLE001 - whatever stops the connection is the reason to skip
-        return skip(f"no database connection ({type(err).__name__}: {err})")
+        return skip(f"no database connection ({type(err).__name__}); run exakit status")
     ds = nb.dataset(conn, args.dataset).require_approved("training")
     handoff = nb.ml_train.training_handoff(conn, ds, split=args.split)
     plan = nb.prepare_training(conn, ds, handoff, seed=args.seed)

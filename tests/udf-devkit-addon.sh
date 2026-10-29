@@ -264,6 +264,7 @@ numpy 2.4.6"; }
             # answered with what the kit library reports (STUB_RUSTC: the rustc
             # it was built with; STUB_RUST_LOAD_ERROR: the database refused it).
             case "$1" in
+                bucket-file) return 0 ;;
                 smoke-rust)
                     echo "smoke-rust $*" >> "$CALLS"
                     if [ -n "${STUB_RUST_LOAD_ERROR:-}" ]; then printf "%s\n" "$STUB_RUST_LOAD_ERROR" >&2; return 7; fi
@@ -273,6 +274,7 @@ numpy 2.4.6"; }
                 *) python3 "$ROOT/setup/udf/udf_tool.py" "$@" ;;
             esac
         }
+        _udf_rust_smoke_packaged() { return 1; }
         manifest_set components.udf_devkit.version 0.1.0
         '"$2"
 }
@@ -348,7 +350,7 @@ check "...before: the verification precedes the restart" "1" "$(printf '%s\n' "$
 check "the library is in the bucket directory under udf/" "fake rust smoke aarch64" "$(cat "$BUCKET/udf/libexakit_smoke.so" 2>/dev/null)"
 contains "rustc and the sdk crate are named" "rustc 1.98.1, exasol-udf-sdk 0.33.0" "$out"
 contains "the smoke UDF passes, naming what it reported" "Rust UDFs run on RUST (rustc 1.98.1, exasol-udf-sdk 0.33.0 - as pinned)" "$out"
-contains "and how to write one" "AS %udf_object /buckets/bfsdefault/default/udf/lib<name>.so;" "$out"
+contains "and how to deploy one" "exakit rust-udf deploy <name>" "$out"
 contains "the language is recorded" "languages=rust" "$out"
 contains "the url under the alias" "lc-rust-fake.tar.gz" "$out"
 contains "validated, with the reported rustc and sdk" "rust=true 1.98.1 0.33.0" "$out"
@@ -379,9 +381,11 @@ check "and the record says not validated" "false" "$(scenario 'manifest_get comp
 json="$(STUB_RUST_LOAD_ERROR="the RUST container refused to load the smoke library (F-UDF-CL-RUST-9001: ABI fingerprint mismatch): the library was built for another exasol-udf-sdk or rustc than the container's 0.33.0:rustc_1.98.1 - F-UDF-CL-RUST-9001: fingerprint 0.33.0:rustc_1.97.0" mscenario "$WORK/versions.json" 'cmd_udf_setup --language rust --json' 2>/dev/null)"; rc=$?
 check "the container refusing the library (F-UDF-CL-RUST-9001): exit 7, step smoke, the fingerprint named" "7 smoke True True" \
     "$rc $(printf '%s' "$json" | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["step"], "F-UDF-CL-RUST-9001" in d["reason"], "0.33.0:rustc_1.98.1" in d["reason"])' 2>&1)"
-out="$(mscenario "$WORK/versions.json" 'udf_bucket_locate() { UDF_BUCKET_ERROR="The deployment has no BucketFS folder"; return 1; }; cmd_udf_setup --language rust --json' 2>/dev/null)"; rc=$?
-check "no bucket directory to put the library into: exit 5, step smoke" "5 smoke exakit status" \
-    "$rc $(printf '%s' "$out" | python3 -c 'import json, sys; d = json.load(sys.stdin); print(d["step"], d["remedy"])' 2>&1)"
+out="$(mscenario "$WORK/versions.json" 'udf_bucket_locate() { UDF_BUCKET_ERROR="The deployment has no BucketFS folder"; return 1; }; _udf_pack_rust_smoke() { echo "pack-rust-smoke" >> "$WORK/calls"; }; cmd_udf_setup --language rust --yes --json' 2>/dev/null)"; rc=$?
+check "no shared bucket: the packaged smoke fallback passes" "0 True" \
+    "$rc $(printf '%s' "$out" | python3 -c 'import json, sys; print(json.load(sys.stdin)["ok"])' 2>&1)"
+contains "the fallback packs the smoke library" "pack-rust-smoke" "$(cat "$WORK/calls")"
+contains "and the smoke uses the path inside RUST" "/opt/exakit/udf/libexakit_smoke-aarch64.so" "$(cat "$WORK/calls")"
 
 echo "a smoke library whose digest does not match is refused before the launcher runs:"
 rm -rf "$CACHE"

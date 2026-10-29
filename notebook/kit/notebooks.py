@@ -23,6 +23,7 @@ is not valid JSON either (it is left alone).
 from __future__ import annotations
 
 import json
+import hashlib
 import shutil
 import sys
 from pathlib import Path
@@ -49,7 +50,9 @@ def _placed(doc: dict) -> list[tuple[str, dict]]:
     """(folder, entry) for everything the copy places: the shared cells' folder first, then each persona's notebooks.
     A source file lives at <source>/<folder>/<file> and is copied to <base>/<folder>/<file>."""
     shared = doc.get("shared")
-    return ([(shared["folder"], shared)] if shared else []) + [(entry["persona"], entry) for entry in doc["notebooks"]]
+    return (([(shared["folder"], shared)] if shared else [])
+            + [(entry["persona"], entry) for entry in doc["notebooks"]]
+            + [(entry["folder"], entry) for entry in doc.get("examples", [])])
 
 
 def persona_title(kit: Path, persona: str) -> str:
@@ -97,6 +100,25 @@ def copy(front: str, kit: Path, notebooks_dir: Path) -> tuple[list[str], list[st
             continue
         added.append(key)
         seen.add(key)
+    # Retire only unchanged copies from the old utility slots. Edited files
+    # remain the user's; a new example is copied before its old copy is removed.
+    for entry in doc.get("examples", []):
+        old = entry.get("previous", {}).get(front, {})
+        old_key = old.get("path", "")
+        previous = base / old_key
+        current = base / entry["folder"] / entry[front]
+        try:
+            if (old_key in before and previous.is_file() and not previous.is_symlink()
+                    and current.is_file() and not current.is_symlink()
+                    and previous.resolve().is_relative_to(base.resolve())
+                    and not base.is_symlink()
+                    and not any(parent.is_symlink() for parent in previous.parents
+                                if parent != base and parent.is_relative_to(base))
+                    and hashlib.sha256(previous.read_bytes()).hexdigest() == old.get("sha256")):
+                previous.unlink()
+                seen.discard(old_key)
+        except OSError as err:
+            problems.append(f"{old_key}: {err.strerror or err}")
     # The full official example library is prebuilt into this kit copy.
     # It is optional only for older kit copies; installation never fetches it.
     library = kit / "notebook" / "examples" / front
@@ -182,6 +204,10 @@ def write_readme(kit: Path, doc: dict, folder: Path) -> None:
         lines += ["", "## Full Exasol example library", "",
                   "Open [exasol-examples/00_library.ipynb](exasol-examples/00_library.ipynb) for all 50 official lessons,",
                   "their prerequisites and the recommended order. The same library is bundled for Marimo."]
+    if doc.get("examples"):
+        lines += ["", "## Useful notebooks", "", "Optional lessons, separate from the BRD persona sequence:", ""]
+        for entry in doc["examples"]:
+            lines.append(f"- `{entry['folder']}/{entry['jupyter']}` - {entry['title']}")
     shared = doc.get("shared")
     if shared and (source / shared["folder"] / shared["jupyter"]).is_file():
         lines += ["", f"`{shared['folder']}/{shared['jupyter']}` - {shared['title']}: {shared['summary']}"]

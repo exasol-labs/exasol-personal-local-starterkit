@@ -7,8 +7,7 @@
   "order": 20,
   "datasets": ["pharma_trials", "banking_complaints"],
   "mcp_clients": "all",
-  "addons": ["notebook", "json-tables", "udf-devkit"],
+  "addons": ["notebook", "udf-devkit"],
   "services": ["mlflow"],
-  "udf_language": "python",
-  "first_prompt": "Open the ML Engineer quickstart: run exakit notebook and open ml-engineer/00_quickstart.ipynb."
+  "udf_language": "python"
 }

@@ -185,3 +185,20 @@ The old **64%** was the ceiling of a time-based generic `installing` segment. It
 This run did not reuse a verified ML archive, so it downloaded the large file. Later runs reuse installed aliases and verified files under `$EXAKIT_HOME/cache/containers`; a clean uninstall removes the kit's cache. Keeping the cache or using a verified local mirror avoids that download. The MLflow service can be prepared separately after the add-on step when the ML Engineer persona finishes.
 
 These timings are one observed run, not a promised installation duration. The help/progress update does not reinstall those containers or restart the database.
+
+### Rust deployment without a shared bucket
+
+`exakit rust-udf deploy score_model --schema EXAKIT_SCORING --json` normally
+copies the verified library into the shared bucket without a restart. If that
+directory is unavailable, it exits 5 at `step: confirm`, with a runnable remedy.
+Run that remedy with `--yes` only when a database restart is acceptable:
+
+```bash
+exakit rust-udf deploy score_model --schema EXAKIT_SCORING --yes --json
+```
+
+The fallback adds the library under `/opt/exakit/udf` in the pinned RUST archive,
+retains earlier kit-deployed libraries, and runs `exasol slc custom update`.
+JSON names `deployment`, `database_restart_requested` and `container_sha256`.
+This fallback also supports the Rust setup smoke check. Python model files still
+need the shared bucket checked by `exakit model list`.

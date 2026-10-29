@@ -239,6 +239,8 @@ def show(root: Path, persona_id: str) -> list:
             rows.append(f"  {label:<15} {value(root, persona_id, key) or 'none'}")
     if doc.get("first_prompt"):
         rows.append(f"  {'Start here':<15} {doc['first_prompt']}")
+    elif "notebook" in doc.get("addons", []):
+        rows.append(f"  {'Start here':<15} exakit notebook; open {persona_id}/00_quickstart.ipynb")
     return rows
 
 

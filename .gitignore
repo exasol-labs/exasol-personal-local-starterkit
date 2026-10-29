@@ -14,3 +14,5 @@ build/
 *.egg-info/
 __pycache__/
 dist/
+# Internal release evidence stays on this machine.
+/v0.3.0 Changes.docx

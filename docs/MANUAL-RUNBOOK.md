@@ -18,17 +18,17 @@ For a completely fresh database, use a machine with no existing Exasol deploymen
 
 ## 2. Install with curl
 
-Use this command to install **the current local work** with both personas:
+From the checkout directory, use this command to install **the current source** with both personas:
 
 ```sh
 curl -fsSL https://www.exasol.com/install/starter-kit.sh | \
-  EXAKIT_LOCAL_KIT="/Users/sheetaldharshan.a/Desktop/starterkit-0.2.0" \
+  EXAKIT_LOCAL_KIT="$PWD" \
   EXAKIT_PERSONA=data-scientist,ml-engineer sh
 ```
 
 The local override is needed because these changes have not been published. The ordinary public command, `curl -fsSL https://www.exasol.com/install/starter-kit.sh | sh`, installs the published kit instead.
 
-Both personas automatically select **Pharma + Banking**, **Notebook + JSON Tables + Dash Server + UDF devkit**, and local MLflow. Wait for the installer to finish, then:
+Both personas together select **Pharma + Banking**, **Notebook + UDF devkit**, and local MLflow. Wait for the installer to finish, then:
 
 ```sh
 export PATH="$HOME/.local/bin:$PATH"
@@ -40,7 +40,7 @@ exakit mcp-doctor --json
 
 Expected: database **running**, persona plan **Nothing pending**, notebooks connect, MCP doctor succeeds.
 
-Data Scientist selects Notebook, JSON Tables and Dash Server. ML Engineer selects Notebook, JSON Tables and UDF devkit, with local MLflow. JSON Tables supports CLI JSON ingestion; dbt, Scheduler and the VS Code extension are optional for transformation projects, scheduled jobs and editor integration.
+Data Scientist selects Notebook. ML Engineer selects Notebook and UDF devkit, with local MLflow. Add Dash Server for the Share lesson and JSON Tables for CLI JSON ingestion. dbt, Scheduler and the VS Code extension are optional for transformation projects, scheduled jobs and editor integration.
 
 ## 3. Check the bundled datasets
 
@@ -56,6 +56,7 @@ The datasets should already be loaded. Expected snapshot counts: **5,169 Pharma 
 ## 4. Prepare Rust and Share
 
 ```sh
+exakit marketplace dash-server json-tables
 exakit udf-setup --language rust
 exakit mlflow status
 exakit marketplace --list
@@ -64,7 +65,7 @@ exakit start dash-server
 exakit status
 ```
 
-Dash Server and JSON Tables should already be installed by the personas; check them in the marketplace list. Agree to the Rust container installation when asked; it can restart the database. Python remains available for training. If MLflow is stopped, run `exakit mlflow start`.
+Check Dash Server and JSON Tables in the marketplace list after adding them. Agree to the Rust container installation when asked; it can restart the database. Python remains available for training. If MLflow is stopped, run `exakit mlflow start`.
 
 ## 5. Test the Data Scientist flow
 
@@ -124,14 +125,14 @@ Live model drafting/Langfuse tracing need your own endpoint and keys. Windows li
 
 ## 10. Extra lessons from Notebook Connector / AI Lab
 
-In either JupyterLab or Marimo, open the persona folder and run these in order:
+In either JupyterLab or Marimo, open `useful-notebooks/<persona>/` and run these optional lessons in order. The BRD persona folders keep their reserved notebook numbers.
 
 | Persona | File stem | Expected result |
 |---|---|---|
-| Data Scientist | `04_sql_and_dataframes` | SQL category totals agree with an independent count |
-| Data Scientist | `05_decision_tree_baseline` | Local scikit-learn decision tree reports held-out accuracy and macro-F1 |
-| ML Engineer | `04_udf_package_check` | Versions of scikit-learn, pandas, NumPy, SciPy and joblib imported **inside Exasol** |
-| ML Engineer | `05_decision_tree_udf` | Decision tree trained inside a SET UDF reports train/test counts and metrics |
+| Data Scientist | `01_sql_and_dataframes` | SQL category totals agree with an independent count |
+| Data Scientist | `02_decision_tree_baseline` | Local scikit-learn decision tree reports held-out accuracy and macro-F1 |
+| ML Engineer | `01_udf_package_check` | Versions of scikit-learn, pandas, NumPy, SciPy and joblib imported **inside Exasol** |
+| ML Engineer | `02_decision_tree_udf` | Decision tree trained inside a SET UDF reports train/test counts and metrics |
 
 Jupyter files end in `.ipynb`; Marimo files end in `.py`. Repeat with
 `DATASET = "banking_complaints"`. The source links and MIT notices are copied

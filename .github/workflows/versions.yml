@@ -790,6 +790,7 @@ jobs:
       - run: python3 tests/test_share.py
         if: matrix.shard == 4
       - run: python3 tests/test_rust_udf.py
+      - run: python3 tests/test_rust_container.py
         if: matrix.shard == 4
       - run: python3 tests/test_model_compatibility.py
         if: matrix.shard == 4
