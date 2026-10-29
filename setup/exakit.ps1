@@ -269,6 +269,24 @@ function Invoke-CmdStatus {
         switch ($type) { "personal" { Get-PersonalStatus } default { "not installed" } }
     }
     $running = "$status".StartsWith("running")
+    # A FIRST BOOT THE LAUNCHER GAVE UP ON reads as "stopped" - its port is
+    # silent - and "stopped" alone sends the reader to `exakit start` with no
+    # word of why it failed. The status word stays; the reason rides beside
+    # it: the launcher's own record, and the container's error when podman kept
+    # one. Asked only for a stopped personal deployment. Twin of _cs_failed in
+    # cmd_status.
+    $failedDetail = ""
+    if ($type -eq "personal" -and "$status" -eq "stopped") {
+        $failedDetail = Invoke-ExakitWithSpinner -Quiet:$Json -Label "Asking the launcher why it is stopped" -Body {
+            $detail = ""
+            if ((Get-PersonalLauncherState) -eq "deployment_failed") {
+                $detail = "the launcher records this deployment as failed (it never finished starting)"
+                $containerError = Get-PersonalContainerError
+                if ($containerError) { $detail = "$detail; the database container could not start: $(Get-PersonalShortText $containerError)" }
+            }
+            $detail
+        }
+    }
     $steps = @(Get-ExakitManifestValue "steps_completed")
     # An install in progress is its own state: Begin-ExakitStep records the step
     # and the setup script clears it when done. Twin of the same read in cmd_status.
@@ -343,6 +361,8 @@ function Invoke-CmdStatus {
                 $remedyHints["database"] = "no database is deployed; the installer resumes at the unfinished step"
             } else {
                 $remedies["database"] = "exakit start"
+                # The remedy stays the command that retries it; the hint says why.
+                if ($failedDetail) { $remedyHints["database"] = "$failedDetail - exakit start retries the launcher's deploy" }
             }
         }
         if ($installing) {
@@ -514,7 +534,7 @@ function Invoke-CmdStatus {
     }
     $dsn = Get-ExakitManifestValue "runtime.dsn"
     if (-not $dsn) { $dsn = "unknown" }
-    if ($running) { $reach = "reachable" } else { $reach = "not reachable" }
+    if ($running) { $reach = "reachable" } elseif ($failedDetail) { $reach = "not reachable - $failedDetail" } else { $reach = "not reachable" }
     Write-StatusPanelRow "Database" "$dsn - $reach"
     # The install state, which the JSON has carried since the poll contract was
     # written and this screen never showed: it said "Start it: exakit start"
@@ -1047,6 +1067,13 @@ function Invoke-CmdRepairRuntime {
     # destructive answered itself with "keep the existing database".
     # Twin of the same export in cmd_repair_runtime (setup/exakit).
     $env:EXAKIT_REUSE_DB = "0"
+    # AND THE DELETION'S OWN CONSENT. Declining reuse is harmless on purpose:
+    # the deployment step then asks a separate DELETE question, default no -
+    # so without this the repair the user had just confirmed as destructive
+    # answered that second question with "no" in an unattended run and
+    # repaired nothing. This command may answer it because it just asked its
+    # own. Twin of the same export in cmd_repair_runtime.
+    $env:EXAKIT_REPLACE_DB = "1"
     if ($Json) {
         # One object on stdout and nothing else: the rebuild's own narration is
         # routed to stderr. Twin of the --json branch in cmd_repair_runtime.
@@ -1068,14 +1095,24 @@ function Invoke-CmdRepairRuntime {
         } finally {
             $ErrorActionPreference = $prevRepairEap
         }
-        if ($repairCode -eq 0) {
+        # EXIT 0 IS NOT A DATABASE. The setup script finishes with 0 when the
+        # database step was recorded as not finished (a Podman that cannot run
+        # it, a deploy that failed) - the rest of the kit still installs - so
+        # "repaired" is claimed only when the runtime step completed again.
+        # Twin of the same check in cmd_repair_runtime.
+        if ($repairCode -eq 0 -and (Test-ExakitStepDone "runtime")) {
             [ordered]@{ ok = $true; status = "repaired"; changed = $true; remedy = $null } |
                 ConvertTo-Json -Compress | Write-Output
             exit 0
         }
+        # The step's own recorded reason when there is one (the soft failure
+        # the setup script wrote), so the answer says WHY, not only "see logs".
+        $repairWhy = "the rebuild did not finish (see exakit logs)"
+        $repairSoft = "" + (Get-ExakitManifestValue "install.soft_failures.runtime.reason")
+        if ($repairSoft) { $repairWhy = "the database was not rebuilt: $repairSoft" }
         [ordered]@{
             ok = $false; status = "failed"; changed = $true
-            reason = "the rebuild did not finish (see exakit logs)"
+            reason = $repairWhy
             remedy = (Get-ExakitInstallCommand)
         } | ConvertTo-Json -Compress | Write-Output
         exit 3

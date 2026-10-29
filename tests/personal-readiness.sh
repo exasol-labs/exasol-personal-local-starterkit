@@ -117,7 +117,7 @@ manifest_set(){ :; }
 manifest_get(){ printf '%s' "\${STUB_PROFILE:-}"; }
 exakit_run_bounded(){ shift; "\$@"; }
 port_in_use(){ (exec 3<>"/dev/tcp/127.0.0.1/\$1") 2>/dev/null && { exec 3>&- 3<&-; return 0; }; return 1; }
-run_logged(){ printf 'RUN %s\n' "\$*" >> "$TMP/calls"; case " \$* " in *" \${STUB_FAIL_VERB:-never} "*) return 1;; esac; return 0; }
+run_logged(){ printf 'RUN %s\n' "\$*" >> "$TMP/calls"; for _fv in \$(printf '%s' "\${STUB_FAIL_VERB:-never}" | tr , ' '); do case " \$* " in *" \$_fv "*) return 1;; esac; done; return 0; }
 detect_wsl_version(){ [ "\${STUB_WSL:-0}" = 1 ]; }
 EXAKIT_PERSONAL_DEPLOY_DIR="$TMP/no-deployment"
 source "$ROOT/setup/lib/runtime-personal.sh"
@@ -146,6 +146,19 @@ personal_deployment_exists(){ [ "\${STUB_EXISTS:-0}" = 1 ]; }
 exakit_db_reachable(){ [ "\${STUB_SQL_OK:-0}" = 1 ]; }
 [ -n "\${STUB_TLS:-}" ] && eval "personal_tls_answers(){ [ \"\$STUB_TLS\" = 1 ]; }"
 EXAKIT_PERSONAL_PORT="\${STUB_PORT:-$CLOSED_PORT}"
+# The deploy ladder's collaborators, for the never-booted and container-error
+# scenarios. confirm_env answers from the variable like the real one and, with
+# none set, prints the question and takes its default (no terminal here).
+exakit_note_failure(){ printf 'NOTE %s\n' "\$*"; }
+exakit_install_command(){ printf 'install-cmd'; }
+confirm_env(){ eval "_cev=\\\${\$1:-}"; case "\$_cev" in 1|y|Y|yes|YES|Yes) return 0;; 0|n|N|no|NO|No) return 1;; esac; printf 'ASK %s [%s]\n' "\$2" "\$3"; [ "\$3" = y ]; }
+personal_install_podman(){ return 0; }
+personal_podman_running(){ return 0; }
+push_rollback(){ printf 'FRESH-DEPLOY\n'; exit 0; }
+[ -n "\${STUB_CERR+x}" ] && eval 'personal_container_error(){ [ -n "\$STUB_CERR" ] && printf "%s\\n" "\$STUB_CERR"; return 0; }'
+[ -n "\${STUB_PENDING:-}" ] && eval 'personal_first_boot_pending(){ [ "\$STUB_PENDING" = 1 ]; }'
+[ "\${STUB_FAST_SLEEP:-0}" = 1 ] && eval 'sleep(){ :; }'
+[ "\${STUB_SLOW_FAIL:-0}" = 1 ] && eval 'personal_recover_slow_first_boot(){ return 1; }'
 eval "\$@"
 HARNESS
 probe() { # probe <ENV=val ...> -- <shell to eval>; echoes stdout then "rc=N"
@@ -245,6 +258,84 @@ contains "  ...naming the repair" "exakit repair-runtime" "$_out"
 _out="$(probe STUB_STATE=stopped -- 'personal_start')"
 check "stopped -> the ordinary start" 0 "$(rc_of "$_out")"
 contains "  ...start was run" "RUN exasol-stub start" "$(cat "$TMP/calls")"
+
+echo "personal_container_error: the container's own error, never a running one's"
+mkdir -p "$TMP/podbin"
+cat > "$TMP/podbin/podman" <<'POD'
+#!/bin/sh
+case "$1" in
+    ps) printf '%s\n' "$PODMAN_PS" ;;
+    inspect) printf '%s\n' "$PODMAN_ERR" ;;
+    *) exit 1 ;;
+esac
+POD
+chmod +x "$TMP/podbin/podman"
+_pids_err="crun: controller \`pids\` is not available under /sys/fs/cgroup/non-systemd/x/cgroup.controllers: OCI runtime error"
+# probe word-splits its NAME=value list, so values with spaces travel in the
+# environment instead.
+export PODMAN_ERR="$_pids_err" PODMAN_PS="exasol-db-abc created"
+_out="$(probe PATH="$TMP/podbin:$PATH" -- 'detect_os(){ printf linux; }; personal_container_error' | sed '$d')"
+check "a created container's State.Error is returned" "$_pids_err" "$_out"
+PODMAN_PS="exasol-db-abc running"
+_out="$(probe PATH="$TMP/podbin:$PATH" -- 'detect_os(){ printf linux; }; personal_container_error' | sed '$d')"
+check "a running container is never blamed" "" "$_out"
+PODMAN_PS="exasol-db-abc created"
+_out="$(probe PATH="$TMP/podbin:$PATH" -- 'detect_os(){ printf macos; }; personal_container_error' | sed '$d')"
+check "macOS's podman is not the launcher's" "" "$_out"
+
+echo "personal_known_cause: the errors the kit can name, in this platform's words"
+_out="$(probe -- "detect_os(){ printf wsl; }; personal_known_cause '$_pids_err'")"
+contains "pids is named with the issue" "podman-container-tools/podman#29909" "$_out"
+contains "...and under WSL as a WSL problem" "WSL 2.9+" "$_out"
+_out="$(probe -- "detect_os(){ printf linux; }; personal_known_cause '$_pids_err'")"
+contains "...and on Linux with the systemd delegation" "Delegate=cpu cpuset io memory pids" "$_out"
+_out="$(probe -- "detect_os(){ printf wsl; }; personal_known_cause 'dial tcp: lookup registry-1.docker.io: Temporary failure in name resolution'")"
+contains "DNS under WSL names the Windows-side setting" 'dnsTunneling=true' "$_out"
+contains "...in the right file" '%USERPROFILE%\.wslconfig' "$_out"
+check "anything else is not guessed at" 1 "$(rc_of "$(probe -- "personal_known_cause 'exit status 125'")")"
+
+echo "a container that refused to start ends the wait, and is the reason"
+export STUB_CERR="$_pids_err"
+_out="$(probe STUB_TLS=0 STUB_FAST_SLEEP=1 EXAKIT_PERSONAL_READY_TIMEOUT=600 -- 'personal_wait_ready_or_deploy')"
+check "the wait gives up" 1 "$(rc_of "$_out")"
+contains "  ...saying the container's error" "The database container could not start: crun: controller" "$_out"
+contains "  ...recording it as the reason" "NOTE The database never answered: the database container could not start (crun" "$_out"
+contains "  ...with the fix" "Fix: " "$_out"
+case "$(cat "$TMP/calls")" in *deploy*) check "  ...and no deploy into the same error" "no deploy" "deploy";; *) check "  ...and no deploy into the same error" "no deploy" "no deploy";; esac
+_tries="$(printf '%s\n' "$_out" | grep -c 'could not start: crun')"
+check "  ...said once, not every poll" 1 "$_tries"
+_out="$(probe STUB_TLS=0 STUB_FAST_SLEEP=1 -- 'personal_wait_ready')"
+check "personal_wait_ready dies on it" 1 "$(rc_of "$_out")"
+contains "  ...naming the container, not a timeout" "The database could not start: the database container could not start" "$_out"
+unset STUB_CERR PODMAN_ERR PODMAN_PS
+
+echo "personal_deploy_local: a deployment that never started is offered for replacement, default yes"
+_dl() { probe STUB_EXISTS=1 STUB_STATE=deployment_failed STUB_FAIL_VERB=deploy STUB_SLOW_FAIL=1 STUB_TLS=0 STUB_CERR= "$@" -- 'personal_deploy_local'; }
+_out="$(_dl STUB_PENDING=1)"
+contains "the never-started question is asked" "ASK This deployment never started, so it holds no data. Remove it and deploy a fresh one? [y]" "$_out"
+case "$_out" in *"keep its data"*) check "  ...not the keep-its-data one" no yes ;; *) check "  ...not the keep-its-data one" no no ;; esac
+contains "  ...unattended, the default replaces it" "RUN exasol-stub destroy --remove --auto-approve" "$(cat "$TMP/calls")"
+contains "  ...and a fresh deploy follows" "FRESH-DEPLOY" "$_out"
+_out="$(_dl STUB_PENDING=1 EXAKIT_REPLACE_DB=0)"
+check "EXAKIT_REPLACE_DB=0 declines it" 1 "$(rc_of "$_out")"
+case "$(cat "$TMP/calls")" in *destroy*) check "  ...deleting nothing" none destroy ;; *) check "  ...deleting nothing" none none ;; esac
+contains "  ...with a reason" "NOTE A deployment that never started could not be brought up, and replacing it was declined" "$_out"
+_out="$(_dl STUB_PENDING=0 STUB_FAIL_VERB=deploy,start)"
+contains "a deployment that ever answered keeps the old ladder" "ASK Start the existing database and keep its data? [y]" "$_out"
+contains "  ...whose DELETE still defaults to no" "ASK DELETE the stopped deployment and its data, and deploy a fresh one? This cannot be undone. [n]" "$_out"
+case "$(cat "$TMP/calls")" in *destroy*) check "  ...and deletes nothing unasked" none destroy ;; *) check "  ...and deletes nothing unasked" none none ;; esac
+_out="$(_dl STUB_PENDING=1 EXAKIT_REUSE_DB=1)"
+case "$_out" in *"never started"*) check "EXAKIT_REUSE_DB=1 keeps the old ladder" ladder never ;; *) check "EXAKIT_REUSE_DB=1 keeps the old ladder" ladder ladder ;; esac
+
+echo "exakit status: a deployment the launcher records as failed says why, beside the unchanged word"
+_st_sh="$(sed -n '/^cmd_status()/,/^}/p' "$ROOT/setup/exakit")"
+contains "sh asks the launcher only for a stopped personal deployment" '[ "$_type" = "personal" ] && [ "$_cs_db" = "stopped" ]' "$_st_sh"
+contains "  ...names the container's error" 'personal_container_error' "$_st_sh"
+contains "  ...in the JSON hint, keeping exakit start as the remedy" "failed_detail + \" - exakit start retries the launcher's deploy\"" "$_st_sh"
+contains "  ...and on the screen" 'not reachable — %s' "$(cat "$ROOT/setup/exakit")"
+_st_ps="$(sed -n '/^function Invoke-CmdStatus/,/^}/p' "$ROOT/setup/exakit.ps1")"
+contains "the Windows twin does the same" 'if ($type -eq "personal" -and "$status" -eq "stopped")' "$_st_ps"
+contains "  ...with the container's error" 'Get-PersonalContainerError' "$_st_ps"
 
 echo ""
 echo "personal-readiness.sh: $PASS passed, $FAIL failed"

@@ -13,6 +13,8 @@
 #
 # Options (environment variables, because flags don't travel through a pipe):
 #   EXAKIT_DRY_RUN=1        show the plan and downloaded scripts, install nothing
+#   EXAKIT_DRY_RUN_KEEP=1   with EXAKIT_DRY_RUN, keep the unpacked kit in TMPDIR
+#                           for reading (removed on exit otherwise)
 #   EXAKIT_PREFLIGHT=1      check this machine's requirements, install nothing
 #   EXAKIT_REPO=...         override the source repo (owner/name)
 #   EXAKIT_REF=...          override the git ref to install from
@@ -170,14 +172,62 @@ main() {
     esac
 
     # --- 3. fetch the kit ----------------------------------------------------
+    # SCRATCH SPACE GOES WITH THE RUN, however it ends. The dry run's kit copy
+    # and the downloaded archive used to be removed only on the success path
+    # (the archive) or never (the dry-run copy): 435 dry runs left ~135 GB of
+    # exakit-dry-run.* folders in one developer's TMPDIR. The EXIT trap covers
+    # exit 0, fail() and the signals below, which exit through it. It does not
+    # survive the `exec` into the setup script, and needs not: by then the
+    # archive is gone and a real install has no dry-run copy.
+    _dry_dir=""
+    tmp_tar=""
+    _cleanup_scratch() {
+        [ -n "$tmp_tar" ] && rm -f "$tmp_tar"
+        [ -n "$_dry_dir" ] && rm -rf "$_dry_dir"
+        return 0
+    }
+    trap _cleanup_scratch EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+
+    # _copy_local_kit <checkout> <dest> — what the checkout would ship, not the
+    # checkout. A plain `cp -R` took everything beside the kit as well: .git,
+    # .claude/worktrees (whole other checkouts), caches and build output - about
+    # 500 MB per run on a working dev machine, for a kit of about 65 MB. In a
+    # git checkout that is the files git tracks plus new ones it does not
+    # ignore (so uncommitted work is still tested); anywhere else, everything
+    # but the usual VCS, editor and cache folders. A pipeline answers with its
+    # last command only, so the result is checked rather than the status.
+    _copy_local_kit() {
+        if command -v git >/dev/null 2>&1 &&
+           git -C "$1" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+            git -c core.quotePath=false -C "$1" ls-files -co --exclude-standard \
+                | while IFS= read -r _f; do
+                    # Agent worktrees stay out even where .gitignore does not name .claude.
+                    case "$_f" in .claude/*) continue ;; esac
+                    [ -e "$1/$_f" ] && printf '%s\n' "$_f"
+                done \
+                | (cd "$1" && tar -cf - -T -) | tar -xf - -C "$2"
+        else
+            (cd "$1" && tar -cf - --exclude .git --exclude .claude --exclude .venv \
+                --exclude node_modules --exclude __pycache__ --exclude .ruff_cache \
+                --exclude .pytest_cache --exclude .mypy_cache --exclude dist --exclude build .) \
+                | tar -xf - -C "$2"
+        fi
+        [ -f "$2/install.sh" ]
+    }
+
     # A DRY RUN WRITES NOTHING UNDER EXAKIT_HOME. It used to unpack into
     # $EXAKIT_HOME/kit, which first empties the copy an installed exakit loads
     # its code from, and then said "nothing was installed". It unpacks into a
     # scratch directory instead, so a dry run over a working install changes
-    # nothing about it.
+    # nothing about it - and removes that directory on the way out, unless
+    # EXAKIT_DRY_RUN_KEEP=1 asks to keep it for reading.
     if [ "${EXAKIT_DRY_RUN:-0}" = "1" ]; then
         kit_dir="$(mktemp -d "${TMPDIR:-/tmp}/exakit-dry-run.XXXXXX")" \
             || fail "Could not create a temporary directory for the dry run. Check that ${TMPDIR:-/tmp} is writable and the disk is not full."
+        _dry_dir="$kit_dir"
     fi
     # The failure text names the OWNERSHIP case explicitly. "Check that it is
     # writable" is not an action, and the documented escape hatch for a
@@ -192,8 +242,8 @@ main() {
         export EXAKIT_KIT_SOURCE
         say "Using local kit checkout: $EXAKIT_LOCAL_KIT"
         find "$kit_dir" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null
-        cp -R "$EXAKIT_LOCAL_KIT"/. "$kit_dir/"
-        rm -rf "$kit_dir/.git"
+        _copy_local_kit "$EXAKIT_LOCAL_KIT" "$kit_dir" \
+            || fail "Could not copy the local kit checkout from $EXAKIT_LOCAL_KIT to $kit_dir. Check that the disk is not full."
     else
         EXAKIT_KIT_SOURCE="$EXAKIT_REPO@$EXAKIT_REF"
         export EXAKIT_KIT_SOURCE
@@ -226,10 +276,13 @@ main() {
         tar -xzf "$tmp_tar" -C "$kit_dir" --strip-components 1 \
             || fail "Could not extract the kit archive."
         rm -f "$tmp_tar"
+        tmp_tar=""
     fi
 
+    # Not exec'd: exec skips the EXIT trap, and with it a dry run's kit copy.
     if [ "${EXAKIT_PREFLIGHT:-0}" = "1" ]; then
-        exec bash -c ". '$kit_dir/setup/lib/detect.sh'; preflight_report"
+        bash -c ". '$kit_dir/setup/lib/detect.sh'; preflight_report"
+        exit $?
     fi
 
     # --- 4. show the plan ----------------------------------------------------
@@ -267,7 +320,12 @@ main() {
 
     if [ "${EXAKIT_DRY_RUN:-0}" = "1" ]; then
         say "Dry run requested (EXAKIT_DRY_RUN=1) — nothing was installed, and nothing under $EXAKIT_HOME was changed."
-        say "The kit is unpacked for inspection in a temporary folder: $kit_dir"
+        if [ "${EXAKIT_DRY_RUN_KEEP:-0}" = "1" ]; then
+            _dry_dir=""
+            say "The kit is kept for inspection in a temporary folder (EXAKIT_DRY_RUN_KEEP=1); delete it when done: $kit_dir"
+        else
+            say "The kit was unpacked to a temporary folder for the plan and has been removed. To keep it for reading, set EXAKIT_DRY_RUN_KEEP=1."
+        fi
         say "To install, run the same command again without EXAKIT_DRY_RUN=1."
         exit 0
     fi
