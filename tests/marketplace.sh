@@ -115,8 +115,8 @@ PATH="$WORK/code-bin:$PATH"
 EXAKIT_ABOUT_OFFLINE=1
 export EXAKIT_ABOUT_OFFLINE
 . "$ROOT/setup/lib/common.sh"
+_exakit_marketplace_python_hooks
 . "$ROOT/setup/lib/dash-server.sh"
-. "$ROOT/setup/lib/dbt-exasol.sh"
 . "$ROOT/setup/lib/exasol-vscode.sh"
 . "$ROOT/setup/lib/json-tables.sh"
 . "$ROOT/setup/lib/exasol-scheduler.sh"
@@ -2403,19 +2403,6 @@ has "...and so does the Windows twin, which redirected nowhere at all" \
     'dash-server-validate.log' "$_dsw"
 has "the Windows twin has the same extractor" \
     'function Get-DashServerFailureReason' "$_dsw"
-
-echo "dbt-exasol is graded on its connection, not on the machine's git:"
-# `dbt debug` folds a `git --help` check into the same pass/fail as the
-# connection test, and without git it raises BEFORE the connection is tried.
-# Windows ships no git, so every fresh Windows install reported "dbt could not
-# connect to the database" about a database dbt never opened, while the same
-# kit passed on every developer machine. `--connection` is dbt's own flag for
-# this. Verified against dbt 1.12.5: no git -> `debug` exits 2, `debug
-# --connection` exits 0 with "Connection test: [OK connection ok]".
-has "the shell half asks dbt for the connection alone" \
-    'exakit_run_bounded 60 "$_ddo_dbt" debug --connection' "$(cat "$ROOT/setup/lib/dbt-exasol.sh")"
-has "the Windows twin asks the same question" \
-    'Invoke-ExakitLogged $exe "debug" "--connection"' "$(cat "$ROOT/setup/lib/dbt-exasol.ps1")"
 
 echo
 echo "a scripted add-on that does not run here is skipped, the rest install:"

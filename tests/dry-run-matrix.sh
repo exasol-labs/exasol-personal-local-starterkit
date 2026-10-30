@@ -257,6 +257,7 @@ manifest_get() {
   case \"\$1\" in
     runtime.type) printf '%s\n' personal ;;
     runtime.version) printf '%s\n' 2.2.0 ;;
+    runtime.ownership|components.personal.ownership|components.exapump.ownership|components.mcp_server.ownership|components.pyexasol.ownership) printf '%s\n' kit ;;
     components.exapump.version) printf '%s\n' 0.11.2 ;;
     components.exapump.path) printf '%s\n' '$_stub_bin/exapump' ;;
     components.pyexasol.python) printf '%s\n' '$_stub_bin/python' ;;
@@ -294,6 +295,7 @@ manifest_get() {
   case \"\$1\" in
     runtime.type) printf '%s\n' personal ;;
     runtime.version) printf '%s\n' 2.2.0 ;;
+    runtime.ownership|components.personal.ownership|components.exapump.ownership) printf '%s\n' kit ;;
     components.exapump.version) printf '%s\n' 0.11.2 ;;
     kit.version) printf '%s\n' 0.2.0 ;;
     *) return 1 ;;
@@ -324,6 +326,7 @@ personal_major_plan="$(bash -c "
 manifest_get() {
   case \"\$1\" in
     runtime.version) printf '%s\n' 2.0.0 ;;
+    components.personal.ownership) printf '%s\n' kit ;;
     *) return 1 ;;
   esac
 }
@@ -496,7 +499,7 @@ fi
 echo "Windows parity guards:"
 if command -v pwsh >/dev/null 2>&1; then
     ps_parse="$(pwsh -NoProfile -Command '
-      $files = @("setup/lib/exakit-common.ps1","setup/lib/runtime-personal.ps1","setup/lib/mcp.ps1","setup/lib/dash-server.ps1","setup/lib/dbt-exasol.ps1","setup/lib/exasol-vscode.ps1","setup/lib/json-tables.ps1","setup/setup-windows.ps1","setup/exakit.ps1")
+      $files = @("setup/lib/exakit-common.ps1","setup/lib/runtime-personal.ps1","setup/lib/mcp.ps1","setup/lib/dash-server.ps1","setup/lib/exasol-vscode.ps1","setup/lib/json-tables.ps1","setup/setup-windows.ps1","setup/exakit.ps1")
       foreach ($f in $files) {
         $errors = $null
         $null = [System.Management.Automation.PSParser]::Tokenize((Get-Content -Raw $f), [ref]$errors)
@@ -646,34 +649,14 @@ else
     check "install(linux personal resume matches macos)" "yes" "no"
 fi
 
-# The marketplace, both sides. The registry, the installed-only gate on
-# `update all`, the command dispatch, and the dash-server module twins must
-# exist on each side, or the Windows path silently loses the add-on layer.
-if grep -q 'exakit_marketplace_addons()' "$ROOT/setup/lib/common.sh" && \
-   grep -q 'exakit_marketplace_installed_addons' "$ROOT/setup/lib/common.sh" && \
-   grep -q 'dash_server_update' "$ROOT/setup/lib/dash-server.sh" && \
-   grep -q 'dash_server_install' "$ROOT/setup/lib/dash-server.sh" && \
-   grep -q 'marketplace) shift; .*_with_notice cmd_marketplace' "$ROOT/setup/exakit" && \
-   grep -q 'function Get-ExakitMarketplaceAddons' "$ROOT/setup/lib/exakit-common.ps1" && \
-   grep -q 'Get-ExakitMarketplaceInstalledAddons' "$ROOT/setup/lib/exakit-common.ps1" && \
-   grep -q 'function Update-DashServer' "$ROOT/setup/lib/dash-server.ps1" && \
-   grep -q 'function Install-DashServer' "$ROOT/setup/lib/dash-server.ps1" && \
-   grep -q 'exasol_vscode_update' "$ROOT/setup/lib/exasol-vscode.sh" && \
-   grep -q 'exasol_vscode_install' "$ROOT/setup/lib/exasol-vscode.sh" && \
-   grep -q 'function Update-ExasolVscode' "$ROOT/setup/lib/exasol-vscode.ps1" && \
-   grep -q 'function Install-ExasolVscode' "$ROOT/setup/lib/exasol-vscode.ps1" && \
-   grep -q '"exasol-vscode"' "$ROOT/setup/lib/exakit-common.ps1" && \
-   grep -q 'json_tables_update' "$ROOT/setup/lib/json-tables.sh" && \
-   grep -q 'json_tables_install' "$ROOT/setup/lib/json-tables.sh" && \
-   grep -q 'function Update-JsonTables' "$ROOT/setup/lib/json-tables.ps1" && \
-   grep -q 'function Install-JsonTables' "$ROOT/setup/lib/json-tables.ps1" && \
-   grep -q '"json-tables"' "$ROOT/setup/lib/exakit-common.ps1" && \
-   grep -q 'dbt_exasol_update' "$ROOT/setup/lib/dbt-exasol.sh" && \
-   grep -q 'dbt_exasol_install' "$ROOT/setup/lib/dbt-exasol.sh" && \
-   grep -q 'function Update-DbtExasol' "$ROOT/setup/lib/dbt-exasol.ps1" && \
-   grep -q 'function Install-DbtExasol' "$ROOT/setup/lib/dbt-exasol.ps1" && \
-   grep -q '"dbt-exasol"' "$ROOT/setup/lib/exakit-common.ps1" && \
-   grep -q '"marketplace"  { Invoke-CmdMarketplace' "$ROOT/setup/exakit.ps1"; then
+# The catalog and Python hook list must expose the same add-ons to both
+# platform entry points. The adapter tests exercise the calls themselves.
+_market_ids="$(python3 "$ROOT/marketplace/metadata.py" "$ROOT" registry | cut -d'|' -f1 | sort)"
+_market_hook_ids="$(python3 "$ROOT/marketplace/metadata.py" "$ROOT" shell-hooks | awk -F'|' '$2 == "install" { print $1 }' | sort)"
+check "marketplace(hooks)" "$_market_ids" "$_market_hook_ids"
+if grep -q 'marketplace) shift; .*_with_notice cmd_marketplace' "$ROOT/setup/exakit" && \
+   grep -q '"marketplace"  { Invoke-CmdMarketplace' "$ROOT/setup/exakit.ps1" && \
+   grep -q 'Initialize-ExakitMarketplacePythonHooks' "$ROOT/setup/exakit.ps1"; then
     check "marketplace(twins)" "yes" "yes"
 else
     check "marketplace(twins)" "yes" "no"

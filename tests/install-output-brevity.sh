@@ -483,14 +483,12 @@ has "dash-server has a summary"     'function Get-DashServerSummary'     "$DS_PS
 has "json-tables has a summary"     'function Get-JsonTablesSummary'     "$JT_PS1"
 has "exasol-vscode has a summary"   'function Get-ExasolVscodeSummary'   "$VS_PS1"
 has "exasol-scheduler has a summary" 'function Get-ExasolSchedulerSummary' "$(cat "$ROOT/setup/lib/exasol-scheduler.ps1")"
-has "dbt-exasol has a summary"      'function Get-DbtExasolSummary'      "$(cat "$ROOT/setup/lib/dbt-exasol.ps1")"
-# Counted from the registry, so a new add-on that forgets its SummaryFn row
-# fails here by count even before its own has-check exists.
+has "dbt-exasol has a summary"      'def summary('                      "$(cat "$ROOT/marketplace/addons/dbt_exasol.py")"
 has "notebook has a summary"        'function Get-NotebookSummary'        "$(cat "$ROOT/setup/lib/notebook.ps1")"
 has "udf-devkit has a summary"      'function Get-UdfDevkitSummary'      "$(cat "$ROOT/setup/lib/udf-devkit.ps1")"
-# The shell registry is the count, so adding an add-on needs no edit here.
-_addon_count="$(sed -n '/^exakit_marketplace_addons() {/,/^}/p' "$ROOT/setup/lib/common.sh" | grep -c "printf")"
-check "every add-on is registered" "$_addon_count" "$(printf '%s\n' "$COMMON_PS1" | grep -cE 'SummaryFn *= *"')"
+_catalog_ids="$(python3 "$ROOT/marketplace/metadata.py" "$ROOT" registry | cut -d'|' -f1 | sort)"
+_summary_ids="$(python3 "$ROOT/marketplace/metadata.py" "$ROOT" shell-hooks | awk -F'|' '$2 == "summary" { print $1 }' | sort)"
+check "every add-on has a summary hook" "$_catalog_ids" "$_summary_ids"
 has "the apply loop reads the hook" '$addon.PSObject.Properties["SummaryFn"]' "$COMMON_PS1"
 has "and only when it resolves"     'Get-Command $addon.SummaryFn -ErrorAction SilentlyContinue' "$COMMON_PS1"
 

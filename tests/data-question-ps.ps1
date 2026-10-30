@@ -29,6 +29,7 @@ foreach ($m in "dash-server", "json-tables", "notebook", "udf-devkit", "exasol-s
     $p = Join-Path $repo "setup/lib/$m.ps1"
     if (Test-Path $p) { . $p }
 }
+Initialize-ExakitMarketplacePythonHooks
 $script:LogFile = $null
 $script:PASS = 0
 $script:FAIL = 0

@@ -53,6 +53,19 @@ class AdapterDryRunTest(unittest.TestCase):
         self.assertIn(str(self.profile), result.stdout)
         self._assert_preserved()
 
+    def test_public_catalog_lists_dbt_on_both_platform_entry_points(self) -> None:
+        commands = [[str(ROOT / "setup/exakit")]]
+        if shutil.which("pwsh"):
+            commands.append(["pwsh", "-NoProfile", "-File", str(ROOT / "setup/exakit.ps1")])
+        for prefix in commands:
+            with self.subTest(prefix=prefix[0]):
+                result = subprocess.run([*prefix, "marketplace", "--list", "--json"],
+                                        env=self._environment(), capture_output=True,
+                                        text=True, timeout=35, check=False)
+                self.assertEqual(0, result.returncode, result.stderr)
+                addons = json.loads(result.stdout)["addons"]
+                self.assertIn("dbt-exasol", {addon["id"] for addon in addons})
+
     def test_bash_install_passes_selected_version_document(self) -> None:
         selected = self.base / "selected versions.json"
         selected.write_text('{"components":{}}')

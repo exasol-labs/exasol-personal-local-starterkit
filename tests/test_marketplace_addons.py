@@ -9,7 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "marketplace"))
@@ -61,6 +61,20 @@ class AddonSafetyTest(unittest.TestCase):
         uv.assert_not_called()
         with self.assertRaisesRegex(AddonFailure, "not kit-owned"):
             dbt_exasol.uninstall(self.ctx)
+
+    def test_dbt_validation_checks_connection_without_git(self) -> None:
+        credential = self.home / "credentials" / "db-password"
+        credential.parent.mkdir()
+        credential.write_text("private-test-password\n", encoding="utf-8")
+        with patch("addons.dbt_exasol.subprocess.run", return_value=Mock(returncode=0)), \
+             patch("addons.dbt_exasol.socket.create_connection"), \
+             patch.object(KitContext, "run_logged") as run:
+            self.assertTrue(dbt_exasol.validate(self.ctx))
+        args = run.call_args.args
+        self.assertEqual(("debug", "--connection"), args[-2:])
+        self.assertNotIn("private-test-password", " ".join(str(arg) for arg in args))
+        self.assertEqual("private-test-password", run.call_args.kwargs["env"]["DBT_ENV_SECRET_EXASOL_PASSWORD"])
+        self.assertEqual("connection", self.manifest.get("components.dbt_exasol.validated_by"))
 
     def test_json_asset_digest_mismatch_deletes_partial_download(self) -> None:
         target = self.home / "engine.bin"
