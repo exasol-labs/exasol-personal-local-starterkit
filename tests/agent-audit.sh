@@ -249,7 +249,7 @@ echo "R2-4b. every command answers --help, the help command included:"
 # `exakit help --help` was the one spelling refused as an unknown option: the
 # universal --help hook skips the help command on purpose, and the help arm's
 # own guard did not list --help. It opens the help command's page now.
-check "exakit help --help opens the help command's page" "exakit help [--all] [<component>]" \
+check "exakit help --help opens the help command's page" "exakit help [<component> | <command> [<action>...]] [--all] [--json]" \
     "$(bash "$CLI" help --help 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g' | grep -v '^[[:space:]]*$' | head -1 | sed 's/^[[:space:]]*//')"
 
 echo "R2-5. exakit sql --json is an option, and the gate still runs first:"
@@ -512,21 +512,29 @@ for _bin in bash sh env sed awk grep cat tr cut sort head tail date mkdir rm chm
     _src="$(command -v "$_bin" 2>/dev/null || true)"
     [ -n "$_src" ] && ln -sf "$_src" "$NOPYPATH/$_bin"
 done
-# A curl that downloads nothing and leaves a fingerprint. The point of the
-# assertion below is that this file is never created: a read-only state query
-# must not so much as REACH for the network, let alone install 36 MB from it.
-printf '#!/bin/sh\n: > "%s"\n' "$WORK/uv-download-attempted" > "$NOPYPATH/curl"
+# Record curl arguments so the check distinguishes a uv bootstrap from other
+# probes made by status.
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >> "%s"\n' "$WORK/curl-calls" > "$NOPYPATH/curl"
 chmod +x "$NOPYPATH/curl"
 _nopy="$(EXAKIT_HOME="$NOPY" EXAKIT_BIN_DIR="$NOPYBIN" EXAKIT_DISABLE_SYSTEM_PYTHON=1 \
     PATH="$NOPYPATH" bash "$CLI" status --json 2>/dev/null)"
 check "no state query ever reached for the uv download" "absent" \
-    "$([ -f "$WORK/uv-download-attempted" ] && echo present || echo absent)"
+    "$(grep -q 'astral.sh/uv/install.sh' "$WORK/curl-calls" 2>/dev/null && echo present || echo absent)"
 check "with no usable interpreter the answer is still one JSON object" "yes" \
     "$(printf '%s' "$_nopy" | python3 -m json.tool >/dev/null 2>&1 && echo yes || echo no)"
 check "...carrying the three contract keys" "yes" \
     "$(printf '%s' "$_nopy" | python3 -c 'import json,sys; d=json.load(sys.stdin); print("yes" if all(k in d for k in ("installed","status","remedy")) else "no")' 2>/dev/null)"
 check "...and NOTHING was installed into the bin dir" "empty" \
     "$([ -z "$(ls -A "$NOPYBIN" 2>/dev/null)" ] && echo empty || echo "$(ls -A "$NOPYBIN")")"
+printf '#!/bin/sh\nprintf "offline=%%s downloads=%%s args=%%s\\n" "${UV_OFFLINE:-}" "${UV_PYTHON_DOWNLOADS:-}" "$*" >> "%s"\nexit 1\n' "$WORK/uv-calls" > "$NOPYPATH/uv"
+chmod +x "$NOPYPATH/uv"
+_nopy="$(EXAKIT_HOME="$NOPY" EXAKIT_BIN_DIR="$NOPYBIN" EXAKIT_DISABLE_SYSTEM_PYTHON=1 \
+    PATH="$NOPYPATH" bash "$CLI" status --json 2>/dev/null)"
+check "a preinstalled uv cannot download Python for status" "absent" \
+    "$(grep -E 'args=(run |python find )' "$WORK/uv-calls" 2>/dev/null | grep -q -v 'offline=1 downloads=never' && echo present || echo absent)"
+check "the uv-present fallback remains JSON" "yes" \
+    "$(printf '%s' "$_nopy" | python3 -m json.tool >/dev/null 2>&1 && echo yes || echo no)"
+rm -f "$NOPYPATH/uv"
 
 echo "R5-5. the state queries agree on installed and on the exit code:"
 _pre_doc="$(pre mcp-doctor --json 2>/dev/null)"
@@ -735,8 +743,9 @@ has "...from the registry, not a hand-written set" 'Get-ExakitMarketplaceAddons 
 has "the twin's status --json carries the service urls" 'urls            = $serviceUrls' "$_ps"
 # The hook lives in the shared library: udf-devkit's restart uses it as well.
 has "...resolved through a registry hook, not a hardcoded id" 'function Get-ExakitServiceUrl' "$_ps$(cat "$ROOT/setup/lib/exakit-common.ps1")"
-has "dash-server registers its UrlFn" 'UrlFn       = "Get-DashServerUrl"' "$(cat "$ROOT/setup/lib/exakit-common.ps1")"
-has "...and defines it" "function Get-DashServerUrl" "$(cat "$ROOT/setup/lib/dash-server.ps1")"
+has "dash-server registers its url hook" 'dash-server|url|url' \
+    "$(python3 "$ROOT/marketplace/metadata.py" "$ROOT" shell-hooks)"
+has "...and defines it" 'def url(' "$(cat "$ROOT/marketplace/addons/dash_server.py")"
 has "the shell side still carries urls" '"urls": umap' "$(cat "$CLI")"
 _dashskill="$(cat "$ROOT/skills/dash-server/SKILL.md")"
 has "the dash-server skill points at the JSON that carries the URL" \

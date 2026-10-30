@@ -193,6 +193,11 @@ def validate(ctx: KitContext) -> bool:
             service.start(_launch_command(ctx), port)
         ok = _http(port, "/mcp", browser=False)
         browser = _http(port, "/", browser=True) if ok else False
+        if was_running and ok and not browser:
+            service.stop(port)
+            service.start(_launch_command(ctx), port)
+            ok = _http(port, "/mcp", browser=False)
+            browser = _http(port, "/", browser=True) if ok else False
         ctx.manifest.set_many({f"{RECEIPT}.validated": ok, f"{RECEIPT}.ui_validated": browser})
         return ok
     except AddonFailure:

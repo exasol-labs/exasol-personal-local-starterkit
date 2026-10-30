@@ -50,7 +50,7 @@ export HOME="$WORK/home" EXAKIT_HOME="$WORK/kit" EXAKIT_BIN_DIR="$WORK/bin"
 unset EXAKIT_NOTEBOOK_VENV EXAKIT_REFUSAL_JSON EXAKIT_PYX_DSN EXAKIT_PYX_USER EXAKIT_PYX_PWFILE STUB_EXIT
 mkdir -p "$HOME" "$EXAKIT_HOME" "$EXAKIT_BIN_DIR" "$WORK/root/setup/lib"
 # shellcheck disable=SC1091
-. "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/help.sh"; . "$ROOT/setup/lib/notebook.sh"; . "$ROOT/setup/lib/describe.sh"
+. "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/help.sh"; . "$ROOT/setup/lib/describe.sh"
 run_python_any() { python3 "$@"; }
 EXAKIT_LOG_FILE="$WORK/log"; : > "$EXAKIT_LOG_FILE"
 manifest_init >/dev/null 2>&1
@@ -59,7 +59,7 @@ manifest_init >/dev/null 2>&1
 # sandbox whose service records what it was asked.
 PY3="$(command -v python3)"
 cp "$ROOT/test_data/describe/stub_service.py" "$WORK/root/setup/lib/describe_service.py"
-notebook_venv_python() { printf '%s\n' "$PY3"; }
+manifest_set components.notebook.python "$PY3"
 exakit_repo_root() { printf '%s\n' "$WORK/root"; }
 # The help renderer reads the installed kit's documents, which this sandbox has
 # none of; what matters here is that --help asks for the command's page.
@@ -120,9 +120,9 @@ run LAB.READINGS;                  check "exit 1" "1" "$CODE"; contains "names t
 
 echo "a missing notebook environment names the repair:"
 manifest_set components.notebook.version 3.1.0
-notebook_venv_python() { printf '%s\n' "$WORK/nowhere/python"; }
+manifest_set components.notebook.python "$WORK/nowhere/python"
 run LAB.READINGS;                  check "exit 1" "1" "$CODE"; contains "names exakit notebook setup" "exakit notebook setup" "$OUT"
-notebook_venv_python() { printf '%s\n' "$PY3"; }
+manifest_set components.notebook.python "$PY3"
 
 echo "the service runs with the manifest's connection settings and the arguments given:"
 manifest_set runtime.dsn 127.0.0.1:8563

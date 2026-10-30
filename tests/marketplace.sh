@@ -55,7 +55,7 @@ trap 'rm -rf "$WORK"' EXIT
 EXAKIT_HOME="$WORK/home"
 EXAKIT_BIN_DIR="$WORK/bin"
 HOME="$WORK/fake-home"
-export HOME
+export EXAKIT_HOME EXAKIT_BIN_DIR HOME
 EXAKIT_EXAPUMP_CONFIG_DIR="$HOME/.exapump"
 export EXAKIT_EXAPUMP_CONFIG_DIR
 mkdir -p "$EXAKIT_HOME" "$EXAKIT_BIN_DIR" "$HOME"
@@ -116,14 +116,13 @@ EXAKIT_ABOUT_OFFLINE=1
 export EXAKIT_ABOUT_OFFLINE
 . "$ROOT/setup/lib/common.sh"
 _exakit_marketplace_python_hooks
-. "$ROOT/setup/lib/dash-server.sh"
 
 # ...and its own port. The default 5100 is where a developer's REAL dash-server
 # listens, and the ownership probe would rightly call that a foreign process
 # holding the suite's port. A sandbox-unique high port keeps every machine
 # reading the same. Explicit, so the manifest never overrides it.
 EXAKIT_DASH_SERVER_PORT="$((5900 + $$ % 90))"
-_EXAKIT_DS_PORT_EXPLICIT=1
+export EXAKIT_DASH_SERVER_PORT
 
 manifest_init >/dev/null 2>&1
 
@@ -141,7 +140,8 @@ check "addons list carries every registered add-on" "dash-server dbt-exasol exas
     "$(exakit_marketplace_addons | cut -d'|' -f1 | tr '\n' ' ' | sed 's/ $//')"
 check "addon module is loaded" "yes" "$(exakit_marketplace_addon_available dash-server && echo yes || echo no)"
 check "component block" "components.dash-server" "$(_exakit_component_block dash-server)"
-check "fallback version is the constant" "$EXAKIT_DASH_SERVER_VERSION_FALLBACK" "$(_exakit_component_fallback dash-server)"
+_dash_fallback="$(python3 -c 'import json; d=json.load(open("'"$ROOT"'/marketplace/catalog.json")); print(next(x["default_version"] for x in d["addons"] if x["id"] == "dash-server"))')"
+check "fallback version comes from the catalog" "$_dash_fallback" "$(_exakit_component_fallback dash-server)"
 # Both readers (python and the awk fallback) must agree with a plain json.load
 # on the new component's path — the same parity promise versions-manifest.sh
 # makes for every other component.
@@ -152,16 +152,16 @@ check "advertised version (awk fallback reader)" "$_shipped_ds" \
     "$( ( EXAKIT_DISABLE_SYSTEM_PYTHON=1; exakit_ensure_uv() { return 1; }; exakit_versions_value components.dash-server.version "$ROOT/versions.json" ) )"
 # The published manifest can PREDATE an add-on (a kit copy ships it before the
 # advertised set catches up): the available version must fall back to the
-# module's constant instead of reading as unknown — that empty answer used to
+# catalog fallback instead of reading as unknown — that empty answer used to
 # make `exakit update dash-server` die on a machine whose fetched doc had no
 # dash-server block yet.
-check "a manifest without the add-on falls back to the module constant" \
-    "$EXAKIT_DASH_SERVER_VERSION_FALLBACK" \
+check "a manifest without the add-on uses the catalog fallback" \
+    "$_dash_fallback" \
     "$( ( exakit_versions_value() { return 1; }; exakit_component_available dash-server ) )"
 check "env override wins" "9.9.9" "$(EXAKIT_DASH_SERVER_VERSION=9.9.9 _exakit_component_env_override dash-server)"
 check "release url is the tag tarball" \
     "https://github.com/exasol-labs/dash-server/archive/refs/tags/v0.1.0.tar.gz" \
-    "$(dash_server_release_url 0.1.0)"
+    "$(PYTHONPATH="$ROOT/marketplace" python3 -c 'from addons import dash_server; print(dash_server._release_url("0.1.0"))')"
 
 echo "update targets never sneak an add-on in:"
 check "not installed -> excluded from all" "exakit runtime exapump mcp pyexasol skills" \
@@ -239,59 +239,8 @@ check "a failing installer surfaces" "rc=1" "$( (
     printf 'rc=%s' "$?"
 ) )"
 
-echo "launcher generation:"
-printf 's3cr3t-value\n' > "$WORK/pwfile"
-chmod 600 "$WORK/pwfile"
-manifest_set runtime.dsn "127.0.0.1:8563"
-manifest_set runtime.user "sys"
-manifest_set runtime.password_file "$WORK/pwfile"
-manifest_set components.mcp_server.connection.user "mcp_readonly"
-manifest_set components.mcp_server.connection.password_file "$WORK/pwfile"
-manifest_set components.mcp_server.connection.validated true
-( dash_server_write_launcher >/dev/null 2>&1 )
-_launcher="$EXAKIT_BIN_DIR/dash-server"
-check "launcher exists and is executable" "yes" "$([ -x "$_launcher" ] && echo yes || echo no)"
-_launcher_body="$(cat "$_launcher" 2>/dev/null)"
-has  "launcher bakes the DSN" "127.0.0.1:8563" "$_launcher_body"
-has  "launcher reads the credential file at run time" "$WORK/pwfile" "$_launcher_body"
-lacks "the password itself never lands in the launcher" "s3cr3t-value" "$_launcher_body"
-has  "user overrides win (setdefault DSN guard)" 'DASH_SERVER_EXASOL_DSN:-' "$_launcher_body"
-has  "instance path is kit-managed" "$EXAKIT_HOME/dash-server/instance" "$_launcher_body"
-has  "profile bootstrap goes through the env secret" "DASH_SERVER_EXASOL_SECRET_ENV_VAR" "$_launcher_body"
-# Running the launcher while a copy is already serving must explain, not hand
-# the user dash-server's single-coordinator traceback.
-has  "the launcher refuses a duplicate politely" "already running" "$_launcher_body"
-has  "and points at the state and log commands" "exakit logs dash-server" "$_launcher_body"
-# ADD-07: the launcher printed a pre-flight verdict for the RECORDED port and
-# then execed dash-server with no port at all, so it bound the upstream default
-# - on a machine that moved off 5100, the busy one. The bind host was left to
-# upstream too, on the one path the kit does not control, while the module
-# asserts loopback everywhere else. Both are setdefaults, so an exported value
-# still wins.
-#
-# The bind now names the RESOLVED port rather than a baked number. That check
-# used to read 'DASH_SERVER_PORT:=5177' - it asserted the generation port was
-# written into the file, which is exactly the copy that later drifted from the
-# kit's record (probe on one port, bind on another). The invariant it was
-# really after - the pre-flight and the bind agree - is what the variable
-# guarantees; which port that resolves to is proven behaviourally further down.
-( EXAKIT_DASH_SERVER_PORT=5177 dash_server_write_launcher >/dev/null 2>&1 )
-_launcher_5177="$(cat "$_launcher" 2>/dev/null)"
-has  "the launcher passes the RESOLVED port to the server" 'DASH_SERVER_PORT:=$_ds_port' "$_launcher_5177"
-has  "...and pins the bind host to loopback"               'DASH_SERVER_HOST:=127.0.0.1' "$_launcher_5177"
-has  "...exported, or the child never sees them"           'export DASH_SERVER_HOST DASH_SERVER_PORT' "$_launcher_5177"
-# The twin: Windows had the identical hole, and the identical drift.
-_ds_ps="$(cat "$ROOT/setup/lib/dash-server.ps1")"
-has  "the PowerShell launcher does the same" 'if not defined DASH_SERVER_PORT set' "$_ds_ps"
-has  "...binding the RESOLVED port, not a baked one" 'DASH_SERVER_PORT=%EXAKIT_DS_PORT%' "$_ds_ps"
-has  "...resolved from the kit's record at run time" 'EXAKIT_DS_MANIFEST' "$_ds_ps"
-has  "...with the plain default as the last resort" 'if not defined EXAKIT_DS_PORT set' "$_ds_ps"
-# Scoped to the GENERATED launcher's probe, not the file: the module itself
-# resolves the port and probes it, and those uses are correct.
-has  "...probing that same resolved port" 'http://127.0.0.1:%EXAKIT_DS_PORT%/mcp' "$_ds_ps"
-has  "...host too"                           'if not defined DASH_SERVER_HOST set' \
-    "$(cat "$ROOT/setup/lib/dash-server.ps1")"
-( dash_server_write_launcher >/dev/null 2>&1 )   # back to the recorded port
+echo "Dash Server launcher and port contracts use the Python add-on tests:"
+check "the Python Dash Server contract suite exists" yes "$([ -f "$ROOT/tests/test_marketplace_dash_server.py" ] && echo yes || echo no)"
 
 echo "generic registry (no per-add-on case arms):"
 # The whole point of the generic arms: an id the registry does not carry must
@@ -402,45 +351,6 @@ check "a scripted run resolves no description" "rc=0 looked=0" "$( (
     exakit_marketplace_menu >/dev/null 2>&1
     printf 'rc=%s looked=%s' "$?" "$(wc -l < "$WORK/looked" | tr -d ' ')" ) )"
 
-echo "pip self-repair (dash-server app builds shell out to python -m pip):"
-# The stub python fails `-m pip` until a marker file appears; the stubbed uv
-# call plants it. Built OUTSIDE command substitution: bash 3.2 misparses a
-# case close-paren inside $( ... ).
-_pv="$WORK/pipless-venv"
-mkdir -p "$_pv/bin"
-rm -f "$_pv/bin/python"
-cat > "$_pv/bin/python" <<'PYEOF'
-#!/bin/sh
-case "$*" in
-    *"-m pip"*) [ -f "${0%/*}/pip-marker" ] || exit 1 ;;
-    *) echo "0.1.0" ;;
-esac
-PYEOF
-chmod +x "$_pv/bin/python"
-_pip_repair="$( (
-    EXAKIT_DASH_SERVER_VENV="$_pv"
-    run_logged() { # the uv call: record it, then "install" pip
-        printf '%s\n' "$*" >> "$WORK/uv-calls"
-        : > "$_pv/bin/pip-marker"
-    }
-    : > "$WORK/uv-calls"
-    _dash_server_ensure_pip fake-uv >/dev/null 2>&1 || { echo "repair-failed"; exit 0; }
-    grep -q "fake-uv pip install --python $_pv/bin/python pip" "$WORK/uv-calls" && echo "repaired"
-) )"
-check "a pip-less venv is repaired through uv" "repaired" "$_pip_repair"
-_pip_noop="$( (
-    EXAKIT_DASH_SERVER_VENV="$_pv"   # now carries the pip-marker from the repair above
-    run_logged() { printf '%s\n' "$*" >> "$WORK/uv-calls-2"; }
-    : > "$WORK/uv-calls-2"
-    _dash_server_ensure_pip fake-uv >/dev/null 2>&1
-    [ -s "$WORK/uv-calls-2" ] && echo "reinstalled" || echo "left alone"
-) )"
-check "a venv that already has pip is left alone" "left alone" "$_pip_noop"
-
-echo "soft-fail accounting:"
-( _dash_server_not_installed "the disk caught fire" >/dev/null 2>&1 )
-check "a soft miss records validated=false" "false" "$(manifest_get components.dash_server.validated)"
-
 echo "update repair path:"
 # Naming an add-on explicitly must reach its module even when the version
 # matches: the hook doubles as the repair command (it rewrites a launcher a
@@ -460,12 +370,6 @@ check "explicit update reaches the hook when versions match" "hook-ran" "$(cat "
   dash_server_update() { printf 'hook-ran' > "$WORK/hook-marker"; }
   exakit_update all ) >/dev/null 2>&1
 check "update all still skips an already-current add-on" "" "$(cat "$WORK/hook-marker")"
-check "already-current says so and regenerates the launcher" "yes" "$( (
-    dash_server_installed_version() { echo "0.0.1-test"; }
-    exakit_component_available() { echo "0.0.1-test"; }
-    rm -f "$EXAKIT_BIN_DIR/dash-server"
-    dash_server_update >/dev/null 2>&1 && [ -x "$EXAKIT_BIN_DIR/dash-server" ] && echo yes || echo no
-) )"
 
 echo "a system install outside the kit is respected:"
 # A same-named binary on PATH that is not the kit launcher: the tool is
@@ -545,37 +449,6 @@ check "update dispatch with module missing refuses" "no" "$(
         && echo yes || echo no
 )"
 has "update dispatch refusal names the module" "dash-server module is not available" "$_upd_missing"
-
-echo "install refuses a venv that cannot answer for its version:"
-# The check is about the version probe, not uv — CI runners have no uv on
-# PATH, so the bootstrap is stubbed to a fake binary either way (a machine
-# with a real uv never reaches the stub).
-printf '#!/bin/sh\nexit 0\n' > "$WORK/stub-uv"
-chmod +x "$WORK/stub-uv"
-_noversion_out="$( (
-    EXAKIT_DASH_SERVER_VENV="$WORK/hollow-venv"
-    exakit_ensure_uv() { EXAKIT_UV_BIN="$WORK/stub-uv"; return 0; }
-    run_logged() { return 0; }               # venv creation and pip install "succeed"
-    dash_server_installed_version() { return 1; }   # ...but the package never materializes
-    dash_server_install 2>&1
-    printf 'rc=%s' "$?"
-) )"
-has "a hollow install is refused, not reported" "cannot report a dash-server version" "$_noversion_out"
-has "and it returns failure" "rc=1" "$_noversion_out"
-
-echo "validation shortcut when the port already answers:"
-mkdir -p "$WORK/live-venv/bin"
-rm -f "$WORK/live-venv/bin/python"
-printf '#!/bin/sh\nexit 0\n' > "$WORK/live-venv/bin/python"
-chmod +x "$WORK/live-venv/bin/python"
-_live_out="$( (
-    EXAKIT_DASH_SERVER_VENV="$WORK/live-venv"
-    _dash_server_port_foreign_desc() { return 1; }   # nobody else holds the port
-    _dash_server_http_answers() { return 0; }    # something already serves /mcp
-    dash_server_validate 2>&1
-) )"
-has "an already-running server validates without a second bind" "control plane answers" "$_live_out"
-check "and records validated=true" "true" "$(manifest_get components.dash_server.validated)"
 
 echo "everything covered — the menu becomes a status screen:"
 mkdir -p "$EXAKIT_HOME/dash-server-venv/bin"
@@ -673,121 +546,6 @@ check "the refusal names EXAKIT_MARKETPLACE_ADDONS" "yes" "$( (
 '; }
     exakit_marketplace_menu 2>&1 | grep -q EXAKIT_MARKETPLACE_ADDONS && echo yes || echo no
 ) )"
-echo "the browser UI is validated separately from the control plane:"
-# The packaging gap that shipped a 500 to a user looked healthy on /mcp. A
-# broken page must be reported, never pass silently — and it must not fail the
-# install, because agents can still drive the add-on over MCP.
-_ui_bad="$( (
-    _dash_server_ui_answers() { return 1; }
-    _dash_server_check_ui 2>&1
-) )"
-has "a broken dashboards page is called out" "does not render" "$_ui_bad"
-check "and recorded, not swallowed" "false" "$(manifest_get components.dash_server.ui_validated)"
-_ui_good="$( (
-    _dash_server_ui_answers() { return 0; }
-    _dash_server_check_ui 2>&1
-) )"
-has "a working page is confirmed" "Dashboards page answers" "$_ui_good"
-check "and recorded" "true" "$(manifest_get components.dash_server.ui_validated)"
-
-# The fresh-install path starts its own probe server, and the browser page must
-# be probed WHILE that server is alive. Probing after the kill asked a DEAD
-# port whether it renders, so every fresh install warned "the dashboards page
-# does not render" about a page that worked the moment the user opened it.
-# The fake server below drops its marker when killed, so a probe that happens
-# after the kill genuinely sees nothing — which is what makes this discriminate.
-_ui_order="$( (
-    dash_server_venv_python() { printf '%s\n' "$EXAKIT_HOME/dash-server-venv/bin/python"; }
-    mkdir -p "$EXAKIT_HOME/dash-server-venv/bin"
-    rm -f "$EXAKIT_HOME/dash-server-venv/bin/python"
-    printf '#!/bin/sh\nexit 0\n' > "$EXAKIT_HOME/dash-server-venv/bin/python"
-    chmod 755 "$EXAKIT_HOME/dash-server-venv/bin/python"
-    _dash_server_resolve_port() { :; }
-    _dash_server_port_foreign_desc() { return 1; }
-    _dash_server_http_answers() { [ -f "$WORK/probe-up" ]; }
-    _dash_server_ui_answers() { [ -f "$WORK/probe-up" ]; }
-    EXAKIT_DASH_SERVER_BIN="$WORK/fake-dash-server"
-    cat > "$WORK/fake-dash-server" <<FAKEEOF
-#!/bin/sh
-trap 'rm -f "$WORK/probe-up"; exit 0' TERM INT
-touch "$WORK/probe-up"
-while :; do sleep 1; done
-FAKEEOF
-    chmod 755 "$WORK/fake-dash-server"
-    _dash_server_print_usage() { :; }
-    rm -f "$WORK/probe-up"
-    dash_server_validate >/dev/null 2>&1
-    printf 'ui=%s' "$(manifest_get components.dash_server.ui_validated)"
-) )"
-check "the UI is probed while the probe server is alive" "ui=true" "$_ui_order"
-
-# The stale-process repair: a server started BEFORE the package-data restore
-# serves 500 on templates that are on disk, and re-validating the same process
-# can never heal it. When the broken page is on OUR OWN instance, validation
-# restarts it once; a foreign holder is never touched.
-_ui_heal="$( (
-    dash_server_venv_python() { printf '%s\n' "$EXAKIT_HOME/dash-server-venv/bin/python"; }
-    mkdir -p "$EXAKIT_HOME/dash-server-venv/bin"
-    rm -f "$EXAKIT_HOME/dash-server-venv/bin/python"
-    printf '#!/bin/sh\nexit 0\n' > "$EXAKIT_HOME/dash-server-venv/bin/python"
-    chmod 755 "$EXAKIT_HOME/dash-server-venv/bin/python"
-    _dash_server_resolve_port() { :; }
-    _dash_server_port_foreign_desc() { return 1; }
-    _dash_server_http_answers() { return 0; }
-    _dash_server_ui_answers() { return 1; }
-    _dash_server_port_is_ours() { return 0; }
-    dash_server_stop() { printf 'STOPPED ' >> "$WORK/heal-trace"; }
-    dash_server_start() { printf 'STARTED ' >> "$WORK/heal-trace"; _dash_server_ui_answers() { return 0; }; }
-    _dash_server_print_usage() { :; }
-    : > "$WORK/heal-trace"
-    dash_server_validate >/dev/null 2>&1
-    printf '%sui=%s' "$(cat "$WORK/heal-trace")" "$(manifest_get components.dash_server.ui_validated)"
-) )"
-check "a stale instance of ours is restarted, then judged" "STOPPED STARTED ui=true" "$_ui_heal"
-_ui_foreign="$( (
-    dash_server_venv_python() { printf '%s\n' "$EXAKIT_HOME/dash-server-venv/bin/python"; }
-    _dash_server_resolve_port() { :; }
-    _dash_server_port_foreign_desc() { return 1; }
-    _dash_server_http_answers() { return 0; }
-    _dash_server_ui_answers() { return 1; }
-    _dash_server_port_is_ours() { return 1; }
-    dash_server_stop() { printf 'STOPPED ' >> "$WORK/heal-trace2"; }
-    dash_server_start() { printf 'STARTED ' >> "$WORK/heal-trace2"; }
-    _dash_server_print_usage() { :; }
-    : > "$WORK/heal-trace2"
-    dash_server_validate >/dev/null 2>&1
-    [ -s "$WORK/heal-trace2" ] && printf 'restarted' || printf 'untouched'
-) )"
-check "a foreign holder is never restarted" "untouched" "$_ui_foreign"
-# The restore only fills GAPS: a file the install already placed is never
-# overwritten, so a fixed upstream release makes it a silent no-op.
-check "restoring package data leaves existing files alone" "original" "$( (
-    _drp_dir="$WORK/site/dash_server"
-    mkdir -p "$_drp_dir/templates"
-    printf 'original' > "$_drp_dir/templates/keep.html"
-    dash_server_venv_python() { printf '%s\n' "$WORK/stub-py"; }
-    printf '#!/bin/sh\nprintf "%s\\n" "'"$_drp_dir"'"\n' > "$WORK/stub-py"; chmod +x "$WORK/stub-py"
-    fetch() { return 1; }          # no network in the suite: the restore bails out
-    _dash_server_restore_package_data >/dev/null 2>&1
-    cat "$_drp_dir/templates/keep.html"
-) )"
-
-echo "add-on uninstall hooks (what folds them into exakit uninstall):"
-# dash-server: dry narrates, real removes venv + state + launcher + record.
-mkdir -p "$EXAKIT_HOME/dash-server-venv" "$EXAKIT_HOME/dash-server" "$EXAKIT_BIN_DIR"
-: > "$EXAKIT_BIN_DIR/dash-server"
-manifest_set components.dash_server.version "0.1.0"
-_ds_dry="$(dash_server_uninstall 1 2>&1)"
-has "dash-server dry-run narrates, removes nothing" "will remove" "$_ds_dry"
-check "and the venv survives a dry-run" "yes" "$([ -d "$EXAKIT_HOME/dash-server-venv" ] && echo yes || echo no)"
-dash_server_uninstall 0 >/dev/null 2>&1
-check "real run removes venv, state and launcher" "GONE GONE GONE" "$(
-    for p in "$EXAKIT_HOME/dash-server-venv" "$EXAKIT_HOME/dash-server" "$EXAKIT_BIN_DIR/dash-server"; do
-        [ -e "$p" ] && printf 'KEPT ' || printf 'GONE '
-    done | sed 's/ $//'
-)"
-check "and clears the manifest record" "absent" "$(manifest_get components.dash_server.version >/dev/null 2>&1 && echo present || echo absent)"
-
 echo "EVERYTHING behaves as a master toggle (uninstall menu):"
 # Layout under test — the shape exakit_uninstall_menu builds:
 #   1 Skip · 2 #Components · 3,4 components · 5 #Add-ons · 6 add-on · 7 EVERYTHING
@@ -876,116 +634,6 @@ has "a not-yet-written log says so" "has not been written yet" "$( (
 ) 2>&1 || true)"
 rm -f "$EXAKIT_HOME/logs/dash-server.log"
 
-echo "services and autostart (is it running, and does it come back after a reboot):"
-# A stand-in server on a quiet port: the status probe is an HTTP check, so
-# anything that answers proves the plumbing without installing dash-server.
-mkdir -p "$EXAKIT_HOME/logs" "$EXAKIT_HOME/dash-server-venv/bin"
-# The stand-in server must look like ours to the ownership probe, which matches
-# on the venv path. The real console script is run as
-# `<venv>/bin/python <venv>/bin/dash-server`, so the venv shows up in argv - a
-# bare `python3 -m http.server` never would. A script INSIDE the venv bin
-# reproduces that shape (a symlinked interpreter does not: macOS resolves
-# argv[0] to the framework binary).
-cat > "$EXAKIT_HOME/dash-server-venv/bin/serve.py" <<'SERVEEOF'
-import http.server, socketserver, sys
-with socketserver.TCPServer(("127.0.0.1", int(sys.argv[1])), http.server.SimpleHTTPRequestHandler) as httpd:
-    httpd.serve_forever()
-SERVEEOF
-check "not installed reads as such, never 'stopped'" "not installed" "$(
-    ( EXAKIT_DASH_SERVER_BIN="$WORK/nope"; dash_server_status )
-)"
-cat > "$EXAKIT_BIN_DIR/dash-server" <<SRVEOF
-#!/bin/sh
-exec python3 "$EXAKIT_HOME/dash-server-venv/bin/serve.py" $EXAKIT_DASH_SERVER_PORT
-SRVEOF
-chmod +x "$EXAKIT_BIN_DIR/dash-server"
-check "installed but down reads stopped" "stopped" "$(dash_server_status)"
-if python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); s.close()' >/dev/null 2>&1; then
-    dash_server_start >/dev/null 2>&1
-    check "start brings it up" "running" "$(dash_server_status)"
-    check "and records a pidfile" "yes" "$([ -f "$EXAKIT_DASH_SERVER_PIDFILE" ] && echo yes || echo no)"
-    has "starting twice is idempotent" "already running" "$(dash_server_start 2>&1)"
-    dash_server_stop >/dev/null 2>&1
-    check "stop takes it down and cleans the pidfile" "stopped cleaned" \
-        "$(printf '%s %s' "$(dash_server_status)" "$([ -f "$EXAKIT_DASH_SERVER_PIDFILE" ] && echo kept || echo cleaned)")"
-    has "stopping twice is idempotent" "already stopped" "$(dash_server_stop 2>&1)"
-else
-    echo "  SKIP  sandbox does not allow local listener binding; service process check runs in unrestricted CI"
-fi
-
-echo "a port held by someone else is never mistaken for dash-server:"
-# The old probe asked "does something answer HTTP here", so ANY web server on
-# the port made the kit report a healthy add-on it never started. Ownership is
-# matched on the venv path, the way the real console script is recognised.
-#
-# The foreign listener must PROVABLY be up before anything is asserted about
-# it: a fixed sleep was not enough on GitHub's macOS runners (a cold python
-# can take longer than 2s to serve), and every check below reads as a product
-# failure when the fixture silently is not there. So: try a few candidate
-# ports (the first choice can be genuinely taken on a shared runner), poll
-# until the listener ANSWERS, and if none can be started, skip the section
-# with the reason instead of failing on a fixture.
-_foreign_port=""
-_foreign_pid=""
-for _fp_try in "$((6100 + $$ % 80))" "$((6300 + $$ % 80))" "$((6500 + $$ % 80))"; do
-    python3 -m http.server "$_fp_try" --bind 127.0.0.1 >/dev/null 2>&1 &
-    _fp_pid=$!
-    _fp_up=0
-    _fp_n=0
-    while [ "$_fp_n" -lt 40 ]; do
-        if curl -fsS -o /dev/null --max-time 2 "http://127.0.0.1:$_fp_try/" 2>/dev/null; then
-            _fp_up=1
-            break
-        fi
-        # The process dying (port taken, python unhappy) ends the wait early.
-        kill -0 "$_fp_pid" 2>/dev/null || break
-        sleep 0.5
-        _fp_n=$((_fp_n + 1))
-    done
-    if [ "$_fp_up" -eq 1 ]; then
-        _foreign_port="$_fp_try"
-        _foreign_pid="$_fp_pid"
-        break
-    fi
-    kill "$_fp_pid" 2>/dev/null
-    wait "$_fp_pid" 2>/dev/null || true
-done
-if [ -z "$_foreign_port" ]; then
-    echo "  SKIP  no local test listener could be started on this machine — port-ownership checks not run"
-else
-_port_verdict="$( (
-    EXAKIT_DASH_SERVER_PORT="$_foreign_port"
-    printf 'status=%s ' "$(dash_server_status | cut -d'(' -f1 | sed 's/ *$//')"
-    printf 'ours=%s ' "$(_dash_server_port_is_ours && echo yes || echo no)"
-    printf 'foreign=%s' "$(_dash_server_port_foreign_desc >/dev/null 2>&1 && echo yes || echo no)"
-) )"
-check "a foreign listener reads as stopped, not running" "status=stopped ours=no foreign=yes" "$_port_verdict"
-has "status names the process holding it" "held by another process" \
-    "$( ( EXAKIT_DASH_SERVER_PORT="$_foreign_port"; dash_server_status ) )"
-_start_refusal="$( ( EXAKIT_DASH_SERVER_PORT="$_foreign_port"; dash_server_start 2>&1 ) )"
-has "start refuses instead of claiming success" "cannot bind" "$_start_refusal"
-has "and says how to move to a free port" "EXAKIT_DASH_SERVER_PORT" "$_start_refusal"
-_val_refusal="$( ( EXAKIT_DASH_SERVER_PORT="$_foreign_port"; dash_server_validate 2>&1 ) )"
-has "validation refuses to claim health on someone else's port" "was not validated" "$_val_refusal"
-# An install with no explicit port steps over the busy one instead of failing.
-_settled="$( (
-    EXAKIT_DASH_SERVER_PORT="$_foreign_port"
-    _EXAKIT_DS_PORT_EXPLICIT=0
-    _dash_server_settle_port >/dev/null 2>&1
-    printf '%s' "$EXAKIT_DASH_SERVER_PORT"
-) )"
-check "an unnamed port steps past the collision" "$((_foreign_port + 1))" "$_settled"
-# A port the user NAMED is refused rather than silently moved.
-_explicit="$( (
-    EXAKIT_DASH_SERVER_PORT="$_foreign_port"
-    _EXAKIT_DS_PORT_EXPLICIT=1
-    _dash_server_settle_port 2>&1 | head -1
-) )"
-has "a named port is refused, never moved behind your back" "is held by another process" "$_explicit"
-kill "$_foreign_pid" 2>/dev/null
-wait "$_foreign_pid" 2>/dev/null || true
-fi
-
 # The service registry: database first, then any installed add-on that serves.
 manifest_set runtime.type personal
 mkdir -p "$EXAKIT_HOME/dash-server-venv/bin"
@@ -997,8 +645,10 @@ manifest_set components.dash_server.python "$EXAKIT_HOME/dash-server-venv/bin/py
 # for it, because a venv whose metadata answers a version is not evidence
 # that the install ever finished.
 manifest_set components.dash_server.version "0.1.0"
-check "the registry lists the database and the service add-on" "database dash-server" \
-    "$(exakit_service_ids | tr '\n' ' ' | sed 's/ $//')"
+check "the registry lists the database first" "database" \
+    "$(exakit_service_ids | head -1)"
+check "the registry includes the service add-on" "dash-server" \
+    "$(exakit_service_ids | grep -x dash-server)"
 # An add-on with no service hooks must not appear as a service.
 check "a non-service add-on stays out of the registry" "no" "$(
     exakit_service_ids | grep -q exasol-vscode && echo yes || echo no
@@ -1518,43 +1168,6 @@ else
     check "exactly one add-ons table survives" "skipped" "skipped"
 fi
 
-echo "== a half-installed add-on can be retried, and Windows can extract =="
-
-DS_PS1="$(cat "$ROOT/setup/lib/dash-server.ps1")"
-DS_SH="$(cat "$ROOT/setup/lib/dash-server.sh")"
-
-# A full Windows install ended with "dash-server installer reported: tar
-# (child): Cannot connect to C: resolve failed". Two stacked causes:
-#
-# 1. `tar` off PATH is Git's GNU tar on a developer machine, ahead of Windows'
-#    own bsdtar, and GNU tar reads "C:\..." as host:path rsh syntax.
-# 2. $ErrorActionPreference is Stop module-wide, so that stderr became a
-#    TERMINATING error - which 2>$null does not prevent - and a best-effort
-#    data-file top-up took the whole add-on install down with it.
-lacks "tar is not taken off PATH"   '& tar -xzf'                        "$DS_PS1"
-has   "...it is asked for by name"  'Join-Path $env:SystemRoot "System32\tar.exe"' "$DS_PS1"
-has   "...and cannot terminate"     '$ErrorActionPreference = "Continue"'  "$DS_PS1"
-has   "...with the code inspected"  '$tarCode = $LASTEXITCODE'             "$DS_PS1"
-
-# That failure left the venv behind but no launcher, and the version check read
-# ONLY the venv - so every caller believed the add-on was fully installed:
-# the marketplace answered "already present - nothing to install", `exakit
-# update dash-server` answered "everything is already current", and starting it
-# answered "not installed". No documented command could recover it.
-#
-# Presence now means USABLE, on both sides. json-tables already took this line.
-has "presence needs the record"     'if (-not (Get-ExakitManifestValue "components.dash_server.version")) { return $null }' "$DS_PS1"
-has "...and the twin agrees"        '_dsv_recorded="$(manifest_get components.dash_server.version' "$DS_SH"
-# ...and the venv is still asked, because neither half alone is evidence.
-has "the venv answers the version"  'return (Get-DashServerPackageVersion)'  "$DS_PS1"
-has "...and on the shell side"      '    dash_server_package_version'        "$DS_SH"
-# The installer asks the venv-only question, because it runs before the
-# record exists - asking the strict one there made a good install report
-# "the venv cannot report a dash-server version after the install".
-has "the installer asks the venv"   'if (-not (Get-DashServerPackageVersion)) {' "$DS_PS1"
-has "...and on the shell side"      '_ds_now="$(dash_server_package_version'   "$DS_SH"
-
-echo
 echo "a refused lookup is not a missing release:"
 # On a real install json-tables failed with "the prebuilt mirror release was not
 # found ... run the pkg workflow once to publish it". That release had existed
@@ -1761,13 +1374,6 @@ has "the present probe dispatches the hook first"   '$addon.SystemPresentFn' "$C
 has "the registry declares json-tables' latest"     'json-tables|latest|latest' "$_python_hooks"
 lacks "...but not the scheduler's, which is looked up upstream" 'LatestFn     = "Get-ExasolSchedulerLatest"' "$COMMON_PS_TP"
 has "the latest lookup dispatches the hook first"   '$addon.LatestFn' "$COMMON_PS_TP"
-# ADD-01/CPY-02: "recorded, so every command agrees" was false on Windows -
-# the module never read the port back. The audit's own zero-occurrence check,
-# inverted into the guard.
-check "dash-server.ps1 reads the recorded port back" "1" \
-    "$(grep -c 'Get-ExakitManifestValue "components.dash_server.port"' "$ROOT/setup/lib/dash-server.ps1")"
-has "...resolved before every entry point" 'function Resolve-DashServerPort' "$(cat "$ROOT/setup/lib/dash-server.ps1")"
-
 # ADD-11: the code CLI drains inherited stdin, which ate the marketplace's own
 # row loop and silently dropped every add-on listed after exasol-vscode. The
 # shell half closes stdin (</dev/null); the Windows half must redirect it too -
@@ -1776,118 +1382,6 @@ has "...resolved before every entry point" 'function Resolve-DashServerPort' "$(
 has "the code CLI cannot drain stdin" \
     'stdin=subprocess.DEVNULL' "$(cat "$ROOT/marketplace/addons/exasol_vscode.py")"
 
-echo "the dash-server launcher never carries an authoritative port:"
-# BAKED-IN PORTS DRIFT, and this one did. The generated launcher used to hold
-# the port it was written with - in its pre-flight probe AND in the bind
-# variable it exports - while the kit records its own choice separately. A
-# launcher written when the port was 5102 kept probing and binding 5102 while
-# the kit passed --port 5100 and waited on it: the launcher answered "already
-# running: 5102", the kit answered "did not answer on 5100", and
-# `exakit status` called a live add-on stopped.
-#
-# The launcher now resolves the port exactly as the kit does - argv, then the
-# kit's record, then the plain default - and holds no copy of its own. These
-# checks generate one with 5102 as its GENERATION port and then prove every
-# resolution step ignores that number.
-_dsp="$WORK/dsport"; mkdir -p "$_dsp/bin" "$_dsp/venv" "$_dsp/home"
-( EXAKIT_BIN_DIR="$_dsp/bin"
-  EXAKIT_DASH_SERVER_BIN="$_dsp/bin/dash-server"
-  EXAKIT_DASH_SERVER_VENV="$_dsp/venv"
-  EXAKIT_DASH_SERVER_HOME="$_dsp"
-  EXAKIT_DASH_SERVER_PORT=5102
-  _EXAKIT_DS_PORT_EXPLICIT=1
-  _EXAKIT_DS_PORT_RESOLVED=1
-  dash_server_write_launcher >/dev/null 2>&1 ) || true
-check "the launcher was generated" "yes" \
-    "$([ -x "$_dsp/bin/dash-server" ] && echo yes || echo no)"
-# No literal port survives in the probe or the bind - those are the two lines
-# that drifted, and a number in either brings the bug back.
-check "no literal port in its probes or its bind" "0" \
-    "$(grep -cE 'iTCP:[0-9]|127\.0\.0\.1:[0-9]+/mcp|DASH_SERVER_PORT:=[0-9]' "$_dsp/bin/dash-server" 2>/dev/null | head -1)"
-# Which port it RESOLVES, observed rather than read: stubbed lsof/ps report a
-# foreign holder for whatever port is probed, so the launcher names that port in
-# its refusal. Hermetic - no port is bound and nothing is started.
-mkdir -p "$_dsp/probe"
-printf '#!/bin/sh\nprintf "4242\\n"\n' > "$_dsp/probe/lsof"
-printf '#!/bin/sh\nprintf "/usr/bin/some-unrelated-app\\n"\n' > "$_dsp/probe/ps"
-chmod +x "$_dsp/probe/lsof" "$_dsp/probe/ps"
-_dsp_port_of() { # _dsp_port_of <manifest-port|-> [args...] -> the port it named
-    if [ "$1" = "-" ]; then rm -f "$_dsp/home/manifest.json"
-    else printf '{\n  "components": {\n    "dash_server": {\n      "port": %s\n    }\n  }\n}\n' "$1" > "$_dsp/home/manifest.json"
-    fi
-    shift
-    PATH="$_dsp/probe:$PATH" EXAKIT_HOME="$_dsp/home" sh "$_dsp/bin/dash-server" "$@" 2>&1 |
-        sed -n 's/^Port \([0-9]*\) is held.*/\1/p' | head -1
-}
-check "a bare run obeys the kit's record, not the generation port" "5100" "$(_dsp_port_of 5100)"
-check "...even when the record moved somewhere else entirely" "5311" "$(_dsp_port_of 5311)"
-check "--port on the command line outranks the record" "5199" "$(_dsp_port_of 5100 --host 127.0.0.1 --port 5199)"
-check "--port=N is understood too" "5177" "$(_dsp_port_of 5100 --port=5177)"
-check "with no record at all it falls back to the plain default" "5100" "$(_dsp_port_of -)"
-# The other half of the record's honesty: a successful start writes back the
-# port that actually bound, so status and the launcher's fallback cannot be
-# reading an intention that never happened.
-has "a successful start records the port it bound" \
-    'manifest_set components.dash_server.port "$EXAKIT_DASH_SERVER_PORT" 2>/dev/null' \
-    "$(cat "$ROOT/setup/lib/dash-server.sh")"
-
-# THE WINDOWS LAUNCHER HAD NONE OF THIS, and that is why it drifted: every
-# check above exercises the sh launcher by running it, and cmd cannot be run
-# here, so the .cmd twin went untested and quietly stopped reading argv at all.
-# The kit starts it as `dash-server.cmd --host 127.0.0.1 --port <n>` and then
-# waits on <n>; with argv unread, the wrapper's own pre-flight probed whatever
-# its manifest scan turned up and could answer "already running" about a port
-# nobody had asked about, while the kit reported "did not answer on 5100".
-# Read from the generator's source, which is the closest this host can get to
-# running cmd.
-_dsw="$(cat "$ROOT/setup/lib/dash-server.ps1")"
-echo "the Windows dash-server launcher resolves the port the same way:"
-has "it walks argv for --port before anything else" \
-    'if /i `"%~1`"==`"--port`" goto exakit_ds_argv_want' "$_dsw"
-has "...and understands --port=N too" \
-    'if `"%EXAKIT_DS_ARG:~0,7%`"==`"--port=`" goto exakit_ds_argv_eq' "$_dsw"
-check "the argv walk runs before the manifest is consulted" "yes" \
-    "$(printf '%s' "$_dsw" | awk '/exakit_ds_argv_done/{a=NR} /EXAKIT_DS_MANIFEST=%USERPROFILE%/{if(a&&NR>a){print "yes";exit}}' | head -1)"
-has "the manifest scan takes the FIRST port key, not the last" \
-    'do if not defined EXAKIT_DS_PORT set `"EXAKIT_DS_PORT=%%P`"' "$_dsw"
-has "a non-numeric value is discarded rather than bound" \
-    'for /f `"delims=0123456789`" %%R in' "$_dsw"
-# `shift` does not touch %*, so walking argv must not cost the server its
-# arguments - the kit's --host and --port still have to reach it.
-has "the whole command line still reaches the server after the walk" \
-    '`"$exe`" %*' "$_dsw"
-# Same rule as the sh launcher: the probe and the bind carry no port of their
-# own, only the one resolved above.
-check "no literal port in its probe or its bind" "0" \
-    "$(printf '%s' "$_dsw" | grep -cE '127\.0\.0\.1:[0-9]+/mcp|DASH_SERVER_PORT=[0-9]+`')"
-
-echo "a dash-server that does not come up says why:"
-# "see the log" IS NOT A DIAGNOSIS - and on the Windows half the named log had
-# nothing in it, because the validation probe was started with no redirection
-# at all. Both halves now redirect to their own file and put the reason on
-# screen. The extractor is exercised for real: a traceback must yield its
-# exception, not its first frame.
-_dsr="$WORK/dsreason"; mkdir -p "$_dsr"
-printf 'Serving on http://127.0.0.1:5100\nTraceback (most recent call last):\n  File "x.py", line 1\nOSError: [Errno 98] Address already in use\n' > "$_dsr/trace.log"
-printf 'dash-server is already running: http://127.0.0.1:8563 (MCP: /mcp)\n' > "$_dsr/wrongport.log"
-: > "$_dsr/empty.log"
-check "a traceback yields its exception, not its first frame" \
-    "OSError: [Errno 98] Address already in use" "$(_dash_server_failure_reason "$_dsr/trace.log")"
-check "a launcher that mis-resolved the port is quoted verbatim" \
-    "dash-server is already running: http://127.0.0.1:8563 (MCP: /mcp)" \
-    "$(_dash_server_failure_reason "$_dsr/wrongport.log")"
-check "an empty log yields nothing, so the caller falls back" "" \
-    "$(_dash_server_failure_reason "$_dsr/empty.log")"
-check "a log that is not there yields nothing either" "" \
-    "$(_dash_server_failure_reason "$_dsr/absent.log")"
-has "the validation probe redirects somewhere it can read back" \
-    'dash-server-validate.log' "$(cat "$ROOT/setup/lib/dash-server.sh")"
-has "...and so does the Windows twin, which redirected nowhere at all" \
-    'dash-server-validate.log' "$_dsw"
-has "the Windows twin has the same extractor" \
-    'function Get-DashServerFailureReason' "$_dsw"
-
-echo
 echo "a scripted add-on that does not run here is skipped, the rest install:"
 # A persona's add-on list is written for every platform. One id it names that
 # does not apply here used to end the env answer (die) before anything was

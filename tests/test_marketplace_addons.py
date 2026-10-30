@@ -68,6 +68,58 @@ class AddonSafetyTest(unittest.TestCase):
         self.assertEqual("3.13", args[args.index("--python") + 1])
         self.assertEqual("kit", self.manifest.get("components.dash_server.ownership"))
 
+    def test_dash_validation_restarts_owned_process_after_broken_ui(self) -> None:
+        python = self.home / "dash-server-venv/bin/python"
+        python.parent.mkdir(parents=True)
+        python.write_text("python", encoding="utf-8")
+        service = Mock()
+        service.status.return_value = "running"
+        with patch.object(dash_server, "_service", return_value=service), \
+             patch.object(dash_server, "_http", side_effect=[True, False, True, True]), \
+             patch.object(dash_server.subprocess, "run", return_value=Mock(returncode=0)):
+            self.assertTrue(dash_server.validate(self.ctx))
+        service.stop.assert_called_once_with(5100)
+        service.start.assert_called_once()
+        self.assertTrue(self.manifest.get("components.dash_server.validated"))
+        self.assertTrue(self.manifest.get("components.dash_server.ui_validated"))
+
+    def test_dash_install_repairs_pip_in_existing_environment(self) -> None:
+        python = self.home / "dash-server-venv/bin/python"
+        python.parent.mkdir(parents=True)
+        python.write_text("python", encoding="utf-8")
+        with patch.object(KitContext, "require_uv"), \
+             patch.object(KitContext, "target_version", return_value="0.1.1"), \
+             patch.object(KitContext, "run_logged") as run, \
+             patch.object(dash_server.subprocess, "run", return_value=Mock(returncode=1)), \
+             patch.object(dash_server, "package_version", side_effect=[None, "0.1.1"]), \
+             patch.object(dash_server, "_settle_port", return_value=5100), \
+             patch.object(dash_server, "_restore_templates"), \
+             patch.object(dash_server, "_write_launcher", return_value=self.home / "dash"):
+            dash_server.install(self.ctx)
+        commands = [call.args for call in run.call_args_list]
+        self.assertTrue(any("Seeding Dash Server pip" == args[0] for args in commands))
+        self.assertTrue(any("Installing Dash Server 0.1.1" == args[0] for args in commands))
+
+    def test_dash_validation_probes_fresh_server_before_stopping_it(self) -> None:
+        python = self.home / "dash-server-venv/bin/python"
+        python.parent.mkdir(parents=True)
+        python.write_text("python", encoding="utf-8")
+        service = Mock()
+        service.status.return_value = "stopped"
+        probe_order = []
+        service.stop.side_effect = lambda _port: probe_order.append("stop")
+        def probe(_port: int, path: str, *, browser: bool) -> bool:
+            probe_order.append(path)
+            return True
+        with patch.object(dash_server, "_service", return_value=service), \
+             patch.object(dash_server, "_http", side_effect=probe), \
+             patch.object(dash_server.subprocess, "run", return_value=Mock(returncode=0)):
+            self.assertTrue(dash_server.validate(self.ctx))
+        self.assertEqual(["/mcp", "/", "stop"], probe_order)
+        service.start.assert_called_once()
+        service.stop.assert_called_once_with(5100)
+        self.assertTrue(self.manifest.get("components.dash_server.ui_validated"))
+
     def test_dbt_uses_a_secret_reference_and_preserves_external_adapter(self) -> None:
         profile = dbt_exasol._profile_text(self.ctx)
         self.assertIn("DBT_ENV_SECRET_EXASOL_PASSWORD", profile)

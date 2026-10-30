@@ -4939,15 +4939,20 @@ function Invoke-ExakitMarketplacePython {
         }
         $captured = [System.Collections.Generic.List[string]]::new()
         if ($python) {
+            $ErrorActionPreference = "Continue"
             & $python @serviceArgs 2>&1 | ForEach-Object {
                 $line = "$_"
-                if ($line -match '^\s*•\s+(.+)$') { Set-ExakitAddonActivity -Message $Matches[1] }
+                if ($line -match ('^\s*' + [char]0x2022 + '\s+(.+)$')) { Set-ExakitAddonActivity -Message $Matches[1] }
                 $captured.Add($line)
             }
         } else {
-            & $uv run --python $script:ManagedPythonVersion --no-project python @serviceArgs 2>&1 | ForEach-Object {
+            $uvArgs = @('run')
+            if (-not $mutating) { $uvArgs += '--offline' }
+            $uvArgs += @('--python', $script:ManagedPythonVersion, '--no-project', 'python')
+            $ErrorActionPreference = "Continue"
+            & $uv @uvArgs @serviceArgs 2>&1 | ForEach-Object {
                 $line = "$_"
-                if ($line -match '^\s*•\s+(.+)$') { Set-ExakitAddonActivity -Message $Matches[1] }
+                if ($line -match ('^\s*' + [char]0x2022 + '\s+(.+)$')) { Set-ExakitAddonActivity -Message $Matches[1] }
                 $captured.Add($line)
             }
         }
@@ -4997,7 +5002,10 @@ function Invoke-ExakitMarketplaceCli {
             $previousUvCache = $env:UV_CACHE_DIR
             try {
                 if (-not $env:UV_CACHE_DIR) { $env:UV_CACHE_DIR = Join-Path $script:ExakitHome 'cache/uv' }
-                & $uv run --python $script:ManagedPythonVersion --no-project python $target @CmdArgs
+                $uvArgs = @('run')
+                if ($readOnly) { $uvArgs += '--offline' }
+                $uvArgs += @('--python', $script:ManagedPythonVersion, '--no-project', 'python')
+                & $uv @uvArgs $target @CmdArgs
                 $code = $LASTEXITCODE
             } finally {
                 if ($null -eq $previousUvCache) { Remove-Item Env:UV_CACHE_DIR -ErrorAction SilentlyContinue }
@@ -5031,7 +5039,10 @@ function Initialize-ExakitMarketplacePythonHooks {
         $previousUvCache = $env:UV_CACHE_DIR
         try {
             if (-not $env:UV_CACHE_DIR) { $env:UV_CACHE_DIR = Join-Path $script:ExakitHome 'cache/uv' }
-            $rows = @(& $uv run --python $script:ManagedPythonVersion --no-project python $metadata $root shell-hooks)
+            $uvArgs = @('run')
+            if ($script:ExakitReadOnlyQuery) { $uvArgs += '--offline' }
+            $uvArgs += @('--python', $script:ManagedPythonVersion, '--no-project', 'python')
+            $rows = @(& $uv @uvArgs $metadata $root shell-hooks)
         } finally {
             if ($null -eq $previousUvCache) { Remove-Item Env:UV_CACHE_DIR -ErrorAction SilentlyContinue }
             else { $env:UV_CACHE_DIR = $previousUvCache }
@@ -6113,7 +6124,7 @@ function Invoke-ExakitMarketplaceApplyPython {
                     }
                     return
                 }
-                if ($line -match '^\s*•\s+(.+)$') {
+                if ($line -match ('^\s*' + [char]0x2022 + '\s+(.+)$')) {
                     Set-ExakitAddonActivity -Message $Matches[1]
                     if ($script:ExakitAddonBarLive) { Set-ExakitProgressPhase -Phase "$($script:ExakitApplyCurrentId) - $($Matches[1])" }
                     elseif (-not $script:ExakitAddonTableLive) { Info $Matches[1] }

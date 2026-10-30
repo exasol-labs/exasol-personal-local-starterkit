@@ -346,8 +346,7 @@ port_listener_pids() {
 # "Stop it or set EXAKIT_DB_PORT" is unactionable when "it" is never named, and
 # the holder is often not what the user expects: on a Windows machine with WSL,
 # a failed WSL install leaves wslrelay holding the port after its container is
-# long gone. dash-server has named its port's holder this way for a while
-# (_dash_server_port_foreign_desc); the database port deserves the same.
+# long gone. Naming the holder makes the remedy actionable.
 #
 # Inside a WSL distro this can still come back empty while the port really is
 # taken: Windows and WSL share localhost, and no tool in the distro can see a

@@ -167,6 +167,13 @@ else
     exit 4
 fi
 
+# Module discovery runs while the libraries load. Mark read-only commands
+# before that work so an absent Python cannot trigger the uv bootstrap.
+case "${1:-help}" in
+    status|version|--version|-v|info|mcp-status|mcp-doctor|skills|catalog|logs|help|--help|-h|whats-new)
+        export EXAKIT_READONLY_QUERY=1 ;;
+esac
+
 . "$_lib_dir/common.sh"
 . "$_lib_dir/detect.sh"
 . "$_lib_dir/runtime-personal.sh"
@@ -2658,11 +2665,6 @@ esac
 # an install failure forever. exakit_note_failure honours the flag, and every
 # child process inherits it. (A separate case, not a ;;& fall-through arm:
 # that is bash 4.0 syntax and this file must run on the 3.2 macOS ships.)
-case "${1:-help}" in
-    status|version|--version|-v|info|mcp-status|mcp-doctor|skills|catalog|logs|help|--help|-h|whats-new)
-        export EXAKIT_READONLY_QUERY=1 ;;
-esac
-
 case "${1:-help}" in
     preflight) shift; _exakit_refuse_unknown_options preflight "" "$@"; _with_notice preflight_report ;;
     status)   shift

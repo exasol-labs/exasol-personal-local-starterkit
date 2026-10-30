@@ -992,7 +992,8 @@ check "no skill advertises 'exakit autostart on'" "0" \
     "$(grep -rl 'exakit autostart on' "$ROOT/skills" 2>/dev/null | wc -l | tr -d ' ')"
 check "...and no help document either" "0" \
     "$(grep -rl 'exakit autostart on' "$ROOT/setup/help" 2>/dev/null | wc -l | tr -d ' ')"
-has "dash-server declares its url hook" 'dash_server_url()' "$(cat "$ROOT/setup/lib/dash-server.sh")"
+has "dash-server declares its url hook" 'dash-server|url|url' \
+    "$(python3 "$ROOT/marketplace/metadata.py" "$ROOT" shell-hooks)"
 
 echo
 echo "the lifecycle keeps its promises on the unhappy paths:"

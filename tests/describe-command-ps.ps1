@@ -15,7 +15,6 @@ $env:EXAKIT_HOME = Join-Path $work "home"
 $env:EXAKIT_BIN_DIR = Join-Path $work "bin"
 foreach ($name in @("EXAKIT_PYX_DSN", "EXAKIT_PYX_USER", "EXAKIT_PYX_PWFILE", "STUB_EXIT")) { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }
 . (Join-Path $repo "setup/lib/exakit-common.ps1")
-. (Join-Path $repo "setup/lib/notebook.ps1")
 . (Join-Path $repo "setup/lib/describe.ps1")
 $script:LogFile = $null
 $script:PASS = 0
@@ -40,7 +39,6 @@ if (-not $python3) { $python3 = (Get-Command python -ErrorAction Stop) }
 $script:StubPython = $python3.Source
 Copy-Item (Join-Path $repo "test_data/describe/stub_service.py") (Join-Path $work "root\setup\lib\describe_service.py")
 $script:StubRoot = Join-Path $work "root"
-function Get-NotebookVenvPython { return $script:StubPython }
 function Get-ExakitRepoRoot { return $script:StubRoot }
 # The help renderer reads the installed kit's documents, which this sandbox has
 # none of; what matters here is that --help asks for the command's page.
@@ -71,6 +69,7 @@ function Asked([string]$Key) {
 
 try {
     Initialize-ExakitManifest
+    Set-ExakitManifestValue "components.notebook.python" $script:StubPython
 
     Write-Host "bad arguments are refused with exit 2 before anything runs:"
     Run @();                                     Check "no table" 2 $CODE; Contains "names the shape" "exakit describe SCHEMA.TABLE" $OUT
@@ -117,9 +116,9 @@ try {
 
     Write-Host "a missing notebook environment names the repair:"
     Set-ExakitManifestValue "components.notebook.version" "3.1.0"
-    function Get-NotebookVenvPython { return (Join-Path $work "nowhere\python.exe") }
+    Set-ExakitManifestValue "components.notebook.python" (Join-Path $work "nowhere\python.exe")
     Run @("LAB.READINGS");                       Check "exit 1" 1 $CODE; Contains "names exakit notebook setup" "exakit notebook setup" $OUT
-    function Get-NotebookVenvPython { return $script:StubPython }
+    Set-ExakitManifestValue "components.notebook.python" $script:StubPython
 
     Write-Host "the service runs with the manifest's connection settings and the arguments given:"
     $pwfile = Join-Path (Join-Path $env:EXAKIT_HOME "credentials") "personal_sys_password"

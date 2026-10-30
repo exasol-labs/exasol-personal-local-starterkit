@@ -9,6 +9,9 @@
 - Remove the redundant Exasol for VS Code shell and PowerShell implementations. The public CLI and isolated end-to-end flow use the Python add-on, with focused checks for editor discovery, stdin isolation, WSL staging, checksums, ownership and uninstall.
 - Remove the redundant Exasol Scheduler shell and PowerShell implementations. The Python add-on now clears a prior launcher failure marker on an explicit restart; tests cover release pins, archive validation, and restart state.
 - Remove the redundant JSON Tables shell and PowerShell implementations. The JSON data loader now checks the Python add-on before ingest. The Python release lookup accepts `GITHUB_TOKEN`, distinguishes a missing release from API refusal, and falls back to the kit repository for a local checkout. A missing Windows cargo shim makes an install retryable.
+- Remove the redundant Dash Server shell and PowerShell implementations. The Python add-on owns port selection, launcher repair, service health, and one restart when its MCP endpoint works but the browser page is unavailable.
+- Mark Bash state queries read-only before loading Python add-on hooks. Run uv queries offline on Bash and PowerShell so a state read cannot download a managed Python runtime.
+- Resolve `describe`'s Notebook interpreter from the installation receipt on Bash and PowerShell. It no longer requires the legacy Notebook helper to be loaded.
 - Make the workflow command test replace a virtualenv Python symlink before writing its stub, so the fixture cannot overwrite the shared interpreter.
 - Make the Textual launcher use the kit's managed Python version override on every platform.
 - Use that managed Python override when Dash Server, dbt-exasol, Notebook, JSON Tables, and Exasol Scheduler create their virtual environments.

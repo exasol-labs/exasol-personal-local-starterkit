@@ -1558,7 +1558,11 @@ run_python() {
         return $?
     fi
     exakit_ensure_uv || return 1
-    "$EXAKIT_UV_BIN" run --python "$EXAKIT_MANAGED_PYTHON_VERSION" --no-project python "$@"
+    if [ "${EXAKIT_READONLY_QUERY:-0}" = 1 ]; then
+        UV_OFFLINE=1 UV_PYTHON_DOWNLOADS=never "$EXAKIT_UV_BIN" run --python "$EXAKIT_MANAGED_PYTHON_VERSION" --no-project python "$@"
+    else
+        "$EXAKIT_UV_BIN" run --python "$EXAKIT_MANAGED_PYTHON_VERSION" --no-project python "$@"
+    fi
 }
 
 # Optional Python for best-effort flows (latest-version checks, digest lookup).
@@ -1566,7 +1570,10 @@ run_python() {
 # parsing or report "unknown" instead of failing a status/version command.
 exakit_can_run_python() {
     _exakit_has_system_python3 && return 0
-    exakit_ensure_uv >/dev/null 2>&1
+    exakit_ensure_uv >/dev/null 2>&1 || return 1
+    if [ "${EXAKIT_READONLY_QUERY:-0}" = 1 ]; then
+        UV_OFFLINE=1 UV_PYTHON_DOWNLOADS=never "$EXAKIT_UV_BIN" python find --no-project "$EXAKIT_MANAGED_PYTHON_VERSION" >/dev/null 2>&1
+    fi
 }
 
 # run_python_any — run a script on ANY Python 3 that is already on the machine.
@@ -3625,8 +3632,13 @@ _exakit_marketplace_run_python() {
         _mrp_uv="$EXAKIT_UV_BIN"
     fi
     if [ -n "$_mrp_uv" ]; then
-        UV_CACHE_DIR="${UV_CACHE_DIR:-$EXAKIT_HOME/cache/uv}" \
-            "$_mrp_uv" run --python "$EXAKIT_MANAGED_PYTHON_VERSION" --no-project python "$@"
+        if [ "$_mrp_mode" = query ]; then
+            UV_CACHE_DIR="${UV_CACHE_DIR:-$EXAKIT_HOME/cache/uv}" UV_OFFLINE=1 UV_PYTHON_DOWNLOADS=never \
+                "$_mrp_uv" run --python "$EXAKIT_MANAGED_PYTHON_VERSION" --no-project python "$@"
+        else
+            UV_CACHE_DIR="${UV_CACHE_DIR:-$EXAKIT_HOME/cache/uv}" \
+                "$_mrp_uv" run --python "$EXAKIT_MANAGED_PYTHON_VERSION" --no-project python "$@"
+        fi
     else
         run_python_any "$@"
     fi
@@ -3678,9 +3690,8 @@ _exakit_marketplace_python_hooks() {
         _mph_name="$(printf '%s' "$_mph_id" | tr '-' '_')_$_mph_method"
         # Keep a hook already supplied by the caller (including test and
         # embedder overrides); loading the registry must be idempotent.
-        # The main exakit entry point still sources the old notebook helper for
-        # describe. Replace its lifecycle hooks there; isolated test overrides
-        # remain untouched.
+        # Replace legacy lifecycle hooks in the main CLI; isolated test
+        # overrides remain untouched.
         if [ "${EXAKIT_MARKETPLACE_PYTHON_HOOKS:-0}" != 1 ]; then
             command -v "$_mph_name" >/dev/null 2>&1 && continue
         fi

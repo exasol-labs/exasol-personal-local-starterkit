@@ -128,6 +128,7 @@ if (Test-Path (Join-Path $scriptDir "lib\exakit-common.ps1")) {
 # by importing common helpers. SQL arguments are text, so do not scan them.
 $script:ExakitReadOnlyHelp = (@('help','catalog','--help','-h','-?') -contains $Command) -or
     ($Command -ne 'sql' -and ($RestArgs -contains '--help' -or $RestArgs -contains '-h'))
+$script:ExakitReadOnlyQuery = $Command -in @('status','version','info','mcp-status','mcp-doctor','skills','catalog','logs','help','whats-new','--help','-h','-?')
 . (Join-Path $libDir "exakit-common.ps1")
 . (Join-Path $libDir "runtime-personal.ps1")
 . (Join-Path $libDir "exapump.ps1")

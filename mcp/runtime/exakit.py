@@ -188,7 +188,7 @@ class ExakitRuntimeLoader:
     def _dash_server_port(self, component_state: dict) -> int:
         """The port every dash-server command agrees on.
 
-        Same precedence as the shell side (setup/lib/dash-server.sh): an
+        Same precedence as the Python add-on: an
         explicit environment choice outranks the recorded port, which outranks
         the default. A recorded value that is not a port is ignored rather than
         raising — a malformed manifest field must not cost the user MCP setup.

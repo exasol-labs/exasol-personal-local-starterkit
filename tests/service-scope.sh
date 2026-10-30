@@ -119,7 +119,6 @@ HARNESS="$WORK/harness.sh"
 {
     printf 'set -u\nEXAKIT_HOME=%s\nEXAKIT_BIN_DIR=%s\n' "$KIT" "$WORK/bin"
     printf '. "%s/setup/lib/common.sh"\n' "$ROOT"
-    printf '. "%s/setup/lib/dash-server.sh"\n' "$ROOT"
     sed -n '/^_service_scope()/,/^}/p' "$CLI"
     sed -n '/^cmd_start()/,/^}/p' "$CLI"
     sed -n '/^cmd_stop()/,/^}/p' "$CLI"

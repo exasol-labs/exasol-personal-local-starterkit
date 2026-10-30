@@ -499,7 +499,7 @@ fi
 echo "Windows parity guards:"
 if command -v pwsh >/dev/null 2>&1; then
     ps_parse="$(pwsh -NoProfile -Command '
-      $files = @("setup/lib/exakit-common.ps1","setup/lib/runtime-personal.ps1","setup/lib/mcp.ps1","setup/lib/dash-server.ps1","setup/setup-windows.ps1","setup/exakit.ps1")
+      $files = @("setup/lib/exakit-common.ps1","setup/lib/runtime-personal.ps1","setup/lib/mcp.ps1","setup/setup-windows.ps1","setup/exakit.ps1")
       foreach ($f in $files) {
         $errors = $null
         $null = [System.Management.Automation.PSParser]::Tokenize((Get-Content -Raw $f), [ref]$errors)
@@ -666,7 +666,7 @@ fi
 # PowerShell add-ons use the shared resolver; Python add-ons use target_version.
 if grep -q 'function Get-ExakitAddonAdvertisedVersion' "$ROOT/setup/lib/exakit-common.ps1" && \
    grep -q 'ctx.target_version(ID, default)' "$ROOT/marketplace/addons/exasol_vscode.py" && \
-   grep -q 'Get-ExakitAddonAdvertisedVersion -Id "dash-server"' "$ROOT/setup/lib/dash-server.ps1" && \
+   grep -q 'ctx.target_version(ID, default)' "$ROOT/marketplace/addons/dash_server.py" && \
    grep -q 'exakit_component_available' "$ROOT/setup/lib/common.sh"; then
     check "marketplace(addon_version_resolver)" "yes" "yes"
 else
@@ -778,9 +778,8 @@ fi
 #
 # Guarded by shape, not by message: any bracketed `if ... (` in the launcher
 # generator is the hazard, whatever it happens to print today.
-if grep -q 'if errorlevel 1 goto exakit_dash_start' "$ROOT/setup/lib/dash-server.ps1" && \
-   grep -q ':exakit_dash_start' "$ROOT/setup/lib/dash-server.ps1" && \
-   ! grep -qE '"if (not )?errorlevel [0-9]+ \("' "$ROOT/setup/lib/dash-server.ps1"; then
+if grep -q 'subprocess.call(argv, env=env)' "$ROOT/marketplace/dash_launcher.py" && \
+   grep -q 'env\["DASH_SERVER_HOST"\] = "127.0.0.1"' "$ROOT/marketplace/dash_launcher.py"; then
     check "dash-server(launcher_no_bracket_block)" "yes" "yes"
 else
     check "dash-server(launcher_no_bracket_block)" "yes" "no"
@@ -788,12 +787,8 @@ fi
 
 # Port ownership, both sides: a foreign listener must never read as a running
 # dash-server, and the install must settle on a port before baking one in.
-if grep -q '_dash_server_port_is_ours()' "$ROOT/setup/lib/dash-server.sh" && \
-   grep -q '_dash_server_port_foreign_desc()' "$ROOT/setup/lib/dash-server.sh" && \
-   grep -q '_dash_server_settle_port()' "$ROOT/setup/lib/dash-server.sh" && \
-   grep -q 'function Test-DashServerPortIsOurs' "$ROOT/setup/lib/dash-server.ps1" && \
-   grep -q 'function Get-DashServerPortForeignDescription' "$ROOT/setup/lib/dash-server.ps1" && \
-   grep -q 'function Confirm-DashServerPort' "$ROOT/setup/lib/dash-server.ps1"; then
+if grep -q 'def owned_pids(' "$ROOT/marketplace/process.py" && \
+   grep -q 'def _settle_port(' "$ROOT/marketplace/addons/dash_server.py"; then
     check "dash-server(port_ownership_twins)" "yes" "yes"
 else
     check "dash-server(port_ownership_twins)" "yes" "no"
@@ -804,11 +799,11 @@ fi
 if grep -q 'exakit_log_targets()' "$ROOT/setup/lib/common.sh" && \
    grep -q 'exakit_logs_overview()' "$ROOT/setup/lib/common.sh" && \
    grep -q 'exakit_logs_show()' "$ROOT/setup/lib/common.sh" && \
-   grep -q 'dash_server_log_path()' "$ROOT/setup/lib/dash-server.sh" && \
+   grep -q 'def log_path(' "$ROOT/marketplace/addons/dash_server.py" && \
    grep -q 'function Get-ExakitLogTargets' "$ROOT/setup/exakit.ps1" && \
    grep -q 'function Show-ExakitLogsOverview' "$ROOT/setup/exakit.ps1" && \
    grep -q 'function Show-ExakitLog' "$ROOT/setup/exakit.ps1" && \
-   grep -q 'function Get-DashServerLogPath' "$ROOT/setup/lib/dash-server.ps1" && \
+   grep -q 'dash-server|log_path|log-path' <(python3 "$ROOT/marketplace/metadata.py" "$ROOT" shell-hooks) && \
    grep -q 'LogFn' "$ROOT/setup/lib/exakit-common.ps1"; then
     check "logs(viewer_twins)" "yes" "yes"
 else
@@ -820,15 +815,14 @@ fi
 if grep -q 'exakit_service_ids()' "$ROOT/setup/lib/common.sh" && \
    grep -q '_exakit_autostart_register()' "$ROOT/setup/lib/common.sh" && \
    grep -q 'exakit_autostart_enable()' "$ROOT/setup/lib/common.sh" && \
-   grep -q 'dash_server_status()' "$ROOT/setup/lib/dash-server.sh" && \
-   grep -q 'dash_server_start()' "$ROOT/setup/lib/dash-server.sh" && \
-   grep -q 'dash_server_autostart_command()' "$ROOT/setup/lib/dash-server.sh" && \
+   grep -q 'def status(' "$ROOT/marketplace/addons/dash_server.py" && \
+   grep -q 'def start(' "$ROOT/marketplace/addons/dash_server.py" && \
+   grep -q 'def autostart_command(' "$ROOT/marketplace/addons/dash_server.py" && \
    grep -q 'autostart) shift; _with_notice cmd_autostart' "$ROOT/setup/exakit" && \
    grep -q 'function Get-ExakitServiceIds' "$ROOT/setup/lib/exakit-common.ps1" && \
    grep -q 'function Register-ExakitAutostart' "$ROOT/setup/lib/exakit-common.ps1" && \
    grep -q 'function Enable-ExakitAutostart' "$ROOT/setup/exakit.ps1" && \
-   grep -q 'function Get-DashServerStatus' "$ROOT/setup/lib/dash-server.ps1" && \
-   grep -q 'function Start-DashServer' "$ROOT/setup/lib/dash-server.ps1" && \
+   grep -q 'dash-server|status|status' <(python3 "$ROOT/marketplace/metadata.py" "$ROOT" shell-hooks) && \
    grep -q '"autostart"    { Invoke-CmdAutostart' "$ROOT/setup/exakit.ps1"; then
     check "services(autostart_twins)" "yes" "yes"
 else

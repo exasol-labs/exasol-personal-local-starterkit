@@ -15,8 +15,7 @@
 #
 # Exit codes: 0 ok; 1 the add-on is not installed; 2 bad arguments or roles;
 # 3 the table or the id is not there; 4 the database is not reachable; 5 a
-# version conflict (the service's own codes pass through). Dot-sourced after
-# notebook.ps1.
+# version conflict (the service's own codes pass through).
 
 # Test-DescribeInstalled - the notebook add-on's record is there (the
 # profiler's Python lives in its venv). Twin of describe_installed.
@@ -32,8 +31,11 @@ function Test-DescribeInstalled {
 # of describe_run.
 function Invoke-DescribeService {
     param([string[]]$ServiceArgs = @())
-    if (-not (Get-Command Get-NotebookVenvPython -ErrorAction SilentlyContinue)) { Fail "The notebook module is missing from this kit copy. Repair with: exakit update" }
-    $python = Get-NotebookVenvPython
+    $python = Get-ExakitManifestValue "components.notebook.python"
+    if (-not $python) {
+        $venv = if ($env:EXAKIT_NOTEBOOK_VENV) { $env:EXAKIT_NOTEBOOK_VENV } else { Join-Path $script:ExakitHome "notebook-venv" }
+        $python = Join-Path $venv "Scripts/python.exe"
+    }
     if (-not (Test-Path $python)) { Fail "The notebook environment is missing ($python). Repair it with: exakit notebook setup" }
     $service = Join-Path (Join-Path (Join-Path (Get-ExakitRepoRoot) "setup") "lib") "describe_service.py"
     $envs = @{ EXAKIT_PYX_DSN = (Get-ExakitManifestValue "runtime.dsn"); EXAKIT_PYX_USER = (Get-ExakitManifestValue "runtime.user")

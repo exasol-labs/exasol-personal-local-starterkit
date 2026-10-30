@@ -15,15 +15,14 @@
 # setup/lib/describe_service.py, which this file and its twin describe.ps1
 # both run through the kit's notebook Python (pyexasol lives in that venv, so
 # the add-on has to be there: exakit marketplace notebook), connected as the
-# kit's admin user the way udf-devkit.sh runs udf_tool.py: the password is
+# kit's admin user: the password is
 # read from its file by the child and never reaches a command line. The shell
 # keeps only the argument check and the refusals. Drafting runs SELECTs only;
 # approving writes comments (and the view) and nothing else.
 #
 # Exit codes: 0 ok; 1 the add-on is not installed; 2 bad arguments or roles;
 # 3 the table or the id is not there; 4 the database is not reachable; 5 a
-# version conflict (the service's own codes pass through). Sourced after
-# notebook.sh. Twin: describe.ps1.
+# version conflict (the service's own codes pass through). Twin: describe.ps1.
 
 # describe_installed — the notebook add-on's record is there (the profiler's
 # Python lives in its venv). ⇄ twin: Test-DescribeInstalled.
@@ -36,8 +35,8 @@ describe_installed() {
 # the password); its exit code is the command's. ⇄ twin:
 # Invoke-DescribeService.
 describe_run() {
-    command -v notebook_venv_python >/dev/null 2>&1 || die "The notebook module is missing from this kit copy. Repair with: exakit update"
-    _dr_python="$(notebook_venv_python)"
+    _dr_python="$(manifest_get components.notebook.python 2>/dev/null || true)"
+    [ -n "$_dr_python" ] || _dr_python="${EXAKIT_NOTEBOOK_VENV:-$EXAKIT_HOME/notebook-venv}/bin/python"
     [ -x "$_dr_python" ] || die "The notebook environment is missing ($_dr_python). Repair it with: exakit notebook setup"
     EXAKIT_PYX_DSN="$(manifest_get runtime.dsn 2>/dev/null || true)" \
     EXAKIT_PYX_USER="$(manifest_get runtime.user 2>/dev/null || echo sys)" \

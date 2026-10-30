@@ -269,8 +269,7 @@ lacks "the launcher is not streamed to the screen" \
     "install local 2>&1 | exakit_stream_foreign" "$RP"
 has "the launcher is piped into the collector" \
     '_personal_deploy_collect "$_deploy_state" "$_deploy_tail" "$_deploy_notice"' "$RP"
-ADDONS="$(cat "$ROOT/setup/lib/dash-server.sh")"
-lacks "no add-on redirects a fetch by hand" "( fetch " "$ADDONS"
+lacks "no add-on redirects a fetch by hand" "( fetch " "$(cat "$ROOT/marketplace/addons/dash_server.py")"
 has "the VS Code install uses the logged Python runner" \
     'ctx.run_logged("Installing Exasol for VS Code"' "$(cat "$ROOT/marketplace/addons/exasol_vscode.py")"
 
