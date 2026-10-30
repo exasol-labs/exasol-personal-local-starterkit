@@ -70,6 +70,16 @@ print(node)
 SHIPPED_PY
 }
 
+# A uv the kit accepts, in the kit's own bin dir, answering the advertised
+# version: the uv row is "current" on every machine this suite runs on. Without
+# it the row reads whatever uv the DEVELOPER has on PATH - below the floor on
+# one laptop, absent on CI - and the table and notice assertions below start
+# describing the machine instead of the kit. The resilient-install scenarios
+# override EXAKIT_BIN_DIR and put a failing uv first on PATH, so they are
+# unaffected.
+printf '#!/bin/sh\necho "uv %s (test stub)"\n' "$(shipped components.uv.version)" > "$EXAKIT_BIN_DIR/uv"
+chmod +x "$EXAKIT_BIN_DIR/uv"
+
 # --- fixtures ----------------------------------------------------------------
 # Variants are derived from the shipped document so they keep its canonical
 # shape; only the property under test differs.
@@ -448,6 +458,12 @@ echo "resilient install (pyexasol cannot end a run):"
 mkdir -p "$WORK/failing-uv"
 printf '#!/bin/sh\nexit 1\n' > "$WORK/failing-uv/uv"
 chmod +x "$WORK/failing-uv/uv"
+# A uv that does not run is not one the kit will use: exakit_ensure_uv treats
+# it as absent and installs the kit's own pinned copy - over the network. No
+# test here may reach the network, so curl fails too, and the bootstrap's
+# refusal is what the steps below have to survive.
+printf '#!/bin/sh\nexit 7\n' > "$WORK/failing-uv/curl"
+chmod +x "$WORK/failing-uv/curl"
 soft_fail="$( EXAKIT_HOME="$WORK/pyx-home"
     EXAKIT_MANIFEST="$WORK/pyx-home/manifest.json"
     EXAKIT_BIN_DIR="$WORK/pyx-home/bin"
@@ -562,6 +578,10 @@ mkdir -p "$UC/kit/mcp" "$UC/cache" "$UC/bin"
 # on any machine, whether or not a real exapump is installed.
 printf '#!/bin/sh\necho "exapump 0.13.0"\n' > "$UC/bin/exapump"
 chmod +x "$UC/bin/exapump"
+# The PowerShell table runs against THIS bin dir and probes uv.exe there (the
+# bash rows read the stub in $EXAKIT_BIN_DIR): the same current uv on both
+# sides, so neither table describes the developer's machine.
+cp "$EXAKIT_BIN_DIR/uv" "$UC/bin/uv.exe"
 cat > "$UC/manifest.json" <<EOF
 {
   "manifest_version": 1,
@@ -1859,6 +1879,7 @@ notice() {
     cat > "$WORK/notice-run.sh" <<EOF
 EXAKIT_NO_FANCY=1
 EXAKIT_HOME='$NT'
+EXAKIT_BIN_DIR='$EXAKIT_BIN_DIR'
 EXAKIT_MANIFEST='$NT/manifest.json'
 EXAKIT_VERSIONS_CACHE='$NT/cache/versions.json'
 EXAKIT_VERSIONS_URL='http://offline.invalid/versions.json'
@@ -2507,6 +2528,10 @@ PY
     if [ "$NOTICE_PTY" != "none" ]; then
         rm -f "$NT/cache/notice-state.json"
         cp "$WORK/notice-versions.json" "$NT/kit/versions.json"
+        # Same current uv the bash notice sees, where the PowerShell side probes
+        # for the kit's own copy; otherwise a developer's old uv on PATH joins
+        # the light group as a critical pending update and rewords the line.
+        cp "$EXAKIT_BIN_DIR/uv" "$NT/bin/uv.exe"
         cat > "$WORK/ps-notice.ps1" <<'PSEOF'
 $env:EXAKIT_HOME = $env:NT
 $env:EXAKIT_BIN_DIR = "$env:NT/bin"

@@ -65,16 +65,20 @@ function Get-McpConfiguredClients {
     }
 }
 
-# Get-UvxPath - resolve the uvx launcher to a full path. uv installs uvx into
-# ~/.local/bin (or $BinDir), which is NOT on the current process's PATH right
-# after install, so a bare "uvx" invocation fails during setup even though uv
-# is present. Always prefer the resolved path.
+# Get-UvxPath - resolve the uvx launcher to a full path: the one beside the uv
+# the kit vetted (Get-ExakitUvUvx), never a bare name resolved through PATH,
+# which could be an old copy the kit refused - or nothing at all right after
+# an install, since $BinDir is not on the current process's PATH yet. The
+# PATH and installer-directory lookups remain as fallbacks for a kit copy
+# that cannot resolve uv at all.
 function Get-UvxPath {
+    $vetted = Get-ExakitUvUvx
+    if ($vetted) { return $vetted }
     $cmd = Get-Command uvx -ErrorAction SilentlyContinue
     if ($cmd) { return $cmd.Source }
-    # The second candidate is where uv's own installer writes: that is
-    # %USERPROFILE%\.local\bin, not PowerShell's $HOME, which on a redirected
-    # home is a directory nothing ever installed into.
+    # Where uv's own installer used to write: %USERPROFILE%\.local\bin, not
+    # PowerShell's $HOME, which on a redirected home is a directory nothing
+    # ever installed into.
     foreach ($dir in @($script:BinDir, (Join-Path (Get-ExakitProfileHome) ".local\bin"))) {
         $candidate = Join-Path $dir "uvx.exe"
         if (Test-Path $candidate) { return $candidate }
@@ -82,10 +86,37 @@ function Get-UvxPath {
     return "uvx"
 }
 
+# Get-McpCommandPath - the uvx the AI clients are told to launch. The vetted
+# uvx comes FIRST, ahead of the manifest record: the record is whatever a
+# previous run wrote, and after a uv below the floor was shadowed by the kit's
+# own copy, a record that still names the old uvx would put the refused binary
+# straight back into every client config. Twin of mcp_command_path.
 function Get-McpCommandPath {
+    $vetted = Get-ExakitUvUvx
+    if ($vetted) { return $vetted }
     $manifestCommand = Get-ExakitManifestValue "components.mcp_server.command"
     if ($manifestCommand) { return $manifestCommand }
     return (Get-UvxPath)
+}
+
+# Set-McpClientsToKitUv - after uv moved (exakit update uv), make the AI
+# clients launch the uvx the kit vetted. The record is rewritten first because
+# the config renderer reads it; then every already-connected client is
+# refreshed. Clients the user never connected are left alone, as always. Twin
+# of mcp_point_clients_at_kit_uv.
+function Set-McpClientsToKitUv {
+    $uvx = Get-ExakitUvUvx
+    if (-not $uvx) { return $false }
+    if (-not (Test-Path $script:ManifestPath)) { return $true }
+    if ($null -eq (Get-ExakitManifestValue "components.mcp_server.version")) { return $true }
+    Set-ExakitManifestValue "components.mcp_server.command" $uvx
+    Set-ExakitManifestValue "components.mcp_server.uv_path" (Get-ExakitUvBin)
+    # The refresh names the package and version it writes; in this path they
+    # come from the record, not from an install that set them.
+    if (-not $script:McpVersion) { $script:McpVersion = Get-ExakitManifestValue "components.mcp_server.version" }
+    $recordedPackage = Get-ExakitManifestValue "components.mcp_server.package"
+    if ($recordedPackage) { $script:McpPackage = $recordedPackage }
+    return (Update-McpClientPins)
 }
 
 function Get-McpSslCertValidation {

@@ -213,10 +213,10 @@ dash_server_install() {
     _dash_server_resolve_port
     _dash_server_settle_port || return 1
 
+    # The uv the kit vetted (exakit_ensure_uv), never the first one on PATH:
+    # that one may sit below the version floor the kit refuses to run.
     _ds_uv=""
-    if command -v uv >/dev/null 2>&1; then
-        _ds_uv="uv"
-    elif exakit_ensure_uv && [ -x "${EXAKIT_UV_BIN:-}" ]; then
+    if exakit_ensure_uv && [ -x "${EXAKIT_UV_BIN:-}" ]; then
         _ds_uv="$EXAKIT_UV_BIN"
     else
         _dash_server_not_installed "uv (the Python tool runner) is not available — install it from https://docs.astral.sh/uv/ and re-run"

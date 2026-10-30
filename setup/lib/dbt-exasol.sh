@@ -392,10 +392,10 @@ dbt_exasol_install() {
         export EXAKIT_DBT_EXASOL_VERSION
     fi
 
+    # The uv the kit vetted (exakit_ensure_uv), never the first one on PATH:
+    # that one may sit below the version floor the kit refuses to run.
     _dei_uv=""
-    if command -v uv >/dev/null 2>&1; then
-        _dei_uv="uv"
-    elif exakit_ensure_uv && [ -x "${EXAKIT_UV_BIN:-}" ]; then
+    if exakit_ensure_uv && [ -x "${EXAKIT_UV_BIN:-}" ]; then
         _dei_uv="$EXAKIT_UV_BIN"
     else
         _dbt_exasol_not_installed "uv (the Python tool runner) is not available — install it from https://docs.astral.sh/uv/ and re-run"

@@ -86,7 +86,7 @@ jobs:
           if not re.match(r"^\d{4}-\d{2}-\d{2}$", str(doc.get("updated", ""))):
               problems.append("updated must be an ISO date (YYYY-MM-DD)")
 
-          expected = {"personal", "exapump", "mcp", "pyexasol", "skills",
+          expected = {"personal", "exapump", "uv", "mcp", "pyexasol", "skills",
                       "dash-server", "exasol-vscode", "json-tables",
                       "exasol-scheduler", "dbt-exasol"}
           components = doc.get("components") or {}
@@ -171,6 +171,35 @@ jobs:
           for platform, digest in digests.items():
               if not isinstance(digest, str) or not digest_re.match(digest):
                   problems.append("components.exasol-scheduler.sha256.%s is not a 64-character hex digest" % platform)
+
+          # uv installs from astral's own release archive, pinned by digest
+          # like exapump, and is held to a FLOOR: the kit refuses to run a uv
+          # below min_version, because older ones trust a compromised root CA
+          # (GHSA-hq85-5cpj-mr62). uvx is the process every AI client hands
+          # the database password to, so a pin here reaches every machine.
+          # Plain versions (0.13.6): astral's tags carry no v.
+          uv = components.get("uv") or {}
+          plain = re.compile(r"^\d+\.\d+\.\d+$")
+          if not uv.get("repo"):
+              problems.append("components.uv.repo is missing (the install downloads from that upstream release)")
+          if not plain.match(str(uv.get("version", ""))):
+              problems.append("components.uv.version must be a plain release (0.13.6); astral's tags carry no v")
+          if not plain.match(str(uv.get("min_version", ""))):
+              problems.append("components.uv.min_version must be a plain release: the oldest uv the kit will run")
+          else:
+              def release_tuple(value):
+                  return tuple(int(part) for part in value.split("."))
+              if plain.match(str(uv.get("version", ""))) and release_tuple(uv["min_version"]) > release_tuple(uv["version"]):
+                  problems.append("components.uv.min_version is above components.uv.version: the kit would refuse the very uv it installs")
+              if release_tuple(uv["min_version"]) < (0, 13, 4):
+                  problems.append("components.uv.min_version must be at least 0.13.4 (GHSA-hq85-5cpj-mr62)")
+          digests = uv.get("sha256") or {}
+          if set(digests) != expected_platforms:
+              problems.append("components.uv.sha256 must cover exactly %s, found %s"
+                              % (sorted(expected_platforms), sorted(digests)))
+          for platform, digest in digests.items():
+              if not isinstance(digest, str) or not digest_re.match(digest):
+                  problems.append("components.uv.sha256.%s is not a 64-character hex digest" % platform)
 
           for problem in problems:
               print("versions.json: %s" % problem, file=sys.stderr)
@@ -306,6 +335,79 @@ jobs:
             fi
             printf '  verified %s\n' "$digest"
           done < /tmp/sched-digests.txt
+
+  uv-digest-verify:
+    name: verify uv digests
+    needs: changes
+    if: needs.changes.outputs.versions == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: download the advertised uv archives and check every digest
+        # uvx is the process every AI client launches to run the MCP server,
+        # and the kit installs it from these archives with NO override for a
+        # digest that does not match (exakit_uv_install_pinned): a wrong pin
+        # here is an install that refuses on every machine. The archives are
+        # the ground truth, so download them and hash them. The keys are the
+        # kit's platform names; the asset is astral's target triple, and
+        # astral tags releases as plain numbers - no v.
+        run: |
+          set -u
+          repo="$(python3 -c 'import json; print(json.load(open("versions.json"))["components"]["uv"].get("repo", "astral-sh/uv"))')"
+          version="$(python3 -c 'import json; print(json.load(open("versions.json"))["components"]["uv"]["version"])')"
+          python3 -c 'import json; d = json.load(open("versions.json"))["components"]["uv"]["sha256"]; print("\n".join("%s %s" % kv for kv in d.items()))' > /tmp/uv-digests.txt
+          while read -r platform digest; do
+            case "$platform" in
+              macos-aarch64)  asset="uv-aarch64-apple-darwin.tar.gz" ;;
+              macos-x86_64)   asset="uv-x86_64-apple-darwin.tar.gz" ;;
+              linux-aarch64)  asset="uv-aarch64-unknown-linux-gnu.tar.gz" ;;
+              linux-x86_64)   asset="uv-x86_64-unknown-linux-gnu.tar.gz" ;;
+              windows-x86_64) asset="uv-x86_64-pc-windows-msvc.zip" ;;
+              *) echo "unknown uv platform key: $platform" >&2; exit 1 ;;
+            esac
+            url="https://github.com/${repo}/releases/download/${version}/${asset}"
+            printf '\n%s\n' "$asset"
+            if ! curl -fL --proto '=https' --retry 3 -sS -o "/tmp/$asset" "$url"; then
+              echo "  could not download $url" >&2
+              exit 1
+            fi
+            actual="$(sha256sum "/tmp/$asset" | cut -d' ' -f1)"
+            rm -f "/tmp/$asset"
+            if [ "$actual" != "$digest" ]; then
+              printf '  digest mismatch\n    advertised: %s\n    actual:     %s\n' "$digest" "$actual" >&2
+              exit 1
+            fi
+            printf '  verified %s\n' "$digest"
+          done < /tmp/uv-digests.txt
+      - name: the shell and PowerShell fallbacks pin the same release and bytes
+        # A machine with no manifest installs from the constants and the pinned
+        # table in the libraries; they must name what versions.json names.
+        run: |
+          set -u
+          version="$(python3 -c 'import json; print(json.load(open("versions.json"))["components"]["uv"]["version"])')"
+          floor="$(python3 -c 'import json; print(json.load(open("versions.json"))["components"]["uv"]["min_version"])')"
+          sh_version="$(sed -n 's/^EXAKIT_UV_VERSION_FALLBACK="\${EXAKIT_UV_VERSION_FALLBACK:-\(.*\)}"$/\1/p' setup/lib/common.sh)"
+          sh_floor="$(sed -n 's/^EXAKIT_UV_MIN_VERSION_FALLBACK="\${EXAKIT_UV_MIN_VERSION_FALLBACK:-\(.*\)}"$/\1/p' setup/lib/common.sh)"
+          ps_version="$(sed -n 's/^\$script:UvVersionFallback = .* else { "\([^"]*\)" }$/\1/p' setup/lib/exakit-common.ps1)"
+          ps_floor="$(sed -n 's/^\$script:UvMinVersionFallback = .* else { "\([^"]*\)" }$/\1/p' setup/lib/exakit-common.ps1)"
+          printf 'manifest: %s (floor %s)\ncommon.sh: %s (floor %s)\nexakit-common.ps1: %s (floor %s)\n' \
+            "$version" "$floor" "$sh_version" "$sh_floor" "$ps_version" "$ps_floor"
+          [ "$version" = "$sh_version" ] && [ "$version" = "$ps_version" ] || { echo "EXAKIT_UV_VERSION_FALLBACK / UvVersionFallback must equal components.uv.version" >&2; exit 1; }
+          [ "$floor" = "$sh_floor" ] && [ "$floor" = "$ps_floor" ] || { echo "EXAKIT_UV_MIN_VERSION_FALLBACK / UvMinVersionFallback must equal components.uv.min_version" >&2; exit 1; }
+          while read -r platform digest; do
+            pinned="$(sed -n "s/^ *uv-${version}-${platform}) *echo \"\([0-9a-f]*\)\" ;;$/\1/p" setup/lib/common.sh)"
+            if [ "$pinned" != "$digest" ]; then
+              echo "exakit_uv_pinned_sha256 in common.sh must carry $platform = $digest for uv $version (found '${pinned:-nothing}')" >&2
+              exit 1
+            fi
+          done < /tmp/uv-digests.txt
+          ps_pinned="$(sed -n "s/.*\"uv-${version}-windows-x86_64\" { return \"\([0-9a-f]*\)\" }.*/\1/p" setup/lib/exakit-common.ps1)"
+          win="$(awk '$1 == "windows-x86_64" {print $2}' /tmp/uv-digests.txt)"
+          if [ "$ps_pinned" != "$win" ]; then
+            echo "Get-ExakitUvPinnedSha256 in exakit-common.ps1 must carry windows-x86_64 = $win for uv $version (found '${ps_pinned:-nothing}')" >&2
+            exit 1
+          fi
+          echo "fallbacks agree with the manifest"
 
   upstream-exists:
     name: the advertised versions exist upstream
@@ -683,6 +785,7 @@ jobs:
       - run: bash tests/ps-undefined-functions.sh
         if: matrix.shard == 2
       - run: bash tests/versions-manifest.sh
+      - run: bash tests/uv-bootstrap.sh
         if: matrix.shard == 3
       - run: bash tests/personal-s3.sh
         if: matrix.shard == 4

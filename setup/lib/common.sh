@@ -87,6 +87,17 @@ EXAKIT_PERSONAL_VERSION_FALLBACK="${EXAKIT_PERSONAL_VERSION_FALLBACK:-2.3.0}"
 EXAKIT_EXAPUMP_VERSION_FALLBACK="${EXAKIT_EXAPUMP_VERSION_FALLBACK:-0.13.1}"
 EXAKIT_MCP_VERSION_FALLBACK="${EXAKIT_MCP_VERSION_FALLBACK:-2.3.0}"
 EXAKIT_PYEXASOL_VERSION_FALLBACK="${EXAKIT_PYEXASOL_VERSION_FALLBACK:-3.0.1}"
+# uv is the Python tool runner: uvx is the process the AI client launches to
+# run the MCP server (and hands EXA_PASSWORD to on every start), and uv runs
+# the kit's managed Python wherever the system one is too old. It is pinned
+# and digest-verified like every other binary the kit installs - see the uv
+# section below exakit_ensure_uv. The MIN version is the oldest uv the kit
+# will RUN at all: below it uv's bundled CA store trusts an emSign root whose
+# intermediate CA keys are compromised (GHSA-hq85-5cpj-mr62), so a uv already
+# on the machine is used only at or above this floor.
+EXAKIT_UV_VERSION_FALLBACK="${EXAKIT_UV_VERSION_FALLBACK:-0.13.6}"
+EXAKIT_UV_MIN_VERSION_FALLBACK="${EXAKIT_UV_MIN_VERSION_FALLBACK:-0.13.4}"
+EXAKIT_UV_REPO="astral-sh/uv"
 # Marketplace add-ons (dash-server, ...) carry their own version constants in
 # their module files — they are not part of the install flow, so nothing here
 # needs to know them.
@@ -1329,18 +1340,298 @@ _exakit_has_system_python3() {
     [ "$_EXAKIT_SYSTEM_PY_OK" = "yes" ]
 }
 
+# ---------------------------------------------------------------------------
+# uv — the Python tool runner
+# ---------------------------------------------------------------------------
+# uv used to be the ONE artifact the kit put on a machine without a digest:
+# astral's install.sh was fetched and piped into sh, unpinned and unverified,
+# and any uv already on PATH was used without its version ever being read.
+# Both are gone. uv is installed the way exapump is - the pinned release
+# archive from GitHub, verified against the per-platform SHA-256 in
+# versions.json (components.uv) BEFORE anything is unpacked, no installer
+# script executed at all - and the kit refuses to RUN a uv older than
+# components.uv.min_version. Below that floor uv's bundled CA store trusts an
+# emSign root whose intermediate CA keys are compromised (GHSA-hq85-5cpj-mr62),
+# and uvx is the process the AI client hands EXA_PASSWORD to on every start.
+#
+# A uv the user installed themselves (Homebrew, pipx, their own astral install
+# somewhere else) is never modified. At or above the floor it is used where
+# it is; below it the kit installs its own copy into EXAKIT_BIN_DIR, uses that
+# one for everything, and `exakit status` says the user's copy is still old.
+# Only the kit's own path ($EXAKIT_BIN_DIR/uv) is ever replaced - and that is
+# also where the old install.sh bootstrap wrote, so the copies this kit itself
+# left behind are the ones that get moved to the floor.
+#
+# RECURSION GUARD. exakit_ensure_uv is what run_python falls back to when the
+# system Python is too old, and the helpers below read versions.json and
+# compare versions - both of which prefer Python. _EXAKIT_UV_RESOLVING=1 makes
+# exakit_ensure_uv answer "no" while a uv decision is being made, so every
+# reader takes its no-Python arm (the awk manifest reader, the shell version
+# comparator) instead of asking for the very thing being decided.
+# ⇄ twins: Get-ExakitUvBin / Install-ExakitUv in exakit-common.ps1.
+
+# exakit_uv_version_of <uv> — "0.13.6" from `uv --version`; non-zero when the
+# binary does not run or does not answer in that shape.
+exakit_uv_version_of() {
+    [ -n "${1:-}" ] && [ -x "$1" ] || return 1
+    _uvo="$("$1" --version 2>/dev/null | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
+    [ -n "$_uvo" ] || return 1
+    printf '%s\n' "$_uvo"
+}
+
+# _exakit_uv_manifest_value <key> — components.uv.<key> from versions.json,
+# read under the recursion guard (see above). Empty when not advertised.
+_exakit_uv_manifest_value() {
+    _uvm_was="${_EXAKIT_UV_RESOLVING:-0}"
+    _EXAKIT_UV_RESOLVING=1
+    _uvm="$(exakit_versions_value "components.uv.$1" 2>/dev/null || true)"
+    _EXAKIT_UV_RESOLVING="$_uvm_was"
+    printf '%s' "$_uvm"
+}
+
+# exakit_uv_min_version — the oldest uv the kit will run.
+exakit_uv_min_version() {
+    _umv="$(_exakit_uv_manifest_value min_version)"
+    case "$_umv" in
+        ''|*[!0-9.]*) _umv="$EXAKIT_UV_MIN_VERSION_FALLBACK" ;;
+    esac
+    printf '%s\n' "$_umv"
+}
+
+# exakit_uv_pinned_version — the uv the kit installs when it has to: an
+# explicit EXAKIT_UV_VERSION, else the advertised one, else the constant.
+exakit_uv_pinned_version() {
+    if [ -n "${EXAKIT_UV_VERSION:-}" ]; then
+        printf '%s\n' "${EXAKIT_UV_VERSION#v}"
+        return 0
+    fi
+    _upv="$(_exakit_uv_manifest_value version)"
+    case "$_upv" in
+        ''|*[!0-9.]*) _upv="$EXAKIT_UV_VERSION_FALLBACK" ;;
+    esac
+    printf '%s\n' "$_upv"
+}
+
+# exakit_uv_platform — the versions.json digest key for this machine
+# (macos-aarch64, linux-x86_64, ...), or non-zero when uv has no build here.
+# WSL takes the Linux build. detect.sh is not sourced by every caller of
+# common.sh (the test suites, `exakit version`), so uname is the fallback.
+exakit_uv_platform() {
+    if command -v detect_os >/dev/null 2>&1 && command -v detect_arch >/dev/null 2>&1; then
+        _uvp_os="$(detect_os 2>/dev/null || true)"
+        _uvp_arch="$(detect_arch 2>/dev/null || true)"
+    else
+        case "$(uname -s 2>/dev/null || true)" in
+            Darwin) _uvp_os=macos ;;
+            Linux)  _uvp_os=linux ;;
+            *)      _uvp_os=unsupported ;;
+        esac
+        case "$(uname -m 2>/dev/null || true)" in
+            arm64|aarch64) _uvp_arch=arm64 ;;
+            x86_64|amd64)  _uvp_arch=x86_64 ;;
+            *)             _uvp_arch=unsupported ;;
+        esac
+    fi
+    case "$_uvp_os" in
+        macos)     _uvp_os=macos ;;
+        linux|wsl) _uvp_os=linux ;;
+        *) return 1 ;;
+    esac
+    case "$_uvp_arch" in
+        arm64)  _uvp_arch=aarch64 ;;
+        x86_64) _uvp_arch=x86_64 ;;
+        *) return 1 ;;
+    esac
+    printf '%s-%s\n' "$_uvp_os" "$_uvp_arch"
+}
+
+# exakit_uv_target <platform> — astral's release target for a digest key. The
+# archive is uv-<target>.tar.gz (.zip on Windows) and unpacks to a directory
+# of the same name holding uv and uvx. Linux takes the glibc build: every
+# supported distro here ships a glibc far newer than uv's floor.
+exakit_uv_target() {
+    case "$1" in
+        macos-aarch64)  printf '%s\n' aarch64-apple-darwin ;;
+        macos-x86_64)   printf '%s\n' x86_64-apple-darwin ;;
+        linux-aarch64)  printf '%s\n' aarch64-unknown-linux-gnu ;;
+        linux-x86_64)   printf '%s\n' x86_64-unknown-linux-gnu ;;
+        windows-x86_64) printf '%s\n' x86_64-pc-windows-msvc ;;
+        *) return 1 ;;
+    esac
+}
+
+# Digests of the fallback release, consulted after versions.json: what a
+# machine with no manifest at all (no network, no cache, no kit copy) verifies
+# against. The current EXAKIT_UV_VERSION_FALLBACK MUST be listed here, for the
+# same reason exapump_pinned_sha256 lists exapump's. Taken from astral's own
+# .sha256 sidecars and re-hashed from the downloaded archives before pinning.
+exakit_uv_pinned_sha256() {
+    case "$1" in
+        uv-0.13.6-linux-aarch64)  echo "229e194255c7958d86d56e8790d969a6f74736592133f0dfd0076f754c642c1d" ;;
+        uv-0.13.6-linux-x86_64)   echo "f29c3e94ffabd7e6f3ba521dba169a9b7ec12100bf3257087f0f24f6123f3645" ;;
+        uv-0.13.6-macos-aarch64)  echo "60fbd5c8a1ed681845eea28d9d622fcde03c51e91a43465b64a1e17db1ed3472" ;;
+        uv-0.13.6-macos-x86_64)   echo "63ba17fdda55ad1a230d4b37fc6017ffa10c23688c83818bd3bfdf914c652a02" ;;
+        uv-0.13.6-windows-x86_64) echo "a2a8820d5eea32f08ef467ef3b7f66883a9b076d5737a2fc2fbb5f458d1bb50f" ;;
+        *) echo "" ;;
+    esac
+}
+
+# exakit_uv_expected_sha256 <version> <platform> <url> — the digest the
+# archive is verified against, in the order exapump uses:
+#   1. versions.json, but ONLY for the advertised version - an override must
+#      never borrow another release's digest;
+#   2. the pinned table above;
+#   3. for an explicit EXAKIT_UV_VERSION that is neither, astral's .sha256
+#      sidecar published beside the archive. Same trust as exapump's
+#      release-API tier, and reached only when the user asked for a version
+#      the kit does not pin.
+# Empty output means "no digest"; the caller refuses to install.
+exakit_uv_expected_sha256() {
+    _ues_version="$1"; _ues_platform="$2"; _ues_url="$3"
+    _ues_advertised="$(_exakit_uv_manifest_value version)"
+    if [ -n "$_ues_advertised" ] && [ "$_ues_advertised" = "$_ues_version" ]; then
+        _ues_digest="$(_exakit_uv_manifest_value "sha256.$_ues_platform")"
+        case "$_ues_digest" in *[!0-9a-f]*) _ues_digest="" ;; esac
+        if [ -n "$_ues_digest" ] && [ "${#_ues_digest}" -eq 64 ]; then
+            printf '%s\n' "$_ues_digest"
+            return 0
+        fi
+    fi
+    _ues_digest="$(exakit_uv_pinned_sha256 "uv-${_ues_version}-${_ues_platform}")"
+    if [ -n "$_ues_digest" ]; then
+        printf '%s\n' "$_ues_digest"
+        return 0
+    fi
+    [ -n "${EXAKIT_UV_VERSION:-}" ] || return 1
+    _ues_digest="$(curl -fsSL --proto '=https' --proto-redir '=https' --retry 2 --connect-timeout 15 \
+        "${_ues_url}.sha256" 2>/dev/null | awk 'NR == 1 {print $1}')"
+    case "$_ues_digest" in *[!0-9a-f]*|'') return 1 ;; esac
+    [ "${#_ues_digest}" -eq 64 ] || return 1
+    printf '%s\n' "$_ues_digest"
+}
+
+# exakit_uv_report — one line, "<verdict>|<path>|<version>|<min>":
+#   ok     the first uv at or above the floor; the kit uses this one
+#   below  only uv(s) below the floor exist; the oldest one found is named
+#   none   no uv anywhere
+# Looked up in the order the kit prefers: an explicit EXAKIT_UV_BIN, the kit's
+# own copy, then PATH - the kit's own first so a copy installed to shadow an
+# old one elsewhere wins. Installs nothing. Runs under the recursion guard.
+exakit_uv_report() {
+    _uvr_was="${_EXAKIT_UV_RESOLVING:-0}"
+    _EXAKIT_UV_RESOLVING=1
+    _uvr_min="$(exakit_uv_min_version)"
+    _uvr_first=""; _uvr_first_v=""; _uvr_out=""
+    for _uvr_p in "${EXAKIT_UV_BIN:-}" "$EXAKIT_BIN_DIR/uv" "$(command -v uv 2>/dev/null || true)"; do
+        [ -n "$_uvr_p" ] && [ -x "$_uvr_p" ] || continue
+        _uvr_v="$(exakit_uv_version_of "$_uvr_p" 2>/dev/null || true)"
+        [ -n "$_uvr_v" ] || continue
+        if [ "$_uvr_v" = "$_uvr_min" ] || exakit_version_newer "$_uvr_v" "$_uvr_min"; then
+            _uvr_out="ok|$_uvr_p|$_uvr_v|$_uvr_min"
+            break
+        fi
+        [ -n "$_uvr_first" ] || { _uvr_first="$_uvr_p"; _uvr_first_v="$_uvr_v"; }
+    done
+    _EXAKIT_UV_RESOLVING="$_uvr_was"
+    if [ -n "$_uvr_out" ]; then
+        printf '%s\n' "$_uvr_out"
+    elif [ -n "$_uvr_first" ]; then
+        printf 'below|%s|%s|%s\n' "$_uvr_first" "$_uvr_first_v" "$_uvr_min"
+    else
+        printf 'none|||%s\n' "$_uvr_min"
+    fi
+}
+
+# exakit_uv_install_pinned — download the pinned uv release archive, verify
+# it against the pinned digest, unpack uv and uvx into EXAKIT_BIN_DIR. Dies
+# on any failure; callers that must not die run it in a subshell. Nothing
+# downloaded is executed before the digest matches.
+exakit_uv_install_pinned() {
+    _uvi_version="$(exakit_uv_pinned_version)"
+    _uvi_platform="$(exakit_uv_platform)" || \
+        die "uv has no build for this machine ($(uname -s 2>/dev/null) $(uname -m 2>/dev/null)); the kit supports macOS and Linux on x86_64 and arm64."
+    _uvi_target="$(exakit_uv_target "$_uvi_platform")"
+    _uvi_asset="uv-${_uvi_target}.tar.gz"
+    _uvi_url="https://github.com/${EXAKIT_UV_REPO}/releases/download/${_uvi_version}/${_uvi_asset}"
+    _uvi_expected="$(exakit_uv_expected_sha256 "$_uvi_version" "$_uvi_platform" "$_uvi_url" 2>/dev/null || true)"
+    # Never install a binary that could not be verified: uvx is the process
+    # the AI client hands the database password to. There is no override.
+    [ -n "$_uvi_expected" ] || \
+        die "No checksum is pinned for uv $_uvi_version ($_uvi_platform); refusing to install an unverified uv. The kit pins components.uv in versions.json - use the advertised version, or add this release's digest there."
+    _uvi_tmp="$(mktemp -d "${TMPDIR:-/tmp}/exakit-uv.XXXXXX")" || die "Could not create a temporary directory for the uv download."
+    _uvi_t0="$(date +%s 2>/dev/null || echo 0)"
+    EXAKIT_ACTIVE_LABEL="Downloading uv $_uvi_version"
+    info "Downloading uv $_uvi_version ($_uvi_asset)"
+    fetch "$_uvi_url" "$_uvi_tmp/$_uvi_asset"
+    verify_sha256 "$_uvi_tmp/$_uvi_asset" "$_uvi_expected"
+    tar -xzf "$_uvi_tmp/$_uvi_asset" -C "$_uvi_tmp" || {
+        rm -rf "$_uvi_tmp"
+        die "The uv archive was verified but could not be unpacked; nothing was installed."
+    }
+    [ -f "$_uvi_tmp/uv-${_uvi_target}/uv" ] && [ -f "$_uvi_tmp/uv-${_uvi_target}/uvx" ] || {
+        rm -rf "$_uvi_tmp"
+        die "The uv archive does not hold uv-${_uvi_target}/uv and uvx as astral publishes them; nothing was installed."
+    }
+    mkdir -p "$EXAKIT_BIN_DIR"
+    install -m 755 "$_uvi_tmp/uv-${_uvi_target}/uv" "$EXAKIT_BIN_DIR/uv" && \
+    install -m 755 "$_uvi_tmp/uv-${_uvi_target}/uvx" "$EXAKIT_BIN_DIR/uvx" || {
+        rm -rf "$_uvi_tmp"
+        die "Could not install uv to $EXAKIT_BIN_DIR (is it writable? is the disk full?)."
+    }
+    rm -rf "$_uvi_tmp"
+    # The binary that landed must be the version that was pinned: a checksum
+    # proves the bytes, this proves they run and say what the pin says.
+    _uvi_have="$(exakit_uv_version_of "$EXAKIT_BIN_DIR/uv" 2>/dev/null || true)"
+    [ "$_uvi_have" = "$_uvi_version" ] || \
+        die "uv was downloaded and verified but reports '${_uvi_have:-nothing}' instead of $_uvi_version, so it is not trusted. See ${EXAKIT_LOG_FILE:-the log}."
+    ensure_path_hint "$EXAKIT_BIN_DIR"
+    ok_step "uv $_uvi_version installed to $(ui_tilde "$EXAKIT_BIN_DIR/uv"), verified ($(( $(date +%s 2>/dev/null || echo 0) - _uvi_t0 ))s)"
+}
+
+# exakit_uv_record_manifest — what the kit uses, written down for `exakit
+# version` and for the MCP config writer (components.mcp_server.uv_path is
+# where it reads the uv to derive uvx from). Best-effort: the manifest may not
+# exist yet when the lazy bootstrap runs.
+exakit_uv_record_manifest() {
+    [ -f "${EXAKIT_MANIFEST:-}" ] || return 0
+    [ -n "${EXAKIT_UV_BIN:-}" ] && [ -x "$EXAKIT_UV_BIN" ] || return 0
+    _urm_v="$(exakit_uv_version_of "$EXAKIT_UV_BIN" 2>/dev/null || true)"
+    manifest_set components.uv.path "$EXAKIT_UV_BIN" >/dev/null 2>&1 || true
+    [ -n "$_urm_v" ] && manifest_set components.uv.version "$_urm_v" >/dev/null 2>&1 || true
+    if [ "$EXAKIT_UV_BIN" = "$EXAKIT_BIN_DIR/uv" ]; then
+        manifest_set components.uv.managed true >/dev/null 2>&1 || true
+    else
+        manifest_set components.uv.managed false >/dev/null 2>&1 || true
+    fi
+    return 0
+}
+
+# exakit_ensure_uv — make EXAKIT_UV_BIN a uv the kit may run. A uv at or
+# above the floor that is already on the machine is used as is; otherwise the
+# pinned release is installed (never during a read-only query). Non-zero
+# means "no usable uv", and the caller degrades the way it always did.
 exakit_ensure_uv() {
-    if [ -n "${EXAKIT_UV_BIN:-}" ] && [ -x "$EXAKIT_UV_BIN" ]; then
+    # Being asked for uv WHILE deciding about uv: the answer is no, so the
+    # asker takes its no-Python path. See the recursion guard note above.
+    [ "${_EXAKIT_UV_RESOLVING:-0}" = "1" ] && return 1
+    if [ -n "${_EXAKIT_UV_VETTED:-}" ] && [ -x "$_EXAKIT_UV_VETTED" ]; then
+        EXAKIT_UV_BIN="$_EXAKIT_UV_VETTED"
         return 0
     fi
-    if command -v uv >/dev/null 2>&1; then
-        EXAKIT_UV_BIN="$(command -v uv)"
+    _eu_report="$(exakit_uv_report)"
+    _eu_verdict="${_eu_report%%|*}"
+    _eu_rest="${_eu_report#*|}"
+    _eu_path="${_eu_rest%%|*}"
+    _eu_rest="${_eu_rest#*|}"
+    _eu_have="${_eu_rest%%|*}"
+    _eu_min="${_eu_rest#*|}"
+    if [ "$_eu_verdict" = "ok" ]; then
+        EXAKIT_UV_BIN="$_eu_path"
+        _EXAKIT_UV_VETTED="$_eu_path"
         return 0
     fi
-    if [ -x "$EXAKIT_BIN_DIR/uv" ]; then
-        EXAKIT_UV_BIN="$EXAKIT_BIN_DIR/uv"
-        return 0
-    fi
+    # One attempt per process: a download that failed a moment ago fails again.
+    [ "${_EXAKIT_UV_NONE:-0}" = "1" ] && return 1
     # A READ-ONLY STATE QUERY INSTALLS NOTHING. `exakit status --json` is
     # documented as a state query, and on a stock macOS (system python3 is
     # 3.9.6, below the tomllib floor) the very first one used to arrive here
@@ -1348,9 +1639,14 @@ exakit_ensure_uv() {
     # network, with no prompt and no mention in AGENTS.md. Report "no
     # interpreter" instead and let the caller degrade honestly; every command
     # that may CHANGE the machine (install, update, mcp-setup) still
-    # bootstraps.
+    # bootstraps. A uv BELOW THE FLOOR is "no interpreter" here on purpose:
+    # the kit does not run it, not even to read its own manifest.
     if [ "${EXAKIT_READONLY_QUERY:-0}" = "1" ]; then
-        _exakit_log_file "INFO  uv bootstrap skipped: this is a read-only state query"
+        if [ "$_eu_verdict" = "below" ]; then
+            _exakit_log_file "INFO  uv $_eu_have at $_eu_path is below the minimum $_eu_min and will not be run; bootstrap skipped: this is a read-only state query"
+        else
+            _exakit_log_file "INFO  uv bootstrap skipped: this is a read-only state query"
+        fi
         return 1
     fi
     # Narration to STDERR, always: this bootstrap runs lazily from inside
@@ -1358,29 +1654,89 @@ exakit_ensure_uv() {
     # stock macOS with no Python 3.11+, the very first `exakit status --json`
     # lands here, and these lines used to interleave with the JSON object on
     # stdout, corrupting the one answer the contract promises is parseable.
-    info "Installing the managed Python bootstrapper (uv)" >&2
-    mkdir -p "$EXAKIT_BIN_DIR"
-    # Same protocol guards as the mcp.sh bootstrap, for the same reason: this
-    # script is EXECUTED, -L follows redirects, and a 302 to http:// would
-    # otherwise be fetched in the clear and piped into sh. wget spells it
-    # --https-only.
-    if command -v curl >/dev/null 2>&1; then
-        env UV_NO_MODIFY_PATH=1 INSTALLER_NO_MODIFY_PATH=1 sh -c \
-            'curl -LsSf --proto "=https" --proto-redir "=https" https://astral.sh/uv/install.sh | sh' >> "${EXAKIT_LOG_FILE:-/dev/null}" 2>&1 || return 1
-    elif command -v wget >/dev/null 2>&1; then
-        env UV_NO_MODIFY_PATH=1 INSTALLER_NO_MODIFY_PATH=1 sh -c \
-            'wget -qO- --https-only https://astral.sh/uv/install.sh | sh' >> "${EXAKIT_LOG_FILE:-/dev/null}" 2>&1 || return 1
+    if [ "$_eu_verdict" = "below" ]; then
+        warn "uv $_eu_have at $_eu_path is below the minimum $_eu_min the kit will run (its CA store trusts a compromised root) — it is left alone; the kit installs its own uv" >&2
     else
-        warn "Neither curl nor wget is available to install uv." >&2
+        info "Installing uv (the Python tool runner), pinned and verified" >&2
+    fi
+    # In a subshell so a die inside (download, checksum, unpack) becomes a
+    # return code here: the callers of this lazy path degrade on "no uv", they
+    # do not end the process. The install step (mcp_uv_install) dies itself.
+    _EXAKIT_UV_RESOLVING=1
+    ( exakit_uv_install_pinned ) 1>&2
+    _eu_rc=$?
+    _EXAKIT_UV_RESOLVING=0
+    if [ "$_eu_rc" -ne 0 ] || [ ! -x "$EXAKIT_BIN_DIR/uv" ]; then
+        _EXAKIT_UV_NONE=1
         return 1
     fi
-    if [ -x "$EXAKIT_BIN_DIR/uv" ]; then
-        EXAKIT_UV_BIN="$EXAKIT_BIN_DIR/uv"
-        ok "uv installed at $EXAKIT_UV_BIN" >&2
-        return 0
+    EXAKIT_UV_BIN="$EXAKIT_BIN_DIR/uv"
+    _EXAKIT_UV_VETTED="$EXAKIT_UV_BIN"
+    exakit_uv_record_manifest
+    return 0
+}
+
+# exakit_uv_uvx — the uvx beside the uv the kit uses; empty when there is no
+# usable uv. This is the command the AI client configs are pointed at, so a
+# client never launches a uvx the kit itself refused.
+exakit_uv_uvx() {
+    exakit_ensure_uv || return 1
+    _uvx="$(dirname "$EXAKIT_UV_BIN")/uvx"
+    [ -x "$_uvx" ] || return 1
+    printf '%s\n' "$_uvx"
+}
+
+# exakit_uv_update — the `exakit update uv` arm. Reached by the dispatcher only
+# when the installed uv differs from the advertised one and is not ahead of it.
+exakit_uv_update() {
+    _uvu_report="$(exakit_uv_report)"
+    _uvu_verdict="${_uvu_report%%|*}"
+    _uvu_rest="${_uvu_report#*|}"
+    _uvu_path="${_uvu_rest%%|*}"
+    _uvu_rest="${_uvu_rest#*|}"
+    _uvu_have="${_uvu_rest%%|*}"
+    _uvu_min="${_uvu_rest#*|}"
+    _uvu_want="$(exakit_component_available uv 2>/dev/null || true)"
+    [ -n "$_uvu_want" ] || _uvu_want="$(exakit_uv_pinned_version)"
+    case "$_uvu_verdict" in
+        ok)
+            if [ "$_uvu_path" != "$EXAKIT_BIN_DIR/uv" ]; then
+                # Theirs, and safe to run: the kit does not replace a tool the
+                # user installed. The row in `exakit version` keeps saying what
+                # is installed and what the kit tested.
+                ok "uv $_uvu_have at $(ui_tilde "$_uvu_path") is yours and at or above the minimum $_uvu_min — leaving it (upgrade it yourself to $_uvu_want with its own tooling, e.g. uv self update or brew upgrade uv)"
+                return 0
+            fi
+            if [ "$_uvu_have" = "$_uvu_want" ]; then
+                ok "uv is already current ($_uvu_have)"
+                return 0
+            fi
+            info "uv $_uvu_have at $(ui_tilde "$_uvu_path") is the kit's own copy; this kit ships $_uvu_want — replacing it"
+            ;;
+        below)
+            warn "uv $_uvu_have at $(ui_tilde "$_uvu_path") is below the minimum $_uvu_min the kit will run — leaving it alone and installing the kit's own uv $_uvu_want"
+            ;;
+        *)
+            info "Installing uv $_uvu_want (the Python tool runner), pinned and verified"
+            ;;
+    esac
+    _EXAKIT_UV_RESOLVING=1
+    exakit_uv_install_pinned
+    _EXAKIT_UV_RESOLVING=0
+    EXAKIT_UV_BIN="$EXAKIT_BIN_DIR/uv"
+    _EXAKIT_UV_VETTED="$EXAKIT_UV_BIN"
+    _EXAKIT_UV_NONE=
+    exakit_uv_record_manifest
+    manifest_set desired.uv "$(exakit_uv_version_of "$EXAKIT_UV_BIN" 2>/dev/null || printf '%s' "$_uvu_want")" >/dev/null 2>&1 || true
+    # The AI clients launch uvx by absolute path, so a kit copy that just
+    # landed beside an old uv elsewhere has to be written into their configs
+    # or they keep starting the old one. mcp.sh owns that; it may be absent
+    # (a kit copy built without the MCP module), and then there is no config
+    # to point anywhere.
+    if command -v mcp_point_clients_at_kit_uv >/dev/null 2>&1; then
+        mcp_point_clients_at_kit_uv || true
     fi
-    warn "uv installation finished but the binary was not found in $EXAKIT_BIN_DIR." >&2
-    return 1
+    return 0
 }
 
 run_python() {
@@ -2857,6 +3213,9 @@ exakit_component_latest() {
     case "$1" in
         exakit)   exakit_latest_github_release_version "$EXAKIT_KIT_REPO" ;;
         exapump)  exakit_latest_github_release_version "$EXAKIT_EXAPUMP_REPO" ;;
+        # astral tags releases as plain numbers (0.13.6, no v); the helper
+        # strips an optional v, so the answer has the same shape either way.
+        uv)       exakit_latest_github_release_version "$EXAKIT_UV_REPO" ;;
         mcp)      exakit_latest_pypi_version "$EXAKIT_MCP_PACKAGE" ;;
         pyexasol) exakit_latest_pypi_version "${EXAKIT_PYEXASOL_PACKAGE:-pyexasol}" ;;
         personal) exakit_latest_github_release_version "$EXAKIT_PERSONAL_REPO" ;;
@@ -2946,7 +3305,7 @@ _exakit_component_block() {
     case "$1" in
         exakit) printf '%s\n' kit ;;
         kit2)   printf '%s\n' kit2 ;;
-        exapump|mcp|pyexasol|personal|skills) printf 'components.%s\n' "$1" ;;
+        exapump|uv|mcp|pyexasol|personal|skills) printf 'components.%s\n' "$1" ;;
         runtime)
             case "$(exakit_installation_runtime_type 2>/dev/null)" in
                 personal) printf '%s\n' components.personal ;;
@@ -2971,6 +3330,7 @@ _exakit_component_block() {
 _exakit_component_env_override() {
     case "$1" in
         exapump)  printf '%s' "${EXAKIT_EXAPUMP_VERSION:-}" ;;
+        uv)       printf '%s' "${EXAKIT_UV_VERSION:-}" ;;
         mcp)      printf '%s' "${EXAKIT_MCP_VERSION:-}" ;;
         pyexasol) printf '%s' "${EXAKIT_PYEXASOL_VERSION:-}" ;;
         personal) printf '%s' "${EXAKIT_PERSONAL_VERSION:-}" ;;
@@ -3025,6 +3385,26 @@ exakit_component_available() {
         printf '%s\n' "$_cav_override"
         return 0
     fi
+    # A uv the USER installed, at or above the floor, is the version the kit
+    # wants: it does not replace a tool it did not install (exakit_uv_update
+    # says so), so advertising the pinned release against it would park the
+    # row on "update available" for good and have the notice nag about an
+    # update that never applies. The kit's own copy, a copy below the floor,
+    # and no copy at all are measured against the pinned release as usual.
+    if [ "$1" = "uv" ]; then
+        _cav_uv="$(exakit_uv_report 2>/dev/null || true)"
+        case "$_cav_uv" in
+            ok\|*)
+                _cav_uv="${_cav_uv#*|}"
+                _cav_uv_path="${_cav_uv%%|*}"
+                _cav_uv="${_cav_uv#*|}"
+                if [ "$_cav_uv_path" != "$EXAKIT_BIN_DIR/uv" ]; then
+                    printf '%s\n' "${_cav_uv%%|*}"
+                    return 0
+                fi
+                ;;
+        esac
+    fi
     case "${EXAKIT_VERSION_POLICY:-manifest}" in
         latest)
             exakit_component_latest "$1"
@@ -3057,6 +3437,14 @@ exakit_component_available() {
         _exakit_component_fallback skills
         return $?
     fi
+    # And uv: the block arrived with kit 0.2.3, and the cached document on a
+    # machine that has just updated can predate it for as long as the cache
+    # TTL lasts. The pin the kit shipped with is the answer then, not "unknown"
+    # - that is also the version the install would actually put down.
+    if [ "$1" = "uv" ]; then
+        _exakit_component_fallback uv
+        return $?
+    fi
     return 1
 }
 
@@ -3064,6 +3452,7 @@ exakit_component_available() {
 _exakit_component_fallback() {
     case "$1" in
         exapump)  printf '%s\n' "$EXAKIT_EXAPUMP_VERSION_FALLBACK" ;;
+        uv)       printf '%s\n' "$EXAKIT_UV_VERSION_FALLBACK" ;;
         mcp)      printf '%s\n' "$EXAKIT_MCP_VERSION_FALLBACK" ;;
         pyexasol) printf '%s\n' "$EXAKIT_PYEXASOL_VERSION_FALLBACK" ;;
         personal) printf '%s\n' "$EXAKIT_PERSONAL_VERSION_FALLBACK" ;;
@@ -3141,6 +3530,7 @@ exakit_component_supported() {
             [ "$(detect_arch 2>/dev/null || true)" != "unsupported" ] || return 1
             return 0
             ;;
+        uv) exakit_uv_platform >/dev/null 2>&1 ;;
         *) return 0 ;;
     esac
 }
@@ -3341,6 +3731,18 @@ exakit_component_current() {
             else
                 manifest_get components.mcp_server.version 2>/dev/null
             fi
+            ;;
+        uv)
+            # The uv the kit would run, read from the binary itself: the first
+            # one at or above the floor, else the old one it refuses (so the
+            # table shows 0.12.0 against the tested version and offers the
+            # update), else provably absent. Installs nothing.
+            _cur_uv="$(exakit_uv_report 2>/dev/null || true)"
+            case "$_cur_uv" in
+                none\|*|'') return 1 ;;
+            esac
+            _cur_uv="${_cur_uv#*|}"; _cur_uv="${_cur_uv#*|}"
+            printf '%s\n' "${_cur_uv%%|*}"
             ;;
         pyexasol)
             _cur_python="$(manifest_get components.pyexasol.python 2>/dev/null || true)"
@@ -4801,7 +5203,10 @@ exakit_update_targets() {
             # exakit_update_skills). Before it joined this list, bumping that
             # version reached nobody. A kit copy that carries no skills/ at all
             # has no skill set to keep current, so it gets no row either.
-            printf '%s\n' exakit runtime exapump mcp pyexasol
+            # uv sits before mcp because the MCP server runs through it: a
+            # uv moved to the floor is what the refreshed client configs
+            # then point at.
+            printf '%s\n' exakit runtime exapump uv mcp pyexasol
             exakit_skills_dir >/dev/null 2>&1 && printf '%s\n' skills
             # Marketplace add-ons join the routine update set only once they
             # are installed: `exakit update all` must never install a tool the
@@ -4816,7 +5221,7 @@ exakit_update_targets() {
             fi
             ;;
         runtime|database|db) printf '%s\n' runtime ;;
-        personal|exakit|exapump|mcp|pyexasol|skills|kit2) printf '%s\n' "$1" ;;
+        personal|exakit|exapump|uv|mcp|pyexasol|skills|kit2) printf '%s\n' "$1" ;;
         *)
             # Any registered marketplace add-on is a valid explicit target.
             _exakit_addon_registered "$1" || return 1
@@ -5967,6 +6372,7 @@ exakit_update_component() {
             command -v exapump_update >/dev/null 2>&1 || die "exapump module is not available in this version."
             exapump_update
             ;;
+        uv) exakit_uv_update ;;
         mcp)
             command -v mcp_update >/dev/null 2>&1 || die "MCP module is not available in this version."
             mcp_update
@@ -9235,6 +9641,20 @@ exakit_mcp_setup() {
     # About to create/verify the read-only database user: a stopped database
     # here used to surface as a bare "Connection refused" — heal it first.
     exakit_ensure_runtime_running
+
+    # The configs written below name the uvx the clients will launch, and the
+    # renderer takes it from the manifest record. Settle uv FIRST, so the
+    # record names a uv at or above the floor (installing the kit's own when
+    # the machine's is below it) - otherwise a record left by an older kit
+    # would put a refused uvx straight into every client config.
+    if command -v mcp_uv_install >/dev/null 2>&1; then
+        mcp_uv_install
+        _mcps_uvx="$(exakit_uv_uvx 2>/dev/null || true)"
+        if [ -n "$_mcps_uvx" ] && [ -f "${EXAKIT_MANIFEST:-}" ]; then
+            manifest_set components.mcp_server.command "$_mcps_uvx"
+            manifest_set components.mcp_server.uv_path "$EXAKIT_UV_BIN"
+        fi
+    fi
 
     info "MCP setup will edit the selected AI client config files."
 

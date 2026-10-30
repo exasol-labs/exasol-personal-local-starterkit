@@ -2,6 +2,48 @@
 
 ## Unreleased
 
+## 0.2.3
+
+**Security release: uv is pinned, verified and held to a minimum version.**
+uv is the Python tool runner the kit depends on: `uvx` is the process every
+AI client launches to run the MCP server (and hands the database password
+to), and `uv` provides the kit's managed Python where the system one is too
+old. Two findings against 0.2.2 are closed:
+
+- **An existing uv was used without reading its version.** uv below 0.13.4
+  ships a CA bundle that trusts an emSign root whose intermediate CA keys are
+  compromised ([GHSA-hq85-5cpj-mr62](https://github.com/astral-sh/uv/security/advisories/GHSA-hq85-5cpj-mr62),
+  critical), so a network attacker could impersonate PyPI or GitHub to it.
+  The kit now refuses to run a uv below `components.uv.min_version`
+  (0.13.4). A uv the user installed themselves is never modified: at or
+  above the floor it is used where it is; below it the kit installs its own
+  copy into `~/.local/bin` and uses that one for everything, and `exakit
+  status` says so (`uv:` row; `status --json` carries a `uv` object and
+  `remedies.uv`).
+- **When uv was missing, `astral.sh/uv/install.sh` (`install.ps1` on
+  Windows) was fetched and executed unpinned and unverified.** No installer
+  script runs any more, from anyone. The kit downloads the pinned uv release
+  archive from GitHub (`components.uv.version`, 0.13.6), verifies it against
+  the per-platform SHA-256 in versions.json before anything is unpacked, and
+  places `uv` and `uvx` itself - exactly how exapump and the scheduler are
+  installed. A digest that does not match refuses the install; there is no
+  override. The Homebrew path is gone with the script it existed to avoid.
+
+uv is a component like the others: `exakit version` shows a `uv` row,
+`exakit update` (or `exakit update uv`) moves the kit's own copy to the pin
+and points every connected AI client at the vetted `uvx`; a user-installed
+uv at or above the floor is reported as current and left alone. Every uv
+user in the kit (the MCP server, the managed Python, pyexasol, dash-server,
+JSON Tables, dbt-exasol, `exakit mcp-setup`) resolves through the one
+checker, on macOS, Linux, WSL and Windows alike. CI hashes the five uv
+archives whenever versions.json changes, and the bump workflow proposes uv
+releases with recomputed digests.
+
+**Updating from 0.2.2.** `exakit update` fetches the new kit; the uv check
+runs on the next `exakit` command, and `exakit update` run once more (or
+`exakit update uv`) installs the pinned uv where the machine's is below the
+floor. Until then `exakit status` names the old uv and the remedy.
+
 ## 0.2.2
 
 **The Personal launcher comes from Exasol's S3 bucket first, verified, with
