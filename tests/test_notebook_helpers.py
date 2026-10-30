@@ -126,7 +126,7 @@ class ModelAndTraceTest(unittest.TestCase):
     def test_no_model_name_skips_the_text_step_with_one_line(self):
         with mock.patch.dict(os.environ, {}, clear=True), redirect_stdout(io.StringIO()) as out:
             self.assertIsNone(exakit_nb.model_client())
-        self.assertIn("EXAKIT_NB_MODEL not set", out.getvalue())
+        self.assertIn("EXAKIT_MODEL_ID not set", out.getvalue())
 
     def test_tracing_is_off_without_every_langfuse_variable(self):
         with mock.patch.dict(os.environ, {"LANGFUSE_PUBLIC_KEY": "pk", "LANGFUSE_HOST": "h"}, clear=True), redirect_stdout(io.StringIO()) as out:
@@ -939,7 +939,7 @@ class TraceSdk5Test(unittest.TestCase):
 
     SECRET = "sk-lf-SECRET-9f3a7c"
     ENV = {"LANGFUSE_PUBLIC_KEY": "pk-lf-public", "LANGFUSE_SECRET_KEY": SECRET, "LANGFUSE_BASE_URL": "https://langfuse.example",
-           "EXAKIT_NB_DATASETS": str(ROOT / "data" / "datasets")}
+           "EXAKIT_NB_DATASETS": str(ROOT / "data" / "datasets"), "EXAKIT_PROVIDER_BASE_URL": "https://model.example/v1"}
 
     class Conn:
         def session_id(self):
@@ -963,7 +963,7 @@ class TraceSdk5Test(unittest.TestCase):
         out, err = io.StringIO(), io.StringIO()
         with mock.patch.dict(os.environ, {**env, "EXAKIT_HOME": self.home.name}, clear=True), redirect_stdout(out), redirect_stderr(err):
             with exakit_nb.trace(self.Conn(), **kwargs) as span:
-                inside = exakit_nb.model_client() if os.environ.get("EXAKIT_NB_MODEL") else None
+                inside = exakit_nb.model_client() if os.environ.get("EXAKIT_MODEL_ID") else None
         return span, inside, out.getvalue() + err.getvalue()
 
     def test_one_observation_with_the_attributes_propagated_and_the_workflow_logged(self):
@@ -1012,7 +1012,7 @@ class TraceSdk5Test(unittest.TestCase):
 
     def test_the_secret_key_is_in_no_output_tag_or_log(self):
         ds = exakit_nb.dataset(FakeConn(PHARMA), "pharma_trials")
-        env = {**self.ENV, "EXAKIT_WORKFLOW_ID": "wf-20261027-abcdef", "EXAKIT_NB_MODEL": "m", "LANGFUSE_HOST": "https://h"}
+        env = {**self.ENV, "EXAKIT_WORKFLOW_ID": "wf-20261027-abcdef", "EXAKIT_MODEL_ID": "m", "LANGFUSE_HOST": "https://h"}
         _, _, output = self._trace(env, dataset=ds)
         self.assertNotIn(self.SECRET, output)
         self.assertNotIn(self.SECRET, repr(self.log[1:]))                      # only the client constructor gets it
@@ -1022,7 +1022,7 @@ class TraceSdk5Test(unittest.TestCase):
         self.assertNotIn(self.SECRET, repr(self.langfuse.openai.OpenAI(api_key="k")))
 
     def test_tracing_off_names_the_three_variables_and_uses_the_plain_client(self):
-        env = {"LANGFUSE_PUBLIC_KEY": "pk", "LANGFUSE_SECRET_KEY": self.SECRET, "EXAKIT_NB_MODEL": "m"}
+        env = {"LANGFUSE_PUBLIC_KEY": "pk", "LANGFUSE_SECRET_KEY": self.SECRET, "EXAKIT_MODEL_ID": "m", "EXAKIT_PROVIDER_BASE_URL": "https://model.example/v1"}
         span, inside, output = self._trace(env)
         self.assertIsNone(span)
         self.assertEqual(self.log, [])
@@ -1031,8 +1031,8 @@ class TraceSdk5Test(unittest.TestCase):
         self.assertEqual(inside[0][0], "openai")
 
     def test_tracing_on_uses_the_langfuse_drop_in(self):
-        _, inside, _ = self._trace({**self.ENV, "EXAKIT_NB_MODEL": "m", "OPENAI_API_KEY": "key"})
-        self.assertEqual(inside, (("langfuse.openai", {"api_key": "key"}), "m"))
+        _, inside, _ = self._trace({**self.ENV, "EXAKIT_MODEL_ID": "m", "EXAKIT_PROVIDER_API_KEY": "key"})
+        self.assertEqual(inside, (("langfuse.openai", {"api_key": "key", "base_url": "https://model.example/v1"}), "m"))
 
     def test_the_success_line_is_the_trace_url_when_the_sdk_builds_one(self):
         """AC-DS4.5: SDK 5's Langfuse.get_trace_url() gives the trace's page (it asks the server for the project id);

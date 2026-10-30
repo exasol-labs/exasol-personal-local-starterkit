@@ -157,7 +157,7 @@ def copy(front: str, kit: Path, notebooks_dir: Path) -> tuple[list[str], list[st
         except OSError as err:
             problems.append(f"{legacy.name}: {err.strerror or err}")
     # Keep the lesson guide and required license notices alongside the bundle.
-    for name in ("EXAMPLE-GUIDE.md", "UPSTREAM-LICENSE.txt", "INSTALL-AND-UPDATE.md"):
+    for name in ("EXAMPLE-GUIDE.md", "UPSTREAM-LICENSE.txt", "INSTALL-AND-UPDATE.md", "MODEL-PROVIDERS.md"):
         origin, target = kit / "notebook" / name, base / name
         if not origin.is_file() or target.exists() or target.is_symlink() or name in before:
             continue

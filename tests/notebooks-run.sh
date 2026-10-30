@@ -17,7 +17,7 @@
 # notebook that did not run exits with, so a CI log never reads a silent skip
 # as a pass and never mistakes "no database" for "a cell failed".
 #
-# What the run sees: EXAKIT_NB_MODEL / OPENAI_BASE_URL / OPENAI_API_KEY point at
+# What the run sees: EXAKIT_MODEL_ID / EXAKIT_PROVIDER_BASE_URL / EXAKIT_PROVIDER_API_KEY point at
 # tests/lib/stub_model_server.py (started here on a free port, stopped at the
 # end); LANGFUSE_* are dropped by --run; MLFLOW_TRACKING_URI passes through when
 # set, else MLflow writes a local store in the run's temporary folder. Nothing
@@ -133,8 +133,8 @@ if [ -z "$PORT" ]; then
     echo "FAIL the stub model server did not start: $(cat "$TMP/stub.err" 2>/dev/null | tail -3)" >&2
     exit 1
 fi
-export EXAKIT_NB_MODEL="stub" OPENAI_BASE_URL="http://127.0.0.1:$PORT/v1" OPENAI_API_KEY="stub-key"
-echo "stub model endpoint on $OPENAI_BASE_URL (tests/lib/stub_model_server.py)"
+export EXAKIT_MODEL_ID="stub" EXAKIT_PROVIDER_BASE_URL="http://127.0.0.1:$PORT/v1" EXAKIT_PROVIDER_API_KEY="stub-key"
+echo "stub model endpoint on $EXAKIT_PROVIDER_BASE_URL (tests/lib/stub_model_server.py)"
 echo "database $HOSTP:$PORTP answers; notebook Python: $NB_PY"
 if [ -n "${MLFLOW_TRACKING_URI:-}" ]; then
     echo "MLflow runs go to MLFLOW_TRACKING_URI (set by the caller)"

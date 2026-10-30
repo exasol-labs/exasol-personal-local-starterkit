@@ -25,10 +25,14 @@ class BundleTest(unittest.TestCase):
                         self.assertIn("nb.connect()", path.read_text())
                     self.assertFalse((base / "upstream-sources.json").exists())
                     self.assertTrue((base / "UPSTREAM-LICENSE.txt").is_file())
+                    guide = base / "MODEL-PROVIDERS.md"
+                    self.assertEqual(guide.read_bytes(), (ROOT / "notebook/MODEL-PROVIDERS.md").read_bytes())
+                    guide.write_text("my provider notes")
                     sample = base / "data-scientist" / doc["notebooks"][0][front]
                     sample.write_text("my notebook")
                     self.assertEqual(bundle.copy(front, ROOT, Path(tmp)), ([], []))
                     self.assertEqual(sample.read_text(), "my notebook")
+                    self.assertEqual(guide.read_text(), "my provider notes")
 
     def test_old_generated_manifest_is_removed_but_user_changes_are_preserved(self):
         with tempfile.TemporaryDirectory() as tmp:

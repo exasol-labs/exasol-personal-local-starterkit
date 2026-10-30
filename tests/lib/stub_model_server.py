@@ -14,7 +14,7 @@ Routes (the OpenAI shapes, enough for ``client.chat.completions.create`` and ``c
 - anything else is 404 with a JSON error in the OpenAI shape.
 
 Used by ``tools/notebooks.py --run`` (through ``tests/notebooks-run.sh``) and by tests: start it, point
-``OPENAI_BASE_URL`` at ``http://127.0.0.1:<port>/v1`` with any ``OPENAI_API_KEY`` and ``EXAKIT_NB_MODEL``, run,
+``EXAKIT_PROVIDER_BASE_URL`` at ``http://127.0.0.1:<port>/v1`` with any ``EXAKIT_PROVIDER_API_KEY`` and ``EXAKIT_MODEL_ID``, run,
 kill it. ``--port 0`` lets the OS choose; the first line on stdout is ``port=<n>`` and is flushed before the server
 answers anything, so a caller reads one line and goes on. Logs one line per request to stderr (method, path, status;
 never the prompt).

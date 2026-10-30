@@ -179,7 +179,7 @@ def ask(dataset: Any, question: str, proposed_sql: str | None = None) -> Proposa
 
         endpoint = model_client()
         if endpoint is None:
-            raise RuntimeError("Set EXAKIT_NB_MODEL for SQL drafting, or pass proposed_sql= with SQL you wrote.")
+            raise RuntimeError("Set EXAKIT_MODEL_ID for SQL drafting, or pass proposed_sql= with SQL you wrote.")
         client, model = endpoint
         roles = {role: column for role, column in dataset.roles()}
         prompt = {"table": dataset.fact_table, "roles": roles, "question": question,

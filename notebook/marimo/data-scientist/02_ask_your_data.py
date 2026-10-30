@@ -23,6 +23,7 @@ def _(mo):
     **By the end:** you will have a read-only answer and a record of the SQL you approved. Paste the quickstart's workflow ID into `WORKFLOW_ID` to connect it to the earlier investigation.
 
     **Optional AI:** the supplied query works with `DRAFT_WITH_MODEL = False`. A configured model can draft a different query when you opt in; you still inspect and approve it.
+    Use the same `EXAKIT_MODEL_ID`, `EXAKIT_PROVIDER_BASE_URL` and `EXAKIT_PROVIDER_API_KEY` as Explore. The [provider guide](../MODEL-PROVIDERS.md) explains documented connection options and their limits. A compatible endpoint does not guarantee valid SQL or JSON; the helper validates the proposal before you approve it.
     """)
     return
 
@@ -33,7 +34,7 @@ def _():
 
     DATASET = "pharma_trials"  # or "banking_complaints", or your own approved descriptor
     QUESTION = "How many rows are in each category?"
-    DRAFT_WITH_MODEL = False  # set True after EXAKIT_NB_MODEL is configured; no rows are sent to draft SQL
+    DRAFT_WITH_MODEL = False  # set True after EXAKIT_MODEL_ID is configured; no rows are sent to draft SQL
     WORKFLOW_ID = None  # paste the quickstart's wf-... id to continue its log
 
     if WORKFLOW_ID:

@@ -498,20 +498,38 @@ class ModelNote(unittest.TestCase):
     def test_no_note_without_a_model(self):
         prof = typical()
         doc = svc.draft(prof)
-        with mock.patch.dict(os.environ, {"EXAKIT_NB_MODEL": "", "OPENAI_BASE_URL": ""}):
+        with mock.patch.dict(os.environ, {"EXAKIT_MODEL_ID": "", "EXAKIT_PROVIDER_BASE_URL": ""}):
             self.assertIsNone(svc.model_notes(doc, prof))
-        with mock.patch.dict(os.environ, {"EXAKIT_NB_MODEL": "llama", "OPENAI_BASE_URL": ""}):
+        with mock.patch.dict(os.environ, {"EXAKIT_MODEL_ID": "llama", "EXAKIT_PROVIDER_BASE_URL": ""}):
             self.assertIsNone(svc.model_notes(doc, prof))
-        with mock.patch.dict(os.environ, {"EXAKIT_NB_MODEL": "", "OPENAI_BASE_URL": "http://127.0.0.1:9"}):
+        with mock.patch.dict(os.environ, {"EXAKIT_MODEL_ID": "", "EXAKIT_PROVIDER_BASE_URL": "http://127.0.0.1:9"}):
             self.assertIsNone(svc.model_notes(doc, prof))
         self.assertNotIn("notes", doc)
+
+    def test_failed_provider_messages_redact_key_and_header_values_even_when_empty(self):
+        prof = typical()
+        doc = svc.draft(prof)
+        before = json.dumps(doc, sort_keys=True)
+        env = {"EXAKIT_MODEL_ID": "m", "EXAKIT_PROVIDER_BASE_URL": "https://provider.example/v1",
+               "EXAKIT_PROVIDER_API_KEY": "test-secret-key",
+               "EXAKIT_PROVIDER_HEADERS": '{"anthropic-workspace-id":"private-workspace"}'}
+        for message in ("test-secret-key private-workspace refused", ""):
+            err = io.StringIO()
+            with self.subTest(message=message), mock.patch.dict(os.environ, env, clear=True), \
+                    mock.patch.dict(sys.modules, {"openai": fake_openai(error=RuntimeError(message))}), redirect_stderr(err):
+                self.assertIsNone(svc.model_notes(doc, prof))
+            self.assertEqual(err.getvalue().count("\n"), 1)
+            self.assertNotIn("test-secret-key", err.getvalue())
+            self.assertNotIn("private-workspace", err.getvalue())
+            self.assertIn("draft is unchanged", err.getvalue())
+            self.assertEqual(json.dumps(doc, sort_keys=True), before)
 
     def test_a_failed_call_is_one_warning_and_the_draft_stands(self):
         prof = typical()
         doc = svc.draft(prof)
         before = json.dumps(doc, sort_keys=True)
         err = io.StringIO()
-        with mock.patch.dict(os.environ, {"EXAKIT_NB_MODEL": "llama", "OPENAI_BASE_URL": "http://127.0.0.1:9"}), \
+        with mock.patch.dict(os.environ, {"EXAKIT_MODEL_ID": "llama", "EXAKIT_PROVIDER_BASE_URL": "http://127.0.0.1:9"}), \
                 mock.patch.dict(sys.modules, {"openai": fake_openai(error=ConnectionError("refused"))}), redirect_stderr(err):
             self.assertIsNone(svc.model_notes(doc, prof))
         self.assertEqual(err.getvalue().count("\n"), 1)
@@ -522,7 +540,7 @@ class ModelNote(unittest.TestCase):
         prof = typical()
         doc = svc.draft(prof)
         module = fake_openai('Sure: {"CUSTOMER_NAME": "Who bought.", "SEGMENT": "The customer segment.", "GHOST": "x"}')
-        with mock.patch.dict(os.environ, {"EXAKIT_NB_MODEL": "llama", "OPENAI_BASE_URL": "http://127.0.0.1:9"}), \
+        with mock.patch.dict(os.environ, {"EXAKIT_MODEL_ID": "llama", "EXAKIT_PROVIDER_BASE_URL": "http://127.0.0.1:9"}), \
                 mock.patch.dict(sys.modules, {"openai": module}):
             notes = svc.model_notes(doc, prof)
         self.assertEqual(notes, {"CUSTOMER_NAME": "Who bought.", "SEGMENT": "The customer segment."})
@@ -593,7 +611,7 @@ class ShippedDatasets(unittest.TestCase):
 def kit_home():
     """A temporary EXAKIT_HOME for the descriptor store (the owner fixed, no model)."""
     folder = tempfile.TemporaryDirectory()
-    patch = mock.patch.dict(os.environ, {"EXAKIT_HOME": folder.name, "EXAKIT_DESCRIPTOR_OWNER": "dana", "EXAKIT_NB_MODEL": "", "OPENAI_BASE_URL": ""})
+    patch = mock.patch.dict(os.environ, {"EXAKIT_HOME": folder.name, "EXAKIT_DESCRIPTOR_OWNER": "dana", "EXAKIT_MODEL_ID": "", "EXAKIT_PROVIDER_BASE_URL": ""})
     return folder, patch
 
 
@@ -943,13 +961,13 @@ class CommandLine(unittest.TestCase):
             target = Path(folder) / "readings.yaml"
             with mock.patch.object(svc, "connect", return_value=mock.Mock(execute=conn.execute, close=mock.Mock())):
                 code, out, err = self.run_main("draft", "lab.readings", "--json", "--id", "lab-readings", "--write", str(target),
-                                               env={"EXAKIT_NB_MODEL": "", "OPENAI_BASE_URL": ""})
+                                               env={"EXAKIT_MODEL_ID": "", "EXAKIT_PROVIDER_BASE_URL": ""})
             self.assertEqual((code, err), (0, ""))
             doc = json.loads(out)
             self.assertEqual((doc["id"], doc["status"], svc.draft_roles(doc)["category"]), ("lab-readings", "draft", "KIND"))
             self.assertEqual(rules.read_descriptor(target).roles["category"][0].column, "KIND")
             with mock.patch.object(svc, "connect", return_value=mock.Mock(execute=conn.execute, close=mock.Mock())):
-                code, out, _err = self.run_main("draft", "LAB.READINGS", env={"EXAKIT_NB_MODEL": "", "OPENAI_BASE_URL": ""})
+                code, out, _err = self.run_main("draft", "LAB.READINGS", env={"EXAKIT_MODEL_ID": "", "EXAKIT_PROVIDER_BASE_URL": ""})
             self.assertEqual(code, 0)
             self.assertTrue(out.startswith("# Which column of LAB.READINGS"))
 

@@ -41,7 +41,7 @@ role is scored per column (0..1, documented beside each scorer; data/README.md h
 in the order date, label, category, entity, text, a column taken by one role never offered to the next; the best
 column takes the role, the second best is kept as its runner_up; a role whose best score is under THRESHOLD is listed
 under `missing` with the reason, never guessed. All-null and constant columns are excluded first, each with its reason
-under evidence.excluded. An optional model (EXAKIT_NB_MODEL + OPENAI_BASE_URL set) is asked ONCE for one line per
+under evidence.excluded. An optional model (EXAKIT_MODEL_ID + EXAKIT_PROVIDER_BASE_URL set) is asked ONCE for one line per
 column from the column names and the profile's numbers - never a row - and writes `notes`; a failed call is one
 warning line, the draft unchanged. A table or a role column whose name is not a plain upper-case SQL name (the reader
 upper-cases what it reads and the notebooks write it into SQL unquoted) is refused at draft time with the column, the
@@ -97,7 +97,7 @@ LOW_CARDINALITY = 50                 # up to this many distinct values, the valu
 TOP_K = 5                            # values shown per role in the evidence
 THRESHOLD = 0.5                      # a role whose best column scores under this is missing
 OWNER_VARIABLE = "EXAKIT_DESCRIPTOR_OWNER"
-MODEL_VARIABLE = "EXAKIT_NB_MODEL"
+MODEL_VARIABLE = "EXAKIT_MODEL_ID"
 SINGLE_ROLES = ("date", "label", "category", "entity")     # assignment order; text last
 ROLES = SINGLE_ROLES + ("text",)
 DATE_FORMATS = (("YYYY-MM-DD", "%Y-%m-%d"), ("DD.MM.YYYY", "%d.%m.%Y"), ("MM/DD/YYYY", "%m/%d/%Y"))
@@ -707,10 +707,10 @@ def _plain_remedy(profile: dict[str, Any], table: str) -> str:
 # --- the model note ------------------------------------------------------------------------------------------------
 
 def model_notes(doc: dict[str, Any], profile: dict[str, Any]) -> dict[str, str] | None:
-    """One line per column from the user's model, when EXAKIT_NB_MODEL and OPENAI_BASE_URL are both set: ONE call
+    """One line per column from the user's model, when EXAKIT_MODEL_ID and EXAKIT_PROVIDER_BASE_URL are both set: ONE call
     with the column names and the profile's numbers (never a row, never a value); None without a model or when the
     call fails (one warning line on stderr). Never decisive: the roles are drafted before this is asked."""
-    model, base = os.environ.get(MODEL_VARIABLE, "").strip(), os.environ.get("OPENAI_BASE_URL", "").strip()
+    model, base = os.environ.get(MODEL_VARIABLE, "").strip(), os.environ.get("EXAKIT_PROVIDER_BASE_URL", "").strip()
     if not model or not base:
         return None
     facts = [{k: c.get(k) for k in ("column", "type", "null_rate", "distinct", "distinct_ratio", "avg_len", "max_len", "span_days")
@@ -719,10 +719,15 @@ def model_notes(doc: dict[str, Any], profile: dict[str, Any]) -> dict[str, str] 
     prompt = ("Table " + doc["fact_table"] + ". For each column write one short line (under 120 characters) saying what it "
               "probably holds, from its name and these numbers only. Answer with one JSON object mapping column name to "
               "the line, nothing else.\nColumns: " + json.dumps(facts) + "\nProposed roles: " + json.dumps(roles))
+    config = None
     try:
-        from openai import OpenAI
-        client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY") or "not-needed")
-        answer = client.chat.completions.create(model=model, messages=[{"role": "user", "content": prompt}], temperature=0)
+        folder = kit_root() / "notebook" / "package"
+        if folder.is_dir() and str(folder) not in sys.path:
+            sys.path.insert(0, str(folder))
+        from exakit_nb.model_config import resolve, create_client
+        config = resolve()
+        client = create_client(config)
+        answer = client.chat.completions.create(model=config.model_id, messages=[{"role": "user", "content": prompt}], temperature=0)
         text = answer.choices[0].message.content or ""
         text = text[text.find("{"):text.rfind("}") + 1]
         given = json.loads(text)
@@ -730,7 +735,9 @@ def model_notes(doc: dict[str, Any], profile: dict[str, Any]) -> dict[str, str] 
         notes = {str(k): " ".join(str(v).split())[:200] for k, v in given.items() if str(k) in known and str(v).strip()}
         return notes or None
     except Exception as err:              # noqa: BLE001 - whatever the model or the client raised: the draft stands
-        print(f"Warning: no model notes ({type(err).__name__}: {str(err).splitlines()[0][:120]}); the draft is unchanged.", file=sys.stderr)
+        message = config.redact(str(err)) if config else str(err)
+        reason = (message.splitlines() or ["request failed"])[0][:120]
+        print(f"Warning: no model notes ({type(err).__name__}: {reason}); the draft is unchanged.", file=sys.stderr)
         return None
 
 

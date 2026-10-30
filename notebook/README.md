@@ -54,6 +54,14 @@ can also enable optional profiling notes; it never assigns or approves roles.
 Role suggestions use measured table statistics and column-name rules, and the
 review screen explains their evidence and close alternatives.
 
+Model configuration uses the same provider-neutral names everywhere:
+`EXAKIT_MODEL_ID`, `EXAKIT_PROVIDER_BASE_URL` and `EXAKIT_PROVIDER_API_KEY`.
+The API key is optional only when the selected server allows unauthenticated
+calls. `nb.model_settings()` reports configuration without key or header values.
+See [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md) for Claude, Ollama, LM Studio,
+vLLM and Gemini, their official compatibility documentation, optional routing
+headers and the exact boundary between local contract tests and live evidence.
+
 ## Where the kit stops in the model lifecycle
 
 The model lifecycle is *Develop → Train → Track → Validate → Register → Deploy → Score → Monitor*. The kit's
@@ -154,9 +162,10 @@ python3 tools/notebooks.py --run --output /tmp/executed           # keep each ex
   service the runner does not have. Tag sparingly: a skipped cell is not
   proven.
 - The kernel sees the caller's environment except `LANGFUSE_*`, which are
-  dropped (nothing headless writes to anyone's Langfuse). `EXAKIT_NB_MODEL`,
-  `OPENAI_BASE_URL` and `OPENAI_API_KEY` pass through, so the text step runs
-  when they point at an endpoint; `MLFLOW_TRACKING_URI` passes through when
+  dropped (nothing headless writes to anyone's Langfuse). `EXAKIT_MODEL_ID`,
+  `EXAKIT_PROVIDER_BASE_URL` and `EXAKIT_PROVIDER_API_KEY` pass through to optional AI steps;
+  Explore still requires `USE_AI_THEMES = True`. The ordinary headless flow keeps it off.
+  `EXAKIT_PROVIDER_HEADERS` also passes through. `MLFLOW_TRACKING_URI` passes through when
   set, else MLflow uses the kit's server if running or its local store. Role proposals are approved automatically
   only when the draft's roles equal the current approved version (`EXAKIT_NB_AUTO_APPROVE=force` approves the
   draft); failed container, MLflow or bucket checks raise an error. Each run has a temporary folder as its

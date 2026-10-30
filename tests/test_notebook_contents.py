@@ -328,6 +328,12 @@ class NotebookShapeTest(unittest.TestCase):
         files = [p for p in (ROOT / "notebook").rglob("*") if p.is_file() and p.suffix in (".py", ".ipynb", ".json", ".md")]
         for path in files:
             text = path.read_text(encoding="utf-8")
+            if path == ROOT / "notebook/MODEL-PROVIDERS.md":
+                # These exact model-server examples are public defaults, not database
+                # connection values. Keep all other hosts and every credential check.
+                for endpoint in ("http://localhost:11434/v1/", "http://localhost:1234/v1/",
+                                 "http://localhost:8000/v1/"):
+                    text = text.replace(endpoint, "<documented-model-endpoint>")
             for needle in ("127.0.0.1", "localhost", ":8563", "password=", "dsn=", "LANGFUSE_SECRET_KEY=", "sk-"):
                 with self.subTest(file=path.relative_to(ROOT).as_posix(), needle=needle):
                     self.assertNotIn(needle, text)

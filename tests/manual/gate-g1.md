@@ -50,14 +50,15 @@ Clean machine: no `~/.exasol-starter-kit`, no `exakit` on PATH, no Podman/Docker
    export LANGFUSE_BASE_URL="https://cloud.langfuse.com"   # or the self-hosted URL
    export LANGFUSE_PUBLIC_KEY="pk-lf-..."
    export LANGFUSE_SECRET_KEY="sk-lf-..."
-   export EXAKIT_NB_MODEL="llama3.1"                        # or the participant's model name
-   export OPENAI_BASE_URL="http://127.0.0.1:11434/v1"       # Ollama; or their endpoint
-   export OPENAI_API_KEY="ollama"                           # Ollama ignores it; their key otherwise
+   export EXAKIT_MODEL_ID="llama3.1"                        # or the participant's model name
+   export EXAKIT_PROVIDER_BASE_URL="http://127.0.0.1:11434/v1"       # Ollama; or their endpoint
+   unset EXAKIT_PROVIDER_API_KEY EXAKIT_PROVIDER_HEADERS      # local Ollama needs no key
    ```
    Windows (same window that will run the install):
    ```powershell
    $env:LANGFUSE_BASE_URL = "https://cloud.langfuse.com"; $env:LANGFUSE_PUBLIC_KEY = "pk-lf-..."; $env:LANGFUSE_SECRET_KEY = "sk-lf-..."
-   $env:EXAKIT_NB_MODEL = "llama3.1"; $env:OPENAI_BASE_URL = "http://127.0.0.1:11434/v1"; $env:OPENAI_API_KEY = "ollama"
+   $env:EXAKIT_MODEL_ID = "llama3.1"; $env:EXAKIT_PROVIDER_BASE_URL = "http://127.0.0.1:11434/v1"
+   Remove-Item Env:EXAKIT_PROVIDER_API_KEY, Env:EXAKIT_PROVIDER_HEADERS -ErrorAction SilentlyContinue
    ```
 5. Clear the terminal (`clear` / `cls`). Start the recording and the stopwatch when the participant presses Enter on step 1.
 
@@ -132,7 +133,7 @@ Each step: *Told* (the one neutral sentence), *Sees* (exact strings from the sou
 ### Step 8 Text step, traced
 
 - **Told:** "Run the text step, then find its trace in your Langfuse project."
-- **Sees:** the sample SQL is printed; the cell runs the model over 5 rows and the table gains a `THEME` column. **Nothing prints when tracing is on.** If a variable is missing: `No model endpoint (EXAKIT_NB_MODEL not set before exakit notebook); the text step is skipped.` or `tracing is off (set LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY and LANGFUSE_BASE_URL before exakit notebook); the cell runs as usual.` - both are an **environment** failure of 0.3, not the participant's. In Langfuse: one trace named `explore-text-step` with five generation calls (input, output, token usage, latency), tags `exasol-starter-kit`, `exasol.dataset=pharma_trials`, `exasol.descriptor=...`, `exasol.descriptor_version=1` (`2` after a correction in step 5), `exasol.session_id=...`, and metadata with the sample SQL.
+- **Sees:** the sample SQL is printed; the cell runs the model over 5 rows and the table gains a `THEME` column. The cell prints a link to the trace when tracing is on. If a variable is missing: `No model endpoint (EXAKIT_MODEL_ID not set before exakit notebook); the text step is skipped.` or `tracing is off (set LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY and LANGFUSE_BASE_URL before exakit notebook); the cell runs as usual.` - both are an **environment** failure of 0.3, not the participant's. In Langfuse: one trace named `explore-text-step` with five generation calls (input, output, token usage, latency), tags `exasol-starter-kit`, `exasol.dataset=pharma_trials`, `exasol.descriptor=...`, `exasol.descriptor_version=1` (`2` after a correction in step 5), `exasol.session_id=...`, and metadata with the sample SQL.
 - **Proves:** AC-DS4.5 (practitioner sees the trace), AC-DS4.1 (one trace, every call, tagged), AC-DS4.3 (observer: no key in the output or the trace).
 - **Timing:** start ____ end ____ · **trace seen at ____**
 - **Observer notes:** how they found the trace (session view, tag filter, time); whether they expected the notebook to link to it (it does not); `exasol.workflow_id` is absent because no workflow was started - note if they ask about it.

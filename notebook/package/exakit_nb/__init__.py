@@ -41,16 +41,17 @@ from .quickstart import check_connection, connected_sources, first, list_schemas
 from .role_picker import RoleReview, review_roles
 from .share import ShareDraft, share
 from .ml_train import TrainingPlan, prepare_training
+from . import model_config
 from .workflow import TRACE as TRACE_KIND
 from .workflow import current_workflow, log_event, log_sql, workflow
 
 # Kept alphabetical (case-insensitive) by construction, so a new export can never break the order test.
-__all__ = sorted(["ask", "check_bucket", "check_connection", "check_container", "check_mlflow", "check_model_compatibility", "confirm_send", "connect", "connected_sources", "current_version", "current_workflow", "dash_tools", "DashTools", "Dataset", "dataset", "describe", "descriptor_store_dir", "DescriptorNotApproved", "Draft", "first", "handoff_from", "handoff_is_stale", "list_schemas", "list_versions", "load_own_file", "load_sample", "load_source", "LoadedTable", "log_event", "log_sql", "model_client", "model_list", "prepare_training", "Proposal", "read_handoff", "review_roles", "RoleReview", "save_descriptor", "share", "ShareDraft", "show_roles", "show_sql", "sql", "trace", "tracing", "TrainingPlan", "workflow", "write_handoff"], key=str.lower)
+__all__ = sorted(["ask", "check_bucket", "check_connection", "check_container", "check_mlflow", "check_model_compatibility", "confirm_send", "connect", "connected_sources", "current_version", "current_workflow", "dash_tools", "DashTools", "Dataset", "dataset", "describe", "descriptor_store_dir", "DescriptorNotApproved", "Draft", "first", "handoff_from", "handoff_is_stale", "list_schemas", "list_versions", "load_own_file", "load_sample", "load_source", "LoadedTable", "log_event", "log_sql", "model_client", "model_list", "model_settings", "prepare_training", "Proposal", "read_handoff", "review_roles", "RoleReview", "save_descriptor", "share", "ShareDraft", "show_roles", "show_sql", "sql", "trace", "tracing", "TrainingPlan", "workflow", "write_handoff"], key=str.lower)
 
 LANGFUSE_VARIABLES = ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_BASE_URL")
 LANGFUSE_HOST_VARIABLE = "LANGFUSE_HOST"      # the SDK 3/4 name of LANGFUSE_BASE_URL; still accepted when BASE_URL is unset
 METADATA_LIMIT = 200                           # Langfuse SDK 5: a propagated value is at most 200 characters once JSON-encoded
-MODEL_VARIABLE = "EXAKIT_NB_MODEL"            # the model name; the endpoint and key are the OpenAI client's own OPENAI_* variables
+MODEL_VARIABLE = model_config.MODEL_ID
 _last: dict[str, str | None] = {"sql": None}
 
 
@@ -119,20 +120,20 @@ def tracing() -> bool:
 
 
 def model_client():
-    """(client, model) for the user's own OpenAI-compatible model endpoint, or None (with one line saying why) when
-    EXAKIT_NB_MODEL is not set. The endpoint and key are the client's own OPENAI_BASE_URL and OPENAI_API_KEY; a local
-    endpoint (Ollama, LM Studio) needs only the base URL. With tracing on, the client is Langfuse's drop-in, so its
-    calls are recorded in the trace."""
-    model = os.environ.get(MODEL_VARIABLE)
-    if not model:
+    """(client, model ID) for EXAKIT_MODEL_ID and EXAKIT_PROVIDER_BASE_URL; EXAKIT_PROVIDER_API_KEY is optional for
+    servers without authentication. Tracing uses Langfuse's instrumented client for the same endpoint and key.
+    This interface makes text Chat Completions calls; it does not provide a provider's native API features."""
+    config = model_config.resolve()
+    if config is None:
         print(f"No model endpoint ({MODEL_VARIABLE} not set before exakit notebook); the text step is skipped.")
         return None
-    if tracing():
-        from langfuse.openai import OpenAI
-    else:
-        from openai import OpenAI
-    key = os.environ.get("OPENAI_API_KEY") or "not-needed"        # a local endpoint takes any key
-    return OpenAI(api_key=key), model
+    return model_config.create_client(config, traced=tracing()), config.model_id
+
+
+def model_settings() -> dict:
+    """Display the chosen model and endpoint without the API key or custom header values; makes no request."""
+    config = model_config.resolve()
+    return config.summary() if config else {"configured": False}
 
 
 def _encoded(text: str) -> int:

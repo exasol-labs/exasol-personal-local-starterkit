@@ -360,7 +360,7 @@ class ApproveFlowTest(unittest.TestCase):
         from tests.test_describe_service import FakeConn, Profiles
 
         with tempfile.TemporaryDirectory() as home, mock.patch.dict(os.environ, {
-                "EXAKIT_HOME": home, "EXAKIT_DESCRIPTOR_OWNER": "dana", "EXAKIT_NB_MODEL": "", "OPENAI_BASE_URL": ""}):
+                "EXAKIT_HOME": home, "EXAKIT_DESCRIPTOR_OWNER": "dana", "EXAKIT_MODEL_ID": "", "EXAKIT_PROVIDER_BASE_URL": ""}):
             conn = self.FlowConn(FakeConn(Profiles.COLUMNS, Profiles.rows()))
             draft = exakit_nb.describe("LAB.READINGS", conn=conn, id="readings")
             path = draft.save(Path(home) / "readings.yaml")

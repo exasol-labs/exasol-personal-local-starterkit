@@ -92,8 +92,16 @@ nb.load_own_file("~/data/claims.csv", "MY_DATA.CLAIMS", {"entity": "CUSTOMER", .
 `data-scientist/01_explore` is built that way: one assignment (`DATASET = ...`) picks the
 data, every query is printed before its result, a small scikit-learn model
 runs on this computer, and a text step calls the user's own model endpoint
-only when `EXAKIT_NB_MODEL` is set (endpoint and key in `OPENAI_BASE_URL` and
-`OPENAI_API_KEY`). Point a user who gets "does not match the database" at
+only when `USE_AI_THEMES = True` and `EXAKIT_MODEL_ID` / `EXAKIT_PROVIDER_BASE_URL`
+are configured. `EXAKIT_PROVIDER_API_KEY` supplies the provider's key; an unauthenticated
+local server can leave it unset. The same names apply to optional Ask SQL drafting
+and profiling notes. `nb.model_settings()` is a read-only, redacted configuration
+check. Optional `EXAKIT_PROVIDER_HEADERS` is a JSON map for routing such as
+`anthropic-workspace-id`; it cannot replace authentication headers. The provider
+guide at `notebook/MODEL-PROVIDERS.md` cites the official Claude, Ollama, LM Studio,
+vLLM and Gemini compatibility endpoints and separates local HTTP contracts from
+live-provider verification. Never call an endpoint verified merely because its
+documentation is compatible. Point a user who gets "does not match the database" at
 `exakit data-load <dataset>`.
 
 `ml-engineer/01_train` trains inside the database: `exasol_mlflow.create_script(schema)`
@@ -117,7 +125,7 @@ calls made inside it in the user's own Langfuse project, tagged with the
 database session and the last SQL; `trace(conn, "label", dataset=ds)` adds the
 dataset and the descriptor's digest. Without those variables it prints that tracing is off and
 the notebook runs unchanged. The kit ships no model: the user's
-`OPENAI_BASE_URL` may point at a local endpoint such as Ollama.
+`EXAKIT_PROVIDER_BASE_URL` may point at a local endpoint such as Ollama.
 
 ## AI Lab notebooks on a local database
 

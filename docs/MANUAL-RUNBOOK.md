@@ -293,7 +293,9 @@ Expected current counts: **7, 13 and 17 tests pass**. These cover packaging, con
 
 ## 11. Optional model endpoint and Langfuse trace
 
-This needs your own model endpoint and Langfuse project. Configure `EXAKIT_NB_MODEL`, `OPENAI_BASE_URL`, `OPENAI_API_KEY`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and `LANGFUSE_BASE_URL` securely in the Terminal environment. Do not paste keys into notebook cells or logs.
+Choose a provider using [MODEL-PROVIDERS.md](../notebook/MODEL-PROVIDERS.md): it links official connection requirements for Claude, Ollama, LM Studio, vLLM and Gemini. A local unauthenticated server needs no model API key; optional `EXAKIT_PROVIDER_HEADERS` supplies routing headers when required. Check `nb.model_settings()` in the notebook for a safe, request-free configuration summary.
+
+This trace check needs your own model endpoint and Langfuse project. Configure `EXAKIT_MODEL_ID`, `EXAKIT_PROVIDER_BASE_URL`, `EXAKIT_PROVIDER_API_KEY`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and `LANGFUSE_BASE_URL` securely in the Terminal environment. Do not paste keys into notebook cells or logs.
 
 Restart the notebook servers from that same Terminal so the kernel inherits the settings:
 

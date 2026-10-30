@@ -32,7 +32,7 @@
       "step": 1,
       "title": "Explore a dataset",
       "summary": "The domain's landscape question with the SQL visible, a small scikit-learn model on this computer, and a text step with your own model traced to your Langfuse. Another dataset or your own file is one assignment away. Ends by writing the handoff the ML Engineer's 01_train starts from.",
-      "needs": "A loaded dataset (pharma_trials as it ships, banking_complaints, or your own file with its roles beside it). Optional: EXAKIT_NB_MODEL with OPENAI_BASE_URL and OPENAI_API_KEY for the text step; LANGFUSE_* for tracing.",
+      "needs": "A loaded dataset (pharma_trials as it ships, banking_complaints, or your own file with its roles beside it). Optional: USE_AI_THEMES = True, EXAKIT_MODEL_ID and EXAKIT_PROVIDER_BASE_URL for the text step (EXAKIT_PROVIDER_API_KEY if authentication is required); LANGFUSE_* for tracing.",
       "jupyter": "01_explore.ipynb",
       "marimo": "01_explore.py"
     },
@@ -42,7 +42,7 @@
       "step": 2,
       "title": "Ask your data",
       "summary": "Draft SQL from an approved descriptor, inspect and edit it, then explicitly approve the exact query before it runs with the read-only database identity.",
-      "needs": "An approved descriptor. Optional: EXAKIT_NB_MODEL and an OpenAI-compatible endpoint for SQL drafting. No model is needed for the starter question.",
+      "needs": "An approved descriptor. Optional: EXAKIT_MODEL_ID and EXAKIT_PROVIDER_BASE_URL for text/chat SQL drafting (EXAKIT_PROVIDER_API_KEY if authentication is required). No model is needed for the starter question.",
       "jupyter": "02_ask_your_data.ipynb",
       "marimo": "02_ask_your_data.py"
     },
