@@ -2384,9 +2384,9 @@ check "no remote fetch follows redirects without pinning https" "" "${_pg_bad# }
 _pg_guarded="$(grep -rc -- "--proto '=https'" "$ROOT"/setup/lib/*.sh "$ROOT"/install.sh 2>/dev/null | awk -F: '{s+=$2} END {print s+0}')"
 check "...and it saw the guarded calls" "yes" \
     "$([ "${_pg_guarded:-0}" -ge 8 ] && echo yes || echo no)"
-# The one that carries a credential is the one that must never be unguarded.
-has "the token-bearing lookup pins https" "--proto '=https' --proto-redir '=https'" \
-    "$(sed -n '/_esd_json="\$(curl/,+3p' "$ROOT/setup/lib/exasol-scheduler.sh")"
+# The scheduler release lookup rejects non-HTTPS responses.
+has "the scheduler lookup pins https" 'if not response.url.startswith("https://")' \
+    "$(cat "$ROOT/marketplace/addons/exasol_scheduler.py")"
 
 echo
 echo "a booting database is not a port conflict:"

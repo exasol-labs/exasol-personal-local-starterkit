@@ -36,6 +36,7 @@ printf '{"components":{"notebook":{"version":"3.1.0"}}}\n' > "$EXAKIT_HOME/manif
 run list; check "missing venv exit" 1 "$CODE"; contains "missing venv remedy" "exakit notebook setup" "$OUT"
 
 mkdir -p "$EXAKIT_HOME/notebook-venv/bin"
+rm -f "$EXAKIT_HOME/notebook-venv/bin/python"
 cat > "$EXAKIT_HOME/notebook-venv/bin/python" <<STUB
 #!/bin/sh
 PYTHONPATH="$ROOT/notebook/package" exec python3 "\$@"

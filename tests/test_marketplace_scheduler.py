@@ -5,10 +5,11 @@ from __future__ import annotations
 import io
 import json
 import sys
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "marketplace"))
@@ -78,6 +79,35 @@ class SchedulerTest(unittest.TestCase):
                 scheduler._download(self.ctx, "0.3.1", archive)
         self.assertFalse(archive.exists())
 
+    def test_release_asset_and_digest_follow_versions_document(self) -> None:
+        with patch.object(scheduler.platform, "system", return_value="Darwin"), \
+             patch.object(scheduler.platform, "machine", return_value="arm64"):
+            repo, tag, name = scheduler._asset(self.ctx, "0.3.1")
+        self.assertEqual(("exasol-labs/exasol-scheduler", "v0.3.1",
+                          "exasol_scheduler-v0.3.1-macos-arm64.tar.gz"), (repo, tag, name))
+        block = self.ctx.versions_document()["components"]["exasol-scheduler"]
+        version = block["version"].removeprefix("v")
+        with patch.object(scheduler, "_platform", return_value="macos-arm64"), \
+             patch.object(scheduler, "_https") as fetch:
+            self.assertEqual(block["sha256"]["macos-arm64"],
+                             scheduler._digest(self.ctx, version, repo, tag, name))
+            fetch.assert_not_called()
+
+    def test_archive_requires_one_engine_binary(self) -> None:
+        source = self.home / "engine"
+        source.write_bytes(b"scheduler engine")
+        archive = self.home / "scheduler.tar.gz"
+        with tarfile.open(archive, "w:gz") as output:
+            output.add(source, arcname="target/aarch64/release/exasol_scheduler")
+        destination = self.home / "unpacked"
+        scheduler._unpack(archive, destination)
+        self.assertEqual(source.read_bytes(), destination.read_bytes())
+        bad = self.home / "bad.tar.gz"
+        with tarfile.open(bad, "w:gz") as output:
+            output.add(source, arcname="README")
+        with self.assertRaisesRegex(AddonFailure, "one engine binary"):
+            scheduler._unpack(bad, self.home / "missing")
+
     def test_uninstall_requires_kit_ownership_and_preserves_schema(self) -> None:
         with self.assertRaisesRegex(AddonFailure, "not kit-owned"):
             scheduler.uninstall(self.ctx)
@@ -135,6 +165,27 @@ class SchedulerTest(unittest.TestCase):
                 scheduler.update(self.ctx)
         stop.assert_called_once_with(self.ctx)
         self.assertIsNone(self.manifest.get("desired.exasol_scheduler"))
+
+    def test_restart_clears_prior_give_up_marker(self) -> None:
+        home, launcher, engine, _, _ = scheduler.paths(self.ctx)
+        engine.parent.mkdir(parents=True)
+        engine.write_text("engine", encoding="utf-8")
+        launcher.parent.mkdir(parents=True, exist_ok=True)
+        launcher.write_text("launcher", encoding="utf-8")
+        marker = home / "gave-up"
+        marker.write_text("gave up after 5 rapid failures", encoding="utf-8")
+        self.manifest.set_many({"components.exasol_scheduler.version": "0.3.1",
+                                "components.exasol_scheduler.ownership": "kit"})
+        with patch.object(scheduler, "_running", return_value=False):
+            self.assertIn("gave up after 5 rapid failures", scheduler.status(self.ctx))
+        process = Mock(pid=321)
+        process.poll.return_value = None
+        with patch.object(scheduler, "_running", return_value=False), \
+             patch.object(scheduler, "_creation", return_value=123.0), \
+             patch.object(scheduler.subprocess, "Popen", return_value=process), \
+             patch.object(scheduler.time, "sleep"):
+            scheduler.start(self.ctx)
+        self.assertFalse(marker.exists())
 
     def test_failed_update_attempts_to_restore_running_scheduler(self) -> None:
         self.manifest.set_many({"components.exasol_scheduler.ownership": "kit"})

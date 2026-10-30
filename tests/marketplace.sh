@@ -118,7 +118,6 @@ export EXAKIT_ABOUT_OFFLINE
 _exakit_marketplace_python_hooks
 . "$ROOT/setup/lib/dash-server.sh"
 . "$ROOT/setup/lib/json-tables.sh"
-. "$ROOT/setup/lib/exasol-scheduler.sh"
 
 # ...and its own port. The default 5100 is where a developer's REAL dash-server
 # listens, and the ownership probe would rightly call that a foreign process
@@ -1267,42 +1266,6 @@ check "with nothing advertised the module's fallback answers, not a guess" "$EXA
     exakit_versions_value() { return 1; }
     exakit_component_latest json-tables 2>/dev/null
 ) )"
-echo "the scheduler's give-up state is visible, not a bare stopped:"
-# THE BUG CLASS: the launcher stops after five rapid engine failures - correct -
-# but the only trace was a log line nobody whose jobs just stopped was reading.
-# The marker it now writes is what turns `exakit status` from "stopped" (reads
-# like a choice someone made) into the reason plus the two commands that act on
-# it. A deliberate restart clears the marker: a fresh start is a fresh chance.
-_SG_HOME="$WORK/sched-giveup"
-_sg_out="$( (
-    EXAKIT_EXASOL_SCHEDULER_HOME="$_SG_HOME"
-    EXAKIT_EXASOL_SCHEDULER_BIN="$_SG_HOME/launcher"
-    mkdir -p "$_SG_HOME"
-    : > "$_SG_HOME/launcher"; chmod 755 "$_SG_HOME/launcher"
-    _exasol_scheduler_pids() { printf ''; }
-    printf 'gave up after 5 rapid failures (last exit 7) at earlier\n' > "$_SG_HOME/gave-up"
-    exasol_scheduler_status
-) )"
-has "a gave-up scheduler says so" "gave up after 5 rapid failures" "$_sg_out"
-has "and names the diagnosis" "exakit logs exasol-scheduler" "$_sg_out"
-check "a start clears the give-up state" "cleared" "$( (
-    EXAKIT_EXASOL_SCHEDULER_HOME="$_SG_HOME"
-    EXAKIT_EXASOL_SCHEDULER_BIN="$_SG_HOME/launcher"
-    printf 'gave up\n' > "$_SG_HOME/gave-up"
-    _exasol_scheduler_pids() { printf ''; }
-    info() { :; }; ok() { :; }; warn() { :; }
-    nohup() { :; }
-    exasol_scheduler_start >/dev/null 2>&1 || true
-    [ -f "$_SG_HOME/gave-up" ] && echo present || echo cleared
-) )"
-check "an ordinary stop stays a plain stopped" "stopped" "$( (
-    EXAKIT_EXASOL_SCHEDULER_HOME="$_SG_HOME"
-    EXAKIT_EXASOL_SCHEDULER_BIN="$_SG_HOME/launcher"
-    rm -f "$_SG_HOME/gave-up"
-    _exasol_scheduler_pids() { printf ''; }
-    exasol_scheduler_status
-) )"
-
 echo "data-load's default row when every bundled dataset is in:"
 # THE BUG: with nothing left to load from the bundle, the pre-selected row was
 # the final "Skip" one -- so Enter did nothing, on the one
@@ -1765,43 +1728,6 @@ has "...and on Windows"                  'Bearer $($env:GITHUB_TOKEN)'    "$JT_P
 has "the add-on failure is only logged"  '_exakit_log_file "WARN  $_mp_id did not finish installing"' "$CO_SH"
 lacks "no note is printed under the frame" '_exakit_addon_note warn \\' "$CO_SH"
 
-printf '\n== the scheduler bootstrap grant is for the first startup only ==\n'
-# CREATE SCHEMA / CREATE TABLE exist so the engine can bootstrap its schema on
-# its FIRST start; validate revokes them once the schema is there. The user
-# bootstrap used to grant them on every install - so an update of a STOPPED
-# scheduler (the one path that never reaches validate) left them in place
-# until the next start, and a version bump walks every stopped scheduler
-# through exactly that. Driven over stubs: the SQL goes to stdout, the probes
-# answer "user present" and, per case, whether the schema exists.
-_sched_grants() { # _sched_grants <schema present 1|0> -> the SQL issued, then granted=<0|1>
-    EXAKIT_HOME="$WORK/sched-home" bash -c '
-        mkdir -p "$EXAKIT_HOME"
-        . "'"$ROOT"'/setup/lib/common.sh" 2>/dev/null
-        . "'"$ROOT"'/setup/lib/exasol-scheduler.sh" 2>/dev/null
-        exakit_exapump_bin() { echo exapump; }
-        read_credential() { echo stub; }
-        _exakit_validate_sql_password_token() { return 0; }
-        store_credential() { :; }
-        info() { :; }; warn() { :; }
-        _exasol_scheduler_sql_has_token() {
-            case "$2" in *USER_PRESENT) return 0 ;; *SCHEMA_PRESENT) [ "'"$1"'" = 1 ] ;; *) return 1 ;; esac
-        }
-        _exasol_scheduler_sql() { printf "SQL %s\n" "$1"; }
-        _exasol_scheduler_ensure_db_user; printf "granted=%s\n" "${_esu_bootstrap_granted:-unset}"' 2>/dev/null
-}
-_sg_fresh="$(_sched_grants 0)"
-has   "a first install grants CREATE SCHEMA"            "GRANT CREATE SCHEMA" "$_sg_fresh"
-has   "...and CREATE TABLE"                             "GRANT CREATE TABLE"  "$_sg_fresh"
-has   "...and says so"                                  "granted=1"           "$_sg_fresh"
-_sg_again="$(_sched_grants 1)"
-has   "an install over an existing schema still grants CREATE SESSION" "GRANT CREATE SESSION" "$_sg_again"
-lacks "...but not CREATE SCHEMA again"                  "GRANT CREATE SCHEMA" "$_sg_again"
-lacks "...nor CREATE TABLE"                             "GRANT CREATE TABLE"  "$_sg_again"
-has   "...and says nothing was granted"                 "granted=0"           "$_sg_again"
-has   "the install resets the revoke record only after a grant" '_esu_bootstrap_granted:-0}" = "1" ] && manifest_set components.exasol_scheduler.bootstrap_revoked false' "$(cat "$ROOT/setup/lib/exasol-scheduler.sh")"
-has   "the Windows twin grants the bootstrap only without a schema" 'if (Test-ExasolSchedulerSchemaExists) { return $true }' "$(cat "$ROOT/setup/lib/exasol-scheduler.ps1")"
-has   "...and resets the revoke record only after a grant" 'if ($script:ExasolSchedulerBootstrapGranted) { Set-ExakitManifestValue "components.exasol_scheduler.bootstrap_revoked" "false" }' "$(cat "$ROOT/setup/lib/exasol-scheduler.ps1")"
-
 printf '\n== a marketplace --json row always carries version ==\n'
 # AGENTS.md and the help promise version on every row; a row for an add-on
 # with no known version used to drop the key, so a parser had to probe for it.
@@ -1958,78 +1884,21 @@ check "...and says nothing under the manifest policy"   "" "$(EXAKIT_VERSION_POL
 check "...or for an add-on that is looked up upstream"  "" "$(EXAKIT_VERSION_POLICY=latest exakit_pinned_latest_note dash-server)"
 check "...the scheduler included"                       "" "$(EXAKIT_VERSION_POLICY=latest exakit_pinned_latest_note exasol-scheduler)"
 has   "json-tables' updater carries the note"           'exakit_pinned_latest_note json-tables'      "$(cat "$ROOT/setup/lib/json-tables.sh")"
-lacks "the scheduler's updater no longer does"          'exakit_pinned_latest_note exasol-scheduler' "$(cat "$ROOT/setup/lib/exasol-scheduler.sh")"
 has "...and MARKETPLACE.md says the same"            'exakit_component_latest_source' "$(cat "$ROOT/MARKETPLACE.md")"
 _pin_ps_common="$(cat "$ROOT/setup/lib/exakit-common.ps1")"
 has "the Windows registry answers the same source question" 'function Get-ExakitComponentLatestSource' "$_pin_ps_common"
 has "...with the same note"                                 'function Get-ExakitPinnedLatestNote'      "$_pin_ps_common"
 has "the Windows source line names the pinned add-ons"      'Write-ExakitPinnedLine'                    "$(cat "$ROOT/setup/exakit.ps1")"
 has   "the Windows json-tables updater qualifies its line"  'Get-ExakitPinnedLatestNote "json-tables"'      "$(cat "$ROOT/setup/lib/json-tables.ps1")"
-lacks "...the Windows scheduler updater no longer does"     'Get-ExakitPinnedLatestNote "exasol-scheduler"' "$(cat "$ROOT/setup/lib/exasol-scheduler.ps1")"
 
 echo
-echo "exasol-scheduler installs straight from upstream's release:"
-# Until 0.2.0 the kit republished upstream's prebuilt binaries on a release of
-# its own (pkg-exasol-scheduler.yml), which put a packaging run and a merge
-# between every upstream tag and its availability (upstream #27). Upstream
-# ships an archive per platform with a .sha256 beside each, which is exactly
-# what exapump offers, so the scheduler now follows exapump's model: the
-# archive is fetched from upstream's tag v<version>, verified against the
-# digest versions.json pins, and the engine is unpacked out of it.
-_sch_adv="$(python3 -c 'import json; print(json.load(open("'"$ROOT"'/versions.json"))["components"]["exasol-scheduler"]["version"])')"
-_sch_pin="$(python3 -c 'import json; print(json.load(open("'"$ROOT"'/versions.json"))["components"]["exasol-scheduler"]["sha256"]["macos-arm64"])')"
-# Earlier cases may have resolved a newer cached manifest. This section
-# checks the release and digest shipped by this checkout, so pin its document.
-_sch_previous_doc="${_EXAKIT_VERSIONS_DOC:-}"
-_EXAKIT_VERSIONS_DOC="$ROOT/versions.json"
+echo "exasol-scheduler release metadata:"
 check "versions.json names the upstream repo" "exasol-labs/exasol-scheduler" \
     "$(python3 -c 'import json; print(json.load(open("'"$ROOT"'/versions.json"))["components"]["exasol-scheduler"].get("repo", ""))')"
-check "...and no kit-repo release any more" "absent" \
-    "$(python3 -c 'import json; print("PRESENT" if "release" in json.load(open("'"$ROOT"'/versions.json"))["components"]["exasol-scheduler"] else "absent")')"
-check "...with a plain version, the tag being v<version>" "plain" "$(printf '%s' "$_sch_adv" | grep -q '^v' && echo v-prefixed || echo plain)"
-check "no <id>_latest hook: the generic lookup answers" "" "$(command -v exasol_scheduler_latest || true)"
-check "no mirror repository either"                     "" "$(command -v exasol_scheduler_mirror_repo || true)"
-_sch_probe() { # <function...> under a stubbed macOS/arm64 host
-    ( detect_os() { printf 'macos'; }; detect_arch() { printf 'arm64'; }; "$@" )
-}
-check "the release tag is v<version>"        "v$_sch_adv" "$(_sch_probe exasol_scheduler_release_tag)"
-check "the asset is upstream's archive"      "exasol_scheduler-v$_sch_adv-macos-arm64.tar.gz" "$(_sch_probe exasol_scheduler_asset)"
-check "...downloaded from upstream's release" \
-    "https://github.com/exasol-labs/exasol-scheduler/releases/download/v$_sch_adv/exasol_scheduler-v$_sch_adv-macos-arm64.tar.gz" \
-    "$(_sch_probe _exasol_scheduler_asset_url "exasol_scheduler-v$_sch_adv-macos-arm64.tar.gz")"
-check "...verified against the versions.json pin, no network" "$_sch_pin" \
-    "$(_sch_probe _exasol_scheduler_digest "exasol_scheduler-v$_sch_adv-macos-arm64.tar.gz")"
-check "a hand-named tag is downloaded as named"        "v9.9" "$(EXAKIT_EXASOL_SCHEDULER_RELEASE_TAG=v9.9 _sch_probe exasol_scheduler_release_tag)"
-check "...and the pin does not apply to it"            "no"   "$(EXAKIT_EXASOL_SCHEDULER_RELEASE_TAG=v9.9 _exasol_scheduler_pin_applies && echo yes || echo no)"
-check "a version override spelled with a v is the advertised build" "yes" \
-    "$(EXAKIT_EXASOL_SCHEDULER_VERSION="v$_sch_adv" _exasol_scheduler_pin_applies && echo yes || echo no)"
-check "an install recorded by the mirror era (v0.3.1) reads as the plain version" "0.3.1" \
-    "$( ( exasol_scheduler_engine_path() { printf '%s' "$WORK/code-bin/code"; }; manifest_get() { printf 'v0.3.1'; }; exasol_scheduler_installed_version ) )"
-# The engine is found inside the archive by name, never at an assumed path.
-_sch_tgz="$WORK/sched-archive"
-mkdir -p "$_sch_tgz/src/target/some-triple/release"
-printf '#!/bin/sh\necho engine\n' > "$_sch_tgz/src/target/some-triple/release/exasol_scheduler"
-printf 'readme\n' > "$_sch_tgz/src/README.md"
-tar -czf "$_sch_tgz/good.tar.gz" -C "$_sch_tgz/src" .
-_exasol_scheduler_unpack "$_sch_tgz/good.tar.gz" "$_sch_tgz/engine" >/dev/null 2>&1
-check "the engine is unpacked out of the archive by name" "engine" "$("$_sch_tgz/engine" 2>/dev/null)"
-mkdir -p "$_sch_tgz/empty"; printf 'readme\n' > "$_sch_tgz/empty/README.md"
-tar -czf "$_sch_tgz/bad.tar.gz" -C "$_sch_tgz/empty" .
-check "an archive without the engine is refused" "refused" \
-    "$(_exasol_scheduler_unpack "$_sch_tgz/bad.tar.gz" "$_sch_tgz/none" >/dev/null 2>&1 && echo accepted || echo refused)"
-check "the packaging workflow is gone"      "absent" "$([ -f "$ROOT/.github/workflows/pkg-exasol-scheduler.yml" ] && echo PRESENT || echo absent)"
-has   "the bump workflow proposes scheduler releases with their digests" 'bumped["exasol-scheduler"]' "$(cat "$ROOT/.github/workflows/versions-bump.yml")"
-has   "CI checks the pins against upstream's archives" 'exasol_scheduler-v${version}-${platform}.tar.gz' "$(cat "$ROOT/.github/workflows/versions.yml")"
-lacks "...and no longer expects a kit-repo release"   'pkg / exasol-scheduler' "$(cat "$ROOT/.github/workflows/versions.yml")"
-_sch_ps="$(cat "$ROOT/setup/lib/exasol-scheduler.ps1")"
-has   "Windows names the platform the same way"      'function Get-ExasolSchedulerPlatform'   "$_sch_ps"
-has   "...fetches upstream's zip"                    '"-" + $platform + ".zip"'               "$_sch_ps"
-has   "...and unpacks the engine out of it"          'function Expand-ExasolSchedulerArchive' "$_sch_ps"
-lacks "...with no mirror repository"                 'MirrorRepo'                             "$_sch_ps"
-lacks "...and no pinned latest"                      'function Get-ExasolSchedulerLatest'     "$_sch_ps"
+check "the old packaging workflow is gone" "absent" "$([ -f "$ROOT/.github/workflows/pkg-exasol-scheduler.yml" ] && echo PRESENT || echo absent)"
+has "the bump workflow proposes scheduler digests" 'bumped["exasol-scheduler"]' "$(cat "$ROOT/.github/workflows/versions-bump.yml")"
+has "CI checks upstream archives" 'exasol_scheduler-v${version}-${platform}.tar.gz' "$(cat "$ROOT/.github/workflows/versions.yml")"
 
-echo
-_EXAKIT_VERSIONS_DOC="$_sch_previous_doc"
 echo "the Windows registry dispatches the same per-add-on hooks as the shell:"
 # THE PARITY GAP THIS PINS: the PS registry had no field for the per-add-on
 # hooks the shell registry dispatches to. Get-JsonTablesSystemPresent and

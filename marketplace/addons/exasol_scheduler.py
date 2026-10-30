@@ -356,6 +356,7 @@ def start(ctx: KitContext) -> None:
     if _running(ctx):
         return
     home, _, engine, log, credential = paths(ctx)
+    (home / "gave-up").unlink(missing_ok=True)
     service = _service(ctx)
     script = ctx.root / "marketplace" / "scheduler_launcher.py"
     command = [str(venv_python(home / "python")), str(script), str(home), str(engine),
