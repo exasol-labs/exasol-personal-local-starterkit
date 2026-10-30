@@ -142,18 +142,11 @@ if (Test-Path (Join-Path $libDir "persona.ps1")) { . (Join-Path $libDir "persona
 # Marketplace add-on modules: the CLI is where they are installed (exakit
 # marketplace) and updated (exakit update <addon>). A missing file only makes
 # the marketplace row unavailable - it must not break every other command.
-if (Test-Path (Join-Path $libDir "dash-server.ps1")) { . (Join-Path $libDir "dash-server.ps1") }
-if (Test-Path (Join-Path $libDir "dbt-exasol.ps1")) { . (Join-Path $libDir "dbt-exasol.ps1") }
-if (Test-Path (Join-Path $libDir "exasol-vscode.ps1")) { . (Join-Path $libDir "exasol-vscode.ps1") }
-if (Test-Path (Join-Path $libDir "json-tables.ps1")) { . (Join-Path $libDir "json-tables.ps1") }
-if (Test-Path (Join-Path $libDir "exasol-scheduler.ps1")) { . (Join-Path $libDir "exasol-scheduler.ps1") }
 if (Test-Path (Join-Path $libDir "notebook.ps1")) { . (Join-Path $libDir "notebook.ps1") }
-if (Test-Path (Join-Path $libDir "workflow.ps1")) { . (Join-Path $libDir "workflow.ps1") }
 if (Test-Path (Join-Path $libDir "describe.ps1")) { . (Join-Path $libDir "describe.ps1") }
-if (Test-Path (Join-Path $libDir "udf-devkit.ps1")) { . (Join-Path $libDir "udf-devkit.ps1") }
-if (Test-Path (Join-Path $libDir "rust-udf.ps1")) { . (Join-Path $libDir "rust-udf.ps1") }
-if (Test-Path (Join-Path $libDir "mlflow.ps1")) { . (Join-Path $libDir "mlflow.ps1") }
 if (Test-Path (Join-Path $libDir "help.ps1")) { . (Join-Path $libDir "help.ps1") }
+Initialize-ExakitMarketplacePythonHooks
+$env:EXAKIT_MARKETPLACE_PYTHON_APPLY = '1'
 
 
 # Assert-ExakitInstalled [-Json] - the install gate every command runs first.
@@ -2364,7 +2357,19 @@ function Invoke-CmdPersona {
             Invoke-ExakitPersonaAdd -Ids $id -Cli $PSCommandPath
             if (-not $script:ExakitPersonaAddOk) { exit 1 }
         }
-        default { Fail "Unknown persona command: $verb (use: exakit persona list | show <id> | plan [<id>] | add <id>)" }
+        "remove" {
+            if ($CmdArgs.Count -ne 2 -or $CmdArgs[1].StartsWith("-")) { Fail "Name one persona: exakit persona remove <id>" }
+            $beforeHome = $env:EXAKIT_HOME
+            try {
+                $env:EXAKIT_HOME = $script:ExakitHome
+                $lines = Invoke-ExakitPersonaService "remove" $CmdArgs[1]
+            } finally {
+                $env:EXAKIT_HOME = $beforeHome
+            }
+            if ($null -eq $lines) { Fail "Could not remove persona $($CmdArgs[1]) from the kit record: $script:ExakitPersonaServiceError" }
+            foreach ($line in @($lines)) { Write-Host $line }
+        }
+        default { Fail "Unknown persona command: $verb (use: exakit persona list | show <id> | plan [<id>] | add <id> | remove <id>)" }
     }
 }
 
@@ -3998,31 +4003,37 @@ try {
             Invoke-CmdUninstall -Addon $unAddon -AssumeYes:($RestArgs -contains "-Yes" -or $RestArgs -contains "--yes" -or $RestArgs -contains "-y") -DryRun:($RestArgs -contains "-DryRun" -or $RestArgs -contains "--dry-run" -or $RestArgs -contains "-n") }
         "whats-new"    { Assert-ExakitKnownOptions -CommandName "whats-new" -Allowed @() -Arguments $RestArgs; Invoke-CmdWhatsNew -Version ($RestArgs | Select-Object -First 1) }
         "logs"         { Invoke-CmdLogs -LogArgs $RestArgs }
-        "persona"      { Invoke-CmdPersona -CmdArgs $RestArgs }
+        "persona"      {
+            if ($RestArgs.Count -gt 0 -and $RestArgs[0] -in @('add', 'apply')) {
+                Invoke-ExakitMarketplaceCli -Script persona_apply -CmdArgs (@($RestArgs) + @('--cli', $PSCommandPath, '--host', (Get-Process -Id $PID).Path))
+            } else {
+                Invoke-CmdPersona -CmdArgs $RestArgs
+            }
+        }
         "notebook"     {
-            if (-not (Get-Command Invoke-CmdNotebook -ErrorAction SilentlyContinue)) { Fail "The notebook module is missing from this kit copy. Repair with: exakit update" }
-            Invoke-CmdNotebook -CmdArgs $RestArgs
+            Invoke-ExakitMarketplaceCli -Script notebook_cli -CmdArgs $RestArgs
         }
         "workflow"     {
-            if (-not (Get-Command Invoke-CmdWorkflow -ErrorAction SilentlyContinue)) { Fail "The workflow module is missing from this kit copy. Repair with: exakit update" }
-            Invoke-CmdWorkflow -CmdArgs $RestArgs
+            Invoke-ExakitMarketplaceCli -Script workflow_cli -CmdArgs $RestArgs
         }
         "mlflow"       {
-            if (-not (Get-Command Invoke-CmdMlflow -ErrorAction SilentlyContinue)) { Fail "The MLflow module is missing from this kit copy. Repair with: exakit update" }
-            Invoke-CmdMlflow -CmdArgs $RestArgs
+            Invoke-ExakitMarketplaceCli -Script mlflow_cli -CmdArgs $RestArgs
         }
         "describe"     {
             if (-not (Get-Command Invoke-CmdDescribe -ErrorAction SilentlyContinue)) { Fail "The describe module is missing from this kit copy. Repair with: exakit update" }
             Invoke-CmdDescribe -CmdArgs $RestArgs
         }
         "rust-udf"     {
-            if (-not (Get-Command Invoke-CmdRustUdf -ErrorAction SilentlyContinue)) { Fail "The Rust UDF module is missing from this kit copy. Repair with: exakit update" }
-            Invoke-CmdRustUdf -CmdArgs $RestArgs
+            Invoke-ExakitMarketplaceCli -Script rust_cli -CmdArgs $RestArgs
         }
-        { $_ -in @("udf-setup", "udf-use", "udf-build", "udf-file", "model") } {
-            $udfFn = @{ "udf-setup" = "Invoke-CmdUdfSetup"; "udf-use" = "Invoke-CmdUdfUse"; "udf-build" = "Invoke-CmdUdfBuild"; "udf-file" = "Invoke-CmdUdfFile"; "model" = "Invoke-CmdModel" }[$Command]
-            if (-not (Get-Command $udfFn -ErrorAction SilentlyContinue)) { Fail "The udf-devkit module is missing from this kit copy. Repair with: exakit update" }
-            & $udfFn -CmdArgs $RestArgs
+        "udf-file"    {
+            Invoke-ExakitMarketplaceCli -Script udf_cli -CmdArgs $RestArgs
+        }
+        "model"       {
+            Invoke-ExakitMarketplaceCli -Script model_cli -CmdArgs $RestArgs
+        }
+        { $_ -in @("udf-setup", "udf-use", "udf-build") } {
+            Invoke-ExakitMarketplaceCli -Script udf_manage -CmdArgs (@($Command) + @($RestArgs))
         }
         "catalog"      {
             Assert-ExakitKnownOptions -CommandName "catalog" -Allowed @("--json", "-j") -Arguments $RestArgs

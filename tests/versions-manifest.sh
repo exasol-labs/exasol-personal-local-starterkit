@@ -2723,6 +2723,17 @@ for component, entries in sorted(coupled.items()):
         if found != want:
             problems.append("%s: versions.json says %s, %s says %s (%s)"
                             % (component, want, name, found, path))
+catalog_path = os.path.join(root, "marketplace", "catalog.json")
+if os.path.isfile(catalog_path):
+    catalog = json.load(open(catalog_path, encoding="utf-8"))
+    for row in catalog.get("addons", []):
+        component = row.get("id")
+        want = (components.get(component) or {}).get("version")
+        found = row.get("default_version")
+        checked += 1
+        if want is None or found != want:
+            problems.append("%s: versions.json says %s, marketplace/catalog.json says %s"
+                            % (component, want, found))
 print("checked=%d" % checked)
 for problem in problems:
     print("  " + problem)

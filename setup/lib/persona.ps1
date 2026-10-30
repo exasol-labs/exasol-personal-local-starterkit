@@ -90,6 +90,14 @@ function Get-ExakitPersona {
     return $null
 }
 
+function Get-ExakitPersonaSelectable {
+    param([string]$Id, [string]$Recorded = "")
+    $ids = @(Invoke-ExakitPersonaService "select" $Id $Recorded | Where-Object { $_ })
+    if ($ids.Count -gt 0) { return $ids[0] }
+    $script:ExakitPersonaProblem = $script:ExakitPersonaServiceError
+    return $null
+}
+
 # Get-ExakitPersonaValue - a string as it is, a list as a comma-separated line.
 # Twin of exakit_persona_value.
 function Get-ExakitPersonaValue {
@@ -135,7 +143,7 @@ function Set-ExakitPersonaEnv {
     param([switch]$NoRecord)
     $id = $env:EXAKIT_PERSONA
     if (-not $id) { return }
-    if (-not (Get-ExakitPersona $id)) { Fail $script:ExakitPersonaProblem }
+    if (-not (Get-ExakitPersonaSelectable $id (Get-ExakitManifestValue "persona.id"))) { Fail $script:ExakitPersonaProblem }
     $answers = Invoke-ExakitPersonaService "answers" $id
     if ($null -eq $answers) { Fail "The persona files could not be read - re-run the installer to repair the kit copy." }
     Set-ExakitPersonaAnswers $answers
@@ -154,6 +162,34 @@ function Set-ExakitPersonaEnv {
 # None.
 # Twin of exakit_persona_question. Sets $env:EXAKIT_PERSONA.
 function Read-ExakitPersonaQuestion {
+    if ((Test-ExakitInteractive) -and (Test-ExakitStdoutIsTerminal) -and $env:EXAKIT_NO_FANCY -ne '1') {
+        $root = Get-ExakitRepoRoot
+        $launcher = Join-Path (Join-Path $root 'marketplace') 'launch.py'
+        $resultPath = Join-Path ([System.IO.Path]::GetTempPath()) ("exakit-persona-ui-" + [guid]::NewGuid().ToString('N') + '.json')
+        $python = Get-ExakitPersonaPython
+        $uv = $null
+        try {
+            if ($python) {
+                & $python $launcher $root persona --out $resultPath --recorded ("" + (Get-ExakitManifestValue 'persona.id'))
+            } else {
+                $uv = Install-ExakitUv
+                & $uv run --no-project --python $script:ManagedPythonVersion python $launcher $root persona --out $resultPath --recorded ("" + (Get-ExakitManifestValue 'persona.id'))
+            }
+            $uiCode = $LASTEXITCODE
+            if ($uiCode -eq 0 -and (Test-Path -LiteralPath $resultPath)) {
+                $chosen = Get-Content -LiteralPath $resultPath -Raw -Encoding UTF8 | ConvertFrom-Json
+                if (@($chosen.selected).Count -gt 0) { $env:EXAKIT_PERSONA = (@($chosen.selected) -join ',') }
+                else { Remove-Item Env:EXAKIT_PERSONA -ErrorAction SilentlyContinue }
+                return
+            }
+            if ($uiCode -eq 10) { Remove-Item Env:EXAKIT_PERSONA -ErrorAction SilentlyContinue; return }
+            Warn2 'The Textual persona picker did not start; using the kit checkbox menu.'
+        } catch {
+            Warn2 'The Textual persona picker did not start; using the kit checkbox menu.'
+        } finally {
+            Remove-Item -LiteralPath $resultPath -ErrorAction SilentlyContinue
+        }
+    }
     $rows = @(Invoke-ExakitPersonaService "picker" | Where-Object { $_ })
     if ($rows.Count -eq 0) { Write-ExakitLog "WARN" "the persona service did not answer; no persona question"; return }
     $ids = New-Object 'System.Collections.Generic.List[string]'
@@ -368,9 +404,9 @@ $script:ExakitPersonaAddOk = $false
 function Invoke-ExakitPersonaAdd {
     param([Parameter(Mandatory)][string]$Ids, [Parameter(Mandatory)][AllowEmptyString()][string]$Cli)
     $script:ExakitPersonaAddOk = $false
-    $new = Get-ExakitPersona $Ids
-    if (-not $new) { Fail $script:ExakitPersonaProblem }
     $was = Get-ExakitPersonaRecorded
+    $new = Get-ExakitPersonaSelectable $Ids $was
+    if (-not $new) { Fail $script:ExakitPersonaProblem }
     $all = $new
     if ($was) {
         $both = Get-ExakitPersona "$was,$new"

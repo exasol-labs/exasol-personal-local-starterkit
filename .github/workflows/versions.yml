@@ -19,6 +19,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  marketplace-python-tests:
+    name: marketplace Python (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install the marketplace UI dependency from its single pin
+        shell: bash
+        run: |
+          version="$(python -c 'from pathlib import Path; print(next(line.split("=", 1)[1] for line in Path("marketplace/defaults.env").read_text().splitlines() if line.startswith("EXAKIT_TEXTUAL_VERSION=")))')"
+          python -m pip install "textual==$version" uv
+      - name: Persona and marketplace Python contracts
+        shell: bash
+        run: python -m unittest discover -s tests -p 'test_marketplace_*.py'
+
   changes:
     name: detect versions.json changes
     runs-on: ubuntu-latest

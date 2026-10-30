@@ -404,42 +404,7 @@ jobs:
                   ("setup/lib/common.sh", "bash", "EXAKIT_PYEXASOL_VERSION_FALLBACK"),
                   ("setup/lib/exakit-common.ps1", "pwsh", "PyexasolVersionFallback"),
               ],
-              # Marketplace add-ons keep their constants in their own module
-              # pair, not in the shared libraries.
-              "dbt-exasol": [
-                  ("setup/lib/dbt-exasol.sh", "bash", "EXAKIT_DBT_EXASOL_VERSION_FALLBACK"),
-                  ("setup/lib/dbt-exasol.ps1", "pwsh", "DbtExasolVersionFallback"),
-              ],
-              "notebook": [
-                  ("setup/lib/notebook.sh", "bash", "EXAKIT_NOTEBOOK_VERSION_FALLBACK"),
-                  ("setup/lib/notebook.ps1", "pwsh", "NotebookVersionFallback"),
-              ],
-              # The kit's own version (its prebuilt container, once published):
-              # no upstream to check, the latest hook answers from versions.json.
-              "udf-devkit": [
-                  ("setup/lib/udf-devkit.sh", "bash", "EXAKIT_UDF_DEVKIT_VERSION_FALLBACK"),
-                  ("setup/lib/udf-devkit.ps1", "pwsh", "UdfDevkitVersionFallback"),
-              ],
-              "exasol-scheduler": [
-                  ("setup/lib/exasol-scheduler.sh", "bash", "EXAKIT_EXASOL_SCHEDULER_VERSION_FALLBACK"),
-                  ("setup/lib/exasol-scheduler.ps1", "pwsh", "ExasolSchedulerVersionFallback"),
-              ],
-              "dash-server": [
-                  ("setup/lib/dash-server.sh", "bash", "EXAKIT_DASH_SERVER_VERSION_FALLBACK"),
-                  ("setup/lib/dash-server.ps1", "pwsh", "DashServerVersionFallback"),
-              ],
-              "exasol-vscode": [
-                  ("setup/lib/exasol-vscode.sh", "bash", "EXAKIT_EXASOL_VSCODE_VERSION_FALLBACK"),
-                  ("setup/lib/exasol-vscode.ps1", "pwsh", "ExasolVscodeVersionFallback"),
-              ],
-              # json-tables is versioned by the upstream COMMIT its prebuilt
-              # artifacts were built from; the pkg/json-tables workflow moves
-              # that version, so the auto-bump leaves it alone and only the
-              # fallback constants are kept in lockstep by hand.
-              "json-tables": [
-                  ("setup/lib/json-tables.sh", "bash", "EXAKIT_JSON_TABLES_VERSION_FALLBACK"),
-                  ("setup/lib/json-tables.ps1", "pwsh", "JsonTablesVersionFallback"),
-              ],
+              # Marketplace fallbacks live together in marketplace/catalog.json.
           }
           touched = set()
 
@@ -472,6 +437,17 @@ jobs:
           for key, (_, new_version) in sorted(bumped.items()):
               for path, dialect, name in COUPLED.get(key, []):
                   retune(path, dialect, name, new_version)
+
+          marketplace_path = pathlib.Path("marketplace/catalog.json")
+          marketplace = json.loads(marketplace_path.read_text())
+          marketplace_changed = False
+          for row in marketplace["addons"]:
+              if row["id"] in bumped:
+                  row["default_version"] = bumped[row["id"]][1]
+                  marketplace_changed = True
+          if marketplace_changed:
+              marketplace_path.write_text(json.dumps(marketplace, indent=2) + "\n")
+              touched.add(str(marketplace_path))
 
           # --- write it back, canonically --------------------------------------
           summary = []

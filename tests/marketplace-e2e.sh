@@ -6,8 +6,8 @@
 #      installs dash-server from its real GitHub release into a kit-managed
 #      venv, writes the launcher, and validates the HTTP control plane.
 #   2. The installed add-on joins the update flow: `exakit version` lists it,
-#      `exakit update dash-server` answers "already current", `exakit version`
-#      reports it, and a second marketplace run offers nothing to install.
+#      explicit `exakit update dash-server` repairs or confirms the current
+#      version, and a second marketplace run offers nothing to install.
 #   3. `exakit_uninstall_run` sweeps the venv, state and launcher.
 #
 # Needs the network (GitHub + PyPI) AND uv, and skips cleanly when any of the
@@ -41,6 +41,13 @@ trap 'pkill -f "$SANDBOX" 2>/dev/null; rm -rf "$SANDBOX"' EXIT
 
 export EXAKIT_HOME="$SANDBOX/home"
 export EXAKIT_BIN_DIR="$SANDBOX/bin"
+export EXAKIT_SKILL_ROOTS="$SANDBOX/agent-skills"
+export EXAKIT_LAUNCHAGENT_DIR="$SANDBOX/launchagents"
+export EXAKIT_SYSTEMD_USER_DIR="$SANDBOX/systemd-user"
+export EXAKIT_STARTUP_DIR="$SANDBOX/startup"
+# Keep this checkout's tested version set for the whole run. A newer remote
+# manifest would turn the "already current" assertion into an update test.
+export EXAKIT_VERSION_POLICY=pinned
 # The machine running this may have a REAL dash-server on PATH — the developer's
 # own install, or a previous run of this very test. The kit would then read it
 # as a system install and decline to offer the add-on, and the sandbox would
@@ -88,7 +95,8 @@ _installed="$("$EXAKIT_HOME/dash-server-venv/bin/python" -c \
 [ -n "$_installed" ] || fail "no dash-server package in the venv"
 [ "$_installed" = "$_advertised" ] || fail "installed $_installed but versions.json advertises $_advertised"
 [ -x "$EXAKIT_BIN_DIR/dash-server" ] || fail "the dash-server launcher was not written"
-grep -q "DASH_SERVER_EXASOL_DSN" "$EXAKIT_BIN_DIR/dash-server" || fail "the launcher carries no profile bootstrap"
+grep -q 'dash_launcher.py' "$EXAKIT_BIN_DIR/dash-server" || fail "the launcher does not run the Python profile bootstrap"
+grep -q 'DASH_SERVER_EXASOL_DSN' "$ROOT/marketplace/dash_launcher.py" || fail "the Python launcher has no profile bootstrap"
 grep -q "not-a-real-password" "$EXAKIT_BIN_DIR/dash-server" && fail "the launcher leaked the password"
 echo "  ok  dash-server $_installed installed, launcher in place"
 
@@ -103,7 +111,7 @@ echo "  ok  control plane answered on port $EXAKIT_DASH_SERVER_PORT during valid
 say "4/9 the installed add-on joins the update flow"
 _targets="$(
     . "$ROOT/setup/lib/common.sh" >/dev/null 2>&1
-    . "$ROOT/setup/lib/dash-server.sh" >/dev/null 2>&1
+    _exakit_marketplace_load_modules
     exakit_update_targets all | tr '\n' ' '
 )"
 case "$_targets" in
@@ -116,10 +124,11 @@ case "$_version_out" in
     *) fail "exakit version does not report dash-server" ;;
 esac
 
-say "5/9 update says already current; a second marketplace run offers nothing"
+say "5/9 update keeps the current version; a second marketplace run offers nothing"
 _update_out="$(bash "$ROOT/setup/exakit" update dash-server 2>&1)" || fail "exakit update failed: $_update_out"
 case "$_update_out" in
-    *"already current"*) echo "  ok  exakit update: already current" ;;
+    *"already current"*|*"dash-server $_advertised -> $_advertised"*)
+        echo "  ok  exakit update: current version repaired or confirmed" ;;
     *) fail "unexpected update output: $_update_out" ;;
 esac
 _second="$(EXAKIT_MARKETPLACE_ADDONS=dash-server bash "$ROOT/setup/exakit" marketplace 2>&1)" || fail "second marketplace run failed"
@@ -164,13 +173,13 @@ else
     say "7/9 the extension joins the update flow and a second run offers nothing"
     _ext_update="$(bash "$ROOT/setup/exakit" update exasol-vscode 2>&1)" || fail "exakit update failed: $_ext_update"
     case "$_ext_update" in
-        *"already current"*) echo "  ok  exakit update: already current" ;;
+        *"already current"*|*"exasol-vscode $_ext_advertised -> $_ext_advertised"*)
+            echo "  ok  exakit update: current version repaired or confirmed" ;;
         *) fail "unexpected update output: $_ext_update" ;;
     esac
     _ext_targets="$(
         . "$ROOT/setup/lib/common.sh" >/dev/null 2>&1
-        . "$ROOT/setup/lib/dash-server.sh" >/dev/null 2>&1
-        . "$ROOT/setup/lib/exasol-vscode.sh" >/dev/null 2>&1
+        _exakit_marketplace_load_modules
         exakit_update_targets all | tr '\n' ' '
     )"
     case "$_ext_targets" in
@@ -212,33 +221,20 @@ elif ! (
 ); then
     echo "  SKIP  no prebuilt engine is published for this platform"
 else
-    _jt_out="$(
-        . "$ROOT/setup/lib/common.sh" >/dev/null 2>&1
-        . "$ROOT/setup/lib/dash-server.sh" >/dev/null 2>&1
-        . "$ROOT/setup/lib/exasol-vscode.sh" >/dev/null 2>&1
-        . "$ROOT/setup/lib/json-tables.sh" >/dev/null 2>&1
-        EXAKIT_MARKETPLACE_ADDONS="json-tables" exakit_marketplace_menu 2>&1
-    )" || fail "the json-tables marketplace install failed: $_jt_out"
+    _jt_out="$(EXAKIT_MARKETPLACE_ADDONS=json-tables "$ROOT/setup/exakit" marketplace 2>&1)" \
+        || fail "the json-tables marketplace install failed: $_jt_out"
     [ -x "$EXAKIT_BIN_DIR/exasol-json-tables" ] || fail "no launcher was written"
     [ -x "$EXAKIT_HOME/json-tables/libexec/json_to_parquet" ] || fail "no prebuilt engine was installed"
     [ -x "$EXAKIT_HOME/json-tables/shim/cargo" ] || fail "no cargo shim was written"
     # Regression guard: the wheel does not declare this file as package data
-    # (upstream packaging gap), so without _json_tables_restore_package_data
+    # (upstream packaging gap), so without the Python package-data repair
     # it is silently absent and ingest-and-wrap fails later with FILE-NOT-FOUND.
-    _jt_venv_site="$(
-        . "$ROOT/setup/lib/common.sh" >/dev/null 2>&1
-        . "$ROOT/setup/lib/json-tables.sh" >/dev/null 2>&1
-        "$(json_tables_venv_python)" -c 'import exasol_json_tables, os; print(os.path.dirname(exasol_json_tables.__file__))' 2>/dev/null
-    )"
+    _jt_venv_site="$("$EXAKIT_HOME/json-tables-venv/bin/python" -c 'import exasol_json_tables, os; print(os.path.dirname(exasol_json_tables.__file__))' 2>/dev/null)"
     [ -f "$_jt_venv_site/preprocessor_assets/jvs_preprocessor_lib.lua" ] \
         || fail "the preprocessor lua asset is missing -- ingest-and-wrap will fail with FILE-NOT-FOUND"
     echo "  ok  the preprocessor lua asset the wheel omits was restored"
-    # The marketplace narrates an add-on install on ONE line, which routes every
-    # info/ok underneath it to the LOGFILE (EXAKIT_QUIET_DETAIL). The checksum
-    # tick is one of those, so proving the download WAS verified means reading
-    # the log, not the screen. Grepping stdout for it made this assertion fail
-    # on main for as long as the one-line narration has existed -- the download
-    # was verified the whole time, the proof had simply moved.
+    # The Python downloader records verified digests in the marketplace log;
+    # the progress UI keeps the digest line off the screen.
     _jt_log="$(cat "$EXAKIT_HOME"/logs/*.log 2>/dev/null || true)"
     case "$_jt_out$_jt_log" in
         *"Checksum verified"*) echo "  ok  artifacts were checksum-verified against the release digests" ;;
@@ -274,12 +270,8 @@ fi
 say "9/9 uninstall sweeps the add-on"
 (
     . "$ROOT/setup/lib/common.sh" >/dev/null 2>&1
-    # The add-on modules must be loaded: the full run dispatches each
-    # kit-managed add-on's own uninstall hook (that is what removes the
-    # kit-installed VS Code extension).
-    . "$ROOT/setup/lib/dash-server.sh" >/dev/null 2>&1
-    . "$ROOT/setup/lib/exasol-vscode.sh" >/dev/null 2>&1
-    . "$ROOT/setup/lib/json-tables.sh" >/dev/null 2>&1
+    # The full run dispatches each kit-managed add-on through Python hooks.
+    _exakit_marketplace_load_modules
     # The database/MCP steps are stubbed: this sandbox never had either.
     personal_teardown() { :; }
     exakit_mcp_operation() { :; }

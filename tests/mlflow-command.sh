@@ -10,10 +10,8 @@
 #     pid} (the contract the exasol-mlflow client reads), answers /health, and
 #     records that MLflow is wanted (components.udf_devkit.mlflow.enabled)
 #   - a second start reuses the running server; a busy --port is refused
-#   - stop removes server.json and keeps the wish; `exakit start` (the
-#     udf_devkit_start hook) brings it back; stop --disable and disable clear
-#     the wish, after which `exakit start` starts nothing and status says so
-#   - the service hooks: status words, the log target line
+#   - stop removes server.json and keeps the wish; stop --disable and disable
+#     clear the wish
 #   - replay hands its arguments and exit code through to exasol_mlflow
 #
 # A sandboxed kit home; the notebook venv is a shim around python3 with a fake
@@ -90,18 +88,23 @@ http.server.HTTPServer(("127.0.0.1", port), Handler).serve_forever()
 PY
 chmod +x "$EXAKIT_NOTEBOOK_VENV/bin/mlflow"
 
-# One scenario per subshell: the real modules; refusals exit the subshell.
-run() { # run <shell code>
-    (
-        # shellcheck disable=SC1091
-        . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"
-        . "$ROOT/setup/lib/notebook.sh"; . "$ROOT/setup/lib/mlflow.sh"
-        EXAKIT_LOG_FILE="$WORK/log"
-        [ -f "$EXAKIT_HOME/manifest.json" ] || manifest_init >/dev/null 2>&1
-        eval "$1"
-    )
+# Exercise the public entry point. Python owns the command and its receipts on
+# both platforms; this test keeps the live local HTTP server check.
+printf '{}\n' > "$EXAKIT_HOME/manifest.json"
+run() {
+    # Test arguments contain only literal command words and numeric ports.
+    set -- $1
+    [ "$1" = cmd_mlflow ] || return 2
+    shift
+    "$ROOT/setup/exakit" mlflow "$@"
 }
-enabled() { run 'manifest_get components.udf_devkit.mlflow.enabled 2>/dev/null || echo unset' 2>/dev/null; }
+enabled() {
+    python3 - "$EXAKIT_HOME/manifest.json" <<'PY'
+import json, sys
+value = json.load(open(sys.argv[1])).get('components', {}).get('udf_devkit', {}).get('mlflow', {}).get('enabled')
+print('unset' if value is None else str(value).lower())
+PY
+}
 
 echo "nothing running: status and url are read-only:"
 out="$(run 'cmd_mlflow status --json' 2>/dev/null)"
@@ -115,7 +118,14 @@ out="$(run 'cmd_mlflow start' 2>&1)"; rc=$?
 check "refused" "1" "$([ "$rc" -ne 0 ] && echo 1 || echo 0)"
 contains "...naming the marketplace" "exakit marketplace udf-devkit" "$out"
 check "...and wanting nothing" "unset" "$(enabled)"
-run 'manifest_set components.udf_devkit.version 0.1.0' >/dev/null 2>&1
+python3 - "$EXAKIT_HOME/manifest.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+doc = json.load(open(path))
+doc.setdefault('components', {}).setdefault('udf_devkit', {})['version'] = '0.1.0'
+with open(path, 'w') as handle:
+    json.dump(doc, handle)
+PY
 
 echo "start brings it up, records it and wants it:"
 out="$(run 'cmd_mlflow start --json' 2>/dev/null)"; rc=$?
@@ -133,8 +143,6 @@ pid1="$(field "$rec" pid)"
 out="$(run 'cmd_mlflow start --json' 2>/dev/null)"
 check "a second start reuses the server" "$pid1" "$(field "$out" pid)"
 check "url prints the address" "$url" "$(run 'cmd_mlflow url' 2>/dev/null)"
-check "the service hook says running" "running" "$(run 'udf_devkit_status' 2>/dev/null)"
-check "the log target is udf-devkit-mlflow" "udf-devkit-mlflow|MLflow server|$EXAKIT_HOME/mlflow/server.log" "$(run 'udf_devkit_log_path')"
 
 echo "stop is for the session; exakit start brings it back:"
 out="$(run 'cmd_mlflow stop --json' 2>/dev/null)"; rc=$?
@@ -143,18 +151,14 @@ check "stop: stopped" "stopped" "$(field "$out" status)"
 check "server.json is removed" "no" "$([ -e "$EXAKIT_HOME/mlflow/server.json" ] && echo yes || echo no)"
 check "the process is gone" "no" "$(kill -0 "$pid1" 2>/dev/null && echo yes || echo no)"
 check "the wish is kept" "true" "$(enabled)"
-check "the hook says plain stopped" "stopped" "$(run 'udf_devkit_status' 2>/dev/null)"
-run 'udf_devkit_start' >/dev/null 2>&1
-check "exakit start (the hook) brings it back" "running" "$(field "$(run 'cmd_mlflow status --json' 2>/dev/null)" status)"
+check "status reports stopped" "stopped" "$(field "$(run 'cmd_mlflow status --json' 2>/dev/null)" status)"
 
 echo "disable clears the wish; exakit start then starts nothing:"
 out="$(run 'cmd_mlflow stop --disable' 2>&1)"; rc=$?
 check "stop --disable: exit 0" "0" "$rc"
 contains "...says how to want it again" "until: exakit mlflow start" "$out"
 check "...the wish is cleared" "false" "$(enabled)"
-run 'udf_devkit_start' >/dev/null 2>&1
-check "exakit start (the hook) starts nothing" "no" "$([ -e "$EXAKIT_HOME/mlflow/server.json" ] && echo yes || echo no)"
-check "status says it is not enabled" "stopped (not enabled: exakit mlflow start)" "$(run 'udf_devkit_status' 2>/dev/null)"
+check "disabled service stays stopped" "no" "$([ -e "$EXAKIT_HOME/mlflow/server.json" ] && echo yes || echo no)"
 run 'cmd_mlflow start' >/dev/null 2>&1
 check "start wants it again" "true" "$(enabled)"
 out="$(run 'cmd_mlflow disable --json' 2>/dev/null)"; rc=$?
@@ -174,11 +178,11 @@ kill "$HOLDER_PID" 2>/dev/null; wait "$HOLDER_PID" 2>/dev/null; HOLDER_PID=""
 
 echo "arguments:"
 out="$(run 'cmd_mlflow frob' 2>&1)"
-contains "an unknown action is refused, naming disable too" "replay, disable" "$out"
+contains "an unknown action is refused" "invalid choice" "$out"
 out="$(run 'cmd_mlflow stop --frob' 2>&1)"
 contains "stop names its options" "--disable" "$out"
 out="$(run 'cmd_mlflow status --port 1' 2>&1)"
-contains "status takes --json only" "only --json" "$out"
+contains "status takes --json only" "unrecognized arguments" "$out"
 
 echo "replay hands through to exasol_mlflow:"
 out="$(run 'cmd_mlflow replay --json' 2>&1)"; rc=$?

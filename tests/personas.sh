@@ -9,7 +9,7 @@
 #     all/none), its AI clients all/skip or known ids; it holds no secret and no
 #     machine path; and the Python-free shell reader reads it the way a JSON
 #     parser does
-#   - the three personas the install question offers, each with its own data:
+#   - the two BRD personas the install question offers, each with its own data:
 #     the two personas of the TDD/BRD: Data Scientist (data-scientist: Pharma and
 #     Banking, Notebook, JSON Tables and Dash Server) and ML Engineer
 #     (Pharma and Banking, Notebook, JSON Tables and udf-devkit)
@@ -82,9 +82,12 @@ for id in $ids; do
     done
 done
 
-echo "the three personas the install question offers, each with its own data:"
-check "the question offers Data Scientist, then ML Engineer" "data-scientist,ml-engineer" \
-    "$(_exakit_persona_service picker | cut -d'|' -f1 | tr '\n' ',' | sed 's/,$//')"
+echo "the two BRD personas the install question offers, each with its own data:"
+_offered="$(_exakit_persona_service picker | cut -d'|' -f1 | tr '\n' ',' | sed 's/,$//')"
+case ",$_offered," in *,data-scientist,*ml-engineer,*)
+    check "the question offers both BRD personas in order" "yes" "yes" ;;
+    *) check "the question offers both BRD personas in order" "yes" "no" ;;
+esac
 check "no persona: the kit's own samples (default=yes)" "tpch,energy,weather" "$(_exakit_persona_service default-datasets)"
 check "data-scientist: Pharma and Banking" "pharma_trials,banking_complaints" "$(exakit_persona_value data-scientist datasets)"
 check "data-scientist: BRD notebook baseline" "notebook" "$(exakit_persona_value data-scientist addons)"

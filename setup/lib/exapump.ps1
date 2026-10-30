@@ -1541,10 +1541,7 @@ function Test-ExakitCsvExtensionRefused {
 # Show-ExakitJsonUnsupported - one honest explanation, with the reason the
 # add-on itself gives, instead of a load that fails at the first ingest.
 function Show-ExakitJsonUnsupported {
-    $why = ""
-    if (Get-Command Get-JsonTablesApplicableReason -ErrorAction SilentlyContinue) {
-        $why = Get-JsonTablesApplicableReason
-    }
+    $why = Get-ExakitJsonTablesReason
     if ($why) {
         Warn2 "JSON files need an engine that is not available on this machine: $why"
     } else {
@@ -1563,12 +1560,51 @@ function Show-ExakitJsonUnsupported {
 # These are the twins of _exakit_json_tables_ready, _exakit_json_tables_ensure
 # and exakit_load_local_json in exapump.sh.
 
+function Get-ExakitJsonTablesBin {
+    $recorded = Get-ExakitManifestValue 'components.json_tables.command'
+    if ($recorded) { return [string]$recorded }
+    if ($env:EXAKIT_JSON_TABLES_BIN) { return $env:EXAKIT_JSON_TABLES_BIN }
+    return (Join-Path $script:BinDir 'exasol-json-tables.cmd')
+}
+
+function Get-ExakitJsonTablesReason {
+    if (Test-Path (Join-Path (Get-ExakitMarketplaceRoot) 'marketplace/service.py')) {
+        return ("" + (Invoke-ExakitMarketplacePython -Id 'json-tables' -Operation 'applicable-reason'))
+    }
+    return ""
+}
+
+# The data loader owns this one ingest invocation. Preserve the add-on log
+# named by its failure message without loading the retired PowerShell module.
+function Invoke-ExakitJsonTablesLogged {
+    param([Parameter(Mandatory)][string]$Exe, [string[]]$Arguments = @())
+    $log = Join-Path $script:LogDir 'json-tables.log'
+    try {
+        New-Item -ItemType Directory -Force -Path (Split-Path -Parent $log) | Out-Null
+        Add-Content -Path $log -Value ("=== " + (Get-Date -Format "yyyy-MM-dd HH:mm:ss") + " " + $Exe + " " + ($Arguments -join " "))
+    } catch { }
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $out = @(& $Exe @Arguments 2>&1) -join "`n"
+        $code = $LASTEXITCODE
+    } catch {
+        $out = "$_"
+        $code = 1
+    } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+    try { if ($out) { Add-Content -Path $log -Value $out } } catch { }
+    if ($out) { Write-ExakitLog 'INFO' $out }
+    return $code
+}
+
 # Test-ExakitJsonTablesReady - is the add-on installed AND usable right now?
 # Twin of _exakit_json_tables_ready.
 function Test-ExakitJsonTablesReady {
-    if (-not (Get-Command Get-JsonTablesInstalledVersion -ErrorAction SilentlyContinue)) { return $false }
-    if (-not (Get-JsonTablesInstalledVersion)) { return $false }
-    $bin = Get-JsonTablesBin
+    if (-not (Test-Path (Join-Path (Get-ExakitMarketplaceRoot) 'marketplace/service.py'))) { return $false }
+    if (-not (Invoke-ExakitMarketplacePython -Id 'json-tables' -Operation 'installed-version')) { return $false }
+    $bin = Get-ExakitJsonTablesBin
     if (-not $bin) { return $false }
     return (Test-Path $bin)
 }
@@ -1577,8 +1613,8 @@ function Test-ExakitJsonTablesReady {
 # Defensive about the module being absent: a kit copy without it cannot install
 # the add-on either, so "no" is the honest answer in both cases.
 function Test-ExakitJsonTablesApplicable {
-    if (-not (Get-Command Test-JsonTablesApplicable -ErrorAction SilentlyContinue)) { return $false }
-    return [bool](Test-JsonTablesApplicable)
+    if (-not (Test-Path (Join-Path (Get-ExakitMarketplaceRoot) 'marketplace/service.py'))) { return $false }
+    return [bool](Invoke-ExakitMarketplacePython -Id 'json-tables' -Operation 'applicable')
 }
 
 # Confirm-ExakitJsonTablesReady - make the JSON engine usable, saying nothing.
@@ -1608,11 +1644,9 @@ function Confirm-ExakitJsonTablesReady {
         return $false
     }
 
-    # No dot-sourcing fallback here, unlike the shell: a dot-sourced module
-    # inside a function loads into THAT function's scope and is gone on return.
-    # Both entry points (setup/exakit.ps1 and setup-windows.ps1) source
-    # every add-on module at the top, so a missing one means an old kit copy.
-    if (-not (Get-Command Install-JsonTables -ErrorAction SilentlyContinue)) {
+    # The Python marketplace service is the add-on's implementation. The
+    # shared PowerShell bridge below remains the stable platform boundary.
+    if (-not (Test-Path (Join-Path (Get-ExakitMarketplaceRoot) 'marketplace/service.py'))) {
         $script:JsonTablesBlocked = "This kit copy does not carry the JSON engine - update the kit first: exakit update"
         Warn2 $script:JsonTablesBlocked
         return $false
@@ -1740,10 +1774,10 @@ function Import-ExakitLocalJson {
         }
 
         $outDir = Join-Path $tmpDir "out"
-        $engine = Get-JsonTablesBin
+        $engine = Get-ExakitJsonTablesBin
         # Through Invoke-JsonTablesLogged so the engine's own words land in the
         # add-on's log too - the very file the failure message below points at.
-        if ((Invoke-JsonTablesLogged -Exe $engine -Arguments @("ingest", "--input", $ingestInput, "--output-dir", $outDir)) -ne 0) {
+        if ((Invoke-ExakitJsonTablesLogged -Exe $engine -Arguments @("ingest", "--input", $ingestInput, "--output-dir", $outDir)) -ne 0) {
             Warn2 "This JSON file could not be read - see: exakit logs json-tables"
             Info "It must be one JSON document, or NDJSON with one document per line."
             Info "Nothing was loaded; the database is unchanged."
@@ -2450,10 +2484,7 @@ function Show-ExakitBulkPlan {
     }
     $json = @($Plan | Where-Object { $_.StartsWith("skip|json-unsupported|") }).Count
     if ($json -gt 0) {
-        $why = ""
-        if (Get-Command Get-JsonTablesApplicableReason -ErrorAction SilentlyContinue) {
-            $why = Get-JsonTablesApplicableReason
-        }
+        $why = Get-ExakitJsonTablesReason
         if ($why) { Warn2 "$(Get-ExakitPlural $json 'JSON file') skipped: $why" }
         else { Warn2 "$(Get-ExakitPlural $json 'JSON file') skipped: no ingest engine is available on this machine." }
         Info "CSV and Parquet load without it. Load the JSON files from macOS, Linux or WSL."

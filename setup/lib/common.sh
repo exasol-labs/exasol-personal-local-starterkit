@@ -3250,10 +3250,11 @@ _exakit_component_fallback() {
         # copy on disk, which is exactly what is installed.
         exakit) exakit_kit_bundled_version ;;
         *)
-            # Marketplace add-ons: EXAKIT_<ID>_VERSION_FALLBACK, defined by the
-            # add-on's own module (empty when the module is not loaded).
+            # Marketplace defaults are release data, not duplicated constants
+            # in the platform modules.
             _exakit_addon_registered "$1" || return 1
-            eval "_cf_value=\"\${$(_exakit_addon_env_var "$1" VERSION_FALLBACK):-}\""
+            _cf_root="$(_exakit_marketplace_root 2>/dev/null || true)"
+            _cf_value="$(run_python_any "$_cf_root/marketplace/metadata.py" "$_cf_root" registry 2>/dev/null | awk -F'|' -v id="$1" '$1 == id { print $5; exit }')"
             [ -n "$_cf_value" ] || return 1
             printf '%s\n' "$_cf_value"
             ;;
@@ -3566,35 +3567,12 @@ exakit_component_current() {
 # installs), and only the installed ones join the routine update flow, so
 # `exakit update all` can refresh an add-on but never sneak one in.
 #
-# Adding a new add-on is three additive changes — NO case-statement surgery.
-# Every registry function (version block, env override, fallback, upstream
-# lookup, installed probe, update targets/dispatch) handles registered add-ons
-# through a generic arm driven by these conventions:
-#   1. Ship its module as setup/lib/<id>.sh (+ the .ps1 twin), defining
-#      <id>_install, <id>_validate, <id>_update, <id>_installed_version and
-#      <id>_uninstall — with dashes flipped to underscores, since a shell
-#      function name cannot carry a dash — plus its own EXAKIT_<ID>_VERSION
-#      and EXAKIT_<ID>_VERSION_FALLBACK constants. The uninstall hook takes a
-#      dry flag ("1" narrates the plan) and is what folds the add-on into the
-#      selectable `exakit uninstall` menu and the full teardown, with no
-#      further wiring.
-#   2. Add a components.<id> block to versions.json: version, severity, and
-#      repo (GitHub-release-installed) or package (PyPI-installed) — that
-#      field is what the generic upstream lookup reads. An add-on the kit
-#      repackages itself (json-tables) carries neither and
-#      defines <id>_latest instead: exakit_component_latest asks that hook
-#      FIRST, so a repo field beside it would never be read. The hook answers
-#      from versions.json on purpose — only a build the pkg workflow has
-#      published and fingerprinted is installable — and
-#      exakit_component_latest_source is how the rest of the kit tells the
-#      two apart.
-#   3. Add one line to exakit_marketplace_addons below.
-# The add-on's one-line description is NOT one of those changes: it is the
-# About field of its own repository, read through
-# exakit_marketplace_addon_description.
-# (CI guards move with it: the expected-components set in versions.yml and the
-# COUPLED fallback-constant table in versions-bump.yml.)
-# ⇄ twin: Get-ExakitMarketplaceAddons and friends in setup/exakit.ps1.
+# Add-on membership, labels, visibility and fallback versions live in
+# marketplace/catalog.json. Operations live in marketplace/addons/<id>.py and
+# the tested component pin lives in versions.json. metadata.py supplies the
+# platform hooks, so a new add-on needs no shell or PowerShell module pair or
+# registry case. See marketplace/README.md for the complete developer path.
+# ⇄ twin: Get-ExakitMarketplaceAddons in setup/lib/exakit-common.ps1.
 
 # exakit_marketplace_addons — one line per add-on: "id|label".
 #
@@ -3611,14 +3589,105 @@ exakit_component_current() {
 # json-tables is last, so json-tables is what disappeared, silently, on any
 # machine that had VS Code. Reading on fd 3 makes that class of bug
 # impossible here no matter what a future add-on shells out to.
+_exakit_marketplace_root() {
+    _mr_local="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+    if [ -f "$_mr_local/marketplace/catalog.json" ]; then printf '%s\n' "$_mr_local"; return 0; fi
+    exakit_repo_root
+}
+
+_exakit_marketplace_versions_doc() {
+    [ "${EXAKIT_VERSION_POLICY:-manifest}" = manifest ] || return 1
+    exakit_versions_active_doc
+}
+
 exakit_marketplace_addons() {
-    printf '%s\n' "dash-server|dash-server (AI dashboard host)"
-    printf '%s\n' "dbt-exasol|dbt-exasol (dbt models on Exasol)"
-    printf '%s\n' "exasol-scheduler|Exasol Scheduler (SQL jobs on a schedule)"
-    printf '%s\n' "exasol-vscode|Exasol for VS Code (editor extension)"
-    printf '%s\n' "json-tables|JSON Tables (JSON into Exasol)"
-    printf '%s\n' "notebook|Notebooks (JupyterLab on Exasol)"
-    printf '%s\n' "udf-devkit|UDF dev kit (Python UDFs on Exasol)"
+    _mcr_root="$(_exakit_marketplace_root 2>/dev/null || true)"
+    [ -f "$_mcr_root/marketplace/metadata.py" ] || return 1
+    run_python_any "$_mcr_root/marketplace/metadata.py" "$_mcr_root" registry 2>/dev/null | cut -d'|' -f1,2
+}
+
+_exakit_addon_visible() {
+    _mcv_root="$(_exakit_marketplace_root 2>/dev/null || true)"
+    [ -f "$_mcv_root/marketplace/metadata.py" ] || return 1
+    [ "$(run_python_any "$_mcv_root/marketplace/metadata.py" "$_mcv_root" registry 2>/dev/null | awk -F'|' -v id="$1" '$1 == id { print $4; exit }')" = 1 ]
+}
+
+_exakit_marketplace_run_python() {
+    _mrp_mode="$1"; shift
+    if [ "$_mrp_mode" = query ] && _exakit_python3_present; then
+        python3 "$@"
+        return $?
+    fi
+    _mrp_uv="$(command -v uv 2>/dev/null || true)"
+    [ -n "$_mrp_uv" ] || [ ! -x "$EXAKIT_BIN_DIR/uv" ] || _mrp_uv="$EXAKIT_BIN_DIR/uv"
+    if [ -z "$_mrp_uv" ] && [ "$_mrp_mode" = mutate ]; then
+        exakit_ensure_uv || return 1
+        _mrp_uv="$EXAKIT_UV_BIN"
+    fi
+    if [ -n "$_mrp_uv" ]; then
+        UV_CACHE_DIR="${UV_CACHE_DIR:-$EXAKIT_HOME/cache/uv}" \
+            "$_mrp_uv" run --python "$EXAKIT_MANAGED_PYTHON_VERSION" --no-project python "$@"
+    else
+        run_python_any "$@"
+    fi
+}
+
+_exakit_marketplace_python() {
+    _mcp_root="$(_exakit_marketplace_root 2>/dev/null || true)"
+    [ -f "$_mcp_root/marketplace/service.py" ] || return 1
+    if [ "$2" = uninstall ] && [ "${3:-0}" = 1 ]; then
+        set -- "$1" "$2" --dry-run
+    else
+        set -- "$1" "$2"
+    fi
+    EXAKIT_MARKETPLACE_ACTIVITY_FILE="${EXAKIT_ADDON_TABLE_STATE:+$EXAKIT_ADDON_TABLE_STATE.activity}" \
+    EXAKIT_MARKETPLACE_ACTIVITY_ROW="${EXAKIT_ADDON_TABLE_ROW:-}" \
+        export EXAKIT_MARKETPLACE_ACTIVITY_FILE EXAKIT_MARKETPLACE_ACTIVITY_ROW
+    if [ "$2" = install ] || [ "$2" = update ]; then
+        _mcp_target="$(exakit_component_available "$1" 2>/dev/null || true)"
+        EXAKIT_MARKETPLACE_TARGET_VERSION="$_mcp_target" \
+        EXAKIT_MARKETPLACE_VERSIONS_DOC="$(_exakit_marketplace_versions_doc 2>/dev/null || true)" \
+            _exakit_marketplace_run_python mutate "$_mcp_root/marketplace/service.py" "$@"
+    else
+        case "$2" in uninstall|validate|start|stop) _mcp_mode=mutate ;; *) _mcp_mode=query ;; esac
+        _exakit_marketplace_run_python "$_mcp_mode" "$_mcp_root/marketplace/service.py" "$@"
+    fi
+}
+
+# Direct add-on commands share one platform boundary. The command parsers and
+# side effects live in marketplace/*.py, not in parallel shell implementations.
+_exakit_marketplace_cli() {
+    case "$1" in notebook_cli|udf_cli|model_cli|udf_manage|mlflow_cli|rust_cli|workflow_cli|persona_apply) ;; *) return 2 ;; esac
+    _emc_script="$1"
+    shift
+    _emc_mode=mutate
+    case "$_emc_script:${1:-}:${2:-}" in
+        model_cli:list:*|model_cli:inspect:*|model_cli:template:*|udf_manage:udf-use:--list|notebook_cli:status:*|notebook_cli:url:*|mlflow_cli:status:*|mlflow_cli:url:*|workflow_cli:*) _emc_mode=query ;;
+    esac
+    EXAKIT_MARKETPLACE_VERSIONS_DOC="$(_exakit_marketplace_versions_doc 2>/dev/null || true)" \
+        _exakit_marketplace_run_python "$_emc_mode" "$(exakit_repo_root)/marketplace/$_emc_script.py" "$@"
+}
+
+_exakit_marketplace_python_hooks() {
+    _mph_root="$(_exakit_marketplace_root 2>/dev/null || true)"
+    [ -f "$_mph_root/marketplace/metadata.py" ] || return 1
+    _mph_rows="$(run_python_any "$_mph_root/marketplace/metadata.py" "$_mph_root" shell-hooks 2>/dev/null)" || return 1
+    while IFS='|' read -r _mph_id _mph_method _mph_operation <&3; do
+        [ -n "$_mph_id" ] || continue
+        # metadata.py validates ids and takes operation names from the service.
+        _mph_name="$(printf '%s' "$_mph_id" | tr '-' '_')_$_mph_method"
+        # Keep a hook already supplied by the caller (including test and
+        # embedder overrides); loading the registry must be idempotent.
+        # The main exakit entry point still sources the old notebook helper for
+        # describe. Replace its lifecycle hooks there; isolated test overrides
+        # remain untouched.
+        if [ "${EXAKIT_MARKETPLACE_PYTHON_HOOKS:-0}" != 1 ]; then
+            command -v "$_mph_name" >/dev/null 2>&1 && continue
+        fi
+        eval "$_mph_name() { _exakit_marketplace_python '$_mph_id' '$_mph_operation' \"\$@\"; }"
+    done 3<<EXAKIT_MPH_EOF
+$_mph_rows
+EXAKIT_MPH_EOF
 }
 
 # _exakit_addon_fn <id> <suffix> — the module function for an add-on.
@@ -3937,18 +4006,18 @@ exakit_marketplace_addon_available() {
     command -v "$(_exakit_addon_fn "$1" install)" >/dev/null 2>&1
 }
 
-# _exakit_marketplace_load_modules — source any add-on module that is not
-# loaded yet. The setup scripts deliberately do not source the modules (the
-# marketplace is not part of the install flow), so the closing offer and the
-# menu load them here on demand. A module that fails to load only makes its
-# own row unavailable.
+# _exakit_marketplace_load_modules — register Python hooks, then source only
+# catalog entries explicitly marked legacy. A missing Python module leaves
+# its row unavailable; it must never silently fall back to an old shell pair.
 _exakit_marketplace_load_modules() {
+    _exakit_marketplace_python_hooks || true
     # The sourcing must happen in THIS shell so the loaded functions stick —
     # ids are collected via command substitution, never through a pipeline
     # (whose stages are subshells).
     _ml_root="$(exakit_repo_root 2>/dev/null || true)"
-    _ml_ids="$(exakit_marketplace_addons | cut -d'|' -f1)"
-    for _ml_id in $_ml_ids; do
+    _ml_rows="$(run_python_any "$_ml_root/marketplace/metadata.py" "$_ml_root" registry 2>/dev/null || true)"
+    while IFS='|' read -r _ml_id _ml_label _ml_backend _ml_visible _ml_fallback; do
+        [ "$_ml_backend" = legacy ] || continue
         exakit_marketplace_addon_available "$_ml_id" && continue
         for _ml_dir in ${_ml_root:+"$_ml_root/setup/lib"} "$EXAKIT_HOME/kit/setup/lib"; do
             if [ -f "$_ml_dir/$_ml_id.sh" ]; then
@@ -3957,7 +4026,9 @@ _exakit_marketplace_load_modules() {
                 break
             fi
         done
-    done
+    done <<EXAKIT_ML_ROWS
+$_ml_rows
+EXAKIT_ML_ROWS
     return 0
 }
 
@@ -3992,6 +4063,7 @@ _exakit_addon_applicable_reason() {
 # tool the user can see for themselves.
 _exakit_addon_offerable() {
     _exakit_marketplace_addon_present "$1" && return 0
+    _exakit_addon_visible "$1" || return 1
     _exakit_addon_applicable "$1"
 }
 
@@ -4513,9 +4585,7 @@ exakit_addon_activity() {
 
 _exakit_addon_progress() {
     exakit_addon_activity "$6"
-    # An add-on being installed from the TABLE reports into its ROW; the row
-    # already names it, so the "<id> · " prefix the one-line bar needs would be
-    # the same fact twice, in a cell that has to spell a phase in a fixed width.
+    # Table rows already show the add-on ID.
     if [ -n "${EXAKIT_ADDON_TABLE_ROW:-}" ] && [ -n "${EXAKIT_ADDON_TABLE_STATE:-}" ]; then
         ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" running \
             "$3" "$4" "$5" "$6"
@@ -4524,35 +4594,51 @@ _exakit_addon_progress() {
     ui_progress_state "$1" "$3" "$4" "$5" "$2 · $6"
 }
 
-# exakit_marketplace_menu — the `exakit marketplace` command body, wearing the
-# kit's two established looks so nothing here reads foreign:
-#   1. the STATE, as the same aligned table `exakit version` prints
-#      (Add-on / Status / Version / Action, one row per add-on, whatever its
-#      state — installed, on the system, missing module, or available);
-#   2. the SELECTION, as the same live table the data-load menu uses: a group
-#      row with the add-ons hanging off UI_TEE/UI_CORNER connectors, Space
-#      toggles, Enter installs, Skip as the exclusive default — and the Status
-#      column of those very rows is what the install then fills in.
-# Only installable add-ons become menu rows — everything else is answered by
-# the table, exactly like already-loaded datasets are not re-offered.
-#
-# Non-interactive runs answer with EXAKIT_MARKETPLACE_ADDONS: a csv of add-on
-# ids, "all", or "none" — same contract as EXAKIT_MCP_CLIENTS / EXAKIT_DATASETS.
+# Interactive selection uses Textual, then the existing table if Textual cannot
+# start. EXAKIT_MARKETPLACE_ADDONS answers unattended runs by ID, all, or none.
 exakit_marketplace_menu() {
+    if [ "${EXAKIT_MARKETPLACE_PYTHON_APPLY:-0}" = 1 ]; then
+        _mm_root="$(_exakit_marketplace_root)"
+        _mm_catalog="$(run_python_any "$_mm_root/marketplace/metadata.py" "$_mm_root" registry 2>&1)" || \
+            die "$_mm_catalog"
+    fi
+    # The interactive selection and its progress view share one Textual app.
+    # Explicit environment answers stay headless and enter the Python batch
+    # controller through the platform progress adapter below.
+    if [ -z "${EXAKIT_MARKETPLACE_ADDONS:-}" ] && \
+       [ "${UI_TABLE_AUTO:-0}" != 1 ] && [ -t 0 ] && [ -t 1 ] && [ "${EXAKIT_NO_FANCY:-0}" != 1 ]; then
+        _mm_root="$(exakit_repo_root)"
+        _mm_state="$(mktemp "${TMPDIR:-/tmp}/exakit-market-state.XXXXXX")" || _mm_state=""
+        _mm_result="$(mktemp "${TMPDIR:-/tmp}/exakit-market-ui.XXXXXX")" || _mm_result=""
+        if [ -n "$_mm_state" ] && [ -n "$_mm_result" ]; then
+            rm -f "$_mm_result"
+            if exakit_marketplace_list 1 >"$_mm_state"; then
+               EXAKIT_MARKETPLACE_VERSIONS_DOC="$(_exakit_marketplace_versions_doc 2>/dev/null || true)" \
+               run_python_any "$_mm_root/marketplace/launch.py" "$_mm_root" marketplace \
+                   --states "$_mm_state" --out "$_mm_result" \
+                   --defaults "${EXAKIT_MARKETPLACE_PRESELECT:-}" \
+                   --only "${EXAKIT_MARKETPLACE_ONLY:-}" \
+                   --frontends "${EXAKIT_NOTEBOOK_FRONTENDS:-jupyterlab,marimo,positron}" --apply
+                _mm_ui_rc=$?
+                rm -f "$_mm_state" "$_mm_result"
+                [ "$_mm_ui_rc" -eq 0 ] && return 0
+                [ "$_mm_ui_rc" -eq 10 ] && { info "Marketplace closed — nothing was installed."; return 0; }
+                [ "$_mm_ui_rc" -eq 11 ] || return "$_mm_ui_rc"
+                warn "The Textual marketplace did not start; using the kit's table menu."
+            else
+                rm -f "$_mm_state" "$_mm_result"
+                warn "The marketplace state could not be read; using the kit's table menu."
+            fi
+        fi
+        rm -f "$_mm_state" "$_mm_result"
+    fi
     _mm_ids=()
     _mm_selectable=0
-    # One "<id>|<why>" per add-on that cannot be installed. The reference panel
-    # used to carry these; deleting it took the answer to "why is this one not
-    # on offer?" with it, and on the all-covered path took the ONLY output that
-    # path produced. They come back as dim, unpickable rows inside the one
-    # table -- the way the MCP client list shows "Cursor · not installed" --
-    # and as plain lines when there is no table to put them in.
+    # <id>|<reason>|<version> for unavailable add-ons.
     _mm_covered=""
-    # "<id>|<version>|<description>" for each installable add-on, handed to the
-    # row builder so it never has to look either up itself.
+    # <id>|<version>|<description> for selectable add-ons.
     _mm_meta=""
-    # "<id>|<key>|<label>|<version>|<description>|<tick>" for each child row an
-    # add-on brings (the optional <id>_table_children hook), likewise.
+    # <id>|<key>|<label>|<version>|<description>|<tick> for child rows.
     _mm_children=""
     while IFS='|' read -r _mm_id _mm_label <&3; do
         [ -n "$_mm_id" ] || continue
@@ -4563,21 +4649,9 @@ exakit_marketplace_menu() {
         if [ -n "${EXAKIT_MARKETPLACE_ONLY:-}" ]; then
             case ",$EXAKIT_MARKETPLACE_ONLY," in *",$_mm_id,"*) ;; *) continue ;; esac
         fi
-        # Every add-on gets a STATE row; only an installable one also gets a
-        # selection row. A state that cannot be installed is answered by the
-        # "__disabled__" keeps the row in _mm_ids so the env answer can still
-        # tell a real add-on it names from an unknown one, and so the row
-        # numbering the selection is built from stays intact. It carries no
-        # text of its own any more: the reference panel that used to print a
-        # version and a reason for each of these is gone (see below), and the
-        # selection only ever listed installable add-ons.
+        # Disabled placeholders keep menu row indexes stable.
         if exakit_marketplace_addon_installed "$_mm_id"; then
-            # "Installed" and the version travel SEPARATELY now: the version
-            # belongs in the Version column beside every other add-on's, and the
-            # word belongs wherever the table puts a state -- Description on the
-            # selection screen, Status while installing. Bundling them into the
-            # name read as "json-tables · Installed (0.2)" with the Version
-            # column empty right next to it.
+            # Keep the version in its own table column.
             _mm_cv="$(exakit_component_current "$_mm_id" 2>/dev/null || true)"
             _mm_covered="$_mm_covered$_mm_id|Installed|$(exakit_version_plain "${_mm_cv:-?}")
 "
@@ -4590,6 +4664,10 @@ exakit_marketplace_menu() {
             _mm_ids+=("__disabled__")
         elif ! exakit_marketplace_addon_available "$_mm_id"; then
             _mm_covered="$_mm_covered$_mm_id|not in this kit copy|
+"
+            _mm_ids+=("__disabled__")
+        elif ! _exakit_addon_visible "$_mm_id"; then
+            _mm_covered="$_mm_covered$_mm_id|disabled in this release|
 "
             _mm_ids+=("__disabled__")
         else
@@ -4669,6 +4747,9 @@ EXAKIT_MM_EOF
                         info "$_mm_tok is already installed — update it with: exakit update"
                     elif _exakit_addon_registered "$_mm_tok" && _exakit_addon_system_present "$_mm_tok"; then
                         info "$_mm_tok is already on this system — the kit leaves it alone"
+                    elif _exakit_addon_registered "$_mm_tok" && ! _exakit_addon_visible "$_mm_tok"; then
+                        warn "Skipping $_mm_tok — it is disabled in marketplace/catalog.json"
+                        _mm_skipped=1
                     elif _exakit_addon_registered "$_mm_tok" && ! _exakit_addon_applicable "$_mm_tok"; then
                         # A real add-on that does not run here. One such id
                         # (a persona's list is written for every platform)
@@ -4714,23 +4795,11 @@ EXAKIT_MM_EOF
     # in the selection itself as columns, so the reader picks from the thing
     # that describes them.
     #
-    # What that costs, on the all-covered path only: the rows for add-ons that
-    # are NOT installable (already installed, already on this system, missing
-    # from this kit copy) had nowhere else to go, and the panel was the only
-    # output that path produced. They are represented by the count below
-    # instead. ui_table_disable is how they would come back -- as dim,
-    # unpickable rows inside the one table, the way the MCP client list shows
-    # "Cursor · not installed".
     printf '\n'
 
     if [ "$_mm_selectable" -eq 0 ]; then
         info "Everything available is already covered."
-        # Named, not just counted: "everything is covered" without saying WHICH
-        # things, or how, is the whole of what this path prints.
-        # Three fields per line (id|why|version), so the version has to be read
-        # into its own name: with two names the third field rode along inside
-        # the second and every line ended in a stray "|" ("managed outside the
-        # kit|"). An installed add-on shows its version, the others show why.
+        # Show each covered add-on and its state.
         while IFS='|' read -r _mm_cid _mm_cwhy _mm_cver; do
             [ -n "$_mm_cid" ] || continue
             info "$(printf '%-14s %s' "$_mm_cid" "$_mm_cwhy${_mm_cver:+ $_mm_cver}")"
@@ -4740,15 +4809,7 @@ EXAKIT_MM_COVERED
         return 0
     fi
 
-    # WITHOUT A TERMINAL, THE ANSWER IS SKIP. The pre-ticked rows exist so a
-    # human's bare Enter installs what is on offer; keeping them as the answer
-    # when nobody could see the question turned `exakit marketplace` from a
-    # browse into a full multi-hundred-MB install with a live daemon — run by
-    # agents that were told to look, not to install. Installing without a
-    # terminal takes an explicit answer: EXAKIT_MARKETPLACE_ADDONS, or ids on
-    # the command line. ⇄ twin: the same guard in Show-ExakitMarketplaceMenu.
-    # UI_TABLE_AUTO=1 is such an answer: `exakit persona add` installs the
-    # personas' add-ons, the ones this menu was narrowed to, without asking.
+    # A headless run needs an explicit selection; persona add sets UI_TABLE_AUTO.
     if [ -z "$(_exakit_prompt_tty)" ] && [ "${UI_TABLE_AUTO:-0}" != 1 ]; then
         info "No terminal to ask on — nothing was installed."
         info "See what is available (read-only): exakit marketplace --list   (--json for scripts)"
@@ -4756,26 +4817,12 @@ EXAKIT_MM_COVERED
         return 0
     fi
 
-    # The selection — the same live table the data-load menu draws: a group row
-    # with the add-ons hanging off connectors (UI_TEE/UI_CORNER from the ui
-    # palette; ASCII in plain mode), the available add-ons pre-selected so Enter
-    # alone installs what is on offer, and Skip as the exclusive opt-out. An
-    # interactive run that cannot draw still keeps the pre-selected defaults
-    # (EXAKIT_MARKETPLACE_ADDONS=none is the scripted opt-out); a run with no
-    # terminal at all never reaches this point.
-    # Mirrors exakit_data_load_select / Show-ExakitMarketplaceMenu.
-    #
-    # The rows the reader ticks here are the rows _exakit_marketplace_apply then
-    # fills in, so the choice and the progress are one screen. The disabled rows
-    # the checkbox version carried are gone: the state table directly above
-    # already gives each of them a version and a status, in more room than a
-    # dimmed one-line label had.
+    # The fallback table uses these rows for selection and progress.
     EXAKIT_ADDON_TABLE_STATE="$(mktemp "${TMPDIR:-/tmp}/exakit-addons.XXXXXX")" || {
         warn "Could not create a temporary file for the add-ons table."
         return 1
     }
-    # _exakit_addon_table_cleanup removes it on every path out that returns;
-    # this covers a die() or Ctrl+C on the way.
+    # Also cleaned on exit and interrupts.
     exakit_track_tmp "$EXAKIT_ADDON_TABLE_STATE"
     _mm_pick_ids=()
     _mm_i=0
@@ -4789,30 +4836,19 @@ EXAKIT_MM_COVERED
     EXAKIT_ADDON_TABLE_DISABLED="$_mm_covered"
     EXAKIT_ADDON_TABLE_META="$_mm_meta"
     EXAKIT_ADDON_TABLE_CHILDREN="$_mm_children"
-    # Above the table, not under it: the Description column is a repository's
-    # About line, which is a table cell and not a reference. The reference is
-    # the help document, and nothing on this screen named it. ⇄ twin:
-    # Show-ExakitMarketplaceMenu.
+    # The help command supplies details beyond the table.
     info "Details on any add-on: exakit help <id>"
     _exakit_addon_table_build "$EXAKIT_ADDON_TABLE_STATE" "${_mm_pick_ids[@]}"
     UI_TABLE_TITLE="Marketplace add-ons"
     # The first column's heading, or the add-ons would sit under "Dataset".
     UI_TABLE_COL1="Add-on"
-    # The two the reference panel used to carry. Module state, like COL1, so
-    # they are cleared the moment this menu is done -- a heading left behind is
-    # how the next table ends up wearing this one's columns.
+    # Reset these headings after the menu.
     UI_TABLE_COL2="Version"
     UI_TABLE_COL3="Description"
     ui_table_menu "$EXAKIT_ADDON_TABLE_STATE"
     UI_TABLE_COL2=""
     UI_TABLE_COL3=""
-    # ONLY A PRESSED ENTER INSTALLS. The menu pre-selects everything so that
-    # Enter alone acts on what is on offer - which is only a safe posture while
-    # there is an Enter. Without one (a dumb terminal where the interactive
-    # table cannot draw, a stdin that hit EOF mid-menu), ui_table_menu returns
-    # those same defaults as the standing selection, and applying them here
-    # installed EVERY add-on on a machine where nobody chose anything - real
-    # venvs, real downloads. The scripted route stays EXAKIT_MARKETPLACE_ADDONS.
+    # Do not install preselected rows when the menu could not read Enter.
     if [ "${EXAKIT_TABLE_CONFIRMED:-0}" != 1 ]; then
         _exakit_addon_table_cleanup
         info "No interactive terminal to confirm a selection — nothing was installed."
@@ -5080,18 +5116,8 @@ exakit_marketplace_offer() {
     return 0
 }
 
-# _exakit_marketplace_questions <ids_csv> — QUESTIONS FIRST. An add-on that
-# asks something at install defines the optional hook <id>_questions (the
-# notebook add-on asks which notebook tools); it is asked HERE, before the
-# progress table animates - a question asked under a live table is redrawn over
-# by it, which left two frames and the question's text bleeding through. The
-# selection frame is cleared first, so the progress table then draws fresh
-# below the answers. The hook exports its answers for the install to read.
-#
-# An add-on whose CHILD ROWS were in the table has had its question answered
-# there (see _exakit_addon_table_build), so it is not asked again - and the
-# selection frame is then left where it is, for the progress to fill in. The
-# hook stays for a run that drew no table (a scripted EXAKIT_MARKETPLACE_ADDONS).
+# Ask add-on questions before the progress table when child rows did not
+# already collect their answers.
 _exakit_marketplace_questions() {
     _mq_ids=""
     for _mq_id in $(printf '%s' "$1" | tr ',' ' '); do
@@ -5116,7 +5142,126 @@ _exakit_marketplace_questions() {
 
 # _exakit_marketplace_apply <ids_csv> — install each picked add-on in turn. One
 # failure does not strand the rest; the exit status says whether all made it.
+_exakit_marketplace_apply_python() {
+    # Textual or the fallback table already collected child choices. Preserve
+    # the Notebook question for a named interactive install with no answer;
+    # an explicit answer reaches Python unmodified for whole-batch validation.
+    [ -n "${EXAKIT_NOTEBOOK_FRONTENDS:-}" ] || _exakit_marketplace_questions "$1"
+    _mpa_root="$(_exakit_marketplace_root)"
+    _mpa_dir="$(mktemp -d "${TMPDIR:-/tmp}/exakit-apply.XXXXXX")" || return 1
+    mkfifo "$_mpa_dir/events" || { rm -rf "$_mpa_dir"; return 1; }
+    EXAKIT_ADDON_TABLE_LIVE=0
+    if [ -n "${EXAKIT_ADDON_TABLE_STATE:-}" ]; then
+        ui_table_begin "$EXAKIT_ADDON_TABLE_STATE" && EXAKIT_ADDON_TABLE_LIVE=1
+    fi
+    # Python owns the lifecycle. This adapter only paints the existing table
+    # from live phase records and drains the final messages after it stops.
+    ( export EXAKIT_ADDON_TABLE_IDS
+      EXAKIT_MARKETPLACE_ACTIVITY_FILE="${EXAKIT_ADDON_TABLE_STATE:+$EXAKIT_ADDON_TABLE_STATE.activity}"
+      export EXAKIT_MARKETPLACE_ACTIVITY_FILE
+      EXAKIT_MARKETPLACE_VERSIONS_DOC="$(_exakit_marketplace_versions_doc 2>/dev/null || true)"
+      export EXAKIT_MARKETPLACE_VERSIONS_DOC
+      _exakit_marketplace_run_python mutate "$_mpa_root/marketplace/apply.py" "$1" --stream \
+          >"$_mpa_dir/events" 2>"$_mpa_dir/stderr"
+      printf '%s\n' "$?" >"$_mpa_dir/exit"
+    ) &
+    _mpa_pid=$!
+    _mpa_notes=""
+    _mpa_failure_event=0
+    _mpa_bar=""
+    _mpa_bar_live=0
+    _mpa_current=""
+    while IFS='|' read -r _mpa_tag _mpa_id _mpa_phase _mpa_detail _mpa_seconds; do
+        if [ "$_mpa_tag" != '@@EXAKIT' ]; then
+            case "$_mpa_tag" in
+                *'• '*)
+                    _mpa_activity="${_mpa_tag#*'• '}"
+                    if [ "$_mpa_bar_live" = 1 ]; then
+                        ui_progress_phase "$_mpa_bar" "$_mpa_current · $_mpa_activity"
+                    elif ! _exakit_addon_table_live; then
+                        info "$_mpa_activity"
+                    fi
+                    ;;
+                *) [ -z "$_mpa_tag" ] || _exakit_log_file "INFO  $_mpa_tag" ;;
+            esac
+            continue
+        fi
+        EXAKIT_ADDON_TABLE_ROW=""
+        _exakit_addon_table_live && EXAKIT_ADDON_TABLE_ROW="$(_exakit_addon_table_row "$_mpa_id")"
+        case "$_mpa_phase" in
+            installing)
+                _mpa_current="$_mpa_id"
+                _exakit_log_file "INFO  Installing add-on: $_mpa_id"
+                [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" running 0 65 40 installing
+                if ! _exakit_addon_table_live; then
+                    info "Installing add-on: $_mpa_id"
+                    _mpa_bar="$(mktemp "${TMPDIR:-/tmp}/exakit-addon-bar.XXXXXX")" || _mpa_bar=""
+                    if [ -n "$_mpa_bar" ]; then
+                        ui_progress_state "$_mpa_bar" 0 65 40 "$_mpa_id · installing"
+                        ui_progress_begin "$_mpa_bar" "$(date +%s 2>/dev/null || echo 0)" && _mpa_bar_live=1
+                    fi
+                fi
+                ;;
+            validating)
+                [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" running 65 90 8 validating
+                [ -n "$_mpa_bar" ] && ui_progress_state "$_mpa_bar" 65 90 8 "$_mpa_id · validating"
+                if ! _exakit_addon_table_live && [ "$_mpa_bar_live" != 1 ]; then info "Validating add-on: $_mpa_id"; fi
+                ;;
+            starting)
+                [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" running 90 100 3 starting
+                [ -n "$_mpa_bar" ] && ui_progress_state "$_mpa_bar" 90 100 3 "$_mpa_id · starting"
+                if ! _exakit_addon_table_live && [ "$_mpa_bar_live" != 1 ]; then info "Starting add-on: $_mpa_id"; fi
+                ;;
+            done)
+                if [ "$_mpa_bar_live" = 1 ]; then ui_progress_end; _mpa_bar_live=0; fi
+                [ -z "$_mpa_bar" ] || { rm -f "$_mpa_bar"; _mpa_bar=""; }
+                [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" done '' '' '' '' "$(_exakit_addon_table_cell "$_mpa_detail" "$_mpa_seconds")"
+                _mpa_notes="$_mpa_notes
+ok|$_mpa_id installed${_mpa_detail:+ — $_mpa_detail}"
+                ;;
+            warning)
+                _mpa_notes="$_mpa_notes
+warn|$_mpa_id: $_mpa_detail"
+                ;;
+            failed)
+                _mpa_failure_event=1
+                if [ "$_mpa_bar_live" = 1 ]; then ui_progress_end; _mpa_bar_live=0; fi
+                [ -z "$_mpa_bar" ] || { rm -f "$_mpa_bar"; _mpa_bar=""; }
+                [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" failed '' '' '' '' 'did not finish — see the log'
+                _mpa_notes="$_mpa_notes
+warn|$_mpa_id did not finish: $_mpa_detail"
+                ;;
+        esac
+    done <"$_mpa_dir/events"
+    if [ "$_mpa_bar_live" = 1 ]; then ui_progress_end; fi
+    [ -z "$_mpa_bar" ] || rm -f "$_mpa_bar"
+    wait "$_mpa_pid" 2>/dev/null || true
+    _mpa_rc="$(cat "$_mpa_dir/exit" 2>/dev/null || echo 1)"
+    if _exakit_addon_table_live; then
+        ui_table_end "$EXAKIT_ADDON_TABLE_STATE"
+        EXAKIT_ADDON_TABLE_LIVE=0
+    fi
+    while IFS='|' read -r _mpa_kind _mpa_message; do
+        [ -n "$_mpa_kind" ] || continue
+        if [ "$_mpa_kind" = ok ]; then ok "$_mpa_message"; else warn "$_mpa_message"; fi
+    done <<EXAKIT_MPA_NOTES
+$_mpa_notes
+EXAKIT_MPA_NOTES
+    if [ "$_mpa_rc" -ne 0 ] && [ -s "$_mpa_dir/stderr" ]; then
+        _mpa_error="$(tail -n 1 "$_mpa_dir/stderr")"
+        _exakit_log_file "WARN  $_mpa_error"
+        [ "$_mpa_failure_event" = 1 ] || warn "Marketplace could not start: $_mpa_error"
+    fi
+    rm -rf "$_mpa_dir"
+    _exakit_addon_table_cleanup
+    return "$_mpa_rc"
+}
+
 _exakit_marketplace_apply() {
+    if [ "${EXAKIT_MARKETPLACE_PYTHON_APPLY:-0}" = 1 ]; then
+        _exakit_marketplace_apply_python "$1"
+        return $?
+    fi
     _mp_status=0
     _exakit_marketplace_questions "$1"
     # The SAME table the selection was just made in becomes the progress display:
@@ -5171,18 +5316,7 @@ _exakit_marketplace_apply() {
             [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && \
                 ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" \
                     failed "" "" "" "" "did not finish — see the log"
-            # NOTHING HERE. Two reasons, and they compound.
-            #
-            # The module that failed has already printed its own reason, specific
-            # to what went wrong. A generic "retry with: exakit marketplace"
-            # underneath gave one failure two competing answers and the generic
-            # one was wrong anyway -- marketplace declines to act on an add-on
-            # that is already present and answers "Nothing to install".
-            #
-            # And the row above already says "did not finish - see the log", so
-            # even a corrected sentence is the third telling of one fact. Printed
-            # under a frame the animator has only just stopped repainting, it is
-            # where the table visibly came apart on a real install.
+            # The add-on has already reported the specific failure.
             _exakit_log_file "WARN  $_mp_id did not finish installing"
             _mp_status=1
         fi
@@ -10970,7 +11104,7 @@ kit_shared_steps() {
             # already established this is not the kit home itself.
             for _kss_stale in "$EXAKIT_HOME/kit/setup/lib" "$EXAKIT_HOME/kit/setup/help" \
                               "$EXAKIT_HOME/kit/mcp" "$EXAKIT_HOME/kit/sql" \
-                              "$EXAKIT_HOME/kit/skills"; do
+                              "$EXAKIT_HOME/kit/skills" "$EXAKIT_HOME/kit/marketplace"; do
                 rm -rf "$_kss_stale"
             done
             cp -R "$_script_dir/lib" "$EXAKIT_HOME/kit/setup/" \
@@ -10994,6 +11128,7 @@ kit_shared_steps() {
             # checkout — it shadows it, so every one of those commands reports
             # "no skills/ directory in this kit build" on a working install.
             [ -d "$_kit_root/skills" ] && cp -R "$_kit_root/skills" "$EXAKIT_HOME/kit/"
+            [ -d "$_kit_root/marketplace" ] && cp -R "$_kit_root/marketplace" "$EXAKIT_HOME/kit/"
             # setup/help/ is the WHOLE help corpus -- one JSON per topic, and
             # `exakit help <topic>` resolves through exakit_repo_root, which
             # PREFERS this staged copy once kit/mcp exists. Omitting it did not

@@ -4,6 +4,7 @@
   "title": "ML Engineer",
   "summary": "Train models inside the database with Python UDFs - or score them with Rust UDFs - on the Pharma and Banking reference datasets, runs logged to the kit's MLflow.",
   "picker": true,
+  "visible": true,
   "order": 20,
   "datasets": ["pharma_trials", "banking_complaints"],
   "mcp_clients": "all",

@@ -183,17 +183,13 @@ fi
 # Marketplace add-on modules: the CLI is where they are installed (exakit
 # marketplace) and updated (exakit update <addon>), so it loads every module
 # it ships. A missing file only makes the marketplace row unavailable.
-[ -f "$_lib_dir/dash-server.sh" ] && . "$_lib_dir/dash-server.sh"
-[ -f "$_lib_dir/dbt-exasol.sh" ] && . "$_lib_dir/dbt-exasol.sh"
-[ -f "$_lib_dir/exasol-vscode.sh" ] && . "$_lib_dir/exasol-vscode.sh"
-[ -f "$_lib_dir/json-tables.sh" ] && . "$_lib_dir/json-tables.sh"
-[ -f "$_lib_dir/exasol-scheduler.sh" ] && . "$_lib_dir/exasol-scheduler.sh"
 [ -f "$_lib_dir/notebook.sh" ] && . "$_lib_dir/notebook.sh"
-[ -f "$_lib_dir/workflow.sh" ] && . "$_lib_dir/workflow.sh"
 [ -f "$_lib_dir/describe.sh" ] && . "$_lib_dir/describe.sh"
-[ -f "$_lib_dir/udf-devkit.sh" ] && . "$_lib_dir/udf-devkit.sh"
-[ -f "$_lib_dir/rust-udf.sh" ] && . "$_lib_dir/rust-udf.sh"
-[ -f "$_lib_dir/mlflow.sh" ] && . "$_lib_dir/mlflow.sh"
+EXAKIT_MARKETPLACE_PYTHON_HOOKS=1
+_exakit_marketplace_load_modules
+unset EXAKIT_MARKETPLACE_PYTHON_HOOKS
+EXAKIT_MARKETPLACE_PYTHON_APPLY=1
+export EXAKIT_MARKETPLACE_PYTHON_APPLY
 
 # Scratch files a command made in TMPDIR (exakit_track_tmp) go with it, however
 # it ends: return, die(), or Ctrl+C - bash runs the EXIT trap on a fatal signal
@@ -2452,7 +2448,7 @@ cmd_whats_new() {
     fi
 }
 
-# cmd_persona list | show <id> | plan [<id>] [--json] | add <id>[,<id>] — the
+# cmd_persona list | show <id> | plan [<id>] [--json] | add <id>[,<id>] | remove <id> — the
 # `exakit persona` command. `apply` is the old name of add, kept as an alias.
 cmd_persona() {
     case "${1:-list}" in
@@ -2502,7 +2498,12 @@ cmd_persona() {
             exakit_persona_known "$_cp_id" || die "$EXAKIT_PERSONA_PROBLEM"
             exakit_persona_add "$_cp_id"
             ;;
-        *) die "Unknown persona command: $1 (use: exakit persona list | show <id> | plan [<id>] | add <id>)" ;;
+        remove)
+            [ "$#" -eq 2 ] || reject "Name one persona: exakit persona remove <id>"
+            case "$2" in -*) reject "Unknown option for persona remove: $2" ;; esac
+            EXAKIT_HOME="$EXAKIT_HOME" _exakit_persona_service remove "$2" || die "Could not remove persona $2 from the kit record"
+            ;;
+        *) die "Unknown persona command: $1 (use: exakit persona list | show <id> | plan [<id>] | add <id> | remove <id>)" ;;
     esac
 }
 
@@ -2724,13 +2725,21 @@ case "${1:-help}" in
     sql)      shift; cmd_sql "$@" ;;
     logs)     shift; cmd_logs "$@" ;;
     catalog)  shift; _exakit_refuse_unknown_options catalog "--json,-j" "$@"; cmd_catalog "$@" ;;
-    persona)  shift; command -v cmd_persona >/dev/null 2>&1 || die "The persona module is missing from this kit copy. Repair with: exakit update"; cmd_persona "$@" ;;
-    notebook) shift; command -v notebook_cmd >/dev/null 2>&1 || die "The notebook module is missing from this kit copy. Repair with: exakit update"; notebook_cmd "$@" ;;
-    workflow) shift; command -v cmd_workflow >/dev/null 2>&1 || die "The workflow module is missing from this kit copy. Repair with: exakit update"; cmd_workflow "$@" ;;
-    mlflow) shift; command -v cmd_mlflow >/dev/null 2>&1 || die "The MLflow module is missing from this kit copy. Repair with: exakit update"; cmd_mlflow "$@" ;;
+    persona)
+        shift
+        case "${1:-}" in
+            add|apply) _exakit_marketplace_cli persona_apply "$@" --cli "$(exakit_repo_root)/setup/exakit" ;;
+            *) command -v cmd_persona >/dev/null 2>&1 || die "The persona module is missing from this kit copy. Repair with: exakit update"; cmd_persona "$@" ;;
+        esac
+        ;;
+    notebook) shift; _exakit_marketplace_cli notebook_cli "$@" ;;
+    workflow) shift; _exakit_marketplace_cli workflow_cli "$@" ;;
+    mlflow) shift; _exakit_marketplace_cli mlflow_cli "$@" ;;
     describe) shift; command -v cmd_describe >/dev/null 2>&1 || die "The describe module is missing from this kit copy. Repair with: exakit update"; cmd_describe "$@" ;;
-    rust-udf) shift; command -v cmd_rust_udf >/dev/null 2>&1 || die "The Rust UDF module is missing from this kit copy. Repair with: exakit update"; cmd_rust_udf "$@" ;;
-    udf-setup|udf-use|udf-build|udf-file|model) _udf_cmd="cmd_$(printf '%s' "$1" | tr '-' '_')"; shift; command -v "$_udf_cmd" >/dev/null 2>&1 || die "The udf-devkit module is missing from this kit copy. Repair with: exakit update"; "$_udf_cmd" "$@" ;;
+    rust-udf) shift; _exakit_marketplace_cli rust_cli "$@" ;;
+    udf-file) shift; _exakit_marketplace_cli udf_cli "$@" ;;
+    model) shift; _exakit_marketplace_cli model_cli "$@" ;;
+    udf-setup|udf-use|udf-build) _udf_name="$1"; shift; _exakit_marketplace_cli udf_manage "$_udf_name" "$@" ;;
     # `exakit help --help` reaches this arm (the universal --help hook skips
     # the help command on purpose), so --help/-h are options here and name
     # the help command's own page, like every other command's --help does.

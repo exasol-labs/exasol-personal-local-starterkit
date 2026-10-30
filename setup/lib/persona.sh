@@ -60,6 +60,13 @@ exakit_persona_known() {
     return 1
 }
 
+exakit_persona_selectable() {
+    _eps_recorded="$(manifest_get persona.id 2>/dev/null || true)"
+    _eps_error="$(_exakit_persona_service select "$1" "$_eps_recorded" 2>&1 >/dev/null)" && return 0
+    EXAKIT_PERSONA_PROBLEM="$(printf '%s\n' "$_eps_error" | tail -n 1)"
+    return 1
+}
+
 # exakit_persona_dataset_hints — dataset|persona titles, for the data menu.
 exakit_persona_dataset_hints() {
     _exakit_persona_service dataset-hints 2>/dev/null
@@ -93,7 +100,7 @@ _exakit_persona_record() {
 # manifest unless told not to.
 exakit_persona_apply_env() {
     [ -n "${EXAKIT_PERSONA:-}" ] || return 0
-    exakit_persona_known "$EXAKIT_PERSONA" || die "$EXAKIT_PERSONA_PROBLEM"
+    exakit_persona_selectable "$EXAKIT_PERSONA" || die "$EXAKIT_PERSONA_PROBLEM"
     _epa_answers="$(_exakit_persona_service answers "$EXAKIT_PERSONA")" || \
         die "The persona files could not be read - re-run the installer to repair the kit copy."
     _exakit_persona_export "$_epa_answers"
@@ -109,6 +116,32 @@ exakit_persona_apply_env() {
 # with: the personas this kit was set up as (a re-run), else the "default": true
 # ones, else None. The answer is EXAKIT_PERSONA (empty for None).
 exakit_persona_question() {
+    # After the common install steps, uv is present for the MCP runtime. The
+    # Textual picker owns this screen; the old checkbox remains a recovery path
+    # if a package mirror is offline or the terminal cannot run Textual.
+    if [ -t 0 ] && [ -t 1 ] && [ "${EXAKIT_NO_FANCY:-0}" != 1 ]; then
+        _epq_root="$(exakit_repo_root)"
+        _epq_result="$(mktemp "${TMPDIR:-/tmp}/exakit-persona-ui.XXXXXX")" || _epq_result=""
+        if [ -n "$_epq_result" ]; then
+            rm -f "$_epq_result"
+            if run_python_any "$_epq_root/marketplace/launch.py" "$_epq_root" persona \
+                --out "$_epq_result" --recorded "$(manifest_get persona.id 2>/dev/null || true)"; then
+                EXAKIT_PERSONA="$(run_python_any - "$_epq_result" <<'PY'
+import json, sys
+print(','.join(json.load(open(sys.argv[1], encoding='utf-8'))['selected']))
+PY
+)"
+                export EXAKIT_PERSONA
+                rm -f "$_epq_result"
+                return 0
+            else
+                _epq_ui_rc=$?
+                rm -f "$_epq_result"
+                [ "$_epq_ui_rc" -eq 10 ] && { EXAKIT_PERSONA=""; export EXAKIT_PERSONA; return 0; }
+                warn "The Textual persona picker did not start; using the kit's checkbox menu."
+            fi
+        fi
+    fi
     _epq_rows="$(_exakit_persona_service picker 2>/dev/null)"
     if [ -z "$_epq_rows" ]; then
         _exakit_log_file "WARN  the persona service did not answer; no persona question"
@@ -330,8 +363,9 @@ _exakit_persona_label() {
 # or which parts did not finish and the one command that retries each (1).
 # ⇄ twin: Invoke-ExakitPersonaAdd in persona.ps1.
 exakit_persona_add() {
-    _epd_new="$(_exakit_persona_service check "$1" 2>/dev/null)" || die "$(_exakit_persona_service check "$1" 2>&1 | tail -n 1)"
     _epd_was="$(exakit_persona_recorded)"
+    _epd_new="$(_exakit_persona_service select "$1" "$_epd_was" 2>/dev/null)" || \
+        die "$(_exakit_persona_service select "$1" "$_epd_was" 2>&1 | tail -n 1)"
     _epd_ids="$_epd_new"
     [ -n "$_epd_was" ] && _epd_ids="$(_exakit_persona_service check "$_epd_was,$_epd_new" 2>/dev/null || printf '%s' "$_epd_new")"
     _epd_title="$(_exakit_persona_service title "$_epd_new" 2>/dev/null || printf '%s' "$_epd_new")"

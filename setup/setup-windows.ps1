@@ -32,6 +32,7 @@ if (Test-Path (Join-Path $LibDir "persona.ps1")) { . (Join-Path $LibDir "persona
 # needed only so the closing marketplace offer can install what the user says
 # yes to. A module missing from an older kit copy just skips its row.
 foreach ($addonEntry in (Get-ExakitMarketplaceAddons)) {
+    if ($addonEntry.Backend -eq 'python') { continue }
     $addonModule = Join-Path $LibDir "$($addonEntry.Id).ps1"
     if (Test-Path $addonModule) { . $addonModule }
 }
@@ -84,6 +85,7 @@ if (Test-Path $earlyPs1) {
 # completed and only while something is on offer. Best-effort: nothing in it may
 # end an install that already succeeded.
 function Invoke-ExakitClosingOffer {
+    Initialize-ExakitMarketplacePythonHooks
     [void](Invoke-ExakitBestEffort -Component "autostart" -Repair "exakit autostart" `
         -Label "automatic start" `
         -Warning "Automatic start could not be turned on." `
@@ -406,7 +408,8 @@ try {
             foreach ($stale in @(
                 (Join-Path $kitSetupDir "lib"), (Join-Path $kitSetupDir "help"),
                 (Join-Path $script:ExakitHome "kit\mcp"), (Join-Path $script:ExakitHome "kit\sql"),
-                (Join-Path $script:ExakitHome "kit\skills"))) {
+                (Join-Path $script:ExakitHome "kit\skills"),
+                (Join-Path $script:ExakitHome "kit\marketplace"))) {
                 Remove-Item -Recurse -Force $stale -ErrorAction SilentlyContinue
             }
         }
@@ -417,7 +420,7 @@ try {
         # the repo-root lookup, which PREFERS this staged copy. Omitting it does
         # not fall back to the checkout - it shadows it, so every one of those
         # commands reports "no skills/ directory in this kit build".
-        foreach ($dir in @("mcp", "sql", "data", "skills")) {
+        foreach ($dir in @("mcp", "sql", "data", "skills", "marketplace")) {
             Copy-ExakitAsset -Source (Join-Path $KitRoot $dir) -Destination (Join-Path $script:ExakitHome "kit\$dir")
         }
         # The versions manifest travels with the copy: it is the offline tier of
@@ -455,6 +458,7 @@ try {
     # setup-macos.sh / setup-linux.sh.
     # It needs the database: without one it returns at once (the skip was said
     # above, with the other database steps).
+    $env:EXAKIT_MARKETPLACE_PYTHON_APPLY = '1'
     if ($exapumpSupported -and (Get-Command Invoke-ExakitPersonaFlow -ErrorAction SilentlyContinue)) {
         Invoke-ExakitPersonaFlow -KitRoot $KitRoot
     }

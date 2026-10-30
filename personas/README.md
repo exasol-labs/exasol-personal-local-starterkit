@@ -4,7 +4,8 @@ A persona is a named set of the answers the installer already takes from the
 environment - which datasets to load, which AI clients to connect, which
 marketplace add-ons to offer. The rules live in one Python service,
 `setup/lib/persona_service.py`, which the shell and PowerShell installers both
-call; the screens are the kit's own menus.
+call. The interactive persona and marketplace choices use the Textual screen
+in `marketplace/ui.py`, with the kit's checkbox menu as a recovery path.
 
 The kit ships the two BRD persona baselines, both on the reference datasets Pharma and Banking:
 
@@ -69,6 +70,12 @@ added: Data Scientist + ML Engineer*, or names each part that did not finish and
 the command that retries it (exit 1). `apply` is the same command, and `--yes`
 is accepted.
 
+`exakit persona remove data-scientist` removes only that membership from the
+kit record. It leaves datasets, notebooks, add-ons and their ownership receipts
+in place because another persona or the user may still use them. Repeating the
+command changes nothing. Use the add-on uninstall command separately if you
+want to remove a kit-owned component.
+
 An answer you give yourself always wins for that one variable:
 `EXAKIT_PERSONA=data-scientist EXAKIT_DATASETS=banking_complaints` loads only
 the Banking dataset and keeps the persona's clients and add-ons. Several
@@ -77,7 +84,7 @@ personas together load each dataset and offer each add-on once; one naming
 
 ## Adding a persona
 
-One file, `personas/<id>.json`, and no code in the installers (two lines in `tests/personas.sh` and `tests/personas-ps.ps1` list the shipped personas and must name it). Try it first, in a sandbox that changes
+One file, `personas/<id>.json`, and no code in the installers. The new entry appears at the position given by `order` when `visible` and `picker` are true. Try it first, in a sandbox that changes
 nothing (`examples/analyst.json` is a ready-made one to start from):
 
 ```bash
@@ -93,6 +100,7 @@ The keys:
 | `id` | the file name without `.json` |
 | `title`, `summary` | what `exakit persona list` and the install question show |
 | `picker` | `true` to offer it in the install question |
+| `visible` | `true` to offer new selections; `false` hides it and refuses a new named add, while preserving the definition and an existing installation |
 | `default` | `true` to tick it there to begin with (neither shipped persona does: None is ticked) |
 | `order` | where the question lists it (lowest first) |
 | `datasets` | a list of bundled dataset ids, or `"all"` / `"none"` |

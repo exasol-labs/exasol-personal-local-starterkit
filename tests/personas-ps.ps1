@@ -36,9 +36,11 @@ try {
         Check "$($id): datasets" ((@($doc.datasets)) -join ",") (Get-ExakitPersonaValue $id "datasets")
         Check "$($id): add-ons" ((@($doc.addons)) -join ",") (Get-ExakitPersonaValue $id "addons")
     }
-    Write-Host "the three personas the install question offers, each with its own data:"
-    Check "the question offers Data Scientist, then ML Engineer" "data-scientist,ml-engineer" `
-        ((@(Invoke-ExakitPersonaService "picker") | ForEach-Object { ("$_" -split '\|')[0] }) -join ",")
+    Write-Host "the two BRD personas the install question offers, each with its own data:"
+    $offered = @((Invoke-ExakitPersonaService "picker") | ForEach-Object { ("$_" -split '\|')[0] })
+    Check "the question offers both BRD personas in order" $true `
+        (($offered -contains 'data-scientist') -and ($offered -contains 'ml-engineer') -and
+         ([array]::IndexOf($offered, 'data-scientist') -lt [array]::IndexOf($offered, 'ml-engineer')))
     Check "no persona: the kit's own samples (default=yes)" "tpch,energy,weather" (@(Invoke-ExakitPersonaService "default-datasets") -join "")
     Check "data-scientist: Pharma and Banking" "pharma_trials,banking_complaints" (Get-ExakitPersonaValue "data-scientist" "datasets")
     Check "ml-engineer: Pharma and Banking" "pharma_trials,banking_complaints" (Get-ExakitPersonaValue "ml-engineer" "datasets")

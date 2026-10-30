@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "addons": [
+    {"id": "dash-server", "label": "dash-server (AI dashboard host)", "backend": "python", "visible": true, "default_version": "0.1.1"},
+    {"id": "dbt-exasol", "label": "dbt-exasol (dbt models on Exasol)", "backend": "python", "visible": true, "default_version": "1.12.1"},
+    {"id": "exasol-scheduler", "label": "Exasol Scheduler (SQL jobs on a schedule)", "backend": "python", "visible": true, "default_version": "0.3.1"},
+    {"id": "exasol-vscode", "label": "Exasol for VS Code (editor extension)", "backend": "python", "visible": true, "default_version": "1.8.0"},
+    {"id": "json-tables", "label": "JSON Tables (JSON into Exasol)", "backend": "python", "visible": true, "default_version": "v0.3.2"},
+    {"id": "notebook", "label": "Notebooks (JupyterLab on Exasol)", "backend": "python", "visible": true, "default_version": "3.1.0", "choices": [
+      {"id": "jupyterlab", "label": "JupyterLab"},
+      {"id": "marimo", "label": "Marimo"},
+      {"id": "positron", "label": "Positron (configure existing app)"}
+    ]},
+    {"id": "udf-devkit", "label": "UDF dev kit (Python UDFs on Exasol)", "backend": "python", "visible": true, "default_version": "0.1.0"}
+  ]
+}

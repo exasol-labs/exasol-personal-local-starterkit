@@ -70,7 +70,7 @@ def problems(path: Path, doc) -> list:
             found.append(f"'{key}' must be one line without '|'")
     if "order" in doc and (isinstance(doc["order"], bool) or not isinstance(doc["order"], int)):
         found.append("'order' must be a whole number")
-    for key in ("picker", "default"):
+    for key in ("picker", "default", "visible"):
         if key in doc and not isinstance(doc[key], bool):
             found.append(f"'{key}' must be true or false")
     for key, words in WORDS.items():
@@ -130,6 +130,16 @@ def picked(root: Path, ids: str) -> list:
     if unknown or not wanted:
         raise BadInput(f"Unknown persona '{','.join(unknown) or ids}' (available: {' '.join(known)}).")
     return [known[i] for i in known if i in wanted]
+
+
+def selectable(root: Path, ids: str, recorded_ids: str = "") -> list:
+    """New selections cannot activate a hidden release definition."""
+    rows = picked(root, ids)
+    recorded = {item.strip() for item in recorded_ids.split(",")}
+    hidden = [row["id"] for row in rows if not row.get("visible", True) and row["id"] not in recorded]
+    if hidden:
+        raise BadInput(f"Persona '{hidden[0]}' is disabled in personas/{hidden[0]}.json.")
+    return rows
 
 
 def one(root: Path, persona_id: str) -> dict:
@@ -217,7 +227,7 @@ def dataset_hints(root: Path) -> list:
     hints: dict = {}
     offered = 0
     for doc in personas(root).values():
-        if doc.get("picker") and isinstance(doc.get("datasets"), list):
+        if doc.get("picker") and doc.get("visible", True) and isinstance(doc.get("datasets"), list):
             offered += 1
             for ds in doc["datasets"]:
                 hints.setdefault(ds, []).append(doc["title"])
@@ -249,16 +259,18 @@ def run(argv: list, env: dict) -> list:
     if len(argv) < 2:
         raise BadInput("usage: persona_service.py <kit_root> <command> [args]")
     root, command, args = Path(argv[0]), argv[1], argv[2:]
-    needs = {"check": 1, "title": 1, "value": 2, "answers": 1, "show": 1}
+    needs = {"check": 1, "select": 1, "title": 1, "value": 2, "answers": 1, "show": 1, "remove": 1}
     if len(args) < needs.get(command, 0):
         raise BadInput(f"{command} needs {needs[command]} argument(s)")
     if command == "picker":
         return [f"{d['id']}|{d['title']}|{d.get('summary', '')}|{1 if d.get('default') else 0}"
-                for d in personas(root).values() if d.get("picker")]
+                for d in personas(root).values() if d.get("picker") and d.get("visible", True)]
     if command == "ids":
-        return list(personas(root))
+        return [d["id"] for d in personas(root).values() if d.get("visible", True)]
     if command == "check":
         return [",".join(d["id"] for d in picked(root, args[0]))]
+    if command == "select":
+        return [",".join(d["id"] for d in selectable(root, args[0], args[1] if len(args) > 1 else ""))]
     if command == "title":
         return [" + ".join(d["title"] for d in picked(root, args[0]))]
     if command == "value":
@@ -271,6 +283,20 @@ def run(argv: list, env: dict) -> list:
         return dataset_hints(root)
     if command == "show":
         return show(root, args[0])
+    if command == "remove":
+        sys.path.insert(0, str(root / "marketplace"))
+        from persona_membership import remove
+        from runtime import AddonFailure
+
+        home = Path(env.get("EXAKIT_HOME", str(Path.home() / ".exasol-starter-kit")))
+        try:
+            remaining, changed = remove(root, home, args[0])
+        except AddonFailure as error:
+            raise BadInput(str(error)) from error
+        if changed:
+            return [f"Persona removed: {args[0]}. Installed datasets and add-ons were kept.",
+                    f"Recorded personas: {','.join(remaining) or 'none'}"]
+        return [f"Persona {args[0]} was not recorded; nothing changed."]
     if command == "default-datasets":
         return [",".join(bundled_datasets(root, defaults_only=True))]
     if command == "problems":

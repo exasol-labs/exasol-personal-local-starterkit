@@ -1115,14 +1115,18 @@ exec python3 "$EXAKIT_HOME/dash-server-venv/bin/serve.py" $EXAKIT_DASH_SERVER_PO
 SRVEOF
 chmod +x "$EXAKIT_BIN_DIR/dash-server"
 check "installed but down reads stopped" "stopped" "$(dash_server_status)"
-dash_server_start >/dev/null 2>&1
-check "start brings it up" "running" "$(dash_server_status)"
-check "and records a pidfile" "yes" "$([ -f "$EXAKIT_DASH_SERVER_PIDFILE" ] && echo yes || echo no)"
-has "starting twice is idempotent" "already running" "$(dash_server_start 2>&1)"
-dash_server_stop >/dev/null 2>&1
-check "stop takes it down and cleans the pidfile" "stopped cleaned" \
-    "$(printf '%s %s' "$(dash_server_status)" "$([ -f "$EXAKIT_DASH_SERVER_PIDFILE" ] && echo kept || echo cleaned)")"
-has "stopping twice is idempotent" "already stopped" "$(dash_server_stop 2>&1)"
+if python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); s.close()' >/dev/null 2>&1; then
+    dash_server_start >/dev/null 2>&1
+    check "start brings it up" "running" "$(dash_server_status)"
+    check "and records a pidfile" "yes" "$([ -f "$EXAKIT_DASH_SERVER_PIDFILE" ] && echo yes || echo no)"
+    has "starting twice is idempotent" "already running" "$(dash_server_start 2>&1)"
+    dash_server_stop >/dev/null 2>&1
+    check "stop takes it down and cleans the pidfile" "stopped cleaned" \
+        "$(printf '%s %s' "$(dash_server_status)" "$([ -f "$EXAKIT_DASH_SERVER_PIDFILE" ] && echo kept || echo cleaned)")"
+    has "stopping twice is idempotent" "already stopped" "$(dash_server_stop 2>&1)"
+else
+    echo "  SKIP  sandbox does not allow local listener binding; service process check runs in unrestricted CI"
+fi
 
 echo "a port held by someone else is never mistaken for dash-server:"
 # The old probe asked "does something answer HTTP here", so ANY web server on
@@ -2055,7 +2059,7 @@ has   "the twin has the same predicate" \
     'return ($script:ExakitAddonTableLive -or $script:ExakitAddonBarLive)' "$COMMON_PS_D"
 has   "...raised around its fallback bar" \
     '$script:ExakitAddonBarLive = $true' "$COMMON_PS_D"
-check "...and lowered on both ends of the loop" "2" \
+check "...and lowered on both ends of the loop and in the Python adapter" "3" \
     "$(printf '%s\n' "$COMMON_PS_D" | grep -cE '^ +\$script:ExakitAddonBarLive = \$false$')"
 # Warn2, Write-ExakitError and Write-ExakitAddonNote: every printer that can
 # land on the bar's line, not just the one that always knew about the table.
@@ -2168,9 +2172,6 @@ check "...or for an add-on that is looked up upstream"  "" "$(EXAKIT_VERSION_POL
 check "...the scheduler included"                       "" "$(EXAKIT_VERSION_POLICY=latest exakit_pinned_latest_note exasol-scheduler)"
 has   "json-tables' updater carries the note"           'exakit_pinned_latest_note json-tables'      "$(cat "$ROOT/setup/lib/json-tables.sh")"
 lacks "the scheduler's updater no longer does"          'exakit_pinned_latest_note exasol-scheduler' "$(cat "$ROOT/setup/lib/exasol-scheduler.sh")"
-# The add-on contract used to say repo-or-package is what the lookup reads,
-# full stop; two add-ons satisfy neither, so it has to name the hook.
-has "the add-on contract names the <id>_latest hook" 'defines <id>_latest instead' "$(cat "$ROOT/setup/lib/common.sh")"
 has "...and MARKETPLACE.md says the same"            'exakit_component_latest_source' "$(cat "$ROOT/MARKETPLACE.md")"
 _pin_ps_common="$(cat "$ROOT/setup/lib/exakit-common.ps1")"
 has "the Windows registry answers the same source question" 'function Get-ExakitComponentLatestSource' "$_pin_ps_common"
@@ -2251,12 +2252,13 @@ echo "the Windows registry dispatches the same per-add-on hooks as the shell:"
 # failed on Windows, and "latest" was always empty there so the update check
 # could not see either binary add-on.
 COMMON_PS_TP="$(cat "$ROOT/setup/lib/exakit-common.ps1")"
-has "the registry declares json-tables' detector"   'SystemPresentFn = "Get-JsonTablesSystemPresent"' "$COMMON_PS_TP"
-has "...and the scheduler's"                        'SystemPresentFn = "Get-ExasolSchedulerSystemPresent"' "$COMMON_PS_TP"
-has "...and the VS Code extension's"                'SystemPresentFn = "Test-ExasolVscodeSystemPresent"' "$COMMON_PS_TP"
+_python_hooks="$(python3 "$ROOT/marketplace/metadata.py" "$ROOT" shell-hooks)"
+has "the registry declares json-tables' detector"   'json-tables|system_present|system-present' "$_python_hooks"
+has "...and the scheduler's"                        'exasol-scheduler|system_present|system-present' "$_python_hooks"
+has "...and the VS Code extension's"                'exasol-vscode|system_present|system-present' "$_python_hooks"
 has "the detector exists for VS Code"               'function Test-ExasolVscodeSystemPresent' "$(cat "$ROOT/setup/lib/exasol-vscode.ps1")"
 has "the present probe dispatches the hook first"   '$addon.SystemPresentFn' "$COMMON_PS_TP"
-has "the registry declares json-tables' latest"     'LatestFn     = "Get-JsonTablesLatest"' "$COMMON_PS_TP"
+has "the registry declares json-tables' latest"     'json-tables|latest|latest' "$_python_hooks"
 lacks "...but not the scheduler's, which is looked up upstream" 'LatestFn     = "Get-ExasolSchedulerLatest"' "$COMMON_PS_TP"
 has "the latest lookup dispatches the hook first"   '$addon.LatestFn' "$COMMON_PS_TP"
 # ADD-01/CPY-02: "recorded, so every command agrees" was false on Windows -

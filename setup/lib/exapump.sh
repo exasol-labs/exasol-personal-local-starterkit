@@ -1522,10 +1522,25 @@ exakit_csv_inspect() {
 }
 
 # _exakit_json_tables_ready — is the add-on installed AND usable right now?
+_exakit_json_tables_bin() {
+    _jtb_recorded="$(manifest_get components.json_tables.command 2>/dev/null || true)"
+    if [ -n "$_jtb_recorded" ]; then printf '%s\n' "$_jtb_recorded"; return 0; fi
+    if [ -n "${EXAKIT_JSON_TABLES_BIN:-}" ]; then printf '%s\n' "$EXAKIT_JSON_TABLES_BIN"; return 0; fi
+    printf '%s\n' "$EXAKIT_BIN_DIR/exasol-json-tables"
+}
+
+_exakit_json_tables_logged() {
+    _jtl_log="${EXAKIT_JSON_TABLES_LOG:-${EXAKIT_LOG_DIR:-$EXAKIT_HOME/logs}/json-tables.log}"
+    { mkdir -p "$(dirname "$_jtl_log")" && \
+      printf '=== %s %s\n' "$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo now)" "$*" >> "$_jtl_log"; } 2>/dev/null || true
+    "$@" 2>&1 | tee -a "$_jtl_log" 2>/dev/null
+    return "${PIPESTATUS[0]}"
+}
+
 _exakit_json_tables_ready() {
     command -v json_tables_installed_version >/dev/null 2>&1 || return 1
     [ -n "$(json_tables_installed_version 2>/dev/null || true)" ] || return 1
-    [ -x "${EXAKIT_JSON_TABLES_BIN:-}" ] || return 1
+    [ -x "$(_exakit_json_tables_bin)" ] || return 1
     return 0
 }
 
@@ -1692,9 +1707,9 @@ EXAKIT_JSON_NORMALISE_PY
         *) ;;   # no python, or an unreadable file: let the engine have its say
     esac
 
-    # Through _json_tables_logged so the engine's own words land in the
+    # Through _exakit_json_tables_logged so the engine's own words land in the
     # add-on's log too - the very file the failure message below points at.
-    if ! run_logged _json_tables_logged "$EXAKIT_JSON_TABLES_BIN" ingest \
+    if ! run_logged _exakit_json_tables_logged "$(_exakit_json_tables_bin)" ingest \
             --input "$_jl_input" --output-dir "$_jl_tmp/out"; then
         rm -rf "$_jl_tmp"
         warn "This JSON file could not be read - see: exakit logs json-tables"
