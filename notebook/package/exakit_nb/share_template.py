@@ -186,6 +186,7 @@ def create_dash_app(server, url_base_pathname, metadata):
                                             textinfo="none", hovertemplate="%{label}<br>%{value:,} · %{percent}<extra></extra>")
                         composition.add_annotation(text=f"{total:,.0f}<br><span style='font-size:11px'>displayed total</span>", showarrow=False, font_size=23)
             if not numeric:
+                leading = "Table view"
                 bars.add_annotation(text="No numeric measure to plot.<br>Inspect the result table below.", showarrow=False)
         else:
             bars.add_annotation(text="No matching rows<br>Try clearing your filters.", showarrow=False)
@@ -204,7 +205,7 @@ def create_dash_app(server, url_base_pathname, metadata):
         count_card = stat("Displayed count" if count else "Highest value", (f"{total:,.0f}" if total is not None else "—") if count else (f"{highest:,.3g}" if highest is not None else "—"),
                           "Across the current selection" if count else "Individual value · not a sum")
         category_card = stat("Categories shown", str(len(visible)), "of " + str(len(rows)) + " returned by the query")
-        leading_card = stat("Leading category", leading, (f"{highest:,.0f}" if count else f"{highest:,.3g}") + " in the selected result" if highest is not None else "Reset filters to see the full result")
+        leading_card = stat("Result type" if visible and highest is None else "Leading category", leading, (f"{highest:,.0f}" if count else f"{highest:,.3g}") + " in the selected result" if highest is not None else ("Inspect the data table below" if visible else "Reset filters to see the full result"))
         return bars, composition, visible, [{"name": k.replace("_", " "), "id": k} for k in keys], count_card, category_card, leading_card, \
             str(len(visible)) + " rows", (("Share of displayed counts. Smaller categories are grouped as Other." if len(visible) > 8 else "Share of the displayed count, after filtering and Top N.") if count else "Totals are disabled for measures not declared as counts."), {"height": str(bar_height) + "px", "minHeight": str(bar_height) + "px", "width": "100%"}
     return app
