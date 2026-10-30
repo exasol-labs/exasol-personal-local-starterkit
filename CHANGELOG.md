@@ -1,5 +1,11 @@
 # Changelog
 
+## Provider-neutral notebook configuration
+
+- Use `EXAKIT_MODEL_ID`, `EXAKIT_PROVIDER_BASE_URL` and `EXAKIT_PROVIDER_API_KEY` consistently in optional notebook AI and profiling notes. Older model-setting names are no longer read; update existing notebook copies to these names.
+- Preserve each provider's API path, allow unauthenticated local servers and support optional routing headers through `EXAKIT_PROVIDER_HEADERS`. `nb.model_settings()` checks configuration without showing keys or header values.
+- Ship a provider guide beside both Jupyter and Marimo notebooks, with official Claude, Ollama, LM Studio, vLLM and Gemini connection requirements. Five local HTTP contracts verify the shared text/chat client; live provider acceptance remains unverified.
+
 ## BRD alignment and deployment fixes
 
 - Fix own-file CSV, Parquet, JSON and JSON-lines loading when a descriptor has a date role.
