@@ -6,6 +6,7 @@
 - Load persona and add-on choices from validated JSON, including `visible` switches. Use root `versions.json` for advertised versions and checksums; keep catalog versions as offline fallbacks.
 - Route the Linux installer's marketplace apply through the same Python controller as macOS and Windows. Preflight the whole selection before installing and restore progress state after each batch.
 - Remove the redundant dbt-exasol shell and PowerShell implementations. Both CLI entry points use the shared Python lifecycle; the catalog and connection validation remain covered by executable tests.
+- Make the Textual launcher use the kit's managed Python version override on every platform.
 
 ## Acceptance fixes and repeatable verification
 

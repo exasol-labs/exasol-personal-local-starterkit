@@ -41,8 +41,10 @@ def run(root: Path, args: list[str]) -> int:
         return 11
     pin = textual_pin(root / "marketplace" / "defaults.env")
     uv = shutil.which("uv") or shutil.which("uv.exe")
+    environment = dict(os.environ)
     if uv:
-        command = [uv, "run", "--no-project", "--python", "3.12", "--with", f"textual=={pin}",
+        command = [uv, "run", "--no-project", "--python", environment.get("EXAKIT_MANAGED_PYTHON_VERSION", "3.12"),
+                   "--with", f"textual=={pin}",
                    "python", str(script), *args]
     else:
         # A deliberately installed matching version works for an offline
@@ -57,7 +59,6 @@ def run(root: Path, args: list[str]) -> int:
             print(f"The marketplace UI needs uv or Textual {pin}.", file=sys.stderr)
             return 11
         command = [sys.executable, str(script), *args]
-    environment = dict(os.environ)
     environment.setdefault("UV_CACHE_DIR", str(Path(environment.get("EXAKIT_HOME") or
                                                       Path.home() / ".exasol-starter-kit") / "cache" / "uv"))
     return subprocess.run(command, check=False, env=environment).returncode

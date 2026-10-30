@@ -11,6 +11,7 @@ Branch: `feat/persona-and-marketplace-ui`. This checklist tracks implementation 
 - [x] Keep root `versions.json` authoritative for advertised/update versions; use `marketplace/` defaults only as fallback and honor explicit overrides and the current version policy. Bash and PowerShell pass their validated active manifest to Python for individual, batch, Textual, and direct UDF commands. A Python context reads one snapshot for version and asset checksums; `tests/test_marketplace_runtime.py` covers a newer cached version and its matching checksum.
 - [x] Keep the current MCP implementation and isolate add-on lifecycle behind `marketplace/service.py`; persona JSON names add-on IDs without host details. A future sidecar implementation remains a separate release task below.
 - [x] Route the Linux installer's marketplace apply through the same Python controller already used by the macOS and Windows persona boundaries. The selected UI and pre-persona steps remain in place.
+- [x] Make the Textual uv launcher honor `EXAKIT_MANAGED_PYTHON_VERSION`, matching the shell and PowerShell adapters. The focused launcher suite passes.
 
 ## Definitions and state
 
