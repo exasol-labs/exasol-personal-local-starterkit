@@ -435,6 +435,12 @@ class SwapTest(unittest.TestCase):
         tree = ast.parse(notebook.read_text(encoding="utf-8"))
         ds = Dataset(descriptor.id, Path("descriptor.yaml"), "0" * 64, descriptor)
         namespace = {"ds": ds, "json": json, "exasol_mlflow": sys.modules["exasol_mlflow"], **self.EXTRA}
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+                try:
+                    namespace[node.targets[0].id] = ast.literal_eval(node.value)
+                except (ValueError, TypeError, SyntaxError):
+                    pass
         for node in tree.body:                                    # the roles cell: ENTITY, ... = ds.col(...), TEXT = ...
             if isinstance(node, ast.Assign) and "ds." in ast.unparse(node.value) and "nb." not in ast.unparse(node.value):
                 exec(compile(ast.Module([node], []), "roles", "exec"), namespace)

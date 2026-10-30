@@ -52,6 +52,7 @@ POSITIVE = {{POSITIVE}}
 SEED = {{SEED}}
 C = {{C}}
 MAX_ITER = {{MAX_ITER}}
+CLASS_WEIGHT = {{CLASS_WEIGHT}}
 MODEL_DIR = {{MODEL_DIR}}
 ALIAS = {{ALIAS}}
 LANGUAGE = "python"
@@ -115,7 +116,8 @@ def _train(x_train, y_train, x_test, y_test, metrics, extras):
     from sklearn.preprocessing import StandardScaler
 
     model = Pipeline([("scale", StandardScaler()),
-                      ("model", LogisticRegression(C=C, max_iter=MAX_ITER, random_state=SEED, solver="lbfgs"))])
+                      ("model", LogisticRegression(C=C, max_iter=MAX_ITER, random_state=SEED,
+                                                    solver="lbfgs", class_weight=CLASS_WEIGHT))])
     model.fit(np.asarray(x_train, dtype=float), y_train)
     classifier, scaler = model.named_steps["model"], model.named_steps["scale"]
     classes = [str(c) for c in classifier.classes_]
@@ -144,7 +146,7 @@ def _train(x_train, y_train, x_test, y_test, metrics, extras):
 
 def run(ctx):
     run_key = str(ctx.run_key or "run")[:64]
-    params = {"model": "LogisticRegression", "solver": "lbfgs", "C": C, "max_iter": MAX_ITER, "seed": SEED,
+    params = {"model": "LogisticRegression", "solver": "lbfgs", "C": C, "max_iter": MAX_ITER, "class_weight": CLASS_WEIGHT, "seed": SEED,
               "label": LABEL, "n_features": len(FEATURES), "scaler": "standard"}
     metrics, extras = {}, {"features": list(FEATURES), "label": LABEL}
     rows, nulls = [], 0

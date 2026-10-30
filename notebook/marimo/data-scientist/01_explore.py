@@ -43,7 +43,7 @@ def _(mo):
 
     **Do now:** review the suggested meanings and check the label still matches the outcome you want to investigate. Exploration can inspect a draft. The final training handoff, Ask and Share need an approved descriptor.
 
-    **Technical note:** the helper validates the mapped columns against the database. An undescribed file can be loaded and profiled here; approve its map in the picker before making a handoff. Date- or label-dependent steps explain why they skip when that role is missing. Keep entity, category and text roles for the main path.
+    **Technical note:** the helper validates the mapped columns against the database. An undescribed file can be loaded and profiled here; approve its map in the picker before making a handoff. Each step names the roles it needs and explains why it skips when one is missing. Other steps remain available.
 
     Set `WORKFLOW_ID` to the quickstart's identifier to keep one investigation log. With no identifier, this notebook starts its own.
     """)
@@ -61,15 +61,16 @@ def _(DATASET):
     ds = nb.review_roles(conn, DATASET).dataset(draft_ok=True)
     nb.show_roles(ds)
 
-    ENTITY, CATEGORY, TEXT = ds.col("entity"), ds.col("category"), ds.text_sql()
+    ENTITY = ds.col("entity") if ds.has("entity") else None
+    CATEGORY = ds.col("category") if ds.has("category") else None
+    TEXT = ds.text_sql() if ds.has("text") else None
     DATE = ds.col("date") if ds.has("date") else None      # a role no column fits is None here, never guessed
     LABEL = ds.col("label") if ds.has("label") else None
-    skipped = {m["role"]: m["reason"] for m in ds.missing if m["role"] in ("date", "label")}
+    skipped = {m["role"]: m["reason"] for m in ds.missing if not ds.has(m["role"])}
     missing_line = "; ".join(f"no {role} role: {reason}" for role, reason in skipped.items())
-    for role, steps in (("date", "the over-time step and the small model are"),
-                        ("label", "the landscape, the over-time step and the small model are")):
+    for role in ("entity", "category", "date", "label", "text"):
         if role in skipped:
-            print(f"No {role} role ({skipped[role]}): {steps} skipped below; the text step needs only the text roles.")
+            print(f"No {role} role ({skipped[role]}): steps that need it explain why they skip below.")
     return CATEGORY, DATE, ENTITY, LABEL, TEXT, conn, ds, missing_line, nb
 
 
@@ -90,8 +91,8 @@ def _(mo):
 @app.cell
 def _(CATEGORY, ENTITY, LABEL, conn, ds, missing_line, nb):
     landscape = pivot = None
-    if not ds.has("label"):
-        print(f"Skipped - the landscape counts how often the label is 1, and no column plays the label role ({missing_line}).")
+    if not all(ds.has(role) for role in ("entity", "category", "label")):
+        print(f"Skipped - the landscape needs entity, category and label roles ({missing_line}).")
     else:
         landscape = nb.sql(conn, f"""
     WITH TOP_ENTITIES AS (
@@ -181,8 +182,8 @@ def _(CATEGORY, DATE, ENTITY, LABEL, TEXT, conn, ds, missing_line, nb):
     SAMPLE = 20000
 
     model = None
-    if not (ds.has("date") and ds.has("label")):
-        print(f"Skipped - the small model predicts the label from the newest {SAMPLE} rows, which needs the label and date "
+    if not all(ds.has(role) for role in ("entity", "category", "text", "date", "label")):
+        print(f"Skipped - the small model predicts the label from the newest {SAMPLE} rows, which needs entity, category, text, label and date "
               f"roles ({missing_line}).")
     else:
         rows = nb.sql(conn, f"""
@@ -260,34 +261,38 @@ def _(mo):
 
 
 @app.cell
-def _(ENTITY, TEXT, USE_AI_THEMES, conn, ds, nb):
+def _(ENTITY, TEXT, USE_AI_THEMES, conn, ds, missing_line, nb):
     SAMPLE_TEXTS = 5
+    text_sample = None
     LABEL_COL = f"{ds.col('label')} AS LABEL_, " if ds.has("label") else ""
-    SAMPLE_ORDER = ", ".join([f"{ds.col(role)} DESC" for role in ("label", "date") if ds.has(role)] + [ENTITY])
-    SAMPLE_SQL = f"""
-    SELECT {ENTITY} AS ENTITY, {LABEL_COL}{TEXT} AS TEXT_
-    FROM {ds.fact_table}
-    WHERE LENGTH(TRIM({TEXT})) > 0
-    ORDER BY {SAMPLE_ORDER}
-    LIMIT {SAMPLE_TEXTS}"""
+    SAMPLE_ORDER = ", ".join([f"{ds.col(role)} DESC" for role in ("label", "date") if ds.has(role)] + ([ENTITY] if ENTITY else ([TEXT] if TEXT else [])))
+    if not ds.has("text"):
+        print(f"Skipped - the text sample needs a text role ({missing_line}).")
+    else:
+        SAMPLE_SQL = f"""
+        SELECT {ENTITY or 'NULL'} AS ENTITY, {LABEL_COL}{TEXT} AS TEXT_
+        FROM {ds.fact_table}
+        WHERE LENGTH(TRIM({TEXT})) > 0
+        ORDER BY {SAMPLE_ORDER}
+        LIMIT {SAMPLE_TEXTS}"""
 
-    text_sample = nb.sql(conn, SAMPLE_SQL)
-    nb.show_sql()
+        text_sample = nb.sql(conn, SAMPLE_SQL)
+        nb.show_sql()
 
-    endpoint = nb.model_client() if USE_AI_THEMES else None
-    if not USE_AI_THEMES:
-        print("Optional AI themes are off. The SQL analysis, local model and handoff remain available.")
-    if endpoint is not None and nb.confirm_send(ds, len(text_sample)):
-        client, model_name = endpoint
-        themes = []
-        with nb.trace(conn, "explore-text-step", dataset=ds, sql=SAMPLE_SQL):
-            for text in text_sample["TEXT_"]:
-                answer = client.chat.completions.create(
-                    model=model_name,
-                    messages=[{"role": "system", "content": "Name the theme of the text in at most five words."},
-                              {"role": "user", "content": text[:4000]}])
-                themes.append(answer.choices[0].message.content.strip())
-        text_sample["THEME"] = themes
+        endpoint = nb.model_client() if USE_AI_THEMES else None
+        if not USE_AI_THEMES:
+            print("Optional AI themes are off. The SQL analysis, local model and handoff remain available.")
+        if endpoint is not None and nb.confirm_send(ds, len(text_sample)):
+            client, model_name = endpoint
+            themes = []
+            with nb.trace(conn, "explore-text-step", dataset=ds, sql=SAMPLE_SQL):
+                for text in text_sample["TEXT_"]:
+                    answer = client.chat.completions.create(
+                        model=model_name,
+                        messages=[{"role": "system", "content": "Name the theme of the text in at most five words."},
+                                  {"role": "user", "content": text[:4000]}])
+                    themes.append(answer.choices[0].message.content.strip())
+            text_sample["THEME"] = themes
     text_sample
     return
 
@@ -319,14 +324,21 @@ def _(mo):
 
 
 @app.cell
-def _(conn, ds, nb):
-    handoff_path = nb.write_handoff(conn, ds)
-    handoff = nb.read_handoff(handoff_path)
-    print(f"Handoff written: {handoff_path}")
-    print(f"It holds descriptor {handoff['descriptor']['id']} v{handoff['descriptor']['version']}, the feature view "
-          f"{handoff['feature_view']['name']} ({len(handoff['input_schema'])} features), the label "
-          f"{handoff['label']['column']} (positive: {handoff['label']['positive']}) and a {handoff['split']['kind']} split; "
-          "ml-engineer/01_train starts from it.")
+def _(conn, ds, missing_line, nb):
+    handoff_path = None
+    if not (ds.has("date") and ds.has("label")):
+        print(f"Skipped - a time-based training handoff needs date and label roles ({missing_line}). "
+              "For data without a date, explicitly request nb.write_handoff(conn, ds, split='random') after approval.")
+    elif ds.status != "approved":
+        print("Skipped - approve the descriptor before writing a training handoff: exakit describe " + ds.id + " --approve")
+    else:
+        handoff_path = nb.write_handoff(conn, ds)
+        handoff = nb.read_handoff(handoff_path)
+        print(f"Handoff written: {handoff_path}")
+        print(f"It holds descriptor {handoff['descriptor']['id']} v{handoff['descriptor']['version']}, the feature view "
+              f"{handoff['feature_view']['name']} ({len(handoff['input_schema'])} features), the label "
+              f"{handoff['label']['column']} (positive: {handoff['label']['positive']}) and a {handoff['split']['kind']} split; "
+              "ml-engineer/01_train starts from it.")
     return
 
 

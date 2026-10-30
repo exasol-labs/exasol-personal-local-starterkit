@@ -33,20 +33,21 @@ def _():
 
     DATASET = "pharma_trials"  # or banking_complaints or an approved descriptor of your own
     TITLE = "Category overview"
-    APP_NAME = "category-overview"
+    APP_NAME = None  # or a name of your own; the default includes the approved dataset ID
     WORKFLOW_ID = None  # paste the quickstart's wf-... id to continue its log
 
     if WORKFLOW_ID:
         nb.workflow(resume=WORKFLOW_ID)
     elif not nb.current_workflow():
-        nb.workflow("share-" + APP_NAME)
+        nb.workflow("share")
 
     conn = nb.connect()
     ds = nb.dataset(conn, DATASET)
     ds.require_approved("share")
+    APP_NAME = APP_NAME or ds.id.replace("_", "-")[:40] + "-category-overview"
     category = ds.col("category")
     QUERY = f"SELECT {category} AS CATEGORY, COUNT(*) AS N FROM {ds.fact_table} GROUP BY 1 ORDER BY N DESC"
-    draft = nb.share(ds, QUERY, TITLE, APP_NAME)
+    draft = nb.share(ds, QUERY, TITLE, APP_NAME, measure="count")
     print("Query digest:", draft.query_digest)
     print("Descriptor version:", ds.version)
     return draft, nb
@@ -57,7 +58,7 @@ def _(mo):
     mo.md(r"""
     ## See what a colleague would see before publishing
 
-    Open the preview URL printed by the next cell. Compare its categories and counts with the SQL and the data you explored. Check that the dashboard title describes the result fairly.
+    Open the preview URL printed by the next cell. Try the category selector, Top N and bar orientation. Both charts, the displayed total and the data table must change together. Clearing the selector includes every category. Compare its categories and counts with the SQL and the data you explored. Check that the dashboard title describes the result fairly.
 
     **Technical note:** the notebook drives Dash Server's MCP control plane, checks its read-only database profile and waits for a healthy preview. The draft carries the query digest and approved descriptor version for later tracing.
     """)

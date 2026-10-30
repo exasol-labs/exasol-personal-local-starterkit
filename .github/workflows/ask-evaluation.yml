@@ -1,0 +1,45 @@
+name: Reference question model evaluation
+on:
+  workflow_dispatch:
+    inputs:
+      models:
+        description: Comma-separated model IDs already available on the acceptance runner
+        required: true
+        default: qwen2.5:0.5b,llama3.2:latest
+permissions:
+  contents: read
+jobs:
+  evaluate:
+    # Requires a trusted runner with the installed kit, both reference datasets,
+    # validated read-only MCP identity and local Ollama. No untrusted PR execution.
+    runs-on: [self-hosted, exakit-acceptance]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: Evaluate the reference questions through the read-only MCP server
+        shell: bash
+        env:
+          EVALUATION_MODELS: ${{ inputs.models }}
+          EXAKIT_NB_KIT: ${{ github.workspace }}
+          EXAKIT_NB_DATASETS: ${{ github.workspace }}/data/datasets
+          EXAKIT_PROVIDER_BASE_URL: http://127.0.0.1:11434/v1/
+          EXAKIT_PROVIDER_API_KEY: ''
+          EXAKIT_PROVIDER_HEADERS: ''
+        run: |
+          python3 - <<'PY'
+          import json, os, pathlib, subprocess
+          home = pathlib.Path(os.environ.get('EXAKIT_HOME') or pathlib.Path.home() / '.exasol-starter-kit')
+          python = json.loads((home / 'manifest.json').read_text())['components']['notebook']['python']
+          models = [m.strip() for m in os.environ['EVALUATION_MODELS'].split(',') if m.strip()]
+          if not models:
+              raise SystemExit('At least one model ID is required')
+          args = [python, 'tools/ask_benchmark.py', '--approve-proposals', '--output', os.path.join(os.environ['RUNNER_TEMP'], 'model-scores.json')]
+          for model in models:
+              args += ['--model', model]
+          subprocess.run(args, check=True)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: model-reference-scores
+          path: ${{ runner.temp }}/model-scores.json

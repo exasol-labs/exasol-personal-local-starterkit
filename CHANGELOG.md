@@ -1,5 +1,16 @@
 # Changelog
 
+## Acceptance fixes and repeatable verification
+
+- Reject credential fields nested in workflow metadata, including encoded JSON. Record descriptor draft and approval events in the same workflow as SQL, tracing and training.
+- Skip only the Explore steps whose required roles are missing, with a reason and approval guidance. Initialize an empty shared bucket with a kit marker before declaring it unavailable.
+- Add an explicit logged `class_weight` training parameter. Repeated live Pharma runs with `None` and Banking runs with `"balanced"` beat their unchanged temporal-split majority baselines; the unweighted Banking recipe still matches its baseline.
+- Add opt-in runner controls for AI themes, SQL approval, class weighting and database restarts. Share figure confirmation remains manual. Dataset-based default app and scorer names avoid cross-dataset collisions.
+- Bound optional Ask requests, accept one fenced JSON proposal and validate its fields before approval. Add a read-only, result-based model benchmark that reports failures without credentials.
+- Add reproducible authenticated MLflow 3.0.0/3.17.2 and Langfuse Cloud/self-hosted 4.59.0 service checks. Local runs passed; hosted CI execution remains pending. Pin SQLAlchemy below 2.1 for MLflow 3.0 compatibility.
+- Add a responsive Share template with category/search filters, Top N, sorting, reset, synchronized comparison/composition charts and a paginated/exportable result table. Count summaries require an explicit count measure; preview confirmation remains manual.
+- Add dedicated acceptance workflows, candidate kernel binding and a generated-output privacy gate. Operator steps and remaining evidence are in `docs/ACCEPTANCE-REMAINING.md`.
+
 ## Provider-neutral notebook configuration
 
 - Use `EXAKIT_MODEL_ID`, `EXAKIT_PROVIDER_BASE_URL` and `EXAKIT_PROVIDER_API_KEY` consistently in optional notebook AI and profiling notes. Older model-setting names are no longer read; update existing notebook copies to these names.
@@ -14,7 +25,7 @@
 - Add the Rust fallback for unavailable shared buckets. Verify file visibility inside a UDF, package libraries into the pinned runtime, require restart consent, preserve previous libraries and reuse unchanged overlays. Record the resulting container digest in scoring lineage.
 - Move the installation, add-on and ownership guides into `docs/` and remove superseded root-level notes.
 
-Release acceptance remains open. Live Windows, Rust parity, service integration and practitioner gates still need evidence. The Banking reference model currently matches its majority baseline on the held-out temporal split; this is an unresolved acceptance check.
+Release acceptance remains open. Clean-machine timing, live Windows, Rust fallback, large-artifact and network-egress checks, hosted CI and practitioner gates still need evidence. Local service checks and the explicit Banking training recipe are recorded below.
 
 ## Consistent add-on discovery
 

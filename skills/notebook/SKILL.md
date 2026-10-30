@@ -166,3 +166,29 @@ exits non-zero when nothing could open. Relay that command to the user.
 | "Port N is in use by another program" (it was given with `--port`) | `exakit notebook --port <another>`, or leave `--port` out and a free one is used |
 | Is it running? where is it? | `exakit notebook check`; its logs: `exakit logs notebook`, `exakit logs notebook-marimo` |
 | `import exakit.nb` fails | `exakit update notebook` (it refreshes the kit's helpers) |
+
+
+## Repeatable acceptance checks
+
+Use `docs/ACCEPTANCE-REMAINING.md` for the remaining release gates and exact
+service/model test commands. Source notebooks remain the user's starting point.
+For the reference training recipes, Pharma uses `CLASS_WEIGHT = None`; Banking
+uses `CLASS_WEIGHT = "balanced"`. Record the choice and compare with the same
+held-out baseline. Do not claim that default Banking training beats baseline.
+
+Headless controls are explicit: `tools/notebooks.py --run --ai-themes`,
+`--class-weight none|balanced`, `--approve-sql`, and
+`--allow-database-restart`. Their shell twins are
+`EXAKIT_NOTEBOOK_AI_THEMES=1`, `EXAKIT_NOTEBOOK_CLASS_WEIGHT=...`,
+`EXAKIT_NOTEBOOK_APPROVE_SQL=1`, `EXAKIT_NOTEBOOK_ALLOW_RESTART=1`.
+Never infer restart or dashboard figure approval from a passing health check.
+The runner leaves `FIGURES_CHECKED = False`; the user checks and promotes.
+`tools/ask_benchmark.py` requires `--approve-proposals` before automated read-only
+SQL execution. Report its result scores, errors and exact model IDs; a provider
+connection test does not prove answer quality.
+
+Share's category filters, Top N and bar orientation update both charts and the
+table together. The count notebook explicitly passes `measure="count"` for
+count totals and composition. The generic helper defaults to `measure="value"`
+and does not sum a rate or other unreviewed measure. Check the filtered and
+unfiltered figures before promoting a revision.

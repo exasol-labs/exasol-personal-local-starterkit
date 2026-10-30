@@ -34,6 +34,11 @@
 # used and nothing is written (the run is idempotent); any other stays a draft.
 #
 #   EXAKIT_NOTEBOOK_DATASETS     space-separated ids (default: both reference datasets)
+#   EXAKIT_NOTEBOOK_BIND_CHECKOUT 1 binds candidate helpers/CLI in a temporary kernel (Mac/Linux CI)
+#   EXAKIT_NOTEBOOK_AI_THEMES     1 enables the optional stub-model text step
+#   EXAKIT_NOTEBOOK_CLASS_WEIGHT  none or balanced; otherwise source value
+#   EXAKIT_NOTEBOOK_APPROVE_SQL   1 approves starter SQL for this automated test
+#   EXAKIT_NOTEBOOK_ALLOW_RESTART 1 permits the declared Rust deployment restart
 #   EXAKIT_NOTEBOOK_CELL_TIMEOUT seconds one cell may take (default 900)
 #   EXAKIT_NOTEBOOK_RUN_OUTPUT   folder for the executed .ipynb files (default: none kept)
 #   EXAKIT_NOTEBOOK_PYTHON       the kit's notebook Python (default: the manifest's, else EXAKIT_HOME/notebook-venv)
@@ -117,6 +122,26 @@ if ! "$NB_PY" -c 'import exakit.nb' >/dev/null 2>&1; then
     skip "exakit.nb does not import with $NB_PY: exakit notebook check"
 fi
 
+# Bind dispatched helper and CLI code without replacing the installed kit or user kernel.
+if [ "${EXAKIT_NOTEBOOK_BIND_CHECKOUT:-0}" = "1" ]; then
+    export PYTHONPATH="$ROOT/notebook/package:$ROOT/packages/exasol-mlflow${PYTHONPATH:+:$PYTHONPATH}"
+    export EXAKIT_NB_KIT="$ROOT" EXAKIT_NB_DATASETS="$ROOT/data/datasets"
+    export PATH="$ROOT/setup:$PATH"
+    "$NB_PY" - "$ROOT" "$TMP" <<'KERNEL'
+import json, os, pathlib, sys
+root, temporary = map(pathlib.Path, sys.argv[1:])
+folder = temporary / 'kernels' / 'exakit-acceptance'
+folder.mkdir(parents=True)
+spec = {'argv': [sys.executable, '-m', 'ipykernel_launcher', '-f', '{connection_file}'],
+        'display_name': 'Exakit candidate acceptance', 'language': 'python',
+        'env': {key: os.environ[key] for key in ('PYTHONPATH', 'EXAKIT_NB_KIT', 'EXAKIT_NB_DATASETS', 'PATH')}}
+(folder / 'kernel.json').write_text(json.dumps(spec))
+KERNEL
+    export JUPYTER_PATH="$TMP${JUPYTER_PATH:+:$JUPYTER_PATH}"
+    export EXAKIT_NOTEBOOK_KERNEL=exakit-acceptance
+    echo "Testing helper and CLI code from checkout: $ROOT (temporary kernel)"
+fi
+
 # --- the stub model endpoint ---------------------------------------------------
 "$NB_PY" "$ROOT/tests/lib/stub_model_server.py" --port 0 --quiet > "$TMP/stub.out" 2> "$TMP/stub.err" &
 STUB_PID=$!
@@ -146,6 +171,14 @@ fi
 AI_LAB="${EXAKIT_NOTEBOOK_AI_LAB:-1}"
 [ $# -gt 0 ] && [ "$AI_LAB" = 1 ] && AI_LAB=0        # named notebooks: only those
 _out=""
+_approval=""
+_restart=""
+[ "${EXAKIT_NOTEBOOK_APPROVE_SQL:-0}" = "1" ] && _approval="--approve-sql"
+[ "${EXAKIT_NOTEBOOK_ALLOW_RESTART:-0}" = "1" ] && _restart="--allow-database-restart"
+_weight=""
+case "${EXAKIT_NOTEBOOK_CLASS_WEIGHT:-}" in none|balanced) _weight="--class-weight $EXAKIT_NOTEBOOK_CLASS_WEIGHT" ;; "") ;; *) echo "Invalid EXAKIT_NOTEBOOK_CLASS_WEIGHT" >&2; exit 2 ;; esac
+_ai=""
+[ "${EXAKIT_NOTEBOOK_AI_THEMES:-0}" = "1" ] && _ai="--ai-themes"
 [ -n "${EXAKIT_NOTEBOOK_RUN_OUTPUT:-}" ] && { mkdir -p "$EXAKIT_NOTEBOOK_RUN_OUTPUT"; _out="--output $EXAKIT_NOTEBOOK_RUN_OUTPUT"; }
 # A fresh workflow for one run, started with the kit's own helper (so its log
 # has the start line a notebook's would); only the id is printed.
@@ -198,7 +231,7 @@ if [ "$AI_LAB" != only ]; then
         esac
         echo "workflow $WID: every notebook on $_ds runs under it (EXAKIT_WORKFLOW_ID)"
         # shellcheck disable=SC2086
-        EXAKIT_WORKFLOW_ID="$WID" "$NB_PY" "$ROOT/tools/notebooks.py" --run "$@" --dataset "$_ds" \
+        EXAKIT_WORKFLOW_ID="$WID" "$NB_PY" "$ROOT/tools/notebooks.py" --run "$@" $_ai $_weight $_approval $_restart --dataset "$_ds" \
             --timeout "${EXAKIT_NOTEBOOK_CELL_TIMEOUT:-900}" $_out
         _rc=$?
         if [ "$_rc" -ne 0 ]; then

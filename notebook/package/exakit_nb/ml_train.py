@@ -209,15 +209,18 @@ def _split_refusal(handoff: dict[str, Any], ds: Dataset) -> str | None:
 
 def prepare_training(conn, ds: Dataset, handoff: dict[str, Any], *, schema: str = "EXASOL_MLFLOW",
                      name: str = "TRAIN_FROM_HANDOFF", container: str | None = None, seed: int = 0, C: float = 1.0,
-                     max_iter: int = 1000, model_dir: str | None = None) -> TrainingPlan:
+                     max_iter: int = 1000, model_dir: str | None = None, class_weight: str | None = None) -> TrainingPlan:
     """Refuse stale input, create the view, drop constant features and render the UDF and training SELECT.
 
     The caller creates ``create_script`` then passes ``training_sql`` to exasol_mlflow.start_run().
     ``container`` is the alias of the Python container the UDF runs on (the notebook's CONTAINER); None resolves it
     with udf_container() - PYTHON3_ML before PYTHON3 from the kit's manifest, EXAKIT_UDF_CONTAINER first - and raises
     with the fix when none is installed, before anything is written. ``model_dir`` is the UDF-visible /buckets
-    directory; small models are returned inline.
+    directory; small models are returned inline. ``class_weight`` is None or "balanced",
+    passed to logistic regression and recorded in the plan; it never changes the holdout split.
     """
+    if class_weight not in (None, "balanced"):
+        raise ValueError("class_weight must be None or balanced")
     if container is None:
         container = udf_container()
     elif not isinstance(container, str) or not _ALIAS.fullmatch(container.strip()):
@@ -244,14 +247,14 @@ def prepare_training(conn, ds: Dataset, handoff: dict[str, Any], *, schema: str 
     render = _renderer()
     options = {"schema": schema, "name": name, "language": container, "features": features,
                "label": handoff["label"]["column"], "positive": handoff["label"]["positive"],
-               "seed": seed, "C": C, "max_iter": max_iter}
+               "seed": seed, "C": C, "max_iter": max_iter, "class_weight": class_weight}
     if model_dir is not None:
         options["model_dir"] = model_dir
     create = render.render_train(**options)
     select = render.train_sql(schema=schema, name=name, training_sql=handoff["training_sql"],
                               run_key=f"{ds.id}-v{ds.version}", label=handoff["label"]["column"], features=features)
     return TrainingPlan(view["name"], tuple(features), create, select,
-                        {"C": C, "seed": seed, "max_iter": max_iter, "train_share": handoff["split"]["train_share"],
+                        {"C": C, "seed": seed, "max_iter": max_iter, "class_weight": class_weight, "train_share": handoff["split"]["train_share"],
                          "features": len(features), "container": container}, handoff)
 
 

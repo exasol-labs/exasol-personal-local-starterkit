@@ -294,12 +294,12 @@ class NotebookShapeTest(unittest.TestCase):
                  if c["cell_type"] == "code"]
         roles = next(c for c in cells if "nb.review_roles(conn, DATASET)" in c)
         for needle in ('ds.col("date") if ds.has("date") else None', 'ds.col("label") if ds.has("label") else None',
-                       "for m in ds.missing", "skipped below"):
+                       "for m in ds.missing", "skip below"):
             self.assertIn(needle, roles)
         self.assertNotIn('ds.col("date"),', roles, "the date and label are no longer read unguarded")
-        guarded = {"landscape = nb.sql(": 'if not ds.has("label"):',
+        guarded = {"landscape = nb.sql(": 'if not all(ds.has(role) for role in ("entity", "category", "label")):',
                    "over_time = nb.sql(": 'if not (ds.has("date") and ds.has("label")):',
-                   "rows = nb.sql(": 'if not (ds.has("date") and ds.has("label")):'}
+                   "rows = nb.sql(": 'if not all(ds.has(role) for role in ("entity", "category", "text", "date", "label")):'}
         for sql, guard in guarded.items():
             with self.subTest(cell=sql):
                 cell = next(c for c in cells if sql in c)
@@ -309,7 +309,9 @@ class NotebookShapeTest(unittest.TestCase):
         words = next(c for c in cells if "get_feature_names_out" in c)
         self.assertIn("if model is not None:", words)
         text_step = next(c for c in cells if "SAMPLE_SQL = " in c)
-        self.assertNotIn("if not ds.has", text_step, "the text step is never skipped for a date or label")
+        self.assertIn('if not ds.has("text"):', text_step)
+        self.assertNotIn('if not ds.has("date")', text_step)
+        self.assertNotIn('if not ds.has("label")', text_step)
         self.assertIn('if ds.has("label") else ""', text_step)
         self.assertIn('for role in ("label", "date") if ds.has(role)', text_step)
         for role in ("date", "label"):

@@ -1,0 +1,58 @@
+name: Full local notebook acceptance
+on:
+  workflow_dispatch:
+    inputs:
+      allow_database_restart:
+        description: Permit Rust fallback to restart the dedicated acceptance database
+        type: boolean
+        default: false
+permissions:
+  contents: read
+jobs:
+  notebooks:
+    # Dedicated trusted machine: kit, reference datasets, PYTHON3_ML, RUST,
+    # Docker/Podman, local MLflow, read-only MCP and Dash Server must be ready.
+    runs-on: [self-hosted, exakit-acceptance]
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - name: Run all eight non-federated persona notebooks
+        shell: bash
+        env:
+          EXAKIT_REQUIRE_DB: '1'
+          EXAKIT_NOTEBOOK_BIND_CHECKOUT: '1'
+          EXAKIT_NOTEBOOK_AI_LAB: '0'
+          EXAKIT_NOTEBOOK_AI_THEMES: '1'
+          EXAKIT_NOTEBOOK_APPROVE_SQL: '1'
+          RESTART_APPROVED: ${{ inputs.allow_database_restart }}
+          EXAKIT_NOTEBOOK_RUN_OUTPUT: ${{ runner.temp }}/executed-notebooks
+        run: |
+          if [ "$RESTART_APPROVED" = true ]; then export EXAKIT_NOTEBOOK_ALLOW_RESTART=1; fi
+          for recipe in pharma_trials:none banking_complaints:balanced; do
+            EXAKIT_NOTEBOOK_DATASETS="${recipe%:*}" EXAKIT_NOTEBOOK_CLASS_WEIGHT="${recipe#*:}" \
+              bash tests/notebooks-run.sh \
+                notebook/notebooks/data-scientist/00_quickstart.py \
+                notebook/notebooks/data-scientist/01_explore.py \
+                notebook/notebooks/data-scientist/02_ask_your_data.py \
+                notebook/notebooks/data-scientist/03_share.py \
+                notebook/notebooks/ml-engineer/00_quickstart.py \
+                notebook/notebooks/ml-engineer/01_train.py \
+                notebook/notebooks/ml-engineer/02_rust_score.py \
+                notebook/notebooks/ml-engineer/03_score_external_model.py
+          done
+      - name: Check generated output before uploading
+        id: privacy
+        if: always()
+        shell: bash
+        run: |
+          if python3 tools/artifact_scan.py "$RUNNER_TEMP/executed-notebooks"; then
+            echo 'safe=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'safe=false' >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.privacy.outputs.safe == 'true'
+        with:
+          name: executed-persona-notebooks
+          path: ${{ runner.temp }}/executed-notebooks

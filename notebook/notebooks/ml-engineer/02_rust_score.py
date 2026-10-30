@@ -20,7 +20,7 @@
 # %%
 DATASET = "pharma_trials"  # or banking_complaints, or your own approved descriptor
 COEFFICIENTS_FILE = None  # or a local coefficients.json exported from 01_train's MLflow run
-UDF_NAME = "score_pharma"  # choose a new plain lowercase name for a new coefficient revision
+UDF_NAME = None  # choose a new plain lowercase name for a new coefficient revision
 UDF_SCHEMA = "EXAKIT_SCORING"
 TEST_ROWS = 500
 ALLOW_DATABASE_RESTART = False  # set True to consent if the shared bucket is unavailable
@@ -44,6 +44,7 @@ elif not nb.current_workflow():
 
 conn = nb.connect()
 ds = nb.dataset(conn, DATASET).require_approved("rust scoring")
+SCORER_NAME = UDF_NAME or "score_" + ds.id.replace("-", "_")[:40] + "_v" + str(ds.version)
 handoff = nb.read_handoff(ds.id)
 stale = nb.handoff_is_stale(conn, handoff, ds)
 if stale:
@@ -113,10 +114,10 @@ def exakit(*arguments):
                            ("; run: " + answer["remedy"] if answer.get("remedy") else ""))
     return answer
 
-project = exakit("rust-udf", "new", UDF_NAME, "--coefficients", str(Path(COEFFICIENTS_FILE).expanduser()))
-built = exakit("rust-udf", "build", UDF_NAME)
+project = exakit("rust-udf", "new", SCORER_NAME, "--coefficients", str(Path(COEFFICIENTS_FILE).expanduser()))
+built = exakit("rust-udf", "build", SCORER_NAME)
 deploy_options = ["--yes"] if ALLOW_DATABASE_RESTART else []
-deployed = exakit("rust-udf", "deploy", UDF_NAME, "--schema", UDF_SCHEMA, *deploy_options)
+deployed = exakit("rust-udf", "deploy", SCORER_NAME, "--schema", UDF_SCHEMA, *deploy_options)
 print("Rust UDF:", deployed["udf"], "sha256", deployed["sha256"])
 
 # %% [markdown]
@@ -124,20 +125,22 @@ print("Rust UDF:", deployed["udf"], "sha256", deployed["sha256"])
 #
 # Look at the largest probability difference and whether the predicted labels agree. If either check fails, investigate feature ordering, missing inputs, coefficients and runtime compatibility before using the scorer.
 #
-# **Technical note:** the query uses the handoff's later test partition and compares up to `TEST_ROWS` records, 500 by default. The Python formula is a sigmoid over the exported raw-feature weights. Every tested label must match and the largest probability difference must be below `1e-9`. This is evidence for the tested rows; adjust the row limit when your verification needs broader coverage.
+# **Technical note:** both scorer inputs replace missing numeric features with zero, matching the training UDF. Non-finite probabilities fail the check. The query uses the handoff's later test partition and compares up to `TEST_ROWS` records, 500 by default. The Python formula is a sigmoid over the exported raw-feature weights. Every tested label must match and the largest probability difference must be below `1e-9`. This is evidence for the tested rows; adjust the row limit when your verification needs broader coverage.
 
 # %%
-arguments = ", ".join(f'CAST(T."{feature}" AS DOUBLE)' for feature in features)
+arguments = ", ".join(f'COALESCE(CAST(T."{feature}" AS DOUBLE), 0.0)' for feature in features)
 test_sql = (f'SELECT T.*, {deployed["udf"]}({arguments}) AS RUST_P '
             f'FROM ({handoff["training_sql"]}) T WHERE T."SPLIT_" = \'test\' LIMIT {TEST_ROWS}')
 print(test_sql)
 test = nb.sql(conn, test_sql)
-matrix = test[features].astype(float).to_numpy()
+matrix = test[features].astype(float).fillna(0.0).to_numpy()
 weights = np.asarray(coefficients["coef"][0], dtype=float)
 expected = expit(matrix @ weights + float(coefficients["intercept"][0]))
 actual = test["RUST_P"].astype(float).to_numpy()
 if len(test) == 0:
     raise ValueError("The handoff has no later test rows; review its split.")
+if not np.all(np.isfinite(expected)) or not np.all(np.isfinite(actual)):
+    raise AssertionError("Parity requires finite probabilities from both scorers; inspect missing inputs and model coefficients.")
 gap = float(np.max(np.abs(expected - actual)))
 labels_match = np.array_equal(expected >= 0.5, actual >= 0.5)
 print(f"{len(test)} test rows; largest probability difference {gap:.3e}; labels agree: {labels_match}")

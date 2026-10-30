@@ -2,7 +2,7 @@
 
 Test in this order: clean install → baseline checks → add Share/JSON tools → Data Scientist → ML Engineer → own files → Marimo and bundled lessons → final checks.
 
-Use Terminal for shell commands and the Exasol (Starter Kit) kernel for notebook cells. This guide tests the current checkout, including commit `bc73a21`; the ordinary public installer alone does not contain these unmerged changes. Virtual schemas and external data-source connections are excluded. Leave the connected-source setting at its shipped `None` value.
+Use Terminal for shell commands and the Exasol (Starter Kit) kernel for notebook cells. This guide tests the current checkout, including the acceptance fixes on the current feature branch; the ordinary public installer alone does not contain these unmerged changes. Virtual schemas and external data-source connections are excluded. Leave the connected-source setting at its shipped `None` value.
 
 ## 1. Optional clean reset
 
@@ -32,7 +32,7 @@ git branch --show-current
 git log -1 --oneline
 ```
 
-Expected branch: `feat/persona-v05-completion`; the tested code is `bc73a21` or a later revision containing it.
+Expected local branch: `feat/persona-and-marketplace-ui`. The PR stack publishes the reviewed changes through `feat/persona-v05-completion`; verify the revision shown by `git log` before testing.
 On another machine, substitute its checkout path. A `fatal: not a git repository` message means you are in the wrong directory; correct that before installing. `$PWD` is your current Terminal directory, so running the following command from `~` points at your home rather than the checkout.
 
 ```sh
@@ -123,7 +123,7 @@ Choose JupyterLab. In `starter-kit-notebooks/data-scientist/`, use the **Exasol 
 | `00_quickstart.ipynb` | Keep `SAMPLE = "pharma_trials"`; leave own-file and connected-source defaults alone. Review the proposed roles and click **Approve descriptor** before continuing. | Connection, approved roles and first query succeed; workflow ID is printed. |
 | `01_explore.ipynb` | Keep `DATASET = "pharma_trials"` and `USE_AI_THEMES = False`; run the SQL, client model and final handoff cell. | SQL/results appear and a handoff file is written. Optional AI themes stay off, including when an endpoint is configured. |
 | `02_ask_your_data.ipynb` | Keep `DRAFT_WITH_MODEL = False`. Leave `APPROVE_SQL = False` first; after reading the SQL, set it to `True` and rerun the approval cell. | No proposal execution before approval; category counts return after approval. |
-| `03_share.ipynb` | Use `APP_NAME = "pharma-category-check"`. Run Preview, open its URL and check the figures. Only then set `FIGURES_CHECKED = True` and rerun the last cell. | Healthy preview, then a live Dash Server URL; no promotion while the flag is false. |
+| `03_share.ipynb` | Use `APP_NAME = "pharma-category-check"`. Run Preview, open its URL, expand Filters and display, try search/sort/Top N and Reset, then check the figures. Only then set `FIGURES_CHECKED = True` and rerun the last cell. | Healthy preview, then a live Dash Server URL; no promotion while the flag is false. |
 
 Copy the quickstart's workflow ID into `WORKFLOW_ID` in subsequent notebooks to keep one log across kernels.
 
@@ -153,7 +153,7 @@ Run Data Scientist `01_explore` first for each dataset so the handoff exists. Op
 
 Repeat on Banking with `DATASET = "banking_complaints"` and Rust `UDF_NAME = "score_banking"`. Use a new UDF name when changing coefficient revisions; existing projects are preserved.
 
-**Known open result:** Banking training reruns are deterministic, but its last observed macro-F1 **`0.469807` equals its majority baseline**. Record training/logging separately from model acceptance; this is an existing acceptance failure. Do not change the test split or lower the pass threshold to hide it.
+Use `CLASS_WEIGHT = None` for Pharma and `CLASS_WEIGHT = "balanced"` for Banking in the training notebook. This is an explicit, logged model parameter; the temporal split, seed and baseline remain unchanged. Live database runs on 30 October 2026 repeated both recipes twice: Pharma macro-F1 **0.445955** versus baseline **0.441129**; Banking **0.523298** versus **0.469807**. Metrics and coefficient digests matched across reruns. Banking with the default unweighted recipe still equals its baseline; selecting the balanced recipe is part of this test, not an automatic dataset-specific override.
 
 For bucketless Rust deployment, the notebook defaults to `ALLOW_DATABASE_RESTART = False`. If it reports that a container update is needed, set it to `True` only when you agree to the restart, then rerun deployment. A verified unchanged packaged library should deploy again without another restart. This fallback applies to Rust; external pickle scoring still requires a working shared bucket.
 
@@ -354,3 +354,11 @@ exakit notebook check
 ```
 
 The remaining kit commands and notebook settings above are shared. Use PowerShell 5.1 when checking the minimum supported Windows shell; macOS PowerShell fixture success is not live Windows acceptance.
+
+
+## 11. Repeatable acceptance checks and remaining gates
+
+See [ACCEPTANCE-REMAINING.md](ACCEPTANCE-REMAINING.md) for service checks,
+model benchmarking, CI setup, participant sessions and the evidence still
+needed. A local warm-machine run does not establish clean-install timing or
+Windows acceptance. Keep internal evidence and credentials out of commits.

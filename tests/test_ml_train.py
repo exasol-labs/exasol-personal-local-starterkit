@@ -148,6 +148,12 @@ class ContainerTest(unittest.TestCase):
 
 
 class TrainPlanTest(HandoffCase):
+    def test_invalid_weight_is_refused_before_database_work(self):
+        conn = TrainConn()
+        with self.assertRaisesRegex(ValueError, "class_weight"):
+            _plan(conn, None, {}, class_weight="automatic")
+        self.assertEqual(conn.statements, [])
+
     def test_approved_handoff_creates_view_and_drops_constant_feature(self):
         ds, conn = _ds(), TrainConn()
         record = handoff.handoff_from(conn, ds)

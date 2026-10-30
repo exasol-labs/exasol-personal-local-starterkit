@@ -124,3 +124,22 @@ Use the kit's notebook Python for the SDK/HTTP cases; without the SDK those case
 are explicitly skipped. CI also runs them in its Python 3.11 SDK environment. Live provider
 acceptance requires a separately configured account/server, a successful text
 response and inspection of its delivered trace. It remains unverified until run.
+
+
+## Validate SQL drafting before relying on a model
+
+`nb.ask(ds, question, table_description=..., request_timeout=30,
+max_output_tokens=1024)` optionally supplies schema metadata and bounds one
+request with retries disabled. It validates a JSON object (or one JSON fenced
+block) with `sql` and string arrays `assumptions`/`doubts`. It still requires
+`proposal.approve()` before executing the exact SQL through read-only MCP.
+Provider chat compatibility does not guarantee SQL quality or support for every
+sampling option; test the exact model/server combination.
+
+Use `tools/ask_benchmark.py --help` and the acceptance guide to compare models.
+The model receives the question, schema and required output column names;
+it never receives reference SQL or result rows. Scores compare complete rows,
+column positions and duplicate counts, ignoring row order and aliases. Results
+at the MCP 1,000-row cap cannot count as correct. Each model request has a
+configurable timeout and output-token bound. No paid provider was exercised by
+the local compatibility contracts or Ollama acceptance checks.

@@ -290,3 +290,73 @@ A new persona is one file in `personas/` (see `personas/README.md`); a new
 dataset is one folder in `data/datasets/` (see `data/README.md`).
 
 The full official 50-notebook collection is prebundled under `examples/` for both tools, with a categorized start page and supporting files. See [INSTALL-AND-UPDATE.md](INSTALL-AND-UPDATE.md) for installation and update behavior.
+
+
+## Explicit acceptance recipes and runner controls
+
+Training exposes `CLASS_WEIGHT`: leave it `None` for Pharma, set it to
+`"balanced"` for the Banking reference recipe. This changes class weights in
+logistic regression and records the choice in MLflow. It does not change the
+temporal holdout or majority baseline. The unweighted Banking model can equal
+its baseline; completing training alone does not establish useful predictions.
+
+The runner changes only the in-memory test copy; it preserves notebook sources
+and user copies. Its optional controls are:
+
+| Option | Effect | Default |
+|---|---|---|
+| `--ai-themes` | Enable Explore's optional model calls | Off |
+| `--class-weight none\|balanced` | Select the declared training recipe | Source value |
+| `--approve-sql` | Approve the starter SQL proposal in the automated Ask lesson | Off |
+| `--allow-database-restart` | Permit the declared Rust deployment restart | Off |
+
+Share's `FIGURES_CHECKED` remains false in automated runs. Preview health is
+machine checked; a person must compare the figures and approve promotion.
+`APP_NAME = None` derives a dataset-specific dashboard name; Rust's
+`UDF_NAME = None` derives a dataset/version-specific scorer name. Choose a new
+explicit name for another coefficient revision of the same descriptor.
+
+```sh
+EXAKIT_NOTEBOOK_DATASETS=banking_complaints \
+EXAKIT_NOTEBOOK_CLASS_WEIGHT=balanced \
+EXAKIT_NOTEBOOK_AI_THEMES=1 EXAKIT_REQUIRE_DB=1 \
+bash tests/notebooks-run.sh \
+  notebook/notebooks/data-scientist/01_explore.py \
+  notebook/notebooks/ml-engineer/01_train.py
+```
+
+The corresponding shell settings are `EXAKIT_NOTEBOOK_AI_THEMES`,
+`EXAKIT_NOTEBOOK_CLASS_WEIGHT`, `EXAKIT_NOTEBOOK_APPROVE_SQL` and
+`EXAKIT_NOTEBOOK_ALLOW_RESTART`. Boolean settings require `1`.
+`tools/ask_benchmark.py` evaluates opted-in models against complete reference
+query results under the read-only MCP user. See
+[the acceptance steps](../docs/ACCEPTANCE-REMAINING.md). An endpoint connection
+or valid JSON response is not evidence that a model answers correctly.
+
+For a dedicated Mac/Linux CI runner with an existing kit, set
+`EXAKIT_NOTEBOOK_BIND_CHECKOUT=1`. The harness binds the checked-out notebook
+helpers, MLflow package, dataset/service paths and CLI in a temporary kernel.
+It leaves the installed kit and registered user kernel intact. Without this
+setting, the registered kit kernel remains the default.
+
+Share includes synchronized category selection, Top N, bar orientation and a
+result table. `nb.share(..., measure="count")` enables count totals and the
+share-of-displayed-total chart. The default `measure="value"` avoids summing
+arbitrary rates or other non-additive values. The supplied Share notebook uses
+a reviewed `COUNT(*)` query and declares it as a count. Recheck both charts and
+the table after filtering, then confirm figures before publishing.
+
+The Share template uses the Dash Server design tokens across responsive cards,
+filters, chart panels and the result table. Search, sort, category selection and
+Top N feed one displayed result. Reset clears them together. The table supports
+pagination, column sorting and CSV export; table column sorting changes row order
+only. The comparison and composition use consistent category colors. Empty,
+non-numeric and refresh-failure states remain visible. Lineage is available in
+About this shared result rather than crowding the main view.
+
+The responsive view keeps filters in an expandable panel, gives longer bar
+comparisons their own scroll area, and groups smaller count categories into
+Other for a readable composition legend without changing the displayed total.
+CSV downloads neutralize spreadsheet formula text while preserving original
+values in the table and charts. Every new preview invalidates earlier approval
+state until its files and health checks pass again.

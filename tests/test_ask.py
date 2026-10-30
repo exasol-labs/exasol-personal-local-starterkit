@@ -122,5 +122,26 @@ for line in sys.stdin:
             self.assertEqual(result, {"columns": ["N"], "rows": [[1]]})
 
 
+class ModelProposalTest(unittest.TestCase):
+    def test_one_fenced_json_object_is_validated_without_execution(self):
+        client = mock.Mock()
+        client.chat.completions.create.return_value.choices = [types.SimpleNamespace(message=types.SimpleNamespace(
+            content='Here is the proposal:\n```json\n{"sql":"SELECT 1 AS N", "assumptions":[], "doubts":[]}\n```'))]
+        with mock.patch("exakit_nb.model_client", return_value=(client, "local")), mock.patch.object(ask_module, "_execute_mcp") as execute:
+            proposal = make_proposal(Descriptor(), "How many?")
+        self.assertEqual(proposal.sql, "SELECT 1 AS N")
+        execute.assert_not_called()
+        with self.assertRaisesRegex(RuntimeError, "not been approved"):
+            proposal.run()
+
+    def test_wrong_json_field_types_are_refused(self):
+        client = mock.Mock()
+        for value in ['[]', '{"sql":null}', '{"sql":"SELECT 1", "assumptions":"guess"}',
+                      '{"sql":"SELECT 1", "doubts":[1]}']:
+            client.chat.completions.create.return_value.choices = [types.SimpleNamespace(message=types.SimpleNamespace(content=value))]
+            with self.subTest(value=value), mock.patch("exakit_nb.model_client", return_value=(client, "local")), self.assertRaises(ValueError):
+                make_proposal(Descriptor(), "How many?")
+
+
 if __name__ == "__main__":
     unittest.main()

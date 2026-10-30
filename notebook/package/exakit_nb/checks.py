@@ -183,6 +183,25 @@ def check_bucket(conn=None) -> bool:
         seen = _probe(conn, packages=(), path=root).get("path")
     except Exception:                                          # the container check says why
         return _report("bucket directory", True, detail + " (not checked from a UDF: see the container check).")
+    if seen == "missing" and not models:
+        # The Personal VM synchronizes files, so an empty host directory may
+        # not exist in the guest yet. A kit marker materializes it without
+        # creating a model or changing any user file.
+        marker = folder / ".exakit-bucket"
+        try:
+            with marker.open("x", encoding="utf-8") as stream:
+                stream.write("Exasol Starter Kit bucket directory\n")
+        except FileExistsError:
+            pass
+        except OSError:
+            return _report("bucket directory", False, detail + "; cannot initialize the empty bucket.",
+                           "check the host bucket folder permissions, then rerun this cell.")
+        import time
+        for attempt in range(10):
+            seen = _probe(conn, packages=(), path=root).get("path")
+            if seen == "folder":
+                break
+            time.sleep(0.5)
     if seen != "folder":
         return _report("bucket directory", False, f"{detail}, but a UDF does not see {root}.",
                        "restart the database (exakit stop, then exakit start) so it mounts the bucket directory.")

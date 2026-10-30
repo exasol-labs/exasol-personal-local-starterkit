@@ -7,6 +7,8 @@ built from them: one cell per ``# %%`` marker, markdown cells for ``# %% [markdo
     python3 tools/notebooks.py --check --marimo  # also compare notebook/marimo/ with a fresh conversion in a temp folder
                                                  # (skipped, with a note, when uv is not there); writes nothing
     python3 tools/notebooks.py --run [<notebook.py>...] [--dataset <id>]... [--timeout S] [--output DIR]
+                                                 # optional: --ai-themes --class-weight none|balanced
+                                                 # --approve-sql --allow-database-restart (each explicit)
                                                  # execute the notebooks headless on the kit's kernel against the
                                                  # local database (every catalog notebook when none is named), once
                                                  # per --dataset; exit 1 with the failing cell and its traceback
@@ -211,7 +213,7 @@ def notebook_python() -> Path | None:
     return None
 
 
-def run_document(py: Path, dataset: str | None, skip_tag: str = SKIP_TAG) -> dict:
+def run_document(py: Path, dataset: str | None, skip_tag: str = SKIP_TAG, *, ai_themes: bool = False, class_weight: str | None = None, approve_sql: bool = False, allow_database_restart: bool = False) -> dict:
     """The notebook to execute, as nbformat's dict: built from the .py, the dataset assignment rewritten to ``dataset``
     when one is given (DATASET or SAMPLE, whichever the notebook has - both when it has both), cells tagged ``skip_tag``
     left out. A dataset given to a notebook with no such assignment is an error: the override would do nothing."""
@@ -231,6 +233,27 @@ def run_document(py: Path, dataset: str | None, skip_tag: str = SKIP_TAG) -> dic
                 cell["source"] = source.splitlines(keepends=True)
         if not hits:
             raise ValueError(f"{py.name} assigns none of {', '.join(DATASET_NAMES)}, so --dataset would change nothing")
+    if ai_themes:
+        for cell in doc["cells"]:
+            if cell["cell_type"] == "code":
+                source = "".join(cell["source"])
+                source = re.sub(r"^USE_AI_THEMES = False\b", "USE_AI_THEMES = True", source, flags=re.M)
+                cell["source"] = source.splitlines(keepends=True)
+    if class_weight is not None:
+        if class_weight not in ("none", "balanced"):
+            raise ValueError("class_weight must be none or balanced")
+        value = "None" if class_weight == "none" else repr(class_weight)
+        for cell in doc["cells"]:
+            if cell["cell_type"] == "code":
+                source = re.sub(r"^CLASS_WEIGHT = (?:None|['\"]balanced['\"])", "CLASS_WEIGHT = " + value,
+                                "".join(cell["source"]), flags=re.M)
+                cell["source"] = source.splitlines(keepends=True)
+    for setting, enabled in (("APPROVE_SQL", approve_sql), ("ALLOW_DATABASE_RESTART", allow_database_restart)):
+        if enabled:
+            for cell in doc["cells"]:
+                if cell["cell_type"] == "code":
+                    source = re.sub(r"^" + setting + r" = False\b", setting + " = True", "".join(cell["source"]), flags=re.M)
+                    cell["source"] = source.splitlines(keepends=True)
     return doc
 
 
@@ -285,7 +308,7 @@ def execute(doc: dict, kernel: str, cwd: Path, timeout: int) -> tuple[dict, str 
     return _as_dict(nb), None
 
 
-def run(notebooks: list[Path], datasets: list[str | None], kernel: str, timeout: int, output: Path | None) -> int:
+def run(notebooks: list[Path], datasets: list[str | None], kernel: str, timeout: int, output: Path | None, *, ai_themes: bool = False, class_weight: str | None = None, approve_sql: bool = False, allow_database_restart: bool = False) -> int:
     """Each notebook once per dataset; one line per run, the failing cell and traceback for a failure; 0 when all ran."""
     import tempfile
     import time
@@ -295,7 +318,7 @@ def run(notebooks: list[Path], datasets: list[str | None], kernel: str, timeout:
         for dataset in datasets:
             label = f"{name} on {dataset}" if dataset else name
             try:
-                doc = run_document(py, dataset)
+                doc = run_document(py, dataset, ai_themes=ai_themes, class_weight=class_weight, approve_sql=approve_sql, allow_database_restart=allow_database_restart)
             except ValueError as problem:
                 print(f"FAIL {label}: {problem}")
                 failed += 1
@@ -349,6 +372,10 @@ def run_main(argv: list[str]) -> int:
                         help="the Jupyter kernel (default: EXAKIT_NOTEBOOK_KERNEL, else the kit's %(default)s)")
     parser.add_argument("--output", type=Path, default=None, metavar="DIR",
                         help="keep each executed notebook, outputs included, as DIR/<persona>/<name>.<dataset>.ipynb")
+    parser.add_argument("--ai-themes", action="store_true", help="enable optional text themes for this test run; requires a configured model endpoint")
+    parser.add_argument("--class-weight", choices=("none", "balanced"), help="explicit class-weight setting for training notebooks")
+    parser.add_argument("--approve-sql", action="store_true", help="authorize the starter Ask query in this automated test run")
+    parser.add_argument("--allow-database-restart", action="store_true", help="consent to a database restart if Rust deployment needs the bucket fallback")
     args = parser.parse_args(argv)
     try:
         import nbclient  # noqa: F401
@@ -373,7 +400,7 @@ def run_main(argv: list[str]) -> int:
         shared = json.loads(CATALOG.read_text(encoding="utf-8"))["shared"]["folder"]
         notebooks = [FOLDER / folder / f"{Path(jupyter).stem}.py" for folder, jupyter, _ in catalog_files()
                      if folder != shared and (FOLDER / folder / f"{Path(jupyter).stem}.py").is_file()]
-    return run(notebooks, args.dataset or [None], args.kernel, args.timeout, args.output)
+    return run(notebooks, args.dataset or [None], args.kernel, args.timeout, args.output, ai_themes=args.ai_themes, class_weight=args.class_weight, approve_sql=args.approve_sql, allow_database_restart=args.allow_database_restart)
 
 
 def main(argv: list[str]) -> int:

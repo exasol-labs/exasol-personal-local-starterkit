@@ -167,8 +167,13 @@ class Proposal:
         return frame
 
 
-def ask(dataset: Any, question: str, proposed_sql: str | None = None) -> Proposal:
+def ask(dataset: Any, question: str, proposed_sql: str | None = None, *, table_description: str | None = None,
+        request_timeout: float | None = None, max_output_tokens: int | None = None) -> Proposal:
     """Draft SQL from roles and the user's opted-in model endpoint; ``proposed_sql`` supports manual drafting."""
+    if request_timeout is not None and request_timeout <= 0:
+        raise ValueError("request_timeout must be positive.")
+    if max_output_tokens is not None and max_output_tokens <= 0:
+        raise ValueError("max_output_tokens must be positive.")
     dataset.require_approved("ask")
     if not question or not question.strip():
         raise ValueError("Ask a non-empty question.")
@@ -181,17 +186,33 @@ def ask(dataset: Any, question: str, proposed_sql: str | None = None) -> Proposa
         if endpoint is None:
             raise RuntimeError("Set EXAKIT_MODEL_ID for SQL drafting, or pass proposed_sql= with SQL you wrote.")
         client, model = endpoint
+        if request_timeout is not None:
+            client = client.with_options(timeout=request_timeout, max_retries=0)
+        options = {}
+        if max_output_tokens is not None:
+            options["max_tokens"] = max_output_tokens
         roles = {role: column for role, column in dataset.roles()}
         prompt = {"table": dataset.fact_table, "roles": roles, "question": question,
                   "rules": "Return one read-only Exasol SELECT query and JSON keys sql, assumptions, doubts. "
-                           "Use only the named table and columns. Do not include row data."}
-        answer = client.chat.completions.create(
-            model=model, temperature=0,
-            messages=[{"role": "system", "content": "Draft Exasol SQL as one JSON object. Never execute SQL."},
-                      {"role": "user", "content": json.dumps(prompt)}])
+                           "Use only tables and columns from the descriptor or supplied schema description. Use fully qualified names. Do not include row data."}
+        if table_description:
+            prompt["table_description"] = table_description
+        try:
+            answer = client.chat.completions.create(
+                model=model, temperature=0,
+                messages=[{"role": "system", "content": "Return only one JSON object with sql, assumptions (array) and doubts (array). No Markdown. Use fully qualified Exasol table names. Never execute SQL."},
+                          {"role": "user", "content": json.dumps(prompt)}], **options)
+        finally:
+            client.close()
         raw = answer.choices[0].message.content or ""
         try:
-            parsed = json.loads(raw)
+            fences = re.findall(r"```(?:json)?\s*(.*?)```", raw, flags=re.S | re.I)
+            parsed = json.loads(fences[0] if len(fences) == 1 else raw)
+            if (not isinstance(parsed, dict) or not isinstance(parsed.get("sql"), str)
+                    or any(not isinstance(parsed.get(key, []), list)
+                           or any(not isinstance(v, str) for v in parsed.get(key, []))
+                           for key in ("assumptions", "doubts"))):
+                raise ValueError("Invalid proposal fields")
             proposed_sql = parsed["sql"]
             assumptions = [str(v) for v in parsed.get("assumptions", [])]
             doubts = [str(v) for v in parsed.get("doubts", [])]

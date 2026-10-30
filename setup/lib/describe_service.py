@@ -613,6 +613,19 @@ def shipped_source(table: str, root: Path | None = None) -> str | None:
     return None
 
 
+def _record_descriptor(kind: str, result: dict[str, Any], *, table: str | None = None) -> dict[str, Any]:
+    """Record successful CLI and notebook actions once; profiling/approval failures never claim success."""
+    if os.environ.get("EXAKIT_WORKFLOW_ID"):
+        folder = kit_root() / "notebook/package"
+        if folder.is_dir() and str(folder) not in sys.path:
+            sys.path.insert(0, str(folder))
+        from exakit_nb.workflow import log_event
+        log_event(kind, descriptor_id=result["id"], descriptor_version=result["version"],
+                  descriptor_digest=result.get("digest"), source_table=table or result.get("fact_table"),
+                  unchanged=bool(result.get("unchanged")))
+    return result
+
+
 def draft(profile: dict[str, Any], table: str | None = None, id: str | None = None, *, root: Path | None = None) -> dict[str, Any]:
     """A schema_version 2 draft descriptor from a profile: version 1, status draft, the owner, created now, drafted_by
     profile, the roles the scoring assigns with their evidence (each role's numbers and runner_up, the excluded columns
@@ -674,9 +687,9 @@ def draft(profile: dict[str, Any], table: str | None = None, id: str | None = No
     if profile.get("sample_method"):
         evidence["table"]["sample_method"] = profile["sample_method"]
     source = shipped_source(table, root) or (f"vs:{schema}" if profile.get("virtual") else table)
-    return {"schema_version": 2, "id": slug, "fact_table": table, "source": source, "version": 1, "status": "draft",
+    return _record_descriptor('describe.draft', {"schema_version": 2, "id": slug, "fact_table": table, "source": source, "version": 1, "status": "draft",
             "owner": descriptor_owner(), "created": _now(), "drafted_by": "profile", "digest": None,
-            "roles": roles, "evidence": evidence, "missing": missing}
+            "roles": roles, "evidence": evidence, "missing": missing}, table=None)
 
 
 def _role_columns(roles: dict[str, Any]) -> list[tuple[str, str]]:
@@ -1119,8 +1132,8 @@ def approve(conn, doc: dict[str, Any], *, roles: dict[str, list[str]] | None = N
     if current is not None and (store_dir(id) / f"v{current}.yaml").is_file():
         have = read_document(store_dir(id) / f"v{current}.yaml")
         if have.get("status") == "approved" and draft_roles(have) == wanted:
-            return {"id": id, "version": current, "path": str(store_dir(id) / f"v{current}.yaml"), "unchanged": True,
-                    "digest": have.get("digest"), "message": f"v{current} is already approved with these roles"}
+            return _record_descriptor('describe.approve', {"id": id, "version": current, "path": str(store_dir(id) / f"v{current}.yaml"), "unchanged": True,
+                    "digest": have.get("digest"), "message": f"v{current} is already approved with these roles"}, table=doc["fact_table"])
     measured = digest(conn, doc["fact_table"], wanted, sample)
     doc["digest"] = measured["digest"]
     table_facts = doc.setdefault("evidence", {}).setdefault("table", {})
@@ -1135,7 +1148,7 @@ def approve(conn, doc: dict[str, Any], *, roles: dict[str, list[str]] | None = N
         result["comments"] = write_comments(conn, doc, measured["columns"], measured["virtual"])
     else:
         result["comments"] = {"written": [], "warnings": [], "skipped": True}
-    return result
+    return _record_descriptor('describe.approve', result, table=doc["fact_table"])
 
 
 # --- the comment write-back ----------------------------------------------------------------------------------------

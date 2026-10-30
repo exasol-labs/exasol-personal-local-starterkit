@@ -30,7 +30,7 @@ class OptionalThemesTest(unittest.TestCase):
         cls.settings = next(c for c in code if c.startswith("DATASET = "))
         cls.themes = next(c for c in code if c.startswith("SAMPLE_TEXTS = "))
 
-    def run_cell(self, *, enable=None, configured=True, allow=True):
+    def run_cell(self, *, enable=None, configured=True, allow=True, entity=True):
         frame = TextFrame(TEXT_=["First description", "Second description"])
         client = Mock()
         client.chat.completions.create.return_value = types.SimpleNamespace(
@@ -38,8 +38,10 @@ class OptionalThemesTest(unittest.TestCase):
         endpoint = Mock(return_value=(client, "configured-model") if configured else None)
         helper = types.SimpleNamespace(sql=Mock(return_value=frame), show_sql=Mock(), model_client=endpoint,
                                        confirm_send=Mock(return_value=allow), trace=lambda *a, **k: contextlib.nullcontext())
-        namespace = {"nb": helper, "conn": object(), "ENTITY": '"COMPANY"', "TEXT": '"DESCRIPTION"',
-                     "ds": types.SimpleNamespace(has=lambda role: False, fact_table="EXAMPLE.RECORDS")}
+        roles = {"category", "text"} | ({"entity"} if entity else set())
+        namespace = {"nb": helper, "conn": object(), "ENTITY": '"COMPANY"' if entity else None, "TEXT": '"DESCRIPTION"',
+                     "ds": types.SimpleNamespace(has=lambda role: role in roles,
+                                                 col=lambda role: f'"{role.upper()}"', fact_table="EXAMPLE.RECORDS")}
         exec(self.settings, namespace)
         if enable is not None:
             namespace["USE_AI_THEMES"] = enable
@@ -70,6 +72,12 @@ class OptionalThemesTest(unittest.TestCase):
         frame, helper, client = self.run_cell(enable=True, allow=False)
         client.chat.completions.create.assert_not_called()
         self.assertNotIn("THEME", frame)
+
+    def test_text_sample_without_entity_uses_sql_null(self):
+        _, helper, _ = self.run_cell(entity=False)
+        sql = helper.sql.call_args.args[1]
+        self.assertIn("SELECT NULL AS ENTITY", sql)
+        self.assertIn('ORDER BY "DESCRIPTION"', sql)
 
 
 if __name__ == "__main__":

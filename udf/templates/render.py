@@ -201,11 +201,13 @@ def _number(value, what: str, kind, low=None):
 
 
 def render_train(schema=None, name=None, features=None, label=None, positive=None, seed=0, C=1.0, max_iter=1000,
-                 language="PYTHON3", model_dir=MODEL_DIR, template: str = TRAIN_TEMPLATE) -> str:
+                 language="PYTHON3", model_dir=MODEL_DIR, template: str = TRAIN_TEMPLATE, class_weight=None) -> str:
     """The CREATE statement of a training UDF (train_model.sql) for the feature columns in ``features`` (in order: the
     coefficient vector follows it) and the label column ``label``; ``positive`` is the positive class as text (roc_auc
     refers to it; None takes the last class). The UDF's parameters are positional (run_key, split_, label, f0, f1, ...),
     so train_sql() must list the same features in the same order."""
+    if class_weight not in (None, "balanced"):
+        raise Refused("CLASS_WEIGHT must be balanced or None.")
     reserved = _reserved()
     names = _features(features)
     columns = ["run_key VARCHAR(64)", "split_ VARCHAR(8)", "label VARCHAR(2000)"] + [f"f{i} DOUBLE" for i in range(len(names))]
@@ -223,6 +225,7 @@ def render_train(schema=None, name=None, features=None, label=None, positive=Non
         "SEED": repr(_number(seed, "SEED", int, 0)),
         "C": repr(_number(C, "C", float, 0.0)),
         "MAX_ITER": repr(_number(max_iter, "MAX_ITER", int, 1)),
+        "CLASS_WEIGHT": repr(class_weight),
         "MODEL_DIR": repr(folder),
     }
     values["ALIAS"] = repr(values["LANGUAGE"])

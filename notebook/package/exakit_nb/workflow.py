@@ -12,7 +12,8 @@ from a notebook) inherits it. The log is ``$EXAKIT_HOME/workflows/<id>.jsonl`` (
 0700 and the file 0600, each line one O_APPEND write so two kernels on one workflow never interleave. A log that
 cannot be written warns and the cell goes on: logging never fails the work it describes.
 
-The log never holds a credential: a secret-named payload key or a DSN containing a password is refused (a
+Credential-shaped payload keys are checked recursively, including JSON-encoded metadata strings. A secret-named key
+or a DSN containing a password is refused (a
 ValueError - the caller's mistake, before anything is written). SQL text is screened rather than refused: a statement
 that mentions PASSWORD, API_KEY, IDENTIFIED BY and the like - or carries a DSN with a password - is logged with its
 text replaced by ``<redacted: credential-like SQL>`` and ``redacted: true``, its digest kept, and one warning; the
@@ -165,20 +166,29 @@ def _screen(payload: dict[str, Any]) -> dict[str, Any]:
                 warnings.warn(f"The workflow log never holds credential-like SQL: {key!r} was logged as {REDACTED_SQL} "
                               "(its digest is kept)", RuntimeWarning, stacklevel=3)
             continue
-        _refuse_dsn(value, key)
+        _refuse_credentials(value, key)
     return screened
 
 
-def _refuse_dsn(value: Any, key: str) -> None:
+def _refuse_credentials(value: Any, key: str) -> None:
     if isinstance(value, str):
+        if value.lstrip().startswith(("{", "[")):
+            try:
+                structured = json.loads(value)
+            except ValueError:
+                structured = None
+            if isinstance(structured, (dict, list)):
+                _refuse_credentials(structured, key)
         if _DSN_PASSWORD.search(value):
             raise ValueError(f"The workflow log never holds a credential: {key!r} looks like a DSN with a password in it")
     elif isinstance(value, dict):
         for inner_key, inner in value.items():
-            _refuse_dsn(inner, f"{key}.{inner_key}")
+            if _SECRET_KEY.search(str(inner_key).lower()):
+                raise ValueError("The workflow log never holds a credential: refusing a nested credential field")
+            _refuse_credentials(inner, f"{key}.{inner_key}")
     elif isinstance(value, (list, tuple)):
         for item in value:
-            _refuse_dsn(item, key)
+            _refuse_credentials(item, key)
 
 
 def log_event(kind: str, **payload: Any) -> None:

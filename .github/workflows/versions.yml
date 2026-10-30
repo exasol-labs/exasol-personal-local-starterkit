@@ -851,6 +851,12 @@ jobs:
       - run: python3 tests/test_notebook_contents.py
       - run: python3 tests/test_notebook_ai.py
         if: matrix.shard == 4
+      - run: python3 tests/test_acceptance_gaps.py
+        if: matrix.shard == 4
+      - run: python3 tests/test_ask_benchmark.py
+        if: matrix.shard == 4
+      - run: python3 tests/test_artifact_scan.py
+        if: matrix.shard == 4
       - run: python3 tests/test_role_picker.py
         if: matrix.shard == 4
       - run: python3 tests/test_notebook_bundle.py
@@ -1134,13 +1140,18 @@ jobs:
         env:
           EXAKIT_REQUIRE_DB: "1"
           EXAKIT_NOTEBOOK_AI_LAB: "0"
+          EXAKIT_NOTEBOOK_AI_THEMES: "1"
+          EXAKIT_NOTEBOOK_BIND_CHECKOUT: '1'
           EXAKIT_NOTEBOOK_RUN_OUTPUT: ${{ runner.temp }}/executed-notebooks
         run: |
-          bash tests/notebooks-run.sh \
-            notebook/notebooks/data-scientist/00_quickstart.py \
-            notebook/notebooks/data-scientist/01_explore.py \
-            notebook/notebooks/ml-engineer/00_quickstart.py \
-            notebook/notebooks/ml-engineer/01_train.py
+          for recipe in pharma_trials:none banking_complaints:balanced; do
+            EXAKIT_NOTEBOOK_DATASETS="${recipe%:*}" EXAKIT_NOTEBOOK_CLASS_WEIGHT="${recipe#*:}" \
+              bash tests/notebooks-run.sh \
+                notebook/notebooks/data-scientist/00_quickstart.py \
+                notebook/notebooks/data-scientist/01_explore.py \
+                notebook/notebooks/ml-engineer/00_quickstart.py \
+                notebook/notebooks/ml-engineer/01_train.py
+          done
       - name: the AI Lab notebook, as the connector ships it, connects from the kit's store
         # AC-DS1.4: first_steps.ipynb from exasol-notebook-connector 3.1.0, a
         # copy in a temporary folder, run on the kit's kernel through its
@@ -1153,12 +1164,22 @@ jobs:
           EXAKIT_NOTEBOOK_AI_LAB: only
           EXAKIT_NOTEBOOK_RUN_OUTPUT: ${{ runner.temp }}/executed-notebooks
         run: bash tests/notebooks-run.sh
-      - name: keep the kit's logs and the executed notebooks
-        if: failure()
+      - name: Check notebook and workflow output before upload
+        id: notebook_privacy
+        if: always()
+        run: |
+          if python3 tools/artifact_scan.py "$RUNNER_TEMP/executed-notebooks" "$HOME/.exasol-starter-kit/workflows"; then
+            echo 'safe=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'safe=false' >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+      - name: keep checked workflow logs and executed notebooks
+        if: failure() && steps.notebook_privacy.outputs.safe == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: notebooks-live-logs
           path: |
-            ~/.exasol-starter-kit/logs
+            ~/.exasol-starter-kit/workflows
             ${{ runner.temp }}/executed-notebooks
           if-no-files-found: ignore

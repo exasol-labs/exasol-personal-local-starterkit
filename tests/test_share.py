@@ -1,6 +1,10 @@
 """Dash Server Share contract: approval, read-only profile, preview and promotion."""
 
+import ast
+import csv
+import io
 import json
+import math
 import os
 import sys
 import tempfile
@@ -51,7 +55,7 @@ class Tools:
             return {"health": {"status": "healthy" if self.healthy else "degraded"}}
         if name == "app_diff_draft_vs_artifact":
             return {"files": [{"path": path, "status": "changed" if path == self.changed_path else "unchanged"} for path in
-                    ("app.py", "queries/business/result.sql", "REVISION.json")]}
+                    ("app.py", "assets/share.css", "queries/business/result.sql", "REVISION.json")]}
         if name == "app_promote_revision":
             return {"app": {"mounted": True, "route": "/apps/example"}}
         return {}
@@ -155,6 +159,22 @@ class ShareTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "healthy preview"):
             draft.confirm(tool, figures_checked=True)
 
+    def test_failed_rebuild_cannot_reuse_an_earlier_preview_approval(self):
+        draft = share(Dataset(), "SELECT 1", "Example", "example")
+        draft.preview(Tools())
+        tool = Tools(changed_path="assets/share.css")
+        with self.assertRaisesRegex(RuntimeError, "lineage files"):
+            draft.preview(tool)
+        with self.assertRaisesRegex(RuntimeError, "healthy preview"):
+            draft.confirm(tool, figures_checked=True)
+        self.assertIsNone(draft.revision_number)
+        self.assertNotIn("app_promote_revision", [name for name, _ in tool.calls])
+
+    def test_changed_stylesheet_blocks_preview(self):
+        draft = share(Dataset(), "SELECT 1", "Example", "example")
+        with self.assertRaisesRegex(RuntimeError, "lineage files"):
+            draft.preview(Tools(changed_path="assets/share.css"))
+
     def test_changed_lineage_file_blocks_preview(self):
         draft = share(Dataset(), "SELECT 1", "Example", "example")
         tool = Tools(changed_path="REVISION.json")
@@ -174,6 +194,72 @@ class ShareTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "unexpected"):
                 dash_server_url()
 
+
+
+
+
+class ShareFilterTest(unittest.TestCase):
+    def setUp(self):
+        path = Path(__file__).resolve().parents[1] / "notebook/package/exakit_nb/share_template.py"
+        from exakit_nb.share_template import APP_SOURCE
+        tree = ast.parse(APP_SOURCE)
+        functions = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in ("number", "category_key", "filtered_rows", "export_csv", "composition_series")]
+        self.namespace = {"json": json, "math": math, "csv": csv, "io": io}
+        exec(compile(ast.Module(body=functions, type_ignores=[]), str(path), "exec"), self.namespace)
+        self.select = self.namespace["filtered_rows"]
+        self.key = self.namespace["category_key"]
+        self.rows = [{"CATEGORY": "A", "N": 4}, {"CATEGORY": "B", "N": 12}, {"CATEGORY": "C", "N": 7}]
+
+    def test_filters_and_top_n_use_the_same_sorted_rows(self):
+        selected = self.select(self.rows, [self.key("A"), self.key("C")], 1)
+        self.assertEqual(selected, [{"CATEGORY": "C", "N": 7}])
+        self.assertEqual(sum(row["N"] for row in selected), 7)
+        self.assertEqual(self.select(self.rows, [], 1000), [self.rows[1], self.rows[2], self.rows[0]])
+        self.assertEqual(self.rows[0]["CATEGORY"], "A")  # filter never mutates the source result
+
+    def test_many_categories_keep_a_bounded_legend_and_the_same_total(self):
+        labels=["C"+str(n) for n in range(50)]
+        values=list(range(1,51))
+        names,numbers,colors=self.namespace["composition_series"](labels,values,["blue"]*50)
+        self.assertEqual(len(names),9)
+        self.assertEqual(sum(numbers),sum(values))
+        self.assertEqual(names[-1],"Other displayed categories")
+        self.assertEqual(numbers[:8],list(range(50,42,-1)))
+
+    def test_csv_export_neutralizes_formulas_without_changing_the_result(self):
+        rows = [{"=header": "=1+1", "value": -2}, {"=header": " \t@SUM(A1:A2)", "value": "normal, text"}]
+        text = self.namespace["export_csv"](rows)
+        parsed = list(csv.reader(io.StringIO(text)))
+        self.assertEqual(parsed[0][0], "'=header")
+        self.assertEqual(parsed[1], ["'=1+1", "-2"])
+        self.assertTrue(parsed[2][0].startswith("'"))
+        self.assertEqual(parsed[2][1], "normal, text")
+        self.assertEqual(rows[0]["=header"], "=1+1")
+        for prefix in ("=", "+", "-", "@", "\t=", "\r+", "\ufeff@"):
+            value=prefix+"formula"
+            exported=self.namespace["export_csv"]([{"K":value}])
+            self.assertEqual(list(csv.reader(io.StringIO(exported)))[1][0], "'"+value)
+
+    def test_search_and_sort_are_shared_across_every_result_view(self):
+        self.assertEqual(self.select(self.rows, [], 10, "c"), [self.rows[2]])
+        self.assertEqual(self.select(self.rows, [], 1, None, "smallest"), [self.rows[0]])
+        self.assertEqual(self.select(self.rows, [], 10, None, "category"), self.rows)
+
+    def test_empty_missing_and_non_numeric_categories(self):
+        self.assertEqual(self.select([], None, 10), [])
+        self.assertEqual(self.select(self.rows, [self.key("absent")], 10), [])
+        rows = [{"K": None, "V": "text"}, {"K": "(missing)", "V": "other"}]
+        self.assertEqual(self.select(rows, [self.key(None)], 10), [rows[0]])
+
+    def test_template_substitution_preserves_unusual_titles_as_data(self):
+        from exakit_nb.share import _app_source
+        title = "A LINEAGE = {} and TITLE = '' title"
+        source = _app_source(title, {"descriptor_version": "1", "measure": "count"})
+        tree = ast.parse(source)
+        values = {n.targets[0].id: ast.literal_eval(n.value) for n in tree.body if isinstance(n, ast.Assign)
+                  and isinstance(n.targets[0], ast.Name) and n.targets[0].id in ("TITLE", "LINEAGE")}
+        self.assertEqual(values["TITLE"], title)
+        self.assertEqual(values["LINEAGE"]["measure"], "count")
 
 if __name__ == "__main__":
     unittest.main()

@@ -90,10 +90,11 @@ def _(CONTAINER, conn, ds, handoff, nb):
     UDF_SCHEMA = "EXASOL_MLFLOW"
     UDF_NAME = "TRAIN_FROM_HANDOFF"
     SEED = 0
+    CLASS_WEIGHT = None  # "balanced" for the Banking reference recipe; None for Pharma
     REGULARIZATION_C = 1.0
 
     plan = nb.prepare_training(conn, ds, handoff, schema=UDF_SCHEMA, name=UDF_NAME, container=CONTAINER,
-                               seed=SEED, C=REGULARIZATION_C)
+                               seed=SEED, C=REGULARIZATION_C, class_weight=CLASS_WEIGHT)
     conn.execute(f"CREATE SCHEMA IF NOT EXISTS {UDF_SCHEMA}")
     nb.log_sql(conn, f"CREATE SCHEMA IF NOT EXISTS {UDF_SCHEMA}", None)
     conn.execute(plan.create_script)
@@ -110,7 +111,7 @@ def _(mo):
 
     Train once, then compare its result with a model that always predicts the most common training class. That **majority baseline** is important when one outcome is rare: high accuracy alone can be misleading.
 
-    **Read the result:** compare macro-F1 with `baseline_macro_f1`, using the same later test records. A model that fails to improve is an experiment result to investigate, not evidence of useful prediction. The current Banking reference run is deterministic but matches its majority baseline; that acceptance check remains open. The last checked Pharma run beat its baseline by a small margin.
+    **Read the result:** compare macro-F1 with `baseline_macro_f1`, using the same later test records. A model that fails to improve is an experiment result to investigate, not evidence of useful prediction. For the reference recipes, keep `CLASS_WEIGHT = None` for Pharma and use `CLASS_WEIGHT = "balanced"` for Banking. Weighting is an explicit, logged experiment setting: it changes training weights, while the held-out records and majority baseline stay fixed. Verify the printed result on your installed runtime.
 
     **Technical note:** `start_run` checks tracking readiness before executing the training SQL. MLflow records the query, descriptor/version, data digest, settings and returned artifacts. If tracking fails after training, a spool record can be replayed with `exakit mlflow replay`; a database restart fails the active run.
     """)

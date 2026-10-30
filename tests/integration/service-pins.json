@@ -1,0 +1,7 @@
+{
+  "langfuse": {
+    "version": "4.59.0",
+    "compose_url": "https://raw.githubusercontent.com/langfuse/langfuse/v4.59.0/docker-compose.yml",
+    "compose_sha256": "170198856803ec03f44dcc06e23bd7b701ff912ec0cab7c41e5bf3062a438da7"
+  }
+}
