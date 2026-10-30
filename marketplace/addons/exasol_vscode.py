@@ -44,7 +44,25 @@ def code_cli(ctx: KitContext) -> Path | None:
         "~/Applications/VSCodium.app/Contents/Resources/app/bin/codium",
         "/usr/share/codium/bin/codium",
     ]
-    return next((candidate for raw in candidates if (candidate := Path(raw).expanduser()).is_file()), None)
+    windows_candidates: list[str] = []
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        windows_candidates.extend(str(Path(local_app_data) / relative) for relative in (
+            "Programs/Microsoft VS Code/bin/code.cmd",
+            "Programs/Microsoft VS Code Insiders/bin/code-insiders.cmd",
+            "Programs/cursor/resources/app/bin/cursor.cmd",
+            "Programs/Windsurf/bin/windsurf.cmd",
+            "Programs/VSCodium/bin/codium.cmd",
+        ))
+    program_files = os.environ.get("ProgramFiles") or os.environ.get("PROGRAMFILES")
+    if program_files:
+        windows_candidates.extend(str(Path(program_files) / relative) for relative in (
+            "Microsoft VS Code/bin/code.cmd",
+            "Microsoft VS Code Insiders/bin/code-insiders.cmd",
+            "VSCodium/bin/codium.cmd",
+        ))
+    return next((candidate for raw in (*windows_candidates, *candidates)
+                 if (candidate := Path(raw).expanduser()).is_file()), None)
 
 
 def _wsl_windows_cli(cli: Path) -> bool:

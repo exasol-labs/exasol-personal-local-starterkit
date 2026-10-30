@@ -123,7 +123,7 @@ class AdapterDryRunTest(unittest.TestCase):
         self.assertIn("dash-server installed", result.stdout)
         self._assert_preserved()
 
-    def test_public_marketplace_rejects_bad_frontend_before_any_addon(self) -> None:
+    def test_public_marketplace_preflights_selection(self) -> None:
         checkout = self.base / "checkout with spaces"
         for name in ("setup", "marketplace", "personas", "data"):
             shutil.copytree(ROOT / name, checkout / name)
@@ -146,6 +146,18 @@ class AdapterDryRunTest(unittest.TestCase):
                 self.assertIn("Unknown or repeated notebook frontend", result.stdout + result.stderr)
                 self.assertIsNone(json.loads((home / "manifest.json").read_text())
                                   .get("components", {}).get("dash_server"))
+        for answer, error in (("dash-server,", "empty add-on ID"),
+                              ("dash-server,,notebook", "empty add-on ID"),
+                              ("dash-server,unknown-addon", "Unknown marketplace add-on")):
+            for command in commands:
+                with self.subTest(command=command[0], answer=answer):
+                    result = subprocess.run([*command, "marketplace"],
+                                            env={**environment, "EXAKIT_MARKETPLACE_ADDONS": answer},
+                                            capture_output=True, text=True, timeout=35, check=False)
+                    self.assertNotEqual(0, result.returncode)
+                    self.assertIn(error, result.stdout + result.stderr)
+                    self.assertIsNone(json.loads((home / "manifest.json").read_text())
+                                      .get("components", {}).get("dash_server"))
         (checkout / "marketplace/catalog.json").write_text("{broken", encoding="utf-8")
         for command in commands:
             with self.subTest(command=command[0], fault="malformed catalog"):
@@ -166,6 +178,26 @@ class AdapterDryRunTest(unittest.TestCase):
                 self.assertIn("missing default_version", result.stdout + result.stderr)
                 self.assertIsNone(json.loads((home / "manifest.json").read_text())
                                   .get("components", {}).get("dash_server"))
+        catalog = json.loads((ROOT / "marketplace/catalog.json").read_text(encoding="utf-8"))
+        next(row for row in catalog["addons"] if row["id"] == "dash-server")["visible"] = False
+        (checkout / "marketplace/catalog.json").write_text(json.dumps(catalog), encoding="utf-8")
+        direct_environment = {key: value for key, value in environment.items()
+                              if key != "EXAKIT_MARKETPLACE_ADDONS"}
+        path_dirs = {str(Path(shutil.which("python3")).parent)}
+        if shutil.which("pwsh"):
+            path_dirs.add(str(Path(shutil.which("pwsh")).parent))
+        direct_environment["PATH"] = os.pathsep.join([*sorted(path_dirs), os.defpath])
+        for command in commands:
+            for addon_id, expected in (("dash-server", "disabled in marketplace/catalog.json"),
+                                       ("unknown-addon", "Unknown marketplace add-on")):
+                with self.subTest(command=command[0], addon=addon_id):
+                    result = subprocess.run([*command, "marketplace", addon_id], env=direct_environment,
+                                            capture_output=True, text=True, timeout=35, check=False)
+                    self.assertIn(expected, result.stdout + result.stderr)
+                    if addon_id == "unknown-addon":
+                        self.assertNotEqual(0, result.returncode)
+                    self.assertIsNone(json.loads((home / "manifest.json").read_text())
+                                      .get("components", {}).get("dash_server"))
 
     def test_udf_command_refusal_is_one_json_object_on_both_entry_points(self) -> None:
         commands = [[str(ROOT / "setup/exakit")]]

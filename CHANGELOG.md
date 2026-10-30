@@ -7,6 +7,8 @@
 - Route the Linux installer's marketplace apply through the same Python controller as macOS and Windows. Preflight the whole selection before installing and restore progress state after each batch.
 - Remove the redundant dbt-exasol shell and PowerShell implementations. Both CLI entry points use the shared Python lifecycle; the catalog and connection validation remain covered by executable tests.
 - Make the Textual launcher use the kit's managed Python version override on every platform.
+- Resolve scripted marketplace answers through one Python parser on Bash and PowerShell. Reject empty CSV entries and unknown add-ons before the first install, and deduplicate repeated IDs.
+- Detect Windows VS Code and compatible editor CLIs under Local App Data and Program Files when they are absent from PATH.
 
 ## Acceptance fixes and repeatable verification
 

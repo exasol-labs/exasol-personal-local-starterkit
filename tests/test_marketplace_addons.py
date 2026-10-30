@@ -118,6 +118,22 @@ class AddonSafetyTest(unittest.TestCase):
         with self.assertRaisesRegex(AddonFailure, "not kit-owned"):
             exasol_vscode.uninstall(self.ctx)
 
+    def test_vscode_finds_windows_editors_outside_path(self) -> None:
+        local = self.home / "Local App Data"
+        cursor = local / "Programs" / "cursor" / "resources" / "app" / "bin" / "cursor.cmd"
+        cursor.parent.mkdir(parents=True)
+        cursor.write_text("editor", encoding="utf-8")
+        program_files = self.home / "Program Files"
+        code = program_files / "Microsoft VS Code" / "bin" / "code.cmd"
+        code.parent.mkdir(parents=True)
+        code.write_text("editor", encoding="utf-8")
+        with patch("addons.exasol_vscode.shutil.which", return_value=None), \
+             patch.dict("addons.exasol_vscode.os.environ", {"LOCALAPPDATA": str(local),
+                                                                "ProgramFiles": str(program_files)}):
+            self.assertEqual(cursor, exasol_vscode.code_cli(self.ctx))
+            cursor.unlink()
+            self.assertEqual(code, exasol_vscode.code_cli(self.ctx))
+
     def test_vscode_bad_digest_refuses_before_extension_install(self) -> None:
         cli = self.home / "code"
         cli.write_text("editor", encoding="utf-8")

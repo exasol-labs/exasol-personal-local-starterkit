@@ -11,7 +11,7 @@ import importlib
 import sys
 from pathlib import Path
 
-from model import CatalogError, load_addons
+from model import CatalogError, load_addons, parse_addon_answer
 from service import OPERATIONS
 
 
@@ -39,13 +39,20 @@ def rows(root: Path, kind: str) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
-    parser.add_argument("kind", choices=("registry", "shell-hooks"))
+    parser.add_argument("kind", choices=("registry", "shell-hooks", "answer"))
+    parser.add_argument("value", nargs="?")
     args = parser.parse_args(argv)
     try:
-        for row in rows(args.root, args.kind):
-            print(row)
+        if args.kind == "answer":
+            if args.value is None:
+                parser.error("answer needs EXAKIT_MARKETPLACE_ADDONS")
+            print(parse_addon_answer(load_addons(args.root), args.value))
+        else:
+            for row in rows(args.root, args.kind):
+                print(row)
     except (OSError, ValueError, CatalogError, ImportError) as error:
-        print(f"marketplace catalog: {error}", file=sys.stderr)
+        prefix = "" if args.kind == "answer" else "marketplace catalog: "
+        print(f"{prefix}{error}", file=sys.stderr)
         return 2
     return 0
 

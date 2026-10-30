@@ -5387,6 +5387,24 @@ function Test-ExakitMarketplaceHasPending {
 
 # Textual handles interactive selection; the table remains the fallback.
 # EXAKIT_MARKETPLACE_ADDONS answers unattended runs by ID, all, or none.
+function Resolve-ExakitMarketplaceAnswer {
+    param([Parameter(Mandatory)][string]$Value)
+    $root = Get-ExakitMarketplaceRoot
+    $metadata = Join-Path (Join-Path $root 'marketplace') 'metadata.py'
+    $python = if (Get-Command Get-ExakitPersonaPython -ErrorAction SilentlyContinue) { Get-ExakitPersonaPython } else { '' }
+    $previousErrorActionPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        if ($python) { $output = @(& $python $metadata $root answer $Value 2>&1) }
+        else {
+            $uv = Install-ExakitUv
+            $output = @(& $uv run --python $script:ManagedPythonVersion --no-project python $metadata $root answer $Value 2>&1)
+        }
+        if ($LASTEXITCODE -ne 0) { Fail (($output | ForEach-Object { "$_" }) -join ' ') }
+        return "$($output[-1])"
+    } finally { $ErrorActionPreference = $previousErrorActionPreference }
+}
+
 function Show-ExakitMarketplaceMenu {
     if (-not $env:EXAKIT_MARKETPLACE_ADDONS -and
         $env:UI_TABLE_AUTO -ne '1' -and (Test-ExakitInteractive) -and (Test-ExakitStdoutIsTerminal) -and
@@ -5497,7 +5515,7 @@ function Show-ExakitMarketplaceMenu {
 
     # The env answer wins over any menu, so agents and CI never need a TTY.
     if ($env:EXAKIT_MARKETPLACE_ADDONS) {
-        $answer = ("" + $env:EXAKIT_MARKETPLACE_ADDONS).ToLower().Replace(" ", "")
+        $answer = Resolve-ExakitMarketplaceAnswer -Value $env:EXAKIT_MARKETPLACE_ADDONS
         if ($answer -eq "none") { Info "EXAKIT_MARKETPLACE_ADDONS=none - installing nothing."; return }
         $picked = @()
         $skipped = $false

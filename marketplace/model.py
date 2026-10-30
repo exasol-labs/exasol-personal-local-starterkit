@@ -111,3 +111,18 @@ def choose_addons(addons: list[Addon], states: dict[str, dict], selected: list[s
     if unavailable:
         raise CatalogError(f"not available to install: {', '.join(unavailable)}")
     return [row.id for row in addons if row.id in selected]
+
+
+def parse_addon_answer(addons: list[Addon], raw: str) -> str:
+    answer = raw.lower().replace(" ", "")
+    if answer in ("all", "none"):
+        return answer
+    parts = answer.split(",")
+    if any(not part for part in parts):
+        raise CatalogError("empty add-on ID in EXAKIT_MARKETPLACE_ADDONS")
+    known = {addon.id for addon in addons}
+    for part in parts:
+        if part not in known:
+            raise CatalogError(f"Unknown marketplace add-on in EXAKIT_MARKETPLACE_ADDONS: '{part}' "
+                               f"(known: {' '.join(addon.id for addon in addons)})")
+    return ",".join(dict.fromkeys(parts))

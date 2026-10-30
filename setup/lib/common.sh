@@ -4721,7 +4721,8 @@ EXAKIT_MM_EOF
 
     # The env answer wins over any menu, so agents and CI never need a TTY.
     if [ -n "${EXAKIT_MARKETPLACE_ADDONS:-}" ]; then
-        _mm_answer="$(printf '%s' "$EXAKIT_MARKETPLACE_ADDONS" | tr '[:upper:]' '[:lower:]' | tr -d ' ')"
+        _mm_root="$(_exakit_marketplace_root)"
+        _mm_answer="$(run_python_any "$_mm_root/marketplace/metadata.py" "$_mm_root" answer "$EXAKIT_MARKETPLACE_ADDONS" 2>&1)" || die "$_mm_answer"
         _mm_picked=""
         _mm_skipped=0
         case "$_mm_answer" in

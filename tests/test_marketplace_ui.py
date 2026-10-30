@@ -14,7 +14,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "marketplace"))
-from model import CatalogError, choose_addons, choose_personas, load_addons, load_personas  # noqa: E402
+from model import CatalogError, choose_addons, choose_personas, load_addons, load_personas, parse_addon_answer  # noqa: E402
 from launch import run, textual_pin  # noqa: E402
 
 
@@ -42,6 +42,16 @@ class MarketplaceModelTest(unittest.TestCase):
         versions = json.loads((self.root / "versions.json").read_text())
         self.assertEqual([versions["components"][item.id]["version"] for item in addons],
                          [item.version for item in addons])
+
+    def test_addon_answer_is_normalized_and_validated_before_apply(self) -> None:
+        addons = load_addons(self.root)
+        self.assertEqual("dash-server,notebook", parse_addon_answer(addons, " DASH-SERVER , notebook,dash-server "))
+        self.assertEqual("all", parse_addon_answer(addons, " ALL "))
+        self.assertEqual("none", parse_addon_answer(addons, " none "))
+        with self.assertRaisesRegex(CatalogError, "empty add-on ID"):
+            parse_addon_answer(addons, "dash-server,")
+        with self.assertRaisesRegex(CatalogError, "Unknown marketplace add-on"):
+            parse_addon_answer(addons, "dash-server,missing")
 
     def test_new_persona_is_available_from_json_without_code_edit(self) -> None:
         new = {"schema_version": 1, "id": "operations", "title": "Operations",
