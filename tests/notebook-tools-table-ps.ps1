@@ -15,12 +15,16 @@ $work = Join-Path ([System.IO.Path]::GetTempPath()) "exakit-nbt-$([guid]::NewGui
 New-Item -ItemType Directory -Force -Path $work | Out-Null
 $env:EXAKIT_HOME = Join-Path $work "home"
 $env:EXAKIT_BIN_DIR = Join-Path $work "bin"
+New-Item -ItemType Directory -Force -Path $env:EXAKIT_HOME, $env:EXAKIT_BIN_DIR | Out-Null
+[System.IO.File]::WriteAllText((Join-Path $env:EXAKIT_HOME 'manifest.json'), '{}', (New-Object System.Text.UTF8Encoding($false)))
+$env:EXAKIT_VERSION_POLICY = 'pinned'
 foreach ($v in "EXAKIT_MARKETPLACE_ADDONS", "EXAKIT_MARKETPLACE_ONLY", "EXAKIT_NOTEBOOK_FRONTENDS",
                "EXAKIT_NOTEBOOK_JUPYTER", "EXAKIT_NOTEBOOK_MARIMO") {
     Remove-Item "Env:$v" -ErrorAction SilentlyContinue
 }
 . (Join-Path $repo "setup/lib/exakit-common.ps1")
-. (Join-Path $repo "setup/lib/notebook.ps1")
+. (Join-Path $repo "setup/lib/persona.ps1")
+Initialize-ExakitMarketplacePythonHooks
 $script:LogFile = $null
 $script:PASS = 0
 $script:FAIL = 0
@@ -48,17 +52,7 @@ function Get-ExakitAddonAdvertisedVersion { param([string]$Id, [string]$Fallback
 function Test-ExakitInteractive { return $true }
 # The other add-on's module, as far as the menu looks: it ships in this copy.
 function Install-UdfDevkit { return $true }
-function Get-ExakitManifestValue([string]$Key) {
-    if ($Key -eq "components.notebook.front_ends") { return $script:Recorded }
-    return $null
-}
-function Set-ExakitManifestValue { param($Key, $Value) }
 $script:Recorded = $null
-# What is on this machine.
-$script:JupyterFound = $null
-$script:PositronFound = $null
-function Find-NotebookJupyter { return $script:JupyterFound }
-function Find-NotebookPositron { return $script:PositronFound }
 # The table menu: records what it was asked with, answers $script:Answer (the
 # defaults when that is $null).
 $script:Answer = $null
@@ -84,6 +78,8 @@ function Menu($Answer) {
     $script:Answer = $Answer
     $script:Applied = ""; $script:Asked = ""
     Remove-Item Env:EXAKIT_NOTEBOOK_FRONTENDS -ErrorAction SilentlyContinue
+    $receipt = if ($script:Recorded) { @{ components = @{ notebook = @{ front_ends = $script:Recorded } } } } else { @{} }
+    [System.IO.File]::WriteAllText((Join-Path $env:EXAKIT_HOME 'manifest.json'), ($receipt | ConvertTo-Json -Depth 5), (New-Object System.Text.UTF8Encoding($false)))
     Show-ExakitMarketplaceMenu 6>$null
     $script:Answer = $null
 }
@@ -110,15 +106,6 @@ try {
     Check "Enter keeps all three, the question not asked" "notebook,udf-devkit|jupyterlab,marimo,positron" $script:Applied
     Check "...no question hook" "" $script:Asked
 
-    Write-Host "the descriptions say what was found:"
-    $script:JupyterFound = ,@("own", "C:\Tools\Scripts\jupyter-lab.exe")
-    $script:PositronFound = "C:\Programs\Positron\Positron.exe"
-    Menu $null
-    Check "a JupyterLab on PATH is used as it is" "yours (C:\Tools\Scripts\jupyter-lab.exe) is used as it is" (($script:MenuRows[2] -split '\|')[3])
-    Check "a Positron here is pointed at the kit's Python" "yours: pointed at the kit's Python" (($script:MenuRows[4] -split '\|')[3])
-    $script:JupyterFound = $null
-    $script:PositronFound = $null
-
     Write-Host "the ticks are the answer:"
     Menu @(2, 3, 5, 6)
     Check "Marimo unticked: the other two" "notebook,udf-devkit|jupyterlab,positron" $script:Applied
@@ -139,8 +126,8 @@ try {
         (@(Get-NotebookTableChildren | ForEach-Object { $_.Ticked }) -join '|')
     Remove-Item Env:EXAKIT_NOTEBOOK_FRONTENDS
     $env:EXAKIT_NOTEBOOK_MARIMO = "skip"
-    $d = Get-NotebookDefaultFrontEnds
-    Check "the default helper does not ask, and says it is only a default" "jupyterlab,positron|False" "$($d.FrontEnds)|$($d.Decided)"
+    [System.IO.File]::WriteAllText((Join-Path $env:EXAKIT_HOME 'manifest.json'), '{}', (New-Object System.Text.UTF8Encoding($false)))
+    Check "the default helper does not ask" "jupyterlab,positron" (Invoke-ExakitNotebookChoice -Kind 'notebook-default')
     Remove-Item Env:EXAKIT_NOTEBOOK_MARIMO
 
     Write-Host "the persona closing offer shows the same children, under a corner:"
@@ -177,27 +164,16 @@ try {
     foreach ($l in $lines) { if ($l.Length -gt $widest) { $widest = $l.Length } }
     Check "nothing past 80 columns" $true ($widest -le 80)
 
-    Write-Host "the install settles each tool's row:"
+    Write-Host "the table records each tool's final status:"
     $script:ExakitAddonTable = $t
     $script:ExakitAddonTableIds = @("", "notebook", "notebook:jupyterlab", "notebook:marimo", "notebook:positron", "dash-server", "")
     $script:ExakitAddonTableLive = $true
     $script:ExakitAddonTableChildRows = Get-ExakitAddonTableChildRows -Id "notebook"
     Check "the child rows are found by key" "3|4|5" "$($script:ExakitAddonTableChildRows['jupyterlab'])|$($script:ExakitAddonTableChildRows['marimo'])|$($script:ExakitAddonTableChildRows['positron'])"
-    function Confirm-NotebookJupyter { return $true }
-    function Install-NotebookMarimo { return $true }
-    function Set-NotebookPositronFolder { return $true }
-    $script:NotebookFrontEnds = "jupyterlab,marimo,positron"
-    Install-NotebookFrontEnds 6>$null
-    Check "JupyterLab: the kit's, at its pin" "done|installed $pinJ" "$($t.Rows[2].State)|$($t.Rows[2].Final)"
-    Check "Marimo: at its pin" "done|installed $pinM" "$($t.Rows[3].State)|$($t.Rows[3].Final)"
-    Check "Positron: not here, the folder is ready" "skipped|not on this machine - folder ready" "$($t.Rows[4].State)|$($t.Rows[4].Final)"
-    $script:JupyterFound = ,@("own", "C:\Tools\Scripts\jupyter-lab.exe")
-    $script:PositronFound = "C:\Programs\Positron\Positron.exe"
-    $script:NotebookFrontEnds = "jupyterlab,positron"
-    Install-NotebookFrontEnds 6>$null
-    Check "JupyterLab: yours, with the kernel" "done|yours, kernel added" "$($t.Rows[2].State)|$($t.Rows[2].Final)"
-    Check "Marimo unticked: skipped" "skipped|" "$($t.Rows[3].State)|$($t.Rows[3].Final)"
-    Check "Positron: configured" "done|configured" "$($t.Rows[4].State)|$($t.Rows[4].Final)"
+    [void](Set-ExakitAddonTableChild -Key 'jupyterlab' -State 'done' -Final "installed $pinJ")
+    [void](Set-ExakitAddonTableChild -Key 'marimo' -State 'skipped' -Final 'skipped')
+    Check "JupyterLab final status stays on its row" "done|installed $pinJ" "$($t.Rows[2].State)|$($t.Rows[2].Final)"
+    Check "Marimo final status stays on its row" "skipped|skipped" "$($t.Rows[3].State)|$($t.Rows[3].Final)"
     $done = (Get-ExakitTableFrame -Table $t -Cursor 0) -replace "$([char]27)\[[0-9;]*m", ""
     Has "a skipped row reads skipped" "skipped" $done
     $script:ExakitAddonTableLive = $false

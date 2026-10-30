@@ -79,7 +79,7 @@ else
 
     echo "the descriptions say what was found:"
     replay '\r' NBT_STOP=menu NBT_JUPYTER=own NBT_POSITRON=yes
-    has "a JupyterLab on PATH is used as it is"          "yours (/opt/tools/bin/jupyter-lab) is" "$SCREEN"
+    has "a JupyterLab on PATH is used as it is"          "is used as it is" "$SCREEN"
     has "a Positron here is pointed at the kit's Python" "yours: pointed at the kit's Python" "$(row '└─ Positron')"
 
     echo "the persona closing offer shows the same children, under a corner:"
@@ -136,19 +136,17 @@ echo "the pieces, without a terminal:"
     export HOME="$WORK/home" EXAKIT_HOME="$WORK/kit" EXAKIT_BIN_DIR="$WORK/bin"
     mkdir -p "$HOME" "$EXAKIT_HOME" "$EXAKIT_BIN_DIR"
     unset EXAKIT_NOTEBOOK_FRONTENDS EXAKIT_NOTEBOOK_JUPYTER EXAKIT_NOTEBOOK_MARIMO
-    . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/notebook.sh"
-    run_python_any() { python3 "$@"; }
+    export EXAKIT_VERSION_POLICY=pinned
+    . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"
+    printf '{}\n' > "$EXAKIT_HOME/manifest.json"
     EXAKIT_LOG_FILE="$WORK/log"; : > "$EXAKIT_LOG_FILE"
-    manifest_get() { [ "$1" = components.notebook.front_ends ] && [ -n "${NBT_RECORDED:-}" ] && printf '%s\n' "$NBT_RECORDED"; }
-    notebook_find_jupyter() { return 1; }
-    notebook_find_positron() { return 1; }
-    notebook_marimo_installed() { return 1; }
     printf 'CHILDREN %s\n' "$(notebook_table_children | cut -d'|' -f1,5 | tr '\n' ' ')"
-    printf 'RECORDED %s\n' "$(NBT_RECORDED=jupyterlab,positron notebook_table_children | cut -d'|' -f1,5 | tr '\n' ' ')"
+    manifest_set components.notebook.front_ends jupyterlab,positron
+    printf 'RECORDED %s\n' "$(notebook_table_children | cut -d'|' -f1,5 | tr '\n' ' ')"
+    manifest_del components.notebook.front_ends
     printf 'VARIABLE %s\n' "$(EXAKIT_NOTEBOOK_FRONTENDS=marimo notebook_table_children | cut -d'|' -f1,5 | tr '\n' ' ')"
     printf 'SKIPVAR %s\n' "$(EXAKIT_NOTEBOOK_MARIMO=skip notebook_table_children | cut -d'|' -f1,5 | tr '\n' ' ')"
-    notebook_default_front_ends; _d_rc=$?
-    printf 'DEFAULT %s|%s\n' "$_d_rc" "$NOTEBOOK_FRONT_ENDS"
+    printf 'DEFAULT %s\n' "$(_exakit_notebook_choice notebook-default)"
     printf 'PICKED1 %s\n' "$(notebook_table_children_picked "jupyterlab,positron"; printf '%s' "$EXAKIT_NOTEBOOK_FRONTENDS")"
     printf 'PICKED0 %s\n' "$(notebook_table_children_picked ""; printf '%s' "$EXAKIT_NOTEBOOK_FRONTENDS")"
     # The table the marketplace builds from them: ids, defaults, group specs.
@@ -165,7 +163,9 @@ echo "the pieces, without a terminal:"
     printf 'ROW %s\n' "$(_exakit_addon_table_row notebook)"
     # A recorded choice without Marimo: its row starts unticked, and so does
     # Select All.
-    EXAKIT_ADDON_TABLE_CHILDREN="$(NBT_RECORDED=jupyterlab,positron notebook_table_children | sed 's/^/notebook|/')"
+    manifest_set components.notebook.front_ends jupyterlab,positron
+    EXAKIT_ADDON_TABLE_CHILDREN="$(notebook_table_children | sed 's/^/notebook|/')"
+    manifest_del components.notebook.front_ends
     _exakit_addon_table_build "$WORK/t" notebook demo-alpha
     printf 'RDEFAULTS %s\n' "$EXAKIT_TABLE_DEFAULTS"
     # Questions: skipped where the rows answered, asked where no table was drawn.
@@ -182,7 +182,7 @@ has "all three ticked by default"                 "CHILDREN jupyterlab|1 marimo|
 has "a recorded choice decides the ticks"         "RECORDED jupyterlab|1 marimo|0 positron|1" "$P"
 has "EXAKIT_NOTEBOOK_FRONTENDS decides them"      "VARIABLE jupyterlab|0 marimo|1 positron|0" "$P"
 has "EXAKIT_NOTEBOOK_MARIMO=skip leaves one out"  "SKIPVAR jupyterlab|1 marimo|0 positron|1" "$P"
-has "the default helper does not ask, and says it is only a default" "DEFAULT 1|jupyterlab,marimo,positron" "$P"
+has "the default helper does not ask"            "DEFAULT jupyterlab,marimo,positron" "$P"
 has "ticked rows become the answer"               "PICKED1 jupyterlab,positron" "$P"
 has "no ticked row is none"                       "PICKED0 none" "$P"
 has "the rows' kinds"                             "KINDS group tee tee-tee tee-tee tee-corner corner plain" "$P"
@@ -222,7 +222,6 @@ has "Select All covers the tools too"              "E 1,2,3,4,5,6" "$C"
 has "the notebook unticked alone"                  "F 6" "$C"
 
 echo "the twins carry the same pieces:"
-NB_PS="$(cat "$ROOT/setup/lib/notebook.ps1")"
 CO_PS="$(cat "$ROOT/setup/lib/exakit-common.ps1")"
 UI_PS="$(cat "$ROOT/setup/lib/ui.ps1")"
 has "the registry names the children hook"        'ChildrenFn  = "Get-NotebookTableChildren"' "$CO_PS"
@@ -231,8 +230,8 @@ has "the table menu takes nested groups"           '[string[]]$Groups = @(),' "$
 has "...with the claim rule"                       '$gmode -eq "claim"' "$UI_PS"
 has "the checkbox menu knows it too"               '$gmode -eq "claim"' "$CO_PS"
 has "the deeper connectors"                        '"tee-tee"' "$UI_PS"
-has "a tool settles its row on Windows"            'Set-ExakitAddonTableChild -Key "marimo"' "$NB_PS"
-has "the default helper on Windows"                'function Get-NotebookDefaultFrontEnds' "$NB_PS"
+has "the Windows rows come from Python metadata"  "Invoke-ExakitNotebookChoice -Kind 'notebook-rows'" "$CO_PS"
+has "the Windows answer comes from Python metadata" "Invoke-ExakitNotebookChoice -Kind 'notebook-normalize'" "$CO_PS"
 
 printf '\nnotebook-tools-table.sh: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -48,6 +48,17 @@ class NotebookChoicesTest(unittest.TestCase):
         with self.assertRaisesRegex(CatalogError, "Unknown notebook choice"):
             metadata.notebook_choices(ROOT, "notebook-normalize", "unlisted")
 
+    def test_rows_report_external_jupyter_and_positron(self) -> None:
+        external = self.home / "tools" / "jupyter-lab"
+        env = {"EXAKIT_HOME": str(self.home), "EXAKIT_VERSION_POLICY": "pinned"}
+        with patch.dict(os.environ, env, clear=True), \
+             patch("addons.notebook._external_jupyter", return_value=external), \
+             patch("notebook_cli._positron_command", return_value="positron"):
+            rows = metadata.notebook_choices(ROOT, "notebook-rows")
+        self.assertIn("yours (", rows[0])
+        self.assertIn("jupyter-lab) is used as it is", rows[0])
+        self.assertIn("yours: pointed at the kit's Python", rows[2])
+
     def test_bash_fallback_stops_before_menu_on_bad_frontends(self) -> None:
         script = (f'. "{ROOT / "setup/lib/common.sh"}"\n'
                   'ui_checkbox_menu() { printf "MENU OPENED\\n"; }\n'
