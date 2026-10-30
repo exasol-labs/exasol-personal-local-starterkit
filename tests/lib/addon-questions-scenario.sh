@@ -8,6 +8,7 @@
 set -u
 ROOT="$1"; W="$(mktemp -d)"; export HOME="$W/home"; mkdir -p "$HOME"
 EXAKIT_HOME="$W/kit"; EXAKIT_BIN_DIR="$W/bin"; mkdir -p "$EXAKIT_HOME" "$EXAKIT_BIN_DIR"
+printf '{}\n' > "$EXAKIT_HOME/manifest.json"
 . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"
 
 demo_alpha_questions() {

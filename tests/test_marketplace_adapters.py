@@ -83,17 +83,19 @@ class AdapterDryRunTest(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual([f"{selected}|2.0.0", f"{selected}|"], result.stdout.splitlines())
 
-    def test_notebook_python_lifecycle_replaces_only_legacy_lifecycle(self) -> None:
+    def test_notebook_python_lifecycle_and_choices_need_no_legacy_module(self) -> None:
         script = (f'. "{ROOT / "setup/lib/common.sh"}"\n'
-                  f'. "{ROOT / "setup/lib/notebook.sh"}"\n'
                   'EXAKIT_MARKETPLACE_PYTHON_HOOKS=1 _exakit_marketplace_python_hooks\n'
                   'declare -f notebook_install\n'
-                  'declare -f notebook_venv_python\n')
+                  'notebook_table_children\n'
+                  'notebook_table_children_picked marimo,positron\n'
+                  'printf "selected=%s\\n" "$EXAKIT_NOTEBOOK_FRONTENDS"\n')
         result = subprocess.run(["bash", "-c", script], env=self._environment(),
                                 capture_output=True, text=True, timeout=30, check=False)
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("_exakit_marketplace_python 'notebook' 'install'", result.stdout)
-        self.assertIn("notebook_venv_python ()", result.stdout)
+        self.assertIn("jupyterlab|JupyterLab|", result.stdout)
+        self.assertIn("selected=marimo,positron", result.stdout)
 
     def test_bash_json_loader_needs_no_legacy_addon_module(self) -> None:
         engine = self.bin_dir / "exasol-json-tables"

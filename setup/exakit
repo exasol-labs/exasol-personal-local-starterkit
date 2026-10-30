@@ -187,10 +187,8 @@ esac
 # CLI needs the module even though it takes no part in the runtime commands.
 [ -f "$_lib_dir/pyexasol.sh" ] && . "$_lib_dir/pyexasol.sh"
 [ -f "$_lib_dir/persona.sh" ] && . "$_lib_dir/persona.sh"
-# Marketplace add-on modules: the CLI is where they are installed (exakit
-# marketplace) and updated (exakit update <addon>), so it loads every module
-# it ships. A missing file only makes the marketplace row unavailable.
-[ -f "$_lib_dir/notebook.sh" ] && . "$_lib_dir/notebook.sh"
+# Load add-on hooks from the Python catalog. The fallback Notebook child rows
+# use the small metadata adapter in common.sh.
 [ -f "$_lib_dir/describe.sh" ] && . "$_lib_dir/describe.sh"
 EXAKIT_MARKETPLACE_PYTHON_HOOKS=1
 _exakit_marketplace_load_modules

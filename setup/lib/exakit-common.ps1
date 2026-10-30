@@ -5065,6 +5065,69 @@ function Initialize-ExakitMarketplacePythonHooks {
     }
 }
 
+function Invoke-ExakitNotebookChoice {
+    param([string]$Kind, [string]$Value = '')
+    $root = Get-ExakitMarketplaceRoot
+    $metadata = Join-Path (Join-Path $root 'marketplace') 'metadata.py'
+    $python = if (Get-Command Get-ExakitPersonaPython -ErrorAction SilentlyContinue) { Get-ExakitPersonaPython } else { '' }
+    $savedDoc = $env:EXAKIT_MARKETPLACE_VERSIONS_DOC
+    $savedEap = $ErrorActionPreference
+    try {
+        $env:EXAKIT_MARKETPLACE_VERSIONS_DOC = Get-ExakitMarketplaceVersionsDoc
+        $ErrorActionPreference = "Continue"
+        $choiceArgs = @($metadata, $root, $Kind)
+        if ($Kind -eq 'notebook-normalize') { $choiceArgs += $Value }
+        if ($python) { $output = @(& $python @choiceArgs 2>&1) }
+        else {
+            $uv = Get-ExakitUvBin
+            if (-not $uv) { $uv = Install-ExakitUv }
+            $uvArgs = @('run')
+            if ($script:ExakitReadOnlyQuery) { $uvArgs += '--offline' }
+            $uvArgs += @('--python', $script:ManagedPythonVersion, '--no-project', 'python')
+            $output = @(& $uv @uvArgs @choiceArgs 2>&1)
+        }
+        if ($LASTEXITCODE -ne 0) { throw (($output | ForEach-Object { "$_" }) -join ' ') }
+        return @($output | ForEach-Object { "$_" })
+    } finally {
+        $ErrorActionPreference = $savedEap
+        if ($null -eq $savedDoc) { Remove-Item Env:EXAKIT_MARKETPLACE_VERSIONS_DOC -ErrorAction SilentlyContinue }
+        else { $env:EXAKIT_MARKETPLACE_VERSIONS_DOC = $savedDoc }
+    }
+}
+
+function Get-NotebookTableChildren {
+    foreach ($row in @(Invoke-ExakitNotebookChoice -Kind 'notebook-rows')) {
+        $parts = ([string]$row).Split('|')
+        if ($parts.Count -ne 5) { continue }
+        [pscustomobject]@{ Key = $parts[0]; Label = $parts[1]; Version = $parts[2]
+            Description = $parts[3]; Ticked = ($parts[4] -eq '1') }
+    }
+}
+
+function Set-NotebookTableChildrenPicked {
+    param([string[]]$Keys = @())
+    $answer = @(Invoke-ExakitNotebookChoice -Kind 'notebook-normalize' -Value ($Keys -join ','))
+    $env:EXAKIT_NOTEBOOK_FRONTENDS = [string]$answer[-1]
+}
+
+function Read-NotebookQuestions {
+    if ($env:EXAKIT_NOTEBOOK_FRONTENDS) {
+        $answer = @(Invoke-ExakitNotebookChoice -Kind 'notebook-default')
+        $env:EXAKIT_NOTEBOOK_FRONTENDS = [string]$answer[-1]
+        return
+    }
+    $rows = @(Get-NotebookTableChildren)
+    $options = @(Invoke-ExakitNotebookChoice -Kind 'notebook-questions')
+    $defaults = @()
+    for ($i = 0; $i -lt $rows.Count; $i++) { if ($rows[$i].Ticked) { $defaults += ($i + 1) } }
+    $picked = $defaults
+    if (Test-ExakitInteractive) {
+        $picked = @(Read-ExakitCheckboxMenu -Title "Notebook tools - untick any you do not want" -Defaults $defaults -Options $options)
+    }
+    $keys = @($picked | Where-Object { $_ -ge 1 -and $_ -le $rows.Count } | ForEach-Object { $rows[$_ - 1].Key })
+    Set-NotebookTableChildrenPicked -Keys $keys
+}
+
 # ---------------------------------------------------------------------------
 # Add-on "About" text - fetched from the add-on's own repository, cached here
 # ---------------------------------------------------------------------------

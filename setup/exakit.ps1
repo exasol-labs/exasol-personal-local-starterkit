@@ -140,10 +140,8 @@ if (Test-Path (Join-Path $libDir "legacy-crossing.ps1")) { . (Join-Path $libDir 
 # CLI needs the module even though it takes no part in the runtime commands.
 . (Join-Path $libDir "pyexasol.ps1")
 if (Test-Path (Join-Path $libDir "persona.ps1")) { . (Join-Path $libDir "persona.ps1") }
-# Marketplace add-on modules: the CLI is where they are installed (exakit
-# marketplace) and updated (exakit update <addon>). A missing file only makes
-# the marketplace row unavailable - it must not break every other command.
-if (Test-Path (Join-Path $libDir "notebook.ps1")) { . (Join-Path $libDir "notebook.ps1") }
+# Load add-on hooks from the Python catalog. The fallback Notebook child rows
+# use the metadata adapter in exakit-common.ps1.
 if (Test-Path (Join-Path $libDir "describe.ps1")) { . (Join-Path $libDir "describe.ps1") }
 if (Test-Path (Join-Path $libDir "help.ps1")) { . (Join-Path $libDir "help.ps1") }
 Initialize-ExakitMarketplacePythonHooks

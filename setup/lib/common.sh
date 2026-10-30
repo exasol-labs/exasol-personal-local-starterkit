@@ -3644,6 +3644,61 @@ _exakit_marketplace_run_python() {
     fi
 }
 
+_exakit_notebook_choice() {
+    _enc_root="$(_exakit_marketplace_root 2>/dev/null || true)"
+    [ -f "$_enc_root/marketplace/metadata.py" ] || return 1
+    EXAKIT_MARKETPLACE_VERSIONS_DOC="$(_exakit_marketplace_versions_doc 2>/dev/null || true)" \
+        _exakit_marketplace_run_python query "$_enc_root/marketplace/metadata.py" "$_enc_root" "$@"
+}
+
+notebook_table_children() { _exakit_notebook_choice notebook-rows; }
+
+notebook_table_children_picked() {
+    EXAKIT_NOTEBOOK_FRONTENDS="$(_exakit_notebook_choice notebook-normalize "${1:-}")" || return 1
+    export EXAKIT_NOTEBOOK_FRONTENDS
+}
+
+notebook_questions() {
+    if [ -n "${EXAKIT_NOTEBOOK_FRONTENDS:-}" ]; then
+        EXAKIT_NOTEBOOK_FRONTENDS="$(_exakit_notebook_choice notebook-default)" || return 1
+        export EXAKIT_NOTEBOOK_FRONTENDS
+        return 0
+    fi
+    _enc_defaults=""
+    _enc_keys=()
+    _enc_i=0
+    _enc_rows="$(_exakit_notebook_choice notebook-rows)" || return 1
+    [ -n "$_enc_rows" ] || return 1
+    while IFS='|' read -r _enc_key _enc_label _enc_version _enc_description _enc_tick; do
+        [ -n "$_enc_key" ] || continue
+        _enc_i=$((_enc_i + 1))
+        _enc_keys+=("$_enc_key")
+        [ "$_enc_tick" = 1 ] && _enc_defaults="${_enc_defaults:+$_enc_defaults,}$_enc_i"
+    done <<EXAKIT_NB_ROWS
+$_enc_rows
+EXAKIT_NB_ROWS
+    _enc_options=()
+    _enc_questions="$(_exakit_notebook_choice notebook-questions)" || return 1
+    while IFS= read -r _enc_label; do
+        [ -n "$_enc_label" ] && _enc_options+=("$_enc_label")
+    done <<EXAKIT_NB_QUESTIONS
+$_enc_questions
+EXAKIT_NB_QUESTIONS
+    [ "${#_enc_keys[@]}" -eq "${#_enc_options[@]}" ] || return 1
+    ui_checkbox_menu "Notebook tools - untick any you do not want" "$_enc_defaults" "${_enc_options[@]}"
+    _enc_selected=""
+    for _enc_index in $(printf '%s' "${EXAKIT_CHECKBOX_SELECTION:-}" | tr ',' ' '); do
+        _enc_key=""
+        case "$_enc_index" in
+            *[!0-9]*|'') ;;
+            *) [ "$_enc_index" -ge 1 ] && [ "$_enc_index" -le "${#_enc_keys[@]}" ] && \
+                _enc_key="${_enc_keys[$((_enc_index - 1))]}" ;;
+        esac
+        [ -n "$_enc_key" ] && _enc_selected="${_enc_selected:+$_enc_selected,}$_enc_key"
+    done
+    notebook_table_children_picked "$_enc_selected"
+}
+
 _exakit_marketplace_python() {
     _mcp_root="$(_exakit_marketplace_root 2>/dev/null || true)"
     [ -f "$_mcp_root/marketplace/service.py" ] || return 1

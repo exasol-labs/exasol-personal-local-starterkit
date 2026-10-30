@@ -14,6 +14,7 @@
 - Resolve `describe`'s Notebook interpreter from the installation receipt on Bash and PowerShell. It no longer requires the legacy Notebook helper to be loaded.
 - Use the active validated versions document for Notebook frontend and scikit-learn pins, MLflow's local server, skill receipts, and Rust smoke overlays, keeping secondary assets aligned with the selected release.
 - Preserve the Notebook add-on's legacy `EXAKIT_NOTEBOOK_JUPYTER` and `EXAKIT_NOTEBOOK_MARIMO` skip defaults and its `jupyter` frontend alias in the Python backend.
+- Source fallback Notebook child rows, versions, descriptions, default ticks, and selected-key normalization from Python metadata on Bash and PowerShell. The public CLI no longer loads the legacy Notebook script pair.
 - Make the workflow command test replace a virtualenv Python symlink before writing its stub, so the fixture cannot overwrite the shared interpreter.
 - Make the Textual launcher use the kit's managed Python version override on every platform.
 - Use that managed Python override when Dash Server, dbt-exasol, Notebook, JSON Tables, and Exasol Scheduler create their virtual environments.

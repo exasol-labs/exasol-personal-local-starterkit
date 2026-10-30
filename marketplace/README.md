@@ -54,8 +54,9 @@ put them in command arguments or the catalog.
 Notebook and UDF Devkit lifecycle operations use the Python service. The
 direct `notebook`, `workflow`, `mlflow`, `rust-udf`, `udf-file`, `model`, `udf-setup`, `udf-use`, and `udf-build`
 commands use Python entry points in this directory. `udf_container.py` selects
-and verifies the pinned release assets. The public CLI still loads Notebook's
-platform helper for `describe`; the workflow, Rust UDF, and MLflow command
+and verifies the pinned release assets. `describe` reads the Notebook Python
+path from the receipt. The fallback table obtains Notebook child rows from
+`metadata.py`; the workflow, Rust UDF, and MLflow command
 wrappers and the dbt-exasol, Exasol for VS Code, Exasol Scheduler, JSON Tables,
 and Dash Server script pairs have been removed.
 Other legacy add-on script pairs remain until their compatibility checks use
