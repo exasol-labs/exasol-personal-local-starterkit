@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import sys
 import tempfile
 import unittest
@@ -176,6 +177,61 @@ class NotebookPlanTest(unittest.TestCase):
             marimo_args = server_type.return_value.start.call_args.args[0]
             self.assertEqual("edit", marimo_args[4])
             self.assertEqual(str(directory / "marimo"), marimo_args[5])
+
+    @unittest.skipIf(os.name == "nt", "native Windows process test is a separate release gate")
+    def test_jupyter_launch_keeps_token_out_of_argv_and_stops_owned_server(self) -> None:
+        _, home, directory = notebook.paths(self.ctx)
+        home.mkdir(parents=True)
+        directory.mkdir(parents=True)
+        program = self.home / "jupyter-lab"
+        program.write_text("""#!/usr/bin/env python3
+import http.server
+import os
+import sys
+
+port = int(next(arg.split('=', 1)[1] for arg in sys.argv if arg.startswith('--ServerApp.port=')))
+open(os.environ['EXAKIT_TEST_TOKEN_FILE'], 'w').write(os.environ.get('JUPYTER_TOKEN', ''))
+
+class Handler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b'{"version":"test"}')
+
+    def log_message(self, *args):
+        pass
+
+http.server.HTTPServer(('127.0.0.1', port), Handler).serve_forever()
+""", encoding="utf-8")
+        program.chmod(0o755)
+        try:
+            with socket.socket() as probe:
+                probe.bind(("127.0.0.1", 0))
+                port = probe.getsockname()[1]
+        except PermissionError:
+            self.skipTest("local socket binding is blocked in this sandbox")
+        token_seen = self.home / "token-seen"
+        server = OnDemandServer(self.ctx, "jupyterlab")
+        try:
+            with patch.dict(os.environ, {"EXAKIT_TEST_TOKEN_FILE": str(token_seen)}), \
+                 patch.object(notebook_cli, "_ensure_frontend"), \
+                 patch.object(notebook_cli, "_find_jupyter", return_value=program), \
+                 patch.object(notebook_cli.webbrowser, "open") as browser, \
+                 redirect_stdout(StringIO()) as output:
+                notebook_cli._start_frontend(self.ctx, "jupyterlab", port, True, False)
+            token = token_seen.read_text(encoding="utf-8")
+            self.assertTrue(token)
+            self.assertEqual("running", server.state(port))
+            self.assertNotIn(token, notebook_cli._command(server.pid()))
+            self.assertNotIn(token, output.getvalue())
+            opened = home / "open-jupyter.html"
+            self.assertIn(token, opened.read_text(encoding="utf-8"))
+            self.assertEqual(0o600, opened.stat().st_mode & 0o777)
+            browser.assert_called_once_with(opened.as_uri())
+        finally:
+            server.stop()
+        self.assertEqual("stopped", server.state(port))
+        self.assertFalse((home / "open-jupyter.html").exists())
 
     def test_failed_update_validation_does_not_mark_desired_version(self) -> None:
         self.store.set_many({"components.notebook.ownership": "kit", "components.notebook.version": "3.1.0"})
