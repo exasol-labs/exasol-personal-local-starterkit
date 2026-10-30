@@ -62,6 +62,15 @@ class ApplyTest(unittest.TestCase):
             self.assertIn(("dbt-exasol", "install"), operations)
             self.assertEqual(["failed", "done"], [event.phase for event in events if event.phase in ("failed", "done")])
 
+    def test_activity_row_is_restored_after_batch_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            ctx = self.context(Path(temp))
+            with patch.dict(os.environ, {"EXAKIT_MARKETPLACE_ACTIVITY_ROW": "prior",
+                                      "EXAKIT_ADDON_TABLE_IDS": "dash-server"}), \
+                 patch.object(market_apply, "invoke", side_effect=AddonFailure("download failed")):
+                self.assertFalse(market_apply.apply(ctx, "dash-server", lambda _: None))
+                self.assertEqual("prior", os.environ["EXAKIT_MARKETPLACE_ACTIVITY_ROW"])
+
     def test_validation_and_start_failure_leave_installed_receipt_truthful(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             ctx = self.context(Path(temp))

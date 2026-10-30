@@ -41,7 +41,6 @@ def _selection(root: Path, ids: str) -> list[str]:
             raise CatalogError(f"{word} is disabled in marketplace/catalog.json")
         if word in seen:
             continue
-        _module(root, word)  # Require every selected implementation before installing any.
         seen.add(word)
         result.append(word)
     return result
@@ -50,14 +49,24 @@ def _selection(root: Path, ids: str) -> list[str]:
 def apply(ctx: KitContext, ids: str, emit: Callable[[Event], None]) -> bool:
     selected = _selection(ctx.root, ids)
     ctx.manifest.read()
-    for addon_id in selected:
-        _, module = _module(ctx.root, addon_id)
+    modules = {addon_id: _module(ctx.root, addon_id)[1] for addon_id in selected}
+    for module in modules.values():
         validate_selection = getattr(module, "validate_selection", None)
         if callable(validate_selection):
             validate_selection(ctx)
+    previous_row = os.environ.get("EXAKIT_MARKETPLACE_ACTIVITY_ROW")
+    try:
+        return _apply_selected(ctx, modules, emit)
+    finally:
+        if previous_row is None:
+            os.environ.pop("EXAKIT_MARKETPLACE_ACTIVITY_ROW", None)
+        else:
+            os.environ["EXAKIT_MARKETPLACE_ACTIVITY_ROW"] = previous_row
+
+
+def _apply_selected(ctx: KitContext, modules: dict[str, object], emit: Callable[[Event], None]) -> bool:
     failed = False
-    for addon_id in selected:
-        _, module = _module(ctx.root, addon_id)
+    for addon_id, module in modules.items():
         started = time.monotonic()
         table_ids = os.environ.get("EXAKIT_ADDON_TABLE_IDS", "").splitlines()
         os.environ["EXAKIT_MARKETPLACE_ACTIVITY_ROW"] = (
