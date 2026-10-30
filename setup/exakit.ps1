@@ -257,6 +257,10 @@ function Invoke-CmdStatus {
         ,@(Get-ExakitLoadedDatasets)
     })
     $pyexasol = Get-ExakitComponentCurrent "pyexasol"
+    # Which uv the kit runs, or why it runs none. A probe, not an install:
+    # status is a read-only query, so a uv under the floor is reported with
+    # its remedy and nothing is downloaded here. Twin of _cs_uv in cmd_status.
+    $uvReport = Get-ExakitUvReport
     # Why the last run stopped, read off disk rather than out of this process:
     # the install that failed was a different process, and its reason is the one
     # an agent needs here. Twin of the .last-failure read in cmd_status.
@@ -303,6 +307,16 @@ function Invoke-CmdStatus {
         $remedies = [ordered]@{}
         $remedyHints = [ordered]@{}
         if (-not $pyexasol) { $remedies["pyexasol"] = "exakit update" }
+        # A uv below the floor is always a remedy. NO uv is one only once the
+        # MCP step has run: before that the install has not reached it yet.
+        if ($uvReport.Verdict -eq "below" -or ($uvReport.Verdict -eq "none" -and @($steps) -contains "mcp")) {
+            $remedies["uv"] = "exakit update uv"
+            if ($uvReport.Version) {
+                $remedyHints["uv"] = "uv $($uvReport.Version) at $($uvReport.Path) is below the minimum $($uvReport.Min) the kit will run (its CA store trusts a compromised root, GHSA-hq85-5cpj-mr62); the remedy installs the kit's own pinned uv beside it and points the AI clients at that one"
+            } else {
+                $remedyHints["uv"] = "no uv is installed; the MCP server and the managed Python run through it"
+            }
+        }
         if (-not $running) {
             # With NO runtime deployed, "exakit start" has nothing to start and
             # fails identically every time - only the installer creates one.
@@ -385,6 +399,14 @@ function Invoke-CmdStatus {
             steps_completed = $steps
             steps_missing   = $stepsMissing
             pyexasol        = $(if ($pyexasol) { "$pyexasol" } else { $null })
+            # Twin of the `uv` object in cmd_status: ok false with a version
+            # means "present but refused", the one state an agent must act on.
+            uv              = [ordered]@{
+                ok          = ($uvReport.Verdict -eq "ok")
+                path        = $(if ($uvReport.Path) { "$($uvReport.Path)" } else { $null })
+                version     = $(if ($uvReport.Version) { "$($uvReport.Version)" } else { $null })
+                min_version = $(if ($uvReport.Min) { "$($uvReport.Min)" } else { $null })
+            }
             remedies        = $remedies
             # Prose that EXPLAINS a remedy, same keys: the remedy itself stays a
             # runnable command, per the AGENTS.md contract. Twin of remedy_hints.
@@ -639,6 +661,15 @@ function Invoke-CmdStatus {
     foreach ($row in $softRows) {
         Write-StatusRow $softLabel $row
         $softLabel = ""
+    }
+    # A uv the kit refuses to run is said in plain words, with the remedy: a
+    # user who installed uv themselves has no other way of learning that the
+    # kit is about to install its own copy beside theirs - or that theirs is
+    # the vulnerable one. Twin of the uv row in cmd_status.
+    if ($uvReport.Verdict -eq "below") {
+        Write-StatusRow "uv:" ("$($uvReport.Version) at $(Get-ExakitTilde $uvReport.Path) is below the minimum $($uvReport.Min) the kit will run (compromised root CA) - repair: exakit update uv")
+    } elseif ($uvReport.Verdict -eq "none" -and $null -ne (Get-ExakitManifestValue "components.mcp_server.validated")) {
+        Write-StatusRow "uv:" "not installed - the MCP server runs through it - repair: exakit update uv"
     }
     if ($softRecords) {
         $softLabel = "Unfinished:"
@@ -2353,7 +2384,8 @@ function Test-ExakitComponentSupported {
     # PROCESSOR_ARCHITECTURE is a Windows variable. It is empty when this file runs
     # under PowerShell on macOS or Linux (tests, cross-platform checks), and an empty
     # value must not be read as "some other architecture".
-    if ($Component -eq "exapump" -and $env:PROCESSOR_ARCHITECTURE `
+    # uv is pinned for windows-x86_64 only, the one Windows build the kit ships for.
+    if (($Component -eq "exapump" -or $Component -eq "uv") -and $env:PROCESSOR_ARCHITECTURE `
             -and $env:PROCESSOR_ARCHITECTURE -ne "AMD64") { return $false }
     return $true
 }
@@ -2870,6 +2902,9 @@ function Invoke-ExakitUpdateRun {
             "runtime" { Invoke-ExakitRuntimeComponentUpdate -Component "runtime" -Advertised $available }
             "personal" { Invoke-ExakitRuntimeComponentUpdate -Component "personal" -Advertised $available }
             "skills" { Update-ExakitSkills -Advertised $available -Installed $current }
+            "uv" {
+                if ($available) { Update-ExakitUv | Out-Null }
+            }
             "exapump" {
                 if ($available) {
                     $script:ExapumpVersion = $available

@@ -194,6 +194,17 @@ $script:McpReadonlySchemas = if ($env:EXAKIT_MCP_READONLY_SCHEMAS) { $env:EXAKIT
 $script:VersionPolicy = if ($env:EXAKIT_VERSION_POLICY) { $env:EXAKIT_VERSION_POLICY } else { "manifest" }
 $script:ExapumpVersionFallback = if ($env:EXAKIT_EXAPUMP_VERSION_FALLBACK) { $env:EXAKIT_EXAPUMP_VERSION_FALLBACK } else { "0.13.1" }
 $script:McpVersionFallback = if ($env:EXAKIT_MCP_VERSION_FALLBACK) { $env:EXAKIT_MCP_VERSION_FALLBACK } else { "2.3.0" }
+# uv is the Python tool runner: uvx is the process the AI client launches to
+# run the MCP server (and hands EXA_PASSWORD to on every start), and uv runs
+# the kit's managed Python wherever the system one is too old. Pinned and
+# digest-verified like every other binary the kit installs - see Install-ExakitUv.
+# The MIN version is the oldest uv the kit will RUN at all: below it uv's
+# bundled CA store trusts an emSign root whose intermediate CA keys are
+# compromised (GHSA-hq85-5cpj-mr62). Twins of EXAKIT_UV_*_FALLBACK in common.sh.
+$script:UvVersionFallback = if ($env:EXAKIT_UV_VERSION_FALLBACK) { $env:EXAKIT_UV_VERSION_FALLBACK } else { "0.13.6" }
+$script:UvMinVersionFallback = if ($env:EXAKIT_UV_MIN_VERSION_FALLBACK) { $env:EXAKIT_UV_MIN_VERSION_FALLBACK } else { "0.13.4" }
+$script:UvRepo = "astral-sh/uv"
+$script:UvVetted = $null
 $script:ExapumpVersion  = if ($env:EXAKIT_EXAPUMP_VERSION) { $env:EXAKIT_EXAPUMP_VERSION } else { "" }
 $script:ExapumpRepo     = "exasol-labs/exapump"
 $script:McpPackage      = if ($env:EXAKIT_MCP_PACKAGE) { $env:EXAKIT_MCP_PACKAGE } else { "exasol-mcp-server" }
@@ -1292,49 +1303,296 @@ function Test-ExakitSystemPython {
     return $script:SystemPythonOk
 }
 
-function Get-ExakitUvBin {
-    if ($script:UvBin -and (Test-Path $script:UvBin)) { return $script:UvBin }
-    $cmd = Get-Command uv -ErrorAction SilentlyContinue
-    if ($cmd) { $script:UvBin = $cmd.Source; return $script:UvBin }
-    $candidate = Join-Path $script:BinDir "uv.exe"
-    if (Test-Path $candidate) { $script:UvBin = $candidate; return $script:UvBin }
-    # Where uv's own Windows installer puts it: %USERPROFILE%\.local\bin, NOT
-    # PowerShell's $HOME. Probing $HOME on a redirected home meant the kit
-    # installed uv and then could not find the binary it had just installed.
-    $candidate = Get-ExakitUvInstallerBin
-    if (Test-Path $candidate) { $script:UvBin = $candidate; return $script:UvBin }
-    return $null
+# ---------------------------------------------------------------------------
+# uv - the Python tool runner. Twin of the uv section in common.sh.
+# ---------------------------------------------------------------------------
+# uv used to be the ONE artifact the kit put on a machine without a digest:
+# astral's install.ps1 was fetched and handed to Invoke-Expression, unpinned
+# and unverified, and any uv already on PATH was used without its version
+# ever being read. Both are gone. uv is installed the way exapump is - the
+# pinned release archive from GitHub, verified against the windows-x86_64
+# SHA-256 in versions.json (components.uv) BEFORE anything is unpacked, no
+# installer script executed at all - and the kit refuses to RUN a uv older
+# than components.uv.min_version (a compromised root CA in its trust store,
+# GHSA-hq85-5cpj-mr62). A uv the user installed themselves is never modified:
+# at or above the floor it is used where it is; below it the kit installs its
+# own copy into $script:BinDir and uses that one. Only the kit's own path is
+# ever replaced.
+
+# The uv.exe the kit's own install writes. Twin of $EXAKIT_BIN_DIR/uv.
+function Get-ExakitUvKitBin {
+    return (Join-Path $script:BinDir "uv.exe")
 }
 
-# The path uv's own installer writes uv.exe to. One definition, so the probe,
-# the retry and the failure message can never name three different directories.
+# The path uv's own Windows installer used to write uv.exe to:
+# %USERPROFILE%\.local\bin, NOT PowerShell's $HOME. Still probed, because kits
+# before 0.2.3 installed uv there through that installer, and those are the
+# copies most likely to sit below the floor.
 function Get-ExakitUvInstallerBin {
     return (Join-Path (Get-ExakitProfileHome) ".local\bin\uv.exe")
 }
 
+# Get-ExakitUvVersionOf <uv.exe> - "0.13.6" from `uv --version`, "" when the
+# binary does not run or does not answer in that shape.
+function Get-ExakitUvVersionOf {
+    param([string]$Path)
+    if (-not $Path -or -not (Test-Path $Path)) { return "" }
+    $version = Get-ExakitProbedVersion -Command $Path -Arguments @("--version")
+    if ($version -match '^(\d+\.\d+\.\d+)') { return $Matches[1] }
+    return ""
+}
+
+# The oldest uv the kit will run: versions.json first, the constant otherwise.
+function Get-ExakitUvMinVersion {
+    $value = Get-ExakitVersionsValue -Path "components.uv.min_version"
+    if ($value -and $value -match '^[0-9.]+$') { return $value }
+    return $script:UvMinVersionFallback
+}
+
+# The uv the kit installs when it has to: an explicit EXAKIT_UV_VERSION, else
+# the advertised one, else the constant.
+function Get-ExakitUvPinnedVersion {
+    if ($env:EXAKIT_UV_VERSION) { return $env:EXAKIT_UV_VERSION.TrimStart("v") }
+    $value = Get-ExakitVersionsValue -Path "components.uv.version"
+    if ($value -and $value -match '^[0-9.]+$') { return $value }
+    return $script:UvVersionFallback
+}
+
+# Digest of the fallback release, consulted after versions.json: what a machine
+# with no manifest at all verifies against. The current UvVersionFallback MUST
+# be listed here. Twin of exakit_uv_pinned_sha256.
+function Get-ExakitUvPinnedSha256 {
+    param([Parameter(Mandatory)][string]$Key)
+    switch ($Key) {
+        "uv-0.13.6-windows-x86_64" { return "a2a8820d5eea32f08ef467ef3b7f66883a9b076d5737a2fc2fbb5f458d1bb50f" }
+        default { return $null }
+    }
+}
+
+# Get-ExakitUvExpectedSha256 <version> <url> - the digest the archive is
+# verified against, in the order exapump uses: versions.json (only for the
+# advertised version), the pinned table, then - for an explicit
+# EXAKIT_UV_VERSION the kit does not pin - astral's .sha256 sidecar beside the
+# archive. $null means "no digest"; the caller refuses to install.
+function Get-ExakitUvExpectedSha256 {
+    param([Parameter(Mandatory)][string]$Version, [Parameter(Mandatory)][string]$Url)
+    $advertised = Get-ExakitVersionsValue -Path "components.uv.version"
+    if ($advertised -and $advertised -eq $Version) {
+        $digest = Get-ExakitVersionsValue -Path "components.uv.sha256.windows-x86_64"
+        if ($digest -and $digest -match '^[0-9a-f]{64}$') { return $digest }
+    }
+    $digest = Get-ExakitUvPinnedSha256 "uv-$Version-windows-x86_64"
+    if ($digest) { return $digest }
+    if (-not $env:EXAKIT_UV_VERSION) { return $null }
+    try {
+        $sidecar = Invoke-RestMethod -Uri "$Url.sha256" -UseBasicParsing -TimeoutSec 30
+        $first = ("" + $sidecar).Trim().Split(" ")[0].ToLowerInvariant()
+        if ($first -match '^[0-9a-f]{64}$') { return $first }
+    } catch { }
+    return $null
+}
+
+# Get-ExakitUvReport - which uv the kit runs, or why it runs none:
+#   Verdict ok     the first uv at or above the floor (Path, Version, Min)
+#   Verdict below  only uv(s) below the floor exist; the first found is named
+#   Verdict none   no uv anywhere
+# Probed in the order the kit prefers: an explicit EXAKIT_UV_BIN, the kit's own
+# copy, PATH, then where the old installer wrote - the kit's own first so a copy
+# installed to shadow an old one elsewhere wins. Installs nothing.
+function Get-ExakitUvReport {
+    $min = Get-ExakitUvMinVersion
+    $candidates = @()
+    if ($env:EXAKIT_UV_BIN) { $candidates += $env:EXAKIT_UV_BIN }
+    $candidates += (Get-ExakitUvKitBin)
+    $cmd = Get-Command uv -ErrorAction SilentlyContinue
+    if ($cmd) { $candidates += $cmd.Source }
+    $candidates += (Get-ExakitUvInstallerBin)
+    $first = ""
+    $firstVersion = ""
+    foreach ($candidate in $candidates) {
+        if (-not $candidate -or -not (Test-Path $candidate)) { continue }
+        $version = Get-ExakitUvVersionOf $candidate
+        if (-not $version) { continue }
+        if ($version -eq $min -or (Test-ExakitVersionNewer -Latest $version -Current $min)) {
+            return @{ Verdict = "ok"; Path = $candidate; Version = $version; Min = $min }
+        }
+        if (-not $first) { $first = $candidate; $firstVersion = $version }
+    }
+    if ($first) { return @{ Verdict = "below"; Path = $first; Version = $firstVersion; Min = $min } }
+    return @{ Verdict = "none"; Path = ""; Version = ""; Min = $min }
+}
+
+# Get-ExakitUvBin - the uv the kit may run, or $null. A probe: it installs
+# nothing (Install-ExakitUv does). Twin of the vetting half of exakit_ensure_uv.
+function Get-ExakitUvBin {
+    if ($script:UvVetted -and (Test-Path $script:UvVetted)) { $script:UvBin = $script:UvVetted; return $script:UvBin }
+    $report = Get-ExakitUvReport
+    if ($report.Verdict -eq "ok") {
+        $script:UvBin = $report.Path
+        $script:UvVetted = $report.Path
+        return $script:UvBin
+    }
+    return $null
+}
+
+# Expand-ExakitZip - unpack a zip. Expand-Archive arrives through module
+# auto-loading, which a managed machine can break (see Get-ExakitSha256); the
+# .NET class behind it is part of the runtime and is the fallback.
+function Expand-ExakitZip {
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][string]$Destination)
+    New-Item -ItemType Directory -Force -Path $Destination | Out-Null
+    if (Get-Command Expand-Archive -ErrorAction SilentlyContinue) {
+        Expand-Archive -Path $Path -DestinationPath $Destination -Force
+        return
+    }
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($Path, $Destination)
+}
+
+# Install-ExakitUvPinned - download the pinned uv release archive, verify it
+# against the pinned digest, unpack uv.exe and uvx.exe into the kit's bin dir.
+# Fails on any miss; nothing downloaded runs before the digest matches. Twin
+# of exakit_uv_install_pinned.
+function Install-ExakitUvPinned {
+    $version = Get-ExakitUvPinnedVersion
+    $asset = "uv-x86_64-pc-windows-msvc.zip"
+    $url = "https://github.com/$($script:UvRepo)/releases/download/$version/$asset"
+    $expected = Get-ExakitUvExpectedSha256 -Version $version -Url $url
+    # Never install a binary that could not be verified: uvx is the process the
+    # AI client hands the database password to. There is no override.
+    if (-not $expected) {
+        Fail "No checksum is pinned for uv $version (windows-x86_64); refusing to install an unverified uv. The kit pins components.uv in versions.json - use the advertised version, or add this release's digest there."
+    }
+    $stage = Join-Path ([System.IO.Path]::GetTempPath()) ("exakit-uv-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Force -Path $stage | Out-Null
+    $zip = Join-Path $stage $asset
+    $t0 = Get-Date
+    $script:ExakitActiveLabel = "Downloading uv $version"
+    Info "Downloading uv $version ($asset)"
+    Get-ExakitFile -Url $url -Dest $zip
+    Test-ExakitSha256 -Path $zip -Expected $expected
+    $unpacked = Join-Path $stage "unpacked"
+    try {
+        Expand-ExakitZip -Path $zip -Destination $unpacked
+    } catch {
+        Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
+        Fail "The uv archive was verified but could not be unpacked ($_); nothing was installed."
+    }
+    # astral's Windows zip holds uv.exe, uvx.exe and uvw.exe at its root.
+    $uvExe = Join-Path $unpacked "uv.exe"
+    $uvxExe = Join-Path $unpacked "uvx.exe"
+    if (-not (Test-Path $uvExe) -or -not (Test-Path $uvxExe)) {
+        Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
+        Fail "The uv archive does not hold uv.exe and uvx.exe as astral publishes them; nothing was installed."
+    }
+    New-Item -ItemType Directory -Force -Path $script:BinDir | Out-Null
+    $kitUv = Get-ExakitUvKitBin
+    Copy-Item -Force $uvExe $kitUv
+    Copy-Item -Force $uvxExe (Join-Path $script:BinDir "uvx.exe")
+    Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
+    # The binary that landed must be the version that was pinned: a checksum
+    # proves the bytes, this proves they run and say what the pin says. A
+    # freshly written executable can be held by a virus scanner for a while
+    # (see Test-ExakitBinaryNotRunnableYet in exapump.ps1), so the probe waits
+    # it out rather than failing on the first "Access is denied".
+    $budget = 180
+    if ($env:EXAKIT_UV_READY_TIMEOUT) { $budget = [int]$env:EXAKIT_UV_READY_TIMEOUT }
+    $have = ""
+    $said = $false
+    while ($true) {
+        $have = Get-ExakitUvVersionOf $kitUv
+        if ($have) { break }
+        if (((Get-Date) - $t0).TotalSeconds -ge $budget) { break }
+        if (-not $said) { Info "The new uv cannot start yet (a virus scanner may still hold it) - waiting up to ${budget}s"; $said = $true }
+        Start-Sleep -Seconds 5
+    }
+    if ($have -ne $version) {
+        Fail "uv was downloaded and verified but reports '$have' instead of $version, so it is not trusted. See exakit logs setup."
+    }
+    Confirm-ExakitOnPath $script:BinDir
+    OkStep "uv $version installed to $(Get-ExakitTilde $kitUv), verified ($([int]((Get-Date) - $t0).TotalSeconds)s)"
+    return $kitUv
+}
+
+# Set-ExakitUvManifest - what the kit uses, written down for `exakit version`
+# and for the MCP config writer (components.mcp_server.uv_path is where it
+# reads the uv to derive uvx from). Best-effort: there may be no manifest yet.
+function Set-ExakitUvManifest {
+    if (-not (Test-Path $script:ManifestPath)) { return }
+    if (-not $script:UvBin -or -not (Test-Path $script:UvBin)) { return }
+    try {
+        Set-ExakitManifestValue "components.uv.path" $script:UvBin
+        $version = Get-ExakitUvVersionOf $script:UvBin
+        if ($version) { Set-ExakitManifestValue "components.uv.version" $version }
+        Set-ExakitManifestValue "components.uv.managed" ($script:UvBin -eq (Get-ExakitUvKitBin))
+    } catch { }
+}
+
+# Install-ExakitUv - a uv the kit may run, installing the pinned release when
+# the machine offers none at or above the floor. Returns its path; Fails when
+# it cannot be installed. Every uv user in the kit resolves through here.
 function Install-ExakitUv {
     $existing = Get-ExakitUvBin
     if ($existing) { return $existing }
-    Info "Installing the managed Python bootstrapper (uv)"
-    try {
-        $env:UV_NO_MODIFY_PATH = "1"
-        $env:INSTALLER_NO_MODIFY_PATH = "1"
-        # HARDENING (eval-report): this fetches and executes the uv installer
-        # unpinned/unverified, unlike the kit's checksum-verified artifacts.
-        # Pin/verify to match the bash twin's chosen approach (keep both sides
-        # identical). Behavior intentionally unchanged here pending that fix.
-        Invoke-Expression (Invoke-RestMethod -Uri "https://astral.sh/uv/install.ps1") *>> $script:LogFile
-    } catch {
-        Fail "The uv installer did not finish, and the MCP server runs through uv. What it printed: $_ - more in: exakit logs setup"
+    $report = Get-ExakitUvReport
+    if ($report.Verdict -eq "below") {
+        Warn2 "uv $($report.Version) at $($report.Path) is below the minimum $($report.Min) the kit will run (its CA store trusts a compromised root) - it is left alone; the kit installs its own uv"
+    } else {
+        Info "Installing uv (the Python tool runner), pinned and verified"
     }
-    $bin = Get-ExakitUvBin
-    if (-not $bin) {
-        $candidate = Get-ExakitUvInstallerBin
-        if (Test-Path $candidate) { $bin = $candidate; $script:UvBin = $bin }
-    }
-    if (-not $bin) { Fail "uv installed but its binary was not found in $(Split-Path (Get-ExakitUvInstallerBin) -Parent)." }
-    Ok "uv installed at $bin"
+    $bin = Install-ExakitUvPinned
+    $script:UvBin = $bin
+    $script:UvVetted = $bin
+    Set-ExakitUvManifest
     return $bin
+}
+
+# Get-ExakitUvUvx - the uvx.exe beside the uv the kit uses, or $null. This is
+# the command the AI client configs are pointed at, so a client never launches
+# a uvx the kit itself refused.
+function Get-ExakitUvUvx {
+    $bin = Get-ExakitUvBin
+    if (-not $bin) { return $null }
+    $uvx = Join-Path (Split-Path $bin -Parent) "uvx.exe"
+    if (Test-Path $uvx) { return $uvx }
+    return $null
+}
+
+# Update-ExakitUv - the `exakit update uv` arm. Reached by the dispatcher only
+# when the installed uv differs from the advertised one and is not ahead of
+# it. Twin of exakit_uv_update.
+function Update-ExakitUv {
+    $report = Get-ExakitUvReport
+    $want = Get-ExakitComponentAvailable "uv"
+    if (-not $want) { $want = Get-ExakitUvPinnedVersion }
+    $kitUv = Get-ExakitUvKitBin
+    switch ($report.Verdict) {
+        "ok" {
+            if ($report.Path -ne $kitUv) {
+                # Theirs, and safe to run: the kit does not replace a tool the
+                # user installed.
+                Ok "uv $($report.Version) at $(Get-ExakitTilde $report.Path) is yours and at or above the minimum $($report.Min) - leaving it (upgrade it yourself to $want with its own tooling, e.g. uv self update)"
+                return
+            }
+            if ($report.Version -eq $want) { Ok "uv is already current ($($report.Version))"; return }
+            Info "uv $($report.Version) at $(Get-ExakitTilde $report.Path) is the kit's own copy; this kit ships $want - replacing it"
+        }
+        "below" {
+            Warn2 "uv $($report.Version) at $(Get-ExakitTilde $report.Path) is below the minimum $($report.Min) the kit will run - leaving it alone and installing the kit's own uv $want"
+        }
+        default { Info "Installing uv $want (the Python tool runner), pinned and verified" }
+    }
+    $bin = Install-ExakitUvPinned
+    $script:UvBin = $bin
+    $script:UvVetted = $bin
+    Set-ExakitUvManifest
+    $installed = Get-ExakitUvVersionOf $bin
+    if (-not $installed) { $installed = $want }
+    Set-ExakitManifestValue "desired.uv" $installed
+    # The AI clients launch uvx by absolute path, so a kit copy that just
+    # landed beside an old uv elsewhere has to be written into their configs.
+    # mcp.ps1 owns that; it may be absent from a kit copy built without it.
+    if (Get-Command Set-McpClientsToKitUv -ErrorAction SilentlyContinue) { Set-McpClientsToKitUv | Out-Null }
 }
 
 function Assert-ExakitPython {
@@ -6000,6 +6258,15 @@ function Get-ExakitComponentAvailable {
     param([string]$Component)
     $override = Get-ExakitComponentEnvOverride $Component
     if ($override) { return $override }
+    # A uv the USER installed, at or above the floor, is the version the kit
+    # wants: it does not replace a tool it did not install (Update-ExakitUv
+    # says so), so advertising the pinned release against it would park the
+    # row on "update available" for good. Twin of the same rule in
+    # exakit_component_available.
+    if ($Component -eq "uv") {
+        $uvReport = Get-ExakitUvReport
+        if ($uvReport.Verdict -eq "ok" -and $uvReport.Path -ne (Get-ExakitUvKitBin)) { return $uvReport.Version }
+    }
     if ($script:VersionPolicy -eq "latest") { return (Get-ExakitComponentLatest $Component) }
     if ($script:VersionPolicy -ne "manifest") { return (Get-ExakitComponentFallback $Component) }
     $block = Get-ExakitComponentBlock $Component
@@ -6015,6 +6282,10 @@ function Get-ExakitComponentAvailable {
     # newer than what the kit copy carries - twin of the same rule in
     # exakit_component_available.
     if ($Component -eq "skills") { return (Get-ExakitComponentFallback "skills") }
+    # And uv: the block arrived with kit 0.2.3, and a cached document on a
+    # machine that has just updated can predate it. The pin the kit shipped
+    # with is the answer then, not "unknown" - twin of exakit_component_available.
+    if ($Component -eq "uv") { return (Get-ExakitComponentFallback "uv") }
     return ""
 }
 
@@ -6025,7 +6296,7 @@ function Get-ExakitComponentBlock {
     switch ($Component) {
         "exakit" { return "kit" }
         "kit2" { return "kit2" }
-        { $_ -in @("exapump", "mcp", "pyexasol", "personal", "skills") } { return "components.$Component" }
+        { $_ -in @("exapump", "uv", "mcp", "pyexasol", "personal", "skills") } { return "components.$Component" }
         "runtime" {
             if ((Get-RuntimeType) -eq "personal") { return "components.personal" }
             return $null
@@ -6080,6 +6351,16 @@ function Get-ExakitComponentCurrent {
             $live = Get-ExakitInstalledMcpVersion
             if ($live) { return $live }
             return (Get-ExakitManifestValue "components.mcp_server.version")
+        }
+        "uv" {
+            # The uv the kit would run, read from the binary itself: the first
+            # one at or above the floor, else the old one it refuses (so the
+            # table shows it against the tested version and offers the
+            # update), else provably absent. Installs nothing. Twin of the
+            # same arm in exakit_component_current.
+            $report = Get-ExakitUvReport
+            if ($report.Verdict -eq "none") { return "" }
+            return $report.Version
         }
         "pyexasol" {
             $python = Get-ExakitManifestValue "components.pyexasol.python"
@@ -6137,6 +6418,7 @@ function Get-ExakitComponentEnvOverride {
     if ($component -eq "runtime") { $component = Get-RuntimeType }
     switch ($component) {
         "exapump" { return $env:EXAKIT_EXAPUMP_VERSION }
+        "uv" { return $env:EXAKIT_UV_VERSION }
         "mcp" { return $env:EXAKIT_MCP_VERSION }
         "pyexasol" { return $env:EXAKIT_PYEXASOL_VERSION }
         "personal" { return $env:EXAKIT_PERSONAL_VERSION }
@@ -6156,6 +6438,7 @@ function Get-ExakitComponentFallback {
     if ($component -eq "runtime") { $component = Get-RuntimeType }
     switch ($component) {
         "exapump" { return $script:ExapumpVersionFallback }
+        "uv" { return $script:UvVersionFallback }
         "mcp" { return $script:McpVersionFallback }
         "pyexasol" { return $script:PyexasolVersionFallback }
         "personal" {
@@ -6227,6 +6510,9 @@ function Get-ExakitComponentLatest {
     switch ($Component) {
         "exakit" { return (Get-ExakitLatestGithubRelease $script:KitRepo) }
         "exapump" { return (Get-ExakitLatestGithubRelease $script:ExapumpRepo) }
+        # astral tags releases as plain numbers (0.13.6, no v); the helper
+        # strips an optional v, so the answer has the same shape either way.
+        "uv" { return (Get-ExakitLatestGithubRelease $script:UvRepo) }
         "mcp" { return (Get-ExakitLatestPypiVersion $script:McpPackage) }
         "pyexasol" { return (Get-ExakitLatestPypiVersion $script:PyexasolPackage) }
         "personal" { return (Get-ExakitLatestGithubRelease "exasol/exasol-personal") }
@@ -6368,14 +6654,17 @@ function Get-ExakitUpdateTargets {
             # skills is a light component like exapump: the skill set has its own
             # version in versions.json and Update-ExakitSkills fetches a newer set
             # from the kit repository without a kit release.
-            $targets = @("exakit", "runtime", "exapump", "mcp", "pyexasol")
+            # uv sits before mcp because the MCP server runs through it: a uv
+            # moved to the floor is what the refreshed client configs then
+            # point at.
+            $targets = @("exakit", "runtime", "exapump", "uv", "mcp", "pyexasol")
             # A kit copy that carries no skills\ at all has no skill set to keep
             # current, so it gets no row either.
             if (Get-ExakitSkillsDir) { $targets += "skills" }
             return @($targets + (Get-ExakitMarketplaceInstalledAddons))
         }
         { $_ -in @("runtime", "database", "db") } { return @("runtime") }
-        { $_ -in @("personal", "exakit", "exapump", "mcp", "pyexasol", "skills", "kit2") } { return @($Target) }
+        { $_ -in @("personal", "exakit", "exapump", "uv", "mcp", "pyexasol", "skills", "kit2") } { return @($Target) }
         default {
             # Any registered marketplace add-on is a valid explicit target.
             if (Get-ExakitMarketplaceAddon $Target) { return @($Target) }

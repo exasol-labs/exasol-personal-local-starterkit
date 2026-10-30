@@ -296,6 +296,60 @@ jobs:
                           exapump["version"] = winner
                           exapump["sha256"] = digests
 
+          # --- uv: astral's newest stable release, plus the five archive digests -
+          # Installs straight from astral's release (exapump's model), so the
+          # digests are hashed from the real archives and a release whose five
+          # archives cannot all be fetched is left alone. astral tags releases
+          # as plain numbers (0.13.6, no v). min_version is the FLOOR the kit
+          # refuses to run below; it is a security judgement and is never
+          # moved by this bot.
+          UV_TARGETS = {
+              "macos-aarch64": "aarch64-apple-darwin",
+              "macos-x86_64": "x86_64-apple-darwin",
+              "linux-aarch64": "aarch64-unknown-linux-gnu",
+              "linux-x86_64": "x86_64-unknown-linux-gnu",
+              "windows-x86_64": "x86_64-pc-windows-msvc",
+          }
+          uv = components.get("uv") or {}
+          if uv.get("version"):
+              repo = uv.get("repo", "astral-sh/uv")
+              body, reason = fetch("https://api.github.com/repos/%s/releases?per_page=100" % repo,
+                                   token=True)
+              if body is None:
+                  notes.append("- `uv`: GitHub did not answer (%s), left alone" % reason)
+              else:
+                  shape = re.compile(r"^(\d+\.\d+\.\d+)$")
+                  candidates = []
+                  for release in body:
+                      if release.get("draft") or release.get("prerelease"):
+                          continue
+                      match = shape.match(release.get("tag_name") or "")
+                      if match:
+                          candidates.append(match.group(1))
+                  winner = pick(candidates, uv["version"], "uv", semver_key)
+                  if winner:
+                      digests = {}
+                      failed = None
+                      for platform in sorted(uv.get("sha256") or {}):
+                          target = UV_TARGETS.get(platform)
+                          if not target:
+                              failed = "%s (no astral target is known for this platform key)" % platform
+                              break
+                          asset = "uv-%s.%s" % (target, "zip" if platform.startswith("windows-") else "tar.gz")
+                          payload, why = fetch("https://github.com/%s/releases/download/%s/%s"
+                                               % (repo, winner, asset), raw=True)
+                          if payload is None:
+                              failed = "%s (%s)" % (asset, why)
+                              break
+                          digests[platform] = hashlib.sha256(payload).hexdigest()
+                      if failed:
+                          notes.append("- `uv`: %s is available but %s could not be "
+                                       "downloaded, so it was left alone" % (winner, failed))
+                      else:
+                          bumped["uv"] = (uv["version"], winner)
+                          uv["version"] = winner
+                          uv["sha256"] = digests
+
           # --- the marketplace add-ons: newest stable GitHub release -------------
           # dash-server installs the tag's source tarball through uv (no digest
           # to recompute); exasol-vscode advertises its vsix digest, which is
@@ -394,6 +448,14 @@ jobs:
               "exapump": [
                   ("setup/lib/common.sh", "bash", "EXAKIT_EXAPUMP_VERSION_FALLBACK"),
                   ("setup/lib/exakit-common.ps1", "pwsh", "ExapumpVersionFallback"),
+              ],
+              # The pinned-digest TABLES (exakit_uv_pinned_sha256 and its
+              # PowerShell twin) are not retuned here: they are the offline
+              # fallback for exactly this release and uv-digest-verify in
+              # versions.yml fails the PR until a maintainer updates them.
+              "uv": [
+                  ("setup/lib/common.sh", "bash", "EXAKIT_UV_VERSION_FALLBACK"),
+                  ("setup/lib/exakit-common.ps1", "pwsh", "UvVersionFallback"),
               ],
               "mcp": [
                   ("setup/lib/common.sh", "bash", "EXAKIT_MCP_VERSION_FALLBACK"),
@@ -496,6 +558,13 @@ jobs:
                   summary.append("")
                   summary.append("The five exapump `sha256` digests were recomputed from the "
                                  "downloaded release assets.")
+              if "uv" in bumped:
+                  summary.append("")
+                  summary.append("The five uv `sha256` digests were recomputed from astral's downloaded "
+                                 "release archives. `min_version` was not moved. The offline pinned "
+                                 "tables (`exakit_uv_pinned_sha256`, `Get-ExakitUvPinnedSha256`) still "
+                                 "name the previous release: update them before merging, or "
+                                 "uv-digest-verify fails this PR.")
               if "personal" in bumped:
                   summary.append("")
                   summary.append("The five Personal S3 raw-binary `sha256` digests were recomputed ")

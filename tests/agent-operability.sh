@@ -1002,9 +1002,13 @@ has "add-on uninstall retires the boot entry" '_exakit_autostart_unregister "$_u
     "$(cat "$ROOT/setup/lib/common.sh")"
 has "...and on Windows too" 'Unregister-ExakitAutostart -Id $Key' "$(cat "$ROOT/setup/exakit.ps1")"
 # AGK-07: the uv bootstrap runs lazily from INSIDE a --json answer; its
-# narration must never share stdout with the JSON object.
-check "uv bootstrap narration goes to stderr" "4" \
-    "$(sed -n '/^exakit_ensure_uv()/,/^}/p' "$ROOT/setup/lib/common.sh" | grep -c '>&2$')"
+# narration must never share stdout with the JSON object. Every narrating
+# call in the function is redirected, and so is the pinned install it runs
+# (which narrates on stdout for the install step that calls it directly).
+check "uv bootstrap narration goes to stderr" "0" \
+    "$(sed -n '/^exakit_ensure_uv()/,/^}/p' "$ROOT/setup/lib/common.sh" | grep -E '^[[:space:]]*(info|ok|ok_step|warn) ' | grep -vc '>&2$')"
+has "...and so does the pinned install it runs" '( exakit_uv_install_pinned ) 1>&2' \
+    "$(sed -n '/^exakit_ensure_uv()/,/^}/p' "$ROOT/setup/lib/common.sh")"
 # MAC-05: adopting or reusing a deployment records the version ON DISK, never
 # the advertised one.
 has "the manifest records the deployed version first" 'personal_deployed_version 2>/dev/null' \

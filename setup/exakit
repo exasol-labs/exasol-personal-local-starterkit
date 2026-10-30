@@ -375,6 +375,12 @@ cmd_status() {
     _cs_datasets="$(exakit_loaded_datasets 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
     if [ "$_cs_json" -eq 0 ]; then ui_spin_end; fi
     _cs_pyx="$(exakit_component_current pyexasol 2>/dev/null || true)"
+    # Which uv the kit runs, or why it runs none: "ok|path|version|min",
+    # "below|path|version|min" (only a uv under the floor exists - the kit
+    # refuses it) or "none|||min". A probe, not an install: status is a
+    # read-only query, so a uv under the floor is reported with its remedy
+    # and nothing is downloaded here.
+    _cs_uv="$(exakit_uv_report 2>/dev/null || true)"
     # An install in progress is its own state. The step name is in the manifest
     # (begin_step writes it) and the lock names the installer's pid; both have
     # to agree, so a crashed install never reads as "installing" forever.
@@ -437,12 +443,25 @@ cmd_status() {
         run_python_any - "$(manifest_get kit_level 2>/dev/null)" "${_type:-}" "$_cs_db"             "${_cs_autostart:-false}" "$_cs_datasets" "${_cs_pyx:-}" "$EXAKIT_MANIFEST"             "$(manifest_get steps_completed 2>/dev/null)" "$_cs_services" "$_cs_note" "$_cs_note_at" \
             "$_cs_installing" "$_cs_step" "$_cs_urls" "$(exakit_install_command)" \
             "$_cs_legacy_c" "$_cs_legacy_e" "$_cs_legacy_choice" "$_cs_legacy_restored" "$_cs_legacy_sample" \
-            "$(detect_os 2>/dev/null || true)" "$(detect_wsl_version 2>/dev/null || true)" <<'EXAKIT_SJ_PY'
+            "$(detect_os 2>/dev/null || true)" "$(detect_wsl_version 2>/dev/null || true)" \
+            "$_cs_uv" <<'EXAKIT_SJ_PY'
 import json, sys
 kit, rtype, db, autostart, datasets, pyx, manifest, steps, services, note, note_at, installing, step, urls, install_cmd = sys.argv[1:16]
 legacy_c, legacy_e, legacy_choice, legacy_restored, legacy_sample = (sys.argv[16:21] + [""] * 5)[:5]
 host_platform, wsl_version = (sys.argv[21:23] + [""] * 2)[:2]
+uv_report = (sys.argv[23:24] + [""])[0]
 installing = installing == "1"
+# uv: which one the kit runs, and whether a copy on this machine is below the
+# floor the kit will run at all (see exakit_uv_report). `ok` false with a
+# version means "present but refused" - the one state an agent must act on,
+# since the MCP server cannot start until a usable uv exists.
+uv_parts = (uv_report.split("|") + [""] * 4)[:4]
+uv = {
+    "ok": uv_parts[0] == "ok",
+    "path": uv_parts[1] or None,
+    "version": uv_parts[2] or None,
+    "min_version": uv_parts[3] or None,
+}
 try:
     steps_list = json.loads(steps) if steps else []
 except ValueError:
@@ -468,6 +487,18 @@ remedies = {}
 remedy_hints = {}
 if not pyx:
     remedies["pyexasol"] = "exakit update"
+# A uv below the floor is always a remedy. NO uv is one only once the MCP step
+# has run: before that the install simply has not reached it yet, and a
+# remedy here would send an agent into `exakit update uv` mid-install.
+if uv_report and not uv["ok"] and (uv["version"] or "mcp" in steps_list):
+    remedies["uv"] = "exakit update uv"
+    if uv["version"]:
+        remedy_hints["uv"] = ("uv %s at %s is below the minimum %s the kit will run (its CA store trusts "
+                              "a compromised root, GHSA-hq85-5cpj-mr62); the remedy installs the kit's own "
+                              "pinned uv beside it and points the AI clients at that one"
+                              % (uv["version"], uv["path"], uv["min_version"]))
+    else:
+        remedy_hints["uv"] = "no uv is installed; the MCP server and the managed Python run through it"
 if not running:
     # "exakit start" is the wrong remedy for an INTERRUPTED deployment: it fails
     # identically every time, which is how an agent ends up looping on it. The
@@ -572,6 +603,7 @@ payload = {
     "steps_completed": steps_list,
     "steps_missing": steps_missing,
     "pyexasol": pyx or None,
+    "uv": uv,
     "remedies": remedies,
     # Prose that explains a remedy, same keys: the remedy itself stays a
     # runnable command, per the AGENTS.md contract.
@@ -842,6 +874,26 @@ EXAKIT_CS_SOFT
         done
         IFS=$_cs_oifs
     fi
+    # A uv the kit refuses to run is said in plain words, with the remedy: a
+    # user who installed uv themselves has no other way of learning that the
+    # kit is about to install its own copy beside theirs - or that theirs is
+    # the vulnerable one.
+    case "$_cs_uv" in
+        below\|*)
+            _cs_uv_rest="${_cs_uv#*|}"
+            _cs_uv_path="${_cs_uv_rest%%|*}"; _cs_uv_rest="${_cs_uv_rest#*|}"
+            _cs_uv_have="${_cs_uv_rest%%|*}"; _cs_uv_min="${_cs_uv_rest#*|}"
+            _cs_row 'uv:' "$(printf '%s at %s is below the minimum %s the kit will run (compromised root CA) — repair: exakit update uv' \
+                "$_cs_uv_have" "$(ui_tilde "$_cs_uv_path")" "$_cs_uv_min")"
+            ;;
+        none\|*)
+            # Only worth a row once the MCP step ran: before that, uv simply
+            # has not been installed yet, and the Missing rows above say so.
+            if manifest_get components.mcp_server.validated >/dev/null 2>&1; then
+                _cs_row 'uv:' 'not installed — the MCP server runs through it — repair: exakit update uv'
+            fi
+            ;;
+    esac
     # No "Manifest:" row: an internal file path, on the last line of the screen,
     # that nothing on this screen asks the reader to open.
     # Superseded launchers the kit set aside during an upgrade. Each is a full
