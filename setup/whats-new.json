@@ -21,12 +21,9 @@
     "already had the kit working and wants to know what is different."
   ],
   "0.2.3": [
-    "Security: uv, which runs the MCP server, is pinned and verified.",
-    "No installer script is downloaded and executed any more.",
-    "A uv older than 0.13.4 is never run (compromised root CA upstream).",
-    "Yours is left alone; below the floor the kit installs its own copy.",
-    "exakit status names an old uv; exakit update uv installs the pin.",
-    "exakit version shows a uv row like every other component."
+    "Security update for uv, the tool that runs the MCP server.",
+    "uv is now pinned and checksum-verified; no install script runs.",
+    "A uv older than 0.13.4 is never used: exakit update uv fixes it."
   ],
   "0.2.2": [
     "The launcher now downloads from Exasol's own server (S3), verified.",
