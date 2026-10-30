@@ -7,12 +7,15 @@ import os
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "marketplace"))
 from addons import notebook  # noqa: E402
+import notebook_cli  # noqa: E402
 from notebook_cli import OnDemandServer, command  # noqa: E402
 from runtime import AddonFailure, KitContext, Manifest  # noqa: E402
 
@@ -151,6 +154,28 @@ class NotebookPlanTest(unittest.TestCase):
         kill.assert_not_called()
         kill_group.assert_not_called()
         self.assertFalse(server.pidfile.exists())
+
+    def test_jupyter_and_marimo_open_separate_notebook_views(self) -> None:
+        _, home, directory = notebook.paths(self.ctx)
+        home.mkdir(parents=True)
+        with patch.object(notebook_cli, "_ensure_frontend"), \
+             patch.object(notebook_cli, "_find_jupyter", return_value=Path("/tools/jupyter-lab")), \
+             patch.object(notebook_cli, "_choose_port", side_effect=lambda port, _: port), \
+             patch.object(notebook_cli, "OnDemandServer") as server_type, \
+             patch.object(notebook, "_copy"):
+            server_type.return_value.state.return_value = "stopped"
+            with redirect_stdout(StringIO()):
+                notebook_cli._start_frontend(self.ctx, "jupyterlab", 28888, False, False)
+            jupyter_args = server_type.return_value.start.call_args.args[0]
+            config = home / "jupyter_server_config.json"
+            self.assertIn(f"--config={config}", jupyter_args)
+            self.assertIn(f"--ServerApp.root_dir={directory}", jupyter_args)
+            self.assertIn("marimo", json.loads(config.read_text(encoding="utf-8"))["ContentsManager"]["hide_globs"])
+            with redirect_stdout(StringIO()):
+                notebook_cli._start_frontend(self.ctx, "marimo", 2718, False, False)
+            marimo_args = server_type.return_value.start.call_args.args[0]
+            self.assertEqual("edit", marimo_args[4])
+            self.assertEqual(str(directory / "marimo"), marimo_args[5])
 
     def test_failed_update_validation_does_not_mark_desired_version(self) -> None:
         self.store.set_many({"components.notebook.ownership": "kit", "components.notebook.version": "3.1.0"})

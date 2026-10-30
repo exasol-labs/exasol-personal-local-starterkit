@@ -891,9 +891,6 @@ jobs:
       # install).
       - run: bash tests/addon-questions.sh
         if: matrix.shard == 4
-      # JupyterLab hides the Marimo copies and Marimo shows only its own.
-      - run: bash tests/notebook-separate-views.sh
-        if: matrix.shard == 4
       # The notebook's tools as child rows of its row in the add-ons table (a
       # real pty: the tree at 80 columns, the ticks reaching the install, each
       # tool's own status in the one table).

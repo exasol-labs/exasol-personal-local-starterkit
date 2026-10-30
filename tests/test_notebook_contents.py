@@ -100,11 +100,15 @@ class CallsExistTest(unittest.TestCase):
                     self.assertIn(command, commands)
 
     def test_every_notebook_option_they_name_exists(self):
-        source = (ROOT / "setup" / "lib" / "notebook.sh").read_text(encoding="utf-8")
+        source = ast.parse((ROOT / "marketplace" / "notebook_cli.py").read_text(encoding="utf-8"))
+        options = {arg.value for node in ast.walk(source) if isinstance(node, ast.Call)
+                   and isinstance(node.func, ast.Attribute) and node.func.attr == "add_argument"
+                   for arg in node.args[:1] if isinstance(arg, ast.Constant) and isinstance(arg.value, str)
+                   and arg.value.startswith("--")}
         for path in [*NOTEBOOKS, *HELPERS, ROOT / "notebook" / "README.md"]:
             for option in set(re.findall(r"\bexakit notebook (--[a-z-]+)", path.read_text(encoding="utf-8"))):
                 with self.subTest(file=path.name, option=option):
-                    self.assertRegex(source, rf"\n\s+([a-z|-]*\|)?{re.escape(option)}(\|[a-z-]*)*\)")
+                    self.assertIn(option, options)
 
     def test_no_reference_to_files_this_kit_lacks(self):
         for path in [*NOTEBOOKS, *SOURCES.glob("**/*.ipynb"), *HELPERS, ROOT / "notebook" / "README.md"]:
