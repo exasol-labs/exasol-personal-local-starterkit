@@ -85,6 +85,15 @@ class MlflowCommandTest(unittest.TestCase):
     def test_server_version_is_pinned_in_root_manifest(self) -> None:
         self.assertEqual("3.17.2", mlflow_cli._server_pin(self.ctx))
 
+    def test_server_pin_follows_active_versions_document(self) -> None:
+        document = json.loads((ROOT / "versions.json").read_text(encoding="utf-8"))
+        document["components"]["udf-devkit"]["mlflow_server"] = "9.8.7"
+        active = self.home / "active-versions.json"
+        active.write_text(json.dumps(document), encoding="utf-8")
+        with patch.dict("os.environ", {"EXAKIT_MARKETPLACE_VERSIONS_DOC": str(active)}):
+            ctx = KitContext(ROOT, self.home, self.home / "bin", self.manifest, Path("uv"))
+            self.assertEqual("9.8.7", mlflow_cli._server_pin(ctx))
+
 
 if __name__ == "__main__":
     unittest.main()

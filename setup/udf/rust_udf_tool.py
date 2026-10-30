@@ -164,7 +164,8 @@ def architecture() -> str:
 
 
 def rust_pins(arch: str) -> dict:
-    versions = Path(__file__).resolve().parents[2] / "versions.json"
+    versions = Path(os.environ.get("EXAKIT_MARKETPLACE_VERSIONS_DOC") or
+                    Path(__file__).resolve().parents[2] / "versions.json")
     try:
         rows = json.loads(versions.read_text(encoding="utf-8"))["components"]["udf-devkit"]["containers"]
         matches = [row for row in rows if row.get("language") == "rust" and row.get("arch") == arch]

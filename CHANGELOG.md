@@ -12,6 +12,8 @@
 - Remove the redundant Dash Server shell and PowerShell implementations. The Python add-on owns port selection, launcher repair, service health, and one restart when its MCP endpoint works but the browser page is unavailable.
 - Mark Bash state queries read-only before loading Python add-on hooks. Run uv queries offline on Bash and PowerShell so a state read cannot download a managed Python runtime.
 - Resolve `describe`'s Notebook interpreter from the installation receipt on Bash and PowerShell. It no longer requires the legacy Notebook helper to be loaded.
+- Use the active validated versions document for Notebook frontend and scikit-learn pins, MLflow's local server, skill receipts, and Rust smoke overlays, keeping secondary assets aligned with the selected release.
+- Preserve the Notebook add-on's legacy `EXAKIT_NOTEBOOK_JUPYTER` and `EXAKIT_NOTEBOOK_MARIMO` skip defaults and its `jupyter` frontend alias in the Python backend.
 - Make the workflow command test replace a virtualenv Python symlink before writing its stub, so the fixture cannot overwrite the shared interpreter.
 - Make the Textual launcher use the kit's managed Python version override on every platform.
 - Use that managed Python override when Dash Server, dbt-exasol, Notebook, JSON Tables, and Exasol Scheduler create their virtual environments.

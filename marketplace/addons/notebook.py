@@ -7,6 +7,7 @@ and an externally installed JupyterLab are never overwritten or removed.
 from __future__ import annotations
 
 import os
+import re
 import secrets
 import shutil
 import socket
@@ -72,12 +73,22 @@ def installed_version(ctx: KitContext) -> str | None:
 def _frontends(ctx: KitContext) -> tuple[str, ...]:
     raw = os.environ.get("EXAKIT_NOTEBOOK_FRONTENDS")
     if raw is None:
-        raw = ctx.manifest.get(f"{RECEIPT}.front_ends") or ",".join(FRONTENDS)
+        raw = ctx.manifest.get(f"{RECEIPT}.front_ends")
+    if raw is None or raw == "":
+        skipped = {"skip", "no", "0", "false", "none"}
+        defaults = ["positron"]
+        if os.environ.get("EXAKIT_NOTEBOOK_JUPYTER", "").lower() not in skipped:
+            defaults.insert(0, "jupyterlab")
+        if os.environ.get("EXAKIT_NOTEBOOK_MARIMO", "").lower() not in skipped:
+            defaults.insert(-1, "marimo")
+        raw = ",".join(defaults)
     if not isinstance(raw, str):
         raise AddonFailure("notebook front_ends receipt is invalid")
-    selected = [part.strip().lower() for part in raw.split(",") if part.strip()]
+    selected = [part.lower() for part in re.split(r"[,;\s]+", raw.strip()) if part]
+    selected = ["jupyterlab" if part == "jupyter" else part for part in selected]
     if selected == ["none"]:
         return ()
+    selected = [part for part in selected if part != "none"]
     unknown = set(selected) - set(FRONTENDS)
     if unknown or len(selected) != len(set(selected)):
         raise AddonFailure(f"Unknown or repeated notebook frontend: {raw}")
@@ -93,9 +104,7 @@ def _pin(ctx: KitContext, frontend: str) -> str:
     override = os.environ.get("EXAKIT_NOTEBOOK_" + frontend.upper() + "_VERSION")
     version = override
     if version is None:
-        from json import loads
-
-        document = loads((ctx.root / "versions.json").read_text(encoding="utf-8"))
+        document = ctx.versions_document()
         version = document.get("components", {}).get("notebook", {}).get("frontends", {}).get(frontend, "")
     if not isinstance(version, str) or not version or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._+-" for c in version):
         raise AddonFailure(f"No safe {frontend} pin in versions.json")
@@ -103,9 +112,7 @@ def _pin(ctx: KitContext, frontend: str) -> str:
 
 
 def _sklearn_pin(ctx: KitContext) -> str:
-    from json import loads
-
-    document = loads((ctx.root / "versions.json").read_text(encoding="utf-8"))
+    document = ctx.versions_document()
     rows = document.get("components", {}).get("udf-devkit", {}).get("containers", [])
     pins = {row.get("packages", {}).get("scikit-learn") for row in rows if row.get("language") == "python"}
     if len(pins) != 1 or None in pins:

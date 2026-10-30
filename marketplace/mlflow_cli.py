@@ -32,7 +32,7 @@ def _require_notebook(ctx: KitContext, purpose: str) -> Path:
 
 
 def _server_pin(ctx: KitContext) -> str:
-    document = json.loads((ctx.root / "versions.json").read_text(encoding="utf-8"))
+    document = ctx.versions_document()
     value = document.get("components", {}).get("udf-devkit", {}).get("mlflow_server")
     if not isinstance(value, str) or not re.fullmatch(r"[0-9]+(?:\.[0-9]+){2}", value):
         raise AddonFailure("versions.json needs a pinned udf-devkit MLflow server version")

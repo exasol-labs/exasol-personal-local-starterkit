@@ -41,12 +41,37 @@ class NotebookPlanTest(unittest.TestCase):
         self.assertTrue(any(spec.startswith("marimo==") for spec in specs))
         self.assertIn(str(ROOT / "notebook" / "package"), specs)
 
+    def test_frontend_and_sklearn_pins_follow_active_versions_document(self) -> None:
+        document = json.loads((ROOT / "versions.json").read_text(encoding="utf-8"))
+        document["components"]["notebook"]["frontends"]["jupyterlab"] = "99.1.2"
+        document["components"]["notebook"]["frontends"]["marimo"] = "99.2.3"
+        for row in document["components"]["udf-devkit"]["containers"]:
+            if row.get("language") == "python":
+                row["packages"]["scikit-learn"] = "8.8.8"
+        active = self.home / "active-versions.json"
+        active.write_text(json.dumps(document), encoding="utf-8")
+        with patch.dict(os.environ, {"EXAKIT_MARKETPLACE_VERSIONS_DOC": str(active),
+                                  "EXAKIT_NOTEBOOK_FRONTENDS": "jupyterlab,marimo"}), \
+             patch.object(notebook, "_external_jupyter", return_value=None):
+            ctx = KitContext(ROOT, self.home, self.home / "bin", self.store, Path("uv"))
+            specs = notebook._specs(ctx, "3.1.0", notebook._frontends(ctx))
+        self.assertIn("jupyterlab==99.1.2", specs)
+        self.assertIn("marimo==99.2.3", specs)
+        self.assertIn("scikit-learn==8.8.8", specs)
+
     def test_bad_frontend_refused_before_any_package_action(self) -> None:
         with patch.dict(os.environ, {"EXAKIT_NOTEBOOK_FRONTENDS": "marimo,not-real"}):
             with self.assertRaisesRegex(AddonFailure, "Unknown"):
                 notebook._frontends(self.ctx)
         with patch.dict(os.environ, {"EXAKIT_NOTEBOOK_FRONTENDS": "none"}):
             self.assertEqual((), notebook._frontends(self.ctx))
+
+    def test_legacy_skip_answers_and_jupyter_alias_still_work(self) -> None:
+        with patch.dict(os.environ, {"EXAKIT_NOTEBOOK_JUPYTER": "skip",
+                                  "EXAKIT_NOTEBOOK_MARIMO": "false"}, clear=True):
+            self.assertEqual(("positron",), notebook._frontends(self.ctx))
+        with patch.dict(os.environ, {"EXAKIT_NOTEBOOK_FRONTENDS": "Jupyter; Marimo"}, clear=True):
+            self.assertEqual(("jupyterlab", "marimo"), notebook._frontends(self.ctx))
 
     def test_uninstall_preview_keeps_venv_store_and_notebooks(self) -> None:
         self.store.set_many({"components.notebook.ownership": "kit"})

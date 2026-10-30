@@ -301,7 +301,7 @@ def _rust_smoke(ctx: KitContext, row: dict, library: Path, *, yes: bool) -> list
         # The helper validates the retained overlay and preserves its libraries.
         try:
             check = subprocess.run([sys.executable, str(ctx.root / "setup/udf/rust_container.py"), "check",
-                                    str(library), expected, str(ctx.root / "versions.json"), row["arch"],
+                                    str(library), expected, str(ctx.versions_path()), row["arch"],
                                     str(ctx.home), "", ""], capture_output=True, check=False, timeout=30)
         except (OSError, subprocess.TimeoutExpired) as error:
             raise UdfFailure("The Rust smoke overlay check did not finish.", 5, "smoke",
@@ -310,7 +310,7 @@ def _rust_smoke(ctx: KitContext, row: dict, library: Path, *, yes: bool) -> list
             def overlay() -> None:
                 try:
                     deployed = subprocess.run([sys.executable, str(ctx.root / "setup/udf/rust_container.py"),
-                                               str(library), expected, str(ctx.root / "versions.json"), row["arch"],
+                                               str(library), expected, str(ctx.versions_path()), row["arch"],
                                                str(ctx.home), _launcher(ctx), str(_deployment(ctx))],
                                               capture_output=True, check=False, timeout=3600)
                 except (OSError, subprocess.TimeoutExpired) as error:

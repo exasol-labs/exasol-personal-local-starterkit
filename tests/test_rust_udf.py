@@ -26,6 +26,21 @@ class RustUdfTests(unittest.TestCase):
         env.start()
         self.addCleanup(env.stop)
 
+    def test_rust_pins_follow_active_versions_document(self):
+        root = Path(__file__).resolve().parents[1]
+        document = json.loads((root / "versions.json").read_text(encoding="utf-8"))
+        arch = rust.architecture()
+        for row in document["components"]["udf-devkit"]["containers"]:
+            if row.get("language") == "rust" and row.get("arch") == arch:
+                row["runtime"]["rustc"] = "9.9.9"
+                break
+        else:
+            self.skipTest(f"No Rust container row for {arch}")
+        active = Path(self.temp.name) / "active-versions.json"
+        active.write_text(json.dumps(document), encoding="utf-8")
+        with patch.dict(os.environ, {"EXAKIT_MARKETPLACE_VERSIONS_DOC": str(active)}):
+            self.assertEqual("9.9.9", rust.rust_pins(arch)["runtime"]["rustc"])
+
     def test_scaffold_pins_sdk_and_scores_coefficients(self):
         source = Path(self.temp.name) / "coefficients.json"
         source.write_text(json.dumps({"features": ["DATE_YEAR", "CAT_A"], "coef": [[0.5, -1.25]],

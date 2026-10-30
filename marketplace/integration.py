@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import plistlib
 import shlex
@@ -66,7 +65,7 @@ def install_addon_skills(ctx: KitContext, addon_id: str) -> list[str]:
         if marker.is_file():
             version = marker.read_text(encoding="utf-8").splitlines()[0].strip()
         else:
-            doc = json.loads((ctx.root / "versions.json").read_text(encoding="utf-8"))
+            doc = ctx.versions_document()
             version = doc.get("components", {}).get("skills", {}).get("version", "unknown")
         ctx.manifest.set_many({"components.skills.installed": sorted(recorded),
                                "components.skills.version": version})

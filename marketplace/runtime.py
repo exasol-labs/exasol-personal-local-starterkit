@@ -205,8 +205,7 @@ class KitContext:
 
     @cached_property
     def _versions_document(self) -> dict:
-        selected = os.environ.get("EXAKIT_MARKETPLACE_VERSIONS_DOC")
-        path = Path(selected) if selected else self.root / "versions.json"
+        path = self.versions_path()
         try:
             document = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as error:
@@ -214,6 +213,10 @@ class KitContext:
         if not isinstance(document, dict) or not isinstance(document.get("components"), dict):
             raise AddonFailure(f"Invalid versions document: {path}")
         return document
+
+    def versions_path(self) -> Path:
+        selected = os.environ.get("EXAKIT_MARKETPLACE_VERSIONS_DOC")
+        return Path(selected) if selected else self.root / "versions.json"
 
     def versions_document(self) -> dict:
         return self._versions_document
