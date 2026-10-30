@@ -117,7 +117,6 @@ export EXAKIT_ABOUT_OFFLINE
 . "$ROOT/setup/lib/common.sh"
 _exakit_marketplace_python_hooks
 . "$ROOT/setup/lib/dash-server.sh"
-. "$ROOT/setup/lib/exasol-vscode.sh"
 . "$ROOT/setup/lib/json-tables.sh"
 . "$ROOT/setup/lib/exasol-scheduler.sh"
 
@@ -619,116 +618,8 @@ _nomanifest_out="$( (
 has "marketplace without an install refuses" "No installation found" "$_nomanifest_out"
 has "and exits non-zero" "rc=1" "$_nomanifest_out"
 
-echo "exasol-vscode (the VS Code extension add-on):"
-# The stub `code` CLI created at the top answers the listing and records
-# every invocation; CODE_LISTING and CODE_CALLS steer it per case.
-
-check "live version parses publisher.id@version" "1.7.0" "$( (
-    PATH="$WORK/code-bin:$PATH"
-    CODE_LISTING="other.ext@2.0.0
-exasol.exasol-vscode@1.7.0"
-    export CODE_LISTING
-    _exasol_vscode_live_version
-) )"
-check "extension in VS Code without a kit record = system install" "sys=yes kit=no" "$( (
-    PATH="$WORK/code-bin:$PATH"
-    CODE_LISTING="exasol.exasol-vscode@1.7.0"; export CODE_LISTING
-    printf 'sys=%s ' "$(exasol_vscode_system_present && echo yes || echo no)"
-    printf 'kit=%s' "$(exasol_vscode_installed_version >/dev/null 2>&1 && echo yes || echo no)"
-) )"
-check "kit record + live extension = kit-managed" "sys=no kit=1.7.0" "$( (
-    PATH="$WORK/code-bin:$PATH"
-    CODE_LISTING="exasol.exasol-vscode@1.7.0"; export CODE_LISTING
-    manifest_set components.exasol_vscode.version "1.7.0"
-    printf 'sys=%s ' "$(exasol_vscode_system_present && echo yes || echo no)"
-    printf 'kit=%s' "$(exasol_vscode_installed_version)"
-) )"
-( . /dev/null; manifest_set components.exasol_vscode.version "" ) 2>/dev/null
-python3 - "$EXAKIT_HOME/manifest.json" <<'PY'
-import json, sys
-path = sys.argv[1]
-doc = json.load(open(path))
-doc.get("components", {}).pop("exasol_vscode", None)
-json.dump(doc, open(path, "w"))
-PY
-check "no record and no extension = simply pending" "no" "$( (
-    PATH="$WORK/code-bin:$PATH"
-    CODE_LISTING=""; export CODE_LISTING
-    _exakit_marketplace_addon_present exasol-vscode && echo yes || echo no
-) )"
-check "the sandbox extensions dir is passed through" "yes" "$( (
-    PATH="$WORK/code-bin:$PATH"
-    CODE_CALLS="$WORK/code-calls"; export CODE_CALLS
-    : > "$CODE_CALLS"
-    _exasol_vscode_code --list-extensions >/dev/null 2>&1
-    grep -q -- "--extensions-dir $EXAKIT_EXASOL_VSCODE_EXTDIR" "$CODE_CALLS" && echo yes || echo no
-) )"
-
-# On WSL the `code` on PATH is the WINDOWS build, reached over /mnt/c interop,
-# and it parses every path in its argv as a Windows path: an untranslated
-# /tmp/x.vsix arrives as C:\tmp\x.vsix and the install dies with ENOENT. Which
-# CLI we are talking to therefore decides whether a path needs translating.
-check "a native code CLI is left alone" "native" "$( (
-    exasol_vscode_code_cli() { printf '/usr/bin/code\n'; }
-    _exasol_vscode_code_is_windows && printf 'windows\n' || printf 'native\n'
-) )"
-check "a /mnt interop CLI reads as Windows" "windows" "$( (
-    exasol_vscode_code_cli() { printf '/mnt/c/Program Files/Microsoft VS Code/bin/code\n'; }
-    _exasol_vscode_code_is_windows && printf 'windows\n' || printf 'native\n'
-) )"
-check "so does a .cmd launcher" "windows" "$( (
-    exasol_vscode_code_cli() { printf '/somewhere/code.cmd\n'; }
-    _exasol_vscode_code_is_windows && printf 'windows\n' || printf 'native\n'
-) )"
-check "a native CLI gets the path verbatim" "/tmp/x.vsix" "$( (
-    exasol_vscode_code_cli() { printf '/usr/bin/code\n'; }
-    _exasol_vscode_host_path /tmp/x.vsix
-) )"
-if command -v wslpath >/dev/null 2>&1; then
-    # A real WSL host: the path must come back as something Windows can open.
-    # Computed first, then matched: a `case` inside the $( ) would not parse
-    # under bash 3.2 (see the note on the drain checks above).
-    _wsl_translated="$( (
-        exasol_vscode_code_cli() { printf '/mnt/c/code.cmd\n'; }
-        _exasol_vscode_host_path /tmp/x.vsix
-    ) )"
-    lacks "on WSL a Windows CLI gets a translated path" "/tmp/x.vsix" "$_wsl_translated"
-else
-    # Anywhere else there is nothing to translate WITH, and a best guess would
-    # be worse than none: the argument is returned untouched, so the call fails
-    # exactly as it did before rather than in some new way.
-    check "without wslpath the path is returned unchanged" "/tmp/x.vsix" "$( (
-        exasol_vscode_code_cli() { printf '/mnt/c/code.cmd\n'; }
-        _exasol_vscode_host_path /tmp/x.vsix
-    ) )"
-fi
-
-# A Windows CLI cannot open a file that lives on the WSL side - Node refuses the
-# UNC host (ERR_UNC_HOST_NOT_ALLOWED: "UNC host 'wsl.localhost' access is not
-# allowed"), seen live on a WSL install - so the install stages the .vsix on a
-# Windows drive (the user's %TEMP%, over /mnt) and removes both copies after.
-EV_SRC="$(cat "$ROOT/setup/lib/exasol-vscode.sh")"
-has "a Windows code CLI gets a copy staged on a Windows drive, not a wsl.localhost path" \
-    '_evi_stage="$(_exasol_vscode_windows_stage_dir 2>/dev/null || true)"' "$EV_SRC"
-has "both the WSL download and the staged copy are removed after the install" \
-    '_exasol_vscode_cleanup_vsix "$_evi_local" "$_evi_vsix"' "$EV_SRC"
-check "the stage dir falls back to the system temp folders when cmd.exe is absent" "" "$( (
-    command() { if [ "$1" = "-v" ] && [ "$2" = "cmd.exe" ]; then return 1; fi; builtin command "$@"; }
-    _exasol_vscode_windows_stage_dir 2>/dev/null | grep -v '^/mnt/c/'
-) )"
-
 echo "a stdin-draining host CLI must not eat the add-on registry:"
-# The VS Code CLI reads and DRAINS whatever stdin it inherits. Every loop over
-# the add-on registry calls into the add-on modules, and the exasol-vscode row
-# asks VS Code what is installed — so with the registry on stdin, that one call
-# swallowed the rest of the loop's input and every add-on listed AFTER
-# exasol-vscode silently vanished. json-tables is last in the registry, so
-# json-tables is what disappeared, on every machine that had VS Code.
-#
-# Measured on WSL before the fix: a `while read` loop over three lines read ONE.
-# CI never caught it because a runner has no VS Code at all, so the CLI is never
-# found and never run — which is exactly why this stub exists. It reproduces the
-# drain on a machine that has no VS Code, and it fails against the old code.
+# The editor stub drains stdin. A later registry row must still be visible.
 mkdir -p "$WORK/drain-bin"
 cat > "$WORK/drain-bin/code" <<'DRAINSTUBEOF'
 #!/bin/sh
@@ -737,18 +628,12 @@ cat >/dev/null 2>&1 || true
 exit 0
 DRAINSTUBEOF
 chmod +x "$WORK/drain-bin/code"
-# The registry's LAST entry is the canary: it is the one a drain loses first.
-# Whatever it is, it must come AFTER exasol-vscode (the row that runs the
-# draining CLI), or there is nothing left for the drain to eat.
+# The last registry row is the canary.
 _drain_last="$(exakit_marketplace_addons | tail -1 | cut -d'|' -f1)"
 _drain_last_fn="$(printf '%s' "$_drain_last" | tr '-' '_')"
 check "the canary is registered after exasol-vscode" "yes" \
     "$(exakit_marketplace_addons | cut -d'|' -f1 | sed -n '/^exasol-vscode$/,$p' | grep -qx "$_drain_last" && [ "$_drain_last" != exasol-vscode ] && echo yes || echo no)"
-# NOTE: the result is computed first and matched with `has`, rather than with a
-# `case` inside the $( ). bash 3.2 - what macOS ships, and what this repo must
-# keep working on - mis-parses a case pattern's closing ')' inside a command
-# substitution ("syntax error near unexpected token `newline'"), which made
-# both of these read as failures on macOS only.
+# Keep the comparison outside command substitution for Bash 3.2.
 _drain_targets="$( (
     PATH="$WORK/drain-bin:$PATH"
     exakit_version_table_targets 2>/dev/null
@@ -756,11 +641,7 @@ _drain_targets="$( (
 has "version-table targets survive the drain" "$_drain_last" "$_drain_targets"
 _drain_installed="$( (
     PATH="$WORK/drain-bin:$PATH"
-    # exasol-vscode stays REAL and gets a manifest record, so its row actually
-    # runs the draining CLI - that is the whole point. Only the canary is
-    # stubbed, because its real probe verifies the venv and engine on disk and
-    # would answer "not installed" here for reasons that have nothing to do
-    # with the drain.
+    # Only the canary is stubbed; the VS Code row must call the draining CLI.
     manifest_set components.exasol_vscode.version "1.7.0" >/dev/null 2>&1
     manifest_set "components.$_drain_last_fn.version" "1.0" >/dev/null 2>&1
     eval "${_drain_last_fn}_installed_version() { printf '1.0\\n'; }"
@@ -772,34 +653,6 @@ check "has-pending survives the drain" "yes" "$( (
     exakit_marketplace_has_pending && printf 'yes\n' || printf 'no\n'
 ) )"
 
-echo "an add-on that needs a host app is only offered when the app is there:"
-# No VS Code on this machine → the extension is not an option at all: no menu
-# row, and no row in the `exakit version` table either. The kit never advertises
-# something it cannot install here.
-_no_code="$( (
-    cover_every_addon
-    exasol_vscode_code_cli() { return 1; }          # no VS Code anywhere
-    exasol_vscode_system_present() { return 1; }    # ...and not present either
-    printf 'applicable=%s ' "$(_exakit_addon_applicable exasol-vscode && echo yes || echo no)"
-    printf 'offerable=%s ' "$(_exakit_addon_offerable exasol-vscode && echo yes || echo no)"
-    printf 'in-menu=%s ' "$(exakit_marketplace_menu 2>&1 | grep -c exasol-vscode)"
-    printf 'in-version-table=%s' "$(exakit_version_table_targets 2>&1 | grep -c exasol-vscode)"
-) )"
-check "without the host app it is hidden everywhere" \
-    "applicable=no offerable=no in-menu=0 in-version-table=0" "$_no_code"
-# With VS Code present it is a normal, selectable add-on again.
-_with_code="$( (
-    exasol_vscode_code_cli() { printf '/stub/code\n'; }
-    # The menu installs nothing without a terminal, so probing its DRAWN
-    # content needs one faked; the guard itself has its own assertions below.
-    _exakit_prompt_tty() { printf 'stub\n'; }
-    printf 'applicable=%s ' "$(_exakit_addon_applicable exasol-vscode && echo yes || echo no)"
-    printf 'in-menu=%s' "$(exakit_marketplace_menu 2>&1 | grep -c exasol-vscode)"
-) )"
-has "with the host app present it is offered again" "applicable=yes" "$_with_code"
-check "and appears in the menu" "yes" "$(
-    printf '%s' "$_with_code" | grep -q 'in-menu=0' && echo no || echo yes
-)"
 # ONLY A PRESSED ENTER INSTALLS. The menu pre-selects every add-on so Enter
 # alone acts on the offer - and without a real Enter (a dumb terminal, an EOF
 # mid-menu, or this suite's faked TTY probe) ui_table_menu returns those same
@@ -822,49 +675,6 @@ check "the refusal names EXAKIT_MARKETPLACE_ADDONS" "yes" "$( (
 '; }
     exakit_marketplace_menu 2>&1 | grep -q EXAKIT_MARKETPLACE_ADDONS && echo yes || echo no
 ) )"
-# Naming it explicitly on a machine without the app explains why, instead of
-# claiming the add-on is unknown or failing deep in the installer.
-_named="$( (
-    exasol_vscode_code_cli() { return 1; }
-    EXAKIT_MARKETPLACE_ADDONS="exasol-vscode"
-    exakit_marketplace_menu 2>&1
-) )"
-has "naming it anyway explains the host app is missing" "VS Code was not found" "$_named"
-lacks "and never calls it unknown" "Unknown marketplace add-on" "$_named"
-# A kit-installed copy stays visible even if the app disappears afterwards, so
-# it can still be updated or removed rather than becoming unreachable state.
-check "an installed copy stays visible without the app" "yes" "$( (
-    exasol_vscode_code_cli() { return 1; }
-    exakit_marketplace_addon_installed() { return 0; }
-    _exakit_addon_offerable exasol-vscode && echo yes || echo no
-) )"
-
-echo "exasol-vscode checksum chain (mirrors the exapump precedence):"
-check "the advertised version verifies against versions.json" \
-    "$(exakit_versions_value components.exasol-vscode.sha256.vsix "$ROOT/versions.json")" \
-    "$(exasol_vscode_expected_sha256 "$(exakit_versions_value components.exasol-vscode.version "$ROOT/versions.json")")"
-check "an unadvertised version falls to the pinned table, then the API" "pinned-empty from-api" "$( (
-    exasol_vscode_pinned_sha256() { printf ''; }
-    exasol_vscode_release_digest_from_api() { printf 'from-api\n'; }
-    printf 'pinned-empty %s' "$(exasol_vscode_expected_sha256 0.0.0-not-advertised)"
-) )"
-check "a checksum mismatch refuses the install" "refused rc=1" "$( (
-    PATH="$WORK/code-bin:$PATH"
-    fetch() { printf 'not-the-real-vsix' > "$2"; }
-    exasol_vscode_expected_sha256() { printf '%064d\n' 1; }
-    exasol_vscode_install >/dev/null 2>&1 && printf 'installed' || printf 'refused rc=1'
-) )"
-check "no checksum anywhere refuses the install" "yes" "$( (
-    PATH="$WORK/code-bin:$PATH"
-    fetch() { printf 'payload' > "$2"; }
-    exasol_vscode_expected_sha256() { return 1; }
-    exasol_vscode_install 2>&1 | grep -q "refusing an unverified extension" && echo yes || echo no
-) )"
-check "no VS Code anywhere is a soft miss naming the fix" "yes" "$( (
-    exasol_vscode_code_cli() { return 1; }
-    exasol_vscode_install 2>&1 | grep -q "install VS Code" && echo yes || echo no
-) )"
-
 echo "the browser UI is validated separately from the control plane:"
 # The packaging gap that shipped a 500 to a user looked healthy on /mcp. A
 # broken page must be reported, never pass silently — and it must not fail the
@@ -979,29 +789,6 @@ check "real run removes venv, state and launcher" "GONE GONE GONE" "$(
     done | sed 's/ $//'
 )"
 check "and clears the manifest record" "absent" "$(manifest_get components.dash_server.version >/dev/null 2>&1 && echo present || echo absent)"
-
-# exasol-vscode: a kit-managed copy is removed through VS Code's own CLI; a
-# copy the kit never installed is refused, and the CLI is never invoked.
-_vs_kit="$( (
-    PATH="$WORK/code-bin:$PATH"
-    CODE_LISTING="exasol.exasol-vscode@1.7.0"; export CODE_LISTING
-    CODE_CALLS="$WORK/un-calls"; export CODE_CALLS
-    : > "$CODE_CALLS"
-    manifest_set components.exasol_vscode.version "1.7.0"
-    exasol_vscode_uninstall 0 >/dev/null 2>&1
-    grep -q -- "--uninstall-extension exasol.exasol-vscode" "$CODE_CALLS" && printf 'cli-called '
-    manifest_get components.exasol_vscode.version >/dev/null 2>&1 && printf 'record-kept' || printf 'record-cleared'
-) )"
-check "kit-managed extension: removed via code CLI, record cleared" "cli-called record-cleared" "$_vs_kit"
-_vs_sys="$( (
-    PATH="$WORK/code-bin:$PATH"
-    CODE_LISTING="exasol.exasol-vscode@1.7.0"; export CODE_LISTING
-    CODE_CALLS="$WORK/un-calls-2"; export CODE_CALLS
-    : > "$CODE_CALLS"
-    exasol_vscode_uninstall 0 2>&1 | grep -q "not kit-managed" && printf 'refused '
-    grep -q -- "--uninstall-extension" "$CODE_CALLS" && printf 'cli-called' || printf 'cli-untouched'
-) )"
-check "a Marketplace-installed copy is refused, CLI untouched" "refused cli-untouched" "$_vs_sys"
 
 echo "EVERYTHING behaves as a master toggle (uninstall menu):"
 # Layout under test — the shape exakit_uninstall_menu builds:
@@ -2256,7 +2043,7 @@ _python_hooks="$(python3 "$ROOT/marketplace/metadata.py" "$ROOT" shell-hooks)"
 has "the registry declares json-tables' detector"   'json-tables|system_present|system-present' "$_python_hooks"
 has "...and the scheduler's"                        'exasol-scheduler|system_present|system-present' "$_python_hooks"
 has "...and the VS Code extension's"                'exasol-vscode|system_present|system-present' "$_python_hooks"
-has "the detector exists for VS Code"               'function Test-ExasolVscodeSystemPresent' "$(cat "$ROOT/setup/lib/exasol-vscode.ps1")"
+has "the Python detector exists for VS Code"         'def system_present(' "$(cat "$ROOT/marketplace/addons/exasol_vscode.py")"
 has "the present probe dispatches the hook first"   '$addon.SystemPresentFn' "$COMMON_PS_TP"
 has "the registry declares json-tables' latest"     'json-tables|latest|latest' "$_python_hooks"
 lacks "...but not the scheduler's, which is looked up upstream" 'LatestFn     = "Get-ExasolSchedulerLatest"' "$COMMON_PS_TP"
@@ -2290,8 +2077,8 @@ has "the shell half says the same words" \
 # shell half closes stdin (</dev/null); the Windows half must redirect it too -
 # code.cmd is a batch wrapper around the same Node process. CI never catches
 # this: a runner has no VS Code, so the CLI is never run.
-has "the code CLI cannot reach the console on Windows" \
-    '$null | & $cli @Arguments' "$(cat "$ROOT/setup/lib/exasol-vscode.ps1")"
+has "the code CLI cannot drain stdin" \
+    'stdin=subprocess.DEVNULL' "$(cat "$ROOT/marketplace/addons/exasol_vscode.py")"
 
 echo "the dash-server launcher never carries an authoritative port:"
 # BAKED-IN PORTS DRIFT, and this one did. The generated launcher used to hold

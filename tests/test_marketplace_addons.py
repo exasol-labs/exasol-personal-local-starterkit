@@ -5,6 +5,8 @@ from __future__ import annotations
 import io
 import hashlib
 import json
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -149,6 +151,110 @@ class AddonSafetyTest(unittest.TestCase):
                 exasol_vscode.install(self.ctx)
         install.assert_not_called()
         self.assertIsNone(self.manifest.get("components.exasol_vscode.ownership"))
+
+    def test_vscode_listing_closes_stdin_and_uses_private_extension_dir(self) -> None:
+        cli = self.home / "code"
+        cli.write_text("editor", encoding="utf-8")
+        extension_dir = self.home / "extensions"
+        with patch.object(exasol_vscode, "code_cli", return_value=cli), \
+             patch.dict(os.environ, {"EXAKIT_EXASOL_VSCODE_EXTDIR": str(extension_dir)}), \
+             patch("addons.exasol_vscode.subprocess.run",
+                   return_value=Mock(returncode=0, stdout="other.ext@1\nexasol.exasol-vscode@1.7.0\n")) as invoke:
+            self.assertEqual("1.7.0", exasol_vscode.live_version(self.ctx))
+            self.assertTrue(exasol_vscode.system_present(self.ctx))
+            self.assertIsNone(exasol_vscode.installed_version(self.ctx))
+            self.manifest.set_many({"components.exasol_vscode.version": "1.7.0"})
+            self.assertFalse(exasol_vscode.system_present(self.ctx))
+            self.assertEqual("1.7.0", exasol_vscode.installed_version(self.ctx))
+        self.assertEqual(subprocess.DEVNULL, invoke.call_args.kwargs["stdin"])
+        self.assertEqual([str(cli), "--extensions-dir", str(extension_dir),
+                          "--list-extensions", "--show-versions"], invoke.call_args.args[0])
+
+    def test_vscode_wsl_stages_extension_on_windows_drive(self) -> None:
+        source = self.home / "extension.vsix"
+        source.write_bytes(b"extension")
+        windows_temp = self.home / "Windows Temp"
+        windows_temp.mkdir()
+        with patch.object(exasol_vscode, "_wsl_windows_cli", return_value=True), \
+             patch("addons.exasol_vscode.shutil.which", side_effect=lambda name: name), \
+             patch("addons.exasol_vscode.subprocess.run",
+                   side_effect=[Mock(returncode=0, stdout="C:\\Temp\n"),
+                                Mock(returncode=0, stdout=str(windows_temp) + "\n")]):
+            staged = exasol_vscode._stage_for_wsl(Path("/mnt/c/code.cmd"), source)
+        self.assertEqual(windows_temp / source.name, staged)
+        self.assertEqual(source.read_bytes(), staged.read_bytes())
+
+    def test_vscode_wsl_path_conversion_and_stage_cleanup(self) -> None:
+        cli = Path("/mnt/c/Program Files/VS Code/bin/code.cmd")
+        with patch.dict(os.environ, {"WSL_INTEROP": "1"}), \
+             patch("addons.exasol_vscode.shutil.which", return_value="/usr/bin/wslpath"), \
+             patch("addons.exasol_vscode.subprocess.run",
+                   return_value=Mock(returncode=0, stdout="C:\\Temp\\extension.vsix\n")):
+            self.assertTrue(exasol_vscode._wsl_windows_cli(cli))
+            self.assertFalse(exasol_vscode._wsl_windows_cli(Path("/usr/bin/code")))
+            self.assertEqual("C:\\Temp\\extension.vsix",
+                             exasol_vscode._host_path(cli, Path("/mnt/c/Temp/extension.vsix")))
+        staged = self.home / "staged.vsix"
+        payload = b"verified extension"
+        digest = hashlib.sha256(payload).hexdigest()
+
+        class Response(io.BytesIO):
+            url = "https://github.com/release.vsix"
+
+        def stage(_cli: Path, source: Path) -> Path:
+            staged.write_bytes(source.read_bytes())
+            return staged
+
+        with patch.object(exasol_vscode, "code_cli", return_value=cli), \
+             patch.object(exasol_vscode, "system_present", return_value=False), \
+             patch.object(exasol_vscode, "live_version", side_effect=[None, "1.7.0"]), \
+             patch.object(exasol_vscode, "expected_digest", return_value=digest), \
+             patch.object(exasol_vscode, "_stage_for_wsl", side_effect=stage), \
+             patch.object(exasol_vscode, "_host_path", return_value="C:\\Temp\\staged.vsix"), \
+             patch.object(KitContext, "target_version", return_value="1.7.0"), \
+             patch.object(KitContext, "run_logged") as invoke, \
+             patch("addons.exasol_vscode.urllib.request.urlopen", return_value=Response(payload)):
+            exasol_vscode.install(self.ctx)
+        self.assertFalse(staged.exists())
+        self.assertEqual("kit", self.manifest.get("components.exasol_vscode.ownership"))
+        self.assertIn("C:\\Temp\\staged.vsix", invoke.call_args.args)
+
+    def test_vscode_uses_advertised_digest_and_falls_back_to_release(self) -> None:
+        version = self.ctx.versions_document()["components"]["exasol-vscode"]["version"]
+        digest = self.ctx.versions_document()["components"]["exasol-vscode"]["sha256"]["vsix"]
+        with patch.object(exasol_vscode, "_release_digest") as release:
+            self.assertEqual(digest, exasol_vscode.expected_digest(self.ctx, version, "extension.vsix"))
+            release.assert_not_called()
+            release.return_value = "f" * 64
+            self.assertEqual("f" * 64, exasol_vscode.expected_digest(self.ctx, "9.9.9", "extension.vsix"))
+
+    def test_vscode_uninstall_removes_only_kit_extension(self) -> None:
+        cli = self.home / "code"
+        cli.write_text("editor", encoding="utf-8")
+        self.manifest.set_many({"components.exasol_vscode.ownership": "kit",
+                                "components.exasol_vscode.version": "1.7.0"})
+        with patch.object(exasol_vscode, "code_cli", return_value=cli), \
+             patch.object(exasol_vscode, "live_version", side_effect=["1.7.0", None]), \
+             patch.object(KitContext, "run_logged") as invoke:
+            self.assertEqual([exasol_vscode.EXTENSION_ID], exasol_vscode.uninstall(self.ctx))
+        self.assertIn("--uninstall-extension", invoke.call_args.args)
+        self.assertIsNone(self.manifest.get("components.exasol_vscode"))
+
+    def test_vscode_missing_editor_and_digest_do_not_claim_install(self) -> None:
+        with patch.object(exasol_vscode, "code_cli", return_value=None), \
+             patch.object(exasol_vscode, "system_present", return_value=False):
+            with self.assertRaisesRegex(AddonFailure, "editor CLI"):
+                exasol_vscode.install(self.ctx)
+        with patch.object(exasol_vscode, "code_cli", return_value=self.home / "code"), \
+             patch.object(exasol_vscode, "system_present", return_value=False), \
+             patch.object(exasol_vscode, "live_version", return_value=None), \
+             patch.object(exasol_vscode, "expected_digest", return_value=None), \
+             patch.dict(os.environ, {"EXAKIT_ALLOW_UNVERIFIED_EXASOL_VSCODE": "0"}), \
+             patch("addons.exasol_vscode.urllib.request.urlopen") as download:
+            with self.assertRaisesRegex(AddonFailure, "No trusted VSIX checksum"):
+                exasol_vscode.install(self.ctx)
+            download.assert_not_called()
+        self.assertIsNone(self.manifest.get("components.exasol_vscode"))
 
 
 if __name__ == "__main__":

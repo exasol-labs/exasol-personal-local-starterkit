@@ -269,11 +269,10 @@ lacks "the launcher is not streamed to the screen" \
     "install local 2>&1 | exakit_stream_foreign" "$RP"
 has "the launcher is piped into the collector" \
     '_personal_deploy_collect "$_deploy_state" "$_deploy_tail" "$_deploy_notice"' "$RP"
-ADDONS="$(cat "$ROOT/setup/lib/exasol-vscode.sh" "$ROOT/setup/lib/dash-server.sh" \
-    "$ROOT/setup/lib/json-tables.sh")"
+ADDONS="$(cat "$ROOT/setup/lib/dash-server.sh" "$ROOT/setup/lib/json-tables.sh")"
 lacks "no add-on redirects a fetch by hand" "( fetch " "$ADDONS"
-lacks "the VS Code install is not a bare redirect" \
-    '_exasol_vscode_code --install-extension "$(_exasol_vscode_host_path "$_evi_vsix")" --force' "$ADDONS"
+has "the VS Code install uses the logged Python runner" \
+    'ctx.run_logged("Installing Exasol for VS Code"' "$(cat "$ROOT/marketplace/addons/exasol_vscode.py")"
 
 printf '\n== an add-on install reports its own stages ==\n'
 

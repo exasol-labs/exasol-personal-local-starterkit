@@ -422,8 +422,7 @@ printf '\n== a reference card is not part of an add-on install ==\n'
 . "$ROOT/setup/lib/dash-server.sh"
 # shellcheck source=/dev/null
 . "$ROOT/setup/lib/json-tables.sh"
-# shellcheck source=/dev/null
-. "$ROOT/setup/lib/exasol-vscode.sh"
+_exakit_marketplace_python_hooks
 
 : > "$EXAKIT_LOG_FILE"
 PANEL_QUIET="$(EXAKIT_QUIET_DETAIL=1 _dash_server_print_usage 2>&1)"
@@ -437,12 +436,6 @@ JT_QUIET="$(EXAKIT_QUIET_DETAIL=1 _json_tables_print_usage 2>&1)"
 check "the JSON Tables panel steps aside" "" "$JT_QUIET"
 has "...leaving its command in the log" "exasol-json-tables ingest" "$(cat "$EXAKIT_LOG_FILE")"
 has "and it still prints outside an install" "Ingest JSON" "$(_json_tables_print_usage 2>&1)"
-
-# The VS Code panel lives inside its validate function rather than a printer of
-# its own, so the gate is asserted at the source.
-has "the VS Code panel is gated too" \
-    'if [ "${EXAKIT_QUIET_DETAIL:-0}" = 1 ]; then
-        _exakit_log_file "DATA  exasol-vscode:' "$(cat "$ROOT/setup/lib/exasol-vscode.sh")"
 
 printf '\n== ...but its one useful fact rides out on the result line ==\n'
 
@@ -475,13 +468,12 @@ printf '\n== the PowerShell twin does the same ==\n'
 
 DS_PS1="$(cat "$ROOT/setup/lib/dash-server.ps1")"
 JT_PS1="$(cat "$ROOT/setup/lib/json-tables.ps1")"
-VS_PS1="$(cat "$ROOT/setup/lib/exasol-vscode.ps1")"
+VS_PY="$(cat "$ROOT/marketplace/addons/exasol_vscode.py")"
 has "dash-server gates its panel"   'if ($script:ExakitQuietDetail) {' "$DS_PS1"
 has "json-tables gates its panel"   'if ($script:ExakitQuietDetail) {' "$JT_PS1"
-has "exasol-vscode gates its panel" 'if ($script:ExakitQuietDetail) {' "$VS_PS1"
 has "dash-server has a summary"     'function Get-DashServerSummary'     "$DS_PS1"
 has "json-tables has a summary"     'function Get-JsonTablesSummary'     "$JT_PS1"
-has "exasol-vscode has a summary"   'function Get-ExasolVscodeSummary'   "$VS_PS1"
+has "exasol-vscode has a summary"   'def summary('                      "$VS_PY"
 has "exasol-scheduler has a summary" 'function Get-ExasolSchedulerSummary' "$(cat "$ROOT/setup/lib/exasol-scheduler.ps1")"
 has "dbt-exasol has a summary"      'def summary('                      "$(cat "$ROOT/marketplace/addons/dbt_exasol.py")"
 has "notebook has a summary"        'function Get-NotebookSummary'        "$(cat "$ROOT/setup/lib/notebook.ps1")"

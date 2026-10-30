@@ -143,12 +143,10 @@ say "6/9 exasol-vscode installs from its release, checksum-verified, into an iso
 # marketplace machinery). The sandbox extensions dir guarantees the user's
 # real VS Code profile is never touched — even on a machine where the
 # extension is genuinely installed.
-_code_cli="$(
-    . "$ROOT/setup/lib/common.sh" >/dev/null 2>&1
-    . "$ROOT/setup/lib/exasol-vscode.sh" >/dev/null 2>&1
-    exasol_vscode_code_cli 2>/dev/null
+_code_available="$(
+    python3 "$ROOT/marketplace/service.py" exasol-vscode applicable >/dev/null 2>&1 && printf 'available'
 )"
-if [ -z "$_code_cli" ]; then
+if [ -z "$_code_available" ]; then
     echo "  --  no VS Code on this machine; the exasol-vscode half is skipped"
 else
     export EXAKIT_EXASOL_VSCODE_EXTDIR="$SANDBOX/vscode-ext"
@@ -157,9 +155,7 @@ else
         fail "exakit marketplace did not complete for exasol-vscode"
     fi
     _ext_live="$(
-        . "$ROOT/setup/lib/common.sh" >/dev/null 2>&1
-        . "$ROOT/setup/lib/exasol-vscode.sh" >/dev/null 2>&1
-        _exasol_vscode_live_version
+        python3 "$ROOT/marketplace/service.py" exasol-vscode installed-version
     )"
     _ext_advertised="$(
         . "$ROOT/setup/lib/common.sh" >/dev/null 2>&1
@@ -293,9 +289,7 @@ echo "  ok  venv, state and launcher removed"
 # is pinned by the unit tests.
 if [ -n "${EXAKIT_EXASOL_VSCODE_EXTDIR:-}" ] && [ -d "$EXAKIT_EXASOL_VSCODE_EXTDIR" ]; then
     _ext_after="$(
-        . "$ROOT/setup/lib/common.sh" >/dev/null 2>&1
-        . "$ROOT/setup/lib/exasol-vscode.sh" >/dev/null 2>&1
-        _exasol_vscode_live_version 2>/dev/null || true
+        python3 "$ROOT/marketplace/service.py" exasol-vscode system-present >/dev/null 2>&1 && printf 'present' || true
     )"
     [ -z "$_ext_after" ] || fail "uninstall left the kit-installed VS Code extension behind (VS Code still lists $_ext_after)"
     echo "  ok  the kit-installed VS Code extension was removed through its own hook (VS Code no longer lists it)"

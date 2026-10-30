@@ -499,7 +499,7 @@ fi
 echo "Windows parity guards:"
 if command -v pwsh >/dev/null 2>&1; then
     ps_parse="$(pwsh -NoProfile -Command '
-      $files = @("setup/lib/exakit-common.ps1","setup/lib/runtime-personal.ps1","setup/lib/mcp.ps1","setup/lib/dash-server.ps1","setup/lib/exasol-vscode.ps1","setup/lib/json-tables.ps1","setup/setup-windows.ps1","setup/exakit.ps1")
+      $files = @("setup/lib/exakit-common.ps1","setup/lib/runtime-personal.ps1","setup/lib/mcp.ps1","setup/lib/dash-server.ps1","setup/lib/json-tables.ps1","setup/setup-windows.ps1","setup/exakit.ps1")
       foreach ($f in $files) {
         $errors = $null
         $null = [System.Management.Automation.PSParser]::Tokenize((Get-Content -Raw $f), [ref]$errors)
@@ -662,16 +662,10 @@ else
     check "marketplace(twins)" "yes" "no"
 fi
 # The advertised-version resolver an add-on install needs, both sides. On the
-# shell side exakit_component_available lives in common.sh, so the setup script
-# and the CLI both have it. On the PowerShell side its twin,
-# Get-ExakitComponentAvailable, is defined in the CLI (setup/exakit.ps1) and the
-# SETUP script never loads the CLI — so an add-on Install-* that called it
-# directly died with a CommandNotFoundException the moment the closing
-# marketplace offer tried to install one, and every Windows add-on install
-# failed while macOS was fine. Get-ExakitAddonAdvertisedVersion is what answers
-# in both contexts; the Install-* functions must go through it.
+# The closing Windows offer cannot call version helpers defined only in the CLI.
+# PowerShell add-ons use the shared resolver; Python add-ons use target_version.
 if grep -q 'function Get-ExakitAddonAdvertisedVersion' "$ROOT/setup/lib/exakit-common.ps1" && \
-   grep -q 'Get-ExakitAddonAdvertisedVersion -Id "exasol-vscode"' "$ROOT/setup/lib/exasol-vscode.ps1" && \
+   grep -q 'ctx.target_version(ID, default)' "$ROOT/marketplace/addons/exasol_vscode.py" && \
    grep -q 'Get-ExakitAddonAdvertisedVersion -Id "dash-server"' "$ROOT/setup/lib/dash-server.ps1" && \
    grep -q 'exakit_component_available' "$ROOT/setup/lib/common.sh"; then
     check "marketplace(addon_version_resolver)" "yes" "yes"
