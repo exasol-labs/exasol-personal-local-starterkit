@@ -2583,7 +2583,7 @@ fi
 # ---------------------------------------------------------------------------
 echo "an installed kit follows its own source:"
 # THE BUG: EXAKIT_KIT_REPO defaulted to the published repository and never read
-# the manifest, while json_tables_mirror_repo already followed kit.source. A
+# the manifest, while the JSON Tables add-on already followed kit.source. A
 # kit installed from a fork downloaded release assets from the fork and digest
 # pins from the default - a split brain where every add-on install died on a
 # checksum mismatch that looked like corruption - and `exakit update exakit`

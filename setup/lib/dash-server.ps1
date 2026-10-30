@@ -102,7 +102,6 @@ function Get-DashServerInstalledVersion {
     #
     # Both halves, because neither alone is evidence: the record may have been
     # written by another machine, and the venv may be a half-install.
-    # Get-JsonTablesInstalledVersion already takes exactly this line.
     if (-not (Get-ExakitManifestValue "components.dash_server.version")) { return $null }
     return (Get-DashServerPackageVersion)
 }

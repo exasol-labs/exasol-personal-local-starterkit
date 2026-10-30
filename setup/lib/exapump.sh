@@ -1538,41 +1538,25 @@ _exakit_json_tables_logged() {
 }
 
 _exakit_json_tables_ready() {
-    command -v json_tables_installed_version >/dev/null 2>&1 || return 1
-    [ -n "$(json_tables_installed_version 2>/dev/null || true)" ] || return 1
+    exakit_component_current json-tables >/dev/null 2>&1 || return 1
     [ -x "$(_exakit_json_tables_bin)" ] || return 1
     return 0
 }
 
-# _exakit_json_tables_load_module — the module is sourced by the exakit CLI but
-# not by the installer, and the JSON path can be reached from either.
+# The JSON path is reachable from the CLI and the installer.
+_EXAKIT_JSON_TABLES_MODULE_READY=""
 _exakit_json_tables_load_module() {
-    command -v json_tables_install >/dev/null 2>&1 && return 0
+    [ "$_EXAKIT_JSON_TABLES_MODULE_READY" = 1 ] && return 0
     command -v _exakit_marketplace_load_modules >/dev/null 2>&1 || return 1
     _exakit_marketplace_load_modules >/dev/null 2>&1 || true
-    command -v json_tables_install >/dev/null 2>&1
+    exakit_marketplace_addon_available json-tables || return 1
+    _EXAKIT_JSON_TABLES_MODULE_READY=1
 }
 
-# _exakit_json_tables_ensure - make the JSON engine usable, saying nothing.
-# A JSON file is just data the user asked to load, so the engine it needs is an
-# implementation detail: it installs with its output in the log, under the same
-# "Loading your data" spinner as the load itself. No question is asked and no
-# install STEP is announced -- but the fact that an add-on arrived is, on one
-# line, once it has.
-#
-# Returns 0 when the engine is ready, 1 when this machine cannot have it - that
-# case still speaks up, because a silent failure is worse than a loud one.
-#
-# ONE ATTEMPT PER RUN, AND THAT IS NOT AN OPTIMISATION. This is called per FILE,
-# so a folder of ten JSON files whose engine cannot install downloaded the same
-# failing wheel ten times and printed the same three lines ten times - measured
-# at 95 seconds to load nothing, of which almost all was re-downloading a wheel
-# that had already failed its checksum. Whatever stops the engine installing is
-# the same on the second file as on the first. The memo is per-process, so the
-# next `exakit data-load` tries again.
+# Install JSON Tables on demand. Cache a failure for this command so a
+# folder load does not retry the same failed download for every file.
 _EXAKIT_JSON_TABLES_BLOCKED=""
 _exakit_json_tables_ensure() {
-    _exakit_json_tables_ready && return 0
     if [ -n "$_EXAKIT_JSON_TABLES_BLOCKED" ]; then
         warn "$_EXAKIT_JSON_TABLES_BLOCKED"
         return 1
@@ -1583,6 +1567,7 @@ _exakit_json_tables_ensure() {
         warn "This kit copy does not carry the JSON engine - update the kit first: exakit update"
         return 1
     }
+    _exakit_json_tables_ready && return 0
     if command -v _exakit_addon_applicable >/dev/null 2>&1 && \
        ! _exakit_addon_applicable json-tables; then
         _jte_why="$(_exakit_addon_applicable_reason json-tables 2>/dev/null || true)"
@@ -1606,30 +1591,7 @@ _exakit_json_tables_ensure() {
         warn "The JSON engine installed but is not usable yet - retry with: exakit data-load"
         return 1
     }
-    # Said once, and only when this run actually installed it -- the early
-    # readiness check above returns before reaching here, so a machine that
-    # already has the add-on stays quiet.
-    #
-    # An add-on the reader never chose has just appeared on their machine, and
-    # since an add-on's skills now install WITH it, a skill arrived too. Leaving
-    # both silent asks them to discover it in `exakit marketplace` later and work
-    # out where it came from. The install itself is still unannounced: this says
-    # that it happened and what it is for, not what it did.
-    #
-    # ok_step rather than ok: the load narrates on one line, which gates plain
-    # ok to the logfile, and ok_step also hands the spinner's line back before
-    # printing so this lands on a row of its own.
-    # Nothing on screen. This runs in the middle of a folder load, where the
-    # one-line progress bar owns the row and rewrites it continuously -- the
-    # line landed inside it:
-    #
-    #   ⠇ products.json (2/2)  ████████ 99% (7s)   ✓ JSON Tables installed — ...
-    #
-    # ok_step cannot help here: its ui_spin_pause looks for a SPINNER, and a
-    # progress bar is a different animator holding the same line. Announcing an
-    # add-on the reader did not choose was worth one line; it is not worth one
-    # line printed through the middle of another. The logfile keeps it, and the
-    # add-on shows as installed in `exakit marketplace` like any other.
+    # Keep the progress row intact while recording the automatic install.
     _exakit_log_file "OK    JSON Tables installed — the add-on that loads JSON into Exasol"
     return 0
 }

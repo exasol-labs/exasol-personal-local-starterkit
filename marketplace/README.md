@@ -56,6 +56,6 @@ direct `notebook`, `workflow`, `mlflow`, `rust-udf`, `udf-file`, `model`, `udf-s
 commands use Python entry points in this directory. `udf_container.py` selects
 and verifies the pinned release assets. The public CLI still loads Notebook's
 platform helper for `describe`; the workflow, Rust UDF, and MLflow command
-wrappers and the dbt-exasol, Exasol for VS Code, and Exasol Scheduler script pairs have been removed.
+wrappers and the dbt-exasol, Exasol for VS Code, Exasol Scheduler, and JSON Tables script pairs have been removed.
 Other legacy add-on script pairs remain until their compatibility checks use
 the Python backend; that cleanup is tracked in `tasks.md`.

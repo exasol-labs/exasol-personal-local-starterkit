@@ -196,25 +196,25 @@ say "8/9 json-tables installs from the kit's own mirror release and a real JSON 
 # workflow has published the advertised build the release does not exist --
 # then this stage SKIPS (with the reason) instead of failing, so the rest of
 # the e2e stays meaningful.
-_jt_repo="$(
-    . "$ROOT/setup/lib/common.sh" >/dev/null 2>&1
-    . "$ROOT/setup/lib/json-tables.sh" >/dev/null 2>&1
-    json_tables_mirror_repo
+_jt_release="$(PYTHONPATH="$ROOT/marketplace" python3 - "$ROOT" "$EXAKIT_HOME" <<'PYJSON'
+from pathlib import Path
+from addons import json_tables
+from runtime import KitContext, Manifest
+import sys
+root, home = map(Path, sys.argv[1:])
+ctx = KitContext(root, home, home / "bin", Manifest(home / "manifest.json"), Path("uv"))
+version = ctx.versions_document()["components"]["json-tables"]["version"]
+repo, tag, _ = json_tables._release_info(ctx, version)
+print(f"{repo}|{tag}")
+PYJSON
 )"
-_jt_tag="$(
-    . "$ROOT/setup/lib/common.sh" >/dev/null 2>&1
-    . "$ROOT/setup/lib/json-tables.sh" >/dev/null 2>&1
-    json_tables_release_tag
-)"
+_jt_repo="${_jt_release%%|*}"
+_jt_tag="${_jt_release#*|}"
 if ! curl -fsSIL --max-time 15 \
         "https://github.com/$_jt_repo/releases/tag/$_jt_tag" >/dev/null 2>&1; then
     echo "  SKIP  the $_jt_tag release does not exist in $_jt_repo yet"
     echo "        run the 'pkg / json-tables' workflow once, then this stage goes live"
-elif ! (
-    . "$ROOT/setup/lib/common.sh" >/dev/null 2>&1
-    . "$ROOT/setup/lib/json-tables.sh" >/dev/null 2>&1
-    json_tables_applicable
-); then
+elif ! PYTHONPATH="$ROOT/marketplace" python3 -c 'from addons import json_tables; json_tables._platform()' >/dev/null 2>&1; then
     echo "  SKIP  no prebuilt engine is published for this platform"
 else
     _jt_out="$(EXAKIT_MARKETPLACE_ADDONS=json-tables "$ROOT/setup/exakit" marketplace 2>&1)" \

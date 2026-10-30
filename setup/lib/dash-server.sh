@@ -167,8 +167,7 @@ dash_server_installed_version() {
     # "everything is already current", and starting it said "not installed" -
     # with no documented command able to recover.
     #
-    # Both halves, because neither alone is evidence. json_tables_installed_version
-    # already takes exactly this line.
+    # Require both a receipt and a usable environment.
     _dsv_recorded="$(manifest_get components.dash_server.version 2>/dev/null || true)"
     [ -n "$_dsv_recorded" ] || return 1
     dash_server_package_version

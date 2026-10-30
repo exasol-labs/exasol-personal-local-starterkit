@@ -13,7 +13,7 @@
 //! The kit ships that engine prebuilt for every platform, so nobody needs a
 //! Rust toolchain. On macOS and Linux a five-line `/bin/sh` script named
 //! `cargo` sits in front of the CLI on PATH and answers that one call - see
-//! `json_tables_write_shim` in `setup/lib/json-tables.sh`, whose behaviour this
+//! `_write_launchers` in `marketplace/addons/json_tables.py`, whose behaviour this
 //! program mirrors exactly.
 //!
 //! That trick cannot work on Windows. `subprocess.run` with an argument list

@@ -101,7 +101,7 @@ class AdapterDryRunTest(unittest.TestCase):
         engine.chmod(0o755)
         script = (f'. "{ROOT / "setup/lib/common.sh"}"\n'
                   f'. "{ROOT / "setup/lib/exapump.sh"}"\n'
-                  'json_tables_installed_version() { printf "v0.3.2\\n"; }\n'
+                  'exakit_component_current() { printf "v0.3.2\\n"; }\n'
                   '_exakit_json_tables_ready && _exakit_json_tables_logged '
                   f'"{engine}" ingest\n')
         result = subprocess.run(["bash", "-c", script], env=self._environment(),
@@ -109,6 +109,17 @@ class AdapterDryRunTest(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertIn("ingested", result.stdout)
         self.assertIn("ingested", (self.home / "logs/json-tables.log").read_text(encoding="utf-8"))
+
+    def test_bash_json_loader_registers_python_hook_once_per_run(self) -> None:
+        script = (f'. "{ROOT / "setup/lib/exapump.sh"}"\n'
+                  '_exakit_marketplace_load_modules() { printf x >> "$EXAKIT_HOME/load-count"; }\n'
+                  'exakit_marketplace_addon_available() { return 0; }\n'
+                  '_exakit_json_tables_load_module\n'
+                  '_exakit_json_tables_load_module\n')
+        result = subprocess.run(["bash", "-c", script], env=self._environment(),
+                                capture_output=True, text=True, timeout=30, check=False)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("x", (self.home / "load-count").read_text(encoding="utf-8"))
 
     def test_bash_selection_controller_streams_python_result(self) -> None:
         script = (f'. "{ROOT / "setup/lib/common.sh"}"\n'

@@ -241,7 +241,7 @@ EXAKIT_VERSIONS_URL="${EXAKIT_VERSIONS_URL:-https://raw.githubusercontent.com/${
 # repository the product is published from - right for a fresh curl|sh, and
 # silently wrong for every kit installed from a fork. The manifest records
 # where a kit really came from (kit.source), and the release assets already
-# follow it (json_tables_mirror_repo) - but these URLs kept pointing at the
+# follow it through the JSON Tables add-on - but these URLs kept pointing at the
 # default. The result was a split brain no fork install could verify: add-on
 # assets downloaded from the fork, digest pins fetched from the default, and
 # every install ending in a checksum mismatch that looked like corruption.

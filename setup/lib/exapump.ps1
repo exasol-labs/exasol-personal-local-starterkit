@@ -1452,7 +1452,7 @@ function Request-ExakitOptionalVerification {
 # Get-ExakitDataFileKind <path> - csv | parquet | json | unknown, from the
 # name. Twin of exakit_data_file_kind in exapump.sh. A JSON file needs the
 # ingest engine rather than exapump, which is why it is named separately:
-# Windows x86_64 runs that engine (see Get-JsonTablesEngineAsset), so the kind
+# Windows x86_64 runs that engine, so the kind
 # routes the file, and only a machine with no published engine refuses it.
 function Get-ExakitDataFileKind {
     param([Parameter(Mandatory)][string]$Path)
@@ -1551,7 +1551,7 @@ function Show-ExakitJsonUnsupported {
 }
 
 # --- JSON loading ------------------------------------------------------------
-# Windows x86_64 CAN run the ingest engine - Get-JsonTablesEngineAsset publishes
+# Windows x86_64 can run the ingest engine; the Python add-on publishes
 # a build for it, which is why the add-on is offered and installable here - but
 # this side had no twin of the shell's JSON load path at all, so every .json
 # file was refused on every Windows machine. The refusal even contradicted
@@ -2360,7 +2360,7 @@ function Get-ExakitBulkFileKind {
 # JSON is planned as load|json on a machine that can have the JSON Tables engine
 # (Windows x86_64) and loaded through Import-ExakitLocalJson, as a single JSON
 # file is. Elsewhere (ARM64) it is reported as json-unsupported with
-# Get-JsonTablesApplicableReason - the same answer a single JSON file gets.
+# the Python add-on's applicable reason - the same answer a single JSON file gets.
 #
 # Files are ordered by ORDINAL bytes, not by the machine's culture, so which of
 # two duplicates wins is the same answer on every machine - the twin sorts with

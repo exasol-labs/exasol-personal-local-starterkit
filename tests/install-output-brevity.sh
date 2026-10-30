@@ -420,8 +420,6 @@ printf '\n== a reference card is not part of an add-on install ==\n'
 # each one's real panel steps aside under the quiet flag.
 # shellcheck source=/dev/null
 . "$ROOT/setup/lib/dash-server.sh"
-# shellcheck source=/dev/null
-. "$ROOT/setup/lib/json-tables.sh"
 _exakit_marketplace_python_hooks
 
 : > "$EXAKIT_LOG_FILE"
@@ -430,12 +428,6 @@ check "the dash-server panel steps aside" "" "$PANEL_QUIET"
 has "...leaving its address in the log" "dash-server: http://127.0.0.1:" "$(cat "$EXAKIT_LOG_FILE")"
 PANEL_LOUD="$(_dash_server_print_usage 2>&1)"
 has "and it still prints outside an install" "MCP endpoint" "$PANEL_LOUD"
-
-: > "$EXAKIT_LOG_FILE"
-JT_QUIET="$(EXAKIT_QUIET_DETAIL=1 _json_tables_print_usage 2>&1)"
-check "the JSON Tables panel steps aside" "" "$JT_QUIET"
-has "...leaving its command in the log" "exasol-json-tables ingest" "$(cat "$EXAKIT_LOG_FILE")"
-has "and it still prints outside an install" "Ingest JSON" "$(_json_tables_print_usage 2>&1)"
 
 printf '\n== ...but its one useful fact rides out on the result line ==\n'
 
@@ -467,12 +459,11 @@ lacks "...nor on Windows"            "how to use one: exakit help <add-on>" "$CO
 printf '\n== the PowerShell twin does the same ==\n'
 
 DS_PS1="$(cat "$ROOT/setup/lib/dash-server.ps1")"
-JT_PS1="$(cat "$ROOT/setup/lib/json-tables.ps1")"
+JT_PY="$(cat "$ROOT/marketplace/addons/json_tables.py")"
 VS_PY="$(cat "$ROOT/marketplace/addons/exasol_vscode.py")"
 has "dash-server gates its panel"   'if ($script:ExakitQuietDetail) {' "$DS_PS1"
-has "json-tables gates its panel"   'if ($script:ExakitQuietDetail) {' "$JT_PS1"
 has "dash-server has a summary"     'function Get-DashServerSummary'     "$DS_PS1"
-has "json-tables has a summary"     'function Get-JsonTablesSummary'     "$JT_PS1"
+has "json-tables has a summary"     'def summary('                      "$JT_PY"
 has "exasol-vscode has a summary"   'def summary('                      "$VS_PY"
 has "exasol-scheduler has a summary" 'def summary(' "$(cat "$ROOT/marketplace/addons/exasol_scheduler.py")"
 has "dbt-exasol has a summary"      'def summary('                      "$(cat "$ROOT/marketplace/addons/dbt_exasol.py")"

@@ -14,6 +14,7 @@ import sys
 import tarfile
 import tempfile
 import urllib.request
+from urllib.error import HTTPError
 from pathlib import Path, PurePosixPath
 
 from runtime import AddonFailure, KitContext, venv_python
@@ -81,7 +82,12 @@ def _package_ok(ctx: KitContext) -> bool:
 
 def installed_version(ctx: KitContext) -> str | None:
     version = ctx.manifest.get(f"{RECEIPT}.version")
-    return version if version and _engine(ctx).is_file() and _package_ok(ctx) else None
+    if not version:
+        return None
+    complete = _engine(ctx).is_file() and _package_ok(ctx)
+    if platform.system() == "Windows":
+        complete = complete and _shim(ctx).is_file()
+    return version if version and complete else None
 
 
 def system_present(ctx: KitContext) -> bool:
@@ -107,7 +113,10 @@ def _release_info(ctx: KitContext, version: str) -> tuple[str, str, dict]:
     same = version == pinned.get("version")
     tag = os.environ.get("EXAKIT_JSON_TABLES_MIRROR_TAG") or (pinned.get("release") if same else None) or f"json-tables-{version}"
     source = ctx.manifest.get("kit.source", "")
-    repo = os.environ.get("EXAKIT_JSON_TABLES_MIRROR_REPO") or (source.split("@", 1)[0] if "/" in source else None) or os.environ.get("EXAKIT_KIT_REPO", "exasol-labs/exasol-personal-local-starterkit")
+    source_repo = source.split("@", 1)[0]
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", source_repo):
+        source_repo = None
+    repo = os.environ.get("EXAKIT_JSON_TABLES_MIRROR_REPO") or source_repo or os.environ.get("EXAKIT_KIT_REPO", "exasol-labs/exasol-personal-local-starterkit")
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repo) or not re.fullmatch(r"[A-Za-z0-9_.-]+", tag):
         raise AddonFailure("Invalid JSON Tables release source")
     return repo, tag, pinned if same and not os.environ.get("EXAKIT_JSON_TABLES_MIRROR_TAG") else {}
@@ -115,9 +124,25 @@ def _release_info(ctx: KitContext, version: str) -> tuple[str, str, dict]:
 
 def _api_assets(repo: str, tag: str) -> dict[str, dict]:
     url = f"https://api.github.com/repos/{repo}/releases/tags/{tag}"
-    with urllib.request.urlopen(url, timeout=20) as response:
-        doc = json.load(response)
-    return {asset["name"]: asset for asset in doc.get("assets", []) if isinstance(asset.get("name"), str)}
+    headers = {"Accept": "application/vnd.github+json"}
+    if token := os.environ.get("GITHUB_TOKEN"):
+        headers["Authorization"] = f"Bearer {token}"
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=20) as response:
+            doc = json.load(response)
+    except (ValueError, TypeError) as error:
+        raise AddonFailure("Malformed JSON Tables release metadata") from error
+    except HTTPError as error:
+        if error.code == 404:
+            raise AddonFailure(f"JSON Tables release {tag} was not found in {repo}; run the pkg / json-tables workflow") from error
+        if error.code in (403, 429):
+            raise AddonFailure("GitHub refused the JSON Tables release lookup; retry later or set GITHUB_TOKEN") from error
+        raise AddonFailure(f"JSON Tables release lookup failed (HTTP {error.code})") from error
+    assets = doc.get("assets") if isinstance(doc, dict) else None
+    if not isinstance(assets, list):
+        raise AddonFailure("Malformed JSON Tables release metadata")
+    return {asset["name"]: asset for asset in assets
+            if isinstance(asset, dict) and isinstance(asset.get("name"), str)}
 
 
 def _asset(ctx: KitContext, repo: str, tag: str, name: str, key: str, pins: dict,
@@ -128,7 +153,11 @@ def _asset(ctx: KitContext, repo: str, tag: str, name: str, key: str, pins: dict
         if isinstance(published, str) and published.startswith("sha256:"):
             digest = published[7:]
     if not digest and os.environ.get("EXAKIT_ALLOW_UNVERIFIED_JSON_TABLES") != "1":
-        raise AddonFailure(f"No trusted checksum for JSON Tables asset {name}")
+        raise AddonFailure(
+            f"No trusted checksum for JSON Tables asset {name}. Retry with exakit update json-tables; "
+            f"the pin belongs in versions.json (components.json-tables.sha256.{key}). "
+            "A maintainer may explicitly set EXAKIT_ALLOW_UNVERIFIED_JSON_TABLES=1 for an unverified install"
+        )
     if digest and not re.fullmatch(r"[0-9a-f]{64}", digest):
         raise AddonFailure(f"Invalid checksum for JSON Tables asset {name}")
     url = f"https://github.com/{repo}/releases/download/{tag}/{name}"
@@ -237,7 +266,10 @@ def install(ctx: KitContext) -> None:
     engine_name = f"exasol-json-tables-ingest-{platform_key}" + (".exe" if system == "windows" else "")
     assets = None
     wheel_name = pins.get("wheel")
-    if not wheel_name or not pins.get("sha256", {}).get(platform_key):
+    required_digests = ("wheel", platform_key)
+    if system == "windows":
+        required_digests += ("cargo-windows-x86_64",)
+    if not wheel_name or any(not pins.get("sha256", {}).get(key) for key in required_digests):
         try:
             assets = _api_assets(repo, tag)
         except OSError as error:

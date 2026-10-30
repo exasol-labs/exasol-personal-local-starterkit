@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from urllib.error import HTTPError
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -117,6 +118,18 @@ class AddonSafetyTest(unittest.TestCase):
         self.assertIn(f"Checksum verified: engine.bin sha256:{digest}",
                       (self.home / "logs" / "marketplace.log").read_text(encoding="utf-8"))
 
+    def test_json_missing_digest_refuses_before_download_with_remedy(self) -> None:
+        target = self.home / "engine.bin"
+        with patch.dict(os.environ, {"EXAKIT_ALLOW_UNVERIFIED_JSON_TABLES": ""}), \
+             patch.object(json_tables.urllib.request, "urlopen") as fetch:
+            with self.assertRaises(AddonFailure) as failure:
+                json_tables._asset(self.ctx, "owner/repo", "tag", "engine.bin", "linux-x86_64",
+                                   {}, None, target)
+        self.assertIn("exakit update json-tables", str(failure.exception))
+        self.assertIn("EXAKIT_ALLOW_UNVERIFIED_JSON_TABLES=1", str(failure.exception))
+        self.assertFalse(target.exists())
+        fetch.assert_not_called()
+
     def test_json_external_install_is_not_removed(self) -> None:
         self.manifest.set_many({"components.json_tables.ownership": "user"})
         with patch.object(KitContext, "require_uv") as uv:
@@ -124,6 +137,48 @@ class AddonSafetyTest(unittest.TestCase):
         uv.assert_not_called()
         with self.assertRaisesRegex(AddonFailure, "not kit-owned"):
             json_tables.uninstall(self.ctx)
+
+    def test_json_windows_missing_binary_shim_is_incomplete(self) -> None:
+        self.manifest.set_many({"components.json_tables.version": "v0.3.2",
+                                "components.json_tables.ownership": "kit"})
+        engine = self.home / "json-tables/libexec/json_to_parquet.exe"
+        engine.parent.mkdir(parents=True)
+        engine.write_bytes(b"engine")
+        shim = self.home / "json-tables/shim/cargo.exe"
+        with patch.object(json_tables, "_engine", return_value=engine), \
+             patch.object(json_tables, "_shim", return_value=shim), \
+             patch.object(json_tables, "_package_ok", return_value=True), \
+             patch.object(json_tables.platform, "system", return_value="Windows"):
+            self.assertIsNone(json_tables.installed_version(self.ctx))
+            shim.parent.mkdir(parents=True)
+            shim.write_bytes(b"shim")
+            self.assertEqual("v0.3.2", json_tables.installed_version(self.ctx))
+
+    def test_json_uninstalled_probe_does_not_start_python(self) -> None:
+        with patch.object(json_tables, "_package_ok") as package:
+            self.assertIsNone(json_tables.installed_version(self.ctx))
+        package.assert_not_called()
+
+    def test_json_release_lookup_uses_token_and_distinguishes_refusal(self) -> None:
+        response = io.BytesIO(b'{"assets": [{"name": "engine.bin", "digest": "sha256:abc"}]}')
+        with patch.dict(os.environ, {"GITHUB_TOKEN": "private-test-token"}), \
+             patch.object(json_tables.urllib.request, "urlopen", return_value=response) as fetch:
+            assets = json_tables._api_assets("owner/repo", "json-tables-v1")
+        self.assertIn("engine.bin", assets)
+        request = fetch.call_args.args[0]
+        self.assertEqual("Bearer private-test-token", request.get_header("Authorization"))
+        for code, guidance in ((403, "GITHUB_TOKEN"), (404, "pkg / json-tables")):
+            error = HTTPError("https://api.github.com", code, "failed", {}, None)
+            with self.subTest(code=code), patch.object(json_tables.urllib.request, "urlopen", side_effect=error):
+                with self.assertRaisesRegex(AddonFailure, guidance):
+                    json_tables._api_assets("owner/repo", "json-tables-v1")
+
+    def test_json_release_lookup_rejects_malformed_metadata(self) -> None:
+        for content in (b"not JSON", b'{"assets": {}}'):
+            with self.subTest(content=content), \
+                 patch.object(json_tables.urllib.request, "urlopen", return_value=io.BytesIO(content)):
+                with self.assertRaisesRegex(AddonFailure, "Malformed JSON Tables release metadata"):
+                    json_tables._api_assets("owner/repo", "json-tables-v1")
 
     def test_vscode_reuses_user_extension_without_download(self) -> None:
         with patch.object(exasol_vscode, "system_present", return_value=True), \

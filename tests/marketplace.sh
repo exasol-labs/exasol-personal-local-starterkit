@@ -117,7 +117,6 @@ export EXAKIT_ABOUT_OFFLINE
 . "$ROOT/setup/lib/common.sh"
 _exakit_marketplace_python_hooks
 . "$ROOT/setup/lib/dash-server.sh"
-. "$ROOT/setup/lib/json-tables.sh"
 
 # ...and its own port. The default 5100 is where a developer's REAL dash-server
 # listens, and the ownership probe would rightly call that a foreign process
@@ -1072,143 +1071,9 @@ has "its one-liner says what the add-on does" "JSON" \
 lacks "and does not mention the Rust toolchain" "Rust" \
     "$(exakit_marketplace_addon_description json-tables)"
 
-# The asset name is the contract between the packaging workflow and the
-# installer: a mismatch means every download 404s. Pin both halves.
-_jt_asset() { ( detect_os() { printf '%s\n' "$1"; }; detect_arch() { printf '%s\n' "$2"; }
-    json_tables_engine_asset 2>/dev/null || printf 'NONE\n' ); }
-check "macOS arm64 asks for the macos-aarch64 engine" "exasol-json-tables-ingest-macos-aarch64" \
-    "$( ( detect_os() { printf 'macos\n'; }; detect_arch() { printf 'arm64\n'; }; json_tables_engine_asset ) )"
-check "Linux x86_64 asks for the linux-x86_64 engine" "exasol-json-tables-ingest-linux-x86_64" \
-    "$( ( detect_os() { printf 'linux\n'; }; detect_arch() { printf 'x86_64\n'; }; json_tables_engine_asset ) )"
-check "Linux arm64 asks for the linux-aarch64 engine" "exasol-json-tables-ingest-linux-aarch64" \
-    "$( ( detect_os() { printf 'linux\n'; }; detect_arch() { printf 'arm64\n'; }; json_tables_engine_asset ) )"
-# WSL IS Linux and runs the linux engine. detect_os reports it as a platform of
-# its own because the INSTALLER needs that distinction (WSL is refused, /mnt
-# paths) — but an artifact lookup does not, and one that fails to fold it back
-# into linux hides the add-on from every WSL machine, with a "no prebuilt engine
-# for this platform" reason that is not true.
-check "WSL x86_64 asks for the linux-x86_64 engine" "exasol-json-tables-ingest-linux-x86_64" \
-    "$( ( detect_os() { printf 'wsl\n'; }; detect_arch() { printf 'x86_64\n'; }; json_tables_engine_asset ) )"
-check "WSL arm64 asks for the linux-aarch64 engine" "exasol-json-tables-ingest-linux-aarch64" \
-    "$( ( detect_os() { printf 'wsl\n'; }; detect_arch() { printf 'arm64\n'; }; json_tables_engine_asset ) )"
-check "and WSL is therefore OFFERED, not hidden" "offered" \
-    "$( ( detect_os() { printf 'wsl\n'; }; detect_arch() { printf 'x86_64\n'; }
-        json_tables_applicable && printf 'offered\n' || printf 'hidden\n' ) )"
-# An Intel Mac has no published engine and building one needs the toolchain the
-# add-on exists to avoid: it must be HIDDEN, not offered and then failed.
-check "an Intel Mac is not applicable" "hidden" \
-    "$( ( detect_os() { printf 'macos\n'; }; detect_arch() { printf 'x86_64\n'; }
-        json_tables_applicable && printf 'offered\n' || printf 'hidden\n' ) )"
-has "and says why, in terms the user can act on" "no prebuilt ingest engine" \
-    "$( ( detect_os() { printf 'macos\n'; }; detect_arch() { printf 'x86_64\n'; }
-        json_tables_applicable_reason ) )"
-
-# The mirror must be looked up where THIS kit came from: a user who installed
-# from a fork gets that fork's mirror release, not the canonical repo's (which
-# may not have one). Explicit override still wins; a checkout falls back.
-check "the mirror follows the recorded install source" "some-fork/update-path" "$( (
-    manifest_set kit.source "some-fork/update-path@main" >/dev/null 2>&1
-    json_tables_mirror_repo
-) )"
-check "an explicit mirror override wins over the source" "elsewhere/mirror" "$( (
-    manifest_set kit.source "some-fork/update-path@main" >/dev/null 2>&1
-    EXAKIT_JSON_TABLES_MIRROR_REPO="elsewhere/mirror"
-    json_tables_mirror_repo
-) )"
-check "a checkout install falls back to the kit repo" "$EXAKIT_KIT_REPO" "$( (
-    manifest_set kit.source "checkout:/tmp/somewhere" >/dev/null 2>&1
-    json_tables_mirror_repo
-) )"
-
-# The shim is the whole no-Rust story. Upstream's ONLY engine call is
-#   cargo run --manifest-path <...>/json_tables_ingest/Cargo.toml -- <engine argv>
-# so the shim must hand <engine argv> to the prebuilt binary verbatim: an extra
-# or dropped argument here is a broken ingest for every user.
-_jt_shim="$( (
-    EXAKIT_JSON_TABLES_HOME="$WORK/jt"
-    mkdir -p "$WORK/jt/libexec"
-    printf '#!/bin/sh\nprintf "ARGV"; for a in "$@"; do printf " <%%s>" "$a"; done; printf "\\n"\n' \
-        > "$WORK/jt/libexec/json_to_parquet"
-    chmod 755 "$WORK/jt/libexec/json_to_parquet"
-    json_tables_write_shim >/dev/null 2>&1
-    "$WORK/jt/shim/cargo" run --manifest-path /x/crates/json_tables_ingest/Cargo.toml \
-        -- --input /tmp/a.json --output-dir /tmp/out --schema-sql
-) )"
-check "the shim replays the engine argv exactly" \
-    "ARGV <--input> </tmp/a.json> <--output-dir> </tmp/out> <--schema-sql>" "$_jt_shim"
-# A user with their own cargo must keep it: the shim is only ever on PATH
-# inside our launcher, and even there it must not swallow unrelated commands.
-_jt_passthru="$( (
-    EXAKIT_JSON_TABLES_HOME="$WORK/jt2"
-    mkdir -p "$WORK/jt2/libexec" "$WORK/real-cargo"
-    printf '#!/bin/sh\necho REAL-CARGO "$@"\n' > "$WORK/real-cargo/cargo"
-    chmod 755 "$WORK/real-cargo/cargo"
-    : > "$WORK/jt2/libexec/json_to_parquet"; chmod 755 "$WORK/jt2/libexec/json_to_parquet"
-    json_tables_write_shim >/dev/null 2>&1
-    PATH="$WORK/jt2/shim:$WORK/real-cargo" "$WORK/jt2/shim/cargo" build --release
-) )"
-check "anything else reaches the real cargo untouched" "REAL-CARGO build --release" "$_jt_passthru"
-
-_jt_launcher="$( (
-    EXAKIT_JSON_TABLES_HOME="$WORK/jt3"
-    EXAKIT_JSON_TABLES_VENV="$WORK/jt3-venv"
-    EXAKIT_JSON_TABLES_BIN="$WORK/bin/exasol-json-tables"
-    json_tables_write_launcher >/dev/null 2>&1
-    grep -c "$WORK/jt3/shim" "$WORK/bin/exasol-json-tables"
-    grep -c "$WORK/jt3-venv/bin/exasol-json-tables" "$WORK/bin/exasol-json-tables"
-) )"
-check "the launcher fronts PATH with the shim and runs the venv CLI" "1
-1" "$_jt_launcher"
-
-# Half an install is not an install: a venv whose engine never arrived would
-# pass an import check and then fail at the first ingest.
-_jt_half="$( (
-    EXAKIT_JSON_TABLES_VENV="$WORK/jt-half-venv"
-    EXAKIT_JSON_TABLES_HOME="$WORK/jt-half"
-    mkdir -p "$WORK/jt-half-venv/bin"
-    rm -f "$WORK/jt-half-venv/bin/python"
-    printf '#!/bin/sh\nexit 0\n' > "$WORK/jt-half-venv/bin/python"; chmod 755 "$WORK/jt-half-venv/bin/python"
-    manifest_set components.json_tables.version 50d05da0f6da >/dev/null 2>&1
-    json_tables_installed_version >/dev/null 2>&1 && printf 'installed\n' || printf 'not installed\n'
-) )"
-check "a venv without the engine does not count as installed" "not installed" "$_jt_half"
-
-# The mirror release is published by our own workflow. Until it exists the
-# add-on must fail SOFT and name the fix, never end the caller's run.
-_jt_missing="$( (
-    EXAKIT_JSON_TABLES_MIRROR_TAG="does-not-exist-$$"
-    # The module chooses its sentence from the HTTP status the release lookup
-    # recorded, so the stub has to leave that record behind the way a real 404
-    # would -- a bare "return 1" is "GitHub could not be reached", which names
-    # the network, not the workflow.
-    _json_tables_mirror_wheel_name() {
-        _jtm_c="$(_json_tables_mirror_cache_file 2>/dev/null || printf '%s' "$EXAKIT_JSON_TABLES_MIRROR_CACHE")"
-        mkdir -p "$(dirname "$_jtm_c")"; printf '404' > "$_jtm_c.http"; return 1; }
-    exakit_ensure_uv() { return 0; }
-    EXAKIT_UV_BIN="$WORK/bin/uv"; printf '#!/bin/sh\nexit 0\n' > "$WORK/bin/uv"; chmod 755 "$WORK/bin/uv"
-    detect_os() { printf 'linux\n'; }; detect_arch() { printf 'x86_64\n'; }
-    json_tables_install 2>&1 | tr '\n' ' '
-    printf 'rc=%s' "$?"
-) )"
-has "a missing mirror release names the workflow to run" "pkg / json-tables" "$_jt_missing"
-has "and stays a soft failure" "Everything else in the kit is unaffected" "$_jt_missing"
-
-_jt_uninst="$( (
-    EXAKIT_JSON_TABLES_VENV="$WORK/jt-u-venv"
-    EXAKIT_JSON_TABLES_HOME="$WORK/jt-u"
-    EXAKIT_JSON_TABLES_BIN="$WORK/bin/exasol-json-tables-u"
-    mkdir -p "$EXAKIT_JSON_TABLES_VENV" "$EXAKIT_JSON_TABLES_HOME"
-    : > "$EXAKIT_JSON_TABLES_BIN"
-    manifest_set components.json_tables.version 50d05da0f6da >/dev/null 2>&1
-    json_tables_uninstall 1 >/dev/null 2>&1
-    [ -d "$EXAKIT_JSON_TABLES_VENV" ] && printf 'dry-kept '
-    json_tables_uninstall 0 >/dev/null 2>&1
-    for _p in "$EXAKIT_JSON_TABLES_VENV" "$EXAKIT_JSON_TABLES_HOME" "$EXAKIT_JSON_TABLES_BIN"; do
-        [ -e "$_p" ] && printf 'LEFT ' || printf 'gone '
-    done
-    manifest_get components.json_tables.version >/dev/null 2>&1 && printf 'record' || printf 'cleared'
-) )"
-check "uninstall keeps a dry run, then removes every part" "dry-kept gone gone gone cleared" "$_jt_uninst"
+# Release pins, platform selection, shim forwarding, and retry behavior are
+# exercised against the Python add-on in test_marketplace_json_tables.py.
+check "the JSON Tables add-on is implemented in Python" "yes"     "$([ -f "$ROOT/marketplace/addons/json_tables.py" ] && echo yes || echo no)"
 
 echo "manual installs are never re-offered:"
 # A tool the user installed themselves is "present": the marketplace must not
@@ -1262,10 +1127,6 @@ check "the advertised version comes from versions.json, without the network" \
     curl() { printf 'NETWORK\n' >&2; return 7; }
     exakit_component_latest json-tables 2>&1
 ) )"
-check "with nothing advertised the module's fallback answers, not a guess" "$EXAKIT_JSON_TABLES_VERSION_FALLBACK" "$( (
-    exakit_versions_value() { return 1; }
-    exakit_component_latest json-tables 2>/dev/null
-) )"
 echo "data-load's default row when every bundled dataset is in:"
 # THE BUG: with nothing left to load from the bundle, the pre-selected row was
 # the final "Skip" one -- so Enter did nothing, on the one
@@ -1318,8 +1179,8 @@ check "file kinds are classified from the name" "csv parquet json json json csv 
 # Not applicable on this platform: the add-on is not even offered, and the
 # reason names the platform rather than leaving the user guessing.
 _jl_unsupported="$( (
-    json_tables_installed_version() { return 1; }
-    json_tables_applicable() { return 1; }
+    exakit_component_current() { return 1; }
+    _exakit_addon_applicable() { return 1; }
     exapump_upload() { printf 'UPLOAD-CALLED\n'; }
     exakit_load_local_json "$WORK/sample.json" "STARTER_KIT.SAMPLE" 2>&1
 ) )"
@@ -1378,7 +1239,7 @@ chmod 755 "$WORK/jt-probe/exasol-json-tables"
 _jl_pretty="$( (
     EXAKIT_JSON_TABLES_BIN="$WORK/jt-probe/exasol-json-tables"
     JT_PROBE_LINES="$WORK/probe-lines"; export JT_PROBE_LINES
-    json_tables_installed_version() { printf '50d05da0f6da\n'; }
+    exakit_component_current() { printf '50d05da0f6da\n'; }
     run_logged() { "$@" >/dev/null 2>&1; }
     info() { :; }; ok() { :; }
     exakit_ensure_schema() { :; }
@@ -1392,7 +1253,7 @@ check "and the engine is handed one document per line" "1" "$(cat "$WORK/probe-l
 _jl_nd="$( (
     EXAKIT_JSON_TABLES_BIN="$WORK/jt-probe/exasol-json-tables"
     JT_PROBE_LINES="$WORK/probe-lines-nd"; export JT_PROBE_LINES
-    json_tables_installed_version() { printf '50d05da0f6da\n'; }
+    exakit_component_current() { printf '50d05da0f6da\n'; }
     run_logged() { "$@" >/dev/null 2>&1; }
     info() { :; }; ok() { :; }
     exakit_ensure_schema() { :; }
@@ -1404,7 +1265,7 @@ check "NDJSON is passed through untouched" "2" "$(cat "$WORK/probe-lines-nd" 2>/
 
 _jl_broken="$( (
     EXAKIT_JSON_TABLES_BIN="$WORK/jt-probe/exasol-json-tables"
-    json_tables_installed_version() { printf '50d05da0f6da\n'; }
+    exakit_component_current() { printf '50d05da0f6da\n'; }
     run_logged() { "$@" >/dev/null 2>&1; }
     exapump_upload() { printf 'UPLOAD-CALLED\n'; }
     exakit_verify_loaded_table() { :; }
@@ -1447,7 +1308,7 @@ has "and the data still lands" "UPLOAD:STARTER_KIT.SAMPLE" "$_jl_silent"
 
 _jl_one="$( (
     EXAKIT_JSON_TABLES_BIN="$WORK/jt-bin/exasol-json-tables"
-    json_tables_installed_version() { printf '50d05da0f6da\n'; }
+    exakit_component_current() { printf '50d05da0f6da\n'; }
     run_logged() { "$@" >/dev/null 2>&1; }
     info() { :; }; ok() { :; }
     exakit_ensure_schema() { printf 'SCHEMA:%s ' "$1"; }
@@ -1463,7 +1324,7 @@ check "one table: ingested, then loaded and verified" \
 _jl_many="$( (
     EXAKIT_JSON_TABLES_BIN="$WORK/jt-bin/exasol-json-tables"
     JT_STUB_TABLES=1; export JT_STUB_TABLES
-    json_tables_installed_version() { printf '50d05da0f6da\n'; }
+    exakit_component_current() { printf '50d05da0f6da\n'; }
     run_logged() { "$@" >/dev/null 2>&1; }
     info() { :; }; ok() { :; }
     exakit_ensure_schema() { printf 'SCHEMA:%s ' "$1"; }
@@ -1478,7 +1339,7 @@ check "every table from a nested document lands, under the name you gave" \
 # A failed ingest must leave the database alone and name the log.
 _jl_failed="$( (
     EXAKIT_JSON_TABLES_BIN="$WORK/jt-bin/exasol-json-tables"
-    json_tables_installed_version() { printf '50d05da0f6da\n'; }
+    exakit_component_current() { printf '50d05da0f6da\n'; }
     run_logged() { return 1; }
     exapump_upload() { printf 'UPLOAD-CALLED\n'; }
     exakit_load_local_json "$WORK/sample.json" "STARTER_KIT.SAMPLE" 2>&1
@@ -1701,26 +1562,11 @@ echo "a refused lookup is not a missing release:"
 # 403: its API allows 60 calls an hour unauthenticated, and a full install spends
 # them. `curl -f` turns any 4xx into an empty body, so a refusal and an absence
 # were indistinguishable, and the remedy named was work that changes nothing.
-JT_SH="$(cat "$ROOT/setup/lib/json-tables.sh")"
-JT_PS="$(cat "$ROOT/setup/lib/json-tables.ps1")"
+JT_PY="$(cat "$ROOT/marketplace/addons/json_tables.py")"
+has "the release lookup accepts a GitHub token" 'GITHUB_TOKEN' "$JT_PY"
+has "a refused lookup names the retry" 'retry later or set GITHUB_TOKEN' "$JT_PY"
+has "a missing release names its workflow" 'pkg / json-tables' "$JT_PY"
 CO_SH="$(cat "$ROOT/setup/lib/common.sh")"
-has "the shell records the HTTP status"  'EXAKIT_JSON_TABLES_MIRROR_HTTP=' "$JT_SH"
-has "...and no longer uses curl -f"      'set -- -sSL --retry 3'          "$JT_SH"
-# ONE request serves all three callers. Each reaches the release through $( ),
-# so the cache and the status both have to be FILES: a variable would be set in
-# a subshell and thrown away, which is the original bug wearing a cache.
-check "the release is fetched from one place only" "1" \
-    "$(grep -c 'api.github.com' "$ROOT/setup/lib/json-tables.sh")"
-has "the document is cached in a file"   'EXAKIT_JSON_TABLES_MIRROR_CACHE=' "$JT_SH"
-has "...and so is the status"            '> "$_jmr_c.http"'                 "$JT_SH"
-has "...which the caller reads back"     'cat "$(_json_tables_mirror_cache_file).http"' "$JT_SH"
-lacks "a refusal is never cached"        'printf %s "$_jmr_http" > "$_jmr_c" ' "$JT_SH"
-has "...and answers 403 differently"     '403|429)'                       "$JT_SH"
-has "...while keeping the 404 remedy"    'pkg / json-tables'              "$JT_SH"
-has "the twin records it too"            'JsonTablesMirrorHttp'           "$JT_PS"
-has "...and branches on 403"             '-eq "403"'                      "$JT_PS"
-has "a token is honoured on the shell"   'Bearer $GITHUB_TOKEN'           "$JT_SH"
-has "...and on Windows"                  'Bearer $($env:GITHUB_TOKEN)'    "$JT_PS"
 # The failure is said ONCE: the row says it, the module's own reason said why,
 # and the note under the table is gone. Asserted on what replaced it, not on the
 # wording that was removed -- that wording had already been changed once by
@@ -1883,13 +1729,11 @@ has   "a pinned add-on's already-current line is qualified under latest" "the bu
 check "...and says nothing under the manifest policy"   "" "$(EXAKIT_VERSION_POLICY=manifest exakit_pinned_latest_note json-tables)"
 check "...or for an add-on that is looked up upstream"  "" "$(EXAKIT_VERSION_POLICY=latest exakit_pinned_latest_note dash-server)"
 check "...the scheduler included"                       "" "$(EXAKIT_VERSION_POLICY=latest exakit_pinned_latest_note exasol-scheduler)"
-has   "json-tables' updater carries the note"           'exakit_pinned_latest_note json-tables'      "$(cat "$ROOT/setup/lib/json-tables.sh")"
 has "...and MARKETPLACE.md says the same"            'exakit_component_latest_source' "$(cat "$ROOT/MARKETPLACE.md")"
 _pin_ps_common="$(cat "$ROOT/setup/lib/exakit-common.ps1")"
 has "the Windows registry answers the same source question" 'function Get-ExakitComponentLatestSource' "$_pin_ps_common"
 has "...with the same note"                                 'function Get-ExakitPinnedLatestNote'      "$_pin_ps_common"
 has "the Windows source line names the pinned add-ons"      'Write-ExakitPinnedLine'                    "$(cat "$ROOT/setup/exakit.ps1")"
-has   "the Windows json-tables updater qualifies its line"  'Get-ExakitPinnedLatestNote "json-tables"'      "$(cat "$ROOT/setup/lib/json-tables.ps1")"
 
 echo
 echo "exasol-scheduler release metadata:"
@@ -1901,8 +1745,8 @@ has "CI checks upstream archives" 'exasol_scheduler-v${version}-${platform}.tar.
 
 echo "the Windows registry dispatches the same per-add-on hooks as the shell:"
 # THE PARITY GAP THIS PINS: the PS registry had no field for the per-add-on
-# hooks the shell registry dispatches to. Get-JsonTablesSystemPresent and
-# Get-ExasolSchedulerSystemPresent were dead code, exasol-vscode had no
+# hooks the shell registry dispatches to. The add-on detectors were dead code,
+# and exasol-vscode had no
 # Windows detector at all (the kit adopted and later DELETED a user's own
 # Marketplace extension), "never offered twice" held on three platforms and
 # failed on Windows, and "latest" was always empty there so the update check
@@ -1923,23 +1767,6 @@ has "the latest lookup dispatches the hook first"   '$addon.LatestFn' "$COMMON_P
 check "dash-server.ps1 reads the recorded port back" "1" \
     "$(grep -c 'Get-ExakitManifestValue "components.dash_server.port"' "$ROOT/setup/lib/dash-server.ps1")"
 has "...resolved before every entry point" 'function Resolve-DashServerPort' "$(cat "$ROOT/setup/lib/dash-server.ps1")"
-
-# ADD-09: json_tables_update returns early when the installed build already IS
-# the advertised one; Update-JsonTables had no such comparison and no
-# already-installed guard behind it, so `exakit update` on Windows re-downloaded
-# the wheel, the ingest engine and the compiled cargo shim on every run while
-# macOS and Linux did nothing. The two halves also have to AGREE in the sentence
-# an agent parses.
-JT_PS_TP="$(cat "$ROOT/setup/lib/json-tables.ps1")"
-JT_SH_TP="$(cat "$ROOT/setup/lib/json-tables.sh")"
-has "Update-JsonTables compares the installed build" \
-    '$current -and $current -eq $available' "$JT_PS_TP"
-has "...and stops instead of re-downloading" \
-    'Ok ("JSON Tables is already current ($current)"' "$JT_PS_TP"
-has "...rewriting the launcher first, like the shell half" \
-    '[void](Write-JsonTablesLauncher)' "$JT_PS_TP"
-has "the shell half says the same words" \
-    'JSON Tables is already current' "$JT_SH_TP"
 
 # ADD-11: the code CLI drains inherited stdin, which ate the marketplace's own
 # row loop and silently dropped every add-on listed after exasol-vscode. The

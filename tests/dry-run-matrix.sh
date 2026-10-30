@@ -499,7 +499,7 @@ fi
 echo "Windows parity guards:"
 if command -v pwsh >/dev/null 2>&1; then
     ps_parse="$(pwsh -NoProfile -Command '
-      $files = @("setup/lib/exakit-common.ps1","setup/lib/runtime-personal.ps1","setup/lib/mcp.ps1","setup/lib/dash-server.ps1","setup/lib/json-tables.ps1","setup/setup-windows.ps1","setup/exakit.ps1")
+      $files = @("setup/lib/exakit-common.ps1","setup/lib/runtime-personal.ps1","setup/lib/mcp.ps1","setup/lib/dash-server.ps1","setup/setup-windows.ps1","setup/exakit.ps1")
       foreach ($f in $files) {
         $errors = $null
         $null = [System.Management.Automation.PSParser]::Tokenize((Get-Content -Raw $f), [ref]$errors)
@@ -685,17 +685,16 @@ if [ -d "$ROOT/setup/shim/json-tables-cargo" ] && \
    grep -q 'fn is_ingest_call' "$ROOT/setup/shim/json-tables-cargo/src/main.rs" && \
    grep -q 'json-tables-cargo/Cargo.toml' "$ROOT/.github/workflows/pkg-json-tables.yml" && \
    grep -q 'exakit-json-tables-cargo-windows-x86_64.exe' "$ROOT/.github/workflows/pkg-json-tables.yml" && \
-   grep -q 'function Get-JsonTablesShimAsset' "$ROOT/setup/lib/json-tables.ps1" && \
-   grep -q 'function Write-JsonTablesLauncher' "$ROOT/setup/lib/json-tables.ps1" && \
-   grep -q 'function Get-JsonTablesMirrorDigest' "$ROOT/setup/lib/json-tables.ps1" && \
-   grep -q 'function Test-JsonTablesAppControl' "$ROOT/setup/lib/json-tables.ps1"; then
+   grep -q 'cargo-windows-x86_64' "$ROOT/marketplace/addons/json_tables.py" && \
+   grep -q 'def _write_launchers' "$ROOT/marketplace/addons/json_tables.py" && \
+   grep -q 'def _asset' "$ROOT/marketplace/addons/json_tables.py"; then
     check "json-tables(windows_shim)" "yes" "yes"
 else
     check "json-tables(windows_shim)" "yes" "no"
 fi
 # ...and that the module no longer reports itself unavailable unconditionally,
 # which is what the stub did.
-if grep -q 'return ((Get-JsonTablesEngineAsset) -ne "")' "$ROOT/setup/lib/json-tables.ps1"; then
+if grep -q 'if system == "windows" and arch != "x86_64"' "$ROOT/marketplace/addons/json_tables.py"; then
     check "json-tables(windows_applicable)" "yes" "yes"
 else
     check "json-tables(windows_applicable)" "yes" "no"
@@ -880,9 +879,9 @@ if grep -q 'tag_name: ${{ needs.check.outputs.tag }}' "$ROOT/.github/workflows/p
    grep -q 'version=${{ needs.check.outputs.sha }}' "$ROOT/.github/workflows/pkg-json-tables.yml" && \
    grep -qE '^  advertise:' "$ROOT/.github/workflows/pkg-json-tables.yml" && \
    grep -q 'needs: \[check, publish\]' "$ROOT/.github/workflows/pkg-json-tables.yml" && \
-   grep -q 'json_tables_write_shim()' "$ROOT/setup/lib/json-tables.sh" && \
-   grep -q 'json_tables_latest()' "$ROOT/setup/lib/json-tables.sh" && \
-   grep -q 'json_tables_system_present()' "$ROOT/setup/lib/json-tables.sh" && \
+   grep -q 'def _write_launchers' "$ROOT/marketplace/addons/json_tables.py" && \
+   grep -q 'def latest' "$ROOT/marketplace/addons/json_tables.py" && \
+   grep -q 'def system_present' "$ROOT/marketplace/addons/json_tables.py" && \
    grep -q 'exakit_data_file_kind()' "$ROOT/setup/lib/exapump.sh" && \
    grep -q 'exakit_load_local_json()' "$ROOT/setup/lib/exapump.sh"; then
     check "json_tables(prebuilt_chain)" "yes" "yes"

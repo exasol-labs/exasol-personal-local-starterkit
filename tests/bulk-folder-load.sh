@@ -360,7 +360,7 @@ lacks "the help no longer documents a format variable" "EXAKIT_DATA_FORMATS" "$H
 
 printf '\n== Windows loads JSON where the engine exists ==\n'
 
-# Get-JsonTablesEngineAsset publishes a build for windows/x86_64, so the add-on
+# The JSON Tables add-on publishes a build for windows/x86_64, so the add-on
 # is applicable, offered and installable there - but exapump.ps1 refused every
 # .json file unconditionally, with a message that contradicted itself by ending
 # "Windows x86_64 is supported; ARM64 is not built yet." The refusal outlived
