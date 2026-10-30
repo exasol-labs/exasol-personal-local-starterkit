@@ -148,7 +148,7 @@ Run Data Scientist `01_explore` first for each dataset so the handoff exists. Op
 |---|---|---|
 | `00_quickstart.ipynb` | Keep Pharma; run connection, container, MLflow and bucket checks, then review/approve roles. | Checks and first query succeed. Record any failed bucket check; do not silently mark it passed. |
 | `01_train.ipynb` | Set `DATASET = "pharma_trials"`; keep seed/options unchanged. Run training and artifact export twice. | Two runs have identical metrics/coefficients; model, training SQL and coefficients appear in MLflow. Pharma's last observed macro-F1 was `0.445955`, above baseline `0.441129`. |
-| `02_rust_score.ipynb` | Keep the same dataset; use `UDF_NAME = "score_pharma"`. Run build/deploy and parity cells. | Rust/Python labels agree and maximum probability difference is **below `1e-9`** on the tested rows. The Rust MLflow run includes container/library/Cargo digests. |
+| `02_rust_score.ipynb` | Keep the same dataset; use `UDF_NAME = "score_pharma"`. Set `TEST_ROWS = 10_000` for the reference acceptance run; run build/deploy and parity cells. | Rust/Python labels agree and maximum probability difference is **below `1e-9`** on the tested rows. The Rust MLflow run includes container/library/Cargo digests. |
 | `03_score_external_model.ipynb` | Keep `MODEL_FILE = None` to train its built-in local example. This tests a local model file, not an external data connection. | File is copied to the shared bucket and local/database predictions match. A skipped comparison or version mismatch is not a pass. |
 
 Repeat on Banking with `DATASET = "banking_complaints"` and Rust `UDF_NAME = "score_banking"`. Use a new UDF name when changing coefficient revisions; existing projects are preserved.

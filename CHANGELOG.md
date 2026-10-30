@@ -8,7 +8,8 @@
 - Add opt-in runner controls for AI themes, SQL approval, class weighting and database restarts. Share figure confirmation remains manual. Dataset-based default app and scorer names avoid cross-dataset collisions.
 - Bound optional Ask requests, accept one fenced JSON proposal and validate its fields before approval. Add a read-only, result-based model benchmark that reports failures without credentials.
 - Add reproducible authenticated MLflow 3.0.0/3.17.2 and Langfuse Cloud/self-hosted 4.59.0 service checks. Local runs passed; hosted CI execution remains pending. Pin SQLAlchemy below 2.1 for MLflow 3.0 compatibility.
-- Add a responsive Share template with category/search filters, Top N, sorting, reset, synchronized comparison/composition charts and a paginated/exportable result table. Count summaries require an explicit count measure; preview confirmation remains manual.
+- Add a responsive Share template with category/search filters, Top N, sorting, reset, synchronized comparison/composition charts and a paginated/exportable result table. Count summaries require an explicit count measure; preview confirmation remains manual. CSV export neutralizes formulas, and failed rebuilds invalidate old approval state.
+- Full held-out Rust/Python checks passed on all 1,030 Pharma and 1,317 Banking test rows with finite probabilities and matching labels.
 - Add dedicated acceptance workflows, candidate kernel binding and a generated-output privacy gate. Operator steps and remaining evidence are in `docs/ACCEPTANCE-REMAINING.md`.
 
 ## Provider-neutral notebook configuration

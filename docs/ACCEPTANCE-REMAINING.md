@@ -16,7 +16,7 @@ external data-source connections; those remain with their existing owner.
 | Langfuse | Five synthetic generations with input/output, token usage, timing and workflow metadata were verified against Cloud and disposable self-hosted 4.59.0. The combined workflow additionally verified the real database session ID. |
 | MLflow | Real authenticated HTTP servers at 3.0.0 and 3.17.2 passed metric/artifact, unauthorized-access, pre-query outage and mid-run spool/replay checks. These service tests use fixture UDF rows; the combined workflow separately exercises a real UDF. |
 | Model comparison | Protocol 2 evaluated two installed Ollama models on ten reference questions per dataset through read-only MCP. Both `qwen2.5:0.5b` and `llama3.2:latest` scored 0/20 exact result matches. The benchmark works; these results do not establish acceptable SQL quality. |
-| Notebook execution | All eight persona notebooks completed on both reference datasets locally. Strict Rust comparisons used 500 test rows per dataset: maximum gaps 1.987e-14 Pharma and 1.11e-16 Banking; labels agree. Model-file scoring also matched. All 16 executed notebook files passed the output privacy scan. Windows and human interaction remain separate gates. |
+| Notebook execution | All eight persona notebooks completed on both reference datasets locally. Additional full held-out comparisons used all 1,030 Pharma and 1,317 Banking test rows with no limit: maximum gaps 2.432e-14 and 1.111e-16; every label agrees and all probabilities are finite. Model-file scoring also matched. All 16 executed notebook files passed the output privacy scan. Windows and human interaction remain separate gates. |
 | Share | A responsive Dash Server preview with category/search filters, Top N, sorting, reset, two charts, summary cards and a paginated/exportable table passed health checks and returned reference counts. A person must compare its figures and explicitly approve promotion. |
 
 Dates, exact run IDs and machine-specific evidence belong in the internal record.
@@ -33,7 +33,7 @@ end-to-end acceptance criterion.
    Review the role evidence and approve before Ask, training or Share.
 4. Use the two training recipes above. Keep the same temporal split and seed;
    repeat each twice and retain metrics, coefficient digest and MLflow tags.
-5. Run Rust scoring and the model-file scoring lesson. Check labels and maximum
+5. Run Rust scoring and the model-file scoring lesson. For these fixed reference snapshots, set `TEST_ROWS = 10_000` to include the entire held-out partition; the ordinary quick check caps it at 500. Check labels and maximum
    probability difference rather than accepting a successful deployment alone.
    Rust's bucketless fallback packages the library into a verified runtime;
    it requires explicit restart consent. Leave `ALLOW_DATABASE_RESTART = False`
