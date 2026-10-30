@@ -150,6 +150,8 @@ kit_shared_steps 3 6 "$SCRIPT_DIR" "$KIT_ROOT"
 # "What will you use this machine for?" comes after the parts everyone needs,
 # and its answer ticks the datasets (and, at the close, the add-ons). With
 # EXAKIT_PERSONA set it was answered before step 1. See exakit_persona_flow.
+EXAKIT_MARKETPLACE_PYTHON_APPLY=1
+export EXAKIT_MARKETPLACE_PYTHON_APPLY
 command -v exakit_persona_flow >/dev/null 2>&1 && exakit_persona_flow "$KIT_ROOT"
 
 # The other half of the crossing runs at the start of the sample-data offer

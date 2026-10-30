@@ -8,6 +8,7 @@ import os
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import patch
@@ -31,6 +32,17 @@ class ApplyTest(unittest.TestCase):
             with patch.object(market_apply, "invoke") as invoke:
                 with self.assertRaisesRegex(CatalogError, "unknown add-on"):
                     market_apply.apply(ctx, "dash-server,unknown-addon", lambda _: None)
+            invoke.assert_not_called()
+
+    def test_disabled_addon_in_csv_stops_before_first_install(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            ctx = self.context(Path(temp))
+            addons = [replace(addon, visible=False) if addon.id == "notebook" else addon
+                      for addon in load_addons(ROOT)]
+            with patch.object(market_apply, "load_addons", return_value=addons), \
+                 patch.object(market_apply, "invoke") as invoke:
+                with self.assertRaisesRegex(CatalogError, "notebook is disabled"):
+                    market_apply.apply(ctx, "dash-server,notebook", lambda _: None)
             invoke.assert_not_called()
 
     def test_invalid_notebook_frontends_stop_entire_batch_before_install(self) -> None:

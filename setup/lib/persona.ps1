@@ -218,12 +218,8 @@ function Read-ExakitPersonaQuestion {
     $env:EXAKIT_PERSONA = ($chosen -join ",")
 }
 
-# Invoke-ExakitPersonaFlow - the install's persona section, after the parts
-# everyone needs: the personas (asked here unless EXAKIT_PERSONA answered it),
-# then the data. Picked on screen, their datasets come TICKED in the data
-# question and their add-ons ticked in the closing marketplace offer. No
-# persona (None picked, or nobody to ask): the kit's own default datasets.
-# Twin of exakit_persona_flow.
+# The install asks for a persona after the common steps, then offers its data.
+# Add-ons are offered at the end; no persona keeps the kit's sample defaults.
 function Invoke-ExakitPersonaFlow {
     param([Parameter(Mandatory)][string]$KitRoot)
     # No database or no exapump: nothing here can run, so nobody is asked.
@@ -388,18 +384,8 @@ function Invoke-ExakitPersonaChild {
     }
 }
 
-# Invoke-ExakitPersonaAdd -Ids <ids> -Cli <exakit.ps1> - `exakit persona add`
-# (alias: apply). The personas named JOIN the ones this kit was set up as:
-# persona.id becomes their union, in the kit's order, and the union's answers
-# are the ones used. Nothing is asked. Three steps headed the way the installer
-# heads its own, each the installer's own table with its defaults taken
-# (UI_TABLE_AUTO) and animated while it works - plain lines without a console:
-# the sample data, the AI clients, the add-ons. What is here already is said in
-# one line, not redone. One closing line: the personas are added, or which parts
-# did not finish and the one command that retries each (exit 1). Whether it
-# all finished is in $script:ExakitPersonaAddOk, not in the output: that is the
-# steps' own, see Invoke-ExakitPersonaChild. Twin of exakit_persona_add in
-# persona.sh.
+# Legacy apply path for direct callers. The public CLI uses
+# marketplace/persona_apply.py on both platforms.
 $script:ExakitPersonaAddOk = $false
 function Invoke-ExakitPersonaAdd {
     param([Parameter(Mandatory)][string]$Ids, [Parameter(Mandatory)][AllowEmptyString()][string]$Cli)

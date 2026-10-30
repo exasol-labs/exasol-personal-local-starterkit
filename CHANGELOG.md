@@ -1,5 +1,11 @@
 # Changelog
 
+## Persona and marketplace Python backend
+
+- Move the seven add-on lifecycle implementations, `persona add`, and the direct Notebook, UDF, MLflow, Rust and workflow commands into `marketplace/` Python modules. Keep the existing Textual selection and progress screen.
+- Load persona and add-on choices from validated JSON, including `visible` switches. Use root `versions.json` for advertised versions and checksums; keep catalog versions as offline fallbacks.
+- Route the Linux installer's marketplace apply through the same Python controller as macOS and Windows. Preflight the whole selection before installing and restore progress state after each batch.
+
 ## Acceptance fixes and repeatable verification
 
 - Reject credential fields nested in workflow metadata, including encoded JSON. Record descriptor draft and approval events in the same workflow as SQL, tracing and training.

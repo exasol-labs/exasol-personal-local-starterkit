@@ -182,14 +182,8 @@ EXAKIT_EPQ_EOF
     export EXAKIT_PERSONA
 }
 
-# exakit_persona_flow <kit_root> — the install's persona section, after the
-# parts everyone needs: the personas (asked here unless EXAKIT_PERSONA answered
-# it already), then the data. Picked on screen, their datasets come TICKED in
-# the data question and their add-ons ticked in the closing marketplace offer -
-# nothing is installed or loaded unasked. Named in the environment, they answer
-# as EXAKIT_DATASETS and EXAKIT_MARKETPLACE_ADDONS always did. No persona (None
-# picked, or nobody to ask): the data question ticks the kit's own default
-# datasets (TPC-H, energy, weather), never the persona reference datasets.
+# The install asks for a persona after the common steps, then offers its data.
+# Add-ons are offered at the end; no persona keeps the kit's sample defaults.
 exakit_persona_flow() {
     _epf_root="$1"
     # No database or no exapump: nothing here can run (the data needs both, and
@@ -346,22 +340,8 @@ _exakit_persona_label() {
         sed 's/ - [0-9.]* MB download$//; s/ *([^()]*)$//'
 }
 
-# exakit_persona_add <ids> — `exakit persona add` (alias: apply). The personas
-# named JOIN the ones this kit was set up as: persona.id becomes their union, in
-# the kit's order, and the union's answers are the ones used, so the datasets
-# and add-ons of every one of them are in. Nothing is asked. Three steps, headed
-# the way the installer heads its own, each the installer's own table with its
-# defaults taken (UI_TABLE_AUTO) and animated while it works - plain lines
-# without a terminal:
-#   1. Sample data - the "Data to load" table, only the datasets still to load
-#   2. AI clients  - the "AI clients to connect" table, the personas' clients
-#   3. Add-ons     - the "Marketplace add-ons" table, the add-ons still missing
-# What is here already is said in one line, not redone. Each step is its own
-# command (data-load, mcp-setup, marketplace) in a SUBSHELL, so a die() in one
-# does not end the others, and with no terminal to ask on (_exakit_prompt_tty)
-# nothing in there can ask anything. One closing line: the personas are added,
-# or which parts did not finish and the one command that retries each (1).
-# ⇄ twin: Invoke-ExakitPersonaAdd in persona.ps1.
+# Legacy apply path for direct callers. The public CLI uses
+# marketplace/persona_apply.py on both platforms.
 exakit_persona_add() {
     _epd_was="$(exakit_persona_recorded)"
     _epd_new="$(_exakit_persona_service select "$1" "$_epd_was" 2>/dev/null)" || \

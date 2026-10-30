@@ -26,6 +26,11 @@ class ModelSettingsTest(unittest.TestCase):
         self.assertIsNone(model_config.resolve({}))
         self.assertIsNone(model_config.resolve({"EXAKIT_MODEL_ID": "  "}))
 
+    def test_retired_notebook_setting_names_do_not_enable_the_model(self):
+        old = {"EXAKIT_NB_MODEL": "old-model", "EXAKIT_NB_BASE_URL": "https://old.example/v1",
+               "EXAKIT_NB_API_KEY": "old-secret"}
+        self.assertIsNone(model_config.resolve(old))
+
     def test_model_requires_an_explicit_provider_base_url(self):
         with self.assertRaisesRegex(ValueError, "EXAKIT_PROVIDER_BASE_URL"):
             model_config.resolve({"EXAKIT_MODEL_ID": "chosen-model"})
