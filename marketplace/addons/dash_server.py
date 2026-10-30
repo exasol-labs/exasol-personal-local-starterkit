@@ -147,7 +147,7 @@ def install(ctx: KitContext) -> None:
     python = venv_python(venv)
     if package_version(ctx) != version or os.environ.get("EXAKIT_FORCE_COMPONENT_INSTALL") == "1":
         if not python.is_file():
-            ctx.run_logged("Creating Dash Server environment", str(ctx.uv), "venv", "--seed", "--python", "3.12", str(venv))
+            ctx.run_logged("Creating Dash Server environment", str(ctx.uv), "venv", "--seed", "--python", ctx.managed_python_version, str(venv))
         else:
             probe = subprocess.run([str(python), "-m", "pip", "--version"], capture_output=True, check=False)
             if probe.returncode != 0:

@@ -131,7 +131,7 @@ def install(ctx: KitContext, *, force: bool = False) -> None:
     venv, profile_dir, launcher = paths(ctx)
     if package_version(ctx) != version or force:
         if not venv_python(venv).is_file():
-            ctx.run_logged("Creating dbt-exasol environment", str(ctx.uv), "venv", "--python", "3.12", str(venv))
+            ctx.run_logged("Creating dbt-exasol environment", str(ctx.uv), "venv", "--python", ctx.managed_python_version, str(venv))
         ctx.run_logged(f"Installing dbt-exasol {version}", str(ctx.uv), "pip", "install", "--python",
                        str(venv_python(venv)), f"{PACKAGE}=={version}")
         if package_version(ctx) != version:

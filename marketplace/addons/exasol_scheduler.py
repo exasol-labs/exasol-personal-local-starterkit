@@ -270,7 +270,7 @@ def install(ctx: KitContext) -> None:
             ctx.run_logged("Checking Scheduler engine", str(staged), "--help", timeout=15)
         python = venv_python(home / "python")
         if not python.is_file():
-            ctx.run_logged("Creating Scheduler Python runtime", str(ctx.uv), "venv", "--python", "3.12",
+            ctx.run_logged("Creating Scheduler Python runtime", str(ctx.uv), "venv", "--python", ctx.managed_python_version,
                            str(home / "python"))
         if needs_engine:
             user, schema, bootstrap = _user(ctx)

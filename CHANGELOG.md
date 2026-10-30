@@ -8,6 +8,7 @@
 - Remove the redundant dbt-exasol shell and PowerShell implementations. Both CLI entry points use the shared Python lifecycle; the catalog and connection validation remain covered by executable tests.
 - Remove the redundant Exasol for VS Code shell and PowerShell implementations. The public CLI and isolated end-to-end flow use the Python add-on, with focused checks for editor discovery, stdin isolation, WSL staging, checksums, ownership and uninstall.
 - Make the Textual launcher use the kit's managed Python version override on every platform.
+- Use that managed Python override when Dash Server, dbt-exasol, Notebook, JSON Tables, and Exasol Scheduler create their virtual environments.
 - Resolve scripted marketplace answers through one Python parser on Bash and PowerShell. Reject empty CSV entries and unknown add-ons before the first install, and deduplicate repeated IDs.
 - Detect Windows VS Code and compatible editor CLIs under Local App Data and Program Files when they are absent from PATH.
 

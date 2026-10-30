@@ -19,11 +19,16 @@ import urllib.request
 from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
-from typing import Iterator
+from typing import Iterator, Mapping
 
 
 class AddonFailure(RuntimeError):
     pass
+
+
+def managed_python_version(environment: Mapping[str, str] | None = None) -> str:
+    values = os.environ if environment is None else environment
+    return values.get("EXAKIT_MANAGED_PYTHON_VERSION") or "3.12"
 
 
 _activity_local = threading.local()
@@ -180,6 +185,10 @@ class KitContext:
         if self.uv.is_file() or shutil.which(str(self.uv)):
             return self.uv
         raise AddonFailure("uv is missing; the kit's Python bootstrap must finish first")
+
+    @property
+    def managed_python_version(self) -> str:
+        return managed_python_version()
 
     def path(self, name: str, fallback: Path) -> Path:
         """Honor the add-on path overrides supported by the old launchers."""

@@ -16,6 +16,8 @@ so a cached version and its asset checksums stay paired.
 requirements belong in each add-on's Python
 module under `marketplace/addons/`; the MLflow server version is pinned under
 `components.udf-devkit.mlflow_server` in `versions.json`.
+Python add-on environments use `EXAKIT_MANAGED_PYTHON_VERSION` when set, matching
+the Textual launcher; the kit defaults to Python 3.12.
 
 The installer keeps its database, exapump, MCP, and pyexasol stages. At the
 persona boundary, it calls `marketplace/launch.py` for an interactive Textual
@@ -54,6 +56,6 @@ direct `notebook`, `workflow`, `mlflow`, `rust-udf`, `udf-file`, `model`, `udf-s
 commands use Python entry points in this directory. `udf_container.py` selects
 and verifies the pinned release assets. The public CLI still loads Notebook's
 platform helper for `describe`; the workflow, Rust UDF, and MLflow command
-wrappers have been removed. Legacy add-on script pairs remain in the source
-tree for their compatibility suites until their remaining installer callers and
-progress controller are migrated; that cleanup is tracked in `tasks.md`.
+wrappers and the dbt-exasol and Exasol for VS Code script pairs have been removed.
+Other legacy add-on script pairs remain until their compatibility checks use
+the Python backend; that cleanup is tracked in `tasks.md`.

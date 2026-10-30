@@ -250,7 +250,7 @@ def install(ctx: KitContext) -> None:
     venv, home, launcher = paths(ctx)
     python = venv_python(venv)
     if not python.is_file():
-        ctx.run_logged("Creating JSON Tables environment", str(ctx.uv), "venv", "--seed", "--python", "3.12", str(venv))
+        ctx.run_logged("Creating JSON Tables environment", str(ctx.uv), "venv", "--seed", "--python", ctx.managed_python_version, str(venv))
     with tempfile.TemporaryDirectory(prefix="exakit-json-tables-") as temp:
         wheel = Path(temp) / wheel_name
         _asset(ctx, repo, tag, wheel_name, "wheel", pins, assets, wheel)

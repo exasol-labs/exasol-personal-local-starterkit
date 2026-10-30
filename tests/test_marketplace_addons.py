@@ -53,6 +53,20 @@ class AddonSafetyTest(unittest.TestCase):
         start.assert_called_once_with(self.ctx)
         self.assertIsNone(self.manifest.get("desired.dash_server"))
 
+    def test_dash_venv_uses_managed_python_override(self) -> None:
+        with patch.dict(os.environ, {"EXAKIT_MANAGED_PYTHON_VERSION": "3.13"}), \
+             patch.object(KitContext, "require_uv"), \
+             patch.object(KitContext, "target_version", return_value="0.1.1"), \
+             patch.object(KitContext, "run_logged") as run, \
+             patch.object(dash_server, "package_version", side_effect=[None, "0.1.1"]), \
+             patch.object(dash_server, "_settle_port", return_value=5100), \
+             patch.object(dash_server, "_restore_templates"), \
+             patch.object(dash_server, "_write_launcher", return_value=self.home / "dash"):
+            dash_server.install(self.ctx)
+        args = run.call_args_list[0].args
+        self.assertEqual("3.13", args[args.index("--python") + 1])
+        self.assertEqual("kit", self.manifest.get("components.dash_server.ownership"))
+
     def test_dbt_uses_a_secret_reference_and_preserves_external_adapter(self) -> None:
         profile = dbt_exasol._profile_text(self.ctx)
         self.assertIn("DBT_ENV_SECRET_EXASOL_PASSWORD", profile)

@@ -15,6 +15,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from runtime import managed_python_version
+
 
 def textual_pin(path: Path) -> str:
     data: dict[str, str] = {}
@@ -43,7 +45,7 @@ def run(root: Path, args: list[str]) -> int:
     uv = shutil.which("uv") or shutil.which("uv.exe")
     environment = dict(os.environ)
     if uv:
-        command = [uv, "run", "--no-project", "--python", environment.get("EXAKIT_MANAGED_PYTHON_VERSION", "3.12"),
+        command = [uv, "run", "--no-project", "--python", managed_python_version(environment),
                    "--with", f"textual=={pin}",
                    "python", str(script), *args]
     else:

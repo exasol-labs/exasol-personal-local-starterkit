@@ -219,7 +219,7 @@ def install(ctx: KitContext) -> None:
     if not python.is_file():
         if venv.is_dir() and (venv / "pyvenv.cfg").exists():
             shutil.rmtree(venv)
-        ctx.run_logged("Creating notebook environment", str(ctx.uv), "venv", "--python", "3.12", str(venv))
+        ctx.run_logged("Creating notebook environment", str(ctx.uv), "venv", "--python", ctx.managed_python_version, str(venv))
     for local in (ctx.root / "notebook" / "package" / "build", ctx.root / "packages" / "exasol-mlflow" / "build"):
         if local.is_dir():
             shutil.rmtree(local)
