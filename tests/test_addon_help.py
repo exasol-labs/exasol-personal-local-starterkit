@@ -1,4 +1,6 @@
 """The same offline argument reference reaches human and JSON help."""
+import ast
+import io
 import json
 import os
 import re
@@ -7,6 +9,10 @@ from pathlib import Path
 import subprocess
 import tempfile
 import unittest
+import sys
+from contextlib import redirect_stdout
+from types import SimpleNamespace
+from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -88,23 +94,52 @@ class AddonHelpTest(unittest.TestCase):
         self.assertNotIn('dbt-exasol dbt-exasol', text)
 
     def test_udf_parser_flags_cannot_disappear_from_the_reference(self):
-        source = (ROOT / 'setup/lib/udf-devkit.sh').read_text()
+        sys.path.insert(0, str(ROOT / 'marketplace'))
+        self.addCleanup(sys.path.remove, str(ROOT / 'marketplace'))
+        import model_cli
+        import udf_manage
+
+        class Parsed(Exception):
+            pass
+
         doc = json.loads((ROOT / 'setup/help/udf-devkit.json').read_text())
         commands = {c['command']: c for c in doc['commands']}
-        functions = {'cmd_udf_setup': 'udf-setup', 'cmd_udf_use': 'udf-use',
-                     'cmd_udf_build': 'udf-build', '_cmd_model_put': 'model put',
-                     '_cmd_model_inspect': 'model inspect', '_cmd_model_list': 'model list',
-                     '_cmd_model_rm': 'model rm', '_cmd_model_prune': 'model prune',
-                     '_cmd_model_template': 'model template'}
-        for function, command in functions.items():
-            with self.subTest(command=command):
-                match = re.search(r'^' + function + r'\(\) \{\n(.*?)^}', source, re.M | re.S)
-                self.assertIsNotNone(match)
-                alternatives = re.findall(r'^\s*([-\w|]+)\)', match[1], re.M)
-                accepted = set(re.findall(r'--[a-z][a-z-]*', ' '.join(alternatives)))
-                documented = set(re.findall(r'--[a-z][a-z-]*', ' '.join(
-                    p['name'] for p in commands['exakit ' + command]['parameters'])))
-                self.assertFalse(accepted - documented, accepted - documented)
+        with tempfile.TemporaryDirectory() as temp:
+            source = Path(temp) / 'model.onnx'
+            source.write_bytes(b'test model')
+            for filename, actions in (('udf_manage.py', ('udf-setup', 'udf-use', 'udf-build')),
+                                      ('model_cli.py', ('put', 'inspect', 'rm', 'prune', 'list', 'template'))):
+                tree = ast.parse((ROOT / 'marketplace' / filename).read_text())
+                flags = {node.value for node in ast.walk(tree) if isinstance(node, ast.Constant)
+                         and isinstance(node.value, str) and re.fullmatch(r'--[a-z][a-z-]*', node.value)}
+                for action in actions:
+                    accepted = set()
+                    for flag in flags:
+                        value = {'--language': 'python', '--alias': 'CUSTOM', '--older-than': '30'}.get(flag)
+                        options = [flag, value] if value else [flag]
+                        if filename == 'udf_manage.py':
+                            base = ([str(source)] if action == 'udf-build' else
+                                    ['default'] if action == 'udf-use' and flag != '--list' else [])
+                            try:
+                                udf_manage._parse(action, base + options)
+                            except udf_manage.udf.UdfFailure:
+                                continue
+                        else:
+                            base = [str(source)] if action in ('put', 'inspect', 'rm') else []
+                            with patch.object(model_cli, '_ready', side_effect=Parsed), redirect_stdout(io.StringIO()):
+                                try:
+                                    model_cli.command(SimpleNamespace(root=ROOT), [action, *base, *options])
+                                except model_cli.ModelError:
+                                    continue
+                                except Parsed:
+                                    pass
+                        accepted.add(flag)
+                    name = action if filename == 'udf_manage.py' else 'model ' + action
+                    documented = set(re.findall(r'--[a-z][a-z-]*', ' '.join(
+                        p['name'] for p in commands['exakit ' + name]['parameters'])))
+                    with self.subTest(command=name):
+                        self.assertTrue(accepted)
+                        self.assertFalse(accepted - documented, accepted - documented)
 
     def test_json_and_all_command_help_preserve_reference(self):
         doc = json.loads(self.help('help', 'udf-devkit', '--json'))

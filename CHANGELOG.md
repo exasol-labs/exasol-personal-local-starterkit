@@ -12,6 +12,7 @@
 - Remove the redundant Dash Server shell and PowerShell implementations. The Python add-on owns port selection, launcher repair, service health, and one restart when its MCP endpoint works but the browser page is unavailable.
 - Remove the redundant Notebook shell and PowerShell implementations. Shared Python tests cover lifecycle, recovery and both public CLI entry points; Windows CI runs the same command checks under PowerShell 5.1 and 7.
 - Preserve an explicit choice of no Notebook frontends across updates. Wait for an already-starting server at its recorded port, mask JupyterLab and Marimo login tokens in logs, and show a private login-file path when the browser cannot open.
+- Show the UDF database restart wait as its own activity. Restore services already stopped if another service refuses to stop, before returning the failure. Check help options against the active Python parsers.
 - Mark Bash state queries read-only before loading Python add-on hooks. Run uv queries offline on Bash and PowerShell so a state read cannot download a managed Python runtime.
 - Resolve `describe`'s Notebook interpreter from the installation receipt on Bash and PowerShell. It no longer requires the legacy Notebook helper to be loaded.
 - Use the active validated versions document for Notebook frontend and scikit-learn pins, MLflow's local server, skill receipts, and Rust smoke overlays, keeping secondary assets aligned with the selected release.

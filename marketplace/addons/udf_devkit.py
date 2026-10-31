@@ -189,24 +189,32 @@ def _restart(ctx: KitContext, commands: list[list[str]], *, yes: bool, reason: s
                        if service != "database" and state == "running"]
         except (ValueError, AttributeError):
             pass
-    for service in running:
-        stopped = _kit_command(ctx, "stop", service)
-        if stopped.returncode:
-            raise UdfFailure(f"Could not stop {service} before the database restart.", 5, "install",
-                             f"exakit stop {service}")
+    stopped_services: list[str] = []
+    restart_started = False
     try:
+        for service in running:
+            stopped = _kit_command(ctx, "stop", service)
+            if stopped.returncode:
+                raise UdfFailure(f"Could not stop {service} before the database restart.", 5, "install",
+                                 f"exakit stop {service}")
+            stopped_services.append(service)
+        restart_started = True
         for argv in commands:
             ctx.run_logged(reason, _launcher(ctx), "slc", *argv, "--deployment-dir", str(_deployment(ctx)),
                            timeout=int(os.environ.get("EXAKIT_UDF_INSTALL_TIMEOUT", "3600")))
         if action is not None:
             action()
+    except UdfFailure:
+        raise
     except AddonFailure as error:
         raise UdfFailure(str(error), 6, "install", "exakit logs") from error
     finally:
-        deadline = time.monotonic() + int(os.environ.get("EXAKIT_PERSONAL_READY_TIMEOUT", "600"))
-        while time.monotonic() < deadline and not _database_ready(ctx):
-            time.sleep(3)
-        for service in running:
+        if restart_started:
+            ctx.activity("Waiting for database restart")
+            deadline = time.monotonic() + int(os.environ.get("EXAKIT_PERSONAL_READY_TIMEOUT", "600"))
+            while time.monotonic() < deadline and not _database_ready(ctx):
+                time.sleep(3)
+        for service in stopped_services:
             started = _kit_command(ctx, "start", service)
             if started.returncode:
                 ctx.activity(f"{service} did not restart; run exakit start {service}")

@@ -282,8 +282,14 @@ class NotebookTest(unittest.TestCase):
         cli = (ROOT / "setup" / "exakit").read_text(encoding="utf-8")
         dispatch = cli.split('case "${1:-help}" in\n')[-1].split("\nesac\n")[0]
         commands = {name for arm in re.findall(r"^    ([a-z0-9|-]+)\)", dispatch, flags=re.M) for name in arm.split("|")}
-        module = (ROOT / "setup" / "lib" / "udf-devkit.sh").read_text(encoding="utf-8")
-        model_subs = set(re.findall(r"^_cmd_model_([a-z]+)\(\)", module, flags=re.M))
+        module = ast.parse((ROOT / "marketplace" / "model_cli.py").read_text(encoding="utf-8"))
+        action_checks = [node for node in ast.walk(module) if isinstance(node, ast.Compare)
+                         and isinstance(node.left, ast.Name) and node.left.id == "action"
+                         and any(isinstance(op, ast.NotIn) for op in node.ops)
+                         and len(node.comparators) == 1 and isinstance(node.comparators[0], ast.Set)]
+        self.assertEqual(1, len(action_checks))
+        model_subs = {item.value for item in action_checks[0].comparators[0].elts
+                      if isinstance(item, ast.Constant)}
         self.assertEqual(model_subs, {"put", "list", "rm", "prune", "template", "inspect"})
         named = re.findall(r"`exakit ([a-z][a-z-]*)(?: ([a-z][a-z-]*))?", self.text)
         for node in ast.walk(ast.parse(self.text)):

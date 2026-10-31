@@ -14,7 +14,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "marketplace"))
 from addons import udf_devkit as udf  # noqa: E402
-from runtime import AddonFailure, KitContext, Manifest  # noqa: E402
+from runtime import AddonFailure, KitContext, Manifest, activity_sink  # noqa: E402
 from udf_manage import _parse, command  # noqa: E402
 
 
@@ -115,6 +115,43 @@ class UdfManageTest(unittest.TestCase):
         self.assertEqual(6, failed.exception.code)
         self.assertEqual([("status", "--json"), ("stop", "dash-server"),
                           ("start", "dash-server")], calls)
+
+    def test_restart_activity_changes_before_waiting_for_database(self) -> None:
+        labels = []
+
+        def ready(_ctx):
+            self.assertEqual("Waiting for database restart", labels[-1])
+            return True
+
+        with activity_sink(labels.append), \
+             patch.object(udf, "_kit_command", return_value=type("Result", (), {"returncode": 0, "stdout": "{}"})()), \
+             patch.object(udf, "_launcher", return_value=sys.executable), \
+             patch.object(udf, "_deployment", return_value=self.home), \
+             patch.object(KitContext, "run_logged", side_effect=lambda label, *_args, **_kwargs: self.ctx.activity(label)), \
+             patch.object(udf, "_database_ready", side_effect=ready):
+            udf._restart(self.ctx, [["install", "PYTHON3"]], yes=True, reason="Installing PYTHON3")
+        self.assertEqual(["Installing PYTHON3", "Waiting for database restart"], labels)
+
+    def test_failed_service_stop_restores_services_already_stopped(self) -> None:
+        calls = []
+
+        def kit(_ctx, *args):
+            calls.append(args)
+            if args == ("status", "--json"):
+                return type("Result", (), {"returncode": 0, "stdout": json.dumps({"services": {
+                    "database": "running", "dash-server": "running", "exasol-scheduler": "running"}})})()
+            return type("Result", (), {"returncode": int(args == ("stop", "exasol-scheduler")), "stdout": ""})()
+
+        with patch.object(udf, "_kit_command", side_effect=kit), \
+             patch.object(KitContext, "run_logged") as install, \
+             patch.object(udf, "_database_ready") as ready:
+            with self.assertRaises(udf.UdfFailure) as failed:
+                udf._restart(self.ctx, [["install", "PYTHON3"]], yes=True, reason="test install")
+        self.assertEqual(5, failed.exception.code)
+        self.assertEqual([("status", "--json"), ("stop", "dash-server"),
+                          ("stop", "exasol-scheduler"), ("start", "dash-server")], calls)
+        install.assert_not_called()
+        ready.assert_not_called()
 
     def test_bad_digest_cannot_reach_launcher_restart(self) -> None:
         row = {"arch": "aarch64", "url": "https://example.invalid/container.tar.gz", "size": 100,
