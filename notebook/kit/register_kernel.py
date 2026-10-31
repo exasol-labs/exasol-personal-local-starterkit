@@ -1,8 +1,7 @@
 """Register the kit's Jupyter kernel for this user. Its spec carries paths only (the store, the file with its master
 password, the kit copy, the kit's datasets), never a secret. Environment: EXAKIT_KERNEL_NAME, EXAKIT_KERNEL_TITLE and the EXAKIT_NB_* paths.
 
-Run by setup/lib/notebook.sh and notebook.ps1 with the notebook venv's Python; one file for both, so the two
-scripts cannot drift.
+Run by the Python marketplace with the notebook environment’s interpreter.
 """
 import os
 from ipykernel.kernelspec import install

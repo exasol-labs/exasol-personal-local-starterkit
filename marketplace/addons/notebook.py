@@ -254,7 +254,7 @@ def install(ctx: KitContext) -> None:
         f"{RECEIPT}.venv": str(venv), f"{RECEIPT}.python": str(python),
         f"{RECEIPT}.notebooks_dir": str(notebooks), f"{RECEIPT}.store_file": str(home / "connection.scs"),
         f"{RECEIPT}.master_file": str(ctx.home / "credentials" / "notebook_store_master_password"),
-        f"{RECEIPT}.kernel": KERNEL, f"{RECEIPT}.front_ends": ",".join(selected),
+        f"{RECEIPT}.kernel": KERNEL, f"{RECEIPT}.front_ends": ",".join(selected) or "none",
         f"{RECEIPT}.jupyter": "kit" if venv_executable(venv, "jupyter-lab").is_file() else "user" if _external_jupyter(ctx) else "none",
         f"{RECEIPT}.marimo": "kit" if venv_executable(venv, "marimo").is_file() else "none",
     })

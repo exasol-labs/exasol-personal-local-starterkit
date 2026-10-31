@@ -4,8 +4,7 @@ Environment: SCS_FILE, SCS_MASTER_PASSWORD (the store and its master password), 
 EXAKIT_NB_USER, EXAKIT_NB_PWFILE (the file holding the password - never the password itself) and EXAKIT_NB_SCHEMA
 (the schema the connector opens; the launchers pass EXAKIT_NOTEBOOK_SCHEMA, default STARTER_KIT). Prints changed|same.
 
-Run by setup/lib/notebook.sh and notebook.ps1 with the notebook venv's Python; one file for both, so the two
-scripts cannot drift.
+Run by the Python marketplace with the notebook environment’s interpreter.
 """
 import os
 from pathlib import Path

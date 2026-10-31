@@ -1,7 +1,6 @@
 """Remove the kit's Jupyter kernel again (EXAKIT_KERNEL_NAME).
 
-Run by setup/lib/notebook.sh and notebook.ps1 with the notebook venv's Python; one file for both, so the two
-scripts cannot drift.
+Run by the Python marketplace with the notebook environment’s interpreter.
 """
 import os
 from jupyter_client.kernelspec import KernelSpecManager

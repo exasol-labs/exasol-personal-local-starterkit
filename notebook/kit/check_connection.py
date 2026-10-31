@@ -1,8 +1,7 @@
 """Open the database from the encrypted store and run SELECT 1; exit 0 when it answers. Environment: SCS_FILE,
 SCS_MASTER_PASSWORD.
 
-Run by setup/lib/notebook.sh and notebook.ps1 with the notebook venv's Python; one file for both, so the two
-scripts cannot drift.
+Run by the Python marketplace with the notebook environment’s interpreter.
 """
 import os
 from pathlib import Path

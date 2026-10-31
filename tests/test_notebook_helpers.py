@@ -38,6 +38,14 @@ PHARMA = ["PHARMA.PHARMA_TRIALS." + c for c in ("NCT_ID", "LEAD_SPONSOR", "PHASE
                                                 "ELIGIBILITY_CRITERIA")]
 
 
+def setUpModule():
+    home = tempfile.TemporaryDirectory(prefix="notebook helpers ")
+    unittest.addModuleCleanup(home.cleanup)
+    environment = mock.patch.dict(os.environ, {"EXAKIT_HOME": home.name})
+    environment.start()
+    unittest.addModuleCleanup(environment.stop)
+
+
 class FakeResult:
     def __init__(self, rows):
         self.rows = rows

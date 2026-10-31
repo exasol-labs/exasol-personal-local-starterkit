@@ -794,11 +794,7 @@ jobs:
       # half against a fake exapump (refuse an existing schema, drop its own).
       - run: python3 tests/test_dataset_check.py
         if: matrix.shard == 4
-      # The notebook add-on: one pinned resolution, notebooks never
-      # overwritten, the command's refusals, uninstall keeps the notebooks;
-      # the exakit.nb helpers and exasol-mlflow against fakes; every notebook
-      # calls only what exists and its SQL differs per dataset only in the
-      # descriptor's values (TDD/BRD AC-DS3.2).
+      # Full-kit removal must preserve user notebooks by default.
       - run: bash tests/notebook-addon.sh
         if: matrix.shard == 4
       # exakit workflow list|show: the CLI over the logs the helpers write.
@@ -824,8 +820,6 @@ jobs:
       - run: python3 tests/test_describe_service.py
         if: matrix.shard == 4
       - run: python3 tests/test_descriptor_v2.py
-        if: matrix.shard == 4
-      - run: bash tests/notebook-launcher.sh
         if: matrix.shard == 4
       - run: python3 tests/test_notebook_helpers.py
         if: matrix.shard == 4
@@ -1022,10 +1016,8 @@ jobs:
             pwsh -NoProfile -File tests/service-scope-ps.ps1
             pwsh -NoProfile -File tests/personal-s3-ps.ps1
             pwsh -NoProfile -File tests/personal-destroy-lock-ps.ps1
-            pwsh -NoProfile -File tests/notebook-addon-ps.ps1
             pwsh -NoProfile -File tests/workflow-command-ps.ps1
             pwsh -NoProfile -File tests/describe-command-ps.ps1
-            pwsh -NoProfile -File tests/notebook-launcher-ps.ps1
             pwsh -NoProfile -File tests/addon-activity-ps.ps1
             pwsh -NoProfile -File tests/addon-help-ps.ps1
             pwsh -NoProfile -File tests/udf-install-progress-ps.ps1

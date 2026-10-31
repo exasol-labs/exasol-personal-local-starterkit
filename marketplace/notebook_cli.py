@@ -102,8 +102,30 @@ class OnDemandServer:
             return "stopped"
         return "running" if _healthy(self.front, port) else "starting"
 
+    def recorded_port(self, fallback: int) -> int:
+        if self.pid():
+            try:
+                value = int(json.loads(self.pidfile.read_text(encoding="utf-8"))["port"])
+                if 1024 <= value <= 65535:
+                    return value
+            except (OSError, ValueError, KeyError, TypeError):
+                pass
+        return fallback
+
+    def wait_ready(self, port: int) -> None:
+        deadline = time.monotonic() + int(os.environ.get("EXAKIT_NOTEBOOK_START_TIMEOUT", "60"))
+        while time.monotonic() < deadline:
+            state = self.state(port)
+            if state == "running":
+                return
+            if state == "stopped":
+                break
+            time.sleep(1)
+        raise AddonFailure(f"{self.front} did not start on port {port}; see {self.log}")
+
     def start(self, argv: list[str], port: int, *, env: dict[str, str] | None = None) -> None:
-        if self.state(port) == "running":
+        if self.state(port) in ("running", "starting"):
+            self.wait_ready(port)
             return
         if _port_open(port):
             raise AddonFailure(f"Port {port} is already in use by another program")
@@ -114,17 +136,17 @@ class OnDemandServer:
                      if os.name == "nt" else {"start_new_session": True})
             process = subprocess.Popen(argv, cwd=notebook.paths(self.ctx)[2], env=env, stdin=subprocess.DEVNULL,
                                        stdout=output, stderr=subprocess.STDOUT, close_fds=True, **flags)
-        self.pidfile.write_text(json.dumps({"pid": process.pid, "created": _creation(process.pid)}) + "\n",
+        self.pidfile.write_text(json.dumps({"pid": process.pid, "created": _creation(process.pid), "port": port}) + "\n",
                                 encoding="utf-8")
-        deadline = time.monotonic() + int(os.environ.get("EXAKIT_NOTEBOOK_START_TIMEOUT", "60"))
-        while time.monotonic() < deadline:
-            if self.state(port) == "running":
-                return
-            if process.poll() is not None:
-                break
-            time.sleep(1)
-        self.stop()
-        raise AddonFailure(f"{self.front} did not start on port {port}; see {self.log}")
+        try:
+            self.wait_ready(port)
+        except AddonFailure:
+            self.stop()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+            raise
 
     def stop(self) -> None:
         pid = self.pid()
@@ -169,7 +191,12 @@ def _open_logged_in(ctx: KitContext, front: str, url: str) -> None:
                       encoding="utf-8")
     if os.name != "nt":
         target.chmod(0o600)
-    webbrowser.open(target.as_uri())
+    try:
+        opened = webbrowser.open(target.as_uri())
+    except webbrowser.Error:
+        opened = False
+    if not opened:
+        print(f"Open the login file in your browser: {target}")
 
 
 def _database_up(ctx: KitContext) -> bool:
@@ -239,7 +266,7 @@ def _ensure_frontend(ctx: KitContext, front: str, setup: bool) -> None:
     if present and (front != "marimo" or present.is_file()):
         return
     answer = os.environ.get("EXAKIT_NOTEBOOK_JUPYTER" if front == "jupyterlab" else "EXAKIT_NOTEBOOK_MARIMO", "")
-    if answer.lower() == "skip":
+    if answer.lower() in {"skip", "no", "0", "false", "none"}:
         raise AddonFailure(f"{front} was skipped; add it with: exakit notebook {front} setup")
     if not setup and not (sys.stdin.isatty() and sys.stdout.isatty()) and answer.lower() != "install":
         raise AddonFailure(f"{front} is missing; install it with: exakit notebook {front} setup")
@@ -268,11 +295,14 @@ def _start_frontend(ctx: KitContext, front: str, port_arg: int | None, browser: 
     server = OnDemandServer(ctx, front)
     port = _port(ctx, front, port_arg)
     key = "port" if front == "jupyterlab" else "marimo_port"
-    recorded = int(ctx.manifest.get(f"components.notebook.{key}", 8888 if front == "jupyterlab" else 2718))
-    if server.state(recorded) in ("running", "starting"):
+    recorded = server.recorded_port(int(ctx.manifest.get(f"components.notebook.{key}", 8888 if front == "jupyterlab" else 2718)))
+    state = server.state(recorded)
+    if state in ("running", "starting"):
         if port_arg and port_arg != recorded:
-            print(f"{front} is already running on port {recorded}; --port {port_arg} is ignored")
+            print(f"{front} is already {state} on port {recorded}; --port {port_arg} is ignored")
         port = recorded
+        if state == "starting":
+            server.wait_ready(port)
     if server.state(port) == "stopped":
         port = _choose_port(port, port_arg is not None)
         venv, home, directory = notebook.paths(ctx)
@@ -284,9 +314,11 @@ def _start_frontend(ctx: KitContext, front: str, port_arg: int | None, browser: 
             config.write_text(json.dumps({"ContentsManager": {"hide_globs": ["__pycache__", "*.pyc", "*.pyo",
                                                                        ".DS_Store", "*~", ".ipynb_checkpoints", "marimo"]}}),
                               encoding="utf-8")
-            token = notebook._credential(ctx, "notebook_jupyter_token").read_text(encoding="utf-8").strip()
+            token_file = notebook._credential(ctx, "notebook_jupyter_token")
+            token = token_file.read_text(encoding="utf-8").strip()
             env = {**os.environ, "JUPYTER_TOKEN": token}
-            argv = [str(command), "--no-browser", "--ServerApp.ip=127.0.0.1", f"--ServerApp.port={port}",
+            argv = [str(venv_python(venv)), str(ctx.root / "notebook" / "kit" / "server_wrapper.py"),
+                    str(token_file), str(command), "--no-browser", "--ServerApp.ip=127.0.0.1", f"--ServerApp.port={port}",
                     "--ServerApp.port_retries=0", f"--ServerApp.root_dir={directory}", f"--config={config}"]
         else:
             notebook._copy(ctx, "marimo")
@@ -327,6 +359,12 @@ def _positron_command() -> str | None:
                       Path("/usr/share/positron/positron")):
         if candidate.exists():
             return str(candidate)
+    if os.name == "nt":
+        for variable, relative in (("LOCALAPPDATA", "Programs/Positron/Positron.exe"),
+                                   ("ProgramFiles", "Positron/Positron.exe")):
+            base = os.environ.get(variable)
+            if base and (Path(base) / relative).is_file():
+                return str(Path(base) / relative)
     return None
 
 
@@ -335,26 +373,45 @@ def _menu(ctx: KitContext) -> list[str] | None:
     jupyter = _find_jupyter(ctx)
     jport = _port(ctx, "jupyterlab", None)
     mport = _port(ctx, "marimo", None)
-    jstate = OnDemandServer(ctx, "jupyterlab").state(jport)
-    mstate = OnDemandServer(ctx, "marimo").state(mport)
+    jserver = OnDemandServer(ctx, "jupyterlab")
+    mserver = OnDemandServer(ctx, "marimo")
+    jport = jserver.recorded_port(jport)
+    mport = mserver.recorded_port(mport)
+    jstate = jserver.state(jport)
+    mstate = mserver.state(mport)
     marimo = venv_executable(notebook.paths(ctx)[0], "marimo").is_file()
     positron = _positron_command()
+    recorded = str(ctx.manifest.get("components.notebook.front_ends", ""))
+    installed = set(recorded.split(","))
+    if jupyter and jupyter.is_relative_to(notebook.paths(ctx)[0]):
+        try:
+            version = subprocess.run([str(jupyter), "--version"], capture_output=True, text=True,
+                                     check=False, timeout=10)
+            kit_version = version.stdout.strip() if version.returncode == 0 else ""
+        except (OSError, subprocess.TimeoutExpired):
+            kit_version = ""
+        jdetail = f"ready (the kit's {kit_version})" if kit_version else "ready (the kit's)"
+    elif jupyter:
+        jdetail = f"ready (yours: {jupyter})"
+    else:
+        jdetail = ("missing - reinstall it" if "jupyterlab" in installed else "not installed - installs it")
+        jdetail += " into the kit's environment"
+    mdetail = "ready" if marimo else ("missing - reinstall it" if "marimo" in installed else "not installed - installs it")
     tools = [
         {"id": "jupyterlab", "label": "JupyterLab",
          "detail": f"running at http://127.0.0.1:{jport}/lab" if jstate == "running"
-                   else "ready" if jupyter else "missing - installs into the kit environment"},
+                   else f"starting on port {jport}" if jstate == "starting" else jdetail},
         {"id": "marimo", "label": "Marimo",
          "detail": f"running at http://127.0.0.1:{mport}/" if mstate == "running"
-                   else "ready" if marimo else "missing - installs into the kit environment"},
+                   else f"starting on port {mport}" if mstate == "starting" else mdetail},
         {"id": "positron", "label": "Positron",
-         "detail": "found - opens on the notebooks folder" if positron else "not on this machine",
+         "detail": "found - opens on the notebooks folder" if positron else "not on this machine (get it at positron.posit.co)",
          "disabled": not bool(positron)},
     ]
     with tempfile.TemporaryDirectory(prefix="exakit-notebook-ui-") as temp:
         states = Path(temp) / "states.json"
         result = Path(temp) / "result.json"
         states.write_text(json.dumps({"tools": tools}), encoding="utf-8")
-        recorded = str(ctx.manifest.get("components.notebook.front_ends", "jupyterlab"))
         run = subprocess.run([sys.executable, str(ctx.root / "marketplace" / "launch.py"), str(ctx.root),
                               "notebook", "--states", str(states), "--out", str(result),
                               "--recorded", recorded], check=False)

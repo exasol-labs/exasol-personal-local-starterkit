@@ -1,5 +1,5 @@
 """The kit's notebooks into the user's notebooks folder, one folder per persona, and the folder prepared for Positron.
-Standard library only; one file for setup/lib/notebook.sh and notebook.ps1, so the two cannot drift.
+Standard-library helper for the Python marketplace.
 
     python notebooks.py copy <jupyter|marimo> <kit_root> <notebooks_dir>   prints persona/file for each one added
     python notebooks.py positron <notebooks_dir> <python> <venv>           .vscode/settings.json names the kit's Python
