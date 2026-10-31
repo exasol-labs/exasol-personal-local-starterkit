@@ -209,21 +209,16 @@ check "excluded from update all again" "exakit runtime exapump mcp pyexasol skil
 echo "EXAKIT_MARKETPLACE_ADDONS (the non-interactive contract):"
 # The install functions are stubbed: this proves the routing, not pip.
 run_menu() ( # run_menu <env-answer> — echoes "installed:<ids>" + menu output
-    _CALLED=""
-    # Stubbed FROM THE REGISTRY, not add-on by add-on. The hand-listed version
-    # of this block silently let any add-on it had not been told about run its
-    # REAL installer: dbt-exasol pip-installed itself from PyPI, into the
-    # sandbox home, on every run of this suite - slowly, over the network, and
-    # leaving a genuine install behind that later checks then counted as an
-    # update target. A loop cannot forget the next add-on.
+    . "$ROOT/tests/lib/mock-addon-events.sh"
+    : > "$WORK/called"
     for _rm_id in $(exakit_marketplace_addons | cut -d'|' -f1); do
         _rm_fn="$(printf '%s' "$_rm_id" | tr '-' '_')"
-        eval "${_rm_fn}_install() { _CALLED=\"\${_CALLED} $_rm_id\"; return 0; }"
-        eval "${_rm_fn}_validate() { return 0; }"
+        eval "${_rm_fn}_install() { printf '%s ' '$_rm_id' >> \"\$WORK/called\"; }"
+        eval "${_rm_fn}_summary() { :; }"
     done
     EXAKIT_MARKETPLACE_ADDONS="$1"
     exakit_marketplace_menu >/dev/null 2>&1
-    printf 'rc=%s called=%s' "$?" "${_CALLED# }"
+    printf 'rc=%s called=%s' "$?" "$(sed 's/ $//' "$WORK/called")"
 )
 check "none installs nothing" "rc=0 called=" "$(run_menu none)"
 check "naming one addon installs only it" "rc=0 called=dash-server" "$(run_menu dash-server)"
@@ -232,6 +227,7 @@ _unknown_out="$( (run_menu not-a-tool) 2>&1 || true)"
 check "an unknown id refuses" "yes" "$( (EXAKIT_MARKETPLACE_ADDONS=not-a-tool exakit_marketplace_menu >/dev/null 2>&1); [ $? -ne 0 ] && echo yes || echo no )"
 # An installer that fails must not report success.
 check "a failing installer surfaces" "rc=1" "$( (
+    . "$ROOT/tests/lib/mock-addon-events.sh"
     dash_server_install() { return 1; }
     dash_server_validate() { return 0; }
     EXAKIT_MARKETPLACE_ADDONS="dash-server"
@@ -343,6 +339,7 @@ check "a non-HTTPS endpoint is refused outright" "1" "$( (
 # A scripted answer installs without drawing a table, so it must resolve NO
 # description at all: that is what keeps agent and CI runs off the network.
 check "a scripted run resolves no description" "rc=0 looked=0" "$( (
+    . "$ROOT/tests/lib/mock-addon-events.sh"
     : > "$WORK/looked"
     exakit_marketplace_addon_description() { printf 'x\n' >> "$WORK/looked"; printf 'x\n'; }
     dash_server_install() { return 0; }
@@ -402,12 +399,13 @@ has "no TTY -> one-line hint, no prompt" "exakit marketplace" "$_offer_notty"
 lacks "no TTY -> no yes/no question" "marketplace now" "$_offer_notty"
 # A scripted answer installs without asking.
 check "EXAKIT_MARKETPLACE_ADDONS pre-answers the offer" "rc=0 called=dash-server" "$( (
-    dash_server_install() { _CALLED="dash-server"; return 0; }
+    . "$ROOT/tests/lib/mock-addon-events.sh"
+    dash_server_install() { printf dash-server > "$WORK/called"; }
     dash_server_validate() { return 0; }
-    _CALLED=""
+    : > "$WORK/called"
     EXAKIT_MARKETPLACE_ADDONS="dash-server"
     exakit_marketplace_offer >/dev/null 2>&1
-    printf 'rc=%s called=%s' "$?" "$_CALLED"
+    printf 'rc=%s called=%s' "$?" "$(cat "$WORK/called")"
 ) )"
 # Everything already present: the offer disappears entirely — no hint, no ask.
 check "nothing pending -> the offer is silent" "" "$( (
@@ -1120,7 +1118,8 @@ _addon_scripted="$( (
     exakit_marketplace_addon_installed() { return 1; }
     _exakit_addon_system_present() { return 1; }
     _exakit_addon_applicable() { return 0; }
-    _exakit_marketplace_install_one() { return 0; }
+    . "$ROOT/tests/lib/mock-addon-events.sh"
+    dash_server_install() { return 0; }
     dash_server_summary() { printf 'dashboards at http://127.0.0.1:8000\n'; }
     EXAKIT_MARKETPLACE_ADDONS="dash-server" exakit_marketplace_menu 2>&1
     printf 'table=[%s]' "$EXAKIT_ADDON_TABLE_STATE"
@@ -1184,7 +1183,7 @@ CO_SH="$(cat "$ROOT/setup/lib/common.sh")"
 # and the note under the table is gone. Asserted on what replaced it, not on the
 # wording that was removed -- that wording had already been changed once by
 # another hand, so a needle aimed at it tests nothing.
-has "the add-on failure is only logged"  '_exakit_log_file "WARN  $_mp_id did not finish installing"' "$CO_SH"
+has "the add-on failure is deferred until the table ends" 'warn|$_mpa_id did not finish: $_mpa_detail' "$CO_SH"
 lacks "no note is printed under the frame" '_exakit_addon_note warn \\' "$CO_SH"
 
 printf '\n== a marketplace --json row always carries version ==\n'
@@ -1230,9 +1229,9 @@ has   "the deferral gate asks the shared question" \
 has   "the twin has the same predicate" \
     'return ($script:ExakitAddonTableLive -or $script:ExakitAddonBarLive)' "$COMMON_PS_D"
 has   "...raised around its fallback bar" \
-    '$script:ExakitAddonBarLive = $true' "$COMMON_PS_D"
-check "...and lowered on both ends of the loop and in the Python adapter" "3" \
-    "$(printf '%s\n' "$COMMON_PS_D" | grep -cE '^ +\$script:ExakitAddonBarLive = \$false$')"
+    '$script:ExakitAddonBarLive = [bool](Start-ExakitProgress' "$COMMON_PS_D"
+check "...and lowered on success, failure, and cleanup" "3" \
+    "$(printf '%s\n' "$COMMON_PS_D" | grep -cF 'Stop-ExakitProgress; $script:ExakitAddonBarLive = $false')"
 # Warn2, Write-ExakitError and Write-ExakitAddonNote: every printer that can
 # land on the bar's line, not just the one that always knew about the table.
 check "all three printers ask the shared question" "3" \

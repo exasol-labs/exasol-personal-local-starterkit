@@ -191,7 +191,8 @@ def command(ctx: KitContext, args: list[str]) -> int:
             if not answer["models"]:
                 print("No models yet. Put one with: exakit model put <file>")
             for item in answer["models"]:
-                print(f"{item['name']}: {item['size']} bytes, sha256 {item['sha256'][:12]}... ({item['status']})")
+                state = "CHANGED since it was put" if item["status"] == "changed" else item["status"]
+                print(f"{item['name']}: {item['size']} bytes, sha256 {item['sha256'][:12]}... ({state})")
                 print(f"  {item['path']}")
             for name in answer["missing"]:
                 print(f"{name}: recorded, but no longer in the bucket directory")

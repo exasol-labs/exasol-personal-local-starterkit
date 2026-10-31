@@ -4782,8 +4782,7 @@ function Confirm-ExakitRuntimeRunning {
 # (kit-managed or a system install) is never advertised.
 #
 # Python add-ons are declared in marketplace/catalog.json and implemented in
-# marketplace/addons/<id>.py. This function retains Notebook's table fallback
-# hooks until those child rows are also driven by catalog data.
+# marketplace/addons/<id>.py. Notebook child rows also come from Python metadata.
 # The add-on's one-line description is NOT one of those changes: it is the About
 # field of its own repository, read through Get-ExakitMarketplaceAddonDescription.
 # (CI guards move with it: the expected-components set in versions.yml and the
@@ -4806,27 +4805,6 @@ function Get-ExakitVersionPlain {
     return $Version
 }
 
-function Get-ExakitMarketplaceLegacyAddons {
-    return @(
-        [pscustomobject]@{
-            Id          = "notebook"
-            Label       = "Notebooks (JupyterLab on Exasol)"
-            InstallFn   = "Install-Notebook"
-            ValidateFn  = "Test-Notebook"
-            UpdateFn    = "Update-Notebook"
-            VersionFn   = "Get-NotebookInstalledVersion"
-            UninstallFn = "Uninstall-Notebook"
-            QuestionsFn = "Read-NotebookQuestions"
-            ChildrenFn  = "Get-NotebookTableChildren"
-            ChildrenPickedFn = "Set-NotebookTableChildrenPicked"
-            LogFn       = "Get-NotebookLogPath"
-            SummaryFn   = "Get-NotebookSummary"
-            EnvVar      = "EXAKIT_NOTEBOOK_VERSION"
-            FallbackVar = "NotebookVersionFallback"
-        }
-    )
-}
-
 function Get-ExakitMarketplaceRoot {
     if (Test-Path (Join-Path $script:ExakitMarketplaceSourceRoot 'marketplace\catalog.json')) {
         return $script:ExakitMarketplaceSourceRoot
@@ -4834,8 +4812,7 @@ function Get-ExakitMarketplaceRoot {
     return (Get-ExakitRepoRoot)
 }
 
-# Catalog rows and their order live in marketplace/catalog.json. The legacy
-# hook map below only supplies Notebook's non-Textual child-row fallback.
+# Catalog rows and their order live in marketplace/catalog.json.
 function Get-ExakitMarketplaceAddons {
     $catalogPath = Join-Path (Join-Path (Get-ExakitMarketplaceRoot) 'marketplace') 'catalog.json'
     if (-not (Test-Path $catalogPath)) { return @() }
@@ -4845,56 +4822,45 @@ function Get-ExakitMarketplaceAddons {
         throw 'marketplace/catalog.json needs schema_version 1 and an addons list'
     }
     $seen = @{}
-    $legacy = @{}
-    foreach ($row in Get-ExakitMarketplaceLegacyAddons) { $legacy[$row.Id] = $row }
     $result = @()
     foreach ($row in $catalog.addons) {
         $id = [string]$row.id
         if ($id -cnotmatch '^[a-z0-9][a-z0-9_-]*$' -or $seen.ContainsKey($id)) {
             throw "Invalid or repeated add-on id: $id"
         }
-        if ($row.backend -notin @('legacy', 'python') -or -not $row.label -or
+        if ($row.backend -ne 'python' -or -not $row.label -or
             ([string]$row.label) -match '[\r\n|]' -or -not $row.default_version) {
             throw "Invalid marketplace definition: $id"
         }
         if ($null -ne $row.visible -and $row.visible -isnot [bool]) { throw "Invalid visible setting: $id" }
         $seen[$id] = $true
         $visible = ($row.visible -ne $false)
-        if ($row.backend -eq 'legacy') {
-            if (-not $legacy.ContainsKey($id)) { throw "Missing legacy add-on hook: $id" }
-            $addon = $legacy[$id]
-        } else {
-            $stem = (($id -split '[-_]') | ForEach-Object { $_.Substring(0, 1).ToUpperInvariant() + $_.Substring(1) }) -join ''
-            $addon = [pscustomobject]@{
-                Id = $id; Label = [string]$row.label
-                InstallFn = "Invoke-Marketplace${stem}Install"
-                ValidateFn = "Invoke-Marketplace${stem}Validate"
-                UpdateFn = "Invoke-Marketplace${stem}Update"
-                VersionFn = "Invoke-Marketplace${stem}InstalledVersion"
-                UninstallFn = "Invoke-Marketplace${stem}Uninstall"
-                SystemPresentFn = "Invoke-Marketplace${stem}SystemPresent"
-                ApplicableFn = "Invoke-Marketplace${stem}Applicable"
-                ReasonFn = "Invoke-Marketplace${stem}ApplicableReason"
-                SummaryFn = "Invoke-Marketplace${stem}Summary"
-                StatusFn = "Invoke-Marketplace${stem}Status"
-                StartFn = "Invoke-Marketplace${stem}Start"
-                StopFn = "Invoke-Marketplace${stem}Stop"
-                UrlFn = "Invoke-Marketplace${stem}Url"
-                LogFn = "Invoke-Marketplace${stem}LogPath"
-                AutostartFn = "Invoke-Marketplace${stem}AutostartCommand"
-                LatestFn = "Invoke-Marketplace${stem}Latest"
-                EnvVar = 'EXAKIT_' + $id.ToUpperInvariant().Replace('-', '_') + '_VERSION'
-                FallbackVar = ''
-            }
-            # Preserve the existing table-menu child rows when Textual is
-            # unavailable. The Python catalog owns the choices in the normal
-            # flow; these are compatibility hooks until that fallback is ported.
-            if ($legacy.ContainsKey($id) -and @($row.choices).Count -gt 0) {
-                foreach ($property in @('QuestionsFn', 'ChildrenFn', 'ChildrenPickedFn')) {
-                    $source = $legacy[$id].PSObject.Properties[$property]
-                    if ($source) { $addon | Add-Member -NotePropertyName $property -NotePropertyValue $source.Value }
-                }
-            }
+        $stem = (($id -split '[-_]') | ForEach-Object { $_.Substring(0, 1).ToUpperInvariant() + $_.Substring(1) }) -join ''
+        $addon = [pscustomobject]@{
+            Id = $id; Label = [string]$row.label
+            InstallFn = "Invoke-Marketplace${stem}Install"
+            ValidateFn = "Invoke-Marketplace${stem}Validate"
+            UpdateFn = "Invoke-Marketplace${stem}Update"
+            VersionFn = "Invoke-Marketplace${stem}InstalledVersion"
+            UninstallFn = "Invoke-Marketplace${stem}Uninstall"
+            SystemPresentFn = "Invoke-Marketplace${stem}SystemPresent"
+            ApplicableFn = "Invoke-Marketplace${stem}Applicable"
+            ReasonFn = "Invoke-Marketplace${stem}ApplicableReason"
+            SummaryFn = "Invoke-Marketplace${stem}Summary"
+            StatusFn = "Invoke-Marketplace${stem}Status"
+            StartFn = "Invoke-Marketplace${stem}Start"
+            StopFn = "Invoke-Marketplace${stem}Stop"
+            UrlFn = "Invoke-Marketplace${stem}Url"
+            LogFn = "Invoke-Marketplace${stem}LogPath"
+            AutostartFn = "Invoke-Marketplace${stem}AutostartCommand"
+            LatestFn = "Invoke-Marketplace${stem}Latest"
+            EnvVar = 'EXAKIT_' + $id.ToUpperInvariant().Replace('-', '_') + '_VERSION'
+            FallbackVar = ''
+        }
+        if ($id -eq 'notebook' -and @($row.choices).Count -gt 0) {
+            $addon | Add-Member -NotePropertyName QuestionsFn -NotePropertyValue 'Read-NotebookQuestions'
+            $addon | Add-Member -NotePropertyName ChildrenFn -NotePropertyValue 'Get-NotebookTableChildren'
+            $addon | Add-Member -NotePropertyName ChildrenPickedFn -NotePropertyValue 'Set-NotebookTableChildrenPicked'
         }
         $addon.Label = [string]$row.label
         $addon | Add-Member -NotePropertyName Visible -NotePropertyValue $visible -Force
@@ -4982,8 +4948,8 @@ function Invoke-ExakitMarketplacePython {
 }
 
 function Invoke-ExakitMarketplaceCli {
-    param([ValidateSet('notebook_cli', 'udf_cli', 'model_cli', 'udf_manage', 'mlflow_cli', 'rust_cli', 'workflow_cli', 'persona_apply')][string]$Script,
-          [string[]]$CmdArgs = @())
+    param([ValidateSet('notebook_cli', 'udf_cli', 'model_cli', 'udf_manage', 'mlflow_cli', 'rust_cli', 'workflow_cli', 'persona_apply', 'installer_flow')][string]$Script,
+          [string[]]$CmdArgs = @(), [switch]$AllowFailure)
     $root = Get-ExakitMarketplaceRoot
     $target = Join-Path (Join-Path $root 'marketplace') "$Script.py"
     if (-not (Test-Path -LiteralPath $target)) { Fail "The $Script module is missing from this kit copy. Repair with: exakit update" }
@@ -5020,7 +4986,7 @@ function Invoke-ExakitMarketplaceCli {
         if ($null -eq $previousVersionsDoc) { Remove-Item Env:EXAKIT_MARKETPLACE_VERSIONS_DOC -ErrorAction SilentlyContinue }
         else { $env:EXAKIT_MARKETPLACE_VERSIONS_DOC = $previousVersionsDoc }
     }
-    if ($code -ne 0) { exit $code }
+    if ($code -ne 0 -and -not $AllowFailure) { exit $code }
 }
 
 # Make hook functions only for operations the Python module actually exports.
@@ -6225,162 +6191,7 @@ function Invoke-ExakitMarketplaceApplyPython {
 
 function Invoke-ExakitMarketplaceApply {
     param([Parameter(Mandatory)][string[]]$Ids)
-    if ($env:EXAKIT_MARKETPLACE_PYTHON_APPLY -eq '1') {
-        Invoke-ExakitMarketplaceApplyPython -Ids $Ids
-        return
-    }
-    $failed = 0
-    Invoke-ExakitMarketplaceQuestions -Ids $Ids
-    # The SAME table the selection was just made in becomes the progress display:
-    # the rows do not move, so nobody has to map one screen onto another. It
-    # animates only where there is a console to animate on, and a scripted answer
-    # (EXAKIT_MARKETPLACE_ADDONS) never built a table at all - every add-on then
-    # narrates in plain lines exactly as it did before.
-    # Twin of the same block in _exakit_marketplace_apply (common.sh).
-    $script:ExakitAddonTableLive = $false
-    if ($null -ne $script:ExakitAddonTable) {
-        $script:ExakitAddonTableLive = [bool](Start-ExakitTable -Table $script:ExakitAddonTable)
-    }
-    # With the table narrating, the per-add-on lines underneath it are the same
-    # facts twice - and printing one scrolls the frame the animator is redrawing.
-    # ExakitQuietDetail routes them to the logfile instead, which is what it is
-    # for; the per-add-on save/restore below nests inside this one.
-    $prevQuietAll = $script:ExakitQuietDetail
-    if ($script:ExakitAddonTableLive) { $script:ExakitQuietDetail = $true }
-    foreach ($id in $Ids) {
-        $addon = Get-ExakitMarketplaceAddon $id
-        if (-not $addon) { continue }
-        # Which row this add-on owns, if a table is on screen. 0 means there is
-        # none and the single-line bar takes over, unchanged.
-        $script:ExakitAddonTableRow = 0
-        $script:ExakitAddonTableChildRows = @{}
-        if ($script:ExakitAddonTableLive) {
-            $script:ExakitAddonTableRow = [int](Get-ExakitAddonTableRow -Id $id)
-            # ...and the rows one level deeper, for the install to settle.
-            $script:ExakitAddonTableChildRows = Get-ExakitAddonTableChildRows -Id $id
-        }
-        Info "Installing add-on: $id"
-        $t0 = Get-Date
-        $installed = $false
-        # Every silent stretch of an add-on install already animates, because
-        # Invoke-ExakitLogged starts the spinner. What it did NOT have was a
-        # truthful label: ExakitActiveLabel is set by Begin-ExakitStep, and
-        # add-ons are installed after the last numbered step (or from `exakit
-        # marketplace`, with no step at all), so a long install animated under
-        # the previous step's title, or under the bare word "working". Name what
-        # is actually running. Twin of the same block in
-        # _exakit_marketplace_install_one (common.sh).
-        # Installing three add-ons printed fifty lines: a venv, a pip resolve, a
-        # download, a checksum, a launcher, a package-data repair and a
-        # validation probe, each announcing itself twice. None of it is
-        # something the person who ticked three boxes can act on, and all of it
-        # is in the logfile. ExakitQuietDetail routes it there; the progress line
-        # is the narration. The percentages are milestone positions weighted by
-        # where the TIME goes - fetching and installing is nearly all of it -
-        # not a step count.
-        $prevLabel = $script:ExakitActiveLabel
-        $prevQuiet = $script:ExakitQuietDetail
-        try {
-            $script:ExakitQuietDetail = $true
-            Set-ExakitAddonProgress -Id $id -Pct 0 -Ceiling 65 -Secs 40 -Phase "installing"
-            # The TABLE, when there is one, already holds the UI layer's single
-            # animation slot, so this takes a reference and draws nothing (see the
-            # guard in Start-ExakitProgress) - and the Stop-ExakitProgress below
-            # gives that reference back rather than tearing the table down.
-            [void](Start-ExakitProgress -Pct 0 -Ceiling 65 -Secs 40 -Phase "$id - installing")
-            $script:ExakitAddonBarLive = $true
-            $installed = & $addon.InstallFn
-        } catch {
-            Write-ExakitAddonNote "warn" "$id installer reported: $_"
-            $installed = $false
-        }
-        if ($installed) {
-            Set-ExakitComponentOwnership $id "kit"
-            if ($addon.ValidateFn -and (Get-Command $addon.ValidateFn -ErrorAction SilentlyContinue)) {
-                try {
-                    Set-ExakitAddonProgress -Id $id -Pct 65 -Ceiling 90 -Secs 8 -Phase "validating"
-                    & $addon.ValidateFn
-                } catch { Write-ExakitAddonNote "warn" "$id validation reported: $_" }
-            }
-            # The add-on's own skills, placed now rather than at the AI-bridge
-            # step. Twin of the same call in _exakit_marketplace_install_one.
-            try { Install-ExakitAddonSkills $id } catch { }
-            # A service add-on joins the boot set the moment it is installed, so
-            # nobody has to remember a second command. This used to be skipped
-            # during an install, because Register-ExakitAutostart was CLI-only -
-            # which is exactly why an add-on installed from the closing offer
-            # never joined the boot set. It is in the shared layer now, so the
-            # install path registers it like the CLI always did.
-            # Twin of the same block in _exakit_marketplace_install_one.
-            if ((Get-ExakitManifestValue "autostart.enabled") -eq $true -and
-                $addon.PSObject.Properties["AutostartFn"]) {
-                try { [void](Register-ExakitAutostart -Id $id) } catch { }
-            }
-            # ...and it is STARTED now. Registering for boot is not the same as
-            # running: on Windows nothing starts until the next login, so
-            # `exakit status` reported the add-on just installed as "stopped".
-            if ($addon.PSObject.Properties["StartFn"] -and
-                (Get-Command $addon.StartFn -ErrorAction SilentlyContinue)) {
-                Set-ExakitAddonProgress -Id $id -Pct 90 -Ceiling 100 -Secs 3 -Phase "starting"
-                try { [void](& $addon.StartFn) }
-                catch { Write-ExakitAddonNote "warn" "$id installed but did not start - start it with: exakit start" }
-            }
-            # The add-on's own panel already carries an "Update  exakit update
-            # <id>" row, so the result line does not repeat it twice.
-            Stop-ExakitProgress
-            $script:ExakitAddonBarLive = $false
-            $script:ExakitQuietDetail = $prevQuiet
-            $script:ExakitActiveLabel = $prevLabel
-            # SummaryFn is OPTIONAL: the one fact worth carrying out of an
-            # install whose reference panel is now log-only. Twin of the
-            # <id>_summary hook in _exakit_marketplace_apply (common.sh).
-            $note = ""
-            if ($addon.PSObject.Properties["SummaryFn"] -and
-                (Get-Command $addon.SummaryFn -ErrorAction SilentlyContinue)) {
-                try { $note = "$(& $addon.SummaryFn)" } catch { $note = "" }
-            }
-            # Ok() is the record either way: it writes the FULL summary to the
-            # logfile whether or not the screen is showing it, which is what keeps
-            # a summary too long for the column from being lost.
-            if ($note) { Ok "$id installed - $note" } else { Ok "$id installed" }
-            if ($script:ExakitAddonTableRow -gt 0) {
-                $elapsed = [int]((Get-Date) - $t0).TotalSeconds
-                if ($elapsed -lt 0) { $elapsed = 0 }
-                Set-ExakitTableRow -Row $script:ExakitAddonTableRow -State "done" `
-                    -Final (Get-ExakitAddonTableCell -Summary $note -Seconds $elapsed) `
-                    -Table $script:ExakitAddonTable
-            }
-        } else {
-            Stop-ExakitProgress
-            $script:ExakitAddonBarLive = $false
-            $script:ExakitQuietDetail = $prevQuiet
-            $script:ExakitActiveLabel = $prevLabel
-            if ($script:ExakitAddonTableRow -gt 0) {
-                Set-ExakitTableRow -Row $script:ExakitAddonTableRow -State "failed" `
-                    -Final "did not finish - see the log" -Table $script:ExakitAddonTable
-            }
-            # NO REMEDY HERE. The module that failed has just printed its own,
-            # specific to what went wrong; adding a generic "retry with: exakit
-            # marketplace" underneath it gave one failure two competing answers
-            # and made the reader choose - and the generic one was the wrong
-            # choice, because marketplace declines to act on an add-on that is
-            # already present and answers "Nothing to install".
-            Write-ExakitAddonNote "warn" "$id did not finish installing - the reason is above, and in the log"
-            $failed += 1
-        }
-        $script:ExakitAddonTableRow = 0
-        $script:ExakitAddonTableChildRows = @{}
-    }
-    # The table stops redrawing BEFORE anything is said over it, and only then is
-    # what was collected on the way said.
-    if ($script:ExakitAddonTableLive) {
-        Stop-ExakitTable -Table $script:ExakitAddonTable
-        $script:ExakitAddonTableLive = $false
-    }
-    $script:ExakitQuietDetail = $prevQuietAll
-    Show-ExakitAddonNotes
-    Reset-ExakitAddonTable
-    if ($failed -gt 0) { Fail "$failed add-on(s) did not finish installing." }
+    Invoke-ExakitMarketplaceApplyPython -Ids $Ids
 }
 
 # Request-ExakitMarketplaceOffer - the closing moment of an install:

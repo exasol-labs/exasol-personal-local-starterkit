@@ -1,10 +1,4 @@
-"""(run: python3 tests/test_notebook_contents.py) What the notebook add-on ships, held to what exists: every call a shipped
-notebook makes into exakit.nb or exasol_mlflow (and on the Dataset and the MLflow run they return) is one the packages
-define, every `exakit <command>` a notebook or helper tells the user to run is a command of this kit, the descriptor
-rules shipped with exakit.nb are byte-identical to tools/descriptor_rules.py, every notebook has its .py source, the
-catalog is the requirements' notebook catalogue (Appendix B) and nothing more, each notebook's first cell states its
-dataset and run time, both quickstarts carry the same shared cells, no shipped file holds a connection value (AC-DS1.2),
-and no build output or egg-info is tracked."""
+"""Check shipped notebook calls, commands, metadata, and generated-file hygiene."""
 
 from __future__ import annotations
 
@@ -14,6 +8,7 @@ import json
 import re
 import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -33,7 +28,13 @@ _spec.loader.exec_module(build_tool)
 
 SOURCES = ROOT / "notebook" / "notebooks"
 NOTEBOOKS = sorted(SOURCES.glob("**/*.py")) + sorted((ROOT / "notebook" / "marimo").glob("**/*.py"))
-HELPERS = sorted((ROOT / "notebook" / "package").glob("*/**/*.py")) + sorted((ROOT / "notebook" / "kit").glob("*.py"))
+def helper_sources(package: Path) -> list[Path]:
+    return sorted(path for path in package.glob("*/**/*.py")
+                  if not any(part in ("build", "dist", "__pycache__") or part.endswith(".egg-info")
+                             for part in path.relative_to(package).parts))
+
+
+HELPERS = helper_sources(ROOT / "notebook" / "package") + sorted((ROOT / "notebook" / "kit").glob("*.py"))
 # Commands other work items add to this kit in parallel: `exakit model put|list` (ML-4) is named by the ML Engineer's
 # checks before its dispatch arm lands.
 PENDING_COMMANDS = {"model"}
@@ -68,6 +69,20 @@ def _built_cells(py: Path) -> list[dict]:
 
 
 class CallsExistTest(unittest.TestCase):
+    def test_helper_checks_ignore_temporary_wheel_build_copies(self):
+        with tempfile.TemporaryDirectory() as folder:
+            package = Path(folder)
+            source = package / "exakit" / "__init__.py"
+            copied = package / "build" / "lib" / "exakit" / "__init__.py"
+            for path in (source, copied):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("")
+            sources = helper_sources(package)
+            copied.unlink()
+            self.assertEqual([source], sources)
+            for path in sources:
+                self.assertEqual("", path.read_text())
+
     def test_every_package_call_a_notebook_makes_exists(self):
         targets = {"nb": set(dir(exakit_nb)), "exakit_nb": set(dir(exakit_nb)), "exasol_mlflow": set(dir(exasol_mlflow)),
                    "ds": _members(Dataset), "run": _members(exasol_mlflow.Run) | set(vars(exasol_mlflow.Run(

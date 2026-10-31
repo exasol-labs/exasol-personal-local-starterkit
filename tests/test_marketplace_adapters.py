@@ -66,6 +66,16 @@ class AdapterDryRunTest(unittest.TestCase):
                 addons = json.loads(result.stdout)["addons"]
                 self.assertIn("dbt-exasol", {addon["id"] for addon in addons})
 
+    def test_bash_direct_commands_use_candidate_code_with_an_older_installed_kit(self) -> None:
+        script = (f'. "{ROOT / "setup/lib/common.sh"}"\n'
+                  f'exakit_repo_root() {{ printf "%s\\n" "{self.home / "old kit"}"; }}\n'
+                  '_exakit_marketplace_run_python() { printf "%s\\n" "$2"; }\n'
+                  '_exakit_marketplace_cli installer_flow --phase begin\n')
+        result = subprocess.run(["bash", "-c", script], env=self._environment(),
+                                capture_output=True, text=True, timeout=15)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(str(ROOT / "marketplace/installer_flow.py"), result.stdout.strip())
+
     def test_bash_install_passes_selected_version_document(self) -> None:
         selected = self.base / "selected versions.json"
         selected.write_text('{"components":{}}')
@@ -259,6 +269,23 @@ class AdapterDryRunTest(unittest.TestCase):
                                 capture_output=True, text=True, timeout=35, check=False)
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual([f"{selected}|2.0.0", f"{selected}|"], captured.read_text().splitlines())
+
+    @unittest.skipUnless(shutil.which("pwsh"), "PowerShell is not installed")
+    def test_optional_service_failure_continues_but_public_commands_fail(self) -> None:
+        script = (f'. "{ROOT / "setup/lib/exakit-common.ps1"}"\n'
+                  'function Get-ExakitUvBin { return "Invoke-FailedWorker" }\n'
+                  'function Invoke-FailedWorker { $global:LASTEXITCODE = 6 }\n'
+                  f'function Get-ExakitMarketplaceVersionsDoc {{ return "{ROOT / "versions.json"}" }}\n')
+        for optional in (False, True):
+            with self.subTest(optional=optional):
+                call = script + ('Invoke-ExakitMarketplaceCli -Script installer_flow '
+                                 + ('-AllowFailure' if optional else '')
+                                 + '\nWrite-Output "continued"\nexit 0\n')
+                result = subprocess.run(["pwsh", "-NoProfile", "-Command", call],
+                    env=self._environment(), capture_output=True, text=True, timeout=15)
+                self.assertEqual(0 if optional else 6, result.returncode, result.stderr)
+                self.assertEqual(optional, "continued" in result.stdout)
+                self._assert_preserved()
 
     @unittest.skipUnless(shutil.which("pwsh"), "PowerShell is not installed")
     def test_powershell_json_loader_uses_python_marketplace_hooks(self) -> None:

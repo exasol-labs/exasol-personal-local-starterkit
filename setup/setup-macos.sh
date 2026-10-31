@@ -173,11 +173,7 @@ exakit_finish
 if [ -n "${EXAKIT_PERSONA_ACTIVE:-}" ]; then
     exakit_autostart_default_on || true
     ( exakit_marketplace_offer ) || true
-    for _persona_service in $(_exakit_persona_service services "$EXAKIT_PERSONA" 2>/dev/null); do
-        case "$_persona_service" in
-            mlflow) "$EXAKIT_BIN_DIR/exakit" mlflow start || warn "MLflow did not start; retry with: exakit mlflow start" ;;
-        esac
-    done
+    _exakit_marketplace_cli installer_flow --phase services --cli "$EXAKIT_BIN_DIR/exakit" || true
     command -v exakit_persona_marketplace_note >/dev/null 2>&1 && exakit_persona_marketplace_note
 fi
 connection_summary

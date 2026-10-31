@@ -221,60 +221,26 @@ function Read-ExakitPersonaQuestion {
 # The install asks for a persona after the common steps, then offers its data.
 # Add-ons are offered at the end; no persona keeps the kit's sample defaults.
 function Invoke-ExakitPersonaFlow {
-    param([Parameter(Mandatory)][string]$KitRoot)
-    # No database or no exapump: nothing here can run, so nobody is asked.
-    if (Test-ExakitSoftFailed "runtime") { return }
-    if (Test-ExakitSoftFailed "exapump") { Invoke-ExakitPersonaData -KitRoot $KitRoot; return }
-    if (-not $env:EXAKIT_PERSONA) {
-        if ($script:UiFancy -and (Test-ExakitInteractive) -and -not (Test-ExakitPersonaAllAnswered)) {
-            Read-ExakitPersonaQuestion
-            if ($env:EXAKIT_PERSONA -and (Get-ExakitPersona $env:EXAKIT_PERSONA)) {
-                Set-ExakitPersonaPreselect -Ids $env:EXAKIT_PERSONA
-                Ok "Persona: $(@(Invoke-ExakitPersonaService 'title' $env:EXAKIT_PERSONA) -join '')"
-                Write-ExakitLog "INFO" "persona $($env:EXAKIT_PERSONA) picked on screen: datasets $($env:EXAKIT_DATASETS_PRESELECT); add-ons $($env:EXAKIT_MARKETPLACE_PRESELECT)"
-                Set-ExakitPersonaRecord
-                $env:EXAKIT_PERSONA_ACTIVE = "1"
-            } elseif ($env:EXAKIT_PERSONA) {
-                Warn2 "$($script:ExakitPersonaProblem) - carrying on without a persona"
-                Remove-Item Env:EXAKIT_PERSONA -ErrorAction SilentlyContinue
+    param([Parameter(Mandatory)][string]$KitRoot, [string]$Phase = 'begin')
+    $flags = @('--root', $KitRoot, '--phase', $Phase)
+    if (Test-ExakitSoftFailed 'runtime') { $flags += '--runtime-failed' }
+    if (Test-ExakitSoftFailed 'exapump') { $flags += '--exapump-failed' }
+    if ($script:UiFancy -and (Test-ExakitInteractive)) { $flags += '--interactive' }
+    $actions = @(Invoke-ExakitMarketplaceCli -Script installer_flow -CmdArgs $flags)
+    foreach ($line in $actions) {
+        $parts = "$line" -split '\|', 3
+        switch ($parts[0]) {
+            'question' { Read-ExakitPersonaQuestion; Invoke-ExakitPersonaFlow -KitRoot $KitRoot -Phase selected }
+            'set' {
+                if ($parts[1] -in @('EXAKIT_PERSONA', 'EXAKIT_PERSONA_ACTIVE', 'EXAKIT_DATASETS_PRESELECT', 'EXAKIT_MARKETPLACE_PRESELECT')) {
+                    [Environment]::SetEnvironmentVariable($parts[1], $parts[2], 'Process')
+                }
             }
-        } else {
-            Set-ExakitPersonaKitDefaults
+            'notice' { Ok $parts[1] }
+            'warning' { Warn2 $parts[1] }
+            'data' { Invoke-ExakitPersonaData -KitRoot $KitRoot }
         }
     }
-    # Asked, and the answer was None: the kit's own default datasets.
-    if (-not $env:EXAKIT_PERSONA -and -not $env:EXAKIT_DATASETS_PRESELECT) { Set-ExakitPersonaKitDefaults }
-    Invoke-ExakitPersonaData -KitRoot $KitRoot
-}
-
-# Set-ExakitPersonaKitDefaults - no persona: the data question ticks the
-# datasets the kit loads on its own (default=yes in their dataset.conf).
-# Nothing is recorded. Twin of _exakit_persona_kit_defaults.
-function Set-ExakitPersonaKitDefaults {
-    $ds = (@(Invoke-ExakitPersonaService "default-datasets") -join "").Trim()
-    if ($ds) { $env:EXAKIT_DATASETS_PRESELECT = $ds }
-}
-
-# Test-ExakitPersonaAllAnswered - everything the persona question would answer
-# was answered in the environment already. Twin of _exakit_persona_all_answered.
-function Test-ExakitPersonaAllAnswered {
-    $data = ($env:EXAKIT_DATASETS -or $env:EXAKIT_LOAD_SAMPLE -eq "0" -or $env:EXAKIT_LOAD_SAMPLE -eq "1")
-    return [bool]($data -and $env:EXAKIT_MARKETPLACE_ADDONS)
-}
-
-# Set-ExakitPersonaPreselect - what the menus tick for these personas:
-# EXAKIT_DATASETS_PRESELECT (dataset ids, or "none") and, unless -DatasetsOnly,
-# EXAKIT_MARKETPLACE_PRESELECT (add-on ids, or "all"). Twin of
-# _exakit_persona_preselect.
-function Set-ExakitPersonaPreselect {
-    param([Parameter(Mandatory)][string]$Ids, [switch]$DatasetsOnly)
-    $answers = @(Invoke-ExakitPersonaService "answers" $Ids)
-    $ds = ($answers | Where-Object { $_ -like "EXAKIT_DATASETS=*" } | ForEach-Object { $_.Substring(16) } | Select-Object -First 1)
-    if ($answers -contains "EXAKIT_LOAD_SAMPLE=0") { $ds = "none" }
-    $ad = ($answers | Where-Object { $_ -like "EXAKIT_MARKETPLACE_ADDONS=*" } | ForEach-Object { $_.Substring(26) } | Select-Object -First 1)
-    if ($ds) { $env:EXAKIT_DATASETS_PRESELECT = $ds }
-    if ($DatasetsOnly) { return }
-    if ($ad -and $ad -ne "none") { $env:EXAKIT_MARKETPLACE_PRESELECT = $ad }
 }
 
 # Invoke-ExakitPersonaData - the sample-data section, booked as a soft step.
@@ -344,169 +310,8 @@ function Get-ExakitPersonaRecorded {
     return (@(Invoke-ExakitPersonaService "check" ($known -join ",")) -join "")
 }
 
-# Get-ExakitPersonaDatasetLabel <id> - the dataset's name as a line says it: its
-# label without the "(~5k rows)" estimate or the download size. Twin of
-# _exakit_persona_label.
-function Get-ExakitPersonaDatasetLabel {
-    param([Parameter(Mandatory)][string]$Id)
-    $ds = @(Get-ExakitBundledDatasets | Where-Object { $_.Id -ceq $Id }) | Select-Object -First 1
-    if (-not $ds) { return $Id }
-    return ([regex]::Replace(("" + $ds.Label), ' - [0-9.]+ MB download$', '') -replace ' *\([^()]*\)$', '')
-}
-
-# Invoke-ExakitPersonaChild -Cli <exakit.ps1> -Command <command> [-Env @{..}] -
-# one step of `exakit persona add`, as its own command in a process of its own:
-# a command that ends with `exit` must not end this one, so one that fails does
-# not stop the others. The variables in -Env are set for it alone ($null
-# removes one). Its input is not the console, so nothing in there can ask a
-# question (Test-ExakitInteractive); its output is, so its tables animate. Keys
-# typed meanwhile are dropped when it ends. The exit code lands in
-# $script:ExakitPersonaChildCode: this function's output is the child's own,
-# straight to the console, and capturing it would take the console away.
-# Twin of the ( cmd_... ) subshells in exakit_persona_add.
-$script:ExakitPersonaChildCode = 0
-function Invoke-ExakitPersonaChild {
-    param([Parameter(Mandatory)][string]$Cli, [Parameter(Mandatory)][string]$Command,
-          [string[]]$Arguments = @(), [hashtable]$Env = @{})
-    $saved = @{}
-    foreach ($k in @($Env.Keys)) {
-        $saved[$k] = [Environment]::GetEnvironmentVariable($k, "Process")
-        [Environment]::SetEnvironmentVariable($k, $Env[$k], "Process")
-    }
-    $script:ExakitPersonaChildCode = 1
-    try {
-        $hostExe = (Get-Process -Id $PID).Path
-        $null | & $hostExe -NoProfile -ExecutionPolicy Bypass -File $Cli $Command @Arguments
-        $script:ExakitPersonaChildCode = $LASTEXITCODE
-    } finally {
-        foreach ($k in @($Env.Keys)) { [Environment]::SetEnvironmentVariable($k, $saved[$k], "Process") }
-        try { while ([Console]::KeyAvailable) { [void][Console]::ReadKey($true) } } catch { }
-    }
-}
-
-# Legacy apply path for direct callers. The public CLI uses
-# marketplace/persona_apply.py on both platforms.
-$script:ExakitPersonaAddOk = $false
 function Invoke-ExakitPersonaAdd {
-    param([Parameter(Mandatory)][string]$Ids, [Parameter(Mandatory)][AllowEmptyString()][string]$Cli)
-    $script:ExakitPersonaAddOk = $false
-    $was = Get-ExakitPersonaRecorded
-    $new = Get-ExakitPersonaSelectable $Ids $was
-    if (-not $new) { Fail $script:ExakitPersonaProblem }
-    $all = $new
-    if ($was) {
-        $both = Get-ExakitPersona "$was,$new"
-        if ($both) { $all = $both }
-    }
-    $title = (@(Invoke-ExakitPersonaService "title" $new) -join "")
-    if (-not $title) { $title = $new }
-    $allTitle = (@(Invoke-ExakitPersonaService "title" $all) -join "")
-    if (-not $allTitle) { $allTitle = $all }
-    $answers = Invoke-ExakitPersonaService "answers" $all
-    if ($null -eq $answers) { Fail "The persona files could not be read - repair the kit copy with: exakit update" }
-    Set-ExakitPersonaAnswers $answers
-    $env:EXAKIT_PERSONA_SOURCE = "add"
-    Set-ExakitPersonaRecord
-    Write-ExakitLog "INFO" "persona add $new -> $($env:EXAKIT_PERSONA): $(@($answers) -join ' ')"
-    Write-Host ""
-    if ($all -eq $new) { Write-ExakitHeading "Adding persona: $title" }
-    else { Write-ExakitHeading "Adding persona: $title (now $allTitle)" }
-    # The installer's tables where there is a console to animate them on.
-    $live = [bool]$script:UiFancy
-    $failed = @()                    # "<part>|<the command that retries it>"
-
-    Write-ExakitStepHeading "Step 1/3  Sample data"
-    $load = @(); $have = @()
-    if ($env:EXAKIT_LOAD_SAMPLE -ne "0" -and $env:EXAKIT_DATASETS) {
-        $known = @(Get-ExakitBundledDatasets | ForEach-Object { $_.Id })
-        $pendingIds = @(Get-ExakitPendingDatasets | ForEach-Object { $_.Id })
-        foreach ($d in @($env:EXAKIT_DATASETS -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
-            if ($known -cnotcontains $d) { Warn2 "Unknown dataset id '$d' in EXAKIT_DATASETS - left out"; continue }
-            if ($pendingIds -ccontains $d) { $load += $d } else { $have += (Get-ExakitPersonaDatasetLabel $d) }
-        }
-    }
-    if ($have.Count) { Ok "Already loaded: $($have -join ', ')" }
-    if ($load.Count) {
-        if ($live) {
-            # The data question's table, with only these datasets under Sample
-            # datasets (a persona lists its own), ticked.
-            $childEnv = @{ EXAKIT_DATASETS = $null; EXAKIT_DATA_FILE = $null; EXAKIT_LOAD_SAMPLE = $null
-                EXAKIT_PERSONA_ACTIVE = "1"; EXAKIT_DATASETS_PRESELECT = ($load -join ","); UI_TABLE_AUTO = "1" }
-        } else {
-            $childEnv = @{ EXAKIT_DATASETS = ($load -join ","); EXAKIT_DATA_FILE = $null; EXAKIT_LOAD_SAMPLE = $null }
-        }
-        Invoke-ExakitPersonaChild -Cli $Cli -Command "data-load" -Env $childEnv
-        if ($script:ExakitPersonaChildCode -ne 0) { $failed += "Sample data|`$env:EXAKIT_DATASETS = '$($load -join ',')'; exakit data-load" }
-    } elseif ($have.Count -eq 0) {
-        Info "No sample data for these personas"
-    }
-
-    Write-ExakitStepHeading "Step 2/3  AI clients"
-    if ($env:EXAKIT_SKIP_MCP -eq "1") {
-        Info "Skipping the AI clients (EXAKIT_SKIP_MCP=1) - connect them any time with: exakit mcp-setup"
-    } elseif (-not $env:EXAKIT_MCP_CLIENTS -or $env:EXAKIT_MCP_CLIENTS -match '^\s*(skip|none)\s*$') {
-        Info "No AI clients for these personas"
-    } else {
-        $childEnv = @{}
-        if ($live) {
-            # The installer's client table: the clients already connected are on
-            # it, saying so; the personas' pending ones are ticked ("all": every
-            # one on this machine).
-            $childEnv = @{ EXAKIT_MCP_PRESELECT = $env:EXAKIT_MCP_CLIENTS; EXAKIT_MCP_CLIENTS = $null; UI_TABLE_AUTO = "1" }
-        }
-        Invoke-ExakitPersonaChild -Cli $Cli -Command "mcp-setup" -Env $childEnv
-        if ($script:ExakitPersonaChildCode -ne 0) { $failed += "AI clients|exakit mcp-setup" }
-    }
-
-    Write-ExakitStepHeading "Step 3/3  Add-ons"
-    $ad = "" + $env:EXAKIT_MARKETPLACE_ADDONS
-    if ($ad -eq "none") { $ad = "" }
-    if ($ad -eq "all") { $ad = (@(Get-ExakitMarketplaceAddons | ForEach-Object { $_.Id }) -join ",") }
-    $installed = @(Get-ExakitMarketplaceInstalledAddons)
-    $get = @(); $got = @()
-    foreach ($a in @($ad -split ',' | Where-Object { $_ })) {
-        if ($installed -contains $a) { $got += $a } else { $get += $a }
-    }
-    if ($got.Count) { Ok "Already installed: $($got -join ', ')" }
-    if ($get.Count) {
-        if ($live) {
-            # The marketplace's table, narrowed to these add-ons, all ticked (the
-            # notebook's tools as its child rows, their own defaults).
-            $childEnv = @{ EXAKIT_MARKETPLACE_ONLY = ($get -join ","); EXAKIT_MARKETPLACE_ADDONS = $null; UI_TABLE_AUTO = "1" }
-        } else {
-            $childEnv = @{ EXAKIT_MARKETPLACE_ADDONS = ($get -join ",") }
-        }
-        Invoke-ExakitPersonaChild -Cli $Cli -Command "marketplace" -Env $childEnv
-        if ($script:ExakitPersonaChildCode -ne 0) { $failed += "Add-ons|exakit marketplace $($get -join ' ')" }
-    } elseif ($got.Count -eq 0) {
-        Info "No add-ons for these personas"
-    }
-
-    foreach ($service in @(Invoke-ExakitPersonaService "services" $new)) {
-        if ($service -eq "mlflow") {
-            Invoke-ExakitPersonaChild -Cli $Cli -Command "mlflow" -Arguments @("start")
-            if ($script:ExakitPersonaChildCode -ne 0) { $failed += "MLflow service|exakit mlflow start" }
-        }
-    }
-
-    Write-Host ""
-    if ($failed.Count -eq 0) {
-        if ($script:UiFancy) {
-            Write-Host ("  {0}{1}{2} {3}Persona added: {4}{5}" -f $script:UiOk, $script:UiTick, $script:UiReset, $script:UiBold, $allTitle, $script:UiReset)
-        } else {
-            Write-Host ("  {0} Persona added: {1}" -f $script:UiTick, $allTitle)
-        }
-        Write-ExakitLog "OK" "persona added: $($env:EXAKIT_PERSONA)"
-        $script:ExakitPersonaAddOk = $true
-        return
-    }
-    if ($script:UiFancy) {
-        Write-Host ("  {0}{1}{2} {3}Persona added: {4}{5} - not everything finished" -f $script:UiErr, $script:UiCross, $script:UiReset, $script:UiBold, $allTitle, $script:UiReset)
-    } else {
-        Write-Host ("  {0} Persona added: {1} - not everything finished" -f $script:UiCross, $allTitle)
-    }
-    foreach ($f in $failed) {
-        $parts = $f -split '\|', 2
-        Warn2 "$($parts[0]) did not finish - retry with: $($parts[1])"
-    }
+    param([Parameter(Mandatory)][string]$Ids, [Parameter(Mandatory)][string]$Cli)
+    Invoke-ExakitMarketplaceCli -Script persona_apply -CmdArgs @('add', $Ids, '--cli', $Cli, '--host', (Get-Process -Id $PID).Path)
+    $script:ExakitPersonaAddOk = $true
 }

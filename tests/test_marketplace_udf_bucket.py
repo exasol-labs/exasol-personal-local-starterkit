@@ -12,6 +12,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from cli_entrypoints import entrypoints
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "marketplace"))
@@ -79,11 +80,7 @@ class UdfBucketTest(unittest.TestCase):
         source.write_text("payload")
         env = {**os.environ, "EXAKIT_HOME": str(self.home),
                "EXAKIT_NO_UPDATE_NOTICE": "1", "EXAKIT_NO_FANCY": "1"}
-        commands = []
-        if shutil.which("bash"):
-            commands.append([str(ROOT / "setup/exakit")])
-        if shutil.which("pwsh"):
-            commands.append(["pwsh", "-NoProfile", "-File", str(ROOT / "setup/exakit.ps1")])
+        commands = entrypoints()
         if not commands:
             self.skipTest("neither Bash nor PowerShell is available")
         for command in commands:

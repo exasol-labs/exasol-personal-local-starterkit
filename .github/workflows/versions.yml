@@ -901,10 +901,6 @@ jobs:
       # follow the restart, BucketFS never written outside the bucket; the
       # shared rules (pins, bucket paths, aliases, the smoke UDF).
       - run: bash tests/addon-activity.sh
-      - run: bash tests/udf-install-progress.sh
-        if: matrix.shard == 4
-      - run: bash tests/udf-devkit-addon.sh
-        if: matrix.shard == 4
       # exakit mlflow: start/stop/disable against a stub server, server.json,
       # the enabled flag exakit start honours, and the lifecycle's own rules.
       - run: bash tests/mlflow-command.sh
@@ -1020,14 +1016,11 @@ jobs:
             pwsh -NoProfile -File tests/describe-command-ps.ps1
             pwsh -NoProfile -File tests/addon-activity-ps.ps1
             pwsh -NoProfile -File tests/addon-help-ps.ps1
-            pwsh -NoProfile -File tests/udf-install-progress-ps.ps1
-            pwsh -NoProfile -File tests/udf-devkit-addon-ps.ps1
             pwsh -NoProfile -File tests/mlflow-command-ps.ps1
             pwsh -NoProfile -File tests/personas-ps.ps1
             pwsh -NoProfile -File tests/dataset-asset-ps.ps1
             pwsh -NoProfile -File tests/data-question-ps.ps1
             pwsh -NoProfile -File tests/notebook-tools-table-ps.ps1
-            pwsh -NoProfile -File tests/model-commands-ps.ps1
             pwsh -NoProfile -File tests/rust-udf-ps.ps1
             pwsh -NoProfile -File tests/data-load-shapes-ps.ps1
             pwsh -NoProfile -File tests/temp-cleanup-ps.ps1

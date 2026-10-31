@@ -1,15 +1,11 @@
 #!/usr/bin/env bash
-# Driven by tests/lib/tty-replay.py under a real pty: an add-on that asks a
-# question at install (the notebook add-on's notebook tools). The question used
-# to be asked from INSIDE the install, under the live progress table, which
-# redrew over it: two frames on screen and the question's text bleeding through.
-# It is asked through the optional <id>_questions hook now, before the table
-# animates. Everything below the stubs is shipping code.
+# Render worker events through the shipping fallback table adapter.
 set -u
 ROOT="$1"; W="$(mktemp -d)"; export HOME="$W/home"; mkdir -p "$HOME"
 EXAKIT_HOME="$W/kit"; EXAKIT_BIN_DIR="$W/bin"; mkdir -p "$EXAKIT_HOME" "$EXAKIT_BIN_DIR"
 printf '{}\n' > "$EXAKIT_HOME/manifest.json"
 . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"
+. "$ROOT/tests/lib/mock-addon-events.sh"
 
 demo_alpha_questions() {
     ui_checkbox_menu "Demo tools - untick any you do not want" "1,2" "Tool one" "Tool two"

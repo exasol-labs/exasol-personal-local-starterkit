@@ -1,20 +1,11 @@
 #!/usr/bin/env bash
-# Driven by tests/lib/tty-replay.py under a real pty: the ADD-ONS table's whole
-# life -- the state panel, the selection, and the install progress that fills the
-# same rows in -- so the replay can assert what a terminal is actually left
-# holding. The bug this shape exists to catch is the table STACKING: the frames
-# are only ever wrong on a screen that can be wrong.
-#
-# Everything below the stubs is shipping code: _exakit_marketplace_apply and
-# _exakit_marketplace_install_one drive the table, and only the add-on modules'
-# own hooks are faked. Ids that are not registered add-ons on purpose -- this
-# exercises the GENERIC path (_exakit_addon_fn resolves demo-alpha to
-# demo_alpha_install), which is the only path a real add-on takes either.
+# Render worker events through the shipping fallback table adapter.
 set -u
 ROOT="$1"; W="$(mktemp -d)"; export HOME="$W/home"; mkdir -p "$HOME"
 EXAKIT_HOME="$W/kit"; EXAKIT_BIN_DIR="$W/bin"; mkdir -p "$EXAKIT_HOME" "$EXAKIT_BIN_DIR"
 . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"
 manifest_init >/dev/null 2>&1
+. "$ROOT/tests/lib/mock-addon-events.sh"
 
 # Three add-ons: two that install, one that fails, so the warn a failure owes the
 # reader is proved to land BELOW the finished table rather than inside the frame.

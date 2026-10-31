@@ -1,6 +1,4 @@
-"""The UDF dev kit's rules and its database steps, shared by setup/lib/udf-devkit.sh and udf-devkit.ps1 so the two
-cannot drift: the launcher version it needs, the launcher's container list, requirements pinning, BucketFS paths, the
-smoke UDF that proves a container, and the container build.
+"""UDF validation rules and database operations used by the Python marketplace.
 
     python udf_tool.py atleast <version> <minimum>        exit 0 when version >= minimum
     python udf_tool.py aliases                            the installed aliases in `exasol slc list --json` (stdin)

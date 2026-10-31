@@ -2,6 +2,13 @@
 
 ## Persona and marketplace Python backend
 
+- Include the notebook connector’s `docker-db` extra because its store widget imports Docker UI types even for an existing local database. Check the widget import during environment validation so missing dependencies are reported before a notebook opens.
+- Use the candidate checkout for direct Bash marketplace commands even when an older kit copy exists under `EXAKIT_HOME`.
+
+- Remove the remaining UDF Devkit shell/PowerShell implementations and duplicate marketplace apply loops. Both platform adapters consume events from the Python batch controller.
+- Share initial persona decisions and service startup in Python. Keep the installer’s persona, data, AI-client and marketplace order; skip MLflow startup when its required kit add-ons are missing.
+- Replace retired direct-helper tests with Python lifecycle and public CLI coverage, including persona add/apply/remove reruns, UDF failure codes, restart refusal, container verification and model-file preservation. Run the shared command suites under both PowerShell engines in Windows CI.
+
 - Move the seven add-on lifecycle implementations, `persona add`, and the direct Notebook, UDF, MLflow, Rust and workflow commands into `marketplace/` Python modules. Keep the existing Textual selection and progress screen.
 - Load persona and add-on choices from validated JSON, including `visible` switches. Use root `versions.json` for advertised versions and checksums; keep catalog versions as offline fallbacks.
 - Route the Linux installer's marketplace apply through the same Python controller as macOS and Windows. Preflight the whole selection before installing and restore progress state after each batch.

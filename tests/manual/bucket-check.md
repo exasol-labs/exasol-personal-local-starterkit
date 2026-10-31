@@ -11,7 +11,7 @@ Run this once on a Windows 11 laptop and once on a macOS machine against Launche
 
 ## How the kit resolves the directory (read before running)
 
-One helper per twin, no platform branch: `udf_bucket_locate` (`setup/lib/udf-devkit.sh`) and `Get-UdfBucketLocation` (`setup/lib/udf-devkit.ps1`). Both compute `$EXAKIT_PERSONAL_DEPLOY_DIR/local/runtime/exa/bucketfs/bfsdefault/default` with `EXAKIT_PERSONAL_DEPLOY_DIR` defaulting to `~/.exasol/personal/deployments/default` (`runtime-personal.sh:22`, `runtime-personal.ps1:40`), and the UDF root `/buckets/bfsdefault/default`. `exakit model put|list|rm` hand both to `setup/udf/model_tool.py`; `check_bucket` (`notebook/package/exakit_nb/checks.py:138`) reads them from `exakit model list --json` and probes the UDF root with `os.path.isdir`. **macOS has no separate resolution**: the Launcher runs the database in a managed VM, and the kit assumes the VM mounts the same host folder. The Launcher creates only `.../bucketfs` (`bucketfs.conf` maps `/exa/bucketfs/bfsdefault/default` to `/buckets/bfsdefault/default`); the `bfsdefault/default` folder is created by the first `model put` (`model_tool.py`, `mkdir(parents=True)`), so on a fresh deployment `check_bucket` reports `does not exist` until a put has run (T6 saw this). Note that in the results.
+All platforms resolve the deployment bucket through `marketplace/udf_bucket.py`. The model and UDF-file commands use that resolver; the notebook check reads `exakit model list --json` and probes the reported UDF path. Verify visibility from a real UDF: a host folder alone does not prove that the database can read it. The resolver creates the default bucket when the deployment mapping supports it. Preserve existing mappings and model files during verification.
 
 ## Steps
 

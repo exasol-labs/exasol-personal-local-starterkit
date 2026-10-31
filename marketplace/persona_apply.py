@@ -10,7 +10,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shutil
 import subprocess
 import sys
 from datetime import datetime, timezone
@@ -18,6 +17,7 @@ from pathlib import Path
 
 from runtime import AddonFailure, KitContext
 from model import CatalogError, load_addons
+from persona_services import command_prefix, start_services
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "setup" / "lib"))
@@ -184,18 +184,11 @@ def apply(ctx: KitContext, requested: str, prefix: list[str], *, live: bool = Fa
         if not _child(prefix, "marketplace", [], child_env):
             failures.append(("Add-ons", "exakit marketplace " + " ".join(pending_addons)))
 
-    for name in persona_service.selected_services(ctx.root, new_ids):
-        ready_addons = set(installed)
-        ready_addons.update(item for item in ("udf-devkit", "notebook")
-                            if ctx.manifest.get(f"components.{item.replace('-', '_')}.ownership") == "kit")
-        if not any(part == "Add-ons" for part, _ in failures):
-            ready_addons.update(pending_addons)
-        missing = [item for item in ("udf-devkit", "notebook") if item not in ready_addons]
-        if name == "mlflow" and missing:
-            print("Skipping MLflow service - missing: " + ", ".join(missing), flush=True)
-            continue
-        if name == "mlflow" and not _child(prefix, "mlflow", ["start"], environment):
-            failures.append(("MLflow service", "exakit mlflow start"))
+    ready = set(installed)
+    if not any(part == "Add-ons" for part, _ in failures):
+        ready.update(pending_addons)
+    failures.extend(start_services(ctx, persona_service.selected_services(ctx.root, new_ids),
+                                   lambda command, args: _child(prefix, command, args, environment), ready))
     if failures:
         print(f"\nPersona added: {all_title} - not everything finished", flush=True)
         for part, retry in failures:
@@ -217,15 +210,8 @@ def main() -> int:
     parser.add_argument("--cli", type=Path, required=True)
     parser.add_argument("--host")
     args = parser.parse_args()
-    if args.cli.suffix.lower() == ".ps1":
-        host = args.host or shutil.which("pwsh") or shutil.which("powershell.exe")
-        if not host:
-            print("PowerShell is unavailable for persona commands", file=sys.stderr)
-            return 1
-        prefix = [host, "-NoProfile", "-File", str(args.cli)]
-    else:
-        prefix = [str(args.cli)]
     try:
+        prefix = command_prefix(args.cli, args.host)
         return apply(KitContext.from_environment(ROOT), args.ids, prefix,
                      live=sys.stdout.isatty() and os.environ.get("EXAKIT_NO_FANCY") != "1")
     except (persona_service.BadInput, AddonFailure, CatalogError, OSError, ValueError) as error:

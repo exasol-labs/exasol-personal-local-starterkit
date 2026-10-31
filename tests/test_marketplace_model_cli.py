@@ -12,6 +12,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from cli_entrypoints import entrypoints
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -117,11 +118,7 @@ class ModelCommandTest(unittest.TestCase):
         self.assertFalse(self.bucket.exists())
 
     def test_both_exakit_entry_points_use_model_python_command(self) -> None:
-        commands = []
-        if shutil.which("bash"):
-            commands.append([str(ROOT / "setup/exakit")])
-        if shutil.which("pwsh"):
-            commands.append(["pwsh", "-NoProfile", "-File", str(ROOT / "setup/exakit.ps1")])
+        commands = entrypoints()
         if not commands:
             self.skipTest("neither Bash nor PowerShell is available")
         env = {**os.environ, "EXAKIT_HOME": str(self.home),

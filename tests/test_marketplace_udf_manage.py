@@ -5,11 +5,15 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
+from cli_entrypoints import entrypoints
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "marketplace"))
@@ -38,6 +42,33 @@ class UdfManageTest(unittest.TestCase):
             with self.subTest(command_name=command_name, args=args):
                 with self.assertRaises(udf.UdfFailure):
                     _parse(command_name, args)
+
+    def test_public_commands_report_json_failures_without_resource_changes(self) -> None:
+        self.store.delete("components.udf_devkit")
+        before = self.store.path.read_bytes()
+        env = {**os.environ, "EXAKIT_HOME": str(self.home), "EXAKIT_BIN_DIR": str(self.home / "bin"),
+               "EXAKIT_NO_UPDATE_NOTICE": "1", "EXAKIT_NO_FANCY": "1", "EXAKIT_UDF_LANGUAGE": "python"}
+        commands = entrypoints()
+        self.assertTrue(commands)
+        cases = ((["udf-setup", "--language", "java", "--json"], 2),
+                 (["udf-use", "--list", "default", "--json"], 2),
+                 (["udf-build", "--invented"], 2),
+                 (["udf-setup", "--json"], 5),
+                 (["udf-use", "--list", "--json"], 5))
+        for prefix in commands:
+            for args, code in cases:
+                with self.subTest(shell=prefix[0], args=args):
+                    result = subprocess.run([*prefix, *args], env=env, input="", capture_output=True,
+                                            text=True, timeout=45)
+                    self.assertEqual(code, result.returncode, result.stdout + result.stderr)
+                    if "--json" in args:
+                        answer = json.loads(result.stdout)
+                        self.assertIs(False, answer["ok"])
+                        self.assertEqual("select-container", answer["step"])
+                        if code == 5:
+                            self.assertEqual("exakit marketplace udf-devkit", answer["remedy"])
+        self.assertEqual(before, self.store.path.read_bytes())
+        self.assertFalse(udf._home(self.ctx).exists())
 
     def test_json_has_one_object_even_when_setup_emits_progress(self) -> None:
         output = io.StringIO()
@@ -197,6 +228,90 @@ class UdfManageTest(unittest.TestCase):
         self.assertEqual((7, "smoke"), (failed.exception.code, failed.exception.step))
         self.assertIs(False, self.store.get("components.udf_devkit.validated"))
         restart.assert_called_once()
+
+    def test_declined_restart_leaves_services_and_launcher_untouched(self) -> None:
+        with patch.object(sys.stdin, "isatty", return_value=True), \
+             patch.object(sys.stdout, "isatty", return_value=True), \
+             patch("builtins.input", return_value="n"), \
+             patch.object(udf, "_kit_command") as kit, patch.object(KitContext, "run_logged") as run:
+            with self.assertRaises(udf.UdfFailure) as failed:
+                udf._restart(self.ctx, [["install", "PYTHON3"]], yes=False, reason="test")
+        self.assertEqual(5, failed.exception.code)
+        kit.assert_not_called()
+        run.assert_not_called()
+
+    def test_existing_ml_container_is_proven_without_install(self) -> None:
+        row = {"url": "https://example.invalid/python.tar.gz", "packages": {"scikit-learn": "1.9.0"}}
+        with patch.object(udf, "_ready"), patch.object(udf, "_row", return_value=row), \
+             patch.object(udf, "_aliases", return_value={udf.ML}), \
+             patch.object(udf, "_smoke", return_value=[]) as smoke, \
+             patch.object(udf, "fetch") as fetch, patch.object(udf, "_restart") as restart:
+            udf.setup_default(self.ctx, install=False)
+        smoke.assert_called_once_with(self.ctx, udf.ML, ["scikit-learn==1.9.0"])
+        fetch.assert_not_called()
+        restart.assert_not_called()
+        self.assertEqual(udf.ML, self.store.get("components.udf_devkit.python_alias"))
+
+    def test_failed_smoke_is_not_recorded_as_ready(self) -> None:
+        for code in (3, 1):
+            with self.subTest(code=code), patch.object(udf, "_tool", return_value=SimpleNamespace(
+                    returncode=code, stdout="", stderr="missing package")):
+                with self.assertRaises(udf.UdfFailure) as failed:
+                    udf._smoke(self.ctx, udf.ML, ["scikit-learn==1.9.0"])
+            self.assertEqual(3 if code == 3 else 7, failed.exception.code)
+            self.assertIs(False, self.store.get("components.udf_devkit.validated"))
+
+    def test_rust_smoke_digest_failure_precedes_restart(self) -> None:
+        row = {"arch": "aarch64", "size": 10, "smoke_asset": {"sha256": "0" * 64, "size": 1}}
+        with patch.object(udf, "_ready"), patch.object(udf, "_row", return_value=row), \
+             patch.object(udf, "fetch", return_value=self.home / "rust.tar.gz"), \
+             patch.object(udf, "rust_smoke", side_effect=AddonFailure("SHA-256 mismatch")), \
+             patch.object(udf, "_restart") as restart:
+            with self.assertRaises(udf.UdfFailure) as failed:
+                udf.setup_rust(self.ctx)
+        self.assertEqual((4, "verify"), (failed.exception.code, failed.exception.step))
+        restart.assert_not_called()
+
+    def test_build_refuses_unpinned_packages_and_insufficient_disk_before_install(self) -> None:
+        from addons import notebook
+        requirements = self.home / "requirements.txt"
+        requirements.write_text("numpy\n")
+        with patch.object(KitContext, "run_logged") as run:
+            with self.assertRaises(udf.UdfFailure) as failed:
+                udf.build(self.ctx, requirements, "CUSTOM", yes=True)
+            self.assertEqual(2, failed.exception.code)
+            requirements.write_text("numpy==2.4.6\n")
+            with patch.object(notebook, "installed_version", return_value="3.1.0"), \
+                 patch.object(udf, "_ready"), patch.object(udf, "_engine", return_value={}), \
+                 patch.object(udf.shutil, "disk_usage", return_value=SimpleNamespace(free=1)):
+                with self.assertRaisesRegex(udf.UdfFailure, "25 GB"):
+                    udf.build(self.ctx, requirements, "CUSTOM", yes=True)
+            run.assert_not_called()
+
+    def test_engine_requires_running_runtime_and_preserves_explicit_socket(self) -> None:
+        with patch.object(udf.shutil, "which", return_value=None):
+            with self.assertRaisesRegex(udf.UdfFailure, "running Docker or Podman"):
+                udf._engine(self.ctx)
+        with patch.object(udf.shutil, "which", side_effect=lambda name: name if name == "podman" else None), \
+             patch.object(udf.subprocess, "run", return_value=SimpleNamespace(returncode=0)), \
+             patch.dict(os.environ, {"DOCKER_HOST": "unix:///test/podman.sock"}):
+            self.assertEqual("unix:///test/podman.sock", udf._engine(self.ctx)["DOCKER_HOST"])
+
+    def test_uninstall_keeps_deployment_models_and_preview_changes_nothing(self) -> None:
+        home = udf._home(self.ctx)
+        home.mkdir(parents=True)
+        model = self.home / "deployment" / "models" / "mine.onnx"
+        model.parent.mkdir(parents=True)
+        model.write_bytes(b"model")
+        with patch.object(udf, "stop") as stop:
+            self.assertEqual([home], udf.uninstall(self.ctx, dry_run=True))
+            stop.assert_not_called()
+            self.assertTrue(home.exists())
+            udf.uninstall(self.ctx)
+            stop.assert_called_once()
+        self.assertEqual(b"model", model.read_bytes())
+        self.assertFalse(home.exists())
+        self.assertIsNone(self.store.get("components.udf_devkit"))
 
 
 if __name__ == "__main__":

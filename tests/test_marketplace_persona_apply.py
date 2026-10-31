@@ -6,11 +6,13 @@ import contextlib
 import io
 import json
 import os
+import subprocess
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+from cli_entrypoints import entrypoints
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "marketplace"))
@@ -185,6 +187,30 @@ class PersonaApplyTest(unittest.TestCase):
                           calls.append(command) or True), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(0, persona_apply.apply(self.ctx, "ml-engineer", ["exakit"]))
         self.assertEqual(["mlflow"], calls)
+
+    def test_public_add_apply_remove_preserve_shared_files(self) -> None:
+        commands = entrypoints()
+        self.assertTrue(commands)
+        shared = self.home / 'notebooks' / 'my-work.ipynb'
+        shared.parent.mkdir()
+        shared.write_text('keep my work')
+        env = {**os.environ, 'EXAKIT_HOME': str(self.home), 'EXAKIT_BIN_DIR': str(self.home / 'bin'),
+               'EXAKIT_NO_UPDATE_NOTICE': '1', 'EXAKIT_NO_FANCY': '1', 'EXAKIT_LOAD_SAMPLE': '0',
+               'EXAKIT_DATASETS': '', 'EXAKIT_MCP_CLIENTS': 'skip', 'EXAKIT_MARKETPLACE_ADDONS': 'none'}
+        for prefix in commands:
+            with self.subTest(shell=prefix[0]):
+                self.manifest.delete('persona')
+                for args in (('add', 'data-scientist'), ('apply', 'ml-engineer', '--yes'), ('add', 'ml-engineer')):
+                    result = subprocess.run([*prefix, 'persona', *args], env=env, input='',
+                                            capture_output=True, text=True, timeout=45)
+                    self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                self.assertEqual('data-scientist,ml-engineer', self.manifest.get('persona.id'))
+                for _ in range(2):
+                    result = subprocess.run([*prefix, 'persona', 'remove', 'data-scientist'], env=env, input='',
+                                            capture_output=True, text=True, timeout=45)
+                    self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                self.assertEqual('ml-engineer', self.manifest.get('persona.id'))
+                self.assertEqual('keep my work', shared.read_text())
 
 
 if __name__ == "__main__":

@@ -4,23 +4,18 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from cli_entrypoints import entrypoints
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 class NotebookCliTest(unittest.TestCase):
     def test_commands_preserve_data_and_report_recovery(self) -> None:
-        commands = []
-        if os.name != "nt":
-            commands.append(["bash", str(ROOT / "setup/exakit")])
-        for shell in (("powershell", "pwsh") if os.name == "nt" else ("pwsh",)):
-            if shutil.which(shell):
-                commands.append([shell, "-NoProfile", "-File", str(ROOT / "setup/exakit.ps1")])
+        commands = entrypoints()
         self.assertTrue(commands, "No supported CLI shell available")
         for entry in commands:
             with self.subTest(shell=entry[0]), tempfile.TemporaryDirectory(prefix="notebook cli ") as temp:

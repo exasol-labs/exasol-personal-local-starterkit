@@ -32,15 +32,18 @@ git branch --show-current
 git log -1 --oneline
 ```
 
-Expected local branch: `feat/persona-and-marketplace-ui`. The PR stack publishes the reviewed changes through `feat/persona-v05-completion`; verify the revision shown by `git log` before testing.
+Expected local branch: `feat/persona-and-marketplace-ui`; verify the revision shown by `git log` before testing. No replacement PR is open while acceptance continues.
 On another machine, substitute its checkout path. A `fatal: not a git repository` message means you are in the wrong directory; correct that before installing. `$PWD` is your current Terminal directory, so running the following command from `~` points at your home rather than the checkout.
 
 ```sh
+export EXAKIT_VERSION_POLICY=pinned
 curl -fsSL https://www.exasol.com/install/starter-kit.sh | \
   EXAKIT_LOCAL_KIT="$PWD" \
   EXAKIT_PERSONA=data-scientist,ml-engineer \
   EXAKIT_NOTEBOOK_FRONTENDS=jupyterlab,marimo sh
 ```
+
+Keep `EXAKIT_VERSION_POLICY=pinned` set in this testing shell: the published manifest may not yet contain this candidate’s Rust container entries. This uses the candidate’s bundled versions; packages and assets still download when needed. After testing, `unset EXAKIT_VERSION_POLICY` restores ordinary manifest-based updates.
 
 The log must say it is using the **local checkout**. `EXAKIT_LOCAL_KIT` belongs after the pipe, as shown. Wait for completion; do not interrupt the UDF step because its percentage pauses. The line above its progress bar should name download, checksum verification, container installation, restart or package checking. A previous first UDF install took about 11 minutes; elapsed time alone is not a failure.
 

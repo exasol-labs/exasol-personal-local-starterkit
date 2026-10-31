@@ -25,10 +25,13 @@ choice. Add-on lifecycle operations call `marketplace/service.py`. Public
 `persona add` sequences the existing data/MCP/marketplace commands in
 `persona_apply.py`. `apply.py` owns the marketplace installation sequence,
 while Textual displays its activity and progress in the selection screen.
-The initial installer persona/data flow and platform progress renderers still
-have small shell and PowerShell adapters; further consolidation is tracked in
-`tasks.md`. Python add-ons share receipt locking, logging, download, and
-process helpers in `runtime.py` and `process.py`.
+`installer_flow.py` decides the initial question, dataset/add-on defaults and
+membership receipt. Platform adapters invoke the existing data UI in response.
+`persona_services.py` checks service prerequisites and starts the same services
+for initial installs and later persona additions. Platform code retains only
+the existing data/MCP calls and terminal rendering adapters. Python add-ons
+share receipt locking, logging, download, and process helpers in `runtime.py`
+and `process.py`.
 
 `service.py` is the host boundary for a later Exasol Personal sidecar backend.
 The current add-ons remain local services until a supported launcher release
@@ -56,8 +59,5 @@ direct `notebook`, `workflow`, `mlflow`, `rust-udf`, `udf-file`, `model`, `udf-s
 commands use Python entry points in this directory. `udf_container.py` selects
 and verifies the pinned release assets. `describe` reads the Notebook Python
 path from the receipt. The fallback table obtains Notebook child rows from
-`metadata.py`; the workflow, Rust UDF, and MLflow command
-wrappers and the dbt-exasol, Exasol for VS Code, Exasol Scheduler, JSON Tables,
-and Dash Server script pairs have been removed.
-Other legacy add-on script pairs remain until their compatibility checks use
-the Python backend; that cleanup is tracked in `tasks.md`.
+`metadata.py`. All seven add-on shell/PowerShell implementation pairs and the
+workflow, Rust UDF, and MLflow command wrapper pairs have been removed.

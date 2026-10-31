@@ -1,24 +1,5 @@
 #!/usr/bin/env bash
-# model-commands.sh — `exakit model put | list | template` (ML-4) in
-# setup/lib/udf-devkit.sh and its dispatcher arm in setup/exakit.
-#
-#   bash tests/model-commands.sh
-#
-# What it pins (AC-ML4.3 and the offline half of AC-ML4.1):
-#   - put copies the file into the deployment's bucket directory under models/,
-#     records its sha256, size and time, and prints the /buckets path
-#   - --json is one object: name, path, sha256, size, replaced
-#   - the same file again is a no-op; a DIFFERENT file of the same name is
-#     refused with exit 5 and nothing copied, unless --replace is given
-#   - list --json has the shape the quickstart notebook reads, is empty before
-#     anything is put, and flags a file changed since it was put
-#   - exit codes: 2 bad input, 3 no deployment, 4 add-on not installed
-#   - no credential is read, printed or recorded
-#   - model --help and model put --help render the add-on's pages
-# Whether a UDF really reads the file at the printed path needs a database:
-# tests/model-live-check.sh (EXAKIT_LIVE_TESTS=1).
-#
-# A sandboxed home, kit home and deployment folder; no database, no launcher.
+# Public model CRUD and JSON contracts in an isolated kit home.
 
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -85,7 +66,7 @@ printf 'weights-v1' > "$WORK/churn.pkl"
 mkdir -p "$WORK/v2"; printf 'weights-v2-longer' > "$WORK/v2/churn.pkl"
 
 echo "list works before anything is put:"
-out="$(cli model list --json 2>&1)"; rc=$?
+out="$(cli model list --json 2>"$WORK/cli.stderr")"; rc=$?
 check "exit 0" "0" "$rc"
 check "the keys the quickstart notebook reads" "['bucket_dir', 'created', 'mapping', 'missing', 'models', 'udf_root']" "$(printf '%s' "$out" | jq_py 'sorted(d)')"
 check "an empty models list" "[]" "$(printf '%s' "$out" | jq_py 'd["models"]')"
@@ -104,7 +85,7 @@ check "no copy in progress left behind" "" "$(ls "$BUCKET/models" | grep '\.part
 
 echo "the same file again changes nothing:"
 put_at="$(record | jq_py 'd["churn.pkl"]["put_at"]')"
-out="$(cli model put "$WORK/churn.pkl" --json 2>&1)"; rc=$?
+out="$(cli model put "$WORK/churn.pkl" --json 2>"$WORK/cli.stderr")"; rc=$?
 check "exit 0" "0" "$rc"
 check "--json includes origin status" "['name', 'path', 'provenance', 'replaced', 'sha256', 'size', 'trusted_origin', 'warning']" "$(printf '%s' "$out" | jq_py 'sorted(d)')"
 check "not replaced" "False" "$(printf '%s' "$out" | jq_py 'd["replaced"]')"
@@ -122,7 +103,7 @@ check "and one refusal object on stdout" "False" "$(printf '%s' "$out" | jq_py '
 contains "whose remedy is the --replace command" "--replace" "$(printf '%s' "$out" | jq_py 'd["remedy"]')"
 
 echo "--replace overwrites it and says so:"
-out="$(cli model put "$WORK/v2/churn.pkl" --replace --json 2>&1)"; rc=$?
+out="$(cli model put "$WORK/v2/churn.pkl" --replace --json 2>"$WORK/cli.stderr")"; rc=$?
 check "exit 0" "0" "$rc"
 check "replaced" "True" "$(printf '%s' "$out" | jq_py 'd["replaced"]')"
 check "the new content is there" "weights-v2-longer" "$(cat "$BUCKET/models/churn.pkl")"
@@ -133,7 +114,7 @@ echo "list flags a file changed since it was put:"
 printf 'tampered' > "$BUCKET/models/churn.pkl"
 printf 'csv' > "$WORK/lookup.csv"
 mkdir -p "$BUCKET/models"; cp "$WORK/lookup.csv" "$BUCKET/models/lookup.csv"
-out="$(cli model list --json 2>&1)"; rc=$?
+out="$(cli model list --json 2>"$WORK/cli.stderr")"; rc=$?
 check "exit 0" "0" "$rc"
 check "each model has name, path, sha256, size" "True" "$(printf '%s' "$out" | jq_py 'all({"name", "path", "sha256", "size"} <= set(m) for m in d["models"])')"
 check "the tampered file is flagged" "changed" "$(printf '%s' "$out" | jq_py '[m["status"] for m in d["models"] if m["name"] == "churn.pkl"][0]')"
@@ -176,7 +157,7 @@ check "nothing written by a refused put" "lookup.csv" "$(ls "$BUCKET/models")"
 )
 
 echo "no credential is read, printed or recorded:"
-all="$(cli model put "$WORK/churn.pkl" --replace 2>&1; cli model put "$WORK/churn.pkl" --json 2>&1; cli model list 2>&1; cli model list --json 2>&1; cli model put "$WORK/v2/churn.pkl" 2>&1)"
+all="$(cli model put "$WORK/churn.pkl" --replace 2>&1; cli model put "$WORK/churn.pkl" --json 2>"$WORK/cli.stderr"; cli model list 2>&1; cli model list --json 2>"$WORK/cli.stderr"; cli model put "$WORK/v2/churn.pkl" 2>&1)"
 lacks "the password is never printed" "$SECRET" "$all"
 lacks "nor the password file's path" "db-password" "$all"
 lacks "nor the record" "$SECRET" "$(record)"
@@ -184,7 +165,7 @@ lacks "the record holds no password file" "password" "$(record)"
 lacks "no failure note from a refusal" "exakit model" "$(cat "$EXAKIT_HOME/.last-failure" 2>/dev/null)"
 
 echo "the template and the help pages:"
-out="$(cli model template --json 2>&1)"; rc=$?
+out="$(cli model template --json 2>"$WORK/cli.stderr")"; rc=$?
 check "template --json: exit 0" "0" "$rc"
 check "names the renderer, which exists" "True" "$(printf '%s' "$out" | python3 -c 'import json, os, sys; print(os.path.isfile(json.load(sys.stdin)["renderer"]))')"
 check "and every placeholder" "LANGUAGE SCHEMA SCRIPT_NAME INPUT_COLUMNS OUTPUT_TYPE MODEL_PATH INPUTS METHOD" "$(printf '%s' "$out" | jq_py '" ".join(d["placeholders"])')"

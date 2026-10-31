@@ -108,6 +108,38 @@ class ChoiceScreenTest(unittest.TestCase):
 
         asyncio.run(check())
 
+    def test_activity_is_above_progress_at_narrow_and_wide_terminal_sizes(self) -> None:
+        from ui import ChoiceApp
+        from apply import Event
+        from textual.widgets import DataTable, ProgressBar, Static
+
+        async def check(width: int) -> None:
+            app = ChoiceApp("marketplace", [{"id": "udf-devkit", "label": "UDF Devkit"}],
+                            {"udf-devkit"}, set())
+            async with app.run_test(size=(width, 24)) as pilot:
+                table = app.query_one(DataTable)
+                self.assertEqual("[✓] Select All", table.get_cell_at((0, 0)))
+                self.assertEqual("[ ] Skip", table.get_cell_at((2, 0)))
+                activity = app.query_one("#activity", Static)
+                progress = app.query_one("#progress", ProgressBar)
+                activity.display = progress.display = True
+                app.applying = True
+                app._on_event(Event("udf-devkit", "installing"))
+                app._on_activity("Waiting for database restart")
+                await pilot.pause()
+                self.assertLess(activity.region.y, progress.region.y)
+                self.assertGreater(activity.region.width, 0)
+                self.assertIn("Waiting for database restart", str(activity.render()))
+                self.assertEqual(0, progress.progress)
+                await pilot.press("escape")
+                self.assertTrue(app.is_running)
+                app.applying = False
+                await pilot.press("escape")
+
+        for width in (80, 120):
+            with self.subTest(width=width):
+                asyncio.run(check(width))
+
     def test_confirmed_marketplace_stays_in_textual_during_apply(self) -> None:
         from ui import ChoiceApp
         from apply import Event

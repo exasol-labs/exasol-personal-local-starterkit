@@ -1,5 +1,4 @@
-"""The rules behind `exakit model put | list | rm | prune | inspect`, shared by setup/lib/udf-devkit.sh and
-udf-devkit.ps1 so the two cannot drift: which name a model file gets in the bucket directory, its digest, when an
+"""The rules behind `exakit model put | list | rm | prune | inspect`, used by marketplace/model_cli.py: which name a model file gets in the bucket directory, its digest, when an
 existing file may be replaced, what a file's provenance says and whether it is trusted, and what the kit's record says
 about each file. Standard library only (any Python 3.9 or later); no database, no network, and NO unpickling: a
 pickle is read as a byte stream (pickletools), never loaded.

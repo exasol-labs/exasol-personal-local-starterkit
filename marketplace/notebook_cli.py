@@ -221,7 +221,7 @@ def _preflight(ctx: KitContext) -> None:
     healthy = False
     if python.is_file():
         try:
-            result = subprocess.run([str(python), "-c", "import exasol.nb_connector, exakit.nb"],
+            result = subprocess.run([str(python), "-c", notebook.IMPORT_CHECK],
                                     capture_output=True, check=False, timeout=15)
             healthy = result.returncode == 0
         except (OSError, subprocess.TimeoutExpired):

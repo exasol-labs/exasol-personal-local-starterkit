@@ -3724,7 +3724,7 @@ _exakit_marketplace_python() {
 # Direct add-on commands share one platform boundary. The command parsers and
 # side effects live in marketplace/*.py, not in parallel shell implementations.
 _exakit_marketplace_cli() {
-    case "$1" in notebook_cli|udf_cli|model_cli|udf_manage|mlflow_cli|rust_cli|workflow_cli|persona_apply) ;; *) return 2 ;; esac
+    case "$1" in notebook_cli|udf_cli|model_cli|udf_manage|mlflow_cli|rust_cli|workflow_cli|persona_apply|installer_flow) ;; *) return 2 ;; esac
     _emc_script="$1"
     shift
     _emc_mode=mutate
@@ -3732,7 +3732,7 @@ _exakit_marketplace_cli() {
         model_cli:list:*|model_cli:inspect:*|model_cli:template:*|udf_manage:udf-use:--list|notebook_cli:status:*|notebook_cli:url:*|mlflow_cli:status:*|mlflow_cli:url:*|workflow_cli:*) _emc_mode=query ;;
     esac
     EXAKIT_MARKETPLACE_VERSIONS_DOC="$(_exakit_marketplace_versions_doc 2>/dev/null || true)" \
-        _exakit_marketplace_run_python "$_emc_mode" "$(exakit_repo_root)/marketplace/$_emc_script.py" "$@"
+        _exakit_marketplace_run_python "$_emc_mode" "$(_exakit_marketplace_root)/marketplace/$_emc_script.py" "$@"
 }
 
 _exakit_marketplace_python_hooks() {
@@ -4072,30 +4072,9 @@ exakit_marketplace_addon_available() {
     command -v "$(_exakit_addon_fn "$1" install)" >/dev/null 2>&1
 }
 
-# _exakit_marketplace_load_modules — register Python hooks, then source only
-# catalog entries explicitly marked legacy. A missing Python module leaves
-# its row unavailable; it must never silently fall back to an old shell pair.
+# A missing Python module leaves its marketplace row unavailable.
 _exakit_marketplace_load_modules() {
     _exakit_marketplace_python_hooks || true
-    # The sourcing must happen in THIS shell so the loaded functions stick —
-    # ids are collected via command substitution, never through a pipeline
-    # (whose stages are subshells).
-    _ml_root="$(exakit_repo_root 2>/dev/null || true)"
-    _ml_rows="$(run_python_any "$_ml_root/marketplace/metadata.py" "$_ml_root" registry 2>/dev/null || true)"
-    while IFS='|' read -r _ml_id _ml_label _ml_backend _ml_visible _ml_fallback; do
-        [ "$_ml_backend" = legacy ] || continue
-        exakit_marketplace_addon_available "$_ml_id" && continue
-        for _ml_dir in ${_ml_root:+"$_ml_root/setup/lib"} "$EXAKIT_HOME/kit/setup/lib"; do
-            if [ -f "$_ml_dir/$_ml_id.sh" ]; then
-                . "$_ml_dir/$_ml_id.sh" 2>/dev/null || \
-                    warn "The $_ml_id module could not be loaded from $_ml_dir (corrupted kit copy?)"
-                break
-            fi
-        done
-    done <<EXAKIT_ML_ROWS
-$_ml_rows
-EXAKIT_ML_ROWS
-    return 0
 }
 
 # _exakit_addon_applicable <id> — does this add-on make sense on THIS machine
@@ -5325,81 +5304,7 @@ EXAKIT_MPA_NOTES
 }
 
 _exakit_marketplace_apply() {
-    if [ "${EXAKIT_MARKETPLACE_PYTHON_APPLY:-0}" = 1 ]; then
-        _exakit_marketplace_apply_python "$1"
-        return $?
-    fi
-    _mp_status=0
-    _exakit_marketplace_questions "$1"
-    # The SAME table the selection was just made in becomes the progress display:
-    # the rows do not move, so nobody has to map one screen onto another. It
-    # animates only where there is a terminal to animate on, and a scripted
-    # answer (EXAKIT_MARKETPLACE_ADDONS) never built a table at all — every
-    # add-on then narrates in plain lines exactly as it did before.
-    EXAKIT_ADDON_TABLE_LIVE=0
-    if [ -n "$EXAKIT_ADDON_TABLE_STATE" ]; then
-        ui_table_begin "$EXAKIT_ADDON_TABLE_STATE" && EXAKIT_ADDON_TABLE_LIVE=1
-    fi
-    # With the table narrating, the per-add-on lines underneath it are the same
-    # facts twice — and printing one scrolls the frame the animator is redrawing.
-    # EXAKIT_QUIET_DETAIL routes them to the logfile instead, which is what it is
-    # for; install_one saves and restores it, so nesting is already handled.
-    _mp_prev_quiet="${EXAKIT_QUIET_DETAIL:-0}"
-    _exakit_addon_table_live && EXAKIT_QUIET_DETAIL=1
-    for _mp_id in $(printf '%s' "$1" | tr ',' ' '); do
-        # Which row this add-on owns, if a table is on screen. Empty means there
-        # is none and the single-line bar takes over, unchanged.
-        EXAKIT_ADDON_TABLE_ROW=""
-        EXAKIT_ADDON_TABLE_CHILD_ROWS=""
-        if _exakit_addon_table_live; then
-            EXAKIT_ADDON_TABLE_ROW="$(_exakit_addon_table_row "$_mp_id")"
-            [ "$EXAKIT_ADDON_TABLE_ROW" = "0" ] && EXAKIT_ADDON_TABLE_ROW=""
-            # ...and the rows one level deeper, for the install to settle.
-            EXAKIT_ADDON_TABLE_CHILD_ROWS="$(_exakit_addon_table_child_rows "$_mp_id")"
-        fi
-        info "Installing add-on: $_mp_id"
-        _mp_t0="$(date +%s 2>/dev/null || echo 0)"
-        if _exakit_marketplace_install_one "$_mp_id"; then
-            # <id>_summary is an OPTIONAL hook: the one fact worth carrying out
-            # of an install whose reference panel is now log-only. Resolved
-            # generically, so a new add-on gets it by defining the function and
-            # nothing here has to learn its name.
-            _mp_note=""
-            _mp_summary_fn="$(_exakit_addon_fn "$_mp_id" summary)"
-            if command -v "$_mp_summary_fn" >/dev/null 2>&1; then
-                _mp_note="$("$_mp_summary_fn" 2>/dev/null || true)"
-            fi
-            _mp_elapsed=$(( $(date +%s 2>/dev/null || echo 0) - _mp_t0 ))
-            [ "$_mp_elapsed" -ge 0 ] 2>/dev/null || _mp_elapsed=0
-            # ok() is the record either way: it writes the FULL summary to the
-            # logfile whether or not the screen is showing it, which is what
-            # keeps a summary too long for the column from being lost.
-            ok "$_mp_id installed${_mp_note:+ — $_mp_note}"
-            [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && \
-                ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" \
-                    done "" "" "" "" \
-                    "$(_exakit_addon_table_cell "$_mp_note" "$_mp_elapsed")"
-        else
-            [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && \
-                ui_table_set "$EXAKIT_ADDON_TABLE_STATE" "$EXAKIT_ADDON_TABLE_ROW" \
-                    failed "" "" "" "" "did not finish — see the log"
-            # The add-on has already reported the specific failure.
-            _exakit_log_file "WARN  $_mp_id did not finish installing"
-            _mp_status=1
-        fi
-        EXAKIT_ADDON_TABLE_ROW=""
-        EXAKIT_ADDON_TABLE_CHILD_ROWS=""
-    done
-    # The table stops redrawing BEFORE anything is said over it, and only then is
-    # what was collected on the way said.
-    if _exakit_addon_table_live; then
-        ui_table_end "$EXAKIT_ADDON_TABLE_STATE"
-        EXAKIT_ADDON_TABLE_LIVE=0
-    fi
-    EXAKIT_QUIET_DETAIL="$_mp_prev_quiet"
-    _exakit_addon_notes_say
-    _exakit_addon_table_cleanup
-    return "$_mp_status"
+    _exakit_marketplace_apply_python "$1"
 }
 
 exakit_update_targets() {

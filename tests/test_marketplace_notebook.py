@@ -45,6 +45,19 @@ class NotebookPlanTest(unittest.TestCase):
         self.assertTrue(any(spec.startswith("jupyterlab==") for spec in specs))
         self.assertTrue(any(spec.startswith("marimo==") for spec in specs))
         self.assertIn(str(ROOT / "notebook" / "package"), specs)
+        self.assertIn("docker-db", specs[0])
+
+    def test_connector_widget_import_failure_refuses_before_connecting(self) -> None:
+        python = self.home / "notebook-venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        python.parent.mkdir(parents=True)
+        python.touch()
+        with patch.object(notebook_cli.subprocess, "run", return_value=SimpleNamespace(returncode=1)) as run, \
+             patch.object(notebook_cli, "_confirm", return_value=False), \
+             patch.object(notebook_cli, "_database_up") as database:
+            with self.assertRaisesRegex(AddonFailure, "environment is broken"):
+                notebook_cli._preflight(self.ctx)
+        self.assertIn("from exasol.nb_connector.ui.access import access_store", run.call_args.args[0][-1])
+        database.assert_not_called()
 
     def test_frontend_and_sklearn_pins_follow_active_versions_document(self) -> None:
         document = json.loads((ROOT / "versions.json").read_text(encoding="utf-8"))

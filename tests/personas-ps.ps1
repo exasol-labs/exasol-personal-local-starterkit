@@ -97,7 +97,8 @@ try {
     Invoke-ExakitPersonaFlow -KitRoot $repo
     Check "no console, no persona: the default personas' datasets, nothing recorded" "tpch,energy,weather||" "$($env:EXAKIT_DATASETS_PRESELECT)|$($env:EXAKIT_MARKETPLACE_PRESELECT)|$($env:EXAKIT_PERSONA)"
     Remove-Item Env:EXAKIT_DATASETS_PRESELECT -ErrorAction SilentlyContinue
-    Set-ExakitPersonaPreselect -Ids "data-scientist"
+    $env:EXAKIT_PERSONA = "data-scientist"
+    Invoke-ExakitPersonaFlow -KitRoot $repo -Phase selected
     Check "picked on screen: the persona's datasets and add-ons are ticked" "pharma_trials,banking_complaints|notebook" "$($env:EXAKIT_DATASETS_PRESELECT)|$($env:EXAKIT_MARKETPLACE_PRESELECT)"
     foreach ($v in @("EXAKIT_DATASETS_PRESELECT", "EXAKIT_MARKETPLACE_PRESELECT")) { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
     $env:EXAKIT_PERSONA_ACTIVE = "1"
@@ -132,93 +133,6 @@ try {
     Check "...without it and without a console: the same defaults, not confirmed" "1,2|False" "$($plain -join ',')|$($script:ExakitTableConfirmed)"
     foreach ($v in @("EXAKIT_DATASETS_PRESELECT", "EXAKIT_PERSONA_ACTIVE")) { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
 
-    Write-Host "exakit persona add (apply is its alias): nothing asked, the personas join:"
-    $ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repo "setup/exakit.ps1"), [ref]$null, [ref]$null)
-    $fn = $ast.Find({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Name -eq "Invoke-CmdPersona" }, $true)
-    . ([scriptblock]::Create($fn.Extent.Text))
-    # Each step says what its process would see; nothing in it is a console.
-    $script:Steps = @()
-    $script:FailStep = ""
-    function Invoke-ExakitPersonaChild {
-        param([string]$Cli, [string]$Command, [string[]]$Arguments = @(), [hashtable]$Env = @{})
-        $view = @{}
-        foreach ($n in @("EXAKIT_DATASETS", "EXAKIT_DATASETS_PRESELECT", "EXAKIT_MCP_CLIENTS", "EXAKIT_MCP_PRESELECT", "EXAKIT_MARKETPLACE_ADDONS", "EXAKIT_MARKETPLACE_ONLY", "UI_TABLE_AUTO")) {
-            $view[$n] = [Environment]::GetEnvironmentVariable($n, "Process")
-        }
-        foreach ($k in @($Env.Keys)) { $view[$k] = $Env[$k] }
-        switch ($Command) {
-            "data-load"   { $script:Steps += "data-load datasets=$($view.EXAKIT_DATASETS) preselect=$($view.EXAKIT_DATASETS_PRESELECT) auto=$($view.UI_TABLE_AUTO)" }
-            "mcp-setup"   { $script:Steps += "mcp-setup clients=$($view.EXAKIT_MCP_CLIENTS) preselect=$($view.EXAKIT_MCP_PRESELECT) auto=$($view.UI_TABLE_AUTO)" }
-            "marketplace" { $script:Steps += "marketplace addons=$($view.EXAKIT_MARKETPLACE_ADDONS) only=$($view.EXAKIT_MARKETPLACE_ONLY) auto=$($view.UI_TABLE_AUTO)" }
-            "mlflow" { $script:Steps += "mlflow action=$($Arguments -join ',')" }
-        }
-        if ($script:FailStep -eq $Command) { $script:ExakitPersonaChildCode = 1 } else { $script:ExakitPersonaChildCode = 0 }
-    }
-    # Pharma is in already and the notebook installed: neither is redone.
-    function Get-ExakitPendingDatasets { return @([pscustomobject]@{ Id = "banking_complaints"; Label = "Banking complaints (CFPB, ~7k complaints)" }) }
-    function Get-ExakitMarketplaceInstalledAddons { return @("notebook", "json-tables", "dash-server") }
-    # The question test above silenced the heading; the title line uses it.
-    function Write-ExakitHeading([string]$Msg) { Write-Host "  > $Msg" }
-    function PersonaCmd([string[]]$CmdArgs) {
-        Clear-Answers
-        $script:Steps = @()
-        $said = ""
-        try { $said = (& { Invoke-CmdPersona -CmdArgs $CmdArgs } 6>&1 | Out-String) } catch { $said = "THREW: $_" }
-        return $said
-    }
-    Set-ExakitManifestValue "persona.id" "data-scientist"
-    $said = PersonaCmd @("add", "ml-engineer")
-    Check "no --yes, no console: it runs" $true ($said -notlike "*THREW*" -and $script:ExakitPersonaAddOk)
-    Check "the personas recorded are the union, in the kit's order" "data-scientist,ml-engineer|add" "$(Get-ExakitManifestValue 'persona.id')|$(Get-ExakitManifestValue 'persona.source')"
-    Check "the title line names the persona added and the set it makes" $true ($said -like "*Adding persona: ML Engineer (now Data Scientist + ML Engineer)*")
-    Check "three steps headed like the installer's" $true ($said -like "*Step 1/3  Sample data*Step 2/3  AI clients*Step 3/3  Add-ons*")
-    Check "a dataset already loaded is said, not redone" $true ($said -like "*Already loaded: Pharma clinical trials*")
-    Check "an add-on already installed is said, not redone" $true ($said -like "*Already installed: notebook*")
-    Check "the steps, in order, each handed only what is missing (no console: plain lines)" `
-        "data-load datasets=banking_complaints preselect= auto=;mcp-setup clients=all preselect= auto=;marketplace addons=udf-devkit only= auto=;mlflow action=start" ($script:Steps -join ";")
-    Check "one closing line names the whole set" $true ($said -like "*Persona added: Data Scientist + ML Engineer*")
-    $said = (& { Invoke-CmdPersona -CmdArgs @("list") } 6>&1 | Out-String)
-    Check "list says what this kit was set up as, by title" $true ($said -like "*This kit was set up as: Data Scientist + ML Engineer*")
-    Check "...and how to add one" $true ($said -like "*exakit persona add <id>*")
-    # On a console the steps draw the installer's tables, taken without asking.
-    Set-ExakitManifestValue "persona.id" "data-scientist"
-    $wasFancy = $script:UiFancy
-    $script:UiFancy = $true
-    try { [void](PersonaCmd @("add", "ml-engineer")) } finally { $script:UiFancy = $wasFancy }
-    Check "on a console each step gets its table's defaults instead of the variable" `
-        "data-load datasets= preselect=banking_complaints auto=1;mcp-setup clients= preselect=all auto=1;marketplace addons= only=udf-devkit auto=1;mlflow action=start" ($script:Steps -join ";")
-    function Get-ExakitPendingDatasets { return @() }
-    function Get-ExakitMarketplaceInstalledAddons { return @("notebook", "json-tables", "dash-server", "udf-devkit") }
-    Clear-Answers
-    $plan = (Show-ExakitPersonaPlan -Ids (Get-ExakitManifestValue "persona.id") -Json | Out-String) | ConvertFrom-Json
-    Check "plan for the recorded set after the add: nothing pending" "data-scientist,ml-engineer|True" "$($plan.persona)|$($plan.nothing_pending)"
-    $said = PersonaCmd @("add", "ml-engineer")
-    Check "added again with everything in: each part says so" $true ($said -like "*Already loaded: Pharma clinical trials, Banking complaints*")
-    Check "...nothing is loaded or installed (the AI client step says for itself what is connected)" "mcp-setup mlflow" (($script:Steps | ForEach-Object { ($_ -split ' ')[0] }) -join " ")
-    function Get-ExakitPendingDatasets { return @([pscustomobject]@{ Id = "banking_complaints"; Label = "Banking complaints (CFPB, ~7k complaints)" }) }
-    function Get-ExakitMarketplaceInstalledAddons { return @("notebook", "json-tables", "dash-server") }
-    Set-ExakitManifestValue "persona.id" "general,data-scientist"
-    $said = PersonaCmd @("apply", "ml-engineer", "--yes")
-    Check "apply is the same command, and --yes is accepted" $true ($said -notlike "*THREW*" -and $script:ExakitPersonaAddOk)
-    Check "...a recorded persona this kit no longer ships is left out" "data-scientist,ml-engineer" "$(Get-ExakitManifestValue 'persona.id')"
-    Set-ExakitManifestValue "persona.id" "data-scientist"
-    $script:FailStep = "data-load"
-    Clear-Answers; $script:Steps = @()
-    $said = (& { Invoke-ExakitPersonaAdd -Ids "ml-engineer" -Cli "exakit.ps1" } 6>&1 | Out-String)
-    $script:FailStep = ""
-    Check "a step that fails: not finished (the command exits 1)" $false $script:ExakitPersonaAddOk
-    Check "...the others still run" "data-load mcp-setup marketplace mlflow" (($script:Steps | ForEach-Object { ($_ -split ' ')[0] }) -join " ")
-    Check "...the closing line says not everything finished" $true ($said -like "*Persona added: Data Scientist + ML Engineer - not everything finished*")
-    Check "...and the one command that retries the part" $true ($said -like "*Sample data did not finish - retry with: `$env:EXAKIT_DATASETS = 'banking_complaints'; exakit data-load*")
-    Check "...only that part" $false ($said -like "*AI clients did not finish*" -or $said -like "*Add-ons did not finish*")
-    Set-ExakitManifestValue "persona.id" ""
-    $said = PersonaCmd @("add", "data-scientist", "ml-engineer")
-    Check "two ids as two words: refused, joined with a comma instead" $true ($said -like "*exakit persona add data-scientist,ml-engineer*")
-    $said = PersonaCmd @("add", "nope")
-    Check "an unknown persona: refused, naming the ones there are" $true ($said -like "*available: data-scientist ml-engineer*")
-    $said = PersonaCmd @("add", "ml-engineer", "--force")
-    Check "an unknown option: refused" $true ($said -like "*Unknown option for persona add: --force*")
-    Check "...and nothing is recorded" "" "$(Get-ExakitManifestValue 'persona.id')"
 } finally {
     Clear-Answers
     Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue

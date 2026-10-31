@@ -99,10 +99,6 @@ jobs:
         if: matrix.shard == 2
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/personas-ps.ps1
-      - name: the udf-devkit add-on under 5.1
-        if: matrix.shard == 2
-        shell: powershell
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/udf-devkit-addon-ps.ps1
       - name: exakit mlflow under 5.1
         if: matrix.shard == 2
         shell: powershell
@@ -127,10 +123,6 @@ jobs:
         if: matrix.shard == 2
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/notebook-tools-table-ps.ps1
-      - name: exakit model under 5.1
-        if: matrix.shard == 2
-        shell: powershell
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/model-commands-ps.ps1
       - name: Rust UDF command twin
         if: matrix.shard == 2
         shell: powershell
@@ -164,21 +156,25 @@ jobs:
         if: matrix.shard == 2
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/addon-help-ps.ps1
-      - name: UDF installation stages under 5.1
-        if: matrix.shard == 2
-        shell: powershell
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/udf-install-progress-ps.ps1
 
-  notebook-python:
+  marketplace-python:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-      - name: Notebook lifecycle and public PowerShell entry points
+      - name: Python add-ons and public PowerShell entry points
         shell: powershell
         run: |
           python -m pip install uv
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m unittest discover -s tests -p 'test_marketplace_notebook*.py' -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -p 'test_marketplace_udf*.py' -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -p 'test_marketplace_model_cli.py' -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -p 'test_marketplace_installer_flow.py' -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -p 'test_marketplace_persona_apply.py' -v

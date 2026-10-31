@@ -482,12 +482,8 @@ try {
     # of setup-macos.sh / setup-linux.sh.
     if ($env:EXAKIT_PERSONA_ACTIVE) {
         Invoke-ExakitClosingOffer
-        foreach ($service in @(Invoke-ExakitPersonaService "services" $env:EXAKIT_PERSONA)) {
-            if ($service -eq "mlflow") {
-                & (Join-Path $script:BinDir "exakit.cmd") mlflow start
-                if ($LASTEXITCODE -ne 0) { Warn2 "MLflow did not start; retry with: exakit mlflow start" }
-            }
-        }
+        Invoke-ExakitMarketplaceCli -Script installer_flow -AllowFailure -CmdArgs @('--phase', 'services', '--cli',
+            (Join-Path $PSScriptRoot 'exakit.ps1'), '--host', (Get-Process -Id $PID).Path)
         if (Get-Command Write-ExakitPersonaMarketplaceNote -ErrorAction SilentlyContinue) { Write-ExakitPersonaMarketplaceNote }
     }
     Show-ExakitConnectionSummary

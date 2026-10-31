@@ -21,6 +21,8 @@ from runtime import AddonFailure, KitContext, venv_executable, venv_python
 ID = "notebook"
 RECEIPT = "components.notebook"
 PACKAGE = "exasol-notebook-connector"
+IMPORT_CHECK = ("import exasol.nb_connector, exakit.nb, exakit_nb, exasol_mlflow, ipykernel; "
+                "from exasol.nb_connector.ui.access import access_store")
 KERNEL = "exasol-starter-kit"
 KERNEL_TITLE = "Exasol (Starter Kit)"
 FRONTENDS = ("jupyterlab", "marimo", "positron")
@@ -131,7 +133,8 @@ def _external_jupyter(ctx: KitContext) -> Path | None:
 
 def _specs(ctx: KitContext, version: str, selected: tuple[str, ...]) -> list[str]:
     venv, _, _ = paths(ctx)
-    extras = "bucketfs,ibis,pyexasol,sqlalchemy,notebook-dependencies"
+    # Connector 3.1 imports Docker UI types even when opening a local database store.
+    extras = "bucketfs,docker-db,ibis,pyexasol,sqlalchemy,notebook-dependencies"
     install_jupyter = "jupyterlab" in selected and not _external_jupyter(ctx)
     if install_jupyter or venv_executable(venv, "jupyter-lab").is_file():
         extras += ",jupyter"
@@ -265,7 +268,7 @@ def validate(ctx: KitContext) -> bool:
     if not python.is_file():
         ctx.manifest.set_many({f"{RECEIPT}.validated": False})
         return False
-    result = subprocess.run([str(python), "-c", "import exasol.nb_connector, exakit.nb, exakit_nb, exasol_mlflow, ipykernel"],
+    result = subprocess.run([str(python), "-c", IMPORT_CHECK],
                             capture_output=True, check=False, timeout=30)
     if result.returncode:
         ctx.manifest.set_many({f"{RECEIPT}.validated": False})

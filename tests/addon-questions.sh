@@ -46,8 +46,8 @@ has "the Windows twin drops them too" "while ([Console]::KeyAvailable)" "$(cat "
 
 echo "the hook, in both twins:"
 ECOMMON="$(cat "$ROOT/setup/lib/exakit-common.ps1")"
-_apply_range='/^_exakit_marketplace_apply() {/,/ui_table_begin/p'          # assigned first: bash 3.2
-_apply_ps_range='/^function Invoke-ExakitMarketplaceApply {/,/Start-ExakitTable/p'
+_apply_range='/^_exakit_marketplace_apply_python() {/,/ui_table_begin/p'          # assigned first: bash 3.2
+_apply_ps_range='/^function Invoke-ExakitMarketplaceApplyPython {/,/Start-ExakitTable/p'
 has "apply asks the questions before the table starts" '_exakit_marketplace_questions "$1"' \
     "$(sed -n "$_apply_range" "$ROOT/setup/lib/common.sh")"
 has "...and so does the twin" 'Invoke-ExakitMarketplaceQuestions -Ids $Ids' \

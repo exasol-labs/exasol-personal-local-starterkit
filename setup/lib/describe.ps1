@@ -7,7 +7,7 @@
 # setup/lib/describe.sh; read that header. The profiling, the scoring and the
 # approving live in one Python service, setup\lib\describe_service.py, which
 # both twins run through the kit's notebook Python (the add-on has to be
-# installed), connected as the kit's admin user the way udf-devkit.ps1 runs
+# installed), connected as the kit's admin user the way the Python UDF command runs
 # udf_tool.py: the password is read from its file by the child and never
 # reaches a command line. The shell keeps only the argument check and the
 # refusals. Drafting runs SELECTs only; approving writes comments (and the

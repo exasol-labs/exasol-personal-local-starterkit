@@ -185,69 +185,27 @@ EXAKIT_EPQ_EOF
 # The install asks for a persona after the common steps, then offers its data.
 # Add-ons are offered at the end; no persona keeps the kit's sample defaults.
 exakit_persona_flow() {
-    _epf_root="$1"
-    # No database or no exapump: nothing here can run (the data needs both, and
-    # the closing offer is not made after a soft failure), so nobody is asked.
-    # The database skip was said with the other database steps; the exapump one
-    # is said by exakit_persona_data.
-    exakit_soft_failed runtime && return 0
-    if exakit_soft_failed exapump; then
-        exakit_persona_data "$_epf_root"
-        return 0
-    fi
-    if [ -z "${EXAKIT_PERSONA:-}" ]; then
-        if [ -n "$(_exakit_prompt_tty)" ] && [ "${UI_FANCY:-0}" = 1 ] && ! _exakit_persona_all_answered; then
-            exakit_persona_question
-            if [ -n "${EXAKIT_PERSONA:-}" ] && exakit_persona_known "$EXAKIT_PERSONA"; then
-                _exakit_persona_preselect "$EXAKIT_PERSONA"
-                ok "Persona: $(_exakit_persona_service title "$EXAKIT_PERSONA" 2>/dev/null)"
-                _exakit_log_file "INFO  persona $EXAKIT_PERSONA picked on screen: datasets ${EXAKIT_DATASETS_PRESELECT:-as asked}; add-ons ${EXAKIT_MARKETPLACE_PRESELECT:-as asked}"
-                _exakit_persona_record
-                export EXAKIT_PERSONA_ACTIVE=1
-            elif [ -n "${EXAKIT_PERSONA:-}" ]; then
-                warn "$EXAKIT_PERSONA_PROBLEM - carrying on without a persona"
-                EXAKIT_PERSONA=""
-            fi
-        else
-            _exakit_persona_kit_defaults
-        fi
-    fi
-    # Asked, and the answer was None: the kit's own default datasets.
-    [ -n "${EXAKIT_PERSONA:-}" ] || [ -n "${EXAKIT_DATASETS_PRESELECT:-}" ] || _exakit_persona_kit_defaults
-    # The data, with the personas' datasets ticked (or loaded, when named in the
-    # environment). See exakit_maybe_offer_data_load.
-    exakit_persona_data "$_epf_root"
-}
-
-# _exakit_persona_kit_defaults — no persona: the data question ticks the
-# datasets the kit loads on its own (default=yes in their dataset.conf: TPC-H,
-# energy, weather). Nothing is recorded - no persona was chosen.
-_exakit_persona_kit_defaults() {
-    _epkd="$(_exakit_persona_service default-datasets 2>/dev/null)"
-    [ -n "$_epkd" ] && { EXAKIT_DATASETS_PRESELECT="$_epkd"; export EXAKIT_DATASETS_PRESELECT; }
-    return 0
-}
-
-# _exakit_persona_all_answered — everything the persona question would answer
-# was answered in the environment already, so asking would change nothing.
-_exakit_persona_all_answered() {
-    { [ -n "${EXAKIT_DATASETS:-}" ] || [ "${EXAKIT_LOAD_SAMPLE:-}" = 0 ] || [ "${EXAKIT_LOAD_SAMPLE:-}" = 1 ]; } && \
-        [ -n "${EXAKIT_MARKETPLACE_ADDONS:-}" ]
-}
-
-# _exakit_persona_preselect <ids> [datasets] — what the menus tick for these
-# personas: EXAKIT_DATASETS_PRESELECT (dataset ids, or "none") and, unless told
-# datasets only, EXAKIT_MARKETPLACE_PRESELECT (add-on ids, or "all"). Answers
-# the user set in the environment still win: they are not overwritten.
-_exakit_persona_preselect() {
-    _epp_answers="$(_exakit_persona_service answers "$1" 2>/dev/null)"
-    _epp_ds="$(printf '%s\n' "$_epp_answers" | sed -n 's/^EXAKIT_DATASETS=//p')"
-    printf '%s\n' "$_epp_answers" | grep -qx 'EXAKIT_LOAD_SAMPLE=0' && _epp_ds=none
-    _epp_ad="$(printf '%s\n' "$_epp_answers" | sed -n 's/^EXAKIT_MARKETPLACE_ADDONS=//p')"
-    [ -n "$_epp_ds" ] && { EXAKIT_DATASETS_PRESELECT="$_epp_ds"; export EXAKIT_DATASETS_PRESELECT; }
-    [ "${2:-}" = datasets ] && return 0
-    [ -n "$_epp_ad" ] && [ "$_epp_ad" != none ] && { EXAKIT_MARKETPLACE_PRESELECT="$_epp_ad"; export EXAKIT_MARKETPLACE_PRESELECT; }
-    return 0
+    local root="$1" phase="${2:-begin}" actions action key value
+    local flags=(--root "$root" --phase "$phase")
+    exakit_soft_failed runtime && flags+=(--runtime-failed)
+    exakit_soft_failed exapump && flags+=(--exapump-failed)
+    if [ -n "$(_exakit_prompt_tty)" ] && [ "${UI_FANCY:-0}" = 1 ]; then flags+=(--interactive); fi
+    actions="$(_exakit_marketplace_cli installer_flow "${flags[@]}")" || return 1
+    while IFS='|' read -r action key value; do
+        case "$action" in
+            question) exakit_persona_question; exakit_persona_flow "$root" selected ;;
+            set)
+                case "$key" in
+                    EXAKIT_PERSONA|EXAKIT_PERSONA_ACTIVE|EXAKIT_DATASETS_PRESELECT|EXAKIT_MARKETPLACE_PRESELECT)
+                        export "$key=$value" ;;
+                esac ;;
+            notice) ok "$key" ;;
+            warning) warn "$key" ;;
+            data) exakit_persona_data "$root" ;;
+        esac
+    done <<EXAKIT_PERSONA_ACTIONS
+$actions
+EXAKIT_PERSONA_ACTIONS
 }
 
 # exakit_persona_data <kit_root> — the sample-data section, booked as a soft
@@ -333,169 +291,7 @@ exakit_persona_recorded() {
     _exakit_persona_service check "$_epr_out" 2>/dev/null
 }
 
-# _exakit_persona_label <dataset-id> — the dataset's name as a line says it:
-# its label without the "(~5k rows)" estimate or the download size.
-_exakit_persona_label() {
-    exakit_bundled_datasets 2>/dev/null | awk -F'|' -v id="$1" '$1 == id { print $2; exit }' | \
-        sed 's/ - [0-9.]* MB download$//; s/ *([^()]*)$//'
-}
-
-# Legacy apply path for direct callers. The public CLI uses
-# marketplace/persona_apply.py on both platforms.
+# Compatibility entry point for callers that already sourced this adapter.
 exakit_persona_add() {
-    _epd_was="$(exakit_persona_recorded)"
-    _epd_new="$(_exakit_persona_service select "$1" "$_epd_was" 2>/dev/null)" || \
-        die "$(_exakit_persona_service select "$1" "$_epd_was" 2>&1 | tail -n 1)"
-    _epd_ids="$_epd_new"
-    [ -n "$_epd_was" ] && _epd_ids="$(_exakit_persona_service check "$_epd_was,$_epd_new" 2>/dev/null || printf '%s' "$_epd_new")"
-    _epd_title="$(_exakit_persona_service title "$_epd_new" 2>/dev/null || printf '%s' "$_epd_new")"
-    _epd_all="$(_exakit_persona_service title "$_epd_ids" 2>/dev/null || printf '%s' "$_epd_ids")"
-    _epd_answers="$(_exakit_persona_service answers "$_epd_ids")" || \
-        die "The persona files could not be read - repair the kit copy with: exakit update"
-    _exakit_persona_export "$_epd_answers"
-    EXAKIT_PERSONA_SOURCE=add
-    export EXAKIT_PERSONA_SOURCE
-    _exakit_persona_record
-    _exakit_log_file "INFO  persona add $_epd_new -> $EXAKIT_PERSONA: $(printf '%s' "$_epd_answers" | tr '\n' ' ')"
-    printf '\n'
-    if [ "$_epd_ids" = "$_epd_new" ]; then
-        heading "Adding persona: $_epd_title"
-    else
-        heading "Adding persona: $_epd_title (now $_epd_all)"
-    fi
-    # The installer's tables where there is a screen to animate them on.
-    _epd_live=0
-    [ "${UI_FANCY:-0}" = 1 ] && [ -t 1 ] && _epd_live=1
-    _epd_failed=""                   # "<part>|<the command that retries it>" lines
-
-    exakit_step_heading "Step 1/3  Sample data"
-    _epd_load=""; _epd_have=""
-    if [ "${EXAKIT_LOAD_SAMPLE:-}" != 0 ] && [ -n "${EXAKIT_DATASETS:-}" ]; then
-        _epd_known=" $(exakit_bundled_datasets 2>/dev/null | cut -d'|' -f1 | tr '\n' ' ') "
-        _epd_pending=" $(exakit_pending_datasets 2>/dev/null | cut -d'|' -f1 | tr '\n' ' ') "
-        for _epd_d in $(printf '%s' "$EXAKIT_DATASETS" | tr ',' ' '); do
-            case "$_epd_known" in
-                *" $_epd_d "*) ;;
-                *) warn "Unknown dataset id '$_epd_d' in EXAKIT_DATASETS - left out"; continue ;;
-            esac
-            case "$_epd_pending" in
-                *" $_epd_d "*) _epd_load="${_epd_load:+$_epd_load,}$_epd_d" ;;
-                *) _epd_have="${_epd_have:+$_epd_have, }$(_exakit_persona_label "$_epd_d")" ;;
-            esac
-        done
-    fi
-    [ -n "$_epd_have" ] && ok "Already loaded: $_epd_have"
-    if [ -n "$_epd_load" ]; then
-        if ( _exakit_prompt_tty() { :; }
-             unset EXAKIT_DATA_FILE EXAKIT_LOAD_SAMPLE
-             if [ "$_epd_live" = 1 ]; then
-                 # The data question's table, with only these datasets under
-                 # Sample datasets (a persona lists its own), ticked.
-                 unset EXAKIT_DATASETS
-                 EXAKIT_PERSONA_ACTIVE=1 EXAKIT_DATASETS_PRESELECT="$_epd_load" UI_TABLE_AUTO=1
-                 export EXAKIT_PERSONA_ACTIVE EXAKIT_DATASETS_PRESELECT UI_TABLE_AUTO
-             else
-                 EXAKIT_DATASETS="$_epd_load"
-                 export EXAKIT_DATASETS
-             fi
-             cmd_data_load ); then
-            :
-        else
-            _epd_failed="${_epd_failed}Sample data|EXAKIT_DATASETS=$_epd_load exakit data-load
-"
-        fi
-    elif [ -z "$_epd_have" ]; then
-        info "No sample data for these personas"
-    fi
-
-    exakit_step_heading "Step 2/3  AI clients"
-    if [ "${EXAKIT_SKIP_MCP:-}" = 1 ]; then
-        info "Skipping the AI clients (EXAKIT_SKIP_MCP=1) - connect them any time with: exakit mcp-setup"
-    else
-        case "${EXAKIT_MCP_CLIENTS:-}" in
-            ""|skip|SKIP|Skip|none|NONE|None) info "No AI clients for these personas" ;;
-            *)
-                if ( _exakit_prompt_tty() { :; }
-                     if [ "$_epd_live" = 1 ]; then
-                         # The installer's client table: the clients already
-                         # connected are on it, saying so; the personas' pending
-                         # ones are ticked ("all": every one on this machine).
-                         EXAKIT_MCP_PRESELECT="$EXAKIT_MCP_CLIENTS" UI_TABLE_AUTO=1
-                         export EXAKIT_MCP_PRESELECT UI_TABLE_AUTO
-                         unset EXAKIT_MCP_CLIENTS
-                     fi
-                     cmd_mcp_setup ); then
-                    :
-                else
-                    _epd_failed="${_epd_failed}AI clients|exakit mcp-setup
-"
-                fi
-                ;;
-        esac
-    fi
-
-    exakit_step_heading "Step 3/3  Add-ons"
-    _epd_ad="${EXAKIT_MARKETPLACE_ADDONS:-}"
-    case "$_epd_ad" in
-        none) _epd_ad="" ;;
-        all) _epd_ad="$(exakit_marketplace_addons | cut -d'|' -f1 | tr '\n' ',' | sed 's/,$//')" ;;
-    esac
-    _epd_installed=" $(exakit_marketplace_installed_addons 2>/dev/null | tr '\n' ' ') "
-    _epd_get=""; _epd_got=""
-    for _epd_a in $(printf '%s' "$_epd_ad" | tr ',' ' '); do
-        case "$_epd_installed" in
-            *" $_epd_a "*) _epd_got="${_epd_got:+$_epd_got, }$_epd_a" ;;
-            *) _epd_get="${_epd_get:+$_epd_get,}$_epd_a" ;;
-        esac
-    done
-    [ -n "$_epd_got" ] && ok "Already installed: $_epd_got"
-    if [ -n "$_epd_get" ]; then
-        if ( _exakit_prompt_tty() { :; }
-             if [ "$_epd_live" = 1 ]; then
-                 # The marketplace's table, narrowed to these add-ons, all ticked
-                 # (the notebook's tools as its child rows, their own defaults).
-                 EXAKIT_MARKETPLACE_ONLY="$_epd_get" UI_TABLE_AUTO=1
-                 export EXAKIT_MARKETPLACE_ONLY UI_TABLE_AUTO
-                 unset EXAKIT_MARKETPLACE_ADDONS
-             else
-                 EXAKIT_MARKETPLACE_ADDONS="$_epd_get"
-                 export EXAKIT_MARKETPLACE_ADDONS
-             fi
-             cmd_marketplace ); then
-            :
-        else
-            _epd_failed="${_epd_failed}Add-ons|exakit marketplace $(printf '%s' "$_epd_get" | tr ',' ' ')
-"
-        fi
-    elif [ -z "$_epd_got" ]; then
-        info "No add-ons for these personas"
-    fi
-
-    # Services are declared by the persona, and start only after its add-ons
-    # have been installed. Reapplying a persona is safe: start is idempotent.
-    for _epd_service in $(_exakit_persona_service services "$_epd_new" 2>/dev/null); do
-        case "$_epd_service" in
-            mlflow)
-                if ( _exakit_prompt_tty() { :; }; cmd_mlflow start ); then :
-                else _epd_failed="${_epd_failed}MLflow service|exakit mlflow start
-"; fi ;;
-        esac
-    done
-
-    printf '\n'
-    if [ -z "$_epd_failed" ]; then
-        printf '  %s%s%s %sPersona added: %s%s\n' "${UI_OK:-}" "${UI_TICK:-[ok]}" "${UI_RESET:-}" \
-            "${UI_BOLD:-}" "$_epd_all" "${UI_RESET:-}"
-        _exakit_log_file "OK    persona added: $EXAKIT_PERSONA"
-        return 0
-    fi
-    printf '  %s%s%s %sPersona added: %s%s - not everything finished\n' "${UI_ERR:-}" "${UI_CROSS:-[x]}" "${UI_RESET:-}" \
-        "${UI_BOLD:-}" "$_epd_all" "${UI_RESET:-}"
-    while IFS='|' read -r _epd_part _epd_retry; do
-        [ -n "$_epd_part" ] || continue
-        warn "$_epd_part did not finish - retry with: $_epd_retry"
-    done <<EXAKIT_EPD_EOF
-$_epd_failed
-EXAKIT_EPD_EOF
-    return 1
+    _exakit_marketplace_cli persona_apply add "$1" --cli "$(_exakit_marketplace_root)/setup/exakit"
 }
