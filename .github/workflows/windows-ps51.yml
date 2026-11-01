@@ -178,3 +178,8 @@ jobs:
           python -m unittest discover -s tests -p 'test_marketplace_installer_flow.py' -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m unittest discover -s tests -p 'test_marketplace_persona_apply.py' -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -p 'test_marketplace_selection.py' -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -p 'test_marketplace_service.py' -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
