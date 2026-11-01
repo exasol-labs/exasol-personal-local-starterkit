@@ -250,6 +250,15 @@ def _write_launcher(ctx: KitContext) -> None:
         launcher.chmod(0o755)
 
 
+def _ensure_python(ctx: KitContext) -> Path:
+    python = venv_python(paths(ctx)[0] / "python")
+    if not python.is_file():
+        uv = ctx.require_uv()
+        ctx.run_logged("Creating Scheduler Python runtime", str(uv), "venv", "--python",
+                       ctx.managed_python_version, str(paths(ctx)[0] / "python"))
+    return python
+
+
 def install(ctx: KitContext) -> None:
     if not applicable(ctx):
         raise AddonFailure(applicable_reason(ctx))
@@ -268,10 +277,7 @@ def install(ctx: KitContext) -> None:
             _download(ctx, version, archive)
             _unpack(archive, staged)
             ctx.run_logged("Checking Scheduler engine", str(staged), "--help", timeout=15)
-        python = venv_python(home / "python")
-        if not python.is_file():
-            ctx.run_logged("Creating Scheduler Python runtime", str(ctx.uv), "venv", "--python", ctx.managed_python_version,
-                           str(home / "python"))
+        _ensure_python(ctx)
         if needs_engine:
             user, schema, bootstrap = _user(ctx)
         else:
@@ -302,7 +308,8 @@ def install(ctx: KitContext) -> None:
 
 def _service(ctx: KitContext) -> ManagedProcess:
     home, _, _, log, _ = paths(ctx)
-    return ManagedProcess(home / "exasol-scheduler.pid", log, ctx.root / "marketplace" / "scheduler_launcher.py")
+    # PID creation time plus the private service home survives kit source updates.
+    return ManagedProcess(home / "exasol-scheduler.pid", log, home)
 
 
 def _legacy_pids(ctx: KitContext) -> set[int]:
@@ -356,10 +363,17 @@ def start(ctx: KitContext) -> None:
     if _running(ctx):
         return
     home, _, engine, log, credential = paths(ctx)
+    python = venv_python(home / "python")
+    if not python.is_file():
+        if ctx.manifest.get(f"{RECEIPT}.ownership") != "kit":
+            raise AddonFailure("Scheduler is not kit-owned; its owner must repair the missing Python runtime")
+        python = _ensure_python(ctx)
+    if ctx.manifest.get(f"{RECEIPT}.ownership") == "kit":
+        _write_launcher(ctx)
     (home / "gave-up").unlink(missing_ok=True)
     service = _service(ctx)
     script = ctx.root / "marketplace" / "scheduler_launcher.py"
-    command = [str(venv_python(home / "python")), str(script), str(home), str(engine),
+    command = [str(python), str(script), str(home), str(engine),
                str(ctx.manifest.path), str(credential)]
     log.parent.mkdir(parents=True, exist_ok=True)
     with log.open("a", encoding="utf-8") as output:

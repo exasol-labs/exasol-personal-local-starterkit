@@ -88,6 +88,27 @@ Langfuse project through the stub model. It preserves source rows and comments.
 Do not upload the entire output directory: its private manifest copy is local
 connection configuration. Share only the sanitized `result.json`.
 
+### Scheduler lifecycle check
+
+With the default Scheduler installed and `SCHED.SCHED_TASKS` empty, run:
+
+```sh
+python3 tests/integration/scheduler_live.py --approve-test-writes \
+  --output /tmp/scheduler-live.json
+```
+
+The check prints its temporary `SELECT 1` task before insertion, waits for a
+`SUCCEEDED` history row, checks that `SCHEDULER_SVC` has only `CREATE SESSION`,
+and removes its task definition. Execution history remains as evidence. It
+refuses to restart a scheduler with existing task definitions. The same Python
+script chooses Bash or Windows PowerShell for the current host.
+
+The Mac check passed after repairing a missing private Python runtime left by
+an older installation. An earlier failure log recorded the Personal license’s
+20-connection limit; the live retry stayed at the baseline in sampled session
+counts. Free unused connections before retrying that specific error with
+`exakit start exasol-scheduler`.
+
 ## 3. Evaluate a useful SQL model
 
 1. Choose an exact model supported by your provider or local server using

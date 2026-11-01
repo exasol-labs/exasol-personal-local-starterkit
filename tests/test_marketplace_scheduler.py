@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import hashlib
 import json
 import sys
 import tarfile
@@ -93,6 +94,27 @@ class SchedulerTest(unittest.TestCase):
                              scheduler._digest(self.ctx, version, repo, tag, name))
             fetch.assert_not_called()
 
+    def test_partial_download_is_removed_and_retry_preserves_other_receipts(self) -> None:
+        payload = b"verified scheduler archive"
+        archive = self.home / "scheduler.tar.gz"
+        self.manifest.set_many({"components.notebook.version": "3.1.0"})
+        before = self.manifest.path.read_bytes()
+        class Interrupted(io.BytesIO):
+            def read(self, size=-1):
+                if self.tell():
+                    raise OSError("transfer interrupted")
+                return super().read(5)
+        with patch.object(scheduler, "_digest", return_value=hashlib.sha256(payload).hexdigest()), \
+             patch.object(scheduler, "_https", return_value=Interrupted(payload)):
+            with self.assertRaisesRegex(OSError, "transfer interrupted"):
+                scheduler._download(self.ctx, "0.4.0", archive)
+        self.assertFalse(archive.exists())
+        with patch.object(scheduler, "_digest", return_value=hashlib.sha256(payload).hexdigest()), \
+             patch.object(scheduler, "_https", return_value=io.BytesIO(payload)):
+            scheduler._download(self.ctx, "0.4.0", archive)
+        self.assertEqual(payload, archive.read_bytes())
+        self.assertEqual(before, self.manifest.path.read_bytes())
+
     def test_archive_requires_one_engine_binary(self) -> None:
         source = self.home / "engine"
         source.write_bytes(b"scheduler engine")
@@ -178,6 +200,9 @@ class SchedulerTest(unittest.TestCase):
                                 "components.exasol_scheduler.ownership": "kit"})
         with patch.object(scheduler, "_running", return_value=False):
             self.assertIn("gave up after 5 rapid failures", scheduler.status(self.ctx))
+        python = scheduler.venv_python(home / "python")
+        python.parent.mkdir(parents=True)
+        python.touch()
         process = Mock(pid=321)
         process.poll.return_value = None
         with patch.object(scheduler, "_running", return_value=False), \
@@ -186,6 +211,59 @@ class SchedulerTest(unittest.TestCase):
              patch.object(scheduler.time, "sleep"):
             scheduler.start(self.ctx)
         self.assertFalse(marker.exists())
+
+    def test_start_migrates_legacy_runtime_without_replacing_engine_or_credentials(self) -> None:
+        home, launcher, engine, _, credential = scheduler.paths(self.ctx)
+        engine.parent.mkdir(parents=True)
+        engine.write_bytes(b"existing engine")
+        credential.parent.mkdir(parents=True)
+        credential.write_text("existing credential")
+        self.manifest.set_many({"components.exasol_scheduler.version": "0.3.1",
+                                "components.exasol_scheduler.ownership": "kit"})
+        python = scheduler.venv_python(home / "python")
+        def create(_label, *args):
+            python.parent.mkdir(parents=True)
+            python.touch()
+        process = Mock(pid=321)
+        process.poll.return_value = None
+        with patch.object(scheduler, "_running", return_value=False), \
+             patch.object(KitContext, "require_uv", return_value=Path("uv")), \
+             patch.object(KitContext, "run_logged", side_effect=create) as run, \
+             patch.object(scheduler, "_user") as user, patch.object(scheduler, "_download") as download, \
+             patch.object(scheduler, "_creation", return_value="created"), \
+             patch.object(scheduler.subprocess, "Popen", return_value=process), \
+             patch.object(scheduler.time, "sleep"):
+            scheduler.start(self.ctx)
+        run.assert_called_once()
+        self.assertTrue(python.is_file())
+        self.assertTrue(launcher.is_file())
+        self.assertEqual(b"existing engine", engine.read_bytes())
+        self.assertEqual("existing credential", credential.read_text())
+        user.assert_not_called()
+        download.assert_not_called()
+
+    def test_service_identity_survives_checkout_to_installed_source_switch(self) -> None:
+        home = scheduler.paths(self.ctx)[0]
+        home.mkdir()
+        (home / "exasol-scheduler.pid").write_text(json.dumps({"pid": 321, "created": "created"}))
+        command = f"python /another/source/marketplace/scheduler_launcher.py {home} engine manifest credential"
+        with patch("process._creation", return_value="created"), \
+             patch("process._command", return_value=command):
+            self.assertEqual(321, scheduler._service(self.ctx).recorded_pid())
+
+    def test_start_does_not_create_runtime_for_external_receipts(self) -> None:
+        engine = scheduler.paths(self.ctx)[2]
+        engine.parent.mkdir(parents=True)
+        engine.write_bytes(b"external engine")
+        for owner in ("user", "unknown"):
+            with self.subTest(owner=owner):
+                self.manifest.set_many({"components.exasol_scheduler.version": "0.3.1",
+                                        "components.exasol_scheduler.ownership": owner})
+                with patch.object(scheduler, "_running", return_value=False), \
+                     patch.object(KitContext, "run_logged") as run:
+                    with self.assertRaisesRegex(AddonFailure, "owner must repair"):
+                        scheduler.start(self.ctx)
+                run.assert_not_called()
 
     def test_failed_update_attempts_to_restore_running_scheduler(self) -> None:
         self.manifest.set_many({"components.exasol_scheduler.ownership": "kit"})

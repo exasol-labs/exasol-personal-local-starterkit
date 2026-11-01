@@ -152,6 +152,12 @@ exakit info
 
 Notebook ports must be 1024–65535. Defaults are JupyterLab 8888 and Marimo 2718; a running server keeps its current port, so stop it before moving it. Positron must already be installed. Dash Server's default is 5100; read the actual URL from `exakit status`. dbt needs a project with the kit's `exasol_starter_kit` profile. Scheduler jobs are rows in `SCHED.SCHED_TASKS`; its help page shows the SQL and cron/timezone format. VS Code connection settings are entered in the editor using `exakit info`.
 
+An older kit-owned Scheduler with no private Python supervisor runtime repairs
+that runtime on `exakit start exasol-scheduler`. Its engine, credential and job
+definitions are preserved. A log naming the Personal 20-connection limit needs
+unused connections closed before retrying the start command.
+
+
 Use environment settings before the command. For example:
 
 ```sh

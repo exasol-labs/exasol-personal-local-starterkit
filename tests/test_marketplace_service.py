@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -60,6 +61,29 @@ class ServiceTest(unittest.TestCase):
                     service.invoke(ROOT, "json-tables", "install")
             self.assertEqual([], called)
             self.assertEqual("user", ctx.manifest.get("components.json_tables.ownership"))
+
+    def test_every_addon_preserves_user_unknown_and_untracked_receipts(self) -> None:
+        for addon in service.load_addons(ROOT):
+            for owner in ("user", "unknown", None):
+                for operation in ("update", "uninstall"):
+                    with self.subTest(addon=addon.id, owner=owner, operation=operation), \
+                         tempfile.TemporaryDirectory() as temp, patch.dict(os.environ, {}, clear=True):
+                        home = Path(temp)
+                        receipt = {"version": "99.0.0"}
+                        if owner is not None:
+                            receipt["ownership"] = owner
+                        ctx = self._context(home, {addon.id.replace("-", "_"): receipt})
+                        sentinel = home / "user-files" / "keep.txt"
+                        sentinel.parent.mkdir()
+                        sentinel.write_text("personal data")
+                        before = ctx.manifest.path.read_bytes()
+                        _, module = service._module(ROOT, addon.id)
+                        with patch.object(module, "install", side_effect=AssertionError("external install")), \
+                             patch.object(KitContext, "run_logged", side_effect=AssertionError("external command")):
+                            with self.assertRaises(AddonFailure):
+                                service.invoke(ROOT, addon.id, operation, ctx=ctx)
+                        self.assertEqual(before, ctx.manifest.path.read_bytes())
+                        self.assertEqual("personal data", sentinel.read_text())
 
     def test_external_install_race_cannot_report_success(self) -> None:
         with tempfile.TemporaryDirectory() as temp:

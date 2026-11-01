@@ -22,13 +22,13 @@
 
 # _exakit_persona_service <command> [args] — ask the persona service.
 _exakit_persona_service() {
-    _eps_root="$(exakit_repo_root)"
+    _eps_root="$(_exakit_marketplace_root)"
     run_python_any "$_eps_root/setup/lib/persona_service.py" "$_eps_root" "$@"
 }
 
 # exakit_persona_dir — where the persona files live in this kit copy.
 exakit_persona_dir() {
-    printf '%s/personas\n' "$(exakit_repo_root)"
+    printf '%s/personas\n' "$(_exakit_marketplace_root)"
 }
 
 # exakit_persona_ids — every persona this kit ships, one per line.
@@ -120,7 +120,7 @@ exakit_persona_question() {
     # Textual picker owns this screen; the old checkbox remains a recovery path
     # if a package mirror is offline or the terminal cannot run Textual.
     if [ -t 0 ] && [ -t 1 ] && [ "${EXAKIT_NO_FANCY:-0}" != 1 ]; then
-        _epq_root="$(exakit_repo_root)"
+        _epq_root="$(_exakit_marketplace_root)"
         _epq_result="$(mktemp "${TMPDIR:-/tmp}/exakit-persona-ui.XXXXXX")" || _epq_result=""
         if [ -n "$_epq_result" ]; then
             rm -f "$_epq_result"

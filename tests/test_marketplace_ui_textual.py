@@ -89,6 +89,33 @@ class ChoiceScreenTest(unittest.TestCase):
 
         asyncio.run(check())
 
+    def test_select_all_tracks_children_and_restores_missing_choices(self) -> None:
+        from ui import ChoiceApp
+        from textual.widgets import DataTable
+
+        async def check() -> None:
+            app = ChoiceApp("marketplace", [{"id": "notebook", "label": "Notebooks",
+                "choices": (("jupyterlab", "JupyterLab"), ("marimo", "Marimo"))}],
+                {"notebook"}, {"jupyterlab"})
+            async with app.run_test() as pilot:
+                table = app.query_one(DataTable)
+                self.assertEqual("[ ] Select All", table.get_cell_at((0, 0)))
+                table.move_cursor(row=0)
+                await pilot.press("space")
+                self.assertEqual({"jupyterlab", "marimo"}, app.frontends)
+                self.assertEqual("[✓] Select All", table.get_cell_at((0, 0)))
+                table.move_cursor(row=3)
+                await pilot.press("space")
+                self.assertEqual("[ ] Select All", table.get_cell_at((0, 0)))
+                table.move_cursor(row=0)
+                await pilot.press("space")
+                self.assertEqual({"jupyterlab", "marimo"}, app.frontends)
+                await pilot.press("space")
+                self.assertEqual(set(), app.selected)
+                self.assertEqual(set(), app.frontends)
+                await pilot.press("escape")
+        asyncio.run(check())
+
     def test_notebook_tool_menu_keeps_disabled_positron_unselected(self) -> None:
         from ui import ChoiceApp
 

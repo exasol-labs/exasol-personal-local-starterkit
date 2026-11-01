@@ -2,6 +2,11 @@
 
 ## Persona and marketplace Python backend
 
+- Repair an older kit-owned Scheduler’s missing Python supervisor runtime on start without replacing its binary, credentials or tasks. Identify its process by PID creation time and service home so checkout and installed commands can manage the same process.
+- Make Textual’s Select All include child choices: a partly selected Notebook row no longer appears fully selected, and selecting all restores missing choices.
+- Resolve persona definitions and interactive menu code from the same marketplace source as direct commands on Bash and PowerShell, including when an older installed kit copy exists.
+- Add a repeatable Scheduler smoke check with a temporary `SELECT 1` task, history and privilege verification, and task cleanup. Extend ownership, interrupted-download and startup-timeout retry coverage.
+
 - Include the notebook connector’s `docker-db` extra because its store widget imports Docker UI types even for an existing local database. Check the widget import during environment validation so missing dependencies are reported before a notebook opens.
 - Use the candidate checkout for direct Bash marketplace commands even when an older kit copy exists under `EXAKIT_HOME`.
 

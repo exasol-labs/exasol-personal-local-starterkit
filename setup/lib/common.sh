@@ -4652,7 +4652,7 @@ exakit_marketplace_menu() {
     # controller through the platform progress adapter below.
     if [ -z "${EXAKIT_MARKETPLACE_ADDONS:-}" ] && \
        [ "${UI_TABLE_AUTO:-0}" != 1 ] && [ -t 0 ] && [ -t 1 ] && [ "${EXAKIT_NO_FANCY:-0}" != 1 ]; then
-        _mm_root="$(exakit_repo_root)"
+        _mm_root="$(_exakit_marketplace_root)"
         _mm_state="$(mktemp "${TMPDIR:-/tmp}/exakit-market-state.XXXXXX")" || _mm_state=""
         _mm_result="$(mktemp "${TMPDIR:-/tmp}/exakit-market-ui.XXXXXX")" || _mm_result=""
         if [ -n "$_mm_state" ] && [ -n "$_mm_result" ]; then

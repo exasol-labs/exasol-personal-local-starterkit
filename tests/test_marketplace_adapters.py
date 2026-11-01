@@ -76,6 +76,51 @@ class AdapterDryRunTest(unittest.TestCase):
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual(str(ROOT / "marketplace/installer_flow.py"), result.stdout.strip())
 
+    def test_persona_definitions_follow_candidate_source_on_both_adapters(self) -> None:
+        old = self.home / "older installed kit"
+        scripts = [["bash", "-c",
+            f'. "{ROOT / "setup/lib/common.sh"}"\n. "{ROOT / "setup/lib/persona.sh"}"\n'
+            f'exakit_repo_root() {{ printf "%s\\n" "{old}"; }}\n'
+            '_exakit_persona_service ids\n']]
+        if shutil.which("pwsh"):
+            scripts.append(["pwsh", "-NoProfile", "-Command",
+                f'. "{ROOT / "setup/lib/exakit-common.ps1"}"\n. "{ROOT / "setup/lib/persona.ps1"}"\n'
+                f'function Get-ExakitRepoRoot {{ return "{old}" }}\n'
+                "Invoke-ExakitPersonaService ids\n"])
+        for command in scripts:
+            with self.subTest(host=command[0]):
+                result = subprocess.run(command, env=self._environment(), capture_output=True,
+                                        text=True, timeout=20)
+                self.assertEqual(["data-scientist", "ml-engineer"], result.stdout.splitlines(), result.stderr)
+
+    @unittest.skipIf(os.name == "nt", "Unix PTY; Windows uses its console tests")
+    def test_bash_persona_and_marketplace_menus_use_candidate_source(self) -> None:
+        import pty
+        capture = self.base / "ui source.txt"
+        old = self.home / "older installed kit"
+        script = (f'. "{ROOT / "setup/lib/common.sh"}"\n. "{ROOT / "setup/lib/persona.sh"}"\n'
+            f'exakit_repo_root() {{ printf "%s\\n" "{old}"; }}\n'
+            'run_python_any() { case "$1" in */marketplace/launch.py) '
+            'printf "%s|%s\\n" "$1" "$2" >> "$EXAKIT_TEST_CAPTURE"; return 10;; '
+            '*) python3 "$@";; esac; }\n'
+            'exakit_marketplace_list() { printf "%s\\n" \'{"addons":[]}\'; }\n'
+            'exakit_persona_question\nEXAKIT_MARKETPLACE_PYTHON_APPLY=1\nexakit_marketplace_menu\n')
+        environment = {**self._environment(), "EXAKIT_NO_FANCY": "0", "UI_TABLE_AUTO": "0",
+                       "EXAKIT_TEST_CAPTURE": str(capture)}
+        environment.pop("EXAKIT_MARKETPLACE_ADDONS", None)
+        try:
+            master, slave = pty.openpty()
+        except OSError:
+            self.skipTest("PTY unavailable")
+        try:
+            result = subprocess.run(["bash", "-c", script], env=environment,
+                stdin=slave, stdout=slave, stderr=slave, timeout=20)
+        finally:
+            os.close(slave)
+            os.close(master)
+        self.assertEqual(0, result.returncode)
+        self.assertEqual([f"{ROOT}/marketplace/launch.py|{ROOT}"] * 2, capture.read_text().splitlines())
+
     def test_bash_install_passes_selected_version_document(self) -> None:
         selected = self.base / "selected versions.json"
         selected.write_text('{"components":{}}')

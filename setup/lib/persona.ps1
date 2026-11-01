@@ -5,7 +5,7 @@
 # service, setup\lib\persona_service.py, which both twins call. An explicit
 # answer always wins, per variable.
 
-function Get-ExakitPersonaDir { return (Join-Path (Get-ExakitRepoRoot) "personas") }
+function Get-ExakitPersonaDir { return (Join-Path (Get-ExakitMarketplaceRoot) "personas") }
 
 # Get-ExakitPersonaPython - the Python 3.9+ on PATH the service runs on, or
 # $null (then uv's managed one is used). The service is standard library only.
@@ -34,7 +34,7 @@ function Get-ExakitPersonaPython {
 # console's code page. Twin of _exakit_persona_service.
 function Invoke-ExakitPersonaService {
     param([Parameter(ValueFromRemainingArguments)]$ServiceArgs)
-    $root = Get-ExakitRepoRoot
+    $root = Get-ExakitMarketplaceRoot
     $service = Join-Path (Join-Path (Join-Path $root "setup") "lib") "persona_service.py"
     $previousErrorActionPreference = $ErrorActionPreference
     $previousEncoding = [Console]::OutputEncoding
@@ -163,7 +163,7 @@ function Set-ExakitPersonaEnv {
 # Twin of exakit_persona_question. Sets $env:EXAKIT_PERSONA.
 function Read-ExakitPersonaQuestion {
     if ((Test-ExakitInteractive) -and (Test-ExakitStdoutIsTerminal) -and $env:EXAKIT_NO_FANCY -ne '1') {
-        $root = Get-ExakitRepoRoot
+        $root = Get-ExakitMarketplaceRoot
         $launcher = Join-Path (Join-Path $root 'marketplace') 'launch.py'
         $resultPath = Join-Path ([System.IO.Path]::GetTempPath()) ("exakit-persona-ui-" + [guid]::NewGuid().ToString('N') + '.json')
         $python = Get-ExakitPersonaPython

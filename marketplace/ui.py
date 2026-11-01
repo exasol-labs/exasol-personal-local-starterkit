@@ -93,9 +93,15 @@ class ChoiceApp(App[dict | None]):
         cells = self._cells(kind, name)
         self.query_one(DataTable).add_row(*cells, key=f"row-{len(self.table_rows)}")
 
+    def _all_selected(self) -> bool:
+        enabled = [row["id"] for row in self.rows if not row.get("disabled")]
+        return bool(enabled) and all(
+            addon in self.selected and set(self.choices_by_addon[addon]).issubset(
+                self.selected_choices.get(addon, set())) for addon in enabled)
+
     def _cells(self, kind: str, name: str | None) -> tuple[str, ...]:
         if kind == "all":
-            checked = all(row.get("disabled") or row["id"] in self.selected for row in self.rows)
+            checked = self._all_selected()
             return (f"{'[✓]' if checked else '[ ]'} Select All", "", "")
         if kind == "skip":
             if self.mode == "marketplace":
@@ -162,7 +168,7 @@ class ChoiceApp(App[dict | None]):
                 selected.clear()
         elif kind == "all":
             enabled = {row["id"] for row in self.rows if not row.get("disabled")}
-            self.selected = set() if self.selected == enabled else enabled
+            self.selected = set() if self._all_selected() else enabled
             for addon_id, choices in self.choices_by_addon.items():
                 selected = self.selected_choices.setdefault(addon_id, set())
                 selected.clear()
