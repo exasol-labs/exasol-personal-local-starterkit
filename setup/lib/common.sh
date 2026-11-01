@@ -3603,7 +3603,7 @@ _exakit_marketplace_root() {
 }
 
 _exakit_marketplace_versions_doc() {
-    [ "${EXAKIT_VERSION_POLICY:-manifest}" = manifest ] || return 1
+    case "${EXAKIT_VERSION_POLICY:-manifest}" in manifest|latest) ;; *) return 1 ;; esac
     exakit_versions_active_doc
 }
 
@@ -3717,7 +3717,12 @@ _exakit_marketplace_python() {
             _exakit_marketplace_run_python mutate "$_mcp_root/marketplace/service.py" "$@"
     else
         case "$2" in uninstall|validate|start|stop) _mcp_mode=mutate ;; *) _mcp_mode=query ;; esac
-        _exakit_marketplace_run_python "$_mcp_mode" "$_mcp_root/marketplace/service.py" "$@"
+        case "$2" in
+            latest|validate)
+                EXAKIT_MARKETPLACE_VERSIONS_DOC="$(_exakit_marketplace_versions_doc 2>/dev/null || true)" \
+                    _exakit_marketplace_run_python "$_mcp_mode" "$_mcp_root/marketplace/service.py" "$@" ;;
+            *) _exakit_marketplace_run_python "$_mcp_mode" "$_mcp_root/marketplace/service.py" "$@" ;;
+        esac
     fi
 }
 

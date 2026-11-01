@@ -4872,7 +4872,7 @@ function Get-ExakitMarketplaceAddons {
 }
 
 function Get-ExakitMarketplaceVersionsDoc {
-    if ($env:EXAKIT_VERSION_POLICY -and $env:EXAKIT_VERSION_POLICY -ne 'manifest') { return '' }
+    if ($env:EXAKIT_VERSION_POLICY -and $env:EXAKIT_VERSION_POLICY -notin @('manifest', 'latest')) { return '' }
     return (Resolve-ExakitVersionsDoc)
 }
 
@@ -4899,14 +4899,18 @@ function Invoke-ExakitMarketplacePython {
         if (-not $env:UV_CACHE_DIR) { $env:UV_CACHE_DIR = Join-Path $script:ExakitHome 'cache/uv' }
         $serviceArgs = @($service, $Id, $Operation)
         if ($DryRun) { $serviceArgs += '--dry-run' }
-        if ($Operation -in @('install', 'update')) {
-            $env:EXAKIT_MARKETPLACE_TARGET_VERSION = Get-ExakitComponentAvailable $Id
+        if ($Operation -in @('install', 'update', 'latest', 'validate')) {
             $env:EXAKIT_MARKETPLACE_VERSIONS_DOC = Get-ExakitMarketplaceVersionsDoc
         }
+        if ($Operation -in @('install', 'update')) {
+            $env:EXAKIT_MARKETPLACE_TARGET_VERSION = Get-ExakitComponentAvailable $Id
+        }
         $captured = [System.Collections.Generic.List[string]]::new()
+        $diagnostics = [System.Collections.Generic.List[string]]::new()
         if ($python) {
             $ErrorActionPreference = "Continue"
             & $python @serviceArgs 2>&1 | ForEach-Object {
+                if ($_ -is [System.Management.Automation.ErrorRecord]) { $diagnostics.Add("$_"); return }
                 $line = "$_"
                 if ($line -match ('^\s*' + [char]0x2022 + '\s+(.+)$')) { Set-ExakitAddonActivity -Message $Matches[1] }
                 $captured.Add($line)
@@ -4917,6 +4921,7 @@ function Invoke-ExakitMarketplacePython {
             $uvArgs += @('--python', $script:ManagedPythonVersion, '--no-project', 'python')
             $ErrorActionPreference = "Continue"
             & $uv @uvArgs @serviceArgs 2>&1 | ForEach-Object {
+                if ($_ -is [System.Management.Automation.ErrorRecord]) { $diagnostics.Add("$_"); return }
                 $line = "$_"
                 if ($line -match ('^\s*' + [char]0x2022 + '\s+(.+)$')) { Set-ExakitAddonActivity -Message $Matches[1] }
                 $captured.Add($line)
@@ -4933,9 +4938,12 @@ function Invoke-ExakitMarketplacePython {
         if ($null -eq $previousUvCache) { Remove-Item Env:UV_CACHE_DIR -ErrorAction SilentlyContinue }
         else { $env:UV_CACHE_DIR = $previousUvCache }
     }
+    if (-not $mutating -and $code -eq 0) {
+        foreach ($line in $diagnostics) { [Console]::Error.WriteLine($line) }
+    }
     if ($Operation -in @('validate', 'applicable', 'system-present')) { return ($code -eq 0) }
     if ($Operation -in @('installed-version', 'latest') -and $code -ne 0) { return '' }
-    if ($code -ne 0) { throw (($lines | Select-Object -Last 1) -join '') }
+    if ($code -ne 0) { throw ((@($lines) + @($diagnostics) | Select-Object -Last 1) -join '') }
     if ($DryRun) {
         foreach ($line in $lines) { Info "  will remove: $line" }
         return $true

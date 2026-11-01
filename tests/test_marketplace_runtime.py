@@ -133,6 +133,49 @@ class ManifestTest(unittest.TestCase):
             self.assertEqual(["Downloading release"], labels)
             self.assertEqual("", output.getvalue())
 
+    def test_child_diagnostics_cannot_persist_delegated_secrets(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            ctx = KitContext(ROOT, home, home / "bin", Manifest(home / "manifest.json"), Path("uv"))
+            secret = "synthetic-credential-7c90b6a1"
+            env = {**os.environ, "DBT_ENV_SECRET_EXASOL_PASSWORD": secret,
+                   "GITHUB_TOKEN": "synthetic-token-a8591d3f",
+                   "LANGFUSE_SECRET_KEY": "synthetic-langfuse-key-a8bc51"}
+            for fail in (False, True):
+                script = ("import os,sys; print(os.environ['DBT_ENV_SECRET_EXASOL_PASSWORD']); "
+                          "print(os.environ['GITHUB_TOKEN'], file=sys.stderr); "
+                          "print(os.environ['LANGFUSE_SECRET_KEY']); "
+                          f"sys.exit({1 if fail else 0})")
+                with patch("sys.stdout", new_callable=io.StringIO) as output:
+                    if fail:
+                        with self.assertRaises(AddonFailure) as error:
+                            ctx.run_logged("Checking connection", sys.executable, "-c", script, env=env)
+                        self.assertNotIn(secret, str(error.exception))
+                    else:
+                        ctx.run_logged("Checking connection", sys.executable, "-c", script, env=env)
+                log = (home / "logs/marketplace.log").read_text()
+                self.assertNotIn(secret, log)
+                self.assertNotIn(env["GITHUB_TOKEN"], log)
+                self.assertNotIn(env["LANGFUSE_SECRET_KEY"], log)
+                self.assertIn("[redacted]", log)
+                self.assertNotIn(secret, output.getvalue())
+
+    def test_timeout_keeps_redacted_diagnostics_and_private_log(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            ctx = KitContext(ROOT, home, home / "bin", Manifest(home / "manifest.json"), Path("uv"))
+            secret = "synthetic-timeout-credential-54950d"
+            with patch.dict(os.environ, {"EXA_PASSWORD": secret}):
+                with self.assertRaisesRegex(AddonFailure, "did not finish"):
+                    ctx.run_logged("Checking connection", sys.executable, "-c",
+                                   "import os,time; print(os.environ['EXA_PASSWORD'], flush=True); time.sleep(10)",
+                                   timeout=2)
+            log = home / "logs/marketplace.log"
+            self.assertNotIn(secret, log.read_text())
+            self.assertIn("[redacted]", log.read_text())
+            if os.name != "nt":
+                self.assertEqual(0o600, log.stat().st_mode & 0o777)
+
 
 class DbtLifecycleTest(unittest.TestCase):
     def setUp(self) -> None:

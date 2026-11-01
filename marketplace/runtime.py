@@ -261,14 +261,28 @@ class KitContext:
         log_dir.mkdir(parents=True, exist_ok=True)
         log_path = log_dir / "marketplace.log"
         self.activity(label)
+        values = os.environ if env is None else env
+        secrets = sorted({value for name, value in values.items() if value and
+                          name.upper().endswith(("PASSWORD", "TOKEN", "_KEY", "SECRET"))},
+                         key=len, reverse=True)
         with log_path.open("a", encoding="utf-8") as log:
+            log_path.chmod(0o600)
             log.write(f"[{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())}] {label}\n")
             log.flush()
-            try:
-                result = subprocess.run(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=log,
-                                        check=False, timeout=timeout)
-            except (OSError, subprocess.TimeoutExpired) as error:
-                raise AddonFailure(f"{label} did not finish; see exakit logs setup") from error
+            # Filter private child diagnostics before appending them to the log.
+            with tempfile.TemporaryFile() as output:
+                try:
+                    result = subprocess.run(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
+                                            stdout=output, stderr=output, check=False, timeout=timeout)
+                except (OSError, subprocess.TimeoutExpired) as error:
+                    raise AddonFailure(f"{label} did not finish; see exakit logs setup") from error
+                finally:
+                    output.seek(0)
+                    for line in output:
+                        text = line.decode("utf-8", errors="replace")
+                        for secret in secrets:
+                            text = text.replace(secret, "[redacted]")
+                        log.write(text)
         if result.returncode != 0:
             raise AddonFailure(f"{label} failed (exit {result.returncode}); see exakit logs setup")
 

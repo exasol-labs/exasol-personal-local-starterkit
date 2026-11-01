@@ -109,6 +109,38 @@ an older installation. An earlier failure log recorded the Personal license’s
 counts. Free unused connections before retrying that specific error with
 `exakit start exasol-scheduler`.
 
+### Isolated marketplace lifecycle checks
+
+From the checkout, with uv available and the existing database running:
+
+```sh
+python3 tests/integration/marketplace_lifecycle_live.py \
+  dbt-exasol json-tables dash-server exasol-vscode notebook \
+  --output /tmp/marketplace-lifecycle.json
+```
+
+This runs public `exakit` commands in a new private temporary kit home. Each
+add-on is installed twice, updated at the version in this checkout's
+`versions.json`, previewed for removal and removed twice. It checks removal of
+generated runtimes and launchers, preservation of personal test files, and the
+original kit manifest's digest. Preview comparisons exclude normal CLI logs
+and the manifest lock file. This is a warm-machine check, not clean-machine
+installation evidence or a newer-version upgrade check.
+
+The fixture borrows the database connection and marks that database user-owned.
+It isolates PATH, Jupyter kernels, editor extensions, skills and login entries;
+it does not replace the existing add-ons. A missing editor or an externally
+installed package can make a named check refuse installation. Failures are
+reported rather than counted as passes. The result names the private temporary
+home; its sibling `commands.log` stays local for diagnosis.
+
+The five add-ons passed this matrix on macOS. Scheduler's real task execution
+and UDF Python/Rust smoke evidence are recorded separately; their complete
+repeated lifecycle and newer-version matrix is still pending. Native Windows
+and WSL runs remain deferred. The shared logger additionally has regressions
+for passwords, tokens and Langfuse keys echoed by successful, failed and timed
+out child tools; those values are redacted before diagnostics reach the log.
+
 ## 3. Evaluate a useful SQL model
 
 1. Choose an exact model supported by your provider or local server using

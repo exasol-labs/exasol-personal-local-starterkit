@@ -131,12 +131,34 @@ class AdapterDryRunTest(unittest.TestCase):
                   'printf "%s|%s\\n" "$EXAKIT_MARKETPLACE_VERSIONS_DOC" '
                   '"$EXAKIT_MARKETPLACE_TARGET_VERSION"; }\n'
                   '_exakit_marketplace_python dash-server install\n'
-                  '_exakit_marketplace_cli udf_manage udf-use --list\n')
+                  '_exakit_marketplace_cli udf_manage udf-use --list\n'
+                  '_exakit_marketplace_python udf-devkit validate\n')
         environment = {**self._environment(), "EXAKIT_VERSION_POLICY": "manifest"}
         result = subprocess.run(["bash", "-c", script], env=environment,
                                 capture_output=True, text=True, timeout=30, check=False)
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual([f"{selected}|2.0.0", f"{selected}|"], result.stdout.splitlines())
+        self.assertEqual([f"{selected}|2.0.0", f"{selected}|", f"{selected}|"], result.stdout.splitlines())
+
+    def test_latest_uses_the_active_document_on_both_adapters(self) -> None:
+        selected = self.base / "selected versions.json"
+        selected.write_text('{"components":{"json-tables":{"version":"99.8.7"}}}')
+        scripts = [["bash", "-c",
+            f'. "{ROOT / "setup/lib/common.sh"}"\n'
+            f'exakit_versions_active_doc() {{ printf "%s\\n" "{selected}"; }}\n'
+            '_exakit_marketplace_python json-tables latest\n']]
+        if shutil.which("pwsh"):
+            scripts.append(["pwsh", "-NoProfile", "-Command",
+                f'. "{ROOT / "setup/lib/exakit-common.ps1"}"\n'
+                f'function Resolve-ExakitVersionsDoc {{ return "{selected}" }}\n'
+                'Invoke-ExakitMarketplacePython -Id json-tables -Operation latest\n'])
+        for command in scripts:
+            for policy in ("manifest", "latest"):
+                with self.subTest(host=command[0], policy=policy):
+                    environment = {**self._environment(), "EXAKIT_VERSION_POLICY": policy}
+                    result = subprocess.run(command, env=environment, capture_output=True,
+                                            text=True, timeout=30)
+                    self.assertEqual(0, result.returncode, result.stderr)
+                    self.assertEqual("99.8.7", result.stdout.strip())
 
     def test_notebook_python_lifecycle_and_choices_need_no_legacy_module(self) -> None:
         script = (f'. "{ROOT / "setup/lib/common.sh"}"\n'
@@ -307,13 +329,14 @@ class AdapterDryRunTest(unittest.TestCase):
                   "function Get-ExakitPersonaPython { return '' }\n"
                   f'function Get-ExakitUvBin {{ return "{fake}" }}\n'
                   'Invoke-ExakitMarketplacePython -Id dash-server -Operation install | Out-Null\n'
-                  "Invoke-ExakitMarketplaceCli -Script udf_manage -CmdArgs @('udf-use','--list')\n")
+                  "Invoke-ExakitMarketplaceCli -Script udf_manage -CmdArgs @('udf-use','--list')\n"
+                  'Invoke-ExakitMarketplacePython -Id udf-devkit -Operation validate | Out-Null\n')
         environment = {**self._environment(), "EXAKIT_VERSION_POLICY": "manifest",
                        "EXAKIT_TEST_CAPTURE": str(captured)}
         result = subprocess.run(["pwsh", "-NoProfile", "-Command", script], env=environment,
                                 capture_output=True, text=True, timeout=35, check=False)
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertEqual([f"{selected}|2.0.0", f"{selected}|"], captured.read_text().splitlines())
+        self.assertEqual([f"{selected}|2.0.0", f"{selected}|", f"{selected}|"], captured.read_text().splitlines())
 
     @unittest.skipUnless(shutil.which("pwsh"), "PowerShell is not installed")
     def test_optional_service_failure_continues_but_public_commands_fail(self) -> None:
