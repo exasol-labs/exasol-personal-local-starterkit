@@ -53,6 +53,7 @@ The install command sets up four components and connects them:
 | [Exasol&nbsp;Personal&nbsp;Local](https://github.com/exasol/exasol-personal) | An in-memory analytics database that runs on your machine |
 | [exapump](https://github.com/exasol-labs/exapump) | Loads CSV and Parquet files and runs SQL from your terminal |
 | [pyexasol](https://github.com/exasol/pyexasol) | The official Exasol Python driver, installed in its own environment |
+| [uv](https://github.com/astral-sh/uv) | The Python tool runner the MCP server runs through, pinned to a release the kit verified by checksum; a uv you installed yourself is used as is when it is at or above the kit's minimum version |
 
 It also gives your AI agent eight skills, one for each part of the kit. They work in Claude Code, Codex, Cursor and any tool that reads the open skill standard, and an agent loads one only when the task needs it.
 
