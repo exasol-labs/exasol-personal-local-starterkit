@@ -86,6 +86,7 @@ db() { printf '%s\n' "$1" > "$STATE"; }
 dbq() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); v=eval(sys.argv[2], {"d": d}); print(json.dumps(v) if not isinstance(v, str) else v)' "$STATE" "$1"; }
 eng() {
     EXAKIT_VS_FAKE_DB="$ROOT/tests/lib/fake-exasol-vs.py" FAKE_VS_STATE="$STATE" FAKE_VS_EXA="$EXA" \
+        EXAKIT_VS_SETTLE_SECONDS="${SETTLE_SECONDS:-0}" EXAKIT_VS_VISIBLE_TIMEOUT="${VISIBLE_TIMEOUT:-20}" \
         python3 "$ROOT/setup/virtual-schemas/engine/cli.py" --defs "$DEFS" --kit-home "$HOME_K" \
         --deployment-dir "$DEPLOY" --dsn 127.0.0.1:8563 --user sys --password-file /nonexistent "$@"
 }
@@ -235,8 +236,10 @@ has "...reports the tables and the bounded read" "Virtual schema VS_SALES: 2 tab
 check "...the CONNECTION carries the credential" "$SECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_SALES"]["secret"]')"
 check "...and verified TLS in its URL" "jdbc:postgresql://pg.example.com:5432/sales?sslmode=verify-full&sslfactory=org.postgresql.ssl.DefaultJavaSSLFactory" \
     "$(dbq 'd["connections"]["EXAKIT_SRC_SALES"]["url"]')"
-check "...adapter script and virtual schema exist" '["EXAKIT_VS.EXAKIT_DNS_PROBE_V2", "EXAKIT_VS.ADAPTER_SALES"] ["ORDERS", "CUSTOMERS"]' \
+check "...adapter script and virtual schema exist" '["EXAKIT_VS.EXAKIT_DNS_PROBE_V2", "EXAKIT_VS.EXAKIT_FILES_PROBE_V1", "EXAKIT_VS.ADAPTER_SALES"] ["ORDERS", "CUSTOMERS"]' \
     "$(dbq 'd["scripts"]') $(dbq 'd["virtual"]["VS_SALES"]["tables"]')"
+check "the staged files were confirmed from inside the database before the adapter was created" "1 yes" \
+    "$(dbq 'd.get("files_probes")') $(dbq '"yes" if [i for i, s in enumerate(d["statements"]) if "EXAKIT_FILES_PROBE_V1(" in s][0] < [i for i, s in enumerate(d["statements"]) if "ADAPTER SCRIPT" in s][0] else "no"')"
 ADAPTER_SQL="$(dbq '[s for s in d["statements"] if "ADAPTER SCRIPT" in s][0]')"
 has "...the adapter script lists the staged adapter" "%jar /buckets/bfsdefault/default/exakit/vs/postgresql/4.1.0/virtual-schema-dist-14.1.0-postgresql-4.1.0.jar;" "$ADAPTER_SQL"
 has "...and the driver" "%jar /buckets/bfsdefault/default/exakit/vs/postgresql/driver-42.7.14/postgresql-42.7.14.jar;" "$ADAPTER_SQL"
@@ -263,6 +266,30 @@ check "the shared driver lists both consumers" '["sales", "warehouses"]' \
     "$(python3 -c 'import json,sys; r=json.load(open(sys.argv[1]))["artifacts"]; print(json.dumps(next(v["consumers"] for k,v in r.items() if k.endswith("POSTGRES_JDBC_DRIVER/postgresql-42.7.14.jar"))))' "$HOME_K/sources/registry.json")"
 run_secret "$SECRET" connect postgresql --name sales $PG_SET --secret-stdin
 check "a name already in use is a conflict, exit 3" "3" "$RC"
+
+printf '\n== a staged file reaches the database a moment after it is written ==\n'
+# Measured on Exasol Personal: the jar staged on this computer was loaded
+# from inside the database within the same second and was not there yet.
+python3 - "$STATE" <<'PY'
+import json, sys; d = json.load(open(sys.argv[1])); d["sources"]["lag.example.com"] = {"tables": ["T"]}; d["stage_lag"] = 2; d["files_probes"] = 0; json.dump(d, open(sys.argv[1], "w"))
+PY
+run_secret "$SECRET" connect postgresql --name lagged --set host=lag.example.com --set database=lag --set user=reader --secret-stdin
+check "two probes saw nothing, the third saw every file: the connect waited and succeeded" "0 3" "$RC $(dbq 'd["files_probes"]')"
+has "...and said how long" "Waited 1." "$OUT"
+check "...the adapter was created only after that" "yes" \
+    "$(dbq '"yes" if [i for i, s in enumerate(d["statements"]) if "EXAKIT_FILES_PROBE_V1(" in s][-1] < [i for i, s in enumerate(d["statements"]) if "ADAPTER_LAGGED" in s][0] else "no"')"
+python3 - "$STATE" <<'PY'
+import json, sys; d = json.load(open(sys.argv[1])); d["sources"]["never.example.com"] = {"tables": ["T"]}; d["stage_never"] = True; json.dump(d, open(sys.argv[1], "w"))
+PY
+VISIBLE_TIMEOUT=1.2 run_secret "$SECRET" connect postgresql --name never --set host=never.example.com --set database=n --set user=reader --secret-stdin
+check "a file the database never sees: refused after the timeout, exit 1" "1" "$RC"
+has "...naming the file and the folder" "does not see /buckets/bfsdefault/default/exakit/vs/postgresql/4.1.0/virtual-schema-dist-14.1.0-postgresql-4.1.0.jar after 1 s (written under" "$OUT"
+check "...no adapter, no schema, no record" "0 0 no" \
+    "$(dbq 'sum("ADAPTER_NEVER" in s for s in d["scripts"])') $(dbq 'sum("VS_NEVER" in v for v in d["virtual"])') $([ -d "$HOME_K/sources/never" ] && echo yes || echo no)"
+python3 - "$STATE" <<'PY'
+import json, sys; d = json.load(open(sys.argv[1])); d.pop("stage_never"); json.dump(d, open(sys.argv[1], "w"))
+PY
+run remove lagged; check "remove lagged: exit 0" "0" "$RC"
 
 printf '\n== a failed connect leaves nothing behind ==\n'
 python3 - "$STATE" <<'PY'
@@ -356,7 +383,7 @@ d.update({"sources": {"pg.example.com": {"tables": ["ORDERS", "CUSTOMERS"], "sec
                       "wh.example.com": {"tables": ["STOCK"]}},
           "connections": {"EXAKIT_SRC_SALES": {"url": "jdbc:postgresql://pg.example.com:5432/sales", "user": "reader", "secret": "s3cr3t-Pa55'word"},
                           "EXAKIT_SRC_WAREHOUSES": {"url": "jdbc:postgresql://wh.example.com:5432/wh", "user": "reader", "secret": "x"}},
-          "schemas": ["EXAKIT_VS"], "scripts": ["EXAKIT_VS.EXAKIT_DNS_PROBE_V2", "EXAKIT_VS.ADAPTER_SALES", "EXAKIT_VS.ADAPTER_WAREHOUSES"],
+          "schemas": ["EXAKIT_VS"], "scripts": ["EXAKIT_VS.EXAKIT_DNS_PROBE_V2", "EXAKIT_VS.EXAKIT_FILES_PROBE_V1", "EXAKIT_VS.ADAPTER_SALES", "EXAKIT_VS.ADAPTER_WAREHOUSES"],
           "virtual": {"VS_SALES": {"connection": "EXAKIT_SRC_SALES", "tables": ["ORDERS", "CUSTOMERS"]},
                       "VS_WAREHOUSES": {"connection": "EXAKIT_SRC_WAREHOUSES", "tables": ["STOCK"]}}})
 json.dump(d, open(sys.argv[1], "w"))
@@ -905,6 +932,8 @@ mgdb
 run_secret "$SECRET" connect mongodb --name mg $MG_SET --set collection=movies --secret-stdin
 check "connect: exit 0" "0" "$RC"
 has "...the collection's tables" "Virtual schema VS_MG: 3 table(s)" "$OUT"
+check "a native adapter has no Java probe to ask: the staged .so is given the settle time instead" "0" \
+    "$(dbq 'sum("EXAKIT_FILES_PROBE_V1(" in s for s in d["statements"])')"
 check "...the CONNECTION holds the URI, the user and the password" "[\"$MG_URI\", \"reader\", true]" \
     "$(dbq '[d["connections"]["EXAKIT_SRC_MG"]["url"], d["connections"]["EXAKIT_SRC_MG"]["user"], d["connections"]["EXAKIT_SRC_MG"]["secret"] == "'"$SECRET"'"]')"
 MGA="$(dbq '[x for x in d["statements"] if "RUST ADAPTER SCRIPT" in x][-1]')"

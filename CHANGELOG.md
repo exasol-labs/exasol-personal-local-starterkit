@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+**`exakit connect` no longer fails when the database has not seen a staged
+file yet.** Measured on Exasol Personal 2.3.0, whose runtime is a VM reading
+the deployment folder over a VirtioFS share: the very first connect on a fresh
+kit staged the adapter jar and asked the database to load it within the same
+second, and the database answered "Java VM cannot find <jar>"; a retry a
+minute later worked. The engine now asks the database, through the Java probe
+it already keeps for DNS, whether it sees every file it just wrote, and
+creates the adapter only once it does (up to 20 s; the wait is reported when
+it took longer than half a second). A file it never sees is refused by name,
+with nothing left behind. A native (Rust) adapter, with no Java to ask, is
+given two seconds. The same wait covers a replaced BigQuery key file.
+
 **Re-running the installer without a terminal no longer reports a failed
 data-load step.** With every bundled dataset already loaded, the data-load
 table pre-ticks the local-file row so Enter still does something; with no
