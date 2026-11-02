@@ -33,6 +33,16 @@ import luaadapter
 import tlshelper
 
 PROBE = "EXAKIT_DNS_PROBE_V2"
+FILES = "EXAKIT_FILES_PROBE_V1"
+# A file written to the bucket on this computer reaches the database a moment
+# later (measured on Exasol Personal 2.3.0, whose runtime is a VM reading the
+# folder over a VirtioFS share): a jar staged and loaded within the same
+# second failed with "Java VM cannot find <jar>", the same jar loaded a second
+# later. The Java probe is asked until it sees every staged file, for at most
+# VISIBLE_TIMEOUT seconds; a native adapter, with no Java to ask, is given
+# SETTLE seconds. Both are read from the environment for the test suite only.
+VISIBLE_TIMEOUT = float(os.environ.get("EXAKIT_VS_VISIBLE_TIMEOUT", "20"))
+SETTLE = float(os.environ.get("EXAKIT_VS_SETTLE_SECONDS", "2"))
 
 EXIT = {"ok": 0, "failed": 1, "input": 2, "conflict": 3, "missing": 4, "gated": 5,
         "dns": 20, "nojava": 21, "unreachable_db": 22, "norust": 23}
@@ -211,6 +221,18 @@ class Engine(object):
                 "  try (Socket s = new Socket()) { s.connect(new InetSocketAddress(a, p), 5000); return \"ok \" + a.getHostAddress(); }\n"
                 "  catch (Exception e) { return \"tcp \" + a.getHostAddress() + \" \" + e.getClass().getSimpleName(); } } }\n"
                 "/" % (PROBE, PROBE))
+            # The staged files the database sees: newline-separated /buckets
+            # paths in, the ones it does not see yet out (see await_staged).
+            db.execute(
+                "CREATE OR REPLACE JAVA SCALAR SCRIPT EXAKIT_VS.%s(p VARCHAR(2000000)) RETURNS VARCHAR(2000000) AS\n"
+                "class %s { static String run(ExaMetadata exa, ExaIterator ctx) throws Exception {\n"
+                "  StringBuilder missing = new StringBuilder();\n"
+                "  for (String path : ctx.getString(\"p\").split(\"\\n\")) {\n"
+                "    if (path.length() > 0 && !new java.io.File(path).isFile()) {\n"
+                "      if (missing.length() > 0) missing.append(\"\\n\");\n"
+                "      missing.append(path); } }\n"
+                "  return missing.toString(); } }\n"
+                "/" % (FILES, FILES))
         except sql.DbError as error:
             if error.kind == "nojava":
                 raise Failure("Java is not installed in the database (no usable script language container)",
@@ -235,6 +257,40 @@ class Engine(object):
         self.ensure_probe()
         rows = self.db().query("SELECT EXAKIT_VS.%s(%s, %d) AS R" % (PROBE, sql.literal(host), int(port)))
         return (rows[0].get("R") if rows else "") or ""
+
+    def await_staged(self, used, written, profile):
+        """Nothing is created over a file the database does not see yet (the
+        constants above say why). `used` are the /buckets paths the source's
+        scripts and URL name, `written` the host paths this command just
+        wrote: the Java probe is asked until it sees every one of them. A
+        profile without that probe (a native adapter) gets SETTLE seconds
+        when it wrote something new. Files outside the bucket (the loader's)
+        are the database's own and need no wait."""
+        fresh = [p for p in dict.fromkeys(self.runtime.sql_path(h) for h in written) if p]
+        paths = [p for p in dict.fromkeys([u for u in used if u.startswith("/buckets/")] + fresh)]
+        if not paths:
+            return
+        if not (profile.get("slc") or {}).get("needs_dns"):
+            if fresh:
+                time.sleep(SETTLE)
+            return
+        self.ensure_probe()
+        started = time.time()
+        while True:
+            rows = self.db().query("SELECT EXAKIT_VS.%s(%s) AS R" % (FILES, sql.literal("\n".join(paths))))
+            missing = [p for p in ((rows[0].get("R") if rows else "") or "").split("\n") if p]
+            waited = time.time() - started
+            if not missing:
+                if waited >= 0.5:
+                    self.emit("INFO", "Waited %.1f s for the database to see the staged file%s"
+                              % (waited, "" if len(paths) == 1 else "s"))
+                return
+            if waited >= VISIBLE_TIMEOUT:
+                raise Failure("the database does not see %s after %.0f s (written under %s); check that the database "
+                              "runs from this deployment folder, then connect again"
+                              % (missing[0], VISIBLE_TIMEOUT, os.path.dirname(self.runtime.bucket_dir())),
+                              EXIT["failed"])
+            time.sleep(0.5)
 
     def choose_ca(self, connector, values):
         """The one certificate the source's CONNECTION will trust, or None
@@ -712,6 +768,7 @@ class Engine(object):
                     key_path = self.stage_key(name, conn_secret, created)
                     conn_secret = None
                     self.emit("OK", "Key file staged for %s (owner-only on this computer)" % name)
+                self.await_staged(jars + ([key_path] if key_path else []), created["files"], profile)
                 if url is None:
                     url = planner.jdbc_url(connector, values, {"ca_pem": ca_pem, "truststore": truststore,
                                                                "key_path": key_path, "sa_email": sa_email})
@@ -931,12 +988,15 @@ class Engine(object):
         old_url = planner.jdbc_url(connector, config["inputs"], {"key_path": config["key_file"],
                                                                   "sa_email": config["sa_email"]})
         new_url = planner.jdbc_url(connector, config["inputs"], {"key_path": config["key_file"], "sa_email": email})
+        profile = self.defs.profile(connector["profile"])
         with self.store.lock():
             self.write_key(path, text)
+            self.await_staged([], [path], profile)
             self.create_connection(config["objects"], new_url, None, None, replace=True, hidden=hidden)
             result = self.check(name)
             if result.get("status") != "ready":
                 self.write_key(path, previous)
+                self.await_staged([], [path], profile)
                 self.create_connection(config["objects"], old_url, None, None, replace=True)
                 self.check(name)
                 raise Failure("the source refused the new key, so the previous one was kept: %s"

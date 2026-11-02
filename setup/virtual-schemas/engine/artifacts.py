@@ -106,6 +106,17 @@ class Runtime(object):
     def bucket_sql(self, *parts):
         return "/".join(["/buckets", self.bucket["service"], self.bucket["bucket"], self.bucket["dir"]] + list(parts))
 
+    def sql_path(self, host_path):
+        """The /buckets path the database reads a host-side bucket file at; None for a file outside the bucket."""
+        root = os.path.join(self.exa, "bucketfs", self.bucket["service"], self.bucket["bucket"])
+        try:
+            relative = os.path.relpath(host_path, root)
+        except ValueError:          # Windows: another drive
+            return None
+        if relative == ".." or relative.startswith(".." + os.sep):
+            return None
+        return "/".join(["/buckets", self.bucket["service"], self.bucket["bucket"]] + relative.split(os.sep))
+
     def loader_dir(self, drivername):
         return os.path.join(self.exa, "jdbc", drivername)
 

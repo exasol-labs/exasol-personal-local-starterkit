@@ -39,6 +39,10 @@ database and inspect it afterwards:
     schemas, scripts, virtual {VS: {"connection", "tables"}}
     statements  every statement, secrets included, so a test can prove where
                 they went (into CONNECTION DDL) and where they did not
+    stage_lag   how many staged-files probes see nothing before the files
+                staged under FAKE_VS_EXA are reported as the database sees
+                them (the share's delay on Exasol Personal); stage_never
+                true -> they never are. files_probes counts the probes.
 
 Errors carry realistic driver text, including the statement for a failed
 CREATE CONNECTION, so the engine's redaction is exercised for real.
@@ -349,6 +353,28 @@ class Fake(object):
             if m.group(1) in doc["unreachable"]:
                 return [{"R": "tcp 10.0.0.9 SocketTimeoutException"}]
             return [{"R": "ok 10.0.0.9"}]
+        # The staged-files probe: which of the /buckets paths given (one per
+        # line) the database does not see. Really checked under FAKE_VS_EXA,
+        # after "stage_lag" probes that see nothing (the share's delay on
+        # Exasol Personal) - or never, with "stage_never". "files_probes"
+        # counts the calls.
+        m = re.search(r"EXAKIT_FILES_PROBE_V1\('((?:[^']|'')*)'\)", sql, re.S)
+        if m:
+            if "EXAKIT_VS.EXAKIT_FILES_PROBE_V1" not in doc["scripts"]:
+                raise Exception("function EXAKIT_VS.EXAKIT_FILES_PROBE_V1 not found")
+            paths = [p for p in m.group(1).replace("''", "'").split("\n") if p]
+            doc["files_probes"] = doc.get("files_probes", 0) + 1
+            if doc.get("stage_never"):
+                missing = paths
+            elif doc.get("stage_lag", 0) > 0:
+                doc["stage_lag"] -= 1
+                missing = paths
+            elif os.environ.get("FAKE_VS_EXA"):
+                missing = [p for p in paths if not os.path.isfile(
+                    os.path.join(os.environ["FAKE_VS_EXA"], "bucketfs", *p[len("/buckets/"):].split("/")))]
+            else:
+                missing = []        # a harness that models no files: the database sees them all
+            return [{"R": "\n".join(missing)}]
         # Who may create scripts (and so read BucketFS): the privilege tables.
         if sql.startswith("SELECT GRANTEE FROM EXA_DBA_SYS_PRIVS WHERE PRIVILEGE IN"):
             return [{"GRANTEE": g} for g in doc.get("script_privs", ["DBA", "PREPROC_ADMIN"])]
