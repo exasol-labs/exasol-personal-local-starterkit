@@ -125,7 +125,7 @@ add-on is installed twice, updated at the version in this checkout's
 generated runtimes and launchers, preservation of personal test files, and the
 original kit manifest's digest. Preview comparisons exclude normal CLI logs
 and the manifest lock file. This is a warm-machine check, not clean-machine
-installation evidence or a newer-version upgrade check.
+installation evidence. Without `--upgrade`, it checks only the current version.
 
 The fixture borrows the database connection and marks that database user-owned.
 It isolates PATH, Jupyter kernels, editor extensions, skills and login entries;
@@ -134,10 +134,59 @@ installed package can make a named check refuse installation. Failures are
 reported rather than counted as passes. The result names the private temporary
 home; its sibling `commands.log` stays local for diagnosis.
 
-The five add-ons passed this matrix on macOS. Scheduler's real task execution
-and UDF Python/Rust smoke evidence are recorded separately; their complete
-repeated lifecycle and newer-version matrix is still pending. Native Windows
-and WSL runs remain deferred. The shared logger additionally has regressions
+All seven add-ons passed repeated lifecycle checks on macOS. Run the two
+database-backed checks separately with explicit test-write consent:
+
+```sh
+python3 tests/integration/marketplace_lifecycle_live.py \
+  exasol-scheduler udf-devkit --approve-test-writes \
+  --output /tmp/database-addon-lifecycle.json
+```
+
+Scheduler uses a generated user/schema, prints its `SELECT 1` task before
+insertion, checks `SUCCEEDED` history and bootstrap privilege removal, and
+reinstalls against the preserved history before cleaning up that namespace.
+Uninstall retains the schema, transfers it to the kit administrator when owned
+by the service user, and removes that user. Other schema owners are preserved.
+Database cleanup failures retain the files and receipt for retry. Exasol's
+[DROP USER rules](https://docs.exasol.com/db/latest/sql/drop_user.htm) and
+[schema ownership command](https://docs.exasol.com/db/latest/sql/alter_schema.htm)
+explain why the transfer is necessary. Passwords use the quoted form documented
+in [CREATE USER](https://docs.exasol.com/db/latest/sql/create_user.htm).
+
+The UDF check requires existing `PYTHON3`, `PYTHON3_ML` and `RUST` runtimes. It
+runs their real smoke checks and verifies alias preservation. A fixture launcher
+allows queries and refuses runtime mutations; it cannot install or replace a
+container. The guard's wiring is exercised by local subprocess tests. This
+establishes warm reuse, not fresh container installation or container upgrades.
+
+To check a newer released package, add an explicit target:
+
+```sh
+python3 tests/integration/marketplace_lifecycle_live.py exasol-scheduler \
+  --approve-test-writes --upgrade exasol-scheduler=0.4.0 \
+  --output /tmp/scheduler-upgrade.json
+python3 tests/integration/marketplace_lifecycle_live.py json-tables dash-server \
+  --upgrade json-tables=v0.4.1 --upgrade dash-server=0.2.1 \
+  --output /tmp/package-upgrades.json
+python3 tests/integration/marketplace_lifecycle_live.py dbt-exasol exasol-vscode notebook \
+  --baseline dbt-exasol=1.12.0 --baseline exasol-vscode=1.7.0 --baseline notebook=3.0.0 \
+  --output /tmp/remaining-package-upgrades.json
+```
+
+All six packaged add-ons passed real upgrades: Scheduler `0.3.1 → 0.4.0`,
+JSON Tables `v0.3.2 → v0.4.1`, Dash Server `0.1.1 → 0.2.1`, dbt `1.12.0 → 1.12.1`,
+VS Code `1.7.0 → 1.8.0` and Notebook `3.0.0 → 3.1.0`. `--baseline` installs an
+older stable package before upgrading to the checkout's pin; `--upgrade`
+selects an explicit newer release. Targets must name selected package add-ons
+and a strictly newer stable version. UDF bundle metadata is not a package
+upgrade; fresh container upgrades require a disposable deployment.
+Downloads retain the normal release verification checks. Native Windows and
+WSL remain pending. Both public platform adapters
+now return failure when add-on removal fails, retain integrations for retry,
+and return exit 5 when selective removal is declined.
+
+The shared logger additionally has regressions
 for passwords, tokens and Langfuse keys echoed by successful, failed and timed
 out child tools; those values are redacted before diagnostics reach the log.
 

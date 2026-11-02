@@ -1724,7 +1724,8 @@ function Invoke-CmdUninstall {
         if (-not $AssumeYes) {
             if (-not (Confirm-ExakitPrompt "Remove the $Addon add-on?" -DefaultYes:$false)) {
                 Info "Nothing was removed."
-                return
+                Info "When you are ready: exakit uninstall $Addon --yes"
+                exit 5
             }
         }
         Invoke-ExakitUninstallComponent -Key $Addon
@@ -1947,8 +1948,7 @@ function Invoke-ExakitUninstallComponent {
             $addonEntry = Get-ExakitMarketplaceAddon $Key
             if ($addonEntry -and $addonEntry.PSObject.Properties["UninstallFn"] -and
                 (Get-Command $addonEntry.UninstallFn -ErrorAction SilentlyContinue)) {
-                try { [void](& $addonEntry.UninstallFn) }
-                catch { Warn2 "Removing the $Key add-on reported issues" }
+                [void](& $addonEntry.UninstallFn)
                 # ...and the skills it owns go with it. Here rather than in the
                 # module, so every add-on gets it without writing a line.
                 try { Remove-ExakitAddonSkills $Key } catch { }
@@ -1956,6 +1956,7 @@ function Invoke-ExakitUninstallComponent {
                 # launcher that no longer exists on every login, forever.
                 try { Unregister-ExakitAutostart -Id $Key } catch { }
             } else {
+                if ($addonEntry) { throw "The $Key module carries no uninstall - update the kit: exakit update" }
                 Warn2 "The $Key module carries no uninstall - update the kit: exakit update"
             }
         }

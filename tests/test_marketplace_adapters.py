@@ -213,6 +213,74 @@ class AdapterDryRunTest(unittest.TestCase):
         self.assertIn("dash-server installed", result.stdout)
         self._assert_preserved()
 
+    def test_failed_public_uninstall_preserves_receipt_and_does_not_report_success(self) -> None:
+        checkout = self.base / "uninstall candidate"
+        for name in ("setup", "marketplace"):
+            shutil.copytree(ROOT / name, checkout / name)
+        shutil.copy2(ROOT / "versions.json", checkout / "versions.json")
+        (checkout / "marketplace/addons/exasol_scheduler.py").write_text(
+            'from runtime import AddonFailure\n'
+            'def installed_version(ctx): return ctx.manifest.get("components.exasol_scheduler.version")\n'
+            'def uninstall(ctx, *, dry_run=False): raise AddonFailure("Injected database cleanup failure")\n')
+        with (checkout / "setup/lib/common.sh").open("a") as script:
+            script.write('\nexakit_remove_addon_skills() { printf removed > "$EXAKIT_TEST_REMOVALS"; }\n'
+                         '_exakit_autostart_unregister() { printf removed > "$EXAKIT_TEST_REMOVALS"; }\n')
+        with (checkout / "setup/lib/exakit-common.ps1").open("a") as script:
+            script.write('\nfunction Remove-ExakitAddonSkills { [IO.File]::WriteAllText($env:EXAKIT_TEST_REMOVALS,"removed") }\n'
+                         'function Unregister-ExakitAutostart { [IO.File]::WriteAllText($env:EXAKIT_TEST_REMOVALS,"removed") }\n')
+        manifest = self.home / "manifest.json"
+        doc = json.loads(manifest.read_text())
+        doc["components"]["exasol_scheduler"] = {"ownership": "kit", "version": "0.3.1"}
+        manifest.write_text(json.dumps(doc))
+        before = manifest.read_bytes()
+        commands = []
+        if os.name != "nt" and shutil.which("bash"):
+            commands.append(["bash", str(checkout / "setup/exakit")])
+        for host in (("powershell", "pwsh") if os.name == "nt" else ("pwsh",)):
+            if shutil.which(host):
+                commands.append([host, "-NoProfile", "-File", str(checkout / "setup/exakit.ps1")])
+        for prefix in commands:
+            with self.subTest(host=prefix[0]):
+                environment = {**self._environment(), "EXAKIT_VERSION_POLICY": "pinned",
+                         "EXAKIT_SKILL_ROOTS": str(self.base / "skills"),
+                         "EXAKIT_TEST_REMOVALS": str(self.base / "integration-removal.txt"),
+                         "EXAKIT_LAUNCHAGENT_DIR": str(self.base / "launch agents")}
+                result = subprocess.run([*prefix, "uninstall", "exasol-scheduler", "--yes"], env=environment,
+                    capture_output=True, text=True, timeout=45)
+                self.assertNotEqual(0, result.returncode)
+                self.assertNotIn("exasol-scheduler removed", result.stdout)
+                self.assertEqual(before, manifest.read_bytes())
+                self.assertFalse((self.base / "integration-removal.txt").exists())
+                self._assert_preserved()
+                declined = subprocess.run([*prefix, "uninstall", "exasol-scheduler"], env=environment,
+                    capture_output=True, text=True, timeout=45, stdin=subprocess.DEVNULL)
+                self.assertEqual(5, declined.returncode, declined.stdout + declined.stderr)
+                self.assertEqual(before, manifest.read_bytes())
+
+    @unittest.skipIf(os.name == "nt", "Bash fallback ownership; Windows uses PowerShell")
+    def test_marketplace_worker_cannot_abort_its_parent_animation(self) -> None:
+        marker = self.base / "parent animation aborted"
+        state = self.base / "table state"
+        script = (f'. "{ROOT / "setup/lib/ui.sh"}"\n. "{ROOT / "setup/lib/common.sh"}"\n'
+            '_exakit_marketplace_run_python() { '
+            'if [ "$1" = query ]; then shift; python3 "$@"; return $?; fi; '
+            'ui_table_abort; '
+            "printf '@@EXAKIT|demo-gamma|installing||0\\n@@EXAKIT|demo-gamma|failed|fixture install failure|1\\n'; "
+            'return 1; }\n'
+            'ui_table_begin() { _UI_TABLE_ACTIVE="$1"; trap \'ui_table_abort\' EXIT; return 0; }\n'
+            'ui_table_end() { _UI_TABLE_ACTIVE=""; return 0; }\n'
+            'ui_table_abort() { [ -z "${_UI_TABLE_ACTIVE:-}" ] || '
+            'printf aborted >> "$EXAKIT_TEST_ABORT_MARKER"; }\n'
+            f'EXAKIT_ADDON_TABLE_STATE="{state}"\n'
+            '_exakit_addon_table_build "$EXAKIT_ADDON_TABLE_STATE" demo-gamma\n'
+            '_exakit_marketplace_apply demo-gamma\n')
+        result = subprocess.run(["bash", "-c", script], capture_output=True, text=True, timeout=30,
+            env={**self._environment(), "EXAKIT_VERSION_POLICY": "pinned",
+                 "EXAKIT_NOTEBOOK_FRONTENDS": "none", "EXAKIT_TEST_ABORT_MARKER": str(marker)})
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("fixture install failure", result.stdout + result.stderr)
+        self.assertFalse(marker.exists(), "the worker retained its parent's animation handle")
+
     def test_public_marketplace_preflights_selection(self) -> None:
         checkout = self.base / "checkout with spaces"
         for name in ("setup", "marketplace", "personas", "data"):

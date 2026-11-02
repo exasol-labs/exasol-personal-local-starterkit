@@ -210,6 +210,8 @@ def _schema_exists(ctx: KitContext, schema: str) -> bool:
 
 def _user(ctx: KitContext) -> tuple[str, str, bool]:
     user = _ident(os.environ.get("EXAKIT_EXASOL_SCHEDULER_USER", "scheduler_svc"))
+    if user in ("SYS", str(ctx.manifest.get("runtime.user", "sys")).upper()):
+        raise AddonFailure("Scheduler must use a dedicated database user, separate from the kit administrator")
     schema = _ident(os.environ.get("EXAKIT_EXASOL_SCHEDULER_SCHEMA", "SCHED"))
     credential = paths(ctx)[4]
     credential.parent.mkdir(parents=True, exist_ok=True)
@@ -226,12 +228,15 @@ def _user(ctx: KitContext) -> tuple[str, str, bool]:
     present = "EXAKIT_SCHED_USER_PRESENT" in _sql(
         ctx, "SELECT CASE WHEN EXISTS (SELECT 1 FROM EXA_DBA_USERS WHERE USER_NAME = "
         f"'{user}') THEN 'EXAKIT_SCHED_USER_PRESENT' ELSE 'EXAKIT_SCHED_USER_MISSING' END AS STATUS")
-    _sql(ctx, f"{'ALTER' if present else 'CREATE'} USER {user} IDENTIFIED BY {password}", secret=password)
+    _sql(ctx, f'{"ALTER" if present else "CREATE"} USER {user} IDENTIFIED BY "{password}"', secret=password)
     _sql(ctx, f"GRANT CREATE SESSION TO {user}")
     bootstrap = not _schema_exists(ctx, schema)
     if bootstrap:
         _sql(ctx, f"GRANT CREATE SCHEMA TO {user}")
         _sql(ctx, f"GRANT CREATE TABLE TO {user}")
+    else:
+        _sql(ctx, f"GRANT USAGE ON SCHEMA {schema} TO {user}")
+        _sql(ctx, f"GRANT SELECT, INSERT, UPDATE, DELETE ON SCHEMA {schema} TO {user}")
     return user, schema, bootstrap
 
 
@@ -492,16 +497,28 @@ def uninstall(ctx: KitContext, *, dry_run: bool = False) -> list[Path]:
     targets = [path for path in (home, launcher, credential) if path.exists()]
     if dry_run:
         return targets
+    user = _ident(str(ctx.manifest.get(f"{RECEIPT}.db_user", "scheduler_svc")))
+    schema = _ident(str(ctx.manifest.get(f"{RECEIPT}.schema", "SCHED")))
+    owner = str(ctx.manifest.get("runtime.user", "sys"))
+    if user in ("SYS", owner.upper()):
+        raise AddonFailure("Scheduler must use a dedicated database user; the administrator will not be removed")
     stop(ctx)
+    others = _sql(ctx, "SELECT CASE WHEN EXISTS (SELECT 1 FROM EXA_SCHEMAS "
+                  f"WHERE SCHEMA_OWNER = '{user}' AND SCHEMA_NAME <> '{schema}') "
+                  "THEN 'EXAKIT_SCHED_OTHER_SCHEMAS' ELSE 'EXAKIT_SCHED_NO_OTHER_SCHEMAS' END AS STATUS")
+    if "EXAKIT_SCHED_OTHER_SCHEMAS" in others:
+        raise AddonFailure("Scheduler owns other schemas; transfer them before retrying removal")
+    owned = _sql(ctx, "SELECT CASE WHEN EXISTS (SELECT 1 FROM EXA_SCHEMAS "
+                 f"WHERE SCHEMA_OWNER = '{user}' AND SCHEMA_NAME = '{schema}') "
+                 "THEN 'EXAKIT_SCHED_OWNS_SCHEMA' ELSE 'EXAKIT_SCHED_SCHEMA_NOT_OWNED' END AS STATUS")
+    if "EXAKIT_SCHED_OWNS_SCHEMA" in owned:
+        quoted_owner = '"' + owner.replace('"', '""') + '"'
+        _sql(ctx, f"ALTER SCHEMA {schema} CHANGE OWNER {quoted_owner}")
+    _sql(ctx, f"DROP USER IF EXISTS {user}")
     for target in targets:
         if target.is_dir():
             shutil.rmtree(target)
         else:
             target.unlink(missing_ok=True)
-    user = _ident(str(ctx.manifest.get(f"{RECEIPT}.db_user", "scheduler_svc")))
-    try:
-        _sql(ctx, f"DROP USER {user}")
-    except AddonFailure:
-        pass
     ctx.manifest.delete(RECEIPT, "desired.exasol_scheduler")
     return targets

@@ -6,14 +6,17 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 
+from marketplace_database_lifecycle import DatabaseChecks
+
 ROOT = Path(__file__).resolve().parents[2]
-ADDONS = ("dbt-exasol", "json-tables", "dash-server", "notebook", "exasol-vscode")
+ADDONS = ("dbt-exasol", "json-tables", "dash-server", "notebook", "exasol-vscode", "exasol-scheduler", "udf-devkit")
 
 
 def fixture_manifest(source: Path) -> dict:
@@ -35,7 +38,24 @@ def prefix() -> list[str]:
     return ["bash", str(ROOT / "setup/exakit")]
 
 
-def run(addons: list[str], source: Path, output: Path) -> dict:
+def run(addons: list[str], source: Path, output: Path, *, approve_test_writes: bool = False,
+        upgrades: dict[str, str] | None = None, baselines: dict[str, str] | None = None) -> dict:
+    if set(addons) & {"exasol-scheduler", "udf-devkit"} and not approve_test_writes:
+        raise RuntimeError("Scheduler/UDF checks need --approve-test-writes for isolated database test objects")
+    versions = json.loads((ROOT / "versions.json").read_text())["components"]
+    upgrades = dict(upgrades or {})
+    baselines = baselines or {}
+    for addon in baselines:
+        if addon not in addons or addon == "udf-devkit":
+            raise RuntimeError("Baseline versions must name selected package add-ons")
+        upgrades.setdefault(addon, versions[addon]["version"])
+    for addon, version in upgrades.items():
+        baseline = baselines.get(addon, versions.get(addon, {}).get("version", ""))
+        target = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", version)
+        current = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", baseline)
+        if addon not in addons or addon == "udf-devkit" or not target or not current or \
+           tuple(map(int, target.groups())) <= tuple(map(int, current.groups())):
+            raise RuntimeError("Upgrade targets must name selected package add-ons and a newer stable version")
     original = source / "manifest.json"
     before = hashlib.sha256(original.read_bytes()).hexdigest()
     fixture = fixture_manifest(source)
@@ -76,11 +96,13 @@ def run(addons: list[str], source: Path, output: Path) -> dict:
                 "JUPYTER_DATA_DIR": str(base / "jupyter data"),
                 "JUPYTER_CONFIG_DIR": str(base / "jupyter config"),
                 "JUPYTER_RUNTIME_DIR": str(base / "jupyter runtime")})
-    versions = json.loads((ROOT / "versions.json").read_text())["components"]
     for addon in addons:
-        env[f"EXAKIT_{addon.upper().replace('-', '_')}_VERSION"] = versions[addon]["version"]
+        env[f"EXAKIT_{addon.upper().replace('-', '_')}_VERSION"] = baselines.get(addon, versions[addon]["version"])
+    database = DatabaseChecks(source, home, bin_dir, env, fixture, addons)
+    manifest.write_text(json.dumps(fixture))
     report = {"ok": False, "platform": os.sys.platform, "home": str(home), "addons": {},
-              "scope": "native install/reinstall/current-version update/preview/removal; no version upgrade"}
+              "scope": "native install/reinstall/current-version update/preview/removal",
+              "upgrade_targets": upgrades, "baseline_versions": baselines}
     captured: list[str] = []
 
     def command(*args: str, check: bool = True) -> subprocess.CompletedProcess:
@@ -99,33 +121,52 @@ def run(addons: list[str], source: Path, output: Path) -> dict:
             row: dict = {"ok": False}
             report["addons"][addon] = row
             key = addon.replace("-", "_")
+            database.before_install(addon, command)
             command("marketplace", addon)
             first = json.loads(manifest.read_text())["components"].get(key, {})
             if first.get("ownership") != "kit":
                 raise RuntimeError(f"{addon} did not produce a kit-owned receipt")
             if first.get("validated") is not True:
                 raise RuntimeError(f"{addon} did not validate its native installation")
+            database.after_install(addon, command)
+            personal_dir = home
+            if addon == "notebook":
+                personal_dir = Path(first["notebooks_dir"])
+            elif addon == "dbt-exasol":
+                personal_dir = Path(first["profiles_dir"])
+            elif addon == "dash-server":
+                personal_dir = Path(first["instance"])
+            elif addon == "udf-devkit":
+                personal_dir = home / "rust-udfs"
+            personal_dir.mkdir(parents=True, exist_ok=True)
+            sentinel = personal_dir / "personal work.txt"
+            sentinel.write_text("Keep my personal work.\n")
             command("marketplace", addon)
             command("update", addon)
             current = json.loads(manifest.read_text())["components"][key]
             if current.get("version") != first["version"]:
                 raise RuntimeError(f"{addon} unexpectedly changed version")
-            sentinel = home / "personal notes.txt"
-            sentinel.write_text("Keep my personal work.\n")
-            if addon == "notebook":
-                sentinel = Path(current["notebooks_dir"]) / "personal notebook.txt"
-                sentinel.write_text("Keep my personal work.\n")
-            if addon == "dbt-exasol":
-                sentinel = Path(current["profiles_dir"]) / "personal profile.txt"
-                sentinel.write_text("Keep my personal work.\n")
+            if addon in upgrades:
+                env[f"EXAKIT_{addon.upper().replace('-', '_')}_VERSION"] = upgrades[addon]
+                print(f"{addon}: upgrade to {upgrades[addon]}", flush=True)
+                command("update", addon)
+                current = json.loads(manifest.read_text())["components"][key]
+                if str(current.get("version", "")).removeprefix("v") != upgrades[addon].removeprefix("v") or \
+                   current.get("validated") is not True:
+                    raise RuntimeError(f"{addon} did not validate its upgraded native installation")
+                row.update({"upgrade_from": first["version"], "upgrade_to": current["version"]})
+            if sentinel.read_text() != "Keep my personal work.\n":
+                raise RuntimeError(f"{addon} update changed personal work")
             state = snapshot(home)
             state_bin = snapshot(bin_dir)
             command("uninstall", addon, "--dry-run")
             if state != snapshot(home) or state_bin != snapshot(bin_dir):
                 raise RuntimeError(f"{addon} preview changed resources outside its logs")
             print(f"{addon}: remove and repeat removal", flush=True)
+            database.before_uninstall(addon, command)
             command("uninstall", addon, "--yes")
             command("uninstall", addon, "--yes")
+            database.after_uninstall(addon, command)
             if key in json.loads(manifest.read_text()).get("components", {}):
                 raise RuntimeError(f"{addon} receipt remains after removal")
             if sentinel.read_text() != "Keep my personal work.\n":
@@ -137,6 +178,7 @@ def run(addons: list[str], source: Path, output: Path) -> dict:
             row.update({"ok": True, "version": first["version"], "install_twice": True,
                         "current_update": True, "preview_preserved_resources": True,
                         "uninstall_twice": True, "personal_file_preserved": True})
+            row.update(database.evidence.get(addon, {}))
         report["ok"] = True
     except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired) as error:
         report["error"] = str(error)
@@ -150,6 +192,11 @@ def run(addons: list[str], source: Path, output: Path) -> dict:
                 except (OSError, RuntimeError, subprocess.TimeoutExpired):
                     report["cleanup_required"] = True
                     report["ok"] = False
+        try:
+            database.cleanup(command)
+        except (OSError, RuntimeError, subprocess.TimeoutExpired):
+            report["cleanup_required"] = True
+            report["ok"] = False
         report["original_manifest_unchanged"] = before == hashlib.sha256(original.read_bytes()).hexdigest()
         report["ok"] &= report["original_manifest_unchanged"]
         credential = Path(runtime.get("password_file", ""))
@@ -170,8 +217,20 @@ def main() -> int:
     parser.add_argument("addons", nargs="+", choices=ADDONS)
     parser.add_argument("--source-home", type=Path, default=Path.home() / ".exasol-starter-kit")
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--approve-test-writes", action="store_true")
+    parser.add_argument("--upgrade", action="append", default=[], metavar="ADDON=VERSION")
+    parser.add_argument("--baseline", action="append", default=[], metavar="ADDON=VERSION")
     args = parser.parse_args()
-    report = run(args.addons, args.source_home, args.output)
+    targets = {"upgrade": {}, "baseline": {}}
+    for kind in targets:
+        for value in getattr(args, kind):
+            addon, separator, version = value.partition("=")
+            if not separator or addon in targets[kind]:
+                parser.error(f"--{kind} requires one ADDON=VERSION per target")
+            targets[kind][addon] = version
+    report = run(args.addons, args.source_home, args.output,
+                 approve_test_writes=args.approve_test_writes,
+                 upgrades=targets["upgrade"], baselines=targets["baseline"])
     print(json.dumps(report, indent=2))
     return 0 if report["ok"] else 1
 

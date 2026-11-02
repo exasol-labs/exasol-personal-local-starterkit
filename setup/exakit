@@ -1535,7 +1535,7 @@ cmd_uninstall() {
             # said "nothing else" while dash-server's hook deleted every
             # dashboard, so the preview has to come from the code that removes.
             info "Dry run — removing the $_uni_addon add-on would:"
-            _exakit_uninstall_component "$_uni_addon" 1
+            _exakit_uninstall_component "$_uni_addon" 1 || exit $?
             exit 0
         fi
         if [ "$_uni_yes" -ne 1 ]; then
@@ -1554,7 +1554,7 @@ cmd_uninstall() {
                 exit 5
             }
         fi
-        _exakit_uninstall_component "$_uni_addon" 0
+        _exakit_uninstall_component "$_uni_addon" 0 || exit $?
         ok "$_uni_addon removed. Reinstall any time with: exakit marketplace $_uni_addon"
         exit 0
     fi

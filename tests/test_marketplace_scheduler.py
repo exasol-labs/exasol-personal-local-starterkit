@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import hashlib
 import json
+import os
 import sys
 import tarfile
 import tempfile
@@ -51,7 +52,8 @@ class SchedulerTest(unittest.TestCase):
         password = scheduler.paths(self.ctx)[4].read_text().strip()
         self.assertNotIn(password, "\n".join(item[0] for item in queries if not item[0].startswith("CREATE USER")))
         self.assertEqual(password, next(secret for command, secret in queries if command.startswith("CREATE USER")))
-        self.assertEqual(0o600, scheduler.paths(self.ctx)[4].stat().st_mode & 0o777)
+        if os.name != "nt":
+            self.assertEqual(0o600, scheduler.paths(self.ctx)[4].stat().st_mode & 0o777)
 
     def test_existing_schema_does_not_regrant_bootstrap(self) -> None:
         queries = []
@@ -67,6 +69,41 @@ class SchedulerTest(unittest.TestCase):
         with patch.object(scheduler, "_sql", side_effect=sql):
             self.assertFalse(scheduler._user(self.ctx)[2])
         self.assertFalse(any(item.startswith("GRANT CREATE SCHEMA") for item in queries))
+        self.assertIn("GRANT USAGE ON SCHEMA SCHED TO SCHEDULER_SVC", queries)
+        self.assertIn("GRANT SELECT, INSERT, UPDATE, DELETE ON SCHEMA SCHED TO SCHEDULER_SVC", queries)
+
+    def test_bootstrap_quotes_digit_leading_and_mixed_case_passwords(self) -> None:
+        credential = scheduler.paths(self.ctx)[4]
+        credential.parent.mkdir(parents=True)
+        for present, password in ((False, "7aB" * 10), (True, "aB7" * 10)):
+            credential.write_text(password + "\n")
+            queries = []
+
+            def sql(_ctx, statement, *, secret=""):
+                queries.append((statement, secret))
+                if "EXAKIT_SCHED_USER_PRESENT" in statement:
+                    return "EXAKIT_SCHED_USER_PRESENT" if present else "EXAKIT_SCHED_USER_MISSING"
+                return "EXAKIT_SCHED_SCHEMA_PRESENT"
+
+            with patch.object(scheduler, "_sql", side_effect=sql):
+                scheduler._user(self.ctx)
+            verb = "ALTER" if present else "CREATE"
+            self.assertIn((f'{verb} USER SCHEDULER_SVC IDENTIFIED BY "{password}"', password), queries)
+
+    def test_administrator_cannot_be_used_or_removed_as_the_scheduler_user(self) -> None:
+        with patch.dict("os.environ", {"EXAKIT_EXASOL_SCHEDULER_USER": "sys"}), \
+             patch.object(scheduler, "_sql") as sql:
+            with self.assertRaisesRegex(AddonFailure, "dedicated database user"):
+                scheduler._user(self.ctx)
+            sql.assert_not_called()
+        self.assertFalse(scheduler.paths(self.ctx)[4].exists())
+        self.manifest.set_many({"components.exasol_scheduler.ownership": "kit",
+                                "components.exasol_scheduler.db_user": "SYS"})
+        with patch.object(scheduler, "stop") as stop, patch.object(scheduler, "_sql") as sql:
+            with self.assertRaisesRegex(AddonFailure, "administrator"):
+                scheduler.uninstall(self.ctx)
+            stop.assert_not_called()
+            sql.assert_not_called()
 
     def test_checksum_mismatch_removes_partial_asset(self) -> None:
         archive = self.home / "archive.tar.gz"
@@ -149,8 +186,56 @@ class SchedulerTest(unittest.TestCase):
         self.assertFalse(home.exists())
         self.assertFalse(launcher.exists())
         self.assertFalse(credential.exists())
-        self.assertEqual("DROP USER SCHEDULER_SVC", sql.call_args.args[1])
+        self.assertEqual("DROP USER IF EXISTS SCHEDULER_SVC", sql.call_args.args[1])
         self.assertIsNone(self.manifest.get("components.exasol_scheduler"))
+
+    def test_uninstall_transfers_only_the_scheduler_schema_before_dropping_its_user(self) -> None:
+        self.manifest.set_many({"components.exasol_scheduler.ownership": "kit",
+                                "components.exasol_scheduler.db_user": "scheduler_svc",
+                                "components.exasol_scheduler.schema": "SCHED"})
+        queries = []
+
+        def sql(_ctx, statement, **_kwargs):
+            queries.append(statement)
+            return "EXAKIT_SCHED_OWNS_SCHEMA" if "SCHEMA_NAME = 'SCHED'" in statement else ""
+
+        with patch.object(scheduler, "stop"), patch.object(scheduler, "_sql", side_effect=sql):
+            scheduler.uninstall(self.ctx)
+        self.assertIn('ALTER SCHEMA SCHED CHANGE OWNER "sys"', queries)
+        self.assertLess(queries.index('ALTER SCHEMA SCHED CHANGE OWNER "sys"'),
+                        queries.index("DROP USER IF EXISTS SCHEDULER_SVC"))
+        self.assertFalse(any("CASCADE" in query or query.startswith("DROP SCHEMA") for query in queries))
+        self.manifest.set_many({"components.exasol_scheduler.ownership": "kit",
+                                "runtime.user": 'team-"admin'})
+        with patch.object(scheduler, "stop"), patch.object(scheduler, "_sql", side_effect=sql):
+            scheduler.uninstall(self.ctx)
+        self.assertIn('ALTER SCHEMA SCHED CHANGE OWNER "team-""admin"', queries)
+
+    def test_failed_database_cleanup_keeps_files_credentials_and_receipt_for_retry(self) -> None:
+        self.manifest.set_many({"components.exasol_scheduler.ownership": "kit"})
+        home, launcher, engine, _, credential = scheduler.paths(self.ctx)
+        engine.parent.mkdir(parents=True)
+        engine.write_text("engine")
+        credential.parent.mkdir(parents=True)
+        credential.write_text("private credential")
+        before = self.manifest.path.read_bytes()
+        with patch.object(scheduler, "stop"), \
+             patch.object(scheduler, "_sql", side_effect=AddonFailure("database unavailable")):
+            with self.assertRaises(AddonFailure):
+                scheduler.uninstall(self.ctx)
+        self.assertEqual(before, self.manifest.path.read_bytes())
+        self.assertTrue(engine.exists())
+        self.assertTrue(credential.exists())
+
+    def test_uninstall_refuses_to_change_unrelated_schema_owners(self) -> None:
+        self.manifest.set_many({"components.exasol_scheduler.ownership": "kit"})
+        before = self.manifest.path.read_bytes()
+        with patch.object(scheduler, "stop"), \
+             patch.object(scheduler, "_sql", return_value="EXAKIT_SCHED_OTHER_SCHEMAS") as sql:
+            with self.assertRaisesRegex(AddonFailure, "other schemas"):
+                scheduler.uninstall(self.ctx)
+        self.assertEqual(1, sql.call_count)
+        self.assertEqual(before, self.manifest.path.read_bytes())
 
     def test_install_records_launcher_after_python_runtime_is_ready(self) -> None:
         def unpack(_archive: Path, destination: Path) -> None:

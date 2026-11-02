@@ -1149,6 +1149,9 @@ if command -v python3 >/dev/null 2>&1; then
             "no: $(grep 'tables on screen' "$WORK/addon-tty.out" || echo 'replay failed')"
     fi
     ADDON_SCREEN="$(sed -n '/=== FINAL SCREEN ===/,/=== tables/p' "$WORK/addon-tty.out")"
+    if [ -n "${EXAKIT_TEST_TTY_EVIDENCE:-}" ]; then
+        cp "$WORK/addon-tty.out" "$EXAKIT_TEST_TTY_EVIDENCE"
+    fi
     has "and the shell announced no dying job" "job announcements: 0" \
         "$(cat "$WORK/addon-tty.out")"
     has "the state table is still above it" "Marketplace add-ons" "$ADDON_SCREEN"

@@ -2,6 +2,11 @@
 
 ## Persona and marketplace Python backend
 
+- Quote Scheduler passwords during bootstrap, restore access to retained task tables on reinstall, and remove its service user while preserving task/history data. Failed database cleanup retains the receipt and files for retry; administrator accounts and unrelated schema owners are protected.
+- Return a failure when selective add-on removal fails on Bash or PowerShell, retaining its integrations. Declined selective removal returns exit 5 on both platforms.
+- Redact delegated credentials from marketplace child-tool logs and use the active versions document consistently for installation, latest-version queries and validation. Keep PowerShell diagnostics separate from returned values.
+- Add isolated lifecycle checks for all seven add-ons, guarded reuse of installed UDF runtimes, and explicit native release-upgrade checks. Verify Scheduler task execution again after removal/reinstall.
+- Detach the Bash marketplace worker from the parent's animation handle so worker error cleanup cannot stop the selection/progress table.
 - Repair an older kit-owned Scheduler’s missing Python supervisor runtime on start without replacing its binary, credentials or tasks. Identify its process by PID creation time and service home so checkout and installed commands can manage the same process.
 - Make Textual’s Select All include child choices: a partly selected Notebook row no longer appears fully selected, and selecting all restores missing choices.
 - Resolve persona definitions and interactive menu code from the same marketplace source as direct commands on Bash and PowerShell, including when an older installed kit copy exists.

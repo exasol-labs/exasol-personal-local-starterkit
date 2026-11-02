@@ -5207,7 +5207,8 @@ _exakit_marketplace_apply_python() {
     fi
     # Python owns the lifecycle. This adapter only paints the existing table
     # from live phase records and drains the final messages after it stops.
-    ( export EXAKIT_ADDON_TABLE_IDS
+    ( ui_table_detach
+      export EXAKIT_ADDON_TABLE_IDS
       EXAKIT_MARKETPLACE_ACTIVITY_FILE="${EXAKIT_ADDON_TABLE_STATE:+$EXAKIT_ADDON_TABLE_STATE.activity}"
       export EXAKIT_MARKETPLACE_ACTIVITY_FILE
       EXAKIT_MARKETPLACE_VERSIONS_DOC="$(_exakit_marketplace_versions_doc 2>/dev/null || true)"
@@ -11625,7 +11626,11 @@ _exakit_uninstall_component() {
             if _exakit_addon_registered "$_uc_key"; then
                 _uc_fn="$(_exakit_addon_fn "$_uc_key" uninstall)"
                 if command -v "$_uc_fn" >/dev/null 2>&1; then
-                    "$_uc_fn" "$_uc_dry" || warn "Removing the $_uc_key add-on reported issues"
+                    if "$_uc_fn" "$_uc_dry"; then :; else
+                        _uc_failed=$?
+                        warn "Removing the $_uc_key add-on failed; its receipt and integrations were kept"
+                        return "$_uc_failed"
+                    fi
                     # ...and the skills it owns go with it. Here rather than in
                     # the module, so every add-on gets it without writing a line.
                     [ "$_uc_dry" = "1" ] || exakit_remove_addon_skills "$_uc_key" || true
@@ -11636,6 +11641,7 @@ _exakit_uninstall_component() {
                     [ "$_uc_dry" = "1" ] || _exakit_autostart_unregister "$_uc_key" || true
                 else
                     warn "The $_uc_key module carries no uninstall — update the kit: exakit update"
+                    return 1
                 fi
             else
                 warn "Unknown uninstall target: $_uc_key"
@@ -12467,7 +12473,7 @@ EXAKIT_UM_PANEL_EOF
 
     printf '\n'
     for _um_key in $_um_picked; do
-        _exakit_uninstall_component "$_um_key" 0
+        _exakit_uninstall_component "$_um_key" 0 || return $?
     done
     printf '\n'
     # A full uninstall has just deleted the exakit binary, so pointing at
