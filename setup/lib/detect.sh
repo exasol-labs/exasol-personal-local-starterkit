@@ -553,8 +553,12 @@ preflight_report() {
         else
             _pf_note "python3 available but older than 3.11 — the installer will use its managed Python runtime automatically"
         fi
-    elif command -v uv >/dev/null 2>&1 || [ -x "${HOME}/.local/bin/uv" ]; then
+    elif _pf_uv="$(exakit_uv_report 2>/dev/null)" && [ "${_pf_uv%%|*}" = "ok" ]; then
         _pf_ok "uv available — it can provide Python automatically"
+    elif [ "${_pf_uv%%|*}" = "below" ]; then
+        # Present but below the floor the kit will run (its CA store trusts a
+        # compromised root): the installer leaves it alone and installs its own.
+        _pf_note "uv is installed but older than the kit's minimum — the installer will install its own pinned uv and use that"
     elif [ "$_os" = "macos" ]; then
         _pf_note "python3 missing — the installer can bootstrap a managed Python runtime automatically"
     else

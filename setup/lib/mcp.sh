@@ -25,7 +25,22 @@
 EXAKIT_MCP_USER="${EXAKIT_MCP_USER:-mcp_readonly}"
 EXAKIT_MCP_HTTP_PORT="${EXAKIT_MCP_HTTP_PORT:-8123}"
 
+# mcp_command_path — the uvx the AI clients are told to launch.
+#
+# The uv the kit vetted comes FIRST, ahead of the manifest record: the record
+# is whatever a previous run wrote, and after a uv below the floor was shadowed
+# by the kit's own copy, a record that still names the old uvx would put the
+# refused binary straight back into every client config. The record and the
+# PATH lookups remain as fallbacks for a kit copy that cannot resolve uv at
+# all (a read-only query on a machine with none).
 mcp_command_path() {
+    if command -v exakit_uv_uvx >/dev/null 2>&1; then
+        _vetted_uvx="$(exakit_uv_uvx 2>/dev/null || true)"
+        if [ -n "$_vetted_uvx" ]; then
+            printf '%s\n' "$_vetted_uvx"
+            return 0
+        fi
+    fi
     _manifest_command="$(manifest_get components.mcp_server.command 2>/dev/null || true)"
     if [ -n "$_manifest_command" ]; then
         printf '%s\n' "$_manifest_command"
@@ -60,45 +75,54 @@ mcp_ssl_cert_validation() {
     esac
 }
 
+# mcp_uv_install — the MCP step's uv. One resolver for the whole kit
+# (exakit_ensure_uv in common.sh): a uv already on the machine is used only at
+# or above components.uv.min_version; otherwise the pinned release archive is
+# downloaded, verified against its digest in versions.json and unpacked - no
+# installer script is executed, from astral or anyone else. Homebrew is no
+# longer asked: it was preferred only to stay off the pipe-to-shell path, and
+# that path no longer exists.
 mcp_uv_install() {
-    if command -v uv >/dev/null 2>&1; then
+    if exakit_ensure_uv; then
         # A dependency that was already there is not an outcome of this step,
         # and its path is not something to act on. Logged, not printed.
-        _exakit_log_file "OK    uv already installed: $(command -v uv)"
+        _exakit_log_file "OK    uv $(exakit_uv_version_of "$EXAKIT_UV_BIN" 2>/dev/null || printf '?') ready: $EXAKIT_UV_BIN"
+        exakit_uv_record_manifest
+        push_rollback "\"$EXAKIT_UV_BIN\" cache clean >/dev/null 2>&1 || true"
         return 0
     fi
-    info "Installing uv (Python tool runner used by the MCP server)"
-    if command -v brew >/dev/null 2>&1; then
-        run_logged brew install uv ||
-            die "Homebrew could not install uv, which the MCP server runs through. What brew said: exakit logs setup. Then install it yourself and re-run:  brew install uv"
-    else
-        # TODO(security): this pipes a remote installer straight into a shell,
-        # unlike the kit's own artifacts which are SHA256-verified. It can't be
-        # checksum-pinned without breakage (astral's install.sh content changes
-        # over time) — a real fix means vendoring a pinned installer or shipping
-        # uv via a verified release asset. Brew is preferred above precisely to
-        # avoid this path on the common macOS case. Fetched over TLS from the
-        # official host as a documented, accepted risk until then.
-        # --proto/--proto-redir: this is the one artifact the kit installs
-        # WITHOUT a digest, and it is also the longest-lived one - uvx is the
-        # process the AI client launches to run the MCP server, and it is
-        # handed EXA_PASSWORD on every start. -L follows redirects, so without
-        # --proto-redir a 302 to http:// is fetched in the clear and piped
-        # straight into sh. Every binary download in this kit already carries
-        # --proto '=https'; the script that is executed carried neither.
-        curl -LsSf --proto '=https' --proto-redir '=https' --retry 3 \
-            https://astral.sh/uv/install.sh | run_logged sh || \
-            die "The uv installer did not finish, and the MCP server runs through uv. What it printed: exakit logs setup. Then install it yourself and re-run:  curl -LsSf https://astral.sh/uv/install.sh | sh"
-        # The uv installer defaults to ~/.local/bin
-        case ":$PATH:" in
-            *":$HOME/.local/bin:"*) ;;
-            *) PATH="$HOME/.local/bin:$PATH" ;;
-        esac
+    die "uv could not be installed, and the MCP server runs through uv. What happened: exakit logs setup. Then re-run the installer, or: exakit update uv"
+}
+
+# mcp_uvx_bin — the uvx this process runs the server with: the one beside the
+# vetted uv, never a bare name resolved through PATH (which could be an old
+# copy the kit refused, or nothing at all right after an install).
+mcp_uvx_bin() {
+    _mub="$(exakit_uv_uvx 2>/dev/null || true)"
+    if [ -n "$_mub" ]; then
+        printf '%s\n' "$_mub"
+        return 0
     fi
-    command -v uv >/dev/null 2>&1 || \
-        die "uv installed but is not on PATH. Add ~/.local/bin to your PATH (or restart your shell), then re-run."
-    push_rollback "uv cache clean >/dev/null 2>&1 || true"
-    ok "uv installed"
+    command -v uvx 2>/dev/null || return 1
+}
+
+# mcp_point_clients_at_kit_uv — after uv moved (exakit update uv), make the AI
+# clients launch the uvx the kit vetted. The record is rewritten first because
+# the config renderer reads it; then every already-connected client is
+# refreshed. Clients the user never connected are left alone, as always.
+mcp_point_clients_at_kit_uv() {
+    _pck_uvx="$(exakit_uv_uvx 2>/dev/null || true)"
+    [ -n "$_pck_uvx" ] || return 1
+    [ -f "${EXAKIT_MANIFEST:-}" ] || return 0
+    manifest_get components.mcp_server.version >/dev/null 2>&1 || return 0
+    manifest_set components.mcp_server.command "$_pck_uvx"
+    manifest_set components.mcp_server.uv_path "$EXAKIT_UV_BIN"
+    # The refresh names the package and version it writes; in this path they
+    # come from the record, not from an install that set them.
+    [ -n "${EXAKIT_MCP_VERSION:-}" ] || EXAKIT_MCP_VERSION="$(manifest_get components.mcp_server.version 2>/dev/null || true)"
+    [ -n "${EXAKIT_MCP_PACKAGE:-}" ] || EXAKIT_MCP_PACKAGE="$(manifest_get components.mcp_server.package 2>/dev/null || printf 'exasol-mcp-server')"
+    export EXAKIT_MCP_VERSION EXAKIT_MCP_PACKAGE
+    mcp_refresh_client_pins
 }
 
 # Six lines became one. uv's path, the priming bullet, "package cached",
@@ -123,15 +147,20 @@ mcp_uv_install() {
 mcp_prefetch_begin() {
     [ "${EXAKIT_MCP_PREFETCH:-1}" = "1" ] || return 0
     [ -n "${EXAKIT_MCP_PREFETCH_PID:-}" ] && return 0
-    mcp_uv_install >/dev/null 2>&1 || return 0
-    command -v uvx >/dev/null 2>&1 || return 0
+    # In a subshell: mcp_uv_install dies when uv cannot be installed, and a
+    # best-effort prefetch must not end the install over it. The step itself
+    # runs the same install again and reports the real reason.
+    ( mcp_uv_install ) >/dev/null 2>&1 || return 0
+    exakit_ensure_uv >/dev/null 2>&1 || return 0
+    _prefetch_uvx="$(mcp_uvx_bin 2>/dev/null || true)"
+    [ -n "$_prefetch_uvx" ] || return 0
     EXAKIT_MCP_PREFETCH_LOG="$(mktemp "${TMPDIR:-/tmp}/exakit-mcp-prefetch.XXXXXX" 2>/dev/null)" || return 0
     # Its own file, not the install log: this writes while the data load is
     # writing too, and two appenders interleave into nonsense. It is folded
     # into the install log when mcp_install collects it.
     # The exit code goes to a file beside the log, because the collector cannot
     # read it any other way - see the note on waiting in mcp_install.
-    ( uvx "${EXAKIT_MCP_PACKAGE}@${EXAKIT_MCP_VERSION}" --help >"$EXAKIT_MCP_PREFETCH_LOG" 2>&1
+    ( "$_prefetch_uvx" "${EXAKIT_MCP_PACKAGE}@${EXAKIT_MCP_VERSION}" --help >"$EXAKIT_MCP_PREFETCH_LOG" 2>&1
       printf '%s' "$?" > "$EXAKIT_MCP_PREFETCH_LOG.rc" ) &
     EXAKIT_MCP_PREFETCH_PID=$!
     _exakit_log_file "INFO  MCP package prefetch started in the background (pid $EXAKIT_MCP_PREFETCH_PID)"
@@ -186,7 +215,7 @@ mcp_install() {
         EXAKIT_MCP_PREFETCH_PID=""
         EXAKIT_MCP_PREFETCH_LOG=""
     else
-        _prime_out="$(uvx "${EXAKIT_MCP_PACKAGE}@${EXAKIT_MCP_VERSION}" --help 2>&1)"
+        _prime_out="$("$(mcp_uvx_bin)" "${EXAKIT_MCP_PACKAGE}@${EXAKIT_MCP_VERSION}" --help 2>&1)"
         _prime_rc=$?
     fi
     ui_spin_end
@@ -196,8 +225,10 @@ mcp_install() {
     else
         warn "Could not prime the MCP server package (it will download on first client start)"
     fi
-    _uv_bin="$(command -v uv 2>/dev/null || true)"
-    [ -n "$_uv_bin" ] && manifest_set components.mcp_server.uv_path "$_uv_bin"
+    # The uv the kit VETTED, not the first one on PATH: the config renderer
+    # derives uvx from this path, so an old uv on PATH here would undo the
+    # floor one line after it was enforced.
+    [ -n "${EXAKIT_UV_BIN:-}" ] && manifest_set components.mcp_server.uv_path "$EXAKIT_UV_BIN"
     manifest_set components.mcp_server.command "$(mcp_command_path)"
     manifest_set components.mcp_server.package "$EXAKIT_MCP_PACKAGE"
     manifest_set components.mcp_server.version "$EXAKIT_MCP_VERSION"
@@ -660,7 +691,7 @@ mcp_validate_http() {
     # acceptable; a real remote deployment must configure proper auth.
     EXA_DSN="$_dsn" EXA_USER="$_user" EXA_PASSWORD="$_password" \
         EXA_SSL_CERT_VALIDATION="$_ssl_cert_validation" \
-        uvx --from "${EXAKIT_MCP_PACKAGE}@${EXAKIT_MCP_VERSION}" \
+        "$(mcp_uvx_bin)" --from "${EXAKIT_MCP_PACKAGE}@${EXAKIT_MCP_VERSION}" \
         exasol-mcp-server-http --host 127.0.0.1 --port "$EXAKIT_MCP_HTTP_PORT" --no-auth \
         >> "${EXAKIT_LOG_FILE:-/dev/null}" 2>&1 &
     _http_pid=$!

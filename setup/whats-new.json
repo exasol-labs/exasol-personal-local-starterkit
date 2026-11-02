@@ -28,6 +28,11 @@
     "From 0.2.2, run exakit update twice; from here on, once is enough.",
     "exakit connect: query PostgreSQL, MySQL, SQL Server, Oracle live."
   ],
+  "0.2.3": [
+    "Security update for uv, the tool that runs the MCP server.",
+    "uv is now pinned and checksum-verified; no install script runs.",
+    "A uv older than 0.13.4 is never used: exakit update uv fixes it."
+  ],
   "0.2.2": [
     "The launcher now downloads from Exasol's own server (S3), verified.",
     "If that server is unreachable, the verified GitHub release is used.",

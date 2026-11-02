@@ -167,7 +167,7 @@ check "release url is the tag tarball" \
     "$(dash_server_release_url 0.1.0)"
 
 echo "update targets never sneak an add-on in:"
-check "not installed -> excluded from all" "exakit runtime exapump mcp pyexasol skills" \
+check "not installed -> excluded from all" "exakit runtime exapump uv mcp pyexasol skills" \
     "$(exakit_update_targets all | tr '\n' ' ' | sed 's/ $//')"
 check "explicit target still routable" "dash-server" "$(exakit_update_targets dash-server)"
 check "pending detection sees the gap" "yes" "$(exakit_marketplace_has_pending && echo yes || echo no)"
@@ -190,7 +190,7 @@ manifest_set components.dash_server.version "0.1.0"
 
 echo "installed add-on state:"
 check "live probe answers" "0.1.0" "$(exakit_component_current dash-server)"
-check "installed -> joins update all" "exakit runtime exapump mcp pyexasol skills dash-server" \
+check "installed -> joins update all" "exakit runtime exapump uv mcp pyexasol skills dash-server" \
     "$(exakit_update_targets all | tr '\n' ' ' | sed 's/ $//')"
 check "installed-addons list" "dash-server" "$(exakit_marketplace_installed_addons)"
 # With a second add-on registered, one install no longer empties the offer —
@@ -206,7 +206,7 @@ check "nothing pending once ALL are covered" "no" "$( (
 rm -rf "$EXAKIT_HOME/dash-server-venv"
 echo "a stale record is not an install:"
 check "probe fails without the venv" "absent" "$(exakit_component_current dash-server >/dev/null 2>&1 && echo present || echo absent)"
-check "excluded from update all again" "exakit runtime exapump mcp pyexasol skills" \
+check "excluded from update all again" "exakit runtime exapump uv mcp pyexasol skills" \
     "$(exakit_update_targets all | tr '\n' ' ' | sed 's/ $//')"
 
 echo "EXAKIT_MARKETPLACE_ADDONS (the non-interactive contract):"
@@ -483,7 +483,7 @@ _sys_out="$( (
     printf 'update-targets=%s' "$(exakit_update_targets all | tr '\n' ' ' | sed 's/ $//')"
 ) )"
 check "system install covers the offer but stays unmanaged" \
-    "present=yes pending=no kit-managed=no update-targets=exakit runtime exapump mcp pyexasol skills" "$_sys_out"
+    "present=yes pending=no kit-managed=no update-targets=exakit runtime exapump uv mcp pyexasol skills" "$_sys_out"
 check "kit launcher on PATH is NOT a system install" "no" "$( (
     cp "$WORK/system-bin/dash-server" "$EXAKIT_BIN_DIR/dash-server"
     PATH="$EXAKIT_BIN_DIR:$PATH"
