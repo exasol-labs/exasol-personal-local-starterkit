@@ -695,7 +695,9 @@ has "...and takes the exit code from a file, the only way across a subshell" \
     'cat "$EXAKIT_MCP_PREFETCH_LOG.rc"' "$MCP_INSTALL_SH"
 has "the prefetch records that exit code" \
     'EXAKIT_MCP_PREFETCH_LOG.rc"' "$(cat "$ROOT/setup/lib/mcp.sh")"
-has "...and still primes inline without one" 'uvx "${EXAKIT_MCP_PACKAGE}@${EXAKIT_MCP_VERSION}" --help 2>&1' "$MCP_INSTALL_SH"
+# Through the uvx beside the VETTED uv (mcp_uvx_bin), never a bare `uvx` off
+# PATH: that could be a copy below the floor the kit refused a moment earlier.
+has "...and still primes inline without one" '"$(mcp_uvx_bin)" "${EXAKIT_MCP_PACKAGE}@${EXAKIT_MCP_VERSION}" --help 2>&1' "$MCP_INSTALL_SH"
 has "the twin collects it in Install-Mcp"    'Receive-ExakitMcpPrefetch' "$MCP_INSTALL_PS"
 has "...and still primes inline without one" 'Get-UvxPath) "$($script:McpPackage)@$($script:McpVersion)" "--help"' "$MCP_INSTALL_PS"
 # A background download must not outlive the installer, on ANY way out.

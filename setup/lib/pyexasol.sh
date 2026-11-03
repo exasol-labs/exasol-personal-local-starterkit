@@ -50,11 +50,11 @@ pyexasol_install() {
     # uv is normally present already (the MCP step installs it and it is a
     # hard dependency of the kit); bootstrap it here only if this step runs
     # in a build without the MCP module. exakit_ensure_uv, not mcp_uv_install:
-    # this step may not fail the run, and mcp_uv_install dies on failure.
+    # this step may not fail the run, and mcp_uv_install dies on failure. And
+    # ONLY exakit_ensure_uv - never the first `uv` on PATH, which may be one
+    # below the version floor the kit refuses to run (components.uv.min_version).
     _pyx_uv=""
-    if command -v uv >/dev/null 2>&1; then
-        _pyx_uv="uv"
-    elif exakit_ensure_uv && [ -x "${EXAKIT_UV_BIN:-}" ]; then
+    if exakit_ensure_uv && [ -x "${EXAKIT_UV_BIN:-}" ]; then
         _pyx_uv="$EXAKIT_UV_BIN"
     else
         _pyexasol_not_installed "uv (the Python tool runner) is not available — install it from https://docs.astral.sh/uv/ and re-run"
