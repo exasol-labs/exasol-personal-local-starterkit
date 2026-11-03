@@ -47,14 +47,14 @@ def main(argv=None):
     thread = threading.Thread(target=server.serve_forever,daemon=True);thread.start()
     try:
         workflow = nb.workflow("acceptance-flow")
-        draft = nb.describe("ESOPHAGEAL.ESOPHAGEAL_POSTS", conn=conn, id="acceptance-pharma-flow")
+        draft = nb.describe("ESOPHAGEAL.ESOPHAGEAL_POSTS", conn=conn, id="acceptance-flow")
+        draft.slot(target="IS_NEGATIVE")
         first = draft.approve(owner="acceptance-tests", comments=False, conn=conn)
-        assert first.version == 1
-        original_text = list(first.text_cols())
-        assert len(original_text) > 1
-        draft.set("text", original_text[:1])
+        assert first.version == 1 and first.text_cols() == ["MESSAGE"]
+        draft.set(TITLE="text")                                          # a correction: the next version
         ds = draft.approve(owner="acceptance-tests", comments=False, conn=conn)
-        assert ds.version == 2 and len(nb.list_versions(ds.id)) == 2
+        stored = sorted((home / "descriptors" / "ESOPHAGEAL.ESOPHAGEAL_POSTS").glob("v[0-9]*.yaml"))
+        assert ds.version == 2 and [p.name for p in stored] == ["v1.yaml", "v2.yaml"]
         sql = f"SELECT {ds.col('category')} AS CATEGORY, COUNT(*) AS N FROM {ds.fact_table} GROUP BY 1 ORDER BY 1"
         frame = nb.sql(conn,sql);nb.show_sql()
         assert len(frame)>0
