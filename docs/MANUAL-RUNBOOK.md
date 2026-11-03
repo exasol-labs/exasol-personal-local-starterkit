@@ -166,6 +166,12 @@ d.set(TITLE="wrong")
 
 ### 1.4 Ask your AI client about the roles
 
+First refresh the AI-client setup so it lists views, then **quit and reopen Claude**:
+
+```bash
+exakit mcp-setup
+```
+
 In Claude (connected to the kit), ask:
 
 *"Describe the view EXAKIT_SEMANTIC.ESOPHAGEAL__ESOPHAGEAL_POSTS and list each column's role."*

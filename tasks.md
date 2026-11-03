@@ -120,7 +120,8 @@ Branch: `feat/persona-and-marketplace-ui`. This checklist tracks implementation 
 - [x] Step 7 model notes: one call, never a sensitive column, never a role.
 - [x] Datasets: `esophageal_posts` (de-identified social-listening export; terms unconfirmed) replaces `pharma_trials`; `bank_marketing` added; both personas load all three reference datasets.
 - [ ] Live run: load the two new datasets and approve on a real database (`docs/MANUAL-RUNBOOK.md`, sections 1-2); confirm the shipped schema digests equal the live ones (TIMESTAMP naming).
-- [ ] MCP describe on the read-only login for a local and a virtual table after a replace (DS5.4).
+- [x] MCP returns column comments on tables and views (live, Mac, 2026-11-03, exasol-mcp-server 2.3.0); views were off in the server's defaults, so list/find never showed EXAKIT_SEMANTIC - the kit now enables them (`mcp/runtime/exakit.py`).
+- [ ] MCP describe on a virtual table after a replace (DS5.4): needs a virtual schema.
 - [ ] Owner: confirm Esophageal's redistribution terms; publish the two new release assets.
 - [ ] Banking text: the CFPB no longer publishes narratives, so banking has no text slot; a narrative source is the owner's call.
 - [ ] Part 2 (semantic fusion, steps 8-11) after Part 1 is merged.

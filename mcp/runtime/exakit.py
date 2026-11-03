@@ -33,6 +33,9 @@ DEFAULT_READ_ONLY_MCP_SETTINGS = {
     "enable_query_profiling": True,
     "enable_write_query": False,
     "enable_write_bucketfs": False,
+    # The server lists no views unless told to (exasol-mcp-server 2.x: views default off), and the approved
+    # descriptors are published as views in EXAKIT_SEMANTIC: an agent that lists or searches objects must see them.
+    "views": {"enable": True},
 }
 
 
