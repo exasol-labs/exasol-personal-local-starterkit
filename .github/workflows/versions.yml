@@ -1090,7 +1090,7 @@ jobs:
         env:
           EXAKIT_LOCAL_KIT: ${{ github.workspace }}
           EXAKIT_PERSONA: data-scientist,ml-engineer
-          EXAKIT_DATASETS: tpch,pharma_trials,banking_complaints
+          EXAKIT_DATASETS: tpch,esophageal_posts,banking_complaints
           EXAKIT_MARKETPLACE_ADDONS: notebook,udf-devkit
           EXAKIT_SKIP_MCP: "1"
           EXAKIT_NOTEBOOK_FRONTENDS: none
@@ -1126,7 +1126,7 @@ jobs:
           EXAKIT_NOTEBOOK_BIND_CHECKOUT: '1'
           EXAKIT_NOTEBOOK_RUN_OUTPUT: ${{ runner.temp }}/executed-notebooks
         run: |
-          for recipe in pharma_trials:none banking_complaints:balanced; do
+          for recipe in esophageal_posts:none banking_complaints:balanced; do
             EXAKIT_NOTEBOOK_DATASETS="${recipe%:*}" EXAKIT_NOTEBOOK_CLASS_WEIGHT="${recipe#*:}" \
               bash tests/notebooks-run.sh \
                 notebook/notebooks/data-scientist/00_quickstart.py \

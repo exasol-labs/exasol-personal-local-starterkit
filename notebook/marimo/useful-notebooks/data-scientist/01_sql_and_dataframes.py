@@ -16,9 +16,9 @@ def _(mo):
     mo.md(r"""
     # Take a database result into Python and check it
 
-    **Dataset:** Pharma or Banking. **How long:** five minutes.
+    **Dataset:** Esophageal or Banking. **How long:** five minutes.
 
-    A colleague wants category shares in a Python table. Begin with counts computed in Exasol, then calculate shares in pandas and verify the total independently. Pharma groups by phase; Banking groups by product.
+    A colleague wants category shares in a Python table. Begin with counts computed in Exasol, then calculate shares in pandas and verify the total independently. Esophageal groups by network; Banking groups by product.
 
     **By the end:** you will have a small result, the SQL behind it and a simple validation check you can reuse in your own notebook. **Optional AI:** no LLM endpoint is required; an assistant can help propose a different aggregate after you understand this one.
 
@@ -31,7 +31,7 @@ def _(mo):
 def _():
     import exakit.nb as nb
 
-    DATASET = "pharma_trials"  # or "banking_complaints"
+    DATASET = "esophageal_posts"  # or "banking_complaints"
     conn = nb.connect()
     ds = nb.dataset(conn, DATASET).require_approved("SQL and DataFrames")
     nb.workflow("sql-and-dataframes")
@@ -45,7 +45,7 @@ def _(mo):
 
     You need a category comparison, so bring back category counts rather than every source row. Inspect the printed SQL and the category names in the result.
 
-    **Technical note:** the approved category role selects `PHASE` or `PRODUCT`. `nb.sql` executes the aggregate and returns a pandas DataFrame. This keeps the same code useful when the dataset changes.
+    **Technical note:** the approved category role selects `SOCIAL_NETWORK` or `PRODUCT`. `nb.sql` executes the aggregate and returns a pandas DataFrame. This keeps the same code useful when the dataset changes.
     """)
     return
 

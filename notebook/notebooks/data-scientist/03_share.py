@@ -9,7 +9,7 @@
 # %% [markdown]
 # # Share a result another person can inspect
 #
-# **Dataset:** Pharma, Banking or your own approved descriptor. **How long:** about five minutes after Dash Server is ready.
+# **Dataset:** Esophageal, Banking or your own approved descriptor. **How long:** about five minutes after Dash Server is ready.
 #
 # You have checked a category comparison and want a colleague to see a live result. This notebook prepares a dashboard, gives you a preview, and publishes only after you confirm the figures.
 #
@@ -20,7 +20,7 @@
 # %%
 import exakit.nb as nb
 
-DATASET = "pharma_trials"  # or banking_complaints or an approved descriptor of your own
+DATASET = "esophageal_posts"  # or banking_complaints or an approved descriptor of your own
 TITLE = "Category overview"
 APP_NAME = None  # or a name of your own; the default includes the approved dataset ID
 WORKFLOW_ID = None  # paste the quickstart's wf-... id to continue its log

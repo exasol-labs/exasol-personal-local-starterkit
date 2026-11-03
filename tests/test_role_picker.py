@@ -32,20 +32,23 @@ from exakit_nb.role_picker import RoleReview, marimo_review, review_roles  # noq
 TABLE = "S.T"
 
 
-def draft(roles=None, missing=None):
-    """A draft over columns A, B, C, D: entity A, category B proposed, no date (C is text-like, D a number)."""
-    doc = {"id": "example", "fact_table": TABLE, "status": "draft", "version": 1, "owner": "me",
-           "roles": roles if roles is not None else {
-               "entity": {"table": TABLE, "column": "A"}, "category": {"table": TABLE, "column": "B"}},
-           "missing": missing if missing is not None else [{"role": "date", "reason": "no dates"}],
-           "evidence": {"entity": {"column": "A", "type": "VARCHAR(40)", "null_rate": 0.0, "distinct": 120,
-                                   "distinct_ratio": 0.12, "score": 0.8, "runner_up": {"column": "C", "score": 0.5}},
-                        "category": {"column": "B", "type": "VARCHAR(10)", "null_rate": 0.015, "distinct": 4, "score": 0.9},
-                        "excluded": {"D": "constant"}}}
-    profile = {"columns": [{"column": "A", "type": "VARCHAR(40)", "null_rate": 0.0, "distinct": 120},
-                           {"column": "B", "type": "VARCHAR(10)", "null_rate": 0.015, "distinct": 4},
-                           {"column": "C", "type": "VARCHAR(2000)", "null_rate": 0.2, "distinct": 900, "avg_len": 140.5},
-                           {"column": "D", "type": "DECIMAL(18,0)", "null_rate": 0.0, "distinct": 1}]}
+def draft():
+    """A draft over columns A, B, C, D: entity A, category B in their slots, no time (C is text-like, D one value)."""
+    doc = {"descriptor": 1, "dataset": "example", "source": {"kind": "local", "object": TABLE, "schema_digest": "sha256:ab",
+                                                              "profiled_rows": 1000},
+           "version": 1, "status": "draft", "grain": "",
+           "slots": {"key": None, "time": None, "text": None, "target": None, "category": "B", "entity": "A"},
+           "slot_evidence": {"key": "no single unique column", "time": "no dates", "text": "no text column",
+                             "target": "set by the user; never drafted"},
+           "columns": {"A": {"role": "category", "confidence": "low", "evidence": "120 distinct, 12% of rows"},
+                       "B": {"role": "category", "confidence": "high", "evidence": "4 distinct"},
+                       "C": {"role": "other", "confidence": "low", "evidence": "VARCHAR(2000), no rule fits"},
+                       "D": {"role": "category", "confidence": "high", "evidence": "1 distinct"}}}
+    profile = {"source": {"profiled_rows": 1000}, "statements": [],
+               "columns": [{"column": "A", "type": "VARCHAR(40)", "approx_distinct": 120},
+                           {"column": "B", "type": "VARCHAR(10)", "approx_distinct": 4},
+                           {"column": "C", "type": "VARCHAR(2000)", "approx_distinct": 900, "avg_length": 140.5},
+                           {"column": "D", "type": "DECIMAL(18,0)", "approx_distinct": 1}]}
     return Draft(doc, profile)
 
 
@@ -65,14 +68,16 @@ class ReviewTest(unittest.TestCase):
         self.assertIn("category", guide)
         self.assertIn("leave", guide)
         explanation = review.explanations()
-        self.assertIn("120", explanation["A"])
-        self.assertIn("4", explanation["B"])
-        self.assertIn("constant", explanation["D"])
+        self.assertIn("120 distinct", explanation["A"])
+        self.assertIn("4 distinct", explanation["B"])
+        self.assertIn("No notebook role: the rules call it category (1 distinct)", explanation["D"])
 
-    def test_close_alternatives_are_marked_for_review(self):
+    def test_low_confidence_and_sensitive_columns_are_marked_for_review(self):
         proposal = draft()
-        proposal.doc["evidence"]["category"]["runner_up"] = {"column": "C", "score": 0.9}
-        self.assertIn("Close alternative", RoleReview(proposal, object()).explanations()["B"])
+        self.assertIn("Low confidence", RoleReview(proposal, object()).explanations()["A"])
+        self.assertNotIn("Low confidence", RoleReview(proposal, object()).explanations()["B"])
+        proposal.doc["columns"]["C"].update(role="identifier", sensitive=True)
+        self.assertIn("never charted, grouped or sent to a model", RoleReview(proposal, object()).explanations()["C"])
 
     def test_corrections_approve_without_editing_a_file(self):
         review = RoleReview(draft(), object())
@@ -81,21 +86,22 @@ class ReviewTest(unittest.TestCase):
             review.dataset()
         with mock.patch.object(Draft, "approve", autospec=True, side_effect=approve_as_dict):
             result = review.approve({"A": "entity", "B": None, "C": "text", "D": None})
-        self.assertEqual(result["roles"]["text"][0]["column"], "C")
-        self.assertEqual(result["evidence"]["entity"]["score"], 0.8)
-        self.assertIn("category", [entry["role"] for entry in result["missing"]])
+        self.assertEqual((result["slots"]["text"], result["slots"]["entity"], result["slots"]["category"]), ("C", "A", None))
+        self.assertEqual("no single unique column", result["slot_evidence"]["key"])
+        self.assertIn("category", result["slot_evidence"])
         self.assertIs(review.dataset(), result)
 
     def test_two_columns_cannot_claim_a_single_role(self):
         with self.assertRaisesRegex(ValueError, "category role has two columns"):
             RoleReview(draft(), object()).approve({"A": "category", "B": "category"})
 
-    def test_labels_carry_the_evidence_and_the_runner_up(self):
-        labels = RoleReview(draft(), object()).labels()
-        self.assertEqual(labels["A"], ("VARCHAR(40), null 0.0%, 120 distinct, score 0.8", "runner-up for entity: C (0.5)"))
-        self.assertEqual(labels["B"], ("VARCHAR(10), null 1.5%, 4 distinct, score 0.9", ""))
-        self.assertEqual(labels["C"], ("VARCHAR(2000), null 20.0%, 900 distinct, avg len 140.5", ""))   # from the profile
-        self.assertEqual(labels["D"], ("DECIMAL(18,0), null 0.0%, 1 distinct; excluded: constant", ""))
+    def test_labels_carry_the_type_role_confidence_and_evidence(self):
+        proposal = draft()
+        proposal.doc["columns"]["B"]["note"] = "The product line as filed."
+        labels = RoleReview(proposal, object()).labels()
+        self.assertEqual(labels["A"], ("VARCHAR(40), category (low confidence): 120 distinct, 12% of rows", ""))
+        self.assertEqual(labels["B"], ("VARCHAR(10), category (high confidence): 4 distinct", "The product line as filed."))
+        self.assertEqual(labels["C"], ("VARCHAR(2000), other (low confidence): VARCHAR(2000), no rule fits", ""))
         self.assertEqual(role_picker.evidence_summary({"type": "DATE", "null_rate": 0.1, "span_days": 400, "distinct": 9}),
                          "DATE, null 10.0%, span 400 d")
 
@@ -118,7 +124,7 @@ class ReviewTest(unittest.TestCase):
         self.assertEqual(dropdowns[0]["options"][0], ("—", None))
         html = [w for w in box.args[0] if type(w).__name__ == "VBox"]
         self.assertEqual(len(html), 4, "every column has its note under the dropdown")
-        self.assertIn("runner-up for entity: C (0.5)", html[0].args[0][1].args[0])
+        self.assertIn("category (low confidence): 120 distinct", html[0].args[0][1].args[0])
         self.assertEqual(type(box.args[0][-2]).__name__, "Button")
 
 
@@ -165,7 +171,7 @@ class HeadlessRuleTest(unittest.TestCase):
         Draft.approve.assert_not_called()
         self.assertEqual(review.dataset(), "the draft as a dataset")
         raw = json.loads(role_picker.checked.call_args.args[1])
-        self.assertEqual((raw["status"], raw["roles"]["category"]["column"]), ("draft", "B"))
+        self.assertEqual((raw["status"], raw["slots"]["category"]), ("draft", "B"))
 
     def test_nothing_approved_yet_stays_a_draft(self):
         review = RoleReview(draft(), object())
@@ -181,12 +187,12 @@ class HeadlessRuleTest(unittest.TestCase):
         self.assertEqual(review.headless, "approved")
         self.assertIn("force: the headless run approves", out)
         Draft.approve.assert_called_once()
-        self.assertEqual(review.dataset()["roles"]["entity"]["column"], "A")
+        self.assertEqual(review.dataset()["slots"]["entity"], "A")
 
     def test_approved_roles_reads_the_store_then_the_shipped_descriptor(self):
         with mock.patch.dict(os.environ, {"EXAKIT_NB_DATASETS": str(ROOT / "data" / "datasets")}):
-            roles, version = role_picker.approved_roles("pharma_trials")
-            self.assertEqual((roles["entity"], version), ("LEAD_SPONSOR", 1))
+            roles, version = role_picker.approved_roles("esophageal_posts")
+            self.assertEqual((roles["entity"], roles["label"], version), ("SOURCE_DOMAIN", "IS_NEGATIVE", 1))
             self.assertEqual(role_picker.approved_roles("no_such_set"), (None, None))
 
 
@@ -240,7 +246,7 @@ class MarimoTest(unittest.TestCase):
         roles, button = review.elements["roles"], review.elements["approve"]
         self.assertEqual(list(roles.elements), ["A", "B", "C", "D"])
         self.assertEqual([d.kwargs["value"] for d in roles.elements.values()], ["entity", "category", "—", "—"])
-        self.assertIn("runner-up for entity: C (0.5)", roles.elements["A"].kwargs["label"])
+        self.assertIn("category (low confidence)", roles.elements["A"].kwargs["label"])
         self.assertEqual(roles.elements["A"].kwargs["options"]["—"], None)
         self.assertEqual(button.kwargs["label"], "Approve descriptor")
 
@@ -254,8 +260,8 @@ class MarimoTest(unittest.TestCase):
         review.value = {"roles": {"A": "entity", "B": None, "C": "text", "D": None}, "approve": True}
         with mock.patch.object(Draft, "approve", autospec=True, side_effect=approve_as_dict):
             result = review.dataset()
-        self.assertEqual(result["roles"]["text"][0]["column"], "C")
-        self.assertNotIn("category", result["roles"])
+        self.assertEqual(result["slots"]["text"], "C")
+        self.assertIsNone(result["slots"]["category"])
         review.value = {"roles": {"A": "entity", "B": None, "C": "text", "D": None}, "approve": False}
         self.assertIs(review.dataset(), result, "a later change of a dropdown keeps the approval")
 
@@ -301,10 +307,10 @@ class WorkflowLogTest(unittest.TestCase):
                 review = review_roles(object(), LoadedTable("example", TABLE, Path("not-a-file")))
                 review.approve()
         kinds = [e["kind"] for e in self.events(wid)]
-        self.assertEqual(kinds, ["start", "describe.draft", "describe.approve"])
-        drafted, approved = self.events(wid)[1:]
-        self.assertEqual((drafted["descriptor_id"], drafted["roles"]["entity"], drafted["missing"]), ("example", "A", ["date"]))
-        self.assertEqual((approved["unchanged"], approved["roles"]["category"]), (False, "B"))
+        self.assertEqual(kinds, ["start", "describe.draft"])             # the approval line is Draft.approve's own
+        drafted = self.events(wid)[1]
+        self.assertEqual((drafted["descriptor_id"], drafted["roles"]["entity"]), ("example", "A"))
+        self.assertEqual(["date", "label", "text"], drafted["missing"])
 
 
 class OpenByNameTest(unittest.TestCase):
@@ -312,10 +318,10 @@ class OpenByNameTest(unittest.TestCase):
     beside it is loaded into MY_DATA.<STEM>, profiled and its draft saved beside it."""
 
     def test_an_approved_dataset_is_settled_with_nothing_to_review(self):
-        ds = types.SimpleNamespace(id="pharma_trials", fact_table="PHARMA.PHARMA_TRIALS", status="approved", version=1)
+        ds = types.SimpleNamespace(id="esophageal_posts", fact_table="ESOPHAGEAL.ESOPHAGEAL_POSTS", status="approved", version=1)
         with mock.patch.object(role_picker, "dataset", return_value=ds), mock.patch.object(role_picker, "describe") as profiled, \
                 redirect_stdout(io.StringIO()) as out:
-            review = review_roles(object(), "pharma_trials")
+            review = review_roles(object(), "esophageal_posts")
         profiled.assert_not_called()
         self.assertIn("v1 is approved: nothing to review", out.getvalue())
         self.assertIs(review.dataset(), ds)

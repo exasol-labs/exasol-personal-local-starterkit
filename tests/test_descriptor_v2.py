@@ -19,6 +19,7 @@ from pathlib import Path
 from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "setup" / "lib"))
 sys.path.insert(0, str(ROOT / "notebook" / "package"))
 sys.path.insert(0, str(ROOT))
 
@@ -92,13 +93,15 @@ class ReaderTest(unittest.TestCase):
         d = rules.parse_descriptor(V1 + "source: crm\n")
         self.assertEqual((d.source, d.live_source), ("crm", "crm"))
 
-    def test_the_shipped_descriptors_are_version_2_approved_by_the_kit(self):
-        for name in ("pharma_trials", "banking_complaints"):
+    def test_the_shipped_descriptors_are_role_per_column_approved_by_the_kit(self):
+        for name in ("esophageal_posts", "banking_complaints", "bank_marketing"):
             with self.subTest(dataset=name):
                 d = rules.read_descriptor(ROOT / "data" / "datasets" / name)
                 self.assertEqual((d.schema_version, d.version, d.status, d.owner, d.drafted_by, d.source),
-                                 (2, 1, "approved", "kit", "shipped", name))
-                self.assertEqual((d.digest, d.created, d.live_source), (None, "2026-10-27T00:00:00Z", None))
+                                 (3, 1, "approved", "kit", "shipped", name))
+                self.assertEqual((d.created, d.live_source), ("2026-11-03T00:00:00Z", None))
+                self.assertTrue(d.digest.startswith("sha256:"))
+                self.assertTrue(d.slots["key"] and d.slots["target"])
 
     def test_a_valid_version_2_file_carries_its_record(self):
         d = rules.parse_descriptor(V2)
@@ -112,7 +115,7 @@ class ReaderTest(unittest.TestCase):
         self.assertEqual(d.column("label").column, "ALARM")
 
     def test_a_version_2_source_names_what_the_data_is(self):
-        for source, live in (("vs:SALES_DB", "SALES_DB"), ("pharma_trials", None), ('"file:/x/y.csv"', None)):
+        for source, live in (("vs:SALES_DB", "SALES_DB"), ("esophageal_posts", None), ('"file:/x/y.csv"', None)):
             with self.subTest(source=source):
                 d = rules.parse_descriptor(V2.replace('source: "file:/data/readings.csv"', f"source: {source}"))
                 self.assertEqual(d.live_source, live)
@@ -197,8 +200,8 @@ class ResolutionTest(unittest.TestCase):
         patcher = mock.patch.dict(os.environ, {"EXAKIT_HOME": self.home.name, "EXAKIT_NB_DATASETS": str(ROOT / "data" / "datasets")})
         patcher.start()
         self.addCleanup(patcher.stop)
-        self.pharma = ["PHARMA.PHARMA_TRIALS." + c for c in ("LEAD_SPONSOR", "PHASE", "START_DATE", "TERMINATED", "BRIEF_SUMMARY",
-                                                           "ELIGIBILITY_CRITERIA", "NCT_ID")]
+        self.posts = ["ESOPHAGEAL.ESOPHAGEAL_POSTS." + c for c in ("POST_ID", "CREATED_TIME", "SOCIAL_NETWORK", "SOURCE_DOMAIN",
+                                                                  "IS_NEGATIVE", "TITLE", "MESSAGE")]
 
     def store(self, id: str, versions: dict[int, str], current: int | None) -> Path:
         folder = store.descriptor_store_dir(id)
@@ -209,46 +212,59 @@ class ResolutionTest(unittest.TestCase):
             (folder / "current").write_text(f"{current}\n", encoding="utf-8")
         return folder
 
-    def shipped_as(self, version: int, status: str, entity: str = "LEAD_SPONSOR") -> str:
-        text = (ROOT / "data" / "datasets" / "pharma_trials" / "descriptor.yaml").read_text(encoding="utf-8")
-        return text.replace("version: 1", f"version: {version}").replace("status: approved", f"status: {status}") \
-                   .replace("owner: kit", "owner: dana").replace("column: LEAD_SPONSOR", f"column: {entity}")
+    def shipped_as(self, version: int, status: str, entity: str = "SOURCE_DOMAIN") -> str:
+        """A schema_version 2 descriptor of the Esophageal table, as an older kit stored it under descriptors/<id>/."""
+        t = "ESOPHAGEAL.ESOPHAGEAL_POSTS"
+        return (f"schema_version: 2\nid: esophageal_posts\nfact_table: {t}\nsource: esophageal_posts\nversion: {version}\n"
+                f"status: {status}\nowner: dana\ncreated: 2026-10-27T00:00:00Z\ndrafted_by: user\nroles:\n"
+                f"  entity: {{table: {t}, column: {entity}}}\n  category: {{table: {t}, column: SOCIAL_NETWORK}}\n"
+                f"  date: {{table: {t}, column: CREATED_TIME}}\n  label: {{table: {t}, column: IS_NEGATIVE}}\n"
+                f"  text: [{{table: {t}, column: MESSAGE}}]\n")
 
     def test_the_store_lives_under_exakit_home(self):
         self.assertEqual(store.kit_home(), Path(self.home.name))
-        self.assertEqual(store.descriptor_store_dir("pharma_trials"), Path(self.home.name) / "descriptors" / "pharma_trials")
+        self.assertEqual(store.descriptor_store_dir("esophageal_posts"), Path(self.home.name) / "descriptors" / "esophageal_posts")
         with self.assertRaises(ValueError):
             store.descriptor_store_dir("../etc")
         with mock.patch.dict(os.environ, {"EXAKIT_HOME": ""}):
             self.assertEqual(store.kit_home(), Path.home() / ".exasol-starter-kit")
 
     def test_nothing_stored_falls_back_to_the_shipped_file(self):
-        ds = exakit_nb.dataset(FakeConn(self.pharma), "pharma_trials")
+        ds = exakit_nb.dataset(FakeConn(self.posts), "esophageal_posts")
         self.assertEqual(ds.descriptor_origin, "shipped")
-        self.assertEqual(ds.descriptor_path, ROOT / "data" / "datasets" / "pharma_trials" / "descriptor.yaml")
+        self.assertEqual(ds.descriptor_path, ROOT / "data" / "datasets" / "esophageal_posts" / "descriptor.yaml")
         self.assertEqual((ds.version, ds.status, ds.owner), (1, "approved", "kit"))
-        self.assertEqual(store.list_versions("pharma_trials"), [])
-        self.assertIsNone(store.current_version("pharma_trials"))
+        self.assertEqual(store.list_versions("esophageal_posts"), [])
+        self.assertIsNone(store.current_version("esophageal_posts"))
 
     def test_the_stores_current_version_wins_over_the_shipped_file(self):
-        folder = self.store("pharma_trials", {1: self.shipped_as(1, "approved"), 2: self.shipped_as(2, "approved", "NCT_ID"),
+        folder = self.store("esophageal_posts", {1: self.shipped_as(1, "approved"), 2: self.shipped_as(2, "approved", "TITLE"),
                                               3: self.shipped_as(3, "draft")}, current=2)
-        ds = exakit_nb.dataset(FakeConn(self.pharma), "pharma_trials")
+        ds = exakit_nb.dataset(FakeConn(self.posts), "esophageal_posts")
         self.assertEqual((ds.descriptor_origin, ds.descriptor_path), ("store", folder / "v2.yaml"))
-        self.assertEqual((ds.version, ds.owner, ds.col("entity")), (2, "dana", "NCT_ID"))
-        self.assertEqual(store.list_versions("pharma_trials"), [1, 2, 3])
-        self.assertEqual(store.current_version("pharma_trials"), 2)
-        self.assertEqual(store.current_descriptor("pharma_trials"), folder / "v2.yaml")
+        self.assertEqual((ds.version, ds.owner, ds.col("entity")), (2, "dana", "TITLE"))
+        self.assertEqual(store.list_versions("esophageal_posts"), [1, 2, 3])
+        self.assertEqual(store.current_version("esophageal_posts"), 2)
+        self.assertEqual(store.current_descriptor("esophageal_posts"), folder / "v2.yaml")
 
     def test_a_store_without_current_or_with_a_gone_version_is_skipped(self):
-        folder = self.store("pharma_trials", {1: self.shipped_as(1, "approved")}, current=None)
-        self.assertEqual(exakit_nb.dataset(FakeConn(self.pharma), "pharma_trials").descriptor_origin, "shipped")
+        folder = self.store("esophageal_posts", {1: self.shipped_as(1, "approved")}, current=None)
+        self.assertEqual(exakit_nb.dataset(FakeConn(self.posts), "esophageal_posts").descriptor_origin, "shipped")
         (folder / "current").write_text("7\n", encoding="utf-8")
-        self.assertIsNone(store.current_descriptor("pharma_trials"))
-        self.assertEqual(exakit_nb.dataset(FakeConn(self.pharma), "pharma_trials").descriptor_origin, "shipped")
+        self.assertIsNone(store.current_descriptor("esophageal_posts"))
+        self.assertEqual(exakit_nb.dataset(FakeConn(self.posts), "esophageal_posts").descriptor_origin, "shipped")
         (folder / "current").write_text("latest\n", encoding="utf-8")
-        self.assertIsNone(store.current_version("pharma_trials"))
-        self.assertEqual(store.list_versions("pharma_trials"), [1])
+        self.assertIsNone(store.current_version("esophageal_posts"))
+        self.assertEqual(store.list_versions("esophageal_posts"), [1])
+
+    def test_the_role_per_column_store_wins_over_the_shipped_file(self):
+        shipped = (ROOT / "data" / "datasets" / "esophageal_posts" / "descriptor.yaml").read_text(encoding="utf-8")
+        folder = Path(self.home.name) / "descriptors" / "ESOPHAGEAL.ESOPHAGEAL_POSTS"
+        folder.mkdir(parents=True)
+        (folder / "current.yaml").write_text(shipped.replace('owner: "kit"', 'owner: "dana"').replace("version: 1", "version: 2"))
+        ds = exakit_nb.dataset(FakeConn(self.posts), "esophageal_posts")
+        self.assertEqual((ds.descriptor_origin, ds.descriptor_path, ds.version, ds.owner),
+                         ("store", folder / "current.yaml", 2, "dana"))
 
     def test_a_path_given_wins_over_the_store(self):
         self.store("sensor_readings", {1: V2}, current=1)
@@ -267,7 +283,7 @@ class ResolutionTest(unittest.TestCase):
         with self.assertRaises(ValueError) as caught:
             exakit_nb.dataset(FakeConn(), "no_such_set")
         self.assertIn("not approved in the kit's store", str(caught.exception))
-        self.assertIn("pharma_trials", str(caught.exception))
+        self.assertIn("esophageal_posts", str(caught.exception))
 
     def test_a_data_file_reads_the_descriptor_beside_it(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -338,77 +354,51 @@ class GatingTest(unittest.TestCase):
 
 class ApproveFlowTest(unittest.TestCase):
     """AC-DS2.5 end to end in a notebook: describe() -> save() is a draft the training step refuses; approve() writes
-    the store's version 1 and hands back an approved Dataset."""
-
-    class FlowConn:
-        """The service's fake (the profile, the digest, the comments) behind the Dataset's own two statements."""
-
-        def __init__(self, inner):
-            self.inner = inner
-
-        def execute(self, statement):
-            if statement.startswith("SELECT 'EXAKIT_NB_COLUMNS'"):
-                return FakeResult([("EXAKIT_NB_COLUMNS",), *[(f"LAB.READINGS.{n}",) for n, _t in self.inner.columns]])
-            if statement.startswith("SELECT DISTINCT CAST("):
-                return FakeResult([("0",), ("1",)])
-            return self.inner.execute(statement)
-
-        def close(self):
-            pass
+    the store's version 1, publishes the view - never a comment on the user's own table - and hands back an approved
+    Dataset; approving again writes nothing."""
 
     def test_a_draft_is_refused_until_approve_and_then_accepted(self):
-        from tests.test_describe_service import FakeConn, Profiles
+        from tests.test_describe_service import Database
+        from tests.test_descriptor_flow import COLUMNS, rows
+        from descriptor import profile as profiling
 
         with tempfile.TemporaryDirectory() as home, mock.patch.dict(os.environ, {
-                "EXAKIT_HOME": home, "EXAKIT_DESCRIPTOR_OWNER": "dana", "EXAKIT_MODEL_ID": "", "EXAKIT_PROVIDER_BASE_URL": ""}):
-            conn = self.FlowConn(FakeConn(Profiles.COLUMNS, Profiles.rows()))
-            draft = exakit_nb.describe("LAB.READINGS", conn=conn, id="readings")
-            path = draft.save(Path(home) / "readings.yaml")
+                "EXAKIT_HOME": home, "EXAKIT_DESCRIPTOR_OWNER": "dana", "EXAKIT_MODEL_ID": "", "EXAKIT_PROVIDER_BASE_URL": "",
+                "EXAKIT_NB_KIT": str(ROOT), "EXAKIT_MCP_READER": "MCP_READONLY"}):
+            conn = Database(COLUMNS, rows())
+            with mock.patch.object(profiling, "profile", side_effect=lambda c, t, *, run=None: profiling.profile_rows(COLUMNS, rows(), t)):
+                draft = exakit_nb.describe("SUPPORT.TICKETS", conn=conn, id="support_tickets")
+            draft.slot(target="ESCALATED")
+            path = draft.save(Path(home) / "tickets.yaml")
             ds = exakit_nb.dataset(conn, path)
-            self.assertEqual((ds.status, ds.version, ds.descriptor_origin, ds.table_digest), ("draft", 1, "explicit", None))
+            self.assertEqual((ds.status, ds.version, ds.descriptor_origin), ("draft", 1, "explicit"))
             with self.assertRaises(DescriptorNotApproved) as caught:
                 ds.require_approved("training")
-            self.assertEqual(str(caught.exception), "training needs an approved descriptor: readings is a draft (v1). Approve it: in the "
-                                                    "quickstart run approve(), or: exakit describe readings --approve")
-            self.assertEqual(store.list_versions("readings"), [])
+            self.assertIn("training needs an approved descriptor: support_tickets is a draft (v1)", str(caught.exception))
             out = io.StringIO()
             with redirect_stdout(out):
                 approved = draft.approve(conn=conn)
             self.assertIsInstance(approved, Dataset)
-            self.assertEqual((approved.status, approved.version, approved.owner, approved.descriptor_origin, approved.id),
-                             ("approved", 1, "dana", "store", "readings"))
+            self.assertEqual((approved.status, approved.version, approved.owner, approved.id), ("approved", 1, "dana", "support_tickets"))
             self.assertIs(approved.require_approved("training"), approved)
-            self.assertRegex(approved.table_digest, r"^sha256:[0-9a-f]{64}$")
-            self.assertEqual(approved.current_table_digest(conn), approved.table_digest)
-            self.assertEqual((store.list_versions("readings"), store.current_version("readings")), ([1], 1))
-            self.assertEqual(approved.descriptor_path, store.current_descriptor("readings"))
-            self.assertEqual(approved.evidence["entity"]["column"], "NAME", "the draft's evidence travels into the approved version")
-            self.assertIn("Approved readings v1 (owner dana, digest sha256:", out.getvalue())
-            self.assertIn('COMMENT ON COLUMN "LAB"."READINGS"."NAME" IS \'role: entity (starter kit, descriptor readings v1)\'', conn.inner.statements)
-            self.assertEqual((draft.doc["status"], draft.doc["version"]), ("approved", 1))
-            self.assertEqual(exakit_nb.dataset(conn, "readings").status, "approved", "the id now resolves to the store")
+            self.assertIn("Approved SUPPORT.TICKETS v1 (owner dana)", out.getvalue())
+            self.assertFalse([sql for sql in conn.sent if sql.startswith("COMMENT ON")], "the user's own table is never commented")
+            self.assertEqual(exakit_nb.dataset(conn, "support_tickets").status, "approved", "the id now resolves to the store")
             self.assertEqual(exakit_nb.dataset(conn, path).status, "draft", "the file written by save() stays a draft")
             with redirect_stdout(out):
                 again = draft.approve(conn=conn)
-            self.assertEqual((again.version, store.list_versions("readings")), (1, [1]))
-            self.assertIn("v1 is already approved with these roles", out.getvalue())
-            changed = conn.inner.rows[3]
-            changed["KIND"] = "steam"
-            self.assertNotEqual(approved.current_table_digest(conn), approved.table_digest, "a changed row changes the digest")
+            self.assertEqual(again.version, 1)
+            self.assertIn("already says this; nothing was written", out.getvalue())
 
     def test_save_keeps_a_number_like_value_a_string(self):
-        doc = {"schema_version": 2, "id": "readings", "fact_table": "LAB.READINGS", "version": 1, "status": "draft", "owner": "dana",
-               "created": "2026-10-27T10:12:03Z", "drafted_by": "profile", "digest": None,
-               "roles": {"entity": {"table": "LAB.READINGS", "column": "DEVICE"}, "category": {"table": "LAB.READINGS", "column": "KIND"},
-                         "date": {"table": "LAB.READINGS", "column": "TAKEN_ON"}, "label": {"table": "LAB.READINGS", "column": "ALARM"},
-                         "text": [{"table": "LAB.READINGS", "column": "NOTE"}]},
-               "evidence": {"label": {"column": "ALARM", "top": [{"value": "0", "share": 0.8}, {"value": "1", "share": 0.2}], "score": 1.0}}}
-        with tempfile.TemporaryDirectory() as folder:
-            path = exakit_nb.Draft(doc).save(Path(folder) / "d.yaml")
-            text = path.read_text(encoding="utf-8")
-        self.assertIn('top: [{value: "0", share: 0.8}, {value: "1", share: 0.2}]', text)
-        self.assertEqual(rules.load_yaml(text)["evidence"]["label"]["top"][0]["value"], "0")
-        self.assertEqual(rules.parse_descriptor(text).evidence["label"]["top"][1], {"value": "1", "share": 0.2})
+        doc = {"descriptor": 1, "dataset": "readings", "source": {"kind": "local", "object": "LAB.READINGS", "schema_digest": None,
+                                                                  "profiled_rows": 5},
+               "version": 1, "status": "draft", "grain": "", "slots": {"key": None, "time": None, "text": None, "target": "ALARM"},
+               "columns": {"ALARM": {"role": "flag", "confidence": "high", "evidence": "0"}}}
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {"EXAKIT_NB_KIT": str(ROOT)}):
+            text = exakit_nb.Draft(doc).save(Path(folder) / "d.yaml").read_text(encoding="utf-8")
+        self.assertIn('"ALARM": {role: "flag", confidence: "high", evidence: "0"}', text)
+        self.assertEqual(rules.load_yaml(text)["columns"]["ALARM"]["evidence"], "0")
 
 
 class WriterTest(unittest.TestCase):

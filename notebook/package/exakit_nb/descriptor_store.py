@@ -1,12 +1,14 @@
-"""Where a user's approved descriptors live: ``~/.exasol-starter-kit/descriptors/<id>/`` (the kit's home, EXAKIT_HOME
+"""Where a user's approved descriptors live. Today: ``~/.exasol-starter-kit/descriptors/<SCHEMA>.<TABLE>/current.yaml``
+(setup/lib/descriptor/store.py writes it; table_descriptor() finds it by its dataset id). Before that, and still read:
+``~/.exasol-starter-kit/descriptors/<id>/`` (the kit's home, EXAKIT_HOME
 when set) holds one ``v<n>.yaml`` per version and ``current``, a text file with the number of the approved version.
 Read-only here: ``exakit describe <id> --approve`` and ``Draft.approve()`` write versions; ``Dataset`` reads the
 current one before it falls back to a shipped descriptor.
 
-    descriptor_store_dir("pharma_trials")   # ~/.exasol-starter-kit/descriptors/pharma_trials
-    list_versions("pharma_trials")          # [1, 2]: every v<n>.yaml there, in order
-    current_version("pharma_trials")        # 2, or None when nothing is approved there
-    current_descriptor("pharma_trials")     # the v2.yaml path, or None
+    descriptor_store_dir("esophageal_posts")   # ~/.exasol-starter-kit/descriptors/esophageal_posts
+    list_versions("esophageal_posts")          # [1, 2]: every v<n>.yaml there, in order
+    current_version("esophageal_posts")        # 2, or None when nothing is approved there
+    current_descriptor("esophageal_posts")     # the v2.yaml path, or None
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ import os
 import re
 from pathlib import Path
 
-__all__ = ["current_descriptor", "current_version", "descriptor_store_dir", "kit_home", "list_versions"]
+__all__ = ["current_descriptor", "current_version", "descriptor_store_dir", "kit_home", "list_versions", "table_descriptor"]
 
 FOLDER = "descriptors"
 CURRENT = "current"
@@ -57,9 +59,28 @@ def current_version(id: str) -> int | None:
 
 
 def current_descriptor(id: str) -> Path | None:
-    """The approved version's file (``v<n>.yaml`` named by ``current``), or None when there is none or it is gone."""
+    """The approved version's file (``v<n>.yaml`` named by ``current``), else the role-per-column store's
+    ``<SCHEMA>.<TABLE>/current.yaml`` whose dataset is ``id``; None when there is neither."""
     number = current_version(id)
-    if number is None:
+    if number is not None:
+        path = descriptor_store_dir(id) / f"v{number}.yaml"
+        if path.is_file():
+            return path
+    return table_descriptor(id)
+
+
+def table_descriptor(id: str) -> Path | None:
+    """The role-per-column store (setup/lib/descriptor/store.py): ``descriptors/<SCHEMA>.<TABLE>/current.yaml`` naming
+    ``dataset: <id>``; the most recently approved one when two tables carry the same id."""
+    root = kit_home() / FOLDER
+    if not isinstance(id, str) or not _ID.match(id) or not root.is_dir():
         return None
-    path = descriptor_store_dir(id) / f"v{number}.yaml"
-    return path if path.is_file() else None
+    found = []
+    for path in root.glob("*.*/current.yaml"):
+        try:
+            head = path.read_text(encoding="utf-8")[:2000]
+        except OSError:
+            continue
+        if re.search(rf'^dataset:\s*"?{re.escape(id)}"?\s*$', head, re.M):
+            found.append(path)
+    return max(found, key=lambda p: p.stat().st_mtime) if found else None

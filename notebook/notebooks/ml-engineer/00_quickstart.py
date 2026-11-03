@@ -9,7 +9,7 @@
 # %% [markdown]
 # # Prepare a trustworthy place to train
 #
-# **Dataset:** `pharma_trials` by default; Banking or your own described file can follow. **How long:** about five minutes once the required runtimes are installed.
+# **Dataset:** `esophageal_posts` by default; Banking or your own described file can follow. **How long:** about five minutes once the required runtimes are installed.
 #
 # The Data Scientist has identified a question and a column map. Your job is to turn that work into a repeatable training and scoring flow. Start by checking the environment before interpreting any model metric.
 #
@@ -91,7 +91,7 @@ bucket_ok = nb.check_bucket(conn)
 # %% [markdown]
 # ## Confirm the outcome before teaching a model
 #
-# Count the records and positive outcomes in each category. Pharma's label is trial termination; Banking's is monetary relief. Check that this matches the question handed to you.
+# Count the records and positive outcomes in each category. Esophageal's label is a negative post; Banking's is monetary relief. Check that this matches the question handed to you.
 #
 # **Read the result:** a positive label means the chosen outcome occurred. It does not mean that the outcome is desirable. The query shows which groups and class balance the later training recipe will encounter.
 #

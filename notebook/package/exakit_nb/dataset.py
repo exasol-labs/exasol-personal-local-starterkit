@@ -1,7 +1,7 @@
 """A dataset the notebooks run on: its descriptor read, validated by the kit's own rules, held against the database,
 and the roles turned into SQL names, so one notebook runs unchanged on any dataset whose descriptor is valid.
 
-    ds = nb.dataset(conn, "pharma_trials")             # a dataset the kit ships, by id
+    ds = nb.dataset(conn, "esophageal_posts")             # a dataset the kit ships, by id
     ds = nb.dataset(conn, "~/data/descriptor.yaml")    # a table already in the database, described by a descriptor file
     ds = nb.dataset(conn, "~/data/sales.csv")          # your own CSV, Parquet or JSON file, its descriptor beside it
     ds.col("label"), ds.text_sql(), ds.fact_table, ds.source
@@ -15,7 +15,8 @@ names a table or column the database lacks, stops the notebook with the reason.
 
 Which descriptor a name resolves to, in order: a path given (a file, or a folder holding descriptor.yaml); for a
 data file of your own, ``<name>.descriptor.yaml`` beside it; for an id, the approved version in the kit's store
-(``~/.exasol-starter-kit/descriptors/<id>/current``, descriptor_store), then the descriptor the kit ships under
+(``~/.exasol-starter-kit/descriptors/<SCHEMA>.<TABLE>/current.yaml``, or an older kit's ``descriptors/<id>/current``;
+descriptor_store), then the descriptor the kit ships under
 ``data/datasets/<id>/``. ``ds.descriptor_path`` and ``ds.descriptor_origin`` say which one was used.
 """
 
@@ -175,12 +176,16 @@ class Dataset:
         return self.descriptor.column(role).column
 
     def text_cols(self) -> list[str]:
-        """The text columns, in the descriptor's order."""
-        return [ref.column for ref in self.descriptor.roles["text"]]
+        """The text columns, in the descriptor's order; none when no column plays the text role."""
+        return [ref.column for ref in self.descriptor.roles.get("text", ())]
 
     def text_sql(self) -> str:
-        """One SQL expression joining the text columns with a space, NULLs as empty."""
+        """One SQL expression joining the text columns with a space, NULLs as empty; a dataset without text raises
+        ValueError with the descriptor's reason."""
         parts = [f"COALESCE({c}, '')" for c in self.text_cols()]
+        if not parts:
+            reason = self.descriptor.missing_reason("text") or "no column plays the text role"
+            raise ValueError(f"{self.id} has no text column: {reason}.")
         return parts[0] if len(parts) == 1 else " || ' ' || ".join(parts)
 
     def roles(self) -> list[tuple[str, str]]:

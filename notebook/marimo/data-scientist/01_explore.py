@@ -16,9 +16,9 @@ def _(mo):
     mo.md(r"""
     # Explore patterns, then prepare a reproducible handoff
 
-    **Dataset:** `pharma_trials` by default; change `DATASET` for `banking_complaints` or your own described file. **How long:** about two minutes, plus time for optional model calls.
+    **Dataset:** `esophageal_posts` by default; change `DATASET` for `banking_complaints` or your own described file. **How long:** about two minutes, plus time for optional model calls.
 
-    You have agreed what the columns mean. Now investigate where outcomes are concentrated, whether they change over time and whether a small model finds useful patterns. Pharma compares sponsors and phases; Banking compares companies and products.
+    You have agreed what the columns mean. Now investigate where outcomes are concentrated, whether they change over time and whether a small model finds useful patterns. Esophageal compares websites and networks; Banking compares companies and products.
 
     **By the end:** you will have visible SQL, descriptive results, a local baseline model and a handoff the ML Engineer can reproduce. Start with the supplied code, then adapt the questions to your project.
 
@@ -29,7 +29,7 @@ def _(mo):
 
 @app.cell
 def _():
-    DATASET = "pharma_trials"   # or "banking_complaints", or your own file ("~/my-data/transactions.csv", roles beside it)
+    DATASET = "esophageal_posts"   # or "banking_complaints", or your own file ("~/my-data/transactions.csv", roles beside it)
     USE_AI_THEMES = False  # optional LLM summaries; configure your endpoint before enabling
     return DATASET, USE_AI_THEMES
 
@@ -39,7 +39,7 @@ def _(mo):
     mo.md(r"""
     ## Reuse the column map instead of rewriting every query
 
-    Keep `DATASET = "pharma_trials"` for the first run. A sample ID opens its table; a CSV, Parquet or JSON path opens the descriptor saved beside that file. This is how the same analysis can travel between domains.
+    Keep `DATASET = "esophageal_posts"` for the first run. A sample ID opens its table; a CSV, Parquet or JSON path opens the descriptor saved beside that file. This is how the same analysis can travel between domains.
 
     **Do now:** review the suggested meanings and check the label still matches the outcome you want to investigate. Exploration can inspect a draft. The final training handoff, Ask and Share need an approved descriptor.
 
@@ -79,7 +79,7 @@ def _(mo):
     mo.md(r"""
     ## Find the groups worth investigating
 
-    Start with the busiest entities and their categories. For Pharma, compare trial counts and termination shares across sponsors and phases. For Banking, compare complaint counts and monetary-relief shares across companies and products.
+    Start with the busiest entities and their categories. For Esophageal, compare post counts and negative shares across websites and networks. For Banking, compare complaint counts and monetary-relief shares across companies and products.
 
     **Read the result:** `N` is the size of a group; `LABEL_1_PCT` is the percentage with your chosen outcome. A small group with a high percentage deserves different caution from a large group with a stable rate. This is a descriptive comparison, not a causal finding.
 
@@ -168,7 +168,7 @@ def _(mo):
     mo.md(r"""
     ## Try a modest baseline before making a bigger claim
 
-    Can the descriptions and category help distinguish the two outcomes? The next cell fits a small text classifier on your computer. In Pharma the outcome is trial termination; in Banking it is monetary relief.
+    Can the descriptions and category help distinguish the two outcomes? The next cell fits a small text classifier on your computer. In Esophageal the outcome is a negative post; in Banking it is monetary relief.
 
     **Read the result:** ROC AUC measures how well the model ranks the two outcomes; 0.5 is chance-level ranking. A higher score is evidence from this sample, not proof that the model is ready for a real decision or explains causes.
 

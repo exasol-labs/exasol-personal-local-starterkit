@@ -28,7 +28,7 @@ jobs:
           EXAKIT_NOTEBOOK_RUN_OUTPUT: ${{ runner.temp }}/executed-notebooks
         run: |
           if [ "$RESTART_APPROVED" = true ]; then export EXAKIT_NOTEBOOK_ALLOW_RESTART=1; fi
-          for recipe in pharma_trials:none banking_complaints:balanced; do
+          for recipe in esophageal_posts:none banking_complaints:balanced; do
             EXAKIT_NOTEBOOK_DATASETS="${recipe%:*}" EXAKIT_NOTEBOOK_CLASS_WEIGHT="${recipe#*:}" \
               bash tests/notebooks-run.sh \
                 notebook/notebooks/data-scientist/00_quickstart.py \

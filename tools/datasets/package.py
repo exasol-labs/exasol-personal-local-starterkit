@@ -5,7 +5,7 @@ export-ignore): exakit data-load fetches them as one archive per dataset, checks
 then checks every CSV against its own digest (data/README.md, "How a reference dataset reaches the database").
 
     python3 tools/datasets/package.py                      # every reference dataset (each folder with a manifest.json)
-    python3 tools/datasets/package.py pharma_trials        # one; --dist DIR writes the archives there (default: dist/)
+    python3 tools/datasets/package.py esophageal_posts        # one; --dist DIR writes the archives there (default: dist/)
 
 The archive is <id>-<snapshot>.tar.gz and is DETERMINISTIC: the same CSVs give the same bytes, so the digest in the
 manifest is reproducible and a rebuild that changes nothing changes nothing. The members are data/<name>.csv, sorted,

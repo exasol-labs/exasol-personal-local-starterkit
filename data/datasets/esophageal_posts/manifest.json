@@ -1,0 +1,31 @@
+{
+  "id": "esophageal_posts",
+  "source": {
+    "name": "Social-listening export on esophageal cancer (Twitter, web, forums, print and TV, 2019-2022)",
+    "url": "none: an export the kit owner provided, not published anywhere",
+    "file": "Esophageal.xlsx",
+    "sheet": "Stream-Data-1",
+    "sha256": "4685ef6b074c8a8868c68015a25564a9d7df256b045e15386ae37aba550ca0ac",
+    "builder": "tools/datasets/esophageal_posts.py"
+  },
+  "terms": {
+    "url": "none: the export carries no terms; the owner must establish them",
+    "license": "unknown: third-party social media and web posts collected by a social-listening tool",
+    "summary": "The owner must confirm the redistribution terms before release: the posts are other people's content (Twitter's terms in particular restrict redistributing tweets). Personal data is removed as the builder's docstring lists; the text is cut and its handles, links and e-mail addresses replaced.",
+    "confirmed": false
+  },
+  "snapshot": "2026-11-03",
+  "asset": {
+    "file": "esophageal_posts-2026-11-03.tar.gz",
+    "sha256": "128f446b6cfa59d2ef63a84e3cc5d32777108bf398521e775a7e769deeb13a54",
+    "size": 8077149,
+    "tar_sha256": "1f5c0679c5c9b3ea9fe3c0364fe94dae84e985c5f7285281818bd4b364589ef8",
+    "url": "https://github.com/{repo}/releases/download/datasets-esophageal_posts-2026-11-03/esophageal_posts-2026-11-03.tar.gz"
+  },
+  "files": {
+    "data/esophageal_posts.csv": {
+      "rows": 40987,
+      "sha256": "b333fd00c7ec1b8e65da51f999ee3ff6de84dc62bad463cdd7bc5f3275966d5a"
+    }
+  }
+}

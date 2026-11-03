@@ -47,7 +47,7 @@ class PersonaApplyTest(unittest.TestCase):
         self.assertEqual("add", self.manifest.get("persona.source"))
         self.assertEqual(["data-load", "mcp-setup", "marketplace", "mlflow"],
                          [command for command, _, _ in calls])
-        self.assertIn("pharma_trials", calls[0][2]["EXAKIT_DATASETS"])
+        self.assertIn("esophageal_posts", calls[0][2]["EXAKIT_DATASETS"])
         self.assertIn("udf-devkit", calls[2][2]["EXAKIT_MARKETPLACE_ADDONS"])
         self.assertEqual("start", calls[3][1][0])
 
@@ -95,11 +95,11 @@ class PersonaApplyTest(unittest.TestCase):
 
         def query(_prefix, command, _args, _env):
             if command == "status":
-                return {"datasets_loaded": ["pharma_trials"]}
+                return {"datasets_loaded": ["esophageal_posts"]}
             return {"addons": [{"id": "notebook", "installed": True},
                                {"id": "dash-server", "status": "managed outside the kit"}]}
 
-        with patch.dict(os.environ, {"EXAKIT_DATASETS": "pharma_trials,banking_complaints",
+        with patch.dict(os.environ, {"EXAKIT_DATASETS": "esophageal_posts,banking_complaints",
                                      "EXAKIT_MCP_CLIENTS": "skip",
                                      "EXAKIT_MARKETPLACE_ADDONS": "notebook,dash-server,udf-devkit",
                                      "EXAKIT_SKIP_MCP": ""}), \
@@ -110,7 +110,7 @@ class PersonaApplyTest(unittest.TestCase):
         self.assertEqual(["data-load", "marketplace", "mlflow"], [name for name, _ in calls])
         self.assertEqual("banking_complaints", calls[0][1]["EXAKIT_DATASETS"])
         self.assertEqual("udf-devkit", calls[1][1]["EXAKIT_MARKETPLACE_ADDONS"])
-        self.assertIn("Already loaded: Pharma clinical trials", output.getvalue())
+        self.assertIn("Already loaded: Esophageal cancer posts", output.getvalue())
         self.assertIn("Already installed: notebook", output.getvalue())
         self.assertIn("Already available outside the kit: dash-server", output.getvalue())
 

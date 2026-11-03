@@ -25,10 +25,10 @@ reserved words in Exasol, so a model trained on a "text" column takes a paramete
 The training template (train_model.sql, the exasol-mlflow run contract) is rendered from Python only, from the
 handoff's feature view (exakit.nb.read_handoff):
 
-    create = render.render_train(schema="STARTER_KIT", name="TRAIN_PHARMA", features=[f["name"] for f in handoff["input_schema"]],
+    create = render.render_train(schema="STARTER_KIT", name="TRAIN_POSTS", features=[f["name"] for f in handoff["input_schema"]],
                                  label=handoff["label"]["column"], positive=handoff["label"]["positive"], seed=0)
-    select = render.train_sql(schema="STARTER_KIT", name="TRAIN_PHARMA", training_sql=handoff["training_sql"],
-                              run_key="pharma-v1", label=handoff["label"]["column"], features=[...])
+    select = render.train_sql(schema="STARTER_KIT", name="TRAIN_POSTS", training_sql=handoff["training_sql"],
+                              run_key="posts-v1", label=handoff["label"]["column"], features=[...])
     conn.execute(create)
     with exasol_mlflow.start_run(conn, handoff=handoff) as run:
         run.execute(select)

@@ -42,8 +42,8 @@ try {
         (($offered -contains 'data-scientist') -and ($offered -contains 'ml-engineer') -and
          ([array]::IndexOf($offered, 'data-scientist') -lt [array]::IndexOf($offered, 'ml-engineer')))
     Check "no persona: the kit's own samples (default=yes)" "tpch,energy,weather" (@(Invoke-ExakitPersonaService "default-datasets") -join "")
-    Check "data-scientist: Pharma and Banking" "pharma_trials,banking_complaints" (Get-ExakitPersonaValue "data-scientist" "datasets")
-    Check "ml-engineer: Pharma and Banking" "pharma_trials,banking_complaints" (Get-ExakitPersonaValue "ml-engineer" "datasets")
+    Check "data-scientist: Pharma and Banking" "esophageal_posts,banking_complaints" (Get-ExakitPersonaValue "data-scientist" "datasets")
+    Check "ml-engineer: Pharma and Banking" "esophageal_posts,banking_complaints" (Get-ExakitPersonaValue "ml-engineer" "datasets")
     Check "data-scientist: BRD notebook baseline" "notebook" (Get-ExakitPersonaValue "data-scientist" "addons")
     Check "ml-engineer: BRD notebook and UDF baseline" "notebook,udf-devkit" (Get-ExakitPersonaValue "ml-engineer" "addons")
     Write-Host "several personas ticked together are combined by the service:"
@@ -51,12 +51,12 @@ try {
     Check "a known list reads back in the kit's order" "data-scientist,ml-engineer" (Get-ExakitPersona "ml-engineer,data-scientist")
     Check "one unknown among several is not known" "" "$(Get-ExakitPersona 'data-scientist,nope')"
     Clear-Answers; $env:EXAKIT_PERSONA = "data-scientist,ml-engineer"; Set-ExakitPersonaEnv
-    Check "their datasets and add-ons together, each once" "pharma_trials,banking_complaints|all|notebook,udf-devkit" (Answers)
-    Check "each dataset is named with the personas it is for" "both personas" ((Get-ExakitPersonaDatasetHints)["pharma_trials"])
+    Check "their datasets and add-ons together, each once" "esophageal_posts,banking_complaints|all|notebook,udf-devkit" (Answers)
+    Check "each dataset is named with the personas it is for" "both personas" ((Get-ExakitPersonaDatasetHints)["esophageal_posts"])
     Write-Host "the data question (one table) ticks the personas' datasets:"
     function Get-ExakitPendingDatasets { return @([pscustomobject]@{ Id = "tpch"; Label = "TPC-H retail benchmark (~175k rows)" },
-                                                  [pscustomobject]@{ Id = "pharma_trials"; Label = "Pharma clinical trials (ClinicalTrials.gov, ~5k)" }) }
-    $env:EXAKIT_DATASETS_PRESELECT = "pharma_trials"
+                                                  [pscustomobject]@{ Id = "esophageal_posts"; Label = "Pharma clinical trials (ClinicalTrials.gov, ~5k)" }) }
+    $env:EXAKIT_DATASETS_PRESELECT = "esophageal_posts"
     Remove-Item Env:EXAKIT_PERSONA_ACTIVE -ErrorAction SilentlyContinue   # no persona picked: every sample is listed
     New-ExakitDataTable -FinalLabel "Skip"
     $labels = (@($script:UiTable.Rows | ForEach-Object { $_.Label }) -join ";")
@@ -70,7 +70,7 @@ try {
         "Sample datasets;Pharma clinical trials;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - coming soon;Skip~1,2" `
         "$((@($script:UiTable.Rows | ForEach-Object { $_.Label })) -join ';')~$($script:ExakitTableDefaults -join ',')"
     Remove-Item Env:EXAKIT_PERSONA_ACTIVE -ErrorAction SilentlyContinue
-    $env:EXAKIT_DATASETS_PRESELECT = "tpch,pharma_trials"
+    $env:EXAKIT_DATASETS_PRESELECT = "tpch,esophageal_posts"
     New-ExakitDataTable -FinalLabel "Skip"
     Check "datasets covering every dataset row tick the Sample datasets parent too" "1,2,3" ($script:ExakitTableDefaults -join ",")
     $env:EXAKIT_DATASETS_PRESELECT = "none"
@@ -79,9 +79,9 @@ try {
     Remove-Item Env:EXAKIT_DATASETS_PRESELECT -ErrorAction SilentlyContinue
     Write-Host "an explicit answer wins, per variable:"
     Clear-Answers; $env:EXAKIT_PERSONA = "ml-engineer"; Set-ExakitPersonaEnv
-    Check "the persona answers everything left open" "pharma_trials,banking_complaints|all|notebook,udf-devkit" (Answers)
-    Clear-Answers; $env:EXAKIT_PERSONA = "ml-engineer"; $env:EXAKIT_DATASETS = "pharma_trials"; Set-ExakitPersonaEnv
-    Check "EXAKIT_DATASETS wins, the rest stays the persona's" "pharma_trials|all|notebook,udf-devkit" (Answers)
+    Check "the persona answers everything left open" "esophageal_posts,banking_complaints|all|notebook,udf-devkit" (Answers)
+    Clear-Answers; $env:EXAKIT_PERSONA = "ml-engineer"; $env:EXAKIT_DATASETS = "esophageal_posts"; Set-ExakitPersonaEnv
+    Check "EXAKIT_DATASETS wins, the rest stays the persona's" "esophageal_posts|all|notebook,udf-devkit" (Answers)
     Clear-Answers; $env:EXAKIT_PERSONA = "data-scientist"; $env:EXAKIT_LOAD_SAMPLE = "0"; $env:EXAKIT_MARKETPLACE_ADDONS = "none"; Set-ExakitPersonaEnv
     Check "EXAKIT_LOAD_SAMPLE=0 and add-ons none win" "|all|none" (Answers)
     Clear-Answers; $env:EXAKIT_PERSONA = "data-scientist"; $env:EXAKIT_SKIP_MCP = "1"; Set-ExakitPersonaEnv
@@ -99,7 +99,7 @@ try {
     Remove-Item Env:EXAKIT_DATASETS_PRESELECT -ErrorAction SilentlyContinue
     $env:EXAKIT_PERSONA = "data-scientist"
     Invoke-ExakitPersonaFlow -KitRoot $repo -Phase selected
-    Check "picked on screen: the persona's datasets and add-ons are ticked" "pharma_trials,banking_complaints|notebook" "$($env:EXAKIT_DATASETS_PRESELECT)|$($env:EXAKIT_MARKETPLACE_PRESELECT)"
+    Check "picked on screen: the persona's datasets and add-ons are ticked" "esophageal_posts,banking_complaints|notebook" "$($env:EXAKIT_DATASETS_PRESELECT)|$($env:EXAKIT_MARKETPLACE_PRESELECT)"
     foreach ($v in @("EXAKIT_DATASETS_PRESELECT", "EXAKIT_MARKETPLACE_PRESELECT")) { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
     $env:EXAKIT_PERSONA_ACTIVE = "1"
     $note = (Write-ExakitPersonaMarketplaceNote 6>&1 | Out-String)
@@ -123,7 +123,7 @@ try {
     Clear-Answers; $env:EXAKIT_PERSONA = "data-scientist"; Set-ExakitPersonaEnv
     Check "the manifest records the persona" "data-scientist|install" "$(Get-ExakitManifestValue 'persona.id')|$(Get-ExakitManifestValue 'persona.source')"
     Write-Host "the table menu, taken without asking (UI_TABLE_AUTO):"
-    $env:EXAKIT_PERSONA_ACTIVE = "1"; $env:EXAKIT_DATASETS_PRESELECT = "pharma_trials"
+    $env:EXAKIT_PERSONA_ACTIVE = "1"; $env:EXAKIT_DATASETS_PRESELECT = "esophageal_posts"
     New-ExakitDataTable -FinalLabel "Skip"
     $env:UI_TABLE_AUTO = "1"
     $auto = @(Invoke-ExakitTableMenu -Defaults $script:ExakitTableDefaults -ExclusiveIndex $script:ExakitTableRowSkip)

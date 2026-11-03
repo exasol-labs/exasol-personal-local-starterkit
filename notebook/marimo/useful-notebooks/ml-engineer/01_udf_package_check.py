@@ -16,7 +16,7 @@ def _(mo):
     mo.md(r"""
     # Verify the libraries where the model will actually run
 
-    **Dataset:** Pharma or Banking. **How long:** two minutes.
+    **Dataset:** Esophageal or Banking. **How long:** two minutes.
 
     The notebook can import scikit-learn, but the scoring function runs inside Exasol's Python runtime. Check that runtime before debugging a model that depends on missing or incompatible libraries.
 
@@ -31,7 +31,7 @@ def _(mo):
 def _():
     import exakit.nb as nb
 
-    DATASET = "pharma_trials"  # or "banking_complaints"
+    DATASET = "esophageal_posts"  # or "banking_complaints"
     CONTAINER = nb.ml_train.udf_container()
     conn = nb.connect()
     ds = nb.dataset(conn, DATASET).require_approved("UDF package check")

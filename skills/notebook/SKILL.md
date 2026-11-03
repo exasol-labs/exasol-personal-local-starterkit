@@ -79,12 +79,12 @@ df = nb.sql(conn, "SELECT * FROM TPCH.NATION")
 nb.show_sql()                                      # the statement that produced df
 ```
 
-For a dataset with a descriptor (`pharma_trials`, `banking_complaints`, or a
+For a dataset with a descriptor (`esophageal_posts`, `banking_complaints`, or a
 `descriptor.yaml` the user wrote for their own table), the roles become SQL
 names, checked against the database first:
 
 ```python
-ds = nb.dataset(conn, "pharma_trials")             # or a descriptor.yaml path, or a data file with one beside it
+ds = nb.dataset(conn, "esophageal_posts")             # or a descriptor.yaml path, or a data file with one beside it
 nb.sql(conn, f"SELECT {ds.col('category')}, AVG({ds.col('label')}) FROM {ds.fact_table} GROUP BY 1")
 nb.load_own_file("~/data/claims.csv", "MY_DATA.CLAIMS", {"entity": "CUSTOMER", ...})   # CSV, Parquet or JSON
 ```
@@ -172,7 +172,7 @@ exits non-zero when nothing could open. Relay that command to the user.
 
 Use `docs/ACCEPTANCE-REMAINING.md` for the remaining release gates and exact
 service/model test commands. Source notebooks remain the user's starting point.
-For the reference training recipes, Pharma uses `CLASS_WEIGHT = None`; Banking
+For the reference training recipes, Esophageal uses `CLASS_WEIGHT = None`; Banking
 uses `CLASS_WEIGHT = "balanced"`. Record the choice and compare with the same
 held-out baseline. Do not claim that default Banking training beats baseline.
 

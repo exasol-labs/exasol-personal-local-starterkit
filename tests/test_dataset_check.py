@@ -199,7 +199,7 @@ class BuilderTest(unittest.TestCase):
     def test_each_builder_writes_the_tables_and_columns_the_dataset_ships(self):
         import csv
         import importlib
-        for builder in ("pharma_trials", "banking_complaints"):
+        for builder in ("esophageal_posts", "banking_complaints", "bank_marketing"):
             folder = ROOT / "data" / "datasets" / builder
             built = importlib.import_module(builder).TABLES
             schema = dataset_check.tables(folder)
@@ -351,7 +351,7 @@ class ReferenceTest(unittest.TestCase):
         self.assertEqual(found[0], ("1. Question 1?", "SELECT COUNT(*) FROM EDGE_DEMO.EDGE_ITEMS WHERE ITEM_ID > 1"))
 
     def test_the_shipped_reference_datasets_have_ten_questions_each(self):
-        for name in ("pharma_trials", "banking_complaints"):
+        for name in ("esophageal_posts", "banking_complaints", "bank_marketing"):
             with self.subTest(dataset=name):
                 found = dataset_check.example_questions((ROOT / "data" / "datasets" / name / "examples.sql").read_text())
                 self.assertGreaterEqual(len(found), 10)
@@ -359,27 +359,22 @@ class ReferenceTest(unittest.TestCase):
 
 
 class DescriptorDocsTest(unittest.TestCase):
-    """AC-DS2.3: data/README.md documents the descriptor with one example per reference dataset and one for a user's
-    own file - and every example there is a descriptor that validates, the reference ones the very files shipped."""
+    """AC-DS2.3: data/README.md documents the role-per-column descriptor with a full example for a user's own table,
+    every YAML example there validates, and it links the descriptor each reference dataset ships."""
 
-    def test_every_yaml_example_validates_and_the_reference_ones_are_the_shipped_files(self):
+    def test_every_yaml_example_validates_and_the_shipped_files_are_linked(self):
         import re
-        from descriptor_rules import parse_descriptor, read_descriptor
+        from descriptor_rules import parse_descriptor
         text = (ROOT / "data" / "README.md").read_text(encoding="utf-8")
         examples = [parse_descriptor(block, "data/README.md") for block in re.findall(r"```yaml\n(.*?)```", text, re.DOTALL)]
-        ids = [d.id for d in examples]
-        self.assertIn("pharma_trials", ids)
-        self.assertIn("banking_complaints", ids)
-        self.assertTrue(any(d.id not in ("pharma_trials", "banking_complaints") and d.source is None for d in examples),
-                        "an example for a user's own file")
-        self.assertTrue(any(d.source for d in examples), "an example with the optional source key")
-        for d in examples:
-            if d.id in ("pharma_trials", "banking_complaints"):
-                with self.subTest(dataset=d.id):
-                    # The README example is the shipped descriptor without its profiler evidence: the
-                    # numbers behind each role (T4) belong in the file, not in a page meant to be read.
-                    shipped = read_descriptor(ROOT / "data" / "datasets" / d.id)
-                    self.assertEqual(dataclasses.replace(d, evidence={}), dataclasses.replace(shipped, evidence={}))
+        own = [d for d in examples if d.schema_version == 3 and d.id not in REFERENCE]
+        self.assertTrue(own, "a role-per-column example for a user's own table")
+        self.assertTrue(any(d.sensitive for d in own), "the example shows a sensitive column")
+        for name in REFERENCE:
+            self.assertIn(f"(datasets/{name}/descriptor.yaml)", text)
+
+
+REFERENCE = ("esophageal_posts", "banking_complaints", "bank_marketing")
 
 
 class LiveReferenceTest(unittest.TestCase):

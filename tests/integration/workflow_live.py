@@ -47,7 +47,7 @@ def main(argv=None):
     thread = threading.Thread(target=server.serve_forever,daemon=True);thread.start()
     try:
         workflow = nb.workflow("acceptance-flow")
-        draft = nb.describe("PHARMA.PHARMA_TRIALS", conn=conn, id="acceptance-pharma-flow")
+        draft = nb.describe("ESOPHAGEAL.ESOPHAGEAL_POSTS", conn=conn, id="acceptance-pharma-flow")
         first = draft.approve(owner="acceptance-tests", comments=False, conn=conn)
         assert first.version == 1
         original_text = list(first.text_cols())

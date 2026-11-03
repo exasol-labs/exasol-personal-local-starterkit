@@ -16,7 +16,7 @@ def _(mo):
     mo.md(r"""
     # Prepare a trustworthy place to train
 
-    **Dataset:** `pharma_trials` by default; Banking or your own described file can follow. **How long:** about five minutes once the required runtimes are installed.
+    **Dataset:** `esophageal_posts` by default; Banking or your own described file can follow. **How long:** about five minutes once the required runtimes are installed.
 
     The Data Scientist has identified a question and a column map. Your job is to turn that work into a repeatable training and scoring flow. Start by checking the environment before interpreting any model metric.
 
@@ -166,11 +166,11 @@ def _(mo):
     mo.md(r"""
     ## Choose a starting dataset
 
-    Start with the bundled sample so you can learn the flow with known data. Pharma asks about trial outcomes; Banking asks about complaint outcomes. Later you can use the same pattern with a file of your own.
+    Start with the bundled sample so you can learn the flow with known data. Esophageal asks which posts are negative; Banking asks about complaint outcomes. Later you can use the same pattern with a file of your own.
 
     Each loading cell has its own setting. Leave unused paths at their defaults. For this local walkthrough, keep `SOURCE = None`. The final selection cell tells the rest of the notebook which dataset to use.
 
-    **Start here: use the bundled sample.** Keep `SAMPLE = "pharma_trials"` for trial data, or change it to `"banking_complaints"` for complaint data. The helper loads a missing sample and reuses one already loaded. Set it to `None` when you later want to work only with your own file.
+    **Start here: use the bundled sample.** Keep `SAMPLE = "esophageal_posts"` for social posts, or change it to `"banking_complaints"` for complaint data. The helper loads a missing sample and reuses one already loaded. Set it to `None` when you later want to work only with your own file.
     """)
     return
 
@@ -178,7 +178,7 @@ def _(mo):
 @app.cell
 def _(conn, nb):
     # Cell tags: load
-    SAMPLE = "pharma_trials"   # or "banking_complaints", or None
+    SAMPLE = "esophageal_posts"   # or "banking_complaints", or None
     sample = nb.load_sample(conn, SAMPLE)
     return (sample,)
 
@@ -243,15 +243,15 @@ def _(mo):
 
     A table stores values. A **role** tells these notebooks how you want to use a column. The kit suggests roles from the real column names, types and measured values, then shows its reasons. You decide whether those suggestions fit your goal.
 
-    | Role | Meaning | Pharma example | Banking example |
+    | Role | Meaning | Esophageal example | Banking example |
     |---|---|---|---|
-    | `entity` | Who or what to compare | `LEAD_SPONSOR` | `COMPANY` |
-    | `category` | Groups to compare | `PHASE` | `PRODUCT` |
+    | `entity` | Who or what to compare | `SOURCE_DOMAIN` | `COMPANY` |
+    | `category` | Groups to compare | `SOCIAL_NETWORK` | `PRODUCT` |
     | `date` | The event timeline | `START_DATE` | `DATE_RECEIVED` |
-    | `label` | The outcome to predict | `TERMINATED` | `MONETARY_RELIEF` |
-    | `text` | Written descriptions | `BRIEF_SUMMARY` | `ISSUE` |
+    | `label` | The outcome to predict | `IS_NEGATIVE` | `MONETARY_RELIEF` |
+    | `text` | Written descriptions | `MESSAGE` | none (the CFPB no longer publishes narratives) |
 
-    **Your most important choice is the label.** A model using `TERMINATED` learns about trial termination. A model using `HAS_RESULTS` answers whether results were published. Both can contain 0/1; the business question decides which is useful.
+    **Your most important choice is the label.** A model using `IS_NEGATIVE` learns the listening tool's sentiment. A model using `IS_REPLY` answers whether a post was a reply. Both can contain 0/1; the business question decides which is useful.
 
     **Do now:** read the reasons, keep or change the dropdowns, leave unrelated columns as **—**, then click **Approve descriptor**. A close alternative deserves a second look. A rule-match score measures how well a column fits the rules, not certainty about its meaning.
 
@@ -280,7 +280,7 @@ def _(mo):
     mo.md(r"""
     ## Confirm the outcome before teaching a model
 
-    Count the records and positive outcomes in each category. Pharma's label is trial termination; Banking's is monetary relief. Check that this matches the question handed to you.
+    Count the records and positive outcomes in each category. Esophageal's label is a negative post; Banking's is monetary relief. Check that this matches the question handed to you.
 
     **Read the result:** a positive label means the chosen outcome occurred. It does not mean that the outcome is desirable. The query shows which groups and class balance the later training recipe will encounter.
 

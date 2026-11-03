@@ -16,9 +16,9 @@ def _(mo):
     mo.md(r"""
     # Start an investigation with data you can explain
 
-    **Dataset:** `pharma_trials` by default; `banking_complaints` or your own file can follow the same path. **How long:** about ten minutes on the first load.
+    **Dataset:** `esophageal_posts` by default; `banking_complaints` or your own file can follow the same path. **How long:** about ten minutes on the first load.
 
-    Imagine a team asks you to understand outcomes: which trial phases and sponsors have more terminations, or which complaint products and companies receive monetary relief. Start by checking the data and agreeing what its columns mean.
+    Imagine a team asks you to understand outcomes: which networks and websites carry more negative posts about esophageal cancer, or which complaint products and companies receive monetary relief. Start by checking the data and agreeing what its columns mean.
 
     **By the end:** you will have a working connection, an approved column map and a first grouped result you can explain. Run top to bottom and use this as the starting notebook for your own investigation.
 
@@ -85,11 +85,11 @@ def _(mo):
     mo.md(r"""
     ## Choose a starting dataset
 
-    Start with the bundled sample so you can learn the flow with known data. Pharma asks about trial outcomes; Banking asks about complaint outcomes. Later you can use the same pattern with a file of your own.
+    Start with the bundled sample so you can learn the flow with known data. Esophageal asks which posts are negative; Banking asks about complaint outcomes. Later you can use the same pattern with a file of your own.
 
     Each loading cell has its own setting. Leave unused paths at their defaults. For this local walkthrough, keep `SOURCE = None`. The final selection cell tells the rest of the notebook which dataset to use.
 
-    **Start here: use the bundled sample.** Keep `SAMPLE = "pharma_trials"` for trial data, or change it to `"banking_complaints"` for complaint data. The helper loads a missing sample and reuses one already loaded. Set it to `None` when you later want to work only with your own file.
+    **Start here: use the bundled sample.** Keep `SAMPLE = "esophageal_posts"` for social posts, or change it to `"banking_complaints"` for complaint data. The helper loads a missing sample and reuses one already loaded. Set it to `None` when you later want to work only with your own file.
     """)
     return
 
@@ -97,7 +97,7 @@ def _(mo):
 @app.cell
 def _(conn, nb):
     # Cell tags: load
-    SAMPLE = "pharma_trials"   # or "banking_complaints", or None
+    SAMPLE = "esophageal_posts"   # or "banking_complaints", or None
     sample = nb.load_sample(conn, SAMPLE)
     return (sample,)
 
@@ -162,15 +162,15 @@ def _(mo):
 
     A table stores values. A **role** tells these notebooks how you want to use a column. The kit suggests roles from the real column names, types and measured values, then shows its reasons. You decide whether those suggestions fit your goal.
 
-    | Role | Meaning | Pharma example | Banking example |
+    | Role | Meaning | Esophageal example | Banking example |
     |---|---|---|---|
-    | `entity` | Who or what to compare | `LEAD_SPONSOR` | `COMPANY` |
-    | `category` | Groups to compare | `PHASE` | `PRODUCT` |
+    | `entity` | Who or what to compare | `SOURCE_DOMAIN` | `COMPANY` |
+    | `category` | Groups to compare | `SOCIAL_NETWORK` | `PRODUCT` |
     | `date` | The event timeline | `START_DATE` | `DATE_RECEIVED` |
-    | `label` | The outcome to predict | `TERMINATED` | `MONETARY_RELIEF` |
-    | `text` | Written descriptions | `BRIEF_SUMMARY` | `ISSUE` |
+    | `label` | The outcome to predict | `IS_NEGATIVE` | `MONETARY_RELIEF` |
+    | `text` | Written descriptions | `MESSAGE` | none (the CFPB no longer publishes narratives) |
 
-    **Your most important choice is the label.** A model using `TERMINATED` learns about trial termination. A model using `HAS_RESULTS` answers whether results were published. Both can contain 0/1; the business question decides which is useful.
+    **Your most important choice is the label.** A model using `IS_NEGATIVE` learns the listening tool's sentiment. A model using `IS_REPLY` answers whether a post was a reply. Both can contain 0/1; the business question decides which is useful.
 
     **Do now:** read the reasons, keep or change the dropdowns, leave unrelated columns as **—**, then click **Approve descriptor**. A close alternative deserves a second look. A rule-match score measures how well a column fits the rules, not certainty about its meaning.
 
@@ -199,7 +199,7 @@ def _(mo):
     mo.md(r"""
     ## Read the first answer before building a model
 
-    Count the observations in each category. For Pharma these are trials by phase; for Banking they are complaints by product. The result also shows the share whose approved outcome is 1, when a label is available.
+    Count the observations in each category. For Esophageal these are posts by network; for Banking they are complaints by product. The result also shows the share whose approved outcome is 1, when a label is available.
 
     **Read the result:** a large group has more records, while a high label percentage has more of the selected outcome. Those are different observations. Counts and associations alone do not explain why an outcome happened.
 

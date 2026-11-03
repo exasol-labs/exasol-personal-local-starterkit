@@ -9,9 +9,9 @@
 # %% [markdown]
 # # Start an investigation with data you can explain
 #
-# **Dataset:** `pharma_trials` by default; `banking_complaints` or your own file can follow the same path. **How long:** about ten minutes on the first load.
+# **Dataset:** `esophageal_posts` by default; `banking_complaints` or your own file can follow the same path. **How long:** about ten minutes on the first load.
 #
-# Imagine a team asks you to understand outcomes: which trial phases and sponsors have more terminations, or which complaint products and companies receive monetary relief. Start by checking the data and agreeing what its columns mean.
+# Imagine a team asks you to understand outcomes: which networks and websites carry more negative posts about esophageal cancer, or which complaint products and companies receive monetary relief. Start by checking the data and agreeing what its columns mean.
 #
 # **By the end:** you will have a working connection, an approved column map and a first grouped result you can explain. Run top to bottom and use this as the starting notebook for your own investigation.
 #
@@ -42,7 +42,7 @@ print(f"Every step below is logged under it: exakit workflow show {wid}")
 # %% [markdown]
 # ## Read the first answer before building a model
 #
-# Count the observations in each category. For Pharma these are trials by phase; for Banking they are complaints by product. The result also shows the share whose approved outcome is 1, when a label is available.
+# Count the observations in each category. For Esophageal these are posts by network; for Banking they are complaints by product. The result also shows the share whose approved outcome is 1, when a label is available.
 #
 # **Read the result:** a large group has more records, while a high label percentage has more of the selected outcome. Those are different observations. Counts and associations alone do not explain why an outcome happened.
 #

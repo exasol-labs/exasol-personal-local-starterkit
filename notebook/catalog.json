@@ -22,7 +22,7 @@
       "step": 0,
       "title": "Quickstart",
       "summary": "Opens connected. Load a sample, your own CSV, Parquet or JSON file, or a connected source; review the proposed column roles and approve them before the first query. Ends by opening 01_explore.",
-      "needs": "Nothing beyond the notebook add-on: the sample-dataset cell loads Pharma (or Banking) the first time.",
+      "needs": "Nothing beyond the notebook add-on: the sample-dataset cell loads Esophageal (or Banking) the first time.",
       "jupyter": "00_quickstart.ipynb",
       "marimo": "00_quickstart.py"
     },
@@ -32,7 +32,7 @@
       "step": 1,
       "title": "Explore a dataset",
       "summary": "The domain's landscape question with the SQL visible, a small scikit-learn model on this computer, and a text step with your own model traced to your Langfuse. Another dataset or your own file is one assignment away. Ends by writing the handoff the ML Engineer's 01_train starts from.",
-      "needs": "A loaded dataset (pharma_trials as it ships, banking_complaints, or your own file with its roles beside it). Optional: USE_AI_THEMES = True, EXAKIT_MODEL_ID and EXAKIT_PROVIDER_BASE_URL for the text step (EXAKIT_PROVIDER_API_KEY if authentication is required); LANGFUSE_* for tracing.",
+      "needs": "A loaded dataset (esophageal_posts as it ships, banking_complaints, or your own file with its roles beside it). Optional: USE_AI_THEMES = True, EXAKIT_MODEL_ID and EXAKIT_PROVIDER_BASE_URL for the text step (EXAKIT_PROVIDER_API_KEY if authentication is required); LANGFUSE_* for tracing.",
       "jupyter": "01_explore.ipynb",
       "marimo": "01_explore.py"
     },

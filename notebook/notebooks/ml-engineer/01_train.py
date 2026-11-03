@@ -9,7 +9,7 @@
 # %% [markdown]
 # # Turn the approved investigation into a repeatable model
 #
-# **Dataset:** `pharma_trials` by default; change `DATASET` for Banking or your own approved file. **How long:** about five minutes after runtime setup.
+# **Dataset:** `esophageal_posts` by default; change `DATASET` for Banking or your own approved file. **How long:** about five minutes after runtime setup.
 #
 # The Data Scientist has agreed what the columns mean and saved a handoff. You will train a small model inside Exasol, test it on later records and keep an experiment record another person can inspect.
 #
@@ -26,7 +26,7 @@ import exakit.nb as nb
 import exasol_mlflow
 import os
 
-DATASET = "pharma_trials"  # or "banking_complaints", or "~/my-data/transactions.csv" with approved roles beside it
+DATASET = "esophageal_posts"  # or "banking_complaints", or "~/my-data/transactions.csv" with approved roles beside it
 CONTAINER = nb.ml_train.udf_container()   # or "PYTHON3_ML", "PYTHON3", or the alias of a container you installed
 if os.environ.get("EXAKIT_WORKFLOW_ID"):
     nb.workflow(resume=os.environ["EXAKIT_WORKFLOW_ID"])
@@ -53,7 +53,7 @@ print(f"data digest: {handoff['data_digest']}")
 # %% [markdown]
 # ## Turn the role map into numbers the model can learn from
 #
-# Words such as phase, sponsor and complaint product must become model inputs called **features**. The next cell creates a SQL feature view and a training function inside the selected Exasol runtime.
+# Words such as social network, website and complaint product must become model inputs called **features**. The next cell creates a SQL feature view and a training function inside the selected Exasol runtime.
 #
 # **Read the result:** inspect the printed feature names and SQL. Check that the target itself has not become an input and that each input would be available when you intend to make a prediction.
 #
@@ -63,7 +63,7 @@ print(f"data digest: {handoff['data_digest']}")
 UDF_SCHEMA = "EXASOL_MLFLOW"
 UDF_NAME = "TRAIN_FROM_HANDOFF"
 SEED = 0
-CLASS_WEIGHT = None  # "balanced" for the Banking reference recipe; None for Pharma
+CLASS_WEIGHT = None  # "balanced" for the Banking reference recipe; None for Esophageal
 REGULARIZATION_C = 1.0
 
 plan = nb.prepare_training(conn, ds, handoff, schema=UDF_SCHEMA, name=UDF_NAME, container=CONTAINER,
@@ -80,7 +80,7 @@ print(plan.training_sql)
 #
 # Train once, then compare its result with a model that always predicts the most common training class. That **majority baseline** is important when one outcome is rare: high accuracy alone can be misleading.
 #
-# **Read the result:** compare macro-F1 with `baseline_macro_f1`, using the same later test records. A model that fails to improve is an experiment result to investigate, not evidence of useful prediction. For the reference recipes, keep `CLASS_WEIGHT = None` for Pharma and use `CLASS_WEIGHT = "balanced"` for Banking. Weighting is an explicit, logged experiment setting: it changes training weights, while the held-out records and majority baseline stay fixed. Verify the printed result on your installed runtime.
+# **Read the result:** compare macro-F1 with `baseline_macro_f1`, using the same later test records. A model that fails to improve is an experiment result to investigate, not evidence of useful prediction. For the reference recipes, keep `CLASS_WEIGHT = None` for Esophageal and use `CLASS_WEIGHT = "balanced"` for Banking. Weighting is an explicit, logged experiment setting: it changes training weights, while the held-out records and majority baseline stay fixed. Verify the printed result on your installed runtime.
 #
 # **Technical note:** `start_run` checks tracking readiness before executing the training SQL. MLflow records the query, descriptor/version, data digest, settings and returned artifacts. If tracking fails after training, a spool record can be replayed with `exakit mlflow replay`; a database restart fails the active run.
 

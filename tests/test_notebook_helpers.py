@@ -34,8 +34,8 @@ from exakit_nb.dataset import Dataset  # noqa: E402
 
 nb_dataset = importlib.import_module("exakit_nb.dataset")    # the module; exakit_nb.dataset is the function
 
-PHARMA = ["PHARMA.PHARMA_TRIALS." + c for c in ("NCT_ID", "LEAD_SPONSOR", "PHASE", "START_DATE", "TERMINATED", "BRIEF_SUMMARY",
-                                                "ELIGIBILITY_CRITERIA")]
+PHARMA = ["ESOPHAGEAL.ESOPHAGEAL_POSTS." + c for c in ("POST_ID", "SOURCE_DOMAIN", "SOCIAL_NETWORK", "CREATED_TIME", "IS_NEGATIVE", "MESSAGE",
+                                                "TITLE")]
 
 
 def setUpModule():
@@ -75,20 +75,26 @@ class DatasetTest(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def test_a_kit_dataset_by_id_gives_its_roles_and_digest(self):
-        ds = exakit_nb.dataset(FakeConn(PHARMA), "pharma_trials")
-        self.assertEqual((ds.id, ds.fact_table, ds.col("label"), ds.col("category")), ("pharma_trials", "PHARMA.PHARMA_TRIALS", "TERMINATED", "PHASE"))
-        self.assertEqual(ds.text_sql(), "COALESCE(BRIEF_SUMMARY, '') || ' ' || COALESCE(ELIGIBILITY_CRITERIA, '')")
+        ds = exakit_nb.dataset(FakeConn(PHARMA), "esophageal_posts")
+        self.assertEqual((ds.id, ds.fact_table, ds.col("label"), ds.col("category")), ("esophageal_posts", "ESOPHAGEAL.ESOPHAGEAL_POSTS", "IS_NEGATIVE", "SOCIAL_NETWORK"))
+        self.assertEqual(ds.text_sql(), "COALESCE(MESSAGE, '')")
         self.assertEqual(len(ds.digest), 64)
-        self.assertEqual(ds.tags(), {"exasol.dataset": "pharma_trials", "exasol.descriptor": ds.digest})
+        self.assertEqual(ds.tags(), {"exasol.dataset": "esophageal_posts", "exasol.descriptor": ds.digest})
         self.assertEqual((ds.status, ds.version, ds.owner, ds.source, ds.source_ref, ds.descriptor_origin),
-                         ("approved", 1, "kit", None, "pharma_trials", "shipped"), "shipped: approved by the kit, not a live source")
+                         ("approved", 1, "kit", None, "esophageal_posts", "shipped"), "shipped: approved by the kit, not a live source")
         self.assertIs(ds.require_approved("training"), ds)
 
     def test_several_text_columns_join_into_one_expression(self):
-        cols = ["BANKING.BANKING_COMPLAINTS." + c for c in ("COMPANY", "PRODUCT", "DATE_RECEIVED", "MONETARY_RELIEF", "ISSUE", "SUB_ISSUE",
-                                                             "COMPANY_PUBLIC_RESPONSE")]
+        ds = Dataset("lab", Path("d"), "0" * 64, rules.parse_descriptor(SYNTHETIC))
+        self.assertEqual(ds.text_sql(), "COALESCE(NOTE, '') || ' ' || COALESCE(OPERATOR_COMMENT, '')")
+
+    def test_a_dataset_without_text_says_why(self):
+        cols = ["BANKING.BANKING_COMPLAINTS." + c for c in ("COMPLAINT_ID", "COMPANY", "PRODUCT", "DATE_SENT_TO_COMPANY",
+                                                             "MONETARY_RELIEF")]
         ds = exakit_nb.dataset(FakeConn(cols), "banking_complaints")
-        self.assertEqual(ds.text_sql(), "COALESCE(ISSUE, '') || ' ' || COALESCE(SUB_ISSUE, '') || ' ' || COALESCE(COMPANY_PUBLIC_RESPONSE, '')")
+        self.assertEqual(([], False), (ds.text_cols(), ds.has("text")))
+        with self.assertRaisesRegex(ValueError, "banking_complaints has no text column: no text column"):
+            ds.text_sql()
 
     def test_a_descriptor_file_of_your_own_is_one_assignment_away(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -105,21 +111,21 @@ class DatasetTest(unittest.TestCase):
 
     def test_a_missing_table_names_the_data_load_for_a_kit_dataset(self):
         with self.assertRaises(ValueError) as caught:
-            exakit_nb.dataset(FakeConn([]), "pharma_trials")
-        self.assertIn("exakit data-load pharma_trials", str(caught.exception))
+            exakit_nb.dataset(FakeConn([]), "esophageal_posts")
+        self.assertIn("exakit data-load esophageal_posts", str(caught.exception))
 
     def test_an_unknown_name_lists_the_datasets_that_have_a_descriptor(self):
         with self.assertRaises(ValueError) as caught:
             exakit_nb.dataset(FakeConn(PHARMA), "no_such_set")
-        self.assertIn("pharma_trials", str(caught.exception))
+        self.assertIn("esophageal_posts", str(caught.exception))
         self.assertIn("banking_complaints", str(caught.exception))
 
     def test_an_empty_table_or_a_label_that_is_not_0_or_1_is_refused(self):
         with self.assertRaises(ValueError) as caught:
-            exakit_nb.dataset(FakeConn(PHARMA, labels=[]), "pharma_trials")
+            exakit_nb.dataset(FakeConn(PHARMA, labels=[]), "esophageal_posts")
         self.assertIn("has no rows", str(caught.exception))
         with self.assertRaises(ValueError) as caught:
-            exakit_nb.dataset(FakeConn(PHARMA, labels=[("0",), ("yes",)]), "pharma_trials")
+            exakit_nb.dataset(FakeConn(PHARMA, labels=[("0",), ("yes",)]), "esophageal_posts")
         self.assertIn("must be 0 or 1", str(caught.exception))
 
     def test_the_kit_rules_decide_and_an_invalid_descriptor_says_why(self):
@@ -394,7 +400,7 @@ class ShippedExploreTest(unittest.TestCase):
         text = self.NOTEBOOK.read_text(encoding="utf-8")
         self.assertEqual(sum(1 for line in text.splitlines() if line.startswith("DATASET = ")), 1)
         code = "\n".join(line for line in text.splitlines() if not line.startswith(("#", "DATASET = ")))
-        for name in ("PHARMA", "BANKING", "TERMINATED", "MONETARY_RELIEF", "BRIEF_SUMMARY", "LEAD_SPONSOR"):
+        for name in ("PHARMA", "BANKING", "IS_NEGATIVE", "MONETARY_RELIEF", "MESSAGE", "SOURCE_DOMAIN"):
             with self.subTest(name=name):
                 self.assertNotIn(name, code, "the SQL comes from the descriptor's roles")
 
@@ -423,15 +429,22 @@ roles:
 
 
 def _descriptors():
-    """(name, Descriptor) for the two reference datasets and the synthetic file."""
-    return [("pharma", rules.read_descriptor(ROOT / "data" / "datasets" / "pharma_trials")),
-            ("banking", rules.read_descriptor(ROOT / "data" / "datasets" / "banking_complaints")),
+    """(name, Descriptor) for the reference datasets with every role and the synthetic file."""
+    return [("esophageal", rules.read_descriptor(ROOT / "data" / "datasets" / "esophageal_posts")),
             ("synthetic", rules.parse_descriptor(SYNTHETIC))]
 
 
+def _partial_descriptors():
+    """(name, Descriptor) for the reference datasets missing a role: banking has no text since the CFPB stopped
+    publishing narratives, bank marketing no time, text or entity."""
+    return [("banking", rules.read_descriptor(ROOT / "data" / "datasets" / "banking_complaints")),
+            ("bank_marketing", rules.read_descriptor(ROOT / "data" / "datasets" / "bank_marketing"))]
+
+
 class SwapTest(unittest.TestCase):
-    """AC-DS3.2: a notebook's SQL rendered for Pharma, Banking and a synthetic file is byte-identical apart from the
-    values the descriptor gives - so switching the data is the one DATASET assignment and no SQL."""
+    """AC-DS3.2: a notebook's SQL rendered for Esophageal and a synthetic file is byte-identical apart from the
+    values the descriptor gives - so switching the data is the one DATASET assignment and no SQL. A dataset missing a
+    role renders the same way or stops with the descriptor's reason for it."""
 
     EXTRA = {"SAMPLE": 20000, "SAMPLE_TEXTS": 5, "period": "MONTH", "UDF_SCHEMA": "EXASOL_MLFLOW", "PARAMS": {"C": 1.0},
              "UDF": "EXAKIT_MODELS.SCORE_MODEL", "where": "1 = 1", "limit": 10, "extra": ""}
@@ -487,16 +500,20 @@ class SwapTest(unittest.TestCase):
                 continue
             with self.subTest(notebook=notebook.relative_to(NOTEBOOKS).as_posix()):
                 rendered = {name: self.render(notebook, d) for name, d in _descriptors()}
-                self.assertNotEqual(rendered["pharma"], rendered["banking"], "the values do differ")
+                self.assertNotEqual(rendered["esophageal"], rendered["synthetic"], "the values do differ")
                 templated = {name: [self.placeholders(s, d) for s in rendered[name]] for name, d in _descriptors()}
-                self.assertEqual(templated["pharma"], templated["banking"])
-                self.assertEqual(templated["pharma"], templated["synthetic"])
+                self.assertEqual(templated["esophageal"], templated["synthetic"])
+                for name, descriptor in _partial_descriptors():
+                    try:
+                        self.render(notebook, descriptor)
+                    except ValueError as err:
+                        self.assertIn(f"{descriptor.id} has no", str(err))
 
     def test_one_assignment_switches_the_data(self):
         for name in ("data-scientist/01_explore.py", "ml-engineer/01_train.py"):
             with self.subTest(notebook=name):
                 lines = (NOTEBOOKS / name).read_text(encoding="utf-8").splitlines()
-                self.assertEqual([l.split("#")[0].strip() for l in lines if l.startswith("DATASET = ")], ['DATASET = "pharma_trials"'])
+                self.assertEqual([l.split("#")[0].strip() for l in lines if l.startswith("DATASET = ")], ['DATASET = "esophageal_posts"'])
                 # train opens the descriptor; explore opens it through the review, so a file with no roles beside it
                 # is loaded and drafted right there instead of stopping (T8b)
                 opened = "nb.review_roles(conn, DATASET)" if name.startswith("data-scientist") else "nb.dataset(conn, DATASET)"
@@ -531,9 +548,10 @@ class DescriptorFileTest(unittest.TestCase):
     """load_own_file and dataset() read a YAML (or JSON) descriptor file; the roles of a file are kept beside it."""
 
     def test_a_yaml_descriptor_path_and_a_dataset_folder_read(self):
-        doc = own_file._descriptor_doc(ROOT / "data" / "datasets" / "pharma_trials" / "descriptor.yaml", None)
-        self.assertEqual(doc["fact_table"], "PHARMA.PHARMA_TRIALS")
-        self.assertEqual(own_file._descriptor_doc(ROOT / "data" / "datasets" / "banking_complaints", None)["id"], "banking_complaints")
+        doc = own_file._descriptor_doc(ROOT / "data" / "datasets" / "esophageal_posts" / "descriptor.yaml", None)
+        self.assertEqual(doc["source"]["object"], "ESOPHAGEAL.ESOPHAGEAL_POSTS")
+        self.assertEqual(own_file._descriptor_doc(ROOT / "data" / "datasets" / "banking_complaints", None)["dataset"], "banking_complaints")
+        self.assertIs(own_file._descriptor_doc(doc, None), doc)            # a whole role-per-column document as it is
         with tempfile.TemporaryDirectory() as tmp:
             (Path(tmp) / "d.json").write_text(json.dumps(doc), encoding="utf-8")
             self.assertEqual(own_file._descriptor_doc(Path(tmp) / "d.json", None), doc)
@@ -664,9 +682,9 @@ class QuickstartTest(unittest.TestCase):
 
     def test_a_loaded_sample_is_used_as_it_is(self):
         with mock.patch.object(quickstart, "_run_exakit") as run, redirect_stdout(io.StringIO()) as out:
-            ds = exakit_nb.load_sample(FakeConn(PHARMA), "pharma_trials")
+            ds = exakit_nb.load_sample(FakeConn(PHARMA), "esophageal_posts")
         run.assert_not_called()
-        self.assertEqual(ds.id, "pharma_trials")
+        self.assertEqual(ds.id, "esophageal_posts")
         self.assertIn("is loaded", out.getvalue())
 
     def test_a_sample_not_loaded_runs_data_load_and_waits(self):
@@ -675,12 +693,12 @@ class QuickstartTest(unittest.TestCase):
             conn.columns = PHARMA
             return 0
         with mock.patch.object(quickstart, "_run_exakit", side_effect=loaded) as run, redirect_stdout(io.StringIO()):
-            ds = exakit_nb.load_sample(conn, "pharma_trials")
-        run.assert_called_once_with("data-load", "pharma_trials")
-        self.assertEqual(ds.fact_table, "PHARMA.PHARMA_TRIALS")
+            ds = exakit_nb.load_sample(conn, "esophageal_posts")
+        run.assert_called_once_with("data-load", "esophageal_posts")
+        self.assertEqual(ds.fact_table, "ESOPHAGEAL.ESOPHAGEAL_POSTS")
         with mock.patch.object(quickstart, "_run_exakit", return_value=1), redirect_stdout(io.StringIO()), \
                 self.assertRaises(RuntimeError):
-            exakit_nb.load_sample(FakeConn([]), "pharma_trials")
+            exakit_nb.load_sample(FakeConn([]), "esophageal_posts")
 
     def test_none_skips_and_an_unknown_id_names_the_ones_there_are(self):
         with redirect_stdout(io.StringIO()) as out:
@@ -709,13 +727,13 @@ class QuickstartTest(unittest.TestCase):
         self.assertIn("is a live source (crm_postgres)", out.getvalue())
 
     def test_the_first_loaded_wins_and_its_roles_print(self):
-        ds = exakit_nb.dataset(FakeConn(PHARMA), "pharma_trials")
+        ds = exakit_nb.dataset(FakeConn(PHARMA), "esophageal_posts")
         self.assertIs(exakit_nb.first(None, None, ds), ds)
         with self.assertRaises(ValueError):
             exakit_nb.first(None, None)
         with redirect_stdout(io.StringIO()) as out:
             exakit_nb.show_roles(ds)
-        self.assertIn("label     PHARMA.PHARMA_TRIALS.TERMINATED", out.getvalue())
+        self.assertIn("label     ESOPHAGEAL.ESOPHAGEAL_POSTS.IS_NEGATIVE", out.getvalue())
 
     def test_the_connection_check_names_no_user_or_host(self):
         frame = _Frame(NOW=["t"], SESSION_ID=["42"], DATABASE_VERSION=["2025.1.8"])
@@ -877,11 +895,11 @@ class TextStepTest(unittest.TestCase):
         self.addCleanup(patcher.stop)
 
     def test_the_trace_tags(self):
-        ds = exakit_nb.dataset(FakeConn(PHARMA), "pharma_trials")
+        ds = exakit_nb.dataset(FakeConn(PHARMA), "esophageal_posts")
         tags = exakit_nb.trace_tags(self.Conn(), ds, "SELECT 1 FROM T")
         self.assertEqual(tags, {"exasol.session_id": "4711", "exasol.sql": "SELECT 1 FROM T",
-                                "exasol.sql_digest": hashlib.sha256(b"SELECT 1 FROM T").hexdigest(), "exasol.dataset": "pharma_trials",
-                                "exasol.descriptor": ds.digest, "exasol.descriptor_id": "pharma_trials", "exasol.descriptor_version": "1"})
+                                "exasol.sql_digest": hashlib.sha256(b"SELECT 1 FROM T").hexdigest(), "exasol.dataset": "esophageal_posts",
+                                "exasol.descriptor": ds.digest, "exasol.descriptor_id": "esophageal_posts", "exasol.descriptor_version": "1"})
 
     def test_tracing_off_is_one_line_and_the_block_runs(self):
         ran = []
@@ -892,7 +910,7 @@ class TextStepTest(unittest.TestCase):
         self.assertEqual(len(out.getvalue().strip().splitlines()), 1)
 
     def test_a_live_source_asks_before_rows_are_sent(self):
-        table = exakit_nb.dataset(FakeConn(PHARMA), "pharma_trials")
+        table = exakit_nb.dataset(FakeConn(PHARMA), "esophageal_posts")
         self.assertTrue(exakit_nb.confirm_send(table, 5))
         live = Dataset("x", Path("d"), "0" * 64, rules.parse_descriptor(SYNTHETIC + "source: crm\n"))
         with redirect_stdout(io.StringIO()) as out:
@@ -966,6 +984,9 @@ class TraceSdk5Test(unittest.TestCase):
         self.addCleanup(self.home.cleanup)
         _kit.SESSION.clear()
         self.addCleanup(_kit.SESSION.clear)
+        datasets = mock.patch.dict(os.environ, {"EXAKIT_NB_DATASETS": str(ROOT / "data" / "datasets")})
+        datasets.start()
+        self.addCleanup(datasets.stop)
         self.log = []
         self.langfuse, drop_in = fake_langfuse(self.log)
         self.openai = fake_openai()
@@ -975,13 +996,14 @@ class TraceSdk5Test(unittest.TestCase):
 
     def _trace(self, env: dict, **kwargs):
         out, err = io.StringIO(), io.StringIO()
-        with mock.patch.dict(os.environ, {**env, "EXAKIT_HOME": self.home.name}, clear=True), redirect_stdout(out), redirect_stderr(err):
+        with mock.patch.dict(os.environ, {**env, "EXAKIT_HOME": self.home.name, "EXAKIT_NB_DATASETS": str(ROOT / "data" / "datasets")},
+                             clear=True), redirect_stdout(out), redirect_stderr(err):
             with exakit_nb.trace(self.Conn(), **kwargs) as span:
                 inside = exakit_nb.model_client() if os.environ.get("EXAKIT_MODEL_ID") else None
         return span, inside, out.getvalue() + err.getvalue()
 
     def test_one_observation_with_the_attributes_propagated_and_the_workflow_logged(self):
-        ds = exakit_nb.dataset(FakeConn(PHARMA), "pharma_trials")
+        ds = exakit_nb.dataset(FakeConn(PHARMA), "esophageal_posts")
         env = {**self.ENV, "EXAKIT_WORKFLOW_ID": "wf-20261027-abcdef"}
         span, _, output = self._trace(env, name="explore-text-step", dataset=ds, sql="SELECT 1 FROM T", step="text")
         self.assertEqual(span.trace_id, "trace-1")
@@ -997,7 +1019,7 @@ class TraceSdk5Test(unittest.TestCase):
         self.assertEqual(propagated["metadata"]["exasol.workflow_id"], "wf-20261027-abcdef")
         self.assertEqual(propagated["metadata"]["exasol.descriptor_version"], "1")
         self.assertEqual(propagated["metadata"]["step"], "text")
-        for label in ("exasol-starter-kit", "exasol.dataset=pharma_trials", "exasol.descriptor_id=pharma_trials",
+        for label in ("exasol-starter-kit", "exasol.dataset=esophageal_posts", "exasol.descriptor_id=esophageal_posts",
                       "exasol.descriptor_version=1", "exasol.session_id=4711", "exasol.workflow_id=wf-20261027-abcdef",
                       f"exasol.descriptor={ds.digest}"):
             self.assertIn(label, propagated["tags"])
@@ -1025,7 +1047,7 @@ class TraceSdk5Test(unittest.TestCase):
         self.assertEqual(traced, "traced: trace-1 (https://old.example, project in your Langfuse)")
 
     def test_the_secret_key_is_in_no_output_tag_or_log(self):
-        ds = exakit_nb.dataset(FakeConn(PHARMA), "pharma_trials")
+        ds = exakit_nb.dataset(FakeConn(PHARMA), "esophageal_posts")
         env = {**self.ENV, "EXAKIT_WORKFLOW_ID": "wf-20261027-abcdef", "EXAKIT_MODEL_ID": "m", "LANGFUSE_HOST": "https://h"}
         _, _, output = self._trace(env, dataset=ds)
         self.assertNotIn(self.SECRET, output)
@@ -1154,7 +1176,7 @@ class NotebookWorkflowTest(unittest.TestCase):
     def setUp(self):
         self.home = tempfile.TemporaryDirectory()
         self.addCleanup(self.home.cleanup)
-        env = mock.patch.dict(os.environ, {"EXAKIT_HOME": self.home.name})
+        env = mock.patch.dict(os.environ, {"EXAKIT_HOME": self.home.name, "EXAKIT_NB_DATASETS": str(ROOT / "data" / "datasets")})
         env.start()
         self.addCleanup(env.stop)
         os.environ.pop("EXAKIT_WORKFLOW_ID", None)
@@ -1203,20 +1225,20 @@ class NotebookWorkflowTest(unittest.TestCase):
         first = _code_cells(NOTEBOOKS / "data-scientist" / "01_explore.py")[1]        # after DATASET = ...
         self.assertIn('nb.workflow("explore", resume=WORKFLOW_ID or os.environ.get("EXAKIT_WORKFLOW_ID"))', first)
         self.assertLess(first.index("nb.workflow("), first.index("nb.connect()"))
-        ds = exakit_nb.dataset(FakeConn(PHARMA), "pharma_trials")
+        ds = exakit_nb.dataset(FakeConn(PHARMA), "esophageal_posts")
         review = mock.Mock(**{"dataset.return_value": ds})
         with mock.patch.object(exakit_nb, "connect", return_value=FakeConn(PHARMA)), \
                 mock.patch.object(exakit_nb, "review_roles", return_value=review) as reviewed:
-            namespace, out = self.run_cell(first, {"DATASET": "pharma_trials"})
+            namespace, out = self.run_cell(first, {"DATASET": "esophageal_posts"})
         self.assertEqual([e["kind"] for e in self.log(namespace["wid"])], ["start"])
-        reviewed.assert_called_once_with(mock.ANY, "pharma_trials")
+        reviewed.assert_called_once_with(mock.ANY, "esophageal_posts")
         review.dataset.assert_called_once_with(draft_ok=True)
-        self.assertEqual(namespace["LABEL"], "TERMINATED")
+        self.assertEqual(namespace["LABEL"], "IS_NEGATIVE")
         importlib.import_module("exakit_nb._kit").SESSION.pop("workflow_id", None)
         os.environ["EXAKIT_WORKFLOW_ID"] = namespace["wid"]
         with mock.patch.object(exakit_nb, "connect", return_value=FakeConn(PHARMA)), \
                 mock.patch.object(exakit_nb, "review_roles", return_value=review):
-            again, _ = self.run_cell(first, {"DATASET": "pharma_trials"})
+            again, _ = self.run_cell(first, {"DATASET": "esophageal_posts"})
         self.assertEqual(again["wid"], namespace["wid"])
 
 

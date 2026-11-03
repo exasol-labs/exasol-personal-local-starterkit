@@ -16,7 +16,7 @@ def _(mo):
     mo.md(r"""
     # Give the same trained model a Rust scorer
 
-    **Dataset:** Pharma, Banking or your own approved descriptor and handoff. **How long:** about fifteen minutes for a first build, less for later builds.
+    **Dataset:** Esophageal, Banking or your own approved descriptor and handoff. **How long:** about fifteen minutes for a first build, less for later builds.
 
     You already trained a linear model in Python. Now test whether a compiled Rust function can score the same later records with the same probabilities and labels. This checks a second implementation of the model; it does not train a new model or establish that the original model is useful.
 
@@ -29,7 +29,7 @@ def _(mo):
 
 @app.cell
 def _():
-    DATASET = "pharma_trials"  # or banking_complaints, or your own approved descriptor
+    DATASET = "esophageal_posts"  # or banking_complaints, or your own approved descriptor
     COEFFICIENTS_FILE = None  # or a local coefficients.json exported from 01_train's MLflow run
     UDF_NAME = None  # choose a new plain lowercase name for a new coefficient revision
     UDF_SCHEMA = "EXAKIT_SCORING"

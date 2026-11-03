@@ -3,9 +3,9 @@
 # database, on both reference datasets, with the text step on a stub model
 # (AC-DS3.1, AC-ML3.1).
 #
-#   bash tests/notebooks-run.sh                       # every catalog notebook, pharma_trials and banking_complaints
+#   bash tests/notebooks-run.sh                       # every catalog notebook, esophageal_posts and banking_complaints
 #   bash tests/notebooks-run.sh notebook/notebooks/data-scientist/01_explore.py
-#   EXAKIT_NOTEBOOK_DATASETS="pharma_trials" bash tests/notebooks-run.sh
+#   EXAKIT_NOTEBOOK_DATASETS="esophageal_posts" bash tests/notebooks-run.sh
 #
 # Needs an installed kit with a running database, the notebook add-on and the
 # datasets loaded (the quickstarts load a missing one themselves). Without a
@@ -69,7 +69,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 EXAKIT_HOME="${EXAKIT_HOME:-$HOME/.exasol-starter-kit}"
 CREDS="$EXAKIT_HOME/credentials"
 MANIFEST="$EXAKIT_HOME/manifest.json"
-DATASETS="${EXAKIT_NOTEBOOK_DATASETS:-pharma_trials banking_complaints}"
+DATASETS="${EXAKIT_NOTEBOOK_DATASETS:-esophageal_posts banking_complaints}"
 
 # The skip that CI can turn into a failure (tests/lib/require.sh explains why),
 # with exit 3 rather than require.sh's 1: here 1 means a notebook failed.

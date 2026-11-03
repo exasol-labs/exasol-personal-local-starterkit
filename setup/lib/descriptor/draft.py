@@ -1,0 +1,154 @@
+"""Step 3 of the descriptor plan: a profile in, a draft descriptor out, no database (draft(), to_yaml()).
+
+Every column gets a role from roles.classify(); the slots name the columns the notebooks need. The key slot takes
+a key column, one with an identifier name first, then the leftmost; with none it stays empty and says "no single
+unique column" (composite keys are not hunted). Time takes the time column with the widest range, text the text
+column with the longest average length. Target is never drafted: it stays empty until the user sets it, and
+training skips with that reason (a guessed target trains on the wrong label and nobody notices).
+
+Two more slots carry what the notebooks group by. Category: the leftmost non-sensitive string category with 2 to
+CATEGORY_GROUPS values - the grouping to compare. Entity: the non-sensitive string column (a category, or a column
+no rule fits) shorter than text with the most distinct values, more than CATEGORY_GROUPS of them - who or where a
+row comes from. Either stays empty, with its reason, when no column fits.
+
+No timestamps, a fixed key order and the columns in table order, so the same profile gives the same bytes.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import json
+from typing import Any
+
+from .roles import classify, has_name_hint
+
+FORMAT = 1
+SLOTS = ("key", "time", "text", "target", "category", "entity")
+CATEGORY_GROUPS = 20
+NO_KEY = "no single unique column"
+NO_TARGET = "set by the user; never drafted"
+
+
+def _span(entry: dict[str, Any]) -> int:
+    try:
+        low = dt.date.fromisoformat(str(entry["min"])[:10])
+        high = dt.date.fromisoformat(str(entry["max"])[:10])
+    except (KeyError, ValueError):
+        return -1
+    return (high - low).days
+
+
+def _slots(columns: list[dict[str, Any]], roles: dict[str, dict[str, Any]]) -> tuple[dict[str, str | None], dict[str, str]]:
+    def having(role: str) -> list[dict[str, Any]]:
+        return [c for c in columns if roles[c["column"]]["role"] == role]
+
+    keys = having("key")
+    key = (sorted(keys, key=lambda c: not has_name_hint(c["column"]))[0]["column"] if keys else None)
+    times = having("time")
+    time = max(times, key=_span)["column"] if times else None            # max() keeps the leftmost of a tie
+    texts = having("text")
+    text = max(texts, key=lambda c: float(c.get("avg_length") or 0))["column"] if texts else None
+    category = next((c["column"] for c in columns if _grouping(c, roles) and roles[c["column"]]["role"] == "category"
+                     and 2 <= _distinct(c) <= CATEGORY_GROUPS), None)
+    entity = _entity(columns, roles)
+    slots = {"key": key, "time": time, "text": text, "target": None, "category": category, "entity": entity}
+    why = {"target": NO_TARGET}
+    if category is None:
+        why["category"] = f"no string category with 2 to {CATEGORY_GROUPS} values"
+    if entity is None:
+        why["entity"] = f"no short string column with more than {CATEGORY_GROUPS} values"
+    if key is None:
+        why["key"] = NO_KEY
+    if time is None:
+        why["time"] = "no time column"
+    if text is None:
+        why["text"] = "no text column"
+    return slots, {slot: why[slot] for slot in SLOTS if slot in why}
+
+
+def _distinct(column: dict[str, Any]) -> int:
+    exact = column.get("exact_distinct")
+    return int(exact if exact is not None else column.get("approx_distinct") or 0)
+
+
+def _grouping(column: dict[str, Any], roles: dict[str, dict[str, Any]]) -> bool:
+    """A string column the notebooks may group by: not sensitive, a category or a column no rule fits."""
+    found = roles[column["column"]]
+    return column.get("kind") == "string" and not found.get("sensitive") and found["role"] in ("category", "other")
+
+
+def _entity(columns: list[dict[str, Any]], roles: dict[str, dict[str, Any]]) -> str | None:
+    from .roles import TEXT_AVG_LENGTH
+    fits = [c for c in columns if _grouping(c, roles) and float(c.get("avg_length") or 0) < TEXT_AVG_LENGTH
+            and _distinct(c) > CATEGORY_GROUPS]
+    return max(fits, key=_distinct)["column"] if fits else None           # max() keeps the leftmost of a tie
+
+
+def draft(profile: dict[str, Any], dataset: str, version: int = 1) -> dict[str, Any]:
+    """The draft descriptor for a profile, as a dict in the order it is written."""
+    columns = profile["columns"]
+    roles = {c["column"]: classify(c) for c in columns}
+    slots, why = _slots(columns, roles)
+    source = {k: profile["source"][k] for k in ("kind", "object", "schema_digest", "profiled_rows")}
+    if profile["source"].get("prefix"):
+        source["profiled"] = profile["source"]["prefix"]
+    doc: dict[str, Any] = {"descriptor": FORMAT, "dataset": dataset, "source": source, "version": version,
+                           "status": "draft", "grain": f"one row per {slots['key']}" if slots["key"] else ""}
+    doc["slots"] = slots
+    doc["slot_evidence"] = why
+    doc["columns"] = {name: roles[name] for name in (c["column"] for c in columns)}
+    return doc
+
+
+def approved(doc: dict[str, Any], owner: str, approved_at: str, version: int | None = None) -> dict[str, Any]:
+    """The same descriptor approved: status approved, owner and approved_at after it, in the order it is written."""
+    out: dict[str, Any] = {}
+    for key, value in doc.items():
+        if key in ("owner", "approved_at"):
+            continue
+        out[key] = version if key == "version" and version is not None else value
+        if key == "status":
+            out["status"] = "approved"
+            out["owner"], out["approved_at"] = owner, approved_at
+    return out
+
+
+def with_slots(doc: dict[str, Any], **slots: str | None) -> dict[str, Any]:
+    """The descriptor with these slots set (a column name) or emptied (None); an empty slot keeps a reason."""
+    out = dict(doc)
+    out["slots"] = {**doc["slots"], **slots}
+    why = {k: v for k, v in (doc.get("slot_evidence") or {}).items() if out["slots"].get(k) is None}
+    for name, column in slots.items():
+        if column is None and name not in why:
+            why[name] = "left empty by the owner"
+    out["slot_evidence"] = {k: why[k] for k in SLOTS if k in why}
+    return out
+
+
+def _scalar(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    return json.dumps(str(value), ensure_ascii=False)
+
+
+def _flow(entry: dict[str, Any]) -> str:
+    return "{" + ", ".join(f"{key}: {_scalar(value)}" for key, value in entry.items()) + "}"
+
+
+def to_yaml(doc: dict[str, Any]) -> str:
+    """The descriptor as YAML: plain keys, every string quoted, a column per line as a flow mapping."""
+    lines = []
+    for key, value in doc.items():
+        if key == "columns":
+            lines.append("columns:")
+            lines += [f"  {_scalar(name)}: {_flow(entry)}" for name, entry in value.items()]
+        elif isinstance(value, dict):
+            lines.append(f"{key}:" if value else f"{key}: {{}}")
+            lines += [f"  {sub}: {_scalar(item)}" for sub, item in value.items()]
+        else:
+            lines.append(f"{key}: {_scalar(value)}")
+    return "\n".join(lines) + "\n"

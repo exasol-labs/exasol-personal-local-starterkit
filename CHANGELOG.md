@@ -1,5 +1,11 @@
 # Changelog
 
+## Descriptor, profiler and approve; new reference datasets
+
+- The descriptor gives every column of a table one of eight roles (key, time, measure, category, flag, text, identifier, other) with its confidence and the evidence that chose it, and names in its slots the columns the notebooks use: key, time, text, target, category, entity. A column of e-mail addresses, phone numbers, IBANs or postcodes is marked sensitive and is never charted, grouped or sent to a model. The target is never drafted.
+- `exakit describe` and `exakit_nb.describe()` profile a table in one pass of SQL (a virtual table as its first 10,000 rows) and draft deterministically; `d.set(COLUMN="role")`, `d.slot(target=...)` and `d.approve()` correct and approve it. Approving checks the table has not changed, writes `~/.exasol-starter-kit/descriptors/<SCHEMA>.<TABLE>/v<n>.yaml` and `current.yaml`, and publishes the roles as column comments on a view in `EXAKIT_SEMANTIC`, granted to the read-only MCP user; the user's own tables are never commented. A changed table drafts the next version and keeps the roles of the columns that did not change. Draft and approval are lines in the active workflow's log.
+- New reference datasets: `esophageal_posts` (40,987 de-identified public posts about esophageal cancer, replacing `pharma_trials`) and `bank_marketing` (UCI, 45,211 clients); both personas load Esophageal, Banking and Bank marketing. The three ship role-per-column descriptors, checked against a fresh draft of their CSVs. `docs/RUNBOOK-PERSONAS-E2E.md` is the end-to-end runbook for a fresh install and an existing kit.
+
 ## Persona and marketplace Python backend
 
 - Quote Scheduler passwords during bootstrap, restore access to retained task tables on reinstall, and remove its service user while preserving task/history data. Failed database cleanup retains the receipt and files for retry; administrator accounts and unrelated schema owners are protected.

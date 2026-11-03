@@ -90,7 +90,7 @@ try {
     Run @("LAB.READINGS", "--versions");         Check "--versions on a table name" 2 $CODE
     Run @("readings", "--approve", "--show");    Check "two modes" 2 $CODE; Contains "names both" "--approve and --show are two different things" $OUT
     Run @("readings", "--approve", "--role");    Check "--role without a value" 2 $CODE
-    Run @("readings", "--approve", "--role", "owner=X"); Check "--role with no such role" 2 $CODE; Contains "names the roles" "one of entity, category, date, label, text" $OUT
+    Run @("readings", "--approve", "--role", "owner=X"); Check "--role with no such role" 2 $CODE; Contains "names the roles" "the slot one of key, time, text, target, category, entity" $OUT
     Run @("readings", "--approve", "--role", "entity=1x"); Check "--role with a column that is no plain name" 2 $CODE
     Run @("readings", "--approve", "--role", "entity=A B"); Check "--role with a space" 2 $CODE
     Run @("readings", "--approve", "--owner");   Check "--owner without a value" 2 $CODE
@@ -183,9 +183,9 @@ try {
     foreach ($opt in @("--approve", "--role", "--owner", "--no-comments", "--show", "--version", "--versions", "--comments")) {
         Contains "the options list $opt" $opt $page.options
     }
-    Contains "the page says what approve writes" "descriptors/<id>/v<n>.yaml" $page.description
-    Contains "and the comment it writes" "role: <role> (starter kit, descriptor <id> v<n>)" $page.description
-    Contains "and the view for a virtual table" "STARTER_KIT.<ID>_DESCRIBED" $page.description
+    Contains "the page says what approve writes" "descriptors/<SCHEMA>.<TABLE>/draft.yaml" $page.description
+    Contains "and the comment it writes" "the user's own table is never commented" $page.description
+    Contains "and the view for a virtual table" "EXAKIT_SEMANTIC.<SCHEMA>__<TABLE>" $page.description
     Contains "and exit 5" "5 when another approve" $page.description
     Contains "with an approve example" "exakit describe orders --approve" ($page.examples -join "`n")
 } finally {

@@ -1,0 +1,44 @@
+# Which role each column plays and which columns the notebooks use: the role-per-column descriptor (data/README.md).
+# Written by tools/descriptor_draft.py --ship from the shipped CSV; tests check a fresh draft agrees with it (DS5.1).
+descriptor: 1
+dataset: "bank_marketing"
+source:
+  kind: "local"
+  object: "BANKMKT.BANK_CLIENTS"
+  schema_digest: "sha256:8c71cbd47179f78fa745ad14329b28961d4591a9fcd1feb3b9aba2795557d2ed"
+  profiled_rows: 45211
+version: 1
+status: "approved"
+owner: "kit"
+approved_at: "2026-11-03T00:00:00Z"
+grain: "one row per client the campaign phoned"
+slots:
+  key: "CLIENT_ID"
+  time: null
+  text: null
+  target: "SUBSCRIBED"
+  category: "JOB"
+  entity: null
+slot_evidence:
+  time: "no time column"
+  text: "no text column"
+  entity: "no short string column with more than 20 values"
+columns:
+  "CLIENT_ID": {role: "key", confidence: "high", evidence: "45,211 distinct, no nulls"}
+  "AGE": {role: "measure", confidence: "low", evidence: "integer, no identifier in its name, 18 to 95"}
+  "JOB": {role: "category", confidence: "high", evidence: "12 distinct"}
+  "MARITAL": {role: "category", confidence: "high", evidence: "3 distinct"}
+  "EDUCATION": {role: "category", confidence: "high", evidence: "4 distinct"}
+  "CREDIT_IN_DEFAULT": {role: "flag", confidence: "high", evidence: "0 98.2%, 1 1.8%"}
+  "BALANCE": {role: "measure", confidence: "low", evidence: "integer, no identifier in its name, -8019 to 102127"}
+  "HOUSING_LOAN": {role: "flag", confidence: "high", evidence: "1 55.6%, 0 44.4%"}
+  "PERSONAL_LOAN": {role: "flag", confidence: "high", evidence: "0 84%, 1 16%"}
+  "CONTACT_TYPE": {role: "category", confidence: "high", evidence: "3 distinct"}
+  "LAST_CONTACT_DAY": {role: "category", confidence: "high", evidence: "31 distinct"}
+  "LAST_CONTACT_MONTH": {role: "category", confidence: "high", evidence: "12 distinct"}
+  "CALL_DURATION": {role: "measure", confidence: "low", evidence: "integer, no identifier in its name, 0 to 4918"}
+  "CAMPAIGN_CONTACTS": {role: "category", confidence: "low", evidence: "48 distinct"}
+  "DAYS_SINCE_PREVIOUS": {role: "measure", confidence: "low", evidence: "integer, no identifier in its name, -1 to 871"}
+  "PREVIOUS_CONTACTS": {role: "category", confidence: "high", evidence: "41 distinct"}
+  "PREVIOUS_OUTCOME": {role: "category", confidence: "high", evidence: "4 distinct"}
+  "SUBSCRIBED": {role: "flag", confidence: "high", evidence: "0 88.3%, 1 11.7%"}

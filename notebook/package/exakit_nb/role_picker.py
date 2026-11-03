@@ -4,7 +4,7 @@
     ds = review.dataset()                     # the approved dataset; waits for the approval
 
 The picker is one dropdown per column, each labelled with the column's evidence (type, null share, distinct values or
-span) and, under it, the runner-up for the role it was proposed for, plus an Approve button. In JupyterLab it is
+span), its role, confidence and evidence, plus an Approve button. In JupyterLab it is
 ipywidgets; in Marimo the review itself is a ``mo.ui.dictionary`` of ``mo.ui.dropdown`` with a ``mo.ui.run_button``, so
 ``ds = review.dataset()`` runs again when the button is clicked and stops cleanly (``mo.stop``) until then; in a plain
 Python session ``review.approve({"COLUMN": "role", ...})`` is the same path.
@@ -106,6 +106,8 @@ def evidence_summary(entry: dict[str, Any]) -> str:
         parts.append(f"avg len {entry['avg_len']}")
     if entry.get("score") is not None:
         parts.append(f"score {entry['score']}")
+    if entry.get("role") and entry.get("evidence"):
+        parts.append(f"{entry['role']} ({entry.get('confidence', '?')} confidence): {entry['evidence']}")
     return ", ".join(parts)
 
 
@@ -134,30 +136,15 @@ class RoleReview:
         return {c["column"]: c for c in (self.draft.profile or {}).get("columns", [])}
 
     def labels(self) -> dict[str, tuple[str, str]]:
-        """{column: (evidence summary, runner-up line)} from the draft's evidence: the chosen column's numbers for a
-        role it plays (the profile's for the others), the role's runner-up under the column it was proposed for."""
-        evidence, profiled = self.draft.evidence, self._profiled()
-        by_column: dict[str, dict[str, Any]] = {}
-        for role, entry in evidence.items():
-            if role == "text" and isinstance(entry, dict):
-                for item in entry.get("columns") or []:
-                    if isinstance(item, dict) and item.get("column"):
-                        by_column.setdefault(str(item["column"]), {}).update(item)
-            elif isinstance(entry, dict) and entry.get("column"):
-                by_column.setdefault(str(entry["column"]), {}).update(entry)
-        excluded = evidence.get("excluded") if isinstance(evidence.get("excluded"), dict) else {}
-        out = {}
-        for column, role in self.suggestions().items():
-            summary = evidence_summary(by_column.get(column) or profiled.get(column) or {})
-            if column in excluded:
-                summary = f"{summary}; excluded: {excluded[column]}" if summary else f"excluded: {excluded[column]}"
-            runner = ""
-            entry = evidence.get(role) if role else None
-            candidate = entry.get("runner_up") if isinstance(entry, dict) else None
-            if isinstance(candidate, dict) and candidate.get("column"):
-                score = f" ({candidate['score']})" if candidate.get("score") is not None else ""
-                runner = f"runner-up for {role}: {candidate['column']}{score}"
-            out[column] = (summary, runner)
+        """{column: (summary, note)}: the column's type, role and confidence with the evidence that chose the role, and
+        its model note when there is one."""
+        profiled, out = self._profiled(), {}
+        for column in self.suggestions():
+            entry = self.draft.doc["columns"].get(column, {})
+            kind = str(profiled.get(column, {}).get("type") or "")
+            summary = ", ".join(part for part in (kind, f"{entry.get('role', '?')} ({entry.get('confidence', '?')} confidence): "
+                                                        f"{entry.get('evidence', '')}" + ("; sensitive" if entry.get("sensitive") else "")) if part)
+            out[column] = (summary, entry.get("note", ""))
         return out
 
     def guide(self) -> str:
@@ -170,43 +157,33 @@ class RoleReview:
                 "These suggestions come from your table's column names and measured values. " + scope +
                 "The rules compare types, missing values, repeated values, dates and text lengths.\n" +
                 "\n".join(f"  {role}: {purpose}." for role, purpose in ROLE_PURPOSES.items()) +
-                "\nYou choose the prediction target (label): for example, TERMINATED predicts trial termination; "
-                "HAS_RESULTS predicts whether results were published. Both can contain 0/1.\n"
+                "\nYou choose the prediction target (label): the kit never guesses it. Two 0/1 columns can answer "
+                "different questions - pick the one that is the outcome you want to predict.\n"
                 "A rule-match score compares candidates; it is not a probability that their business meaning is correct. "
                 "Keep useful suggestions, change the others, and leave irrelevant columns as —. "
                 "Approve descriptor saves this column map for the next notebooks.")
 
     def explanations(self) -> dict[str, str]:
-        """Plain reasons beside the existing technical evidence; ties never imply certainty."""
-        profiled, evidence = self._profiled(), self.draft.evidence
-        excluded = evidence.get("excluded") or {}
+        """Plain reasons beside the evidence; a low-confidence role says so, and certainty is never implied."""
         result = {}
         for column, role in self.suggestions().items():
-            if column in excluded:
-                result[column] = f"No automatic role: {excluded[column]}. Leave it unassigned unless you need it."
+            entry = self.draft.doc["columns"].get(column, {})
+            if entry.get("sensitive"):
+                result[column] = "Looks like personal data (an e-mail, phone number, IBAN or postcode): it is never charted, grouped or sent to a model."
                 continue
             if role is None:
-                result[column] = "No strong automatic match. Choose a role if it fits your question, or leave it unassigned."
+                result[column] = (f"No notebook role: the rules call it {entry.get('role', 'other')} ({entry.get('evidence', '')}). "
+                                  "Choose a role if it fits your question, or leave it unassigned.")
                 continue
-            entry = evidence.get(role) or {}
-            numbers = profiled.get(column) or entry
-            distinct = numbers.get("distinct")
-            if role == "text":
-                reason = "Descriptive text can supply word features or optional AI summaries."
-            elif role == "date":
-                reason = "Date-like values can order events. Check that this is the event date your question needs."
-            elif role == "label":
-                reason = "Two outcome values make this a prediction candidate. You decide whether it is the outcome you want."
-            elif role == "category":
-                reason = f"{distinct} distinct values form repeated groups to compare." if distinct else "Repeated groups can be compared."
-            else:
-                reason = (f"{distinct} distinct names or identifiers can group observations by who or what they concern."
-                          if distinct else "Names or identifiers can group observations by who or what they concern.")
-            alternate = entry.get("runner_up") if isinstance(entry, dict) else None
-            if (isinstance(alternate, dict) and isinstance(entry.get("score"), (int, float))
-                    and isinstance(alternate.get("score"), (int, float))
-                    and alternate["score"] >= 0.5 and abs(round(entry["score"] - alternate["score"], 2)) <= 0.1):
-                reason += f" Close alternative: {alternate['column']}. Review which meaning fits your question."
+            reason = {"text": "Descriptive text can supply word features or optional AI summaries.",
+                      "date": "Date-like values can order events. Check that this is the event date your question needs.",
+                      "label": "Two outcome values make this a prediction candidate. You decide whether it is the outcome you want.",
+                      "category": "Repeated groups to compare",
+                      "entity": "Names or identifiers that group observations by who or what they concern"}[role]
+            if role in ("category", "entity"):
+                reason += f" ({entry.get('evidence', '')})."
+            if entry.get("confidence") == "low":
+                reason += f" Low confidence: {entry.get('evidence', '')} is close to the rule's line - check this one."
             result[column] = reason
         return result
 
@@ -229,31 +206,22 @@ class RoleReview:
             if role != "text" and len(groups[role]) > 1:
                 raise ValueError(f"The {role} role has two columns: {', '.join(groups[role])}. Pick one.")
         corrected = self._corrected(groups)
-        self.approved = corrected.approve(conn=self.conn)
-        log_event(DESCRIBE_APPROVE, descriptor_id=corrected.id, table=corrected.table,
-                  version=getattr(self.approved, "version", corrected.doc.get("version")),
-                  digest=corrected.doc.get("digest"), roles=corrected.roles, unchanged=False)
+        self.approved = corrected.approve(conn=self.conn)           # logs the approval to the active workflow
         self._save_beside(corrected)
         return self.approved
 
     def _corrected(self, groups: dict[str, list[str]]) -> Draft:
-        doc = self.draft.to_dict()
-        doc["roles"] = {}
-        doc["missing"] = []
-        corrected = Draft(doc, self.draft.profile)
-        original = self.draft.roles
+        """The draft with the reviewed choices: each role's slot set to its column, or emptied with the reason."""
+        corrected = self.draft.copy()
+        for role in ROLES:                                           # empty first, so a column can move between slots
+            corrected.assign(role, None)
         for role in ROLES:
             columns = groups[role]
             if columns:
-                chosen = columns if role == "text" else columns[0]
-                corrected.set(role, chosen)
-                if chosen == original.get(role):
-                    evidence = self.draft.evidence.get(role)
-                    if evidence is not None:
-                        corrected.doc.setdefault("evidence", {})[role] = evidence
+                corrected.assign(role, columns if role == "text" else columns[0])
             else:
                 old = next((m.get("reason") for m in self.draft.missing if m.get("role") == role), None)
-                corrected.doc["missing"].append({"role": role, "reason": old or "left unassigned during review"})
+                corrected.assign(role, None, old or "left unassigned during review")
         return corrected
 
     def _save_beside(self, draft: Draft, only_if_absent: bool = False) -> Path | None:
@@ -354,7 +322,7 @@ class RoleReview:
         return self.build_jupyter_picker(widgets)
 
     def build_jupyter_picker(self, widgets):
-        """One dropdown per column, labelled with the column, its evidence and the runner-up under it, then the
+        """One dropdown per column, labelled with the column, its evidence and its note under it, then the
         Approve button. ``widgets`` is the ipywidgets module (or a stand-in)."""
         labels, explanations = self.labels(), self.explanations()
         pickers, rows = {}, []

@@ -16,7 +16,7 @@ def _(mo):
     mo.md(r"""
     # Bring a trusted model file into SQL
 
-    **Dataset:** `pharma_trials` by default; change `DATASET` for Banking or a compatible described table.
+    **Dataset:** `esophageal_posts` by default; change `DATASET` for Banking or a compatible described table.
 
     Sometimes a model is trained on a laptop and arrives as a file. You want to call it from SQL without changing its predictions. This lesson provides a local stand-in model, copies it into the shared model directory and compares database scores with local scores.
 
@@ -33,7 +33,7 @@ def _(mo):
 def _():
     import exakit.nb as nb
 
-    DATASET = "pharma_trials"   # or "banking_complaints", or the path of a descriptor for a table you loaded
+    DATASET = "esophageal_posts"   # or "banking_complaints", or the path of a descriptor for a table you loaded
     return DATASET, nb
 
 
@@ -72,7 +72,7 @@ def _(mo):
     mo.md(r"""
     ## Agree what data the file will receive
 
-    Open the approved role map and check that category, text and label mean the same things the model was trained to use. Pharma supplies phase and trial descriptions; Banking supplies product and complaint descriptions.
+    Open the approved role map and check that category, text and label mean the same things the model was trained to use. Esophageal supplies network and post text; Banking supplies product and complaint descriptions.
 
     **Technical note:** the connection comes from the kit store. `DATASET` selects the descriptor; its mapped column names supply the SQL expressions below.
     """)
@@ -363,7 +363,7 @@ def _(mo):
     mo.md(r"""
     ## Use the verified scorer in an ordinary query
 
-    Once the comparison is satisfactory, inspect the average predicted probability and actual outcome share per category. Pharma groups by phase; Banking groups by product.
+    Once the comparison is satisfactory, inspect the average predicted probability and actual outcome share per category. Esophageal groups by network; Banking groups by product.
 
     **Read the result:** a predicted probability is a model estimate, while the actual label share is observed data. Disagreement can reveal calibration or coverage problems worth investigating.
 

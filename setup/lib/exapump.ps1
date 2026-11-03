@@ -2903,7 +2903,7 @@ function Get-ExakitBundledDatasets {
 }
 
 # --- reference datasets: CSVs from a checksummed release asset --------------
-# A reference dataset (pharma_trials, banking_complaints) keeps its CSVs in git
+# A reference dataset (esophageal_posts, banking_complaints) keeps its CSVs in git
 # but not in the kit archive users download (.gitattributes, export-ignore):
 # they ship as one deterministic <id>-<snapshot>.tar.gz per dataset, a release
 # asset whose SHA-256, size and URL are in the dataset's manifest.json

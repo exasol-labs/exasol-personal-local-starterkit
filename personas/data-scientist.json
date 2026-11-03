@@ -2,11 +2,11 @@
   "schema_version": 1,
   "id": "data-scientist",
   "title": "Data Scientist",
-  "summary": "Explore Pharma, Banking or your own files in connected notebooks and trace model calls to your Langfuse. Add Dash Server when you want to share a dashboard.",
+  "summary": "Explore Esophageal, Banking or your own files in connected notebooks and trace model calls to your Langfuse. Add Dash Server when you want to share a dashboard.",
   "picker": true,
   "visible": true,
   "order": 10,
-  "datasets": ["pharma_trials", "banking_complaints"],
+  "datasets": ["esophageal_posts", "banking_complaints", "bank_marketing"],
   "mcp_clients": "all",
   "addons": ["notebook"]
 }

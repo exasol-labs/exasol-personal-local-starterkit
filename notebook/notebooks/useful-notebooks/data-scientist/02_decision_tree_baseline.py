@@ -9,7 +9,7 @@
 # %% [markdown]
 # # Try a different small model and compare it fairly
 #
-# **Dataset:** Pharma or Banking. **How long:** five minutes.
+# **Dataset:** Esophageal or Banking. **How long:** five minutes.
 #
 # Can the category alone tell us anything useful about the chosen outcome? Train a small decision tree on your computer and compare it with always choosing the majority class. The result gives you a starting experiment, even when the tree does not improve the baseline.
 #
@@ -20,7 +20,7 @@
 # %%
 import exakit.nb as nb
 
-DATASET = "pharma_trials"  # or "banking_complaints"
+DATASET = "esophageal_posts"  # or "banking_complaints"
 conn = nb.connect()
 ds = nb.dataset(conn, DATASET).require_approved("decision-tree baseline")
 nb.workflow("decision-tree-baseline")

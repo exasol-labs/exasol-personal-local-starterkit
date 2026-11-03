@@ -106,7 +106,7 @@ if command -v python3 >/dev/null 2>&1; then
     echo "a persona's datasets: Skip when none of them is still to load:"
     out="$(replay '\r' EXAKIT_DATASETS_PRESELECT=none)"
     has "persona datasets none: Enter skips" "SELECTION=none" "$out"
-    out="$(replay '\r' EXAKIT_DATASETS_PRESELECT=pharma_trials)"
+    out="$(replay '\r' EXAKIT_DATASETS_PRESELECT=esophageal_posts)"
     has "persona datasets all loaded already: Enter skips" "SELECTION=none" "$out"
     out="$(replay '\r' EXAKIT_DATASETS_PRESELECT=energy)"
     has "persona datasets still to load: Enter loads exactly those" "SELECTION=energy" "$out"
@@ -162,7 +162,7 @@ table() { # table <pending-ids...> — EXAKIT_TABLE_DEFAULTS~EXAKIT_TABLE_ROW_LO
 check "no persona: the parent and every pending row ticked" "1,2,3~4~6" "$(table tpch energy)"
 check "persona's dataset pending: that row only" "3~4~6" "$(EXAKIT_DATASETS_PRESELECT=energy table tpch energy)"
 check "persona's datasets are every one: the parent too" "1,2,3~4~6" "$(EXAKIT_DATASETS_PRESELECT=tpch,energy table tpch energy)"
-check "persona's datasets loaded already: Skip" "6~4~6" "$(EXAKIT_DATASETS_PRESELECT=pharma_trials table tpch energy)"
+check "persona's datasets loaded already: Skip" "6~4~6" "$(EXAKIT_DATASETS_PRESELECT=esophageal_posts table tpch energy)"
 check "persona datasets none: Skip" "6~4~6" "$(EXAKIT_DATASETS_PRESELECT=none table tpch energy)"
 check "ids are matched exactly" "6~4~6" "$(EXAKIT_DATASETS_PRESELECT=ENERGY table tpch energy)"
 check "nothing pending: your own file, never Skip" "2~2~4" "$(table)"
@@ -191,11 +191,11 @@ check "EXAKIT_DATA_FILE bypasses the table" "local~" \
         printf '%s~%s' "$EXAKIT_DATA_LOAD_SELECTION" "$EXAKIT_TABLE_STATE") )"
 
 echo "who each dataset is for is a column, not a suffix:"
-out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H retail benchmark (~175k rows)\npharma_trials|Pharma clinical trials (ClinicalTrials.gov, ~5k trials)\n'; }
+out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H retail benchmark (~175k rows)\nesophageal_posts|Esophageal cancer posts (social listening, ~41k posts, de-identified)\n'; }
         exakit_data_table_build "$WORK/table"
         printf '%s~%s~%s' "$EXAKIT_TABLE_HAS_FOR" "$(cut -d'|' -f2 "$WORK/table" | tr '\n' ';')" "$(cut -d'|' -f11 "$WORK/table" | tr '\n' ';')") )"
 check "the names stay names; the personas go in column 2" \
-    "1~Sample datasets;TPC-H retail benchmark;Pharma clinical trials;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - coming soon;Skip;~;;both personas;;;;" "$out"
+    "1~Sample datasets;TPC-H retail benchmark;Esophageal cancer posts;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - coming soon;Skip;~;;both personas;;;;" "$out"
 out="$( (exakit_persona_dataset_hints() { :; }
         exakit_pending_datasets() { printf 'tpch|TPC-H retail benchmark\n'; }
         exakit_data_table_build "$WORK/table"; printf '%s' "$EXAKIT_TABLE_HAS_FOR") )"
@@ -228,14 +228,14 @@ dl() { # dl <pending-ids> <args...> — what cmd_data_load does, stubbed below t
         cmd_data_load "$@"
     ) 2>&1
 }
-check "--force <dataset> reloads exactly that dataset" "LOAD pharma_trials --force" "$(dl tpch --force pharma_trials | grep '^LOAD')"
-check "<dataset> --force, the other order, too" "LOAD pharma_trials --force" "$(dl tpch pharma_trials --force | grep '^LOAD')"
+check "--force <dataset> reloads exactly that dataset" "LOAD esophageal_posts --force" "$(dl tpch --force esophageal_posts | grep '^LOAD')"
+check "<dataset> --force, the other order, too" "LOAD esophageal_posts --force" "$(dl tpch esophageal_posts --force | grep '^LOAD')"
 check "bare --force still reloads the bundled sample" "LOAD tpch(sample) --force" "$(dl tpch --force | grep '^LOAD')"
-check "a dataset id wins over EXAKIT_DATA_FILE in the environment" "LOAD pharma_trials " \
-    "$(EXAKIT_DATA_FILE="$WORK" dl pharma_trials pharma_trials | grep -E '^(LOAD|MENU)')"
+check "a dataset id wins over EXAKIT_DATA_FILE in the environment" "LOAD esophageal_posts " \
+    "$(EXAKIT_DATA_FILE="$WORK" dl esophageal_posts esophageal_posts | grep -E '^(LOAD|MENU)')"
 check "...and over EXAKIT_DATASETS" "LOAD energy " "$(EXAKIT_DATASETS=tpch dl "tpch energy" energy | grep -E '^(LOAD|MENU)')"
-out="$(dl tpch pharma_trials)"
-has "an id already loaded names the reload command for it" "exakit data-load --force pharma_trials" "$out"
+out="$(dl tpch esophageal_posts)"
+has "an id already loaded names the reload command for it" "exakit data-load --force esophageal_posts" "$out"
 has "two targets are refused" "REJECT: data-load takes one file, folder or dataset at a time" "$(dl tpch tpch energy)"
 has "--force with a file is refused, with the file's own answer" "EXAKIT_ON_EXISTING=replace" "$(dl tpch --force "$WORK")"
 has "an unknown option is refused" "REJECT: Unknown option '--nope'" "$(dl tpch --nope)"

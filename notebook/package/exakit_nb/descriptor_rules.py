@@ -18,6 +18,13 @@ role, model-written ``notes`` per column and the roles no column fits, ``missing
 may then be absent from ``roles``). A ``schema_version: 1`` file is the 0.2 kit's shape, read as version 1, approved,
 owned by the kit, drafted by what shipped it, with no digest and no creation time - nothing it does not say is guessed
 beyond that.
+
+A file starting ``descriptor: 1`` is the role-per-column descriptor (setup/lib/descriptor): every column of the source
+table has one of eight roles, with its confidence and evidence, and ``slots`` name the columns the notebooks need -
+key, time, text, target, and the category and entity they group by. It reads as a Descriptor with schema_version 3:
+the time slot is the ``date`` role, the target the ``label``, the text slot the ``text``, category and entity as they
+are, and an empty slot is a missing role with the reason ``slot_evidence`` gives. ``columns``, ``slots`` and
+``grain`` are kept on the Descriptor for the code that reads the new shape.
 """
 
 from __future__ import annotations
@@ -48,7 +55,7 @@ DRAFTERS = ("profile", "shipped", "user")
 V1_RECORD = {"version": 1, "status": "approved", "owner": "kit", "created": None, "digest": None, "drafted_by": "shipped"}
 DESCRIPTOR_FILES = ("descriptor.yaml", "descriptor.yml", "descriptor.json")   # what a dataset folder may hold, first wins
 _IDENT = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,127}$")
-_ID = re.compile(r"^[a-z0-9]+([-_][a-z0-9]+)*$")        # a dataset id: its folder name (pharma_trials, sample-claims)
+_ID = re.compile(r"^[a-z0-9]+([-_][a-z0-9]+)*$")        # a dataset id: its folder name (esophageal_posts, sample-claims)
 _LIVE = "vs:"                                           # a v2 source that is a virtual schema's alias (a live source)
 
 Problems = list[str]
@@ -94,6 +101,14 @@ class Descriptor:
     evidence: dict[str, dict[str, Any]] = field(default_factory=dict)
     notes: dict[str, str] = field(default_factory=dict)
     missing: tuple[dict[str, str], ...] = ()
+    columns: dict[str, dict[str, Any]] = field(default_factory=dict)
+    slots: dict[str, str | None] = field(default_factory=dict)
+    grain: str | None = None
+
+    @property
+    def sensitive(self) -> tuple[str, ...]:
+        """The columns a role-per-column descriptor marks sensitive: never charted, never sent to a model."""
+        return tuple(name for name, entry in self.columns.items() if entry.get("sensitive"))
 
     @property
     def approved(self) -> bool:
@@ -498,12 +513,143 @@ def parse_descriptor(text: str, source: str = "the descriptor") -> Descriptor:
         if isinstance(err, BadInput):
             raise
         raise BadInput(f"{source} cannot be read ({err}).") from err
+    if isinstance(doc, dict) and "descriptor" in doc:
+        return column_descriptor(doc, source)
     problems = validate_descriptor(doc)
     if problems:
         raise BadInput(f"{source} is not a valid dataset descriptor: {'; '.join(problems)}.")
     roles = _roles(doc, [])
     return Descriptor(id=doc["id"], fact_table=str(qualified_table(doc["fact_table"])), roles=roles,
                       source=doc.get("source"), schema_version=doc["schema_version"], **_record(doc))
+
+
+# --- the role-per-column descriptor (descriptor: 1) -------------------------------------------------------------
+
+COLUMN_FORMAT = 1
+COLUMN_ROLES = ("key", "time", "measure", "category", "flag", "text", "identifier", "other")
+SLOT_NAMES = ("key", "time", "text", "target", "category", "entity")
+REQUIRED_SLOTS = ("key", "time", "text", "target")
+SLOT_ROLES = {"key": ("key",), "time": ("time",), "text": ("text",)}   # the role a slot's column must have
+LEGACY_ROLE = {"entity": "entity", "category": "category", "time": "date", "target": "label", "text": "text"}
+SOURCE_KINDS = ("local", "file", "virtual")
+COLUMN_TOP_KEYS = ("descriptor", "dataset", "source", "version", "status", "owner", "approved_at", "grain", "slots",
+                   "slot_evidence", "columns")
+SOURCE_KEYS = ("kind", "object", "schema_digest", "profiled_rows", "profiled", "snapshot_of", "snapshot_at")
+COLUMN_KEYS = ("role", "confidence", "evidence", "sensitive", "note")
+
+
+def _column_entry_problems(name: str, entry: Any) -> Problems:
+    if not isinstance(entry, dict):
+        return [f"columns.{name} must be {{role, confidence, evidence}}"]
+    problems = [f"columns.{name}: unknown keys {', '.join(sorted(set(entry) - set(COLUMN_KEYS)))}"] if set(entry) - set(COLUMN_KEYS) else []
+    if entry.get("role") not in COLUMN_ROLES:
+        problems.append(f"columns.{name}.role must be one of {', '.join(COLUMN_ROLES)}")
+    if entry.get("confidence") not in ("high", "low"):
+        problems.append(f"columns.{name}.confidence must be high or low")
+    if not isinstance(entry.get("evidence"), str):
+        problems.append(f"columns.{name}.evidence must be the numbers that chose the role, as text")
+    if "sensitive" in entry and not isinstance(entry["sensitive"], bool):
+        problems.append(f"columns.{name}.sensitive must be true or false")
+    if "note" in entry and not isinstance(entry["note"], str):
+        problems.append(f"columns.{name}.note must be one line of text")
+    return problems
+
+
+def _slot_problems(slots: Any, columns: dict[str, Any]) -> Problems:
+    if not isinstance(slots, dict):
+        return ["slots must map key, time, text and target to a column or null"]
+    problems = [f"slots: unknown slots {', '.join(sorted(set(slots) - set(SLOT_NAMES)))}"] if set(slots) - set(SLOT_NAMES) else []
+    problems += [f"slots.{name} is missing (null leaves it empty on purpose)" for name in REQUIRED_SLOTS if name not in slots]
+    taken: dict[str, str] = {}
+    for name, column in slots.items():
+        if column is None:
+            continue
+        if not isinstance(column, str) or column not in columns:
+            problems.append(f"slots.{name} names {column!r}, which is not one of the columns")
+            continue
+        if column in taken:
+            problems.append(f"column {column} sits in two slots ({taken[column]}, {name})")
+        taken[column] = name
+        entry = columns[column] if isinstance(columns[column], dict) else {}
+        if name in SLOT_ROLES and entry.get("role") not in SLOT_ROLES[name]:
+            problems.append(f"slots.{name} needs a column with role {SLOT_ROLES[name][0]}; {column} is {entry.get('role')}")
+        if entry.get("sensitive") and name in ("target", "category", "entity", "text"):
+            problems.append(f"slots.{name}: {column} is sensitive, so it is never grouped, charted or sent to a model")
+        if name in LEGACY_ROLE and not _IDENT.match(column):
+            problems.append(f"slots.{name}: {column} is not a plain SQL name; give it one through a view")
+    return problems
+
+
+def validate_column_descriptor(doc: Any) -> Problems:
+    """Every problem of a role-per-column descriptor (descriptor: 1), each naming its key; empty when valid."""
+    if not isinstance(doc, dict) or doc.get("descriptor") != COLUMN_FORMAT or isinstance(doc.get("descriptor"), bool):
+        return [f"descriptor must be {COLUMN_FORMAT}"]
+    problems = [f"unknown keys: {', '.join(sorted(set(doc) - set(COLUMN_TOP_KEYS)))}"] if set(doc) - set(COLUMN_TOP_KEYS) else []
+    if not isinstance(doc.get("dataset"), str) or not _ID.match(doc["dataset"]):
+        problems.append("dataset must be the dataset id (lower-case letters and digits, joined by - or _)")
+    source = doc.get("source")
+    if not isinstance(source, dict):
+        problems.append("source must be {kind, object, schema_digest, profiled_rows}")
+        source = {}
+    problems += [f"source: unknown keys {', '.join(sorted(set(source) - set(SOURCE_KEYS)))}"] if set(source) - set(SOURCE_KEYS) else []
+    if source.get("kind") not in SOURCE_KINDS:
+        problems.append(f"source.kind must be {', '.join(SOURCE_KINDS)}")
+    if qualified_table(source.get("object")) is None:
+        problems.append("source.object must be SCHEMA.TABLE (plain SQL names)")
+    if source.get("schema_digest") is not None and not str(source["schema_digest"]).startswith("sha256:"):
+        problems.append("source.schema_digest must be sha256:<hex>, or null")
+    if not isinstance(doc.get("version"), int) or isinstance(doc.get("version"), bool) or doc["version"] < 1:
+        problems.append("version must be an integer from 1 (approving writes the next)")
+    if doc.get("status") not in STATUSES:
+        problems.append(f"status must be {' or '.join(STATUSES)}")
+    if doc.get("status") == "approved":
+        if not isinstance(doc.get("owner"), str) or not doc["owner"].strip():
+            problems.append("owner must name who approved it")
+        if not isinstance(doc.get("approved_at"), str) or _timestamp(doc["approved_at"]) is None:
+            problems.append("approved_at must be an ISO-8601 timestamp")
+    if "grain" in doc and doc["grain"] is not None and not isinstance(doc["grain"], str):
+        problems.append("grain must be one line, e.g. one row per complaint")
+    columns = doc.get("columns")
+    if not isinstance(columns, dict) or not columns:
+        return problems + ["columns must give every column of the table its role"]
+    for name, entry in columns.items():
+        problems += _column_entry_problems(str(name), entry)
+    evidence = doc.get("slot_evidence")
+    if evidence is not None and (not isinstance(evidence, dict) or not all(isinstance(v, str) for v in evidence.values())):
+        problems.append("slot_evidence must map a slot to why it is empty")
+    return problems + _slot_problems(doc.get("slots"), columns)
+
+
+def column_descriptor(doc: dict[str, Any], source: str = "the descriptor") -> Descriptor:
+    """A role-per-column descriptor as the Descriptor every consumer reads (schema_version 3); BadInput names every
+    problem of an invalid one."""
+    problems = validate_column_descriptor(doc)
+    if problems:
+        raise BadInput(f"{source} is not a valid dataset descriptor: {'; '.join(problems)}.")
+    table = str(qualified_table(doc["source"]["object"]))
+    slots = {name: doc["slots"].get(name) for name in SLOT_NAMES}
+    why = dict(doc.get("slot_evidence") or {})
+    roles: dict[str, tuple[ColumnRef, ...]] = {}
+    missing = []
+    for slot, role in LEGACY_ROLE.items():
+        if slots.get(slot):
+            roles[role] = (ColumnRef(table, slots[slot].upper()),)
+        else:
+            missing.append({"role": role, "reason": why.get(slot) or f"no {slot} column is set"})
+    kind = doc["source"]["kind"]
+    status = doc["status"]
+    owner = str(doc.get("owner") or "kit")
+    return Descriptor(
+        id=doc["dataset"], fact_table=table, roles=roles,
+        source=f"vs:{table.split('.', 1)[0]}" if kind == "virtual" else (f"file:{table}" if kind == "file" else doc["dataset"]),
+        schema_version=3, version=doc["version"], status=status, owner=owner, created=doc.get("approved_at"),
+        digest=doc["source"].get("schema_digest"),
+        drafted_by="profile" if status == "draft" else ("shipped" if owner == "kit" else "user"),
+        evidence={role: {"column": slots[slot], **{k: v for k, v in doc["columns"][slots[slot]].items() if k != "role"}}
+                  for slot, role in LEGACY_ROLE.items() if slots.get(slot)},
+        notes={name: entry["note"] for name, entry in doc["columns"].items() if entry.get("note")},
+        missing=tuple(missing), columns={str(k): dict(v) for k, v in doc["columns"].items()}, slots=slots,
+        grain=doc.get("grain"))
 
 
 def descriptor_file(folder: Path) -> Path | None:

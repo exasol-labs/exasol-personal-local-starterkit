@@ -160,6 +160,24 @@ def _table_problems(folder: Path, schema_tables: dict[str, list[str]]) -> list[s
     return problems
 
 
+def _column_descriptor_problems(name: str, descriptor, folder: Path) -> list[str]:
+    """A shipped role-per-column descriptor: a key and a target, every column of its table in table order, the schema
+    digest its 01_create_schema.sql declares, and a reason for every empty slot."""
+    from descriptor_draft import tables
+    sys.path.insert(0, str(ROOT / "setup" / "lib"))
+    from descriptor.profile import schema_digest
+    problems = [f"{name}: a reference dataset sets the {slot} slot" for slot in ("key", "target") if not descriptor.slots.get(slot)]
+    schema, declared = tables((folder / "01_create_schema.sql").read_text(encoding="utf-8"))
+    table = descriptor.fact_table.split(".", 1)[1]
+    columns = declared.get(table, [])
+    if list(descriptor.columns) != [column for column, _ in columns]:
+        problems.append(f"{name}: columns must be every column of {descriptor.fact_table}, in table order")
+    elif descriptor.digest != schema_digest([{"column": c, "type": t} for c, t in columns]):
+        problems.append(f"{name}: source.schema_digest is not the digest of {table}'s declared columns "
+                        "(redraft it: python3 tools/descriptor_draft.py --ship ...)")
+    return problems
+
+
 def _descriptor_problems(folder: Path, schema: str, schema_tables: dict[str, list[str]]) -> list[str]:
     """A dataset with a descriptor (descriptor.yaml) is a reference dataset: valid descriptor, a manifest that
     matches, a README and at least ten read-only example queries on its own schema (data/README.md, "Reference
@@ -179,7 +197,9 @@ def _descriptor_problems(folder: Path, schema: str, schema_tables: dict[str, lis
         problems.append(f"{path.name}: version must be 1 or more (version: {descriptor.version})")
     if descriptor.schema_version == 2 and descriptor.drafted_by != "shipped":
         problems.append(f"{path.name}: a shipped descriptor is drafted_by: shipped (has {descriptor.drafted_by})")
-    if descriptor.missing:
+    if descriptor.schema_version == 3:
+        problems += _column_descriptor_problems(path.name, descriptor, folder)
+    elif descriptor.missing:
         problems.append(f"{path.name}: a reference dataset has every role (missing: "
                         f"{', '.join(m['role'] for m in descriptor.missing)})")
     known = {f"{schema}.{t}": cols for t, cols in schema_tables.items()}

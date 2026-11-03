@@ -48,17 +48,19 @@ class DescriptorWorkflowTest(unittest.TestCase):
         sys.path.insert(0, str(ROOT / "setup/lib"))
         sys.path.insert(0, str(ROOT / "tests"))
         import describe_service as service
-        from test_describe_service import FakeConn, Profiles, readings_draft
+        from descriptor import profile as profiling
+        from test_describe_service import Database
+        from test_descriptor_flow import COLUMNS, rows
         with tempfile.TemporaryDirectory() as home, mock.patch.dict(os.environ, {
                 "EXAKIT_HOME": home, "EXAKIT_WORKFLOW_ID": "wf-20261030-abcdef"}, clear=True), \
-                mock.patch.dict(kit.SESSION, {}, clear=True), contextlib.redirect_stdout(io.StringIO()):
-            conn = FakeConn(Profiles.COLUMNS, Profiles.rows())
-            doc = readings_draft(conn)
-            result = service.approve(conn, doc, comments=False)
-            rows = wf.read_log("wf-20261030-abcdef")
-        self.assertEqual([row["kind"] for row in rows], ["describe.draft", "describe.approve"])
-        self.assertEqual(rows[-1]["descriptor_version"], result["version"])
-        self.assertEqual(rows[-1]["descriptor_id"], result["id"])
+                mock.patch.dict(kit.SESSION, {}, clear=True), contextlib.redirect_stdout(io.StringIO()), \
+                mock.patch.object(service, "connect", return_value=Database(COLUMNS, rows())), \
+                mock.patch.object(profiling, "profile", side_effect=lambda c, t, *, run=None: profiling.profile_rows(COLUMNS, rows(), t)):
+            self.assertEqual(0, service.main(["draft", "support.tickets", "--id", "support_tickets"]))
+            self.assertEqual(0, service.main(["approve", "support_tickets", "--role", "label=ESCALATED", "--no-comments"]))
+            events = wf.read_log("wf-20261030-abcdef")
+        self.assertEqual([row["kind"] for row in events], ["describe.draft", "describe.approve"])
+        self.assertEqual((events[0]["descriptor_id"], events[-1]["version"]), ("support_tickets", 1))
 
 
 class MissingRolesTest(unittest.TestCase):

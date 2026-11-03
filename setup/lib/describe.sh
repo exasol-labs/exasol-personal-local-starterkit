@@ -1,24 +1,24 @@
 #!/usr/bin/env bash
-# describe.sh — `exakit describe <table> [--sample N] [--id <slug>] [--json]
-# [--write <path>]`: profile SCHEMA.TABLE and draft its descriptor (DS-5): a
-# role per column with the evidence that chose it and, under missing, the
-# roles no column fits, each with its reason. And the approve half:
-#   exakit describe <id|draft.yaml> --approve [--role <role>=<COL>]... [--owner <who>] [--no-comments]
+# describe.sh — `exakit describe <table> [--id <slug>] [--json] [--write <path>]`:
+# describe SCHEMA.TABLE (DS-2, DS-5): its approved descriptor when the table
+# still matches it, else a draft giving every column one of eight roles with
+# the evidence that chose it, and the slots the notebooks use. The approve half:
+#   exakit describe <id|SCHEMA.TABLE|draft.yaml> --approve [--role <slot>=<COL>]... [--owner <who>] [--no-comments]
 #   exakit describe <id> --show [--version n]  |  --versions  |  --comments
-# approve validates the roles, computes the table digest, writes the next
-# version into ~/.exasol-starter-kit/descriptors/<id>/ and writes the roles
-# into the table's column comments (a view in STARTER_KIT for a virtual
-# table); --show prints one version, --versions lists them, --comments writes
-# the comments again. All take --json.
+# approve checks the roles and that the table has not changed, writes the next
+# version into ~/.exasol-starter-kit/descriptors/<SCHEMA>.<TABLE>/ and
+# publishes the roles as column comments on a view in EXAKIT_SEMANTIC (the
+# user's own table is never commented); --show prints one version, --versions
+# lists them, --comments publishes again. All take --json.
 #
-# THE PROFILING, THE SCORING AND THE APPROVING LIVE IN ONE PYTHON SERVICE,
+# THE PROFILING, THE DRAFTING AND THE APPROVING LIVE IN ONE PYTHON SERVICE,
 # setup/lib/describe_service.py, which this file and its twin describe.ps1
 # both run through the kit's notebook Python (pyexasol lives in that venv, so
 # the add-on has to be there: exakit marketplace notebook), connected as the
 # kit's admin user: the password is
 # read from its file by the child and never reaches a command line. The shell
 # keeps only the argument check and the refusals. Drafting runs SELECTs only;
-# approving writes comments (and the view) and nothing else.
+# approving writes the view in EXAKIT_SEMANTIC and nothing else.
 #
 # Exit codes: 0 ok; 1 the add-on is not installed; 2 bad arguments or roles;
 # 3 the table or the id is not there; 4 the database is not reachable; 5 a
@@ -41,6 +41,7 @@ describe_run() {
     EXAKIT_PYX_DSN="$(manifest_get runtime.dsn 2>/dev/null || true)" \
     EXAKIT_PYX_USER="$(manifest_get runtime.user 2>/dev/null || echo sys)" \
     EXAKIT_PYX_PWFILE="$(manifest_get runtime.password_file 2>/dev/null || true)" \
+    EXAKIT_MCP_READER="$(manifest_get components.mcp_server.connection.user 2>/dev/null || true)" \
         "$_dr_python" "$(exakit_repo_root)/setup/lib/describe_service.py" "$@"
 }
 
@@ -82,9 +83,9 @@ cmd_describe() {
                         case "$2" in ''|*[!0-9]*|0*) reject "--version takes a version number (a positive integer), not '$2'." ;; esac
                         _cd_version="$2" ;;
                     --role)
-                        # role=COLUMN (text=A,B); the service checks the column against the table.
-                        printf '%s' "$2" | grep -Eq '^(entity|category|date|label|text)=[A-Za-z][A-Za-z0-9_]*(,[A-Za-z][A-Za-z0-9_]*)*$' || \
-                            reject "--role takes role=COLUMN with the role one of entity, category, date, label, text (text takes A,B,...), not '$2'."
+                        # slot=COLUMN (or slot=- to leave it empty); the service checks the column against the table.
+                        printf '%s' "$2" | grep -Eq '^(key|time|text|target|category|entity|date|label)=([A-Za-z][A-Za-z0-9_]*(,[A-Za-z][A-Za-z0-9_]*)*|-)$' || \
+                            reject "--role takes slot=COLUMN with the slot one of key, time, text, target, category, entity (date and label name time and target; slot=- leaves it empty), not '$2'."
                         _cd_roles+=("$2") ;;
                 esac
                 shift ;;

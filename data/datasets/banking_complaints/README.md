@@ -22,7 +22,7 @@ API nor the bulk download carries them (checked 2026-10-20). The text columns
 here are therefore short: the **issue** and **sub-issue** the consumer picked,
 and the company's optional **public response**, which is one of a few set
 phrases. The notebooks' text step works on them, but expect short, repetitive
-text rather than prose. For long free text, use `pharma_trials`.
+text rather than prose. For long free text, use `esophageal_posts`.
 
 The public response is written when the company answers, so it could hint at
 the outcome. In this snapshot it hardly does: behind each response given

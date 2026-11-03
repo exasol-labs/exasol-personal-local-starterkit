@@ -51,7 +51,7 @@ Expected baseline:
 
 | Item | Data Scientist | ML Engineer | Both together |
 |---|---|---|---|
-| Datasets | Pharma + Banking | Pharma + Banking | Each loaded once |
+| Datasets | Esophageal + Banking + Bank marketing | Esophageal + Banking + Bank marketing | Each loaded once |
 | Add-ons | Notebook | Notebook + UDF devkit | Notebook + UDF devkit |
 | MLflow | — | Managed local service | Managed local service |
 | Extra tools | Dash Server / JSON Tables added explicitly below | Same | Same |
@@ -67,16 +67,16 @@ exakit persona plan data-scientist,ml-engineer
 exakit notebook check
 exakit mcp-doctor --json
 exakit sql --json 'SELECT CURRENT_TIMESTAMP'
-exakit sql 'SELECT COUNT(*) AS N FROM PHARMA.PHARMA_TRIALS'
+exakit sql 'SELECT COUNT(*) AS N FROM ESOPHAGEAL.ESOPHAGEAL_POSTS'
 exakit sql 'SELECT COUNT(*) AS N FROM BANKING.BANKING_COMPLAINTS'
 ```
 
-Pass: database running; persona plan has nothing pending; notebook connection works; the timestamp returns; counts are **5,169 Pharma trials** and **6,754 Banking complaints**. MCP doctor should report a successful handshake for configured clients. Restart an AI client before expecting its newly registered tools to appear.
+Pass: database running; persona plan has nothing pending; notebook connection works; the timestamp returns; counts are **40,987 Esophageal posts**, **6,754 Banking complaints** and **45,211 Bank marketing clients**. MCP doctor should report a successful handshake for configured clients. Restart an AI client before expecting its newly registered tools to appear.
 
 If a reference dataset is missing, load it and repeat the count:
 
 ```sh
-exakit data-load pharma_trials
+exakit data-load esophageal_posts
 exakit data-load banking_complaints
 ```
 
@@ -113,7 +113,7 @@ Pass: Rust smoke reports the pinned rustc/SDK, and the installed aliases include
 
 A first Rust **build** additionally needs a running Docker or Podman Linux engine. The database running inside Exasol Personal does not by itself prove that a build engine is available.
 
-## 5. Data Scientist: Pharma, then Banking
+## 5. Data Scientist: Esophageal, then Banking
 
 ```sh
 exakit notebook
@@ -123,10 +123,10 @@ Choose JupyterLab. In `starter-kit-notebooks/data-scientist/`, use the **Exasol 
 
 | Notebook | Action | Pass |
 |---|---|---|
-| `00_quickstart.ipynb` | Keep `SAMPLE = "pharma_trials"`; leave own-file and connected-source defaults alone. Review the proposed roles and click **Approve descriptor** before continuing. | Connection, approved roles and first query succeed; workflow ID is printed. |
-| `01_explore.ipynb` | Keep `DATASET = "pharma_trials"` and `USE_AI_THEMES = False`; run the SQL, client model and final handoff cell. | SQL/results appear and a handoff file is written. Optional AI themes stay off, including when an endpoint is configured. |
+| `00_quickstart.ipynb` | Keep `SAMPLE = "esophageal_posts"`; leave own-file and connected-source defaults alone. Review the proposed roles and click **Approve descriptor** before continuing. | Connection, approved roles and first query succeed; workflow ID is printed. |
+| `01_explore.ipynb` | Keep `DATASET = "esophageal_posts"` and `USE_AI_THEMES = False`; run the SQL, client model and final handoff cell. | SQL/results appear and a handoff file is written. Optional AI themes stay off, including when an endpoint is configured. |
 | `02_ask_your_data.ipynb` | Keep `DRAFT_WITH_MODEL = False`. Leave `APPROVE_SQL = False` first; after reading the SQL, set it to `True` and rerun the approval cell. | No proposal execution before approval; category counts return after approval. |
-| `03_share.ipynb` | Use `APP_NAME = "pharma-category-check"`. Run Preview, open its URL, expand Filters and display, try search/sort/Top N and Reset, then check the figures. Only then set `FIGURES_CHECKED = True` and rerun the last cell. | Healthy preview, then a live Dash Server URL; no promotion while the flag is false. |
+| `03_share.ipynb` | Use `APP_NAME = "esophageal-category-check"`. Run Preview, open its URL, expand Filters and display, try search/sort/Top N and Reset, then check the figures. Only then set `FIGURES_CHECKED = True` and rerun the last cell. | Healthy preview, then a live Dash Server URL; no promotion while the flag is false. |
 
 Copy the quickstart's workflow ID into `WORKFLOW_ID` in subsequent notebooks to keep one log across kernels.
 
@@ -149,14 +149,14 @@ Run Data Scientist `01_explore` first for each dataset so the handoff exists. Op
 
 | Notebook | Action | Pass / current expectation |
 |---|---|---|
-| `00_quickstart.ipynb` | Keep Pharma; run connection, container, MLflow and bucket checks, then review/approve roles. | Checks and first query succeed. Record any failed bucket check; do not silently mark it passed. |
-| `01_train.ipynb` | Set `DATASET = "pharma_trials"`; keep seed/options unchanged. Run training and artifact export twice. | Two runs have identical metrics/coefficients; model, training SQL and coefficients appear in MLflow. Pharma's last observed macro-F1 was `0.445955`, above baseline `0.441129`. |
-| `02_rust_score.ipynb` | Keep the same dataset; use `UDF_NAME = "score_pharma"`. Set `TEST_ROWS = 10_000` for the reference acceptance run; run build/deploy and parity cells. | Rust/Python labels agree and maximum probability difference is **below `1e-9`** on the tested rows. The Rust MLflow run includes container/library/Cargo digests. |
+| `00_quickstart.ipynb` | Keep Esophageal; run connection, container, MLflow and bucket checks, then review/approve roles. | Checks and first query succeed. Record any failed bucket check; do not silently mark it passed. |
+| `01_train.ipynb` | Set `DATASET = "esophageal_posts"`; keep seed/options unchanged. Run training and artifact export twice. | Two runs have identical metrics/coefficients; model, training SQL and coefficients appear in MLflow. Esophageal's last observed macro-F1 was `0.445955`, above baseline `0.441129`. |
+| `02_rust_score.ipynb` | Keep the same dataset; use `UDF_NAME = "score_posts"`. Set `TEST_ROWS = 10_000` for the reference acceptance run; run build/deploy and parity cells. | Rust/Python labels agree and maximum probability difference is **below `1e-9`** on the tested rows. The Rust MLflow run includes container/library/Cargo digests. |
 | `03_score_external_model.ipynb` | Keep `MODEL_FILE = None` to train its built-in local example. This tests a local model file, not an external data connection. | File is copied to the shared bucket and local/database predictions match. A skipped comparison or version mismatch is not a pass. |
 
 Repeat on Banking with `DATASET = "banking_complaints"` and Rust `UDF_NAME = "score_banking"`. Use a new UDF name when changing coefficient revisions; existing projects are preserved.
 
-Use `CLASS_WEIGHT = None` for Pharma and `CLASS_WEIGHT = "balanced"` for Banking in the training notebook. This is an explicit, logged model parameter; the temporal split, seed and baseline remain unchanged. Live database runs on 30 October 2026 repeated both recipes twice: Pharma macro-F1 **0.445955** versus baseline **0.441129**; Banking **0.523298** versus **0.469807**. Metrics and coefficient digests matched across reruns. Banking with the default unweighted recipe still equals its baseline; selecting the balanced recipe is part of this test, not an automatic dataset-specific override.
+Use `CLASS_WEIGHT = None` for Esophageal and `CLASS_WEIGHT = "balanced"` for Banking in the training notebook. This is an explicit, logged model parameter; the temporal split, seed and baseline remain unchanged. Live database runs on 30 October 2026 repeated both recipes twice: Esophageal macro-F1 **0.445955** versus baseline **0.441129**; Banking **0.523298** versus **0.469807**. Metrics and coefficient digests matched across reruns. Banking with the default unweighted recipe still equals its baseline; selecting the balanced recipe is part of this test, not an automatic dataset-specific override.
 
 For bucketless Rust deployment, the notebook defaults to `ALLOW_DATABASE_RESTART = False`. If it reports that a container update is needed, set it to `True` only when you agree to the restart, then rerun deployment. A verified unchanged packaged library should deploy again without another restart. This fallback applies to Rust; external pickle scoring still requires a working shared bucket.
 
@@ -268,7 +268,7 @@ To test refresh preservation, add a Markdown marker to a copied optional lesson,
 Use a fresh UDF name for a new coefficients file. The public command forms are:
 
 ```sh
-exakit rust-udf new score_manual --coefficients "$HOME/.exasol-starter-kit/handoffs/pharma_trials-v1.coefficients.json"
+exakit rust-udf new score_manual --coefficients "$HOME/.exasol-starter-kit/handoffs/esophageal_posts-v1.coefficients.json"
 exakit rust-udf build score_manual --json
 exakit rust-udf deploy score_manual --schema EXAKIT_SCORING --json
 ```

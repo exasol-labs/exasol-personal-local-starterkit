@@ -16,9 +16,9 @@ def _(mo):
     mo.md(r"""
     # Ask a question and keep control of the answer
 
-    **Dataset:** Pharma, Banking or your own approved descriptor. **How long:** about five minutes.
+    **Dataset:** Esophageal, Banking or your own approved descriptor. **How long:** about five minutes.
 
-    A colleague asks how records are distributed across categories. You will inspect a proposed query, decide whether it answers the question and approve the exact SQL before it runs. In Pharma that means trial phases; in Banking it means complaint products.
+    A colleague asks how records are distributed across categories. You will inspect a proposed query, decide whether it answers the question and approve the exact SQL before it runs. In Esophageal that means social networks; in Banking it means complaint products.
 
     **By the end:** you will have a read-only answer and a record of the SQL you approved. Paste the quickstart's workflow ID into `WORKFLOW_ID` to connect it to the earlier investigation.
 
@@ -32,7 +32,7 @@ def _(mo):
 def _():
     import exakit.nb as nb
 
-    DATASET = "pharma_trials"  # or "banking_complaints", or your own approved descriptor
+    DATASET = "esophageal_posts"  # or "banking_complaints", or your own approved descriptor
     QUESTION = "How many rows are in each category?"
     DRAFT_WITH_MODEL = False  # set True after EXAKIT_MODEL_ID is configured; no rows are sent to draft SQL
     WORKFLOW_ID = None  # paste the quickstart's wf-... id to continue its log

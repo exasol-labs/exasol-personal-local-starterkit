@@ -1,15 +1,25 @@
-"""Describe a table from a notebook (DS-5, design 2.2): ``describe(table_or_dataset, sample=10000)`` profiles the
-table and returns a ``Draft`` - the descriptor the kit proposes, a role per column with the evidence that chose it
-and the roles no column fits - for the user to look at (``show()``), correct (``set(role, column)``), keep
-(``save(path)``, ``to_dict()``) and approve (``approve(owner=None, comments=True) -> Dataset``: the next version in
-the kit's store with the table digest, the roles written into the column comments, and the dataset read back from
-the store, so ``ds.status == "approved"`` and the steps that need an approved descriptor go on).
+"""Describe a table from a notebook (DS-2, DS-5): the role-per-column descriptor of setup/lib/descriptor.
 
-The profiling, the scoring and the approving are the kit's own service, setup/lib/describe_service.py in the kit
-copy (the same code `exakit describe` runs), loaded from its file and run in this process over the kit's connection;
-when the kit copy is not found, `exakit describe --json` runs as a child process instead. The draft is
-deterministic: the same table gives the same roles, offline, with or without a model (a model only adds ``notes``,
-one line per column).
+    d = exakit_nb.describe("BANKING.COMPLAINTS")      # profile, draft v(n+1), show the table
+    d.set(PRODUCT="category", ZIP_CODE="identifier")  # corrections, chainable
+    d.slot(target="TIMELY_RESPONSE")                  # target=None leaves it empty on purpose
+    ds = d.approve()                                  # check, write, publish; the Dataset read back
+
+describe() on a table whose approved descriptor still matches it returns that one (force=True profiles again);
+otherwise the table is profiled once, in SQL, and every column gets one of eight roles with the evidence that chose
+it; the slots name the columns the notebooks use. show() lists column, type, role, confidence, evidence and note,
+low confidence first, the slots above. approve() checks every column has a role and none sits in two slots, checks
+the table has not changed since it was profiled, writes the next version into the kit's store and publishes the
+roles as column comments on a view in EXAKIT_SEMANTIC (a publish that fails leaves the approval standing, and says
+why). The active workflow's log gets one line.
+
+The work is the kit's own service, setup/lib/describe_service.py in the kit copy (the one `exakit describe` runs),
+loaded from its file and run in this process over the kit's connection; without the kit copy, `exakit describe
+--json` runs as a child process instead.
+
+The role review (role_picker) speaks the five roles of earlier descriptors - entity, category, date, label, text - so
+``roles``, ``evidence``, ``missing`` and ``set(role, column)`` read and write the matching slots: date is the time
+slot and label the target.
 """
 
 from __future__ import annotations
@@ -23,20 +33,18 @@ from typing import Any
 
 from ._kit import exakit_command, setting
 
-SAMPLE = 10000
+SAMPLE = 10000                          # accepted for the earlier signature; a virtual table is read as its first 10,000 rows
 ROLES = ("entity", "category", "date", "label", "text")
 SINGLE_ROLES = ("entity", "category", "date", "label")
+SLOT_OF = {"entity": "entity", "category": "category", "date": "time", "label": "target", "text": "text"}
+COLUMN_ROLES = ("key", "time", "measure", "category", "flag", "text", "identifier", "other")
+SLOTS = ("key", "time", "text", "target", "category", "entity")
 
 __all__ = ["Draft", "describe", "describe_service"]
 
 
-def _rules():
-    from . import descriptor_rules
-    return descriptor_rules
-
-
 def describe_service():
-    """The kit's profiler module (setup/lib/describe_service.py), loaded from the kit copy's file - or from the
+    """The kit's describe service (setup/lib/describe_service.py), loaded from the kit copy's file - or from the
     checkout this package sits in; None when neither is there."""
     candidates = []
     kit = setting("EXAKIT_NB_KIT")
@@ -53,23 +61,26 @@ def describe_service():
 
 
 def _resolve(name: str) -> tuple[str, str | None]:
-    """(fact table, dataset id or None) for ``SCHEMA.TABLE`` or a shipped dataset id (its descriptor's fact table)."""
+    """(table, dataset id or None) for ``SCHEMA.TABLE`` or a shipped dataset id (its descriptor's table)."""
     if "." in name:
         return name, None
+    from . import descriptor_rules
     datasets = setting("EXAKIT_NB_DATASETS")
     folder = Path(datasets) / name if datasets else None
     if folder is not None and folder.is_dir():
-        path = _rules().descriptor_file(folder)
+        path = descriptor_rules.descriptor_file(folder)
         if path is not None:
-            descriptor = _rules().read_descriptor(path)
-            return descriptor.fact_table, descriptor.id
-    raise ValueError(f"'{name}' is neither SCHEMA.TABLE nor a shipped dataset id (the kit's data/datasets).")
+            return descriptor_rules.read_descriptor(path).fact_table, name
+    from .descriptor_store import current_descriptor
+    stored = current_descriptor(name)
+    if stored is not None:
+        return descriptor_rules.read_descriptor(stored).fact_table, name
+    raise ValueError(f"'{name}' is neither SCHEMA.TABLE nor a dataset id the kit knows.")
 
 
-def describe(table_or_dataset: str, sample: int = SAMPLE, *, conn=None, id: str | None = None) -> "Draft":
-    """Profile ``SCHEMA.TABLE`` (or a shipped dataset's fact table) and return the kit's draft descriptor. Uses the
-    connection given, else opens the kit's; a virtual table or one past 5 million rows is profiled on ``sample``
-    rows. Only SELECTs run."""
+def describe(table_or_dataset: str, sample: int = SAMPLE, *, conn=None, id: str | None = None, force: bool = False) -> "Draft":
+    """Describe ``SCHEMA.TABLE`` (or a dataset id's table): the approved descriptor when the table still matches it,
+    else a fresh draft. Uses the connection given, else opens the kit's. Only SELECTs run."""
     table, slug = _resolve(str(table_or_dataset))
     service = describe_service()
     if service is not None:
@@ -78,205 +89,233 @@ def describe(table_or_dataset: str, sample: int = SAMPLE, *, conn=None, id: str 
             from . import connect
             conn = connect()
         try:
-            prof = service.profile(conn, table, sample)
+            found = service.describe(conn, table, dataset=id or slug, force=force)
         finally:
             if own:
                 conn.close()
-        kit = setting("EXAKIT_NB_KIT")
-        doc = service.draft(prof, prof["table"], id or slug, root=Path(kit) if kit else None)
-        notes = service.model_notes(doc, prof)
-        if notes:
-            doc["notes"] = notes
-        return Draft(doc, prof)
+        if found["status"] == "draft":                       # step 7: a model's one line per column, when one is set up
+            service.with_notes(found["doc"], service.model_notes(found["doc"], found["profile"]))
+        return Draft(found["doc"], found.get("profile"), changed=found.get("changed") or [])
     command = exakit_command()
     if command is None:
-        raise RuntimeError("The kit's profiler was not found (no kit copy beside this Python and exakit's launcher is not on PATH); "
-                           "install the notebook add-on: exakit marketplace notebook")
-    args = [*command, "describe", table, "--sample", str(sample), "--json"] + (["--id", id or slug] if id or slug else [])
+        raise RuntimeError("The kit's describe service was not found (no kit copy beside this Python and exakit's launcher is "
+                           "not on PATH); install the notebook add-on: exakit marketplace notebook")
+    args = [*command, "describe", table, "--json"] + (["--id", id or slug] if id or slug else [])
     run = subprocess.run(args, capture_output=True, text=True)
     if run.returncode != 0:
         raise RuntimeError(f"exakit describe failed (exit {run.returncode}): {(run.stderr or run.stdout).strip()}")
-    return Draft(json.loads(run.stdout), None)
+    found = json.loads(run.stdout)
+    return Draft(found["doc"], None, changed=found.get("changed") or [])
 
 
 class Draft:
-    """A drafted descriptor (schema_version 2, status draft): ``roles`` is what the kit proposes, ``evidence`` the
-    numbers behind each role (with its runner-up), ``missing`` the roles no column fits. ``show()`` prints it,
-    ``set(role, column)`` corrects a role, ``save(path)`` writes the YAML the notebooks read, ``to_dict()`` is the
-    document, ``approve()`` writes the next approved version into the kit's store and returns the Dataset."""
+    """A descriptor proposed for a table (status draft), or the approved one describe() returned."""
 
-    def __init__(self, doc: dict[str, Any], profile: dict[str, Any] | None = None):
+    def __init__(self, doc: dict[str, Any], profile: dict[str, Any] | None = None, *, changed: list[str] | None = None):
         self.doc = doc
         self.profile = profile
+        self.changed = list(changed or [])
+
+    # --- what it says ------------------------------------------------------------------------------------------------
 
     @property
     def id(self) -> str:
-        return str(self.doc["id"])
+        return str(self.doc["dataset"])
 
     @property
     def table(self) -> str:
-        return str(self.doc["fact_table"])
+        return str(self.doc["source"]["object"])
+
+    @property
+    def version(self) -> int:
+        return int(self.doc.get("version") or 1)
+
+    @property
+    def status(self) -> str:
+        return str(self.doc.get("status"))
+
+    @property
+    def slots(self) -> dict[str, str | None]:
+        return dict(self.doc.get("slots") or {})
+
+    @property
+    def column_roles(self) -> dict[str, str]:
+        return {name: entry["role"] for name, entry in self.doc["columns"].items()}
 
     @property
     def roles(self) -> dict[str, Any]:
-        """{role: column} for the single roles, {text: [columns]} for text."""
-        return {role: ([r["column"] for r in ref] if isinstance(ref, list) else ref["column"])
-                for role, ref in self.doc.get("roles", {}).items()}
+        """The five roles of earlier descriptors, read from the slots: {role: column}, {text: [column]}."""
+        out: dict[str, Any] = {}
+        for role, slot in SLOT_OF.items():
+            column = self.slots.get(slot)
+            if column:
+                out[role] = [column] if role == "text" else column
+        return out
 
     @property
     def evidence(self) -> dict[str, Any]:
-        return dict(self.doc.get("evidence") or {})
+        """Per role, the column with its role, confidence and the evidence that chose it, plus the profile's numbers."""
+        numbers = {c["column"]: c for c in (self.profile or {}).get("columns", [])}
+        out: dict[str, Any] = {}
+        for role, value in self.roles.items():
+            for column in value if isinstance(value, list) else [value]:
+                entry = {"column": column, **self.doc["columns"].get(column, {})}
+                facts = numbers.get(column) or {}
+                entry.update({k: v for k, v in (("type", facts.get("type")), ("distinct", facts.get("approx_distinct")),
+                                                 ("avg_len", facts.get("avg_length"))) if v is not None})
+                if role == "text":
+                    out.setdefault("text", {"columns": []})["columns"].append(entry)
+                else:
+                    out[role] = entry
+        if self.profile:
+            out["table"] = {"rows": self.profile["source"]["profiled_rows"], "profiled_rows": self.profile["source"]["profiled_rows"],
+                            "statements": len(self.profile.get("statements") or [])}
+        return out
 
     @property
     def missing(self) -> list[dict[str, str]]:
-        return list(self.doc.get("missing") or [])
+        """The roles no column plays, each with the reason the empty slot gives."""
+        why = self.doc.get("slot_evidence") or {}
+        return [{"role": role, "reason": why.get(slot) or f"no {slot} column is set"}
+                for role, slot in SLOT_OF.items() if not self.slots.get(slot)]
 
     @property
     def notes(self) -> dict[str, str]:
-        return dict(self.doc.get("notes") or {})
+        return {name: entry["note"] for name, entry in self.doc["columns"].items() if entry.get("note")}
 
     def columns(self) -> list[str]:
-        """The table's columns, when the profile is here (an in-process draft); else the ones the draft names."""
-        if self.profile:
-            return [c["column"] for c in self.profile["columns"]]
-        named = [v if isinstance(v, str) else v for v in self.roles.values()]
-        return sorted({c for v in named for c in (v if isinstance(v, list) else [v])})
+        """The table's columns, in table order."""
+        return list(self.doc["columns"])
 
-    def _claimed_by(self, column: str, except_role: str) -> str | None:
-        for role, value in self.roles.items():
-            if role != except_role and (column == value or (isinstance(value, list) and column in value)):
-                return role
-        return None
+    # --- corrections -------------------------------------------------------------------------------------------------
 
-    def set(self, role: str, column: str | list[str]) -> "Draft":
-        """Give ``role`` to ``column`` (text takes one column or a list); the role leaves ``missing``. A column
-        another role already has is refused, naming it - set that role first."""
-        if role not in ROLES:
-            raise ValueError(f"'{role}' is not a role (the roles are {', '.join(ROLES)}).")
-        columns = list(column) if isinstance(column, (list, tuple)) else [column]
-        if role in SINGLE_ROLES and len(columns) != 1:
-            raise ValueError(f"The '{role}' role takes exactly one column.")
-        known = self.columns()
-        for name in columns:
-            if not isinstance(name, str) or not name.strip():
-                raise ValueError("Name the column as a string.")
-            if self.profile and name not in known:
-                raise ValueError(f"{self.table} has no column '{name}' (it has: {', '.join(known)}).")
-            other = self._claimed_by(name, role)
-            if other:
-                raise ValueError(f"{name} already plays the '{other}' role; set that role to another column first.")
-        ref = [{"table": self.table, "column": c} for c in columns]
-        self.doc.setdefault("roles", {})[role] = ref if role == "text" else ref[0]
-        self.doc["missing"] = [m for m in self.missing if m.get("role") != role]
-        evidence = self.doc.setdefault("evidence", {})
-        chosen = evidence.get(role) if isinstance(evidence.get(role), dict) else {}
-        evidence[role] = dict(chosen, set_by="user", column=columns[0] if role != "text" else chosen.get("column"))
-        if role == "text":
-            evidence[role]["columns"] = [{"column": c} for c in columns]
+    def _column(self, name: str) -> str:
+        if name in self.doc["columns"]:
+            return name
+        if name.upper() in self.doc["columns"]:
+            return name.upper()
+        raise ValueError(f"{self.table} has no column '{name}' (it has: {', '.join(self.doc['columns'])}).")
+
+    def set(self, role: str | None = None, column: str | list[str] | None = None, **columns: str) -> "Draft":
+        """``set(COLUMN="role", ...)`` gives columns a role (one of the eight); ``set("label", "COLUMN")``, the form of
+        earlier descriptors, puts a column in that role's slot. Chainable."""
+        if role is not None:
+            if role not in ROLES:
+                raise ValueError(f"'{role}' is not a role (the roles are {', '.join(ROLES)}; or set(COLUMN=role) with one "
+                                 f"of {', '.join(COLUMN_ROLES)}).")
+            chosen = column[0] if isinstance(column, (list, tuple)) and column else column
+            return self.slot(**{SLOT_OF[role]: chosen})
+        for name, value in columns.items():
+            if value not in COLUMN_ROLES:
+                raise ValueError(f"'{value}' is not a role; the roles are {', '.join(COLUMN_ROLES)}.")
+            name = self._column(name)
+            self.doc["columns"][name] = dict(self.doc["columns"][name], role=value, confidence="high", evidence="set by you")
         return self
 
+    def slot(self, **slots: str | None) -> "Draft":
+        """Put a column in a slot (key, time, text, target, category, entity), or None to leave it empty on purpose."""
+        for name, column in slots.items():
+            if name not in SLOTS:
+                raise ValueError(f"'{name}' is not a slot; the slots are {', '.join(SLOTS)}.")
+            chosen = None if column is None else self._column(str(column))
+            taken = next((s for s, c in self.slots.items() if c == chosen and s != name and chosen), None)
+            if taken:
+                raise ValueError(f"{chosen} already sits in the {taken} slot; empty that one first.")
+            self.doc["slots"][name] = chosen
+            why = self.doc.setdefault("slot_evidence", {})
+            if chosen is None:
+                why[name] = "left empty by you"
+            else:
+                why.pop(name, None)
+        return self
+
+    def assign(self, role: str, column: str | list[str] | None, reason: str | None = None) -> "Draft":
+        """The role review's correction: ``role`` (one of the five) to ``column``, or empty with ``reason``."""
+        slot = SLOT_OF[role]
+        chosen = column[0] if isinstance(column, (list, tuple)) and column else column
+        self.slot(**{slot: chosen or None})
+        if not chosen and reason:
+            self.doc["slot_evidence"][slot] = reason
+        return self
+
+    def copy(self) -> "Draft":
+        return Draft(copy.deepcopy(self.doc), self.profile, changed=self.changed)
+
+    # --- keeping and approving ---------------------------------------------------------------------------------------
+
     def to_dict(self) -> dict[str, Any]:
-        """The draft document (a copy)."""
+        """The descriptor document (a copy)."""
         return copy.deepcopy(self.doc)
 
-    def save(self, path: str | Path) -> Path:
-        """Write the draft as YAML in the kit's descriptor layout; exakit.nb.dataset(conn, path) reads it back. The
-        service's writer is used when the kit copy is there (it keeps a number-like value such as "0" a string);
-        else the package's own save_descriptor."""
-        about = f"Which column of {self.table} plays which role; drafted by exakit.nb.describe."
+    def to_yaml(self) -> str:
         service = describe_service()
-        target = Path(path).expanduser()
-        if service is not None:
-            target.write_text(service.to_yaml(self.to_dict(), about), encoding="utf-8")
-            return target
-        from .own_file import save_descriptor
-        return save_descriptor(self.to_dict(), target, about)
+        if service is None:
+            raise RuntimeError("The kit's describe service was not found; install the notebook add-on: exakit marketplace notebook")
+        return service.drafting.to_yaml(self.doc)
 
-    def approve(self, owner: str | None = None, comments: bool = True, *, conn=None, sample: int = SAMPLE):
-        """Approve this draft (design 2.2): the roles validated by the descriptor rules, the table digest computed,
-        version n+1 written into the kit's store (``~/.exasol-starter-kit/descriptors/<id>/``) with ``current``,
-        then the roles written into the table's column comments (a view in STARTER_KIT for a virtual table; a
-        comment that cannot be written is a printed warning, the descriptor approved all the same; ``comments=False``
-        skips them). ``owner`` defaults to EXAKIT_DESCRIPTOR_OWNER or the OS user. Approving the roles the current
-        approved version already has writes nothing and says so. Returns the Dataset read back from the store, so
-        ``ds.status == "approved"``. Uses the connection given, else opens the kit's."""
+    def save(self, path: str | Path) -> Path:
+        """Write the descriptor as YAML; exakit_nb.dataset(conn, path) reads it back."""
+        target = Path(path).expanduser()
+        target.write_text(self.to_yaml(), encoding="utf-8")
+        return target
+
+    def approve(self, owner: str | None = None, comments: bool = True, *, conn=None, sample: int | None = None):
+        """Approve: every column has a role and none sits in two slots, the table has not changed since it was
+        profiled, the next version is written into the kit's store with current.yaml, and the roles are published on
+        a view in EXAKIT_SEMANTIC (``comments=False`` skips it). ``owner`` defaults to EXAKIT_DESCRIPTOR_OWNER or the
+        OS user. Returns the Dataset read back from the store."""
         from .dataset import dataset
+        from .workflow import log_event
 
         service = describe_service()
         if service is None:
-            raise RuntimeError("The kit's describe service was not found (no kit copy beside this Python); approve on the command line: "
-                               f"exakit describe {self.id} --approve")
+            raise RuntimeError("The kit's describe service was not found (no kit copy beside this Python); approve on the "
+                               f"command line: exakit describe {self.id} --approve")
         own = conn is None
         if own:
             from . import connect
             conn = connect()
         try:
-            kit = setting("EXAKIT_NB_KIT")
-            result = service.approve(conn, self.to_dict(), owner=owner, comments=comments, sample=sample,
-                                     root=Path(kit) if kit else None)
-            if result.get("unchanged"):
+            result = service.approve_document(conn, self.to_dict(), owner=owner, publish=comments, log=log_event)
+            if result["status"] == "unchanged":
                 print(result["message"])
             else:
-                print(f"Approved {result['id']} v{result['version']} (owner {result['owner']}, digest {result['digest'][:19]}...): {result['path']}")
-                for warning in result["comments"].get("warnings", []):
-                    print(f"Warning: {warning}")
-            self.doc.update(status="approved", version=result["version"], owner=result.get("owner", self.doc.get("owner")),
-                            digest=result.get("digest"))
-            return dataset(conn, self.id)
+                print(f"Approved {result['table']} v{result['version']} (owner {result['owner']}): {result['path']}")
+                if result.get("published"):
+                    print(f"Published as {result['published']}: agents read the roles from its column comments.")
+                elif result.get("reason"):
+                    print(f"Approved, not published: {result['reason']}. Retry with: exakit describe {self.id} --comments")
+            current = service.store.folder(result["table"]) / service.store.CURRENT
+            self.doc = service.flow.load(current.read_text(encoding="utf-8"))
+            return dataset(conn, str(current))
         finally:
             if own:
                 conn.close()
 
+    # --- showing -----------------------------------------------------------------------------------------------------
+
     def _lines(self) -> list[str]:
-        evidence = self.evidence
-        rows: list[tuple[str, str, str, str]] = []
-        for role in ROLES:
-            if role == "text" and "text" in self.roles:
-                for entry in (evidence.get("text") or {}).get("columns") or [{"column": c} for c in self.roles["text"]]:
-                    rows.append(("text", str(entry.get("column")), _summary(entry), ""))
-                rows[-1] = rows[-1][:3] + (_runner(evidence.get("text")),)
-            elif role in self.roles:
-                rows.append((role, str(self.roles[role]), _summary(evidence.get(role) or {}), _runner(evidence.get(role))))
-            else:
-                reason = next((m["reason"] for m in self.missing if m.get("role") == role), "no column fits")
-                rows.append((role, "-", f"missing: {reason}", ""))
-        widths = [max(len(r[i]) for r in rows + [("role", "column", "evidence", "runner-up")]) for i in range(4)]
-        head = ("role", "column", "evidence", "runner-up")
-        out = [f"{self.table} - draft descriptor '{self.id}' (version {self.doc.get('version')}, {self.doc.get('status')}, owner {self.doc.get('owner')})",
-               "  ".join(h.ljust(w) for h, w in zip(head, widths)).rstrip(),
-               "  ".join("-" * w for w in widths)]
+        numbers = {c["column"]: c for c in (self.profile or {}).get("columns", [])}
+        out = [f"{self.table} - {self.status} descriptor '{self.id}' v{self.version}"
+               + (f" (grain: {self.doc['grain']})" if self.doc.get("grain") else "")]
+        why = self.doc.get("slot_evidence") or {}
+        out.append("slots: " + "; ".join(f"{s}={self.slots.get(s) or '-'}" + (f" ({why[s]})" if s in why else "") for s in SLOTS))
+        rows = []
+        for name, entry in sorted(self.doc["columns"].items(), key=lambda item: item[1].get("confidence") != "low"):
+            role = entry["role"] + (" (sensitive)" if entry.get("sensitive") else "")
+            changed = " [changed]" if name in self.changed else ""
+            rows.append((name + changed, str(numbers.get(name, {}).get("type", "")), role, entry.get("confidence", ""),
+                         entry.get("evidence", ""), entry.get("note", "")))
+        head = ("column", "type", "role", "confidence", "evidence", "note")
+        widths = [max(len(r[i]) for r in rows + [head]) for i in range(len(head))]
+        out.append("  ".join(h.ljust(w) for h, w in zip(head, widths)).rstrip())
+        out.append("  ".join("-" * w for w in widths))
         out += ["  ".join(v.ljust(w) for v, w in zip(r, widths)).rstrip() for r in rows]
-        excluded = evidence.get("excluded") or {}
-        if excluded:
-            out.append("excluded: " + "; ".join(f"{c} ({why})" for c, why in excluded.items()))
-        facts = evidence.get("table") or {}
-        if facts:
-            out.append(f"profiled {facts.get('profiled_rows')} of {facts.get('rows')} rows"
-                       + (" (a sample)" if facts.get("sampled") else "") + f" in {facts.get('statements')} statements")
-        for column, note in self.notes.items():
-            out.append(f"note {column}: {note}")
         return out
 
     def show(self) -> None:
-        """Print the draft as a table: role, column, the evidence behind it and the runner-up."""
+        """Print column, type, role, confidence, evidence and note, low confidence first, the slots above."""
         print("\n".join(self._lines()))
 
     def __repr__(self) -> str:
-        return f"Draft({self.id!r}, roles={self.roles!r}, missing={[m['role'] for m in self.missing]!r})"
-
-
-def _summary(entry: dict[str, Any]) -> str:
-    parts = []
-    for key, label in (("type", ""), ("null_rate", "null"), ("distinct", "distinct"), ("distinct_ratio", "ratio"),
-                       ("span_days", "span d"), ("date_parse_rate", "parse"), ("avg_len", "avg len"), ("max_len", "max len"),
-                       ("min_share", "min share"), ("score", "score")):
-        if entry.get(key) is not None:
-            parts.append(f"{label} {entry[key]}".strip())
-    if entry.get("set_by") == "user":
-        parts.append("set by you")
-    return ", ".join(parts)
-
-
-def _runner(entry: Any) -> str:
-    runner = entry.get("runner_up") if isinstance(entry, dict) else None
-    return f"{runner['column']} ({runner.get('score')})" if isinstance(runner, dict) and runner.get("column") else ""
+        return f"Draft({self.id!r}, {self.table}, slots={self.slots!r})"

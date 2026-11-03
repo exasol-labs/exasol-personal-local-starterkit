@@ -93,7 +93,7 @@ run LAB.READINGS --approve;        check "--approve on a table name (no id, no f
 run LAB.READINGS --versions;       check "--versions on a table name" "2" "$CODE"
 run readings --approve --show;     check "two modes" "2" "$CODE"; contains "names both" "--approve and --show are two different things" "$OUT"
 run readings --approve --role;     check "--role without a value" "2" "$CODE"
-run readings --approve --role owner=X; check "--role with no such role" "2" "$CODE"; contains "names the roles" "one of entity, category, date, label, text" "$OUT"
+run readings --approve --role owner=X; check "--role with no such role" "2" "$CODE"; contains "names the roles" "the slot one of key, time, text, target, category, entity" "$OUT"
 run readings --approve --role entity=1x; check "--role with a column that is no plain name" "2" "$CODE"
 run readings --approve --role 'entity=A B'; check "--role with a space" "2" "$CODE"
 run readings --approve --owner;    check "--owner without a value" "2" "$CODE"
@@ -174,9 +174,9 @@ contains "and its page names the add-on" "exakit marketplace notebook" "$_cd_pag
 for _opt in --approve --role --owner --no-comments --show --version --versions --comments; do
     contains "the options list $_opt" "$_opt" "$(printf '%s' "$_cd_page" | sed -n 1p)"
 done
-contains "the page says what approve writes" "descriptors/<id>/v<n>.yaml" "$_cd_page"
-contains "and the comment it writes" "role: <role> (starter kit, descriptor <id> v<n>)" "$_cd_page"
-contains "and the view for a virtual table" "STARTER_KIT.<ID>_DESCRIBED" "$_cd_page"
+contains "the page says what approve writes" "descriptors/<SCHEMA>.<TABLE>/draft.yaml" "$_cd_page"
+contains "and the comment it writes" "the user's own table is never commented" "$_cd_page"
+contains "and the view for a virtual table" "EXAKIT_SEMANTIC.<SCHEMA>__<TABLE>" "$_cd_page"
 contains "and exit 5" "5 when another approve" "$_cd_page"
 contains "with an approve example" "exakit describe orders --approve" "$_cd_page"
 

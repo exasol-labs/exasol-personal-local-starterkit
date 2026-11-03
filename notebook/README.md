@@ -27,7 +27,7 @@ Numbers follow the requirements document's Appendix B and are never reused.
 
 ## Follow one investigation across the notebooks
 
-Start with a question: which Pharma trial groups have more terminations, or
+Start with a question: which groups of Esophageal posts are more often negative, or
 which Banking complaint groups receive monetary relief? The quickstart opens
 the data and explains the proposed column meanings. Explore compares groups,
 checks changes over time and writes a **handoff**, the saved recipe for the
@@ -147,7 +147,7 @@ itself with the kit's notebook Python (`EXAKIT_NOTEBOOK_PYTHON`, else
 
 ```bash
 python3 tools/notebooks.py --run                                   # every catalog notebook, each on its own dataset
-python3 tools/notebooks.py --run --dataset pharma_trials --dataset banking_complaints
+python3 tools/notebooks.py --run --dataset esophageal_posts --dataset banking_complaints
 python3 tools/notebooks.py --run notebook/notebooks/data-scientist/01_explore.py --dataset banking_complaints --timeout 600
 python3 tools/notebooks.py --run --output /tmp/executed           # keep each executed .ipynb, outputs included
 ```
@@ -179,7 +179,7 @@ python3 tools/notebooks.py --run --output /tmp/executed           # keep each ex
 OpenAI-compatible endpoint (`POST /v1/chat/completions`, `GET /v1/models`),
 answering each prompt with a fixed theme chosen by the prompt's hash so two runs
 compare equal - points the model variables at it, and runs every shipped
-notebook on `pharma_trials` and `banking_complaints`. Without a database that
+notebook on `esophageal_posts` and `banking_complaints`. Without a database that
 answers it prints `SKIP` and exits 0, with the same probe
 `tests/mcp-readonly-sql-matrix.sh` uses; `EXAKIT_REQUIRE_DB=1` makes that a
 failure with exit 3 (the `notebooks-live` job in `.github/workflows/versions.yml`
@@ -231,7 +231,7 @@ UDF on the very same view, so TF-IDF stays out of it (token flags computed in
 SQL are recorded as deferred). The view is not created by explore; train
 creates it. Every identifier in the generated SQL is double-quoted. Without a
 date role the split is `random` with the reason (a hash of the row's role
-columns orders it, reproducibly). `nb.read_handoff("pharma_trials")` reads
+columns orders it, reproducibly). `nb.read_handoff("esophageal_posts")` reads
 the latest one (`"<id>-v<n>"` or a path reads one), `nb.handoff_from(conn,
 ds)` builds the record from an approved descriptor without explore, and
 `nb.handoff_is_stale(conn, handoff, ds)` is the check train runs: `None`, or
@@ -242,9 +242,9 @@ and the fix. An active workflow logs one `handoff` line with the path.
 
 - **Descriptor-driven.** Every query is built from the descriptor's roles
   (`ds.col("label")`, `ds.text_sql()`, `ds.fact_table`): no dataset's table or
-  column is named in the code, so the same cells run on Pharma, Banking, a
+  column is named in the code, so the same cells run on Esophageal, Banking, a
   user's own file or a table in a connected source.
-- **One assignment picks the data**: `DATASET = "pharma_trials"`, a dataset id,
+- **One assignment picks the data**: `DATASET = "esophageal_posts"`, a dataset id,
   a descriptor file, or the path of the user's own CSV, Parquet or JSON file
   with its roles in `<name>.descriptor.yaml` beside it (the quickstart's
   own-file cell writes that file).
@@ -294,7 +294,7 @@ The full official 50-notebook collection is prebundled under `examples/` for bot
 
 ## Explicit acceptance recipes and runner controls
 
-Training exposes `CLASS_WEIGHT`: leave it `None` for Pharma, set it to
+Training exposes `CLASS_WEIGHT`: leave it `None` for Esophageal, set it to
 `"balanced"` for the Banking reference recipe. This changes class weights in
 logistic regression and records the choice in MLflow. It does not change the
 temporal holdout or majority baseline. The unweighted Banking model can equal

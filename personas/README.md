@@ -7,12 +7,12 @@ marketplace add-ons to offer. The rules live in one Python service,
 call. The interactive persona and marketplace choices use the Textual screen
 in `marketplace/ui.py`, with the kit's checkbox menu as a recovery path.
 
-The kit ships the two BRD persona baselines, both on the reference datasets Pharma and Banking:
+The kit ships the two BRD persona baselines, both on the reference datasets Esophageal, Banking and Bank marketing:
 
 | Persona | Datasets | AI clients | Add-ons | First notebook |
 |---|---|---|---|---|
-| `data-scientist` (Data Scientist) | `pharma_trials`, `banking_complaints` | all detected | `notebook` | `data-scientist/00_quickstart.ipynb` |
-| `ml-engineer` (ML Engineer) | `pharma_trials`, `banking_complaints` | all detected | `notebook`, `udf-devkit` | `ml-engineer/00_quickstart.ipynb` |
+| `data-scientist` (Data Scientist) | `esophageal_posts`, `banking_complaints` | all detected | `notebook` | `data-scientist/00_quickstart.ipynb` |
+| `ml-engineer` (ML Engineer) | `esophageal_posts`, `banking_complaints` | all detected | `notebook`, `udf-devkit` | `ml-engineer/00_quickstart.ipynb` |
 
 The ML Engineer persona also starts local MLflow and installs the selected UDF runtime.
 JSON Tables and Dash Server stay available separately, without expanding the BRD baseline:
@@ -64,7 +64,7 @@ not here yet comes in - nothing is asked. Three steps, headed like the
 installer's (*Step 1/3 Sample data*, *2/3 AI clients*, *3/3 Add-ons*), each
 showing the installer's own table with its defaults ticked and filling it in as
 it works; what is already here is named in one line instead (*Already loaded:
-Pharma clinical trials*). Without a terminal the same happens in plain lines.
+Esophageal cancer posts*). Without a terminal the same happens in plain lines.
 A part that fails does not stop the others; the closing line says *Persona
 added: Data Scientist + ML Engineer*, or names each part that did not finish and
 the command that retries it (exit 1). `apply` is the same command, and `--yes`

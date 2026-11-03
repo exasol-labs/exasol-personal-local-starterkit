@@ -330,10 +330,10 @@ class FileTest(HandoffCase):
 
     def test_a_missing_handoff_says_how_to_make_one(self):
         with self.assertRaises(FileNotFoundError) as caught:
-            handoff.read_handoff("pharma_trials")
+            handoff.read_handoff("esophageal_posts")
         self.assertIn("handoff_from", str(caught.exception))
         with self.assertRaises(FileNotFoundError):
-            handoff.read_handoff("pharma_trials-v9")
+            handoff.read_handoff("esophageal_posts-v9")
         with self.assertRaises(FileNotFoundError):
             handoff.read_handoff(self.home / "nowhere.json")
         bad = self.home / "bad.json"

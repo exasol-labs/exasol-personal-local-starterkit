@@ -9,7 +9,7 @@
 # %% [markdown]
 # # Run an alternative training experiment inside Exasol
 #
-# **Dataset:** Pharma or Banking. **How long:** five minutes.
+# **Dataset:** Esophageal or Banking. **How long:** five minutes.
 #
 # You have a reproducible feature recipe from the core training flow. Reuse it to try a decision tree in the database, then compare its held-out metrics with a majority baseline. This is an educational alternative, not an automatic model upgrade.
 #
@@ -20,7 +20,7 @@
 # %%
 import exakit.nb as nb
 
-DATASET = "pharma_trials"  # or "banking_complaints"
+DATASET = "esophageal_posts"  # or "banking_complaints"
 CONTAINER = nb.ml_train.udf_container()
 conn = nb.connect()
 ds = nb.dataset(conn, DATASET).require_approved("decision-tree UDF")

@@ -16,7 +16,7 @@ def _(mo):
     mo.md(r"""
     # Our shared starting point: a table we understand
 
-    **Dataset:** Pharma or Banking. **Run time:** about ten minutes on a first load.
+    **Dataset:** Esophageal or Banking. **Run time:** about ten minutes on a first load.
     These cells appear in both persona quickstarts. They connect to your kit, load the chosen data and help you agree what the columns mean. Open your persona's quickstart to follow its full story.
     """)
     return
@@ -58,11 +58,11 @@ def _(mo):
     mo.md(r"""
     ## Choose a starting dataset
 
-    Start with the bundled sample so you can learn the flow with known data. Pharma asks about trial outcomes; Banking asks about complaint outcomes. Later you can use the same pattern with a file of your own.
+    Start with the bundled sample so you can learn the flow with known data. Esophageal asks which posts are negative; Banking asks about complaint outcomes. Later you can use the same pattern with a file of your own.
 
     Each loading cell has its own setting. Leave unused paths at their defaults. For this local walkthrough, keep `SOURCE = None`. The final selection cell tells the rest of the notebook which dataset to use.
 
-    **Start here: use the bundled sample.** Keep `SAMPLE = "pharma_trials"` for trial data, or change it to `"banking_complaints"` for complaint data. The helper loads a missing sample and reuses one already loaded. Set it to `None` when you later want to work only with your own file.
+    **Start here: use the bundled sample.** Keep `SAMPLE = "esophageal_posts"` for social posts, or change it to `"banking_complaints"` for complaint data. The helper loads a missing sample and reuses one already loaded. Set it to `None` when you later want to work only with your own file.
     """)
     return
 
@@ -70,7 +70,7 @@ def _(mo):
 @app.cell
 def _(conn, nb):
     # Cell tags: load
-    SAMPLE = "pharma_trials"   # or "banking_complaints", or None
+    SAMPLE = "esophageal_posts"   # or "banking_complaints", or None
     sample = nb.load_sample(conn, SAMPLE)
     return (sample,)
 
@@ -135,15 +135,15 @@ def _(mo):
 
     A table stores values. A **role** tells these notebooks how you want to use a column. The kit suggests roles from the real column names, types and measured values, then shows its reasons. You decide whether those suggestions fit your goal.
 
-    | Role | Meaning | Pharma example | Banking example |
+    | Role | Meaning | Esophageal example | Banking example |
     |---|---|---|---|
-    | `entity` | Who or what to compare | `LEAD_SPONSOR` | `COMPANY` |
-    | `category` | Groups to compare | `PHASE` | `PRODUCT` |
+    | `entity` | Who or what to compare | `SOURCE_DOMAIN` | `COMPANY` |
+    | `category` | Groups to compare | `SOCIAL_NETWORK` | `PRODUCT` |
     | `date` | The event timeline | `START_DATE` | `DATE_RECEIVED` |
-    | `label` | The outcome to predict | `TERMINATED` | `MONETARY_RELIEF` |
-    | `text` | Written descriptions | `BRIEF_SUMMARY` | `ISSUE` |
+    | `label` | The outcome to predict | `IS_NEGATIVE` | `MONETARY_RELIEF` |
+    | `text` | Written descriptions | `MESSAGE` | none (the CFPB no longer publishes narratives) |
 
-    **Your most important choice is the label.** A model using `TERMINATED` learns about trial termination. A model using `HAS_RESULTS` answers whether results were published. Both can contain 0/1; the business question decides which is useful.
+    **Your most important choice is the label.** A model using `IS_NEGATIVE` learns the listening tool's sentiment. A model using `IS_REPLY` answers whether a post was a reply. Both can contain 0/1; the business question decides which is useful.
 
     **Do now:** read the reasons, keep or change the dropdowns, leave unrelated columns as **—**, then click **Approve descriptor**. A close alternative deserves a second look. A rule-match score measures how well a column fits the rules, not certainty about its meaning.
 

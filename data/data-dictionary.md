@@ -1,7 +1,7 @@
-# Data dictionary — the five bundled datasets
+# Data dictionary — the six bundled datasets
 
-TPCH (TPC-H at SF=0.02), ENERGY, WEATHER, PHARMA (`pharma_trials`) and BANKING
-(`banking_complaints`). Each loads into its own schema; there are no joins across schemas.
+TPCH (TPC-H at SF=0.02), ENERGY, WEATHER, ESOPHAGEAL (`esophageal_posts`), BANKING
+(`banking_complaints`) and BANKMKT (`bank_marketing`). Each loads into its own schema; there are no joins across schemas.
 
 > The same descriptions ship **inside the database** as table and column comments
 > (`SYS.EXA_ALL_TABLES.TABLE_COMMENT`, `SYS.EXA_ALL_COLUMNS.COLUMN_COMMENT`) and are
@@ -9,8 +9,8 @@ TPCH (TPC-H at SF=0.02), ENERGY, WEATHER, PHARMA (`pharma_trials`) and BANKING
 > shape of the data. This file adds the narrative: keys, joins and conventions.
 
 Reference for every table and column in this folder. Use it to write correct SQL
-(and to ground an AI assistant) without guessing what a column means. The two reference
-datasets (PHARMA, BANKING) also have a README of their own with the source, the
+(and to ground an AI assistant) without guessing what a column means. The three reference
+datasets (ESOPHAGEAL, BANKING, BANKMKT) also have a README of their own with the source, the
 terms and how the snapshot was taken; row counts here are the shipped snapshots'.
 
 ## TPCH — TPC-H retail benchmark (schema `TPCH`, dataset id `tpch`)
@@ -223,85 +223,75 @@ Grain: one row per city per day. **PK:** `(city_id, w_date)`. **FK (documented, 
 Typical questions: hottest month per city, rainy-day counts per year, a city's
 temperature range on a given day.
 
-## PHARMA — clinical trials (schema `PHARMA`, dataset id `pharma_trials`)
+## ESOPHAGEAL — posts about esophageal cancer (schema `ESOPHAGEAL`, dataset id `esophageal_posts`)
 
-5,169 industry-sponsored, interventional Phase 2 and Phase 3 trials from ClinicalTrials.gov
-that started in 2016-2018 and ended `COMPLETED` or `TERMINATED` (snapshot 2026-10-20).
-Source, terms and the full story: [datasets/pharma_trials/README.md](datasets/pharma_trials/README.md).
-A reference dataset: its [descriptor](datasets/pharma_trials/descriptor.yaml) names
-`LEAD_SPONSOR` (entity), `PHASE` (category), `START_DATE` (date), `TERMINATED` (label) and
-`BRIEF_SUMMARY` + `ELIGIBILITY_CRITERIA` (text).
+40,987 public posts about esophageal cancer from January 2018 to September 2022 - the web
+(blogs, forums), Twitter, print and TV - from a social-listening export, **de-identified**: no
+person, account or location below the country (what was removed and why:
+[datasets/esophageal_posts/README.md](datasets/esophageal_posts/README.md)). Descriptor slots:
+`POST_ID` (key), `CREATED_TIME` (time), `MESSAGE` (text), `IS_NEGATIVE` (target),
+`SOCIAL_NETWORK` (category), `SOURCE_DOMAIN` (entity).
 
-```
-pharma_trials 1─* pharma_sponsors        (SEQ 1 = the lead sponsor)
-              1─* pharma_conditions
-              1─* pharma_interventions
-              1─0..1 pharma_stop_reasons (only stopped trials; gives the label away)
-```
-
-All foreign keys are `NCT_ID` → `PHARMA_TRIALS.NCT_ID` (documented, not enforced).
-
-### PHARMA_TRIALS  (5,169 rows) — fact table
-Grain: one trial. **PK:** `NCT_ID`.
+### ESOPHAGEAL_POSTS  (40,987 rows) — fact table
+Grain: one post. **PK:** `POST_ID`.
 
 | Column | Type | Description | Example / values |
 |---|---|---|---|
-| NCT_ID | VARCHAR(11) | ClinicalTrials.gov identifier (PK) | NCT01336660 |
-| BRIEF_TITLE | VARCHAR(400) | Short title, at most 300 characters | — |
-| PHASE | VARCHAR(20) | Trial phase | PHASE2, PHASE3, PHASE1/PHASE2, PHASE2/PHASE3 |
-| OVERALL_STATUS | VARCHAR(12) | How the trial ended | COMPLETED (4,254), TERMINATED (915) |
-| TERMINATED | DECIMAL(1,0) | 1 when terminated early, else 0 — **the label** | 0 |
-| START_DATE | DATE | Start; the first of the month when only the month is published | 2017-03-01 |
-| PRIMARY_COMPLETION_DATE | DATE | Primary completion, actual or as last reported | 2018-11-01 |
-| ENROLLMENT | DECIMAL(9,0) | Participants enrolled; NULL for 3 trials | 56 |
-| LEAD_SPONSOR | VARCHAR(200) | The company running the trial (1,575 distinct) | Novartis Pharmaceuticals |
-| ALLOCATION | VARCHAR(20) | Randomisation; NULL for 12 | RANDOMIZED, NON_RANDOMIZED, NA |
-| PRIMARY_PURPOSE | VARCHAR(40) | Primary purpose; NULL for 6 | TREATMENT, PREVENTION, OTHER, DIAGNOSTIC, SUPPORTIVE_CARE, BASIC_SCIENCE, ... |
-| MASKING | VARCHAR(12) | Blinding; NULL for 4 | NONE, SINGLE, DOUBLE, TRIPLE, QUADRUPLE |
-| HAS_RESULTS | DECIMAL(1,0) | 1 when results are posted on ClinicalTrials.gov | 1 |
-| BRIEF_SUMMARY | VARCHAR(2100) | The sponsor's summary, one line; longer ones cut on a word, ending in ` …`, at most 2,000 characters | — |
-| ELIGIBILITY_CRITERIA | VARCHAR(2100) | Inclusion and exclusion criteria, folded and cut the same way (present for every trial) | Inclusion Criteria: * ... |
+| POST_ID | DECIMAL(9,0) | Post number in time order (PK); not the source's id | 1 |
+| CREATED_TIME | TIMESTAMP | When it was published, 2018-01-16 to 2022-09-30 | 2022-09-30 07:44:42 |
+| SOCIAL_NETWORK | VARCHAR(20) | Where it was published | WEB (19,652), TWITTER (15,487), PRINT (3,588), TV (2,252) |
+| MESSAGE_TYPE | VARCHAR(40) | Kind of post (13 distinct) | Blog Post, Twitter Update, Forums, Twitter Reply |
+| IS_REPLY | DECIMAL(1,0) | 1 when it answers another post (877) | 0 |
+| LANGUAGE | VARCHAR(40) | Language (29 distinct) | English (40,391) |
+| COUNTRY | VARCHAR(60) | Country the listening tool assigned (7 distinct) | United States, United Kingdom |
+| SOURCE_DOMAIN | VARCHAR(100) | Website, when 10 or more posts share it; NULL otherwise | community.macmillan.org.uk |
+| MEDIA_TYPES | VARCHAR(300) | Media attached, comma-separated | LINK, PHOTO, VIDEO |
+| CLIENT_APP | VARCHAR(60) | App a tweet was made with, when 10 or more posts share it | Twitter for iPhone |
+| RETWEETS | DECIMAL(9,0) | Times shared | 0 |
+| FAVORITES | DECIMAL(9,0) | Times liked | 0 |
+| SENTIMENT | VARCHAR(10) | The listening tool's score | NEUTRAL (29,941), NEGATIVE (6,466), POSITIVE (4,580) |
+| IS_NEGATIVE | DECIMAL(1,0) | 1 when SENTIMENT is NEGATIVE (15.8%) — **the label** | 0 |
+| TITLE | VARCHAR(300) | Title of a blog post, article or thread; NULL for tweets | Oesophageal cancer |
+| MESSAGE | VARCHAR(1000) | The text, cut at 1,000 characters; @handles, links and e-mails replaced | Hey, that's great news ... |
 
-### PHARMA_SPONSORS  (6,674 rows)
-Grain: one organisation of a trial. **PK:** `(NCT_ID, SEQ)`.
+Typical questions: negative share by network, kind of post or website, posts per quarter, what
+gets shared, treatment words in the text. The label is the listening tool's sentiment, not a
+person's judgement.
 
-| Column | Type | Description | Example / values |
-|---|---|---|---|
-| NCT_ID | VARCHAR(11) | Trial (FK) | NCT01336660 |
-| SEQ | DECIMAL(4,0) | 1 for the lead sponsor (same name as `LEAD_SPONSOR`), then the collaborators in record order | 1 |
-| SPONSOR_ROLE | VARCHAR(12) | Role | LEAD (5,169), COLLABORATOR (1,505) |
-| SPONSOR_NAME | VARCHAR(200) | Organisation name as the record gives it | Instituto Bioclon S.A. de C.V. |
-| SPONSOR_CLASS | VARCHAR(12) | Organisation class | INDUSTRY, OTHER, UNKNOWN, NIH, OTHER_GOV, FED, NETWORK, AMBIG, INDIV |
+## BANKMKT — bank marketing (schema `BANKMKT`, dataset id `bank_marketing`)
 
-### PHARMA_CONDITIONS  (7,291 rows)
-Grain: one condition a trial studies. **PK:** `(NCT_ID, CONDITION_NAME)`.
+45,211 clients a Portuguese bank phoned in its term-deposit campaigns, May 2008 to November 2010
+(Moro, Rita and Cortez 2014, UCI, CC BY 4.0;
+[datasets/bank_marketing/README.md](datasets/bank_marketing/README.md)). Descriptor slots:
+`CLIENT_ID` (key), `SUBSCRIBED` (target), `JOB` (category); no time column (the source has no
+year), no text and no entity.
 
-| Column | Type | Description | Example |
-|---|---|---|---|
-| NCT_ID | VARCHAR(11) | Trial (FK) | NCT01336660 |
-| CONDITION_NAME | VARCHAR(200) | Condition as the sponsor wrote it, not normalised (`Age-related Macular Degeneration` and `Age-Related Macular Degeneration` both occur) | Atopic Dermatitis |
-
-### PHARMA_INTERVENTIONS  (12,384 rows)
-Grain: one intervention a trial tests. **PK:** `(NCT_ID, SEQ)`.
+### BANK_CLIENTS  (45,211 rows) — fact table
+Grain: one client. **PK:** `CLIENT_ID`.
 
 | Column | Type | Description | Example / values |
 |---|---|---|---|
-| NCT_ID | VARCHAR(11) | Trial (FK) | NCT01336660 |
-| SEQ | DECIMAL(4,0) | Position in the protocol, from 1 | 1 |
-| INTERVENTION_TYPE | VARCHAR(30) | Type | DRUG, BIOLOGICAL, OTHER, DEVICE, DIETARY_SUPPLEMENT, COMBINATION_PRODUCT, PROCEDURE, RADIATION, GENETIC, BEHAVIORAL, DIAGNOSTIC_TEST |
-| INTERVENTION_NAME | VARCHAR(200) | Name as written (`Placebo` and `placebo` both occur) | Nivolumab |
+| CLIENT_ID | DECIMAL(6,0) | Row number in the source file (PK) | 1 |
+| AGE | DECIMAL(3,0) | Age in years, 18 to 95 | 58 |
+| JOB | VARCHAR(20) | Kind of job (12 distinct) | management, blue-collar, technician |
+| MARITAL | VARCHAR(10) | Marital status | married, single, divorced |
+| EDUCATION | VARCHAR(10) | Education | primary, secondary, tertiary, unknown |
+| CREDIT_IN_DEFAULT | DECIMAL(1,0) | 1 when the client has credit in default | 0 |
+| BALANCE | DECIMAL(9,0) | Average yearly balance, euros | 2143 |
+| HOUSING_LOAN | DECIMAL(1,0) | 1 with a housing loan | 1 |
+| PERSONAL_LOAN | DECIMAL(1,0) | 1 with a personal loan | 0 |
+| CONTACT_TYPE | VARCHAR(10) | How the client was reached | cellular, telephone, unknown |
+| LAST_CONTACT_DAY | DECIMAL(2,0) | Day of the month of the last contact | 5 |
+| LAST_CONTACT_MONTH | VARCHAR(3) | Month of the last contact (no year in the source) | may |
+| CALL_DURATION | DECIMAL(6,0) | Seconds of the last call - known only after the call: **not a feature** | 261 |
+| CAMPAIGN_CONTACTS | DECIMAL(3,0) | Contacts in this campaign | 1 |
+| DAYS_SINCE_PREVIOUS | DECIMAL(4,0) | Days since a previous campaign's contact; -1 never | -1 |
+| PREVIOUS_CONTACTS | DECIMAL(4,0) | Contacts before this campaign | 0 |
+| PREVIOUS_OUTCOME | VARCHAR(10) | Outcome of the previous campaign | success, failure, other, unknown |
+| SUBSCRIBED | DECIMAL(1,0) | 1 when the client subscribed (5,289, 11.7%) — **the label** | 0 |
 
-### PHARMA_STOP_REASONS  (887 rows)
-Grain: one stopped trial's reason. **PK:** `NCT_ID`. Exists only for a stopped trial, so it
-**gives the label away**: read it to understand terminations, never use it as a model feature.
-
-| Column | Type | Description | Example |
-|---|---|---|---|
-| NCT_ID | VARCHAR(11) | Trial (FK) | NCT02020278 |
-| WHY_STOPPED | VARCHAR(600) | The sponsor's reason, at most 500 characters | Sponsor decision |
-
-Typical questions: termination rate by phase or sponsor, the commonest conditions, placebo-
-controlled share, how long trials run (`PRIMARY_COMPLETION_DATE - START_DATE`), why trials stop.
+Typical questions: subscription rate by job, age band, previous outcome, month or number of
+contacts - and why `CALL_DURATION` must stay out of a model.
 
 ## BANKING — consumer complaints (schema `BANKING`, dataset id `banking_complaints`)
 
@@ -309,8 +299,9 @@ controlled share, how long trials run (`PRIMARY_COMPLETION_DATE - START_DATE`), 
 Consumer Financial Protection Bureau received from 1 to 14 January 2025 (snapshot 2026-10-20).
 The CFPB no longer publishes complaint narratives, so the text is short (issue, sub-issue,
 public response). Source and terms: [datasets/banking_complaints/README.md](datasets/banking_complaints/README.md).
-Descriptor roles: `COMPANY` (entity), `PRODUCT` (category), `DATE_RECEIVED` (date),
-`MONETARY_RELIEF` (label), `ISSUE` + `SUB_ISSUE` + `COMPANY_PUBLIC_RESPONSE` (text).
+Descriptor slots: `COMPLAINT_ID` (key), `DATE_SENT_TO_COMPANY` (time: the widest range, as the
+drafting rule takes it), `MONETARY_RELIEF` (target), `PRODUCT` (category), `COMPANY` (entity); no
+text slot, since the CFPB no longer publishes narratives.
 
 ```
 banking_complaints 1─1 banking_responses   (the label's source; never a feature)
@@ -353,8 +344,8 @@ day, how fast companies get the complaint.
 - **Column names are UPPERCASE** and resolve unquoted (`p_type`, `l_extendedprice` — Exasol folds
   identifiers to uppercase). No double-quoting needed.
 - **Upper-case names everywhere:** every bundled table and column is upper-case
-  (`PHARMA.PHARMA_TRIALS.BRIEF_SUMMARY`), so unquoted SQL resolves it.
-- **0/1 labels:** `TERMINATED` and `MONETARY_RELIEF` are
+  (`ESOPHAGEAL.ESOPHAGEAL_POSTS.MESSAGE`), so unquoted SQL resolves it.
+- **0/1 labels:** `IS_NEGATIVE`, `MONETARY_RELIEF` and `SUBSCRIBED` are
   `DECIMAL(1,0)`, so `AVG(label)` is the rate and `SUM(label)` the count.
 - **Row limit:** Exasol uses `LIMIT n` (or `LIMIT n OFFSET m`) — **not** `FETCH FIRST … ROWS ONLY`
   or `TOP n`.
@@ -362,5 +353,5 @@ day, how fast companies get the complaint.
   excludes tax, does not subtract returns. Add `WHERE l_returnflag <> 'R'` to exclude returned lines.
 
 See **[example-questions.md](example-questions.md)** for 14 ready-to-ask TPC-H questions with
-validated reference SQL you can inspect before running. PHARMA and BANKING each ship at least
+validated reference SQL you can inspect before running. ESOPHAGEAL, BANKING and BANKMKT each ship at least
 ten runnable example queries in `datasets/<id>/examples.sql`.

@@ -85,7 +85,7 @@ Each step: *Told* (the one neutral sentence), *Sees* (exact strings from the sou
 ### Step 1 Install (budget: steps 1–3 ≈ 10:00)
 
 - **Told:** "Install the kit for your role with the command on the card."
-- **Sees:** the installer's step panels; a compatibility line (`Compatibility check passed (...)`); `Deploying Exasol Personal locally`; the datasets loaded (`pharma_trials`, `banking_complaints`); `Checksum verified: ...` lines for the release assets; at the end the persona's first prompt: `Open the Data Scientist quickstart: run exakit notebook and open data-scientist/00_quickstart.ipynb.` Nothing asks a question: the persona answers datasets, AI clients (`all`) and the add-on (`notebook`).
+- **Sees:** the installer's step panels; a compatibility line (`Compatibility check passed (...)`); `Deploying Exasol Personal locally`; the datasets loaded (`esophageal_posts`, `banking_complaints`); `Checksum verified: ...` lines for the release assets; at the end the persona's first prompt: `Open the Data Scientist quickstart: run exakit notebook and open data-scientist/00_quickstart.ipynb.` Nothing asks a question: the persona answers datasets, AI clients (`all`) and the add-on (`notebook`).
 - **Proves:** P-1 (AC-P1.1); start of AC-DS1.1.
 - **Timing:** start ____ end ____ (install wall time ____)
 - **Observer notes:** did the install ask anything (it must not); did the participant wait on a long step or think it hung (note the step and the minute); did they lose the first-prompt line by clearing the screen; was `exakit` on PATH in the same window afterwards (macOS: a new shell may be needed; Windows: `exakit.cmd`).
@@ -93,7 +93,7 @@ Each step: *Told* (the one neutral sentence), *Sees* (exact strings from the sou
 ### Step 2 Load data
 
 - **Told:** "Make sure the sample data is loaded."
-- **Sees:** `exakit data-load pharma_trials` (or `banking_complaints`) returns `0` with the dataset already there (the persona install loaded both), or loads it: a checksummed archive is downloaded, `SHA-256 and every file's digest` verified, every file listed with its table and rows. The bare `exakit data-load` menu lists the bundled datasets with the two reference datasets and `Skip`.
+- **Sees:** `exakit data-load esophageal_posts` (or `banking_complaints`) returns `0` with the dataset already there (the persona install loaded both), or loads it: a checksummed archive is downloaded, `SHA-256 and every file's digest` verified, every file listed with its table and rows. The bare `exakit data-load` menu lists the bundled datasets with the two reference datasets and `Skip`.
 - **Proves:** AC-DS2.1 (load < 5 min, digest verified). If the persona install already loaded both, take the load time from `exakit logs setup --lines 200` after the session.
 - **Timing:** start ____ end ____ (load time, if it loaded here ____)
 - **Observer notes:** did they find `data-load` (from `exakit` with no arguments, `exakit --help`, or the README); did the menu's `Skip` row confuse them; did they try to load their own CSV here (fine; note it, and whether they then also do it in the notebook at step 9).
@@ -101,7 +101,7 @@ Each step: *Told* (the one neutral sentence), *Sees* (exact strings from the sou
 ### Step 3 Open the notebook, connected
 
 - **Told:** "Open the notebooks and run the quickstart until you see rows from the database."
-- **Sees:** `exakit notebook` prints `JupyterLab is running: http://127.0.0.1:8888...` (`... (stop it with: exakit notebook stop)`) and the browser opens logged in: no token typed. In `data-scientist/00_quickstart.ipynb` the kernel is **Exasol (Starter Kit)**. The connect cell prints `Connected: Exasol <version>, session <id>.`; the next lists schemas including `PHARMA` and `BANKING`. The sample cell prints `pharma_trials is loaded (PHARMA.PHARMA_TRIALS).`; the own-file cell prints `No file at ~/my-data/transactions.csv: set it to your CSV, Parquet or JSON file to load that - skipped.`; the source cell prints `No external source is connected (there is no virtual schema in the database): skipped.`
+- **Sees:** `exakit notebook` prints `JupyterLab is running: http://127.0.0.1:8888...` (`... (stop it with: exakit notebook stop)`) and the browser opens logged in: no token typed. In `data-scientist/00_quickstart.ipynb` the kernel is **Exasol (Starter Kit)**. The connect cell prints `Connected: Exasol <version>, session <id>.`; the next lists schemas including `PHARMA` and `BANKING`. The sample cell prints `esophageal_posts is loaded (ESOPHAGEAL.ESOPHAGEAL_POSTS).`; the own-file cell prints `No file at ~/my-data/transactions.csv: set it to your CSV, Parquet or JSON file to load that - skipped.`; the source cell prints `No external source is connected (there is no virtual schema in the database): skipped.`
 - **Proves:** AC-DS1.1 (clean machine to rows ≤ 10 min macOS / 15 min Windows: **stop the AC-DS1.1 clock at the first-query rows in step 5**), AC-DS1.2 (ask them: "is there a password anywhere in this notebook?" - expected: no), AC-DS1.5 (connection written at launch).
 - **Timing:** start ____ end ____
 - **Observer notes:** did they run cells top to bottom or jump; did the own-file `skipped` line read as an error to them; did they edit `OWN_FILE` now (step 9 early: allowed, note it); did the browser open or did they have to paste the URL.
@@ -109,7 +109,7 @@ Each step: *Told* (the one neutral sentence), *Sees* (exact strings from the sou
 ### Step 4 Draft (budget: steps 4–5 ≈ 5:00)
 
 - **Told:** "Review what the kit proposes for the data's roles."
-- **Sees:** the review cell `review = nb.review_roles(conn, ds)` prints the draft table headed `PHARMA.PHARMA_TRIALS - draft descriptor 'pharma_trials' (version 1, draft, owner <os user>)` with columns `role  column  evidence  runner-up`, one row per role (`entity LEAD_SPONSOR`, `category PHASE`, `date START_DATE`, `label TERMINATED`, `text BRIEF_SUMMARY`), a `profiled N of N rows in K statements` line, then one dropdown per column and a green **Approve descriptor** button. (For the Banking sample the table is `BANKING.BANKING_COMPLAINTS`.)
+- **Sees:** the review cell `review = nb.review_roles(conn, ds)` prints the draft table headed `ESOPHAGEAL.ESOPHAGEAL_POSTS - draft descriptor 'esophageal_posts' (version 1, draft, owner <os user>)` with columns `role  column  evidence  runner-up`, one row per role (`entity LEAD_SPONSOR`, `category PHASE`, `date START_DATE`, `label TERMINATED`, `text BRIEF_SUMMARY`), a `profiled N of N rows in K statements` line, then one dropdown per column and a green **Approve descriptor** button. (For the Banking sample the table is `BANKING.BANKING_COMPLAINTS`.)
 - **Proves:** AC-DS5.1 (draft equals the shipped roles), AC-DS5.5 (draft is the same with or without a model), AC-DS3.4 first half.
 - **Timing:** start ____ end ____
 - **Observer notes:** did they read the evidence column or go straight to the button; did they understand "runner-up"; did they try to run the next cell before approving (it raises `Review the proposed roles and click Approve descriptor, or call review.approve({...}) first.` - record whether that message got them back).
@@ -117,15 +117,15 @@ Each step: *Told* (the one neutral sentence), *Sees* (exact strings from the sou
 ### Step 5 Approve, then the first query
 
 - **Told:** "Change anything you disagree with, approve the roles, and get the first query's rows."
-- **Sees:** after **Approve descriptor** with the proposed roles unchanged: `v1 is already approved with these roles` then `Approved pharma_trials v1. Run the next cell.` (the kit ships pharma_trials as approved v1, so nothing is written). With one role corrected: `Approved pharma_trials v2 (owner <user>, digest sha256:...): ~/.exasol-starter-kit/...` then `Approved pharma_trials v2. Run the next cell.` The next cell prints `pharma_trials: one row of PHARMA.PHARMA_TRIALS per observation; descriptor sha256 ...` and the five roles. The first query prints its SQL (`SELECT PHASE AS CATEGORY, COUNT(*) AS N, ...`) and a table of up to 10 rows.
-- **Proves:** AC-DS5.2 (version n+1, owner, digest, Approved - only when a role was corrected; otherwise step 9's own file proves it), AC-DS5.4 (roles in column comments; observer checks after the session with `exakit describe pharma_trials --comments`), AC-DS3.4 (**approved descriptor + first query ≤ 8 min from opening the quickstart**), AC-DS2.5 (nothing ran on a draft), AC-DS1.1 ends here.
+- **Sees:** after **Approve descriptor** with the proposed roles unchanged: `v1 is already approved with these roles` then `Approved esophageal_posts v1. Run the next cell.` (the kit ships esophageal_posts as approved v1, so nothing is written). With one role corrected: `Approved esophageal_posts v2 (owner <user>, digest sha256:...): ~/.exasol-starter-kit/...` then `Approved esophageal_posts v2. Run the next cell.` The next cell prints `esophageal_posts: one row of ESOPHAGEAL.ESOPHAGEAL_POSTS per observation; descriptor sha256 ...` and the five roles. The first query prints its SQL (`SELECT PHASE AS CATEGORY, COUNT(*) AS N, ...`) and a table of up to 10 rows.
+- **Proves:** AC-DS5.2 (version n+1, owner, digest, Approved - only when a role was corrected; otherwise step 9's own file proves it), AC-DS5.4 (roles in column comments; observer checks after the session with `exakit describe esophageal_posts --comments`), AC-DS3.4 (**approved descriptor + first query ≤ 8 min from opening the quickstart**), AC-DS2.5 (nothing ran on a draft), AC-DS1.1 ends here.
 - **Timing:** start ____ end ____ · **AC-DS1.1 total (install start → first rows): ____** · **AC-DS3.4 (quickstart open → first rows): ____**
 - **Observer notes:** did they change a role before approving (which, why); did the `Could not approve: ...` line appear (record it verbatim); did they look for a file to edit (the YAML they never have to touch).
 
 ### Step 7 Explore (budget: steps 7–8 ≈ 10:00)
 
 - **Told:** "Open the explore notebook and run it on the same data."
-- **Sees:** `01_explore.ipynb`, `DATASET = "pharma_trials"` as it ships. The connect cell prints the roles line; the landscape cell prints a `WITH TOP_ENTITIES AS (...)` statement and a pivot of sponsors by phase; the over-time cell prints a `DATE_TRUNC` statement and a table; the model cell prints `<N> rows, <p>% with label 1; ROC AUC on the held-out quarter: 0.xxx (0.5 is guessing)`; then `towards 1: ...` / `towards 0: ...`.
+- **Sees:** `01_explore.ipynb`, `DATASET = "esophageal_posts"` as it ships. The connect cell prints the roles line; the landscape cell prints a `WITH TOP_ENTITIES AS (...)` statement and a pivot of sponsors by phase; the over-time cell prints a `DATE_TRUNC` statement and a table; the model cell prints `<N> rows, <p>% with label 1; ROC AUC on the held-out quarter: 0.xxx (0.5 is guessing)`; then `towards 1: ...` / `towards 0: ...`.
 - **Proves:** DS-3 (AC-DS3.2: one assignment, SQL visible before every result).
 - **Timing:** start ____ end ____ (model cell wall time ____)
 - **Observer notes:** did they notice the `DATASET` line; did they read any printed SQL; did the scikit-learn cell's wait worry them; any `ImportError` (record the package).
@@ -133,7 +133,7 @@ Each step: *Told* (the one neutral sentence), *Sees* (exact strings from the sou
 ### Step 8 Text step, traced
 
 - **Told:** "Run the text step, then find its trace in your Langfuse project."
-- **Sees:** the sample SQL is printed; the cell runs the model over 5 rows and the table gains a `THEME` column. The cell prints a link to the trace when tracing is on. If a variable is missing: `No model endpoint (EXAKIT_MODEL_ID not set before exakit notebook); the text step is skipped.` or `tracing is off (set LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY and LANGFUSE_BASE_URL before exakit notebook); the cell runs as usual.` - both are an **environment** failure of 0.3, not the participant's. In Langfuse: one trace named `explore-text-step` with five generation calls (input, output, token usage, latency), tags `exasol-starter-kit`, `exasol.dataset=pharma_trials`, `exasol.descriptor=...`, `exasol.descriptor_version=1` (`2` after a correction in step 5), `exasol.session_id=...`, and metadata with the sample SQL.
+- **Sees:** the sample SQL is printed; the cell runs the model over 5 rows and the table gains a `THEME` column. The cell prints a link to the trace when tracing is on. If a variable is missing: `No model endpoint (EXAKIT_MODEL_ID not set before exakit notebook); the text step is skipped.` or `tracing is off (set LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY and LANGFUSE_BASE_URL before exakit notebook); the cell runs as usual.` - both are an **environment** failure of 0.3, not the participant's. In Langfuse: one trace named `explore-text-step` with five generation calls (input, output, token usage, latency), tags `exasol-starter-kit`, `exasol.dataset=esophageal_posts`, `exasol.descriptor=...`, `exasol.descriptor_version=1` (`2` after a correction in step 5), `exasol.session_id=...`, and metadata with the sample SQL.
 - **Proves:** AC-DS4.5 (practitioner sees the trace), AC-DS4.1 (one trace, every call, tagged), AC-DS4.3 (observer: no key in the output or the trace).
 - **Timing:** start ____ end ____ · **trace seen at ____**
 - **Observer notes:** how they found the trace (session view, tag filter, time); whether they expected the notebook to link to it (it does not); `exasol.workflow_id` is absent because no workflow was started - note if they ask about it.
@@ -184,7 +184,7 @@ exakit status --json
 exakit logs setup --lines 200
 exakit logs notebook
 exakit workflow list                 # expected empty in G1: no notebook starts a workflow; note if not
-exakit describe pharma_trials --versions
+exakit describe esophageal_posts --versions
 exakit describe <name> --versions    # the own file's id, if step 9 was reached
 ```
 On Windows the same commands in PowerShell. Also: a screenshot of the failing cell with its output, the Langfuse trace page (or the empty project) for step 8, and the participant's verbatim last question. Store under `g1-results/<date>-P<n>/`. Never copy `~/.exasol-starter-kit/credentials/` or the environment.

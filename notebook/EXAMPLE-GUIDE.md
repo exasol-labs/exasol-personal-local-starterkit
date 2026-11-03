@@ -12,7 +12,7 @@ Marimo. Open the files listed below; no source manifest or download is needed.
 They adapt examples distributed by
 [Exasol Notebook Connector](https://github.com/exasol/notebook-connector) and
 used by [Exasol AI Lab](https://github.com/exasol/ai-lab). They use the kit's
-secure connection, approved Pharma or Banking roles and installed Python UDF
+secure connection, approved Esophageal or Banking roles and installed Python UDF
 runtime. They require no external data connection or cloud account.
 
 | Persona | Notebook in JupyterLab | Lesson |
@@ -49,7 +49,7 @@ Source revisions and original digests are kept internally in the kit at
 All four added lessons ran successfully on both bundled datasets. The core
 MLflow training notebook and external-model scoring notebook also ran on both.
 The scoring comparison used 500 held-out rows per dataset; the largest local
-versus database difference was `2.22e-16` (Pharma) and `1.11e-16` (Banking).
+versus database difference was `2.22e-16` (Esophageal) and `1.11e-16` (Banking).
 
 The UDF imported Python 3.12.3, scikit-learn 1.9.0, pandas 2.3.3, NumPy 2.4.6,
 SciPy 1.18.0 and joblib 1.6.0. These versions were read inside Exasol, not from

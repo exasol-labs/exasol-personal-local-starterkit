@@ -1,6 +1,6 @@
 """AC-ML3.4, the live half: train twice in the database from the same handoff with the same seed and compare.
 
-    ~/.exasol-starter-kit/notebook-venv/bin/python tests/lib/live_train_twice.py [--dataset pharma_trials] [--seed 0]
+    ~/.exasol-starter-kit/notebook-venv/bin/python tests/lib/live_train_twice.py [--dataset esophageal_posts] [--seed 0]
 
 Runs ml-engineer/01_train's path twice against the local database - the handoff (explore's file, else one built from
 the approved descriptor), prepare_training, the view, the UDF, exasol_mlflow.start_run - and fails unless the two
@@ -28,7 +28,7 @@ def skip(reason: str) -> int:
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="train twice from the same handoff and compare (AC-ML3.4)")
-    parser.add_argument("--dataset", default="pharma_trials")
+    parser.add_argument("--dataset", default="esophageal_posts")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--split", default=None, help='"random" for a descriptor without a date role')
     args = parser.parse_args(argv)

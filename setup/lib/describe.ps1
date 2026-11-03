@@ -39,7 +39,8 @@ function Invoke-DescribeService {
     if (-not (Test-Path $python)) { Fail "The notebook environment is missing ($python). Repair it with: exakit notebook setup" }
     $service = Join-Path (Join-Path (Join-Path (Get-ExakitRepoRoot) "setup") "lib") "describe_service.py"
     $envs = @{ EXAKIT_PYX_DSN = (Get-ExakitManifestValue "runtime.dsn"); EXAKIT_PYX_USER = (Get-ExakitManifestValue "runtime.user")
-               EXAKIT_PYX_PWFILE = (Get-ExakitManifestValue "runtime.password_file") }
+               EXAKIT_PYX_PWFILE = (Get-ExakitManifestValue "runtime.password_file")
+               EXAKIT_MCP_READER = (Get-ExakitManifestValue "components.mcp_server.connection.user") }
     if (-not $envs.EXAKIT_PYX_USER) { $envs.EXAKIT_PYX_USER = "sys" }
     $saved = @{}
     foreach ($key in $envs.Keys) {
@@ -103,9 +104,9 @@ function Invoke-CmdDescribe {
                     $version = $value
                 }
                 "--role" {
-                    # role=COLUMN (text=A,B); the service checks the column against the table.
-                    if ($value -cnotmatch '^(entity|category|date|label|text)=[A-Za-z][A-Za-z0-9_]*(,[A-Za-z][A-Za-z0-9_]*)*$') {
-                        Deny-ExakitInput "--role takes role=COLUMN with the role one of entity, category, date, label, text (text takes A,B,...), not '$value'."
+                    # slot=COLUMN (or slot=- to leave it empty); the service checks the column against the table.
+                    if ($value -cnotmatch '^(key|time|text|target|category|entity|date|label)=([A-Za-z][A-Za-z0-9_]*(,[A-Za-z][A-Za-z0-9_]*)*|-)$') {
+                        Deny-ExakitInput "--role takes slot=COLUMN with the slot one of key, time, text, target, category, entity (date and label name time and target; slot=- leaves it empty), not '$value'."
                     }
                     $roles += $value
                 }

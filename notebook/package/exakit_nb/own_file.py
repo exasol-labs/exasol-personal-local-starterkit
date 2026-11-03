@@ -123,7 +123,7 @@ def _descriptor_doc(descriptor: Any, table: str | None, file: Path | None = None
         return doc
     if not isinstance(descriptor, dict):
         raise ValueError("The descriptor is a mapping of role to column, e.g. {'entity': 'CUSTOMER_ID', ...}, or a file path.")
-    if "roles" in descriptor:
+    if "roles" in descriptor or "descriptor" in descriptor:       # a whole document, either shape
         return descriptor
     if table is None:
         raise ValueError("Name the table to load the file into (SCHEMA.TABLE): the roles alone do not say which.")
@@ -403,6 +403,6 @@ def load_own_file(path: str | Path, table: str | None, descriptor: Any = None, *
     ds = checked(conn, raw, file, remedy="Correct the descriptor's roles or the file.",
                  descriptor_path=beside if beside is not None and beside.is_file() else None,
                  origin="beside" if beside is not None else "explicit")
-    if isinstance(descriptor, dict) and "roles" not in descriptor and descriptor_beside(file) is None:
+    if isinstance(descriptor, dict) and not {"roles", "descriptor"} & set(descriptor) and descriptor_beside(file) is None:
         _keep_roles(file, doc)
     return ds
