@@ -3,8 +3,10 @@
     review = nb.review_roles(conn, ds)        # profiles the table, prints the evidence, shows the picker
     ds = review.dataset()                     # the approved dataset; waits for the approval
 
-The picker is one dropdown per column, each labelled with the column's evidence (type, null share, distinct values or
-span), its role, confidence and evidence, plus an Approve button. In JupyterLab it is
+The picker is the descriptor itself: one dropdown per column with the eight roles (key, time, measure, category, flag,
+text, identifier, other), set to the role the rules drafted and labelled with the evidence that chose it; then one
+dropdown per slot - the columns the notebooks use (key, time, text, target, category, entity) - set to the drafted
+column; then an Approve button. In JupyterLab it is
 ipywidgets; in Marimo the review itself is a ``mo.ui.dictionary`` of ``mo.ui.dropdown`` with a ``mo.ui.run_button``, so
 ``ds = review.dataset()`` runs again when the button is clicked and stops cleanly (``mo.stop``) until then; in a plain
 Python session ``review.approve({"COLUMN": "role", ...})`` is the same path.
@@ -31,7 +33,7 @@ from pathlib import Path
 from typing import Any
 
 from .dataset import DATA_FILES, Dataset, _locate, checked, dataset
-from .describe import Draft, ROLES, describe
+from .describe import COLUMN_ROLES, SLOTS, Draft, ROLES, describe
 from .workflow import DESCRIBE_APPROVE, DESCRIBE_DRAFT, log_event
 
 __all__ = ["RoleReview", "review_roles"]
@@ -39,14 +41,26 @@ __all__ = ["RoleReview", "review_roles"]
 AUTO_APPROVE = "EXAKIT_NB_AUTO_APPROVE"
 FORCE = "force"
 DEFAULT_SCHEMA = "MY_DATA"             # where a data file named by a notebook's assignment loads, as the quickstart's OWN_TABLE
-NONE_LABEL = "—"                  # the dropdown entry for a column that plays no role
+NONE_LABEL = "—"                  # the slot dropdown's entry for a slot left empty
 ROLE_PURPOSES = {
-    "entity": "the organisation, person or item you want to compare",
-    "category": "the groups you want to compare",
-    "date": "the event date used for trends and earlier/later records",
-    "label": "the outcome you want the model to predict",
-    "text": "the written descriptions you want to explore",
+    "key": "unique for every row: it identifies the record",
+    "time": "a date or time: it orders events and makes trends",
+    "measure": "a number to sum, average or chart",
+    "category": "a few repeated values: the groups to compare",
+    "flag": "two values (0/1, yes/no): a yes-or-no fact, and a candidate outcome to predict",
+    "text": "free text: words to explore, summarise or turn into features",
+    "identifier": "names or codes that point at someone or something: not grouped or charted",
+    "other": "no rule fits: left out unless you give it a role",
 }
+SLOT_PURPOSES = {
+    "key": "the column that identifies a row",
+    "time": "the event date for trends and earlier/later records",
+    "text": "the written descriptions to explore",
+    "target": "the outcome a model predicts - you choose it, the kit never guesses it",
+    "category": "the groups to compare",
+    "entity": "who or what a row is about (the organisation, person or item)",
+}
+LEGACY_SLOT = {"date": "time", "label": "target", "entity": "entity"}   # an earlier picker's names, still accepted
 
 
 def _rules():
@@ -123,13 +137,14 @@ class RoleReview:
 
     # --- what the picker shows -----------------------------------------------------------------------------------
 
-    def suggestions(self) -> dict[str, str | None]:
-        """{column: proposed role or None}, in table order."""
-        assigned: dict[str, str | None] = {column: None for column in self.draft.columns()}
-        for role, value in self.draft.roles.items():
-            for column in value if isinstance(value, list) else [value]:
-                assigned[column] = role
-        return assigned
+    def suggestions(self) -> dict[str, str]:
+        """{column: drafted role} (one of the eight), in table order."""
+        return {column: (self.draft.doc["columns"].get(column) or {}).get("role", "other") for column in self.draft.columns()}
+
+    def slot_suggestions(self) -> dict[str, str | None]:
+        """{slot: drafted column or None}: the columns the notebooks use."""
+        slots = self.draft.slots
+        return {slot: slots.get(slot) for slot in SLOTS}
 
     def _profiled(self) -> dict[str, dict[str, Any]]:
         """The profiler's record per column, when the draft was made in this process."""
@@ -155,33 +170,29 @@ class RoleReview:
                  if isinstance(measured, int) and isinstance(total, int) else "")
         return (f"Review column suggestions for {self.draft.table}\n"
                 "These suggestions come from your table's column names and measured values. " + scope +
-                "The rules compare types, missing values, repeated values, dates and text lengths.\n" +
+                "The rules compare types, missing values, repeated values, dates and text lengths.\n"
+                "Every column gets one role:\n" +
                 "\n".join(f"  {role}: {purpose}." for role, purpose in ROLE_PURPOSES.items()) +
-                "\nYou choose the prediction target (label): the kit never guesses it. Two 0/1 columns can answer "
+                "\nThen the slots name the columns the notebooks use:\n" +
+                "\n".join(f"  {slot}: {purpose}." for slot, purpose in SLOT_PURPOSES.items()) +
+                "\nYou choose the prediction target: the kit never guesses it. Two 0/1 columns can answer "
                 "different questions - pick the one that is the outcome you want to predict.\n"
-                "A rule-match score compares candidates; it is not a probability that their business meaning is correct. "
-                "Keep useful suggestions, change the others, and leave irrelevant columns as —. "
-                "Approve descriptor saves this column map for the next notebooks.")
+                "A rule's confidence says how close the evidence is to its line; it is not a probability that the "
+                "business meaning is correct. Keep useful suggestions, change the others, and leave a slot empty (—) "
+                "when no column fits. Approve descriptor saves this column map for the next notebooks.")
 
     def explanations(self) -> dict[str, str]:
         """Plain reasons beside the evidence; a low-confidence role says so, and certainty is never implied."""
+        slots = {column: slot for slot, column in self.slot_suggestions().items() if column}
         result = {}
         for column, role in self.suggestions().items():
             entry = self.draft.doc["columns"].get(column, {})
             if entry.get("sensitive"):
                 result[column] = "Looks like personal data (an e-mail, phone number, IBAN or postcode): it is never charted, grouped or sent to a model."
                 continue
-            if role is None:
-                result[column] = (f"No notebook role: the rules call it {entry.get('role', 'other')} ({entry.get('evidence', '')}). "
-                                  "Choose a role if it fits your question, or leave it unassigned.")
-                continue
-            reason = {"text": "Descriptive text can supply word features or optional AI summaries.",
-                      "date": "Date-like values can order events. Check that this is the event date your question needs.",
-                      "label": "Two outcome values make this a prediction candidate. You decide whether it is the outcome you want.",
-                      "category": "Repeated groups to compare",
-                      "entity": "Names or identifiers that group observations by who or what they concern"}[role]
-            if role in ("category", "entity"):
-                reason += f" ({entry.get('evidence', '')})."
+            reason = f"{role.capitalize()}: {ROLE_PURPOSES.get(role, '')} ({entry.get('evidence', '')})."
+            if column in slots:
+                reason += f" The notebooks use it as the {slots[column]}."
             if entry.get("confidence") == "low":
                 reason += f" Low confidence: {entry.get('evidence', '')} is close to the rule's line - check this one."
             result[column] = reason
@@ -189,39 +200,60 @@ class RoleReview:
 
     # --- approving -------------------------------------------------------------------------------------------------
 
-    def approve(self, choices: dict[str, str | None] | None = None) -> Dataset:
-        """Apply column -> role choices (the proposal when None), then save and comment the approved descriptor."""
-        selected = self.suggestions() if choices is None else choices
-        unknown = sorted(set(selected) - set(self.draft.columns()))
+    def approve(self, choices: dict[str, str | None] | None = None, slots: dict[str, str | None] | None = None) -> Dataset:
+        """Apply the reviewed roles ({COLUMN: role}, one of the eight; the proposal when None) and slots ({slot:
+        COLUMN or None}), then save and comment the approved descriptor. An earlier picker's ``date``, ``label`` and
+        ``entity`` are still taken: they put the column in the time, target and entity slot."""
+        roles = self.suggestions()
+        chosen = self.slot_suggestions()
+        unknown = sorted(set(choices or {}) - set(roles))
         if unknown:
             raise ValueError(f"The table has no column: {', '.join(unknown)}")
-        invalid = sorted({role for role in selected.values() if role is not None and role not in ROLES})
-        if invalid:
-            raise ValueError(f"Unknown role: {', '.join(invalid)}")
-        groups: dict[str, list[str]] = {role: [] for role in ROLES}
-        for column, role in selected.items():
-            if role:
-                groups[role].append(column)
-        for role in ROLES:
-            if role != "text" and len(groups[role]) > 1:
-                raise ValueError(f"The {role} role has two columns: {', '.join(groups[role])}. Pick one.")
-        corrected = self._corrected(groups)
+        for column, role in (choices or {}).items():
+            if role in LEGACY_SLOT:
+                chosen = {s: (None if c == column else c) for s, c in chosen.items()}
+                chosen[LEGACY_SLOT[role]] = column
+            elif role is None:
+                roles[column] = "other"
+            elif role in COLUMN_ROLES:
+                roles[column] = role
+            else:
+                raise ValueError(f"Unknown role: {role} (the roles are {', '.join(COLUMN_ROLES)})")
+        for slot, column in (slots or {}).items():
+            if slot not in SLOTS:
+                raise ValueError(f"Unknown slot: {slot} (the slots are {', '.join(SLOTS)})")
+            if column is not None and column not in roles:
+                raise ValueError(f"The table has no column: {column}")
+            chosen[slot] = column
+        taken: dict[str, list[str]] = {}
+        for slot, column in chosen.items():
+            if column:
+                taken.setdefault(column, []).append(slot)
+        twice = {column: names for column, names in taken.items() if len(names) > 1}
+        if twice:
+            column, names = next(iter(twice.items()))
+            raise ValueError(f"{column} sits in two slots ({' and '.join(names)}). A column fills one slot: pick one.")
+        corrected = self._corrected(roles, chosen)
         self.approved = corrected.approve(conn=self.conn)           # logs the approval to the active workflow
         self._save_beside(corrected)
         return self.approved
 
-    def _corrected(self, groups: dict[str, list[str]]) -> Draft:
-        """The draft with the reviewed choices: each role's slot set to its column, or emptied with the reason."""
+    def _corrected(self, roles: dict[str, str], slots: dict[str, str | None]) -> Draft:
+        """The draft with the reviewed choices: the roles that changed (marked "set by you"), every slot set to its
+        column or emptied with its reason."""
         corrected = self.draft.copy()
-        for role in ROLES:                                           # empty first, so a column can move between slots
-            corrected.assign(role, None)
-        for role in ROLES:
-            columns = groups[role]
-            if columns:
-                corrected.assign(role, columns if role == "text" else columns[0])
+        drafted = self.suggestions()
+        changed = {column: role for column, role in roles.items() if role != drafted.get(column)}
+        if changed:
+            corrected.set(**changed)
+        reasons = dict(self.draft.doc.get("slot_evidence") or {})
+        corrected.slot(**{slot: None for slot in SLOTS})               # empty first, so a column can move between slots
+        for slot in SLOTS:
+            if slots.get(slot):
+                corrected.slot(**{slot: slots[slot]})
             else:
-                old = next((m.get("reason") for m in self.draft.missing if m.get("role") == role), None)
-                corrected.assign(role, None, old or "left unassigned during review")
+                kept = reasons.get(slot) if self.draft.slots.get(slot) is None else None
+                corrected.doc["slot_evidence"][slot] = kept or "left empty during review"
         return corrected
 
     def _save_beside(self, draft: Draft, only_if_absent: bool = False) -> Path | None:
@@ -306,7 +338,8 @@ class RoleReview:
             from IPython.display import display
             display(widget)
             return self
-        print("Review with review.approve({'COLUMN': 'role', ...}); use None to leave a column unassigned.")
+        print("Review with review.approve({'COLUMN': 'role', ...}, {'slot': 'COLUMN', ...}); the roles are "
+              f"{', '.join(COLUMN_ROLES)}, the slots {', '.join(SLOTS)} (None leaves a slot empty).")
         return self
 
     def jupyter_picker(self):
@@ -322,18 +355,27 @@ class RoleReview:
         return self.build_jupyter_picker(widgets)
 
     def build_jupyter_picker(self, widgets):
-        """One dropdown per column, labelled with the column, its evidence and its note under it, then the
-        Approve button. ``widgets`` is the ipywidgets module (or a stand-in)."""
+        """One dropdown per column with the eight roles (the drafted one set), its reason and evidence under it; then one
+        dropdown per slot with the table's columns; then the Approve button. ``widgets`` is ipywidgets (or a stand-in)."""
         labels, explanations = self.labels(), self.explanations()
-        pickers, rows = {}, []
+        pickers, slot_pickers, rows = {}, {}, [widgets.HTML("<b>Column roles</b>")]
         for column, role in self.suggestions().items():
             summary, runner = labels[column]
-            picker = widgets.Dropdown(options=[(NONE_LABEL, None), *[(r, r) for r in ROLES]], value=role,
+            picker = widgets.Dropdown(options=[(r, r) for r in COLUMN_ROLES], value=role,
                                       description=column, style={"description_width": "180px"})
             pickers[column] = picker
             note = " &middot; ".join(escape(part) for part in (summary, runner) if part)
             why = escape(explanations[column])
             rows.append(widgets.VBox([picker, widgets.HTML(f"{why}<br><small>Technical evidence: {note}</small>")]))
+        rows.append(widgets.HTML("<b>What the notebooks use</b> - one column per slot, or — to leave it empty"))
+        columns = list(self.suggestions())
+        reasons = self.draft.doc.get("slot_evidence") or {}
+        for slot, column in self.slot_suggestions().items():
+            picker = widgets.Dropdown(options=[(NONE_LABEL, None), *[(c, c) for c in columns]], value=column,
+                                      description=slot, style={"description_width": "180px"})
+            slot_pickers[slot] = picker
+            hint = SLOT_PURPOSES[slot] + (f" (empty: {reasons[slot]})" if column is None and reasons.get(slot) else "")
+            rows.append(widgets.VBox([picker, widgets.HTML(f"<small>{escape(hint)}</small>")]))
         button = widgets.Button(description="Approve descriptor", button_style="success")
         output = widgets.Output()
 
@@ -341,7 +383,8 @@ class RoleReview:
             with output:
                 output.clear_output()
                 try:
-                    self.approve({column: picker.value for column, picker in pickers.items()})
+                    self.approve({column: picker.value for column, picker in pickers.items()},
+                                 {slot: picker.value for slot, picker in slot_pickers.items()})
                     print(f"Approved {self.approved.id} v{self.approved.version}. Run the next cell.")
                 except (ValueError, RuntimeError) as err:
                     print(f"Could not approve: {err}")
@@ -365,9 +408,14 @@ def marimo_review(mo, draft: Draft, conn, file: Path | None = None) -> RoleRevie
                 label = (f"**{escape(column)}**<br>{escape(explanations[column])}" +
                          (f"<br>Technical evidence: {escape(summary)}" if summary else "") +
                          (f"<br>{escape(runner)}" if runner else ""))
-                dropdowns[column] = mo.ui.dropdown(options={NONE_LABEL: None, **{r: r for r in ROLES}},
-                                                   value=role or NONE_LABEL, label=label)
+                dropdowns[column] = mo.ui.dropdown(options={r: r for r in COLUMN_ROLES}, value=role, label=label)
+            columns = list(self.suggestions())
+            slot_dropdowns = {slot: mo.ui.dropdown(options={NONE_LABEL: None, **{c: c for c in columns}},
+                                                   value=column or NONE_LABEL,
+                                                   label=f"**{slot}**: {escape(SLOT_PURPOSES[slot])}")
+                              for slot, column in self.slot_suggestions().items()}
             mo.ui.dictionary.__init__(self, {"roles": mo.ui.dictionary(dropdowns),
+                                             "slots": mo.ui.dictionary(slot_dropdowns),
                                              "approve": mo.ui.run_button(label="Approve descriptor")},
                                       label=f"Roles of {draft.table}")
 
@@ -376,14 +424,20 @@ def marimo_review(mo, draft: Draft, conn, file: Path | None = None) -> RoleRevie
             roles = values.get("roles") or {}
             return {column: roles.get(column) for column in self.draft.columns()}
 
+        def slot_choices(self) -> dict[str, str | None]:
+            values = self.value or {}
+            slots = values.get("slots") or {}
+            return {slot: slots.get(slot) for slot in SLOTS}
+
         def dataset(self, draft_ok: bool = False) -> Dataset:
             if (self.value or {}).get("approve"):                  # the button was clicked: compute the approval now
-                self.approve(self.choices())
+                self.approve(self.choices(), self.slot_choices())
             if self.approved is not None:
                 return self.approved
             if draft_ok or self.headless == "draft":
                 return self._draft_dataset()
-            mo.stop(True, mo.md("Pick a role per column above and click **Approve descriptor**; the cells below run then."))
+            mo.stop(True, mo.md("Check the role of each column and the slots above, then click **Approve descriptor**; the "
+                                "cells below run then."))
             raise RuntimeError("Approve the roles first.")          # not reached: mo.stop raises
 
         def show(self):

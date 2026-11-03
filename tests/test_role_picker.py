@@ -70,7 +70,10 @@ class ReviewTest(unittest.TestCase):
         explanation = review.explanations()
         self.assertIn("120 distinct", explanation["A"])
         self.assertIn("4 distinct", explanation["B"])
-        self.assertIn("No notebook role: the rules call it category (1 distinct)", explanation["D"])
+        self.assertIn("Category: a few repeated values: the groups to compare (1 distinct)", explanation["D"])
+        self.assertIn("The notebooks use it as the entity", explanation["A"])
+        for role in ("key", "measure", "flag", "identifier", "other", "target"):
+            self.assertIn(role, guide)
 
     def test_low_confidence_and_sensitive_columns_are_marked_for_review(self):
         proposal = draft()
@@ -79,21 +82,35 @@ class ReviewTest(unittest.TestCase):
         proposal.doc["columns"]["C"].update(role="identifier", sensitive=True)
         self.assertIn("never charted, grouped or sent to a model", RoleReview(proposal, object()).explanations()["C"])
 
+    def test_the_dropdowns_start_on_the_drafted_roles_and_slots(self):
+        review = RoleReview(draft(), object())
+        self.assertEqual(review.suggestions(), {"A": "category", "B": "category", "C": "other", "D": "category"})
+        self.assertEqual(review.slot_suggestions(),
+                         {"key": None, "time": None, "text": None, "target": None, "category": "B", "entity": "A"})
+
     def test_corrections_approve_without_editing_a_file(self):
         review = RoleReview(draft(), object())
-        self.assertEqual(review.suggestions(), {"A": "entity", "B": "category", "C": None, "D": None})
         with self.assertRaisesRegex(RuntimeError, "Approve descriptor"):
             review.dataset()
         with mock.patch.object(Draft, "approve", autospec=True, side_effect=approve_as_dict):
-            result = review.approve({"A": "entity", "B": None, "C": "text", "D": None})
+            result = review.approve({"C": "text", "D": "measure"}, {"text": "C", "category": None})
         self.assertEqual((result["slots"]["text"], result["slots"]["entity"], result["slots"]["category"]), ("C", "A", None))
+        self.assertEqual((result["columns"]["C"]["role"], result["columns"]["C"]["evidence"]), ("text", "set by you"))
+        self.assertEqual(result["columns"]["B"]["evidence"], "4 distinct", "an unchanged role keeps its evidence")
         self.assertEqual("no single unique column", result["slot_evidence"]["key"])
-        self.assertIn("category", result["slot_evidence"])
+        self.assertEqual("left empty during review", result["slot_evidence"]["category"])
         self.assertIs(review.dataset(), result)
 
-    def test_two_columns_cannot_claim_a_single_role(self):
-        with self.assertRaisesRegex(ValueError, "category role has two columns"):
-            RoleReview(draft(), object()).approve({"A": "category", "B": "category"})
+    def test_an_earlier_pickers_names_still_fill_their_slot(self):
+        with mock.patch.object(Draft, "approve", autospec=True, side_effect=approve_as_dict):
+            result = RoleReview(draft(), object()).approve({"D": "label", "B": "entity"})
+        self.assertEqual((result["slots"]["target"], result["slots"]["entity"]), ("D", "B"))
+
+    def test_a_column_fills_one_slot(self):
+        with self.assertRaisesRegex(ValueError, "A sits in two slots"):
+            RoleReview(draft(), object()).approve(slots={"key": "A"})
+        with self.assertRaisesRegex(ValueError, "Unknown role: date-ish"):
+            RoleReview(draft(), object()).approve({"A": "date-ish"})
 
     def test_labels_carry_the_type_role_confidence_and_evidence(self):
         proposal = draft()
@@ -119,11 +136,15 @@ class ReviewTest(unittest.TestCase):
         widgets = types.SimpleNamespace(**{name: type(name, (Widget,), {}) for name in ("Dropdown", "HTML", "VBox", "Button", "Output")})
         box = RoleReview(draft(), object()).build_jupyter_picker(widgets)
         dropdowns = [kw for name, kw in made if name == "Dropdown"]
-        self.assertEqual([kw["description"] for kw in dropdowns], ["A", "B", "C", "D"])
-        self.assertEqual([kw["value"] for kw in dropdowns], ["entity", "category", None, None])
-        self.assertEqual(dropdowns[0]["options"][0], ("—", None))
+        self.assertEqual([kw["description"] for kw in dropdowns],
+                         ["A", "B", "C", "D", "key", "time", "text", "target", "category", "entity"])
+        self.assertEqual([kw["value"] for kw in dropdowns],
+                         ["category", "category", "other", "category", None, None, None, None, "B", "A"])
+        self.assertEqual([o for o, _ in dropdowns[0]["options"]],
+                         ["key", "time", "measure", "category", "flag", "text", "identifier", "other"])
+        self.assertEqual(dropdowns[4]["options"][0], ("—", None))
         html = [w for w in box.args[0] if type(w).__name__ == "VBox"]
-        self.assertEqual(len(html), 4, "every column has its note under the dropdown")
+        self.assertEqual(len(html), 10, "every column and every slot has its note under the dropdown")
         self.assertIn("category (low confidence): 120 distinct", html[0].args[0][1].args[0])
         self.assertEqual(type(box.args[0][-2]).__name__, "Button")
 
@@ -243,11 +264,14 @@ class MarimoTest(unittest.TestCase):
             review = marimo_review(mo, draft(), object()).show()
         self.assertIsInstance(review, mo.ui.dictionary)
         self.assertIs(mo.shown[0], review, "the element is the cell's output")
-        roles, button = review.elements["roles"], review.elements["approve"]
+        roles, slots, button = review.elements["roles"], review.elements["slots"], review.elements["approve"]
         self.assertEqual(list(roles.elements), ["A", "B", "C", "D"])
-        self.assertEqual([d.kwargs["value"] for d in roles.elements.values()], ["entity", "category", "—", "—"])
+        self.assertEqual([d.kwargs["value"] for d in roles.elements.values()], ["category", "category", "other", "category"])
         self.assertIn("category (low confidence)", roles.elements["A"].kwargs["label"])
-        self.assertEqual(roles.elements["A"].kwargs["options"]["—"], None)
+        self.assertEqual(list(roles.elements["A"].kwargs["options"]),
+                         ["key", "time", "measure", "category", "flag", "text", "identifier", "other"])
+        self.assertEqual([d.kwargs["value"] for d in slots.elements.values()], ["—", "—", "—", "—", "B", "A"])
+        self.assertIsNone(slots.elements["key"].kwargs["options"]["—"])
         self.assertEqual(button.kwargs["label"], "Approve descriptor")
 
     def test_dataset_stops_cleanly_until_the_click_then_approves_the_choices(self):
@@ -257,12 +281,14 @@ class MarimoTest(unittest.TestCase):
         with self.assertRaises(FakeMarimo.Stop):
             review.dataset()
         self.assertIn("Approve descriptor", mo.stopped[0])
-        review.value = {"roles": {"A": "entity", "B": None, "C": "text", "D": None}, "approve": True}
+        roles = {"A": "category", "B": "category", "C": "text", "D": "category"}
+        slots = {"key": None, "time": None, "text": "C", "target": None, "category": None, "entity": "A"}
+        review.value = {"roles": roles, "slots": slots, "approve": True}
         with mock.patch.object(Draft, "approve", autospec=True, side_effect=approve_as_dict):
             result = review.dataset()
         self.assertEqual(result["slots"]["text"], "C")
         self.assertIsNone(result["slots"]["category"])
-        review.value = {"roles": {"A": "entity", "B": None, "C": "text", "D": None}, "approve": False}
+        review.value = {"roles": roles, "slots": slots, "approve": False}
         self.assertIs(review.dataset(), result, "a later change of a dropdown keeps the approval")
 
     def test_headless_in_marimo_follows_the_same_rule(self):
@@ -278,8 +304,9 @@ class MarimoTest(unittest.TestCase):
         with redirect_stdout(io.StringIO()):
             review = marimo_review(mo, draft(), object())
         self.assertIsInstance(review, mo.ui.dictionary)
-        self.assertEqual(set(review.value), {"roles", "approve"})
-        self.assertEqual(review.value["roles"], {"A": "entity", "B": "category", "C": None, "D": None})
+        self.assertEqual(set(review.value), {"roles", "slots", "approve"})
+        self.assertEqual(review.value["roles"], {"A": "category", "B": "category", "C": "other", "D": "category"})
+        self.assertEqual(review.value["slots"]["entity"], "A")
 
 
 class WorkflowLogTest(unittest.TestCase):
