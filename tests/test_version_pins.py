@@ -43,41 +43,20 @@ class LauncherPinTest(unittest.TestCase):
 
 
 class PyexasolPinTest(unittest.TestCase):
-    """One pyexasol for the kit's own environment and the notebooks', at or above the floor Exasol Personal needs."""
+    """The kit's own pyexasol defaults to versions.json's 2.4.1; the notebook environment leaves pyexasol to the
+    connector, whose exact pydantic pin no pyexasol from 2.4.0 can meet."""
 
-    def test_the_notebooks_default_to_the_kits_pyexasol(self):
-        class Context:
-            def versions_document(self):
-                return {"components": VERSIONS}
+    def test_the_kit_default_and_one_floor_in_both_installers(self):
         self.assertEqual("2.4.1", VERSIONS["pyexasol"]["version"])
-        with mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("EXAKIT_PYEXASOL_VERSION", None)
-            self.assertEqual(VERSIONS["pyexasol"]["version"], notebook._pyexasol_pin(Context()))
-        self.assertFalse([spec for spec in notebook.COMPANIONS if spec.startswith("pyexasol")],
-                         "pyexasol is pinned from versions.json, not as a companion range")
-
-    def test_your_version_wins_and_an_old_one_is_only_warned_about(self):
-        said = []
-
-        class Context:
-            def versions_document(self):
-                return {"components": VERSIONS}
-
-            def activity(self, text):
-                said.append(text)
-        with mock.patch.dict(os.environ, {"EXAKIT_PYEXASOL_VERSION": "2.5.0"}):
-            self.assertEqual("2.5.0", notebook._pyexasol_pin(Context()))
-        self.assertEqual([], said)
-        with mock.patch.dict(os.environ, {"EXAKIT_PYEXASOL_VERSION": "2.3.2"}):
-            self.assertEqual("2.3.2", notebook._pyexasol_pin(Context()))
-        self.assertEqual(1, len(said))
-
-    def test_every_installer_holds_the_same_floor(self):
         shell = re.search(r'^_pyx_min_version="([^"]+)"', (ROOT / "setup/lib/pyexasol.sh").read_text(encoding="utf-8"), re.M)
         windows = re.search(r'^\$script:PyexasolMinVersion = "([^"]+)"',
                             (ROOT / "setup/lib/pyexasol.ps1").read_text(encoding="utf-8"), re.M)
-        self.assertEqual(notebook.PYEXASOL_FLOOR, shell.group(1))
-        self.assertEqual(notebook.PYEXASOL_FLOOR, windows.group(1))
+        self.assertEqual(shell.group(1), windows.group(1))
+
+    def test_the_notebook_environment_does_not_pin_pyexasol(self):
+        self.assertFalse([spec for spec in notebook.COMPANIONS if spec.startswith("pyexasol")])
+        source = (ROOT / "marketplace/addons/notebook.py").read_text(encoding="utf-8")
+        self.assertNotIn('f"pyexasol==', source)
 
 
 class NotebookPinTest(unittest.TestCase):

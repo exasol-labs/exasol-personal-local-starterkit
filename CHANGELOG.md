@@ -36,7 +36,7 @@
 - The persona question's "None - just the kit" row is now **General**, and it combines with the others.
 - `esophageal_posts` replaces the pharma trials dataset.
 - Banking has no text column (the CFPB no longer publishes complaint narratives), so the text steps skip on Banking and say why. Its time column is the date a complaint was received.
-- The notebooks and the kit's Python install pyexasol 2.4.1 by default (`versions.json`; `EXAKIT_PYEXASOL_VERSION` chooses another): versions before 2.4 failed every import and export (`export_to_pandas`, the connector's data loading) on Exasol Personal. A pyexasol of your own older than 2.4 is left as it is, and the kit installs its own beside it.
+- The kit's Python installs pyexasol 2.4.1 by default (`versions.json`; `EXAKIT_PYEXASOL_VERSION` chooses another): versions before 2.4 failed every import and export (`export_to_pandas`) on Exasol Personal. A pyexasol of your own older than 2.4 is left as it is, and the kit installs its own beside it. The notebook environment keeps the connector's own pyexasol, because the connector pins a pydantic that pyexasol 2.4 cannot use; in a notebook, read results with `nb.sql` rather than `export_to_pandas` until the connector moves.
 - Scoring a text model in the database no longer fails on an empty text: Exasol stores `''` as NULL, and the scoring UDF now hands the model an empty string.
 - A dataset with no category column (the ADE sentences) is counted by its entity or its target in the quickstart, Ask and Share notebooks, instead of stopping.
 

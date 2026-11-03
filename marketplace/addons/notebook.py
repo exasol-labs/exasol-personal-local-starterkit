@@ -114,25 +114,6 @@ def _pin(ctx: KitContext, frontend: str) -> str:
     return version
 
 
-# The oldest pyexasol that works with Exasol Personal: before 2.4 every import and export (export_to_pandas, the
-# connector's data loading) raises InvalidVersion on its version string. A warning, never a refusal; setup/lib/
-# pyexasol.sh holds the same floor for reusing a pyexasol of your own.
-PYEXASOL_FLOOR = "2.4.0"
-
-
-def _pyexasol_pin(ctx: KitContext) -> str:
-    """The notebook environment's pyexasol: EXAKIT_PYEXASOL_VERSION when you set one, as for the kit's own pyexasol,
-    else the default versions.json names (components.pyexasol.version, 2.4.1). A version older than PYEXASOL_FLOOR is
-    installed as asked, with a warning that imports and exports will fail on Exasol Personal."""
-    version = os.environ.get("EXAKIT_PYEXASOL_VERSION") or \
-        ctx.versions_document().get("components", {}).get("pyexasol", {}).get("version", "")
-    if not isinstance(version, str) or not re.fullmatch(r"\d+(\.\d+){1,2}", version):
-        raise AddonFailure("No usable pyexasol version: set EXAKIT_PYEXASOL_VERSION or check versions.json")
-    if tuple(int(p) for p in version.split(".")) < tuple(int(p) for p in PYEXASOL_FLOOR.split(".")):
-        ctx.activity(f"pyexasol {version} is older than {PYEXASOL_FLOOR}: imports and exports will fail on Exasol Personal")
-    return version
-
-
 def _sklearn_pin(ctx: KitContext) -> str:
     document = ctx.versions_document()
     rows = document.get("components", {}).get("udf-devkit", {}).get("containers", [])
@@ -158,8 +139,10 @@ def _specs(ctx: KitContext, version: str, selected: tuple[str, ...]) -> list[str
     install_jupyter = "jupyterlab" in selected and not _external_jupyter(ctx)
     if install_jupyter or venv_executable(venv, "jupyter-lab").is_file():
         extras += ",jupyter"
-    specs = [f"{PACKAGE}[{extras}]=={version}", f"pyexasol=={_pyexasol_pin(ctx)}",
-             f"scikit-learn=={_sklearn_pin(ctx)}", *COMPANIONS]
+    # No pyexasol pin here: the connector pins pydantic==2.11.5 (3.1.0 and 4.0.0 alike) and every pyexasol from 2.4.0
+    # needs pydantic>=2.13.4, so the connector's own pyexasol (2.3.x) is the only one that resolves. The kit's
+    # separate pyexasol environment keeps the 2.4.1 default (setup/lib/pyexasol.sh).
+    specs = [f"{PACKAGE}[{extras}]=={version}", f"scikit-learn=={_sklearn_pin(ctx)}", *COMPANIONS]
     if install_jupyter or venv_executable(venv, "jupyter-lab").is_file():
         specs.append(f"jupyterlab=={_pin(ctx, 'jupyterlab')}")
     if "marimo" in selected or venv_executable(venv, "marimo").is_file():
