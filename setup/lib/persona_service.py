@@ -220,8 +220,8 @@ def selected_services(root: Path, ids: str) -> list[str]:
 def dataset_hints(root: Path) -> list:
     """dataset|titles of the offered personas that name it (a persona naming "all" is not listed: it names everything).
 
-    A dataset every offered persona names says "both personas" (or "all personas" with three or more) instead of
-    the titles: "Data Scientist, ML Engineer" is 27 columns, and in the data table's For column that pushed the
+    A dataset two or more personas name says "both personas" ("all personas" when every offered one names it, "N
+    personas" for more than two of them) instead of the titles: "Data Scientist, ML Engineer" is 27 columns, and in the data table's For column that pushed the
     41-column upload and external-source labels past 80 columns, where the name column yields first and both
     were cut short. The short form says the same thing and leaves the names whole."""
     hints: dict = {}
@@ -235,8 +235,12 @@ def dataset_hints(root: Path) -> list:
     for ds, titles in hints.items():
         if offered > 1 and len(titles) == offered:
             out.append(f"{ds}|{'both' if offered == 2 else 'all'} personas")
+        elif len(titles) == 2:
+            out.append(f"{ds}|both personas")         # two of three or more: still too wide to name them
+        elif len(titles) > 2:
+            out.append(f"{ds}|{len(titles)} personas")
         else:
-            out.append(f"{ds}|{', '.join(titles)}")
+            out.append(f"{ds}|{titles[0]}")
     return out
 
 

@@ -462,7 +462,186 @@ ui_step_fail() {
 # Restore the cursor if we died mid-spin. NOT wired to a trap here on
 # purpose: the installer owns `trap ... EXIT` (exakit_on_failure), which
 # calls this itself, so a trap here would clobber the installer's cleanup.
-ui_restore_cursor() { [ "$UI_FANCY" = 1 ] && printf '\033[?25h'; _ui_input_release; return 0; }
+ui_restore_cursor() { ui_mouse_off; [ "$UI_FANCY" = 1 ] && printf '\033[?25h'; _ui_input_release; return 0; }
+
+# --- mouse in the menus -------------------------------------------------------
+# A click on a row of ui_checkbox_menu or ui_table_menu ticks or unticks it, the
+# same as Space on it; only Enter moves on. xterm SGR reporting (modes 1000 and
+# 1006), which Terminal.app, iTerm2, VS Code, GNOME Terminal and Windows
+# Terminal all speak. Fancy terminals only, EXAKIT_NO_MOUSE=1 keeps it off, and
+# it is always switched off again - by the menu, and by ui_restore_cursor on the
+# installer's EXIT trap - so a terminal is never left reporting clicks.
+#
+# Echo stays off for the whole menu, not only inside each read: a click's
+# release report, or the terminal's answer to _ui_cursor_ask, can arrive while
+# a frame is being drawn, and the terminal would echo it there as
+# "^[[<0;8;27m". The menu's own hold is released (and what is left unread
+# dropped) when the mouse goes off; a hold someone else took is left alone.
+ui_mouse_on() {
+    [ "${UI_FANCY:-0}" = 1 ] && [ "${EXAKIT_NO_MOUSE:-0}" != 1 ] || return 0
+    if [ -z "${_UI_STTY_SAVED:-}" ] && [ "${_UI_MOUSE_HELD:-0}" != 1 ]; then
+        _ui_input_hold
+        [ -n "${_UI_STTY_SAVED:-}" ] && _UI_MOUSE_HELD=1
+    fi
+    printf '\033[?1000h\033[?1006h'
+    _UI_MOUSE=1
+    UI_CURSOR_ROW=""
+}
+ui_mouse_off() {
+    _UI_MOUSE_PAUSED=0
+    if [ "${_UI_MOUSE:-0}" = 1 ]; then
+        printf '\033[?1006l\033[?1000l'
+        _UI_MOUSE=0
+    fi
+    if [ "${_UI_MOUSE_HELD:-0}" = 1 ]; then
+        _UI_MOUSE_HELD=0
+        _ui_input_release
+    fi
+    return 0
+}
+
+# _ui_mouse_pause — THE WHEEL BELONGS TO THE TERMINAL. While clicks are reported
+# the terminal sends its wheel to the menu too, and the scrollback stops moving:
+# the screen feels stuck under the menu. The first wheel tick therefore hands
+# reporting straight back, so the wheel scrolls the terminal as it always does,
+# and _ui_menu_key re-arms clicks after two quiet seconds or on the next key.
+_ui_mouse_pause() {
+    [ "${_UI_MOUSE:-0}" = 1 ] || return 0
+    printf '\033[?1006l\033[?1000l'
+    _UI_MOUSE=0
+    _UI_MOUSE_PAUSED=1
+}
+
+# _ui_menu_key <tty> — one keypress for a menu, no echo: UI_KEY (Enter is
+# empty), and for an escape sequence UI_KEY_SEQ ("[A", "[B", or "[<" for a left
+# click, with UI_MOUSE_Y set). Returns 1 at the end of the input.
+#
+# The wheel never reaches the menu: a wheel report hands the mouse back to the
+# terminal (_ui_mouse_pause) and is swallowed HERE, with no redraw - a redraw
+# would snap a scrolled-back screen to the bottom, which is the stuck scroll this
+# exists to prevent. While paused it waits in two-second slices and re-arms
+# clicks after a quiet one or on the next key.
+_ui_menu_key() {
+    while :; do
+        UI_KEY=""; UI_KEY_SEQ=""
+        if [ "${_UI_MOUSE_PAUSED:-0}" = 1 ]; then
+            # bash 3.2 answers a timeout with 1, like the end of the input: the
+            # clock tells them apart - the end of the input answers at once.
+            _umk_t0="$SECONDS"
+            if [ "$1" = "/dev/tty" ]; then
+                IFS= read -rsn1 -t 2 UI_KEY < /dev/tty; _umk_rc=$?
+            else
+                IFS= read -rsn1 -t 2 UI_KEY; _umk_rc=$?
+            fi
+            _UI_MOUSE_PAUSED=0
+            ui_mouse_on
+            if [ "$_umk_rc" -ne 0 ]; then
+                [ $(( SECONDS - _umk_t0 )) -ge 1 ] && continue
+                return 1
+            fi
+        elif [ "$1" = "/dev/tty" ]; then
+            IFS= read -rsn1 UI_KEY < /dev/tty || return 1
+        else
+            IFS= read -rsn1 UI_KEY || return 1
+        fi
+        [ "$UI_KEY" = "$(printf '\033')" ] || return 0
+        if [ "$1" = "/dev/tty" ]; then
+            IFS= read -rsn2 -t 1 UI_KEY_SEQ < /dev/tty || UI_KEY_SEQ=""
+        else
+            IFS= read -rsn2 -t 1 UI_KEY_SEQ || UI_KEY_SEQ=""
+        fi
+        case "$UI_KEY_SEQ" in
+            "[<") ;;
+            "["[0-9])
+                # A longer sequence: the cursor report _ui_cursor_ask asked
+                # for (taken, never handed to the menu - a redraw for it would
+                # ask again, forever), or a key such as Delete (ignored).
+                _ui_read_csi "$1" || continue
+                [ -n "$UI_CSI_ROW" ] && { UI_CURSOR_ROW="$UI_CSI_ROW"; continue; }
+                return 0 ;;
+            *) return 0 ;;
+        esac
+        _ui_read_mouse "$1" || continue
+        case "$UI_MOUSE_PRESS:$UI_MOUSE_BTN" in
+            1:0) return 0 ;;
+            1:64|1:65) _ui_mouse_pause ;;
+        esac
+    done
+}
+
+# _ui_cursor_ask — ask the terminal where the cursor is, right after a frame is
+# drawn: the frame's top is that row minus the lines it drew, wherever the
+# screen has scrolled to. NEVER waited for. The answer ("ESC [ row ; col R")
+# arrives in the input like a key, where _ui_menu_key takes it into
+# UI_CURSOR_ROW and swallows it; a read that blocked for it here would swallow
+# the keys typed ahead of it instead, and a terminal that never answers would
+# hang the menu. Until an answer arrives, a click is ignored.
+_ui_cursor_ask() {
+    [ "${_UI_MOUSE:-0}" = 1 ] || return 0
+    printf '\033[6n'
+}
+
+# _ui_read_csi <tty> — the rest of an escape sequence whose start, "[" and a
+# digit, is in UI_KEY_SEQ: read to its final letter (or "~"). UI_CSI_ROW is the
+# row of a cursor report ("ESC [ row ; col R"), empty for anything else.
+_ui_read_csi() {
+    _urc_s="${UI_KEY_SEQ#\[}"; _urc_c=""; _urc_n=0; UI_CSI_ROW=""
+    while [ "$_urc_n" -lt 16 ]; do
+        if [ "$1" = "/dev/tty" ]; then
+            IFS= read -rsn1 -t 1 _urc_c < /dev/tty || return 1
+        else
+            IFS= read -rsn1 -t 1 _urc_c || return 1
+        fi
+        case "$_urc_c" in [A-Za-z~]) break ;; esac
+        _urc_s="$_urc_s$_urc_c"
+        _urc_n=$(( _urc_n + 1 ))
+    done
+    if [ "$_urc_c" = "R" ]; then
+        UI_CSI_ROW="${_urc_s%%;*}"
+        case "$UI_CSI_ROW" in ''|*[!0-9]*) UI_CSI_ROW="" ;; esac
+    fi
+    return 0
+}
+
+# _ui_read_mouse <tty> — the rest of an SGR mouse report, after the menu has
+# read its "ESC [<": UI_MOUSE_BTN (0 left, 64/65 wheel), UI_MOUSE_Y (screen row)
+# and UI_MOUSE_PRESS (1 press, 0 release).
+_ui_read_mouse() {
+    _urm_s=""; _urm_c=""; _urm_n=0
+    while [ "$_urm_n" -lt 24 ]; do
+        if [ "$1" = "/dev/tty" ]; then
+            IFS= read -rsn1 -t 1 _urm_c < /dev/tty || return 1
+        else
+            IFS= read -rsn1 -t 1 _urm_c || return 1
+        fi
+        case "$_urm_c" in M|m) break ;; esac
+        _urm_s="$_urm_s$_urm_c"
+        _urm_n=$(( _urm_n + 1 ))
+    done
+    UI_MOUSE_PRESS=0
+    [ "$_urm_c" = "M" ] && UI_MOUSE_PRESS=1
+    UI_MOUSE_BTN="${_urm_s%%;*}"
+    UI_MOUSE_Y="${_urm_s##*;}"
+    case "$UI_MOUSE_BTN$UI_MOUSE_Y" in ''|*[!0-9]*) return 1 ;; esac
+    return 0
+}
+
+# _ui_click_row <top> <count> <starts...> — which entry a click on screen row
+# UI_MOUSE_Y landed on, given the frame's top row and the line each entry starts
+# at (0-based, ascending; the last value is where the entries end). Prints the
+# 1-based entry, or nothing for a click outside them.
+_ui_click_row() {
+    _ucl_off=$(( UI_MOUSE_Y - $1 )); _ucl_n="$2"; shift 2
+    _ucl_i=0; _ucl_hit=""
+    for _ucl_at in "$@"; do
+        if [ "$_ucl_i" -ge 1 ] && [ "$_ucl_off" -lt "$_ucl_at" ]; then _ucl_hit="$_ucl_i"; break; fi
+        [ "$_ucl_off" -ge "$_ucl_at" ] || break
+        _ucl_i=$(( _ucl_i + 1 ))
+        [ "$_ucl_i" -le "$_ucl_n" ] || break
+    done
+    [ -n "$_ucl_hit" ] && printf '%s\n' "$_ucl_hit"
+    return 0
+}
 
 # _ui_input_hold / _ui_input_release — while a table animates, the keys a reader
 # types are not echoed, and when it ends they are thrown away. An Enter echoed
@@ -1236,6 +1415,8 @@ ui_table_frame() {
     _utr_f="$_utr_f  ${UI_ACCENT:-}${UI_VB:-|}${UI_RESET:-}${_utr_head}${_UI_TABLE_SP:0:$(( _utr_inner - _utr_headlen ))}${UI_ACCENT:-}${UI_VB:-|}${UI_RESET:-}
 "
     _utr_lines=2
+    # The line each row starts on, for a click (see ui_table_menu).
+    _UI_TABLE_AT=()
     _utr_now="$(date +%s 2>/dev/null || echo 0)"
     # One reserved activity line follows the active add-on, directly above
     # its bar. Moving it between rows keeps the total frame height constant.
@@ -1363,6 +1544,7 @@ ui_table_frame() {
 "
             _utr_lines=$(( _utr_lines + 1 ))
         fi
+        _UI_TABLE_AT[$_utr_i]="$_utr_lines"
         _utr_f="$_utr_f  ${UI_ACCENT:-}${UI_VB:-|}${UI_RESET:-}${_utr_ptr}${_utr_box} ${_utr_name}${_UI_TABLE_SP:0:$_utr_npad}${_utr_mid}${_utr_statsep}${UI_TABLE_CELL}${_UI_TABLE_SP:0:$_utr_rpad}${UI_ACCENT:-}${UI_VB:-|}${UI_RESET:-}
 "
         _utr_lines=$(( _utr_lines + 1 ))
@@ -1407,6 +1589,7 @@ ui_table_frame() {
             _utr_wi=$(( _utr_wi + 1 ))
         done
     done < "$1"
+    _UI_TABLE_AT[$(( _utr_i + 1 ))]="$_utr_lines"
     # The frame is still ONE height in every state, and now structurally so
     # rather than by arrangement: data rows stay one line, with one reserved
     # activity line shared by the add-ons. That property is what the
@@ -1787,6 +1970,8 @@ ui_table_menu() {
         return 0
     fi
     _utm_first=1
+    # A click ticks or unticks the row under it, like Space; Enter still confirms.
+    ui_mouse_on
     # Normally nothing of this table is on screen yet; a re-ask says otherwise.
     _utm_drawn="${UI_TABLE_MENU_ONSCREEN:-0}"
     case "$_utm_drawn" in ''|*[!0-9]*) _utm_drawn=0 ;; esac
@@ -1805,11 +1990,9 @@ ui_table_menu() {
         fi
         _utm_drawn=$(( UI_TABLE_LINES + 1 ))
         _utm_first=0
-        if [ "$_utm_tty" = "/dev/tty" ]; then
-            IFS= read -rsn1 _utm_key < /dev/tty || break
-        else
-            IFS= read -rsn1 _utm_key || break
-        fi
+        _ui_cursor_ask
+        _ui_menu_key "$_utm_tty" || break
+        _utm_key="$UI_KEY"
         case "$_utm_key" in
             "")
                 # Enter on the exclusive row (Skip) answers Skip, whatever else
@@ -1829,20 +2012,25 @@ ui_table_menu() {
                 _utm_sel="$(_ui_checkbox_apply_exclusive "$_utm_sel" "$_utm_cur" "$EXAKIT_TABLE_EXCLUSIVE")"
                 ;;
             "$(printf '\033')")
-                if [ "$_utm_tty" = "/dev/tty" ]; then
-                    IFS= read -rsn2 -t 1 _utm_seq < /dev/tty || _utm_seq=""
-                else
-                    IFS= read -rsn2 -t 1 _utm_seq || _utm_seq=""
-                fi
-                case "$_utm_seq" in
+                case "$UI_KEY_SEQ" in
                     '[A') _utm_move -1 ;;
                     '[B') _utm_move 1 ;;
+                    '[<')
+                        [ -n "$UI_CURSOR_ROW" ] || continue
+                        _utm_hit="$(_ui_click_row $(( UI_CURSOR_ROW - _utm_drawn )) "$_utm_n" "${_UI_TABLE_AT[@]}")"
+                        [ -n "$_utm_hit" ] && _utm_pickable "$_utm_hit" || continue
+                        _utm_cur="$_utm_hit"
+                        _utm_sel="$(_ui_checkbox_toggle "$_utm_sel" "$_utm_n" "$_utm_cur")"
+                        _utm_sel="$(_ui_checkbox_apply_group "$_utm_sel" "$_utm_cur" "$EXAKIT_TABLE_GROUP")"
+                        _utm_sel="$(_ui_checkbox_apply_exclusive "$_utm_sel" "$_utm_cur" "$EXAKIT_TABLE_EXCLUSIVE")"
+                        ;;
                 esac
                 ;;
             k|K) _utm_move -1 ;;
             j|J) _utm_move 1 ;;
         esac
     done
+    ui_mouse_off
     # Redraw once without the pointer or the hint: the selection is made, and
     # the same table is about to become the progress display.
     ui_table_tick "$_utm_f" "$_utm_sel"

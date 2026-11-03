@@ -21,10 +21,13 @@ the Textual launcher; the kit defaults to Python 3.12.
 
 The installer keeps its database, exapump, MCP, and pyexasol stages. At the
 persona boundary, it calls `marketplace/launch.py` for an interactive Textual
-choice. Add-on lifecycle operations call `marketplace/service.py`. Public
+choice, drawn exactly as the shell's checkbox menu and add-on table (same
+characters, the terminal's own colours, no Textual chrome; a click ticks a
+row, Enter moves on, the wheel scrolls the terminal). Add-on lifecycle operations call `marketplace/service.py`. Public
 `persona add` sequences the existing data/MCP/marketplace commands in
 `persona_apply.py`. `apply.py` owns the marketplace installation sequence,
-while Textual displays its activity and progress in the selection screen.
+while Textual displays its activity and progress in the table's Status
+column, the same bar the data-load table shows.
 `installer_flow.py` decides the initial question, dataset/add-on defaults and
 membership receipt. Platform adapters invoke the existing data UI in response.
 `persona_services.py` checks service prerequisites and starts the same services

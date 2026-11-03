@@ -4,7 +4,7 @@ Branch: `feat/persona-and-marketplace-ui`. This checklist tracks implementation 
 
 ## Scope and compatibility
 
-- [ ] Keep the existing persona and marketplace selection wording, row order, keyboard controls, notebook child rows, and progress/activity placement while Textual renders them.
+- [x] Keep the existing persona and marketplace selection wording, row order, keyboard controls, notebook child rows, and progress/activity placement while Textual renders them. Textual now draws the shell's own checkbox menu and add-on table (ansi colours, no Textual border, background or scrollbar, accent written as 38;5;35); a click ticks a row, Enter moves on, the wheel is handed back to the terminal. The shell menus take clicks the same way.
 - [ ] Preserve every command, option, exit status, JSON shape, ownership receipt, and installed state used by the existing persona and marketplace paths on macOS, Linux, and Windows.
 - [x] Leave database deployment, pre-persona installation, virtual schema, and external data source code outside this change. The platform entry-point edits are limited to persona and marketplace adapters.
 - [x] Use the kit's uv-managed Python for persona/marketplace mutations after bootstrap; keep read-only queries able to use an existing interpreter without downloading Python. Add-on mutations, `persona add`, the initial persona controller and the Textual picker use uv with a cache under `EXAKIT_HOME`. Existing data/MCP commands remain platform services.
@@ -28,8 +28,8 @@ Branch: `feat/persona-and-marketplace-ui`. This checklist tracks implementation 
 
 ## Textual and Python entry points
 
-- [ ] Textual persona picker matches the current screen, including None and recorded/default selections. The actual Textual pilot now verifies selection and cancel; visual parity in a terminal remains.
-- [ ] Textual marketplace picker matches the current screen, including Select All, Skip, unavailable rows, notebook frontends, and an activity line above progress. The actual Textual pilot verifies selection stays in the same app during Python apply, dynamic choices from catalog rows, activity above progress at 80/120 columns, and keyboard protection during install; visual parity in a real terminal remains.
+- [x] Textual persona picker matches the current screen, including recorded/default selections. None became the General persona (combinable, ticked by default). Verified under a terminal emulator (pyte, real cursor reports): the rows are character for character ui_checkbox_menu's, no background is painted, and a click on a row ticks that row.
+- [x] Textual marketplace picker matches the current screen, including Select All, Skip, unavailable rows, notebook frontends, and an activity line above progress. At 140 columns the Textual frame is identical to ui_table_frame's for the same rows; widths follow ui_table_widths. The actual Textual pilot verifies selection stays in the same app during Python apply, dynamic choices from catalog rows, activity above progress at 80/120 columns, and keyboard protection during install; visual parity in a real terminal remains.
 - [x] Noninteractive env answers remain unattended and never open a UI; cancellation changes nothing. Verified by the selector and persona tests; the marketplace shell suite also checks scripted answers.
 - [x] The seven add-on lifecycle operations enter `marketplace/service.py` through platform adapters. Direct Notebook, workflow, MLflow, Rust UDF, UDF file/model, and UDF setup/use/build commands also enter Python. `describe` still uses its small platform adapters and existing Python helpers.
 - [x] Remove all seven old add-on `.sh`/`.ps1` implementation pairs after migrating production callers and compatibility coverage. The final UDF pair is removed; direct UDF/model checks now use Python and both public CLI entry points.
@@ -152,7 +152,7 @@ Branch: `feat/persona-and-marketplace-ui`. This checklist tracks implementation 
 
 | Gate | Evidence still required |
 |---|---|
-| Native UI | Compare the existing and Textual screens in Terminal. Native Terminal UI automation is unavailable here; pilot/PTY results do not establish pixel parity. |
+| Native UI | Character and SGR parity is checked under a terminal emulator; a look in Terminal.app, iTerm2 and Windows Terminal (click, wheel scroll-back, a changed colour scheme) is still a person's check. Windows' PowerShell fallback menus take no clicks yet. |
 | Clean Mac install | Fresh-machine timing and first connected result; reused-database runs do not establish this. |
 | Windows/Linux/WSL | Native install/service checks, Windows PowerShell 5.1 and mounted-path behavior. Windows verification is deferred by the user. |
 | Hosted CI | Resolve the repository’s billing/spending-limit block and retain passing workflow URLs. Local checks do not establish a hosted pass. |

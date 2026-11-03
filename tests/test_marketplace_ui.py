@@ -196,6 +196,8 @@ class MarketplaceModelTest(unittest.TestCase):
             self.assertEqual(0, run(self.root, ["persona", "--out", str(self.root / "choice.json")]))
         argv = call.call_args.args[0]
         self.assertEqual("3.13", argv[argv.index("--python") + 1])
+        # uv's own spinner would be the one line on screen that is not the kit's.
+        self.assertIn("--quiet", argv)
 
 
 if __name__ == "__main__":

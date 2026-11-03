@@ -57,6 +57,14 @@ curl -fsSL https://www.exasol.com/install/starter-kit.sh | EXAKIT_LOCAL_KIT="$KI
 
 Wait until it says it is done (a few minutes). Near the top it should say **Using local kit checkout**.
 
+Want to see the persona screen as well? Run the same command **without** `EXAKIT_PERSONA=data-scientist`. When it asks *What will you use this machine for?*:
+
+- three rows: **Data Scientist**, **ML Engineer**, **General** - General is ticked
+- click a row: its tick turns on or off; nothing else happens
+- scroll with the mouse wheel: the terminal scrolls, the screen does not stick
+- press **Enter**: the install goes on
+- the add-on screen after the data looks like the data table: same frame, same progress bar
+
 Go to **Check the install** below.
 
 ---

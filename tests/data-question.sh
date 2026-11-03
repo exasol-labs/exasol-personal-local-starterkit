@@ -195,7 +195,7 @@ out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H retail benchmark (~175k 
         exakit_data_table_build "$WORK/table"
         printf '%s~%s~%s' "$EXAKIT_TABLE_HAS_FOR" "$(cut -d'|' -f2 "$WORK/table" | tr '\n' ';')" "$(cut -d'|' -f11 "$WORK/table" | tr '\n' ';')") )"
 check "the names stay names; the personas go in column 2" \
-    "1~Sample datasets;TPC-H retail benchmark;Esophageal cancer posts;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - coming soon;Skip;~;;both personas;;;;" "$out"
+    "1~Sample datasets;TPC-H retail benchmark;Esophageal cancer posts;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - coming soon;Skip;~;General;both personas;;;;" "$out"
 out="$( (exakit_persona_dataset_hints() { :; }
         exakit_pending_datasets() { printf 'tpch|TPC-H retail benchmark\n'; }
         exakit_data_table_build "$WORK/table"; printf '%s' "$EXAKIT_TABLE_HAS_FOR") )"

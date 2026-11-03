@@ -5451,7 +5451,8 @@ function Test-ExakitMarketplaceHasPending {
     return $false
 }
 
-# Textual handles interactive selection; the table remains the fallback.
+# Textual handles interactive selection, drawing this same table in the
+# console's colours; the table remains the fallback.
 # EXAKIT_MARKETPLACE_ADDONS answers unattended runs by ID, all, or none.
 function Resolve-ExakitMarketplaceAnswer {
     param([Parameter(Mandatory)][string]$Value)
@@ -5479,21 +5480,25 @@ function Show-ExakitMarketplaceMenu {
         $launcher = Join-Path (Join-Path $root 'marketplace') 'launch.py'
         $statesPath = Join-Path ([System.IO.Path]::GetTempPath()) ("exakit-market-state-" + [guid]::NewGuid().ToString('N') + '.json')
         $resultPath = Join-Path ([System.IO.Path]::GetTempPath()) ("exakit-market-ui-" + [guid]::NewGuid().ToString('N') + '.json')
+        $aboutPath = "$statesPath.about"
         $previousVersionsDoc = $env:EXAKIT_MARKETPLACE_VERSIONS_DOC
         try {
             $env:EXAKIT_MARKETPLACE_VERSIONS_DOC = Get-ExakitMarketplaceVersionsDoc
             $snapshot = Show-ExakitMarketplaceList -Json
             [System.IO.File]::WriteAllText($statesPath, ("" + $snapshot), (New-Object System.Text.UTF8Encoding($false)))
+            # The Description column is the table's own: each add-on's About.
+            $about = @(foreach ($addon in Get-ExakitMarketplaceAddons) { "$($addon.Id)|$(Get-ExakitMarketplaceAddonDescription $addon.Id)" })
+            [System.IO.File]::WriteAllText($aboutPath, (($about -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
             $python = Get-ExakitPersonaPython
             $frontends = if ($env:EXAKIT_NOTEBOOK_FRONTENDS) { $env:EXAKIT_NOTEBOOK_FRONTENDS } else { 'jupyterlab,marimo,positron' }
             if ($python) {
-                & $python $launcher $root marketplace --states $statesPath --out $resultPath `
+                & $python $launcher $root marketplace --states $statesPath --about $aboutPath --out $resultPath `
                     --defaults ("" + $env:EXAKIT_MARKETPLACE_PRESELECT) --only ("" + $env:EXAKIT_MARKETPLACE_ONLY) `
                     --frontends $frontends --apply
             } else {
                 $uv = Install-ExakitUv
                 & $uv run --no-project --python $script:ManagedPythonVersion python $launcher $root marketplace `
-                    --states $statesPath --out $resultPath --defaults ("" + $env:EXAKIT_MARKETPLACE_PRESELECT) `
+                    --states $statesPath --about $aboutPath --out $resultPath --defaults ("" + $env:EXAKIT_MARKETPLACE_PRESELECT) `
                     --only ("" + $env:EXAKIT_MARKETPLACE_ONLY) --frontends $frontends --apply
             }
             $uiCode = $LASTEXITCODE
@@ -5506,7 +5511,7 @@ function Show-ExakitMarketplaceMenu {
         } finally {
             if ($null -eq $previousVersionsDoc) { Remove-Item Env:EXAKIT_MARKETPLACE_VERSIONS_DOC -ErrorAction SilentlyContinue }
             else { $env:EXAKIT_MARKETPLACE_VERSIONS_DOC = $previousVersionsDoc }
-            Remove-Item -LiteralPath $statesPath, $resultPath -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $statesPath, $aboutPath, $resultPath -ErrorAction SilentlyContinue
         }
     }
     # A previous marketplace in this same process is finished with, and a stale

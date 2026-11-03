@@ -75,7 +75,7 @@ mkdir -p "$WORK/kit2/personas"
 cp "$ROOT"/personas/*.json "$WORK/kit2/personas/"
 printf '{"schema_version": 1, "id": "analyst", "title": "Analyst", "summary": "SQL on the samples.", "picker": true, "order": 15, "datasets": ["tpch"], "mcp_clients": "all", "addons": ["dash-server"]}\n' \
     > "$WORK/kit2/personas/analyst.json"
-check "the question offers it where its order says, unticked" "data-scientist|0 analyst|0 ml-engineer|0" \
+check "the question offers it where its order says, unticked" "data-scientist|0 analyst|0 ml-engineer|0 general|1" \
     "$(python3 "$ROOT/setup/lib/persona_service.py" "$WORK/kit2" picker | awk -F'|' '{printf "%s%s|%s", (NR>1?" ":""), $1, $4}')"
 check "it answers like any other" "EXAKIT_DATASETS=tpch EXAKIT_MARKETPLACE_ADDONS=dash-server" \
     "$(env -u EXAKIT_DATASETS -u EXAKIT_LOAD_SAMPLE -u EXAKIT_MARKETPLACE_ADDONS python3 "$ROOT/setup/lib/persona_service.py" "$WORK/kit2" answers analyst | grep -E '^EXAKIT_(DATASETS|MARKETPLACE_ADDONS)=' | tr '\n' ' ' | sed 's/ $//')"
@@ -108,7 +108,7 @@ out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H retail benchmark (~175k 
         printf '%s~%s~%s~%s' "$EXAKIT_TABLE_DEFAULTS" "$EXAKIT_TABLE_ROW_LOCAL" "$(cut -d'|' -f2 "$WORK/table" | tr '\n' ';')" \
             "$(cut -d'|' -f11 "$WORK/table" | tr '\n' ';')") )"
 check "the persona's row ticked, the file and external rows after the datasets, each named for its persona in the For column" \
-    "3~4~Sample datasets;TPC-H retail benchmark;Esophageal cancer posts;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - coming soon;Skip;~;;both personas;;;;" "$out"
+    "3~4~Sample datasets;TPC-H retail benchmark;Esophageal cancer posts;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - coming soon;Skip;~;General;both personas;;;;" "$out"
 out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H retail benchmark (~175k rows)\nesophageal_posts|Esophageal cancer posts (social listening, ~41k posts, de-identified)\n'; }
         EXAKIT_PERSONA_ACTIVE=1 EXAKIT_DATASETS_PRESELECT=esophageal_posts; exakit_data_table_build "$WORK/table"
         printf '%s~%s' "$EXAKIT_TABLE_DEFAULTS" "$(cut -d'|' -f2 "$WORK/table" | tr '\n' ';')") )"
@@ -162,7 +162,7 @@ printf '{"id":"bare","title":"Bare","summary":"Nothing.","datasets":[],"addons":
 printf 'junk' > "$WORK/kit3/personas/._data-scientist.json"
 SVC3() { env -u EXAKIT_DATASETS -u EXAKIT_LOAD_SAMPLE -u EXAKIT_MARKETPLACE_ADDONS -u EXAKIT_MCP_CLIENTS -u EXAKIT_NOTEBOOK_FRONTENDS \
     python3 "$ROOT/setup/lib/persona_service.py" "$WORK/kit3" "$@"; }
-check "the valid ones still answer (a BOM is fine, dotfiles are skipped)" "data-scientist ml-engineer bare everything" \
+check "the valid ones still answer (a BOM is fine, dotfiles are skipped)" "data-scientist ml-engineer general bare everything" \
     "$(SVC3 ids 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
 check "each broken file is named with what is wrong" "broken.json inj.json pipe.json" \
     "$(SVC3 problems | cut -d'|' -f1 | tr '\n' ' ' | sed 's/ $//')"
@@ -178,7 +178,7 @@ check "an EXAKIT_LOAD_SAMPLE the installer does not read is not an answer" "EXAK
     "$(EXAKIT_LOAD_SAMPLE=yes python3 "$ROOT/setup/lib/persona_service.py" "$ROOT" answers data-scientist 2>/dev/null | grep '^EXAKIT_DATASETS=')"
 check "one persona where one is meant" "2" "$(python3 "$ROOT/setup/lib/persona_service.py" "$ROOT" value data-scientist,ml-engineer title >/dev/null 2>&1; echo $?)"
 out="$( (EXAKIT_PERSONA=nope; exakit_persona_known nope; printf '%s' "$EXAKIT_PERSONA_PROBLEM") )"
-contains "an unknown persona is named with the ones there are" "Unknown persona 'nope' (available: data-scientist ml-engineer)" "$out"
+contains "an unknown persona is named with the ones there are" "Unknown persona 'nope' (available: data-scientist ml-engineer general)" "$out"
 out="$( (run_python_any() { return 127; }; exakit_persona_known data-scientist; printf '%s' "$EXAKIT_PERSONA_PROBLEM") )"
 contains "no Python: says so, not 'unknown persona'" "needs Python 3" "$out"
 
@@ -186,8 +186,8 @@ echo "the install's persona section:"
 out="$( (manifest_set persona.id ""
         ui_checkbox_menu() { shift; printf '%s|%s|%s' "$1" "${EXAKIT_CHECKBOX_EXCLUSIVE:-}" "$(eval echo \"\${$#}\")" > "$WORK/q"; EXAKIT_CHECKBOX_SELECTION="3"; }
         exakit_persona_question >/dev/null 2>&1; printf '%s~%s' "$(cat "$WORK/q")" "${EXAKIT_PERSONA:-}") )"
-check "the question ends with None, exclusive and ticked to begin with; picking it is no persona" \
-    "3|3|None - just the kit, with the TPC-H, energy and weather samples~" "$out"
+check "the question ends with General, ticked to begin with, combinable (no exclusive row)" \
+    "3||General - The kit's own samples - TPC-H retail, smart-meter energy and daily weather - with every AI client on this machine. Tick it with a persona to load everything.~general" "$out"
 out="$( (unset EXAKIT_PERSONA EXAKIT_DATASETS EXAKIT_LOAD_SAMPLE EXAKIT_DATASETS_PRESELECT EXAKIT_MARKETPLACE_PRESELECT
         exakit_persona_data() { :; }; exakit_persona_flow "$ROOT" </dev/null >/dev/null 2>&1
         printf '%s|%s|%s' "${EXAKIT_DATASETS_PRESELECT:-}" "${EXAKIT_MARKETPLACE_PRESELECT:-}" "${EXAKIT_PERSONA:-}") )"
@@ -232,12 +232,12 @@ dry() { HOME="$WORK/dryhome" EXAKIT_HOME="$WORK/dryhome/kit" EXAKIT_BIN_DIR="$WO
         EXAKIT_LOCAL_KIT="$ROOT" EXAKIT_DRY_RUN=1 EXAKIT_PERSONA="$1" sh "$ROOT/install.sh" 2>&1; }
 out="$(dry nope)"; rc=$?
 check "install.sh: an unknown persona fails" "1" "$rc"
-contains "install.sh: and says which exist" "available: data-scientist ml-engineer" "$out"
+contains "install.sh: and says which exist" "available: data-scientist general ml-engineer" "$out"
 out="$(dry data-scientist,ml-engineer)"
 contains "install.sh: several personas joined by commas" "Persona: data-scientist,ml-engineer" "$out"
 out="$(dry data-scientist,nope)"
 contains "install.sh: one unknown among several is named" "Unknown persona 'nope'" "$out"
-for bad in ML-ENGINEER ../versions examples/analyst '*' 'ml-engineer ml-engineer' general; do
+for bad in ML-ENGINEER ../versions examples/analyst '*' 'ml-engineer ml-engineer' analyst; do
     out="$(dry "$bad")"; rc=$?
     check "install.sh: '$bad' is not a persona id" "1" "$rc"
 done

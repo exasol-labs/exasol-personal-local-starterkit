@@ -112,13 +112,20 @@ exakit_persona_apply_env() {
 }
 
 # exakit_persona_question — "What will you use this machine for?": the personas
-# the kit offers ("picker": true), as many as wanted, or None. Ticked to begin
-# with: the personas this kit was set up as (a re-run), else the "default": true
-# ones, else None. The answer is EXAKIT_PERSONA (empty for None).
+# the kit offers ("picker": true), as many as wanted - General (the kit's own
+# samples) is one of them, so "everything" is every row ticked. Drawn by
+# ui_checkbox_menu, in the terminal's colours like every other question. Ticked
+# to begin with: the personas this kit was set up as (a re-run), else the
+# "default": true ones. The answer is EXAKIT_PERSONA (empty: no persona).
 exakit_persona_question() {
+    # The rule and the heading are the question's own, whichever draws the
+    # rows below them: the Textual screen or ui_checkbox_menu.
+    ui_rule
+    heading "What will you use this machine for?"
     # After the common install steps, uv is present for the MCP runtime. The
-    # Textual picker owns this screen; the old checkbox remains a recovery path
-    # if a package mirror is offline or the terminal cannot run Textual.
+    # Textual picker draws the rows exactly as ui_checkbox_menu does, in the
+    # terminal's colours; the checkbox remains a recovery path if a package
+    # mirror is offline or the terminal cannot run Textual.
     if [ -t 0 ] && [ -t 1 ] && [ "${EXAKIT_NO_FANCY:-0}" != 1 ]; then
         _epq_root="$(_exakit_marketplace_root)"
         _epq_result="$(mktemp "${TMPDIR:-/tmp}/exakit-persona-ui.XXXXXX")" || _epq_result=""
@@ -163,16 +170,7 @@ PY
     done <<EXAKIT_EPQ_EOF
 $_epq_rows
 EXAKIT_EPQ_EOF
-    # The last row is the kit on its own, no persona - exclusive, and ticked to
-    # begin with unless a persona file says "default": true or a previous run
-    # recorded one.
-    _epq_none=$(( _epq_n + 1 ))
-    _epq_labels+=("None - just the kit, with the TPC-H, energy and weather samples")
-    ui_rule
-    heading "What will you use this machine for?"
-    _epq_default="${_epq_recorded:-${_epq_default:-$_epq_none}}"
-    EXAKIT_CHECKBOX_EXCLUSIVE="$_epq_none"
-    ui_checkbox_menu "Personas - tick one or more, or None" "$_epq_default" "${_epq_labels[@]}"
+    ui_checkbox_menu "Personas - tick one or more" "${_epq_recorded:-$_epq_default}" "${_epq_labels[@]}"
     EXAKIT_PERSONA=""
     for _epq_i in $(printf '%s' "${EXAKIT_CHECKBOX_SELECTION:-}" | tr ',' ' '); do
         case "$_epq_i" in ''|*[!0-9]*) continue ;; esac

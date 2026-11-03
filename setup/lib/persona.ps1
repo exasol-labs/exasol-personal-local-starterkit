@@ -157,11 +157,16 @@ function Set-ExakitPersonaEnv {
 }
 
 # Read-ExakitPersonaQuestion - "What will you use this machine for?": the
-# personas the kit offers, as many as wanted, or None. Ticked to begin with: the
-# ones this kit was set up as (a re-run), else the "default": true ones, else
-# None.
+# personas the kit offers, as many as wanted - General (the kit's own samples)
+# is one of them, so "everything" is every row ticked. Drawn by
+# Read-ExakitCheckboxMenu, in the console's colours like every other question.
+# Ticked to begin with: the ones this kit was set up as (a re-run), else the
+# "default": true ones.
 # Twin of exakit_persona_question. Sets $env:EXAKIT_PERSONA.
 function Read-ExakitPersonaQuestion {
+    # The rule and the heading are the question's own, whichever draws the rows.
+    Write-ExakitRule
+    Write-ExakitHeading "What will you use this machine for?"
     if ((Test-ExakitInteractive) -and (Test-ExakitStdoutIsTerminal) -and $env:EXAKIT_NO_FANCY -ne '1') {
         $root = Get-ExakitMarketplaceRoot
         $launcher = Join-Path (Join-Path $root 'marketplace') 'launch.py'
@@ -204,15 +209,8 @@ function Read-ExakitPersonaQuestion {
         if ($parts.Count -gt 3 -and $parts[3] -eq "1") { [void]$defaults.Add($ids.Count) }
         if ($was -ccontains $parts[0]) { [void]$recorded.Add($ids.Count) }
     }
-    # The last row is the kit on its own, no persona - exclusive, and ticked to
-    # begin with unless a file says "default": true or a previous run recorded one.
-    $none = $ids.Count + 1
-    [void]$labels.Add("None - just the kit, with the TPC-H, energy and weather samples")
     if ($recorded.Count -gt 0) { $defaults = $recorded }
-    if ($defaults.Count -eq 0) { [void]$defaults.Add($none) }
-    Write-ExakitRule
-    Write-ExakitHeading "What will you use this machine for?"
-    $picked = @(Read-ExakitCheckboxMenu -Title "Personas - tick one or more, or None" -Options $labels.ToArray() -Defaults $defaults.ToArray() -ExclusiveIndex $none)
+    $picked = @(Read-ExakitCheckboxMenu -Title "Personas - tick one or more" -Options $labels.ToArray() -Defaults $defaults.ToArray())
     $chosen = @($picked | Where-Object { $_ -ge 1 -and $_ -le $ids.Count } | ForEach-Object { $ids[$_ - 1] })
     if ($chosen.Count -eq 0) { Remove-Item Env:EXAKIT_PERSONA -ErrorAction SilentlyContinue; return }
     $env:EXAKIT_PERSONA = ($chosen -join ",")

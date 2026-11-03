@@ -1,4 +1,5 @@
-"""Exercise the actual Textual screen with its headless pilot."""
+"""Exercise the actual Textual screen with its headless pilot: the shell's own screens, its keys,
+clicks, and the wheel handed back to the terminal."""
 
 from __future__ import annotations
 
@@ -16,16 +17,48 @@ except ImportError:
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "marketplace"))
 
+PERSONAS = [{"id": "data-scientist", "label": "Data Scientist", "detail": "Explore"},
+            {"id": "ml-engineer", "label": "ML Engineer", "detail": "Train"},
+            {"id": "general", "label": "General", "detail": "The kit's own samples"}]
+
 
 @unittest.skipIf(textual is None, "Textual is provided by uv at the persona boundary")
 class ChoiceScreenTest(unittest.TestCase):
-    def test_persona_confirm_and_cancel(self) -> None:
+    def test_persona_screen_is_the_shell_checkbox_menu(self) -> None:
+        from ui import ChoiceApp
+
+        async def check() -> None:
+            app = ChoiceApp("persona", PERSONAS, {"general"}, set())
+            async with app.run_test(size=(100, 20)):
+                self.assertEqual(["    • Personas - tick one or more",
+                                  "    ❯ [ ] Data Scientist - Explore",
+                                  "      [ ] ML Engineer - Train",
+                                  "      [✓] General - The kit's own samples",
+                                  "      ↑/↓ to move · Space to toggle · Enter to confirm"],
+                                 app.render_screen(100)[0].plain.splitlines())
+
+        asyncio.run(check())
+
+    def test_general_combines_with_every_persona(self) -> None:
+        from ui import ChoiceApp
+
+        async def check() -> None:
+            app = ChoiceApp("persona", PERSONAS, {"general"}, set())
+            async with app.run_test() as pilot:
+                await pilot.press("a")
+                await pilot.press("enter")
+            self.assertEqual(["data-scientist", "ml-engineer", "general"], app.return_value["selected"])
+
+        asyncio.run(check())
+
+    def test_persona_confirm_needs_a_selection_and_escape_cancels(self) -> None:
         from ui import ChoiceApp
 
         async def confirm() -> None:
             app = ChoiceApp("persona", [{"id": "operations", "label": "Operations"}], set(), set())
             async with app.run_test() as pilot:
-                app.query_one("#table").move_cursor(row=0)
+                await pilot.press("enter")                  # nothing ticked: the question stays
+                self.assertTrue(app.is_running)
                 await pilot.press("space")
                 await pilot.press("enter")
             self.assertEqual({"selected": ["operations"], "frontends": []}, app.return_value)
@@ -39,18 +72,55 @@ class ChoiceScreenTest(unittest.TestCase):
         asyncio.run(confirm())
         asyncio.run(cancel())
 
+    def test_a_click_ticks_the_row_under_it_and_only_enter_confirms(self) -> None:
+        from ui import ChoiceApp
+
+        async def check() -> None:
+            app = ChoiceApp("persona", PERSONAS, {"general"}, set())
+            async with app.run_test(size=(100, 20)) as pilot:
+                await pilot.click("#screen", offset=(10, 2))     # line 2: ML Engineer
+                self.assertEqual({"ml-engineer", "general"}, app.selected)
+                self.assertTrue(app.is_running)
+                await pilot.click("#screen", offset=(10, 0))     # the title line is not a row
+                self.assertEqual({"ml-engineer", "general"}, app.selected)
+                await pilot.press("enter")
+            self.assertEqual(["ml-engineer", "general"], app.return_value["selected"])
+
+        asyncio.run(check())
+
+    def test_the_wheel_hands_the_mouse_back_to_the_terminal(self) -> None:
+        from textual import events
+        from ui import ChoiceApp
+
+        async def check() -> None:
+            app = ChoiceApp("persona", PERSONAS, {"general"}, set())
+            async with app.run_test() as pilot:
+                calls = []
+                app._driver._disable_mouse_support = lambda: calls.append("off")
+                app._driver._enable_mouse_support = lambda: calls.append("on")
+                app.on_mouse_scroll_down(events.MouseScrollDown(None, 0, 0, 0, 0, 0, False, False, False))
+                self.assertEqual(["off"], calls)
+                self.assertEqual(0, app.cursor)                  # the cursor did not move
+                await pilot.press("down")                       # a key re-arms the mouse
+                self.assertEqual(["off", "on"], calls)
+                await pilot.press("escape")
+
+        asyncio.run(check())
+
     def test_unavailable_addon_is_disabled(self) -> None:
         from ui import ChoiceApp
 
         async def check() -> None:
             app = ChoiceApp("marketplace", [{"id": "notebook", "label": "Notebooks", "disabled": True,
-                                             "detail": "managed outside the kit"}], {"notebook"}, {"marimo"})
+                                             "reason": "managed outside the kit"}], {"notebook"}, {"marimo"})
             async with app.run_test() as pilot:
-                app.query_one("#table").move_cursor(row=1)
+                self.assertEqual([("all", None), ("disabled", "notebook"), ("skip", None)], app.table_rows)
+                app.cursor = 1
                 await pilot.press("space")
                 self.assertEqual(set(), app.selected)
-                await pilot.press("enter")
-            self.assertEqual([], app.return_value["selected"])
+                app.cursor = 2
+                await pilot.press("enter")                      # Enter on Skip: nothing installed
+            self.assertIsNone(app.return_value)
 
         asyncio.run(check())
 
@@ -63,7 +133,7 @@ class ChoiceScreenTest(unittest.TestCase):
                             {"notebook"}, {"marimo"})
             async with app.run_test() as pilot:
                 self.assertIn("future-ui", app.choices)
-                app.query_one("#table").move_cursor(row=3)
+                app.cursor = 3
                 await pilot.press("space")
                 await pilot.press("enter")
             self.assertEqual(["marimo", "future-ui"], app.return_value["frontends"])
@@ -81,7 +151,7 @@ class ChoiceScreenTest(unittest.TestCase):
                 self.assertEqual([("all", None), ("item", "future-addon"),
                                   ("choice", "future-addon:local"),
                                   ("choice", "future-addon:remote"), ("skip", None)], app.table_rows)
-                app.query_one("#table").move_cursor(row=3)
+                app.cursor = 3
                 await pilot.press("space")
                 await pilot.press("enter")
             self.assertEqual(["future-addon"], app.return_value["selected"])
@@ -89,25 +159,49 @@ class ChoiceScreenTest(unittest.TestCase):
 
         asyncio.run(check())
 
+    def test_marketplace_is_the_shell_table(self) -> None:
+        from ui import ChoiceApp
+
+        async def check() -> None:
+            app = ChoiceApp("marketplace", [
+                {"id": "notebook", "label": "Notebooks", "version": "3.1.0", "about": "Notebooks on the database",
+                 "choices": (("jupyterlab", "JupyterLab"), ("marimo", "Marimo"))},
+                {"id": "dash-server", "label": "Dash", "version": "0.1.1", "disabled": True, "reason": "Installed"}],
+                {"notebook"}, {"jupyterlab"})
+            async with app.run_test(size=(80, 30)):
+                lines = app.render_screen(80)[0].plain.splitlines()
+            self.assertEqual("    • Details on any add-on: exakit help <id>", lines[1])
+            self.assertTrue(lines[2].startswith("  ╭─ Marketplace add-ons ─"))
+            self.assertTrue(lines[2].endswith("╮"))
+            self.assertRegex(lines[3], r"^  │     Add-on +Version  Description +│$")
+            self.assertRegex(lines[5], r"^  │❯\[✓\] ├─ notebook +3\.1\.0 +Notebooks on the database +│$")
+            self.assertRegex(lines[6], r"^  │ \[✓\] │  ├─ JupyterLab +│$")
+            self.assertRegex(lines[7], r"^  │ \[ \] │  └─ Marimo +│$")
+            self.assertRegex(lines[8], r"^  │     └─ dash-server +0\.1\.1 +Installed +│$")
+            self.assertRegex(lines[9], r"^  │ \[ \] Skip +│$")
+            self.assertTrue(lines[10].startswith("  ╰─") and lines[10].endswith("╯"))
+            self.assertEqual("      ↑/↓ to move · Space to toggle · Enter to confirm", lines[11])
+            self.assertEqual({len(line) for line in lines[2:11]}, {len(lines[2])})
+
+        asyncio.run(check())
+
     def test_select_all_tracks_children_and_restores_missing_choices(self) -> None:
         from ui import ChoiceApp
-        from textual.widgets import DataTable
 
         async def check() -> None:
             app = ChoiceApp("marketplace", [{"id": "notebook", "label": "Notebooks",
                 "choices": (("jupyterlab", "JupyterLab"), ("marimo", "Marimo"))}],
                 {"notebook"}, {"jupyterlab"})
             async with app.run_test() as pilot:
-                table = app.query_one(DataTable)
-                self.assertEqual("[ ] Select All", table.get_cell_at((0, 0)))
-                table.move_cursor(row=0)
+                self.assertFalse(app._ticked("all", None))
+                app.cursor = 0
                 await pilot.press("space")
                 self.assertEqual({"jupyterlab", "marimo"}, app.frontends)
-                self.assertEqual("[✓] Select All", table.get_cell_at((0, 0)))
-                table.move_cursor(row=3)
+                self.assertTrue(app._ticked("all", None))
+                app.cursor = 3
                 await pilot.press("space")
-                self.assertEqual("[ ] Select All", table.get_cell_at((0, 0)))
-                table.move_cursor(row=0)
+                self.assertFalse(app._ticked("all", None))
+                app.cursor = 0
                 await pilot.press("space")
                 self.assertEqual({"jupyterlab", "marimo"}, app.frontends)
                 await pilot.press("space")
@@ -125,41 +219,41 @@ class ChoiceScreenTest(unittest.TestCase):
                                          {"id": "positron", "label": "Positron", "disabled": True}],
                             {"jupyterlab"}, set())
             async with app.run_test() as pilot:
-                app.query_one("#table").move_cursor(row=2)
+                app.cursor = 2
                 await pilot.press("space")
                 self.assertNotIn("positron", app.selected)
-                app.query_one("#table").move_cursor(row=1)
+                await pilot.press("down")                       # the cursor steps over Positron
+                self.assertEqual(3, app.cursor)
+                app.cursor = 1
                 await pilot.press("space")
                 await pilot.press("enter")
             self.assertEqual(["jupyterlab", "marimo"], app.return_value["selected"])
 
         asyncio.run(check())
 
-    def test_activity_is_above_progress_at_narrow_and_wide_terminal_sizes(self) -> None:
+    def test_progress_is_the_tables_status_column(self) -> None:
         from ui import ChoiceApp
         from apply import Event
-        from textual.widgets import DataTable, ProgressBar, Static
 
         async def check(width: int) -> None:
-            app = ChoiceApp("marketplace", [{"id": "udf-devkit", "label": "UDF Devkit"}],
-                            {"udf-devkit"}, set())
+            app = ChoiceApp("marketplace", [{"id": "udf-devkit", "label": "UDF Devkit", "version": "0.1.0"},
+                                            {"id": "dash-server", "label": "Dash", "version": "0.1.1"}],
+                            {"udf-devkit", "dash-server"}, set())
             async with app.run_test(size=(width, 24)) as pilot:
-                table = app.query_one(DataTable)
-                self.assertEqual("[✓] Select All", table.get_cell_at((0, 0)))
-                self.assertEqual("[ ] Skip", table.get_cell_at((2, 0)))
-                activity = app.query_one("#activity", Static)
-                progress = app.query_one("#progress", ProgressBar)
-                activity.display = progress.display = True
                 app.applying = True
+                app._on_event(Event("dash-server", "done", "dashboards ready", 2))
                 app._on_event(Event("udf-devkit", "installing"))
                 app._on_activity("Waiting for database restart")
-                await pilot.pause()
-                self.assertLess(activity.region.y, progress.region.y)
-                self.assertGreater(activity.region.width, 0)
-                self.assertIn("Waiting for database restart", str(activity.render()))
-                self.assertEqual(0, progress.progress)
+                lines = app.render_screen(width)[0].plain.splitlines()
+                activity = next(i for i, line in enumerate(lines) if "Waiting for database restart" in line)
+                self.assertIn("udf-devkit", lines[activity + 1])          # the activity sits above its row
+                self.assertRegex(lines[activity + 1], r"░+ +0% +│$")      # the data-load table's bar
+                done = next(line for line in lines if "dash-serv" in line)
+                self.assertRegex(done, r"✓ dashboards ready +\(2s\) +│$")
+                self.assertFalse(any("Enter to confirm" in line for line in lines))
+                self.assertFalse(any("❯" in line for line in lines))
                 await pilot.press("escape")
-                self.assertTrue(app.is_running)
+                self.assertTrue(app.is_running)                  # no way out mid-install
                 app.applying = False
                 await pilot.press("escape")
 
@@ -185,7 +279,7 @@ class ChoiceScreenTest(unittest.TestCase):
 
             with patch("apply.apply", side_effect=install):
                 async with app.run_test() as pilot:
-                    app.query_one("#table").move_cursor(row=1)
+                    app.cursor = 1
                     await pilot.press("enter")
                     await pilot.pause(0.2)
             self.assertTrue(app.return_value["success"])

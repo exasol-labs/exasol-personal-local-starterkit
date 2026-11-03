@@ -1,4 +1,5 @@
-"""Run the pinned Textual UI with uv after the kit's Python bootstrap.
+"""Run the pinned Textual UI with uv after the kit's Python bootstrap. It draws the
+shell menus' own screens in the terminal's colours (see ui.py).
 
 This script needs only the Python standard library. It is called at the persona
 boundary by both platform installers; no Textual dependency is imposed on the
@@ -45,7 +46,9 @@ def run(root: Path, args: list[str]) -> int:
     uv = shutil.which("uv") or shutil.which("uv.exe")
     environment = dict(os.environ)
     if uv:
-        command = [uv, "run", "--no-project", "--python", managed_python_version(environment),
+        # Quiet: uv's own "Resolving dependencies" spinner would be the one line on screen
+        # that is not the kit's.
+        command = [uv, "run", "--quiet", "--no-project", "--python", managed_python_version(environment),
                    "--with", f"textual=={pin}",
                    "python", str(script), *args]
     else:
@@ -72,6 +75,7 @@ def main() -> int:
     parser.add_argument("mode", choices=("persona", "marketplace", "notebook"))
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--states", type=Path)
+    parser.add_argument("--about", type=Path)
     parser.add_argument("--defaults", default="")
     parser.add_argument("--recorded", default="")
     parser.add_argument("--only", default="")

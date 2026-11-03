@@ -11,6 +11,8 @@
 - **New reference datasets.** `esophageal_posts`: 40,987 public posts about esophageal cancer (2018-2022), personal details removed; it replaces the pharma trials. `bank_marketing`: 45,211 clients of a bank's term-deposit campaigns (UCI, CC BY 4.0). Both personas now load Esophageal posts, Banking complaints and Bank marketing, each with its descriptor.
 - **Your own files get the same treatment.** Load a CSV, Parquet or JSON file with `load_own_file`, describe it and approve it the same way; the notebooks then run on it unchanged.
 - **Optional model notes.** With a model configured, describe adds one line per column; a note never changes a role and never sees a sensitive column.
+- **General is a persona.** The persona question's "None - just the kit" row is now **General** - the kit's own samples (TPC-H, energy, weather) with every AI client - and it can be ticked together with Data Scientist and ML Engineer: tick all three to load everything. It is ticked to begin with; `EXAKIT_PERSONA=general` works too.
+- **Every question looks the same.** The persona, add-on and notebook-tool screens now look exactly like the rest of the install: the same frame and ticks, the data-load table's progress bar, and your terminal's own colours. A click ticks or unticks a row, only Enter moves on, and the scroll wheel still scrolls the terminal.
 - **A simpler test guide.** `docs/MANUAL-RUNBOOK.md` walks through a fresh install and an existing kit, both personas, step by step.
 
 ### Changed

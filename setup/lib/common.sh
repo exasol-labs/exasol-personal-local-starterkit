@@ -854,6 +854,10 @@ ui_checkbox_menu() {
     if [ "${UI_FANCY:-0}" = 1 ]; then _cb_mark="${UI_TICK:-x}"; else _cb_mark="x"; fi
     _cb_first=1
     _cb_drawn=0
+    # A click ticks or unticks the row under it, like Space; Enter still
+    # confirms. _cb_at[i] is the line row i starts on within the frame.
+    _cb_at=()
+    ui_mouse_on
     while :; do
         if [ "$_cb_first" -ne 1 ] && [ "$UI_FANCY" = 1 ]; then
             # Up by the lines the LAST frame really occupied, not by the row
@@ -870,6 +874,7 @@ ui_checkbox_menu() {
         _cb_drawn=0
         _cb_i=1
         for _cb_label in "$@"; do
+            _cb_at[$_cb_i]="$_cb_drawn"
             if _cb_is_header "$_cb_i"; then
                 _cb_text="$(_ui_fit_row "${_cb_label#\#}" 4 "$_cb_cols")"
                 printf '    %s%s%s\n' "${UI_ACCENT:-}" "$_cb_text" "${UI_RESET:-}"
@@ -910,16 +915,15 @@ ui_checkbox_menu() {
             _cb_drawn=$((_cb_drawn + $(_ui_wrapped_lines $((_cb_chrome + ${#_cb_text})) "$_cb_cols")))
             _cb_i=$((_cb_i + 1))
         done
+        _cb_at[$(( _cb_n + 1 ))]="$_cb_drawn"
         _cb_hint="$(_ui_fit_row "↑/↓ to move · $_cb_space · Enter to confirm" 6 "$_cb_cols")"
         ui_menu_hint "$_cb_hint"
         _cb_drawn=$((_cb_drawn + $(_ui_wrapped_lines $((6 + ${#_cb_hint})) "$_cb_cols")))
+        _ui_cursor_ask
         # One raw keypress, no echo. Enter arrives as an empty read; IFS= keeps
         # a Space keypress from being stripped to an empty string.
-        if [ "$_cb_tty" = "/dev/tty" ]; then
-            IFS= read -rsn1 _cb_key < /dev/tty || { _cb_sel="$_cb_defaults"; break; }
-        else
-            IFS= read -rsn1 _cb_key || { _cb_sel="$_cb_defaults"; break; }
-        fi
+        _ui_menu_key "$_cb_tty" || { _cb_sel="$_cb_defaults"; break; }
+        _cb_key="$UI_KEY"
         case "$_cb_key" in
             "")                                          # Enter → confirm, next step
                 # Enter ON the exclusive row (Skip, No, Nothing) answers that
@@ -937,15 +941,20 @@ ui_checkbox_menu() {
                 _cb_sel="$(_ui_checkbox_apply_group "$_cb_sel" "$_cb_cur" "$EXAKIT_CHECKBOX_GROUP")"
                 _cb_sel="$(_ui_checkbox_apply_exclusive "$_cb_sel" "$_cb_cur" "$EXAKIT_CHECKBOX_EXCLUSIVE")"
                 ;;
-            "$(printf '\033')")                          # arrows: ESC [ A / ESC [ B
-                if [ "$_cb_tty" = "/dev/tty" ]; then
-                    IFS= read -rsn2 -t 1 _cb_seq < /dev/tty || _cb_seq=""
-                else
-                    IFS= read -rsn2 -t 1 _cb_seq || _cb_seq=""
-                fi
-                case "$_cb_seq" in
+            "$(printf '\033')")                          # arrows: ESC [ A / ESC [ B; a click: ESC [<
+                case "$UI_KEY_SEQ" in
                     '[A') _cb_step -1 ;;
                     '[B') _cb_step 1 ;;
+                    '[<')
+                        [ -n "$UI_CURSOR_ROW" ] || continue
+                        _cb_hit="$(_ui_click_row $(( UI_CURSOR_ROW - _cb_drawn )) "$_cb_n" "${_cb_at[@]}")"
+                        [ -n "$_cb_hit" ] || continue
+                        if _cb_is_header "$_cb_hit" || _cb_is_disabled "$_cb_hit"; then continue; fi
+                        _cb_cur="$_cb_hit"
+                        _cb_sel="$(_ui_checkbox_toggle "$_cb_sel" "$_cb_n" "$_cb_cur")"
+                        _cb_sel="$(_ui_checkbox_apply_group "$_cb_sel" "$_cb_cur" "$EXAKIT_CHECKBOX_GROUP")"
+                        _cb_sel="$(_ui_checkbox_apply_exclusive "$_cb_sel" "$_cb_cur" "$EXAKIT_CHECKBOX_EXCLUSIVE")"
+                        ;;
                 esac
                 ;;
             k|K) _cb_step -1 ;;
@@ -964,6 +973,7 @@ ui_checkbox_menu() {
                 ;;
         esac
     done
+    ui_mouse_off
     EXAKIT_CHECKBOX_SELECTION="$(printf '%s' "$_cb_sel" | tr ',' '\n' | sort -n | paste -sd, -)"
     EXAKIT_CHECKBOX_EXCLUSIVE=""
     EXAKIT_CHECKBOX_GROUP=""
@@ -4660,7 +4670,8 @@ _exakit_addon_progress() {
     ui_progress_state "$1" "$3" "$4" "$5" "$2 · $6"
 }
 
-# Interactive selection uses Textual, then the existing table if Textual cannot
+# Interactive selection uses Textual - drawing this same table, in the terminal's
+# colours - then the existing table if Textual cannot
 # start. EXAKIT_MARKETPLACE_ADDONS answers unattended runs by ID, all, or none.
 exakit_marketplace_menu() {
     if [ "${EXAKIT_MARKETPLACE_PYTHON_APPLY:-0}" = 1 ]; then
@@ -4679,14 +4690,20 @@ exakit_marketplace_menu() {
         if [ -n "$_mm_state" ] && [ -n "$_mm_result" ]; then
             rm -f "$_mm_result"
             if exakit_marketplace_list 1 >"$_mm_state"; then
+               # The Description column is the table's own: each add-on's About.
+               while IFS='|' read -r _mm_aid _mm_arest; do
+                   [ -n "$_mm_aid" ] && printf '%s|%s\n' "$_mm_aid" "$(exakit_marketplace_addon_description "$_mm_aid" 2>/dev/null || true)"
+               done <<EXAKIT_MM_ABOUT >"$_mm_state.about"
+$(exakit_marketplace_addons)
+EXAKIT_MM_ABOUT
                EXAKIT_MARKETPLACE_VERSIONS_DOC="$(_exakit_marketplace_versions_doc 2>/dev/null || true)" \
                run_python_any "$_mm_root/marketplace/launch.py" "$_mm_root" marketplace \
-                   --states "$_mm_state" --out "$_mm_result" \
+                   --states "$_mm_state" --about "$_mm_state.about" --out "$_mm_result" \
                    --defaults "${EXAKIT_MARKETPLACE_PRESELECT:-}" \
                    --only "${EXAKIT_MARKETPLACE_ONLY:-}" \
                    --frontends "${EXAKIT_NOTEBOOK_FRONTENDS:-jupyterlab,marimo,positron}" --apply
                 _mm_ui_rc=$?
-                rm -f "$_mm_state" "$_mm_result"
+                rm -f "$_mm_state" "$_mm_state.about" "$_mm_result"
                 [ "$_mm_ui_rc" -eq 0 ] && return 0
                 [ "$_mm_ui_rc" -eq 10 ] && { info "Marketplace closed — nothing was installed."; return 0; }
                 [ "$_mm_ui_rc" -eq 11 ] || return "$_mm_ui_rc"

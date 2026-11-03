@@ -1,4 +1,20 @@
-"""One Textual selector for personas and an in-place marketplace progress view."""
+"""The persona, notebook-tool and marketplace questions, drawn through Textual exactly as the
+kit's shell menus draw them.
+
+Textual handles the keys, the mouse and the in-place redraw; what it draws is the shell's own
+screen, character for character: ui_checkbox_menu (setup/lib/common.sh) for the persona and
+notebook questions, ui_table_frame (setup/lib/ui.sh) for the marketplace table, and that table's
+Status cells as the install's progress - the same bar the data-load table shows. The App runs
+with ansi_color=True and paints no background, so the colours are the terminal's own: default
+foreground, the 256-colour 35 accent, a bold green tick and dim detail, the codes the shell
+writes, following whatever colour scheme the terminal has.
+
+Keys are the shell's: up/down or j/k move, Space ticks, "a" ticks all, Enter confirms, Esc or q
+cancels. A click ticks or unticks the row under it; only Enter moves on. The wheel belongs to the
+terminal: the first wheel event hands mouse reporting back, so the screen scrolls as it always
+does, and clicks are re-armed after two quiet seconds or on the next key (_ui_mouse_pause in
+ui.sh is the shell twin).
+"""
 
 from __future__ import annotations
 
@@ -7,39 +23,119 @@ import asyncio
 import json
 import os
 import sys
+import textwrap
 import time
 from pathlib import Path
 
+# The shell writes the accent as 38;5;35. Textual would upgrade it to the same colour in RGB on a
+# truecolor terminal; held at 256 colours it writes the shell's own code. Read at import.
+os.environ.setdefault("TEXTUAL_COLOR_SYSTEM", "256")
+
+from rich.style import Style
+from rich.text import Text
+from textual import events
 from textual.app import App, ComposeResult
-from textual.widgets import DataTable, ProgressBar, Static
+from textual.widgets import Static
 
 from model import CatalogError, choose_addons, choose_personas, load_addons, load_personas
 
+# The shell palette (ui.sh): UI_ACCENT 38;5;35, UI_OK 1;32, UI_ERR 1;31, UI_DIM 2, UI_BOLD 1.
+ACCENT = Style(color="color(35)")
+OK = Style(bold=True, color="green")
+ERR = Style(bold=True, color="red")
+DIM = Style(dim=True)
+BOLD = Style(bold=True)
+TICK, CROSS, BULLET, ARROW, POINTER = "✓", "✗", "•", "▸", "❯"
+HR, TL, TR, BL, BR, VB = "─", "╭", "╮", "╰", "╯", "│"
+BAR_FULL, BAR_EMPTY, EIGHTHS = "█", "░", " ▏▎▍▌▋▊▉"
+HINT = "↑/↓ to move · Space to toggle · Enter to confirm"
+STAT_MIN = 44                       # UI_TABLE_STAT_MIN
+COL3_FIXED = 44                     # UI_TABLE_COL3_FIXED
+COL3_MAX = 90                       # UI_TABLE_COL3_MAX
+STAGES = {"installing": (0, 65, 40), "validating": (65, 90, 8), "starting": (90, 100, 3)}
+CONNECTOR = {"tee": "├─ ", "corner": "└─ ", "tee-tee": "│  ├─ ", "tee-corner": "│  └─ ",
+             "corner-tee": "   ├─ ", "corner-corner": "   └─ "}
+SPINE = {"tee": "│", "corner": "", "tee-tee": "│  │", "tee-corner": "│",
+         "corner-tee": "   │", "corner-corner": ""}
+
+
+def fit(text: str, chrome: int, cols: int) -> str:
+    """_ui_fit_row: a row that would pass the last column is cut, with an ellipsis."""
+    if len(text) + chrome > cols:
+        return text[:max(1, cols - chrome - 1)] + "…"
+    return text
+
+
+def creep(floor: int, ceiling: int, seconds: int, elapsed: float) -> int:
+    """ui_progress_creep: between the stage reached and the next, never claiming the next."""
+    span = ceiling - floor
+    if span <= 0 or seconds <= 0:
+        return floor
+    return floor + min(span - 1, max(0, int(span * elapsed / seconds)))
+
+
+def widths(cols: int, name_w: int, col2_w: int, col3_w: int, stat_w: int) -> tuple[int, int, int]:
+    """ui_table_widths: the Description grows into slack up to UI_TABLE_COL3_MAX, gives way first
+    on a narrow terminal (down to 8, then the whole column), then the name, then the Status."""
+    total = 9 + name_w + 3 + 2 + col2_w + 2 + col3_w + (2 + stat_w if stat_w else 0)
+    over = total - cols
+    if over < 0:
+        grow = max(0, min(COL3_MAX - col3_w, -over))
+        col3_w += grow
+        over += grow
+    if over > 0:
+        if over >= col3_w + 2:
+            over -= col3_w + 2
+            col3_w = 0
+        else:
+            col3_w -= over
+            over = 0
+            if col3_w < 8:
+                over, col3_w = 8 - col3_w, 8
+    if over > 0:
+        name_w -= over
+        if name_w < 12:
+            over, name_w = 12 - name_w, 12
+            stat_w = max(12, stat_w - over)
+    return name_w, col3_w, stat_w
+
+
+def finished(detail: str, seconds) -> str:
+    """_exakit_addon_table_cell: the summary padded to the column, then the elapsed time."""
+    elapsed = f"{'(' + str(seconds) + 's)':>5}"
+    room = STAT_MIN - len(TICK) - len(elapsed) - 2
+    text = detail or "installed"
+    if len(text) > room:
+        text = text[:room - 1] + "…"
+    return f"{text:<{room}} {elapsed}"
+
+
+class Screenful(Static):
+    """The whole question as one block of text, the way the shell prints it."""
+
+    DEFAULT_CSS = "Screenful { background: ansi_default; color: ansi_default; padding: 0; }"
+
+    def on_click(self, event: events.Click) -> None:
+        self.app.click_line(event.y, event.button)
+
 
 class ChoiceApp(App[dict | None]):
-    """The kit's existing inline checkbox table, drawn through Textual.
-
-    Arrow keys move, Space toggles, Enter applies, and Skip/Escape cancel.
-    This keeps the existing interaction and leaves the earlier install screen
-    visible above the selector on platforms where Textual supports inline mode.
-    """
+    """One question, drawn as the shell draws it; see the module docstring."""
 
     INLINE_PADDING = 0
-    BINDINGS = [("escape", "cancel", "Cancel"), ("space", "toggle", "Toggle"),
-                ("enter", "confirm", "Install"), ("q", "cancel", "Cancel")]
+    BINDINGS = [("escape", "cancel", "Cancel"), ("q", "cancel", "Cancel"), ("space", "toggle", "Toggle"),
+                ("enter", "confirm", "Confirm"), ("up", "move(-1)", "Up"), ("k", "move(-1)", "Up"),
+                ("down", "move(1)", "Down"), ("j", "move(1)", "Down"), ("a", "select_all", "All")]
+    # No background, no inline border, no scrollbar: Textual's own chrome would be the one
+    # thing on screen the shell never draws.
     CSS = """
-    Screen { background: $background; }
-    #title { height: 2; margin: 0 1; text-style: bold; color: $text; }
-    #table { height: auto; max-height: 22; margin: 0 1; border: round $accent; }
-    #activity { display: none; height: 1; margin: 0 2; color: $text-muted; }
-    #progress { display: none; height: 1; margin: 0 2; }
-    #hint { height: 2; margin: 0 1; color: $text-muted; }
-    Screen:inline { height: auto; max-height: 30; }
+    Screen { background: ansi_default; color: ansi_default; scrollbar-size: 0 0; }
+    Screen:inline, Screen:ansi:inline { height: auto; border-top: none; border-bottom: none; }
     """
 
     def __init__(self, mode: str, rows: list[dict], defaults: set[str], frontend_defaults: set[str],
                  *, apply_selection: bool = False):
-        super().__init__()
+        super().__init__(ansi_color=True)
         self.mode = mode
         self.rows = rows
         self.selected = {row["id"] for row in rows if row["id"] in defaults and not row.get("disabled")}
@@ -51,47 +147,281 @@ class ChoiceApp(App[dict | None]):
             for row in rows if row["id"] in self.selected and self.choices_by_addon[row["id"]]
         }
         self.frontends = self.selected_choices.setdefault("notebook", set())
-        self.table_rows: list[tuple[str, str | None]] = []
+        self.skip = False
         self.apply_selection = apply_selection
         self.applying = False
-        self._progress_floor = 0
-        self._progress_ceiling = 0
-        self._progress_seconds = 1
-        self._progress_started = 0.0
-        self._current_addon = ""
         self.apply_events = []
-        self.title = "Exasol starter kit"
+        self.status: dict[str, dict] = {}
+        self.activity = ""
+        self.active = ""
+        self.line_rows: list[int | None] = []
+        self._mouse_paused = False
+        self._rearm = None
+        self.table_rows: list[tuple[str, str | None]] = []
+        if mode == "marketplace":
+            self.table_rows.append(("all", None))
+        for row in rows:
+            if row.get("disabled"):
+                continue
+            self.table_rows.append(("item", row["id"]))
+            if mode == "marketplace":
+                self.table_rows.extend(("choice", f"{row['id']}:{name}") for name in self.choices_by_addon[row["id"]])
+        if mode == "marketplace":
+            self.table_rows.extend(("disabled", row["id"]) for row in rows if row.get("disabled"))
+        elif mode == "notebook":
+            self.table_rows.extend(("disabled", row["id"]) for row in rows if row.get("disabled"))
+        if mode != "persona":
+            self.table_rows.append(("skip", None))
+        # The shell's first cursor position: past the group row, never on a row that cannot be picked.
+        pickable = [i for i, (kind, _) in enumerate(self.table_rows) if kind not in ("disabled", "all")]
+        self.cursor = pickable[0] if pickable else 0
+
+    # --- what is drawn ------------------------------------------------------------------------------
 
     def compose(self) -> ComposeResult:
-        heading = {"persona": "What will you use this machine for?", "marketplace": "Marketplace add-ons",
-                   "notebook": "Open which notebook tools?"}
-        yield Static(heading[self.mode], id="title")
-        yield DataTable(id="table", cursor_type="row", show_header=self.mode == "marketplace")
-        yield Static("", id="activity")
-        yield ProgressBar(total=100, show_eta=False, id="progress")
-        yield Static("↑↓ move   Space select   Enter continue   Esc cancel", id="hint")
+        yield Screenful(id="screen")
 
     def on_mount(self) -> None:
-        table = self.query_one(DataTable)
-        table.add_column("Selection", key="selection")
-        if self.mode == "marketplace":
-            table.add_column("Version", key="version", width=12)
-            table.add_column("Description", key="description")
-            self._add_row("all", None)
-        for row in self.rows:
-            self._add_row("item", row["id"])
-            if self.mode == "marketplace" and not row.get("disabled"):
-                for name in self.choices_by_addon[row["id"]]:
-                    self._add_row("choice", f"{row['id']}:{name}")
-        self._add_row("skip", None)
-        if self.apply_selection:
-            self.set_interval(0.2, self._tick_progress)
-        table.focus()
+        self.set_interval(0.2, self._tick)
+        self._draw()
 
-    def _add_row(self, kind: str, name: str | None) -> None:
-        self.table_rows.append((kind, name))
-        cells = self._cells(kind, name)
-        self.query_one(DataTable).add_row(*cells, key=f"row-{len(self.table_rows)}")
+    def on_resize(self, _: events.Resize) -> None:
+        self._draw()
+
+    def _tick(self) -> None:
+        if self.applying:
+            self._draw()
+
+    def _draw(self) -> None:
+        text, self.line_rows = self.render_screen(max(40, self.size.width or 80))
+        self.query_one("#screen", Screenful).update(text)
+
+    def _label(self, name: str) -> str:
+        row = next(row for row in self.rows if row["id"] == name)
+        return row["label"] + (" - " + row["detail"] if row.get("detail") else "")
+
+    def _ticked(self, kind: str, name: str | None) -> bool:
+        if kind == "all":
+            return self._all_selected()
+        if kind == "skip":
+            return self.skip
+        if kind == "choice":
+            addon_id, choice_id = name.split(":", 1)
+            return choice_id in self.selected_choices.get(addon_id, set())
+        return kind == "item" and name in self.selected
+
+    def render_screen(self, width: int) -> tuple[Text, list[int | None]]:
+        """The question as the shell prints it, and which row each printed line belongs to."""
+        if self.mode == "marketplace":
+            return self._render_table(width)
+        return self._render_checkbox(width)
+
+    def _render_checkbox(self, width: int) -> tuple[Text, list[int | None]]:
+        """ui_checkbox_menu: the title as an info line, one row per choice, the dim hint."""
+        cols = width - 1
+        out, lines = Text(), []
+        if self.mode == "notebook":
+            out.append("  ").append(ARROW, OK).append(" Open which notebook tools?\n")
+            lines.append(None)
+        title = "Personas - tick one or more" if self.mode == "persona" else "Notebook tools - tick one or more"
+        out.append("    ").append(BULLET, DIM).append(f" {title}\n")
+        lines.append(None)
+        for index, (kind, name) in enumerate(self.table_rows):
+            label = "Skip - open nothing" if kind == "skip" else self._label(name)
+            if kind == "disabled":
+                out.append("      ").append("[ ] " + fit(label, 10, cols), DIM).append("\n")
+            else:
+                pointer = POINTER if index == self.cursor and not self.applying else " "
+                out.append("    ").append(pointer, ACCENT).append(" ")
+                out.append(f"[{TICK}]", OK) if self._ticked(kind, name) else out.append("[ ]")
+                out.append(" " + fit(label, 10, cols) + "\n")
+            lines.append(index)
+        out.append("      ").append(fit(HINT, 6, cols), DIM)
+        lines.append(None)
+        return out, lines
+
+    def _table_entries(self) -> list[dict]:
+        """_exakit_addon_table_build: Select All, the add-ons with their choices one level down,
+        the ones that cannot be picked, Skip."""
+        entries = []
+        last_item = max((i for i, (kind, _) in enumerate(self.table_rows) if kind in ("item", "disabled")), default=-1)
+        children_of: dict[str, list[int]] = {}
+        for index, (kind, name) in enumerate(self.table_rows):
+            if kind == "choice":
+                children_of.setdefault(name.split(":", 1)[0], []).append(index)
+        for index, (kind, name) in enumerate(self.table_rows):
+            entry = {"index": index, "kind": kind, "tree": "", "version": "", "desc": "", "parent": False}
+            if kind == "all":
+                entry["label"] = "Select All"
+            elif kind == "skip":
+                entry["label"] = "Skip"
+            elif kind in ("item", "disabled"):
+                row = next(row for row in self.rows if row["id"] == name)
+                entry.update(label=name, version=str(row.get("version") or ""),
+                             desc=row.get("reason", "") if kind == "disabled" else row.get("about", ""),
+                             tree="corner" if index == last_item else "tee",
+                             parent=bool(children_of.get(name)))
+            else:
+                addon_id, choice_id = name.split(":", 1)
+                parent_tree = "corner" if self.table_rows.index(("item", addon_id)) == last_item else "tee"
+                siblings = children_of[addon_id]
+                entry.update(label=self.choices_by_addon[addon_id][choice_id],
+                             tree=f"{parent_tree}-{'corner' if index == siblings[-1] else 'tee'}")
+            entries.append(entry)
+        return entries
+
+    def _cell(self, entry: dict, stat_w: int, now: float) -> tuple[Text, int]:
+        """_ui_table_cell: the bar while running, the tick and summary when done."""
+        if entry["kind"] == "disabled":
+            return (Text(entry["desc"], DIM), len(entry["desc"])) if stat_w else (Text(), 0)
+        state = self.status.get(entry["label"]) if entry["kind"] == "item" else None
+        if not state:
+            return Text(), 0
+        if state["state"] == "running":
+            bar_w = max(8, stat_w - 7)
+            at = min(100, creep(state["pct"], state["ceil"], state["secs"], now - state["t0"]))
+            units = at * bar_w * 8 // 100
+            full, rem = min(bar_w, units // 8), units % 8
+            head = EIGHTHS[rem] if full < bar_w and rem else ""
+            empty = max(0, bar_w - full - len(head))
+            cell = Text().append(BAR_FULL * full, ACCENT).append(head + BAR_EMPTY * empty, DIM)
+            cell.append(f"{at}%".rjust(7))
+            return cell, bar_w + 7
+        if state["state"] == "done":
+            return Text().append(TICK, OK).append(" " + state["final"]), len(TICK) + 1 + len(state["final"])
+        final = "did not finish — see the log"
+        return Text().append(CROSS, ERR).append(" " + final), len(CROSS) + 1 + len(final)
+
+    def _render_table(self, width: int) -> tuple[Text, list[int | None]]:
+        """ui_table_frame, then ui_table_menu's hint while the selection is open."""
+        entries = self._table_entries()
+        name_w = max([10] + [len(CONNECTOR.get(e["tree"], "")) + len(e["label"]) for e in entries])
+        col2_w = max([len("Version")] + [len(e["version"]) for e in entries])
+        stat_w = 0
+        if self.status:
+            stat_w = max([STAT_MIN] + [len(s["final"]) + len(TICK) + 1 for s in self.status.values() if s.get("final")])
+        name_w, col3_w, stat_w = widths(width, name_w, col2_w, COL3_FIXED, stat_w)
+        sep = "  "
+        inner = 5 + name_w + 1 + len(sep) + col2_w + (len(sep) + col3_w if col3_w else 0) + (len(sep) + stat_w if stat_w else 0)
+        now = time.monotonic()
+        out, lines = Text(), []
+
+        def border(left: str, right: str, body: Text) -> None:
+            out.append("  ").append(left, ACCENT).append_text(body).append(right + "\n", ACCENT)
+
+        out.append("\n    ").append(BULLET, DIM).append(" Details on any add-on: exakit help <id>\n")
+        lines += [None, None]
+        title = " Marketplace add-ons "
+        out.append("  ").append(TL + HR, ACCENT).append(title, BOLD)
+        out.append(HR * max(0, inner - len(title) - 1) + TR + "\n", ACCENT)
+        lines.append(None)
+        head = "     " + "Add-on".ljust(name_w) + sep + "Version".ljust(col2_w)
+        if col3_w:
+            head += sep + "Description"[:col3_w].ljust(col3_w)
+        if stat_w:
+            head += sep + "Status"
+        border(VB, VB, Text(head.ljust(inner)))
+        lines.append(None)
+        status_left = 5 + name_w + len(sep) + col2_w + (len(sep) + col3_w if col3_w else 0) + len(sep)
+        for entry in entries:
+            if self.applying and entry["kind"] == "item" and entry["label"] == self.active:
+                note = self.activity[:inner - status_left]
+                border(VB, VB, Text(" " * status_left).append(note.ljust(inner - status_left), DIM))
+                lines.append(None)
+            kind = entry["kind"]
+            # Built from an unstyled Text: a Text made WITH a style hands it to everything
+            # appended after it, and the name would come out in the accent colour.
+            row = Text().append(POINTER if entry["index"] == self.cursor and not self.applying else " ", ACCENT)
+            if kind == "disabled":
+                row.append("   ")
+            elif self._ticked(kind, self.table_rows[entry["index"]][1]):
+                row.append(f"[{TICK}]", OK)
+            else:
+                row.append("[ ]")
+            name = CONNECTOR.get(entry["tree"], "") + entry["label"]
+            name = name if len(name) <= name_w else name[:name_w - 1] + "…"
+            wrapped = textwrap.wrap(entry["desc"], col3_w) if entry["desc"] and col3_w else []
+            row.append(" ")
+            row.append(name.ljust(name_w), DIM if kind == "disabled" else None)
+            version = entry["version"] if len(entry["version"]) <= col2_w else entry["version"][:col2_w - 1] + "…"
+            row.append(sep).append(version.ljust(col2_w), DIM)
+            used = 1 + 3 + 1 + name_w + len(sep) + col2_w
+            if col3_w:
+                row.append(sep).append((wrapped[0] if wrapped else "").ljust(col3_w), DIM)
+                used += len(sep) + col3_w
+            if stat_w:
+                cell, cell_len = self._cell(entry, stat_w, now)
+                row.append(sep).append_text(cell)
+                used += len(sep) + cell_len
+            row.append(" " * max(0, inner - used))
+            border(VB, VB, row)
+            lines.append(entry["index"])
+            spine = SPINE.get(entry["tree"], "")
+            if entry["parent"]:
+                spine = "│  │" if entry["tree"] == "tee" else "   │"
+            for more in wrapped[1:]:
+                cont = Text("     " + spine.ljust(name_w) + sep + " " * col2_w + sep)
+                cont.append(more.ljust(col3_w), DIM)
+                cont.append(" " * max(0, inner - (5 + name_w + len(sep) + col2_w + len(sep) + col3_w)))
+                border(VB, VB, cont)
+                lines.append(entry["index"])
+        out.append("  ").append(BL + HR * inner + BR, ACCENT)
+        lines.append(None)
+        if not self.applying:
+            out.append("\n      ").append(HINT, DIM)
+            lines.append(None)
+        return out, lines
+
+    # --- keys and the mouse -----------------------------------------------------------------------
+
+    def _pickable(self, index: int) -> bool:
+        return self.table_rows[index][0] != "disabled"
+
+    def action_move(self, step: int) -> None:
+        if self.applying or not self.table_rows:
+            return
+        for _ in range(len(self.table_rows)):
+            self.cursor = (self.cursor + step) % len(self.table_rows)
+            if self._pickable(self.cursor):
+                break
+        self._draw()
+
+    def click_line(self, line: int, button: int) -> None:
+        if self.applying or button != 1 or not 0 <= line < len(self.line_rows):
+            return
+        index = self.line_rows[line]
+        if index is None or not self._pickable(index):
+            return
+        self.cursor = index
+        self.action_toggle()
+
+    def on_mouse_scroll_down(self, _: events.MouseScrollDown) -> None:
+        self._pause_mouse()
+
+    def on_mouse_scroll_up(self, _: events.MouseScrollUp) -> None:
+        self._pause_mouse()
+
+    def _pause_mouse(self) -> None:
+        """Hand the wheel back to the terminal (see the module docstring)."""
+        driver = getattr(self, "_driver", None)
+        if self._mouse_paused or driver is None or not hasattr(driver, "_disable_mouse_support"):
+            return
+        driver._disable_mouse_support()
+        self._mouse_paused = True
+        self._rearm = self.set_timer(2.0, self._rearm_mouse)
+
+    def _rearm_mouse(self) -> None:
+        if self._rearm is not None:
+            self._rearm.stop()
+            self._rearm = None
+        driver = getattr(self, "_driver", None)
+        if self._mouse_paused and driver is not None and hasattr(driver, "_enable_mouse_support"):
+            driver._enable_mouse_support()
+        self._mouse_paused = False
+
+    def on_key(self, _: events.Key) -> None:
+        if self._mouse_paused:
+            self._rearm_mouse()
 
     def _all_selected(self) -> bool:
         enabled = [row["id"] for row in self.rows if not row.get("disabled")]
@@ -99,61 +429,37 @@ class ChoiceApp(App[dict | None]):
             addon in self.selected and set(self.choices_by_addon[addon]).issubset(
                 self.selected_choices.get(addon, set())) for addon in enabled)
 
-    def _cells(self, kind: str, name: str | None) -> tuple[str, ...]:
-        if kind == "all":
-            checked = self._all_selected()
-            return (f"{'[✓]' if checked else '[ ]'} Select All", "", "")
-        if kind == "skip":
-            if self.mode == "marketplace":
-                return ("[ ] Skip", "", "")
-            if self.mode == "notebook":
-                return ("[ ] Skip - open nothing",)
-            return (f"{'[✓]' if not self.selected else '[ ]'} None - just the kit, with the TPC-H, energy and weather samples",)
-        if kind == "choice":
-            addon_id, choice_id = name.split(":", 1)
-            label = self.choices_by_addon[addon_id][choice_id]
-            picked = choice_id in self.selected_choices.get(addon_id, set())
-            return (f"{'[✓]' if picked else '[ ]'}    └─ {label}", "", "")
-        row = next(row for row in self.rows if row["id"] == name)
-        prefix = "[·]" if row.get("disabled") else "[✓]" if name in self.selected else "[ ]"
-        label = f"{prefix} ├─ {row['label']}" if self.mode == "marketplace" else f"{prefix} {row['label']}"
-        if self.mode in ("persona", "notebook"):
-            return (label + " - " + row.get("detail", ""),)
-        return (label, str(row.get("version", "")), str(row.get("detail", "")))
-
-    def _refresh(self) -> None:
-        table = self.query_one(DataTable)
-        for index, (kind, name) in enumerate(self.table_rows):
-            cells = self._cells(kind, name)
-            for column, value in enumerate(cells):
-                table.update_cell_at((index, column), value)
-
     def action_cancel(self) -> None:
         if not self.applying:
             self.exit(None)
 
+    def action_select_all(self) -> None:
+        """"a" ticks every real choice - never the exclusive Skip, never a disabled row."""
+        if self.applying or self.mode == "marketplace":
+            return
+        self.skip = False
+        self.selected = {row["id"] for row in self.rows if not row.get("disabled")}
+        self._draw()
+
     def action_confirm(self) -> None:
         if self.applying:
             return
-        table = self.query_one(DataTable)
-        if self.table_rows[table.cursor_row][0] == "skip":
+        if self.table_rows[self.cursor][0] == "skip" or self.skip:
             self.exit(None)
             return
         selected = [row["id"] for row in self.rows if row["id"] in self.selected]
+        if not selected:
+            self.bell()                                 # at least one selection, as in the shell menus
+            return
         frontends = [name for name in self.choices if name in self.frontends]
         result = {"selected": selected, "frontends": frontends}
         if self.mode == "marketplace":
             result["choices"] = {addon_id: [name for name in choices if name in self.selected_choices.get(addon_id, set())]
                                  for addon_id, choices in self.choices_by_addon.items()
                                  if addon_id in self.selected and choices}
-        if self.apply_selection and not selected:
-            self.exit(None)
-            return
-        if self.apply_selection and self.mode == "marketplace" and selected:
+        if self.apply_selection and self.mode == "marketplace":
             self.applying = True
-            self.query_one("#activity", Static).styles.display = "block"
-            self.query_one("#progress", ProgressBar).styles.display = "block"
-            self.query_one("#hint", Static).update("Installing selected add-ons…")
+            self._draw()
             asyncio.create_task(self._install(result))
             return
         self.exit(result)
@@ -161,11 +467,13 @@ class ChoiceApp(App[dict | None]):
     def action_toggle(self) -> None:
         if self.applying:
             return
-        kind, name = self.table_rows[self.query_one(DataTable).cursor_row]
+        kind, name = self.table_rows[self.cursor]
         if kind == "skip":
-            self.selected.clear()
-            for selected in self.selected_choices.values():
-                selected.clear()
+            self.skip = not self.skip
+            if self.skip:
+                self.selected.clear()
+                for selected in self.selected_choices.values():
+                    selected.clear()
         elif kind == "all":
             enabled = {row["id"] for row in self.rows if not row.get("disabled")}
             self.selected = set() if self._all_selected() else enabled
@@ -174,10 +482,9 @@ class ChoiceApp(App[dict | None]):
                 selected.clear()
                 if addon_id in self.selected:
                     selected.update(choices)
+            self.skip = False
         elif kind == "item":
-            row = next(row for row in self.rows if row["id"] == name)
-            if row.get("disabled"):
-                return
+            self.skip = False
             if name in self.selected:
                 self.selected.remove(name)
                 self.selected_choices.setdefault(name, set()).clear()
@@ -187,6 +494,7 @@ class ChoiceApp(App[dict | None]):
                 if not selected:
                     selected.update(self.choices_by_addon.get(name, {}))
         elif kind == "choice":
+            self.skip = False
             addon_id, choice_id = name.split(":", 1)
             selected = self.selected_choices.setdefault(addon_id, set())
             if choice_id in selected:
@@ -194,42 +502,33 @@ class ChoiceApp(App[dict | None]):
             else:
                 selected.add(choice_id)
                 self.selected.add(addon_id)
-        self._refresh()
+        self._draw()
 
-    def on_data_table_row_selected(self, _: DataTable.RowSelected) -> None:
-        self.action_confirm()
-
-    def _tick_progress(self) -> None:
-        if not self.applying or self._progress_ceiling <= self._progress_floor:
-            return
-        elapsed = time.monotonic() - self._progress_started
-        step = int((self._progress_ceiling - self._progress_floor) * elapsed / self._progress_seconds)
-        value = min(self._progress_ceiling - 1, self._progress_floor + max(0, step))
-        self.query_one("#progress", ProgressBar).update(progress=value)
+    # --- the install, in the table's Status column ------------------------------------------------
 
     def _on_activity(self, label: str) -> None:
-        self.query_one("#activity", Static).update(label)
+        self.activity = label
 
     def _on_event(self, event) -> None:
         self.apply_events.append(event)
-        stages = {"installing": (0, 65, 40), "validating": (65, 90, 8),
-                  "starting": (90, 100, 3)}
-        if event.phase in stages:
-            self._current_addon = event.addon
-            self._progress_floor, self._progress_ceiling, self._progress_seconds = stages[event.phase]
-            self._progress_started = time.monotonic()
-            self.query_one("#progress", ProgressBar).update(progress=self._progress_floor)
-            self._on_activity(f"{event.addon}: {event.phase}")
-        elif event.phase == "warning":
-            self._on_activity(f"{event.addon}: {event.detail}")
-        else:
-            self._progress_ceiling = 0
-            self.query_one("#progress", ProgressBar).update(progress=100)
-            self._on_activity(f"{event.addon}: {'installed' if event.phase == 'done' else event.detail}")
+        if event.phase in STAGES:
+            floor, ceiling, seconds = STAGES[event.phase]
+            previous = self.status.get(event.addon, {})
+            self.status[event.addon] = {"state": "running", "pct": floor, "ceil": ceiling, "secs": seconds,
+                                        "t0": time.monotonic(), "final": ""}
+            if previous.get("state") == "running":     # a new phase keeps the job's place on the bar
+                self.status[event.addon]["pct"] = max(floor, creep(previous["pct"], previous["ceil"],
+                                                                   previous["secs"], time.monotonic() - previous["t0"]))
+            self.active = event.addon
+            self.activity = event.phase
+        elif event.phase == "done":
+            self.status[event.addon] = {"state": "done", "final": finished(event.detail, getattr(event, "seconds", 0) or 0)}
+        elif event.phase == "failed":
+            self.status[event.addon] = {"state": "failed", "final": ""}
         row = next((row for row in self.rows if row["id"] == event.addon), None)
         if row is not None and event.phase != "warning":
             row["detail"] = event.detail if event.phase in ("done", "failed") else event.phase
-            self._refresh()
+        self._draw()
 
     async def _install(self, result: dict) -> None:
         from apply import apply
@@ -251,7 +550,17 @@ class ChoiceApp(App[dict | None]):
             result["success"] = False
             result["error"] = str(error)
             self._on_activity(str(error))
+        self.active = ""
+        self._draw()
         self.exit(result)
+
+
+def about(path: Path | None) -> dict[str, str]:
+    """id|description lines: the add-on's one-line About, as the shell table shows it."""
+    if not path or not path.is_file():
+        return {}
+    pairs = (line.split("|", 1) for line in path.read_text(encoding="utf-8").splitlines() if "|" in line)
+    return {key: value for key, value in pairs}
 
 
 def main() -> int:
@@ -259,11 +568,12 @@ def main() -> int:
     parser.add_argument("mode", choices=("persona", "marketplace", "notebook"))
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--states", type=Path)
+    parser.add_argument("--about", type=Path, help="id|description lines for the marketplace's Description column")
     parser.add_argument("--defaults", default="")
     parser.add_argument("--recorded", default="")
     parser.add_argument("--only", default="")
     parser.add_argument("--frontends", default="jupyterlab,marimo,positron")
-    parser.add_argument("--apply", action="store_true", help="keep Textual open while Python installs the selection")
+    parser.add_argument("--apply", action="store_true", help="keep the table open while Python installs the selection")
     args = parser.parse_args()
     if args.apply and args.mode != "marketplace":
         parser.error("--apply is only valid for marketplace")
@@ -305,11 +615,21 @@ def main() -> int:
                 addons = [addon for addon in addons if addon.id in only]
             raw = json.loads(args.states.read_text(encoding="utf-8")) if args.states else {}
             states = {row["id"]: row for row in raw.get("addons", [])}
-            rows = [{"id": row.id, "label": row.label, "version": row.version or row.default_version,
-                     "choices": row.choices,
-                     "detail": states.get(row.id, {}).get("status", "not in this kit copy"),
-                     "disabled": states.get(row.id, {}).get("status") != "available"}
-                    for row in addons]
+            abouts = about(args.about)
+            # Not offerable here and not installed: no row at all, as in the shell table.
+            addons = [addon for addon in addons
+                      if states.get(addon.id, {}).get("status") != "not available on this machine"]
+            rows = []
+            for row in addons:
+                status = states.get(row.id, {}).get("status", "not in this kit copy")
+                installed = status == "installed"
+                rows.append({"id": row.id, "label": row.label,
+                             "version": (states.get(row.id, {}).get("version") if installed else None)
+                             or row.version or row.default_version,
+                             "choices": row.choices, "detail": status,
+                             "about": abouts.get(row.id) or f"Details: exakit help {row.id}",
+                             "reason": "Installed" if installed else status,
+                             "disabled": status != "available"})
             if args.recorded:
                 defaults = set(args.recorded.split(","))
             elif not defaults:

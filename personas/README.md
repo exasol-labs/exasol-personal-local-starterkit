@@ -5,14 +5,22 @@ environment - which datasets to load, which AI clients to connect, which
 marketplace add-ons to offer. The rules live in one Python service,
 `setup/lib/persona_service.py`, which the shell and PowerShell installers both
 call. The interactive persona and marketplace choices use the Textual screen
-in `marketplace/ui.py`, with the kit's checkbox menu as a recovery path.
+in `marketplace/ui.py`, drawn exactly as the kit's own checkbox menu and table,
+in the terminal's colours: a click ticks or unticks a row, Enter moves on, and
+the scroll wheel still scrolls the terminal. The shell menus remain the
+recovery path and take clicks the same way.
 
-The kit ships the two BRD persona baselines, both on the reference datasets Esophageal, Banking and Bank marketing:
+The kit ships the two BRD persona baselines, both on the reference datasets Esophageal, Banking and Bank marketing,
+and General, the kit's own samples:
 
 | Persona | Datasets | AI clients | Add-ons | First notebook |
 |---|---|---|---|---|
-| `data-scientist` (Data Scientist) | `esophageal_posts`, `banking_complaints` | all detected | `notebook` | `data-scientist/00_quickstart.ipynb` |
-| `ml-engineer` (ML Engineer) | `esophageal_posts`, `banking_complaints` | all detected | `notebook`, `udf-devkit` | `ml-engineer/00_quickstart.ipynb` |
+| `data-scientist` (Data Scientist) | `esophageal_posts`, `banking_complaints`, `bank_marketing` | all detected | `notebook` | `data-scientist/00_quickstart.ipynb` |
+| `ml-engineer` (ML Engineer) | `esophageal_posts`, `banking_complaints`, `bank_marketing` | all detected | `notebook`, `udf-devkit` | `ml-engineer/00_quickstart.ipynb` |
+| `general` (General) | `tpch`, `energy`, `weather` | all detected | - | - |
+
+General is ticked to begin with and combines with the others like any persona:
+tick all three to load every dataset and get every persona's add-ons.
 
 The ML Engineer persona also starts local MLflow and installs the selected UDF runtime.
 JSON Tables and Dash Server stay available separately, without expanding the BRD baseline:
@@ -32,13 +40,13 @@ curl -fsSL https://www.exasol.com/install/starter-kit.sh | EXAKIT_PERSONA=ml-eng
 **On a terminal without `EXAKIT_PERSONA`** the install asks, after the parts
 everyone needs (the database, exapump, the AI bridge):
 
-1. *What will you use this machine for?* - Data Scientist, ML Engineer (one or
-   both), or None - just the kit, which is ticked to begin with.
+1. *What will you use this machine for?* - Data Scientist, ML Engineer and
+   General, as many as you like; General is ticked to begin with.
 2. *Data to load* - one table: **Sample datasets** is the parent row with the
    datasets under it (a For column names the persona each is for, and the
    picked personas' datasets are ticked), then your own file or folder, an
    external source (shown, coming soon) and Skip. Enter starts the load in the
-   same table. With None, the kit's own samples are ticked: TPC-H, energy,
+   same table. With General, the kit's own samples are ticked: TPC-H, energy,
    weather.
 3. *Add-ons for your personas* - only their add-ons, ticked; Enter installs
    them, Skip backs out. The notebook add-on's tools (JupyterLab, Marimo,
