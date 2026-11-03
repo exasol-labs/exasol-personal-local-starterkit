@@ -40,6 +40,33 @@ class LauncherPinTest(unittest.TestCase):
         self.assertFalse(udf_tool.at_least("2.2.9", udf_devkit.LAUNCHER_FLOOR))
 
 
+class PyexasolPinTest(unittest.TestCase):
+    """One pyexasol for the kit's own environment and the notebooks', at or above the floor Exasol Personal needs."""
+
+    def test_the_notebooks_get_the_kits_exact_pyexasol(self):
+        class Context:
+            def versions_document(self):
+                return {"components": VERSIONS}
+        self.assertEqual("2.4.1", VERSIONS["pyexasol"]["version"])
+        self.assertEqual(VERSIONS["pyexasol"]["version"], notebook._pyexasol_pin(Context()))
+        self.assertFalse([spec for spec in notebook.COMPANIONS if spec.startswith("pyexasol")],
+                         "pyexasol is pinned from versions.json, not as a companion range")
+
+    def test_a_pin_below_the_floor_is_refused(self):
+        class Context:
+            def versions_document(self):
+                return {"components": {"pyexasol": {"version": "2.3.2"}}}
+        with self.assertRaises(Exception):
+            notebook._pyexasol_pin(Context())
+
+    def test_every_installer_holds_the_same_floor(self):
+        shell = re.search(r'^_pyx_min_version="([^"]+)"', (ROOT / "setup/lib/pyexasol.sh").read_text(encoding="utf-8"), re.M)
+        windows = re.search(r'^\$script:PyexasolMinVersion = "([^"]+)"',
+                            (ROOT / "setup/lib/pyexasol.ps1").read_text(encoding="utf-8"), re.M)
+        self.assertEqual(notebook.PYEXASOL_FLOOR, shell.group(1))
+        self.assertEqual(notebook.PYEXASOL_FLOOR, windows.group(1))
+
+
 class NotebookPinTest(unittest.TestCase):
     def test_notebook_connector_is_3_1(self):
         pinned = VERSIONS["notebook"]["version"]

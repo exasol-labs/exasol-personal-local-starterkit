@@ -28,9 +28,6 @@ KERNEL = "exasol-starter-kit"
 KERNEL_TITLE = "Exasol (Starter Kit)"
 FRONTENDS = ("jupyterlab", "marimo", "positron")
 COMPANIONS = (
-    # pyexasol before 2.4 raises InvalidVersion on Exasol Personal's version string in every import and export
-    # (export_to_pandas, the connector's data loading); the connector alone allows any 2.x.
-    "pyexasol>=2.4,<3",
     "ipykernel>=6.29,<8", "langfuse>=5,<6", "openai>=1.40,<3",
     "mlflow-skinny>=3,<4", "alembic>=1.13,<2", "pyarrow>=14",
     "pandas>=2,<3", "numpy>=1.26,<3", "scipy>=1.10,<2", "joblib>=1.5,<2",
@@ -117,6 +114,22 @@ def _pin(ctx: KitContext, frontend: str) -> str:
     return version
 
 
+# The oldest pyexasol that works with Exasol Personal: before 2.4 every import and export (export_to_pandas, the
+# connector's data loading) raises InvalidVersion on its version string. setup/lib/pyexasol.sh holds the same floor.
+PYEXASOL_FLOOR = "2.4.0"
+
+
+def _pyexasol_pin(ctx: KitContext) -> str:
+    """The pyexasol the kit installs everywhere, versions.json's components.pyexasol.version (2.4.1): the notebook
+    environment gets that exact version, not whatever 2.x the connector allows."""
+    version = ctx.versions_document().get("components", {}).get("pyexasol", {}).get("version", "")
+    if not isinstance(version, str) or not re.fullmatch(r"\d+(\.\d+){1,2}", version):
+        raise AddonFailure("No pyexasol pin in versions.json")
+    if tuple(int(p) for p in version.split(".")) < tuple(int(p) for p in PYEXASOL_FLOOR.split(".")):
+        raise AddonFailure(f"versions.json pins pyexasol {version}; Exasol Personal needs {PYEXASOL_FLOOR} or later")
+    return version
+
+
 def _sklearn_pin(ctx: KitContext) -> str:
     document = ctx.versions_document()
     rows = document.get("components", {}).get("udf-devkit", {}).get("containers", [])
@@ -142,7 +155,8 @@ def _specs(ctx: KitContext, version: str, selected: tuple[str, ...]) -> list[str
     install_jupyter = "jupyterlab" in selected and not _external_jupyter(ctx)
     if install_jupyter or venv_executable(venv, "jupyter-lab").is_file():
         extras += ",jupyter"
-    specs = [f"{PACKAGE}[{extras}]=={version}", f"scikit-learn=={_sklearn_pin(ctx)}", *COMPANIONS]
+    specs = [f"{PACKAGE}[{extras}]=={version}", f"pyexasol=={_pyexasol_pin(ctx)}",
+             f"scikit-learn=={_sklearn_pin(ctx)}", *COMPANIONS]
     if install_jupyter or venv_executable(venv, "jupyter-lab").is_file():
         specs.append(f"jupyterlab=={_pin(ctx, 'jupyterlab')}")
     if "marimo" in selected or venv_executable(venv, "marimo").is_file():
