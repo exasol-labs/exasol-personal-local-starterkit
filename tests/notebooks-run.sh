@@ -69,7 +69,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 EXAKIT_HOME="${EXAKIT_HOME:-$HOME/.exasol-starter-kit}"
 CREDS="$EXAKIT_HOME/credentials"
 MANIFEST="$EXAKIT_HOME/manifest.json"
-DATASETS="${EXAKIT_NOTEBOOK_DATASETS:-esophageal_posts banking_complaints bank_marketing}"
+DATASETS="${EXAKIT_NOTEBOOK_DATASETS:-esophageal_posts banking_complaints bank_marketing ade_corpus}"
 
 # The skip that CI can turn into a failure (tests/lib/require.sh explains why),
 # with exit 3 rather than require.sh's 1: here 1 means a notebook failed.

@@ -6,7 +6,7 @@
   "picker": true,
   "visible": true,
   "order": 10,
-  "datasets": ["esophageal_posts", "banking_complaints", "bank_marketing"],
+  "datasets": ["esophageal_posts", "banking_complaints", "bank_marketing", "ade_corpus", "pubmed_abstracts", "medication_sigs"],
   "mcp_clients": "all",
   "addons": ["notebook"]
 }

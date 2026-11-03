@@ -64,8 +64,8 @@ def home() -> Path:
 
 
 def reference_ids() -> list[str]:
-    """Every dataset folder with a manifest.json: the reference datasets."""
-    return sorted(p.parent.name for p in DATASETS.glob("*/manifest.json"))
+    """Every dataset folder with a descriptor.yaml: the reference datasets (tools/dataset_check.py's definition)."""
+    return sorted(p.parent.name for p in DATASETS.glob("*/descriptor.yaml"))
 
 
 class Checks:

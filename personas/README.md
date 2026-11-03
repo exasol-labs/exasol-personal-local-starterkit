@@ -10,13 +10,14 @@ in the terminal's colours: a click ticks or unticks a row, Enter moves on, and
 the scroll wheel still scrolls the terminal. The shell menus remain the
 recovery path and take clicks the same way.
 
-The kit ships the two BRD persona baselines, both on the reference datasets Esophageal, Banking and Bank marketing,
+The kit ships the two BRD persona baselines, both on Esophageal, Banking and Bank marketing and the medical text sets
+(ADE corpus, PubMed abstracts, medication sigs), each downloaded only when it is loaded,
 and General, the kit's own samples:
 
 | Persona | Datasets | AI clients | Add-ons | First notebook |
 |---|---|---|---|---|
-| `data-scientist` (Data Scientist) | `esophageal_posts`, `banking_complaints`, `bank_marketing` | all detected | `notebook` | `data-scientist/00_quickstart.ipynb` |
-| `ml-engineer` (ML Engineer) | `esophageal_posts`, `banking_complaints`, `bank_marketing` | all detected | `notebook`, `udf-devkit` | `ml-engineer/00_quickstart.ipynb` |
+| `data-scientist` (Data Scientist) | `esophageal_posts`, `banking_complaints`, `bank_marketing`, `ade_corpus`, `pubmed_abstracts`, `medication_sigs` | all detected | `notebook` | `data-scientist/00_quickstart.ipynb` |
+| `ml-engineer` (ML Engineer) | `esophageal_posts`, `banking_complaints`, `bank_marketing`, `ade_corpus`, `pubmed_abstracts`, `medication_sigs` | all detected | `notebook`, `udf-devkit` | `ml-engineer/00_quickstart.ipynb` |
 | `general` (General) | `tpch`, `energy`, `weather` | all detected | - | - |
 
 General is ticked to begin with and combines with the others like any persona:

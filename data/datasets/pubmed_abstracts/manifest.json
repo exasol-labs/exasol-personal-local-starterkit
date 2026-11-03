@@ -1,0 +1,29 @@
+{
+  "id": "pubmed_abstracts",
+  "source": {
+    "name": "PubMed abstracts of clinical studies (U.S. National Library of Medicine), as supplied for medical text extraction",
+    "url": "https://pubmed.ncbi.nlm.nih.gov/",
+    "file": "CarteraDB_Compreend.txt",
+    "builder": "tools/datasets/pubmed_abstracts.py"
+  },
+  "terms": {
+    "url": "https://www.nlm.nih.gov/databases/download/terms_and_conditions.html",
+    "license": "PubMed abstracts: copyright stays with the publishers; NLM's terms apply",
+    "summary": "Abstracts as published in PubMed. Some publishers hold copyright on their abstracts; whether they may be redistributed here is still to be confirmed.",
+    "confirmed": false
+  },
+  "snapshot": "2026-11-03",
+  "asset": {
+    "file": "pubmed_abstracts-2026-11-03.tar.gz",
+    "sha256": "4894c874353a9566ec440ceaa748af3c3f1e89cdf233136d63e9b9db45c8e1c1",
+    "size": 698895,
+    "tar_sha256": "2202c6d5d593d183f2ebb2d239e13ecaf1fe6431e1289d640c30404572e2d4e0",
+    "url": "https://github.com/{repo}/releases/download/datasets/pubmed_abstracts-2026-11-03.tar.gz"
+  },
+  "files": {
+    "data/pubmed_abstracts.csv": {
+      "rows": 1409,
+      "sha256": "23c20e4faf4615e02762edbd9778eeaaf9d7b8d4d672d05be56bfa6746a093d9"
+    }
+  }
+}

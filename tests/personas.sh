@@ -65,9 +65,9 @@ case ",$_offered," in *,data-scientist,*ml-engineer,*)
     *) check "the question offers both BRD personas in order" "yes" "no" ;;
 esac
 check "no persona: the kit's own samples (default=yes)" "tpch,energy,weather" "$(_exakit_persona_service default-datasets)"
-check "data-scientist: Esophageal and both banking datasets" "esophageal_posts,banking_complaints,bank_marketing" "$(exakit_persona_value data-scientist datasets)"
+check "data-scientist: Esophageal and both banking datasets" "esophageal_posts,banking_complaints,bank_marketing,ade_corpus,pubmed_abstracts,medication_sigs" "$(exakit_persona_value data-scientist datasets)"
 check "data-scientist: BRD notebook baseline" "notebook" "$(exakit_persona_value data-scientist addons)"
-check "ml-engineer: Esophageal and both banking datasets" "esophageal_posts,banking_complaints,bank_marketing" "$(exakit_persona_value ml-engineer datasets)"
+check "ml-engineer: Esophageal and both banking datasets" "esophageal_posts,banking_complaints,bank_marketing,ade_corpus,pubmed_abstracts,medication_sigs" "$(exakit_persona_value ml-engineer datasets)"
 check "ml-engineer: BRD notebook and UDF baseline" "notebook,udf-devkit" "$(exakit_persona_value ml-engineer addons)"
 
 echo "a new persona is one file and no code:"
@@ -87,7 +87,7 @@ check "the title names each" "Data Scientist + ML Engineer" "$(_exakit_persona_s
 out="$( (unset EXAKIT_DATASETS EXAKIT_MCP_CLIENTS EXAKIT_MARKETPLACE_ADDONS EXAKIT_LOAD_SAMPLE
         export EXAKIT_PERSONA=data-scientist,ml-engineer; exakit_persona_apply_env >/dev/null 2>&1
         printf '%s|%s|%s' "$EXAKIT_DATASETS" "$EXAKIT_MCP_CLIENTS" "$EXAKIT_MARKETPLACE_ADDONS") )"
-check "their datasets and add-ons together, each once" "esophageal_posts,banking_complaints,bank_marketing|all|notebook,udf-devkit" "$out"
+check "their datasets and add-ons together, each once" "esophageal_posts,banking_complaints,bank_marketing,ade_corpus,pubmed_abstracts,medication_sigs|all|notebook,udf-devkit" "$out"
 check "each dataset is named with the personas it is for" "esophageal_posts|both personas" \
     "$(exakit_persona_dataset_hints | grep '^esophageal_posts|')"
 
@@ -125,7 +125,7 @@ echo "an explicit answer wins, per variable:"
 out="$( (unset EXAKIT_DATASETS EXAKIT_MCP_CLIENTS EXAKIT_MARKETPLACE_ADDONS EXAKIT_LOAD_SAMPLE
         export EXAKIT_PERSONA=ml-engineer; exakit_persona_apply_env >/dev/null 2>&1
         printf '%s|%s|%s' "$EXAKIT_DATASETS" "$EXAKIT_MCP_CLIENTS" "$EXAKIT_MARKETPLACE_ADDONS") )"
-check "the persona answers everything left open" "esophageal_posts,banking_complaints,bank_marketing|all|notebook,udf-devkit" "$out"
+check "the persona answers everything left open" "esophageal_posts,banking_complaints,bank_marketing,ade_corpus,pubmed_abstracts,medication_sigs|all|notebook,udf-devkit" "$out"
 out="$( (unset EXAKIT_MCP_CLIENTS EXAKIT_MARKETPLACE_ADDONS EXAKIT_LOAD_SAMPLE
         export EXAKIT_DATASETS=esophageal_posts EXAKIT_PERSONA=ml-engineer; exakit_persona_apply_env >/dev/null 2>&1
         printf '%s|%s|%s' "$EXAKIT_DATASETS" "$EXAKIT_MCP_CLIENTS" "$EXAKIT_MARKETPLACE_ADDONS") )"
@@ -174,7 +174,7 @@ check "datasets \"all\" become the kit's dataset ids (EXAKIT_DATASETS takes ids)
 check "[] answers the nothing-word for each key" "EXAKIT_LOAD_SAMPLE=0 EXAKIT_MCP_CLIENTS=skip EXAKIT_MARKETPLACE_ADDONS=none" \
     "$(SVC3 answers bare 2>/dev/null | grep -v '^EXAKIT_PERSONA=' | tr '\n' ' ' | sed 's/ $//')"
 check "an empty add-on list answers none" "EXAKIT_MARKETPLACE_ADDONS=none" "$(SVC3 answers bare 2>/dev/null | grep '^EXAKIT_MARKETPLACE_ADDONS=')"
-check "an EXAKIT_LOAD_SAMPLE the installer does not read is not an answer" "EXAKIT_DATASETS=esophageal_posts,banking_complaints,bank_marketing" \
+check "an EXAKIT_LOAD_SAMPLE the installer does not read is not an answer" "EXAKIT_DATASETS=esophageal_posts,banking_complaints,bank_marketing,ade_corpus,pubmed_abstracts,medication_sigs" \
     "$(EXAKIT_LOAD_SAMPLE=yes python3 "$ROOT/setup/lib/persona_service.py" "$ROOT" answers data-scientist 2>/dev/null | grep '^EXAKIT_DATASETS=')"
 check "one persona where one is meant" "2" "$(python3 "$ROOT/setup/lib/persona_service.py" "$ROOT" value data-scientist,ml-engineer title >/dev/null 2>&1; echo $?)"
 out="$( (EXAKIT_PERSONA=nope; exakit_persona_known nope; printf '%s' "$EXAKIT_PERSONA_PROBLEM") )"
@@ -217,7 +217,7 @@ contains "...after a persona offer, one pointer" "exakit marketplace" \
 echo "exakit persona plan (AC-P1.1: nothing pending after a persona install):"
 out="$( (exakit_pending_datasets() { printf 'banking_complaints|Banking\n'; }; exakit_marketplace_installed_addons() { printf 'notebook\njson-tables\ndash-server\n'; }
         exakit_persona_plan ml-engineer 0 2>&1) )"
-contains "what is loaded and what is pending" "loaded: esophageal_posts bank_marketing   pending: banking_complaints" "$out"
+contains "what is loaded and what is pending" "loaded: esophageal_posts bank_marketing ade_corpus pubmed_abstracts medication_sigs   pending: banking_complaints" "$out"
 contains "...add-ons the same way" "installed: notebook   pending: udf-devkit" "$out"
 contains "...and how to finish" "exakit persona add ml-engineer" "$out"
 out="$( (exakit_pending_datasets() { :; }; exakit_marketplace_installed_addons() { printf 'notebook\njson-tables\ndash-server\nudf-devkit\n'; }

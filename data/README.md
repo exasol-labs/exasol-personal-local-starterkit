@@ -37,7 +37,7 @@ again (`--offline` skips the load; `--keep` leaves it; `--replace` reloads a sch
 is already there). The kit offers every folder that has a `dataset.conf`. A reference
 dataset is checked for more - see [Reference datasets](#reference-datasets) below.
 
-The kit offers six datasets:
+The kit offers nine datasets:
 
 | Dataset | Schema | Contents |
 |---|---|---|
@@ -45,22 +45,29 @@ The kit offers six datasets:
 | [`datasets/energy/`](datasets/energy/) | `ENERGY` | 50 smart meters + 108,000 hourly readings (SQL-generated time series) |
 | [`datasets/weather/`](datasets/weather/) | `WEATHER` | 10 European cities, ~11k days of daily weather (2023–2025) |
 | [`datasets/esophageal_posts/`](datasets/esophageal_posts/) | `ESOPHAGEAL` | 40,987 de-identified public posts about esophageal cancer (2018-2022; web, Twitter, print, TV) with their text and a label (negative sentiment); 28 MB of CSV, an 8.1 MB download ([README](datasets/esophageal_posts/README.md)) |
-| [`datasets/banking_complaints/`](datasets/banking_complaints/) | `BANKING` | 6,754 CFPB consumer complaints about cards, mortgages and accounts (1-14 January 2025), with a label (monetary relief) and the company responses apart; 1.9 MB of CSV, a 0.1 MB download ([README](datasets/banking_complaints/README.md)) |
+| [`datasets/banking_complaints/`](datasets/banking_complaints/) | `BANKING` | 214,742 CFPB consumer complaints about cards, mortgages and accounts (October 2025-September 2026), with a label (monetary relief) and the company responses apart; 58 MB of CSV, a 4.4 MB download ([README](datasets/banking_complaints/README.md)) |
 | [`datasets/bank_marketing/`](datasets/bank_marketing/) | `BANKMKT` | 45,211 clients of a bank's term-deposit campaigns (UCI, CC BY 4.0) with a label (subscribed); 3.6 MB of CSV, a 0.6 MB download ([README](datasets/bank_marketing/README.md)) |
+| [`datasets/ade_corpus/`](datasets/ade_corpus/) | `ADE` | 20,960 PubMed sentences labelled for an adverse drug effect, with the drug-effect and drug-dose pairs they name (ADE-Corpus-V2); 3.3 MB of CSV, a 1.2 MB download ([README](datasets/ade_corpus/README.md)) |
+| [`datasets/pubmed_abstracts/`](datasets/pubmed_abstracts/) | `PUBMED` | 1,409 PubMed abstracts of clinical studies, for medical text extraction; 2.3 MB of CSV, a 0.7 MB download ([README](datasets/pubmed_abstracts/README.md)) |
+| [`datasets/medication_sigs/`](datasets/medication_sigs/) | `MEDSIGS` | 50 prescription directions ("1 cap(s) po tid,x7 day(s)") to read the dose, route and timing from ([README](datasets/medication_sigs/README.md)) |
 
 The first three are the kit's own samples: they ship inside the kit and are what a kit
-without a persona loads (`default=yes` in their `dataset.conf`). The other three are the
-*reference datasets* the Data Scientist and ML Engineer personas load: data with a
+without a persona loads (`default=yes` in their `dataset.conf`). The other six are what
+the Data Scientist and ML Engineer personas load, each downloaded only when it is picked.
+Four of them are *reference datasets*: data with a
 `README.md` (source, terms, data dictionary), a `manifest.json` (source, terms, snapshot
 date, rows and SHA-256 of every CSV, and the release asset they ship as) and a descriptor;
 the builders that make them again live in [`tools/datasets/`](../tools/datasets/).
+`pubmed_abstracts` and `medication_sigs` are text to read and extract from, with no label
+to predict: they have the README and the manifest but no descriptor - describe them like a
+table of your own (`exakit describe`).
 Every table and column has a `COMMENT` in its `01_create_schema.sql`, so the database itself
-describes the data; the narrative and the join map for all six are in
+describes the data; the narrative and the join map for every dataset are in
 [data-dictionary.md](data-dictionary.md).
 
 ## Reference datasets
 
-`esophageal_posts`, `banking_complaints` and `bank_marketing` are *reference datasets*. Each
+`esophageal_posts`, `banking_complaints`, `bank_marketing` and `ade_corpus` are *reference datasets*. Each
 folder holds:
 
 | File | What it is | Checked by `tools/dataset_check.py` |
@@ -112,10 +119,11 @@ columns:
   "BODY": {role: "text", confidence: "high", evidence: "avg 214 chars, 97.5% distinct"}
 ```
 
-The three reference datasets ship theirs in the same shape:
+The four reference datasets ship theirs in the same shape:
 [`esophageal_posts`](datasets/esophageal_posts/descriptor.yaml),
-[`banking_complaints`](datasets/banking_complaints/descriptor.yaml) and
-[`bank_marketing`](datasets/bank_marketing/descriptor.yaml).
+[`banking_complaints`](datasets/banking_complaints/descriptor.yaml),
+[`bank_marketing`](datasets/bank_marketing/descriptor.yaml) and
+[`ade_corpus`](datasets/ade_corpus/descriptor.yaml).
 
 **The roles.** Eight, and no more: `key`, `time`, `measure`, `category`, `flag`, `text`,
 `identifier` and `other`. Sensitivity is decided first and kept whatever the role: a string
@@ -199,7 +207,7 @@ recorded in the dataset's `manifest.json`:
   "sha256": "<SHA-256 of the archive>",
   "size": 3904755,
   "tar_sha256": "<SHA-256 of the uncompressed tar: it depends on the CSVs alone>",
-  "url": "https://github.com/{repo}/releases/download/datasets-esophageal_posts-2026-10-20/esophageal_posts-2026-10-20.tar.gz"
+  "url": "https://github.com/{repo}/releases/download/datasets/esophageal_posts-2026-10-20.tar.gz"
 }
 ```
 
@@ -227,7 +235,9 @@ block (`tpch`, `energy`, `weather`) load from the kit copy, as always.
 the CSVs and the manifest), then `python3 tools/datasets/package.py <id>` - it writes
 `dist/<id>-<snapshot>.tar.gz` and the manifest's `asset` block. The archive is
 deterministic (members sorted, fixed mtime, uid and gid, gzip mtime 0): the same CSVs give
-the same bytes. Upload it to the release tag in the URL (`datasets-<id>-<snapshot>`), then
+the same bytes. Upload it to the one release every archive lives in, tagged `datasets`
+(`gh release upload datasets dist/<id>-<snapshot>.tar.gz`; never delete an asset a released
+kit's manifest still names), then
 `python3 tools/dataset_check.py --all --offline` checks that the manifest, the CSVs and the
 local archive agree.
 

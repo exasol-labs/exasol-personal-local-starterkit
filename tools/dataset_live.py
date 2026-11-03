@@ -154,9 +154,10 @@ def _check_reference(pump: Pump, folder: Path, report: Report) -> None:
     if not values or not values <= {"0", "1"}:
         report.problems.append(f"descriptor: the label {label} must be 0 or 1, found {sorted(values)[:5] or 'no values'}")
     text = " || ".join(f"COALESCE(CAST({r['column']} AS VARCHAR(2000000)), '')" for role, r in refs if role == "text")
-    with_text = pump.rows(f"SELECT COUNT(*) AS N FROM {fact} WHERE LENGTH(TRIM({text})) > 0", "reading the text")
-    if not with_text or with_text[0]["N"] == "0":
-        report.problems.append("descriptor: no row has any text in the text columns")
+    if text:                                       # a descriptor without a text column (Banking) has none to read
+        with_text = pump.rows(f"SELECT COUNT(*) AS N FROM {fact} WHERE LENGTH(TRIM({text})) > 0", "reading the text")
+        if not with_text or with_text[0]["N"] == "0":
+            report.problems.append("descriptor: no row has any text in the text columns")
     report.passed.append("descriptor: every role resolves in the database")
     _run_examples(pump, folder, report)
 

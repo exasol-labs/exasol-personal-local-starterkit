@@ -33,7 +33,9 @@ LIVE_SCRIPT = ROOT / "tests" / "integration" / "reference_datasets_live.py"
 
 
 def reference_ids() -> list[str]:
-    return sorted(p.parent.name for p in DATASETS.glob("*/manifest.json"))
+    """The reference datasets: those that ship a descriptor (tools/dataset_check.py's definition). A dataset with only
+    a manifest - text with no label, such as pubmed_abstracts - downloads the same way but is not one."""
+    return sorted(p.parent.name for p in DATASETS.glob("*/descriptor.yaml"))
 
 
 def load_yaml(path: Path) -> Any:
@@ -137,9 +139,12 @@ class WorkflowDatasetsTest(unittest.TestCase):
                 self.assertTrue((ROOT / path).exists(), f"push.paths names {path}, which is not in the tree")
 
     def test_the_personas_load_the_reference_datasets(self) -> None:
+        """Every reference dataset, and beside them only datasets the kit has (the text sets with no label)."""
         for persona in ("data-scientist", "ml-engineer"):
             doc = json.loads((ROOT / "personas" / f"{persona}.json").read_text(encoding="utf-8"))
-            self.assertEqual(sorted(doc["datasets"]), self.ids, f"{persona}.json")
+            self.assertLessEqual(set(self.ids), set(doc["datasets"]), f"{persona}.json")
+            for extra in set(doc["datasets"]) - set(self.ids):
+                self.assertTrue((DATASETS / extra / "dataset.conf").is_file(), f"{persona}.json names {extra}")
 
     def test_every_notebook_and_script_a_workflow_runs_is_there(self) -> None:
         for name, doc in self.docs.items():

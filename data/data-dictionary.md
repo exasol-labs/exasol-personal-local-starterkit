@@ -295,8 +295,9 @@ contacts - and why `CALL_DURATION` must stay out of a model.
 
 ## BANKING — consumer complaints (schema `BANKING`, dataset id `banking_complaints`)
 
-6,754 complaints about credit cards, mortgages and checking or savings accounts that the U.S.
-Consumer Financial Protection Bureau received from 1 to 14 January 2025 (snapshot 2026-10-20).
+214,742 complaints about credit cards, mortgages and checking or savings accounts that the U.S.
+Consumer Financial Protection Bureau received from October 2025 to September 2026, every one closed
+(from the full export of 2026-11-02).
 The CFPB no longer publishes complaint narratives, so the text is short (issue, sub-issue,
 public response). Source and terms: [datasets/banking_complaints/README.md](datasets/banking_complaints/README.md).
 Descriptor slots: `COMPLAINT_ID` (key), `DATE_RECEIVED` (time), `MONETARY_RELIEF` (target),
@@ -307,37 +308,112 @@ narratives.
 banking_complaints 1─1 banking_responses   (the label's source; never a feature)
 ```
 
-### BANKING_COMPLAINTS  (6,754 rows) — fact table
+### BANKING_COMPLAINTS  (214,742 rows) — fact table
 Grain: one complaint. **PK:** `COMPLAINT_ID`.
 
 | Column | Type | Description | Example / values |
 |---|---|---|---|
-| COMPLAINT_ID | DECIMAL(12,0) | CFPB complaint id (PK) | 11333660 |
-| DATE_RECEIVED | DATE | When the CFPB received it, 2025-01-01 to 2025-01-14 | 2025-01-03 |
-| DATE_SENT_TO_COMPANY | DATE | When the CFPB sent it to the company | 2025-01-07 |
-| PRODUCT | VARCHAR(60) | Product | Credit card (3,451), Checking or savings account (2,349), Mortgage (954) |
+| COMPLAINT_ID | DECIMAL(12,0) | CFPB complaint id (PK) | 16258358 |
+| DATE_RECEIVED | DATE | When the CFPB received it, 2025-10-01 to 2026-09-30 | 2025-10-01 |
+| DATE_SENT_TO_COMPANY | DATE | When the CFPB sent it to the company | 2025-10-01 |
+| PRODUCT | VARCHAR(60) | Product | Credit card (94,705), Checking or savings account (87,332), Mortgage (32,705) |
 | SUB_PRODUCT | VARCHAR(100) | Sub-product the consumer chose (14 distinct) | General-purpose credit card or charge card |
 | ISSUE | VARCHAR(120) | Issue the consumer chose (24 distinct) | Managing an account |
-| SUB_ISSUE | VARCHAR(200) | Sub-issue (101 distinct); NULL for 2 | Deposits and withdrawals |
-| COMPANY | VARCHAR(200) | Company complained about (324 distinct) | JPMORGAN CHASE & CO. |
-| CONSUMER_STATE | VARCHAR(2) | Consumer's U.S. state or territory, two letters; NULL for 37 | TX |
+| SUB_ISSUE | VARCHAR(200) | Sub-issue (106 distinct); NULL for 169 | Deposits and withdrawals |
+| COMPANY | VARCHAR(200) | Company complained about (1,394 distinct) | CAPITAL ONE FINANCIAL CORPORATION |
+| CONSUMER_STATE | VARCHAR(2) | Consumer's U.S. state or territory, two letters; NULL for 1,627 | TX |
 | SUBMITTED_VIA | VARCHAR(20) | Channel | Web, Phone, Referral, Postal mail |
 | TAGS | VARCHAR(40) | Consumer's own tags; NULL for most | Servicemember, Older American, Older American, Servicemember |
-| TIMELY | DECIMAL(1,0) | 1 when the company answered in time (25 did not) | 1 |
-| MONETARY_RELIEF | DECIMAL(1,0) | 1 when closed with monetary relief (801, 11.9%), else 0 — **the label** | 0 |
-| COMPANY_PUBLIC_RESPONSE | VARCHAR(300) | Company's optional public response, one of nine set phrases; NULL for about half | Company believes it acted appropriately as authorized by contract or law |
+| TIMELY | DECIMAL(1,0) | 1 when the company answered in time (3,111 did not) | 1 |
+| MONETARY_RELIEF | DECIMAL(1,0) | 1 when closed with monetary relief (26,996, 12.6%), else 0 — **the label** | 0 |
+| COMPANY_PUBLIC_RESPONSE | VARCHAR(300) | Company's optional public response, one of ten set phrases; NULL for 55% | Company believes it acted appropriately as authorized by contract or law |
 
-### BANKING_RESPONSES  (6,754 rows)
+### BANKING_RESPONSES  (214,742 rows)
 Grain: one complaint's closing. **PK:** `COMPLAINT_ID` (FK → `BANKING_COMPLAINTS`, documented,
 not enforced). The label is derived from it: read it, never use it as a feature.
 
 | Column | Type | Description | Values |
 |---|---|---|---|
-| COMPLAINT_ID | DECIMAL(12,0) | Complaint (PK, FK) | 11333660 |
-| COMPANY_RESPONSE | VARCHAR(60) | How the company closed it | Closed with explanation (4,922), Closed with non-monetary relief (1,026), Closed with monetary relief (801), Untimely response (5) |
+| COMPLAINT_ID | DECIMAL(12,0) | Complaint (PK, FK) | 16258358 |
+| COMPANY_RESPONSE | VARCHAR(60) | How the company closed it | Closed with explanation (170,588), Closed with non-monetary relief (16,093), Closed with monetary relief (26,996), Untimely response (1,065) |
 
 Typical questions: relief rate by product or company, the issues that pay, complaints per
 day, how fast companies get the complaint.
+
+## ADE — adverse drug effects in PubMed sentences (schema `ADE`, dataset id `ade_corpus`)
+
+20,960 sentences from PubMed case reports, each annotated for an adverse drug effect
+(ADE-Corpus-V2, Gurulingappa et al., 2012): 4,272 report one (20.4%). Source and terms:
+[datasets/ade_corpus/README.md](datasets/ade_corpus/README.md). Descriptor slots:
+`SENTENCE_ID` (key), `SENTENCE` (text), `HAS_ADE` (target); no time, category or entity.
+
+```
+ade_sentences 1─n ade_drug_effects   (only for HAS_ADE = 1: never a feature for the label)
+ade_sentences 1─n ade_drug_doses
+```
+
+### ADE_SENTENCES  (20,960 rows) — fact table
+Grain: one sentence. **PK:** `SENTENCE_ID`.
+
+| Column | Type | Description | Example / values |
+|---|---|---|---|
+| SENTENCE_ID | DECIMAL(6,0) | Sentence id (PK) | 1 |
+| PUBMED_ID | DECIMAL(9,0) | PubMed id of the article (2,972 articles) | 10030778 |
+| SENTENCE | VARCHAR(1000) | The sentence, as published (avg 126 chars) | Intravenous azithromycin-induced ototoxicity. |
+| HAS_ADE | DECIMAL(1,0) | 1 when the sentence reports an adverse drug effect (4,272), else 0 — **the label** | 1 |
+
+### ADE_DRUG_EFFECTS  (6,633 rows)
+Grain: one drug and adverse effect a sentence names. **PK:** `PAIR_ID`; `SENTENCE_ID` → `ADE_SENTENCES`.
+
+| Column | Type | Description | Example / values |
+|---|---|---|---|
+| PAIR_ID | DECIMAL(6,0) | Pair id (PK) | 1 |
+| SENTENCE_ID | DECIMAL(6,0) | The sentence (FK) | 1 |
+| DRUG | VARCHAR(100) | Drug, as written (1,318 distinct) | azithromycin |
+| ADVERSE_EFFECT | VARCHAR(200) | Adverse effect, as written (3,340 distinct) | ototoxicity |
+
+### ADE_DRUG_DOSES  (269 rows)
+Grain: one drug and dose a sentence names. **PK:** `PAIR_ID`; `SENTENCE_ID` → `ADE_SENTENCES`.
+
+| Column | Type | Description | Example / values |
+|---|---|---|---|
+| PAIR_ID | DECIMAL(6,0) | Pair id (PK) | 1 |
+| SENTENCE_ID | DECIMAL(6,0) | The sentence (FK) | 20 |
+| DRUG | VARCHAR(100) | Drug, as written | methotrexate |
+| DOSE | VARCHAR(100) | Dose, as written | 1500 mg/m2 |
+
+Typical questions: which drugs and effects come up most, what a classifier on `SENTENCE`
+learns for `HAS_ADE`, which doses go with which effects.
+
+## PUBMED — clinical-study abstracts (schema `PUBMED`, dataset id `pubmed_abstracts`)
+
+1,409 PubMed abstracts of clinical studies, for medical text extraction. Source and terms:
+[datasets/pubmed_abstracts/README.md](datasets/pubmed_abstracts/README.md). No descriptor ships:
+describe it yourself (`exakit describe PUBMED.PUBMED_ABSTRACTS`).
+
+### PUBMED_ABSTRACTS  (1,409 rows) — fact table
+Grain: one abstract. **PK:** `ABSTRACT_ID`.
+
+| Column | Type | Description | Example / values |
+|---|---|---|---|
+| ABSTRACT_ID | DECIMAL(5,0) | Abstract id (PK) | 1 |
+| FIRST_SECTION | VARCHAR(40) | Opening heading; NULL for an unstructured abstract (660) | BACKGROUND, OBJECTIVE, ... |
+| WORD_COUNT | DECIMAL(5,0) | Words in the abstract (median 235) | 243 |
+| ABSTRACT_TEXT | VARCHAR(8000) | The abstract, as published | BACKGROUND: Interferon beta-1a ... |
+
+## MEDSIGS — prescription directions (schema `MEDSIGS`, dataset id `medication_sigs`)
+
+50 prescription directions as prescribers write them. Source and terms:
+[datasets/medication_sigs/README.md](datasets/medication_sigs/README.md). No descriptor ships.
+
+### MEDICATION_SIGS  (50 rows)
+Grain: one direction. **PK:** `SIG_ID`.
+
+| Column | Type | Description | Example / values |
+|---|---|---|---|
+| SIG_ID | DECIMAL(4,0) | Direction id (PK) | 1 |
+| WORD_COUNT | DECIMAL(3,0) | Words in the direction (1 to 18) | 6 |
+| SIG_TEXT | VARCHAR(300) | The direction, as written | 1 cap(s) po tid,x7 day(s) |
 
 ## Writing SQL against this data (Exasol notes)
 

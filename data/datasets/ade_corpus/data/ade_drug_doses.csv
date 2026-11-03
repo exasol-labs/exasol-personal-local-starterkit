@@ -1,0 +1,270 @@
+PAIR_ID,SENTENCE_ID,DRUG,DOSE
+1,20,methotrexate,1500 mg/m2
+2,61,insulin,4 times per day
+3,63,brimonidine,1 drop
+4,156,TCA,200 mg
+5,171,ibuprofen,overdose
+6,172,Ibuprofen,overdose
+7,182,methotrexate,low
+8,220,methylprednisolone,high
+9,233,colchicine,regular
+10,264,Miacalcic,25 UI
+11,330,ARA-C,2 g/m2 intravenously every 12 hours
+12,330,ARA-C,high
+13,331,cytosine arabinoside,high
+14,332,ARA-C,high
+15,332,cytosine arabinoside,high
+16,338,clomipramine,150 mg/d
+17,338,clozapine,150 mg/d
+18,354,meloxicam,15 mg
+19,380,lansoprazole,standard
+20,380,omeprazole,standard
+21,380,pantoprazole,standard
+22,407,adenosine,12 mg
+23,408,methylprednisolone,40 mg
+24,409,CBZ,OD
+25,410,CBZ,OD
+26,430,taxol,80 mg/m(2)x3
+27,433,IFN-alpha,low
+28,434,sodium aurothiomalate,100 mg
+29,450,LTG,overdose
+30,452,lamotrigine,overdose
+31,452,LTG,overdose
+32,452,valproic acid,overdose
+33,452,VPA,overdose
+34,470,carbamazepine,10 g
+35,470,carbamazepine,4 g
+36,489,vincristine,2 mg
+37,494,benztropine,abuse
+38,532,metoclopramide,conventional
+39,532,sertraline,conventional
+40,532,venlafaxine,conventional
+41,579,lansoprazole,60 mg twice daily
+42,601,mitomycin C,144 mg/m2
+43,627,rosiglitazone,4 mg twice/day
+44,635,lidocaine,overdose
+45,639,vasopressin,low
+46,656,ticlopidine,500 mg
+47,667,gemcitabine,21.9 +/- 10.9
+48,672,amiodarone HCl,200 mg/day
+49,736,methotrexate,high
+50,795,prednisolone,40 mg/day
+51,860,clonazepam,0.02 mg/kg/day
+52,897,vecuronium,high doses
+53,905,bleomycin,100 U
+54,917,CBZ,low or moderate dosage
+55,917,clozapine,low or moderate dosage
+56,917,lithium,low or moderate dosage
+57,944,L-dopa,400 mg/day
+58,951,glyburide,900 mg
+59,967,dexamethasone,10 mg/m(2)/day
+60,975,vitamin D3,20 micro g/g
+61,1043,ciprofloxacin,250 mg bid
+62,1052,colchicine,high
+63,1059,pilocarpine,overdose
+64,1107,BCNU,600 mg/m2
+65,1107,BCNU,high-dose
+66,1133,nimodipine,overdosage
+67,1146,Tiagabine,overdose
+68,1169,CAP,2000 mg/m2
+69,1170,CAP-XRT,1600 mg/m2
+70,1171,CAP,2500 mg/m2
+71,1178,quetiapine,overdose
+72,1180,quetiapine,overdose
+73,1185,flupirtine,overdose
+74,1220,carbamazepine,400 mg/day
+75,1249,quetiapine,higher doses
+76,1285,cerivastatin,0.15 mg/day
+77,1288,Carboplatin,low-dose
+78,1288,carboplatin,low-dose
+79,1288,paclitaxel,low-dose
+80,1290,CBDCA,low-dose
+81,1291,carboplatin,60 mg/m2
+82,1291,CBDCA,60 mg/m2
+83,1291,paclitaxel,60 mg/m2
+84,1291,carboplatin,low-dose
+85,1291,CBDCA,low-dose
+86,1291,paclitaxel,low-dose
+87,1372,fluoxetine,massive
+88,1374,iron sucrose,16 mg/kg
+89,1389,busulfan,high-dose
+90,1389,melphalan,high-dose
+91,1420,epinephrine,overdose
+92,1436,phenylephrine,high-dose
+93,1447,venlafaxine,75 mg/day
+94,1485,methotrexate,5 g/m2
+95,1485,methotrexate,high-dose
+96,1486,methotrexate,High-dose
+97,1582,cloxacillin,500 mg
+98,1586,carmustine,high-dose
+99,1641,methylprednisolone,high-dose
+100,1644,glucocorticoids,high-dose
+101,1658,caffeine,35 g
+102,1822,Flecainide,overdose
+103,1823,flecainide,overdose
+104,1947,metronidazole,114 g
+105,1947,metronidazole,30.6
+106,1948,methotrexate,15 mg/week
+107,1948,methotrexate,low-dose
+108,1977,acetylsalicylic acid,low-dose
+109,2010,carbamazepine,low-dose
+110,2052,muzolimine,240 to 1440 mg per day
+111,2052,muzolimine,high dosage
+112,2075,olanzapine,20-mg daily
+113,2093,Copaxone,20 mg/day
+114,2104,bupropion,overdose
+115,2105,bupropion,48 mg/kg
+116,2119,propafenone,900 mg/d
+117,2150,aspirin,low-dose
+118,2153,aspirin,low-dose
+119,2162,methylprednisolone,high-dose
+120,2163,methylprednisolone,High-dose
+121,2233,methotrexate,12 g/m2
+122,2233,MTX,12 g/m2
+123,2233,methotrexate,high-dose
+124,2233,MTX,high-dose
+125,2235,methotrexate,high-dose
+126,2251,dexmedetomidine,5.0 microg/kg
+127,2251,glycopyrrolate,5.0 microg/kg
+128,2359,bevacizumab,1.25 mg in 0.1 ml
+129,2384,adalimumab,160 mg
+130,2407,methylprednisolone,high-dose
+131,2408,methylprednisolone,high-dose
+132,2434,imatinib,400 mg/d
+133,2438,cytosine arabinoside,high-dose
+134,2455,lacosamide,600 mg/day
+135,2530,methotrexate,12 mg
+136,2530,methotrexate,500 mg/m2
+137,2563,glipizide,10 mg
+138,2563,SMX,10 mg
+139,2563,sulfamethoxazole,10 mg
+140,2563,TMP,10 mg
+141,2563,trimethoprim,10 mg
+142,2565,ifosfamide,5 g/m2
+143,2567,ifosfamide,high dose
+144,2632,cytosine arabinoside,high-dose
+145,2633,cytosine arabinoside,high-dose
+146,2635,cytosine arabinoside,high-dose
+147,2646,cyclophosphamide,low dose
+148,2646,indomethacin,low dose
+149,2647,cyclophosphamide,low dose
+150,2647,indomethacin,low dose
+151,2650,clofazimine,high doses
+152,2687,Ara-C,100 mg/m2/d
+153,2687,cytosine arabinoside,100 mg/m2/d
+154,2717,isotretinoin,1 mg/kg/day
+155,2730,chloral hydrate,overdosage
+156,2763,vincristine,single dose
+157,2765,vincristine,single dose
+158,2767,vincristine,single small dose
+159,2783,doxycycline,1 g
+160,2802,cyclosporine A,low-dose
+161,2805,propylthiouracil,"100 mg orally, three times a day"
+162,2821,D-penicillamine,"1,200 g"
+163,2873,amiodarone,1400 mg
+164,2873,amiodarone,30 mg kg-1
+165,2879,prazosin,0.5 to 1 mg
+166,2886,phenytoin,1 g
+167,2888,carbamazepine,200 mg
+168,2888,phenytoin sodium,300 mg/day
+169,2898,amiodarone,2300 mg in 3 days
+170,2926,methimazole,20 mg
+171,2951,propranolol,overdose
+172,2952,propranolol,overdose
+173,2963,heparin,low-dose
+174,2992,lithium,high doses
+175,2992,trazodone,high doses
+176,3006,desferrioxamine,15 g
+177,3010,Intralipid,20%
+178,3016,methotrexate,175 mg
+179,3016,methotrexate,190 mg
+180,3016,methotrexate,196 mg
+181,3073,aspirin,high-dose
+182,3088,cytarabine,300 mg
+183,3135,tamoxifen,high-dose
+184,3146,lorcainide,200 mg
+185,3152,amiodarone,low-dosage
+186,3153,amiodarone,low-dosage
+187,3155,propranolol,80 mg
+188,3161,CCNU,high doses
+189,3163,CCNU,1100 mg/m2
+190,3163,CCNU,1240 mg/m2
+191,3163,CCNU,high doses
+192,3178,fluoresone,750 mg
+193,3178,phenobarbital,750 mg
+194,3178,phenytoin,750 mg
+195,3212,quinacrine hydrochloride,100 mg
+196,3232,ergonovine,0.05 mg
+197,3272,disopyramide,300 to 600 mg/day
+198,3316,digoxin,0.25 mg
+199,3356,vinblastine,high dose
+200,3357,vinblastine,high dose
+201,3368,chlorambucil,high-dose
+202,3373,procainamide,750 mg/day
+203,3387,methotrexate,40 mg/m2
+204,3387,MTX,40 mg/m2
+205,3388,methotrexate,low dose
+206,3402,ketoralac,30 mg
+207,3412,acyclovir,30 mg/kg per day
+208,3470,mefloquine,"1,500 mg over two days"
+209,3484,doxorubicin,'low' doses
+210,3508,mannitol,High-dose
+211,3511,mannitol,high-dose
+212,3527,methotrexate,high-dose
+213,3528,HD-MTX,8 gm/m2 by 6 h continuous infusion
+214,3529,methotrexate,high-dose
+215,3542,metronidazole,21 g over 14 days
+216,3578,ibopamine,100 mg
+217,3581,bromocriptine,low-dose
+218,3583,methotrexate,low-dose
+219,3584,methotrexate,low-dose
+220,3585,Levemepromazine,high dose
+221,3585,methotrimeprazine meleate,high dose
+222,3586,phenothiazine,overdose
+223,3611,morphine,450-mg
+224,3619,cotrimoxazole,high
+225,3646,clofazimine,low
+226,3648,Amphotericin B,overdose
+227,3649,Amphotericin B,overdose
+228,3650,amphotericin B,overdoses
+229,3651,amphotericin B,between 4.6 and 40.8 mg/kg/d
+230,3652,amphotericin B,overdose
+231,3681,acyclovir,overdose
+232,3702,methotrexate,low
+233,3706,prednisolone,25 mg/day
+234,3707,pimozide,low
+235,3708,pimozide,0.032 mg/kg/day
+236,3708,pimozide,0.096 mg/kg/day
+237,3714,gold,low
+238,3716,phenol-glycerine,0.3 ml
+239,3721,azathioprine,1 mg/kg
+240,3732,Halfan,higher
+241,3732,mefloquine,higher
+242,3786,fluticasone propionate,high
+243,3787,fluticasone propionate,high
+244,3788,fluticasone propionate,high
+245,3789,fluticasone propionate,high
+246,3791,metripranolol,0.6
+247,3800,acyclovir,10 mg/kg
+248,3800,lithium,10 mg/kg
+249,3805,dapsone,low
+250,3932,minocycline,50 mg twice daily
+251,3961,CBZ,overdose
+252,3983,magnesium,Overdose
+253,3983,magnesium sulfate,Overdose
+254,4033,AZ,excessive
+255,4037,danazol,600 mg
+256,4079,d-penicillamine,125-500 mg daily
+257,4080,heroin,overdose
+258,4083,heroin,overdose
+259,4126,penicillin,high
+260,4131,desmethylsertraline,25 mg
+261,4131,lamotrigine,25 mg
+262,4131,sertraline,25 mg
+263,4174,5-aminosalicylic acid,3.0 g/day
+264,4174,Pentasa,3.0 g/day
+265,4175,alprazolam,low
+266,4187,olanzapine,20-25 mg/d
+267,4199,isosorbide dinitrate,5 mg
+268,4201,isosorbide dinitrate,5 mg
+269,4212,phosphate,High

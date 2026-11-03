@@ -117,7 +117,7 @@ package.package(folder, Path(sys.argv[3]))
     Check "the listing names the download" "0.1 MB download" (Get-ExakitDatasetDownloadNote -Dir $ds)
     $r = Try-Files $kit $ds
     Has "it fails" "failed|" $r
-    Has "naming the URL" "could not be fetched from https://github.com/$($script:KitRepo)/releases/download/datasets-demo_ref-2026-01-02/$archive" $r
+    Has "naming the URL" "could not be fetched from https://github.com/$($script:KitRepo)/releases/download/datasets/$archive" $r
     Has "and the way out" "EXAKIT_DATASETS_MIRROR" $r
     Check "the download was retried, three tries" "3" $script:Fetched.Count
     $script:Fetched = @()

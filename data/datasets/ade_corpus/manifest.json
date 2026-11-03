@@ -1,0 +1,37 @@
+{
+  "id": "ade_corpus",
+  "source": {
+    "name": "ADE-Corpus-V2 (H. Gurulingappa et al., Benchmark Corpus to Support Information Extraction for Adverse Drug Effects, Journal of Biomedical Informatics 45(5), 2012)",
+    "url": "https://doi.org/10.1016/j.jbi.2012.04.008",
+    "file": "ADE-Corpus-V2.zip",
+    "builder": "tools/datasets/ade_corpus.py"
+  },
+  "terms": {
+    "url": "https://doi.org/10.1016/j.jbi.2012.04.008",
+    "license": "Research corpus, distributed with a request to cite the source article; no licence named",
+    "summary": "Sentences quoted from PubMed case-report abstracts with their annotations. Cite Gurulingappa et al. (2012). Redistribution terms are still to be confirmed.",
+    "confirmed": false
+  },
+  "snapshot": "2026-11-03",
+  "asset": {
+    "file": "ade_corpus-2026-11-03.tar.gz",
+    "sha256": "b916e8651c9e9f4d937e5c2661675cf1a1262121868306ef36c2928868bb5e96",
+    "size": 1201810,
+    "tar_sha256": "63b7b1a66b26484038605d7688274b1d52a09074dcecbb4623f768fb464ffdf0",
+    "url": "https://github.com/{repo}/releases/download/datasets/ade_corpus-2026-11-03.tar.gz"
+  },
+  "files": {
+    "data/ade_sentences.csv": {
+      "rows": 20960,
+      "sha256": "b7986bd7a4df147e3be3a21ac72eaeae9c6215505fbd1619a0bc3b200229c6db"
+    },
+    "data/ade_drug_effects.csv": {
+      "rows": 6633,
+      "sha256": "822a30df77811d9afb8cbc75d3ce69f08815a9c24afd0e891fa97ac659ab9e83"
+    },
+    "data/ade_drug_doses.csv": {
+      "rows": 269,
+      "sha256": "d98fff4c8faec0b04877ab0aed997cb0fb5bf8dfbf2258f0ede92f131a027298"
+    }
+  }
+}

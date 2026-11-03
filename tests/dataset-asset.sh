@@ -86,7 +86,7 @@ cp "$WORK/dist/$ARCHIVE" "$MIRROR/"
 SHA="$(_exakit_dataset_asset_field "$DS/manifest.json" sha256)"
 check "the manifest names the archive" "$ARCHIVE" "$(_exakit_dataset_asset_field "$DS/manifest.json" file)"
 check "the url template carries {repo}" \
-    "https://github.com/{repo}/releases/download/datasets-demo_ref-2026-01-02/$ARCHIVE" \
+    "https://github.com/{repo}/releases/download/datasets/$ARCHIVE" \
     "$(_exakit_dataset_asset_field "$DS/manifest.json" url)"
 
 # The network: never touched. A download records its URL and fails, like a
@@ -131,7 +131,7 @@ check "the listing names the download" "0.1 MB download" "$(exakit_dataset_downl
 exakit_dataset_files "$KIT" "$DS" demo_ref
 check "it fails" "1" "$?"
 check "the release URL was tried, with the kit's repository" \
-    "https://github.com/$EXAKIT_KIT_REPO/releases/download/datasets-demo_ref-2026-01-02/$ARCHIVE" "$(cat "$WORK/fetch.calls")"
+    "https://github.com/$EXAKIT_KIT_REPO/releases/download/datasets/$ARCHIVE" "$(cat "$WORK/fetch.calls")"
 has "the reason names the URL" "could not be fetched from https://github.com/" "$EXAKIT_DATASET_FETCH_ERROR"
 has "and the way out" "EXAKIT_DATASETS_MIRROR" "$EXAKIT_DATASET_FETCH_ERROR"
 : > "$WORK/fetch.calls"

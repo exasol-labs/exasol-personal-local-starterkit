@@ -1,24 +1,26 @@
 # banking_complaints - consumer complaints from the CFPB
 
-A snapshot of **6,754 consumer complaints about credit cards, mortgages and
+A snapshot of **214,742 consumer complaints about credit cards, mortgages and
 checking or savings accounts that the U.S. Consumer Financial Protection
-Bureau received from 1 to 14 January 2025**, taken from the CFPB Consumer
-Complaint Database on 2026-10-20. Every complaint is closed, so the question
-"which complaints end in monetary relief?" has an answer in the data: 801 of
-them (11.9%) did.
+Bureau received from October 2025 to September 2026** - twelve complete months - taken
+from the full export of the CFPB Consumer Complaint Database (18.9 million
+complaints, downloaded 2026-11-02). Every complaint is closed (the 3,793 still
+in progress are left out), so the question "which complaints end in monetary
+relief?" has an answer in the data: 26,996 of them (12.6%) did.
 
 ```bash
 exakit data-load banking_complaints
 ```
 
-It loads into the `BANKING` schema in a few seconds (1.9 MB of CSV). An installed
-kit downloads the CSVs first, as one checksummed archive of 0.1 MB (see
-[Download](#download)).
+It loads into the `BANKING` schema in under a minute (58 MB of CSV). An
+installed kit downloads the CSVs first, when you pick the dataset, as one
+checksummed archive of 4.4 MB (see [Download](#download)).
 
 ## No complaint narratives
 
 The CFPB stopped publishing consumers' written narratives in 2026: neither the
-API nor the bulk download carries them (checked 2026-10-20). The text columns
+API nor the bulk download carries them (checked 2026-10-20, and the export of
+2026-11-02 has no narrative column). The text columns
 here are therefore short: the **issue** and **sub-issue** the consumer picked,
 and the company's optional **public response**, which is one of a few set
 phrases. The notebooks' text step works on them, but expect short, repetitive
@@ -26,16 +28,16 @@ text rather than prose. For long free text, use `esophageal_posts`.
 
 The public response is written when the company answers, so it could hint at
 the outcome. In this snapshot it hardly does: behind each response given
-ten times or more, the relief rate ranges from 0% to 16% against 12% overall
-(example 11; the rarer phrases, given one to six times, are too few to read),
+ten times or more, the relief rate ranges from 0% to 17% against 13% overall
+(example 11; the one rarer phrase, given twice, is too few to read),
 so the notebooks' model reads it with the other text.
 
 ## Tables
 
 | Table | Rows | One row is |
 |---|---:|---|
-| `BANKING.BANKING_COMPLAINTS` | 6,754 | a complaint |
-| `BANKING.BANKING_RESPONSES` | 6,754 | how the company closed it |
+| `BANKING.BANKING_COMPLAINTS` | 214,742 | a complaint |
+| `BANKING.BANKING_RESPONSES` | 214,742 | how the company closed it |
 
 ## Data dictionary
 
@@ -49,14 +51,14 @@ so the notebooks' model reads it with the other text.
 | `PRODUCT` | VARCHAR(60) | `Credit card`, `Mortgage` or `Checking or savings account` |
 | `SUB_PRODUCT` | VARCHAR(100) | e.g. `General-purpose credit card or charge card` |
 | `ISSUE` | VARCHAR(120) | the issue the consumer picked |
-| `SUB_ISSUE` | VARCHAR(200) | the sub-issue; empty for 2 complaints |
-| `COMPANY` | VARCHAR(200) | the company complained about (324 distinct) |
-| `CONSUMER_STATE` | VARCHAR(2) | the consumer's U.S. state; empty for 37 |
+| `SUB_ISSUE` | VARCHAR(200) | the sub-issue; empty for 169 complaints |
+| `COMPANY` | VARCHAR(200) | the company complained about (1,394 distinct) |
+| `CONSUMER_STATE` | VARCHAR(2) | the consumer's U.S. state or territory; empty for 1,627 |
 | `SUBMITTED_VIA` | VARCHAR(20) | `Web`, `Phone`, `Referral` or `Postal mail` |
 | `TAGS` | VARCHAR(40) | `Servicemember`, `Older American`, both, or empty |
 | `TIMELY` | DECIMAL(1,0) | 1 when the company answered in time |
 | `MONETARY_RELIEF` | DECIMAL(1,0) | 1 when closed with monetary relief, else 0 - **the label** |
-| `COMPANY_PUBLIC_RESPONSE` | VARCHAR(300) | the company's public response; empty for about half |
+| `COMPANY_PUBLIC_RESPONSE` | VARCHAR(300) | the company's public response; empty for 55% |
 
 `BANKING_RESPONSES`: `COMPLAINT_ID`, `COMPANY_RESPONSE` (`Closed with
 explanation`, `Closed with non-monetary relief`, `Closed with monetary
@@ -96,8 +98,10 @@ channels, states, time to the company, public responses and a text question.
   verify complaints, and a complaint is not a finding against the company.
   The owner still confirms that the kit may ship the snapshot
   (`terms.confirmed` in the manifest).
-- **Rebuild:** `python3 tools/datasets/banking_complaints.py` fetches the same
-  query again and rewrites the CSVs and the manifest. A later run can differ
+- **Rebuild:** `python3 tools/datasets/banking_complaints.py complaints.csv.zip`
+  reads the same window from a copy of the export (without the argument it
+  downloads the export first, about 360 MB) and rewrites the CSVs and the
+  manifest. A later run can differ
   where the CFPB updated records; the manifest records the snapshot date, the
   row counts and the SHA-256 of every file, and the kit's tests check that the
   shipped files match it.

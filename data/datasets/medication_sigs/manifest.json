@@ -1,0 +1,27 @@
+{
+  "id": "medication_sigs",
+  "source": {
+    "name": "Prescription directions (sigs), a sample for medication-text extraction",
+    "file": "ReadFile_Medical_1.txt",
+    "builder": "tools/datasets/medication_sigs.py"
+  },
+  "terms": {
+    "license": "Supplied with the kit's requirements; origin and terms to be confirmed",
+    "summary": "Generic prescription directions with no patient, prescriber or pharmacy named.",
+    "confirmed": false
+  },
+  "snapshot": "2026-11-03",
+  "asset": {
+    "file": "medication_sigs-2026-11-03.tar.gz",
+    "sha256": "fd0d488acb847a0083f82c5b5dd1f3a36e8f910a6b952d25d2793ada82a0f3ec",
+    "size": 962,
+    "tar_sha256": "b8ce978242864d5c4c58b5307ba93b0a7f8d40c5aedeebd510583fcdefca21a7",
+    "url": "https://github.com/{repo}/releases/download/datasets/medication_sigs-2026-11-03.tar.gz"
+  },
+  "files": {
+    "data/medication_sigs.csv": {
+      "rows": 50,
+      "sha256": "e6467fba36976cfb9a76f4529f1552a8656cf1da6f91d42f0c6d35c741867b36"
+    }
+  }
+}

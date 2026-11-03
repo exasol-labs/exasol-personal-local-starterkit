@@ -94,7 +94,7 @@ It keeps your database, data and AI-client settings.
 exakit persona add data-scientist
 ```
 
-You should see the new datasets load (Esophageal posts, Bank marketing); Banking says *already loaded*.
+You should see the new datasets download and load (Esophageal posts, Bank marketing, ADE corpus, PubMed abstracts, Medication sigs); Banking loads its new twelve months.
 
 ---
 
@@ -103,16 +103,16 @@ You should see the new datasets load (Esophageal posts, Bank marketing); Banking
 ```bash
 exakit status
 exakit persona plan data-scientist
-exakit sql "SELECT 'Esophageal' AS DATA, COUNT(*) AS ROWS_ FROM ESOPHAGEAL.ESOPHAGEAL_POSTS UNION ALL SELECT 'Banking', COUNT(*) FROM BANKING.BANKING_COMPLAINTS UNION ALL SELECT 'Bank marketing', COUNT(*) FROM BANKMKT.BANK_CLIENTS"
+exakit sql "SELECT 'Esophageal' AS DATA, COUNT(*) AS ROWS_ FROM ESOPHAGEAL.ESOPHAGEAL_POSTS UNION ALL SELECT 'Banking', COUNT(*) FROM BANKING.BANKING_COMPLAINTS UNION ALL SELECT 'Bank marketing', COUNT(*) FROM BANKMKT.BANK_CLIENTS UNION ALL SELECT 'ADE', COUNT(*) FROM ADE.ADE_SENTENCES UNION ALL SELECT 'PubMed', COUNT(*) FROM PUBMED.PUBMED_ABSTRACTS UNION ALL SELECT 'Sigs', COUNT(*) FROM MEDSIGS.MEDICATION_SIGS"
 ```
 
 You should see:
 
 - status: **running**
 - persona plan: **nothing pending**
-- rows: Esophageal **40987**, Banking **6754**, Bank marketing **45211**
+- rows: Esophageal **40987**, Banking **214742**, Bank marketing **45211**, ADE **20960**, PubMed **1409**, Sigs **50**
 
-If a dataset is missing: `exakit data-load esophageal_posts` (or `bank_marketing`, `banking_complaints`).
+If a dataset is missing: `exakit data-load esophageal_posts` (or `bank_marketing`, `banking_complaints`, `ade_corpus`, `pubmed_abstracts`, `medication_sigs`).
 
 ---
 

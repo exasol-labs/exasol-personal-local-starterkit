@@ -2,40 +2,41 @@
   "id": "banking_complaints",
   "source": {
     "name": "Consumer Complaint Database (U.S. Consumer Financial Protection Bureau)",
-    "url": "https://www.consumerfinance.gov/data-research/consumer-complaints/search/api/v1/",
+    "url": "https://files.consumerfinance.gov/ccdb/complaints.csv.zip",
     "query": {
-      "date_received_min": "2025-01-01",
-      "date_received_max": "2025-01-14",
+      "date_received_min": "2025-10-01",
+      "date_received_max": "2026-09-30",
       "product": [
         "Credit card",
         "Mortgage",
         "Checking or savings account"
-      ]
+      ],
+      "company_response": "settled (not 'In progress')"
     },
     "builder": "tools/datasets/banking_complaints.py"
   },
   "terms": {
     "url": "https://www.consumerfinance.gov/complaint/data-use/",
-    "license": "CC0 1.0 (the API answers with _meta.license = CC0)",
+    "license": "CC0 1.0 (the CFPB's data-use terms)",
     "summary": "Public domain dedication: free to copy, change and redistribute. The CFPB does not verify complaints; a complaint is not a finding against the company.",
     "confirmed": false
   },
-  "snapshot": "2026-10-20",
+  "snapshot": "2026-11-03",
   "asset": {
-    "file": "banking_complaints-2026-10-20.tar.gz",
-    "sha256": "af96831b1ab51e153f9c7277e9adc8b23d02ecd9239bcc850cfc58bb812d95ce",
-    "size": 139875,
-    "tar_sha256": "230767db89db98caeb9f58ae9062acab5ec26f705a8878e77e562b280bd1f130",
-    "url": "https://github.com/{repo}/releases/download/datasets-banking_complaints-2026-10-20/banking_complaints-2026-10-20.tar.gz"
+    "file": "banking_complaints-2026-11-03.tar.gz",
+    "sha256": "5f1a98f9040b69f0acce61671a8f986498b7ca4d5596376d9de1ce7300da42a9",
+    "size": 4444740,
+    "tar_sha256": "0728d42999e462dbbe12b867c223821c3a26e82c88ba1a5222d1acaa708f173f",
+    "url": "https://github.com/{repo}/releases/download/datasets/banking_complaints-2026-11-03.tar.gz"
   },
   "files": {
     "data/banking_complaints.csv": {
-      "rows": 6754,
-      "sha256": "9fe74d7208327da63e61e04b1a924b3b95c24de9b2067cf88f56e37bafb91315"
+      "rows": 214742,
+      "sha256": "1755dd124aafa98744642cd197f47ce361a11d3fb4c2b2eb4be5a4f4ca3318ae"
     },
     "data/banking_responses.csv": {
-      "rows": 6754,
-      "sha256": "abea347bda2df91eada6fa39d928466c377e32093cdf3b13ab70aa8f77f9824e"
+      "rows": 214742,
+      "sha256": "79d2a79ae4657bafaa6b5afd9fb044eb366e5e67b020ff4016daea959028f93a"
     }
   }
 }

@@ -5,13 +5,13 @@
 OPEN SCHEMA BANKING;
 
 SELECT 'row_count: banking_complaints' AS CHECK_NAME,
-       CASE WHEN COUNT(*) = 6754 THEN 'OK' ELSE 'FAIL' END AS STATUS,
-       'expected 6754, found ' || CAST(COUNT(*) AS VARCHAR(20)) AS DETAIL
+       CASE WHEN COUNT(*) = 214742 THEN 'OK' ELSE 'FAIL' END AS STATUS,
+       'expected 214742, found ' || CAST(COUNT(*) AS VARCHAR(20)) AS DETAIL
 FROM BANKING_COMPLAINTS
 UNION ALL
 SELECT 'row_count: banking_responses',
-       CASE WHEN COUNT(*) = 6754 THEN 'OK' ELSE 'FAIL' END,
-       'expected 6754, found ' || CAST(COUNT(*) AS VARCHAR(20))
+       CASE WHEN COUNT(*) = 214742 THEN 'OK' ELSE 'FAIL' END,
+       'expected 214742, found ' || CAST(COUNT(*) AS VARCHAR(20))
 FROM BANKING_RESPONSES
 UNION ALL
 SELECT 'sanity: the label matches the response',

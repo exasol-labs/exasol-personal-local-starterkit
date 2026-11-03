@@ -15,11 +15,12 @@ the CSVs alone, not on the zlib that compressed them, so tools/dataset_check.py 
 the manifest is the one these CSVs make. The asset block written into manifest.json:
 
     "asset": {"file": "<id>-<snapshot>.tar.gz", "sha256": ..., "size": ..., "tar_sha256": ...,
-              "url": "https://github.com/{repo}/releases/download/datasets-<id>-<snapshot>/<file>"}
+              "url": "https://github.com/{repo}/releases/download/datasets/<file>"}
 
-{repo} is filled in at load time (EXAKIT_DATASETS_REPO, else the repository the kit was installed from). Upload the
-archive to that release tag - the tag is per dataset and snapshot, so a new snapshot is a new release and an old kit
-keeps finding the archive its manifest names.
+{repo} is filled in at load time (EXAKIT_DATASETS_REPO, else the repository the kit was installed from). Every archive
+is an asset of ONE release, tagged ``datasets``: upload it there next to the others. The file name carries the snapshot
+date, so a new snapshot is a new asset beside the old one, and an old kit keeps finding the archive its manifest names
+(never delete an asset a released kit's manifest still names).
 
 Exit 0 when every archive was written, 1 when a dataset cannot be packaged (its manifest does not match its CSVs),
 2 for a bad command line.
@@ -39,7 +40,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 DATASETS = ROOT / "data" / "datasets"
 DIST = ROOT / "dist"
-URL = "https://github.com/{repo}/releases/download/datasets-%(id)s-%(snapshot)s/%(file)s"
+RELEASE = "datasets"
+URL = "https://github.com/{repo}/releases/download/" + RELEASE + "/%(file)s"
 
 
 def csv_paths(folder: Path) -> list[Path]:

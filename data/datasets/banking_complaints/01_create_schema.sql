@@ -41,7 +41,7 @@ CREATE OR REPLACE TABLE BANKING_RESPONSES (
 -- Semantics travel WITH the tables (see the note in tpch/01_create_schema.sql):
 -- the MCP describe path reads these comments. COMMENT is idempotent.
 
-COMMENT ON TABLE  BANKING_COMPLAINTS IS 'Consumer complaints about credit cards, mortgages and checking or savings accounts received by the CFPB 2025-01-01..2025-01-14. PK complaint_id. A complaint is not a finding against the company.';
+COMMENT ON TABLE  BANKING_COMPLAINTS IS 'Consumer complaints about credit cards, mortgages and checking or savings accounts received by the CFPB 2025-10-01..2026-09-30. PK complaint_id. A complaint is not a finding against the company.';
 COMMENT ON COLUMN BANKING_COMPLAINTS.COMPLAINT_ID IS 'CFPB complaint id (PK)';
 COMMENT ON COLUMN BANKING_COMPLAINTS.DATE_RECEIVED IS 'Date the CFPB received the complaint';
 COMMENT ON COLUMN BANKING_COMPLAINTS.DATE_SENT_TO_COMPANY IS 'Date the CFPB sent it to the company';

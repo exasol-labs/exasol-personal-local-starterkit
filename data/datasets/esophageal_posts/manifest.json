@@ -20,7 +20,7 @@
     "sha256": "128f446b6cfa59d2ef63a84e3cc5d32777108bf398521e775a7e769deeb13a54",
     "size": 8077149,
     "tar_sha256": "1f5c0679c5c9b3ea9fe3c0364fe94dae84e985c5f7285281818bd4b364589ef8",
-    "url": "https://github.com/{repo}/releases/download/datasets-esophageal_posts-2026-11-03/esophageal_posts-2026-11-03.tar.gz"
+    "url": "https://github.com/{repo}/releases/download/datasets/esophageal_posts-2026-11-03.tar.gz"
   },
   "files": {
     "data/esophageal_posts.csv": {

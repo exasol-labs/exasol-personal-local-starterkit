@@ -42,8 +42,8 @@ try {
         (($offered -contains 'data-scientist') -and ($offered -contains 'ml-engineer') -and
          ([array]::IndexOf($offered, 'data-scientist') -lt [array]::IndexOf($offered, 'ml-engineer')))
     Check "no persona: the kit's own samples (default=yes)" "tpch,energy,weather" (@(Invoke-ExakitPersonaService "default-datasets") -join "")
-    Check "data-scientist: Esophageal, Banking and Bank marketing" "esophageal_posts,banking_complaints,bank_marketing" (Get-ExakitPersonaValue "data-scientist" "datasets")
-    Check "ml-engineer: Esophageal, Banking and Bank marketing" "esophageal_posts,banking_complaints,bank_marketing" (Get-ExakitPersonaValue "ml-engineer" "datasets")
+    Check "data-scientist: Esophageal, Banking and Bank marketing" "esophageal_posts,banking_complaints,bank_marketing,ade_corpus,pubmed_abstracts,medication_sigs" (Get-ExakitPersonaValue "data-scientist" "datasets")
+    Check "ml-engineer: Esophageal, Banking and Bank marketing" "esophageal_posts,banking_complaints,bank_marketing,ade_corpus,pubmed_abstracts,medication_sigs" (Get-ExakitPersonaValue "ml-engineer" "datasets")
     Check "data-scientist: BRD notebook baseline" "notebook" (Get-ExakitPersonaValue "data-scientist" "addons")
     Check "ml-engineer: BRD notebook and UDF baseline" "notebook,udf-devkit" (Get-ExakitPersonaValue "ml-engineer" "addons")
     Write-Host "several personas ticked together are combined by the service:"
@@ -51,7 +51,7 @@ try {
     Check "a known list reads back in the kit's order" "data-scientist,ml-engineer" (Get-ExakitPersona "ml-engineer,data-scientist")
     Check "one unknown among several is not known" "" "$(Get-ExakitPersona 'data-scientist,nope')"
     Clear-Answers; $env:EXAKIT_PERSONA = "data-scientist,ml-engineer"; Set-ExakitPersonaEnv
-    Check "their datasets and add-ons together, each once" "esophageal_posts,banking_complaints,bank_marketing|all|notebook,udf-devkit" (Answers)
+    Check "their datasets and add-ons together, each once" "esophageal_posts,banking_complaints,bank_marketing,ade_corpus,pubmed_abstracts,medication_sigs|all|notebook,udf-devkit" (Answers)
     Check "each dataset is named with the personas it is for" "both personas" ((Get-ExakitPersonaDatasetHints)["esophageal_posts"])
     Write-Host "the data question (one table) ticks the personas' datasets:"
     function Get-ExakitPendingDatasets { return @([pscustomobject]@{ Id = "tpch"; Label = "TPC-H retail benchmark (~175k rows)" },
@@ -79,7 +79,7 @@ try {
     Remove-Item Env:EXAKIT_DATASETS_PRESELECT -ErrorAction SilentlyContinue
     Write-Host "an explicit answer wins, per variable:"
     Clear-Answers; $env:EXAKIT_PERSONA = "ml-engineer"; Set-ExakitPersonaEnv
-    Check "the persona answers everything left open" "esophageal_posts,banking_complaints,bank_marketing|all|notebook,udf-devkit" (Answers)
+    Check "the persona answers everything left open" "esophageal_posts,banking_complaints,bank_marketing,ade_corpus,pubmed_abstracts,medication_sigs|all|notebook,udf-devkit" (Answers)
     Clear-Answers; $env:EXAKIT_PERSONA = "ml-engineer"; $env:EXAKIT_DATASETS = "esophageal_posts"; Set-ExakitPersonaEnv
     Check "EXAKIT_DATASETS wins, the rest stays the persona's" "esophageal_posts|all|notebook,udf-devkit" (Answers)
     Clear-Answers; $env:EXAKIT_PERSONA = "data-scientist"; $env:EXAKIT_LOAD_SAMPLE = "0"; $env:EXAKIT_MARKETPLACE_ADDONS = "none"; Set-ExakitPersonaEnv
@@ -99,7 +99,7 @@ try {
     Remove-Item Env:EXAKIT_DATASETS_PRESELECT -ErrorAction SilentlyContinue
     $env:EXAKIT_PERSONA = "data-scientist"
     Invoke-ExakitPersonaFlow -KitRoot $repo -Phase selected
-    Check "picked on screen: the persona's datasets and add-ons are ticked" "esophageal_posts,banking_complaints,bank_marketing|notebook" "$($env:EXAKIT_DATASETS_PRESELECT)|$($env:EXAKIT_MARKETPLACE_PRESELECT)"
+    Check "picked on screen: the persona's datasets and add-ons are ticked" "esophageal_posts,banking_complaints,bank_marketing,ade_corpus,pubmed_abstracts,medication_sigs|notebook" "$($env:EXAKIT_DATASETS_PRESELECT)|$($env:EXAKIT_MARKETPLACE_PRESELECT)"
     foreach ($v in @("EXAKIT_DATASETS_PRESELECT", "EXAKIT_MARKETPLACE_PRESELECT")) { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
     $env:EXAKIT_PERSONA_ACTIVE = "1"
     $note = (Write-ExakitPersonaMarketplaceNote 6>&1 | Out-String)

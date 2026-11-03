@@ -20,7 +20,7 @@
     "sha256": "9288901674d5a5c9f02c2657a005540ad4d4af85541d9189fb567939ccdec514",
     "size": 561743,
     "tar_sha256": "fec71e11bd550018e2bd951c643b09823c862194481a48f254103a95f60ec72b",
-    "url": "https://github.com/{repo}/releases/download/datasets-bank_marketing-2026-11-03/bank_marketing-2026-11-03.tar.gz"
+    "url": "https://github.com/{repo}/releases/download/datasets/bank_marketing-2026-11-03.tar.gz"
   },
   "files": {
     "data/bank_clients.csv": {

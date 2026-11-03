@@ -1,32 +1,38 @@
-"""Build the banking_complaints snapshot from the CFPB Consumer Complaint Database: the CSV and the manifest in
+"""Build the banking_complaints snapshot from the CFPB Consumer Complaint Database: the CSVs and the manifest in
 data/datasets/banking_complaints.
 
 The snapshot is every complaint about a credit card, a mortgage or a checking or savings account that the CFPB received
-in the first two weeks of January 2025 - a few thousand rows whose outcome (closed with monetary relief or not) is
-settled. The CFPB stopped publishing complaint narratives in 2026, so the text columns are the issue, the sub-issue and
-the company's public response (see data/datasets/banking_complaints/README.md, "No complaint narratives").
+from October 2025 to September 2026 - twelve complete months, about 215,000 complaints, each with a settled outcome (closed with
+monetary relief or not; the few still "In progress" are left out, their label is not known yet). It is read from the
+database's full export, complaints.csv.zip (18.9M complaints, 5.7 GB unzipped), streamed: nothing but the window is
+kept. The export has no narratives (the CFPB stopped publishing them), so the text columns are the issue, the sub-issue
+and the company's public response (see data/datasets/banking_complaints/README.md, "No complaint narratives").
 
-    python3 tools/datasets/banking_complaints.py       # writes data/datasets/banking_complaints/data/*.csv and manifest.json
+    python3 tools/datasets/banking_complaints.py ~/Downloads/complaints.csv.zip   # from a copy of the export you have
+    python3 tools/datasets/banking_complaints.py                                  # downloads the export first (~360 MB)
 """
 
 from __future__ import annotations
 
+import csv
+import io
 import json
+import shutil
 import sys
-import time
-import urllib.parse
+import tempfile
 import urllib.request
+import zipfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from snapshot import DATASETS, clean, write_manifest, write_tables
 
-API = "https://www.consumerfinance.gov/data-research/consumer-complaints/search/api/v1/"
-QUERY = [("product", "Credit card"), ("product", "Mortgage"), ("product", "Checking or savings account"),
-         ("date_received_min", "2025-01-01"), ("date_received_max", "2025-01-14")]
-PAGE = 1000
+EXPORT = "https://files.consumerfinance.gov/ccdb/complaints.csv.zip"
+PRODUCTS = ("Credit card", "Mortgage", "Checking or savings account")
+FIRST, LAST = "2025-10-01", "2026-09-30"
 HERE = DATASETS / "banking_complaints"
 RELIEF = "Closed with monetary relief"
+OPEN = "In progress"
 
 TABLES = {
     "BANKING_COMPLAINTS": ["COMPLAINT_ID", "DATE_RECEIVED", "DATE_SENT_TO_COMPANY", "PRODUCT", "SUB_PRODUCT", "ISSUE",
@@ -36,44 +42,48 @@ TABLES = {
 }
 
 
-def fetch() -> list[dict]:
-    """Every complaint the query matches, a page at a time, oldest first: each page starts after the last one's sort key
-    (the API ignores an offset)."""
-    found: list[dict] = []
-    after = ""
-    while True:
-        params = [*QUERY, ("size", str(PAGE)), ("no_aggs", "true"), ("sort", "created_date_asc")]
-        if after:
-            params.append(("search_after", after))
-        with urllib.request.urlopen(f"{API}?{urllib.parse.urlencode(params)}", timeout=120) as answer:   # noqa: S310 - a fixed https URL
-            hits = json.load(answer)["hits"]
-        found += [hit["_source"] for hit in hits["hits"]]
-        print(f"  {len(found)} of {hits['total']['value']} complaints", file=sys.stderr)
-        if not hits["hits"] or len(found) >= hits["total"]["value"]:
-            return found
-        after = "_".join(str(v) for v in hits["hits"][-1]["sort"])
-        time.sleep(0.5)
+def complaints(export: Path):
+    """The window's complaints from the export, streamed row by row; one per complaint id."""
+    seen = set()
+    with zipfile.ZipFile(export) as archive, archive.open("complaints.csv") as raw:
+        for c in csv.DictReader(io.TextIOWrapper(raw, encoding="utf-8", newline="")):
+            if c["Product"] not in PRODUCTS or not FIRST <= c["Date received"] <= LAST:
+                continue
+            if c["Company response to consumer"] in ("", OPEN) or c["Complaint ID"] in seen:
+                continue
+            seen.add(c["Complaint ID"])
+            yield c
 
 
 def row(c: dict) -> list:
-    """One complaint as a row of BANKING_COMPLAINTS (its company response goes to BANKING_RESPONSES)."""
-    return [int(c["complaint_id"]), c["date_received"][:10], (c.get("date_sent_to_company") or "")[:10], c["product"],
-            c.get("sub_product") or "", c.get("issue") or "", c.get("sub_issue") or "", clean(c["company"], 200),
-            c.get("state") or "", c.get("submitted_via") or "", c.get("tags") or "", 1 if c.get("timely") == "Yes" else 0,
-            1 if c.get("company_response") == RELIEF else 0,
-            clean(c.get("company_public_response"), 300)]
+    """One complaint as a row of BANKING_COMPLAINTS (its company response goes to BANKING_RESPONSES). The ZIP code is
+    left out: with the date and the company it narrows a complaint down to a person."""
+    return [int(c["Complaint ID"]), c["Date received"], c["Date sent to company"], c["Product"], clean(c["Sub-product"], 100),
+            clean(c["Issue"], 120), clean(c["Sub-issue"], 200), clean(c["Company"], 200), c["State"][:2],
+            c["Submitted via"], c["Tags"], 1 if c["Timely response?"] == "Yes" else 0,
+            1 if c["Company response to consumer"] == RELIEF else 0, clean(c["Company public response"], 300)]
 
 
-def main() -> int:
-    complaints = {c["complaint_id"]: c for c in fetch()}          # a page boundary never doubles a complaint
-    files = write_tables(HERE, TABLES, {"BANKING_COMPLAINTS": [row(c) for c in complaints.values()],
-                                        "BANKING_RESPONSES": [[int(i), c.get("company_response") or ""] for i, c in complaints.items()]})
+def main(argv: list[str]) -> int:
+    with tempfile.TemporaryDirectory() as temp:
+        if argv:
+            export = Path(argv[0]).expanduser()
+        else:
+            export = Path(temp) / "complaints.csv.zip"
+            with urllib.request.urlopen(EXPORT, timeout=600) as answer, export.open("wb") as out:   # noqa: S310 - fixed https
+                shutil.copyfileobj(answer, out)
+        rows, responses = [], []
+        for c in complaints(export):
+            rows.append(row(c))
+            responses.append([int(c["Complaint ID"]), c["Company response to consumer"]])
+    files = write_tables(HERE, TABLES, {"BANKING_COMPLAINTS": rows, "BANKING_RESPONSES": responses})
     write_manifest(HERE,
-                   {"name": "Consumer Complaint Database (U.S. Consumer Financial Protection Bureau)", "url": API,
-                    "query": dict(QUERY[3:]) | {"product": [v for k, v in QUERY if k == "product"]},
+                   {"name": "Consumer Complaint Database (U.S. Consumer Financial Protection Bureau)", "url": EXPORT,
+                    "query": {"date_received_min": FIRST, "date_received_max": LAST, "product": list(PRODUCTS),
+                              "company_response": f"settled (not '{OPEN}')"},
                     "builder": "tools/datasets/banking_complaints.py"},
                    {"url": "https://www.consumerfinance.gov/complaint/data-use/",
-                    "license": "CC0 1.0 (the API answers with _meta.license = CC0)",
+                    "license": "CC0 1.0 (the CFPB's data-use terms)",
                     "summary": "Public domain dedication: free to copy, change and redistribute. The CFPB does not verify "
                                "complaints; a complaint is not a finding against the company.",
                     "confirmed": False},
@@ -83,4 +93,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))

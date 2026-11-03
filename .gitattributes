@@ -39,3 +39,6 @@ static/*.mp4 export-ignore
 data/datasets/esophageal_posts/data export-ignore
 data/datasets/banking_complaints/data export-ignore
 data/datasets/bank_marketing/data export-ignore
+data/datasets/ade_corpus/data export-ignore
+data/datasets/pubmed_abstracts/data export-ignore
+data/datasets/medication_sigs/data export-ignore
