@@ -94,7 +94,6 @@ Hard rules:
 
 - Documentation is part of the product, not project exhaust.
 - Every significant decision must state rationale, alternatives, trade-offs, risks, and evidence.
-- Use ADR style in `docs/decisions.md`.
 - Keep requirements traceable to sources.
 - Keep assumptions explicit and review them at each phase gate.
 

@@ -170,9 +170,7 @@ exits non-zero when nothing could open. Relay that command to the user.
 
 ## Repeatable acceptance checks
 
-Use `docs/ACCEPTANCE-REMAINING.md` for the remaining release gates and exact
-service/model test commands. Source notebooks remain the user's starting point.
-For the reference training recipes, Esophageal uses `CLASS_WEIGHT = None`; Banking
+Source notebooks remain the user's starting point. For the reference training recipes, Esophageal uses `CLASS_WEIGHT = None`; Banking
 uses `CLASS_WEIGHT = "balanced"`. Record the choice and compare with the same
 held-out baseline. Do not claim that default Banking training beats baseline.
 

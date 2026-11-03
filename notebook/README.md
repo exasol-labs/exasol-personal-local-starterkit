@@ -330,8 +330,7 @@ The corresponding shell settings are `EXAKIT_NOTEBOOK_AI_THEMES`,
 `EXAKIT_NOTEBOOK_CLASS_WEIGHT`, `EXAKIT_NOTEBOOK_APPROVE_SQL` and
 `EXAKIT_NOTEBOOK_ALLOW_RESTART`. Boolean settings require `1`.
 `tools/ask_benchmark.py` evaluates opted-in models against complete reference
-query results under the read-only MCP user. See
-[the acceptance steps](../docs/ACCEPTANCE-REMAINING.md). An endpoint connection
+query results under the read-only MCP user (`tools/ask_benchmark.py --help`). An endpoint connection
 or valid JSON response is not evidence that a model answers correctly.
 
 For a dedicated Mac/Linux CI runner with an existing kit, set

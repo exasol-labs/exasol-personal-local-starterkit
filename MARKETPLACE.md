@@ -397,5 +397,4 @@ bash tests/ps-encoding-guard.sh
 ```
 
 Run `tests/marketplace-e2e.sh` for the isolated integration path. A live
-database and native Windows/WSL checks are separate release gates in
-`tasks.md`.
+database and native Windows/WSL checks are separate.

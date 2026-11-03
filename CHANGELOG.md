@@ -1,191 +1,41 @@
 # Changelog
 
-## Unreleased - descriptor, new reference datasets, telemetry off
+## Unreleased - personas
 
-### New
+### Pick who you are
 
-- **Describe and approve any table.** `exakit describe <SCHEMA.TABLE>` and, in a notebook, `exakit_nb.describe(...)` give every column one of eight roles - key, time, measure, category, flag, text, identifier, other - with how sure the kit is and the numbers that decided it, and name the columns the notebooks use: key, time, text, target, category and entity. Correct with `d.set(COLUMN="role")` and `d.slot(target="COLUMN")`, then `d.approve()`. The same table always gives the same draft; the target is never guessed.
-- **Personal data stays out.** A column of e-mail addresses, phone numbers, IBANs or postcodes is marked sensitive and is never charted, grouped or sent to a model.
-- **Versions you can trust.** Approving writes a new version in `~/.exasol-starter-kit/descriptors/<SCHEMA>.<TABLE>/` (old versions are never changed) and refuses a table that changed since it was described. When a table changes, the next draft keeps your earlier choices for the columns that did not change.
-- **AI clients see the roles.** An approved descriptor is published as a view in `EXAKIT_SEMANTIC` whose column comments carry the roles; your own tables are never altered. The kit's MCP server now lists and finds views, so an AI client discovers them - run `exakit mcp-setup` once to refresh an existing client.
-- **New reference datasets.** `esophageal_posts`: 40,987 public posts about esophageal cancer (2018-2022), personal details removed; it replaces the pharma trials. `bank_marketing`: 45,211 clients of a bank's term-deposit campaigns (UCI, CC BY 4.0). Both personas now load Esophageal posts, Banking complaints and Bank marketing, each with its descriptor.
-- **Your own files get the same treatment.** Load a CSV, Parquet or JSON file with `load_own_file`, describe it and approve it the same way; the notebooks then run on it unchanged.
-- **Optional model notes.** With a model configured, describe adds one line per column; a note never changes a role and never sees a sensitive column.
-- **Medical datasets, and every dataset downloaded only when you pick it.** Three new datasets for both personas: `ade_corpus` (20,960 PubMed sentences labelled for an adverse drug effect, with the drug-effect and drug-dose pairs they name), `pubmed_abstracts` (1,409 clinical-study abstracts) and `medication_sigs` (50 prescription directions to read the dose, route and timing from). Every dataset beyond the kit's own samples now lives in one GitHub release, `datasets`, and is downloaded, checked and loaded only when you pick it - the kit itself stays small. From a private repository, set `GITHUB_TOKEN`: the download then goes through the GitHub API.
-- **Banking complaints: a year, not two weeks.** `banking_complaints` now holds the 214,742 settled complaints the CFPB received from October 2025 to September 2026 (was 6,754 from January 2025), cleaned from the full complaint export: a 4.4 MB download.
-- **General is a persona.** The persona question's "None - just the kit" row is now **General** - the kit's own samples (TPC-H, energy, weather) with every AI client - and it can be ticked together with Data Scientist and ML Engineer: tick all three to load everything. It is ticked to begin with; `EXAKIT_PERSONA=general` works too.
-- **All your settings in one file.** `~/.exasol-starter-kit/exakit.env` lists every setting the kit reads, commented out with its default; uncomment a line to change it for every install and `exakit` command. A value on the command line still wins, nothing in the file is run, and secrets are refused.
-- **Models over 1 MB come back from the UDF.** A trained model bigger than 1 MB used to need a bucket the UDF could write to, which a local Mac deployment does not have. The training UDFs now send it back through the query in parts of up to 1 MB; the client puts it together and checks it against its SHA-256 before MLflow logs it. Results from UDFs created earlier still read as before.
-- **Dash Server for the Data Scientist.** Picking Data Scientist installs Dash Server first, then the notebook, so the notebooks' Share step has its server. Dash Server now queries as the kit's read-only user (it used the database administrator, and Share refused it with "Dash Server profile must validate as the kit's read-only user"); an install that has the old administrator profile is moved over on the next start of `dash-server`.
-- **Every question looks the same.** The persona, add-on and notebook-tool screens now look exactly like the rest of the install: the same frame and ticks, the data-load table's progress bar, and your terminal's own colours. A click ticks or unticks a row, only Enter moves on, and the scroll wheel still scrolls the terminal. Clicks work in the PowerShell menus on Windows too (`EXAKIT_NO_MOUSE=1` turns them off).
-- **A simpler test guide.** `docs/MANUAL-RUNBOOK.md` walks through a fresh install and an existing kit, both personas, step by step.
+- **Three personas.** The installer asks *What will you use this machine for?*: **Data Scientist**, **ML Engineer** and **General** (the kit's own TPC-H, energy and weather samples). Tick one or more; General is ticked to begin with, and ticking all three loads everything. `EXAKIT_PERSONA=data-scientist` (or `ml-engineer`, `general`, or several joined with a comma) answers it without a terminal.
+- **Add one later.** `exakit persona add ml-engineer` brings in what the new persona needs - its data, AI clients and add-ons - without a question; `exakit persona remove <id>` takes a persona off and keeps the data and add-ons another persona still uses. `exakit persona list | show <id> | plan` shows what each one brings and what is still pending.
+- **Every question looks the same.** The persona, add-on and notebook-tool screens use the same frame, ticks and progress bar as the rest of the install, in your terminal's own colours. A click ticks or unticks a row, only Enter moves on, the scroll wheel still scrolls the terminal, and resizing the window keeps the earlier output. Clicks work in the PowerShell menus on Windows too (`EXAKIT_NO_MOUSE=1` turns them off).
+- **The add-ons table.** While you choose it shows each add-on's Version and Description; once Enter starts the install it shows Version and Status, with the step above the active row. A spinner covers the pause before it opens.
+
+### Data Scientist
+
+- **Datasets:** `esophageal_posts` (40,987 public posts about esophageal cancer, personal details removed), `banking_complaints` (214,742 complaints the CFPB settled from October 2025 to September 2026), `bank_marketing` (45,211 clients of a bank's term-deposit campaigns), `ade_corpus` (20,960 PubMed sentences labelled for an adverse drug effect), `pubmed_abstracts` (1,409 clinical-study abstracts) and `medication_sigs` (50 prescription directions).
+- **Downloaded only when picked.** Each dataset lives in the GitHub release `datasets` and is downloaded, checked and loaded only when a persona or `exakit data-load <id>` asks for it, so the kit itself stays small. From a private repository, set `GITHUB_TOKEN`.
+- **Dash Server and the notebooks.** The persona installs Dash Server first, then the notebook add-on (JupyterLab, Marimo, Positron). Dash Server queries as the kit's read-only user, starts without its built-in demo dashboard, and a dashboard shared from a notebook says which approved data it answers from.
+- **Notebooks:** `data-scientist/00_quickstart`, `01_explore`, `02_ask_your_data` and `03_share`; one `DATASET = ...` line switches to another dataset or your own CSV, Parquet or JSON file.
+- **Describe and approve any table.** `exakit describe <SCHEMA.TABLE>`, or `nb.describe(...)` in a notebook, gives every column one of eight roles - key, time, measure, category, flag, text, identifier, other - with the evidence for it, and names the columns the notebooks use (key, time, text, target, category, entity). The role picker's dropdowns start on the drafted roles. Correct, then approve: each approval is a new version, the target is never guessed, and a column of e-mail addresses, phone numbers, IBANs or postcodes is marked sensitive and never charted or sent to a model.
+- **AI clients see the roles.** An approved table is published as a view in `EXAKIT_SEMANTIC` whose column comments carry the roles; run `exakit mcp-setup` once so an existing AI client lists views.
+- **Optional model and tracing.** `EXAKIT_MODEL_ID` and `EXAKIT_PROVIDER_BASE_URL` (Claude, Ollama, LM Studio, vLLM, Gemini) turn on SQL drafting in Ask and text themes in Explore; `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and `LANGFUSE_BASE_URL` trace those calls to your Langfuse project. Both are off until you set them.
+
+### ML Engineer
+
+- **The same datasets, plus training in the database.** The persona installs the notebook and `udf-devkit` add-ons and a local MLflow server, which starts again at login.
+- **Notebooks:** `ml-engineer/00_quickstart`, `01_train` (a scikit-learn model trained inside the database, the run logged to MLflow), `02_rust_score` (the trained model as a Rust scoring UDF, checked against Python) and `03_score_external_model` (a model trained anywhere, scored in the database).
+- **Models over 1 MB** come back from the training UDF in parts and are checked against their SHA-256 before MLflow logs them.
+- **Rust without a shared bucket.** When the deployment has no bucket the UDF can read, the Rust library is packaged into the RUST container instead - only after you allow the database restart it needs.
+
+### Settings
+
+- **One settings file.** `~/.exasol-starter-kit/exakit.env` lists every setting the kit reads with its default; uncomment a line to change it. A value on the command line still wins, nothing in the file is run, and secrets are refused.
+- **Usage telemetry is off** in everything the kit starts (`EXASOL_TELEMETRY_DISABLE`); a value you set yourself is kept.
 
 ### Changed
 
-- **Usage telemetry is off.** Exasol tools report anonymous usage unless `EXASOL_TELEMETRY_DISABLE` is set; the kit now sets it in everything it starts - the commands, the notebooks and their kernel, the add-on services and the MCP server your AI clients run. A value you set yourself is kept.
-- **The time column is the event date.** A table's time column is now its most complete date column, the leftmost of equals (Banking: the date a complaint was received, no longer the date it was sent on).
-- **Banking has no text column.** The CFPB no longer publishes complaint narratives, so the text steps skip on Banking and say why.
-- **The MLflow server stays on MLflow 3.** A server version outside 3.x is refused instead of replacing the notebooks' MLflow client.
-
-### Fixed
-
-- Exasol Scheduler: passwords with digits or mixed case work during setup, task tables stay readable after a reinstall, its service user is removed while task history is kept, and an older install is repaired on start without losing its tasks.
-- Removing one add-on now reports a failure when it fails, instead of saying it was removed; declining the removal exits 5 on macOS, Linux and Windows.
-- Passwords and keys no longer appear in the add-on install log.
-- Select All in the add-on menu now includes the notebook tools under it.
-- Read-only commands such as `exakit status` never download anything.
-- An install checks the whole add-on choice before the first install; empty or unknown names are refused and repeated ones counted once.
-- The notebook add-on remembers "no notebook tools" across updates, hides JupyterLab and Marimo login tokens in logs, and imports Exasol's AI Lab notebooks.
-- Windows: VS Code and compatible editors are found even when they are not on PATH.
-- Services already stopped are started again when another service refuses to stop, and the database-restart wait of a UDF container install shows on its own line.
-
-## Acceptance fixes and repeatable verification
-
-- Reject credential fields nested in workflow metadata, including encoded JSON. Record descriptor draft and approval events in the same workflow as SQL, tracing and training.
-- Skip only the Explore steps whose required roles are missing, with a reason and approval guidance. Initialize an empty shared bucket with a kit marker before declaring it unavailable.
-- Add an explicit logged `class_weight` training parameter. Repeated live Pharma runs with `None` and Banking runs with `"balanced"` beat their unchanged temporal-split majority baselines; the unweighted Banking recipe still matches its baseline.
-- Add opt-in runner controls for AI themes, SQL approval, class weighting and database restarts. Share figure confirmation remains manual. Dataset-based default app and scorer names avoid cross-dataset collisions.
-- Bound optional Ask requests, accept one fenced JSON proposal and validate its fields before approval. Add a read-only, result-based model benchmark that reports failures without credentials.
-- Add reproducible authenticated MLflow 3.0.0/3.17.2 and Langfuse Cloud/self-hosted 4.59.0 service checks. Local runs passed; hosted CI execution remains pending. Pin SQLAlchemy below 2.1 for MLflow 3.0 compatibility.
-- Add a responsive Share template with category/search filters, Top N, sorting, reset, synchronized comparison/composition charts and a paginated/exportable result table. Count summaries require an explicit count measure; preview confirmation remains manual. CSV export neutralizes formulas, and failed rebuilds invalidate old approval state.
-- Full held-out Rust/Python checks passed on all 1,030 Pharma and 1,317 Banking test rows with finite probabilities and matching labels.
-- Add dedicated acceptance workflows, candidate kernel binding and a generated-output privacy gate. Operator steps and remaining evidence are in `docs/ACCEPTANCE-REMAINING.md`.
-
-## Provider-neutral notebook configuration
-
-- Use `EXAKIT_MODEL_ID`, `EXAKIT_PROVIDER_BASE_URL` and `EXAKIT_PROVIDER_API_KEY` consistently in optional notebook AI and profiling notes. Older model-setting names are no longer read; update existing notebook copies to these names.
-- Preserve each provider's API path, allow unauthenticated local servers and support optional routing headers through `EXAKIT_PROVIDER_HEADERS`. `nb.model_settings()` checks configuration without showing keys or header values.
-- Ship a provider guide beside both Jupyter and Marimo notebooks, with official Claude, Ollama, LM Studio, vLLM and Gemini connection requirements. Five local HTTP contracts verify the shared text/chat client; live provider acceptance remains unverified.
-
-## BRD alignment and deployment fixes
-
-- Fix own-file CSV, Parquet, JSON and JSON-lines loading when a descriptor has a date role.
-- Match persona defaults to the BRD: Notebook for Data Scientist; Notebook, UDF devkit and local MLflow for ML Engineer. Both select Pharma and Banking. JSON Tables and Dash Server remain explicit add-ons.
-- Move the four utility lessons into `useful-notebooks/`, preserving edited copies and leaving the BRD's reserved notebook positions free.
-- Add the Rust fallback for unavailable shared buckets. Verify file visibility inside a UDF, package libraries into the pinned runtime, require restart consent, preserve previous libraries and reuse unchanged overlays. Record the resulting container digest in scoring lineage.
-- Move the installation, add-on and ownership guides into `docs/` and remove superseded root-level notes.
-
-Release acceptance remains open. Clean-machine timing, live Windows, Rust fallback, large-artifact and network-egress checks, hosted CI and practitioner gates still need evidence. Local service checks and the explicit Banking training recipe are recorded below.
-
-## Consistent add-on discovery
-
-- Give all seven add-ons the same management reference in human and JSON help; automatically include future add-on documents.
-- Publish exact invocations, usage, parameter/default/choice metadata, examples and help commands in the JSON catalog. Normalize native executable names without duplicated prefixes.
-- Keep multiword help paths and support JSON through the same help forms on shell and PowerShell. Register notebook controls, MLflow actions and Rust scoring actions separately with their own parameters.
-- Reject unknown help actions with exit 2 and a catalog remedy instead of guessing a parent. Keep keyword search in `catalog`.
-- Add registration, lifecycle argument, action lookup and complete shell/PowerShell JSON parity checks. Document the required help contract for new add-ons.
-- Implement the advertised PowerShell model inspection and `put --yes` trust confirmation, including no-copy refusals for unconfirmed pickle files. Validate MLflow start flags before installing or starting its server.
-- Keep PowerShell help/catalog discovery from creating empty installation folders.
-
-## Unreleased
-
-**Rootful and rootless Podman machines are both supported on Windows.** The
-requirements gate (and so `exakit preflight`, which is now read-only) reports
-the machine's mode instead of refusing a rootful machine or switching it, and
-`EXAKIT_FORCE` is back to meaning RAM and disk. The 0.2.0 refusal rested on a
-measurement that holds only for Podman 6.0.0 to 6.1.0, whose rootful machines
-do not forward published ports to Windows (fixed in 6.1.1); on 5.x the rootful
-port is forwarded, and rootful is the one mode that runs the database where WSL
-2.9+ gives rootless Podman no `pids` controller. A container that runs but does
-not answer on 127.0.0.1 is now diagnosed: that Podman version is named with its
-fix (upgrade, recreate the machine), and otherwise switching to rootless is
-offered as one option, with consent.
-
-**Podman is checked before every deploy and start, and what the kit can fix it
-offers to fix.** Windows: the machine is started if it is off (also on
-`exakit start` after a reboot); before a fresh pull the machine must resolve
-`registry-1.docker.io`, and on Windows 11 22H2+ the kit offers to set
-`dnsTunneling=true` in `%USERPROFILE%\.wslconfig` (edited in place, idempotent)
-and restart WSL; a machine with no `pids` cgroup controller
-(podman-container-tools/podman#29909) is offered a switch to rootful and asked
-again. Every change needs a yes at the terminal or `EXAKIT_PODMAN_SELFHEAL=1`;
-what remains is a soft failure with the cause named, never a deploy that cannot
-succeed. Linux and WSL: preflight and the install name a missing `pids`
-controller (with the systemd delegation, or the WSL issue).
-
-**The real error, not "never answered".** The waits read the database
-container's own `State.Error` and stop at once when it has failed for good, and
-every deploy and start failure carries it as its reason; known errors (`pids`,
-name resolution) come with their fix. A failed Windows deploy prints the
-launcher's last lines, and a Podman that does not answer prints what it said.
-`exakit status` adds the launcher's "deployment failed" record and the
-container's error to a stopped deployment's line and `remedy_hints`.
-
-**A deployment that never started is offered for replacement, default yes.**
-It holds no data, so "Start the existing database and keep its data?" (a no-op
-in that state) and "DELETE ... [y/N]" were the wrong questions. Only a
-deployment the kit created and never saw answer qualifies; `EXAKIT_REPLACE_DB=0`
-or `EXAKIT_REUSE_DB=1` keeps the old questions, which every deployment that
-ever booted still gets.
-
-**`exakit repair-runtime` on Windows consents to the deletion it asked
-about** (`EXAKIT_REPLACE_DB=1`, as on macOS and Linux), and on both sides its
-`--json` answer reports `failed` rather than `repaired` when the rebuild left
-no database.
-
-**A dry run no longer leaves the kit behind in TMPDIR, and nothing else the
-kit makes there does either.** `EXAKIT_DRY_RUN=1` unpacked the kit into
-`$TMPDIR/exakit-dry-run.*` (`%TEMP%\exakit-dry-run-*` on Windows) and never
-removed it; with `EXAKIT_LOCAL_KIT` the copy was the whole checkout, `.git`,
-`.claude` worktrees and caches included, about 500 MB a run. One developer's
-Mac had 435 of them, 135 GB. Both installers now remove the folder on the
-way out - after the plan, on a failure, and on Ctrl+C or a kill (an EXIT trap
-in install.sh, a `finally` in install.ps1) - and `EXAKIT_DRY_RUN_KEEP=1`
-keeps it for reading. A local-kit copy takes what git would ship (tracked
-files plus new, unignored ones), so ~65 MB instead of ~500 MB, on real
-installs too. The data table's state file (`exakit-table.*`) is removed once
-the table closes, where nothing removed it before, and it, the add-ons table
-(`exakit-addons.*`) and the launcher download (`exakit-personal.*`) are swept
-on `die()` and on exit by a new `exakit_track_tmp` registry; the `exakit`
-command sets an EXIT trap for it. Pinned by `tests/temp-cleanup.sh` and
-`tests/temp-cleanup-ps.ps1`.
-
-### Add-on command reference and UDF installation stages
-
-- Every add-on help page now includes argument/option descriptions, defaults, valid values, examples and environment settings, shared by shell, PowerShell and JSON help. Correct the dbt command prefix and document previously omitted `model inspect`, `model put --yes`, `udf-build --yes`, MLflow replay options and Rust arguments.
-- Split the UDF add-on's generic installing progress into container download, checksum, ML archive preparation, install/restart and smoke-check milestones. The completion message names the ready ML runtime. Document the observed 842 MB download and two installs behind the eleven-minute Mac run; percentages are estimates rather than download measurements.
-- Add parser-to-help coverage and shell/PowerShell progress tests, including Windows PowerShell 5.1 CI entries. The update changes help and progress only; it does not reinstall live containers or change virtual-schema/external-source integrations.
-
-### v0.3.0 change evidence (2026-10-29)
-
-The candidate follows the BRD requirements. Live Windows verification and practitioner acceptance remain pending; this changelog does not declare release acceptance.
-
-- Complete the Data Scientist and ML Engineer bundles with JSON Tables, role-specific Dash Server / UDF devkit, the MLflow service and scientific Python dependencies.
-- Bundle all 50 official Notebook Connector lessons for Jupyter and Marimo, with indexes and supporting assets, kit connections and explicit Run controls. Preserve notebook edits and document connector/package/file updates.
-- Fix stale notebook helper packaging behind the MLflow `handoff` argument error; complete descriptor approval, shared workflows/handoffs, governed Ask and Dash Server Share, model hardening and pinned Rust build/smoke paths.
-- Show the current UDF/add-on installation activity above the active progress bar.
-- Track component ownership and binary receipts. Reuse user-installed components, preserve shared profiles and unknown shared installations, and remove only kit-owned resources. Expose ownership in component listings and isolate the kit's exapump profile store.
-- Update the manual Mac runbook, ownership guidance and shell/PowerShell regression coverage. Live Windows and practitioner-gate verification remain explicitly deferred/pending.
-
-### v0.5 candidate work
-
-- Data Scientist and ML Engineer notebooks now share approved descriptor versions, workflow logs and a handoff. The Data Scientist can review generated SQL before a read-only MCP query runs, then prepare a Dash Server preview and explicitly promote a healthy revision after checking its figures.
-- The ML Engineer path adds a managed MLflow server, a validated UDF return contract with replay recovery, a time-split training notebook, model upload and removal controls, a Rust scoring project command and a parity notebook. Notebook model scoring checks the container's scikit-learn version before uploading a pickle.
-- The Rust build uses the pinned Exasol SDK and Rust toolchain inside a matching Linux container on macOS and Windows, records its Cargo lockfile digest, and checks the installed container before deployment. The Arm scorer and both architecture-specific smoke libraries compiled and passed `cargo exasol-udf validate` on macOS. The smoke libraries are bundled with size, SHA-256 and ELF architecture checks. The PowerShell path is checked with local tests; live Windows deployment remains for the user's later verification.
-- Release gate plans are in `tests/manual/gate-g1.md`, `gate-g2.md` and `gate-g3.md`. Their pass criteria require observed practitioner sessions; none is declared passed by this changelog.
-
-
-The persona-based starter kit of the requirements document (TDD/BRD v0.3: Data Scientist and ML Engineer), on the 0.2.2
-kit's shell and PowerShell twins.
-
-- **Two personas, chosen at install (P-1).** `EXAKIT_PERSONA=data-scientist` (Data Scientist) installs the kit with the Pharma and Banking reference datasets, every AI client on the machine and the notebook add-on; `EXAKIT_PERSONA=ml-engineer` adds the UDF dev kit; both join with a comma. Without the variable, an interactive install asks after the parts everyone needs - the two personas or None, just the kit - then ticks their datasets in the data question and offers only their add-ons at the end; with None or no terminal the kit installs on its own with TPC-H, energy and weather, as before. Each persona's first prompt opens its quickstart notebook. `exakit persona list | show | add | plan`: `add` (`apply` is its alias) adds the personas named to the ones the kit was set up as - the record becomes their union, so a kit installed as Data Scientist and then given ML Engineer is both - and brings in what they are missing without asking anything: three steps headed like the installer's (Sample data, AI clients, Add-ons), each the installer's own table taken with its defaults and filled in as it works (plain lines without a terminal), what is already here named in one line, one failure not stopping the others and the closing line naming each retry (exit 1); `--yes` is accepted. `plan [--json]` shows what is still pending - with no id for the recorded personas, nothing after a persona install or add (AC-P1.1). The rules are one Python service, `setup/lib/persona_service.py`, that both installers call; a persona is one file in `personas/`, validated (one bad file never takes the others down), and `tools/try_persona.sh` tries a new one in a sandbox. The installers accept only persona ids (no paths, globs or other case).
-- **The data question, one screen (DS-2).** *Data to load* is one table: **Sample datasets** is the parent row with the datasets under it (a For column names the persona each is for), then your own file or folder (CSV, Parquet, JSON), an external source (shown, coming soon - a separate item) and Skip; Enter starts the load right there. Enter on Skip skips in every menu. A persona install offers its add-ons before the connection panel, so the panel and the ready line close it; without a persona the marketplace offer stays after the panel. An add-on that asks something at install (the notebook tools) asks it before the progress table animates, through an optional `<id>_questions` hook - asked under the live table, it was redrawn over. `exakit data-load [--force] [<file-or-folder>|<dataset>]`, arguments in either order: `exakit data-load --force banking_complaints` drops and rebuilds exactly that dataset; `--force` with a file is refused and points at `EXAKIT_ON_EXISTING=replace`.
-- **The reference datasets are checksummed release assets (DS-2).** `pharma_trials` (ClinicalTrials.gov, with eligibility criteria and sponsors) and `banking_complaints` (CFPB) ship as deterministic `<id>-<snapshot>.tar.gz` archives: `data-load` takes the kit copy's files when their digests match, else a verified cache, else downloads the archive, verifies its SHA-256 and every file's digest, refuses a mismatch and caches it. `EXAKIT_DATASETS_MIRROR` (a folder or base URL) and `EXAKIT_DATASETS_REPO` point elsewhere; `tools/datasets/package.py` builds the archives. Their CSVs are left out of the kit download.
-- **The semantic layer is YAML (DS-2).** `descriptor.yaml` beside each reference dataset names the fact table and the column roles (entity, category, date, label, text; `source` for a table in a virtual schema), read by a strict standard-library YAML reader; the schema is documented in `data/README.md` with an example per dataset and one for your own file. `tools/dataset_check.py` enforces README, data dictionary, ten example questions with reference SQL, a valid descriptor and a manifest with source, terms, snapshot date and row counts.
-- **Notebooks (DS-1, DS-3, DS-4, ML-3, Appendix B).** The notebook add-on installs Exasol's notebook connector (JupyterLab through its `[jupyter]` extra) with the kit's `exakit.nb` helpers (`exakit_nb` still imports): `connect`, `sql`, `show_sql`, `load_own_file` (CSV, Parquet, JSON), `trace` (Langfuse, opt-in, tagged with the dataset, descriptor digest, session id and sample SQL; it asks before a live source's rows go to a model). The notebooks follow the document's catalogue: `data-scientist/00_quickstart` and `01_explore`, `ml-engineer/00_quickstart`, `01_train` (a scikit-learn model trained inside the database under `exasol_mlflow.start_run`, the run logged to your MLflow from the client) and `03_score_external_model`, with `00_shared` cells for the three ways data comes in; one `DATASET` assignment switches dataset or your own file and no SQL. The notebook tools - JupyterLab, Marimo (installed into the kit's environment) and Positron (yours, only configured) - are child rows of the notebook's row in the marketplace's add-ons table, ticked right there: each says before anything installs what will become of it (yours used as it is, or installed into the kit's environment; Positron found or the folder prepared for it) and then shows how it settled; their versions are pinned in `versions.json` and moved by `exakit update notebook`. `exakit notebook [marimo|positron]` opens them logged in without the token ever on a command line or in a log.
-- **`exakit notebook` is a launcher, and its forms are words:** `exakit notebook marimo`, `positron`, `jupyterlab`, `check`, `setup`, `stop` (the `--marimo`-style flags still work). On a terminal it asks *Open which notebook tools?* - JupyterLab, Marimo and Positron, each with its state (running at its address, ready, missing, not installed, or Positron not on this machine), and Skip, which opens nothing. Before opening anything it repairs, or offers to repair: a stopped database or a lost connection, a deleted JupyterLab or Marimo (reinstalled at the pinned version), a broken notebook environment, a port held by another program (the next free one unless `--port` was given), a deleted notebooks folder, a removed kernel spec, and a connection store whose master password is lost. A tool that fails does not stop the others (exit 1). Without a terminal it never asks: it opens JupyterLab as before, or names the fixing command and exits 1.
-- **A model trained anywhere, scored in the database (ML-4).** `exakit model put <file>` copies it into the deployment's bucket directory, records its SHA-256 and prints the `/buckets` path; a different file of the same name is refused (exit 5) unless `--replace`. `exakit model list` shows what is there and flags a changed file; `exakit model template` names the scoring UDF template (`udf/templates/`: scikit-learn pickles, joblib, ONNX; the model loaded once per UDF instance) and its renderer.
-- **Python UDFs on the local database (marketplace add-on `udf-devkit`, ML-1).** `exakit udf-setup` installs the official Python container, `exakit udf-use <container.tar.gz>` one of yours, `exakit udf-build requirements.txt` builds one with your pinned packages on Docker or the launcher's Podman (engine and free disk checked first). Every container install restarts the database, asks first and is proven by a smoke UDF; the launcher must be 2.3.0 or later.
-- **The prebuilt containers are a matrix, picked for your database (ML-1).** `versions.json` carries `components.udf-devkit.containers`: one row per language and architecture (Python 3.12 with scikit-learn 1.9.0, pandas 2.3.3, numpy 2.4.6 and scipy 1.18.0 from `exasol/script-languages-release` 12.0.0; Rust with rustc 1.98.1 and `exasol-udf-sdk` 0.33.0 from `exasol-labs/language-container-rs` v0.33.0), each with the database versions it runs on, url, sha256 and size. `exakit udf-use default` resolves the row for the DATABASE's architecture (an Apple-silicon Mac runs an aarch64 database, Windows an x86_64 one; `EXAKIT_UDF_ARCH` overrides) and its version, downloads it once into `~/.exasol-starter-kit/cache/containers` (`EXAKIT_UDF_CONTAINERS_MIRROR`: a folder or base URL instead), verifies size and sha256 before the launcher sees it, installs it as `PYTHON3_ML` and the smoke UDF compares each package's version with the pin. `EXAKIT_UDF_LANGUAGE=rust`, `exakit udf-setup --language rust` and `udf-use default --language rust` install the Rust container as `RUST` the same way (its smoke UDF is the next step; `components.udf_devkit.languages` records what is set up). `udf-setup` and `udf-use` take `--json` and answer one object naming the language and the failing step (`select-container`, `download`, `verify`, `install`, `smoke`) with exit codes 2, 3, 4, 5, 6 and 7 documented in `exakit help udf-devkit`. The shared rules (`arch`, `resolve`, `verify`, `pins`, the smoke comparison) are `setup/udf/udf_tool.py`, standard library only, used by both twins.
-- **Removed:** the General persona, the `fda_recalls` and `bank_marketing` datasets and the `start_here`, `text_classification` and `bank_marketing_mlflow` notebooks (not in the requirements document).
-- **Fix: `exakit uninstall` keeps your notebooks.** It used to delete `~/.exasol-starter-kit/notebooks` right after saying they stay; now only `EXAKIT_UNINSTALL_NOTEBOOKS=remove` removes them.
-- **Fix: notebook servers.** A stale pid file no longer stops an unrelated process; `exakit notebook` no longer hangs a caller reading its output; a second start waits for the first; `--port` is not silently ignored; `exakit logs notebook` and `notebook-marimo` work.
-- **Fix: Exasol's AI Lab notebooks run on the kit.** The notebook add-on installs the connector's `notebook-dependencies` extra (ipywidgets, ipyfilechooser, matplotlib, wordcloud, stopwatch.py - their first cell failed with `ModuleNotFoundError: ipywidgets`), and the connection store carries `db_schema` (the kit's `STARTER_KIT`; `EXAKIT_NOTEBOOK_SCHEMA` overrides), which `jupysql.init(ai_lab_config)` read and raised on.
-- **Adding a dataset needs no code.** `python3 tools/dataset_check.py data/datasets/<id>` checks a folder's files (encoding, headers, row widths, empty required values, repeated keys, Exasol's reserved words, schema, markers, verify script, and for a reference dataset its descriptor, manifest, README and examples), then loads it into the database as `exakit data-load` does, verifies it and drops it again. `tests/test_sample_data_schema.py` runs the same file checks on every folder.
-- **Fix: Skip skips.** In the datasets, AI-clients and add-ons tables the rows on offer start ticked, so moving to Skip and pressing Enter went on with them - loading the datasets, or on a database that already had them, asking for a local file. Enter on Skip now answers Skip, on macOS/Linux and Windows.
-- **Fix: an uninstall no longer leaves the database behind after a launcher crash.** A launcher that crashed or was killed leaves a lock on the deployment, and every later `destroy` refused ("locked by another operation"): the database kept running and its folder - gigabytes - stayed. When no launcher process is running, the kit now releases that lock with `exasol diag unlock --auto-approve` and destroys again; a running launcher keeps its lock. When the destroy still fails, the warning quotes the launcher's own error and names the deployment folder, instead of pointing at `exakit logs`, which an uninstall has just removed. Same on macOS/Linux (`personal_destroy`) and Windows (`Invoke-PersonalDestroy`); `tests/personal-destroy-lock.sh` and `tests/personal-destroy-lock-ps.ps1` (also under Windows PowerShell 5.1 in CI).
-- **Langfuse SDK 5 and MLflow 3.x.** The notebook add-on pins `langfuse>=5,<6` and `mlflow-skinny>=3,<4` (`exasol-mlflow[mlflow]` the same; a new `exasol-mlflow[server]` extra carries the full `mlflow>=3,<4` for the server). `nb.trace()` is ported to the SDK 5 API: a `Langfuse()` client from `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and `LANGFUSE_BASE_URL` (`LANGFUSE_HOST`, the SDK 3 name, still counts, with one line saying so), one observation with the trace name, session id, tags and metadata propagated to every model call inside the block; the tags gain `exasol.workflow_id` (when a workflow is active), `exasol.descriptor_id` and `exasol.descriptor_version`; the sample SQL is cut to the SDK's 200-character metadata limit and `exasol.sql_digest` carries the whole statement's SHA-256; the active workflow's log gets one `trace` line with the trace id. Unset variables still mean one printed line and the plain OpenAI client; the secret key appears in no output, tag or log (tested).
-- **The score notebook is now `ml-engineer/03_score_external_model`** (it was `02_…`). Appendix B numbers the ML Engineer notebooks 00 quickstart, 01 train, 02 rust_score (to come) and 03 score_external_model; numbers are never reused, so the renamed notebook keeps its catalog id `score-external-model` at step 3 and 02 stays free for the Rust one.
+- The persona question's "None - just the kit" row is now **General**, and it combines with the others.
+- `esophageal_posts` replaces the pharma trials dataset.
+- Banking has no text column (the CFPB no longer publishes complaint narratives), so the text steps skip on Banking and say why. Its time column is the date a complaint was received.
 
 ## 0.2.2
 

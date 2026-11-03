@@ -34,5 +34,3 @@ exapump sql -p starter-kit 'SELECT CURRENT_TIMESTAMP'
 A working pyexasol in the Python already on your PATH can be reused without installing packages into that Python. Notebook Connector and notebook dependencies still use the kit's separate notebook environment, so notebook setup can add its tested packages without changing your Python installation.
 
 Full uninstall removes kit-owned resources and kit configuration. It preserves reused binaries, shared exapump profiles, reused database data, and explicitly recorded user component paths even when they are beneath the kit home. Legacy private package environments recorded under the kit home retain their existing kit-managed lifecycle; legacy shared binaries and databases without receipts are treated as unknown and kept. Review `exakit uninstall --dry-run` before removal.
-
-These changes are local source work until published. Use the local checkout command in [the Mac runbook](MANUAL-RUNBOOK.md) when testing this version. PowerShell behavior has automated fixture coverage; live Windows verification is deferred.
