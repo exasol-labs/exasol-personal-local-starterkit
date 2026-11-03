@@ -193,9 +193,12 @@ names `exakit marketplace --list`, `exakit marketplace <id>` and
 An add-on this machine cannot install — no VS Code-compatible editor, no
 prebuilt binary for the architecture, already installed outside the kit — gets
 a dimmed, unpickable row carrying the reason instead, or no row at all when it
-is neither applicable nor present. The descriptions are each repository's
-GitHub About, fetched and cached; offline the kit falls back to the tagline in
-`setup/help/<id>.json`, so the wording of a row can differ from the capture
+is neither applicable nor present. Each row's name, link and description are
+the add-on repository's own on GitHub (the id you type is shown beside a name
+that differs, e.g. `exasol-json-tables (json-tables)`). They are looked up only
+while installing and while showing updates (`exakit update`), and cached; every
+other screen, and any lookup that fails, uses the copy in
+`marketplace/catalog.json`, so the wording of a row can differ from the capture
 above. The same rows fill in with progress as each pick installs — the
 selection and the install are one table, not two screens.
 
@@ -360,8 +363,12 @@ add-on needs no shell or PowerShell lifecycle implementation.
 
 ## Adding a new add-on
 
-1. Add an ordered row to `marketplace/catalog.json`: a unique `id`, `label`,
-   `backend: "python"`, `visible`, and `default_version`. Set `visible: false`
+1. Add an ordered row to `marketplace/catalog.json`: a unique `id`, a
+   `github` block with the add-on's `repo` (`owner/name`), `backend: "python"`,
+   `visible`, and `default_version`; then run `python3 tools/addon_github.py`,
+   which writes the repository's `url`, `name` and `about` from GitHub. Never
+   type those by hand, and never add a `label`: the row's name is the
+   repository's. Set `visible: false`
    to stop new selections while keeping an existing installation manageable.
    Add `choices` only when the add-on has user-selectable variants.
 2. Add `marketplace/addons/<id_with_underscores>.py`. Implement the lifecycle

@@ -92,7 +92,7 @@ try {
     Write-Host "the rows: the notebook's tools hang off its row:"
     Menu $null
     Check "the kinds and labels" `
-        "group|Select All;tee|notebook;tee-tee|JupyterLab;tee-tee|Marimo;tee-corner|Positron;corner|udf-devkit;plain|Skip" `
+        "group|Select All;tee|notebook-connector (notebook);tee-tee|JupyterLab;tee-tee|Marimo;tee-corner|Positron;corner|script-languages-release (udf-devkit);plain|Skip" `
         (@($script:MenuRows | ForEach-Object { ($_ -split '\|')[0..1] -join '|' }) -join ';')
     Check "child ids are <id>:<key>" ",notebook,notebook:jupyterlab,notebook:marimo,notebook:positron,udf-devkit," `
         ($script:ExakitAddonTableIds -join ',')

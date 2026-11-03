@@ -25,11 +25,13 @@ Working on the code in this repo:
   (dash-server is the reference implementation), a `components.<id>` block in
   versions.json, one registry line each side
   (`exakit_marketplace_addons` in common.sh, `Get-ExakitMarketplaceAddons` in
-  exakit-common.ps1), and a `setup/help/<id>.json` carrying `repo` + `tagline` + `docs`,
-  plus the two CI-guard entries. The add-on's one-line **description is never
-  typed into this repo** — it is that repository's GitHub About, fetched and
-  cached (`exakit_marketplace_addon_description`), with the tagline as the
-  offline answer. Never add per-add-on case
+  exakit-common.ps1), a `marketplace/catalog.json` row whose `github` block
+  names the repository (`python3 tools/addon_github.py` fills its `url`, `name`
+  and `about` from GitHub), and a `setup/help/<id>.json` carrying `role` +
+  `docs`, plus the two CI-guard entries. The add-on's **name, link and
+  description are never typed into this repo** — they are that repository's on
+  GitHub: looked up only while installing and showing updates, cached, and the
+  catalog's copy is the answer whenever a lookup fails. Never add per-add-on case
   arms to the registry functions — the generic arms handle registered add-ons,
   and `tests/marketplace.sh` fails on hand-wired ones. Never install an
   add-on from the setup scripts; the marketplace and its closing offer are

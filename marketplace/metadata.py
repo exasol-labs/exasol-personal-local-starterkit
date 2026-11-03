@@ -68,6 +68,10 @@ def rows(root: Path, kind: str) -> list[str]:
         if kind == "registry":
             result.append("|".join((addon.id, addon.label, addon.backend,
                                     "1" if addon.visible else "0", addon.default_version)))
+        elif kind == "github":
+            # The About is prose and may hold a "|": it is the last field, so a reader splits at most four times.
+            block = addon.github
+            result.append("|".join((addon.id, block["repo"], block["url"], block["name"], block["about"])))
         elif kind == "shell-hooks":
             if not (root / "marketplace" / "addons" / (addon.id.replace("-", "_") + ".py")).is_file():
                 continue
@@ -85,7 +89,7 @@ def rows(root: Path, kind: str) -> list[str]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path)
-    parser.add_argument("kind", choices=("registry", "shell-hooks", "answer",
+    parser.add_argument("kind", choices=("registry", "github", "shell-hooks", "answer",
                                          "notebook-rows", "notebook-default", "notebook-normalize",
                                          "notebook-questions"))
     parser.add_argument("value", nargs="?")

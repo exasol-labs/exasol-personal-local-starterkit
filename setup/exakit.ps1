@@ -2877,6 +2877,11 @@ function Invoke-CmdUpdate {
     param([string]$Target = "all", [string[]]$More = @(), [bool]$AssumeYes = $false, [bool]$Json = $false)
     if ($Json) { Assert-ExakitInstalled -Json } else { Assert-ExakitInstalled }
     Initialize-ExakitLogging
+    # Showing updates is one of the two moments the add-ons' GitHub names, links
+    # and Abouts are looked up (the other is the install's offer).
+    if (Get-Command Update-ExakitMarketplaceAboutCache -ErrorAction SilentlyContinue) {
+        try { Update-ExakitMarketplaceAboutCache -All } catch { }
+    }
     if (-not $Target) { $Target = "all" }
     # An unknown target is bad input: refused before anything runs, exit 2,
     # as JSON under --json - what exakit_update's reject does. Resolved out

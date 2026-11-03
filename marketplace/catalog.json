@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "addons": [
-    {"id": "dash-server", "label": "dash-server (AI dashboard host)", "backend": "python", "visible": true, "default_version": "0.2.1"},
-    {"id": "dbt-exasol", "label": "dbt-exasol (dbt models on Exasol)", "backend": "python", "visible": true, "default_version": "1.12.1"},
-    {"id": "exasol-scheduler", "label": "Exasol Scheduler (SQL jobs on a schedule)", "backend": "python", "visible": true, "default_version": "0.4.1"},
-    {"id": "exasol-vscode", "label": "Exasol for VS Code (editor extension)", "backend": "python", "visible": true, "default_version": "1.9.0"},
-    {"id": "json-tables", "label": "JSON Tables (JSON into Exasol)", "backend": "python", "visible": true, "default_version": "v0.4.1"},
-    {"id": "notebook", "label": "Notebooks (JupyterLab on Exasol)", "backend": "python", "visible": true, "default_version": "3.1.0", "choices": [
+    {"id": "dash-server", "github": {"repo": "exasol-labs/dash-server", "url": "https://github.com/exasol-labs/dash-server", "name": "dash-server", "about": "Agent-operated Dash hosting for live analytical apps"}, "backend": "python", "visible": true, "default_version": "0.2.1"},
+    {"id": "dbt-exasol", "github": {"repo": "exasol/dbt-exasol", "url": "https://github.com/exasol/dbt-exasol", "name": "dbt-exasol", "about": "Data Build Tool adapter for Exasol"}, "backend": "python", "visible": true, "default_version": "1.12.1"},
+    {"id": "exasol-scheduler", "github": {"repo": "exasol-labs/exasol-scheduler", "url": "https://github.com/exasol-labs/exasol-scheduler", "name": "exasol-scheduler", "about": "Lightweight table-driven SQL job scheduling for Exasol"}, "backend": "python", "visible": true, "default_version": "0.4.1"},
+    {"id": "exasol-vscode", "github": {"repo": "exasol-labs/exasol-vscode", "url": "https://github.com/exasol-labs/exasol-vscode", "name": "exasol-vscode", "about": "A Visual Studio Code extension for working with Exasol databases. Provides comprehensive database management, intelligent SQL editing, and powerful query execution capabilities."}, "backend": "python", "visible": true, "default_version": "1.9.0"},
+    {"id": "json-tables", "github": {"repo": "exasol-labs/exasol-json-tables", "url": "https://github.com/exasol-labs/exasol-json-tables", "name": "exasol-json-tables", "about": "Exasol JSON Tables: ingest, query, and reshape JSON-shaped data in Exasol."}, "backend": "python", "visible": true, "default_version": "v0.4.1"},
+    {"id": "notebook", "github": {"repo": "exasol/notebook-connector", "url": "https://github.com/exasol/notebook-connector", "name": "notebook-connector", "about": "Connection configuration management and additional tools for Jupyter notebooks."}, "backend": "python", "visible": true, "default_version": "3.1.0", "choices": [
       {"id": "jupyterlab", "label": "JupyterLab"},
       {"id": "marimo", "label": "Marimo"},
       {"id": "positron", "label": "Positron (configure existing app)"}
     ]},
-    {"id": "udf-devkit", "label": "UDF dev kit (Python UDFs on Exasol)", "backend": "python", "visible": true, "default_version": "0.1.0"}
+    {"id": "udf-devkit", "github": {"repo": "exasol/script-languages-release", "url": "https://github.com/exasol/script-languages-release", "name": "script-languages-release", "about": "Release Repository for Script Language Container for user defined functions (UDF's) that can be used in the EXASOL database."}, "backend": "python", "visible": true, "default_version": "0.1.0"}
   ]
 }

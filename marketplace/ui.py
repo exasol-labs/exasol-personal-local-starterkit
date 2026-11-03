@@ -391,7 +391,8 @@ class ChoiceApp(App[dict | None]):
                 entry["label"] = "Skip"
             elif kind in ("item", "disabled"):
                 row = next(row for row in self.rows if row["id"] == name)
-                entry.update(label=name, version=str(row.get("version") or ""),
+                # label keys the row (its install status, the active row); shown is what it says.
+                entry.update(label=name, shown=row.get("label") or name, version=str(row.get("version") or ""),
                              desc=row.get("reason", "") if kind == "disabled" else row.get("about", ""),
                              tree="corner" if index == last_item else "tee",
                              parent=bool(children_of.get(name)))
@@ -429,7 +430,7 @@ class ChoiceApp(App[dict | None]):
     def _render_table(self, width: int) -> tuple[Text, list[int | None]]:
         """ui_table_frame, then ui_table_menu's hint while the selection is open."""
         entries = self._table_entries()
-        name_w = max([10] + [len(CONNECTOR.get(e["tree"], "")) + len(e["label"]) for e in entries])
+        name_w = max([10] + [len(CONNECTOR.get(e["tree"], "")) + len(e.get("shown", e["label"])) for e in entries])
         col2_w = max([len("Version")] + [len(e["version"]) for e in entries])
         stat_w = 0
         if self.status:
@@ -474,7 +475,7 @@ class ChoiceApp(App[dict | None]):
                 row.append(f"[{TICK}]", OK)
             else:
                 row.append("[ ]")
-            name = CONNECTOR.get(entry["tree"], "") + entry["label"]
+            name = CONNECTOR.get(entry["tree"], "") + entry.get("shown", entry["label"])
             name = name if len(name) <= name_w else name[:name_w - 1] + "…"
             wrapped = textwrap.wrap(entry["desc"], col3_w) if entry["desc"] and col3_w else []
             row.append(" ")
@@ -691,12 +692,17 @@ class ChoiceApp(App[dict | None]):
         self.exit(result)
 
 
-def about(path: Path | None) -> dict[str, str]:
-    """id|description lines: the add-on's one-line About, as the shell table shows it."""
+def about(path: Path | None) -> dict[str, tuple[str, str]]:
+    """id|label|description lines, as the shell resolved them: the row's name (the repository's on GitHub,
+    the id beside it when they differ) and its About. The About is last: prose, it may hold a "|"."""
     if not path or not path.is_file():
         return {}
-    pairs = (line.split("|", 1) for line in path.read_text(encoding="utf-8").splitlines() if "|" in line)
-    return {key: value for key, value in pairs}
+    found = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        parts = line.split("|", 2)
+        if len(parts) == 3 and parts[0]:
+            found[parts[0]] = (parts[1].strip(), parts[2].strip())
+    return found
 
 
 def main() -> int:
@@ -704,7 +710,7 @@ def main() -> int:
     parser.add_argument("mode", choices=("persona", "marketplace", "notebook"))
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--states", type=Path)
-    parser.add_argument("--about", type=Path, help="id|description lines for the marketplace's Description column")
+    parser.add_argument("--about", type=Path, help="id|label|description lines: each add-on row's name and About")
     parser.add_argument("--defaults", default="")
     parser.add_argument("--recorded", default="")
     parser.add_argument("--only", default="")
@@ -759,11 +765,13 @@ def main() -> int:
             for row in addons:
                 status = states.get(row.id, {}).get("status", "not in this kit copy")
                 installed = status == "installed"
-                rows.append({"id": row.id, "label": row.label,
+                shown, said = abouts.get(row.id, ("", ""))
+                rows.append({"id": row.id, "label": shown or row.label,
                              "version": (states.get(row.id, {}).get("version") if installed else None)
                              or row.version or row.default_version,
                              "choices": row.choices, "detail": status,
-                             "about": abouts.get(row.id) or f"Details: exakit help {row.id}",
+                             # The shell's live About, else the catalog's copy of it, else the help pointer.
+                             "about": said or row.github.get("about") or f"Details: exakit help {row.id}",
                              "reason": "Installed" if installed else status,
                              "disabled": status != "available"})
             if args.recorded:

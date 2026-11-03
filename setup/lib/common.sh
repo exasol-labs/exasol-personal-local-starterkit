@@ -332,12 +332,12 @@ EXAKIT_VERSIONS_SCHEMA=1
 # so a support question ("where did this version come from?") has an answer.
 EXAKIT_VERSIONS_SOURCE_USED=""
 
-# Marketplace add-on "About" text. The one-line description the marketplace
-# shows for an add-on is NOT stored in this repository: it is the About field of
-# the add-on's own repository, fetched once and cached, so the tool that owns
-# the wording owns it in exactly one place. The cache is what makes that safe to
-# do in front of an interactive menu -- see exakit_marketplace_addon_description
-# for the full resolution order, including what happens with no network at all.
+# Marketplace add-on name, link and "About" text: the add-on repository's own on
+# GitHub. marketplace/catalog.json carries a copy tools/addon_github.py wrote; a
+# lookup refreshes the cache ONLY on demand -- while installing (the closing
+# marketplace offer) and while showing updates (exakit update). Every other
+# screen reads the cache, else the catalog's copy, and makes no request. See
+# exakit_marketplace_addon_description for the full resolution order.
 EXAKIT_ABOUT_URL="${EXAKIT_ABOUT_URL:-https://api.github.com/repos}"
 EXAKIT_ABOUT_TTL="${EXAKIT_ABOUT_TTL:-86400}"
 EXAKIT_ABOUT_CACHE_DIR="${EXAKIT_ABOUT_CACHE_DIR:-$EXAKIT_CACHE_DIR/about}"
@@ -4278,15 +4278,61 @@ EXAKIT_ADF_PY
     sed -n 's/.*"'"$2"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$_adf_doc" | head -1
 }
 
-# _exakit_addon_repo <id> — the add-on's repository, as owner/name.
+# _exakit_addon_github <id> <repo|url|name|about> — the add-on's GitHub
+# repository as marketplace/catalog.json carries it: tools/addon_github.py
+# copies it from GitHub, so it is the repository's own name, link and About, and
+# the answer when GitHub cannot be reached. One add-on per catalog line, so with
+# no Python the line is read with sed. Whitespace collapses to single spaces;
+# callers that print the About still sanitise it.
+_exakit_addon_github() {
+    _agh_cat="$(_exakit_marketplace_root 2>/dev/null)/marketplace/catalog.json"
+    [ -f "$_agh_cat" ] || return 1
+    case "$2" in repo|url|name|about) ;; *) return 1 ;; esac
+    # Any working python3, never one installed for this: a read of the kit's own
+    # file must not set up a runtime (it is asked once per table row).
+    if _exakit_python3_present; then
+        python3 - "$_agh_cat" "$1" "$2" <<'EXAKIT_AGH_PY' 2>/dev/null
+import json, sys
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        rows = json.load(handle)["addons"]
+except Exception:
+    sys.exit(1)
+for row in rows:
+    if isinstance(row, dict) and row.get("id") == sys.argv[2]:
+        block = row.get("github")
+        value = block.get(sys.argv[3]) if isinstance(block, dict) else None
+        if isinstance(value, str) and value.strip():
+            print(" ".join(value.split()))
+            sys.exit(0)
+sys.exit(1)
+EXAKIT_AGH_PY
+        return $?
+    fi
+    _agh_line="$(grep -F "{\"id\": \"$1\"," "$_agh_cat" 2>/dev/null | head -1)"
+    [ -n "$_agh_line" ] || return 1
+    # The block as tools/addon_github.py writes it: repo, url, name, about, in
+    # that order, about last. The first three never hold a quote; the About may,
+    # escaped, so it is taken to the block's closing quote and unescaped.
+    _agh_block="$(printf '%s\n' "$_agh_line" | sed -n 's/.*"github": {\(.*\)}, "backend".*/\1/p' | head -1)"
+    case "$2" in
+        about) _agh_value="$(printf '%s\n' "$_agh_block" | sed -n 's/.*"about": "\(.*\)"$/\1/p' | sed -e 's/\\"/"/g' -e 's/\\\\/\\/g')" ;;
+        *) _agh_value="$(printf '%s\n' "$_agh_block" | sed -n 's/.*"'"$2"'": "\([^"]*\)".*/\1/p' | head -1)" ;;
+    esac
+    [ -n "$_agh_value" ] || return 1
+    printf '%s\n' "$_agh_value"
+}
+
+# _exakit_addon_repo <id> — the add-on's repository, as owner/name, from the
+# catalog's GitHub block.
 #
 # This value is interpolated into a URL, so it is validated as two plain path
-# segments and nothing else. A document that says anything more interesting than
+# segments and nothing else. A catalog that says anything more interesting than
 # that has no repository as far as this code is concerned.
 _exakit_addon_repo() {
-    _aar_repo="$(_exakit_addon_doc_field "$1" repo 2>/dev/null || true)"
+    _aar_repo="$(_exakit_addon_github "$1" repo 2>/dev/null || true)"
     case "$_aar_repo" in
-        ''|*[!A-Za-z0-9._/-]*|*/*/*|/*|*/) return 1 ;;
+        ''|*[!A-Za-z0-9._/-]*|*/*/*|/*|*/|*..*) return 1 ;;
         */*) printf '%s\n' "$_aar_repo" ;;
         *) return 1 ;;
     esac
@@ -4354,22 +4400,30 @@ _exakit_about_cap() {
     printf '%s\n' "$_abc_text"
 }
 
-# _exakit_about_extract <json> — the About field out of a repository response.
+# _exakit_about_extract <json> [field] — one field out of a repository
+# response: the About (description, the default), or full_name, html_url or
+# archived ("true"/"false").
 _exakit_about_extract() {
+    _abx_field="${2:-description}"
     if exakit_can_run_python; then
         printf '%s' "$1" | run_python -c 'import json,sys
 try:
-    print((json.load(sys.stdin).get("description") or "").strip())
+    value = json.load(sys.stdin).get(sys.argv[1])
+    print(("true" if value else "false") if isinstance(value, bool) else (value or "").strip())
 except Exception:
-    pass' 2>/dev/null
+    pass' "$_abx_field" 2>/dev/null
         return 0
     fi
-    printf '%s' "$1" | sed -n 's/.*"description"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1
+    case "$_abx_field" in
+        archived) printf '%s' "$1" | grep -q '"archived"[[:space:]]*:[[:space:]]*true' && echo true || echo false ;;
+        *) printf '%s' "$1" | sed -n 's/.*"'"$_abx_field"'"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1 ;;
+    esac
 }
 
 # _exakit_about_fetch <id> — refresh one add-on's cached About line.
-# 0 = a line was cached, 2 = the fetch was skipped as unnecessary, 1 = nothing
-# was cached (and the caller falls back; it never fails a screen).
+# 0 = a line was cached, 2 = the fetch was skipped as unnecessary, 3 = the
+# request got no answer (offline, timed out, refused), 1 = nothing else was
+# cached. Whatever it returns, what is on disk stays and the caller falls back.
 _exakit_about_fetch() {
     _abf_id="$1"
     [ "$EXAKIT_ABOUT_OFFLINE" = "1" ] && return 1
@@ -4393,49 +4447,107 @@ _exakit_about_fetch() {
         --connect-timeout "$EXAKIT_VERSION_LOOKUP_CONNECT_TIMEOUT" \
         --max-time "$EXAKIT_VERSION_LOOKUP_MAX_TIME" \
         -A "$(exakit_versions_user_agent 2>/dev/null || true)" \
-        "$EXAKIT_ABOUT_URL/$_abf_repo" 2>/dev/null || true)"
+        "$EXAKIT_ABOUT_URL/$_abf_repo" 2>/dev/null)"
+    _abf_rc=$?
     if [ -z "$_abf_json" ]; then
         _exakit_log_file "INFO  About fetch failed for $_abf_id — keeping whatever is on disk"
-        return 1
+        # curl 22 is GitHub answering with an error (a deleted repository's 404,
+        # a rate limit's 403): the next add-on may still be asked. Anything else
+        # is no answer at all.
+        [ "$_abf_rc" -eq 22 ] && return 1
+        return 3
     fi
     _abf_text="$(_exakit_about_cap "$(_exakit_about_extract "$_abf_json" | _exakit_about_sanitise)")"
     if [ -z "$_abf_text" ]; then
         _exakit_log_file "INFO  $_abf_repo has no About text to show for $_abf_id"
         return 1
     fi
+    # The repository as GitHub names it now. A renamed or transferred one
+    # answers under its new owner/name (curl follows the redirect); anything
+    # that is not plain owner/name, with the matching link, is not kept.
+    _abf_full="$(_exakit_about_extract "$_abf_json" full_name)"
+    _abf_url="$(_exakit_about_extract "$_abf_json" html_url)"
+    case "$_abf_full" in
+        ''|*[!A-Za-z0-9._/-]*|*/*/*|/*|*/|*..*) _abf_full="" ;;
+        */*) ;;
+        *) _abf_full="" ;;
+    esac
+    [ -n "$_abf_full" ] && [ "$_abf_url" = "https://github.com/$_abf_full" ] || { _abf_full=""; _abf_url=""; }
+    [ -n "$_abf_full" ] && [ "$_abf_full" != "$_abf_repo" ] && \
+        _exakit_log_file "INFO  $_abf_repo is now $_abf_full on GitHub (refresh with tools/addon_github.py)"
+    _abf_archived="$(_exakit_about_extract "$_abf_json" archived)"
+    [ "$_abf_archived" = true ] && _exakit_log_file "WARN  $_abf_repo is archived on GitHub ($_abf_id)"
     _abf_tmp="$_abf_cache.tmp.$$"
-    printf '%s\n' "$_abf_text" > "$_abf_tmp" 2>/dev/null || { rm -f "$_abf_tmp"; return 1; }
+    # Line 1 the About, line 2 the repository's name, 3 its link, 4 archived.
+    printf '%s\n%s\n%s\n%s\n' "$_abf_text" "${_abf_full##*/}" "$_abf_url" "${_abf_archived:-false}" \
+        > "$_abf_tmp" 2>/dev/null || { rm -f "$_abf_tmp"; return 1; }
     mv -f "$_abf_tmp" "$_abf_cache" 2>/dev/null || { rm -f "$_abf_tmp"; return 1; }
     _exakit_log_file "INFO  About refreshed for $_abf_id from $_abf_repo"
     return 0
 }
 
-# exakit_marketplace_addon_description <id> — the one-liner a screen shows.
-# Always answers something; the chain degrades instead of blanking a column:
-#   1. a cached About younger than the TTL     — the common case, no network
-#   2. a fresh fetch                           — one request, timeouts bounded
-#   3. a STALE cached About, any age           — old wording beats no wording
-#   4. the help document's own tagline         — on disk, so this is the answer
-#                                                offline and when rate-limited
-#   5. a pointer at the help screen            — only if even that is missing
+# exakit_marketplace_addon_description <id> — the one-liner a screen shows: the
+# add-on repository's GitHub About. Always answers something; the chain degrades
+# instead of blanking a column:
+#   1. the cached About, any age               — what the last lookup saw
+#   2. the catalog's copy of the About         — on disk, so this is the answer
+#                                                before any lookup, offline and
+#                                                when rate-limited
+#   3. a pointer at the help screen            — only if even that is missing
+# It never fetches: _exakit_marketplace_warm_about does, on demand (install and
+# update). A repository GitHub reports as archived says so after its About.
 exakit_marketplace_addon_description() {
     _mad_cache="$(_exakit_about_cache_path "$1")"
-    _exakit_about_cache_fresh "$_mad_cache" || _exakit_about_fetch "$1" >/dev/null 2>&1 || true
     if [ -f "$_mad_cache" ]; then
         _mad_text="$(head -1 "$_mad_cache" 2>/dev/null || true)"
         if [ -n "$_mad_text" ]; then
+            [ "$(sed -n 4p "$_mad_cache" 2>/dev/null)" = true ] && _mad_text="$_mad_text (archived on GitHub)"
             printf '%s\n' "$_mad_text"
             return 0
         fi
     fi
-    _mad_text="$(_exakit_addon_doc_field "$1" tagline 2>/dev/null || true)"
+    _mad_text="$(_exakit_about_cap "$(_exakit_addon_github "$1" about 2>/dev/null | _exakit_about_sanitise)")"
     if [ -n "$_mad_text" ]; then
-        # A tagline is written as a help-screen header and ends in a period; a
-        # table cell does not.
-        printf '%s\n' "${_mad_text%.}"
+        printf '%s\n' "$_mad_text"
         return 0
     fi
     printf 'Details: exakit help %s\n' "$1"
+}
+
+# exakit_marketplace_addon_name <id> — the add-on repository's name on GitHub:
+# the one the last fetch saw (a renamed repository shows its new name), else the
+# catalog's copy, else the id itself. Never fetches: the description's lookup
+# fills the cache this reads.
+exakit_marketplace_addon_name() {
+    _man_name="$(sed -n 2p "$(_exakit_about_cache_path "$1")" 2>/dev/null || true)"
+    case "$_man_name" in ''|*[!A-Za-z0-9._-]*) _man_name="" ;; esac
+    [ -n "$_man_name" ] || _man_name="$(_exakit_addon_github "$1" name 2>/dev/null || true)"
+    case "$_man_name" in ''|*[!A-Za-z0-9._-]*) _man_name="$1" ;; esac
+    printf '%s\n' "$_man_name"
+}
+
+# _exakit_marketplace_addon_about_offline <id> — the About with no lookup: the
+# cached one at any age, else the catalog's copy; empty when neither exists.
+_exakit_marketplace_addon_about_offline() {
+    _mao_text="$(head -1 "$(_exakit_about_cache_path "$1")" 2>/dev/null || true)"
+    [ -n "$_mao_text" ] || _mao_text="$(_exakit_about_cap "$(_exakit_addon_github "$1" about 2>/dev/null | _exakit_about_sanitise)")"
+    printf '%s\n' "$_mao_text"
+}
+
+# exakit_marketplace_addon_label <id> — what a table row says: the repository's
+# name, with the id typed in commands beside it when the two differ.
+exakit_marketplace_addon_label() {
+    _mal_name="$(exakit_marketplace_addon_name "$1")"
+    if [ "$_mal_name" = "$1" ]; then printf '%s\n' "$1"; else printf '%s (%s)\n' "$_mal_name" "$1"; fi
+}
+
+# exakit_marketplace_addon_url <id> — the add-on repository's link on GitHub:
+# the last fetch's (it follows a rename), else the catalog's.
+exakit_marketplace_addon_url() {
+    _mau_url="$(sed -n 3p "$(_exakit_about_cache_path "$1")" 2>/dev/null || true)"
+    case "$_mau_url" in *[!A-Za-z0-9._/:-]*|*..*) _mau_url="" ;; https://github.com/*/*) ;; *) _mau_url="" ;; esac
+    [ -n "$_mau_url" ] || _mau_url="$(_exakit_addon_github "$1" url 2>/dev/null || true)"
+    case "$_mau_url" in *[!A-Za-z0-9._/:-]*|*..*) return 1 ;; https://github.com/*/*) printf '%s\n' "$_mau_url" ;; *) return 1 ;; esac
 }
 
 # exakit_about_wrap <text> [width] [continuation-indent] — the text in full,
@@ -4484,19 +4596,25 @@ exakit_about_wrap() {
     fi
 }
 
-# _exakit_marketplace_warm_about — fill the cache for the rows that will show a
-# description, before a screen is drawn.
-#
-# This exists for the closing offer: it runs its gate question ("Browse it
-# now?") before the table exists, so the requests land while the user is reading
-# two sentences of prose rather than in front of a half-drawn table.
+# _exakit_marketplace_warm_about [all] — the ONE place an add-on's GitHub name,
+# link and About are looked up, and only on demand: the install's closing offer
+# (the add-ons it can offer, before its table exists, so the requests land while
+# the user reads the gate question) and exakit update ("all": installed ones
+# too, as an update shows them). The cache's TTL and attempt stamp still keep a
+# re-run from asking again. Every other screen reads what this cached.
 _exakit_marketplace_warm_about() {
     while read -r _mw_id <&3; do
         [ -n "$_mw_id" ] || continue
-        _exakit_addon_offerable "$_mw_id" || continue
-        _exakit_marketplace_addon_present "$_mw_id" && continue
-        exakit_marketplace_addon_available "$_mw_id" || continue
-        _exakit_about_fetch "$_mw_id" >/dev/null 2>&1 || true
+        if [ "${1:-}" != all ]; then
+            _exakit_addon_offerable "$_mw_id" || continue
+            _exakit_marketplace_addon_present "$_mw_id" && continue
+            exakit_marketplace_addon_available "$_mw_id" || continue
+        fi
+        # A request that got no answer means GitHub is out of reach for this
+        # run: the rest are not asked (each would wait out its own timeout), and
+        # every screen goes on with the cached or the catalog's copy.
+        _exakit_about_fetch "$_mw_id" >/dev/null 2>&1
+        [ "$?" -eq 3 ] && break
     done 3<<EXAKIT_MW_EOF
 $(exakit_marketplace_addons | cut -d'|' -f1)
 EXAKIT_MW_EOF
@@ -4720,6 +4838,19 @@ EXAKIT_ADDON_NOTES_EOF
 # ticks it, unticking it unticks them, and it may stand with none ticked), and
 # Select All spans them too. Their ids are "<id>:<key>", which no add-on id
 # matches, so nothing that looks an add-on's row up finds one of them.
+# _exakit_addon_table_label <id> — the row's name from EXAKIT_ADDON_TABLE_LABELS
+# ("<id>|<label>" lines the caller resolved, like the versions and descriptions):
+# the repository's name, with the id beside it when they differ. An id with no
+# line is its own label.
+_exakit_addon_table_label() {
+    while IFS='|' read -r _atl_id _atl_label; do
+        [ "$_atl_id" = "$1" ] && [ -n "$_atl_label" ] && { printf '%s\n' "$_atl_label"; return 0; }
+    done <<EXAKIT_ATL_LABELS
+${EXAKIT_ADDON_TABLE_LABELS:-}
+EXAKIT_ATL_LABELS
+    printf '%s\n' "$1"
+}
+
 _exakit_addon_table_build() {
     _atb_f="$1"; shift
     : > "$_atb_f"
@@ -4773,7 +4904,7 @@ EXAKIT_ATB_COUNT
         done <<EXAKIT_ATB_META
 ${EXAKIT_ADDON_TABLE_META:-}
 EXAKIT_ATB_META
-        printf '%s|%s|1|idle|||||| |%s|%s\n' "$_atb_kind" "$_atb_id" \
+        printf '%s|%s|1|idle|||||| |%s|%s\n' "$_atb_kind" "$(_exakit_addon_table_label "$_atb_id")" \
             "$_atb_ver" "$_atb_desc" >> "$_atb_f"
         EXAKIT_ADDON_TABLE_IDS="$EXAKIT_ADDON_TABLE_IDS$_atb_id
 "
@@ -4826,7 +4957,7 @@ EXAKIT_ATB_KIDS
         # and no Status, the install screen has Status and no Description, and
         # the row should say the same thing on either.
         printf '%s|%s|0|disabled|||||%s|%s|%s|%s\n' \
-            "$_atb_dkind" "$_atb_did" "" "$_atb_dwhy" "$_atb_dver" "$_atb_dwhy" >> "$_atb_f"
+            "$_atb_dkind" "$(_exakit_addon_table_label "$_atb_did")" "" "$_atb_dwhy" "$_atb_dver" "$_atb_dwhy" >> "$_atb_f"
         EXAKIT_ADDON_TABLE_IDS="$EXAKIT_ADDON_TABLE_IDS
 "
     done <<EXAKIT_ATB_DISABLED
@@ -5103,9 +5234,13 @@ exakit_marketplace_menu() {
             # opens at once.
             ui_spin_begin "Opening the add-ons"
             if exakit_marketplace_list 1 >"$_mm_state"; then
-               # The Description column is the table's own: each add-on's About.
+               # Each row's name and Description, the add-on repository's on
+               # GitHub: id|label|About. The About first, as its lookup fills the
+               # cache the name is read from.
                while IFS='|' read -r _mm_aid _mm_arest; do
-                   [ -n "$_mm_aid" ] && printf '%s|%s\n' "$_mm_aid" "$(exakit_marketplace_addon_description "$_mm_aid" 2>/dev/null || true)"
+                   [ -n "$_mm_aid" ] || continue
+                   _mm_adesc="$(exakit_marketplace_addon_description "$_mm_aid" 2>/dev/null || true)"
+                   printf '%s|%s|%s\n' "$_mm_aid" "$(exakit_marketplace_addon_label "$_mm_aid")" "$_mm_adesc"
                done <<EXAKIT_MM_ABOUT >"$_mm_state.about"
 $(exakit_marketplace_addons)
 EXAKIT_MM_ABOUT
@@ -5137,6 +5272,8 @@ EXAKIT_MM_ABOUT
     _mm_covered=""
     # <id>|<version>|<description> for selectable add-ons.
     _mm_meta=""
+    # <id>|<label> for every row: the repository's name.
+    _mm_labels=""
     # <id>|<key>|<label>|<version>|<description>|<tick> for child rows.
     _mm_children=""
     while IFS='|' read -r _mm_id _mm_label <&3; do
@@ -5148,6 +5285,9 @@ EXAKIT_MM_ABOUT
         if [ -n "${EXAKIT_MARKETPLACE_ONLY:-}" ]; then
             case ",$EXAKIT_MARKETPLACE_ONLY," in *",$_mm_id,"*) ;; *) continue ;; esac
         fi
+        # The row's name: the repository's on GitHub, the id beside it when different.
+        _mm_labels="$_mm_labels$_mm_id|$(exakit_marketplace_addon_label "$_mm_id")
+"
         # Disabled placeholders keep menu row indexes stable.
         if exakit_marketplace_addon_installed "$_mm_id"; then
             # Keep the version in its own table column.
@@ -5335,6 +5475,7 @@ EXAKIT_MM_COVERED
     done
     EXAKIT_ADDON_TABLE_DISABLED="$_mm_covered"
     EXAKIT_ADDON_TABLE_META="$_mm_meta"
+    EXAKIT_ADDON_TABLE_LABELS="$_mm_labels"
     EXAKIT_ADDON_TABLE_CHILDREN="$_mm_children"
     # The help command supplies details beyond the table.
     info "Details on any add-on: exakit help <id>"
@@ -5412,7 +5553,7 @@ _exakit_marketplace_json_compact() {
     _ml_rows="$1"
     _ml_first=1
     printf '{\n  "addons": [\n'
-    while IFS='|' read -r _ml_id _ml_status _ml_ver _ml_reason _ml_repo _ml_docs; do
+    while IFS='|' read -r _ml_id _ml_status _ml_ver _ml_reason _ml_repo _ml_docs _ml_name _ml_url _ml_about; do
         [ -n "$_ml_id" ] || continue
         [ "$_ml_first" -eq 1 ] || printf ',\n'
         _ml_first=0
@@ -5436,6 +5577,15 @@ _exakit_marketplace_json_compact() {
             printf ', "docs": "%s"' "$(printf '%s' "$_ml_docs" | sed 's/\\/\\\\/g; s/"/\\"/g')"
         else
             printf ', "docs": null'
+        fi
+        # The add-on repository on GitHub: its name, link and About (as the last
+        # lookup cached them, else the catalog's copy).
+        printf ', "name": "%s"' "${_ml_name:-$_ml_id}"
+        if [ -n "$_ml_url" ]; then printf ', "url": "%s"' "$_ml_url"; else printf ', "url": null'; fi
+        if [ -n "$_ml_about" ]; then
+            printf ', "about": "%s"' "$(printf '%s' "$_ml_about" | sed 's/\\/\\\\/g; s/"/\\"/g')"
+        else
+            printf ', "about": null'
         fi
         printf '}'
     done <<EXAKIT_ML_JSON
@@ -5483,7 +5633,9 @@ exakit_marketplace_list() {
             https://*) ;;
             *) _ml_docs="" ;;
         esac
-        _ml_rows="$_ml_rows$_ml_id|$_ml_status|$_ml_ver|$_ml_reason|$_ml_repo|$_ml_docs
+        # The repository's name, link and About on GitHub, from the cache or the
+        # catalog: this listing never fetches. The About last: prose may hold a "|".
+        _ml_rows="$_ml_rows$_ml_id|$_ml_status|$_ml_ver|$_ml_reason|$_ml_repo|$_ml_docs|$(exakit_marketplace_addon_name "$_ml_id")|$(exakit_marketplace_addon_url "$_ml_id" 2>/dev/null || true)|$(_exakit_marketplace_addon_about_offline "$_ml_id")
 "
     done <<EXAKIT_ML_EOF
 $(exakit_marketplace_addons)
@@ -5498,7 +5650,7 @@ EXAKIT_ML_EOF
         return 0
     fi
 
-    while IFS='|' read -r _ml_id _ml_status _ml_ver _ml_reason _ml_repo _ml_docs; do
+    while IFS='|' read -r _ml_id _ml_status _ml_ver _ml_reason _ml_repo _ml_docs _ml_rest; do
         [ -n "$_ml_id" ] || continue
         printf '%-16s %s%s%s\n' "$_ml_id" "$_ml_status" \
             "${_ml_ver:+ }" "$_ml_ver"
@@ -7287,6 +7439,9 @@ $_upd_more_targets" ;;
         esac
     fi
     exakit_init_logging
+    # Showing updates is one of the two moments the add-ons' GitHub names,
+    # links and Abouts are looked up (the other is the install's offer).
+    command -v _exakit_marketplace_warm_about >/dev/null 2>&1 && _exakit_marketplace_warm_about all
     # --json: the same run, with every screen line sent to the logfile and
     # ONE object on stdout at the end. Nothing may prompt under --json, so a
     # database change that was not pre-answered (--yes or

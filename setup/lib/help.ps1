@@ -38,9 +38,51 @@ function Get-ExakitHelpDocument {
     param([string]$Id)
     $shipped = Join-Path (Get-ExakitHelpKitDir) "$Id.json"
     if (Test-Path $shipped) {
-        try { return (Get-Content -Raw -Path $shipped -Encoding UTF8 | ConvertFrom-Json) } catch { return $null }
+        $doc = $null
+        try { $doc = (Get-Content -Raw -Path $shipped -Encoding UTF8 | ConvertFrom-Json) } catch { return $null }
+        return (Add-ExakitHelpGitHubFacts -Id $Id -Doc $doc)
     }
     return $null
+}
+
+# Add-ExakitHelpGitHubFacts <id> <doc> - an add-on's title, tagline and repository
+# are its GitHub repository's, never typed into its help document: the name and
+# About the last lookup cached (a renamed repository under its new name), else
+# the catalog's copy. A help screen never fetches, and reads the catalog itself
+# so help stands alone. Twin of github_facts in help.sh.
+function Add-ExakitHelpGitHubFacts {
+    param([string]$Id, $Doc)
+    if (-not $Doc -or $Doc.kind -ne "addon") { return $Doc }
+    $kitRoot = ""
+    if ($script:LibDir) { $kitRoot = Split-Path (Split-Path $script:LibDir -Parent) -Parent }
+    $catalogPath = Join-Path (Join-Path $kitRoot "marketplace") "catalog.json"
+    if (-not $kitRoot -or -not (Test-Path $catalogPath)) { return $Doc }
+    $row = $null
+    try {
+        $row = @((Get-Content -Raw -Path $catalogPath -Encoding UTF8 | ConvertFrom-Json).addons) |
+            Where-Object { $_.id -eq $Id } | Select-Object -First 1
+    } catch { return $Doc }
+    if (-not $row -or -not $row.github) { return $Doc }
+    $name = [string]$row.github.name; $about = [string]$row.github.about; $url = [string]$row.github.url
+    $cacheDir = if ($env:EXAKIT_ABOUT_CACHE_DIR) { $env:EXAKIT_ABOUT_CACHE_DIR } else { Join-Path (Join-Path $script:ExakitHome "cache") "about" }
+    $lines = @()
+    $cache = Join-Path $cacheDir "$Id.txt"
+    if (Test-Path $cache) {
+        try { $lines = @(Get-Content -Path $cache -Encoding UTF8 -TotalCount 4 | ForEach-Object { ("" + $_).Trim() }) } catch { $lines = @() }
+    }
+    if ($lines.Count -ge 1 -and $lines[0]) { $about = $lines[0] }
+    if ($lines.Count -ge 2 -and $lines[1] -match '^[A-Za-z0-9._-]+$') { $name = $lines[1] }
+    if ($lines.Count -ge 3 -and $lines[2] -match '^https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$') { $url = $lines[2] }
+    $archived = ($lines.Count -ge 4 -and $lines[3] -eq "true")
+    if ($name -notmatch '^[A-Za-z0-9._-]+$' -or -not $about.Trim() -or $url -notmatch '^https://github\.com/' -or $url.Contains('..')) {
+        return $Doc
+    }
+    $about = ([regex]::Replace($about, '\p{Cc}', ' ') -replace '\s+', ' ').Trim()
+    if ($archived) { $about = "$about (archived on GitHub)" }
+    $Doc | Add-Member -NotePropertyName title -NotePropertyValue $name -Force
+    $Doc | Add-Member -NotePropertyName tagline -NotePropertyValue $about -Force
+    $Doc | Add-Member -NotePropertyName repo -NotePropertyValue $url -Force
+    return $Doc
 }
 
 # Get-ExakitHelpDocuments - every document this kit carries.

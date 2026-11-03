@@ -79,13 +79,19 @@ exakit_help_doc() {
     exakit_help_doc_local "$1"
 }
 
-# _exakit_help_docs_args - "id=path" for every document this kit carries.
+# _exakit_help_docs_args - "id=path" for every document this kit carries, then
+# where the add-ons' GitHub names and Abouts are: the catalog's copy and the
+# cache the last lookup wrote (a help screen never fetches).
 _exakit_help_docs_args() {
     exakit_help_ids 2>/dev/null | while IFS= read -r _hda_id; do
         [ -n "$_hda_id" ] || continue
         _hda_path="$(exakit_help_doc_local "$_hda_id" 2>/dev/null)" || continue
         printf '%s=%s\n' "$_hda_id" "$_hda_path"
     done
+    _hda_cat="$(_exakit_marketplace_root 2>/dev/null)/marketplace/catalog.json"
+    [ -f "$_hda_cat" ] && printf '__catalog__=%s\n' "$_hda_cat"
+    [ -n "${EXAKIT_ABOUT_CACHE_DIR:-}" ] && printf '__about__=%s\n' "$EXAKIT_ABOUT_CACHE_DIR"
+    return 0
 }
 
 # exakit_help_render <mode> [arg] - every screen this module draws.
@@ -115,14 +121,60 @@ import json, sys, textwrap
 
 mode, color, width, arg = sys.argv[1], sys.argv[2] == "1", int(sys.argv[3]), sys.argv[4]
 docs = {}
+places = {}
 for pair in sys.argv[5:]:
     if "=" not in pair:
         continue
     key, path = pair.split("=", 1)
+    if key.startswith("__"):
+        places[key] = path
+        continue
     try:
         docs[key] = json.load(open(path, encoding="utf-8"))
     except Exception:
         pass
+
+import os, re
+
+def github_facts():
+    """Each add-on's name, About and link: its repository's on GitHub, as the last lookup cached them (a
+    renamed repository under its new name), else the catalog's copy. Twin of Get-ExakitHelpGitHubFacts."""
+    facts = {}
+    try:
+        rows = json.load(open(places["__catalog__"], encoding="utf-8"))["addons"]
+    except Exception:
+        return facts
+    plain = re.compile(r"^[A-Za-z0-9._-]+$")
+    for row in rows:
+        block = row.get("github") if isinstance(row, dict) else None
+        if not isinstance(block, dict) or not isinstance(row.get("id"), str):
+            continue
+        name, about, url = block.get("name"), block.get("about"), block.get("url")
+        archived = False
+        try:
+            with open(os.path.join(places.get("__about__", ""), row["id"] + ".txt"), encoding="utf-8") as handle:
+                cached = [line.strip() for line in handle.read().splitlines()[:4]]
+        except Exception:
+            cached = []
+        if cached and cached[0]:
+            about = cached[0]
+        if len(cached) > 1 and plain.fullmatch(cached[1]):
+            name = cached[1]
+        if len(cached) > 2 and re.fullmatch(r"https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+", cached[2]):
+            url = cached[2]
+        archived = len(cached) > 3 and cached[3] == "true"
+        if not (isinstance(name, str) and plain.fullmatch(name) and isinstance(about, str) and about.strip()
+                and isinstance(url, str) and url.startswith("https://github.com/") and ".." not in url):
+            continue
+        about = " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", about).split())
+        facts[row["id"]] = {"title": name, "tagline": about + (" (archived on GitHub)" if archived else ""),
+                            "repo": url}
+    return facts
+
+# An add-on's title, tagline and repository are its GitHub repository's: never typed into its help document.
+for key, facts in github_facts().items():
+    if key in docs:
+        docs[key] = dict(docs[key], **facts)
 
 WRAP = min(width, 100)
 

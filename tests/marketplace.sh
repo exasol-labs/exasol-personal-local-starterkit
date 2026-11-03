@@ -260,9 +260,9 @@ lacks "common.sh types no add-on description" "Live dashboards on your Exasol da
 lacks "exakit-common.ps1 types no add-on description" "Live dashboards on your Exasol data" \
     "$(cat "$ROOT/setup/lib/exakit-common.ps1")"
 
-# Which repository to ask is resolved OFFLINE, from the help document the kit
-# already ships -- so a cold, network-less machine still knows the answer exists.
-check "repo comes from the shipped help doc" "exasol-labs/dash-server" "$(_exakit_addon_repo dash-server)"
+# Which repository to ask is resolved OFFLINE, from the catalog's GitHub block
+# the kit ships -- so a cold, network-less machine still knows the answer exists.
+check "repo comes from the catalog's GitHub block" "exasol-labs/dash-server" "$(_exakit_addon_repo dash-server)"
 check "json-tables points at its own upstream" "exasol-labs/exasol-json-tables" "$(_exakit_addon_repo json-tables)"
 check "an add-on with no document has no repo" "no" \
     "$(_exakit_addon_repo not-a-tool >/dev/null 2>&1 && echo yes || echo no)"
@@ -302,11 +302,15 @@ check "an over-long word is not broken" "supercalifragilistic|next" \
 check "the truncating helper is gone" "no" \
     "$(command -v exakit_about_fit >/dev/null 2>&1 && echo yes || echo no)"
 
-# Offline is this suite's default. With nothing cached the answer is the help
-# document's own tagline, minus the trailing period a header carries and a table
-# cell does not.
-check "offline falls back to the tagline" "SQL editing and schema browsing inside VS Code" \
+# Offline is this suite's default. With nothing cached the answer is the
+# catalog's copy of the repository's GitHub About, as tools/addon_github.py
+# wrote it.
+check "offline falls back to the catalog's GitHub About" \
+    "$(python3 -c 'import json,sys; print(next(r["github"]["about"] for r in json.load(open(sys.argv[1]))["addons"] if r["id"] == "exasol-vscode"))' "$ROOT/marketplace/catalog.json")" \
     "$(exakit_marketplace_addon_description exasol-vscode)"
+check "and so do the name and the link" "exasol-json-tables|exasol-json-tables (json-tables)|https://github.com/exasol-labs/exasol-json-tables" \
+    "$(exakit_marketplace_addon_name json-tables)|$(exakit_marketplace_addon_label json-tables)|$(exakit_marketplace_addon_url json-tables)"
+check "a name that matches its id is not repeated" "dbt-exasol" "$(exakit_marketplace_addon_label dbt-exasol)"
 check "and nothing was cached by that" "no" \
     "$([ -f "$(_exakit_about_cache_path exasol-vscode)" ] && echo yes || echo no)"
 # Nothing cached AND no document: still a usable cell, never a blank one.
@@ -325,10 +329,41 @@ check "a stale cache survives a failed lookup" "Cached About line" "$( (
     EXAKIT_ABOUT_OFFLINE=0; EXAKIT_ABOUT_URL="https://127.0.0.1:9/repos"
     exakit_marketplace_addon_description dash-server ) )"
 
+# A screen never looks anything up: only the install's offer and exakit update
+# do (_exakit_marketplace_warm_about). A stale cache is shown as it is, and no
+# attempt is even stamped.
+check "a screen makes no lookup, however old the cache" "Cached About line|no attempt" "$( (
+    EXAKIT_ABOUT_OFFLINE=0; EXAKIT_ABOUT_URL="https://127.0.0.1:9/repos"
+    printf '%s|' "$(exakit_marketplace_addon_description dash-server)"
+    [ -f "$EXAKIT_ABOUT_CACHE_DIR/.attempt-dash-server" ] && echo attempted || echo "no attempt" ) )"
+
+# What the last lookup saw wins over the catalog: a renamed repository shows its
+# new name and link; an archived one says so. A cache line that is not the plain
+# shape is ignored rather than shown.
+printf 'Renamed About\nnew-scheduler\nhttps://github.com/exasol-labs/new-scheduler\ntrue\n' \
+    > "$(_exakit_about_cache_path exasol-scheduler)"
+check "a renamed repository shows its new name and link" "new-scheduler (exasol-scheduler)|https://github.com/exasol-labs/new-scheduler" \
+    "$(exakit_marketplace_addon_label exasol-scheduler)|$(exakit_marketplace_addon_url exasol-scheduler)"
+check "an archived repository says so" "Renamed About (archived on GitHub)" \
+    "$(exakit_marketplace_addon_description exasol-scheduler)"
+printf 'About\nbad name;rm\nhttps://evil.example/x\nfalse\n' > "$(_exakit_about_cache_path exasol-scheduler)"
+check "a tampered cache falls back to the catalog's name and link" "exasol-scheduler|https://github.com/exasol-labs/exasol-scheduler" \
+    "$(exakit_marketplace_addon_label exasol-scheduler)|$(exakit_marketplace_addon_url exasol-scheduler)"
+rm -f "$(_exakit_about_cache_path exasol-scheduler)"
+
+# GitHub out of reach: the round stops at the first request that gets no answer,
+# instead of every add-on waiting out its own timeout; screens carry on with the
+# catalog's copy.
+check "an unreachable GitHub stops the lookup round after one request" "1" "$( (
+    EXAKIT_ABOUT_OFFLINE=0; EXAKIT_ABOUT_URL="https://127.0.0.1:9/repos"; EXAKIT_ABOUT_TTL=0
+    rm -f "$EXAKIT_ABOUT_CACHE_DIR"/.attempt-* 2>/dev/null
+    _exakit_marketplace_warm_about all >/dev/null 2>&1
+    ls -a "$EXAKIT_ABOUT_CACHE_DIR" | grep -c '^\.attempt-' ) )"
+
 # The attempt stamp is written BEFORE the request, so one attempt per id per TTL
 # is made whatever the answer -- this is what keeps a rate-limited or offline
 # machine from paying a timeout on every single run.
-check "a failed lookup is not retried within the TTL" "first=1 second=2" "$( (
+check "a failed lookup is not retried within the TTL" "first=3 second=2" "$( (
     EXAKIT_ABOUT_OFFLINE=0; EXAKIT_ABOUT_URL="https://127.0.0.1:9/repos"
     _exakit_about_fetch exasol-vscode >/dev/null 2>&1; printf 'first=%s ' "$?"
     _exakit_about_fetch exasol-vscode >/dev/null 2>&1; printf 'second=%s' "$?" ) )"
@@ -743,7 +778,9 @@ check "the menu says so instead of offering an install" "managed outside the kit
     # The row sits inside a panel now, so strip whatever border precedes it -
     # ASCII here, since a redirected run is always in plain mode - before
     # anchoring on the id.
-    exakit_marketplace_menu 2>/dev/null | sed 's/^[^A-Za-z]*//' | grep '^json-tables' | grep -o 'managed outside the kit' | head -1
+    # The row and its continuation line: the Description cell folds a long state.
+    exakit_marketplace_menu 2>/dev/null | sed 's/^[^A-Za-z]*//' | grep -A1 '^exasol-json-tables (json-tables)' \
+        | tr -s ' |\n' '   ' | grep -o 'managed outside the kit' | head -1
 ) )"
 check "and it cannot be selected" "not-selectable" "$( (
     PATH="$WORK/manual-bin:$PATH"

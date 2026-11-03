@@ -5199,16 +5199,26 @@ function Get-ExakitMarketplaceAddons {
         if ($id -cnotmatch '^[a-z0-9][a-z0-9_-]*$' -or $seen.ContainsKey($id)) {
             throw "Invalid or repeated add-on id: $id"
         }
-        if ($row.backend -ne 'python' -or -not $row.label -or
-            ([string]$row.label) -match '[\r\n|]' -or -not $row.default_version) {
+        if ($row.backend -ne 'python' -or $null -ne $row.label -or -not $row.default_version) {
             throw "Invalid marketplace definition: $id"
+        }
+        # The add-on's GitHub repository, as tools/addon_github.py copied it: the repo and name go into URLs
+        # and file names, the About into a terminal, so each is held to its plain shape. Twin of model.github_block.
+        $gh = $row.github
+        $ghRepo = [string]$gh.repo; $ghName = [string]$gh.name; $ghAbout = [string]$gh.about
+        if ($null -eq $gh -or $ghRepo -notmatch '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$' -or $ghRepo.Contains('..') -or
+            [string]$gh.url -cne "https://github.com/$ghRepo" -or $ghName -notmatch '^[A-Za-z0-9._-]+$' -or
+            -not $ghAbout.Trim() -or $ghAbout.Length -gt 300 -or $ghAbout -match '\p{Cc}') {
+            throw "Invalid marketplace definition: ${id}: github must name the add-on's repository (tools/addon_github.py)"
         }
         if ($null -ne $row.visible -and $row.visible -isnot [bool]) { throw "Invalid visible setting: $id" }
         $seen[$id] = $true
         $visible = ($row.visible -ne $false)
         $stem = (($id -split '[-_]') | ForEach-Object { $_.Substring(0, 1).ToUpperInvariant() + $_.Substring(1) }) -join ''
+        $label = if ($ghName -ceq $id) { $id } else { "$ghName ($id)" }
         $addon = [pscustomobject]@{
-            Id = $id; Label = [string]$row.label
+            Id = $id; Label = $label
+            GitHubRepo = $ghRepo; GitHubUrl = [string]$gh.url; GitHubName = $ghName; GitHubAbout = $ghAbout
             InstallFn = "Invoke-Marketplace${stem}Install"
             ValidateFn = "Invoke-Marketplace${stem}Validate"
             UpdateFn = "Invoke-Marketplace${stem}Update"
@@ -5233,7 +5243,6 @@ function Get-ExakitMarketplaceAddons {
             $addon | Add-Member -NotePropertyName ChildrenFn -NotePropertyValue 'Get-NotebookTableChildren'
             $addon | Add-Member -NotePropertyName ChildrenPickedFn -NotePropertyValue 'Set-NotebookTableChildrenPicked'
         }
-        $addon.Label = [string]$row.label
         $addon | Add-Member -NotePropertyName Visible -NotePropertyValue $visible -Force
         $addon | Add-Member -NotePropertyName Backend -NotePropertyValue ([string]$row.backend) -Force
         $addon | Add-Member -NotePropertyName DefaultVersion -NotePropertyValue ([string]$row.default_version) -Force
@@ -5532,16 +5541,18 @@ function Get-ExakitAddonDocument {
     return $null
 }
 
-# Get-ExakitAddonRepo <id> - the add-on's repository, as owner/name.
+# Get-ExakitAddonRepo <id> - the add-on's repository, as owner/name, from the
+# catalog's GitHub block.
 #
 # This value is interpolated into a URL, so it is validated as two plain path
-# segments and nothing else.
+# segments and nothing else. Twin of _exakit_addon_repo.
 function Get-ExakitAddonRepo {
     param([string]$Id)
-    $doc = Get-ExakitAddonDocument $Id
-    if (-not $doc) { return "" }
-    $repo = [string]$doc.repo
-    if ($repo -match '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$') { return $repo }
+    $addon = $null
+    try { $addon = Get-ExakitMarketplaceAddon $Id } catch { $addon = $null }
+    if (-not $addon) { return "" }
+    $repo = [string]$addon.GitHubRepo
+    if ($repo -match '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$' -and -not $repo.Contains('..')) { return $repo }
     return ""
 }
 
@@ -5601,13 +5612,30 @@ function Update-ExakitAboutCache {
     New-Item -ItemType File -Force -Path $attempt -ErrorAction SilentlyContinue | Out-Null
     try {
         $doc = Invoke-RestMethod -Uri "$($script:ExakitAboutUrl)/$repo" -UseBasicParsing -TimeoutSec 5
-    } catch { return $false }
+    } catch {
+        # No answer (offline, timed out, refused): the caller stops asking for this run. An HTTP error
+        # (a deleted repository's 404, a rate limit's 403) is GitHub answering; the next may still be asked.
+        if (-not $_.Exception.Response) { $script:ExakitAboutUnreachable = $true }
+        return $false
+    }
     if (-not $doc) { return $false }
     $text = Convert-ExakitAboutText ([string]$doc.description)
     if (-not $text) { return $false }
+    # The repository as GitHub names it now: a renamed or transferred one answers
+    # under its new owner/name. Anything that is not plain owner/name, with the
+    # matching link, is not kept.
+    $full = [string]$doc.full_name; $url = [string]$doc.html_url
+    if ($full -notmatch '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$' -or $full.Contains('..') -or $url -cne "https://github.com/$full") {
+        $full = ""; $url = ""
+    }
+    if ($full -and $full -ne $repo) { Write-ExakitLog "INFO" "$repo is now $full on GitHub (refresh with tools/addon_github.py)" }
+    $archived = if ($doc.archived -eq $true) { "true" } else { "false" }
+    if ($archived -eq "true") { Write-ExakitLog "WARN" "$repo is archived on GitHub ($Id)" }
+    $name = if ($full) { $full.Split('/')[1] } else { "" }
     $tmp = "$cache.tmp"
     try {
-        Set-Content -Path $tmp -Value $text -Encoding UTF8 -ErrorAction Stop
+        # Line 1 the About, line 2 the repository's name, 3 its link, 4 archived. Twin of _exakit_about_fetch.
+        Set-Content -Path $tmp -Value @($text, $name, $url, $archived) -Encoding UTF8 -ErrorAction Stop
         Move-Item -Force -Path $tmp -Destination $cache -ErrorAction Stop
     } catch {
         Remove-Item -Force $tmp -ErrorAction SilentlyContinue
@@ -5616,30 +5644,75 @@ function Update-ExakitAboutCache {
     return $true
 }
 
-# Get-ExakitMarketplaceAddonDescription <id> - the one-liner a screen shows.
-# Always answers something; the chain degrades instead of blanking a column:
-#   1. a cached About younger than the TTL     - the common case, no network
-#   2. a fresh fetch                           - one request, timeout bounded
-#   3. a STALE cached About, any age           - old wording beats no wording
-#   4. the help document's own tagline         - on disk, so this is the answer
-#                                                offline and when rate-limited
-#   5. a pointer at the help screen            - only if even that is missing
+# Get-ExakitMarketplaceAddonDescription <id> - the one-liner a screen shows: the
+# add-on repository's GitHub About. Always answers something; the chain degrades
+# instead of blanking a column:
+#   1. the cached About, any age               - what the last lookup saw
+#   2. the catalog's copy of the About         - on disk, so this is the answer
+#                                                before any lookup, offline and
+#                                                when rate-limited
+#   3. a pointer at the help screen            - only if even that is missing
+# It never fetches: Update-ExakitMarketplaceAboutCache does, on demand (install
+# and update). A repository GitHub reports as archived says so after its About.
+# Twin of exakit_marketplace_addon_description.
 function Get-ExakitMarketplaceAddonDescription {
     param([string]$Id)
-    $cache = Join-Path (Get-ExakitAboutCacheDir) "$Id.txt"
-    if (-not (Test-ExakitAboutCacheFresh $cache)) { Update-ExakitAboutCache $Id | Out-Null }
-    if (Test-Path $cache) {
-        $text = ""
-        try { $text = ((Get-Content -Path $cache -Encoding UTF8 -TotalCount 1) | Out-String -Width 4096).Trim() } catch { }
+    $lines = @(Get-ExakitAboutCacheLines $Id)
+    if ($lines.Count -ge 1 -and $lines[0]) {
+        if ($lines.Count -ge 4 -and $lines[3] -eq "true") { return "$($lines[0]) (archived on GitHub)" }
+        return $lines[0]
+    }
+    $addon = $null
+    try { $addon = Get-ExakitMarketplaceAddon $Id } catch { $addon = $null }
+    if ($addon -and $addon.GitHubAbout) {
+        $text = Convert-ExakitAboutText ([string]$addon.GitHubAbout)
         if ($text) { return $text }
     }
-    $doc = Get-ExakitAddonDocument $Id
-    if ($doc -and $doc.tagline) {
-        # A tagline is written as a help-screen header and ends in a period; a
-        # table cell does not.
-        return ([string]$doc.tagline).TrimEnd(".")
-    }
     return "Details: exakit help $Id"
+}
+
+# Get-ExakitAboutCacheLines <id> - the cached lines, trimmed; none when there is no cache.
+function Get-ExakitAboutCacheLines {
+    param([string]$Id)
+    $cache = Join-Path (Get-ExakitAboutCacheDir) "$Id.txt"
+    if (-not (Test-Path $cache)) { return @() }
+    try { return @(Get-Content -Path $cache -Encoding UTF8 -TotalCount 4 | ForEach-Object { ("" + $_).Trim() }) } catch { return @() }
+}
+
+# Get-ExakitMarketplaceAddonName <id> - the add-on repository's name on GitHub:
+# the one the last fetch saw (a renamed repository shows its new name), else the
+# catalog's copy, else the id. Never fetches. Twin of exakit_marketplace_addon_name.
+function Get-ExakitMarketplaceAddonName {
+    param([string]$Id)
+    $lines = @(Get-ExakitAboutCacheLines $Id)
+    if ($lines.Count -ge 2 -and $lines[1] -match '^[A-Za-z0-9._-]+$') { return $lines[1] }
+    $addon = $null
+    try { $addon = Get-ExakitMarketplaceAddon $Id } catch { $addon = $null }
+    if ($addon -and ([string]$addon.GitHubName) -match '^[A-Za-z0-9._-]+$') { return [string]$addon.GitHubName }
+    return $Id
+}
+
+# Get-ExakitMarketplaceAddonLabel <id> - what a table row says: the repository's
+# name, with the id typed in commands beside it when the two differ.
+function Get-ExakitMarketplaceAddonLabel {
+    param([string]$Id)
+    $name = Get-ExakitMarketplaceAddonName $Id
+    if ($name -ceq $Id) { return $Id }
+    return "$name ($Id)"
+}
+
+# Get-ExakitMarketplaceAddonUrl <id> - the add-on repository's link on GitHub:
+# the last fetch's (it follows a rename), else the catalog's. Twin of
+# exakit_marketplace_addon_url.
+function Get-ExakitMarketplaceAddonUrl {
+    param([string]$Id)
+    $pattern = '^https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$'
+    $lines = @(Get-ExakitAboutCacheLines $Id)
+    if ($lines.Count -ge 3 -and $lines[2] -match $pattern -and -not $lines[2].Contains('..')) { return $lines[2] }
+    $addon = $null
+    try { $addon = Get-ExakitMarketplaceAddon $Id } catch { $addon = $null }
+    if ($addon -and ([string]$addon.GitHubUrl) -match $pattern) { return [string]$addon.GitHubUrl }
+    return ""
 }
 
 # Format-ExakitAboutWrap <text> [width] [pad] - the text in full, folded onto as
@@ -5671,14 +5744,23 @@ function Format-ExakitAboutWrap {
     return $out
 }
 
-# Update-ExakitMarketplaceAboutCache - fill the cache for the rows that will
-# show a description, before a screen is drawn. Twin of
-# _exakit_marketplace_warm_about.
+# Update-ExakitMarketplaceAboutCache [-All] - the ONE place an add-on's GitHub
+# name, link and About are looked up, and only on demand: the install's closing
+# offer (the add-ons it can offer) and exakit update (-All: installed ones too).
+# The cache's TTL and attempt marker still keep a re-run from asking again.
+# Every other screen reads what this cached. Twin of _exakit_marketplace_warm_about.
 function Update-ExakitMarketplaceAboutCache {
+    param([switch]$All)
+    $script:ExakitAboutUnreachable = $false
     foreach ($addon in (Get-ExakitMarketplaceAddons)) {
-        if (-not (Test-ExakitAddonOfferable $addon.Id)) { continue }
-        if (Test-ExakitMarketplaceAddonPresent $addon.Id) { continue }
-        if (-not (Get-Command $addon.InstallFn -ErrorAction SilentlyContinue)) { continue }
+        # GitHub out of reach for this run: the rest are not asked (each would wait out its own timeout), and
+        # every screen goes on with the cached or the catalog's copy.
+        if ($script:ExakitAboutUnreachable) { break }
+        if (-not $All) {
+            if (-not (Test-ExakitAddonOfferable $addon.Id)) { continue }
+            if (Test-ExakitMarketplaceAddonPresent $addon.Id) { continue }
+            if (-not (Get-Command $addon.InstallFn -ErrorAction SilentlyContinue)) { continue }
+        }
         Update-ExakitAboutCache $addon.Id | Out-Null
     }
 }
@@ -5854,7 +5936,12 @@ function Show-ExakitMarketplaceMenu {
             $snapshot = Show-ExakitMarketplaceList -Json
             [System.IO.File]::WriteAllText($statesPath, ("" + $snapshot), (New-Object System.Text.UTF8Encoding($false)))
             # The Description column is the table's own: each add-on's About.
-            $about = @(foreach ($addon in Get-ExakitMarketplaceAddons) { "$($addon.Id)|$(Get-ExakitMarketplaceAddonDescription $addon.Id)" })
+            # Each row's name and Description, the add-on repository's on GitHub: id|label|About. The About
+            # first, as its lookup fills the cache the name is read from.
+            $about = @(foreach ($addon in Get-ExakitMarketplaceAddons) {
+                $said = Get-ExakitMarketplaceAddonDescription $addon.Id
+                "$($addon.Id)|$(Get-ExakitMarketplaceAddonLabel $addon.Id)|$said"
+            })
             [System.IO.File]::WriteAllText($aboutPath, (($about -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
             $python = Get-ExakitPersonaPython
             $frontends = if ($env:EXAKIT_NOTEBOOK_FRONTENDS) { $env:EXAKIT_NOTEBOOK_FRONTENDS } else { 'jupyterlab,marimo,positron' }
@@ -6080,7 +6167,7 @@ function Show-ExakitMarketplaceMenu {
         # cell would make the row two lines tall - which is the frame-height
         # invariant the redraw depends on.
         $desc = ("" + $selectable[$i].Description) -replace "`r?`n", " "
-        $parentRow = Add-ExakitTableRow -Kind $kind -Label $selectable[$i].Id `
+        $parentRow = Add-ExakitTableRow -Kind $kind -Label (Get-ExakitMarketplaceAddonLabel $selectable[$i].Id) `
             -Col2 ("" + $selectable[$i].Version) -Col3 $desc -Table $script:ExakitAddonTable
         [void]$addonIds.Add($selectable[$i].Id)
         $defaults += $parentRow
@@ -6102,7 +6189,7 @@ function Show-ExakitMarketplaceMenu {
         # The state word goes to Description (the selection screen) AND to the
         # disabled note (the Status cell on the install screen), so the row says
         # the same thing on either.
-        $at = Add-ExakitTableRow -Kind $kind -Label $covered[$i].Label `
+        $at = Add-ExakitTableRow -Kind $kind -Label (Get-ExakitMarketplaceAddonLabel $covered[$i].Label) `
             -Col2 ("" + $covered[$i].Version) -Col3 ("" + $covered[$i].Why) -Table $script:ExakitAddonTable
         Disable-ExakitTableRow -Row $at -Note ("" + $covered[$i].Why) -Table $script:ExakitAddonTable
         [void]$addonIds.Add("")

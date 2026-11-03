@@ -970,6 +970,21 @@ jobs:
       - run: python3 tests/test_notebook_bundle.py
       - run: python3 tests/test_example_library.py
         if: matrix.shard == 4
+      - run: python3 tests/test_addon_github.py
+        if: matrix.shard == 4
+      # The catalog's copy of each add-on's GitHub name, link and About is the
+      # kit's answer when GitHub cannot be reached. A repository that renamed
+      # itself or reworded its About is flagged here (refresh with
+      # tools/addon_github.py); a warning, so another project's edit does not
+      # fail an unrelated change.
+      - name: the add-ons' GitHub names, links and Abouts match the catalog
+        if: matrix.shard == 4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ! python3 tools/addon_github.py --check; then
+            echo "::warning title=add-on catalog drift::marketplace/catalog.json no longer matches GitHub; run python3 tools/addon_github.py"
+          fi
       - run: python3 tests/test_addon_help.py
         if: matrix.shard == 4
       - run: python3 tests/test_exasol_mlflow.py

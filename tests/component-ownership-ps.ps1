@@ -18,6 +18,8 @@ foreach ($file in @('setup/lib/exakit-common.ps1','setup/lib/exapump.ps1','setup
 }
 $script:ExakitHome = Join-Path $work 'kit'
 $script:ManifestPath = Join-Path $script:ExakitHome 'manifest.json'
+# The versions cache the uv pin is read from (none here: the kit's own versions.json answers).
+$script:VersionsCachePath = Join-Path $work 'versions-cache.json'
 $script:BinDir = Join-Path $work 'bin'
 $script:manifest = @{}
 function Get-ExakitManifestValue([string]$Path) { return $script:manifest[$Path] }

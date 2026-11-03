@@ -43,6 +43,49 @@ class MarketplaceModelTest(unittest.TestCase):
         self.assertEqual([versions["components"][item.id]["version"] for item in addons],
                          [item.version for item in addons])
 
+    def test_names_links_and_abouts_are_the_repositories_on_github(self) -> None:
+        # The catalog carries each add-on's GitHub block (tools/addon_github.py writes it); the row's name is the
+        # repository's, with the id typed in commands beside it only when the two differ.
+        addons = {item.id: item for item in load_addons(self.root)}
+        self.assertEqual("dbt-exasol", addons["dbt-exasol"].label)
+        self.assertEqual("exasol-json-tables (json-tables)", addons["json-tables"].label)
+        self.assertEqual("https://github.com/exasol-labs/exasol-json-tables", addons["json-tables"].github["url"])
+        for item in addons.values():
+            self.assertEqual(f"https://github.com/{item.github['repo']}", item.github["url"])
+            self.assertTrue(item.github["about"])
+
+    def test_a_github_block_that_is_not_the_safe_shape_is_refused(self) -> None:
+        # The repo and name go into URLs and file names, the About into a terminal: anything else is refused
+        # before a screen is drawn, and a hand-typed label is not a name.
+        catalog_path = self.root / "marketplace/catalog.json"
+        original = json.loads(catalog_path.read_text())
+        good = dict(original["addons"][0]["github"])
+        cases = {
+            "github must name": None,
+            "github.repo must be owner/name": dict(good, repo="https://evil.example/x"),
+            "github.repo must be owner/name ": dict(good, repo="../../etc"),
+            "github.url must be": dict(good, url="https://evil.example/dash-server"),
+            "github.name must be": dict(good, name="dash server;rm"),
+            "github.about must be": dict(good, about="line one\nline two"),
+            "github.about must be ": dict(good, about="\x1b[31mred"),
+            "github.about must be  ": dict(good, about="x" * 301),
+            "github.about must be   ": dict(good, about="   "),
+        }
+        for message, block in cases.items():
+            catalog = json.loads(json.dumps(original))
+            if block is None:
+                del catalog["addons"][0]["github"]
+            else:
+                catalog["addons"][0]["github"] = block
+            catalog_path.write_text(json.dumps(catalog))
+            with self.subTest(message.strip()), self.assertRaisesRegex(CatalogError, message.strip()):
+                load_addons(self.root)
+        catalog = json.loads(json.dumps(original))
+        catalog["addons"][0]["label"] = "dash-server (hand-typed)"
+        catalog_path.write_text(json.dumps(catalog))
+        with self.assertRaisesRegex(CatalogError, "comes from GitHub"):
+            load_addons(self.root)
+
     def test_addon_answer_is_normalized_and_validated_before_apply(self) -> None:
         addons = load_addons(self.root)
         self.assertEqual("dash-server,notebook", parse_addon_answer(addons, " DASH-SERVER , notebook,dash-server "))

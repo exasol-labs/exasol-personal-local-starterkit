@@ -4,11 +4,15 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 ID = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+~-]*$")
+# A GitHub owner/name and a repository name: plain path segments, interpolated into URLs.
+REPO = re.compile(r"^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$")
+REPO_NAME = re.compile(r"^[A-Za-z0-9._-]+$")
+ABOUT_MAX = 300
 
 
 class CatalogError(ValueError):
@@ -24,6 +28,31 @@ class Addon:
     default_version: str
     visible: bool
     choices: tuple[tuple[str, str], ...]
+    # The repository the add-on comes from, as tools/addon_github.py copied it from GitHub: repo, url, name, about.
+    github: dict = field(default_factory=dict, compare=False)
+
+
+def display_name(name: str, addon_id: str) -> str:
+    """The repository's name, with the id typed in commands beside it when the two differ."""
+    return name if name == addon_id else f"{name} ({addon_id})"
+
+
+def github_block(addon_id: str, block) -> dict:
+    """The catalog's copy of the add-on's GitHub repository, refused unless every value is the safe shape: the
+    repo and name go into URLs and file names, the About into a terminal."""
+    if not isinstance(block, dict):
+        raise CatalogError(f"{addon_id}: github must name the add-on's repository (tools/addon_github.py)")
+    repo, url, name, about = (block.get(key) for key in ("repo", "url", "name", "about"))
+    if not isinstance(repo, str) or not REPO.fullmatch(repo) or ".." in repo:
+        raise CatalogError(f"{addon_id}: github.repo must be owner/name")
+    if url != f"https://github.com/{repo}":
+        raise CatalogError(f"{addon_id}: github.url must be https://github.com/{repo}")
+    if not isinstance(name, str) or not REPO_NAME.fullmatch(name):
+        raise CatalogError(f"{addon_id}: github.name must be the repository's name")
+    if (not isinstance(about, str) or not about.strip() or len(about) > ABOUT_MAX
+            or any(ord(c) < 32 or ord(c) == 127 for c in about)):
+        raise CatalogError(f"{addon_id}: github.about must be the repository's About, one line")
+    return {"repo": repo, "url": url, "name": name, "about": about}
 
 
 def load_addons(root: Path) -> list[Addon]:
@@ -45,9 +74,10 @@ def load_addons(root: Path) -> list[Addon]:
             raise CatalogError(f"invalid or repeated add-on id: {addon_id!r}")
         if row.get("backend") != "python":
             raise CatalogError(f"{addon_id}: unsupported backend {row.get('backend')!r}")
-        label = row.get("label")
-        if not isinstance(label, str) or not label.strip() or any(c in label for c in "\r\n|"):
-            raise CatalogError(f"{addon_id}: label must be one non-empty line")
+        if "label" in row:
+            raise CatalogError(f"{addon_id}: the name comes from GitHub (github.name), not a label")
+        github = github_block(addon_id, row.get("github"))
+        label = display_name(github["name"], addon_id)
         block = components.get(addon_id, {})
         if not isinstance(block, dict):
             raise CatalogError(f"{addon_id}: versions.json component must be an object")
@@ -75,7 +105,7 @@ def load_addons(root: Path) -> list[Addon]:
             validated_choices.append((choice_id, choice_label))
         seen.add(addon_id)
         addons.append(Addon(addon_id, label, row["backend"], version, fallback, visible,
-                            tuple(validated_choices)))
+                            tuple(validated_choices), github))
     return addons
 
 
