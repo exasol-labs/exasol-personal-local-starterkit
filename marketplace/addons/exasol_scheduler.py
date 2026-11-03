@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -519,5 +520,8 @@ def uninstall(ctx: KitContext, *, dry_run: bool = False) -> list[Path]:
             shutil.rmtree(target)
         else:
             target.unlink(missing_ok=True)
+    # Install creates the credentials folder when the kit's own passwords live elsewhere; an empty one is ours.
+    with contextlib.suppress(OSError):
+        credential.parent.rmdir()
     ctx.manifest.delete(RECEIPT, "desired.exasol_scheduler")
     return targets
