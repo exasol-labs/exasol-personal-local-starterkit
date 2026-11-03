@@ -123,9 +123,21 @@ This runs public `exakit` commands in a new private temporary kit home. Each
 add-on is installed twice, updated at the version in this checkout's
 `versions.json`, previewed for removal and removed twice. It checks removal of
 generated runtimes and launchers, preservation of personal test files, and the
-original kit manifest's digest. Preview comparisons exclude normal CLI logs
-and the manifest lock file. This is a warm-machine check, not clean-machine
-installation evidence. Without `--upgrade`, it checks only the current version.
+original kit manifest's digest. Both previews, `uninstall <id> --dry-run` and
+the full-kit `uninstall --dry-run`, must leave every file and folder in the kit
+home and bin folder unchanged, logs and the manifest lock included. Removal may
+leave only logs, caches and the user's work it keeps by design (dashboards, the
+notebooks folder, Rust UDF sources); any other path the lifecycle created is a
+failure. This is a warm-machine check, not clean-machine installation evidence.
+Without `--upgrade`, it checks only the current version.
+
+A privacy watch (`tests/integration/privacy_watch.py`) runs beside every
+command. It samples every process's arguments, and scans each command's output
+and every generated text file outside the credentials store, after install and
+after removal, for the borrowed database passwords, every value the disposable
+kit writes under `credentials/` and credential-named environment values of eight
+characters or more. Findings land in the report's `privacy` block by label and
+place, never by value; any finding fails the run.
 
 The fixture borrows the database connection and marks that database user-owned.
 It isolates PATH, Jupyter kernels, editor extensions, skills and login entries;

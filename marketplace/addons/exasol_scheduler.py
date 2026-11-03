@@ -21,7 +21,7 @@ import zipfile
 from pathlib import Path
 
 from process import ManagedProcess, _command, _creation
-from runtime import AddonFailure, KitContext, venv_python
+from runtime import AddonFailure, KitContext, cmd_quote, venv_python
 
 ID = "exasol-scheduler"
 RECEIPT = "components.exasol_scheduler"
@@ -247,8 +247,7 @@ def _write_launcher(ctx: KitContext) -> None:
     ctx.bin_dir.mkdir(parents=True, exist_ok=True)
     argv = [str(python), str(script), str(home), str(engine), str(ctx.manifest.path), str(credential)]
     if os.name == "nt":
-        launcher.write_text("@echo off\r\n" + " ".join('"' + item.replace('"', '""') + '"' for item in argv)
-                            + " %*\r\n", encoding="utf-8")
+        launcher.write_text("@echo off\r\n" + " ".join(cmd_quote(item) for item in argv) + " %*\r\n", encoding="utf-8")
     else:
         launcher.write_text("#!/bin/sh\nexec " + " ".join(shlex.quote(item) for item in argv) + ' "$@"\n',
                             encoding="utf-8")
