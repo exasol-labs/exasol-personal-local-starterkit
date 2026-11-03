@@ -128,8 +128,9 @@ class CallsExistTest(unittest.TestCase):
     def test_no_reference_to_files_this_kit_lacks(self):
         for path in [*NOTEBOOKS, *SOURCES.glob("**/*.ipynb"), *HELPERS, ROOT / "notebook" / "README.md"]:
             text = path.read_text(encoding="utf-8")
+            # bank_marketing left this list when it came back as a reference dataset (data/datasets/bank_marketing).
             for gone in ("data/datasets/README.md", "docs/design.md", "start_here", "text_classification",
-                         "bank_marketing", "fda_recalls"):
+                         "fda_recalls"):
                 with self.subTest(file=path.name, reference=gone):
                     self.assertNotIn(gone, text)
 

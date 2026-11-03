@@ -70,8 +70,9 @@ jobs:
           printf 'versions.json changed: %s\n' "$(printf '%s\n' "$changed" | grep -cx 'versions.json')"
           # The notebooks-live job (a database on the runner) runs on a pull
           # request only when it touches what that job proves: the notebooks,
-          # the reference datasets, the helper packages, or the job's own files.
-          nb_paths='^(notebook/|data/datasets/|packages/|tools/notebooks\.py$|tests/notebooks-run\.sh$|tests/lib/stub_model_server\.py$|tests/mcp-readonly-sql-matrix\.sh$|\.github/workflows/versions\.yml$)'
+          # the reference datasets, the helper packages, the descriptor service
+          # the notebooks describe through, or the job's own files.
+          nb_paths='^(notebook/|data/datasets/|packages/|setup/lib/descriptor/|setup/lib/describe_service\.py$|tools/notebooks\.py$|tests/notebooks-run\.sh$|tests/lib/stub_model_server\.py$|tests/mcp-readonly-sql-matrix\.sh$|\.github/workflows/versions\.yml$)'
           if printf '%s\n' "$changed" | grep -qE "$nb_paths"; then
             echo "notebooks=true" >> "$GITHUB_OUTPUT"
           else
@@ -819,6 +820,16 @@ jobs:
         if: matrix.shard == 4
       - run: python3 tests/test_describe_service.py
         if: matrix.shard == 4
+      # The role-per-column descriptor: the eight roles and their thresholds,
+      # describe/approve/publish against a fake database.
+      - run: python3 tests/test_descriptor_roles.py
+        if: matrix.shard == 4
+      - run: python3 tests/test_descriptor_flow.py
+        if: matrix.shard == 4
+      # The workflows parse and none falls behind the reference datasets
+      # (every folder with a manifest.json), and the live job's checks.
+      - run: python3 tests/test_workflow_datasets.py
+        if: matrix.shard == 4
       - run: python3 tests/test_descriptor_v2.py
         if: matrix.shard == 4
       - run: python3 tests/test_notebook_helpers.py
@@ -1058,7 +1069,7 @@ jobs:
     # through the kit's own installer (the launcher runs the database in a
     # rootless Podman container on Linux), then runs the two suites that need
     # it: the read-only MCP user proven empirically (TPC-H), and the four core
-    # quickstart/explore/train notebooks on both reference datasets with the
+    # quickstart/explore/train notebooks on the three reference datasets with the
     # text step on a stub model (TDD/BRD AC-DS3.1, AC-ML3.1). Ask requires an
     # explicit SQL approval; Share requires Dash Server and a figure check;
     # Rust scoring requires its separate pinned SLC. They have their own gates.
@@ -1067,12 +1078,12 @@ jobs:
     # Every push to main or a release branch; a pull request only when it
     # touches the notebooks, the reference datasets, the helper packages or
     # this job's own files (the changes job's filter). A real gate: no
-    # continue-on-error, time-boxed to forty minutes.
+    # continue-on-error, time-boxed to fifty-five minutes (a third dataset).
     if: >-
       (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release')))
       || (github.event_name == 'pull_request' && needs.changes.outputs.notebooks == 'true')
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 55
     env:
       EXAKIT_NO_FANCY: "1"
     steps:
@@ -1090,7 +1101,7 @@ jobs:
         env:
           EXAKIT_LOCAL_KIT: ${{ github.workspace }}
           EXAKIT_PERSONA: data-scientist,ml-engineer
-          EXAKIT_DATASETS: tpch,esophageal_posts,banking_complaints
+          EXAKIT_DATASETS: tpch,esophageal_posts,banking_complaints,bank_marketing
           EXAKIT_MARKETPLACE_ADDONS: notebook,udf-devkit
           EXAKIT_SKIP_MCP: "1"
           EXAKIT_NOTEBOOK_FRONTENDS: none
@@ -1118,7 +1129,7 @@ jobs:
           exakit notebook check
       - name: the read-only MCP user can read everything and write nothing
         run: EXAKIT_REQUIRE_DB=1 bash tests/mcp-readonly-sql-matrix.sh
-      - name: core notebooks headless on both datasets
+      - name: core notebooks headless on the three reference datasets
         env:
           EXAKIT_REQUIRE_DB: "1"
           EXAKIT_NOTEBOOK_AI_LAB: "0"
@@ -1126,7 +1137,7 @@ jobs:
           EXAKIT_NOTEBOOK_BIND_CHECKOUT: '1'
           EXAKIT_NOTEBOOK_RUN_OUTPUT: ${{ runner.temp }}/executed-notebooks
         run: |
-          for recipe in esophageal_posts:none banking_complaints:balanced; do
+          for recipe in esophageal_posts:none banking_complaints:balanced bank_marketing:balanced; do
             EXAKIT_NOTEBOOK_DATASETS="${recipe%:*}" EXAKIT_NOTEBOOK_CLASS_WEIGHT="${recipe#*:}" \
               bash tests/notebooks-run.sh \
                 notebook/notebooks/data-scientist/00_quickstart.py \
