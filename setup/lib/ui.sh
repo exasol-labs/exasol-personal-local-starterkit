@@ -475,8 +475,8 @@ ui_restore_cursor() { ui_mouse_off; [ "$UI_FANCY" = 1 ] && printf '\033[?25h'; _
 # Echo stays off for the whole menu, not only inside each read: a click's
 # release report, or the terminal's answer to _ui_cursor_ask, can arrive while
 # a frame is being drawn, and the terminal would echo it there as
-# "^[[<0;8;27m". The menu's own hold is released (and what is left unread
-# dropped) when the mouse goes off; a hold someone else took is left alone.
+# "^[[<0;8;27m". The menu's own hold is released when the mouse goes off; a
+# hold someone else took is left alone.
 ui_mouse_on() {
     [ "${UI_FANCY:-0}" = 1 ] && [ "${EXAKIT_NO_MOUSE:-0}" != 1 ] || return 0
     if [ -z "${_UI_STTY_SAVED:-}" ] && [ "${_UI_MOUSE_HELD:-0}" != 1 ]; then
@@ -494,8 +494,11 @@ ui_mouse_off() {
         _UI_MOUSE=0
     fi
     if [ "${_UI_MOUSE_HELD:-0}" = 1 ]; then
+        # Echo back on, and NOTHING dropped: unlike an animation's hold, keys typed
+        # after the Enter that closed the menu are the next question's answers.
         _UI_MOUSE_HELD=0
-        _ui_input_release
+        [ -n "${_UI_STTY_SAVED:-}" ] && stty "$_UI_STTY_SAVED" < "$_UI_STTY_DEV" 2>/dev/null
+        _UI_STTY_SAVED=''
     fi
     return 0
 }

@@ -131,6 +131,9 @@ exakit_persona_question() {
         _epq_result="$(mktemp "${TMPDIR:-/tmp}/exakit-persona-ui.XXXXXX")" || _epq_result=""
         if [ -n "$_epq_result" ]; then
             rm -f "$_epq_result"
+            ui_spin_begin "Opening the question"
+            run_python_any "$_epq_root/marketplace/launch.py" "$_epq_root" warm || true
+            ui_spin_end
             if run_python_any "$_epq_root/marketplace/launch.py" "$_epq_root" persona \
                 --out "$_epq_result" --recorded "$(manifest_get persona.id 2>/dev/null || true)"; then
                 EXAKIT_PERSONA="$(run_python_any - "$_epq_result" <<'PY'

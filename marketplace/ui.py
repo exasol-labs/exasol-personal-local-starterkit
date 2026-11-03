@@ -22,6 +22,7 @@ import argparse
 import asyncio
 import json
 import os
+import signal
 import sys
 import textwrap
 import time
@@ -35,6 +36,7 @@ from rich.style import Style
 from rich.text import Text
 from textual import events
 from textual.app import App, ComposeResult
+from textual.geometry import Size
 from textual.widgets import Static
 
 from model import CatalogError, choose_addons, choose_personas, load_addons, load_personas
@@ -113,10 +115,17 @@ def finished(detail: str, seconds) -> str:
 class Screenful(Static):
     """The whole question as one block of text, the way the shell prints it."""
 
-    DEFAULT_CSS = "Screenful { background: ansi_default; color: ansi_default; padding: 0; }"
+    # Never wrapped: every line is already fitted to the width. Wrapped, the old (wider) frame grew
+    # taller for the one repaint Textual makes before the redraw at a new size, and pushed the
+    # install's output above it off the screen.
+    DEFAULT_CSS = """Screenful { background: ansi_default; color: ansi_default; padding: 0;
+                                 text-wrap: nowrap; text-overflow: clip; }"""
 
     def on_click(self, event: events.Click) -> None:
         self.app.click_line(event.y, event.button)
+
+    def on_resize(self, _: events.Resize) -> None:
+        self.app.after_resize()
 
 
 class ChoiceApp(App[dict | None]):
@@ -157,6 +166,7 @@ class ChoiceApp(App[dict | None]):
         self.line_rows: list[int | None] = []
         self._mouse_paused = False
         self._rearm = None
+        self._resize_pending = False
         self.table_rows: list[tuple[str, str | None]] = []
         if mode == "marketplace":
             self.table_rows.append(("all", None))
@@ -183,9 +193,39 @@ class ChoiceApp(App[dict | None]):
 
     def on_mount(self) -> None:
         self.set_interval(0.2, self._tick)
+        self._keep_the_screen_on_resize()
         self._draw()
 
-    def on_resize(self, _: events.Resize) -> None:
+    def _keep_the_screen_on_resize(self) -> None:
+        """Textual's inline driver answers a terminal resize with ESC[2J, which wipes the WHOLE screen -
+        the install's output above the question vanished and only this block was drawn again. Its handler
+        is replaced: clear from the block's top down (the inline driver parks the cursor there after
+        every frame), then let the resize redraw the block. Everything above it stays."""
+        driver = getattr(self, "_driver", None)
+        if sys.platform == "win32" or not hasattr(signal, "SIGWINCH") or not getattr(driver, "is_inline", False):
+            return
+        loop = asyncio.get_running_loop()
+
+        def on_resize(_signum, _frame) -> None:
+            # From here until the resize is handled no frame is drawn: one drawn at the old width
+            # would wrap in the narrower terminal and push the redraw out of place.
+            self._resize_pending = True
+            width, height = driver._get_terminal_size()
+            size = Size(width, height)
+
+            async def redraw() -> None:
+                driver.write("\x1b[J")
+                await self._post_message(events.Resize(size, size))
+
+            asyncio.run_coroutine_threadsafe(redraw(), loop)
+
+        signal.signal(signal.SIGWINCH, on_resize)
+
+    def after_resize(self) -> None:
+        """Called by the block itself once Textual has laid it out at the new size. Drawn on the App's
+        resize instead, the new content was painted at the old width, wrapped, and left a copy of the
+        block above the redraw."""
+        self._resize_pending = False
         self._draw()
 
     def _tick(self) -> None:
@@ -193,6 +233,8 @@ class ChoiceApp(App[dict | None]):
             self._draw()
 
     def _draw(self) -> None:
+        if self._resize_pending:
+            return
         text, self.line_rows = self.render_screen(max(40, self.size.width or 80))
         self.query_one("#screen", Screenful).update(text)
 

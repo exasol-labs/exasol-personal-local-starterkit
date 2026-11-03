@@ -174,6 +174,11 @@ function Read-ExakitPersonaQuestion {
         $python = Get-ExakitPersonaPython
         $uv = $null
         try {
+            Start-ExakitSpinner "Opening the question"
+            try {
+                if ($python) { & $python $launcher $root warm | Out-Null }
+                else { & (Install-ExakitUv) run --no-project --python $script:ManagedPythonVersion python $launcher $root warm | Out-Null }
+            } finally { Stop-ExakitSpinner }
             if ($python) {
                 & $python $launcher $root persona --out $resultPath --recorded ("" + (Get-ExakitManifestValue 'persona.id'))
             } else {

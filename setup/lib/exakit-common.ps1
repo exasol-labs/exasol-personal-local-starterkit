@@ -5483,6 +5483,9 @@ function Show-ExakitMarketplaceMenu {
         $aboutPath = "$statesPath.about"
         $previousVersionsDoc = $env:EXAKIT_MARKETPLACE_VERSIONS_DOC
         try {
+            # The add-ons' states, their descriptions and Textual itself (a download on a
+            # fresh machine) are got ready under the spinner; the table then opens at once.
+            Start-ExakitSpinner "Opening the add-ons"
             $env:EXAKIT_MARKETPLACE_VERSIONS_DOC = Get-ExakitMarketplaceVersionsDoc
             $snapshot = Show-ExakitMarketplaceList -Json
             [System.IO.File]::WriteAllText($statesPath, ("" + $snapshot), (New-Object System.Text.UTF8Encoding($false)))
@@ -5491,6 +5494,9 @@ function Show-ExakitMarketplaceMenu {
             [System.IO.File]::WriteAllText($aboutPath, (($about -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
             $python = Get-ExakitPersonaPython
             $frontends = if ($env:EXAKIT_NOTEBOOK_FRONTENDS) { $env:EXAKIT_NOTEBOOK_FRONTENDS } else { 'jupyterlab,marimo,positron' }
+            if ($python) { & $python $launcher $root warm | Out-Null }
+            else { & (Install-ExakitUv) run --no-project --python $script:ManagedPythonVersion python $launcher $root warm | Out-Null }
+            Stop-ExakitSpinner
             if ($python) {
                 & $python $launcher $root marketplace --states $statesPath --about $aboutPath --out $resultPath `
                     --defaults ("" + $env:EXAKIT_MARKETPLACE_PRESELECT) --only ("" + $env:EXAKIT_MARKETPLACE_ONLY) `
@@ -5509,6 +5515,7 @@ function Show-ExakitMarketplaceMenu {
         } catch {
             Warn2 'The Textual marketplace did not start; using the kit table menu.'
         } finally {
+            Stop-ExakitSpinner       # a no-op once stopped; ends it on a failure before the table
             if ($null -eq $previousVersionsDoc) { Remove-Item Env:EXAKIT_MARKETPLACE_VERSIONS_DOC -ErrorAction SilentlyContinue }
             else { $env:EXAKIT_MARKETPLACE_VERSIONS_DOC = $previousVersionsDoc }
             Remove-Item -LiteralPath $statesPath, $aboutPath, $resultPath -ErrorAction SilentlyContinue
@@ -6256,11 +6263,17 @@ function Write-ExakitReadyLine {
 }
 
 function Request-ExakitMarketplaceOffer {
-    if (-not (Test-ExakitMarketplaceHasPending)) { return }
-    # Fill the About cache now, while the gate question below is still being
-    # read: this is the one screen where the cache is reliably cold (a machine
-    # minutes old), and the table it feeds does not exist yet.
-    Update-ExakitMarketplaceAboutCache
+    # Several checks per add-on and a description fetched for each take
+    # seconds: a turning spinner says the install is still going, not stuck.
+    # Twin of exakit_marketplace_offer.
+    Start-ExakitSpinner "Getting the add-ons ready"
+    try {
+        if (-not (Test-ExakitMarketplaceHasPending)) { return }
+        # Fill the About cache now, while the gate question below is still being
+        # read: this is the one screen where the cache is reliably cold (a machine
+        # minutes old), and the table it feeds does not exist yet.
+        Update-ExakitMarketplaceAboutCache
+    } finally { Stop-ExakitSpinner }
 
     # A scripted answer wins over any prompt (same contract as the menu).
     if ($env:EXAKIT_MARKETPLACE_ADDONS) {

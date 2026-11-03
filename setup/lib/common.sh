@@ -4689,6 +4689,10 @@ exakit_marketplace_menu() {
         _mm_result="$(mktemp "${TMPDIR:-/tmp}/exakit-market-ui.XXXXXX")" || _mm_result=""
         if [ -n "$_mm_state" ] && [ -n "$_mm_result" ]; then
             rm -f "$_mm_result"
+            # The add-ons' states, their descriptions and Textual itself (a download
+            # on a fresh machine) are got ready under the spinner; the table then
+            # opens at once.
+            ui_spin_begin "Opening the add-ons"
             if exakit_marketplace_list 1 >"$_mm_state"; then
                # The Description column is the table's own: each add-on's About.
                while IFS='|' read -r _mm_aid _mm_arest; do
@@ -4696,6 +4700,8 @@ exakit_marketplace_menu() {
                done <<EXAKIT_MM_ABOUT >"$_mm_state.about"
 $(exakit_marketplace_addons)
 EXAKIT_MM_ABOUT
+               run_python_any "$_mm_root/marketplace/launch.py" "$_mm_root" warm || true
+               ui_spin_end
                EXAKIT_MARKETPLACE_VERSIONS_DOC="$(_exakit_marketplace_versions_doc 2>/dev/null || true)" \
                run_python_any "$_mm_root/marketplace/launch.py" "$_mm_root" marketplace \
                    --states "$_mm_state" --about "$_mm_state.about" --out "$_mm_result" \
@@ -4709,6 +4715,7 @@ EXAKIT_MM_ABOUT
                 [ "$_mm_ui_rc" -eq 11 ] || return "$_mm_ui_rc"
                 warn "The Textual marketplace did not start; using the kit's table menu."
             else
+                ui_spin_end
                 rm -f "$_mm_state" "$_mm_result"
                 warn "The marketplace state could not be read; using the kit's table menu."
             fi
@@ -5129,12 +5136,16 @@ exakit_print_ready_line() {
 }
 
 exakit_marketplace_offer() {
+    # Several checks per add-on and a description fetched for each take
+    # seconds: a turning spinner says the install is still going, not stuck.
+    ui_spin_begin "Getting the add-ons ready"
     _exakit_marketplace_load_modules
-    exakit_marketplace_has_pending || return 0
+    exakit_marketplace_has_pending || { ui_spin_end; return 0; }
     # Fill the About cache now, while the gate question below is still being
     # read: this is the one screen where the cache is reliably cold (a machine
     # minutes old), and the table it feeds does not exist yet.
     _exakit_marketplace_warm_about
+    ui_spin_end
 
     # A scripted answer wins over any prompt (same contract as the menu).
     if [ -n "${EXAKIT_MARKETPLACE_ADDONS:-}" ]; then

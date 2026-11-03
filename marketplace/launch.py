@@ -35,7 +35,8 @@ def textual_pin(path: Path) -> str:
 
 
 def run(root: Path, args: list[str]) -> int:
-    if not sys.stdin.isatty() or not sys.stdout.isatty():
+    warm = args[:1] == ["warm"]
+    if not warm and (not sys.stdin.isatty() or not sys.stdout.isatty()):
         print("An interactive terminal is required for the persona/marketplace UI.", file=sys.stderr)
         return 10
     script = root / "marketplace" / "ui.py"
@@ -43,6 +44,11 @@ def run(root: Path, args: list[str]) -> int:
         print("The marketplace UI is missing from this kit copy.", file=sys.stderr)
         return 11
     pin = textual_pin(root / "marketplace" / "defaults.env")
+    if warm:
+        # Fetch and import Textual now, while the caller's spinner turns: on a fresh machine
+        # that is a download, and the question it opens next would otherwise sit on a silent
+        # terminal until it was done. Nothing is drawn.
+        script, args = Path("-c"), ["import textual.app"]
     uv = shutil.which("uv") or shutil.which("uv.exe")
     environment = dict(os.environ)
     if uv:
@@ -66,6 +72,9 @@ def run(root: Path, args: list[str]) -> int:
         command = [sys.executable, str(script), *args]
     environment.setdefault("UV_CACHE_DIR", str(Path(environment.get("EXAKIT_HOME") or
                                                       Path.home() / ".exasol-starter-kit") / "cache" / "uv"))
+    if warm:
+        return subprocess.run(command, check=False, env=environment, stdin=subprocess.DEVNULL,
+                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode
     return subprocess.run(command, check=False, env=environment).returncode
 
 
@@ -81,6 +90,12 @@ def main() -> int:
     parser.add_argument("--only", default="")
     parser.add_argument("--frontends", default="jupyterlab,marimo,positron")
     parser.add_argument("--apply", action="store_true")
+    if sys.argv[2:3] == ["warm"]:
+        try:
+            return run(Path(sys.argv[1]), ["warm"])
+        except (OSError, ValueError) as error:
+            print(f"Marketplace UI could not start: {error}", file=sys.stderr)
+            return 11
     parsed = parser.parse_args()
     if parsed.mode in ("marketplace", "notebook") and not parsed.states:
         parser.error(f"{parsed.mode} needs --states")
