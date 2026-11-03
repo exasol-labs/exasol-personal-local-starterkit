@@ -212,6 +212,25 @@ class RustUdfTests(unittest.TestCase):
         self.assertFalse(result["database_restart_requested"])
         self.assertEqual(result["container_sha256"], "a"*64)
 
+    def test_the_build_falls_back_to_podman_when_docker_is_not_running(self):
+        def which(name):
+            return f"/bin/{name}"
+
+        def info(args, **_):
+            return MagicMock(returncode=1 if args[0] == "/bin/docker" else 0)
+        with patch.object(rust.shutil, "which", side_effect=which), patch.object(rust.subprocess, "run", side_effect=info):
+            self.assertEqual("/bin/podman", rust.container_runtime())
+
+    def test_docker_wins_when_both_run_and_neither_is_refused(self):
+        with patch.object(rust.shutil, "which", side_effect=lambda name: f"/bin/{name}"), \
+             patch.object(rust.subprocess, "run", return_value=MagicMock(returncode=0)):
+            self.assertEqual("/bin/docker", rust.container_runtime())
+        with patch.object(rust.shutil, "which", side_effect=lambda name: f"/bin/{name}"), \
+             patch.object(rust.subprocess, "run", return_value=MagicMock(returncode=1)), \
+             self.assertRaises(rust.Refused) as refused:
+            rust.container_runtime()
+        self.assertIn("Docker or Podman", str(refused.exception))
+
     def test_driver_failures_keep_private_details_out_of_json(self):
         output = io.StringIO()
         with patch.object(rust, "deploy", side_effect=RuntimeError("password=private-value")), \
