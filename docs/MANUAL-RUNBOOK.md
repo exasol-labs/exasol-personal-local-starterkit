@@ -386,4 +386,5 @@ If something fails: copy the message, then run `exakit status` and `exakit logs 
 - **Banking has no text** (the source stopped publishing complaint texts) - text steps skip on Banking.
 - **Esophageal posts** are other people's public posts with personal details removed; the terms are still to be confirmed before release.
 - **Windows** (later): in PowerShell, `$env:EXAKIT_LOCAL_KIT = 'C:\path\to\checkout'`, then `irm https://www.exasol.com/install/starter-kit.ps1 | iex`, then the same steps.
+- One pass from a clean machine through every Data Scientist feature, UDFs, Rust and Langfuse included: [DATA-SCIENTIST-TEST-PLAN.md](DATA-SCIENTIST-TEST-PLAN.md).
 - Deeper checks (Rust scoring, Share dashboards, Marimo, all file formats, Langfuse): [ACCEPTANCE-REMAINING.md](ACCEPTANCE-REMAINING.md).
