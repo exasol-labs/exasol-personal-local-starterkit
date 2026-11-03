@@ -179,11 +179,12 @@ python3 tools/notebooks.py --run --output /tmp/executed           # keep each ex
 OpenAI-compatible endpoint (`POST /v1/chat/completions`, `GET /v1/models`),
 answering each prompt with a fixed theme chosen by the prompt's hash so two runs
 compare equal - points the model variables at it, and runs every shipped
-notebook on `esophageal_posts` and `banking_complaints`. Without a database that
+notebook on `esophageal_posts`, `banking_complaints` and `bank_marketing`. Without a database that
 answers it prints `SKIP` and exits 0, with the same probe
 `tests/mcp-readonly-sql-matrix.sh` uses; `EXAKIT_REQUIRE_DB=1` makes that a
 failure with exit 3 (the `notebooks-live` job in `.github/workflows/versions.yml`
-sets it, so CI can never skip silently). `EXAKIT_NOTEBOOK_DATASETS`,
+and `.github/workflows/reference-datasets-live.yml`, which also runs them on a
+file of your own, set it, so CI can never skip silently). `EXAKIT_NOTEBOOK_DATASETS`,
 `EXAKIT_NOTEBOOK_CELL_TIMEOUT` and `EXAKIT_NOTEBOOK_RUN_OUTPUT` adjust it; the
 executed notebooks are the job's artifact when it fails.
 
