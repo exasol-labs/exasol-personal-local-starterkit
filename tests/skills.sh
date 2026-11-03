@@ -416,7 +416,8 @@ has "...and uninstalling the add-on removes them" \
     'exakit_remove_addon_skills "$_uc_key"' "$_ZZ_SH_COMMON"
 has "the twin reads the owner"        "function Get-ExakitSkillAddon" "$(cat "$_ZZ_PS_COMMON")"
 has "...and gates the skills step"    "Test-ExakitSkillWanted -Path" "$(cat "$_ZZ_PS_COMMON")"
-has "...and installs with the add-on" "Install-ExakitAddonSkills \$id" "$(cat "$_ZZ_PS_COMMON")"
+# Windows installs an add-on through the shared Python controller, which places its skills itself.
+has "...and installs with the add-on" "install_addon_skills(ctx, addon_id)" "$(cat "$ROOT/marketplace/apply.py")"
 has "...and removes with it"          "Remove-ExakitAddonSkills \$Key" "$(cat "$_ZZ_PS_CLI")"
 
 # ---------------------------------------------------------------------------

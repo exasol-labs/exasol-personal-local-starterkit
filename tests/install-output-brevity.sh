@@ -357,9 +357,9 @@ has "the screen is not left silent" "still speaking" "$LOUD"
 printf '\n== the result line does not repeat the panel ==\n'
 
 # The outcome is the id plus, at most, the add-on's own one-line summary.
-has "one line for the outcome" 'ok "$_mp_id installed${_mp_note:+' "$COMMON"
+has "one line for the outcome" 'ok|$_mpa_id installed${_mpa_detail:+ — $_mpa_detail}' "$COMMON"
 lacks "no doubled update hint" 'installed — it now updates with: exakit update (or exakit update' "$COMMON"
-has "...on Windows too"        'Ok "$id installed - $note"' "$COMMON_PS1"
+has "...on Windows too"        'Text = "$id installed$(if ($detail) { '"'"' - '"'"' + $detail })"' "$COMMON_PS1"
 
 printf '\n== the PowerShell twin gates at the same sink ==\n'
 
@@ -367,9 +367,9 @@ has "Info is gated"        'if (-not $script:ExakitQuietDetail) {' "$COMMON_PS1"
 has "the flag is declared" '$script:ExakitQuietDetail = $false'    "$COMMON_PS1"
 has "the progress helper"  'function Set-ExakitAddonProgress'      "$COMMON_PS1"
 has "the apply loop starts the bar" 'Start-ExakitProgress -Pct 0 -Ceiling 65 -Secs 40' "$COMMON_PS1"
-has "...and reports each stage"      'Set-ExakitAddonProgress -Id $id -Pct 65 -Ceiling 90' "$COMMON_PS1"
+has "...and reports each stage"      'Set-ExakitProgress -Pct 65 -Ceiling 90 -Secs 8 -Phase "$id - validating"' "$COMMON_PS1"
 has "...and stops it"                'Stop-ExakitProgress' "$COMMON_PS1"
-has "and hands it back"      '$script:ExakitQuietDetail = $prevQuiet' "$COMMON_PS1"
+has "and hands it back"      '$script:ExakitQuietDetail = $prev' "$COMMON_PS1"
 
 printf '\n== exakit help lists each command once ==\n'
 
@@ -436,9 +436,12 @@ done
 # The hook is OPTIONAL and resolved generically: no add-on id appears in the
 # apply loop, so a new add-on gets this by defining the function and nothing in
 # common.sh has to learn its name.
-has "the hook is resolved by name"   '_mp_summary_fn="$(_exakit_addon_fn "$_mp_id" summary)"' "$COMMON"
-has "and only used when it exists"   'command -v "$_mp_summary_fn" >/dev/null 2>&1' "$COMMON"
-has "the result line carries it"     'ok "$_mp_id installed${_mp_note:+ — $_mp_note}"' "$COMMON"
+# The add-ons are installed by the shared Python controller (marketplace/apply.py), which asks each one for its
+# summary; the Bash and PowerShell adapters only render the events it streams.
+APPLY_PY="$(cat "$ROOT/marketplace/apply.py")"
+has "the hook is resolved by name"   'callable(getattr(module, "summary", None))' "$APPLY_PY"
+has "and only used when it exists"   'invoke(ctx.root, addon_id, "summary", ctx=ctx)' "$APPLY_PY"
+has "the result line carries it"     'emit(Event(addon_id, "done", summary, int(time.monotonic() - started)))' "$APPLY_PY"
 # "Browse again: exakit marketplace · how to use one: exakit help <add-on>"
 # stood here. The table above has just said what was installed and what each
 # gives you, and the closing support line already names `exakit help`.
@@ -460,8 +463,8 @@ has "udf-devkit has a summary"      'def summary(' "$(cat "$ROOT/marketplace/add
 _catalog_ids="$(python3 "$ROOT/marketplace/metadata.py" "$ROOT" registry | cut -d'|' -f1 | sort)"
 _summary_ids="$(python3 "$ROOT/marketplace/metadata.py" "$ROOT" shell-hooks | awk -F'|' '$2 == "summary" { print $1 }' | sort)"
 check "every add-on has a summary hook" "$_catalog_ids" "$_summary_ids"
-has "the apply loop reads the hook" '$addon.PSObject.Properties["SummaryFn"]' "$COMMON_PS1"
-has "and only when it resolves"     'Get-Command $addon.SummaryFn -ErrorAction SilentlyContinue' "$COMMON_PS1"
+has "the apply loop reads the summary" "'done' {" "$COMMON_PS1"
+has "and puts it in the finished cell" 'Get-ExakitAddonTableCell -Summary $detail -Seconds $seconds' "$COMMON_PS1"
 
 printf '\n== a folded description lines up under the one above it ==\n'
 
