@@ -50,6 +50,18 @@ _pyexasol_not_installed() {
     return 1
 }
 
+# The oldest pyexasol that works with Exasol Personal: older ones raise InvalidVersion on its
+# version string ("2026.2.0-nano.3") in every import and export (export_to_pandas, import_from_file,
+# the notebook connector's data loading), though SELECT works. A user's older driver is left as it
+# is and the kit installs its own beside it.
+_pyx_min_version="2.4.0"
+
+# pyexasol_new_enough <version> — true when <version> is _pyx_min_version or later.
+pyexasol_new_enough() {
+    [ -n "$1" ] || return 1
+    ! exakit_version_newer "$_pyx_min_version" "$1"
+}
+
 pyexasol_existing_python() {
     command -v python3 >/dev/null 2>&1 || return 1
     _pyx_probe="$(command -v python3)"
@@ -59,13 +71,26 @@ pyexasol_existing_python() {
 
 pyexasol_install() {
     if [ "$(exakit_component_ownership pyexasol)" = user ]; then
-        [ -n "$(pyexasol_installed_version || true)" ] && { exakit_preserve_component pyexasol; return 0; }
-        warn "The reused pyexasol no longer works. Repair its Python environment outside the kit."
-        return 1
+        _pyx_reused="$(pyexasol_installed_version || true)"
+        if [ -z "$_pyx_reused" ]; then
+            warn "The reused pyexasol no longer works. Repair its Python environment outside the kit."
+            return 1
+        fi
+        if pyexasol_new_enough "$_pyx_reused"; then
+            exakit_preserve_component pyexasol
+            return 0
+        fi
+        info "Your pyexasol $_pyx_reused is older than $_pyx_min_version, which Exasol Personal needs for imports and exports; the kit installs its own beside it and leaves yours as it is."
+        # The kit's own venv from here on: pyexasol_venv_python must stop naming the user's interpreter, or the
+        # install below would go into their Python.
+        exakit_record_ownership pyexasol kit "$EXAKIT_PYEXASOL_VENV"
+        manifest_del components.pyexasol.python
     fi
     # Reuse a working driver from the user's Python without installing into
     # or changing that environment. Notebook dependencies stay in their own venv.
-    if [ ! -x "$EXAKIT_PYEXASOL_VENV/bin/python" ] && _pyx_external="$(pyexasol_existing_python)"; then
+    if [ ! -x "$EXAKIT_PYEXASOL_VENV/bin/python" ] && [ "$(exakit_component_ownership pyexasol)" != user ] \
+            && _pyx_external="$(pyexasol_existing_python)" \
+            && pyexasol_new_enough "$("$_pyx_external" -c 'import pyexasol; print(pyexasol.__version__)' 2>/dev/null)"; then
         exakit_record_ownership pyexasol user "$_pyx_external"
         manifest_set components.pyexasol.python "$_pyx_external"
         _pyx_external_version="$("$_pyx_external" -c 'import pyexasol; print(pyexasol.__version__)' 2>/dev/null || true)"
@@ -271,7 +296,7 @@ PY
         # Two lines for the step: what happened, and the interpreter to run it
         # with. Installed-and-validated is one fact -- an install that failed
         # validation says so through the warn below, which is never gated.
-        ok_step "pyexasol ${EXAKIT_PYEXASOL_VERSION} installed and validated against the database ($(( $(date +%s 2>/dev/null || echo 0) - _pyv_t0 ))s)"
+        ok_step "pyexasol $(manifest_get components.pyexasol.version 2>/dev/null || printf '%s' "$EXAKIT_PYEXASOL_VERSION") $([ "$(exakit_component_ownership pyexasol)" = user ] && printf 'reused' || printf 'installed') and validated against the database ($(( $(date +%s 2>/dev/null || echo 0) - _pyv_t0 ))s)"
         info_step "Use it from Python:  $(ui_tilde "$_pyx_python")  (import pyexasol)"
     else
         warn "pyexasol could not complete SELECT 1 against the database. Why: exakit logs setup. Check the database is up with: exakit status, then re-run setup to retry."

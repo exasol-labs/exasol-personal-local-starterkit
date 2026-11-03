@@ -75,11 +75,25 @@ pyexasol_install
 check 'external driver adopted without a package install' user "$(exakit_component_ownership pyexasol)"
 check 'external driver version recorded' 2.4.1 "$(manifest_get components.pyexasol.version)"
 exakit_record_ownership pyexasol user "$HOME/user-python"
-pyexasol_installed_version(){ printf 1.0.0; }
+pyexasol_installed_version(){ printf 2.5.0; }
 pyexasol_install
 check 'driver remains user owned' user "$(exakit_component_ownership pyexasol)"
 pyexasol_installed_version(){ :; }
 if pyexasol_install; then echo 'FAIL broken reused driver was accepted' >&2; exit 1; fi
+
+# A reused driver older than Exasol Personal needs (InvalidVersion on every import and export) is
+# left alone: the kit installs its own beside it and never into the user's Python.
+exakit_record_ownership pyexasol user "$HOME/user-python"
+manifest_set components.pyexasol.python "$HOME/user-python"
+pyexasol_installed_version(){ printf 2.3.1; }
+printf '#!/bin/sh\nprintf "2.3.1\\n"\n' > "$HOME/user-python"
+eval "$(declare -f run_logged | sed '1s/^run_logged/_ownership_run_logged/')"
+run_logged(){ printf '%s\n' "$*" >> "$HOME/pyexasol-installs"; }
+pyexasol_install >/dev/null 2>&1
+check 'an older reused driver hands over to the kit' kit "$(exakit_component_ownership pyexasol)"
+check '...which installs into its own environment' yes "$(grep -q 'pyexasol-venv' "$HOME/pyexasol-installs" && echo yes)"
+check '...and never into the user'"'"'s Python' no "$(grep -q 'user-python' "$HOME/pyexasol-installs" && echo yes || echo no)"
+eval "$(declare -f _ownership_run_logged | sed '1s/^_ownership_run_logged/run_logged/')"
 
 exakit_version_table_targets(){ printf 'exapump\n'; }
 exakit_component_available(){ printf 99.0.0; }

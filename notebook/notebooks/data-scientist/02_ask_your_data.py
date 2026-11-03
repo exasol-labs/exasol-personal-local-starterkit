@@ -44,7 +44,10 @@ nb.show_roles(ds)
 # **Technical note:** in the supplied mode, the SQL template determines the answer; changing `QUESTION` alone does not rewrite it. Edit the proposed SQL to ask a different manual question. With `DRAFT_WITH_MODEL = True`, your configured endpoint drafts from the question and approved table/role metadata, without receiving table rows. Treat its proposal as something to review.
 
 # %%
-starter_sql = f"SELECT {ds.col('category')} AS CATEGORY, COUNT(*) AS N FROM {ds.fact_table} GROUP BY 1 ORDER BY N DESC"
+GROUPED_BY, BY = ds.group_by()   # the category, else the entity, else the target
+starter_sql = f"SELECT {BY} AS CATEGORY, COUNT(*) AS N FROM {ds.fact_table} GROUP BY 1 ORDER BY N DESC"
+if GROUPED_BY != "category":
+    print(f"{ds.id} has no category; the starter SQL counts rows per {GROUPED_BY} ({BY}).")
 proposal = nb.ask(ds, QUESTION, proposed_sql=None if DRAFT_WITH_MODEL else starter_sql)
 print("Assumptions:", proposal.assumptions or "none")
 print("Doubts:", proposal.doubts or "none")

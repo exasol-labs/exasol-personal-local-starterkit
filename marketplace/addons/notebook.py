@@ -28,6 +28,9 @@ KERNEL = "exasol-starter-kit"
 KERNEL_TITLE = "Exasol (Starter Kit)"
 FRONTENDS = ("jupyterlab", "marimo", "positron")
 COMPANIONS = (
+    # pyexasol before 2.4 raises InvalidVersion on Exasol Personal's version string in every import and export
+    # (export_to_pandas, the connector's data loading); the connector alone allows any 2.x.
+    "pyexasol>=2.4,<3",
     "ipykernel>=6.29,<8", "langfuse>=5,<6", "openai>=1.40,<3",
     "mlflow-skinny>=3,<4", "alembic>=1.13,<2", "pyarrow>=14",
     "pandas>=2,<3", "numpy>=1.26,<3", "scipy>=1.10,<2", "joblib>=1.5,<2",

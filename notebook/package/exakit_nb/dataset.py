@@ -196,6 +196,16 @@ class Dataset:
         """Whether a column plays ``role`` (False for one listed under ``missing``)."""
         return role in self.descriptor.roles
 
+    def group_by(self) -> tuple[str, str]:
+        """(role, column) the overviews count rows by: the category, else the entity, else the target - a table such
+        as the ADE sentences has only a key, a text and a 0/1 target, and counting by that target is its overview. A
+        descriptor with none of the three raises ValueError naming them."""
+        for role in ("category", "entity", "label"):
+            if self.has(role):
+                return role, self.col(role)
+        raise ValueError(f"{self.id} has no category, entity or target column to count rows by: set one with "
+                         f"exakit describe {self.id} --approve --role category=<COLUMN>.")
+
     def tags(self) -> dict[str, str]:
         """What a trace or an MLflow run records about the data: the dataset and the descriptor's digest (and the
         source's alias for a live source)."""

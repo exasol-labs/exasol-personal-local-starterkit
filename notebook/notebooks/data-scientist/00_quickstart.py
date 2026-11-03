@@ -50,11 +50,12 @@ print(f"Every step below is logged under it: exakit workflow show {wid}")
 
 # %%
 skipped = {m["role"]: m["reason"] for m in ds.missing}
-for role, instead in (("category", "rows are counted per entity instead"), ("label", "the label rate is left out")):
-    if role in skipped:
-        print(f"No {role} role ({skipped[role]}): {instead}; the steps that need it later say so.")
-BY = ds.col("category") if ds.has("category") else ds.col("entity")
-LABEL_PCT = f",\n       ROUND(100 * AVG({ds.col('label')}), 1) AS LABEL_1_PCT" if ds.has("label") else ""
+GROUPED_BY, BY = ds.group_by()   # the category, else the entity, else the target
+if GROUPED_BY != "category":
+    print(f"No category role ({skipped.get('category', 'none approved')}): rows are counted per {GROUPED_BY} instead.")
+if "label" in skipped:
+    print(f"No label role ({skipped['label']}): the label rate is left out; the steps that need it later say so.")
+LABEL_PCT = f",\n       ROUND(100 * AVG({ds.col('label')}), 1) AS LABEL_1_PCT" if ds.has("label") and GROUPED_BY != "label" else ""
 first_rows = nb.sql(conn, f"""
 SELECT {BY} AS CATEGORY,
        COUNT(*) AS N{LABEL_PCT}

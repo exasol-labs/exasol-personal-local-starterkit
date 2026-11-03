@@ -63,7 +63,10 @@ def _(mo):
 
 @app.cell
 def _(DRAFT_WITH_MODEL, QUESTION, ds, nb):
-    starter_sql = f"SELECT {ds.col('category')} AS CATEGORY, COUNT(*) AS N FROM {ds.fact_table} GROUP BY 1 ORDER BY N DESC"
+    GROUPED_BY, BY = ds.group_by()   # the category, else the entity, else the target
+    starter_sql = f"SELECT {BY} AS CATEGORY, COUNT(*) AS N FROM {ds.fact_table} GROUP BY 1 ORDER BY N DESC"
+    if GROUPED_BY != "category":
+        print(f"{ds.id} has no category; the starter SQL counts rows per {GROUPED_BY} ({BY}).")
     proposal = nb.ask(ds, QUESTION, proposed_sql=None if DRAFT_WITH_MODEL else starter_sql)
     print("Assumptions:", proposal.assumptions or "none")
     print("Doubts:", proposal.doubts or "none")

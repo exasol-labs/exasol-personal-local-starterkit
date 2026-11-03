@@ -211,11 +211,12 @@ def _(mo):
 @app.cell
 def _(conn, ds_1, nb):
     skipped = {m['role']: m['reason'] for m in ds_1.missing}
-    for role, instead in (('category', 'rows are counted per entity instead'), ('label', 'the label rate is left out')):
-        if role in skipped:
-            print(f'No {role} role ({skipped[role]}): {instead}; the steps that need it later say so.')
-    BY = ds_1.col('category') if ds_1.has('category') else ds_1.col('entity')
-    LABEL_PCT = f",\n       ROUND(100 * AVG({ds_1.col('label')}), 1) AS LABEL_1_PCT" if ds_1.has('label') else ''
+    GROUPED_BY, BY = ds_1.group_by()  # the category, else the entity, else the target
+    if GROUPED_BY != 'category':
+        print(f"No category role ({skipped.get('category', 'none approved')}): rows are counted per {GROUPED_BY} instead.")
+    if 'label' in skipped:
+        print(f"No label role ({skipped['label']}): the label rate is left out; the steps that need it later say so.")
+    LABEL_PCT = f",\n       ROUND(100 * AVG({ds_1.col('label')}), 1) AS LABEL_1_PCT" if ds_1.has('label') and GROUPED_BY != 'label' else ''
     first_rows = nb.sql(conn, f'\nSELECT {BY} AS CATEGORY,\n       COUNT(*) AS N{LABEL_PCT}\nFROM {ds_1.fact_table}\nGROUP BY {BY}\nORDER BY N DESC\nLIMIT 10')
     nb.show_sql()
     first_rows

@@ -45,7 +45,9 @@ def _():
     ds = nb.dataset(conn, DATASET)
     ds.require_approved("share")
     APP_NAME = APP_NAME or ds.id.replace("_", "-")[:40] + "-category-overview"
-    category = ds.col("category")
+    GROUPED_BY, category = ds.group_by()   # the category, else the entity, else the target
+    if GROUPED_BY != "category":
+        print(f"{ds.id} has no category; the dashboard counts rows per {GROUPED_BY} ({category}).")
     QUERY = f"SELECT {category} AS CATEGORY, COUNT(*) AS N FROM {ds.fact_table} GROUP BY 1 ORDER BY N DESC"
     draft = nb.share(ds, QUERY, TITLE, APP_NAME, measure="count")
     print("Query digest:", draft.query_digest)
