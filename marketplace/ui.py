@@ -32,6 +32,7 @@ from pathlib import Path
 # truecolor terminal; held at 256 colours it writes the shell's own code. Read at import.
 os.environ.setdefault("TEXTUAL_COLOR_SYSTEM", "256")
 
+from rich.cells import cell_len
 from rich.style import Style
 from rich.text import Text
 from textual import events
@@ -199,27 +200,86 @@ class ChoiceApp(App[dict | None]):
     def _keep_the_screen_on_resize(self) -> None:
         """Textual's inline driver answers a terminal resize with ESC[2J, which wipes the WHOLE screen -
         the install's output above the question vanished and only this block was drawn again. Its handler
-        is replaced: clear from the block's top down (the inline driver parks the cursor there after
-        every frame), then let the resize redraw the block. Everything above it stays."""
+        is replaced, and between frames the cursor waits on the block's LAST line instead of its first.
+
+        Why the last line: a terminal that narrows re-wraps every line that no longer fits, and it keeps the
+        cursor at the end of what is written - what lies below the cursor it treats as empty. Parked on the
+        block's first line (Textual's way) the whole block sat below the cursor: xterm.js (the desktop app's
+        panel) left the cursor halfway down the re-wrapped frame, Terminal.app scrolled the frame up and put
+        the cursor on the bottom row, and every redraw left part of the old frame above the new one. Parked
+        on the last line, the rows the old frame fills after any resize are known exactly - each of its
+        lines was written to the full width it was drawn at, so it now takes ceil(drawn / new width) rows -
+        and the redraw moves up that far, clears down, and draws the block where it was. Everything above
+        it stays."""
         driver = getattr(self, "_driver", None)
         if sys.platform == "win32" or not hasattr(signal, "SIGWINCH") or not getattr(driver, "is_inline", False):
             return
         loop = asyncio.get_running_loop()
+        write = driver.write
+        parked = self._parked = {"rows": 0, "on": True}
+
+        def write_frame(data: str) -> None:
+            # A frame is what Textual's InlineUpdate writes: the lines, then the move back to the first one
+            # (ESC[nA, CR) or just a CR for a single line, then ESC[6n. Before it the cursor goes back up from
+            # where it waits; after it, down to the last line (the ESC[6n answer, which places mouse clicks,
+            # still reports the first line: the terminal answers before it moves).
+            if not data.endswith("\r\x1b[6n"):
+                write(data)
+                return
+            core = data[:-len("\r\x1b[6n")]
+            rows = 0
+            if core.endswith("A"):
+                start = core.rfind("\x1b[")
+                count = core[start + 2:-1] if start >= 0 else ""
+                if count.isdigit():
+                    rows = int(count) - (1 if "\x1b[J" in core else 0)
+            up = f"\x1b[{parked['rows']}A\r" if parked["rows"] else ""
+            if not parked["on"]:
+                write(up + data)
+                parked["rows"] = 0
+                return
+            write(up + data + (f"\x1b[{rows}B" if rows else ""))
+            parked["rows"] = rows
+
+        driver.write = write_frame
+        burst = {"generation": 0}
 
         def on_resize(_signum, _frame) -> None:
             # From here until the resize is handled no frame is drawn: one drawn at the old width
             # would wrap in the narrower terminal and push the redraw out of place.
             self._resize_pending = True
-            width, height = driver._get_terminal_size()
-            size = Size(width, height)
+            burst["generation"] += 1
+            generation = burst["generation"]
 
             async def redraw() -> None:
-                driver.write("\x1b[J")
-                await self._post_message(events.Resize(size, size))
+                # A window that is dragged, or animated as Terminal.app does, sends a signal for every column
+                # it passes: one redraw, once it has stopped. Thirty overlapping redraws stacked thirty frames.
+                await asyncio.sleep(0.15)
+                if generation != burst["generation"]:
+                    return
+                width, height = driver._get_terminal_size()
+                # The rows between the block's first line and the one the cursor waits on, as the terminal now
+                # holds them: a line wider than the terminal takes one row per width it spans, the rest one.
+                shown = getattr(self, "_shown", [])
+                above = shown[:parked["rows"]] + [0] * max(0, parked["rows"] - len(shown))
+                up = sum(max(1, -(-columns // max(1, width))) for columns in above)
+                write((f"\x1b[{up}A" if up else "") + "\r\x1b[J")
+                parked["rows"] = 0
+                await self._post_message(events.Resize(Size(width, height), Size(width, height)))
 
             asyncio.run_coroutine_threadsafe(redraw(), loop)
 
         signal.signal(signal.SIGWINCH, on_resize)
+
+    def exit(self, *args, **kwargs) -> None:
+        """Back to the block's first line before Textual's own exit, which moves and prints from there."""
+        parked = getattr(self, "_parked", None)
+        if parked and parked["on"]:
+            parked["on"] = False
+            if parked["rows"]:
+                self._driver.write(f"\x1b[{parked['rows']}A\r")
+                parked["rows"] = 0
+        super().exit(*args, **kwargs)
 
     def after_resize(self) -> None:
         """Called by the block itself once Textual has laid it out at the new size. Drawn on the App's
@@ -236,6 +296,9 @@ class ChoiceApp(App[dict | None]):
         if self._resize_pending:
             return
         text, self.line_rows = self.render_screen(max(40, self.size.width or 80))
+        # What each line shows, without the padding Textual adds: a terminal that re-wraps on resize
+        # counts only this, so it is what tells how many rows the frame takes at a new width.
+        self._shown = [cell_len(line.rstrip()) for line in text.plain.split("\n")]
         self.query_one("#screen", Screenful).update(text)
 
     def _label(self, name: str) -> str:
