@@ -40,6 +40,39 @@ class DashServerTest(unittest.TestCase):
             with self.assertRaisesRegex(AddonFailure, "Port 5100 is in use"):
                 dash_server._settle_port(self.ctx)
 
+    def test_the_seeded_demo_dashboard_is_removed_once(self) -> None:
+        apps = {"apps": [{"name": "demo", "title": "Demo Dashboard"}, {"name": "sales", "title": "Sales"}]}
+        calls = []
+
+        def tool(port, name, arguments):
+            calls.append((name, arguments))
+            return apps if name == "apps_list" else {"deleted": True}
+
+        with patch.object(dash_server, "_tool", side_effect=tool):
+            dash_server._drop_demo(self.ctx, 5100)
+            dash_server._drop_demo(self.ctx, 5100)
+        self.assertEqual([("apps_list", {}), ("app_delete", {"name": "demo", "confirmation": "demo"})], calls)
+        self.assertIs(True, self.manifest.get("components.dash_server.demo_removed"))
+
+    def test_a_dashboard_a_person_called_demo_stays(self) -> None:
+        calls = []
+
+        def tool(port, name, arguments):
+            calls.append(name)
+            return {"apps": [{"name": "demo", "title": "Our demo"}]}
+
+        with patch.object(dash_server, "_tool", side_effect=tool):
+            dash_server._drop_demo(self.ctx, 5100)
+        self.assertEqual(["apps_list"], calls)
+        self.assertIs(True, self.manifest.get("components.dash_server.demo_removed"))
+
+    def test_an_unreachable_control_plane_leaves_the_demo_for_the_next_start(self) -> None:
+        with patch.object(dash_server, "_tool", side_effect=AddonFailure("refused")), \
+             patch.object(KitContext, "activity") as said:
+            dash_server._drop_demo(self.ctx, 5100)
+        self.assertIsNone(self.manifest.get("components.dash_server.demo_removed"))
+        said.assert_called_once()
+
     def test_same_version_install_restores_missing_launcher(self) -> None:
         self.manifest.set_many({"components.dash_server.ownership": "kit",
                                 "components.dash_server.version": "0.1.1"})

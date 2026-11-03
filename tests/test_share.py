@@ -92,6 +92,9 @@ class ShareTests(unittest.TestCase):
         self.assertEqual([event["state"] for event in events], ["preview", "live"])
         self.assertEqual(events[0]["sql"], draft.sql)
         self.assertEqual(events[0]["source_table"], "EXAMPLE.FACT")
+        created = dict(tool.calls)["app_create_exasol_dashboard"]
+        self.assertEqual(created["description"], f"From the approved {Dataset().id} data, descriptor v4.")
+        self.assertNotIn("Exasol", created["description"])
 
     def test_existing_managed_dashboard_gets_a_new_draft(self):
         draft = share(Dataset(), "SELECT 1", "Example", "example")

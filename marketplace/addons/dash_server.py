@@ -176,6 +176,52 @@ def _http(port: int, path: str, *, browser: bool) -> bool:
     return 200 <= code < (400 if browser else 500)
 
 
+def _tool(port: int, name: str, arguments: dict) -> dict:
+    """One call on Dash Server's MCP control plane, which answers plain JSON on loopback: initialize, then the tool.
+    The result's structuredContent, or AddonFailure with the server's own words."""
+    session: dict[str, str] = {}
+
+    def post(body: dict) -> dict:
+        headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream", **session}
+        request = urllib.request.Request(f"http://127.0.0.1:{port}/mcp", json.dumps(body).encode("utf-8"), headers)
+        with urllib.request.urlopen(request, timeout=30) as response:
+            if response.headers.get("Mcp-Session-Id"):
+                session["Mcp-Session-Id"] = response.headers["Mcp-Session-Id"]
+            text = response.read().decode("utf-8")
+        if text.lstrip().startswith(("event:", "data:")):      # a server that streams answers in one SSE message
+            text = "".join(line[5:] for line in text.splitlines() if line.startswith("data:"))
+        return json.loads(text or "{}")
+
+    try:
+        post({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+              "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "exakit", "version": "1"}}})
+        post({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        result = post({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                       "params": {"name": name, "arguments": arguments}}).get("result") or {}
+    except (OSError, ValueError) as error:
+        raise AddonFailure(f"Dash Server's {name} did not answer: {error}") from error
+    if result.get("isError"):
+        raise AddonFailure(f"Dash Server refused {name}: {str(result.get('content'))[:300]}")
+    return result.get("structuredContent") or {}
+
+
+def _drop_demo(ctx: KitContext, port: int) -> None:
+    """Dash Server seeds a built-in "Demo Dashboard" (demo) on its first start, a check of its own hosting with
+    nothing of the user's in it, and has no setting to skip it. The kit removes it once, while it is still the seeded
+    one, and records that: a dashboard a person later calls demo is theirs and stays."""
+    if ctx.manifest.get(f"{RECEIPT}.demo_removed") is True:
+        return
+    try:
+        apps = _tool(port, "apps_list", {}).get("apps") or []
+        seeded = next((app for app in apps if app.get("name") == "demo" and app.get("title") == "Demo Dashboard"), None)
+        if seeded is not None:
+            _tool(port, "app_delete", {"name": "demo", "confirmation": "demo"})
+    except AddonFailure as error:
+        ctx.activity(f"The built-in demo dashboard stays: {error}")
+        return
+    ctx.manifest.set_many({f"{RECEIPT}.demo_removed": True})
+
+
 def validate(ctx: KitContext) -> bool:
     venv, _, _ = paths(ctx)
     python = venv_python(venv)
@@ -199,6 +245,8 @@ def validate(ctx: KitContext) -> bool:
             ok = _http(port, "/mcp", browser=False)
             browser = _http(port, "/", browser=True) if ok else False
         ctx.manifest.set_many({f"{RECEIPT}.validated": ok, f"{RECEIPT}.ui_validated": browser})
+        if ok:
+            _drop_demo(ctx, port)
         return ok
     except AddonFailure:
         ctx.manifest.set_many({f"{RECEIPT}.validated": False})
@@ -224,6 +272,7 @@ def start(ctx: KitContext) -> str:
     if not _http(port, "/mcp", browser=False):
         raise AddonFailure(f"Dash Server started but /mcp does not answer on port {port}")
     ctx.manifest.set_many({f"{RECEIPT}.port": port})
+    _drop_demo(ctx, port)
     return f"Dash Server is running at {url(ctx)}"
 
 

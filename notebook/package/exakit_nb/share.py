@@ -54,11 +54,17 @@ class ShareDraft:
         return [
             ("app_create_exasol_dashboard", {"name": self.name, "profile_name": profile_name,
                                              "pattern": "analytics-hub", "title": self.title,
+                                             "description": self.description(),
                                              "start_immediately": False}),
             ("app_put_files", {"name": self.name, "files": self.files}),
             ("app_deploy_draft", {"name": self.name, "deployment_target": "preview"}),
             ("app_run_healthcheck", {"name": self.name, "target": "preview"}),
         ]
+
+    def description(self) -> str:
+        """The catalog's line under the title: the approved data it answers from. Without one Dash Server writes
+        "Live Exasol dashboard backed by profile <name>", which says nothing about the dashboard."""
+        return f"From the approved {self.dataset.id} data, descriptor v{self.dataset.version}."
 
     def preview(self, tool: Tool, profile_name: str = "starter-kit", windows: bool | None = None) -> str:
         """Create and health-check a preview; on Windows use build + healthcheck."""
