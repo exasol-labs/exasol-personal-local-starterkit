@@ -221,7 +221,11 @@ recorded in the dataset's `manifest.json`:
 3. **the release asset** - downloaded (with retries and timeouts) from
    `EXAKIT_DATASETS_MIRROR` when it is set (a folder, a `file://` URL or an `https://` base
    URL holding the archive), else from the manifest's URL with `{repo}` =
-   `EXAKIT_DATASETS_REPO`, default the repository the kit was installed from. The archive
+   `EXAKIT_DATASETS_REPO`, default the repository the kit was installed from. With
+   `GITHUB_TOKEN` (or `GH_TOKEN`) set, a private repository's release works too: its plain
+   download link answers 404 even with a token, so the archive is found through the GitHub
+   API and fetched from there - the token goes to `api.github.com` only, never on a command
+   line or into the log - and the plain link is still tried after. The archive
    must match the manifest's SHA-256 (a mismatch is deleted and nothing loads); every member
    must be a plain `data/<name>.csv` the manifest lists - no links, no absolute paths, no
    `..`; and every CSV must match its own digest. Only then is it cached and loaded.

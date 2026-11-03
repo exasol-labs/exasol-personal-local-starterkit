@@ -146,6 +146,49 @@ check "an https mirror is a base URL" "https://mirror.example/assets/$ARCHIVE" "
 EXAKIT_DATASETS_MIRROR="ftp://mirror.example" exakit_dataset_files "$KIT" "$DS" demo_ref
 has "any other scheme is refused" "must be a folder, a file:// URL or an https:// URL" "$EXAKIT_DATASET_FETCH_ERROR"
 
+printf '\n== a private repository: with a token, through the API ==\n'
+# The plain releases/download link of a private repository answers 404 even
+# with a token: the release is looked up by its tag and the asset fetched from
+# its API URL. curl stands in for GitHub; the token must reach it on stdin
+# (-K -), never on its command line, and never be logged.
+curl() {
+    printf '%s\n' "$*" >> "$WORK/curl.args"
+    cat >> "$WORK/curl.stdin"
+    _c_out=""; _c_url=""
+    while [ $# -gt 0 ]; do case "$1" in -o) _c_out="$2"; shift 2 ;; *) _c_url="$1"; shift ;; esac; done
+    case "$_c_url" in
+        "https://api.github.com/repos/$EXAKIT_KIT_REPO/releases/tags/datasets")
+            printf '{"assets":[{"name":"%s","url":"https://api.github.com/repos/%s/releases/assets/42"}]}' \
+                "$ARCHIVE" "$EXAKIT_KIT_REPO" > "$_c_out" ;;
+        "https://api.github.com/repos/$EXAKIT_KIT_REPO/releases/assets/42") cp "$MIRROR/$ARCHIVE" "$_c_out" ;;
+        *) return 22 ;;
+    esac
+}
+reset_cache; : > "$WORK/curl.args"; : > "$WORK/curl.stdin"
+GITHUB_TOKEN=tok-secret-123 exakit_dataset_files "$KIT" "$DS" demo_ref
+check "it loads" "0:$CACHE/demo_ref/$SHA/data" "$?:$EXAKIT_DATASET_DATA_DIR"
+check "the plain link was not needed" "" "$(cat "$WORK/fetch.calls")"
+has "the release is looked up by its tag" "api.github.com/repos/$EXAKIT_KIT_REPO/releases/tags/datasets" "$(cat "$WORK/curl.args")"
+has "the asset is fetched from its API URL as octet-stream" "Accept: application/octet-stream" "$(cat "$WORK/curl.args")"
+lacks "the token is never on curl's command line" "tok-secret-123" "$(cat "$WORK/curl.args")"
+has "it reaches curl on stdin" "Authorization: Bearer tok-secret-123" "$(cat "$WORK/curl.stdin")"
+lacks "nor in the log" "tok-secret-123" "$(cat "$EXAKIT_LOG_FILE")"
+reset_cache; : > "$WORK/curl.args"
+GH_TOKEN=tok-gh exakit_dataset_files "$KIT" "$DS" demo_ref
+check "GH_TOKEN works too" "0" "$?"
+reset_cache; : > "$WORK/curl.args"
+GITHUB_TOKEN=tok EXAKIT_DATASETS_REPO=someone/else exakit_dataset_files "$KIT" "$DS" demo_ref
+check "a release the token cannot see: it fails" "1" "$?"
+check "...after trying the plain link as well" "https://github.com/someone/else/releases/download/datasets/$ARCHIVE" "$(cat "$WORK/fetch.calls")"
+has "...and the reason names the token" "GITHUB_TOKEN" "$EXAKIT_DATASET_FETCH_ERROR"
+reset_cache; : > "$WORK/curl.args"
+exakit_dataset_files "$KIT" "$DS" demo_ref
+check "no token: the API is not asked" "" "$(cat "$WORK/curl.args")"
+reset_cache; : > "$WORK/curl.args"
+GITHUB_TOKEN=tok EXAKIT_DATASETS_MIRROR="https://mirror.example/assets" exakit_dataset_files "$KIT" "$DS" demo_ref
+check "a mirror is never sent the token" "" "$(cat "$WORK/curl.args")"
+unset -f curl
+
 printf '\n== a tampered archive is refused and never cached ==\n'
 reset_cache
 BAD="$WORK/bad-mirror"

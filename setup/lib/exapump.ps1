@@ -2916,6 +2916,60 @@ function Get-ExakitBundledDatasets {
 #                           <id>-<snapshot>.tar.gz: an offline or internal copy
 #   EXAKIT_DATASETS_REPO    owner/name whose release holds the asset (default:
 #                           the repository this kit was installed from)
+#   GITHUB_TOKEN / GH_TOKEN a token that can read that repository: a private
+#                           repository's release is fetched through the API
+
+# Get-ExakitDatasetAssetWithToken -Url -Dest - a release asset of a PRIVATE
+# repository. Twin of _exakit_dataset_fetch_token in exapump.sh: the
+# releases/download link answers 404 even with a token, so the asset is found
+# through the API (the release by its tag, the asset by name) and fetched from
+# its API URL as application/octet-stream. The token ($env:GITHUB_TOKEN, else
+# $env:GH_TOKEN) goes to api.github.com only: the redirect to the storage host
+# is followed here, without it - Windows PowerShell 5.1 would replay the header
+# there, and the storage host refuses a second credential. The storage URL is
+# signed and short-lived, so it is not logged. $true when $Dest holds the file.
+function Get-ExakitDatasetAssetWithToken {
+    param([Parameter(Mandatory)][string]$Url, [Parameter(Mandatory)][string]$Dest)
+    $token = $env:GITHUB_TOKEN
+    if (-not $token) { $token = $env:GH_TOKEN }
+    if (-not $token -or $Url -notmatch '^https://github\.com/([^/]+/[^/]+)/releases/download/([^/]+)/([^/]+)$') { return $false }
+    $repo = $Matches[1]; $tag = $Matches[2]; $file = $Matches[3]
+    try {
+        $headers = @{ Authorization = "Bearer $token"; Accept = 'application/vnd.github+json'; 'User-Agent' = 'exakit' }
+        Write-ExakitLog "INFO" "GET https://api.github.com/repos/$repo/releases/tags/$tag (with a token)"
+        $release = Invoke-RestMethod -UseBasicParsing -Headers $headers -TimeoutSec 60 `
+            -Uri "https://api.github.com/repos/$repo/releases/tags/$tag"
+        $asset = @($release.assets | Where-Object { $_.name -eq $file }) | Select-Object -First 1
+        if (-not $asset -or ("" + $asset.url) -notlike "https://api.github.com/repos/$repo/releases/assets/*") { return $false }
+        Write-ExakitLog "INFO" "GET $($asset.url) (with a token) -> $Dest"
+        $request = [System.Net.HttpWebRequest]::Create("" + $asset.url)
+        $request.AllowAutoRedirect = $false
+        $request.Accept = 'application/octet-stream'
+        $request.UserAgent = 'exakit'
+        $request.Timeout = 60000
+        $request.Headers.Add('Authorization', "Bearer $token")
+        $response = $null
+        try { $response = $request.GetResponse() } catch [System.Net.WebException] { $response = $_.Exception.Response }
+        if ($null -eq $response) { return $false }
+        $location = $null
+        try {
+            $code = [int]$response.StatusCode
+            if ($code -ge 300 -and $code -lt 400) {
+                $location = $response.Headers['Location']
+            } elseif ($code -eq 200) {
+                $stream = $response.GetResponseStream()
+                $out = [System.IO.File]::Create($Dest)
+                try { $stream.CopyTo($out) } finally { $out.Close(); $stream.Close() }
+                return $true
+            }
+        } finally { $response.Close() }
+        if (-not $location -or $location -notmatch '^https://') { return $false }
+        return [bool](Get-ExakitFile -Url $location -Dest $Dest -Soft)
+    } catch {
+        Write-ExakitLog "WARN" "The token download did not work ($($_.Exception.Message)); trying the plain link"
+        return $false
+    }
+}
 
 # Get-ExakitDatasetAsset <dataset-dir> - the manifest's asset block, or $null.
 function Get-ExakitDatasetAsset {
@@ -3082,16 +3136,23 @@ function Get-ExakitDatasetFiles {
             Remove-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue
         }
     } else {
+        # With a token, the release may be a private repository's: through the
+        # API first, then the plain link (a public repository needs no token).
+        $viaToken = $false
+        if (-not $mirror -and ($env:GITHUB_TOKEN -or $env:GH_TOKEN)) {
+            $viaToken = Get-ExakitDatasetAssetWithToken -Url $source -Dest $part
+            if (-not $viaToken) { Remove-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue }
+        }
         # Three tries, each bounded (10 s to connect, 20 s between bytes): a
         # blip is retried, an offline machine answers in seconds, not minutes.
-        for ($attempt = 1; $attempt -le 3; $attempt++) {
+        for ($attempt = 1; -not $viaToken -and $attempt -le 3; $attempt++) {
             if (Get-ExakitFile -Url $source -Dest $part -Soft) { break }
             if ($attempt -lt 3) { Start-Sleep -Seconds (2 * $attempt) }
         }
     }
     if (-not (Test-Path -LiteralPath $part) -or (Get-Item -LiteralPath $part).Length -eq 0) {
         Remove-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue
-        Fail "The '$Id' data could not be fetched from $source and nothing is cached. Retry when online, or set EXAKIT_DATASETS_MIRROR to a folder or URL holding $file."
+        Fail "The '$Id' data could not be fetched from $source and nothing is cached. Retry when online; for a private repository set GITHUB_TOKEN; or set EXAKIT_DATASETS_MIRROR to a folder or URL holding $file."
     }
     $done = Invoke-ExakitDatasetAssetService $KitRoot "install" $Dir $cache $part
     Remove-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue

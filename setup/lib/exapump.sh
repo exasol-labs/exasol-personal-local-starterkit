@@ -2895,6 +2895,46 @@ exakit_bundled_datasets() {
 #                           <id>-<snapshot>.tar.gz: an offline or internal copy
 #   EXAKIT_DATASETS_REPO    owner/name whose release holds the asset (default:
 #                           the repository this kit was installed from)
+#   GITHUB_TOKEN / GH_TOKEN a token that can read that repository: a private
+#                           repository's release is fetched through the API
+
+# _exakit_dataset_fetch_token <url> <dest> — a release asset of a PRIVATE
+# repository. Its github.com/<repo>/releases/download/<tag>/<file> link answers
+# 404 even with a token, so the asset is found through the API (the release by
+# its tag, then the asset by name) and fetched from its API URL as
+# application/octet-stream. The token (GITHUB_TOKEN, else GH_TOKEN) reaches
+# curl on stdin, never on its command line where ps shows it, and is sent to
+# api.github.com only: curl does not carry an Authorization header across the
+# redirect to the storage host. Returns 1 on any failure; the caller words it.
+_exakit_dataset_fetch_token() {
+    _edt_token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+    [ -n "$_edt_token" ] || return 1
+    case "$1" in https://github.com/*/*/releases/download/*/*) ;; *) return 1 ;; esac
+    _edt_rest="${1#https://github.com/}"
+    _edt_repo="$(printf '%s' "$_edt_rest" | cut -d/ -f1-2)"
+    _edt_tag="$(printf '%s' "$_edt_rest" | cut -d/ -f5)"
+    _edt_file="${1##*/}"
+    _edt_json="$(mktemp "${TMPDIR:-/tmp}/exakit-release.XXXXXX")" || return 1
+    _exakit_log_file "GET   https://api.github.com/repos/$_edt_repo/releases/tags/$_edt_tag (with a token)"
+    if ! printf 'header = "Authorization: Bearer %s"\n' "$_edt_token" | curl -fsSL --proto '=https' --proto-redir '=https' \
+            --retry 3 --connect-timeout 15 --max-time 60 -K - -H 'Accept: application/vnd.github+json' \
+            -o "$_edt_json" "https://api.github.com/repos/$_edt_repo/releases/tags/$_edt_tag"; then
+        rm -f "$_edt_json"
+        return 1
+    fi
+    _edt_api="$(run_python_any - "$_edt_json" "$_edt_file" <<'PY'
+import json, sys
+release = json.load(open(sys.argv[1], encoding="utf-8"))
+print(next((a.get("url", "") for a in release.get("assets", []) if a.get("name") == sys.argv[2]), ""))
+PY
+)"
+    rm -f "$_edt_json"
+    case "$_edt_api" in "https://api.github.com/repos/$_edt_repo/releases/assets/"*) ;; *) return 1 ;; esac
+    _exakit_log_file "GET   $_edt_api (with a token) -> $2"
+    printf 'header = "Authorization: Bearer %s"\n' "$_edt_token" | curl -fsSL --proto '=https' --proto-redir '=https' \
+        --retry 3 --connect-timeout 15 --speed-limit 1024 --speed-time 60 -K - -H 'Accept: application/octet-stream' \
+        -o "$2" "$_edt_api"
+}
 
 # _exakit_dataset_asset_field <manifest.json> <key> — one value of the asset
 # block, read without Python (the listing calls this for every dataset).
@@ -2994,12 +3034,23 @@ EXAKIT_EDF_EOF
         cp "$_edf_local" "$_edf_part" 2>>"${EXAKIT_LOG_FILE:-/dev/null}" || rm -f "$_edf_part"
     else
         EXAKIT_ACTIVE_LABEL="Downloading the '$_edf_id' data ($_edf_mb)"
-        fetch_quiet "$_edf_src" "$_edf_part" || rm -f "$_edf_part"
+        # With a token, the release may be a private repository's: through the
+        # API first, then the plain link (a public repository needs no token).
+        _edf_tok=0
+        if [ -z "${EXAKIT_DATASETS_MIRROR:-}" ] && [ -n "${GITHUB_TOKEN:-${GH_TOKEN:-}}" ]; then
+            ui_spin_begin "$EXAKIT_ACTIVE_LABEL"
+            _exakit_dataset_fetch_token "$_edf_src" "$_edf_part" >>"${EXAKIT_LOG_FILE:-/dev/null}" 2>&1 && _edf_tok=1
+            ui_spin_end
+            [ "$_edf_tok" = 1 ] || rm -f "$_edf_part"
+        fi
+        if [ "$_edf_tok" != 1 ]; then
+            fetch_quiet "$_edf_src" "$_edf_part" || rm -f "$_edf_part"
+        fi
         EXAKIT_ACTIVE_LABEL=""
     fi
     if [ ! -s "$_edf_part" ]; then
         rm -f "$_edf_part"
-        EXAKIT_DATASET_FETCH_ERROR="The '$_edf_id' data could not be fetched from $_edf_src and nothing is cached. Retry when online, or set EXAKIT_DATASETS_MIRROR to a folder or URL holding $_edf_file."
+        EXAKIT_DATASET_FETCH_ERROR="The '$_edf_id' data could not be fetched from $_edf_src and nothing is cached. Retry when online; for a private repository set GITHUB_TOKEN; or set EXAKIT_DATASETS_MIRROR to a folder or URL holding $_edf_file."
         return 1
     fi
     _edf_err="$(mktemp "${TMPDIR:-/tmp}/exakit-asset.XXXXXX")" || _edf_err="/dev/null"
