@@ -743,15 +743,13 @@ def main() -> int:
                 defaults = {row.id for row in addons if states.get(row.id, {}).get("status") == "available"}
         app = ChoiceApp(args.mode, rows, defaults, set(args.frontends.split(",")),
                         apply_selection=args.apply)
-        result = app.run(inline=sys.platform != "win32", inline_no_clear=True)
+        result = app.run(inline=True, inline_no_clear=True)  # never full screen; launch.py keeps Windows out
         if result is None:
             return 10
         if args.apply:
             for event in app.apply_events:
                 if event.phase in ("warning", "failed"):
                     print(f"{event.addon}: {event.detail}", file=sys.stderr)
-                elif event.phase == "done" and sys.platform == "win32":
-                    print(f"{event.addon} installed" + (f" — {event.detail}" if event.detail else ""))
             if result.get("error"):
                 print(f"marketplace: {result['error']}", file=sys.stderr)
             return 0 if result.get("success") else 1

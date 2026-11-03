@@ -36,6 +36,11 @@ def textual_pin(path: Path) -> str:
 
 def run(root: Path, args: list[str]) -> int:
     warm = args[:1] == ["warm"]
+    if sys.platform == "win32":
+        # Textual has no inline driver for Windows: it would take the whole screen. The questions stay in
+        # the flow under the shell's own lines, so the kit's own menus draw them there (11: use them).
+        print("The Textual menus draw inline only; Windows uses the kit's own menus.", file=sys.stderr)
+        return 11
     if not warm and (not sys.stdin.isatty() or not sys.stdout.isatty()):
         print("An interactive terminal is required for the persona/marketplace UI.", file=sys.stderr)
         return 10

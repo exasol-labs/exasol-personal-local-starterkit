@@ -175,6 +175,18 @@ class MarketplaceModelTest(unittest.TestCase):
         self.assertEqual(10, run(self.root, ["persona", "--out", str(result)]))
         self.assertFalse(result.exists())
 
+    def test_windows_never_gets_a_full_screen_menu(self) -> None:
+        # Textual has no inline driver for Windows. 11 sends the caller to the kit's own menus, which stay in
+        # the flow; nothing is started, not even the warm-up download.
+        (self.root / "marketplace/ui.py").write_text("", encoding="utf-8")
+        terminal = SimpleNamespace(isatty=lambda: True)
+        for mode in (["persona", "--out", str(self.root / "choice.json")], ["warm"]):
+            with patch("launch.sys.platform", "win32"), \
+                 patch("launch.sys.stdin", terminal), patch("launch.sys.stdout", terminal), \
+                 patch("launch.subprocess.run") as call:
+                self.assertEqual(11, run(self.root, mode))
+            call.assert_not_called()
+
     def test_ui_uv_cache_stays_under_the_kit_home(self) -> None:
         (self.root / "marketplace/ui.py").write_text("", encoding="utf-8")
         home = self.root / "kit home"

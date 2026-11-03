@@ -112,6 +112,23 @@ try {
     function Write-ExakitHeading { param($Text) }
     Read-ExakitPersonaQuestion
     Check "a re-run ticks the persona this kit was set up as" "2" $script:menuDefaults
+    Write-Host "on Windows the question stays in the flow, drawn by the kit's own menu (Textual would go full screen):"
+    $onWindows = $true
+    if (Get-Variable -Name IsWindows -ErrorAction SilentlyContinue) { $onWindows = [bool]$IsWindows }
+    Check "Textual draws inline only off Windows" (-not $onWindows) (Test-ExakitTextualInline)
+    $script:menuDefaults = $null; $script:textualAsked = $false
+    & {
+        # Stubs in a scope of their own: they end with it, and the kit's functions they stand in for remain.
+        function Test-ExakitInteractive { return $true }
+        function Test-ExakitStdoutIsTerminal { return $true }
+        function Test-ExakitTextualInline { return $false }
+        # Only the Textual path turns the spinner ("Opening the question") before it starts.
+        function Start-ExakitSpinner { param($Message) $script:textualAsked = $true; throw "Textual was asked for" }
+        function Warn2 { param($Message) }
+        Read-ExakitPersonaQuestion
+    }
+    Check "an interactive Windows terminal gets the kit's menu" "2" $script:menuDefaults
+    Check "...and Textual is never started" $false $script:textualAsked
     Set-ExakitManifestValue "persona.id" ""
     Clear-Answers; $env:EXAKIT_PERSONA = "ml-engineer"; Set-ExakitPersonaEnv -NoRecord
     Check "-NoRecord answers without recording" "" "$(Get-ExakitManifestValue 'persona.id')"

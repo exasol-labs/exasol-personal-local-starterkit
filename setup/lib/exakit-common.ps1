@@ -5827,10 +5827,19 @@ function Resolve-ExakitMarketplaceAnswer {
     } finally { $ErrorActionPreference = $previousErrorActionPreference }
 }
 
+# Test-ExakitTextualInline - the Textual menus can draw here inline, under the question like every other
+# line of the run. Textual has no inline driver for Windows and would take the whole screen, so there the
+# kit's own menus draw the persona and add-on questions: the same flow, in the console's colours.
+function Test-ExakitTextualInline {
+    $onWindows = $true
+    if (Get-Variable -Name IsWindows -ErrorAction SilentlyContinue) { $onWindows = [bool]$IsWindows }
+    return (-not $onWindows)
+}
+
 function Show-ExakitMarketplaceMenu {
     if (-not $env:EXAKIT_MARKETPLACE_ADDONS -and
         $env:UI_TABLE_AUTO -ne '1' -and (Test-ExakitInteractive) -and (Test-ExakitStdoutIsTerminal) -and
-        $env:EXAKIT_NO_FANCY -ne '1') {
+        $env:EXAKIT_NO_FANCY -ne '1' -and (Test-ExakitTextualInline)) {
         $root = Get-ExakitMarketplaceRoot
         $launcher = Join-Path (Join-Path $root 'marketplace') 'launch.py'
         $statesPath = Join-Path ([System.IO.Path]::GetTempPath()) ("exakit-market-state-" + [guid]::NewGuid().ToString('N') + '.json')

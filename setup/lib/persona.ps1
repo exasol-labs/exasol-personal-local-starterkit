@@ -168,7 +168,8 @@ function Read-ExakitPersonaQuestion {
     # The rule and the heading are the question's own, whichever draws the rows.
     Write-ExakitRule
     Write-ExakitHeading "What will you use this machine for?"
-    if ((Test-ExakitInteractive) -and (Test-ExakitStdoutIsTerminal) -and $env:EXAKIT_NO_FANCY -ne '1') {
+    if ((Test-ExakitInteractive) -and (Test-ExakitStdoutIsTerminal) -and $env:EXAKIT_NO_FANCY -ne '1' -and
+        (Test-ExakitTextualInline)) {
         $root = Get-ExakitMarketplaceRoot
         $launcher = Join-Path (Join-Path $root 'marketplace') 'launch.py'
         $resultPath = Join-Path ([System.IO.Path]::GetTempPath()) ("exakit-persona-ui-" + [guid]::NewGuid().ToString('N') + '.json')
