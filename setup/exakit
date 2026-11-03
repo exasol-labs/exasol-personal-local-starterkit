@@ -1522,7 +1522,8 @@ cmd_uninstall() {
                 ;;
         esac
     done
-    exakit_init_logging 2>/dev/null || true
+    # A preview changes nothing on disk, its log included.
+    [ "$_uni_dry" = 1 ] || exakit_init_logging 2>/dev/null || true
 
     if [ -n "$_uni_addon" ]; then
         [ -f "$EXAKIT_MANIFEST" ] || die "No installation found. Run the installer first."

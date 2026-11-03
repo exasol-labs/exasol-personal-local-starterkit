@@ -14,6 +14,7 @@ import tempfile
 from pathlib import Path
 
 from marketplace_database_lifecycle import DatabaseChecks
+from privacy_watch import PrivacyWatch, leftovers, paths
 
 ROOT = Path(__file__).resolve().parents[2]
 ADDONS = ("dbt-exasol", "json-tables", "dash-server", "notebook", "exasol-vscode", "exasol-scheduler", "udf-devkit")
@@ -25,11 +26,10 @@ def fixture_manifest(source: Path) -> dict:
             "autostart": {"enabled": False}}
 
 
-def snapshot(folder: Path) -> dict[str, tuple[int, int]]:
-    return {str(path.relative_to(folder)): (path.stat().st_size, path.stat().st_mtime_ns)
-            for path in folder.rglob("*") if path.is_file()
-            and "logs" not in path.relative_to(folder).parts
-            and path.name != "manifest.json.lock"}
+def snapshot(folder: Path) -> dict[str, tuple[int, int] | None]:
+    """Every file with its size and modification time, and every folder: a preview may change none of it."""
+    return {str(path.relative_to(folder)): (path.stat().st_size, path.stat().st_mtime_ns) if path.is_file() else None
+            for path in folder.rglob("*")}
 
 
 def prefix() -> list[str]:
@@ -57,7 +57,7 @@ def run(addons: list[str], source: Path, output: Path, *, approve_test_writes: b
            tuple(map(int, target.groups())) <= tuple(map(int, current.groups())):
             raise RuntimeError("Upgrade targets must name selected package add-ons and a newer stable version")
     original = source / "manifest.json"
-    before = hashlib.sha256(original.read_bytes()).hexdigest()
+    digest = hashlib.sha256(original.read_bytes()).hexdigest()
     fixture = fixture_manifest(source)
     runtime = fixture["runtime"]
     base = Path(tempfile.mkdtemp(prefix="exakit lifecycle "))
@@ -99,6 +99,7 @@ def run(addons: list[str], source: Path, output: Path, *, approve_test_writes: b
     for addon in addons:
         env[f"EXAKIT_{addon.upper().replace('-', '_')}_VERSION"] = baselines.get(addon, versions[addon]["version"])
     database = DatabaseChecks(source, home, bin_dir, env, fixture, addons)
+    watch = PrivacyWatch(source, home, bin_dir, fixture)
     manifest.write_text(json.dumps(fixture))
     report = {"ok": False, "platform": os.sys.platform, "home": str(home), "addons": {},
               "scope": "native install/reinstall/current-version update/preview/removal",
@@ -106,9 +107,11 @@ def run(addons: list[str], source: Path, output: Path, *, approve_test_writes: b
     captured: list[str] = []
 
     def command(*args: str, check: bool = True) -> subprocess.CompletedProcess:
-        result = subprocess.run([*prefix(), *args], env=env, capture_output=True,
-                                text=True, timeout=1200, stdin=subprocess.DEVNULL)
+        with watch.watching(" ".join(args)):
+            result = subprocess.run([*prefix(), *args], env=env, capture_output=True,
+                                    text=True, timeout=1200, stdin=subprocess.DEVNULL)
         captured.extend((result.stdout, result.stderr))
+        watch.scan_text(" ".join(args), "command output", result.stdout + result.stderr)
         with command_log.open("a") as handle:
             handle.write(f"{args!r}: exit {result.returncode}\n{result.stdout}\n{result.stderr}\n")
         if check and result.returncode:
@@ -122,7 +125,9 @@ def run(addons: list[str], source: Path, output: Path, *, approve_test_writes: b
             report["addons"][addon] = row
             key = addon.replace("-", "_")
             database.before_install(addon, command)
+            before = paths(home) | {"bin/" + item for item in paths(bin_dir)}
             command("marketplace", addon)
+            watch.scan_files(f"{addon} installed")
             first = json.loads(manifest.read_text())["components"].get(key, {})
             if first.get("ownership") != "kit":
                 raise RuntimeError(f"{addon} did not produce a kit-owned receipt")
@@ -160,8 +165,11 @@ def run(addons: list[str], source: Path, output: Path, *, approve_test_writes: b
             state = snapshot(home)
             state_bin = snapshot(bin_dir)
             command("uninstall", addon, "--dry-run")
-            if state != snapshot(home) or state_bin != snapshot(bin_dir):
-                raise RuntimeError(f"{addon} preview changed resources outside its logs")
+            command("uninstall", "--dry-run")
+            changed = sorted(set(state.items()) ^ set(snapshot(home).items()))
+            changed += sorted(set(state_bin.items()) ^ set(snapshot(bin_dir).items()))
+            if changed:
+                raise RuntimeError(f"{addon} preview changed {', '.join(sorted({str(item[0]) for item in changed}))}")
             print(f"{addon}: remove and repeat removal", flush=True)
             database.before_uninstall(addon, command)
             command("uninstall", addon, "--yes")
@@ -169,6 +177,14 @@ def run(addons: list[str], source: Path, output: Path, *, approve_test_writes: b
             database.after_uninstall(addon, command)
             if key in json.loads(manifest.read_text()).get("components", {}):
                 raise RuntimeError(f"{addon} receipt remains after removal")
+            watch.scan_files(f"{addon} removed")
+            # Dashboards, notebooks and Rust UDF sources are the user's work: removal keeps them by design.
+            kept = personal_dir if addon in ("dash-server", "notebook", "udf-devkit") else sentinel
+            kept = [kept.relative_to(home).as_posix() + ("/" if kept.is_dir() else "")] if kept.is_relative_to(home) else []
+            left = leftovers(before, paths(home) | {"bin/" + item for item in paths(bin_dir)}, kept)
+            row["leftovers"] = left
+            if left:
+                raise RuntimeError(f"{addon} removal left {', '.join(left[:10])}")
             if sentinel.read_text() != "Keep my personal work.\n":
                 raise RuntimeError(f"{addon} removed personal work")
             for field in ("venv", "command", "engine", "store_file", "master_file"):
@@ -176,7 +192,7 @@ def run(addons: list[str], source: Path, output: Path, *, approve_test_writes: b
                 if value and Path(value).is_relative_to(base) and Path(value).exists():
                     raise RuntimeError(f"{addon} left its generated {field}")
             row.update({"ok": True, "version": first["version"], "install_twice": True,
-                        "current_update": True, "preview_preserved_resources": True,
+                        "current_update": True, "preview_changed_nothing": True,
                         "uninstall_twice": True, "personal_file_preserved": True})
             row.update(database.evidence.get(addon, {}))
         report["ok"] = True
@@ -197,8 +213,10 @@ def run(addons: list[str], source: Path, output: Path, *, approve_test_writes: b
         except (OSError, RuntimeError, subprocess.TimeoutExpired):
             report["cleanup_required"] = True
             report["ok"] = False
-        report["original_manifest_unchanged"] = before == hashlib.sha256(original.read_bytes()).hexdigest()
+        report["original_manifest_unchanged"] = digest == hashlib.sha256(original.read_bytes()).hexdigest()
         report["ok"] &= report["original_manifest_unchanged"]
+        report["privacy"] = {"findings": watch.findings, "process_samples": watch.samples}
+        report["ok"] &= not watch.findings
         credential = Path(runtime.get("password_file", ""))
         if credential.is_file():
             secret = credential.read_text().strip()

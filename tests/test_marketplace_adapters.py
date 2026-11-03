@@ -53,6 +53,26 @@ class AdapterDryRunTest(unittest.TestCase):
         self.assertIn(str(self.profile), result.stdout)
         self._assert_preserved()
 
+    def _tree(self) -> dict[str, tuple[int, int] | None]:
+        return {str(path.relative_to(self.base)): (path.stat().st_size, path.stat().st_mtime_ns)
+                if path.is_file() else None for root in (self.home, self.bin_dir) for path in [root, *root.rglob("*")]}
+
+    def _assert_public_previews_change_nothing(self, prefix: list[str]) -> None:
+        before = self._tree()
+        for args in (["uninstall", "dbt-exasol", "--dry-run"], ["uninstall", "--dry-run"]):
+            result = subprocess.run([*prefix, *args], env=self._environment(), stdin=subprocess.DEVNULL,
+                                    capture_output=True, text=True, timeout=90, check=False)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertEqual(before, self._tree(), f"{' '.join(args)} changed the kit home, its logs included")
+        self._assert_preserved()
+
+    def test_bash_public_previews_write_nothing_not_even_a_log(self) -> None:
+        self._assert_public_previews_change_nothing(["bash", str(ROOT / "setup/exakit")])
+
+    @unittest.skipUnless(shutil.which("pwsh"), "PowerShell is not installed")
+    def test_powershell_public_previews_write_nothing_not_even_a_log(self) -> None:
+        self._assert_public_previews_change_nothing(["pwsh", "-NoProfile", "-File", str(ROOT / "setup/exakit.ps1")])
+
     def test_public_catalog_lists_dbt_on_both_platform_entry_points(self) -> None:
         commands = [[str(ROOT / "setup/exakit")]]
         if shutil.which("pwsh"):

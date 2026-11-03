@@ -15,9 +15,32 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "marketplace"))
-from runtime import AddonFailure, KitContext, Manifest, activity_sink  # noqa: E402
+from runtime import AddonFailure, KitContext, Manifest, activity_sink, cmd_quote  # noqa: E402
 from addons import dash_server, dbt_exasol, exasol_scheduler, exasol_vscode, json_tables  # noqa: E402
 from service import invoke  # noqa: E402
+
+
+class WindowsWrapperQuotingTest(unittest.TestCase):
+    """A generated .cmd file is read by cmd: & ^ | split commands outside quotes and %NAME% expands inside them."""
+
+    def test_every_argument_is_quoted_so_an_ampersand_stays_text(self) -> None:
+        self.assertEqual(r'"C:\Users\R&D\python.exe"', cmd_quote(Path("C:/Users/R&D/python.exe")).replace("/", "\\"))
+        self.assertEqual('"plain"', cmd_quote("plain"))
+
+    def test_percent_is_doubled_so_cmd_does_not_expand_it(self) -> None:
+        self.assertEqual('"C:\\a%%PATH%%b"', cmd_quote("C:\\a%PATH%b"))
+
+    def test_a_quote_inside_an_argument_is_doubled(self) -> None:
+        self.assertEqual('"say ""hi"""', cmd_quote('say "hi"'))
+
+    def test_every_cmd_writer_builds_its_line_with_cmd_quote(self) -> None:
+        for path in sorted((ROOT / "marketplace").rglob("*.py")):
+            lines = path.read_text(encoding="utf-8").splitlines()
+            for number, line in enumerate(lines):
+                if "@echo off" in line or ".cmd\").write_text" in line:
+                    statement = "\n".join(lines[max(0, number - 2):number + 3])
+                    with self.subTest(file=path.name, line=number + 1):
+                        self.assertIn("cmd_quote", statement)
 
 
 class ManifestTest(unittest.TestCase):

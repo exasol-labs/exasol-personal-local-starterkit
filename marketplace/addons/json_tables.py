@@ -17,7 +17,7 @@ import urllib.request
 from urllib.error import HTTPError
 from pathlib import Path, PurePosixPath
 
-from runtime import AddonFailure, KitContext, venv_python
+from runtime import AddonFailure, KitContext, cmd_quote, venv_python
 
 ID = "json-tables"
 RECEIPT = "components.json_tables"
@@ -238,7 +238,8 @@ def _write_launchers(ctx: KitContext) -> None:
     launcher.parent.mkdir(parents=True, exist_ok=True)
     cli = venv / ("Scripts/exasol-json-tables.exe" if os.name == "nt" else "bin/exasol-json-tables")
     if os.name == "nt":
-        launcher.write_text(f'@echo off\r\nset "PATH={shim.parent};%PATH%"\r\n"{cli}" %*\r\n', encoding="utf-8")
+        launcher.write_text("@echo off\r\nset " + cmd_quote(f"PATH={shim.parent};").rstrip('"') + '%PATH%"\r\n'
+                            + f"{cmd_quote(cli)} %*\r\n", encoding="utf-8")
     else:
         launcher.write_text("#!/bin/sh\nPATH=" + shlex.quote(str(shim.parent)) + ':"$PATH"\nexport PATH\nexec '
                             + shlex.quote(str(cli)) + ' "$@"\n', encoding="utf-8")

@@ -358,6 +358,18 @@ class NotebookPlanTest(unittest.TestCase):
         self.assertFalse((home / "connection.scs").exists())
         self.assertEqual("user notebook", (directory / "analysis.ipynb").read_text())
         self.assertIsNone(self.store.get("components.notebook"))
+        self.assertFalse(home.exists(), "the emptied add-on folder is removed")
+        self.assertFalse(token.parent.exists(), "an emptied credentials folder is removed")
+
+    def test_uninstall_keeps_a_credentials_folder_that_holds_other_secrets(self) -> None:
+        self.store.set_many({"components.notebook.ownership": "kit", "components.notebook.version": "3.1.0"})
+        token = notebook._credential(self.ctx, "notebook_jupyter_token")
+        database = token.parent / "database_password"
+        database.write_text("kept", encoding="utf-8")
+        with patch.object(notebook_cli, "OnDemandServer"), patch.object(notebook, "_run_helper"):
+            notebook.uninstall(self.ctx)
+        self.assertFalse(token.exists())
+        self.assertEqual("kept", database.read_text())
 
     def test_menu_selection_continues_after_one_frontend_fails(self) -> None:
         self.store.set_many({"components.notebook.version": "3.1.0"})

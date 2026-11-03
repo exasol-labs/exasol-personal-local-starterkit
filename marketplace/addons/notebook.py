@@ -350,5 +350,11 @@ def uninstall(ctx: KitContext, *, dry_run: bool = False) -> list[Path]:
             shutil.rmtree(target)
         else:
             target.unlink(missing_ok=True)
+    # The add-on's folder and the credentials folder go only when nothing else lives in them.
+    for folder in (home, ctx.home / "credentials"):
+        try:
+            folder.rmdir()
+        except OSError:
+            pass
     ctx.manifest.delete(RECEIPT, "desired.notebook")
     return targets

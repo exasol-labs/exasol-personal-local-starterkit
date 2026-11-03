@@ -127,7 +127,8 @@ if (Test-Path (Join-Path $scriptDir "lib\exakit-common.ps1")) {
 # Discovery reads shipped documents and must not create an installation merely
 # by importing common helpers. SQL arguments are text, so do not scan them.
 $script:ExakitReadOnlyHelp = (@('help','catalog','--help','-h','-?') -contains $Command) -or
-    ($Command -ne 'sql' -and ($RestArgs -contains '--help' -or $RestArgs -contains '-h'))
+    ($Command -ne 'sql' -and ($RestArgs -contains '--help' -or $RestArgs -contains '-h')) -or
+    ($Command -eq 'uninstall' -and ($RestArgs -contains '-DryRun' -or $RestArgs -contains '--dry-run' -or $RestArgs -contains '-n'))
 $script:ExakitReadOnlyQuery = $Command -in @('status','version','info','mcp-status','mcp-doctor','skills','catalog','logs','help','whats-new','--help','-h','-?')
 . (Join-Path $libDir "exakit-common.ps1")
 . (Join-Path $libDir "runtime-personal.ps1")
@@ -1687,7 +1688,8 @@ foreach (`$f in @($quoted)) { try { Remove-Item -Force -ErrorAction SilentlyCont
 
 function Invoke-CmdUninstall {
     param([switch]$AssumeYes, [switch]$DryRun, [string]$Addon = "")
-    Initialize-ExakitLogging
+    # A preview changes nothing on disk, its log included.
+    if ($DryRun) { Show-ExakitHomeNotice } else { Initialize-ExakitLogging }
 
     if (-not (Test-Path $script:ManifestPath) -and
         -not (Test-Path (Join-Path $script:BinDir "exakit.cmd")) -and

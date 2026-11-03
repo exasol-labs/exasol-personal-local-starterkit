@@ -10,7 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from runtime import AddonFailure, KitContext
+from runtime import AddonFailure, KitContext, cmd_quote
 
 
 def _skill_owner(path: Path) -> str:
@@ -109,8 +109,7 @@ def register_autostart(ctx: KitContext, addon_id: str, module: object) -> bool:
                                                             "Microsoft/Windows/Start Menu/Programs/Startup")
         root = Path(base)
         root.mkdir(parents=True, exist_ok=True)
-        # Windows cmd quoting is delegated to subprocess.list2cmdline.
-        line = subprocess.list2cmdline(argv)
+        line = " ".join(cmd_quote(item) for item in argv)
         (root / f"{label}.cmd").write_text("@echo off\r\nstart \"\" /min " + line + "\r\n", encoding="ascii")
     else:
         root = Path(os.environ.get("EXAKIT_SYSTEMD_USER_DIR", str(Path.home() / ".config/systemd/user")))

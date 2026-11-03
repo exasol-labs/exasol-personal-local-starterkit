@@ -324,3 +324,9 @@ def venv_python(venv: Path) -> Path:
 
 def venv_executable(venv: Path, name: str) -> Path:
     return venv / (f"Scripts/{name}.exe" if os.name == "nt" else f"bin/{name}")
+
+
+def cmd_quote(item: object) -> str:
+    """One argument for a .cmd file: always quoted, so & ^ | < > in a path stay text, and % doubled, because cmd
+    expands %NAME% inside quotes too. Quotes inside an argument are doubled for the C runtime's parser."""
+    return '"' + str(item).replace('"', '""').replace("%", "%%") + '"'

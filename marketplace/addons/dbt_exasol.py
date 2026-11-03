@@ -17,7 +17,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from runtime import AddonFailure, KitContext, venv_executable, venv_python
+from runtime import AddonFailure, KitContext, cmd_quote, venv_executable, venv_python
 
 ID = "dbt-exasol"
 PACKAGE = "dbt-exasol"
@@ -105,7 +105,8 @@ def _write_launcher(ctx: KitContext) -> Path:
     if os.name == "nt":
         # Windows needs a .cmd entry point. It only starts the same Python code
         # used by every platform; the credential never appears in an argument.
-        launcher.write_text(f'@echo off\r\n"{venv_python(venv)}" "{ctx.root / "marketplace" / "dbt_launcher.py"}" %*\r\n', encoding="utf-8")
+        launcher.write_text(f"@echo off\r\n{cmd_quote(venv_python(venv))} {cmd_quote(ctx.root / 'marketplace' / 'dbt_launcher.py')} %*\r\n",
+                            encoding="utf-8")
     else:
         launcher.write_text("#!/bin/sh\nexec " + shlex.quote(str(venv_python(venv))) + " "
                             + shlex.quote(str(ctx.root / "marketplace" / "dbt_launcher.py")) + ' "$@"\n',
