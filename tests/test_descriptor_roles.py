@@ -175,9 +175,15 @@ class DraftTest(unittest.TestCase):
     def setUp(self):
         self.profile = profile.profile_rows(COLUMNS, synthetic_rows(), "SHOP.ORDERS")
 
-    def test_slots_key_widest_time_longest_text_and_no_target(self):
+    def test_time_takes_the_complete_date_before_one_with_gaps_and_the_leftmost_of_a_tie(self):
+        cols = [("SENT_ON", "DATE"), ("RECEIVED_ON", "DATE"), ("CLOSED_ON", "DATE")]
+        rows = [[None if i % 5 == 0 else f"2025-0{1 + i % 9}-01", "2025-01-01", f"2025-02-{1 + i % 28:02d}"] for i in range(100)]
+        doc = draft.draft(profile.profile_rows(cols, rows, "S.T"), "x")
+        self.assertEqual("RECEIVED_ON", doc["slots"]["time"])      # SENT_ON has gaps; RECEIVED_ON is the leftmost complete one
+
+    def test_slots_key_first_complete_time_longest_text_and_no_target(self):
         doc = draft.draft(self.profile, "shop_orders")
-        self.assertEqual({"key": "ORDER_ID", "time": "SHIPPED_ON", "text": "NOTE", "target": None, "category": "CHANNEL",
+        self.assertEqual({"key": "ORDER_ID", "time": "ORDERED_AT", "text": "NOTE", "target": None, "category": "CHANNEL",
                           "entity": None}, doc["slots"])
         self.assertEqual("set by the user; never drafted", doc["slot_evidence"]["target"])
 

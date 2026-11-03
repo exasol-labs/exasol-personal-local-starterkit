@@ -299,9 +299,9 @@ contacts - and why `CALL_DURATION` must stay out of a model.
 Consumer Financial Protection Bureau received from 1 to 14 January 2025 (snapshot 2026-10-20).
 The CFPB no longer publishes complaint narratives, so the text is short (issue, sub-issue,
 public response). Source and terms: [datasets/banking_complaints/README.md](datasets/banking_complaints/README.md).
-Descriptor slots: `COMPLAINT_ID` (key), `DATE_SENT_TO_COMPANY` (time: the widest range, as the
-drafting rule takes it), `MONETARY_RELIEF` (target), `PRODUCT` (category), `COMPANY` (entity); no
-text slot, since the CFPB no longer publishes narratives.
+Descriptor slots: `COMPLAINT_ID` (key), `DATE_RECEIVED` (time), `MONETARY_RELIEF` (target),
+`PRODUCT` (category), `COMPANY` (entity); no text slot, since the CFPB no longer publishes
+narratives.
 
 ```
 banking_complaints 1─1 banking_responses   (the label's source; never a feature)

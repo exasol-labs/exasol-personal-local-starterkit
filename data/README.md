@@ -144,7 +144,8 @@ Confidence is `low` when the deciding number was within 10% of its threshold (fo
 
 **The slots.** `key` takes a key column (an identifier-like name first, then the leftmost);
 with none it stays empty, "no single unique column". `time` takes the time column with the
-widest range, `text` the text column with the longest average length. `target` is **never
+fewest nulls, the leftmost of a tie (a table puts the row's own event date first; follow-up
+dates have gaps), `text` the text column with the longest average length. `target` is **never
 drafted**: it stays empty until a person sets it, and training stops with that reason - a
 guessed target trains on the wrong label and nobody notices. `category` is the leftmost
 non-sensitive string category with 2 to 20 values (the grouping to compare) and `entity` the

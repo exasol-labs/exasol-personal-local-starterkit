@@ -89,7 +89,7 @@ class DatasetTest(unittest.TestCase):
         self.assertEqual(ds.text_sql(), "COALESCE(NOTE, '') || ' ' || COALESCE(OPERATOR_COMMENT, '')")
 
     def test_a_dataset_without_text_says_why(self):
-        cols = ["BANKING.BANKING_COMPLAINTS." + c for c in ("COMPLAINT_ID", "COMPANY", "PRODUCT", "DATE_SENT_TO_COMPANY",
+        cols = ["BANKING.BANKING_COMPLAINTS." + c for c in ("COMPLAINT_ID", "COMPANY", "PRODUCT", "DATE_RECEIVED",
                                                              "MONETARY_RELIEF")]
         ds = exakit_nb.dataset(FakeConn(cols), "banking_complaints")
         self.assertEqual(([], False), (ds.text_cols(), ds.has("text")))

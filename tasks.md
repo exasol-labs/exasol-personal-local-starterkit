@@ -113,6 +113,7 @@ Branch: `feat/persona-and-marketplace-ui`. This checklist tracks implementation 
 
 - [x] Step 1 `setup/lib/descriptor/roles.py`: eight roles, sensitivity first, the rules in order, thresholds pinned by tests (`tests/test_descriptor_roles.py`, DS2.3 synthetic table).
 - [x] Step 2 `profile.py`: one SQL pass per table (40 columns per statement, three follow-ups), schema digest, virtual tables as a 10,000-row prefix; the same numbers from rows for files and tests.
+- [x] Time slot rule changed after review (3 Nov): the time column with the fewest nulls, leftmost of a tie - "widest range" picked Banking's DATE_SENT_TO_COMPANY (a follow-up date) over DATE_RECEIVED.
 - [x] Step 3 `draft.py`: deterministic drafts, slots key/time/text/target plus category and entity (raise at review: the notebooks group by these two), target never drafted. Checkpoint material: the three reference datasets' drafts.
 - [x] Step 4 `store.py` + `flow.py`: versions, current.yaml via os.replace, approve in the plan's order, carry-over on a changed table, "approved, not published" (`tests/test_descriptor_flow.py`).
 - [x] Step 5 `publish.py`: the EXAKIT_SEMANTIC view with role comments and the grant; read back.

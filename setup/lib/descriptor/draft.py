@@ -2,8 +2,10 @@
 
 Every column gets a role from roles.classify(); the slots name the columns the notebooks need. The key slot takes
 a key column, one with an identifier name first, then the leftmost; with none it stays empty and says "no single
-unique column" (composite keys are not hunted). Time takes the time column with the widest range, text the text
-column with the longest average length. Target is never drafted: it stays empty until the user sets it, and
+unique column" (composite keys are not hunted). Time takes the time column with the fewest nulls, the leftmost of a
+tie: tables put the row's own event date first, and follow-up dates have gaps - a range says nothing about which date
+is the event (a follow-up date sent months later spans wider; reviewed 3 Nov against the plan's "widest range"). Text
+takes the text column with the longest average length. Target is never drafted: it stays empty until the user sets it, and
 training skips with that reason (a guessed target trains on the wrong label and nobody notices).
 
 Two more slots carry what the notebooks group by. Category: the leftmost non-sensitive string category with 2 to
@@ -16,7 +18,6 @@ No timestamps, a fixed key order and the columns in table order, so the same pro
 
 from __future__ import annotations
 
-import datetime as dt
 import json
 from typing import Any
 
@@ -29,13 +30,8 @@ NO_KEY = "no single unique column"
 NO_TARGET = "set by the user; never drafted"
 
 
-def _span(entry: dict[str, Any]) -> int:
-    try:
-        low = dt.date.fromisoformat(str(entry["min"])[:10])
-        high = dt.date.fromisoformat(str(entry["max"])[:10])
-    except (KeyError, ValueError):
-        return -1
-    return (high - low).days
+def _nulls(entry: dict[str, Any]) -> int:
+    return int(entry.get("rows") or 0) - int(entry.get("non_null") or 0)
 
 
 def _slots(columns: list[dict[str, Any]], roles: dict[str, dict[str, Any]]) -> tuple[dict[str, str | None], dict[str, str]]:
@@ -45,7 +41,7 @@ def _slots(columns: list[dict[str, Any]], roles: dict[str, dict[str, Any]]) -> t
     keys = having("key")
     key = (sorted(keys, key=lambda c: not has_name_hint(c["column"]))[0]["column"] if keys else None)
     times = having("time")
-    time = max(times, key=_span)["column"] if times else None            # max() keeps the leftmost of a tie
+    time = min(times, key=_nulls)["column"] if times else None           # min() keeps the leftmost of a tie
     texts = having("text")
     text = max(texts, key=lambda c: float(c.get("avg_length") or 0))["column"] if texts else None
     category = next((c["column"] for c in columns if _grouping(c, roles) and roles[c["column"]]["role"] == "category"

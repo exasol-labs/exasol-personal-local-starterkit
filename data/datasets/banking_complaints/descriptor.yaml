@@ -14,7 +14,7 @@ approved_at: "2026-11-03T00:00:00Z"
 grain: "one row per complaint"
 slots:
   key: "COMPLAINT_ID"
-  time: "DATE_SENT_TO_COMPANY"
+  time: "DATE_RECEIVED"
   text: null
   target: "MONETARY_RELIEF"
   category: "PRODUCT"
