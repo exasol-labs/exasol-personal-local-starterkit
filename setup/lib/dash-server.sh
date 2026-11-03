@@ -39,7 +39,7 @@
 # convention (EXAKIT_<ID>_VERSION[_FALLBACK]), and the versions-bump workflow
 # keeps the fallback in lockstep with versions.json (COUPLED table).
 EXAKIT_DASH_SERVER_VERSION="${EXAKIT_DASH_SERVER_VERSION:-}"
-EXAKIT_DASH_SERVER_VERSION_FALLBACK="${EXAKIT_DASH_SERVER_VERSION_FALLBACK:-0.1.1}"
+EXAKIT_DASH_SERVER_VERSION_FALLBACK="${EXAKIT_DASH_SERVER_VERSION_FALLBACK:-0.2.1}"
 EXAKIT_DASH_SERVER_REPO="${EXAKIT_DASH_SERVER_REPO:-exasol-labs/dash-server}"
 EXAKIT_DASH_SERVER_PACKAGE="${EXAKIT_DASH_SERVER_PACKAGE:-dash-server}"
 EXAKIT_DASH_SERVER_VENV="${EXAKIT_DASH_SERVER_VENV:-$EXAKIT_HOME/dash-server-venv}"
@@ -213,10 +213,10 @@ dash_server_install() {
     _dash_server_resolve_port
     _dash_server_settle_port || return 1
 
+    # The uv the kit vetted (exakit_ensure_uv), never the first one on PATH:
+    # that one may sit below the version floor the kit refuses to run.
     _ds_uv=""
-    if command -v uv >/dev/null 2>&1; then
-        _ds_uv="uv"
-    elif exakit_ensure_uv && [ -x "${EXAKIT_UV_BIN:-}" ]; then
+    if exakit_ensure_uv && [ -x "${EXAKIT_UV_BIN:-}" ]; then
         _ds_uv="$EXAKIT_UV_BIN"
     else
         _dash_server_not_installed "uv (the Python tool runner) is not available — install it from https://docs.astral.sh/uv/ and re-run"

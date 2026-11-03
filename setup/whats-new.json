@@ -20,6 +20,11 @@
     "install shows no cards at all, so every line here is read by someone who",
     "already had the kit working and wants to know what is different."
   ],
+  "0.2.3": [
+    "Security update for uv, the tool that runs the MCP server.",
+    "uv is now pinned and checksum-verified; no install script runs.",
+    "A uv older than 0.13.4 is never used: exakit update uv fixes it."
+  ],
   "0.2.2": [
     "The launcher now downloads from Exasol's own server (S3), verified.",
     "If that server is unreachable, the verified GitHub release is used.",

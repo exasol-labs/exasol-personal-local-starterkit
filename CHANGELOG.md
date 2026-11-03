@@ -136,6 +136,48 @@ kit's shell and PowerShell twins.
 - **Langfuse SDK 5 and MLflow 3.x.** The notebook add-on pins `langfuse>=5,<6` and `mlflow-skinny>=3,<4` (`exasol-mlflow[mlflow]` the same; a new `exasol-mlflow[server]` extra carries the full `mlflow>=3,<4` for the server). `nb.trace()` is ported to the SDK 5 API: a `Langfuse()` client from `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and `LANGFUSE_BASE_URL` (`LANGFUSE_HOST`, the SDK 3 name, still counts, with one line saying so), one observation with the trace name, session id, tags and metadata propagated to every model call inside the block; the tags gain `exasol.workflow_id` (when a workflow is active), `exasol.descriptor_id` and `exasol.descriptor_version`; the sample SQL is cut to the SDK's 200-character metadata limit and `exasol.sql_digest` carries the whole statement's SHA-256; the active workflow's log gets one `trace` line with the trace id. Unset variables still mean one printed line and the plain OpenAI client; the secret key appears in no output, tag or log (tested).
 - **The score notebook is now `ml-engineer/03_score_external_model`** (it was `02_…`). Appendix B numbers the ML Engineer notebooks 00 quickstart, 01 train, 02 rust_score (to come) and 03 score_external_model; numbers are never reused, so the renamed notebook keeps its catalog id `score-external-model` at step 3 and 02 stays free for the Rust one.
 
+## 0.2.3
+
+**Security release: uv is pinned, verified and held to a minimum version.**
+uv is the Python tool runner the kit depends on: `uvx` is the process every
+AI client launches to run the MCP server (and hands the database password
+to), and `uv` provides the kit's managed Python where the system one is too
+old. Two findings against 0.2.2 are closed:
+
+- **An existing uv was used without reading its version.** uv below 0.13.4
+  ships a CA bundle that trusts an emSign root whose intermediate CA keys are
+  compromised ([GHSA-hq85-5cpj-mr62](https://github.com/astral-sh/uv/security/advisories/GHSA-hq85-5cpj-mr62),
+  critical), so a network attacker could impersonate PyPI or GitHub to it.
+  The kit now refuses to run a uv below `components.uv.min_version`
+  (0.13.4). A uv the user installed themselves is never modified: at or
+  above the floor it is used where it is; below it the kit installs its own
+  copy into `~/.local/bin` and uses that one for everything, and `exakit
+  status` says so (`uv:` row; `status --json` carries a `uv` object and
+  `remedies.uv`).
+- **When uv was missing, `astral.sh/uv/install.sh` (`install.ps1` on
+  Windows) was fetched and executed unpinned and unverified.** No installer
+  script runs any more, from anyone. The kit downloads the pinned uv release
+  archive from GitHub (`components.uv.version`, 0.13.6), verifies it against
+  the per-platform SHA-256 in versions.json before anything is unpacked, and
+  places `uv` and `uvx` itself - exactly how exapump and the scheduler are
+  installed. A digest that does not match refuses the install; there is no
+  override. The Homebrew path is gone with the script it existed to avoid.
+
+uv is a component like the others: `exakit version` shows a `uv` row,
+`exakit update` (or `exakit update uv`) moves the kit's own copy to the pin
+and points every connected AI client at the vetted `uvx`; a user-installed
+uv at or above the floor is reported as current and left alone. Every uv
+user in the kit (the MCP server, the managed Python, pyexasol, dash-server,
+JSON Tables, dbt-exasol, `exakit mcp-setup`) resolves through the one
+checker, on macOS, Linux, WSL and Windows alike. CI hashes the five uv
+archives whenever versions.json changes, and the bump workflow proposes uv
+releases with recomputed digests.
+
+**Updating from 0.2.2.** `exakit update` fetches the new kit; the uv check
+runs on the next `exakit` command, and `exakit update` run once more (or
+`exakit update uv`) installs the pinned uv where the machine's is below the
+floor. Until then `exakit status` names the old uv and the remedy.
+
 ## 0.2.2
 
 **The Personal launcher comes from Exasol's S3 bucket first, verified, with

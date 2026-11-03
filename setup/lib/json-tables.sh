@@ -42,7 +42,7 @@
 #   - launcher: $EXAKIT_BIN_DIR/exasol-json-tables
 
 EXAKIT_JSON_TABLES_VERSION="${EXAKIT_JSON_TABLES_VERSION:-}"
-EXAKIT_JSON_TABLES_VERSION_FALLBACK="${EXAKIT_JSON_TABLES_VERSION_FALLBACK:-v0.3.2}"
+EXAKIT_JSON_TABLES_VERSION_FALLBACK="${EXAKIT_JSON_TABLES_VERSION_FALLBACK:-v0.4.1}"
 EXAKIT_JSON_TABLES_PACKAGE="${EXAKIT_JSON_TABLES_PACKAGE:-exasol-json-tables}"
 # Upstream source, used only to restore package data the wheel omits (see
 # _json_tables_restore_package_data). Not where the wheel or engine come from.
@@ -530,10 +530,10 @@ json_tables_install() {
         return 1
     }
 
+    # The uv the kit vetted (exakit_ensure_uv), never the first one on PATH:
+    # that one may sit below the version floor the kit refuses to run.
     _jti_uv=""
-    if command -v uv >/dev/null 2>&1; then
-        _jti_uv="uv"
-    elif exakit_ensure_uv && [ -x "${EXAKIT_UV_BIN:-}" ]; then
+    if exakit_ensure_uv && [ -x "${EXAKIT_UV_BIN:-}" ]; then
         _jti_uv="$EXAKIT_UV_BIN"
     else
         _json_tables_not_installed "uv (the Python tool runner) is not available — install it from https://docs.astral.sh/uv/ and re-run"

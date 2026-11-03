@@ -36,7 +36,7 @@
 # registry entry, and the versions-bump workflow keeps the fallback in
 # lockstep with versions.json (COUPLED table).
 $script:DashServerRepo = "exasol-labs/dash-server"
-$script:DashServerVersionFallback = if ($env:EXAKIT_DASH_SERVER_VERSION_FALLBACK) { $env:EXAKIT_DASH_SERVER_VERSION_FALLBACK } else { "0.1.1" }
+$script:DashServerVersionFallback = if ($env:EXAKIT_DASH_SERVER_VERSION_FALLBACK) { $env:EXAKIT_DASH_SERVER_VERSION_FALLBACK } else { "0.2.1" }
 $script:DashServerVersion = if ($env:EXAKIT_DASH_SERVER_VERSION) { $env:EXAKIT_DASH_SERVER_VERSION } else { "" }
 $script:DashServerVenv = if ($env:EXAKIT_DASH_SERVER_VENV) { $env:EXAKIT_DASH_SERVER_VENV } else { Join-Path $script:ExakitHome "dash-server-venv" }
 $script:DashServerHome = if ($env:EXAKIT_DASH_SERVER_HOME) { $env:EXAKIT_DASH_SERVER_HOME } else { Join-Path $script:ExakitHome "dash-server" }
