@@ -7,7 +7,10 @@ screen and listed names, profile images, follower count, influencer score, age a
 country (location text, state, city, latitude, longitude); the message, conversation and parent ids and the
 permalinks, which embed tweet ids. A post's domain and its client app are kept only where at least SHARED_MIN
 posts share them, so a personal blog or one account's own posting tool does not name its author. Inside the title and the message, @handles become @user, links become URL
-and e-mail addresses become EMAIL. Columns that are empty or one value throughout are dropped, and so are the copies
+and e-mail addresses become EMAIL; forum markup that names a member goes too - a quote's attribution ([quote=Name;id],
+[QUOTE="Name, post: 1, member: 2"]) becomes [QUOTE], member and post numbers are dropped, the name in a quote's
+"Name said: ↑ ... Click to expand" header and in "Posted by Name" becomes user, a Reddit u/name becomes u/user - and
+phone numbers become PHONE. Columns that are empty or one value throughout are dropped, and so are the copies
 (Action Time, Message Type, LanguageCode). The message is cut at MESSAGE_LIMIT characters.
 
     python3 tools/datasets/esophageal_posts.py ~/Downloads/Esophageal.xlsx     # needs openpyxl
@@ -37,15 +40,43 @@ COLUMNS = ["POST_ID", "CREATED_TIME", "SOCIAL_NETWORK", "MESSAGE_TYPE", "IS_REPL
 _URL = re.compile(r"https?:(?://\s*)?\S*|\bwww\.\S+", re.I)     # "https:// host", "https:\/\/..." and "https:%2F..." too
 _EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 _HANDLE = re.compile(r"(?<![\w@])@\w{1,30}")
+_QUOTE = re.compile(r"\[quote=[^\]]*\]", re.I)                                     # [quote=Name;id], [QUOTE="Name, post: 1, member: 2"]
+_FORUM_NUMBER = re.compile(r",?\s*\b(?:post|member):\s*\d+", re.I)
+_BY = re.compile(r"\b(posted|written|submitted|answered|replied) by (?!user\b)[^\s,.;:!?\"“”]{1,40}", re.I)
+_REDDIT = re.compile(r"(?<![\w/])/?u/[A-Za-z0-9_-]{3,}")
+_PHONE = re.compile(r"(?<![\w+])(?:\+?\d{1,3}[ .-]?)?(?:\(\d{2,4}\)|\d{3,4})[ .-]\d{3,4}[ .-]?\d{3,4}(?![\w-])")
+_SAID = re.compile(r"(?<!\S)([^\s\"“”,.;:]{1,40}) said:(\s*↑)?")
+# Words before "said:" that are speech, not a member's name: they stay.
+_SPEAKERS = frozenset("he she they i you we it who someone everyone everybody nobody doctor dr doc mom mum dad wife "
+                      "husband son daughter friend nurse surgeon oncologist".split())
 
 
 TABLES = {"ESOPHAGEAL_POSTS": COLUMNS}
 
 
+def _forum_names(text: str) -> str:
+    """The member names of a forum's quote headers: "Name said: ↑" anywhere, and every "Name said:" in a post that
+    quotes ("Click to expand"), become "user said:"; speech ("he said:") stays."""
+    quoting = "click to expand" in text.lower()
+
+    def name(match: re.Match) -> str:
+        if match.group(1).lower() in _SPEAKERS or not (match.group(2) or quoting):
+            return match.group(0)
+        return "user said:" + (match.group(2) or "")
+    return _SAID.sub(name, text)
+
+
 def scrub(text: str | None, limit: int) -> str:
-    """One line of text with links, e-mail addresses and @handles replaced, then cut at a word (snapshot.clean)."""
+    """One line of text with links, e-mail addresses, @handles, forum member names and numbers and phone numbers
+    replaced, then cut at a word (snapshot.clean)."""
     text = _URL.sub("URL", text or "")
     text = _EMAIL.sub("EMAIL", text)
+    text = _QUOTE.sub("[QUOTE]", text)
+    text = _FORUM_NUMBER.sub("", text)
+    text = _BY.sub(lambda m: f"{m.group(1)} by user", text)
+    text = _REDDIT.sub("u/user", text)
+    text = _PHONE.sub("PHONE", text)
+    text = _forum_names(text)
     return clean(_HANDLE.sub("@user", text), limit)
 
 

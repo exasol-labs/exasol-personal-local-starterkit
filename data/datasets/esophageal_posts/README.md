@@ -28,7 +28,11 @@ drops everything that identifies or profiles a person or an account:
   personal blog or one account's own posting tool does not name its author.
 
 Inside the title and the message, `@handles` become `@user`, links become `URL`
-and e-mail addresses become `EMAIL`; the message is cut on a word at 1,000
+and e-mail addresses become `EMAIL`; forum markup that names a member goes too - a
+quote's attribution (`[quote=Name;id]`) becomes `[QUOTE]`, member and post numbers
+are dropped, the name in a quote's `Name said: ↑ ... Click to expand` header and in
+`Posted by Name` becomes `user`, a Reddit `u/name` becomes `u/user` - and phone
+numbers become `PHONE` (a helpline's too: a personal number cannot be told apart); the message is cut on a word at 1,000
 characters. Columns that were empty or one value throughout (33 of the 67) and
 the export's duplicate columns are left out. Posts are numbered in time order;
 the number is not the source's id.
@@ -63,7 +67,7 @@ first names and family details. Treat it as sensitive, and see the terms below.
 | `SENTIMENT` | VARCHAR(10) | `NEUTRAL` (29,941), `NEGATIVE` (6,466) or `POSITIVE` (4,580), as the listening tool scored it |
 | `IS_NEGATIVE` | DECIMAL(1,0) | 1 when `SENTIMENT` is `NEGATIVE`, else 0 - **the label** |
 | `TITLE` | VARCHAR(300) | title of a blog post, article or thread, when it has one |
-| `MESSAGE` | VARCHAR(1000) | text of the post, cut at 1,000 characters, handles, links and e-mail addresses replaced |
+| `MESSAGE` | VARCHAR(1000) | text of the post, cut at 1,000 characters, handles, links, e-mail addresses, phone numbers and forum member names replaced |
 
 The label comes from the listening tool's sentiment model, not from a person:
 a model trained on it learns that tool's judgement.

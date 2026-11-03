@@ -11,21 +11,21 @@
   "terms": {
     "url": "none: the export carries no terms; the owner must establish them",
     "license": "unknown: third-party social media and web posts collected by a social-listening tool",
-    "summary": "The owner must confirm the redistribution terms before release: the posts are other people's content (Twitter's terms in particular restrict redistributing tweets). Personal data is removed as the builder's docstring lists; the text is cut and its handles, links and e-mail addresses replaced.",
+    "summary": "The owner must confirm the redistribution terms before release: the posts are other people's content (Twitter's terms in particular restrict redistributing tweets). Personal data is removed as the builder's docstring lists; the text is cut and its handles, links, e-mail addresses, phone numbers and forum member names and numbers replaced.",
     "confirmed": false
   },
   "snapshot": "2026-11-03",
   "asset": {
     "file": "esophageal_posts-2026-11-03.tar.gz",
-    "sha256": "128f446b6cfa59d2ef63a84e3cc5d32777108bf398521e775a7e769deeb13a54",
-    "size": 8077149,
-    "tar_sha256": "1f5c0679c5c9b3ea9fe3c0364fe94dae84e985c5f7285281818bd4b364589ef8",
+    "sha256": "f1119643e95bd6a624a418a6335da363eae729e63ac5c8ae750f726aa8d346cc",
+    "size": 8071081,
+    "tar_sha256": "77c9f75d5fa687e88668891ef0611f568d150395e1f3b0ced23a5661d88617fa",
     "url": "https://github.com/{repo}/releases/download/datasets/esophageal_posts-2026-11-03.tar.gz"
   },
   "files": {
     "data/esophageal_posts.csv": {
       "rows": 40987,
-      "sha256": "b333fd00c7ec1b8e65da51f999ee3ff6de84dc62bad463cdd7bc5f3275966d5a"
+      "sha256": "102b22b2065775e3053212abeb0bbb30530d0b5428740d39c094ce2e0838aedb"
     }
   }
 }
