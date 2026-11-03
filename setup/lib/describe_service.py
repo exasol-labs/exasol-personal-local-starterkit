@@ -110,6 +110,8 @@ def connect():
         password = Path(pwfile).read_text(encoding="utf-8").strip()
     except OSError as err:
         raise Unreachable(f"The admin credential file cannot be read ({err.strerror}); repair with: exakit repair-runtime") from err
+    # pyexasol's usage telemetry stays off unless the user set the variable (marketplace/kit_telemetry.py).
+    os.environ.setdefault("EXASOL_TELEMETRY_DISABLE", "1")
     try:
         import pyexasol
     except ImportError as err:

@@ -232,6 +232,8 @@ def smoke_script(alias: str, schema: str, packages: list[str]) -> str:
 def _connect():
     import ssl
 
+    # pyexasol's usage telemetry stays off unless the user set the variable (marketplace/kit_telemetry.py).
+    os.environ.setdefault("EXASOL_TELEMETRY_DISABLE", "1")
     import pyexasol
     password = Path(os.environ["EXAKIT_PYX_PWFILE"]).read_text(encoding="utf-8").strip()
     kw = dict(dsn=os.environ["EXAKIT_PYX_DSN"], user=os.environ["EXAKIT_PYX_USER"], password=password, fetch_dict=True)

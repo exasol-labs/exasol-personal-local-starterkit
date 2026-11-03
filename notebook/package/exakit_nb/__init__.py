@@ -28,7 +28,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-from ._kit import setting
+from ._kit import setting, telemetry_off
 from .ask import Proposal, ask
 from .checks import check_bucket, check_container, check_mlflow, check_model_compatibility, model_list
 from .dash_mcp import DashTools, dash_tools
@@ -70,7 +70,9 @@ def _store():
 
 
 def connect(**kwargs: Any):
-    """A pyexasol connection to the local database, opened from the kit's encrypted store."""
+    """A pyexasol connection to the local database, opened from the kit's encrypted store. Exasol's usage telemetry
+    stays off unless EXASOL_TELEMETRY_DISABLE was already set."""
+    telemetry_off()
     from exasol.nb_connector.connections import open_pyexasol_connection
 
     return open_pyexasol_connection(_store(), **kwargs)

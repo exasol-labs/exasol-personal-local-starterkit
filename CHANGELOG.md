@@ -1,5 +1,11 @@
 # Changelog
 
+## Telemetry off by default; release pins checked
+
+- pyexasol 3 sends one anonymous usage event per connect unless `EXASOL_TELEMETRY_DISABLE` is set. The kit now sets `EXASOL_TELEMETRY_DISABLE=1` before pyexasol can load, and never replaces a value the user set: in `common.sh` and `exakit-common.ps1` (so `exakit`, the installers, data loading and the upgrade), on import of the marketplace runtime (every marketplace command and the processes it starts), in the Dash Server, dbt-exasol and Exasol Scheduler launchers, the JupyterLab and Marimo servers, the notebook helper scripts, the `Exasol (Starter Kit)` kernel spec, `exakit.nb` (on import and in `connect()`), `describe`, the UDF and Rust UDF tools, and the generated JSON Tables command. The JSON Tables command and the kernel spec pick it up on the next `exakit update json-tables` and `exakit notebook setup`. The MCP server an AI client starts from its own config is not covered yet.
+- The MLflow server pin in `versions.json` must stay inside MLflow 3.x, the range of the notebook environment's client and `exasol-mlflow`; a pin outside it is refused instead of replacing the client. The UDF add-on's launcher floor (2.3.0) is one named constant, checked against the launcher pin.
+- New pin checks: launcher floor against the launcher pin, notebook-connector 3.1.x and its catalog fallback, Langfuse SDK 5, one MLflow 3 range, and one language-container-rs release (0.33.0) and rustc (1.98.1) across the Rust rows, the Rust tool's constants and its build image.
+
 ## Descriptor, profiler and approve; new reference datasets
 
 - The descriptor gives every column of a table one of eight roles (key, time, measure, category, flag, text, identifier, other) with its confidence and the evidence that chose it, and names in its slots the columns the notebooks use: key, time, text, target, category, entity. A column of e-mail addresses, phone numbers, IBANs or postcodes is marked sensitive and is never charted, grouped or sent to a model. The target is never drafted.

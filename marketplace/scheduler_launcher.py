@@ -12,6 +12,8 @@ import sys
 import time
 from pathlib import Path
 
+import kit_telemetry
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -29,6 +31,7 @@ def main() -> int:
         port = 8563
     receipt = doc.get("components", {}).get("exasol_scheduler", {})
     env = os.environ.copy()
+    kit_telemetry.default_off(env)
     for name, value in (("EXA_HOST", host or "127.0.0.1"), ("EXA_PORT", str(port)),
                         ("EXA_USER", receipt.get("db_user", "scheduler_svc")),
                         ("EXA_SCHEMA", receipt.get("schema", "SCHED")),

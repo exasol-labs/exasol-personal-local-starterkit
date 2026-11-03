@@ -16,6 +16,7 @@ import urllib.request
 import webbrowser
 from pathlib import Path
 
+import kit_telemetry
 from addons import notebook
 from process import _command, _creation
 from runtime import AddonFailure, KitContext, venv_executable, venv_python
@@ -316,7 +317,7 @@ def _start_frontend(ctx: KitContext, front: str, port_arg: int | None, browser: 
                               encoding="utf-8")
             token_file = notebook._credential(ctx, "notebook_jupyter_token")
             token = token_file.read_text(encoding="utf-8").strip()
-            env = {**os.environ, "JUPYTER_TOKEN": token}
+            env = kit_telemetry.default_off({**os.environ, "JUPYTER_TOKEN": token})
             argv = [str(venv_python(venv)), str(ctx.root / "notebook" / "kit" / "server_wrapper.py"),
                     str(token_file), str(command), "--no-browser", "--ServerApp.ip=127.0.0.1", f"--ServerApp.port={port}",
                     "--ServerApp.port_retries=0", f"--ServerApp.root_dir={directory}", f"--config={config}"]
@@ -328,7 +329,7 @@ def _start_frontend(ctx: KitContext, front: str, port_arg: int | None, browser: 
                     str(token_file), str(command), "edit", str(directory / "marimo"), "--headless", "--host",
                     "127.0.0.1", "--port", str(port), "--token-password-file", str(token_file),
                     "--skip-update-check"]
-            env = None
+            env = kit_telemetry.default_off(dict(os.environ))
         server.start(argv, port, env=env)
         ctx.manifest.set_many({f"components.notebook.{ 'port' if front == 'jupyterlab' else 'marimo_port'}": port})
     url = f"http://127.0.0.1:{port}/lab" if front == "jupyterlab" else f"http://127.0.0.1:{port}/"

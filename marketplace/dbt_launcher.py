@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import kit_telemetry
+
 
 def main() -> int:
     home = Path(os.environ.get("EXAKIT_HOME", str(Path.home() / ".exasol-starter-kit")))
@@ -15,6 +17,7 @@ def main() -> int:
     paths = doc["components"]["dbt_exasol"]
     credential = Path(doc["runtime"]["password_file"])
     env = dict(os.environ)
+    kit_telemetry.default_off(env)
     env.setdefault("DBT_ENV_SECRET_EXASOL_PASSWORD", credential.read_text(encoding="utf-8").strip())
     env.setdefault("DBT_PROFILES_DIR", paths["profiles_dir"])
     dbt = Path(paths["venv"]) / ("Scripts/dbt.exe" if os.name == "nt" else "bin/dbt")

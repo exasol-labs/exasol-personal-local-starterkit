@@ -32,6 +32,22 @@ if ! command -v ui_spin_begin >/dev/null 2>&1; then
 fi
 
 # ---------------------------------------------------------------------------
+# Exasol usage telemetry: off unless the user chose otherwise
+# ---------------------------------------------------------------------------
+# pyexasol 3 reports one anonymous usage event per connect unless
+# EXASOL_TELEMETRY_DISABLE is present in its environment (any value disables
+# it). Every script that sources this file - exakit, the installers, data
+# loading, the upgrade - exports it before anything it runs can load pyexasol,
+# and never replaces a value the user already set (even an empty one). The
+# Python side of the same rule is marketplace/kit_telemetry.py; the PowerShell
+# twin is Set-ExakitTelemetryDefault in exakit-common.ps1.
+exakit_telemetry_default() {
+    : "${EXASOL_TELEMETRY_DISABLE=1}"
+    export EXASOL_TELEMETRY_DISABLE
+}
+exakit_telemetry_default
+
+# ---------------------------------------------------------------------------
 # State locations
 # ---------------------------------------------------------------------------
 EXAKIT_HOME="${EXAKIT_HOME:-$HOME/.exasol-starter-kit}"

@@ -29,6 +29,10 @@ PYTHON = "PYTHON3"
 ML = "PYTHON3_ML"
 RUST = "RUST"
 SCHEMA = "EXAKIT_UDF"
+# The oldest Exasol Personal launcher whose BucketFS and restart behaviour the
+# UDF paths rely on. tests/test_version_pins.py keeps it at or below the
+# launcher versions.json pins, so the kit never refuses its own launcher.
+LAUNCHER_FLOOR = "2.3.0"
 
 
 class UdfFailure(AddonFailure):
@@ -116,8 +120,8 @@ def _launcher_supported(ctx: KitContext, step: str) -> None:
     from udf_container import _rules
 
     rules = _rules(ctx.root)
-    if not rules.at_least(version.group(), "2.3.0"):
-        raise UdfFailure(f"Exasol launcher {version.group()} is older than 2.3.0.", step=step,
+    if not rules.at_least(version.group(), LAUNCHER_FLOOR):
+        raise UdfFailure(f"Exasol launcher {version.group()} is older than {LAUNCHER_FLOOR}.", step=step,
                          remedy="exakit update personal")
 
 
