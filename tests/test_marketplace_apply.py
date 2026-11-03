@@ -174,6 +174,26 @@ class IntegrationTest(unittest.TestCase):
             doc = plistlib.loads((launch_dir / "com.exasol.exakit.dash-server.plist").read_bytes())
             self.assertEqual(command, doc["ProgramArguments"])
 
+    def test_every_addon_service_can_join_the_boot_set(self) -> None:
+        """An add-on with a status hook counts as a service: `exakit status` calls autostart enabled only when every
+        service is registered. One without an autostart command (udf-devkit's MLflow had none) kept it "disabled"
+        on every kit that installed it."""
+        import ast
+        for path in sorted((ROOT / "marketplace" / "addons").glob("*.py")):
+            names = {node.name for node in ast.parse(path.read_text(encoding="utf-8")).body if isinstance(node, ast.FunctionDef)}
+            if "status" in names:
+                with self.subTest(addon=path.stem):
+                    self.assertIn("autostart_command", names)
+
+    def test_udf_devkit_starts_its_mlflow_at_login_through_exakit(self) -> None:
+        import addons.udf_devkit as udf_devkit
+        with tempfile.TemporaryDirectory() as temp:
+            ctx = self.context(Path(temp) / "root", Path(temp) / "kit")
+            command = udf_devkit.autostart_command(ctx)
+            self.assertEqual(command[1:], ["start", "udf-devkit"])
+            self.assertTrue(command[0].endswith("exakit.cmd" if os.name == "nt" else "exakit"))
+            self.assertEqual("handoff", udf_devkit.autostart_kind(ctx))
+
 
 if __name__ == "__main__":
     unittest.main()

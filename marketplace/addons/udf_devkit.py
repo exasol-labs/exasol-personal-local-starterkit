@@ -607,6 +607,18 @@ def stop(ctx: KitContext) -> None:
     _mlflow(ctx, "stop", "--json")
 
 
+def autostart_command(ctx: KitContext) -> list[str]:
+    """The login entry: ``exakit start udf-devkit``, which starts the kit's MLflow server only when it was enabled
+    (exakit mlflow start) and hands it off. Without one this service could never join the boot set, so `exakit
+    status` reported autostart disabled on every ML Engineer kit."""
+    return [str(ctx.bin_dir / ("exakit.cmd" if os.name == "nt" else "exakit")), "start", "udf-devkit"]
+
+
+def autostart_kind(ctx: KitContext) -> str:
+    """The start command returns once the server runs in its own session: systemd keeps the unit up after it."""
+    return "handoff"
+
+
 def url(ctx: KitContext) -> str:
     return _mlflow(ctx, "url").stdout.strip()
 

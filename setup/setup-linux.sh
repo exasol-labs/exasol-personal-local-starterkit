@@ -170,10 +170,16 @@ exakit_finish
 # the ready line are what the reader is left with. Without a persona the
 # marketplace stays the optional extra it always was, after the panel.
 if [ -n "${EXAKIT_PERSONA_ACTIVE:-}" ]; then
+    # exakit_finish released the install lock, and the personas' add-ons install
+    # after it - minutes, for a UDF container. Held again through them: without
+    # it a second setup run started meanwhile ran beside this one, and the one
+    # interrupted left "did not finish at step" on a kit that was fine.
+    exakit_acquire_lock
     exakit_autostart_default_on || true
     ( exakit_marketplace_offer ) || true
     _exakit_marketplace_cli installer_flow --phase services --cli "$EXAKIT_BIN_DIR/exakit" || true
     command -v exakit_persona_marketplace_note >/dev/null 2>&1 && exakit_persona_marketplace_note
+    exakit_release_lock
 fi
 connection_summary
 # Only when the kit version moved during this run, and never able to fail it: the

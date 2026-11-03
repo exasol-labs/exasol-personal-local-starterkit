@@ -248,5 +248,11 @@ contains "install.sh: a known persona is named in the plan" "Persona: ml-enginee
 check "install.ps1: the same refusal" "yes" \
     "$(grep -q "throw \"Unknown persona '\$personaId'" "$ROOT/install.ps1" && grep -q '"personas"' "$ROOT/install.ps1" && echo yes || echo no)"
 
+echo "the personas' add-ons install under the install lock (no second setup run beside them):"
+for _os in macos linux; do
+    check "setup-$_os.sh takes the lock again before the add-on offer and releases it after" "acquire offer release" \
+        "$(awk '/EXAKIT_PERSONA_ACTIVE:-}" \]; then/{p=1} p&&/exakit_acquire_lock/{printf "acquire "} p&&/exakit_marketplace_offer \)/{printf "offer "} p&&/exakit_release_lock/{printf "release"; exit}' "$ROOT/setup/setup-$_os.sh")"
+done
+
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
