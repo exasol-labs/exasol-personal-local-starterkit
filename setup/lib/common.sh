@@ -7237,18 +7237,39 @@ exakit_update() {
     fi
     _target="${1:-all}"
     if [ "$#" -gt 0 ]; then shift; fi
+    case "$_target" in
+        -*) reject "Unknown option '$_target' for update ($(exakit_update_options_hint))." ;;
+    esac
+    _targets="$(exakit_update_targets "$_target")" || reject "Unknown update target '$_target' (see: exakit version)"
+    # Several component ids, as `exakit marketplace` takes them (#47): `exakit
+    # update exapump dbt-exasol` updates both. Only ids join this way - an
+    # option still goes behind personal alone - so a second id is never read
+    # as an option and refused with a message about options.
     # Bad input is exit 2 and records nothing, like every other refusal: an
     # option behind the wrong target is not a failed update, so not a die.
     if [ "$#" -gt 0 ]; then
         case "$_target" in
             personal|runtime|database|db) ;;
-            *) reject "Update options are only supported for Personal runtime updates ($(exakit_update_options_hint))." ;;
+            all) reject "'exakit update' with no id updates everything; name components instead of 'all' to update only those." ;;
+            *)
+                for _upd_more in "$@"; do
+                    case "$_upd_more" in
+                        -*) reject "Update options are only supported for Personal runtime updates ($(exakit_update_options_hint))." ;;
+                        all) reject "'all' cannot be named beside other components: 'exakit update' alone updates everything." ;;
+                    esac
+                    _upd_more_targets="$(exakit_update_targets "$_upd_more")" \
+                        || reject "Unknown update target '$_upd_more' (see: exakit version)"
+                    case " $(printf '%s ' $_targets)" in
+                        *" $_upd_more_targets "*) ;;
+                        *) _targets="$_targets
+$_upd_more_targets" ;;
+                    esac
+                done
+                _target="$_target $*"
+                set --
+                ;;
         esac
     fi
-    case "$_target" in
-        -*) reject "Unknown option '$_target' for update ($(exakit_update_options_hint))." ;;
-    esac
-    _targets="$(exakit_update_targets "$_target")" || reject "Unknown update target '$_target' (see: exakit version)"
     exakit_init_logging
     # --json: the same run, with every screen line sent to the logfile and
     # ONE object on stdout at the end. Nothing may prompt under --json, so a

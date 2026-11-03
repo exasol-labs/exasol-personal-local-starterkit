@@ -111,6 +111,10 @@ jobs:
         if: matrix.shard == 2
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/mcp-admin-sql-ps.ps1
+      - name: exakit update takes several component ids under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/update-targets-ps.ps1
       - name: exakit mlflow under 5.1
         if: matrix.shard == 2
         shell: powershell

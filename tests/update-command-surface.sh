@@ -82,8 +82,10 @@ printf '\n== a repair remedy names the component it repairs ==\n'
 # the guard above would happily pass.
 _repair_ok=0
 _repair_missing=""
+# The add-ons are Python now (marketplace/addons/, and the Scheduler's launcher
+# beside them); the remedy is wherever the add-on's code lives.
 for _rc in json-tables exasol-scheduler; do
-    if grep -rq "exakit update $_rc" "$ROOT/setup/lib/$_rc.sh" 2>/dev/null; then
+    if grep -rq "exakit update $_rc" "$ROOT/marketplace" "$ROOT/setup/lib/$_rc.sh" 2>/dev/null; then
         _repair_ok=$((_repair_ok + 1))
     else
         _repair_missing="$_repair_missing $_rc"
@@ -207,6 +209,40 @@ case "$_ucs_out" in
     *"exakit update personal --plan"*) pass "...and names the target it belongs to" ;;
     *)                                 fail "...but does not name the Personal form" ;;
 esac
+
+# Several component ids (#47): `exakit update exapump dbt-exasol` updates both,
+# as `exakit marketplace` installs several; a second id is never read as an
+# option. Only the run is stubbed: the parsing is the real exakit_update.
+_ucs_multi() { # _ucs_multi <args...> -> the targets the run was handed, or the refusal; sets _ucs_rc
+    bash -c '. "$1/setup/lib/common.sh" >/dev/null 2>&1
+        exakit_init_logging() { :; }
+        exakit_marketplace_installed_addons() { :; }
+        _exakit_addon_registered() { [ "$1" = dbt-exasol ] || [ "$1" = dash-server ]; }
+        _exakit_update_run() { printf "target=%s|targets=%s|rest=%s\n" "$1" "$(printf "%s" "$2" | tr "\n" " ")" "$*"; }
+        shift; exakit_update "$@"' _ "$ROOT" "$@" 2>&1
+}
+_ucs_out="$(_ucs_multi exapump dbt-exasol)"; _ucs_rc=$?
+case "$_ucs_out" in
+    *"targets=exapump dbt-exasol|"*) pass "update with two ids updates both" ;;
+    *) fail "update exapump dbt-exasol did not hand both to the run: $_ucs_out" ;;
+esac
+case "$_ucs_out" in
+    *"Update options"*) fail "...and still blames options" ;;
+    *) pass "...and no longer blames options" ;;
+esac
+_ucs_out="$(_ucs_multi exapump dbt-exasol exapump --yes)"; _ucs_rc=$?
+case "$_ucs_out" in
+    *"targets=exapump dbt-exasol|"*) pass "...each once, with --yes anywhere" ;;
+    *) fail "a repeated id or --yes changed the targets: $_ucs_out" ;;
+esac
+_ucs_out="$(_ucs_multi exapump nonsense)"; _ucs_rc=$?
+[ "$_ucs_rc" -eq 2 ] && pass "an unknown second id is refused with exit 2" || fail "an unknown second id exited $_ucs_rc, expected 2"
+case "$_ucs_out" in
+    *"Unknown update target 'nonsense'"*) pass "...naming the id" ;;
+    *) fail "...but does not name it: $_ucs_out" ;;
+esac
+_ucs_out="$(_ucs_multi exapump dbt-exasol --plan)"; _ucs_rc=$?
+[ "$_ucs_rc" -eq 2 ] && pass "an option behind several ids is still refused with exit 2" || fail "ids plus --plan exited $_ucs_rc"
 
 _ucs_out="$(_ucs_run --bogus)"; _ucs_rc=$?
 [ "$_ucs_rc" -eq 2 ] && pass "an unknown option is still refused with exit 2" || fail "update --bogus exited $_ucs_rc, expected 2"

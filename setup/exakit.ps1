@@ -2855,7 +2855,7 @@ function Write-ExakitUpdateJsonReport {
 }
 
 function Invoke-CmdUpdate {
-    param([string]$Target = "all", [bool]$AssumeYes = $false, [bool]$Json = $false)
+    param([string]$Target = "all", [string[]]$More = @(), [bool]$AssumeYes = $false, [bool]$Json = $false)
     if ($Json) { Assert-ExakitInstalled -Json } else { Assert-ExakitInstalled }
     Initialize-ExakitLogging
     if (-not $Target) { $Target = "all" }
@@ -2867,8 +2867,24 @@ function Invoke-CmdUpdate {
     if (-not (Test-ExakitUpdateTarget $Target)) {
         Deny-ExakitInput "Unknown update target '$Target' (see: exakit version)"
     }
+    $components = $null
+    $More = @($More | Where-Object { $_ })
+    if ($More.Count -gt 0) {
+        if ($Target -eq "all") {
+            Deny-ExakitInput "'exakit update' with no id updates everything; name components instead of 'all' to update only those."
+        }
+        $components = New-Object System.Collections.ArrayList
+        foreach ($id in @($Target) + $More) {
+            if ($id -eq "all") { Deny-ExakitInput "'all' cannot be named beside other components: 'exakit update' alone updates everything." }
+            if (-not (Test-ExakitUpdateTarget $id)) { Deny-ExakitInput "Unknown update target '$id' (see: exakit version)" }
+            foreach ($resolved in @(Get-ExakitUpdateTargets -Target $id)) {
+                if (-not $components.Contains($resolved)) { [void]$components.Add($resolved) }
+            }
+        }
+        $Target = (@($Target) + $More) -join " "
+    }
     if (-not $Json) {
-        Invoke-ExakitUpdateRun -Target $Target -AssumeYes $AssumeYes
+        Invoke-ExakitUpdateRun -Target $Target -Components $components -AssumeYes $AssumeYes
         return
     }
     # --json: the same run with every screen line discarded (the log keeps
@@ -2892,7 +2908,7 @@ function Invoke-CmdUpdate {
         # A loader while the run is silent; the spinner stops before the
         # object prints. Twin of the ui_spin_begin around _exakit_update_run.
         Invoke-ExakitWithSpinner -Label "Applying updates (every line goes to the log: exakit logs)" -Body {
-            & { Invoke-ExakitUpdateRun -Target $Target -AssumeYes $AssumeYes } *> $null
+            & { Invoke-ExakitUpdateRun -Target $Target -Components $components -AssumeYes $AssumeYes } *> $null
         } | Out-Null
     } catch {
         $runFailed = $true
@@ -2904,7 +2920,7 @@ function Invoke-CmdUpdate {
 # Invoke-ExakitUpdateRun - the body of `exakit update`: one pass over the
 # targets, applying what is advertised. Twin of _exakit_update_run.
 function Invoke-ExakitUpdateRun {
-    param([string]$Target = "all", [bool]$AssumeYes = $false)
+    param([string]$Target = "all", $Components = $null, [bool]$AssumeYes = $false)
     if ($AssumeYes) {
         # -Yes answers the only question this command asks: may it stop the
         # database. The runtime updater reads the same variable, so an
@@ -2924,7 +2940,9 @@ function Invoke-ExakitUpdateRun {
     Write-ExakitVersionsSourceLine
     $deferred = 0
     $acted = 0
-    foreach ($component in (Get-ExakitUpdateTargets -Target $Target)) {
+    $planned = $Components
+    if ($null -eq $planned) { $planned = @(Get-ExakitUpdateTargets -Target $Target) }
+    foreach ($component in $planned) {
         $actual = Get-ExakitActualTarget $component
         $current = Get-ExakitComponentCurrent $actual
         $available = Get-ExakitComponentAvailable $actual
@@ -3844,7 +3862,9 @@ try {
             $updateYes = ($RestArgs -contains "-Yes" -or $RestArgs -contains "--yes" -or $RestArgs -contains "-y")
             $updateJson = ($RestArgs -contains "--json" -or $RestArgs -contains "-j")
             $updateArgs = @($RestArgs | Where-Object { $_ -notin @("-Yes", "--yes", "-y", "--json", "-j") })
-            Invoke-CmdUpdate -Target ($updateArgs | Select-Object -First 1) -AssumeYes $updateYes -Json $updateJson
+            # Every id, not the first (#47): `exakit update exapump dbt-exasol` updates both, as
+            # `exakit marketplace` installs several. Twin of exakit_update.
+            Invoke-CmdUpdate -Target ($updateArgs | Select-Object -First 1) -More @($updateArgs | Select-Object -Skip 1) -AssumeYes $updateYes -Json $updateJson
         }
         "info"         {
             Assert-ExakitKnownOptions -CommandName "info" -Allowed @("--json", "-j") -Arguments $RestArgs
