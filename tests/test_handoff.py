@@ -101,9 +101,12 @@ class FakeConn:
         self.statements.append(statement)
         if "GROUP BY 1 ORDER BY N DESC" in statement:
             return FakeResult([(value, 100 - n) for n, value in enumerate(self.categories)])
-        if statement.startswith("SELECT COUNT(*), MIN("):
+        if statement.startswith("SELECT COUNT(*)") and "NULL, NULL" in statement:
+            # Exasol refuses two unnamed NULL columns; bank_marketing (no date role) hit it live.
+            raise AssertionError("Duplicate column names in result set: NULL")
+        if statement.startswith("SELECT COUNT(*) AS N, MIN("):
             return FakeResult([(self.rows, self.date_min, self.date_max)])
-        if statement.startswith("SELECT COUNT(*), NULL"):
+        if statement.startswith("SELECT COUNT(*) AS N, NULL AS DATE_MIN, NULL AS DATE_MAX"):
             return FakeResult([(self.rows, None, None)])
         if "ORDER BY 2, 1" in statement:
             return FakeResult(self.labels)

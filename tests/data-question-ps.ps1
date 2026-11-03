@@ -37,8 +37,11 @@ function Check($label, $expected, $actual) {
     if ("$expected" -eq "$actual") { $script:PASS++; Write-Host "  ok   $label" }
     else { $script:FAIL++; Write-Host "  FAIL $($label): expected <$expected>, got <$actual>" }
 }
+# The kit wraps a long line at the console's width (the Windows runner's is narrow), so a
+# phrase is looked for with its whitespace, line breaks included, collapsed to one space.
+function Flat($text) { return (("" + $text) -replace '\s+', ' ') }
 function Has($label, $needle, $haystack) {
-    if (("" + $haystack).Contains("" + $needle)) { $script:PASS++; Write-Host "  ok   $label" }
+    if ((Flat $haystack).Contains((Flat $needle))) { $script:PASS++; Write-Host "  ok   $label" }
     else { $script:FAIL++; Write-Host "  FAIL $($label): expected '$needle' in <$haystack>" }
 }
 function Lacks($label, $needle, $haystack) {

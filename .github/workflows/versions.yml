@@ -983,7 +983,9 @@ jobs:
           for pin in "mlflow-skinny==3.0.*" "mlflow-skinny>=3,<4"; do
             rm -rf "$RUNNER_TEMP/mlflow-venv"
             python3 -m venv "$RUNNER_TEMP/mlflow-venv"
-            "$RUNNER_TEMP/mlflow-venv/bin/python" -m pip install --quiet "$pin" "sqlalchemy>=2,<3" "alembic>=1.13,<2"
+            # The same store pins as exasol-mlflow's [mlflow] extra: SQLAlchemy 2.1 removed a pool
+            # class MLflow 3.0's store imports.
+            "$RUNNER_TEMP/mlflow-venv/bin/python" -m pip install --quiet "$pin" "sqlalchemy>=2,<2.1" "alembic>=1.13,<2"
             "$RUNNER_TEMP/mlflow-venv/bin/python" -c 'import mlflow; print("mlflow", mlflow.__version__)'
             "$RUNNER_TEMP/mlflow-venv/bin/python" -m unittest tests.test_exasol_mlflow
           done

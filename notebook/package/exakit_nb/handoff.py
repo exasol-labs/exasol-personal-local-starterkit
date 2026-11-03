@@ -109,8 +109,9 @@ def _summary_sql(ds: Dataset) -> str:
     """COUNT(*) and, with a date role, MIN and MAX of the date: the cheap data digest and the first date of the span."""
     if ds.has("date"):
         date = _q(ds.col("date"))
-        return f"SELECT COUNT(*), MIN({date}), MAX({date}) FROM {_qualified(ds.fact_table)}"
-    return f"SELECT COUNT(*), NULL, NULL FROM {_qualified(ds.fact_table)}"
+        return f"SELECT COUNT(*) AS N, MIN({date}) AS DATE_MIN, MAX({date}) AS DATE_MAX FROM {_qualified(ds.fact_table)}"
+    # Named: Exasol refuses two unnamed NULL columns ("Duplicate column names in result set").
+    return f"SELECT COUNT(*) AS N, NULL AS DATE_MIN, NULL AS DATE_MAX FROM {_qualified(ds.fact_table)}"
 
 
 def _summary(conn, ds: Dataset) -> tuple[int, str | None, str | None]:
