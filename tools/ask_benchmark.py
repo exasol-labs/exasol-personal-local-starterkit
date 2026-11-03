@@ -47,6 +47,12 @@ def canonical_result(result: dict) -> tuple[int, Counter]:
                                     separators=(",", ":")) for row in rows)
 
 
+# The provider refused the request itself, not the SQL: no question can be scored, so the model is not scored at all.
+ACCESS_ERRORS = {"AuthenticationError": "the provider rejected the API key (EXAKIT_PROVIDER_API_KEY)",
+                 "PermissionDeniedError": "the API key may not use this model or endpoint",
+                 "NotFoundError": "the provider does not know this model ID or base URL"}
+
+
 def evaluate_question(dataset, question: str, reference: str, *, execute, draft, description: str) -> dict:
     """Reference and approved candidate both use the same read-only executor; never send the reference to draft."""
     item = {"question": question, "matched": False}
@@ -115,6 +121,13 @@ def main(argv=None) -> int:
                 for question, reference in cases:
                     results.append(evaluate_question(ds, question, reference, execute=ask._execute_mcp,
                                                     draft=partial(nb.ask, request_timeout=args.timeout, max_output_tokens=args.max_output_tokens), description=description))
+                    refused = ACCESS_ERRORS.get(results[-1].get("error_type")) if results[-1].get("error_stage") == "draft" else None
+                    if refused:
+                        scored["not_scored"] = f"{results[-1]['error_type']}: {refused}"
+                        print(f"{model}: not scored - {scored['not_scored']}", file=sys.stderr, flush=True)
+                        break
+                if scored.get("not_scored"):
+                    break
                 entry = {"dataset": name, "descriptor_version": ds.version, "descriptor_digest": ds.digest,
                          "reference_digest": hashlib.sha256((folder / "examples.sql").read_bytes()).hexdigest(),
                          "matched": sum(item["matched"] for item in results), "total": len(results), "questions": results}
@@ -125,7 +138,8 @@ def main(argv=None) -> int:
             report["models"].append(scored)
         maximum = max(item["matched"] for item in report["models"])
         report["best_scoring_models"] = [m["model_id"] for m in report["models"] if maximum > 0 and m["matched"] == maximum]
-        report["valid_evaluation"] = not any(q.get("error_stage") == "reference" for m in report["models"] for d in m["datasets"] for q in d["questions"])
+        report["valid_evaluation"] = not any(m.get("not_scored") for m in report["models"]) and \
+            not any(q.get("error_stage") == "reference" for m in report["models"] for d in m["datasets"] for q in d["questions"])
     finally:
         conn.close()
         if original_model is None:

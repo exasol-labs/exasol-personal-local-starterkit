@@ -50,6 +50,16 @@ class BenchmarkTest(unittest.TestCase):
         self.assertNotIn("private connection", str(item))
         draft.assert_not_called()
 
+    def test_a_rejected_key_is_a_provider_refusal_not_a_wrong_answer(self):
+        AuthenticationError = type("AuthenticationError", (Exception,), {})
+        execute = mock.Mock(return_value={"columns": ["N"], "rows": [[1]]})
+        draft = mock.Mock(side_effect=AuthenticationError("invalid x-api-key sk-ant-secret"))
+        item = bench.evaluate_question(object(), "Question", "SELECT 1", execute=execute,
+                                       draft=draft, description="Schema only")
+        self.assertEqual(("draft", "AuthenticationError"), (item["error_stage"], item["error_type"]))
+        self.assertIn(item["error_type"], bench.ACCESS_ERRORS)
+        self.assertNotIn("sk-ant", str(item))
+
 
 if __name__ == "__main__":
     unittest.main()
