@@ -166,7 +166,11 @@ def run(addons: list[str], source: Path, output: Path, *, approve_test_writes: b
             state_bin = snapshot(bin_dir)
             command("uninstall", addon, "--dry-run")
             command("uninstall", "--dry-run")
-            changed = sorted(set(state.items()) ^ set(snapshot(home).items()))
+            # A running service writes its own log on its own schedule (the Scheduler logs every task run, here every
+            # ten seconds): that file changing is the service at work, not the preview. Every log a command writes -
+            # install-*.log, marketplace.log, the lock - stays in the comparison.
+            service_log = str(Path("logs") / f"{addon}.log")
+            changed = sorted(item for item in set(state.items()) ^ set(snapshot(home).items()) if item[0] != service_log)
             changed += sorted(set(state_bin.items()) ^ set(snapshot(bin_dir).items()))
             if changed:
                 raise RuntimeError(f"{addon} preview changed {', '.join(sorted({str(item[0]) for item in changed}))}")
