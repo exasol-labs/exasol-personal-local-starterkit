@@ -119,7 +119,7 @@ Branch: `feat/persona-and-marketplace-ui`. This checklist tracks implementation 
 - [x] Step 6 notebook cell: `exakit_nb.describe()` / `Draft.set/slot/approve`; the role review on top of it; `exakit describe` on the same service (`--role slot=COLUMN`, `--set COLUMN=role`).
 - [x] Step 7 model notes: one call, never a sensitive column, never a role.
 - [x] Datasets: `esophageal_posts` (de-identified social-listening export; terms unconfirmed) replaces `pharma_trials`; `bank_marketing` added; both personas load all three reference datasets.
-- [ ] Live run: load the two new datasets and approve on a real database (`docs/RUNBOOK-PERSONAS-E2E.md`, A2-A8); confirm the shipped schema digests equal the live ones (TIMESTAMP naming).
+- [ ] Live run: load the two new datasets and approve on a real database (`docs/MANUAL-RUNBOOK.md`, sections 1-2); confirm the shipped schema digests equal the live ones (TIMESTAMP naming).
 - [ ] MCP describe on the read-only login for a local and a virtual table after a replace (DS5.4).
 - [ ] Owner: confirm Esophageal's redistribution terms; publish the two new release assets.
 - [ ] Banking text: the CFPB no longer publishes narratives, so banking has no text slot; a narrative source is the owner's call.

@@ -1,367 +1,341 @@
-# Mac test runbook: current starter-kit candidate
+# Test the starter kit yourself (Mac)
 
-Test in this order: clean install → baseline checks → add Share/JSON tools → Data Scientist → ML Engineer → own files → Marimo and bundled lessons → final checks.
+Two ways in - pick one:
 
-Use Terminal for shell commands and the Exasol (Starter Kit) kernel for notebook cells. This guide tests the current checkout, including the acceptance fixes on the current feature branch; the ordinary public installer alone does not contain these unmerged changes. Virtual schemas and external data-source connections are excluded. Leave the connected-source setting at its shipped `None` value.
+- **Path A - fresh install**: start from nothing (or wipe your kit first).
+- **Path B - the kit you already have**: keep your data, add the new version on top.
 
-## 1. Optional clean reset
+Both end with the same tests: **Data Scientist**, **your own file**, **ML Engineer**.
+Tick each line in the checklist at the bottom as you go.
 
-**Full uninstall deletes kit-owned database data and, with the setting below, your kit notebooks. Save anything you need first.** Compatible user-owned components and databases are preserved; this is a clean kit installation, not a guarantee that every pre-existing Exasol deployment disappears.
+> Terminal = the Mac Terminal app. Notebook = JupyterLab in your browser.
+> Copy one grey box at a time, press Enter, and wait until it finishes.
 
-```sh
-export PATH="$HOME/.local/bin:$PATH"
-exakit version
-EXAKIT_UNINSTALL_NOTEBOOKS=remove exakit uninstall --dry-run
-```
+---
 
-Read the removal plan. If it is correct, run this and select **EVERYTHING** in the menu, then confirm:
+## Before you start (both paths)
 
-```sh
+1. Open **Terminal**.
+2. Go to the kit folder and check you are on the right version:
+
+   ```bash
+   cd ~/Desktop/starterkit-0.2.0-descriptor
+   git log -1 --oneline
+   ```
+
+   You see one line starting with a commit number. Write it in the checklist.
+
+3. Set up this Terminal window (do this again if you open a new window):
+
+   ```bash
+   export PATH="$HOME/.local/bin:$PATH"
+   export EXAKIT_VERSION_POLICY=pinned
+   export KIT="$PWD"
+   ```
+
+---
+
+## Path A - fresh install
+
+### A1. Wipe the old kit (skip if you have none)
+
+This deletes the kit's database and notebooks. Save anything you need first.
+
+```bash
 EXAKIT_UNINSTALL_NOTEBOOKS=remove exakit uninstall
 ```
 
-Skip this section if `exakit` is not installed. Keep your source checkout and the internal evidence document. Do not manually delete reused deployments or edit ownership records to make the reset look clean.
+In the menu choose **EVERYTHING**, then confirm.
 
-## 2. Install the current checkout using curl
+### A2. Install with the Data Scientist persona
 
-First change into your checkout. On the Mac used for this test, run:
+Note the time, then run:
 
-```sh
-cd /Users/sheetaldharshan.a/Desktop/starterkit-0.2.0
-git branch --show-current
-git log -1 --oneline
+```bash
+curl -fsSL https://www.exasol.com/install/starter-kit.sh | EXAKIT_LOCAL_KIT="$KIT" EXAKIT_PERSONA=data-scientist EXAKIT_NOTEBOOK_FRONTENDS=jupyterlab,marimo sh
 ```
 
-Expected local branch: `feat/persona-and-marketplace-ui`; verify the revision shown by `git log` before testing. No replacement PR is open while acceptance continues.
-On another machine, substitute its checkout path. A `fatal: not a git repository` message means you are in the wrong directory; correct that before installing. `$PWD` is your current Terminal directory, so running the following command from `~` points at your home rather than the checkout.
+Wait until it says it is done (a few minutes). Near the top it should say **Using local kit checkout**.
 
-```sh
-export EXAKIT_VERSION_POLICY=pinned
-curl -fsSL https://www.exasol.com/install/starter-kit.sh | \
-  EXAKIT_LOCAL_KIT="$PWD" \
-  EXAKIT_PERSONA=data-scientist,ml-engineer \
-  EXAKIT_NOTEBOOK_FRONTENDS=jupyterlab,marimo sh
+Go to **Check the install** below.
+
+---
+
+## Path B - the kit you already have
+
+### B1. Note what you have
+
+```bash
+exakit version
+exakit persona plan
 ```
 
-Keep `EXAKIT_VERSION_POLICY=pinned` set in this testing shell: the published manifest may not yet contain this candidate’s Rust container entries. This uses the candidate’s bundled versions; packages and assets still download when needed. After testing, `unset EXAKIT_VERSION_POLICY` restores ordinary manifest-based updates.
+Write down the version and the personas shown.
 
-The log must say it is using the **local checkout**. `EXAKIT_LOCAL_KIT` belongs after the pipe, as shown. Wait for completion; do not interrupt the UDF step because its percentage pauses. The line above its progress bar should name download, checksum verification, container installation, restart or package checking. A previous first UDF install took about 11 minutes; elapsed time alone is not a failure.
+### B2. Put the new version on your kit
 
-Expected baseline:
-
-| Item | Data Scientist | ML Engineer | Both together |
-|---|---|---|---|
-| Datasets | Esophageal + Banking + Bank marketing | Esophageal + Banking + Bank marketing | Each loaded once |
-| Add-ons | Notebook | Notebook + UDF devkit | Notebook + UDF devkit |
-| MLflow | — | Managed local service | Managed local service |
-| Extra tools | Dash Server / JSON Tables added explicitly below | Same | Same |
-
-To test either persona alone on a fresh kit, change only `EXAKIT_PERSONA` to `data-scientist` or `ml-engineer`. To test adding the other persona later, use `exakit persona add ml-engineer` or `exakit persona add data-scientist`, then check its plan.
-
-## 3. Confirm the installation and default data
-
-```sh
-export PATH="$HOME/.local/bin:$PATH"
-exakit status --json
-exakit persona plan data-scientist,ml-engineer
-exakit notebook check
-exakit mcp-doctor --json
-exakit sql --json 'SELECT CURRENT_TIMESTAMP'
-exakit sql 'SELECT COUNT(*) AS N FROM ESOPHAGEAL.ESOPHAGEAL_POSTS'
-exakit sql 'SELECT COUNT(*) AS N FROM BANKING.BANKING_COMPLAINTS'
+```bash
+curl -fsSL https://www.exasol.com/install/starter-kit.sh | EXAKIT_LOCAL_KIT="$KIT" sh
 ```
 
-Pass: database running; persona plan has nothing pending; notebook connection works; the timestamp returns; counts are **40,987 Esophageal posts**, **6,754 Banking complaints** and **45,211 Bank marketing clients**. MCP doctor should report a successful handshake for configured clients. Restart an AI client before expecting its newly registered tools to appear.
+It keeps your database, data and AI-client settings.
 
-If a reference dataset is missing, load it and repeat the count:
+### B3. Add the Data Scientist persona
 
-```sh
-exakit data-load esophageal_posts
-exakit data-load banking_complaints
+```bash
+exakit persona add data-scientist
 ```
 
-For the ordinary kit sample datasets as well, optionally run these separately:
+You should see the new datasets load (Esophageal posts, Bank marketing); Banking says *already loaded*.
 
-```sh
-exakit data-load tpch
-exakit data-load energy
-exakit data-load weather
-exakit sql "SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_ROW_COUNT FROM SYS.EXA_ALL_TABLES WHERE TABLE_SCHEMA NOT LIKE 'SYS%' ORDER BY 1, 2"
+---
+
+## Check the install (both paths)
+
+```bash
+exakit status
+exakit persona plan data-scientist
+exakit sql "SELECT 'Esophageal' AS DATA, COUNT(*) AS ROWS_ FROM ESOPHAGEAL.ESOPHAGEAL_POSTS UNION ALL SELECT 'Banking', COUNT(*) FROM BANKING.BANKING_COMPLAINTS UNION ALL SELECT 'Bank marketing', COUNT(*) FROM BANKMKT.BANK_CLIENTS"
 ```
 
-## 4. Add Share and CLI JSON support; prepare Rust
+You should see:
 
-```sh
-exakit marketplace dash-server json-tables
-exakit mcp-setup
-exakit start dash-server
-exakit mlflow status --json
-exakit marketplace --list --json
-exakit status --json
-```
+- status: **running**
+- persona plan: **nothing pending**
+- rows: Esophageal **40987**, Banking **6754**, Bank marketing **45211**
 
-Pass: both added tools are installed; Dash Server reports its URL (normally `http://127.0.0.1:5100`); MLflow is running. If MLflow is stopped, run `exakit mlflow start`. Use `exakit mlflow url` for its actual address.
+If a dataset is missing: `exakit data-load esophageal_posts` (or `bank_marketing`, `banking_complaints`).
 
-Rust container installation can restart the database. Run it when a restart is acceptable and confirm the prompt:
+---
 
-```sh
-exakit udf-setup --language rust
-exakit udf-use --list
-```
+## 1. Data Scientist
 
-Pass: Rust smoke reports the pinned rustc/SDK, and the installed aliases include `RUST` plus the Python training runtimes. A later check should succeed without reinstalling an already valid container. The ML Engineer persona should already have prepared `PYTHON3_ML`; use `exakit udf-use default --language python` only if that runtime is missing or its package check failed—it can restart the database too.
+### 1.1 Open the notebooks
 
-A first Rust **build** additionally needs a running Docker or Podman Linux engine. The database running inside Exasol Personal does not by itself prove that a build engine is available.
-
-## 5. Data Scientist: Esophageal, then Banking
-
-```sh
+```bash
 exakit notebook
 ```
 
-Choose JupyterLab. In `starter-kit-notebooks/data-scientist/`, use the **Exasol (Starter Kit)** kernel and run cells in order:
+Choose **JupyterLab**. Your browser opens.
 
-| Notebook | Action | Pass |
-|---|---|---|
-| `00_quickstart.ipynb` | Keep `SAMPLE = "esophageal_posts"`; leave own-file and connected-source defaults alone. Review the proposed roles and click **Approve descriptor** before continuing. | Connection, approved roles and first query succeed; workflow ID is printed. |
-| `01_explore.ipynb` | Keep `DATASET = "esophageal_posts"` and `USE_AI_THEMES = False`; run the SQL, client model and final handoff cell. | SQL/results appear and a handoff file is written. Optional AI themes stay off, including when an endpoint is configured. |
-| `02_ask_your_data.ipynb` | Keep `DRAFT_WITH_MODEL = False`. Leave `APPROVE_SQL = False` first; after reading the SQL, set it to `True` and rerun the approval cell. | No proposal execution before approval; category counts return after approval. |
-| `03_share.ipynb` | Use `APP_NAME = "esophageal-category-check"`. Run Preview, open its URL, expand Filters and display, try search/sort/Top N and Reset, then check the figures. Only then set `FIGURES_CHECKED = True` and rerun the last cell. | Healthy preview, then a live Dash Server URL; no promotion while the flag is false. |
+In the left panel open: **starter-kit-notebooks → data-scientist → 00_quickstart.ipynb**.
+Top right, the kernel must say **Exasol (Starter Kit)**.
 
-Copy the quickstart's workflow ID into `WORKFLOW_ID` in subsequent notebooks to keep one log across kernels.
+### 1.2 Run the quickstart
 
-Read the question and result notes as you go. The role picker must explain that
-its suggestions use measured table values and column names, show the technical
-evidence and flag close alternatives. Check that a role fits your question:
-`TERMINATED` and `HAS_RESULTS` are both binary, but predict different outcomes.
-Your approval selects the meaning; a suggestion score is not a probability.
+Menu **Run → Run All Cells**.
 
-Existing working notebooks are preserved during updates. For the revised
-walkthrough, open the current original under the kit's
-`kit/notebook/notebooks/` or `kit/notebook/marimo/` directory and save a new copy
-with a different name; see `notebook/README.md` in this checkout for the paths.
+- It prints a **workflow id** (looks like `wf-20261103-...`). Write it down.
+- A small form shows each column's role. Look it over and click **Approve descriptor**.
+- The last cells show rows from the data.
 
-Repeat all four with `SAMPLE` / `DATASET = "banking_complaints"`. Use `APP_NAME = "banking-category-check"` for its dashboard. The rest of the notebook SQL should stay unchanged.
+From the install start to these rows should take **under 10 minutes**.
 
-## 6. ML Engineer: train, score and inspect MLflow
+### 1.3 Describe and approve a dataset yourself
 
-Run Data Scientist `01_explore` first for each dataset so the handoff exists. Open `starter-kit-notebooks/ml-engineer/`:
-
-| Notebook | Action | Pass / current expectation |
-|---|---|---|
-| `00_quickstart.ipynb` | Keep Esophageal; run connection, container, MLflow and bucket checks, then review/approve roles. | Checks and first query succeed. Record any failed bucket check; do not silently mark it passed. |
-| `01_train.ipynb` | Set `DATASET = "esophageal_posts"`; keep seed/options unchanged. Run training and artifact export twice. | Two runs have identical metrics/coefficients; model, training SQL and coefficients appear in MLflow. Esophageal's last observed macro-F1 was `0.445955`, above baseline `0.441129`. |
-| `02_rust_score.ipynb` | Keep the same dataset; use `UDF_NAME = "score_posts"`. Set `TEST_ROWS = 10_000` for the reference acceptance run; run build/deploy and parity cells. | Rust/Python labels agree and maximum probability difference is **below `1e-9`** on the tested rows. The Rust MLflow run includes container/library/Cargo digests. |
-| `03_score_external_model.ipynb` | Keep `MODEL_FILE = None` to train its built-in local example. This tests a local model file, not an external data connection. | File is copied to the shared bucket and local/database predictions match. A skipped comparison or version mismatch is not a pass. |
-
-Repeat on Banking with `DATASET = "banking_complaints"` and Rust `UDF_NAME = "score_banking"`. Use a new UDF name when changing coefficient revisions; existing projects are preserved.
-
-Use `CLASS_WEIGHT = None` for Esophageal and `CLASS_WEIGHT = "balanced"` for Banking in the training notebook. This is an explicit, logged model parameter; the temporal split, seed and baseline remain unchanged. Live database runs on 30 October 2026 repeated both recipes twice: Esophageal macro-F1 **0.445955** versus baseline **0.441129**; Banking **0.523298** versus **0.469807**. Metrics and coefficient digests matched across reruns. Banking with the default unweighted recipe still equals its baseline; selecting the balanced recipe is part of this test, not an automatic dataset-specific override.
-
-For bucketless Rust deployment, the notebook defaults to `ALLOW_DATABASE_RESTART = False`. If it reports that a container update is needed, set it to `True` only when you agree to the restart, then rerun deployment. A verified unchanged packaged library should deploy again without another restart. This fallback applies to Rust; external pickle scoring still requires a working shared bucket.
-
-```sh
-exakit mlflow url
-exakit model list --json
-```
-
-Open MLflow and inspect the Python/Rust runs, metrics, parameters, artifacts and descriptor/workflow tags. Notebook-side packages and packages inside Exasol are different environments; the database-side check is in the extra lesson below.
-
-## 7. Test all five own-file formats
-
-In a new notebook cell, create local test files:
+In JupyterLab: **File → New → Notebook**, pick **Exasol (Starter Kit)**. Paste into the first cell and run it (Shift+Enter):
 
 ```python
-from pathlib import Path
-import pandas as pd
-
-folder = Path.home() / "exakit-test-data"
-folder.mkdir(exist_ok=True)
-frame = pd.DataFrame({
-    "COMPANY": [f"company-{i % 5}" for i in range(120)],
-    "CATEGORY": ["A" if i % 2 else "B" for i in range(120)],
-    "EVENT_DATE": pd.date_range("2025-01-01", periods=120).strftime("%Y-%m-%d"),
-    "LABEL": [i % 2 for i in range(120)],
-    "DESCRIPTION": ["accepted claim" if i % 2 else "rejected claim" for i in range(120)],
-    "select": list(range(120)),
-    "EMPTY_TEXT": [""] * 120,
-})
-frame.to_csv(folder / "records-csv.csv", index=False)
-frame.to_parquet(folder / "records-parquet.parquet", index=False)
-frame.to_json(folder / "records-array.json", orient="records")
-frame.to_json(folder / "records-jsonl.jsonl", orient="records", lines=True)
-frame.to_json(folder / "records-lines.json", orient="records", lines=True)
-print(folder)
+import exakit_nb as nb
+d = nb.describe("esophageal_posts")
+d.show()
 ```
 
-For each row below, rerun the Data Scientist quickstart's load/review/query cells with `SAMPLE = None` and these values. Use a separate table per format:
+You see a table: every column with a **role**, **confidence** and **evidence**. The line at the top shows the **slots**:
 
-| `OWN_FILE` | `OWN_TABLE` |
-|---|---|
-| `"~/exakit-test-data/records-csv.csv"` | `"FILE_TEST.CSV_RECORDS"` |
-| `"~/exakit-test-data/records-parquet.parquet"` | `"FILE_TEST.PARQUET_RECORDS"` |
-| `"~/exakit-test-data/records-array.json"` | `"FILE_TEST.JSON_RECORDS"` |
-| `"~/exakit-test-data/records-jsonl.jsonl"` | `"FILE_TEST.JSONL_RECORDS"` |
-| `"~/exakit-test-data/records-lines.json"` | `"FILE_TEST.JSON_LINES_RECORDS"` |
+- key `POST_ID`, time `CREATED_TIME`, text `MESSAGE`, category `SOCIAL_NETWORK`, entity `SOURCE_DOMAIN`
+- **target is empty** (the kit never guesses it)
 
-Review entity=`COMPANY`, category=`CATEGORY`, date=`EVENT_DATE`, label=`LABEL` (positive `1`), text=`DESCRIPTION`; the all-empty column must not break loading. Approve before continuing. Each table should contain **120 rows**, the reserved `select` header should be normalized safely, and no `Descriptor.has` error should appear.
+Next cell:
 
-Choose one file and set Explore's single `DATASET` assignment to that file path. Rerun exploration and handoff; its descriptor was saved beside the file. You can then use the same path in the training notebook.
-
-Separately test the **JSON Tables CLI add-on** using a new target:
-
-```sh
-EXAKIT_DATA_FILE="$HOME/exakit-test-data/records-array.json" \
-  EXAKIT_DATA_TABLE=FILE_TEST.CLI_JSON exakit data-load
-exakit sql "SELECT TABLE_NAME, TABLE_ROW_COUNT FROM SYS.EXA_ALL_TABLES WHERE TABLE_SCHEMA = 'FILE_TEST' ORDER BY TABLE_NAME"
+```python
+d.slot(target="IS_NEGATIVE")
+ds = d.approve()
 ```
 
-Pass: the CLI reports the created tables and a successful load. Inspect the printed table names; JSON ingestion can create related tables. This is separate from the notebook's own-file loader.
+You see **Approved ... v1** and **Published as EXAKIT_SEMANTIC.ESOPHAGEAL__ESOPHAGEAL_POSTS**.
 
-## 8. Marimo, useful lessons and the official library
+Run `d.approve()` once more: it says **nothing was written** (nothing changed).
 
-```sh
-exakit notebook marimo
+Try a wrong role - it must refuse and list the right ones:
+
+```python
+d.set(TITLE="wrong")
 ```
 
-Open the matching persona `.py` files in Marimo's `data-scientist/` or `ml-engineer/` folders. Run the quickstart and Explore/Train with the same settings above. Use the notebook's visible Run/approval controls. Each front end has its own copies; editing Jupyter does not edit Marimo.
+### 1.4 Ask your AI client about the roles
 
-In either front end, run these additional lessons under `useful-notebooks/<persona>/`:
+In Claude (connected to the kit), ask:
 
-| Persona | File stem | Pass |
-|---|---|---|
-| Data Scientist | `01_sql_and_dataframes` | SQL aggregates and independent totals agree. |
-| Data Scientist | `02_decision_tree_baseline` | Client-side scikit-learn training/evaluation completes. |
-| ML Engineer | `01_udf_package_check` | scikit-learn, pandas, NumPy, SciPy and joblib import **inside Exasol**. |
-| ML Engineer | `02_decision_tree_udf` | Database-side decision-tree training returns row counts and metrics. |
+*"Describe the view EXAKIT_SEMANTIC.ESOPHAGEAL__ESOPHAGEAL_POSTS and list each column's role."*
 
-Repeat with Banking. Jupyter filenames end in `.ipynb`; Marimo filenames end in `.py`.
+The answer should show `role=...` for each column.
 
-Open `exasol-examples/00_library.ipynb` (or `.py`) for the bundled 50-example index. For the local smoke flow, use its configuration lesson and Abalone load/train/UDF-prediction/client-prediction lessons. Read prerequisites first; external-source, cloud, GPU and other service-dependent tutorials are outside this run. Record them as **not exercised**, not passed.
+### 1.5 The same from Terminal (Banking and Bank marketing)
 
-## 9. Check help, ownership and notebook preservation
-
-```sh
-exakit --help udf-devkit
-exakit rust-udf deploy --help
-exakit model put --help --json
-exakit --help notebook
-exakit marketplace --list --json
-exakit version --json
+```bash
+exakit describe BANKING.BANKING_COMPLAINTS --id banking_complaints
+exakit describe banking_complaints --approve --role target=MONETARY_RELIEF
+exakit describe BANKMKT.BANK_CLIENTS --id bank_marketing
+exakit describe bank_marketing --approve --role target=SUBSCRIBED
+exakit describe bank_marketing --versions
 ```
 
-Pass: options/defaults/examples match each action, including Rust deploy's `--yes`; installed components show ownership. Reused user-owned components must remain user-owned and be preserved in the uninstall preview. See [ownership behavior](COMPONENT-OWNERSHIP.md) and [all add-on commands](ADDON-COMMANDS.md).
+Each approve prints **Approved ... v1**. Banking has **no text** column and Bank marketing has **no time or text** column - each says why.
 
-Test a harmless invalid help action:
+### 1.6 Explore
 
-```sh
-exakit help made-up-action --json
-echo $?
+Open **data-scientist → 01_explore.ipynb** and **Run All Cells**. Charts and a model result appear. Then change the first line to `DATASET = "banking_complaints"` and run again - it works without other changes (the text step skips and says why).
+
+---
+
+## 2. Your own file
+
+### 2.1 Make a test file
+
+In Terminal:
+
+```bash
+mkdir -p ~/my-data && python3 - <<'PY'
+import csv, datetime, os, random
+random.seed(1)
+with open(os.path.expanduser("~/my-data/tickets.csv"), "w", newline="") as f:
+    w = csv.writer(f); w.writerow(["TICKET_ID", "OPENED_ON", "CHANNEL", "CUSTOMER_EMAIL", "ESCALATED", "BODY"])
+    for i in range(1500):
+        w.writerow([1000 + i, (datetime.date(2025, 1, 1) + datetime.timedelta(days=i % 300)).isoformat(),
+                    ["web", "phone", "mail"][i % 3], f"customer{i % 400}@example.org", int(random.random() < 0.1),
+                    f"Ticket {i}: the {['invoice', 'delivery', 'password', 'refund'][i % 4]} problem is still open after {i % 9} days"])
+PY
 ```
 
-Expected: `ok: false`, no matching commands, catalog remedy, exit **2**; nothing is installed.
+### 2.2 Load it, describe it, approve it
 
-To test refresh preservation, add a Markdown marker to a copied optional lesson, save it, then run `exakit notebook setup` and reopen it. Your edit must remain. Existing old utility copies that you edited are also preserved; unchanged kit copies can be moved out of the reserved slots. After a clean install, utility lessons belong under `useful-notebooks/`.
+In a notebook cell:
 
-## 10. Rust fallback-specific checks
-
-Use a fresh UDF name for a new coefficients file. The public command forms are:
-
-```sh
-exakit rust-udf new score_manual --coefficients "$HOME/.exasol-starter-kit/handoffs/esophageal_posts-v1.coefficients.json"
-exakit rust-udf build score_manual --json
-exakit rust-udf deploy score_manual --schema EXAKIT_SCORING --json
+```python
+import exakit_nb as nb
+nb.load_own_file("~/my-data/tickets.csv", "MY_DATA.TICKETS")
+d = nb.describe("MY_DATA.TICKETS")
+d.show()
 ```
 
-Use the actual coefficient path printed by training if the descriptor version is not `v1`.
+Check:
 
-| Situation | Expected result |
-|---|---|
-| Shared bucket is readable in a UDF | `deployment: "bucket"`; no database restart. |
-| Bucket unavailable and no matching packaged library; no `--yes` | Exit **5**, `step: "confirm"`, explicit restart remedy. A bucket probe may stage a library/helper UDF; no container update/restart occurs. |
-| Same unavailable bucket, restart accepted | Run `exakit rust-udf deploy score_manual --schema EXAKIT_SCORING --yes --json`; expect `deployment: "container"`, derived `container_sha256`, restart requested and a successful load. |
-| Repeat unchanged packaged deployment | Run the ordinary deploy again; expect reuse with `database_restart_requested: false`. |
+- `CUSTOMER_EMAIL` is **identifier** and marked **sensitive** (personal data - never charted or sent to a model)
+- slots: key `TICKET_ID`, time `OPENED_ON`, text `BODY`, category `CHANNEL`
 
-Do not rename/delete live bucket folders to force this test. A Mac with a working bucket exercises the normal route; record the live fallback as **not exercised** unless the bucket is actually unavailable. Python/Rust parity still needs the notebook check after deployment.
+Then:
 
-The isolated fallback fixtures can be run from the source checkout without altering the real deployment:
-
-```sh
-python3 tests/test_rust_container.py
-python3 tests/test_rust_udf.py
-python3 tests/test_udf_tool.py
+```python
+d.slot(target="ESCALATED")
+ds = d.approve()
 ```
 
-Expected current counts: **7, 13 and 17 tests pass**. These cover packaging, consent, unavailable UDF-visible buckets, retained libraries, reuse and invalidation; they do not establish a live restart/parity pass.
+### 2.3 Explore your file
 
-## 11. Optional model endpoint and Langfuse trace
+Open **01_explore.ipynb**, change the first line to `DATASET = "my_data_tickets"` and **Run All Cells**. It runs unchanged.
 
-Choose a provider using [MODEL-PROVIDERS.md](../notebook/MODEL-PROVIDERS.md): it links official connection requirements for Claude, Ollama, LM Studio, vLLM and Gemini. A local unauthenticated server needs no model API key; optional `EXAKIT_PROVIDER_HEADERS` supplies routing headers when required. Check `nb.model_settings()` in the notebook for a safe, request-free configuration summary.
+### 2.4 Change the table and describe again
 
-This trace check needs your own model endpoint and Langfuse project. Configure `EXAKIT_MODEL_ID`, `EXAKIT_PROVIDER_BASE_URL`, `EXAKIT_PROVIDER_API_KEY`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and `LANGFUSE_BASE_URL` securely in the Terminal environment. Do not paste keys into notebook cells or logs.
-
-Restart the notebook servers from that same Terminal so the kernel inherits the settings:
-
-```sh
-exakit notebook stop
-exakit notebook
+```bash
+exakit sql "ALTER TABLE MY_DATA.TICKETS ADD COLUMN PRIORITY VARCHAR(10)"
 ```
 
-In Explore set `USE_AI_THEMES = True` and rerun its settings cell. This opts into sending up to five descriptions to your configured endpoint. Inspect the text-step SQL before running that cell; bundled local tables do not ask for another confirmation. Pass: one trace groups its model calls and shows inputs/outputs, token usage, latency, dataset/descriptor/workflow/session tags and sample SQL. Inspect the trace for accidental connection secrets. With model configuration present but Langfuse variables absent, model calls should still work with a tracing-off note. With no model configured, the optional model step skips. Return `USE_AI_THEMES` to `False` and rerun: the SQL sample should still appear and no theme calls should be made.
+```python
+d2 = nb.describe("MY_DATA.TICKETS")
+d2.show()
+```
 
-No local Langfuse server installation is required by this flow. Real Cloud/self-hosted compatibility and your own-project trace remain manual checks; local mock tests do not replace them.
+You get a **draft v2**: `PRIORITY` is marked **changed since v1**, everything else keeps your choices (target too).
 
-## 12. Final record and stop
+---
 
-```sh
-exakit mlflow url
+## 3. Workflow log
+
+```bash
 exakit workflow list
-exakit status --json
+exakit workflow show YOUR_WORKFLOW_ID
 ```
 
-Inspect a workflow with the real ID printed earlier:
+(Use the id you wrote down in 1.2.) You see lines for the descriptor **draft** and **approve** and the SQL that ran.
 
-```sh
-exakit workflow show YOUR_WORKFLOW_ID --json
+No password anywhere - this prints only file names, so **no output is good**:
+
+```bash
+PWFILE=$(python3 -c "import json,os; print(json.load(open(os.path.expanduser('~/.exasol-starter-kit/manifest.json')))['runtime']['password_file'])")
+grep -rIlF -f "$PWFILE" ~/.exasol-starter-kit/notebooks ~/.exasol-starter-kit/descriptors ~/.exasol-starter-kit/workflows ~/Library/Jupyter/kernels 2>/dev/null
 ```
 
-Record **pass / fail / not exercised** for: installation, reference counts, both DS notebook flows, both ML training/logging flows, model baseline improvement, Python/Rust parity, external local-model scoring, five file formats, CLI JSON, Marimo, useful lessons, notebook preservation, ownership/help, Langfuse and live fallback. Keep the Banking baseline failure visible. GitHub CI is separately blocked by the account billing/spending limit until that is resolved.
+---
 
-```sh
+## 4. ML Engineer
+
+### 4.1 Add the persona
+
+```bash
+exakit persona add ml-engineer
+exakit persona plan ml-engineer
+exakit mlflow status
+```
+
+- persona plan: **nothing pending**
+- MLflow: **running** (if not: `exakit mlflow start`)
+
+The first time it installs the Python UDF container - this can take ~10 minutes and restarts the database once.
+
+### 4.2 Train
+
+In JupyterLab open **ml-engineer → 00_quickstart.ipynb** → **Run All Cells** (connection, container and MLflow checks pass).
+
+Then open **ml-engineer → 01_train.ipynb**, keep `DATASET = "esophageal_posts"` → **Run All Cells**.
+
+```bash
+exakit mlflow url
+```
+
+Open that address in the browser: the run is there with its metrics and tags.
+
+Repeat **01_train** with `DATASET = "bank_marketing"`.
+
+---
+
+## 5. Finish
+
+```bash
 exakit notebook stop
 exakit stop
 ```
 
-For another session, run `exakit start`, then open notebooks on demand. For failures, use the named remedy and inspect:
+Next time: `exakit start`, then `exakit notebook`.
 
-```sh
-exakit status --json
-exakit logs setup --lines 100
-exakit logs udf-devkit-mlflow --lines 100
-```
+If something fails: copy the message, then run `exakit status` and `exakit logs setup --lines 100` and keep the output.
 
-Do not loop on `start` if status reports `interrupted`; runtime repair deletes database data and requires a separate deliberate decision.
+---
 
-## Windows commands for later verification
+## Checklist
 
-Live Windows verification is deferred. From the Windows checkout directory, after any uninstall preview/confirmation:
+| Step | What you checked | ✓ | Note (time, message) |
+|---|---|---|---|
+| Before you start | commit number | | |
+| A2 / B2-B3 | install finished, datasets loaded | | minutes: |
+| Check the install | running, nothing pending, 40987 / 6754 / 45211 rows | | |
+| 1.2 | quickstart rows under 10 minutes | | minutes: |
+| 1.3 | describe → approve v1 → published; second approve writes nothing; wrong role refused | | |
+| 1.4 | AI client shows the roles | | |
+| 1.5 | Banking and Bank marketing approved from Terminal | | |
+| 1.6 | Explore runs on Esophageal and Banking | | |
+| 2.2 | own file: email is sensitive; approved | | |
+| 2.3 | Explore runs on your file | | |
+| 2.4 | changed table → draft v2, choices kept | | |
+| 3 | workflow lines; password check prints nothing | | |
+| 4.1 | ML Engineer added, MLflow running | | |
+| 4.2 | train runs in MLflow (Esophageal, Bank marketing) | | |
 
-```powershell
-$env:EXAKIT_LOCAL_KIT = (Get-Location).Path
-$env:EXAKIT_PERSONA = 'data-scientist,ml-engineer'
-$env:EXAKIT_NOTEBOOK_FRONTENDS = 'jupyterlab,marimo'
-irm https://www.exasol.com/install/starter-kit.ps1 | iex
-exakit status --json
-exakit persona plan data-scientist,ml-engineer
-exakit notebook check
-```
+## Good to know
 
-The remaining kit commands and notebook settings above are shared. Use PowerShell 5.1 when checking the minimum supported Windows shell; macOS PowerShell fixture success is not live Windows acceptance.
-
-
-## 11. Repeatable acceptance checks and remaining gates
-
-See [ACCEPTANCE-REMAINING.md](ACCEPTANCE-REMAINING.md) for service checks,
-model benchmarking, CI setup, participant sessions and the evidence still
-needed. A local warm-machine run does not establish clean-install timing or
-Windows acceptance. Keep internal evidence and credentials out of commits.
+- This version installs only **from this folder** (`EXAKIT_LOCAL_KIT`) - the new datasets are not published online yet.
+- **First time the new datasets load on a real database.** If a load or check fails at A2/B3, copy the message into the checklist; `exakit data-load esophageal_posts --force` retries one dataset.
+- **Banking has no text** (the source stopped publishing complaint texts) - text steps skip on Banking.
+- **Esophageal posts** are other people's public posts with personal details removed; the terms are still to be confirmed before release.
+- **Windows** (later): in PowerShell, `$env:EXAKIT_LOCAL_KIT = 'C:\path\to\checkout'`, then `irm https://www.exasol.com/install/starter-kit.ps1 | iex`, then the same steps.
+- Deeper checks (Rust scoring, Share dashboards, Marimo, all file formats, Langfuse): [ACCEPTANCE-REMAINING.md](ACCEPTANCE-REMAINING.md).
