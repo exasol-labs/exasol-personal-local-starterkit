@@ -608,10 +608,17 @@ def stop(ctx: KitContext) -> None:
 
 
 def autostart_command(ctx: KitContext) -> list[str]:
-    """The login entry: ``exakit start udf-devkit``, which starts the kit's MLflow server only when it was enabled
-    (exakit mlflow start) and hands it off. Without one this service could never join the boot set, so `exakit
-    status` reported autostart disabled on every ML Engineer kit."""
-    return [str(ctx.bin_dir / ("exakit.cmd" if os.name == "nt" else "exakit")), "start", "udf-devkit"]
+    """The login entry: the notebook environment's Python runs setup/lib/mlflow_service.py start --if-enabled, which
+    starts the kit's MLflow server only when it was enabled (exakit mlflow start) and hands it off. Not through
+    `exakit start udf-devkit`: that waits on the database, which MLflow does not need, and a login entry's bare
+    environment has neither the kit's PATH nor its home - EXAKIT_HOME is given here. Without an entry this service
+    could never join the boot set, so `exakit status` reported autostart disabled on every ML Engineer kit."""
+    from addons.notebook import paths
+
+    venv = paths(ctx)[0]
+    command = [str(venv_python(venv)), str(ctx.root / "setup/lib/mlflow_service.py"), "start", "--if-enabled",
+               "--executable", str(venv_executable(venv, "mlflow"))]
+    return command if os.name == "nt" else ["/usr/bin/env", f"EXAKIT_HOME={ctx.home}", *command]
 
 
 def autostart_kind(ctx: KitContext) -> str:

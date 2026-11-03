@@ -185,13 +185,15 @@ class IntegrationTest(unittest.TestCase):
                 with self.subTest(addon=path.stem):
                     self.assertIn("autostart_command", names)
 
-    def test_udf_devkit_starts_its_mlflow_at_login_through_exakit(self) -> None:
+    def test_udf_devkit_starts_its_mlflow_at_login_when_enabled(self) -> None:
         import addons.udf_devkit as udf_devkit
         with tempfile.TemporaryDirectory() as temp:
             ctx = self.context(Path(temp) / "root", Path(temp) / "kit")
             command = udf_devkit.autostart_command(ctx)
-            self.assertEqual(command[1:], ["start", "udf-devkit"])
-            self.assertTrue(command[0].endswith("exakit.cmd" if os.name == "nt" else "exakit"))
+            self.assertTrue(command[-5].endswith("mlflow_service.py"))
+            self.assertEqual(["start", "--if-enabled", "--executable"], command[-4:-1])
+            if os.name != "nt":
+                self.assertEqual(["/usr/bin/env", f"EXAKIT_HOME={ctx.home}"], command[:2])
             self.assertEqual("handoff", udf_devkit.autostart_kind(ctx))
 
 

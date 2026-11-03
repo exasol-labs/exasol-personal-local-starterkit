@@ -31,6 +31,17 @@ def record_path() -> Path:
     return folder() / "server.json"
 
 
+def enabled() -> bool:
+    """Whether the user asked for the kit's MLflow server (exakit mlflow start, or the ML Engineer persona): the
+    manifest's components.udf_devkit.mlflow.enabled."""
+    try:
+        doc = json.loads((home() / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    record = ((doc.get("components") or {}).get("udf_devkit") or {}).get("mlflow") or {}
+    return record.get("enabled") is True
+
+
 def read_record() -> dict:
     try:
         doc = json.loads(record_path().read_text(encoding="utf-8"))
@@ -162,13 +173,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--port", type=int)
     parser.add_argument("--json", action="store_true")
     parser.add_argument("--executable", type=Path)
+    parser.add_argument("--if-enabled", action="store_true",
+                        help="start only when the kit's MLflow was enabled: the login entry's form")
     args = parser.parse_args(argv)
     if args.port is not None and not (1 <= args.port <= 65535):
         parser.error("--port must be from 1 to 65535")
     if args.port is not None and args.action != "start":
         parser.error("--port applies to start only")
     try:
-        if args.action == "start":
+        if args.action == "start" and args.if_enabled and not enabled():
+            result = state()
+        elif args.action == "start":
             if args.executable is None:
                 parser.error("start needs the kit's MLflow executable")
             result = start(args.executable, args.port)
