@@ -278,6 +278,9 @@ def create_sql(name: str, schema: str, features: list[str], path: str) -> str:
 
 def _connect():
     import ssl
+
+    # pyexasol's usage telemetry stays off unless the user set the variable (marketplace/kit_telemetry.py).
+    os.environ.setdefault("EXASOL_TELEMETRY_DISABLE", "1")
     import pyexasol
 
     filename = Path(os.environ["EXAKIT_PYX_PWFILE"])

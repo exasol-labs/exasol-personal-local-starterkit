@@ -31,11 +31,21 @@ def _require_notebook(ctx: KitContext, purpose: str) -> Path:
     return python
 
 
+# The notebook environment's MLflow client and exasol-mlflow require MLflow 3
+# (mlflow-skinny>=3,<4 in addons/notebook.py, packages/exasol-mlflow). The
+# server installs into that same environment, so its exact pin must stay in
+# the same major release or it would replace the client underneath them.
+MLFLOW_MAJOR = 3
+
+
 def _server_pin(ctx: KitContext) -> str:
     document = ctx.versions_document()
     value = document.get("components", {}).get("udf-devkit", {}).get("mlflow_server")
     if not isinstance(value, str) or not re.fullmatch(r"[0-9]+(?:\.[0-9]+){2}", value):
         raise AddonFailure("versions.json needs a pinned udf-devkit MLflow server version")
+    if int(value.split(".")[0]) != MLFLOW_MAJOR:
+        raise AddonFailure(f"versions.json pins MLflow server {value}, outside the MLflow {MLFLOW_MAJOR}.x "
+                           "range the notebook environment uses")
     return value
 
 

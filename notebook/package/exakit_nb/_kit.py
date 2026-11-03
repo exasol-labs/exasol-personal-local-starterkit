@@ -19,6 +19,21 @@ from pathlib import Path
 
 VARIABLES = ("EXAKIT_NB_STORE", "EXAKIT_NB_MASTER_FILE", "EXAKIT_NB_KIT", "EXAKIT_NB_DATASETS")
 
+# pyexasol 3 reports anonymous usage on every connect unless this variable is present (any value disables it). The
+# kit sets it before pyexasol loads and never replaces a value the user set; the same rule as
+# marketplace/kit_telemetry.py, for the notebook environment, which cannot import the marketplace.
+TELEMETRY_VARIABLE = "EXASOL_TELEMETRY_DISABLE"
+TELEMETRY_VALUE = "1"
+
+
+def telemetry_off() -> None:
+    """Keep Exasol's usage telemetry off in this Python process unless the user set EXASOL_TELEMETRY_DISABLE."""
+    os.environ.setdefault(TELEMETRY_VARIABLE, TELEMETRY_VALUE)
+
+
+# Every exakit_nb module imports this one first, so importing the helpers is enough.
+telemetry_off()
+
 # The session store: what the helpers remember for the life of this Python process (the active workflow id, for one),
 # as opposed to the paths above, which come from files. A plain dict so a notebook can inspect it; never written to disk.
 SESSION: dict[str, object] = {}

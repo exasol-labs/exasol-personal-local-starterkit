@@ -31,7 +31,9 @@ membership receipt. Platform adapters invoke the existing data UI in response.
 for initial installs and later persona additions. Platform code retains only
 the existing data/MCP calls and terminal rendering adapters. Python add-ons
 share receipt locking, logging, download, and process helpers in `runtime.py`
-and `process.py`.
+and `process.py`. `kit_telemetry.py` keeps Exasol's usage telemetry off
+(`EXASOL_TELEMETRY_DISABLE`, unless the user set it): `runtime.py` applies it on
+import, and each `*_launcher.py` applies it to its service's environment.
 
 `service.py` is the host boundary for a later Exasol Personal sidecar backend.
 The current add-ons remain local services until a supported launcher release

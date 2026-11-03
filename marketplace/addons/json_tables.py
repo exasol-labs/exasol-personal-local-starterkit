@@ -17,6 +17,7 @@ import urllib.request
 from urllib.error import HTTPError
 from pathlib import Path, PurePosixPath
 
+import kit_telemetry
 from runtime import AddonFailure, KitContext, venv_python
 
 ID = "json-tables"
@@ -237,10 +238,15 @@ def _write_launchers(ctx: KitContext) -> None:
         shim.chmod(0o755)
     launcher.parent.mkdir(parents=True, exist_ok=True)
     cli = venv / ("Scripts/exasol-json-tables.exe" if os.name == "nt" else "bin/exasol-json-tables")
+    # The ingest CLI connects with pyexasol: its usage telemetry stays off
+    # unless the user set the variable (kit_telemetry.py).
+    variable, value = kit_telemetry.VARIABLE, kit_telemetry.VALUE
     if os.name == "nt":
-        launcher.write_text(f'@echo off\r\nset "PATH={shim.parent};%PATH%"\r\n"{cli}" %*\r\n', encoding="utf-8")
+        launcher.write_text(f'@echo off\r\nset "PATH={shim.parent};%PATH%"\r\n'
+                            f'if not defined {variable} set "{variable}={value}"\r\n"{cli}" %*\r\n', encoding="utf-8")
     else:
-        launcher.write_text("#!/bin/sh\nPATH=" + shlex.quote(str(shim.parent)) + ':"$PATH"\nexport PATH\nexec '
+        launcher.write_text("#!/bin/sh\nPATH=" + shlex.quote(str(shim.parent)) + ':"$PATH"\nexport PATH\n'
+                            f': "${{{variable}={value}}}"\nexport {variable}\nexec '
                             + shlex.quote(str(cli)) + ' "$@"\n', encoding="utf-8")
         launcher.chmod(0o755)
 

@@ -15,6 +15,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import kit_telemetry
 from model import load_addons
 from runtime import AddonFailure, KitContext, venv_executable, venv_python
 
@@ -153,6 +154,9 @@ def _notebook_script(ctx: KitContext, name: str) -> Path:
 
 def _run_helper(ctx: KitContext, name: str, *args: str, env: dict[str, str] | None = None) -> str:
     python = venv_python(paths(ctx)[0])
+    # The helpers open the database through the notebook connector (pyexasol)
+    # and register_kernel.py copies the variable into the kernel spec.
+    env = kit_telemetry.default_off(dict(os.environ) if env is None else dict(env))
     result = subprocess.run([str(python), str(_notebook_script(ctx, name)), *args], env=env,
                             capture_output=True, text=True, check=False, timeout=60)
     if result.returncode:

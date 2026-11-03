@@ -14,7 +14,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "marketplace"))
 import mlflow_cli  # noqa: E402
-from runtime import KitContext, Manifest  # noqa: E402
+from runtime import AddonFailure, KitContext, Manifest  # noqa: E402
 
 
 class MlflowCommandTest(unittest.TestCase):
@@ -87,12 +87,23 @@ class MlflowCommandTest(unittest.TestCase):
 
     def test_server_pin_follows_active_versions_document(self) -> None:
         document = json.loads((ROOT / "versions.json").read_text(encoding="utf-8"))
-        document["components"]["udf-devkit"]["mlflow_server"] = "9.8.7"
+        document["components"]["udf-devkit"]["mlflow_server"] = "3.98.7"
         active = self.home / "active-versions.json"
         active.write_text(json.dumps(document), encoding="utf-8")
         with patch.dict("os.environ", {"EXAKIT_MARKETPLACE_VERSIONS_DOC": str(active)}):
             ctx = KitContext(ROOT, self.home, self.home / "bin", self.manifest, Path("uv"))
-            self.assertEqual("9.8.7", mlflow_cli._server_pin(ctx))
+            self.assertEqual("3.98.7", mlflow_cli._server_pin(ctx))
+
+    def test_server_pin_outside_the_mlflow_3_range_is_refused(self) -> None:
+        document = json.loads((ROOT / "versions.json").read_text(encoding="utf-8"))
+        active = self.home / "active-versions.json"
+        for pin in ("2.22.0", "4.0.0"):
+            document["components"]["udf-devkit"]["mlflow_server"] = pin
+            active.write_text(json.dumps(document), encoding="utf-8")
+            with self.subTest(pin=pin), patch.dict("os.environ", {"EXAKIT_MARKETPLACE_VERSIONS_DOC": str(active)}):
+                ctx = KitContext(ROOT, self.home, self.home / "bin", self.manifest, Path("uv"))
+                with self.assertRaisesRegex(AddonFailure, "outside the MLflow 3.x range"):
+                    mlflow_cli._server_pin(ctx)
 
 
 if __name__ == "__main__":

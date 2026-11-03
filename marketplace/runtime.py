@@ -21,6 +21,13 @@ from functools import cached_property
 from pathlib import Path
 from typing import Iterator, Mapping
 
+import kit_telemetry
+
+# Every marketplace command imports this module first, before anything it
+# starts can load pyexasol: Exasol's usage telemetry stays off for this
+# process and all of its children unless the user set the variable already.
+kit_telemetry.default_off()
+
 
 class AddonFailure(RuntimeError):
     pass

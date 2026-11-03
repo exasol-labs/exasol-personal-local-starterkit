@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import kit_telemetry
+
 
 def main() -> int:
     home = Path(os.environ.get("EXAKIT_HOME", str(Path.home() / ".exasol-starter-kit")))
@@ -16,6 +18,7 @@ def main() -> int:
     runtime = doc.get("runtime", {})
     port = int(addon["port"])
     env = dict(os.environ)
+    kit_telemetry.default_off(env)
     env.setdefault("DASH_SERVER_INSTANCE_PATH", addon["instance"])
     credential = runtime.get("password_file")
     if runtime.get("dsn") and credential and Path(credential).is_file() and not env.get("DASH_SERVER_EXASOL_DSN"):
