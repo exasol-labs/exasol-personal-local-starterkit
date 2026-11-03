@@ -126,7 +126,8 @@ Top right, the kernel must say **Exasol (Starter Kit)**.
 Menu **Run → Run All Cells**.
 
 - It prints a **workflow id** (looks like `wf-20261103-...`). Write it down.
-- A small form shows each column's role. Look it over and click **Approve descriptor**.
+- It says the sample's descriptor is **approved: nothing to review** (it ships approved). If instead a small form
+  shows each column's role, look it over and click **Approve descriptor**.
 - The last cells show rows from the data.
 
 From the install start to these rows should take **under 10 minutes**.
