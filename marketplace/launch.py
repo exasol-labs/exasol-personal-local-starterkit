@@ -49,7 +49,10 @@ def run(root: Path, args: list[str]) -> int:
         # that is a download, and the question it opens next would otherwise sit on a silent
         # terminal until it was done. Nothing is drawn.
         script, args = Path("-c"), ["import textual.app"]
-    uv = shutil.which("uv") or shutil.which("uv.exe")
+    from runtime import vetted_uv  # the uv the kit vetted, as every add-on runs it
+
+    home = Path(os.environ.get("EXAKIT_HOME", str(Path.home() / ".exasol-starter-kit"))).expanduser()
+    uv = vetted_uv(home, Path(os.environ.get("EXAKIT_BIN_DIR", str(Path.home() / ".local" / "bin"))).expanduser())
     environment = dict(os.environ)
     if uv:
         # Quiet: uv's own "Resolving dependencies" spinner would be the one line on screen

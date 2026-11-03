@@ -170,6 +170,24 @@ class Manifest:
                     node.pop(parts[-1], None)
 
 
+def vetted_uv(home: Path, bin_dir: Path) -> str | None:
+    """The uv the kit vetted, never merely the first one on PATH, which may be below the version floor the shell
+    refuses (exakit_ensure_uv): EXAKIT_UV_BIN, else the path the shell recorded in the manifest
+    (components.uv.path), else the kit's own copy in the bin folder, and PATH only when none of them exists."""
+    name = "uv.exe" if os.name == "nt" else "uv"
+    candidates = [os.environ.get("EXAKIT_UV_BIN", "")]
+    try:
+        candidates.append(json.loads((home / "manifest.json").read_text(encoding="utf-8"))
+                          .get("components", {}).get("uv", {}).get("path", ""))
+    except (OSError, ValueError, AttributeError):
+        pass
+    candidates.append(str(bin_dir / name))
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file():
+            return candidate
+    return shutil.which("uv") or shutil.which("uv.exe")
+
+
 @dataclass(frozen=True)
 class KitContext:
     root: Path
@@ -182,10 +200,7 @@ class KitContext:
     def from_environment(cls, root: Path) -> "KitContext":
         home = Path(os.environ.get("EXAKIT_HOME", str(Path.home() / ".exasol-starter-kit"))).expanduser()
         bin_dir = Path(os.environ.get("EXAKIT_BIN_DIR", str(Path.home() / ".local" / "bin"))).expanduser()
-        uv_path = shutil.which("uv") or shutil.which("uv.exe")
-        if not uv_path:
-            candidate = bin_dir / ("uv.exe" if os.name == "nt" else "uv")
-            uv_path = str(candidate) if candidate.exists() else None
+        uv_path = vetted_uv(home, bin_dir)
         return cls(root, home, bin_dir, Manifest(home / "manifest.json"), Path(uv_path) if uv_path else Path("uv"))
 
     def require_uv(self) -> Path:

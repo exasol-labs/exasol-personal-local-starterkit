@@ -43,15 +43,17 @@ class LauncherPinTest(unittest.TestCase):
 
 
 class PyexasolPinTest(unittest.TestCase):
-    """The kit's own pyexasol defaults to versions.json's 2.4.1; the notebook environment leaves pyexasol to the
+    """The kit's own pyexasol defaults to versions.json's pin, at or above the floor; the notebook environment leaves pyexasol to the
     connector, whose exact pydantic pin no pyexasol from 2.4.0 can meet."""
 
     def test_the_kit_default_and_one_floor_in_both_installers(self):
-        self.assertEqual("2.4.1", VERSIONS["pyexasol"]["version"])
         shell = re.search(r'^_pyx_min_version="([^"]+)"', (ROOT / "setup/lib/pyexasol.sh").read_text(encoding="utf-8"), re.M)
         windows = re.search(r'^\$script:PyexasolMinVersion = "([^"]+)"',
                             (ROOT / "setup/lib/pyexasol.ps1").read_text(encoding="utf-8"), re.M)
         self.assertEqual(shell.group(1), windows.group(1))
+        pinned = tuple(int(part) for part in VERSIONS["pyexasol"]["version"].split("."))
+        self.assertGreaterEqual(pinned, tuple(int(part) for part in shell.group(1).split(".")),
+                                "versions.json pins a pyexasol below the floor Exasol Personal needs")
 
     def test_the_notebook_environment_does_not_pin_pyexasol(self):
         self.assertFalse([spec for spec in notebook.COMPANIONS if spec.startswith("pyexasol")])

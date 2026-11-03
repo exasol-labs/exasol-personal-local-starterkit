@@ -139,7 +139,11 @@ class AdapterDryRunTest(unittest.TestCase):
             os.close(slave)
             os.close(master)
         self.assertEqual(0, result.returncode)
-        self.assertEqual([f"{ROOT}/marketplace/launch.py|{ROOT}"] * 2, capture.read_text().splitlines())
+        # The two menus, and the warm-up the persona question runs under its spinner: every one from this
+        # checkout, none from the older installed kit.
+        launches = capture.read_text().splitlines()
+        self.assertGreaterEqual(len(launches), 2)
+        self.assertEqual({f"{ROOT}/marketplace/launch.py|{ROOT}"}, set(launches))
 
     def test_bash_install_passes_selected_version_document(self) -> None:
         selected = self.base / "selected versions.json"
