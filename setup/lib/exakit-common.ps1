@@ -32,6 +32,13 @@ $ProgressPreference = "SilentlyContinue"
 # common.sh; the Python side is marketplace/kit_telemetry.py. Both scripts run
 # in their own powershell.exe (exakit.cmd and install.ps1 start them with
 # -File), so the user's own session is not changed.
+# The settings file (~/.exasol-starter-kit/exakit.env) before anything else: everything
+# below - the telemetry default first - reads the environment it fills in.
+try {
+    . (Join-Path $PSScriptRoot "envfile.ps1")
+    Import-ExakitEnvFile
+} catch { }
+
 function Set-ExakitTelemetryDefault {
     if ($null -eq [Environment]::GetEnvironmentVariable("EXASOL_TELEMETRY_DISABLE", "Process")) {
         [Environment]::SetEnvironmentVariable("EXASOL_TELEMETRY_DISABLE", "1", "Process")

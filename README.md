@@ -132,6 +132,17 @@ exakit marketplace     # optional add-ons (dashboards & more)
 exakit help            # the commands it offers
 ```
 
+## Your settings in one file
+
+Every setting the kit reads - persona, datasets, mirrors, ports, versions, timeouts - is
+listed, commented out with its default, in `~/.exasol-starter-kit/exakit.env` (the
+installer puts it there; the template is [`setup/exakit.env`](setup/exakit.env)). To change
+one, remove the `# ` in front of its line and edit the value; every later install and
+`exakit` command uses it. A value given on the command line still wins for that run.
+Nothing in the file is ever run, and it holds no secrets: passwords, API keys and tokens
+stay in the environment or the kit's credentials store. `EXAKIT_ENV_FILE=/path` reads
+another file instead.
+
 ## More ways to connect
 
 - GUI: [DBeaver](https://dbeaver.io/download/) or [DbVisualizer](https://www.dbvis.com/download/). Create a new Exasol connection with host `127.0.0.1`, port `8563` and user `sys`.

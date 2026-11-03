@@ -39,6 +39,9 @@ foreach ($addonEntry in (Get-ExakitMarketplaceAddons)) {
 
 Initialize-ExakitLogging
 Initialize-ExakitManifest
+# The settings file: the commented template, once (never over the user's copy).
+Install-ExakitEnvFile -KitRoot $KitRoot
+Write-ExakitEnvFileNote
 # The installer is the one process whose Fail() reason belongs in .last-failure.
 $script:ExakitRecordFailureNotes = $true
 Resolve-ExakitInstallVersions

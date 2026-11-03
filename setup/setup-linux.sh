@@ -47,6 +47,9 @@ exakit_init_logging
 # and this is the first line setup can write.
 [ -n "${EXAKIT_INSTALL_T0:-}" ] && _exakit_log_file "INFO  setup started $(( $(date +%s) - EXAKIT_INSTALL_T0 ))s after the installer began (download, extraction and library load)"
 manifest_init
+# The settings file: the commented template, once (never over the user's copy).
+exakit_env_file_install "$KIT_ROOT"
+exakit_env_file_note
 exakit_enable_failure_handling
 # The `exakit` command first, so `exakit status` answers from the first seconds
 # of this install (AGENTS.md tells an agent to poll it). It used to be written

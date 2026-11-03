@@ -99,6 +99,10 @@ jobs:
         if: matrix.shard == 2
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/personas-ps.ps1
+      - name: the settings file under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/env-file-ps.ps1
       - name: exakit mlflow under 5.1
         if: matrix.shard == 2
         shell: powershell

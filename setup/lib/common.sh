@@ -19,6 +19,11 @@
 # connection_panel below can use its glyphs and palette. If it is somehow
 # absent, install no-op stubs so nothing here breaks under `set -u`.
 _exakit_common_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd 2>/dev/null)" || _exakit_common_dir=''
+# The settings file (~/.exasol-starter-kit/exakit.env) before anything else: ui.sh
+# and everything below read the environment it fills in.
+if [ -n "$_exakit_common_dir" ] && [ -f "$_exakit_common_dir/envfile.sh" ]; then
+    . "$_exakit_common_dir/envfile.sh" && exakit_load_env_file
+fi
 [ -n "$_exakit_common_dir" ] && [ -f "$_exakit_common_dir/ui.sh" ] && . "$_exakit_common_dir/ui.sh"
 if ! command -v ui_spin_begin >/dev/null 2>&1; then
     UI_FANCY=0; UI_RESET=''; UI_BOLD=''; UI_DIM=''; UI_ACCENT=''

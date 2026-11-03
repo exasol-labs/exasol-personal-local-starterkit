@@ -121,6 +121,65 @@ function Get-ExakitInstallHomeBase {
     } catch { }
     return $base
 }
+# The settings file, ~/.exasol-starter-kit/exakit.env (the kit's setup/exakit.env is its
+# template): read before anything else, so a value kept there answers this install too.
+# A copy of setup/lib/envfile.ps1's functions - this script runs before the kit is here;
+# tests/env-file-ps.ps1 keeps the two the same.
+# Get-ExakitEnvFilePath - where the settings file is: EXAKIT_ENV_FILE, else exakit.env in
+# the kit's home (EXAKIT_HOME, else .exasol-starter-kit in the user's profile).
+function Get-ExakitEnvFilePath {
+    if ($env:EXAKIT_ENV_FILE) { return $env:EXAKIT_ENV_FILE }
+    $homeDir = $env:EXAKIT_HOME
+    if (-not $homeDir) {
+        $base = $env:USERPROFILE
+        if (-not $base) { $base = $HOME }
+        $homeDir = Join-Path $base ".exasol-starter-kit"
+    }
+    return (Join-Path $homeDir "exakit.env")
+}
+
+# Import-ExakitEnvFile - set each NAME=value of the settings file that the environment
+# does not already have: a command line still wins over the file. Nothing in it is run.
+# Only EXAKIT_* names and EXASOL_TELEMETRY_DISABLE are taken; a secret's name (PASSWORD,
+# API_KEY, TOKEN, SECRET) and EXAKIT_HOME / EXAKIT_ENV_FILE are refused and named in
+# $script:ExakitEnvFileRefused. A value may be quoted; unquoted, " #" starts a comment.
+function Import-ExakitEnvFile {
+    $script:ExakitEnvFileRefused = @()
+    $path = Get-ExakitEnvFilePath
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return }
+    try { $lines = [System.IO.File]::ReadAllLines($path) } catch { return }
+    foreach ($raw in $lines) {
+        $line = $raw.Trim()
+        if (-not $line -or $line.StartsWith('#')) { continue }
+        if ($line.StartsWith('export ')) { $line = $line.Substring(7).TrimStart() }
+        $eq = $line.IndexOf('=')
+        if ($eq -lt 1) { continue }
+        $name = $line.Substring(0, $eq).Trim()
+        $value = $line.Substring($eq + 1).Trim()
+        if ($name -cnotmatch '^[A-Z0-9_]+$') { continue }
+        if ($name -cnotmatch '^EXAKIT_' -and $name -cne 'EXASOL_TELEMETRY_DISABLE') { continue }
+        if ($name -ceq 'EXAKIT_HOME' -or $name -ceq 'EXAKIT_ENV_FILE' -or $name -cmatch 'PASSWORD|API_KEY|TOKEN|SECRET') {
+            $script:ExakitEnvFileRefused += $name
+            continue
+        }
+        if ($value -match '^"([^"]*)"') { $value = $Matches[1] }
+        elseif ($value -match "^'([^']*)'") { $value = $Matches[1] }
+        else {
+            $hash = $value.IndexOf(' #')
+            $tab = $value.IndexOf("`t#")
+            if ($tab -ge 0 -and ($hash -lt 0 -or $tab -lt $hash)) { $hash = $tab }
+            if ($hash -ge 0) { $value = $value.Substring(0, $hash) }
+            $value = $value.TrimEnd()
+        }
+        if ($null -ne [Environment]::GetEnvironmentVariable($name)) { continue }
+        [Environment]::SetEnvironmentVariable($name, $value)
+    }
+}
+
+Import-ExakitEnvFile
+if (@($script:ExakitEnvFileRefused).Count -gt 0) {
+    [Console]::Error.WriteLine("  ! $(Get-ExakitEnvFilePath) ignores $(@($script:ExakitEnvFileRefused) -join ' '): a secret, or where the file itself lives, stays in the environment")
+}
 $ExakitHome = if ($env:EXAKIT_HOME) { $env:EXAKIT_HOME } else { Join-Path (Get-ExakitInstallHomeBase) ".exasol-starter-kit" }
 $env:EXAKIT_HOME = $ExakitHome
 $Repo       = if ($env:EXAKIT_REPO) { $env:EXAKIT_REPO } else { "exasol-labs/exasol-personal-local-starterkit" }

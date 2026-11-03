@@ -177,6 +177,7 @@ esac
 . "$_lib_dir/common.sh"
 . "$_lib_dir/detect.sh"
 . "$_lib_dir/runtime-personal.sh"
+command -v exakit_env_file_note >/dev/null 2>&1 && exakit_env_file_note
 [ -f "$_lib_dir/help.sh" ] && . "$_lib_dir/help.sh"
 [ -f "$_lib_dir/exapump.sh" ] && . "$_lib_dir/exapump.sh"
 # The crossing module: `exakit migrate docker-nano` is its after-the-install

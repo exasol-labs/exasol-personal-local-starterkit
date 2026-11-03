@@ -131,6 +131,7 @@ $script:ExakitReadOnlyHelp = (@('help','catalog','--help','-h','-?') -contains $
     ($Command -eq 'uninstall' -and ($RestArgs -contains '-DryRun' -or $RestArgs -contains '--dry-run' -or $RestArgs -contains '-n'))
 $script:ExakitReadOnlyQuery = $Command -in @('status','version','info','mcp-status','mcp-doctor','skills','catalog','logs','help','whats-new','--help','-h','-?')
 . (Join-Path $libDir "exakit-common.ps1")
+if (Get-Command Write-ExakitEnvFileNote -ErrorAction SilentlyContinue) { Write-ExakitEnvFileNote }
 . (Join-Path $libDir "runtime-personal.ps1")
 . (Join-Path $libDir "exapump.ps1")
 # The crossing module: `exakit migrate docker-nano` is its after-the-install

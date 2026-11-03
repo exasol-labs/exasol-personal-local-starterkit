@@ -64,7 +64,54 @@
 
 set -u
 
+# The settings file, ~/.exasol-starter-kit/exakit.env (the kit's setup/exakit.env is its
+# template): read before anything else, so a value kept there answers this install too.
+# A copy of setup/lib/envfile.sh's function - this script runs before the kit is here;
+# tests/env-file.sh keeps the two the same.
+exakit_load_env_file() {
+    _elf_file="${EXAKIT_ENV_FILE:-${EXAKIT_HOME:-$HOME/.exasol-starter-kit}/exakit.env}"
+    EXAKIT_ENV_FILE_REFUSED=""
+    [ -f "$_elf_file" ] && [ -r "$_elf_file" ] || return 0
+    _elf_cr="$(printf '\r')"                       # a file saved on Windows ends its lines in CRLF
+    while IFS= read -r _elf_line || [ -n "$_elf_line" ]; do
+        _elf_line="${_elf_line%"$_elf_cr"}"
+        _elf_line="${_elf_line#"${_elf_line%%[! 	]*}"}"
+        case "$_elf_line" in ''|'#'*) continue ;; esac
+        case "$_elf_line" in 'export '*) _elf_line="${_elf_line#export }" ;; esac
+        case "$_elf_line" in *=*) ;; *) continue ;; esac
+        _elf_name="${_elf_line%%=*}"
+        _elf_name="${_elf_name%"${_elf_name##*[! 	]}"}"
+        _elf_value="${_elf_line#*=}"
+        _elf_value="${_elf_value#"${_elf_value%%[! 	]*}"}"
+        case "$_elf_name" in ''|*[!A-Z0-9_]*) continue ;; esac
+        case "$_elf_name" in EXAKIT_*|EXASOL_TELEMETRY_DISABLE) ;; *) continue ;; esac
+        case "$_elf_name" in
+            EXAKIT_HOME|EXAKIT_ENV_FILE|*PASSWORD*|*API_KEY*|*TOKEN*|*SECRET*)
+                EXAKIT_ENV_FILE_REFUSED="${EXAKIT_ENV_FILE_REFUSED:+$EXAKIT_ENV_FILE_REFUSED }$_elf_name"
+                continue ;;
+        esac
+        case "$_elf_value" in
+            \"*\"*) _elf_value="${_elf_value#\"}"; _elf_value="${_elf_value%%\"*}" ;;
+            \'*\'*) _elf_value="${_elf_value#\'}"; _elf_value="${_elf_value%%\'*}" ;;
+            *)
+                case "$_elf_value" in *' #'*|*'	#'*) _elf_value="${_elf_value%%[ 	]#*}" ;; esac
+                _elf_value="${_elf_value%"${_elf_value##*[! 	]}"}" ;;
+        esac
+        # The name is checked above (A-Z, 0-9, _), so eval only ever sees a plain name;
+        # the value is never in the evaluated text.
+        eval "_elf_set=\${$_elf_name+set}"
+        [ "$_elf_set" = set ] && continue
+        eval "$_elf_name=\$_elf_value; export $_elf_name"
+    done < "$_elf_file"
+    return 0
+}
+
 main() {
+    exakit_load_env_file
+    if [ -n "${EXAKIT_ENV_FILE_REFUSED:-}" ]; then
+        printf '  ! %s ignores %s: a secret, or where the file itself lives, stays in the environment\n' \
+            "${EXAKIT_ENV_FILE:-~/.exasol-starter-kit/exakit.env}" "$EXAKIT_ENV_FILE_REFUSED" >&2
+    fi
     EXAKIT_HOME="${EXAKIT_HOME:-$HOME/.exasol-starter-kit}"
     EXAKIT_REPO="${EXAKIT_REPO:-exasol-labs/exasol-personal-local-starterkit}"
     EXAKIT_REF="${EXAKIT_REF:-main}"

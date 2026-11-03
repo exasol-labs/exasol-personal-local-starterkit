@@ -65,6 +65,8 @@ Want to see the persona screen as well? Run the same command **without** `EXAKIT
 - press **Enter**: the install goes on
 - the add-on screen after the data looks like the data table: same frame, same progress bar
 
+Your settings: open `~/.exasol-starter-kit/exakit.env`. Every setting is there with its default; remove the `# ` in front of a line to change it.
+
 Go to **Check the install** below.
 
 ---
