@@ -533,14 +533,36 @@ function Invoke-ExapumpAdminSql {
         # this way also retires the ConvertTo-ExakitNativeArgs quoting dance -
         # nothing goes through the 5.1 command-line rules any more, so quoted
         # identifiers arrive intact by construction rather than by escaping.
-        $previousOutputEncoding = $OutputEncoding
+        #
+        # Bytes, not a pipe (#52): Windows PowerShell 5.1 starts a string piped into a native process with
+        # U+FEFF whatever $OutputEncoding says, and Exasol rejects that first character, so every statement
+        # failed and the read-only user was never made. The statement's UTF-8 bytes go to exapump's stdin
+        # straight from memory - never through a file, since two of them carry a password - as
+        # Invoke-ExapumpSqlFileCapture does; both output streams are read as they come, so a full pipe
+        # cannot stall it.
+        $out = ""
+        $code = 1
         try {
-            # No BOM: exapump parses the first bytes as SQL.
-            $OutputEncoding = New-Object System.Text.UTF8Encoding($false)
-            $out = @($Sql | & $bin sql -p $Profile 2>&1) -join "`n"
-            $code = $LASTEXITCODE
-        } finally {
-            $OutputEncoding = $previousOutputEncoding
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName = $bin
+            $psi.Arguments = "sql -p `"$Profile`""
+            $psi.UseShellExecute = $false
+            $psi.RedirectStandardInput = $true
+            $psi.RedirectStandardOutput = $true
+            $psi.RedirectStandardError = $true
+            $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+            $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
+            $proc = [System.Diagnostics.Process]::Start($psi)
+            $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+            $stderrTask = $proc.StandardError.ReadToEndAsync()
+            $bytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes($Sql)
+            $proc.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length)
+            $proc.StandardInput.Close()
+            $proc.WaitForExit()
+            $out = ($stdoutTask.Result + $stderrTask.Result).TrimEnd()
+            $code = $proc.ExitCode
+        } catch {
+            $out = "$_"
         }
         return @{ Output = $out; ExitCode = $code; Success = (Test-ExapumpSucceeded -ExitCode $code -Output $out) }
     } catch {
