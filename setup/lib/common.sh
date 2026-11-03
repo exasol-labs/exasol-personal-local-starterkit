@@ -11365,15 +11365,17 @@ _EXAKIT_CONN_EOF
 exakit_print_no_ai_panel() {
     _nap_dsn="$(manifest_get runtime.dsn 2>/dev/null)"
     _nap_host="${_nap_dsn%%:*}"; _nap_port="${_nap_dsn##*:}"
+    _nap_python="$(manifest_get components.pyexasol.python 2>/dev/null || true)"
+    [ -n "$_nap_python" ] || _nap_python="$EXAKIT_HOME/pyexasol-venv/bin/python"
     printf '\n'
     ui_panel_begin "Using your database without an AI client"
     ui_panel_line "Your database works great on its own — three easy ways in:"
     ui_panel_line ""
     ui_panel_line "GUI client:  $(ui_link https://dbeaver.io/download/ "DBeaver") or $(ui_link https://www.dbvis.com/download/ "DbVisualizer")"
     ui_panel_line "             New Connection > Exasol > Host ${_nap_host:-127.0.0.1} Port ${_nap_port:-8563}"
-    ui_panel_line "Python:      pyexasol is preinstalled in its own environment:"
-    ui_panel_line "             $(ui_tilde "$EXAKIT_HOME/pyexasol-venv/bin/python")"
-    ui_panel_line "Terminal:    exapump interactive -p starter-kit   (SQL shell)"
+    ui_panel_line "Python:      pyexasol works in:"
+    ui_panel_line "             $(ui_tilde "$_nap_python")"
+    ui_panel_line "Terminal:    exakit sql \"SELECT 42\"   (a SQL shell: exakit guide)"
     ui_panel_line ""
     ui_panel_line "Step-by-step (credentials, TLS setting, first query):"
     ui_panel_line "  exakit guide"
@@ -11394,8 +11396,29 @@ exakit_guide() {
     _g_user="$(manifest_get runtime.user 2>/dev/null)"; _g_user="${_g_user:-sys}"
     _g_pwfile="$(manifest_get runtime.password_file 2>/dev/null)"
     _g_mcp_user="$(manifest_get components.mcp_server.connection.user 2>/dev/null || true)"
+    # What this kit actually holds: the loaded datasets' schemas, the personas, the
+    # Python pyexasol lives in (a reused one of yours, or the kit's own) and the add-ons.
+    _g_facts="$(run_python_any - "$EXAKIT_MANIFEST" <<'PY' 2>/dev/null || true
+import json, sys
+doc = json.load(open(sys.argv[1]))
+sets = (doc.get("data") or {}).get("datasets") or {}
+print(",".join(sorted({v["schema"] for v in sets.values() if isinstance(v, dict) and v.get("loaded") and v.get("schema")})))
+persona = doc.get("persona") or {}
+print(persona.get("id", "") if isinstance(persona, dict) else "")
+parts = doc.get("components") or {}
+print((parts.get("pyexasol") or {}).get("python", ""))
+print(",".join(k for k in ("notebook", "dash_server", "udf_devkit") if (parts.get(k) or {}).get("version")))
+print((parts.get("dash_server") or {}).get("port", ""))
+PY
+)"
+    _g_schemas="$(printf '%s\n' "$_g_facts" | sed -n 1p)"
+    _g_persona="$(printf '%s\n' "$_g_facts" | sed -n 2p)"
+    _g_python="$(printf '%s\n' "$_g_facts" | sed -n 3p)"
+    [ -n "$_g_python" ] || _g_python="$EXAKIT_HOME/pyexasol-venv/bin/python"
+    _g_addons=",$(printf '%s\n' "$_g_facts" | sed -n 4p),"
+    _g_dash_port="$(printf '%s\n' "$_g_facts" | sed -n 5p)"
 
-    ui_banner "How to connect" "AI clients, SQL clients, Python — pick your door"
+    ui_banner "How to connect" "AI clients, SQL clients, Python, notebooks — pick your door"
 
     ui_panel_begin "1 · Ask questions with an AI client (MCP)"
     ui_panel_line "Connect one or more AI clients in a single guided step:"
@@ -11423,28 +11446,57 @@ exakit_guide() {
     ui_panel_line "  TLS:       local self-signed certificate — in Driver properties set"
     ui_panel_line "             validateservercertificate = 0 (or add ;validateservercertificate=0"
     ui_panel_line "             to the JDBC URL), then Test Connection > Finish."
-    ui_panel_line "Each bundled dataset has its own schema (TPCH, ENERGY, WEATHER);"
+    if [ -n "$_g_schemas" ]; then
+        ui_panel_line "Each loaded dataset has its own schema: $(printf '%s' "$_g_schemas" | sed 's/,/, /g');"
+    else
+        ui_panel_line "No dataset is loaded yet (exakit data-load); each one gets its own schema;"
+    fi
     ui_panel_line "your own uploads default to STARTER_KIT."
     ui_panel_end
 
     ui_panel_begin "3 · Terminal and Python"
-    ui_panel_line "Interactive SQL shell:   exapump interactive -p starter-kit"
-    ui_panel_line "One-off query:           exapump sql -p starter-kit \"SELECT 42\""
+    ui_panel_line "One-off query:           exakit sql \"SELECT 42\""
+    ui_panel_line "Interactive SQL shell, with the kit's exapump profile:"
+    ui_panel_line "  export EXAPUMP_CONFIG=$(ui_tilde "$EXAKIT_HOME/exapump/config.toml")"
+    ui_panel_line "  exapump interactive -p starter-kit"
     ui_panel_line ""
-    ui_panel_line "Python (pyexasol preinstalled in its own environment):"
-    ui_panel_line "  $(ui_tilde "$EXAKIT_HOME/pyexasol-venv/bin/python")"
+    ui_panel_line "Python with pyexasol:"
+    ui_panel_line "  $(ui_tilde "$_g_python")"
     ui_panel_line "  import pyexasol"
     ui_panel_line "  c = pyexasol.connect(dsn='$_g_host:$_g_port', user='$_g_user',"
     ui_panel_line "                       password=open('<password file above>').read(),"
     ui_panel_line "                       websocket_sslopt={'cert_reqs': 0})"
-    ui_panel_line "  c.export_to_pandas('SELECT * FROM TPCH.CUSTOMER LIMIT 5')"
+    ui_panel_line "  c.export_to_pandas('SELECT TABLE_SCHEMA, TABLE_NAME FROM EXA_ALL_TABLES')"
+    ui_panel_end
+
+    ui_panel_begin "4 · Notebooks, dashboards and models"
+    if [ -n "$_g_persona" ]; then
+        ui_panel_line "Set up as:            $(printf '%s' "$_g_persona" | sed 's/,/, /g')  (exakit persona plan)"
+    else
+        ui_panel_line "Personas:             exakit persona list · exakit persona add <id>"
+    fi
+    case "$_g_addons" in
+        *,notebook,*) ui_panel_line "Notebooks:            exakit notebook (JupyterLab, Marimo, Positron)" ;;
+        *) ui_panel_line "Notebooks:            exakit marketplace notebook" ;;
+    esac
+    ui_panel_line "Roles of a table:     exakit describe <SCHEMA.TABLE>"
+    case "$_g_addons" in
+        *,dash_server,*) ui_panel_line "Dashboards:           http://127.0.0.1:${_g_dash_port:-5100}" ;;
+        *) ui_panel_line "Dashboards:           exakit marketplace dash-server" ;;
+    esac
+    case "$_g_addons" in
+        *,udf_devkit,*) ui_panel_line "Models and UDFs:      exakit mlflow url · exakit udf-setup · exakit rust-udf" ;;
+        *) ui_panel_line "Models and UDFs:      exakit persona add ml-engineer" ;;
+    esac
     ui_panel_end
 
     ui_panel_begin "Everything else"
     ui_panel_line "Connection summary:   exakit info"
     ui_panel_line "Load more data:       exakit data-load"
-    ui_panel_line "Optional add-ons:     exakit marketplace (dashboards & more)"
+    ui_panel_line "Optional add-ons:     exakit marketplace"
+    ui_panel_line "Your settings:        $(ui_tilde "$EXAKIT_HOME/exakit.env")"
     ui_panel_line "Health check:         exakit status · exakit mcp-doctor"
+    ui_panel_line "Every command:        exakit help · exakit catalog"
     ui_panel_end
     printf '\n'
 }

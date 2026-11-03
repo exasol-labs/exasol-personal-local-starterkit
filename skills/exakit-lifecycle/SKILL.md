@@ -157,7 +157,7 @@ exakit help <command>    # one command's page
 exakit catalog           # every exakit, exapump and exasol command
 exakit catalog mcp       # searchable
 exakit catalog --json    # the whole surface as one object
-exakit guide             # how to connect: AI clients, SQL clients, Python
+exakit guide             # how to connect: AI clients, SQL clients, Python, notebooks, dashboards
 ```
 
 Prefer `exakit catalog --json` over guessing a flag. If a command or flag is not

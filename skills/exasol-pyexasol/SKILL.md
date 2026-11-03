@@ -71,8 +71,8 @@ C.close()
 Remember the dialect: Exasol pages with **`LIMIT n`**, never `FETCH FIRST` or
 `TOP`.
 
-The bundled datasets live in their own schemas — `TPCH`, `ENERGY`, `WEATHER` —
-and anything the user uploads defaults to `STARTER_KIT`.
+The bundled datasets live in their own schemas — `TPCH`, `ENERGY`, `WEATHER`, and
+with a persona `ESOPHAGEAL`, `BANKING`, `BANKMKT`, `ADE`, `PUBMED`, `MEDSIGS` — and anything the user uploads defaults to `STARTER_KIT`.
 
 ## Dataframes and extra packages
 

@@ -65,7 +65,7 @@ options before piping a remote script into a shell:
   can be read first; installs nothing until the user runs the setup themselves.
 
 When **you** run the installer (no terminal is attached, so the install cannot prompt the
-user), it silently takes safe defaults — it would load **every bundled dataset** and connect
+user), it silently takes safe defaults — it would load **the General persona's samples** (TPC-H, energy, weather) and connect
 **every AI client found on the machine that isn't connected yet** over MCP, without asking.
 Instead, ask the user these questions first, then pass the answers so their choices are
 honored — prefixed before `sh` on macOS/Linux/WSL, or set as `$env:` variables first in

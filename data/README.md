@@ -51,8 +51,8 @@ The kit offers nine datasets:
 | [`datasets/pubmed_abstracts/`](datasets/pubmed_abstracts/) | `PUBMED` | 1,409 PubMed abstracts of clinical studies, for medical text extraction; 2.3 MB of CSV, a 0.7 MB download ([README](datasets/pubmed_abstracts/README.md)) |
 | [`datasets/medication_sigs/`](datasets/medication_sigs/) | `MEDSIGS` | 50 prescription directions ("1 cap(s) po tid,x7 day(s)") to read the dose, route and timing from ([README](datasets/medication_sigs/README.md)) |
 
-The first three are the kit's own samples: they ship inside the kit and are what a kit
-without a persona loads (`default=yes` in their `dataset.conf`). The other six are what
+The first three are the kit's own samples: they ship inside the kit and are what the
+General persona loads (`default=yes` in their `dataset.conf`). The other six are what
 the Data Scientist and ML Engineer personas load, each downloaded only when it is picked.
 Four of them are *reference datasets*: data with a
 `README.md` (source, terms, data dictionary), a `manifest.json` (source, terms, snapshot
@@ -181,6 +181,8 @@ d.approve()                                       # check, write, publish
 or with `exakit describe MY_DATA.TICKETS` on the command line. Approving writes
 `~/.exasol-starter-kit/descriptors/<SCHEMA>.<TABLE>/v<n>.yaml` (a version is never
 rewritten) and `current.yaml`, a copy of the approved one; `EXAKIT_HOME` moves the store.
+It then publishes the roles as a view, `EXAKIT_SEMANTIC.<SCHEMA>__<TABLE>`, whose column
+comments carry them, so an AI client connected over MCP sees them.
 The table must not have changed since it was profiled: the schema digest is checked again.
 
 **Where a descriptor is read from.** `nb.dataset(conn, name)` takes, in this order: a path
@@ -284,7 +286,7 @@ part ───────────────< lineitem
 ## Column reference
 
 See **[data-dictionary.md](data-dictionary.md)** for the full per-column reference —
-name, type, description, keys, and allowed values for every table of all five datasets.
+name, type, description, keys, and allowed values for every table of all nine datasets.
 
 ## Regenerating at a different size (optional)
 

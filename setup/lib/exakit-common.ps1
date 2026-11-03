@@ -955,9 +955,11 @@ function Show-ExakitNoAiPanel {
     Write-ExakitPanelLine "GUI client:  DBeaver - https://dbeaver.io/download/"
     Write-ExakitPanelLine "             or DbVisualizer - https://www.dbvis.com/download/"
     Write-ExakitPanelLine "             New Connection > Exasol > Host $hostName Port $port"
-    Write-ExakitPanelLine "Python:      pyexasol is preinstalled in its own environment:"
-    Write-ExakitPanelLine "             $(Get-ExakitTilde (Join-Path $script:ExakitHome 'pyexasol-venv'))"
-    Write-ExakitPanelLine "Terminal:    exapump interactive -p starter-kit   (SQL shell)"
+    $python = Get-ExakitManifestValue "components.pyexasol.python"
+    if (-not $python) { $python = Join-Path $script:ExakitHome "pyexasol-venv\Scripts\python.exe" }
+    Write-ExakitPanelLine "Python:      pyexasol works in:"
+    Write-ExakitPanelLine "             $(Get-ExakitTilde $python)"
+    Write-ExakitPanelLine "Terminal:    exakit sql 'SELECT 42'   (a SQL shell: exakit guide)"
     Write-ExakitPanelLine "Step-by-step (credentials, TLS setting, first query):  exakit guide"
     Write-ExakitPanelLine "Changed your mind about AI? Any time:  exakit mcp-setup"
     Complete-ExakitPanel
@@ -974,8 +976,26 @@ function Show-ExakitGuide {
     $user = Get-ExakitManifestValue "runtime.user"; if (-not $user) { $user = "sys" }
     $pwfile = Get-ExakitManifestValue "runtime.password_file"
     $mcpUser = Get-ExakitManifestValue "components.mcp_server.connection.user"
+    # What this kit actually holds: the loaded datasets' schemas, the personas, the
+    # Python pyexasol lives in (a reused one of yours, or the kit's own) and the add-ons.
+    $schemas = @()
+    $sets = Get-ExakitManifestValue "data.datasets"
+    if ($sets) {
+        foreach ($entry in $sets.PSObject.Properties) {
+            if ($entry.Value.loaded -eq $true -and $entry.Value.schema) { $schemas += [string]$entry.Value.schema }
+        }
+    }
+    $schemas = @($schemas | Sort-Object -Unique)
+    $persona = Get-ExakitManifestValue "persona.id"
+    $python = Get-ExakitManifestValue "components.pyexasol.python"
+    if (-not $python) { $python = Join-Path $script:ExakitHome "pyexasol-venv\Scripts\python.exe" }
+    $hasNotebook = [bool](Get-ExakitManifestValue "components.notebook.version")
+    $hasDash = [bool](Get-ExakitManifestValue "components.dash_server.version")
+    $hasUdf = [bool](Get-ExakitManifestValue "components.udf_devkit.version")
+    $dashPort = Get-ExakitManifestValue "components.dash_server.port"
+    if (-not $dashPort) { $dashPort = "5100" }
 
-    Write-ExakitBanner "How to connect" "AI clients, SQL clients, Python - pick your door"
+    Write-ExakitBanner "How to connect" "AI clients, SQL clients, Python, notebooks - pick your door"
 
     Start-ExakitPanel "1 - Ask questions with an AI client (MCP)"
     Write-ExakitPanelLine "Connect one or more AI clients in a single guided step:"
@@ -999,21 +1019,50 @@ function Show-ExakitGuide {
     if ($mcpUser) { Write-ExakitPanelLine "  (read-only alternative: user $mcpUser)" }
     Write-ExakitPanelLine "  TLS:       local self-signed certificate - in Driver properties set"
     Write-ExakitPanelLine "             validateservercertificate = 0, then Test Connection > Finish."
-    Write-ExakitPanelLine "Each bundled dataset has its own schema (TPCH, ENERGY, WEATHER);"
+    if ($schemas.Count -gt 0) {
+        Write-ExakitPanelLine "Each loaded dataset has its own schema: $($schemas -join ', ');"
+    } else {
+        Write-ExakitPanelLine "No dataset is loaded yet (exakit data-load); each one gets its own schema;"
+    }
     Write-ExakitPanelLine "your own uploads default to STARTER_KIT."
     Complete-ExakitPanel
 
     Start-ExakitPanel "3 - Terminal and Python"
-    Write-ExakitPanelLine "Interactive SQL shell:   exapump interactive -p starter-kit"
-    Write-ExakitPanelLine "One-off query:           exapump sql -p starter-kit 'SELECT 42'"
-    Write-ExakitPanelLine "Python (pyexasol preinstalled in its own environment):"
-    Write-ExakitPanelLine "  $(Get-ExakitTilde (Join-Path $script:ExakitHome 'pyexasol-venv'))"
+    Write-ExakitPanelLine "One-off query:           exakit sql 'SELECT 42'"
+    Write-ExakitPanelLine "Interactive SQL shell, with the kit's exapump profile:"
+    Write-ExakitPanelLine "  `$env:EXAPUMP_CONFIG = '$(Join-Path $script:ExakitHome 'exapump\config.toml')'"
+    Write-ExakitPanelLine "  exapump interactive -p starter-kit"
+    Write-ExakitPanelLine "Python with pyexasol:"
+    Write-ExakitPanelLine "  $(Get-ExakitTilde $python)"
+    Write-ExakitPanelLine "  import pyexasol"
+    Write-ExakitPanelLine "  c = pyexasol.connect(dsn='$($hostName):$port', user='$user',"
+    Write-ExakitPanelLine "                       password=open(r'<password file above>').read(),"
+    Write-ExakitPanelLine "                       websocket_sslopt={'cert_reqs': 0})"
+    Write-ExakitPanelLine "  c.export_to_pandas('SELECT TABLE_SCHEMA, TABLE_NAME FROM EXA_ALL_TABLES')"
+    Complete-ExakitPanel
+
+    Start-ExakitPanel "4 - Notebooks, dashboards and models"
+    if ($persona) {
+        Write-ExakitPanelLine "Set up as:            $($persona -replace ',', ', ')  (exakit persona plan)"
+    } else {
+        Write-ExakitPanelLine "Personas:             exakit persona list - exakit persona add <id>"
+    }
+    if ($hasNotebook) { Write-ExakitPanelLine "Notebooks:            exakit notebook (JupyterLab, Marimo, Positron)" }
+    else { Write-ExakitPanelLine "Notebooks:            exakit marketplace notebook" }
+    Write-ExakitPanelLine "Roles of a table:     exakit describe <SCHEMA.TABLE>"
+    if ($hasDash) { Write-ExakitPanelLine "Dashboards:           http://127.0.0.1:$dashPort" }
+    else { Write-ExakitPanelLine "Dashboards:           exakit marketplace dash-server" }
+    if ($hasUdf) { Write-ExakitPanelLine "Models and UDFs:      exakit mlflow url - exakit udf-setup - exakit rust-udf" }
+    else { Write-ExakitPanelLine "Models and UDFs:      exakit persona add ml-engineer" }
     Complete-ExakitPanel
 
     Start-ExakitPanel "Everything else"
     Write-ExakitPanelLine "Connection summary:   exakit info"
     Write-ExakitPanelLine "Load more data:       exakit data-load"
+    Write-ExakitPanelLine "Optional add-ons:     exakit marketplace"
+    Write-ExakitPanelLine "Your settings:        $(Get-ExakitTilde (Join-Path $script:ExakitHome 'exakit.env'))"
     Write-ExakitPanelLine "Health check:         exakit status - exakit mcp-doctor"
+    Write-ExakitPanelLine "Every command:        exakit help - exakit catalog"
     Complete-ExakitPanel
     Write-Host ""
 }

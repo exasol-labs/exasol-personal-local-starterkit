@@ -1,7 +1,8 @@
-# Data dictionary — the six bundled datasets
+# Data dictionary — the nine bundled datasets
 
 TPCH (TPC-H at SF=0.02), ENERGY, WEATHER, ESOPHAGEAL (`esophageal_posts`), BANKING
-(`banking_complaints`) and BANKMKT (`bank_marketing`). Each loads into its own schema; there are no joins across schemas.
+(`banking_complaints`), BANKMKT (`bank_marketing`), ADE (`ade_corpus`), PUBMED
+(`pubmed_abstracts`) and MEDSIGS (`medication_sigs`). Each loads into its own schema; there are no joins across schemas.
 
 > The same descriptions ship **inside the database** as table and column comments
 > (`SYS.EXA_ALL_TABLES.TABLE_COMMENT`, `SYS.EXA_ALL_COLUMNS.COLUMN_COMMENT`) and are
@@ -9,8 +10,8 @@ TPCH (TPC-H at SF=0.02), ENERGY, WEATHER, ESOPHAGEAL (`esophageal_posts`), BANKI
 > shape of the data. This file adds the narrative: keys, joins and conventions.
 
 Reference for every table and column in this folder. Use it to write correct SQL
-(and to ground an AI assistant) without guessing what a column means. The three reference
-datasets (ESOPHAGEAL, BANKING, BANKMKT) also have a README of their own with the source, the
+(and to ground an AI assistant) without guessing what a column means. The six downloaded
+datasets (ESOPHAGEAL, BANKING, BANKMKT, ADE, PUBMED, MEDSIGS) also have a README of their own with the source, the
 terms and how the snapshot was taken; row counts here are the shipped snapshots'.
 
 ## TPCH — TPC-H retail benchmark (schema `TPCH`, dataset id `tpch`)

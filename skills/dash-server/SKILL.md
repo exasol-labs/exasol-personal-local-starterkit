@@ -11,14 +11,15 @@ server for Exasol-backed dashboards. The division of labour is the point —
 **you build and deploy dashboards through its MCP control plane; the user just
 opens a URL in a browser.**
 
-## Install it (it is never installed by default)
+## Install it (the Data Scientist persona installs it)
 
 ```bash
 EXAKIT_MARKETPLACE_ADDONS=dash-server exakit marketplace
 ```
 
 Interactively, `exakit marketplace` lists it with Space to select and Enter to
-install. Nothing in the kit's setup flow installs it for you.
+install. The Data Scientist persona installs it for you, before the notebook, so the
+notebooks' Share step has its server.
 
 ## The two endpoints
 

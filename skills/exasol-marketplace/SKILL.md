@@ -1,6 +1,6 @@
 ---
 name: exasol-marketplace
-description: Browse, install and remove the starter kit's optional add-ons through exakit marketplace — dash-server (agent-built dashboards), Exasol for VS Code (editor extension), JSON Tables (JSON ingestion), Exasol Scheduler (SQL jobs on a schedule) and dbt-exasol (dbt models) — including the read-only listing, installing by id without a terminal, why an add-on may not be offered at all, and how installed add-ons join the normal update and uninstall flows. Triggers — "what optional tools can I add", "exakit marketplace", "install an add-on", "add dashboards to my kit", "add dbt to my kit", "schedule a query", "run this nightly", "install the scheduler", "why is an add-on not listed", "remove an add-on", "update my add-ons".
+description: Browse, install and remove the starter kit's optional add-ons through exakit marketplace — dash-server (agent-built dashboards), notebook (JupyterLab, Marimo, Positron), udf-devkit (Python and Rust UDFs, MLflow), Exasol for VS Code (editor extension), JSON Tables (JSON ingestion), Exasol Scheduler (SQL jobs on a schedule) and dbt-exasol (dbt models) — including the read-only listing, installing by id without a terminal, why an add-on may not be offered at all, and how installed add-ons join the normal update and uninstall flows. Triggers — "what optional tools can I add", "exakit marketplace", "install an add-on", "add dashboards to my kit", "add dbt to my kit", "schedule a query", "run this nightly", "install the scheduler", "why is an add-on not listed", "remove an add-on", "update my add-ons".
 ---
 
 # The marketplace — optional add-ons
@@ -33,6 +33,8 @@ interactive install ("Do you want to add optional tools?").
 | Id | What it gives the user | Skill with the detail |
 |---|---|---|
 | `dash-server` | Agent-built live dashboards on the local database, driven through its own MCP control plane | `dash-server` |
+| `notebook` | JupyterLab, Marimo or Positron connected to the local database, with the kit's persona notebooks | `notebook` |
+| `udf-devkit` | Python and Rust UDF containers, training inside the database, a local MLflow server | `udf-devkit` |
 | `exasol-vscode` | Exasol SQL editing and schema browsing inside VS Code | `exasol-vscode` |
 | `json-tables` | Ingest, query and reshape JSON-shaped data; the engine ships prebuilt, no Rust toolchain | `json-tables` |
 | `exasol-scheduler` | SQL jobs on a cron schedule, defined and audited as rows in a table | `exasol-scheduler` |
@@ -80,7 +82,7 @@ exakit update                      # covers every INSTALLED add-on
 
 Add-ons you never picked are never touched by `exakit update`.
 
-Add-ons that **run as a service** (today: `dash-server`) are managed like the
+Add-ons that **run as a service** (`dash-server`, `exasol-scheduler`, and udf-devkit's MLflow server) are managed like the
 database itself:
 
 ```bash

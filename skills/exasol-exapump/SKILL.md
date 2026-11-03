@@ -96,11 +96,13 @@ quotes altogether.
 statement gate is a seatbelt against a typo. The enforced read-only boundary is
 the MCP user.
 
-`-p starter-kit` names the connection **profile** the kit created. Profiles
-live in `~/.exapump/config.toml`; `EXAPUMP_CONFIG` overrides that path.
+`-p starter-kit` names the connection **profile** the kit created. The kit keeps it in
+its own file, `~/.exasol-starter-kit/exapump/config.toml` (your `~/.exapump/config.toml` is
+left alone), so export `EXAPUMP_CONFIG` as above before calling exapump directly.
 
 > `starter-kit` is a *profile* name, not a schema. The bundled datasets each
-> live in their own **schema** — `TPCH`, `ENERGY`, `WEATHER` — and data the user
+> live in their own **schema** — `TPCH`, `ENERGY`, `WEATHER`, and with a persona
+> `ESOPHAGEAL`, `BANKING`, `BANKMKT`, `ADE`, `PUBMED`, `MEDSIGS` — and data the user
 > uploads defaults to the `STARTER_KIT` schema. Do not conflate the two or
 > "correct" one into the other.
 

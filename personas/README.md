@@ -55,8 +55,8 @@ everyone needs (the database, exapump, the AI bridge):
    will become of it, ticked as `notebook_tools` says (all three otherwise);
    untick one there. Then the connection panel and "Your starter kit is
    ready to use" close the install. The rest of the marketplace is one command
-   away: `exakit marketplace`. (Without a persona, the marketplace offer comes
-   after the panel, as before.)
+   away: `exakit marketplace`. (General brings no add-ons, so with General alone
+   the marketplace offer comes after the panel.)
 
 Nothing is loaded or installed without that screen. Without a terminal and
 without `EXAKIT_PERSONA`, the kit installs on its own with TPC-H, energy and
@@ -110,7 +110,7 @@ The keys:
 | `title`, `summary` | what `exakit persona list` and the install question show |
 | `picker` | `true` to offer it in the install question |
 | `visible` | `true` to offer new selections; `false` hides it and refuses a new named add, while preserving the definition and an existing installation |
-| `default` | `true` to tick it there to begin with (neither shipped persona does: None is ticked) |
+| `default` | `true` to tick it there to begin with (General does) |
 | `order` | where the question lists it (lowest first) |
 | `datasets` | a list of bundled dataset ids, or `"all"` / `"none"` |
 | `mcp_clients` | `"all"`, `"skip"`, or a list of client ids |

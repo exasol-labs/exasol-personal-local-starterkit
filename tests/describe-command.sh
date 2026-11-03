@@ -168,7 +168,7 @@ contains "setup/exakit has the arm" 'cmd_describe "$@"' "$(grep 'describe) shift
 contains "and sources the module" 'describe.sh" ] && . "$_lib_dir/describe.sh"' "$(cat "$ROOT/setup/exakit")"
 contains "and its header names the command" 'describe <table>' "$(sed -n '1,90p' "$ROOT/setup/exakit")"
 check "the help document has the command" "describe" "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(",".join(c["command"] for c in d["commands"] if c["command"]=="describe"))' "$ROOT/setup/help/exakit.json")"
-check "in the add-ons group" "yes" "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("yes" if any("describe" in g["commands"] for g in d["groups"] if g["title"]=="Add-ons") else "no")' "$ROOT/setup/help/exakit.json")"
+check "in the personas and notebooks group" "yes" "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("yes" if any("describe" in g["commands"] for g in d["groups"] if g["title"]=="Personas and notebooks") else "no")' "$ROOT/setup/help/exakit.json")"
 _cd_page="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); c=[c for c in d["commands"] if c["command"]=="describe"][0]; print(c["options"]); print(c["description"]); print("\n".join(c["examples"]))' "$ROOT/setup/help/exakit.json")"
 contains "and its page names the add-on" "exakit marketplace notebook" "$_cd_page"
 for _opt in --approve --role --owner --no-comments --show --version --versions --comments; do

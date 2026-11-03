@@ -60,7 +60,7 @@ The install command sets up four components and connects them:
 | [exapump](https://github.com/exasol-labs/exapump) | Loads CSV and Parquet files and runs SQL from your terminal |
 | [pyexasol](https://github.com/exasol/pyexasol) | The official Exasol Python driver, installed in its own environment |
 
-It also gives your AI agent eight skills, one for each part of the kit. They work in Claude Code, Codex, Cursor and any tool that reads the open skill standard, and an agent loads one only when the task needs it.
+It also gives your AI agent fifteen skills, one for each part of the kit and each add-on. They work in Claude Code, Codex, Cursor and any tool that reads the open skill standard, and an agent loads one only when the task needs it.
 
 ## What's new
 
@@ -75,7 +75,7 @@ The base install stays small. When you want more, you pick an add-on by the outc
 | [JSON&nbsp;Tables](https://github.com/exasol-labs/exasol-json-tables) | JSON files, nested ones included, turned into tables you can query |
 | [Exasol&nbsp;Scheduler](https://github.com/exasol-labs/exasol-scheduler) | SQL that runs on a timetable inside the database. The jobs are rows in a table |
 | [dbt-exasol](https://github.com/exasol/dbt-exasol) | Repeatable SQL models built, tested and documented with dbt against the local database |
-| [Notebooks](https://github.com/exasol/notebook-connector) | JupyterLab connected to the local database (no password in any notebook): a quickstart and an explore notebook for the Data Scientist, a quickstart, a training notebook (runs logged to your MLflow) and a scoring notebook for the ML Engineer, all on any described dataset. JupyterLab, Marimo or your Positron: `exakit notebook` |
+| [Notebooks](https://github.com/exasol/notebook-connector) | JupyterLab connected to the local database (no password in any notebook): for the Data Scientist a quickstart, explore, ask-your-data and share-a-dashboard notebook; for the ML Engineer a quickstart, a training notebook (runs logged to your MLflow), Rust scoring and scoring a model trained elsewhere; four short lessons besides; all on any described dataset. JupyterLab, Marimo or your Positron: `exakit notebook` |
 | UDF&nbsp;dev&nbsp;kit | Python and Rust UDFs on the local database: `exakit udf-setup` installs the Python container (the database restarts), `udf-use default` the prebuilt machine-learning one picked for your database's architecture and verified against its pinned digest (scikit-learn, pandas, numpy, scipy), `--language rust` the pinned Rust container, `udf-build` builds one from your pinned requirements, `model put` brings in a model trained anywhere (digest recorded) and `model template` makes the scoring UDF for it |
 
 
@@ -112,7 +112,7 @@ exakit mcp-setup
 
 The installer runs this for you, and you can run it again any time to add a client. It lists Claude, Codex, Cursor, GitHub Copilot, Gemini CLI, OpenCode and Continue, greys out the ones already connected or not installed, writes the config for the ones you pick and checks the connection. `exakit mcp-doctor` checks it again later.
 
-Three sample datasets are loaded for you: TPC-H retail in `TPCH`, smart-meter energy readings in `ENERGY` and daily city weather in `WEATHER`. A persona adds the two reference datasets, esophageal cancer posts in `ESOPHAGEAL` and banking complaints in `BANKING`, downloaded as checksummed archives (`exakit data-load esophageal_posts` brings one in any time). The [data dictionary](data/data-dictionary.md) describes them, and [data/example-questions.md](data/example-questions.md) has 14 questions with reference SQL.
+The General persona (ticked to begin with) loads three samples: TPC-H retail in `TPCH`, smart-meter energy readings in `ENERGY` and daily city weather in `WEATHER`. The Data Scientist and ML Engineer personas load six more, each downloaded from the kit's `datasets` release only when picked: esophageal cancer posts in `ESOPHAGEAL`, banking complaints in `BANKING`, bank marketing clients in `BANKMKT`, adverse-drug-effect sentences in `ADE`, clinical-study abstracts in `PUBMED` and prescription directions in `MEDSIGS` (`exakit data-load esophageal_posts` brings one in any time). The [data dictionary](data/data-dictionary.md) describes them, and [data/example-questions.md](data/example-questions.md) has 14 questions with reference SQL.
 
 Try it: *"Which product category generated the most revenue? Show me the SQL before you run it."*
 
@@ -148,7 +148,7 @@ another file instead.
 - GUI: [DBeaver](https://dbeaver.io/download/) or [DbVisualizer](https://www.dbvis.com/download/). Create a new Exasol connection with host `127.0.0.1`, port `8563` and user `sys`.
   - `exakit info` shows where the password is stored.
 - Python: pyexasol is preinstalled in its own environment.
-- Terminal: `exapump interactive -p starter-kit` opens a SQL shell.
+- Terminal: `exakit sql "SELECT 42"` runs one statement; for a SQL shell, `export EXAPUMP_CONFIG=~/.exasol-starter-kit/exapump/config.toml` then `exapump interactive -p starter-kit`.
 
 Run `exakit guide` for the full walkthrough.
 

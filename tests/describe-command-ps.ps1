@@ -178,7 +178,7 @@ try {
     Contains "and its header names the command" 'describe <table>' $cli
     $help = Get-Content -Raw (Join-Path $repo "setup/help/exakit.json") | ConvertFrom-Json
     Check "the help document has the command" 1 @($help.commands | Where-Object { $_.command -eq "describe" }).Count
-    Check "in the add-ons group" $true ((@($help.groups | Where-Object { $_.title -eq "Add-ons" })[0].commands) -contains "describe")
+    Check "in the personas and notebooks group" $true ((@($help.groups | Where-Object { $_.title -eq "Personas and notebooks" })[0].commands) -contains "describe")
     $page = @($help.commands | Where-Object { $_.command -eq "describe" })[0]
     foreach ($opt in @("--approve", "--role", "--owner", "--no-comments", "--show", "--version", "--versions", "--comments")) {
         Contains "the options list $opt" $opt $page.options
