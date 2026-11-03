@@ -115,18 +115,21 @@ def _pin(ctx: KitContext, frontend: str) -> str:
 
 
 # The oldest pyexasol that works with Exasol Personal: before 2.4 every import and export (export_to_pandas, the
-# connector's data loading) raises InvalidVersion on its version string. setup/lib/pyexasol.sh holds the same floor.
+# connector's data loading) raises InvalidVersion on its version string. A warning, never a refusal; setup/lib/
+# pyexasol.sh holds the same floor for reusing a pyexasol of your own.
 PYEXASOL_FLOOR = "2.4.0"
 
 
 def _pyexasol_pin(ctx: KitContext) -> str:
-    """The pyexasol the kit installs everywhere, versions.json's components.pyexasol.version (2.4.1): the notebook
-    environment gets that exact version, not whatever 2.x the connector allows."""
-    version = ctx.versions_document().get("components", {}).get("pyexasol", {}).get("version", "")
+    """The notebook environment's pyexasol: EXAKIT_PYEXASOL_VERSION when you set one, as for the kit's own pyexasol,
+    else the default versions.json names (components.pyexasol.version, 2.4.1). A version older than PYEXASOL_FLOOR is
+    installed as asked, with a warning that imports and exports will fail on Exasol Personal."""
+    version = os.environ.get("EXAKIT_PYEXASOL_VERSION") or \
+        ctx.versions_document().get("components", {}).get("pyexasol", {}).get("version", "")
     if not isinstance(version, str) or not re.fullmatch(r"\d+(\.\d+){1,2}", version):
-        raise AddonFailure("No pyexasol pin in versions.json")
+        raise AddonFailure("No usable pyexasol version: set EXAKIT_PYEXASOL_VERSION or check versions.json")
     if tuple(int(p) for p in version.split(".")) < tuple(int(p) for p in PYEXASOL_FLOOR.split(".")):
-        raise AddonFailure(f"versions.json pins pyexasol {version}; Exasol Personal needs {PYEXASOL_FLOOR} or later")
+        ctx.activity(f"pyexasol {version} is older than {PYEXASOL_FLOOR}: imports and exports will fail on Exasol Personal")
     return version
 
 

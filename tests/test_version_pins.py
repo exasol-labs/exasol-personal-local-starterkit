@@ -7,9 +7,11 @@ same in every Rust row, in the Rust tool's constants and in its build image.
 from __future__ import annotations
 
 import json
+import os
 import re
 import sys
 import unittest
+from unittest import mock
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -43,21 +45,32 @@ class LauncherPinTest(unittest.TestCase):
 class PyexasolPinTest(unittest.TestCase):
     """One pyexasol for the kit's own environment and the notebooks', at or above the floor Exasol Personal needs."""
 
-    def test_the_notebooks_get_the_kits_exact_pyexasol(self):
+    def test_the_notebooks_default_to_the_kits_pyexasol(self):
         class Context:
             def versions_document(self):
                 return {"components": VERSIONS}
         self.assertEqual("2.4.1", VERSIONS["pyexasol"]["version"])
-        self.assertEqual(VERSIONS["pyexasol"]["version"], notebook._pyexasol_pin(Context()))
+        with mock.patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("EXAKIT_PYEXASOL_VERSION", None)
+            self.assertEqual(VERSIONS["pyexasol"]["version"], notebook._pyexasol_pin(Context()))
         self.assertFalse([spec for spec in notebook.COMPANIONS if spec.startswith("pyexasol")],
                          "pyexasol is pinned from versions.json, not as a companion range")
 
-    def test_a_pin_below_the_floor_is_refused(self):
+    def test_your_version_wins_and_an_old_one_is_only_warned_about(self):
+        said = []
+
         class Context:
             def versions_document(self):
-                return {"components": {"pyexasol": {"version": "2.3.2"}}}
-        with self.assertRaises(Exception):
-            notebook._pyexasol_pin(Context())
+                return {"components": VERSIONS}
+
+            def activity(self, text):
+                said.append(text)
+        with mock.patch.dict(os.environ, {"EXAKIT_PYEXASOL_VERSION": "2.5.0"}):
+            self.assertEqual("2.5.0", notebook._pyexasol_pin(Context()))
+        self.assertEqual([], said)
+        with mock.patch.dict(os.environ, {"EXAKIT_PYEXASOL_VERSION": "2.3.2"}):
+            self.assertEqual("2.3.2", notebook._pyexasol_pin(Context()))
+        self.assertEqual(1, len(said))
 
     def test_every_installer_holds_the_same_floor(self):
         shell = re.search(r'^_pyx_min_version="([^"]+)"', (ROOT / "setup/lib/pyexasol.sh").read_text(encoding="utf-8"), re.M)

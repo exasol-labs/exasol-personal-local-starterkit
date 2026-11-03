@@ -101,9 +101,27 @@ def _onnx(session, row):
     return _plain(outputs[0].ravel()[0] if hasattr(outputs[0], "ravel") else outputs[0][0])
 
 
+_TEXT = None
+
+
+def _text_inputs():
+    """The parameters of a character type, read once from the UDF's own metadata. Exasol stores an empty string as
+    NULL, so COALESCE(col, '') still arrives as None, and a text model given None raises on its first .lower()."""
+    global _TEXT
+    if _TEXT is None:
+        try:
+            columns = exa.meta.input_columns  # noqa: F821 - the database provides exa
+        except NameError:
+            columns = []
+        _TEXT = {str(c.name).upper() for c in columns if str(c.sql_type).upper().startswith(("VARCHAR", "CHAR"))}
+    return _TEXT
+
+
 def run(ctx):
     model = _load()
-    row = [getattr(ctx, name) for name, _ in INPUTS]
+    text = _text_inputs()
+    row = [("" if value is None and name.upper() in text else value)
+           for name, value in ((name, getattr(ctx, name)) for name, _ in INPUTS)]
     if hasattr(model, "get_inputs"):
         return _onnx(model, row)
     import pandas as pd

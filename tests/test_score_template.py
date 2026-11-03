@@ -161,6 +161,21 @@ class UdfBodyTest(unittest.TestCase):
         self.assertEqual(frame.columns, ["category", "text"], "the parameters reach the model under its own names")
         self.assertEqual(frame.data, {"category": ["A"], "text": ["x" * 10]})
 
+    def test_a_null_text_reaches_the_model_as_an_empty_string(self):
+        # Exasol stores '' as NULL: COALESCE(MESSAGE, '') still hands the UDF None for an empty post.
+        with tempfile.TemporaryDirectory() as folder:
+            model_file = Path(folder) / "churn.pkl"
+            model_file.write_bytes(pickle.dumps(StandInModel()))
+            meta = types.SimpleNamespace(input_columns=[types.SimpleNamespace(name="CATEGORY", sql_type="VARCHAR(2000) UTF8"),
+                                                        types.SimpleNamespace(name="DOC_TEXT", sql_type="VARCHAR(2000000) UTF8")])
+            namespace: dict = {"exa": types.SimpleNamespace(meta=meta)}
+            with mock.patch.dict(sys.modules, {"pandas": types.SimpleNamespace(DataFrame=StandInFrame)}):
+                exec(compile(body(render.render(**GOOD)), "<udf>", "exec"), namespace)
+                namespace["MODEL_PATH"] = str(model_file)
+                score = namespace["run"](types.SimpleNamespace(category="web", doc_text=None))
+        self.assertEqual(0.0, score)
+        self.assertEqual([""], namespace["_model"].frames[0].data["text"])
+
     def test_predict_returns_a_plain_value(self):
         with tempfile.TemporaryDirectory() as tmp:
             model_file = Path(tmp, "m.pkl")
