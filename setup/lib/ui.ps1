@@ -359,7 +359,132 @@ function Resume-ExakitSpinner {
     }
 }
 
-function Restore-ExakitCursor { if ($script:UiFancy) { try { [Console]::Write("$($script:UiEsc)[?25h") } catch { } } }
+function Restore-ExakitCursor { Disable-ExakitMenuMouse; if ($script:UiFancy) { try { [Console]::Write("$($script:UiEsc)[?25h") } catch { } } }
+
+# --- mouse in the menus -------------------------------------------------------
+# A click on a row of Read-ExakitCheckboxMenu or Invoke-ExakitTableMenu ticks or
+# unticks it, the same as Space on it; only Enter moves on. Twin of ui_mouse_on /
+# _ui_menu_key in ui.sh. Windows only (the shell menus serve macOS and Linux):
+# the console is put in virtual-terminal input mode, so a click arrives as an SGR
+# report (ESC [< b ; x ; y M) and the arrows as ESC [ A / B, and QuickEdit is
+# switched off - it takes a click for the start of a text selection. Its own
+# mode is given back by Disable-ExakitMenuMouse (and Restore-ExakitCursor, on
+# the way out of a failed run). EXAKIT_NO_MOUSE=1 keeps it off.
+#
+# The wheel belongs to the console: the first wheel report hands the mouse back,
+# so the screen scrolls as it always does, and clicks are re-armed after two
+# quiet seconds or with the next key - as in ui.sh.
+$script:UiMouse = $null
+function Enable-ExakitMenuMouse {
+    if (-not $script:UiFancy -or $env:EXAKIT_NO_MOUSE -eq '1' -or $null -ne $script:UiMouse) { return }
+    if ($PSVersionTable.PSVersion.Major -gt 5 -and -not $IsWindows) { return }
+    try {
+        if (-not ('Exakit.ConsoleMode' -as [type])) {
+            Add-Type -Namespace Exakit -Name ConsoleMode -MemberDefinition @'
+[DllImport("kernel32.dll", SetLastError = true)] public static extern IntPtr GetStdHandle(int nStdHandle);
+[DllImport("kernel32.dll", SetLastError = true)] public static extern bool GetConsoleMode(IntPtr hConsoleHandle, out uint lpMode);
+[DllImport("kernel32.dll", SetLastError = true)] public static extern bool SetConsoleMode(IntPtr hConsoleHandle, uint dwMode);
+'@
+        }
+        $handle = [Exakit.ConsoleMode]::GetStdHandle(-10)            # STD_INPUT_HANDLE
+        $mode = [uint32]0
+        if (-not [Exakit.ConsoleMode]::GetConsoleMode($handle, [ref]$mode)) { return }
+        # + ENABLE_VIRTUAL_TERMINAL_INPUT (0x200) and ENABLE_EXTENDED_FLAGS (0x80), - ENABLE_QUICK_EDIT_MODE (0x40)
+        $new = [uint32](([int64]$mode -bor 0x280) -band (0xFFFFFFFFL -bxor 0x40))
+        if (-not [Exakit.ConsoleMode]::SetConsoleMode($handle, $new)) { return }
+        $script:UiMouse = @{ Handle = $handle; Mode = $mode; Paused = $false }
+        [Console]::Write("$($script:UiEsc)[?1000h$($script:UiEsc)[?1006h")
+    } catch { $script:UiMouse = $null }
+}
+function Disable-ExakitMenuMouse {
+    $m = $script:UiMouse
+    if ($null -eq $m) { return }
+    $script:UiMouse = $null
+    try { [Console]::Write("$($script:UiEsc)[?1006l$($script:UiEsc)[?1000l") } catch { }
+    try { [void][Exakit.ConsoleMode]::SetConsoleMode($m.Handle, [uint32]$m.Mode) } catch { }
+}
+
+# Read-ExakitMenuKey - one keypress for a menu: @{ Name = Enter | Space | Up | Down
+# | Char | Click | Escape; Char; Y }. Plain keys come as ConsoleKeys; with
+# virtual-terminal input on, the arrows and the mouse come as escape sequences,
+# read here. A click is a left-button press, Y its screen row (1-based); the
+# wheel is handed back to the console and swallowed, with no redraw.
+function Read-ExakitMenuKey {
+    while ($true) {
+        $m = $script:UiMouse
+        if ($null -ne $m -and $m.Paused) {
+            $deadline = [DateTime]::UtcNow.AddSeconds(2)
+            while (-not [Console]::KeyAvailable -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 50 }
+            $m.Paused = $false
+            [Console]::Write("$($script:UiEsc)[?1000h$($script:UiEsc)[?1006h")
+            if (-not [Console]::KeyAvailable) { continue }
+        }
+        $key = [Console]::ReadKey($true)
+        switch ($key.Key) {
+            'Enter'     { return @{ Name = 'Enter' } }
+            'Spacebar'  { return @{ Name = 'Space' } }
+            'UpArrow'   { return @{ Name = 'Up' } }
+            'DownArrow' { return @{ Name = 'Down' } }
+        }
+        $code = [int]$key.KeyChar
+        if ($code -eq 13 -or $code -eq 10) { return @{ Name = 'Enter' } }
+        if ($code -eq 32) { return @{ Name = 'Space' } }
+        if ($code -ne 27) { return @{ Name = 'Char'; Char = [string]$key.KeyChar } }
+        $seq = ''
+        $deadline = [DateTime]::UtcNow.AddMilliseconds(200)
+        while ($seq.Length -lt 24 -and [DateTime]::UtcNow -lt $deadline) {
+            if (-not [Console]::KeyAvailable) { Start-Sleep -Milliseconds 5; continue }
+            $c = [string][Console]::ReadKey($true).KeyChar
+            $seq += $c
+            if ($seq.Length -ge 2 -and $c -cmatch '[A-Za-z~]') { break }
+        }
+        $read = ConvertFrom-ExakitMenuSequence $seq
+        if ($read.Name -eq 'Wheel') {
+            if ($null -ne $m) {
+                [Console]::Write("$($script:UiEsc)[?1006l$($script:UiEsc)[?1000l")
+                $m.Paused = $true
+            }
+            continue
+        }
+        if ($read.Name -ne 'Ignore') { return $read }
+    }
+}
+
+# ConvertFrom-ExakitMenuSequence <what followed ESC> - @{ Name = Up | Down | Click |
+# Wheel | Escape | Ignore; Y }: the arrows, a left-button press (with its screen
+# row), a wheel turn, a lone Escape; anything else (a button release, a key the
+# menus do not use) is ignored.
+function ConvertFrom-ExakitMenuSequence {
+    param([string]$Sequence)
+    if (-not $Sequence) { return @{ Name = 'Escape' } }
+    if ($Sequence -ceq '[A' -or $Sequence -ceq 'OA') { return @{ Name = 'Up' } }
+    if ($Sequence -ceq '[B' -or $Sequence -ceq 'OB') { return @{ Name = 'Down' } }
+    if ($Sequence -cmatch '^\[<(\d+);(\d+);(\d+)([Mm])$') {
+        $button = [int]$Matches[1]
+        if ($Matches[4] -ceq 'M' -and $button -eq 0) { return @{ Name = 'Click'; Y = [int]$Matches[3] } }
+        if ($Matches[4] -ceq 'M' -and ($button -eq 64 -or $button -eq 65)) { return @{ Name = 'Wheel' } }
+    }
+    return @{ Name = 'Ignore' }
+}
+
+# Get-ExakitMenuClickRow -Y -Drawn -Starts - which entry a click on screen row Y
+# (1-based) landed on: the menu's last $Drawn lines end at the cursor, and
+# $Starts holds the line each entry starts on (0-based, ascending; the last value
+# is where the entries end). 0 for a click outside them.
+function Get-ExakitMenuClickRow {
+    param([int]$Y, [int]$Drawn, [int[]]$Starts, [int]$CursorTop = -1, [int]$WindowTop = -1)
+    try {
+        if ($CursorTop -lt 0) { $CursorTop = [Console]::CursorTop }
+        if ($WindowTop -lt 0) { $WindowTop = [Console]::WindowTop }
+    } catch { return 0 }
+    $top = $CursorTop - $Drawn
+    $row = $WindowTop + $Y - 1
+    $offset = $row - $top
+    for ($i = 1; $i -lt $Starts.Count; $i++) {
+        if ($offset -ge $Starts[$i - 1] -and $offset -lt $Starts[$i]) { return $i }
+    }
+    return 0
+}
 
 # --- progress bar (determinate) ---------------------------------------------
 function Write-ExakitProgress([int]$Current, [int]$Total, [string]$Label = "") {
@@ -1053,6 +1178,7 @@ function Get-ExakitTableFrame {
 
     $now = Get-Date
     $allRows = $Table.Rows.ToArray()
+    $rowAt = New-Object 'int[]' ($allRows.Count + 1)
     $i = 0
     foreach ($row in $allRows) {
         $i++
@@ -1157,6 +1283,7 @@ function Get-ExakitTableFrame {
                 $script:UiDim + $activity + $script:UiReset + (" " * ($activityWidth - $activity.Length)) +
                 $script:UiAccent + $script:UiVB + $script:UiReset)
         }
+        $rowAt[$i - 1] = $lines.Count                       # the line this row starts on, for a click
         [void]$lines.Add("  " + $script:UiAccent + $script:UiVB + $script:UiReset + $ptr + $box + " " +
             $name + (" " * $namePad) + $mid + $statSep + $cell.Text + (" " * $tail) +
             $script:UiAccent + $script:UiVB + $script:UiReset)
@@ -1214,6 +1341,8 @@ function Get-ExakitTableFrame {
     [void]$lines.Add("  " + $script:UiAccent + $script:UiBL + ($script:UiHr * $inner) +
         $script:UiBR + $script:UiReset)
 
+    $rowAt[$allRows.Count] = $lines.Count - 1
+    $Table.RowAt = $rowAt
     $Table.Lines = $lines.Count
     # Recorded for Update-ExakitTable: while the geometry is unchanged it can
     # overwrite the frame in place instead of erasing the region first, and the
@@ -1691,6 +1820,9 @@ function Invoke-ExakitTableMenu {
     # Normally nothing of this table is on screen yet; a re-ask says otherwise.
     $drawn = 0
     if ($OnScreen -gt 0) { $drawn = $OnScreen }
+    # A click ticks or unticks the row under it, like Space; Enter still confirms.
+    Enable-ExakitMenuMouse
+    try {
     while ($true) {
         Set-ExakitTableTicks -Rows @($sel) -Table $Table
         # Built first, then written in ONE write. The other order - clear, then
@@ -1717,10 +1849,14 @@ function Invoke-ExakitTableMenu {
             [Console]::Write("`r$($script:UiEsc)[${drawn}A$($script:UiEsc)[0J" + $frame + "`r`n" + $hint + "`r`n")
         }
         $drawn = [int]$Table.Lines + 1
-        $key = [Console]::ReadKey($true)
+        $key = Read-ExakitMenuKey
         $confirmed = $false
-        $handled = $true
-        switch ($key.Key) {
+        if ($key.Name -eq 'Click') {
+            # The click picks the row under it and toggles it, as Space would there.
+            $hit = Get-ExakitMenuClickRow -Y $key.Y -Drawn $drawn -Starts $Table.RowAt
+            if ($hit -ge 1 -and $pickable.Contains($hit)) { $cur = $hit; $key = @{ Name = 'Space' } }
+        }
+        switch ($key.Name) {
             "Enter"     {
                 # Enter on the exclusive row (Skip) answers Skip, whatever else
                 # is ticked: pending rows start ticked, so "move to Skip, press
@@ -1728,7 +1864,7 @@ function Invoke-ExakitTableMenu {
                 if ($ExclusiveIndex -ge 1 -and $cur -eq $ExclusiveIndex) { $sel.Clear(); [void]$sel.Add($ExclusiveIndex) }
                 if ($sel.Count -gt 0) { $confirmed = $true; $script:ExakitTableConfirmed = $true }
             }
-            "Spacebar"  {
+            "Space"     {
                 # A row that cannot be picked cannot be toggled either. The cursor
                 # never rests on one, so this catches only the keypress that
                 # arrives before the cursor has moved at all.
@@ -1738,18 +1874,18 @@ function Invoke-ExakitTableMenu {
                     & $applyExclusive $cur
                 }
             }
-            "UpArrow"   { $cur = [int](& $step $cur (-1)) }
-            "DownArrow" { $cur = [int](& $step $cur 1) }
-            default     { $handled = $false }
-        }
-        if (-not $handled) {
-            switch -Regex ([string]$key.KeyChar) {
-                '^[kK]$' { $cur = [int](& $step $cur (-1)) }
-                '^[jJ]$' { $cur = [int](& $step $cur 1) }
+            "Up"        { $cur = [int](& $step $cur (-1)) }
+            "Down"      { $cur = [int](& $step $cur 1) }
+            "Char"      {
+                switch -Regex ($key.Char) {
+                    '^[kK]$' { $cur = [int](& $step $cur (-1)) }
+                    '^[jJ]$' { $cur = [int](& $step $cur 1) }
+                }
             }
         }
         if ($confirmed) { break }
     }
+    } finally { Disable-ExakitMenuMouse }
     # Redraw once without the pointer or the hint: the selection is made, and the
     # same table is about to become the progress display. $drawn counts the hint
     # line too, so this erases it.

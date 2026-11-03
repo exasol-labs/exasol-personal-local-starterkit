@@ -869,6 +869,11 @@ function Read-ExakitCheckboxMenu {
     $script:cbCur = 0
     & $step 1
     $firstDraw = $true
+    # A click ticks or unticks the row under it, like Space; Enter still confirms.
+    # Every option is one line, then the hint: entry i starts on line i-1.
+    $starts = @(0..$Options.Count)
+    if (Get-Command Enable-ExakitMenuMouse -ErrorAction SilentlyContinue) { Enable-ExakitMenuMouse }
+    try {
     while ($true) {
         if (-not $firstDraw -and $script:UiFancy) {
             # redraw the block in place: options + hint line
@@ -894,9 +899,15 @@ function Read-ExakitCheckboxMenu {
             }
         }
         Write-ExakitMenuHint "Up/Down to move - $spaceVerb - Enter to confirm"
-        $key = [Console]::ReadKey($true)
-        $handled = $true
-        switch ($key.Key) {
+        $key = Read-ExakitMenuKey
+        if ($key.Name -eq 'Click') {
+            $hit = Get-ExakitMenuClickRow -Y $key.Y -Drawn ($Options.Count + 1) -Starts $starts
+            if ($hit -ge 1 -and -not (& $isHeader $hit) -and -not (& $isDisabled $hit)) {
+                $script:cbCur = $hit
+                $key = @{ Name = 'Space' }
+            }
+        }
+        switch ($key.Name) {
             "Enter"     {
                 # Enter ON the exclusive row (Skip, No, Nothing) answers that row
                 # alone, whatever else is ticked: the other rows usually start
@@ -906,17 +917,16 @@ function Read-ExakitCheckboxMenu {
                 if ($ExclusiveIndex -ge 1 -and $script:cbCur -eq $ExclusiveIndex) { $sel.Clear(); [void]$sel.Add($ExclusiveIndex) }
                 if ($sel.Count -gt 0) { return @($sel | Sort-Object) }
             }
-            "Spacebar"  {
+            "Space"     {
                 if ($sel.Contains($script:cbCur)) { [void]$sel.Remove($script:cbCur) } else { [void]$sel.Add($script:cbCur) }
                 & $applyGroup $script:cbCur
                 & $applyExclusive $script:cbCur
             }
-            "UpArrow"   { & $step -1 }
-            "DownArrow" { & $step 1 }
-            default     { $handled = $false }
+            "Up"        { & $step -1 }
+            "Down"      { & $step 1 }
         }
-        if ($handled) { continue }
-        switch -Regex ([string]$key.KeyChar) {
+        if ($key.Name -ne 'Char') { continue }
+        switch -Regex ($key.Char) {
             '^[kK]$' { & $step -1 }
             '^[jJ]$' { & $step 1 }
             '^[aA]$' {
@@ -928,6 +938,9 @@ function Read-ExakitCheckboxMenu {
                 }
             }
         }
+    }
+    } finally {
+        if (Get-Command Disable-ExakitMenuMouse -ErrorAction SilentlyContinue) { Disable-ExakitMenuMouse }
     }
 }
 # Show-ExakitNoAiPanel - shown when the user skips MCP client setup: the
