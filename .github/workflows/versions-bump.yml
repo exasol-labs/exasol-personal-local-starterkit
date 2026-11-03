@@ -253,6 +253,29 @@ jobs:
           bump_pypi("mcp", "exasol-mcp-server")
           bump_pypi("pyexasol", "pyexasol")
 
+          # --- the notebook tools: JupyterLab and Marimo, stable PyPI releases ---
+          # Pinned per tool under components.notebook.frontends; a new release is
+          # proposed like any other bump, and the notebook CI tests it in the PR.
+          frontends = (components.get("notebook") or {}).get("frontends") or {}
+          for tool in ("jupyterlab", "marimo"):
+              if not frontends.get(tool):
+                  continue
+              label = "notebook.frontends.%s" % tool
+              body, reason = fetch("https://pypi.org/pypi/%s/json" % tool)
+              if body is None:
+                  notes.append("- `%s`: PyPI did not answer (%s), left alone" % (label, reason))
+                  continue
+              shape = re.compile(r"^\d+(?:\.\d+)*$")
+              candidates = [v for v, files in (body.get("releases") or {}).items()
+                            if shape.match(v) and files and not all(f.get("yanked") for f in files)]
+              winner = pick(candidates, frontends[tool], label, semver_key)
+              if winner:
+                  bumped[label] = (frontends[tool], winner)
+                  frontends[tool] = winner
+                  notes.append("- `%s`: a new install gets %s at once; an installed kit picks it up with "
+                               "`exakit update notebook` (the update notice follows the connector's own version)"
+                               % (label, winner))
+
           # --- exapump: a stable release, plus the five asset digests -----------
           exapump = components.get("exapump") or {}
           if exapump.get("version"):
@@ -453,7 +476,7 @@ jobs:
           summary = []
           if bumped:
               for key in bumped:
-                  block = components[key]
+                  block = components[key.split(".", 1)[0]]     # notebook.frontends.marimo -> the notebook block
                   # Urgency is a human call, and a note written about an older
                   # version does not describe this one.
                   block["severity"] = "normal"
