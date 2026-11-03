@@ -22,6 +22,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import signal
 import sys
 import textwrap
@@ -111,6 +112,23 @@ def finished(detail: str, seconds) -> str:
     if len(text) > room:
         text = text[:room - 1] + "…"
     return f"{text:<{room}} {elapsed}"
+
+
+# Trailing padding: spaces, and the style codes around them, at the end of a line.
+_PADDING = re.compile(r"(?:\x1b\[[0-9;]*m| )*$")
+
+
+def _unpadded(frame: str) -> str:
+    """A frame's lines without the spaces Textual pads them to the full width with; the rest of each line is
+    cleared instead (ESC[K). A padded line fills the last column and leaves the terminal waiting to wrap, and
+    such lines did not re-wrap the way the redraw counts them: iTerm2 left twice as much of the old frame
+    above the new one. Unpadded, a terminal re-wraps what the redraw counts, the visible text. The block
+    paints no background, so nothing is lost."""
+    tail = re.search(r"(?:\n\x1b\[J)?(?:\x1b\[\d+A)?$", frame)
+    body, end = frame[:tail.start()], frame[tail.start():]
+    lines = [_PADDING.sub(lambda match: "\x1b[0m\x1b[K" if " " in match.group(0) else match.group(0), line)
+             for line in body.split("\n")]
+    return "\n".join(lines) + end
 
 
 class Screenful(Static):
@@ -226,7 +244,14 @@ class ChoiceApp(App[dict | None]):
             if not data.endswith("\r\x1b[6n"):
                 write(data)
                 return
-            core = data[:-len("\r\x1b[6n")]
+            if self._resize_pending and parked["on"]:
+                # Drawn at the width before the resize, a frame wraps in the narrower terminal and its move
+                # back up lands inside the block: every frame after it was out of place. iTerm2 reports the
+                # pointer moving while its window resizes, and each report repainted the block. The block
+                # is drawn again, whole, once it is laid out at the new width.
+                return
+            core = _unpadded(data[:-len("\r\x1b[6n")])
+            data = core + "\r\x1b[6n"
             rows = 0
             if core.endswith("A"):
                 start = core.rfind("\x1b[")
@@ -266,6 +291,10 @@ class ChoiceApp(App[dict | None]):
                 write((f"\x1b[{up}A" if up else "") + "\r\x1b[J")
                 parked["rows"] = 0
                 await self._post_message(events.Resize(Size(width, height), Size(width, height)))
+                # A resize that ends at the size it began lays nothing out again, and the block would wait.
+                await asyncio.sleep(0.5)
+                if generation == burst["generation"] and self._resize_pending:
+                    self.after_resize()
 
             asyncio.run_coroutine_threadsafe(redraw(), loop)
 

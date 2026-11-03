@@ -290,5 +290,19 @@ class ChoiceScreenTest(unittest.TestCase):
         asyncio.run(check())
 
 
+
+@unittest.skipIf(textual is None, "Textual is provided by uv at the persona boundary")
+class FrameTest(unittest.TestCase):
+    def test_a_frame_goes_out_without_its_padding(self) -> None:
+        # A line padded to the last column re-wrapped unlike the redraw counts it (iTerm2 kept twice the old
+        # frame above the new one): the padding goes, the rest of each line is cleared, the moves stay.
+        from ui import _unpadded
+
+        frame = "\x1b[1mab\x1b[0m   \x1b[0m  \nplain    \n│ x │\x1b[0m\n\x1b[J\x1b[3A"
+        self.assertEqual("\x1b[1mab\x1b[0m\x1b[K\nplain\x1b[0m\x1b[K\n│ x │\x1b[0m\n\x1b[J\x1b[3A", _unpadded(frame))
+        self.assertEqual("one line\x1b[0m\x1b[K", _unpadded("one line   "))
+        self.assertEqual("no padding", _unpadded("no padding"))
+
+
 if __name__ == "__main__":
     unittest.main()
