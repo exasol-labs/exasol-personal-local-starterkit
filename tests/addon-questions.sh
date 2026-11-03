@@ -53,7 +53,7 @@ has "apply asks the questions before the table starts" '_exakit_marketplace_ques
 has "...and so does the twin" 'Invoke-ExakitMarketplaceQuestions -Ids $Ids' \
     "$(sed -n "$_apply_ps_range" "$ROOT/setup/lib/exakit-common.ps1")"
 has "the notebook add-on asks through the hook" "notebook_questions()" "$(cat "$ROOT/setup/lib/common.sh")"
-has "...its twin is registered" 'QuestionsFn = "Read-NotebookQuestions"' "$ECOMMON"
+has "...its twin is registered" "-NotePropertyName QuestionsFn -NotePropertyValue 'Read-NotebookQuestions'" "$ECOMMON"
 has "...and exports the answer the install reads" 'export EXAKIT_NOTEBOOK_FRONTENDS' "$(cat "$ROOT/setup/lib/common.sh")"
 # Where the table carried the add-on's own child rows (the notebook's tools),
 # those rows were the question: the hook is not asked again, and the frame is
