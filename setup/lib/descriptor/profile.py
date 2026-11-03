@@ -75,9 +75,14 @@ def column_kind(column_type: str) -> str:
     return "other"
 
 
+_DEFAULT_TIMESTAMP = re.compile(r"^TIMESTAMP\(3\)", re.I)
+
+
 def schema_digest(columns: list[dict[str, Any]]) -> str:
-    """sha256 of the NAME:TYPE lines, in table order."""
-    text = "".join(f"{c['column']}:{c['type']}\n" for c in columns)
+    """sha256 of the NAME:TYPE lines, in table order. TIMESTAMP(3) is written TIMESTAMP: it is the same type (3 is
+    the default precision), and the database reports it with the precision while a CREATE TABLE and a shipped
+    descriptor name it without - a digest of the spelling would call every such table changed."""
+    text = "".join(f"{c['column']}:{_DEFAULT_TIMESTAMP.sub('TIMESTAMP', str(c['type']))}\n" for c in columns)
     return "sha256:" + hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 

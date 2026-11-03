@@ -170,6 +170,14 @@ class SyntheticTableTest(unittest.TestCase):
         self.assertNotEqual(self.profile["source"]["schema_digest"],
                             profile.profile_rows(swapped, [], "X.Y")["source"]["schema_digest"])
 
+    def test_the_default_timestamp_precision_is_the_same_type(self):
+        # The database reports TIMESTAMP(3) for a column a CREATE TABLE and a shipped descriptor call TIMESTAMP.
+        declared = profile.schema_digest([{"column": "AT", "type": "TIMESTAMP"}])
+        self.assertEqual(declared, profile.schema_digest([{"column": "AT", "type": "TIMESTAMP(3)"}]))
+        self.assertEqual(profile.schema_digest([{"column": "AT", "type": "TIMESTAMP WITH LOCAL TIME ZONE"}]),
+                         profile.schema_digest([{"column": "AT", "type": "TIMESTAMP(3) WITH LOCAL TIME ZONE"}]))
+        self.assertNotEqual(declared, profile.schema_digest([{"column": "AT", "type": "TIMESTAMP(6)"}]))
+
 
 class DraftTest(unittest.TestCase):
     def setUp(self):

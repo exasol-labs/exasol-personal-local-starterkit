@@ -304,7 +304,7 @@ def reader_count(c: Checks, dataset: str, view: str, rows: int) -> None:
         schema, name = view.split(".", 1)
         done = subprocess.run([shutil.which("exapump") or str(Path.home() / ".local" / "bin" / "exapump"), "sql", "-p", "reader"],
                               input=f'SELECT COUNT(*) AS N FROM {schema}."{name}";\n', capture_output=True, text=True,
-                              env={**os.environ, "HOME": folder}, timeout=600, check=False)
+                              env={**os.environ, "HOME": folder, "EXAPUMP_CONFIG": str(config)}, timeout=600, check=False)
     lines = [line.strip().strip('"') for line in done.stdout.splitlines() if line.strip()]
     c.check(done.returncode == 0 and str(rows) in lines, f"{dataset}: {user} reads {view} ({rows:,} rows)",
             f"exit {done.returncode}: {(done.stderr or done.stdout).strip()[-300:]}")
