@@ -1,58 +1,36 @@
 # Changelog
 
-## Telemetry off by default; release pins checked
+## Unreleased - descriptor, new reference datasets, telemetry off
 
-- pyexasol 3 sends one anonymous usage event per connect unless `EXASOL_TELEMETRY_DISABLE` is set. The kit now sets `EXASOL_TELEMETRY_DISABLE=1` before pyexasol can load, and never replaces a value the user set: in `common.sh` and `exakit-common.ps1` (so `exakit`, the installers, data loading and the upgrade), on import of the marketplace runtime (every marketplace command and the processes it starts), in the Dash Server, dbt-exasol and Exasol Scheduler launchers, the JupyterLab and Marimo servers, the notebook helper scripts, the `Exasol (Starter Kit)` kernel spec, `exakit.nb` (on import and in `connect()`), `describe`, the UDF and Rust UDF tools, and the generated JSON Tables command. The JSON Tables command and the kernel spec pick it up on the next `exakit update json-tables` and `exakit notebook setup`. The MCP server an AI client starts from its own config is not covered yet.
-- The MLflow server pin in `versions.json` must stay inside MLflow 3.x, the range of the notebook environment's client and `exasol-mlflow`; a pin outside it is refused instead of replacing the client. The UDF add-on's launcher floor (2.3.0) is one named constant, checked against the launcher pin.
-- New pin checks: launcher floor against the launcher pin, notebook-connector 3.1.x and its catalog fallback, Langfuse SDK 5, one MLflow 3 range, and one language-container-rs release (0.33.0) and rustc (1.98.1) across the Rust rows, the Rust tool's constants and its build image.
+### New
 
-## Descriptor, profiler and approve; new reference datasets
+- **Describe and approve any table.** `exakit describe <SCHEMA.TABLE>` and, in a notebook, `exakit_nb.describe(...)` give every column one of eight roles - key, time, measure, category, flag, text, identifier, other - with how sure the kit is and the numbers that decided it, and name the columns the notebooks use: key, time, text, target, category and entity. Correct with `d.set(COLUMN="role")` and `d.slot(target="COLUMN")`, then `d.approve()`. The same table always gives the same draft; the target is never guessed.
+- **Personal data stays out.** A column of e-mail addresses, phone numbers, IBANs or postcodes is marked sensitive and is never charted, grouped or sent to a model.
+- **Versions you can trust.** Approving writes a new version in `~/.exasol-starter-kit/descriptors/<SCHEMA>.<TABLE>/` (old versions are never changed) and refuses a table that changed since it was described. When a table changes, the next draft keeps your earlier choices for the columns that did not change.
+- **AI clients see the roles.** An approved descriptor is published as a view in `EXAKIT_SEMANTIC` whose column comments carry the roles; your own tables are never altered. The kit's MCP server now lists and finds views, so an AI client discovers them - run `exakit mcp-setup` once to refresh an existing client.
+- **New reference datasets.** `esophageal_posts`: 40,987 public posts about esophageal cancer (2018-2022), personal details removed; it replaces the pharma trials. `bank_marketing`: 45,211 clients of a bank's term-deposit campaigns (UCI, CC BY 4.0). Both personas now load Esophageal posts, Banking complaints and Bank marketing, each with its descriptor.
+- **Your own files get the same treatment.** Load a CSV, Parquet or JSON file with `load_own_file`, describe it and approve it the same way; the notebooks then run on it unchanged.
+- **Optional model notes.** With a model configured, describe adds one line per column; a note never changes a role and never sees a sensitive column.
+- **A simpler test guide.** `docs/MANUAL-RUNBOOK.md` walks through a fresh install and an existing kit, both personas, step by step.
 
-- The descriptor gives every column of a table one of eight roles (key, time, measure, category, flag, text, identifier, other) with its confidence and the evidence that chose it, and names in its slots the columns the notebooks use: key, time, text, target, category, entity. A column of e-mail addresses, phone numbers, IBANs or postcodes is marked sensitive and is never charted, grouped or sent to a model. The target is never drafted.
-- `exakit describe` and `exakit_nb.describe()` profile a table in one pass of SQL (a virtual table as its first 10,000 rows) and draft deterministically; `d.set(COLUMN="role")`, `d.slot(target=...)` and `d.approve()` correct and approve it. Approving checks the table has not changed, writes `~/.exasol-starter-kit/descriptors/<SCHEMA>.<TABLE>/v<n>.yaml` and `current.yaml`, and publishes the roles as column comments on a view in `EXAKIT_SEMANTIC`, granted to the read-only MCP user; the user's own tables are never commented. A changed table drafts the next version and keeps the roles of the columns that did not change. Draft and approval are lines in the active workflow's log.
-- The kit's MCP server now lists and finds views (exasol-mcp-server leaves them off by default), so an AI client sees the EXAKIT_SEMANTIC views with their role comments; run `exakit mcp-setup` to refresh an existing client.
-- New reference datasets: `esophageal_posts` (40,987 de-identified public posts about esophageal cancer, replacing `pharma_trials`) and `bank_marketing` (UCI, 45,211 clients); both personas load Esophageal, Banking and Bank marketing. The three ship role-per-column descriptors, checked against a fresh draft of their CSVs. `docs/MANUAL-RUNBOOK.md` is now a short step-by-step guide for a fresh install and an existing kit.
+### Changed
 
-## Persona and marketplace Python backend
+- **Usage telemetry is off.** Exasol tools report anonymous usage unless `EXASOL_TELEMETRY_DISABLE` is set; the kit now sets it in everything it starts - the commands, the notebooks and their kernel, the add-on services and the MCP server your AI clients run. A value you set yourself is kept.
+- **The time column is the event date.** A table's time column is now its most complete date column, the leftmost of equals (Banking: the date a complaint was received, no longer the date it was sent on).
+- **Banking has no text column.** The CFPB no longer publishes complaint narratives, so the text steps skip on Banking and say why.
+- **The MLflow server stays on MLflow 3.** A server version outside 3.x is refused instead of replacing the notebooks' MLflow client.
 
-- Quote Scheduler passwords during bootstrap, restore access to retained task tables on reinstall, and remove its service user while preserving task/history data. Failed database cleanup retains the receipt and files for retry; administrator accounts and unrelated schema owners are protected.
-- Return a failure when selective add-on removal fails on Bash or PowerShell, retaining its integrations. Declined selective removal returns exit 5 on both platforms.
-- Redact delegated credentials from marketplace child-tool logs and use the active versions document consistently for installation, latest-version queries and validation. Keep PowerShell diagnostics separate from returned values.
-- Add isolated lifecycle checks for all seven add-ons, guarded reuse of installed UDF runtimes, and explicit native release-upgrade checks. Verify Scheduler task execution again after removal/reinstall.
-- Detach the Bash marketplace worker from the parent's animation handle so worker error cleanup cannot stop the selection/progress table.
-- Repair an older kit-owned Scheduler’s missing Python supervisor runtime on start without replacing its binary, credentials or tasks. Identify its process by PID creation time and service home so checkout and installed commands can manage the same process.
-- Make Textual’s Select All include child choices: a partly selected Notebook row no longer appears fully selected, and selecting all restores missing choices.
-- Resolve persona definitions and interactive menu code from the same marketplace source as direct commands on Bash and PowerShell, including when an older installed kit copy exists.
-- Add a repeatable Scheduler smoke check with a temporary `SELECT 1` task, history and privilege verification, and task cleanup. Extend ownership, interrupted-download and startup-timeout retry coverage.
+### Fixed
 
-- Include the notebook connector’s `docker-db` extra because its store widget imports Docker UI types even for an existing local database. Check the widget import during environment validation so missing dependencies are reported before a notebook opens.
-- Use the candidate checkout for direct Bash marketplace commands even when an older kit copy exists under `EXAKIT_HOME`.
-
-- Remove the remaining UDF Devkit shell/PowerShell implementations and duplicate marketplace apply loops. Both platform adapters consume events from the Python batch controller.
-- Share initial persona decisions and service startup in Python. Keep the installer’s persona, data, AI-client and marketplace order; skip MLflow startup when its required kit add-ons are missing.
-- Replace retired direct-helper tests with Python lifecycle and public CLI coverage, including persona add/apply/remove reruns, UDF failure codes, restart refusal, container verification and model-file preservation. Run the shared command suites under both PowerShell engines in Windows CI.
-
-- Move the seven add-on lifecycle implementations, `persona add`, and the direct Notebook, UDF, MLflow, Rust and workflow commands into `marketplace/` Python modules. Keep the existing Textual selection and progress screen.
-- Load persona and add-on choices from validated JSON, including `visible` switches. Use root `versions.json` for advertised versions and checksums; keep catalog versions as offline fallbacks.
-- Route the Linux installer's marketplace apply through the same Python controller as macOS and Windows. Preflight the whole selection before installing and restore progress state after each batch.
-- Remove the redundant dbt-exasol shell and PowerShell implementations. Both CLI entry points use the shared Python lifecycle; the catalog and connection validation remain covered by executable tests.
-- Remove the redundant Exasol for VS Code shell and PowerShell implementations. The public CLI and isolated end-to-end flow use the Python add-on, with focused checks for editor discovery, stdin isolation, WSL staging, checksums, ownership and uninstall.
-- Remove the redundant Exasol Scheduler shell and PowerShell implementations. The Python add-on now clears a prior launcher failure marker on an explicit restart; tests cover release pins, archive validation, and restart state.
-- Remove the redundant JSON Tables shell and PowerShell implementations. The JSON data loader now checks the Python add-on before ingest. The Python release lookup accepts `GITHUB_TOKEN`, distinguishes a missing release from API refusal, and falls back to the kit repository for a local checkout. A missing Windows cargo shim makes an install retryable.
-- Remove the redundant Dash Server shell and PowerShell implementations. The Python add-on owns port selection, launcher repair, service health, and one restart when its MCP endpoint works but the browser page is unavailable.
-- Remove the redundant Notebook shell and PowerShell implementations. Shared Python tests cover lifecycle, recovery and both public CLI entry points; Windows CI runs the same command checks under PowerShell 5.1 and 7.
-- Preserve an explicit choice of no Notebook frontends across updates. Wait for an already-starting server at its recorded port, mask JupyterLab and Marimo login tokens in logs, and show a private login-file path when the browser cannot open.
-- Show the UDF database restart wait as its own activity. Restore services already stopped if another service refuses to stop, before returning the failure. Check help options against the active Python parsers.
-- Mark Bash state queries read-only before loading Python add-on hooks. Run uv queries offline on Bash and PowerShell so a state read cannot download a managed Python runtime.
-- Resolve `describe`'s Notebook interpreter from the installation receipt on Bash and PowerShell. It no longer requires the legacy Notebook helper to be loaded.
-- Use the active validated versions document for Notebook frontend and scikit-learn pins, MLflow's local server, skill receipts, and Rust smoke overlays, keeping secondary assets aligned with the selected release.
-- Preserve the Notebook add-on's legacy `EXAKIT_NOTEBOOK_JUPYTER` and `EXAKIT_NOTEBOOK_MARIMO` skip defaults and its `jupyter` frontend alias in the Python backend.
-- Source fallback Notebook child rows, versions, descriptions, default ticks, and selected-key normalization from Python metadata on Bash and PowerShell. The public CLI no longer loads the legacy Notebook script pair.
-- Make the workflow command test replace a virtualenv Python symlink before writing its stub, so the fixture cannot overwrite the shared interpreter.
-- Make the Textual launcher use the kit's managed Python version override on every platform.
-- Use that managed Python override when Dash Server, dbt-exasol, Notebook, JSON Tables, and Exasol Scheduler create their virtual environments.
-- Resolve scripted marketplace answers through one Python parser on Bash and PowerShell. Reject empty CSV entries and unknown add-ons before the first install, and deduplicate repeated IDs.
-- Detect Windows VS Code and compatible editor CLIs under Local App Data and Program Files when they are absent from PATH.
+- Exasol Scheduler: passwords with digits or mixed case work during setup, task tables stay readable after a reinstall, its service user is removed while task history is kept, and an older install is repaired on start without losing its tasks.
+- Removing one add-on now reports a failure when it fails, instead of saying it was removed; declining the removal exits 5 on macOS, Linux and Windows.
+- Passwords and keys no longer appear in the add-on install log.
+- Select All in the add-on menu now includes the notebook tools under it.
+- Read-only commands such as `exakit status` never download anything.
+- An install checks the whole add-on choice before the first install; empty or unknown names are refused and repeated ones counted once.
+- The notebook add-on remembers "no notebook tools" across updates, hides JupyterLab and Marimo login tokens in logs, and imports Exasol's AI Lab notebooks.
+- Windows: VS Code and compatible editors are found even when they are not on PATH.
+- Services already stopped are started again when another service refuses to stop, and the database-restart wait of a UDF container install shows on its own line.
 
 ## Acceptance fixes and repeatable verification
 

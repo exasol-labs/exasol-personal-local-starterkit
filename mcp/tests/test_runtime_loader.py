@@ -162,6 +162,7 @@ class RuntimeLoaderEdgeCaseTests(unittest.TestCase):
         settings = json.loads(context.server_definition.env["EXA_MCP_SETTINGS"])
         self.assertTrue(settings["enable_read_query"])
         self.assertEqual({"enable": True}, settings["views"], "the EXAKIT_SEMANTIC views are listed and found")
+        self.assertEqual("1", context.server_definition.env["EXASOL_TELEMETRY_DISABLE"], "the MCP server sends no telemetry")
         self.assertFalse(settings["enable_write_query"])
         self.assertTrue(settings["enable_summarize_table"])
         self.assertTrue(settings["enable_query_profiling"])

@@ -127,6 +127,9 @@ class ExakitRuntimeLoader:
             "EXA_USER": connection_user,
             "EXA_PASSWORD": password,
             "EXA_MCP_SETTINGS": json.dumps(DEFAULT_READ_ONLY_MCP_SETTINGS),
+            # exasol-mcp-server reports its start to Exasol's usage telemetry unless this is set; the kit keeps
+            # telemetry off in every process it starts (marketplace/kit_telemetry.py), a value of the user's own wins.
+            "EXASOL_TELEMETRY_DISABLE": self._environment.env.get("EXASOL_TELEMETRY_DISABLE", "1"),
         }
         env.update(self._ssl_environment(runtime, dsn))
         # The install validated the server only with OpenSSL's ARM fast paths

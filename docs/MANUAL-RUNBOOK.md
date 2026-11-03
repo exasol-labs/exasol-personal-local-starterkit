@@ -176,7 +176,8 @@ In Claude (connected to the kit), ask:
 
 *"Describe the view EXAKIT_SEMANTIC.ESOPHAGEAL__ESOPHAGEAL_POSTS and list each column's role."*
 
-The answer should show `role=...` for each column.
+The answer should show `role=...` for each column. Then ask *"List the views in the schema EXAKIT_SEMANTIC."* -
+the view must be in the list (Claude finds it without being told its name).
 
 ### 1.5 The same from Terminal (Banking and Bank marketing)
 
@@ -188,7 +189,8 @@ exakit describe bank_marketing --approve --role target=SUBSCRIBED
 exakit describe bank_marketing --versions
 ```
 
-Each approve prints **Approved ... v1**. Banking has **no text** column and Bank marketing has **no time or text** column - each says why.
+Each approve prints **Approved ... v1**. Banking's time column is **DATE_RECEIVED** and it has **no text** column;
+Bank marketing has **no time or text** column - each says why.
 
 ### 1.6 Explore
 
@@ -306,7 +308,34 @@ Repeat **01_train** with `DATASET = "bank_marketing"`.
 
 ---
 
-## 5. Finish
+## 5. More checks
+
+### 5.1 Usage telemetry is off
+
+```bash
+grep -l "EXASOL_TELEMETRY_DISABLE" ~/Library/Jupyter/kernels/*/kernel.json
+exakit mcp-setup
+grep -l "EXASOL_TELEMETRY_DISABLE" ~/.claude.json "$HOME/Library/Application Support/Claude/claude_desktop_config.json" 2>/dev/null
+```
+
+Each command prints a file name: the notebook kernel and your AI clients' setup carry the switch that turns
+Exasol's usage reporting off.
+
+### 5.2 UDFs can read the bucket folder
+
+```bash
+printf 'bucket check\n' > ~/bucket-check.txt
+exakit model put ~/bucket-check.txt
+exakit model list
+exakit model rm bucket-check.txt
+```
+
+`model put` prints the path a UDF reads it from (`/buckets/bfsdefault/default/models/bucket-check.txt`).
+The full check with a UDF that reads the file back is in `tests/manual/bucket-check.md` (passed on Mac, 3 Nov).
+
+---
+
+## 6. Finish
 
 ```bash
 exakit notebook stop
@@ -337,6 +366,8 @@ If something fails: copy the message, then run `exakit status` and `exakit logs 
 | 3 | workflow lines; password check prints nothing | | |
 | 4.1 | ML Engineer added, MLflow running | | |
 | 4.2 | train runs in MLflow (Esophageal, Bank marketing) | | |
+| 5.1 | telemetry switch in kernel and AI-client setup | | |
+| 5.2 | bucket file put, listed and removed | | |
 
 ## Good to know
 
