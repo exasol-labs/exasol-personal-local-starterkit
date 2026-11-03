@@ -70,7 +70,7 @@ function Install-Pyexasol {
             $previous = $ErrorActionPreference
             try {
                 $ErrorActionPreference = "Continue"
-                $externalVersion = (& $external.Source -c "import pyexasol; print(pyexasol.__version__)" 2>$null | Out-String).Trim()
+                $externalVersion = (& $external.Source -c "import pyexasol; print(pyexasol.__version__)" 2>$null | Out-String -Width 4096).Trim()
                 if ($LASTEXITCODE -eq 0 -and $externalVersion) {
                     Set-ExakitComponentOwnership "pyexasol" "user" $external.Source
                     Set-ExakitManifestValue "components.pyexasol.python" $external.Source
@@ -79,7 +79,7 @@ function Install-Pyexasol {
                     Ok "Reusing user-owned pyexasol $externalVersion"
                     return $true
                 }
-                $installedDistribution = (& $external.Source -c "from importlib.metadata import version; print(version('pyexasol'))" 2>$null | Out-String).Trim()
+                $installedDistribution = (& $external.Source -c "from importlib.metadata import version; print(version('pyexasol'))" 2>$null | Out-String -Width 4096).Trim()
                 if ($LASTEXITCODE -eq 0 -and $installedDistribution) {
                     Set-ExakitComponentOwnership "pyexasol" "user" $external.Source
                     Set-ExakitManifestValue "components.pyexasol.python" $external.Source

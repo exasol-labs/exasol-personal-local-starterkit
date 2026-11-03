@@ -21,9 +21,13 @@ function Contains($label, $needle, $haystack) {
 $hostBin = if ($PSVersionTable.PSEdition -eq "Desktop") { "powershell" } else { "pwsh" }
 function Run {
     param([string[]]$Words = @())
-    $script:OUT = (@(& $hostBin -NoProfile -File (Join-Path $repo "setup/exakit.ps1") "workflow" @Words 2>&1 |
-        ForEach-Object { "$_" }) -join "`n")
-    $script:CODE = $LASTEXITCODE
+    $previous = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        $script:OUT = (@(& $hostBin -NoProfile -File (Join-Path $repo "setup/exakit.ps1") "workflow" @Words 2>&1 |
+            ForEach-Object { "$_" }) -join "`n")
+        $script:CODE = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $previous }
 }
 try {
     Run @(); Check "missing action" 2 $CODE; Contains "usage named" "exakit workflow list" $OUT

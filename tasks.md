@@ -161,4 +161,5 @@ Branch: `feat/persona-and-marketplace-ui`. This checklist tracks implementation 
 The former draft PR #8 remains closed until the agreed release checks are complete.
 The internal v0.3.0 Word record remains local and excluded from Git. The two
 previously recorded PowerShell encoding findings in `setup/lib/pyexasol.ps1`
-and `tests/workflow-command-ps.ps1` remain outside this persona/marketplace scope.
+and `tests/workflow-command-ps.ps1` are fixed (3 Nov): `Out-String -Width 4096` and a Continue window;
+`tests/ps-encoding-guard.sh` passes 134/0.
