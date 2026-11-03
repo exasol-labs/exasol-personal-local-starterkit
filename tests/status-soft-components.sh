@@ -52,9 +52,12 @@ STUB="$WORK/exakit"
 # exakit resolves its library relative to its OWN directory, so the stub needs a
 # lib/ beside it or it dies before printing a single row.
 ln -s "$ROOT/setup/lib" "$WORK/lib"
+# The last line that sources a library from $_lib_dir: no one add-on's module, which come and go.
+LAST_LIB="$(grep -n '^\(\[ -f "\$_lib_dir/[^"]*" \] && \)\?\. "\$_lib_dir/' "$ROOT/setup/exakit" | tail -1 | cut -d: -f1)"
+[ -n "$LAST_LIB" ] || { printf 'FAIL could not find where setup/exakit sources its libraries\n'; exit 1; }
 {
     # Everything up to and including the last library source line...
-    sed -n '1,/^\[ -f "\$_lib_dir\/json-tables.sh" \]/p' "$ROOT/setup/exakit"
+    sed -n "1,${LAST_LIB}p" "$ROOT/setup/exakit"
     # ...then the override, so it wins over the real probe...
     cat <<'STUB_EOF'
 if [ -n "${EXAKIT_TEST_ABSENT:-}${EXAKIT_TEST_PRESENT:-}" ]; then
@@ -67,7 +70,7 @@ if [ -n "${EXAKIT_TEST_ABSENT:-}${EXAKIT_TEST_PRESENT:-}" ]; then
 fi
 STUB_EOF
     # ...then the rest of the script.
-    sed -n '/^\[ -f "\$_lib_dir\/json-tables.sh" \]/,$p' "$ROOT/setup/exakit" | tail -n +2
+    sed -n "$((LAST_LIB + 1)),\$p" "$ROOT/setup/exakit"
 } > "$STUB"
 chmod +x "$STUB"
 # The stub is worthless if the injection missed, and a silent miss would make

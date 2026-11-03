@@ -328,7 +328,8 @@ _out="$(_dl STUB_PENDING=1 EXAKIT_REUSE_DB=1)"
 case "$_out" in *"never started"*) check "EXAKIT_REUSE_DB=1 keeps the old ladder" ladder never ;; *) check "EXAKIT_REUSE_DB=1 keeps the old ladder" ladder ladder ;; esac
 
 echo "exakit status: a deployment the launcher records as failed says why, beside the unchanged word"
-_st_sh="$(sed -n '/^cmd_status()/,/^}/p' "$ROOT/setup/exakit")"
+# Up to the next function, not the first column-0 brace: the embedded Python closes a dict with one.
+_st_sh="$(awk '/^cmd_status\(\)/ {on=1; print; next} on && /^[A-Za-z_][A-Za-z0-9_]*\(\) *\{/ {exit} on' "$ROOT/setup/exakit")"
 contains "sh asks the launcher only for a stopped personal deployment" '[ "$_type" = "personal" ] && [ "$_cs_db" = "stopped" ]' "$_st_sh"
 contains "  ...names the container's error" 'personal_container_error' "$_st_sh"
 contains "  ...in the JSON hint, keeping exakit start as the remedy" "failed_detail + \" - exakit start retries the launcher's deploy\"" "$_st_sh"

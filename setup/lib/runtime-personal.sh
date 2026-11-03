@@ -703,7 +703,13 @@ personal_install_launcher() {
             return 1
         fi
         warn "The installed Exasol launcher ($_existing) does not support the 'local' preset (too old)."
-        info "Installing launcher v${EXAKIT_PERSONAL_VERSION} to $EXAKIT_PERSONAL_BIN — your existing launcher is left untouched"
+        # Say what happens to it (#41): the kit's own launcher at the same path is replaced; one anywhere else
+        # is only shadowed, never touched.
+        if [ "$_existing" = "$EXAKIT_PERSONAL_BIN" ]; then
+            info "Replacing the kit's launcher at $EXAKIT_PERSONAL_BIN with v${EXAKIT_PERSONAL_VERSION}"
+        else
+            info "Installing launcher v${EXAKIT_PERSONAL_VERSION} to $EXAKIT_PERSONAL_BIN — your launcher at $_existing is left untouched"
+        fi
     fi
 
     # Refuse before acting: from here on the advertised version WILL be written

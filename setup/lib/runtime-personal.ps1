@@ -539,7 +539,13 @@ function Install-PersonalLauncher {
                 Fail "The user-owned Exasol launcher is incompatible. Update it outside the kit; it was not replaced."
             }
             Warn2 "The installed Exasol launcher ($($existing.Source)) does not support the 'local' preset (too old)."
-            Info "Installing launcher v$(Get-PersonalTargetVersion) to $(Get-ExakitTilde $script:PersonalBinPath) - your existing launcher is left untouched"
+            # Say what happens to it (#41): the kit's own launcher at the same path is replaced; one anywhere
+            # else is only shadowed, never touched.
+            if ($existing.Source -eq $script:PersonalBinPath) {
+                Info "Replacing the kit's launcher at $(Get-ExakitTilde $script:PersonalBinPath) with v$(Get-PersonalTargetVersion)"
+            } else {
+                Info "Installing launcher v$(Get-PersonalTargetVersion) to $(Get-ExakitTilde $script:PersonalBinPath) - your launcher at $(Get-ExakitTilde $existing.Source) is left untouched"
+            }
         }
     }
 
