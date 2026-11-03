@@ -136,7 +136,12 @@ def literal(text: str) -> str:
 # --- (a) loaded, verified, counted ------------------------------------------------------------------------------------
 
 def _pump():
+    """The kit writes its profile to <kit home>/exapump/config.toml and exports EXAPUMP_CONFIG only inside exakit; a
+    maintainer's shell does not have it, so the kit's file is named here unless the environment names another."""
     from dataset_live import Pump
+    kit_config = home() / "exapump" / "config.toml"
+    if not os.environ.get("EXAPUMP_CONFIG") and kit_config.is_file():
+        os.environ["EXAPUMP_CONFIG"] = str(kit_config)
     return Pump(os.environ.get("EXAKIT_EXAPUMP_PROFILE") or "starter-kit")
 
 
