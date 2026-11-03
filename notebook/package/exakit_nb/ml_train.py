@@ -215,8 +215,8 @@ def prepare_training(conn, ds: Dataset, handoff: dict[str, Any], *, schema: str 
     The caller creates ``create_script`` then passes ``training_sql`` to exasol_mlflow.start_run().
     ``container`` is the alias of the Python container the UDF runs on (the notebook's CONTAINER); None resolves it
     with udf_container() - PYTHON3_ML before PYTHON3 from the kit's manifest, EXAKIT_UDF_CONTAINER first - and raises
-    with the fix when none is installed, before anything is written. ``model_dir`` is the UDF-visible /buckets
-    directory; small models are returned inline. ``class_weight`` is None or "balanced",
+    with the fix when none is installed, before anything is written. ``model_dir`` is accepted for the earlier
+    signature; the model comes back through the query, in parts of up to 1 MB when it is bigger - no bucket is written. ``class_weight`` is None or "balanced",
     passed to logistic regression and recorded in the plan; it never changes the holdout split.
     """
     if class_weight not in (None, "balanced"):

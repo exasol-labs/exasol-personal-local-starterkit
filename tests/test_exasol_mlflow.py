@@ -87,9 +87,26 @@ class FakeResult:
         return self.rows
 
 
+def parted(blob, *, key="run-1", statement="7", drop=None):
+    """The rows a training UDF emits for a model over 1 MB: one per part, the whole model's digest on each."""
+    base = dict(zip(COLUMNS, answer(blob, key=key, statement=statement)[0]))
+    chunks = [blob[at:at + contract.INLINE_LIMIT] for at in range(0, len(blob), contract.INLINE_LIMIT)]
+    rows = []
+    for number, chunk in enumerate(chunks, 1):
+        if number == drop:
+            continue
+        values = {**base, "MODEL_B64": base64.b64encode(chunk).decode(), "MODEL_PART": number, "MODEL_PARTS": len(chunks)}
+        rows.append(tuple(values[name] for name in PARTED_COLUMNS))
+    return rows
+
+
+PARTED_COLUMNS = [*COLUMNS, *contract.PART_COLUMNS]
+
+
 class FakeConn:
-    def __init__(self, rows=None, failure=None):
+    def __init__(self, rows=None, failure=None, columns=None):
         self.rows, self.failure, self.statements = rows if rows is not None else answer(), failure, []
+        self.columns = columns or COLUMNS
     def execute(self, sql):
         self.statements.append(sql)
         if "EXA_METADATA" in sql:
@@ -97,7 +114,7 @@ class FakeConn:
                                                                ("databaseProductVersion", "2026.2.0")])
         if self.failure:
             raise self.failure
-        return FakeResult(COLUMNS, self.rows)
+        return FakeResult(self.columns, self.rows)
     def session_id(self):
         return 4242
 
@@ -172,6 +189,44 @@ class RunTest(unittest.TestCase):
             model.write_bytes(b"changed")
             with self.assertRaisesRegex(contract.ContractError, "model_sha256"):
                 exasol_mlflow.log_training(FakeConn(row), "SELECT 1", experiment="exp", tracking_dir=tmp)
+
+    def test_a_large_model_comes_back_in_parts_and_is_logged_whole(self):
+        """No bucket: a model over 1 MB arrives in parts through the query, in any order, and is logged as one artefact
+        whose digest is the whole model's."""
+        log = []
+        blob = bytes(range(256)) * 10000                                   # 2.56 MB: three parts
+        rows = parted(blob)
+        self.assertEqual(len(rows), 3)
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(sys.modules, {"mlflow": fake_mlflow(log)}), \
+                mock.patch.dict(os.environ, {"EXAKIT_HOME": tmp}, clear=True):
+            run = exasol_mlflow.log_training(FakeConn(list(reversed(rows)), columns=PARTED_COLUMNS), "SELECT 1",
+                                             experiment="exp", tracking_dir=tmp)
+        self.assertEqual(run.metrics["roc_auc"], 0.8)
+        self.assertIn(("artifact", "model", blob), log)
+        refusals = {
+            "part 2 is missing": parted(blob, drop=2),
+            "appears twice": [*parted(blob), *parted(blob)[:1]],
+            "does not match the model its parts put together": [
+                tuple(v if c != "MODEL_SHA256" else "0" * 64 for c, v in zip(PARTED_COLUMNS, row)) for row in parted(blob)],
+            "differs from the first part": [rows[0], *[tuple(v if c != "METRICS" else '{"roc_auc": 0.1}'
+                                                             for c, v in zip(PARTED_COLUMNS, row)) for row in rows[1:]]],
+        }
+        for reason, bad in refusals.items():
+            with self.subTest(reason=reason), self.assertRaises(contract.ContractError) as caught:
+                contract.parse(PARTED_COLUMNS, bad)
+            self.assertIn(reason, str(caught.exception))
+
+    def test_the_training_udfs_emit_parts_and_write_no_bucket(self):
+        sys.path.insert(0, str(ROOT / "udf" / "templates"))
+        import render
+        from exasol_mlflow import udf
+        template = render.render_train(schema="S", name="T", features=["A"], label="L", positive="1")
+        text = udf.create_script("S")
+        for sql in (template, text):
+            body = sql.split(" AS", 1)[1]
+            self.assertIn("MODEL_PART DECIMAL(9,0), MODEL_PARTS DECIMAL(9,0)", sql)
+            self.assertNotIn("open(", body.replace("open(os.path.join(folder", ""), "nothing is written from the UDF")
+            self.assertNotIn("makedirs", body)
 
     def test_server_offline_stops_before_sql(self):
         conn = FakeConn()

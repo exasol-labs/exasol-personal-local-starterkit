@@ -48,7 +48,8 @@ HERE = Path(__file__).resolve().parent
 TEMPLATE = "score_model.sql"
 TRAIN_TEMPLATE = "train_model.sql"
 METHODS = ("predict", "predict_proba")
-MODEL_DIR = "/buckets/bfsdefault/default/models"            # where a model over 1 MB is written (see train_model.sql)
+MODEL_DIR = "/buckets/bfsdefault/default/models"            # accepted and checked for the earlier signature: a
+                                                            # model over 1 MB now comes back in parts (train_model.sql)
 SPLIT_COLUMN = "SPLIT_"                                     # the handoff training SQL's split column: 'train' | 'test'
 RUN_KEY_COLUMN = "RUN_KEY"
 _RUN_KEY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")

@@ -115,3 +115,5 @@ Expected: `Removed bucket-check.txt from the bucket directory and the kit's reco
 | Windows 11 (build ____), Launcher 2.3.0 | | | | | | |
 
 Decision after both rows are filled: writable on neither → §6 stays as written (>1 MB model = error row, model stays client-side); writable on Windows/Linux only → §6 gains a platform note and the template keeps `MODEL_DIR = /buckets/bfsdefault/default/models` (`packages/exasol-mlflow/exasol_mlflow/udf.py:17`) with the macOS error path; either platform not readable → AC-ML4.1 fails and ML-4 is dropped (requirements §2.2 step 10).
+
+Since then the >1 MB model does not depend on this answer: it comes back through the query in parts (packages/exasol-mlflow/exasol_mlflow/contract.py), so the UDF writes no bucket on any platform.

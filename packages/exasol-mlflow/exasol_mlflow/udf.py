@@ -4,8 +4,8 @@
 one instance and one model is trained (one run, not one per worker). It reads ``(label, category, doc_text, params)`` -
 ``params`` a JSON object, the same on every row, with an optional ``run_key`` - and needs only the Python and
 scikit-learn of the database's script language container: no network, no MLflow, no credentials. It emits exactly one
-contract row: the model inline (base64) when it is 1 MB or smaller, else written under /buckets when that is writable
-from the UDF, else no model and ``metrics.error`` saying so.
+contract row: the model base64 in MODEL_B64 - in parts of up to 1 MB, one row each, when it is bigger (contract.py),
+so nothing is written to a bucket that may not be writable from the UDF.
 """
 
 from __future__ import annotations
@@ -20,8 +20,7 @@ _SQL_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,127}$")
 _BODY = r'''
 import base64, hashlib, json, os, pickle, platform
 
-INLINE_LIMIT = 1048576                            # bytes: a pickle up to 1 MB travels base64 in MODEL_B64
-MODEL_DIR = "%(model_dir)s"
+INLINE_LIMIT = 1048576                            # bytes: a pickle travels base64 in MODEL_B64, in parts of up to 1 MB
 
 
 def _container():
@@ -95,45 +94,36 @@ def run(ctx):
         blob = pickle.dumps(model)
         metrics["model_bytes"] = float(len(blob))
     except Exception as err:
-        metrics["error"] = ("%%s: %%s" %% (type(err).__name__, err))[:2000]
-    model_b64 = model_path = sha = None
+        metrics["error"] = ("%s: %s" % (type(err).__name__, err))[:2000]
+    sha, parts = None, [None]
     if blob is not None:
         sha = hashlib.sha256(blob).hexdigest()
-        if len(blob) <= INLINE_LIMIT:
-            model_b64 = base64.b64encode(blob).decode("ascii")
-        else:
-            target = MODEL_DIR + "/" + run_key + ".pkl"
-            try:
-                os.makedirs(MODEL_DIR, exist_ok=True)
-                with open(target, "wb") as handle:
-                    handle.write(blob)
-                model_path = target
-            except OSError as err:
-                sha = None
-                metrics["error"] = ("the model is %%d bytes (over the 1 MB inline limit) and %%s is not writable from the UDF: %%s"
-                                    %% (len(blob), MODEL_DIR, err))
+        parts = [base64.b64encode(blob[at:at + INLINE_LIMIT]).decode("ascii")
+                 for at in range(0, len(blob), INLINE_LIMIT)] or [""]
     digest, info = _container()
     versions = _versions()
     versions.update(info)
-    ctx.emit(run_key, json.dumps({"model": "tfidf+LogisticRegression", **p}), json.dumps(metrics), model_b64, model_path, sha,
-             "python", digest, json.dumps(versions), json.dumps(extras))
+    for number, part in enumerate(parts, 1):
+        ctx.emit(run_key, json.dumps({"model": "tfidf+LogisticRegression", **p}), json.dumps(metrics), part, None, sha,
+                 "python", digest, json.dumps(versions), json.dumps(extras), number, len(parts))
 '''
 
 EMITS = ("EMITS (RUN_KEY VARCHAR(64), PARAMS VARCHAR(2000000), METRICS VARCHAR(2000000), MODEL_B64 VARCHAR(2000000), "
          "MODEL_PATH VARCHAR(2000), MODEL_SHA256 VARCHAR(64), LANGUAGE VARCHAR(16), CONTAINER_DIGEST VARCHAR(80), "
-         "VERSIONS VARCHAR(2000000), EXTRAS VARCHAR(2000000))")
+         "VERSIONS VARCHAR(2000000), EXTRAS VARCHAR(2000000), MODEL_PART DECIMAL(9,0), MODEL_PARTS DECIMAL(9,0))")
 
 
 def create_script(schema: str, model_dir: str = MODEL_DIR) -> str:
     """The CREATE OR REPLACE statement for the training UDF in ``schema`` (a plain SQL name), as a driver sends it
-    (a SQL client such as exapump also wants a line holding only ``/`` after it)."""
+    (a SQL client such as exapump also wants a line holding only ``/`` after it). ``model_dir`` is accepted for the
+    earlier signature and checked; nothing is written there any more - a big model comes back in parts."""
     if not _SQL_NAME.match(schema):
         raise ValueError(f"'{schema}' is not a plain SQL name")
     if not re.match(r"^/buckets/[A-Za-z0-9._-]+(/[A-Za-z0-9._-]+)+$", model_dir):
         raise ValueError(f"'{model_dir}' is not a /buckets folder")
     return (f"CREATE OR REPLACE PYTHON3 SET SCRIPT {schema.upper()}.{NAME}"
             "(label DECIMAL(1,0), category VARCHAR(2000), doc_text VARCHAR(2000000), params VARCHAR(2000))\n"
-            f"{EMITS} AS" + _BODY % {"model_dir": model_dir})
+            f"{EMITS} AS" + _BODY)
 
 
 def call(schema: str) -> str:

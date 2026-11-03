@@ -1,22 +1,27 @@
 -- train_model.sql - a training UDF that follows the exasol-mlflow run contract (packages/exasol-mlflow).
 --
 -- A SET script: every row of one group (one RUN_KEY) reaches one instance, which trains one scikit-learn
--- LogisticRegression on the rows whose split column says 'train', evaluates on 'test' and emits EXACTLY ONE row
--- per group - the 10-column contract exasol_mlflow.start_run() validates and logs:
+-- LogisticRegression on the rows whose split column says 'train', evaluates on 'test' and emits ONE row per group - one
+-- per part of the model when it is over 1 MB - in the contract exasol_mlflow.start_run() validates and logs:
 --
 --   RUN_KEY VARCHAR(64)             the group's key (what the caller put in the RUN_KEY column)
 --   PARAMS VARCHAR(2000000)         JSON: what was trained (model, solver, C, max_iter, seed, label, n_features)
 --   METRICS VARCHAR(2000000)        JSON: accuracy, macro_f1, baseline_macro_f1 (majority class of the train labels),
 --                                   beats_baseline (1/0), roc_auc (binary), rows_train, rows_test, ... - numbers; plus
 --                                   "error": "<text>" when the model could not be trained or stored
---   MODEL_B64 VARCHAR(2000000)      the pickled model, base64, when it is 1 MB or smaller; else NULL
---   MODEL_PATH VARCHAR(2000)        the /buckets path the model was written to when it is over 1 MB; else NULL
---   MODEL_SHA256 VARCHAR(64)        SHA-256 of the pickle (NULL when there is no model: see METRICS.error)
+--   MODEL_B64 VARCHAR(2000000)      the pickled model, base64 - one part of it, up to 1 MB, when it is bigger
+--   MODEL_PATH VARCHAR(2000)        NULL: nothing is written anywhere (the contract still reads it from older UDFs)
+--   MODEL_SHA256 VARCHAR(64)        SHA-256 of the WHOLE pickle (NULL when there is no model: see METRICS.error)
 --   LANGUAGE VARCHAR(16)            "python"
 --   CONTAINER_DIGEST VARCHAR(80)    the container's release hash from /build_info/image_info, else the alias
 --   VERSIONS VARCHAR(2000000)       JSON: python, scikit-learn, numpy, pandas (+ flavor, commit when known)
 --   EXTRAS VARCHAR(2000000)         JSON: coefficients {features, coef, intercept, classes} over the RAW feature
 --                                   values (the scaler is folded in: p = sigmoid(intercept + coef . x)), positive_class
+--   MODEL_PART DECIMAL(9,0)         which part of the model this row carries, from 1
+--   MODEL_PARTS DECIMAL(9,0)        how many parts there are (1 for a model of 1 MB or less)
+--
+-- A model over 1 MB comes back through the query in parts, not as a file: on a local deployment no bucket may be
+-- writable from a UDF, and the client puts the parts together and checks them against MODEL_SHA256.
 --
 -- Fill the placeholders with udf/templates/render.py (render_train() and train_sql()), which checks every value
 -- and refuses any left unfilled:
@@ -30,15 +35,13 @@
 -- LABEL          the label column's name (recorded, not read: the label arrives as the third parameter)
 -- POSITIVE       the positive class as text (roc_auc and positive_class refer to it), or None for the last class
 -- SEED, C, MAX_ITER  LogisticRegression(random_state=SEED, C=C, max_iter=MAX_ITER, solver="lbfgs")
--- MODEL_DIR      where a model over 1 MB is written (/buckets/<bucket>/models); when that is not writable from the
---                UDF the row carries no model and METRICS.error says so
 -- ALIAS          the container alias again, as text, for CONTAINER_DIGEST when /build_info is missing
 --
 -- The UDF needs no network, no MLflow and no credentials: the client logs the row.
 CREATE OR REPLACE {{LANGUAGE}} SET SCRIPT {{SCHEMA}}.{{SCRIPT_NAME}}({{INPUT_COLUMNS}})
 EMITS (RUN_KEY VARCHAR(64), PARAMS VARCHAR(2000000), METRICS VARCHAR(2000000), MODEL_B64 VARCHAR(2000000),
        MODEL_PATH VARCHAR(2000), MODEL_SHA256 VARCHAR(64), LANGUAGE VARCHAR(16), CONTAINER_DIGEST VARCHAR(80),
-       VERSIONS VARCHAR(2000000), EXTRAS VARCHAR(2000000)) AS
+       VERSIONS VARCHAR(2000000), EXTRAS VARCHAR(2000000), MODEL_PART DECIMAL(9,0), MODEL_PARTS DECIMAL(9,0)) AS
 import base64
 import hashlib
 import json
@@ -53,10 +56,9 @@ SEED = {{SEED}}
 C = {{C}}
 MAX_ITER = {{MAX_ITER}}
 CLASS_WEIGHT = {{CLASS_WEIGHT}}
-MODEL_DIR = {{MODEL_DIR}}
 ALIAS = {{ALIAS}}
 LANGUAGE = "python"
-INLINE_LIMIT = 1048576            # bytes: a pickle up to 1 MB travels base64 in MODEL_B64, a bigger one as a file
+INLINE_LIMIT = 1048576            # bytes: a pickle travels base64 in MODEL_B64, in parts of up to 1 MB
 
 
 def _container():
@@ -87,24 +89,12 @@ def _versions():
     return found
 
 
-def _store(run_key, blob, metrics):
-    """(model_b64, model_path, model_sha256) for the pickle: inline up to INLINE_LIMIT, else a file under MODEL_DIR;
-    when that cannot be written all three are None and METRICS.error says why."""
+def _parts(blob):
+    """(model_sha256, [base64 parts of up to INLINE_LIMIT bytes]) for the pickle; (None, [None]) without one."""
     if blob is None:
-        return None, None, None
-    sha = hashlib.sha256(blob).hexdigest()
-    if len(blob) <= INLINE_LIMIT:
-        return base64.b64encode(blob).decode("ascii"), None, sha
-    target = MODEL_DIR.rstrip("/") + "/" + run_key + ".pkl"
-    try:
-        os.makedirs(MODEL_DIR, exist_ok=True)
-        with open(target, "wb") as handle:
-            handle.write(blob)
-        return None, target, sha
-    except OSError as err:
-        metrics["error"] = ("the model is %d bytes (over the 1 MB inline limit) and %s is not writable from the UDF: %s"
-                            % (len(blob), MODEL_DIR, err))
-        return None, None, None
+        return None, [None]
+    chunks = [blob[at:at + INLINE_LIMIT] for at in range(0, len(blob), INLINE_LIMIT)] or [b""]
+    return hashlib.sha256(blob).hexdigest(), [base64.b64encode(chunk).decode("ascii") for chunk in chunks]
 
 
 def _train(x_train, y_train, x_test, y_test, metrics, extras):
@@ -181,9 +171,10 @@ def run(ctx):
             blob = None
     if blob is not None:
         metrics["model_bytes"] = float(len(blob))
-    model_b64, model_path, sha = _store(run_key, blob, metrics)
+    sha, parts = _parts(blob)
     digest, info = _container()
     versions = _versions()
     versions.update(info)
-    ctx.emit(run_key, json.dumps(params), json.dumps(metrics), model_b64, model_path, sha, LANGUAGE, digest,
-             json.dumps(versions), json.dumps(extras))
+    for number, part in enumerate(parts, 1):
+        ctx.emit(run_key, json.dumps(params), json.dumps(metrics), part, None, sha, LANGUAGE, digest,
+                 json.dumps(versions), json.dumps(extras), number, len(parts))
