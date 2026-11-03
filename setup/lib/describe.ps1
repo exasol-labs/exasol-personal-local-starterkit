@@ -50,7 +50,9 @@ function Invoke-DescribeService {
     $prevEap = $ErrorActionPreference
     try {
         $ErrorActionPreference = "Continue"
-        & $python $service @ServiceArgs
+        # A quoted identifier keeps its quotes on 5.1 too (see ConvertTo-ExakitNativeArgs).
+        $nativeArgs = ConvertTo-ExakitNativeArgs $ServiceArgs
+        & $python $service @nativeArgs
         if ($LASTEXITCODE -ne 0) { $script:PendingExitCode = $LASTEXITCODE }
     } finally {
         $ErrorActionPreference = $prevEap

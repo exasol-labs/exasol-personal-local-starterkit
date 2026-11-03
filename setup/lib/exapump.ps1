@@ -3043,11 +3043,12 @@ function Invoke-ExakitDatasetAssetService {
         $env:PYTHONIOENCODING = "utf-8"
         try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false) } catch { }
         $python = Get-ExakitDatasetPython
+        $nativeArgs = ConvertTo-ExakitNativeArgs $ServiceArgs
         if ($python) {
-            $raw = @(& $python $service @ServiceArgs 2>&1)
+            $raw = @(& $python $service @nativeArgs 2>&1)
         } else {
             $uv = Install-ExakitUv
-            $raw = @(& $uv run --python $script:ManagedPythonVersion --no-project python $service @ServiceArgs 2>&1)
+            $raw = @(& $uv run --python $script:ManagedPythonVersion --no-project python $service @nativeArgs 2>&1)
         }
         $result.Code = $LASTEXITCODE
         $result.Out = @($raw | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] } | ForEach-Object { "$_" })

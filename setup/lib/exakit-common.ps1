@@ -5341,6 +5341,8 @@ function Invoke-ExakitMarketplaceCli {
     $uv = if ($python) { '' } else { Get-ExakitUvBin }
     if (-not $uv -and -not $readOnly) { $uv = Install-ExakitUv }
     $previousVersionsDoc = $env:EXAKIT_MARKETPLACE_VERSIONS_DOC
+    # What the user typed after the add-on's name keeps its quotes on 5.1 (see ConvertTo-ExakitNativeArgs).
+    $nativeArgs = ConvertTo-ExakitNativeArgs $CmdArgs
     try {
         $env:EXAKIT_MARKETPLACE_VERSIONS_DOC = Get-ExakitMarketplaceVersionsDoc
         if ($uv) {
@@ -5350,7 +5352,7 @@ function Invoke-ExakitMarketplaceCli {
                 $uvArgs = @('run')
                 if ($readOnly) { $uvArgs += '--offline' }
                 $uvArgs += @('--python', $script:ManagedPythonVersion, '--no-project', 'python')
-                & $uv @uvArgs $target @CmdArgs
+                & $uv @uvArgs $target @nativeArgs
                 $code = $LASTEXITCODE
             } finally {
                 if ($null -eq $previousUvCache) { Remove-Item Env:UV_CACHE_DIR -ErrorAction SilentlyContinue }
@@ -5358,7 +5360,7 @@ function Invoke-ExakitMarketplaceCli {
             }
         } else {
             if (-not $python) { Fail "uv is missing. Repair with: exakit update" }
-            & $python $target @CmdArgs
+            & $python $target @nativeArgs
             $code = $LASTEXITCODE
         }
     } finally {

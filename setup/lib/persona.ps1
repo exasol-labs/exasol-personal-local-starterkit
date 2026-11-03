@@ -45,11 +45,12 @@ function Invoke-ExakitPersonaService {
         $ErrorActionPreference = "Continue"
         try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false) } catch { }
         $python = Get-ExakitPersonaPython
+        $nativeArgs = ConvertTo-ExakitNativeArgs $ServiceArgs
         if ($python) {
-            $raw = @(& $python $service $root @ServiceArgs 2>&1)
+            $raw = @(& $python $service $root @nativeArgs 2>&1)
         } else {
             $uv = Install-ExakitUv
-            $raw = @(& $uv run --python $script:ManagedPythonVersion --no-project python $service $root @ServiceArgs 2>&1)
+            $raw = @(& $uv run --python $script:ManagedPythonVersion --no-project python $service $root @nativeArgs 2>&1)
         }
         $code = $LASTEXITCODE
         $out = @($raw | Where-Object { $_ -isnot [System.Management.Automation.ErrorRecord] } | ForEach-Object { "$_" })
