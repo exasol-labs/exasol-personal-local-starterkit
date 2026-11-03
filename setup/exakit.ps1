@@ -2073,6 +2073,14 @@ function Invoke-CmdVersion {
     $versionTargets = Invoke-ExakitWithSpinner -Label "Working out which components to check" -Body {
         ,@(Get-ExakitVersionTableTargets)
     }
+    # Under the default policy "current" means current against the manifest, not upstream: a pin the manifest has
+    # fallen behind on read as current (#46). The row says which manifest; the latest policy keeps the plain word.
+    # Twin of exakit_print_version_table.
+    $checkedAgainst = ""
+    if ($script:VersionPolicy -ne "latest") {
+        $updatedOn = "" + (Get-ExakitVersionsValue -Path "updated")
+        if ($updatedOn.Length -ge 10) { $checkedAgainst = $updatedOn.Substring(0, 10) }
+    }
     foreach ($component in $versionTargets) {
         $actual = Get-ExakitActualTarget $component
         $installed = Invoke-ExakitWithSpinner -Label "Checking $actual" -Body {
@@ -2152,6 +2160,7 @@ function Invoke-CmdVersion {
             }
         }
 
+        if ($status -eq "current" -and $checkedAgainst) { $status = "current (manifest $checkedAgainst)" }
         if ($actual.Length -gt $compWidth) { $compWidth = $actual.Length }
         if ($installed.Length -gt $verWidth) { $verWidth = $installed.Length }
         $rows.Add(@{
@@ -2190,6 +2199,11 @@ function Invoke-CmdVersion {
             # Twin of the same mapping in exakit_print_version_table --json.
             $rowStatus = "$($r.R)"
             $rowRemedy = $null
+            $rowChecked = $null
+            if ($rowStatus.StartsWith("current (manifest ") -and $rowStatus.EndsWith(")")) {
+                $rowChecked = "manifest " + $rowStatus.Substring(18, $rowStatus.Length - 19)
+                $rowStatus = "current"
+            }
             if ($rowStatus -eq "current") { $rowStatus = "current" }
             elseif ($rowStatus -eq "none") { $rowStatus = "ahead" }
             elseif ($rowStatus -eq "-") { $rowStatus = "unsupported" }
@@ -2208,6 +2222,7 @@ function Invoke-CmdVersion {
                 installed_label = $r.V
                 advertised      = $(if ($r.A -in @("unknown", "")) { $null } else { $r.A })
                 status          = $rowStatus
+                checked_against = $rowChecked
                 remedy          = $rowRemedy
                 severity        = $r.Sev
                 note            = $(if ($r.M) { $r.M } else { $null })
@@ -2836,7 +2851,11 @@ function Write-ExakitUpdateJsonReport {
         $status = "failed"; $remedy = $(if ($failed[0].remedy) { $failed[0].remedy } else { "exakit update" })
     } elseif ($deferred.Count -gt 0) {
         $status = "deferred"; $remedy = $(if ($deferred[0].remedy) { $deferred[0].remedy } else { "exakit update --yes" })
-        $hint = "a database change needs the database stopped; --yes (or EXAKIT_CONFIRM_RUNTIME_UPDATE=1) applies it unattended"
+        if ("$remedy".EndsWith("--yes")) {
+            $hint = "a database change needs the database stopped; --yes (or EXAKIT_CONFIRM_RUNTIME_UPDATE=1) applies it unattended"
+        } else {
+            $hint = "the kit updated itself in this run; run the remedy so the new kit updates the rest"
+        }
     } elseif ($blocked.Count -gt 0) {
         $status = "blocked"; $remedy = "exakit update"
     } elseif ($updated.Count -gt 0) {
@@ -2942,7 +2961,12 @@ function Invoke-ExakitUpdateRun {
     $acted = 0
     $planned = $Components
     if ($null -eq $planned) { $planned = @(Get-ExakitUpdateTargets -Target $Target) }
+    # The kit itself moved earlier in this run (#45): this process still holds the old code and manifest, which
+    # built an add-on download URL the new release no longer has. What is left goes to the new kit instead.
+    $kitMoved = $false
+    $rest = New-Object System.Collections.ArrayList
     foreach ($component in $planned) {
+        if ($kitMoved) { [void]$rest.Add($component); continue }
         $actual = Get-ExakitActualTarget $component
         $current = Get-ExakitComponentCurrent $actual
         $available = Get-ExakitComponentAvailable $actual
@@ -3095,6 +3119,24 @@ function Invoke-ExakitUpdateRun {
             Add-ExakitUpdateNote -Component $actual -Outcome "updated" -From $current -To $available
         }
         $acted += 1
+        if ($component -eq "exakit" -and -not $componentFailed -and $available -and $current -ne $available -and
+                (Get-ExakitComponentCurrent "exakit") -eq $available) {
+            $kitMoved = $true
+        }
+    }
+    if ($rest.Count -gt 0) {
+        $restIds = @($rest) -join " "
+        if ($script:ExakitUpdateJson) {
+            # One object answers this run, so the rest is named rather than run.
+            foreach ($component in $rest) {
+                Add-ExakitUpdateNote -Component $component -Outcome "deferred" -From "" -To "" -Remedy "exakit update $restIds"
+            }
+        } else {
+            Info "The kit is now $(Get-ExakitComponentCurrent 'exakit'); it updates the rest itself: $restIds"
+            # The -Yes answer travels in EXAKIT_CONFIRM_RUNTIME_UPDATE, set above.
+            & (Join-Path $script:BinDir "exakit.cmd") update @($rest)
+            if ($LASTEXITCODE -ne 0) { Fail "The new kit could not finish the update; run: exakit update $restIds" }
+        }
     }
     if ($acted -eq 0 -and $deferred -eq 0) {
         Ok "Everything is already current."

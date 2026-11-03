@@ -1380,6 +1380,20 @@ drift_manifest 0.13.0 2.9.9
 agree_out="$(version_out)"
 lacks "and says nothing extra when they agree" "kit installed" "$agree_out"
 
+echo "current says which manifest it was checked against (#46):"
+# Under the default policy a row is current against the manifest, not upstream: a pin
+# the manifest had fallen behind on read as plain "current". The latest policy looks
+# upstream and keeps the plain word; the JSON keeps "current" and adds checked_against.
+_vm_exapump="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['components']['exapump']['version'])" "$REAL")"
+_vm_updated="$(python3 -c "import json,sys; print(str(json.load(open(sys.argv[1])).get('updated', ''))[:10])" "$REAL")"
+printf '#!/bin/sh\necho "exapump %s"\n' "$_vm_exapump" > "$DR/bin/exapump"
+drift_manifest "$_vm_exapump" 2.9.9
+current_out="$(EXAKIT_VERSION_POLICY=pinned version_out)"
+has "a current row names the manifest it was checked against" "current (manifest $_vm_updated)" "$(row "$current_out" exapump)"
+current_json="$(EXAKIT_VERSION_POLICY=pinned EXAKIT_HOME="$DR" bash "$ROOT/setup/exakit" version --json 2>/dev/null)"
+has "...and the JSON keeps status current" '"status": "current"' "$(printf '%s' "$current_json" | python3 -c "import json,sys; print(json.dumps([c for c in json.load(sys.stdin)['components'] if c['component']=='exapump'][0]))")"
+has "...with checked_against naming the manifest" "\"checked_against\": \"manifest $_vm_updated\"" "$(printf '%s' "$current_json" | python3 -c "import json,sys; print(json.dumps([c for c in json.load(sys.stdin)['components'] if c['component']=='exapump'][0]))")"
+
 echo "a component with no build for this machine is never offered:"
 # exapump publishes nothing for Windows on ARM, and nothing for a CPU outside
 # x86_64/arm64. Offering `exakit update exapump` there fails deep inside the installer,

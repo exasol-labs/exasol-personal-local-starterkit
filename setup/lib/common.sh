@@ -6321,6 +6321,13 @@ exakit_print_version_table() {
     # knows a runtime change needs the database stopped and asks at the moment it
     # matters; this screen only has to say that something is waiting.
     _pending=0
+    # Under the default policy "current" means current against the manifest, not upstream: a pin the manifest has
+    # fallen behind on read as current (#46). The row says which manifest; the latest policy looks upstream and
+    # keeps the plain word.
+    _uc_against=""
+    if [ "${EXAKIT_VERSION_POLICY:-manifest}" != "latest" ]; then
+        _uc_against="$(exakit_versions_value updated 2>/dev/null | cut -c1-10)"
+    fi
     for _component in $(exakit_version_table_targets); do
         _row_component="$(exakit_update_actual_target "$_component" 2>/dev/null || printf '%s\n' "$_component")"
         _row_installed="$(exakit_version_plain "$(exakit_version_installed_cell "$_row_component")")"
@@ -6395,6 +6402,9 @@ exakit_print_version_table() {
             fi
             _pending=$((_pending + 1))
         fi
+        if [ "$_status" = "current" ] && [ -n "$_uc_against" ]; then
+            _status="current (manifest $_uc_against)"
+        fi
         [ "${#_row_component}" -gt "$_uc_cw" ] && _uc_cw="${#_row_component}"
         [ "${#_row_installed}" -gt "$_uc_vw" ] && _uc_vw="${#_row_installed}"
         _uc_comp+=("$_row_component")
@@ -6438,6 +6448,11 @@ with open(sys.argv[1], encoding="utf-8") as handle:
         # "2.2.0 available (repair)" - which is a command or a sentence, not a
         # status. The JSON key gets a fixed vocabulary a parser can switch on,
         # and the action moves to a per-row remedy that is runnable as-is.
+        checked_against = None
+        if status.startswith("current (manifest ") and status.endswith(")"):
+            # Current against the manifest of that date, not looked up upstream (#46).
+            checked_against = "manifest " + status[len("current (manifest "):-1]
+            status = "current"
         if status == "current":
             row_status, remedy = "current", None
         elif status == "none":
@@ -6466,6 +6481,7 @@ with open(sys.argv[1], encoding="utf-8") as handle:
             "installed_label": ver,
             "advertised": None if avail in ("unknown", "") else avail,
             "status": row_status,
+            "checked_against": checked_against,
             "remedy": remedy,
             "severity": sev or "normal",
             "note": maint or None,
@@ -7368,7 +7384,10 @@ print(json.dumps({
     "ahead": ahead,
     "failed": failed,
     "remedy": remedy,
-    "remedy_hint": ("a database change needs the database stopped; --yes (or EXAKIT_CONFIRM_RUNTIME_UPDATE=1) applies it unattended" if status == "deferred" else None),
+    "remedy_hint": (None if status != "deferred" else
+                    "the kit updated itself in this run; run the remedy so the new kit updates the rest"
+                    if not str(remedy).endswith("--yes") else
+                    "a database change needs the database stopped; --yes (or EXAKIT_CONFIRM_RUNTIME_UPDATE=1) applies it unattended"),
 }, indent=2, ensure_ascii=False))
 sys.exit(0 if not failed else 1)
 EXAKIT_UPDATE_JSON_PY
@@ -7396,7 +7415,16 @@ _exakit_update_run() {
     exakit_print_versions_source_line
     _deferred=0
     _acted=0
+    _upd_kit_moved=0
+    _upd_rest=""
     for _component in $_targets; do
+        # The kit itself moved earlier in this run (#45): this shell still holds the old code and the old
+        # manifest, which built an add-on's download URL the new release no longer has (a 404 that a second
+        # run fixed). What is left goes to the new kit instead, below.
+        if [ "$_upd_kit_moved" = 1 ]; then
+            _upd_rest="${_upd_rest:+$_upd_rest }$_component"
+            continue
+        fi
         # _upd_ prefix: verify_sha256 (reached through the component updaters)
         # assigns _actual, and bash has no function-local variables here.
         _upd_actual="$(exakit_update_actual_target "$_component" 2>/dev/null || printf '%s\n' "$_component")"
@@ -7501,7 +7529,25 @@ _exakit_update_run() {
             exakit_update_component "$_component" "$@"
         fi
         _acted=$((_acted + 1))
+        if [ "$_upd_actual" = exakit ] && [ -n "$_avail" ] && [ "$_cur" != "$_avail" ] \
+                && [ "$(exakit_component_current exakit 2>/dev/null || true)" = "$_avail" ]; then
+            _upd_kit_moved=1
+        fi
     done
+    if [ -n "$_upd_rest" ]; then
+        if [ "${EXAKIT_UPDATE_JSON:-0}" = "1" ]; then
+            # One object answers this run, so the rest is named rather than run: the same command, run again,
+            # applies it with the new kit.
+            for _component in $_upd_rest; do
+                _exakit_update_note "$_component" deferred "" "" "exakit update $_upd_rest"
+            done
+        else
+            info "The kit is now $(exakit_component_current exakit 2>/dev/null || true); it updates the rest itself: $_upd_rest"
+            # The --yes answer travels in EXAKIT_CONFIRM_RUNTIME_UPDATE, which exakit_update exported.
+            # shellcheck disable=SC2086 # the ids are words, one each
+            "$EXAKIT_BIN_DIR/exakit" update $_upd_rest || _upd_failed=$((${_upd_failed:-0} + 1))
+        fi
+    fi
     if [ "$_acted" -eq 0 ] && [ "$_deferred" -eq 0 ]; then
         ok "Everything is already current."
     fi
