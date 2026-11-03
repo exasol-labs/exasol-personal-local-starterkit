@@ -1780,8 +1780,15 @@ cmd_data_load() {
     # on the command line it is THE answer: it replaces an EXAKIT_DATASETS and
     # an EXAKIT_DATA_FILE left in the environment, which would otherwise load
     # something else instead (the file won over the id without a word).
+    # The ids are read whole and then matched: a `| grep -q` here can lose its
+    # writer to SIGPIPE under `set -o pipefail` and miss an id that is there.
+    _dl_ids="$(exakit_bundled_datasets 2>/dev/null | cut -d'|' -f1)" || _dl_ids=""
     if [ -n "$_dl_path" ] && [ ! -e "$_dl_path" ] && \
-       exakit_bundled_datasets | cut -d'|' -f1 | grep -qx -- "$_dl_path"; then
+       case "
+$_dl_ids
+" in *"
+$_dl_path
+"*) true ;; *) false ;; esac; then
         EXAKIT_DATASETS="$_dl_path"
         export EXAKIT_DATASETS
         unset EXAKIT_DATA_FILE

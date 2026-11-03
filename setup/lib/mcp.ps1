@@ -542,7 +542,16 @@ function Invoke-ExapumpAdminSql {
         # cannot stall it.
         $out = ""
         $code = 1
+        $previousInputEncoding = $null
         try {
+            # Process writes the preamble of [Console]::InputEncoding to stdin the moment it opens it - on
+            # 5.1 that is the BOM, before a single statement byte. So the console's input encoding is UTF-8
+            # without one while exapump starts (best effort: it throws where there is no console), and is
+            # restored after. Invoke-ExapumpSqlFileCapture does the same.
+            try {
+                $previousInputEncoding = [Console]::InputEncoding
+                [Console]::InputEncoding = New-Object System.Text.UTF8Encoding $false
+            } catch { $previousInputEncoding = $null }
             $psi = New-Object System.Diagnostics.ProcessStartInfo
             $psi.FileName = $bin
             $psi.Arguments = "sql -p `"$Profile`""
@@ -563,6 +572,10 @@ function Invoke-ExapumpAdminSql {
             $code = $proc.ExitCode
         } catch {
             $out = "$_"
+        } finally {
+            if ($previousInputEncoding) {
+                try { [Console]::InputEncoding = $previousInputEncoding } catch { }
+            }
         }
         return @{ Output = $out; ExitCode = $code; Success = (Test-ExapumpSucceeded -ExitCode $code -Output $out) }
     } catch {

@@ -1214,7 +1214,10 @@ jobs:
           EXAKIT_PERSONA: data-scientist,ml-engineer
           EXAKIT_DATASETS: tpch,esophageal_posts,banking_complaints,bank_marketing,ade_corpus
           EXAKIT_MARKETPLACE_ADDONS: notebook,udf-devkit
-          EXAKIT_SKIP_MCP: "1"
+          # One named client so the install creates the read-only MCP user: the
+          # matrix below and the notebook runs read as it. EXAKIT_SKIP_MCP=1
+          # skipped that user too, and both steps failed with no credential.
+          EXAKIT_MCP_CLIENTS: claude
           EXAKIT_NOTEBOOK_FRONTENDS: none
           EXAKIT_INSTALL_PODMAN: "0"
           EXAKIT_PODMAN_SELFHEAL: "1"

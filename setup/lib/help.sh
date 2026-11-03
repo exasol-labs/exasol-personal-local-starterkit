@@ -52,7 +52,18 @@ exakit_help_is_id() {
     # option. Without them `exakit --help --json` reached here with the topic
     # "--help", grep read it as a flag, and the user got grep's own usage
     # block printed at them mid-help-screen.
-    exakit_help_ids 2>/dev/null | grep -qxF -- "$1"
+    #
+    # The list is read whole, then matched: piped into `grep -q`, grep left at the
+    # first match and, under exakit's `set -o pipefail`, the writer's SIGPIPE made
+    # the pipeline fail on a fast machine - `exakit help dash-server` then printed
+    # the dash-server COMMAND's entry instead of the add-on's page (Linux CI).
+    _hii_ids="$(exakit_help_ids 2>/dev/null)" || return 1
+    while IFS= read -r _hii_id; do
+        [ "$_hii_id" = "$1" ] && return 0
+    done <<EXAKIT_HELP_IDS
+$_hii_ids
+EXAKIT_HELP_IDS
+    return 1
 }
 
 # exakit_help_doc_local <id> - the document this kit shipped, or nothing.

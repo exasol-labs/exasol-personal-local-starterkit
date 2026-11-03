@@ -100,6 +100,10 @@ class ManagedProcess:
         if foreign:
             return f"stopped (port {port} is held by another process: pid {min(foreign)})"
         if port_open(port):
+            # No listener could be listed (lsof/ss missing or too slow) but the port answers: it is
+            # ours when the process this record started is still alive.
+            if self.recorded_pid() is not None:
+                return "running"
             return f"stopped (port {port} is busy; owner could not be verified)"
         return "stopped"
 
@@ -123,14 +127,18 @@ class ManagedProcess:
             raise AddonFailure("Could not record the service process start time")
         self.pidfile.write_text(json.dumps({"pid": process.pid, "created": created}) + "\n", encoding="utf-8")
         deadline = time.monotonic() + seconds
+        state = "starting"
         while time.monotonic() < deadline:
-            if self.status(port) == "running":
+            state = self.status(port)
+            if state == "running":
                 return
             if process.poll() is not None:
+                state = f"exited with code {process.returncode}"
                 break
             time.sleep(1)
         self.stop(port)
-        raise AddonFailure(f"Service did not start on port {port}; see {self.log}")
+        # The state, never a log line: a service log can hold an access token (Jupyter writes one).
+        raise AddonFailure(f"Service did not start on port {port} ({state}); see {self.log}")
 
     def stop(self, port: int) -> None:
         pids = self.owned_pids(port)
@@ -147,6 +155,8 @@ class ManagedProcess:
                 pass
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline and any(_command(pid) for pid in pids):
+            if self._process is not None:
+                self._process.poll()  # reap our own child, or ps keeps listing it until the deadline
             time.sleep(0.2)
         for pid in pids:
             if _command(pid) and str(self.marker) in _command(pid):

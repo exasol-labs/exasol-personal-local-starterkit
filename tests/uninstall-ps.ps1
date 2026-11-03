@@ -94,6 +94,10 @@ function Remove-ExakitBinariesDeferred { param([string[]]$Paths) foreach ($f in 
 # Autostart teardown: the real one writes to the user's login items, so it is
 # recorded rather than performed. Asserted below -- this is uninstall's promise
 # that it leaves nothing behind to start the database after it is gone.
+# Ownership (exakit-common.ps1): everything in this fixture was installed by the kit, so nothing is kept.
+function Get-ExakitPreservedComponentPaths { @() }
+function Test-ExakitComponentManaged { param([string]$Component) $true }
+function Write-ExakitPreservedComponent { param([string]$Component) }
 function Get-ExakitServiceIds { @("database") }
 function Test-ExakitAutostartRegistered { param([string]$Id) $true }
 function Unregister-ExakitAutostart { param([string]$Id) $script:markers.autostart = $Id }

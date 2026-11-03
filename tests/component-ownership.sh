@@ -89,11 +89,17 @@ pyexasol_installed_version(){ printf 2.3.1; }
 printf '#!/bin/sh\nprintf "2.3.1\\n"\n' > "$HOME/user-python"
 eval "$(declare -f run_logged | sed '1s/^run_logged/_ownership_run_logged/')"
 run_logged(){ printf '%s\n' "$*" >> "$HOME/pyexasol-installs"; }
-pyexasol_install >/dev/null 2>&1
+# A uv the kit vetted, as on a machine past the bootstrap: the CI runner has none on PATH, and finding one
+# would mean a download, which this fixture refuses.
+printf '#!/bin/sh\nexit 0\n' > "$HOME/vetted-uv"; chmod +x "$HOME/vetted-uv"
+eval "$(declare -f exakit_ensure_uv | sed '1s/^exakit_ensure_uv/_ownership_ensure_uv/')"
+exakit_ensure_uv(){ EXAKIT_UV_BIN="$HOME/vetted-uv"; return 0; }
+pyexasol_install >/dev/null 2>&1 || true
 check 'an older reused driver hands over to the kit' kit "$(exakit_component_ownership pyexasol)"
 check '...which installs into its own environment' yes "$(grep -q 'pyexasol-venv' "$HOME/pyexasol-installs" && echo yes)"
 check '...and never into the user'"'"'s Python' no "$(grep -q 'user-python' "$HOME/pyexasol-installs" && echo yes || echo no)"
 eval "$(declare -f _ownership_run_logged | sed '1s/^_ownership_run_logged/run_logged/')"
+eval "$(declare -f _ownership_ensure_uv | sed '1s/^_ownership_ensure_uv/exakit_ensure_uv/')"
 
 exakit_version_table_targets(){ printf 'exapump\n'; }
 exakit_component_available(){ printf 99.0.0; }

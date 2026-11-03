@@ -56,12 +56,19 @@ def _lock_file(handle) -> None:
     if sys.platform == "win32":
         import msvcrt
 
+        # Windows locks are mandatory: reading or writing a byte another handle holds fails with
+        # PermissionError, so byte 0 is locked without touching it (a lock may lie past the end of
+        # the file). LK_LOCK gives up after ten tries a second apart; a long install keeps waiting.
         handle.seek(0)
-        if not handle.read(1):
-            handle.write("0")
-            handle.flush()
-        handle.seek(0)
-        msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+        deadline = time.monotonic() + 300
+        while True:
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                return
+            except OSError:
+                if time.monotonic() > deadline:
+                    raise AddonFailure("The kit manifest is busy; retry this command")
+                time.sleep(0.025)
     else:
         import fcntl
 
@@ -234,6 +241,17 @@ class KitContext:
             raise AddonFailure(f"Cannot read the selected versions document: {path}") from error
         if not isinstance(document, dict) or not isinstance(document.get("components"), dict):
             raise AddonFailure(f"Invalid versions document: {path}")
+        # A published manifest can predate an add-on this kit ships (the notebook's frontend pins, the
+        # UDF containers). Those blocks come from the kit's own versions.json; an advertised block wins.
+        bundled_path = self.root / "versions.json"
+        if path != bundled_path:
+            try:
+                bundled = json.loads(bundled_path.read_text(encoding="utf-8")).get("components", {})
+            except (OSError, ValueError, AttributeError):
+                bundled = {}
+            if isinstance(bundled, dict):
+                for name, block in bundled.items():
+                    document["components"].setdefault(name, block)
         return document
 
     def versions_path(self) -> Path:

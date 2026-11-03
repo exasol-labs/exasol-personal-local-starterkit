@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "marketplace"))
-from runtime import AddonFailure, KitContext, Manifest, activity_sink, cmd_quote  # noqa: E402
+from runtime import AddonFailure, KitContext, Manifest, activity_sink, cmd_quote, venv_executable, venv_python  # noqa: E402
 from addons import dash_server, dbt_exasol, exasol_scheduler, exasol_vscode, json_tables  # noqa: E402
 from service import invoke  # noqa: E402
 
@@ -98,6 +98,25 @@ class ManifestTest(unittest.TestCase):
                 self.assertEqual("1.0.0", ctx.target_version("dbt-exasol", "1.0.0"))
             with patch.dict("os.environ", {"EXAKIT_DBT_EXASOL_VERSION": "9.0.0"}, clear=True):
                 self.assertEqual("9.0.0", ctx.target_version("dbt-exasol", "1.0.0"))
+
+    def test_a_published_manifest_without_a_kit_block_uses_the_kits_own(self) -> None:
+        # The default policy reads <repo>/main/versions.json, which can predate the notebook and UDF
+        # blocks this kit ships; without them both add-ons refused to install.
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "checkout"
+            root.mkdir()
+            (root / "versions.json").write_text(json.dumps({"components": {
+                "udf-devkit": {"containers": [{"language": "python", "packages": {"scikit-learn": "1.9.0"}}]},
+                "exasol-vscode": {"version": "1.0.0"}}}))
+            cache = Path(temp) / "published.json"
+            cache.write_text(json.dumps({"components": {"exasol-vscode": {"version": "2.0.0"}}}))
+            home = Path(temp) / "home"
+            home.mkdir()
+            ctx = KitContext(root, home, root / "bin", Manifest(home / "manifest.json"), Path("uv"))
+            with patch.dict(os.environ, {"EXAKIT_MARKETPLACE_VERSIONS_DOC": str(cache)}, clear=True):
+                components = ctx.versions_document()["components"]
+            self.assertEqual("1.9.0", components["udf-devkit"]["containers"][0]["packages"]["scikit-learn"])
+            self.assertEqual("2.0.0", components["exasol-vscode"]["version"], "an advertised block wins")
 
     def test_selected_manifest_pairs_version_with_asset_digest(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -219,8 +238,8 @@ class DbtLifecycleTest(unittest.TestCase):
 
     def test_install_writes_no_secret_and_reuses_existing_package(self) -> None:
         venv, profile_dir, launcher = dbt_exasol.paths(self.ctx)
-        python = venv / "bin/python"
-        dbt = venv / "bin/dbt"
+        python = venv_python(venv)
+        dbt = venv_executable(venv, "dbt")
         python.parent.mkdir(parents=True)
         python.write_text("fake")
         dbt.write_text("fake")
