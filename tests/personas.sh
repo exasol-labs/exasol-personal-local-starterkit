@@ -66,7 +66,7 @@ case ",$_offered," in *,data-scientist,*ml-engineer,*)
 esac
 check "no persona: the kit's own samples (default=yes)" "tpch,energy,weather" "$(_exakit_persona_service default-datasets)"
 check "data-scientist: Esophageal and both banking datasets" "esophageal_posts,banking_complaints,bank_marketing,ade_corpus,pubmed_abstracts,medication_sigs" "$(exakit_persona_value data-scientist datasets)"
-check "data-scientist: BRD notebook baseline" "notebook" "$(exakit_persona_value data-scientist addons)"
+check "data-scientist: Dash Server first, then the notebook" "dash-server,notebook" "$(exakit_persona_value data-scientist addons)"
 check "ml-engineer: Esophageal and both banking datasets" "esophageal_posts,banking_complaints,bank_marketing,ade_corpus,pubmed_abstracts,medication_sigs" "$(exakit_persona_value ml-engineer datasets)"
 check "ml-engineer: BRD notebook and UDF baseline" "notebook,udf-devkit" "$(exakit_persona_value ml-engineer addons)"
 
@@ -87,7 +87,7 @@ check "the title names each" "Data Scientist + ML Engineer" "$(_exakit_persona_s
 out="$( (unset EXAKIT_DATASETS EXAKIT_MCP_CLIENTS EXAKIT_MARKETPLACE_ADDONS EXAKIT_LOAD_SAMPLE
         export EXAKIT_PERSONA=data-scientist,ml-engineer; exakit_persona_apply_env >/dev/null 2>&1
         printf '%s|%s|%s' "$EXAKIT_DATASETS" "$EXAKIT_MCP_CLIENTS" "$EXAKIT_MARKETPLACE_ADDONS") )"
-check "their datasets and add-ons together, each once" "esophageal_posts,banking_complaints,bank_marketing,ade_corpus,pubmed_abstracts,medication_sigs|all|notebook,udf-devkit" "$out"
+check "their datasets and add-ons together, each once" "esophageal_posts,banking_complaints,bank_marketing,ade_corpus,pubmed_abstracts,medication_sigs|all|dash-server,notebook,udf-devkit" "$out"
 check "each dataset is named with the personas it is for" "esophageal_posts|both personas" \
     "$(exakit_persona_dataset_hints | grep '^esophageal_posts|')"
 

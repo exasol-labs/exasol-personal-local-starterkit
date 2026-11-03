@@ -8,5 +8,5 @@
   "order": 10,
   "datasets": ["esophageal_posts", "banking_complaints", "bank_marketing", "ade_corpus", "pubmed_abstracts", "medication_sigs"],
   "mcp_clients": "all",
-  "addons": ["notebook"]
+  "addons": ["dash-server", "notebook"]
 }

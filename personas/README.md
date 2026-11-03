@@ -16,19 +16,19 @@ and General, the kit's own samples:
 
 | Persona | Datasets | AI clients | Add-ons | First notebook |
 |---|---|---|---|---|
-| `data-scientist` (Data Scientist) | `esophageal_posts`, `banking_complaints`, `bank_marketing`, `ade_corpus`, `pubmed_abstracts`, `medication_sigs` | all detected | `notebook` | `data-scientist/00_quickstart.ipynb` |
+| `data-scientist` (Data Scientist) | `esophageal_posts`, `banking_complaints`, `bank_marketing`, `ade_corpus`, `pubmed_abstracts`, `medication_sigs` | all detected | `dash-server`, `notebook` | `data-scientist/00_quickstart.ipynb` |
 | `ml-engineer` (ML Engineer) | `esophageal_posts`, `banking_complaints`, `bank_marketing`, `ade_corpus`, `pubmed_abstracts`, `medication_sigs` | all detected | `notebook`, `udf-devkit` | `ml-engineer/00_quickstart.ipynb` |
 | `general` (General) | `tpch`, `energy`, `weather` | all detected | - | - |
 
 General is ticked to begin with and combines with the others like any persona:
 tick all three to load every dataset and get every persona's add-ons.
 
-The ML Engineer persona also starts local MLflow and installs the selected UDF runtime.
-JSON Tables and Dash Server stay available separately, without expanding the BRD baseline:
-`exakit marketplace json-tables` adds CLI JSON ingestion; `exakit marketplace dash-server`
-adds the Data Scientist's Share flow. The notebook own-file loader handles flat JSON
-without that CLI add-on. To select the extended bundle during install, set
-`EXAKIT_MARKETPLACE_ADDONS=notebook,json-tables,dash-server` for Data Scientist,
+The Data Scientist gets Dash Server first, then the notebook: the notebooks' Share step
+publishes a dashboard there, querying as the kit's read-only user. The ML Engineer persona
+also starts local MLflow and installs the selected UDF runtime. JSON Tables stays available
+separately: `exakit marketplace json-tables` adds CLI JSON ingestion (the notebook own-file
+loader handles flat JSON without it). To select the extended bundle during install, set
+`EXAKIT_MARKETPLACE_ADDONS=dash-server,notebook,json-tables` for Data Scientist,
 or `EXAKIT_MARKETPLACE_ADDONS=notebook,json-tables,udf-devkit` for ML Engineer.
 
 Pick one with `EXAKIT_PERSONA` on the install command:

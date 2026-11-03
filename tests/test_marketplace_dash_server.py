@@ -79,6 +79,42 @@ class DashServerTest(unittest.TestCase):
         self.assertEqual("private-test-password", env["EXA_PASSWORD"])
         self.assertNotIn("private-test-password", " ".join(args))
 
+    @unittest.skipIf(os.name == "nt", "Unix execve contract")
+    def test_dashboards_query_as_the_read_only_user_and_an_admin_profile_is_repaired(self) -> None:
+        credentials = self.home / "credentials"
+        credentials.mkdir(parents=True)
+        (credentials / "personal_sys_password").write_text("admin-secret\n", encoding="utf-8")
+        (credentials / "mcp_readonly_password").write_text("reader-secret\n", encoding="utf-8")
+        venv = self.home / "dash-server-venv"
+        instance = self.home / "dash-server" / "instance"
+        doc = {"components": {"dash_server": {"version": "0.1.1", "port": 5100, "venv": str(venv), "instance": str(instance)},
+                              "mcp_server": {"connection": {"user": "mcp_readonly", "validated": True,
+                                                            "password_file": str(credentials / "mcp_readonly_password")}}},
+               "runtime": {"dsn": "127.0.0.1:8563", "user": "sys", "password_file": str(credentials / "personal_sys_password")}}
+        self.manifest.path.write_text(json.dumps(doc), encoding="utf-8")
+
+        def launch_env() -> dict:
+            with patch.dict(os.environ, {"EXAKIT_HOME": str(self.home)}), patch.object(sys, "argv", ["dash-server"]), \
+                    patch.object(dash_launcher.os, "execve") as launch:
+                dash_launcher.main()
+            return launch.call_args.args[2]
+
+        env = launch_env()
+        self.assertEqual("mcp_readonly", env["DASH_SERVER_EXASOL_USER"])
+        self.assertEqual("reader-secret", env["EXA_PASSWORD"])
+        self.assertNotIn("DASH_SERVER_EXASOL_OVERWRITE", env)                  # no stored profile: a plain seed
+        stored = instance / "gitops-repo" / "profiles" / "exasol" / "starter-kit.json"
+        stored.parent.mkdir(parents=True)
+        stored.write_text(json.dumps({"name": "starter-kit", "user": "sys", "dsn": "127.0.0.1:8563"}), encoding="utf-8")
+        self.assertEqual("true", launch_env().get("DASH_SERVER_EXASOL_OVERWRITE"))   # the earlier kit's admin profile
+        stored.write_text(json.dumps({"name": "starter-kit", "user": "analyst", "dsn": "127.0.0.1:8563"}), encoding="utf-8")
+        self.assertNotIn("DASH_SERVER_EXASOL_OVERWRITE", launch_env())         # someone's own choice stays
+        doc["components"]["mcp_server"]["connection"]["validated"] = False
+        self.manifest.path.write_text(json.dumps(doc), encoding="utf-8")
+        env = launch_env()
+        self.assertEqual("sys", env["DASH_SERVER_EXASOL_USER"])                # no read-only user yet
+        self.assertNotIn("DASH_SERVER_EXASOL_OVERWRITE", env)
+
 
 if __name__ == "__main__":
     unittest.main()
