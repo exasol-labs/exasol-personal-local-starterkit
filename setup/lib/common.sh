@@ -4554,6 +4554,8 @@ _exakit_addon_table_cleanup() {
           "$EXAKIT_ADDON_TABLE_STATE.lines" "$EXAKIT_ADDON_TABLE_STATE.stop" \
           "$EXAKIT_ADDON_TABLE_STATE.activity" "$EXAKIT_ADDON_TABLE_STATE.activity.new"
     EXAKIT_ADDON_TABLE_STATE=""
+    UI_TABLE_COL2=""
+    UI_TABLE_COL3=""
     # The rows' ids and the child rows go with it: a later scripted run in the
     # same shell must not find this table's children and skip a question.
     EXAKIT_ADDON_TABLE_IDS=""
@@ -4942,7 +4944,9 @@ EXAKIT_MM_COVERED
     UI_TABLE_COL2="Version"
     UI_TABLE_COL3="Description"
     ui_table_menu "$EXAKIT_ADDON_TABLE_STATE"
-    UI_TABLE_COL2=""
+    # The Description helps the choice and goes once it is made: the install
+    # shows each add-on's Version and its Status. _exakit_addon_table_cleanup
+    # drops the Version heading with the table.
     UI_TABLE_COL3=""
     # Do not install preselected rows when the menu could not read Enter.
     if [ "${EXAKIT_TABLE_CONFIRMED:-0}" != 1 ]; then

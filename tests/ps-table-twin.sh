@@ -551,27 +551,36 @@ else
     printf 'SKIP the balance check needs python3\n'
 fi
 
-printf '\n== the selection\047s columns do not survive into the install ==\n'
+printf '\n== the install keeps Version and drops Description ==\n'
 # The add-on table the reader ticks IS the table the install then fills in, so
 # whatever headings the menu chose are still attached when the progress display
 # starts. On the shell they are module globals the caller switches off; in
 # PowerShell they are fields on the table OBJECT, which outlive the menu unless
-# cleared. Nothing forced the two to agree, and they did not: a Windows install
-# ran with Add-on, Version, Description AND Status while macOS showed Add-on and
-# Status. Asserted as text because there is no pwsh on the machine this kit is
-# developed on, and Windows is the only place that screen is drawn.
-if grep -A2 'ui_table_menu "$EXAKIT_ADDON_TABLE_STATE"' "$COMMON_SH" | grep -qF 'UI_TABLE_COL2=""'; then
-    pass "the shell drops Version once the add-on menu closes"
+# cleared. Nothing forced the two to agree, and once they did not: a Windows
+# install ran with every menu column while macOS showed two. The install shows
+# Add-on, Version and Status on both; the Description is the selection's alone.
+# Asserted as text: Windows is the only place the PowerShell screen is drawn.
+if grep -A4 'ui_table_menu "$EXAKIT_ADDON_TABLE_STATE"' "$COMMON_SH" | grep -qF 'UI_TABLE_COL2=""'; then
+    fail "the shell drops Version once the add-on menu closes"
 else
-    fail "the shell no longer drops Version after the add-on menu"
+    pass "the shell keeps Version through the install"
 fi
-if grep -A3 'ui_table_menu "$EXAKIT_ADDON_TABLE_STATE"' "$COMMON_SH" | grep -qF 'UI_TABLE_COL3=""'; then
-    pass "...and Description with it"
+if grep -A4 'ui_table_menu "$EXAKIT_ADDON_TABLE_STATE"' "$COMMON_SH" | grep -qF 'UI_TABLE_COL3=""'; then
+    pass "...and drops Description once the menu closes"
 else
     fail "the shell no longer drops Description after the add-on menu"
 fi
-has "the twin drops Version on the object"  '$script:ExakitAddonTable.Col2 = ""' "$COMMON_PS1"
-has "...and Description with it"            '$script:ExakitAddonTable.Col3 = ""' "$COMMON_PS1"
+if grep -A10 '^_exakit_addon_table_cleanup()' "$COMMON_SH" | grep -qF 'UI_TABLE_COL2=""'; then
+    pass "...and the Version heading goes with the table"
+else
+    fail "the Version heading outlives the add-on table"
+fi
+if grep -qF '$script:ExakitAddonTable.Col2 = ""' "$COMMON_PS1"; then
+    fail "the twin drops Version on the object"
+else
+    pass "the twin keeps Version on the object"
+fi
+has "...and drops Description"            '$script:ExakitAddonTable.Col3 = ""' "$COMMON_PS1"
 
 printf '\n== a row nobody can pick keeps its columns ==\n'
 # It used to merge into one sentence -- "json-tables · Installed (0.2)" -- which

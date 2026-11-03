@@ -5791,20 +5791,18 @@ function Show-ExakitMarketplaceMenu {
         Info "Pick add-ons without the menu: `$env:EXAKIT_MARKETPLACE_ADDONS = '<ids|all>'; exakit marketplace"
         return
     }
-    # Version and Description belong to the SELECTION, and are dropped the moment
-    # it is made: the install below reuses this very table as its progress
-    # display, and a heading left behind is how that screen ends up wearing the
-    # menu's columns. On the shell side these are module globals that the caller
-    # simply switches off; here they are fields ON THE OBJECT that outlive the
-    # menu unless cleared, which is why Windows showed four columns through the
-    # install where macOS showed two.
+    # The Description belongs to the SELECTION, and is dropped the moment it is
+    # made: the install below reuses this very table as its progress display,
+    # with each add-on's Version and its Status. On the shell side these are
+    # module globals that the caller switches off; here they are fields ON THE
+    # OBJECT that outlive the menu unless cleared, which is why Windows once
+    # showed the menu's columns through the install.
     #
     # Clearing them also hands the width back to Status: it is withheld only from
     # a table that has other columns to hold the box open, so with these gone it
     # takes its floor again -- which is what the progress bars need.
     #
     # Twin of the two UI_TABLE_COL2/COL3 resets in _exakit_marketplace_menu.
-    $script:ExakitAddonTable.Col2 = ""
     $script:ExakitAddonTable.Col3 = ""
     if ($selection -contains $rowSkip) {
         Reset-ExakitAddonTable

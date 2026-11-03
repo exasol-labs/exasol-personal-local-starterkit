@@ -79,13 +79,13 @@ def creep(floor: int, ceiling: int, seconds: int, elapsed: float) -> int:
 def widths(cols: int, name_w: int, col2_w: int, col3_w: int, stat_w: int) -> tuple[int, int, int]:
     """ui_table_widths: the Description grows into slack up to UI_TABLE_COL3_MAX, gives way first
     on a narrow terminal (down to 8, then the whole column), then the name, then the Status."""
-    total = 9 + name_w + 3 + 2 + col2_w + 2 + col3_w + (2 + stat_w if stat_w else 0)
+    total = 9 + name_w + 3 + 2 + col2_w + (2 + col3_w if col3_w else 0) + (2 + stat_w if stat_w else 0)
     over = total - cols
-    if over < 0:
+    if over < 0 and col3_w:
         grow = max(0, min(COL3_MAX - col3_w, -over))
         col3_w += grow
         over += grow
-    if over > 0:
+    if over > 0 and col3_w:
         if over >= col3_w + 2:
             over -= col3_w + 2
             col3_w = 0
@@ -342,7 +342,9 @@ class ChoiceApp(App[dict | None]):
         stat_w = 0
         if self.status:
             stat_w = max([STAT_MIN] + [len(s["final"]) + len(TICK) + 1 for s in self.status.values() if s.get("final")])
-        name_w, col3_w, stat_w = widths(width, name_w, col2_w, COL3_FIXED, stat_w)
+        # The Description helps the choice; once Enter starts the install the rows show
+        # their Version and Status only (_exakit_marketplace_menu drops UI_TABLE_COL3).
+        name_w, col3_w, stat_w = widths(width, name_w, col2_w, 0 if self.applying else COL3_FIXED, stat_w)
         sep = "  "
         inner = 5 + name_w + 1 + len(sep) + col2_w + (len(sep) + col3_w if col3_w else 0) + (len(sep) + stat_w if stat_w else 0)
         now = time.monotonic()
