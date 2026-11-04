@@ -185,5 +185,28 @@ class ModelProposalTest(unittest.TestCase):
         self.assertIn("Not approved yet", html)
         self.assertEqual(sql, proposal.sql, "the approved text is never reformatted")
 
+    def test_no_temperature_is_sent_unless_asked_for(self):
+        """What Ask actually sends (audit QAT-07): newer Claude models refuse temperature with HTTP 400, so none is
+        sent by default; EXAKIT_MODEL_TEMPERATURE=0 sends 0.0. The themes step sends the same."""
+        import os
+        reply = '{"sql":"SELECT 1 AS N", "assumptions":[], "doubts":[]}'
+        for value, expected in ((None, None), ("0", 0.0)):
+            client = mock.Mock()
+            client.chat.completions.create.return_value.choices = [types.SimpleNamespace(message=types.SimpleNamespace(content=reply))]
+            environ = {k: v for k, v in os.environ.items() if k != "EXAKIT_MODEL_TEMPERATURE"}
+            if value is not None:
+                environ["EXAKIT_MODEL_TEMPERATURE"] = value
+            with self.subTest(temperature=value), mock.patch.dict(os.environ, environ, clear=True), \
+                    mock.patch("exakit_nb.model_client", return_value=(client, "local")):
+                make_proposal(Descriptor(), "How many?")
+                sent = client.chat.completions.create.call_args.kwargs
+                self.assertEqual(expected, sent.get("temperature"))
+                self.assertEqual(value is not None, "temperature" in sent)
+                themes = importlib.import_module("exakit_nb.themes")
+                client.chat.completions.create.return_value.choices = [types.SimpleNamespace(
+                    message=types.SimpleNamespace(content='{"themes": []}'))]
+                themes._ask(client, "local", ["a text"], "themes where all", traced=False)
+                self.assertEqual(value is not None, "temperature" in client.chat.completions.create.call_args.kwargs)
+
 if __name__ == "__main__":
     unittest.main()

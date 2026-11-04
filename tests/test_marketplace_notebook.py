@@ -34,6 +34,53 @@ class NotebookPlanTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
+    def test_tool_outcomes_read_what_the_install_left(self) -> None:
+        """What each tool row says after an install (audit QAT-02): installed with its pin, yours, skipped by choice,
+        or not installed when it was picked and is missing."""
+        venv = notebook.paths(self.ctx)[0]
+
+        def outcomes(frontends: str, present: tuple[str, ...], external=None) -> list:
+            for name in ("jupyter-lab", "marimo"):
+                tool = notebook.venv_executable(venv, name)
+                if name in present:
+                    tool.parent.mkdir(parents=True, exist_ok=True)
+                    tool.write_text("", encoding="utf-8")
+                elif tool.exists():
+                    tool.unlink()
+            with patch.dict(os.environ, {"EXAKIT_NOTEBOOK_FRONTENDS": frontends}), \
+                 patch.object(notebook, "_external_jupyter", return_value=external), \
+                 patch.object(notebook, "_pin", side_effect=lambda ctx, tool: {"jupyterlab": "4.4.9", "marimo": "0.13.0"}[tool]):
+                return notebook.tool_outcomes(self.ctx)
+
+        self.assertEqual([("jupyterlab", "done", "installed 4.4.9"), ("marimo", "done", "installed 0.13.0")],
+                         outcomes("jupyterlab,marimo", ("jupyter-lab", "marimo")))
+        self.assertEqual([("jupyterlab", "done", "yours, kernel added"), ("marimo", "skipped", "skipped")],
+                         outcomes("jupyterlab", (), external=Path("/usr/local/bin/jupyter-lab")))
+        self.assertEqual(("marimo", "skipped", "not installed - see the log"), outcomes("jupyterlab,marimo", ("jupyter-lab",))[1])
+
+    def test_the_recorded_personas_reach_the_copy(self) -> None:
+        """The hand-off, not just the filter (audit QAT-05): with the kit set up as ML Engineer only, the real copy
+        helper places that persona's notebooks and no Data Scientist folder."""
+        import importlib.util
+
+        spec = importlib.util.spec_from_file_location("kit_notebooks_seam", ROOT / "notebook/kit/notebooks.py")
+        helper = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(helper)
+
+        def run_helper(ctx, script, *args, **kwargs):
+            self.assertEqual("notebooks.py", script)
+            out = StringIO()
+            with redirect_stdout(out):
+                helper.main(list(args))
+            return out.getvalue().strip()
+
+        self.store.set_many({"persona.id": "ml-engineer"})
+        with patch.object(notebook, "_run_helper", side_effect=run_helper):
+            notebook._copy(self.ctx, "jupyter")
+        placed = notebook.paths(self.ctx)[2] / "starter-kit-notebooks"
+        self.assertTrue((placed / "ml-engineer" / "00_quickstart.ipynb").is_file())
+        self.assertFalse((placed / "data-scientist").exists(), "only the recorded persona's notebooks")
+
     def test_not_offered_on_linux_arm_with_the_reason(self) -> None:
         """Its help says Linux on Arm is not offered; a persona that brings it skips it with this reason (LNX-07)."""
         cases = (("linux", "aarch64", False), ("linux", "arm64", False), ("linux", "x86_64", True),

@@ -54,6 +54,30 @@ class ApplyTest(unittest.TestCase):
                     market_apply.apply(ctx, "dash-server,notebook", lambda _: None)
             invoke.assert_not_called()
 
+    def test_each_tool_of_an_addon_streams_its_own_row(self) -> None:
+        """The producer of the notebook tool rows (audit QAT-02): after the add-on's own done, one record per tool
+        that settled, in the line format the shell and PowerShell tables read; a tool still running gets none."""
+        with tempfile.TemporaryDirectory() as temp:
+            ctx = self.context(Path(temp))
+
+            def invoke(_root, addon_id, operation, *, ctx):
+                if operation == "tool-outcomes":
+                    return 0, [("jupyterlab", "done", "installed 4.4.9"), ("marimo", "skipped", "skipped"),
+                               ("positron", "running", "never a row")]
+                return 0, "notebooks: exakit notebook" if operation == "summary" else None
+
+            out = io.StringIO()
+            with patch.object(market_apply, "invoke", side_effect=invoke), \
+                 patch.object(market_apply, "install_addon_skills", return_value=[]), \
+                 patch.object(market_apply, "register_autostart", return_value=False), \
+                 patch.object(market_apply.KitContext, "from_environment", return_value=ctx), \
+                 redirect_stdout(out):
+                self.assertEqual(0, market_apply.main(["notebook", "--stream"]))
+            lines = [line for line in out.getvalue().splitlines() if line.startswith("@@EXAKIT|notebook")]
+            done = next(i for i, line in enumerate(lines) if line.startswith("@@EXAKIT|notebook|done|"))
+            self.assertEqual(["@@EXAKIT|notebook:jupyterlab|done|installed 4.4.9|0",
+                              "@@EXAKIT|notebook:marimo|skipped|skipped|0"], lines[done + 1:])
+
     def test_failure_does_not_strand_the_next_addon(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             ctx = self.context(Path(temp))
