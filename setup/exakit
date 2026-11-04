@@ -1665,7 +1665,7 @@ cmd_uninstall() {
         exakit_uninstall_run 0
         printf '\n'
         ok "Uninstall complete — the Exasol Personal Local Starter Kit has been removed."
-        info "If a PATH entry for $EXAKIT_BIN_DIR remains in your shell profile (~/.zshrc, ~/.bashrc, ~/.profile), remove it manually if you no longer need it."
+        exakit_uninstall_leftovers
         exit 0
     fi
 

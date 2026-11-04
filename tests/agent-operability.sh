@@ -2679,6 +2679,17 @@ done
 has "...and says why the name matters" 'file name becomes the table name' \
     "$(cat "$ROOT/setup/exakit")"
 
+echo "a full uninstall names what it leaves for you to remove (audit DAY-09):"
+_ul_dir="$(mktemp -d)"; mkdir -p "$_ul_dir/bin" "$_ul_dir/python/cpython-3.12.9-macos-aarch64-none"
+printf '#!/bin/sh\n[ "$1 $2" = "python dir" ] && echo "%s/python"\n' "$_ul_dir" > "$_ul_dir/bin/uv"; chmod +x "$_ul_dir/bin/uv"
+_ul_out="$( (PATH="$_ul_dir/bin:$PATH"; EXAKIT_MANAGED_PYTHON_VERSION=3.12; exakit_uninstall_leftovers) 2>&1)"
+has "the PATH line" "PATH entry for" "$_ul_out"
+has "the Python uv downloaded, with the command that removes it" "uv python uninstall 3.12" "$_ul_out"
+rm -rf "$_ul_dir/python/cpython-3.12.9-macos-aarch64-none"
+lacks "...and nothing about it when there is none" "uv python uninstall" "$( (PATH="$_ul_dir/bin:$PATH"; exakit_uninstall_leftovers) 2>&1)"
+rm -rf "$_ul_dir"
+has "both full-uninstall endings say it" "2" "$(cat "$ROOT/setup/exakit" "$ROOT/setup/lib/common.sh" | grep -c '^[[:space:]]*exakit_uninstall_leftovers$')"
+
 echo "GITHUB_TOKEN never reaches a command line (audit SEC-05/06):"
 _tk_dir="$(mktemp -d)"; mkdir -p "$_tk_dir/bin" "$_tk_dir/home"
 cat > "$_tk_dir/bin/curl" <<'CURL'

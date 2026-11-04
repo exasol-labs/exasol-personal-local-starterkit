@@ -13458,12 +13458,28 @@ EXAKIT_UM_PANEL_EOF
                 ok "Done. The kit is gone."
             fi
             info "Install it again any time: $(exakit_install_command)"
+            exakit_uninstall_leftovers
             ;;
         *)
             ok "Done. See where you stand with: exakit info"
             ;;
     esac
     return 0
+}
+
+# exakit_uninstall_leftovers — after a full uninstall, what is still on the
+# machine because it is not the kit's alone to remove: a PATH line in the shell
+# profile, and the Python uv downloaded for the kit's environments, which lives
+# in uv's own shared folder (another project of yours may use it). Said with
+# the command that removes each, never removed here (audit DAY-09).
+exakit_uninstall_leftovers() {
+    info "If a PATH entry for $EXAKIT_BIN_DIR remains in your shell profile (~/.zshrc, ~/.bashrc, ~/.profile), remove it manually if you no longer need it."
+    command -v uv >/dev/null 2>&1 || return 0
+    _ul_dir="$(uv python dir 2>/dev/null || true)"
+    [ -n "$_ul_dir" ] && [ -d "$_ul_dir" ] || return 0
+    _ul_py="$(ls -d "$_ul_dir"/cpython-"$EXAKIT_MANAGED_PYTHON_VERSION".* 2>/dev/null | head -1)"
+    [ -n "$_ul_py" ] || return 0
+    info "uv keeps the Python $EXAKIT_MANAGED_PYTHON_VERSION it downloaded for the kit in $_ul_dir. If nothing else of yours uses it: uv python uninstall $EXAKIT_MANAGED_PYTHON_VERSION"
 }
 
 exakit_uninstall_run() {

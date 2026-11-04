@@ -1838,6 +1838,7 @@ function Invoke-CmdUninstall {
         Invoke-ExakitUninstallRun
         Write-Host ""
         Ok "Uninstall complete - the Exasol Personal Local Starter Kit has been removed."
+        Write-ExakitUninstallLeftovers
         return
     }
 
@@ -2026,7 +2027,7 @@ function Invoke-ExakitUninstallComponent {
         }
         "everything" {
             Invoke-ExakitUninstallRun
-            Info "If a PATH entry for $script:BinDir remains in your profile, remove it manually if you no longer need it."
+            Write-ExakitUninstallLeftovers
         }
         default {
             # A marketplace add-on: its module owns the removal.
@@ -2407,6 +2408,22 @@ function Write-ExakitVersionNote {
 # as an alias. A wrong or missing persona is bad input: exit 2 and nothing
 # recorded (Deny-ExakitInput), one object on stdout under --json. Twin of
 # cmd_persona.
+# Write-ExakitUninstallLeftovers - after a full uninstall, what is still on the machine because it is not the kit's
+# alone to remove: a PATH entry, and the Python uv downloaded for the kit's environments, in uv's shared folder
+# (another project may use it). Said with the command that removes each, never removed (audit DAY-09). Twin of
+# exakit_uninstall_leftovers.
+function Write-ExakitUninstallLeftovers {
+    Info "If a PATH entry for $script:BinDir remains in your profile, remove it manually if you no longer need it."
+    $uv = Get-Command uv -ErrorAction SilentlyContinue
+    if (-not $uv) { return }
+    $dir = ""
+    try { $dir = ("" + (& $uv.Source python dir 2>$null)).Trim() } catch { $dir = "" }
+    if (-not $dir -or -not (Test-Path -LiteralPath $dir)) { return }
+    $version = $script:ManagedPythonVersion
+    if (-not @(Get-ChildItem -LiteralPath $dir -Directory -Filter "cpython-$version.*" -ErrorAction SilentlyContinue).Count) { return }
+    Info "uv keeps the Python $version it downloaded for the kit in $dir. If nothing else of yours uses it: uv python uninstall $version"
+}
+
 function Invoke-CmdPersona {
     param([string[]]$CmdArgs = @())
     $verb = if ($CmdArgs.Count) { $CmdArgs[0] } else { "list" }
