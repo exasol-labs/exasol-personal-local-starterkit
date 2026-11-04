@@ -53,6 +53,24 @@ class BundleTest(unittest.TestCase):
             bundle.copy("jupyter", ROOT, Path(tmp), {"general"})
             self.assertTrue((base / "data-scientist").is_dir() and (base / "ml-engineer").is_dir())
 
+    def test_an_older_kits_readme_is_replaced_and_kept_beside(self):
+        """A README an older kit wrote (no marker; it names useful-notebooks/ and Positron) is replaced, the old one
+        kept as README.old.md; one of the user's own is left alone (audit DAY-02)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / bundle.catalog(ROOT)["folders"]["jupyter"]
+            base.mkdir(parents=True)
+            (base / "README.md").write_text("# The starter kit's notebooks\n\nexakit notebook positron; useful-notebooks/\n")
+            bundle.copy("jupyter", ROOT, Path(tmp), {"data-scientist"})
+            self.assertTrue((base / "README.md").read_text().startswith("# Your notebooks"))
+            self.assertIn("positron", (base / "README.old.md").read_text())
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / bundle.catalog(ROOT)["folders"]["jupyter"]
+            base.mkdir(parents=True)
+            (base / "README.md").write_text("# My own notes\n")
+            bundle.copy("jupyter", ROOT, Path(tmp), {"data-scientist"})
+            self.assertEqual("# My own notes\n", (base / "README.md").read_text())
+            self.assertFalse((base / "README.old.md").exists())
+
     def test_removing_a_persona_does_not_bring_the_other_ones(self):
         """Data Scientist removed, General left (audit DAY-04): the next copy adds no ML Engineer notebooks, and the
         README still names the data-scientist folder that is on disk."""

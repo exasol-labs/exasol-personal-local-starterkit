@@ -33,6 +33,7 @@ import sys
 from pathlib import Path
 
 STATE = ".kit-copied"                      # one "persona/file<TAB>cells digest" per line: what the kit copied here
+OLD_README_HEADING = "# The starter kit's notebooks"   # what kits before the marker wrote, once
 README_STATE = ".kit-readme"               # the sha256 of the README the kit last wrote: rewritten only while unchanged
 INTERPRETER = "python.defaultInterpreterPath"
 INCLUDE = "python.interpreters.include"
@@ -223,6 +224,15 @@ def write_readme(kit: Path, doc: dict, folder: Path, personas: set[str] | None =
     if not folder.is_dir():
         return
     marker = folder / README_STATE
+    if not marker.exists() and readme.is_file() and not readme.is_symlink():
+        # An older kit wrote it once, with no marker, under this heading; it still names useful-notebooks/ and
+        # Positron. It is kept beside as README.old.md and the current one is written (audit DAY-02).
+        try:
+            first = readme.read_text(encoding="utf-8").splitlines()[:1]
+        except (OSError, UnicodeDecodeError):
+            first = []
+        if first == [OLD_README_HEADING] and not (folder / "README.old.md").exists():
+            readme.rename(folder / "README.old.md")
     if readme.exists() or readme.is_symlink():
         try:
             ours = marker.read_text(encoding="utf-8").strip()
