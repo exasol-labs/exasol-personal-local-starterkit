@@ -21,6 +21,16 @@ def _(mo):
     Review a proposed query, approve it, then run it read-only. Set `WORKFLOW_ID` to continue the quickstart's log.
 
     Optional: `DRAFT_WITH_MODEL = True` lets your model draft the SQL from the approved column map: every column with its role, evidence and note (same `EXAKIT_MODEL_ID` settings as Explore; no rows are sent). Setup: the README in the notebooks folder.
+
+    **JupyterLab already running?** It only reads these settings when it starts: an `export` in another terminal, or a kernel restart, does not reach it (and `exakit.env` refuses keys on purpose). In a terminal, save your notebooks, then:
+
+    ```bash
+    read -rsp "API key: " EXAKIT_PROVIDER_API_KEY; echo
+    export EXAKIT_MODEL_ID=claude-opus-5-5 EXAKIT_PROVIDER_BASE_URL=https://api.anthropic.com/v1/ EXAKIT_PROVIDER_API_KEY
+    exakit notebook stop && exakit notebook
+    ```
+
+    The Langfuse keys go the same way (`read -rsp` for the two keys, `LANGFUSE_BASE_URL` in the `export`). They last until that JupyterLab stops.
     """)
     return
 

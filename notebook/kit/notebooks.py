@@ -211,6 +211,8 @@ def readme_text(kit: Path, doc: dict, personas: set[str] | None = None, fresh: b
               "  `EXAKIT_PROVIDER_API_KEY` before `exakit notebook` (Claude: `https://api.anthropic.com/v1/`;",
               "  Ollama: its `/v1/` address, no key).",
               "- Langfuse traces: set `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL` the same way.",
+              "- JupyterLab reads these only when it starts. Already running? Set them in a terminal, then run",
+              "  `exakit notebook stop && exakit notebook` there (a kernel restart is not enough).",
               "- Marimo: `exakit notebook marimo`.",
               "- These files are yours: one you edit is kept as it is, one you have not edited takes the kit's",
               "  newer version on update, and one you delete is not copied back."]
