@@ -83,6 +83,10 @@
     "CATALOG_NAME": "{database}",
     "SCHEMA_NAME": "{schema}"
   },
+  "tips": [
+    "Names arrive in upper case (CUSTOMER, C_NAME): no quotes needed.",
+    "NUMBER(38,0), Snowflake's default for integer columns, is wider than Exasol's DECIMAL(36) and reads as the text 'Number precision not supported'. To read such a column, give the reader a view at the source that casts it to NUMBER(36,0)."
+  ],
   "notes": [
     "JDBC_QUERY_RESULT_FORMAT=JSON is mandatory with driver 4.x.",
     "Authenticates with a programmatic access token as the password; TLS with certificate, host name and revocation checks is always on.",

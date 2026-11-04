@@ -92,6 +92,11 @@
     "CATALOG_NAME": "{database}",
     "SCHEMA_NAME": "{schema}"
   },
+  "tips": [
+    "Names arrive in upper case (FILM, TITLE): query them without quotes.",
+    "NUMERIC columns arrive as VARCHAR, so cast them to compute: CAST(RENTAL_RATE AS DECIMAL(10,2)).",
+    "A column of a domain type (pagila's FILM.RELEASE_YEAR) or an extension type such as vector cannot be read, and BYTEA reads as the text 'bytea NOT SUPPORTED': leave such columns out of the SELECT list."
+  ],
   "notes": [
     "The adapter JAR already contains pgJDBC 42.7.14; the driver pin is the same version so the two copies never disagree.",
     "verify checks the server certificate AND its host name against the JVM's public CAs. A server with a private CA (AWS RDS, Azure, a company CA) is verified against it with --set ca=<PEM file or bundle>: the one certificate that signs the server travels in the URL (SingleCertValidatingFactory), because the loader's Java sandbox denies file reads. require only encrypts."

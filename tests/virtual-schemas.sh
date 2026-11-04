@@ -328,6 +328,20 @@ db '{"java": false}'
 run_secret "$SECRET" connect oracle --name erp --set host=ora.example.com --set service=ORCL --set schema=APP --set user=reader --secret-stdin
 check "no Java in the database: exit 21, for the shell to offer the install" "21" "$RC"
 
+printf '\n== the first query and the tips ==\n'
+db '{"sources": {"my.example.com": {"tables": ["orders", "actor"]}}}'
+run_secret "$SECRET" connect mysql --name shop --set host=my.example.com --set database=shop --set user=reader --secret-stdin
+check "a MySQL source: exit 0" "0" "$RC"
+has "...the first query names a real table, quoted as MySQL spells it" '"example": "SELECT * FROM VS_SHOP.\"actor\" LIMIT 10"' "$OUT"
+has "...with the connector's tips, the schema filled in" "quote them, e.g. SELECT \\\"first_name\\\" FROM VS_SHOP.\\\"actor\\\"" "$OUT"
+run show shop
+has "source show carries the tips too" "YEAR columns arrive as DATE" "$OUT"
+run remove shop
+db '{"sources": {"pg.example.com": {"tables": ["ORDERS", "LINES"]}}}'
+run_secret "$SECRET" connect postgresql --name up $PG_SET --secret-stdin
+has "an upper-case table is named without quotes" '"example": "SELECT * FROM VS_UP.LINES LIMIT 10"' "$OUT"
+run remove up
+
 printf '\n== an interrupted connect is recovered, not mistaken for a stranger ==\n'
 # The state an attempt killed right after CREATE CONNECTION leaves behind: its
 # journal (naming what it made) and the connection in the database.

@@ -136,6 +136,23 @@ def tls_remedy(message, connector, clock=None):
     return None
 
 
+def tips(connector, name, schema):
+    """What a reader needs to query this kind of source: how its names arrive
+    and which types change on the way (connector.json "tips", each measured
+    on a live source)."""
+    return [t.replace("<schema>", schema).replace("<name>", name) for t in connector.get("tips", [])]
+
+
+def example_query(schema, tables):
+    """A first query on a real table, its name quoted when Exasol would
+    otherwise upper-case it: SELECT * FROM VS_X."actor" LIMIT 10."""
+    if not tables:
+        return "SELECT * FROM %s.<table> LIMIT 10" % schema
+    table = sorted(tables)[0]
+    shown = table if re.match(r"^[A-Z][A-Z0-9_]*$", table) else sql.ident(table)
+    return "SELECT * FROM %s.%s LIMIT 10" % (schema, shown)
+
+
 class Failure(Exception):
     def __init__(self, message, code, kind="error"):
         super().__init__(message)
@@ -876,7 +893,8 @@ class Engine(object):
                                                          "evidence": ("metadata and %s" % how) if read else "metadata",
                                                          "empty_tables": empty}})
             self.store.clear_journal(name)
-        return {"name": name, "connector": connector_id, "objects": names, "tables": len(tables), "status": "ready"}
+        return {"name": name, "connector": connector_id, "objects": names, "tables": len(tables), "status": "ready",
+                "example": example_query(names["schema"], tables), "tips": tips(connector, name, names["schema"])}
 
     def recover_interrupted(self, name, names):
         """Undo what an interrupted first connect recorded in its journal."""
@@ -1193,10 +1211,14 @@ class Engine(object):
     def show(self, name):
         config = self.store.config(name)
         status = self.store.status(name)
+        try:
+            connector = self.defs.connector(config["connector"])
+        except (OSError, ValueError):
+            connector = {}
         return {"name": name, "connector": config["connector"], "inputs": config["inputs"],
                 "objects": config["objects"], "status": status.get("status", "unknown"),
                 "pins": status.get("pins"), "tables": status.get("tables"), "last_check": status.get("last_check"),
-                "journal": self.store.journal(name)}
+                "journal": self.store.journal(name), "tips": tips(connector, name, config["objects"]["schema"])}
 
     def issues(self, status_filter=None):
         rows = []

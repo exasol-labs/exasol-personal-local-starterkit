@@ -66,6 +66,11 @@
     "COLLECTION": "{collection}"
   },
   "error_hint": "MongoDB's adapter reports a wrong password, an address the server does not accept (Atlas: this computer's public IP must be in the project's IP access list) and an unreachable server all as 'error while reading collection metadata', and a database the account may not read as a collection that 'does not exist' - check the user and password, the access list and the database's role",
+  "tips": [
+    "The collection is the upper-case root table (MOVIES); its fields and the child tables keep MongoDB's spelling, so quote them: \"MOVIES_writers_arr\".\"_value\".",
+    "A child table joins its root on \"_parent\" = root.\"_id\"; mongo_id is the document's ObjectId.",
+    "Columns come from a sample of the documents: after the collection's shape changes, run exakit source refresh <name>."
+  ],
   "notes": [
     "One virtual schema per collection: its root table, plus a child table for each nested object and array (measured on sample_mflix.movies: 12 tables). The schema is inferred from a bounded sample.",
     "The URI carries no credentials: the user and password go into the CONNECTION, where the database keeps them hidden; a URI with user:password@ is refused. Atlas mongodb+srv:// addresses resolve from inside the database (measured).",

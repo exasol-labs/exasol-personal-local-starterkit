@@ -91,6 +91,10 @@
     "CATALOG_NAME": "{database}",
     "SCHEMA_NAME": "{schema}"
   },
+  "tips": [
+    "Names keep SQL Server's spelling, spaces included: quote them, e.g. SELECT \"OrderID\" FROM <schema>.\"Orders\".",
+    "datetime arrives as TIMESTAMP(3), bit as BOOLEAN, money as DECIMAL(19,4)."
+  ],
   "notes": [
     "SQL Server login only; Windows authentication and Entra ID are not part of this connector.",
     "Exasol tested the jre8 build of mssql-jdbc 13.4.0; it runs on the Java 17 container.",

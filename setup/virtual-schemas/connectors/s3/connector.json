@@ -53,6 +53,10 @@
   "vs_properties": {
     "MAPPING": "{mapping_path}"
   },
+  "tips": [
+    "Tables and columns are named by the mapping file: a change to the mapping needs a new connect (exakit source remove <name>, then connect again).",
+    "A CSV mapping without fields has its columns inferred, and a date then arrives as VARCHAR(2000000): name the fields and their types in the mapping to get typed columns."
+  ],
   "notes": [
     "The credential is an access key: the secret key alone on standard input (with --set access_key_id=...), or a JSON file through --password-file - what `aws iam create-access-key` prints, or `aws sts` temporary credentials with their session token. The kit never reads ~/.aws.",
     "The account needs s3:ListBucket on the mapped prefixes and s3:GetObject on the objects (plus kms:Decrypt for a KMS-encrypted bucket). Measured: a prefix outside the policy fails as AccessDenied naming the action.",

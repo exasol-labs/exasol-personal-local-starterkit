@@ -89,6 +89,10 @@
   "vs_properties": {
     "SCHEMA_NAME": "{schema}"
   },
+  "tips": [
+    "Names arrive as Oracle stores them, normally upper case (EMPLOYEES): no quotes needed.",
+    "Oracle DATE carries a time of day, so it arrives as TIMESTAMP(0)."
+  ],
   "notes": [
     "The Java-only (thin) driver: no Oracle Client install. IMPORT FROM ORA stays off.",
     "verify uses TCPS and checks the server certificate's name; the listener's TCPS port is often 2484, so set the port to match.",

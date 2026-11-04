@@ -82,6 +82,10 @@
     "match": "for iterator' \\(table expected, got nil\\)",
     "text": "Unity Catalog returned tables without their columns, which Databricks adapter 1.0.2 cannot read - the built-in samples catalog does this (measured); choose a catalog and schema your workspace owns"
   },
+  "tips": [
+    "Names arrive in upper case (CUSTOMER, C_NAME): no quotes needed.",
+    "STRING arrives as VARCHAR(2000000), BIGINT as DECIMAL(19,0)."
+  ],
   "notes": [
     "A personal access token only: it lives in the CONNECTION's password (USER 'token'). OAuth M2M is not offered - the adapter needs its client secret inside the JDBC URL (upstream issue 43).",
     "Metadata comes from the Unity Catalog REST API through the Lua adapter, rows through IMPORT FROM JDBC. Upstream 1.0.2 turns certificate verification off for the REST calls (issue 4) because the database's LuaSec loads no CA file; the kit's suffix verifies the chain against the pinned Mozilla CA bundle and the host name against the certificate, in memory, before any request or token is sent - measured: Databricks verifies; an expired, self-signed, untrusted-root and wrong-host certificate are each refused.",

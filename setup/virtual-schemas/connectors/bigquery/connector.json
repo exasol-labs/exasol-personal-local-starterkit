@@ -52,6 +52,10 @@
     "CATALOG_NAME": "{project}",
     "SCHEMA_NAME": "{dataset}"
   },
+  "tips": [
+    "Names keep BigQuery's spelling (orders, customer_id): quote them, e.g. SELECT \"customer_id\" FROM <schema>.\"orders\".",
+    "INT64 arrives as DECIMAL(19,0) and FLOAT64 as DOUBLE; an ARRAY or STRUCT column arrives as BigQuery's raw JSON text ({\"v\": ...})."
+  ],
   "notes": [
     "Rows come back as VALUES from the adapter itself - meant for small results (upstream warns at a few thousand rows). BIGQUERY_ENABLE_IMPORT stays off.",
     "The credential is the service-account key file (JSON) Google Cloud creates, through --password-file. The driver reads it only from a file, so the kit writes it to BucketFS as this source's own file, owner-only on this computer, and the CONNECTION names its path - not the key. Measured: a key in the CONNECTION's password is refused (OAuthPvtKeyPath required).",

@@ -87,6 +87,9 @@
     "CATALOG_KIND": "GLUE",
     "NAMESPACE": "{database}"
   },
+  "tips": [
+    "Names arrive in upper case (ORDERS, ORDER_ID): no quotes needed."
+  ],
   "notes": [
     "Reads the Iceberg tables of one AWS Glue database (and its plain Hive Parquet tables) where they lie in S3: exasol-labs' lakehouse-engine-rs runs Apache DataFusion inside the Rust language container (the same 0.33.0 container MongoDB uses). Iceberg deletes are applied (positional and deletion vectors); equality deletes, ORC and Avro are refused by name.",
     "The release is a .tar.gz pinned per CPU; the .so inside it is pinned too, and staged only when both match.",

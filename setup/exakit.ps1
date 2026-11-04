@@ -3509,7 +3509,7 @@ function Invoke-CmdConnect {
     }
     $secret = $null
     if ($code -eq 0) {
-        Ok "Query it like any schema: SELECT * FROM VS_$($name.ToUpperInvariant()).<table> LIMIT 10"
+        Show-ExakitVsQueryHints -Result $script:ExakitVsResult -Name $name
         Info "Manage it with: exakit source show $name | check | reauth | refresh | disconnect | remove"
     }
     exit $code
@@ -3619,6 +3619,12 @@ function Invoke-CmdSource {
                     if ($v -is [System.Management.Automation.PSCustomObject]) { $v = $v | ConvertTo-Json -Compress -Depth 4 }
                     Write-Host ("  {0,-11} {1}" -f $k, $v)
                 }
+            }
+            $first = $true
+            foreach ($t in @($r.tips)) {
+                if (-not $t) { continue }
+                $label = ""; if ($first) { $label = "tips" }
+                Write-Host ("  {0,-11} {1}" -f $label, $t); $first = $false
             }
         }
     }

@@ -878,7 +878,7 @@ if p.get("exposure"):
         _exakit_vs_render "$_EVT_DIR/why"
     done
     for _evt_i in ${_EVT_OK:-}; do
-        ok "Query it like any schema: SELECT * FROM VS_$(printf '%s' "${_EVT_S_NAME[$_evt_i]}" | tr 'a-z' 'A-Z').<table> LIMIT 10"
+        _exakit_vs_query_hints "$(cat "$_EVT_DIR/run.$_evt_i.json" 2>/dev/null)" "${_EVT_S_NAME[$_evt_i]}"
     done
     [ -n "${_EVT_OK:-}" ] && info "Manage with: exakit source show <name> (every action: exakit help source)"
     # Nothing secret outlives the command in this shell.
@@ -977,10 +977,28 @@ EOF
     _cc_rc=$?
     unset _cc_secret
     if [ "$_cc_rc" -eq 0 ]; then
-        ok "Query it like any schema: SELECT * FROM VS_$(printf '%s' "$_cc_name" | tr 'a-z' 'A-Z').<table> LIMIT 10"
+        _exakit_vs_query_hints "$EXAKIT_VS_RESULT" "$_cc_name"
         info "Manage it with: exakit source show $_cc_name | check | reauth | refresh | disconnect | remove"
     fi
     exit "$_cc_rc"
+}
+
+# _exakit_vs_query_hints <connect-result-json> <name> — a first query on one of
+# the source's real tables, quoted as it must be, then how this kind of source
+# names and types what it sends (the connector's tips).
+_exakit_vs_query_hints() {
+    _eqh_lines="$(printf '%s' "$1" | run_python_any -c 'import json, sys
+r = json.load(sys.stdin)
+print("OK Query it like any schema: " + r["example"])
+for t in r.get("tips") or []:
+    print("INFO " + t)' 2>/dev/null)"
+    if [ -z "$_eqh_lines" ]; then
+        ok "Query it like any schema: SELECT * FROM VS_$(printf '%s' "$2" | tr 'a-z' 'A-Z').<table> LIMIT 10"
+        return 0
+    fi
+    printf '%s\n' "$_eqh_lines" > "${TMPDIR:-/tmp}/exakit-vs-hints.$$"
+    _exakit_vs_render "${TMPDIR:-/tmp}/exakit-vs-hints.$$"
+    rm -f "${TMPDIR:-/tmp}/exakit-vs-hints.$$"
 }
 
 # _exakit_vs_show_plan <plan-json> — what will happen, before it does.
@@ -1111,6 +1129,8 @@ elif "checks" in r:
 else:
     for k in ("name", "connector", "status", "objects", "inputs", "pins", "tables", "last_check", "evidence", "remedy"):
         if r.get(k) not in (None, "", {}):
-            print("  %-11s %s" % (k, json.dumps(r[k]) if isinstance(r[k], (dict, list)) else r[k]))' 2>/dev/null
+            print("  %-11s %s" % (k, json.dumps(r[k]) if isinstance(r[k], (dict, list)) else r[k]))
+    for i, t in enumerate(r.get("tips") or []):
+        print("  %-11s %s" % ("tips" if i == 0 else "", t))' 2>/dev/null
     exit "$_cs_rc"
 }

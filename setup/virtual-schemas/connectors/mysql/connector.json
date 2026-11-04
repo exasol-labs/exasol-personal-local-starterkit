@@ -84,6 +84,10 @@
   "vs_properties": {
     "CATALOG_NAME": "{database}"
   },
+  "tips": [
+    "Table and column names keep MySQL's spelling (actor, first_name): quote them, e.g. SELECT \"first_name\" FROM <schema>.\"actor\".",
+    "YEAR columns arrive as DATE (2006 reads as 2006-01-01); TEXT arrives as VARCHAR(65535)."
+  ],
   "notes": [
     "MySQL has no schemas below a database: the dialect takes CATALOG_NAME only.",
     "Connector/J is downloaded from Maven Central on this machine and never redistributed (GPL with the FOSS exception).",
