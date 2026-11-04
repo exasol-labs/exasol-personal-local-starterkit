@@ -30,16 +30,15 @@ class OptionalThemesTest(unittest.TestCase):
         cls.settings = next(c for c in code if c.startswith("DATASET = "))
         cls.themes = next(c for c in code if c.startswith("SAMPLE_TEXTS = "))
 
-    def run_cell(self, *, enable=None, configured=True, allow=True, entity=True):
-        frame = TextFrame(TEXT_=["First description", "Second description"])
-        client = Mock()
-        client.chat.completions.create.return_value = types.SimpleNamespace(
-            choices=[types.SimpleNamespace(message=types.SimpleNamespace(content="A suggested theme"))])
-        endpoint = Mock(return_value=(client, "configured-model") if configured else None)
+    def run_cell(self, *, enable=None, configured=True, allow=True, roles=("category", "text", "label", "date")):
+        frame = TextFrame(LABEL_=[1, 0], TEXT_=["First description", "Second description"])
+        endpoint = Mock(return_value=(Mock(), "configured-model") if configured else None)
         helper = types.SimpleNamespace(sql=Mock(return_value=frame), show_sql=Mock(), model_client=endpoint,
-                                       confirm_send=Mock(return_value=allow), trace=lambda *a, **k: contextlib.nullcontext())
-        roles = {"category", "text"} | ({"entity"} if entity else set())
-        namespace = {"nb": helper, "conn": object(), "ENTITY": '"COMPANY"' if entity else None, "TEXT": '"DESCRIPTION"',
+                                       confirm_send=Mock(return_value=allow), themes=Mock(return_value="the themes"))
+        roles = set(roles)
+        namespace = {"nb": helper, "conn": object(), "missing_line": "",
+                     "ENTITY": None, "TEXT": '"DESCRIPTION"', "DATE": '"DATE"' if "date" in roles else None,
+                     "LABEL": '"LABEL"' if "label" in roles else None,
                      "ds": types.SimpleNamespace(has=lambda role: role in roles,
                                                  col=lambda role: f'"{role.upper()}"', fact_table="EXAMPLE.RECORDS")}
         exec(self.settings, namespace)
@@ -47,37 +46,45 @@ class OptionalThemesTest(unittest.TestCase):
             namespace["USE_AI_THEMES"] = enable
         with contextlib.redirect_stdout(io.StringIO()):
             exec(self.themes, namespace)
-        return frame, helper, client
+        return namespace, helper
 
-    def test_default_path_does_not_request_an_endpoint_even_when_one_is_configured(self):
-        frame, helper, client = self.run_cell()
+    def test_default_path_shows_the_sample_and_never_asks_for_an_endpoint(self):
+        namespace, helper = self.run_cell()
         helper.model_client.assert_not_called()
-        client.chat.completions.create.assert_not_called()
-        self.assertNotIn("THEME", frame)
+        helper.themes.assert_not_called()
         helper.sql.assert_called_once()  # the SQL sample still runs
+        self.assertIsNone(namespace["themes"])
 
-    def test_explicit_opt_in_summarises_each_selected_description(self):
-        frame, helper, client = self.run_cell(enable=True)
+    def test_opt_in_sorts_both_sides_in_one_helper_call(self):
+        namespace, helper = self.run_cell(enable=True)
         helper.model_client.assert_called_once()
-        self.assertEqual(client.chat.completions.create.call_count, 2)
-        self.assertEqual(frame["THEME"], ["A suggested theme", "A suggested theme"])
-        self.assertEqual(client.chat.completions.create.call_args.kwargs["model"], "configured-model")
+        helper.themes.assert_called_once()
+        conn, ds, sample, endpoint = helper.themes.call_args.args
+        self.assertIs(sample, helper.sql.return_value)
+        self.assertEqual("configured-model", endpoint[1])
+        self.assertEqual(helper.sql.call_args.args[1], helper.themes.call_args.kwargs["sql"], "the trace names the SQL")
+        self.assertEqual("the themes", namespace["themes"])
 
-    def test_missing_endpoint_leaves_the_sql_sample_usable(self):
-        frame, helper, client = self.run_cell(enable=True, configured=False)
-        self.assertEqual(frame["TEXT_"], ["First description", "Second description"])
-        client.chat.completions.create.assert_not_called()
-
-    def test_declined_sample_does_not_call_the_model(self):
-        frame, helper, client = self.run_cell(enable=True, allow=False)
-        client.chat.completions.create.assert_not_called()
-        self.assertNotIn("THEME", frame)
-
-    def test_text_sample_without_entity_uses_sql_null(self):
-        _, helper, _ = self.run_cell(entity=False)
+    def test_the_sample_is_the_newest_texts_on_each_side_of_the_label(self):
+        _, helper = self.run_cell()
         sql = helper.sql.call_args.args[1]
-        self.assertIn("SELECT NULL AS ENTITY", sql)
-        self.assertIn('ORDER BY "DESCRIPTION"', sql)
+        self.assertIn('SELECT "LABEL" AS LABEL_, "DESCRIPTION" AS TEXT_', sql)
+        self.assertIn('AND "LABEL" IS NOT NULL', sql)
+        self.assertIn('QUALIFY ROW_NUMBER() OVER (PARTITION BY "LABEL" ORDER BY "DATE" DESC) <= 20', sql)
+
+    def test_without_a_label_or_date_it_is_one_side(self):
+        _, helper = self.run_cell(roles=("text",))
+        sql = helper.sql.call_args.args[1]
+        self.assertIn("SELECT NULL AS LABEL_", sql)
+        self.assertIn("QUALIFY ROW_NUMBER() OVER (ORDER BY 1) <= 20", sql)
+        self.assertNotIn("IS NOT NULL", sql)
+
+    def test_missing_endpoint_or_a_declined_sample_calls_no_model(self):
+        for kwargs in ({"configured": False}, {"allow": False}):
+            with self.subTest(**kwargs):
+                namespace, helper = self.run_cell(enable=True, **kwargs)
+                helper.themes.assert_not_called()
+                self.assertIsNone(namespace["themes"])
 
 
 if __name__ == "__main__":

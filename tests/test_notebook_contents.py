@@ -307,7 +307,7 @@ class NotebookShapeTest(unittest.TestCase):
         self.assertNotIn('if not ds.has("date")', text_step)
         self.assertNotIn('if not ds.has("label")', text_step)
         self.assertIn('if ds.has("label") else ""', text_step)
-        self.assertIn('for role in ("label", "date") if ds.has(role)', text_step)
+        self.assertIn('if ds.has("date") else ds.col("entity") if ds.has("entity") else "1"', text_step)
         for role in ("date", "label"):
             self.assertNotIn("{" + role.upper() + "}", text_step, f"the {role} is in the text SQL only when it exists")
 

@@ -20,7 +20,7 @@ def _(mo):
 
     Compare groups, follow outcomes over time, fit a small local model, then write a handoff for the ML Engineer.
 
-    Optional: `USE_AI_THEMES = True` adds LLM text themes (needs a model endpoint).
+    Optional: `USE_AI_THEMES = True` lets your model say what the label-1 texts are about, traced to Langfuse when it is set up.
     """)
     return
 
@@ -28,7 +28,7 @@ def _(mo):
 @app.cell
 def _():
     DATASET = "esophageal_posts"   # or "banking_complaints", or your own file ("~/my-data/transactions.csv", roles beside it)
-    USE_AI_THEMES = False  # optional LLM summaries; configure your endpoint before enabling
+    USE_AI_THEMES = False  # True: your model sorts the texts into themes (needs EXAKIT_MODEL_ID; see the AI step below)
     return DATASET, USE_AI_THEMES
 
 
@@ -80,19 +80,17 @@ def _(mo):
 
 @app.cell
 def _(CATEGORY, ENTITY, LABEL, conn, ds, missing_line, nb):
+    landscape = pivot = None
     # Result columns are named after the data (SOURCE_DOMAIN, POSTS, IS_NEGATIVE_PCT); a note under each result says
     # what its numbers mean.
     COUNT = nb.count_name(ds)
     E = nb.name(ENTITY) if ENTITY else None
     C = nb.name(CATEGORY) if CATEGORY else None
     PCT = nb.name(LABEL, "PCT") if LABEL else None
-    overall = nb.sql(conn, f"SELECT COUNT(*) AS N, ROUND(100 * AVG({LABEL}), 1) AS PCT FROM {ds.fact_table}") if LABEL else None
-    OVERALL = (overall["N"][0], overall["PCT"][0]) if LABEL else None
-
-    landscape = pivot = None
     if not all(ds.has(role) for role in ("entity", "category", "label")):
         print(f"Skipped - the landscape needs entity, category and label roles ({missing_line}).")
     else:
+        overall = nb.sql(conn, f"SELECT COUNT(*) AS N, ROUND(100 * AVG({LABEL}), 1) AS PCT FROM {ds.fact_table}")
         landscape = nb.sql(conn, f"""
     WITH TOP_ENTITIES AS (
         SELECT {ENTITY} AS ENTITY, COUNT(*) AS N_ROWS
@@ -109,7 +107,7 @@ def _(CATEGORY, ENTITY, LABEL, conn, ds, missing_line, nb):
     GROUP BY T.ENTITY, F.{CATEGORY}
     ORDER BY T.ENTITY, {COUNT} DESC""")
         nb.show_sql()
-        nb.note_groups(landscape, ds, (E, C), COUNT, PCT, overall=OVERALL)
+        nb.note_groups(landscape, ds, (E, C), COUNT, PCT, overall=(overall["N"][0], overall["PCT"][0]))
         pivot = landscape.pivot_table(index=E, columns=C, values=COUNT, fill_value=0, aggfunc="sum")
     landscape
     return COUNT, PCT, pivot
@@ -243,51 +241,42 @@ def _(LABEL, model):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Optional: AI themes
+    ## Optional: what the label-1 texts are about
 
-    Set `EXAKIT_MODEL_ID`, `EXAKIT_PROVIDER_BASE_URL` and `EXAKIT_PROVIDER_API_KEY` before starting the kernel, then `USE_AI_THEMES = True`. Setup: the README in the notebooks folder.
+    Your model reads the newest texts on each side of the label (`IS_NEGATIVE = 1` and `= 0`) and sorts each side into a few themes. A theme found on one side only is the clue. The note under the result says how to read it.
 
-    Sends up to five texts to your model (a live source asks first). Themes are suggestions to check.
+    To switch it on: set `EXAKIT_MODEL_ID`, `EXAKIT_PROVIDER_BASE_URL` and `EXAKIT_PROVIDER_API_KEY` before `exakit notebook`, then `USE_AI_THEMES = True` in the first cell. Two model calls, a few cents. A live source asks before anything is sent.
 
-    Optional tracing: set `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and `LANGFUSE_BASE_URL`. Keep keys in the environment.
+    With `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and `LANGFUSE_BASE_URL` set too, both calls are one trace, `explore-themes`, with what was sent, the answer, tokens, cost, time and two scores (`valid_json`, `texts_placed`): run it with another model and compare the two traces.
     """)
     return
 
 
 @app.cell
-def _(ENTITY, TEXT, USE_AI_THEMES, conn, ds, missing_line, nb):
-    SAMPLE_TEXTS = 5
-    text_sample = None
-    LABEL_COL = f"{ds.col('label')} AS LABEL_, " if ds.has("label") else ""
-    SAMPLE_ORDER = ", ".join([f"{ds.col(role)} DESC" for role in ("label", "date") if ds.has(role)] + ([ENTITY] if ENTITY else ([TEXT] if TEXT else [])))
+def _(LABEL, TEXT, USE_AI_THEMES, conn, ds, missing_line, nb):
+    SAMPLE_TEXTS = 20      # per side: the newest texts where the label is 1, and as many where it is 0
+    text_sample = themes = None
+    NEWEST = f"{ds.col('date')} DESC" if ds.has("date") else ds.col("entity") if ds.has("entity") else "1"
+    SIDES = f"PARTITION BY {ds.col('label')} " if ds.has("label") else ""
+    LABELLED = f" AND {ds.col('label')} IS NOT NULL" if ds.has("label") else ""
     if not ds.has("text"):
-        print(f"Skipped - the text sample needs a text role ({missing_line}).")
+        print(f"Skipped - the themes need a text role ({missing_line}).")
     else:
         SAMPLE_SQL = f"""
-        SELECT {ENTITY or 'NULL'} AS ENTITY, {LABEL_COL}{TEXT} AS TEXT_
-        FROM {ds.fact_table}
-        WHERE LENGTH(TRIM({TEXT})) > 0
-        ORDER BY {SAMPLE_ORDER}
-        LIMIT {SAMPLE_TEXTS}"""
-
+    SELECT {LABEL or 'NULL'} AS LABEL_, {TEXT} AS TEXT_
+    FROM {ds.fact_table}
+    WHERE LENGTH(TRIM({TEXT})) > 0{LABELLED}
+    QUALIFY ROW_NUMBER() OVER ({SIDES}ORDER BY {NEWEST}) <= {SAMPLE_TEXTS}"""
         text_sample = nb.sql(conn, SAMPLE_SQL)
         nb.show_sql()
-
-        endpoint = nb.model_client() if USE_AI_THEMES else None
         if not USE_AI_THEMES:
-            print("Optional AI themes are off. The SQL analysis, local model and handoff remain available.")
-        if endpoint is not None and nb.confirm_send(ds, len(text_sample)):
-            client, model_name = endpoint
-            themes = []
-            with nb.trace(conn, "explore-text-step", dataset=ds, sql=SAMPLE_SQL):
-                for text in text_sample["TEXT_"]:
-                    answer = client.chat.completions.create(
-                        model=model_name,
-                        messages=[{"role": "system", "content": "Name the theme of the text in at most five words."},
-                                  {"role": "user", "content": text[:4000]}])
-                    themes.append(answer.choices[0].message.content.strip())
-            text_sample["THEME"] = themes
-    text_sample
+            print("The AI step is off: above is the sample it would read. To run it, switch USE_AI_THEMES on in the first "
+                  "cell. Everything else in this notebook runs without a model.")
+        else:
+            endpoint = nb.model_client()
+            if endpoint is not None and nb.confirm_send(ds, len(text_sample)):
+                themes = nb.themes(conn, ds, text_sample, endpoint, sql=SAMPLE_SQL)
+    themes if themes is not None else text_sample
     return
 
 
