@@ -250,7 +250,7 @@ class AddonHelpTest(unittest.TestCase):
                                                  'default': 'off', 'description': 'Return JSON.'}],
                                  'examples': ['future-cli inspect --json']}]}
             (help_dir / 'future-addon.json').write_text(json.dumps(doc))
-            sh_code = ('exakit_can_run_python() { return 0; }; run_python() { python3 "$@"; }; '
+            sh_code = ('exakit_can_run_python() { return 0; }; run_python() { python3 "$@"; }; exakit_can_run_python_any() { return 0; }; run_python_any() { python3 "$@"; }; '
                        '_lib_dir="$1"; source "$2"; exakit_help_render command-json "future-cli inspect"')
             sh = subprocess.run(['bash', '-c', sh_code, 'help-test', str(lib), str(ROOT / 'setup/lib/help.sh')],
                                 capture_output=True, text=True, check=True, timeout=20)
