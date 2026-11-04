@@ -5706,6 +5706,19 @@ function Get-ExakitAboutCacheLines {
     try { return @(Get-Content -Path $cache -Encoding UTF8 -TotalCount 4 | ForEach-Object { ("" + $_).Trim() }) } catch { return @() }
 }
 
+# Get-ExakitMarketplaceAddonAboutOffline <id> - the About with no lookup: the cached
+# line, else the catalog's copy, else "" (the JSON's null). Twin of
+# _exakit_marketplace_addon_about_offline.
+function Get-ExakitMarketplaceAddonAboutOffline {
+    param([string]$Id)
+    $lines = @(Get-ExakitAboutCacheLines $Id)
+    if ($lines.Count -ge 1 -and $lines[0]) { return $lines[0] }
+    $addon = $null
+    try { $addon = Get-ExakitMarketplaceAddon $Id } catch { $addon = $null }
+    if ($addon -and $addon.GitHubAbout) { return (Convert-ExakitAboutText ([string]$addon.GitHubAbout)) }
+    return ""
+}
+
 # Get-ExakitMarketplaceAddonName <id> - the add-on repository's name on GitHub:
 # the one the last fetch saw (a renamed repository shows its new name), else the
 # catalog's copy, else the id. Never fetches. Twin of exakit_marketplace_addon_name.
@@ -6359,6 +6372,14 @@ function Show-ExakitMarketplaceList {
         if ($docs -notlike "https://*") { $docs = "" }
         if ($repo) { $entry.repo = $repo } else { $entry.repo = $null }
         if ($docs) { $entry.docs = $docs } else { $entry.docs = $null }
+        # The add-on repository on GitHub: its name, link and About (as the last
+        # lookup cached them, else the catalog's copy). Twin of the same fields in
+        # exakit_marketplace_list (audit WIN-01).
+        $entry.name = Get-ExakitMarketplaceAddonName $addon.Id
+        $url = Get-ExakitMarketplaceAddonUrl $addon.Id
+        if ($url) { $entry.url = $url } else { $entry.url = $null }
+        $about = Get-ExakitMarketplaceAddonAboutOffline $addon.Id
+        if ($about) { $entry.about = $about } else { $entry.about = $null }
         $entries += [pscustomobject]$entry
     }
     if ($Json) {

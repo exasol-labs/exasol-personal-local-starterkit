@@ -205,13 +205,15 @@ if ($doc) {
     Check "marketplace --json lists the add-ons" ($rows.Count -ge 5) "count $($rows.Count)"
     $shapeOk = $true; $why = ""
     foreach ($row in $rows) {
-        foreach ($k in @("id", "status", "installed", "version", "repo", "docs")) {
+        foreach ($k in @("id", "status", "installed", "version", "repo", "docs", "name", "url", "about")) {
             if (-not $row.PSObject.Properties[$k]) { $shapeOk = $false; $why += "$($row.id) lacks $k; " }
         }
         if ($null -ne $row.docs -and "$($row.docs)" -notlike "https://*") { $shapeOk = $false; $why += "$($row.id) docs not https; " }
         if ($null -ne $row.repo -and "$($row.repo)" -notmatch '^[^/\s]+/[^/\s]+$') { $shapeOk = $false; $why += "$($row.id) repo not owner/name; " }
+        if (-not "$($row.name)") { $shapeOk = $false; $why += "$($row.id) has no name; " }
+        if ($null -ne $row.url -and "$($row.url)" -notlike "https://github.com/*") { $shapeOk = $false; $why += "$($row.id) url not GitHub; " }
     }
-    Check "marketplace --json: every row carries id, status, installed, version, repo and docs (null when unknown)" $shapeOk $why
+    Check "marketplace --json: every row carries id, status, installed, version, repo, docs, name, url and about (null when unknown; audit WIN-01)" $shapeOk $why
 }
 
 # --- a checksum does not depend on a cmdlet that may not load ----------------
