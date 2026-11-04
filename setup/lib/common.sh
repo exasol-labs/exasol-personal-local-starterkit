@@ -8808,6 +8808,7 @@ _exakit_skills_json_compact() {
     _skj_gated=0
     _skj_missing=0
     _skj_total=0
+    _skj_states=""
     printf '{"skills":['
     while IFS='|' read -r _skl_id _skl_sum; do
         [ -n "$_skl_id" ] || continue
@@ -8825,10 +8826,12 @@ _exakit_skills_json_compact() {
         # prescribe that command - installing the add-on places it whole.
         if [ "$_skl_state" != "installed" ] && [ -n "$_skl_owner" ]; then
             _skj_gated=$((_skj_gated + 1))
+            _skj_states="$_skj_states needs-addon"
             printf '{"name":"%s","state":"needs-addon","addon":"%s","remedy":"exakit marketplace %s","summary":"%s"}' \
                 "$_skl_id" "$_skl_owner" "$_skl_owner" \
                 "$(printf '%s' "$_skl_sum" | sed 's/\\/\\\\/g; s/"/\\"/g')"
         else
+            _skj_states="$_skj_states $_skl_state"
             if [ "$_skl_state" = "installed" ]; then
                 _skj_installed=$((_skj_installed + 1))
             else
@@ -8853,8 +8856,14 @@ EXAKIT_SKL_EOF
     elif [ "$_skj_missing" -gt 0 ]; then
         _skj_status="missing"; _skj_next='"exakit skills-install"'
     fi
-    printf '],"counts":{"installed":%d,"needs_addon":%d,"missing":%d,"total":%d},"installed_version":%s,"advertised_version":%s,"status":"%s","next":%s}\n' \
-        "$_skj_installed" "$_skj_gated" "$_skj_missing" "$_skj_total" \
+    # by_state counts the rows by the very token each row's "state" carries
+    # (audit AGT-16): counts groups them for the verdict, so its names differ
+    # (needs_addon, missing), and a parser matching a row's state against a
+    # count found no key for "available" or "needs-addon".
+    _skj_by="$(printf '%s\n' $_skj_states | sort | uniq -c | \
+        awk 'NF == 2 { printf "%s\"%s\":%d", (n++ ? "," : ""), $2, $1 }')"
+    printf '],"counts":{"installed":%d,"needs_addon":%d,"missing":%d,"total":%d},"by_state":{%s},"installed_version":%s,"advertised_version":%s,"status":"%s","next":%s}\n' \
+        "$_skj_installed" "$_skj_gated" "$_skj_missing" "$_skj_total" "$_skj_by" \
         "$([ -n "$_skj_have" ] && printf '"%s"' "$_skj_have" || printf null)" \
         "$([ -n "$_skj_want" ] && printf '"%s"' "$_skj_want" || printf null)" \
         "$_skj_status" "$_skj_next"

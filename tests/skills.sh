@@ -247,6 +247,10 @@ d=json.load(sys.stdin); c=d["counts"]
 print(all(isinstance(c[k],int) for k in ("installed","needs_addon","missing","total")),
       c["installed"]+c["needs_addon"]+c["missing"]==c["total"], c["total"]==len(d["skills"]))' 2>/dev/null)"
 check "...as integers, summing to the row count" "True True True" "$_cnt"
+# AGT-16: by_state uses the row's own token, so a row's state is always a key.
+check "by_state counts the rows by their own state tokens" "True" \
+    "$(printf '%s' "$JSON" | python3 -c 'import json,sys,collections
+d=json.load(sys.stdin); print(d["by_state"] == dict(collections.Counter(r["state"] for r in d["skills"])))' 2>/dev/null)"
 has "the panel ends with the same tally, every number labelled" \
     "0 installed, 1 not placed, 1 in this kit" "$(exakit_skills_list 2>/dev/null)"
 # With nothing gated, the installer's sentence is the one it always printed.

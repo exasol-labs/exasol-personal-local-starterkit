@@ -4993,6 +4993,12 @@ function Show-ExakitSkills {
             counts = [ordered]@{
                 installed = $placed; needs_addon = $gated; missing = $skjMissing; total = $rows.Count
             }
+            # The rows counted by the very token each row's state carries (audit AGT-16).
+            by_state = $(
+                $byState = [ordered]@{}
+                foreach ($group in @($entries | Group-Object -Property state | Sort-Object -Property Name)) { $byState[$group.Name] = $group.Count }
+                $byState
+            )
             installed_version = $(if ($skjHave) { "$skjHave" } else { $null })
             advertised_version = $(if ($skjWant) { "$skjWant" } else { $null })
             status = $skjStatus
