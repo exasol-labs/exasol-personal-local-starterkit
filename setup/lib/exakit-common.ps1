@@ -1016,7 +1016,23 @@ function Show-ExakitGuide {
     Write-ExakitPanelLine "First thing to ask it:"
     Write-ExakitPanelLine "  'List the schemas and tables in my Exasol database, then answer my"
     Write-ExakitPanelLine "   questions with read-only SQL - show me the SQL before you run it.'"
-    Write-ExakitPanelLine "14 ready-made questions: data\example-questions.md (in the kit)"
+    # Ready-made questions for the data this kit holds, not a fixed TPC-H list a
+    # persona that never loads TPC-H cannot ask (audit NEW-01). Twin of cmd_guide.
+    $root = Get-ExakitRepoRoot
+    $asked = $false
+    if ($sets -and $root) {
+        foreach ($entry in @($sets.PSObject.Properties | Sort-Object Name)) {
+            if ($entry.Value.loaded -ne $true) { continue }
+            if ($entry.Name -eq "tpch") { $questions = Join-Path (Join-Path $root "data") "example-questions.md" }
+            else { $questions = Join-Path (Join-Path (Join-Path (Join-Path $root "data") "datasets") $entry.Name) "examples.sql" }
+            if (-not (Test-Path -LiteralPath $questions)) { continue }
+            if (-not $asked) { Write-ExakitPanelLine "Ready-made questions for your data (each with its SQL):" }
+            Write-ExakitPanelLine "  $($entry.Name):"
+            Write-ExakitPanelLine "    $questions"
+            $asked = $true
+        }
+    }
+    if (-not $asked) { Write-ExakitPanelLine "Ready-made questions come with each dataset: exakit data-load <id>" }
     Complete-ExakitPanel
 
     Start-ExakitPanel "2 - Browse and query with a SQL client (GUI)"

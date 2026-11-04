@@ -12067,6 +12067,7 @@ parts = doc.get("components") or {}
 print((parts.get("pyexasol") or {}).get("python", ""))
 print(",".join(k for k in ("notebook", "dash_server", "udf_devkit") if (parts.get(k) or {}).get("version")))
 print((parts.get("dash_server") or {}).get("port", ""))
+print(" ".join(sorted(k for k, v in sets.items() if isinstance(v, dict) and v.get("loaded"))))
 PY
 )"
     _g_schemas="$(printf '%s\n' "$_g_facts" | sed -n 1p)"
@@ -12087,7 +12088,19 @@ PY
     ui_panel_line "First thing to ask it:"
     ui_panel_line "  \"List the schemas and tables in my Exasol database, then answer my"
     ui_panel_line "   questions with read-only SQL — show me the SQL before you run it.\""
-    ui_panel_line "14 ready-made questions: data/example-questions.md (in the kit)"
+    # Ready-made questions for the data this kit holds, not a fixed TPC-H list a
+    # persona that never loads TPC-H cannot ask (audit NEW-01).
+    _g_root="$(exakit_repo_root 2>/dev/null || true)"
+    _g_asked=""
+    for _g_id in $(printf '%s\n' "$_g_facts" | sed -n 6p); do
+        if [ "$_g_id" = tpch ]; then _g_q="$_g_root/data/example-questions.md"; else _g_q="$_g_root/data/datasets/$_g_id/examples.sql"; fi
+        [ -n "$_g_root" ] && [ -f "$_g_q" ] || continue
+        [ -n "$_g_asked" ] || ui_panel_line "Ready-made questions for your data (each with its SQL):"
+        ui_panel_line "  $_g_id:"
+        ui_panel_line "    $(ui_tilde "$_g_q")"
+        _g_asked=1
+    done
+    [ -n "$_g_asked" ] || ui_panel_line "Ready-made questions come with each dataset: exakit data-load <id>"
     ui_panel_end
 
     ui_panel_begin "2 · Browse and query with a SQL client (GUI)"
