@@ -5284,7 +5284,25 @@ function Get-ExakitMarketplaceVersionsDoc {
     return (Resolve-ExakitVersionsDoc)
 }
 
+# An add-on's read-only answers (is it installed, which version, does it apply here) are asked again and again while
+# one screen is built, and each asks Python: they are remembered for the run. Anything that changes an add-on forgets
+# them all first. Twin of _EXAKIT_HOOK_MEMO in common.sh.
+$script:ExakitHookMemo = @{}
+
 function Invoke-ExakitMarketplacePython {
+    param([string]$Id, [string]$Operation, [bool]$DryRun = $false)
+    if ($Operation -in @('install', 'update', 'uninstall', 'validate', 'start', 'stop')) { $script:ExakitHookMemo.Clear() }
+    if ($DryRun -or $Operation -notin @('installed-version', 'system-present', 'applicable', 'applicable-reason')) {
+        return (Invoke-ExakitMarketplacePythonNow -Id $Id -Operation $Operation -DryRun $DryRun)
+    }
+    $key = "$Id|$Operation"
+    if (-not $script:ExakitHookMemo.ContainsKey($key)) {
+        $script:ExakitHookMemo[$key] = Invoke-ExakitMarketplacePythonNow -Id $Id -Operation $Operation
+    }
+    return $script:ExakitHookMemo[$key]
+}
+
+function Invoke-ExakitMarketplacePythonNow {
     param([string]$Id, [string]$Operation, [bool]$DryRun = $false)
     $root = Get-ExakitMarketplaceRoot
     $service = Join-Path (Join-Path $root 'marketplace') 'service.py'

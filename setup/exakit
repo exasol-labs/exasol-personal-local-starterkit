@@ -210,6 +210,9 @@ export EXAKIT_MARKETPLACE_PYTHON_APPLY
 # A command that turns on the installer's failure handling replaces this with
 # exakit_on_failure, which sweeps as well.
 trap 'command -v ui_table_abort >/dev/null 2>&1 && ui_table_abort; exakit_sweep_tmp' EXIT
+# The add-ons' read-only answers are remembered for this run (_EXAKIT_HOOK_MEMO):
+# one screen asks each of them many times, and every answer is a Python start.
+_exakit_hook_memo_begin 2>/dev/null || true
 
 _runtime_type() {
     manifest_get runtime.type 2>/dev/null
@@ -1329,6 +1332,7 @@ cmd_repair_runtime() {
             "$(exakit_install_command)"
         return 3
     fi
+    exakit_sweep_tmp                    # exec skips the EXIT trap that would
     exec bash "$_rr_kit/$_rr_setup"
 }
 

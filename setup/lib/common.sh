@@ -4042,19 +4042,67 @@ _exakit_marketplace_versions_doc() {
     exakit_versions_active_doc
 }
 
+# _exakit_registry — metadata.py's registry rows, read ONCE per process. Every
+# per-add-on question (is it registered, its block, its version override) asked
+# for the whole registry again, a Python start each time - dozens per add-on
+# table, which is most of why listing or offering the add-ons took seconds. The
+# rows are kept in a variable; read in the main shell (the hook loader primes
+# it at load), every subshell after inherits them for free.
+_EXAKIT_REGISTRY_ROWS=""
+_exakit_registry() {
+    if [ -z "$_EXAKIT_REGISTRY_ROWS" ]; then
+        _mcr_root="$(_exakit_marketplace_root 2>/dev/null || true)"
+        [ -f "$_mcr_root/marketplace/metadata.py" ] || return 1
+        _EXAKIT_REGISTRY_ROWS="$(run_python_any "$_mcr_root/marketplace/metadata.py" "$_mcr_root" registry 2>/dev/null)"
+    fi
+    [ -n "$_EXAKIT_REGISTRY_ROWS" ] || return 1
+    printf '%s\n' "$_EXAKIT_REGISTRY_ROWS"
+}
+
 exakit_marketplace_addons() {
-    _mcr_root="$(_exakit_marketplace_root 2>/dev/null || true)"
-    [ -f "$_mcr_root/marketplace/metadata.py" ] || return 1
-    run_python_any "$_mcr_root/marketplace/metadata.py" "$_mcr_root" registry 2>/dev/null | cut -d'|' -f1,2
+    _exakit_registry | cut -d'|' -f1,2
 }
 
 _exakit_addon_visible() {
-    _mcv_root="$(_exakit_marketplace_root 2>/dev/null || true)"
-    [ -f "$_mcv_root/marketplace/metadata.py" ] || return 1
-    [ "$(run_python_any "$_mcv_root/marketplace/metadata.py" "$_mcv_root" registry 2>/dev/null | awk -F'|' -v id="$1" '$1 == id { print $4; exit }')" = 1 ]
+    [ "$(_exakit_registry | awk -F'|' -v id="$1" '$1 == id { print $4; exit }')" = 1 ]
+}
+
+# _exakit_hook_memo — where this run remembers the add-ons' read-only answers
+# (installed-version, system-present, applicable, applicable-reason). A table,
+# a listing and the offer ask the same questions of every add-on several times,
+# a Python start each; asked once, they are remembered for the run. Keyed by
+# one temp folder, made by _exakit_hook_memo_begin in a shell whose EXIT trap
+# sweeps it (setup/exakit; the installer's closing offer), registered with
+# exakit_track_tmp so it goes when the run does. The subshells the table code
+# runs in inherit its name. Nothing is written to the kit home, and a script
+# that only sources this library asks every time, as before. Anything that
+# changes an add-on (a mutate run below) forgets it all, before and after.
+_EXAKIT_HOOK_MEMO=""
+_exakit_hook_memo_begin() {
+    [ -z "$_EXAKIT_HOOK_MEMO" ] || return 0
+    _EXAKIT_HOOK_MEMO="$(mktemp -d "${TMPDIR:-/tmp}/exakit-hooks.XXXXXX" 2>/dev/null || true)"
+    [ -n "$_EXAKIT_HOOK_MEMO" ] || return 1
+    exakit_track_tmp "$_EXAKIT_HOOK_MEMO"
+}
+_exakit_hook_memo_forget() {
+    [ -n "$_EXAKIT_HOOK_MEMO" ] && [ -d "$_EXAKIT_HOOK_MEMO" ] || return 0
+    rm -f "$_EXAKIT_HOOK_MEMO"/* 2>/dev/null
+    return 0
 }
 
 _exakit_marketplace_run_python() {
+    _mrp_mode="$1"; shift
+    if [ "$_mrp_mode" = mutate ]; then
+        _exakit_hook_memo_forget
+        _exakit_marketplace_run_python_now mutate "$@"
+        _mrp_rc=$?
+        _exakit_hook_memo_forget
+        return "$_mrp_rc"
+    fi
+    _exakit_marketplace_run_python_now "$_mrp_mode" "$@"
+}
+
+_exakit_marketplace_run_python_now() {
     _mrp_mode="$1"; shift
     if [ "$_mrp_mode" = query ] && _exakit_python3_present; then
         python3 "$@"
@@ -4152,6 +4200,26 @@ _exakit_marketplace_python() {
             _exakit_marketplace_run_python mutate "$_mcp_root/marketplace/service.py" "$@"
     else
         case "$2" in uninstall|validate|start|stop) _mcp_mode=mutate ;; *) _mcp_mode=query ;; esac
+        case "$2:$#" in
+            installed-version:2|system-present:2|applicable:2|applicable-reason:2)
+                # Read-only and asked again and again: remembered for the run (_EXAKIT_HOOK_MEMO).
+                if [ -n "$_EXAKIT_HOOK_MEMO" ] && [ -d "$_EXAKIT_HOOK_MEMO" ]; then
+                    _mcp_memo="$_EXAKIT_HOOK_MEMO/$1.$2"
+                    if [ -f "$_mcp_memo" ]; then
+                        _mcp_rc="$(head -1 "$_mcp_memo")"
+                        sed 1d "$_mcp_memo"
+                        return "${_mcp_rc:-1}"
+                    fi
+                    _mcp_out="$(_exakit_marketplace_run_python query "$_mcp_root/marketplace/service.py" "$@")"
+                    _mcp_rc=$?
+                    _mcp_part="$_mcp_memo.$RANDOM"
+                    { printf '%s\n' "$_mcp_rc"; [ -z "$_mcp_out" ] || printf '%s\n' "$_mcp_out"; } \
+                        > "$_mcp_part" 2>/dev/null && mv -f "$_mcp_part" "$_mcp_memo" 2>/dev/null
+                    [ -z "$_mcp_out" ] || printf '%s\n' "$_mcp_out"
+                    return "$_mcp_rc"
+                fi
+                ;;
+        esac
         case "$2" in
             latest|validate)
                 EXAKIT_MARKETPLACE_VERSIONS_DOC="$(_exakit_marketplace_versions_doc 2>/dev/null || true)" \
@@ -4182,7 +4250,7 @@ _exakit_marketplace_python_hooks() {
     while IFS='|' read -r _mph_id _mph_method _mph_operation <&3; do
         [ -n "$_mph_id" ] || continue
         # metadata.py validates ids and takes operation names from the service.
-        _mph_name="$(printf '%s' "$_mph_id" | tr '-' '_')_$_mph_method"
+        _mph_name="${_mph_id//-/_}_$_mph_method"          # no fork per hook: there are over a hundred
         # Keep a hook already supplied by the caller (including test and
         # embedder overrides); loading the registry must be idempotent.
         # Replace legacy lifecycle hooks in the main CLI; isolated test
@@ -4194,11 +4262,12 @@ _exakit_marketplace_python_hooks() {
     done 3<<EXAKIT_MPH_EOF
 $_mph_rows
 EXAKIT_MPH_EOF
+    _exakit_registry >/dev/null 2>&1 || true     # read once, here in the main shell (see _exakit_registry)
 }
 
 # _exakit_addon_fn <id> <suffix> — the module function for an add-on.
 _exakit_addon_fn() {
-    printf '%s_%s\n' "$(printf '%s' "$1" | tr '-' '_')" "$2"
+    printf '%s_%s\n' "${1//-/_}" "$2"
 }
 
 # _exakit_addon_env_var <id> <suffix> — the env/constant name for an add-on:
@@ -4605,6 +4674,8 @@ exakit_about_wrap() {
 # too, as an update shows them). The cache's TTL and attempt stamp still keep a
 # re-run from asking again. Every other screen reads what this cached.
 _exakit_marketplace_warm_about() {
+    _mw_probed=0
+    _mw_pids=""
     while read -r _mw_id <&3; do
         [ -n "$_mw_id" ] || continue
         if [ "${1:-}" != all ]; then
@@ -4612,14 +4683,27 @@ _exakit_marketplace_warm_about() {
             _exakit_marketplace_addon_present "$_mw_id" && continue
             exakit_marketplace_addon_available "$_mw_id" || continue
         fi
-        # A request that got no answer means GitHub is out of reach for this
-        # run: the rest are not asked (each would wait out its own timeout), and
-        # every screen goes on with the cached or the catalog's copy.
-        _exakit_about_fetch "$_mw_id" >/dev/null 2>&1
-        [ "$?" -eq 3 ] && break
+        # The first request that goes out is asked alone: one that gets no
+        # answer means GitHub is out of reach for this run, so the rest are not
+        # asked (each would wait out its own timeout) and every screen goes on
+        # with the cached or the catalog's copy. Once one is answered, the rest
+        # are asked at the same time, not one after another (each writes its
+        # own cache file). Only these are waited for: a spinner may be running.
+        if [ "$_mw_probed" = 0 ]; then
+            _exakit_about_fetch "$_mw_id" >/dev/null 2>&1
+            case "$?" in
+                3) break ;;
+                2) ;;                               # fresh in the cache: nothing was asked
+                *) _mw_probed=1 ;;
+            esac
+        else
+            _exakit_about_fetch "$_mw_id" >/dev/null 2>&1 &
+            _mw_pids="$_mw_pids $!"
+        fi
     done 3<<EXAKIT_MW_EOF
 $(exakit_marketplace_addons | cut -d'|' -f1)
 EXAKIT_MW_EOF
+    for _mw_pid in $_mw_pids; do wait "$_mw_pid" 2>/dev/null; done
     return 0
 }
 
@@ -5707,6 +5791,11 @@ exakit_marketplace_offer() {
     # Several checks per add-on and a description fetched for each take
     # seconds: a turning spinner says the install is still going, not stuck.
     ui_spin_begin "Getting the add-ons ready"
+    # The installers run this in a subshell, where the loader keeps no memo:
+    # this one is the subshell's own, and goes when it does.
+    if [ -z "$_EXAKIT_HOOK_MEMO" ] && [ "${BASH_SUBSHELL:-0}" != 0 ] && _exakit_hook_memo_begin; then
+        trap 'exakit_sweep_tmp' EXIT
+    fi
     _exakit_marketplace_load_modules
     exakit_marketplace_has_pending || { ui_spin_end; return 0; }
     # Fill the About cache now, while the gate question below is still being

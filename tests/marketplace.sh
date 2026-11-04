@@ -247,7 +247,10 @@ check "unregistered id: no fallback" "no" "$(_exakit_component_fallback not-a-to
 check "addon env-var name derivation" "EXAKIT_DASH_SERVER_VERSION_FALLBACK" "$(_exakit_addon_env_var dash-server VERSION_FALLBACK)"
 # The shared library must stay free of per-add-on case arms: a "dash-server)"
 # pattern in common.sh would mean the generic registry regressed to surgery.
-check "common.sh carries no dash-server case arm" "0" "$(grep -c 'dash-server)' "$ROOT/setup/lib/common.sh")"
+# The uninstall is the one exception: there dash-server is the name of a folder
+# under the kit home whose dashboards it keeps, not a component id.
+check "common.sh carries no dash-server case arm" "0" "$(awk '/^[A-Za-z_][A-Za-z0-9_]*\(\) *\{/ { f = $1 }
+    /dash-server\)/ && f != "exakit_uninstall_run()" { n++ } END { print n + 0 }' "$ROOT/setup/lib/common.sh")"
 
 echo "add-on About text (from the add-on's own repository, cached here):"
 # The wording lives in exactly ONE place -- the add-on's repository -- because it
