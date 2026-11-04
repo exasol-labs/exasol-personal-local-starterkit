@@ -2896,7 +2896,8 @@ function Get-ExakitBundledDatasets {
             $schema = if ($kv.schema) { $kv.schema } else { $kv.id.ToUpper() }
             $order = 50
             if ($kv.order -match '^[0-9]+$') { $order = [int]$kv.order }
-            $datasets += @{ Id = $kv.id; Label = $label; Flag = $flag; Markers = $markers; Schema = $schema; Order = $order }
+            $datasets += @{ Id = $kv.id; Label = $label; Flag = $flag; Markers = $markers; Schema = $schema; Order = $order
+                            Description = ("" + $kv.description) }
         }
     }
     return @($datasets | Sort-Object { $_.Order }, { $_.Id })
@@ -3800,7 +3801,7 @@ function Invoke-ExakitDatasetDirLoad {
 $script:ExakitTableIds = @()          # the dataset id per row ("" for the rest)
 $script:ExakitTableRowLocal = 0
 $script:ExakitTableRowSkip = 0
-$script:ExakitTableHasFor = $false   # does any row name the personas it is for
+$script:ExakitTableHasDesc = $false  # does any row carry a description
 $script:ExakitTableDefaults = @()
 $script:ExakitTableGroupFirst = 0
 $script:ExakitTableGroupLast = 0
@@ -3813,11 +3814,9 @@ $script:ExakitTableRow = 0            # the row the dataset being loaded owns
 function New-ExakitDataTable {
     param([Parameter(Mandatory)][string]$FinalLabel, [switch]$NoLocal)
     [void](New-ExakitTable -Title "Data to load")
-    # Which personas each dataset is for (the persona service): the row's second
-    # column, shown as "For" while the reader picks (Select-ExakitDataLoad).
-    $hints = @{}
-    $script:ExakitTableHasFor = $false
-    if (Get-Command Get-ExakitPersonaDatasetHints -ErrorAction SilentlyContinue) { $hints = Get-ExakitPersonaDatasetHints }
+    # What each dataset is (description= in its dataset.conf): the row's second
+    # column, shown as "Description" while the reader picks (Select-ExakitDataLoad).
+    $script:ExakitTableHasDesc = $false
     $ids = New-Object 'System.Collections.Generic.List[string]'
     $defaults = New-Object 'System.Collections.Generic.List[int]'
     $script:ExakitTableGroupFirst = 0
@@ -3847,11 +3846,10 @@ function New-ExakitDataTable {
             # parenthetical goes - "Orders (EU) by quarter" keeps its brackets -
             # and a download size after it stays: that is what the row will cost.
             $label = [regex]::Replace($pending[$i].Label, ' *\([^()]*\)( - [0-9.]+ MB download)?$', '$1')
-            # Who it is for goes in its own column, not on the name: a
-            # " - for <persona>" suffix was cut off on an 80-column console.
-            $forWhom = ""
-            if ($hints.ContainsKey($pending[$i].Id)) { $forWhom = "" + $hints[$pending[$i].Id]; $script:ExakitTableHasFor = $true }
-            [void](Add-ExakitTableRow -Kind $kind -Label $label -Col2 $forWhom -Ticked)
+            # What it is goes in its own column, not on the name.
+            $about = "" + $pending[$i].Description
+            if ($about) { $script:ExakitTableHasDesc = $true }
+            [void](Add-ExakitTableRow -Kind $kind -Label $label -Col2 $about -Ticked)
             [void]$ids.Add($pending[$i].Id)
         }
         $script:ExakitTableGroupFirst = 2
@@ -3950,7 +3948,7 @@ function Select-ExakitDataLoad {
     # Without a persona the second column is there all the same, blank and
     # untitled, so the names get their width (twin of exakit_data_samples_select).
     if ($script:UiTable) {
-        if ($script:ExakitTableHasFor) { $script:UiTable.Col2 = "For" } else { $script:UiTable.Col2 = " " }
+        if ($script:ExakitTableHasDesc) { $script:UiTable.Col2 = "Description" } else { $script:UiTable.Col2 = " " }
     }
     Write-Host ""
     try {

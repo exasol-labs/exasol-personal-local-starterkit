@@ -169,16 +169,33 @@ def _run_helper(ctx: KitContext, name: str, *args: str, env: dict[str, str] | No
     return result.stdout.strip()
 
 
+def _personas(ctx: KitContext) -> str:
+    """The personas this kit was set up as (persona.id): their notebooks are the ones copied."""
+    recorded = ctx.manifest.get("persona.id") or os.environ.get("EXAKIT_PERSONA") or ""
+    return ",".join(part for part in str(recorded).split(",") if re.fullmatch(r"[a-z0-9][a-z0-9_-]*", part))
+
+
 def _copy(ctx: KitContext, frontend: str) -> None:
     _, _, folder = paths(ctx)
     # This helper tracks copied files and intentionally respects edits/deletes.
     try:
-        result = _run_helper(ctx, "notebooks.py", "copy", frontend, str(ctx.root), str(folder))
+        result = _run_helper(ctx, "notebooks.py", "copy", frontend, str(ctx.root), str(folder), _personas(ctx))
     except AddonFailure:
         ctx.activity(f"Some {frontend} notebooks could not be copied; existing files were kept")
         return
     if result:
         ctx.activity(f"New {frontend} notebooks: {result.replace(chr(10), ', ')}")
+
+
+def sync_notebooks(ctx: KitContext) -> None:
+    """The notebooks of every persona now recorded, for the front ends installed: a persona added later brings its
+    folder (and the README names it). Nothing is overwritten or brought back after a delete."""
+    if ctx.manifest.get(f"{RECEIPT}.ownership") != "kit":
+        return
+    venv = paths(ctx)[0]
+    _copy(ctx, "jupyter")
+    if venv_executable(venv, "marimo").is_file():
+        _copy(ctx, "marimo")
 
 
 def _write_store(ctx: KitContext) -> None:

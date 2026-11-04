@@ -1,15 +1,17 @@
 """The kit's notebooks into the user's notebooks folder, one folder per persona, and the folder prepared for Positron.
 Standard-library helper for the Python marketplace.
 
-    python notebooks.py copy <jupyter|marimo> <kit_root> <notebooks_dir>   prints persona/file for each one added
+    python notebooks.py copy <jupyter|marimo> <kit_root> <notebooks_dir> [personas]
+                                       prints persona/file for each one added; personas: comma-separated ids
     python notebooks.py positron <notebooks_dir> <python> <venv>           .vscode/settings.json names the kit's Python
     python notebooks.py positron-remove <notebooks_dir> <python> <venv>    takes the kit's two settings out again
     python notebooks.py list <kit_root>                                    step|persona|title|jupyter file|marimo file
 
-What goes where is notebook/catalog.json: the Jupyter notebooks into <notebooks_dir>/starter-kit-notebooks/<persona>/
-(and the shared cells into its 00_shared/) with a README naming the order to open them in, the Marimo ones into
-<notebooks_dir>/marimo/<persona>/. A catalog entry whose file this kit copy does not carry is skipped. A file
-already there is the user's and is never overwritten; neither is the README. What the kit copied is recorded in
+What goes where is notebook/catalog.json: the picked personas' Jupyter notebooks into
+<notebooks_dir>/starter-kit-notebooks/<persona>/ with a README naming the order to open them in, the Marimo ones into
+<notebooks_dir>/marimo/<persona>/; a persona added later brings its folder on the next copy (no persona with
+notebooks picked: all of them). A catalog entry whose file this kit copy does not carry is skipped. A file already
+there is the user's and is never overwritten; the README is rewritten only while it is what the kit wrote. What the kit copied is recorded in
 .kit-copied in that folder, so a notebook the user deleted stays deleted. A notebook that cannot be copied (a file
 where its persona folder should be, a folder that is read-only) is named on stderr, the rest are still copied, and the
 exit status is 1.
@@ -29,6 +31,7 @@ import sys
 from pathlib import Path
 
 STATE = ".kit-copied"                      # one persona/file per line: what the kit has copied into this folder
+README_STATE = ".kit-readme"               # the sha256 of the README the kit last wrote: rewritten only while unchanged
 INTERPRETER = "python.defaultInterpreterPath"
 INCLUDE = "python.interpreters.include"
 
@@ -46,13 +49,20 @@ def catalog(kit: Path) -> dict:
     return doc
 
 
-def _placed(doc: dict) -> list[tuple[str, dict]]:
-    """(folder, entry) for everything the copy places: the shared cells' folder first, then each persona's notebooks.
-    A source file lives at <source>/<folder>/<file> and is copied to <base>/<folder>/<file>."""
-    shared = doc.get("shared")
-    return (([(shared["folder"], shared)] if shared else [])
-            + [(entry["persona"], entry) for entry in doc["notebooks"]]
-            + [(entry["folder"], entry) for entry in doc.get("examples", [])])
+def wanted(doc: dict, personas: set[str] | None) -> set[str]:
+    """The personas whose notebooks are copied: the ones picked that have notebooks; every one when none is picked
+    (or none of the picked has notebooks), so installing the add-on on its own still brings them all."""
+    have = {entry["persona"] for entry in doc["notebooks"]}
+    picked = have & (personas or set())
+    return picked or have
+
+
+def _placed(doc: dict, personas: set[str] | None = None) -> list[tuple[str, dict]]:
+    """(folder, entry) for everything the copy places: the picked personas' notebooks.
+    A source file lives at <source>/<folder>/<file> and is copied to <base>/<folder>/<file>. The shared cells
+    (00_shared/) are build input only: each quickstart already carries them."""
+    keep = wanted(doc, personas)
+    return [(entry["persona"], entry) for entry in doc["notebooks"] if entry["persona"] in keep]
 
 
 def persona_title(kit: Path, persona: str) -> str:
@@ -70,15 +80,16 @@ def _copied_before(base: Path) -> set[str]:
         return set()
 
 
-def copy(front: str, kit: Path, notebooks_dir: Path) -> tuple[list[str], list[str]]:
-    """The kit's notebooks for a front end into their persona folders: (the ones added as persona/file, the problems).
-    One already there is the user's; one the kit copied before and the user deleted is not brought back."""
+def copy(front: str, kit: Path, notebooks_dir: Path, personas: set[str] | None = None) -> tuple[list[str], list[str]]:
+    """The picked personas' notebooks for a front end into their folders: (the ones added as persona/file, the
+    problems). A persona added later brings its folder on the next copy. One already there is the user's; one the kit
+    copied before and the user deleted is not brought back."""
     doc = catalog(kit)
     source = kit / doc["sources"][front]
     base = notebooks_dir / doc["folders"][front]
     before = _copied_before(base)
     added, problems, seen = [], [], set(before)
-    for folder, entry in _placed(doc):
+    for folder, entry in _placed(doc, personas):
         name = entry.get(front)
         if not name or not (source / folder / name).is_file():
             continue                                     # a catalog entry this kit copy does not carry yet
@@ -100,25 +111,6 @@ def copy(front: str, kit: Path, notebooks_dir: Path) -> tuple[list[str], list[st
             continue
         added.append(key)
         seen.add(key)
-    # Retire only unchanged copies from the old utility slots. Edited files
-    # remain the user's; a new example is copied before its old copy is removed.
-    for entry in doc.get("examples", []):
-        old = entry.get("previous", {}).get(front, {})
-        old_key = old.get("path", "")
-        previous = base / old_key
-        current = base / entry["folder"] / entry[front]
-        try:
-            if (old_key in before and previous.is_file() and not previous.is_symlink()
-                    and current.is_file() and not current.is_symlink()
-                    and previous.resolve().is_relative_to(base.resolve())
-                    and not base.is_symlink()
-                    and not any(parent.is_symlink() for parent in previous.parents
-                                if parent != base and parent.is_relative_to(base))
-                    and hashlib.sha256(previous.read_bytes()).hexdigest() == old.get("sha256")):
-                previous.unlink()
-                seen.discard(old_key)
-        except OSError as err:
-            problems.append(f"{old_key}: {err.strerror or err}")
     # The full official example library is prebuilt into this kit copy.
     # It is optional only for older kit copies; installation never fetches it.
     library = kit / "notebook" / "examples" / front
@@ -144,33 +136,9 @@ def copy(front: str, kit: Path, notebooks_dir: Path) -> tuple[list[str], list[st
                 problems.append(f"{key}: {err.strerror or err}")
         if library_added:
             added.append("exasol-examples")
-    # Runnable notebooks are the bundle. The source manifest stays in the
-    # kit, outside the user's notebook browser. Remove only our unchanged old
-    # manifest copy; a file the user edited remains theirs.
-    legacy = base / "upstream-sources.json"
-    origin = kit / "notebook" / legacy.name
-    if legacy.name in before and legacy.is_file() and not legacy.is_symlink() and origin.is_file():
-        try:
-            if legacy.read_bytes() == origin.read_bytes():
-                legacy.unlink()
-                seen.discard(legacy.name)
-        except OSError as err:
-            problems.append(f"{legacy.name}: {err.strerror or err}")
-    # Keep the lesson guide and required license notices alongside the bundle.
-    for name in ("EXAMPLE-GUIDE.md", "UPSTREAM-LICENSE.txt", "INSTALL-AND-UPDATE.md", "MODEL-PROVIDERS.md"):
-        origin, target = kit / "notebook" / name, base / name
-        if not origin.is_file() or target.exists() or target.is_symlink() or name in before:
-            continue
-        try:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(origin, target)
-            seen.add(name)
-            added.append(name)
-        except OSError as err:
-            problems.append(f"{name}: {err.strerror or err}")
     if front == "jupyter":                           # Marimo would list a README as a notebook of its own
         try:
-            write_readme(kit, doc, base)
+            write_readme(kit, doc, base, personas)
         except OSError as err:
             problems.append(f"README.md: {err.strerror or err}")
     if seen != before and base.is_dir():
@@ -181,42 +149,52 @@ def copy(front: str, kit: Path, notebooks_dir: Path) -> tuple[list[str], list[st
     return added, problems
 
 
-def write_readme(kit: Path, doc: dict, folder: Path) -> None:
-    """A README naming each persona folder and the order to open its notebooks in; written once, then the user's.
-    It names only the notebooks this kit copy carries."""
-    readme = folder / "README.md"
-    if readme.exists() or not folder.is_dir():
-        return
+def readme_text(kit: Path, doc: dict, personas: set[str] | None = None) -> str:
+    """The folder's README: the picked personas' notebooks in the order to open them, and the few
+    things to know. Only notebooks this kit copy carries."""
     source = kit / doc["sources"]["jupyter"]
-    lines = ["# The starter kit's notebooks", "", "One folder per persona; open its notebooks in this order, `00_quickstart` first.", ""]
+    keep = wanted(doc, personas)
+    lines = ["# Your notebooks", "", "Open them in order, `00_quickstart` first.", ""]
     persona = None
     for entry in doc["notebooks"]:
-        if not entry.get("jupyter") or not (source / entry["persona"] / entry["jupyter"]).is_file():
+        if entry["persona"] not in keep or not entry.get("jupyter") or not (source / entry["persona"] / entry["jupyter"]).is_file():
             continue
         if entry["persona"] != persona:
             persona = entry["persona"]
-            lines += ([""] if lines[-1] else []) + [f"## {persona}/ ({persona_title(kit, persona)})", ""]
-        lines.append(f"{int(entry['step']):02d}. `{persona}/{entry['jupyter']}` - {entry['title']}: {entry['summary']}")
-        lines.append(f"    Needs: {entry['needs']}")
-        if entry.get("upstream"):
-            lines.append(f"    Adapted from [Exasol Notebook Connector / AI Lab]({entry['upstream']}); see UPSTREAM-LICENSE.txt.")
+            lines += ([""] if lines[-1] else []) + [f"## {persona_title(kit, persona)} - `{persona}/`", ""]
+        needs = f" (needs {entry['needs']})" if entry.get("needs") else ""
+        lines.append(f"{int(entry['step']):02d}. `{entry['jupyter']}` - {entry['title']}{needs}")
     if (kit / "notebook/examples/jupyter/00_library.ipynb").is_file():
-        lines += ["", "## Full Exasol example library", "",
-                  "Open [exasol-examples/00_library.ipynb](exasol-examples/00_library.ipynb) for all 50 official lessons,",
-                  "their prerequisites and the recommended order. The same library is bundled for Marimo."]
-    if doc.get("examples"):
-        lines += ["", "## Useful notebooks", "", "Optional lessons, separate from the BRD persona sequence:", ""]
-        for entry in doc["examples"]:
-            lines.append(f"- `{entry['folder']}/{entry['jupyter']}` - {entry['title']}")
-    shared = doc.get("shared")
-    if shared and (source / shared["folder"] / shared["jupyter"]).is_file():
-        lines += ["", f"`{shared['folder']}/{shared['jupyter']}` - {shared['title']}: {shared['summary']}"]
-    lines += ["", "Every notebook connects with `import exakit.nb as nb; conn = nb.connect()` - no host, user or password.",
-              "These files are yours: the kit never overwrites them, and one you delete is not copied again.",
-              "Your own notebooks can go anywhere in the notebooks folder.",
-              "", "Also: `exakit notebook marimo` (the same notebooks in Marimo), `exakit notebook positron` (this folder in",
-              "Positron, with the kit's Python).", ""]
-    readme.write_text("\n".join(lines), encoding="utf-8")
+        lines += ["", "## Exasol examples", "", "`exasol-examples/00_library.ipynb` - the 50 official lessons, in order."]
+    lines += ["", "## Good to know", "",
+              "- Connect: `import exakit.nb as nb; conn = nb.connect()` - no host, user or password.",
+              "- A model for the AI steps: set `EXAKIT_MODEL_ID`, `EXAKIT_PROVIDER_BASE_URL` and",
+              "  `EXAKIT_PROVIDER_API_KEY` before `exakit notebook` (Claude: `https://api.anthropic.com/v1/`;",
+              "  Ollama: its `/v1/` address, no key).",
+              "- Langfuse traces: set `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL` the same way.",
+              "- Marimo: `exakit notebook marimo`.",
+              "- These files are yours: edits are kept, and a notebook you delete is not copied back."]
+    return "\n".join(lines) + "\n"
+
+
+def write_readme(kit: Path, doc: dict, folder: Path, personas: set[str] | None = None) -> None:
+    """Write the README; rewrite it when the personas change, but only while it is exactly what the kit wrote -
+    once edited it is the user's."""
+    readme = folder / "README.md"
+    if not folder.is_dir():
+        return
+    marker = folder / README_STATE
+    if readme.exists() or readme.is_symlink():
+        try:
+            ours = marker.read_text(encoding="utf-8").strip()
+            unchanged = not readme.is_symlink() and hashlib.sha256(readme.read_bytes()).hexdigest() == ours
+        except OSError:
+            unchanged = False
+        if not unchanged:
+            return
+    text = readme_text(kit, doc, personas)
+    readme.write_text(text, encoding="utf-8")
+    marker.write_text(hashlib.sha256(text.encode("utf-8")).hexdigest() + "\n", encoding="utf-8")
 
 
 def _strip_jsonc(text: str) -> tuple[str, bool]:
@@ -346,9 +324,10 @@ def positron_remove(notebooks_dir: Path, python: str, venv: str) -> str:
 
 
 def main(argv: list[str]) -> int:
-    if len(argv) == 4 and argv[0] == "copy" and argv[1] in ("jupyter", "marimo"):
+    if len(argv) in (4, 5) and argv[0] == "copy" and argv[1] in ("jupyter", "marimo"):
+        personas = {part for part in argv[4].split(",") if part} if len(argv) == 5 else None
         try:
-            added, problems = copy(argv[1], Path(argv[2]), Path(argv[3]))
+            added, problems = copy(argv[1], Path(argv[2]), Path(argv[3]), personas)
         except (OSError, ValueError, KeyError) as err:
             print(f"the kit's notebooks could not be placed: {err}", file=sys.stderr)
             return 1

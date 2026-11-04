@@ -7,15 +7,13 @@
 # ---
 
 # %% [markdown]
-# # Give the same trained model a Rust scorer
+# # Rust scorer
 #
-# **Dataset:** Esophageal, Banking or your own approved descriptor and handoff. **How long:** about fifteen minutes for a first build, less for later builds.
+# **Dataset:** Esophageal, Banking or your own approved descriptor and handoff. **How long:** about fifteen minutes for a first build.
 #
-# You already trained a linear model in Python. Now test whether a compiled Rust function can score the same later records with the same probabilities and labels. This checks a second implementation of the model; it does not train a new model or establish that the original model is useful.
+# Builds a Rust UDF from the trained coefficients and checks it scores exactly like Python.
 #
-# **By the end:** you will have a validated Linux library, a callable SQL scoring function, a parity result and a Rust record in MLflow.
-#
-# **Run first:** `01_train`, the `RUST` container (`exakit udf-setup --language rust`) and a running Docker or Podman Linux build engine. **Optional AI:** no LLM endpoint is required. Use an assistant to review the formula if helpful, then rely on the numerical comparison.
+# **Run first:** `01_train`, the `RUST` container (`exakit udf-setup --language rust`) and Docker or Podman running.
 
 # %%
 DATASET = "esophageal_posts"  # or banking_complaints, or your own approved descriptor
@@ -51,13 +49,9 @@ if stale:
     raise ValueError(stale)
 
 # %% [markdown]
-# ## Bring the exact coefficients, not a similar experiment
+# ## Load the coefficients
 #
-# Choose the model tied to this approved descriptor version. The default finds the newest finished Python run for that version and downloads its coefficients. You can instead set `COEFFICIENTS_FILE` to the file exported by training.
-#
-# **Read the result:** check the ordered feature list. Each coefficient must multiply the same input column in Python and Rust. A stale handoff or different feature order stops this step.
-#
-# **Technical note:** the artifact carries raw-feature coefficients, intercept and class order. The source MLflow run is retained for lineage. Choose a new `UDF_NAME` for a different coefficient revision so an existing project is preserved.
+# Defaults to the newest finished `01_train` run for this descriptor version, or set `COEFFICIENTS_FILE`. Feature order must match the handoff. Use a new `UDF_NAME` for a new revision.
 
 # %%
 source_run_id = None
@@ -88,13 +82,9 @@ if features != [item["name"] for item in handoff["input_schema"] if item["name"]
 print("features in coefficient order:", ", ".join(features))
 
 # %% [markdown]
-# ## Build for the database, then choose the deployment route
+# ## Build and deploy
 #
-# The scorer runs inside the database's Linux runtime, including when you work on a Mac. The next cell creates the project, builds and validates its `.so` library, then deploys a SQL function.
-#
-# **Read the result:** a usable shared bucket gives the normal file route. Without one, the kit can package the library into the RUST runtime. Keep `ALLOW_DATABASE_RESTART = False` until you are ready to permit that update; set it to `True` deliberately and rerun deployment when prompted. A verified unchanged packaged library can be reused without another restart.
-#
-# **Technical note:** the build pins exasol-udf-sdk 0.33.0 and rustc 1.98.1 and targets the database architecture. Deployment verifies library digests and actual UDF visibility, or uses the consented container fallback. The returned deployment details identify the route and resulting container digest.
+# Builds a Linux `.so` and deploys a SQL function. Without a shared bucket, the library goes into the RUST container, which restarts the database: set `ALLOW_DATABASE_RESTART = True` to allow it.
 
 # %%
 def exakit(*arguments):
@@ -121,11 +111,9 @@ deployed = exakit("rust-udf", "deploy", SCORER_NAME, "--schema", UDF_SCHEMA, *de
 print("Rust UDF:", deployed["udf"], "sha256", deployed["sha256"])
 
 # %% [markdown]
-# ## Test the claim that both scorers are equivalent
+# ## Check parity
 #
-# Look at the largest probability difference and whether the predicted labels agree. If either check fails, investigate feature ordering, missing inputs, coefficients and runtime compatibility before using the scorer.
-#
-# **Technical note:** both scorer inputs replace missing numeric features with zero, matching the training UDF. Non-finite probabilities fail the check. The query uses the handoff's later test partition and compares up to `TEST_ROWS` records, 500 by default. The Python formula is a sigmoid over the exported raw-feature weights. Every tested label must match and the largest probability difference must be below `1e-9`. This is evidence for the tested rows; adjust the row limit when your verification needs broader coverage.
+# Scores up to `TEST_ROWS` test rows in Rust and Python. Every label must match and the largest probability gap must be below `1e-9`.
 
 # %%
 arguments = ", ".join(f'COALESCE(CAST(T."{feature}" AS DOUBLE), 0.0)' for feature in features)
@@ -149,11 +137,9 @@ if gap >= 1e-9 or not labels_match:
 print("Rust and Python scoring agree on the held-out rows.")
 
 # %% [markdown]
-# ## Leave a trail from the scorer back to its training run
+# ## Record the run in MLflow
 #
-# After a passing comparison, inspect the Rust run in MLflow. It should lead back to the source Python run and the descriptor version. This lets a colleague identify which library and recipe produced the scores.
-#
-# **Technical note:** the run records the actual scoring-container digest, its base-container digest, rustc/SDK pins, Cargo.lock and library hashes, comparison row count and maximum difference. Build records are attached as artifacts. A successful parity check preserves the original model's behaviour; model-quality acceptance remains a separate check.
+# Logs a Rust run linked to the source Python run, with build hashes and the parity result.
 
 # %%
 import hashlib

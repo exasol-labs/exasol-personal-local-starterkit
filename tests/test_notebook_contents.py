@@ -151,24 +151,6 @@ class CatalogTest(unittest.TestCase):
                 self.assertTrue(entry["jupyter"].startswith(f"{int(entry['step']):02d}_"), "the file's number is its step")
                 self.assertEqual(Path(entry["jupyter"]).stem, Path(entry["marimo"]).stem)
 
-    def test_adapted_examples_have_pinned_sources_and_license(self):
-        provenance = json.loads((ROOT / "notebook" / "upstream-sources.json").read_text())
-        self.assertRegex(provenance["connector_revision"], r"^[0-9a-f]{40}$")
-        self.assertRegex(provenance["ai_lab_revision"], r"^[0-9a-f]{40}$")
-        examples = {entry["notebook"]: entry for entry in provenance["notebooks"]}
-        for entry in self.DOC.get("examples", []):
-            if "upstream" not in entry:
-                continue
-            key = f"{entry['folder']}/{Path(entry['jupyter']).stem}"
-            source = examples.pop(key)
-            self.assertEqual(source["source"], entry["upstream"])
-            self.assertIn(provenance["connector_revision"], source["source"])
-            self.assertRegex(source["sha256"], r"^[0-9a-f]{64}$")
-        self.assertEqual(examples, {})
-        license_text = (ROOT / "notebook" / "UPSTREAM-LICENSE.txt").read_text()
-        self.assertIn("Permission is hereby granted", license_text)
-        self.assertIn("Exasol", license_text)
-
     def test_the_catalog_names_files_that_exist(self):
         """Each entry's files are there - except an entry whose .py is not in the tree yet (built when it lands)."""
         pending = set(build_tool.pending())
@@ -196,15 +178,6 @@ class CatalogTest(unittest.TestCase):
                 self.assertNotIn("first_prompt", doc)
                 self.assertTrue((SOURCES / persona / "00_quickstart.ipynb").is_file())
 
-    def test_extra_lessons_leave_all_brd_reserved_slots_free(self):
-        examples = self.DOC["examples"]
-        self.assertEqual(len(examples), 4)
-        for entry in examples:
-            self.assertEqual(entry["folder"], "useful-notebooks/" + entry["persona"])
-        for persona in SPRINT_NOTEBOOKS:
-            for front in ("notebooks", "marimo"):
-                files = list((ROOT / "notebook" / front / persona).glob("0[45]_*"))
-                self.assertEqual(files, [], "BRD backlog slots must not hold unrelated utility lessons")
 
 
 class NotebookShapeTest(unittest.TestCase):

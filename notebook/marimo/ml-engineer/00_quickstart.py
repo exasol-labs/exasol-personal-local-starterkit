@@ -14,17 +14,13 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    # Prepare a trustworthy place to train
+    # ML Engineer quickstart
 
-    **Dataset:** `esophageal_posts` by default; Banking or your own described file can follow. **How long:** about five minutes once the required runtimes are installed.
+    **Dataset:** `esophageal_posts` by default; Banking or your own file also work. **How long:** about five minutes once runtimes are installed.
 
-    The Data Scientist has identified a question and a column map. Your job is to turn that work into a repeatable training and scoring flow. Start by checking the environment before interpreting any model metric.
+    Checks the database Python runtime, MLflow and the shared model directory, then loads and describes the data.
 
-    **By the end:** you will know whether the database can run Python, where training runs are recorded, whether shared model files are visible and which outcome the first query describes. The following chapters train in Exasol, verify a Rust scorer and try a trusted model file.
-
-    **Optional AI:** this path uses SQL and scikit-learn as supplied; an LLM endpoint is optional. An assistant can help you inspect code or propose a later experiment, while the checks and measured results remain yours to validate.
-
-    **Run first:** install the ML Engineer persona or UDF devkit. `exakit udf-use default` supplies the ML runtime; a container installation can restart the database.
+    **Run first:** `exakit udf-use default` (installs the ML runtime; a container install can restart the database).
     """)
     return
 
@@ -32,11 +28,9 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Keep the investigation connected to the training run
+    ## Start a workflow
 
-    Use one workflow ID to follow the approved data, checks and model runs. If you continue the Data Scientist's investigation, start the kernel with its `EXAKIT_WORKFLOW_ID`; otherwise this cell creates a fresh workflow.
-
-    **Technical note:** each logged step carries the same identifier, and MLflow runs can carry it as a tag. Keep the printed `exakit workflow show ...` command so you can inspect the trail later.
+    One ID links data, checks and model runs. To continue the Data Scientist's log, start the kernel with `EXAKIT_WORKFLOW_ID`.
     """)
     return
 
@@ -54,13 +48,13 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Choose the Python that runs inside the database
+    ## Pick the database Python runtime
 
-    The notebook's Python prepares the work. A separate Python runtime inside Exasol executes the training UDF, which is a function you call from SQL. It needs its own copies of scikit-learn and the other training packages.
+    Training runs as a UDF inside Exasol, with its own packages.
 
-    **Read the result:** keep the default `CONTAINER` for the first run. The printed alias identifies the runtime the next check and training notebook will use.
-
-    **Technical note:** `exakit udf-use default` installs `PYTHON3_ML` with the ML packages; `exakit udf-setup` installs the official `PYTHON3` alternative. `PYTHON3_ML` is preferred when installed. `EXAKIT_UDF_CONTAINER` can select another installed alias. If none is ready, the helper stops and names the installation command.
+    - `PYTHON3_ML` (`exakit udf-use default`): preferred, has the ML packages.
+    - `PYTHON3` (`exakit udf-setup`): the official alternative.
+    - `EXAKIT_UDF_CONTAINER` picks another installed alias.
     """)
     return
 
@@ -76,11 +70,9 @@ def _(nb):
 def _(mo):
     # Cell tags: connect
     mo.md(r"""
-    ## Meet the data where it lives
+    ## Connect
 
-    Before interpreting a number, check that the notebook can reach your local Exasol database. The next cell connects using the kit's saved connection and runs a small check. Then you can see the available schemas, which are folders of database tables.
-
-    **Technical note:** `nb.connect()` reads the kit's connection store. You can reuse this cell in your own notebook without copying connection credentials into it.
+    Uses the kit's saved connection, then lists the schemas. No password in the notebook.
     """)
     return
 
@@ -103,13 +95,9 @@ def _(conn, nb):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Prove the database can import its training packages
+    ## Check the runtime packages
 
-    A package working in Jupyter does not establish that it works inside Exasol. The next cell runs a small UDF in the selected runtime and checks what it imports.
-
-    **Read the result:** continue when the check reports success. If it prints a failure, use the command it names for that exact alias and repeat the check before training.
-
-    **Technical note:** this is a smoke test of the database-side Python and required package versions. The useful lesson `01_udf_package_check` shows a fuller package report.
+    Runs a small UDF that imports the training packages. On failure, run the command it prints and repeat.
     """)
     return
 
@@ -123,13 +111,9 @@ def _(CONTAINER, conn, nb):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Decide where the experiment record goes
+    ## Check MLflow
 
-    A useful experiment includes its inputs, settings, metrics and model files. MLflow is the experiment record you can inspect and compare after training; it is independent of any optional LLM endpoint.
-
-    **Read the result:** the check reports the destination this notebook will actually use. For the local browser UI, run `exakit mlflow start` and open the address from `exakit mlflow url`.
-
-    **Technical note:** `MLFLOW_TRACKING_URI` selects another configured server. Otherwise the helper uses the kit server or its local store under `~/.exasol-starter-kit/mlflow/`. The client records the UDF's result; database training does not need MLflow credentials.
+    Shows where runs are recorded. Browser UI: `exakit mlflow start`, then `exakit mlflow url`. `MLFLOW_TRACKING_URI` overrides.
     """)
     return
 
@@ -143,13 +127,9 @@ def _(nb):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Check the path a scoring function will read
+    ## Check the shared model directory
 
-    A trained model can be a file on your computer, but a database function must see that file from inside its runtime. The next check tests the kit's shared model directory and its visibility in a UDF.
-
-    **Read the result:** success makes the shared-file scoring route available. Record a failed check and its reason. Rust has a separate container-packaging fallback that asks before a needed restart; Python model-file scoring still needs a working shared directory.
-
-    **Technical note:** `exakit model list --json` reports the host directory and the `/buckets/...` path a UDF uses. This check does not make a missing shared directory pass by assumption.
+    Tests that a UDF can read the kit's model directory (needed for Python model-file scoring). `exakit model list --json` shows its paths.
     """)
     return
 
@@ -164,13 +144,9 @@ def _(conn, nb):
 def _(mo):
     # Cell tags: load
     mo.md(r"""
-    ## Choose a starting dataset
+    ## Choose a dataset
 
-    Start with the bundled sample so you can learn the flow with known data. Esophageal asks which posts are negative; Banking asks about complaint outcomes. Later you can use the same pattern with a file of your own.
-
-    Each loading cell has its own setting. Leave unused paths at their defaults. For this local walkthrough, keep `SOURCE = None`. The final selection cell tells the rest of the notebook which dataset to use.
-
-    **Start here: use the bundled sample.** Keep `SAMPLE = "esophageal_posts"` for social posts, or change it to `"banking_complaints"` for complaint data. The helper loads a missing sample and reuses one already loaded. Set it to `None` when you later want to work only with your own file.
+    Start with the bundled sample: `SAMPLE = "esophageal_posts"` (social posts) or `"banking_complaints"` (complaints). It loads once and is reused. Keep `SOURCE = None` for this walkthrough.
     """)
     return
 
@@ -187,7 +163,7 @@ def _(conn, nb):
 def _(mo):
     # Cell tags: load
     mo.md(r"""
-    **Make this your own later.** Set `OWN_FILE` to a CSV, Parquet or JSON file and choose a new `OWN_TABLE`, such as `MY_DATA.TRANSACTIONS`. The loader brings its records into Exasol; the review step below suggests how to use its columns. A default path that does not exist is skipped, so you can finish the sample story first.
+    **Your own file (optional):** set `OWN_FILE` (CSV, Parquet or JSON) and `OWN_TABLE`. A missing path is skipped.
     """)
     return
 
@@ -205,8 +181,7 @@ def _(conn, nb):
 def _(mo):
     # Cell tags: load
     mo.md(r"""
-    **A connected source**: a table in a virtual schema, an external database Exasol reads live. Name it as
-    SCHEMA.TABLE; the next cell profiles a sample and lets you review the roles. With no source connected, it skips.
+    **A connected source (optional):** set `SOURCE = "SCHEMA.TABLE"` for a virtual-schema table. `None` skips it.
     """)
     return
 
@@ -223,7 +198,7 @@ def _(conn, nb):
 def _(mo):
     # Cell tags: load
     mo.md(r"""
-    The data used from here on. A source wins over your file, which wins over the sample:
+    The data used from here on: the source, else your file, else the sample.
     """)
     return
 
@@ -239,23 +214,23 @@ def _(nb, own, sample, source):
 def _(mo):
     # Cell tags: review
     mo.md(r"""
-    ## Give the columns a meaning for this question
+    ## Approve the column roles
 
-    A table stores values. A **role** tells these notebooks how you want to use a column. The kit suggests roles from the real column names, types and measured values, then shows its reasons. You decide whether those suggestions fit your goal.
+    A **role** tells the notebooks how to use a column. The kit suggests roles with its reasons.
 
-    | Role | Meaning | Esophageal example | Banking example |
+    | Role | Meaning | Esophageal | Banking |
     |---|---|---|---|
     | `entity` | Who or what to compare | `SOURCE_DOMAIN` | `COMPANY` |
     | `category` | Groups to compare | `SOCIAL_NETWORK` | `PRODUCT` |
-    | `date` | The event timeline | `START_DATE` | `DATE_RECEIVED` |
-    | `label` | The outcome to predict | `IS_NEGATIVE` | `MONETARY_RELIEF` |
-    | `text` | Written descriptions | `MESSAGE` | none (the CFPB no longer publishes narratives) |
+    | `date` | Event time | `START_DATE` | `DATE_RECEIVED` |
+    | `label` | Outcome to predict | `IS_NEGATIVE` | `MONETARY_RELIEF` |
+    | `text` | Free text | `MESSAGE` | none |
 
-    **Your most important choice is the label.** A model using `IS_NEGATIVE` learns the listening tool's sentiment. A model using `IS_REPLY` answers whether a post was a reply. Both can contain 0/1; the business question decides which is useful.
+    The **label** matters most: it is what a model learns to predict.
 
-    **Do now:** read the reasons, keep or change the dropdowns, leave unrelated columns as **—**, then click **Approve descriptor**. A close alternative deserves a second look. A rule-match score measures how well a column fits the rules, not certainty about its meaning.
+    **Do now:** check the dropdowns, leave unrelated columns as **—**, click **Approve descriptor**. The next cell waits for it. Explore, Ask, Train and Share use this approved map.
 
-    **Technical note:** approval saves a versioned **descriptor**, the column map used by Explore, Ask, Train and Share. The next cell waits for approval; Marimo resumes it after the button is clicked. Plain Python can use `review.approve({"COLUMN": "role", ...})`. Automated `EXAKIT_NB_AUTO_APPROVE=1` reuses an unchanged approved map; `force` accepts a new proposal deliberately. Use the button for this walkthrough.
+    Plain Python: `review.approve({"COLUMN": "role", ...})`.
     """)
     return
 
@@ -278,13 +253,9 @@ def _(nb, review):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Confirm the outcome before teaching a model
+    ## Check the label
 
-    Count the records and positive outcomes in each category. Esophageal's label is a negative post; Banking's is monetary relief. Check that this matches the question handed to you.
-
-    **Read the result:** a positive label means the chosen outcome occurred. It does not mean that the outcome is desirable. The query shows which groups and class balance the later training recipe will encounter.
-
-    **Technical note:** the query uses the approved role map. Missing category or label roles produce the explained fallback rather than an invented column.
+    Rows and positive labels per category. Label 1 means the outcome happened (negative post, monetary relief), not that it is good.
     """)
     return
 
@@ -306,11 +277,9 @@ def _(conn, ds_1, nb):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Move from readiness to a repeatable experiment
+    ## Next
 
-    Run `data-scientist/01_explore.ipynb` through its handoff cell for the chosen dataset, then open `01_train.ipynb`. A **handoff** is the saved recipe tying the approved column map, data fingerprint, features and split together.
-
-    Change one `DATASET` assignment in the training notebook to follow Banking or your own described file. Keep the default runtime until the first experiment is working.
+    Run `data-scientist/01_explore.ipynb` up to its handoff cell, then open `01_train.ipynb`.
     """)
     return
 

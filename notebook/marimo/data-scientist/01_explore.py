@@ -14,15 +14,13 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    # Explore patterns, then prepare a reproducible handoff
+    # Explore
 
-    **Dataset:** `esophageal_posts` by default; change `DATASET` for `banking_complaints` or your own described file. **How long:** about two minutes, plus time for optional model calls.
+    **Dataset:** `esophageal_posts` by default; change `DATASET` for `banking_complaints` or your own file. **How long:** about two minutes.
 
-    You have agreed what the columns mean. Now investigate where outcomes are concentrated, whether they change over time and whether a small model finds useful patterns. Esophageal compares websites and networks; Banking compares companies and products.
+    Compare groups, follow outcomes over time, fit a small local model, then write a handoff for the ML Engineer.
 
-    **By the end:** you will have visible SQL, descriptive results, a local baseline model and a handoff the ML Engineer can reproduce. Start with the supplied code, then adapt the questions to your project.
-
-    **Optional AI:** `USE_AI_THEMES = False` keeps the optional LLM text summaries off. The supplied scikit-learn model runs on your computer without an LLM service. Turn themes on only after configuring your model endpoint; Langfuse tracing is a further opt-in.
+    Optional: `USE_AI_THEMES = True` adds LLM text themes (needs a model endpoint).
     """)
     return
 
@@ -37,15 +35,11 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Reuse the column map instead of rewriting every query
+    ## Load the column map
 
-    Keep `DATASET = "esophageal_posts"` for the first run. A sample ID opens its table; a CSV, Parquet or JSON path opens the descriptor saved beside that file. This is how the same analysis can travel between domains.
+    `DATASET` is a sample ID or a file path with its descriptor beside it. A draft map is enough here; the handoff needs an approved one.
 
-    **Do now:** review the suggested meanings and check the label still matches the outcome you want to investigate. Exploration can inspect a draft. The final training handoff, Ask and Share need an approved descriptor.
-
-    **Technical note:** the helper validates the mapped columns against the database. An undescribed file can be loaded and profiled here; approve its map in the picker before making a handoff. Each step names the roles it needs and explains why it skips when one is missing. Other steps remain available.
-
-    Set `WORKFLOW_ID` to the quickstart's identifier to keep one investigation log. With no identifier, this notebook starts its own.
+    Set `WORKFLOW_ID` to the quickstart's ID to keep one log. Steps whose roles are missing skip and say why.
     """)
     return
 
@@ -77,13 +71,9 @@ def _(DATASET):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Find the groups worth investigating
+    ## Compare groups
 
-    Start with the busiest entities and their categories. For Esophageal, compare post counts and negative shares across websites and networks. For Banking, compare complaint counts and monetary-relief shares across companies and products.
-
-    **Read the result:** `N` is the size of a group; `LABEL_1_PCT` is the percentage with your chosen outcome. A small group with a high percentage deserves different caution from a large group with a stable rate. This is a descriptive comparison, not a causal finding.
-
-    **Technical note:** the query selects the ten entities with the most records, aggregates them by the category role and returns a pandas table. The SQL is printed so you can inspect how the numbers were made.
+    Top 10 entities, split by category. `N` = rows, `LABEL_1_PCT` = % with label 1. Descriptive, not causal.
     """)
     return
 
@@ -118,7 +108,7 @@ def _(CATEGORY, ENTITY, LABEL, conn, ds, missing_line, nb):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    The first table keeps counts and outcome percentages together. This second view puts each category in a column so you can compare the number of records across entities. It shows counts only; use the first table for outcome rates.
+    The same counts, one column per category.
     """)
     return
 
@@ -132,11 +122,9 @@ def _(pivot):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Check whether the pattern changes over time
+    ## Over time
 
-    A single total can hide changes in the mix of records. The next result follows counts and outcome rates across the approved event date. Consider whether a busy period or a different group mix could affect your earlier comparison.
-
-    **Technical note:** the notebook chooses day, month or year periods from the date span. It needs date and label roles; without them it prints the reason for skipping this step.
+    Rows and label rate per day, month or year (picked from the date span). Needs date and label roles.
     """)
     return
 
@@ -166,13 +154,9 @@ def _(DATE, LABEL, conn, ds, missing_line, nb):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Try a modest baseline before making a bigger claim
+    ## Small baseline model
 
-    Can the descriptions and category help distinguish the two outcomes? The next cell fits a small text classifier on your computer. In Esophageal the outcome is a negative post; in Banking it is monetary relief.
-
-    **Read the result:** ROC AUC measures how well the model ranks the two outcomes; 0.5 is chance-level ranking. A higher score is evidence from this sample, not proof that the model is ready for a real decision or explains causes.
-
-    **Technical note:** SQL selects up to 20,000 recent labelled rows. scikit-learn combines TF-IDF word features with a one-hot category, then fits logistic regression. A fixed, stratified random split holds out a quarter of this sample. This client demonstration uses a different split from the later time-based in-database training notebook.
+    TF-IDF text + one-hot category, logistic regression, on up to 20,000 recent labelled rows; a quarter held out. ROC AUC 0.5 = guessing.
     """)
     return
 
@@ -222,11 +206,9 @@ def _(CATEGORY, DATE, ENTITY, LABEL, TEXT, conn, ds, missing_line, nb):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Inspect the clues the model used
+    ## Model clues
 
-    Read the words associated with predictions toward 1 and toward 0. Use them to form questions about the data: are they plausible domain signals, boilerplate or information that would only be known after the outcome?
-
-    **Technical note:** these are the largest positive and negative coefficients in the fitted linear model. They describe this model's associations. The table remains empty if the model step was skipped.
+    Top words pushing predictions toward 1 and toward 0. Check they are real signals, not boilerplate or leaks.
     """)
     return
 
@@ -247,15 +229,13 @@ def _(model):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Optional AI: add short themes to a small text sample
+    ## Optional: AI themes
 
-    You can complete the investigation without this step. If you want help reading descriptions, configure `EXAKIT_MODEL_ID`, `EXAKIT_PROVIDER_BASE_URL` and `EXAKIT_PROVIDER_API_KEY` before starting the kernel, then set `USE_AI_THEMES = True` near the top.
+    Set `EXAKIT_MODEL_ID`, `EXAKIT_PROVIDER_BASE_URL` and `EXAKIT_PROVIDER_API_KEY` before starting the kernel, then `USE_AI_THEMES = True`. Setup: the README in the notebooks folder.
 
-    These settings work with a text/chat model served through the documented compatibility endpoint of Claude, Ollama, LM Studio, vLLM or Gemini. A local server may need no API key. The [provider guide](../MODEL-PROVIDERS.md) beside these notebooks explains the exact URLs, authentication and limits; model identifiers come from your provider or local server. `nb.model_settings()` checks configuration without printing the key or making a request.
+    Sends up to five texts to your model (a live source asks first). Themes are suggestions to check.
 
-    The code sends up to five selected descriptions to your endpoint and asks for short themes. Read those themes against the original text; they are suggestions to check, not established facts. Use the printed sample SQL to see exactly which records were selected.
-
-    **Optional tracing:** set `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and `LANGFUSE_BASE_URL` before launching notebooks to group the model calls in your Langfuse project. This records inputs/outputs, usage, timing and workflow/descriptor/session/SQL tags. Keep keys in the environment. Configuring a model can also enable optional column-description notes during profiling; the role assignments still come from fixed rules and require your approval.
+    Optional tracing: set `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and `LANGFUSE_BASE_URL`. Keep keys in the environment.
     """)
     return
 
@@ -300,11 +280,9 @@ def _(ENTITY, TEXT, USE_AI_THEMES, conn, ds, missing_line, nb):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Decide what deserves the next experiment
+    ## Decide what to test next
 
-    Review the group comparisons, time pattern and local model together. Keep a useful question, note a limitation and decide what you would need to validate next. Optional AI themes can help you read the text, while the visible SQL and measured results remain the evidence.
-
-    To repeat this investigation with Banking or your own described file, change `DATASET` and rerun. Keep the same workflow ID when it is the same investigation.
+    Keep one finding worth validating. To rerun on other data, change `DATASET`.
     """)
     return
 
@@ -312,13 +290,11 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Hand off to the ML Engineer: a recipe someone else can run
+    ## Hand off to the ML Engineer
 
-    The ML Engineer needs more than a screenshot of your results. The next cell writes a **handoff**: the chosen dataset, approved column-map version, data fingerprint, feature recipe, target and train/test split.
+    Writes a **handoff**: dataset, approved map version, data fingerprint, features, label and split (earliest 80% train, latest 20% test). Next: `ml-engineer/01_train.ipynb`.
 
-    **Read the result:** keep the printed handoff path and check its descriptor ID/version and label. Open `ml-engineer/01_train.ipynb` to train inside Exasol from this recipe. If you change the approved map or data later, create a fresh handoff.
-
-    **Technical note:** features are reproducible SQL inputs: category flags, date parts, text lengths and entity frequency. The time split uses the earliest 80% for training and later 20% for evaluation. Without a date, explicitly request `nb.write_handoff(conn, ds, split="random")` or approve a date role. A stale or unapproved handoff is refused.
+    Needs an approved map with date and label roles. Without a date: `nb.write_handoff(conn, ds, split="random")`.
     """)
     return
 

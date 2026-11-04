@@ -8,6 +8,9 @@
 - **Add one later.** `exakit persona add ml-engineer` brings in what the new persona needs - its data, AI clients and add-ons - without a question; `exakit persona remove <id>` takes a persona off and keeps the data and add-ons another persona still uses. `exakit persona list | show <id> | plan` shows what each one brings and what is still pending.
 - **Every question looks the same.** The persona, add-on and notebook-tool screens use the same frame, ticks and progress bar as the rest of the install, in your terminal's own colours. A click ticks or unticks a row, only Enter moves on, the scroll wheel still scrolls the terminal, and resizing the window keeps the earlier output. On Windows the kit's own PowerShell menus draw these questions in the same place, never full screen; clicks work there too (`EXAKIT_NO_MOUSE=1` turns them off).
 - **The add-ons table.** While you choose it shows each add-on's Version and Description; once Enter starts the install it shows Version and Status, with the step above the active row. A spinner covers the pause before it opens.
+- **Your personas' notebooks only.** Picking Data Scientist copies its notebooks; adding ML Engineer later brings that folder. The notebooks folder's README lists what you have, in order, and how to connect a model.
+- **Short notebooks.** Each step says what it does and what to set, in a line or two.
+- **Datasets say what they are.** The data table shows a short description beside each dataset.
 
 ### Data Scientist
 

@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "ml-engineer",
   "title": "ML Engineer",
-  "summary": "Train models inside the database with Python UDFs - or score them with Rust UDFs - on the reference datasets and the medical text sets, runs logged to the kit's MLflow.",
+  "summary": "Train and score models inside the database, tracked in MLflow.",
   "picker": true,
   "visible": true,
   "order": 20,

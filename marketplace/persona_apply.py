@@ -187,6 +187,14 @@ def apply(ctx: KitContext, requested: str, prefix: list[str], *, live: bool = Fa
     ready = set(installed)
     if not any(part == "Add-ons" for part, _ in failures):
         ready.update(pending_addons)
+    if "notebook" in installed:
+        # The notebook was already there: the new persona's notebooks join it (a fresh install copies its own).
+        from addons import notebook
+
+        try:
+            notebook.sync_notebooks(ctx)
+        except (AddonFailure, OSError) as error:
+            failures.append(("Notebooks", f"exakit notebook setup ({error})"))
     failures.extend(start_services(ctx, persona_service.selected_services(ctx.root, new_ids),
                                    lambda command, args: _child(prefix, command, args, environment), ready))
     if failures:

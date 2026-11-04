@@ -7,24 +7,18 @@
 # ---
 
 # %% [markdown]
-# # Prepare a trustworthy place to train
+# # ML Engineer quickstart
 #
-# **Dataset:** `esophageal_posts` by default; Banking or your own described file can follow. **How long:** about five minutes once the required runtimes are installed.
+# **Dataset:** `esophageal_posts` by default; Banking or your own file also work. **How long:** about five minutes once runtimes are installed.
 #
-# The Data Scientist has identified a question and a column map. Your job is to turn that work into a repeatable training and scoring flow. Start by checking the environment before interpreting any model metric.
+# Checks the database Python runtime, MLflow and the shared model directory, then loads and describes the data.
 #
-# **By the end:** you will know whether the database can run Python, where training runs are recorded, whether shared model files are visible and which outcome the first query describes. The following chapters train in Exasol, verify a Rust scorer and try a trusted model file.
-#
-# **Optional AI:** this path uses SQL and scikit-learn as supplied; an LLM endpoint is optional. An assistant can help you inspect code or propose a later experiment, while the checks and measured results remain yours to validate.
-#
-# **Run first:** install the ML Engineer persona or UDF devkit. `exakit udf-use default` supplies the ML runtime; a container installation can restart the database.
+# **Run first:** `exakit udf-use default` (installs the ML runtime; a container install can restart the database).
 
 # %% [markdown]
-# ## Keep the investigation connected to the training run
+# ## Start a workflow
 #
-# Use one workflow ID to follow the approved data, checks and model runs. If you continue the Data Scientist's investigation, start the kernel with its `EXAKIT_WORKFLOW_ID`; otherwise this cell creates a fresh workflow.
-#
-# **Technical note:** each logged step carries the same identifier, and MLflow runs can carry it as a tag. Keep the printed `exakit workflow show ...` command so you can inspect the trail later.
+# One ID links data, checks and model runs. To continue the Data Scientist's log, start the kernel with `EXAKIT_WORKFLOW_ID`.
 
 # %%
 import os
@@ -34,13 +28,13 @@ wid = nb.workflow("ml-engineer-quickstart", resume=os.environ.get("EXAKIT_WORKFL
 print(f"Every step below is logged under it: exakit workflow show {wid}")
 
 # %% [markdown]
-# ## Choose the Python that runs inside the database
+# ## Pick the database Python runtime
 #
-# The notebook's Python prepares the work. A separate Python runtime inside Exasol executes the training UDF, which is a function you call from SQL. It needs its own copies of scikit-learn and the other training packages.
+# Training runs as a UDF inside Exasol, with its own packages.
 #
-# **Read the result:** keep the default `CONTAINER` for the first run. The printed alias identifies the runtime the next check and training notebook will use.
-#
-# **Technical note:** `exakit udf-use default` installs `PYTHON3_ML` with the ML packages; `exakit udf-setup` installs the official `PYTHON3` alternative. `PYTHON3_ML` is preferred when installed. `EXAKIT_UDF_CONTAINER` can select another installed alias. If none is ready, the helper stops and names the installation command.
+# - `PYTHON3_ML` (`exakit udf-use default`): preferred, has the ML packages.
+# - `PYTHON3` (`exakit udf-setup`): the official alternative.
+# - `EXAKIT_UDF_CONTAINER` picks another installed alias.
 
 # %%
 CONTAINER = nb.ml_train.udf_container()   # or "PYTHON3_ML", "PYTHON3", or the alias of a container you installed
@@ -49,37 +43,25 @@ print(f"container alias: {CONTAINER}")
 # %% [include] ../00_shared/data_paths.py connect
 
 # %% [markdown]
-# ## Prove the database can import its training packages
+# ## Check the runtime packages
 #
-# A package working in Jupyter does not establish that it works inside Exasol. The next cell runs a small UDF in the selected runtime and checks what it imports.
-#
-# **Read the result:** continue when the check reports success. If it prints a failure, use the command it names for that exact alias and repeat the check before training.
-#
-# **Technical note:** this is a smoke test of the database-side Python and required package versions. The useful lesson `01_udf_package_check` shows a fuller package report.
+# Runs a small UDF that imports the training packages. On failure, run the command it prints and repeat.
 
 # %%
 container_ok = nb.check_container(conn, alias=CONTAINER)
 
 # %% [markdown]
-# ## Decide where the experiment record goes
+# ## Check MLflow
 #
-# A useful experiment includes its inputs, settings, metrics and model files. MLflow is the experiment record you can inspect and compare after training; it is independent of any optional LLM endpoint.
-#
-# **Read the result:** the check reports the destination this notebook will actually use. For the local browser UI, run `exakit mlflow start` and open the address from `exakit mlflow url`.
-#
-# **Technical note:** `MLFLOW_TRACKING_URI` selects another configured server. Otherwise the helper uses the kit server or its local store under `~/.exasol-starter-kit/mlflow/`. The client records the UDF's result; database training does not need MLflow credentials.
+# Shows where runs are recorded. Browser UI: `exakit mlflow start`, then `exakit mlflow url`. `MLFLOW_TRACKING_URI` overrides.
 
 # %%
 mlflow_ok = nb.check_mlflow()
 
 # %% [markdown]
-# ## Check the path a scoring function will read
+# ## Check the shared model directory
 #
-# A trained model can be a file on your computer, but a database function must see that file from inside its runtime. The next check tests the kit's shared model directory and its visibility in a UDF.
-#
-# **Read the result:** success makes the shared-file scoring route available. Record a failed check and its reason. Rust has a separate container-packaging fallback that asks before a needed restart; Python model-file scoring still needs a working shared directory.
-#
-# **Technical note:** `exakit model list --json` reports the host directory and the `/buckets/...` path a UDF uses. This check does not make a missing shared directory pass by assumption.
+# Tests that a UDF can read the kit's model directory (needed for Python model-file scoring). `exakit model list --json` shows its paths.
 
 # %%
 bucket_ok = nb.check_bucket(conn)
@@ -89,13 +71,9 @@ bucket_ok = nb.check_bucket(conn)
 # %% [include] ../00_shared/data_paths.py review
 
 # %% [markdown]
-# ## Confirm the outcome before teaching a model
+# ## Check the label
 #
-# Count the records and positive outcomes in each category. Esophageal's label is a negative post; Banking's is monetary relief. Check that this matches the question handed to you.
-#
-# **Read the result:** a positive label means the chosen outcome occurred. It does not mean that the outcome is desirable. The query shows which groups and class balance the later training recipe will encounter.
-#
-# **Technical note:** the query uses the approved role map. Missing category or label roles produce the explained fallback rather than an invented column.
+# Rows and positive labels per category. Label 1 means the outcome happened (negative post, monetary relief), not that it is good.
 
 # %%
 skipped = {m["role"]: m["reason"] for m in ds.missing}
@@ -116,8 +94,6 @@ nb.show_sql()
 first_rows
 
 # %% [markdown]
-# ## Move from readiness to a repeatable experiment
+# ## Next
 #
-# Run `data-scientist/01_explore.ipynb` through its handoff cell for the chosen dataset, then open `01_train.ipynb`. A **handoff** is the saved recipe tying the approved column map, data fingerprint, features and split together.
-#
-# Change one `DATASET` assignment in the training notebook to follow Banking or your own described file. Keep the default runtime until the first experiment is working.
+# Run `data-scientist/01_explore.ipynb` up to its handoff cell, then open `01_train.ipynb`.

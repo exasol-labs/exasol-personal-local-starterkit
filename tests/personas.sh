@@ -107,8 +107,8 @@ out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H retail benchmark (~175k 
         EXAKIT_DATASETS_PRESELECT=esophageal_posts; exakit_data_table_build "$WORK/table"
         printf '%s~%s~%s~%s' "$EXAKIT_TABLE_DEFAULTS" "$EXAKIT_TABLE_ROW_LOCAL" "$(cut -d'|' -f2 "$WORK/table" | tr '\n' ';')" \
             "$(cut -d'|' -f11 "$WORK/table" | tr '\n' ';')") )"
-check "the persona's row ticked, the file and external rows after the datasets, each named for its persona in the For column" \
-    "3~4~Sample datasets;TPC-H retail benchmark;Esophageal cancer posts;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - coming soon;Skip;~;General;both personas;;;;" "$out"
+check "the persona's row ticked, the file and external rows after the datasets, each described in the Description column" \
+    "3~4~Sample datasets;TPC-H retail benchmark;Esophageal cancer posts;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - coming soon;Skip;~;Orders, customers, parts;Social media posts;;;;" "$out"
 out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H retail benchmark (~175k rows)\nesophageal_posts|Esophageal cancer posts (social listening, ~41k posts, de-identified)\n'; }
         EXAKIT_PERSONA_ACTIVE=1 EXAKIT_DATASETS_PRESELECT=esophageal_posts; exakit_data_table_build "$WORK/table"
         printf '%s~%s' "$EXAKIT_TABLE_DEFAULTS" "$(cut -d'|' -f2 "$WORK/table" | tr '\n' ';')") )"
@@ -187,7 +187,7 @@ out="$( (manifest_set persona.id ""
         ui_checkbox_menu() { shift; printf '%s|%s|%s' "$1" "${EXAKIT_CHECKBOX_EXCLUSIVE:-}" "$(eval echo \"\${$#}\")" > "$WORK/q"; EXAKIT_CHECKBOX_SELECTION="3"; }
         exakit_persona_question >/dev/null 2>&1; printf '%s~%s' "$(cat "$WORK/q")" "${EXAKIT_PERSONA:-}") )"
 check "the question ends with General, ticked to begin with, combinable (no exclusive row)" \
-    "3||General - The kit's own samples - TPC-H retail, smart-meter energy and daily weather - with every AI client on this machine. Tick it with a persona to load everything.~general" "$out"
+    "3||General - Sample data (retail, energy, weather) and your AI clients.~general" "$out"
 out="$( (unset EXAKIT_PERSONA EXAKIT_DATASETS EXAKIT_LOAD_SAMPLE EXAKIT_DATASETS_PRESELECT EXAKIT_MARKETPLACE_PRESELECT
         exakit_persona_data() { :; }; exakit_persona_flow "$ROOT" </dev/null >/dev/null 2>&1
         printf '%s|%s|%s' "${EXAKIT_DATASETS_PRESELECT:-}" "${EXAKIT_MARKETPLACE_PRESELECT:-}" "${EXAKIT_PERSONA:-}") )"

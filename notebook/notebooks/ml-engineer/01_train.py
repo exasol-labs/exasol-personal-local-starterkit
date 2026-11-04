@@ -7,19 +7,16 @@
 # ---
 
 # %% [markdown]
-# # Turn the approved investigation into a repeatable model
+# # Train in Exasol
 #
-# **Dataset:** `esophageal_posts` by default; change `DATASET` for Banking or your own approved file. **How long:** about five minutes after runtime setup.
+# **Dataset:** `esophageal_posts` by default; change `DATASET` for Banking or your own approved file. **How long:** about five minutes after setup.
 #
-# The Data Scientist has agreed what the columns mean and saved a handoff. You will train a small model inside Exasol, test it on later records and keep an experiment record another person can inspect.
+# Trains a model inside Exasol from the Explore handoff and records it in MLflow. No LLM needed.
 #
-# **By the end:** MLflow will hold the training SQL, settings, metrics, model and coefficients. You can rerun the same recipe to check repeatability, then verify its scorer in the Rust chapter.
-#
-# **Run first:** an approved descriptor, the Explore handoff and a Python ML runtime (`exakit udf-use default`). Start local MLflow with `exakit mlflow start` for its browser UI.
-#
-# **Runtime choice:** `exakit udf-use default` installs `PYTHON3_ML` with the ML packages; `exakit udf-setup` installs the official `PYTHON3` alternative. The default prefers `PYTHON3_ML` when installed. `EXAKIT_UDF_CONTAINER` selects another installed alias; its package check must pass before training.
-#
-# **Optional AI:** the supplied SQL/scikit-learn training path needs no LLM endpoint. Use it as a baseline before asking an assistant to suggest a new feature or parameter; every new experiment still needs the same evaluation.
+# **Run first:**
+# - an approved descriptor and the Explore handoff
+# - a Python ML runtime: `exakit udf-use default` (`PYTHON3_ML`) or `exakit udf-setup` (`PYTHON3`); `EXAKIT_UDF_CONTAINER` picks another alias
+# - `exakit mlflow start` for the MLflow UI
 
 # %%
 import exakit.nb as nb
@@ -34,11 +31,9 @@ elif not nb.current_workflow():
     nb.workflow("train-" + DATASET)
 
 # %% [markdown]
-# ## Start from the same recipe the Data Scientist approved
+# ## Load the handoff
 #
-# The handoff records the chosen target, feature recipe, column-map version and data fingerprint. Check the printed ID and split before training. A change in the data or map means the old recipe should be reviewed again.
-#
-# **Technical note:** a stale handoff is refused. With no handoff file, the helper can build a recipe from the approved descriptor and says it has done so. The earliest 80% of records by the date role train the model; the later 20% evaluate it. With no date, explicitly ask for `SPLIT = "random"` when making a new handoff, or approve an appropriate date role. An existing handoff keeps its recorded split.
+# Check the printed ID and split. A stale handoff is refused; with no handoff file, one is built from the approved descriptor. No date role? Set `SPLIT = "random"`.
 
 # %%
 SPLIT = None  # None: the time split by the date role; "random": a hash split, only when there is no handoff file yet
@@ -51,13 +46,9 @@ print(f"handoff: {ds.id} v{ds.version}; {handoff['rows']} rows; {handoff['split'
 print(f"data digest: {handoff['data_digest']}")
 
 # %% [markdown]
-# ## Turn the role map into numbers the model can learn from
+# ## Build features and the training UDF
 #
-# Words such as social network, website and complaint product must become model inputs called **features**. The next cell creates a SQL feature view and a training function inside the selected Exasol runtime.
-#
-# **Read the result:** inspect the printed feature names and SQL. Check that the target itself has not become an input and that each input would be available when you intend to make a prediction.
-#
-# **Technical note:** the approved recipe supplies category flags, date parts, text lengths and entity frequency. Constant features are dropped. Logistic regression uses the fixed `SEED` and `REGULARIZATION_C`; the UDF returns its model, metrics and raw-feature coefficients to the client.
+# Creates a SQL feature view and a training UDF. Check the label is not among the printed features.
 
 # %%
 UDF_SCHEMA = "EXASOL_MLFLOW"
@@ -76,13 +67,11 @@ print(f"UDF {UDF_SCHEMA}.{UDF_NAME} on {CONTAINER}; features ({len(plan.features
 print(plan.training_sql)
 
 # %% [markdown]
-# ## Make the model beat a simple alternative
+# ## Train and compare with the baseline
 #
-# Train once, then compare its result with a model that always predicts the most common training class. That **majority baseline** is important when one outcome is rare: high accuracy alone can be misleading.
+# Compare macro-F1 with `baseline_macro_f1` (always predicting the most common class). Use `CLASS_WEIGHT = None` for Esophageal, `"balanced"` for Banking.
 #
-# **Read the result:** compare macro-F1 with `baseline_macro_f1`, using the same later test records. A model that fails to improve is an experiment result to investigate, not evidence of useful prediction. For the reference recipes, keep `CLASS_WEIGHT = None` for Esophageal and use `CLASS_WEIGHT = "balanced"` for Banking. Weighting is an explicit, logged experiment setting: it changes training weights, while the held-out records and majority baseline stay fixed. Verify the printed result on your installed runtime.
-#
-# **Technical note:** `start_run` checks tracking readiness before executing the training SQL. MLflow records the query, descriptor/version, data digest, settings and returned artifacts. If tracking fails after training, a spool record can be replayed with `exakit mlflow replay`; a database restart fails the active run.
+# If MLflow fails after training, replay with `exakit mlflow replay`.
 
 # %%
 EXPERIMENT = "exasol-starter-kit"
@@ -100,11 +89,9 @@ print(f"macro-F1: {f1:.4f}; majority baseline: {baseline:.4f}")
 print("beats baseline" if f1 > baseline else "does not beat baseline; inspect features or the split")
 
 # %% [markdown]
-# ## Keep the files that make the result reproducible
+# ## Model files
 #
-# A metric without its recipe and model is hard to reuse. Inspect the artifact paths printed below and open the run in MLflow. Rerun training with the same seed, data and handoff; compare both metrics and coefficients.
-#
-# **Technical note:** `model/model.pkl` is the fitted Python pipeline. `coefficients.json` contains weights for the raw SQL feature columns, with scaling folded into them. The same coefficients are written beside the handoff as `<id>-v<n>.coefficients.json`, ready for the Rust scorer. Package/container versions help explain portability problems.
+# `model/model.pkl` is the fitted pipeline. `coefficients.json` holds the weights, also saved beside the handoff for the Rust scorer.
 
 # %%
 from urllib.parse import unquote, urlparse
@@ -117,8 +104,8 @@ coefficients_path = nb.ml_train.export_coefficients(run, handoff)
 print(f"coefficients beside the handoff: {coefficients_path}")
 
 # %% [markdown]
-# ## Choose the next experiment deliberately
+# ## Next
 #
-# Open `02_rust_score.ipynb` to test whether a compiled scorer reproduces this trained model. Use `03_score_external_model.ipynb` for the separate trusted-file scoring lesson.
-#
-# To investigate model quality, change one setting such as `REGULARIZATION_C`, rerun and compare the MLflow records. Optional AI can suggest experiments or explain code. Keep the test split and acceptance criteria fixed while assessing those suggestions; a new story about a metric is not a measured improvement.
+# - `02_rust_score.ipynb`: check a Rust scorer against this model.
+# - `03_score_external_model.ipynb`: score a model file in SQL.
+# - To experiment, change one setting (e.g. `REGULARIZATION_C`) and compare runs in MLflow.

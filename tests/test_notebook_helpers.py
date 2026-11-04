@@ -267,43 +267,6 @@ class CopyTest(unittest.TestCase):
         with redirect_stderr(io.StringIO()):
             self.assertEqual(kit_notebooks.main(["copy", "jupyter", str(ROOT)]), 2)
 
-    def test_retired_utility_slots_remove_only_unchanged_copies(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            base = Path(tmp) / "starter-kit-notebooks"
-            old = base / "data-scientist/04_old.ipynb"
-            old.parent.mkdir(parents=True)
-            old.write_text("the kit copy")
-            (base / ".kit-copied").write_text("data-scientist/04_old.ipynb\n")
-            doc = kit_notebooks.catalog(ROOT)
-            entry = doc["examples"][0]
-            entry["previous"]["jupyter"] = {"path": "data-scientist/04_old.ipynb",
-                "sha256": hashlib.sha256(old.read_bytes()).hexdigest()}
-            with mock.patch.object(kit_notebooks, "catalog", return_value=doc):
-                added, problems = kit_notebooks.copy("jupyter", ROOT, Path(tmp))
-            self.assertEqual(problems, [])
-            self.assertFalse(old.exists())
-            self.assertIn(entry["folder"]+"/"+entry["jupyter"], added)
-            old.write_text("my edited lesson")
-            (base / ".kit-copied").write_text((base / ".kit-copied").read_text()+"data-scientist/04_old.ipynb\n")
-            with mock.patch.object(kit_notebooks, "catalog", return_value=doc):
-                kit_notebooks.copy("jupyter", ROOT, Path(tmp))
-            self.assertEqual(old.read_text(), "my edited lesson")
-
-    def test_retired_copy_inside_a_linked_folder_is_preserved(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            base, outside = Path(tmp) / "starter-kit-notebooks", Path(tmp) / "outside"
-            base.mkdir(); outside.mkdir()
-            old = outside / "04_old.ipynb"
-            old.write_text("the kit copy")
-            (base / "data-scientist").symlink_to(outside, target_is_directory=True)
-            key = "data-scientist/04_old.ipynb"
-            (base / ".kit-copied").write_text(key + "\n")
-            doc = kit_notebooks.catalog(ROOT)
-            doc["examples"][0]["previous"]["jupyter"] = {"path": key,
-                "sha256": hashlib.sha256(old.read_bytes()).hexdigest()}
-            with mock.patch.object(kit_notebooks, "catalog", return_value=doc):
-                kit_notebooks.copy("jupyter", ROOT, Path(tmp))
-            self.assertEqual(old.read_text(), "the kit copy")
 
 
 try:

@@ -27,7 +27,7 @@ The kit's notebooks are in `~/.exasol-starter-kit/notebooks/starter-kit-notebook
 one folder per persona, with a README naming the order to open them in:
 `data-scientist/00_quickstart`, `01_explore`, `02_ask_your_data`, `03_share` (Data Scientist),
 and `ml-engineer/00_quickstart`, `01_train`, `02_rust_score`, `03_score_external_model` (ML Engineer);
-`useful-notebooks/` holds four short lessons and `00_shared/` the cells both quickstarts use. Marimo's copies are in
+Only the picked personas' folders are copied; a persona added later (`exakit persona add`) brings its own. Marimo's copies are in
 `notebooks/marimo/<persona>/`. A file there is the user's: the kit never overwrites it.
 
 Install it with `exakit marketplace notebook`. Never tell a user to

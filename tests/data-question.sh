@@ -115,11 +115,11 @@ if command -v python3 >/dev/null 2>&1; then
     out="$(replay 'k \r' EXAKIT_DATASETS_PRESELECT=energy)"
     has "ticking the parent ticks every dataset" "SELECTION=tpch,energy,banking_complaints" "$out"
 
-    echo "who each dataset is for, whole, at 80 columns:"
+    echo "what each dataset is, whole, at 80 columns:"
     out="$(TTY_REPLAY_COLS=80 replay '\r' DQ_PERSONA=1 EXAKIT_DATASETS_PRESELECT=banking_complaints)"
     has "the table draws once" "1 top borders, 1 bottom borders" "$out"
-    has "a For column" "For" "$(printf '%s\n' "$out" | grep 'Dataset')"
-    has "the persona is shown in full" "both personas" "$out"
+    has "a Description column" "Description" "$(printf '%s\n' "$out" | grep 'Dataset')"
+    has "the description is shown in full" "US consumer complaints" "$out"
     has "and the dataset name is not cut" "Smart-meter energy readings" "$out"
     has "nor your own file" "Upload a file or folder: CSV/Parquet/JSON" "$out"
     has "nor the external source" "Connect an external source - coming soon" "$out"
@@ -190,16 +190,15 @@ check "EXAKIT_DATA_FILE bypasses the table" "local~" \
     "$( (exakit_pending_datasets() { printf 'tpch|TPC-H\n'; }; EXAKIT_DATA_FILE="$WORK" exakit_data_load_select Skip >/dev/null 2>&1
         printf '%s~%s' "$EXAKIT_DATA_LOAD_SELECTION" "$EXAKIT_TABLE_STATE") )"
 
-echo "who each dataset is for is a column, not a suffix:"
+echo "what each dataset is goes in a column, not on the name:"
 out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H retail benchmark (~175k rows)\nesophageal_posts|Esophageal cancer posts (social listening, ~41k posts, de-identified)\n'; }
         exakit_data_table_build "$WORK/table"
-        printf '%s~%s~%s' "$EXAKIT_TABLE_HAS_FOR" "$(cut -d'|' -f2 "$WORK/table" | tr '\n' ';')" "$(cut -d'|' -f11 "$WORK/table" | tr '\n' ';')") )"
-check "the names stay names; the personas go in column 2" \
-    "1~Sample datasets;TPC-H retail benchmark;Esophageal cancer posts;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - coming soon;Skip;~;General;both personas;;;;" "$out"
-out="$( (exakit_persona_dataset_hints() { :; }
-        exakit_pending_datasets() { printf 'tpch|TPC-H retail benchmark\n'; }
-        exakit_data_table_build "$WORK/table"; printf '%s' "$EXAKIT_TABLE_HAS_FOR") )"
-check "no persona service, no For column" "0" "$out"
+        printf '%s~%s~%s' "$EXAKIT_TABLE_HAS_DESC" "$(cut -d'|' -f2 "$WORK/table" | tr '\n' ';')" "$(cut -d'|' -f11 "$WORK/table" | tr '\n' ';')") )"
+check "the names stay names; the descriptions go in column 2" \
+    "1~Sample datasets;TPC-H retail benchmark;Esophageal cancer posts;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - coming soon;Skip;~;Orders, customers, parts;Social media posts;;;;" "$out"
+out="$( (exakit_pending_datasets() { printf 'not_a_dataset|A dataset with no conf\n'; }
+        exakit_data_table_build "$WORK/table"; printf '%s' "$EXAKIT_TABLE_HAS_DESC") )"
+check "no description, no Description column" "0" "$out"
 out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H\n'; }
         _exakit_prompt_tty() { :; }
         exakit_data_load_select Skip >/dev/null 2>&1

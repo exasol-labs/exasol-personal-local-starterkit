@@ -10,4 +10,4 @@ This directory contains the complete 50-notebook collection from the official No
 
 Cloud/virtual-schema examples are reference only. GPU and extension/container provisioning examples require separate setup. The bundle changes no external-source or virtual-schema implementation.
 
-Rebuild with `python3 tools/bundle_connector_notebooks.py /path/to/notebook-connector`, then run the library tests and Marimo checks. See the parent `INSTALL-AND-UPDATE.md` for user commands and update behavior.
+Rebuild with `python3 tools/bundle_connector_notebooks.py /path/to/notebook-connector`, then run the library tests and Marimo checks. See the parent `README.md` for how the kit copies it.

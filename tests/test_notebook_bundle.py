@@ -23,30 +23,35 @@ class BundleTest(unittest.TestCase):
                         path = base / entry["persona"] / entry[front]
                         self.assertTrue(path.is_file())
                         self.assertIn("nb.connect()", path.read_text())
-                    self.assertFalse((base / "upstream-sources.json").exists())
-                    self.assertTrue((base / "UPSTREAM-LICENSE.txt").is_file())
-                    guide = base / "MODEL-PROVIDERS.md"
-                    self.assertEqual(guide.read_bytes(), (ROOT / "notebook/MODEL-PROVIDERS.md").read_bytes())
-                    guide.write_text("my provider notes")
+                    # The README says what the guides did; they and the shared cells (build input) stay in the kit.
+                    for left_out in ("MODEL-PROVIDERS.md", "INSTALL-AND-UPDATE.md", "00_shared", "useful-notebooks"):
+                        self.assertFalse((base / left_out).exists(), left_out)
                     sample = base / "data-scientist" / doc["notebooks"][0][front]
                     sample.write_text("my notebook")
                     self.assertEqual(bundle.copy(front, ROOT, Path(tmp)), ([], []))
                     self.assertEqual(sample.read_text(), "my notebook")
-                    self.assertEqual(guide.read_text(), "my provider notes")
+            readme = Path(tmp) / doc["folders"]["jupyter"] / "README.md"
+            self.assertIn("EXAKIT_PROVIDER_BASE_URL", readme.read_text())
 
-    def test_old_generated_manifest_is_removed_but_user_changes_are_preserved(self):
+    def test_a_persona_brings_its_own_notebooks_and_one_added_later_joins(self):
         with tempfile.TemporaryDirectory() as tmp:
-            for front, edited in (("jupyter", False), ("marimo", True)):
-                base = Path(tmp) / bundle.catalog(ROOT)["folders"][front]
-                base.mkdir(parents=True)
-                manifest = base / "upstream-sources.json"
-                manifest.write_bytes(b"my source notes" if edited else (ROOT / "notebook/upstream-sources.json").read_bytes())
-                (base / bundle.STATE).write_text("upstream-sources.json\n")
-                _, problems = bundle.copy(front, ROOT, Path(tmp))
-                self.assertEqual(problems, [])
-                self.assertEqual(manifest.exists(), edited)
-                if edited:
-                    self.assertEqual(manifest.read_bytes(), b"my source notes")
+            base = Path(tmp) / bundle.catalog(ROOT)["folders"]["jupyter"]
+            bundle.copy("jupyter", ROOT, Path(tmp), {"data-scientist"})
+            self.assertTrue((base / "data-scientist").is_dir())
+            self.assertFalse((base / "ml-engineer").exists())
+            self.assertNotIn("ml-engineer/", (base / "README.md").read_text())
+            bundle.copy("jupyter", ROOT, Path(tmp), {"data-scientist", "ml-engineer"})
+            self.assertTrue((base / "ml-engineer").is_dir())
+            self.assertIn("ml-engineer/", (base / "README.md").read_text(), "the kit's README follows the personas")
+            (base / "README.md").write_text("my notes")
+            bundle.copy("jupyter", ROOT, Path(tmp), {"general"})
+            self.assertEqual("my notes", (base / "README.md").read_text(), "an edited README is the user's")
+
+    def test_no_persona_with_notebooks_brings_them_all(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / bundle.catalog(ROOT)["folders"]["jupyter"]
+            bundle.copy("jupyter", ROOT, Path(tmp), {"general"})
+            self.assertTrue((base / "data-scientist").is_dir() and (base / "ml-engineer").is_dir())
 
 
 if __name__ == "__main__":

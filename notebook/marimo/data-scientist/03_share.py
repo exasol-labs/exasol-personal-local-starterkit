@@ -14,15 +14,13 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    # Share a result another person can inspect
+    # Share a dashboard
 
-    **Dataset:** Esophageal, Banking or your own approved descriptor. **How long:** about five minutes after Dash Server is ready.
+    **Dataset:** Esophageal, Banking or your own approved descriptor. **How long:** about five minutes once Dash Server is ready.
 
-    You have checked a category comparison and want a colleague to see a live result. This notebook prepares a dashboard, gives you a preview, and publishes only after you confirm the figures.
+    Builds a dashboard on Dash Server, previews it and publishes only after you check the figures. No LLM needed.
 
-    **By the end:** you will have a Dash Server URL linked to its SQL, descriptor version and workflow. No LLM endpoint is required. You can use this small dashboard as the base for a larger question after validating the first result.
-
-    **Run first:** `exakit marketplace dash-server`, `exakit mcp-setup`, then `exakit start dash-server`. Paste the earlier workflow ID below. Choose a distinct `APP_NAME` for a separate investigation.
+    **Run first:** `exakit marketplace dash-server`, `exakit mcp-setup`, `exakit start dash-server`. Paste your workflow ID below.
     """)
     return
 
@@ -58,11 +56,9 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## See what a colleague would see before publishing
+    ## Preview
 
-    Open the preview URL printed by the next cell. Try the category selector, Top N and bar orientation. Both charts, the displayed total and the data table must change together. Clearing the selector includes every category. Compare its categories and counts with the SQL and the data you explored. Check that the dashboard title describes the result fairly.
-
-    **Technical note:** the notebook drives Dash Server's MCP control plane, checks its read-only database profile and waits for a healthy preview. The draft carries the query digest and approved descriptor version for later tracing.
+    Open the printed URL. Check the categories and counts match your SQL, and that the filters update both charts and the table.
     """)
     return
 
@@ -78,13 +74,9 @@ def _(draft, nb):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Publish after you have checked the figures
+    ## Publish
 
-    Leave `FIGURES_CHECKED = False` while reviewing the preview. Set it to `True` only when the displayed result matches the query, then run the last cell. Open the live URL and keep it with your workflow ID.
-
-    **Technical note:** promotion is a separate action from preview. The workflow log and dashboard revision metadata retain the same descriptor version and query digest. A healthy page proves it runs; your comparison establishes that it shows the intended figures.
-
-    **Make it your own:** change the approved dataset and reviewed query, preview the new result, and validate it before publishing another revision.
+    Set `FIGURES_CHECKED = True` only when the preview matches the query, then run the cell. Keep the live URL with your workflow ID.
     """)
     return
 

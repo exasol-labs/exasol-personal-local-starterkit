@@ -3672,17 +3672,14 @@ exakit_data_samples_select() {
     exakit_track_tmp "$EXAKIT_TABLE_STATE"
     exakit_data_table_build "$EXAKIT_TABLE_STATE"
     UI_TABLE_TITLE="Data to load"
-    # Who each dataset is for gets a column of its own while the reader picks:
-    # as a " - for <persona>" suffix on the name it was cut off at 80 columns,
-    # where the name column is ~22 wide. Only for the choice, and only when the
-    # persona service named someone: the progress display that follows has no
-    # room for it, and needs none.
-    # Without a persona the second column is there all the same, blank and
-    # untitled: a table with a second column holds no room for a Status column
-    # while every row is idle, which is what gives the names their width here
-    # (with Status reserved, an 80-column screen cut them at ~22 characters).
+    # What each dataset is (description= in its dataset.conf) gets a column of
+    # its own while the reader picks; the progress display that follows has no
+    # room for it, and needs none. With no description the second column is
+    # there all the same, blank and untitled: a table with a second column holds
+    # no room for a Status column while every row is idle, which is what gives
+    # the names their width here.
     UI_TABLE_COL2=" "
-    [ "${EXAKIT_TABLE_HAS_FOR:-0}" = 1 ] && UI_TABLE_COL2="For"
+    [ "${EXAKIT_TABLE_HAS_DESC:-0}" = 1 ] && UI_TABLE_COL2="Description"
     printf '\n'
     ui_table_menu "$EXAKIT_TABLE_STATE"
     UI_TABLE_COL2=""
@@ -3724,7 +3721,7 @@ exakit_data_table_release() {
 EXAKIT_TABLE_STATE=""
 EXAKIT_TABLE_ROW_LOCAL=0
 EXAKIT_TABLE_ROW_SKIP=0
-EXAKIT_TABLE_HAS_FOR=0            # does any row name the personas it is for
+EXAKIT_TABLE_HAS_DESC=0           # does any row carry a description
 
 # exakit_data_table_build <state-file> — write the rows, in the order they are
 # drawn, and set EXAKIT_TABLE_DEFAULTS / _GROUP / _EXCLUSIVE the way the
@@ -3734,7 +3731,7 @@ exakit_data_table_build() {
     _dtb_f="$1"
     : > "$_dtb_f"
     EXAKIT_TABLE_IDS=""
-    EXAKIT_TABLE_HAS_FOR=0
+    EXAKIT_TABLE_HAS_DESC=0
     # Via a FILE, not a space-separated list: every label has spaces in it
     # ("TPC-H retail benchmark"), and `for x in $list` would split each label
     # into a row of its own.
@@ -3758,10 +3755,8 @@ exakit_data_table_build() {
                 ;;
         esac
     fi
-    # Which personas each dataset is for, from the persona service: a label
-    # suffix, so a reader sees why a row is ticked. Nothing when it cannot answer.
-    _dtb_hints=""
-    command -v exakit_persona_dataset_hints >/dev/null 2>&1 && _dtb_hints="$(exakit_persona_dataset_hints 2>/dev/null || true)"
+    # Each dataset's description= (its dataset.conf), for the second column.
+    _dtb_root="$(exakit_repo_root 2>/dev/null || true)"
     # NOT `grep -c ... || printf 0`: grep exits 1 when the count is zero, so the
     # fallback fired IN ADDITION and the count came out as "0\n0" — which every
     # later [ -gt ] then refused as a non-integer. The guard is the value, not
@@ -3784,15 +3779,16 @@ exakit_data_table_build() {
             # The label loses its trailing "(~175k rows)": the Status column
             # carries the real count when the row finishes, and an estimate
             # beside a measurement is the same fact twice, worse.
-            # Who it is for goes in the row's second column (the "For" column
-            # exakit_data_samples_select shows while the reader picks), not on
-            # the name: a suffix there was cut off on an 80-column terminal.
-            _dtb_for="$(printf '%s\n' "$_dtb_hints" | sed -n "s/^${_dtb_id}|//p" | head -n 1)"
-            [ -n "$_dtb_for" ] && EXAKIT_TABLE_HAS_FOR=1
+            # What it is goes in the row's second column (the Description
+            # column exakit_data_samples_select shows while the reader picks).
+            _dtb_desc=""
+            [ -n "$_dtb_root" ] && [ -f "$_dtb_root/data/datasets/$_dtb_id/dataset.conf" ] && \
+                _dtb_desc="$(_exakit_dataset_conf_get description "$_dtb_root/data/datasets/$_dtb_id/dataset.conf")"
+            [ -n "$_dtb_desc" ] && EXAKIT_TABLE_HAS_DESC=1
             # A download size the label ends with stays: it is not an estimate
             # of the rows, it is what loading the row will cost.
             printf '%s|%s|1|idle|||||| |%s\n' "$_dtb_kind" \
-                "$(printf '%s' "$_dtb_label" | sed 's/ *([^()]*)\( - [0-9.]* MB download\)\{0,1\}$/\1/')" "$_dtb_for" >> "$_dtb_f"
+                "$(printf '%s' "$_dtb_label" | sed 's/ *([^()]*)\( - [0-9.]* MB download\)\{0,1\}$/\1/')" "$_dtb_desc" >> "$_dtb_f"
             EXAKIT_TABLE_IDS="$EXAKIT_TABLE_IDS$_dtb_id
 "
             _dtb_n=$(( _dtb_n + 1 ))

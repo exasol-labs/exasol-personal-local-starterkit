@@ -54,15 +54,15 @@ try {
     Check "their datasets and add-ons together, each once" "esophageal_posts,banking_complaints,bank_marketing,ade_corpus,pubmed_abstracts,medication_sigs|all|dash-server,notebook,udf-devkit" (Answers)
     Check "each dataset is named with the personas it is for" "both personas" ((Get-ExakitPersonaDatasetHints)["esophageal_posts"])
     Write-Host "the data question (one table) ticks the personas' datasets:"
-    function Get-ExakitPendingDatasets { return @([pscustomobject]@{ Id = "tpch"; Label = "TPC-H retail benchmark (~175k rows)" },
-                                                  [pscustomobject]@{ Id = "esophageal_posts"; Label = "Pharma clinical trials (ClinicalTrials.gov, ~5k)" }) }
+    function Get-ExakitPendingDatasets { return @([pscustomobject]@{ Id = "tpch"; Label = "TPC-H retail benchmark (~175k rows)"; Description = "Orders, customers, parts" },
+                                                  [pscustomobject]@{ Id = "esophageal_posts"; Label = "Pharma clinical trials (ClinicalTrials.gov, ~5k)"; Description = "Social media posts" }) }
     $env:EXAKIT_DATASETS_PRESELECT = "esophageal_posts"
     Remove-Item Env:EXAKIT_PERSONA_ACTIVE -ErrorAction SilentlyContinue   # no persona picked: every sample is listed
     New-ExakitDataTable -FinalLabel "Skip"
     $labels = (@($script:UiTable.Rows | ForEach-Object { $_.Label }) -join ";")
     $for = (@($script:UiTable.Rows | ForEach-Object { $_.Col2 }) -join ";")
-    Check "the persona's row ticked, the file and external rows after the datasets, each named for its persona in the For column" `
-        "3~4~Sample datasets;TPC-H retail benchmark;Pharma clinical trials;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - coming soon;Skip~;General;both personas;;;" `
+    Check "the persona's row ticked, the file and external rows after the datasets, each described in the Description column" `
+        "3~4~Sample datasets;TPC-H retail benchmark;Pharma clinical trials;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - coming soon;Skip~;Orders, customers, parts;Social media posts;;;" `
         "$($script:ExakitTableDefaults -join ',')~$($script:ExakitTableRowLocal)~$labels~$for"
     $env:EXAKIT_PERSONA_ACTIVE = "1"
     New-ExakitDataTable -FinalLabel "Skip"

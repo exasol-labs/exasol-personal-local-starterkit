@@ -14,15 +14,11 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    # Start an investigation with data you can explain
+    # Data Scientist quickstart
 
-    **Dataset:** `esophageal_posts` by default; `banking_complaints` or your own file can follow the same path. **How long:** about ten minutes on the first load.
+    **Dataset:** `esophageal_posts` (default), `banking_complaints` or your own file. **How long:** about ten minutes on the first load.
 
-    Imagine a team asks you to understand outcomes: which networks and websites carry more negative posts about esophageal cancer, or which complaint products and companies receive monetary relief. Start by checking the data and agreeing what its columns mean.
-
-    **By the end:** you will have a working connection, an approved column map and a first grouped result you can explain. Run top to bottom and use this as the starting notebook for your own investigation.
-
-    **Optional AI:** an LLM endpoint is optional. The connection, table-based role suggestions and first SQL query work as supplied. Later, Explore can summarize text and Ask can draft SQL with your configured model.
+    You end with a connection, an approved column map and a first grouped result. No LLM needed.
     """)
     return
 
@@ -30,13 +26,9 @@ def _(mo):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Keep a trail of the investigation
+    ## Start a workflow
 
-    A colleague should be able to follow a result back to the data and decisions behind it. The next cell starts a **workflow**, a record of your queries, role review and later handoffs.
-
-    **Do now:** keep the printed `wf-...` identifier. Paste it into `WORKFLOW_ID` in Explore, Ask and Share when those notebooks open in separate kernels.
-
-    **Technical note:** the log lives in `~/.exasol-starter-kit/workflows/<id>.jsonl`. `exakit workflow show <id>` reads it; `EXAKIT_WORKFLOW_ID` can continue it from a new kernel.
+    Logs your queries and decisions. Keep the printed `wf-...` ID: paste it into `WORKFLOW_ID` in Explore, Ask and Share.
     """)
     return
 
@@ -55,11 +47,9 @@ def _():
 def _(mo):
     # Cell tags: connect
     mo.md(r"""
-    ## Meet the data where it lives
+    ## Connect
 
-    Before interpreting a number, check that the notebook can reach your local Exasol database. The next cell connects using the kit's saved connection and runs a small check. Then you can see the available schemas, which are folders of database tables.
-
-    **Technical note:** `nb.connect()` reads the kit's connection store. You can reuse this cell in your own notebook without copying connection credentials into it.
+    Uses the kit's saved connection, then lists the schemas. No password in the notebook.
     """)
     return
 
@@ -83,13 +73,9 @@ def _(conn, nb):
 def _(mo):
     # Cell tags: load
     mo.md(r"""
-    ## Choose a starting dataset
+    ## Choose a dataset
 
-    Start with the bundled sample so you can learn the flow with known data. Esophageal asks which posts are negative; Banking asks about complaint outcomes. Later you can use the same pattern with a file of your own.
-
-    Each loading cell has its own setting. Leave unused paths at their defaults. For this local walkthrough, keep `SOURCE = None`. The final selection cell tells the rest of the notebook which dataset to use.
-
-    **Start here: use the bundled sample.** Keep `SAMPLE = "esophageal_posts"` for social posts, or change it to `"banking_complaints"` for complaint data. The helper loads a missing sample and reuses one already loaded. Set it to `None` when you later want to work only with your own file.
+    Start with the bundled sample: `SAMPLE = "esophageal_posts"` (social posts) or `"banking_complaints"` (complaints). It loads once and is reused. Keep `SOURCE = None` for this walkthrough.
     """)
     return
 
@@ -106,7 +92,7 @@ def _(conn, nb):
 def _(mo):
     # Cell tags: load
     mo.md(r"""
-    **Make this your own later.** Set `OWN_FILE` to a CSV, Parquet or JSON file and choose a new `OWN_TABLE`, such as `MY_DATA.TRANSACTIONS`. The loader brings its records into Exasol; the review step below suggests how to use its columns. A default path that does not exist is skipped, so you can finish the sample story first.
+    **Your own file (optional):** set `OWN_FILE` (CSV, Parquet or JSON) and `OWN_TABLE`. A missing path is skipped.
     """)
     return
 
@@ -124,8 +110,7 @@ def _(conn, nb):
 def _(mo):
     # Cell tags: load
     mo.md(r"""
-    **A connected source**: a table in a virtual schema, an external database Exasol reads live. Name it as
-    SCHEMA.TABLE; the next cell profiles a sample and lets you review the roles. With no source connected, it skips.
+    **A connected source (optional):** set `SOURCE = "SCHEMA.TABLE"` for a virtual-schema table. `None` skips it.
     """)
     return
 
@@ -142,7 +127,7 @@ def _(conn, nb):
 def _(mo):
     # Cell tags: load
     mo.md(r"""
-    The data used from here on. A source wins over your file, which wins over the sample:
+    The data used from here on: the source, else your file, else the sample.
     """)
     return
 
@@ -158,23 +143,23 @@ def _(nb, own, sample, source):
 def _(mo):
     # Cell tags: review
     mo.md(r"""
-    ## Give the columns a meaning for this question
+    ## Approve the column roles
 
-    A table stores values. A **role** tells these notebooks how you want to use a column. The kit suggests roles from the real column names, types and measured values, then shows its reasons. You decide whether those suggestions fit your goal.
+    A **role** tells the notebooks how to use a column. The kit suggests roles with its reasons.
 
-    | Role | Meaning | Esophageal example | Banking example |
+    | Role | Meaning | Esophageal | Banking |
     |---|---|---|---|
     | `entity` | Who or what to compare | `SOURCE_DOMAIN` | `COMPANY` |
     | `category` | Groups to compare | `SOCIAL_NETWORK` | `PRODUCT` |
-    | `date` | The event timeline | `START_DATE` | `DATE_RECEIVED` |
-    | `label` | The outcome to predict | `IS_NEGATIVE` | `MONETARY_RELIEF` |
-    | `text` | Written descriptions | `MESSAGE` | none (the CFPB no longer publishes narratives) |
+    | `date` | Event time | `START_DATE` | `DATE_RECEIVED` |
+    | `label` | Outcome to predict | `IS_NEGATIVE` | `MONETARY_RELIEF` |
+    | `text` | Free text | `MESSAGE` | none |
 
-    **Your most important choice is the label.** A model using `IS_NEGATIVE` learns the listening tool's sentiment. A model using `IS_REPLY` answers whether a post was a reply. Both can contain 0/1; the business question decides which is useful.
+    The **label** matters most: it is what a model learns to predict.
 
-    **Do now:** read the reasons, keep or change the dropdowns, leave unrelated columns as **—**, then click **Approve descriptor**. A close alternative deserves a second look. A rule-match score measures how well a column fits the rules, not certainty about its meaning.
+    **Do now:** check the dropdowns, leave unrelated columns as **—**, click **Approve descriptor**. The next cell waits for it. Explore, Ask, Train and Share use this approved map.
 
-    **Technical note:** approval saves a versioned **descriptor**, the column map used by Explore, Ask, Train and Share. The next cell waits for approval; Marimo resumes it after the button is clicked. Plain Python can use `review.approve({"COLUMN": "role", ...})`. Automated `EXAKIT_NB_AUTO_APPROVE=1` reuses an unchanged approved map; `force` accepts a new proposal deliberately. Use the button for this walkthrough.
+    Plain Python: `review.approve({"COLUMN": "role", ...})`.
     """)
     return
 
@@ -197,13 +182,9 @@ def _(nb, review):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Read the first answer before building a model
+    ## First result
 
-    Count the observations in each category. For Esophageal these are posts by network; for Banking they are complaints by product. The result also shows the share whose approved outcome is 1, when a label is available.
-
-    **Read the result:** a large group has more records, while a high label percentage has more of the selected outcome. Those are different observations. Counts and associations alone do not explain why an outcome happened.
-
-    **Technical note:** the SQL uses your role map rather than hard-coded dataset columns. Without a category it groups by entity; without a label it leaves out the outcome rate and explains the omission. `nb.show_sql()` reveals the query behind the result.
+    Rows per category and, with an approved label, the share with label 1. Counts show size, not cause. `nb.show_sql()` shows the query.
     """)
     return
 
@@ -226,11 +207,9 @@ def _(conn, ds_1, nb):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Continue the story
+    ## Next
 
-    Open `01_explore.ipynb` to compare groups, follow outcomes over time and try a small local model. Keep the sample first; changing its `DATASET` assignment later lets you reuse the notebook with Banking or the path to your own described file.
-
-    The next chapters are `02_ask_your_data.ipynb` for a reviewed question and `03_share.ipynb` for a checked dashboard on Dash Server. Bring your workflow ID along.
+    Open `01_explore.ipynb`, then `02_ask_your_data.ipynb` and `03_share.ipynb`. Bring your workflow ID.
     """)
     return
 

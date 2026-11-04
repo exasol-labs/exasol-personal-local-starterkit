@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "general",
   "title": "General",
-  "summary": "The kit's own samples - TPC-H retail, smart-meter energy and daily weather - with every AI client on this machine. Tick it with a persona to load everything.",
+  "summary": "Sample data (retail, energy, weather) and your AI clients.",
   "picker": true,
   "visible": true,
   "default": true,

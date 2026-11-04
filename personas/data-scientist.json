@@ -2,7 +2,7 @@
   "schema_version": 1,
   "id": "data-scientist",
   "title": "Data Scientist",
-  "summary": "Explore Esophageal, Banking, Bank marketing, the medical text sets or your own files in connected notebooks, trace model calls to your Langfuse and share a dashboard on Dash Server.",
+  "summary": "Explore data in notebooks, ask it questions, share dashboards.",
   "picker": true,
   "visible": true,
   "order": 10,

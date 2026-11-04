@@ -7,17 +7,13 @@
 # ---
 
 # %% [markdown]
-# # Bring a trusted model file into SQL
+# # Score a model file in SQL
 #
-# **Dataset:** `esophageal_posts` by default; change `DATASET` for Banking or a compatible described table.
+# **Dataset:** `esophageal_posts` by default; change `DATASET` for Banking or a compatible table. **Run time:** about three minutes after setup.
 #
-# Sometimes a model is trained on a laptop and arrives as a file. You want to call it from SQL without changing its predictions. This lesson provides a local stand-in model, copies it into the shared model directory and compares database scores with local scores.
+# Copies a scikit-learn model file to the shared model directory, wraps it in a scoring UDF and checks database scores match local ones.
 #
-# **By the end:** you will know which model file was used, whether its Python packages are compatible and whether both environments score the held-out sample consistently.
-#
-# **What it needs:** approved roles, the Python ML runtime and a working shared bucket. **Run time:** about three minutes after setup.
-#
-# **Optional AI:** no LLM endpoint is required. Here 'external model' means a local model file; it does not configure an external data source.
+# **Needs:** approved roles, the Python ML runtime and a working shared bucket.
 
 # %%
 import exakit.nb as nb
@@ -25,11 +21,9 @@ import exakit.nb as nb
 DATASET = "esophageal_posts"   # or "banking_complaints", or the path of a descriptor for a table you loaded
 
 # %% [markdown]
-# ## Use the supplied model first, then adapt the input contract
+# ## Settings
 #
-# Keep `MODEL_FILE = None` for the walkthrough. The notebook trains a small category-and-text classifier locally, standing in for a model someone hands you. Later, supply a trusted scikit-learn model file with compatible inputs and `predict_proba`.
-#
-# **Technical note:** this template sends fields named `category` and `text`. The numeric-feature pipeline from `01_train` has a different input contract and needs an adapted feature query/template before it can be used here. A matching filename alone does not establish compatibility.
+# Keep `MODEL_FILE = None` to train a small stand-in model. Your own file needs `predict_proba` and `category`/`text` inputs.
 
 # %%
 MODEL_FILE = None                   # or "~/Downloads/model.pkl"
@@ -40,11 +34,9 @@ TRAIN_ROWS = 4000                   # rows the stand-in model learns from
 HOLDOUT_ROWS = 500                  # held-out rows the two predictions are compared on
 
 # %% [markdown]
-# ## Agree what data the file will receive
+# ## Load the roles
 #
-# Open the approved role map and check that category, text and label mean the same things the model was trained to use. Esophageal supplies network and post text; Banking supplies product and complaint descriptions.
-#
-# **Technical note:** the connection comes from the kit store. `DATASET` selects the descriptor; its mapped column names supply the SQL expressions below.
+# Prints the role-to-column map the SQL below uses.
 
 # %%
 import importlib.util
@@ -66,11 +58,9 @@ for role, column in ds.roles():
     print(f"  {role:<9} {column}")
 
 # %% [markdown]
-# ## Keep some records away from the supplied training example
+# ## Training rows
 #
-# The built-in stand-in learns from one set of records and is checked on another. This avoids judging it only on records it has just seen.
-#
-# **Technical note:** a fixed hash of category/text selects the held-out bucket, while the complement supplies the stand-in's training rows. The same expressions select either dataset. Null labels are excluded; text fields are combined and missing text becomes empty.
+# A fixed hash holds out about one row in five; the stand-in trains on the rest.
 
 # %%
 CATEGORY = f"COALESCE(CAST({ds.col('category')} AS VARCHAR(2000)), '')"
@@ -90,11 +80,9 @@ train = nb.sql(conn, train_sql)
 print(f"\n{len(train)} training rows, label 1 share {train['LABEL'].mean():.2f}")
 
 # %% [markdown]
-# ## Check the file and the runtime before using it
+# ## Load the model and check versions
 #
-# The next cell trains and saves the stand-in, or opens the trusted file you supplied. Inspect the package-compatibility result before scoring. A skipped check or an incompatible version leaves the scoring lesson incomplete.
-#
-# **Technical note:** the helper compares the model's scikit-learn version with the selected database runtime. When a local provenance sidecar matches the file's SHA-256, its scikit-learn version supplies that check; the digest does not prove who created the file. Python and other package compatibility still need the loading and scoring tests below. A pickle can execute code when opened, so use files whose origin you trust. The notebook's own stand-in is created by the visible code you just ran.
+# Trains the stand-in or opens `MODEL_FILE`, then checks its scikit-learn version against the database runtime. Only open pickles you trust: loading one can run code.
 
 # %%
 import sklearn
@@ -145,11 +133,9 @@ MODEL_COMPATIBLE = model is not None and nb.check_model_compatibility(
     conn, model_version, alias=CONTAINER, model_path=f"/buckets/bfsdefault/default/models/{model_path.name}")
 
 # %% [markdown]
-# ## Make the same file visible to the scoring function
+# ## Copy the model for the UDF
 #
-# A file on your laptop must be placed where a database UDF can read it. The next cell copies it into the deployment's shared model directory and prints the UDF-visible path and digest.
-#
-# **Technical note:** `exakit model put` makes an atomic copy and records SHA-256. This lesson intentionally allows replacement of its just-trained example on reruns. A supplied `MODEL_FILE` needs a separate origin/trust confirmation using `exakit model inspect` and `exakit model put ... --yes`. `exakit model list` shows recorded files. Rust's bucketless fallback does not provide a Python model-file route.
+# `exakit model put` copies the file and prints the UDF-visible path and SHA-256. For your own `MODEL_FILE`, run `exakit model inspect`, then `exakit model put ... --yes`.
 
 # %%
 def exakit(*args: str) -> dict:
@@ -183,11 +169,9 @@ else:
     print("Scoring skipped until the model and container versions match.")
 
 # %% [markdown]
-# ## Turn the file into a function a query can call
+# ## Create the scoring UDF
 #
-# The generated scoring function accepts a category and description, loads the model and returns its positive-class probability. Read the printed definition before creating it.
-#
-# **Technical note:** the checked renderer fills `udf/templates/score_model.sql` and rejects invalid or missing placeholders. Each UDF instance loads the model once. The SQL argument `doc_text` is passed to the pipeline's `text` field; adapting a model requires preserving its feature names, types and order.
+# Renders the UDF from the kit's checked template. It returns the positive-class probability.
 
 # %%
 if MODEL_COMPATIBLE:
@@ -205,11 +189,9 @@ if MODEL_COMPATIBLE:
     print(f"UDF {UDF} is ready")
 
 # %% [markdown]
-# ## Compare predictions before scoring more rows
+# ## Compare predictions
 #
-# The same held-out records are scored inside Exasol and on your computer. Read the row count, largest difference and comparison message. A skipped comparison is not a portability pass.
-#
-# **Technical note:** the notebook compares probabilities using NumPy's numerical comparison and reports the maximum difference as well. Investigate mismatches in package versions, input preparation and model provenance. Matching implementations establish portability on the tested records; the printed accuracy is a separate measure of the model's quality.
+# Scores the held-out rows in Exasol and locally. They must match; a skipped comparison is not a pass.
 
 # %%
 if MODEL_COMPATIBLE:
@@ -225,13 +207,9 @@ if MODEL_COMPATIBLE:
     print(f"accuracy on the held-out rows: {float(((there >= 0.5).astype(int) == holdout['LABEL'].astype(int)).mean()):.3f}")
 
 # %% [markdown]
-# ## Use the verified scorer in an ordinary query
+# ## Score in a query
 #
-# Once the comparison is satisfactory, inspect the average predicted probability and actual outcome share per category. Esophageal groups by network; Banking groups by product.
-#
-# **Read the result:** a predicted probability is a model estimate, while the actual label share is observed data. Disagreement can reveal calibration or coverage problems worth investigating.
-#
-# **Technical note:** the query calls the scoring UDF for each selected row and aggregates the results. Keep the feature preparation consistent with the earlier comparison.
+# Mean predicted score vs actual label share per category.
 
 # %%
 if MODEL_COMPATIBLE:
@@ -244,8 +222,6 @@ LIMIT 15"""
     nb.sql(conn, table_sql)
 
 # %% [markdown]
-# ## Reuse the pattern for a model you own
+# ## Use your own model
 #
-# Start from the supplied example, then change `MODEL_FILE` and adapt the feature query and renderer inputs to your model's contract. Repeat the compatibility and held-out comparison before relying on its scores.
-#
-# Use `exakit model list` to inspect model provenance. When you are finished with this example, the SQL function can be removed deliberately with `DROP SCRIPT EXAKIT_SCORING.SCORE_TEXT_MODEL`. Use the kit's model commands for managed files. A chart or published result belongs in the checked Dash Server Share flow.
+# Set `MODEL_FILE`, adapt the inputs and rerun the checks. Remove the example with `DROP SCRIPT EXAKIT_SCORING.SCORE_TEXT_MODEL`.

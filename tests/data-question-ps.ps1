@@ -53,7 +53,7 @@ function Set-Pending([string[]]$Ids) {
     $script:PendingIds = @($Ids)
 }
 function Get-ExakitPendingDatasets {
-    return @($script:PendingIds | Where-Object { $_ } | ForEach-Object { [pscustomobject]@{ Id = $_; Label = "$_ label (~1k rows)" } })
+    return @($script:PendingIds | Where-Object { $_ } | ForEach-Object { [pscustomobject]@{ Id = $_; Label = "$_ label (~1k rows)"; Description = "$_ about" } })
 }
 # The data question is ONE table: no checkbox menu is asked before it.
 function Read-ExakitCheckboxMenu {
@@ -150,14 +150,14 @@ try {
     Check "EXAKIT_DATA_FILE bypasses the table" "local~~" "$(Answer @('tpch') $null)~$($script:MenuAsked)~$($script:ExakitTableIds -join ',')"
     Remove-Item Env:EXAKIT_DATA_FILE
 
-    Write-Host "who each dataset is for is a column, not a suffix:"
+    Write-Host "what each dataset is goes in a column, not on the name:"
     Set-Pending @("tpch", "esophageal_posts")
     New-ExakitDataTable -FinalLabel "Skip"
     Check "the names stay names" "Sample datasets;tpch label;esophageal_posts label;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - coming soon;Skip" ((@($script:UiTable.Rows | ForEach-Object { $_.Label })) -join ";")
-    Check "the personas go in column 2" ";General;both personas;;;" ((@($script:UiTable.Rows | ForEach-Object { $_.Col2 })) -join ";")
-    Check "the table knows it has them" "True" "$($script:ExakitTableHasFor)"
+    Check "the descriptions go in column 2" ";tpch about;esophageal_posts about;;;" ((@($script:UiTable.Rows | ForEach-Object { $_.Col2 })) -join ";")
+    Check "the table knows it has them" "True" "$($script:ExakitTableHasDesc)"
     $chosen = @(Select-ExakitDataLoad -FinalLabel "Skip")
-    Check "the For column is up while the reader picks" "For" $script:Col2AtMenu
+    Check "the Description column is up while the reader picks" "Description" $script:Col2AtMenu
     Check "...and gone again before the progress display" "" ("" + $script:UiTable.Col2)
     Check "the picked rows still answer" "tpch,esophageal_posts" ($chosen -join ",")
 
