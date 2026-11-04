@@ -466,7 +466,9 @@ class ChoiceApp(App[dict | None]):
         status_left = 5 + name_w + len(sep) + col2_w + (len(sep) + col3_w if col3_w else 0) + len(sep)
         for entry in entries:
             if self.applying and entry["kind"] == "item" and entry["label"] == self.active:
-                note = self.activity[:inner - status_left]
+                room = inner - status_left
+                # Cut where the cell ends, and say so: a label stopping mid-word reads as broken.
+                note = self.activity if len(self.activity) <= room else self.activity[:max(room - 1, 0)] + "…"
                 border(VB, VB, Text(" " * status_left).append(note.ljust(inner - status_left), DIM))
                 lines.append(None)
             kind = entry["kind"]

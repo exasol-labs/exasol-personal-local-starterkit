@@ -263,6 +263,13 @@ class ChoiceScreenTest(unittest.TestCase):
                 self.assertRegex(lines[activity + 1], r"░+ +0% +│$")      # the data-load table's bar
                 done = next(line for line in lines if "dash-serv" in line)
                 self.assertRegex(done, r"✓ dashboards ready +\(2s\) +│$")
+                long = "Installing notebook connector 3.1.0 and every tool it brings along with it"
+                app._on_activity(long)
+                lines = app.render_screen(width)[0].plain.splitlines()
+                said = next(line for line in lines if "Installing notebook connector" in line)
+                self.assertEqual(len(said), len(done), "the activity stays inside the frame")
+                if long not in said:                                    # cut where the cell ends, and says so
+                    self.assertRegex(said, r"…\s*│$")
                 self.assertFalse(any("Enter to confirm" in line for line in lines))
                 self.assertFalse(any("❯" in line for line in lines))
                 await pilot.press("escape")

@@ -264,7 +264,7 @@ def install(ctx: KitContext) -> None:
     if sys.platform != "darwin":
         command.extend(("--torch-backend", "cpu"))
     command.extend(_specs(ctx, version, selected))
-    ctx.run_logged(f"Installing notebook connector {version} and selected frontends", *command)
+    ctx.run_logged(f"Installing notebook connector {version}", *command)   # the tools are rows of their own
     if _package_version(ctx) != version:
         raise AddonFailure("The notebook connector does not report the requested version")
     notebooks.mkdir(parents=True, exist_ok=True)

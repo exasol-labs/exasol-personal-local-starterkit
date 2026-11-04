@@ -1325,7 +1325,7 @@ _ui_table_cell() {
             _utc_ph="$6"; _utc_phw=0
             if [ -n "$_utc_ph" ]; then
                 _utc_phmax=$(( UI_TABLE_STAT_W / 2 ))
-                [ "${#_utc_ph}" -gt "$_utc_phmax" ] && _utc_ph="${_utc_ph:0:$_utc_phmax}"
+                [ "${#_utc_ph}" -gt "$_utc_phmax" ] && _utc_ph="${_utc_ph:0:$(( _utc_phmax - 1 ))}…"
                 _utc_phw=$(( ${#_utc_ph} + 1 ))
                 if [ $(( _utc_barw - _utc_phw )) -ge 8 ]; then
                     _utc_barw=$(( _utc_barw - _utc_phw ))

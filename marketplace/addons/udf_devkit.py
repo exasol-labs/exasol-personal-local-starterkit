@@ -483,7 +483,7 @@ def build(ctx: KitContext, requirements: Path, alias: str, *, yes: bool) -> list
     ctx.require_uv()
     version = notebook.installed_version(ctx)
     python = venv_python(notebook.paths(ctx)[0])
-    ctx.run_logged("Adding UDF build tooling to the notebook environment", str(ctx.uv), "pip", "install",
+    ctx.run_logged("Adding UDF build tools to notebooks", str(ctx.uv), "pip", "install",
                    "--python", str(python),
                    f"exasol-notebook-connector[bucketfs,ibis,pyexasol,sqlalchemy,notebook-dependencies,slc]=={version}")
     notebook._write_store(ctx)

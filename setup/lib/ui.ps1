@@ -1046,7 +1046,10 @@ function Get-ExakitTableCell {
             $phaseW = 0
             if ($phase) {
                 $phaseMax = [int][Math]::Floor($StatusWidth / 2)
-                if ($phase.Length -gt $phaseMax) { $phase = $phase.Substring(0, $phaseMax) }
+                if ($phase.Length -gt $phaseMax) {
+                    $mark = "" + $script:UiEllipsis
+                    $phase = $phase.Substring(0, [Math]::Max(0, $phaseMax - $mark.Length)) + $mark
+                }
                 $phaseW = $phase.Length + 1
                 if (($barw - $phaseW) -ge 8) { $barw = $barw - $phaseW } else { $phase = ""; $phaseW = 0 }
             }
