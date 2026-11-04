@@ -276,7 +276,7 @@ class NotebookTest(unittest.TestCase):
         self.assertIn("name: exasol-starter-kit", self.text)
         cells = re.split(r"^# %%", self.text, flags=re.M)[1:]
         self.assertTrue(cells[0].startswith(" [markdown]"), "the first cell says what the notebook needs")
-        self.assertRegex(cells[0], r"(?s)What it needs.*Run time")
+        self.assertRegex(cells[0], r"(?s)Run time.*Needs:")
         self.assertTrue(any(isinstance(node, ast.Assign) and node.targets[0].id == "DATASET" for node in tree.body))
 
     def test_it_holds_no_connection_details(self):

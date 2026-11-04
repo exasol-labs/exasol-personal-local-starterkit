@@ -339,7 +339,7 @@ class UdfTest(unittest.TestCase):
         with mock.patch.object(socket, "socket", side_effect=AssertionError("outbound network from the UDF")):
             namespace["run"](ctx)
         self.assertEqual(len(ctx.emitted), 1)
-        result = contract.parse(COLUMNS, [("7", *ctx.emitted[0])])[0]
+        result = contract.parse(PARTED_COLUMNS, [("7", *ctx.emitted[0])])[0]   # the UDF emits its model in parts
         self.assertTrue(result.has_model)
         self.assertEqual(result.metrics["rows_train"], 20.0)
 
