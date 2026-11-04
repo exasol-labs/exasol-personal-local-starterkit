@@ -2679,6 +2679,22 @@ done
 has "...and says why the name matters" 'file name becomes the table name' \
     "$(cat "$ROOT/setup/exakit")"
 
+echo "GITHUB_TOKEN never reaches a command line (audit SEC-05/06):"
+_tk_dir="$(mktemp -d)"; mkdir -p "$_tk_dir/bin" "$_tk_dir/home"
+cat > "$_tk_dir/bin/curl" <<'CURL'
+#!/bin/sh
+printf '%s\n' "$*" >> "$TK_DIR/argv"
+case " $* " in *" -K - "*) cat >> "$TK_DIR/stdin" ;; esac
+exit 22
+CURL
+chmod +x "$_tk_dir/bin/curl"
+( TK_DIR="$_tk_dir" HOME="$_tk_dir/home" PATH="$_tk_dir/bin:$PATH" GITHUB_TOKEN=tk-not-a-real-token \
+    EXAKIT_DRY_RUN=1 sh "$ROOT/install.sh" </dev/null >/dev/null 2>&1 )
+lacks "install.sh: the token is not in curl's arguments" "tk-not-a-real-token" "$(cat "$_tk_dir/argv" 2>/dev/null)"
+has "...it reaches curl on stdin, as a header" "Authorization: Bearer tk-not-a-real-token" "$(cat "$_tk_dir/stdin" 2>/dev/null)"
+rm -rf "$_tk_dir"
+has "install.ps1 sends the token it names as the remedy" 'Authorization = "Bearer $($env:GITHUB_TOKEN)"' "$(cat "$ROOT/install.ps1")"
+
 echo "the PATH line runs in a non-interactive ssh shell too (audit LNX-14):"
 _lp_home="$(mktemp -d)"
 printf '# ~/.bashrc\ncase $- in\n    *i*) ;;\n      *) return;;\nesac\nalias ll=ls\n' > "$_lp_home/.bashrc"

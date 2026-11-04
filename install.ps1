@@ -468,6 +468,13 @@ if ($env:HTTPS_PROXY) {
     $webArgs["Proxy"] = $env:HTTPS_PROXY
     $webArgs["ProxyUseDefaultCredentials"] = $true
 }
+# GITHUB_TOKEN is SENT, as the failure text below and install.sh promise (audit
+# SEC-06): it was named as the remedy for a private repository and never used.
+# Only github.com is asked here; the archive redirect to codeload carries its
+# own token in the URL, and no Authorization header follows a redirect.
+if ($env:GITHUB_TOKEN) {
+    $webArgs["Headers"] = @{ Authorization = "Bearer $($env:GITHUB_TOKEN)" }
+}
 $fetched = $false
 $proxyDenied = $false
 foreach ($url in $(if ($LocalKit) { @() } else { $urls })) {

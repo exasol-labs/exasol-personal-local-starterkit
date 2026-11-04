@@ -351,10 +351,13 @@ main() {
         # ${auth_header:+-H "..."} word-splits the header value into separate
         # argv tokens (a real bug), so branch explicitly instead. --max-time
         # caps a stalled transfer so a hung connection can't hang forever.
+        # The header reaches curl on stdin (-K -), never on its command line,
+        # where any user of the machine reads it with ps (audit SEC-05).
         _fetch_kit() {
             if [ -n "${GITHUB_TOKEN:-}" ]; then
+                printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN" | \
                 curl -fL --proto '=https' --retry 3 --connect-timeout 15 --max-time 300 -sS \
-                    -H "Authorization: Bearer $GITHUB_TOKEN" -o "$tmp_tar" "$1"
+                    -K - -o "$tmp_tar" "$1"
             else
                 curl -fL --proto '=https' --retry 3 --connect-timeout 15 --max-time 300 -sS \
                     -o "$tmp_tar" "$1"
