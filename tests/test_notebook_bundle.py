@@ -53,6 +53,16 @@ class BundleTest(unittest.TestCase):
             bundle.copy("jupyter", ROOT, Path(tmp), {"general"})
             self.assertTrue((base / "data-scientist").is_dir() and (base / "ml-engineer").is_dir())
 
+    def test_removing_a_persona_does_not_bring_the_other_ones(self):
+        """Data Scientist removed, General left (audit DAY-04): the next copy adds no ML Engineer notebooks, and the
+        README still names the data-scientist folder that is on disk."""
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / bundle.catalog(ROOT)["folders"]["jupyter"]
+            bundle.copy("jupyter", ROOT, Path(tmp), {"data-scientist", "general"})
+            self.assertEqual(bundle.copy("jupyter", ROOT, Path(tmp), {"general"}), ([], []))
+            self.assertFalse((base / "ml-engineer").exists())
+            self.assertIn("data-scientist/", (base / "README.md").read_text(), "a folder still there is still named")
+
 
 if __name__ == "__main__":
     unittest.main()

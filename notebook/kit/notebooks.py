@@ -51,19 +51,21 @@ def catalog(kit: Path) -> dict:
     return doc
 
 
-def wanted(doc: dict, personas: set[str] | None) -> set[str]:
-    """The personas whose notebooks are copied: the ones picked that have notebooks; every one when none is picked
-    (or none of the picked has notebooks), so installing the add-on on its own still brings them all."""
+def wanted(doc: dict, personas: set[str] | None, fresh: bool = True) -> set[str]:
+    """The personas whose notebooks are copied: the ones picked that have notebooks. When none of them has any, every
+    persona's - but only into a fresh folder (``fresh``), so installing the add-on on its own still brings them all,
+    while a kit left with General after `persona remove data-scientist` is not handed the ML Engineer's (DAY-04)."""
     have = {entry["persona"] for entry in doc["notebooks"]}
-    picked = have & (personas or set())
-    return picked or have
+    if not personas:
+        return have                                  # no persona recorded: the add-on on its own brings them all
+    return (have & personas) or (have if fresh else set())
 
 
-def _placed(doc: dict, personas: set[str] | None = None) -> list[tuple[str, dict]]:
+def _placed(doc: dict, personas: set[str] | None = None, fresh: bool = True) -> list[tuple[str, dict]]:
     """(folder, entry) for everything the copy places: the picked personas' notebooks.
     A source file lives at <source>/<folder>/<file> and is copied to <base>/<folder>/<file>. The shared cells
     (00_shared/) are build input only: each quickstart already carries them."""
-    keep = wanted(doc, personas)
+    keep = wanted(doc, personas, fresh)
     return [(entry["persona"], entry) for entry in doc["notebooks"] if entry["persona"] in keep]
 
 
@@ -106,7 +108,9 @@ def copy(front: str, kit: Path, notebooks_dir: Path, personas: set[str] | None =
     base = notebooks_dir / doc["folders"][front]
     before = _copied_before(base)
     added, problems, seen = [], [], dict(before)
-    for folder, entry in _placed(doc, personas):
+    have = {entry["persona"] for entry in doc["notebooks"]}
+    fresh = not any(key.split("/", 1)[0] in have for key in before)     # no persona's notebooks copied here yet
+    for folder, entry in _placed(doc, personas, fresh):
         name = entry.get(front)
         if not name or not (source / folder / name).is_file():
             continue                                     # a catalog entry this kit copy does not carry yet
@@ -170,7 +174,7 @@ def copy(front: str, kit: Path, notebooks_dir: Path, personas: set[str] | None =
             added.append("exasol-examples")
     if front == "jupyter":                           # Marimo would list a README as a notebook of its own
         try:
-            write_readme(kit, doc, base, personas)
+            write_readme(kit, doc, base, personas, fresh)
         except OSError as err:
             problems.append(f"README.md: {err.strerror or err}")
     if seen != before and base.is_dir():
@@ -182,11 +186,12 @@ def copy(front: str, kit: Path, notebooks_dir: Path, personas: set[str] | None =
     return added, problems
 
 
-def readme_text(kit: Path, doc: dict, personas: set[str] | None = None) -> str:
-    """The folder's README: the picked personas' notebooks in the order to open them, and the few
-    things to know. Only notebooks this kit copy carries."""
+def readme_text(kit: Path, doc: dict, personas: set[str] | None = None, fresh: bool = True,
+                present: set[str] | None = None) -> str:
+    """The folder's README: the picked personas' notebooks, and those of any persona folder still there (``present``),
+    in the order to open them, and the few things to know. Only notebooks this kit copy carries."""
     source = kit / doc["sources"]["jupyter"]
-    keep = wanted(doc, personas)
+    keep = wanted(doc, personas, fresh) | (present or set())
     lines = ["# Your notebooks", "", "Open them in order, `00_quickstart` first.", ""]
     persona = None
     for entry in doc["notebooks"]:
@@ -206,11 +211,12 @@ def readme_text(kit: Path, doc: dict, personas: set[str] | None = None) -> str:
               "  Ollama: its `/v1/` address, no key).",
               "- Langfuse traces: set `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL` the same way.",
               "- Marimo: `exakit notebook marimo`.",
-              "- These files are yours: edits are kept, and a notebook you delete is not copied back."]
+              "- These files are yours: one you edit is kept as it is, one you have not edited takes the kit's",
+              "  newer version on update, and one you delete is not copied back."]
     return "\n".join(lines) + "\n"
 
 
-def write_readme(kit: Path, doc: dict, folder: Path, personas: set[str] | None = None) -> None:
+def write_readme(kit: Path, doc: dict, folder: Path, personas: set[str] | None = None, fresh: bool = True) -> None:
     """Write the README; rewrite it when the personas change, but only while it is exactly what the kit wrote -
     once edited it is the user's."""
     readme = folder / "README.md"
@@ -225,7 +231,9 @@ def write_readme(kit: Path, doc: dict, folder: Path, personas: set[str] | None =
             unchanged = False
         if not unchanged:
             return
-    text = readme_text(kit, doc, personas)
+    have = {entry["persona"] for entry in doc["notebooks"]}
+    present = {child.name for child in folder.iterdir() if child.is_dir() and child.name in have}
+    text = readme_text(kit, doc, personas, fresh, present)
     readme.write_text(text, encoding="utf-8")
     marker.write_text(hashlib.sha256(text.encode("utf-8")).hexdigest() + "\n", encoding="utf-8")
 
