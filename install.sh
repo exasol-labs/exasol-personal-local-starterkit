@@ -271,7 +271,10 @@ main() {
     # scratch directory instead, so a dry run over a working install changes
     # nothing about it - and removes that directory on the way out, unless
     # EXAKIT_DRY_RUN_KEEP=1 asks to keep it for reading.
-    if [ "${EXAKIT_DRY_RUN:-0}" = "1" ]; then
+    # A preflight installs nothing either, so it reads the kit from the same
+    # scratch copy: it used to unpack over $EXAKIT_HOME/kit, which an installed
+    # exakit loads all its code from (audit MAC-01).
+    if [ "${EXAKIT_DRY_RUN:-0}" = "1" ] || [ "${EXAKIT_PREFLIGHT:-0}" = "1" ]; then
         kit_dir="$(mktemp -d "${TMPDIR:-/tmp}/exakit-dry-run.XXXXXX")" \
             || fail "Could not create a temporary directory for the dry run. Check that ${TMPDIR:-/tmp} is writable and the disk is not full."
         _dry_dir="$kit_dir"

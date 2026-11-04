@@ -96,6 +96,21 @@ check "fail() after mktemp exits 1" "1" "$?"
 check "fail(): TMPDIR is empty" "" "$(left)"
 dry EXAKIT_PREFLIGHT=1
 check "preflight (no exec) under a dry run: TMPDIR is empty" "" "$(left)"
+# A preflight on its own, over an installed kit: it reads a scratch copy and
+# leaves $EXAKIT_HOME/kit alone (audit MAC-01). The stand-in kit's preflight
+# only says it ran, so nothing is probed on the network or on port 8563.
+PF="$WORK/preflight-kit"
+mkdir -p "$PF/setup/lib" "$WORK/home/kit/kit"
+printf 'preflight_report() { echo "preflight ran"; return 0; }\n' > "$PF/setup/lib/detect.sh"
+printf 'echo kit\n' > "$PF/install.sh"
+printf 'installed code\n' > "$WORK/home/kit/kit/marker"
+env TMPDIR="$SCRATCH" HOME="$WORK/home" EXAKIT_HOME="$WORK/home/kit" EXAKIT_BIN_DIR="$WORK/home/bin" \
+    EXAKIT_NO_PROFILE_EDIT=1 EXAKIT_LOCAL_KIT="$PF" EXAKIT_PREFLIGHT=1 sh "$ROOT/install.sh" > "$WORK/out" 2>&1
+check "a preflight runs and exits 0" "0" "$?"
+check "...from the kit it was given" "1" "$(grep -c 'preflight ran' "$WORK/out")"
+check "...and leaves the installed kit's code alone" "installed code" "$(cat "$WORK/home/kit/kit/marker" 2>/dev/null)"
+check "...and TMPDIR is empty after it" "" "$(left)"
+rm -rf "$WORK/home/kit"
 for sig in TERM INT HUP; do
     # INT reset to default: a background job of a non-interactive shell starts
     # with it ignored, and a shell may not trap what it inherited ignored.
