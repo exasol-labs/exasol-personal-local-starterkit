@@ -178,14 +178,26 @@ names `exakit marketplace --list`, `exakit marketplace <id>` and
   ╭─ Marketplace add-ons ────────────────────────────────────────────────────╮
   │     Add-on               Version  Description                            │
   │ [✓] Select All                                                           │
-  │ [✓] ├─ dash-server       0.1.1    Agent-operated Dash hosting for live   │
+  │ [✓] ├─ dash-server       0.2.1    Agent-operated Dash hosting for live   │
   │     │                             analytical apps                        │
-  │ [✓] ├─ exasol-scheduler  0.2      Lightweight table-driven SQL job       │
+  │ [✓] ├─ dbt-exasol        1.12.1   Data Build Tool adapter for Exasol     │
+  │ [✓] ├─ exasol-scheduler  0.4.1    Lightweight table-driven SQL job       │
   │     │                             scheduling for Exasol                  │
-  │ [✓] ├─ exasol-vscode     1.7.0    A Visual Studio Code extension for     │
+  │ [✓] ├─ exasol-vscode     1.9.0    A Visual Studio Code extension for     │
   │     │                             working with Exasol databases.         │
-  │ [✓] └─ json-tables       0.3      Exasol JSON Tables: ingest, query, and │
-  │                                   reshape JSON-shaped data in Exasol.    │
+  │     │                             Provides comprehensive database        │
+  │     │                             management, intelligent SQL editing,   │
+  │     │                             and powerful query execution           │
+  │     │                             capabilities.                          │
+  │ [✓] ├─ json-tables       0.4.1    Exasol JSON Tables: ingest, query, and │
+  │     │                             reshape JSON-shaped data in Exasol.    │
+  │ [✓] ├─ notebook          3.1.0    Connection configuration management    │
+  │     │                             and additional tools for Jupyter       │
+  │     │                             notebooks.                             │
+  │ [✓] └─ udf-devkit        0.1.0    Release Repository for Script Language │
+  │                                   Container for user defined functions   │
+  │                                   (UDF's) that can be used in the EXASOL │
+  │                                   database.                              │
   │ [ ] Skip                                                                 │
   ╰──────────────────────────────────────────────────────────────────────────╯
 ```
@@ -199,7 +211,9 @@ that differs, e.g. `exasol-json-tables (json-tables)`). They are looked up only
 while installing and while showing updates (`exakit update`), and cached; every
 other screen, and any lookup that fails, uses the copy in
 `marketplace/catalog.json`, so the wording of a row can differ from the capture
-above. The same rows fill in with progress as each pick installs — the
+above. At 80 columns a row shows the id (`json-tables`) where `name (id)` does
+not fit its column; the notebook row carries JupyterLab and Marimo as child
+rows of their own. The same rows fill in with progress as each pick installs — the
 selection and the install are one table, not two screens.
 
 ```mermaid
