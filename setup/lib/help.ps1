@@ -213,7 +213,11 @@ function Write-ExakitHelpHeader {
     param([string]$Title, [string]$Subtitle)
     Write-Host ""
     Write-Host ("  " + ("-" * 70)) -ForegroundColor Cyan
-    if ($Subtitle) {
+    if ($Subtitle -and ($Title.Length + 2 + $Subtitle.Length) -gt 74) {
+        # An add-on's tagline is its GitHub About: too long for the title line, it wraps under it (audit MAC-02).
+        Write-Host "   $Title" -ForegroundColor Cyan
+        Write-ExakitHelpWrapped -Text $Subtitle -Indent "   "
+    } elseif ($Subtitle) {
         Write-Host "   $Title  " -ForegroundColor Cyan -NoNewline
         Write-Host $Subtitle -ForegroundColor DarkGray
     } else {

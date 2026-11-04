@@ -84,6 +84,17 @@ class AddonHelpTest(unittest.TestCase):
         self.assertIn('EXAKIT_UDF_INSTALL_TIMEOUT', text)
         self.assertNotIn('--requirements', text)  # this is a positional file, not a flag
 
+    def test_a_wide_name_and_a_long_tagline_keep_the_80_column_layout(self):
+        """MAC-02: an environment name as wide as its column ran into its text, and an add-on's GitHub tagline never
+        wrapped; at 80 columns the name gets a line of its own and the tagline wraps under the title."""
+        with patch.dict(os.environ, {'COLUMNS': '80'}):
+            text = self.help('help', 'udf-devkit')
+        lines = text.splitlines()
+        self.assertIn('    EXAKIT_UDF_CONTAINERS_MIRROR', lines)
+        self.assertFalse([line for line in lines if re.search(r'EXAKIT_[A-Z_]+[A-Z][a-z]', line)], 'a name runs into its text')
+        title = next(index for index, line in enumerate(lines) if line.strip() == 'script-languages-release')
+        self.assertTrue(all(len(line) <= 80 for line in lines[title:title + 4]), lines[title:title + 4])
+
     def test_individual_command_documents_supported_trust_confirmation(self):
         text = self.help('model', 'put', '--help')
         self.assertIn('--yes', text)

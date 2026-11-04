@@ -200,7 +200,14 @@ def rule():
 def header(title, subtitle=""):
     out()
     rule()
-    out("   %s%s%s%s" % (CYB, title, R, ("  %s%s%s" % (DIM, subtitle, R)) if subtitle else ""))
+    if subtitle and len(title) + 2 + len(subtitle) > WRAP - 3:
+        # An add-on's tagline is its GitHub About, written for a repository page:
+        # too long for the title line, it wraps under it (audit MAC-02).
+        out("   %s%s%s" % (CYB, title, R))
+        for line in textwrap.wrap(subtitle, width=WRAP - 3):
+            out("   %s%s%s" % (DIM, line, R))
+    else:
+        out("   %s%s%s%s" % (CYB, title, R, ("  %s%s%s" % (DIM, subtitle, R)) if subtitle else ""))
     rule()
 
 def section(title):
@@ -209,6 +216,12 @@ def section(title):
     out()
 
 def kv(key, value, pad=16):
+    if len(key) >= pad:
+        # A name as wide as its column ran straight into its text
+        # (EXAKIT_UDF_CONTAINERS_MIRRORLocal ...): it gets a line of its own (audit MAC-02).
+        out("    %s%s%s" % (GN, key, R))
+        para(value, indent=" " * (4 + pad))
+        return
     para(value, indent=" " * (4 + pad), first="    %s%-*s%s" % (GN, pad, key, R))
 
 def cmd_line(prefix, command, options, summary, pad=22, indent="    "):
