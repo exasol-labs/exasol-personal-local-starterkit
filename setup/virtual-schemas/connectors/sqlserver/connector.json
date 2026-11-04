@@ -79,6 +79,15 @@
       "kind": "ca-file"
     }
   ],
+  "paste": {
+    "schemes": ["jdbc:sqlserver"],
+    "bare": true,
+    "path": "database",
+    "params": {"databasename": "database", "database": "database", "servername": "host", "portnumber": "port", "user": "user", "username": "user"},
+    "tls": "sqlserver",
+    "instance": "a named instance (host\\instance) is not read: give the host and the instance's TCP port with --set host=... --set port=... (SQL Server Configuration Manager shows the port)",
+    "forms": ["jdbc:sqlserver://host:1433;databaseName=db;encrypt=true", "host[:port][/database]"]
+  },
   "auth": "password",
   "url": "jdbc:sqlserver://{host}:{port};databaseName={database};{tls}",
   "tls": {
@@ -91,6 +100,14 @@
     "CATALOG_NAME": "{database}",
     "SCHEMA_NAME": "{schema}"
   },
+  "schema_check": {
+    "input": "schema",
+    "statement": "SELECT CASE WHEN SCHEMA_ID({v}) IS NOT NULL THEN 'ok' ELSE 'missing' END"
+  },
+  "tips": [
+    "Names keep SQL Server's spelling, spaces included: quote them, e.g. SELECT \"OrderID\" FROM <schema>.\"Orders\".",
+    "datetime arrives as TIMESTAMP(3), bit as BOOLEAN, money as DECIMAL(19,4)."
+  ],
   "notes": [
     "SQL Server login only; Windows authentication and Entra ID are not part of this connector.",
     "Exasol tested the jre8 build of mssql-jdbc 13.4.0; it runs on the Java 17 container.",

@@ -4,11 +4,13 @@
     cli.py [context] resolve    QUERY
     cli.py [context] inputs     CONNECTOR
     cli.py [context] field      CONNECTOR INPUT [--base64]   (the value on standard input)
+    cli.py [context] paste      CONNECTOR [--base64]         (a connection string on standard input)
     cli.py [context] plan       CONNECTOR --name N [--set KEY=VALUE ...]
     cli.py [context] connect    CONNECTOR --name N [--set KEY=VALUE ...] [--secret-stdin]
     cli.py [context] list | issues [--status S] | show N | check N|--all
     cli.py [context] reauth     N --secret-stdin
     cli.py [context] refresh    N
+    cli.py [context] describe   N [TABLE] [--ddl] [--into SCHEMA]
     cli.py [context] disconnect N [--dry-run]
     cli.py [context] remove     N [--dry-run]
 
@@ -42,6 +44,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import lifecycle  # noqa: E402
+import paste  # noqa: E402
 import plan as planner  # noqa: E402
 import sources  # noqa: E402
 
@@ -64,6 +67,9 @@ def parse(argv):
     cmd.add_argument("connector")
     cmd.add_argument("input")
     cmd.add_argument("--base64", action="store_true")
+    cmd = sub.add_parser("paste")
+    cmd.add_argument("connector")
+    cmd.add_argument("--base64", action="store_true")
     for name in ("plan", "connect"):
         cmd = sub.add_parser(name)
         cmd.add_argument("connector")
@@ -83,6 +89,11 @@ def parse(argv):
     cmd.add_argument("--secret-stdin", action="store_true")
     cmd.add_argument("--secret-stdin-base64", action="store_true")
     sub.add_parser("refresh").add_argument("name")
+    cmd = sub.add_parser("describe")
+    cmd.add_argument("name")
+    cmd.add_argument("table", nargs="?", default="")
+    cmd.add_argument("--ddl", action="store_true")
+    cmd.add_argument("--into", default="")
     for name in ("disconnect", "remove"):
         cmd = sub.add_parser(name)
         cmd.add_argument("name")
@@ -120,6 +131,31 @@ def read_secret(args):
     return data.rstrip("\r\n") or None
 
 
+def read_value(args):
+    """A value on standard input (field, paste); --base64 is the Windows
+    bridge's encoding, for the reason read_secret takes it."""
+    if args.base64:
+        try:
+            raw = base64.b64decode(re.sub(rb"[^A-Za-z0-9+/=]", b"", sys.stdin.buffer.read()), validate=True).decode("utf-8")
+        except (ValueError, binascii.Error):
+            raise planner.PlanError("the value on standard input is not valid base64 UTF-8")
+    else:
+        raw = sys.stdin.read()
+    return raw.rstrip("\r\n")
+
+
+def paste_answer(args, emit):
+    """A pasted connection string as the connector's inputs (paste.read): the
+    values, notes and dropped parameter names. The string comes on standard
+    input, never as an argument: it may hold a password."""
+    defs = planner.Definitions(args.defs)
+    connector_id = defs.resolve(args.connector)
+    answer = paste.read(defs.connector(connector_id), read_value(args))
+    for level, text in answer.pop("events"):
+        emit(level, text)
+    return dict(answer, connector=connector_id)
+
+
 def form_answer(args):
     """The terminal form's two questions, answered without the database.
 
@@ -143,15 +179,7 @@ def form_answer(args):
                            "secret": spec["kind"] in ("secret", "secret-file")})
         return {"connector": connector_id, "name": entry["name"], "status": entry["status"],
                 "gate": entry.get("gate") or "", "inputs": fields}
-    if args.base64:
-        # The Windows bridge's encoding, for the reason read_secret takes it.
-        try:
-            raw = base64.b64decode(re.sub(rb"[^A-Za-z0-9+/=]", b"", sys.stdin.buffer.read()), validate=True).decode("utf-8")
-        except (ValueError, binascii.Error):
-            raise planner.PlanError("the value on standard input is not valid base64 UTF-8")
-    else:
-        raw = sys.stdin.read()
-    raw = raw.rstrip("\r\n")
+    raw = read_value(args)
     if args.input == "name":
         if not sources.NAME.match(raw):
             raise planner.PlanError("the source name must be lower case letters, digits and _ (start with a letter, "
@@ -198,6 +226,8 @@ def main(argv=None):
     try:
         if args.command in ("inputs", "field"):
             result = form_answer(args)
+        elif args.command == "paste":
+            result = paste_answer(args, emit)
         elif args.command in ("catalog", "resolve"):
             defs = planner.Definitions(args.defs)
             if args.command == "resolve":
@@ -240,6 +270,8 @@ def main(argv=None):
                 code = 0 if result.get("status") == "ready" else 1
             elif args.command == "refresh":
                 result = engine.refresh(args.name)
+            elif args.command == "describe":
+                result = engine.describe(args.name, args.table, args.ddl, args.into)
             elif args.command == "disconnect":
                 result = engine.disconnect(args.name, args.dry_run)
             elif args.command == "remove":

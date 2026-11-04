@@ -24,6 +24,12 @@ database and inspect it afterwards:
     A lakehouse catalog on AWS Glue is keyed by glue.<region>.amazonaws.com and
     takes "databases" ({name: [tables]}), "readable" (the databases the key may
     list; default all) and "key_id" (the access key it accepts)
+    An Iceberg REST catalog or a Unity Catalog (the same engine) is keyed by
+    the host of its URL and takes "catalog" ("rest" | "unity"), "namespaces"
+    ({name: [tables]}), "token" (the token it accepts), "key_id" and
+    "secret_key" (the storage keys it accepts), "warehouse" (the one it
+    knows), "region" (the bucket's) and "fail": "external" (Unity closed to
+    outside engines) | "managed" (a catalog-managed table, at the read)
     sources     {host: {"tables": [...], "fail": null|"auth"|"tls"|"tls-validity"|"unreachable"|"denied",
                         "secret": "<the credential the source accepts>"}}
                 a document source (S3) is keyed by <bucket>.s3.<region>.amazonaws.com
@@ -43,6 +49,9 @@ database and inspect it afterwards:
                 staged under FAKE_VS_EXA are reported as the database sees
                 them (the share's delay on Exasol Personal); stage_never
                 true -> they never are. files_probes counts the probes.
+    refresh_fail virtual schemas whose ALTER ... REFRESH fails (the adapter
+                cannot reach its source); script_fail scripts (SCHEMA.NAME)
+                whose CREATE OR REPLACE fails
 
 Errors carry realistic driver text, including the statement for a failed
 CREATE CONNECTION, so the engine's redaction is exercised for real.
@@ -277,6 +286,60 @@ def _glue_source(doc, con, namespace=None):
     return {"tables": [t.upper() for t in src["databases"].get(database, [])]}
 
 
+def _catalog_source(doc, con, props, at_read=False):
+    # lakehouse-engine-rs over an Iceberg REST catalog or Unity Catalog. Not
+    # measured live: the shapes follow the Iceberg REST spec's error types,
+    # Databricks' error codes and object_store's own words.
+    host = _host(con["url"])
+    src = doc["sources"].get(host)
+    if src is None:
+        raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: catalog request failed: error sending request for "
+                        "url (%s): error trying to connect: dns error" % con["url"])
+    cred = json.loads(con["secret"] or "{}")
+    unity = props.get("CATALOG_KIND") == "UNITY_CATALOG"
+    namespace = props.get("NAMESPACE", "")
+    if con["url"].startswith("http://") and props.get("ALLOW_HTTP") != "true":
+        raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: the catalog URL %s is plain http, which is refused "
+                        "unless ALLOW_HTTP is true" % con["url"])
+    if unity != (src.get("catalog") == "unity"):
+        raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: catalog request failed: HTTP 404 Not Found")
+    if unity:
+        if cred.get("token") != src.get("token"):
+            raise Exception('VM error: F-UDF-CL-RUST-9001: UDF error: Unity Catalog request failed: HTTP 401: '
+                            '{"error_code":"UNAUTHENTICATED","message":"Invalid access token. [ReqId: r1]"}')
+    elif "token" in cred:
+        if cred["token"] != src.get("token"):
+            raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: Iceberg REST catalog request failed: "
+                            "NotAuthorizedException: Not authorized to make this request (HTTP 401)")
+    elif cred.get("access_key") != src.get("key_id") or cred.get("secret_key") != src.get("secret_key"):
+        # Static keys: the catalog lists, the store refuses the signature.
+        if at_read:
+            raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: Object Store error: Error performing GET: "
+                            "SignatureDoesNotMatch: The request signature we calculated does not match the "
+                            "signature you provided. Check your key and signing method.")
+    if not unity and src.get("warehouse") and cred.get("warehouse") != src["warehouse"]:
+        raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: Iceberg REST catalog request failed: "
+                        "NoSuchWarehouseException: Warehouse %s does not exist (HTTP 404)" % cred.get("warehouse"))
+    if src.get("fail") == "external":
+        raise Exception('VM error: F-UDF-CL-RUST-9001: UDF error: Unity Catalog request failed: HTTP 403: '
+                        '{"error_code":"PERMISSION_DENIED","message":"User does not have EXTERNAL USE SCHEMA on '
+                        'Schema \'%s\'."}' % namespace)
+    if namespace not in src.get("namespaces", {}):
+        if unity:
+            raise Exception('VM error: F-UDF-CL-RUST-9001: UDF error: Unity Catalog request failed: HTTP 404: '
+                            '{"error_code":"SCHEMA_DOES_NOT_EXIST","message":"Schema \'%s\' does not exist."}'
+                            % namespace)
+        raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: Iceberg REST catalog request failed: "
+                        "NoSuchNamespaceException: Namespace does not exist: %s (HTTP 404)" % namespace)
+    if at_read and src.get("region") and cred.get("region") != src["region"]:
+        raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: Object Store error: Received redirect without "
+                        "LOCATION, this normally indicates an incorrectly configured region")
+    if at_read and src.get("fail") == "managed":
+        raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: table %s.%s is a catalog-managed table: Max "
+                        "catalog version is required" % (namespace, src["namespaces"][namespace][0]))
+    return {"tables": [t.upper() for t in src["namespaces"][namespace]]}
+
+
 def _source_for(doc, connection, via="adapter"):
     con = doc["connections"].get(connection)
     if not con:
@@ -285,6 +348,8 @@ def _source_for(doc, connection, via="adapter"):
         return _databricks_source(doc, con, via)
     if con["url"].startswith("https://glue."):
         return _glue_source(doc, con, doc.get("namespaces", {}).get(connection))
+    if connection in doc.get("catalogs", {}):
+        return _catalog_source(doc, con, doc["catalogs"][connection], at_read=True)
     if con["url"].startswith("jdbc:bigquery:"):
         return _bigquery_source(doc, con)
     if con["url"].startswith("mongodb"):
@@ -336,6 +401,18 @@ class Fake(object):
         m = re.search(r"FROM EXA_DBA_CONNECTIONS WHERE CONNECTION_NAME = '([^']+)'", sql)
         if m:
             return [{"CONNECTION_NAME": m.group(1)}] if m.group(1) in doc["connections"] else []
+        m = re.search(r"FROM SYS.EXA_ALL_COLUMNS WHERE COLUMN_SCHEMA = '([^']+)'", sql)
+        if m:
+            # columns: {table: [[name, type, nullable], ...]} at the top level;
+            # a table not listed has two plain columns.
+            vs = doc["virtual"].get(m.group(1)) or {"tables": []}
+            rows = []
+            for table in sorted(vs["tables"]):
+                cols = doc.get("columns", {}).get(table) or [["ID", "DECIMAL(18,0)", False],
+                                                             ["NAME", "VARCHAR(100) UTF8", True]]
+                rows += [{"COLUMN_TABLE": table, "COLUMN_NAME": c[0], "COLUMN_TYPE": c[1],
+                          "COLUMN_IS_NULLABLE": c[2]} for c in cols]
+            return rows
         m = re.search(r"FROM EXA_SCHEMAS WHERE SCHEMA_NAME = '([^']+)'", sql)
         if m:
             return [{"SCHEMA_NAME": m.group(1)}] if m.group(1) in doc["schemas"] + list(doc["virtual"]) else []
@@ -412,7 +489,15 @@ class Fake(object):
         m = re.match(r"SELECT \* FROM \(IMPORT FROM JDBC AT \"([^\"]+)\" STATEMENT '", sql)
         if m:
             _loader_trust(doc, m.group(1))
-            _source_for(doc, m.group(1), "loader")
+            src = _source_for(doc, m.group(1), "loader")
+            if "''missing''" in sql:
+                # The schema check: the source's "schemas" ({name: "ok" |
+                # "denied" | "case:<NAME>"}) answers; without it, every name is.
+                words = ("ok", "denied", "missing", "case:", "USAGE", "SCHEMA", "SELECT")
+                value = next((v for v in re.findall(r"''([^']*)''", sql) if v not in words), "")
+                answer = "ok" if "schemas" not in src else src["schemas"].get(value, "missing")
+                doc.setdefault("scope_checks", []).append(value)
+                return [{"ANSWER": answer}]
             return [{"1": 1}]
         m = re.match(r'SELECT \* FROM "([^"]+)"\."([^"]+)" LIMIT 1', sql)
         if m:
@@ -434,6 +519,8 @@ class Fake(object):
             if not doc[m.group(1).lower()]:
                 raise Exception("No usable script language container is installed for the requested language.")
             name = "%s.%s" % (m.group(3), m.group(4))
+            if name in doc.get("script_fail", []):
+                raise Exception("VM error: could not create script %s" % name)
             if name not in doc["scripts"]:
                 doc["scripts"].append(name)
             return
@@ -475,6 +562,14 @@ class Fake(object):
             doc.setdefault("namespaces", {})[m.group(2)] = m.group(3)
             doc["virtual"][m.group(1)] = {"connection": m.group(2), "tables": src["tables"]}
             return
+        m = re.match(r'CREATE VIRTUAL SCHEMA "([^"]+)" USING \S+ WITH CATALOG_CONNECTION = \'([^\']+)\'((?: \w+ = \'[^\']*\')*)$', sql)
+        if m:
+            # An Iceberg REST catalog or Unity Catalog: CREATE lists the namespace's tables.
+            props = dict(re.findall(r"(\w+) = '([^']*)'", m.group(3)))
+            src = _catalog_source(doc, doc["connections"][m.group(2)], props)
+            doc.setdefault("catalogs", {})[m.group(2)] = props
+            doc["virtual"][m.group(1)] = {"connection": m.group(2), "tables": src["tables"]}
+            return
         m = re.match(r'CREATE VIRTUAL SCHEMA "([^"]+)" USING .* CONNECTION_NAME = \'([^\']+)\'', sql)
         if m:
             src = _source_for(doc, m.group(2))
@@ -483,6 +578,8 @@ class Fake(object):
         m = re.match(r'ALTER VIRTUAL SCHEMA "([^"]+)" REFRESH', sql)
         if m:
             vs = doc["virtual"][m.group(1)]
+            if m.group(1) in doc.get("refresh_fail", []):
+                raise Exception("Connection refused. Check that the hostname and port are correct")
             src = _source_for(doc, vs["connection"])
             if "tables" in src:
                 vs["tables"] = list(src["tables"])

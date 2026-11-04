@@ -420,9 +420,9 @@
     },
     {
       "command": "connect",
-      "options": "[source] [--name N] [--set KEY=VALUE]... [--password-file F] [--dry-run] [--yes] [--json]",
+      "options": "[source] [--name N] [--url STRING] [--set KEY=VALUE]... [--password-file F] [--dry-run] [--yes] [--json]",
       "summary": "Query an external database from the local one (virtual schema).",
-      "description": "Connects PostgreSQL, MySQL, SQL Server, Oracle, Snowflake, BigQuery, Databricks or MongoDB, Iceberg tables in AWS Glue - or document files in S3 or Azure Blob Storage - as an Exasol virtual schema: the tables stay at the source and queries fetch what they need. Search by name or alias (pg, mssql). On a terminal, `exakit connect` alone opens a menu of the connectors (Space ticks several, Enter confirms), then one panel per source with every field and its default, each answer checked where it is typed; a review shows what each will download and who can read it, and after one question a table follows every source to its VS_<NAME> or its failure; unattended, give every input with --set and the credential on standard input or with --password-file (never as an argument). The adapter and JDBC driver are pinned and SHA-256 verified; the credential lives only in the database's CONNECTION EXAKIT_SRC_<NAME>, and the tables appear as VS_<NAME>. A failed connect leaves nothing behind. The first connect installs the Java language container if it is missing (asked; one database restart). Exit 2 bad input, 3 name or object conflict, 5 connector gated or not confirmed (nothing changed), 1 any other failure.",
+      "description": "Connects PostgreSQL, MySQL, SQL Server, Oracle, Snowflake, BigQuery, Databricks or MongoDB, Iceberg tables in AWS Glue - or document files in S3 or Azure Blob Storage - as an Exasol virtual schema: the tables stay at the source and queries fetch what they need. Search by name or alias (pg, mssql). On a terminal, `exakit connect` alone opens a menu of the connectors (Space ticks several, Enter confirms), then one panel per source with every field and its default, each answer checked where it is typed; a review shows what each will download and who can read it, and after one question a table follows every source to its VS_<NAME> or its failure; unattended, give every input with --set and the credential on standard input or with --password-file (never as an argument). --url takes the source's connection string (a JDBC URL, postgres://, mongodb+srv://, s3://, an Azure blob URL, ...) and fills the inputs it names, each checked as if given with --set; an explicit --set wins over it. A password in the string is never used or stored - the credential is still asked for separately - and settings the kit does not read are dropped by name. The adapter and JDBC driver are pinned and SHA-256 verified; the credential lives only in the database's CONNECTION EXAKIT_SRC_<NAME>, and the tables appear as VS_<NAME>. A failed connect leaves nothing behind. The first connect installs the Java language container if it is missing (asked; one database restart). Exit 2 bad input, 3 name or object conflict, 5 connector gated or not confirmed (nothing changed), 1 any other failure.",
       "environment": [
         "EXAKIT_CONFIRM_RUNTIME_UPDATE=1 pre-answers the Java container install (--yes does the same)"
       ],
@@ -430,19 +430,21 @@
         "exakit connect",
   "exakit connect postgresql",
         "exakit connect pg --name sales --set host=db.example.com --set database=sales --set user=reader --password-file ~/.sales.pw",
-        "exakit connect mssql --name erp --dry-run"
+        "exakit connect mssql --name erp --dry-run",
+        "exakit connect pg --name sales --url 'postgres://reader@db.example.com:5432/sales?sslmode=verify-full' --password-file ~/.sales.pw"
       ]
     },
     {
       "command": "source",
-      "options": "list|issues [--status S]|catalog|show N|check N|--all|reauth N|refresh N|disconnect N|remove N [--dry-run] [--yes] [--json]",
+      "options": "list|issues [--status S]|catalog|show N|describe N [TABLE] [--ddl] [--schema S]|check N|--all|reauth N|refresh N|disconnect N|remove N [--dry-run] [--yes] [--json]",
       "summary": "List, check and manage connected external sources.",
-      "description": "list shows saved sources and their last known state; issues filters the failing ones with the command that fixes each; check runs a fresh bounded read through the adapter (--all for every source, one shot, not monitoring); reauth replaces the credential from a hidden prompt, --password-file or standard input and reads again; refresh re-reads the source's table list; disconnect drops only the CONNECTION (queries fail until you connect again with the same name); remove drops the virtual schema, adapter and connection and deletes the downloaded files no other source still uses. disconnect and remove preview first and ask; --dry-run only previews, and without a terminal they need --yes (unconfirmed: exit 5, nothing changed). reauth tries the new credential before it replaces the old one. Remote data is never touched.",
+      "description": "list shows saved sources and their last known state; issues filters the failing ones with the command that fixes each; check runs a fresh bounded read through the adapter (--all for every source, one shot, not monitoring); reauth replaces the credential from a hidden prompt, --password-file or standard input and reads again; refresh re-reads the source's table list; describe lists its tables and columns as Exasol sees them, read from the local catalog without reaching the source, and --ddl prints CREATE TABLE statements (with --schema, for that schema) to copy a table locally; disconnect drops only the CONNECTION (queries fail until you connect again with the same name); remove drops the virtual schema, adapter and connection and deletes the downloaded files no other source still uses. disconnect and remove preview first and ask; --dry-run only previews, and without a terminal they need --yes (unconfirmed: exit 5, nothing changed). reauth tries the new credential before it replaces the old one. Remote data is never touched.",
       "examples": [
         "exakit source list",
         "exakit source issues",
         "exakit source check --all",
         "exakit source reauth sales",
+        "exakit source describe sales orders --ddl --schema LOCAL > orders.sql",
         "exakit source remove sales --dry-run"
       ]
     }

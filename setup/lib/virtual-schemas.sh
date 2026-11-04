@@ -878,7 +878,7 @@ if p.get("exposure"):
         _exakit_vs_render "$_EVT_DIR/why"
     done
     for _evt_i in ${_EVT_OK:-}; do
-        ok "Query it like any schema: SELECT * FROM VS_$(printf '%s' "${_EVT_S_NAME[$_evt_i]}" | tr 'a-z' 'A-Z').<table> LIMIT 10"
+        _exakit_vs_query_hints "$(cat "$_EVT_DIR/run.$_evt_i.json" 2>/dev/null)" "${_EVT_S_NAME[$_evt_i]}"
     done
     [ -n "${_EVT_OK:-}" ] && info "Manage with: exakit source show <name> (every action: exakit help source)"
     # Nothing secret outlives the command in this shell.
@@ -888,15 +888,44 @@ if p.get("exposure"):
     return "$_EVT_RC"
 }
 
-# cmd_connect [source] [--name N] [--set KEY=VALUE]... [--password-file F]
-#             [--dry-run] [--yes] [--json]
+# _exakit_vs_paste <connector> <string> - the inputs a pasted connection string
+# names (engine paste, the string on its stdin, never an argument), its notes
+# shown, as --set pairs put BEFORE the command line's own in EXAKIT_VS_SETS - the
+# engine's pairs() keeps the last, so an explicit --set wins - and their names
+# added to EXAKIT_VS_GIVEN, so they are not asked for again.
+_exakit_vs_paste() {
+    _evp_out="$(mktemp "${TMPDIR:-/tmp}/exakit-vs-paste.XXXXXX")" || { error "Could not create a temporary file."; return 1; }
+    printf '%s' "$2" | exakit_vs_engine paste "$1" > "$_evp_out" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
+    _evp_rc=$?
+    _exakit_vs_render "$_evp_out"; rm -f "$_evp_out"
+    [ "$_evp_rc" -eq 0 ] || return "$_evp_rc"
+    _evp_pairs="$(printf '%s' "$EXAKIT_VS_RESULT" | run_python_any -c 'import json, sys
+for k, v in json.load(sys.stdin)["values"].items():
+    print("%s=%s" % (k, v))')"
+    _evp_sets=""
+    while IFS= read -r _evp_pair; do
+        [ -n "$_evp_pair" ] || continue
+        _evp_sets="$_evp_sets
+--set
+$_evp_pair"
+        EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${_evp_pair%%=*}"
+    done <<EOF
+$_evp_pairs
+EOF
+    EXAKIT_VS_SETS="$_evp_sets$EXAKIT_VS_SETS"
+}
+
+# cmd_connect [source] [--name N] [--url STRING] [--set KEY=VALUE]...
+#             [--password-file F] [--dry-run] [--yes] [--json]
 cmd_connect() {
-    _cc_source=""; _cc_name=""; _cc_pwfile=""; _cc_dry=0; _cc_json=0
+    _cc_source=""; _cc_name=""; _cc_pwfile=""; _cc_dry=0; _cc_json=0; _cc_url=""
     EXAKIT_VS_SETS=""; EXAKIT_VS_GIVEN=""
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --name) _cc_name="${2:-}"; shift ;;
             --name=*) _cc_name="${1#--name=}" ;;
+            --url) _cc_url="${2:-}"; [ -n "$_cc_url" ] || reject "--url takes a connection string (exakit help connect)"; shift ;;
+            --url=*) _cc_url="${1#--url=}"; [ -n "$_cc_url" ] || reject "--url takes a connection string (exakit help connect)" ;;
             --set) case "${2:-}" in *=*) ;; *) reject "--set takes KEY=VALUE (exakit help connect)" ;; esac
                    EXAKIT_VS_SETS="$EXAKIT_VS_SETS
 --set
@@ -914,6 +943,13 @@ $2"; EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${2%%=*}"; shift ;;
     done
     _require_install "$_cc_json"
     exakit_init_logging
+    # A pasted connection string fills what it names, for every path below:
+    # the terminal's panel shows those answers, --yes and --dry-run use them.
+    if [ -n "$_cc_url" ]; then
+        [ -n "$_cc_source" ] || reject "--url needs the source it is for, e.g. exakit connect postgresql --url 'postgres://reader@db.example.com/sales'"
+        _exakit_vs_paste "$_cc_source" "$_cc_url" || exit $?
+        _cc_url=""
+    fi
     # A person at a terminal gets the menu and the panels; a pipe, --yes,
     # --dry-run and --json keep the line-by-line path below, unchanged.
     if [ "$_cc_dry" = 0 ] && [ "$_cc_json" = 0 ] && _exakit_vs_tui_ok; then
@@ -977,10 +1013,28 @@ EOF
     _cc_rc=$?
     unset _cc_secret
     if [ "$_cc_rc" -eq 0 ]; then
-        ok "Query it like any schema: SELECT * FROM VS_$(printf '%s' "$_cc_name" | tr 'a-z' 'A-Z').<table> LIMIT 10"
+        _exakit_vs_query_hints "$EXAKIT_VS_RESULT" "$_cc_name"
         info "Manage it with: exakit source show $_cc_name | check | reauth | refresh | disconnect | remove"
     fi
     exit "$_cc_rc"
+}
+
+# _exakit_vs_query_hints <connect-result-json> <name> — a first query on one of
+# the source's real tables, quoted as it must be, then how this kind of source
+# names and types what it sends (the connector's tips).
+_exakit_vs_query_hints() {
+    _eqh_lines="$(printf '%s' "$1" | run_python_any -c 'import json, sys
+r = json.load(sys.stdin)
+print("OK Query it like any schema: " + r["example"])
+for t in r.get("tips") or []:
+    print("INFO " + t)' 2>/dev/null)"
+    if [ -z "$_eqh_lines" ]; then
+        ok "Query it like any schema: SELECT * FROM VS_$(printf '%s' "$2" | tr 'a-z' 'A-Z').<table> LIMIT 10"
+        return 0
+    fi
+    printf '%s\n' "$_eqh_lines" > "${TMPDIR:-/tmp}/exakit-vs-hints.$$"
+    _exakit_vs_render "${TMPDIR:-/tmp}/exakit-vs-hints.$$"
+    rm -f "${TMPDIR:-/tmp}/exakit-vs-hints.$$"
 }
 
 # _exakit_vs_show_plan <plan-json> — what will happen, before it does.
@@ -1003,7 +1057,7 @@ if p.get("gate"):
 # cmd_source <action> [name] [options] — the lifecycle of a connected source.
 cmd_source() {
     _cs_action="${1:-list}"; [ "$#" -gt 0 ] && shift
-    _cs_json=0; _cs_dry=0; _cs_name=""; _cs_all=0; _cs_status=""; _cs_pwfile=""
+    _cs_json=0; _cs_dry=0; _cs_name=""; _cs_all=0; _cs_status=""; _cs_pwfile=""; _cs_table=""; _cs_ddl=0; _cs_into=""
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --json|-j) _cs_json=1 ;;
@@ -1012,19 +1066,24 @@ cmd_source() {
             --all|-a) _cs_all=1 ;;
             --status) _cs_status="${2:-}"; shift ;;
             --password-file) _cs_pwfile="${2:-}"; shift ;;
+            --ddl) _cs_ddl=1 ;;
+            --schema) _cs_into="${2:-}"; shift ;;
+            --schema=*) _cs_into="${1#--schema=}" ;;
             -*) reject "Unknown option '$1' for source $_cs_action (exakit help source)." ;;
-            *) [ -z "$_cs_name" ] || reject "source $_cs_action takes one name."; _cs_name="$1" ;;
+            *) if [ -z "$_cs_name" ]; then _cs_name="$1"
+               elif [ "$_cs_action" = describe ] && [ -z "$_cs_table" ]; then _cs_table="$1"
+               else reject "source $_cs_action takes one name."; fi ;;
         esac
         shift
     done
     _require_install "$_cs_json"
     exakit_init_logging
     case "$_cs_action" in
-        list|issues|catalog|show|check|reauth|refresh|disconnect|remove) ;;
-        *) reject "Unknown source action '$_cs_action' (list, issues, show, check, reauth, refresh, disconnect, remove, catalog)." ;;
+        list|issues|catalog|show|describe|check|reauth|refresh|disconnect|remove) ;;
+        *) reject "Unknown source action '$_cs_action' (list, issues, show, describe, check, reauth, refresh, disconnect, remove, catalog)." ;;
     esac
     case "$_cs_action" in
-        show|reauth|refresh|disconnect|remove)
+        show|describe|reauth|refresh|disconnect|remove)
             [ -n "$_cs_name" ] || reject "exakit source $_cs_action needs a source name (see: exakit source list)." ;;
         check) [ -n "$_cs_name" ] || [ "$_cs_all" = 1 ] || reject "exakit source check needs a name or --all." ;;
     esac
@@ -1035,6 +1094,10 @@ cmd_source() {
         catalog) set -- "$@" catalog ;;
         issues)  set -- "$@" issues; [ -n "$_cs_status" ] && set -- "$@" --status "$_cs_status" ;;
         show|refresh) set -- "$@" "$_cs_action" "$_cs_name" ;;
+        describe) set -- "$@" describe "$_cs_name"
+                  [ -n "$_cs_table" ] && set -- "$@" "$_cs_table"
+                  [ "$_cs_ddl" = 1 ] && set -- "$@" --ddl
+                  [ -n "$_cs_into" ] && set -- "$@" --into "$_cs_into" ;;
         check)   if [ "$_cs_all" = 1 ]; then set -- "$@" check --all; else set -- "$@" check "$_cs_name"; fi ;;
         disconnect|remove)
             set -- "$@" "$_cs_action" "$_cs_name"
@@ -1083,6 +1146,23 @@ print("  " + "\n  ".join(["drops: " + ", ".join(p["drop"])] + (["keeps: " + ", "
             remove) ok "$_cs_name removed"; exit 0 ;;
         esac
     fi
+    if [ "$_cs_action" = describe ]; then
+        # --ddl prints only the statements, so they can go straight to a file.
+        [ -n "$EXAKIT_VS_RESULT" ] && printf '%s' "$EXAKIT_VS_RESULT" | run_python_any -c 'import json, sys
+r = json.load(sys.stdin)
+if not r["tables"]:
+    print("  %s shows no tables. If the source has some now: exakit source refresh %s" % (r["schema"], r["name"]))
+for t in r["tables"]:
+    if "ddl" in t:
+        sys.stdout.write(t["ddl"] + "\n")
+        continue
+    print("  %s.%s (%d column%s)" % (r["schema"], t["name"], len(t["columns"]), "" if len(t["columns"]) == 1 else "s"))
+    width = max([len(c["name"]) for c in t["columns"]] + [6])
+    for c in t["columns"]:
+        print("    %s  %s%s" % (c["name"].ljust(width), c["type"], "" if c["nullable"] else "  NOT NULL"))
+    print("")' 2>/dev/null
+        exit "$_cs_rc"
+    fi
     [ -n "$EXAKIT_VS_RESULT" ] && printf '%s' "$EXAKIT_VS_RESULT" | run_python_any -c 'import json, sys
 r = json.load(sys.stdin)
 rows = r["sources"] if "sources" in r else r.get("issues")
@@ -1109,8 +1189,10 @@ elif "checks" in r:
     for c in r["checks"]:
         print("  %-16s %s %s" % (c["name"], c["status"], c.get("evidence") or c.get("remedy") or ""))
 else:
-    for k in ("name", "connector", "status", "objects", "inputs", "pins", "tables", "last_check", "evidence", "remedy"):
+    for k in ("name", "connector", "status", "objects", "inputs", "pins", "needs_refresh", "tables", "last_check", "evidence", "remedy"):
         if r.get(k) not in (None, "", {}):
-            print("  %-11s %s" % (k, json.dumps(r[k]) if isinstance(r[k], (dict, list)) else r[k]))' 2>/dev/null
+            print("  %-11s %s" % (k, json.dumps(r[k]) if isinstance(r[k], (dict, list)) else r[k]))
+    for i, t in enumerate(r.get("tips") or []):
+        print("  %-11s %s" % ("tips" if i == 0 else "", t))' 2>/dev/null
     exit "$_cs_rc"
 }

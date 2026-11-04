@@ -51,12 +51,13 @@ def targz(member, data):
         archive.addfile(info, io.BytesIO(data))
     return buf.getvalue()
 for cid in ("postgresql", "mysql", "sqlserver", "oracle", "snowflake", "bigquery", "s3", "azure-blob", "mongodb",
-            "databricks", "lakehouse"):
+            "databricks", "lakehouse", "iceberg-rest", "unity"):
     path = os.path.join(defs, "connectors", cid, "connector.json")
     doc = json.load(open(path))
     if "arch" in doc["adapter"]:
         for arch, pin in doc["adapter"]["arch"].items():
-            data = ("adapter-%s-%s" % (cid, arch)).encode()
+            # One family (lakehouse, iceberg-rest, unity) pins one engine: the same bytes.
+            data = ("adapter-%s-%s" % (doc.get("family", cid), arch)).encode()
             if doc["adapter"].get("bundle") == "tar.gz":
                 # A release archive: the pinned member inside it is pinned too.
                 pin["member_size"], pin["member_sha256"] = len(data), hashlib.sha256(data).hexdigest()
@@ -327,6 +328,90 @@ lacks "...said once, not restated in a second parenthesis" "did not answer from 
 db '{"java": false}'
 run_secret "$SECRET" connect oracle --name erp --set host=ora.example.com --set service=ORCL --set schema=APP --set user=reader --secret-stdin
 check "no Java in the database: exit 21, for the shell to offer the install" "21" "$RC"
+
+printf '\n== the first query and the tips ==\n'
+db '{"sources": {"my.example.com": {"tables": ["orders", "actor"]}}}'
+run_secret "$SECRET" connect mysql --name shop --set host=my.example.com --set database=shop --set user=reader --secret-stdin
+check "a MySQL source: exit 0" "0" "$RC"
+has "...the first query names a real table, quoted as MySQL spells it" '"example": "SELECT * FROM VS_SHOP.\"actor\" LIMIT 10"' "$OUT"
+has "...with the connector's tips, the schema filled in" "quote them, e.g. SELECT \\\"first_name\\\" FROM VS_SHOP.\\\"actor\\\"" "$OUT"
+run show shop
+has "source show carries the tips too" "YEAR columns arrive as DATE" "$OUT"
+run remove shop
+db '{"sources": {"pg.example.com": {"tables": ["ORDERS", "LINES"]}}}'
+run_secret "$SECRET" connect postgresql --name up $PG_SET --secret-stdin
+has "an upper-case table is named without quotes" '"example": "SELECT * FROM VS_UP.LINES LIMIT 10"' "$OUT"
+run remove up
+
+printf '\n== the schema is checked before anything is created ==\n'
+# Exasol creates a virtual schema over a name the source does not have, empty,
+# and that reads as success. The loader asks the source first.
+db '{"sources": {"pg.example.com": {"tables": ["ORDERS"], "schemas": {"public": "ok", "Sales": "ok", "locked": "denied"}}}}'
+run_secret "$SECRET" connect postgresql --name nosch $PG_SET --set schema=nosuch --secret-stdin
+check "a schema the source does not have: exit 1" "1" "$RC"
+has "...said with the name" "the source has no schema nosuch that this account can see" "$OUT"
+check "...before any script or virtual schema, the connection dropped again" "[] {} {}" \
+    "$(dbq '[s for s in d["scripts"] if "NOSCH" in s]') $(dbq '{k: v for k, v in d["virtual"].items() if "NOSCH" in k}') $(dbq '{k: v for k, v in d["connections"].items() if "NOSCH" in k}')"
+check "...and no record" "no" "$([ -d "$HOME_K/sources/nosch" ] && echo yes || echo no)"
+db '{"sources": {"pg.example.com": {"tables": ["ORDERS"], "schemas": {"public": "ok", "Sales": "ok", "sales": "case:Sales", "locked": "denied"}}}}'
+run_secret "$SECRET" connect postgresql --name nosch $PG_SET --set schema=sales --secret-stdin
+has "a schema spelled in another case is named as the source spells it" "it has Sales (PostgreSQL folds an unquoted name to lower case); give it as the source spells it: --set schema=Sales" "$OUT"
+run_secret "$SECRET" connect postgresql --name nosch $PG_SET --set schema=locked --secret-stdin
+check "a schema the account may not use: exit 1" "1" "$RC"
+has "...filed as access denied, with the grant to give" "the account may not use schema locked; grant it USAGE on the schema" "$OUT"
+run_secret "$SECRET" connect postgresql --name withsch $PG_SET --set schema=Sales --secret-stdin
+check "the right schema: exit 0" "0" "$RC"
+has "...said before the adapter is created" "The source has schema Sales, and the account may use it" "$OUT"
+check "...asked with the schema as given" "Sales" "$(dbq 'd["scope_checks"][-1]')"
+run remove withsch
+db '{"sources": {"my.example.com": {"tables": ["orders"], "schemas": {"shop": "ok"}}}}'
+run_secret "$SECRET" connect mysql --name nodb --set host=my.example.com --set database=Shop --set user=reader --secret-stdin
+has "MySQL: the database is the scope checked" "the source has no database Shop that this account can see" "$OUT"
+db '{"sources": {"my.example.com": {"tables": ["orders"]}}}'
+run_secret "$SECRET" connect bigquery --name nobq --set project=p --set dataset=d --secret-stdin < /dev/null
+lacks "a connector without a schema check asks nothing" "that this account can see" "$OUT"
+
+printf '\n== source describe: tables and columns, and DDL to copy them ==\n'
+db '{"sources": {"my.example.com": {"tables": ["orders", "Orders2", "actor"]}}, "columns": {"orders": [["order_id", "DECIMAL(10,0)", false], ["note", "VARCHAR(100) UTF8", true]], "actor": [["first|name", "VARCHAR(45) UTF8", true]]}}'
+run_secret "$SECRET" connect mysql --name desc --set host=my.example.com --set database=shop --set user=reader --secret-stdin
+check "a source to describe: exit 0" "0" "$RC"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["statements"]=[]; json.dump(d, open(sys.argv[1], "w"))' "$STATE"
+run --json describe desc
+check "describe: exit 0" "0" "$RC"
+has "...every table, columns in order" '"name": "orders"' "$OUT"
+has "...with types and nullability" '"type": "DECIMAL(10,0)"' "$OUT"
+lacks "...and nothing reaches the source (no import, no adapter call)" "IMPORT FROM" "$(dbq 'd["statements"]')"
+run --json describe desc ORDERS
+check "a table named in another case, when only one matches: exit 0" "0" "$RC"
+has "...gives that table" '"name": "orders"' "$OUT"
+lacks "...and only that one" '"name": "actor"' "$OUT"
+run describe desc nosuch
+check "an unknown table: exit 2" "2" "$RC"; has "...listing the tables" "its tables: Orders2, actor, orders" "$OUT"
+db '{"sources": {"my.example.com": {"tables": ["t", "T"]}}, "virtual": {"VS_DESC": {"connection": "EXAKIT_SRC_DESC", "tables": ["t", "T"]}}}'
+run describe desc TT
+check "no match at all: exit 2" "2" "$RC"
+python3 - "$STATE" <<'PY'
+import json, sys; d = json.load(open(sys.argv[1])); d["virtual"]["VS_DESC"]["tables"] = ["ab", "AB"]; json.dump(d, open(sys.argv[1], "w"))
+PY
+run describe desc Ab
+check "two tables that differ only in case: exit 2, never a guess" "2" "$RC"; has "...said so" "matches 2 tables in VS_DESC" "$OUT"
+db '{"sources": {"my.example.com": {"tables": ["orders", "actor"]}}, "virtual": {"VS_DESC": {"connection": "EXAKIT_SRC_DESC", "tables": ["orders", "actor"]}}, "columns": {"orders": [["order_id", "DECIMAL(10,0)", false], ["note", "VARCHAR(100) UTF8", true]], "actor": [["first|name", "VARCHAR(45) UTF8", true]]}}'
+run --json describe desc orders --ddl --into LOCAL
+has "--ddl: a CREATE TABLE in the target schema, every name quoted" 'CREATE TABLE \"LOCAL\".\"orders\" (\n    \"order_id\" DECIMAL(10,0) NOT NULL,\n    \"note\" VARCHAR(100) UTF8\n);' "$OUT"
+has "...and the copy, as a comment" '-- a local copy: INSERT INTO \"LOCAL\".\"orders\" SELECT * FROM VS_DESC.\"orders\";' "$OUT"
+run --json describe desc actor --ddl
+has "...without --schema: the session's schema, a MongoDB-style name quoted" 'CREATE TABLE \"actor\" (\n    \"first|name\" VARCHAR(45) UTF8\n);' "$OUT"
+run describe desc --ddl --into 'X;DROP'
+check "--schema takes a plain name only: exit 2" "2" "$RC"
+run disconnect desc
+run --json describe desc
+check "a disconnected source still describes (the catalog is local): exit 0" "0" "$RC"
+python3 - "$STATE" <<'PY'
+import json, sys; d = json.load(open(sys.argv[1])); d["virtual"].pop("VS_DESC"); json.dump(d, open(sys.argv[1], "w"))
+PY
+run describe desc
+check "a virtual schema that is gone: exit 1" "1" "$RC"; has "...with the way back" "exakit source check desc" "$OUT"
+run remove desc; check "...and it still removes cleanly" "0" "$RC"
 
 printf '\n== an interrupted connect is recovered, not mistaken for a stranger ==\n'
 # The state an attempt killed right after CREATE CONNECTION leaves behind: its
@@ -794,8 +879,12 @@ has "...with the kit's jar beside it" "JAR=exakit-loader.jar" "$(cat "$SFLOADER/
 check "...which is staged there" "yes" "$([ -f "$SFLOADER/exakit-loader.jar" ] && echo yes || echo no)"
 check "...built once in the database, the build script dropped" "1 no" \
     "$(dbq 'd.get("tls_builds", 0)') $(dbq '"EXAKIT_VS.EXAKIT_TLS_BUILD" in d["scripts"]' | tr A-Z a-z | sed 's/true/yes/;s/false/no/')"
-run_secret "$SECRET" connect snowflake --name sf2 $SF_SET --secret-stdin
+run_secret "$SECRET" connect snowflake --name sf2 $SF_SET --set role=ANALYST --secret-stdin
 check "a second Snowflake source: exit 0, the cached jar is reused, not rebuilt" "0 1" "$RC $(dbq 'd.get("tls_builds", 0)')"
+has "...a role, when given, rides in the URL" "JDBC_QUERY_RESULT_FORMAT=JSON&role=ANALYST" "$(dbq 'd["connections"]["EXAKIT_SRC_SF2"]["url"]')"
+lacks "...and none is sent when it is not" "role=" "$(dbq 'd["connections"]["EXAKIT_SRC_SF"]["url"]')"
+run plan snowflake --name sf3 $SF_SET --set "role=A&warehouse=X"
+check "...a role cannot add URL parameters (exit 2)" "2" "$RC"
 run remove sf
 check "removing one keeps the loader for the other" "yes yes" \
     "$([ -f "$SFLOADER/exakit-loader.jar" ] && echo yes || echo no) $([ -f "$SFLOADER/settings.cfg" ] && echo yes || echo no)"
@@ -1138,6 +1227,16 @@ OUT="$(eng connect lakehouse --name lakeno --set region=ap-south-1 --set databas
 check "a database the key may not list: exit 1, the shared scripts kept, nothing of its own" "1 1 false" \
     "$RC $(dbq 'd["scripts"].count("EXAKIT_VS.LAKEHOUSE_SCAN")') $(dbq '"EXAKIT_SRC_LAKENO" in d["connections"]' | tr A-Z a-z)"
 has "...filed as access denied, with what the key needs" "glue:GetDatabase, GetTables, GetTable and GetPartitions" "$OUT"
+# Measured: a database 42 min behind (the laptop slept) got S3's 403 for every
+# signed read, which the engine words as PermissionDenied - not a missing grant.
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["clock_skew"]=-2520; json.dump(d, open(sys.argv[1], "w"))' "$STATE"
+OUT="$(eng connect lakehouse --name lakeclk --set region=ap-south-1 --set database=locked --secret-stdin < "$LK_FILE" 2>&1)"; RC=$?
+has "a refusal with the clock 42 min off is filed as the clock, not a grant" "the database clock is too far from the store's for a signed request" "$OUT"
+lacks "...so it does not send the reader after IAM grants" "GetPartitions on the database" "$OUT"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["clock_skew"]=-300; json.dump(d, open(sys.argv[1], "w"))' "$STATE"
+OUT="$(eng connect lakehouse --name lakeclk --set region=ap-south-1 --set database=locked --secret-stdin < "$LK_FILE" 2>&1)"; RC=$?
+has "...a clock 5 min off, inside the stores' window, leaves it access denied" "glue:GetDatabase, GetTables, GetTable and GetPartitions" "$OUT"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d.pop("clock_skew"); json.dump(d, open(sys.argv[1], "w"))' "$STATE"
 
 run_secret "$LK_KEY_ID" connect lakehouse --name lakebad $LK_SET --secret-stdin
 check "a bare key id as the secret: refused as input, exit 2" "2" "$RC"
@@ -1217,6 +1316,205 @@ print(" ".join(sorted(k for k, p in a["arch"].items() if all(re.fullmatch(r"[0-9
                       and p["url"].startswith("https://github.com/exasol-labs/lakehouse-engine-rs/releases/download/v%s/" % a["version"]))))
 PYP
 )"
+
+printf '\n== Lakehouse engine routes: Iceberg REST and Unity Catalog on the same adapter ==\n'
+# Not measured live: the catalogs are simulated from the Iceberg REST spec and
+# Databricks' error codes. What is pinned here is the kit's side: one engine,
+# one set of scripts for every route, and a CONNECTION whose JSON the kit writes.
+IR_TOKEN="t0ken-$SECRET"; export IR_TOKEN
+UC_TOKEN="dapi0123456789abcdef-$SECRET"
+MINIO_SECRET="minio-$SECRET-secret"
+IR_SET="--set catalog_url=https://rest.example.com/api/catalog/ --set warehouse=s3://wh/ --set namespace=sales"
+UC_SET="--set workspace_url=https://dbc-1234.cloud.databricks.com --set namespace=main.sales --set region=us-east-2"
+MINIO_SET="--set catalog_url=http://192.168.64.1:8181 --set warehouse=lake --set namespace=sales --set endpoint=http://192.168.64.1:9000 --set access_key_id=minioadmin"
+lhdb() {
+    IR_TOKEN="$IR_TOKEN" UC_TOKEN="$UC_TOKEN" MINIO_SECRET="$MINIO_SECRET" LK_KEY_ID="$LK_KEY_ID" python3 - "$STATE" <<'PYLH'
+import json, os, sys
+e = os.environ
+uc = lambda **kw: dict({"catalog": "unity", "token": e["UC_TOKEN"], "namespaces": {"main.sales": ["orders"]},
+                        "region": "us-east-2"}, **kw)
+json.dump({"sources": {
+    "glue.ap-south-1.amazonaws.com": {"key_id": e["LK_KEY_ID"], "databases": {"sales_lake": ["customers", "orders"]}},
+    "rest.example.com": {"catalog": "rest", "warehouse": "s3://wh/", "token": e["IR_TOKEN"],
+                         "namespaces": {"sales": ["orders", "returns"], "ops": ["events"]}},
+    "192.168.64.1": {"catalog": "rest", "warehouse": "lake", "key_id": "minioadmin", "secret_key": e["MINIO_SECRET"],
+                     "namespaces": {"sales": ["orders"]}, "region": "us-east-1"},
+    "dbc-1234.cloud.databricks.com": uc(),
+    "dbc-closed.cloud.databricks.com": uc(fail="external"),
+    "dbc-managed.cloud.databricks.com": uc(fail="managed"),
+}}, open(sys.argv[1], "w"))
+PYLH
+}
+lhdb
+run resolve rest; has "rest resolves to the Iceberg REST route" '"connector": "iceberg-rest"' "$OUT"
+run resolve unity; has "unity resolves to the Unity Catalog route" '"connector": "unity"' "$OUT"
+run resolve lakehouse; has "lakehouse still resolves to Glue" '"connector": "lakehouse"' "$OUT"
+run resolve glue; has "...and glue" '"connector": "lakehouse"' "$OUT"
+run resolve iceberg; check "iceberg names two catalogs, so it asks: exit 2" "2" "$RC"; has "...Glue or REST" "choices: lakehouse, iceberg-rest" "$OUT"
+run resolve unity-catalog; check "unity-catalog names two routes, so it asks: exit 2" "2" "$RC"; has "...the SQL warehouse or the engine" "choices: databricks, unity" "$OUT"
+check "the three routes pin one engine: archive, member and companion scripts identical" "same" "$(python3 - "$ROOT" <<'PYS'
+import json, sys
+load = lambda c: json.load(open(sys.argv[1] + "/setup/virtual-schemas/connectors/%s/connector.json" % c))
+docs = [load(c) for c in ("lakehouse", "iceberg-rest", "unity")]
+keys = ("adapter", "shared_adapter", "companions", "version_script", "profile")
+print("same" if all(all(d[k] == docs[0][k] for k in keys) for d in docs) and all(d.get("family", d["id"]) == "lakehouse" for d in docs) else "differ")
+PYS
+)"
+
+run plan iceberg-rest --name rest1 $IR_SET
+check "plan iceberg-rest: exit 0" "0" "$RC"
+has "...Beta, a candidate" '"tier": "Beta", "status": "candidate"' "$OUT"
+has "...says it is untested live" "not been run against a live Iceberg REST catalog" "$OUT"
+has "...states the MCP exposure" "MCP read-only user can read every table of VS_REST1" "$OUT"
+has "...the scripts shared with every lakehouse engine source" "shared by every lakehouse engine source (AWS Glue, Iceberg REST or Unity Catalog)" "$OUT"
+PLAN_IR="$(printf '%s\n' "$OUT" | sed -n 's/^RESULT //p' | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["downloads"]))')"
+run plan unity --name uc $UC_SET
+check "plan unity: exit 0" "0" "$RC"
+has "...says it is untested live" "not been run against a live Unity Catalog" "$OUT"
+has "...states the MCP exposure" "MCP read-only user can read every table of VS_UC" "$OUT"
+PLAN_UC="$(printf '%s\n' "$OUT" | sed -n 's/^RESULT //p' | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["downloads"]))')"
+run plan lakehouse --name glake $LK_SET
+PLAN_LK="$(printf '%s\n' "$OUT" | sed -n 's/^RESULT //p' | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["downloads"]))')"
+check "...all three download the same pinned archive (one cache entry)" "$PLAN_LK $PLAN_LK" "$PLAN_IR $PLAN_UC"
+has "...this machine's engine archive" "lakehouse-engine" "$PLAN_IR"
+run plan iceberg-rest --name minio $MINIO_SET --set region=us-east-1
+check "plan over http to this computer: exit 0" "0" "$RC"
+has "...warns that it is plain http" "plain http: the catalog token or storage keys and the rows cross the network unencrypted" "$OUT"
+check "URLs are normalized: https for a bare host, http only towards this computer or a private network" \
+    "https://rest.example.com/api/catalog https://rest.example.com http://192.168.64.1:8181 http://host.containers.internal:8181 http://10.1.2.3 http://[fd00::1]:8181 http://minio:9000 public loopback loopback" \
+    "$(python3 - "$ROOT" <<'PYU'
+import sys; sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
+import plan
+spec = {"name": "catalog_url", "kind": "catalog-url"}
+out = [plan.check_value(spec, raw)[0] for raw in ("https://rest.example.com/api/catalog/", "rest.example.com",
+       "HTTP://192.168.64.1:8181/", "http://host.containers.internal:8181", "http://10.1.2.3", "http://[fd00::1]:8181")]
+out.append(plan.check_value({"name": "endpoint", "kind": "endpoint-url"}, "http://minio:9000")[0])
+out += [plan.host_scope(h) for h in ("8.8.8.8", "127.0.0.2", "[::1]")]
+print(" ".join(str(o) for o in out))
+PYU
+)"
+
+# Refusals before anything is created.
+run plan iceberg-rest --name rest1 --set catalog_url=https://rest.example.com --set namespace=sales
+check "REST without a warehouse: exit 2" "2" "$RC"; has "...named" "warehouse is required" "$OUT"
+run plan unity --name uc --set workspace_url=https://dbc-1234.cloud.databricks.com --set namespace=sales --set region=us-east-2
+check "Unity namespace that is not catalog.schema: exit 2" "2" "$RC"; has "...said how" "namespace must be catalog.schema, e.g. main.sales" "$OUT"
+run plan unity --name uc --set workspace_url=https://dbc-1234.cloud.databricks.com --set namespace=main.sales
+check "Unity without a region: exit 2" "2" "$RC"; has "...named" "region is required" "$OUT"
+run plan iceberg-rest --name rest1 --set catalog_url=http://rest.example.com --set warehouse=w --set namespace=sales
+check "plain http to a public host: exit 2" "2" "$RC"; has "...said why" "is plain http to rest.example.com, a public host" "$OUT"
+run plan iceberg-rest --name rest1 --set catalog_url=http://localhost:8181 --set warehouse=w --set namespace=sales
+check "a catalog on localhost: exit 2" "2" "$RC"; has "...with the address the database sees this computer at" "on macOS 192.168.64.1, on Linux and WSL host.containers.internal" "$OUT"
+run plan unity --name uc --set workspace_url=http://10.0.0.5 --set namespace=main.sales --set region=us-east-2
+check "a Unity workspace over http, even a private one: exit 2" "2" "$RC"; has "...https only" "workspace_url must use https" "$OUT"
+run plan iceberg-rest --name rest1 --set catalog_url=https://minioadmin:pw@rest.example.com --set warehouse=w --set namespace=sales
+check "a catalog URL carrying credentials: exit 2" "2" "$RC"; lacks "...not echoed" "minioadmin:pw" "$OUT"
+run plan iceberg-rest --name rest1 $IR_SET --set endpoint=https://minio.example.com:9000/bucket
+check "a storage endpoint with a path: exit 2" "2" "$RC"
+NBEFORE="$(dbq 'len(d.get("connections", {}))')"
+run_secret "$MINIO_SECRET" connect iceberg-rest --name minio $MINIO_SET --secret-stdin
+check "storage keys without a region: exit 2, nothing created" "2 $NBEFORE" "$RC $(dbq 'len(d.get("connections", {}))')"
+has "...named" "region is required with an access key" "$OUT"
+run_secret "$IR_TOKEN" connect iceberg-rest --name rest1 $IR_SET --set endpoint=https://minio.example.com --secret-stdin
+check "a storage endpoint with a catalog token: exit 2" "2" "$RC"; has "...said why" "a storage endpoint goes with an access key" "$OUT"
+lacks "...the token is not echoed" "$IR_TOKEN" "$OUT"
+
+# Connect all three routes: one engine, one set of scripts.
+OUT="$(eng connect lakehouse --name glake $LK_SET --secret-stdin < "$LK_FILE" 2>&1)"; RC=$?
+check "a Glue source first: exit 0" "0" "$RC"
+run_secret "$IR_TOKEN" connect iceberg-rest --name rest1 $IR_SET --secret-stdin
+check "connect iceberg-rest with a catalog token: exit 0" "0" "$RC"
+has "...the catalog's host probed from inside the database" "rest.example.com resolves and answers on port 443" "$OUT"
+has "...the namespace's tables" "Virtual schema VS_REST1: 2 table(s); a bounded read succeeded" "$OUT"
+check "...the CONNECTION: TO the catalog URL, no user" '["https://rest.example.com/api/catalog", ""]' \
+    "$(dbq '[d["connections"]["EXAKIT_SRC_REST1"]["url"], d["connections"]["EXAKIT_SRC_REST1"]["user"]]')"
+check "...its password: warehouse, token, vended credentials" '[["token", "use_vended_credentials", "warehouse"], true, "s3://wh/"]' \
+    "$(dbq '(lambda c: [sorted(c), c["use_vended_credentials"], c["warehouse"]])(__import__("json").loads(d["connections"]["EXAKIT_SRC_REST1"]["secret"]))')"
+LHVS="$(dbq '[x for x in d["statements"] if x.startswith("CREATE VIRTUAL SCHEMA \"VS_REST1\"")][-1]')"
+has "...the virtual schema: the connection and the namespace" "WITH CATALOG_CONNECTION = 'EXAKIT_SRC_REST1' NAMESPACE = 'sales'" "$LHVS"
+lacks "...no ALLOW_HTTP over https" "ALLOW_HTTP" "$LHVS"
+lacks "...no catalog kind (REST is the engine's default)" "CATALOG_KIND" "$LHVS"
+check "...the token only inside CONNECTION DDL" "0" \
+    "$(dbq 'len([x for x in d["statements"] if (__import__("os").environ["IR_TOKEN"] in x or __import__("os").environ["IR_TOKEN"].replace(chr(39), chr(39) * 2) in x) and not x.startswith("CREATE CONNECTION")])')"
+lacks "...not printed" "$IR_TOKEN" "$OUT"
+check "...not in the kit's records" "0" "$(grep -rlF -- "$IR_TOKEN" "$HOME_K" | wc -l | tr -d ' ')"
+
+run_secret "$MINIO_SECRET" connect iceberg-rest --name minio $MINIO_SET --set region=us-east-1 --secret-stdin
+check "connect iceberg-rest with storage keys over http on this computer: exit 0" "0" "$RC"
+has "...the catalog port probed" "192.168.64.1 resolves and answers on port 8181" "$OUT"
+check "...its password: warehouse, keys, region, endpoint, path-style" \
+    '[["access_key", "endpoint", "path_style", "region", "secret_key", "warehouse"], "minioadmin", "http://192.168.64.1:9000", true]' \
+    "$(dbq '(lambda c: [sorted(c), c["access_key"], c["endpoint"], c["path_style"]])(__import__("json").loads(d["connections"]["EXAKIT_SRC_MINIO"]["secret"]))')"
+has "...the virtual schema allows http" "NAMESPACE = 'sales' ALLOW_HTTP = 'true'" \
+    "$(dbq '[x for x in d["statements"] if x.startswith("CREATE VIRTUAL SCHEMA \"VS_MINIO\"")][-1]')"
+lacks "...the secret key is not printed" "$MINIO_SECRET" "$OUT"
+
+run_secret "$UC_TOKEN" connect unity --name uc $UC_SET --secret-stdin
+check "connect unity: exit 0" "0" "$RC"
+check "...the CONNECTION: TO the workspace, no user" '["https://dbc-1234.cloud.databricks.com", ""]' \
+    "$(dbq '[d["connections"]["EXAKIT_SRC_UC"]["url"], d["connections"]["EXAKIT_SRC_UC"]["user"]]')"
+check "...its password: token, vended credentials, region" '[["region", "token", "use_vended_credentials"], "us-east-2", true]' \
+    "$(dbq '(lambda c: [sorted(c), c["region"], c["use_vended_credentials"]])(__import__("json").loads(d["connections"]["EXAKIT_SRC_UC"]["secret"]))')"
+has "...the virtual schema names Unity Catalog" "WITH CATALOG_CONNECTION = 'EXAKIT_SRC_UC' CATALOG_KIND = 'UNITY_CATALOG' NAMESPACE = 'main.sales'" \
+    "$(dbq '[x for x in d["statements"] if x.startswith("CREATE VIRTUAL SCHEMA \"VS_UC\"")][-1]')"
+has "...the tips: external data access" "Databricks Default Storage cannot be read from outside" "$OUT"
+has "...and catalog-managed tables" "catalog-managed tables cannot be read by this adapter version" "$OUT"
+lacks "...the token is not printed" "$UC_TOKEN" "$OUT"
+
+check "four sources on three routes: the adapter and its three scripts once each" "1 1 1 1" \
+    "$(dbq 'd["scripts"].count("EXAKIT_VS.LAKEHOUSE_ADAPTER")') $(dbq 'd["scripts"].count("EXAKIT_VS.LAKEHOUSE_SCAN")') $(dbq 'd["scripts"].count("EXAKIT_VS.LAKEHOUSE_DISTRIBUTE_FILES")') $(dbq 'd["scripts"].count("EXAKIT_VS.LAKEHOUSE_VERSION")')"
+check "...one staged engine, in the family's folder" "lakehouse" "$(ls "$EXA/bucketfs/bfsdefault/default/exakit/vs/" | grep -E '^(lakehouse|iceberg-rest|unity)$' | tr '\n' ' ' | sed 's/ $//')"
+check "...every route's adapter script loads that one file" "1" \
+    "$(dbq 'len(set(x.split("%udf_object ")[1] for x in d["statements"] if "RUST ADAPTER SCRIPT" in x and "LAKEHOUSE_ADAPTER" in x))')"
+
+# Failures, classified, nothing kept.
+run_secret "wrong-token" connect iceberg-rest --name restbad $IR_SET --secret-stdin
+check "a token the catalog refuses: exit 1, nothing kept" "1 false" "$RC $(dbq '"EXAKIT_SRC_RESTBAD" in d["connections"]' | tr A-Z a-z)"
+has "...filed as a rejected credential" "the source rejected the credentials" "$OUT"
+run_secret "wrong-token" connect unity --name ucbad $UC_SET --secret-stdin
+check "a Unity token refused: exit 1, nothing kept" "1 false" "$RC $(dbq '"EXAKIT_SRC_UCBAD" in d["connections"]' | tr A-Z a-z)"
+has "...filed as a rejected credential" "the source rejected the credentials" "$OUT"
+run_secret "$IR_TOKEN" connect iceberg-rest --name restno --set catalog_url=https://rest.example.com/api/catalog --set warehouse=s3://wh/ --set namespace=nope --secret-stdin
+check "a namespace the catalog does not have: exit 1, nothing kept" "1 false" "$RC $(dbq '"EXAKIT_SRC_RESTNO" in d["connections"]' | tr A-Z a-z)"
+has "...named as a missing namespace" "the catalog has no such namespace that this credential can see" "$OUT"
+run_secret "$UC_TOKEN" connect unity --name ucno --set workspace_url=https://dbc-1234.cloud.databricks.com --set namespace=main.nope --set region=us-east-2 --secret-stdin
+check "a Unity schema that does not exist: exit 1" "1" "$RC"; has "...named as a missing namespace" "no such namespace" "$OUT"
+run_secret "$UC_TOKEN" connect unity --name ucclosed --set workspace_url=https://dbc-closed.cloud.databricks.com --set namespace=main.sales --set region=us-east-2 --secret-stdin
+check "a schema closed to outside engines: exit 1, nothing kept" "1 false" "$RC $(dbq '"EXAKIT_SRC_UCCLOSED" in d["connections"]' | tr A-Z a-z)"
+has "...named as External Data Access, not a grant guess" "switch External Data Access on for the metastore" "$OUT"
+has "...with the other route" "exakit connect databricks" "$OUT"
+run_secret "$UC_TOKEN" connect unity --name ucmanaged --set workspace_url=https://dbc-managed.cloud.databricks.com --set namespace=main.sales --set region=us-east-2 --secret-stdin
+check "a catalog-managed table: exit 1" "1" "$RC"; has "...named as not readable yet" "catalog-managed table, which this adapter version cannot read yet" "$OUT"
+run_secret "$MINIO_SECRET" connect iceberg-rest --name minio2 $MINIO_SET --set region=eu-west-1 --secret-stdin
+check "a bucket in another region: exit 1" "1" "$RC"; has "...named as the region" "connect again with --set region=<the bucket's region>" "$OUT"
+check "...and the shared scripts are still there after every refusal" "1 1" \
+    "$(dbq 'd["scripts"].count("EXAKIT_VS.LAKEHOUSE_ADAPTER")') $(dbq 'd["scripts"].count("EXAKIT_VS.LAKEHOUSE_SCAN")')"
+
+lhdb_token() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["sources"]["rest.example.com"]["token"]=sys.argv[2]; json.dump(d, open(sys.argv[1],"w"))' "$STATE" "$1"; }
+lhdb_token "n3w-$IR_TOKEN"
+run_secret "n3w-$IR_TOKEN" reauth rest1 --secret-stdin
+check "reauth iceberg-rest with the catalog's new token: exit 0" "0" "$RC"
+has "...the new token in the CONNECTION" "n3w-t0ken" "$(dbq '__import__("json").loads(d["connections"]["EXAKIT_SRC_REST1"]["secret"])["token"]')"
+
+# The last Glue source out must not take the scripts a REST or Unity source calls.
+run remove glake --dry-run
+lacks "removing the only Glue source: the shared adapter is not in its plan" "LAKEHOUSE_ADAPTER" "$OUT"
+lacks "...nor its scripts" "LAKEHOUSE_SCAN" "$OUT"
+run remove glake
+check "...removed, the scripts and the engine kept for the REST and Unity sources" "0 1 1 1 1 yes" \
+    "$RC $(dbq 'd["scripts"].count("EXAKIT_VS.LAKEHOUSE_ADAPTER")') $(dbq 'd["scripts"].count("EXAKIT_VS.LAKEHOUSE_SCAN")') $(dbq 'd["scripts"].count("EXAKIT_VS.LAKEHOUSE_DISTRIBUTE_FILES")') $(dbq 'd["scripts"].count("EXAKIT_VS.LAKEHOUSE_VERSION")') $([ -f "$LKSO" ] && echo yes || echo no)"
+run check rest1
+check "...the REST source still reads" "0" "$RC"
+run remove rest1; run remove minio
+check "removing the REST sources keeps them for Unity" "0 1 yes" "$RC $(dbq 'd["scripts"].count("EXAKIT_VS.LAKEHOUSE_SCAN")') $([ -f "$LKSO" ] && echo yes || echo no)"
+run remove uc --dry-run
+for s in LAKEHOUSE_SCAN LAKEHOUSE_DISTRIBUTE_FILES LAKEHOUSE_VERSION; do
+    has "the last lakehouse engine source out plans to drop $s" "script EXAKIT_VS.$s (no other lakehouse source uses it)" "$OUT"
+done
+LKN="$(dbq 'len(d["statements"])')"
+run remove uc
+check "...and drops the three scripts, the adapter and the engine" "3 1 no" \
+    "$(dbq 'len([x for x in d["statements"]['"$LKN"':] if x.startswith("DROP SCRIPT \"EXAKIT_VS\".\"LAKEHOUSE_")])') $(dbq 'len([x for x in d["statements"]['"$LKN"':] if x == "DROP ADAPTER SCRIPT \"EXAKIT_VS\".\"LAKEHOUSE_ADAPTER\""])') $([ -f "$LKSO" ] && echo yes || echo no)"
 
 printf '\n== a private CA for Oracle: a wallet inside the connection ==\n'
 # Measured against RDS Oracle 19c over TCPS: ojdbc 23 reads a trust-only PEM
@@ -1617,6 +1915,342 @@ done
 has "Invoke-CmdConnect hands a console to it" "Invoke-ExakitVsTui -Source" "$(cat "$ROOT/setup/exakit.ps1")"
 has "the menu starts on the first connector on both sides" "-StartRow 1" "$(cat "$ROOT/setup/lib/virtual-schemas.ps1")"
 has "...and in bash" "UI_TABLE_MENU_START=1" "$(cat "$ROOT/setup/lib/virtual-schemas.sh")"
+
+printf '\n== a kit update moves connected sources to the adapter it pins ==\n'
+# An update changes a connector's pins (connector.json); a source connected
+# earlier keeps running what its adapter script names until a check moves it.
+# Its own kit home and deployment, so the files it proves are its own.
+RP_SAVED_HOME="$HOME_K"; RP_SAVED_DEPLOY="$DEPLOY"; RP_SAVED_EXA="$EXA"
+HOME_K="$WORK/kit-repin"; DEPLOY="$WORK/deploy-repin"; EXA="$DEPLOY/local/runtime/exa"
+mkdir -p "$HOME_K" "$EXA/bucketfs/bfsdefault/default" "$EXA/jdbc"
+cp -R "$RP_SAVED_HOME/cache" "$HOME_K/cache"
+cp "$DEFS/connectors/postgresql/connector.json" "$WORK/pg-connector.json"
+cp "$DEFS/connectors/mongodb/connector.json" "$WORK/mg-connector.json"
+RP_VS="$EXA/bucketfs/bfsdefault/default/exakit/vs"
+RP_LOADER="$EXA/jdbc/POSTGRES_JDBC_DRIVER"
+rpstate() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(eval(sys.argv[2], {"d": d}))' "$HOME_K/sources/$1/state.json" "$2"; }
+rpreg() { python3 -c 'import json,sys; r=json.load(open(sys.argv[1]))["artifacts"]; print(json.dumps(sorted(next((v["consumers"] for k, v in r.items() if k.endswith(sys.argv[2])), []))))' "$HOME_K/sources/registry.json" "$1"; }
+repin() {
+    python3 - "$DEFS" "$HOME_K" "$@" <<'PY'
+import hashlib, json, os, sys
+defs, home, cid, version = sys.argv[1:5]
+def seed(pin, data):
+    pin["size"], pin["sha256"] = len(data), hashlib.sha256(data).hexdigest()
+    folder = os.path.join(home, "cache", "virtual-schemas", pin["sha256"])
+    os.makedirs(folder, exist_ok=True)
+    open(os.path.join(folder, pin["asset"]), "wb").write(data)
+path = os.path.join(defs, "connectors", cid, "connector.json")
+doc = json.load(open(path))
+old = doc["adapter"]["version"]
+doc["adapter"]["version"] = version
+if cid == "postgresql":
+    doc["adapter"]["asset"] = doc["adapter"]["asset"].replace(old, version)
+    seed(doc["adapter"], ("adapter-postgresql-" + version).encode())
+    if len(sys.argv) > 5:
+        doc["driver"]["asset"] = doc["driver"]["asset"].replace(doc["driver"]["version"], sys.argv[5])
+        doc["driver"]["version"] = sys.argv[5]
+        seed(doc["driver"], ("driver-postgresql-" + sys.argv[5]).encode())
+else:
+    for arch, pin in doc["adapter"]["arch"].items():
+        pin["asset"] = pin["asset"].replace(old, version)
+        seed(pin, ("adapter-mongodb-%s-%s" % (version, arch)).encode())
+json.dump(doc, open(path, "w"), indent=2)
+PY
+}
+db '{"sources": {"a.example.com": {"tables": ["T1"]}, "b.example.com": {"tables": ["T2"]}, "c.example.com": {"tables": ["T3"]},
+                 "cluster0.example.net": {"tables": ["MOVIES"], "secret": "'"$SECRET"'"}}}'
+RP_RC=""
+for n in a b c; do
+    run_secret "$SECRET" connect postgresql --name rp_$n --set host=$n.example.com --set database=$n --set user=reader --secret-stdin
+    RP_RC="$RP_RC$RC"
+done
+run_secret "$SECRET" connect mongodb --name rp_m1 $MG_SET --set collection=movies --secret-stdin; RP_RC="$RP_RC$RC"
+run_secret "$SECRET" connect mongodb --name rp_m2 $MG_SET --set collection=theaters --secret-stdin; RP_RC="$RP_RC$RC"
+run disconnect rp_c; RP_RC="$RP_RC$RC"
+check "three PostgreSQL sources (one disconnected) and two MongoDB sources connected" "000000" "$RP_RC"
+run check rp_a
+check "on the pins it was connected with, a check moves nothing" "0" "$RC"
+lacks "...and says nothing of a move" "Moved" "$OUT"
+
+OLD_JAR="$RP_VS/postgresql/4.1.0/virtual-schema-dist-14.1.0-postgresql-4.1.0.jar"
+NEW_JAR="$RP_VS/postgresql/4.2.0/virtual-schema-dist-14.2.0-postgresql-4.2.0.jar"
+OLD_DRV="$RP_VS/postgresql/driver-42.7.14/postgresql-42.7.14.jar"
+repin postgresql 4.2.0 42.7.15
+# rp_b's script cannot be re-created this time: it stays on the old adapter.
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["script_fail"]=["EXAKIT_VS.ADAPTER_RP_B"]; json.dump(d, open(sys.argv[1],"w"))' "$STATE"
+N0="$(dbq 'len(d["statements"])')"
+run check rp_a
+check "after the update, check rp_a: exit 0" "0" "$RC"
+has "...it moved, in plain words" "Moved rp_a from PostgreSQL adapter 4.1.0 to 4.2.0 and driver 42.7.14 to 42.7.15" "$OUT"
+check "...the staging said once for the three sources" "1" "$(printf '%s\n' "$OUT" | grep -c 'Adapter 4.2.0 and driver 42.7.15 verified and staged')"
+RPA_SQL="$(dbq '[s for s in d["statements"]['"$N0"':] if "ADAPTER SCRIPT \"EXAKIT_VS\".\"ADAPTER_RP_A\"" in s][-1]')"
+has "...its script re-created over the new adapter" "%jar /buckets/bfsdefault/default/exakit/vs/postgresql/4.2.0/virtual-schema-dist-14.2.0-postgresql-4.2.0.jar;" "$RPA_SQL"
+has "...and the new driver" "%jar /buckets/bfsdefault/default/exakit/vs/postgresql/driver-42.7.15/postgresql-42.7.15.jar;" "$RPA_SQL"
+has "...with CREATE OR REPLACE" "CREATE OR REPLACE JAVA ADAPTER SCRIPT" "$RPA_SQL"
+check "...its virtual schema refreshed, the new pins recorded, nothing left to refresh" "1 4.2.0 42.7.15 False" \
+    "$(dbq 'sum(s == "ALTER VIRTUAL SCHEMA \"VS_RP_A\" REFRESH" for s in d["statements"]['"$N0"':])') $(rpstate rp_a 'd["pins"]["adapter_version"]') $(rpstate rp_a 'd["pins"]["driver_version"]') $(rpstate rp_a '"needs_refresh" in d')"
+has "the disconnected source moved too (the connector's sources move together)" "Moved rp_c from PostgreSQL adapter 4.1.0 to 4.2.0" "$OUT"
+check "...its script re-created, no refresh tried, needs_refresh recorded" "1 0 4.2.0 True" \
+    "$(dbq 'sum("ADAPTER_RP_C" in s and "4.2.0" in s for s in d["statements"]['"$N0"':])') $(dbq 'sum("VS_RP_C" in s and "REFRESH" in s for s in d["statements"]['"$N0"':])') $(rpstate rp_c 'd["pins"]["adapter_version"]') $(rpstate rp_c 'd.get("needs_refresh")')"
+has "...said with how it ends" "rp_c is disconnected: its virtual schema is refreshed when it is connected again" "$OUT"
+has "a script that could not be re-created is said, with the retry" "Could not move rp_b to PostgreSQL adapter 4.2.0" "$OUT"
+has "...and the command" "exakit source check rp_b" "$OUT"
+check "...rp_b keeps its old pins" "4.1.0" "$(rpstate rp_b 'd["pins"]["adapter_version"]')"
+check "the old adapter and driver stay while rp_b uses them, the new ones are staged" "yes yes yes" \
+    "$([ -f "$OLD_JAR" ] && echo yes) $([ -f "$OLD_DRV" ] && echo yes) $([ -f "$NEW_JAR" ] && echo yes)"
+check "...the registry names rp_b alone as the old adapter's consumer" '["rp_b"]' "$(rpreg postgresql/4.1.0/virtual-schema-dist-14.1.0-postgresql-4.1.0.jar)"
+check "...and the new one's consumers are the moved sources" '["rp_a", "rp_c"]' "$(rpreg postgresql/4.2.0/virtual-schema-dist-14.2.0-postgresql-4.2.0.jar)"
+check "the loader runs the new driver; the old one stays for rp_b" "JAR=postgresql-42.7.15.jar yes" \
+    "$(grep '^JAR=' "$RP_LOADER/settings.cfg") $([ -f "$RP_LOADER/postgresql-42.7.14.jar" ] && echo yes)"
+
+# Now rp_b's script can be re-created, but its source does not answer the refresh.
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d.pop("script_fail"); d["refresh_fail"]=["VS_RP_B"]; json.dump(d, open(sys.argv[1],"w"))' "$STATE"
+run --json check --all
+has "check --all moves the one left behind" "Moved rp_b from PostgreSQL adapter 4.1.0 to 4.2.0" "$OUT"
+has "...a refresh that fails is said, with the repair" "rp_b moved, but its virtual schema did not refresh" "$OUT"
+has "...and the command" "repair it with: exakit source refresh rp_b" "$OUT"
+check "...said once, though check --all reaches rp_b again" "1" "$(printf '%s\n' "$OUT" | grep -c 'rp_b moved')"
+check "...its new pins are recorded all the same, marked needs_refresh" "4.2.0 True" \
+    "$(rpstate rp_b 'd["pins"]["adapter_version"]') $(rpstate rp_b 'd.get("needs_refresh")')"
+check "the last consumer gone: the old adapter, driver and loader jar are deleted, with their folders" "no no no no" \
+    "$([ -f "$OLD_JAR" ] && echo yes || echo no) $([ -d "$RP_VS/postgresql/4.1.0" ] && echo yes || echo no) $([ -d "$RP_VS/postgresql/driver-42.7.14" ] && echo yes || echo no) $([ -f "$RP_LOADER/postgresql-42.7.14.jar" ] && echo yes || echo no)"
+check "...the new files and the bucket stay" "yes yes yes" \
+    "$([ -f "$NEW_JAR" ] && echo yes) $([ -f "$RP_LOADER/postgresql-42.7.15.jar" ] && echo yes) $([ -d "$EXA/bucketfs/bfsdefault/default" ] && echo yes)"
+run --json list
+has "list shows needs_refresh" '"needs_refresh": true' "$OUT"
+run --json show rp_b
+has "show shows it" '"needs_refresh": true' "$OUT"
+run --json issues
+has "issues names it with the repair" "exakit source refresh rp_b" "$OUT"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d.pop("refresh_fail"); json.dump(d, open(sys.argv[1],"w"))' "$STATE"
+run refresh rp_b
+check "refresh clears needs_refresh" "0 False" "$RC $(rpstate rp_b '"needs_refresh" in d')"
+
+N1="$(dbq 'len(d["statements"])')"
+run --json check --all
+lacks "a second check --all moves nothing" "Moved" "$OUT"
+check "...and re-creates no script, refreshes no schema" "0" \
+    "$(dbq 'sum("ADAPTER SCRIPT" in s or "REFRESH" in s for s in d["statements"]['"$N1"':])')"
+
+run_secret "$SECRET" connect postgresql --name rp_c --secret-stdin
+check "reconnecting the moved source: exit 0, its schema refreshed, needs_refresh cleared" "0 1 False 4.2.0" \
+    "$RC $(dbq 'sum(s == "ALTER VIRTUAL SCHEMA \"VS_RP_C\" REFRESH" for s in d["statements"]['"$N1"':])') $(rpstate rp_c '"needs_refresh" in d') $(rpstate rp_c 'd["pins"]["adapter_version"]')"
+
+# A pin that cannot be fetched (here: not HTTPS, never cached) moves nothing.
+cp "$DEFS/connectors/postgresql/connector.json" "$WORK/pg-420.json"
+python3 - "$DEFS/connectors/postgresql/connector.json" <<'PY'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+doc["adapter"].update(version="9.9.9", asset="vs-9.9.9.jar", url="http://example.com/vs-9.9.9.jar", sha256="0" * 64, size=1)
+json.dump(doc, open(sys.argv[1], "w"), indent=2)
+PY
+CFG_BEFORE="$(cat "$RP_LOADER/settings.cfg")"
+run check rp_a
+check "an adapter that cannot be fetched: the check still runs, exit 0" "0" "$RC"
+has "...the move is said not to have happened, with the retry" "Could not move the PostgreSQL sources rp_a, rp_b, rp_c to adapter 9.9.9" "$OUT"
+check "...pins, staged files and the loader are as they were" "4.2.0 no yes" \
+    "$(rpstate rp_a 'd["pins"]["adapter_version"]') $([ -d "$RP_VS/postgresql/9.9.9" ] && echo yes || echo no) $([ "$CFG_BEFORE" = "$(cat "$RP_LOADER/settings.cfg")" ] && echo yes)"
+cp "$WORK/pg-420.json" "$DEFS/connectors/postgresql/connector.json"
+
+# A shared adapter (MongoDB: one script every source runs) moves them all at once.
+MG_OLD_DIR="$RP_VS/mongodb/0.1.3"
+repin mongodb 0.1.4
+N2="$(dbq 'len(d["statements"])')"
+run check rp_m1
+check "MongoDB after the update: exit 0" "0" "$RC"
+has "...both sources moved" "Moved rp_m1 from MongoDB adapter 0.1.3 to 0.1.4" "$OUT"
+has "...the other one too" "Moved rp_m2 from MongoDB adapter 0.1.3 to 0.1.4" "$OUT"
+check "...the shared adapter and its scan UDF re-created once, both schemas refreshed" "1 1 1 1" \
+    "$(dbq 'sum("RUST ADAPTER SCRIPT \"EXAKIT_VS\".\"MONGODB_ADAPTER\"" in s for s in d["statements"]['"$N2"':])') $(dbq 'sum("\"MONGODB_SCAN\"" in s and s.startswith("CREATE") for s in d["statements"]['"$N2"':])') $(dbq 'sum(s == "ALTER VIRTUAL SCHEMA \"VS_RP_M1\" REFRESH" for s in d["statements"]['"$N2"':])') $(dbq 'sum(s == "ALTER VIRTUAL SCHEMA \"VS_RP_M2\" REFRESH" for s in d["statements"]['"$N2"':])')"
+has "...the adapter loads the new .so" "%udf_object /buckets/bfsdefault/default/exakit/vs/mongodb/0.1.4/exasol-mongodb-vs-0.1.4-linux-" \
+    "$(dbq '[s for s in d["statements"]['"$N2"':] if "MONGODB_ADAPTER" in s][-1]')"
+check "...both record the new pins; the old .so is deleted" "0.1.4 0.1.4 no" \
+    "$(rpstate rp_m1 'd["pins"]["adapter_version"]') $(rpstate rp_m2 'd["pins"]["adapter_version"]') $([ -d "$MG_OLD_DIR" ] && echo yes || echo no)"
+N3="$(dbq 'len(d["statements"])')"
+run check rp_m2
+lacks "...a second check moves nothing" "Moved" "$OUT"
+check "...nor re-creates the script" "0" "$(dbq 'sum("MONGODB_ADAPTER" in s for s in d["statements"]['"$N3"':])')"
+
+# A new connect re-creates the shared script with the pins of the day: the
+# sources already there move with it, recorded as such.
+repin mongodb 0.1.5
+run_secret "$SECRET" connect mongodb --name rp_m3 $MG_SET --set collection=comments --secret-stdin
+check "a new MongoDB connect after an update: exit 0" "0" "$RC"
+has "...the sources already there moved first" "Moved rp_m1 from MongoDB adapter 0.1.4 to 0.1.5" "$OUT"
+check "...all three record the pins the shared script runs; the old .so is gone" "0.1.5 0.1.5 0.1.5 no" \
+    "$(rpstate rp_m1 'd["pins"]["adapter_version"]') $(rpstate rp_m2 'd["pins"]["adapter_version"]') $(rpstate rp_m3 'd["pins"]["adapter_version"]') $([ -d "$RP_VS/mongodb/0.1.4" ] && echo yes || echo no)"
+
+cp "$WORK/pg-connector.json" "$DEFS/connectors/postgresql/connector.json"
+cp "$WORK/mg-connector.json" "$DEFS/connectors/mongodb/connector.json"
+HOME_K="$RP_SAVED_HOME"; DEPLOY="$RP_SAVED_DEPLOY"; EXA="$RP_SAVED_EXA"
+
+printf '\n== a pasted connection string: exakit connect <connector> --url ==\n'
+# eng paste reads the string on stdin and answers the inputs it names; each
+# value passes the same check a --set gets. A credential in the string is never
+# used or echoed, other parameters are dropped by name, and no message quotes
+# the string.
+pst() { # pst <connector> <string> - OUT, RC, VALS (the values, sorted JSON)
+    OUT="$(printf '%s' "$2" | eng paste "$1" 2>&1)"; RC=$?
+    VALS="$(printf '%s\n' "$OUT" | sed -n 's/^RESULT //p' | python3 -c 'import json, sys; print(json.dumps(json.load(sys.stdin)["values"], sort_keys=True))' 2>/dev/null)"
+}
+while IFS='|' read -r _c _u _v; do
+    [ -n "$_c" ] || continue
+    pst "$_c" "$_u"
+    check "paste $_c: $_u" "0 $_v" "$RC $VALS"
+done <<'EOF'
+pg|jdbc:postgresql://pg.example.com:6432/sales?currentSchema=ops&sslmode=verify-full|{"database": "sales", "host": "pg.example.com", "port": "6432", "schema": "ops", "tls": "verify"}
+pg|postgres://reader@pg.example.com/sales?sslmode=prefer|{"database": "sales", "host": "pg.example.com", "tls": "require", "user": "reader"}
+pg|postgresql://pg.example.com/sales?user=bob&sslmode=disable|{"database": "sales", "host": "pg.example.com", "tls": "disable", "user": "bob"}
+pg|pg.example.com:5433/sales|{"database": "sales", "host": "pg.example.com", "port": "5433"}
+pg|postgres://reader@[2001:db8::5]:5432/sales?sslmode=verify-ca|{"database": "sales", "host": "2001:db8::5", "port": "5432", "tls": "verify", "user": "reader"}
+mysql|jdbc:mysql://my.example.com:3307/shop?sslMode=VERIFY_CA&user=reader|{"database": "shop", "host": "my.example.com", "port": "3307", "tls": "verify", "user": "reader"}
+mysql|mysql://reader@my.example.com/shop?sslMode=REQUIRED&useSSL=false|{"database": "shop", "host": "my.example.com", "tls": "require", "user": "reader"}
+mysql|jdbc:mysql://my.example.com/shop?useSSL=false|{"database": "shop", "host": "my.example.com", "tls": "disable"}
+mysql|jdbc:mysql://my.example.com/shop?sslMode=DISABLED|{"database": "shop", "host": "my.example.com", "tls": "disable"}
+mssql|jdbc:sqlserver://sql.example.com:1433;databaseName=erp;encrypt=true;trustServerCertificate=true;user=reader|{"database": "erp", "host": "sql.example.com", "port": "1433", "tls": "require", "user": "reader"}
+mssql|jdbc:sqlserver://sql.example.com;databaseName=erp;encrypt=strict;trustServerCertificate=true|{"database": "erp", "host": "sql.example.com", "tls": "verify"}
+mssql|jdbc:sqlserver://sql.example.com;database=erp;encrypt=true|{"database": "erp", "host": "sql.example.com", "tls": "verify"}
+mssql|jdbc:sqlserver://sql.example.com;databaseName=erp;encrypt=false|{"database": "erp", "host": "sql.example.com", "tls": "disable"}
+mssql|jdbc:sqlserver://;serverName=sql.example.com;portNumber=1500;databaseName=erp|{"database": "erp", "host": "sql.example.com", "port": "1500"}
+oracle|jdbc:oracle:thin:@//ora.example.com:1521/ORCLPDB1|{"host": "ora.example.com", "port": "1521", "service": "ORCLPDB1"}
+oracle|jdbc:oracle:thin:@tcps://ora.example.com:2484/ORCLPDB1|{"host": "ora.example.com", "port": "2484", "service": "ORCLPDB1", "tls": "verify"}
+oracle|ora.example.com:1521/ORCLPDB1|{"host": "ora.example.com", "port": "1521", "service": "ORCLPDB1"}
+snowflake|jdbc:snowflake://myorg-acct.snowflakecomputing.com/?db=sales&warehouse=wh&schema=public&role=reader&user=bob|{"account": "myorg-acct", "database": "SALES", "role": "reader", "schema": "PUBLIC", "user": "bob", "warehouse": "WH"}
+snowflake|https://myorg-acct.snowflakecomputing.com|{"account": "myorg-acct"}
+databricks|jdbc:databricks://dbc-1234abcd-5678.cloud.databricks.com:443/default;transportMode=http;ssl=1;AuthMech=3;httpPath=/sql/1.0/warehouses/abc123;UID=token;ConnCatalog=main;ConnSchema=sales|{"catalog": "main", "host": "dbc-1234abcd-5678.cloud.databricks.com", "http_path": "/sql/1.0/warehouses/abc123", "schema": "sales"}
+databricks|jdbc:spark://dbc-1234abcd-5678.cloud.databricks.com:443/default;httpPath=sql/protocolv1/o/123/0123-abc|{"host": "dbc-1234abcd-5678.cloud.databricks.com", "http_path": "/sql/protocolv1/o/123/0123-abc"}
+mongodb|mongodb+srv://reader@cluster0.abc12.mongodb.net/movies?retryWrites=true&authSource=admin|{"database": "movies", "uri": "mongodb+srv://cluster0.abc12.mongodb.net/?retryWrites=true&authSource=admin", "user": "reader"}
+mongodb|mongodb://h1.example.com:27017,h2.example.com:27017/films|{"database": "films", "uri": "mongodb://h1.example.com:27017,h2.example.com:27017"}
+s3|s3://my-bucket/docs/|{"bucket": "my-bucket"}
+s3|https://my-bucket.s3.eu-central-1.amazonaws.com/docs/a.json|{"bucket": "my-bucket", "region": "eu-central-1"}
+azure|https://mystorage.blob.core.windows.net/data|{"account": "mystorage", "container": "data"}
+azure|abfss://data@mystorage.dfs.core.windows.net/raw|{"account": "mystorage", "container": "data"}
+bq|jdbc:bigquery://https://www.googleapis.com/bigquery/v2:443;ProjectId=my-project;OAuthType=0;DefaultDataset=sales|{"dataset": "sales", "project": "my-project"}
+lakehouse|https://glue.eu-central-1.amazonaws.com|{"region": "eu-central-1"}
+lakehouse|arn:aws:glue:eu-central-1:123456789012:database/sales_lake|{"database": "sales_lake", "region": "eu-central-1"}
+EOF
+check "every connector reads a connection string, into its own inputs only" "ok" "$(python3 - "$DEFS" <<'PY2'
+import json, os, sys
+for cid in sorted(os.listdir(os.path.join(sys.argv[1], "connectors"))):
+    doc = json.load(open(os.path.join(sys.argv[1], "connectors", cid, "connector.json")))
+    names = {s["name"] for s in doc["inputs"] if s["kind"] not in ("secret", "secret-file")}
+    block = doc.get("paste")
+    if not block or not block.get("forms") or not set(block.get("params", {}).values()) <= names \
+            or block.get("path", "host") not in names | {"host"}:
+        print("bad: " + cid); break
+else:
+    print("ok")
+PY2
+)"
+
+PW='Hunter2-pa55'
+for _case in "pg|postgres://reader:$PW@pg.example.com/sales" "pg|jdbc:postgresql://pg.example.com/sales?user=reader&password=$PW" \
+             "mssql|jdbc:sqlserver://sql.example.com;databaseName=erp;user=reader;password=$PW" \
+             "oracle|jdbc:oracle:thin:reader/$PW@//ora.example.com:1521/ORCLPDB1" \
+             "snowflake|jdbc:snowflake://myorg-acct.snowflakecomputing.com/?db=sales&warehouse=wh&token=$PW" \
+             "databricks|jdbc:databricks://dbc-1.cloud.databricks.com:443/default;httpPath=/sql/1.0/warehouses/abc;UID=token;PWD=$PW" \
+             "mongodb|mongodb+srv://reader:$PW@cluster0.abc12.mongodb.net/movies?authMechanismProperties=AWS_SESSION_TOKEN:$PW" \
+             "s3|https://my-bucket.s3.eu-central-1.amazonaws.com/a.json?X-Amz-Credential=AKIA&X-Amz-Signature=$PW" \
+             "azure|https://mystorage.blob.core.windows.net/data?sv=2022-11-02&sp=rl&sig=$PW" \
+             "azure|DefaultEndpointsProtocol=https;AccountName=mystorage;AccountKey=$PW;EndpointSuffix=core.windows.net"; do
+    pst "${_case%%|*}" "${_case#*|}"
+    check "a credential in the string is not used (${_case%%|*}), exit 0" "0" "$RC"
+    lacks "...and is in none of the output" "$PW" "$OUT"
+    has "...the note says it was ignored and is asked for separately" "it was not used. The credential is asked for separately" "$OUT"
+    has "...and that the string was on the command line" "The string was on the command line" "$OUT"
+done
+lacks "a credential never becomes an input value" '"password"' "$VALS"
+pst mongodb "mongodb+srv://reader:$PW@cluster0.abc12.mongodb.net/movies?retryWrites=true&authMechanismProperties=AWS_SESSION_TOKEN:$PW"
+check "mongodb: the uri keeps no credentials and no path" '{"database": "movies", "uri": "mongodb+srv://cluster0.abc12.mongodb.net/?retryWrites=true", "user": "reader"}' "$VALS"
+pst pg 'jdbc:postgresql://pg.example.com/sales?ApplicationName=report-x9&sslrootcert=/etc/ca.pem&password=zz'
+has "unknown parameters are dropped by name" "Not used from the connection string: ApplicationName, sslrootcert" "$OUT"
+lacks "...never by value" "report-x9" "$OUT"
+has "...and listed" '"dropped": ["ApplicationName", "sslrootcert", "password"]' "$OUT"
+pst databricks 'jdbc:databricks://dbc-1.cloud.databricks.com:443/default;transportMode=http;ssl=1;AuthMech=3;httpPath=/sql/1.0/warehouses/abc;UID=token'
+lacks "...what the kit sets itself is consumed without a note" "Not used" "$OUT"
+pst bq 'jdbc:bigquery://https://www.googleapis.com/bigquery/v2:443;ProjectId=p1;OAuthPvtKeyPath=/keys/k.json;DefaultDataset=d1'
+has "a key file's path is dropped by name, not taken for a credential" "Not used from the connection string: OAuthPvtKeyPath" "$OUT"
+lacks "...so no credential note" "held a credential" "$OUT"
+
+pst oracle 'jdbc:oracle:thin:@//ora.example.com:1521/ORCLPDB1'
+has "oracle over plain TCP: tls is left at its default, with a note" "uses plain TCP; tls stays at verify" "$OUT"
+lacks "...never silently downgraded" '"tls"' "$VALS"
+pst pg 'postgres://pg.example.com/sales?sslmode=allow'
+has "a TLS value the kit does not map is said, not guessed" "sslmode has a value the kit does not map; tls stays as asked (default verify)" "$OUT"
+pst pg 'jdbc:postgresql://localhost:5432/sales'
+check "localhost from the string is not taken, exit 0" '0 {"database": "sales", "port": "5432"}' "$RC $VALS"
+has "...with the address to use instead" "on macOS 192.168.64.1" "$OUT"
+pst pg 'postgres://pg.example.com:99999/sales'
+has "a value that fails its check is named, not quoted" "port from the connection string is not used: it is not a valid port" "$OUT"
+lacks "...(no value in the message)" "99999" "$OUT"
+
+for _case in "oracle|jdbc:oracle:thin:@orahost-zz9.example.com:1521:ORCLZZ|Oracle SID" \
+             "oracle|jdbc:oracle:thin:@(DESCRIPTION=(ADDRESS=(PROTOCOL=tcp)(HOST=orahost-zz9)(PORT=1521))(CONNECT_DATA=(SERVICE_NAME=s)))|TNS descriptor" \
+             "mssql|jdbc:sqlserver://sqlhost-zz9.example.com\\SQLEXPRESS;databaseName=erp|named instance" \
+             "mssql|jdbc:sqlserver://;serverName=sqlhost-zz9.example.com;instanceName=SQLEXPRESS|named instance" \
+             "pg|jdbc:postgresql://pghost-zz9.example.com,pg2.example.com/sales|more than one host" \
+             "pg|jdbc:mysql://pghost-zz9.example.com/sales|does not read this as a PostgreSQL connection string; it reads: jdbc:postgresql://" \
+             "snowflake|https://app.snowflake.com/zz9/acct|not <account>.snowflakecomputing.com" \
+             "s3|https://storage.googleapis.com/zz9-bucket|does not read this as a Amazon S3" \
+             "pg|postgres://reader:pa?zz9;w@pg.example.com/sales|must be percent-encoded" \
+             "pg|postgres://pg.example.com/sales zz9|on one line"; do
+    _c="${_case%%|*}"; _r="${_case#*|}"; _u="${_r%|*}"; _why="${_r##*|}"
+    pst "$_c" "$_u"
+    check "refused, exit 2: $_why" "2" "$RC"
+    has "...saying why" "$_why" "$OUT"
+    lacks "...without quoting the string" "zz9" "$OUT"
+done
+OUT="$(printf '' | eng paste pg 2>&1)"; RC=$?
+check "an empty string is refused" "2 FAIL no connection string was given" "$RC $OUT"
+OUT="$(printf '%s' 'cG9zdGdyZXM6Ly9yZWFkZXJAcGcuZXhhbXBsZS5jb20vc2FsZXM=' | eng paste pg --base64 2>&1)"
+has "the Windows bridge's base64 is decoded first" '"values": {"host": "pg.example.com", "database": "sales", "user": "reader"}' "$OUT"
+
+# The shell path: cmd_connect with the shipping libraries and the real engine
+# on the simulated database; the engine's arguments are recorded.
+urlsh() {
+    ( EXAKIT_HOME="$HOME_K"
+      . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
+      _require_install() { :; }; exakit_init_logging() { EXAKIT_LOG_FILE="$WORK/url.log"; }
+      command -v reject >/dev/null 2>&1 || reject() { printf '%s\n' "$*" >&2; exit 2; }
+      exakit_vs_engine() { printf '%s\n' "$*" >> "$WORK/url.argv"; eng "$@"; }
+      "$@" ) 2>&1
+}
+db '{"sources": {"pg.example.com": {"tables": ["ORDERS"]}}}'
+rm -f "$WORK/url.argv"
+OUT="$(urlsh cmd_connect pg --name urlpg --url "postgres://reader:$PW@pg.example.com:5433/sales?sslmode=require" --set port=5432 --dry-run </dev/null)"; RC=$?
+check "connect --url --dry-run: exit 0" "0" "$RC"
+check "...the string went to paste on stdin; its inputs come before the command line's --set, which wins" \
+    "paste pg|resolve pg|plan postgresql --name urlpg --set host=pg.example.com --set port=5433 --set database=sales --set user=reader --set tls=require --set port=5432|" \
+    "$(tr '\n' '|' < "$WORK/url.argv")"
+has "...its notes are shown" "The string was on the command line" "$OUT"
+has "...the plan reflects it" "does NOT check the server's identity" "$OUT"
+lacks "...the password is in no argument" "$PW" "$(cat "$WORK/url.argv")"
+lacks "...and not in the output" "$PW" "$OUT"
+lacks "...nor the log" "$PW" "$(cat "$WORK/url.log" 2>/dev/null)"
+rm -f "$WORK/url.argv"
+OUT="$(urlsh cmd_connect pg --name urlpg --url=postgres://pg.example.com/sales?sslmode=require --set tls=verify --set user=reader --dry-run </dev/null)"; RC=$?
+check "--url=STRING works too, and --set tls overrides the string's sslmode" "0" "$RC"
+lacks "...so no TLS warning" "does NOT check" "$OUT"
+OUT="$(urlsh cmd_connect --name urlpg --url postgres://pg.example.com/sales --dry-run </dev/null)"; RC=$?
+check "--url without a connector is refused, exit 2" "2" "$RC"
+has "...saying what it needs" "--url needs the source it is for" "$OUT"
+rm -f "$WORK/url.argv"
+OUT="$(urlsh cmd_connect oracle --name urlora --url 'jdbc:oracle:thin:@ora.example.com:1521:ORCL' --dry-run </dev/null)"; RC=$?
+check "a refused string stops connect before any plan, exit 2" "2 paste oracle|" "$RC $(tr '\n' '|' < "$WORK/url.argv")"
+printf '%s' "$PW" > "$WORK/url.pw"
+OUT="$(urlsh cmd_connect pg --name urlsales --url 'jdbc:postgresql://pg.example.com/sales?user=reader' --password-file "$WORK/url.pw" --yes </dev/null)"; RC=$?
+check "connect --url --yes with a password file: exit 0" "0" "$RC"
+check "...the credential reached the CONNECTION from the file" "$PW" "$(dbq 'd["connections"]["EXAKIT_SRC_URLSALES"]["secret"]')"
+has "...and the string's inputs are the ones recorded" '"host": "pg.example.com"' "$(cat "$HOME_K/sources/urlsales/"*.json 2>/dev/null)"
+
+# On a terminal the panel opens with the string's answers in it.
+printf '%s' "$TUI_SECRET" > "$WORK/tui.pw"
+TUI_ARGS="pg --name tuiurl --url postgres://reader@pg.example.com/sales --password-file $WORK/tui.pw" \
+    tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 2 "\r\r\r\ry\r"
+check "the terminal flow with --url: one panel, one table" "0" "$TUI_RC"
+has "...the panel holds the string's host" "Host name or address      pg.example.com" "$TUI_SCREEN"
+has "...and it connects" "✓ VS_TUIURL · 1 table" "$TUI_SCREEN"
+has "PowerShell parses --url too" '$arg -eq "--url"' "$(cat "$ROOT/setup/exakit.ps1")"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

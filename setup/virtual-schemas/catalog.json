@@ -7,6 +7,8 @@
     "  status  candidate = defined and unit-tested, not yet qualified end to end",
     "          against a real source; kit-tested = qualified; gated = defined but",
     "          blocked by a named release gate (see `gate`).",
+  "  caveat  said in the plan's warnings: what a candidate has not been run",
+  "          against yet (a Beta connector built without a live source).",
     "  aliases what a search also matches; ambiguous input lists the choices.",
     "  summary what a source of this kind becomes, for the exakit connect menu.",
     "",
@@ -135,6 +137,33 @@
       "profile": "rust-native",
       "tier": "GA",
       "status": "candidate"
+    },
+    {
+      "id": "iceberg-rest",
+      "name": "Iceberg REST catalog", "summary": "Iceberg tables behind an Iceberg REST catalog (Polaris, Lakekeeper, Nessie, Gravitino)",
+      "aliases": [
+        "iceberg",
+        "rest",
+        "rest-catalog",
+        "iceberg-rest-catalog"
+      ],
+      "profile": "rust-native",
+      "tier": "Beta",
+      "status": "candidate",
+      "caveat": "Beta: the same engine as the Glue lakehouse connector, but this route has not been run against a live Iceberg REST catalog yet"
+    },
+    {
+      "id": "unity",
+      "name": "Unity Catalog (lakehouse engine)", "summary": "a Unity Catalog schema's tables, read in place from storage",
+      "aliases": [
+        "unity-catalog",
+        "uc",
+        "oss-unity-catalog"
+      ],
+      "profile": "rust-native",
+      "tier": "Beta",
+      "status": "candidate",
+      "caveat": "Beta: the same engine as the Glue lakehouse connector, but this route has not been run against a live Unity Catalog yet"
     },
     {
       "id": "mongodb",

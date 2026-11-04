@@ -73,6 +73,14 @@
       "kind": "ca-file"
     }
   ],
+  "paste": {
+    "schemes": ["jdbc:mysql", "mysql"],
+    "bare": true,
+    "path": "database",
+    "params": {"user": "user", "sslmode": "tls", "usessl": "tls"},
+    "map": {"sslmode": {"verify_identity": "verify", "verify_ca": "verify", "required": "require", "preferred": "require", "disabled": "disable"}, "usessl": {"false": "disable", "true": null}},
+    "forms": ["jdbc:mysql://host:3306/db", "mysql://user@host:3306/db", "host[:port][/database]"]
+  },
   "auth": "password",
   "url": "jdbc:mysql://{host}:{port}/?{tls}",
   "tls": {
@@ -84,6 +92,15 @@
   "vs_properties": {
     "CATALOG_NAME": "{database}"
   },
+  "schema_check": {
+    "input": "database",
+    "statement": "SELECT CASE WHEN EXISTS (SELECT 1 FROM information_schema.schemata WHERE schema_name = BINARY {v}) THEN 'ok' ELSE COALESCE((SELECT CONCAT('case:', MIN(schema_name)) FROM information_schema.schemata WHERE LOWER(schema_name) = LOWER({v})), 'missing') END",
+    "case": "MySQL database names are case-sensitive on Linux"
+  },
+  "tips": [
+    "Table and column names keep MySQL's spelling (actor, first_name): quote them, e.g. SELECT \"first_name\" FROM <schema>.\"actor\".",
+    "YEAR columns arrive as DATE (2006 reads as 2006-01-01); TEXT arrives as VARCHAR(65535)."
+  ],
   "notes": [
     "MySQL has no schemas below a database: the dialect takes CATALOG_NAME only.",
     "Connector/J is downloaded from Maven Central on this machine and never redistributed (GPL with the FOSS exception).",

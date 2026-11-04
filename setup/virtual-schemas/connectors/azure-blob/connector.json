@@ -40,6 +40,12 @@
       "required": true
     }
   ],
+  "paste": {
+    "style": "azure",
+    "params": {"accountname": "account"},
+    "implied": ["defaultendpointsprotocol", "endpointsuffix", "blobendpoint"],
+    "forms": ["https://<account>.blob.core.windows.net/<container>", "abfss://<container>@<account>.dfs.core.windows.net", "AccountName=...;AccountKey=..."]
+  },
   "auth": "azure-sas-or-key",
   "host": "{account}.blob.core.windows.net",
   "credential": "azure-blob",
@@ -49,6 +55,10 @@
   "vs_properties": {
     "MAPPING": "{mapping_path}"
   },
+  "tips": [
+    "Tables and columns are named by the mapping file: a change to the mapping needs a new connect (exakit source remove <name>, then connect again).",
+    "A CSV mapping without fields has its columns inferred, and a date then arrives as VARCHAR(2000000): name the fields and their types in the mapping to get typed columns."
+  ],
   "notes": [
     "The credential is one of three things Azure gives you, on standard input or through --password-file: a SAS token (recommended: limited to the container, read and list only, with an expiry), the storage account's connection string, or its account key. The kit checks a SAS on this computer first - read and list permission, not expired, not scoped to one blob - and builds the connection string itself, always over HTTPS to <account>.blob.core.windows.net.",
     "A SAS cannot be narrowed to a folder: it opens the whole container, so keep data the database must not read in another container. An account key opens every container of the account, for writing too.",

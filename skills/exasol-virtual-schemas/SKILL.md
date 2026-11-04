@@ -1,6 +1,6 @@
 ---
 name: exasol-virtual-schemas
-description: Query an external database - PostgreSQL, MySQL, SQL Server, Oracle, Snowflake, BigQuery, Databricks or MongoDB - Iceberg tables in an AWS Glue lakehouse, or JSON, CSV and Parquet files in an Amazon S3 bucket or an Azure Blob Storage container from the local Exasol database through a virtual schema, with exakit connect and exakit source. Covers giving inputs unattended, passing the credential safely (never as an argument), reading the plan, the "localhost inside the database is not this computer" trap, the failure classes and their fixes (auth, TLS, unreachable, no DNS, no Java, S3 access denied or wrong region, Azure SAS permissions), the EDML mapping that turns S3 objects and Azure blobs into tables, which Azure credential to use (a container SAS over the account key), reauth after a password change, disconnect versus remove, how BigQuery's key file is kept and who could read it, and what the kit adds to the Databricks adapter (certificate checks, no join pushdown). Triggers — "connect my Postgres to Exasol", "query MySQL from Exasol", "virtual schema", "federate a remote database", "exakit connect", "exakit source", "my source password changed", "the virtual schema stopped working", "remove a connected source", "join local tables with a remote database", "connect Snowflake", "connect SQL Server", "connect Oracle", "connect BigQuery", "query BigQuery from Exasol", "BigQuery service account key", "connect Databricks", "query Databricks from Exasol", "Unity Catalog", "Databricks personal access token", "query Iceberg tables", "connect an AWS Glue catalog", "lakehouse", "Athena tables from Exasol", "connect MongoDB", "query a MongoDB collection from Exasol", "MongoDB Atlas", "query files in S3", "connect an S3 bucket", "JSON files in S3 as a table", "EDML mapping", "query files in Azure Blob Storage", "connect an Azure storage container", "Azure SAS token".
+description: Query an external database - PostgreSQL, MySQL, SQL Server, Oracle, Snowflake, BigQuery, Databricks or MongoDB - Iceberg tables in an AWS Glue lakehouse, or JSON, CSV and Parquet files in an Amazon S3 bucket or an Azure Blob Storage container from the local Exasol database through a virtual schema, with exakit connect and exakit source. Covers giving inputs unattended, passing the credential safely (never as an argument), reading the plan, the "localhost inside the database is not this computer" trap, the failure classes and their fixes (auth, TLS, unreachable, no DNS, no Java, S3 access denied or wrong region, Azure SAS permissions), the EDML mapping that turns S3 objects and Azure blobs into tables, which Azure credential to use (a container SAS over the account key), reauth after a password change, disconnect versus remove, how BigQuery's key file is kept and who could read it, and what the kit adds to the Databricks adapter (certificate checks, no join pushdown). Triggers — "connect my Postgres to Exasol", "query MySQL from Exasol", "virtual schema", "federate a remote database", "exakit connect", "exakit source", "my source password changed", "the virtual schema stopped working", "remove a connected source", "join local tables with a remote database", "connect Snowflake", "connect SQL Server", "connect Oracle", "connect BigQuery", "query BigQuery from Exasol", "BigQuery service account key", "connect Databricks", "query Databricks from Exasol", "Unity Catalog", "Databricks personal access token", "query Iceberg tables", "connect an AWS Glue catalog", "connect an Iceberg REST catalog", "lakehouse", "Athena tables from Exasol", "connect MongoDB", "query a MongoDB collection from Exasol", "MongoDB Atlas", "query files in S3", "connect an S3 bucket", "JSON files in S3 as a table", "EDML mapping", "query files in Azure Blob Storage", "connect an Azure storage container", "Azure SAS token".
 ---
 
 # Virtual schemas — query a remote database from local Exasol
@@ -21,12 +21,19 @@ database runs every query, even after `exakit` exits.
 | Azure Blob Storage (JSON, CSV, Parquet files) | `azure-blob` (`azure`, `abs`) | candidate |
 | MongoDB (one collection per source) | `mongodb` (`mongo`, `atlas`) | candidate |
 | Databricks (one Unity Catalog schema per source) | `databricks` (`dbx`) | candidate |
-| Lakehouse: Iceberg (and Hive Parquet) tables in AWS Glue | `lakehouse` (`iceberg`, `glue`) | candidate |
+| Lakehouse: Iceberg (and Hive Parquet) tables in AWS Glue | `lakehouse` (`glue`) | candidate |
+| Lakehouse engine over an Iceberg REST catalog (Beta, not yet run live) | `iceberg-rest` (`rest`) | candidate |
+| Lakehouse engine over Unity Catalog, read from storage (Beta, not yet run live) | `unity` (`uc`) | candidate |
 | BigQuery | `bigquery` (`bq`) | candidate |
 
 `candidate` means defined and tested against a simulated database, not yet
 qualified against every real server version. `exakit source catalog` is the
 live list.
+
+`iceberg` asks whether Glue (`lakehouse`) or a REST catalog (`iceberg-rest`) is
+meant; `unity-catalog` asks between the SQL warehouse (`databricks`) and the
+engine reading storage (`unity`). All three lakehouse routes share one engine
+and its four scripts; the last lakehouse source of any route removes them.
 
 ## Connect — unattended, the way an agent does it
 
@@ -39,6 +46,16 @@ printf '%s' "$SALES_PASSWORD" | exakit connect pg --name sales \
   --set host=db.example.com --set database=sales --set user=reader
 # or: --password-file ~/.config/sales.pw   (a file only the user can read)
 ```
+
+When the user has the source's connection string (a JDBC URL, `postgres://`,
+`mongodb+srv://`, `s3://`, an Azure blob URL, a Glue endpoint), pass it with
+`--url '<string>'` and the connector: it fills the inputs it names, each
+checked like a `--set`, and an explicit `--set` still wins. A password in the
+string is never used - the credential still goes on stdin or in
+`--password-file` - and parameters the kit does not read are dropped by name
+(the output says which). Prefer a string without the password: the command
+line is visible to other local users. A SID, a TNS descriptor or a SQL Server
+named instance is refused; give host, port and service or database with `--set`.
 
 A person at a terminal can type `exakit connect` alone: a menu of the
 connectors (Space ticks several), one panel per source with each answer
@@ -220,9 +237,14 @@ exakit source issues               # only the failing ones, each with its fix
 exakit source check sales          # a fresh bounded read now (--all for every source)
 exakit source reauth sales         # after a password or token change
 exakit source refresh sales        # after tables were added or changed at the source
+exakit source describe sales       # tables and columns as Exasol sees them (no call to the source)
+exakit source describe sales orders --ddl --schema LOCAL > orders.sql   # DDL to copy a table locally
 ```
 
 `check` is one shot, not monitoring: nothing watches a source in the background.
+After `exakit update`, run `exakit source check --all`: it moves sources
+connected earlier to the adapter the update pins (a source it could not
+refresh is named, with `exakit source refresh <name>`).
 
 ## Disconnect versus remove
 

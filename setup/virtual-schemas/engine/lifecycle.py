@@ -50,7 +50,8 @@ EXIT = {"ok": 0, "failed": 1, "input": 2, "conflict": 3, "missing": 4, "gated": 
 # Status recorded for a failure kind (sql.classify).
 STATUS_FOR = {"auth": "auth-failed", "tls": "tls-failed", "unreachable": "unreachable", "nohost": "unreachable",
               "dns": "dns-failed", "nojava": "failed", "error": "failed", "denied": "access-denied",
-              "region": "failed", "nobucket": "failed", "clock": "failed", "norust": "failed"}
+              "region": "failed", "nobucket": "failed", "clock": "failed", "norust": "failed",
+              "schema_missing": "failed", "external": "access-denied", "managed": "failed"}
 
 REMEDY_FOR = {
     "auth": "the source rejected the credentials: exakit source reauth {name}",
@@ -64,6 +65,9 @@ REMEDY_FOR = {
     "region": "the bucket is in another region: exakit source disconnect {name} --yes, then exakit connect <connector> --name {name} --set region=<the bucket's region> with the credential again",
     "nobucket": "the {store} does not exist under that name: check it, then remove and connect again",
     "clock": "the database clock is too far from the store's for a signed request; restart the database (exakit stop, then exakit start), then: exakit source check {name}",
+    "schema_missing": "the schema the source was connected with is gone or no longer visible to the account; check it at the source, then: exakit source check {name}",
+    "external": "Unity Catalog does not let engines outside Databricks read this schema's files: the metastore needs External Data Access switched on and the token's user EXTERNAL USE SCHEMA on the schema (a schema on Databricks Default Storage can never be read from outside) - or read it through the SQL warehouse: exakit connect databricks; then: exakit source check {name}",
+    "managed": "a table here is a Databricks catalog-managed table, which this adapter version cannot read yet; read it through the SQL warehouse instead: exakit connect databricks",
     "error": "see the log: exakit logs",
 }
 
@@ -89,6 +93,8 @@ def remedy_for(kind, name, connector, message=None):
 # the Mac sleeps - 2 h 26 min, 1 h 25 min and 32 min behind on one laptop - and
 # an RDS certificate issued that morning then failed as not yet valid.
 CLOCK_LIMIT = 120
+# How far off a signed request may be before S3 and Azure refuse it.
+SIGNED_LIMIT = 15 * 60
 
 
 def clock_words(seconds):
@@ -134,11 +140,47 @@ def tls_remedy(message, connector, clock=None):
     return None
 
 
+def tips(connector, name, schema):
+    """What a reader needs to query this kind of source: how its names arrive
+    and which types change on the way (connector.json "tips", each measured
+    on a live source)."""
+    return [t.replace("<schema>", schema).replace("<name>", name) for t in connector.get("tips", [])]
+
+
+def table_ddl(schema, table, columns, into=""):
+    """One virtual table as an Exasol CREATE TABLE, every name quoted (a
+    MongoDB field carries '|' and mixed case), and a commented line that
+    copies the rows into it. Without into it targets the session's schema."""
+    target = "%s.%s" % (sql.ident(into), sql.ident(table)) if into else sql.ident(table)
+    lines = ",\n".join("    %s %s%s" % (sql.ident(c["name"]), c["type"], "" if c["nullable"] else " NOT NULL")
+                        for c in columns)
+    copy_to = target if into else "<schema>.%s" % sql.ident(table)
+    return ("-- %s.%s as Exasol sees it\nCREATE TABLE %s (\n%s\n);\n-- a local copy: INSERT INTO %s SELECT * FROM %s.%s;\n"
+            % (schema, sql.ident(table), target, lines, copy_to, schema, sql.ident(table)))
+
+
+def example_query(schema, tables):
+    """A first query on a real table, its name quoted when Exasol would
+    otherwise upper-case it: SELECT * FROM VS_X."actor" LIMIT 10."""
+    if not tables:
+        return "SELECT * FROM %s.<table> LIMIT 10" % schema
+    table = sorted(tables)[0]
+    shown = table if re.match(r"^[A-Z][A-Z0-9_]*$", table) else sql.ident(table)
+    return "SELECT * FROM %s.%s LIMIT 10" % (schema, shown)
+
+
 class Failure(Exception):
     def __init__(self, message, code, kind="error"):
         super().__init__(message)
         self.code = code
         self.kind = kind
+
+
+class ScopeFailure(Failure):
+    """The schema check's own answer: complete in its words, so connect adds
+    only that nothing was kept."""
+    def __init__(self, message, kind):
+        super().__init__(message, EXIT["failed"], kind)
 
 
 class Engine(object):
@@ -164,11 +206,24 @@ class Engine(object):
                 before = time.time()
                 rows = self.db().query("SELECT POSIX_TIME() AS T")
                 skew = float(rows[0]["T"]) - (before + time.time()) / 2
+                self._skew = skew
                 if abs(skew) >= CLOCK_LIMIT:
                     self._clock = clock_words(skew)
             except (Failure, sql.DbError, LookupError, TypeError, ValueError):
                 pass
         return self._clock
+
+    def signed_kind(self, kind, connector):
+        """A store that signs each request with the time (S3, Glue, Azure
+        with a key or SAS) refuses one more than 15 minutes off its own clock.
+        It does not always say so: the lakehouse engine reports the S3 refusal
+        as "PermissionDenied ... status: 403" (measured, a database 42 min
+        behind after the laptop slept), which reads like a missing grant.
+        With the clock that far off, the clock is the cause to name."""
+        if kind not in ("error", "denied", "auth") or connector.get("auth") not in ("aws-keys", "azure-sas-or-key"):
+            return kind
+        self.clock()
+        return "clock" if abs(getattr(self, "_skew", 0)) >= SIGNED_LIMIT else kind
 
     def warn_clock(self):
         if self.clock():
@@ -429,7 +484,7 @@ class Engine(object):
         host = planner.source_host(connector, values)
         if not host:
             return
-        port = int(values.get("port") or 443)
+        port = planner.source_port(connector, values)
         answer = self.probe(host, port)
         if answer.startswith("nodns"):
             # The language container has no resolver at all (Exasol Personal's
@@ -447,7 +502,10 @@ class Engine(object):
         """Fetch, verify and stage the adapter and driver; record this source as their consumer."""
         if not self.runtime.available():
             raise Failure("the deployment's runtime directory is missing (%s)" % self.runtime.exa, EXIT["failed"])
-        cid = connector["id"]
+        # Connectors of one family (lakehouse: Glue, Iceberg REST, Unity) run
+        # the same pinned engine, staged once under the family's folder, so
+        # the shared adapter script always points at a file all of them keep.
+        cid = connector.get("family") or connector["id"]
         adapter_pin, driver_pin = connector["adapter"], connector.get("driver")
         jars = []
         adapter_src = self.cache.fetch(adapter_pin)
@@ -644,17 +702,65 @@ class Engine(object):
         return "\n".join(lines) + "\n/"
 
     def import_script_users(self, connector_id, besides):
-        """Other sources of this connector, which share its import script."""
-        return [n for n in self.store.names() if n != besides and self.store.config(n).get("connector") == connector_id]
+        """Other sources that share this connector's scripts: of the same
+        connector, or of any connector on the same shared adapter script
+        (lakehouse, iceberg-rest and unity all run LAKEHOUSE_ADAPTER and its
+        companions), so the last Glue source out does not drop what a REST
+        or Unity source still calls."""
+        shared = self._shared_adapter(connector_id)
+        users = []
+        for n in self.store.names():
+            other = self.store.config(n).get("connector")
+            if n != besides and (other == connector_id or (shared and other and self._shared_adapter(other) == shared)):
+                users.append(n)
+        return users
+
+    def _shared_adapter(self, connector_id):
+        try:
+            return self.defs.connector(connector_id).get("shared_adapter")
+        except (OSError, ValueError, planner.PlanError):
+            return None
 
     def vs_sql(self, connector, names, values, extra=None):
         props = ["%s = %s" % (connector.get("connection_property", "CONNECTION_NAME"), sql.literal(names["connection"]))]
         fields = dict(values, **(extra or {}))
         for key, template in connector["vs_properties"].items():
             props.append("%s = %s" % (key, sql.literal(template.format(**fields))))
+        if planner.plain_http(connector, values):
+            # The lakehouse engine refuses an http catalog or store unless told.
+            for key, value in (connector.get("vs_when_http") or {}).items():
+                props.append("%s = %s" % (key, sql.literal(value)))
         return "CREATE VIRTUAL SCHEMA %s USING %s.%s WITH %s" % (
             sql.ident(names["schema"]), sql.ident(names["script_schema"]), sql.ident(names["script"]),
             " ".join(props))
+
+    def check_scope(self, connector, names, values):
+        """Is the schema (MySQL: the database) there, and may the account use
+        it? Asked through the loader before any script or virtual schema
+        exists: Exasol does not ask, and a virtual schema over a name the
+        source does not have is created empty, which reads as success."""
+        spec = connector.get("schema_check")
+        if not spec or not connector.get("etl"):
+            return
+        value = values.get(spec["input"], "")
+        statement = spec["statement"].replace("{v}", sql.literal(value))
+        rows = self.db().query("SELECT * FROM (IMPORT FROM JDBC AT %s STATEMENT %s)"
+                               % (sql.ident(names["connection"]), sql.literal(statement)))
+        answer = str(list(rows[0].values())[0]) if rows and rows[0] else ""
+        label = "database" if spec["input"] == "database" else "schema"
+        if answer == "ok":
+            self.emit("OK", "The source has %s %s, and the account may use it" % (label, value))
+            return
+        if answer.startswith("case:"):
+            other = answer[5:]
+            raise ScopeFailure("the source has no %s %s, but it has %s (%s); give it as the source spells it: "
+                               "--set %s=%s" % (label, value, other, spec.get("case", "names differ in case"),
+                                                spec["input"], other), "schema_missing")
+        if answer == "denied":
+            raise ScopeFailure("the account may not use %s %s; grant it USAGE on the %s (and SELECT on its tables)"
+                               % (label, value, label), "denied")
+        raise ScopeFailure("the source has no %s %s that this account can see; check the name and that the "
+                           "account has access to it" % (label, value), "schema_missing")
 
     def tables(self, schema):
         return [r.get("TABLE_NAME") for r in self.db().query(
@@ -738,6 +844,11 @@ class Engine(object):
             # says exactly what that attempt made; that is undone first.
             if not reconnect:
                 self.recover_interrupted(name, names)
+            if reconnect or self.shares_scripts(connector):
+                # After a kit update: a reconnect keeps the adapter script it
+                # had, and a shared script re-created below would move every
+                # other source of the connector unrecorded - so they move first.
+                self.move_forward(connector_id, only=[name])
             self.store.save_journal(name, journal)
 
             def made(flag):
@@ -775,8 +886,15 @@ class Engine(object):
                 self.create_connection(names, url, user, conn_secret, replace=reconnect, hidden=hidden)
                 if not reconnect:
                     made("connection")
+                elif self.store.status(name).get("needs_refresh"):
+                    # Moved to a new adapter while disconnected: its metadata
+                    # is read again now that the adapter can reach the source.
+                    self.db().execute("ALTER VIRTUAL SCHEMA %s REFRESH" % sql.ident(names["schema"]))
+                    self.emit("OK", "Virtual schema %s refreshed for adapter %s"
+                              % (names["schema"], connector["adapter"]["version"]))
                 self.emit("OK", "Connection %s created (%s)" % (names["connection"], "it names the key file, not the key"
                                                                      if key_path else "the credential lives only in the database"))
+                self.check_scope(connector, names, values)
                 if not reconnect:
                     shared_before = connector.get("shared_adapter") and \
                         self.exists("script", names["script_schema"], names["script"])
@@ -809,7 +927,7 @@ class Engine(object):
                     # empty folder its journal lived in.
                     self.store.delete_source(name)
                     self.drop_kit_schema_if_unused()
-                kind = getattr(error, "kind", "error")
+                kind = self.signed_kind(getattr(error, "kind", "error"), connector)
                 code = getattr(error, "code", EXIT["failed"])
                 if isinstance(error, sql.DbError):
                     code = EXIT["dns"] if kind == "dns" else EXIT["nojava"] if kind == "nojava" else EXIT["failed"]
@@ -821,11 +939,13 @@ class Engine(object):
                 remedy = remedy_for(kind, name, connector, error)
                 if getattr(error, "complete", False):
                     raise error
+                if isinstance(error, ScopeFailure):
+                    raise Failure("%s; nothing was kept - connect again with the corrected name" % error, code, kind)
                 specific = tls_remedy(error, connector, self.clock()) if kind == "tls" else None
                 if specific:
                     remedy = "the source's certificate did not verify; nothing was kept - %s, then connect again" % specific
                 elif not reconnect and kind in ("auth", "tls", "unreachable", "nohost", "denied", "region", "nobucket",
-                                                "clock"):
+                                                "clock", "external", "managed", "schema_missing"):
                     remedy = {"denied": "the account signs in but may not read this data; nothing was kept - grant it what the message names (%s), then connect again" % connector.get("access", "read access"),
                               "region": "the bucket is in another region; nothing was kept - connect again with --set region=<the bucket's region>",
                               "nobucket": "nothing was kept - check the %s name, then connect again" % connector.get("store", "bucket"),
@@ -834,15 +954,16 @@ class Engine(object):
                                       + ("; %s" % connector["auth_hint"] if connector.get("auth_hint") else ""),
                               "tls": "the source's certificate or host name did not verify; nothing was kept - fix the server certificate or choose tls=require knowingly, then connect again",
                               "unreachable": "the source did not answer from inside the database; nothing was kept - check host, port, firewall and VPN (a source on this computer must listen beyond 127.0.0.1), then connect again",
-                              "nohost": "nothing was kept - check the spelling (a private name may need a VPN), then connect again"}[kind]
+                              "nohost": "nothing was kept - check the spelling (a private name may need a VPN), then connect again",
+                              "external": "Unity Catalog does not let engines outside Databricks read this schema's files; nothing was kept - switch External Data Access on for the metastore and grant the token's user EXTERNAL USE SCHEMA on the schema (a schema on Databricks Default Storage can never be read from outside), or read it through the SQL warehouse: exakit connect databricks",
+                              "managed": "a table here is a Databricks catalog-managed table, which this adapter version cannot read yet; nothing was kept - read it through the SQL warehouse instead: exakit connect databricks",
+                              "schema_missing": "the catalog has no such namespace that this credential can see; nothing was kept - check the namespace (and the warehouse), then connect again"}[kind]
                 if isinstance(error, Failure):
                     # The kit's own words already say what happened (the route
                     # check); only the driver's raw text needs it restated.
                     raise Failure("%s; %s" % (error, remedy.split("; ", 1)[-1]), code, kind)
                 raise Failure("%s (%s)" % (error, remedy), code, kind)
-            driver = connector.get("driver") or {}
-            pins = {"adapter": connector["adapter"]["sha256"], "driver": driver.get("sha256"),
-                    "adapter_version": connector["adapter"]["version"], "driver_version": driver.get("version")}
+            pins = self.pins(connector)
             record = {"schema_version": 1, "id": name, "connector": connector_id,
                       "profile": connector["profile"], "inputs": values, "objects": names,
                       "created_at": self.store.config(name).get("created_at") if reconnect else sources.now()}
@@ -861,7 +982,8 @@ class Engine(object):
                                                          "evidence": ("metadata and %s" % how) if read else "metadata",
                                                          "empty_tables": empty}})
             self.store.clear_journal(name)
-        return {"name": name, "connector": connector_id, "objects": names, "tables": len(tables), "status": "ready"}
+        return {"name": name, "connector": connector_id, "objects": names, "tables": len(tables), "status": "ready",
+                "example": example_query(names["schema"], tables), "tips": tips(connector, name, names["schema"])}
 
     def recover_interrupted(self, name, names):
         """Undo what an interrupted first connect recorded in its journal."""
@@ -914,8 +1036,20 @@ class Engine(object):
 
     def check(self, name):
         config = self.store.config(name)
+        # After a kit update, the connector's sources move to what it pins now
+        # (exakit source check --all is the step the update names).
+        try:
+            moved = self.move_forward(config["connector"])
+        except (OSError, ValueError, planner.PlanError) as error:
+            # A definition this kit no longer reads: the check below says more.
+            self.emit("WARN", "Could not compare %s with the %s adapter this kit pins: %s"
+                      % (name, config["connector"], error))
+            moved = []
         if self.store.status(name).get("status") == "disconnected":
-            return {"name": name, "status": "disconnected", "skipped": True}
+            result = {"name": name, "status": "disconnected", "skipped": True}
+            if self.store.status(name).get("needs_refresh"):
+                result["needs_refresh"] = True
+            return result
         connector = self.defs.connector(config["connector"])
         names = config["objects"]
         try:
@@ -924,7 +1058,7 @@ class Engine(object):
             self.warn_key_readers(connector, name)
             tables, read, how, empty = self.verify(connector, names["schema"])
         except (Failure, sql.DbError) as error:
-            kind = getattr(error, "kind", "error")
+            kind = self.signed_kind(getattr(error, "kind", "error"), connector)
             status = self.record_check(name, "failed", str(error), kind)
             remedy = remedy_for(kind, name, connector, error)
             specific = tls_remedy(error, connector, self.clock()) if kind == "tls" else None
@@ -942,6 +1076,14 @@ class Engine(object):
         result = {"name": name, "status": "ready", "evidence": evidence}
         if empty:
             result["empty_tables"] = empty
+        just_moved = name in moved or name in getattr(self, "_moved", ())
+        if just_moved:
+            result["moved"] = True
+        if self.store.status(name).get("needs_refresh"):
+            result["needs_refresh"] = True
+            if not just_moved:     # a move in this run that failed to refresh has said so
+                self.emit("WARN", "%s moved to a new adapter and its metadata is not refreshed yet: exakit source "
+                                  "refresh %s" % (name, name))
         return result
 
     def reauth(self, name, secret):
@@ -1058,8 +1200,238 @@ class Engine(object):
         except sql.DbError as error:
             raise Failure("the metadata refresh failed: %s" % error, EXIT["failed"], error.kind)
         count = len(self.tables(schema))
-        self.store.update_status(name, tables=count, refreshed_at=sources.now())
+        status = self.store.status(name)
+        status.pop("needs_refresh", None)
+        status.update(tables=count, refreshed_at=sources.now())
+        self.store.save_status(name, status)
         return {"name": name, "tables": count}
+
+    def describe(self, name, table="", ddl=False, into=""):
+        """The tables and columns of a source as Exasol sees them, read from
+        the database's own catalog: nothing reaches the source, so it costs
+        nothing there (a Databricks warehouse is not woken) and works for a
+        disconnected source too. ddl adds CREATE TABLE statements to make a
+        local copy; into names the schema they target."""
+        config = self.store.config(name)
+        schema = config["objects"]["schema"]
+        if into and not re.match(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$", into):
+            raise Failure("--schema takes a plain schema name (letters, digits and _), not %r" % into, EXIT["input"])
+        if not self.exists("schema", schema):
+            raise Failure("the virtual schema %s is gone; create it again from the stored connection with: "
+                          "exakit source check %s" % (schema, name), EXIT["failed"])
+        rows = self.db().query(
+            "SELECT COLUMN_TABLE, COLUMN_NAME, COLUMN_TYPE, COLUMN_IS_NULLABLE FROM SYS.EXA_ALL_COLUMNS "
+            "WHERE COLUMN_SCHEMA = %s ORDER BY COLUMN_TABLE, COLUMN_ORDINAL_POSITION" % sql.literal(schema))
+        tables = {}
+        for row in rows:
+            # Nullable unless the catalog says otherwise: a wrong NOT NULL
+            # would refuse rows the source holds.
+            nullable = row.get("COLUMN_IS_NULLABLE") not in (False, "FALSE", "false", 0)
+            tables.setdefault(row["COLUMN_TABLE"], []).append(
+                {"name": row["COLUMN_NAME"], "type": row["COLUMN_TYPE"], "nullable": nullable})
+        if table:
+            # As typed, else ignoring case - but never a guess between two.
+            hits = [table] if table in tables else [t for t in tables if t.upper() == table.upper()]
+            if len(hits) != 1:
+                listed = ", ".join(sorted(tables)) or "none"
+                if hits:
+                    raise Failure("%s matches %d tables in %s (%s); give it with its exact case"
+                                  % (table, len(hits), schema, ", ".join(sorted(hits))), EXIT["input"])
+                raise Failure("%s has no table %s (its tables: %s); a table added at the source appears after: "
+                              "exakit source refresh %s" % (schema, table, listed, name), EXIT["input"])
+            tables = {hits[0]: tables[hits[0]]}
+        out = []
+        for name_t in sorted(tables):
+            entry = {"name": name_t, "columns": tables[name_t]}
+            if ddl:
+                entry["ddl"] = table_ddl(schema, name_t, tables[name_t], into)
+            out.append(entry)
+        return {"name": name, "schema": schema, "tables": out}
+
+    # --- moving sources to the adapter the connector pins now -----------------------
+    @staticmethod
+    def pins(connector):
+        """What a source records as running: its connector's adapter and driver pins."""
+        driver = connector.get("driver") or {}
+        return {"adapter": connector["adapter"]["sha256"], "driver": driver.get("sha256"),
+                "adapter_version": connector["adapter"]["version"], "driver_version": driver.get("version")}
+
+    @staticmethod
+    def shares_scripts(connector):
+        """Every source of the connector runs one adapter script (a native
+        adapter bound to its name) or shares companion scripts: re-creating
+        one of them moves all of those sources at once."""
+        return bool(connector.get("shared_adapter") or connector.get("companions") or connector.get("import_script"))
+
+    def move_forward(self, connector_id, only=None):
+        """Move the sources of a connector to the adapter and driver it pins now.
+
+        A kit update can change a connector's pins (connector.json); a source
+        connected earlier keeps running what its adapter script names until
+        it is moved: the current files staged, its script re-created over
+        them, its virtual schema refreshed, the new pins recorded, and the old
+        files given up - deleted once no source uses them, and only when the
+        kit made them. A script shared by the connector's sources moves them
+        all together. `only` limits the move to those names, unless the
+        connector shares its scripts. A source already on the current pins is
+        left alone, so a second run does nothing. Returns the names moved."""
+        connector = self.defs.connector(connector_id)
+        current = self.pins(connector)
+        shared = self.shares_scripts(connector)
+        with self.store.lock():
+            stale = []
+            for name in self.store.names():
+                pins = self.store.status(name).get("pins")
+                if self.store.config(name).get("connector") != connector_id or not pins or pins == current:
+                    continue
+                if only is not None and not shared and name not in only:
+                    continue
+                stale.append(name)
+            if not stale:
+                return []
+            return self._move(connector, current, stale)
+
+    def _stage_tracked(self, connector, name, created, touched):
+        """stage(), noting every path it records this source as a consumer of."""
+        record = self.store.add_consumer
+
+        def add(path, digest, consumer, made):
+            touched.append(path)
+            record(path, digest, consumer, made)
+        self.store.add_consumer = add
+        try:
+            return self.stage(connector, name, created)
+        finally:
+            del self.store.add_consumer
+
+    def _artifact_file(self, connector, path):
+        """A file stage() puts in place for a connector's pins: under its own
+        bucket folder, or a jar directly in its loader folder. A source's key,
+        mapping or truststore copy, and the loader's settings.cfg, are not."""
+        path = os.path.normpath(path)
+        if path.startswith(os.path.normpath(self.runtime.bucket_dir(connector["id"])) + os.sep):
+            return True
+        etl = connector.get("etl")
+        return bool(etl) and os.path.basename(path) != "settings.cfg" and \
+            os.path.dirname(path) == os.path.normpath(self.runtime.loader_dir(etl["drivername"]))
+
+    def _unstage(self, attempt, made):
+        """Give up what one move attempt staged for its source: its consumption
+        of the files it added, and those files once unused when this run made them."""
+        fresh = [p for p in dict.fromkeys(attempt["touched"]) if p not in attempt["before"]]
+        for path in self.store.release_paths(attempt["name"], fresh):
+            if path in made and os.path.isfile(path):
+                os.remove(path)
+                self.prune(os.path.dirname(path))
+
+    @staticmethod
+    def _change_words(old, new):
+        parts = []
+        if old.get("adapter") != new["adapter"]:
+            parts.append("adapter %s to %s" % (old.get("adapter_version") or "unknown", new["adapter_version"]))
+        if old.get("driver") != new["driver"]:
+            parts.append("driver %s to %s" % (old.get("driver_version") or "none", new["driver_version"] or "none"))
+        return " and ".join(parts) or "adapter %s to %s" % (old.get("adapter_version"), new["adapter_version"])
+
+    def _move(self, connector, current, stale):
+        cid = connector["id"]
+        label = self.defs.entry(cid)["name"]
+        profile = self.defs.profile(connector["profile"])
+        etl = connector.get("etl")
+        cfg = os.path.join(self.runtime.loader_dir(etl["drivername"]), "settings.cfg") if etl else None
+        cfg_text = None
+        if cfg and os.path.isfile(cfg):
+            # stage() rewrites the loader's settings.cfg for the new driver;
+            # a move that does not happen puts the previous one back.
+            with open(cfg, encoding="utf-8") as handle:
+                cfg_text = handle.read()
+        attempts, made = [], set()
+
+        def give_up(undone):
+            for attempt in undone:
+                self._unstage(attempt, made)
+
+        def restore_cfg():
+            if cfg_text is not None:
+                with open(cfg, "w", encoding="utf-8", newline="\n") as handle:
+                    handle.write(cfg_text)
+
+        try:
+            for name in stale:
+                registry = self.store.registry().get("artifacts", {})
+                attempt = {"name": name, "touched": [], "created": {"files": []},
+                           "before": {p for p, e in registry.items() if name in e.get("consumers", [])}}
+                attempts.append(attempt)
+                journal = self.store.journal(name)
+                emit = self.emit
+                if len(attempts) > 1:
+                    # The same files for every source: their staging is said once.
+                    self.emit = lambda level, text: None if level == "OK" else emit(level, text)
+                try:
+                    attempt["jars"] = self._stage_tracked(connector, name, attempt["created"], attempt["touched"])
+                finally:
+                    self.emit = emit
+                    made.update(attempt["created"]["files"])
+                    # stage() notes what it made in the source's journal, for
+                    # an interrupted first connect; a move leaves it as it was.
+                    if journal is None:
+                        self.store.clear_journal(name)
+                    else:
+                        self.store.save_journal(name, journal)
+            jars = attempts[0]["jars"]
+            self.await_staged(jars, sorted(made), profile)
+            names = self.store.config(stale[0])["objects"]
+            if connector.get("shared_adapter"):
+                self.db().execute(self.adapter_sql(names, jars, profile))
+            for spec in self.companions(connector, profile):
+                self.db().execute(self.companion_sql(spec, names, jars))
+        except (Failure, sql.DbError, artifacts.ArtifactError, planner.PlanError, OSError) as error:
+            give_up(attempts)
+            restore_cfg()
+            self.emit("WARN", "Could not move the %s source%s %s to adapter %s (%s); %s the adapter %s had - retry "
+                              "with: exakit source check --all"
+                      % (label, "" if len(stale) == 1 else "s", ", ".join(stale), current["adapter_version"], error,
+                         "it keeps" if len(stale) == 1 else "they keep", "it" if len(stale) == 1 else "they"))
+            return []
+        moved = []
+        for attempt in attempts:
+            name = attempt["name"]
+            if not connector.get("shared_adapter"):
+                try:
+                    self.db().execute(self.adapter_sql(self.store.config(name)["objects"], attempt["jars"], profile))
+                except (Failure, sql.DbError) as error:
+                    give_up([attempt])
+                    self.emit("WARN", "Could not move %s to %s adapter %s (%s); it keeps the adapter it had - retry "
+                                      "with: exakit source check %s" % (name, label, current["adapter_version"], error, name))
+                    continue
+            moved.append(attempt)
+        if not moved:
+            restore_cfg()
+            return []
+        for attempt in moved:
+            name = attempt["name"]
+            status = self.store.status(name)
+            old = status.get("pins") or {}
+            # Recorded before the refresh: the script already runs the new files.
+            self.store.update_status(name, pins=current, needs_refresh=True)
+            gone = [p for p in attempt["before"] if p not in attempt["touched"] and self._artifact_file(connector, p)]
+            for path in self.store.release_paths(name, gone):
+                if os.path.isfile(path):
+                    os.remove(path)
+                    self.prune(os.path.dirname(path))
+            self.emit("OK", "Moved %s from %s %s" % (name, label, self._change_words(old, current)))
+            if status.get("status") == "disconnected":
+                self.emit("INFO", "%s is disconnected: its virtual schema is refreshed when it is connected again "
+                                  "(exakit connect %s --name %s)" % (name, cid, name))
+                continue
+            try:
+                self.refresh(name)
+            except (Failure, sql.DbError) as error:
+                self.emit("WARN", "%s moved, but its virtual schema did not refresh (%s); repair it with: exakit source "
+                                  "refresh %s" % (name, error, name))
+        names = [attempt["name"] for attempt in moved]
+        self._moved = getattr(self, "_moved", set()) | set(names)
+        return names
 
     def disconnect(self, name, dry_run=False):
         config = self.store.config(name)
@@ -1094,13 +1466,14 @@ class Engine(object):
         last = bool(shared) and not self.import_script_users(config["connector"], name)
         own_adapter = not connector.get("shared_adapter") or last
         kind = "import script" if connector.get("import_script") else "script"
+        family = connector.get("family") or config["connector"]
         plan = {"name": name, "drop": ["virtual schema %s" % names["schema"]] +
                                       (["adapter script %s.%s%s" % (names["script_schema"], names["script"],
-                                                                    " (no other %s source uses it)" % config["connector"]
+                                                                    " (no other %s source uses it)" % family
                                                                     if connector.get("shared_adapter") else "")]
                                        if own_adapter else []) +
                                       (["%s %s.%s (no other %s source uses it)"
-                                        % (kind, names["script_schema"], script, config["connector"])
+                                        % (kind, names["script_schema"], script, family)
                                         for script in shared] if last else []) +
                                       ["CONNECTION %s" % names["connection"]],
                 "delete_files": reclaim, "keep_files": [p for p in mine if p not in reclaim],
@@ -1172,20 +1545,30 @@ class Engine(object):
             config = self.store.config(name)
             status = self.store.status(name)
             rows.append({"name": name, "connector": config["connector"], "schema": config["objects"]["schema"],
-                         "status": status.get("status", "unknown"), "last_check": status.get("last_check")})
+                         "status": status.get("status", "unknown"), "last_check": status.get("last_check"),
+                         "needs_refresh": bool(status.get("needs_refresh"))})
         return rows
 
     def show(self, name):
         config = self.store.config(name)
         status = self.store.status(name)
+        try:
+            connector = self.defs.connector(config["connector"])
+        except (OSError, ValueError):
+            connector = {}
         return {"name": name, "connector": config["connector"], "inputs": config["inputs"],
                 "objects": config["objects"], "status": status.get("status", "unknown"),
-                "pins": status.get("pins"), "tables": status.get("tables"), "last_check": status.get("last_check"),
-                "journal": self.store.journal(name)}
+                "pins": status.get("pins"), "needs_refresh": True if status.get("needs_refresh") else None,
+                "tables": status.get("tables"), "last_check": status.get("last_check"),
+                "journal": self.store.journal(name), "tips": tips(connector, name, config["objects"]["schema"])}
 
     def issues(self, status_filter=None):
         rows = []
         for row in self.listing():
+            if row["status"] == "ready" and row["needs_refresh"] and not status_filter:
+                rows.append(dict(row, remedy="it moved to a new adapter and its metadata is not refreshed yet: "
+                                             "exakit source refresh %s" % row["name"]))
+                continue
             if row["status"] in ("ready", "disconnected"):
                 continue
             if status_filter and row["status"] != status_filter:

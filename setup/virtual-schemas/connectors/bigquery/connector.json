@@ -42,6 +42,13 @@
       "required": true
     }
   ],
+  "paste": {
+    "schemes": ["jdbc:bigquery"],
+    "endpoint": "skip",
+    "params": {"projectid": "project", "defaultdataset": "dataset"},
+    "implied": ["oauthtype"],
+    "forms": ["jdbc:bigquery://https://www.googleapis.com/bigquery/v2:443;ProjectId=...;DefaultDataset=..."]
+  },
   "auth": "service-account-key",
   "secret_as_file": true,
   "auth_hint": "a service-account sign-in is a token dated by the database's clock, so a clock that is off reads as a refused key - if exakit status shows it behind, restart the database; otherwise the key may be deleted or disabled in Google Cloud",
@@ -52,6 +59,10 @@
     "CATALOG_NAME": "{project}",
     "SCHEMA_NAME": "{dataset}"
   },
+  "tips": [
+    "Names keep BigQuery's spelling (orders, customer_id): quote them, e.g. SELECT \"customer_id\" FROM <schema>.\"orders\".",
+    "INT64 arrives as DECIMAL(19,0) and FLOAT64 as DOUBLE; an ARRAY or STRUCT column arrives as BigQuery's raw JSON text ({\"v\": ...})."
+  ],
   "notes": [
     "Rows come back as VALUES from the adapter itself - meant for small results (upstream warns at a few thousand rows). BIGQUERY_ENABLE_IMPORT stays off.",
     "The credential is the service-account key file (JSON) Google Cloud creates, through --password-file. The driver reads it only from a file, so the kit writes it to BucketFS as this source's own file, owner-only on this computer, and the CONNECTION names its path - not the key. Measured: a key in the CONNECTION's password is refused (OAuthPvtKeyPath required).",

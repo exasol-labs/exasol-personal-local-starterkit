@@ -30,6 +30,7 @@
   "driver": null,
   "etl": null,
   "shared_adapter": "LAKEHOUSE_ADAPTER",
+  "shared_by": "lakehouse engine source (AWS Glue, Iceberg REST or Unity Catalog)",
   "companions": [
     {
       "name": "LAKEHOUSE_SCAN",
@@ -77,6 +78,10 @@
       "required": true
     }
   ],
+  "paste": {
+    "style": "glue",
+    "forms": ["https://glue.<region>.amazonaws.com", "arn:aws:glue:<region>:<account>:database/<name>"]
+  },
   "auth": "aws-keys",
   "host": "glue.{region}.amazonaws.com",
   "url": "https://glue.{region}.amazonaws.com",
@@ -87,6 +92,9 @@
     "CATALOG_KIND": "GLUE",
     "NAMESPACE": "{database}"
   },
+  "tips": [
+    "Names arrive in upper case (ORDERS, ORDER_ID): no quotes needed."
+  ],
   "notes": [
     "Reads the Iceberg tables of one AWS Glue database (and its plain Hive Parquet tables) where they lie in S3: exasol-labs' lakehouse-engine-rs runs Apache DataFusion inside the Rust language container (the same 0.33.0 container MongoDB uses). Iceberg deletes are applied (positional and deletion vectors); equality deletes, ORC and Avro are refused by name.",
     "The release is a .tar.gz pinned per CPU; the .so inside it is pinned too, and staged only when both match.",

@@ -78,6 +78,11 @@
       "kind": "ca-file"
     }
   ],
+  "paste": {
+    "style": "oracle",
+    "bare": true,
+    "forms": ["jdbc:oracle:thin:@//host:1521/service", "jdbc:oracle:thin:@tcps://host:2484/service", "host[:port]/service"]
+  },
   "auth": "password",
   "url": "jdbc:oracle:thin:@{tls}",
   "tls": {
@@ -89,6 +94,15 @@
   "vs_properties": {
     "SCHEMA_NAME": "{schema}"
   },
+  "schema_check": {
+    "input": "schema",
+    "statement": "SELECT CASE WHEN EXISTS (SELECT 1 FROM all_users WHERE username = {v}) THEN 'ok' WHEN EXISTS (SELECT 1 FROM all_users WHERE username = UPPER({v})) THEN 'case:' || UPPER({v}) ELSE 'missing' END FROM dual",
+    "case": "Oracle stores a name in upper case unless it was created quoted"
+  },
+  "tips": [
+    "Names arrive as Oracle stores them, normally upper case (EMPLOYEES): no quotes needed.",
+    "Oracle DATE carries a time of day, so it arrives as TIMESTAMP(0)."
+  ],
   "notes": [
     "The Java-only (thin) driver: no Oracle Client install. IMPORT FROM ORA stays off.",
     "verify uses TCPS and checks the server certificate's name; the listener's TCPS port is often 2484, so set the port to match.",

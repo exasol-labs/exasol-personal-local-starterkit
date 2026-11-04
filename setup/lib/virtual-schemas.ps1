@@ -243,6 +243,18 @@ function Invoke-ExakitVsRun {
     return $run.Code
 }
 
+# Show-ExakitVsQueryHints - a first query on one of the source's real tables,
+# quoted as it must be, then the connector's tips. Twin of _exakit_vs_query_hints.
+function Show-ExakitVsQueryHints {
+    param($Result, [string]$Name)
+    if ($null -ne $Result -and $Result.PSObject.Properties["example"] -and $Result.example) {
+        Ok ("Query it like any schema: " + $Result.example)
+        foreach ($t in @($Result.tips)) { if ($t) { Info $t } }
+    } else {
+        Ok "Query it like any schema: SELECT * FROM VS_$($Name.ToUpperInvariant()).<table> LIMIT 10"
+    }
+}
+
 # Show-ExakitVsDropPlan - what disconnect or remove drops, keeps and deletes.
 # Twin of the "drop" branch of the renderer in cmd_source.
 function Show-ExakitVsDropPlan {
@@ -636,7 +648,7 @@ function Invoke-ExakitVsTuiRun {
             if ($null -ne $doc -and $null -ne $doc.tables) { $n = "" + $doc.tables }
             $plural = "s"; if ($n -eq "1") { $plural = "" }
             Set-ExakitTableRow -Row $row -State done -Final ("VS_{0} {4} {1} table{2} {4} {3} s" -f $s.Name.ToUpperInvariant(), $n, $plural, $secs, $script:UiMidDot) -Table $Table
-            $s.Outcome = "ok"
+            $s.Outcome = "ok"; $s.Result = $doc
         } else {
             $why = ""
             if ($run.Code -eq 21) { $why = "needs Java in the database"; $s.Outcome = "java" }
@@ -691,7 +703,7 @@ function Invoke-ExakitVsTui {
             [Console]::Write("`r`n"); Info "Left out: $($picked[$p])"
             continue
         }
-        $src.Outcome = ""; $src.Lines = @(); $src.Code = 0; $src.Error = ""
+        $src.Outcome = ""; $src.Lines = @(); $src.Code = 0; $src.Error = ""; $src.Result = $null
         $sources += $src
         $taken += $src.Name
     }
@@ -742,7 +754,7 @@ function Invoke-ExakitVsTui {
         if ($code -eq 0) { $code = [int]$s.Code; if ($code -eq 0) { $code = 1 } }
     }
     foreach ($s in $sources) {
-        if ($s.Outcome -eq "ok") { Ok "Query it like any schema: SELECT * FROM VS_$($s.Name.ToUpperInvariant()).<table> LIMIT 10" }
+        if ($s.Outcome -eq "ok") { Show-ExakitVsQueryHints -Result $s.Result -Name $s.Name }
     }
     if (@($sources | Where-Object { $_.Outcome -eq "ok" }).Count -gt 0) {
         Info "Manage with: exakit source show <name> (every action: exakit help source)"
