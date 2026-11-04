@@ -104,6 +104,9 @@ mkdir -p "$TMP/.exapump"
 printf '[mcpro]\nhost = "%s"\nport = %s\nuser = "mcp_readonly"\npassword = "%s"\ntls = true\nvalidate_certificate = false\n' \
     "$HOSTP" "$PORTP" "$(cat "$CREDS/mcp_readonly_password")" > "$TMP/.exapump/config.toml"
 chmod 600 "$TMP/.exapump/config.toml"
+# exapump reads EXAPUMP_CONFIG before $HOME/.exapump, and the kit sets it for its own
+# commands (#40): name these throwaway profiles, or a set one hides them.
+EXAPUMP_CONFIG="$TMP/.exapump/config.toml"; export EXAPUMP_CONFIG
 if ! printf 'SELECT 1;' | HOME="$TMP" "$EXAPUMP" sql -p mcpro >/dev/null 2>&1; then
     skip "the database did not answer a query as mcp_readonly at $HOSTP:$PORTP (start it with: exakit start)"
 fi
