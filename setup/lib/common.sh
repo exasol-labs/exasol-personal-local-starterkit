@@ -13521,7 +13521,15 @@ EXAKIT_PRESERVED_PATHS_EOF
         if [ "$_dry" != "1" ] && [ -d "$EXAKIT_HOME/backups" ] && [ -n "$(ls -A "$EXAKIT_HOME/backups" 2>/dev/null)" ]; then
             _un_keep="${EXAKIT_HOME}-backups-$(date +%Y%m%d-%H%M%S)"
             if mv "$EXAKIT_HOME/backups" "$_un_keep" 2>/dev/null; then
-                info "AI client config snapshots kept at $_un_keep (delete it when you are sure)"
+                # The configs hold the kit's MCP password and other servers' keys:
+                # yours alone, and only the newest - the one that restores the
+                # configs as this uninstall found them (audit SEC-16).
+                chmod -R go-rwx "$_un_keep" 2>/dev/null || true
+                for _un_old in "${EXAKIT_HOME}"-backups-*; do
+                    [ -d "$_un_old" ] && [ ! -L "$_un_old" ] && [ "$_un_old" != "$_un_keep" ] && rm -rf "$_un_old"
+                done
+                info "AI client config snapshots kept at $_un_keep, readable by you only; they hold the MCP password."
+                info "  Delete it once your AI clients work: rm -rf '$_un_keep'"
             fi
         fi
         # Checked by the guard at the top of this function, before step 0a.

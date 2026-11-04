@@ -201,6 +201,17 @@ $env:EXAKIT_UNINSTALL_NOTEBOOKS = "remove"
 try { Invoke-ExakitUninstallRun } finally { Remove-Item Env:EXAKIT_UNINSTALL_NOTEBOOKS -ErrorAction SilentlyContinue }
 Check "work: EXAKIT_UNINSTALL_NOTEBOOKS=remove takes it too" "no" (Ex $script:ExakitHome)
 
+# --- the AI client config snapshots: only the newest is kept (audit SEC-16) ---
+Seed
+New-Item -ItemType Directory -Force -Path (Join-Path $script:ExakitHome "backups\claude") | Out-Null
+Set-Content -Path (Join-Path $script:ExakitHome "backups\claude\config.json") -Value '{"EXA_PASSWORD": "x"}'
+$older = "$($script:ExakitHome)-backups-20200101-000000"
+New-Item -ItemType Directory -Force -Path $older | Out-Null
+Invoke-ExakitUninstallRun
+$kept = @(Get-ChildItem -LiteralPath $fakeHome -Directory -Force | Where-Object { $_.Name -like ".exasol-starter-kit-backups-*" })
+Check "snapshots: one is kept" "1" $kept.Count
+Check "snapshots: the older one is gone" "no" (Ex $older)
+
 # --- idempotent second run on empty tree ---------------------------------
 $ok = $true; try { Invoke-ExakitUninstallRun } catch { $ok = $false }
 Check "idempotent second run" "True" ("" + $ok)

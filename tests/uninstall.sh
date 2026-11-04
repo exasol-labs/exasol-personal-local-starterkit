@@ -124,6 +124,15 @@ check "real: exapump bin gone"    no  "$(exists "$H/.local/bin/exapump")"
 check "real: dash-server venv gone" no "$(exists "$H/.exasol-starter-kit/dash-server-venv")"
 check "real: dash-server keeps only its instance" "instance" "$(ls -A "$H/.exasol-starter-kit/dash-server" 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
 check "real: dash-server bin gone" no "$(exists "$H/.local/bin/dash-server")"
+# The AI client config snapshots: only the newest is kept beside the home, readable by its owner alone (SEC-16).
+seed
+mkdir -p "$H/.exasol-starter-kit/backups/claude" "$H/.exasol-starter-kit-backups-20200101-000000"
+printf '{"EXA_PASSWORD": "x"}\n' > "$H/.exasol-starter-kit/backups/claude/config.json"
+run_engine 0
+kept="$(ls -d "$H"/.exasol-starter-kit-backups-* 2>/dev/null)"
+check "real: one config snapshot is kept" 1 "$(printf '%s\n' "$kept" | grep -c .)"
+check "real: ...the newest, not the older one" no "$(exists "$H/.exasol-starter-kit-backups-20200101-000000")"
+check "real: ...readable by its owner only" "" "$(find "$kept" -perm -g+r -o -perm -o+r 2>/dev/null | head -1)"
 check "real: skill A gone"        no  "$(exists "$H/.claude/skills/local-agent-ready-starter")"
 check "real: skill B gone"        no  "$(exists "$H/.claude/skills/exasol-runtime")"
 # The discovery folders also hold skills the user installed themselves. The kit

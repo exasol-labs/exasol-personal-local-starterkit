@@ -1632,7 +1632,19 @@ function Invoke-ExakitUninstallRun {
             $keep = "$($script:ExakitHome)-backups-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
             try {
                 Move-Item -Path $backupsDir -Destination $keep -ErrorAction Stop
-                Info "AI client config snapshots kept at $keep (delete it when you are sure)"
+                # The configs hold the kit's MCP password and other servers' keys:
+                # yours alone, and only the newest - the one that restores the
+                # configs as this uninstall found them (audit SEC-16).
+                if (Get-Command Protect-ExakitDirectory -ErrorAction SilentlyContinue) { Protect-ExakitDirectory -Path $keep }
+                $parent = Split-Path -Parent $keep
+                $prefix = (Split-Path -Leaf $script:ExakitHome) + "-backups-"
+                foreach ($old in @(Get-ChildItem -LiteralPath $parent -Directory -Force -ErrorAction SilentlyContinue)) {
+                    if ($old.Name.StartsWith($prefix) -and $old.FullName -ne $keep) {
+                        Remove-Item -LiteralPath $old.FullName -Recurse -Force -ErrorAction SilentlyContinue
+                    }
+                }
+                Info "AI client config snapshots kept at $keep, readable by you only; they hold the MCP password."
+                Info "  Delete it once your AI clients work: Remove-Item -Recurse -Force '$keep'"
             } catch { }
         }
         if ((Test-ExakitUninstallKeepsNotebooks) -or $preservedComponentPaths.Count -gt 0) {
