@@ -4831,7 +4831,7 @@ EXAKIT_ADDON_NOTES_EOF
 # child range contiguous.
 #
 # An add-on may bring CHILD ROWS of its own, one level deeper under its row
-# (the notebook add-on's tools: JupyterLab, Marimo, Positron), passed in through
+# (the notebook add-on's tools: JupyterLab, Marimo), passed in through
 # EXAKIT_ADDON_TABLE_CHILDREN as "<id>|<key>|<label>|<version>|<description>|<tick>"
 # lines -- resolved by the caller, for the same reason as the metadata below.
 # Each is ticked right there; the add-on row is their parent ("claim": a child

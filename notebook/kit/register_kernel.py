@@ -2,7 +2,7 @@
 password, the kit copy, the kit's datasets), never a secret. Environment: EXAKIT_KERNEL_NAME, EXAKIT_KERNEL_TITLE and the EXAKIT_NB_* paths.
 
 The spec also carries EXASOL_TELEMETRY_DISABLE, so pyexasol's usage telemetry stays off in the kernel whichever
-front end starts it (JupyterLab, VS Code, Positron): the value the user had set when the kernel was registered, else
+front end starts it (JupyterLab, VS Code): the value the user had set when the kernel was registered, else
 "1" (marketplace/kit_telemetry.py). Re-running exakit notebook setup re-registers it.
 
 Run by the Python marketplace with the notebook environment’s interpreter.

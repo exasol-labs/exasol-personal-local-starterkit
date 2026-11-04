@@ -103,7 +103,7 @@ def _apply_selected(ctx: KitContext, modules: dict[str, object], emit: Callable[
                 except (AddonFailure, CatalogError, OSError, ValueError):
                     pass
             emit(Event(addon_id, "done", summary, int(time.monotonic() - started)))
-            # Each of the add-on's tools on its own row (the notebook's JupyterLab, Marimo, Positron).
+            # Each of the add-on's tools on its own row (the notebook's JupyterLab and Marimo).
             if callable(getattr(module, "tool_outcomes", None)):
                 try:
                     _, outcomes = invoke(ctx.root, addon_id, "tool-outcomes", ctx=ctx)

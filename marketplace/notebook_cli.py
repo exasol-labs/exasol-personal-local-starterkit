@@ -429,15 +429,20 @@ def command(ctx: KitContext, args: list[str]) -> int:
     parser.add_argument("--stop", action="store_true")
     parser.add_argument("--marimo", action="store_true")
     parser.add_argument("--positron", action="store_true")
-    parser.add_argument("front", nargs="?", choices=("jupyterlab", "marimo", "positron"))
-    normalized = ["--" + item if item in ("check", "setup", "stop") else item for item in args]
+    parser.add_argument("front", nargs="?")
+    # Tool and action names in any case (`exakit notebook JupyterLab`); Positron is still taken by name.
+    words = ("jupyterlab", "marimo", "positron", "check", "setup", "stop")
+    lowered = [item.lower() if item.lower() in words else item for item in args]
+    normalized = ["--" + item if item in ("check", "setup", "stop") else item for item in lowered]
     parsed, unknown = parser.parse_known_args(normalized)
     if unknown:
         raise AddonFailure(f"Unknown option for exakit notebook: {unknown[0]} (see: exakit help notebook)")
+    if parsed.front is not None and parsed.front not in ("jupyterlab", "marimo", "positron"):
+        raise AddonFailure(f"Unknown notebook tool: {parsed.front} (choose jupyterlab or marimo)")
     fronts = {name for name, yes in ((parsed.front, parsed.front is not None),
                                      ("marimo", parsed.marimo), ("positron", parsed.positron)) if yes}
     if len(fronts) > 1:
-        raise AddonFailure("Pick one of jupyterlab, marimo and positron")
+        raise AddonFailure("Pick one notebook tool: jupyterlab or marimo")
     explicit_front = bool(fronts)
     front = fronts.pop() if fronts else "jupyterlab"
     if parsed.port is not None and not 1024 <= parsed.port <= 65535:

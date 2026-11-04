@@ -1,5 +1,5 @@
 """Where the kit is, for any notebook tool: the four paths the helpers need, from the Jupyter kernel's environment when it
-set them, else from the kit's own files - so the same helpers connect in Marimo, Positron, VS Code or a plain script
+set them, else from the kit's own files - so the same helpers connect in Marimo, VS Code or a plain script
 that runs the kit's notebook Python, with no kernel of ours involved.
 
 The kit's home is found, in order: the folder around the Python running this (the kit's notebook environment lives in

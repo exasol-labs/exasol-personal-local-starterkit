@@ -18,7 +18,6 @@ from service import OPERATIONS
 
 def notebook_choices(root: Path, kind: str, selected: str = "") -> list[str]:
     from addons import notebook
-    from notebook_cli import _positron_command
     from runtime import KitContext, venv_executable
 
     ctx = KitContext.from_environment(root)
@@ -52,12 +51,9 @@ def notebook_choices(root: Path, kind: str, selected: str = "") -> list[str]:
         jupyter = "not on this machine: installed into the kit's notebook environment"
     marimo = ("already installed" if venv_executable(venv, "marimo").is_file()
               else "installed into the kit's notebook environment")
-    positron = ("yours: pointed at the kit's Python" if _positron_command()
-                else "not on this machine: the notebooks folder is prepared for it (positron.posit.co)")
     details = {"jupyterlab": (notebook._pin(ctx, "jupyterlab"), jupyter),
-               "marimo": (notebook._pin(ctx, "marimo"), marimo),
-               "positron": ("", positron)}
-    return ["|".join((key, "Positron" if key == "positron" else label,
+               "marimo": (notebook._pin(ctx, "marimo"), marimo)}
+    return ["|".join((key, label,
                       details[key][0], details[key][1].replace("|", "/"),
                       "1" if key in defaults else "0")) for key, label in choices]
 

@@ -3,7 +3,7 @@ same module under its older name).
 
 The connection comes from the kit. Its Jupyter kernel ("Exasol (Starter Kit)") carries two paths: the encrypted
 configuration store, and the kit's credential file holding the store's master password, readable by the user only.
-These helpers open the database from there, in JupyterLab, Marimo, Positron, VS Code or any front end that runs the
+These helpers open the database from there, in JupyterLab, Marimo, VS Code or any front end that runs the
 kit's notebook Python. Nothing here prints or returns a host, a user or a password.
 
     import exakit.nb as nb

@@ -389,6 +389,19 @@ class NotebookPlanTest(unittest.TestCase):
             self.assertEqual(1, command(self.ctx, []))
         self.assertEqual(["jupyterlab", "marimo"], [call.args[1] for call in start.call_args_list])
 
+    def test_tool_names_are_taken_in_any_case_and_refusals_name_only_the_offered_tools(self) -> None:
+        self.store.set_many({"components.notebook.version": "3.1.0"})
+        with patch.object(notebook_cli, "_preflight"), \
+             patch.object(notebook_cli, "_start_frontend") as start:
+            self.assertEqual(0, command(self.ctx, ["JupyterLab", "--no-browser"]))
+            self.assertEqual(0, command(self.ctx, ["MARIMO", "--no-browser"]))
+        self.assertEqual(["jupyterlab", "marimo"], [call.args[1] for call in start.call_args_list])
+        for args in (["rstudio"], ["jupyterlab", "--marimo"]):
+            with self.subTest(args=args), self.assertRaises(AddonFailure) as refused:
+                command(self.ctx, args)
+            self.assertIn("jupyterlab or marimo", str(refused.exception))
+            self.assertNotIn("positron", str(refused.exception).lower())
+
     def test_starting_server_is_waited_for_at_its_recorded_port(self) -> None:
         with patch.object(notebook_cli, "_ensure_frontend"), \
              patch.object(notebook_cli, "OnDemandServer") as server_type, \
