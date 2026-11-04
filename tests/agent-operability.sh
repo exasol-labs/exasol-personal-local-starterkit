@@ -1559,7 +1559,12 @@ _p2kss="$(sed -n '/^kit_shared_steps()/,/^}/p' "$ROOT/setup/lib/common.sh")"
 has "the db-dependent steps are skipped in one line"     "they all need the database, which is not installed" "$_p2kss"
 has "...decided by the recorded failure" 'exakit_soft_failed runtime' "$_p2kss"
 check "...guarding all four of them" "4"     "$(printf '%s' "$_p2kss" | grep -c 'if \[ "$_kss_nodb" = 1 \]')"
-has "...and the exakit helper still runs" "begin_step exakit_helper" "$_p2kss"
+# The helper is the install's last step (kit_helper_step), after the persona's
+# data: it still installs then, and both setup scripts run it after the persona.
+has "...and the exakit helper still runs" "begin_step exakit_helper" "$(sed -n '/^kit_helper_step()/,/^}/p' "$ROOT/setup/lib/common.sh")"
+for _p2os in macos linux; do
+    check "...last, after the persona's data ($_p2os)" "yes" "$(awk '/exakit_persona_flow "\$KIT_ROOT"/{p=1} p&&/^kit_helper_step 6 6/{print "yes"; exit}' "$ROOT/setup/setup-$_p2os.sh")"
+done
 
 # THE WINDOWS TWIN. There the LAUNCHER installs Podman, through winget, so the
 # kit cannot retry it - but a machine whose winget refused must reach the end of

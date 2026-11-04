@@ -11619,6 +11619,117 @@ PWB_BODY
     return 0
 }
 
+# kit_helper_step <step-no> <total-steps> <script-dir> <kit-root> — the exakit
+# command and the kit copy it reads, refreshed and ticked: the install's last
+# step, after the persona's data, so it is what the reader sees last before the
+# panel. The command is in place from the start (exakit_install_helper_early);
+# this records the tick and refreshes anything that changed.
+kit_helper_step() {
+    _step_no="$1"
+    _total="$2"
+    _script_dir="$3"
+    _kit_root="$4"
+    # The step flag alone is not trusted: if the exakit command was removed
+    # (cleanup, testing), a re-run must reinstall it rather than skip.
+    _helper_needed=0
+    if begin_step exakit_helper "Step ${_step_no}/${_total}  exakit helper command"; then
+        _helper_needed=1
+    elif [ ! -x "$EXAKIT_BIN_DIR/exakit" ]; then
+        info "exakit command is missing — reinstalling it"
+        _helper_needed=1
+    elif ! cmp -s "$_script_dir/exakit" "$EXAKIT_BIN_DIR/exakit" 2>/dev/null; then
+        # The flag records "installed", not "current". Re-running the installer
+        # over an older install (the 0.1.0 -> 0.2.0 upgrade path) arrives with
+        # the flag already set and a command already on disk, while install.sh
+        # has just replaced the kit copy underneath it. The installed command is
+        # a COPY of setup/exakit, so without this it stays at the old version
+        # and drives the new library: the update notice, the version panel and
+        # the kit2 subcommands all live in the command itself and would go
+        # missing until the next self-update.
+        info "exakit command is out of date — refreshing it"
+        _helper_needed=1
+    else
+        ensure_path_hint "$EXAKIT_BIN_DIR"
+    fi
+    if [ "$_helper_needed" -eq 1 ]; then
+        mkdir -p "$EXAKIT_BIN_DIR" || die "Could not create $EXAKIT_BIN_DIR for the exakit command."
+        # Fail loudly here: without a check, a failed install (e.g. non-writable
+        # ~/.local/bin, full disk) would fall through to mark_step + "exakit
+        # installed", reporting success while no binary exists.
+        install -m 755 "$_script_dir/exakit" "$EXAKIT_BIN_DIR/exakit" \
+            || die "Could not install the exakit command to $EXAKIT_BIN_DIR (is it writable? is the disk full?)."
+        # Keep a copy of the kit library (and the mcp/ and sql/ packages
+        # exakit_repo_root() depends on) next to the state so exakit finds
+        # them even when this checkout moves or disappears. Skip when setup is
+        # ALREADY running from the kit home (the curl|sh flow, where install.sh
+        # placed the kit there): copying a directory onto itself makes cp error
+        # out with "are identical", which is not a real failure.
+        if [ "$_script_dir" -ef "$EXAKIT_HOME/kit/setup" ] 2>/dev/null; then
+            :   # already in place; nothing to copy
+        else
+            mkdir -p "$EXAKIT_HOME/kit/setup" || die "Could not create $EXAKIT_HOME/kit/setup."
+            # CLEAR WHAT WE ARE ABOUT TO REPLACE. cp -R merges, it does not
+            # mirror, so a module the new kit DELETED goes on living in the
+            # staged copy - and the staged copy is what an installed exakit
+            # sources. Installing this kit over the official one left its
+            # runtime-nano.sh, nano.ps1 and catalog.tsv sitting in lib/, three
+            # files this kit removed on purpose. Same hazard, smaller, on any
+            # update that drops a file.
+            #
+            # Only the subtrees re-copied below, and only in the branch that
+            # already established this is not the kit home itself.
+            for _kss_stale in "$EXAKIT_HOME/kit/setup/lib" "$EXAKIT_HOME/kit/setup/help" \
+                              "$EXAKIT_HOME/kit/mcp" "$EXAKIT_HOME/kit/sql" \
+                              "$EXAKIT_HOME/kit/skills" "$EXAKIT_HOME/kit/marketplace"; do
+                rm -rf "$_kss_stale"
+            done
+            cp -R "$_script_dir/lib" "$EXAKIT_HOME/kit/setup/" \
+                || die "Could not copy the kit library to $EXAKIT_HOME/kit/setup."
+            # Copy the assets exakit needs after the checkout is gone: the mcp/
+            # and sql/ packages, the data/ CSVs, load-data.sh, and the versions
+            # manifest (the offline tier of version resolution, and the record of
+            # which kit version this is).
+            [ -f "$_kit_root/versions.json" ] && cp "$_kit_root/versions.json" "$EXAKIT_HOME/kit/"
+            # whats-new.json lives under setup/, and only setup/lib is copied
+            # above, so it needs naming or `exakit whats-new` finds nothing once
+            # the checkout is gone.
+            [ -f "$_kit_root/setup/whats-new.json" ] && cp "$_kit_root/setup/whats-new.json" "$EXAKIT_HOME/kit/setup/"
+            [ -d "$_kit_root/mcp" ] && cp -R "$_kit_root/mcp" "$EXAKIT_HOME/kit/"
+            [ -d "$_kit_root/sql" ] && cp -R "$_kit_root/sql" "$EXAKIT_HOME/kit/"
+            [ -d "$_kit_root/data" ] && cp -R "$_kit_root/data" "$EXAKIT_HOME/kit/"
+            # skills/ is not optional decoration: `exakit skills`, `exakit
+            # skills-install` and the post-install skills step all resolve
+            # through exakit_repo_root, which PREFERS this staged copy once
+            # kit/mcp exists. Omitting it here does not fall back to the
+            # checkout — it shadows it, so every one of those commands reports
+            # "no skills/ directory in this kit build" on a working install.
+            [ -d "$_kit_root/skills" ] && cp -R "$_kit_root/skills" "$EXAKIT_HOME/kit/"
+            [ -d "$_kit_root/marketplace" ] && cp -R "$_kit_root/marketplace" "$EXAKIT_HOME/kit/"
+            # setup/help/ is the WHOLE help corpus -- one JSON per topic, and
+            # `exakit help <topic>` resolves through exakit_repo_root, which
+            # PREFERS this staged copy once kit/mcp exists. Omitting it did not
+            # fall back to the checkout, it shadowed it: on every installed kit
+            # `exakit help mcp`, `exapump`, `personal`, `pyexasol`,
+            # `exakit` and all three add-ons answered "No help entry for ...".
+            #
+            # It also took the marketplace descriptions with it, ALL THREE
+            # TIERS of them, because every tier reads this same document:
+            # _exakit_addon_repo takes the `repo` field, so with nothing staged
+            # the GitHub About could not even be requested; the cache it fills
+            # therefore stayed empty; and the `tagline` fallback -- the offline
+            # answer AGENTS/CLAUDE describe -- was in the same missing file. So
+            # every add-on in the table read "Details: exakit help <id>", the
+            # last resort of the chain, pointing at the very command this
+            # omission had disabled. Same shape as the skills note below.
+            [ -d "$_kit_root/setup/help" ] && cp -R "$_kit_root/setup/help" "$EXAKIT_HOME/kit/setup/"
+            [ -f "$_script_dir/load-data.sh" ] && cp "$_script_dir/load-data.sh" "$EXAKIT_HOME/kit/setup/"
+        fi
+        ensure_path_hint "$EXAKIT_BIN_DIR"
+        mark_step exakit_helper
+        ok_step "exakit installed ($(ui_tilde "$EXAKIT_BIN_DIR/exakit"))"
+    fi
+}
+
 kit_shared_steps() {
     _step_no="$1"
     _total="$2"
@@ -11744,105 +11855,10 @@ kit_shared_steps() {
     fi
     _step_no=$((_step_no + 1))
 
-    # The step flag alone is not trusted: if the exakit command was removed
-    # (cleanup, testing), a re-run must reinstall it rather than skip.
-    _helper_needed=0
-    if begin_step exakit_helper "Step ${_step_no}/${_total}  exakit helper command"; then
-        _helper_needed=1
-    elif [ ! -x "$EXAKIT_BIN_DIR/exakit" ]; then
-        info "exakit command is missing — reinstalling it"
-        _helper_needed=1
-    elif ! cmp -s "$_script_dir/exakit" "$EXAKIT_BIN_DIR/exakit" 2>/dev/null; then
-        # The flag records "installed", not "current". Re-running the installer
-        # over an older install (the 0.1.0 -> 0.2.0 upgrade path) arrives with
-        # the flag already set and a command already on disk, while install.sh
-        # has just replaced the kit copy underneath it. The installed command is
-        # a COPY of setup/exakit, so without this it stays at the old version
-        # and drives the new library: the update notice, the version panel and
-        # the kit2 subcommands all live in the command itself and would go
-        # missing until the next self-update.
-        info "exakit command is out of date — refreshing it"
-        _helper_needed=1
-    else
-        ensure_path_hint "$EXAKIT_BIN_DIR"
-    fi
-    if [ "$_helper_needed" -eq 1 ]; then
-        mkdir -p "$EXAKIT_BIN_DIR" || die "Could not create $EXAKIT_BIN_DIR for the exakit command."
-        # Fail loudly here: without a check, a failed install (e.g. non-writable
-        # ~/.local/bin, full disk) would fall through to mark_step + "exakit
-        # installed", reporting success while no binary exists.
-        install -m 755 "$_script_dir/exakit" "$EXAKIT_BIN_DIR/exakit" \
-            || die "Could not install the exakit command to $EXAKIT_BIN_DIR (is it writable? is the disk full?)."
-        # Keep a copy of the kit library (and the mcp/ and sql/ packages
-        # exakit_repo_root() depends on) next to the state so exakit finds
-        # them even when this checkout moves or disappears. Skip when setup is
-        # ALREADY running from the kit home (the curl|sh flow, where install.sh
-        # placed the kit there): copying a directory onto itself makes cp error
-        # out with "are identical", which is not a real failure.
-        if [ "$_script_dir" -ef "$EXAKIT_HOME/kit/setup" ] 2>/dev/null; then
-            :   # already in place; nothing to copy
-        else
-            mkdir -p "$EXAKIT_HOME/kit/setup" || die "Could not create $EXAKIT_HOME/kit/setup."
-            # CLEAR WHAT WE ARE ABOUT TO REPLACE. cp -R merges, it does not
-            # mirror, so a module the new kit DELETED goes on living in the
-            # staged copy - and the staged copy is what an installed exakit
-            # sources. Installing this kit over the official one left its
-            # runtime-nano.sh, nano.ps1 and catalog.tsv sitting in lib/, three
-            # files this kit removed on purpose. Same hazard, smaller, on any
-            # update that drops a file.
-            #
-            # Only the subtrees re-copied below, and only in the branch that
-            # already established this is not the kit home itself.
-            for _kss_stale in "$EXAKIT_HOME/kit/setup/lib" "$EXAKIT_HOME/kit/setup/help" \
-                              "$EXAKIT_HOME/kit/mcp" "$EXAKIT_HOME/kit/sql" \
-                              "$EXAKIT_HOME/kit/skills" "$EXAKIT_HOME/kit/marketplace"; do
-                rm -rf "$_kss_stale"
-            done
-            cp -R "$_script_dir/lib" "$EXAKIT_HOME/kit/setup/" \
-                || die "Could not copy the kit library to $EXAKIT_HOME/kit/setup."
-            # Copy the assets exakit needs after the checkout is gone: the mcp/
-            # and sql/ packages, the data/ CSVs, load-data.sh, and the versions
-            # manifest (the offline tier of version resolution, and the record of
-            # which kit version this is).
-            [ -f "$_kit_root/versions.json" ] && cp "$_kit_root/versions.json" "$EXAKIT_HOME/kit/"
-            # whats-new.json lives under setup/, and only setup/lib is copied
-            # above, so it needs naming or `exakit whats-new` finds nothing once
-            # the checkout is gone.
-            [ -f "$_kit_root/setup/whats-new.json" ] && cp "$_kit_root/setup/whats-new.json" "$EXAKIT_HOME/kit/setup/"
-            [ -d "$_kit_root/mcp" ] && cp -R "$_kit_root/mcp" "$EXAKIT_HOME/kit/"
-            [ -d "$_kit_root/sql" ] && cp -R "$_kit_root/sql" "$EXAKIT_HOME/kit/"
-            [ -d "$_kit_root/data" ] && cp -R "$_kit_root/data" "$EXAKIT_HOME/kit/"
-            # skills/ is not optional decoration: `exakit skills`, `exakit
-            # skills-install` and the post-install skills step all resolve
-            # through exakit_repo_root, which PREFERS this staged copy once
-            # kit/mcp exists. Omitting it here does not fall back to the
-            # checkout — it shadows it, so every one of those commands reports
-            # "no skills/ directory in this kit build" on a working install.
-            [ -d "$_kit_root/skills" ] && cp -R "$_kit_root/skills" "$EXAKIT_HOME/kit/"
-            [ -d "$_kit_root/marketplace" ] && cp -R "$_kit_root/marketplace" "$EXAKIT_HOME/kit/"
-            # setup/help/ is the WHOLE help corpus -- one JSON per topic, and
-            # `exakit help <topic>` resolves through exakit_repo_root, which
-            # PREFERS this staged copy once kit/mcp exists. Omitting it did not
-            # fall back to the checkout, it shadowed it: on every installed kit
-            # `exakit help mcp`, `exapump`, `personal`, `pyexasol`,
-            # `exakit` and all three add-ons answered "No help entry for ...".
-            #
-            # It also took the marketplace descriptions with it, ALL THREE
-            # TIERS of them, because every tier reads this same document:
-            # _exakit_addon_repo takes the `repo` field, so with nothing staged
-            # the GitHub About could not even be requested; the cache it fills
-            # therefore stayed empty; and the `tagline` fallback -- the offline
-            # answer AGENTS/CLAUDE describe -- was in the same missing file. So
-            # every add-on in the table read "Details: exakit help <id>", the
-            # last resort of the chain, pointing at the very command this
-            # omission had disabled. Same shape as the skills note below.
-            [ -d "$_kit_root/setup/help" ] && cp -R "$_kit_root/setup/help" "$EXAKIT_HOME/kit/setup/"
-            [ -f "$_script_dir/load-data.sh" ] && cp "$_script_dir/load-data.sh" "$EXAKIT_HOME/kit/setup/"
-        fi
-        ensure_path_hint "$EXAKIT_BIN_DIR"
-        mark_step exakit_helper
-        ok_step "exakit installed ($(ui_tilde "$EXAKIT_BIN_DIR/exakit"))"
-    fi
+    # The exakit helper is the install's last step: kit_helper_step, which the
+    # setup scripts run after the persona's data, so it is what the reader sees
+    # last before the panel. The command itself is in place from the start
+    # (exakit_install_helper_early).
 
     # Autostart is NOT decided here. It used to be: an unconditional
     # exakit_autostart_enable, which unconditionally writes

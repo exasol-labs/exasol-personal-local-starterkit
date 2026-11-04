@@ -353,7 +353,21 @@ try {
         }
     }
 
-    # --- step 6: exakit helper command ------------------------------------------
+    # --- the personas, then the data -------------------------------------------
+    # "What will you use this machine for?" comes after the parts everyone
+    # needs, and its answer ticks the datasets (and, at the close, the add-ons).
+    # With EXAKIT_PERSONA set it was answered before step 1. Twin of the call in
+    # setup-macos.sh / setup-linux.sh.
+    # It needs the database: without one it returns at once (the skip was said
+    # above, with the other database steps).
+    $env:EXAKIT_MARKETPLACE_PYTHON_APPLY = '1'
+    if ($exapumpSupported -and (Get-Command Invoke-ExakitPersonaFlow -ErrorAction SilentlyContinue)) {
+        Invoke-ExakitPersonaFlow -KitRoot $KitRoot
+    }
+
+    # --- step 6: exakit helper command, last, after the persona's data ---------
+    # The command is in place from the start; this is the tick and the refresh,
+    # what the reader sees last before the panel. Twin of kit_helper_step.
     # The step flag alone is not trusted: if the shim was removed (cleanup,
     # testing, older builds), a re-run must reinstall it rather than skip -
     # and the PATH check must run either way, since the PATH entry can be
@@ -452,18 +466,6 @@ try {
         Confirm-ExakitOnPath $script:BinDir
         Set-ExakitStepDone "exakit_helper"
         OkStep "exakit installed ($(Get-ExakitTilde (Join-Path $script:BinDir 'exakit.cmd')))"
-    }
-
-    # --- the personas, then the data -------------------------------------------
-    # "What will you use this machine for?" comes after the parts everyone
-    # needs, and its answer ticks the datasets (and, at the close, the add-ons).
-    # With EXAKIT_PERSONA set it was answered before step 1. Twin of the call in
-    # setup-macos.sh / setup-linux.sh.
-    # It needs the database: without one it returns at once (the skip was said
-    # above, with the other database steps).
-    $env:EXAKIT_MARKETPLACE_PYTHON_APPLY = '1'
-    if ($exapumpSupported -and (Get-Command Invoke-ExakitPersonaFlow -ErrorAction SilentlyContinue)) {
-        Invoke-ExakitPersonaFlow -KitRoot $KitRoot
     }
 
     # The upgrade news (Write-ExakitWhatsNewBox) and the closing summary

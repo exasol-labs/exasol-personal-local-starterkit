@@ -149,7 +149,7 @@ else
     fi
 fi
 
-# --- steps 3-6: exapump, MCP server, pyexasol, exakit helper (shared) -------
+# --- steps 3-5: exapump, MCP server, pyexasol (shared) -----------------------
 kit_shared_steps 3 6 "$SCRIPT_DIR" "$KIT_ROOT"
 
 # --- the personas, then the data ---------------------------------------------
@@ -159,6 +159,9 @@ kit_shared_steps 3 6 "$SCRIPT_DIR" "$KIT_ROOT"
 EXAKIT_MARKETPLACE_PYTHON_APPLY=1
 export EXAKIT_MARKETPLACE_PYTHON_APPLY
 command -v exakit_persona_flow >/dev/null 2>&1 && exakit_persona_flow "$KIT_ROOT"
+
+# --- step 6: the exakit helper, last, after the persona's data ---------------
+kit_helper_step 6 6 "$SCRIPT_DIR" "$KIT_ROOT"
 
 # The other half of the crossing. Last, because it needs all three things the
 # steps above provide: a database that is up, an exapump binary, and a profile
