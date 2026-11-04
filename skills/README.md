@@ -44,7 +44,7 @@ user's request actually needs, not a manual for the whole kit.
 
 **The marketplace** — opt-in add-ons
 
-`exasol-marketplace` itself installs with the kit; the other five skills below
+`exasol-marketplace` itself installs with the kit; the other seven skills below
 are **installed with their add-on**, not with the kit: each declares
 `addon: <id>` in its frontmatter, and the marketplace places it as part of
 installing that add-on and removes it again when the add-on goes.

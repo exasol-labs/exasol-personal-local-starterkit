@@ -31,7 +31,7 @@
       "persona": "data-scientist",
       "step": 1,
       "title": "Explore a dataset",
-      "summary": "The domain's landscape question with the SQL visible, a small scikit-learn model on this computer, and a text step with your own model traced to your Langfuse. Another dataset or your own file is one assignment away. Ends by writing the handoff the ML Engineer's 01_train starts from.",
+      "summary": "The domain's landscape question with the SQL visible, a small scikit-learn model on this computer, and a text step with your own model traced to your Langfuse. Another dataset or your own file is one assignment away.",
       "needs": "a loaded dataset; a model for the optional AI step",
       "jupyter": "01_explore.ipynb",
       "marimo": "01_explore.py"

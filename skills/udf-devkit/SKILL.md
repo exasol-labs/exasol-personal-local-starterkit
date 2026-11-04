@@ -117,6 +117,22 @@ TEXT is a reserved word: a model column named `text` comes in as parameter
 upload to BucketFS over HTTP, with `exasol-bucketfs` or with curl on port 2580
 or 2581: a local deployment does not serve it.
 
+## The local MLflow server
+
+```bash
+exakit mlflow start      # on 127.0.0.1 from port 5000; exakit start brings it back after this
+exakit mlflow status     # running or not, and where
+exakit mlflow url
+exakit mlflow stop       # for this session; exakit mlflow disable keeps it off
+exakit logs mlflow
+```
+
+Its store, artifacts and log live in `~/.exasol-starter-kit/mlflow`. MLflow's
+telemetry is off (`MLFLOW_DISABLE_TELEMETRY=true`, also when it starts at login)
+unless the user set that variable. A full `exakit uninstall` keeps that folder,
+so the runs and models survive a reinstall; `EXAKIT_UNINSTALL_NOTEBOOKS=remove`
+removes it too.
+
 ## When something is wrong
 
 | Symptom | Do this |

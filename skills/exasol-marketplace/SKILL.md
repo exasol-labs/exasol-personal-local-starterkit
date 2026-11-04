@@ -1,6 +1,6 @@
 ---
 name: exasol-marketplace
-description: Browse, install and remove the starter kit's optional add-ons through exakit marketplace — dash-server (agent-built dashboards), notebook (JupyterLab, Marimo), udf-devkit (Python and Rust UDFs, MLflow), Exasol for VS Code (editor extension), JSON Tables (JSON ingestion), Exasol Scheduler (SQL jobs on a schedule) and dbt-exasol (dbt models) — including the read-only listing, installing by id without a terminal, why an add-on may not be offered at all, and how installed add-ons join the normal update and uninstall flows. Triggers — "what optional tools can I add", "exakit marketplace", "install an add-on", "add dashboards to my kit", "add dbt to my kit", "schedule a query", "run this nightly", "install the scheduler", "why is an add-on not listed", "remove an add-on", "update my add-ons".
+description: Browse, install and remove the starter kit's optional add-ons through exakit marketplace — dash-server (agent-built dashboards), notebook (JupyterLab, Marimo), udf-devkit (Python and Rust UDFs, MLflow), Exasol for VS Code (editor extension), JSON Tables (JSON ingestion), Exasol Scheduler (SQL jobs on a schedule) and dbt-exasol (dbt models) — including the read-only listing, installing by id without a terminal, why an add-on may not be offered at all, and how installed add-ons join the normal update and uninstall flows. Triggers — "what optional tools can I add", "exakit marketplace", "install an add-on", "add dashboards to my kit", "add dbt to my kit", "schedule a query", "run this nightly", "install the scheduler", "why is an add-on not listed", "remove an add-on", "update my add-ons", "add a persona to my kit".
 ---
 
 # The marketplace — optional add-ons
@@ -8,7 +8,10 @@ description: Browse, install and remove the starter kit's optional add-ons throu
 The marketplace is where the kit keeps **optional tools**: worth having next to
 the database, not worth lengthening the install for. The install adds them only
 when a persona (`EXAKIT_PERSONA`) or `EXAKIT_MARKETPLACE_ADDONS` asks for them;
-afterwards use `exakit marketplace` or `exakit persona add <id>`.
+afterwards use `exakit marketplace` or `exakit persona add <id>`. On a terminal,
+`exakit persona add` with no id asks the install's persona question with this
+kit's personas ticked and adds the ones newly ticked; without a terminal it
+names the command to run and exits 2.
 
 ```bash
 exakit marketplace       # browse: Space selects, Enter installs
@@ -19,12 +22,13 @@ like this instead:
 
 ```bash
 exakit marketplace --list          # read-only: every add-on and its state
-exakit marketplace --list --json   # the same, for scripts
+exakit marketplace --list --json   # the same, for scripts: id, status, installed, version, repo, docs, name, url, about
 exakit marketplace dbt-exasol      # install exactly this one (ids, space-separated)
 EXAKIT_MARKETPLACE_ADDONS=dash-server exakit marketplace   # ids csv, or all / none
 ```
 
-Look with `--list` first: it never installs anything.
+Look with `--list` first: it never installs anything, downloads nothing and
+writes nothing.
 
 The same variable pre-answers the one-question offer that follows a successful
 interactive install ("Do you want to add optional tools?").
@@ -40,6 +44,13 @@ interactive install ("Do you want to add optional tools?").
 | `json-tables` | Ingest, query and reshape JSON-shaped data; the engine ships prebuilt, no Rust toolchain | `json-tables` |
 | `exasol-scheduler` | SQL jobs on a cron schedule, defined and audited as rows in a table | `exasol-scheduler` |
 | `dbt-exasol` | Build, test and document SQL models on the local database with dbt | `dbt-exasol` |
+
+On screen each row shows the add-on repository's name on GitHub, with the id
+beside it when the two differ: `exasol-json-tables (json-tables)`,
+`notebook-connector (notebook)`. The id is what you type. The name, link and
+About come from GitHub only while installing and while `exakit update` shows
+updates; every other screen uses the cached copy, and a failed lookup falls back
+to the kit's own copy.
 
 Each has its own skill, placed when the add-on is installed. Load that one
 when the user wants to *use* the tool; this skill is about choosing and
@@ -80,6 +91,7 @@ An installed add-on becomes a **full component** of the kit:
 ```bash
 exakit version                     # its version, and whether a newer one is advertised
 exakit update dash-server          # update one add-on
+exakit update dash-server dbt-exasol   # or several, each once
 exakit update                      # covers every INSTALLED add-on
 ```
 
@@ -108,7 +120,9 @@ exakit uninstall                         # interactive: Skip (safe default), the
 
 Each add-on is individually selectable, the plan is shown back as a summary,
 and a typed gate confirms. `exakit uninstall --dry-run` previews the full plan
-without touching anything — prefer it when you are unsure.
+without touching anything — prefer it when you are unsure. A full uninstall
+keeps the user's work: notebooks, the kit MLflow server's runs and models, and
+Dash dashboards stay in the kit home unless `EXAKIT_UNINSTALL_NOTEBOOKS=remove`.
 
 Pin a specific version at install or update time with the per-add-on variable,
 e.g. `EXAKIT_DASH_SERVER_VERSION=<version>`.

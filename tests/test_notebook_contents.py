@@ -278,7 +278,7 @@ class NotebookShapeTest(unittest.TestCase):
         for match in re.finditer("LANGFUSE_HOST", text):
             self.assertIn("alias", text[match.end():match.end() + 80], "LANGFUSE_HOST is named only as the alias of LANGFUSE_BASE_URL")
         summary = next(e["summary"] for e in CatalogTest.DOC["notebooks"] if e["id"] == "explore")
-        self.assertIn("handoff", summary)
+        self.assertNotIn("handoff", summary)     # explore writes none (f70a957); 01_train writes its own
 
     def test_explore_skips_what_a_missing_role_needs_and_says_why(self):
         """AC-DS5.3 / design 2.4: a role no column fits does not stop explore. The roles cell takes the date and label

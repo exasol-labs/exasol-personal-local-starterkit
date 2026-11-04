@@ -75,6 +75,9 @@ releases:
   Claude Code CLI; also `claude_desktop`, `claude_code`, `codex`, `cursor`, `copilot`,
   `gemini`, `opencode`, `continue`, `all`, comma-separated); or `EXAKIT_SKIP_MCP=1` to set
   MCP up later via `exakit mcp-setup`
+- what the machine is for → `EXAKIT_PERSONA=general` (or `data-scientist`, `ml-engineer`,
+  comma-separated to combine): a named set of the answers below; an answer you set yourself
+  wins for that one variable
 - which data to load → `EXAKIT_DATASETS=tpch,weather` (bundled dataset ids; wins over
   `EXAKIT_LOAD_SAMPLE`), or `EXAKIT_LOAD_SAMPLE=1` (bundled sample) / `0` (skip data)
 - on macOS, if a database is already running → `EXAKIT_REUSE_DB=1` (reuse) or `0` (deploy fresh)
@@ -83,8 +86,10 @@ Example: `curl -fsSL <install.sh URL> | EXAKIT_MCP_CLIENTS=claude EXAKIT_DATASET
 or on Windows: `$env:EXAKIT_MCP_CLIENTS = "claude"; $env:EXAKIT_DATASETS = "tpch"; irm <install.ps1 URL> | iex`.
 (`EXAKIT_REUSE_DB` applies to the macOS native runtime only.)
 
-Tell the user what to expect: a detection summary, an install plan, then numbered steps
-ending in a connection panel — and the suggested first AI prompt is copied to the user's
+Tell the user what to expect: a detection summary, an install plan, numbered steps, then
+the persona's data (on a terminal it first asks "What will you use this machine for?"), the `exakit`
+helper as the last step, and a connection panel. The `exakit` command itself is in place
+from the first seconds, so `exakit status` answers while the install runs. The suggested first AI prompt is copied to the user's
 clipboard automatically when a clipboard tool is available, ready to paste into their client.
 **The first database deployment usually finishes in under 2 minutes on every
 platform** (one-time). Do not treat a long-running macOS

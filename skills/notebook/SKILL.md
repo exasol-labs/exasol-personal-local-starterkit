@@ -10,14 +10,21 @@ description: Open notebooks already connected to the local Exasol database with 
 (`exasol-notebook-connector`, the package Exasol's AI Lab is built on),
 pyexasol, the Langfuse and OpenAI clients, the kit's helper package `exakit.nb`
 (`exakit_nb` still imports) and a Jupyter kernel, **Exasol (Starter Kit)**, in an environment of their own.
+It is not offered on Linux Arm (a connector dependency publishes no Linux Arm
+build): the marketplace shows it as not applicable, and a persona that brings it
+skips it and says why. It runs on Linux x86_64, macOS on Apple silicon and Windows.
 
 **The notebook tools are the user's choice: they are the notebook row's child
 rows in the marketplace's add-ons table, both ticked, each saying before
-anything installs what will become of it and then how it settled** (a scripted
+anything installs what will become of it and then how it settled**
+(`installed <version>`, `yours, kernel added`, `skipped`, or
+`not installed - see the log`; a scripted
 install that draws no table asks one checklist instead). JupyterLab: one already on the machine is used as it is, with the
 kit's kernel added (VS Code and other Jupyter front ends see it too); with none,
 the kit's is installed (the connector's `[jupyter]` extra) because it was ticked. Marimo: installed into the kit's
-notebook environment. Pre-answer only on the
+notebook environment. The install names each part on its activity line as it
+goes: creating the environment, the notebook connector, JupyterLab, Marimo,
+validating, then placing the notebooks and the kernel. Pre-answer only on the
 user's word: `EXAKIT_NOTEBOOK_FRONTENDS=jupyterlab,marimo` (or `none`),
 or `EXAKIT_NOTEBOOK_JUPYTER=skip` / `EXAKIT_NOTEBOOK_MARIMO=skip` to leave one out.
 The JupyterLab and Marimo versions are pinned in the kit's `versions.json`
@@ -26,9 +33,16 @@ The JupyterLab and Marimo versions are pinned in the kit's `versions.json`
 The kit's notebooks are in `~/.exasol-starter-kit/notebooks/starter-kit-notebooks/`,
 one folder per persona, with a README naming the order to open them in:
 `data-scientist/00_quickstart`, `01_explore`, `02_ask_your_data`, `03_share` (Data Scientist),
-and `ml-engineer/00_quickstart`, `01_train`, `02_rust_score`, `03_score_external_model` (ML Engineer);
-Only the picked personas' folders are copied; a persona added later (`exakit persona add`) brings its own. Marimo's copies are in
-`notebooks/marimo/<persona>/`. A file there is the user's: the kit never overwrites it.
+and `ml-engineer/00_quickstart`, `01_train`, `02_rust_score`, `03_score_external_model` (ML Engineer),
+plus Exasol's examples library as `exasol-examples/`.
+Only the picked personas' folders are copied; a persona added later (`exakit persona add`) brings its own.
+The add-on installed with no persona recorded brings every persona's; removing a persona never brings the
+other's. Marimo's copies are in `notebooks/marimo/<persona>/`. Each persona stands alone: no notebook needs
+the other persona's.
+
+A kit notebook nobody edited is refreshed when the kit's version changes (cells are compared; outputs from
+running it do not count). One the user edited, or a file of their own, is never overwritten, and one the user
+deleted is not copied back.
 
 Install it with `exakit marketplace notebook`. Never tell a user to
 `pip install exasol-notebook-connector` themselves: that copy has no
@@ -46,16 +60,21 @@ exakit notebook check              # connect and report (and whether JupyterLab 
 ```
 
 **On a terminal, plain `exakit notebook` asks one multi-select, "Open which
-notebook tools?"**, each row saying its tool's state before anything happens:
-JupyterLab `running at http://127.0.0.1:<port>/lab`, `ready (the kit's <version>)`,
-`ready (yours: <path>)` or `missing - reinstall it into the kit's environment`;
-Marimo `running at ...`, `ready` or `not installed - installs it`; and
+notebook tools?"**, with a JupyterLab row and a Marimo row, each saying its
+tool's state before anything happens:
+JupyterLab `running at http://127.0.0.1:<port>/lab`, `starting on port <port>`,
+`ready (the kit's <version>)`, `ready (yours: <path>)`, or
+`missing - reinstall it` / `not installed - installs it` (into the kit's environment);
+Marimo `running at ...`, `starting on port <port>`, `ready`, `missing - reinstall it`
+or `not installed - installs it`; and
 `Skip - open nothing`. The tools the user chose at install
 are ticked (JupyterLab when none). Each one picked opens in turn - one line each
-with its address - then one line says how to stop them. **Without a terminal
+with its address - then one line says how to stop them. Windows shows the same
+menu. **Without a terminal
 (an agent's shell) it never asks**: plain `exakit notebook` opens JupyterLab, as
 it always did; `--port N` also means JupyterLab, without the menu. An agent
-should name the tool it means: `exakit notebook` or `marimo`.
+should name the tool it means: `exakit notebook jupyterlab` or
+`exakit notebook marimo` (tool names in any case).
 
 JupyterLab runs in the background until it is stopped, so `exakit notebook`
 returns at once; with `--no-browser` it opens no browser and prints the address
@@ -85,13 +104,31 @@ nb.sql(conn, f"SELECT {ds.col('category')}, AVG({ds.col('label')}) FROM {ds.fact
 nb.load_own_file("~/data/claims.csv", "MY_DATA.CLAIMS", {"entity": "CUSTOMER", ...})   # CSV, Parquet or JSON
 ```
 
-`data-scientist/01_explore` is built that way: one assignment (`DATASET = ...`) picks the
-data, every query is printed before its result, a small scikit-learn model
-runs on this computer, and a text step calls the user's own model endpoint
+`data-scientist/01_explore` is built that way: its settings are all in the first cell, one
+assignment (`DATASET = ...`) picks the data, every query is printed before its result, a small
+scikit-learn model runs on this computer, and a text step calls the user's own model endpoint
 only when `USE_AI_THEMES = True` and `EXAKIT_MODEL_ID` / `EXAKIT_PROVIDER_BASE_URL`
-are configured. `EXAKIT_PROVIDER_API_KEY` supplies the provider's key; an unauthenticated
+are configured. That step (`nb.themes`) sends the newest texts on each side of the label,
+one call per side, and the model sorts each side into two to four themes: a table of theme,
+count, share and example. With Langfuse set up it is one trace, `explore-themes`.
+
+`DATASET = None` in the later notebooks means the dataset approved last in a quickstart
+(else `esophageal_posts`); each says which in one line. Result columns are named after the
+data (`SOCIAL_NETWORK`, `POSTS`, `IS_NEGATIVE_PCT`; `nb.name`, `nb.count_name`), and a note in
+plain words sits under each result (`nb.note_groups`, `nb.note_trend`, `nb.note_model`).
+
+`data-scientist/02_ask_your_data`: `proposal = nb.ask(ds, question)` drafts SQL with the
+user's model from the whole approved column map (every column's role, evidence and note; a
+sensitive column is named with its role only and never selected). With
+`DRAFT_WITH_MODEL = False` it starts from the notebook's own SQL instead. The proposal shows
+the question, the SQL one clause per line, what the model assumed and what to check. Nothing
+runs until `proposal.approve()`; `proposal.run()` runs exactly the approved text as the
+read-only MCP user, and `proposal.edit("...")` clears the approval.
+
+`EXAKIT_PROVIDER_API_KEY` supplies the provider's key; an unauthenticated
 local server can leave it unset. The same names apply to optional Ask SQL drafting
-and profiling notes. `nb.model_settings()` is a read-only, redacted configuration
+and profiling notes. No temperature is sent unless `EXAKIT_MODEL_TEMPERATURE` is set
+(newer Claude models refuse it). `nb.model_settings()` is a read-only, redacted configuration
 check. Optional `EXAKIT_PROVIDER_HEADERS` is a JSON map for routing such as
 `anthropic-workspace-id`; it cannot replace authentication headers. The provider
 guide at `notebook/MODEL-PROVIDERS.md` cites the official Claude, Ollama, LM Studio,
@@ -100,13 +137,23 @@ live-provider verification. Never call an endpoint verified merely because its
 documentation is compatible. Point a user who gets "does not match the database" at
 `exakit data-load <dataset>`.
 
-`ml-engineer/01_train` trains inside the database: `exasol_mlflow.create_script(schema)`
+`ml-engineer/01_train` starts from the training handoff in
+`~/.exasol-starter-kit/handoffs/`; when there is none it writes one from the approved column
+map, so `02_rust_score` finds it and no Data Scientist notebook is needed. A stale handoff is
+refused with its fix, `nb.write_handoff(conn, ds)`. It trains inside the database: `exasol_mlflow.create_script(schema)`
 makes a training UDF, the query feeds it the roles, and
 `with exasol_mlflow.start_run(conn, params=...) as run: run.execute(sql)` checks
 the UDF's answer and logs one MLflow run (params, metrics, `training.sql`, the model, and the
 `exasol.session_id` / `exasol.statement_id` / `exasol.deployment` tags) from
 the client. The run goes to `MLFLOW_TRACKING_URI`, or to a local store in
-`mlflow/` beside the notebook; the UDF never holds MLflow credentials.
+`mlflow/` beside the notebook; the UDF never holds MLflow credentials. MLflow's and dbt's
+usage telemetry is off in the notebook process and kernel (`MLFLOW_DISABLE_TELEMETRY=true`,
+`DBT_SEND_ANONYMOUS_USAGE_STATS=false`, as Exasol's is), unless the user set them.
+
+`exakit uninstall` keeps the user's work in the kit home: the notebooks
+(`~/.exasol-starter-kit/notebooks`), the kit MLflow server's runs and models
+(`~/.exasol-starter-kit/mlflow`) and the Dash dashboards; a reinstall picks them up.
+`EXAKIT_UNINSTALL_NOTEBOOKS=remove` removes them too.
 
 The connection lives in the connector's **encrypted** configuration store,
 written by the kit and refreshed on every `exakit notebook`, so a database

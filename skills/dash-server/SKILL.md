@@ -99,6 +99,11 @@ into generated files, and you must never print them. Without the read-only user
 it is never given the administrator's password. Fix: `exakit mcp-setup`, then
 `exakit stop dash-server && exakit start dash-server`.
 
+The user's dashboards live in `~/.exasol-starter-kit/dash-server/instance`.
+`exakit uninstall dash-server` removes the server and keeps them, and so does a
+full `exakit uninstall`; a reinstall picks them up. On a full uninstall,
+`EXAKIT_UNINSTALL_NOTEBOOKS=remove` removes them too.
+
 ## Diagnosing
 
 Work these in order:
