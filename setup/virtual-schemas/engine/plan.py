@@ -256,6 +256,10 @@ def jdbc_url(connector, values, extra=None):
             fields["tls"] = connector["tls_class"].format(tls_arg=tlsca.class_arg(values["host"], fields["ca_pem"]))
         else:
             fields["tls"] = connector["tls"][values.get("tls", "verify")].format(**fields)
+    # An optional input adds its parameter only when given ({opt_<input>} in
+    # the template): an empty role= would ask the driver for a role named "".
+    for key, fragment in (connector.get("url_optional") or {}).items():
+        fields["opt_" + key] = fragment.format(**fields) if fields.get(key) else ""
     return connector["url"].format(**fields)
 
 

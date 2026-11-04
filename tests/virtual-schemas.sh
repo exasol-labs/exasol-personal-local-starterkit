@@ -794,8 +794,12 @@ has "...with the kit's jar beside it" "JAR=exakit-loader.jar" "$(cat "$SFLOADER/
 check "...which is staged there" "yes" "$([ -f "$SFLOADER/exakit-loader.jar" ] && echo yes || echo no)"
 check "...built once in the database, the build script dropped" "1 no" \
     "$(dbq 'd.get("tls_builds", 0)') $(dbq '"EXAKIT_VS.EXAKIT_TLS_BUILD" in d["scripts"]' | tr A-Z a-z | sed 's/true/yes/;s/false/no/')"
-run_secret "$SECRET" connect snowflake --name sf2 $SF_SET --secret-stdin
+run_secret "$SECRET" connect snowflake --name sf2 $SF_SET --set role=ANALYST --secret-stdin
 check "a second Snowflake source: exit 0, the cached jar is reused, not rebuilt" "0 1" "$RC $(dbq 'd.get("tls_builds", 0)')"
+has "...a role, when given, rides in the URL" "JDBC_QUERY_RESULT_FORMAT=JSON&role=ANALYST" "$(dbq 'd["connections"]["EXAKIT_SRC_SF2"]["url"]')"
+lacks "...and none is sent when it is not" "role=" "$(dbq 'd["connections"]["EXAKIT_SRC_SF"]["url"]')"
+run plan snowflake --name sf3 $SF_SET --set "role=A&warehouse=X"
+check "...a role cannot add URL parameters (exit 2)" "2" "$RC"
 run remove sf
 check "removing one keeps the loader for the other" "yes yes" \
     "$([ -f "$SFLOADER/exakit-loader.jar" ] && echo yes || echo no) $([ -f "$SFLOADER/settings.cfg" ] && echo yes || echo no)"

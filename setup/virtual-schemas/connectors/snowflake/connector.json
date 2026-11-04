@@ -55,6 +55,11 @@
       "upper": true
     },
     {
+      "name": "role",
+      "label": "Role (Enter: the user's default role)",
+      "kind": "name"
+    },
+    {
       "name": "user",
       "label": "Reader account",
       "kind": "text",
@@ -69,7 +74,10 @@
   ],
   "auth": "pat",
   "host": "{account}.snowflakecomputing.com",
-  "url": "jdbc:snowflake://{account}.snowflakecomputing.com/?db={database}&warehouse={warehouse}&JDBC_QUERY_RESULT_FORMAT=JSON",
+  "url": "jdbc:snowflake://{account}.snowflakecomputing.com/?db={database}&warehouse={warehouse}&JDBC_QUERY_RESULT_FORMAT=JSON{opt_role}",
+  "url_optional": {
+    "role": "&role={role}"
+  },
   "tls": null,
   "vs_properties": {
     "CATALOG_NAME": "{database}",
