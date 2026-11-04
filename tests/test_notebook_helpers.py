@@ -1200,7 +1200,7 @@ class NotebookWorkflowTest(unittest.TestCase):
         review = mock.Mock(**{"dataset.return_value": ds})
         with mock.patch.object(exakit_nb, "connect", return_value=FakeConn(PHARMA)), \
                 mock.patch.object(exakit_nb, "review_roles", return_value=review) as reviewed:
-            namespace, out = self.run_cell(first, {"DATASET": "esophageal_posts"})
+            namespace, out = self.run_cell(first, {"DATASET": "esophageal_posts", "WORKFLOW_ID": None})
         self.assertEqual([e["kind"] for e in self.log(namespace["wid"])], ["start"])
         reviewed.assert_called_once_with(mock.ANY, "esophageal_posts")
         review.dataset.assert_called_once_with(draft_ok=True)
@@ -1209,7 +1209,7 @@ class NotebookWorkflowTest(unittest.TestCase):
         os.environ["EXAKIT_WORKFLOW_ID"] = namespace["wid"]
         with mock.patch.object(exakit_nb, "connect", return_value=FakeConn(PHARMA)), \
                 mock.patch.object(exakit_nb, "review_roles", return_value=review):
-            again, _ = self.run_cell(first, {"DATASET": "esophageal_posts"})
+            again, _ = self.run_cell(first, {"DATASET": "esophageal_posts", "WORKFLOW_ID": None})
         self.assertEqual(again["wid"], namespace["wid"])
 
 

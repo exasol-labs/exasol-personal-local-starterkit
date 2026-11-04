@@ -313,6 +313,20 @@ class NotebookShapeTest(unittest.TestCase):
         for role in ("date", "label"):
             self.assertNotIn("{" + role.upper() + "}", text_step, f"the {role} is in the text SQL only when it exists")
 
+    def test_what_a_reader_sets_is_in_the_cell_that_sets_the_dataset(self):
+        """Pasting a workflow id into a later cell and running only that cell failed on DATASET: every value a reader
+        edits sits in the one cell that assigns DATASET."""
+        for py in sorted(SOURCES.glob("*/*.py")):
+            code = ["".join(c["source"]) for c in _built_cells(py) if c["cell_type"] == "code"]
+            settings = [c for c in code if re.search(r"^DATASET = ", c, re.M)]
+            if not settings:
+                continue
+            with self.subTest(notebook=py.relative_to(SOURCES).as_posix()):
+                for name in ("WORKFLOW_ID", "USE_AI_THEMES", "DRAFT_WITH_MODEL"):
+                    assigned = [c for c in code if re.search(rf"^{name} = ", c, re.M)]
+                    for cell in assigned:
+                        self.assertIn(cell, settings, f"{name} is set outside the DATASET cell")
+
     def test_no_dataset_is_named_in_the_code(self):
         for py in SOURCES.glob("*/*.py"):
             text = py.read_text(encoding="utf-8")

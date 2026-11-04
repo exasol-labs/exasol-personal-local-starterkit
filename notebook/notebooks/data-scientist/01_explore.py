@@ -18,19 +18,19 @@
 # %%
 DATASET = "esophageal_posts"   # or "banking_complaints", or your own file ("~/my-data/transactions.csv", roles beside it)
 USE_AI_THEMES = False  # True: your model sorts the texts into themes (needs EXAKIT_MODEL_ID; see the AI step below)
+WORKFLOW_ID = None  # paste the quickstart's wf-... id to continue its log
 
 # %% [markdown]
 # ## Load the column map
 #
 # `DATASET` is a sample ID or a file path with its descriptor beside it. A draft map is enough here.
 #
-# Set `WORKFLOW_ID` to the quickstart's ID to keep one log. Steps whose roles are missing skip and say why.
+# Everything you set is in the first cell: run it, then this one. Steps whose roles are missing skip and say why.
 
 # %%
 import os
 import exakit.nb as nb
 
-WORKFLOW_ID = None  # paste the quickstart's wf-... id to continue its log
 wid = nb.workflow("explore", resume=WORKFLOW_ID or os.environ.get("EXAKIT_WORKFLOW_ID"))
 conn = nb.connect()
 ds = nb.review_roles(conn, DATASET).dataset(draft_ok=True)
