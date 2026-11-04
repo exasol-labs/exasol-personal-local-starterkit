@@ -20,6 +20,7 @@ from mcp.adapters.registry import AdapterRegistry
 from mcp.runtime.filesystem import OWNER_ONLY_ACL, describe_protection
 from mcp.core.models import (
     ArtifactReference,
+    DeploymentMode,
     DiscoveredClient,
     Finding,
     OperationRequest,
@@ -236,6 +237,8 @@ class ValidatorService:
         findings: list[Finding] = []
         evidence: list[VerificationEvidence] = []
         definition = request.server_definition
+        if definition is not None and definition.transport is DeploymentMode.HTTP and definition.url:
+            return self._validate_http_server(definition.url)
         if definition is None or not definition.command:
             findings.append(
                 Finding(
@@ -337,6 +340,95 @@ class ValidatorService:
             )
         )
         return StageResult("server_launch", "pass", findings, evidence)
+
+    # The launcher's MCP sidecar is already running when doctor asks: no first
+    # download to wait for, so a short budget.
+    HTTP_HANDSHAKE_TIMEOUT_SECONDS = 15
+
+    def _validate_http_server(self, url: str) -> StageResult:
+        """The server is the launcher's MCP sidecar (an HTTP endpoint): speak MCP to it there.
+
+        Nothing is started - the sidecar runs with the database - so a refusal
+        names the launcher's own status command rather than a command to run.
+        """
+        findings: list[Finding] = []
+        evidence: list[VerificationEvidence] = []
+        try:
+            tools = self._mcp_http_handshake(url)
+        except _ServerLaunchError as exc:
+            findings.append(
+                Finding(
+                    code="server_launch_failed",
+                    severity=Severity.ERROR,
+                    blocking=True,
+                    message=f"The MCP server at {url} did not complete an MCP handshake: {exc}",
+                    recommended_action=(
+                        "Check that the database is running (exakit status), then "
+                        "'exasol mcp status' for the server's own state; 'exakit start' starts both."
+                    ),
+                )
+            )
+            return StageResult("server_launch", "fail_recoverable", findings, evidence)
+        evidence.append(
+            VerificationEvidence(
+                stage="server_launch",
+                status="pass",
+                details=f"The MCP server answered at {url} and offered {len(tools)} tools.",
+                subject=url,
+            )
+        )
+        return StageResult("server_launch", "pass", findings, evidence)
+
+    def _mcp_http_handshake(self, url: str) -> list[str]:
+        """initialize + tools/list over Streamable HTTP. Returns the tool names.
+
+        The answer is JSON or an event stream (``data: {...}`` lines), whichever
+        the server chose; the session id it hands back on initialize goes with
+        every later request, as the transport requires.
+        """
+        import urllib.error
+        import urllib.request
+
+        session: dict[str, str] = {}
+
+        def post(message: dict) -> dict | None:
+            headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+            headers.update(session)
+            request = urllib.request.Request(url, data=json.dumps(message).encode("utf-8"),
+                                             headers=headers, method="POST")
+            try:
+                with urllib.request.urlopen(request, timeout=self.HTTP_HANDSHAKE_TIMEOUT_SECONDS) as response:
+                    sid = response.headers.get("mcp-session-id")
+                    if sid:
+                        session["mcp-session-id"] = sid
+                    body = response.read().decode("utf-8", errors="replace")
+            except urllib.error.HTTPError as exc:
+                raise _ServerLaunchError(f"HTTP {exc.code}") from exc
+            except (urllib.error.URLError, OSError) as exc:
+                raise _ServerLaunchError(f"not reachable ({getattr(exc, 'reason', exc)})") from exc
+            if "id" not in message:
+                return None
+            for chunk in [body] + [line[5:].strip() for line in body.splitlines() if line.startswith("data:")]:
+                try:
+                    answer = json.loads(chunk)
+                except ValueError:
+                    continue
+                if isinstance(answer, dict) and answer.get("id") == message["id"]:
+                    return answer
+            raise _ServerLaunchError("the server answered something that is not MCP")
+
+        post({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+              "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                         "clientInfo": {"name": "exakit-mcp-doctor", "version": "1"}}})
+        post({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}})
+        answer = post({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}) or {}
+        if "error" in answer:
+            raise _ServerLaunchError(str((answer["error"] or {}).get("message", "tools/list failed")))
+        tools = [tool.get("name", "") for tool in (answer.get("result") or {}).get("tools", [])
+                 if isinstance(tool, dict)]
+        if not tools:
+            raise _ServerLaunchError("the server offered no tools")
+        return tools
 
     def _mcp_handshake(self, command: list[str], env: dict[str, str]) -> list[str]:
         """initialize + tools/list over stdio. Returns the tool names.
@@ -606,6 +698,9 @@ class ValidatorService:
         read-only.
         """
 
+        if desired is None:
+            return None
+        desired = desired.for_client(adapter.describe_capabilities().supports_http)
         if desired is None:
             return None
         if desired.name != entry_name:

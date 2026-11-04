@@ -11,6 +11,7 @@ import sys
 from mcp.adapters import AdapterRegistry
 from mcp.core.errors import MCPSubsystemError
 from mcp.core.models import (
+    DeploymentMode,
     OperationRequest,
     OperationStatus,
     ServerDefinition,
@@ -407,19 +408,21 @@ def _permanent_setup(
 ) -> dict:
     context = context_loader.load(runtime_root)
     subsystem = MCPAccessSubsystem(environment=environment, filesystem=filesystem)
-    result = subsystem.execute(
-        {
-            "operation": "configure",
-            "target_clients": clients,
-            "deployment_mode": "stdio",
-            "runtime_root": str(runtime_root),
-            "server_definition": to_primitive(context.server_definition),
-            "credential_reference": {"kind": "inline_env", "name": "EXA_PASSWORD"},
-            "dsn_reference": {"kind": "literal", "value": context.dsn},
-            "create_snapshot": True,
-            "validate_after_apply": True,
-        }
-    )
+    request = {
+        "operation": "configure",
+        "target_clients": clients,
+        # stdio for the kit's own server; http for the launcher's MCP sidecar,
+        # whose client entries carry a URL and no credential at all.
+        "deployment_mode": context.server_definition.transport.value,
+        "runtime_root": str(runtime_root),
+        "server_definition": to_primitive(context.server_definition),
+        "dsn_reference": {"kind": "literal", "value": context.dsn},
+        "create_snapshot": True,
+        "validate_after_apply": True,
+    }
+    if context.server_definition.transport is DeploymentMode.STDIO:
+        request["credential_reference"] = {"kind": "inline_env", "name": "EXA_PASSWORD"}
+    result = subsystem.execute(request)
     payload = result.to_dict()
     payload.update(
         {
@@ -657,11 +660,11 @@ def _build_operation_request(
         # nobody has touched since an update moved the pinned server version on
         # reads as perfectly consistent and doctor reports success. It is an input
         # to a comparison on both paths; the read-only paths never apply it.
-        request["deployment_mode"] = "stdio"
+        request["deployment_mode"] = context.server_definition.transport.value
         request["server_definition"] = to_primitive(context.server_definition)
     if operation == "doctor":
         request["stages"] = _doctor_stages()
-    if operation == "repair":
+    if operation == "repair" and request.get("deployment_mode", "stdio") == "stdio":
         request["credential_reference"] = {"kind": "inline_env", "name": "EXA_PASSWORD"}
         request["validate_after_apply"] = True
         request["create_snapshot"] = True

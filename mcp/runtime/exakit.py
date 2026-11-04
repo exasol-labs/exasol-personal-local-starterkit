@@ -19,6 +19,15 @@ DEFAULT_MCP_COMMAND = "uvx"
 DEFAULT_MCP_PACKAGE = "exasol-mcp-server"
 DEFAULT_MCP_VERSION = "2.3.0"
 DEFAULT_SERVER_NAME = "exasol"
+# The launcher's MCP server (Exasol Personal 2.4.0+): a sidecar next to the
+# database, answering Streamable HTTP on loopback, connected as the kit's
+# read-only MCP user (setup/lib/mcp.sh mcp_sidecar_apply). Recorded in the
+# manifest as components.mcp_server.backend = "sidecar" with its url.
+SIDECAR_BACKEND = "sidecar"
+# Claude Desktop runs only local (stdio) servers: it reaches the sidecar through
+# this bridge, run by the uvx the kit already has. Pinned; versions.json
+# components.mcp.bridge overrides it through the manifest.
+DEFAULT_MCP_BRIDGE = "mcp-proxy@0.13.0"
 # The dash-server add-on's MCP control plane. dash-server speaks Streamable
 # HTTP on a port it records at install time (5100 unless something already held
 # it), so it is registered as a URL, not a command.
@@ -122,6 +131,31 @@ class ExakitRuntimeLoader:
         server_name = str(
             self._environment.env.get("EXAKIT_MCP_SERVER_NAME") or DEFAULT_SERVER_NAME
         ).strip()
+        sidecar_url = str(component_state.get("url") or "").strip()
+        if component_state.get("backend") == SIDECAR_BACKEND and sidecar_url.startswith("http://127.0.0.1:"):
+            # The launcher's server: clients get its URL and nothing secret - the
+            # read-only user's password lives in the deployment's sidecar
+            # definition (0600, the launcher's), not in any client's config.
+            bridge = str(component_state.get("bridge") or DEFAULT_MCP_BRIDGE).strip()
+            definition = ServerDefinition(
+                transport=DeploymentMode.HTTP,
+                name=server_name,
+                url=sidecar_url,
+                bridge=ServerDefinition(
+                    transport=DeploymentMode.STDIO,
+                    name=server_name,
+                    command=command,
+                    args=(bridge, "--transport", "streamablehttp", sidecar_url),
+                ),
+            )
+            return ExakitRuntimeContext(
+                runtime_root=runtime_root,
+                dsn=dsn,
+                user=connection_user,
+                password=password,
+                password_file=password_file,
+                server_definition=definition,
+            )
         env = {
             "EXA_DSN": dsn,
             "EXA_USER": connection_user,
