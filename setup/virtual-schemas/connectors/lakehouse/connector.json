@@ -30,6 +30,7 @@
   "driver": null,
   "etl": null,
   "shared_adapter": "LAKEHOUSE_ADAPTER",
+  "shared_by": "lakehouse engine source (AWS Glue, Iceberg REST or Unity Catalog)",
   "companions": [
     {
       "name": "LAKEHOUSE_SCAN",

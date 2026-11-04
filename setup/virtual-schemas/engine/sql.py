@@ -30,13 +30,24 @@ _KINDS = (
     # A driver naming a property its URL lacks (Simba: "Connection Refused:
     # ... Required Connection Key(s)") is configuration, not the network.
     ("error", r"Required Connection Key\(s\)"),
+    # Unity Catalog through the lakehouse engine: a metastore or schema closed
+    # to engines outside Databricks (it answers PERMISSION_DENIED, so this
+    # comes before "denied"), and a catalog-managed table this engine cannot
+    # read yet. Neither is a credential problem.
+    ("external", r"EXTERNAL[ _]USE[ _]SCHEMA|External Data Access|EXTERNAL_ACCESS_DISABLED"),
+    ("managed", r"catalog-managed table|Max catalog version is required"),
+    # An Iceberg REST catalog or Unity Catalog without the namespace asked for.
+    ("schema_missing", r"NoSuchNamespaceException|NoSuchWarehouseException|SCHEMA_DOES_NOT_EXIST|"
+                       r"CATALOG_DOES_NOT_EXIST"),
     # Object stores answer over HTTPS with their own codes (S3 measured live):
     # a request signed by a clock too far off, a bucket in another region, a
     # key that may not list or read - each has its own fix, so each is named.
     ("clock", r"RequestTimeTooSkewed|difference between the request time and the current time is too large|"
               r"Signature not yet current|Signature expired|Request date header too (old|new)"),
     ("region", r"must be addressed using the specified endpoint|PermanentRedirect|"
-               r"AuthorizationHeaderMalformed.*region|the region '[\w-]+' is wrong"),
+               r"AuthorizationHeaderMalformed.*region|the region '[\w-]+' is wrong|"
+               # object_store (the lakehouse engine) on S3's redirect to the bucket's region.
+               r"incorrectly configured region|x-amz-bucket-region"),
     ("nobucket", r"NoSuchBucket|The specified bucket does not exist|ContainerNotFound"),
     ("denied", r"AccessDenied|not authorized to perform|AuthorizationPermissionMismatch|AuthorizationFailure|"
                r"PERMISSION_DENIED"),
@@ -51,7 +62,9 @@ _KINDS = (
              r"Server failed to authenticate the request|AuthenticationFailed|"
              r"Error getting access token for service account|"
              # Databricks: the REST API (adapter) and the JDBC driver (loader).
-             r"Invalid access token|REST API answered HTTP 401"),
+             r"Invalid access token|REST API answered HTTP 401|"
+             # An Iceberg REST catalog refusing the token or keys (the spec's error type).
+             r"NotAuthorizedException"),
     ("unreachable", r"Connection refused|connect timed out|The connection attempt failed|"
                     r"Communications link failure|No route to host|Network is unreachable|"
                     r"Connection timed out|ORA-12541|ORA-12170|TCP/IP connection to the host|"

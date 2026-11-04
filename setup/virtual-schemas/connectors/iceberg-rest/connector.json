@@ -1,0 +1,120 @@
+{
+  "id": "iceberg-rest",
+  "name": "Iceberg REST catalog",
+  "profile": "rust-native",
+  "upstream": "exasol-labs/lakehouse-engine-rs",
+  "family": "lakehouse",
+  "adapter": {
+    "version": "0.57.3",
+    "license": "MIT",
+    "bundle": "tar.gz",
+    "member": "udf/liblakehouse_engine.so",
+    "arch": {
+      "aarch64": {
+        "asset": "lakehouse-engine-aarch64.tar.gz",
+        "url": "https://github.com/exasol-labs/lakehouse-engine-rs/releases/download/v0.57.3/lakehouse-engine-aarch64.tar.gz",
+        "size": 61428965,
+        "sha256": "c90cecd55f6a1e034717cffd0af732976f7419a8d778887cae11d8b905462791",
+        "member_size": 203873112,
+        "member_sha256": "6f34346413c2ea1c49b62f1c36e7f5aca0663e8c42b771e55b9939a690718197"
+      },
+      "x86_64": {
+        "asset": "lakehouse-engine.tar.gz",
+        "url": "https://github.com/exasol-labs/lakehouse-engine-rs/releases/download/v0.57.3/lakehouse-engine.tar.gz",
+        "size": 59188013,
+        "sha256": "7eb321de789b75edb45e6af26b7d710a4c5f56265808c4515e5e8bb58bdbd5c1",
+        "member_size": 218989960,
+        "member_sha256": "f058464f1d021dcbcfae63a5528f9aec92d8c38eb02eef434a2c0315ff57b05d"
+      }
+    }
+  },
+  "driver": null,
+  "etl": null,
+  "shared_adapter": "LAKEHOUSE_ADAPTER",
+  "shared_by": "lakehouse engine source (AWS Glue, Iceberg REST or Unity Catalog)",
+  "companions": [
+    {
+      "name": "LAKEHOUSE_SCAN",
+      "language": "RUST",
+      "type": "SCALAR",
+      "signature": "(common VARCHAR(2000000), files VARCHAR(2000000)) EMITS (...)"
+    },
+    {
+      "name": "LAKEHOUSE_DISTRIBUTE_FILES",
+      "language": "LUA",
+      "type": "SET",
+      "signature": "(files VARCHAR(2000000)) EMITS (files VARCHAR(2000000))",
+      "body": "function run(ctx)\n    repeat\n        ctx.emit(ctx.files)\n    until not ctx.next()\nend"
+    },
+    {
+      "name": "LAKEHOUSE_VERSION",
+      "language": "RUST",
+      "type": "SCALAR",
+      "signature": "() RETURNS VARCHAR(100)"
+    }
+  ],
+  "version_script": "LAKEHOUSE_VERSION",
+  "inputs": [
+    {
+      "name": "catalog_url",
+      "label": "Catalog URL (https://host[:port][/path]; http only for this computer or a private network)",
+      "kind": "catalog-url",
+      "required": true
+    },
+    {
+      "name": "warehouse",
+      "label": "Warehouse the catalog knows it by (e.g. s3://warehouse/ or a catalog name)",
+      "kind": "warehouse",
+      "required": true
+    },
+    {
+      "name": "namespace",
+      "label": "Namespace (one namespace is one virtual schema)",
+      "kind": "iceberg-namespace",
+      "required": true
+    },
+    {
+      "name": "endpoint",
+      "label": "S3-compatible storage endpoint, with an access key (Enter for AWS S3)",
+      "kind": "endpoint-url"
+    },
+    {
+      "name": "region",
+      "label": "Storage region (with an access key: the bucket's region; Enter to let the catalog say)",
+      "kind": "storage-region"
+    },
+    {
+      "name": "access_key_id",
+      "label": "Storage access key ID (Enter to use a catalog token instead)",
+      "kind": "access-key"
+    },
+    {
+      "name": "secret",
+      "label": "Storage secret key, or the catalog token",
+      "kind": "secret",
+      "required": true
+    }
+  ],
+  "auth": "storage-keys-or-token",
+  "host_from": "catalog_url",
+  "url": "{catalog_url}",
+  "credential": "lakehouse-rest",
+  "connection_property": "CATALOG_CONNECTION",
+  "access": "read on the namespace in the catalog (list and load its tables) and, with storage keys, list and read on the table files (s3:ListBucket, s3:GetObject or the store's equivalent)",
+  "auth_hint": "with --set access_key_id the secret is the storage's secret key; without it, a token the catalog accepts and that lets it vend storage credentials",
+  "vs_properties": {
+    "NAMESPACE": "{namespace}"
+  },
+  "vs_when_http": {
+    "ALLOW_HTTP": "true"
+  },
+  "tips": [
+    "Names arrive in upper case (ORDERS, ORDER_ID): no quotes needed.",
+    "One namespace is one virtual schema: connect again with another --name for the next namespace."
+  ],
+  "notes": [
+    "The Glue lakehouse connector's engine over an Iceberg REST catalog: the same pinned lakehouse-engine-rs build, the same LAKEHOUSE_ADAPTER and companion scripts in EXAKIT_VS and the same Rust language container, so a Glue source and a REST source share them. Not yet run against a live catalog (Beta).",
+    "The CONNECTION goes TO the catalog URL with an empty user; its password is JSON the kit writes: the warehouse plus either storage keys (access_key, secret_key, region and, for MinIO and other S3-compatible stores, endpoint with path-style addressing) or a catalog token with use_vended_credentials, so the catalog hands out short-lived storage credentials per table.",
+    "https by default. Plain http is accepted only when typed, and only towards this computer (on macOS 192.168.64.1, on Linux and WSL host.containers.internal) or a private network; the virtual schema then carries ALLOW_HTTP = 'true'. localhost is refused: inside the database it is the database itself."
+  ]
+}
