@@ -34,7 +34,7 @@ print(f"Every step below is logged under it: exakit workflow show {wid}")
 # %% [markdown]
 # ## First result
 #
-# Rows per category and, with an approved label, the share with label 1. Counts show size, not cause. `nb.show_sql()` shows the query.
+# How many rows per group and, when the column map names a label, the % where it is 1. A note under the result says what the numbers mean.
 
 # %%
 skipped = {m["role"]: m["reason"] for m in ds.missing}
@@ -43,15 +43,19 @@ if GROUPED_BY != "category":
     print(f"No category role ({skipped.get('category', 'none approved')}): rows are counted per {GROUPED_BY} instead.")
 if "label" in skipped:
     print(f"No label role ({skipped['label']}): the label rate is left out; the steps that need it later say so.")
-LABEL_PCT = f",\n       ROUND(100 * AVG({ds.col('label')}), 1) AS LABEL_1_PCT" if ds.has("label") and GROUPED_BY != "label" else ""
+GROUP, COUNT = nb.name(BY), nb.count_name(ds)       # columns named after the data: SOCIAL_NETWORK, POSTS
+PCT = nb.name(ds.col("label"), "PCT") if ds.has("label") and GROUPED_BY != "label" else None   # IS_NEGATIVE_PCT
+RATE = f",\n       ROUND(100 * AVG({ds.col('label')}), 1) AS {PCT}" if PCT else ""
 first_rows = nb.sql(conn, f"""
-SELECT {BY} AS CATEGORY,
-       COUNT(*) AS N{LABEL_PCT}
+SELECT {BY} AS {GROUP},
+       COUNT(*) AS {COUNT}{RATE}
 FROM {ds.fact_table}
 GROUP BY {BY}
-ORDER BY N DESC
+ORDER BY {COUNT} DESC
 LIMIT 10""")
 nb.show_sql()
+overall = nb.sql(conn, f"SELECT COUNT(*) AS N, ROUND(100 * AVG({ds.col('label')}), 1) AS PCT FROM {ds.fact_table}") if PCT else None
+nb.note_groups(first_rows, ds, GROUP, COUNT, PCT, overall=(overall["N"][0], overall["PCT"][0]) if PCT else None)
 first_rows
 
 # %% [markdown]

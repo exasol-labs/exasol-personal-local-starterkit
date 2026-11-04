@@ -244,8 +244,9 @@ class NotebookShapeTest(unittest.TestCase):
         code = ["".join(c["source"]) for c in _built_cells(SOURCES / "ml-engineer" / "00_quickstart.py") if c["cell_type"] == "code"]
         cell = next(s for s in code if "first_rows = nb.sql(" in s)
         self.assertIn('BY = ds.col("category") if ds.has("category") else ds.col("entity")', cell)
-        self.assertIn("if ds.has(\"label\") else \"\"", cell)
-        self.assertIn('SUM({ds.col(\'label\')}) AS LABEL_1', cell)
+        self.assertIn("if ds.has(\"label\") else None", cell)
+        self.assertIn('ROUND(100 * AVG({ds.col(\'label\')}), 1) AS {PCT}', cell)
+        self.assertIn("nb.note_groups(first_rows, ds, GROUP, COUNT, PCT", cell, "the result carries its plain-language note")
         self.assertIn("ds.missing", cell)
         self.assertIn("skipped[role]", cell)
         self.assertNotIn('SUM({ds.col("label")})', cell, "no unguarded label column")

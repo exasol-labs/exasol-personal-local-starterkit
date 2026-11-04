@@ -255,7 +255,7 @@ def _(mo):
     mo.md(r"""
     ## Check the label
 
-    Rows and positive labels per category. Label 1 means the outcome happened (negative post, monetary relief), not that it is good.
+    How many rows per group and the % where the label is 1. Label 1 means the outcome happened (a negative post, monetary relief), not that it is good. A note under the result says what the numbers mean.
     """)
     return
 
@@ -267,9 +267,13 @@ def _(conn, ds_1, nb):
         if role in skipped:
             print(f'No {role} role ({skipped[role]}): {instead}; the steps that need it later say so.')
     BY = ds_1.col('category') if ds_1.has('category') else ds_1.col('entity')
-    LABEL_1 = f",\n       SUM({ds_1.col('label')}) AS LABEL_1" if ds_1.has('label') else ''
-    first_rows = nb.sql(conn, f'\nSELECT {BY} AS CATEGORY,\n       COUNT(*) AS N{LABEL_1}\nFROM {ds_1.fact_table}\nGROUP BY {BY}\nORDER BY N DESC\nLIMIT 10')
+    GROUP, COUNT = (nb.name(BY), nb.count_name(ds_1))
+    PCT = nb.name(ds_1.col('label'), 'PCT') if ds_1.has('label') else None  # columns named after the data: SOCIAL_NETWORK, POSTS
+    RATE = f",\n       ROUND(100 * AVG({ds_1.col('label')}), 1) AS {PCT}" if PCT else ''  # IS_NEGATIVE_PCT
+    first_rows = nb.sql(conn, f'\nSELECT {BY} AS {GROUP},\n       COUNT(*) AS {COUNT}{RATE}\nFROM {ds_1.fact_table}\nGROUP BY {BY}\nORDER BY {COUNT} DESC\nLIMIT 10')
     nb.show_sql()
+    overall = nb.sql(conn, f"SELECT COUNT(*) AS N, ROUND(100 * AVG({ds_1.col('label')}), 1) AS PCT FROM {ds_1.fact_table}") if PCT else None
+    nb.note_groups(first_rows, ds_1, GROUP, COUNT, PCT, overall=(overall['N'][0], overall['PCT'][0]) if PCT else None)
     first_rows
     return
 

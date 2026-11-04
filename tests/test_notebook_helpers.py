@@ -425,8 +425,12 @@ class SwapTest(unittest.TestCase):
                     namespace[node.targets[0].id] = ast.literal_eval(node.value)
                 except (ValueError, TypeError, SyntaxError):
                     pass
-        for node in tree.body:                                    # the roles cell: ENTITY, ... = ds.col(...), TEXT = ...
-            if isinstance(node, ast.Assign) and "ds." in ast.unparse(node.value) and "nb." not in ast.unparse(node.value):
+        readout = importlib.import_module("exakit_nb.readout")
+        namespace["nb"] = types.SimpleNamespace(name=readout.name, count_name=readout.count_name)
+        for node in tree.body:     # the roles cell: ENTITY, ... = ds.col(...), TEXT = ...; result names: PCT = nb.name(...)
+            source = ast.unparse(node.value) if isinstance(node, ast.Assign) else ""
+            calls = set(re.findall(r"\bnb\.(\w+)", source))
+            if source and ("ds." in source or calls) and calls <= {"name", "count_name"}:
                 exec(compile(ast.Module([node], []), "roles", "exec"), namespace)
         sql = [node for node in ast.walk(tree) if isinstance(node, ast.JoinedStr)
                and any("FROM" in str(part.value) for part in node.values if isinstance(part, ast.Constant))]
@@ -437,7 +441,11 @@ class SwapTest(unittest.TestCase):
     def placeholders(text: str, descriptor) -> str:
         """The rendered SQL with every value the descriptor gave replaced by its role's name."""
         ds = Dataset(descriptor.id, Path("d"), "0" * 64, descriptor)
+        readout = importlib.import_module("exakit_nb.readout")
         text = text.replace(ds.text_sql(), "<text>").replace(descriptor.fact_table, "<fact_table>")
+        text = re.sub(rf"\b{re.escape(readout.count_name(ds))}\b", "<count>", text)   # POSTS: named after the grain
+        for role in ("entity", "category", "date", "label"):                       # IS_NEGATIVE_PCT: after the column
+            text = re.sub(rf"\b{re.escape(readout.name(ds.col(role)))}_PCT\b", f"<{role}>_PCT", text)
         for role in ("entity", "category", "date", "label"):
             text = re.sub(rf"\b{re.escape(ds.col(role))}\b", f"<{role}>", text)
         return text
@@ -1224,8 +1232,10 @@ class MissingRoleTest(unittest.TestCase):
 
     def run_query(self, ds) -> tuple[str, str]:
         statements = []
-        fake_nb = types.SimpleNamespace(sql=lambda conn, statement: statements.append(statement) or _Frame(),
-                                        show_sql=lambda: None)
+        readout = importlib.import_module("exakit_nb.readout")
+        fake_nb = types.SimpleNamespace(sql=lambda conn, statement: statements.append(statement) or _Frame(N=[40], PCT=[25.0]),
+                                        show_sql=lambda: None, name=readout.name, count_name=readout.count_name,
+                                        note_groups=readout.note_groups)
         with redirect_stdout(io.StringIO()) as out:
             exec(compile(self.query_cell(), "cell", "exec"), {"nb": fake_nb, "conn": object(), "ds": ds})
         return statements[0], out.getvalue()
@@ -1233,16 +1243,20 @@ class MissingRoleTest(unittest.TestCase):
     def test_every_role_present_is_the_full_query(self):
         ds = self.descriptor({"entity": "DEVICE", "category": "KIND", "date": "TAKEN_ON", "label": "ALARM", "text": ["NOTE"]}, [])
         sql, out = self.run_query(ds)
-        self.assertIn("SELECT KIND AS CATEGORY", sql)
-        self.assertIn("ROUND(100 * AVG(ALARM), 1) AS LABEL_1_PCT", sql)
-        self.assertEqual(out, "")
+        self.assertIn("SELECT KIND AS KIND", sql, "result columns are named after the data")
+        self.assertIn("COUNT(*) AS ROW_COUNT", sql)
+        self.assertIn("ROUND(100 * AVG(ALARM), 1) AS ALARM_PCT", sql)
+        self.assertIn("What this shows: one line per KIND. ROW_COUNT = how many rows. ALARM_PCT = the % of those rows "
+                      "where ALARM is 1.", out)
+        self.assertIn("Overall: 25.0% of 40 rows have ALARM = 1.", out)
+        self.assertIn("Counts, not causes", out)
 
     def test_a_missing_label_and_category_do_not_stop_the_query(self):
         ds = self.descriptor({"entity": "DEVICE", "date": "TAKEN_ON", "text": ["NOTE"]},
                              [{"role": "label", "reason": "no 0/1 column"}, {"role": "category", "reason": "no column with 3-50 values"}])
         self.assertFalse(ds.has("label"))
         sql, out = self.run_query(ds)
-        self.assertIn("SELECT DEVICE AS CATEGORY", sql)
+        self.assertIn("SELECT DEVICE AS DEVICE", sql)
         self.assertIn("GROUP BY DEVICE", sql)
         self.assertNotIn("AVG", sql)
         self.assertIn("No category role (no column with 3-50 values): rows are counted per entity", out)

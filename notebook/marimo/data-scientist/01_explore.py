@@ -73,13 +73,22 @@ def _(mo):
     mo.md(r"""
     ## Compare groups
 
-    Top 10 entities, split by category. `N` = rows, `LABEL_1_PCT` = % with label 1. Descriptive, not causal.
+    The 10 biggest entities, split by category: how many rows each has and, for each, the % where the label is 1. The note under the result says what it means.
     """)
     return
 
 
 @app.cell
 def _(CATEGORY, ENTITY, LABEL, conn, ds, missing_line, nb):
+    # Result columns are named after the data (SOURCE_DOMAIN, POSTS, IS_NEGATIVE_PCT); a note under each result says
+    # what its numbers mean.
+    COUNT = nb.count_name(ds)
+    E = nb.name(ENTITY) if ENTITY else None
+    C = nb.name(CATEGORY) if CATEGORY else None
+    PCT = nb.name(LABEL, "PCT") if LABEL else None
+    overall = nb.sql(conn, f"SELECT COUNT(*) AS N, ROUND(100 * AVG({LABEL}), 1) AS PCT FROM {ds.fact_table}") if LABEL else None
+    OVERALL = (overall["N"][0], overall["PCT"][0]) if LABEL else None
+
     landscape = pivot = None
     if not all(ds.has(role) for role in ("entity", "category", "label")):
         print(f"Skipped - the landscape needs entity, category and label roles ({missing_line}).")
@@ -91,24 +100,25 @@ def _(CATEGORY, ENTITY, LABEL, conn, ds, missing_line, nb):
         GROUP BY {ENTITY}
         ORDER BY N_ROWS DESC
         LIMIT 10)
-    SELECT T.ENTITY,
-           F.{CATEGORY} AS CATEGORY,
-           COUNT(*) AS N,
-           ROUND(100 * AVG(F.{LABEL}), 1) AS LABEL_1_PCT
+    SELECT T.ENTITY AS {E},
+           F.{CATEGORY} AS {C},
+           COUNT(*) AS {COUNT},
+           ROUND(100 * AVG(F.{LABEL}), 1) AS {PCT}
     FROM {ds.fact_table} F
     JOIN TOP_ENTITIES T ON F.{ENTITY} = T.ENTITY
     GROUP BY T.ENTITY, F.{CATEGORY}
-    ORDER BY T.ENTITY, N DESC""")
+    ORDER BY T.ENTITY, {COUNT} DESC""")
         nb.show_sql()
-        pivot = landscape.pivot_table(index="ENTITY", columns="CATEGORY", values="N", fill_value=0, aggfunc="sum")
+        nb.note_groups(landscape, ds, (E, C), COUNT, PCT, overall=OVERALL)
+        pivot = landscape.pivot_table(index=E, columns=C, values=COUNT, fill_value=0, aggfunc="sum")
     landscape
-    return (pivot,)
+    return COUNT, PCT, pivot
 
 
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    The same counts, one column per category.
+    The same counts as a grid: one row per entity, one column per category, each cell the number of rows.
     """)
     return
 
@@ -124,13 +134,13 @@ def _(mo):
     mo.md(r"""
     ## Over time
 
-    Rows and label rate per day, month or year (picked from the date span). Needs date and label roles.
+    How many rows per day, month or year (picked from the date span), and the % where the label is 1. Needs date and label roles. The note under the result says what it means.
     """)
     return
 
 
 @app.cell
-def _(DATE, LABEL, conn, ds, missing_line, nb):
+def _(COUNT, DATE, LABEL, PCT, conn, ds, missing_line, nb):
     over_time = None
     if not (ds.has("date") and ds.has("label")):
         print(f"Skipped - rows and label rate per period need the date and label roles ({missing_line}).")
@@ -140,13 +150,14 @@ def _(DATE, LABEL, conn, ds, missing_line, nb):
         period = "DAY" if days <= 62 else "MONTH" if days <= 3 * 366 else "YEAR"
 
         over_time = nb.sql(conn, f"""
-    SELECT CAST(DATE_TRUNC('{period}', {DATE}) AS DATE) AS PERIOD,
-           COUNT(*) AS N,
-           ROUND(100 * AVG({LABEL}), 1) AS LABEL_1_PCT
+    SELECT CAST(DATE_TRUNC('{period}', {DATE}) AS DATE) AS {period}_START,
+           COUNT(*) AS {COUNT},
+           ROUND(100 * AVG({LABEL}), 1) AS {PCT}
     FROM {ds.fact_table}
     GROUP BY 1
     ORDER BY 1""")
         nb.show_sql()
+        nb.note_trend(over_time, ds, f"{period}_START", COUNT, PCT)
     over_time
     return
 
@@ -156,7 +167,9 @@ def _(mo):
     mo.md(r"""
     ## Small baseline model
 
-    TF-IDF text + one-hot category, logistic regression, on up to 20,000 recent labelled rows; a quarter held out. ROC AUC 0.5 = guessing.
+    A small model learns to tell label 1 from label 0 using the text and the category, on up to 20,000 recent rows, and is checked on a quarter it has not seen. The note says how good it is in plain words.
+
+    Technical: TF-IDF text + one-hot category, logistic regression; the score is ROC AUC (0.5 = guessing).
     """)
     return
 
@@ -199,7 +212,8 @@ def _(CATEGORY, DATE, ENTITY, LABEL, TEXT, conn, ds, missing_line, nb):
         ])
         model.fit(X_train, y_train)
         auc = roc_auc_score(y_test, model.predict_proba(X_test)[:, 1])
-        print(f"{len(rows)} rows, {y.mean():.1%} with label 1; ROC AUC on the held-out quarter: {auc:.3f} (0.5 is guessing)")
+        print(f"ROC AUC on the held-out quarter: {auc:.3f}")
+        nb.note_model(auc, ds, len(rows), y.mean())
     return (model,)
 
 
@@ -208,21 +222,21 @@ def _(mo):
     mo.md(r"""
     ## Model clues
 
-    Top words pushing predictions toward 1 and toward 0. Check they are real signals, not boilerplate or leaks.
+    The words the model leans on most, each way. They are clues, not proof: drop a word that is boilerplate (it appears in every text) or a leak (it gives the answer away, like the label's own name).
     """)
     return
 
 
 @app.cell
-def _(model):
+def _(LABEL, model):
     import numpy as np
 
     if model is not None:
         names = model.named_steps["features"].get_feature_names_out()
         weights = model.named_steps["classifier"].coef_[0]
         order = np.argsort(weights)
-        print("towards 1:", ", ".join(n.split("__", 1)[1] for n in names[order[-12:]][::-1]))
-        print("towards 0:", ", ".join(n.split("__", 1)[1] for n in names[order[:12]]))
+        print(f"Make {LABEL} = 1 more likely:", ", ".join(n.split("__", 1)[1] for n in names[order[-12:]][::-1]))
+        print(f"Make {LABEL} = 1 less likely:", ", ".join(n.split("__", 1)[1] for n in names[order[:12]]))
     return
 
 

@@ -184,7 +184,7 @@ def _(mo):
     mo.md(r"""
     ## First result
 
-    Rows per category and, with an approved label, the share with label 1. Counts show size, not cause. `nb.show_sql()` shows the query.
+    How many rows per group and, when the column map names a label, the % where it is 1. A note under the result says what the numbers mean.
     """)
     return
 
@@ -197,9 +197,13 @@ def _(conn, ds_1, nb):
         print(f"No category role ({skipped.get('category', 'none approved')}): rows are counted per {GROUPED_BY} instead.")
     if 'label' in skipped:
         print(f"No label role ({skipped['label']}): the label rate is left out; the steps that need it later say so.")
-    LABEL_PCT = f",\n       ROUND(100 * AVG({ds_1.col('label')}), 1) AS LABEL_1_PCT" if ds_1.has('label') and GROUPED_BY != 'label' else ''
-    first_rows = nb.sql(conn, f'\nSELECT {BY} AS CATEGORY,\n       COUNT(*) AS N{LABEL_PCT}\nFROM {ds_1.fact_table}\nGROUP BY {BY}\nORDER BY N DESC\nLIMIT 10')
+    GROUP, COUNT = (nb.name(BY), nb.count_name(ds_1))  # columns named after the data: SOCIAL_NETWORK, POSTS
+    PCT = nb.name(ds_1.col('label'), 'PCT') if ds_1.has('label') and GROUPED_BY != 'label' else None  # IS_NEGATIVE_PCT
+    RATE = f",\n       ROUND(100 * AVG({ds_1.col('label')}), 1) AS {PCT}" if PCT else ''
+    first_rows = nb.sql(conn, f'\nSELECT {BY} AS {GROUP},\n       COUNT(*) AS {COUNT}{RATE}\nFROM {ds_1.fact_table}\nGROUP BY {BY}\nORDER BY {COUNT} DESC\nLIMIT 10')
     nb.show_sql()
+    overall = nb.sql(conn, f"SELECT COUNT(*) AS N, ROUND(100 * AVG({ds_1.col('label')}), 1) AS PCT FROM {ds_1.fact_table}") if PCT else None
+    nb.note_groups(first_rows, ds_1, GROUP, COUNT, PCT, overall=(overall['N'][0], overall['PCT'][0]) if PCT else None)
     first_rows
     return
 

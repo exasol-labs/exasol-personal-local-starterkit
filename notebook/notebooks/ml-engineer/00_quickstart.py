@@ -73,7 +73,7 @@ bucket_ok = nb.check_bucket(conn)
 # %% [markdown]
 # ## Check the label
 #
-# Rows and positive labels per category. Label 1 means the outcome happened (negative post, monetary relief), not that it is good.
+# How many rows per group and the % where the label is 1. Label 1 means the outcome happened (a negative post, monetary relief), not that it is good. A note under the result says what the numbers mean.
 
 # %%
 skipped = {m["role"]: m["reason"] for m in ds.missing}
@@ -82,15 +82,19 @@ for role, instead in (("category", "rows are counted per entity instead"),
     if role in skipped:
         print(f"No {role} role ({skipped[role]}): {instead}; the steps that need it later say so.")
 BY = ds.col("category") if ds.has("category") else ds.col("entity")
-LABEL_1 = f",\n       SUM({ds.col('label')}) AS LABEL_1" if ds.has("label") else ""
+GROUP, COUNT = nb.name(BY), nb.count_name(ds)       # columns named after the data: SOCIAL_NETWORK, POSTS
+PCT = nb.name(ds.col("label"), "PCT") if ds.has("label") else None   # IS_NEGATIVE_PCT
+RATE = f",\n       ROUND(100 * AVG({ds.col('label')}), 1) AS {PCT}" if PCT else ""
 first_rows = nb.sql(conn, f"""
-SELECT {BY} AS CATEGORY,
-       COUNT(*) AS N{LABEL_1}
+SELECT {BY} AS {GROUP},
+       COUNT(*) AS {COUNT}{RATE}
 FROM {ds.fact_table}
 GROUP BY {BY}
-ORDER BY N DESC
+ORDER BY {COUNT} DESC
 LIMIT 10""")
 nb.show_sql()
+overall = nb.sql(conn, f"SELECT COUNT(*) AS N, ROUND(100 * AVG({ds.col('label')}), 1) AS PCT FROM {ds.fact_table}") if PCT else None
+nb.note_groups(first_rows, ds, GROUP, COUNT, PCT, overall=(overall["N"][0], overall["PCT"][0]) if PCT else None)
 first_rows
 
 # %% [markdown]

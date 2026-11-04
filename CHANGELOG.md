@@ -22,6 +22,8 @@
 - **AI clients see the roles.** An approved table is published as a view in `EXAKIT_SEMANTIC` whose column comments carry the roles; run `exakit mcp-setup` once so an existing AI client lists views.
 - **Optional model and tracing.** `EXAKIT_MODEL_ID` and `EXAKIT_PROVIDER_BASE_URL` (Claude, Ollama, LM Studio, vLLM, Gemini) turn on SQL drafting in Ask and text themes in Explore; `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and `LANGFUSE_BASE_URL` trace those calls to your Langfuse project. Both are off until you set them.
 
+- **Results read in plain words.** Result columns are named after the data (`SOCIAL_NETWORK`, `POSTS`, `IS_NEGATIVE_PCT`, not `CATEGORY`, `N`, `LABEL_1_PCT`), and a note under each quickstart and Explore result says what one line and each number mean, the overall figure, the highest and lowest groups, which groups are too small to trust, and that a difference is not a cause (`nb.note_groups`, `nb.note_trend`, `nb.note_model`).
+
 ### ML Engineer
 
 - **The same datasets, plus training in the database.** The persona installs the notebook and `udf-devkit` add-ons and a local MLflow server, which starts again at login.
