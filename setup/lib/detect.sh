@@ -293,8 +293,9 @@ _detect_engine_probe() {
 
 # detect_podman — "podman" when a usable Podman is here, "none" otherwise.
 #
-# The kit drives Podman and only Podman: the Exasol launcher deploys through
-# it, and exapump's glibc shim borrows it. Bounded, because `podman info` can
+# The launcher deploys through Podman, or (from 2.4.0, Linux and Windows) a
+# Docker where Podman is not installed - see personal_engine - and exapump's
+# glibc shim borrows whichever is here. Bounded, because `podman info` can
 # block while a machine is still coming up, and a probe that hangs turns a
 # status command into a stall.
 detect_podman() {
@@ -303,6 +304,38 @@ detect_podman() {
         return 0
     fi
     echo "none"
+}
+
+# detect_docker_cli — a `docker` on PATH that is Docker itself: Podman installs
+# a `docker` that is podman under another name, and the launcher does not count
+# that one as Docker either.
+detect_docker_cli() {
+    command -v docker >/dev/null 2>&1 || return 1
+    case "$(_detect_engine_probe docker --version 2>/dev/null | tr '[:upper:]' '[:lower:]')" in
+        *podman*) return 1 ;;
+    esac
+    return 0
+}
+
+# detect_docker — "docker <major>" when a Docker daemon answers and runs Linux
+# containers (<major> is the Docker Engine major version, 0 when it does not
+# say), "down" when the Docker CLI is here but its daemon does not answer,
+# "none" otherwise (no Docker, Podman's alias, or Windows containers).
+detect_docker() {
+    if ! detect_docker_cli; then
+        echo "none"
+        return 0
+    fi
+    _dd="$(_detect_engine_probe docker info --format '{{.OSType}} {{.ServerVersion}}' 2>/dev/null | head -1)"
+    case "$_dd" in
+        linux\ *) : ;;
+        "") echo "down"; return 0 ;;
+        *) echo "none"; return 0 ;;
+    esac
+    _dd_major="${_dd#linux }"
+    _dd_major="${_dd_major%%.*}"
+    case "$_dd_major" in ''|*[!0-9]*) _dd_major=0 ;; esac
+    echo "docker $_dd_major"
 }
 
 

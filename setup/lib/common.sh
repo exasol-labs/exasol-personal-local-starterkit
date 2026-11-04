@@ -205,14 +205,15 @@ EXAKIT_PYEXASOL_VERSION="${EXAKIT_PYEXASOL_VERSION:-}"
 # 404 mid-install with the launcher half-downloaded. So this constant and
 # components.personal.version in versions.json move together, and they move to
 # a release that still exists - check before pinning, not after.
-# 2.3.0 FINAL since 2026-09-21, so no candidate is pinned here any more - the
-# two deletions above were both candidates, and a published release is not
-# removed the same way. Verified before pinning, as the note above demands:
-# v2.3.0 on exasol/exasol-personal is published, not a draft, not a
+# 2.4.0 since 2026-11-04 (2.3.0 FINAL before it), so no candidate is pinned
+# here - the two deletions above were both candidates, and a published release
+# is not removed the same way. Verified before pinning, as the note above
+# demands: v2.4.0 on exasol/exasol-personal is published, not a draft, not a
 # prerelease, and carries every asset this kit fetches - the macOS and Linux
 # arm64/x86_64 tarballs, the Windows x86_64 zip, and
-# exasol-personal_2.3.0_checksums.txt.
-EXAKIT_PERSONAL_VERSION_FALLBACK="${EXAKIT_PERSONAL_VERSION_FALLBACK:-2.3.0}"
+# exasol-personal_2.4.0_checksums.txt - and every S3 binary pinned in
+# versions.json is byte-identical to the one inside that checksummed archive.
+EXAKIT_PERSONAL_VERSION_FALLBACK="${EXAKIT_PERSONAL_VERSION_FALLBACK:-2.4.0}"
 EXAKIT_EXAPUMP_VERSION_FALLBACK="${EXAKIT_EXAPUMP_VERSION_FALLBACK:-0.13.1}"
 EXAKIT_MCP_VERSION_FALLBACK="${EXAKIT_MCP_VERSION_FALLBACK:-2.3.0}"
 EXAKIT_PYEXASOL_VERSION_FALLBACK="${EXAKIT_PYEXASOL_VERSION_FALLBACK:-3.0.1}"

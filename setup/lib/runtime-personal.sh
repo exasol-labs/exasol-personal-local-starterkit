@@ -200,6 +200,68 @@ personal_podman_installable() {
     command -v sudo >/dev/null 2>&1
 }
 
+# --- the container engine ---------------------------------------------------
+# From launcher 2.4.0 a local deployment on Linux (and WSL) runs in Podman when
+# Podman is installed, and otherwise in a Docker that runs Linux containers -
+# the launcher's container_engine "auto". The kit follows the same rule rather
+# than choosing for it: Podman is installed only where the launcher would need
+# it, and every check the kit makes against a deployment asks the engine that
+# deployment runs on. A deployment keeps the engine it first started on, which
+# the launcher records in local/runtime/container-engine.json; one made before
+# 2.4.0 has no record and runs in Podman. macOS has none of this: the launcher
+# runs its own VM there, and personal_engine answers nothing.
+PERSONAL_DOCKER_MIN_MAJOR=29
+
+# personal_engine — podman | docker for this machine's deployment (the one on
+# disk, else the one the launcher's auto would choose); empty on macOS. Docker
+# is chosen only when it can run the deployment: Docker Engine 29 or later with
+# Linux containers, or a Docker whose daemon is not answering (the launcher
+# picks that one too, and the kit asks for it to be started rather than putting
+# Podman beside it). An older Docker, or one on Windows containers, is passed
+# over, so Podman is installed and auto then picks it.
+personal_engine() {
+    case "$(detect_os 2>/dev/null)" in linux|wsl) : ;; *) return 0 ;; esac
+    _pe_run="$EXAKIT_PERSONAL_DEPLOY_DIR/local/runtime"
+    if [ -f "$_pe_run/container-engine.json" ]; then
+        _pe="$(tr -d '\012\015' < "$_pe_run/container-engine.json" 2>/dev/null | \
+            sed -n 's/.*"engine"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p')"
+        case "$_pe" in podman|docker) printf '%s\n' "$_pe"; return 0 ;; esac
+    fi
+    # Database data without the record: a deployment from before 2.4.0, which
+    # the launcher keeps on Podman (RecordedContainerEngine reads it the same way).
+    [ -d "$_pe_run/exa" ] && { printf 'podman\n'; return 0; }
+    command -v podman >/dev/null 2>&1 && { printf 'podman\n'; return 0; }
+    _pe_docker="$(detect_docker 2>/dev/null)"
+    case "$_pe_docker" in
+        down) printf 'docker\n'; return 0 ;;
+        docker\ *)
+            _pe_major="${_pe_docker#docker }"
+            if [ "${_pe_major:-0}" -ge "$PERSONAL_DOCKER_MIN_MAJOR" ] 2>/dev/null; then
+                printf 'docker\n'; return 0
+            fi
+            _exakit_log_file "INFO  Docker Engine $_pe_major is older than $PERSONAL_DOCKER_MIN_MAJOR, which the launcher needs: Podman is used instead"
+            ;;
+    esac
+    printf 'podman\n'
+}
+
+# personal_engine_running — the engine this deployment runs on can run a
+# container now. Podman: personal_podman_running (one repair, then the reason).
+# Docker: its daemon answers; the launcher never starts Docker and neither does
+# the kit, so a stopped one is named with what to do. 0 on macOS.
+personal_engine_running() {
+    case "$(personal_engine)" in
+        docker)
+            exakit_run_bounded 30 docker info --format '{{.OSType}}' >/dev/null 2>&1 && return 0
+            warn "Docker is installed, but it is not running."
+            info "Start Docker (Docker Desktop, or: sudo systemctl start docker), then re-run the installer to finish the install: $(exakit_install_command)"
+            exakit_note_failure "Docker is installed but not running ('docker info' did not answer)"
+            return 1
+            ;;
+        *) personal_podman_running ;;
+    esac
+}
+
 # personal_install_podman — Podman, when the database step finds it missing.
 #
 # WHERE THIS RUNS MATTERS. The launcher is installed first and the database is
@@ -225,6 +287,8 @@ personal_install_podman() {
         linux|wsl) : ;;
         *) return 0 ;;   # macOS and Windows: the launcher brings its own
     esac
+    # Docker runs this deployment (personal_engine): nothing to install.
+    [ "$(personal_engine)" = docker ] && return 0
 
     _pin_cmd="$(_personal_podman_install_cmd 2>/dev/null || true)"
     _pin_where="on this machine"
@@ -375,7 +439,7 @@ personal_check_requirements() {
             #
             # The launcher checked before anything is downloaded, so a machine
             # without podman is told once, at the start, and not mid-install.
-            if ! command -v podman >/dev/null 2>&1; then
+            if ! command -v podman >/dev/null 2>&1 && [ "$(personal_engine)" != docker ]; then
                 # "in WSL" / "on Linux": the same sentence with the platform
                 # spelled the way its user would say it, not the way detect_os
                 # returns it.
@@ -1475,8 +1539,9 @@ personal_container_error() {
         linux|wsl) : ;;
         *) return 0 ;;
     esac
-    command -v podman >/dev/null 2>&1 || return 0
-    _pce_list="$(exakit_run_bounded 15 podman ps -a --filter name=exasol-db --format '{{.Names}} {{.State}}' 2>/dev/null)" || return 0
+    _pce_engine="$(personal_engine)"
+    command -v "${_pce_engine:-podman}" >/dev/null 2>&1 || return 0
+    _pce_list="$(exakit_run_bounded 15 "$_pce_engine" ps -a --filter name=exasol-db --format '{{.Names}} {{.State}}' 2>/dev/null)" || return 0
     case " $_pce_list " in
         *" running"*) return 0 ;;
     esac
@@ -1485,7 +1550,7 @@ personal_container_error() {
             created|exited|stopped) : ;;
             *) continue ;;
         esac
-        _pce_err="$(exakit_run_bounded 15 podman inspect --format '{{.State.Error}}' "$_pce_name" 2>/dev/null | grep -v '^[[:space:]]*$' | head -1)"
+        _pce_err="$(exakit_run_bounded 15 "$_pce_engine" inspect --format '{{.State.Error}}' "$_pce_name" 2>/dev/null | grep -v '^[[:space:]]*$' | head -1)"
         if [ -n "$_pce_err" ]; then
             printf '%s\n' "$_pce_err"
             break
@@ -1609,7 +1674,7 @@ personal_deploy_local() {
     personal_install_podman || return 1
     # AND THAT IT ACTUALLY RUNS. A podman that is present but cannot start a
     # container fails inside the launcher, minutes later, naming neither.
-    personal_podman_running || return 1
+    personal_engine_running || return 1
     # A reachable Exasol is already up (this run, a previous run, or the user
     # started it by hand). `exasol info` is the launcher's own health signal.
     # Checked BEFORE the port test below so a healthy database that legitimately
@@ -2309,7 +2374,12 @@ personal_start() {
         # PODMAN FIRST, as the install does: a podman that cannot run anything
         # fails the start inside the launcher, naming neither. No-op on macOS.
         # Twin of the readiness check at the top of Start-Personal.
-        personal_podman_running || die "Podman cannot run the database right now (the reason is above). Once 'podman info' answers: exakit start"
+        if ! personal_engine_running; then
+            case "$(personal_engine)" in
+                docker) die "Docker cannot run the database right now (the reason is above). Once 'docker info' answers: exakit start" ;;
+                *) die "Podman cannot run the database right now (the reason is above). Once 'podman info' answers: exakit start" ;;
+            esac
+        fi
         # In "deployment_failed" the launcher's start (and stop) do nothing and
         # exit 0, so this reported "Database started" over a database that was
         # never asked to start and then waited its whole budget for it. The

@@ -340,10 +340,15 @@ exapump_install_glibc_shim() {
     # the user's own files (profile at ~/.exapump, mode 600) appear root-owned
     # and unreadable to the -u uid.
     _shim_userns="--userns=keep-id"
+    # No Podman, a Docker that answers: the launcher deploys through that one,
+    # and so does the shim. Docker maps no user namespace, so -u alone is right.
+    case "$_shim_runtime:$(detect_docker 2>/dev/null)" in
+        none:docker\ *) _shim_runtime="docker"; _shim_userns="" ;;
+    esac
     _sys_glibc="$(ldd --version 2>/dev/null | head -1)"
     warn "The exapump release binary needs a newer glibc than this system provides (${_sys_glibc:-unknown glibc})."
     if [ "$_shim_runtime" = "none" ]; then
-        die "exapump cannot run on this system's glibc and Podman is not available to shim it. Install Podman and re-run, or use a distro with glibc 2.38+ (e.g. Ubuntu 24.04)."
+        die "exapump cannot run on this system's glibc and neither Podman nor Docker is available to shim it. Install Podman and re-run, or use a distro with glibc 2.38+ (e.g. Ubuntu 24.04)."
     fi
     info "Self-repair: running exapump inside a $EXAKIT_EXAPUMP_SHIM_IMAGE container via $_shim_runtime"
 

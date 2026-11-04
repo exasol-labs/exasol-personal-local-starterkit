@@ -45,6 +45,7 @@
 
 ### Changed
 
+- **Exasol Personal is pinned to 2.4.0** (was 2.3.0). New local deployments get a generated `sys` password in the deployment's `secrets.json` instead of `exasol`; the kit already reads the password from there, so nothing changes for you, and existing deployments keep theirs. The release also brings the Nano database fixes (wrong results, crashes and three security fixes) and the launcher's sidecars. The v2.4.0 release was checked before pinning, and every S3 binary the kit downloads is byte-identical to the one in GitHub's checksummed archive.
 - The persona question's "None - just the kit" row is now **General**, and it combines with the others.
 - `esophageal_posts` replaces the pharma trials dataset.
 - Banking has no text column (the CFPB no longer publishes complaint narratives), so the text steps skip on Banking and say why. Its time column is the date a complaint was received.

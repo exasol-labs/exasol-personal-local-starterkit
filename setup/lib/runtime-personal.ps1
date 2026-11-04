@@ -10,8 +10,10 @@
 #   - first try the raw Windows EXE in Exasol S3, pinned by versions.json;
 #     fall back to exasol-personal_Windows_x86_64.zip + release checksums;
 #     there is NO Windows arm64 local deployment
-#   - the database runs through HOST Podman inside Podman's default machine;
-#     a missing Podman is offered for install by the launcher itself (winget,
+#   - the database runs through HOST Podman inside Podman's default machine,
+#     or (from 2.4.0) in Docker when Podman is not installed and a Docker
+#     Engine 29+ runs Linux containers - Get-PersonalEngine; with neither, a
+#     missing Podman is offered for install by the launcher itself (winget,
 #     possibly with an administrator prompt) - the kit never installs it
 #   - that default machine is shared host-wide: the launcher never reconfigures
 #     an existing one and leaves it running after stop and destroy, so this
@@ -21,13 +23,12 @@
 #     the flag is probed per subcommand exactly as the sh side does
 
 $script:PersonalRepo            = "exasol/exasol-personal"
-# 2.3.0 FINAL since 2026-09-21. This was a release candidate, and candidates
-# get deleted: rc2 and rc3 were both removed upstream while pinned here, and
+# 2.4.0 since 2026-11-04 (2.3.0 FINAL before it). Pins on release candidates
+# got deleted: rc2 and rc3 were both removed upstream while pinned here, and
 # rc3 reached a user as a 404 mid-install. A published release is not removed
-# that way, so this is the first pin here that is not living on borrowed time.
-# Twin of EXAKIT_PERSONAL_VERSION_FALLBACK in common.sh; both move together,
-# and both were checked against the upstream release before being written.
-$script:PersonalVersionFallback = "2.3.0"
+# that way. Twin of EXAKIT_PERSONAL_VERSION_FALLBACK in common.sh; both move
+# together, and both were checked against the upstream release before being written.
+$script:PersonalVersionFallback = "2.4.0"
 $script:PersonalPort            = 8563
 $script:PersonalProbeTimeout    = if ($env:EXAKIT_PERSONAL_PROBE_TIMEOUT) { [int]$env:EXAKIT_PERSONAL_PROBE_TIMEOUT } else { 10 }
 $script:PersonalMinRamGb        = if ($env:EXAKIT_PERSONAL_MIN_RAM_GB)  { [int]$env:EXAKIT_PERSONAL_MIN_RAM_GB }  else { 8 }
@@ -660,8 +661,9 @@ function Clear-PersonalStaleRecord {
     foreach ($key in @("runtime.container", "runtime.image", "runtime.volume")) {
         if ($null -ne (Get-ExakitManifestValue $key)) { Remove-ExakitManifestValue $key }
     }
-    # On Windows the launcher always runs the database in Podman (see header).
-    Set-ExakitManifestValue "runtime.engine" "podman"
+    # The engine this deployment runs on (Get-PersonalEngine): Podman, or from
+    # launcher 2.4.0 a Docker where Podman is not installed.
+    Set-ExakitManifestValue "runtime.engine" (Get-PersonalEngine)
 }
 
 # Set-PersonalManifest [status] - the connection details this kit hands to every
@@ -863,6 +865,81 @@ function Get-PersonalPodman {
     return (Get-Command podman -ErrorAction SilentlyContinue)
 }
 
+# --- the container engine ---------------------------------------------------
+# From launcher 2.4.0 a local deployment on Windows runs in Podman when Podman
+# is installed, and otherwise in a Docker that runs Linux containers (Docker
+# Engine 29 or later) - the launcher's container_engine "auto"; with neither,
+# the launcher installs Podman through winget as before. The kit follows the
+# same rule rather than choosing for it, and every check it makes against a
+# deployment asks the engine that deployment runs on. A deployment keeps the
+# engine it first started on (local\runtime\container-engine.json); one made
+# before 2.4.0 has no record and runs in Podman. Twin of personal_engine.
+$script:PersonalDockerMinMajor = 29
+
+# Get-PersonalDockerState - "docker <major>" when a Docker daemon answers and
+# runs Linux containers, "down" when the Docker CLI is here and its daemon is
+# not answering, "none" otherwise (no Docker, Podman's docker alias, or Windows
+# containers). Twin of detect_docker.
+function Get-PersonalDockerState {
+    $docker = Get-Command docker -ErrorAction SilentlyContinue
+    if (-not $docker) { return "none" }
+    $version = "" + (Invoke-ExakitBounded -FilePath $docker.Source -TimeoutSeconds 10 -Arguments @("--version"))
+    if ($version.ToLowerInvariant().Contains("podman")) { return "none" }
+    $info = ("" + (Invoke-ExakitBounded -FilePath $docker.Source -TimeoutSeconds 15 `
+        -Arguments @("info", "--format", "{{.OSType}} {{.ServerVersion}}"))).Trim()
+    if (-not $info) { return "down" }
+    $parts = @($info -split '\s+')
+    if ($parts[0] -ne "linux") { return "none" }
+    $major = 0
+    if ($parts.Count -gt 1) { [void][int]::TryParse(($parts[1] -split '\.')[0], [ref]$major) }
+    return "docker $major"
+}
+
+# Get-PersonalEngine - "podman" or "docker" for this machine's deployment: the
+# one on disk, else the one the launcher's auto would choose. A Docker whose
+# daemon is not answering is chosen too (the launcher picks it, and the kit asks
+# for it to be started); an older Docker is passed over for Podman.
+function Get-PersonalEngine {
+    $runtimeDir = Join-Path $script:PersonalDeployDir "local\runtime"
+    $marker = Join-Path $runtimeDir "container-engine.json"
+    if (Test-Path -LiteralPath $marker) {
+        try {
+            $recorded = "" + (Get-Content -LiteralPath $marker -Raw -Encoding UTF8 | ConvertFrom-Json).engine
+            if ($recorded -in @("podman", "docker")) { return $recorded }
+        } catch { }
+    }
+    if (Test-Path -LiteralPath (Join-Path $runtimeDir "exa")) { return "podman" }
+    if (Get-PersonalPodman) { return "podman" }
+    $docker = Get-PersonalDockerState
+    if ($docker -eq "down") { return "docker" }
+    if ($docker -like "docker *") {
+        $major = [int]($docker.Substring(7))
+        if ($major -ge $script:PersonalDockerMinMajor) { return "docker" }
+        Write-ExakitLog "INFO" "Docker Engine $major is older than $($script:PersonalDockerMinMajor), which the launcher needs: Podman is used instead"
+    }
+    return "podman"
+}
+
+# Get-PersonalEngineCommand - the engine's command on PATH, or $null.
+function Get-PersonalEngineCommand {
+    if ((Get-PersonalEngine) -eq "docker") { return (Get-Command docker -ErrorAction SilentlyContinue) }
+    return (Get-PersonalPodman)
+}
+
+# Test-PersonalEngineReady - the engine this deployment runs on can run it now:
+# Podman's own readiness questions (machine, DNS, pids), or a Docker daemon that
+# answers. The launcher never starts Docker and neither does the kit, so a
+# stopped one is named with what to do.
+function Test-PersonalEngineReady {
+    param([switch]$Fresh)
+    if ((Get-PersonalEngine) -ne "docker") { return (Test-PersonalPodmanReady -Fresh:$Fresh) }
+    if ((Get-PersonalDockerState) -like "docker *") { return $true }
+    Warn2 "Docker is installed, but it is not running."
+    Info "Start Docker Desktop, then re-run the installer to finish the install: $(Get-ExakitInstallCommand)"
+    Set-ExakitFailureReason "Docker is installed but not running ('docker info' did not answer)"
+    return $false
+}
+
 # Get-PersonalPodmanMode - "rootful" or "rootless" for Podman's default
 # machine, "" when there is none or it cannot say. Reported, never judged.
 function Get-PersonalPodmanMode {
@@ -981,7 +1058,7 @@ function Get-PersonalKnownCause {
 # Get-PersonalContainers - this deployment's containers, as Name/State pairs.
 # The launcher names them exasol-db-<id>.
 function Get-PersonalContainers {
-    $podman = Get-PersonalPodman
+    $podman = Get-PersonalEngineCommand
     if (-not $podman) { return @() }
     $out = "" + (Invoke-ExakitBounded -FilePath $podman.Source -TimeoutSeconds 15 `
         -Arguments @("ps", "-a", "--filter", "name=exasol-db", "--format", "{{.Names}} {{.State}}"))
@@ -1006,7 +1083,7 @@ function Get-PersonalContainers {
 function Get-PersonalContainerError {
     $containers = @(Get-PersonalContainers)
     if (@($containers | Where-Object { $_.State -eq "running" }).Count -gt 0) { return "" }
-    $podman = Get-PersonalPodman
+    $podman = Get-PersonalEngineCommand
     foreach ($c in @($containers | Select-Object -First 3)) {
         if ($c.State -notmatch '^(created|exited|stopped)$') { continue }
         $err = "" + (Invoke-ExakitBounded -FilePath $podman.Source -TimeoutSeconds 15 `
@@ -1392,9 +1469,10 @@ function Install-PersonalDeployment {
     # the top of personal_deploy_local.
     $deployed = Test-PersonalDeploymentExists
     if ($deployed) { Set-ExakitReusedOwnership "database" $script:PersonalDeployDir }
-    if (Get-PersonalPodman) {
+    $engine = Get-PersonalEngine
+    if ($engine -eq "docker" -or (Get-PersonalPodman)) {
         $fresh = (-not $deployed) -or (Test-PersonalFirstBootPending)
-        if (-not (Test-PersonalPodmanReady -Fresh:$fresh)) {
+        if (-not (Test-PersonalEngineReady -Fresh:$fresh)) {
             $script:PersonalNoDatabase = $true
             return
         }
@@ -1538,12 +1616,16 @@ function Install-PersonalDeployment {
     # does the installing itself where the kit owns that job.
     # An installed Podman that cannot run the database was stopped at the top
     # of this function (Test-PersonalPodmanReady), before any branch waited on it.
-    if (-not (Get-PersonalPodman)) {
-        Warn2 "Podman is not installed on this machine, and the database runs through it."
-        Info "The Exasol launcher installs it as part of this step, and Windows may ask for administrator approval."
-        Info "If that is refused or fails: install it yourself with 'winget install RedHat.Podman' (a reboot may be needed), then re-run the installer."
+    if ($engine -eq "docker") {
+        Info "Deploying Exasol Personal locally - the database runs in Docker, which is already on this machine."
+    } else {
+        if (-not (Get-PersonalPodman)) {
+            Warn2 "Podman is not installed on this machine, and the database runs through it."
+            Info "The Exasol launcher installs it as part of this step, and Windows may ask for administrator approval."
+            Info "If that is refused or fails: install it yourself with 'winget install RedHat.Podman' (a reboot may be needed), then re-run the installer."
+        }
+        Info "Deploying Exasol Personal locally - the database runs through Podman's default machine, which the launcher prepares."
     }
-    Info "Deploying Exasol Personal locally - the database runs through Podman's default machine, which the launcher prepares."
 
     $installArgs = @("install", "local")
     $flag = Get-PersonalAutoApproveFlag "install"
@@ -1567,7 +1649,7 @@ function Install-PersonalDeployment {
             # THE LIKELIEST CAUSE FIRST. A deploy that fails with Podman still
             # missing failed at installing Podman, and "Local deployment
             # failed" sends the reader to look at the database instead.
-            if (-not (Get-PersonalPodman)) {
+            if ($engine -ne "docker" -and -not (Get-PersonalPodman)) {
                 # NOT Fail. This is the one deployment failure the install can
                 # carry on from, and the twin of personal_deploy_local's single
                 # non-zero return: nothing has been created, nothing is half
@@ -1669,7 +1751,7 @@ function Start-Personal {
     # the install asks, so `exakit start` (and autostart) starts the machine
     # and names a pids or DNS gap instead of waiting on it. The DNS question
     # only for a deployment that has never pulled its image.
-    if (-not (Test-PersonalPodmanReady -Fresh:(Test-PersonalFirstBootPending))) {
+    if (-not (Test-PersonalEngineReady -Fresh:(Test-PersonalFirstBootPending))) {
         Fail "$(Get-ExakitFailureReason). Once that is fixed: exakit start"
     }
     # In "deployment_failed" the launcher's start (and stop) do nothing and

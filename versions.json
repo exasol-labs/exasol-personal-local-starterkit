@@ -6,16 +6,16 @@
   },
   "components": {
     "personal": {
-      "version": "2.3.0",
+      "version": "2.4.0",
       "severity": "normal",
       "s3": {
         "base_url": "https://x-up.s3.eu-west-1.amazonaws.com/releases/exasol-personal",
         "sha256": {
-          "linux-arm64": "ab543074586579a9f21cd63a4d2a3e765c89f4af0fc283ed78a46e76ea0de17c",
-          "linux-x86_64": "62f7dcd9da76e54848cf5c53f0de70d1d33908fe994455687d0d4ed5524ab2b9",
-          "macos-arm64": "b1119c8374db7767950f2c87c427267e7dd3914436ea7e72bd637dfc6cf94bac",
-          "macos-x86_64": "fa1e769fc895b4bc0e05cdc3177dd32e67d88266bf81f9901a5efaf87ad50b8e",
-          "windows-x86_64": "cd33517a53a593239a7f489f0f15a8f7fd63cc00c1975e22dd4a3ce7c5c7d73a"
+          "linux-arm64": "c5360ba697c753305da9056f4f1b5a53279d963418fc671bbc04044ba6d252a3",
+          "linux-x86_64": "9c8242aed903995c56986705f4eefe65b56ecd99cbb711cbecfcd360b7528838",
+          "macos-arm64": "f3e3d3c80f2818d1b3778e3c93c42957b9b2c9f47e8d67c12252d0e169e28dc6",
+          "macos-x86_64": "6276fffc83f1b79ebe7644ff585d2ca86ba73f48bd47edb03714114ee1b84530",
+          "windows-x86_64": "1dd3101d34e59c4e82b15dd1163e713b5e2afcb71239c4fc8411dc331bf0c0be"
         }
       }
     },

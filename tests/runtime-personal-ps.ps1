@@ -551,6 +551,40 @@ Check "...and --json claims repaired only when the runtime step completed" $true
 Reset-Machine
 Remove-Item Env:EXAKIT_PERSONAL_READY_TIMEOUT -ErrorAction SilentlyContinue
 
+Write-Host "Get-PersonalEngine: the launcher's own choice - Podman if installed, else a Docker 29+ on Linux containers:"
+$script:PersonalDeployDir = Join-Path $work "engine-none"
+$script:podmanHere = $false
+$script:dockerSays = "none"
+function Get-PersonalPodman { if ($script:podmanHere) { return [pscustomobject]@{ Source = "podman-stub" } }; return $null }
+function Get-PersonalDockerState { return $script:dockerSays }
+$script:podmanHere = $true; $script:dockerSays = "docker 29"
+Check "Podman installed -> podman, Docker beside it or not" "podman" (Get-PersonalEngine)
+$script:podmanHere = $false
+Check "no Podman, Docker 29 on Linux containers -> docker" "docker" (Get-PersonalEngine)
+$script:dockerSays = "docker 28"
+Check "Docker older than 29 -> podman (the launcher installs it)" "podman" (Get-PersonalEngine)
+$script:dockerSays = "down"
+Check "Docker Desktop not running -> docker (start it; no Podman beside it)" "docker" (Get-PersonalEngine)
+$script:dockerSays = "none"
+Check "neither -> podman (the launcher installs it through winget)" "podman" (Get-PersonalEngine)
+$recorded = Join-Path $work "engine-docker"
+New-Item -ItemType Directory -Force -Path (Join-Path $recorded "local/runtime") | Out-Null
+Set-Content -Path (Join-Path $recorded "local/runtime/container-engine.json") -Value '{"engine":"docker"}'
+$script:PersonalDeployDir = $recorded; $script:podmanHere = $true
+Check "a deployment keeps its recorded engine" "docker" (Get-PersonalEngine)
+$legacyDep = Join-Path $work "engine-legacy"
+New-Item -ItemType Directory -Force -Path (Join-Path $legacyDep "local/runtime/exa") | Out-Null
+$script:PersonalDeployDir = $legacyDep; $script:podmanHere = $false; $script:dockerSays = "docker 29"
+Check "a deployment from before 2.4.0 (data, no record) stays on podman" "podman" (Get-PersonalEngine)
+$script:PersonalDeployDir = Join-Path $work "engine-none"; $script:dockerSays = "down"
+function Warn2 { param($m) $script:calls.Add("warn: $m") }
+function Info { param($m) $script:calls.Add("info: $m") }
+$script:calls.Clear()
+Check "a stopped Docker is not ready" $false (Test-PersonalEngineReady)
+Check "...and says to start Docker Desktop" $true ((@($script:calls) -join "|") -like "*Start Docker Desktop*")
+$script:dockerSays = "docker 29"
+Check "a running Docker is ready" $true (Test-PersonalEngineReady)
+
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 Write-Host ""
 Write-Host "passed: $($script:PASS), failed: $($script:FAIL)"
