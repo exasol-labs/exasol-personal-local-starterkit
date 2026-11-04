@@ -95,7 +95,7 @@ EXAKIT_PYEXASOL_VERSION_FALLBACK="${EXAKIT_PYEXASOL_VERSION_FALLBACK:-3.0.1}"
 # will RUN at all: below it uv's bundled CA store trusts an emSign root whose
 # intermediate CA keys are compromised (GHSA-hq85-5cpj-mr62), so a uv already
 # on the machine is used only at or above this floor.
-EXAKIT_UV_VERSION_FALLBACK="${EXAKIT_UV_VERSION_FALLBACK:-0.13.6}"
+EXAKIT_UV_VERSION_FALLBACK="${EXAKIT_UV_VERSION_FALLBACK:-0.13.7}"
 EXAKIT_UV_MIN_VERSION_FALLBACK="${EXAKIT_UV_MIN_VERSION_FALLBACK:-0.13.4}"
 EXAKIT_UV_REPO="astral-sh/uv"
 # Marketplace add-ons (dash-server, ...) carry their own version constants in

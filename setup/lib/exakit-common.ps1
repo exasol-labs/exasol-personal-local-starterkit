@@ -201,7 +201,7 @@ $script:McpVersionFallback = if ($env:EXAKIT_MCP_VERSION_FALLBACK) { $env:EXAKIT
 # The MIN version is the oldest uv the kit will RUN at all: below it uv's
 # bundled CA store trusts an emSign root whose intermediate CA keys are
 # compromised (GHSA-hq85-5cpj-mr62). Twins of EXAKIT_UV_*_FALLBACK in common.sh.
-$script:UvVersionFallback = if ($env:EXAKIT_UV_VERSION_FALLBACK) { $env:EXAKIT_UV_VERSION_FALLBACK } else { "0.13.6" }
+$script:UvVersionFallback = if ($env:EXAKIT_UV_VERSION_FALLBACK) { $env:EXAKIT_UV_VERSION_FALLBACK } else { "0.13.7" }
 $script:UvMinVersionFallback = if ($env:EXAKIT_UV_MIN_VERSION_FALLBACK) { $env:EXAKIT_UV_MIN_VERSION_FALLBACK } else { "0.13.4" }
 $script:UvRepo = "astral-sh/uv"
 $script:UvVetted = $null
