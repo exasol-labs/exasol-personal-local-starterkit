@@ -1153,7 +1153,7 @@ elif "checks" in r:
     for c in r["checks"]:
         print("  %-16s %s %s" % (c["name"], c["status"], c.get("evidence") or c.get("remedy") or ""))
 else:
-    for k in ("name", "connector", "status", "objects", "inputs", "pins", "tables", "last_check", "evidence", "remedy"):
+    for k in ("name", "connector", "status", "objects", "inputs", "pins", "needs_refresh", "tables", "last_check", "evidence", "remedy"):
         if r.get(k) not in (None, "", {}):
             print("  %-11s %s" % (k, json.dumps(r[k]) if isinstance(r[k], (dict, list)) else r[k]))
     for i, t in enumerate(r.get("tips") or []):

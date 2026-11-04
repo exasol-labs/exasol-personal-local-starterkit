@@ -1916,5 +1916,173 @@ has "Invoke-CmdConnect hands a console to it" "Invoke-ExakitVsTui -Source" "$(ca
 has "the menu starts on the first connector on both sides" "-StartRow 1" "$(cat "$ROOT/setup/lib/virtual-schemas.ps1")"
 has "...and in bash" "UI_TABLE_MENU_START=1" "$(cat "$ROOT/setup/lib/virtual-schemas.sh")"
 
+printf '\n== a kit update moves connected sources to the adapter it pins ==\n'
+# An update changes a connector's pins (connector.json); a source connected
+# earlier keeps running what its adapter script names until a check moves it.
+# Its own kit home and deployment, so the files it proves are its own.
+RP_SAVED_HOME="$HOME_K"; RP_SAVED_DEPLOY="$DEPLOY"; RP_SAVED_EXA="$EXA"
+HOME_K="$WORK/kit-repin"; DEPLOY="$WORK/deploy-repin"; EXA="$DEPLOY/local/runtime/exa"
+mkdir -p "$HOME_K" "$EXA/bucketfs/bfsdefault/default" "$EXA/jdbc"
+cp -R "$RP_SAVED_HOME/cache" "$HOME_K/cache"
+cp "$DEFS/connectors/postgresql/connector.json" "$WORK/pg-connector.json"
+cp "$DEFS/connectors/mongodb/connector.json" "$WORK/mg-connector.json"
+RP_VS="$EXA/bucketfs/bfsdefault/default/exakit/vs"
+RP_LOADER="$EXA/jdbc/POSTGRES_JDBC_DRIVER"
+rpstate() { python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(eval(sys.argv[2], {"d": d}))' "$HOME_K/sources/$1/state.json" "$2"; }
+rpreg() { python3 -c 'import json,sys; r=json.load(open(sys.argv[1]))["artifacts"]; print(json.dumps(sorted(next((v["consumers"] for k, v in r.items() if k.endswith(sys.argv[2])), []))))' "$HOME_K/sources/registry.json" "$1"; }
+repin() {
+    python3 - "$DEFS" "$HOME_K" "$@" <<'PY'
+import hashlib, json, os, sys
+defs, home, cid, version = sys.argv[1:5]
+def seed(pin, data):
+    pin["size"], pin["sha256"] = len(data), hashlib.sha256(data).hexdigest()
+    folder = os.path.join(home, "cache", "virtual-schemas", pin["sha256"])
+    os.makedirs(folder, exist_ok=True)
+    open(os.path.join(folder, pin["asset"]), "wb").write(data)
+path = os.path.join(defs, "connectors", cid, "connector.json")
+doc = json.load(open(path))
+old = doc["adapter"]["version"]
+doc["adapter"]["version"] = version
+if cid == "postgresql":
+    doc["adapter"]["asset"] = doc["adapter"]["asset"].replace(old, version)
+    seed(doc["adapter"], ("adapter-postgresql-" + version).encode())
+    if len(sys.argv) > 5:
+        doc["driver"]["asset"] = doc["driver"]["asset"].replace(doc["driver"]["version"], sys.argv[5])
+        doc["driver"]["version"] = sys.argv[5]
+        seed(doc["driver"], ("driver-postgresql-" + sys.argv[5]).encode())
+else:
+    for arch, pin in doc["adapter"]["arch"].items():
+        pin["asset"] = pin["asset"].replace(old, version)
+        seed(pin, ("adapter-mongodb-%s-%s" % (version, arch)).encode())
+json.dump(doc, open(path, "w"), indent=2)
+PY
+}
+db '{"sources": {"a.example.com": {"tables": ["T1"]}, "b.example.com": {"tables": ["T2"]}, "c.example.com": {"tables": ["T3"]},
+                 "cluster0.example.net": {"tables": ["MOVIES"], "secret": "'"$SECRET"'"}}}'
+RP_RC=""
+for n in a b c; do
+    run_secret "$SECRET" connect postgresql --name rp_$n --set host=$n.example.com --set database=$n --set user=reader --secret-stdin
+    RP_RC="$RP_RC$RC"
+done
+run_secret "$SECRET" connect mongodb --name rp_m1 $MG_SET --set collection=movies --secret-stdin; RP_RC="$RP_RC$RC"
+run_secret "$SECRET" connect mongodb --name rp_m2 $MG_SET --set collection=theaters --secret-stdin; RP_RC="$RP_RC$RC"
+run disconnect rp_c; RP_RC="$RP_RC$RC"
+check "three PostgreSQL sources (one disconnected) and two MongoDB sources connected" "000000" "$RP_RC"
+run check rp_a
+check "on the pins it was connected with, a check moves nothing" "0" "$RC"
+lacks "...and says nothing of a move" "Moved" "$OUT"
+
+OLD_JAR="$RP_VS/postgresql/4.1.0/virtual-schema-dist-14.1.0-postgresql-4.1.0.jar"
+NEW_JAR="$RP_VS/postgresql/4.2.0/virtual-schema-dist-14.2.0-postgresql-4.2.0.jar"
+OLD_DRV="$RP_VS/postgresql/driver-42.7.14/postgresql-42.7.14.jar"
+repin postgresql 4.2.0 42.7.15
+# rp_b's script cannot be re-created this time: it stays on the old adapter.
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["script_fail"]=["EXAKIT_VS.ADAPTER_RP_B"]; json.dump(d, open(sys.argv[1],"w"))' "$STATE"
+N0="$(dbq 'len(d["statements"])')"
+run check rp_a
+check "after the update, check rp_a: exit 0" "0" "$RC"
+has "...it moved, in plain words" "Moved rp_a from PostgreSQL adapter 4.1.0 to 4.2.0 and driver 42.7.14 to 42.7.15" "$OUT"
+check "...the staging said once for the three sources" "1" "$(printf '%s\n' "$OUT" | grep -c 'Adapter 4.2.0 and driver 42.7.15 verified and staged')"
+RPA_SQL="$(dbq '[s for s in d["statements"]['"$N0"':] if "ADAPTER SCRIPT \"EXAKIT_VS\".\"ADAPTER_RP_A\"" in s][-1]')"
+has "...its script re-created over the new adapter" "%jar /buckets/bfsdefault/default/exakit/vs/postgresql/4.2.0/virtual-schema-dist-14.2.0-postgresql-4.2.0.jar;" "$RPA_SQL"
+has "...and the new driver" "%jar /buckets/bfsdefault/default/exakit/vs/postgresql/driver-42.7.15/postgresql-42.7.15.jar;" "$RPA_SQL"
+has "...with CREATE OR REPLACE" "CREATE OR REPLACE JAVA ADAPTER SCRIPT" "$RPA_SQL"
+check "...its virtual schema refreshed, the new pins recorded, nothing left to refresh" "1 4.2.0 42.7.15 False" \
+    "$(dbq 'sum(s == "ALTER VIRTUAL SCHEMA \"VS_RP_A\" REFRESH" for s in d["statements"]['"$N0"':])') $(rpstate rp_a 'd["pins"]["adapter_version"]') $(rpstate rp_a 'd["pins"]["driver_version"]') $(rpstate rp_a '"needs_refresh" in d')"
+has "the disconnected source moved too (the connector's sources move together)" "Moved rp_c from PostgreSQL adapter 4.1.0 to 4.2.0" "$OUT"
+check "...its script re-created, no refresh tried, needs_refresh recorded" "1 0 4.2.0 True" \
+    "$(dbq 'sum("ADAPTER_RP_C" in s and "4.2.0" in s for s in d["statements"]['"$N0"':])') $(dbq 'sum("VS_RP_C" in s and "REFRESH" in s for s in d["statements"]['"$N0"':])') $(rpstate rp_c 'd["pins"]["adapter_version"]') $(rpstate rp_c 'd.get("needs_refresh")')"
+has "...said with how it ends" "rp_c is disconnected: its virtual schema is refreshed when it is connected again" "$OUT"
+has "a script that could not be re-created is said, with the retry" "Could not move rp_b to PostgreSQL adapter 4.2.0" "$OUT"
+has "...and the command" "exakit source check rp_b" "$OUT"
+check "...rp_b keeps its old pins" "4.1.0" "$(rpstate rp_b 'd["pins"]["adapter_version"]')"
+check "the old adapter and driver stay while rp_b uses them, the new ones are staged" "yes yes yes" \
+    "$([ -f "$OLD_JAR" ] && echo yes) $([ -f "$OLD_DRV" ] && echo yes) $([ -f "$NEW_JAR" ] && echo yes)"
+check "...the registry names rp_b alone as the old adapter's consumer" '["rp_b"]' "$(rpreg postgresql/4.1.0/virtual-schema-dist-14.1.0-postgresql-4.1.0.jar)"
+check "...and the new one's consumers are the moved sources" '["rp_a", "rp_c"]' "$(rpreg postgresql/4.2.0/virtual-schema-dist-14.2.0-postgresql-4.2.0.jar)"
+check "the loader runs the new driver; the old one stays for rp_b" "JAR=postgresql-42.7.15.jar yes" \
+    "$(grep '^JAR=' "$RP_LOADER/settings.cfg") $([ -f "$RP_LOADER/postgresql-42.7.14.jar" ] && echo yes)"
+
+# Now rp_b's script can be re-created, but its source does not answer the refresh.
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d.pop("script_fail"); d["refresh_fail"]=["VS_RP_B"]; json.dump(d, open(sys.argv[1],"w"))' "$STATE"
+run --json check --all
+has "check --all moves the one left behind" "Moved rp_b from PostgreSQL adapter 4.1.0 to 4.2.0" "$OUT"
+has "...a refresh that fails is said, with the repair" "rp_b moved, but its virtual schema did not refresh" "$OUT"
+has "...and the command" "repair it with: exakit source refresh rp_b" "$OUT"
+check "...said once, though check --all reaches rp_b again" "1" "$(printf '%s\n' "$OUT" | grep -c 'rp_b moved')"
+check "...its new pins are recorded all the same, marked needs_refresh" "4.2.0 True" \
+    "$(rpstate rp_b 'd["pins"]["adapter_version"]') $(rpstate rp_b 'd.get("needs_refresh")')"
+check "the last consumer gone: the old adapter, driver and loader jar are deleted, with their folders" "no no no no" \
+    "$([ -f "$OLD_JAR" ] && echo yes || echo no) $([ -d "$RP_VS/postgresql/4.1.0" ] && echo yes || echo no) $([ -d "$RP_VS/postgresql/driver-42.7.14" ] && echo yes || echo no) $([ -f "$RP_LOADER/postgresql-42.7.14.jar" ] && echo yes || echo no)"
+check "...the new files and the bucket stay" "yes yes yes" \
+    "$([ -f "$NEW_JAR" ] && echo yes) $([ -f "$RP_LOADER/postgresql-42.7.15.jar" ] && echo yes) $([ -d "$EXA/bucketfs/bfsdefault/default" ] && echo yes)"
+run --json list
+has "list shows needs_refresh" '"needs_refresh": true' "$OUT"
+run --json show rp_b
+has "show shows it" '"needs_refresh": true' "$OUT"
+run --json issues
+has "issues names it with the repair" "exakit source refresh rp_b" "$OUT"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d.pop("refresh_fail"); json.dump(d, open(sys.argv[1],"w"))' "$STATE"
+run refresh rp_b
+check "refresh clears needs_refresh" "0 False" "$RC $(rpstate rp_b '"needs_refresh" in d')"
+
+N1="$(dbq 'len(d["statements"])')"
+run --json check --all
+lacks "a second check --all moves nothing" "Moved" "$OUT"
+check "...and re-creates no script, refreshes no schema" "0" \
+    "$(dbq 'sum("ADAPTER SCRIPT" in s or "REFRESH" in s for s in d["statements"]['"$N1"':])')"
+
+run_secret "$SECRET" connect postgresql --name rp_c --secret-stdin
+check "reconnecting the moved source: exit 0, its schema refreshed, needs_refresh cleared" "0 1 False 4.2.0" \
+    "$RC $(dbq 'sum(s == "ALTER VIRTUAL SCHEMA \"VS_RP_C\" REFRESH" for s in d["statements"]['"$N1"':])') $(rpstate rp_c '"needs_refresh" in d') $(rpstate rp_c 'd["pins"]["adapter_version"]')"
+
+# A pin that cannot be fetched (here: not HTTPS, never cached) moves nothing.
+cp "$DEFS/connectors/postgresql/connector.json" "$WORK/pg-420.json"
+python3 - "$DEFS/connectors/postgresql/connector.json" <<'PY'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+doc["adapter"].update(version="9.9.9", asset="vs-9.9.9.jar", url="http://example.com/vs-9.9.9.jar", sha256="0" * 64, size=1)
+json.dump(doc, open(sys.argv[1], "w"), indent=2)
+PY
+CFG_BEFORE="$(cat "$RP_LOADER/settings.cfg")"
+run check rp_a
+check "an adapter that cannot be fetched: the check still runs, exit 0" "0" "$RC"
+has "...the move is said not to have happened, with the retry" "Could not move the PostgreSQL sources rp_a, rp_b, rp_c to adapter 9.9.9" "$OUT"
+check "...pins, staged files and the loader are as they were" "4.2.0 no yes" \
+    "$(rpstate rp_a 'd["pins"]["adapter_version"]') $([ -d "$RP_VS/postgresql/9.9.9" ] && echo yes || echo no) $([ "$CFG_BEFORE" = "$(cat "$RP_LOADER/settings.cfg")" ] && echo yes)"
+cp "$WORK/pg-420.json" "$DEFS/connectors/postgresql/connector.json"
+
+# A shared adapter (MongoDB: one script every source runs) moves them all at once.
+MG_OLD_DIR="$RP_VS/mongodb/0.1.3"
+repin mongodb 0.1.4
+N2="$(dbq 'len(d["statements"])')"
+run check rp_m1
+check "MongoDB after the update: exit 0" "0" "$RC"
+has "...both sources moved" "Moved rp_m1 from MongoDB adapter 0.1.3 to 0.1.4" "$OUT"
+has "...the other one too" "Moved rp_m2 from MongoDB adapter 0.1.3 to 0.1.4" "$OUT"
+check "...the shared adapter and its scan UDF re-created once, both schemas refreshed" "1 1 1 1" \
+    "$(dbq 'sum("RUST ADAPTER SCRIPT \"EXAKIT_VS\".\"MONGODB_ADAPTER\"" in s for s in d["statements"]['"$N2"':])') $(dbq 'sum("\"MONGODB_SCAN\"" in s and s.startswith("CREATE") for s in d["statements"]['"$N2"':])') $(dbq 'sum(s == "ALTER VIRTUAL SCHEMA \"VS_RP_M1\" REFRESH" for s in d["statements"]['"$N2"':])') $(dbq 'sum(s == "ALTER VIRTUAL SCHEMA \"VS_RP_M2\" REFRESH" for s in d["statements"]['"$N2"':])')"
+has "...the adapter loads the new .so" "%udf_object /buckets/bfsdefault/default/exakit/vs/mongodb/0.1.4/exasol-mongodb-vs-0.1.4-linux-" \
+    "$(dbq '[s for s in d["statements"]['"$N2"':] if "MONGODB_ADAPTER" in s][-1]')"
+check "...both record the new pins; the old .so is deleted" "0.1.4 0.1.4 no" \
+    "$(rpstate rp_m1 'd["pins"]["adapter_version"]') $(rpstate rp_m2 'd["pins"]["adapter_version"]') $([ -d "$MG_OLD_DIR" ] && echo yes || echo no)"
+N3="$(dbq 'len(d["statements"])')"
+run check rp_m2
+lacks "...a second check moves nothing" "Moved" "$OUT"
+check "...nor re-creates the script" "0" "$(dbq 'sum("MONGODB_ADAPTER" in s for s in d["statements"]['"$N3"':])')"
+
+# A new connect re-creates the shared script with the pins of the day: the
+# sources already there move with it, recorded as such.
+repin mongodb 0.1.5
+run_secret "$SECRET" connect mongodb --name rp_m3 $MG_SET --set collection=comments --secret-stdin
+check "a new MongoDB connect after an update: exit 0" "0" "$RC"
+has "...the sources already there moved first" "Moved rp_m1 from MongoDB adapter 0.1.4 to 0.1.5" "$OUT"
+check "...all three record the pins the shared script runs; the old .so is gone" "0.1.5 0.1.5 0.1.5 no" \
+    "$(rpstate rp_m1 'd["pins"]["adapter_version"]') $(rpstate rp_m2 'd["pins"]["adapter_version"]') $(rpstate rp_m3 'd["pins"]["adapter_version"]') $([ -d "$RP_VS/mongodb/0.1.4" ] && echo yes || echo no)"
+
+cp "$WORK/pg-connector.json" "$DEFS/connectors/postgresql/connector.json"
+cp "$WORK/mg-connector.json" "$DEFS/connectors/mongodb/connector.json"
+HOME_K="$RP_SAVED_HOME"; DEPLOY="$RP_SAVED_DEPLOY"; EXA="$RP_SAVED_EXA"
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -232,6 +232,9 @@ exakit source describe sales orders --ddl --schema LOCAL > orders.sql   # DDL to
 ```
 
 `check` is one shot, not monitoring: nothing watches a source in the background.
+After `exakit update`, run `exakit source check --all`: it moves sources
+connected earlier to the adapter the update pins (a source it could not
+refresh is named, with `exakit source refresh <name>`).
 
 ## Disconnect versus remove
 

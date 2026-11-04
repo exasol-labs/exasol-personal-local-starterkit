@@ -49,6 +49,9 @@ database and inspect it afterwards:
                 staged under FAKE_VS_EXA are reported as the database sees
                 them (the share's delay on Exasol Personal); stage_never
                 true -> they never are. files_probes counts the probes.
+    refresh_fail virtual schemas whose ALTER ... REFRESH fails (the adapter
+                cannot reach its source); script_fail scripts (SCHEMA.NAME)
+                whose CREATE OR REPLACE fails
 
 Errors carry realistic driver text, including the statement for a failed
 CREATE CONNECTION, so the engine's redaction is exercised for real.
@@ -516,6 +519,8 @@ class Fake(object):
             if not doc[m.group(1).lower()]:
                 raise Exception("No usable script language container is installed for the requested language.")
             name = "%s.%s" % (m.group(3), m.group(4))
+            if name in doc.get("script_fail", []):
+                raise Exception("VM error: could not create script %s" % name)
             if name not in doc["scripts"]:
                 doc["scripts"].append(name)
             return
@@ -573,6 +578,8 @@ class Fake(object):
         m = re.match(r'ALTER VIRTUAL SCHEMA "([^"]+)" REFRESH', sql)
         if m:
             vs = doc["virtual"][m.group(1)]
+            if m.group(1) in doc.get("refresh_fail", []):
+                raise Exception("Connection refused. Check that the hostname and port are correct")
             src = _source_for(doc, vs["connection"])
             if "tables" in src:
                 vs["tables"] = list(src["tables"])
