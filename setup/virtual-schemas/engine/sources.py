@@ -49,19 +49,34 @@ def now():
 class Store(object):
     def __init__(self, kit_home):
         self.root = os.path.join(kit_home, "sources")
+        self._held = 0
 
     def path(self, *parts):
         return os.path.join(self.root, *parts)
 
     @contextlib.contextmanager
     def lock(self):
-        """One sources operation at a time per machine."""
+        """One sources operation at a time per machine. Re-entrant within one
+        process: an operation that holds it may call another that takes it
+        (a check that moves its connector's sources forward), where a second
+        flock on the same file would wait for itself."""
+        if self._held:
+            self._held += 1
+            try:
+                yield
+            finally:
+                self._held -= 1
+            return
         os.makedirs(self.root, exist_ok=True)
         lock_target = self.path("registry.json")
         if not os.path.exists(lock_target):
             self._write(lock_target, {"schema_version": 1, "artifacts": {}})
         with core_state.manifest_lock(lock_target):
-            yield
+            self._held = 1
+            try:
+                yield
+            finally:
+                self._held = 0
 
     # --- files -----------------------------------------------------------------
     def _read(self, path, default=None):
@@ -156,6 +171,23 @@ class Store(object):
         doc = self.registry()
         unused = []
         for path, entry in list(doc.get("artifacts", {}).items()):
+            if consumer in entry.get("consumers", []):
+                entry["consumers"].remove(consumer)
+            if not entry.get("consumers"):
+                if entry.get("owned"):
+                    unused.append(path)
+                del doc["artifacts"][path]
+        self.save_registry(doc)
+        return unused
+
+    def release_paths(self, consumer, paths):
+        """Drop a consumer from these paths only; return the owned ones nobody uses any more."""
+        doc = self.registry()
+        unused = []
+        for path in paths:
+            entry = doc.get("artifacts", {}).get(path)
+            if entry is None:
+                continue
             if consumer in entry.get("consumers", []):
                 entry["consumers"].remove(consumer)
             if not entry.get("consumers"):

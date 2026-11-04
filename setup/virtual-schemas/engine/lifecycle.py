@@ -807,6 +807,11 @@ class Engine(object):
             # says exactly what that attempt made; that is undone first.
             if not reconnect:
                 self.recover_interrupted(name, names)
+            if reconnect or self.shares_scripts(connector):
+                # After a kit update: a reconnect keeps the adapter script it
+                # had, and a shared script re-created below would move every
+                # other source of the connector unrecorded - so they move first.
+                self.move_forward(connector_id, only=[name])
             self.store.save_journal(name, journal)
 
             def made(flag):
@@ -844,6 +849,12 @@ class Engine(object):
                 self.create_connection(names, url, user, conn_secret, replace=reconnect, hidden=hidden)
                 if not reconnect:
                     made("connection")
+                elif self.store.status(name).get("needs_refresh"):
+                    # Moved to a new adapter while disconnected: its metadata
+                    # is read again now that the adapter can reach the source.
+                    self.db().execute("ALTER VIRTUAL SCHEMA %s REFRESH" % sql.ident(names["schema"]))
+                    self.emit("OK", "Virtual schema %s refreshed for adapter %s"
+                              % (names["schema"], connector["adapter"]["version"]))
                 self.emit("OK", "Connection %s created (%s)" % (names["connection"], "it names the key file, not the key"
                                                                      if key_path else "the credential lives only in the database"))
                 self.check_scope(connector, names, values)
@@ -912,9 +923,7 @@ class Engine(object):
                     # check); only the driver's raw text needs it restated.
                     raise Failure("%s; %s" % (error, remedy.split("; ", 1)[-1]), code, kind)
                 raise Failure("%s (%s)" % (error, remedy), code, kind)
-            driver = connector.get("driver") or {}
-            pins = {"adapter": connector["adapter"]["sha256"], "driver": driver.get("sha256"),
-                    "adapter_version": connector["adapter"]["version"], "driver_version": driver.get("version")}
+            pins = self.pins(connector)
             record = {"schema_version": 1, "id": name, "connector": connector_id,
                       "profile": connector["profile"], "inputs": values, "objects": names,
                       "created_at": self.store.config(name).get("created_at") if reconnect else sources.now()}
@@ -987,8 +996,20 @@ class Engine(object):
 
     def check(self, name):
         config = self.store.config(name)
+        # After a kit update, the connector's sources move to what it pins now
+        # (exakit source check --all is the step the update names).
+        try:
+            moved = self.move_forward(config["connector"])
+        except (OSError, ValueError, planner.PlanError) as error:
+            # A definition this kit no longer reads: the check below says more.
+            self.emit("WARN", "Could not compare %s with the %s adapter this kit pins: %s"
+                      % (name, config["connector"], error))
+            moved = []
         if self.store.status(name).get("status") == "disconnected":
-            return {"name": name, "status": "disconnected", "skipped": True}
+            result = {"name": name, "status": "disconnected", "skipped": True}
+            if self.store.status(name).get("needs_refresh"):
+                result["needs_refresh"] = True
+            return result
         connector = self.defs.connector(config["connector"])
         names = config["objects"]
         try:
@@ -1015,6 +1036,14 @@ class Engine(object):
         result = {"name": name, "status": "ready", "evidence": evidence}
         if empty:
             result["empty_tables"] = empty
+        just_moved = name in moved or name in getattr(self, "_moved", ())
+        if just_moved:
+            result["moved"] = True
+        if self.store.status(name).get("needs_refresh"):
+            result["needs_refresh"] = True
+            if not just_moved:     # a move in this run that failed to refresh has said so
+                self.emit("WARN", "%s moved to a new adapter and its metadata is not refreshed yet: exakit source "
+                                  "refresh %s" % (name, name))
         return result
 
     def reauth(self, name, secret):
@@ -1131,8 +1160,196 @@ class Engine(object):
         except sql.DbError as error:
             raise Failure("the metadata refresh failed: %s" % error, EXIT["failed"], error.kind)
         count = len(self.tables(schema))
-        self.store.update_status(name, tables=count, refreshed_at=sources.now())
+        status = self.store.status(name)
+        status.pop("needs_refresh", None)
+        status.update(tables=count, refreshed_at=sources.now())
+        self.store.save_status(name, status)
         return {"name": name, "tables": count}
+
+    # --- moving sources to the adapter the connector pins now -----------------------
+    @staticmethod
+    def pins(connector):
+        """What a source records as running: its connector's adapter and driver pins."""
+        driver = connector.get("driver") or {}
+        return {"adapter": connector["adapter"]["sha256"], "driver": driver.get("sha256"),
+                "adapter_version": connector["adapter"]["version"], "driver_version": driver.get("version")}
+
+    @staticmethod
+    def shares_scripts(connector):
+        """Every source of the connector runs one adapter script (a native
+        adapter bound to its name) or shares companion scripts: re-creating
+        one of them moves all of those sources at once."""
+        return bool(connector.get("shared_adapter") or connector.get("companions") or connector.get("import_script"))
+
+    def move_forward(self, connector_id, only=None):
+        """Move the sources of a connector to the adapter and driver it pins now.
+
+        A kit update can change a connector's pins (connector.json); a source
+        connected earlier keeps running what its adapter script names until
+        it is moved: the current files staged, its script re-created over
+        them, its virtual schema refreshed, the new pins recorded, and the old
+        files given up - deleted once no source uses them, and only when the
+        kit made them. A script shared by the connector's sources moves them
+        all together. `only` limits the move to those names, unless the
+        connector shares its scripts. A source already on the current pins is
+        left alone, so a second run does nothing. Returns the names moved."""
+        connector = self.defs.connector(connector_id)
+        current = self.pins(connector)
+        shared = self.shares_scripts(connector)
+        with self.store.lock():
+            stale = []
+            for name in self.store.names():
+                pins = self.store.status(name).get("pins")
+                if self.store.config(name).get("connector") != connector_id or not pins or pins == current:
+                    continue
+                if only is not None and not shared and name not in only:
+                    continue
+                stale.append(name)
+            if not stale:
+                return []
+            return self._move(connector, current, stale)
+
+    def _stage_tracked(self, connector, name, created, touched):
+        """stage(), noting every path it records this source as a consumer of."""
+        record = self.store.add_consumer
+
+        def add(path, digest, consumer, made):
+            touched.append(path)
+            record(path, digest, consumer, made)
+        self.store.add_consumer = add
+        try:
+            return self.stage(connector, name, created)
+        finally:
+            del self.store.add_consumer
+
+    def _artifact_file(self, connector, path):
+        """A file stage() puts in place for a connector's pins: under its own
+        bucket folder, or a jar directly in its loader folder. A source's key,
+        mapping or truststore copy, and the loader's settings.cfg, are not."""
+        path = os.path.normpath(path)
+        if path.startswith(os.path.normpath(self.runtime.bucket_dir(connector["id"])) + os.sep):
+            return True
+        etl = connector.get("etl")
+        return bool(etl) and os.path.basename(path) != "settings.cfg" and \
+            os.path.dirname(path) == os.path.normpath(self.runtime.loader_dir(etl["drivername"]))
+
+    def _unstage(self, attempt, made):
+        """Give up what one move attempt staged for its source: its consumption
+        of the files it added, and those files once unused when this run made them."""
+        fresh = [p for p in dict.fromkeys(attempt["touched"]) if p not in attempt["before"]]
+        for path in self.store.release_paths(attempt["name"], fresh):
+            if path in made and os.path.isfile(path):
+                os.remove(path)
+                self.prune(os.path.dirname(path))
+
+    @staticmethod
+    def _change_words(old, new):
+        parts = []
+        if old.get("adapter") != new["adapter"]:
+            parts.append("adapter %s to %s" % (old.get("adapter_version") or "unknown", new["adapter_version"]))
+        if old.get("driver") != new["driver"]:
+            parts.append("driver %s to %s" % (old.get("driver_version") or "none", new["driver_version"] or "none"))
+        return " and ".join(parts) or "adapter %s to %s" % (old.get("adapter_version"), new["adapter_version"])
+
+    def _move(self, connector, current, stale):
+        cid = connector["id"]
+        label = self.defs.entry(cid)["name"]
+        profile = self.defs.profile(connector["profile"])
+        etl = connector.get("etl")
+        cfg = os.path.join(self.runtime.loader_dir(etl["drivername"]), "settings.cfg") if etl else None
+        cfg_text = None
+        if cfg and os.path.isfile(cfg):
+            # stage() rewrites the loader's settings.cfg for the new driver;
+            # a move that does not happen puts the previous one back.
+            with open(cfg, encoding="utf-8") as handle:
+                cfg_text = handle.read()
+        attempts, made = [], set()
+
+        def give_up(undone):
+            for attempt in undone:
+                self._unstage(attempt, made)
+
+        def restore_cfg():
+            if cfg_text is not None:
+                with open(cfg, "w", encoding="utf-8", newline="\n") as handle:
+                    handle.write(cfg_text)
+
+        try:
+            for name in stale:
+                registry = self.store.registry().get("artifacts", {})
+                attempt = {"name": name, "touched": [], "created": {"files": []},
+                           "before": {p for p, e in registry.items() if name in e.get("consumers", [])}}
+                attempts.append(attempt)
+                journal = self.store.journal(name)
+                emit = self.emit
+                if len(attempts) > 1:
+                    # The same files for every source: their staging is said once.
+                    self.emit = lambda level, text: None if level == "OK" else emit(level, text)
+                try:
+                    attempt["jars"] = self._stage_tracked(connector, name, attempt["created"], attempt["touched"])
+                finally:
+                    self.emit = emit
+                    made.update(attempt["created"]["files"])
+                    # stage() notes what it made in the source's journal, for
+                    # an interrupted first connect; a move leaves it as it was.
+                    if journal is None:
+                        self.store.clear_journal(name)
+                    else:
+                        self.store.save_journal(name, journal)
+            jars = attempts[0]["jars"]
+            self.await_staged(jars, sorted(made), profile)
+            names = self.store.config(stale[0])["objects"]
+            if connector.get("shared_adapter"):
+                self.db().execute(self.adapter_sql(names, jars, profile))
+            for spec in self.companions(connector, profile):
+                self.db().execute(self.companion_sql(spec, names, jars))
+        except (Failure, sql.DbError, artifacts.ArtifactError, planner.PlanError, OSError) as error:
+            give_up(attempts)
+            restore_cfg()
+            self.emit("WARN", "Could not move the %s source%s %s to adapter %s (%s); %s the adapter %s had - retry "
+                              "with: exakit source check --all"
+                      % (label, "" if len(stale) == 1 else "s", ", ".join(stale), current["adapter_version"], error,
+                         "it keeps" if len(stale) == 1 else "they keep", "it" if len(stale) == 1 else "they"))
+            return []
+        moved = []
+        for attempt in attempts:
+            name = attempt["name"]
+            if not connector.get("shared_adapter"):
+                try:
+                    self.db().execute(self.adapter_sql(self.store.config(name)["objects"], attempt["jars"], profile))
+                except (Failure, sql.DbError) as error:
+                    give_up([attempt])
+                    self.emit("WARN", "Could not move %s to %s adapter %s (%s); it keeps the adapter it had - retry "
+                                      "with: exakit source check %s" % (name, label, current["adapter_version"], error, name))
+                    continue
+            moved.append(attempt)
+        if not moved:
+            restore_cfg()
+            return []
+        for attempt in moved:
+            name = attempt["name"]
+            status = self.store.status(name)
+            old = status.get("pins") or {}
+            # Recorded before the refresh: the script already runs the new files.
+            self.store.update_status(name, pins=current, needs_refresh=True)
+            gone = [p for p in attempt["before"] if p not in attempt["touched"] and self._artifact_file(connector, p)]
+            for path in self.store.release_paths(name, gone):
+                if os.path.isfile(path):
+                    os.remove(path)
+                    self.prune(os.path.dirname(path))
+            self.emit("OK", "Moved %s from %s %s" % (name, label, self._change_words(old, current)))
+            if status.get("status") == "disconnected":
+                self.emit("INFO", "%s is disconnected: its virtual schema is refreshed when it is connected again "
+                                  "(exakit connect %s --name %s)" % (name, cid, name))
+                continue
+            try:
+                self.refresh(name)
+            except (Failure, sql.DbError) as error:
+                self.emit("WARN", "%s moved, but its virtual schema did not refresh (%s); repair it with: exakit source "
+                                  "refresh %s" % (name, error, name))
+        names = [attempt["name"] for attempt in moved]
+        self._moved = getattr(self, "_moved", set()) | set(names)
+        return names
 
     def disconnect(self, name, dry_run=False):
         config = self.store.config(name)
@@ -1245,7 +1462,8 @@ class Engine(object):
             config = self.store.config(name)
             status = self.store.status(name)
             rows.append({"name": name, "connector": config["connector"], "schema": config["objects"]["schema"],
-                         "status": status.get("status", "unknown"), "last_check": status.get("last_check")})
+                         "status": status.get("status", "unknown"), "last_check": status.get("last_check"),
+                         "needs_refresh": bool(status.get("needs_refresh"))})
         return rows
 
     def show(self, name):
@@ -1257,12 +1475,17 @@ class Engine(object):
             connector = {}
         return {"name": name, "connector": config["connector"], "inputs": config["inputs"],
                 "objects": config["objects"], "status": status.get("status", "unknown"),
-                "pins": status.get("pins"), "tables": status.get("tables"), "last_check": status.get("last_check"),
+                "pins": status.get("pins"), "needs_refresh": True if status.get("needs_refresh") else None,
+                "tables": status.get("tables"), "last_check": status.get("last_check"),
                 "journal": self.store.journal(name), "tips": tips(connector, name, config["objects"]["schema"])}
 
     def issues(self, status_filter=None):
         rows = []
         for row in self.listing():
+            if row["status"] == "ready" and row["needs_refresh"] and not status_filter:
+                rows.append(dict(row, remedy="it moved to a new adapter and its metadata is not refreshed yet: "
+                                             "exakit source refresh %s" % row["name"]))
+                continue
             if row["status"] in ("ready", "disconnected"):
                 continue
             if status_filter and row["status"] != status_filter:

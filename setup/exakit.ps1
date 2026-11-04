@@ -3613,7 +3613,7 @@ function Invoke-CmdSource {
             if (@($r.checks).Count -eq 0) { Write-Host "  (none)" }
             foreach ($c in @($r.checks)) { $why = $c.evidence; if (-not $why) { $why = $c.remedy }; Write-Host ("  {0,-16} {1} {2}" -f $c.name, $c.status, $why) }
         } else {
-            foreach ($k in @("name", "connector", "status", "objects", "inputs", "pins", "tables", "last_check", "evidence", "remedy")) {
+            foreach ($k in @("name", "connector", "status", "objects", "inputs", "pins", "needs_refresh", "tables", "last_check", "evidence", "remedy")) {
                 if ($r.PSObject.Properties[$k] -and $null -ne $r.$k -and "$($r.$k)" -ne "") {
                     $v = $r.$k
                     if ($v -is [System.Management.Automation.PSCustomObject]) { $v = $v | ConvertTo-Json -Compress -Depth 4 }
