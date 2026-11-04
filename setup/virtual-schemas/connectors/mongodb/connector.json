@@ -57,6 +57,12 @@
       "required": true
     }
   ],
+  "paste": {
+    "style": "mongodb",
+    "schemes": ["mongodb", "mongodb+srv"],
+    "secret": ["authmechanismproperties"],
+    "forms": ["mongodb+srv://user@cluster.example.net/database?options", "mongodb://user@host:27017/database?options"]
+  },
   "auth": "password",
   "host": "",
   "url": "{uri}",

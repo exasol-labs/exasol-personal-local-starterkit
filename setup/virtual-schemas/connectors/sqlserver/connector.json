@@ -79,6 +79,15 @@
       "kind": "ca-file"
     }
   ],
+  "paste": {
+    "schemes": ["jdbc:sqlserver"],
+    "bare": true,
+    "path": "database",
+    "params": {"databasename": "database", "database": "database", "servername": "host", "portnumber": "port", "user": "user", "username": "user"},
+    "tls": "sqlserver",
+    "instance": "a named instance (host\\instance) is not read: give the host and the instance's TCP port with --set host=... --set port=... (SQL Server Configuration Manager shows the port)",
+    "forms": ["jdbc:sqlserver://host:1433;databaseName=db;encrypt=true", "host[:port][/database]"]
+  },
   "auth": "password",
   "url": "jdbc:sqlserver://{host}:{port};databaseName={database};{tls}",
   "tls": {

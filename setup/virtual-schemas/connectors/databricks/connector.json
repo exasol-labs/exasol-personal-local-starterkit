@@ -66,6 +66,13 @@
       "required": true
     }
   ],
+  "paste": {
+    "schemes": ["jdbc:databricks", "jdbc:spark", "https"],
+    "bare": true,
+    "params": {"httppath": "http_path", "conncatalog": "catalog", "connschema": "schema"},
+    "implied": ["transportmode", "ssl", "authmech", "uid"],
+    "forms": ["jdbc:databricks://<host>:443/default;httpPath=...;ConnCatalog=...;ConnSchema=...", "jdbc:spark://<host>:443/default;httpPath=...", "<host>"]
+  },
   "auth": "pat",
   "user": "token",
   "host": "{host}",

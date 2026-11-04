@@ -1674,5 +1674,173 @@ has "Invoke-CmdConnect hands a console to it" "Invoke-ExakitVsTui -Source" "$(ca
 has "the menu starts on the first connector on both sides" "-StartRow 1" "$(cat "$ROOT/setup/lib/virtual-schemas.ps1")"
 has "...and in bash" "UI_TABLE_MENU_START=1" "$(cat "$ROOT/setup/lib/virtual-schemas.sh")"
 
+printf '\n== a pasted connection string: exakit connect <connector> --url ==\n'
+# eng paste reads the string on stdin and answers the inputs it names; each
+# value passes the same check a --set gets. A credential in the string is never
+# used or echoed, other parameters are dropped by name, and no message quotes
+# the string.
+pst() { # pst <connector> <string> - OUT, RC, VALS (the values, sorted JSON)
+    OUT="$(printf '%s' "$2" | eng paste "$1" 2>&1)"; RC=$?
+    VALS="$(printf '%s\n' "$OUT" | sed -n 's/^RESULT //p' | python3 -c 'import json, sys; print(json.dumps(json.load(sys.stdin)["values"], sort_keys=True))' 2>/dev/null)"
+}
+while IFS='|' read -r _c _u _v; do
+    [ -n "$_c" ] || continue
+    pst "$_c" "$_u"
+    check "paste $_c: $_u" "0 $_v" "$RC $VALS"
+done <<'EOF'
+pg|jdbc:postgresql://pg.example.com:6432/sales?currentSchema=ops&sslmode=verify-full|{"database": "sales", "host": "pg.example.com", "port": "6432", "schema": "ops", "tls": "verify"}
+pg|postgres://reader@pg.example.com/sales?sslmode=prefer|{"database": "sales", "host": "pg.example.com", "tls": "require", "user": "reader"}
+pg|postgresql://pg.example.com/sales?user=bob&sslmode=disable|{"database": "sales", "host": "pg.example.com", "tls": "disable", "user": "bob"}
+pg|pg.example.com:5433/sales|{"database": "sales", "host": "pg.example.com", "port": "5433"}
+pg|postgres://reader@[2001:db8::5]:5432/sales?sslmode=verify-ca|{"database": "sales", "host": "2001:db8::5", "port": "5432", "tls": "verify", "user": "reader"}
+mysql|jdbc:mysql://my.example.com:3307/shop?sslMode=VERIFY_CA&user=reader|{"database": "shop", "host": "my.example.com", "port": "3307", "tls": "verify", "user": "reader"}
+mysql|mysql://reader@my.example.com/shop?sslMode=REQUIRED&useSSL=false|{"database": "shop", "host": "my.example.com", "tls": "require", "user": "reader"}
+mysql|jdbc:mysql://my.example.com/shop?useSSL=false|{"database": "shop", "host": "my.example.com", "tls": "disable"}
+mysql|jdbc:mysql://my.example.com/shop?sslMode=DISABLED|{"database": "shop", "host": "my.example.com", "tls": "disable"}
+mssql|jdbc:sqlserver://sql.example.com:1433;databaseName=erp;encrypt=true;trustServerCertificate=true;user=reader|{"database": "erp", "host": "sql.example.com", "port": "1433", "tls": "require", "user": "reader"}
+mssql|jdbc:sqlserver://sql.example.com;databaseName=erp;encrypt=strict;trustServerCertificate=true|{"database": "erp", "host": "sql.example.com", "tls": "verify"}
+mssql|jdbc:sqlserver://sql.example.com;database=erp;encrypt=true|{"database": "erp", "host": "sql.example.com", "tls": "verify"}
+mssql|jdbc:sqlserver://sql.example.com;databaseName=erp;encrypt=false|{"database": "erp", "host": "sql.example.com", "tls": "disable"}
+mssql|jdbc:sqlserver://;serverName=sql.example.com;portNumber=1500;databaseName=erp|{"database": "erp", "host": "sql.example.com", "port": "1500"}
+oracle|jdbc:oracle:thin:@//ora.example.com:1521/ORCLPDB1|{"host": "ora.example.com", "port": "1521", "service": "ORCLPDB1"}
+oracle|jdbc:oracle:thin:@tcps://ora.example.com:2484/ORCLPDB1|{"host": "ora.example.com", "port": "2484", "service": "ORCLPDB1", "tls": "verify"}
+oracle|ora.example.com:1521/ORCLPDB1|{"host": "ora.example.com", "port": "1521", "service": "ORCLPDB1"}
+snowflake|jdbc:snowflake://myorg-acct.snowflakecomputing.com/?db=sales&warehouse=wh&schema=public&role=reader&user=bob|{"account": "myorg-acct", "database": "SALES", "role": "reader", "schema": "PUBLIC", "user": "bob", "warehouse": "WH"}
+snowflake|https://myorg-acct.snowflakecomputing.com|{"account": "myorg-acct"}
+databricks|jdbc:databricks://dbc-1234abcd-5678.cloud.databricks.com:443/default;transportMode=http;ssl=1;AuthMech=3;httpPath=/sql/1.0/warehouses/abc123;UID=token;ConnCatalog=main;ConnSchema=sales|{"catalog": "main", "host": "dbc-1234abcd-5678.cloud.databricks.com", "http_path": "/sql/1.0/warehouses/abc123", "schema": "sales"}
+databricks|jdbc:spark://dbc-1234abcd-5678.cloud.databricks.com:443/default;httpPath=sql/protocolv1/o/123/0123-abc|{"host": "dbc-1234abcd-5678.cloud.databricks.com", "http_path": "/sql/protocolv1/o/123/0123-abc"}
+mongodb|mongodb+srv://reader@cluster0.abc12.mongodb.net/movies?retryWrites=true&authSource=admin|{"database": "movies", "uri": "mongodb+srv://cluster0.abc12.mongodb.net/?retryWrites=true&authSource=admin", "user": "reader"}
+mongodb|mongodb://h1.example.com:27017,h2.example.com:27017/films|{"database": "films", "uri": "mongodb://h1.example.com:27017,h2.example.com:27017"}
+s3|s3://my-bucket/docs/|{"bucket": "my-bucket"}
+s3|https://my-bucket.s3.eu-central-1.amazonaws.com/docs/a.json|{"bucket": "my-bucket", "region": "eu-central-1"}
+azure|https://mystorage.blob.core.windows.net/data|{"account": "mystorage", "container": "data"}
+azure|abfss://data@mystorage.dfs.core.windows.net/raw|{"account": "mystorage", "container": "data"}
+bq|jdbc:bigquery://https://www.googleapis.com/bigquery/v2:443;ProjectId=my-project;OAuthType=0;DefaultDataset=sales|{"dataset": "sales", "project": "my-project"}
+lakehouse|https://glue.eu-central-1.amazonaws.com|{"region": "eu-central-1"}
+lakehouse|arn:aws:glue:eu-central-1:123456789012:database/sales_lake|{"database": "sales_lake", "region": "eu-central-1"}
+EOF
+check "every connector reads a connection string, into its own inputs only" "ok" "$(python3 - "$DEFS" <<'PY2'
+import json, os, sys
+for cid in sorted(os.listdir(os.path.join(sys.argv[1], "connectors"))):
+    doc = json.load(open(os.path.join(sys.argv[1], "connectors", cid, "connector.json")))
+    names = {s["name"] for s in doc["inputs"] if s["kind"] not in ("secret", "secret-file")}
+    block = doc.get("paste")
+    if not block or not block.get("forms") or not set(block.get("params", {}).values()) <= names \
+            or block.get("path", "host") not in names | {"host"}:
+        print("bad: " + cid); break
+else:
+    print("ok")
+PY2
+)"
+
+PW='Hunter2-pa55'
+for _case in "pg|postgres://reader:$PW@pg.example.com/sales" "pg|jdbc:postgresql://pg.example.com/sales?user=reader&password=$PW" \
+             "mssql|jdbc:sqlserver://sql.example.com;databaseName=erp;user=reader;password=$PW" \
+             "oracle|jdbc:oracle:thin:reader/$PW@//ora.example.com:1521/ORCLPDB1" \
+             "snowflake|jdbc:snowflake://myorg-acct.snowflakecomputing.com/?db=sales&warehouse=wh&token=$PW" \
+             "databricks|jdbc:databricks://dbc-1.cloud.databricks.com:443/default;httpPath=/sql/1.0/warehouses/abc;UID=token;PWD=$PW" \
+             "mongodb|mongodb+srv://reader:$PW@cluster0.abc12.mongodb.net/movies?authMechanismProperties=AWS_SESSION_TOKEN:$PW" \
+             "s3|https://my-bucket.s3.eu-central-1.amazonaws.com/a.json?X-Amz-Credential=AKIA&X-Amz-Signature=$PW" \
+             "azure|https://mystorage.blob.core.windows.net/data?sv=2022-11-02&sp=rl&sig=$PW" \
+             "azure|DefaultEndpointsProtocol=https;AccountName=mystorage;AccountKey=$PW;EndpointSuffix=core.windows.net"; do
+    pst "${_case%%|*}" "${_case#*|}"
+    check "a credential in the string is not used (${_case%%|*}), exit 0" "0" "$RC"
+    lacks "...and is in none of the output" "$PW" "$OUT"
+    has "...the note says it was ignored and is asked for separately" "it was not used. The credential is asked for separately" "$OUT"
+    has "...and that the string was on the command line" "The string was on the command line" "$OUT"
+done
+lacks "a credential never becomes an input value" '"password"' "$VALS"
+pst mongodb "mongodb+srv://reader:$PW@cluster0.abc12.mongodb.net/movies?retryWrites=true&authMechanismProperties=AWS_SESSION_TOKEN:$PW"
+check "mongodb: the uri keeps no credentials and no path" '{"database": "movies", "uri": "mongodb+srv://cluster0.abc12.mongodb.net/?retryWrites=true", "user": "reader"}' "$VALS"
+pst pg 'jdbc:postgresql://pg.example.com/sales?ApplicationName=report-x9&sslrootcert=/etc/ca.pem&password=zz'
+has "unknown parameters are dropped by name" "Not used from the connection string: ApplicationName, sslrootcert" "$OUT"
+lacks "...never by value" "report-x9" "$OUT"
+has "...and listed" '"dropped": ["ApplicationName", "sslrootcert", "password"]' "$OUT"
+pst databricks 'jdbc:databricks://dbc-1.cloud.databricks.com:443/default;transportMode=http;ssl=1;AuthMech=3;httpPath=/sql/1.0/warehouses/abc;UID=token'
+lacks "...what the kit sets itself is consumed without a note" "Not used" "$OUT"
+pst bq 'jdbc:bigquery://https://www.googleapis.com/bigquery/v2:443;ProjectId=p1;OAuthPvtKeyPath=/keys/k.json;DefaultDataset=d1'
+has "a key file's path is dropped by name, not taken for a credential" "Not used from the connection string: OAuthPvtKeyPath" "$OUT"
+lacks "...so no credential note" "held a credential" "$OUT"
+
+pst oracle 'jdbc:oracle:thin:@//ora.example.com:1521/ORCLPDB1'
+has "oracle over plain TCP: tls is left at its default, with a note" "uses plain TCP; tls stays at verify" "$OUT"
+lacks "...never silently downgraded" '"tls"' "$VALS"
+pst pg 'postgres://pg.example.com/sales?sslmode=allow'
+has "a TLS value the kit does not map is said, not guessed" "sslmode has a value the kit does not map; tls stays as asked (default verify)" "$OUT"
+pst pg 'jdbc:postgresql://localhost:5432/sales'
+check "localhost from the string is not taken, exit 0" '0 {"database": "sales", "port": "5432"}' "$RC $VALS"
+has "...with the address to use instead" "on macOS 192.168.64.1" "$OUT"
+pst pg 'postgres://pg.example.com:99999/sales'
+has "a value that fails its check is named, not quoted" "port from the connection string is not used: it is not a valid port" "$OUT"
+lacks "...(no value in the message)" "99999" "$OUT"
+
+for _case in "oracle|jdbc:oracle:thin:@orahost-zz9.example.com:1521:ORCLZZ|Oracle SID" \
+             "oracle|jdbc:oracle:thin:@(DESCRIPTION=(ADDRESS=(PROTOCOL=tcp)(HOST=orahost-zz9)(PORT=1521))(CONNECT_DATA=(SERVICE_NAME=s)))|TNS descriptor" \
+             "mssql|jdbc:sqlserver://sqlhost-zz9.example.com\\SQLEXPRESS;databaseName=erp|named instance" \
+             "mssql|jdbc:sqlserver://;serverName=sqlhost-zz9.example.com;instanceName=SQLEXPRESS|named instance" \
+             "pg|jdbc:postgresql://pghost-zz9.example.com,pg2.example.com/sales|more than one host" \
+             "pg|jdbc:mysql://pghost-zz9.example.com/sales|does not read this as a PostgreSQL connection string; it reads: jdbc:postgresql://" \
+             "snowflake|https://app.snowflake.com/zz9/acct|not <account>.snowflakecomputing.com" \
+             "s3|https://storage.googleapis.com/zz9-bucket|does not read this as a Amazon S3" \
+             "pg|postgres://reader:pa?zz9;w@pg.example.com/sales|must be percent-encoded" \
+             "pg|postgres://pg.example.com/sales zz9|on one line"; do
+    _c="${_case%%|*}"; _r="${_case#*|}"; _u="${_r%|*}"; _why="${_r##*|}"
+    pst "$_c" "$_u"
+    check "refused, exit 2: $_why" "2" "$RC"
+    has "...saying why" "$_why" "$OUT"
+    lacks "...without quoting the string" "zz9" "$OUT"
+done
+OUT="$(printf '' | eng paste pg 2>&1)"; RC=$?
+check "an empty string is refused" "2 FAIL no connection string was given" "$RC $OUT"
+OUT="$(printf '%s' 'cG9zdGdyZXM6Ly9yZWFkZXJAcGcuZXhhbXBsZS5jb20vc2FsZXM=' | eng paste pg --base64 2>&1)"
+has "the Windows bridge's base64 is decoded first" '"values": {"host": "pg.example.com", "database": "sales", "user": "reader"}' "$OUT"
+
+# The shell path: cmd_connect with the shipping libraries and the real engine
+# on the simulated database; the engine's arguments are recorded.
+urlsh() {
+    ( EXAKIT_HOME="$HOME_K"
+      . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
+      _require_install() { :; }; exakit_init_logging() { EXAKIT_LOG_FILE="$WORK/url.log"; }
+      command -v reject >/dev/null 2>&1 || reject() { printf '%s\n' "$*" >&2; exit 2; }
+      exakit_vs_engine() { printf '%s\n' "$*" >> "$WORK/url.argv"; eng "$@"; }
+      "$@" ) 2>&1
+}
+db '{"sources": {"pg.example.com": {"tables": ["ORDERS"]}}}'
+rm -f "$WORK/url.argv"
+OUT="$(urlsh cmd_connect pg --name urlpg --url "postgres://reader:$PW@pg.example.com:5433/sales?sslmode=require" --set port=5432 --dry-run </dev/null)"; RC=$?
+check "connect --url --dry-run: exit 0" "0" "$RC"
+check "...the string went to paste on stdin; its inputs come before the command line's --set, which wins" \
+    "paste pg|resolve pg|plan postgresql --name urlpg --set host=pg.example.com --set port=5433 --set database=sales --set user=reader --set tls=require --set port=5432|" \
+    "$(tr '\n' '|' < "$WORK/url.argv")"
+has "...its notes are shown" "The string was on the command line" "$OUT"
+has "...the plan reflects it" "does NOT check the server's identity" "$OUT"
+lacks "...the password is in no argument" "$PW" "$(cat "$WORK/url.argv")"
+lacks "...and not in the output" "$PW" "$OUT"
+lacks "...nor the log" "$PW" "$(cat "$WORK/url.log" 2>/dev/null)"
+rm -f "$WORK/url.argv"
+OUT="$(urlsh cmd_connect pg --name urlpg --url=postgres://pg.example.com/sales?sslmode=require --set tls=verify --set user=reader --dry-run </dev/null)"; RC=$?
+check "--url=STRING works too, and --set tls overrides the string's sslmode" "0" "$RC"
+lacks "...so no TLS warning" "does NOT check" "$OUT"
+OUT="$(urlsh cmd_connect --name urlpg --url postgres://pg.example.com/sales --dry-run </dev/null)"; RC=$?
+check "--url without a connector is refused, exit 2" "2" "$RC"
+has "...saying what it needs" "--url needs the source it is for" "$OUT"
+rm -f "$WORK/url.argv"
+OUT="$(urlsh cmd_connect oracle --name urlora --url 'jdbc:oracle:thin:@ora.example.com:1521:ORCL' --dry-run </dev/null)"; RC=$?
+check "a refused string stops connect before any plan, exit 2" "2 paste oracle|" "$RC $(tr '\n' '|' < "$WORK/url.argv")"
+printf '%s' "$PW" > "$WORK/url.pw"
+OUT="$(urlsh cmd_connect pg --name urlsales --url 'jdbc:postgresql://pg.example.com/sales?user=reader' --password-file "$WORK/url.pw" --yes </dev/null)"; RC=$?
+check "connect --url --yes with a password file: exit 0" "0" "$RC"
+check "...the credential reached the CONNECTION from the file" "$PW" "$(dbq 'd["connections"]["EXAKIT_SRC_URLSALES"]["secret"]')"
+has "...and the string's inputs are the ones recorded" '"host": "pg.example.com"' "$(cat "$HOME_K/sources/urlsales/"*.json 2>/dev/null)"
+
+# On a terminal the panel opens with the string's answers in it.
+printf '%s' "$TUI_SECRET" > "$WORK/tui.pw"
+TUI_ARGS="pg --name tuiurl --url postgres://reader@pg.example.com/sales --password-file $WORK/tui.pw" \
+    tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 2 "\r\r\r\ry\r"
+check "the terminal flow with --url: one panel, one table" "0" "$TUI_RC"
+has "...the panel holds the string's host" "Host name or address      pg.example.com" "$TUI_SCREEN"
+has "...and it connects" "✓ VS_TUIURL · 1 table" "$TUI_SCREEN"
+has "PowerShell parses --url too" '$arg -eq "--url"' "$(cat "$ROOT/setup/exakit.ps1")"
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

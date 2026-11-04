@@ -888,15 +888,44 @@ if p.get("exposure"):
     return "$_EVT_RC"
 }
 
-# cmd_connect [source] [--name N] [--set KEY=VALUE]... [--password-file F]
-#             [--dry-run] [--yes] [--json]
+# _exakit_vs_paste <connector> <string> - the inputs a pasted connection string
+# names (engine paste, the string on its stdin, never an argument), its notes
+# shown, as --set pairs put BEFORE the command line's own in EXAKIT_VS_SETS - the
+# engine's pairs() keeps the last, so an explicit --set wins - and their names
+# added to EXAKIT_VS_GIVEN, so they are not asked for again.
+_exakit_vs_paste() {
+    _evp_out="$(mktemp "${TMPDIR:-/tmp}/exakit-vs-paste.XXXXXX")" || { error "Could not create a temporary file."; return 1; }
+    printf '%s' "$2" | exakit_vs_engine paste "$1" > "$_evp_out" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
+    _evp_rc=$?
+    _exakit_vs_render "$_evp_out"; rm -f "$_evp_out"
+    [ "$_evp_rc" -eq 0 ] || return "$_evp_rc"
+    _evp_pairs="$(printf '%s' "$EXAKIT_VS_RESULT" | run_python_any -c 'import json, sys
+for k, v in json.load(sys.stdin)["values"].items():
+    print("%s=%s" % (k, v))')"
+    _evp_sets=""
+    while IFS= read -r _evp_pair; do
+        [ -n "$_evp_pair" ] || continue
+        _evp_sets="$_evp_sets
+--set
+$_evp_pair"
+        EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${_evp_pair%%=*}"
+    done <<EOF
+$_evp_pairs
+EOF
+    EXAKIT_VS_SETS="$_evp_sets$EXAKIT_VS_SETS"
+}
+
+# cmd_connect [source] [--name N] [--url STRING] [--set KEY=VALUE]...
+#             [--password-file F] [--dry-run] [--yes] [--json]
 cmd_connect() {
-    _cc_source=""; _cc_name=""; _cc_pwfile=""; _cc_dry=0; _cc_json=0
+    _cc_source=""; _cc_name=""; _cc_pwfile=""; _cc_dry=0; _cc_json=0; _cc_url=""
     EXAKIT_VS_SETS=""; EXAKIT_VS_GIVEN=""
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --name) _cc_name="${2:-}"; shift ;;
             --name=*) _cc_name="${1#--name=}" ;;
+            --url) _cc_url="${2:-}"; [ -n "$_cc_url" ] || reject "--url takes a connection string (exakit help connect)"; shift ;;
+            --url=*) _cc_url="${1#--url=}"; [ -n "$_cc_url" ] || reject "--url takes a connection string (exakit help connect)" ;;
             --set) case "${2:-}" in *=*) ;; *) reject "--set takes KEY=VALUE (exakit help connect)" ;; esac
                    EXAKIT_VS_SETS="$EXAKIT_VS_SETS
 --set
@@ -914,6 +943,13 @@ $2"; EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${2%%=*}"; shift ;;
     done
     _require_install "$_cc_json"
     exakit_init_logging
+    # A pasted connection string fills what it names, for every path below:
+    # the terminal's panel shows those answers, --yes and --dry-run use them.
+    if [ -n "$_cc_url" ]; then
+        [ -n "$_cc_source" ] || reject "--url needs the source it is for, e.g. exakit connect postgresql --url 'postgres://reader@db.example.com/sales'"
+        _exakit_vs_paste "$_cc_source" "$_cc_url" || exit $?
+        _cc_url=""
+    fi
     # A person at a terminal gets the menu and the panels; a pipe, --yes,
     # --dry-run and --json keep the line-by-line path below, unchanged.
     if [ "$_cc_dry" = 0 ] && [ "$_cc_json" = 0 ] && _exakit_vs_tui_ok; then

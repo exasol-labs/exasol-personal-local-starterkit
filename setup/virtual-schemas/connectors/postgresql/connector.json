@@ -79,6 +79,14 @@
       "kind": "ca-file"
     }
   ],
+  "paste": {
+    "schemes": ["jdbc:postgresql", "postgresql", "postgres"],
+    "bare": true,
+    "path": "database",
+    "params": {"currentschema": "schema", "user": "user", "sslmode": "tls"},
+    "map": {"sslmode": {"verify-full": "verify", "verify-ca": "verify", "require": "require", "prefer": "require", "disable": "disable"}},
+    "forms": ["jdbc:postgresql://host:5432/db", "postgres://user@host:5432/db", "host[:port][/database]"]
+  },
   "auth": "password",
   "url": "jdbc:postgresql://{host}:{port}/{database}?{tls}",
   "tls": {

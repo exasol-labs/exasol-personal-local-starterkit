@@ -40,6 +40,16 @@ printf '%s' "$SALES_PASSWORD" | exakit connect pg --name sales \
 # or: --password-file ~/.config/sales.pw   (a file only the user can read)
 ```
 
+When the user has the source's connection string (a JDBC URL, `postgres://`,
+`mongodb+srv://`, `s3://`, an Azure blob URL, a Glue endpoint), pass it with
+`--url '<string>'` and the connector: it fills the inputs it names, each
+checked like a `--set`, and an explicit `--set` still wins. A password in the
+string is never used - the credential still goes on stdin or in
+`--password-file` - and parameters the kit does not read are dropped by name
+(the output says which). Prefer a string without the password: the command
+line is visible to other local users. A SID, a TNS descriptor or a SQL Server
+named instance is refused; give host, port and service or database with `--set`.
+
 A person at a terminal can type `exakit connect` alone: a menu of the
 connectors (Space ticks several), one panel per source with each answer
 checked as it is typed, a review of downloads and exposure, then one table that

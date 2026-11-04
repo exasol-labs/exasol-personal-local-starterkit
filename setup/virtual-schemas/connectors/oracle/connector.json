@@ -78,6 +78,11 @@
       "kind": "ca-file"
     }
   ],
+  "paste": {
+    "style": "oracle",
+    "bare": true,
+    "forms": ["jdbc:oracle:thin:@//host:1521/service", "jdbc:oracle:thin:@tcps://host:2484/service", "host[:port]/service"]
+  },
   "auth": "password",
   "url": "jdbc:oracle:thin:@{tls}",
   "tls": {

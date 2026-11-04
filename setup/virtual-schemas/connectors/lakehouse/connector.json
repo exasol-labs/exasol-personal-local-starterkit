@@ -77,6 +77,10 @@
       "required": true
     }
   ],
+  "paste": {
+    "style": "glue",
+    "forms": ["https://glue.<region>.amazonaws.com", "arn:aws:glue:<region>:<account>:database/<name>"]
+  },
   "auth": "aws-keys",
   "host": "glue.{region}.amazonaws.com",
   "url": "https://glue.{region}.amazonaws.com",
