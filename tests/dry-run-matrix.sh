@@ -948,12 +948,14 @@ fi
 # Anchored on "for support", the one phrase the closing line keeps on all three
 # platforms. It used to anchor on "Next: exakit status" and that wording is gone
 # - an anchor tied to a sentence breaks the moment the sentence is reworded, and
-# what this guard actually cares about is only WHERE that line sits.
+# what this guard actually cares about is only WHERE that line sits. On macOS
+# and Linux the line is exakit_closing_hint (common.sh), which adds the full path
+# when the terminal that ran the installer cannot find exakit yet.
 wn_box_placement() { # wn_box_placement <file> <panel-call> <box-call>
     awk -v panel="$2" -v box="$3" '
         index($0, panel) && panel_at == 0 { panel_at = NR }
         index($0, box)   && box_at == 0   { box_at = NR }
-        index($0, "for support") && next_at == 0 { next_at = NR }
+        (index($0, "for support") || index($0, "exakit_closing_hint")) && next_at == 0 { next_at = NR }
         END {
             if (panel_at > 0 && box_at > panel_at && next_at > box_at) print "panel,box,next"
             else printf "panel=%d box=%d next=%d\n", panel_at, box_at, next_at

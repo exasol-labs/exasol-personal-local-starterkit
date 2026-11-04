@@ -69,6 +69,11 @@ EXAKIT_CREDS_DIR="$EXAKIT_HOME/credentials"
 # step of the trust loop into an mkdir it has to guess at.
 EXAKIT_WORKFLOWS_DIR="$EXAKIT_HOME/workflows"
 EXAKIT_BIN_DIR="${EXAKIT_BIN_DIR:-$HOME/.local/bin}"
+# The PATH the run started with, before ensure_path_hint puts the bin folder on
+# it: the shell that ran `curl ... | sh` still has that one, so the install's
+# last line has to know whether `exakit` resolves there (audit MAC-04).
+EXAKIT_PATH_AT_START="${EXAKIT_PATH_AT_START:-$PATH}"
+export EXAKIT_PATH_AT_START
 EXAKIT_MANAGED_PYTHON_VERSION="${EXAKIT_MANAGED_PYTHON_VERSION:-3.12}"
 EXAKIT_MCP_READONLY_USER="${EXAKIT_MCP_READONLY_USER:-mcp_readonly}"
 EXAKIT_MCP_READONLY_SCHEMAS="${EXAKIT_MCP_READONLY_SCHEMAS:-STARTER_KIT}"
@@ -8410,6 +8415,21 @@ verify_sha256_from_file() {
 # ---------------------------------------------------------------------------
 # Misc
 # ---------------------------------------------------------------------------
+# exakit_closing_hint — the install's last line. "Run exakit help" is only true
+# in a terminal that has the bin folder on its PATH; the one that ran the
+# installer did not when the install had to add it, so it is given the full
+# path too.
+exakit_closing_hint() {
+    case ":${EXAKIT_PATH_AT_START:-$PATH}:" in
+        *":$EXAKIT_BIN_DIR:"*) heading "Run \"exakit help\" for support" ;;
+        *)
+            _ech_bin="$EXAKIT_BIN_DIR"
+            case "$_ech_bin" in "$HOME"/*) _ech_bin="~/${_ech_bin#"$HOME"/}" ;; esac
+            heading "Run \"exakit help\" for support - in a new terminal; in this one: $_ech_bin/exakit help"
+            ;;
+    esac
+}
+
 # ensure_path_hint <dir> — make dir usable on PATH without sudo: fix the
 # current process immediately, then persist the export in the user's own
 # shell profile (their file, their permissions — never /etc, never root).

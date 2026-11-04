@@ -2679,5 +2679,14 @@ done
 has "...and says why the name matters" 'file name becomes the table name' \
     "$(cat "$ROOT/setup/exakit")"
 
+echo "the install's last line works in the terminal that ran it (audit MAC-04):"
+_ch_bare="$( (EXAKIT_PATH_AT_START=/usr/bin:/bin; exakit_closing_hint) 2>&1)"
+has "bin folder not on the starting PATH: the full path is given" "/exakit help" "$_ch_bare"
+_ch_on="$( (EXAKIT_PATH_AT_START="$EXAKIT_BIN_DIR:/usr/bin"; exakit_closing_hint) 2>&1)"
+lacks "already on PATH: the short form only" "in this one" "$_ch_on"
+for _ch_os in macos linux; do
+    has "setup-$_ch_os.sh ends with that line" "exakit_closing_hint" "$(tail -20 "$ROOT/setup/setup-$_ch_os.sh")"
+done
+
 echo "passed: $PASS, failed: $FAIL"
 [ "$FAIL" -eq 0 ]

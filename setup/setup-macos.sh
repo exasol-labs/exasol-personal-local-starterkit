@@ -217,7 +217,7 @@ fi
 # and run together with whatever the marketplace printed it read as one more of
 # its bullets. The rule gives it air; the green arrow says it is not a step.
 ui_rule
-heading "Run \"exakit help\" for support"
+exakit_closing_hint
 # Two blank lines before the shell prompt returns. The installer's last line was
 # landing directly against it, so the prompt read as part of the output.
 printf '\n\n'
