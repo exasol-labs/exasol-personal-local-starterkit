@@ -17,7 +17,7 @@
     {
       "step": "Open the notebooks",
       "run": "exakit notebook",
-      "note": "On a terminal it asks which tools to open - one multi-select, each row saying its tool's state (running, ready, missing, not installed) - and opens each one picked: JupyterLab and Marimo in the background, opened in your browser, logged in. Without a terminal it opens JupyterLab. The notebooks are in ~/.exasol-starter-kit/notebooks: the kit's in starter-kit-notebooks/, one folder per persona (general, data-scientist, ml-engineer), with a README naming the end-to-end path."
+      "note": "On a terminal it asks which tools to open - one multi-select, each row saying its tool's state (running, ready, missing, not installed) - and opens each one picked: JupyterLab and Marimo in the background, opened in your browser, logged in. Without a terminal it opens JupyterLab. The notebooks are in ~/.exasol-starter-kit/notebooks: the kit's in starter-kit-notebooks/, one folder per persona you picked that has notebooks (data-scientist, ml-engineer), with a README naming the order to open them."
     },
     {
       "step": "Or in Marimo",

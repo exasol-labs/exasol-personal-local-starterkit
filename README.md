@@ -51,7 +51,7 @@ Existing compatible components are reused. The kit records whether each componen
 
 This kit sets up an analytics database on your own machine and connects your AI assistant to it. Everything runs locally, so your data stays with you. You see every SQL statement before it runs and can check each answer yourself.
 
-The install command sets up four components and connects them:
+The install command sets up five components and connects them:
 
 | Component | What it does |
 |---|---|
@@ -103,7 +103,7 @@ If Podman blocks the install, see the [Podman troubleshooting guide](quickstarts
 
 ## Upgrade Path for Starterkit
 
-To upgrade from 0.1.0 to 0.2.0, run the install command from the top of this page again. On Windows it is recommended to have Podman Desktop installed before you start, and Podman on Linux. On macOS there is nothing to prepare, and `exakit update` does the same job.
+To upgrade an installed kit, run the install command from the top of this page again (or `exakit update`). On Windows it is recommended to have Podman Desktop installed before you start, and Podman on Linux. On macOS there is nothing to prepare, and `exakit update` does the same job.
 
 ## Connect your AI client and ask
 

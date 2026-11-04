@@ -10,6 +10,7 @@ the server and a model it actually serves; model weights are not bundled.
 | `EXAKIT_PROVIDER_BASE_URL` | API base URL, including its version/prefix; not a full request URL |
 | `EXAKIT_PROVIDER_API_KEY` | Provider credential; leave unset only if that server allows unauthenticated calls |
 | `EXAKIT_PROVIDER_HEADERS` | Optional JSON map of additional routing headers; omit unless required |
+| `EXAKIT_MODEL_TEMPERATURE` | Optional, 0 to 2. Unset (the default) sends no temperature: Claude Opus 4.7 and later refuse one with HTTP 400. Set `0` for a local model that should answer the same way twice |
 
 No model ID means optional AI stays disabled. A selected model requires an
 explicit base URL. Blank keys use a non-secret SDK placeholder for unauthenticated
@@ -136,7 +137,7 @@ block) with `sql` and string arrays `assumptions`/`doubts`. It still requires
 Provider chat compatibility does not guarantee SQL quality or support for every
 sampling option; test the exact model/server combination.
 
-Use `tools/ask_benchmark.py --help` and the acceptance guide to compare models.
+Use `tools/ask_benchmark.py --help` to compare models.
 The model receives the question, schema and required output column names;
 it never receives reference SQL or result rows. Scores compare complete rows,
 column positions and duplicate counts, ignoring row order and aliases. Results

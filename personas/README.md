@@ -116,6 +116,8 @@ The keys:
 | `mcp_clients` | `"all"`, `"skip"`, or a list of client ids |
 | `addons` | a list of marketplace add-on ids, or `"all"` / `"none"` |
 | `notebook_tools` | optional: which notebook tools to tick, e.g. `["jupyterlab", "marimo"]` |
+| `services` | optional: kit services the persona starts at login, e.g. `["mlflow"]` (ML Engineer) |
+| `udf_language` | optional: `python` or `rust`, the UDF language udf-devkit sets up first (sets `EXAKIT_UDF_LANGUAGE`) |
 | `first_prompt` | optional: what to do first, shown by `exakit persona show` (the shipped ones open their quickstart notebook) |
 
 No secrets and no machine paths: a persona names things, it never holds them.

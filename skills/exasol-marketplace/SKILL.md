@@ -6,8 +6,9 @@ description: Browse, install and remove the starter kit's optional add-ons throu
 # The marketplace — optional add-ons
 
 The marketplace is where the kit keeps **optional tools**: worth having next to
-the database, not worth lengthening the install for. Nothing here is ever
-installed by the setup scripts.
+the database, not worth lengthening the install for. The install adds them only
+when a persona (`EXAKIT_PERSONA`) or `EXAKIT_MARKETPLACE_ADDONS` asks for them;
+afterwards use `exakit marketplace` or `exakit persona add <id>`.
 
 ```bash
 exakit marketplace       # browse: Space selects, Enter installs
@@ -48,10 +49,12 @@ managing them.
 
 Two independent filters run before anything is listed, and both are deliberate:
 
-**Applicability.** An add-on that extends software the user does not have is
-not offered at all — no row, no mention. `exasol-vscode` is only listed on a
-machine that has VS Code. Naming it anyway explains that the host app is
-missing, instead of failing deep in an installer:
+**Applicability.** An add-on that extends software the user does not have, or
+that has no build for this machine, is not offered for install: the menu has no
+row for it, while `exakit marketplace --list` still shows it as not applicable
+with the reason. `exasol-vscode` is only offered on a machine that has VS Code,
+notebook not on Linux Arm. Naming it anyway explains why, instead of failing
+deep in an installer:
 
 ```bash
 EXAKIT_MARKETPLACE_ADDONS=exasol-vscode exakit marketplace
@@ -112,9 +115,10 @@ e.g. `EXAKIT_DASH_SERVER_VERSION=<version>`.
 
 ## Guardrails
 
-- **Never install an add-on during a kit install.** The marketplace is the only
-  install path, by design — do not shortcut it by calling module functions
-  directly.
+- **Install add-ons through the marketplace or a persona, nothing else.** During
+  a kit install that means `EXAKIT_PERSONA` or `EXAKIT_MARKETPLACE_ADDONS`;
+  afterwards `exakit marketplace <id>` or `exakit persona add <id>`. Do not
+  shortcut it by calling module functions directly.
 - **Never manage a copy the kit did not install.** If an add-on shows as
   "already on this system", leave it alone; do not update or remove it.
 - **Prefer `--dry-run` before any uninstall**, and never run

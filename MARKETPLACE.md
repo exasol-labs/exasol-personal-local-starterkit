@@ -235,11 +235,13 @@ reach `127.0.0.1` on the machine can call its tools, which build, deploy and
 pip-install dependencies for Dash apps as the installing user. Fine on a
 personal laptop; on a shared or multi-user machine, stop dash-server when it is
 not in use (`exakit stop`), and never expose the port on a LAN or through a
-tunnel. dash-server is also the one add-on installed **without a kit-pinned
-checksum** — the version is tag-pinned, but a GitHub source tarball publishes no
-digest to verify the download against, and its Python dependencies come from
-PyPI unpinned. Every other add-on refuses an artifact whose digest it cannot
-check.
+tunnel. Not every add-on is installed **against a kit-pinned checksum**:
+dash-server is tag-pinned, but a GitHub source tarball publishes no digest to
+verify the download against, and its Python dependencies come from PyPI
+unpinned; dbt-exasol, the notebook environment (JupyterLab, Marimo) and MLflow
+are pinned by version from PyPI, without hash checking. exasol-scheduler,
+Exasol for VS Code, JSON Tables and the UDF containers are verified against
+pinned digests and refuse an artifact whose digest they cannot check.
 
 Non-interactive use, same contract as the closing offer:
 
