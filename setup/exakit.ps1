@@ -219,6 +219,16 @@ function Get-ExakitLoadedDatasets {
 # cmd_status, including THE EXIT CODE CONTRACT (agents branch on it, not on
 # prose): 0 running, 3 installed but not running, 4 not installed.
 
+# Get-ExakitPlatformName - the `platform` AGENTS.md tells agents to branch on before
+# running a remedy: windows here (macos or linux when this CLI runs under pwsh for
+# development). wsl_version, its partner, is always null on this side. Twin of
+# _exakit_platform_json_fields (audit WIN-02, AGT-10).
+function Get-ExakitPlatformName {
+    if ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT) { return "windows" }
+    if ($IsMacOS) { return "macos" }
+    return "linux"
+}
+
 # Write-ExakitNotInstalledAnswer [-Json] - the not-installed answer for a STATE
 # QUERY, and it exits 4. Twin of _not_installed_answer. A bare Fail here fails
 # an agent twice over: it exits 1 where the documented contract says 4, and it
@@ -237,6 +247,8 @@ function Write-ExakitNotInstalledAnswer {
             # something a shell can execute. Twin of the same key in
             # _not_installed_answer.
             remedy    = (Get-ExakitInstallCommand)
+            platform    = (Get-ExakitPlatformName)
+            wsl_version = $null
         } | ConvertTo-Json -Compress)
     } else {
         Write-Host "Not installed (no manifest at $script:ManifestPath). Run the installer first: $(Get-ExakitInstallCommand)"
@@ -461,6 +473,8 @@ function Invoke-CmdStatus {
             last_failure    = $(if ($failureNote.reason) { $failureNote.reason } else { $null })
             last_failure_at = $(if ($failureNote.at) { $failureNote.at } else { $null })
             manifest        = $script:ManifestPath
+            platform        = (Get-ExakitPlatformName)
+            wsl_version     = $null
         }
         # An older kit's container database, as the crossing recorded it. Only
         # present when there is one: `copied` says whether its tables are in this

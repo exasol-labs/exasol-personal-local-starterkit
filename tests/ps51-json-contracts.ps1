@@ -68,6 +68,9 @@ foreach ($case in @(
     if ($doc) {
         Check "$($case.Label) (not installed) says installed=false" ($doc.installed -eq $false) "installed=$($doc.installed)"
         Check "$($case.Label) (not installed) carries status and remedy" ($doc.PSObject.Properties["status"] -and $doc.PSObject.Properties["remedy"]) (Head $r.Out 160)
+        # The state queries' answer; update --json's not-installed answer is a result, as in the shell twin.
+        if ($case.Label -ne "update --json") { Check "$($case.Label) (not installed) carries platform and wsl_version (audit WIN-02)" `
+            ("$($doc.platform)" -in @("windows", "macos", "linux") -and $doc.PSObject.Properties["wsl_version"] -and $null -eq $doc.wsl_version) (Head $r.Out 200) }
     }
 }
 
@@ -148,6 +151,8 @@ if ($doc) {
     Check "status --json: not installing without a lock" ($doc.installing -eq $false -and $doc.status -ne "installing") "status=$($doc.status) installing=$($doc.installing)"
     Check "status --json: steps_completed is an array" ($doc.steps_completed -is [array]) "type $($doc.steps_completed.GetType().Name)"
     Check "status --json: carries datasets_source" ([bool]$doc.PSObject.Properties["datasets_source"]) "missing"
+    Check "status --json: carries platform and wsl_version (AGENTS.md; audit WIN-02)" `
+        ("$($doc.platform)" -in @("windows", "macos", "linux") -and $doc.PSObject.Properties["wsl_version"]) "platform=$($doc.platform)"
 }
 
 Set-ExakitManifestValue "install.current_step" "runtime"
