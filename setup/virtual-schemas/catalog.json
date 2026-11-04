@@ -8,6 +8,7 @@
     "          against a real source; kit-tested = qualified; gated = defined but",
     "          blocked by a named release gate (see `gate`).",
     "  aliases what a search also matches; ambiguous input lists the choices.",
+    "  summary what a source of this kind becomes, for the exakit connect menu.",
     "",
     "A connector's inputs, artifacts and SQL live in connectors/<id>/; the",
     "deployment recipe it shares with others in profiles/<profile>/."
@@ -16,7 +17,7 @@
   "connectors": [
     {
       "id": "postgresql",
-      "name": "PostgreSQL",
+      "name": "PostgreSQL", "summary": "a PostgreSQL database",
       "aliases": [
         "pg",
         "postgres",
@@ -28,7 +29,7 @@
     },
     {
       "id": "mysql",
-      "name": "MySQL",
+      "name": "MySQL", "summary": "a MySQL or MariaDB database",
       "aliases": [
         "mysql8",
         "mysql-server"
@@ -39,7 +40,7 @@
     },
     {
       "id": "sqlserver",
-      "name": "SQL Server",
+      "name": "SQL Server", "summary": "a SQL Server database",
       "aliases": [
         "mssql",
         "sql-server",
@@ -51,7 +52,7 @@
     },
     {
       "id": "oracle",
-      "name": "Oracle",
+      "name": "Oracle", "summary": "an Oracle database",
       "aliases": [
         "oracle-db",
         "ora"
@@ -62,7 +63,7 @@
     },
     {
       "id": "snowflake",
-      "name": "Snowflake",
+      "name": "Snowflake", "summary": "a Snowflake schema",
       "aliases": [
         "sf",
         "snow"
@@ -73,7 +74,7 @@
     },
     {
       "id": "bigquery",
-      "name": "Google BigQuery",
+      "name": "Google BigQuery", "summary": "a BigQuery dataset",
       "aliases": [
         "bq",
         "gbq",
@@ -85,7 +86,7 @@
     },
     {
       "id": "s3",
-      "name": "Amazon S3",
+      "name": "Amazon S3", "summary": "JSON, CSV and Parquet files in a bucket",
       "aliases": [
         "aws-s3",
         "s3-files",
@@ -98,7 +99,7 @@
     },
     {
       "id": "azure-blob",
-      "name": "Azure Blob Storage",
+      "name": "Azure Blob Storage", "summary": "JSON, CSV and Parquet blobs in a container",
       "aliases": [
         "azure",
         "abs",
@@ -112,7 +113,7 @@
     },
     {
       "id": "databricks",
-      "name": "Databricks",
+      "name": "Databricks", "summary": "a Unity Catalog schema",
       "aliases": [
         "dbx",
         "databricks-sql",
@@ -124,7 +125,7 @@
     },
     {
       "id": "lakehouse",
-      "name": "Lakehouse (Iceberg on AWS Glue)",
+      "name": "Lakehouse (Iceberg on AWS Glue)", "summary": "Iceberg tables in an AWS Glue catalog",
       "aliases": [
         "iceberg",
         "glue",
@@ -137,7 +138,7 @@
     },
     {
       "id": "mongodb",
-      "name": "MongoDB",
+      "name": "MongoDB", "summary": "a MongoDB collection",
       "aliases": [
         "mongo",
         "atlas",

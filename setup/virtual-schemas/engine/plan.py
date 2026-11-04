@@ -140,6 +140,51 @@ def objects(name, connector=None):
             "script_schema": "EXAKIT_VS", "script": script}
 
 
+def check_value(spec, raw):
+    """One input's value checked by its kind: (value, None), or (None, the problem).
+
+    validate_inputs applies it to every input; the terminal form asks it about
+    one answer at a time (cli.py field), so a wrong value is said where it was
+    typed, in the same words a scripted connect would get."""
+    name, kind = spec["name"], spec["kind"]
+    raw = str(raw).strip()
+    if kind == "port":
+        if not raw.isdigit() or not 0 < int(raw) < 65536:
+            return None, "%s must be a port number, not %r" % (name, raw)
+    elif kind == "choice":
+        if raw not in spec["choices"]:
+            return None, "%s must be one of %s, not %r" % (name, ", ".join(spec["choices"]), raw)
+    elif kind == "ca-file":
+        raw = os.path.abspath(os.path.expanduser(raw))
+        try:
+            tlsca.certificates(raw)
+        except tlsca.CaError as error:
+            return None, str(error)
+    elif kind == "edml":
+        raw = os.path.abspath(os.path.expanduser(raw))
+        try:
+            document.load_mappings(raw)
+        except document.DocumentError as error:
+            return None, str(error)
+    elif kind == "mongodb-uri" and "@" in raw.split("://", 1)[-1].split("/", 1)[0]:
+        return None, ("the MongoDB URI carries credentials (user:password@): give the user with --set user=... "
+                      "and the password on standard input, so the database keeps it hidden")
+    elif kind == "s3-bucket" and "." in raw:
+        return None, ("bucket %s has dots: its HTTPS name does not match the S3 certificate, and the kit "
+                      "reads only over verified HTTPS" % raw)
+    elif kind in KINDS and not KINDS[kind].match(raw):
+        return None, "%s=%r is not a valid %s" % (name, raw, kind)
+    if kind == "aws-region" and raw.startswith("cn-"):
+        return None, "the China regions use other endpoints, which this connector does not reach"
+    if kind == "host" and raw.strip("[]").lower() in LOOPBACK:
+        return None, LOOPBACK_ADVICE
+    if kind == "host":
+        # Stored bare; jdbc_url adds the brackets an IPv6 literal needs in
+        # a URL, and the route probe resolves the bare form.
+        raw = raw.strip("[]")
+    return (raw.upper() if spec.get("upper") else raw), None
+
+
 def validate_inputs(connector, given):
     """Defaults applied, every value checked by kind; secrets are not taken here."""
     values, problems = {}, []
@@ -160,51 +205,11 @@ def validate_inputs(connector, given):
                 continue
             else:
                 continue
-        raw = str(raw).strip()
-        if kind == "port":
-            if not raw.isdigit() or not 0 < int(raw) < 65536:
-                problems.append("%s must be a port number, not %r" % (name, raw))
-                continue
-        elif kind == "choice":
-            if raw not in spec["choices"]:
-                problems.append("%s must be one of %s, not %r" % (name, ", ".join(spec["choices"]), raw))
-                continue
-        elif kind == "ca-file":
-            raw = os.path.abspath(os.path.expanduser(raw))
-            try:
-                tlsca.certificates(raw)
-            except tlsca.CaError as error:
-                problems.append(str(error))
-                continue
-        elif kind == "edml":
-            raw = os.path.abspath(os.path.expanduser(raw))
-            try:
-                document.load_mappings(raw)
-            except document.DocumentError as error:
-                problems.append(str(error))
-                continue
-        elif kind == "mongodb-uri" and "@" in raw.split("://", 1)[-1].split("/", 1)[0]:
-            problems.append("the MongoDB URI carries credentials (user:password@): give the user with --set user=... "
-                            "and the password on standard input, so the database keeps it hidden")
+        value, problem = check_value(spec, raw)
+        if problem:
+            problems.append(problem)
             continue
-        elif kind == "s3-bucket" and "." in raw:
-            problems.append("bucket %s has dots: its HTTPS name does not match the S3 certificate, and the kit "
-                            "reads only over verified HTTPS" % raw)
-            continue
-        elif kind in KINDS and not KINDS[kind].match(raw):
-            problems.append("%s=%r is not a valid %s" % (name, raw, kind))
-            continue
-        if kind == "aws-region" and raw.startswith("cn-"):
-            problems.append("the China regions use other endpoints, which this connector does not reach")
-            continue
-        if kind == "host" and raw.strip("[]").lower() in LOOPBACK:
-            problems.append(LOOPBACK_ADVICE)
-            continue
-        if kind == "host":
-            # Stored bare; jdbc_url adds the brackets an IPv6 literal needs in
-            # a URL, and the route probe resolves the bare form.
-            raw = raw.strip("[]")
-        values[name] = raw.upper() if spec.get("upper") else raw
+        values[name] = value
     if values.get("ca") and values.get("tls", "verify") != "verify":
         # A CA only means something to a check; with require or disable it
         # would read as protection that is not there.

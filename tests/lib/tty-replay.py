@@ -7,7 +7,8 @@
 # <boxes> is the total number of boxes expected on the final screen (default 1),
 # for a scenario that prints a static panel above the live table.
 # <keystrokes> are typed INTO the scenario, e.g. 'jj \r' for down, down, Space,
-# Enter (python escapes are honoured, so '\e[B' is the Down arrow).
+# Enter (python escapes are honoured, so '\e[B' is the Down arrow; '\x01' is a
+# one-second pause).
 #
 # The pty is driven directly rather than through pty.spawn, for two reasons that
 # both showed up as a wrong screen. It asks for keystrokes only when OUR stdin
@@ -69,7 +70,15 @@ while True:
         out.append(chunk)
         continue
     if keys and time.time() >= next_key:
-        os.write(master, keys.pop(0).encode('utf-8'))
+        k = keys.pop(0)
+        if k == '\x01':
+            # A PAUSE, not a key: '\x01' in the keystrokes waits a second, for a
+            # scenario that throws away what was typed while it worked (the
+            # connect table discards an impatient Enter) - the next key has to
+            # arrive once it is listening again.
+            next_key = time.time() + 1.0
+            continue
+        os.write(master, k.encode('utf-8'))
         next_key = time.time() + 0.35
         continue
     if proc.poll() is not None:
@@ -112,6 +121,14 @@ while i < len(raw):
                 scr[cur] = scr[cur][:col]
             i += m.end(); continue
         m = re.match(r'\x1b\[\?25[lh]', raw[i:])
+        if m: i += m.end(); continue
+        # Invisible on a real terminal, and emitted by .NET's console on Unix
+        # around every ReadLine (the PowerShell scenarios): any other private
+        # mode (keypad: ESC[?1h), the keypad switches ESC= / ESC>, and a window
+        # title (OSC ... BEL). Printed as text here they would widen a line
+        # until it wrapped, and the replay would report stacking a terminal
+        # never shows.
+        m = re.match(r'\x1b\[\?[0-9;]*[lh]|\x1b[=>]|\x1b\][^\x07\x1b]*(\x07|\x1b\\)?', raw[i:])
         if m: i += m.end(); continue
         m = re.match(r'\x1b\[[0-9;]*m', raw[i:])
         if m: i += m.end(); continue

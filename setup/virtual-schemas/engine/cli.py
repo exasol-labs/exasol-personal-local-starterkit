@@ -2,6 +2,8 @@
 
     cli.py [context] catalog    [--query Q]
     cli.py [context] resolve    QUERY
+    cli.py [context] inputs     CONNECTOR
+    cli.py [context] field      CONNECTOR INPUT [--base64]   (the value on standard input)
     cli.py [context] plan       CONNECTOR --name N [--set KEY=VALUE ...]
     cli.py [context] connect    CONNECTOR --name N [--set KEY=VALUE ...] [--secret-stdin]
     cli.py [context] list | issues [--status S] | show N | check N|--all
@@ -57,6 +59,11 @@ def parse(argv):
     cmd = sub.add_parser("catalog")
     cmd.add_argument("--query", default="")
     sub.add_parser("resolve").add_argument("query")
+    sub.add_parser("inputs").add_argument("connector")
+    cmd = sub.add_parser("field")
+    cmd.add_argument("connector")
+    cmd.add_argument("input")
+    cmd.add_argument("--base64", action="store_true")
     for name in ("plan", "connect"):
         cmd = sub.add_parser(name)
         cmd.add_argument("connector")
@@ -113,6 +120,68 @@ def read_secret(args):
     return data.rstrip("\r\n") or None
 
 
+def form_answer(args):
+    """The terminal form's two questions, answered without the database.
+
+    inputs: what to ask for a connector, in order - the source name first, then
+    each input as connector.json declares it (secrets flagged, never valued).
+    field: is one answer right? The value comes on standard input, not as an
+    argument, for the reason a secret does: a value pasted into the wrong field
+    is still not shown to every local user. The answer is the stored value, or
+    a PlanError in the words a scripted connect would get for the same value."""
+    defs = planner.Definitions(args.defs)
+    connector_id = defs.resolve(args.connector)
+    connector = defs.connector(connector_id)
+    entry = defs.entry(connector_id)
+    if args.command == "inputs":
+        fields = [{"name": "name", "label": "Name for this connection", "kind": "source-name", "required": True,
+                   "default": "", "choices": [], "secret": False}]
+        for spec in connector["inputs"]:
+            fields.append({"name": spec["name"], "label": spec.get("label", spec["name"]), "kind": spec["kind"],
+                           "required": bool(spec.get("required")), "default": str(spec.get("default", "")),
+                           "choices": list(spec.get("choices", [])),
+                           "secret": spec["kind"] in ("secret", "secret-file")})
+        return {"connector": connector_id, "name": entry["name"], "status": entry["status"],
+                "gate": entry.get("gate") or "", "inputs": fields}
+    if args.base64:
+        # The Windows bridge's encoding, for the reason read_secret takes it.
+        try:
+            raw = base64.b64decode(re.sub(rb"[^A-Za-z0-9+/=]", b"", sys.stdin.buffer.read()), validate=True).decode("utf-8")
+        except (ValueError, binascii.Error):
+            raise planner.PlanError("the value on standard input is not valid base64 UTF-8")
+    else:
+        raw = sys.stdin.read()
+    raw = raw.rstrip("\r\n")
+    if args.input == "name":
+        if not sources.NAME.match(raw):
+            raise planner.PlanError("the source name must be lower case letters, digits and _ (start with a letter, "
+                                    "at most 40), e.g. sales")
+        store = sources.Store(args.kit_home)
+        if store.exists(raw):
+            current = store.config(raw)
+            # A disconnected source of the same connector is reconnected by
+            # name - the one case where an existing name is the right answer.
+            if store.status(raw).get("status") != "disconnected" or current["connector"] != connector_id:
+                raise planner.PlanError("a source named %s already exists (%s); choose another name or remove it "
+                                        "first: exakit source remove %s" % (raw, current["connector"], raw),
+                                        code=lifecycle.EXIT["conflict"])
+        return {"value": raw}
+    spec = next((s for s in connector["inputs"] if s["name"] == args.input), None)
+    if spec is None or spec["kind"] in ("secret", "secret-file"):
+        raise planner.PlanError("%s is not an input of %s that the form checks" % (args.input, connector_id))
+    if raw == "":
+        if "default" in spec:
+            raw = str(spec["default"])
+        elif spec.get("required"):
+            raise planner.PlanError("%s is required (%s)" % (spec["name"], spec.get("label", spec["name"])))
+        else:
+            return {"value": ""}
+    value, problem = planner.check_value(spec, raw)
+    if problem:
+        raise planner.PlanError(problem)
+    return {"value": value}
+
+
 def main(argv=None):
     args = parse(argv)
     out = sys.stderr if args.json else sys.stdout
@@ -127,7 +196,9 @@ def main(argv=None):
     result, code = None, 0
     engine = None
     try:
-        if args.command in ("catalog", "resolve"):
+        if args.command in ("inputs", "field"):
+            result = form_answer(args)
+        elif args.command in ("catalog", "resolve"):
             defs = planner.Definitions(args.defs)
             if args.command == "resolve":
                 # The gate comes before any question: asking for a project and

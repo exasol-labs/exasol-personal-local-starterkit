@@ -40,6 +40,14 @@ printf '%s' "$SALES_PASSWORD" | exakit connect pg --name sales \
 # or: --password-file ~/.config/sales.pw   (a file only the user can read)
 ```
 
+A person at a terminal can type `exakit connect` alone: a menu of the
+connectors (Space ticks several), one panel per source with each answer
+checked as it is typed, a review of downloads and exposure, then one table that
+follows every source to `VS_<NAME>`. That flow needs a terminal on standard
+input, so an agent never lands in it - piped or `--yes`, `--dry-run` and
+`--json` runs keep the line-by-line behaviour above. Suggest it to a user who
+wants to connect several sources by hand.
+
 Rules that are not negotiable:
 
 - **The credential never goes on the command line.** `--password=…` is refused

@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+**`exakit connect` on a terminal: a menu, a panel per source, one live
+table.** Typed alone, it opens the marketplace's own table with every
+connector (what each one is, and the sources already connected through it);
+Space ticks several, Enter confirms. Each source then gets a panel with every
+field and its default, and the engine checks each answer where it is typed, in
+the words a scripted connect would get (`localhost` is explained, a name
+already taken is refused before anything runs). A review shows what each plan
+downloads and who can read the result, one question follows, and the same
+table then tracks every source - one at a time - to `VS_<NAME>` and its table
+count, or to a short reason with the engine's full sentence below. A missing
+Java or Rust container is asked about once, below the table, and those sources
+run again. `exakit connect <source>` skips the menu and ticks what the command
+line already gave. Credentials stay hidden and in memory, never in a file or
+an argument. Nothing changes for scripts and agents: a pipe, `--yes`,
+`--dry-run` and `--json` keep the line-by-line path. Same on Windows.
+
 **`exakit connect` no longer fails when the database has not seen a staged
 file yet.** Measured on Exasol Personal 2.3.0, whose runtime is a VM reading
 the deployment folder over a VirtioFS share: the very first connect on a fresh

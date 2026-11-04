@@ -1597,6 +1597,11 @@ ui_animation_stop() {
 # table — frame plus anything printed under it — are ALREADY on screen, so a
 # re-ask overwrites them instead of drawing a second table below them. The MCP
 # step sets it when an unconfirmed "Skip" sends the reader back to the menu.
+#
+# UI_TABLE_MENU_START (optional, cleared on use): the row the cursor starts on.
+# Left unset it is row 2, past a "Select All" row; a table with no such row
+# (exakit connect's) starts on row 1. A row nobody can pick still moves it on.
+# ⇄ twin: Invoke-ExakitTableMenu -StartRow.
 ui_table_menu() {
     _utm_f="$1"
     _utm_n=0
@@ -1633,7 +1638,12 @@ ui_table_menu() {
     # Row 2 as before — past the group row — but never a row that cannot be
     # picked, or the first Space would land on one.
     _utm_cur=1
-    [ "$_utm_n" -ge 2 ] && _utm_move 1
+    _utm_start="${UI_TABLE_MENU_START:-}"
+    UI_TABLE_MENU_START=""
+    case "$_utm_start" in
+        ''|*[!0-9]*) [ "$_utm_n" -ge 2 ] && _utm_move 1 ;;
+        *) [ "$_utm_start" -ge 1 ] && [ "$_utm_start" -le "$_utm_n" ] && _utm_cur="$_utm_start" ;;
+    esac
     _utm_pickable "$_utm_cur" || _utm_move 1
     _utm_sel="$EXAKIT_TABLE_DEFAULTS"
     # CONFIRMED means a human pressed Enter on this table - nothing else. The
