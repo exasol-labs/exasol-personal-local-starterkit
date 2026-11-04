@@ -12491,7 +12491,7 @@ _exakit_log_mtime() {
 # object, including when there are no logs at all, so a parser never gets empty
 # stdout (the same rule the other --json surfaces follow).
 exakit_logs_overview_json() {
-    exakit_can_run_python || return 1
+    exakit_can_run_python_any || return 1   # json only: any Python 3 (audit AGT-02)
     _loj_rows=""
     while IFS='|' read -r _loj_id _loj_label _loj_kind _loj_src; do
         [ -n "$_loj_id" ] || continue
@@ -12508,7 +12508,7 @@ EXAKIT_LOJ_EOF
     # Rows go through argv, not stdin: run_python reads the PROGRAM from stdin
     # (the here-doc), so a piped payload arrives as an empty read and the
     # listing silently comes back with zero targets.
-    run_python - "$_loj_rows" <<'EXAKIT_LOJ_PY'
+    run_python_any - "$_loj_rows" <<'EXAKIT_LOJ_PY'
 import json, sys
 targets = []
 for line in sys.argv[1].splitlines():

@@ -172,6 +172,12 @@ fi
 case "${1:-help}" in
     status|version|--version|-v|info|mcp-status|mcp-doctor|skills|catalog|logs|help|--help|-h|whats-new)
         export EXAKIT_READONLY_QUERY=1 ;;
+    # The read-only actions of commands that also write (audit AGT-01, AGT-03): a
+    # persona's plan, list and show, and the marketplace's help and listing.
+    persona)
+        case "${2:-}" in plan|list|show|--help|-h) export EXAKIT_READONLY_QUERY=1 ;; esac ;;
+    marketplace)
+        case " $* " in *" --help "*|*" -h "*|*" --list "*) export EXAKIT_READONLY_QUERY=1 ;; esac ;;
 esac
 
 . "$_lib_dir/common.sh"
@@ -2153,7 +2159,7 @@ usage() {
         esac
     done
     if [ "$_u_json" -eq 1 ]; then
-        exakit_can_run_python || die "python3 is needed for --json."
+        exakit_can_run_python_any || die "python3 is needed for --json."
         case "$_u_topic" in
             --all|-a|"") exakit_help_render json all ;;
             *)           exakit_help_render command-json "$_u_topic" ;;
@@ -2587,7 +2593,7 @@ cmd_catalog() {
     done
     _search="$(printf '%s' "$_cat_args" | tr '[:upper:]' '[:lower:]')"
     if [ "$_cat_json" -eq 1 ]; then
-        exakit_can_run_python || die "python3 is needed for --json."
+        exakit_can_run_python_any || die "python3 is needed for --json."
         exakit_help_render json "$_search"
         return $?
     fi

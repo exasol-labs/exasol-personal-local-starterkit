@@ -98,7 +98,9 @@ _exakit_help_docs_args() {
 exakit_help_render() {
     _hr_mode="$1"
     _hr_arg="${2:-}"
-    exakit_can_run_python || {
+    # Any Python 3 renders it (the script needs nothing newer than 3.8): a stock
+    # macOS 3.9 must show help before the kit's own Python exists (audit AGT-04).
+    exakit_can_run_python_any || {
         # No python: fall back to the shipped exakit document, read as text, so
         # help still says something useful instead of dying.
         _hr_ship="$(exakit_help_kit_dir)/exakit.json"
@@ -115,7 +117,7 @@ exakit_help_render() {
     [ "$_hr_width" -lt 40 ] && _hr_width=80
 
     # shellcheck disable=SC2046
-    run_python - "$_hr_mode" "$_hr_color" "$_hr_width" "$_hr_arg" \
+    run_python_any - "$_hr_mode" "$_hr_color" "$_hr_width" "$_hr_arg" \
         $(_exakit_help_docs_args | tr '\n' ' ') <<'EXAKIT_HELP_RENDER_PY'
 import json, sys, textwrap
 
