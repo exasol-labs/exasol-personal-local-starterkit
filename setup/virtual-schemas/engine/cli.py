@@ -156,6 +156,15 @@ def paste_answer(args, emit):
     return dict(answer, connector=connector_id)
 
 
+def adapter_version(defs, connector_id):
+    """The adapter version a connector pins, for the menu; "" when its
+    definition cannot be read (the catalog still lists it)."""
+    try:
+        return str(defs.connector(connector_id)["adapter"].get("version", ""))
+    except (OSError, ValueError, KeyError, planner.PlanError):
+        return ""
+
+
 def form_answer(args):
     """The terminal form's two questions, answered without the database.
 
@@ -241,8 +250,8 @@ def main(argv=None):
                 result = {"connector": connector}
             else:
                 q = args.query.lower()
-                result = {"connectors": [dict(e, profile=e["profile"]) for e in defs.entries()
-                                         if not q or q in json.dumps(e).lower()]}
+                result = {"connectors": [dict(e, profile=e["profile"], version=adapter_version(defs, e["id"]))
+                                         for e in defs.entries() if not q or q in json.dumps(e).lower()]}
         else:
             engine = lifecycle.Engine(args, emit)
             if args.command in ("plan", "connect"):

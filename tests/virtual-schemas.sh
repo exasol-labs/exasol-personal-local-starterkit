@@ -1844,7 +1844,10 @@ if command -v python3 >/dev/null 2>&1; then
         " \rtuione\rlocalhost\rpg.example.com\r\rsales\r\rreader\r$TUI_SECRET\r\r\ry\r"
     check "one menu, one panel and one table are left on screen, never stacked" "0" "$TUI_RC"
     has "...the menu offers the connectors" "├─ PostgreSQL" "$TUI_SCREEN"
-    has "...with what each one is" "a PostgreSQL database" "$TUI_SCREEN"
+    has "...with the adapter version each one pins" "4.1.0" "$TUI_SCREEN"
+    has "...and its release" "GA" "$TUI_SCREEN"
+    has "...under the three column heads" "Version" "$TUI_SCREEN"
+    lacks "...no Kind column any more" "REST + JDBC" "$TUI_SCREEN"
     has "...the panel shows every answer" "Host name or address      pg.example.com" "$TUI_SCREEN"
     has "...the credential as given, never its value" "(given, hidden)" "$TUI_SCREEN"
     has "...the review says who can read the result" "MCP read-only user can read every table of VS_TUIONE" "$TUI_SCREEN"
@@ -1892,7 +1895,10 @@ PY
     has "...and it connects" "✓ VS_TUIARGS · 1 table" "$TUI_SCREEN"
 
     # Skip closes the menu with nothing done.
-    tui connect-tui-scenario.sh "Connect external sources" 1 "jjjjjjjjjjj \r"
+    # Skip sits below every connector of the catalog (GA and Beta); the cursor
+    # steps over a gated one.
+    _skip_keys="$(python3 -c 'import json,sys; print("j" * sum(1 for e in json.load(open(sys.argv[1]))["connectors"] if e.get("status") != "gated"))' "$DEFS/catalog.json")"
+    tui connect-tui-scenario.sh "Connect external sources" 1 "$_skip_keys \r"
     has "Skip: nothing chosen, nothing changed" "Nothing was chosen; nothing was changed." "$TUI_SCREEN"
 
     if command -v pwsh >/dev/null 2>&1; then

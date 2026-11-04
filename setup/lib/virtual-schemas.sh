@@ -280,27 +280,15 @@ _exakit_vs_tui_tail() {
 _exakit_vs_pick() {
     _evp_dir="$1"
     exakit_vs_engine catalog < /dev/null > "$_evp_dir/catalog" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
-    exakit_vs_engine list < /dev/null > "$_evp_dir/list" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
-    # id|label|kind|description|gate. The label drops a parenthesis ("Lakehouse
-    # (Iceberg on AWS Glue)" is "Lakehouse"): the summary says what it is, and
-    # the sources already connected through it follow it.
-    run_python_any - "$(_exakit_vs_result "$_evp_dir/catalog")" "$(_exakit_vs_result "$_evp_dir/list")" \
-        > "$_evp_dir/rows" <<'PY'
+    # id|label|version|release|gate: the connector, the adapter version it
+    # pins, and GA or Beta. GA first, then Beta, each in the catalog's order.
+    run_python_any - "$(_exakit_vs_result "$_evp_dir/catalog")" > "$_evp_dir/rows" <<'PY'
 import json, sys
 catalog = json.loads(sys.argv[1] or "{}").get("connectors", [])
-have = {}
-for s in json.loads(sys.argv[2] or "{}").get("sources", []):
-    have.setdefault(s.get("connector", ""), []).append(s.get("name", ""))
-kinds = {"java-jdbc": "JDBC", "java-document-files": "files", "lua-jdbc": "REST + JDBC", "rust-native": "native"}
-for e in catalog:
-    if e.get("tier") != "GA":
-        continue
-    text = e.get("summary", "")
-    if have.get(e["id"]):
-        text += " · connected: " + ", ".join(sorted(have[e["id"]]))
+for e in sorted(catalog, key=lambda e: e.get("tier") != "GA"):
     gate = e.get("gate", "") if e.get("status") == "gated" else ""
     print("|".join(x.replace("|", "/") for x in
-                   (e["id"], e["name"].split(" (")[0], kinds.get(e["profile"], e["profile"]), text, gate)))
+                   (e["id"], e["name"], e.get("version", ""), e.get("tier", ""), gate)))
 PY
     [ -s "$_evp_dir/rows" ] || { error "The connector catalog could not be read. Details: exakit logs"; return 2; }
     _evp_state="$_evp_dir/menu"
@@ -308,6 +296,7 @@ PY
     _evp_n="$(grep -c . "$_evp_dir/rows")"
     _evp_i=0; _evp_ids=""
     while IFS='|' read -r _evp_id _evp_label _evp_kind _evp_text _evp_gate; do
+        # _evp_kind is the adapter version, _evp_text the release (GA or Beta).
         _evp_i=$(( _evp_i + 1 ))
         _evp_tree=tee; [ "$_evp_i" -eq "$_evp_n" ] && _evp_tree=corner
         # kind|label|tick|state|pct|ceiling|secs|t0|phase|final|col2|col3; a
@@ -315,7 +304,7 @@ PY
         # (the marketplace's own disabled-row shape).
         if [ -n "$_evp_gate" ]; then
             printf '%s|%s|0|disabled||||||%s|%s|%s\n' "$_evp_tree" "$_evp_label" \
-                "not available yet" "$_evp_kind" "not available yet: $_evp_gate" >> "$_evp_state"
+                "not available yet" "$_evp_kind" "$_evp_text, not available yet" >> "$_evp_state"
         else
             printf '%s|%s|0|idle|||||||%s|%s\n' "$_evp_tree" "$_evp_label" "$_evp_kind" "$_evp_text" >> "$_evp_state"
         fi
@@ -328,7 +317,7 @@ $_evp_id"
     EXAKIT_TABLE_GROUP=""
     EXAKIT_TABLE_EXCLUSIVE="$_evp_skip"
     UI_TABLE_TITLE="Connect external sources"
-    UI_TABLE_COL1="Source"; UI_TABLE_COL2="Kind"; UI_TABLE_COL3="Description"
+    UI_TABLE_COL1="Source"; UI_TABLE_COL2="Version"; UI_TABLE_COL3="Release"
     UI_TABLE_MENU_START=1               # no "Select All" row to step past
     info "Tick one or more sources; the details for each are asked next."
     ui_table_menu "$_evp_state"
