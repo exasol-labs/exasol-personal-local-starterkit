@@ -150,6 +150,16 @@ try {
     Check "...without it and without a console: the same defaults, not confirmed" "1,2|False" "$($plain -join ',')|$($script:ExakitTableConfirmed)"
     foreach ($v in @("EXAKIT_DATASETS_PRESELECT", "EXAKIT_PERSONA_ACTIVE")) { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
 
+    Write-Host "the data table's Description column is read from each dataset.conf, not stubbed (audit QAT-06):"
+    $bundled = @(Get-ExakitBundledDatasets)
+    foreach ($conf in (Get-ChildItem -Path (Join-Path $repo "data/datasets/*/dataset.conf"))) {
+        $id = ((Get-Content $conf | Where-Object { $_ -like "id=*" } | Select-Object -First 1) -replace '^id=', '')
+        $want = ((Get-Content $conf | Where-Object { $_ -like "description=*" } | Select-Object -First 1) -replace '^description=', '')
+        if (-not $id) { continue }
+        $row = $bundled | Where-Object { $_.Id -eq $id } | Select-Object -First 1
+        Check "$($id): the Windows reader carries its description" $want ("" + $row.Description)
+    }
+
     Write-Host "add-on About text and GitHub names (audit SEC-10, SEC-11, SEC-18):"
     $c1 = [string][char]0x9B; $rlo = [string][char]0x202E; $fsi = [string][char]0x2068
     Check "C1 controls and bidi overrides are stripped" "Safe [31mred evil text" (Convert-ExakitAboutText "Safe$c1[31mred $($rlo)evil$fsi text")
