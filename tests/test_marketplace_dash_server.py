@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import io
 import json
 import os
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -95,7 +97,9 @@ class DashServerTest(unittest.TestCase):
         venv = self.home / "dash-server-venv"
         instance = self.home / "dash-server" / "instance"
         doc = {"components": {"dash_server": {"version": "0.1.1", "port": 5102,
-                                             "venv": str(venv), "instance": str(instance)}},
+                                             "venv": str(venv), "instance": str(instance)},
+                              "mcp_server": {"connection": {"user": "mcp_readonly", "validated": True,
+                                                            "password_file": str(credential)}}},
                "runtime": {"dsn": "127.0.0.1:8563", "user": "SYS", "password_file": str(credential)}}
         self.manifest.path.write_text(json.dumps(doc), encoding="utf-8")
         launcher = dash_server._write_launcher(self.ctx)
@@ -126,9 +130,11 @@ class DashServerTest(unittest.TestCase):
                "runtime": {"dsn": "127.0.0.1:8563", "user": "sys", "password_file": str(credentials / "personal_sys_password")}}
         self.manifest.path.write_text(json.dumps(doc), encoding="utf-8")
 
+        said = io.StringIO()
+
         def launch_env() -> dict:
             with patch.dict(os.environ, {"EXAKIT_HOME": str(self.home)}), patch.object(sys, "argv", ["dash-server"]), \
-                    patch.object(dash_launcher.os, "execve") as launch:
+                    patch.object(dash_launcher.os, "execve") as launch, redirect_stderr(said):
                 dash_launcher.main()
             return launch.call_args.args[2]
 
@@ -145,8 +151,11 @@ class DashServerTest(unittest.TestCase):
         doc["components"]["mcp_server"]["connection"]["validated"] = False
         self.manifest.path.write_text(json.dumps(doc), encoding="utf-8")
         env = launch_env()
-        self.assertEqual("sys", env["DASH_SERVER_EXASOL_USER"])                # no read-only user yet
+        # No read-only user yet: no database profile at all - never the administrator's password (audit SEC-01).
+        self.assertNotIn("DASH_SERVER_EXASOL_USER", env)
+        self.assertNotIn("admin-secret", json.dumps(env))
         self.assertNotIn("DASH_SERVER_EXASOL_OVERWRITE", env)
+        self.assertIn("exakit mcp-setup", said.getvalue())
 
 
 if __name__ == "__main__":

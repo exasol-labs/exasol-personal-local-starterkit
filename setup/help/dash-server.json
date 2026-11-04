@@ -10,7 +10,7 @@
   "control_plane": "The same address with /mcp on the end. exakit mcp-setup registers it as an MCP server named dash-server, so its tools sit beside the exasol ones once the client restarts - Cursor, Claude Code, Codex, GitHub Copilot, Gemini CLI, OpenCode and Continue. Claude Desktop is the one left out: its config file has no shape for a remote MCP server (the app takes those through its own Connectors settings), so setup prints one note naming the URL and the run is not affected.",
   "installed_by": "exakit marketplace dash-server, or the Data Scientist persona.",
   "warning": "The control plane at /mcp is unauthenticated and bound to 127.0.0.1. Anything that can reach loopback on this machine - any other session on a shared box, any script, any browser page - can build, deploy and pip-install dependencies for Dash apps as you. That is fine on a personal laptop; on a shared or multi-user machine, stop dash-server when you are not using it (exakit stop). Never put this port on a LAN or behind a public tunnel.",
-  "db_user": "Reuses the kit's read-only mcp_readonly user - dashboards read, they do not write.",
+  "db_user": "Reuses the kit's read-only mcp_readonly user - dashboards read, they do not write. Without that user (exakit mcp-setup makes it) Dash Server starts with no database connection; it is never given the administrator's password.",
   "quickstart": [
     {
       "step": "Install it",

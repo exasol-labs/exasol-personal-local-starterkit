@@ -94,7 +94,10 @@ The launcher bootstraps the server against the kit's local database using the
 **dedicated read-only MCP user** — dashboards read, they do not write, the same
 least-privilege posture as the MCP server itself. Credentials are supplied by
 the launcher at run time from the kit's credential files; they are never baked
-into generated files, and you must never print them.
+into generated files, and you must never print them. Without the read-only user
+(a failed MCP step) Dash Server starts with no database connection and says so;
+it is never given the administrator's password. Fix: `exakit mcp-setup`, then
+`exakit stop dash-server && exakit start dash-server`.
 
 ## Diagnosing
 

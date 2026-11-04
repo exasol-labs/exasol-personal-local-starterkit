@@ -11,18 +11,23 @@ from pathlib import Path
 import kit_telemetry
 
 
-def connection(doc: dict) -> tuple[str, str | None]:
+NO_READER = ("Dash Server starts without a database connection: the kit's read-only database user is not set up, "
+             "and the administrator's password is never handed to Dash Server (its control plane has no login). "
+             "Set it up with: exakit mcp-setup - then restart it: exakit stop dash-server && exakit start dash-server")
+
+
+def connection(doc: dict) -> tuple[str | None, str | None]:
     """(user, password file) the dashboards query as: the kit's validated READ-ONLY user, the
     identity every AI client already uses - a shared dashboard must not run with the
     database administrator's rights, and the notebooks' Share step refuses a profile that
-    does. The administrator only while no read-only user exists yet (a kit set up before
-    it, or one whose MCP step failed); `exakit mcp-setup` then makes one."""
+    does. (None, None) while no read-only user exists yet (a kit set up before it, or one
+    whose MCP step failed): Dash Server then starts with no database profile, never the
+    administrator's, and `exakit mcp-setup` makes the user."""
     readonly = (doc.get("components", {}).get("mcp_server") or {}).get("connection") or {}
-    runtime = doc.get("runtime", {})
     if readonly.get("validated") is True and readonly.get("user") and readonly.get("password_file") \
             and Path(readonly["password_file"]).is_file():
         return readonly["user"], readonly["password_file"]
-    return runtime.get("user", "SYS"), runtime.get("password_file")
+    return None, None
 
 
 def admin_profile_to_repair(instance: Path, name: str, runtime: dict, user: str) -> bool:
@@ -50,6 +55,8 @@ def main() -> int:
     kit_telemetry.default_off(env)
     env.setdefault("DASH_SERVER_INSTANCE_PATH", addon["instance"])
     user, credential = connection(doc)
+    if credential is None and not env.get("DASH_SERVER_EXASOL_DSN"):
+        print(NO_READER, file=sys.stderr)
     if runtime.get("dsn") and credential and Path(credential).is_file() and not env.get("DASH_SERVER_EXASOL_DSN"):
         name = env.get("EXAKIT_DASH_SERVER_PROFILE", "starter-kit")
         env.setdefault("EXA_PASSWORD", Path(credential).read_text(encoding="utf-8").strip())
