@@ -1029,7 +1029,7 @@
       "options": "[<addon-id>] [--dry-run] [--yes]",
       "summary": "Remove what the kit installed.",
       "description": "Pick what to remove (Skip, each add-on, or EVERYTHING) with a confirmation summary and a typed gate. --dry-run previews the full plan and changes nothing. Removing one add-on only: exakit uninstall <addon-id> [--yes] - the rest of the kit is untouched.",
-      "warning": "A full uninstall removes the database AND its data, the MCP configs, the skills and the binaries.",
+      "warning": "A full uninstall removes the database AND its data, the MCP configs, the skills and the binaries. Your notebooks, MLflow runs and models and Dash dashboards stay in the kit home unless EXAKIT_UNINSTALL_NOTEBOOKS=remove.",
       "examples": [
         "exakit uninstall --dry-run",
         "exakit uninstall --yes",

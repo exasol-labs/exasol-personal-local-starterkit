@@ -13333,24 +13333,38 @@ exakit_uninstall_run() {
             [ -e "$1/$_un_marker" ] && return 0
         done
         # Nothing of ours in it. Empty is still fine, and so is a home holding
-        # only the notebooks an earlier uninstall kept (step 5); anything else
-        # is not.
+        # only the work an earlier uninstall kept (step 5: notebooks, mlflow,
+        # dash-server/instance); anything else is not.
         for _un_entry in "$1"/* "$1"/.[!.]* "$1"/..?*; do
             [ -e "$_un_entry" ] || [ -L "$_un_entry" ] || continue
-            [ "$_un_entry" = "$1/notebooks" ] && [ -d "$_un_entry" ] && [ ! -L "$_un_entry" ] && continue
+            case "${_un_entry#"$1"/}" in
+                notebooks|mlflow|dash-server) [ -d "$_un_entry" ] && [ ! -L "$_un_entry" ] && continue ;;
+            esac
             return 1
         done
         return 0
     }
-    # _un_keep_notebooks — step 5 keeps $EXAKIT_HOME/notebooks: the user's own
-    # work (their notebooks, the kit's copies they edited, the MLflow stores
-    # beside them), not the kit's. EXAKIT_UNINSTALL_NOTEBOOKS=remove takes it
-    # too. Not EXAKIT_UNINSTALL_FULL: that one only tells add-on hooks a full
-    # uninstall is under way (it is set below on every full run).
+    # _un_keep_notebooks — step 5 keeps the user's own work in the kit home, not
+    # the kit's: their notebooks (notebooks/), their MLflow runs, registry and
+    # artifacts (mlflow/) and their dashboards (dash-server/instance). A
+    # reinstall picks all three up again. EXAKIT_UNINSTALL_NOTEBOOKS=remove
+    # takes them too. Not EXAKIT_UNINSTALL_FULL: that one only tells add-on
+    # hooks a full uninstall is under way (it is set below on every full run).
+    _un_work="notebooks mlflow dash-server/instance"
     _un_keep_notebooks() {
-        [ -d "$EXAKIT_HOME/notebooks" ] && [ ! -L "$EXAKIT_HOME/notebooks" ] || return 1
         case "$(printf '%s' "${EXAKIT_UNINSTALL_NOTEBOOKS:-}" | tr '[:upper:]' '[:lower:]')" in remove) return 1 ;; esac
-        return 0
+        for _un_w in $_un_work; do
+            [ -d "$EXAKIT_HOME/$_un_w" ] && [ ! -L "$EXAKIT_HOME/$_un_w" ] && return 0
+        done
+        return 1
+    }
+    # _un_kept_work — the kept folders that exist, as a reader names them.
+    _un_kept_work() {
+        _un_kw=""
+        [ -d "$EXAKIT_HOME/notebooks" ] && _un_kw="${_un_kw:+$_un_kw, }notebooks"
+        [ -d "$EXAKIT_HOME/mlflow" ] && _un_kw="${_un_kw:+$_un_kw, }MLflow runs and models"
+        [ -d "$EXAKIT_HOME/dash-server/instance" ] && _un_kw="${_un_kw:+$_un_kw, }dashboards"
+        printf '%s' "$_un_kw"
     }
     _rm() { # _rm <path> — remove a path unless dry-run
         [ "$_dry" = "1" ] || rm -rf "$1"
@@ -13512,22 +13526,37 @@ EXAKIT_PRESERVED_PATHS_EOF
         fi
         # Checked by the guard at the top of this function, before step 0a.
         if _un_keep_notebooks || [ -n "$_un_preserved_paths" ]; then
-            # Everything in the kit home but the notebooks folder. The home is
-            # left holding only that folder, which an install or an uninstall
-            # later accepts as a kit home (see _un_safe_target).
-            _step "kit home $EXAKIT_HOME (credentials, logs, manifest, snapshots, pyexasol venv, add-ons) - all but your notebooks"
-            _un_keep_notebooks && info "  your notebooks stay in $EXAKIT_HOME/notebooks (EXAKIT_UNINSTALL_NOTEBOOKS=remove removes them too)"
+            # Everything in the kit home but the user's work. The home is left
+            # holding only that, which an install or an uninstall later accepts
+            # as a kit home (see _un_safe_target).
+            _step "kit home $EXAKIT_HOME (credentials, logs, manifest, snapshots, pyexasol venv, add-ons) - all but your work"
+            _un_keep_notebooks && info "  your work stays in $EXAKIT_HOME: $(_un_kept_work) (EXAKIT_UNINSTALL_NOTEBOOKS=remove removes it too)"
             [ -z "$_un_preserved_paths" ] || info "  reused component files under the kit home are preserved"
             if [ "$_dry" != "1" ]; then
                 for _un_entry in "$EXAKIT_HOME"/* "$EXAKIT_HOME"/.[!.]* "$EXAKIT_HOME"/..?*; do
                     [ -e "$_un_entry" ] || [ -L "$_un_entry" ] || continue
-                    if [ "$_un_entry" = "$EXAKIT_HOME/notebooks" ] && _un_keep_notebooks; then continue; fi
+                    if _un_keep_notebooks && [ ! -L "$_un_entry" ]; then
+                        case "${_un_entry#"$EXAKIT_HOME"/}" in
+                            notebooks|mlflow) continue ;;
+                            dash-server)
+                                # The server goes; its instance (the dashboards) stays.
+                                if [ -d "$_un_entry/instance" ]; then
+                                    for _un_sub in "$_un_entry"/* "$_un_entry"/.[!.]* "$_un_entry"/..?*; do
+                                        [ -e "$_un_sub" ] || [ -L "$_un_sub" ] || continue
+                                        [ "$_un_sub" = "$_un_entry/instance" ] && continue
+                                        _un_entry_preserved "$_un_sub" && continue
+                                        rm -rf "$_un_sub"
+                                    done
+                                    continue
+                                fi ;;
+                        esac
+                    fi
                     _un_entry_preserved "$_un_entry" && continue
                     rm -rf "$_un_entry"
                 done
             fi
             if _un_keep_notebooks; then
-                _done "Kit-owned files removed from $EXAKIT_HOME; your notebooks were kept in $EXAKIT_HOME/notebooks; reused resources were preserved"
+                _done "Kit-owned files removed from $EXAKIT_HOME; your work was kept there ($(_un_kept_work)); reused resources were preserved"
             else
                 _done "Kit-owned files removed from $EXAKIT_HOME; reused resources were preserved"
             fi

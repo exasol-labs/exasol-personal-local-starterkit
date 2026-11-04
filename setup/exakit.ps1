@@ -1424,21 +1424,34 @@ function Test-ExakitSafeUninstallTarget([string]$Path) {
         if (Test-Path -LiteralPath (Join-Path $full $marker)) { return $true }
     }
     # Nothing of ours in it. Empty is still fine, and so is a home holding only
-    # the notebooks an earlier uninstall kept (step 5); anything else is not.
+    # the work an earlier uninstall kept (step 5: notebooks, mlflow,
+    # dash-server\instance); anything else is not.
     $anyEntry = Get-ChildItem -LiteralPath $full -Force -ErrorAction SilentlyContinue |
-        Where-Object { -not ($_.PSIsContainer -and $_.Name -eq "notebooks") } | Select-Object -First 1
+        Where-Object { -not ($_.PSIsContainer -and $_.Name -in @("notebooks", "mlflow", "dash-server")) } | Select-Object -First 1
     return ($null -eq $anyEntry)
 }
 
-# Test-ExakitUninstallKeepsNotebooks - a full uninstall keeps $ExakitHome\notebooks:
-# the user's own work (their notebooks, the kit's copies they edited, the MLflow
-# stores beside them). EXAKIT_UNINSTALL_NOTEBOOKS=remove takes it too. Not
-# $script:ExakitUninstallFull: that only tells add-on hooks a full uninstall is
-# under way. Twin of _un_keep_notebooks in exakit_uninstall_run.
+# Test-ExakitUninstallKeepsNotebooks - a full uninstall keeps the user's own work
+# in the kit home, not the kit's: their notebooks (notebooks), their MLflow runs,
+# registry and artifacts (mlflow) and their dashboards (dash-server\instance). A
+# reinstall picks all three up again. EXAKIT_UNINSTALL_NOTEBOOKS=remove takes them
+# too. Not $script:ExakitUninstallFull: that only tells add-on hooks a full
+# uninstall is under way. Twin of _un_keep_notebooks in exakit_uninstall_run.
 function Test-ExakitUninstallKeepsNotebooks {
-    $notebooks = Join-Path $script:ExakitHome "notebooks"
-    if (-not (Test-Path -LiteralPath $notebooks -PathType Container)) { return $false }
-    return ("$env:EXAKIT_UNINSTALL_NOTEBOOKS".ToLower() -ne "remove")
+    if ("$env:EXAKIT_UNINSTALL_NOTEBOOKS".ToLower() -eq "remove") { return $false }
+    foreach ($work in @("notebooks", "mlflow", "dash-server\instance")) {
+        if (Test-Path -LiteralPath (Join-Path $script:ExakitHome $work) -PathType Container) { return $true }
+    }
+    return $false
+}
+
+# Get-ExakitUninstallKeptWork - the kept folders that exist, as a reader names them.
+function Get-ExakitUninstallKeptWork {
+    $said = @()
+    if (Test-Path -LiteralPath (Join-Path $script:ExakitHome "notebooks") -PathType Container) { $said += "notebooks" }
+    if (Test-Path -LiteralPath (Join-Path $script:ExakitHome "mlflow") -PathType Container) { $said += "MLflow runs and models" }
+    if (Test-Path -LiteralPath (Join-Path $script:ExakitHome "dash-server\instance") -PathType Container) { $said += "dashboards" }
+    return ($said -join ", ")
 }
 
 function Invoke-ExakitUninstallRun {
@@ -1623,21 +1636,32 @@ function Invoke-ExakitUninstallRun {
             } catch { }
         }
         if ((Test-ExakitUninstallKeepsNotebooks) -or $preservedComponentPaths.Count -gt 0) {
-            # Everything in the kit home but the notebooks folder; the home is
-            # left holding only that, which Test-ExakitSafeUninstallTarget
-            # accepts as a kit home later.
-            $keptNotebooks = Join-Path $script:ExakitHome "notebooks"
-            if ($DryRun) { Info "  will remove: kit home $script:ExakitHome (credentials, logs, manifest, snapshots) - all but your notebooks" }
-            if (Test-ExakitUninstallKeepsNotebooks) { Info "  your notebooks stay in $keptNotebooks (EXAKIT_UNINSTALL_NOTEBOOKS=remove removes them too)" }
+            # Everything in the kit home but the user's work; the home is left
+            # holding only that, which Test-ExakitSafeUninstallTarget accepts as
+            # a kit home later.
+            $keepWork = Test-ExakitUninstallKeepsNotebooks
+            $keptSaid = if ($keepWork) { Get-ExakitUninstallKeptWork } else { "" }
+            if ($DryRun) { Info "  will remove: kit home $script:ExakitHome (credentials, logs, manifest, snapshots) - all but your work" }
+            if ($keepWork) { Info "  your work stays in $($script:ExakitHome): $keptSaid (EXAKIT_UNINSTALL_NOTEBOOKS=remove removes it too)" }
             if ($preservedComponentPaths.Count -gt 0) { Info "  reused component files under the kit home are preserved" }
             if (-not $DryRun) {
                 foreach ($entry in @(Get-ChildItem -LiteralPath $script:ExakitHome -Force -ErrorAction SilentlyContinue)) {
-                    if ($entry.PSIsContainer -and $entry.Name -eq "notebooks" -and (Test-ExakitUninstallKeepsNotebooks)) { continue }
+                    if ($keepWork -and $entry.PSIsContainer -and $entry.Name -in @("notebooks", "mlflow")) { continue }
+                    if ($keepWork -and $entry.PSIsContainer -and $entry.Name -eq "dash-server" -and
+                        (Test-Path -LiteralPath (Join-Path $entry.FullName "instance") -PathType Container)) {
+                        # The server goes; its instance (the dashboards) stays.
+                        foreach ($sub in @(Get-ChildItem -LiteralPath $entry.FullName -Force -ErrorAction SilentlyContinue)) {
+                            if ($sub.Name -eq "instance" -or (Test-PreservedEntry $sub.FullName)) { continue }
+                            Remove-Item -LiteralPath $sub.FullName -Recurse -Force -ErrorAction SilentlyContinue
+                        }
+                        continue
+                    }
                     if (Test-PreservedEntry $entry.FullName) { continue }
                     Remove-Item -LiteralPath $entry.FullName -Recurse -Force -ErrorAction SilentlyContinue
                 }
             }
-            RecordRemoved "Kit-owned files removed from $script:ExakitHome; notebooks and reused resources were preserved"
+            if ($keptSaid) { RecordRemoved "Kit-owned files removed from $script:ExakitHome; your work was kept there ($keptSaid); reused resources were preserved" }
+            else { RecordRemoved "Kit-owned files removed from $script:ExakitHome; reused resources were preserved" }
         } else {
             if ($DryRun) { Info "  will remove: kit home $script:ExakitHome (credentials, logs, manifest, snapshots)" }
             else { Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $script:ExakitHome }

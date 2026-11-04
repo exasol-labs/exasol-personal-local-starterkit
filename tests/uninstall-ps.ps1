@@ -183,6 +183,24 @@ Check "real: skill A gone"      "no"  (Ex "$fakeHome\.claude\skills\local-agent-
 Check "real: skill B gone"      "no"  (Ex "$fakeHome\.claude\skills\trusted-ai-workflow")
 Check "real: bystander kept"    "yes" (Ex (Join-Path $script:BinDir "some-other-tool.exe"))
 
+# --- the user's work stays: notebooks, MLflow runs, dashboards (audit DAY-01) ---
+Seed
+foreach ($d in @("notebooks\data-scientist", "mlflow\artifacts", "dash-server\instance\gitops-repo", "dash-server\venv", "logs")) {
+    New-Item -ItemType Directory -Force -Path (Join-Path $script:ExakitHome $d) | Out-Null
+}
+Set-Content -Path (Join-Path $script:ExakitHome "mlflow\mlflow.db") -Value "registry"
+Set-Content -Path (Join-Path $script:ExakitHome "dash-server\instance\gitops-repo\sales.json") -Value "board"
+Check "work: the kept work is named" "notebooks, MLflow runs and models, dashboards" (Get-ExakitUninstallKeptWork)
+Invoke-ExakitUninstallRun
+$left = (@(Get-ChildItem -LiteralPath $script:ExakitHome -Force | ForEach-Object { $_.Name }) | Sort-Object) -join " "
+Check "work: only the work is left in the kit home" "dash-server mlflow notebooks" $left
+Check "work: Dash Server keeps only its instance" "instance" ((@(Get-ChildItem -LiteralPath (Join-Path $script:ExakitHome "dash-server") -Force | ForEach-Object { $_.Name })) -join " ")
+Check "work: the MLflow store is still there" "registry" ((Get-Content -Path (Join-Path $script:ExakitHome "mlflow\mlflow.db")) -join "")
+Check "work: a home holding only kept work is still a kit home" "True" ("" + (Test-ExakitSafeUninstallTarget $script:ExakitHome))
+$env:EXAKIT_UNINSTALL_NOTEBOOKS = "remove"
+try { Invoke-ExakitUninstallRun } finally { Remove-Item Env:EXAKIT_UNINSTALL_NOTEBOOKS -ErrorAction SilentlyContinue }
+Check "work: EXAKIT_UNINSTALL_NOTEBOOKS=remove takes it too" "no" (Ex $script:ExakitHome)
+
 # --- idempotent second run on empty tree ---------------------------------
 $ok = $true; try { Invoke-ExakitUninstallRun } catch { $ok = $false }
 Check "idempotent second run" "True" ("" + $ok)

@@ -31,7 +31,7 @@ run_python_any() { python3 "$@"; }
 EXAKIT_MARKETPLACE_PYTHON_HOOKS=1 _exakit_marketplace_python_hooks
 EXAKIT_LOG_FILE="$WORK/log"
 : > "$EXAKIT_LOG_FILE"
-echo "a full kit uninstall keeps the notebooks:"
+echo "a full kit uninstall keeps your work (notebooks, MLflow runs, dashboards; audit DAY-01):"
 full_uninstall() { # full_uninstall <dry> — the real engine with the externals stubbed
     ( exakit_service_ids() { :; }; exakit_mcp_operation() { :; }; exakit_mcp_clients_from_args() { :; }
       _exakit_remove_installed_skills() { :; }; exakit_marketplace_installed_addons() { echo notebook; }
@@ -45,18 +45,24 @@ seed_kit() {
     mkdir -p "$EXAKIT_NOTEBOOK_DIR/my-work/mlflow" "$EXAKIT_HOME/logs" "$EXAKIT_HOME/pyexasol-venv"
     printf 'precious' > "$EXAKIT_NOTEBOOK_DIR/my-work/analysis.ipynb"
     printf 'runs' > "$EXAKIT_NOTEBOOK_DIR/my-work/mlflow/mlflow.db"
+    mkdir -p "$EXAKIT_HOME/mlflow/artifacts" "$EXAKIT_HOME/dash-server/instance/gitops-repo" "$EXAKIT_HOME/dash-server/venv"
+    printf 'registry' > "$EXAKIT_HOME/mlflow/mlflow.db"
+    printf 'board' > "$EXAKIT_HOME/dash-server/instance/gitops-repo/sales.json"
 }
 seed_kit
 out="$(full_uninstall 1 2>&1)"
-contains "the dry run says the notebooks stay" "your notebooks stay in $EXAKIT_HOME/notebooks" "$out"
+contains "the dry run names the work that stays" "your work stays in $EXAKIT_HOME: notebooks, MLflow runs and models, dashboards" "$out"
 check "the dry run removes nothing" "yes" "$([ -f "$EXAKIT_HOME/manifest.json" ] && echo yes || echo no)"
 out="$(full_uninstall 0 2>&1)"
-contains "the real run says so" "your notebooks were kept in $EXAKIT_HOME/notebooks" "$out"
+contains "the real run says so" "your work was kept there (notebooks, MLflow runs and models, dashboards)" "$out"
 check "the user's notebook and MLflow store are still there" "precious|runs" \
     "$(cat "$EXAKIT_NOTEBOOK_DIR/my-work/analysis.ipynb" 2>/dev/null)|$(cat "$EXAKIT_NOTEBOOK_DIR/my-work/mlflow/mlflow.db" 2>/dev/null)"
-check "everything else in the kit home is gone" "notebooks" "$(ls -A "$EXAKIT_HOME" | tr '\n' ' ' | sed 's/ $//')"
+check "the kit's MLflow store and the dashboards are still there" "registry|board" \
+    "$(cat "$EXAKIT_HOME/mlflow/mlflow.db" 2>/dev/null)|$(cat "$EXAKIT_HOME/dash-server/instance/gitops-repo/sales.json" 2>/dev/null)"
+check "everything else in the kit home is gone" "dash-server mlflow notebooks" "$(ls -A "$EXAKIT_HOME" | sort | tr '\n' ' ' | sed 's/ $//')"
+check "...and Dash Server keeps only its instance" "instance" "$(ls -A "$EXAKIT_HOME/dash-server" | tr '\n' ' ' | sed 's/ $//')"
 out="$(full_uninstall 1 2>&1)"; rc=$?
-check "a home holding only kept notebooks is still a kit home to the guard" "0" "$rc"
+check "a home holding only kept work is still a kit home to the guard" "0" "$rc"
 seed_kit
 out="$(EXAKIT_UNINSTALL_NOTEBOOKS=remove full_uninstall 1 2>&1)"
 contains "EXAKIT_UNINSTALL_NOTEBOOKS=remove: the dry run says they go" "$EXAKIT_NOTEBOOK_DIR" "$out"

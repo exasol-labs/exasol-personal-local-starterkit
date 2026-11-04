@@ -34,8 +34,10 @@ of that file tagged `<tag>`, so each built notebook stands on its own.
 `~/.exasol-starter-kit/notebooks/starter-kit-notebooks/<persona>/` (Marimo: `.../notebooks/marimo/<persona>/`), plus
 the examples library as `exasol-examples/` in both. A persona added later (`exakit persona add`) brings its folder;
 with no persona that has notebooks, all are copied. A generated `README.md` names the order; it is rewritten only while
-unchanged. Files already there are never overwritten, and one the user deletes is not copied back (`.kit-copied`
-records what was copied). Uninstall keeps the folder unless `EXAKIT_UNINSTALL_NOTEBOOKS=remove`. Installing never
+unchanged. A kit notebook nobody edited is refreshed when the kit's version changes (cells are compared, outputs do
+not count); one the user edited, or a file of their own, is never overwritten, and one the user deletes is not copied
+back (`.kit-copied` records what was copied, with each notebook's cells digest). Uninstall keeps the folder, the kit
+MLflow server's runs and the Dash dashboards unless `EXAKIT_UNINSTALL_NOTEBOOKS=remove`. Installing never
 fetches notebooks from GitHub: a new notebook reaches users only with a kit release.
 
 To refresh the examples library from a reviewed, pinned Notebook Connector checkout:
