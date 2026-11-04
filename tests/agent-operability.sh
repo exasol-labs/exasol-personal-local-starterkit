@@ -2679,6 +2679,20 @@ done
 has "...and says why the name matters" 'file name becomes the table name' \
     "$(cat "$ROOT/setup/exakit")"
 
+echo "the PATH line runs in a non-interactive ssh shell too (audit LNX-14):"
+_lp_home="$(mktemp -d)"
+printf '# ~/.bashrc\ncase $- in\n    *i*) ;;\n      *) return;;\nesac\nalias ll=ls\n' > "$_lp_home/.bashrc"
+( HOME="$_lp_home" SHELL=/bin/bash PATH=/usr/bin:/bin; uname() { echo Linux; }; ensure_path_hint "$_lp_home/.local/bin" ) >/dev/null 2>&1
+check "Ubuntu's early return: the export goes above it" "export case" \
+    "$(awk '/^export PATH=/ && !e { printf "export "; e=1 } /^case / && !c { printf "case"; c=1 }' "$_lp_home/.bashrc")"
+has "...and the user's own lines are kept" "alias ll=ls" "$(cat "$_lp_home/.bashrc")"
+check "a non-interactive shell now has it" "yes" \
+    "$(env -i HOME="$_lp_home" PATH=/usr/bin:/bin bash -c ". '$_lp_home/.bashrc'; case :\$PATH: in *':$_lp_home/.local/bin:'*) echo yes ;; *) echo no ;; esac")"
+printf 'alias ll=ls\n' > "$_lp_home/.bashrc"
+( HOME="$_lp_home" SHELL=/bin/bash PATH=/usr/bin:/bin; uname() { echo Linux; }; ensure_path_hint "$_lp_home/.local/bin" ) >/dev/null 2>&1
+check "no early return: appended at the end, as before" "export" "$(tail -1 "$_lp_home/.bashrc" | cut -d' ' -f1)"
+rm -rf "$_lp_home"
+
 echo "the install's last line works in the terminal that ran it (audit MAC-04):"
 _ch_bare="$( (EXAKIT_PATH_AT_START=/usr/bin:/bin; exakit_closing_hint) 2>&1)"
 has "bin folder not on the starting PATH: the full path is given" "/exakit help" "$_ch_bare"

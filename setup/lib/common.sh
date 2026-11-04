@@ -8494,7 +8494,28 @@ ensure_path_hint() {
         # sourced it (covered by the export above).
         return 0
     fi
-    if { printf '\n%s\nexport PATH="%s:$PATH"\n' "$_eph_marker" "$1" >> "$_eph_profile"; } 2>/dev/null; then
+    # Ubuntu's and Debian's ~/.bashrc stop early for a non-interactive shell
+    # (`case $- in *i*) ;; *) return;; esac`, or `[ -z "$PS1" ] && return`), and
+    # a non-interactive `ssh box exakit status` is exactly that shell: a line
+    # appended at the end never ran there (audit LNX-14). In such a file the two
+    # lines go at the top instead, above the early return; written with cat so
+    # the file keeps its owner, mode and any symlink.
+    _eph_top=0
+    if [ "$(basename "$_eph_profile")" = ".bashrc" ] && [ -f "$_eph_profile" ] && \
+        grep -Eq '^[[:space:]]*case[[:space:]]+\$-[[:space:]]+in|^[[:space:]]*\[[[:space:]]+-z[[:space:]]+"?\$PS1"?[[:space:]]*\][[:space:]]*&&[[:space:]]*return' "$_eph_profile"; then
+        _eph_top=1
+    fi
+    if [ "$_eph_top" = 1 ]; then
+        _eph_tmp="$(mktemp "${TMPDIR:-/tmp}/exakit-profile.XXXXXX" 2>/dev/null)" && \
+            { printf '%s\nexport PATH="%s:$PATH"\n\n' "$_eph_marker" "$1"; cat "$_eph_profile"; } > "$_eph_tmp" 2>/dev/null && \
+            cat "$_eph_tmp" > "$_eph_profile" 2>/dev/null
+        _eph_rc=$?
+        rm -f "$_eph_tmp" 2>/dev/null
+    else
+        { printf '\n%s\nexport PATH="%s:$PATH"\n' "$_eph_marker" "$1" >> "$_eph_profile"; } 2>/dev/null
+        _eph_rc=$?
+    fi
+    if [ "$_eph_rc" -eq 0 ]; then
         ok "Added $1 to your PATH in $_eph_profile - new terminals pick it up. To undo, delete the two lines marked \"Added by the Exasol Personal Local Starter Kit\"; EXAKIT_NO_PROFILE_EDIT=1 skips this edit."
     else
         warn "$1 is not on your PATH and $_eph_profile is not writable. Add this to your shell profile:"
