@@ -5484,6 +5484,33 @@ function Read-NotebookQuestions {
     Set-NotebookTableChildrenPicked -Keys $keys
 }
 
+# Invoke-ExakitNotebookMenu - bare `exakit notebook` on a Windows console. Textual has no inline driver there, so
+# the notebook tools are the kit's own checkbox menu, as in the install, and each one ticked opens as
+# `exakit notebook <tool>` would. Without the notebook add-on the Python command says so, as everywhere.
+function Invoke-ExakitNotebookMenu {
+    if (-not (Get-ExakitManifestValue "components.notebook.version")) {
+        Invoke-ExakitMarketplaceCli -Script notebook_cli -CmdArgs @()
+        return
+    }
+    $rows = @(Get-NotebookTableChildren)
+    $options = @(Invoke-ExakitNotebookChoice -Kind 'notebook-questions')
+    $defaults = @()
+    for ($i = 0; $i -lt $rows.Count; $i++) { if ($rows[$i].Ticked) { $defaults += ($i + 1) } }
+    if (-not $defaults) { $defaults = @(1) }
+    $picked = @(Read-ExakitCheckboxMenu -Title "Notebook tools - tick the ones to open" -Defaults $defaults -Options $options)
+    $keys = @($picked | Where-Object { $_ -ge 1 -and $_ -le $rows.Count } | ForEach-Object { $rows[$_ - 1].Key })
+    if (-not $keys) {
+        Write-Host "Nothing opened. Open the notebook tools any time with: exakit notebook"
+        return
+    }
+    $failed = 0
+    foreach ($key in $keys) {
+        Invoke-ExakitMarketplaceCli -Script notebook_cli -CmdArgs @($key) -AllowFailure
+        if ($LASTEXITCODE -ne 0) { $failed++ }
+    }
+    if ($failed) { exit 1 }
+}
+
 # ---------------------------------------------------------------------------
 # Add-on "About" text - fetched from the add-on's own repository, cached here
 # ---------------------------------------------------------------------------

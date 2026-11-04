@@ -4116,7 +4116,9 @@ try {
             }
         }
         "notebook"     {
-            Invoke-ExakitMarketplaceCli -Script notebook_cli -CmdArgs $RestArgs
+            # The tool menu: the kit's own on a console (Textual draws no inline menu on Windows).
+            if ($RestArgs.Count -eq 0 -and (Test-ExakitInteractive)) { Invoke-ExakitNotebookMenu }
+            else { Invoke-ExakitMarketplaceCli -Script notebook_cli -CmdArgs $RestArgs }
         }
         "workflow"     {
             Invoke-ExakitMarketplaceCli -Script workflow_cli -CmdArgs $RestArgs

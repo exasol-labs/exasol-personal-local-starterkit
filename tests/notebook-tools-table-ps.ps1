@@ -182,6 +182,29 @@ try {
     $script:Asked = ""
     Invoke-ExakitMarketplaceQuestions -Ids @("notebook")
     Check "a scripted run asks it" "asked" $script:Asked
+
+    Write-Host "bare exakit notebook on a console: the kit's own menu, then each tool ticked (audit WIN-03):"
+    $dispatch = Get-Content -Raw (Join-Path $repo "setup/exakit.ps1")
+    Has "the dispatcher sends a bare console call to the menu" 'if ($RestArgs.Count -eq 0 -and (Test-ExakitInteractive)) { Invoke-ExakitNotebookMenu }' $dispatch
+    function Get-ExakitManifestValue { param($Key) if ($Key -eq "components.notebook.version") { return $script:Installed } }
+    function Get-NotebookTableChildren {
+        [pscustomobject]@{ Key = "jupyterlab"; Ticked = $true }; [pscustomobject]@{ Key = "marimo"; Ticked = $false }
+    }
+    function Invoke-ExakitNotebookChoice { param($Kind) @("JupyterLab - notebooks", "Marimo - reactive notebooks") }
+    function Read-ExakitCheckboxMenu { param($Title, $Options, $Defaults) $script:MenuDefaults = "$Defaults"; $script:MenuTitle = $Title; $script:Picked }
+    function Invoke-ExakitMarketplaceCli { param($Script, $CmdArgs, [switch]$AllowFailure) $script:Opened += @("$Script $($CmdArgs -join ' ')"); $global:LASTEXITCODE = 0 }
+    $script:Installed = "3.1.0"; $script:Picked = @(1, 2); $script:Opened = @()
+    Invoke-ExakitNotebookMenu
+    Check "the recorded tools start ticked" "1" $script:MenuDefaults
+    Has "the menu says what ticking does" "tick the ones to open" $script:MenuTitle
+    Check "each tool ticked opens as exakit notebook <tool>" "notebook_cli jupyterlab|notebook_cli marimo" ($script:Opened -join "|")
+    $script:Picked = @(); $script:Opened = @()
+    $said = (Invoke-ExakitNotebookMenu 6>&1 | Out-String)
+    Check "nothing ticked opens nothing" "" ($script:Opened -join "|")
+    Has "...and says how to open them later" "Nothing opened" $said
+    $script:Installed = $null; $script:Opened = @()
+    Invoke-ExakitNotebookMenu
+    Check "without the add-on the Python command says so (no menu)" "notebook_cli " ($script:Opened -join "|")
 } finally {
     Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 }
