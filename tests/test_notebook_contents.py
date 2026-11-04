@@ -346,6 +346,10 @@ class NotebookShapeTest(unittest.TestCase):
                 for endpoint in ("http://localhost:11434/v1/", "http://localhost:1234/v1/",
                                  "http://localhost:8000/v1/"):
                     text = text.replace(endpoint, "<documented-model-endpoint>")
+            if path == ROOT / "notebook/package/exakit_nb/model_config.py":
+                # The clear-text check (audit SEC-08) names the loopback host to ALLOW plain http there;
+                # it is a rule about hosts, not a connection value. Exactly that one line is exempt.
+                text = text.replace('if host == "localhost" or host.endswith((".localhost", ".local", ".internal")):', "")
             for needle in ("127.0.0.1", "localhost", ":8563", "password=", "dsn=", "LANGFUSE_SECRET_KEY=", "sk-"):
                 with self.subTest(file=path.relative_to(ROOT).as_posix(), needle=needle):
                     self.assertNotIn(needle, text)

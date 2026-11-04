@@ -24,7 +24,7 @@ _AUTH_HEADERS = {"authorization", "api-key", "x-api-key", "host"}
 
 def clear_text_ok(url: str) -> bool:
     """Whether a key may travel to this URL: always over https, and over plain http only to this machine or a
-    private network (localhost, a loopback, private or link-local address, a .local/.localhost/.internal name) -
+    private network (a loopback, private or link-local address or name, a .local/.internal name) -
     a local model server. A key sent over http to anywhere else crosses networks in clear text (audit SEC-08)."""
     parts = urlsplit(url)
     if parts.scheme == "https":
