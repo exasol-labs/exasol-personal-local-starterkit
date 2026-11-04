@@ -220,6 +220,8 @@ exakit source issues               # only the failing ones, each with its fix
 exakit source check sales          # a fresh bounded read now (--all for every source)
 exakit source reauth sales         # after a password or token change
 exakit source refresh sales        # after tables were added or changed at the source
+exakit source describe sales       # tables and columns as Exasol sees them (no call to the source)
+exakit source describe sales orders --ddl --schema LOCAL > orders.sql   # DDL to copy a table locally
 ```
 
 `check` is one shot, not monitoring: nothing watches a source in the background.

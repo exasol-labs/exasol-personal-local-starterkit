@@ -145,6 +145,18 @@ def tips(connector, name, schema):
     return [t.replace("<schema>", schema).replace("<name>", name) for t in connector.get("tips", [])]
 
 
+def table_ddl(schema, table, columns, into=""):
+    """One virtual table as an Exasol CREATE TABLE, every name quoted (a
+    MongoDB field carries '|' and mixed case), and a commented line that
+    copies the rows into it. Without into it targets the session's schema."""
+    target = "%s.%s" % (sql.ident(into), sql.ident(table)) if into else sql.ident(table)
+    lines = ",\n".join("    %s %s%s" % (sql.ident(c["name"]), c["type"], "" if c["nullable"] else " NOT NULL")
+                        for c in columns)
+    copy_to = target if into else "<schema>.%s" % sql.ident(table)
+    return ("-- %s.%s as Exasol sees it\nCREATE TABLE %s (\n%s\n);\n-- a local copy: INSERT INTO %s SELECT * FROM %s.%s;\n"
+            % (schema, sql.ident(table), target, lines, copy_to, schema, sql.ident(table)))
+
+
 def example_query(schema, tables):
     """A first query on a real table, its name quoted when Exasol would
     otherwise upper-case it: SELECT * FROM VS_X."actor" LIMIT 10."""
@@ -1133,6 +1145,48 @@ class Engine(object):
         count = len(self.tables(schema))
         self.store.update_status(name, tables=count, refreshed_at=sources.now())
         return {"name": name, "tables": count}
+
+    def describe(self, name, table="", ddl=False, into=""):
+        """The tables and columns of a source as Exasol sees them, read from
+        the database's own catalog: nothing reaches the source, so it costs
+        nothing there (a Databricks warehouse is not woken) and works for a
+        disconnected source too. ddl adds CREATE TABLE statements to make a
+        local copy; into names the schema they target."""
+        config = self.store.config(name)
+        schema = config["objects"]["schema"]
+        if into and not re.match(r"^[A-Za-z_][A-Za-z0-9_]{0,127}$", into):
+            raise Failure("--schema takes a plain schema name (letters, digits and _), not %r" % into, EXIT["input"])
+        if not self.exists("schema", schema):
+            raise Failure("the virtual schema %s is gone; create it again from the stored connection with: "
+                          "exakit source check %s" % (schema, name), EXIT["failed"])
+        rows = self.db().query(
+            "SELECT COLUMN_TABLE, COLUMN_NAME, COLUMN_TYPE, COLUMN_IS_NULLABLE FROM SYS.EXA_ALL_COLUMNS "
+            "WHERE COLUMN_SCHEMA = %s ORDER BY COLUMN_TABLE, COLUMN_ORDINAL_POSITION" % sql.literal(schema))
+        tables = {}
+        for row in rows:
+            # Nullable unless the catalog says otherwise: a wrong NOT NULL
+            # would refuse rows the source holds.
+            nullable = row.get("COLUMN_IS_NULLABLE") not in (False, "FALSE", "false", 0)
+            tables.setdefault(row["COLUMN_TABLE"], []).append(
+                {"name": row["COLUMN_NAME"], "type": row["COLUMN_TYPE"], "nullable": nullable})
+        if table:
+            # As typed, else ignoring case - but never a guess between two.
+            hits = [table] if table in tables else [t for t in tables if t.upper() == table.upper()]
+            if len(hits) != 1:
+                listed = ", ".join(sorted(tables)) or "none"
+                if hits:
+                    raise Failure("%s matches %d tables in %s (%s); give it with its exact case"
+                                  % (table, len(hits), schema, ", ".join(sorted(hits))), EXIT["input"])
+                raise Failure("%s has no table %s (its tables: %s); a table added at the source appears after: "
+                              "exakit source refresh %s" % (schema, table, listed, name), EXIT["input"])
+            tables = {hits[0]: tables[hits[0]]}
+        out = []
+        for name_t in sorted(tables):
+            entry = {"name": name_t, "columns": tables[name_t]}
+            if ddl:
+                entry["ddl"] = table_ddl(schema, name_t, tables[name_t], into)
+            out.append(entry)
+        return {"name": name, "schema": schema, "tables": out}
 
     def disconnect(self, name, dry_run=False):
         config = self.store.config(name)

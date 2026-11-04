@@ -9,6 +9,7 @@
     cli.py [context] list | issues [--status S] | show N | check N|--all
     cli.py [context] reauth     N --secret-stdin
     cli.py [context] refresh    N
+    cli.py [context] describe   N [TABLE] [--ddl] [--into SCHEMA]
     cli.py [context] disconnect N [--dry-run]
     cli.py [context] remove     N [--dry-run]
 
@@ -83,6 +84,11 @@ def parse(argv):
     cmd.add_argument("--secret-stdin", action="store_true")
     cmd.add_argument("--secret-stdin-base64", action="store_true")
     sub.add_parser("refresh").add_argument("name")
+    cmd = sub.add_parser("describe")
+    cmd.add_argument("name")
+    cmd.add_argument("table", nargs="?", default="")
+    cmd.add_argument("--ddl", action="store_true")
+    cmd.add_argument("--into", default="")
     for name in ("disconnect", "remove"):
         cmd = sub.add_parser(name)
         cmd.add_argument("name")
@@ -240,6 +246,8 @@ def main(argv=None):
                 code = 0 if result.get("status") == "ready" else 1
             elif args.command == "refresh":
                 result = engine.refresh(args.name)
+            elif args.command == "describe":
+                result = engine.describe(args.name, args.table, args.ddl, args.into)
             elif args.command == "disconnect":
                 result = engine.disconnect(args.name, args.dry_run)
             elif args.command == "remove":

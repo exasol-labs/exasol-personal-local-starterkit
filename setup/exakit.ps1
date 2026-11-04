@@ -3522,6 +3522,7 @@ function Invoke-CmdSource {
     $rest = @($Arguments)
     if ($rest.Count -gt 0) { $action = $rest[0]; $rest = @($rest | Select-Object -Skip 1) }
     $json = $false; $dry = $false; $all = $false; $name = ""; $status = ""; $pwFile = ""
+    $table = ""; $ddl = $false; $into = ""
     $script:ExakitVsAssumeYes = $false
     for ($i = 0; $i -lt $rest.Count; $i++) {
         $arg = $rest[$i]
@@ -3531,16 +3532,20 @@ function Invoke-CmdSource {
         elseif ($arg -in @("--all", "-a")) { $all = $true }
         elseif ($arg -eq "--status") { $i++; $status = "" + $rest[$i] }
         elseif ($arg -eq "--password-file") { $i++; $pwFile = "" + $rest[$i] }
+        elseif ($arg -eq "--ddl") { $ddl = $true }
+        elseif ($arg -eq "--schema") { $i++; $into = "" + $rest[$i] }
+        elseif ($arg -like "--schema=*") { $into = $arg.Substring(9) }
         elseif ($arg -like "-*") { Deny-ExakitInput "Unknown option '$arg' for source $action (exakit help source)." }
-        elseif ($name) { Deny-ExakitInput "source $action takes one name." }
-        else { $name = $arg }
+        elseif (-not $name) { $name = $arg }
+        elseif ($action -eq "describe" -and -not $table) { $table = $arg }
+        else { Deny-ExakitInput "source $action takes one name." }
     }
     if ($json) { Assert-ExakitInstalled -Json } else { Assert-ExakitInstalled }
     Initialize-ExakitLogging
-    if ($action -notin @("list", "issues", "catalog", "show", "check", "reauth", "refresh", "disconnect", "remove")) {
-        Deny-ExakitInput "Unknown source action '$action' (list, issues, show, check, reauth, refresh, disconnect, remove, catalog)."
+    if ($action -notin @("list", "issues", "catalog", "show", "describe", "check", "reauth", "refresh", "disconnect", "remove")) {
+        Deny-ExakitInput "Unknown source action '$action' (list, issues, show, describe, check, reauth, refresh, disconnect, remove, catalog)."
     }
-    if ($action -in @("show", "reauth", "refresh", "disconnect", "remove") -and -not $name) {
+    if ($action -in @("show", "describe", "reauth", "refresh", "disconnect", "remove") -and -not $name) {
         Deny-ExakitInput "exakit source $action needs a source name (see: exakit source list)."
     }
     if ($action -eq "check" -and -not $name -and -not $all) { Deny-ExakitInput "exakit source check needs a name or --all." }
@@ -3550,6 +3555,12 @@ function Invoke-CmdSource {
         "issues" { $argv += "issues"; if ($status) { $argv += @("--status", $status) } }
         "check" { if ($all) { $argv += @("check", "--all") } else { $argv += @("check", $name) } }
         { $_ -in @("show", "refresh") } { $argv += @($action, $name) }
+        "describe" {
+            $argv += @("describe", $name)
+            if ($table) { $argv += $table }
+            if ($ddl) { $argv += "--ddl" }
+            if ($into) { $argv += @("--into", $into) }
+        }
         { $_ -in @("list", "catalog") } { $argv += $action }
         { $_ -in @("disconnect", "remove") } {
             $argv += @($action, $name)
@@ -3588,6 +3599,28 @@ function Invoke-CmdSource {
         exit $run.Code
     }
     $code = Invoke-ExakitVsRun -Arguments $argv
+    if ($action -eq "describe") {
+        # --ddl prints only the statements, so they can go straight to a file.
+        # Twin of the describe renderer in cmd_source.
+        $r = $script:ExakitVsResult
+        if ($null -ne $r) {
+            if (@($r.tables).Count -eq 0) { Write-Host ("  {0} shows no tables. If the source has some now: exakit source refresh {1}" -f $r.schema, $r.name) }
+            foreach ($t in @($r.tables)) {
+                if ($t.PSObject.Properties["ddl"]) { Write-Output $t.ddl; continue }
+                $cols = @($t.columns)
+                $plural = "s"; if ($cols.Count -eq 1) { $plural = "" }
+                Write-Host ("  {0}.{1} ({2} column{3})" -f $r.schema, $t.name, $cols.Count, $plural)
+                $width = 6
+                foreach ($c in $cols) { if (("" + $c.name).Length -gt $width) { $width = ("" + $c.name).Length } }
+                foreach ($c in $cols) {
+                    $nn = ""; if (-not $c.nullable) { $nn = "  NOT NULL" }
+                    Write-Host ("    {0}  {1}{2}" -f ("" + $c.name).PadRight($width), $c.type, $nn)
+                }
+                Write-Host ""
+            }
+        }
+        exit $code
+    }
     if ($code -eq 0 -and -not $dry) {
         if ($action -eq "disconnect") { Ok ("$name disconnected: VS_" + $name.ToUpper() + " stays, its queries fail until you connect it again with --name $name"); exit 0 }
         if ($action -eq "remove") { Ok "$name removed"; exit 0 }

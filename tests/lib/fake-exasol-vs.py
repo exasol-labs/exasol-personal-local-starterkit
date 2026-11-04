@@ -336,6 +336,18 @@ class Fake(object):
         m = re.search(r"FROM EXA_DBA_CONNECTIONS WHERE CONNECTION_NAME = '([^']+)'", sql)
         if m:
             return [{"CONNECTION_NAME": m.group(1)}] if m.group(1) in doc["connections"] else []
+        m = re.search(r"FROM SYS.EXA_ALL_COLUMNS WHERE COLUMN_SCHEMA = '([^']+)'", sql)
+        if m:
+            # columns: {table: [[name, type, nullable], ...]} at the top level;
+            # a table not listed has two plain columns.
+            vs = doc["virtual"].get(m.group(1)) or {"tables": []}
+            rows = []
+            for table in sorted(vs["tables"]):
+                cols = doc.get("columns", {}).get(table) or [["ID", "DECIMAL(18,0)", False],
+                                                             ["NAME", "VARCHAR(100) UTF8", True]]
+                rows += [{"COLUMN_TABLE": table, "COLUMN_NAME": c[0], "COLUMN_TYPE": c[1],
+                          "COLUMN_IS_NULLABLE": c[2]} for c in cols]
+            return rows
         m = re.search(r"FROM EXA_SCHEMAS WHERE SCHEMA_NAME = '([^']+)'", sql)
         if m:
             return [{"SCHEMA_NAME": m.group(1)}] if m.group(1) in doc["schemas"] + list(doc["virtual"]) else []

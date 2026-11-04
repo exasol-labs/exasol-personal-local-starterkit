@@ -370,6 +370,48 @@ db '{"sources": {"my.example.com": {"tables": ["orders"]}}}'
 run_secret "$SECRET" connect bigquery --name nobq --set project=p --set dataset=d --secret-stdin < /dev/null
 lacks "a connector without a schema check asks nothing" "that this account can see" "$OUT"
 
+printf '\n== source describe: tables and columns, and DDL to copy them ==\n'
+db '{"sources": {"my.example.com": {"tables": ["orders", "Orders2", "actor"]}}, "columns": {"orders": [["order_id", "DECIMAL(10,0)", false], ["note", "VARCHAR(100) UTF8", true]], "actor": [["first|name", "VARCHAR(45) UTF8", true]]}}'
+run_secret "$SECRET" connect mysql --name desc --set host=my.example.com --set database=shop --set user=reader --secret-stdin
+check "a source to describe: exit 0" "0" "$RC"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["statements"]=[]; json.dump(d, open(sys.argv[1], "w"))' "$STATE"
+run --json describe desc
+check "describe: exit 0" "0" "$RC"
+has "...every table, columns in order" '"name": "orders"' "$OUT"
+has "...with types and nullability" '"type": "DECIMAL(10,0)"' "$OUT"
+lacks "...and nothing reaches the source (no import, no adapter call)" "IMPORT FROM" "$(dbq 'd["statements"]')"
+run --json describe desc ORDERS
+check "a table named in another case, when only one matches: exit 0" "0" "$RC"
+has "...gives that table" '"name": "orders"' "$OUT"
+lacks "...and only that one" '"name": "actor"' "$OUT"
+run describe desc nosuch
+check "an unknown table: exit 2" "2" "$RC"; has "...listing the tables" "its tables: Orders2, actor, orders" "$OUT"
+db '{"sources": {"my.example.com": {"tables": ["t", "T"]}}, "virtual": {"VS_DESC": {"connection": "EXAKIT_SRC_DESC", "tables": ["t", "T"]}}}'
+run describe desc TT
+check "no match at all: exit 2" "2" "$RC"
+python3 - "$STATE" <<'PY'
+import json, sys; d = json.load(open(sys.argv[1])); d["virtual"]["VS_DESC"]["tables"] = ["ab", "AB"]; json.dump(d, open(sys.argv[1], "w"))
+PY
+run describe desc Ab
+check "two tables that differ only in case: exit 2, never a guess" "2" "$RC"; has "...said so" "matches 2 tables in VS_DESC" "$OUT"
+db '{"sources": {"my.example.com": {"tables": ["orders", "actor"]}}, "virtual": {"VS_DESC": {"connection": "EXAKIT_SRC_DESC", "tables": ["orders", "actor"]}}, "columns": {"orders": [["order_id", "DECIMAL(10,0)", false], ["note", "VARCHAR(100) UTF8", true]], "actor": [["first|name", "VARCHAR(45) UTF8", true]]}}'
+run --json describe desc orders --ddl --into LOCAL
+has "--ddl: a CREATE TABLE in the target schema, every name quoted" 'CREATE TABLE \"LOCAL\".\"orders\" (\n    \"order_id\" DECIMAL(10,0) NOT NULL,\n    \"note\" VARCHAR(100) UTF8\n);' "$OUT"
+has "...and the copy, as a comment" '-- a local copy: INSERT INTO \"LOCAL\".\"orders\" SELECT * FROM VS_DESC.\"orders\";' "$OUT"
+run --json describe desc actor --ddl
+has "...without --schema: the session's schema, a MongoDB-style name quoted" 'CREATE TABLE \"actor\" (\n    \"first|name\" VARCHAR(45) UTF8\n);' "$OUT"
+run describe desc --ddl --into 'X;DROP'
+check "--schema takes a plain name only: exit 2" "2" "$RC"
+run disconnect desc
+run --json describe desc
+check "a disconnected source still describes (the catalog is local): exit 0" "0" "$RC"
+python3 - "$STATE" <<'PY'
+import json, sys; d = json.load(open(sys.argv[1])); d["virtual"].pop("VS_DESC"); json.dump(d, open(sys.argv[1], "w"))
+PY
+run describe desc
+check "a virtual schema that is gone: exit 1" "1" "$RC"; has "...with the way back" "exakit source check desc" "$OUT"
+run remove desc; check "...and it still removes cleanly" "0" "$RC"
+
 printf '\n== an interrupted connect is recovered, not mistaken for a stranger ==\n'
 # The state an attempt killed right after CREATE CONNECTION leaves behind: its
 # journal (naming what it made) and the connection in the database.

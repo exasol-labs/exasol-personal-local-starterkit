@@ -1021,7 +1021,7 @@ if p.get("gate"):
 # cmd_source <action> [name] [options] — the lifecycle of a connected source.
 cmd_source() {
     _cs_action="${1:-list}"; [ "$#" -gt 0 ] && shift
-    _cs_json=0; _cs_dry=0; _cs_name=""; _cs_all=0; _cs_status=""; _cs_pwfile=""
+    _cs_json=0; _cs_dry=0; _cs_name=""; _cs_all=0; _cs_status=""; _cs_pwfile=""; _cs_table=""; _cs_ddl=0; _cs_into=""
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --json|-j) _cs_json=1 ;;
@@ -1030,19 +1030,24 @@ cmd_source() {
             --all|-a) _cs_all=1 ;;
             --status) _cs_status="${2:-}"; shift ;;
             --password-file) _cs_pwfile="${2:-}"; shift ;;
+            --ddl) _cs_ddl=1 ;;
+            --schema) _cs_into="${2:-}"; shift ;;
+            --schema=*) _cs_into="${1#--schema=}" ;;
             -*) reject "Unknown option '$1' for source $_cs_action (exakit help source)." ;;
-            *) [ -z "$_cs_name" ] || reject "source $_cs_action takes one name."; _cs_name="$1" ;;
+            *) if [ -z "$_cs_name" ]; then _cs_name="$1"
+               elif [ "$_cs_action" = describe ] && [ -z "$_cs_table" ]; then _cs_table="$1"
+               else reject "source $_cs_action takes one name."; fi ;;
         esac
         shift
     done
     _require_install "$_cs_json"
     exakit_init_logging
     case "$_cs_action" in
-        list|issues|catalog|show|check|reauth|refresh|disconnect|remove) ;;
-        *) reject "Unknown source action '$_cs_action' (list, issues, show, check, reauth, refresh, disconnect, remove, catalog)." ;;
+        list|issues|catalog|show|describe|check|reauth|refresh|disconnect|remove) ;;
+        *) reject "Unknown source action '$_cs_action' (list, issues, show, describe, check, reauth, refresh, disconnect, remove, catalog)." ;;
     esac
     case "$_cs_action" in
-        show|reauth|refresh|disconnect|remove)
+        show|describe|reauth|refresh|disconnect|remove)
             [ -n "$_cs_name" ] || reject "exakit source $_cs_action needs a source name (see: exakit source list)." ;;
         check) [ -n "$_cs_name" ] || [ "$_cs_all" = 1 ] || reject "exakit source check needs a name or --all." ;;
     esac
@@ -1053,6 +1058,10 @@ cmd_source() {
         catalog) set -- "$@" catalog ;;
         issues)  set -- "$@" issues; [ -n "$_cs_status" ] && set -- "$@" --status "$_cs_status" ;;
         show|refresh) set -- "$@" "$_cs_action" "$_cs_name" ;;
+        describe) set -- "$@" describe "$_cs_name"
+                  [ -n "$_cs_table" ] && set -- "$@" "$_cs_table"
+                  [ "$_cs_ddl" = 1 ] && set -- "$@" --ddl
+                  [ -n "$_cs_into" ] && set -- "$@" --into "$_cs_into" ;;
         check)   if [ "$_cs_all" = 1 ]; then set -- "$@" check --all; else set -- "$@" check "$_cs_name"; fi ;;
         disconnect|remove)
             set -- "$@" "$_cs_action" "$_cs_name"
@@ -1100,6 +1109,23 @@ print("  " + "\n  ".join(["drops: " + ", ".join(p["drop"])] + (["keeps: " + ", "
             disconnect) ok "$_cs_name disconnected: VS_$(printf '%s' "$_cs_name" | tr 'a-z' 'A-Z') stays, its queries fail until you connect it again with --name $_cs_name"; exit 0 ;;
             remove) ok "$_cs_name removed"; exit 0 ;;
         esac
+    fi
+    if [ "$_cs_action" = describe ]; then
+        # --ddl prints only the statements, so they can go straight to a file.
+        [ -n "$EXAKIT_VS_RESULT" ] && printf '%s' "$EXAKIT_VS_RESULT" | run_python_any -c 'import json, sys
+r = json.load(sys.stdin)
+if not r["tables"]:
+    print("  %s shows no tables. If the source has some now: exakit source refresh %s" % (r["schema"], r["name"]))
+for t in r["tables"]:
+    if "ddl" in t:
+        sys.stdout.write(t["ddl"] + "\n")
+        continue
+    print("  %s.%s (%d column%s)" % (r["schema"], t["name"], len(t["columns"]), "" if len(t["columns"]) == 1 else "s"))
+    width = max([len(c["name"]) for c in t["columns"]] + [6])
+    for c in t["columns"]:
+        print("    %s  %s%s" % (c["name"].ljust(width), c["type"], "" if c["nullable"] else "  NOT NULL"))
+    print("")' 2>/dev/null
+        exit "$_cs_rc"
     fi
     [ -n "$EXAKIT_VS_RESULT" ] && printf '%s' "$EXAKIT_VS_RESULT" | run_python_any -c 'import json, sys
 r = json.load(sys.stdin)
