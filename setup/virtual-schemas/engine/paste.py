@@ -9,7 +9,8 @@ the shell puts them before the command line's own --set pairs, so those win.
 The connector's "paste" block in connector.json says which strings it reads:
 
     schemes    the prefixes before "://" it accepts (jdbc:postgresql, postgres)
-    style      url (the default), oracle, mongodb, s3, azure or glue
+    style      url (the default), oracle, mongodb, s3, azure, glue or catalog (input: the one input
+               the whole address fills)
     bare       true: a plain host[:port][/path] is read as well
     host       the input the host fills (default host); host_suffix, when set,
                must end the host and is cut off it (Snowflake's account)
@@ -430,8 +431,24 @@ def style_glue(reading, text):
     reading.put("region", match.group(1))
 
 
+def style_catalog(reading, text):
+    """A catalog's own address (Iceberg REST, Unity Catalog) is one input
+    whole: the block's "input". A user:secret@ or a query string is a
+    credential and never kept; the input's own check refuses the rest."""
+    match = re.match(r"^(https?)://([^/?#]*)([^?#]*)(.*)$", text, re.I)
+    if not match:
+        reading.not_a_form()
+    authority = match.group(2)
+    if "@" in authority:
+        reading.secret = True
+        authority = authority.rsplit("@", 1)[1]
+    if match.group(4):
+        reading.secret = True
+    reading.put(reading.block["input"], "%s://%s%s" % (match.group(1).lower(), authority, match.group(3).rstrip("/")))
+
+
 STYLES = {"url": style_url, "oracle": style_oracle, "mongodb": style_mongodb, "s3": style_s3,
-          "azure": style_azure, "glue": style_glue}
+          "azure": style_azure, "glue": style_glue, "catalog": style_catalog}
 
 
 def read(connector, text):

@@ -2128,6 +2128,8 @@ azure|abfss://data@mystorage.dfs.core.windows.net/raw|{"account": "mystorage", "
 bq|jdbc:bigquery://https://www.googleapis.com/bigquery/v2:443;ProjectId=my-project;OAuthType=0;DefaultDataset=sales|{"dataset": "sales", "project": "my-project"}
 lakehouse|https://glue.eu-central-1.amazonaws.com|{"region": "eu-central-1"}
 lakehouse|arn:aws:glue:eu-central-1:123456789012:database/sales_lake|{"database": "sales_lake", "region": "eu-central-1"}
+iceberg-rest|https://catalog.example.com:8181/api/catalog/|{"catalog_url": "https://catalog.example.com:8181/api/catalog"}
+unity|https://dbc-1234abcd-5678.cloud.databricks.com|{"workspace_url": "https://dbc-1234abcd-5678.cloud.databricks.com"}
 EOF
 check "every connector reads a connection string, into its own inputs only" "ok" "$(python3 - "$DEFS" <<'PY2'
 import json, os, sys
@@ -2152,7 +2154,8 @@ for _case in "pg|postgres://reader:$PW@pg.example.com/sales" "pg|jdbc:postgresql
              "mongodb|mongodb+srv://reader:$PW@cluster0.abc12.mongodb.net/movies?authMechanismProperties=AWS_SESSION_TOKEN:$PW" \
              "s3|https://my-bucket.s3.eu-central-1.amazonaws.com/a.json?X-Amz-Credential=AKIA&X-Amz-Signature=$PW" \
              "azure|https://mystorage.blob.core.windows.net/data?sv=2022-11-02&sp=rl&sig=$PW" \
-             "azure|DefaultEndpointsProtocol=https;AccountName=mystorage;AccountKey=$PW;EndpointSuffix=core.windows.net"; do
+             "azure|DefaultEndpointsProtocol=https;AccountName=mystorage;AccountKey=$PW;EndpointSuffix=core.windows.net" \
+             "iceberg-rest|https://ak:$PW@catalog.example.com/api" "unity|https://dbc-1.cloud.databricks.com/?token=$PW"; do
     pst "${_case%%|*}" "${_case#*|}"
     check "a credential in the string is not used (${_case%%|*}), exit 0" "0" "$RC"
     lacks "...and is in none of the output" "$PW" "$OUT"
