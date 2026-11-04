@@ -29,11 +29,12 @@ def _(mo):
 def _():
     import exakit.nb as nb
 
-    DATASET = "esophageal_posts"  # or banking_complaints or an approved descriptor of your own
+    DATASET = None  # None: the dataset approved last in a quickstart (else esophageal_posts); or banking_complaints or an approved descriptor of your own
     TITLE = "Category overview"
     APP_NAME = None  # or a name of your own; the default includes the approved dataset ID
     WORKFLOW_ID = None  # paste the quickstart's wf-... id to continue its log
 
+    DATASET = nb.chosen_dataset(DATASET)
     if WORKFLOW_ID:
         nb.workflow(resume=WORKFLOW_ID)
     elif not nb.current_workflow():

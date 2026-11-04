@@ -10,8 +10,10 @@ Standard-library helper for the Python marketplace.
 What goes where is notebook/catalog.json: the picked personas' Jupyter notebooks into
 <notebooks_dir>/starter-kit-notebooks/<persona>/ with a README naming the order to open them in, the Marimo ones into
 <notebooks_dir>/marimo/<persona>/; a persona added later brings its folder on the next copy (no persona with
-notebooks picked: all of them). A catalog entry whose file this kit copy does not carry is skipped. A file already
-there is the user's and is never overwritten; the README is rewritten only while it is what the kit wrote. What the kit copied is recorded in
+notebooks picked: all of them). A catalog entry whose file this kit copy does not carry is skipped. A kit notebook
+nobody edited is refreshed when the kit's version changes (its cells are compared, not its outputs: running it is not
+editing it); one the user edited, or a file of their own, is never overwritten; the README is rewritten only while it
+is what the kit wrote. What the kit copied is recorded in
 .kit-copied in that folder, so a notebook the user deleted stays deleted. A notebook that cannot be copied (a file
 where its persona folder should be, a folder that is read-only) is named on stderr, the rest are still copied, and the
 exit status is 1.
@@ -30,7 +32,7 @@ import shutil
 import sys
 from pathlib import Path
 
-STATE = ".kit-copied"                      # one persona/file per line: what the kit has copied into this folder
+STATE = ".kit-copied"                      # one "persona/file<TAB>cells digest" per line: what the kit copied here
 README_STATE = ".kit-readme"               # the sha256 of the README the kit last wrote: rewritten only while unchanged
 INTERPRETER = "python.defaultInterpreterPath"
 INCLUDE = "python.interpreters.include"
@@ -73,11 +75,26 @@ def persona_title(kit: Path, persona: str) -> str:
         return persona
 
 
-def _copied_before(base: Path) -> set[str]:
+def _copied_before(base: Path) -> dict[str, str]:
+    """{persona/file: the digest of the cells the kit copied} ("" from an older kit, which kept names only)."""
     try:
-        return {line.strip() for line in (base / STATE).read_text(encoding="utf-8").splitlines() if line.strip()}
+        lines = (base / STATE).read_text(encoding="utf-8").splitlines()
     except OSError:
-        return set()
+        return {}
+    return {key.strip(): digest.strip() for key, _, digest in (line.partition("\t") for line in lines) if key.strip()}
+
+
+def cells_digest(path: Path) -> str:
+    """What a notebook says, not what running it left: a .ipynb's cell types and sources (outputs, execution counts
+    and metadata do not count), any other file as it is."""
+    raw = path.read_bytes()
+    if path.suffix == ".ipynb":
+        try:
+            cells = json.loads(raw).get("cells", [])
+            raw = json.dumps([(c.get("cell_type"), "".join(c.get("source", ""))) for c in cells]).encode("utf-8")
+        except (ValueError, AttributeError):
+            pass
+    return hashlib.sha256(raw).hexdigest()
 
 
 def copy(front: str, kit: Path, notebooks_dir: Path, personas: set[str] | None = None) -> tuple[list[str], list[str]]:
@@ -88,7 +105,7 @@ def copy(front: str, kit: Path, notebooks_dir: Path, personas: set[str] | None =
     source = kit / doc["sources"][front]
     base = notebooks_dir / doc["folders"][front]
     before = _copied_before(base)
-    added, problems, seen = [], [], set(before)
+    added, problems, seen = [], [], dict(before)
     for folder, entry in _placed(doc, personas):
         name = entry.get(front)
         if not name or not (source / folder / name).is_file():
@@ -96,7 +113,22 @@ def copy(front: str, kit: Path, notebooks_dir: Path, personas: set[str] | None =
         key = f"{folder}/{name}"
         target = base / folder / name
         if target.exists() or target.is_symlink():
-            seen.add(key)                                # there (the kit's earlier copy, or the user's own): theirs
+            if key not in before or target.is_symlink():
+                seen.setdefault(key, "")                 # a file of the user's own with the kit's name: theirs
+                continue
+            fresh, there = cells_digest(source / folder / name), cells_digest(target)
+            if not before[key]:                          # an older kit's record: adopted only when it is the kit's now
+                seen[key] = fresh if there == fresh else ""
+                continue
+            if there != before[key] or fresh == there:
+                continue                                 # edited by the user (theirs), or already the kit's latest
+            try:
+                shutil.copyfile(source / folder / name, target)
+            except OSError as err:
+                problems.append(f"{key}: {err.strerror or err}")
+                continue
+            seen[key] = fresh
+            added.append(f"{key} (updated)")
             continue
         if key in before:
             continue                                     # copied once, then deleted by the user: it stays deleted
@@ -110,7 +142,7 @@ def copy(front: str, kit: Path, notebooks_dir: Path, personas: set[str] | None =
             problems.append(f"{key}: {err.strerror or err}")
             continue
         added.append(key)
-        seen.add(key)
+        seen[key] = cells_digest(target)
     # The full official example library is prebuilt into this kit copy.
     # It is optional only for older kit copies; installation never fetches it.
     library = kit / "notebook" / "examples" / front
@@ -123,14 +155,14 @@ def copy(front: str, kit: Path, notebooks_dir: Path, personas: set[str] | None =
             key = relative if relative.startswith("public/") else "exasol-examples/" + relative
             target = base / key
             if target.exists() or target.is_symlink():
-                seen.add(key)
+                seen.setdefault(key, before.get(key, ""))
                 continue
             if key in before:
                 continue
             try:
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(origin, target)
-                seen.add(key)
+                seen[key] = ""
                 library_added = True
             except OSError as err:
                 problems.append(f"{key}: {err.strerror or err}")
@@ -143,7 +175,8 @@ def copy(front: str, kit: Path, notebooks_dir: Path, personas: set[str] | None =
             problems.append(f"README.md: {err.strerror or err}")
     if seen != before and base.is_dir():
         try:
-            (base / STATE).write_text("".join(f"{key}\n" for key in sorted(seen)), encoding="utf-8")
+            (base / STATE).write_text("".join(f"{key}\t{seen[key]}\n" if seen[key] else f"{key}\n"
+                                              for key in sorted(seen)), encoding="utf-8")
         except OSError as err:
             problems.append(f"{STATE}: {err.strerror or err}")
     return added, problems

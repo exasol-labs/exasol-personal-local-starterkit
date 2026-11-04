@@ -56,7 +56,7 @@ KERNEL = {"display_name": "Exasol (Starter Kit)", "language": "python", "name": 
 _TAGS = re.compile(r"\btags=(\[[^\]]*\])")
 SKIP_TAG = "skip-ci"                                       # a cell tagged so is left out of a --run
 DATASET_NAMES = ("DATASET", "SAMPLE")                      # the one assignment that picks the data, per notebook kind
-_DATASET_LINE = re.compile(r'^(?P<name>' + "|".join(DATASET_NAMES) + r')(?P<gap>\s*=\s*)"[^"\n]*"', re.M)
+_DATASET_LINE = re.compile(r'^(?P<name>' + "|".join(DATASET_NAMES) + r')(?P<gap>\s*=\s*)(?:"[^"\n]*"|None)', re.M)
 LANGFUSE_PREFIX = "LANGFUSE_"
 
 Cell = tuple[str, list[str], list[str]]          # kind, source lines, tags

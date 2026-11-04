@@ -16,7 +16,7 @@
 # Optional: `USE_AI_THEMES = True` lets your model say what the label-1 texts are about, traced to Langfuse when it is set up.
 
 # %%
-DATASET = "esophageal_posts"   # or "banking_complaints", or your own file ("~/my-data/transactions.csv", roles beside it)
+DATASET = None   # None: the dataset approved last in a quickstart (else esophageal_posts); or "banking_complaints", or your own file ("~/my-data/transactions.csv", roles beside it)
 USE_AI_THEMES = False  # True: your model sorts the texts into themes (needs EXAKIT_MODEL_ID; see the AI step below)
 WORKFLOW_ID = None  # paste the quickstart's wf-... id to continue its log
 
@@ -33,6 +33,7 @@ import exakit.nb as nb
 
 wid = nb.workflow("explore", resume=WORKFLOW_ID or os.environ.get("EXAKIT_WORKFLOW_ID"))
 conn = nb.connect()
+DATASET = nb.chosen_dataset(DATASET)
 ds = nb.review_roles(conn, DATASET).dataset(draft_ok=True)
 nb.show_roles(ds)
 

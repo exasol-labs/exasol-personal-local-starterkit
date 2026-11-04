@@ -27,7 +27,7 @@ def _(mo):
 
 @app.cell
 def _():
-    DATASET = "esophageal_posts"   # or "banking_complaints", or your own file ("~/my-data/transactions.csv", roles beside it)
+    DATASET = None   # None: the dataset approved last in a quickstart (else esophageal_posts); or "banking_complaints", or your own file ("~/my-data/transactions.csv", roles beside it)
     USE_AI_THEMES = False  # True: your model sorts the texts into themes (needs EXAKIT_MODEL_ID; see the AI step below)
     WORKFLOW_ID = None  # paste the quickstart's wf-... id to continue its log
     return DATASET, USE_AI_THEMES, WORKFLOW_ID
@@ -49,22 +49,21 @@ def _(mo):
 def _(DATASET, WORKFLOW_ID):
     import os
     import exakit.nb as nb
-
-    wid = nb.workflow("explore", resume=WORKFLOW_ID or os.environ.get("EXAKIT_WORKFLOW_ID"))
+    wid = nb.workflow('explore', resume=WORKFLOW_ID or os.environ.get('EXAKIT_WORKFLOW_ID'))
     conn = nb.connect()
-    ds = nb.review_roles(conn, DATASET).dataset(draft_ok=True)
+    DATASET_1 = nb.chosen_dataset(DATASET)
+    ds = nb.review_roles(conn, DATASET_1).dataset(draft_ok=True)
     nb.show_roles(ds)
-
-    ENTITY = ds.col("entity") if ds.has("entity") else None
-    CATEGORY = ds.col("category") if ds.has("category") else None
-    TEXT = ds.text_sql() if ds.has("text") else None
-    DATE = ds.col("date") if ds.has("date") else None      # a role no column fits is None here, never guessed
-    LABEL = ds.col("label") if ds.has("label") else None
-    skipped = {m["role"]: m["reason"] for m in ds.missing if not ds.has(m["role"])}
-    missing_line = "; ".join(f"no {role} role: {reason}" for role, reason in skipped.items())
-    for role in ("entity", "category", "date", "label", "text"):
+    ENTITY = ds.col('entity') if ds.has('entity') else None
+    CATEGORY = ds.col('category') if ds.has('category') else None
+    TEXT = ds.text_sql() if ds.has('text') else None
+    DATE = ds.col('date') if ds.has('date') else None
+    LABEL = ds.col('label') if ds.has('label') else None
+    skipped = {m['role']: m['reason'] for m in ds.missing if not ds.has(m['role'])}  # a role no column fits is None here, never guessed
+    missing_line = '; '.join((f'no {role} role: {reason}' for role, reason in skipped.items()))
+    for role in ('entity', 'category', 'date', 'label', 'text'):
         if role in skipped:
-            print(f"No {role} role ({skipped[role]}): steps that need it explain why they skip below.")
+            print(f'No {role} role ({skipped[role]}): steps that need it explain why they skip below.')
     return CATEGORY, DATE, ENTITY, LABEL, TEXT, conn, ds, missing_line, nb
 
 

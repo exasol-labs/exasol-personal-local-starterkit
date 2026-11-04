@@ -27,7 +27,7 @@ def _(mo):
 
 @app.cell
 def _():
-    DATASET = "esophageal_posts"  # or banking_complaints, or your own approved descriptor
+    DATASET = None  # None: the dataset approved last in a quickstart (else esophageal_posts); or banking_complaints, or your own approved descriptor
     COEFFICIENTS_FILE = None  # or a local coefficients.json exported from 01_train's MLflow run
     UDF_NAME = None  # choose a new plain lowercase name for a new coefficient revision
     UDF_SCHEMA = "EXAKIT_SCORING"
@@ -52,19 +52,17 @@ def _(DATASET, UDF_NAME, WORKFLOW_ID):
     import shutil
     import subprocess
     from pathlib import Path
-
     import numpy as np
     from scipy.special import expit
     import exakit.nb as nb
-
     if WORKFLOW_ID:
         nb.workflow(resume=WORKFLOW_ID)
     elif not nb.current_workflow():
-        nb.workflow("rust-scoring")
-
+        nb.workflow('rust-scoring')
     conn = nb.connect()
-    ds = nb.dataset(conn, DATASET).require_approved("rust scoring")
-    SCORER_NAME = UDF_NAME or "score_" + ds.id.replace("-", "_")[:40] + "_v" + str(ds.version)
+    DATASET_1 = nb.chosen_dataset(DATASET)
+    ds = nb.dataset(conn, DATASET_1).require_approved('rust scoring')
+    SCORER_NAME = UDF_NAME or 'score_' + ds.id.replace('-', '_')[:40] + '_v' + str(ds.version)
     handoff = nb.read_handoff(ds.id)
     stale = nb.handoff_is_stale(conn, handoff, ds)
     if stale:

@@ -32,7 +32,7 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
-from .dataset import DATA_FILES, Dataset, _locate, checked, dataset
+from .dataset import DATA_FILES, Dataset, _locate, checked, dataset, remember_dataset
 from .describe import COLUMN_ROLES, SLOTS, Draft, ROLES, describe
 from .workflow import DESCRIBE_APPROVE, DESCRIBE_DRAFT, log_event
 
@@ -334,6 +334,7 @@ class RoleReview:
         approval: a headless run (or ``draft_ok``) gets the proposal as a draft Dataset; a person is told to approve
         first, in one line."""
         if self._already_approved() is not None:
+            remember_dataset(self.approved)                     # the later notebooks carry on with it
             return self.approved
         if draft_ok or self.headless == "draft":
             return self._draft_dataset()
@@ -450,6 +451,7 @@ def marimo_review(mo, draft: Draft, conn, file: Path | None = None) -> RoleRevie
             if (self.value or {}).get("approve"):                  # the button was clicked: compute the approval now
                 self.approve(self.choices(), self.slot_choices())
             if self._already_approved() is not None:
+                remember_dataset(self.approved)
                 return self.approved
             if draft_ok or self.headless == "draft":
                 return self._draft_dataset()

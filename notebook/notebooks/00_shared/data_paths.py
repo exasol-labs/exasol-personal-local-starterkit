@@ -30,7 +30,7 @@ nb.list_schemas(conn)
 # %% [markdown] tags=["load"]
 # ## Choose a dataset
 #
-# Start with the bundled sample: `SAMPLE = "esophageal_posts"` (social posts) or `"banking_complaints"` (complaints). It loads once and is reused. Keep `SOURCE = None` for this walkthrough.
+# Start with the bundled sample: `SAMPLE = "esophageal_posts"` (social posts) or `"banking_complaints"` (complaints). It loads once and is reused, and the later notebooks carry on with the dataset you approve here (their `DATASET = None`). Keep `SOURCE = None` for this walkthrough.
 
 # %% tags=["load"]
 SAMPLE = "esophageal_posts"   # or "banking_complaints", or None

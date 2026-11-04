@@ -32,7 +32,7 @@ from ._kit import setting, telemetry_off
 from .ask import Proposal, ask
 from .checks import check_bucket, check_container, check_mlflow, check_model_compatibility, model_list
 from .dash_mcp import DashTools, dash_tools
-from .dataset import Dataset, DescriptorNotApproved, dataset
+from .dataset import Dataset, DescriptorNotApproved, chosen_dataset, dataset
 from .describe import Draft, describe
 from .descriptor_store import current_version, descriptor_store_dir, list_versions
 from .handoff import handoff_from, handoff_is_stale, read_handoff, write_handoff
@@ -48,7 +48,7 @@ from .workflow import TRACE as TRACE_KIND
 from .workflow import current_workflow, log_event, log_sql, workflow
 
 # Kept alphabetical (case-insensitive) by construction, so a new export can never break the order test.
-__all__ = sorted(["ask", "check_bucket", "check_connection", "check_container", "check_mlflow", "check_model_compatibility", "confirm_send", "connect", "connected_sources", "count_name", "current_version", "current_workflow", "dash_tools", "DashTools", "Dataset", "dataset", "describe", "descriptor_store_dir", "DescriptorNotApproved", "Draft", "first", "handoff_from", "handoff_is_stale", "list_schemas", "list_versions", "load_own_file", "load_sample", "load_source", "LoadedTable", "log_event", "log_sql", "model_client", "model_list", "model_settings", "name", "note_groups", "note_model", "note_trend", "noun", "prepare_training", "Proposal", "read_handoff", "review_roles", "RoleReview", "save_descriptor", "share", "ShareDraft", "show_roles", "show_sql", "sql", "themes", "trace", "tracing", "TrainingPlan", "workflow", "write_handoff"], key=str.lower)
+__all__ = sorted(["ask", "check_bucket", "check_connection", "check_container", "check_mlflow", "check_model_compatibility", "chosen_dataset", "confirm_send", "connect", "connected_sources", "count_name", "current_version", "current_workflow", "dash_tools", "DashTools", "Dataset", "dataset", "describe", "descriptor_store_dir", "DescriptorNotApproved", "Draft", "first", "handoff_from", "handoff_is_stale", "list_schemas", "list_versions", "load_own_file", "load_sample", "load_source", "LoadedTable", "log_event", "log_sql", "model_client", "model_list", "model_settings", "name", "note_groups", "note_model", "note_trend", "noun", "prepare_training", "Proposal", "read_handoff", "review_roles", "RoleReview", "save_descriptor", "share", "ShareDraft", "show_roles", "show_sql", "sql", "themes", "trace", "tracing", "TrainingPlan", "workflow", "write_handoff"], key=str.lower)
 
 LANGFUSE_VARIABLES = ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_BASE_URL")
 LANGFUSE_HOST_VARIABLE = "LANGFUSE_HOST"      # the SDK 3/4 name of LANGFUSE_BASE_URL; still accepted when BASE_URL is unset

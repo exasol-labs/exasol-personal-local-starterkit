@@ -11,6 +11,7 @@ import contextlib
 import hashlib
 import io
 import json
+import shutil
 import os
 import re
 import subprocess
@@ -251,6 +252,55 @@ class CopyTest(unittest.TestCase):
             self.assertEqual(kit_notebooks.copy("jupyter", ROOT, Path(tmp)), ([], []))
             self.assertTrue((base / ".kit-copied").is_file())
 
+    def _fake_kit(self, tmp: str) -> Path:
+        kit = Path(tmp) / "kit"
+        shutil.copytree(ROOT / "notebook" / "notebooks", kit / "notebook" / "notebooks")
+        shutil.copy2(ROOT / "notebook" / "catalog.json", kit / "notebook" / "catalog.json")
+        shutil.copytree(ROOT / "personas", kit / "personas")
+        return kit
+
+    @staticmethod
+    def _rewrite_markdown(path: Path, old: str, new: str) -> None:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        for cell in doc["cells"]:
+            if cell["cell_type"] == "markdown" and old in "".join(cell["source"]):
+                cell["source"] = "".join(cell["source"]).replace(old, new)
+        path.write_text(json.dumps(doc, indent=1), encoding="utf-8")
+
+    def test_an_unedited_kit_notebook_is_refreshed_and_an_edited_one_kept(self):
+        """A fresh install kept a quickstart copied before the kit changed it: an unedited one (running it is not
+        editing it) now takes the kit's new version; one the user edited is never overwritten."""
+        with tempfile.TemporaryDirectory() as tmp:
+            kit, home = self._fake_kit(tmp), Path(tmp) / "home"
+            kit_notebooks.copy("jupyter", kit, home, {"data-scientist"})
+            base = home / "starter-kit-notebooks" / "data-scientist"
+            ran = json.loads((base / "00_quickstart.ipynb").read_text(encoding="utf-8"))
+            ran["cells"][1]["outputs"] = [{"output_type": "stream", "name": "stdout", "text": ["ran\n"]}]
+            (base / "00_quickstart.ipynb").write_text(json.dumps(ran), encoding="utf-8")      # run, not edited
+            self._rewrite_markdown(base / "01_explore.ipynb", "# Explore", "# Explore (my notes)")  # edited
+            for name in ("00_quickstart.ipynb", "01_explore.ipynb"):
+                self._rewrite_markdown(kit / "notebook" / "notebooks" / "data-scientist" / name, "## ", "## New: ")
+            added, problems = kit_notebooks.copy("jupyter", kit, home, {"data-scientist"})
+            self.assertEqual((["data-scientist/00_quickstart.ipynb (updated)"], []), (added, problems))
+            self.assertIn("## New: ", (base / "00_quickstart.ipynb").read_text(encoding="utf-8"))
+            self.assertIn("(my notes)", (base / "01_explore.ipynb").read_text(encoding="utf-8"))
+            self.assertNotIn("## New: ", (base / "01_explore.ipynb").read_text(encoding="utf-8"))
+            self.assertEqual(kit_notebooks.copy("jupyter", kit, home, {"data-scientist"}), ([], []), "once")
+
+    def test_an_older_record_is_adopted_only_where_the_copy_is_the_kits_now(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            kit, home = self._fake_kit(tmp), Path(tmp) / "home"
+            kit_notebooks.copy("jupyter", kit, home, {"data-scientist"})
+            base = home / "starter-kit-notebooks"
+            names = [line.split("\t")[0] for line in (base / ".kit-copied").read_text(encoding="utf-8").splitlines()]
+            (base / ".kit-copied").write_text("".join(f"{n}\n" for n in names), encoding="utf-8")   # names only
+            self._rewrite_markdown(base / "data-scientist" / "01_explore.ipynb", "# Explore", "# Explore (older)")
+            self.assertEqual(kit_notebooks.copy("jupyter", kit, home, {"data-scientist"}), ([], []))
+            record = dict(line.partition("\t")[::2] for line in (base / ".kit-copied").read_text(encoding="utf-8").splitlines())
+            self.assertTrue(record["data-scientist/00_quickstart.ipynb"], "the kit's own copy: adopted, refreshed later")
+            self.assertEqual("", record["data-scientist/01_explore.ipynb"], "cannot tell: never overwritten")
+            self.assertIn("(older)", (base / "data-scientist" / "01_explore.ipynb").read_text(encoding="utf-8"))
+
     def test_one_that_cannot_be_copied_is_named_and_the_rest_still_come(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp) / "starter-kit-notebooks"
@@ -361,7 +411,8 @@ class ShippedExploreTest(unittest.TestCase):
 
     def test_one_assignment_picks_the_data_and_no_dataset_is_named_in_the_sql(self):
         text = self.NOTEBOOK.read_text(encoding="utf-8")
-        self.assertEqual(sum(1 for line in text.splitlines() if line.startswith("DATASET = ")), 1)
+        resolve = "DATASET = nb.chosen_dataset(DATASET)"    # None: the dataset approved last; not a second choice
+        self.assertEqual(sum(1 for line in text.splitlines() if line.startswith("DATASET = ") and line != resolve), 1)
         code = "\n".join(line for line in text.splitlines() if not line.startswith(("#", "DATASET = ")))
         for name in ("PHARMA", "BANKING", "IS_NEGATIVE", "MONETARY_RELIEF", "MESSAGE", "SOURCE_DOMAIN"):
             with self.subTest(name=name):
@@ -484,11 +535,31 @@ class SwapTest(unittest.TestCase):
         for name in ("data-scientist/01_explore.py", "ml-engineer/01_train.py"):
             with self.subTest(notebook=name):
                 lines = (NOTEBOOKS / name).read_text(encoding="utf-8").splitlines()
-                self.assertEqual([l.split("#")[0].strip() for l in lines if l.startswith("DATASET = ")], ['DATASET = "esophageal_posts"'])
+                self.assertEqual([l.split("#")[0].strip() for l in lines if l.startswith("DATASET = ")],
+                                 ["DATASET = None", "DATASET = nb.chosen_dataset(DATASET)"],
+                                 "one assignment picks the data; None is the dataset approved last")
                 # train opens the descriptor; explore opens it through the review, so a file with no roles beside it
                 # is loaded and drafted right there instead of stopping (T8b)
                 opened = "nb.review_roles(conn, DATASET)" if name.startswith("data-scientist") else "nb.dataset(conn, DATASET)"
                 self.assertIn(opened, "\n".join(lines))
+
+
+class ChosenDatasetTest(unittest.TestCase):
+    """DATASET = None in a later notebook: the dataset approved last in a quickstart (banking_complaints chosen there
+    carries on), else esophageal_posts; a draft is never remembered."""
+
+    def test_the_dataset_approved_last_carries_on(self):
+        nb_dataset = importlib.import_module("exakit_nb.dataset")
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.dict(os.environ, {"EXAKIT_HOME": tmp}), \
+                redirect_stdout(io.StringIO()) as out:
+            self.assertEqual("esophageal_posts", nb_dataset.chosen_dataset(None))
+            nb_dataset.remember_dataset(types.SimpleNamespace(status="draft", id="my_draft", descriptor_origin="store"))
+            self.assertEqual("esophageal_posts", nb_dataset.chosen_dataset(None), "a draft is not remembered")
+            nb_dataset.remember_dataset(types.SimpleNamespace(status="approved", id="banking_complaints",
+                                                              descriptor_origin="shipped"))
+            self.assertEqual("banking_complaints", nb_dataset.chosen_dataset(None))
+            self.assertEqual("bank_marketing", nb_dataset.chosen_dataset("bank_marketing"), "a set DATASET wins")
+        self.assertIn("banking_complaints, the dataset approved last", out.getvalue())
 
 
 class AliasTest(unittest.TestCase):

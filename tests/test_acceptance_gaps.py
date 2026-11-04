@@ -87,7 +87,7 @@ class MissingRolesTest(unittest.TestCase):
             nb = types.SimpleNamespace(workflow=mock.Mock(return_value="wf-20261030-abcdef"),
                 connect=mock.Mock(), review_roles=mock.Mock(return_value=types.SimpleNamespace(dataset=lambda **kw: ds)),
                 show_roles=mock.Mock(), sql=mock.Mock(return_value=Frame(DAYS=[30], N=[10], PCT=[5.0], TEXT_=["Synthetic description"])),
-                show_sql=mock.Mock(), model_client=mock.Mock(), confirm_send=mock.Mock(), themes=mock.Mock(),
+                show_sql=mock.Mock(), model_client=mock.Mock(), confirm_send=mock.Mock(), themes=mock.Mock(), chosen_dataset=lambda name: name or "fixture",
                 name=mock.Mock(return_value="NAMED"), count_name=mock.Mock(return_value="ROW_COUNT"),
                 note_groups=mock.Mock(), note_trend=mock.Mock(), note_model=mock.Mock(),
                 write_handoff=mock.Mock(return_value="fixture.json"), read_handoff=mock.Mock(return_value={

@@ -9,7 +9,7 @@
 # %% [markdown]
 # # Score a model file in SQL
 #
-# **Dataset:** `esophageal_posts` by default; change `DATASET` for Banking or a compatible table. **Run time:** about three minutes after setup.
+# **Dataset:** the one you approved last (else `esophageal_posts`); set `DATASET` for Banking or a compatible table. **Run time:** about three minutes after setup.
 #
 # Copies a scikit-learn model file to the shared model directory, wraps it in a scoring UDF and checks database scores match local ones.
 #
@@ -18,7 +18,7 @@
 # %%
 import exakit.nb as nb
 
-DATASET = "esophageal_posts"   # or "banking_complaints", or the path of a descriptor for a table you loaded
+DATASET = None   # None: the dataset approved last in a quickstart (else esophageal_posts); or "banking_complaints", or the path of a descriptor for a table you loaded
 
 # %% [markdown]
 # ## Settings
@@ -53,6 +53,7 @@ import numpy as np
 import pandas as pd
 
 conn = nb.connect()
+DATASET = nb.chosen_dataset(DATASET)
 ds = nb.dataset(conn, DATASET)
 for role, column in ds.roles():
     print(f"  {role:<9} {column}")

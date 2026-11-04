@@ -29,7 +29,7 @@ from typing import Any
 
 from ._kit import setting
 
-__all__ = ["DATA_FILES", "Dataset", "DescriptorNotApproved", "checked", "dataset"]
+__all__ = ["DATA_FILES", "Dataset", "DescriptorNotApproved", "checked", "chosen_dataset", "dataset", "remember_dataset"]
 
 _ANSWERED = "EXAKIT_NB_COLUMNS"
 DATA_FILES = (".csv", ".parquet", ".pq", ".json", ".jsonl", ".ndjson")     # what load_own_file reads
@@ -225,6 +225,45 @@ def _columns(conn, schemas: list[str]) -> set[str]:
     if _ANSWERED not in found:
         raise RuntimeError("The database did not answer, so the descriptor could not be checked.")
     return found - {_ANSWERED}
+
+
+DEFAULT_DATASET = "esophageal_posts"
+LAST_DATASET = "last-dataset"                # in the kit's home: what a review approved last
+
+
+def _last_file() -> Path:
+    import os
+
+    return Path(os.environ.get("EXAKIT_HOME") or Path.home() / ".exasol-starter-kit").expanduser() / LAST_DATASET
+
+
+def remember_dataset(ds: "Dataset") -> None:
+    """Note an approved dataset as the one the later notebooks use when their DATASET is None: its id, or its data
+    file when its descriptor sits beside one. Never fails a cell."""
+    if getattr(ds, "status", None) != "approved":
+        return
+    name = str(ds.path) if getattr(ds, "descriptor_origin", None) == "beside" else str(ds.id)
+    try:
+        _last_file().parent.mkdir(parents=True, exist_ok=True)
+        _last_file().write_text(name + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def chosen_dataset(name: str | Path | None = None) -> str:
+    """The dataset a notebook works on: ``name`` when it is set; with None, the one approved last in a quickstart (so
+    picking banking_complaints there carries on here), else esophageal_posts. Says which, and why, in one line."""
+    if name:
+        return str(name)
+    try:
+        last = _last_file().read_text(encoding="utf-8").strip()
+    except OSError:
+        last = ""
+    if last:
+        print(f"DATASET = None: {last}, the dataset approved last. Set DATASET to work on another.")
+        return last
+    print(f"DATASET = None: {DEFAULT_DATASET}, the default (nothing approved yet). Set DATASET to work on another.")
+    return DEFAULT_DATASET
 
 
 def dataset(conn, name: str | Path) -> Dataset:

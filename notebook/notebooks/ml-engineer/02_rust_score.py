@@ -16,7 +16,7 @@
 # **Run first:** `01_train`, the `RUST` container (`exakit udf-setup --language rust`) and Docker or Podman running.
 
 # %%
-DATASET = "esophageal_posts"  # or banking_complaints, or your own approved descriptor
+DATASET = None  # None: the dataset approved last in a quickstart (else esophageal_posts); or banking_complaints, or your own approved descriptor
 COEFFICIENTS_FILE = None  # or a local coefficients.json exported from 01_train's MLflow run
 UDF_NAME = None  # choose a new plain lowercase name for a new coefficient revision
 UDF_SCHEMA = "EXAKIT_SCORING"
@@ -41,6 +41,7 @@ elif not nb.current_workflow():
     nb.workflow("rust-scoring")
 
 conn = nb.connect()
+DATASET = nb.chosen_dataset(DATASET)
 ds = nb.dataset(conn, DATASET).require_approved("rust scoring")
 SCORER_NAME = UDF_NAME or "score_" + ds.id.replace("-", "_")[:40] + "_v" + str(ds.version)
 handoff = nb.read_handoff(ds.id)

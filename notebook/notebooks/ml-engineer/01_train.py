@@ -9,7 +9,7 @@
 # %% [markdown]
 # # Train in Exasol
 #
-# **Dataset:** `esophageal_posts` by default; change `DATASET` for Banking or your own approved file. **How long:** about five minutes after setup.
+# **Dataset:** the one you approved last (else `esophageal_posts`); set `DATASET` for Banking or your own approved file. **How long:** about five minutes after setup.
 #
 # Trains a model inside Exasol from the approved column map and records it in MLflow. No LLM needed.
 #
@@ -23,8 +23,9 @@ import exakit.nb as nb
 import exasol_mlflow
 import os
 
-DATASET = "esophageal_posts"  # or "banking_complaints", or "~/my-data/transactions.csv" with approved roles beside it
+DATASET = None  # None: the dataset approved last in a quickstart (else esophageal_posts); or "banking_complaints", or "~/my-data/transactions.csv" with approved roles beside it
 CONTAINER = nb.ml_train.udf_container()   # or "PYTHON3_ML", "PYTHON3", or the alias of a container you installed
+DATASET = nb.chosen_dataset(DATASET)
 if os.environ.get("EXAKIT_WORKFLOW_ID"):
     nb.workflow(resume=os.environ["EXAKIT_WORKFLOW_ID"])
 elif not nb.current_workflow():
