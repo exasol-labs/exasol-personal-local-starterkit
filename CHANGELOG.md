@@ -2,6 +2,51 @@
 
 ## Unreleased
 
+**`exakit connect --url`: paste a connection string.** A JDBC URL, a
+`postgres://`, `mysql://` or `mongodb+srv://` URI, an S3, Azure or Glue
+address, or a bare `host:port/database` as a cloud console shows it fills the
+connector's inputs; `--set` still wins. Each value passes the same check a
+`--set` gets. A password or token inside the string is never used or echoed:
+the credential is asked for separately. Unknown parameters are dropped by
+name, never by value.
+
+**`exakit source describe`: tables, columns and DDL.** Lists a connected
+source's tables and columns as Exasol sees them, from the local catalog, so
+nothing reaches the source (a Databricks warehouse is not woken). `--ddl`
+prints a `CREATE TABLE` per table and the `INSERT ... SELECT` that copies it,
+with `--schema` for the target; only the statements go to standard output.
+
+**Sources move to the adapter a kit update pins.** After an update changes a
+connector's adapter or driver, `exakit source check` (or `--all`) re-creates
+the source's adapter script on the new files, refreshes the virtual schema,
+records the new pins and deletes old files no source uses any more. A refresh
+that fails is said, with `exakit source refresh <name>`, and kept as
+`needs_refresh` until one succeeds.
+
+**The schema is checked before anything is created.** PostgreSQL, MySQL, SQL
+Server, Oracle and Snowflake: connect asks the source whether the schema (MySQL:
+the database) exists and the account may use it, before any script or virtual
+schema. Exasol would otherwise create an empty virtual schema and report
+success. A name in the wrong case is answered with the source's spelling.
+
+**After connect: a first query on a real table, and the connector's tips.**
+How each source's names arrive (quote MySQL's lower-case `"actor"`) and which
+types change on the way, measured on live sources: a Snowflake `NUMBER(38,0)`
+reads as text, a PostgreSQL domain or vector column cannot be read. `exakit
+source show` lists them too.
+
+**Lakehouse over Iceberg REST and Unity Catalog (Beta).** `exakit connect
+iceberg-rest` and `exakit connect unity` use the same pinned lakehouse engine
+and scripts as the AWS Glue route. Not yet run against a live catalog; the
+plan says so.
+
+**Snowflake: an optional `role`.**
+
+**The database clock is named when a signed store refuses a read.** S3, Glue
+and Azure refuse a request signed more than 15 minutes off; the lakehouse
+engine reports that as a 403. `source check` now names the clock and the
+restart instead of pointing at the log.
+
 **`exakit connect` on a terminal: a menu, a panel per source, one live
 table.** Typed alone, it opens the marketplace's own table with every
 connector (what each one is, and the sources already connected through it);
