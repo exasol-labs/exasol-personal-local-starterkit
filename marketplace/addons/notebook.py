@@ -7,6 +7,7 @@ and an externally installed JupyterLab are never overwritten or removed.
 from __future__ import annotations
 
 import os
+import platform
 import re
 import secrets
 import shutil
@@ -67,6 +68,17 @@ def _package_version(ctx: KitContext) -> str | None:
     except (OSError, subprocess.TimeoutExpired):
         return None
     return result.stdout.strip() if result.returncode == 0 else None
+
+
+def applicable(ctx: KitContext) -> bool:
+    """Not on Linux Arm: one of the connector's dependencies publishes no Linux Arm build (its help says so), so it
+    is not offered there, and a persona that brings it skips it with the reason instead of failing (audit LNX-07)."""
+    return not (sys.platform.startswith("linux") and platform.machine().lower() in ("aarch64", "arm64"))
+
+
+def applicable_reason(ctx: KitContext) -> str:
+    return ("the notebook connector has no Linux Arm build (one of its dependencies publishes none); it runs on "
+            "Linux x86_64, macOS on Apple silicon and Windows")
 
 
 def installed_version(ctx: KitContext) -> str | None:

@@ -34,6 +34,16 @@ class NotebookPlanTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
+    def test_not_offered_on_linux_arm_with_the_reason(self) -> None:
+        """Its help says Linux on Arm is not offered; a persona that brings it skips it with this reason (LNX-07)."""
+        cases = (("linux", "aarch64", False), ("linux", "arm64", False), ("linux", "x86_64", True),
+                 ("darwin", "arm64", True), ("win32", "AMD64", True))
+        for system, machine, expected in cases:
+            with self.subTest(system=system, machine=machine), patch.object(notebook.sys, "platform", system), \
+                    patch.object(notebook.platform, "machine", return_value=machine):
+                self.assertIs(expected, notebook.applicable(self.ctx))
+        self.assertIn("no Linux Arm build", notebook.applicable_reason(self.ctx))
+
     def test_selected_frontends_have_one_resolution_and_shared_sklearn_pin(self) -> None:
         with patch.dict(os.environ, {"EXAKIT_NOTEBOOK_FRONTENDS": "jupyterlab,marimo"}), \
              patch.object(notebook, "_external_jupyter", return_value=None):
