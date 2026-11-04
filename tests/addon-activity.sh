@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# The activity sits directly above the active bar without changing frame height.
+# The activity sits directly above the active row's status cell (its phase, then its bar) without changing
+# frame height.
 set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="$(mktemp -d)"
@@ -20,7 +21,7 @@ ui_spin_end
 ui_table_frame "$WORK/table" 0
 case "$UI_TABLE_FRAME" in *'Downloading the Python ML container'*) ;; *) echo 'FAIL missing download activity'; exit 1 ;; esac
 [ "$UI_TABLE_LINES" = "$height" ]
-printf '%s\n' "$UI_TABLE_FRAME" | python3 -c 'import sys; lines=sys.stdin.read().splitlines(); i=next(i for i,l in enumerate(lines) if "udf-devkit" in l); assert "Downloading the Python ML container" in lines[i-1]; assert lines[i-1].index("Downloading") == lines[i].index("#")'
+printf '%s\n' "$UI_TABLE_FRAME" | python3 -c 'import sys; lines=sys.stdin.read().splitlines(); i=next(i for i,l in enumerate(lines) if "udf-devkit" in l); assert "Downloading the Python ML container" in lines[i-1]; assert lines[i-1].index("Downloading") == lines[i].index("installing #")'
 exakit_addon_activity 'Checking packages'
 ui_table_frame "$WORK/table" 0
 case "$UI_TABLE_FRAME" in *'Checking packages'*) ;; *) echo 'FAIL missing check activity'; exit 1 ;; esac

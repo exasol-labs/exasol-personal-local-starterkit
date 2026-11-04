@@ -3024,7 +3024,7 @@ EXAKIT_EDF_EOF
     _edf_part="$_edf_cache/$_edf_id/$_edf_file.part"
     rm -f "$_edf_part"
     if [ -n "${EXAKIT_TABLE_ROW:-}" ] && [ -n "${EXAKIT_TABLE_STATE:-}" ]; then
-        ui_table_set "$EXAKIT_TABLE_STATE" "$EXAKIT_TABLE_ROW" running 0 1 10 "$_edf_id · downloading $_edf_mb"
+        ui_table_set "$EXAKIT_TABLE_STATE" "$EXAKIT_TABLE_ROW" running 0 1 10 "downloading $_edf_mb"
         _exakit_log_file "INFO  Downloading the '$_edf_id' data ($_edf_mb) from $_edf_src"
     else
         info "Downloading the '$_edf_id' data ($_edf_mb, checked against its SHA-256)"

@@ -3126,7 +3126,7 @@ function Get-ExakitDatasetFiles {
     Remove-Item -LiteralPath $part -Force -ErrorAction SilentlyContinue
     if ($script:ExakitTableRow -gt 0) {
         Set-ExakitTableRow -Row $script:ExakitTableRow -State "running" -Pct 0 -Ceiling 1 -Secs 10 `
-            -Phase "$Id - downloading $mb"
+            -Phase "downloading $mb"
         Write-ExakitLog "INFO" "Downloading the '$Id' data ($mb) from $source"
     } else {
         Info "Downloading the '$Id' data ($mb, checked against its SHA-256)"

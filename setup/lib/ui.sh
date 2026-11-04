@@ -1319,6 +1319,20 @@ _ui_table_cell() {
                 _utc_at=$(( $2 + _utc_step ))
             fi
             [ "$_utc_at" -gt 100 ] && _utc_at=100
+            # What the row is doing, before its bar ("downloading 8.1 MB",
+            # "installing"): at most half the cell, and only while
+            # the bar keeps eight cells - a narrow terminal shows the bar alone.
+            _utc_ph="$6"; _utc_phw=0
+            if [ -n "$_utc_ph" ]; then
+                _utc_phmax=$(( UI_TABLE_STAT_W / 2 ))
+                [ "${#_utc_ph}" -gt "$_utc_phmax" ] && _utc_ph="${_utc_ph:0:$_utc_phmax}"
+                _utc_phw=$(( ${#_utc_ph} + 1 ))
+                if [ $(( _utc_barw - _utc_phw )) -ge 8 ]; then
+                    _utc_barw=$(( _utc_barw - _utc_phw ))
+                else
+                    _utc_ph=""; _utc_phw=0
+                fi
+            fi
             _utc_units=$(( _utc_at * _utc_barw * 8 / 100 ))
             _utc_full=$(( _utc_units / 8 ))
             _utc_rem=$(( _utc_units % 8 ))
@@ -1334,7 +1348,8 @@ _ui_table_cell() {
             _utc_pct="${_utc_at}%"
             _utc_npad=$(( _utc_num - ${#_utc_pct} )); [ "$_utc_npad" -ge 0 ] || _utc_npad=0
             UI_TABLE_CELL="${UI_ACCENT:-}${_UI_TABLE_FULL:0:$_utc_full}${UI_DIM:-}${_utc_head}${_UI_TABLE_EMPTY:0:$_utc_empty}${UI_RESET:-}${_UI_TABLE_SP:0:$_utc_npad}${_utc_pct}"
-            UI_TABLE_CELL_LEN=$(( _utc_barw + _utc_num ))
+            [ -n "$_utc_ph" ] && UI_TABLE_CELL="${_utc_ph} ${UI_TABLE_CELL}"
+            UI_TABLE_CELL_LEN=$(( _utc_phw + _utc_barw + _utc_num ))
             ;;
         waiting)
             UI_TABLE_CELL="${UI_DIM:-}waiting${UI_RESET:-}"; UI_TABLE_CELL_LEN=7 ;;

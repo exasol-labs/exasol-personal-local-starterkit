@@ -1039,6 +1039,17 @@ function Get-ExakitTableCell {
             }
             if ($at -gt 100) { $at = 100 }
             if ($at -lt 0) { $at = 0 }
+            # What the row is doing, before its bar ("downloading 8.1 MB",
+            # "installing"): at most half the cell, and only while the
+            # bar keeps eight cells - a narrow terminal shows the bar alone.
+            $phase = "" + $Row.Phase
+            $phaseW = 0
+            if ($phase) {
+                $phaseMax = [int][Math]::Floor($StatusWidth / 2)
+                if ($phase.Length -gt $phaseMax) { $phase = $phase.Substring(0, $phaseMax) }
+                $phaseW = $phase.Length + 1
+                if (($barw - $phaseW) -ge 8) { $barw = $barw - $phaseW } else { $phase = ""; $phaseW = 0 }
+            }
             # Eighths across the whole bar, from integer percent: at forty cells
             # one percent is three eighths, so every step of the creep moves
             # something on screen.
@@ -1058,7 +1069,8 @@ function Get-ExakitTableCell {
             $pctText = "$at%"
             $cell.Text = $script:UiAccent + ($script:UiBarFull * $full) + $script:UiDim + $head +
                 ($script:UiBarEmpty * $empty) + $script:UiReset + $pctText.PadLeft($num)
-            $cell.Len = $barw + $num
+            if ($phase) { $cell.Text = $phase + " " + $cell.Text }
+            $cell.Len = $phaseW + $barw + $num
         }
         "waiting" {
             $cell.Text = $script:UiDim + "waiting" + $script:UiReset
