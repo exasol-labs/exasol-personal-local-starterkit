@@ -72,7 +72,7 @@ ds = nb.first(source, own, sample)
 #
 # The **label** matters most: it is what a model learns to predict.
 #
-# **Do now:** check the dropdowns, leave unrelated columns as **—**, click **Approve descriptor**. The next cell waits for it. Explore, Ask, Train and Share use this approved map.
+# **Do now:** check the dropdowns, leave unrelated columns as **—**, click **Approve descriptor**, then run the next cell. Roles that are already approved need no click. Explore, Ask, Train and Share use this approved map.
 #
 # Plain Python: `review.approve({"COLUMN": "role", ...})`.
 

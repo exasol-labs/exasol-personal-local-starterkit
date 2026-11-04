@@ -36,7 +36,7 @@ from .dataset import DATA_FILES, Dataset, _locate, checked, dataset
 from .describe import COLUMN_ROLES, SLOTS, Draft, ROLES, describe
 from .workflow import DESCRIBE_APPROVE, DESCRIBE_DRAFT, log_event
 
-__all__ = ["RoleReview", "review_roles"]
+__all__ = ["ApprovalNeeded", "RoleReview", "review_roles"]
 
 AUTO_APPROVE = "EXAKIT_NB_AUTO_APPROVE"
 FORCE = "force"
@@ -123,6 +123,13 @@ def evidence_summary(entry: dict[str, Any]) -> str:
     if entry.get("role") and entry.get("evidence"):
         parts.append(f"{entry['role']} ({entry.get('confidence', '?')} confidence): {entry['evidence']}")
     return ", ".join(parts)
+
+
+class ApprovalNeeded(RuntimeError):
+    """The roles are not approved yet. A notebook shows the one line, not a traceback; the cells below stop."""
+
+    def _render_traceback_(self) -> list[str]:          # IPython's hook for how an exception is shown
+        return [str(self)]
 
 
 class RoleReview:
@@ -314,14 +321,24 @@ class RoleReview:
 
     # --- the handover to the next cell --------------------------------------------------------------------------------
 
+    def _already_approved(self) -> Dataset | None:
+        """The approved version the review was opened on, when nobody clicked Approve: nothing is waiting for a person."""
+        if self.approved is None and self.draft.status == "approved":
+            self.approved = dataset(self.conn, self.file if self.file is not None else self.draft.id)
+            print(f"Using the approved roles of {self.approved.id} v{self.approved.version}. To change them, set the "
+                  "dropdowns above, click Approve descriptor and run this cell again.")
+        return self.approved
+
     def dataset(self, draft_ok: bool = False) -> Dataset:
-        """The approved dataset. Before approval: a headless run (or ``draft_ok``) gets the proposal as a draft
-        Dataset; a person is told to approve first."""
-        if self.approved is not None:
+        """The approved dataset: the one approved here, else the approved version the review opened on. Before an
+        approval: a headless run (or ``draft_ok``) gets the proposal as a draft Dataset; a person is told to approve
+        first, in one line."""
+        if self._already_approved() is not None:
             return self.approved
         if draft_ok or self.headless == "draft":
             return self._draft_dataset()
-        raise RuntimeError("Review the proposed roles and click Approve descriptor, or call review.approve({...}) first.")
+        raise ApprovalNeeded("Not approved yet: check the dropdowns above, click Approve descriptor, then run this cell "
+                             "again (plain Python: review.approve({...})).")
 
     # --- the front ends ------------------------------------------------------------------------------------------------
 
@@ -432,7 +449,7 @@ def marimo_review(mo, draft: Draft, conn, file: Path | None = None) -> RoleRevie
         def dataset(self, draft_ok: bool = False) -> Dataset:
             if (self.value or {}).get("approve"):                  # the button was clicked: compute the approval now
                 self.approve(self.choices(), self.slot_choices())
-            if self.approved is not None:
+            if self._already_approved() is not None:
                 return self.approved
             if draft_ok or self.headless == "draft":
                 return self._draft_dataset()

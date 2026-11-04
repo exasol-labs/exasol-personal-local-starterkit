@@ -101,6 +101,22 @@ class ReviewTest(unittest.TestCase):
         self.assertEqual("left empty during review", result["slot_evidence"]["category"])
         self.assertIs(review.dataset(), result)
 
+    def test_a_review_opened_on_an_approved_version_needs_no_click(self):
+        approved = draft()
+        approved.doc.update(status="approved", version=3)
+        review = RoleReview(approved, object())
+        with mock.patch.object(role_picker, "dataset", return_value=types.SimpleNamespace(id="example", version=3)) as opened, \
+             redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(3, review.dataset().version)
+        opened.assert_called_once_with(review.conn, "example")
+        self.assertIn("Using the approved roles of example v3", out.getvalue())
+
+    def test_a_missing_approval_is_one_line_not_a_traceback(self):
+        with self.assertRaises(role_picker.ApprovalNeeded) as stopped:
+            RoleReview(draft(), object()).dataset()
+        self.assertEqual([str(stopped.exception)], stopped.exception._render_traceback_())
+        self.assertIn("click Approve descriptor, then run this cell again", str(stopped.exception))
+
     def test_an_earlier_pickers_names_still_fill_their_slot(self):
         with mock.patch.object(Draft, "approve", autospec=True, side_effect=approve_as_dict):
             result = RoleReview(draft(), object()).approve({"D": "label", "B": "entity"})
