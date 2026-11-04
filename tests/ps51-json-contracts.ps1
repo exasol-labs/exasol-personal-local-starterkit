@@ -74,6 +74,38 @@ foreach ($case in @(
     }
 }
 
+# The commands that also write answer a machine with no kit the same way, and
+# refuse a wrong persona as bad input, before anything is fetched (AGT-05/06/09).
+foreach ($case in @(
+    @{ Args = @("marketplace", "--list", "--json"); Label = "marketplace --list --json" },
+    @{ Args = @("persona", "add", "data-scientist", "--json"); Label = "persona add --json" }
+)) {
+    $r = Run-Cli $case.Args
+    Check "$($case.Label) (not installed) exits 4" ($r.Code -eq 4) "exit $($r.Code): $(Head $r.Out 120)"
+    $doc = Parse-Json "$($case.Label) (not installed)" $r.Out
+    if ($doc) { Check "$($case.Label) (not installed) names the installer" ($doc.installed -eq $false -and $doc.remedy) (Head $r.Out 160) }
+}
+foreach ($case in @(
+    @{ Args = @("persona", "plan", "--json"); Label = "persona plan --json with no persona recorded" },
+    @{ Args = @("persona", "show", "nope", "--json"); Label = "persona show <unknown> --json" }
+)) {
+    $r = Run-Cli $case.Args
+    Check "$($case.Label) is bad input: exit 2" ($r.Code -eq 2) "exit $($r.Code): $(Head $r.Out 120)"
+    $doc = Parse-Json $case.Label $r.Out
+    if ($doc) { Check "$($case.Label) is a refusal object" ($doc.rejected -eq $true -and $doc.error) (Head $r.Out 160) }
+}
+$r = Run-Cli @("persona", "list", "--json")
+$doc = Parse-Json "persona list --json" $r.Out
+if ($doc) {
+    $ids = @($doc.personas | ForEach-Object { $_.id })
+    Check "persona list --json lists every persona (AGT-07)" ($r.Code -eq 0 -and $ids -contains "data-scientist" -and $ids -contains "ml-engineer") "exit $($r.Code): $($ids -join ',')"
+}
+$r = Run-Cli @("persona", "show", "ml-engineer", "--json")
+$doc = Parse-Json "persona show ml-engineer --json" $r.Out
+if ($doc) {
+    Check "persona show --json names the notebooks it brings (AGT-12)" ($r.Code -eq 0 -and @($doc.notebooks | ForEach-Object { $_.jupyter }) -contains "ml-engineer/01_train.ipynb") (Head $r.Out 200)
+}
+
 # --- 2. the catalog and skills are one object each, nothing else on stdout --
 Write-Host "--- catalog, help, skills"
 $r = Run-Cli @("catalog", "--json")

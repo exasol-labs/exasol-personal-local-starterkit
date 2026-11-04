@@ -264,5 +264,30 @@ check "without a terminal it names the command and exits 2" "2|yes" "$rc|$named"
 check "the dispatcher sends a bare add to the menu" "1" \
     "$(grep -c 'if \[ "\$1" = add \] && \[ \$# -eq 1 \]; then exakit_persona_add_menu' "$ROOT/setup/exakit")"
 
+echo "the persona command's answers for scripts (audit AGT-05/06/07/09/12):"
+_bare="$WORK/bare"; mkdir -p "$_bare/home"
+_cli() { HOME="$_bare/home" EXAKIT_HOME="$_bare/home/.exasol-starter-kit" EXAKIT_BIN_DIR="$_bare/bin" \
+    EXAKIT_NO_UPDATE_NOTICE=1 bash "$ROOT/setup/exakit" "$@" 2>/dev/null; printf '|rc=%s' "$?"; }
+_json() { python3 -c 'import json,sys; d=json.loads(sys.stdin.read().rsplit("|rc=",1)[0]); print(eval(sys.argv[1]))' "$1"; }
+out="$(_cli persona list --json)"
+contains "persona list --json exits 0" "|rc=0" "$out"
+check "...and lists every persona" "data-scientist,ml-engineer,general" "$(printf '%s' "$out" | _json '",".join(p["id"] for p in d["personas"])')"
+out="$(_cli persona show ml-engineer --json)"
+check "persona show --json names the notebooks it brings, in order" \
+    "ml-engineer/00_quickstart.ipynb,ml-engineer/01_train.ipynb,ml-engineer/02_rust_score.ipynb,ml-engineer/03_score_external_model.ipynb" \
+    "$(printf '%s' "$out" | _json '",".join(n["jupyter"] for n in d["notebooks"])')"
+out="$(_cli persona show nope --json)"
+contains "an unknown persona is bad input: exit 2" "|rc=2" "$out"
+check "...one refusal object on stdout" "True" "$(printf '%s' "$out" | _json 'd["rejected"]')"
+out="$(_cli persona plan --json)"
+contains "plan with no persona recorded is bad input: exit 2" "|rc=2" "$out"
+check "...and records no failure" "no" "$([ -e "$_bare/home/.exasol-starter-kit/.last-failure" ] && echo yes || echo no)"
+out="$(_cli marketplace --list --json)"
+contains "marketplace with no kit exits 4, as every state query does" "|rc=4" "$out"
+check "...with the installer's command" "False" "$(printf '%s' "$out" | _json 'd["installed"]')"
+out="$(_cli persona add data-scientist --json)"
+contains "persona add with no kit exits 4" "|rc=4" "$out"
+check "...having downloaded nothing and edited no shell profile" "0" "$(find "$_bare/home" -type f | wc -l | tr -d ' ')"
+
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

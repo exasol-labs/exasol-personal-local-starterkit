@@ -77,6 +77,26 @@ function Get-ExakitPersonaIds {
 # Get-ExakitPersona - the ids, in the kit's order, when every persona named
 # exists and its file is valid; else $null, with why in
 # $script:ExakitPersonaProblem (the service's words). Twin of exakit_persona_known.
+# Invoke-ExakitPersonaJson <list-json|show-json> [id] - the persona service's
+# JSON answer as one line, with the personas this kit was set up as (the
+# manifest's persona.id) handed over in EXAKIT_PERSONA_RECORDED; $null when the
+# service failed. Twin of the --json arms of cmd_persona.
+function Invoke-ExakitPersonaJson {
+    param([string]$Kind, [string]$Id = "")
+    $before = $env:EXAKIT_PERSONA_RECORDED
+    try {
+        $env:EXAKIT_PERSONA_RECORDED = "" + (Get-ExakitManifestValue "persona.id")
+        $lines = if ($Id) { Invoke-ExakitPersonaService $Kind $Id } else { Invoke-ExakitPersonaService $Kind }
+    } finally {
+        if ($null -eq $before) { Remove-Item Env:EXAKIT_PERSONA_RECORDED -ErrorAction SilentlyContinue }
+        else { $env:EXAKIT_PERSONA_RECORDED = $before }
+    }
+    if ($null -eq $lines) { return $null }
+    $doc = (@($lines) -join "").Trim()
+    if (-not $doc) { return $null }
+    return $doc
+}
+
 function Get-ExakitPersona {
     param([string]$Id)
     $script:ExakitPersonaProblem = ""

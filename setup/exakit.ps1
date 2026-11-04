@@ -161,6 +161,7 @@ function Assert-ExakitInstalled {
         if ($Json) {
             Write-Output ([pscustomobject]@{
                 ok = $false; installed = $false; status = "not installed"
+                manifest = $script:ManifestPath; reason = "no install record"
                 error = "no installation found"; remedy = (Get-ExakitInstallCommand)
             } | ConvertTo-Json -Compress)
         } else {
@@ -2401,14 +2402,27 @@ function Write-ExakitVersionNote {
 }
 
 
-# Invoke-CmdPersona - `exakit persona list | show <id> | plan [<id>] [--json] |
-# add <id>[,<id>]`; `apply` is the old name of add, kept as an alias. Twin of
+# Invoke-CmdPersona - `exakit persona list [--json] | show <id> [--json] |
+# plan [<id>] [--json] | add <id>[,<id>]`; `apply` is the old name of add, kept
+# as an alias. A wrong or missing persona is bad input: exit 2 and nothing
+# recorded (Deny-ExakitInput), one object on stdout under --json. Twin of
 # cmd_persona.
 function Invoke-CmdPersona {
     param([string[]]$CmdArgs = @())
     $verb = if ($CmdArgs.Count) { $CmdArgs[0] } else { "list" }
+    $asJson = ($CmdArgs -contains "--json") -or ($CmdArgs -contains "-j")
     switch ($verb) {
         "list" {
+            foreach ($arg in @($CmdArgs | Select-Object -Skip 1)) {
+                if ($arg -notin @("--json", "-j")) { Deny-ExakitInput "Unknown option for persona list: $arg (supported: --json)" }
+            }
+            if ($asJson) {
+                # Each persona with what it brings - its notebooks too - and the ones this kit was set up as.
+                $doc = Invoke-ExakitPersonaJson "list-json"
+                if ($null -eq $doc) { Fail "No persona can be read from this kit copy - the persona service needs Python 3. Repair with: exakit update" }
+                Write-Output $doc
+                return
+            }
             $ids = @(Get-ExakitPersonaIds)
             if ($ids.Count -eq 0) { Fail "No persona can be read from this kit copy ($((@(Invoke-ExakitPersonaService 'problems') | Select-Object -First 1) -replace '\|', ':')) - the persona service needs Python 3. Repair with: exakit update" }
             foreach ($id in $ids) {
@@ -2424,10 +2438,22 @@ function Invoke-CmdPersona {
             Info "Add one with: exakit persona add (a menu), or exakit persona add <id>"
         }
         "show" {
-            $id = if ($CmdArgs.Count -gt 1) { $CmdArgs[1] } else { "" }
-            if (-not (Get-ExakitPersona $id)) { Fail $script:ExakitPersonaProblem }
+            $id = ""
+            foreach ($arg in @($CmdArgs | Select-Object -Skip 1)) {
+                if ($arg -in @("--json", "-j")) { }
+                elseif ($arg.StartsWith("-")) { Deny-ExakitInput "Unknown option for persona show: $arg (supported: --json)" }
+                elseif ($id) { Deny-ExakitInput "Name one persona: exakit persona show <id>" }
+                else { $id = $arg }
+            }
+            if (-not (Get-ExakitPersona $id)) { Deny-ExakitInput $script:ExakitPersonaProblem }
+            if ($asJson) {
+                $doc = Invoke-ExakitPersonaJson "show-json" $id
+                if ($null -eq $doc) { Deny-ExakitInput "Name one persona: exakit persona show <id>" }
+                Write-Output $doc
+                return
+            }
             $lines = Invoke-ExakitPersonaService "show" $id
-            if ($null -eq $lines) { Fail "Name one persona: exakit persona show <id>" }
+            if ($null -eq $lines) { Deny-ExakitInput "Name one persona: exakit persona show <id>" }
             foreach ($line in @($lines)) { Write-Host $line }
         }
         "plan" {
@@ -2438,8 +2464,8 @@ function Invoke-CmdPersona {
                 else { $id = $arg }
             }
             if (-not $id) { $id = Get-ExakitManifestValue "persona.id" }
-            if (-not $id) { Fail "No persona is recorded for this kit - name one: exakit persona plan <id>" }
-            if (-not (Get-ExakitPersona $id)) { Fail $script:ExakitPersonaProblem }
+            if (-not $id) { Deny-ExakitInput "No persona is recorded for this kit - name one: exakit persona plan <id> (exakit persona list shows them)" }
+            if (-not (Get-ExakitPersona $id)) { Deny-ExakitInput $script:ExakitPersonaProblem }
             Show-ExakitPersonaPlan -Ids $id -Json:$json
         }
         { $_ -in @("add", "apply") } {
@@ -2485,7 +2511,9 @@ function Invoke-CmdPersona {
 # Twin of cmd_marketplace in setup/exakit.
 function Invoke-CmdMarketplace {
     param([string[]]$Arguments = @())
-    if (-not (Test-Path $script:ManifestPath)) { Fail "No installation found. Run the installer first." }
+    # No kit: exit 4 and the installer's command, one object under --json - the
+    # answer every state query gives, with nothing recorded as a failure.
+    if (-not (Test-Path $script:ManifestPath)) { Assert-ExakitInstalled -Json:$script:ExakitRefusalJson }
     $list = $false
     $json = $false
     $ids = @()
@@ -4159,6 +4187,23 @@ try {
         "whats-new"    { Assert-ExakitKnownOptions -CommandName "whats-new" -Allowed @() -Arguments $RestArgs; Invoke-CmdWhatsNew -Version ($RestArgs | Select-Object -First 1) }
         "logs"         { Invoke-CmdLogs -LogArgs $RestArgs }
         "persona"      {
+            if ($RestArgs.Count -gt 0 -and $RestArgs[0] -in @('add', 'apply')) {
+                # Refused before anything is fetched: adding needs the kit's own
+                # Python, and on a machine without it that is a download, so a
+                # missing kit (4) and a persona that does not exist (2) are told
+                # first, on whatever Python 3 is there.
+                if (-not (Test-Path $script:ManifestPath)) { Assert-ExakitInstalled -Json:$script:ExakitRefusalJson }
+                if ($RestArgs.Count -gt 1) {
+                    $paId = ""
+                    foreach ($paArg in @($RestArgs | Select-Object -Skip 1)) {
+                        if ($paArg -in @('--yes', '-y')) { }
+                        elseif ("$paArg".StartsWith('-')) { Deny-ExakitInput "Unknown option for persona add: $paArg (it asks nothing; --yes is accepted)" }
+                        elseif ($paId) { Deny-ExakitInput "Name the personas once, joined by commas: exakit persona add $paId,$paArg" }
+                        else { $paId = $paArg }
+                    }
+                    if ((Get-ExakitPersonaPython) -and -not (Get-ExakitPersona $paId)) { Deny-ExakitInput $script:ExakitPersonaProblem }
+                }
+            }
             # No id: the persona question, as the install asks it.
             if ($RestArgs.Count -eq 1 -and $RestArgs[0] -eq 'add') {
                 Invoke-ExakitPersonaAddMenu -Cli $PSCommandPath
