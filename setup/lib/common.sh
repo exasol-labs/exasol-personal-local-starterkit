@@ -8766,8 +8766,9 @@ exakit_skills_summary_line() {
 # care either way. Without a Python the compact document goes out as is,
 # which is the same valid JSON. ⇄ twin: ConvertTo-Json already indents.
 exakit_json_pretty() {
-    if exakit_can_run_python; then
-        if printf '%s' "$1" | run_python -c '
+    # Any Python 3 lays JSON out: a refusal must never download one to do it.
+    if exakit_can_run_python_any; then
+        if printf '%s' "$1" | run_python_any -c '
 import json, sys
 print(json.dumps(json.load(sys.stdin), indent=2, ensure_ascii=False))
 ' 2>/dev/null; then

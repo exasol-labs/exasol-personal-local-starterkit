@@ -523,7 +523,7 @@ _nomanifest_out="$( (
     printf 'rc=%s' "$?"
 ) )"
 has "marketplace without an install refuses" "No installation found" "$_nomanifest_out"
-has "and exits non-zero" "rc=1" "$_nomanifest_out"
+has "and exits 4 (not installed), as every state query does" "rc=4" "$_nomanifest_out"
 
 echo "a stdin-draining host CLI must not eat the add-on registry:"
 # The editor stub drains stdin. A later registry row must still be visible.

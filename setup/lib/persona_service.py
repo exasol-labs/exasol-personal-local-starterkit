@@ -258,12 +258,38 @@ def show(root: Path, persona_id: str) -> list:
     return rows
 
 
+def notebooks(root: Path, persona_id: str) -> list:
+    """The notebooks a persona brings, in their order, from the notebook catalog (notebook/catalog.json): what the
+    notebook add-on copies into the persona's folder. Empty when the kit copy carries no catalog."""
+    try:
+        doc = json.loads((root / "notebook" / "catalog.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    rows = [n for n in doc.get("notebooks", []) if isinstance(n, dict) and n.get("persona") == persona_id]
+    return [{"id": n.get("id"), "title": n.get("title"), "jupyter": f"{persona_id}/{n['jupyter']}" if n.get("jupyter") else None,
+             "marimo": f"{persona_id}/{n['marimo']}" if n.get("marimo") else None}
+            for n in sorted(rows, key=lambda n: n.get("step", 0))]
+
+
+def described(root: Path, persona_id: str, recorded: list) -> dict:
+    """One persona as `exakit persona show <id> --json` answers it: the same facts as the text form, lists as lists."""
+    doc = one(root, persona_id)
+    out = {"id": doc["id"], "title": doc["title"], "summary": doc.get("summary", ""), "recorded": doc["id"] in recorded}
+    for key in ("datasets", "addons", "notebook_tools", "mcp_clients", "services", "udf_language"):
+        if key in doc:
+            out[key] = doc[key]
+    out["notebooks"] = notebooks(root, doc["id"])
+    start = show(root, persona_id)[-1].split(None, 2)
+    out["start_here"] = start[2] if len(start) == 3 and start[:2] == ["Start", "here"] else None
+    return out
+
+
 def run(argv: list, env: dict) -> list:
     """The command's output lines."""
     if len(argv) < 2:
         raise BadInput("usage: persona_service.py <kit_root> <command> [args]")
     root, command, args = Path(argv[0]), argv[1], argv[2:]
-    needs = {"check": 1, "select": 1, "title": 1, "value": 2, "answers": 1, "show": 1, "remove": 1}
+    needs = {"check": 1, "select": 1, "title": 1, "value": 2, "answers": 1, "show": 1, "show-json": 1, "remove": 1}
     if len(args) < needs.get(command, 0):
         raise BadInput(f"{command} needs {needs[command]} argument(s)")
     if command == "picker":
@@ -287,6 +313,13 @@ def run(argv: list, env: dict) -> list:
         return dataset_hints(root)
     if command == "show":
         return show(root, args[0])
+    if command in ("list-json", "show-json"):
+        # The recorded personas come from the kit's manifest, which the caller reads: EXAKIT_PERSONA_RECORDED.
+        recorded = [i for i in env.get("EXAKIT_PERSONA_RECORDED", "").split(",") if i]
+        if command == "show-json":
+            return [json.dumps(described(root, args[0], recorded))]
+        rows = [described(root, d["id"], recorded) for d in personas(root).values() if d.get("visible", True)]
+        return [json.dumps({"personas": rows, "recorded": recorded})]
     if command == "remove":
         sys.path.insert(0, str(root / "marketplace"))
         from persona_membership import remove

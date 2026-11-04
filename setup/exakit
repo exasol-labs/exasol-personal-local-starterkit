@@ -1588,7 +1588,7 @@ cmd_uninstall() {
     [ "$_uni_dry" = 1 ] || exakit_init_logging 2>/dev/null || true
 
     if [ -n "$_uni_addon" ]; then
-        [ -f "$EXAKIT_MANIFEST" ] || die "No installation found. Run the installer first."
+        [ -f "$EXAKIT_MANIFEST" ] || _require_install "${EXAKIT_REFUSAL_JSON:-0}"
         if ! exakit_marketplace_addon_installed "$_uni_addon" 2>/dev/null; then
             info "$_uni_addon is not installed — nothing to remove."
             exit 0
@@ -2116,7 +2116,9 @@ cmd_skills() {
 # marketplace dash-server` installs dash-server and nothing else — it used to
 # silently DISCARD the id and install the other pending add-ons instead.
 cmd_marketplace() {
-    [ -f "$EXAKIT_MANIFEST" ] || die "No installation found. Run the installer first."
+    # No kit: exit 4 and the installer's command, as one object under --json -
+    # the answer every state query gives, with nothing recorded as a failure.
+    [ -f "$EXAKIT_MANIFEST" ] || _require_install "${EXAKIT_REFUSAL_JSON:-0}"
     _cm_list=0
     _cm_json=0
     _cm_ids=""
@@ -2523,11 +2525,28 @@ cmd_whats_new() {
     fi
 }
 
-# cmd_persona list | show <id> | plan [<id>] [--json] | add <id>[,<id>] | remove <id> — the
-# `exakit persona` command. `apply` is the old name of add, kept as an alias.
+# cmd_persona list [--json] | show <id> [--json] | plan [<id>] [--json] | add <id>[,<id>] | remove <id>
+# — the `exakit persona` command. `apply` is the old name of add, kept as an alias.
+# A wrong or missing persona is bad input: exit 2 and nothing recorded (reject),
+# as one object on stdout under --json.
 cmd_persona() {
+    _cp_json=0
+    for _cp_arg in "$@"; do
+        case "$_cp_arg" in --json|-j) _cp_json=1 ;; esac
+    done
     case "${1:-list}" in
         list)
+            for _cp_arg in "$@"; do
+                case "$_cp_arg" in list|--json|-j) ;; *) reject "Unknown option for persona list: $_cp_arg (supported: --json)" ;; esac
+            done
+            if [ "$_cp_json" = 1 ]; then
+                # Each persona with what it brings - its notebooks too - and the ones this kit was set up as.
+                _cp_doc="$(EXAKIT_PERSONA_RECORDED="$(manifest_get persona.id 2>/dev/null || true)" \
+                    _exakit_persona_service list-json 2>/dev/null)" || \
+                    die "No persona can be read from this kit copy - the persona service needs Python 3. Repair with: exakit update"
+                exakit_json_pretty "$_cp_doc"
+                return 0
+            fi
             _cp_ids="$(exakit_persona_ids)"
             [ -n "$_cp_ids" ] || die "No persona can be read from this kit copy ($(_exakit_persona_service problems 2>/dev/null | head -n 1 | tr '|' ':' || true)) - the persona service needs Python 3. Repair with: exakit update"
             for _cp_id in $_cp_ids; do
@@ -2541,8 +2560,23 @@ cmd_persona() {
             info "Add one with: exakit persona add (a menu), or exakit persona add <id>"
             ;;
         show)
-            exakit_persona_known "${2:-}" || die "$EXAKIT_PERSONA_PROBLEM"
-            _exakit_persona_service show "$2" 2>/dev/null || die "Name one persona: exakit persona show <id>"
+            shift
+            _cp_id=""
+            for _cp_arg in "$@"; do
+                case "$_cp_arg" in
+                    --json|-j) ;;
+                    -*) reject "Unknown option for persona show: $_cp_arg (supported: --json)" ;;
+                    *) [ -z "$_cp_id" ] || reject "Name one persona: exakit persona show <id>"; _cp_id="$_cp_arg" ;;
+                esac
+            done
+            exakit_persona_known "$_cp_id" || reject "$EXAKIT_PERSONA_PROBLEM"
+            if [ "$_cp_json" = 1 ]; then
+                _cp_doc="$(EXAKIT_PERSONA_RECORDED="$(manifest_get persona.id 2>/dev/null || true)" \
+                    _exakit_persona_service show-json "$_cp_id" 2>/dev/null)" || reject "Name one persona: exakit persona show <id>"
+                exakit_json_pretty "$_cp_doc"
+                return 0
+            fi
+            _exakit_persona_service show "$_cp_id" 2>/dev/null || reject "Name one persona: exakit persona show <id>"
             ;;
         plan)
             shift
@@ -2555,8 +2589,8 @@ cmd_persona() {
                 esac
             done
             [ -n "$_cp_id" ] || _cp_id="$(manifest_get persona.id 2>/dev/null || true)"
-            [ -n "$_cp_id" ] || die "No persona is recorded for this kit - name one: exakit persona plan <id>"
-            exakit_persona_known "$_cp_id" || die "$EXAKIT_PERSONA_PROBLEM"
+            [ -n "$_cp_id" ] || reject "No persona is recorded for this kit - name one: exakit persona plan <id> (exakit persona list shows them)"
+            exakit_persona_known "$_cp_id" || reject "$EXAKIT_PERSONA_PROBLEM"
             exakit_persona_plan "$_cp_id" "$_cp_json"
             ;;
         add|apply)
@@ -2799,8 +2833,28 @@ case "${1:-help}" in
         shift
         case "${1:-}" in
             add|apply)
+                # Refused before anything is fetched: adding needs the kit's own
+                # Python, and on a machine without it that is a download, so a
+                # missing kit (4) and a persona that does not exist (2) are told
+                # first, on whatever Python 3 is there.
+                [ -f "$EXAKIT_MANIFEST" ] || _require_install "${EXAKIT_REFUSAL_JSON:-0}"
                 # No id: the persona question, as the install asks it.
                 if [ "$1" = add ] && [ $# -eq 1 ]; then exakit_persona_add_menu; exit $?; fi
+                _pa_id=""; _pa_skip=0
+                for _pa_arg in "$@"; do
+                    if [ "$_pa_skip" = 1 ]; then _pa_skip=0; continue; fi
+                    case "$_pa_arg" in
+                        add|apply) [ -z "$_pa_id" ] && [ "$_pa_arg" = "$1" ] && continue ;;
+                        --cli|--host) _pa_skip=1; continue ;;
+                        --yes|-y|--cli=*|--host=*) continue ;;
+                        -*) reject "Unknown option for persona add: $_pa_arg (it asks nothing; --yes is accepted)" ;;
+                    esac
+                    [ -z "$_pa_id" ] || reject "Name the personas once, joined by commas: exakit persona add $_pa_id,$_pa_arg"
+                    _pa_id="$_pa_arg"
+                done
+                if exakit_can_run_python_any; then
+                    exakit_persona_known "$_pa_id" || reject "$EXAKIT_PERSONA_PROBLEM"
+                fi
                 _exakit_marketplace_cli persona_apply "$@" --cli "$(exakit_repo_root)/setup/exakit" ;;
             *) command -v cmd_persona >/dev/null 2>&1 || die "The persona module is missing from this kit copy. Repair with: exakit update"; cmd_persona "$@" ;;
         esac

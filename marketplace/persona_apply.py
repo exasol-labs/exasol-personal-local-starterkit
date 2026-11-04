@@ -194,7 +194,7 @@ def apply(ctx: KitContext, requested: str, prefix: list[str], *, live: bool = Fa
         try:
             notebook.sync_notebooks(ctx)
         except (AddonFailure, OSError) as error:
-            failures.append(("Notebooks", f"exakit notebook setup ({error})"))
+            failures.append((f"Notebooks ({error})", "exakit notebook setup"))
     failures.extend(start_services(ctx, persona_service.selected_services(ctx.root, new_ids),
                                    lambda command, args: _child(prefix, command, args, environment), ready))
     if failures:
@@ -209,7 +209,7 @@ def apply(ctx: KitContext, requested: str, prefix: list[str], *, live: bool = Fa
 def main() -> int:
     class PersonaParser(argparse.ArgumentParser):
         def error(self, message: str) -> None:
-            self.exit(1, f"persona: {message}\n")
+            self.exit(2, f"persona: {message}\n")
 
     parser = PersonaParser(description=__doc__)
     parser.add_argument("action", choices=("add", "apply"))
@@ -222,7 +222,10 @@ def main() -> int:
         prefix = command_prefix(args.cli, args.host)
         return apply(KitContext.from_environment(ROOT), args.ids, prefix,
                      live=sys.stdout.isatty() and os.environ.get("EXAKIT_NO_FANCY") != "1")
-    except (persona_service.BadInput, AddonFailure, CatalogError, OSError, ValueError) as error:
+    except (persona_service.BadInput, CatalogError) as error:
+        print(f"persona: {error}", file=sys.stderr)       # the persona or add-on named: bad input
+        return 2
+    except (AddonFailure, OSError, ValueError) as error:
         print(f"persona: {error}", file=sys.stderr)
         return 1
 
