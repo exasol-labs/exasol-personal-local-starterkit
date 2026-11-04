@@ -4405,6 +4405,17 @@ EXAKIT_AGH_PY
 # This value is interpolated into a URL, so it is validated as two plain path
 # segments and nothing else. A catalog that says anything more interesting than
 # that has no repository as far as this code is concerned.
+# _exakit_about_cache_matches <id> — the cached lines are this add-on's: their
+# fifth line names the repository they were fetched from, and that is still the
+# one the catalog names. The cache is keyed by add-on id, so a kit update that
+# points an add-on at another repository otherwise showed the old one's name,
+# link and About until the cache aged out (audit DAY-05). A cache from before
+# the fifth line was written counts as another repository's.
+_exakit_about_cache_matches() {
+    _acm_repo="$(_exakit_addon_repo "$1" 2>/dev/null || true)"
+    [ -n "$_acm_repo" ] && [ "$(sed -n 5p "$(_exakit_about_cache_path "$1")" 2>/dev/null)" = "$_acm_repo" ]
+}
+
 _exakit_addon_repo() {
     _aar_repo="$(_exakit_addon_github "$1" repo 2>/dev/null || true)"
     case "$_aar_repo" in
@@ -4520,6 +4531,10 @@ _exakit_about_fetch() {
     [ -n "$_abf_repo" ] || return 1
     _abf_cache="$(_exakit_about_cache_path "$_abf_id")"
     _abf_attempt="$EXAKIT_ABOUT_CACHE_DIR/.attempt-$_abf_id"
+    # Another repository's lines (or ones from before line 5): asked again now.
+    if [ -f "$_abf_cache" ] && ! _exakit_about_cache_matches "$_abf_id"; then
+        rm -f "$_abf_cache" "$_abf_attempt" 2>/dev/null
+    fi
     _exakit_about_cache_fresh "$_abf_cache" && return 2
     # The stamp is what keeps a rate-limited or offline machine from asking
     # again on every single run: it is written BEFORE the request, so the
@@ -4563,8 +4578,9 @@ _exakit_about_fetch() {
     _abf_archived="$(_exakit_about_extract "$_abf_json" archived)"
     [ "$_abf_archived" = true ] && _exakit_log_file "WARN  $_abf_repo is archived on GitHub ($_abf_id)"
     _abf_tmp="$_abf_cache.tmp.$$"
-    # Line 1 the About, line 2 the repository's name, 3 its link, 4 archived.
-    printf '%s\n%s\n%s\n%s\n' "$_abf_text" "${_abf_full##*/}" "$_abf_url" "${_abf_archived:-false}" \
+    # Line 1 the About, line 2 the repository's name, 3 its link, 4 archived,
+    # 5 the catalog's repository it was asked of (_exakit_about_cache_matches).
+    printf '%s\n%s\n%s\n%s\n%s\n' "$_abf_text" "${_abf_full##*/}" "$_abf_url" "${_abf_archived:-false}" "$_abf_repo" \
         > "$_abf_tmp" 2>/dev/null || { rm -f "$_abf_tmp"; return 1; }
     mv -f "$_abf_tmp" "$_abf_cache" 2>/dev/null || { rm -f "$_abf_tmp"; return 1; }
     _exakit_log_file "INFO  About refreshed for $_abf_id from $_abf_repo"
@@ -4583,7 +4599,7 @@ _exakit_about_fetch() {
 # update). A repository GitHub reports as archived says so after its About.
 exakit_marketplace_addon_description() {
     _mad_cache="$(_exakit_about_cache_path "$1")"
-    if [ -f "$_mad_cache" ]; then
+    if [ -f "$_mad_cache" ] && _exakit_about_cache_matches "$1"; then
         # Cleaned again on the way out: the cache is a file anyone could have
         # written, not only the fetch that sanitised it (audit SEC-18).
         _mad_text="$(_exakit_about_cap "$(head -1 "$_mad_cache" 2>/dev/null | _exakit_about_sanitise)")"
@@ -4606,7 +4622,8 @@ exakit_marketplace_addon_description() {
 # catalog's copy, else the id itself. Never fetches: the description's lookup
 # fills the cache this reads.
 exakit_marketplace_addon_name() {
-    _man_name="$(sed -n 2p "$(_exakit_about_cache_path "$1")" 2>/dev/null || true)"
+    _man_name=""
+    _exakit_about_cache_matches "$1" && _man_name="$(sed -n 2p "$(_exakit_about_cache_path "$1")" 2>/dev/null || true)"
     case "$_man_name" in ''|*[!A-Za-z0-9._-]*) _man_name="" ;; esac
     [ -n "$_man_name" ] || _man_name="$(_exakit_addon_github "$1" name 2>/dev/null || true)"
     case "$_man_name" in ''|*[!A-Za-z0-9._-]*) _man_name="$1" ;; esac
@@ -4616,7 +4633,9 @@ exakit_marketplace_addon_name() {
 # _exakit_marketplace_addon_about_offline <id> — the About with no lookup: the
 # cached one at any age, else the catalog's copy; empty when neither exists.
 _exakit_marketplace_addon_about_offline() {
-    _mao_text="$(_exakit_about_cap "$(head -1 "$(_exakit_about_cache_path "$1")" 2>/dev/null | _exakit_about_sanitise)")"
+    _mao_text=""
+    _exakit_about_cache_matches "$1" && \
+        _mao_text="$(_exakit_about_cap "$(head -1 "$(_exakit_about_cache_path "$1")" 2>/dev/null | _exakit_about_sanitise)")"
     [ -n "$_mao_text" ] || _mao_text="$(_exakit_about_cap "$(_exakit_addon_github "$1" about 2>/dev/null | _exakit_about_sanitise)")"
     printf '%s\n' "$_mao_text"
 }
@@ -4631,7 +4650,8 @@ exakit_marketplace_addon_label() {
 # exakit_marketplace_addon_url <id> — the add-on repository's link on GitHub:
 # the last fetch's (it follows a rename), else the catalog's.
 exakit_marketplace_addon_url() {
-    _mau_url="$(sed -n 3p "$(_exakit_about_cache_path "$1")" 2>/dev/null || true)"
+    _mau_url=""
+    _exakit_about_cache_matches "$1" && _mau_url="$(sed -n 3p "$(_exakit_about_cache_path "$1")" 2>/dev/null || true)"
     case "$_mau_url" in *[!A-Za-z0-9._/:-]*|*..*) _mau_url="" ;; https://github.com/*/*) ;; *) _mau_url="" ;; esac
     [ -n "$_mau_url" ] || _mau_url="$(_exakit_addon_github "$1" url 2>/dev/null || true)"
     case "$_mau_url" in *[!A-Za-z0-9._/:-]*|*..*) return 1 ;; https://github.com/*/*) printf '%s\n' "$_mau_url" ;; *) return 1 ;; esac

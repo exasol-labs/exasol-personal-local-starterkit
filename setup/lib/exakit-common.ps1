@@ -5687,11 +5687,15 @@ function Update-ExakitAboutCache {
     if (-not $repo) { return $false }
     $cacheDir = Get-ExakitAboutCacheDir
     $cache = Join-Path $cacheDir "$Id.txt"
+    $attempt = Join-Path $cacheDir ".attempt-$Id"
+    # Another repository's lines (or ones from before line 5): asked again now (audit DAY-05).
+    if ((Test-Path $cache) -and @(Get-ExakitAboutCacheLines $Id).Count -eq 0) {
+        Remove-Item -Force $cache, $attempt -ErrorAction SilentlyContinue
+    }
     if (Test-ExakitAboutCacheFresh $cache) { return $false }
     # The marker is what keeps a rate-limited or offline machine from asking
     # again on every run: it is written BEFORE the request, so the question
     # counts as asked whatever the answer turns out to be.
-    $attempt = Join-Path $cacheDir ".attempt-$Id"
     if (Test-ExakitAboutCacheFresh $attempt) { return $false }
     New-Item -ItemType Directory -Force -Path $cacheDir -ErrorAction SilentlyContinue | Out-Null
     New-Item -ItemType File -Force -Path $attempt -ErrorAction SilentlyContinue | Out-Null
@@ -5719,8 +5723,9 @@ function Update-ExakitAboutCache {
     $name = if ($full) { $full.Split('/')[1] } else { "" }
     $tmp = "$cache.tmp"
     try {
-        # Line 1 the About, line 2 the repository's name, 3 its link, 4 archived. Twin of _exakit_about_fetch.
-        Set-Content -Path $tmp -Value @($text, $name, $url, $archived) -Encoding UTF8 -ErrorAction Stop
+        # Line 1 the About, line 2 the repository's name, 3 its link, 4 archived, 5 the catalog's repository it was
+        # asked of. Twin of _exakit_about_fetch.
+        Set-Content -Path $tmp -Value @($text, $name, $url, $archived, $repo) -Encoding UTF8 -ErrorAction Stop
         Move-Item -Force -Path $tmp -Destination $cache -ErrorAction Stop
     } catch {
         Remove-Item -Force $tmp -ErrorAction SilentlyContinue
@@ -5756,12 +5761,16 @@ function Get-ExakitMarketplaceAddonDescription {
     return "Details: exakit help $Id"
 }
 
-# Get-ExakitAboutCacheLines <id> - the cached lines, trimmed; none when there is no cache.
+# Get-ExakitAboutCacheLines <id> - the cached lines, trimmed; none when there is no cache, or it is not this add-on's.
 function Get-ExakitAboutCacheLines {
     param([string]$Id)
     $cache = Join-Path (Get-ExakitAboutCacheDir) "$Id.txt"
     if (-not (Test-Path $cache)) { return @() }
-    try { $lines = @(Get-Content -Path $cache -Encoding UTF8 -TotalCount 4 | ForEach-Object { ("" + $_).Trim() }) } catch { return @() }
+    try { $lines = @(Get-Content -Path $cache -Encoding UTF8 -TotalCount 5 | ForEach-Object { ("" + $_).Trim() }) } catch { return @() }
+    # Keyed by add-on id: lines fetched from another repository than the catalog's now - a kit update repointed the
+    # add-on - or from before line 5 was written are not this add-on's (audit DAY-05). Twin of _exakit_about_cache_matches.
+    $repo = Get-ExakitAddonRepo $Id
+    if (-not $repo -or $lines.Count -lt 5 -or $lines[4] -cne $repo) { return @() }
     # The About is cleaned again on the way out: the cache is a file anyone could have written, not only the
     # fetch that sanitised it (audit SEC-18). The name and link are held to their shapes where they are read.
     if ($lines.Count -ge 1) { $lines[0] = Convert-ExakitAboutText $lines[0] }

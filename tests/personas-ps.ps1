@@ -159,8 +159,10 @@ try {
     $aboutDir = Get-ExakitAboutCacheDir
     New-Item -ItemType Directory -Force -Path $aboutDir | Out-Null
     $esc = [string][char]27
-    Set-Content -Path (Join-Path $aboutDir "dash-server.txt") -Value @("planted$esc[2J text", "name", "https://github.com/a/b", "false") -Encoding UTF8
+    Set-Content -Path (Join-Path $aboutDir "dash-server.txt") -Value @("planted$esc[2J text", "name", "https://github.com/a/b", "false", (Get-ExakitAddonRepo "dash-server")) -Encoding UTF8
     Check "a cached About is cleaned again when it is read" "planted text" (Get-ExakitMarketplaceAddonDescription "dash-server")
+    Set-Content -Path (Join-Path $aboutDir "dash-server.txt") -Value @("Old repo About", "old-name", "https://github.com/someone/old-name", "false", "someone/old-name") -Encoding UTF8
+    Check "a cache from the add-on's previous repository is not shown (DAY-05)" $false ((Get-ExakitMarketplaceAddonDescription "dash-server") -like "Old repo About*")
 
     Write-Host "exakit persona add with no id: the persona question, then the newly ticked:"
     $dispatch = Get-Content -Raw (Join-Path $repo "setup/exakit.ps1")

@@ -293,8 +293,8 @@ check "sanitiser strips C1 controls and bidi overrides too (SEC-10)" "Safe [31mr
     "$(printf 'Safe\302\233[31mred \342\200\256evil\342\201\247 text ok' | _exakit_about_sanitise)"
 _sec18_home="$(mktemp -d)"
 _sec18_out="$( (EXAKIT_ABOUT_CACHE_DIR="$_sec18_home"; mkdir -p "$_sec18_home"
-    printf 'planted\033[2J\033]8;;http://evil.example\033\\link\033]8;;\033\\ text\nname\nhttps://github.com/a/b\nfalse\n' \
-        > "$(_exakit_about_cache_path dash-server)"
+    printf 'planted\033[2J\033]8;;http://evil.example\033\\link\033]8;;\033\\ text\nname\nhttps://github.com/a/b\nfalse\n%s\n' \
+        "$(_exakit_addon_repo dash-server)" > "$(_exakit_about_cache_path dash-server)"
     exakit_marketplace_addon_description dash-server; _exakit_marketplace_addon_about_offline dash-server) 2>&1)"
 check "a cached About is cleaned again when it is read (SEC-18)" "plantedlink text|plantedlink text" \
     "$(printf '%s' "$_sec18_out" | tr '\n' '|' | sed 's/|$//')"
@@ -331,7 +331,7 @@ check "with no About and no document it points at help" "Details: exakit help gh
     "$(exakit_marketplace_addon_description ghost)"
 
 mkdir -p "$EXAKIT_ABOUT_CACHE_DIR"
-printf 'Cached About line\n' > "$(_exakit_about_cache_path dash-server)"
+printf 'Cached About line\n\n\n\n%s\n' "$(_exakit_addon_repo dash-server)" > "$(_exakit_about_cache_path dash-server)"
 check "a fresh cache answers with no lookup" "Cached About line" \
     "$(exakit_marketplace_addon_description dash-server)"
 
@@ -353,15 +353,23 @@ check "a screen makes no lookup, however old the cache" "Cached About line|no at
 # What the last lookup saw wins over the catalog: a renamed repository shows its
 # new name and link; an archived one says so. A cache line that is not the plain
 # shape is ignored rather than shown.
-printf 'Renamed About\nnew-scheduler\nhttps://github.com/exasol-labs/new-scheduler\ntrue\n' \
-    > "$(_exakit_about_cache_path exasol-scheduler)"
+printf 'Renamed About\nnew-scheduler\nhttps://github.com/exasol-labs/new-scheduler\ntrue\n%s\n' \
+    "$(_exakit_addon_repo exasol-scheduler)" > "$(_exakit_about_cache_path exasol-scheduler)"
 check "a renamed repository shows its new name and link" "new-scheduler (exasol-scheduler)|https://github.com/exasol-labs/new-scheduler" \
     "$(exakit_marketplace_addon_label exasol-scheduler)|$(exakit_marketplace_addon_url exasol-scheduler)"
 check "an archived repository says so" "Renamed About (archived on GitHub)" \
     "$(exakit_marketplace_addon_description exasol-scheduler)"
-printf 'About\nbad name;rm\nhttps://evil.example/x\nfalse\n' > "$(_exakit_about_cache_path exasol-scheduler)"
+printf 'About\nbad name;rm\nhttps://evil.example/x\nfalse\n%s\n' "$(_exakit_addon_repo exasol-scheduler)" > "$(_exakit_about_cache_path exasol-scheduler)"
 check "a tampered cache falls back to the catalog's name and link" "exasol-scheduler|https://github.com/exasol-labs/exasol-scheduler" \
     "$(exakit_marketplace_addon_label exasol-scheduler)|$(exakit_marketplace_addon_url exasol-scheduler)"
+# DAY-05: the cache is keyed by id; lines asked of another repository - a kit
+# update repointed the add-on - or written before line 5 are not this add-on's.
+printf 'Old repo About\nold-name\nhttps://github.com/someone/old-name\nfalse\nsomeone/old-name\n' > "$(_exakit_about_cache_path exasol-scheduler)"
+check "a cache from the add-on's previous repository is not shown (DAY-05)" "exasol-scheduler|https://github.com/exasol-labs/exasol-scheduler" \
+    "$(exakit_marketplace_addon_label exasol-scheduler)|$(exakit_marketplace_addon_url exasol-scheduler)"
+lacks "...nor its About" "Old repo About" "$(exakit_marketplace_addon_description exasol-scheduler)"
+printf 'Four-line About\nexasol-scheduler\nhttps://github.com/exasol-labs/exasol-scheduler\nfalse\n' > "$(_exakit_about_cache_path exasol-scheduler)"
+lacks "...nor a cache from before line 5 named its repository" "Four-line About" "$(exakit_marketplace_addon_description exasol-scheduler)"
 rm -f "$(_exakit_about_cache_path exasol-scheduler)"
 
 # GitHub out of reach: the round stops at the first request that gets no answer,
