@@ -1152,12 +1152,20 @@ function Fail([string]$Msg) {
         Write-ExakitFailureNote $Msg
     }
     # Rendered as a small "card": prominent cross header, then a dim gutter
-    # line to the log - the same shape as ui.sh's die().
-    Write-Host ""
-    if ($script:UiFancy) {
+    # line to the log - the same shape as ui.sh's die(). When stdout is not the
+    # console (an agent reading --json, a pipe) the card goes to stderr, as die()
+    # does: Write-Host reaches a captured stdout, which put prose where a JSON
+    # object belongs (audit AGT-11).
+    if ([Console]::IsOutputRedirected) {
+        [Console]::Error.WriteLine("")
+        [Console]::Error.WriteLine(("  {0} {1}" -f $script:UiCross, $Msg))
+        if ($script:LogFile) { [Console]::Error.WriteLine(("    | Log: {0}" -f $script:LogFile)) }
+    } elseif ($script:UiFancy) {
+        Write-Host ""
         Write-Host ("  {0}{1} {2}{3}{4}" -f $script:UiErr, $script:UiCross, $script:UiBold, $Msg, $script:UiReset)
         if ($script:LogFile) { Write-Host ("    {0}{1} Log: {2}{3}" -f $script:UiDim, $script:UiVB, $script:LogFile, $script:UiReset) }
     } else {
+        Write-Host ""
         Write-Host ("  {0} {1}" -f $script:UiCross, $Msg) -ForegroundColor Red
         if ($script:LogFile) { Write-Host ("    | Log: {0}" -f $script:LogFile) }
     }
