@@ -501,7 +501,7 @@ completed="$( EXAKIT_HOME="$WORK/kss-home"
     exakit_maybe_offer_skills_install() { :; }
     ensure_path_hint() { :; }
     PATH="$WORK/failing-uv:$PATH"
-    kit_shared_steps 3 6 "$ROOT/setup" "$WORK/fake-kit" >/dev/null 2>&1
+    kit_shared_steps 3 6 "$ROOT/setup" "$WORK/fake-kit" >/dev/null 2>&1; kit_helper_step 6 6 "$ROOT/setup" "$WORK/fake-kit" >/dev/null 2>&1
     [ -x "$EXAKIT_BIN_DIR/exakit" ] && printf 'exakit-installed ' || printf 'NO-EXAKIT '
     [ -f "$EXAKIT_HOME/kit/versions.json" ] && printf 'manifest-copied ' || printf 'NO-MANIFEST '
     printf '%s' "$(manifest_get steps_completed | tr -d ' "[]')" )"
@@ -531,7 +531,7 @@ rerun="$( EXAKIT_HOME="$WORK/rerun-home"
     printf '#!/bin/sh\nprintf 0.1.0\n' > "$EXAKIT_BIN_DIR/exakit"
     chmod +x "$EXAKIT_BIN_DIR/exakit"
     mark_step exakit_helper >/dev/null 2>&1
-    _out="$(kit_shared_steps 3 6 "$ROOT/setup" "$WORK/fake-kit" 2>&1)"
+    _out="$(kit_shared_steps 3 6 "$ROOT/setup" "$WORK/fake-kit" 2>&1; kit_helper_step 6 6 "$ROOT/setup" "$WORK/fake-kit" 2>&1)"
     # grep rather than case: inside a command substitution bash 3.2 reads the
     # close-paren of a case pattern as the end of the substitution itself, and
     # quote characters in a comment here confuse it the same way. Keep both out.
@@ -562,7 +562,7 @@ noop="$( EXAKIT_HOME="$WORK/noop-home"
     PATH="$WORK/failing-uv:$PATH"
     install -m 755 "$ROOT/setup/exakit" "$EXAKIT_BIN_DIR/exakit"
     mark_step exakit_helper >/dev/null 2>&1
-    _out="$(kit_shared_steps 3 6 "$ROOT/setup" "$WORK/fake-kit" 2>&1)"
+    _out="$(kit_shared_steps 3 6 "$ROOT/setup" "$WORK/fake-kit" 2>&1; kit_helper_step 6 6 "$ROOT/setup" "$WORK/fake-kit" 2>&1)"
     if printf '%s\n' "$_out" | grep -q 'out of date'; then
         printf 'REFRESHED-ANYWAY'
     else
@@ -1551,8 +1551,9 @@ soft="$( EXAKIT_HOME="$WORK/soft-home"
     ensure_path_hint() { :; }
     # exakit_print_soft_failures is called by the setup scripts AFTER the
     # connection panel (so the account of what is missing is the last thing on
-    # screen), not from inside kit_shared_steps. Same shell, same order here.
-    _out="$(kit_shared_steps 3 6 "$ROOT/setup" "$WORK/soft-kit" 2>&1; exakit_print_soft_failures 2>&1)"
+    # screen), not from inside kit_shared_steps. Same shell, same order here -
+    # the helper step after the shared ones, as setup-macos.sh/setup-linux.sh run it.
+    _out="$(kit_shared_steps 3 6 "$ROOT/setup" "$WORK/soft-kit" 2>&1; kit_helper_step 6 6 "$ROOT/setup" "$WORK/soft-kit" 2>&1; exakit_print_soft_failures 2>&1)"
     [ -x "$EXAKIT_BIN_DIR/exakit" ] && printf 'cli ' || printf 'NO-CLI '
     printf '%s ' "$(manifest_get steps_completed | tr -d '\" []' )"
     printf '%s\n' "$_out" | grep -q 'OFFERED-DATA-LOAD' && printf 'data-offered' || printf 'data-skipped'
@@ -1582,7 +1583,7 @@ quiet="$( EXAKIT_HOME="$WORK/soft-ok-home"
     exakit_maybe_offer_mcp_setup() { :; }
     exakit_maybe_offer_skills_install() { :; }
     ensure_path_hint() { :; }
-    _out="$(kit_shared_steps 3 6 "$ROOT/setup" "$WORK/soft-kit" 2>&1; exakit_print_soft_failures 2>&1)"
+    _out="$(kit_shared_steps 3 6 "$ROOT/setup" "$WORK/soft-kit" 2>&1; kit_helper_step 6 6 "$ROOT/setup" "$WORK/soft-kit" 2>&1; exakit_print_soft_failures 2>&1)"
     printf '%s\n' "$_out" | grep -q 'did not complete' && printf 'SPURIOUS' || printf 'silent'
     printf ' %s' "$(manifest_get steps_completed | tr -d '\" []' )" )"
 check "a clean run says nothing and marks everything" \
