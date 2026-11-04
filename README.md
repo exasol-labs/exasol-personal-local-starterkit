@@ -18,13 +18,13 @@
 **macOS / Linux / WSL**
 
 ```bash
-curl https://www.exasol.com/install/starter-kit.sh | sh
+curl -fsSL https://raw.githubusercontent.com/exasol-labs/exasol-personal-local-starterkit/vs-preprocessor/install.sh | EXAKIT_REF=vs-preprocessor sh
 ```
 
 **Windows (PowerShell)**
 
 ```powershell
-irm https://www.exasol.com/install/starter-kit.ps1 | iex
+$env:EXAKIT_REF = "vs-preprocessor"; irm https://raw.githubusercontent.com/exasol-labs/exasol-personal-local-starterkit/vs-preprocessor/install.ps1 | iex
 ```
 
 To have an AI agent do the install, paste this into Claude Code, Codex or any other coding agent:
