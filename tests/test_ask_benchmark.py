@@ -60,6 +60,29 @@ class BenchmarkTest(unittest.TestCase):
         self.assertIn(item["error_type"], bench.ACCESS_ERRORS)
         self.assertNotIn("sk-ant", str(item))
 
+    def test_a_refused_request_is_not_scored_and_says_why_without_secrets(self):
+        # Claude Opus 4.7+ refuses temperature with HTTP 400: twenty such refusals were reported as 0/20 matched.
+        BadRequestError = type("BadRequestError", (Exception,), {})
+        draft = mock.Mock(side_effect=BadRequestError("Error code: 400 - temperature not supported; key sk-ant-api03-XyZ987"))
+        item = bench.evaluate_question(object(), "Question", "SELECT 1",
+                                       execute=mock.Mock(return_value={"columns": ["N"], "rows": [[1]]}),
+                                       draft=draft, description="Schema only")
+        self.assertIn(item["error_type"], bench.ACCESS_ERRORS)
+        self.assertIn("temperature not supported", item["_provider_said"])
+        self.assertNotIn("sk-ant", item["_provider_said"])
+
+
+class SamplingTest(unittest.TestCase):
+    def test_no_temperature_unless_asked(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "notebook/package"))
+        from exakit_nb.model_config import sampling
+
+        self.assertEqual({}, sampling({}))
+        self.assertEqual({"temperature": 0.0}, sampling({"EXAKIT_MODEL_TEMPERATURE": "0"}))
+        for bad in ("hot", "-1", "3"):
+            with self.subTest(bad), self.assertRaises(ValueError):
+                sampling({"EXAKIT_MODEL_TEMPERATURE": bad})
+
 
 if __name__ == "__main__":
     unittest.main()

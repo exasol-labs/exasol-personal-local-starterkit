@@ -16,6 +16,7 @@ MODEL_ID = "EXAKIT_MODEL_ID"
 BASE_URL = "EXAKIT_PROVIDER_BASE_URL"
 API_KEY = "EXAKIT_PROVIDER_API_KEY"
 HEADERS = "EXAKIT_PROVIDER_HEADERS"
+TEMPERATURE = "EXAKIT_MODEL_TEMPERATURE"
 _HEADER_NAME = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 _AUTH_HEADERS = {"authorization", "api-key", "x-api-key", "host"}
 
@@ -78,6 +79,23 @@ def resolve(environ: Mapping[str, str] | None = None) -> ModelConfig | None:
         raise ValueError(f"{HEADERS} must be a JSON object of valid header names and single-line string values; "
                          f"put authentication in {API_KEY}.") from None
     return ModelConfig(model, base, key, headers)
+
+
+def sampling(environ: Mapping[str, str] | None = None) -> dict:
+    """Sampling settings to send, only when asked for. Claude Opus 4.7 and later refuse `temperature` (HTTP 400),
+    and on the newest API version every model does, so the default sends none; a local model that should answer
+    the same way twice takes EXAKIT_MODEL_TEMPERATURE=0."""
+    env = os.environ if environ is None else environ
+    raw = env.get(TEMPERATURE, "").strip()
+    if not raw:
+        return {}
+    try:
+        value = float(raw)
+    except ValueError:
+        value = -1.0
+    if not 0 <= value <= 2:
+        raise ValueError(f"{TEMPERATURE} must be a number from 0 to 2, or unset to send none.")
+    return {"temperature": value}
 
 
 def create_client(config: ModelConfig, *, traced: bool = False):

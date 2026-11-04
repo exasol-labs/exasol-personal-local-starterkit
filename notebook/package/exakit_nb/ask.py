@@ -188,7 +188,9 @@ def ask(dataset: Any, question: str, proposed_sql: str | None = None, *, table_d
         client, model = endpoint
         if request_timeout is not None:
             client = client.with_options(timeout=request_timeout, max_retries=0)
-        options = {}
+        from .model_config import sampling
+
+        options = dict(sampling())  # no temperature unless EXAKIT_MODEL_TEMPERATURE asks for one
         if max_output_tokens is not None:
             options["max_tokens"] = max_output_tokens
         roles = {role: column for role, column in dataset.roles()}
@@ -199,7 +201,7 @@ def ask(dataset: Any, question: str, proposed_sql: str | None = None, *, table_d
             prompt["table_description"] = table_description
         try:
             answer = client.chat.completions.create(
-                model=model, temperature=0,
+                model=model,
                 messages=[{"role": "system", "content": "Return only one JSON object with sql, assumptions (array) and doubts (array). No Markdown. Use fully qualified Exasol table names. Never execute SQL."},
                           {"role": "user", "content": json.dumps(prompt)}], **options)
         finally:

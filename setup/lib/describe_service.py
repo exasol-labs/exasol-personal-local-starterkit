@@ -403,9 +403,9 @@ def model_notes(doc: dict[str, Any], profile: dict[str, Any]) -> dict[str, str] 
         folder = kit_root() / "notebook" / "package"
         if folder.is_dir() and str(folder) not in sys.path:
             sys.path.insert(0, str(folder))
-        from exakit_nb.model_config import create_client, resolve
+        from exakit_nb.model_config import create_client, resolve, sampling
         config = resolve()
-        answer = create_client(config).chat.completions.create(model=config.model_id, temperature=0,
+        answer = create_client(config).chat.completions.create(model=config.model_id, **sampling(),
                                                               messages=[{"role": "user", "content": prompt}])
         given = json.loads(answer.choices[0].message.content or "")
         allowed = {f["column"] for f in facts}

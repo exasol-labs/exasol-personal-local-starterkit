@@ -12,7 +12,9 @@ from decimal import Decimal
 import hashlib
 from functools import partial
 import json
+import os
 from pathlib import Path
+import re
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -48,9 +50,23 @@ def canonical_result(result: dict) -> tuple[int, Counter]:
 
 
 # The provider refused the request itself, not the SQL: no question can be scored, so the model is not scored at all.
+# Anything shaped like a credential: provider and GitHub key prefixes, and any long token-like run.
+SECRET_SHAPES = re.compile(r"\b(?:sk|pk|ghp|gho|ghs|github_pat|xox[a-z])[-_][A-Za-z0-9_-]{3,}|[A-Za-z0-9_-]{32,}")
+
+
+def scrub(text: str) -> str:
+    """A provider's message with the configured key and anything key-shaped taken out: it may echo either."""
+    key = os.environ.get("EXAKIT_PROVIDER_API_KEY", "").strip()
+    if key:
+        text = text.replace(key, "[redacted]")
+    return SECRET_SHAPES.sub("[redacted]", text)
+
+
 ACCESS_ERRORS = {"AuthenticationError": "the provider rejected the API key (EXAKIT_PROVIDER_API_KEY)",
                  "PermissionDeniedError": "the API key may not use this model or endpoint",
-                 "NotFoundError": "the provider does not know this model ID or base URL"}
+                 "NotFoundError": "the provider does not know this model ID or base URL",
+                 "BadRequestError": "the provider refused the request as sent (HTTP 400): a setting this model "
+                                    "does not take (EXAKIT_MODEL_TEMPERATURE, the token limit) or the wrong base URL"}
 
 
 def evaluate_question(dataset, question: str, reference: str, *, execute, draft, description: str) -> dict:
@@ -72,8 +88,11 @@ def evaluate_question(dataset, question: str, reference: str, *, execute, draft,
         item.update(matched=expected_rows == canonical_result(actual), reference_rows=len(expected["rows"]),
                     actual_rows=len(actual["rows"]))
     except Exception as err:
-        # Engine/HTTP exception strings can contain connection details. Keep only classification.
+        # Engine/HTTP exception strings can contain connection details. Keep only classification in the
+        # results; the model provider's own words (draft stage only) go to the terminal, never the file.
         item.update(error_stage=stage, error_type=type(err).__name__)
+        if stage == "draft":
+            item["_provider_said"] = scrub(" ".join(str(err).split()))[:300]
     return item
 
 
@@ -122,9 +141,12 @@ def main(argv=None) -> int:
                     results.append(evaluate_question(ds, question, reference, execute=ask._execute_mcp,
                                                     draft=partial(nb.ask, request_timeout=args.timeout, max_output_tokens=args.max_output_tokens), description=description))
                     refused = ACCESS_ERRORS.get(results[-1].get("error_type")) if results[-1].get("error_stage") == "draft" else None
+                    said = results[-1].pop("_provider_said", "")
                     if refused:
                         scored["not_scored"] = f"{results[-1]['error_type']}: {refused}"
                         print(f"{model}: not scored - {scored['not_scored']}", file=sys.stderr, flush=True)
+                        if said:
+                            print(f"  the provider said: {said}", file=sys.stderr, flush=True)
                         break
                 if scored.get("not_scored"):
                     break
