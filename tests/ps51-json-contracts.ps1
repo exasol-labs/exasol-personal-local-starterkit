@@ -74,6 +74,14 @@ foreach ($case in @(
     }
 }
 
+$bareHome = Join-Path ([System.IO.Path]::GetTempPath()) ("exakit-ps51-bare-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Force -Path $bareHome | Out-Null
+$env:EXAKIT_HOME = $bareHome
+foreach ($q in @("status", "version", "info", "skills")) { Run-Cli @($q, "--json") | Out-Null }
+$env:EXAKIT_HOME = $kitHome
+Check "the state queries write nothing into the kit home (audit AGT-14)" (@(Get-ChildItem -Force $bareHome).Count -eq 0) "$(Get-ChildItem -Force -Name $bareHome)"
+Remove-Item -Recurse -Force $bareHome -ErrorAction SilentlyContinue
+
 # The commands that also write answer a machine with no kit the same way, and
 # refuse a wrong persona as bad input, before anything is fetched (AGT-05/06/09).
 foreach ($case in @(
