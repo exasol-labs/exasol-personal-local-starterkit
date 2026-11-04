@@ -143,5 +143,26 @@ class ModelProposalTest(unittest.TestCase):
                 make_proposal(Descriptor(), "How many?")
 
 
+    def test_the_model_is_told_the_whole_approved_descriptor(self):
+        ds = Descriptor()
+        ds.descriptor = types.SimpleNamespace(grain="one row per post", columns={
+            "CATEGORY": {"role": "category", "confidence": "high", "evidence": "6 distinct"},
+            "COUNTRY": {"role": "category", "confidence": "high", "evidence": "7 distinct", "note": "where the author is"},
+            "EMAIL": {"role": "identifier", "confidence": "high", "evidence": "a@b.example, 99% of rows", "sensitive": True}})
+        client = mock.Mock()
+        client.chat.completions.create.return_value.choices = [types.SimpleNamespace(message=types.SimpleNamespace(
+            content='{"sql":"SELECT COUNTRY, COUNT(*) FROM STARTER_KIT.SAMPLE GROUP BY 1", "assumptions":[], "doubts":[]}'))]
+        with mock.patch("exakit_nb.model_client", return_value=(client, "local")):
+            make_proposal(ds, "Posts by country?")
+        sent = json.loads(client.chat.completions.create.call_args.kwargs["messages"][1]["content"])
+        self.assertEqual("one row per post", sent["grain"])
+        self.assertEqual("sample v1 (approved)", sent["descriptor"])
+        self.assertEqual({"category": "CATEGORY"}, sent["slots"])
+        self.assertEqual({"role": "category", "evidence": "7 distinct", "note": "where the author is"}, sent["columns"]["COUNTRY"],
+                         "a column outside the slots is there too")
+        self.assertNotIn("evidence", sent["columns"]["EMAIL"], "a sensitive column's evidence is never sent")
+        self.assertIn("never select", sent["columns"]["EMAIL"]["sensitive"])
+        self.assertEqual("Posts by country?", sent["question"])
+
 if __name__ == "__main__":
     unittest.main()

@@ -167,6 +167,29 @@ class Proposal:
         return frame
 
 
+def described(dataset: Any) -> dict[str, Any]:
+    """What the model is told about the data: the approved descriptor - the table, what one row is, the version, the
+    slots, and every column with its role, the evidence that chose it and its note. A sensitive column is named with
+    its role only, and the model is told never to select its values. The same approved version the EXAKIT_SEMANTIC
+    view carries, so the notebook and the AI clients over MCP answer from one meaning."""
+    descriptor = getattr(dataset, "descriptor", None)
+    about: dict[str, Any] = {"table": dataset.fact_table,
+                             "descriptor": f"{dataset.id} v{dataset.version} (approved)",
+                             "slots": {role: column for role, column in dataset.roles()}}
+    grain = getattr(descriptor, "grain", None)
+    if grain:
+        about["grain"] = grain
+    columns = {}
+    for name, entry in (getattr(descriptor, "columns", None) or {}).items():
+        if entry.get("sensitive"):
+            columns[name] = {"role": entry.get("role"), "sensitive": "personal data: never select, group or filter its values"}
+        else:
+            columns[name] = {key: entry[key] for key in ("role", "evidence", "note") if entry.get(key)}
+    if columns:
+        about["columns"] = columns
+    return about
+
+
 def ask(dataset: Any, question: str, proposed_sql: str | None = None, *, table_description: str | None = None,
         request_timeout: float | None = None, max_output_tokens: int | None = None) -> Proposal:
     """Draft SQL from roles and the user's opted-in model endpoint; ``proposed_sql`` supports manual drafting."""
@@ -193,10 +216,11 @@ def ask(dataset: Any, question: str, proposed_sql: str | None = None, *, table_d
         options = dict(sampling())  # no temperature unless EXAKIT_MODEL_TEMPERATURE asks for one
         if max_output_tokens is not None:
             options["max_tokens"] = max_output_tokens
-        roles = {role: column for role, column in dataset.roles()}
-        prompt = {"table": dataset.fact_table, "roles": roles, "question": question,
-                  "rules": "Return one read-only Exasol SELECT query and JSON keys sql, assumptions, doubts. "
-                           "Use only tables and columns from the descriptor or supplied schema description. Use fully qualified names. Do not include row data."}
+        prompt = {**described(dataset), "question": question,
+                  "rules": "Return one read-only Exasol SELECT query and JSON keys sql, assumptions, doubts. Query the "
+                           "table named above with its fully qualified name. Use only its columns listed above (or in "
+                           "the supplied schema description); the slots name the ones the question most likely means. "
+                           "A flag's evidence gives its values. Do not include row data."}
         if table_description:
             prompt["table_description"] = table_description
         try:
