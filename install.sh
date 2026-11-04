@@ -165,6 +165,49 @@ main() {
         printf '\n  Exasol Personal Local Starter Kit\n\n'
     }
 
+    # render_dry_run_plan — what EXAKIT_DRY_RUN=1 promises: the plan, not only
+    # the banner (audit MAC-07). Where it goes, the steps, and every choice the
+    # run would make: the ones you set, the persona's for the rest (asked of the
+    # kit's own persona service when a Python 3 is there), and that anything
+    # still open is asked on a terminal or takes its default without one.
+    render_dry_run_plan() {
+        say "The plan:"
+        printf '    %-14s %s (%s)\n' "Platform" "$platform" "$arch"
+        printf '    %-14s %s\n' "Database" "$target"
+        printf '    %-14s %s\n' "Kit home" "$EXAKIT_HOME"
+        printf '    %-14s %s\n' "Steps" "1 Exasol launcher, 2 the local database, 3 exapump, 4 AI bridge (MCP),"
+        printf '    %-14s %s\n' "" "5 pyexasol, then your persona's data, 6 the exakit command"
+        _plan_answers=""
+        if [ -n "${_personas:-}" ] && command -v python3 >/dev/null 2>&1; then
+            _plan_answers="$(python3 "$kit_dir/setup/lib/persona_service.py" "$kit_dir" answers "$_personas" 2>/dev/null)"
+        fi
+        _plan_shown=0
+        for _plan_var in EXAKIT_DATASETS EXAKIT_LOAD_SAMPLE EXAKIT_MCP_CLIENTS EXAKIT_SKIP_MCP EXAKIT_MARKETPLACE_ADDONS EXAKIT_NOTEBOOK_FRONTENDS; do
+            eval "_plan_val=\${$_plan_var:-}"
+            _plan_from="yours"
+            if [ -z "$_plan_val" ]; then
+                _plan_val="$(printf '%s\n' "$_plan_answers" | sed -n "s/^$_plan_var=//p" | head -1)"
+                _plan_from="the persona's"
+            fi
+            [ -n "$_plan_val" ] || continue
+            case "$_plan_var" in
+                EXAKIT_DATASETS) _plan_label="Sample data" ;;
+                EXAKIT_LOAD_SAMPLE) _plan_label="Sample data"; [ "$_plan_val" = 0 ] && _plan_val="none" ;;
+                EXAKIT_MCP_CLIENTS) _plan_label="AI clients" ;;
+                EXAKIT_SKIP_MCP) _plan_label="AI clients"; [ "$_plan_val" = 1 ] && _plan_val="skipped" ;;
+                EXAKIT_MARKETPLACE_ADDONS) _plan_label="Add-ons" ;;
+                *) _plan_label="Notebook tools" ;;
+            esac
+            printf '    %-14s %s (%s)\n' "$_plan_label" "$_plan_val" "$_plan_from"
+            _plan_shown=1
+        done
+        if [ "$_plan_shown" = 0 ]; then
+            printf '    %-14s %s\n' "Choices" "asked on a terminal; without one, each takes its default"
+        else
+            printf '    %-14s %s\n' "" "anything not listed is asked on a terminal, or takes its default without one"
+        fi
+    }
+
     # --- 1. preflight --------------------------------------------------------
     [ "$(id -u)" -ne 0 ] || fail "Please run as a regular user, not root."
     command -v curl >/dev/null 2>&1 || fail "curl is required."
@@ -369,6 +412,7 @@ main() {
     fi
 
     if [ "${EXAKIT_DRY_RUN:-0}" = "1" ]; then
+        render_dry_run_plan
         say "Dry run requested (EXAKIT_DRY_RUN=1) — nothing was installed, and nothing under $EXAKIT_HOME was changed."
         if [ "${EXAKIT_DRY_RUN_KEEP:-0}" = "1" ]; then
             _dry_dir=""

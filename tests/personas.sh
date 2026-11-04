@@ -243,6 +243,14 @@ for bad in ML-ENGINEER ../versions examples/analyst '*' 'ml-engineer ml-engineer
 done
 out="$(dry ' data-scientist , ml-engineer ')"
 contains "install.sh: spaces around the ids are fine" "Persona: data-scientist,ml-engineer" "$out"
+echo "the dry run shows the plan, not only the banner (audit MAC-07):"
+out="$(dry ml-engineer)"
+contains "install.sh: the steps" "1 Exasol launcher, 2 the local database" "$out"
+contains "install.sh: the persona's add-ons" "notebook,udf-devkit (the persona's)" "$out"
+out="$(EXAKIT_DATASETS=tpch dry ml-engineer)"
+contains "install.sh: an answer you set is yours, and wins" "tpch (yours)" "$out"
+out="$(dry '')"
+contains "install.sh: no persona, no answers: what happens to the choices" "asked on a terminal" "$out"
 out="$(dry ml-engineer)"
 contains "install.sh: a known persona is named in the plan" "Persona: ml-engineer" "$out"
 check "install.ps1: the same refusal" "yes" \
