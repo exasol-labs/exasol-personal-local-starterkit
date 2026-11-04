@@ -280,6 +280,12 @@ class NotebookPlanTest(unittest.TestCase):
         self.assertIn("missing - reinstall", rows[1]["detail"])
         # The menu offers JupyterLab and Marimo; `exakit notebook positron` still opens Positron.
         self.assertEqual(["jupyterlab", "marimo"], [row["id"] for row in rows])
+        try:
+            from ui import notebook_tools          # the screen that draws these rows must take them
+        except ImportError:                        # Textual comes from uv at the menu boundary
+            notebook_tools = None
+        if notebook_tools:
+            self.assertEqual(rows, notebook_tools({"tools": rows}))
         rows.clear()
         with patch.object(notebook_cli, "_find_jupyter", return_value=None), \
              patch.object(notebook_cli, "_positron_command", return_value=None), \

@@ -211,6 +211,17 @@ class ChoiceScreenTest(unittest.TestCase):
                 await pilot.press("escape")
         asyncio.run(check())
 
+    def test_notebook_menu_takes_jupyterlab_and_marimo_with_or_without_positron(self) -> None:
+        from model import CatalogError
+        from ui import notebook_tools
+
+        two = [{"id": "jupyterlab"}, {"id": "marimo"}]
+        self.assertEqual(two, notebook_tools({"tools": two}))
+        self.assertEqual(3, len(notebook_tools({"tools": [*two, {"id": "positron"}]})))
+        for tools in ([{"id": "jupyterlab"}], [*two, {"id": "marimo"}], [*two, {"id": "rstudio"}], "x"):
+            with self.subTest(tools=tools), self.assertRaises(CatalogError):
+                notebook_tools({"tools": tools})
+
     def test_notebook_tool_menu_keeps_disabled_positron_unselected(self) -> None:
         from ui import ChoiceApp
 

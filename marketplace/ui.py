@@ -718,6 +718,20 @@ def about(path: Path | None) -> dict[str, tuple[str, str]]:
     return found
 
 
+NOTEBOOK_TOOLS = ("jupyterlab", "marimo", "positron")
+
+
+def notebook_tools(raw: dict) -> list[dict]:
+    """The notebook menu's rows: JupyterLab and Marimo, each once; Positron only when the caller
+    offers it (it stays hidden until it is fully supported)."""
+    rows = raw.get("tools", [])
+    ids = [row.get("id") for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+    if len(ids) != len(rows) or len(set(ids)) != len(ids) \
+            or not {"jupyterlab", "marimo"} <= set(ids) <= set(NOTEBOOK_TOOLS):
+        raise CatalogError("notebook choices must list JupyterLab and Marimo once")
+    return rows
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("mode", choices=("persona", "marketplace", "notebook"))
@@ -747,12 +761,10 @@ def main() -> int:
             addons = []
         elif args.mode == "notebook":
             raw = json.loads(args.states.read_text(encoding="utf-8")) if args.states else {}
-            rows = raw.get("tools", [])
-            known = {"jupyterlab", "marimo", "positron"}
-            if not isinstance(rows, list) or {row.get("id") for row in rows} != known:
-                raise CatalogError("notebook choices must list JupyterLab, Marimo, and Positron once")
-            defaults = set(args.recorded.split(",")) if args.recorded else {"jupyterlab"}
-            if not defaults & known:
+            rows = notebook_tools(raw)
+            known = {row["id"] for row in rows}
+            defaults = (set(args.recorded.split(",")) if args.recorded else {"jupyterlab"}) & known
+            if not defaults:
                 defaults = {"jupyterlab"}
             states = {}
             addons = []
