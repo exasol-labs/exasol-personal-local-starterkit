@@ -55,6 +55,9 @@ for shell in sh dash; do                # Debian and Ubuntu run #!/bin/sh as das
 
 done
 
+sh "$WORK/exapump" --version | has_pair --security-opt label=disable
+check "SELinux labelling is off for the mounts (LNX-02)" $?
+
 grep -q 'EXAKIT_EXAPUMP_SHIM_IMAGE:-docker.io/library/ubuntu:24.04' "$ROOT/setup/lib/exapump.sh"
 check "the shim image is fully qualified" $?
 

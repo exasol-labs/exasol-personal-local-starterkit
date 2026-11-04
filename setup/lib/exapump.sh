@@ -402,7 +402,9 @@ if [ -n "${EXAPUMP_CONFIG:-}" ]; then
         *) [ -d "$_exakit_cd" ] && { _exakit_c="-v"; _exakit_cp="$_exakit_cd:$_exakit_cd"; } ;;
     esac
 fi
-exec @RUNTIME@ run --rm $_exakit_tty --network host @USERNS@ \
+# label=disable: on an SELinux host (RHEL and its rebuilds, Fedora) the mounts are unreadable to the container
+# without it; Docker and Podman accept it everywhere (audit LNX-02).
+exec @RUNTIME@ run --rm $_exakit_tty --network host --security-opt label=disable @USERNS@ \
     -u "$(id -u):$(id -g)" \
     -e HOME="$HOME" ${_exakit_e:+"$_exakit_e"} ${_exakit_ev:+"$_exakit_ev"} \
     -v "$HOME:$HOME" -v /tmp:/tmp \

@@ -249,7 +249,9 @@ def build(name: str) -> dict:
               "echo EXAKIT_STAGE=build >&2; cargo exasol-udf build /work; "
               "echo EXAKIT_STAGE=validate >&2; "
               f"cargo exasol-udf validate /work/target/release/lib{name}.so --deny-unknown-deps")
-    _run([runtime, "run", "--rm", "--platform", platform_arg, "-v", f"{project}:/work",
+    # label=disable: on an SELinux host (Fedora, RHEL and its rebuilds) a bind mount is unreadable to the container
+    # without it; Docker and Podman accept it everywhere (audit LNX-02).
+    _run([runtime, "run", "--rm", "--security-opt", "label=disable", "--platform", platform_arg, "-v", f"{project}:/work",
           "-v", f"exakit-rust-cargo-{arch}:/cargo-home", "-e", "CARGO_HOME=/cargo-home",
           "-w", "/work", IMAGE, "sh", "-c", script], cwd=project)
     if not artifact.is_file():

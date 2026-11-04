@@ -104,6 +104,7 @@ class RustUdfTests(unittest.TestCase):
         self.assertIn("linux/arm64", seen)
         self.assertIn("exakit-rust-cargo-aarch64:/cargo-home", seen)
         self.assertIn(rust.IMAGE, seen)
+        self.assertIn("label=disable", seen[seen.index("--security-opt") + 1:][:1], "an SELinux host can read the mount")
         self.assertEqual(len(record["cargo_lock_sha256"]), 64)
 
     def test_deploy_requires_validated_rust_container(self):
