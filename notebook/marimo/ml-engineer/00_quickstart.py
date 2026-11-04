@@ -214,23 +214,28 @@ def _(nb, own, sample, source):
 def _(mo):
     # Cell tags: review
     mo.md(r"""
-    ## Approve the column roles
+    ## Approve the column map
 
-    A **role** tells the notebooks how to use a column. The kit suggests roles with its reasons.
+    The column map tells the notebooks what each column is. The kit suggests it from the data and shows why. It has two parts.
 
-    | Role | Meaning | Esophageal | Banking |
+    **1. A role for every column**, one of eight: `key` (one per row), `time`, `measure` (a number to add up), `category` (a few repeated values), `flag` (yes/no), `text`, `identifier` (names or codes, never grouped) and `other`.
+
+    **2. The slots**: the one column the notebooks use for each job.
+
+    | Slot | What the notebooks use it for | Esophageal | Banking |
     |---|---|---|---|
-    | `entity` | Who or what to compare | `SOURCE_DOMAIN` | `COMPANY` |
+    | `key` | One row | `POST_ID` | `COMPLAINT_ID` |
+    | `time` | Trends, earlier and later | `CREATED_TIME` | `DATE_RECEIVED` |
+    | `text` | Words to explore | `MESSAGE` | — |
+    | `target` | The outcome to predict | `IS_NEGATIVE` | `MONETARY_RELIEF` |
     | `category` | Groups to compare | `SOCIAL_NETWORK` | `PRODUCT` |
-    | `date` | Event time | `START_DATE` | `DATE_RECEIVED` |
-    | `label` | Outcome to predict | `IS_NEGATIVE` | `MONETARY_RELIEF` |
-    | `text` | Free text | `MESSAGE` | none |
+    | `entity` | Who or what a row is about | `SOURCE_DOMAIN` | `COMPANY` |
 
-    The **label** matters most: it is what a model learns to predict.
+    The **target** matters most: the kit never guesses it, you choose it. Leave a slot as **—** when no column fits.
 
-    **Do now:** check the dropdowns, leave unrelated columns as **—**, click **Approve descriptor**, then run the next cell. Roles that are already approved need no click. Explore, Ask, Train and Share use this approved map.
+    **Do now:** check the dropdowns, click **Approve descriptor**, then run the next cell. If the map is already approved and you change nothing, no click is needed. The later notebooks use this approved map.
 
-    Plain Python: `review.approve({"COLUMN": "role", ...})`.
+    Plain Python: `review.approve({"COLUMN": "role"}, {"target": "COLUMN"})`.
     """)
     return
 
