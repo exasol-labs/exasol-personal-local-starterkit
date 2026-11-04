@@ -476,6 +476,9 @@ class ChoiceApp(App[dict | None]):
             else:
                 row.append("[ ]")
             name = CONNECTOR.get(entry["tree"], "") + entry.get("shown", entry["label"])
+            if len(name) > name_w and entry.get("shown"):
+                # Too narrow for "name (id)": the id the commands take, rather than a name cut short.
+                name = CONNECTOR.get(entry["tree"], "") + entry["label"]
             name = name if len(name) <= name_w else name[:name_w - 1] + "…"
             wrapped = textwrap.wrap(entry["desc"], col3_w) if entry["desc"] and col3_w else []
             row.append(" ")

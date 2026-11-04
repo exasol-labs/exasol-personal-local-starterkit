@@ -8,8 +8,9 @@
 # _exakit_marketplace_apply and Python-backed notebook child rows are shipping code. What is
 # faked is everything that would reach outside: the registry (notebook first,
 # so its row is a tee, then a demo add-on), the add-on states, the About text,
-# the notebook install (it records the answer and settles the tool rows), and
-# test executables used to probe JupyterLab and Positron.
+# the Python apply's event stream (from stub installs: the notebook's records
+# the answer and settles the tool rows), and test executables used to probe
+# JupyterLab and Positron.
 #
 #   NBT_JUPYTER=own|none     a JupyterLab on PATH, or none (default none)
 #   NBT_POSITRON=yes|no      a Positron on this machine (default no)
@@ -92,6 +93,28 @@ notebook_install() {
     return 0
 }
 demo_alpha_install() { printf 'demo-alpha ' >> "$W/installed"; sleep 1; return 0; }
+
+# Python owns the install now (marketplace/apply.py); the shell paints its
+# event stream onto the table. Stood in here: the same stream, from the stub
+# installs above, so the painting is the shipping code's and nothing reaches
+# a real catalog (demo-alpha is not in it).
+eval "_nbt_real_run_python() $(declare -f _exakit_marketplace_run_python | tail -n +2)"
+_exakit_marketplace_run_python() {
+    case "${2:-}" in */apply.py) ;; *) _nbt_real_run_python "$@"; return $? ;; esac
+    printf '%s\n' "${3:-}" > "$W/picked"
+    for _sp_id in $(printf '%s' "${3:-}" | tr ',' ' '); do
+        printf '@@EXAKIT|%s|installing||\n' "$_sp_id"
+        if "$(printf '%s' "$_sp_id" | tr '-' '_')_install" >/dev/null 2>&1; then
+            _sp_detail=""
+            command -v "$(printf '%s' "$_sp_id" | tr '-' '_')_summary" >/dev/null 2>&1 && \
+                _sp_detail="$("$(printf '%s' "$_sp_id" | tr '-' '_')_summary")"
+            printf '@@EXAKIT|%s|done|%s|1\n' "$_sp_id" "$_sp_detail"
+        else
+            printf '@@EXAKIT|%s|failed|stub install failed|\n' "$_sp_id"
+        fi
+    done
+    return 0
+}
 
 if [ "${NBT_STOP:-}" = menu ]; then
     _exakit_marketplace_apply() { printf '%s\n' "$1" > "$W/picked"; printf '%s\n' "${EXAKIT_NOTEBOOK_FRONTENDS:-unset}" > "$W/frontends"; }

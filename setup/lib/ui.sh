@@ -1493,6 +1493,18 @@ ui_table_frame() {
         # colour escapes, and ${#...} would count those bytes as width and pad
         # the row short by exactly the length of the escape sequence.
         _utr_plain="$_utr_conn$_utr_label"
+        # Too narrow for an add-on's "name (id)": the id the commands take,
+        # rather than a name cut short (twin of the Textual table's rule).
+        if [ "${#_utr_plain}" -gt "$UI_TABLE_NAME_W" ]; then
+            case "$_utr_label" in
+                *' ('*')')
+                    _utr_short="${_utr_label##* (}"; _utr_short="${_utr_short%)}"
+                    case "$_utr_short" in
+                        ''|*[!a-z0-9_-]*) ;;
+                        *) _utr_plain="$_utr_conn$_utr_short" ;;
+                    esac ;;
+            esac
+        fi
         [ "${#_utr_plain}" -le "$UI_TABLE_NAME_W" ] || \
             _utr_plain="${_utr_plain:0:$(( UI_TABLE_NAME_W - 1 ))}…"
         _utr_namelen=${#_utr_plain}

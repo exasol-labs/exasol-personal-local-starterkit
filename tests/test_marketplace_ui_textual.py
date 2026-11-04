@@ -164,9 +164,10 @@ class ChoiceScreenTest(unittest.TestCase):
 
         async def check() -> None:
             app = ChoiceApp("marketplace", [
-                {"id": "notebook", "label": "Notebooks", "version": "3.1.0", "about": "Notebooks on the database",
-                 "choices": (("jupyterlab", "JupyterLab"), ("marimo", "Marimo"))},
-                {"id": "dash-server", "label": "Dash", "version": "0.1.1", "disabled": True, "reason": "Installed"}],
+                # A row's label is what it shows: the repository's GitHub name, the id beside it when they differ.
+                {"id": "notebook", "label": "notebook-connector (notebook)", "version": "3.1.0",
+                 "about": "Notebooks on the database", "choices": (("jupyterlab", "JupyterLab"), ("marimo", "Marimo"))},
+                {"id": "dash-server", "label": "dash-server", "version": "0.1.1", "disabled": True, "reason": "Installed"}],
                 {"notebook"}, {"jupyterlab"})
             async with app.run_test(size=(80, 30)):
                 lines = app.render_screen(80)[0].plain.splitlines()
@@ -174,7 +175,7 @@ class ChoiceScreenTest(unittest.TestCase):
             self.assertTrue(lines[2].startswith("  ╭─ Marketplace add-ons ─"))
             self.assertTrue(lines[2].endswith("╮"))
             self.assertRegex(lines[3], r"^  │     Add-on +Version  Description +│$")
-            self.assertRegex(lines[5], r"^  │❯\[✓\] ├─ notebook +3\.1\.0 +Notebooks on the database +│$")
+            self.assertRegex(lines[5], r"^  │❯\[✓\] ├─ notebook-connector \(notebook\) +3\.1\.0 +Notebooks on the database +│$")
             self.assertRegex(lines[6], r"^  │ \[✓\] │  ├─ JupyterLab +│$")
             self.assertRegex(lines[7], r"^  │ \[ \] │  └─ Marimo +│$")
             self.assertRegex(lines[8], r"^  │     └─ dash-server +0\.1\.1 +Installed +│$")
@@ -236,8 +237,9 @@ class ChoiceScreenTest(unittest.TestCase):
         from apply import Event
 
         async def check(width: int) -> None:
-            app = ChoiceApp("marketplace", [{"id": "udf-devkit", "label": "UDF Devkit", "version": "0.1.0"},
-                                            {"id": "dash-server", "label": "Dash", "version": "0.1.1"}],
+            app = ChoiceApp("marketplace", [{"id": "udf-devkit", "label": "script-languages-release (udf-devkit)",
+                                             "version": "0.1.0"},
+                                            {"id": "dash-server", "label": "dash-server", "version": "0.1.1"}],
                             {"udf-devkit", "dash-server"}, set())
             async with app.run_test(size=(width, 24)) as pilot:
                 app.applying = True

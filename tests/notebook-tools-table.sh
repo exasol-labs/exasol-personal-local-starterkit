@@ -48,6 +48,8 @@ replay() {
 }
 # row <label> — the screen line carrying that row's label.
 row() { printf '%s\n' "$SCREEN" | grep -- "$1" | head -1; }
+# A row's Description with its continuation line: the cell folds long text.
+said() { printf '%s\n' "$SCREEN" | grep -A1 -- "$1" | head -2 | tr -s ' │|\n' '    ' | tr -s ' '; }
 # widest — the widest line on the screen, in characters.
 widest() { printf '%s\n' "$SCREEN" | python3 -c 'import sys; print(max(len(l.rstrip("\n")) for l in sys.stdin))'; }
 
@@ -69,8 +71,8 @@ else
     # The Version column starts where JupyterLab's pin does; Positron's is blank.
     _vcol="$(row '├─ JupyterLab' | python3 -c 'import sys; l=sys.stdin.read(); print(l.index(sys.argv[1]))' "$PIN_J")"
     check "Positron has no version" "" "$(row '└─ Positron' | python3 -c 'import sys; print(sys.stdin.read()[int(sys.argv[1]):int(sys.argv[1])+6].strip())' "$_vcol")"
-    has "no JupyterLab here: the kit installs one"       "not on this machine: installed into the" "$(row '├─ JupyterLab')"
-    has "no Positron here: the folder is prepared"       "not on this machine: the notebooks folder" "$(row '└─ Positron')"
+    has "no JupyterLab here: the kit installs one"       "not on this machine: installed into the" "$(said '├─ JupyterLab')"
+    has "no Positron here: the folder is prepared"       "not on this machine: the notebooks folder" "$(said '└─ Positron')"
     has "all three ticked"                               "[✓] │  ├─ Marimo"  "$SCREEN"
     has "Select All ticked"                              "[✓] Select All"    "$SCREEN"
     has "Enter keeps all three"                          "FRONTENDS=jupyterlab,marimo,positron" "$OUT"
@@ -80,7 +82,7 @@ else
     echo "the descriptions say what was found:"
     replay '\r' NBT_STOP=menu NBT_JUPYTER=own NBT_POSITRON=yes
     has "a JupyterLab on PATH is used as it is"          "is used as it is" "$SCREEN"
-    has "a Positron here is pointed at the kit's Python" "yours: pointed at the kit's Python" "$(row '└─ Positron')"
+    has "a Positron here is pointed at the kit's Python" "yours: pointed at the kit's Python" "$(said '└─ Positron')"
 
     echo "the persona closing offer shows the same children, under a corner:"
     replay '\r' NBT_STOP=menu NBT_ONLY=notebook
@@ -224,8 +226,8 @@ has "the notebook unticked alone"                  "F 6" "$C"
 echo "the twins carry the same pieces:"
 CO_PS="$(cat "$ROOT/setup/lib/exakit-common.ps1")"
 UI_PS="$(cat "$ROOT/setup/lib/ui.ps1")"
-has "the registry names the children hook"        'ChildrenFn  = "Get-NotebookTableChildren"' "$CO_PS"
-has "...and the answer hook"                       'ChildrenPickedFn = "Set-NotebookTableChildrenPicked"' "$CO_PS"
+has "the registry names the children hook"        "-NotePropertyName ChildrenFn -NotePropertyValue 'Get-NotebookTableChildren'" "$CO_PS"
+has "...and the answer hook"                       "-NotePropertyName ChildrenPickedFn -NotePropertyValue 'Set-NotebookTableChildrenPicked'" "$CO_PS"
 has "the table menu takes nested groups"           '[string[]]$Groups = @(),' "$UI_PS"
 has "...with the claim rule"                       '$gmode -eq "claim"' "$UI_PS"
 has "the checkbox menu knows it too"               '$gmode -eq "claim"' "$CO_PS"
