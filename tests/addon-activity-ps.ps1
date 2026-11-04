@@ -20,7 +20,8 @@ if (-not $frame.Contains("Downloading the Python ML container")) { throw "missin
 $lines = $frame -split "`r?`n"
 $at = 0; while (-not $lines[$at].Contains("udf-devkit")) { $at++ }
 if (-not $lines[$at - 1].Contains("Downloading the Python ML container")) { throw "phase is not directly above UDF bar" }
-if ($lines[$at - 1].IndexOf("Downloading") -ne $lines[$at].IndexOf("#")) { throw "phase is not aligned with bar" }
+# The status cell starts with the row's step, then its bar: the activity sits above that cell's start.
+if ($lines[$at - 1].IndexOf("Downloading") -ne $lines[$at].IndexOf("installing #")) { throw "activity is not aligned with the status cell" }
 Set-ExakitAddonActivity -Message "Checking packages"
 $frame = Get-ExakitTableFrame -Table $table
 if (-not $frame.Contains("Checking packages") -or $frame.Contains("Downloading the Python")) { throw "stale activity" }
