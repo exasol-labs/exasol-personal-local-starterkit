@@ -150,6 +150,18 @@ try {
     Check "...without it and without a console: the same defaults, not confirmed" "1,2|False" "$($plain -join ',')|$($script:ExakitTableConfirmed)"
     foreach ($v in @("EXAKIT_DATASETS_PRESELECT", "EXAKIT_PERSONA_ACTIVE")) { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
 
+    Write-Host "add-on About text and GitHub names (audit SEC-10, SEC-11, SEC-18):"
+    $c1 = [string][char]0x9B; $rlo = [string][char]0x202E; $fsi = [string][char]0x2068
+    Check "C1 controls and bidi overrides are stripped" "Safe [31mred evil text" (Convert-ExakitAboutText "Safe$c1[31mred $($rlo)evil$fsi text")
+    Check "a name ending in a newline is not a name" $false ("exasol`n" -match '^[A-Za-z0-9._-]+\z')
+    $common = Get-Content -Raw (Join-Path $repo "setup/lib/exakit-common.ps1")
+    Check "no owner/name or name check anchors with a bare dollar" $false $common.Contains("'^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$'")
+    $aboutDir = Get-ExakitAboutCacheDir
+    New-Item -ItemType Directory -Force -Path $aboutDir | Out-Null
+    $esc = [string][char]27
+    Set-Content -Path (Join-Path $aboutDir "dash-server.txt") -Value @("planted$esc[2J text", "name", "https://github.com/a/b", "false") -Encoding UTF8
+    Check "a cached About is cleaned again when it is read" "planted text" (Get-ExakitMarketplaceAddonDescription "dash-server")
+
     Write-Host "exakit persona add with no id: the persona question, then the newly ticked:"
     $dispatch = Get-Content -Raw (Join-Path $repo "setup/exakit.ps1")
     Check "the dispatcher sends a bare add to the menu" $true $dispatch.Contains('if ($RestArgs.Count -eq 1 -and $RestArgs[0] -eq ''add'') {')

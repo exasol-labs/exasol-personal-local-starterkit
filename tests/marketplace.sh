@@ -289,6 +289,16 @@ check "sanitiser strips CSI and control bytes" "LiveALERT dash boards second lin
     "$(printf 'Live\033[1;31mALERT\033[0m dash\tboards\nsecond\rline\a' | _exakit_about_sanitise)"
 check "sanitiser removes OSC 8 hyperlinks whole" "see this now" \
     "$(printf 'see \033]8;;http://evil.example\033\\this\033]8;;\033\\ now' | _exakit_about_sanitise)"
+check "sanitiser strips C1 controls and bidi overrides too (SEC-10)" "Safe [31mred evil text ok" \
+    "$(printf 'Safe\302\233[31mred \342\200\256evil\342\201\247 text ok' | _exakit_about_sanitise)"
+_sec18_home="$(mktemp -d)"
+_sec18_out="$( (EXAKIT_ABOUT_CACHE_DIR="$_sec18_home"; mkdir -p "$_sec18_home"
+    printf 'planted\033[2J\033]8;;http://evil.example\033\\link\033]8;;\033\\ text\nname\nhttps://github.com/a/b\nfalse\n' \
+        > "$(_exakit_about_cache_path dash-server)"
+    exakit_marketplace_addon_description dash-server; _exakit_marketplace_addon_about_offline dash-server) 2>&1)"
+check "a cached About is cleaned again when it is read (SEC-18)" "plantedlink text|plantedlink text" \
+    "$(printf '%s' "$_sec18_out" | tr '\n' '|' | sed 's/|$//')"
+rm -rf "$_sec18_home"
 check "the length ceiling trims on a word boundary" "one two" \
     "$(EXAKIT_ABOUT_MAX_LEN=9 _exakit_about_cap 'one two three')"
 
@@ -1234,7 +1244,7 @@ printf '\n== a marketplace --json row always carries version ==\n'
 # with no known version used to drop the key, so a parser had to probe for it.
 has   "the shell row carries version null when unknown"   '"version": null' "$(cat "$ROOT/setup/lib/common.sh")"
 has   "the Windows row carries version null when unknown" '$entry.version = $null' "$(cat "$ROOT/setup/lib/exakit-common.ps1")"
-has   "AGENTS.md says which keys are null when unknown"   '`version`, `repo` and `docs` are `null` when unknown' "$(cat "$ROOT/AGENTS.md")"
+has   "AGENTS.md says which keys are null when unknown"   '`version`, `repo`, `docs`, `url` and `about` are `null` when unknown' "$(cat "$ROOT/AGENTS.md")"
 
 printf '\n== a failing add-on is readable, not spliced through the table ==\n'
 

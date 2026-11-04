@@ -4452,10 +4452,19 @@ _exakit_about_cache_fresh() {
 _exakit_about_sanitise() {
     _abs_esc="$(printf '\033')"
     _abs_bel="$(printf '\007')"
+    # Also the C1 controls (U+0080-U+009F, UTF-8 C2 80..9F) and the bidi
+    # embeddings, overrides and isolates (U+202A-U+202E, U+2066-U+2069): the first
+    # are terminal controls in their own right, the second reorder what is
+    # printed after them. The PowerShell twin strips both (audit SEC-10).
+    _abs_c2="$(printf '\302')"; _abs_80="$(printf '\200')"; _abs_9f="$(printf '\237')"
+    _abs_e2="$(printf '\342')"; _abs_80b="$(printf '\200')"; _abs_81="$(printf '\201')"
     LC_ALL=C sed \
         -e "s/${_abs_esc}\[[0-9;?]*[A-Za-z]//g" \
         -e "s/${_abs_esc}]8;;[^${_abs_bel}${_abs_esc}]*${_abs_bel}//g" \
         -e "s/${_abs_esc}]8;;[^${_abs_bel}${_abs_esc}]*${_abs_esc}\\\\//g" \
+        -e "s/${_abs_c2}[${_abs_80}-${_abs_9f}]/ /g" \
+        -e "s/${_abs_e2}${_abs_80b}[$(printf '\252')-$(printf '\256')]//g" \
+        -e "s/${_abs_e2}${_abs_81}[$(printf '\246')-$(printf '\251')]//g" \
         | LC_ALL=C tr '\n\r\t' '   ' \
         | LC_ALL=C tr -d '\000-\037\177' \
         | LC_ALL=C tr -s ' ' \
@@ -4575,7 +4584,9 @@ _exakit_about_fetch() {
 exakit_marketplace_addon_description() {
     _mad_cache="$(_exakit_about_cache_path "$1")"
     if [ -f "$_mad_cache" ]; then
-        _mad_text="$(head -1 "$_mad_cache" 2>/dev/null || true)"
+        # Cleaned again on the way out: the cache is a file anyone could have
+        # written, not only the fetch that sanitised it (audit SEC-18).
+        _mad_text="$(_exakit_about_cap "$(head -1 "$_mad_cache" 2>/dev/null | _exakit_about_sanitise)")"
         if [ -n "$_mad_text" ]; then
             [ "$(sed -n 4p "$_mad_cache" 2>/dev/null)" = true ] && _mad_text="$_mad_text (archived on GitHub)"
             printf '%s\n' "$_mad_text"
@@ -4605,7 +4616,7 @@ exakit_marketplace_addon_name() {
 # _exakit_marketplace_addon_about_offline <id> — the About with no lookup: the
 # cached one at any age, else the catalog's copy; empty when neither exists.
 _exakit_marketplace_addon_about_offline() {
-    _mao_text="$(head -1 "$(_exakit_about_cache_path "$1")" 2>/dev/null || true)"
+    _mao_text="$(_exakit_about_cap "$(head -1 "$(_exakit_about_cache_path "$1")" 2>/dev/null | _exakit_about_sanitise)")"
     [ -n "$_mao_text" ] || _mao_text="$(_exakit_about_cap "$(_exakit_addon_github "$1" about 2>/dev/null | _exakit_about_sanitise)")"
     printf '%s\n' "$_mao_text"
 }

@@ -346,7 +346,7 @@ else {
             $kitSource = ""
             if ($manifestDoc.kit -and $manifestDoc.kit.source) { $kitSource = [string]$manifestDoc.kit.source }
             $kitSourceRepo = ($kitSource -split "@", 2)[0]
-            if ($kitSourceRepo -match '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$') {
+            if ($kitSourceRepo -match '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\z') {
                 $script:KitRepo = $kitSourceRepo
             }
         } catch { }
@@ -2137,10 +2137,10 @@ function Test-ExakitVersionsDoc {
     foreach ($block in $blocks) {
         if ($null -eq $block -or -not ($block -is [System.Management.Automation.PSCustomObject])) { return 1 }
         $version = Get-ManifestValue -Manifest $block -Path "version"
-        if (-not ($version -is [string]) -or $version -notmatch '^[A-Za-z0-9._+-]+$') { return 1 }
+        if (-not ($version -is [string]) -or $version -notmatch '^[A-Za-z0-9._+-]+\z') { return 1 }
         $minKit = Get-ManifestValue -Manifest $block -Path "min_kit_version"
         if ($null -ne $minKit) {
-            if (-not ($minKit -is [string]) -or $minKit -notmatch '^[A-Za-z0-9._+-]+$') { return 1 }
+            if (-not ($minKit -is [string]) -or $minKit -notmatch '^[A-Za-z0-9._+-]+\z') { return 1 }
         }
         $digests = Get-ManifestValue -Manifest $block -Path "sha256"
         if ($null -ne $digests) {
@@ -2888,7 +2888,7 @@ function Get-ExakitKitVersionAt {
     $doc = Join-Path $KitRoot "versions.json"
     if (-not (Test-Path $doc)) { return $null }
     $version = Get-ExakitVersionsValue -Path "kit.version" -DocPath $doc
-    if (-not $version -or $version -notmatch '^[A-Za-z0-9._+-]+$') { return $null }
+    if (-not $version -or $version -notmatch '^[A-Za-z0-9._+-]+\z') { return $null }
     return $version
 }
 
@@ -3827,12 +3827,12 @@ function Get-ExakitSkillsLocalVersion {
     $marker = Join-Path $root "skills\.version"
     if (Test-Path $marker) {
         $v = ("" + (Get-Content -Path $marker -TotalCount 1 -ErrorAction SilentlyContinue)).Trim()
-        if ($v -match '^[A-Za-z0-9._+-]+$') { return $v }
+        if ($v -match '^[A-Za-z0-9._+-]+\z') { return $v }
     }
     $doc = Join-Path $root "versions.json"
     if (-not (Test-Path $doc)) { return "" }
     $v = Get-ExakitVersionsValue -Path "components.skills.version" -DocPath $doc
-    if ($v -and $v -match '^[A-Za-z0-9._+-]+$') { return $v }
+    if ($v -and $v -match '^[A-Za-z0-9._+-]+\z') { return $v }
     return ""
 }
 
@@ -5244,8 +5244,8 @@ function Get-ExakitMarketplaceAddons {
         # and file names, the About into a terminal, so each is held to its plain shape. Twin of model.github_block.
         $gh = $row.github
         $ghRepo = [string]$gh.repo; $ghName = [string]$gh.name; $ghAbout = [string]$gh.about
-        if ($null -eq $gh -or $ghRepo -notmatch '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$' -or $ghRepo.Contains('..') -or
-            [string]$gh.url -cne "https://github.com/$ghRepo" -or $ghName -notmatch '^[A-Za-z0-9._-]+$' -or
+        if ($null -eq $gh -or $ghRepo -notmatch '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\z' -or $ghRepo.Contains('..') -or
+            [string]$gh.url -cne "https://github.com/$ghRepo" -or $ghName -notmatch '^[A-Za-z0-9._-]+\z' -or
             -not $ghAbout.Trim() -or $ghAbout.Length -gt 300 -or $ghAbout -match '\p{Cc}') {
             throw "Invalid marketplace definition: ${id}: github must name the add-on's repository (tools/addon_github.py)"
         }
@@ -5635,7 +5635,7 @@ function Get-ExakitAddonRepo {
     try { $addon = Get-ExakitMarketplaceAddon $Id } catch { $addon = $null }
     if (-not $addon) { return "" }
     $repo = [string]$addon.GitHubRepo
-    if ($repo -match '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$' -and -not $repo.Contains('..')) { return $repo }
+    if ($repo -match '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\z' -and -not $repo.Contains('..')) { return $repo }
     return ""
 }
 
@@ -5665,6 +5665,8 @@ function Convert-ExakitAboutText {
     $clean = [regex]::Replace($clean, "$esc\[[0-9;?]*[A-Za-z]", "")
     $clean = [regex]::Replace($clean, "$esc\]8;;[^$bel$esc]*($bel|$esc\\)", "")
     $clean = [regex]::Replace($clean, "\p{Cc}", " ")
+    # The bidi embeddings, overrides and isolates reorder what is printed after them (audit SEC-10).
+    $clean = [regex]::Replace($clean, "[\u202A-\u202E\u2066-\u2069]", "")
     $clean = [regex]::Replace($clean, "\s+", " ").Trim()
     if ($clean.Length -gt $script:ExakitAboutMaxLen) {
         $clean = $clean.Substring(0, $script:ExakitAboutMaxLen)
@@ -5708,7 +5710,7 @@ function Update-ExakitAboutCache {
     # under its new owner/name. Anything that is not plain owner/name, with the
     # matching link, is not kept.
     $full = [string]$doc.full_name; $url = [string]$doc.html_url
-    if ($full -notmatch '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$' -or $full.Contains('..') -or $url -cne "https://github.com/$full") {
+    if ($full -notmatch '^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\z' -or $full.Contains('..') -or $url -cne "https://github.com/$full") {
         $full = ""; $url = ""
     }
     if ($full -and $full -ne $repo) { Write-ExakitLog "INFO" "$repo is now $full on GitHub (refresh with tools/addon_github.py)" }
@@ -5759,7 +5761,11 @@ function Get-ExakitAboutCacheLines {
     param([string]$Id)
     $cache = Join-Path (Get-ExakitAboutCacheDir) "$Id.txt"
     if (-not (Test-Path $cache)) { return @() }
-    try { return @(Get-Content -Path $cache -Encoding UTF8 -TotalCount 4 | ForEach-Object { ("" + $_).Trim() }) } catch { return @() }
+    try { $lines = @(Get-Content -Path $cache -Encoding UTF8 -TotalCount 4 | ForEach-Object { ("" + $_).Trim() }) } catch { return @() }
+    # The About is cleaned again on the way out: the cache is a file anyone could have written, not only the
+    # fetch that sanitised it (audit SEC-18). The name and link are held to their shapes where they are read.
+    if ($lines.Count -ge 1) { $lines[0] = Convert-ExakitAboutText $lines[0] }
+    return $lines
 }
 
 # Get-ExakitMarketplaceAddonAboutOffline <id> - the About with no lookup: the cached
@@ -5781,10 +5787,10 @@ function Get-ExakitMarketplaceAddonAboutOffline {
 function Get-ExakitMarketplaceAddonName {
     param([string]$Id)
     $lines = @(Get-ExakitAboutCacheLines $Id)
-    if ($lines.Count -ge 2 -and $lines[1] -match '^[A-Za-z0-9._-]+$') { return $lines[1] }
+    if ($lines.Count -ge 2 -and $lines[1] -match '^[A-Za-z0-9._-]+\z') { return $lines[1] }
     $addon = $null
     try { $addon = Get-ExakitMarketplaceAddon $Id } catch { $addon = $null }
-    if ($addon -and ([string]$addon.GitHubName) -match '^[A-Za-z0-9._-]+$') { return [string]$addon.GitHubName }
+    if ($addon -and ([string]$addon.GitHubName) -match '^[A-Za-z0-9._-]+\z') { return [string]$addon.GitHubName }
     return $Id
 }
 
@@ -7466,7 +7472,7 @@ function Get-ExakitProbedVersion {
         $out = ("" + $out).Trim()
         if (-not $out) { return "" }
         if ($Raw) {
-            if ($out -match '^[A-Za-z0-9._+-]+$') { return $out }
+            if ($out -match '^[A-Za-z0-9._+-]+\z') { return $out }
             return ""
         }
         $match = [regex]::Match($out, '[0-9]+\.[0-9]+[0-9A-Za-z._+-]*')
