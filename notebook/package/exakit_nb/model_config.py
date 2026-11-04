@@ -6,6 +6,7 @@ interface. No configuration is inferred from an SDK's ambient provider credentia
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import ipaddress
 import json
 import os
 import re
@@ -19,6 +20,23 @@ HEADERS = "EXAKIT_PROVIDER_HEADERS"
 TEMPERATURE = "EXAKIT_MODEL_TEMPERATURE"
 _HEADER_NAME = re.compile(r"^[!#$%&'*+.^_`|~0-9A-Za-z-]+$")
 _AUTH_HEADERS = {"authorization", "api-key", "x-api-key", "host"}
+
+
+def clear_text_ok(url: str) -> bool:
+    """Whether a key may travel to this URL: always over https, and over plain http only to this machine or a
+    private network (localhost, a loopback, private or link-local address, a .local/.localhost/.internal name) -
+    a local model server. A key sent over http to anywhere else crosses networks in clear text (audit SEC-08)."""
+    parts = urlsplit(url)
+    if parts.scheme == "https":
+        return True
+    host = (parts.hostname or "").lower().rstrip(".")
+    if host == "localhost" or host.endswith((".localhost", ".local", ".internal")):
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    return address.is_loopback or address.is_private or address.is_link_local
 
 
 @dataclass(frozen=True)
@@ -68,6 +86,10 @@ def resolve(environ: Mapping[str, str] | None = None) -> ModelConfig | None:
     key = env.get(API_KEY, "").strip()
     if "\r" in key or "\n" in key:
         raise ValueError(f"{API_KEY} must be a single-line value.")
+    if key and not clear_text_ok(base):
+        raise ValueError(f"{BASE_URL} is plain http:// to {url.hostname}, which would send {API_KEY} in clear text: "
+                         "use its https:// address (plain http is for a model server on this machine or your own "
+                         "network).")
     try:
         headers = json.loads(env.get(HEADERS) or "{}")
         if not isinstance(headers, dict) or any(

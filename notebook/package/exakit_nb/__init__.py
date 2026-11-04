@@ -200,9 +200,18 @@ def trace(conn, name: str = "exakit-notebook", dataset: Dataset | None = None, s
               "notebook); the cell runs as usual.")
         yield None
         return
-    from langfuse import Langfuse, propagate_attributes
+    from .model_config import clear_text_ok
 
     settings = _langfuse_settings()
+    if not clear_text_ok(settings["base_url"]):
+        # The secret key goes with every trace: never in clear text across networks (audit SEC-08).
+        print(f"tracing is off: {LANGFUSE_VARIABLES[-1]} is plain http:// to a host outside this machine and your "
+              "network, which would send LANGFUSE_SECRET_KEY in clear text - use its https:// address. The cell runs "
+              "as usual.")
+        yield None
+        return
+    from langfuse import Langfuse, propagate_attributes
+
     if not os.environ.get(LANGFUSE_VARIABLES[-1]):
         print(f"{LANGFUSE_HOST_VARIABLE} is the SDK 3 name; Langfuse SDK 5 reads {LANGFUSE_VARIABLES[-1]} - using it as that.")
     client = Langfuse(public_key=settings["public_key"], secret_key=settings["secret_key"], base_url=settings["base_url"])

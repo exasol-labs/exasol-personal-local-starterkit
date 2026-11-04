@@ -78,6 +78,36 @@ class ModelSettingsTest(unittest.TestCase):
         self.assertIn('"api_key_configured": true', shown)
         self.assertIn("anthropic-workspace-id", shown)
 
+    def test_a_key_never_goes_over_plain_http_to_a_public_host(self):
+        """SEC-08: http is for a model server on this machine or the user's own network; elsewhere the key would
+        cross networks in clear text, so it is refused before anything is sent. Without a key nothing secret goes."""
+        local = ("http://localhost:11434/v1", "http://127.0.0.1:8000", "http://[::1]:8080", "http://192.168.1.5/v1",
+                 "http://10.0.0.3", "http://ollama.local:11434", "https://api.example.com/v1")
+        for url in local:
+            with self.subTest(url=url):
+                self.assertTrue(model_config.clear_text_ok(url))
+                self.assertIsNotNone(model_config.resolve({"EXAKIT_MODEL_ID": "m", "EXAKIT_PROVIDER_BASE_URL": url,
+                                                           "EXAKIT_PROVIDER_API_KEY": "test-key"}))
+        for url in ("http://api.example.com/v1", "http://8.8.8.8/v1"):
+            with self.subTest(url=url):
+                self.assertFalse(model_config.clear_text_ok(url))
+                with self.assertRaisesRegex(ValueError, "clear text") as raised:
+                    model_config.resolve({"EXAKIT_MODEL_ID": "m", "EXAKIT_PROVIDER_BASE_URL": url,
+                                          "EXAKIT_PROVIDER_API_KEY": "test-key"})
+                self.assertNotIn("test-key", str(raised.exception))
+                self.assertIsNotNone(model_config.resolve({"EXAKIT_MODEL_ID": "m", "EXAKIT_PROVIDER_BASE_URL": url}))
+
+    def test_tracing_stays_off_over_plain_http_to_a_public_host(self):
+        """SEC-08: the Langfuse secret key goes with every trace, so a plain-http public base URL turns tracing off
+        with the reason instead of sending it."""
+        env = {"LANGFUSE_PUBLIC_KEY": "pk-test", "LANGFUSE_SECRET_KEY": "sk-test", "LANGFUSE_BASE_URL": "http://langfuse.example.com"}
+        printed = []
+        with mock.patch.dict(os.environ, env, clear=False), mock.patch("builtins.print", side_effect=printed.append):
+            with nb.trace(None, "t") as span:
+                self.assertIsNone(span)
+        self.assertTrue(any("clear text" in line for line in printed), printed)
+        self.assertFalse(any("sk-test" in line for line in printed))
+
     def test_invalid_urls_fail_without_echoing_the_input(self):
         for base in ["file:///private/example", "https://user:secret@provider.example/v1",
                      "https://provider.example/v1?key=secret", "https://provider.example/v1#secret",

@@ -7,7 +7,7 @@ the server and a model it actually serves; model weights are not bundled.
 | Setting | Meaning |
 |---|---|
 | `EXAKIT_MODEL_ID` | Exact model identifier accepted by your provider/server |
-| `EXAKIT_PROVIDER_BASE_URL` | API base URL, including its version/prefix; not a full request URL |
+| `EXAKIT_PROVIDER_BASE_URL` | API base URL, including its version/prefix; not a full request URL. With an API key it must be `https://`, unless the server is on this machine or your own network (localhost, a private or link-local address, a `.local` name): a key is never sent in clear text across networks. The same rule keeps tracing off for a plain-`http://` `LANGFUSE_BASE_URL` elsewhere |
 | `EXAKIT_PROVIDER_API_KEY` | Provider credential; leave unset only if that server allows unauthenticated calls |
 | `EXAKIT_PROVIDER_HEADERS` | Optional JSON map of additional routing headers; omit unless required |
 | `EXAKIT_MODEL_TEMPERATURE` | Optional, 0 to 2. Unset (the default) sends no temperature: Claude Opus 4.7 and later refuse one with HTTP 400. Set `0` for a local model that should answer the same way twice |
