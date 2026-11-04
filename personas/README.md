@@ -50,9 +50,9 @@ everyone needs (the database, exapump, the AI bridge):
    same table. With General, the kit's own samples are ticked: TPC-H, energy,
    weather.
 3. *Add-ons for your personas* - only their add-ons, ticked; Enter installs
-   them, Skip backs out. The notebook add-on's tools (JupyterLab, Marimo,
-   Positron) are child rows under its row in the same table, each saying what
-   will become of it, ticked as `notebook_tools` says (all three otherwise);
+   them, Skip backs out. The notebook add-on's tools (JupyterLab and
+   Marimo) are child rows under its row in the same table, each saying what
+   will become of it, ticked as `notebook_tools` says (both otherwise);
    untick one there. Then the connection panel and "Your starter kit is
    ready to use" close the install. The rest of the marketplace is one command
    away: `exakit marketplace`. (General brings no add-ons, so with General alone

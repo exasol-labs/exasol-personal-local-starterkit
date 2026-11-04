@@ -30,6 +30,8 @@ class Addon:
     choices: tuple[tuple[str, str], ...]
     # The repository the add-on comes from, as tools/addon_github.py copied it from GitHub: repo, url, name, about.
     github: dict = field(default_factory=dict, compare=False)
+    # Choices the backend still accepts but no screen offers ("visible": false), until they are fully supported.
+    hidden_choices: tuple[str, ...] = ()
 
 
 def display_name(name: str, addon_id: str) -> str:
@@ -95,6 +97,7 @@ def load_addons(root: Path) -> list[Addon]:
             raise CatalogError(f"{addon_id}: choices must be a list")
         choice_ids: set[str] = set()
         validated_choices = []
+        hidden_choices = []
         for choice in choices:
             if not isinstance(choice, dict) or not isinstance(choice.get("id"), str) or not ID.fullmatch(choice["id"]):
                 raise CatalogError(f"{addon_id}: invalid choice")
@@ -102,10 +105,16 @@ def load_addons(root: Path) -> list[Addon]:
             if choice_id in choice_ids or not isinstance(choice_label, str) or not choice_label.strip() or any(c in choice_label for c in "\r\n|"):
                 raise CatalogError(f"{addon_id}: invalid or repeated choice {choice_id!r}")
             choice_ids.add(choice_id)
-            validated_choices.append((choice_id, choice_label))
+            shown = choice.get("visible", True)
+            if not isinstance(shown, bool):
+                raise CatalogError(f"{addon_id}: choice {choice_id!r} visible must be true or false")
+            if shown:
+                validated_choices.append((choice_id, choice_label))
+            else:
+                hidden_choices.append(choice_id)
         seen.add(addon_id)
         addons.append(Addon(addon_id, label, row["backend"], version, fallback, visible,
-                            tuple(validated_choices), github))
+                            tuple(validated_choices), github, tuple(hidden_choices)))
     return addons
 
 

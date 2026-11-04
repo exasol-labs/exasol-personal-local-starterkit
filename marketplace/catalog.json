@@ -9,7 +9,7 @@
     {"id": "notebook", "github": {"repo": "exasol/notebook-connector", "url": "https://github.com/exasol/notebook-connector", "name": "notebook-connector", "about": "Connection configuration management and additional tools for Jupyter notebooks."}, "backend": "python", "visible": true, "default_version": "3.1.0", "choices": [
       {"id": "jupyterlab", "label": "JupyterLab"},
       {"id": "marimo", "label": "Marimo"},
-      {"id": "positron", "label": "Positron (configure existing app)"}
+      {"id": "positron", "label": "Positron (configure existing app)", "visible": false}
     ]},
     {"id": "udf-devkit", "github": {"repo": "exasol/script-languages-release", "url": "https://github.com/exasol/script-languages-release", "name": "script-languages-release", "about": "Release Repository for Script Language Container for user defined functions (UDF's) that can be used in the EXASOL database."}, "backend": "python", "visible": true, "default_version": "0.1.0"}
   ]

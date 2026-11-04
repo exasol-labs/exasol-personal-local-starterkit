@@ -20,7 +20,7 @@ from runtime import AddonFailure, KitContext
 OPERATIONS = {
     "install", "installed-version", "system-present", "applicable", "applicable-reason",
     "validate", "update", "uninstall", "summary", "status", "start", "stop",
-    "url", "log-path", "autostart-command", "autostart-kind", "latest",
+    "url", "log-path", "autostart-command", "autostart-kind", "latest", "tool-outcomes",
 }
 
 

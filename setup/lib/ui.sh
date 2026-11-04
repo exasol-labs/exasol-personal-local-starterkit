@@ -1242,6 +1242,16 @@ ui_table_widths() {
             [ "$UI_TABLE_COL3_W" -ge 8 ] || { _utw_over=$(( 8 - UI_TABLE_COL3_W )); UI_TABLE_COL3_W=8; }
         fi
     fi
+    # A table that opts in (the add-ons', UI_TABLE_COL2_YIELDS=1) gives up its
+    # second column next, once a Status column runs: the versions were on the
+    # selection screen, and keeping them cut the notebook's tools on an
+    # 80-column terminal ("│  ├─ Jupyte…") - a name the reader cannot match.
+    if [ "$_utw_over" -gt 0 ] && [ "${UI_TABLE_COL2_YIELDS:-0}" = 1 ] && \
+       [ "$UI_TABLE_COL2_W" -gt 0 ] && [ "$UI_TABLE_STAT_W" -gt 0 ]; then
+        _utw_over=$(( _utw_over - UI_TABLE_COL2_W - _utw_sepw ))
+        UI_TABLE_COL2_W=0
+        [ "$_utw_over" -ge 0 ] || _utw_over=0
+    fi
     if [ "$_utw_over" -gt 0 ]; then
         UI_TABLE_NAME_W=$(( UI_TABLE_NAME_W - _utw_over ))
         if [ "$UI_TABLE_NAME_W" -lt 12 ]; then

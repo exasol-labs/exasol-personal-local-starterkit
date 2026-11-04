@@ -104,7 +104,9 @@ _exakit_marketplace_run_python() {
     printf '%s\n' "${3:-}" > "$W/picked"
     for _sp_id in $(printf '%s' "${3:-}" | tr ',' ' '); do
         printf '@@EXAKIT|%s|installing||\n' "$_sp_id"
-        if "$(printf '%s' "$_sp_id" | tr '-' '_')_install" >/dev/null 2>&1; then
+        # A tool's outcome travels as apply.py sends it: an event for <id>:<tool>.
+        exakit_addon_table_child() { printf '@@EXAKIT|%s:%s|%s|%s|\n' "$_sp_id" "$1" "$2" "${3:-}"; }
+        if "$(printf '%s' "$_sp_id" | tr '-' '_')_install" 2>/dev/null; then
             _sp_detail=""
             command -v "$(printf '%s' "$_sp_id" | tr '-' '_')_summary" >/dev/null 2>&1 && \
                 _sp_detail="$("$(printf '%s' "$_sp_id" | tr '-' '_')_summary")"

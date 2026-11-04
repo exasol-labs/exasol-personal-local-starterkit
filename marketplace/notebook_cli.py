@@ -381,7 +381,6 @@ def _menu(ctx: KitContext) -> list[str] | None:
     jstate = jserver.state(jport)
     mstate = mserver.state(mport)
     marimo = venv_executable(notebook.paths(ctx)[0], "marimo").is_file()
-    positron = _positron_command()
     recorded = str(ctx.manifest.get("components.notebook.front_ends", ""))
     installed = set(recorded.split(","))
     if jupyter and jupyter.is_relative_to(notebook.paths(ctx)[0]):
@@ -405,10 +404,7 @@ def _menu(ctx: KitContext) -> list[str] | None:
         {"id": "marimo", "label": "Marimo",
          "detail": f"running at http://127.0.0.1:{mport}/" if mstate == "running"
                    else f"starting on port {mport}" if mstate == "starting" else mdetail},
-        {"id": "positron", "label": "Positron",
-         "detail": "found - opens on the notebooks folder" if positron else "not on this machine (get it at positron.posit.co)",
-         "disabled": not bool(positron)},
-    ]
+    ]  # Positron: `exakit notebook positron` still opens it; the menu offers it once it is fully supported
     with tempfile.TemporaryDirectory(prefix="exakit-notebook-ui-") as temp:
         states = Path(temp) / "states.json"
         result = Path(temp) / "result.json"
@@ -419,7 +415,7 @@ def _menu(ctx: KitContext) -> list[str] | None:
         if run.returncode == 10:
             return None
         if run.returncode != 0 or not result.is_file():
-            raise AddonFailure("The Notebook menu could not start; choose jupyterlab, marimo, or positron explicitly")
+            raise AddonFailure("The Notebook menu could not start; choose jupyterlab or marimo explicitly")
         answer = json.loads(result.read_text(encoding="utf-8"))
         return answer["selected"]
 

@@ -103,6 +103,15 @@ def _apply_selected(ctx: KitContext, modules: dict[str, object], emit: Callable[
                 except (AddonFailure, CatalogError, OSError, ValueError):
                     pass
             emit(Event(addon_id, "done", summary, int(time.monotonic() - started)))
+            # Each of the add-on's tools on its own row (the notebook's JupyterLab, Marimo, Positron).
+            if callable(getattr(module, "tool_outcomes", None)):
+                try:
+                    _, outcomes = invoke(ctx.root, addon_id, "tool-outcomes", ctx=ctx)
+                    for tool, state, said in outcomes or []:
+                        if state in ("done", "skipped"):
+                            emit(Event(f"{addon_id}:{tool}", state, str(said)))
+                except (AddonFailure, CatalogError, OSError, ValueError, TypeError):
+                    pass
         except (AddonFailure, CatalogError, OSError, ValueError) as error:
             failed = True
             emit(Event(addon_id, "failed", str(error), int(time.monotonic() - started)))
@@ -127,6 +136,8 @@ def main(argv: list[str] | None = None) -> int:
             safe = event.detail.replace("\r", " ").replace("\n", " ").replace("|", " ")
             print(f"@@EXAKIT|{event.addon}|{event.phase}|{safe}|{event.seconds}", flush=True)
             return
+        if ":" in event.addon:
+            return  # a tool's own row is a table's; the add-on's line already says it installed
         if event.phase == "done":
             print(f"  ✓ {event.addon} installed" + (f" — {event.detail}" if event.detail else ""), flush=True)
         elif event.phase == "failed":

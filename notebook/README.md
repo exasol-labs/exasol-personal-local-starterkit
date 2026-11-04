@@ -129,7 +129,7 @@ with a fresh conversion, and runs `marimo check` on it, when uv is installed).
 `# %% [include] ../00_shared/data_paths.py <tag>`: the build puts in its place
 every cell of that file tagged `<tag>` (`tags=["connect"]`, `tags=["load"]`), so
 both quickstarts carry the very same cells and each built notebook stands on its
-own in JupyterLab, Marimo and Positron alike.
+own in JupyterLab and Marimo alike.
 
 ## Running the notebooks headless
 
@@ -262,7 +262,7 @@ JupyterLab and Marimo, when the kit installs them, are pinned in
 by `tools/notebooks.py --marimo`; `EXAKIT_NOTEBOOK_JUPYTERLAB_VERSION` and
 `EXAKIT_NOTEBOOK_MARIMO_VERSION` override a pin. Bumping a pin there is the
 whole change: `exakit update notebook` moves a front end the kit installed to
-it. Positron is the user's own and only ever configured.
+it.
 
 ## Adding a notebook
 

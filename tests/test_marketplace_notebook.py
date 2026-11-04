@@ -87,7 +87,9 @@ class NotebookPlanTest(unittest.TestCase):
     def test_legacy_skip_answers_and_jupyter_alias_still_work(self) -> None:
         with patch.dict(os.environ, {"EXAKIT_NOTEBOOK_JUPYTER": "skip",
                                   "EXAKIT_NOTEBOOK_MARIMO": "false"}, clear=True):
-            self.assertEqual(("positron",), notebook._frontends(self.ctx))
+            self.assertEqual((), notebook._frontends(self.ctx))  # Positron is no default: it is not offered yet
+        with patch.dict(os.environ, {"EXAKIT_NOTEBOOK_FRONTENDS": "positron"}, clear=True):
+            self.assertEqual(("positron",), notebook._frontends(self.ctx))  # ...and still works when named
         with patch.dict(os.environ, {"EXAKIT_NOTEBOOK_FRONTENDS": "Jupyter; Marimo"}, clear=True):
             self.assertEqual(("jupyterlab", "marimo"), notebook._frontends(self.ctx))
 
@@ -276,8 +278,8 @@ class NotebookPlanTest(unittest.TestCase):
             self.assertEqual([], notebook_cli._menu(self.ctx))
         self.assertIn("ready (yours:", rows[0]["detail"])
         self.assertIn("missing - reinstall", rows[1]["detail"])
-        self.assertTrue(rows[2]["disabled"])
-        self.assertIn("positron.posit.co", rows[2]["detail"])
+        # The menu offers JupyterLab and Marimo; `exakit notebook positron` still opens Positron.
+        self.assertEqual(["jupyterlab", "marimo"], [row["id"] for row in rows])
         rows.clear()
         with patch.object(notebook_cli, "_find_jupyter", return_value=None), \
              patch.object(notebook_cli, "_positron_command", return_value=None), \

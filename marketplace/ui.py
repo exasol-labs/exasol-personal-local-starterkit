@@ -409,9 +409,13 @@ class ChoiceApp(App[dict | None]):
         """_ui_table_cell: the bar while running, the tick and summary when done."""
         if entry["kind"] == "disabled":
             return (Text(entry["desc"], DIM), len(entry["desc"])) if stat_w else (Text(), 0)
-        state = self.status.get(entry["label"]) if entry["kind"] == "item" else None
+        key = (entry["label"] if entry["kind"] == "item"
+               else self.table_rows[entry["index"]][1] if entry["kind"] == "choice" else None)
+        state = self.status.get(key) if key else None
         if not state:
             return Text(), 0
+        if state["state"] == "skipped":
+            return Text(state["final"], DIM), len(state["final"])
         if state["state"] == "running":
             bar_w = max(8, stat_w - 7)
             at = min(100, creep(state["pct"], state["ceil"], state["secs"], now - state["t0"]))
@@ -651,6 +655,12 @@ class ChoiceApp(App[dict | None]):
 
     def _on_event(self, event) -> None:
         self.apply_events.append(event)
+        if ":" in event.addon:
+            # One of an add-on's tools (notebook:jupyterlab), settled: its own row's Status says how.
+            if event.phase in ("done", "skipped", "failed"):
+                self.status[event.addon] = {"state": event.phase, "final": event.detail}
+            self._draw()
+            return
         if event.phase in STAGES:
             floor, ceiling, seconds = STAGES[event.phase]
             previous = self.status.get(event.addon, {})
@@ -717,7 +727,7 @@ def main() -> int:
     parser.add_argument("--defaults", default="")
     parser.add_argument("--recorded", default="")
     parser.add_argument("--only", default="")
-    parser.add_argument("--frontends", default="jupyterlab,marimo,positron")
+    parser.add_argument("--frontends", default="jupyterlab,marimo")
     parser.add_argument("--apply", action="store_true", help="keep the table open while Python installs the selection")
     args = parser.parse_args()
     if args.apply and args.mode != "marketplace":

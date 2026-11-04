@@ -5088,6 +5088,7 @@ _exakit_addon_table_cleanup() {
           "$EXAKIT_ADDON_TABLE_STATE.activity" "$EXAKIT_ADDON_TABLE_STATE.activity.new"
     EXAKIT_ADDON_TABLE_STATE=""
     UI_TABLE_COL2=""
+    UI_TABLE_COL2_YIELDS=0
     UI_TABLE_COL3=""
     # The rows' ids and the child rows go with it: a later scripted run in the
     # same shell must not find this table's children and skip a question.
@@ -5251,7 +5252,7 @@ EXAKIT_MM_ABOUT
                    --states "$_mm_state" --about "$_mm_state.about" --out "$_mm_result" \
                    --defaults "${EXAKIT_MARKETPLACE_PRESELECT:-}" \
                    --only "${EXAKIT_MARKETPLACE_ONLY:-}" \
-                   --frontends "${EXAKIT_NOTEBOOK_FRONTENDS:-jupyterlab,marimo,positron}" --apply
+                   --frontends "${EXAKIT_NOTEBOOK_FRONTENDS:-jupyterlab,marimo}" --apply
                 _mm_ui_rc=$?
                 rm -f "$_mm_state" "$_mm_state.about" "$_mm_result"
                 [ "$_mm_ui_rc" -eq 0 ] && return 0
@@ -5486,6 +5487,8 @@ EXAKIT_MM_COVERED
     # Reset these headings after the menu.
     UI_TABLE_COL2="Version"
     UI_TABLE_COL3="Description"
+    # Once an install runs, the Version gives way before the names (ui_table_widths).
+    UI_TABLE_COL2_YIELDS=1
     ui_table_menu "$EXAKIT_ADDON_TABLE_STATE"
     # The Description helps the choice and goes once it is made: the install
     # shows each add-on's Version and its Status. _exakit_addon_table_cleanup
@@ -5847,6 +5850,19 @@ _exakit_marketplace_apply_python() {
         fi
         EXAKIT_ADDON_TABLE_ROW=""
         _exakit_addon_table_live && EXAKIT_ADDON_TABLE_ROW="$(_exakit_addon_table_row "$_mpa_id")"
+        case "$_mpa_id" in
+            *:*)
+                # One of the add-on's tools (notebook:jupyterlab), settled: its own
+                # row says how, the way the add-on's row says how the add-on did.
+                if [ -n "$EXAKIT_ADDON_TABLE_ROW" ] && [ "$EXAKIT_ADDON_TABLE_ROW" != 0 ]; then
+                    EXAKIT_ADDON_TABLE_CHILD_ROWS="${_mpa_id#*:}:$EXAKIT_ADDON_TABLE_ROW" \
+                        exakit_addon_table_child "${_mpa_id#*:}" "$_mpa_phase" "$_mpa_detail" || true
+                elif ! _exakit_addon_table_live; then
+                    info "${_mpa_id#*:}: $_mpa_detail"
+                fi
+                continue
+                ;;
+        esac
         case "$_mpa_phase" in
             installing)
                 _mpa_current="$_mpa_id"
@@ -12118,7 +12134,7 @@ PY
         ui_panel_line "Personas:             exakit persona list · exakit persona add <id>"
     fi
     case "$_g_addons" in
-        *,notebook,*) ui_panel_line "Notebooks:            exakit notebook (JupyterLab, Marimo, Positron)" ;;
+        *,notebook,*) ui_panel_line "Notebooks:            exakit notebook (JupyterLab, Marimo)" ;;
         *) ui_panel_line "Notebooks:            exakit marketplace notebook" ;;
     esac
     ui_panel_line "Roles of a table:     exakit describe <SCHEMA.TABLE>"

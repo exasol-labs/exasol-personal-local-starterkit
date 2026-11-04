@@ -53,7 +53,7 @@ The same model inspection and `put --yes` trust confirmation run through the Pow
 
 | Add-on | Help command | Main operation |
 |---|---|---|
-| Notebook | `exakit --help notebook` | JupyterLab, Marimo and Positron setup/open/check/stop |
+| Notebook | `exakit --help notebook` | JupyterLab and Marimo setup/open/check/stop |
 | UDF devkit | `exakit --help udf-devkit` | Python/ML/Rust containers, model files, MLflow and Rust projects |
 | Dash Server | `exakit --help dash-server` | Managed dashboard hosting and its MCP endpoint |
 | JSON Tables | `exakit --help json-tables` | JSON/NDJSON loading and native ingest parameters |
@@ -150,7 +150,7 @@ exakit marketplace exasol-vscode
 exakit info
 ```
 
-Notebook ports must be 1024–65535. Defaults are JupyterLab 8888 and Marimo 2718; a running server keeps its current port, so stop it before moving it. Positron must already be installed. Dash Server's default is 5100; read the actual URL from `exakit status`. dbt needs a project with the kit's `exasol_starter_kit` profile. Scheduler jobs are rows in `SCHED.SCHED_TASKS`; its help page shows the SQL and cron/timezone format. VS Code connection settings are entered in the editor using `exakit info`.
+Notebook ports must be 1024–65535. Defaults are JupyterLab 8888 and Marimo 2718; a running server keeps its current port, so stop it before moving it. Dash Server's default is 5100; read the actual URL from `exakit status`. dbt needs a project with the kit's `exasol_starter_kit` profile. Scheduler jobs are rows in `SCHED.SCHED_TASKS`; its help page shows the SQL and cron/timezone format. VS Code connection settings are entered in the editor using `exakit info`.
 
 An older kit-owned Scheduler with no private Python supervisor runtime repairs
 that runtime on `exakit start exasol-scheduler`. Its engine, credential and job

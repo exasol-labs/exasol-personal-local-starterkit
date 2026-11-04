@@ -35,13 +35,15 @@ class NotebookChoicesTest(unittest.TestCase):
              patch("addons.notebook._external_jupyter", return_value=None), \
              patch("notebook_cli._positron_command", return_value=None):
             rows = metadata.notebook_choices(ROOT, "notebook-rows")
-        self.assertEqual(3, len(rows))
+        # JupyterLab and Marimo: Positron is not offered until it is fully supported ("visible": false).
+        self.assertEqual(2, len(rows))
         self.assertIn("jupyterlab|JupyterLab|99.1.2|not on this machine", rows[0])
         self.assertTrue(rows[0].endswith("|1"))
         self.assertTrue(rows[1].endswith("|0"))
-        self.assertTrue(rows[2].endswith("|1"))
+        self.assertFalse(any(row.startswith("positron|") for row in rows))
 
     def test_normalization_uses_catalog_order_and_rejects_unknown(self) -> None:
+        # Positron is still accepted when named: the backend keeps it, only no screen offers it.
         self.assertEqual(["jupyterlab,positron"],
                          metadata.notebook_choices(ROOT, "notebook-normalize", "positron,jupyterlab"))
         self.assertEqual(["none"], metadata.notebook_choices(ROOT, "notebook-normalize", ""))
@@ -57,7 +59,7 @@ class NotebookChoicesTest(unittest.TestCase):
             rows = metadata.notebook_choices(ROOT, "notebook-rows")
         self.assertIn("yours (", rows[0])
         self.assertIn("jupyter-lab) is used as it is", rows[0])
-        self.assertIn("yours: pointed at the kit's Python", rows[2])
+        self.assertEqual(2, len(rows), "a Positron on this machine is still not offered")
 
     def test_bash_fallback_stops_before_menu_on_bad_frontends(self) -> None:
         script = (f'. "{ROOT / "setup/lib/common.sh"}"\n'
@@ -82,7 +84,7 @@ class NotebookChoicesTest(unittest.TestCase):
         result = subprocess.run(["pwsh", "-NoProfile", "-Command", script], env=env,
                                 text=True, capture_output=True, timeout=45, check=False)
         self.assertEqual(0, result.returncode, result.stderr)
-        self.assertIn("3|jupyterlab|marimo,positron", result.stdout)
+        self.assertIn("2|jupyterlab|marimo,positron", result.stdout)
 
 
 if __name__ == "__main__":

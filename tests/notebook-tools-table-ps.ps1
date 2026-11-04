@@ -1,6 +1,6 @@
 #!/usr/bin/env pwsh
 # notebook-tools-table-ps.ps1 - the Windows twin of tests/notebook-tools-table.sh:
-# the notebook add-on's tools (JupyterLab, Marimo, Positron) are CHILD ROWS of
+# the notebook add-on's tools (JupyterLab, Marimo) are CHILD ROWS of
 # its row in the marketplace's add-ons table, one level deeper, ticked right
 # there; each says before anything installs what will become of it, and then
 # how the install settled it. The table menu is mocked, as the other PS tests
@@ -92,24 +92,23 @@ try {
     Write-Host "the rows: the notebook's tools hang off its row:"
     Menu $null
     Check "the kinds and labels" `
-        "group|Select All;tee|notebook-connector (notebook);tee-tee|JupyterLab;tee-tee|Marimo;tee-corner|Positron;corner|script-languages-release (udf-devkit);plain|Skip" `
+        "group|Select All;tee|notebook-connector (notebook);tee-tee|JupyterLab;tee-corner|Marimo;corner|script-languages-release (udf-devkit);plain|Skip" `
         (@($script:MenuRows | ForEach-Object { ($_ -split '\|')[0..1] -join '|' }) -join ';')
-    Check "child ids are <id>:<key>" ",notebook,notebook:jupyterlab,notebook:marimo,notebook:positron,udf-devkit," `
+    Check "child ids are <id>:<key>" ",notebook,notebook:jupyterlab,notebook:marimo,udf-devkit," `
         ($script:ExakitAddonTableIds -join ',')
     Check "asked: everything ticked, Skip exclusive, the notebook a claim parent inside Select All" `
-        "1,2,3,4,5,6~7~2:3:5:claim~1~2~6~all" $script:MenuAsked
+        "1,2,3,4,5~6~2:3:4:claim~1~2~5~all" $script:MenuAsked
     Check "the JupyterLab row: its pin, and the kit installs one" "$pinJ|not on this machine: installed into the kit's notebook environment" `
         ((($script:MenuRows[2] -split '\|')[2..3]) -join '|')
     Check "the Marimo row: its pin" $pinM (($script:MenuRows[3] -split '\|')[2])
-    Check "the Positron row: no version, the folder prepared" "|not on this machine: the notebooks folder is prepared for it (positron.posit.co)" `
-        ((($script:MenuRows[4] -split '\|')[2..3]) -join '|')
-    Check "Enter keeps all three, the question not asked" "notebook,udf-devkit|jupyterlab,marimo,positron" $script:Applied
+    Check "no Positron row: not offered until fully supported" 0 (@(@($script:MenuRows) -match 'Positron').Count)
+    Check "Enter keeps both, the question not asked" "notebook,udf-devkit|jupyterlab,marimo" $script:Applied
     Check "...no question hook" "" $script:Asked
 
     Write-Host "the ticks are the answer:"
-    Menu @(2, 3, 5, 6)
-    Check "Marimo unticked: the other two" "notebook,udf-devkit|jupyterlab,positron" $script:Applied
-    Menu @(6)
+    Menu @(2, 3, 5)
+    Check "Marimo unticked: the other one" "notebook,udf-devkit|jupyterlab" $script:Applied
+    Menu @(5)
     Check "the notebook unticked: not installed" "udf-devkit|" $script:Applied
     Menu @(2)
     Check "the notebook with no tool: none" "notebook|none" $script:Applied
@@ -119,23 +118,23 @@ try {
     Write-Host "the default ticks come from the record, or the variable:"
     $script:Recorded = "jupyterlab,positron"
     Menu $null
-    Check "a recorded choice without Marimo: its row and Select All unticked" "2,3,5,6~7~2:3:5:claim~1~2~6~all" $script:MenuAsked
+    Check "a recorded choice without Marimo: its row and Select All unticked" "2,3,5~6~2:3:4:claim~1~2~5~all" $script:MenuAsked
     $script:Recorded = $null
     $env:EXAKIT_NOTEBOOK_FRONTENDS = "marimo"
-    Check "EXAKIT_NOTEBOOK_FRONTENDS decides them" "False|True|False" `
+    Check "EXAKIT_NOTEBOOK_FRONTENDS decides them" "False|True" `
         (@(Get-NotebookTableChildren | ForEach-Object { $_.Ticked }) -join '|')
     Remove-Item Env:EXAKIT_NOTEBOOK_FRONTENDS
     $env:EXAKIT_NOTEBOOK_MARIMO = "skip"
     [System.IO.File]::WriteAllText((Join-Path $env:EXAKIT_HOME 'manifest.json'), '{}', (New-Object System.Text.UTF8Encoding($false)))
-    Check "the default helper does not ask" "jupyterlab,positron" (Invoke-ExakitNotebookChoice -Kind 'notebook-default')
+    Check "the default helper does not ask, and picks no Positron" "jupyterlab" (Invoke-ExakitNotebookChoice -Kind 'notebook-default')
     Remove-Item Env:EXAKIT_NOTEBOOK_MARIMO
 
     Write-Host "the persona closing offer shows the same children, under a corner:"
     $env:EXAKIT_MARKETPLACE_ONLY = "notebook"
     Menu $null
-    Check "the kinds" "group;corner;corner-tee;corner-tee;corner-corner;plain" `
+    Check "the kinds" "group;corner;corner-tee;corner-corner;plain" `
         (@($script:MenuRows | ForEach-Object { ($_ -split '\|')[0] }) -join ';')
-    Check "asked with the children in Select All" "1,2,3,4,5~6~2:3:5:claim~1~2~5~all" $script:MenuAsked
+    Check "asked with the children in Select All" "1,2,3,4~5~2:3:4:claim~1~2~4~all" $script:MenuAsked
     Remove-Item Env:EXAKIT_MARKETPLACE_ONLY
 
     Write-Host "the drawn frame, at 80 columns:"
@@ -147,8 +146,7 @@ try {
     [void](Add-ExakitTableRow -Kind "tee" -Label "notebook" -Col2 "3.1.0" -Col3 "Notebooks connected to the local Exasol database" -Table $t)
     $kids = @(Get-NotebookTableChildren)
     [void](Add-ExakitTableRow -Kind "tee-tee" -Label $kids[0].Label -Col2 $kids[0].Version -Col3 $kids[0].Description -Table $t)
-    [void](Add-ExakitTableRow -Kind "tee-tee" -Label $kids[1].Label -Col2 $kids[1].Version -Col3 $kids[1].Description -Table $t)
-    [void](Add-ExakitTableRow -Kind "tee-corner" -Label $kids[2].Label -Col2 $kids[2].Version -Col3 $kids[2].Description -Table $t)
+    [void](Add-ExakitTableRow -Kind "tee-corner" -Label $kids[1].Label -Col2 $kids[1].Version -Col3 $kids[1].Description -Table $t)
     [void](Add-ExakitTableRow -Kind "corner" -Label "dash-server" -Col2 "1.0.0" -Col3 "About dash-server" -Table $t)
     [void](Add-ExakitTableRow -Kind "plain" -Label "Skip" -Table $t)
     $frame = (Get-ExakitTableFrame -Table $t -Cursor 0) -replace "$([char]27)\[[0-9;]*m", ""
@@ -156,8 +154,8 @@ try {
     $vb = $script:UiVB; $tee = $script:UiTee; $corner = $script:UiCorner
     Has "the notebook row is a tee" "$tee notebook" $frame
     Has "JupyterLab hangs off it, its spine carried on" "$vb  $tee JupyterLab" $frame
-    Has "Marimo too" "$vb  $tee Marimo" $frame
-    Has "Positron is the last of them" "$vb  $corner Positron" $frame
+    Has "Marimo is the last of them" "$vb  $corner Marimo" $frame
+    Lacks "Positron is not offered" "Positron" $frame
     Has "the notebook's wrapped description starts its children's spine" "     $vb  $vb " $frame
     Lacks "nothing cut short" $script:UiEllipsis $frame
     $widest = 0
@@ -166,10 +164,10 @@ try {
 
     Write-Host "the table records each tool's final status:"
     $script:ExakitAddonTable = $t
-    $script:ExakitAddonTableIds = @("", "notebook", "notebook:jupyterlab", "notebook:marimo", "notebook:positron", "dash-server", "")
+    $script:ExakitAddonTableIds = @("", "notebook", "notebook:jupyterlab", "notebook:marimo", "dash-server", "")
     $script:ExakitAddonTableLive = $true
     $script:ExakitAddonTableChildRows = Get-ExakitAddonTableChildRows -Id "notebook"
-    Check "the child rows are found by key" "3|4|5" "$($script:ExakitAddonTableChildRows['jupyterlab'])|$($script:ExakitAddonTableChildRows['marimo'])|$($script:ExakitAddonTableChildRows['positron'])"
+    Check "the child rows are found by key" "3|4|" "$($script:ExakitAddonTableChildRows['jupyterlab'])|$($script:ExakitAddonTableChildRows['marimo'])|$($script:ExakitAddonTableChildRows['positron'])"
     [void](Set-ExakitAddonTableChild -Key 'jupyterlab' -State 'done' -Final "installed $pinJ")
     [void](Set-ExakitAddonTableChild -Key 'marimo' -State 'skipped' -Final 'skipped')
     Check "JupyterLab final status stays on its row" "done|installed $pinJ" "$($t.Rows[2].State)|$($t.Rows[2].Final)"

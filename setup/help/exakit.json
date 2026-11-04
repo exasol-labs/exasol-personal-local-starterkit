@@ -477,8 +477,8 @@
     },
     {
       "command": "notebook",
-      "options": "[jupyterlab | marimo | positron] [check] [setup] [stop] [--no-browser] [--port <number>]",
-      "summary": "Open JupyterLab, Marimo or Positron, connected to the local database (the notebook add-on).",
+      "options": "[jupyterlab | marimo] [check] [setup] [stop] [--no-browser] [--port <number>]",
+      "summary": "Open JupyterLab or Marimo, connected to the local database (the notebook add-on).",
       "description": "Starts JupyterLab in the background on 127.0.0.1 (port 8888 unless you name one) with the kit's notebooks and the kernel 'Exasol (Starter Kit)', and opens it in your browser, logged in; the login token is a kit credential and is never printed. Every run first writes the kit's current database connection into the notebook connector's encrypted store, so a restart or a port change needs no edit, and copies any kit notebook you do not have yet (yours are never overwritten). check proves the connection and says whether JupyterLab runs, starting nothing; setup settles JupyterLab (yours, or the kit's after a yes) and starts nothing; stop stops the JupyterLab the kit started. JupyterLab is never installed unasked (EXAKIT_NOTEBOOK_JUPYTER=install|skip answers for a script) and never starts with the database or at login. Needs the add-on: exakit marketplace notebook.",
       "examples": [
         "exakit notebook",
@@ -495,8 +495,7 @@
           "required": false,
           "choices": [
             "jupyterlab",
-            "marimo",
-            "positron"
+            "marimo"
           ]
         },
         {
@@ -518,8 +517,8 @@
           "required": false
         },
         {
-          "name": "--marimo / --positron",
-          "description": "Compatibility aliases for the tool words. Prefer marimo or positron.",
+          "name": "--marimo",
+          "description": "A compatibility alias for the tool word. Prefer marimo.",
           "default": "off",
           "required": false
         },

@@ -26,16 +26,17 @@ def notebook_choices(root: Path, kind: str, selected: str = "") -> list[str]:
     if choices is None:
         raise CatalogError("notebook is missing from marketplace/catalog.json")
     ids = [key for key, _ in choices]
+    # Choices no screen offers (Positron) are still accepted when named.
+    hidden = next((addon.hidden_choices for addon in load_addons(root) if addon.id == "notebook"), ())
     if kind == "notebook-normalize":
         picked = [part.strip().lower() for part in selected.split(",") if part.strip()]
-        unknown = set(picked) - set(ids)
+        unknown = set(picked) - set(ids) - set(hidden)
         if unknown:
             raise CatalogError(f"Unknown notebook choice: {', '.join(sorted(unknown))}")
-        return [",".join(key for key in ids if key in picked) or "none"]
+        return [",".join(key for key in (*ids, *hidden) if key in picked) or "none"]
     if kind == "notebook-questions":
         return ["JupyterLab - notebooks in the browser with the kit's kernel; yours is used if you have one",
-                "Marimo - reactive notebooks, installed into the kit's notebook environment",
-                "Positron - your Positron, pointed at the kit's Python; never installed by the kit"]
+                "Marimo - reactive notebooks, installed into the kit's notebook environment"]
     defaults = set(notebook._frontends(ctx))
     if kind == "notebook-default":
         return [",".join(key for key in ids if key in defaults) or "none"]

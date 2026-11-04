@@ -79,11 +79,13 @@ def _frontends(ctx: KitContext) -> tuple[str, ...]:
         raw = ctx.manifest.get(f"{RECEIPT}.front_ends")
     if raw is None or raw == "":
         skipped = {"skip", "no", "0", "false", "none"}
-        defaults = ["positron"]
+        # JupyterLab and Marimo. Positron stays supported here (EXAKIT_NOTEBOOK_FRONTENDS=positron) but is not
+        # offered or picked by default until it is fully supported and tested.
+        defaults = []
         if os.environ.get("EXAKIT_NOTEBOOK_JUPYTER", "").lower() not in skipped:
-            defaults.insert(0, "jupyterlab")
+            defaults.append("jupyterlab")
         if os.environ.get("EXAKIT_NOTEBOOK_MARIMO", "").lower() not in skipped:
-            defaults.insert(-1, "marimo")
+            defaults.append("marimo")
         raw = ",".join(defaults)
     if not isinstance(raw, str):
         raise AddonFailure("notebook front_ends receipt is invalid")
@@ -268,6 +270,37 @@ def install(ctx: KitContext) -> None:
         f"{RECEIPT}.jupyter": "kit" if venv_executable(venv, "jupyter-lab").is_file() else "user" if _external_jupyter(ctx) else "none",
         f"{RECEIPT}.marimo": "kit" if venv_executable(venv, "marimo").is_file() else "none",
     })
+
+
+def tool_outcomes(ctx: KitContext) -> list[tuple[str, str, str]]:
+    """What became of each tool, for its own row in the add-ons table after an install: (tool, done or
+    skipped, what to say). Read from what the install left, so it is true whoever asks."""
+    from notebook_cli import _positron_command
+
+    selected = set(_frontends(ctx))
+    venv = paths(ctx)[0]
+    outcomes = []
+    if "jupyterlab" not in selected:
+        outcomes.append(("jupyterlab", "skipped", "skipped"))
+    elif venv_executable(venv, "jupyter-lab").is_file():
+        outcomes.append(("jupyterlab", "done", f"installed {_pin(ctx, 'jupyterlab')}"))
+    elif _external_jupyter(ctx):
+        outcomes.append(("jupyterlab", "done", "yours, kernel added"))
+    else:
+        outcomes.append(("jupyterlab", "skipped", "not installed - see the log"))
+    if "marimo" not in selected:
+        outcomes.append(("marimo", "skipped", "skipped"))
+    elif venv_executable(venv, "marimo").is_file():
+        outcomes.append(("marimo", "done", f"installed {_pin(ctx, 'marimo')}"))
+    else:
+        outcomes.append(("marimo", "skipped", "not installed - see the log"))
+    if "positron" not in selected:
+        pass  # not offered on any screen: no row to say "skipped" on
+    elif _positron_command():
+        outcomes.append(("positron", "done", "configured"))
+    else:
+        outcomes.append(("positron", "skipped", "not on this machine - folder ready"))
+    return outcomes
 
 
 def validate(ctx: KitContext) -> bool:

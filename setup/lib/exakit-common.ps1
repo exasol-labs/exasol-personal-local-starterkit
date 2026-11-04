@@ -1058,7 +1058,7 @@ function Show-ExakitGuide {
     } else {
         Write-ExakitPanelLine "Personas:             exakit persona list - exakit persona add <id>"
     }
-    if ($hasNotebook) { Write-ExakitPanelLine "Notebooks:            exakit notebook (JupyterLab, Marimo, Positron)" }
+    if ($hasNotebook) { Write-ExakitPanelLine "Notebooks:            exakit notebook (JupyterLab, Marimo)" }
     else { Write-ExakitPanelLine "Notebooks:            exakit marketplace notebook" }
     Write-ExakitPanelLine "Roles of a table:     exakit describe <SCHEMA.TABLE>"
     if ($hasDash) { Write-ExakitPanelLine "Dashboards:           http://127.0.0.1:$dashPort" }
@@ -5944,7 +5944,7 @@ function Show-ExakitMarketplaceMenu {
             })
             [System.IO.File]::WriteAllText($aboutPath, (($about -join "`n") + "`n"), (New-Object System.Text.UTF8Encoding($false)))
             $python = Get-ExakitPersonaPython
-            $frontends = if ($env:EXAKIT_NOTEBOOK_FRONTENDS) { $env:EXAKIT_NOTEBOOK_FRONTENDS } else { 'jupyterlab,marimo,positron' }
+            $frontends = if ($env:EXAKIT_NOTEBOOK_FRONTENDS) { $env:EXAKIT_NOTEBOOK_FRONTENDS } else { 'jupyterlab,marimo' }
             if ($python) { & $python $launcher $root warm | Out-Null }
             else { & (Install-ExakitUv) run --no-project --python $script:ManagedPythonVersion python $launcher $root warm | Out-Null }
             Stop-ExakitSpinner
@@ -6589,6 +6589,20 @@ function Invoke-ExakitMarketplaceApplyPython {
                     $script:ExakitAddonTableRow = 0
                     if ($script:ExakitAddonTableLive) {
                         $script:ExakitAddonTableRow = [int](Get-ExakitAddonTableRow -Id $id)
+                    }
+                    if ($id.Contains(':')) {
+                        # One of the add-on's tools (notebook:jupyterlab), settled: its own row says how.
+                        # Twin of the *:* arm in _exakit_marketplace_apply_python.
+                        $tool = $id.Substring($id.IndexOf(':') + 1)
+                        if ($script:ExakitAddonTableRow -gt 0 -and $phase -in @('done', 'failed', 'skipped')) {
+                            $room = 44 - $script:UiTick.Length - 1
+                            $final = $detail
+                            if ($final.Length -gt $room) { $final = $final.Substring(0, $room - $script:UiEllipsis.Length) + $script:UiEllipsis }
+                            Set-ExakitTableRow -Row $script:ExakitAddonTableRow -State $phase -Final $final -Table $script:ExakitAddonTable
+                        } elseif (-not $script:ExakitAddonTableLive) {
+                            Info "$($tool): $detail"
+                        }
+                        return
                     }
                     switch ($phase) {
                         'installing' {

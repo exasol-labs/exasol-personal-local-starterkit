@@ -96,7 +96,7 @@ def main() -> int:
     parser.add_argument("--defaults", default="")
     parser.add_argument("--recorded", default="")
     parser.add_argument("--only", default="")
-    parser.add_argument("--frontends", default="jupyterlab,marimo,positron")
+    parser.add_argument("--frontends", default="jupyterlab,marimo")
     parser.add_argument("--apply", action="store_true")
     if sys.argv[2:3] == ["warm"]:
         try:
