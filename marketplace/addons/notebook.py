@@ -165,6 +165,26 @@ def _specs(ctx: KitContext, version: str, selected: tuple[str, ...]) -> list[str
     return specs
 
 
+def _stages(ctx: KitContext, version: str, selected: tuple[str, ...]) -> list[tuple[str, list[str]]]:
+    """(what the activity line says, the specs) for each step of the install, so the table says which part is
+    installing: the connector and the kit's helpers, then JupyterLab, then Marimo. Each step asks for everything
+    before it as well, and the last asks for exactly _specs(): one resolution, as when it was a single command."""
+    final = _specs(ctx, version, selected)
+    tools = {spec.split("==", 1)[0]: spec for spec in final if spec.startswith(("jupyterlab==", "marimo=="))}
+    connector = next(spec for spec in final if spec.startswith(f"{PACKAGE}["))
+    plain = connector.replace(",jupyter]", "]")           # the jupyter extra comes with JupyterLab's step
+    base = [plain if spec == connector else spec for spec in final if spec not in tools.values()]
+    stages = [(f"Installing notebook connector {version}", base)]   # short: the activity cell is ~44 wide
+    so_far = list(base)
+    if "jupyterlab" in tools:
+        so_far = [connector if spec == plain else spec for spec in so_far] + [tools["jupyterlab"]]
+        stages.append((f"Installing JupyterLab {tools['jupyterlab'].split('==', 1)[1]}", list(so_far)))
+    if "marimo" in tools:
+        so_far = [connector if spec == plain else spec for spec in so_far] + [tools["marimo"]]
+        stages.append((f"Installing Marimo {tools['marimo'].split('==', 1)[1]}", list(so_far)))
+    return stages
+
+
 def _notebook_script(ctx: KitContext, name: str) -> Path:
     return ctx.root / "notebook" / "kit" / name
 
@@ -267,18 +287,21 @@ def install(ctx: KitContext) -> None:
     if not python.is_file():
         if venv.is_dir() and (venv / "pyvenv.cfg").exists():
             shutil.rmtree(venv)
-        ctx.run_logged("Creating notebook environment", str(ctx.uv), "venv", "--python", ctx.managed_python_version, str(venv))
+        ctx.run_logged(f"Creating notebook environment (Python {ctx.managed_python_version})", str(ctx.uv), "venv", "--python", ctx.managed_python_version, str(venv))
     for local in (ctx.root / "notebook" / "package" / "build", ctx.root / "packages" / "exasol-mlflow" / "build"):
         if local.is_dir():
             shutil.rmtree(local)
-    command = [str(ctx.uv), "pip", "install", "--python", str(python),
-               "--reinstall-package", "exakit-nb", "--reinstall-package", "exasol-mlflow"]
-    if sys.platform != "darwin":
-        command.extend(("--torch-backend", "cpu"))
-    command.extend(_specs(ctx, version, selected))
-    ctx.run_logged(f"Installing notebook connector {version}", *command)   # the tools are rows of their own
+    for number, (label, specs) in enumerate(_stages(ctx, version, selected)):
+        command = [str(ctx.uv), "pip", "install", "--python", str(python)]
+        if number == 0:                                   # the kit's own two packages, rebuilt once
+            command += ["--reinstall-package", "exakit-nb", "--reinstall-package", "exasol-mlflow"]
+        if sys.platform != "darwin":
+            command.extend(("--torch-backend", "cpu"))
+        ctx.run_logged(label, *command, *specs)
+    ctx.activity("Validating notebook connector")
     if _package_version(ctx) != version:
         raise AddonFailure("The notebook connector does not report the requested version")
+    ctx.activity("Placing notebooks and the kernel")
     notebooks.mkdir(parents=True, exist_ok=True)
     _copy(ctx, "jupyter")
     if "marimo" in selected:

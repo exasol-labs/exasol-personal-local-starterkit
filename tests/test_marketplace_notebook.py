@@ -34,6 +34,22 @@ class NotebookPlanTest(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
+    def test_the_install_says_each_part_and_ends_on_one_resolution(self) -> None:
+        """The activity line names each part as it installs - the connector, then JupyterLab, then Marimo - and the
+        last step asks for exactly what one command used to, so the environment is the same; each label fits the
+        activity cell."""
+        with patch.dict(os.environ, {"EXAKIT_NOTEBOOK_FRONTENDS": "jupyterlab,marimo"}), \
+             patch.object(notebook, "_external_jupyter", return_value=None):
+            stages = notebook._stages(self.ctx, "3.1.0", ("jupyterlab", "marimo"))
+            final = notebook._specs(self.ctx, "3.1.0", ("jupyterlab", "marimo"))
+            marimo_only = notebook._stages(self.ctx, "3.1.0", ("marimo",))
+        labels = [label.split(" ")[1] for label, _ in stages]
+        self.assertEqual(["notebook", "JupyterLab", "Marimo"], labels)
+        self.assertEqual(sorted(final), sorted(stages[-1][1]))
+        self.assertFalse(any(",jupyter]" in spec for spec in stages[0][1]), "the jupyter extra comes with JupyterLab")
+        self.assertTrue(all(len(label) <= 40 for label, _ in stages))
+        self.assertEqual(["notebook", "Marimo"], [label.split(" ")[1] for label, _ in marimo_only])
+
     def test_tool_outcomes_read_what_the_install_left(self) -> None:
         """What each tool row says after an install (audit QAT-02): installed with its pin, yours, skipped by choice,
         or not installed when it was picked and is missing."""
