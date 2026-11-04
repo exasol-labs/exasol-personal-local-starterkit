@@ -3459,6 +3459,11 @@ function Invoke-CmdConnect {
     }
     if ($json) { Assert-ExakitInstalled -Json } else { Assert-ExakitInstalled }
     Initialize-ExakitLogging
+    # A person at a console gets the menu and the panels; a pipe, --yes,
+    # --dry-run and --json keep the line-by-line path below, unchanged.
+    if (-not $dry -and -not $json -and (Test-ExakitVsTuiOk)) {
+        exit (Invoke-ExakitVsTui -Source $source -Name $name -PasswordFile $pwFile -Sets $sets)
+    }
     $interactive = Test-ExakitInteractive
     if (-not $source) {
         if (-not $interactive) { Deny-ExakitInput "Name the source to connect, e.g. exakit connect postgresql (see: exakit source catalog)." }

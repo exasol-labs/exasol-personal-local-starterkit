@@ -1505,5 +1505,118 @@ has "...and the terminal's own state comes back, on Ctrl-C too" 'trap '"'"'stty 
 VSREAD="$(sed -n '/^_exakit_vs_read_secret() {/,/^}/p' "$ROOT/setup/lib/virtual-schemas.sh")"
 has "the virtual-schema credential prompt uses it" "exakit_read_hidden" "$VSREAD"
 
+printf '\n== the terminal form asks the engine, one answer at a time ==\n'
+run inputs pg
+has "inputs: the source name comes first" '"inputs": [{"name": "name", "label": "Name for this connection", "kind": "source-name"' "$OUT"
+has "...then the connector's own, the credential flagged and never valued" '"name": "password", "label": "Password", "kind": "secret", "required": true, "default": "", "choices": [], "secret": true' "$OUT"
+OUT="$(printf 'pg.example.com' | eng field pg host 2>&1)"; RC=$?
+check "field: a good host is taken as it will be stored" '0 RESULT {"value": "pg.example.com"}' "$RC $OUT"
+OUT="$(printf 'localhost' | eng field pg host 2>&1)"; RC=$?
+check "...localhost is refused where it is typed, exit 2" "2" "$RC"
+has "...in the words a scripted connect gets" "on macOS 192.168.64.1, on Linux and WSL host.containers.internal" "$OUT"
+OUT="$(printf '' | eng field pg port 2>&1)"
+check "...an empty answer takes the default" 'RESULT {"value": "5432"}' "$OUT"
+OUT="$(printf '' | eng field pg host 2>&1)"; RC=$?
+check "...and is refused where the input is required" "2 FAIL host is required (Host name or address)" "$RC $OUT"
+OUT="$(printf 'Bad-Name' | eng field pg name 2>&1)"; RC=$?
+check "...the source name keeps its rule" "2" "$RC"
+OUT="$(printf 'cG9ydA==' | eng field pg tls --base64 2>&1)"; RC=$?
+check "...the Windows bridge's base64 is decoded first (port is not a tls mode)" "2" "$RC"
+OUT="$(printf 'dmVyaWZ5' | eng field pg tls --base64 2>&1)"
+check "...and a good one passes" 'RESULT {"value": "verify"}' "$OUT"
+OUT="$(printf 'x' | eng field pg password 2>&1)"; RC=$?
+check "...a credential is never sent to be checked" "2" "$RC"
+
+printf '\n== exakit connect on a terminal: menu, panel, review, live table ==\n'
+# tty-replay.py runs the scenario under a real pty and replays the escape codes
+# the way a terminal would, so what is asserted is what a person is left
+# looking at: one menu, one panel per source however many redraws, one table.
+TUI_SECRET='tUi-s3cret-Value'
+export TUI_KIT="$HOME_K" TUI_STATE="$STATE" TUI_EXA="$EXA" TUI_DEFS="$DEFS" TUI_DEPLOY="$DEPLOY" TUI_LOG="$WORK/tui.log"
+tui() { # tui <scenario> <title> <boxes> <keys> - the replay's report in TUI_OUT, its verdict in TUI_RC
+    TUI_OUT="$(TTY_REPLAY_COLS="${TUI_COLS:-100}" python3 "$ROOT/tests/lib/tty-replay.py" "$ROOT/tests/lib/$1" "$ROOT" "$2" "$4" "$3" 2>&1)"
+    TUI_RC=$?
+    TUI_SCREEN="$(printf '%s\n' "$TUI_OUT" | sed -n '/=== FINAL SCREEN ===/,/=== tables on screen/p')"
+}
+if command -v python3 >/dev/null 2>&1; then
+    db '{"sources": {"pg.example.com": {"tables": ["ORDERS", "CUSTOMERS"]}}}'
+    # Space ticks PostgreSQL - the cursor starts on the first connector, there
+    # is no "Select All" above it - then one wrong answer, corrected.
+    tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 3 \
+        " \rtuione\rlocalhost\rpg.example.com\r\rsales\r\rreader\r$TUI_SECRET\r\r\ry\r"
+    check "one menu, one panel and one table are left on screen, never stacked" "0" "$TUI_RC"
+    has "...the menu offers the connectors" "├─ PostgreSQL" "$TUI_SCREEN"
+    has "...with what each one is" "a PostgreSQL database" "$TUI_SCREEN"
+    has "...the panel shows every answer" "Host name or address      pg.example.com" "$TUI_SCREEN"
+    has "...the credential as given, never its value" "(given, hidden)" "$TUI_SCREEN"
+    has "...the review says who can read the result" "MCP read-only user can read every table of VS_TUIONE" "$TUI_SCREEN"
+    has "...and the row ends with the schema and its tables" "✓ VS_TUIONE · 2 tables" "$TUI_SCREEN"
+    lacks "...the refused answer's line is gone once it was corrected" "would be the database itself" "$TUI_SCREEN"
+    lacks "the credential is not on the screen" "$TUI_SECRET" "$TUI_OUT"
+    check "...it reached the CONNECTION" "$TUI_SECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_TUIONE"]["secret"]')"
+    check "...and nowhere under the kit home" "" "$(grep -rl "$TUI_SECRET" "$HOME_K" 2>/dev/null)"
+
+    python3 - "$STATE" <<'PY'
+import json, sys; d = json.load(open(sys.argv[1])); d["sources"]["pg.example.com"] = {"tables": ["ORDERS"]}; json.dump(d, open(sys.argv[1], "w"))
+PY
+    OUT="$(printf 'tuione' | eng field pg name 2>&1)"; RC=$?
+    check "field: a name already taken is refused before anything runs, exit 3" "3" "$RC"
+    # Two sources at 80 columns, the second unreachable: one row each, and the
+    # failure's whole sentence under the table rather than in a cell.
+    TUI_COLS=80 tui connect-tui-scenario.sh "Connect 2 sources" 4 \
+        " j \rtuitwo\rpg.example.com\r\rsales\r\rreader\rpw\r\r\rtuimy\rmy.example.com\r\rshop\rreader\rpw\r\r\ry\r"
+    check "two sources: still one table" "0" "$TUI_RC"
+    has "...the one that worked" "✓ VS_TUITWO · 1 table" "$TUI_SCREEN"
+    has "...the one that did not, in a few words" "✗ the source did not answer" "$TUI_SCREEN"
+    has "...and in the engine's words below the table" "tuimy did not connect:" "$TUI_SCREEN"
+    check "...nothing kept for the failed one" "no" "$([ -d "$HOME_K/sources/tuimy" ] && echo yes || echo no)"
+
+    # Java missing: the row says so, the question comes once below the table, and
+    # an Enter pressed while the table ran does not answer it.
+    python3 - "$STATE" <<'PY'
+import json, sys; d = json.load(open(sys.argv[1])); d["java"] = False; json.dump(d, open(sys.argv[1], "w"))
+PY
+    TUI_FAKE_JAVA_INSTALL=1 tui connect-tui-scenario.sh "Connect again" 4 \
+        " \rtuijava\rpg.example.com\r\rsales\r\rreader\rpw\r\r\ry\r\r\x01\x01\x01y\r"
+    check "a missing Java container: one question, then a table of its own" "0" "$TUI_RC"
+    has "...the first table says what is missing" "✗ needs Java in the database" "$TUI_SCREEN"
+    has "...the answer was the one typed after the question" "Java language container installed" "$TUI_SCREEN"
+    has "...and the source connects" "✓ VS_TUIJAVA · 1 table" "$TUI_SCREEN"
+
+    # The command line names the connector and some answers: no menu, those
+    # answers ticked, only the rest asked.
+    printf '%s' "$TUI_SECRET" > "$WORK/tui.pw"
+    TUI_ARGS="pg --name tuiargs --set host=pg.example.com --set database=sales --set user=reader --password-file $WORK/tui.pw" \
+        tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 2 "\r\r\r\ry\r"
+    check "a named connector skips the menu" "0" "$TUI_RC"
+    lacks "...no menu" "Connect external sources" "$TUI_SCREEN"
+    has "...the given credential file is used, not asked for" "(read from a file)" "$TUI_SCREEN"
+    has "...and it connects" "✓ VS_TUIARGS · 1 table" "$TUI_SCREEN"
+
+    # Skip closes the menu with nothing done.
+    tui connect-tui-scenario.sh "Connect external sources" 1 "jjjjjjjjjjj \r"
+    has "Skip: nothing chosen, nothing changed" "Nothing was chosen; nothing was changed." "$TUI_SCREEN"
+
+    if command -v pwsh >/dev/null 2>&1; then
+        # The PowerShell twin, under the same terminal model. pwsh starts slower,
+        # hence the pauses (\x01) before the first key.
+        tui connect-tui-scenario-ps.sh "1 of 1 · PostgreSQL" 3 \
+            "\x01\x01\x01 \rtuips\rlocalhost\rpg.example.com\r\rsales\r\rreader\r$TUI_SECRET\r\r\ry\r"
+        check "PowerShell: one menu, one panel, one table" "0" "$TUI_RC"
+        has "...and the row ends with the schema" "✓ VS_TUIPS · 1 table" "$TUI_SCREEN"
+        lacks "...the credential is not on the screen" "$TUI_SECRET" "$TUI_OUT"
+        check "...it reached the CONNECTION" "$TUI_SECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_TUIPS"]["secret"]')"
+    else
+        pass "PowerShell terminal flow: skipped (no pwsh)"
+    fi
+fi
+# The twins carry the same flow.
+for fn in Invoke-ExakitVsTui Invoke-ExakitVsPick Invoke-ExakitVsTuiForm Invoke-ExakitVsTuiRun Test-ExakitVsTuiOk; do
+    has "PowerShell has $fn" "function $fn" "$(cat "$ROOT/setup/lib/virtual-schemas.ps1")"
+done
+has "Invoke-CmdConnect hands a console to it" "Invoke-ExakitVsTui -Source" "$(cat "$ROOT/setup/exakit.ps1")"
+has "the menu starts on the first connector on both sides" "-StartRow 1" "$(cat "$ROOT/setup/lib/virtual-schemas.ps1")"
+has "...and in bash" "UI_TABLE_MENU_START=1" "$(cat "$ROOT/setup/lib/virtual-schemas.sh")"
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

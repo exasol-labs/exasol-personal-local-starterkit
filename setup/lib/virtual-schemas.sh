@@ -224,6 +224,670 @@ $_evi_lines
 EOF
 }
 
+# --- the terminal flow: pick, fill in, review, connect ----------------------------
+#
+# `exakit connect` on a terminal that can draw (UI_FANCY) and answer (stdin is
+# the terminal), without --yes, --dry-run or --json:
+#   1. pick    the marketplace's own table (ui_table_menu): one row per connector,
+#              the sources already connected named in its Description; skipped
+#              when the command named a connector;
+#   2. fill    one panel per picked source, every field visible with its default,
+#              each answer checked by the engine where it was typed (cli.py field,
+#              the value on its stdin); a credential is a hidden prompt (or a key
+#              file's path) and stays in this shell's memory until it goes down
+#              the engine's stdin;
+#   3. review  the engine's plan for each (cli.py plan): what it downloads and who
+#              can read the result, then one table of the sources, one question;
+#   4. connect that table comes alive: one source at a time, a bar per row, then
+#              VS_<NAME> and its table count, or the reason it failed.
+# Everything else (a pipe, --yes, a dumb terminal, --dry-run, --json) keeps the
+# line-by-line path in cmd_connect, so scripts and agents see no change.
+# ⇄ twin: Invoke-ExakitVsTui.
+
+# _exakit_vs_tui_ok — can the terminal flow run here?
+_exakit_vs_tui_ok() {
+    [ "${UI_FANCY:-0}" = 1 ] || return 1
+    [ "${EXAKIT_VS_ASSUME_YES:-0}" != 1 ] || return 1
+    [ -t 0 ] && [ -t 1 ] || return 1
+    return 0
+}
+
+# _exakit_vs_result <engine-output-file> — the JSON of its RESULT line.
+_exakit_vs_result() {
+    sed -n 's/^RESULT //p' "$1" | tail -1
+}
+
+# _exakit_vs_tui_rows <characters> — how many terminal lines a line of that many
+# characters takes. A wrapped line counted as one is a stale line the next
+# redraw leaves behind.
+_exakit_vs_tui_rows() {
+    if [ "$1" -le 0 ]; then echo 1; else echo $(( ($1 - 1) / _EVT_COLS + 1 )); fi
+}
+
+# _exakit_vs_tui_short <text> <width> — the text with its START kept ("…" at the end).
+_exakit_vs_tui_short() {
+    if [ "${#1}" -le "$2" ]; then printf '%s' "$1"; else printf '%s…' "${1:0:$(( $2 - 1 ))}"; fi
+}
+
+# _exakit_vs_tui_tail <text> <width> — the text with its END kept, for a path or
+# a host: "…/vs-test/rds-ap-south-1-bundle.pem".
+_exakit_vs_tui_tail() {
+    if [ "${#1}" -le "$2" ]; then printf '%s' "$1"; else printf '…%s' "${1:$(( ${#1} - $2 + 1 ))}"; fi
+}
+
+# _exakit_vs_pick <work-dir> — the connector menu. Sets EXAKIT_VS_PICKED to the
+# chosen connector ids, space separated; returns 5 when nothing was chosen.
+_exakit_vs_pick() {
+    _evp_dir="$1"
+    exakit_vs_engine catalog < /dev/null > "$_evp_dir/catalog" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
+    exakit_vs_engine list < /dev/null > "$_evp_dir/list" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
+    # id|label|kind|description|gate. The label drops a parenthesis ("Lakehouse
+    # (Iceberg on AWS Glue)" is "Lakehouse"): the summary says what it is, and
+    # the sources already connected through it follow it.
+    run_python_any - "$(_exakit_vs_result "$_evp_dir/catalog")" "$(_exakit_vs_result "$_evp_dir/list")" \
+        > "$_evp_dir/rows" <<'PY'
+import json, sys
+catalog = json.loads(sys.argv[1] or "{}").get("connectors", [])
+have = {}
+for s in json.loads(sys.argv[2] or "{}").get("sources", []):
+    have.setdefault(s.get("connector", ""), []).append(s.get("name", ""))
+kinds = {"java-jdbc": "JDBC", "java-document-files": "files", "lua-jdbc": "REST + JDBC", "rust-native": "native"}
+for e in catalog:
+    if e.get("tier") != "GA":
+        continue
+    text = e.get("summary", "")
+    if have.get(e["id"]):
+        text += " · connected: " + ", ".join(sorted(have[e["id"]]))
+    gate = e.get("gate", "") if e.get("status") == "gated" else ""
+    print("|".join(x.replace("|", "/") for x in
+                   (e["id"], e["name"].split(" (")[0], kinds.get(e["profile"], e["profile"]), text, gate)))
+PY
+    [ -s "$_evp_dir/rows" ] || { error "The connector catalog could not be read. Details: exakit logs"; return 2; }
+    _evp_state="$_evp_dir/menu"
+    : > "$_evp_state"
+    _evp_n="$(grep -c . "$_evp_dir/rows")"
+    _evp_i=0; _evp_ids=""
+    while IFS='|' read -r _evp_id _evp_label _evp_kind _evp_text _evp_gate; do
+        _evp_i=$(( _evp_i + 1 ))
+        _evp_tree=tee; [ "$_evp_i" -eq "$_evp_n" ] && _evp_tree=corner
+        # kind|label|tick|state|pct|ceiling|secs|t0|phase|final|col2|col3; a
+        # gated connector is shown, never pickable, with its gate as the reason
+        # (the marketplace's own disabled-row shape).
+        if [ -n "$_evp_gate" ]; then
+            printf '%s|%s|0|disabled||||||%s|%s|%s\n' "$_evp_tree" "$_evp_label" \
+                "not available yet" "$_evp_kind" "not available yet: $_evp_gate" >> "$_evp_state"
+        else
+            printf '%s|%s|0|idle|||||||%s|%s\n' "$_evp_tree" "$_evp_label" "$_evp_kind" "$_evp_text" >> "$_evp_state"
+        fi
+        _evp_ids="$_evp_ids
+$_evp_id"
+    done < "$_evp_dir/rows"
+    printf 'plain|Skip|0|idle||||||| | \n' >> "$_evp_state"
+    _evp_skip=$(( _evp_n + 1 ))
+    EXAKIT_TABLE_DEFAULTS=""            # nothing ticked: a connect is always a choice
+    EXAKIT_TABLE_GROUP=""
+    EXAKIT_TABLE_EXCLUSIVE="$_evp_skip"
+    UI_TABLE_TITLE="Connect external sources"
+    UI_TABLE_COL1="Source"; UI_TABLE_COL2="Kind"; UI_TABLE_COL3="Description"
+    UI_TABLE_MENU_START=1               # no "Select All" row to step past
+    info "Tick one or more sources; the details for each are asked next."
+    ui_table_menu "$_evp_state"
+    UI_TABLE_COL2=""; UI_TABLE_COL3=""
+    EXAKIT_TABLE_EXCLUSIVE=""
+    EXAKIT_VS_PICKED=""
+    [ "${EXAKIT_TABLE_CONFIRMED:-0}" = 1 ] || return 5
+    for _evp_row in $(printf '%s' "$EXAKIT_TABLE_SELECTION" | tr ',' ' '); do
+        case "$_evp_row" in ''|*[!0-9]*) continue ;; esac
+        [ "$_evp_row" = "$_evp_skip" ] && { EXAKIT_VS_PICKED=""; return 5; }
+        _evp_id="$(printf '%s\n' "$_evp_ids" | sed -n "$(( _evp_row + 1 ))p")"
+        [ -n "$_evp_id" ] && EXAKIT_VS_PICKED="${EXAKIT_VS_PICKED:+$EXAKIT_VS_PICKED }$_evp_id"
+    done
+    [ -n "$EXAKIT_VS_PICKED" ] || return 5
+    return 0
+}
+
+# _exakit_vs_tui_frame <title> <current-field> — the panel, built into _EVT_BUF
+# with its height in _EVT_BUF_N.
+_exakit_vs_tui_frame() {
+    _EVT_BUF=""; _EVT_BUF_N=0
+    _evf_t=" $1 "
+    _evf_fill=$(( _EVT_IN - ${#_evf_t} - 1 )); [ "$_evf_fill" -ge 0 ] || _evf_fill=0
+    _EVT_BUF="  $UI_ACCENT$UI_TL$UI_HR$UI_RESET$UI_BOLD$_evf_t$UI_RESET$UI_ACCENT${_EVT_HR:0:$_evf_fill}$UI_TR$UI_RESET"$'\n'
+    _EVT_BUF_N=1
+    _evf_i=0
+    while [ "$_evf_i" -lt "$_EVT_NF" ]; do
+        _evf_lab="${_EVT_LAB[$_evf_i]}"
+        _evf_lab="$_evf_lab${_EVT_SP:0:$(( _EVT_LW - ${#_evf_lab} ))}"
+        _evf_kind="${_EVT_KIND[$_evf_i]}"
+        if [ "$_evf_i" -eq "$2" ]; then
+            _evf_mark="$UI_ACCENT$UI_ARROW$UI_RESET"; _evf_shown="$UI_BOLD$_evf_lab$UI_RESET"
+            _evf_plain=""; _evf_val=""
+        elif [ -n "${_EVT_DONE[$_evf_i]:-}" ]; then
+            _evf_mark="$UI_OK$UI_TICK$UI_RESET"; _evf_shown="$_evf_lab"
+            _evf_val="${_EVT_VAL[$_evf_i]}"
+            if [ "$_evf_kind" = secret ]; then
+                if [ -n "$_evf_val" ]; then _evf_val="(given, hidden)"; else _evf_val="(read from a file)"; fi
+            fi
+            [ -n "$_evf_val" ] || _evf_val="(none)"
+            _evf_plain="$(_exakit_vs_tui_tail "$_evf_val" "$_EVT_VW")"
+            _evf_val="$_evf_plain"
+        else
+            _evf_mark=" "; _evf_shown="$UI_DIM$_evf_lab$UI_RESET"
+            _evf_val="${_EVT_VAL[$_evf_i]:-${_EVT_DEF[$_evf_i]}}"
+            case "$_evf_kind" in secret|secret-file) _evf_val="" ;; esac
+            [ -n "$_evf_val" ] && _evf_val="[$(_exakit_vs_tui_tail "$_evf_val" $(( _EVT_VW - 2 )))]"
+            _evf_plain="$_evf_val"; _evf_val="$UI_DIM$_evf_val$UI_RESET"
+        fi
+        _evf_pad=$(( _EVT_IN - 7 - _EVT_LW - ${#_evf_plain} )); [ "$_evf_pad" -ge 0 ] || _evf_pad=0
+        _EVT_BUF="$_EVT_BUF  $UI_ACCENT$UI_VB$UI_RESET  $_evf_mark  $_evf_shown  $_evf_val${_EVT_SP:0:$_evf_pad}$UI_ACCENT$UI_VB$UI_RESET"$'\n'
+        _EVT_BUF_N=$(( _EVT_BUF_N + 1 ))
+        _evf_i=$(( _evf_i + 1 ))
+    done
+    _EVT_BUF="$_EVT_BUF  $UI_ACCENT$UI_BL${_EVT_HR:0:$_EVT_IN}$UI_BR$UI_RESET"$'\n'
+    _EVT_BUF_N=$(( _EVT_BUF_N + 1 ))
+}
+
+# _exakit_vs_tui_draw <title> <current-field> — the panel over what this form
+# drew last (_EVT_ON_SCREEN lines: the panel and every line under it), in one write.
+_exakit_vs_tui_draw() {
+    _exakit_vs_tui_frame "$1" "$2"
+    if [ "$_EVT_ON_SCREEN" -gt 0 ]; then
+        printf '\r\033[%dA\033[0J%s' "$_EVT_ON_SCREEN" "$_EVT_BUF"
+    else
+        printf '%s' "$_EVT_BUF"
+    fi
+    _EVT_ON_SCREEN="$_EVT_BUF_N"
+}
+
+# _exakit_vs_tui_say <mark> <text> — a line under the panel (a refused answer and
+# why), wrapped to the terminal and counted for the next redraw.
+_exakit_vs_tui_say() {
+    _ui_wrap "$2" $(( _EVT_COLS - 8 ))
+    _evs_k=0
+    while [ "$_evs_k" -lt "$_UI_WRAP_N" ]; do
+        if [ "$_evs_k" -eq 0 ]; then printf '    %s %s\n' "$1" "${_UI_WRAP[$_evs_k]}"
+        else printf '      %s\n' "${_UI_WRAP[$_evs_k]}"; fi
+        _evs_k=$(( _evs_k + 1 ))
+    done
+    _EVT_ON_SCREEN=$(( _EVT_ON_SCREEN + _UI_WRAP_N ))
+}
+
+# _exakit_vs_tui_ask <prompt-plain> <prompt-colour> <hidden:0|1> — one answer
+# into _EVT_ANSWER: a line editor for the visible ones, echo off (and back on
+# whatever happens) for the hidden one. Returns 1 at end of input.
+_exakit_vs_tui_ask() {
+    if [ "$3" = 1 ]; then
+        # Echo off BEFORE the prompt shows: a key typed the moment it appears
+        # would otherwise be echoed in clear (exakit_read_hidden, same order).
+        _eva_saved="$(stty -g 2>/dev/null)"
+        trap 'stty "${_eva_saved:-echo}" 2>/dev/null; printf "\n"; exit 130' INT TERM
+        if ! stty -echo 2>/dev/null; then
+            _exakit_vs_tui_say "$UI_ERR$UI_CROSS$UI_RESET" "this terminal cannot hide input; give the credential with --password-file"
+            _EVT_ANSWER=""; trap - INT TERM; return 1
+        fi
+        printf '  %s: ' "$2"
+        IFS= read -r _EVT_ANSWER; _eva_rc=$?
+        stty "${_eva_saved:-echo}" 2>/dev/null
+        trap - INT TERM
+        printf '\n'
+        _EVT_ON_SCREEN=$(( _EVT_ON_SCREEN + $(_exakit_vs_tui_rows $(( ${#1} + 4 ))) ))
+        return "$_eva_rc"
+    fi
+    # The prompt goes through readline (-p), its colour marked invisible
+    # (\001..\002), so editing and history redraw it in the right place.
+    IFS= read -r -e -p "  $2: " _EVT_ANSWER; _eva_rc=$?
+    _EVT_ON_SCREEN=$(( _EVT_ON_SCREEN + $(_exakit_vs_tui_rows $(( ${#1} + 4 + ${#_EVT_ANSWER} ))) ))
+    return "$_eva_rc"
+}
+
+# _exakit_vs_tui_yes <question> — y/N, counted like any line under the panel.
+_exakit_vs_tui_yes() {
+    printf '  %s%s [y/N]%s ' "$UI_ASK" "$1" "$UI_RESET"
+    IFS= read -r _ety_a || _ety_a=""
+    _EVT_ON_SCREEN=$(( _EVT_ON_SCREEN + 1 ))
+    case "$_ety_a" in y|Y|yes|YES|Yes) return 0 ;; *) return 1 ;; esac
+}
+
+# _exakit_vs_tui_args — the engine arguments of the form being filled in, one
+# per line: connector, --name, then --set pairs. A credential is never one.
+_exakit_vs_tui_args() {
+    printf '%s\n' "$_evo_id"
+    _eta_f=0
+    while [ "$_eta_f" -lt "$_EVT_NF" ]; do
+        _eta_v="${_EVT_VAL[$_eta_f]}"
+        case "${_EVT_KIND[$_eta_f]}" in
+            source-name) printf -- '--name\n%s\n' "$_eta_v" ;;
+            secret|secret-file) ;;
+            *) [ -n "$_eta_v" ] && printf -- '--set\n%s=%s\n' "${_EVT_NAME[$_eta_f]}" "$_eta_v" ;;
+        esac
+        _eta_f=$(( _eta_f + 1 ))
+    done
+}
+
+# _exakit_vs_tui_source_args <i> — the same for a source whose form is done.
+_exakit_vs_tui_source_args() {
+    printf '%s\n--name\n%s\n' "${_EVT_S_ID[$1]}" "${_EVT_S_NAME[$1]}"
+    printf '%s' "${_EVT_S_SETS[$1]}" | while IFS= read -r _esa_kv; do
+        [ -n "$_esa_kv" ] && printf -- '--set\n%s\n' "$_esa_kv"
+    done
+}
+
+# _exakit_vs_tui_engine <args-one-per-line> <command> [--json] [extra...] — the
+# engine with those arguments after the command (--json goes before it: it is
+# the engine's own option, not the command's).
+_exakit_vs_tui_engine() {
+    _ete_lines="$1"; _ete_cmd="$2"; shift 2
+    _ete_json=""
+    [ "${1:-}" = --json ] && { _ete_json="--json"; shift; }
+    _ete_extra="$*"
+    set -- "$_ete_cmd"
+    [ -n "$_ete_json" ] && set -- --json "$_ete_cmd"
+    while IFS= read -r _ete_w; do [ -n "$_ete_w" ] && set -- "$@" "$_ete_w"; done <<EOF
+$_ete_lines
+EOF
+    # shellcheck disable=SC2086 — the extra flags are words of our own
+    [ -n "$_ete_extra" ] && set -- "$@" $_ete_extra
+    exakit_vs_engine "$@"
+}
+
+# _exakit_vs_tui_form <connector> <pos> <total> <given-name> <given-sets> <password-file>
+# — one source's panel; on success it joins the _EVT_S_* lists. Returns 5 when
+# the reader left it out, 2 when its definition could not be read.
+_exakit_vs_tui_form() {
+    _evo_id="$1"; _evo_pos="$2"; _evo_total="$3"; _evo_pwfile="$6"
+    exakit_vs_engine inputs "$_evo_id" < /dev/null > "$_EVT_DIR/inputs" 2>>"${EXAKIT_LOG_FILE:-/dev/null}" || {
+        _exakit_vs_render "$_EVT_DIR/inputs"
+        # An engine older than this file (a kit copy updated by halves) has no
+        # "inputs": say so, and how the line-by-line path still works.
+        error "The connect form could not read $_evo_id's inputs. Update the kit (exakit update), or connect without the form: exakit connect $_evo_id --name <name> --set KEY=VALUE ... --yes"
+        return 2; }
+    # First line the connector's name, then name|label|kind|required|default|choices.
+    # A long prose label is cut to its first clause; the prompt has room for the rest.
+    run_python_any - "$(_exakit_vs_result "$_EVT_DIR/inputs")" > "$_EVT_DIR/fields" <<'PY'
+import json, sys
+doc = json.loads(sys.argv[1])
+print(doc["name"])
+for f in doc["inputs"]:
+    label = f["label"]
+    for cut in (" - ", " (", "; "):
+        label = label.split(cut)[0]
+    print("|".join(str(x).replace("|", "/") for x in
+                   (f["name"], label, f["kind"], "1" if f["required"] else "", f["default"], " ".join(f["choices"]))))
+PY
+    _evo_label=""
+    _EVT_NAME=(); _EVT_LAB=(); _EVT_KIND=(); _EVT_REQ=(); _EVT_DEF=(); _EVT_CH=(); _EVT_VAL=(); _EVT_DONE=()
+    _EVT_NF=0; _EVT_LW=0
+    while IFS='|' read -r _evo_n _evo_l _evo_k _evo_r _evo_d _evo_c; do
+        if [ -z "$_evo_label" ]; then _evo_label="$_evo_n"; continue; fi
+        _EVT_NAME[$_EVT_NF]="$_evo_n"; _EVT_LAB[$_EVT_NF]="$_evo_l"; _EVT_KIND[$_EVT_NF]="$_evo_k"
+        _EVT_REQ[$_EVT_NF]="$_evo_r"; _EVT_DEF[$_EVT_NF]="$_evo_d"; _EVT_CH[$_EVT_NF]="$_evo_c"
+        _EVT_VAL[$_EVT_NF]=""; _EVT_DONE[$_EVT_NF]=""
+        # What the command line already said is an answer, not a question.
+        if [ "$_evo_k" = source-name ] && [ -n "$4" ]; then _EVT_VAL[$_EVT_NF]="$4"; _EVT_DONE[$_EVT_NF]=1; fi
+        _evo_given="$(printf '%s\n' "$5" | sed -n "s/^$_evo_n=//p" | tail -1)"
+        [ -n "$_evo_given" ] && { _EVT_VAL[$_EVT_NF]="$_evo_given"; _EVT_DONE[$_EVT_NF]=1; }
+        if [ -n "$_evo_pwfile" ]; then
+            case "$_evo_k" in
+                secret) _EVT_DONE[$_EVT_NF]=1 ;;
+                secret-file) _EVT_VAL[$_EVT_NF]="$_evo_pwfile"; _EVT_DONE[$_EVT_NF]=1 ;;
+            esac
+        fi
+        [ "${#_evo_l}" -gt "$_EVT_LW" ] && _EVT_LW=${#_evo_l}
+        _EVT_NF=$(( _EVT_NF + 1 ))
+    done < "$_EVT_DIR/fields"
+    [ "$_EVT_LW" -le 30 ] || _EVT_LW=30
+    _evo_f=0
+    while [ "$_evo_f" -lt "$_EVT_NF" ]; do
+        _EVT_LAB[$_evo_f]="$(_exakit_vs_tui_short "${_EVT_LAB[$_evo_f]}" "$_EVT_LW")"
+        _evo_f=$(( _evo_f + 1 ))
+    done
+    _EVT_VW=$(( _EVT_IN - 7 - _EVT_LW - 2 ))
+    _evo_title="$_evo_pos of $_evo_total · $_evo_label"
+    while :; do
+        _EVT_ON_SCREEN=0
+        _evo_f=0
+        while [ "$_evo_f" -lt "$_EVT_NF" ]; do
+            if [ -n "${_EVT_DONE[$_evo_f]}" ]; then _evo_f=$(( _evo_f + 1 )); continue; fi
+            _exakit_vs_tui_draw "$_evo_title" "$_evo_f"
+            _evo_k="${_EVT_KIND[$_evo_f]}"; _evo_def="${_EVT_VAL[$_evo_f]:-${_EVT_DEF[$_evo_f]}}"
+            _evo_note=""
+            case "$_evo_k" in
+                choice) _evo_note="($(printf '%s' "${_EVT_CH[$_evo_f]}" | sed 's/ / · /g'))" ;;
+                secret) _evo_note="(hidden)"; _evo_def="" ;;
+                secret-file) _evo_note="(the path to the file)" ;;
+            esac
+            [ -n "$_evo_def" ] && _evo_note="${_evo_note:+$_evo_note }[$(_exakit_vs_tui_tail "$_evo_def" 32)]"
+            _evo_plain="${_EVT_LAB[$_evo_f]}${_evo_note:+ $_evo_note}"
+            if [ "$_evo_k" = secret ]; then
+                _evo_deco="$UI_ASK${_EVT_LAB[$_evo_f]}$UI_RESET $UI_DIM$_evo_note$UI_RESET"
+            else
+                _evo_deco=$'\001'"$UI_ASK"$'\002'"${_EVT_LAB[$_evo_f]}"$'\001'"$UI_RESET"$'\002'
+                [ -n "$_evo_note" ] && _evo_deco="$_evo_deco "$'\001'"$UI_DIM"$'\002'"$_evo_note"$'\001'"$UI_RESET"$'\002'
+            fi
+            while :; do
+                if [ "$_evo_k" = secret ]; then
+                    _exakit_vs_tui_ask "$_evo_plain" "$_evo_deco" 1 || return 5
+                    if [ -z "$_EVT_ANSWER" ]; then
+                        _exakit_vs_tui_say "$UI_ERR$UI_CROSS$UI_RESET" "this one is needed; it stays in memory and goes only to the database"
+                        continue
+                    fi
+                    _EVT_VAL[$_evo_f]="$_EVT_ANSWER"; _EVT_ANSWER=""
+                    break
+                fi
+                _exakit_vs_tui_ask "$_evo_plain" "$_evo_deco" 0 || return 5
+                _evo_v="${_EVT_ANSWER:-$_evo_def}"
+                case "$_evo_v" in "~/"*) _evo_v="$HOME/${_evo_v#\~/}" ;; esac
+                if [ "$_evo_k" = secret-file ]; then
+                    if [ -n "$_evo_v" ] && [ -f "$_evo_v" ] && [ -r "$_evo_v" ]; then _EVT_VAL[$_evo_f]="$_evo_v"; break; fi
+                    _exakit_vs_tui_say "$UI_ERR$UI_CROSS$UI_RESET" "${_evo_v:-no file} cannot be read here; give the path to the key file"
+                    continue
+                fi
+                # The engine's own rule for this input, in the words a scripted
+                # connect would get; the value travels on its stdin, never in argv.
+                printf '%s' "$_evo_v" | exakit_vs_engine field "$_evo_id" "${_EVT_NAME[$_evo_f]}" \
+                    > "$_EVT_DIR/field" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
+                if [ $? -eq 0 ]; then
+                    _evo_v="$(_exakit_vs_result "$_EVT_DIR/field" | run_python_any -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+                    if [ "$_evo_k" = source-name ]; then
+                        case " ${_EVT_TAKEN:-} " in *" $_evo_v "*)
+                            _exakit_vs_tui_say "$UI_ERR$UI_CROSS$UI_RESET" "$_evo_v is already the name of another source in this list"
+                            continue ;;
+                        esac
+                    fi
+                    _EVT_VAL[$_evo_f]="$_evo_v"
+                    break
+                fi
+                _exakit_vs_tui_say "$UI_ERR$UI_CROSS$UI_RESET" "$(sed -n 's/^FAIL //p' "$_EVT_DIR/field" | head -1)"
+            done
+            _EVT_DONE[$_evo_f]=1
+            _evo_f=$(( _evo_f + 1 ))
+        done
+        _exakit_vs_tui_draw "$_evo_title" -1
+        # The whole source, checked by the plan: what one field cannot see (a CA
+        # with tls=require), and what will be downloaded.
+        _exakit_vs_tui_engine "$(_exakit_vs_tui_args)" plan < /dev/null \
+            > "$_EVT_DIR/plan.$_EVT_COUNT" 2>>"${EXAKIT_LOG_FILE:-/dev/null}" && break
+        _exakit_vs_tui_say "$UI_ERR$UI_CROSS$UI_RESET" "$(sed -n 's/^FAIL //p' "$_EVT_DIR/plan.$_EVT_COUNT" | head -1)"
+        _exakit_vs_tui_yes "Change the answers?" || return 5
+        printf '\n'
+        _evo_f=0
+        while [ "$_evo_f" -lt "$_EVT_NF" ]; do _EVT_DONE[$_evo_f]=""; _evo_f=$(( _evo_f + 1 )); done
+        _evo_pwfile=""
+    done
+    # Kept for the review and the run, one entry per source.
+    _evo_name=""; _evo_secret=""; _evo_sfile=""; _evo_sets=""; _evo_where=""
+    _evo_f=0
+    while [ "$_evo_f" -lt "$_EVT_NF" ]; do
+        _evo_v="${_EVT_VAL[$_evo_f]}"
+        case "${_EVT_KIND[$_evo_f]}" in
+            source-name) _evo_name="$_evo_v" ;;
+            secret) _evo_secret="$_evo_v" ;;
+            secret-file) _evo_sfile="$_evo_v" ;;
+            *) [ -n "$_evo_v" ] && _evo_sets="$_evo_sets${_EVT_NAME[$_evo_f]}=$_evo_v"$'\n'
+               case "${_EVT_NAME[$_evo_f]}" in
+                   host|bucket|account|project|uri|region) [ -z "$_evo_where" ] && _evo_where="$_evo_v" ;;
+               esac ;;
+        esac
+        _evo_f=$(( _evo_f + 1 ))
+    done
+    [ -z "$_evo_secret" ] && [ -z "$_evo_sfile" ] && [ -n "$_evo_pwfile" ] && _evo_sfile="$_evo_pwfile"
+    _evo_where="${_evo_where#*://}"; _evo_where="${_evo_where%%/*}"
+    # A host name shows its first label (exakit-vs-test-pg): what a reader recognises.
+    case "$_evo_where" in *.*[a-zA-Z]*) _evo_where="${_evo_where%%.*}" ;; esac
+    _EVT_S_ID[$_EVT_COUNT]="$_evo_id"; _EVT_S_NAME[$_EVT_COUNT]="$_evo_name"
+    _EVT_S_LABEL[$_EVT_COUNT]="$_evo_label"; _EVT_S_SETS[$_EVT_COUNT]="$_evo_sets"
+    _EVT_S_SECRET[$_EVT_COUNT]="$_evo_secret"; _EVT_S_SFILE[$_EVT_COUNT]="$_evo_sfile"
+    _EVT_S_WHERE[$_EVT_COUNT]="$(_exakit_vs_tui_short "$_evo_where" 18)"
+    _EVT_TAKEN="${_EVT_TAKEN:-} $_evo_name"
+    _EVT_COUNT=$(( _EVT_COUNT + 1 ))
+    printf '\n'
+    return 0
+}
+
+# _exakit_vs_tui_table <state-file> <title> <indexes...> — a table of finished
+# forms, every row waiting.
+_exakit_vs_tui_table() {
+    _ett_state="$1"; _ett_title="$2"; shift 2
+    : > "$_ett_state"
+    _ett_k=0
+    for _ett_i in "$@"; do
+        _ett_k=$(( _ett_k + 1 ))
+        _ett_tree=tee; [ "$_ett_k" -eq "$#" ] && _ett_tree=corner
+        printf '%s|%s|1|waiting|||||||%s|%s\n' "$_ett_tree" "${_EVT_S_NAME[$_ett_i]}" \
+            "${_EVT_S_LABEL[$_ett_i]}" "${_EVT_S_WHERE[$_ett_i]}" >> "$_ett_state"
+    done
+    UI_TABLE_TITLE="$_ett_title"
+    UI_TABLE_COL1="Name"; UI_TABLE_COL2="Source"; UI_TABLE_COL3="Where"
+}
+
+# _exakit_vs_tui_run <state-file> <indexes...> — connect those sources one after
+# another while the table on screen follows. One at a time on purpose: parallel
+# connects contend for the same database objects. Collects _EVT_OK, _EVT_FAILED,
+# _EVT_NEEDS (sources waiting for a language container) and _EVT_RC.
+_exakit_vs_tui_run() {
+    _etr_state="$1"; shift
+    _etr_row=0
+    for _etr_i in "$@"; do
+        _etr_row=$(( _etr_row + 1 ))
+        _etr_out="$_EVT_DIR/run.$_etr_i"
+        _etr_args="$(_exakit_vs_tui_source_args "$_etr_i")"
+        _etr_t0="$(date +%s 2>/dev/null || echo 0)"
+        _etr_try=0
+        while :; do
+            _etr_try=$(( _etr_try + 1 ))
+            ui_table_set "$_etr_state" "$_etr_row" running 2 18 8 "starting"
+            (
+                ui_table_detach
+                # --json: the events (OK/INFO/WARN/FAIL) on stderr move the bar,
+                # and the answer on stdout carries the failure's kind.
+                if [ -n "${_EVT_S_SECRET[$_etr_i]}" ]; then
+                    printf '%s' "${_EVT_S_SECRET[$_etr_i]}" | _exakit_vs_tui_engine "$_etr_args" connect --json --secret-stdin
+                elif [ -n "${_EVT_S_SFILE[$_etr_i]}" ]; then
+                    _exakit_vs_tui_engine "$_etr_args" connect --json --secret-stdin < "${_EVT_S_SFILE[$_etr_i]}"
+                else
+                    _exakit_vs_tui_engine "$_etr_args" connect --json < /dev/null
+                fi
+            ) > "$_etr_out.json" 2> "$_etr_out" &
+            _etr_pid=$!
+            _etr_seen=0
+            while kill -0 "$_etr_pid" 2>/dev/null; do
+                # One OK line per finished step: the bar moves on those.
+                _etr_oks="$(grep -c '^OK ' "$_etr_out" 2>/dev/null)"; _etr_oks="${_etr_oks:-0}"
+                if [ "$_etr_oks" != "$_etr_seen" ]; then
+                    _etr_seen="$_etr_oks"
+                    _etr_p=$(( 5 + _etr_oks * 15 )); [ "$_etr_p" -le 90 ] || _etr_p=90
+                    _etr_c=$(( _etr_p + 15 )); [ "$_etr_c" -le 97 ] || _etr_c=97
+                    ui_table_set "$_etr_state" "$_etr_row" running "$_etr_p" "$_etr_c" 8 "step $_etr_oks"
+                fi
+                sleep 0.3
+            done
+            wait "$_etr_pid"; _etr_rc=$?
+            cat "$_etr_out" "$_etr_out.json" >> "${EXAKIT_LOG_FILE:-/dev/null}" 2>/dev/null
+            # Java without DNS needs no question: repaired, then tried once more.
+            if [ "$_etr_rc" -eq 20 ] && [ "$_etr_try" -eq 1 ]; then
+                ui_table_set "$_etr_state" "$_etr_row" running 30 60 20 "repairing DNS"
+                personal_slc_dns_repair >>"${EXAKIT_LOG_FILE:-/dev/null}" 2>&1 && continue
+            fi
+            break
+        done
+        _etr_secs=$(( $(date +%s 2>/dev/null || echo 0) - _etr_t0 ))
+        # The Status cell says it in a few words - a long one would push the row
+        # past the screen; the engine's whole sentence is said under the table.
+        _etr_say="$(run_python_any - "$_etr_out.json" "$_etr_rc" "${_EVT_S_NAME[$_etr_i]}" "$_etr_secs" <<'PY' 2>/dev/null
+import json, sys
+try:
+    doc = json.load(open(sys.argv[1]))
+except Exception:
+    doc = {}
+rc, name, secs = sys.argv[2], sys.argv[3], sys.argv[4]
+if rc == "0":
+    n = doc.get("tables", "?")
+    print("VS_%s · %s table%s · %s s" % (name.upper(), n, "" if n == 1 else "s", secs))
+else:
+    short = {"auth": "the credentials were refused", "tls": "the certificate did not verify",
+             "unreachable": "the source did not answer", "nohost": "the host name does not resolve",
+             "dns": "Java in the database has no DNS", "denied": "the account may not read this",
+             "region": "the region does not match", "nobucket": "no such bucket or container",
+             "clock": "the database clock is wrong"}
+    why = short.get(doc.get("kind", ""))
+    if not why and rc == "3":
+        why = "the name is already taken"
+    if not why:
+        why = doc.get("error") or "did not connect"
+    print(why if len(why) <= 34 else why[:33] + "…")
+PY
+)"
+        if [ "$_etr_rc" -eq 0 ]; then
+            ui_table_set "$_etr_state" "$_etr_row" done "" "" "" "" "$_etr_say"
+            _EVT_OK="${_EVT_OK:-} $_etr_i"
+        else
+            case "$_etr_rc" in
+                21) _etr_say="needs Java in the database"; _EVT_NEEDS="${_EVT_NEEDS:-} java:$_etr_i" ;;
+                23) _etr_say="needs Rust in the database"; _EVT_NEEDS="${_EVT_NEEDS:-} rust:$_etr_i" ;;
+                *)  _EVT_FAILED="${_EVT_FAILED:-} $_etr_i"
+                    [ "$_EVT_RC" -ne 0 ] || _EVT_RC="$_etr_rc" ;;
+            esac
+            ui_table_set "$_etr_state" "$_etr_row" failed "" "" "" "" "${_etr_say:-did not connect}"
+        fi
+    done
+}
+
+# _exakit_vs_tui_live <state-file> <lines-on-screen> <indexes...> — that table,
+# alive, over the lines it replaces.
+_exakit_vs_tui_live() {
+    _etl_state="$1"; UI_TABLE_LINES="$2"; shift 2
+    # Keys pressed while it runs are neither echoed into the frame nor kept: an
+    # impatient Enter must not land in the table, nor answer the next question.
+    _etl_tty="$(stty -g 2>/dev/null)"
+    stty -echo 2>/dev/null
+    _etl_live=0
+    ui_table_begin "$_etl_state" && _etl_live=1
+    _exakit_vs_tui_run "$_etl_state" "$@"
+    if [ "$_etl_live" = 1 ]; then ui_table_end "$_etl_state"; else ui_table_render "$_etl_state" 0; fi
+    run_python_any -c 'import sys, termios; termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)' 2>/dev/null
+    [ -n "$_etl_tty" ] && stty "$_etl_tty" 2>/dev/null
+}
+
+# _exakit_vs_tui <source-or-empty> <name-or-empty> <password-file-or-empty> — the
+# whole terminal flow; returns cmd_connect's exit code.
+_exakit_vs_tui() {
+    _EVT_DIR="$(mktemp -d "${TMPDIR:-/tmp}/exakit-connect.XXXXXX")" || { error "Could not create a temporary folder."; return 1; }
+    _EVT_COLS="$(_ui_term_cols)"
+    _EVT_W=$(( _EVT_COLS - 2 )); [ "$_EVT_W" -le 96 ] || _EVT_W=96
+    _EVT_IN=$(( _EVT_W - 4 ))
+    _EVT_SP=""; _EVT_HR=""; _evt_k=0
+    while [ "$_evt_k" -lt 160 ]; do _EVT_SP="$_EVT_SP "; _EVT_HR="$_EVT_HR$UI_HR"; _evt_k=$(( _evt_k + 1 )); done
+    _EVT_S_ID=(); _EVT_S_NAME=(); _EVT_S_LABEL=(); _EVT_S_SETS=(); _EVT_S_SECRET=(); _EVT_S_SFILE=(); _EVT_S_WHERE=()
+    _EVT_COUNT=0; _EVT_TAKEN=""; _EVT_OK=""; _EVT_FAILED=""; _EVT_NEEDS=""; _EVT_RC=0
+    _evt_name="$2"; _evt_pwfile="$3"
+
+    # 1. which sources
+    if [ -n "$1" ]; then
+        exakit_vs_engine resolve "$1" < /dev/null > "$_EVT_DIR/resolve" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
+        _evt_rc=$?
+        if [ "$_evt_rc" -ne 0 ]; then _exakit_vs_render "$_EVT_DIR/resolve"; rm -rf "$_EVT_DIR"; return "$_evt_rc"; fi
+        EXAKIT_VS_PICKED="$(_exakit_vs_result "$_EVT_DIR/resolve" | run_python_any -c 'import json,sys; print(json.load(sys.stdin)["connector"])')"
+    else
+        _exakit_vs_pick "$_EVT_DIR"
+        _evt_rc=$?
+        if [ "$_evt_rc" -ne 0 ]; then
+            [ "$_evt_rc" -eq 5 ] && info "Nothing was chosen; nothing was changed."
+            rm -rf "$_EVT_DIR"; return "$_evt_rc"
+        fi
+    fi
+    # shellcheck disable=SC2086 — connector ids, one word each
+    set -- $EXAKIT_VS_PICKED
+    _evt_total=$#
+
+    # 2. the details, one panel each. --name, --set and --password-file belong to
+    # the one source the command named.
+    printf '\n'
+    _evt_sets=""
+    [ "$_evt_total" -eq 1 ] && _evt_sets="$(printf '%s\n' "${EXAKIT_VS_SETS:-}" | grep -v '^--set$' | grep -v '^$')"
+    [ "$_evt_total" -eq 1 ] || { _evt_name=""; _evt_pwfile=""; }
+    _evt_pos=0
+    for _evt_id in "$@"; do
+        _evt_pos=$(( _evt_pos + 1 ))
+        _exakit_vs_tui_form "$_evt_id" "$_evt_pos" "$_evt_total" "$_evt_name" "$_evt_sets" "$_evt_pwfile"
+        case "$?" in
+            2) rm -rf "$_EVT_DIR"; return 2 ;;
+            5) printf '\n'; info "Left out: $_evt_id" ;;
+        esac
+    done
+    if [ "$_EVT_COUNT" -eq 0 ]; then info "Nothing was changed."; rm -rf "$_EVT_DIR"; return 5; fi
+    _evt_all=""; _evt_i=0
+    while [ "$_evt_i" -lt "$_EVT_COUNT" ]; do _evt_all="$_evt_all $_evt_i"; _evt_i=$(( _evt_i + 1 )); done
+
+    # 3. review: what each plan downloads and who can read the result, above one
+    # table of the sources and one question
+    for _evt_i in $_evt_all; do
+        _exakit_vs_result "$_EVT_DIR/plan.$_evt_i" | run_python_any -c 'import json, sys
+p = json.load(sys.stdin)
+new = [d for d in p["downloads"] if not d["cached"]]
+if new:
+    print("INFO %s downloads %s (%.0f MB)" % (p["name"], ", ".join("%s %s" % (d["role"], d["version"]) for d in new),
+                                           sum(d["bytes"] for d in new) / 1e6))
+for w in p["warnings"]:
+    print("WARN %s: %s" % (p["name"], w))
+if p.get("exposure"):
+    print("INFO %s: %s" % (p["name"], p["exposure"][0].upper() + p["exposure"][1:]))' > "$_EVT_DIR/review" 2>/dev/null
+        _exakit_vs_render "$_EVT_DIR/review"
+    done
+    _evt_state="$_EVT_DIR/sources"
+    # shellcheck disable=SC2086 — indexes
+    _exakit_vs_tui_table "$_evt_state" "Connect $_EVT_COUNT source$([ "$_EVT_COUNT" = 1 ] || printf s)" $_evt_all
+    ui_table_render "$_evt_state" 0
+    _evt_lines="$UI_TABLE_LINES"
+    _EVT_ON_SCREEN=0
+    if ! _exakit_vs_tui_yes "$(if [ "$_EVT_COUNT" = 1 ]; then printf 'Connect it now?'; else printf 'Connect all %s now?' "$_EVT_COUNT"; fi)"; then
+        UI_TABLE_COL2=""; UI_TABLE_COL3=""
+        info "Nothing was changed."; rm -rf "$_EVT_DIR"; return 5
+    fi
+
+    # 4. connect: the review table comes alive in place, over itself and the question
+    # shellcheck disable=SC2086 — indexes
+    _exakit_vs_tui_live "$_evt_state" $(( _evt_lines + _EVT_ON_SCREEN )) $_evt_all
+
+    # A language container is a download and a restart: asked once, below the
+    # table, and those sources then run again in a table of their own.
+    for _evt_lang in java rust; do
+        _evt_wait=""
+        for _evt_n in ${_EVT_NEEDS:-}; do
+            case "$_evt_n" in "$_evt_lang:"*) _evt_wait="$_evt_wait ${_evt_n#*:}" ;; esac
+        done
+        [ -n "$_evt_wait" ] || continue
+        printf '\n'
+        if [ "$_evt_lang" = java ]; then _exakit_vs_install_java; else _exakit_vs_install_rust; fi
+        if [ $? -ne 0 ]; then
+            _EVT_FAILED="${_EVT_FAILED:-}$_evt_wait"; [ "$_EVT_RC" -ne 0 ] || _EVT_RC=1
+            continue
+        fi
+        printf '\n'
+        # shellcheck disable=SC2086 — indexes
+        _exakit_vs_tui_table "$_EVT_DIR/again.$_evt_lang" "Connect again" $_evt_wait
+        # shellcheck disable=SC2086 — indexes
+        _exakit_vs_tui_live "$_EVT_DIR/again.$_evt_lang" 0 $_evt_wait
+    done
+    UI_TABLE_COL2=""; UI_TABLE_COL3=""
+
+    # What went wrong in the engine's own words, below the finished table.
+    printf '\n'
+    for _evt_i in ${_EVT_FAILED:-}; do
+        warn "${_EVT_S_NAME[$_evt_i]} did not connect:"
+        grep -v '^OK \|^RESULT ' "$_EVT_DIR/run.$_evt_i" > "$_EVT_DIR/why" 2>/dev/null
+        _exakit_vs_render "$_EVT_DIR/why"
+    done
+    for _evt_i in ${_EVT_OK:-}; do
+        ok "Query it like any schema: SELECT * FROM VS_$(printf '%s' "${_EVT_S_NAME[$_evt_i]}" | tr 'a-z' 'A-Z').<table> LIMIT 10"
+    done
+    [ -n "${_EVT_OK:-}" ] && info "Manage with: exakit source show <name> (every action: exakit help source)"
+    # Nothing secret outlives the command in this shell.
+    for _evt_i in $_evt_all; do _EVT_S_SECRET[$_evt_i]=""; done
+    rm -rf "$_EVT_DIR"
+    [ -z "${_EVT_FAILED:-}" ] || [ "$_EVT_RC" -ne 0 ] || _EVT_RC=1
+    return "$_EVT_RC"
+}
+
 # cmd_connect [source] [--name N] [--set KEY=VALUE]... [--password-file F]
 #             [--dry-run] [--yes] [--json]
 cmd_connect() {
@@ -250,6 +914,12 @@ $2"; EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${2%%=*}"; shift ;;
     done
     _require_install "$_cc_json"
     exakit_init_logging
+    # A person at a terminal gets the menu and the panels; a pipe, --yes,
+    # --dry-run and --json keep the line-by-line path below, unchanged.
+    if [ "$_cc_dry" = 0 ] && [ "$_cc_json" = 0 ] && _exakit_vs_tui_ok; then
+        _exakit_vs_tui "$_cc_source" "$_cc_name" "$_cc_pwfile"
+        exit $?
+    fi
     _cc_tty="$(_exakit_prompt_tty)"
     if [ -z "$_cc_source" ]; then
         [ -n "$_cc_tty" ] || reject "Name the source to connect, e.g. exakit connect postgresql (see: exakit source catalog)."

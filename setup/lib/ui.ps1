@@ -1464,7 +1464,10 @@ function Invoke-ExakitTableMenu {
         [int]$ExclusiveIndex = 0,
         [int]$GroupParent = 0, [int]$GroupFirst = 0, [int]$GroupLast = 0,
         [string]$GroupMode = "any",
-        [int]$OnScreen = 0
+        [int]$OnScreen = 0,
+        # The row the cursor starts on; 0 keeps row 2, past a "Select All" row.
+        # exakit connect's table has none and starts on 1. ⇄ UI_TABLE_MENU_START.
+        [int]$StartRow = 0
     )
     if ($null -eq $Table) { $Table = $script:UiTable }
     if ($null -eq $Table) { return @() }
@@ -1574,7 +1577,8 @@ function Invoke-ExakitTableMenu {
     # it: the group row is the one answer nobody has to move to - and never on a
     # row that cannot be picked, or the first Space would land on one.
     $cur = 1
-    if ($n -ge 2) { $cur = [int](& $step $cur 1) }
+    if ($StartRow -ge 1 -and $StartRow -le $n) { $cur = $StartRow }
+    elseif ($n -ge 2) { $cur = [int](& $step $cur 1) }
     if (-not $pickable.Contains($cur)) { $cur = [int](& $step $cur 1) }
     # Normally nothing of this table is on screen yet; a re-ask says otherwise.
     $drawn = 0
