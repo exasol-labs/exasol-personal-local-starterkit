@@ -2421,7 +2421,7 @@ function Invoke-CmdPersona {
                 if (-not $currentTitle) { $currentTitle = $current }
                 Info "This kit was set up as: $currentTitle"
             }
-            Info "Add one with: exakit persona add <id>"
+            Info "Add one with: exakit persona add (a menu), or exakit persona add <id>"
         }
         "show" {
             $id = if ($CmdArgs.Count -gt 1) { $CmdArgs[1] } else { "" }
@@ -4159,7 +4159,10 @@ try {
         "whats-new"    { Assert-ExakitKnownOptions -CommandName "whats-new" -Allowed @() -Arguments $RestArgs; Invoke-CmdWhatsNew -Version ($RestArgs | Select-Object -First 1) }
         "logs"         { Invoke-CmdLogs -LogArgs $RestArgs }
         "persona"      {
-            if ($RestArgs.Count -gt 0 -and $RestArgs[0] -in @('add', 'apply')) {
+            # No id: the persona question, as the install asks it.
+            if ($RestArgs.Count -eq 1 -and $RestArgs[0] -eq 'add') {
+                Invoke-ExakitPersonaAddMenu -Cli $PSCommandPath
+            } elseif ($RestArgs.Count -gt 0 -and $RestArgs[0] -in @('add', 'apply')) {
                 Invoke-ExakitMarketplaceCli -Script persona_apply -CmdArgs (@($RestArgs) + @('--cli', $PSCommandPath, '--host', (Get-Process -Id $PID).Path))
             } else {
                 Invoke-CmdPersona -CmdArgs $RestArgs

@@ -157,6 +157,27 @@ function Set-ExakitPersonaEnv {
     $env:EXAKIT_PERSONA_ACTIVE = "1"
 }
 
+# Invoke-ExakitPersonaAddMenu <cli> - `exakit persona add` with no id: the install's
+# own persona question, the kit's personas ticked, and each one newly ticked is
+# added as `exakit persona add <id>` would. Without a console there is no one to
+# ask: it names the command instead and exits 2. Twin of exakit_persona_add_menu.
+function Invoke-ExakitPersonaAddMenu {
+    param([string]$Cli)
+    if (-not (Test-ExakitInteractive)) {
+        [Console]::Error.WriteLine("persona: name the persona to add: exakit persona add <id> (exakit persona list shows them)")
+        exit 2
+    }
+    $was = @("$(Get-ExakitManifestValue 'persona.id')" -split ',' | Where-Object { $_ })
+    Remove-Item Env:EXAKIT_PERSONA -ErrorAction SilentlyContinue
+    Read-ExakitPersonaQuestion
+    $new = @("$env:EXAKIT_PERSONA" -split ',' | Where-Object { $_ -and $_ -notin $was })
+    if ($new.Count -eq 0) {
+        Info "Nothing new to add. To take a persona off: exakit persona remove <id>"
+        return
+    }
+    Invoke-ExakitMarketplaceCli -Script persona_apply -CmdArgs @('add', ($new -join ','), '--cli', $Cli, '--host', (Get-Process -Id $PID).Path)
+}
+
 # Read-ExakitPersonaQuestion - "What will you use this machine for?": the
 # personas the kit offers, as many as wanted - General (the kit's own samples)
 # is one of them, so "everything" is every row ticked. Drawn by

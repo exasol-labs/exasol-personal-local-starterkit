@@ -150,6 +150,21 @@ try {
     Check "...without it and without a console: the same defaults, not confirmed" "1,2|False" "$($plain -join ',')|$($script:ExakitTableConfirmed)"
     foreach ($v in @("EXAKIT_DATASETS_PRESELECT", "EXAKIT_PERSONA_ACTIVE")) { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
 
+    Write-Host "exakit persona add with no id: the persona question, then the newly ticked:"
+    $dispatch = Get-Content -Raw (Join-Path $repo "setup/exakit.ps1")
+    Check "the dispatcher sends a bare add to the menu" $true $dispatch.Contains('if ($RestArgs.Count -eq 1 -and $RestArgs[0] -eq ''add'') {')
+    function Test-ExakitInteractive { $true }
+    function Get-ExakitManifestValue { param($Key) if ($Key -eq "persona.id") { "data-scientist" } }
+    function Read-ExakitPersonaQuestion { $env:EXAKIT_PERSONA = $script:Ticked }
+    function Invoke-ExakitMarketplaceCli { param($Script, $CmdArgs) $script:Added = "$Script $($CmdArgs[0]) $($CmdArgs[1])" }
+    $script:Ticked = "data-scientist,ml-engineer"; $script:Added = ""
+    Invoke-ExakitPersonaAddMenu -Cli "exakit.ps1"
+    Check "only the newly ticked persona is added" "persona_apply add ml-engineer" $script:Added
+    $script:Ticked = "data-scientist"; $script:Added = ""
+    Invoke-ExakitPersonaAddMenu -Cli "exakit.ps1"
+    Check "nothing new ticked adds nothing" "" $script:Added
+    Remove-Item Env:EXAKIT_PERSONA -ErrorAction SilentlyContinue
+
 } finally {
     Clear-Answers
     Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue

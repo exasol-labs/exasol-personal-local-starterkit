@@ -292,6 +292,36 @@ exakit_persona_recorded() {
     _exakit_persona_service check "$_epr_out" 2>/dev/null
 }
 
+# _exakit_persona_newly_ticked <recorded> <ticked> — the ticked personas the
+# kit was not set up as yet, comma-separated, in the order they were ticked.
+_exakit_persona_newly_ticked() {
+    _epnt_new=""
+    for _epnt_id in $(printf '%s' "$2" | tr ',' ' '); do
+        case ",$1," in *",$_epnt_id,"*) ;; *) _epnt_new="${_epnt_new:+$_epnt_new,}$_epnt_id" ;; esac
+    done
+    printf '%s\n' "$_epnt_new"
+}
+
+# exakit_persona_add_menu — `exakit persona add` with no id: the install's own
+# persona question, the kit's personas ticked, and each one newly ticked is
+# added as `exakit persona add <id>` would. Without a terminal there is no one
+# to ask: it names the command instead and exits 2 (bad arguments).
+exakit_persona_add_menu() {
+    if [ ! -t 0 ] || [ ! -t 1 ]; then
+        printf '%s\n' "persona: name the persona to add: exakit persona add <id> (exakit persona list shows them)" >&2
+        return 2
+    fi
+    _epam_was="$(manifest_get persona.id 2>/dev/null || true)"
+    EXAKIT_PERSONA=""
+    exakit_persona_question
+    _epam_new="$(_exakit_persona_newly_ticked "$_epam_was" "${EXAKIT_PERSONA:-}")"
+    if [ -z "$_epam_new" ]; then
+        info "Nothing new to add. To take a persona off: exakit persona remove <id>"
+        return 0
+    fi
+    _exakit_marketplace_cli persona_apply add "$_epam_new" --cli "$(exakit_repo_root)/setup/exakit"
+}
+
 # Compatibility entry point for callers that already sourced this adapter.
 exakit_persona_add() {
     _exakit_marketplace_cli persona_apply add "$1" --cli "$(_exakit_marketplace_root)/setup/exakit"

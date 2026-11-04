@@ -2534,7 +2534,7 @@ cmd_persona() {
             if [ -n "$_cp_current" ]; then
                 info "This kit was set up as: $(_exakit_persona_service title "$_cp_current" 2>/dev/null || printf '%s' "$_cp_current")"
             fi
-            info "Add one with: exakit persona add <id>"
+            info "Add one with: exakit persona add (a menu), or exakit persona add <id>"
             ;;
         show)
             exakit_persona_known "${2:-}" || die "$EXAKIT_PERSONA_PROBLEM"
@@ -2794,7 +2794,10 @@ case "${1:-help}" in
     persona)
         shift
         case "${1:-}" in
-            add|apply) _exakit_marketplace_cli persona_apply "$@" --cli "$(exakit_repo_root)/setup/exakit" ;;
+            add|apply)
+                # No id: the persona question, as the install asks it.
+                if [ "$1" = add ] && [ $# -eq 1 ]; then exakit_persona_add_menu; exit $?; fi
+                _exakit_marketplace_cli persona_apply "$@" --cli "$(exakit_repo_root)/setup/exakit" ;;
             *) command -v cmd_persona >/dev/null 2>&1 || die "The persona module is missing from this kit copy. Repair with: exakit update"; cmd_persona "$@" ;;
         esac
         ;;

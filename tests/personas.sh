@@ -254,5 +254,15 @@ for _os in macos linux; do
         "$(awk '/EXAKIT_PERSONA_ACTIVE:-}" \]; then/{p=1} p&&/exakit_acquire_lock/{printf "acquire "} p&&/exakit_marketplace_offer \)/{printf "offer "} p&&/exakit_release_lock/{printf "release"; exit}' "$ROOT/setup/setup-$_os.sh")"
 done
 
+echo "exakit persona add with no id: the persona question, then the newly ticked:"
+check "only the ones the kit was not set up as are added" "ml-engineer,general" \
+    "$(_exakit_persona_newly_ticked "data-scientist" "data-scientist,ml-engineer,general")"
+check "nothing new ticked adds nothing" "" "$(_exakit_persona_newly_ticked "data-scientist,general" "general")"
+out="$(exakit_persona_add_menu </dev/null 2>&1)"; rc=$?
+named=no; case "$out" in *"exakit persona add <id>"*) named=yes ;; esac
+check "without a terminal it names the command and exits 2" "2|yes" "$rc|$named"
+check "the dispatcher sends a bare add to the menu" "1" \
+    "$(grep -c 'if \[ "\$1" = add \] && \[ \$# -eq 1 \]; then exakit_persona_add_menu' "$ROOT/setup/exakit")"
+
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
