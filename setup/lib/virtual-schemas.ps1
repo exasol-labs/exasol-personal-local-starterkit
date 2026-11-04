@@ -337,30 +337,21 @@ function Get-ExakitVsTuiRows {
 # none when nothing was chosen. Twin of _exakit_vs_pick.
 function Invoke-ExakitVsPick {
     $catalog = Get-ExakitVsResultOf (Invoke-ExakitVsEngine -Arguments @("catalog")).Lines
-    $listing = Get-ExakitVsResultOf (Invoke-ExakitVsEngine -Arguments @("list")).Lines
     if ($null -eq $catalog) { Write-Host ("  {0} The connector catalog could not be read. Details: exakit logs" -f $script:UiCross) -ForegroundColor Red; return @() }
-    $have = @{}
-    if ($null -ne $listing) {
-        foreach ($s in @($listing.sources)) {
-            if (-not $have.ContainsKey("" + $s.connector)) { $have["" + $s.connector] = @() }
-            $have["" + $s.connector] += ("" + $s.name)
-        }
-    }
-    $kinds = @{ "java-jdbc" = "JDBC"; "java-document-files" = "files"; "lua-jdbc" = "REST + JDBC"; "rust-native" = "native" }
-    $entries = @(@($catalog.connectors) | Where-Object { $_.tier -eq "GA" })
-    $t = New-ExakitTable -Title "Connect external sources" -Col1 "Source" -Col2 "Kind" -Col3 "Description"
+    # Source, the adapter version it pins, and GA or Beta: GA first, then Beta.
+    # Twin of _exakit_vs_pick.
+    $entries = @(@($catalog.connectors) | Where-Object { $_.tier -eq "GA" }) + @(@($catalog.connectors) | Where-Object { $_.tier -ne "GA" })
+    $t = New-ExakitTable -Title "Connect external sources" -Col1 "Source" -Col2 "Version" -Col3 "Release"
     $ids = @()
     for ($i = 0; $i -lt $entries.Count; $i++) {
         $e = $entries[$i]
         $tree = "tee"
         if ($i -eq $entries.Count - 1) { $tree = "corner" }
-        $kind = "" + $e.profile
-        if ($kinds.ContainsKey($kind)) { $kind = $kinds[$kind] }
-        $text = "" + $e.summary
-        if ($have.ContainsKey("" + $e.id)) { $text += " " + $script:UiMidDot + " connected: " + ((@($have["" + $e.id]) | Sort-Object) -join ", ") }
-        $label = ("" + $e.name).Split(@(" ("), [StringSplitOptions]::None)[0]
+        $kind = "" + $e.version
+        $text = "" + $e.tier
+        $label = "" + $e.name
         if ("" + $e.status -eq "gated") {
-            $row = Add-ExakitTableRow -Kind $tree -Label $label -Col2 $kind -Col3 ("not available yet: " + $e.gate) -Table $t
+            $row = Add-ExakitTableRow -Kind $tree -Label $label -Col2 $kind -Col3 ($text + ", not available yet") -Table $t
             Disable-ExakitTableRow -Row $row -Note "not available yet" -Table $t
         } else {
             [void](Add-ExakitTableRow -Kind $tree -Label $label -Col2 $kind -Col3 $text -Table $t)
