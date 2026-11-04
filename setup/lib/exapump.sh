@@ -332,7 +332,8 @@ exapump_verify_runs() {
 # networking instead of failing the install. The wrapper is transparent
 # to every caller: same path, same CLI, profiles and data files under $HOME
 # and /tmp remain visible.
-EXAKIT_EXAPUMP_SHIM_IMAGE="${EXAKIT_EXAPUMP_SHIM_IMAGE:-ubuntu:24.04}"
+# Fully qualified: Podman refuses a short name without a TTY to ask on (registries.conf short-name-mode).
+EXAKIT_EXAPUMP_SHIM_IMAGE="${EXAKIT_EXAPUMP_SHIM_IMAGE:-docker.io/library/ubuntu:24.04}"
 exapump_install_glibc_shim() {
     _shim_runtime="$(detect_podman)"
     # Rootless podman remaps ownership inside the container: without keep-id
@@ -390,11 +391,22 @@ case "$PWD" in
             _exakit_wd="$HOME"
         fi ;;
 esac
+# The kit keeps its profile in its own store and names it with EXAPUMP_CONFIG: passed in, or exapump inside reads
+# ~/.exapump and finds no starter-kit profile. Its folder is mounted when it is not under $HOME already.
+_exakit_e=""; _exakit_ev=""; _exakit_c=""; _exakit_cp=""
+if [ -n "${EXAPUMP_CONFIG:-}" ]; then
+    _exakit_e="-e"; _exakit_ev="EXAPUMP_CONFIG=$EXAPUMP_CONFIG"
+    _exakit_cd="$(dirname "$EXAPUMP_CONFIG")"
+    case "$_exakit_cd" in
+        "$HOME"*|/tmp*) ;;
+        *) [ -d "$_exakit_cd" ] && { _exakit_c="-v"; _exakit_cp="$_exakit_cd:$_exakit_cd"; } ;;
+    esac
+fi
 exec @RUNTIME@ run --rm $_exakit_tty --network host @USERNS@ \
     -u "$(id -u):$(id -g)" \
-    -e HOME="$HOME" \
+    -e HOME="$HOME" ${_exakit_e:+"$_exakit_e"} ${_exakit_ev:+"$_exakit_ev"} \
     -v "$HOME:$HOME" -v /tmp:/tmp \
-    ${_exakit_v:+"$_exakit_v"} ${_exakit_vp:+"$_exakit_vp"} \
+    ${_exakit_v:+"$_exakit_v"} ${_exakit_vp:+"$_exakit_vp"} ${_exakit_c:+"$_exakit_c"} ${_exakit_cp:+"$_exakit_cp"} \
     -w "$_exakit_wd" \
     @IMAGE@ \
     "@REAL@" "$@"

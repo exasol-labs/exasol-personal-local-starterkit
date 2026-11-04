@@ -821,6 +821,9 @@ jobs:
       - run: bash tests/ps-undefined-functions.sh
         if: matrix.shard == 2
       - run: bash tests/versions-manifest.sh
+      # The exapump wrapper for glibc < 2.38, rendered: no CI runner is old enough to generate it.
+      - run: bash tests/exapump-shim-wrapper.sh
+        if: matrix.shard == 1
       - run: bash tests/uv-bootstrap.sh
         if: matrix.shard == 3
       - run: bash tests/personal-s3.sh
