@@ -30,7 +30,7 @@ def _(mo):
     mo.md(r"""
     ## Start a workflow
 
-    One ID links data, checks and model runs. To continue the Data Scientist's log, start the kernel with `EXAKIT_WORKFLOW_ID`.
+    One ID links data, checks and model runs. To continue an earlier log, start the kernel with `EXAKIT_WORKFLOW_ID`.
     """)
     return
 
@@ -283,7 +283,7 @@ def _(mo):
     mo.md(r"""
     ## Next
 
-    Run `data-scientist/01_explore.ipynb` up to its handoff cell, then open `01_train.ipynb`.
+    Open `01_train.ipynb`: it trains from the approved column map above and writes the training handoff the next notebooks use.
     """)
     return
 

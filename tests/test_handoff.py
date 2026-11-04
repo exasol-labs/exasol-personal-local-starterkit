@@ -334,7 +334,7 @@ class FileTest(HandoffCase):
     def test_a_missing_handoff_says_how_to_make_one(self):
         with self.assertRaises(FileNotFoundError) as caught:
             handoff.read_handoff("esophageal_posts")
-        self.assertIn("handoff_from", str(caught.exception))
+        self.assertIn("nb.write_handoff(conn, ds)", str(caught.exception))
         with self.assertRaises(FileNotFoundError):
             handoff.read_handoff("esophageal_posts-v9")
         with self.assertRaises(FileNotFoundError):
@@ -361,14 +361,14 @@ class StaleTest(HandoffCase):
     def test_a_new_descriptor_version_is_stale_with_the_fix(self):
         record = handoff.handoff_from(FakeConn(), _ds(SYNTHETIC.replace("version: 3", "version: 2")))
         reason = handoff.handoff_is_stale(FakeConn(), record, _ds())
-        self.assertEqual(reason, "descriptor sensor_readings changed since the handoff (v2 → v3): re-run 01_explore or build "
-                                 "the handoff: handoff = exakit.nb.handoff_from(ds)")
+        self.assertEqual(reason, "descriptor sensor_readings changed since the handoff (v2 → v3): write it again: "
+                                 "nb.write_handoff(conn, ds)")
 
     def test_a_changed_descriptor_digest_at_the_same_version_is_stale(self):
         record = handoff.handoff_from(FakeConn(), _ds(file_digest="a" * 64))
         reason = handoff.handoff_is_stale(FakeConn(), record, _ds(file_digest="c" * 64))
         self.assertIn("descriptor sensor_readings changed since the handoff (v3, its file digest differs)", reason)
-        self.assertIn("exakit.nb.handoff_from(ds)", reason)
+        self.assertIn("nb.write_handoff(conn, ds)", reason)
         with mock.patch.object(Dataset, "current_table_digest", create=True, return_value="sha256:" + "b" * 64):
             record = handoff.handoff_from(FakeConn(), _ds(table_digest="sha256:" + "b" * 64))
             self.assertIsNone(handoff.handoff_is_stale(FakeConn(), record, _ds(table_digest="sha256:" + "b" * 64)))

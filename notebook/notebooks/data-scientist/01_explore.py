@@ -11,7 +11,7 @@
 #
 # **Dataset:** `esophageal_posts` by default; change `DATASET` for `banking_complaints` or your own file. **How long:** about two minutes.
 #
-# Compare groups, follow outcomes over time, fit a small local model, then write a handoff for the ML Engineer.
+# Compare groups, follow outcomes over time, fit a small local model, and see what the texts are about.
 #
 # Optional: `USE_AI_THEMES = True` lets your model say what the label-1 texts are about, traced to Langfuse when it is set up.
 
@@ -22,7 +22,7 @@ USE_AI_THEMES = False  # True: your model sorts the texts into themes (needs EXA
 # %% [markdown]
 # ## Load the column map
 #
-# `DATASET` is a sample ID or a file path with its descriptor beside it. A draft map is enough here; the handoff needs an approved one.
+# `DATASET` is a sample ID or a file path with its descriptor beside it. A draft map is enough here.
 #
 # Set `WORKFLOW_ID` to the quickstart's ID to keep one log. Steps whose roles are missing skip and say why.
 
@@ -215,26 +215,3 @@ themes if themes is not None else text_sample
 # ## Decide what to test next
 #
 # Keep one finding worth validating. To rerun on other data, change `DATASET`.
-
-# %% [markdown]
-# ## Hand off to the ML Engineer
-#
-# Writes a **handoff**: dataset, approved map version, data fingerprint, features, label and split (earliest 80% train, latest 20% test). Next: `ml-engineer/01_train.ipynb`.
-#
-# Needs an approved map with date and label roles. Without a date: `nb.write_handoff(conn, ds, split="random")`.
-
-# %%
-handoff_path = None
-if not (ds.has("date") and ds.has("label")):
-    print(f"Skipped - a time-based training handoff needs date and label roles ({missing_line}). "
-          "For data without a date, explicitly request nb.write_handoff(conn, ds, split='random') after approval.")
-elif ds.status != "approved":
-    print("Skipped - approve the descriptor before writing a training handoff: exakit describe " + ds.id + " --approve")
-else:
-    handoff_path = nb.write_handoff(conn, ds)
-    handoff = nb.read_handoff(handoff_path)
-    print(f"Handoff written: {handoff_path}")
-    print(f"It holds descriptor {handoff['descriptor']['id']} v{handoff['descriptor']['version']}, the feature view "
-          f"{handoff['feature_view']['name']} ({len(handoff['input_schema'])} features), the label "
-          f"{handoff['label']['column']} (positive: {handoff['label']['positive']}) and a {handoff['split']['kind']} split; "
-          "ml-engineer/01_train starts from it.")

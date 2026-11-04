@@ -1,6 +1,6 @@
 """exakit_nb.ml_train: the training plan from the handoff, on a fake Exasol connection (python3 -m unittest tests.test_ml_train).
 
-What it pins: the plan refuses a draft descriptor, a stale handoff (the line names handoff_from(ds)), a forged view or
+What it pins: the plan refuses a draft descriptor, a stale handoff (the line names nb.write_handoff(conn, ds)), a forged view or
 training SQL, and a random split the handoff does not mark as asked for (an explicit one trains); the plan is the same
 on two builds and the rendered UDF trains to the same metrics and coefficients twice, rows shuffled, when scikit-learn
 is installed here (AC-ML3.4; the live twin is tests/lib/live_train_twice.py); the coefficients land beside the handoff
@@ -154,6 +154,12 @@ class TrainPlanTest(HandoffCase):
             _plan(conn, None, {}, class_weight="automatic")
         self.assertEqual(conn.statements, [])
 
+    def setUp(self):
+        super().setUp()
+        container = mock.patch.dict(os.environ, {ml_train.CONTAINER_VARIABLE: "PYTHON3"})   # no test reads this machine's manifest
+        container.start()
+        self.addCleanup(container.stop)
+
     def test_approved_handoff_creates_view_and_drops_constant_feature(self):
         ds, conn = _ds(), TrainConn()
         record = handoff.handoff_from(conn, ds)
@@ -190,10 +196,10 @@ class TrainPlanTest(HandoffCase):
         record["descriptor"]["version"] = 1
         with self.assertRaises(ValueError) as caught:
             prepare_training(conn, ds, record)
-        self.assertEqual(str(caught.exception), "descriptor sensor_readings changed since the handoff (v1 → v3): re-run 01_explore "
-                                                "or build the handoff: handoff = exakit.nb.handoff_from(ds)")
+        self.assertEqual(str(caught.exception), "descriptor sensor_readings changed since the handoff (v1 → v3): write it again: "
+                                                "nb.write_handoff(conn, ds)")
         self.assertFalse(any(statement.startswith("CREATE ") for statement in conn.statements))
-        with self.assertRaisesRegex(ValueError, r"the data of LAB\.READINGS changed since the handoff.*handoff_from\(ds\)"):
+        with self.assertRaisesRegex(ValueError, r"the data of LAB\.READINGS changed since the handoff.*nb\.write_handoff\(conn, ds\)"):
             prepare_training(TrainConn(rows=121), ds, handoff.handoff_from(conn, ds))
 
 
@@ -208,10 +214,9 @@ class TrainingHandoffTest(HandoffCase):
             record = training_handoff(TrainConn(), ds)
         self.assertEqual(record["descriptor"]["version"], 3)
         self.assertEqual(record["written_by"], "01_train")
-        self.assertEqual(out.getvalue().strip(),
-                         "no handoff file for sensor_readings in " + str(self.home / "handoffs") + ": built from the approved "
-                         "descriptor v3 (not from 01_explore; run data-scientist/01_explore to write one)")
-        self.assertFalse((self.home / "handoffs").exists(), "built, not written")
+        written = self.home / "handoffs" / "sensor_readings-v3.json"
+        self.assertEqual(out.getvalue().strip(), f"handoff written from the approved descriptor v3: {written}")
+        self.assertTrue(written.is_file(), "written, so 02_rust_score finds it without another persona's notebook")
         self.assertIsNone(handoff.handoff_is_stale(TrainConn(), record, ds))
         with contextlib.redirect_stdout(io.StringIO()):
             plan = _plan(TrainConn(), ds, record)
@@ -229,7 +234,7 @@ class TrainingHandoffTest(HandoffCase):
         with contextlib.redirect_stdout(io.StringIO()) as out:
             self.assertEqual(training_handoff(TrainConn(), older, name="sensor_readings-v2")["descriptor"]["version"], 2)
         self.assertTrue(out.getvalue().strip().endswith("sensor_readings-v2.json"))
-        with self.assertRaisesRegex(ValueError, r"changed since the handoff \(v2 → v3\).*handoff_from\(ds\)"):
+        with self.assertRaisesRegex(ValueError, r"changed since the handoff \(v2 → v3\).*nb\.write_handoff\(conn, ds\)"):
             training_handoff(TrainConn(), ds, name="sensor_readings-v2")
         with self.assertRaisesRegex(ValueError, r"the data of LAB\.READINGS changed since the handoff"):
             training_handoff(TrainConn(rows=121), ds)
@@ -249,6 +254,12 @@ class TrainingHandoffTest(HandoffCase):
 class SplitRuleTest(HandoffCase):
     """Design 7: refuse when no date role unless split.kind = random is explicit in the handoff."""
 
+    def setUp(self):
+        super().setUp()
+        container = mock.patch.dict(os.environ, {ml_train.CONTAINER_VARIABLE: "PYTHON3"})   # no test reads this machine's manifest
+        container.start()
+        self.addCleanup(container.stop)
+
     def test_a_random_split_the_handoff_does_not_mark_as_asked_for_is_refused(self):
         ds, conn = _ds(NO_DATE), TrainConn()
         record = handoff.handoff_from(conn, ds, split="random")
@@ -263,7 +274,7 @@ class SplitRuleTest(HandoffCase):
                                  "the handoff's split is random without having been asked for (split.explicit is not true), "
                                  "and a time split needs a date role: write the handoff with the random split named - "
                                  "nb.write_handoff(conn, ds, split=\"random\") - or add a date role to the descriptor and "
-                                 "approve it (exakit describe sensor_readings), then re-run 01_explore.")
+                                 "approve it (exakit describe sensor_readings), then write it again: nb.write_handoff(conn, ds).")
         self.assertFalse(any(statement.startswith("CREATE ") for statement in conn.statements))
 
     def test_an_explicit_random_split_trains(self):
@@ -349,7 +360,10 @@ class DeterminismTest(HandoffCase):
             exec(body, namespace)
             ctx = Ctx(order)
             namespace["run"](ctx)
-            (_key, _params, metrics, model_b64, _path, sha, _language, _digest, _versions, extras), = ctx.emitted
+            emitted = sorted(ctx.emitted, key=lambda row: row[10])     # a model over 1 MB comes back in parts
+            (_key, _params, metrics, _part, _path, sha, _language, _digest, _versions, extras, _number, parts) = emitted[0]
+            self.assertEqual(len(emitted), parts)
+            model_b64 = "".join(row[3] for row in emitted)
             results.append((json.loads(metrics), json.loads(extras)["coefficients"], sha, model_b64))
         self.assertEqual(results[0][0], results[1][0], "the metrics are identical")
         self.assertEqual(results[0][1], results[1][1], "the coefficients are identical")

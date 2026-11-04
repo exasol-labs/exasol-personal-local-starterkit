@@ -11,10 +11,10 @@
 #
 # **Dataset:** `esophageal_posts` by default; change `DATASET` for Banking or your own approved file. **How long:** about five minutes after setup.
 #
-# Trains a model inside Exasol from the Explore handoff and records it in MLflow. No LLM needed.
+# Trains a model inside Exasol from the approved column map and records it in MLflow. No LLM needed.
 #
 # **Run first:**
-# - an approved descriptor and the Explore handoff
+# - an approved column map with a label (the quickstart's review step, or `exakit describe <id> --approve`)
 # - a Python ML runtime: `exakit udf-use default` (`PYTHON3_ML`) or `exakit udf-setup` (`PYTHON3`); `EXAKIT_UDF_CONTAINER` picks another alias
 # - `exakit mlflow start` for the MLflow UI
 
@@ -33,7 +33,7 @@ elif not nb.current_workflow():
 # %% [markdown]
 # ## Load the handoff
 #
-# Check the printed ID and split. A stale handoff is refused; with no handoff file, one is built from the approved descriptor. No date role? Set `SPLIT = "random"`.
+# The handoff fixes what is trained on: the approved map version, a data fingerprint, the features, the label and the split. With none yet, it is written here from the approved map; a stale one is refused. Check the printed ID and split. No date role? Set `SPLIT = "random"`.
 
 # %%
 SPLIT = None  # None: the time split by the date role; "random": a hash split, only when there is no handoff file yet

@@ -356,14 +356,14 @@ def read_handoff(id_or_path: str | Path) -> dict[str, Any]:
         found = [(int(m.group("version")), p) for p in handoffs_dir().glob(f"{name}-v*.json")
                  if (m := _FILE.match(p.name)) and m.group("id") == name]
         if not found:
-            raise FileNotFoundError(f"No handoff for descriptor {name} in {handoffs_dir()}: run 01_explore on it, or "
-                                    "build one: handoff = exakit.nb.handoff_from(conn, ds)")
+            raise FileNotFoundError(f"No handoff for descriptor {name} in {handoffs_dir()}: ml-engineer/01_train writes one, "
+                                    "or write it here: nb.write_handoff(conn, ds)")
         path = max(found)[1]
     else:
         raise FileNotFoundError(f"No handoff at {name}: give a descriptor id, <id>-v<n>, or the path of a handoff file.")
     if not path.is_file():
-        raise FileNotFoundError(f"No handoff at {path}: run 01_explore on the descriptor, or build one: "
-                                "handoff = exakit.nb.handoff_from(conn, ds)")
+        raise FileNotFoundError(f"No handoff at {path}: ml-engineer/01_train writes one, or write it here: "
+                                "nb.write_handoff(conn, ds)")
     record = json.loads(path.read_text(encoding="utf-8"))
     for key in ("descriptor", "feature_view", "label", "split", "training_sql", "input_schema", "output_schema"):
         if key not in record:
@@ -375,7 +375,7 @@ def handoff_is_stale(conn, handoff: dict[str, Any], ds: Dataset) -> str | None:
     """None when ``handoff`` still describes ``ds`` and its data; else the line 01_train prints before it refuses:
     the descriptor's version or digest changed (recomputed from ``ds``: the same kind the handoff recorded), or - with
     a connection - the data digest no longer matches. The fix is in the line."""
-    fix = "re-run 01_explore or build the handoff: handoff = exakit.nb.handoff_from(ds)"
+    fix = "write it again: nb.write_handoff(conn, ds)"
     record = handoff.get("descriptor") or {}
     if record.get("id") != ds.id:
         return f"the handoff is for descriptor {record.get('id')}, not {ds.id}: {fix}"

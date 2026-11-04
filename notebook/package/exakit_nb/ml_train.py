@@ -27,7 +27,7 @@ from urllib.request import url2pathname
 
 from ._kit import _home, setting
 from .dataset import Dataset
-from .handoff import SPLITS, feature_view, handoff_from, handoff_is_stale, handoffs_dir, read_handoff, training_sql
+from .handoff import SPLITS, feature_view, handoff_is_stale, handoffs_dir, read_handoff, training_sql, write_handoff
 from .workflow import log_sql
 
 __all__ = ["COEFFICIENTS_FILE", "CONTAINER_VARIABLE", "PYTHON_CONTAINERS", "TrainingPlan", "coefficients_of",
@@ -158,10 +158,10 @@ def udf_container(record: dict[str, Any] | None = None, *, prefer: tuple[str, ..
 
 
 def training_handoff(conn, ds: Dataset, *, name: str | None = None, split: str | None = None) -> dict[str, Any]:
-    """The handoff 01_train starts from (requirements 2.2 step 4): the file explore wrote for ``ds`` (``name``: a path,
-    ``<id>-v<n>``, default the descriptor's latest), refused when it is stale; when there is no file at all, one built
-    now from the approved descriptor with handoff_from (said in one line; nothing is written - explore stays the
-    writer). ``split`` passes through to the build ("random" when there is no date role)."""
+    """The handoff 01_train starts from (requirements 2.2 step 4): the file for ``ds`` (``name``: a path, ``<id>-v<n>``,
+    default the descriptor's latest), refused when it is stale; when there is none, it is written now from the approved
+    descriptor (said in one line), so the ML Engineer needs no other persona's notebook and 02_rust_score finds it.
+    ``split`` passes through to the build ("random" when there is no date role)."""
     ds.require_approved("training")
     wanted = name if name is not None else ds.id
     try:
@@ -169,10 +169,9 @@ def training_handoff(conn, ds: Dataset, *, name: str | None = None, split: str |
     except FileNotFoundError:
         if name is not None:
             raise
-        record = handoff_from(conn, ds, split=split, written_by="01_train")
-        print(f"no handoff file for {ds.id} in {handoffs_dir()}: built from the approved descriptor v{ds.version} "
-              "(not from 01_explore; run data-scientist/01_explore to write one)")
-        return record
+        path = write_handoff(conn, ds, split=split, written_by="01_train")
+        print(f"handoff written from the approved descriptor v{ds.version}: {path}")
+        return read_handoff(str(path))
     stale = handoff_is_stale(conn, record, ds)
     if stale:
         raise ValueError(stale)
@@ -198,12 +197,12 @@ def _split_refusal(handoff: dict[str, Any], ds: Dataset) -> str | None:
     split = handoff.get("split") if isinstance(handoff.get("split"), dict) else {}
     kind = split.get("kind")
     if kind not in SPLITS:
-        return f"the handoff's split kind {kind!r} is not one of {', '.join(SPLITS)}: re-run 01_explore to write it again."
+        return f"the handoff's split kind {kind!r} is not one of {', '.join(SPLITS)}: write it again: nb.write_handoff(conn, ds)."
     if kind == "random" and split.get("explicit") is not True:
         return ("the handoff's split is random without having been asked for (split.explicit is not true), and a time "
                 "split needs a date role: write the handoff with the random split named - nb.write_handoff(conn, ds, "
                 f"split=\"random\") - or add a date role to the descriptor and approve it (exakit describe {ds.id}), "
-                "then re-run 01_explore.")
+                "then write it again: nb.write_handoff(conn, ds).")
     return None
 
 
@@ -236,7 +235,7 @@ def prepare_training(conn, ds: Dataset, handoff: dict[str, Any], *, schema: str 
     view = handoff["feature_view"]
     expected = feature_view(conn, ds)
     if view != expected or handoff.get("training_sql") != training_sql(expected["name"], ds, handoff["split"]):
-        raise ValueError("The handoff's view or training SQL differs from the descriptor; re-run 01_explore to write it again.")
+        raise ValueError("The handoff's view or training SQL differs from the descriptor; write it again: nb.write_handoff(conn, ds).")
     schema_sql = "CREATE SCHEMA IF NOT EXISTS STARTER_KIT"
     conn.execute(schema_sql)
     log_sql(conn, schema_sql, None)

@@ -58,13 +58,14 @@ To refresh the examples library from a reviewed, pinned Notebook Connector check
 and `EXAKIT_MODEL_TEMPERATURE` (not sent unless set; Claude Opus 4.7+ refuses temperature).
 `nb.model_settings()` reports them without secrets. Providers in detail: [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md).
 
-## The handoff from explore to train
+## The training handoff
 
-`01_explore` ends with `nb.write_handoff(conn, ds)`: one JSON file in `~/.exasol-starter-kit/handoffs/<id>-v<n>.json`
+Each persona stands alone: the ML Engineer needs no Data Scientist notebook. `ml-engineer/01_train` writes the handoff
+from the approved column map when there is none: one JSON file in `~/.exasol-starter-kit/handoffs/<id>-v<n>.json`
 holding the descriptor version and digest, a data digest, the SQL feature view, the label, the reproducible split and
-the training SQL. `01_train` reads it (`nb.read_handoff`), refuses a stale one (`nb.handoff_is_stale` names what changed
-and the fix), trains in a Python UDF, compares macro-F1 with a majority baseline and logs to MLflow. The view is plain
-SQL so `02_rust_score` can score the same columns with a Rust UDF. `nb.handoff_from(conn, ds)` builds it without explore.
+the training SQL. A stale one is refused (`nb.handoff_is_stale` names what changed and the fix). It trains in a Python
+UDF, compares macro-F1 with a majority baseline and logs to MLflow. The view is plain SQL, so `02_rust_score` scores
+the same columns with a Rust UDF. `nb.write_handoff(conn, ds)` writes one from any notebook.
 Training's `CLASS_WEIGHT`: `None` for Esophageal, `"balanced"` for Banking.
 
 ## Front-end versions
