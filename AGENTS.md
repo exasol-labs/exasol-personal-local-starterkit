@@ -238,6 +238,8 @@ exasol-json-tables ingest-and-wrap --input <file.json> --dsn 127.0.0.1:8563 \
   --name <workflow_name> --no-tls --if-exists replace --json
 ```
 
+The add-on's CLI takes the password only on its command line (`--password`, or inside an `exasol://` URL; it has no file or environment option), so for the seconds the command runs, any other user of this machine can read the ADMIN password with `ps`. On a single-user laptop that is the trade; on a shared machine, load the file with `EXAKIT_DATA_FILE=<file.json> EXAKIT_DATA_TABLE=<SCHEMA.TABLE> exakit data-load` instead, which reads the password from its file and never puts it on a command line, and build the dashboard on the loaded tables without the wrapper views.
+
 The `--json` summary names the source schema it created (`EJT_<NAME>_SRC`). Explore it with read-only SQL; every ingested column is a string, so `CAST(... AS DOUBLE)` numerics before aggregating.
 
 3. **Build the dashboard through dash-server's MCP control plane** — plain JSON-RPC over HTTP to `http://127.0.0.1:5100/mcp` (read the real URL from `exakit status --json`, key `urls["dash-server"]`; the port alone is `exakit info --json`'s `components.dash_server.port`). The install just registered this endpoint with your clients as an MCP server named `dash-server`, but a client only reads its server list at startup, so the session that ran the install does not have those tools yet. Inside this run, call the endpoint over HTTP; from the next session, use the registered tools instead:
