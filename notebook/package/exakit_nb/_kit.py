@@ -26,9 +26,15 @@ TELEMETRY_VARIABLE = "EXASOL_TELEMETRY_DISABLE"
 TELEMETRY_VALUE = "1"
 
 
+OTHER_TELEMETRY = {"MLFLOW_DISABLE_TELEMETRY": "true", "DBT_SEND_ANONYMOUS_USAGE_STATS": "false"}
+
+
 def telemetry_off() -> None:
-    """Keep Exasol's usage telemetry off in this Python process unless the user set EXASOL_TELEMETRY_DISABLE."""
+    """Keep Exasol's usage telemetry off in this Python process unless the user set EXASOL_TELEMETRY_DISABLE; the
+    MLflow client's and dbt's the same way (audit SEC-04)."""
     os.environ.setdefault(TELEMETRY_VARIABLE, TELEMETRY_VALUE)
+    for name, value in OTHER_TELEMETRY.items():
+        os.environ.setdefault(name, value)
 
 
 # Every exakit_nb module imports this one first, so importing the helpers is enough.

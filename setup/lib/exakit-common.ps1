@@ -40,8 +40,12 @@ try {
 } catch { }
 
 function Set-ExakitTelemetryDefault {
-    if ($null -eq [Environment]::GetEnvironmentVariable("EXASOL_TELEMETRY_DISABLE", "Process")) {
-        [Environment]::SetEnvironmentVariable("EXASOL_TELEMETRY_DISABLE", "1", "Process")
+    # Exasol's, then dbt's anonymous usage stats and MLflow's telemetry the same way (audit SEC-04).
+    foreach ($pair in @(@("EXASOL_TELEMETRY_DISABLE", "1"), @("DBT_SEND_ANONYMOUS_USAGE_STATS", "false"),
+                        @("MLFLOW_DISABLE_TELEMETRY", "true"))) {
+        if ($null -eq [Environment]::GetEnvironmentVariable($pair[0], "Process")) {
+            [Environment]::SetEnvironmentVariable($pair[0], $pair[1], "Process")
+        }
     }
 }
 Set-ExakitTelemetryDefault

@@ -22,6 +22,9 @@ from typing import MutableMapping
 
 VARIABLE = "EXASOL_TELEMETRY_DISABLE"
 VALUE = "1"
+# The other tools the kit runs report usage of their own unless told not to: dbt's anonymous usage stats and
+# MLflow's telemetry (3.x). Same rule: set unless the user set it (audit SEC-04).
+OTHERS = {"DBT_SEND_ANONYMOUS_USAGE_STATS": "false", "MLFLOW_DISABLE_TELEMETRY": "true"}
 
 
 def default_off(environment: MutableMapping[str, str] | None = None) -> MutableMapping[str, str]:
@@ -32,4 +35,6 @@ def default_off(environment: MutableMapping[str, str] | None = None) -> MutableM
     """
     target = os.environ if environment is None else environment
     target.setdefault(VARIABLE, VALUE)
+    for name, value in OTHERS.items():
+        target.setdefault(name, value)
     return target

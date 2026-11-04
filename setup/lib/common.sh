@@ -48,7 +48,9 @@ fi
 # twin is Set-ExakitTelemetryDefault in exakit-common.ps1.
 exakit_telemetry_default() {
     : "${EXASOL_TELEMETRY_DISABLE=1}"
-    export EXASOL_TELEMETRY_DISABLE
+    # dbt's anonymous usage stats and MLflow's telemetry, the same way (audit SEC-04).
+    : "${DBT_SEND_ANONYMOUS_USAGE_STATS=false}" "${MLFLOW_DISABLE_TELEMETRY=true}"
+    export EXASOL_TELEMETRY_DISABLE DBT_SEND_ANONYMOUS_USAGE_STATS MLFLOW_DISABLE_TELEMETRY
 }
 exakit_telemetry_default
 

@@ -41,7 +41,7 @@
 ### Settings
 
 - **One settings file.** `~/.exasol-starter-kit/exakit.env` lists every setting the kit reads with its default; uncomment a line to change it. A value on the command line still wins, nothing in the file is run, and secrets are refused.
-- **Usage telemetry is off** in everything the kit starts (`EXASOL_TELEMETRY_DISABLE`); a value you set yourself is kept.
+- **Usage telemetry is off** in everything the kit starts: Exasol's (`EXASOL_TELEMETRY_DISABLE`), dbt's anonymous usage stats (`DBT_SEND_ANONYMOUS_USAGE_STATS=false`) and MLflow's (`MLFLOW_DISABLE_TELEMETRY=true`); a value you set yourself is kept.
 
 ### Changed
 

@@ -11,8 +11,12 @@ import os
 
 TELEMETRY = "EXASOL_TELEMETRY_DISABLE"
 os.environ.setdefault(TELEMETRY, "1")
+OTHERS = {"MLFLOW_DISABLE_TELEMETRY": "true", "DBT_SEND_ANONYMOUS_USAGE_STATS": "false"}   # the same rule (SEC-04)
+for _name, _value in OTHERS.items():
+    os.environ.setdefault(_name, _value)
 
 from ipykernel.kernelspec import install  # noqa: E402
 
-env = {k: os.environ[k] for k in ("EXAKIT_NB_STORE", "EXAKIT_NB_MASTER_FILE", "EXAKIT_NB_KIT", "EXAKIT_NB_DATASETS", TELEMETRY) if k in os.environ}
+env = {k: os.environ[k] for k in ("EXAKIT_NB_STORE", "EXAKIT_NB_MASTER_FILE", "EXAKIT_NB_KIT", "EXAKIT_NB_DATASETS", TELEMETRY, *OTHERS)
+       if k in os.environ}
 print(install(user=True, kernel_name=os.environ["EXAKIT_KERNEL_NAME"], display_name=os.environ["EXAKIT_KERNEL_TITLE"], env=env))

@@ -82,6 +82,25 @@ class HelperTest(unittest.TestCase):
                     kit_telemetry.default_off()
                     self.assertEqual(expected, os.environ[VAR])
 
+    def test_dbt_and_mlflow_telemetry_are_off_too_unless_the_user_chose(self):
+        """dbt's anonymous usage stats and MLflow's telemetry follow the same rule (audit SEC-04), in the marketplace,
+        the notebook process and the shell entry point."""
+        from exakit_nb import _kit
+        self.assertEqual(kit_telemetry.OTHERS, _kit.OTHER_TELEMETRY)
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertEqual({"DBT_SEND_ANONYMOUS_USAGE_STATS": "false", "MLFLOW_DISABLE_TELEMETRY": "true"},
+                             {k: v for k, v in kit_telemetry.default_off().items() if k in kit_telemetry.OTHERS})
+        mine = {"DBT_SEND_ANONYMOUS_USAGE_STATS": "true", "MLFLOW_DISABLE_TELEMETRY": "false"}
+        self.assertEqual(mine["MLFLOW_DISABLE_TELEMETRY"], kit_telemetry.default_off(dict(mine))["MLFLOW_DISABLE_TELEMETRY"])
+        with mock.patch.dict(os.environ, mine, clear=True):
+            _kit.telemetry_off()
+            self.assertEqual("true", os.environ["DBT_SEND_ANONYMOUS_USAGE_STATS"], "a value the user set is kept")
+        shell = subprocess.run(["bash", "-c", f'. "{ROOT}/setup/lib/common.sh" >/dev/null 2>&1; '
+                                'printf "%s %s" "$DBT_SEND_ANONYMOUS_USAGE_STATS" "$MLFLOW_DISABLE_TELEMETRY"'],
+                               capture_output=True, text=True,
+                               env={"HOME": os.environ.get("HOME", "/tmp"), "PATH": os.environ["PATH"]})
+        self.assertEqual("false true", shell.stdout)
+
     def test_notebook_helper_matches_the_marketplace_rule(self):
         from exakit_nb import _kit
         self.assertEqual((kit_telemetry.VARIABLE, kit_telemetry.VALUE), (_kit.TELEMETRY_VARIABLE, _kit.TELEMETRY_VALUE))

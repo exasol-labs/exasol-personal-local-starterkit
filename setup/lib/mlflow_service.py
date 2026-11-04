@@ -123,8 +123,12 @@ def start(executable: Path, port: int | None) -> dict:
                "--artifacts-destination", str(artifacts.resolve())]
     log = (root / "server.log").open("a", encoding="utf-8")
     try:
+        # The server starts at login too, not only from exakit: its telemetry is off here as well, unless the user
+        # set the variable (audit SEC-04).
+        env = dict(os.environ)
+        env.setdefault("MLFLOW_DISABLE_TELEMETRY", "true")
         options = {"stdin": subprocess.DEVNULL, "stdout": log, "stderr": subprocess.STDOUT,
-                   "cwd": str(root)}
+                   "cwd": str(root), "env": env}
         if sys.platform == "win32":
             options["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
         else:
