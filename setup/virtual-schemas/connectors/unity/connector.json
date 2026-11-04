@@ -100,5 +100,12 @@
     "The Glue lakehouse connector's engine over Unity Catalog (Databricks or OSS): the same pinned lakehouse-engine-rs build, scripts and Rust language container, shared with Glue and Iceberg REST sources. Not yet run against a live Unity Catalog (Beta).",
     "The CONNECTION goes TO the workspace URL with an empty user; its password is JSON the kit writes: the token, use_vended_credentials and the region. Unity's temporary storage credentials carry no region, so the bucket's region is asked for, not guessed.",
     "The rows are read from storage by the engine inside this database, not by a Databricks warehouse: nothing runs on Databricks compute. exakit connect databricks is the other route, through the SQL warehouse."
-  ]
+  ],
+  "paste": {
+    "style": "catalog",
+    "input": "workspace_url",
+    "forms": [
+      "https://<workspace-host>"
+    ]
+  }
 }
