@@ -285,8 +285,36 @@ def _stored(dataset: str) -> str | None:
     return None
 
 
+def adopt_shipped(table: str, root: Path | None = None) -> int | None:
+    """A table the kit ships, with nothing in the kit's store yet: its shipped approved descriptor becomes the store's
+    current version, so a review starts on the approved roles (the target among them, which is never drafted) and an
+    approval builds on it instead of replacing it. The version adopted, or None."""
+    table = flow.table_name(table)
+    if store.current(table) is not None or store.versions(table):
+        return None
+    datasets = (root or kit_root()) / "data" / "datasets"
+    for folder in sorted(datasets.iterdir()) if datasets.is_dir() else ():
+        path = _rules().descriptor_file(folder)
+        if path is None:
+            continue
+        try:
+            doc = flow.load(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if doc.get("status") == "approved" and flow.table_name(str((doc.get("source") or {}).get("object", ""))) == table:
+            text = drafting.to_yaml(doc)
+            store.write_version(table, int(doc.get("version") or 1), text)
+            store.replace_current(table, text)
+            stale = store.folder(table) / store.DRAFT          # drafted before the approved roles were in the store
+            if stale.is_file():
+                stale.unlink()
+            return int(doc.get("version") or 1)
+    return None
+
+
 def describe(conn, table: str, dataset: str | None = None, force: bool = False) -> dict[str, Any]:
     """flow.describe over the connection: {status, doc, profile, changed, previous}."""
+    adopt_shipped(table)
     try:
         return flow.describe(lambda sql: _rows(conn, sql), table, dataset=dataset, force=force)
     except LookupError as err:
@@ -321,6 +349,7 @@ def load_draft(target: str) -> dict[str, Any]:
     if path.is_file():
         return flow.load(path.read_text(encoding="utf-8"))
     table = resolve(target)
+    adopt_shipped(table)
     text = store.draft(table) or store.current(table)
     if text is None:
         raise NotFound(f"Nothing to approve for {table}: describe it first (exakit describe {table}).")

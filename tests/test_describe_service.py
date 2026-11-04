@@ -241,6 +241,32 @@ class Service(unittest.TestCase):
         again = nb_describe.describe("SUPPORT.TICKETS", conn=self.db)
         self.assertEqual(("approved", 1), (again.status, again.version))
 
+    def test_a_shipped_dataset_is_reviewed_from_its_approved_roles_and_keeps_its_target(self):
+        # The kit ships an approved descriptor whose target is set; the user's store is empty. The target is never
+        # drafted, so a fresh draft approved as it stands would publish a version without it.
+        self.run_main("draft", "support.tickets", "--id", "support_tickets")
+        self.run_main("approve", "support_tickets", "--role", "target=ESCALATED")
+        shipped = Path(self.temp.name) / "kit" / "data" / "datasets" / "support_tickets"
+        shipped.mkdir(parents=True)
+        (shipped / "descriptor.yaml").write_text(store.current("SUPPORT.TICKETS"), encoding="utf-8")
+        fresh = tempfile.TemporaryDirectory()
+        self.addCleanup(fresh.cleanup)
+        stale = Path(fresh.name) / "descriptors" / "SUPPORT.TICKETS" / "draft.yaml"
+        stale.parent.mkdir(parents=True)
+        stale.write_text("an earlier draft without the target", encoding="utf-8")
+        with mock.patch.dict(os.environ, {"EXAKIT_HOME": fresh.name}), \
+             mock.patch.object(svc, "kit_root", return_value=Path(self.temp.name) / "kit"):
+            code, out, _ = self.run_main("draft", "SUPPORT.TICKETS", "--json")
+            found = json.loads(out)
+            self.assertEqual((0, "approved", "ESCALATED"), (code, found["status"], found["doc"]["slots"]["target"]))
+            self.assertFalse(stale.exists())
+            code, out, _ = self.run_main("approve", "support_tickets", "--json")
+            self.assertEqual((0, "unchanged"), (code, json.loads(out)["status"]))
+            code, out, _ = self.run_main("approve", "support_tickets", "--role", "category=-", "--json")
+            self.assertEqual((0, "approved", 2), (code, json.loads(out)["status"], json.loads(out)["version"]))
+            self.assertIn('target: "ESCALATED"', store.current("SUPPORT.TICKETS"))
+            self.assertIsNone(svc.adopt_shipped("SUPPORT.TICKETS"))          # once only: the store is the user's now
+
     def test_help_is_exit_0(self):
         code, out, _ = self.run_main("--help")
         self.assertEqual(0, code)
