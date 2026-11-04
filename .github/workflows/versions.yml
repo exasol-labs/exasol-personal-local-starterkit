@@ -824,6 +824,11 @@ jobs:
       # The exapump wrapper for glibc < 2.38, rendered: no CI runner is old enough to generate it.
       - run: bash tests/exapump-shim-wrapper.sh
         if: matrix.shard == 1
+      # The read-only commands download nothing and write nothing to the home, on any Python 3.
+      - run: bash tests/readonly-queries.sh
+        if: matrix.shard == 1
+      - run: bash tests/ci-wiring.sh
+        if: matrix.shard == 1
       - run: bash tests/uv-bootstrap.sh
         if: matrix.shard == 3
       - run: bash tests/personal-s3.sh
@@ -971,6 +976,14 @@ jobs:
       - run: python3 tests/test_role_picker.py
         if: matrix.shard == 4
       - run: python3 tests/test_notebook_bundle.py
+      # Each suite named, so none can sit in tests/ unrun (audit QAT-01); tests/ci-wiring.sh fails on one that does.
+      - name: notebook, training and persona suites
+        if: matrix.shard == 4
+        run: |
+          for suite in test_handoff test_ml_train test_notebook_readout test_notebook_themes test_persona_membership \
+                       test_privacy_watch test_telemetry_default test_version_pins; do
+            echo "== $suite"; python3 "tests/$suite.py" || exit 1
+          done
       - run: python3 tests/test_example_library.py
         if: matrix.shard == 4
       - run: python3 tests/test_addon_github.py
