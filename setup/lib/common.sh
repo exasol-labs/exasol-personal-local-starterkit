@@ -12320,13 +12320,17 @@ PY
     ui_panel_line "  export EXAPUMP_CONFIG=$(ui_tilde "$EXAKIT_HOME/exapump/config.toml")"
     ui_panel_line "  exapump interactive -p starter-kit"
     ui_panel_line ""
-    ui_panel_line "Python with pyexasol:"
+    # Shell line, then Python lines marked by their prompt, with the password
+    # file's real path: Python's open() does not expand a ~ (audit NEW-02).
+    ui_panel_line "Python with pyexasol - start the kit's Python:"
     ui_panel_line "  $(ui_tilde "$_g_python")"
-    ui_panel_line "  import pyexasol"
-    ui_panel_line "  c = pyexasol.connect(dsn='$_g_host:$_g_port', user='$_g_user',"
-    ui_panel_line "                       password=open('<password file above>').read(),"
-    ui_panel_line "                       websocket_sslopt={'cert_reqs': 0})"
-    ui_panel_line "  c.export_to_pandas('SELECT TABLE_SCHEMA, TABLE_NAME FROM EXA_ALL_TABLES')"
+    ui_panel_line "then, at its >>> prompt:"
+    ui_panel_line "  >>> import os, pyexasol"
+    ui_panel_line "  >>> pw = open(os.path.expanduser("
+    ui_panel_line "  ...     '$(ui_tilde "${_g_pwfile:-$EXAKIT_CREDS_DIR/<password file>}")')).read().strip()"
+    ui_panel_line "  >>> c = pyexasol.connect(dsn='$_g_host:$_g_port', user='$_g_user',"
+    ui_panel_line "  ...     password=pw, websocket_sslopt={'cert_reqs': 0})"
+    ui_panel_line "  >>> c.execute('SELECT TABLE_NAME FROM EXA_ALL_TABLES').fetchall()"
     ui_panel_end
 
     ui_panel_begin "4 · Notebooks, dashboards and models"

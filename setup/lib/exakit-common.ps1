@@ -1067,13 +1067,16 @@ function Show-ExakitGuide {
     Write-ExakitPanelLine "Interactive SQL shell, with the kit's exapump profile:"
     Write-ExakitPanelLine "  `$env:EXAPUMP_CONFIG = '$(Join-Path $script:ExakitHome 'exapump\config.toml')'"
     Write-ExakitPanelLine "  exapump interactive -p starter-kit"
-    Write-ExakitPanelLine "Python with pyexasol:"
+    # The shell line, then Python lines marked by their prompt, with the password file's real path (audit NEW-02).
+    $pwPath = if ($pwfile) { $pwfile } else { Join-Path $script:CredsDir "<password file>" }
+    Write-ExakitPanelLine "Python with pyexasol - start the kit's Python:"
     Write-ExakitPanelLine "  $(Get-ExakitTilde $python)"
-    Write-ExakitPanelLine "  import pyexasol"
-    Write-ExakitPanelLine "  c = pyexasol.connect(dsn='$($hostName):$port', user='$user',"
-    Write-ExakitPanelLine "                       password=open(r'<password file above>').read(),"
-    Write-ExakitPanelLine "                       websocket_sslopt={'cert_reqs': 0})"
-    Write-ExakitPanelLine "  c.export_to_pandas('SELECT TABLE_SCHEMA, TABLE_NAME FROM EXA_ALL_TABLES')"
+    Write-ExakitPanelLine "then, at its >>> prompt:"
+    Write-ExakitPanelLine "  >>> import pyexasol"
+    Write-ExakitPanelLine "  >>> pw = open(r'$pwPath').read().strip()"
+    Write-ExakitPanelLine "  >>> c = pyexasol.connect(dsn='$($hostName):$port', user='$user',"
+    Write-ExakitPanelLine "  ...     password=pw, websocket_sslopt={'cert_reqs': 0})"
+    Write-ExakitPanelLine "  >>> c.execute('SELECT TABLE_NAME FROM EXA_ALL_TABLES').fetchall()"
     Complete-ExakitPanel
 
     Start-ExakitPanel "4 - Notebooks, dashboards and models"
