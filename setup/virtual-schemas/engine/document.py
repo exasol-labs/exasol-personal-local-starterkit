@@ -109,6 +109,8 @@ def credential(kind, values, secret, now=None):
     """(the CONNECTION's JSON, every string to redact, notes) for a document source."""
     if kind == "azure-blob":
         return _azure(values, secret.strip(), now or datetime.datetime.now(datetime.timezone.utc))
+    if kind in ("lakehouse-rest", "lakehouse-unity"):
+        return _catalog(kind, values, secret.strip())
     if kind not in ("s3", "lakehouse-glue"):
         raise DocumentError("unknown credential kind %s" % kind)
     key_id, secret_key, token, hidden = _aws_keys(values, secret)
@@ -127,6 +129,42 @@ def credential(kind, values, secret, now=None):
                      "exakit source reauth <name> --password-file <file>")
     text = json.dumps(body)
     return text, [h for h in hidden + [text] if h], notes
+
+
+def _catalog(kind, values, secret):
+    """lakehouse-engine-rs over an Iceberg REST catalog (lakehouse-rest) or
+    Unity Catalog (lakehouse-unity), next to the Glue body above. Either the
+    storage's own keys (the catalog only names the files) or a catalog token,
+    with which the catalog vends short-lived storage credentials per table.
+    Unity's vended credentials carry no region, so its body always names one."""
+    keyed = kind == "lakehouse-rest" and values.get("access_key_id")
+    what = "secret key" if keyed else "token"
+    if not secret or re.search(r"\s", secret):
+        raise DocumentError("the %s is missing or has white space in it" % what)
+    if secret.startswith("{"):
+        raise DocumentError("give the %s itself, not JSON: the kit writes the connection's JSON" % what)
+    notes = []
+    if kind == "lakehouse-unity":
+        body = {"token": secret, "use_vended_credentials": True, "region": values["region"]}
+        notes.append("a Databricks personal access token stops working on the expiry date it was made with; "
+                     "then give a new one with: exakit source reauth <name>")
+    elif keyed:
+        if not values.get("region"):
+            raise DocumentError("region is required with an access key: the region of the bucket (an S3-compatible "
+                                "store such as MinIO usually answers to us-east-1)")
+        body = {"warehouse": values["warehouse"], "access_key": values["access_key_id"], "secret_key": secret,
+                "region": values["region"]}
+        if values.get("endpoint"):
+            body.update(endpoint=values["endpoint"], path_style=True)
+    else:
+        if values.get("endpoint"):
+            raise DocumentError("a storage endpoint goes with an access key (--set access_key_id=...); with a "
+                                "catalog token the catalog names its storage")
+        body = {"warehouse": values["warehouse"], "token": secret, "use_vended_credentials": True}
+        if values.get("region"):
+            body["region"] = values["region"]
+    text = json.dumps(body)
+    return text, [secret, text], notes
 
 
 def _aws_keys(values, secret):

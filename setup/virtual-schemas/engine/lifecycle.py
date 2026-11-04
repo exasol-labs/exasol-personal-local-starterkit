@@ -51,7 +51,7 @@ EXIT = {"ok": 0, "failed": 1, "input": 2, "conflict": 3, "missing": 4, "gated": 
 STATUS_FOR = {"auth": "auth-failed", "tls": "tls-failed", "unreachable": "unreachable", "nohost": "unreachable",
               "dns": "dns-failed", "nojava": "failed", "error": "failed", "denied": "access-denied",
               "region": "failed", "nobucket": "failed", "clock": "failed", "norust": "failed",
-              "schema_missing": "failed"}
+              "schema_missing": "failed", "external": "access-denied", "managed": "failed"}
 
 REMEDY_FOR = {
     "auth": "the source rejected the credentials: exakit source reauth {name}",
@@ -66,6 +66,8 @@ REMEDY_FOR = {
     "nobucket": "the {store} does not exist under that name: check it, then remove and connect again",
     "clock": "the database clock is too far from the store's for a signed request; restart the database (exakit stop, then exakit start), then: exakit source check {name}",
     "schema_missing": "the schema the source was connected with is gone or no longer visible to the account; check it at the source, then: exakit source check {name}",
+    "external": "Unity Catalog does not let engines outside Databricks read this schema's files: the metastore needs External Data Access switched on and the token's user EXTERNAL USE SCHEMA on the schema (a schema on Databricks Default Storage can never be read from outside) - or read it through the SQL warehouse: exakit connect databricks; then: exakit source check {name}",
+    "managed": "a table here is a Databricks catalog-managed table, which this adapter version cannot read yet; read it through the SQL warehouse instead: exakit connect databricks",
     "error": "see the log: exakit logs",
 }
 
@@ -470,7 +472,7 @@ class Engine(object):
         host = planner.source_host(connector, values)
         if not host:
             return
-        port = int(values.get("port") or 443)
+        port = planner.source_port(connector, values)
         answer = self.probe(host, port)
         if answer.startswith("nodns"):
             # The language container has no resolver at all (Exasol Personal's
@@ -488,7 +490,10 @@ class Engine(object):
         """Fetch, verify and stage the adapter and driver; record this source as their consumer."""
         if not self.runtime.available():
             raise Failure("the deployment's runtime directory is missing (%s)" % self.runtime.exa, EXIT["failed"])
-        cid = connector["id"]
+        # Connectors of one family (lakehouse: Glue, Iceberg REST, Unity) run
+        # the same pinned engine, staged once under the family's folder, so
+        # the shared adapter script always points at a file all of them keep.
+        cid = connector.get("family") or connector["id"]
         adapter_pin, driver_pin = connector["adapter"], connector.get("driver")
         jars = []
         adapter_src = self.cache.fetch(adapter_pin)
@@ -685,14 +690,34 @@ class Engine(object):
         return "\n".join(lines) + "\n/"
 
     def import_script_users(self, connector_id, besides):
-        """Other sources of this connector, which share its import script."""
-        return [n for n in self.store.names() if n != besides and self.store.config(n).get("connector") == connector_id]
+        """Other sources that share this connector's scripts: of the same
+        connector, or of any connector on the same shared adapter script
+        (lakehouse, iceberg-rest and unity all run LAKEHOUSE_ADAPTER and its
+        companions), so the last Glue source out does not drop what a REST
+        or Unity source still calls."""
+        shared = self._shared_adapter(connector_id)
+        users = []
+        for n in self.store.names():
+            other = self.store.config(n).get("connector")
+            if n != besides and (other == connector_id or (shared and other and self._shared_adapter(other) == shared)):
+                users.append(n)
+        return users
+
+    def _shared_adapter(self, connector_id):
+        try:
+            return self.defs.connector(connector_id).get("shared_adapter")
+        except (OSError, ValueError, planner.PlanError):
+            return None
 
     def vs_sql(self, connector, names, values, extra=None):
         props = ["%s = %s" % (connector.get("connection_property", "CONNECTION_NAME"), sql.literal(names["connection"]))]
         fields = dict(values, **(extra or {}))
         for key, template in connector["vs_properties"].items():
             props.append("%s = %s" % (key, sql.literal(template.format(**fields))))
+        if planner.plain_http(connector, values):
+            # The lakehouse engine refuses an http catalog or store unless told.
+            for key, value in (connector.get("vs_when_http") or {}).items():
+                props.append("%s = %s" % (key, sql.literal(value)))
         return "CREATE VIRTUAL SCHEMA %s USING %s.%s WITH %s" % (
             sql.ident(names["schema"]), sql.ident(names["script_schema"]), sql.ident(names["script"]),
             " ".join(props))
@@ -897,7 +922,7 @@ class Engine(object):
                 if specific:
                     remedy = "the source's certificate did not verify; nothing was kept - %s, then connect again" % specific
                 elif not reconnect and kind in ("auth", "tls", "unreachable", "nohost", "denied", "region", "nobucket",
-                                                "clock"):
+                                                "clock", "external", "managed", "schema_missing"):
                     remedy = {"denied": "the account signs in but may not read this data; nothing was kept - grant it what the message names (%s), then connect again" % connector.get("access", "read access"),
                               "region": "the bucket is in another region; nothing was kept - connect again with --set region=<the bucket's region>",
                               "nobucket": "nothing was kept - check the %s name, then connect again" % connector.get("store", "bucket"),
@@ -906,7 +931,10 @@ class Engine(object):
                                       + ("; %s" % connector["auth_hint"] if connector.get("auth_hint") else ""),
                               "tls": "the source's certificate or host name did not verify; nothing was kept - fix the server certificate or choose tls=require knowingly, then connect again",
                               "unreachable": "the source did not answer from inside the database; nothing was kept - check host, port, firewall and VPN (a source on this computer must listen beyond 127.0.0.1), then connect again",
-                              "nohost": "nothing was kept - check the spelling (a private name may need a VPN), then connect again"}[kind]
+                              "nohost": "nothing was kept - check the spelling (a private name may need a VPN), then connect again",
+                              "external": "Unity Catalog does not let engines outside Databricks read this schema's files; nothing was kept - switch External Data Access on for the metastore and grant the token's user EXTERNAL USE SCHEMA on the schema (a schema on Databricks Default Storage can never be read from outside), or read it through the SQL warehouse: exakit connect databricks",
+                              "managed": "a table here is a Databricks catalog-managed table, which this adapter version cannot read yet; nothing was kept - read it through the SQL warehouse instead: exakit connect databricks",
+                              "schema_missing": "the catalog has no such namespace that this credential can see; nothing was kept - check the namespace (and the warehouse), then connect again"}[kind]
                 if isinstance(error, Failure):
                     # The kit's own words already say what happened (the route
                     # check); only the driver's raw text needs it restated.
@@ -1167,13 +1195,14 @@ class Engine(object):
         last = bool(shared) and not self.import_script_users(config["connector"], name)
         own_adapter = not connector.get("shared_adapter") or last
         kind = "import script" if connector.get("import_script") else "script"
+        family = connector.get("family") or config["connector"]
         plan = {"name": name, "drop": ["virtual schema %s" % names["schema"]] +
                                       (["adapter script %s.%s%s" % (names["script_schema"], names["script"],
-                                                                    " (no other %s source uses it)" % config["connector"]
+                                                                    " (no other %s source uses it)" % family
                                                                     if connector.get("shared_adapter") else "")]
                                        if own_adapter else []) +
                                       (["%s %s.%s (no other %s source uses it)"
-                                        % (kind, names["script_schema"], script, config["connector"])
+                                        % (kind, names["script_schema"], script, family)
                                         for script in shared] if last else []) +
                                       ["CONNECTION %s" % names["connection"]],
                 "delete_files": reclaim, "keep_files": [p for p in mine if p not in reclaim],

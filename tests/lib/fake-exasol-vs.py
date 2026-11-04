@@ -24,6 +24,12 @@ database and inspect it afterwards:
     A lakehouse catalog on AWS Glue is keyed by glue.<region>.amazonaws.com and
     takes "databases" ({name: [tables]}), "readable" (the databases the key may
     list; default all) and "key_id" (the access key it accepts)
+    An Iceberg REST catalog or a Unity Catalog (the same engine) is keyed by
+    the host of its URL and takes "catalog" ("rest" | "unity"), "namespaces"
+    ({name: [tables]}), "token" (the token it accepts), "key_id" and
+    "secret_key" (the storage keys it accepts), "warehouse" (the one it
+    knows), "region" (the bucket's) and "fail": "external" (Unity closed to
+    outside engines) | "managed" (a catalog-managed table, at the read)
     sources     {host: {"tables": [...], "fail": null|"auth"|"tls"|"tls-validity"|"unreachable"|"denied",
                         "secret": "<the credential the source accepts>"}}
                 a document source (S3) is keyed by <bucket>.s3.<region>.amazonaws.com
@@ -277,6 +283,60 @@ def _glue_source(doc, con, namespace=None):
     return {"tables": [t.upper() for t in src["databases"].get(database, [])]}
 
 
+def _catalog_source(doc, con, props, at_read=False):
+    # lakehouse-engine-rs over an Iceberg REST catalog or Unity Catalog. Not
+    # measured live: the shapes follow the Iceberg REST spec's error types,
+    # Databricks' error codes and object_store's own words.
+    host = _host(con["url"])
+    src = doc["sources"].get(host)
+    if src is None:
+        raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: catalog request failed: error sending request for "
+                        "url (%s): error trying to connect: dns error" % con["url"])
+    cred = json.loads(con["secret"] or "{}")
+    unity = props.get("CATALOG_KIND") == "UNITY_CATALOG"
+    namespace = props.get("NAMESPACE", "")
+    if con["url"].startswith("http://") and props.get("ALLOW_HTTP") != "true":
+        raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: the catalog URL %s is plain http, which is refused "
+                        "unless ALLOW_HTTP is true" % con["url"])
+    if unity != (src.get("catalog") == "unity"):
+        raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: catalog request failed: HTTP 404 Not Found")
+    if unity:
+        if cred.get("token") != src.get("token"):
+            raise Exception('VM error: F-UDF-CL-RUST-9001: UDF error: Unity Catalog request failed: HTTP 401: '
+                            '{"error_code":"UNAUTHENTICATED","message":"Invalid access token. [ReqId: r1]"}')
+    elif "token" in cred:
+        if cred["token"] != src.get("token"):
+            raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: Iceberg REST catalog request failed: "
+                            "NotAuthorizedException: Not authorized to make this request (HTTP 401)")
+    elif cred.get("access_key") != src.get("key_id") or cred.get("secret_key") != src.get("secret_key"):
+        # Static keys: the catalog lists, the store refuses the signature.
+        if at_read:
+            raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: Object Store error: Error performing GET: "
+                            "SignatureDoesNotMatch: The request signature we calculated does not match the "
+                            "signature you provided. Check your key and signing method.")
+    if not unity and src.get("warehouse") and cred.get("warehouse") != src["warehouse"]:
+        raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: Iceberg REST catalog request failed: "
+                        "NoSuchWarehouseException: Warehouse %s does not exist (HTTP 404)" % cred.get("warehouse"))
+    if src.get("fail") == "external":
+        raise Exception('VM error: F-UDF-CL-RUST-9001: UDF error: Unity Catalog request failed: HTTP 403: '
+                        '{"error_code":"PERMISSION_DENIED","message":"User does not have EXTERNAL USE SCHEMA on '
+                        'Schema \'%s\'."}' % namespace)
+    if namespace not in src.get("namespaces", {}):
+        if unity:
+            raise Exception('VM error: F-UDF-CL-RUST-9001: UDF error: Unity Catalog request failed: HTTP 404: '
+                            '{"error_code":"SCHEMA_DOES_NOT_EXIST","message":"Schema \'%s\' does not exist."}'
+                            % namespace)
+        raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: Iceberg REST catalog request failed: "
+                        "NoSuchNamespaceException: Namespace does not exist: %s (HTTP 404)" % namespace)
+    if at_read and src.get("region") and cred.get("region") != src["region"]:
+        raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: Object Store error: Received redirect without "
+                        "LOCATION, this normally indicates an incorrectly configured region")
+    if at_read and src.get("fail") == "managed":
+        raise Exception("VM error: F-UDF-CL-RUST-9001: UDF error: table %s.%s is a catalog-managed table: Max "
+                        "catalog version is required" % (namespace, src["namespaces"][namespace][0]))
+    return {"tables": [t.upper() for t in src["namespaces"][namespace]]}
+
+
 def _source_for(doc, connection, via="adapter"):
     con = doc["connections"].get(connection)
     if not con:
@@ -285,6 +345,8 @@ def _source_for(doc, connection, via="adapter"):
         return _databricks_source(doc, con, via)
     if con["url"].startswith("https://glue."):
         return _glue_source(doc, con, doc.get("namespaces", {}).get(connection))
+    if connection in doc.get("catalogs", {}):
+        return _catalog_source(doc, con, doc["catalogs"][connection], at_read=True)
     if con["url"].startswith("jdbc:bigquery:"):
         return _bigquery_source(doc, con)
     if con["url"].startswith("mongodb"):
@@ -481,6 +543,14 @@ class Fake(object):
         if m:
             src = _glue_source(doc, doc["connections"][m.group(2)], m.group(3))
             doc.setdefault("namespaces", {})[m.group(2)] = m.group(3)
+            doc["virtual"][m.group(1)] = {"connection": m.group(2), "tables": src["tables"]}
+            return
+        m = re.match(r'CREATE VIRTUAL SCHEMA "([^"]+)" USING \S+ WITH CATALOG_CONNECTION = \'([^\']+)\'((?: \w+ = \'[^\']*\')*)$', sql)
+        if m:
+            # An Iceberg REST catalog or Unity Catalog: CREATE lists the namespace's tables.
+            props = dict(re.findall(r"(\w+) = '([^']*)'", m.group(3)))
+            src = _catalog_source(doc, doc["connections"][m.group(2)], props)
+            doc.setdefault("catalogs", {})[m.group(2)] = props
             doc["virtual"][m.group(1)] = {"connection": m.group(2), "tables": src["tables"]}
             return
         m = re.match(r'CREATE VIRTUAL SCHEMA "([^"]+)" USING .* CONNECTION_NAME = \'([^\']+)\'', sql)
