@@ -70,14 +70,33 @@ def _package_version(ctx: KitContext) -> str | None:
     return result.stdout.strip() if result.returncode == 0 else None
 
 
+def _linux_arm() -> bool:
+    return sys.platform.startswith("linux") and platform.machine().lower() in ("aarch64", "arm64")
+
+
+def _intel_mac() -> bool:
+    """macOS on an Intel processor. Asked of the hardware, not of this Python: one running under Rosetta 2 reports
+    x86_64 on an Apple silicon Mac, where the notebook environment is built native and works."""
+    if sys.platform != "darwin" or platform.machine().lower() not in ("x86_64", "amd64", "i386"):
+        return False
+    try:
+        answer = subprocess.run(["sysctl", "-n", "hw.optional.arm64"], capture_output=True, text=True, check=False,
+                                timeout=5).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        return True
+    return answer != "1"
+
+
 def applicable(ctx: KitContext) -> bool:
-    """Not on Linux Arm: one of the connector's dependencies publishes no Linux Arm build (its help says so), so it
-    is not offered there, and a persona that brings it skips it with the reason instead of failing (audit LNX-07)."""
-    return not (sys.platform.startswith("linux") and platform.machine().lower() in ("aarch64", "arm64"))
+    """Not on Linux Arm (audit LNX-07) or an Intel Mac (audit MAC-05): the connector needs a package that publishes
+    no build for either (bitsandbytes, through the transformers extension), so the install could only fail. It is
+    not offered there, as its help says, and a persona that brings it skips it with the reason instead."""
+    return not (_linux_arm() or _intel_mac())
 
 
 def applicable_reason(ctx: KitContext) -> str:
-    return ("the notebook connector has no Linux Arm build (one of its dependencies publishes none); it runs on "
+    where = "an Intel Mac" if _intel_mac() else "Linux Arm"
+    return (f"the notebook connector has no build for {where} (one of its dependencies publishes none); it runs on "
             "Linux x86_64, macOS on Apple silicon and Windows")
 
 

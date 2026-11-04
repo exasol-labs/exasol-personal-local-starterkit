@@ -7,7 +7,7 @@
   "package": "exasol-notebook-connector",
   "credentials": "The connection lives in the connector's encrypted configuration store (~/.exasol-starter-kit/notebook/connection.scs). Its master password and the JupyterLab and Marimo login tokens are kit credentials in ~/.exasol-starter-kit/credentials, readable by you only. The kernel's spec names only those two file paths, and the helpers read them, so no kernel spec, notebook or output ever holds a secret. The notebooks connect as the kit's admin user, because building tables and UDFs needs it.",
   "installed_by": "exakit marketplace notebook (EXAKIT_MARKETPLACE_ADDONS=notebook for a script).",
-  "platforms": "macOS on Apple silicon, Linux x86_64 (including WSL) and Windows x86_64. The connector supports Python 3.11 and 3.12; the kit's managed interpreter is 3.12. Linux on Arm is not offered: one of the connector's dependencies publishes no Linux Arm build.",
+  "platforms": "macOS on Apple silicon, Linux x86_64 (including WSL) and Windows x86_64. The connector supports Python 3.11 and 3.12; the kit's managed interpreter is 3.12. Linux on Arm and Intel Macs are not offered: one of the connector's dependencies publishes no build for either.",
   "quickstart": [
     {
       "step": "Install it",

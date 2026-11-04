@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import socket
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -105,7 +106,20 @@ class NotebookPlanTest(unittest.TestCase):
             with self.subTest(system=system, machine=machine), patch.object(notebook.sys, "platform", system), \
                     patch.object(notebook.platform, "machine", return_value=machine):
                 self.assertIs(expected, notebook.applicable(self.ctx))
-        self.assertIn("no Linux Arm build", notebook.applicable_reason(self.ctx))
+        self.assertIn("no build for Linux Arm", notebook.applicable_reason(self.ctx))
+
+    def test_not_offered_on_an_intel_mac_with_the_reason(self) -> None:
+        """An Intel Mac has no build of one of the connector's dependencies either (MAC-05); a Python under Rosetta on
+        an Apple silicon Mac reports x86_64 but the hardware says arm64, and there it is offered."""
+        cases = (("0", False), ("", False), ("1", True))
+        for answer, expected in cases:
+            run = lambda *a, **k: subprocess.CompletedProcess(a, 0, stdout=answer + "\n", stderr="")  # noqa: E731
+            with self.subTest(hw_arm64=answer), patch.object(notebook.sys, "platform", "darwin"), \
+                    patch.object(notebook.platform, "machine", return_value="x86_64"), \
+                    patch.object(notebook.subprocess, "run", side_effect=run):
+                self.assertIs(expected, notebook.applicable(self.ctx))
+                if not expected:
+                    self.assertIn("no build for an Intel Mac", notebook.applicable_reason(self.ctx))
 
     def test_selected_frontends_have_one_resolution_and_shared_sklearn_pin(self) -> None:
         with patch.dict(os.environ, {"EXAKIT_NOTEBOOK_FRONTENDS": "jupyterlab,marimo"}), \

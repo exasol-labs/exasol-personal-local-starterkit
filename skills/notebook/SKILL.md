@@ -10,8 +10,8 @@ description: Open notebooks already connected to the local Exasol database with 
 (`exasol-notebook-connector`, the package Exasol's AI Lab is built on),
 pyexasol, the Langfuse and OpenAI clients, the kit's helper package `exakit.nb`
 (`exakit_nb` still imports) and a Jupyter kernel, **Exasol (Starter Kit)**, in an environment of their own.
-It is not offered on Linux Arm (a connector dependency publishes no Linux Arm
-build): the marketplace shows it as not applicable, and a persona that brings it
+It is not offered on Linux Arm or an Intel Mac (a connector dependency publishes
+no build for either): the marketplace shows it as not applicable, and a persona that brings it
 skips it and says why. It runs on Linux x86_64, macOS on Apple silicon and Windows.
 
 **The notebook tools are the user's choice: they are the notebook row's child
