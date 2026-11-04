@@ -1142,6 +1142,16 @@ OUT="$(eng connect lakehouse --name lakeno --set region=ap-south-1 --set databas
 check "a database the key may not list: exit 1, the shared scripts kept, nothing of its own" "1 1 false" \
     "$RC $(dbq 'd["scripts"].count("EXAKIT_VS.LAKEHOUSE_SCAN")') $(dbq '"EXAKIT_SRC_LAKENO" in d["connections"]' | tr A-Z a-z)"
 has "...filed as access denied, with what the key needs" "glue:GetDatabase, GetTables, GetTable and GetPartitions" "$OUT"
+# Measured: a database 42 min behind (the laptop slept) got S3's 403 for every
+# signed read, which the engine words as PermissionDenied - not a missing grant.
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["clock_skew"]=-2520; json.dump(d, open(sys.argv[1], "w"))' "$STATE"
+OUT="$(eng connect lakehouse --name lakeclk --set region=ap-south-1 --set database=locked --secret-stdin < "$LK_FILE" 2>&1)"; RC=$?
+has "a refusal with the clock 42 min off is filed as the clock, not a grant" "the database clock is too far from the store's for a signed request" "$OUT"
+lacks "...so it does not send the reader after IAM grants" "GetPartitions on the database" "$OUT"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["clock_skew"]=-300; json.dump(d, open(sys.argv[1], "w"))' "$STATE"
+OUT="$(eng connect lakehouse --name lakeclk --set region=ap-south-1 --set database=locked --secret-stdin < "$LK_FILE" 2>&1)"; RC=$?
+has "...a clock 5 min off, inside the stores' window, leaves it access denied" "glue:GetDatabase, GetTables, GetTable and GetPartitions" "$OUT"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d.pop("clock_skew"); json.dump(d, open(sys.argv[1], "w"))' "$STATE"
 
 run_secret "$LK_KEY_ID" connect lakehouse --name lakebad $LK_SET --secret-stdin
 check "a bare key id as the secret: refused as input, exit 2" "2" "$RC"

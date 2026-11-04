@@ -89,6 +89,8 @@ def remedy_for(kind, name, connector, message=None):
 # the Mac sleeps - 2 h 26 min, 1 h 25 min and 32 min behind on one laptop - and
 # an RDS certificate issued that morning then failed as not yet valid.
 CLOCK_LIMIT = 120
+# How far off a signed request may be before S3 and Azure refuse it.
+SIGNED_LIMIT = 15 * 60
 
 
 def clock_words(seconds):
@@ -164,11 +166,24 @@ class Engine(object):
                 before = time.time()
                 rows = self.db().query("SELECT POSIX_TIME() AS T")
                 skew = float(rows[0]["T"]) - (before + time.time()) / 2
+                self._skew = skew
                 if abs(skew) >= CLOCK_LIMIT:
                     self._clock = clock_words(skew)
             except (Failure, sql.DbError, LookupError, TypeError, ValueError):
                 pass
         return self._clock
+
+    def signed_kind(self, kind, connector):
+        """A store that signs each request with the time (S3, Glue, Azure
+        with a key or SAS) refuses one more than 15 minutes off its own clock.
+        It does not always say so: the lakehouse engine reports the S3 refusal
+        as "PermissionDenied ... status: 403" (measured, a database 42 min
+        behind after the laptop slept), which reads like a missing grant.
+        With the clock that far off, the clock is the cause to name."""
+        if kind not in ("error", "denied", "auth") or connector.get("auth") not in ("aws-keys", "azure-sas-or-key"):
+            return kind
+        self.clock()
+        return "clock" if abs(getattr(self, "_skew", 0)) >= SIGNED_LIMIT else kind
 
     def warn_clock(self):
         if self.clock():
@@ -809,7 +824,7 @@ class Engine(object):
                     # empty folder its journal lived in.
                     self.store.delete_source(name)
                     self.drop_kit_schema_if_unused()
-                kind = getattr(error, "kind", "error")
+                kind = self.signed_kind(getattr(error, "kind", "error"), connector)
                 code = getattr(error, "code", EXIT["failed"])
                 if isinstance(error, sql.DbError):
                     code = EXIT["dns"] if kind == "dns" else EXIT["nojava"] if kind == "nojava" else EXIT["failed"]
@@ -924,7 +939,7 @@ class Engine(object):
             self.warn_key_readers(connector, name)
             tables, read, how, empty = self.verify(connector, names["schema"])
         except (Failure, sql.DbError) as error:
-            kind = getattr(error, "kind", "error")
+            kind = self.signed_kind(getattr(error, "kind", "error"), connector)
             status = self.record_check(name, "failed", str(error), kind)
             remedy = remedy_for(kind, name, connector, error)
             specific = tls_remedy(error, connector, self.clock()) if kind == "tls" else None
