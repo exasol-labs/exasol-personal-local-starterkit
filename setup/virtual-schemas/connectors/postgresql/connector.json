@@ -92,6 +92,11 @@
     "CATALOG_NAME": "{database}",
     "SCHEMA_NAME": "{schema}"
   },
+  "schema_check": {
+    "input": "schema",
+    "statement": "SELECT CASE WHEN EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = {v}) THEN (CASE WHEN has_schema_privilege({v}, 'USAGE') THEN 'ok' ELSE 'denied' END) ELSE COALESCE((SELECT 'case:' || MIN(nspname) FROM pg_catalog.pg_namespace WHERE lower(nspname) = lower({v})), 'missing') END",
+    "case": "PostgreSQL folds an unquoted name to lower case"
+  },
   "tips": [
     "Names arrive in upper case (FILM, TITLE): query them without quotes.",
     "NUMERIC columns arrive as VARCHAR, so cast them to compute: CAST(RENTAL_RATE AS DECIMAL(10,2)).",

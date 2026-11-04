@@ -342,6 +342,34 @@ run_secret "$SECRET" connect postgresql --name up $PG_SET --secret-stdin
 has "an upper-case table is named without quotes" '"example": "SELECT * FROM VS_UP.LINES LIMIT 10"' "$OUT"
 run remove up
 
+printf '\n== the schema is checked before anything is created ==\n'
+# Exasol creates a virtual schema over a name the source does not have, empty,
+# and that reads as success. The loader asks the source first.
+db '{"sources": {"pg.example.com": {"tables": ["ORDERS"], "schemas": {"public": "ok", "Sales": "ok", "locked": "denied"}}}}'
+run_secret "$SECRET" connect postgresql --name nosch $PG_SET --set schema=nosuch --secret-stdin
+check "a schema the source does not have: exit 1" "1" "$RC"
+has "...said with the name" "the source has no schema nosuch that this account can see" "$OUT"
+check "...before any script or virtual schema, the connection dropped again" "[] {} {}" \
+    "$(dbq '[s for s in d["scripts"] if "NOSCH" in s]') $(dbq '{k: v for k, v in d["virtual"].items() if "NOSCH" in k}') $(dbq '{k: v for k, v in d["connections"].items() if "NOSCH" in k}')"
+check "...and no record" "no" "$([ -d "$HOME_K/sources/nosch" ] && echo yes || echo no)"
+db '{"sources": {"pg.example.com": {"tables": ["ORDERS"], "schemas": {"public": "ok", "Sales": "ok", "sales": "case:Sales", "locked": "denied"}}}}'
+run_secret "$SECRET" connect postgresql --name nosch $PG_SET --set schema=sales --secret-stdin
+has "a schema spelled in another case is named as the source spells it" "it has Sales (PostgreSQL folds an unquoted name to lower case); give it as the source spells it: --set schema=Sales" "$OUT"
+run_secret "$SECRET" connect postgresql --name nosch $PG_SET --set schema=locked --secret-stdin
+check "a schema the account may not use: exit 1" "1" "$RC"
+has "...filed as access denied, with the grant to give" "the account may not use schema locked; grant it USAGE on the schema" "$OUT"
+run_secret "$SECRET" connect postgresql --name withsch $PG_SET --set schema=Sales --secret-stdin
+check "the right schema: exit 0" "0" "$RC"
+has "...said before the adapter is created" "The source has schema Sales, and the account may use it" "$OUT"
+check "...asked with the schema as given" "Sales" "$(dbq 'd["scope_checks"][-1]')"
+run remove withsch
+db '{"sources": {"my.example.com": {"tables": ["orders"], "schemas": {"shop": "ok"}}}}'
+run_secret "$SECRET" connect mysql --name nodb --set host=my.example.com --set database=Shop --set user=reader --secret-stdin
+has "MySQL: the database is the scope checked" "the source has no database Shop that this account can see" "$OUT"
+db '{"sources": {"my.example.com": {"tables": ["orders"]}}}'
+run_secret "$SECRET" connect bigquery --name nobq --set project=p --set dataset=d --secret-stdin < /dev/null
+lacks "a connector without a schema check asks nothing" "that this account can see" "$OUT"
+
 printf '\n== an interrupted connect is recovered, not mistaken for a stranger ==\n'
 # The state an attempt killed right after CREATE CONNECTION leaves behind: its
 # journal (naming what it made) and the connection in the database.

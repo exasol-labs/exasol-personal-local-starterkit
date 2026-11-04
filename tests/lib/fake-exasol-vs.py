@@ -412,7 +412,15 @@ class Fake(object):
         m = re.match(r"SELECT \* FROM \(IMPORT FROM JDBC AT \"([^\"]+)\" STATEMENT '", sql)
         if m:
             _loader_trust(doc, m.group(1))
-            _source_for(doc, m.group(1), "loader")
+            src = _source_for(doc, m.group(1), "loader")
+            if "''missing''" in sql:
+                # The schema check: the source's "schemas" ({name: "ok" |
+                # "denied" | "case:<NAME>"}) answers; without it, every name is.
+                words = ("ok", "denied", "missing", "case:", "USAGE", "SCHEMA", "SELECT")
+                value = next((v for v in re.findall(r"''([^']*)''", sql) if v not in words), "")
+                answer = "ok" if "schemas" not in src else src["schemas"].get(value, "missing")
+                doc.setdefault("scope_checks", []).append(value)
+                return [{"ANSWER": answer}]
             return [{"1": 1}]
         m = re.match(r'SELECT \* FROM "([^"]+)"\."([^"]+)" LIMIT 1', sql)
         if m:

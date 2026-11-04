@@ -91,6 +91,10 @@
     "CATALOG_NAME": "{database}",
     "SCHEMA_NAME": "{schema}"
   },
+  "schema_check": {
+    "input": "schema",
+    "statement": "SELECT CASE WHEN SCHEMA_ID({v}) IS NOT NULL THEN 'ok' ELSE 'missing' END"
+  },
   "tips": [
     "Names keep SQL Server's spelling, spaces included: quote them, e.g. SELECT \"OrderID\" FROM <schema>.\"Orders\".",
     "datetime arrives as TIMESTAMP(3), bit as BOOLEAN, money as DECIMAL(19,4)."

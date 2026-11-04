@@ -50,7 +50,8 @@ EXIT = {"ok": 0, "failed": 1, "input": 2, "conflict": 3, "missing": 4, "gated": 
 # Status recorded for a failure kind (sql.classify).
 STATUS_FOR = {"auth": "auth-failed", "tls": "tls-failed", "unreachable": "unreachable", "nohost": "unreachable",
               "dns": "dns-failed", "nojava": "failed", "error": "failed", "denied": "access-denied",
-              "region": "failed", "nobucket": "failed", "clock": "failed", "norust": "failed"}
+              "region": "failed", "nobucket": "failed", "clock": "failed", "norust": "failed",
+              "schema_missing": "failed"}
 
 REMEDY_FOR = {
     "auth": "the source rejected the credentials: exakit source reauth {name}",
@@ -64,6 +65,7 @@ REMEDY_FOR = {
     "region": "the bucket is in another region: exakit source disconnect {name} --yes, then exakit connect <connector> --name {name} --set region=<the bucket's region> with the credential again",
     "nobucket": "the {store} does not exist under that name: check it, then remove and connect again",
     "clock": "the database clock is too far from the store's for a signed request; restart the database (exakit stop, then exakit start), then: exakit source check {name}",
+    "schema_missing": "the schema the source was connected with is gone or no longer visible to the account; check it at the source, then: exakit source check {name}",
     "error": "see the log: exakit logs",
 }
 
@@ -158,6 +160,13 @@ class Failure(Exception):
         super().__init__(message)
         self.code = code
         self.kind = kind
+
+
+class ScopeFailure(Failure):
+    """The schema check's own answer: complete in its words, so connect adds
+    only that nothing was kept."""
+    def __init__(self, message, kind):
+        super().__init__(message, EXIT["failed"], kind)
 
 
 class Engine(object):
@@ -688,6 +697,34 @@ class Engine(object):
             sql.ident(names["schema"]), sql.ident(names["script_schema"]), sql.ident(names["script"]),
             " ".join(props))
 
+    def check_scope(self, connector, names, values):
+        """Is the schema (MySQL: the database) there, and may the account use
+        it? Asked through the loader before any script or virtual schema
+        exists: Exasol does not ask, and a virtual schema over a name the
+        source does not have is created empty, which reads as success."""
+        spec = connector.get("schema_check")
+        if not spec or not connector.get("etl"):
+            return
+        value = values.get(spec["input"], "")
+        statement = spec["statement"].replace("{v}", sql.literal(value))
+        rows = self.db().query("SELECT * FROM (IMPORT FROM JDBC AT %s STATEMENT %s)"
+                               % (sql.ident(names["connection"]), sql.literal(statement)))
+        answer = str(list(rows[0].values())[0]) if rows and rows[0] else ""
+        label = "database" if spec["input"] == "database" else "schema"
+        if answer == "ok":
+            self.emit("OK", "The source has %s %s, and the account may use it" % (label, value))
+            return
+        if answer.startswith("case:"):
+            other = answer[5:]
+            raise ScopeFailure("the source has no %s %s, but it has %s (%s); give it as the source spells it: "
+                               "--set %s=%s" % (label, value, other, spec.get("case", "names differ in case"),
+                                                spec["input"], other), "schema_missing")
+        if answer == "denied":
+            raise ScopeFailure("the account may not use %s %s; grant it USAGE on the %s (and SELECT on its tables)"
+                               % (label, value, label), "denied")
+        raise ScopeFailure("the source has no %s %s that this account can see; check the name and that the "
+                           "account has access to it" % (label, value), "schema_missing")
+
     def tables(self, schema):
         return [r.get("TABLE_NAME") for r in self.db().query(
             "SELECT TABLE_NAME FROM EXA_DBA_VIRTUAL_TABLES WHERE TABLE_SCHEMA = %s ORDER BY TABLE_NAME"
@@ -809,6 +846,7 @@ class Engine(object):
                     made("connection")
                 self.emit("OK", "Connection %s created (%s)" % (names["connection"], "it names the key file, not the key"
                                                                      if key_path else "the credential lives only in the database"))
+                self.check_scope(connector, names, values)
                 if not reconnect:
                     shared_before = connector.get("shared_adapter") and \
                         self.exists("script", names["script_schema"], names["script"])
@@ -853,6 +891,8 @@ class Engine(object):
                 remedy = remedy_for(kind, name, connector, error)
                 if getattr(error, "complete", False):
                     raise error
+                if isinstance(error, ScopeFailure):
+                    raise Failure("%s; nothing was kept - connect again with the corrected name" % error, code, kind)
                 specific = tls_remedy(error, connector, self.clock()) if kind == "tls" else None
                 if specific:
                     remedy = "the source's certificate did not verify; nothing was kept - %s, then connect again" % specific
