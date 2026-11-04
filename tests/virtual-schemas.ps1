@@ -184,6 +184,54 @@ $childCode = $LASTEXITCODE
 $ErrorActionPreference = "Stop"
 Check "remove --yes: exit 0, and says it is done" "0 True" ("$childCode " + (@($out) -join "`n").Contains("sales removed"))
 
+Write-Host ""
+Write-Host "== exakit connect --url: the string on the engine's stdin, --set still wins =="
+# Invoke-CmdConnect ends with `exit`: a child PowerShell runs it with the real
+# bridge and engine on the simulated database, every engine call recorded.
+$urlChild = @'
+param($repo, $defs, $kitHome, $deploy, $python, $record)
+$ErrorActionPreference = "Stop"
+$script:ExakitHome = $kitHome
+function Write-ExakitLog { param($L, $M) }
+function Ok([string]$M) { Write-Host "OK $M" }
+function Info([string]$M) { Write-Host "INFO $M" }
+function Warn2([string]$M) { Write-Host "WARN $M" }
+function Get-ExakitRepoRoot { return $null }
+function Get-PyexasolVenvPython { return $python }
+function Get-ExakitManifestValue { param([string]$Path)
+    switch ($Path) { "runtime.deployment_dir" { return $deploy } "runtime.dsn" { return "127.0.0.1:8563" } "runtime.user" { return "sys" } default { return "" } } }
+. (Join-Path $repo "setup/lib/core-setup.ps1")
+. (Join-Path $repo "setup/lib/virtual-schemas.ps1")
+function Get-ExakitVsDefs { return $defs }
+$cli = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repo "setup/exakit.ps1"), [ref]$null, [ref]$null)
+foreach ($def in @($cli.FindAll({ param($n) ($n -is [System.Management.Automation.Language.FunctionDefinitionAst]) -and $n.Name -eq "Invoke-CmdConnect" }, $true))) {
+    . ([scriptblock]::Create($def.Extent.Text))
+}
+function Assert-ExakitInstalled { param([switch]$Json) }
+function Initialize-ExakitLogging { }
+function Test-ExakitInteractive { return $false }
+function Deny-ExakitInput { param([string]$Message, $Remedy = $null) Write-Output "DENY $Message"; exit 2 }
+$realEngine = ${function:Invoke-ExakitVsEngine}
+function Invoke-ExakitVsEngine { param([string[]]$Arguments = @(), [string]$Secret = "")
+    Add-Content -LiteralPath $record -Value ($Arguments -join " ")
+    return (& $realEngine -Arguments $Arguments -Secret $Secret) }
+Invoke-CmdConnect -Arguments $args
+'@
+$urlChildFile = Join-Path $work "url-child.ps1"; Set-Content -LiteralPath $urlChildFile -Value $urlChild -Encoding ASCII
+$urlRecord = Join-Path $work "url-calls.txt"
+$urlPw = "Pw-" + [char]0x20AC + "-url9"
+$ErrorActionPreference = "Continue"
+$out = & $pwsh -NoProfile -File $urlChildFile $repo $defs $home2 $deploy $python $urlRecord pg --name urlps --url ("postgres://reader:" + $urlPw + "@pg.example.com:5433/sales?sslmode=require") --set port=5432 --dry-run 2>&1
+$childCode = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+$calls = @(Get-Content -LiteralPath $urlRecord -ErrorAction SilentlyContinue)
+Check "connect --url --dry-run: exit 0" 0 $childCode
+Check "...paste ran first, the string not among its arguments" "paste pg --base64" $calls[0]
+Check "...the string's inputs come before the command line's --set, which wins" "plan postgresql --name urlps --set host=pg.example.com --set port=5433 --set database=sales --set user=reader --set tls=require --set port=5432" $calls[2]
+Check "...the password is in no argument" $false ((($calls -join "`n")).Contains("url9"))
+Check "...nor in the output" $false (((@($out) -join "`n")).Contains("url9"))
+Check "...whose note says it was not used" $true (((@($out) -join "`n")).Contains("The string was on the command line"))
+
 Remove-Item Env:\EXAKIT_VS_FAKE_DB, Env:\FAKE_VS_STATE
 if (-not $env:KEEP_WORK) { Remove-Item -Recurse -Force -LiteralPath $work -ErrorAction SilentlyContinue } else { Write-Host "work: $work" }
 Write-Host ""

@@ -72,6 +72,15 @@
       "required": true
     }
   ],
+  "paste": {
+    "schemes": ["jdbc:snowflake", "https"],
+    "bare": true,
+    "host": "account",
+    "host_suffix": ".snowflakecomputing.com",
+    "params": {"db": "database", "database": "database", "warehouse": "warehouse", "schema": "schema", "role": "role", "user": "user"},
+    "implied": ["jdbc_query_result_format"],
+    "forms": ["jdbc:snowflake://<account>.snowflakecomputing.com/?db=...&warehouse=...", "https://<account>.snowflakecomputing.com"]
+  },
   "auth": "pat",
   "host": "{account}.snowflakecomputing.com",
   "url": "jdbc:snowflake://{account}.snowflakecomputing.com/?db={database}&warehouse={warehouse}&JDBC_QUERY_RESULT_FORMAT=JSON{opt_role}",

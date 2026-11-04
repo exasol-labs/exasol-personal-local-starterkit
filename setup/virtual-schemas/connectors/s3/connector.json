@@ -45,6 +45,10 @@
       "required": true
     }
   ],
+  "paste": {
+    "style": "s3",
+    "forms": ["s3://bucket/...", "https://bucket.s3.<region>.amazonaws.com/..."]
+  },
   "auth": "aws-keys",
   "host": "{bucket}.s3.{region}.amazonaws.com",
   "credential": "s3",

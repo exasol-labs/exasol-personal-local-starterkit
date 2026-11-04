@@ -40,6 +40,12 @@
       "required": true
     }
   ],
+  "paste": {
+    "style": "azure",
+    "params": {"accountname": "account"},
+    "implied": ["defaultendpointsprotocol", "endpointsuffix", "blobendpoint"],
+    "forms": ["https://<account>.blob.core.windows.net/<container>", "abfss://<container>@<account>.dfs.core.windows.net", "AccountName=...;AccountKey=..."]
+  },
   "auth": "azure-sas-or-key",
   "host": "{account}.blob.core.windows.net",
   "credential": "azure-blob",

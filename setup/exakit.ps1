@@ -3431,16 +3431,20 @@ function Invoke-CmdInfoJson {
     exit 0
 }
 
-# Invoke-CmdConnect - `exakit connect [source] [--name N] [--set KEY=VALUE]...
-# [--password-file F] [--dry-run] [--yes] [--json]`. Twin of cmd_connect.
+# Invoke-CmdConnect - `exakit connect [source] [--name N] [--url STRING]
+# [--set KEY=VALUE]... [--password-file F] [--dry-run] [--yes] [--json]`. Twin of cmd_connect.
 function Invoke-CmdConnect {
     param([string[]]$Arguments = @())
-    $source = ""; $name = ""; $pwFile = ""; $dry = $false; $json = $false; $sets = @(); $given = @()
+    $source = ""; $name = ""; $pwFile = ""; $dry = $false; $json = $false; $sets = @(); $given = @(); $url = ""
     $script:ExakitVsAssumeYes = $false
     for ($i = 0; $i -lt $Arguments.Count; $i++) {
         $arg = $Arguments[$i]
         if ($arg -eq "--name") { $i++; $name = "" + $Arguments[$i] }
         elseif ($arg -like "--name=*") { $name = $arg.Substring(7) }
+        elseif ($arg -eq "--url" -or $arg -like "--url=*") {
+            if ($arg -eq "--url") { $i++; $url = "" + $Arguments[$i] } else { $url = $arg.Substring(6) }
+            if (-not $url) { Deny-ExakitInput "--url takes a connection string (exakit help connect)" }
+        }
         elseif ($arg -eq "--set") {
             $i++; $pair = "" + $Arguments[$i]
             if ($pair -notlike "*=*") { Deny-ExakitInput "--set takes KEY=VALUE (exakit help connect)" }
@@ -3459,6 +3463,21 @@ function Invoke-CmdConnect {
     }
     if ($json) { Assert-ExakitInstalled -Json } else { Assert-ExakitInstalled }
     Initialize-ExakitLogging
+    # A pasted connection string fills what it names, for every path below. It
+    # goes to the engine on stdin (base64, as a secret does), never as an
+    # argument; its pairs go BEFORE the command line's --set, so those win.
+    if ($url) {
+        if (-not $source) { Deny-ExakitInput "--url needs the source it is for, e.g. exakit connect postgresql --url 'postgres://reader@db.example.com/sales'" }
+        $pasted = Invoke-ExakitVsEngine -Arguments @("paste", $source, "--base64") -Secret $url
+        $url = $null
+        $answer = Show-ExakitVsLines -Lines $pasted.Lines
+        if ($pasted.Code -ne 0) { exit $pasted.Code }
+        $urlSets = @()
+        if ($answer -and $answer.values) {
+            foreach ($p in @($answer.values.PSObject.Properties)) { $urlSets += @("--set", "$($p.Name)=$($p.Value)"); $given += $p.Name }
+        }
+        $sets = $urlSets + $sets
+    }
     # A person at a console gets the menu and the panels; a pipe, --yes,
     # --dry-run and --json keep the line-by-line path below, unchanged.
     if (-not $dry -and -not $json -and (Test-ExakitVsTuiOk)) {

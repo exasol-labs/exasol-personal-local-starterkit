@@ -42,6 +42,13 @@
       "required": true
     }
   ],
+  "paste": {
+    "schemes": ["jdbc:bigquery"],
+    "endpoint": "skip",
+    "params": {"projectid": "project", "defaultdataset": "dataset"},
+    "implied": ["oauthtype"],
+    "forms": ["jdbc:bigquery://https://www.googleapis.com/bigquery/v2:443;ProjectId=...;DefaultDataset=..."]
+  },
   "auth": "service-account-key",
   "secret_as_file": true,
   "auth_hint": "a service-account sign-in is a token dated by the database's clock, so a clock that is off reads as a refused key - if exakit status shows it behind, restart the database; otherwise the key may be deleted or disabled in Google Cloud",
