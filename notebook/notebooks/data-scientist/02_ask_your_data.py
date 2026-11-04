@@ -36,16 +36,16 @@ nb.show_roles(ds)
 # %% [markdown]
 # ## Review the proposal
 #
-# Check the SQL, assumptions and doubts. With the supplied SQL, changing `QUESTION` alone changes nothing; edit the SQL instead.
+# Read the SQL, what the model assumed and what it says to check. With the starter SQL (`DRAFT_WITH_MODEL = False`), changing `QUESTION` alone changes nothing; edit the SQL instead: `proposal.edit("SELECT ...")`.
 
 # %%
 GROUPED_BY, BY = ds.group_by()   # the category, else the entity, else the target
-starter_sql = f"SELECT {BY} AS CATEGORY, COUNT(*) AS N FROM {ds.fact_table} GROUP BY 1 ORDER BY N DESC"
+GROUP, COUNT = nb.name(BY), nb.count_name(ds)       # columns named after the data: SOCIAL_NETWORK, POSTS
+starter_sql = f"SELECT {BY} AS {GROUP}, COUNT(*) AS {COUNT} FROM {ds.fact_table} GROUP BY 1 ORDER BY {COUNT} DESC"
 if GROUPED_BY != "category":
     print(f"{ds.id} has no category; the starter SQL counts rows per {GROUPED_BY} ({BY}).")
 proposal = nb.ask(ds, QUESTION, proposed_sql=None if DRAFT_WITH_MODEL else starter_sql)
-print("Assumptions:", proposal.assumptions or "none")
-print("Doubts:", proposal.doubts or "none")
+proposal
 
 # %% [markdown]
 # ## Approve and run
@@ -61,7 +61,8 @@ APPROVE_SQL = False
 if APPROVE_SQL:
     proposal.approve()
     answer = proposal.run()
-    print(f"{len(answer)} rows returned. Check the figures against the SQL printed above.")
-    print(answer)
+    print(f"{len(answer)} rows. Check the figures against the SQL above.")
 else:
-    print("SQL not approved; no query ran. Review it and set APPROVE_SQL=True to continue.")
+    answer = None
+    print("Not approved: no query ran. Review the proposal above, then set APPROVE_SQL = True and run this cell again.")
+answer

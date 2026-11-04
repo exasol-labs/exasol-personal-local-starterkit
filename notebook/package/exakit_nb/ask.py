@@ -127,6 +127,20 @@ def _execute_mcp(statement: str) -> dict[str, Any]:
         process.stdout.close()
 
 
+_QUOTED = re.compile(r"('(?:[^']|'')*'|\"(?:[^\"]|\"\")*\")")
+_CLAUSE = re.compile(r"\s+((?:LEFT |RIGHT |INNER |FULL |CROSS )?(?:OUTER )?JOIN|FROM|WHERE|GROUP BY|HAVING|QUALIFY|ORDER BY|"
+                     r"LIMIT|UNION ALL|UNION)\b", re.I)
+
+
+def readable(sql: str) -> str:
+    """The SQL laid out for reading, one clause per line; the text approved and run is never changed. SQL that
+    already has line breaks is shown as it is."""
+    if "\n" in sql.strip():
+        return sql.strip()
+    parts = _QUOTED.split(sql.strip())                 # odd items are quoted names and strings: never split inside
+    return "".join(part if i % 2 else _CLAUSE.sub(lambda m: "\n" + m.group(1), part) for i, part in enumerate(parts))
+
+
 @dataclass
 class Proposal:
     dataset: Any
@@ -135,6 +149,33 @@ class Proposal:
     assumptions: list[str] = field(default_factory=list)
     doubts: list[str] = field(default_factory=list)
     _approved_digest: str | None = field(default=None, init=False, repr=False)
+
+    def _sections(self) -> list[tuple[str, list[str]]]:
+        return [("What the model assumed", self.assumptions), ("Check before you approve", self.doubts)]
+
+    def __str__(self) -> str:
+        state = "approved" if self._approved_digest else "not approved yet: nothing has run"
+        lines = [f"Question: {self.question}", f"SQL ({state}):", readable(self.sql)]
+        for title, items in self._sections():
+            if items:
+                lines += ["", f"{title}:", *(f"  - {item}" for item in items)]
+        return "\n".join(lines)
+
+    def _repr_html_(self) -> str:
+        """How Jupyter and Marimo show a proposal: the question, the SQL one clause per line, then what the model
+        assumed and what to check, as lists, and the state."""
+        from html import escape
+
+        state = ("<b>Approved</b>: run it with <code>proposal.run()</code>." if self._approved_digest
+                 else "<b>Not approved yet</b>: nothing has run. Edit with <code>proposal.edit(\"...\")</code> if needed, "
+                      "then approve it in the next cell.")
+        html = [f"<p><b>Question:</b> {escape(self.question)}</p>",
+                f"<pre style=\"white-space: pre-wrap\">{escape(readable(self.sql))}</pre>"]
+        for title, items in self._sections():
+            if items:
+                html.append(f"<p><b>{title}</b></p><ul>" + "".join(f"<li>{escape(item)}</li>" for item in items) + "</ul>")
+        html.append(f"<p>{state}</p>")
+        return "\n".join(html)
 
     def edit(self, sql: str) -> "Proposal":
         self.sql = _read_sql(sql)
@@ -154,7 +195,6 @@ class Proposal:
         statement = _read_sql(self.sql)
         if self._approved_digest != hashlib.sha256(statement.encode("utf-8")).hexdigest():
             raise RuntimeError("This SQL has not been approved. Review it, then call proposal.approve() before run().")
-        print(statement)
         import pandas as pd
 
         result = _execute_mcp(statement)
@@ -244,10 +284,4 @@ def ask(dataset: Any, question: str, proposed_sql: str | None = None, *, table_d
             doubts = [str(v) for v in parsed.get("doubts", [])]
         except (ValueError, KeyError, TypeError) as error:
             raise ValueError("The model did not return a SQL proposal JSON object; ask again or write SQL yourself.") from error
-    proposal = Proposal(dataset, question.strip(), _read_sql(proposed_sql), assumptions, doubts)
-    print("Proposed SQL (review and edit before approval):\n" + proposal.sql)
-    if assumptions:
-        print("Assumptions: " + "; ".join(assumptions))
-    if doubts:
-        print("Doubts: " + "; ".join(doubts))
-    return proposal
+    return Proposal(dataset, question.strip(), _read_sql(proposed_sql), assumptions, doubts)
