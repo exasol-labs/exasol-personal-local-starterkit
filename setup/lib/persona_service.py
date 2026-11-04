@@ -258,6 +258,34 @@ def show(root: Path, persona_id: str) -> list:
     return rows
 
 
+# How a service a persona started is kept from starting at login, and where the manifest says it is set to start;
+# anything else is stopped by its service id.
+SERVICE_OFF = {"mlflow": ("The MLflow server", "exakit mlflow stop --disable", ("components", "udf_devkit", "mlflow", "enabled"))}
+
+
+def kept_services(root: Path, removed: str, remaining: list, manifest: dict | None = None) -> list:
+    """What `persona remove` leaves running, said: a service the removed persona started (the ML Engineer's MLflow
+    server), that is set to start and that no remaining persona needs, still starts at every login - with the
+    command that stops that (audit DAY-10). Its data stays either way."""
+    try:
+        theirs = selected_services(root, removed)
+        still = set(selected_services(root, ",".join(remaining))) if remaining else set()
+    except BadInput:
+        return []
+    lines = []
+    for service in theirs:
+        if service in still:
+            continue
+        what, command, flag = SERVICE_OFF.get(service, (f"The {service} service", f"exakit stop {service}", ()))
+        node = manifest or {}
+        for key in flag:
+            node = node.get(key) if isinstance(node, dict) else None
+        if flag and node is not True:
+            continue                                 # never set to start: nothing to say
+        lines.append(f"{what} it started still starts at every login (its data stays). To stop that: {command}")
+    return lines
+
+
 def notebooks(root: Path, persona_id: str) -> list:
     """The notebooks a persona brings, in their order, from the notebook catalog (notebook/catalog.json): what the
     notebook add-on copies into the persona's folder. Empty when the kit copy carries no catalog."""
@@ -282,6 +310,14 @@ def described(root: Path, persona_id: str, recorded: list) -> dict:
     start = show(root, persona_id)[-1].split(None, 2)
     out["start_here"] = start[2] if len(start) == 3 and start[:2] == ["Start", "here"] else None
     return out
+
+
+def _manifest(home: Path) -> dict:
+    try:
+        doc = json.loads((home / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return doc if isinstance(doc, dict) else {}
 
 
 def run(argv: list, env: dict) -> list:
@@ -332,6 +368,7 @@ def run(argv: list, env: dict) -> list:
             raise BadInput(str(error)) from error
         if changed:
             return [f"Persona removed: {args[0]}. Installed datasets and add-ons were kept.",
+                    *kept_services(root, args[0], remaining, _manifest(home)),
                     f"Recorded personas: {','.join(remaining) or 'none'}"]
         return [f"Persona {args[0]} was not recorded; nothing changed."]
     if command == "default-datasets":
