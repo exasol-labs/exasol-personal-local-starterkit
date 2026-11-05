@@ -238,12 +238,56 @@ def _copy(ctx: KitContext, frontend: str) -> None:
         ctx.activity(f"New {frontend} notebooks: {result.replace(chr(10), ', ')}")
 
 
+HELPER_PACKAGES = (("exakit-nb", ("notebook", "package")), ("exasol-mlflow", ("packages", "exasol-mlflow")))
+
+
+def _helpers_digest(ctx: KitContext) -> str:
+    """What the kit's own two packages (the exakit.nb helpers and exasol-mlflow) are in this kit copy."""
+    import hashlib
+
+    digest = hashlib.sha256()
+    for _, parts in HELPER_PACKAGES:
+        base = ctx.root.joinpath(*parts)
+        for path in sorted(base.rglob("*")):
+            relative = path.relative_to(base).parts
+            if not path.is_file() or relative[0] == "build" or "__pycache__" in relative or \
+                    any(part.endswith(".egg-info") for part in relative):
+                continue
+            digest.update("/".join(relative).encode("utf-8") + b"\0" + path.read_bytes())
+    return digest.hexdigest()
+
+
+def sync_helpers(ctx: KitContext) -> bool:
+    """Reinstall the kit's own packages into the notebook environment when this kit copy carries other code than the
+    one they were installed from. `exakit update exakit` moves the notebooks forward, and they import these helpers:
+    left at the old kit's code, a refreshed notebook called helpers that were not there yet (DAY-07)."""
+    if ctx.manifest.get(f"{RECEIPT}.ownership") != "kit":
+        return False
+    python = venv_python(paths(ctx)[0])
+    if not python.is_file():
+        return False
+    digest = _helpers_digest(ctx)
+    if ctx.manifest.get(f"{RECEIPT}.helpers_digest") == digest:
+        return False
+    sources = [ctx.root.joinpath(*parts) for _, parts in HELPER_PACKAGES]
+    for source in sources:
+        if (source / "build").is_dir():
+            shutil.rmtree(source / "build")
+    command = [str(ctx.require_uv()), "pip", "install", "--python", str(python)]
+    for name, _ in HELPER_PACKAGES:
+        command += ["--reinstall-package", name]
+    ctx.run_logged("Updating the notebook helpers to this kit", *command, *(str(source) for source in sources))
+    ctx.manifest.set_many({f"{RECEIPT}.helpers_digest": digest})
+    return True
+
+
 def sync_notebooks(ctx: KitContext) -> None:
     """The notebooks of every persona now recorded, for the front ends installed: a persona added later brings its
     folder (and the README names it). Nothing is overwritten or brought back after a delete."""
     if ctx.manifest.get(f"{RECEIPT}.ownership") != "kit":
         return
     venv = paths(ctx)[0]
+    sync_helpers(ctx)
     _copy(ctx, "jupyter")
     if venv_executable(venv, "marimo").is_file():
         _copy(ctx, "marimo")
@@ -320,6 +364,7 @@ def install(ctx: KitContext) -> None:
     ctx.activity("Validating notebook connector")
     if _package_version(ctx) != version:
         raise AddonFailure("The notebook connector does not report the requested version")
+    ctx.manifest.set_many({f"{RECEIPT}.helpers_digest": _helpers_digest(ctx)})
     ctx.activity("Placing notebooks and the kernel")
     notebooks.mkdir(parents=True, exist_ok=True)
     _copy(ctx, "jupyter")

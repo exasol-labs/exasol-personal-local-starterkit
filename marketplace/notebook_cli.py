@@ -244,6 +244,7 @@ def _preflight(ctx: KitContext) -> None:
         if result.returncode or not _database_up(ctx):
             raise AddonFailure("The database still does not answer; inspect exakit status")
     notebook._write_store(ctx)
+    notebook.sync_helpers(ctx)          # the helpers the refreshed notebooks import come from this kit too
     notebook._register_kernel(ctx)
     directory.mkdir(parents=True, exist_ok=True)
     notebook._copy(ctx, "jupyter")
