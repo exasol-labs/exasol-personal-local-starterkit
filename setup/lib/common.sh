@@ -13247,6 +13247,12 @@ exakit_autostart_enable() {
         # `exakit autostart` produced no output at all once the per-service
         # lines went.
         ok "Automatic start after a restart is on."
+        # In WSL "a restart" is the DISTRO's, not the PC's (WSL-05): Windows
+        # starts a distro when it is opened and stops it when idle, so after a
+        # reboot nothing here runs until the distro does.
+        if [ "$(detect_os 2>/dev/null)" = wsl ]; then
+            info "In WSL that is when this distro starts: after a Windows reboot, open the distro (or start it from a Windows logon task: wsl.exe -d ${WSL_DISTRO_NAME:-<distro>} --exec true) and the database comes up with it."
+        fi
     else
         manifest_set autostart.enabled false
     fi

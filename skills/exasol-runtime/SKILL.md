@@ -89,6 +89,13 @@ On by default from a fresh install. The mechanism differs per platform —
 launchd on macOS, `systemd --user` on Linux, a Startup entry on Windows — but
 the command is the same everywhere.
 
+**In WSL**, "after a restart" means when the *distro* starts, not the PC:
+Windows starts a distro when it is opened and stops it when idle, so after a
+Windows reboot nothing in it runs until it is opened again (or a Windows logon
+task starts it: `wsl.exe -d <distro> --exec true`). It also needs systemd on in
+the distro (`[boot] systemd=true` in `/etc/wsl.conf`); `exakit autostart` says so
+when it is off.
+
 ## When the database will not come up
 
 Work the ladder in order; do not improvise past it:
