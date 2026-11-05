@@ -1382,6 +1382,7 @@ _p2gate_setup() { # _p2gate_setup <os> <with-podman:0|1> [installable] -> all ou
         confirm_env() { return 0; }
         . "$0/setup/lib/detect.sh" 2>/dev/null
         detect_os() { echo "'"$1"'"; }
+        detect_musl() { [ "${EXAKIT_TEST_MUSL:-0}" = 1 ]; }
         detect_arch() { echo arm64; }
         detect_ram_gb() { echo 16; }
         detect_free_disk_gb() { echo 100; }
@@ -1450,6 +1451,11 @@ check "gate(linux, no podman but installable) carries on" \
     "OK: Compatibility check passed (linux arm64, 16 GB RAM, 100 GB free)" "$(_p2gate linux 0 1)"
 check "gate(wsl, no podman but installable) carries on" \
     "OK: Compatibility check passed (wsl arm64, 16 GB RAM, 100 GB free)" "$(_p2gate wsl 0 1)"
+# LNX-06: a musl Linux (Alpine) is refused before anything is installed.
+_p2musl="$(EXAKIT_TEST_MUSL=1 _p2gate_setup linux 1)"
+has "gate(linux) refuses a musl system" "DIED: Unsupported C library: musl" "$_p2musl"
+check "gate(linux) on glibc passes" \
+    "OK: Compatibility check passed (linux arm64, 16 GB RAM, 100 GB free)" "$(_p2gate linux 1)"
 # WSL-06: a kit home on a Windows drive is refused BEFORE any password is
 # written there - the preflight warned, the install itself wrote them first.
 _p2drvfs="$(EXAKIT_HOME=/mnt/c/Users/me/.exasol-starter-kit _p2gate_setup wsl 1)"

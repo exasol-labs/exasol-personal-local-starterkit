@@ -422,6 +422,15 @@ personal_check_requirements() {
                 info "Then reopen the distro and re-run the installer: $(exakit_install_command)"
                 die "WSL 1 is not supported: Exasol Personal needs a real Linux kernel."
             fi
+            # MUSL IS REFUSED BEFORE ANYTHING IS INSTALLED (LNX-06). Alpine and other
+            # musl distros got a `sudo apk add podman` and then binaries - the
+            # launcher, exapump, uv's Python - that are built for glibc and do not
+            # run there. Said at the start, with the way that works.
+            if detect_musl 2>/dev/null; then
+                error "This Linux uses the musl C library (Alpine or similar). The Exasol launcher, exapump and the kit's Python are built for glibc and cannot run here."
+                info "Use a glibc distribution (Ubuntu, Debian, Fedora, RHEL and its rebuilds), for example in a VM or a WSL 2 distro, and run the installer there."
+                die "Unsupported C library: musl."
+            fi
             # A KIT HOME ON A WINDOWS DRIVE, refused before the first password is
             # written (WSL-06). DrvFs mounts without Linux permissions, so the
             # chmod 600 on the database passwords is accepted and discarded: any

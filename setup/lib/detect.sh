@@ -89,6 +89,15 @@ detect_wsl_drvfs_path() {
     return 1
 }
 
+# detect_musl — true on a Linux built on the musl C library (Alpine and the
+# like), where the glibc binaries the kit downloads cannot run.
+detect_musl() {
+    for _dm in /lib/ld-musl-*; do
+        [ -e "$_dm" ] && return 0
+    done
+    [ -f /etc/alpine-release ]
+}
+
 # detect_arch — prints: arm64 | x86_64 | unsupported
 detect_arch() {
     _da_m="$(uname -m)"
