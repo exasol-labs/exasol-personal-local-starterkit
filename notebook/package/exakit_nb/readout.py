@@ -42,7 +42,11 @@ def noun(ds, one: bool = False) -> str:
     for part in (found.group(1).split() if found else []):
         if part in _STOP:
             break
-        if part not in ("and", "a", "an", "the"):
+        if part in ("a", "an", "the"):
+            if words:          # "client the campaign phoned": an article after the noun starts a clause
+                break
+            continue
+        if part != "and":      # "store and week": joined, not a word of its own
             words.append(part)
     words = words[:3] or ["row"]
     if one:

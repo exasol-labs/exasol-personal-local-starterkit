@@ -47,6 +47,10 @@ class Names(unittest.TestCase):
         self.assertEqual(("posts", "post", "POSTS"), (readout.noun(dataset()), readout.noun(dataset(), one=True),
                                                       readout.count_name(dataset())))
         self.assertEqual("clients", readout.noun(dataset("one row per client the campaign phoned")))
+        self.assertEqual(("order lines", "ORDER_LINES"), (readout.noun(dataset("one row per order line")),
+                                                          readout.count_name(dataset("one row per order line"))))
+        self.assertEqual(("store weeks", "store week"), (readout.noun(dataset("one row per store and week")),
+                                                         readout.noun(dataset("one row per store and week"), one=True)))
         self.assertEqual("ROW_COUNT", readout.count_name(dataset(None)), "ROWS is an SQL word")
 
 

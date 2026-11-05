@@ -61,13 +61,13 @@ try {
     New-ExakitDataTable -FinalLabel "Skip"
     $labels = (@($script:UiTable.Rows | ForEach-Object { $_.Label }) -join ";")
     $for = (@($script:UiTable.Rows | ForEach-Object { $_.Col2 }) -join ";")
-    Check "the persona's row ticked, the file and external rows after the datasets, each described in the Description column" `
-        "3~4~Sample datasets;TPC-H retail benchmark;Amazon sales;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - coming soon;Skip~;Orders, customers, parts;Online orders;;;" `
+    Check "the persona's row ticked, the file row after the datasets, each described in the Description column" `
+        "3~4~Sample datasets;TPC-H retail benchmark;Amazon sales;Upload a file or folder: CSV/Parquet/JSON;Skip~;Orders, customers, parts;Online orders;;" `
         "$($script:ExakitTableDefaults -join ',')~$($script:ExakitTableRowLocal)~$labels~$for"
     $env:EXAKIT_PERSONA_ACTIVE = "1"
     New-ExakitDataTable -FinalLabel "Skip"
-    Check "a persona picked: only its datasets under Sample datasets, then upload, external and Skip" `
-        "Sample datasets;Amazon sales;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - coming soon;Skip~1,2" `
+    Check "a persona picked: only its datasets under Sample datasets, then upload and Skip" `
+        "Sample datasets;Amazon sales;Upload a file or folder: CSV/Parquet/JSON;Skip~1,2" `
         "$((@($script:UiTable.Rows | ForEach-Object { $_.Label })) -join ';')~$($script:ExakitTableDefaults -join ',')"
     Remove-Item Env:EXAKIT_PERSONA_ACTIVE -ErrorAction SilentlyContinue
     $env:EXAKIT_DATASETS_PRESELECT = "tpch,amazon_sales"
@@ -75,7 +75,7 @@ try {
     Check "datasets covering every dataset row tick the Sample datasets parent too" "1,2,3" ($script:ExakitTableDefaults -join ",")
     $env:EXAKIT_DATASETS_PRESELECT = "none"
     New-ExakitDataTable -FinalLabel "Skip"
-    Check "a persona that wants none: Skip is the default" "6~6" "$($script:ExakitTableDefaults -join ',')~$($script:ExakitTableRowSkip)"
+    Check "a persona that wants none: Skip is the default" "5~5" "$($script:ExakitTableDefaults -join ',')~$($script:ExakitTableRowSkip)"
     Remove-Item Env:EXAKIT_DATASETS_PRESELECT -ErrorAction SilentlyContinue
     Write-Host "an explicit answer wins, per variable:"
     Clear-Answers; $env:EXAKIT_PERSONA = "ml-engineer"; Set-ExakitPersonaEnv

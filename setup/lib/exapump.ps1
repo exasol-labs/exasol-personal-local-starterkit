@@ -3873,18 +3873,15 @@ function New-ExakitDataTable {
         if ($script:UiTable) { $script:UiTable.Rows[$script:UiTable.Rows.Count - 1].State = "disabled" }
         [void]$ids.Add("")
     }
-    # The other two ways data comes in, in the same table: your own file or
-    # folder, and an external source (shown, coming soon - so it cannot be
-    # picked). -NoLocal leaves the file row out. 0 means no row. Twin of
+    # The other way data comes in, in the same table: your own file or folder.
+    # No row for an external source: a row nobody can pick is noise (NEW-09).
+    # -NoLocal leaves the file row out. 0 means no row. Twin of
     # exakit_data_table_build.
     $script:ExakitTableRowLocal = 0
     if (-not $NoLocal) {
         [void](Add-ExakitTableRow -Kind "plain" -Label "Upload a file or folder: CSV/Parquet/JSON")
         [void]$ids.Add("local")
         $script:ExakitTableRowLocal = $ids.Count
-        [void](Add-ExakitTableRow -Kind "plain" -Label "Connect an external source - coming soon")
-        if ($script:UiTable) { $script:UiTable.Rows[$script:UiTable.Rows.Count - 1].State = "disabled" }
-        [void]$ids.Add("")
     }
     [void](Add-ExakitTableRow -Kind "plain" -Label $FinalLabel)
     [void]$ids.Add("")
@@ -3920,7 +3917,7 @@ function Get-ExakitDataTableRow {
 # Select-ExakitDataLoad <final_label> - the data question, ONE table that the
 # load then fills in: the parent "Sample datasets" with every dataset not loaded
 # yet under it (a For column naming the personas each is for), your file or
-# folder, an external source (shown, coming soon) and <final_label> as the
+# folder and <final_label> as the
 # mutually exclusive opt-out (Skip). When every dataset is in, the parent stays
 # on screen, disabled. Returns a string array of ids ("tpch", "local") or
 # @("none"). Twin of exakit_data_load_select in exapump.sh.
@@ -3937,8 +3934,7 @@ function Select-ExakitDataLoad {
         return @("local")
     }
     # ONE SCREEN: "Sample datasets" is the parent row with the datasets under
-    # it, then your own file or folder, an external source (shown, coming soon)
-    # and Skip; Enter starts the load in this same table. Twin of
+    # it, then your own file or folder and Skip; Enter starts the load in this same table. Twin of
     # exakit_data_load_select / exakit_data_samples_select.
     New-ExakitDataTable -FinalLabel $FinalLabel
     $groupParent = 0

@@ -290,6 +290,15 @@ class ReferenceTest(unittest.TestCase):
         (self.folder.path / "examples.sql").write_text(EXAMPLES.split("-- 10.")[0])
         self.assertIn("examples.sql has 9 queries", self.problems())
 
+    def test_an_example_alias_that_is_a_reserved_word_is_named(self):
+        # "AS MONTH" passed every offline check and failed only in the database (walmart_sales, found live).
+        (self.folder.path / "examples.sql").write_text(
+            EXAMPLES.replace("SELECT COUNT(*) FROM EDGE_DEMO.EDGE_ITEMS WHERE ITEM_ID > 3;",
+                             "SELECT COUNT(*) AS MONTH FROM EDGE_DEMO.EDGE_ITEMS WHERE ITEM_ID > 3;"))
+        self.assertIn("query 3 names a column MONTH, a reserved word in Exasol", self.problems())
+        (self.folder.path / "examples.sql").write_text(EXAMPLES)
+        self.assertNotIn("reserved word", self.problems())
+
     def test_the_manifest_names_source_terms_snapshot_and_rows(self):
         self.manifest(terms={"url": "https://x", "summary": "y"})
         self.assertIn("terms.confirmed must be true or false", self.problems())

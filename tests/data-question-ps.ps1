@@ -1,8 +1,7 @@
 #!/usr/bin/env pwsh
 # data-question-ps.ps1 - the Windows twin of tests/data-question.sh: the data
 # question is ONE "Data to load" table (the "Sample datasets" parent with the
-# pending datasets under it, your own file or folder, an external source shown
-# disabled, Skip), with every sample loaded the parent is a disabled row and your
+# pending datasets under it, your own file or folder, Skip), with every sample loaded the parent is a disabled row and your
 # own file the default, a persona's datasets are the rows ticked and one that
 # wants no samples or only loaded ones makes Skip the default, Skip answers none
 # and the file row with the samples answers "<ids>,local", who each dataset is
@@ -94,52 +93,52 @@ try {
 
     Write-Host "the table's rows:"
     [void](Table @("tpch", "energy"))
-    Check "parent, datasets, your file, external (disabled), Skip" `
-        "group|Sample datasets|idle;tee|tpch label|idle;corner|energy label|idle;plain|Upload a file or folder: CSV/Parquet/JSON|idle;plain|Connect an external source - coming soon|disabled;plain|Skip|idle~,tpch,energy,local,," `
+    Check "parent, datasets, your file, Skip" `
+        "group|Sample datasets|idle;tee|tpch label|idle;corner|energy label|idle;plain|Upload a file or folder: CSV/Parquet/JSON|idle;plain|Skip|idle~,tpch,energy,local," `
         (Rows)
     Check "the parent spans the datasets" "2~3" "$($script:ExakitTableGroupFirst)~$($script:ExakitTableGroupLast)"
     Check "a dataset and the file row know their rows" "3~4" "$(Get-ExakitDataTableRow -Id 'energy')~$(Get-ExakitDataTableRow -Id 'local')"
     [void](Table @())
     Check "every sample loaded: the parent is a disabled row that says so" `
-        "plain|Sample datasets - all of them are loaded already|disabled;plain|Upload a file or folder: CSV/Parquet/JSON|idle;plain|Connect an external source - coming soon|disabled;plain|Skip|idle~,local,," `
+        "plain|Sample datasets - all of them are loaded already|disabled;plain|Upload a file or folder: CSV/Parquet/JSON|idle;plain|Skip|idle~,local," `
         (Rows)
     Check "...and no group" "0~0" "$($script:ExakitTableGroupFirst)~$($script:ExakitTableGroupLast)"
     Check "one screen: no separate source question" "False" "$($null -ne (Get-Command Select-ExakitDataSource -ErrorAction SilentlyContinue))"
 
     Write-Host "the defaults: Skip when nothing on offer is wanted:"
-    Check "no persona: the parent and every pending row ticked" "1,2,3~4~6" (Table @("tpch", "energy"))
+    Check "no persona: the parent and every pending row ticked" "1,2,3~4~5" (Table @("tpch", "energy"))
     $env:EXAKIT_DATASETS_PRESELECT = "energy"
-    Check "persona's dataset pending: that row only" "3~4~6" (Table @("tpch", "energy"))
+    Check "persona's dataset pending: that row only" "3~4~5" (Table @("tpch", "energy"))
     $env:EXAKIT_DATASETS_PRESELECT = "tpch,energy"
-    Check "persona's datasets are every one: the parent too" "1,2,3~4~6" (Table @("tpch", "energy"))
+    Check "persona's datasets are every one: the parent too" "1,2,3~4~5" (Table @("tpch", "energy"))
     $env:EXAKIT_DATASETS_PRESELECT = "amazon_sales"
-    Check "persona's datasets loaded already: Skip" "6~4~6" (Table @("tpch", "energy"))
+    Check "persona's datasets loaded already: Skip" "5~4~5" (Table @("tpch", "energy"))
     $env:EXAKIT_DATASETS_PRESELECT = "none"
-    Check "persona datasets none: Skip" "6~4~6" (Table @("tpch", "energy"))
+    Check "persona datasets none: Skip" "5~4~5" (Table @("tpch", "energy"))
     $env:EXAKIT_DATASETS_PRESELECT = "ENERGY"
-    Check "case-sensitive, like the shell side" "6~4~6" (Table @("tpch", "energy"))
+    Check "case-sensitive, like the shell side" "5~4~5" (Table @("tpch", "energy"))
     $env:EXAKIT_DATASETS_PRESELECT = "tpch"
     # With every sample in, the file row is the only thing the screen can still
     # do, whoever the persona is. Twin of tests/data-question.sh.
-    Check "nothing pending, a persona: Skip (nothing it asked for is left)" "4~2~4" (Table @())
+    Check "nothing pending, a persona: Skip (nothing it asked for is left)" "3~2~3" (Table @())
     Remove-Item Env:EXAKIT_DATASETS_PRESELECT
-    Check "nothing pending: your own file, never Skip" "2~2~4" (Table @())
+    Check "nothing pending: your own file, never Skip" "2~2~3" (Table @())
     Set-Pending @(); New-ExakitDataTable -FinalLabel "Skip" -NoLocal
     Check "nothing pending and no file row: Skip, never row 0" "2~0~2" "$($script:ExakitTableDefaults -join ',')~$($script:ExakitTableRowLocal)~$($script:ExakitTableRowSkip)"
 
     Write-Host "one table answers the data question:"
     $script:Answer = $null
     Check "the defaults: every pending dataset" "tpch,energy" (Answer @("tpch", "energy") $null)
-    Check "...asked once, with Skip exclusive and the parent spanning the datasets" "1,2,3~6~1~2~3~all" $script:MenuAsked
+    Check "...asked once, with Skip exclusive and the parent spanning the datasets" "1,2,3~5~1~2~3~all" $script:MenuAsked
     Check "...and no checkbox question before it" "" $script:CheckboxAsked
     Check "Skip answers none" "none" (Answer @("tpch", "energy") @(6))
-    Check "Skip wins over anything ticked with it" "none" (Answer @("tpch", "energy") @(2, 6))
+    Check "Skip wins over anything ticked with it" "tpch" (Answer @("tpch", "energy") @(2, 6))
     Check "the file row picked with the samples: <ids>,local" "tpch,energy,local" (Answer @("tpch", "energy") @(1, 2, 3, 4))
     Check "the file row alone" "local" (Answer @("tpch", "energy") @(4))
     Check "the disabled external row never answers anything" "none" (Answer @("tpch", "energy") @(5))
     Check "nothing picked is none" "none" (Answer @("tpch", "energy") @())
     Check "every sample loaded: your own file is the default answer" "local" (Answer @() $null)
-    Check "...asked with no parent and Skip as row 4" "2~4~0~0~0~all" $script:MenuAsked
+    Check "...asked with no parent and Skip as row 4" "2~3~0~0~0~all" $script:MenuAsked
     $env:EXAKIT_DATASETS_PRESELECT = "none"
     Check "persona datasets none: the default answer is none" "none" (Answer @("tpch", "energy") $null)
     $env:EXAKIT_DATASETS_PRESELECT = "energy"
@@ -153,8 +152,8 @@ try {
     Write-Host "what each dataset is goes in a column, not on the name:"
     Set-Pending @("tpch", "amazon_sales")
     New-ExakitDataTable -FinalLabel "Skip"
-    Check "the names stay names" "Sample datasets;tpch label;amazon_sales label;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - coming soon;Skip" ((@($script:UiTable.Rows | ForEach-Object { $_.Label })) -join ";")
-    Check "the descriptions go in column 2" ";tpch about;amazon_sales about;;;" ((@($script:UiTable.Rows | ForEach-Object { $_.Col2 })) -join ";")
+    Check "the names stay names" "Sample datasets;tpch label;amazon_sales label;Upload a file or folder: CSV/Parquet/JSON;Skip" ((@($script:UiTable.Rows | ForEach-Object { $_.Label })) -join ";")
+    Check "the descriptions go in column 2" ";tpch about;amazon_sales about;;" ((@($script:UiTable.Rows | ForEach-Object { $_.Col2 })) -join ";")
     Check "the table knows it has them" "True" "$($script:ExakitTableHasDesc)"
     $chosen = @(Select-ExakitDataLoad -FinalLabel "Skip")
     Check "the Description column is up while the reader picks" "Description" $script:Col2AtMenu
@@ -168,8 +167,7 @@ try {
     Has "Read-ExakitCheckboxMenu: Enter on the exclusive row clears the rest" `
         'if ($ExclusiveIndex -ge 1 -and $script:cbCur -eq $ExclusiveIndex) { $sel.Clear(); [void]$sel.Add($ExclusiveIndex) }' $cbText
     # The data question is a table: its Enter on Skip, and its cursor stepping
-    # over the disabled rows (the external source, the parent once every sample
-    # is in).
+    # over a disabled row (the parent once every sample is in).
     $tmText = (Get-Content -Raw (Join-Path $repo "setup/lib/ui.ps1"))
     Has "Invoke-ExakitTableMenu: Enter on Skip answers Skip alone" `
         'if ($ExclusiveIndex -ge 1 -and $cur -eq $ExclusiveIndex) { $sel.Clear(); [void]$sel.Add($ExclusiveIndex) }' $tmText

@@ -3640,7 +3640,6 @@ exakit_load_dataset_dir() {
 #   [x] Sample datasets              <- the parent: ticks every dataset under it
 #   [x] ├─ <each dataset not loaded yet>          For: the personas it is for
 #   [ ] Upload a file or folder: CSV/Parquet/JSON
-#       Connect an external source - coming soon  <- shown, never pickable
 #   [ ] <final_label>                <- mutually exclusive opt-out (Skip)
 #
 # Already-loaded datasets are not offered; when every one is in, the parent
@@ -3662,8 +3661,7 @@ exakit_data_load_select() {
         return 0
     fi
     # ONE SCREEN: "Sample datasets" is the parent row with the datasets under
-    # it, then your own file or folder, an external source (shown, coming soon)
-    # and Skip. Enter starts the load in this same table, so the rows a reader
+    # it, then your own file or folder and Skip. Enter starts the load in this same table, so the rows a reader
     # ticks are the rows they then watch fill in.
     EXAKIT_DATA_LOAD_SELECTION=""
     exakit_data_samples_select "$_dls_final_label" || return 1
@@ -3835,10 +3833,9 @@ exakit_data_table_build() {
         EXAKIT_TABLE_DEFAULTS=""
     fi
     rm -f "$_dtb_pend"
-    # The other two ways data comes in, in the same table: your own file or
-    # folder, and an external source (shown, coming soon - exakit connect is a
-    # separate item - so it cannot be picked). EXAKIT_DATA_TABLE_NO_LOCAL=1
-    # leaves the file row out. 0 means no row.
+    # The other way data comes in, in the same table: your own file or folder.
+    # No row for an external source: a row nobody can pick is noise (NEW-09).
+    # EXAKIT_DATA_TABLE_NO_LOCAL=1 leaves the file row out. 0 means no row.
     EXAKIT_TABLE_ROW_LOCAL=0
     if [ "${EXAKIT_DATA_TABLE_NO_LOCAL:-0}" != 1 ]; then
         printf 'plain|Upload a file or folder: CSV/Parquet/JSON|0|idle|||||| \n' >> "$_dtb_f"
@@ -3846,10 +3843,6 @@ exakit_data_table_build() {
 "
         _dtb_n=$(( _dtb_n + 1 ))
         EXAKIT_TABLE_ROW_LOCAL="$_dtb_n"
-        printf 'plain|Connect an external source - coming soon|0|disabled|||||| \n' >> "$_dtb_f"
-        EXAKIT_TABLE_IDS="$EXAKIT_TABLE_IDS
-"
-        _dtb_n=$(( _dtb_n + 1 ))
     fi
     printf 'plain|Skip|0|idle|||||| \n' >> "$_dtb_f"
     EXAKIT_TABLE_IDS="$EXAKIT_TABLE_IDS

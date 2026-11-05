@@ -6,6 +6,7 @@ import importlib
 import importlib.util
 import io
 import json
+import re
 import os
 from pathlib import Path
 import sys
@@ -94,14 +95,23 @@ class MissingRolesTest(unittest.TestCase):
                     "descriptor":{"id":"fixture","version":1},"feature_view":{"name":"EXAMPLE.FEATURES"},
                     "input_schema":[],"label":{"column":"LABEL","positive":1},"split":{"kind":"time"}}))
             namespace = {"nb": nb}
+            # The small model needs a date, a label and a category or entity - no text. Where those are there it would
+            # train (scikit-learn, real rows), so its cell is not run here: its own guard is read and must admit it.
+            model_runs = missing in ("entity", "category", "text")
             cells = [c for c in self.cells if c.startswith(("DATASET = ", "import os\n", "landscape = ",
-                     "over_time = ", "SAMPLE = ", "SAMPLE_TEXTS = ", "handoff_path = None"))]
+                     "over_time = ", "SAMPLE = ", "SAMPLE_TEXTS = ", "handoff_path = None"))
+                     and not (model_runs and c.startswith("SAMPLE = "))]
             output = io.StringIO()
             with self.subTest(missing=missing), mock.patch.dict(sys.modules, {"exakit.nb": nb}), \
                     contextlib.redirect_stdout(output):
                 for cell in cells:
                     exec(cell.replace("import exakit.nb as nb", ""), namespace)
-                self.assertIsNone(namespace["model"])
+                model_cell = next(c for c in self.cells if c.startswith("SAMPLE = "))
+                guard = re.search(r"^if not (\(.*\)):$", model_cell, re.M).group(1)
+                if model_runs:
+                    self.assertTrue(eval(guard, {"ds": ds}), f"the model runs without the {missing} role")
+                else:
+                    self.assertIsNone(namespace["model"])
                 if missing in ("entity", "category", "label", "all"):
                     self.assertIsNone(namespace["landscape"])
                 if missing in ("text", "all"):

@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # The data question ("Data to load") under a real pty (tests/lib/tty-replay.py
 # types the keys). It is ONE table: the "Sample datasets" parent with the
-# pending datasets under it, your own file or folder, an external source (shown
-# disabled, coming soon) and Skip. The answer lands on one line, SELECTION=,
+# pending datasets under it, your own file or folder and Skip. The answer lands on one line, SELECTION=,
 # for tests/data-question.sh.
 #
 #   DQ_SCENE=source    the whole data question (exakit_data_load_select)

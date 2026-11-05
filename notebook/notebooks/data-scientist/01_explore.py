@@ -11,7 +11,7 @@
 #
 # **Dataset:** `amazon_sales` by default; change `DATASET` for `walmart_sales` or your own file. **How long:** about two minutes.
 #
-# Compare groups and follow outcomes over time. With a text column, also fit a small local model and see what the texts are about: `amazon_sales` and `walmart_sales` have no text column, so those steps skip and say why.
+# Compare groups and follow outcomes over time, then fit a small local model from the category, entity and month and see which values it leans on. With a text column, your own model can also say what the texts are about: `amazon_sales` and `walmart_sales` have no text column, so that step skips and says why.
 #
 # Optional, for data with a text column: `USE_AI_THEMES = True` lets your model say what the label-1 texts are about, traced to Langfuse when it is set up.
 
@@ -126,43 +126,43 @@ over_time
 # > It learns from most rows and is graded on rows it never saw, like a test with new questions.
 # > If it is barely better than guessing, a bigger model is unlikely to rescue the idea.
 #
-# Needs a text column: on `amazon_sales` and `walmart_sales` it skips and says why. A small model learns to tell label 1 from label 0 using the text and the category, on up to 20,000 recent rows, and is checked on a quarter it has not seen. The note says how good it is in plain words.
+# A small model learns to tell label 1 from label 0 from three things every row has: its category, its entity and the month of its date (in `amazon_sales`: the product category, the state it shipped to and the month; in `walmart_sales`: the store and the month). It uses up to 20,000 recent rows, is checked on a quarter it has not seen, and the note says how good it is in plain words. It needs a date, a label and a category or entity.
 #
-# Technical: TF-IDF text + one-hot category, logistic regression; the score is ROC AUC (0.5 = guessing).
+# Technical: one-hot category, entity and month, logistic regression; the score is ROC AUC (0.5 = guessing).
 
 # %%
 SAMPLE = 20000
+# The features the model reads, each only when its role exists: the category and the entity as text, then the month.
+CATEGORY_FEATURE = f"CAST({ds.col('category')} AS VARCHAR(2000)) AS CATEGORY_,\n       " if ds.has("category") else ""
+ENTITY_FEATURE = f"CAST({ds.col('entity')} AS VARCHAR(2000)) AS ENTITY_,\n       " if ds.has("entity") else ""
 
 model = None
-if not all(ds.has(role) for role in ("entity", "category", "text", "date", "label")):
-    print(f"Skipped - the small model predicts the label from the newest {SAMPLE} rows, which needs entity, category, text, label and date "
-          f"roles ({missing_line}).")
+if not (ds.has("date") and ds.has("label") and (ds.has("category") or ds.has("entity"))):
+    print(f"Skipped - the small model predicts the label from the category, entity and month of the newest {SAMPLE} rows, "
+          f"which needs a date, a label and a category or entity role ({missing_line}).")
 else:
+    # What each feature is called on screen: the column it comes from, or "month".
+    READABLE = {"MONTH_": "month", "CATEGORY_": (CATEGORY or "").strip('"'), "ENTITY_": (ENTITY or "").strip('"')}
     rows = nb.sql(conn, f"""
-SELECT {TEXT} AS TEXT_,
-       CAST({CATEGORY} AS VARCHAR(2000)) AS CATEGORY_,
+SELECT {CATEGORY_FEATURE}{ENTITY_FEATURE}EXTRACT(MONTH FROM {DATE}) AS MONTH_,
        {LABEL} AS LABEL_
 FROM {ds.fact_table}
 WHERE {LABEL} IS NOT NULL
-ORDER BY {DATE} DESC, {ENTITY}
+ORDER BY {DATE} DESC
 LIMIT {SAMPLE}""")
     nb.show_sql()
 
-    from sklearn.compose import ColumnTransformer
-    from sklearn.feature_extraction.text import TfidfVectorizer
     from sklearn.linear_model import LogisticRegression
     from sklearn.metrics import roc_auc_score
     from sklearn.model_selection import train_test_split
     from sklearn.pipeline import Pipeline
     from sklearn.preprocessing import OneHotEncoder
 
-    X, y = rows[["TEXT_", "CATEGORY_"]].fillna(""), rows["LABEL_"].astype(int)
+    features = [name for name in ("CATEGORY_", "ENTITY_", "MONTH_") if name in rows.columns]
+    X, y = rows[features].fillna("(none)").astype(str), rows["LABEL_"].astype(int)
     X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=0, stratify=y)
     model = Pipeline([
-        ("features", ColumnTransformer([
-            ("text", TfidfVectorizer(max_features=20000, ngram_range=(1, 2), min_df=2, stop_words="english"), "TEXT_"),
-            ("category", OneHotEncoder(handle_unknown="ignore"), ["CATEGORY_"]),
-        ])),
+        ("onehot", OneHotEncoder(handle_unknown="ignore")),
         ("classifier", LogisticRegression(max_iter=1000, class_weight="balanced")),
     ])
     model.fit(X_train, y_train)
@@ -173,17 +173,22 @@ LIMIT {SAMPLE}""")
 # %% [markdown]
 # ## Model clues
 #
-# Runs only when the model above ran (data with a text column). The words the model leans on most, each way. They are clues, not proof: drop a word that is boilerplate (it appears in every text) or a leak (it gives the answer away, like the label's own name).
+# Runs only when the model above ran. The values the model leans on most, each way: a category, an entity or a month. They are clues, not proof: a value with few rows can look strong by chance.
 
 # %%
 import numpy as np
 
 if model is not None:
-    names = model.named_steps["features"].get_feature_names_out()
+    names = model.named_steps["onehot"].get_feature_names_out(features)
     weights = model.named_steps["classifier"].coef_[0]
     order = np.argsort(weights)
-    print(f"Make {LABEL} = 1 more likely:", ", ".join(n.split("__", 1)[1] for n in names[order[-12:]][::-1]))
-    print(f"Make {LABEL} = 1 less likely:", ", ".join(n.split("__", 1)[1] for n in names[order[:12]]))
+
+    def said(name):
+        feature, value = name.split("_", 1)[0] + "_", name.split("__", 1)[1]
+        return f"{READABLE[feature]} = {value}"
+
+    print(f"Make {LABEL} = 1 more likely:", ", ".join(said(n) for n in names[order[-8:]][::-1]))
+    print(f"Make {LABEL} = 1 less likely:", ", ".join(said(n) for n in names[order[:8]]))
 
 # %% [markdown]
 # ## Optional: what the label-1 texts are about

@@ -217,6 +217,11 @@ def _descriptor_problems(folder: Path, schema: str, schema_tables: dict[str, lis
                  if not s.lstrip().upper().startswith(("SELECT", "WITH")) or f"{schema}." not in s.upper()]
     problems += [f"examples.sql: query {n} has no question (a -- comment line right above it)"
                  for n, (q, _s) in enumerate(questions, 1) if not q]
+    # An alias that is a reserved word ("AS MONTH") fails only once the query reaches the database.
+    problems += [f"examples.sql: query {n} names a column {alias}, a reserved word in Exasol: rename it"
+                 for n, (_q, s) in enumerate(questions, 1)
+                 for alias in re.findall(r"\bAS\s+([A-Za-z_][A-Za-z0-9_]*)\b", s, re.IGNORECASE)
+                 if alias.upper() in RESERVED]
     return problems
 
 
