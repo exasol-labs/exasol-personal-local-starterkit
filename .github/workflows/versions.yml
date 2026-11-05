@@ -839,6 +839,9 @@ jobs:
         if: matrix.shard == 4
       - run: bash tests/marketplace.sh
         if: matrix.shard == 2
+      # The no-Python reader of the catalog's GitHub block agrees with the Python one (QAT-12).
+      - run: bash tests/catalog-github-sed.sh
+        if: matrix.shard == 2
       # json-tables ships from one immutable release per build; the pin in
       # versions.json is the only authority. This guards both halves: the
       # module never reads a pin for a build it is not installing, and the
