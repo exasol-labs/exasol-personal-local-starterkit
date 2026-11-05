@@ -6056,6 +6056,15 @@ function Update-ExakitAboutCache {
 # Twin of exakit_marketplace_addon_description.
 function Get-ExakitMarketplaceAddonDescription {
     param([string]$Id)
+    # Offered for a persona: the persona's own line for this add-on wins
+    # (EXAKIT_MARKETPLACE_REASONS, addon|reason lines; NEW-10). Twin of
+    # exakit_marketplace_addon_description.
+    if ($env:EXAKIT_MARKETPLACE_REASONS) {
+        foreach ($line in ("" + $env:EXAKIT_MARKETPLACE_REASONS) -split "`r?`n") {
+            $parts = $line -split '\|', 2
+            if ($parts.Count -eq 2 -and $parts[0] -eq $Id -and $parts[1]) { return $parts[1] }
+        }
+    }
     $lines = @(Get-ExakitAboutCacheLines $Id)
     if ($lines.Count -ge 1 -and $lines[0]) {
         if ($lines.Count -ge 4 -and $lines[3] -eq "true") { return "$($lines[0]) (archived on GitHub)" }
@@ -7205,7 +7214,15 @@ function Request-ExakitMarketplaceOffer {
             return
         }
         $env:EXAKIT_MARKETPLACE_ONLY = $only
-        try { Show-ExakitMarketplaceMenu } finally { Remove-Item env:EXAKIT_MARKETPLACE_ONLY -ErrorAction SilentlyContinue }
+        # Each row says what the add-on does for the persona, in the persona's own
+        # words, not the add-on repository's About (NEW-10). Twin of exakit_marketplace_offer.
+        if ($env:EXAKIT_PERSONA -and (Get-Command Invoke-ExakitPersonaService -ErrorAction SilentlyContinue)) {
+            $env:EXAKIT_MARKETPLACE_REASONS = (@(Invoke-ExakitPersonaService "addon-reasons" $env:EXAKIT_PERSONA) -join "`n")
+        }
+        try { Show-ExakitMarketplaceMenu } finally {
+            Remove-Item env:EXAKIT_MARKETPLACE_ONLY -ErrorAction SilentlyContinue
+            Remove-Item env:EXAKIT_MARKETPLACE_REASONS -ErrorAction SilentlyContinue
+        }
         return
     }
     if ($softFailed -or -not $interactive) {

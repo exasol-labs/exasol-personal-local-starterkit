@@ -169,6 +169,23 @@ check "each broken file is named with what is wrong" "broken.json inj.json pipe.
 contains "a title with | is refused" "'title' must be one line without '|'" "$(SVC3 problems)"
 contains "a list item that is not an id is refused" "which is not an id" "$(SVC3 problems)"
 contains "naming a broken persona says what is wrong with its file" "personas/pipe.json is invalid" "$(SVC3 check pipe 2>&1)"
+
+echo "a persona says what each of its add-ons does for it (NEW-10):"
+check "the personas' own lines, first persona first" \
+    "dash-server|Share what you find as a live dashboard others open in a browser;notebook|The Data Scientist notebooks, already connected to your data;udf-devkit|Train and score models inside the database, runs kept in MLflow" \
+    "$(python3 "$ROOT/setup/lib/persona_service.py" "$ROOT" addon-reasons data-scientist,ml-engineer | tr '\n' ';' | sed 's/;$//')"
+check "a persona without them gives none" "" "$(python3 "$ROOT/setup/lib/persona_service.py" "$ROOT" addon-reasons general)"
+mkdir -p "$WORK/kit4/personas"; ln -s "$ROOT/data" "$WORK/kit4/data"; ln -s "$ROOT/setup" "$WORK/kit4/setup"
+printf '{"id":"why","title":"Why","summary":"x","addons":["notebook"],"addon_reasons":{"dash-server":"not listed","notebook":"a | b"}}' > "$WORK/kit4/personas/why.json"
+_why="$(python3 "$ROOT/setup/lib/persona_service.py" "$WORK/kit4" problems)"
+contains "a reason for an add-on the persona does not list is refused" "names 'dash-server', which is not in its 'addons'" "$_why"
+contains "a reason with | is refused" "for 'notebook' must be one line" "$_why"
+check "offered for a persona, a row shows the persona's line" "Train and score models" \
+    "$(EXAKIT_MARKETPLACE_REASONS="$(printf 'notebook|N\nudf-devkit|Train and score models')" exakit_marketplace_addon_description udf-devkit)"
+_outside="$(unset EXAKIT_MARKETPLACE_REASONS; exakit_marketplace_addon_description udf-devkit)"
+_shows=no
+case "$_outside" in *"Train and score models"*) _shows=yes ;; esac
+check "...and outside one, never" "no" "$_shows"
 check "datasets \"all\" become the kit's dataset ids (EXAKIT_DATASETS takes ids)" \
     "EXAKIT_DATASETS=$(exakit_bundled_datasets | cut -d'|' -f1 | tr '\n' ',' | sed 's/,$//')" "$(SVC3 answers everything 2>/dev/null | grep '^EXAKIT_DATASETS=')"
 check "[] answers the nothing-word for each key" "EXAKIT_LOAD_SAMPLE=0 EXAKIT_MCP_CLIENTS=skip EXAKIT_MARKETPLACE_ADDONS=none" \

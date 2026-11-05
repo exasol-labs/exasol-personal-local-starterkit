@@ -115,6 +115,7 @@ The keys:
 | `datasets` | a list of bundled dataset ids, or `"all"` / `"none"` |
 | `mcp_clients` | `"all"`, `"skip"`, or a list of client ids |
 | `addons` | a list of marketplace add-on ids, or `"all"` / `"none"` |
+| `addon_reasons` | optional: `{"<add-on id>": "one line, at most 90 characters"}` - what each add-on the persona lists does for it, shown in place of the add-on repository's About while the persona's add-ons are offered |
 | `notebook_tools` | optional: which notebook tools to tick, e.g. `["jupyterlab", "marimo"]` |
 | `services` | optional: kit services the persona starts at login, e.g. `["mlflow"]` (ML Engineer) |
 | `udf_language` | optional: `python` or `rust`, the UDF language udf-devkit sets up first (sets `EXAKIT_UDF_LANGUAGE`) |

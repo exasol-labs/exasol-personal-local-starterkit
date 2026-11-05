@@ -91,7 +91,28 @@ def problems(path: Path, doc) -> list:
             found.append(f"'services' must be a list of known services: {', '.join(SERVICES)}")
     if "udf_language" in doc and doc["udf_language"] not in ("python", "rust"):
         found.append("'udf_language' must be python or rust")
+    if "addon_reasons" in doc:
+        # NEW-10: what each add-on does for this persona, in its own words, shown in place of the add-on repository's
+        # About while the persona's add-ons are offered. One short line per add-on the persona lists.
+        reasons, listed = doc["addon_reasons"], doc.get("addons")
+        if not isinstance(reasons, dict):
+            found.append("'addon_reasons' must map add-on ids to one line each")
+        else:
+            for key, text in reasons.items():
+                if not isinstance(text, str) or not text.strip() or "|" in text or "\n" in text or len(text) > 90:
+                    found.append(f"'addon_reasons' for {key!r} must be one line of at most 90 characters, without '|'")
+                elif isinstance(listed, list) and key not in listed:
+                    found.append(f"'addon_reasons' names {key!r}, which is not in its 'addons'")
     return found
+
+
+def addon_reasons(root: Path, ids: str) -> list:
+    """addon|reason for the add-ons of the personas named, in the kit's order; the first persona to give one wins."""
+    found: dict[str, str] = {}
+    for doc in picked(root, ids):
+        for addon, reason in (doc.get("addon_reasons") or {}).items():
+            found.setdefault(addon, reason)
+    return [f"{addon}|{reason}" for addon, reason in found.items()]
 
 
 def load(root: Path) -> tuple:
@@ -362,6 +383,8 @@ def run(argv: list, env: dict) -> list:
         return answers(root, args[0], env)
     if command == "services":
         return selected_services(root, args[0])
+    if command == "addon-reasons":
+        return addon_reasons(root, args[0]) if args else []
     if command == "dataset-hints":
         return dataset_hints(root)
     if command == "show":

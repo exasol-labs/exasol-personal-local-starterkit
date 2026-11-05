@@ -4703,6 +4703,15 @@ _exakit_about_fetch() {
 # It never fetches: _exakit_marketplace_warm_about does, on demand (install and
 # update). A repository GitHub reports as archived says so after its About.
 exakit_marketplace_addon_description() {
+    # Offered for a persona: the persona's own line for this add-on wins
+    # (EXAKIT_MARKETPLACE_REASONS, addon|reason lines; NEW-10).
+    if [ -n "${EXAKIT_MARKETPLACE_REASONS:-}" ]; then
+        _mad_reason="$(printf '%s\n' "$EXAKIT_MARKETPLACE_REASONS" | awk -F'|' -v id="$1" '$1 == id { sub(/^[^|]*\|/, ""); print; exit }')"
+        if [ -n "$_mad_reason" ]; then
+            printf '%s\n' "$_mad_reason"
+            return 0
+        fi
+    fi
     _mad_cache="$(_exakit_about_cache_path "$1")"
     if [ -f "$_mad_cache" ] && _exakit_about_cache_matches "$1"; then
         # Cleaned again on the way out: the cache is a file anyone could have
@@ -5972,7 +5981,13 @@ exakit_marketplace_offer() {
         heading "Add-ons for your personas"
         _mo_only="$(printf '%s' "$EXAKIT_MARKETPLACE_PRESELECT" | tr '[:upper:]' '[:lower:]' | tr -d ' ')"
         [ "$_mo_only" = all ] && _mo_only=""
-        EXAKIT_MARKETPLACE_ONLY="$_mo_only" exakit_marketplace_menu || true
+        # Each row says what the add-on does for the persona, in the persona's
+        # own words, not the add-on repository's About (NEW-10).
+        _mo_reasons=""
+        if [ -n "${EXAKIT_PERSONA:-}" ] && command -v _exakit_persona_service >/dev/null 2>&1; then
+            _mo_reasons="$(_exakit_persona_service addon-reasons "$EXAKIT_PERSONA" 2>/dev/null || true)"
+        fi
+        EXAKIT_MARKETPLACE_REASONS="$_mo_reasons" EXAKIT_MARKETPLACE_ONLY="$_mo_only" exakit_marketplace_menu || true
         return 0
     fi
 
