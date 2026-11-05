@@ -1450,6 +1450,12 @@ check "gate(linux, no podman but installable) carries on" \
     "OK: Compatibility check passed (linux arm64, 16 GB RAM, 100 GB free)" "$(_p2gate linux 0 1)"
 check "gate(wsl, no podman but installable) carries on" \
     "OK: Compatibility check passed (wsl arm64, 16 GB RAM, 100 GB free)" "$(_p2gate wsl 0 1)"
+# WSL-06: a kit home on a Windows drive is refused BEFORE any password is
+# written there - the preflight warned, the install itself wrote them first.
+_p2drvfs="$(EXAKIT_HOME=/mnt/c/Users/me/.exasol-starter-kit _p2gate_setup wsl 1)"
+has "gate(wsl) refuses a kit home on a Windows drive" "DIED: Kit home on a Windows drive" "$_p2drvfs"
+check "gate(wsl) takes a kit home on the Linux filesystem" \
+    "OK: Compatibility check passed (wsl arm64, 16 GB RAM, 100 GB free)" "$(EXAKIT_HOME=/home/me/.exasol-starter-kit _p2gate wsl 1)"
 # ...and it is the DATABASE step that does it, not the gate: a package install
 # must not run in front of a machine that has not yet agreed to anything.
 _p2dep="$(sed -n '/^personal_deploy_local()/,/^}/p' "$ROOT/setup/lib/runtime-personal.sh")"

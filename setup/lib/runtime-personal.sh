@@ -422,6 +422,16 @@ personal_check_requirements() {
                 info "Then reopen the distro and re-run the installer: $(exakit_install_command)"
                 die "WSL 1 is not supported: Exasol Personal needs a real Linux kernel."
             fi
+            # A KIT HOME ON A WINDOWS DRIVE, refused before the first password is
+            # written (WSL-06). DrvFs mounts without Linux permissions, so the
+            # chmod 600 on the database passwords is accepted and discarded: any
+            # Windows user can read them, and OneDrive syncs them. The preflight
+            # said so; the install itself only warned after writing them there.
+            if [ "$_pcr_os" = wsl ] && detect_wsl_drvfs_path "$EXAKIT_HOME" 2>/dev/null; then
+                error "The kit home $EXAKIT_HOME is on a Windows drive: WSL mounts those without Linux file permissions, so the database passwords stored there could not be protected (any Windows user could read them, and OneDrive would sync them)."
+                info "Put the kit on the Linux filesystem and re-run the installer: EXAKIT_HOME=\$HOME/.exasol-starter-kit $(exakit_install_command)"
+                die "Kit home on a Windows drive: $EXAKIT_HOME."
+            fi
             # WSL IS LINUX TO THE LAUNCHER, AND THAT IS THE WHOLE STORY. A WSL2
             # distro is an AMD64 Linux with a real kernel, the launcher ships a
             # Linux build, and its Linux local runtime asks for exactly one
