@@ -383,6 +383,27 @@ COMMON_SH_7="$(cat "$ROOT/setup/lib/common.sh")"
 # starter that hands off must not be declared as a service that crashed.
 has "autostart is a systemd user unit" 'EXAKIT_SYSTEMD_USER_DIR' "$COMMON_SH_7"
 has "...as a oneshot where the command hands off" 'Type=oneshot' "$COMMON_SH_7"
+# LNX-08: the database's handoff unit retries a transient boot failure - but
+# only where systemd loads Restart= on a oneshot (244+); 239 (RHEL 8) refuses
+# the whole unit if it is there.
+_lnx08_unit() {
+    _lu="$(mktemp -d)"; mkdir -p "$_lu/bin" "$_lu/units"
+    printf '#!/bin/sh\n[ "$1" = --version ] && echo "systemd %s (x)"\nexit 0\n' "$1" > "$_lu/bin/systemctl"
+    chmod +x "$_lu/bin/systemctl"
+    HOME="$_lu" EXAKIT_HOME="$_lu/kh" EXAKIT_SYSTEMD_USER_DIR="$_lu/units" PATH="$_lu/bin:/usr/bin:/bin" bash -c '
+        . "$1/setup/lib/common.sh" 2>/dev/null
+        detect_os() { echo linux; }
+        _exakit_service_autostart_command() { printf "%s\n" /x/exakit start database; }
+        loginctl() { :; }
+        _exakit_autostart_register database >/dev/null 2>&1' _ "$ROOT"
+    cat "$_lu"/units/*.service 2>/dev/null
+    rm -rf "$_lu"
+}
+_lnx08_new="$(_lnx08_unit 255)"; _lnx08_old="$(_lnx08_unit 239)"
+has "...which retries a failed boot start on systemd 244+" 'Restart=on-failure' "$_lnx08_new"
+has "...within a start limit" 'StartLimitBurst=5' "$_lnx08_new"
+has "...and on systemd 239 it is still a oneshot" 'Type=oneshot' "$_lnx08_old"
+check "...without the Restart= that would stop it loading" "0" "$(printf '%s\n' "$_lnx08_old" | grep -c '^Restart=')"
 # LNX-12: a user unit dies at logout without lingering; the kit enables it or
 # says what an admin has to run.
 has "lingering is attempted" 'loginctl enable-linger' "$COMMON_SH_7"

@@ -13128,12 +13128,26 @@ _exakit_autostart_register() {
             # 100 ms, which burns DefaultStartLimitBurst in half a second and
             # then stops trying for good - so a service that fails once at boot
             # for a transient reason never comes back at all.
+            #
+            # The handoff retries too (LNX-08): the transient failure at boot this
+            # file describes - the container runtime not up yet - otherwise left
+            # the box with no database until someone ran exakit start. systemd
+            # takes Restart= on a oneshot only from 244 and REFUSES to load the
+            # unit before that (RHEL 8 ships 239), so it is added where it loads.
+            _ar_limit=""
             case "$(_exakit_service_autostart_kind "$_ar_id")" in
-                handoff) _ar_svc='Type=oneshot\nRemainAfterExit=yes' ;;
+                handoff)
+                    _ar_svc='Type=oneshot\nRemainAfterExit=yes'
+                    _ar_sd="$(systemctl --version 2>/dev/null | sed -n '1s/^systemd \([0-9][0-9]*\).*/\1/p')"
+                    if [ "${_ar_sd:-0}" -ge 244 ] 2>/dev/null; then
+                        _ar_svc="$_ar_svc"'\nRestart=on-failure\nRestartSec=15'
+                        _ar_limit='StartLimitIntervalSec=600\nStartLimitBurst=5\n'
+                    fi
+                    ;;
                 *)       _ar_svc='Type=simple\nRestart=on-failure\nRestartSec=5' ;;
             esac
             {
-                printf '[Unit]\nDescription=Exasol Starter Kit: %s\n\n' "$_ar_id"
+                printf "[Unit]\nDescription=Exasol Starter Kit: %s\n${_ar_limit}\n" "$_ar_id"
                 printf "[Service]\n${_ar_svc}\nExecStart=%s\n\n" "$_ar_exec"
                 printf '[Install]\nWantedBy=default.target\n'
             } > "$_ar_unit" || { warn "Could not write $_ar_unit"; return 1; }
