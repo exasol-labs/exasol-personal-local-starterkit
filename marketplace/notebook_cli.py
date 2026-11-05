@@ -40,6 +40,10 @@ def _healthy(frontend: str, port: int) -> bool:
 
 
 def _port_open(port: int) -> bool:
+    from process import windows_listening
+
+    if windows_listening(port):          # in WSL, a Windows program holds it where the URL is opened
+        return True
     try:
         with socket.create_connection(("127.0.0.1", port), timeout=1):
             return True

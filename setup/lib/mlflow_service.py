@@ -101,8 +101,36 @@ def state() -> dict:
             "remedy": None if running else "exakit mlflow start"}
 
 
+def _windows_listening() -> set[int]:
+    """Inside WSL, the ports a WINDOWS program listens on: the printed URL opens on Windows' localhost, where such a
+    listener wins over the distro's forwarded one (WSL-04). Empty outside WSL. Twin of process.windows_listening."""
+    if not (os.environ.get("WSL_DISTRO_NAME") or os.environ.get("WSL_INTEROP")):
+        return set()
+    import shutil
+
+    netstat = shutil.which("netstat.exe")
+    if not netstat:
+        return set()
+    try:
+        out = subprocess.run([netstat, "-ano", "-p", "TCP"], capture_output=True, text=True, timeout=15,
+                             check=False).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return set()
+    ports = set()
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) >= 4 and parts[0].upper() == "TCP" and parts[3].upper() == "LISTENING":
+            tail = parts[1].rsplit(":", 1)[-1]
+            if tail.isdigit():
+                ports.add(int(tail))
+    return ports
+
+
 def free_port(start: int, tries: int = 20) -> int:
+    windows = _windows_listening()
     for port in range(start, start + tries + 1):
+        if port in windows:
+            continue
         with socket.socket() as sock:
             try:
                 sock.bind(("127.0.0.1", port))

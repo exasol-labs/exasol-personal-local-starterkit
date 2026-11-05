@@ -14,7 +14,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path, PurePosixPath
 
-from process import ManagedProcess, port_open
+from process import ManagedProcess, port_open, windows_listening
 from runtime import AddonFailure, KitContext, cmd_quote, venv_executable, venv_python
 
 ID = "dash-server"
@@ -71,12 +71,12 @@ def installed_version(ctx: KitContext) -> str | None:
 def _settle_port(ctx: KitContext) -> int:
     port = _port(ctx)
     service = _service(ctx)
-    if service.status(port) == "stopped" or service.status(port) == "running":
+    if (service.status(port) == "stopped" and not windows_listening(port)) or service.status(port) == "running":
         return port
     if os.environ.get("EXAKIT_DASH_SERVER_PORT"):
         raise AddonFailure(f"Port {port} is in use; set EXAKIT_DASH_SERVER_PORT to a free port")
     for candidate in range(port + 1, min(port + 21, 65536)):
-        if service.status(candidate) == "stopped":
+        if service.status(candidate) == "stopped" and not windows_listening(candidate):
             ctx.activity(f"Port {port} is busy; dash-server will use {candidate}")
             return candidate
     raise AddonFailure(f"No free dash-server port found from {port} through {min(port + 20, 65535)}")

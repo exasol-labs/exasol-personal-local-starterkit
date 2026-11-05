@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import signal
 import socket
 import subprocess
@@ -34,6 +35,34 @@ def _command(pid: int) -> str:
     except (OSError, subprocess.TimeoutExpired):
         return ""
     return result.stdout.strip() if result.returncode == 0 else ""
+
+
+_WINDOWS_LISTENING: set[int] | None = None
+
+
+def windows_listening(port: int) -> bool:
+    """Inside WSL, is a WINDOWS program listening on this port? Windows' localhost is where the printed URL is
+    opened, and a Windows-side listener there wins over the distro's forwarded one, so a port only free inside the
+    distro is not free (WSL-04). Read once per run from netstat.exe; False outside WSL or when Windows cannot be asked."""
+    global _WINDOWS_LISTENING
+    if not (os.environ.get("WSL_DISTRO_NAME") or os.environ.get("WSL_INTEROP")):
+        return False
+    if _WINDOWS_LISTENING is None:
+        _WINDOWS_LISTENING = set()
+        netstat = shutil.which("netstat.exe")
+        if netstat:
+            try:
+                out = subprocess.run([netstat, "-ano", "-p", "TCP"], capture_output=True, text=True,
+                                     timeout=15, check=False).stdout
+            except (OSError, subprocess.TimeoutExpired):
+                out = ""
+            for line in out.splitlines():
+                parts = line.split()
+                if len(parts) >= 4 and parts[0].upper() == "TCP" and parts[3].upper() == "LISTENING":
+                    tail = parts[1].rsplit(":", 1)[-1]
+                    if tail.isdigit():
+                        _WINDOWS_LISTENING.add(int(tail))
+    return port in _WINDOWS_LISTENING
 
 
 def listener_pids(port: int) -> set[int]:
