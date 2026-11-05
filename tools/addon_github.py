@@ -39,13 +39,32 @@ def clean(text: str) -> str:
     return text
 
 
+class SameHostAuthRedirect(urllib.request.HTTPRedirectHandler):
+    """Follow a redirect, but never hand the Authorization header to another host.
+
+    urllib copies every header but the content ones onto the redirected request,
+    a token included, wherever the redirect points (SEC-12). GitHub redirects a
+    renamed repository within api.github.com, which keeps the token; anything
+    else gets the request without it.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        import urllib.parse
+
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is not None and urllib.parse.urlsplit(newurl).hostname != urllib.parse.urlsplit(req.full_url).hostname:
+            new.remove_header("Authorization")
+        return new
+
+
 def fetch(repo: str) -> dict:
     request = urllib.request.Request(API + repo, headers={"Accept": "application/vnd.github+json",
                                                           "User-Agent": "exasol-starter-kit-addon-github"})
     token = os.environ.get("GITHUB_TOKEN")
     if token:
         request.add_header("Authorization", f"Bearer {token}")
-    with urllib.request.urlopen(request, timeout=20) as response:  # follows a renamed repository's redirect
+    # Follows a renamed repository's redirect, keeping the token on GitHub's own host only.
+    with urllib.request.build_opener(SameHostAuthRedirect).open(request, timeout=20) as response:
         return json.load(response)
 
 

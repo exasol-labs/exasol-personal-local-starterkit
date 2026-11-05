@@ -55,11 +55,17 @@ SECRET_SHAPES = re.compile(r"\b(?:sk|pk|ghp|gho|ghs|github_pat|xox[a-z])[-_][A-Z
 
 
 def scrub(text: str) -> str:
-    """A provider's message with the configured key and anything key-shaped taken out: it may echo either."""
-    key = os.environ.get("EXAKIT_PROVIDER_API_KEY", "").strip()
-    if key:
-        text = text.replace(key, "[redacted]")
-    return SECRET_SHAPES.sub("[redacted]", text)
+    """A provider's message with the configured key, the custom header values and anything key-shaped taken out, in
+    any form it may echo them (model_config.redact_secrets: URL-encoded, base64, after a credential label)."""
+    from exakit_nb.model_config import HEADERS, redact_secrets
+
+    secrets = [os.environ.get("EXAKIT_PROVIDER_API_KEY", "").strip()]
+    try:
+        headers = json.loads(os.environ.get(HEADERS) or "{}")
+        secrets += [str(value) for value in headers.values()] if isinstance(headers, dict) else []
+    except ValueError:
+        pass
+    return SECRET_SHAPES.sub("[redacted]", redact_secrets(text, secrets))
 
 
 ACCESS_ERRORS = {"AuthenticationError": "the provider rejected the API key (EXAKIT_PROVIDER_API_KEY)",

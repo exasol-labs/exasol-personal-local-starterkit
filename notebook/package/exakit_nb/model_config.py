@@ -5,12 +5,14 @@ interface. No configuration is inferred from an SDK's ambient provider credentia
 """
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass, field
 import ipaddress
 import json
 import os
 import re
 from typing import Mapping
+import urllib.parse
 from urllib.parse import urlsplit
 
 MODEL_ID = "EXAKIT_MODEL_ID"
@@ -39,6 +41,32 @@ def clear_text_ok(url: str) -> bool:
     return address.is_loopback or address.is_private or address.is_link_local
 
 
+# A value is token-shaped when it has a digit or a symbol, or is long: "invalid token provided" keeps its words.
+_TOKEN = r"((?=[A-Za-z]*[0-9._~+/=-])[A-Za-z0-9._~+/=-]{4,}|[A-Za-z]{20,})"
+# After Bearer or Basic the value is always a credential; after the word "token" only a token-shaped one.
+_AUTH_SCHEME = re.compile(r"(?i)\b(bearer|basic)(\s+)([A-Za-z0-9._~+/=-]{4,})|\b(token)(\s+)" + _TOKEN)
+_CREDENTIAL_LABEL = re.compile(r"(?i)\b(authorization|x-api-key|api[-_]?key)\b([\"':= ]+)(?!bearer\b|basic\b|token\b|\[redacted\])" + _TOKEN)
+
+
+def redact_secrets(message: str, secrets: list[str]) -> str:
+    """Take each secret out of a message, in every form it may be echoed, longest first; then the value after any
+    credential label. A secret of any length is removed as written; its encoded forms from four characters on."""
+    forms: set[str] = set()
+    for secret in secrets:
+        if not secret:
+            continue
+        forms.add(secret)
+        for encoded in (urllib.parse.quote(secret, safe=""), base64.b64encode(secret.encode("utf-8")).decode("ascii"),
+                        base64.urlsafe_b64encode(secret.encode("utf-8")).decode("ascii")):
+            if len(encoded.rstrip("=")) >= 4:
+                forms.update({encoded, encoded.rstrip("=")})
+    for form in sorted(forms, key=len, reverse=True):
+        message = message.replace(form, "[redacted]")
+    message = _AUTH_SCHEME.sub(lambda match: (match.group(1) or match.group(4)) + (match.group(2) or match.group(5))
+                               + "[redacted]", message)
+    return _CREDENTIAL_LABEL.sub(lambda match: match.group(1) + match.group(2) + "[redacted]", message)
+
+
 @dataclass(frozen=True)
 class ModelConfig:
     model_id: str
@@ -53,10 +81,10 @@ class ModelConfig:
                 "protocol": "chat-completions"}
 
     def redact(self, message: str) -> str:
-        for secret in [self.api_key, *self.headers.values()]:
-            if secret:
-                message = message.replace(secret, "[redacted]")
-        return message
+        """The message with every configured secret taken out (SEC-09): the API key and each custom header value,
+        as written and as a provider may echo them - URL-encoded or base64 - and whatever follows a credential label
+        (Authorization, Bearer, Basic, api-key)."""
+        return redact_secrets(message, [self.api_key, *self.headers.values()])
 
 
 def resolve(environ: Mapping[str, str] | None = None) -> ModelConfig | None:

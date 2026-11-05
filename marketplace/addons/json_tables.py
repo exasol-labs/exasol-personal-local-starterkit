@@ -18,7 +18,7 @@ from urllib.error import HTTPError
 from pathlib import Path, PurePosixPath
 
 import kit_telemetry
-from runtime import AddonFailure, KitContext, cmd_quote, venv_python, host_machine
+from runtime import AddonFailure, KitContext, cmd_quote, venv_python, host_machine, open_url
 
 ID = "json-tables"
 RECEIPT = "components.json_tables"
@@ -129,7 +129,7 @@ def _api_assets(repo: str, tag: str) -> dict[str, dict]:
     if token := os.environ.get("GITHUB_TOKEN"):
         headers["Authorization"] = f"Bearer {token}"
     try:
-        with urllib.request.urlopen(urllib.request.Request(url, headers=headers), timeout=20) as response:
+        with open_url(urllib.request.Request(url, headers=headers), timeout=20) as response:
             doc = json.load(response)
     except (ValueError, TypeError) as error:
         raise AddonFailure("Malformed JSON Tables release metadata") from error

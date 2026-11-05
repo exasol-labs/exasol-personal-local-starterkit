@@ -33,6 +33,29 @@ class AddonFailure(RuntimeError):
     pass
 
 
+class SameHostAuthRedirect(urllib.request.HTTPRedirectHandler):
+    """Follow a redirect, but never hand the Authorization header to another host.
+
+    urllib copies every header but the content ones onto the redirected request,
+    a token included, wherever the redirect points (SEC-12). GitHub redirects a
+    renamed repository within api.github.com, which keeps the token; anything
+    else gets the request without it.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        import urllib.parse
+
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is not None and urllib.parse.urlsplit(newurl).hostname != urllib.parse.urlsplit(req.full_url).hostname:
+            new.remove_header("Authorization")
+        return new
+
+
+def open_url(request, timeout: float):
+    """urllib.request.urlopen with SameHostAuthRedirect."""
+    return urllib.request.build_opener(SameHostAuthRedirect).open(request, timeout=timeout)
+
+
 def host_machine() -> str:
     """The machine's own CPU architecture, as platform.machine() spells it.
 

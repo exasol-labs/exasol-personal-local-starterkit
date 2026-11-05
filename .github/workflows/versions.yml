@@ -986,7 +986,7 @@ jobs:
       - name: notebook, training and persona suites
         if: matrix.shard == 4
         run: |
-          for suite in test_handoff test_ml_train test_notebook_readout test_notebook_themes test_persona_membership \
+          for suite in test_handoff test_ml_train test_notebook_readout test_notebook_redact test_notebook_themes test_persona_membership \
                        test_privacy_watch test_telemetry_default test_version_pins; do
             echo "== $suite"; python3 "tests/$suite.py" || exit 1
           done
