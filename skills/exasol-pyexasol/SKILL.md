@@ -1,139 +1,59 @@
 ---
 name: exasol-pyexasol
-description: Query the local Exasol database from Python using pyexasol, the official Exasol Python driver the starter kit reuses or installs into its own virtual environment — connecting with the right TLS setting for the kit's self-signed certificate, running queries, reading credentials safely, and adding extra packages such as pandas. Triggers — "query Exasol from Python", "use pyexasol", "connect Python to my database", "write a Python script against Exasol", "pandas dataframe from Exasol", "import pyexasol fails", "which Python has pyexasol".
+description: "Use the official PyExasol Python driver for direct Exasol connections, queries, bulk I/O, metadata, UDF logs, and multiprocessing. Covers pyexasol.connect, connect_local_config, ExaConnection, ExaStatement, fetch_mapper, convert_websocket_to_python, execute_sql_script, create_prepared_statement, import_from_*, export_to_*, insert_multi, .meta, sql_columns, explain_last, execute_udf_output, http_transport, exa_address, export_parallel, import_parallel, exasol.driver.websocket.dbapi2, and EXASOL_TELEMETRY_DISABLE."
 ---
 
-# pyexasol — Python access to the local database
+> **Exasol starter kit:** Exasol's own skill, copied unchanged from [exasol-labs/exasol-agent-skills](https://github.com/exasol-labs/exasol-agent-skills) at `af04558dde9f7320e012453bff9a2af57b978368`. On this machine the `exakit` skill comes first: how to connect, how to load data and which tool to reach for.
 
-The kit reuses a working driver in the user's Python when one is available.
-Otherwise it installs the official driver in a dedicated kit environment.
-Read `exakit info --json` for `components.pyexasol.python` and `exakit version
---json` for ownership before choosing an interpreter. Reused user Python
-environments are preserved during update and uninstall.
+# Exasol PyExasol Skill
 
-## Use this interpreter
+Use this skill for Python code that talks directly to Exasol through
+`pyexasol`. For version-specific behavior, check the requested release in the
+[official repository](https://github.com/exasol/pyexasol); do not mix APIs from
+different releases.
 
-```
-~/.exasol-starter-kit/pyexasol-venv/bin/python
-```
+## Routing Algorithm
 
-That is the default for a kit-created environment. A reused installation can
-use a different Python; always use the recorded path. An import error in some
-other interpreter does not prove the recorded driver is broken.
+Load only the matching references:
 
-Confirm it and read the exact path from the machine rather than assuming:
+1. **Connect, query, format SQL, fetch, or transact**
+   - Trigger phrases: `pyexasol.connect`, `connect_local_config`, `ExaConnection`, `ExaStatement`, `execute_sql_script`, `create_prepared_statement`, `fetch_mapper`, `!i`, `!q`, `!r`
+   - Load: `references/connections-and-sql.md`
 
-```bash
-exakit info --json      # components.pyexasol.python is the interpreter path
-```
+2. **Move data with HTTP transport**
+   - Trigger phrases: `export_to_`, `import_from_`, `pandas`, `Polars`, `Parquet`, `insert_multi`, `export_params`, `import_params`
+   - Load: `references/bulk-transfer.md`
 
-## Connecting
+3. **Inspect metadata or debug**
+   - Trigger phrases: `.meta`, `sql_columns`, `list_tables`, `execute_udf_output`, `explain_last`, `debug_logdir`, `abort_query`
+   - Load: `references/metadata-and-debugging.md`
 
-Three details matter, and the third is the one people miss:
+4. **Run parallel HTTP transfer**
+   - Trigger phrases: `http_transport`, `export_parallel`, `import_parallel`, `get_nodes`, `exa_address`, `multiprocessing`, `threadsafety`
+   - Load: `references/parallel-http-transport.md`
 
-- **DSN** — `127.0.0.1:8563` (confirm with `exakit info`)
-- **User** — `sys`, the admin user; its password lives in a file under
-  `~/.exasol-starter-kit/credentials/`
-- **TLS** — the local database uses a **self-signed certificate**, so
-  certificate verification must be relaxed or every connection fails
+5. **Use the PEP 249 interface**
+   - Trigger phrases: `exasol.driver.websocket.dbapi2`, `DB-API 2.0`, `PEP 249`, `cursor`, `executemany`, `paramstyle`, `SQLAlchemy`
+   - Load: `references/dbapi.md`
 
-```python
-import pyexasol
+Load every reference that matches.
 
-with open("/Users/<you>/.exasol-starter-kit/credentials/<password-file>") as fh:
-    password = fh.read().strip()
+## Security
 
-C = pyexasol.connect(
-    dsn="127.0.0.1:8563",
-    user="sys",
-    password=password,
-    websocket_sslopt={"cert_reqs": 0},   # local self-signed certificate
-)
-```
+- Read credentials from the application's secret source. Never put them in
+  source code, command arguments, logs, or chat output.
+- Keep TLS and certificate verification enabled. Disable verification only for
+  an explicit local test and label it unsafe for production.
+- Use PyExasol placeholders. Never join user input into SQL, and use `!r` only
+  for a closed set of trusted SQL fragments.
+- Do not share a connection across threads or processes. `abort_query()` is the
+  only supported cross-thread connection call.
 
-Get the real password filename from `exakit info` (the "Admin pass" line) or
-`exakit info --json` (`runtime.password_file`) — do not guess it, and **never
-print the password or paste it into a script literal**. Read it from the file
-at run time, exactly as above.
+## Related Skills
 
-## Querying
-
-```python
-stmt = C.execute("SELECT * FROM TPCH.CUSTOMER LIMIT 5")
-for row in stmt:
-    print(row)
-
-print(C.execute("SELECT COUNT(*) FROM TPCH.ORDERS").fetchval())
-
-C.close()
-```
-
-Remember the dialect: Exasol pages with **`LIMIT n`**, never `FETCH FIRST` or
-`TOP`.
-
-The bundled datasets live in their own schemas — `TPCH`, `ENERGY`, `WEATHER`, and
-with a persona `ESOPHAGEAL`, `BANKING`, `BANKMKT`, `ADE`, `PUBMED`, `MEDSIGS` — and anything the user uploads defaults to `STARTER_KIT`.
-
-## Dataframes and extra packages
-
-The kit installs the **bare** `pyexasol` package. Convenience methods that
-return dataframes — `export_to_pandas`, `import_from_pandas` — need pandas,
-which is not in the venv. Calling them as shipped raises `ImportError`.
-
-For a kit-owned driver environment, add pandas when the user wants dataframes:
-
-```bash
-PY=~/.exasol-starter-kit/pyexasol-venv/bin/python
-# Kits installed before pip was seeded into this venv have no pip yet; ensurepip adds it.
-"$PY" -m pip --version >/dev/null 2>&1 || "$PY" -m ensurepip --upgrade
-"$PY" -m pip install pandas
-```
-
-On Windows the interpreter is `%USERPROFILE%\.exasol-starter-kit\pyexasol-venv\Scripts\python.exe`; run the same `-m ensurepip --upgrade` and `-m pip install pandas` with it.
-
-Do not run these package installation commands against a reused user-owned
-Python automatically. Use the kit's Notebook environment, which already
-includes dataframe packages, or let the user manage their own environment.
-
-Then:
-
-```python
-df = C.export_to_pandas("SELECT * FROM TPCH.CUSTOMER LIMIT 5")
-```
-
-Prefer the plain `execute()` API when a dataframe is not required — it works
-out of the box.
-
-## This connection is the admin connection
-
-`sys` is the **admin** user. Like `exapump -p starter-kit`, and unlike the MCP
-tools, it is **not sandboxed** — it can create, update, delete and drop. The
-read-only guarantee in this kit belongs to the MCP path only.
-
-So: write `SELECT` unless the user explicitly asked for a change, show the SQL
-before running it, and never use a Python script to route around a write the
-MCP path refused.
-
-## When something is wrong
-
-| Symptom | Cause | Fix |
-|---|---|---|
-| `ModuleNotFoundError: No module named 'pyexasol'` | wrong interpreter | use `~/.exasol-starter-kit/pyexasol-venv/bin/python` |
-| Connection refused / timeout on `8563` | database not running | `exakit start`, confirm `exakit status` |
-| TLS / certificate verification error | self-signed certificate | pass `websocket_sslopt={"cert_reqs": 0}` |
-| `ImportError` from `export_to_pandas` | pandas not installed | install it into the kit venv with the three lines above (`ensurepip` first if `No module named pip`) |
-| pyexasol reported missing by `exakit status` | the soft install step failed | `exakit update` |
-
-`exakit update` doubles as the repair command — it installs the
-advertised version into the venv.
-
-## Guardrails
-
-- **Never print, log or hardcode** the contents of the credential files under
-  `~/.exasol-starter-kit/credentials/`. Open and read them at run time.
-- **Admin connection** — treat every statement as consequential; `SELECT` by
-  default.
-- **Do not install into the system Python** to "fix" an import error. The venv
-  is deliberate; use its interpreter.
-- **Do not invent** pyexasol API calls. If unsure, check the driver's own docs
-  rather than guessing a method name.
+- Use **exasol-notebook-connections** for `open_pyexasol_connection` and other
+  notebook-connector wrappers.
+- Use **exasol-database** for Exasol SQL or exapump without PyExasol.
+- Use **exasol-import** and **exasol-export** for native SQL or exapump data
+  movement without PyExasol.
+- Use **exasol-udfs** to build UDFs; this skill only covers their captured logs.

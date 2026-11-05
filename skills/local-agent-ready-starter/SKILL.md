@@ -154,13 +154,14 @@ is loaded. Only on an empty database, load a bundled sample, for example TPC-H (
 orders, line items, parts, suppliers) into the `TPCH` schema:
 
 ```bash
-exakit data-load
+exakit data-load tpch      # a bundled dataset by id; bare `exakit data-load` is the menu (terminal only)
 ```
 
-Safe to run any time; choose the bundled sample option to load it. Use `exakit data-load --force`
-to reload the bundled sample directly. If it reports files as *pending*, the sample data has not shipped in this build —
-the user can still continue with their own data:
-`exapump upload yourfile.csv --table STARTER_KIT.MYTABLE -p starter-kit`.
+Safe to run any time: what is already loaded is skipped. Use `exakit data-load --force tpch`
+to reload it. If it reports files as *pending*, the sample data has not shipped in this build —
+the user can still continue with their own data, through the same command first:
+`EXAKIT_DATA_TABLE=STARTER_KIT.MYTABLE exakit data-load yourfile.csv` (exapump only when
+`exakit data-load` cannot take the file — the order is in the `exakit` skill).
 
 ## Step 5 — The first trusted query (the payoff, and the point)
 

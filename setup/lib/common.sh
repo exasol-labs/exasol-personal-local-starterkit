@@ -8664,12 +8664,21 @@ exakit_skills_dir() {
 # keys the SKILL.md standard defines (name, description), so a real YAML parser
 # would be a dependency bought for nothing.
 exakit_skill_field() {
-    awk -v want="$2" '
+    # A YAML-quoted value (the skills copied from the components quote theirs)
+    # is read without its quotes. The single quote comes in as q: this program
+    # is itself single-quoted. Twin: Get-ExakitSkillField.
+    awk -v want="$2" -v q="'" '
         NR == 1 { if ($0 != "---") exit; next }
         $0 == "---" { exit }
         {
             key = want ": "
-            if (index($0, key) == 1) { print substr($0, length(key) + 1); exit }
+            if (index($0, key) == 1) {
+                v = substr($0, length(key) + 1)
+                first = substr(v, 1, 1); last = substr(v, length(v), 1)
+                if (length(v) >= 2 && first == last && (first == "\"" || first == q))
+                    v = substr(v, 2, length(v) - 2)
+                print v; exit
+            }
         }
     ' "$1" 2>/dev/null
 }

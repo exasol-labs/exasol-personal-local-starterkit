@@ -45,6 +45,13 @@ Working on the code in this repo:
   `components.skills.version` in versions.json in the same PR: that bump is
   what makes `exakit update` on every installed kit fetch the new set from
   `main` — no kit release is needed for a skills change.
+- **A component already ships a skill?** Use it rather than writing one: add it to
+  `skills/upstream.json` (repository, pinned ref, path; `addon:` when it belongs
+  to an add-on) and run `python3 tools/sync_upstream_skills.py`. The copies are
+  byte for byte plus a provenance line; never edit them by hand —
+  `tests/skills.sh` checks them against `skills/upstream.lock.json` and fails
+  when a pin falls behind the version the kit installs. The kit's own rules
+  for every task live in one master skill, `skills/exakit/SKILL.md`.
 - `setup/lib/ui.sh` and `setup/lib/ui.ps1` are close twins of the shared
   visual layer (banner, palette, status glyphs, spinner, progress, panels):
   when you change a function that exists in both, mirror it in the other,

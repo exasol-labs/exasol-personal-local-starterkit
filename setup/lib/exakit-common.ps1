@@ -4761,7 +4761,15 @@ function Get-ExakitSkillField {
     $key = $Field + ": "
     for ($i = 1; $i -lt $lines.Count; $i++) {
         if ($lines[$i].Trim() -eq "---") { break }
-        if ($lines[$i].StartsWith($key)) { return $lines[$i].Substring($key.Length) }
+        if ($lines[$i].StartsWith($key)) {
+            # A YAML-quoted value (the components' own skills quote theirs) is
+            # read without its quotes. Twin of exakit_skill_field.
+            $v = $lines[$i].Substring($key.Length)
+            if ($v.Length -ge 2 -and (($v.StartsWith('"') -and $v.EndsWith('"')) -or ($v.StartsWith("'") -and $v.EndsWith("'")))) {
+                $v = $v.Substring(1, $v.Length - 2)
+            }
+            return $v
+        }
     }
     return ""
 }

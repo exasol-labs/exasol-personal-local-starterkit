@@ -125,22 +125,29 @@ names.
 
 ## Bulk loading files
 
+**`exakit data-load` comes first** — for a bundled dataset and for the user's
+own CSV, Parquet, JSON or folder alike (the order is set in the `exakit`
+skill). It checks the file, skips what is already loaded, and reports the
+rows each file landed:
+
+```bash
+exakit data-load ./sales.csv                                  # on a terminal it asks for SCHEMA.TABLE
+EXAKIT_DATA_TABLE=STARTER_KIT.SALES exakit data-load ./sales.csv   # without one
+EXAKIT_SCHEMA=SALES exakit data-load ~/exports                # a folder: one table per file
+exakit data-load esophageal_posts                             # a bundled dataset by id
+```
+
+Use exapump directly only when `exakit data-load` cannot take the file (it
+names the file and why):
+
 ```bash
 exapump upload data.csv --table STARTER_KIT.MYTABLE -p starter-kit
 exapump upload data.parquet --table STARTER_KIT.MYTABLE -p starter-kit
 ```
 
 exapump loads **CSV and Parquet**. It does *not* load JSON — JSON is a nested
-tree, not a table. For JSON, the kit offers the **JSON Tables** add-on, which
-shreds it into relational tables; `exakit data-load` offers it on the spot when
-you hand it a `.json` file.
-
-For the bundled sample data, prefer the kit's own menu over hand-rolled uploads:
-
-```bash
-exakit data-load           # bundled datasets or a local CSV/Parquet/JSON file
-exakit data-load --force   # reload the bundled sample directly
-```
+tree, not a table. `exakit data-load` sends a `.json` file through the
+**JSON Tables** add-on, which shreds it into relational tables.
 
 ## Profiles
 

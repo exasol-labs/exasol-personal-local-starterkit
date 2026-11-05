@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "about": "Skills copied unchanged from the components' own repositories. Edit this file, then run: python3 tools/sync_upstream_skills.py. Never edit the copies under skills/<name>/ by hand: tests/skills.sh compares them with skills/upstream.lock.json.",
+  "sources": [
+    {
+      "repo": "exasol/mcp-server",
+      "ref": "2.4.0",
+      "follows": "components.mcp.version",
+      "why": "Ships inside the MCP server the kit installs, at the same version.",
+      "skills": [
+        {"name": "exasol-mcp-server", "path": "exasol/ai/mcp/server/skills/exasol-mcp-server"},
+        {"name": "exasol-sql-dialect", "path": "exasol/ai/mcp/server/skills/exasol-sql-dialect"},
+        {"name": "exasol-system-tables", "path": "exasol/ai/mcp/server/skills/exasol-system-tables"},
+        {"name": "exasol-table-design", "path": "exasol/ai/mcp/server/skills/exasol-table-design"},
+        {"name": "exasol-import-export", "path": "exasol/ai/mcp/server/skills/exasol-import-export"},
+        {"name": "exasol-udfs", "path": "exasol/ai/mcp/server/skills/exasol-udfs"},
+        {"name": "exasol-virtual-schemas", "path": "exasol/ai/mcp/server/skills/exasol-virtual-schemas"}
+      ]
+    },
+    {
+      "repo": "exasol-labs/exasol-agent-skills",
+      "ref": "af04558dde9f7320e012453bff9a2af57b978368",
+      "why": "Exasol's agent skills. Pinned to a commit: exasol-pyexasol is newer than the v0.24.1 release.",
+      "skills": [
+        {"name": "exasol-database", "path": "plugins/exasol/skills/exasol-database"},
+        {"name": "exasol-pyexasol", "path": "plugins/exasol/skills/exasol-pyexasol"},
+        {"name": "exasol-bucketfs", "path": "plugins/exasol/skills/exasol-bucketfs"}
+      ]
+    },
+    {
+      "repo": "exasol-labs/dash-server",
+      "ref": "v0.2.1",
+      "follows": "components.dash-server.version",
+      "why": "dash-server's own guide to writing dashboards; it has no frontmatter, so the kit gives it one.",
+      "skills": [
+        {
+          "name": "exasol-dash",
+          "path": "skills",
+          "entry": "exasol_dash_skill.md",
+          "files": ["pyexasol_skill.md"],
+          "addon": "dash-server",
+          "description": "Exasol's own guide (from the dash-server repository) to writing the Dash app itself for a dashboard hosted on dash-server — layout, callbacks, the queries behind each figure, and patching or reviewing an existing app. Use it with the dash-server skill, which covers installing, starting and registering the server."
+        }
+      ]
+    }
+  ],
+  "not_taken": {
+    "exasol-labs/exasol-json-tables skills/*": "Written for developers of that repository (they open crates/ and tests/ there); the kit's json-tables skill covers using it.",
+    "exasol-labs/exasol-agent-skills exasol-setup-personal": "Installs Exasol Personal itself; in the kit, exakit installs and operates the database.",
+    "exasol-labs/exasol-agent-skills exasol-notebook-connections, exasol-notebook-connector-config": "Configure and open the connector by hand; the kit's notebooks connect through exakit.nb with no secret in a cell.",
+    "exasol-labs/exasol-agent-skills exasol-import, exasol-export, exasol-udfs": "Same subject as the mcp-server skills of the version the kit installs; one skill per subject.",
+    "exasol-labs/exasol-agent-skills exasol": "Routes to skills the kit does not ship (ITDE, SaaS, extensions).",
+    "exasol/dbt-exasol, exasol/exasol-personal": "Only skills for developing those repositories (openspec).",
+    "exasol-labs/exapump, exasol-labs/exasol-scheduler, exasol-labs/exasol-vscode, exasol/notebook-connector, exasol/pyexasol, exasol/script-languages-release": "No skill in the repository."
+  }
+}

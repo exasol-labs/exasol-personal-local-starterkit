@@ -44,6 +44,17 @@ A kit notebook nobody edited is refreshed when the kit's version changes (cells 
 running it do not count). One the user edited, or a file of their own, is never overwritten, and one the user
 deleted is not copied back.
 
+**Use the kit's notebooks; a new one is a copy of them.** Start from the
+persona's notebook for the task, and edit it in place when the user asks for a
+change to it. When the user wants a new notebook, put it in the **same persona
+folder**, named with the next step number and a short topic
+(`starter-kit-notebooks/data-scientist/04_churn_by_region.ipynb`; Marimo:
+`marimo/data-scientist/04_churn_by_region.py`), and make it a **copy of that
+persona's `00_quickstart`** (or of the kit notebook closest to the task), then
+edit the copy: it keeps the `Exasol (Starter Kit)` kernel and connects through
+`exakit.nb`. Never start from an empty notebook, never write connection code
+by hand, never put a host, user or password in a cell.
+
 Install it with `exakit marketplace notebook`. Never tell a user to
 `pip install exasol-notebook-connector` themselves: that copy has no
 connection, no helpers and no notebooks.

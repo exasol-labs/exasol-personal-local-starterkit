@@ -55,6 +55,10 @@ echo "every shipped skill is loadable by an agent:"
 # contract, and the description is the ONLY thing an agent sees before it
 # decides to load the body. Both are asserted for every skill that ships.
 SKILL_COUNT=0
+# Skills copied from a component's own repository (skills/upstream.json) keep
+# that repository's description word for word; the "Triggers -" list is the
+# kit's convention for the skills it writes, so it is asked of those only.
+UPSTREAM_SKILLS=" $(python3 "$ROOT/tools/sync_upstream_skills.py" --names | tr '\n' ' ') "
 for _dir in "$ROOT"/skills/*/; do
     [ -f "$_dir/SKILL.md" ] || continue
     _id="$(basename "$_dir")"
@@ -70,7 +74,10 @@ for _dir in "$ROOT"/skills/*/; do
     # The "Triggers —" list is how an agent decides when to fire the skill.
     # skills/README.md promises it is kept accurate; an absent one means the
     # skill can only ever be loaded by being named explicitly.
-    has "$_id: description carries Triggers" "Triggers" "$_desc"
+    case "$UPSTREAM_SKILLS" in
+        *" $_id "*) check "$_id: copied from upstream, its description kept" "yes" "yes" ;;
+        *) has "$_id: description carries Triggers" "Triggers" "$_desc" ;;
+    esac
     # A summary is what `exakit skills` renders; it must not be empty and must
     # not still carry the trigger list.
     _sum="$(exakit_skill_summary "$_desc")"
@@ -123,6 +130,32 @@ PYEOF
     check "$_id: frontmatter survives a real YAML parser" "clean" "$_yaml_safe"
 done
 
+# ---------------------------------------------------------------------------
+echo
+echo "the components' own skills are copies, at the version the kit installs:"
+# ---------------------------------------------------------------------------
+# Byte for byte against skills/upstream.lock.json: a hand edit would make the
+# copy say something its repository never said, and a pin behind the version
+# the kit installs would teach an older server's tools. Offline - the sync
+# tool is what talks to GitHub.
+_up_check="$(python3 "$ROOT/tools/sync_upstream_skills.py" --check 2>&1)"
+check "every copy matches the lock and every pin the installed version" "" "$_up_check"
+_up_master=no
+case "$UPSTREAM_SKILLS" in *" exakit "*) _up_master=yes ;; esac
+check "the master skill is not a copy" "no" "$_up_master"
+for _up in $UPSTREAM_SKILLS; do
+    has "$_up: says where it came from" "copied unchanged from" "$(sed -n '1,12p' "$ROOT/skills/$_up/SKILL.md")"
+    check "$_up: carries its repository's licence" "yes" "$([ -s "$ROOT/skills/$_up/LICENSE" ] && echo yes || echo no)"
+done
+# A broken copy is caught: edit one byte in a scratch copy of the tree.
+_UPKIT="$WORK/upkit"; mkdir -p "$_UPKIT/tools"
+cp -R "$ROOT/skills" "$_UPKIT/skills"; cp "$ROOT/versions.json" "$_UPKIT/"
+cp "$ROOT/tools/sync_upstream_skills.py" "$_UPKIT/tools/"
+printf 'x' >> "$_UPKIT/skills/exasol-sql-dialect/SKILL.md"
+has "a hand-edited copy is refused" "exasol-sql-dialect/SKILL.md: edited by hand" \
+    "$(python3 "$_UPKIT/tools/sync_upstream_skills.py" --check 2>&1)"
+rm -rf "$_UPKIT"
+
 # Guards against the whole point of this feature being quietly lost: the kit
 # grew skills for each component and add-on, so a build carrying only the
 # original starter skill is a packaging regression, not a valid state.
@@ -145,9 +178,18 @@ echo "the registry is the filesystem, not a hardcoded list:"
 # entries, so they are exempt: the thing under test is that no skill needs a
 # name in the code to work, not that the string never occurs.
 _addon_ids="$(exakit_marketplace_addons 2>/dev/null | cut -d'|' -f1)"
+_component_packages="$(python3 -c 'import json,sys
+c=json.load(open(sys.argv[1]))["components"]
+print(" ".join(sorted({v["package"] for v in c.values() if isinstance(v, dict) and v.get("package")})))' "$ROOT/versions.json")"
 for _hardcode in $(ls -1 "$ROOT/skills" 2>/dev/null); do
     [ -f "$ROOT/skills/$_hardcode/SKILL.md" ] || continue
     case " $(printf '%s' "$_addon_ids" | tr '\n' ' ') " in
+        *" $_hardcode "*) continue ;;
+    esac
+    # A skill named after the command itself (exakit) or after a component's
+    # package (exasol-mcp-server ships its own skill of that name) shares the
+    # name with a constant the code must use; the add-on ids above are the same case.
+    case " exakit $_component_packages " in
         *" $_hardcode "*) continue ;;
     esac
     # Match the id as a whole token: "exasol-mcp" is a substring of the MCP
