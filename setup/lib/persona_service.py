@@ -244,13 +244,30 @@ def dataset_hints(root: Path) -> list:
     return out
 
 
+def dataset_titles(root: Path) -> dict:
+    """id -> the short name the data menu shows for each bundled dataset: its label up to the first " (" (NEW-05)."""
+    titles = {}
+    for conf in (root / "data" / "datasets").glob("*/dataset.conf"):
+        keys = {k.strip(): v.strip() for k, v in (line.split("=", 1) for line in conf.read_text(encoding="utf-8").splitlines()
+                                                     if "=" in line)}
+        label = keys.get("label", "")
+        if label:
+            titles[keys.get("id", conf.parent.name)] = label.split(" (", 1)[0]
+    return titles
+
+
 def show(root: Path, persona_id: str) -> list:
-    """What a persona brings, as `exakit persona show` prints it."""
+    """What a persona brings, as `exakit persona show` prints it: datasets by the names the data menu uses (NEW-05),
+    add-ons and clients by the ids you type."""
     doc = one(root, persona_id)
     rows = [doc["title"], doc.get("summary", ""), ""]
     for key, label in (("datasets", "Sample data"), ("addons", "Add-ons"), ("notebook_tools", "Notebook tools"), ("mcp_clients", "AI clients"), ("services", "Services"), ("udf_language", "UDF language")):
         if key in doc:
-            rows.append(f"  {label:<15} {value(root, persona_id, key) or 'none'}")
+            shown = value(root, persona_id, key) or "none"
+            if key == "datasets" and isinstance(doc[key], list) and doc[key]:
+                titles = dataset_titles(root)
+                shown = ", ".join(titles.get(item, item) for item in doc[key])
+            rows.append(f"  {label:<15} {shown}")
     if doc.get("first_prompt"):
         rows.append(f"  {'Start here':<15} {doc['first_prompt']}")
     elif "notebook" in doc.get("addons", []):
