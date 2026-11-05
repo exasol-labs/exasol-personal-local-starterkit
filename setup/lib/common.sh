@@ -1592,7 +1592,7 @@ exakit_uv_version_of() {
 _exakit_uv_manifest_value() {
     _uvm_was="${_EXAKIT_UV_RESOLVING:-0}"
     _EXAKIT_UV_RESOLVING=1
-    _uvm="$(exakit_versions_value "components.uv.$1" 2>/dev/null || true)"
+    _uvm="$(exakit_versions_pin "components.uv.$1" 2>/dev/null || true)"    # the kit copy's pin (SEC-13)
     _EXAKIT_UV_RESOLVING="$_uvm_was"
     printf '%s' "$_uvm"
 }
@@ -2951,6 +2951,20 @@ exakit_versions_resolve_doc() {
     fi
     _EXAKIT_VERSIONS_SOURCE="fallback"
     return 1
+}
+
+# exakit_versions_pin <dot.path> — a value from THIS KIT COPY's versions.json,
+# never the document fetched from the main branch. Every SHA-256 a download is
+# verified against, and the version it belongs to, come from here (SEC-13): the
+# fetched copy says what is newest, but a digest read from it would be the
+# mutable branch vouching for itself. The kit copy came from a release
+# (exakit update installs the announced tag) with the digests it was reviewed
+# with; a newer version advertised only remotely gets no digest here and falls
+# to the component's next tier. Twin of Get-ExakitVersionsPin.
+exakit_versions_pin() {
+    _vp_doc="$(exakit_versions_baked_doc 2>/dev/null || true)"
+    [ -n "$_vp_doc" ] || return 1
+    exakit_versions_value "$1" "$_vp_doc"
 }
 
 exakit_versions_active_doc() {

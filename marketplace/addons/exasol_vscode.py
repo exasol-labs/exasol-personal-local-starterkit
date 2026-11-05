@@ -131,7 +131,7 @@ def _release_digest(version: str, asset_name: str) -> str | None:
 
 
 def expected_digest(ctx: KitContext, version: str, asset_name: str) -> str | None:
-    doc = ctx.versions_document()
+    doc = ctx.pinned_document()                # the kit copy's own pins, never the fetched document (SEC-13)
     block = doc.get("components", {}).get(ID, {})
     if version == block.get("version"):
         digest = block.get("sha256", {}).get("vsix")

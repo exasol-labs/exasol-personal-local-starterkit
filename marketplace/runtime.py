@@ -325,6 +325,22 @@ class KitContext:
     def versions_document(self) -> dict:
         return self._versions_document
 
+    @cached_property
+    def _pinned_document(self) -> dict:
+        try:
+            document = json.loads((self.root / "versions.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {"components": {}}
+        return document if isinstance(document, dict) and isinstance(document.get("components"), dict) \
+            else {"components": {}}
+
+    def pinned_document(self) -> dict:
+        """This kit copy's own versions.json: where a SHA-256 a download is verified against comes from (SEC-13).
+        versions_document() may be the copy fetched from the main branch, which says what is newest but is not a
+        trust anchor; the kit copy came from a release (exakit update installs the announced tag) and carries the
+        digests that release was reviewed with. A newer version advertised only remotely gets no digest from here."""
+        return self._pinned_document
+
     def target_version(self, addon_id: str, default: str) -> str:
         # The platform adapter has already resolved the kit's active cached
         # versions document and explicit override. Use exactly that answer.

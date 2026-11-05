@@ -148,7 +148,7 @@ function Get-ExapumpAssetName {
 # Twin of exapump_expected_sha256 in exapump.sh.
 function Get-ExapumpExpectedSha256 {
     param([Parameter(Mandatory)][string]$AssetName)
-    $advertised = Get-ExakitVersionsValue -Path "components.exapump.version"
+    $advertised = Get-ExakitVersionsPin -Path "components.exapump.version"   # the kit copy's pin (SEC-13)
     if ($advertised -and $advertised -eq $script:ExapumpVersion) {
         # The asset name is exapump-<version>-<os>-<arch>.exe, and versions.json
         # keys its digests by that same <os>-<arch> token.
@@ -156,7 +156,7 @@ function Get-ExapumpExpectedSha256 {
         $prefix = "exapump-$($script:ExapumpVersion)-"
         if ($platform.StartsWith($prefix)) { $platform = $platform.Substring($prefix.Length) }
         if ($platform.EndsWith(".exe")) { $platform = $platform.Substring(0, $platform.Length - 4) }
-        $digest = Get-ExakitVersionsValue -Path "components.exapump.sha256.$platform"
+        $digest = Get-ExakitVersionsPin -Path "components.exapump.sha256.$platform"
         if ($digest -and $digest -match '^[0-9a-f]{64}$') { return $digest }
     }
     $digest = Get-ExapumpPinnedSha256 $AssetName

@@ -1610,9 +1610,9 @@ function Get-ExakitUvPinnedSha256 {
 # archive. $null means "no digest"; the caller refuses to install.
 function Get-ExakitUvExpectedSha256 {
     param([Parameter(Mandatory)][string]$Version, [Parameter(Mandatory)][string]$Url)
-    $advertised = Get-ExakitVersionsValue -Path "components.uv.version"
+    $advertised = Get-ExakitVersionsPin -Path "components.uv.version"     # the kit copy's pin (SEC-13)
     if ($advertised -and $advertised -eq $Version) {
-        $digest = Get-ExakitVersionsValue -Path ("components.uv.sha256." + (Get-ExakitUvPlatform).Key)
+        $digest = Get-ExakitVersionsPin -Path ("components.uv.sha256." + (Get-ExakitUvPlatform).Key)
         if ($digest -and $digest -match '^[0-9a-f]{64}$') { return $digest }
     }
     $digest = Get-ExakitUvPinnedSha256 ("uv-$Version-" + (Get-ExakitUvPlatform).Key)
@@ -3104,6 +3104,18 @@ function Test-ExakitVersionsSchemaAhead {
 #   Get-ExakitVersionsValue -Path "components.exapump.version"
 #   Get-ExakitVersionsValue -Path "components.exapump.sha256.windows-x86_64"
 # $null means "not advertised" - never a failure to be propagated.
+# Get-ExakitVersionsPin <dot.path> - a value from THIS KIT COPY's versions.json, never
+# the document fetched from main: every SHA-256 a download is verified against, and its
+# version, come from here (SEC-13). Twin of exakit_versions_pin.
+function Get-ExakitVersionsPin {
+    param([Parameter(Mandatory)][string]$Path)
+    $root = Get-ExakitRepoRoot
+    if (-not $root) { return $null }
+    $doc = Join-Path $root "versions.json"
+    if (-not (Test-Path -LiteralPath $doc)) { return $null }
+    return (Get-ExakitVersionsValue -Path $Path -DocPath $doc)
+}
+
 function Get-ExakitVersionsValue {
     param([Parameter(Mandatory)][string]$Path, [string]$DocPath = "")
     if (-not $DocPath) {

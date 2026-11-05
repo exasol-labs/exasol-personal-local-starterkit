@@ -516,9 +516,10 @@ function Get-PersonalS3Source {
     # EXAKIT_PERSONAL_S3=0: the network blocks the bucket, or the release path
     # is wanted for its own sake; the GitHub download is as verified.
     if ($env:EXAKIT_PERSONAL_S3 -eq "0") { return $null }
-    if ((Get-ExakitVersionsValue -Path "components.personal.version") -ne $Version) { return $null }
-    $base = Get-ExakitVersionsValue -Path "components.personal.s3.base_url"
-    $sha = Get-ExakitVersionsValue -Path "components.personal.s3.sha256.windows-x86_64"
+    # The kit copy's own pins, never the fetched document (SEC-13).
+    if ((Get-ExakitVersionsPin -Path "components.personal.version") -ne $Version) { return $null }
+    $base = Get-ExakitVersionsPin -Path "components.personal.s3.base_url"
+    $sha = Get-ExakitVersionsPin -Path "components.personal.s3.sha256.windows-x86_64"
     if (-not $base -or $base -notmatch '^https://' -or $sha -notmatch '^[0-9a-f]{64}$') { return $null }
     return @{ Url = "$($base.TrimEnd('/'))/windows/x86_64/$Version/exasol.exe"; Sha256 = $sha }
 }

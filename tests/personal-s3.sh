@@ -31,6 +31,9 @@ exakit_versions_value() {
         components.personal.s3.sha256.linux-arm64) printf '%s\n' "$pin" ;;
     esac
 }
+# The stub above stands for the kit copy's own versions.json, which is where the
+# launcher's pins are read from (exakit_versions_pin, SEC-13).
+exakit_versions_pin() { exakit_versions_value "$@"; }
 detect_os() { printf 'macos\n'; }
 detect_arch() { printf 'arm64\n'; }
 info() { :; }

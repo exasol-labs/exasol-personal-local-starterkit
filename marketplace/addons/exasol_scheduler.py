@@ -229,7 +229,7 @@ def _https(url: str):
 
 
 def _digest(ctx: KitContext, version: str, repo: str, tag: str, name: str) -> str | None:
-    versions = ctx.versions_document()
+    versions = ctx.pinned_document()           # the kit copy's own pins, never the fetched document (SEC-13)
     block = versions.get("components", {}).get(ID, {})
     if not os.environ.get("EXAKIT_EXASOL_SCHEDULER_RELEASE_TAG") and \
        version == str(block.get("version", "")).removeprefix("v"):

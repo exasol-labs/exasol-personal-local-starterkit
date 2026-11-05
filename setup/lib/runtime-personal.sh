@@ -607,9 +607,10 @@ personal_s3_source() {
     # EXAKIT_PERSONAL_S3=0: the user's network blocks the bucket, or they want
     # the release path for its own sake; the GitHub download is as verified.
     [ "${EXAKIT_PERSONAL_S3:-1}" = "0" ] && return 1
-    _pss_manifest_version="$(exakit_versions_value components.personal.version 2>/dev/null || true)"
+    # The kit copy's own pins, never the fetched document (SEC-13).
+    _pss_manifest_version="$(exakit_versions_pin components.personal.version 2>/dev/null || true)"
     [ "$_pss_manifest_version" = "$EXAKIT_PERSONAL_VERSION" ] || return 1
-    _pss_base="$(exakit_versions_value components.personal.s3.base_url 2>/dev/null || true)"
+    _pss_base="$(exakit_versions_pin components.personal.s3.base_url 2>/dev/null || true)"
     case "$_pss_base" in https://*) : ;; *) return 1 ;; esac
     case "$(detect_os)" in
         macos) _pss_os=macos ;;
@@ -617,7 +618,7 @@ personal_s3_source() {
         *) return 1 ;;
     esac
     case "$(detect_arch)" in arm64|x86_64) _pss_arch="$(detect_arch)" ;; *) return 1 ;; esac
-    _pss_hash="$(exakit_versions_value "components.personal.s3.sha256.${_pss_os}-${_pss_arch}" 2>/dev/null || true)"
+    _pss_hash="$(exakit_versions_pin "components.personal.s3.sha256.${_pss_os}-${_pss_arch}" 2>/dev/null || true)"
     case "$_pss_hash" in *[!0-9a-f]*|'') return 1 ;; esac
     [ "${#_pss_hash}" -eq 64 ] || return 1
     printf '%s\n%s\n' "${_pss_base%/}/${_pss_os}/${_pss_arch}/${EXAKIT_PERSONAL_VERSION}/exasol" "$_pss_hash"

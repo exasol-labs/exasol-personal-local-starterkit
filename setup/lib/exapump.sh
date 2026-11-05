@@ -58,12 +58,13 @@ exapump_asset_name() {
 # ⇄ twin: Get-ExapumpExpectedSha256 in exapump.ps1.
 exapump_expected_sha256() {
     _ex_asset="$1"
-    _ex_advertised="$(exakit_versions_value components.exapump.version 2>/dev/null || true)"
+    # The kit copy's own pin, never the fetched document (SEC-13).
+    _ex_advertised="$(exakit_versions_pin components.exapump.version 2>/dev/null || true)"
     if [ -n "$_ex_advertised" ] && [ "$_ex_advertised" = "$EXAKIT_EXAPUMP_VERSION" ]; then
         # The asset name is exapump-<version>-<os>-<arch>, and versions.json keys
         # its digests by that same <os>-<arch> token.
         _ex_platform="${_ex_asset#exapump-${EXAKIT_EXAPUMP_VERSION}-}"
-        _ex_digest="$(exakit_versions_value "components.exapump.sha256.${_ex_platform}" 2>/dev/null || true)"
+        _ex_digest="$(exakit_versions_pin "components.exapump.sha256.${_ex_platform}" 2>/dev/null || true)"
         case "$_ex_digest" in
             *[!0-9a-f]*) _ex_digest="" ;;
         esac

@@ -109,7 +109,7 @@ def system_present(ctx: KitContext) -> bool:
 
 
 def _release_info(ctx: KitContext, version: str) -> tuple[str, str, dict]:
-    doc = ctx.versions_document()
+    doc = ctx.pinned_document()                # the kit copy's own pins, never the fetched document (SEC-13)
     pinned = doc.get("components", {}).get(ID, {})
     same = version == pinned.get("version")
     tag = os.environ.get("EXAKIT_JSON_TABLES_MIRROR_TAG") or (pinned.get("release") if same else None) or f"json-tables-{version}"
