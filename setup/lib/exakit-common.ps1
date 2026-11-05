@@ -749,13 +749,40 @@ function Write-ExakitMenuHint([string]$Text) {
 # empty selection re-asks). In fancy mode the block redraws in place so
 # toggling feels live. Non-interactive runs keep the defaults and say so.
 # Returns the selected 1-based indices, ascending.
+# Get-ExakitFuzzyScore <query> <text> - how well a typed search fits a row: the
+# query inside the text scores 1000 minus where it starts, its letters in order
+# but apart 500 minus how far apart; case and spaces do not count. $null when it
+# does not fit. Twin of _ui_fuzzy_score (common.sh) and fuzzy_score
+# (marketplace/ui.py); tests/fuzzy-search-cases.json holds all three to it.
+function Get-ExakitFuzzyScore {
+    param([string]$Query, [string]$Text)
+    $q = ($Query.ToLowerInvariant() -replace '\s', '')
+    $t = $Text.ToLowerInvariant()
+    if ($q.Length -eq 0) { return 0 }
+    $at = $t.IndexOf($q, [System.StringComparison]::Ordinal)
+    if ($at -ge 0) { return 1000 - $at }
+    $first = -1; $last = -1; $i = 0
+    foreach ($ch in $q.ToCharArray()) {
+        $i = $t.IndexOf($ch, $i)
+        if ($i -lt 0) { return $null }
+        if ($first -lt 0) { $first = $i }
+        $last = $i; $i += 1
+    }
+    return 500 - ($last - $first)
+}
+
 function Read-ExakitCheckboxMenu {
     param(
         [string]$Title, [string[]]$Options, [int[]]$Defaults = @(), [int]$ExclusiveIndex = 0,
         [int]$GroupParent = 0, [int]$GroupFirst = 0, [int]$GroupLast = 0,
         [string]$GroupMode = "any",
-        [string[]]$Groups = @()
+        [string[]]$Groups = @(),
+        [switch]$Search
     )
+    # -Search opens the menu with a search line (the persona question): every
+    # letter typed goes into it, the pointer jumps to the row it fits best, the
+    # rows it does not fit are dimmed and skipped, Backspace deletes, Esc
+    # clears. Twin of EXAKIT_CHECKBOX_SEARCH in common.sh.
     # $ExclusiveIndex (1-based, 0 = none): an option that cannot be combined
     # with the others - think "Skip". Selecting it clears every other
     # choice; selecting any other choice clears it. Enter with the cursor ON
@@ -882,13 +909,30 @@ function Read-ExakitCheckboxMenu {
     }
     $spaceVerb = "Space to toggle"
     if ($ExclusiveIndex -ge 1 -and $selectableCount -eq 2) { $spaceVerb = "Space to select" }
+    $script:cbQuery = ""
+    $fits = {
+        param($i)
+        if ($script:cbQuery.Length -eq 0) { return $true }
+        return ($null -ne (Get-ExakitFuzzyScore -Query $script:cbQuery -Text $Options[$i - 1]))
+    }
+    $point = {
+        # The pointer on the row the search fits best; the earliest wins a tie.
+        if ($script:cbQuery.Length -eq 0) { return }
+        $best = 0; $bestScore = $null
+        for ($p = 1; $p -le $Options.Count; $p++) {
+            if ((& $isHeader $p) -or (& $isDisabled $p)) { continue }
+            $sc = Get-ExakitFuzzyScore -Query $script:cbQuery -Text $Options[$p - 1]
+            if ($null -ne $sc -and ($null -eq $bestScore -or $sc -gt $bestScore)) { $best = $p; $bestScore = $sc }
+        }
+        if ($best -ge 1) { $script:cbCur = $best }
+    }
     $step = {
         param($dir)
         for ($s = 0; $s -lt $Options.Count; $s++) {
             $script:cbCur += $dir
             if ($script:cbCur -lt 1) { $script:cbCur = $Options.Count }
             if ($script:cbCur -gt $Options.Count) { $script:cbCur = 1 }
-            if (-not (& $isHeader $script:cbCur) -and -not (& $isDisabled $script:cbCur)) { return }
+            if (-not (& $isHeader $script:cbCur) -and -not (& $isDisabled $script:cbCur) -and (& $fits $script:cbCur)) { return }
         }
     }
     $script:cbCur = 0
@@ -896,15 +940,34 @@ function Read-ExakitCheckboxMenu {
     $firstDraw = $true
     # A click ticks or unticks the row under it, like Space; Enter still confirms.
     # Every option is one line, then the hint: entry i starts on line i-1.
-    $starts = @(0..$Options.Count)
+    $searchLines = 0
+    if ($Search) { $searchLines = 1 }
+    $starts = @(0..$Options.Count | ForEach-Object { $_ + $searchLines })
     if (Get-Command Enable-ExakitMenuMouse -ErrorAction SilentlyContinue) { Enable-ExakitMenuMouse }
     try {
     while ($true) {
         if (-not $firstDraw -and $script:UiFancy) {
             # redraw the block in place: options + hint line
-            Write-Host ("{0}[{1}A{0}[0J" -f $script:UiEsc, ($Options.Count + 1)) -NoNewline
+            Write-Host ("{0}[{1}A{0}[0J" -f $script:UiEsc, ($Options.Count + 1 + $searchLines)) -NoNewline
         }
         $firstDraw = $false
+        if ($Search) {
+            # The first line: what is typed, after a caret-marked prompt.
+            $none = ""
+            if ($script:cbQuery.Length -gt 0) {
+                $none = "  no persona matches"
+                for ($p = 1; $p -le $Options.Count; $p++) {
+                    if (-not (& $isHeader $p) -and -not (& $isDisabled $p) -and (& $fits $p)) { $none = ""; break }
+                }
+            }
+            if ($script:UiFancy) {
+                if ($script:cbQuery.Length -gt 0) { Write-Host ("      {0}Search:{1} {2}|{3}{4}{1}" -f $script:UiAccent, $script:UiReset, $script:cbQuery, $script:UiDim, $none) }
+                else { Write-Host ("      {0}Search:{1} |{2}type to find a persona{1}" -f $script:UiAccent, $script:UiReset, $script:UiDim) }
+            } else {
+                if ($script:cbQuery.Length -gt 0) { Write-Host ("      Search: {0}|{1}" -f $script:cbQuery, $none) }
+                else { Write-Host "      Search: |type to find a persona" }
+            }
+        }
         for ($i = 1; $i -le $Options.Count; $i++) {
             if (& $isHeader $i) {
                 Write-Host ("    {0}" -f $Options[$i - 1].Substring(1)) -ForegroundColor Cyan
@@ -916,17 +979,39 @@ function Read-ExakitCheckboxMenu {
                 continue
             }
             $ptr = if ($i -eq $script:cbCur) { ">" } else { " " }
+            # A row the search does not fit is dimmed, never hidden: what is ticked stays in sight.
+            $fade = ""; $unfade = ""
+            if ($script:UiFancy -and -not (& $fits $i)) { $fade = $script:UiDim; $unfade = $script:UiReset }
             if ($sel.Contains($i)) {
-                if ($script:UiFancy) { Write-Host ("    {0} {1}[{2}]{3} {4}" -f $ptr, $script:UiOk, $script:UiTick, $script:UiReset, $Options[$i - 1]) }
+                if ($script:UiFancy) { Write-Host ("    {0} {1}[{2}]{3} {5}{4}{6}" -f $ptr, $script:UiOk, $script:UiTick, $script:UiReset, $Options[$i - 1], $fade, $unfade) }
                 else { Write-Host ("    {0} [x] {1}" -f $ptr, $Options[$i - 1]) }
             } else {
-                Write-Host ("    {0} [ ] {1}" -f $ptr, $Options[$i - 1])
+                Write-Host ("    {0} {2}[ ] {1}{3}" -f $ptr, $Options[$i - 1], $fade, $unfade)
             }
         }
-        Write-ExakitMenuHint "Up/Down to move - $spaceVerb - Enter to confirm"
+        $hint = "Up/Down to move - $spaceVerb - Enter to confirm"
+        if ($Search) { $hint = "Type to search - $hint" }
+        Write-ExakitMenuHint $hint
         $key = Read-ExakitMenuKey
+        if ($Search) {
+            # The search line's keys, before the menu's: on it a letter is typed, not "a", "j" or "k".
+            if ($key.Name -eq 'Escape' -and $script:cbQuery.Length -gt 0) { $script:cbQuery = ""; continue }
+            if ($key.Name -eq 'Char') {
+                $code = [int][char]$key.Char
+                if ($code -eq 8 -or $code -eq 127) {
+                    if ($script:cbQuery.Length -gt 0) { $script:cbQuery = $script:cbQuery.Substring(0, $script:cbQuery.Length - 1) }
+                    & $point
+                    continue
+                }
+                if ($code -gt 32 -and -not [char]::IsControl([char]$key.Char)) {
+                    $script:cbQuery += $key.Char
+                    & $point
+                    continue
+                }
+            }
+        }
         if ($key.Name -eq 'Click') {
-            $hit = Get-ExakitMenuClickRow -Y $key.Y -Drawn ($Options.Count + 1) -Starts $starts
+            $hit = Get-ExakitMenuClickRow -Y $key.Y -Drawn ($Options.Count + 1 + $searchLines) -Starts $starts
             if ($hit -ge 1 -and -not (& $isHeader $hit) -and -not (& $isDisabled $hit)) {
                 $script:cbCur = $hit
                 $key = @{ Name = 'Space' }

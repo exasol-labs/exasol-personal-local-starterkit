@@ -1,0 +1,155 @@
+{
+ "about": "fuzzy_score (marketplace/ui.py) and its shell twins must agree on every case",
+ "cases": [
+  {
+   "query": "",
+   "text": "Data Scientist - Explore data in notebooks, ask it questions, share dashboards.",
+   "score": 0
+  },
+  {
+   "query": "",
+   "text": "ML Engineer - Train in the database, score with UDFs.",
+   "score": 0
+  },
+  {
+   "query": "",
+   "text": "General - Sample data (retail, energy, weather) and your AI clients.",
+   "score": 0
+  },
+  {
+   "query": "ml",
+   "text": "Data Scientist - Explore data in notebooks, ask it questions, share dashboards.",
+   "score": null
+  },
+  {
+   "query": "ml",
+   "text": "ML Engineer - Train in the database, score with UDFs.",
+   "score": 1000
+  },
+  {
+   "query": "ml",
+   "text": "General - Sample data (retail, energy, weather) and your AI clients.",
+   "score": 498
+  },
+  {
+   "query": "ML",
+   "text": "Data Scientist - Explore data in notebooks, ask it questions, share dashboards.",
+   "score": null
+  },
+  {
+   "query": "ML",
+   "text": "ML Engineer - Train in the database, score with UDFs.",
+   "score": 1000
+  },
+  {
+   "query": "ML",
+   "text": "General - Sample data (retail, energy, weather) and your AI clients.",
+   "score": 498
+  },
+  {
+   "query": "data sci",
+   "text": "Data Scientist - Explore data in notebooks, ask it questions, share dashboards.",
+   "score": 493
+  },
+  {
+   "query": "data sci",
+   "text": "ML Engineer - Train in the database, score with UDFs.",
+   "score": 483
+  },
+  {
+   "query": "data sci",
+   "text": "General - Sample data (retail, energy, weather) and your AI clients.",
+   "score": null
+  },
+  {
+   "query": "dsc",
+   "text": "Data Scientist - Explore data in notebooks, ask it questions, share dashboards.",
+   "score": 494
+  },
+  {
+   "query": "dsc",
+   "text": "ML Engineer - Train in the database, score with UDFs.",
+   "score": 489
+  },
+  {
+   "query": "dsc",
+   "text": "General - Sample data (retail, energy, weather) and your AI clients.",
+   "score": null
+  },
+  {
+   "query": "gen",
+   "text": "Data Scientist - Explore data in notebooks, ask it questions, share dashboards.",
+   "score": null
+  },
+  {
+   "query": "gen",
+   "text": "ML Engineer - Train in the database, score with UDFs.",
+   "score": 487
+  },
+  {
+   "query": "gen",
+   "text": "General - Sample data (retail, energy, weather) and your AI clients.",
+   "score": 1000
+  },
+  {
+   "query": "eng",
+   "text": "Data Scientist - Explore data in notebooks, ask it questions, share dashboards.",
+   "score": null
+  },
+  {
+   "query": "eng",
+   "text": "ML Engineer - Train in the database, score with UDFs.",
+   "score": 997
+  },
+  {
+   "query": "eng",
+   "text": "General - Sample data (retail, energy, weather) and your AI clients.",
+   "score": 466
+  },
+  {
+   "query": "xyz",
+   "text": "Data Scientist - Explore data in notebooks, ask it questions, share dashboards.",
+   "score": null
+  },
+  {
+   "query": "xyz",
+   "text": "ML Engineer - Train in the database, score with UDFs.",
+   "score": null
+  },
+  {
+   "query": "xyz",
+   "text": "General - Sample data (retail, energy, weather) and your AI clients.",
+   "score": null
+  },
+  {
+   "query": "train",
+   "text": "Data Scientist - Explore data in notebooks, ask it questions, share dashboards.",
+   "score": 471
+  },
+  {
+   "query": "train",
+   "text": "ML Engineer - Train in the database, score with UDFs.",
+   "score": 986
+  },
+  {
+   "query": "train",
+   "text": "General - Sample data (retail, energy, weather) and your AI clients.",
+   "score": 487
+  },
+  {
+   "query": "weath",
+   "text": "Data Scientist - Explore data in notebooks, ask it questions, share dashboards.",
+   "score": null
+  },
+  {
+   "query": "weath",
+   "text": "ML Engineer - Train in the database, score with UDFs.",
+   "score": null
+  },
+  {
+   "query": "weath",
+   "text": "General - Sample data (retail, energy, weather) and your AI clients.",
+   "score": 961
+  }
+ ]
+}

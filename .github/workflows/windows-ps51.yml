@@ -113,6 +113,10 @@ jobs:
         if: matrix.shard == 2
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/menu-mouse-ps.ps1
+      - name: the persona search under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/persona-search-ps.ps1
       - name: MCP admin SQL reaches exapump without a byte order mark under 5.1
         if: matrix.shard == 2
         shell: powershell

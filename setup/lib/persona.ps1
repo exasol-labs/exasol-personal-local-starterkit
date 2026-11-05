@@ -258,7 +258,7 @@ function Read-ExakitPersonaQuestion {
         if ($was -ccontains $parts[0]) { [void]$recorded.Add($ids.Count) }
     }
     if ($recorded.Count -gt 0) { $defaults = $recorded }
-    $picked = @(Read-ExakitCheckboxMenu -Title "Personas - tick one or more" -Options $labels.ToArray() -Defaults $defaults.ToArray())
+    $picked = @(Read-ExakitCheckboxMenu -Title "Personas - tick one or more" -Options $labels.ToArray() -Defaults $defaults.ToArray() -Search)
     $chosen = @($picked | Where-Object { $_ -ge 1 -and $_ -le $ids.Count } | ForEach-Object { $ids[$_ - 1] })
     if ($chosen.Count -eq 0) { Remove-Item Env:EXAKIT_PERSONA -ErrorAction SilentlyContinue; return }
     $env:EXAKIT_PERSONA = ($chosen -join ",")
