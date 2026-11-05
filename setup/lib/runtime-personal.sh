@@ -840,8 +840,17 @@ personal_install_launcher() {
                 _pil_source="s3"
                 ok "S3 launcher SHA-256 verified"
             else
-                warn "The launcher from Exasol's server did not match its expected checksum and was discarded; getting it from the verified GitHub release instead."
-                _exakit_log_file "WARN  S3 launcher SHA-256 expected $_pil_s3_hash, got $_pil_actual"
+                # A MISMATCH IS NOT A MISSING FILE (SEC-03). Falling back to
+                # GitHub here traded a pin that failed for a checksum file that
+                # sits beside the archive it vouches for - the weaker check, picked
+                # exactly when the stronger one said something is wrong. Nothing
+                # is installed; the person decides.
+                _exakit_log_file "ERROR S3 launcher SHA-256 expected $_pil_s3_hash, got $_pil_actual"
+                rm -f "$_tmp/exasol"
+                error "The Exasol launcher from Exasol's server does not match the checksum this kit pins for v${EXAKIT_PERSONAL_VERSION}, so it was not installed."
+                info "That is either a changed file on the server or a wrong pin: report it (exakit logs setup has both checksums)."
+                info "To install from the GitHub release instead, checked against its own checksums file: EXAKIT_PERSONAL_S3=0 $(exakit_install_command)"
+                die "Launcher checksum mismatch (Exasol S3)."
             fi
         else
             warn "Could not download the launcher from Exasol's server; getting the same version from the verified GitHub release instead."

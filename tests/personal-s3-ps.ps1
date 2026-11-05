@@ -41,6 +41,7 @@ function Get-ExakitVersionsValue {
 function Info { param($Text) }
 function Ok { param($Text) }
 function Warn2 { param($Text) }
+function Fail { param($Text) throw "FAIL: $Text" }
 function OkStep { param($Text) }
 function Write-ExakitLog { param($Kind, $Text) }
 function Set-ExakitReusedOwnership { param($Id, $OwnedPath) } # fixture launcher belongs to the kit
@@ -98,13 +99,16 @@ try {
     Check 'raw S3 executable installed' 'good-s3' (Get-Content $script:PersonalBinPath -Raw)
 
     $script:mode = 'mismatch'
-    Install-PersonalLauncher
-    Check 'S3 mismatch downloads ZIP and checksum' 2 $script:githubCalls
-    Check 'mismatched S3 EXE not installed' 'github-bin' (Get-Content $script:PersonalBinPath -Raw)
+    Set-Content -Path $script:PersonalBinPath -Value 'previous' -NoNewline
+    $failed = ""
+    try { Install-PersonalLauncher } catch { $failed = "$_" }
+    Check 'S3 mismatch stops the install (SEC-03)' $true ($failed -like "FAIL:*does not match the checksum*")
+    Check '...without falling back to GitHub' 0 $script:githubCalls
+    Check 'mismatched S3 EXE not installed' 'previous' (Get-Content $script:PersonalBinPath -Raw)
 
     $script:mode = 'fail'
     Install-PersonalLauncher
-    Check 'S3 transfer failure downloads ZIP and checksum' 4 $script:githubCalls
+    Check 'S3 transfer failure downloads ZIP and checksum' 2 $script:githubCalls
     Check 'verified fallback installed' 'github-bin' (Get-Content $script:PersonalBinPath -Raw)
 } finally {
     Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue

@@ -37,6 +37,9 @@ info() { :; }
 ok() { :; }
 warn() { :; }
 _exakit_log_file() { :; }
+error() { printf 'ERROR %s\n' "$*" >&2; }
+die() { printf 'DIE %s\n' "$*" >&2; exit 1; }
+exakit_install_command() { printf 'install-cmd\n'; }
 ui_tilde() { printf '%s\n' "$1"; }
 push_rollback() { :; }
 ensure_path_hint() { :; }
@@ -88,20 +91,25 @@ check 'S3 success avoids GitHub' 0 "$github_calls"
 check 'S3 raw binary installed' good-s3 "$(cat "$EXAKIT_PERSONAL_BIN")"
 
 mode=mismatch
-personal_install_launcher
-check 'checksum mismatch downloads GitHub archive and checksums' 2 "$github_calls"
-check 'unverified S3 binary never installed' github-bin "$(cat "$EXAKIT_PERSONAL_BIN")"
+printf 'previous\n' > "$EXAKIT_PERSONAL_BIN"
+_mm_rc=0
+_mm_out="$( (info() { printf 'INFO %s\n' "$*"; }; personal_install_launcher) 2>&1 )" || _mm_rc=$?
+check 'checksum mismatch stops the install (SEC-03)' 1 "$_mm_rc"
+check '...without falling back to GitHub' 0 "$github_calls"
+check 'unverified S3 binary never installed' previous "$(cat "$EXAKIT_PERSONAL_BIN")"
+case "$_mm_out" in *EXAKIT_PERSONAL_S3=0*) _mm_says=yes ;; *) _mm_says=no ;; esac
+check '...naming the explicit GitHub route' yes "$_mm_says"
 
 mode=fail
 personal_install_launcher
-check 'S3 transfer failure falls back' 4 "$github_calls"
+check 'S3 transfer failure falls back' 2 "$github_calls"
 check 'GitHub binary installed after S3 failure' github-bin "$(cat "$EXAKIT_PERSONAL_BIN")"
 
 EXAKIT_PERSONAL_VERSION=2.4.0
 before="$s3_calls"
 personal_install_launcher
 check 'different target version skips stale S3 pin' "$before" "$s3_calls"
-check 'different target version still uses GitHub' 6 "$github_calls"
+check 'different target version still uses GitHub' 4 "$github_calls"
 
 # The opt-out: a network that blocks the bucket, or a user who wants the
 # release path, sets EXAKIT_PERSONAL_S3=0 and S3 is never asked, for any
@@ -113,7 +121,7 @@ before="$s3_calls"
 EXAKIT_PERSONAL_S3=0 personal_install_launcher
 check 'EXAKIT_PERSONAL_S3=0 never touches S3' "$before" "$s3_calls"
 check '...and installs the verified GitHub binary' github-bin "$(cat "$EXAKIT_PERSONAL_BIN")"
-check '...after the archive and its checksums' 8 "$github_calls"
+check '...after the archive and its checksums' 6 "$github_calls"
 
 # The real fetch_soft, not the stub above: a miss must come back as a return
 # code with no failure note, or every S3 miss that fell back to GitHub would

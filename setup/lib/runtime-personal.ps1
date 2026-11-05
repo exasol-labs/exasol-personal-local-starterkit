@@ -573,18 +573,24 @@ function Install-PersonalLauncher {
         } elseif ($source) {
             Info "Downloading Exasol launcher v$version from Exasol S3"
             if (Get-ExakitFile -Url $source.Url -Dest $binaryPath -Soft) {
+                $actual = $null
                 try {
                     $actual = Get-ExakitSha256 -Path $binaryPath
-                    if ($actual -eq $source.Sha256) {
-                        $verifiedS3 = $true
-                        Ok "S3 launcher SHA-256 verified"
-                    } else {
-                        Warn2 "The launcher from Exasol's server did not match its expected checksum and was discarded; getting it from the verified GitHub release instead."
-                        Write-ExakitLog "WARN" "S3 launcher SHA-256 expected $($source.Sha256), got $actual"
-                    }
                 } catch {
                     Warn2 "Could not check the launcher from Exasol's server, so it was discarded; getting it from the verified GitHub release instead."
                     Write-ExakitLog "WARN" "S3 launcher hashing failed: $_"
+                }
+                if ($actual -and $actual -eq $source.Sha256) {
+                    $verifiedS3 = $true
+                    Ok "S3 launcher SHA-256 verified"
+                } elseif ($actual) {
+                    # A mismatch is not a missing file (SEC-03): nothing is
+                    # installed and the person decides. Twin of personal_install_launcher.
+                    Write-ExakitLog "ERROR" "S3 launcher SHA-256 expected $($source.Sha256), got $actual"
+                    Remove-Item -Force $binaryPath -ErrorAction SilentlyContinue
+                    Info "That is either a changed file on the server or a wrong pin: report it (exakit logs setup has both checksums)."
+                    Info "To install from the GitHub release instead, checked against its own checksums file: `$env:EXAKIT_PERSONAL_S3 = '0' and re-run the installer."
+                    Fail "The Exasol launcher from Exasol's server does not match the checksum this kit pins for v$version, so it was not installed."
                 }
             } else {
                 Warn2 "Could not download the launcher from Exasol's server; getting the same version from the verified GitHub release instead."
