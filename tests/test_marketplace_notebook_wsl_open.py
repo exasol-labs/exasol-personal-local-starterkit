@@ -43,3 +43,23 @@ class WslOpenTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SnapBrowserTest(unittest.TestCase):
+    """LNX-05: a snap-packaged default browser cannot read ~/.exasol-starter-kit; its own ~/snap/<name>/common it can."""
+
+    def test_a_snap_firefox_gets_its_own_folder(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as home:
+            (Path(home) / "snap" / "firefox" / "common").mkdir(parents=True)
+            answer = subprocess.CompletedProcess([], 0, stdout="firefox_firefox.desktop\n", stderr="")
+            with patch("sys.platform", "linux"), patch("shutil.which", return_value="/usr/bin/xdg-settings"), \
+                    patch("subprocess.run", return_value=answer), patch("pathlib.Path.home", return_value=Path(home)):
+                self.assertEqual(notebook_cli._snap_browser_folder(), Path(home) / "snap" / "firefox" / "common")
+
+    def test_a_deb_browser_keeps_the_kit_folder(self) -> None:
+        answer = subprocess.CompletedProcess([], 0, stdout="firefox.desktop\n", stderr="")
+        with patch("sys.platform", "linux"), patch("shutil.which", return_value="/usr/bin/xdg-settings"), \
+                patch("subprocess.run", return_value=answer):
+            self.assertIsNone(notebook_cli._snap_browser_folder())

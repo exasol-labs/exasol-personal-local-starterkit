@@ -184,7 +184,11 @@ class OnDemandServer:
                     pass
         self.pidfile.unlink(missing_ok=True)
         _, home, _ = notebook.paths(self.ctx)
-        (home / ("open-jupyter.html" if self.front == "jupyterlab" else "open-marimo.html")).unlink(missing_ok=True)
+        login = "open-jupyter.html" if self.front == "jupyterlab" else "open-marimo.html"
+        (home / login).unlink(missing_ok=True)
+        snap = _snap_browser_folder()          # the copy a snap browser was handed holds the same token
+        if snap is not None:
+            (snap / ("exakit-" + login)).unlink(missing_ok=True)
 
 
 def _open_in_windows(target: Path) -> bool:
@@ -208,10 +212,32 @@ def _open_in_windows(target: Path) -> bool:
         return False
 
 
+def _snap_browser_folder() -> Path | None:
+    """The folder a snap-packaged default browser can read, or None. Ubuntu's Firefox and Chromium are snaps, and a
+    snap cannot open anything under a hidden folder in the home directory, ~/.exasol-starter-kit included (LNX-05);
+    its own ~/snap/<name>/common it can."""
+    if not sys.platform.startswith("linux"):
+        return None
+    xdg = shutil.which("xdg-settings")
+    if not xdg:
+        return None
+    try:
+        default = subprocess.run([xdg, "get", "default-web-browser"], capture_output=True, text=True,
+                                 timeout=10, check=False).stdout.strip()
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    name = default.split("_", 1)[0] if "_" in default else ""
+    folder = Path.home() / "snap" / name / "common"
+    return folder if name and folder.is_dir() else None
+
+
 def _open_logged_in(ctx: KitContext, front: str, url: str) -> None:
     _, home, _ = notebook.paths(ctx)
     home.mkdir(parents=True, exist_ok=True)
     target = home / ("open-jupyter.html" if front == "jupyterlab" else "open-marimo.html")
+    snap = _snap_browser_folder()
+    if snap is not None:
+        target = snap / ("exakit-" + target.name)
     # The browser receives a file path. The token stays in a 0600 local file,
     # not in a shell command or visible CLI argument.
     write_private(target, "<!doctype html><meta http-equiv=refresh content=\"0;url=" + url.replace('"', "%22") + "\">\n")
