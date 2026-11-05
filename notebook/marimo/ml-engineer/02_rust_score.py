@@ -16,7 +16,7 @@ def _(mo):
     mo.md(r"""
     # Rust scorer
 
-    **Dataset:** Esophageal, Banking or your own approved descriptor and handoff. **How long:** about fifteen minutes for a first build.
+    **Dataset:** `amazon_sales`, `walmart_sales` or your own approved descriptor and handoff. **How long:** about fifteen minutes for a first build.
 
     Builds a Rust UDF from the trained coefficients and checks it scores exactly like Python.
 
@@ -27,7 +27,7 @@ def _(mo):
 
 @app.cell
 def _():
-    DATASET = None  # None: the dataset approved last in a quickstart (else esophageal_posts); or banking_complaints, or your own approved descriptor
+    DATASET = None  # None: the dataset approved last in a quickstart (else amazon_sales); or "walmart_sales", or your own approved descriptor
     COEFFICIENTS_FILE = None  # or a local coefficients.json exported from 01_train's MLflow run
     UDF_NAME = None  # choose a new plain lowercase name for a new coefficient revision
     UDF_SCHEMA = "EXAKIT_SCORING"
@@ -175,6 +175,10 @@ def _(
 def _(mo):
     mo.md(r"""
     ## Check parity
+
+    > **Why check parity?** The Rust scorer is a second, faster copy of the same model.
+    > A copy is only safe to use if it gives the same answer as the original on every row.
+    > So both score the same held-out rows, and any difference stops the notebook.
 
     Scores up to `TEST_ROWS` test rows in Rust and Python. Every label must match and the largest probability gap must be below `1e-9`.
     """)

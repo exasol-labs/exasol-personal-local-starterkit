@@ -9,7 +9,7 @@
 # %% [markdown]
 # # ML Engineer quickstart
 #
-# **Dataset:** `esophageal_posts` by default; Banking or your own file also work. **How long:** about five minutes once runtimes are installed.
+# **Dataset:** `amazon_sales` by default; `walmart_sales` or your own file also work. **How long:** about five minutes once runtimes are installed.
 #
 # Checks the database Python runtime, MLflow and the shared model directory, then loads and describes the data.
 #
@@ -29,6 +29,10 @@ print(f"Every step below is logged under it: exakit workflow show {wid}")
 
 # %% [markdown]
 # ## Pick the database Python runtime
+#
+# > **What is a UDF?** A user-defined function: a small program, here in Python, that runs inside the database, next to the data.
+# > Training as a UDF means the rows are not copied out of the database into the notebook first.
+# > The runtime (container) picked below is the set of Python packages that program can use.
 #
 # Training runs as a UDF inside Exasol, with its own packages.
 #
@@ -53,6 +57,10 @@ container_ok = nb.check_container(conn, alias=CONTAINER)
 # %% [markdown]
 # ## Check MLflow
 #
+# > **What is MLflow tracking?** A logbook for model training: every run's settings, scores and model file.
+# > With it you can compare two runs side by side and find the exact model a result came from.
+# > By default the runs are kept on this computer, in the kit's own MLflow.
+#
 # Shows where runs are recorded. Browser UI: `exakit mlflow start`, then `exakit mlflow url`. `MLFLOW_TRACKING_URI` overrides.
 
 # %%
@@ -73,7 +81,7 @@ bucket_ok = nb.check_bucket(conn)
 # %% [markdown]
 # ## Check the label
 #
-# How many rows per group and the % where the label is 1. Label 1 means the outcome happened (a negative post, monetary relief), not that it is good. A note under the result says what the numbers mean.
+# How many rows per group and the % where the label is 1. Label 1 means the outcome happened (`CANCELLED`: the order line was cancelled; `ABOVE_STORE_MEDIAN`: the store sold more that week than in its median week), not that it is good. A note under the result says what the numbers mean.
 
 # %%
 skipped = {m["role"]: m["reason"] for m in ds.missing}
@@ -82,8 +90,8 @@ for role, instead in (("category", "rows are counted per entity instead"),
     if role in skipped:
         print(f"No {role} role ({skipped[role]}): {instead}; the steps that need it later say so.")
 BY = ds.col("category") if ds.has("category") else ds.col("entity")
-GROUP, COUNT = nb.name(BY), nb.count_name(ds)       # columns named after the data: SOCIAL_NETWORK, POSTS
-PCT = nb.name(ds.col("label"), "PCT") if ds.has("label") else None   # IS_NEGATIVE_PCT
+GROUP, COUNT = nb.name(BY), nb.count_name(ds)       # columns named after the data: CATEGORY, ORDER_LINES
+PCT = nb.name(ds.col("label"), "PCT") if ds.has("label") else None   # CANCELLED_PCT
 RATE = f",\n       ROUND(100 * AVG({ds.col('label')}), 1) AS {PCT}" if PCT else ""
 first_rows = nb.sql(conn, f"""
 SELECT {BY} AS {GROUP},

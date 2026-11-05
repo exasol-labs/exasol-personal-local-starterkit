@@ -37,37 +37,32 @@ again (`--offline` skips the load; `--keep` leaves it; `--replace` reloads a sch
 is already there). The kit offers every folder that has a `dataset.conf`. A reference
 dataset is checked for more - see [Reference datasets](#reference-datasets) below.
 
-The kit offers nine datasets:
+The kit offers five datasets:
 
 | Dataset | Schema | Contents |
 |---|---|---|
 | [`datasets/tpch/`](datasets/tpch/) | `TPCH` | TPC-H retail benchmark (below) — the original sample |
 | [`datasets/energy/`](datasets/energy/) | `ENERGY` | 50 smart meters + 108,000 hourly readings (SQL-generated time series) |
 | [`datasets/weather/`](datasets/weather/) | `WEATHER` | 10 European cities, ~11k days of daily weather (2023–2025) |
-| [`datasets/esophageal_posts/`](datasets/esophageal_posts/) | `ESOPHAGEAL` | 40,987 de-identified public posts about esophageal cancer (2018-2022; web, Twitter, print, TV) with their text and a label (negative sentiment); 28 MB of CSV, an 8.1 MB download ([README](datasets/esophageal_posts/README.md)) |
-| [`datasets/banking_complaints/`](datasets/banking_complaints/) | `BANKING` | 214,742 CFPB consumer complaints about cards, mortgages and accounts (October 2025-September 2026), with a label (monetary relief) and the company responses apart; 58 MB of CSV, a 4.4 MB download ([README](datasets/banking_complaints/README.md)) |
-| [`datasets/bank_marketing/`](datasets/bank_marketing/) | `BANKMKT` | 45,211 clients of a bank's term-deposit campaigns (UCI, CC BY 4.0) with a label (subscribed); 3.6 MB of CSV, a 0.6 MB download ([README](datasets/bank_marketing/README.md)) |
-| [`datasets/ade_corpus/`](datasets/ade_corpus/) | `ADE` | 20,960 PubMed sentences labelled for an adverse drug effect, with the drug-effect and drug-dose pairs they name (ADE-Corpus-V2); 3.3 MB of CSV, a 1.2 MB download ([README](datasets/ade_corpus/README.md)) |
-| [`datasets/pubmed_abstracts/`](datasets/pubmed_abstracts/) | `PUBMED` | 1,409 PubMed abstracts of clinical studies, for medical text extraction; 2.3 MB of CSV, a 0.7 MB download ([README](datasets/pubmed_abstracts/README.md)) |
-| [`datasets/medication_sigs/`](datasets/medication_sigs/) | `MEDSIGS` | 50 prescription directions ("1 cap(s) po tid,x7 day(s)") to read the dose, route and timing from ([README](datasets/medication_sigs/README.md)) |
+| [`datasets/walmart_sales/`](datasets/walmart_sales/) | `WALMART` | 6,435 weeks of sales from 45 Walmart stores (February 2010-October 2012) with holiday weeks, temperature, fuel price, CPI and unemployment, and a label (the week beat the store's median week); 0.4 MB of CSV, a 0.1 MB download ([README](datasets/walmart_sales/README.md)) |
+| [`datasets/amazon_sales/`](datasets/amazon_sales/) | `AMAZON` | 128,975 order lines of one fashion seller on Amazon.in (March 31-June 29 2022): status, fulfilment, product, size, amount and where it shipped, with a label (cancelled, 14.2%); 22 MB of CSV, a 4.5 MB download ([README](datasets/amazon_sales/README.md)) |
 
-The first three are the kit's own samples: they ship inside the kit and are what the
-General persona loads (`default=yes` in their `dataset.conf`). The other six are what
-the Data Scientist and ML Engineer personas load, each downloaded only when it is picked.
-Four of them are *reference datasets*: data with a
+The first three are the kit's own samples: they ship inside the kit, load with no
+internet and are what the General persona loads (`default=yes` in their `dataset.conf`).
+The other two are what the Data Scientist and ML Engineer personas load, each downloaded
+from the kit's `datasets` release only when it is picked. Both are *reference datasets*:
+data with a
 `README.md` (source, terms, data dictionary), a `manifest.json` (source, terms, snapshot
 date, rows and SHA-256 of every CSV, and the release asset they ship as) and a descriptor;
 the builders that make them again live in [`tools/datasets/`](../tools/datasets/).
-`pubmed_abstracts` and `medication_sigs` are text to read and extract from, with no label
-to predict: they have the README and the manifest but no descriptor - describe them like a
-table of your own (`exakit describe`).
+Neither has a free-text column, so the notebook steps that need text skip on them and say why.
 Every table and column has a `COMMENT` in its `01_create_schema.sql`, so the database itself
 describes the data; the narrative and the join map for every dataset are in
 [data-dictionary.md](data-dictionary.md).
 
 ## Reference datasets
 
-`esophageal_posts`, `banking_complaints`, `bank_marketing` and `ade_corpus` are *reference datasets*. Each
+`walmart_sales` and `amazon_sales` are *reference datasets*. Each
 folder holds:
 
 | File | What it is | Checked by `tools/dataset_check.py` |
@@ -85,8 +80,8 @@ it; each must return rows.
 The notebooks and the training template never name a dataset's tables or columns. They
 read a YAML descriptor that gives **every column of the table one role** - with how sure the
 kit is and the numbers that decided it - and names, in its **slots**, the columns the
-notebooks need. The same notebook therefore runs on Esophageal, on Banking, on Bank
-marketing, on a table you loaded yourself or on a table in a virtual schema.
+notebooks need. The same notebook therefore runs on Walmart, on Amazon, on a table you
+loaded yourself or on a table in a virtual schema.
 
 ```yaml
 descriptor: 1                     # format version
@@ -119,11 +114,9 @@ columns:
   "BODY": {role: "text", confidence: "high", evidence: "avg 214 chars, 97.5% distinct"}
 ```
 
-The four reference datasets ship theirs in the same shape:
-[`esophageal_posts`](datasets/esophageal_posts/descriptor.yaml),
-[`banking_complaints`](datasets/banking_complaints/descriptor.yaml),
-[`bank_marketing`](datasets/bank_marketing/descriptor.yaml) and
-[`ade_corpus`](datasets/ade_corpus/descriptor.yaml).
+The two reference datasets ship theirs in the same shape:
+[`walmart_sales`](datasets/walmart_sales/descriptor.yaml) and
+[`amazon_sales`](datasets/amazon_sales/descriptor.yaml).
 
 **The roles.** Eight, and no more: `key`, `time`, `measure`, `category`, `flag`, `text`,
 `identifier` and `other`. Sensitivity is decided first and kept whatever the role: a string
@@ -205,11 +198,11 @@ recorded in the dataset's `manifest.json`:
 
 ```json
 "asset": {
-  "file": "esophageal_posts-2026-10-20.tar.gz",
-  "sha256": "<SHA-256 of the archive>",
-  "size": 3904755,
-  "tar_sha256": "<SHA-256 of the uncompressed tar: it depends on the CSVs alone>",
-  "url": "https://github.com/{repo}/releases/download/datasets/esophageal_posts-2026-10-20.tar.gz"
+  "file": "amazon_sales-2026-11-05.tar.gz",
+  "sha256": "b7ed9c1034ef023c0fb61bf2d0ebc29c4ce06e82b52963de72fe565a6a3ce80e",
+  "size": 4535714,
+  "tar_sha256": "f5614184ab9e61d68c6561e8d937b132f21ec62ac1c5c7f3583e5a37c5ba75b3",
+  "url": "https://github.com/{repo}/releases/download/datasets/amazon_sales-2026-11-05.tar.gz"
 }
 ```
 
@@ -232,7 +225,7 @@ recorded in the dataset's `manifest.json`:
    must be a plain `data/<name>.csv` the manifest lists - no links, no absolute paths, no
    `..`; and every CSV must match its own digest. Only then is it cached and loaded.
 
-The menu names the download (`Esophageal cancer posts - 8.1 MB download`) while one is
+The menu names the download (`Amazon sales - 4.5 MB download`) while one is
 needed. Offline with nothing cached, the load stops with the URL it tried and the
 `EXAKIT_DATASETS_MIRROR` way out; the other datasets still load. Datasets without an asset
 block (`tpch`, `energy`, `weather`) load from the kit copy, as always.
@@ -286,7 +279,7 @@ part ───────────────< lineitem
 ## Column reference
 
 See **[data-dictionary.md](data-dictionary.md)** for the full per-column reference —
-name, type, description, keys, and allowed values for every table of all nine datasets.
+name, type, description, keys, and allowed values for every table of all five datasets.
 
 ## Regenerating at a different size (optional)
 

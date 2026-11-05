@@ -47,14 +47,16 @@ def main(argv=None):
     thread = threading.Thread(target=server.serve_forever,daemon=True);thread.start()
     try:
         workflow = nb.workflow("acceptance-flow")
-        draft = nb.describe("ESOPHAGEAL.ESOPHAGEAL_POSTS", conn=conn, id="acceptance-flow")
-        draft.slot(target="IS_NEGATIVE")
+        draft = nb.describe("AMAZON.ORDER_LINES", conn=conn, id="acceptance-flow")
+        draft.slot(target="CANCELLED")
         first = draft.approve(owner="acceptance-tests", comments=False, conn=conn)
-        assert first.version == 1 and first.text_cols() == ["MESSAGE"]
-        draft.set(TITLE="text")                                          # a correction: the next version
+        assert first.version == 1 and first.text_cols() == []           # amazon_sales has no text column
+        # A correction, the next version: the smoke needs text to send to the stub model, so SHIP_CITY plays it.
+        draft.set(SHIP_CITY="text").slot(text="SHIP_CITY")
         ds = draft.approve(owner="acceptance-tests", comments=False, conn=conn)
-        stored = sorted((home / "descriptors" / "ESOPHAGEAL.ESOPHAGEAL_POSTS").glob("v[0-9]*.yaml"))
+        stored = sorted((home / "descriptors" / "AMAZON.ORDER_LINES").glob("v[0-9]*.yaml"))
         assert ds.version == 2 and [p.name for p in stored] == ["v1.yaml", "v2.yaml"]
+        assert ds.text_cols() == ["SHIP_CITY"]
         sql = f"SELECT {ds.col('category')} AS CATEGORY, COUNT(*) AS N FROM {ds.fact_table} GROUP BY 1 ORDER BY 1"
         frame = nb.sql(conn,sql);nb.show_sql()
         assert len(frame)>0

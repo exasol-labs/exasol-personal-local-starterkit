@@ -228,8 +228,9 @@ class HeadlessRuleTest(unittest.TestCase):
 
     def test_approved_roles_reads_the_store_then_the_shipped_descriptor(self):
         with mock.patch.dict(os.environ, {"EXAKIT_NB_DATASETS": str(ROOT / "data" / "datasets")}):
-            roles, version = role_picker.approved_roles("esophageal_posts")
-            self.assertEqual((roles["entity"], roles["label"], version), ("SOURCE_DOMAIN", "IS_NEGATIVE", 1))
+            roles, version = role_picker.approved_roles("amazon_sales")
+            self.assertEqual((roles["entity"], roles["label"], version), ("SHIP_STATE", "CANCELLED", 1))
+            self.assertNotIn("text", roles, "amazon_sales has no text column")
             self.assertEqual(role_picker.approved_roles("no_such_set"), (None, None))
 
 
@@ -361,10 +362,10 @@ class OpenByNameTest(unittest.TestCase):
     beside it is loaded into MY_DATA.<STEM>, profiled and its draft saved beside it."""
 
     def test_an_approved_dataset_is_settled_with_nothing_to_review(self):
-        ds = types.SimpleNamespace(id="esophageal_posts", fact_table="ESOPHAGEAL.ESOPHAGEAL_POSTS", status="approved", version=1)
+        ds = types.SimpleNamespace(id="amazon_sales", fact_table="AMAZON.ORDER_LINES", status="approved", version=1)
         with mock.patch.object(role_picker, "dataset", return_value=ds), mock.patch.object(role_picker, "describe") as profiled, \
                 redirect_stdout(io.StringIO()) as out:
-            review = review_roles(object(), "esophageal_posts")
+            review = review_roles(object(), "amazon_sales")
         profiled.assert_not_called()
         self.assertIn("v1 is approved: nothing to review", out.getvalue())
         self.assertIs(review.dataset(), ds)

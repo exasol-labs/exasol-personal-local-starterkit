@@ -34,7 +34,7 @@ LIVE_SCRIPT = ROOT / "tests" / "integration" / "reference_datasets_live.py"
 
 def reference_ids() -> list[str]:
     """The reference datasets: those that ship a descriptor (tools/dataset_check.py's definition). A dataset with only
-    a manifest - text with no label, such as pubmed_abstracts - downloads the same way but is not one."""
+    a manifest and no descriptor would download the same way but is not one."""
     return sorted(p.parent.name for p in DATASETS.glob("*/descriptor.yaml"))
 
 
@@ -90,7 +90,8 @@ class WorkflowDatasetsTest(unittest.TestCase):
         cls.docs = {p.name: load_yaml(p) for p in sorted(WORKFLOWS.glob("*.yml"))}
 
     def test_the_reference_datasets_are_found(self) -> None:
-        self.assertGreaterEqual(len(self.ids), 3, self.ids)
+        self.assertGreaterEqual(len(self.ids), 2, self.ids)
+        self.assertLessEqual({"walmart_sales", "amazon_sales"}, set(self.ids), self.ids)
         for dataset in self.ids:
             for name in ("dataset.conf", "descriptor.yaml", "03_verify_setup.sql"):
                 self.assertTrue((DATASETS / dataset / name).is_file(), f"{dataset} has no {name}")
@@ -139,7 +140,7 @@ class WorkflowDatasetsTest(unittest.TestCase):
                 self.assertTrue((ROOT / path).exists(), f"push.paths names {path}, which is not in the tree")
 
     def test_the_personas_load_the_reference_datasets(self) -> None:
-        """Every reference dataset, and beside them only datasets the kit has (the text sets with no label)."""
+        """Every reference dataset, and beside them only datasets the kit has (a folder with a dataset.conf)."""
         for persona in ("data-scientist", "ml-engineer"):
             doc = json.loads((ROOT / "personas" / f"{persona}.json").read_text(encoding="utf-8"))
             self.assertLessEqual(set(self.ids), set(doc["datasets"]), f"{persona}.json")
@@ -170,14 +171,15 @@ class WorkflowDatasetsTest(unittest.TestCase):
                 self.assertEqual(live.cmd_datasets(self.ids), 3)                 # ... a failure where CI insists
 
     def test_the_live_draft_check_passes_the_shipped_draft_and_names_a_changed_type(self) -> None:
-        """check_draft against `exakit describe --json` stood in by the offline draft of Banking (the very code the
-        service runs, on the CSV): no failure; then one live type changed - the digest check fails and names it."""
+        """check_draft against `exakit describe --json` stood in by the offline draft of Walmart weekly sales (the very
+        code the service runs, on the CSV): no failure; then one live type changed - the digest check fails and names
+        it."""
         live = self._live()
         sys.path.insert(0, str(ROOT / "tools"))
         import descriptor_draft
         from descriptor import draft, profile
         import csv
-        dataset = "banking_complaints"
+        dataset = "walmart_sales"
         folder = DATASETS / dataset
         schema, found = descriptor_draft.tables((folder / "01_create_schema.sql").read_text(encoding="utf-8"))
         shipped = live.read_yaml(folder / "descriptor.yaml")
@@ -210,7 +212,7 @@ class WorkflowDatasetsTest(unittest.TestCase):
                 live.check_draft(checks, dataset, shipped)
             self.assertEqual(checks.failed, 1, out.getvalue())
             self.assertIn("schema_digest", out.getvalue())
-            self.assertIn("DATE_RECEIVED: declared DATE, EXA_ALL_COLUMNS TIMESTAMP(3)", out.getvalue())
+            self.assertIn("WEEK_DATE: declared DATE, EXA_ALL_COLUMNS TIMESTAMP(3)", out.getvalue())
 
     def _live(self):
         sys.path.insert(0, str(LIVE_SCRIPT.parent))

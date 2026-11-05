@@ -6,7 +6,7 @@
   "picker": true,
   "visible": true,
   "order": 10,
-  "datasets": ["esophageal_posts", "banking_complaints", "bank_marketing", "ade_corpus", "pubmed_abstracts", "medication_sigs"],
+  "datasets": ["walmart_sales", "amazon_sales"],
   "mcp_clients": "all",
   "addons": ["dash-server", "notebook"]
 }

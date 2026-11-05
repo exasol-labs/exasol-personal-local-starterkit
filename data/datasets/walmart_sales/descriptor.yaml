@@ -1,0 +1,33 @@
+descriptor: 1
+dataset: "walmart_sales"
+source:
+  kind: "local"
+  object: "WALMART.WEEKLY_SALES"
+  schema_digest: "sha256:6fffa9bcd84abc3d7f088b4977c765a29828040a8dd824557c33c4c4d9541688"
+  profiled_rows: 6435
+version: 1
+status: "approved"
+owner: "kit"
+approved_at: "2026-11-05T00:00:00Z"
+grain: "one row per store and week"
+slots:
+  key: "SALES_ID"
+  time: "WEEK_DATE"
+  text: null
+  target: "ABOVE_STORE_MEDIAN"
+  category: "STORE"
+  entity: null
+slot_evidence:
+  text: "no text column"
+  entity: "no short string column with more than 20 values"
+columns:
+  "SALES_ID": {role: "key", confidence: "high", evidence: "6,435 distinct, no nulls"}
+  "STORE": {role: "category", confidence: "low", evidence: "45 distinct"}
+  "WEEK_DATE": {role: "time", confidence: "high", evidence: "DATE, 2010-02-05 to 2012-10-26"}
+  "WEEKLY_SALES": {role: "measure", confidence: "high", evidence: "DECIMAL(12,2), 209986.25 to 3818686.45"}
+  "HOLIDAY_WEEK": {role: "flag", confidence: "high", evidence: "0 93%, 1 7%"}
+  "TEMPERATURE_F": {role: "measure", confidence: "high", evidence: "DECIMAL(5,2), -2.06 to 100.14"}
+  "FUEL_PRICE": {role: "measure", confidence: "high", evidence: "DECIMAL(5,3), 2.472 to 4.468"}
+  "CPI": {role: "measure", confidence: "high", evidence: "DECIMAL(12,7), 126.064 to 227.232806"}
+  "UNEMPLOYMENT": {role: "measure", confidence: "high", evidence: "DECIMAL(6,3), 3.879 to 14.313"}
+  "ABOVE_STORE_MEDIAN": {role: "flag", confidence: "high", evidence: "0 50.3%, 1 49.7%"}

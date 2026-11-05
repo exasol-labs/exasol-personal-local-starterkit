@@ -9,19 +9,22 @@
 # %% [markdown]
 # # Explore
 #
-# **Dataset:** `esophageal_posts` by default; change `DATASET` for `banking_complaints` or your own file. **How long:** about two minutes.
+# **Dataset:** `amazon_sales` by default; change `DATASET` for `walmart_sales` or your own file. **How long:** about two minutes.
 #
-# Compare groups, follow outcomes over time, fit a small local model, and see what the texts are about.
+# Compare groups and follow outcomes over time. With a text column, also fit a small local model and see what the texts are about: `amazon_sales` and `walmart_sales` have no text column, so those steps skip and say why.
 #
-# Optional: `USE_AI_THEMES = True` lets your model say what the label-1 texts are about, traced to Langfuse when it is set up.
+# Optional, for data with a text column: `USE_AI_THEMES = True` lets your model say what the label-1 texts are about, traced to Langfuse when it is set up.
 
 # %%
-DATASET = None   # None: the dataset approved last in a quickstart (else esophageal_posts); or "banking_complaints", or your own file ("~/my-data/transactions.csv", roles beside it)
-USE_AI_THEMES = False  # True: your model sorts the texts into themes (needs EXAKIT_MODEL_ID; see the AI step below)
+DATASET = None   # None: the dataset approved last in a quickstart (else amazon_sales); or "walmart_sales", or your own file ("~/my-data/transactions.csv", roles beside it)
+USE_AI_THEMES = False  # True: your model sorts the texts into themes (needs a text column and EXAKIT_MODEL_ID; see the AI step below)
 WORKFLOW_ID = None  # paste the quickstart's wf-... id to continue its log
 
 # %% [markdown]
 # ## Load the column map
+#
+# > **The column map (descriptor), again:** it says which column is the key, the time, the groups and the outcome (label).
+# > Every query below is built from it, so the same notebook runs on any dataset whose map you approved.
 #
 # `DATASET` is a sample ID or a file path with its descriptor beside it. A draft map is enough here.
 #
@@ -55,7 +58,7 @@ for role in ("entity", "category", "date", "label", "text"):
 
 # %%
 landscape = pivot = None
-# Result columns are named after the data (SOURCE_DOMAIN, POSTS, IS_NEGATIVE_PCT); a note under each result says
+# Result columns are named after the data (SHIP_STATE, ORDER_LINES, CANCELLED_PCT); a note under each result says
 # what its numbers mean.
 COUNT = nb.count_name(ds)
 E = nb.name(ENTITY) if ENTITY else None
@@ -119,7 +122,11 @@ over_time
 # %% [markdown]
 # ## Small baseline model
 #
-# A small model learns to tell label 1 from label 0 using the text and the category, on up to 20,000 recent rows, and is checked on a quarter it has not seen. The note says how good it is in plain words.
+# > **What is a baseline model?** The simplest model worth trying, to see how much the data can tell at all.
+# > It learns from most rows and is graded on rows it never saw, like a test with new questions.
+# > If it is barely better than guessing, a bigger model is unlikely to rescue the idea.
+#
+# Needs a text column: on `amazon_sales` and `walmart_sales` it skips and says why. A small model learns to tell label 1 from label 0 using the text and the category, on up to 20,000 recent rows, and is checked on a quarter it has not seen. The note says how good it is in plain words.
 #
 # Technical: TF-IDF text + one-hot category, logistic regression; the score is ROC AUC (0.5 = guessing).
 
@@ -166,7 +173,7 @@ LIMIT {SAMPLE}""")
 # %% [markdown]
 # ## Model clues
 #
-# The words the model leans on most, each way. They are clues, not proof: drop a word that is boilerplate (it appears in every text) or a leak (it gives the answer away, like the label's own name).
+# Runs only when the model above ran (data with a text column). The words the model leans on most, each way. They are clues, not proof: drop a word that is boilerplate (it appears in every text) or a leak (it gives the answer away, like the label's own name).
 
 # %%
 import numpy as np
@@ -181,7 +188,7 @@ if model is not None:
 # %% [markdown]
 # ## Optional: what the label-1 texts are about
 #
-# Your model reads the newest texts on each side of the label (`IS_NEGATIVE = 1` and `= 0`) and sorts each side into a few themes. A theme found on one side only is the clue. The note under the result says how to read it.
+# Needs a text column: on `amazon_sales` and `walmart_sales` it skips and says why. Your model reads the newest texts on each side of the label (label `= 1` and `= 0`) and sorts each side into a few themes. A theme found on one side only is the clue. The note under the result says how to read it.
 #
 # To switch it on: set `EXAKIT_MODEL_ID`, `EXAKIT_PROVIDER_BASE_URL` and `EXAKIT_PROVIDER_API_KEY` before `exakit notebook`, then `USE_AI_THEMES = True` in the first cell. Two model calls, a few cents. A live source asks before anything is sent.
 #

@@ -16,7 +16,7 @@ def _(mo):
     mo.md(r"""
     # Share a dashboard
 
-    **Dataset:** Esophageal, Banking or your own approved descriptor. **How long:** about five minutes once Dash Server is ready.
+    **Dataset:** `amazon_sales`, `walmart_sales` or your own approved descriptor. **How long:** about five minutes once Dash Server is ready.
 
     Builds a dashboard on Dash Server, previews it and publishes only after you check the figures. No LLM needed.
 
@@ -29,7 +29,7 @@ def _(mo):
 def _():
     import exakit.nb as nb
 
-    DATASET = None  # None: the dataset approved last in a quickstart (else esophageal_posts); or banking_complaints or an approved descriptor of your own
+    DATASET = None  # None: the dataset approved last in a quickstart (else amazon_sales); or "walmart_sales", or an approved descriptor of your own
     TITLE = "Category overview"
     APP_NAME = None  # or a name of your own; the default includes the approved dataset ID
     WORKFLOW_ID = None  # paste the quickstart's wf-... id to continue its log
@@ -58,6 +58,10 @@ def _():
 def _(mo):
     mo.md(r"""
     ## Preview
+
+    > **Why a preview first?** A dashboard is what other people will read and trust.
+    > It goes up as a preview first, and you check its figures against the SQL.
+    > Only after that do you publish it at its live address.
 
     Open the printed URL. Check the categories and counts match your SQL, and that the filters update both charts and the table.
     """)

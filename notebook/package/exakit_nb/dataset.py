@@ -1,7 +1,7 @@
 """A dataset the notebooks run on: its descriptor read, validated by the kit's own rules, held against the database,
 and the roles turned into SQL names, so one notebook runs unchanged on any dataset whose descriptor is valid.
 
-    ds = nb.dataset(conn, "esophageal_posts")             # a dataset the kit ships, by id
+    ds = nb.dataset(conn, "amazon_sales")                 # a dataset the kit ships, by id
     ds = nb.dataset(conn, "~/data/descriptor.yaml")    # a table already in the database, described by a descriptor file
     ds = nb.dataset(conn, "~/data/sales.csv")          # your own CSV, Parquet or JSON file, its descriptor beside it
     ds.col("label"), ds.text_sql(), ds.fact_table, ds.source
@@ -197,8 +197,8 @@ class Dataset:
         return role in self.descriptor.roles
 
     def group_by(self) -> tuple[str, str]:
-        """(role, column) the overviews count rows by: the category, else the entity, else the target - a table such
-        as the ADE sentences has only a key, a text and a 0/1 target, and counting by that target is its overview. A
+        """(role, column) the overviews count rows by: the category, else the entity, else the target - a table
+        with only a key, a text and a 0/1 target has no other group, and counting by that target is its overview. A
         descriptor with none of the three raises ValueError naming them."""
         for role in ("category", "entity", "label"):
             if self.has(role):
@@ -227,7 +227,7 @@ def _columns(conn, schemas: list[str]) -> set[str]:
     return found - {_ANSWERED}
 
 
-DEFAULT_DATASET = "esophageal_posts"
+DEFAULT_DATASET = "amazon_sales"
 LAST_DATASET = "last-dataset"                # in the kit's home: what a review approved last
 
 
@@ -252,7 +252,7 @@ def remember_dataset(ds: "Dataset") -> None:
 
 def chosen_dataset(name: str | Path | None = None) -> str:
     """The dataset a notebook works on: ``name`` when it is set; with None, the one approved last in a quickstart (so
-    picking banking_complaints there carries on here), else esophageal_posts. Says which, and why, in one line."""
+    picking walmart_sales there carries on here), else amazon_sales. Says which, and why, in one line."""
     if name:
         return str(name)
     try:

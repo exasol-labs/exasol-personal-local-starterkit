@@ -55,7 +55,7 @@ DRAFTERS = ("profile", "shipped", "user")
 V1_RECORD = {"version": 1, "status": "approved", "owner": "kit", "created": None, "digest": None, "drafted_by": "shipped"}
 DESCRIPTOR_FILES = ("descriptor.yaml", "descriptor.yml", "descriptor.json")   # what a dataset folder may hold, first wins
 _IDENT = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,127}$")
-_ID = re.compile(r"^[a-z0-9]+([-_][a-z0-9]+)*$")        # a dataset id: its folder name (esophageal_posts, sample-claims)
+_ID = re.compile(r"^[a-z0-9]+([-_][a-z0-9]+)*$")        # a dataset id: its folder name (amazon_sales, sample-claims)
 _LIVE = "vs:"                                           # a v2 source that is a virtual schema's alias (a live source)
 
 Problems = list[str]
@@ -608,7 +608,7 @@ def validate_column_descriptor(doc: Any) -> Problems:
         if not isinstance(doc.get("approved_at"), str) or _timestamp(doc["approved_at"]) is None:
             problems.append("approved_at must be an ISO-8601 timestamp")
     if "grain" in doc and doc["grain"] is not None and not isinstance(doc["grain"], str):
-        problems.append("grain must be one line, e.g. one row per complaint")
+        problems.append("grain must be one line, e.g. one row per order line")
     columns = doc.get("columns")
     if not isinstance(columns, dict) or not columns:
         return problems + ["columns must give every column of the table its role"]

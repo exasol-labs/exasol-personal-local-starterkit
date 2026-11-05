@@ -112,7 +112,7 @@ try {
     Check "persona's dataset pending: that row only" "3~4~6" (Table @("tpch", "energy"))
     $env:EXAKIT_DATASETS_PRESELECT = "tpch,energy"
     Check "persona's datasets are every one: the parent too" "1,2,3~4~6" (Table @("tpch", "energy"))
-    $env:EXAKIT_DATASETS_PRESELECT = "esophageal_posts"
+    $env:EXAKIT_DATASETS_PRESELECT = "amazon_sales"
     Check "persona's datasets loaded already: Skip" "6~4~6" (Table @("tpch", "energy"))
     $env:EXAKIT_DATASETS_PRESELECT = "none"
     Check "persona datasets none: Skip" "6~4~6" (Table @("tpch", "energy"))
@@ -151,15 +151,15 @@ try {
     Remove-Item Env:EXAKIT_DATA_FILE
 
     Write-Host "what each dataset is goes in a column, not on the name:"
-    Set-Pending @("tpch", "esophageal_posts")
+    Set-Pending @("tpch", "amazon_sales")
     New-ExakitDataTable -FinalLabel "Skip"
-    Check "the names stay names" "Sample datasets;tpch label;esophageal_posts label;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - coming soon;Skip" ((@($script:UiTable.Rows | ForEach-Object { $_.Label })) -join ";")
-    Check "the descriptions go in column 2" ";tpch about;esophageal_posts about;;;" ((@($script:UiTable.Rows | ForEach-Object { $_.Col2 })) -join ";")
+    Check "the names stay names" "Sample datasets;tpch label;amazon_sales label;Upload a file or folder: CSV/Parquet/JSON;Connect an external source - coming soon;Skip" ((@($script:UiTable.Rows | ForEach-Object { $_.Label })) -join ";")
+    Check "the descriptions go in column 2" ";tpch about;amazon_sales about;;;" ((@($script:UiTable.Rows | ForEach-Object { $_.Col2 })) -join ";")
     Check "the table knows it has them" "True" "$($script:ExakitTableHasDesc)"
     $chosen = @(Select-ExakitDataLoad -FinalLabel "Skip")
     Check "the Description column is up while the reader picks" "Description" $script:Col2AtMenu
     Check "...and gone again before the progress display" "" ("" + $script:UiTable.Col2)
-    Check "the picked rows still answer" "tpch,esophageal_posts" ($chosen -join ",")
+    Check "the picked rows still answer" "tpch,amazon_sales" ($chosen -join ",")
 
     Write-Host "Enter on the exclusive row answers it alone:"
     # The keypress loop needs a console; the rule is pinned by its text, and
@@ -199,19 +199,19 @@ try {
         Remove-Item Env:EXAKIT_DATASETS, Env:EXAKIT_DATA_FILE -ErrorAction SilentlyContinue
         return "$($script:Did -join ';')|$said"
     }
-    Has "-Force <dataset> reloads exactly that dataset" "LOAD esophageal_posts True|" (DataLoad @("tpch") @("--force", "esophageal_posts"))
-    Has "<dataset> -Force, the other order, too" "LOAD esophageal_posts True|" (DataLoad @("tpch") @("esophageal_posts", "-Force"))
+    Has "-Force <dataset> reloads exactly that dataset" "LOAD amazon_sales True|" (DataLoad @("tpch") @("--force", "amazon_sales"))
+    Has "<dataset> -Force, the other order, too" "LOAD amazon_sales True|" (DataLoad @("tpch") @("amazon_sales", "-Force"))
     Has "bare -Force still reloads the bundled sample" "LOAD tpch(sample) True|" (DataLoad @("tpch") @("-Force"))
     $env:EXAKIT_DATA_FILE = $work
-    Has "a dataset id wins over EXAKIT_DATA_FILE in the environment" "LOAD esophageal_posts False|" (DataLoad @("esophageal_posts") @("esophageal_posts"))
+    Has "a dataset id wins over EXAKIT_DATA_FILE in the environment" "LOAD amazon_sales False|" (DataLoad @("amazon_sales") @("amazon_sales"))
     $env:EXAKIT_DATASETS = "tpch"
     Has "...and over EXAKIT_DATASETS" "LOAD energy False|" (DataLoad @("tpch", "energy") @("energy"))
-    Has "an id already loaded names the reload command for it" "exakit data-load --force esophageal_posts" (DataLoad @("tpch") @("esophageal_posts"))
+    Has "an id already loaded names the reload command for it" "exakit data-load --force amazon_sales" (DataLoad @("tpch") @("amazon_sales"))
     Has "two targets are refused" "REJECT: data-load takes one file, folder or dataset at a time" (DataLoad @("tpch") @("tpch", "energy"))
     Has "-Force with a file is refused, with the file's own answer" "EXAKIT_ON_EXISTING" (DataLoad @("tpch") @("-Force", $work))
     Has "an unknown option is refused" "REJECT: Unknown option '--nope'" (DataLoad @("tpch") @("--nope"))
     Has "a dataset id is matched case-sensitively" "No such file, folder or dataset: TPCH" (DataLoad @("tpch") @("TPCH"))
-    Has "the one-argument form still works" "LOAD esophageal_posts True|" ($(Set-Pending @("tpch"); $script:Did = @(); Invoke-CmdDataLoad -Argument "--force" -Arguments @("esophageal_posts") 6>$null; "$($script:Did -join ';')|"))
+    Has "the one-argument form still works" "LOAD amazon_sales True|" ($(Set-Pending @("tpch"); $script:Did = @(); Invoke-CmdDataLoad -Argument "--force" -Arguments @("amazon_sales") 6>$null; "$($script:Did -join ';')|"))
 
     Write-Host "a scripted add-on that does not run here is skipped, the rest install:"
     function Get-ExakitMarketplaceAddonDescription { return "desc" }

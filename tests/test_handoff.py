@@ -102,7 +102,7 @@ class FakeConn:
         if "GROUP BY 1 ORDER BY N DESC" in statement:
             return FakeResult([(value, 100 - n) for n, value in enumerate(self.categories)])
         if statement.startswith("SELECT COUNT(*)") and "NULL, NULL" in statement:
-            # Exasol refuses two unnamed NULL columns; bank_marketing (no date role) hit it live.
+            # Exasol refuses two unnamed NULL columns; a dataset with no date role hit it live.
             raise AssertionError("Duplicate column names in result set: NULL")
         if statement.startswith("SELECT COUNT(*) AS N, MIN("):
             return FakeResult([(self.rows, self.date_min, self.date_max)])
@@ -333,10 +333,10 @@ class FileTest(HandoffCase):
 
     def test_a_missing_handoff_says_how_to_make_one(self):
         with self.assertRaises(FileNotFoundError) as caught:
-            handoff.read_handoff("esophageal_posts")
+            handoff.read_handoff("amazon_sales")
         self.assertIn("nb.write_handoff(conn, ds)", str(caught.exception))
         with self.assertRaises(FileNotFoundError):
-            handoff.read_handoff("esophageal_posts-v9")
+            handoff.read_handoff("amazon_sales-v9")
         with self.assertRaises(FileNotFoundError):
             handoff.read_handoff(self.home / "nowhere.json")
         bad = self.home / "bad.json"

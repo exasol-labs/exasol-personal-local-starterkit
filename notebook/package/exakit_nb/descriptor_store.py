@@ -5,10 +5,10 @@ when set) holds one ``v<n>.yaml`` per version and ``current``, a text file with 
 Read-only here: ``exakit describe <id> --approve`` and ``Draft.approve()`` write versions; ``Dataset`` reads the
 current one before it falls back to a shipped descriptor.
 
-    descriptor_store_dir("esophageal_posts")   # ~/.exasol-starter-kit/descriptors/esophageal_posts
-    list_versions("esophageal_posts")          # [1, 2]: every v<n>.yaml there, in order
-    current_version("esophageal_posts")        # 2, or None when nothing is approved there
-    current_descriptor("esophageal_posts")     # the v2.yaml path, or None
+    descriptor_store_dir("amazon_sales")   # ~/.exasol-starter-kit/descriptors/amazon_sales
+    list_versions("amazon_sales")          # [1, 2]: every v<n>.yaml there, in order
+    current_version("amazon_sales")        # 2, or None when nothing is approved there
+    current_descriptor("amazon_sales")     # the v2.yaml path, or None
 """
 
 from __future__ import annotations

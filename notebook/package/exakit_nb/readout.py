@@ -1,14 +1,14 @@
 """Plain-language notes under a notebook's results, for a reader who is not a data scientist.
 
-    by = nb.name(CATEGORY)                              # SOCIAL_NETWORK: result columns are named after the data
-    pct = nb.name(LABEL, "PCT")                         # IS_NEGATIVE_PCT: the % of rows where IS_NEGATIVE is 1
-    count = nb.count_name(ds)                           # POSTS: the count column, named after what a row is
-    nb.note_groups(first_rows, ds, by, count, pct, overall=(40987, 15.8))
+    by = nb.name(CATEGORY)                              # CATEGORY: result columns are named after the data
+    pct = nb.name(LABEL, "PCT")                         # CANCELLED_PCT: the % of rows where CANCELLED is 1
+    count = nb.count_name(ds)                           # ORDER_LINES: the count column, named after what a row is
+    nb.note_groups(first_rows, ds, by, count, pct, overall=(128975, 14.2))
     nb.note_trend(over_time, ds, "PERIOD", count, pct)
     nb.note_model(auc, ds, rows=20000)
 
 Each note says what one row of the result is, what each number means in the data's own words (``ds.grain``: "one
-row per post" makes them posts), the overall figure, the highest and lowest groups, which groups are too small to
+row per order line" makes them order lines), the overall figure, the highest and lowest groups, which groups are too small to
 trust, and that a difference between groups is not a cause. Nothing is computed that the result does not hold.
 """
 
@@ -20,10 +20,11 @@ from typing import Any
 __all__ = ["count_name", "name", "noun", "note_groups", "note_model", "note_trend"]
 
 SMALL = 30                     # fewer rows than this: the group's % moves a lot with one row, so it is not compared
+_STOP = ("in", "of", "for", "with", "by", "from", "at", "on", "per", "where", "when", "that", "which")   # a grain's noun ends
 
 
 def name(column: str | None, suffix: str = "") -> str:
-    """A result column named after a data column: ``IS_NEGATIVE`` + ``PCT`` -> ``IS_NEGATIVE_PCT``; quotes, dots and
+    """A result column named after a data column: ``CANCELLED`` + ``PCT`` -> ``CANCELLED_PCT``; quotes, dots and
     spaces become underscores, so the name works unquoted in SQL."""
     base = re.sub(r"[^A-Z0-9]+", "_", str(column or "").split(".")[-1].upper()).strip("_") or "VALUE"
     if base[0].isdigit():
@@ -32,18 +33,27 @@ def name(column: str | None, suffix: str = "") -> str:
 
 
 def noun(ds, one: bool = False) -> str:
-    """What a row is, from the descriptor's grain: "one row per post" -> "posts" (``one=True``: "post"); "rows" when
-    the descriptor does not say."""
+    """What a row is, from the descriptor's grain: "one row per order line" -> "order lines" (``one=True``: "order
+    line"), "one row per store and week" -> "store weeks"; at most three words, up to a comma or a word such as "in" or
+    "per"; "rows" when the descriptor does not say."""
     grain = str(getattr(getattr(ds, "descriptor", None), "grain", None) or "")
-    found = re.search(r"\bper\s+([a-z][a-z-]*)", grain.lower())
-    word = found.group(1) if found else "row"
+    found = re.search(r"\bper\s+([a-z][a-z -]*)", grain.lower())
+    words: list[str] = []
+    for part in (found.group(1).split() if found else []):
+        if part in _STOP:
+            break
+        if part not in ("and", "a", "an", "the"):
+            words.append(part)
+    words = words[:3] or ["row"]
     if one:
-        return word
-    return word if word.endswith("s") else word[:-1] + "ies" if word.endswith("y") and word[-2:-1] not in "aeiou" else word + "s"
+        return " ".join(words)
+    word = words[-1]
+    plural = word if word.endswith("s") else word[:-1] + "ies" if word.endswith("y") and word[-2:-1] not in "aeiou" else word + "s"
+    return " ".join(words[:-1] + [plural])
 
 
 def count_name(ds) -> str:
-    """The count column, named after what is counted: POSTS, COMPLAINTS, CLIENTS; ROW_COUNT when the descriptor does
+    """The count column, named after what is counted: ORDER_LINES, STORE_WEEKS; ROW_COUNT when the descriptor does
     not say (ROWS is an SQL word)."""
     found = name(noun(ds))
     return "ROW_COUNT" if found == "ROWS" else found

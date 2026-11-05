@@ -11,8 +11,8 @@ permissions:
 jobs:
   evaluate:
     # Requires a trusted runner with the installed kit, the reference datasets
-    # tools/ask_benchmark.py scores (Esophageal and Banking; Bank marketing has
-    # no reference questions there yet), validated read-only MCP identity and
+    # tools/ask_benchmark.py scores (Walmart sales and Amazon sales),
+    # validated read-only MCP identity and
     # local Ollama. No untrusted PR execution.
     runs-on: [self-hosted, exakit-acceptance]
     timeout-minutes: 30

@@ -10,14 +10,14 @@ in the terminal's colours: a click ticks or unticks a row, Enter moves on, and
 the scroll wheel still scrolls the terminal. The shell menus remain the
 recovery path and take clicks the same way.
 
-The kit ships the two BRD persona baselines, both on Esophageal, Banking and Bank marketing and the medical text sets
-(ADE corpus, PubMed abstracts, medication sigs), each downloaded only when it is loaded,
-and General, the kit's own samples:
+The kit ships the two BRD persona baselines, both on Walmart weekly sales and Amazon sales,
+each downloaded from the kit's `datasets` release only when it is loaded,
+and General, the kit's own samples, bundled with the kit and loaded offline:
 
 | Persona | Datasets | AI clients | Add-ons | First notebook |
 |---|---|---|---|---|
-| `data-scientist` (Data Scientist) | `esophageal_posts`, `banking_complaints`, `bank_marketing`, `ade_corpus`, `pubmed_abstracts`, `medication_sigs` | all detected | `dash-server`, `notebook` | `data-scientist/00_quickstart.ipynb` |
-| `ml-engineer` (ML Engineer) | `esophageal_posts`, `banking_complaints`, `bank_marketing`, `ade_corpus`, `pubmed_abstracts`, `medication_sigs` | all detected | `notebook`, `udf-devkit` | `ml-engineer/00_quickstart.ipynb` |
+| `data-scientist` (Data Scientist) | `walmart_sales`, `amazon_sales` | all detected | `dash-server`, `notebook` | `data-scientist/00_quickstart.ipynb` |
+| `ml-engineer` (ML Engineer) | `walmart_sales`, `amazon_sales` | all detected | `notebook`, `udf-devkit` | `ml-engineer/00_quickstart.ipynb` |
 | `general` (General) | `tpch`, `energy`, `weather` | all detected | - | - |
 
 General is ticked to begin with and combines with the others like any persona:
@@ -73,7 +73,7 @@ not here yet comes in - nothing is asked. Three steps, headed like the
 installer's (*Step 1/3 Sample data*, *2/3 AI clients*, *3/3 Add-ons*), each
 showing the installer's own table with its defaults ticked and filling it in as
 it works; what is already here is named in one line instead (*Already loaded:
-Esophageal cancer posts*). Without a terminal the same happens in plain lines.
+Amazon sales*). Without a terminal the same happens in plain lines.
 A part that fails does not stop the others; the closing line says *Persona
 added: Data Scientist + ML Engineer*, or names each part that did not finish and
 the command that retries it (exit 1). `apply` is the same command, and `--yes`
@@ -86,8 +86,8 @@ command changes nothing. Use the add-on uninstall command separately if you
 want to remove a kit-owned component.
 
 An answer you give yourself always wins for that one variable:
-`EXAKIT_PERSONA=data-scientist EXAKIT_DATASETS=banking_complaints` loads only
-the Banking dataset and keeps the persona's clients and add-ons. Several
+`EXAKIT_PERSONA=data-scientist EXAKIT_DATASETS=walmart_sales` loads only
+the Walmart dataset and keeps the persona's clients and add-ons. Several
 personas together load each dataset and offer each add-on once; one naming
 `all` wins.
 

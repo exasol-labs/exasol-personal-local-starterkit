@@ -105,12 +105,12 @@ df = nb.sql(conn, "SELECT * FROM TPCH.NATION")
 nb.show_sql()                                      # the statement that produced df
 ```
 
-For a dataset with a descriptor (`esophageal_posts`, `banking_complaints`, or a
+For a dataset with a descriptor (`amazon_sales`, `walmart_sales`, or a
 `descriptor.yaml` the user wrote for their own table), the roles become SQL
 names, checked against the database first:
 
 ```python
-ds = nb.dataset(conn, "esophageal_posts")             # or a descriptor.yaml path, or a data file with one beside it
+ds = nb.dataset(conn, "amazon_sales")                 # or a descriptor.yaml path, or a data file with one beside it
 nb.sql(conn, f"SELECT {ds.col('category')}, AVG({ds.col('label')}) FROM {ds.fact_table} GROUP BY 1")
 nb.load_own_file("~/data/claims.csv", "MY_DATA.CLAIMS", {"entity": "CUSTOMER", ...})   # CSV, Parquet or JSON
 ```
@@ -119,13 +119,14 @@ nb.load_own_file("~/data/claims.csv", "MY_DATA.CLAIMS", {"entity": "CUSTOMER", .
 assignment (`DATASET = ...`) picks the data, every query is printed before its result, a small
 scikit-learn model runs on this computer, and a text step calls the user's own model endpoint
 only when `USE_AI_THEMES = True` and `EXAKIT_MODEL_ID` / `EXAKIT_PROVIDER_BASE_URL`
-are configured. That step (`nb.themes`) sends the newest texts on each side of the label,
+are configured; on a dataset with no text column (both `amazon_sales` and
+`walmart_sales`) it skips and says why. That step (`nb.themes`) sends the newest texts on each side of the label,
 one call per side, and the model sorts each side into two to four themes: a table of theme,
 count, share and example. With Langfuse set up it is one trace, `explore-themes`.
 
 `DATASET = None` in the later notebooks means the dataset approved last in a quickstart
-(else `esophageal_posts`); each says which in one line. Result columns are named after the
-data (`SOCIAL_NETWORK`, `POSTS`, `IS_NEGATIVE_PCT`; `nb.name`, `nb.count_name`), and a note in
+(else `amazon_sales`); each says which in one line. Result columns are named after the
+data (`CATEGORY`, `ORDERS`, `CANCELLED_PCT`; `nb.name`, `nb.count_name`), and a note in
 plain words sits under each result (`nb.note_groups`, `nb.note_trend`, `nb.note_model`).
 
 `data-scientist/02_ask_your_data`: `proposal = nb.ask(ds, question)` drafts SQL with the
@@ -223,9 +224,11 @@ exits non-zero when nothing could open. Relay that command to the user.
 
 ## Repeatable acceptance checks
 
-Source notebooks remain the user's starting point. For the reference training recipes, Esophageal uses `CLASS_WEIGHT = None`; Banking
+Source notebooks remain the user's starting point. For the reference training recipes, Walmart sales (about half the weeks above the
+store's median) uses `CLASS_WEIGHT = None`; Amazon sales (14.2% of lines cancelled)
 uses `CLASS_WEIGHT = "balanced"`. Record the choice and compare with the same
-held-out baseline. Do not claim that default Banking training beats baseline.
+held-out baseline. Do not claim that a model beats the baseline unless that held-out
+comparison shows it.
 
 Headless controls are explicit: `tools/notebooks.py --run --ai-themes`,
 `--class-weight none|balanced`, `--approve-sql`, and

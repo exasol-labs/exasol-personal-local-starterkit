@@ -6,7 +6,7 @@ role has no time split: the handoff is refused with the fix (``split="random"`` 
 date role) - a random split is never silent, and ``01_train`` refuses one the file does not mark as asked for.
 
     path = nb.write_handoff(conn, ds)          # explore's last cell: ~/.exasol-starter-kit/handoffs/<id>-v<n>.json
-    handoff = nb.read_handoff("esophageal_posts")  # the latest one for that descriptor (or a path, or "<id>-v2")
+    handoff = nb.read_handoff("amazon_sales")      # the latest one for that descriptor (or a path, or "<id>-v2")
     handoff = nb.handoff_from(conn, ds)         # the same record, built from an approved descriptor, not written
     nb.handoff_is_stale(conn, handoff, ds)      # None, or the line that says what changed and what to do
 

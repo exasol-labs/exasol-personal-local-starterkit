@@ -17,7 +17,7 @@
 #   exakit persona list|show <id>|plan [<id>]|add <id>  (apply: the same)
 #
 # An explicit answer always wins, per variable: EXAKIT_PERSONA=data-scientist
-# EXAKIT_DATASETS=esophageal_posts loads only that dataset and keeps the persona's
+# EXAKIT_DATASETS=amazon_sales loads only that dataset and keeps the persona's
 # clients and add-ons. Sourced after common.sh. Twin: persona.ps1.
 
 # _exakit_persona_service <command> [args] — ask the persona service.

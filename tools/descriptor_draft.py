@@ -2,10 +2,11 @@
 """Draft a shipped dataset's descriptor offline: the column types from its 01_create_schema.sql, the rows from its
 CSV, then the same profile and draft code `exakit describe` runs on the database (setup/lib/descriptor).
 
-    python3 tools/descriptor_draft.py data/datasets/banking_complaints            # the first table, YAML on stdout
-    python3 tools/descriptor_draft.py data/datasets/bank_marketing --table CLIENTS --profile profile.json
-    python3 tools/descriptor_draft.py data/datasets/bank_marketing --ship --target SUBSCRIBED --grain "one row per client" \
-        --approved-at 2026-11-03 > data/datasets/bank_marketing/descriptor.yaml     # the descriptor the kit ships
+    python3 tools/descriptor_draft.py data/datasets/walmart_sales                 # the first table, YAML on stdout
+    python3 tools/descriptor_draft.py data/datasets/amazon_sales --table ORDER_LINES --profile profile.json
+    python3 tools/descriptor_draft.py data/datasets/amazon_sales --ship --target CANCELLED --grain "one row per order line" \
+        --slot category=CATEGORY --slot entity=SHIP_STATE \
+        --approved-at 2026-11-05 > data/datasets/amazon_sales/descriptor.yaml     # the descriptor the kit ships
 
 Types are written as EXA_ALL_COLUMNS reports them (VARCHAR(n) UTF8, DECIMAL(p,s), ...), so the schema digest is
 the one the database gives, as far as the declaration says it; the live profile is the authority.

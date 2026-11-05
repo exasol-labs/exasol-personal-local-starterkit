@@ -16,7 +16,7 @@ def _(mo):
     mo.md(r"""
     # Data Scientist quickstart
 
-    **Dataset:** `esophageal_posts` (default), `banking_complaints` or your own file. **How long:** about ten minutes on the first load.
+    **Dataset:** `amazon_sales` (default), `walmart_sales` or your own file. **How long:** about ten minutes on the first load.
 
     You end with a connection, an approved column map and a first grouped result. No LLM needed.
     """)
@@ -75,7 +75,11 @@ def _(mo):
     mo.md(r"""
     ## Choose a dataset
 
-    Start with the bundled sample: `SAMPLE = "esophageal_posts"` (social posts) or `"banking_complaints"` (complaints). It loads once and is reused, and the later notebooks carry on with the dataset you approve here (their `DATASET = None`). Keep `SOURCE = None` for this walkthrough.
+    > **What is a dataset?** One table of rows to learn from; each row is one thing that happened.
+    > The kit offers two to practise on: `amazon_sales` (online fashion orders, one row per order line) and `walmart_sales` (weekly sales, one row per store and week).
+    > We start with one of these known samples so you can try every step before bringing your own data.
+
+    Pick one: `SAMPLE = "amazon_sales"` (the default) or `"walmart_sales"`. The first run downloads it from the kit's release (internet needed) and loads it once; after that it is reused, and the later notebooks carry on with the dataset you approve here (their `DATASET = None`). Keep `SOURCE = None` for this walkthrough.
     """)
     return
 
@@ -83,7 +87,7 @@ def _(mo):
 @app.cell
 def _(conn, nb):
     # Cell tags: load
-    SAMPLE = "esophageal_posts"   # or "banking_complaints", or None
+    SAMPLE = "amazon_sales"   # or "walmart_sales", or None
     sample = nb.load_sample(conn, SAMPLE)
     return (sample,)
 
@@ -145,20 +149,26 @@ def _(mo):
     mo.md(r"""
     ## Approve the column map
 
-    The column map tells the notebooks what each column is. The kit suggests it from the data and shows why. It has two parts.
+    > **What is the descriptor?** A short map of the table, also called the column map: which column plays which part - the key, the time, the groups to compare (category), the outcome to predict (target).
+    > Every later query is written from this map, so no notebook has your column names typed in.
+    > It is saved with a version number, so each result says which map it came from.
+
+    > **Why approve it?** The kit proposes the map from the data, and a guess can be wrong: in `amazon_sales`, `STATUS` says `Cancelled` on exactly the cancelled lines, so it gives the answer away.
+    > A person checks the map once and approves it before any query runs on it.
+    > That way every number later rests on choices you have seen and agreed to.
+
+    The kit suggests the map from the data and shows why. It has two parts.
 
     **1. A role for every column**, one of eight: `key` (one per row), `time`, `measure` (a number to add up), `category` (a few repeated values), `flag` (yes/no), `text`, `identifier` (names or codes, never grouped) and `other`.
 
-    **2. The slots**: the one column the notebooks use for each job.
+    **2. The slots**: the one column the notebooks use for each job - `key` (one row), `time` (trends), `text` (words to explore), `target` (the outcome to predict), `category` (groups to compare) and `entity` (who or what a row is about). The datasets the kit ships with their map approved:
 
-    | Slot | What the notebooks use it for | Esophageal | Banking |
-    |---|---|---|---|
-    | `key` | One row | `POST_ID` | `COMPLAINT_ID` |
-    | `time` | Trends, earlier and later | `CREATED_TIME` | `DATE_RECEIVED` |
-    | `text` | Words to explore | `MESSAGE` | — |
-    | `target` | The outcome to predict | `IS_NEGATIVE` | `MONETARY_RELIEF` |
-    | `category` | Groups to compare | `SOCIAL_NETWORK` | `PRODUCT` |
-    | `entity` | Who or what a row is about | `SOURCE_DOMAIN` | `COMPANY` |
+    | Dataset | `key` | `time` | `text` | `target` | `category` | `entity` |
+    |---|---|---|---|---|---|---|
+    | Amazon sales | `ORDER_LINE_ID` | `ORDER_DATE` | — | `CANCELLED` | `CATEGORY` | `SHIP_STATE` |
+    | Walmart sales | `SALES_ID` | `WEEK_DATE` | — | `ABOVE_STORE_MEDIAN` | `STORE` | — |
+
+    Neither has a text column, so the steps that read text skip and say why. Your own file: the picker below proposes its map from the data.
 
     The **target** matters most: the kit never guesses it, you choose it. Leave a slot as **—** when no column fits.
 
@@ -202,8 +212,8 @@ def _(conn, ds_1, nb):
         print(f"No category role ({skipped.get('category', 'none approved')}): rows are counted per {GROUPED_BY} instead.")
     if 'label' in skipped:
         print(f"No label role ({skipped['label']}): the label rate is left out; the steps that need it later say so.")
-    GROUP, COUNT = (nb.name(BY), nb.count_name(ds_1))  # columns named after the data: SOCIAL_NETWORK, POSTS
-    PCT = nb.name(ds_1.col('label'), 'PCT') if ds_1.has('label') and GROUPED_BY != 'label' else None  # IS_NEGATIVE_PCT
+    GROUP, COUNT = (nb.name(BY), nb.count_name(ds_1))  # columns named after the data: CATEGORY, ORDER_LINES
+    PCT = nb.name(ds_1.col('label'), 'PCT') if ds_1.has('label') and GROUPED_BY != 'label' else None  # CANCELLED_PCT
     RATE = f",\n       ROUND(100 * AVG({ds_1.col('label')}), 1) AS {PCT}" if PCT else ''
     first_rows = nb.sql(conn, f'\nSELECT {BY} AS {GROUP},\n       COUNT(*) AS {COUNT}{RATE}\nFROM {ds_1.fact_table}\nGROUP BY {BY}\nORDER BY {COUNT} DESC\nLIMIT 10')
     nb.show_sql()

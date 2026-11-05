@@ -128,7 +128,6 @@ class CallsExistTest(unittest.TestCase):
     def test_no_reference_to_files_this_kit_lacks(self):
         for path in [*NOTEBOOKS, *SOURCES.glob("**/*.ipynb"), *HELPERS, ROOT / "notebook" / "README.md"]:
             text = path.read_text(encoding="utf-8")
-            # bank_marketing left this list when it came back as a reference dataset (data/datasets/bank_marketing).
             for gone in ("data/datasets/README.md", "docs/design.md", "start_here", "text_classification",
                          "fda_recalls"):
                 with self.subTest(file=path.name, reference=gone):
@@ -331,7 +330,11 @@ class NotebookShapeTest(unittest.TestCase):
         for py in SOURCES.glob("*/*.py"):
             text = py.read_text(encoding="utf-8")
             code = "\n".join(line for line in text.splitlines() if not line.startswith(("#", "DATASET = ", "SAMPLE = ")))
-            for name in ("PHARMA", "BANKING", "TERMINATED", "MONETARY_RELIEF", "BRIEF_SUMMARY", "LEAD_SPONSOR", "COMPANY"):
+            # The persona datasets' schemas, tables and slot columns (inline comments may name the result columns the
+            # descriptor yields, such as ORDER_LINES or CANCELLED_PCT, so those two are not listed).
+            for name in ("PHARMA", "TERMINATED", "MONETARY_RELIEF", "BRIEF_SUMMARY", "LEAD_SPONSOR", "COMPANY",
+                         "WALMART", "AMAZON", "WEEKLY_SALES", "ABOVE_STORE_MEDIAN", "SHIP_STATE", "WEEK_DATE",
+                         "ORDER_DATE", "ORDER_LINE_ID", "SALES_ID"):
                 with self.subTest(notebook=py.name, name=name):
                     self.assertNotIn(name, code, "the SQL comes from the descriptor's roles")
 

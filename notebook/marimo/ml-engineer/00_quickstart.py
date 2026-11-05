@@ -16,7 +16,7 @@ def _(mo):
     mo.md(r"""
     # ML Engineer quickstart
 
-    **Dataset:** `esophageal_posts` by default; Banking or your own file also work. **How long:** about five minutes once runtimes are installed.
+    **Dataset:** `amazon_sales` by default; `walmart_sales` or your own file also work. **How long:** about five minutes once runtimes are installed.
 
     Checks the database Python runtime, MLflow and the shared model directory, then loads and describes the data.
 
@@ -49,6 +49,10 @@ def _():
 def _(mo):
     mo.md(r"""
     ## Pick the database Python runtime
+
+    > **What is a UDF?** A user-defined function: a small program, here in Python, that runs inside the database, next to the data.
+    > Training as a UDF means the rows are not copied out of the database into the notebook first.
+    > The runtime (container) picked below is the set of Python packages that program can use.
 
     Training runs as a UDF inside Exasol, with its own packages.
 
@@ -113,6 +117,10 @@ def _(mo):
     mo.md(r"""
     ## Check MLflow
 
+    > **What is MLflow tracking?** A logbook for model training: every run's settings, scores and model file.
+    > With it you can compare two runs side by side and find the exact model a result came from.
+    > By default the runs are kept on this computer, in the kit's own MLflow.
+
     Shows where runs are recorded. Browser UI: `exakit mlflow start`, then `exakit mlflow url`. `MLFLOW_TRACKING_URI` overrides.
     """)
     return
@@ -146,7 +154,11 @@ def _(mo):
     mo.md(r"""
     ## Choose a dataset
 
-    Start with the bundled sample: `SAMPLE = "esophageal_posts"` (social posts) or `"banking_complaints"` (complaints). It loads once and is reused, and the later notebooks carry on with the dataset you approve here (their `DATASET = None`). Keep `SOURCE = None` for this walkthrough.
+    > **What is a dataset?** One table of rows to learn from; each row is one thing that happened.
+    > The kit offers two to practise on: `amazon_sales` (online fashion orders, one row per order line) and `walmart_sales` (weekly sales, one row per store and week).
+    > We start with one of these known samples so you can try every step before bringing your own data.
+
+    Pick one: `SAMPLE = "amazon_sales"` (the default) or `"walmart_sales"`. The first run downloads it from the kit's release (internet needed) and loads it once; after that it is reused, and the later notebooks carry on with the dataset you approve here (their `DATASET = None`). Keep `SOURCE = None` for this walkthrough.
     """)
     return
 
@@ -154,7 +166,7 @@ def _(mo):
 @app.cell
 def _(conn, nb):
     # Cell tags: load
-    SAMPLE = "esophageal_posts"   # or "banking_complaints", or None
+    SAMPLE = "amazon_sales"   # or "walmart_sales", or None
     sample = nb.load_sample(conn, SAMPLE)
     return (sample,)
 
@@ -216,20 +228,26 @@ def _(mo):
     mo.md(r"""
     ## Approve the column map
 
-    The column map tells the notebooks what each column is. The kit suggests it from the data and shows why. It has two parts.
+    > **What is the descriptor?** A short map of the table, also called the column map: which column plays which part - the key, the time, the groups to compare (category), the outcome to predict (target).
+    > Every later query is written from this map, so no notebook has your column names typed in.
+    > It is saved with a version number, so each result says which map it came from.
+
+    > **Why approve it?** The kit proposes the map from the data, and a guess can be wrong: in `amazon_sales`, `STATUS` says `Cancelled` on exactly the cancelled lines, so it gives the answer away.
+    > A person checks the map once and approves it before any query runs on it.
+    > That way every number later rests on choices you have seen and agreed to.
+
+    The kit suggests the map from the data and shows why. It has two parts.
 
     **1. A role for every column**, one of eight: `key` (one per row), `time`, `measure` (a number to add up), `category` (a few repeated values), `flag` (yes/no), `text`, `identifier` (names or codes, never grouped) and `other`.
 
-    **2. The slots**: the one column the notebooks use for each job.
+    **2. The slots**: the one column the notebooks use for each job - `key` (one row), `time` (trends), `text` (words to explore), `target` (the outcome to predict), `category` (groups to compare) and `entity` (who or what a row is about). The datasets the kit ships with their map approved:
 
-    | Slot | What the notebooks use it for | Esophageal | Banking |
-    |---|---|---|---|
-    | `key` | One row | `POST_ID` | `COMPLAINT_ID` |
-    | `time` | Trends, earlier and later | `CREATED_TIME` | `DATE_RECEIVED` |
-    | `text` | Words to explore | `MESSAGE` | — |
-    | `target` | The outcome to predict | `IS_NEGATIVE` | `MONETARY_RELIEF` |
-    | `category` | Groups to compare | `SOCIAL_NETWORK` | `PRODUCT` |
-    | `entity` | Who or what a row is about | `SOURCE_DOMAIN` | `COMPANY` |
+    | Dataset | `key` | `time` | `text` | `target` | `category` | `entity` |
+    |---|---|---|---|---|---|---|
+    | Amazon sales | `ORDER_LINE_ID` | `ORDER_DATE` | — | `CANCELLED` | `CATEGORY` | `SHIP_STATE` |
+    | Walmart sales | `SALES_ID` | `WEEK_DATE` | — | `ABOVE_STORE_MEDIAN` | `STORE` | — |
+
+    Neither has a text column, so the steps that read text skip and say why. Your own file: the picker below proposes its map from the data.
 
     The **target** matters most: the kit never guesses it, you choose it. Leave a slot as **—** when no column fits.
 
@@ -260,7 +278,7 @@ def _(mo):
     mo.md(r"""
     ## Check the label
 
-    How many rows per group and the % where the label is 1. Label 1 means the outcome happened (a negative post, monetary relief), not that it is good. A note under the result says what the numbers mean.
+    How many rows per group and the % where the label is 1. Label 1 means the outcome happened (`CANCELLED`: the order line was cancelled; `ABOVE_STORE_MEDIAN`: the store sold more that week than in its median week), not that it is good. A note under the result says what the numbers mean.
     """)
     return
 
@@ -273,8 +291,8 @@ def _(conn, ds_1, nb):
             print(f'No {role} role ({skipped[role]}): {instead}; the steps that need it later say so.')
     BY = ds_1.col('category') if ds_1.has('category') else ds_1.col('entity')
     GROUP, COUNT = (nb.name(BY), nb.count_name(ds_1))
-    PCT = nb.name(ds_1.col('label'), 'PCT') if ds_1.has('label') else None  # columns named after the data: SOCIAL_NETWORK, POSTS
-    RATE = f",\n       ROUND(100 * AVG({ds_1.col('label')}), 1) AS {PCT}" if PCT else ''  # IS_NEGATIVE_PCT
+    PCT = nb.name(ds_1.col('label'), 'PCT') if ds_1.has('label') else None  # columns named after the data: CATEGORY, ORDER_LINES
+    RATE = f",\n       ROUND(100 * AVG({ds_1.col('label')}), 1) AS {PCT}" if PCT else ''  # CANCELLED_PCT
     first_rows = nb.sql(conn, f'\nSELECT {BY} AS {GROUP},\n       COUNT(*) AS {COUNT}{RATE}\nFROM {ds_1.fact_table}\nGROUP BY {BY}\nORDER BY {COUNT} DESC\nLIMIT 10')
     nb.show_sql()
     overall = nb.sql(conn, f"SELECT COUNT(*) AS N, ROUND(100 * AVG({ds_1.col('label')}), 1) AS PCT FROM {ds_1.fact_table}") if PCT else None

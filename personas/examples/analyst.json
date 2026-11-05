@@ -6,7 +6,7 @@
   "picker": true,
   "default": false,
   "order": 15,
-  "datasets": ["tpch", "esophageal_posts"],
+  "datasets": ["tpch", "amazon_sales"],
   "mcp_clients": "all",
   "addons": ["dash-server", "dbt-exasol"]
 }

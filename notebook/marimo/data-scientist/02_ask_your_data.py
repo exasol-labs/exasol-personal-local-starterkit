@@ -16,7 +16,7 @@ def _(mo):
     mo.md(r"""
     # Ask your data
 
-    **Dataset:** Esophageal, Banking or your own approved descriptor. **How long:** about five minutes.
+    **Dataset:** `amazon_sales`, `walmart_sales` or your own approved descriptor. **How long:** about five minutes.
 
     Review a proposed query, approve it, then run it read-only. Set `WORKFLOW_ID` to continue the quickstart's log.
 
@@ -39,7 +39,7 @@ def _(mo):
 def _():
     import exakit.nb as nb
 
-    DATASET = None  # None: the dataset approved last in a quickstart (else esophageal_posts); or "banking_complaints", or your own approved descriptor
+    DATASET = None  # None: the dataset approved last in a quickstart (else amazon_sales); or "walmart_sales", or your own approved descriptor
     QUESTION = "How many rows are in each category?"
     DRAFT_WITH_MODEL = False  # set True after EXAKIT_MODEL_ID is configured; no rows are sent to draft SQL
     WORKFLOW_ID = None  # paste the quickstart's wf-... id to continue its log
@@ -70,7 +70,7 @@ def _(mo):
 @app.cell
 def _(DRAFT_WITH_MODEL, QUESTION, ds, nb):
     GROUPED_BY, BY = ds.group_by()   # the category, else the entity, else the target
-    GROUP, COUNT = nb.name(BY), nb.count_name(ds)       # columns named after the data: SOCIAL_NETWORK, POSTS
+    GROUP, COUNT = nb.name(BY), nb.count_name(ds)       # columns named after the data: CATEGORY, ORDER_LINES
     starter_sql = f"SELECT {BY} AS {GROUP}, COUNT(*) AS {COUNT} FROM {ds.fact_table} GROUP BY 1 ORDER BY {COUNT} DESC"
     if GROUPED_BY != "category":
         print(f"{ds.id} has no category; the starter SQL counts rows per {GROUPED_BY} ({BY}).")
@@ -83,6 +83,10 @@ def _(DRAFT_WITH_MODEL, QUESTION, ds, nb):
 def _(mo):
     mo.md(r"""
     ## Approve and run
+
+    > **Why approve a query?** A query written for you, by the starter SQL or by a model, can be subtly wrong: the wrong column, a missing filter.
+    > You read it and say yes first; only that exact text then runs.
+    > It runs with read-only rights, so it can never change your data.
 
     Nothing runs while `APPROVE_SQL = False`. After review, set `APPROVE_SQL = True` and rerun.
 

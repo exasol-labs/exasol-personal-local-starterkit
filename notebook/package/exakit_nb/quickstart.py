@@ -5,7 +5,7 @@ notebook runs top to bottom whichever ways the user picked.
 
     conn = nb.connect()
     nb.check_connection(conn); nb.list_schemas(conn)
-    sample = nb.load_sample(conn, "esophageal_posts")
+    sample = nb.load_sample(conn, "amazon_sales")
     own = nb.load_own_file("~/data/sales.json", "MY_DATA.SALES", {...}, conn=conn, missing_ok=True)
     source = nb.load_source(conn, None)
     ds = nb.first(source, own, sample); nb.show_roles(ds)
@@ -65,7 +65,7 @@ def _run_exakit(*args: str) -> int:
 
 
 def load_sample(conn, dataset_id: str | None) -> Dataset | None:
-    """A dataset the kit ships (``esophageal_posts``, ``banking_complaints``): used as it is when it is loaded, else loaded
+    """A dataset the kit offers (``amazon_sales``, ``walmart_sales``): used as it is when it is loaded, else loaded
     first with ``exakit data-load <id>`` (the cell waits for it), then checked against the database. None skips it."""
     if not dataset_id:
         print("No sample dataset asked for: skipped.")

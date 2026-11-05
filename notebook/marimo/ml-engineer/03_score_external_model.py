@@ -16,7 +16,7 @@ def _(mo):
     mo.md(r"""
     # Score a model file in SQL
 
-    **Dataset:** the one you approved last (else `esophageal_posts`); set `DATASET` for Banking or a compatible table. **Run time:** about three minutes after setup.
+    **Dataset:** the one you approved last (else `amazon_sales`); set `DATASET` for `walmart_sales` or a compatible table. **Run time:** about three minutes after setup.
 
     Copies a scikit-learn model file to the shared model directory, wraps it in a scoring UDF and checks database scores match local ones.
 
@@ -29,7 +29,7 @@ def _(mo):
 def _():
     import exakit.nb as nb
 
-    DATASET = None   # None: the dataset approved last in a quickstart (else esophageal_posts); or "banking_complaints", or the path of a descriptor for a table you loaded
+    DATASET = None   # None: the dataset approved last in a quickstart (else amazon_sales); or "walmart_sales", or the path of a descriptor for a table you loaded
     return DATASET, nb
 
 
@@ -38,7 +38,7 @@ def _(mo):
     mo.md(r"""
     ## Settings
 
-    Keep `MODEL_FILE = None` to train a small stand-in model. Your own file needs `predict_proba` and `category`/`text` inputs.
+    Keep `MODEL_FILE = None` to train a small stand-in model. Your own file needs `predict_proba` and the same inputs as the stand-in: `category`, plus `entity` and `text` when the map has them (the printed inputs below).
     """)
     return
 
@@ -47,7 +47,7 @@ def _(mo):
 def _(nb):
     MODEL_FILE = None                   # or "~/Downloads/model.pkl"
     SCORING_SCHEMA = "EXAKIT_SCORING"   # where the scoring UDF is created; nothing else is written there
-    UDF_NAME = "SCORE_TEXT_MODEL"
+    UDF_NAME = "SCORE_STAND_IN_MODEL"
     CONTAINER = nb.ml_train.udf_container()  # prefer the installed PYTHON3_ML runtime
     TRAIN_ROWS = 4000                   # rows the stand-in model learns from
     HOLDOUT_ROWS = 500                  # held-out rows the two predictions are compared on
@@ -111,29 +111,46 @@ def _(mo):
     mo.md(r"""
     ## Training rows
 
-    A fixed hash holds out about one row in five; the stand-in trains on the rest.
+    The model's inputs come from the approved map: the category, the entity when there is one, the text when there is one (`amazon_sales` and `walmart_sales` have no text, so the stand-in learns from the groups only). A fixed hash of the key holds out about one row in five; the stand-in trains on the rest.
     """)
     return
 
 
 @app.cell
-def _(TRAIN_ROWS, conn, ds, nb):
-    CATEGORY = f"COALESCE(CAST({ds.col('category')} AS VARCHAR(2000)), '')"
-    TEXT = ds.text_sql()
+def _(TRAIN_ROWS, conn, ds, nb, pd):
+    CATEGORY = f"COALESCE(CAST({ds.col('category')} AS VARCHAR(2000)), '')" if ds.has("category") else None
+    ENTITY = f"COALESCE(CAST({ds.col('entity')} AS VARCHAR(2000)), '')" if ds.has("entity") else None
+    TEXT = ds.text_sql() if ds.has("text") else None
     LABEL = ds.col("label")
-    HELD_OUT = f"MOD(ASCII(SUBSTR(HASH_MD5({TEXT} || '|' || {CATEGORY}), 1, 1)), 5) = 0"
+    # (result column and UDF parameter, SQL expression, the model's column name), for each role the map has
+    INPUTS = [(column, sql, name) for column, sql, name in (("CATEGORY", CATEGORY, "category"), ("ENTITY", ENTITY, "entity"),
+                                                             ("DOC_TEXT", TEXT, "text")) if ds.has(name)]
+    GROUPS = [name for _, _, name in INPUTS if name != "text"]
+    if not GROUPS:
+        raise ValueError(f"{ds.id} has no category or entity role for the stand-in to learn from: approve one first.")
+    if TEXT is None:
+        print(f"No text role ({ds.descriptor.missing_reason('text') or 'none approved'}): the stand-in learns from "
+              f"{' and '.join(GROUPS)} only.")
+    KEY = (getattr(ds.descriptor, "slots", None) or {}).get("key")
+    HASHED = f"CAST({KEY} AS VARCHAR(200))" if KEY else " || '|' || ".join(sql for _, sql, _ in INPUTS)
+    HELD_OUT = f"MOD(ASCII(SUBSTR(HASH_MD5({HASHED}), 1, 1)), 5) = 0"
 
 
     def rows_sql(where: str, limit: int, extra: str = "") -> str:
-        return (f"SELECT {CATEGORY} AS CATEGORY, {TEXT} AS DOC_TEXT, {LABEL} AS LABEL{extra}\n"
+        return (f"SELECT {', '.join(sql + ' AS ' + column for column, sql, _ in INPUTS)}, {LABEL} AS LABEL{extra}\n"
                 f"FROM {ds.fact_table}\nWHERE {LABEL} IS NOT NULL AND {where}\nLIMIT {limit}")
+
+
+    def model_frame(rows) -> pd.DataFrame:
+        """The rows as the model sees them: one column per input, under the model's name; an empty value is ''."""
+        return pd.DataFrame({name: rows[column].fillna("").astype(str) for column, _, name in INPUTS})
 
 
     train_sql = rows_sql(f"NOT ({HELD_OUT})", TRAIN_ROWS)
     print(train_sql)
     train = nb.sql(conn, train_sql)
     print(f"\n{len(train)} training rows, label 1 share {train['LABEL'].mean():.2f}")
-    return CATEGORY, HELD_OUT, LABEL, TEXT, rows_sql, train
+    return GROUPS, HELD_OUT, INPUTS, LABEL, TEXT, model_frame, rows_sql, train
 
 
 @app.cell(hide_code=True)
@@ -149,14 +166,16 @@ def _(mo):
 @app.cell
 def _(
     CONTAINER,
+    GROUPS,
     MODEL_FILE,
     Path,
+    TEXT,
     conn,
     ds,
     hashlib,
     json,
+    model_frame,
     nb,
-    pd,
     pickle,
     train,
     warnings,
@@ -170,13 +189,14 @@ def _(
         from sklearn.pipeline import Pipeline
         from sklearn.preprocessing import OneHotEncoder
 
+        parts = [(name, OneHotEncoder(handle_unknown="ignore"), [name]) for name in GROUPS]
+        if TEXT is not None:
+            parts.append(("text", TfidfVectorizer(max_features=5000, ngram_range=(1, 2), min_df=2), "text"))
         stand_in = Pipeline([
-            ("features", ColumnTransformer([
-                ("text", TfidfVectorizer(max_features=5000, ngram_range=(1, 2), min_df=2), "text"),
-                ("category", OneHotEncoder(handle_unknown="ignore"), ["category"])])),
+            ("features", ColumnTransformer(parts)),
             ("classifier", LogisticRegression(max_iter=1000, class_weight="balanced"))])
-        stand_in.fit(pd.DataFrame({"category": train["CATEGORY"], "text": train["DOC_TEXT"]}), train["LABEL"].astype(int))
-        model_path = Path("models") / f"{ds.id}_text_classifier.pkl"
+        stand_in.fit(model_frame(train), train["LABEL"].astype(int))
+        model_path = Path("models") / f"{ds.id}_stand_in.pkl"
         model_path.parent.mkdir(exist_ok=True)
         model_path.write_bytes(pickle.dumps(stand_in))
     else:
@@ -268,7 +288,7 @@ def _(mo):
     mo.md(r"""
     ## Create the scoring UDF
 
-    Renders the UDF from the kit's checked template. It returns the positive-class probability.
+    Renders the UDF from the kit's checked template: one argument per input above. It returns the probability that the label is 1.
     """)
     return
 
@@ -276,6 +296,7 @@ def _(mo):
 @app.cell
 def _(
     CONTAINER,
+    INPUTS,
     MODEL_COMPATIBLE,
     SCORING_SCHEMA,
     UDF_NAME,
@@ -290,7 +311,8 @@ def _(
         render = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(render)
         create_sql = render.render(schema=SCORING_SCHEMA, name=UDF_NAME, model_path=put["path"], language=CONTAINER,
-                                   inputs=[("category", "VARCHAR(2000)"), ("doc_text", "VARCHAR(2000000)", "text")],
+                                   inputs=[(column.lower(), "VARCHAR(2000000)" if name == "text" else "VARCHAR(2000)", name)
+                                           for column, _, name in INPUTS],
                                    output="DOUBLE", method="predict_proba")
         print("\n".join(create_sql.splitlines()[:8]) + "\n...")
         conn.execute(f"CREATE SCHEMA IF NOT EXISTS {SCORING_SCHEMA}")
@@ -312,24 +334,24 @@ def _(mo):
 
 @app.cell
 def _(
-    CATEGORY,
     HELD_OUT,
     HOLDOUT_ROWS,
+    INPUTS,
     MODEL_COMPATIBLE,
-    TEXT,
     UDF,
     conn,
     model,
+    model_frame,
     nb,
     np,
-    pd,
     rows_sql,
 ):
     if MODEL_COMPATIBLE:
-        holdout_sql = rows_sql(HELD_OUT, HOLDOUT_ROWS, extra=f",\n       {UDF}({CATEGORY}, {TEXT}) AS DB_SCORE")
+        holdout_sql = rows_sql(HELD_OUT, HOLDOUT_ROWS,
+                               extra=f",\n       {UDF}({', '.join(sql for _, sql, _ in INPUTS)}) AS DB_SCORE")
         print(holdout_sql)
         holdout = nb.sql(conn, holdout_sql)
-        here = model.predict_proba(pd.DataFrame({"category": holdout["CATEGORY"], "text": holdout["DOC_TEXT"]}))[:, 1]
+        here = model.predict_proba(model_frame(holdout))[:, 1]
         there = holdout["DB_SCORE"].astype(float).to_numpy()
         gap = float(np.max(np.abs(here - there))) if len(here) else 0.0
         print(f"\n{len(holdout)} held-out rows; largest difference between the database and this computer: {gap:.2e}")
@@ -344,17 +366,17 @@ def _(mo):
     mo.md(r"""
     ## Score in a query
 
-    Mean predicted score vs actual label share per category.
+    Mean predicted score vs actual label share per category (the first input).
     """)
     return
 
 
 @app.cell
-def _(CATEGORY, LABEL, MODEL_COMPATIBLE, TEXT, UDF, conn, ds, nb):
+def _(INPUTS, LABEL, MODEL_COMPATIBLE, UDF, conn, ds, nb):
     if MODEL_COMPATIBLE:
-        table_sql = f"""SELECT CATEGORY, COUNT(*) AS ROWS_SCORED, AVG(SCORE) AS MEAN_SCORE, AVG({LABEL}) AS LABEL_1_SHARE
-    FROM (SELECT {CATEGORY} AS CATEGORY, {LABEL}, {UDF}({CATEGORY}, {TEXT}) AS SCORE FROM {ds.fact_table})
-    GROUP BY CATEGORY
+        table_sql = f"""SELECT GROUP_, COUNT(*) AS ROWS_SCORED, AVG(SCORE) AS MEAN_SCORE, AVG({LABEL}) AS LABEL_1_SHARE
+    FROM (SELECT {INPUTS[0][1]} AS GROUP_, {LABEL}, {UDF}({', '.join(sql for _, sql, _ in INPUTS)}) AS SCORE FROM {ds.fact_table})
+    GROUP BY GROUP_
     ORDER BY ROWS_SCORED DESC
     LIMIT 15"""
         print(table_sql)
@@ -367,7 +389,7 @@ def _(mo):
     mo.md(r"""
     ## Use your own model
 
-    Set `MODEL_FILE`, adapt the inputs and rerun the checks. Remove the example with `DROP SCRIPT EXAKIT_SCORING.SCORE_TEXT_MODEL`.
+    Set `MODEL_FILE`, adapt the inputs and rerun the checks. Remove the example with `DROP SCRIPT EXAKIT_SCORING.SCORE_STAND_IN_MODEL`.
     """)
     return
 

@@ -102,7 +102,7 @@ left alone), so export `EXAPUMP_CONFIG` as above before calling exapump directly
 
 > `starter-kit` is a *profile* name, not a schema. The bundled datasets each
 > live in their own **schema** — `TPCH`, `ENERGY`, `WEATHER`, and with a persona
-> `ESOPHAGEAL`, `BANKING`, `BANKMKT`, `ADE`, `PUBMED`, `MEDSIGS` — and data the user
+> `WALMART` and `AMAZON` — and data the user
 > uploads defaults to the `STARTER_KIT` schema. Do not conflate the two or
 > "correct" one into the other.
 
@@ -134,7 +134,7 @@ rows each file landed:
 exakit data-load ./sales.csv                                  # on a terminal it asks for SCHEMA.TABLE
 EXAKIT_DATA_TABLE=STARTER_KIT.SALES exakit data-load ./sales.csv   # without one
 EXAKIT_SCHEMA=SALES exakit data-load ~/exports                # a folder: one table per file
-exakit data-load esophageal_posts                             # a bundled dataset by id
+exakit data-load amazon_sales                                 # a bundled dataset by id
 ```
 
 Use exapump directly only when `exakit data-load` cannot take the file (it

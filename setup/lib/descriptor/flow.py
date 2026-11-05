@@ -52,7 +52,7 @@ def table_name(table: str) -> str:
 
 
 def dataset_id(table: str) -> str:
-    """A dataset id from a table name: BANKING.COMPLAINTS -> banking_complaints."""
+    """A dataset id from a table name: WALMART.WEEKLY_SALES -> walmart_weekly_sales."""
     return re.sub(r"_+", "_", re.sub(r"[^a-z0-9]+", "_", table.lower())).strip("_") or "dataset"
 
 

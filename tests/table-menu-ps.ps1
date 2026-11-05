@@ -34,7 +34,7 @@ function New-Fixture {
     $t = New-ExakitTable -Title "Datasets" -Col1 "Dataset" -Col2 "Rows"
     [void](Add-ExakitTableRow -Table $t -Kind group -Label "Select All")
     [void](Add-ExakitTableRow -Table $t -Kind tee -Label "tpch")
-    [void](Add-ExakitTableRow -Table $t -Kind tee -Label "esophageal")
+    [void](Add-ExakitTableRow -Table $t -Kind tee -Label "amazon")
     $t.Rows[2].State = "disabled"
     [void](Add-ExakitTableRow -Table $t -Kind corner -Label "weather")
     [void](Add-ExakitTableRow -Table $t -Kind plain -Label "Skip")

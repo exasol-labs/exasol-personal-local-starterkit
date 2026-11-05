@@ -3,7 +3,7 @@
     sample = nb.sql(conn, SAMPLE_SQL)                   # LABEL_ and TEXT_: the newest texts on each side of the label
     themes = nb.themes(conn, ds, sample, nb.model_client(), sql=SAMPLE_SQL)
 
-One model call per side (IS_NEGATIVE = 1, IS_NEGATIVE = 0): the model sorts that side's texts into two to four themes
+One model call per side (label = 1, label = 0): the model sorts that side's texts into two to four themes
 and answers in JSON, so the result is a table - theme, how many texts, their share, an example - with a note in plain
 words under it. A theme found on one side only is the clue: what those texts are about that the others are not.
 

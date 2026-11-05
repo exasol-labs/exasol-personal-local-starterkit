@@ -53,6 +53,11 @@ To refresh the examples library from a reviewed, pinned Notebook Connector check
 - **No host, user or password** anywhere; the connection comes from the kit's kernel, **Exasol (Starter Kit)**.
 - **Marimo-ready**: each name is assigned in one cell only.
 - **AI is opt-in**: `USE_AI_THEMES = False` in explore, `DRAFT_WITH_MODEL = False` in ask; a model never approves roles.
+- **A step whose role is missing skips and says why**: `amazon_sales` and `walmart_sales` have no text column, so
+  explore's small text model and AI themes skip on them; 03_score_external_model's stand-in then learns from the
+  category and entity only.
+- **Each important idea is explained where it first appears**, in three or four plain lines (what it is, why we use
+  it): the dataset, the descriptor and its approval, the baseline, the handoff, the feature view, MLflow, the UDF.
 
 ## Model settings
 
@@ -68,7 +73,9 @@ holding the descriptor version and digest, a data digest, the SQL feature view, 
 the training SQL. A stale one is refused (`nb.handoff_is_stale` names what changed and the fix). It trains in a Python
 UDF, compares macro-F1 with a majority baseline and logs to MLflow. The view is plain SQL, so `02_rust_score` scores
 the same columns with a Rust UDF. `nb.write_handoff(conn, ds)` writes one from any notebook.
-Training's `CLASS_WEIGHT`: `None` for Esophageal, `"balanced"` for Banking.
+Training's `CLASS_WEIGHT` defaults to `"balanced"`, which helps a rare label (`amazon_sales`: 14.2% of order lines
+cancelled) and changes little on an even one (`walmart_sales`: 49.7% of weeks above the store's median); `None` weighs
+every row the same.
 
 ## Front-end versions
 
@@ -93,7 +100,7 @@ database and `nbclient` in the add-on's environment
 ```sh
 python3 tools/notebooks.py --run                    # every catalog notebook
 python3 tools/notebooks.py --run notebook/notebooks/data-scientist/01_explore.py \
-  --dataset banking_complaints --timeout 600 --output /tmp/executed
+  --dataset walmart_sales --timeout 600 --output /tmp/executed
 ```
 
 - `--dataset <id>` rewrites the one dataset assignment (repeat it to run once per dataset).

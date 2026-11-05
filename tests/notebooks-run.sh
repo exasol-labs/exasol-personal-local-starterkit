@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # notebooks-run.sh — the kit's notebooks executed headless against the local
-# database, on the reference datasets, with the text step on a stub model
-# (AC-DS3.1, AC-ML3.1).
+# database, on the persona datasets, with the text step on a stub model
+# (AC-DS3.1, AC-ML3.1). Neither persona dataset has a text column, so on them
+# the text step skips and says why; a dataset with text exercises it.
 #
-#   bash tests/notebooks-run.sh                       # every catalog notebook, on the three reference datasets
+#   bash tests/notebooks-run.sh                       # every catalog notebook, on the two persona datasets
 #   bash tests/notebooks-run.sh notebook/notebooks/data-scientist/01_explore.py
-#   EXAKIT_NOTEBOOK_DATASETS="esophageal_posts" bash tests/notebooks-run.sh
+#   EXAKIT_NOTEBOOK_DATASETS="amazon_sales" bash tests/notebooks-run.sh
 #
 # Needs an installed kit with a running database, the notebook add-on and the
 # datasets loaded (the quickstarts load a missing one themselves). Without a
@@ -33,7 +34,7 @@
 # with EXAKIT_NB_AUTO_APPROVE=1: a proposal equal to the approved descriptor is
 # used and nothing is written (the run is idempotent); any other stays a draft.
 #
-#   EXAKIT_NOTEBOOK_DATASETS     space-separated ids (default: the three reference datasets)
+#   EXAKIT_NOTEBOOK_DATASETS     space-separated ids (default: the two persona datasets, amazon_sales walmart_sales)
 #   EXAKIT_NOTEBOOK_BIND_CHECKOUT 1 binds candidate helpers/CLI in a temporary kernel (Mac/Linux CI)
 #   EXAKIT_NOTEBOOK_AI_THEMES     1 enables the optional stub-model text step
 #   EXAKIT_NOTEBOOK_CLASS_WEIGHT  none or balanced; otherwise source value
@@ -69,7 +70,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 EXAKIT_HOME="${EXAKIT_HOME:-$HOME/.exasol-starter-kit}"
 CREDS="$EXAKIT_HOME/credentials"
 MANIFEST="$EXAKIT_HOME/manifest.json"
-DATASETS="${EXAKIT_NOTEBOOK_DATASETS:-esophageal_posts banking_complaints bank_marketing ade_corpus}"
+DATASETS="${EXAKIT_NOTEBOOK_DATASETS:-amazon_sales walmart_sales}"
 
 # The skip that CI can turn into a failure (tests/lib/require.sh explains why),
 # with exit 3 rather than require.sh's 1: here 1 means a notebook failed.

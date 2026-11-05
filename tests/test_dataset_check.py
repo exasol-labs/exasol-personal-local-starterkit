@@ -199,8 +199,7 @@ class BuilderTest(unittest.TestCase):
     def test_each_builder_writes_the_tables_and_columns_the_dataset_ships(self):
         import csv
         import importlib
-        for builder in ("esophageal_posts", "banking_complaints", "bank_marketing", "ade_corpus", "pubmed_abstracts",
-                        "medication_sigs"):
+        for builder in ("walmart_sales", "amazon_sales"):
             folder = ROOT / "data" / "datasets" / builder
             built = importlib.import_module(builder).TABLES
             schema = dataset_check.tables(folder)
@@ -352,8 +351,7 @@ class ReferenceTest(unittest.TestCase):
         self.assertEqual(found[0], ("1. Question 1?", "SELECT COUNT(*) FROM EDGE_DEMO.EDGE_ITEMS WHERE ITEM_ID > 1"))
 
     def test_the_shipped_reference_datasets_have_ten_questions_each(self):
-        for name in ("esophageal_posts", "banking_complaints", "bank_marketing", "ade_corpus", "pubmed_abstracts",
-                     "medication_sigs"):
+        for name in ("walmart_sales", "amazon_sales"):
             with self.subTest(dataset=name):
                 found = dataset_check.example_questions((ROOT / "data" / "datasets" / name / "examples.sql").read_text())
                 self.assertGreaterEqual(len(found), 10)
@@ -376,7 +374,7 @@ class DescriptorDocsTest(unittest.TestCase):
             self.assertIn(f"(datasets/{name}/descriptor.yaml)", text)
 
 
-REFERENCE = ("esophageal_posts", "banking_complaints", "bank_marketing", "ade_corpus")
+REFERENCE = ("walmart_sales", "amazon_sales")
 
 
 class LiveReferenceTest(unittest.TestCase):

@@ -365,7 +365,7 @@ def run_main(argv: list[str]) -> int:
     parser.add_argument("notebooks", nargs="*", metavar="notebook.py",
                         help="notebook sources to run (default: every catalog notebook in notebook/notebooks)")
     parser.add_argument("--dataset", action="append", default=[], metavar="ID",
-                        help="run on this dataset (esophageal_posts, banking_complaints, a descriptor or file path); "
+                        help="run on this dataset (amazon_sales, walmart_sales, a descriptor or file path); "
                              "repeat for several; none keeps each notebook's own assignment")
     parser.add_argument("--timeout", type=int, default=900, metavar="S", help="seconds one cell may take (default 900)")
     parser.add_argument("--kernel", default=os.environ.get("EXAKIT_NOTEBOOK_KERNEL") or KERNEL["name"],

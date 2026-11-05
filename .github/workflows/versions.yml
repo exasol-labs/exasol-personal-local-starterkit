@@ -1233,8 +1233,9 @@ jobs:
     # through the kit's own installer (the launcher runs the database in a
     # rootless Podman container on Linux), then runs the two suites that need
     # it: the read-only MCP user proven empirically (TPC-H), and the four core
-    # quickstart/explore/train notebooks on the three reference datasets with the
-    # text step on a stub model (TDD/BRD AC-DS3.1, AC-ML3.1). Ask requires an
+    # quickstart/explore/train notebooks on the two reference datasets with the
+    # text step on a stub model, which skips on both with its reason: neither
+    # has a text column (TDD/BRD AC-DS3.1, AC-ML3.1). Ask requires an
     # explicit SQL approval; Share requires Dash Server and a figure check;
     # Rust scoring requires its separate pinned SLC. They have their own gates.
     # Both suites skip without a database; EXAKIT_REQUIRE_DB=1 turns that into
@@ -1265,7 +1266,7 @@ jobs:
         env:
           EXAKIT_LOCAL_KIT: ${{ github.workspace }}
           EXAKIT_PERSONA: data-scientist,ml-engineer
-          EXAKIT_DATASETS: tpch,esophageal_posts,banking_complaints,bank_marketing,ade_corpus
+          EXAKIT_DATASETS: tpch,walmart_sales,amazon_sales
           EXAKIT_MARKETPLACE_ADDONS: notebook,udf-devkit
           # One named client so the install creates the read-only MCP user: the
           # matrix below and the notebook runs read as it. EXAKIT_SKIP_MCP=1
@@ -1325,7 +1326,7 @@ jobs:
           exakit notebook check
       - name: the read-only MCP user can read everything and write nothing
         run: EXAKIT_REQUIRE_DB=1 bash tests/mcp-readonly-sql-matrix.sh
-      - name: core notebooks headless on the three reference datasets
+      - name: core notebooks headless on the two reference datasets
         env:
           EXAKIT_REQUIRE_DB: "1"
           EXAKIT_NOTEBOOK_AI_LAB: "0"
@@ -1333,7 +1334,7 @@ jobs:
           EXAKIT_NOTEBOOK_BIND_CHECKOUT: '1'
           EXAKIT_NOTEBOOK_RUN_OUTPUT: ${{ runner.temp }}/executed-notebooks
         run: |
-          for recipe in esophageal_posts:none banking_complaints:balanced bank_marketing:balanced ade_corpus:balanced; do
+          for recipe in walmart_sales:none amazon_sales:balanced; do
             EXAKIT_NOTEBOOK_DATASETS="${recipe%:*}" EXAKIT_NOTEBOOK_CLASS_WEIGHT="${recipe#*:}" \
               bash tests/notebooks-run.sh \
                 notebook/notebooks/data-scientist/00_quickstart.py \

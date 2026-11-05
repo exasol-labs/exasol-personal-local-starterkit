@@ -21,7 +21,7 @@ class InstallerFlowTest(unittest.TestCase):
     def test_question_then_selected_persona_preselects_data_and_addons(self):
         self.assertEqual([('question', '', '')], plan(ROOT, {}, interactive=True))
         actions = plan(ROOT, {'EXAKIT_PERSONA': 'ml-engineer'}, phase='selected')
-        self.assertIn(('set', 'EXAKIT_DATASETS_PRESELECT', 'esophageal_posts,banking_complaints,bank_marketing,ade_corpus,pubmed_abstracts,medication_sigs'), actions)
+        self.assertIn(('set', 'EXAKIT_DATASETS_PRESELECT', 'walmart_sales,amazon_sales'), actions)
         self.assertIn(('set', 'EXAKIT_MARKETPLACE_PRESELECT', 'notebook,udf-devkit'), actions)
         self.assertIn(('record', 'ml-engineer', ''), actions)
         self.assertEqual(('data', '', ''), actions[-1])

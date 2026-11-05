@@ -39,7 +39,7 @@ Install the Exasol starter kit from https://github.com/exasol-labs/exasol-person
 
 </div>
 
-Set up for a role in one go: `curl -fsSL https://www.exasol.com/install/starter-kit.sh | EXAKIT_PERSONA=data-scientist sh` installs the Data Scientist's set - the Esophageal, Banking, Bank marketing and ADE reference datasets with the PubMed and medication-sig text sets, every detected AI client, Dash Server and Notebook. `EXAKIT_PERSONA=ml-engineer` selects Notebook and the UDF devkit, with a local MLflow server. Without it, the installer asks (or installs the kit on its own when nobody is at the terminal). Add another one later with `exakit persona add ml-engineer`: the kit is then both, and what the new one brings is loaded, connected and installed without a question. See [personas/](personas/README.md).
+Set up for a role in one go: `curl -fsSL https://www.exasol.com/install/starter-kit.sh | EXAKIT_PERSONA=data-scientist sh` installs the Data Scientist's set - the Walmart weekly sales and Amazon sales reference datasets, every detected AI client, Dash Server and Notebook. `EXAKIT_PERSONA=ml-engineer` selects Notebook and the UDF devkit, with a local MLflow server. Without it, the installer asks (or installs the kit on its own when nobody is at the terminal). Add another one later with `exakit persona add ml-engineer`: the kit is then both, and what the new one brings is loaded, connected and installed without a question. See [personas/](personas/README.md).
 
 ---
 
@@ -113,7 +113,7 @@ exakit mcp-setup
 
 The installer runs this for you, and you can run it again any time to add a client. It lists Claude, Codex, Cursor, GitHub Copilot, Gemini CLI, OpenCode and Continue, greys out the ones already connected or not installed, writes the config for the ones you pick and checks the connection. `exakit mcp-doctor` checks it again later.
 
-The General persona (ticked to begin with) loads three samples: TPC-H retail in `TPCH`, smart-meter energy readings in `ENERGY` and daily city weather in `WEATHER`. The Data Scientist and ML Engineer personas load six more, each downloaded from the kit's `datasets` release only when picked: esophageal cancer posts in `ESOPHAGEAL`, banking complaints in `BANKING`, bank marketing clients in `BANKMKT`, adverse-drug-effect sentences in `ADE`, clinical-study abstracts in `PUBMED` and prescription directions in `MEDSIGS` (`exakit data-load esophageal_posts` brings one in any time). The [data dictionary](data/data-dictionary.md) describes them, and [data/example-questions.md](data/example-questions.md) has 14 questions with reference SQL.
+The General persona (ticked to begin with) loads three samples: TPC-H retail in `TPCH`, smart-meter energy readings in `ENERGY` and daily city weather in `WEATHER`. The Data Scientist and ML Engineer personas load two more, each downloaded from the kit's `datasets` release only when picked: weekly sales of 45 Walmart stores in `WALMART` and Amazon.in fashion order lines in `AMAZON` (`exakit data-load amazon_sales` brings one in any time). The [data dictionary](data/data-dictionary.md) describes them, and [data/example-questions.md](data/example-questions.md) has 14 questions with reference SQL.
 
 Try it: *"Which product category generated the most revenue? Show me the SQL before you run it."*
 

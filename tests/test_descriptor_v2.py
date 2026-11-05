@@ -94,12 +94,12 @@ class ReaderTest(unittest.TestCase):
         self.assertEqual((d.source, d.live_source), ("crm", "crm"))
 
     def test_the_shipped_descriptors_are_role_per_column_approved_by_the_kit(self):
-        for name in ("esophageal_posts", "banking_complaints", "bank_marketing", "ade_corpus"):
+        for name in ("walmart_sales", "amazon_sales"):
             with self.subTest(dataset=name):
                 d = rules.read_descriptor(ROOT / "data" / "datasets" / name)
                 self.assertEqual((d.schema_version, d.version, d.status, d.owner, d.drafted_by, d.source),
                                  (3, 1, "approved", "kit", "shipped", name))
-                self.assertEqual((d.created, d.live_source), ("2026-11-03T00:00:00Z", None))
+                self.assertEqual((d.created, d.live_source), ("2026-11-05T00:00:00Z", None))
                 self.assertTrue(d.digest.startswith("sha256:"))
                 self.assertTrue(d.slots["key"] and d.slots["target"])
 
@@ -115,7 +115,7 @@ class ReaderTest(unittest.TestCase):
         self.assertEqual(d.column("label").column, "ALARM")
 
     def test_a_version_2_source_names_what_the_data_is(self):
-        for source, live in (("vs:SALES_DB", "SALES_DB"), ("esophageal_posts", None), ('"file:/x/y.csv"', None)):
+        for source, live in (("vs:SALES_DB", "SALES_DB"), ("amazon_sales", None), ('"file:/x/y.csv"', None)):
             with self.subTest(source=source):
                 d = rules.parse_descriptor(V2.replace('source: "file:/data/readings.csv"', f"source: {source}"))
                 self.assertEqual(d.live_source, live)
@@ -200,8 +200,10 @@ class ResolutionTest(unittest.TestCase):
         patcher = mock.patch.dict(os.environ, {"EXAKIT_HOME": self.home.name, "EXAKIT_NB_DATASETS": str(ROOT / "data" / "datasets")})
         patcher.start()
         self.addCleanup(patcher.stop)
-        self.posts = ["ESOPHAGEAL.ESOPHAGEAL_POSTS." + c for c in ("POST_ID", "CREATED_TIME", "SOCIAL_NETWORK", "SOURCE_DOMAIN",
-                                                                  "IS_NEGATIVE", "TITLE", "MESSAGE")]
+        self.lines = ["AMAZON.ORDER_LINES." + c for c in (
+            "ORDER_LINE_ID", "ORDER_ID", "ORDER_DATE", "STATUS", "FULFILMENT", "SALES_CHANNEL", "SHIP_SERVICE_LEVEL",
+            "STYLE_CODE", "SKU", "CATEGORY", "SIZE", "ASIN", "COURIER_STATUS", "QTY", "CURRENCY", "AMOUNT", "SHIP_CITY",
+            "SHIP_STATE", "SHIP_POSTAL_CODE", "SHIP_COUNTRY", "HAS_PROMOTION", "IS_B2B", "FULFILLED_BY", "CANCELLED")]
 
     def store(self, id: str, versions: dict[int, str], current: int | None) -> Path:
         folder = store.descriptor_store_dir(id)
@@ -212,57 +214,58 @@ class ResolutionTest(unittest.TestCase):
             (folder / "current").write_text(f"{current}\n", encoding="utf-8")
         return folder
 
-    def shipped_as(self, version: int, status: str, entity: str = "SOURCE_DOMAIN") -> str:
-        """A schema_version 2 descriptor of the Esophageal table, as an older kit stored it under descriptors/<id>/."""
-        t = "ESOPHAGEAL.ESOPHAGEAL_POSTS"
-        return (f"schema_version: 2\nid: esophageal_posts\nfact_table: {t}\nsource: esophageal_posts\nversion: {version}\n"
+    def shipped_as(self, version: int, status: str, entity: str = "SHIP_STATE") -> str:
+        """A schema_version 2 descriptor of the Amazon table, as an older kit stored it under descriptors/<id>/. The
+        table has no text column, so the text role is listed under missing with its reason."""
+        t = "AMAZON.ORDER_LINES"
+        return (f"schema_version: 2\nid: amazon_sales\nfact_table: {t}\nsource: amazon_sales\nversion: {version}\n"
                 f"status: {status}\nowner: dana\ncreated: 2026-10-27T00:00:00Z\ndrafted_by: user\nroles:\n"
-                f"  entity: {{table: {t}, column: {entity}}}\n  category: {{table: {t}, column: SOCIAL_NETWORK}}\n"
-                f"  date: {{table: {t}, column: CREATED_TIME}}\n  label: {{table: {t}, column: IS_NEGATIVE}}\n"
-                f"  text: [{{table: {t}, column: MESSAGE}}]\n")
+                f"  entity: {{table: {t}, column: {entity}}}\n  category: {{table: {t}, column: CATEGORY}}\n"
+                f"  date: {{table: {t}, column: ORDER_DATE}}\n  label: {{table: {t}, column: CANCELLED}}\n"
+                f"missing:\n  - {{role: text, reason: no text column}}\n")
 
     def test_the_store_lives_under_exakit_home(self):
         self.assertEqual(store.kit_home(), Path(self.home.name))
-        self.assertEqual(store.descriptor_store_dir("esophageal_posts"), Path(self.home.name) / "descriptors" / "esophageal_posts")
+        self.assertEqual(store.descriptor_store_dir("amazon_sales"), Path(self.home.name) / "descriptors" / "amazon_sales")
         with self.assertRaises(ValueError):
             store.descriptor_store_dir("../etc")
         with mock.patch.dict(os.environ, {"EXAKIT_HOME": ""}):
             self.assertEqual(store.kit_home(), Path.home() / ".exasol-starter-kit")
 
     def test_nothing_stored_falls_back_to_the_shipped_file(self):
-        ds = exakit_nb.dataset(FakeConn(self.posts), "esophageal_posts")
+        ds = exakit_nb.dataset(FakeConn(self.lines), "amazon_sales")
         self.assertEqual(ds.descriptor_origin, "shipped")
-        self.assertEqual(ds.descriptor_path, ROOT / "data" / "datasets" / "esophageal_posts" / "descriptor.yaml")
+        self.assertEqual(ds.descriptor_path, ROOT / "data" / "datasets" / "amazon_sales" / "descriptor.yaml")
         self.assertEqual((ds.version, ds.status, ds.owner), (1, "approved", "kit"))
-        self.assertEqual(store.list_versions("esophageal_posts"), [])
-        self.assertIsNone(store.current_version("esophageal_posts"))
+        self.assertEqual(store.list_versions("amazon_sales"), [])
+        self.assertIsNone(store.current_version("amazon_sales"))
 
     def test_the_stores_current_version_wins_over_the_shipped_file(self):
-        folder = self.store("esophageal_posts", {1: self.shipped_as(1, "approved"), 2: self.shipped_as(2, "approved", "TITLE"),
+        folder = self.store("amazon_sales", {1: self.shipped_as(1, "approved"), 2: self.shipped_as(2, "approved", "SHIP_CITY"),
                                               3: self.shipped_as(3, "draft")}, current=2)
-        ds = exakit_nb.dataset(FakeConn(self.posts), "esophageal_posts")
+        ds = exakit_nb.dataset(FakeConn(self.lines), "amazon_sales")
         self.assertEqual((ds.descriptor_origin, ds.descriptor_path), ("store", folder / "v2.yaml"))
-        self.assertEqual((ds.version, ds.owner, ds.col("entity")), (2, "dana", "TITLE"))
-        self.assertEqual(store.list_versions("esophageal_posts"), [1, 2, 3])
-        self.assertEqual(store.current_version("esophageal_posts"), 2)
-        self.assertEqual(store.current_descriptor("esophageal_posts"), folder / "v2.yaml")
+        self.assertEqual((ds.version, ds.owner, ds.col("entity")), (2, "dana", "SHIP_CITY"))
+        self.assertEqual(store.list_versions("amazon_sales"), [1, 2, 3])
+        self.assertEqual(store.current_version("amazon_sales"), 2)
+        self.assertEqual(store.current_descriptor("amazon_sales"), folder / "v2.yaml")
 
     def test_a_store_without_current_or_with_a_gone_version_is_skipped(self):
-        folder = self.store("esophageal_posts", {1: self.shipped_as(1, "approved")}, current=None)
-        self.assertEqual(exakit_nb.dataset(FakeConn(self.posts), "esophageal_posts").descriptor_origin, "shipped")
+        folder = self.store("amazon_sales", {1: self.shipped_as(1, "approved")}, current=None)
+        self.assertEqual(exakit_nb.dataset(FakeConn(self.lines), "amazon_sales").descriptor_origin, "shipped")
         (folder / "current").write_text("7\n", encoding="utf-8")
-        self.assertIsNone(store.current_descriptor("esophageal_posts"))
-        self.assertEqual(exakit_nb.dataset(FakeConn(self.posts), "esophageal_posts").descriptor_origin, "shipped")
+        self.assertIsNone(store.current_descriptor("amazon_sales"))
+        self.assertEqual(exakit_nb.dataset(FakeConn(self.lines), "amazon_sales").descriptor_origin, "shipped")
         (folder / "current").write_text("latest\n", encoding="utf-8")
-        self.assertIsNone(store.current_version("esophageal_posts"))
-        self.assertEqual(store.list_versions("esophageal_posts"), [1])
+        self.assertIsNone(store.current_version("amazon_sales"))
+        self.assertEqual(store.list_versions("amazon_sales"), [1])
 
     def test_the_role_per_column_store_wins_over_the_shipped_file(self):
-        shipped = (ROOT / "data" / "datasets" / "esophageal_posts" / "descriptor.yaml").read_text(encoding="utf-8")
-        folder = Path(self.home.name) / "descriptors" / "ESOPHAGEAL.ESOPHAGEAL_POSTS"
+        shipped = (ROOT / "data" / "datasets" / "amazon_sales" / "descriptor.yaml").read_text(encoding="utf-8")
+        folder = Path(self.home.name) / "descriptors" / "AMAZON.ORDER_LINES"
         folder.mkdir(parents=True)
         (folder / "current.yaml").write_text(shipped.replace('owner: "kit"', 'owner: "dana"').replace("version: 1", "version: 2"))
-        ds = exakit_nb.dataset(FakeConn(self.posts), "esophageal_posts")
+        ds = exakit_nb.dataset(FakeConn(self.lines), "amazon_sales")
         self.assertEqual((ds.descriptor_origin, ds.descriptor_path, ds.version, ds.owner),
                          ("store", folder / "current.yaml", 2, "dana"))
 
@@ -283,7 +286,7 @@ class ResolutionTest(unittest.TestCase):
         with self.assertRaises(ValueError) as caught:
             exakit_nb.dataset(FakeConn(), "no_such_set")
         self.assertIn("not approved in the kit's store", str(caught.exception))
-        self.assertIn("esophageal_posts", str(caught.exception))
+        self.assertIn("amazon_sales", str(caught.exception))
 
     def test_a_data_file_reads_the_descriptor_beside_it(self):
         with tempfile.TemporaryDirectory() as tmp:

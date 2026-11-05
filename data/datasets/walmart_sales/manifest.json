@@ -1,0 +1,29 @@
+{
+  "id": "walmart_sales",
+  "source": {
+    "name": "Walmart Data Analysis and Forecasting (Kaggle; the exact page was not recorded)",
+    "url": "https://www.kaggle.com/search?q=Walmart+Data+Analysis+and+Forcasting",
+    "file": "Walmart Data Analysis and Forcasting.csv",
+    "builder": "tools/datasets/walmart_sales.py"
+  },
+  "terms": {
+    "url": "https://www.kaggle.com/search?q=Walmart+Data+Analysis+and+Forcasting",
+    "license": "as stated on the Kaggle dataset page (not confirmed)",
+    "summary": "Weekly sales of 45 Walmart stores, 2010-2012, as published on Kaggle. The licence has not been confirmed: check the dataset page before redistributing it.",
+    "confirmed": false
+  },
+  "snapshot": "2026-11-05",
+  "asset": {
+    "file": "walmart_sales-2026-11-05.tar.gz",
+    "sha256": "dc385745c5f7cf200e8ebc829bdb1eee85857ac701820e30d691c11d64210d0d",
+    "size": 136344,
+    "tar_sha256": "52edfb8dccf6a10c0984f17a0447b9291cd340d314a6ff2e713eec568b10d45e",
+    "url": "https://github.com/{repo}/releases/download/datasets/walmart_sales-2026-11-05.tar.gz"
+  },
+  "files": {
+    "data/weekly_sales.csv": {
+      "rows": 6435,
+      "sha256": "274f377b1f9dd484e01508b392a393c9650b9e5142b2deac5f644075291ba772"
+    }
+  }
+}

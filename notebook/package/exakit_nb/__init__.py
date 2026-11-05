@@ -10,7 +10,7 @@ kit's notebook Python. Nothing here prints or returns a host, a user or a passwo
     conn = nb.connect()
     df = nb.sql(conn, "SELECT * FROM TPCH.NATION")
     nb.show_sql()
-    ds = nb.dataset(conn, "esophageal_posts")           # the roles of a dataset, checked against the database
+    ds = nb.dataset(conn, "amazon_sales")               # the roles of a dataset, checked against the database
     ds = nb.load_own_file("~/data/sales.json", "MY_DATA.SALES", {"entity": "CUSTOMER", ...})   # or your own file
     with nb.trace(conn, dataset=ds): ...              # model calls as one trace in your Langfuse (opt-in)
 

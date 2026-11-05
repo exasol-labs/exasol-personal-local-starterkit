@@ -105,7 +105,7 @@ def evaluate_question(dataset, question: str, reference: str, *, execute, draft,
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", action="append", required=True, help="exact provider model ID; repeat to compare models")
-    parser.add_argument("--dataset", action="append", choices=("esophageal_posts", "banking_complaints"),
+    parser.add_argument("--dataset", action="append", choices=("walmart_sales", "amazon_sales"),
                         help="reference dataset; repeat (default: both)")
     parser.add_argument("--output", type=Path, required=True, help="JSON scores without credentials or result rows")
     parser.add_argument("--approve-proposals", action="store_true", help="explicitly authorize generated read-only queries for this benchmark")
@@ -135,7 +135,7 @@ def main(argv=None) -> int:
             os.environ[model_config.MODEL_ID] = model
             model_config.resolve()  # fail before evaluating a misconfigured provider
             scored = {"model_id": model, "datasets": []}
-            for name in args.dataset or ["esophageal_posts", "banking_complaints"]:
+            for name in args.dataset or ["walmart_sales", "amazon_sales"]:
                 folder = ROOT / "data/datasets" / name
                 ds = nb.dataset(conn, name).require_approved("ask benchmark")
                 description = (folder / "01_create_schema.sql").read_text()

@@ -9,7 +9,7 @@
 # %% [markdown]
 # # Data Scientist quickstart
 #
-# **Dataset:** `esophageal_posts` (default), `banking_complaints` or your own file. **How long:** about ten minutes on the first load.
+# **Dataset:** `amazon_sales` (default), `walmart_sales` or your own file. **How long:** about ten minutes on the first load.
 #
 # You end with a connection, an approved column map and a first grouped result. No LLM needed.
 
@@ -43,8 +43,8 @@ if GROUPED_BY != "category":
     print(f"No category role ({skipped.get('category', 'none approved')}): rows are counted per {GROUPED_BY} instead.")
 if "label" in skipped:
     print(f"No label role ({skipped['label']}): the label rate is left out; the steps that need it later say so.")
-GROUP, COUNT = nb.name(BY), nb.count_name(ds)       # columns named after the data: SOCIAL_NETWORK, POSTS
-PCT = nb.name(ds.col("label"), "PCT") if ds.has("label") and GROUPED_BY != "label" else None   # IS_NEGATIVE_PCT
+GROUP, COUNT = nb.name(BY), nb.count_name(ds)       # columns named after the data: CATEGORY, ORDER_LINES
+PCT = nb.name(ds.col("label"), "PCT") if ds.has("label") and GROUPED_BY != "label" else None   # CANCELLED_PCT
 RATE = f",\n       ROUND(100 * AVG({ds.col('label')}), 1) AS {PCT}" if PCT else ""
 first_rows = nb.sql(conn, f"""
 SELECT {BY} AS {GROUP},

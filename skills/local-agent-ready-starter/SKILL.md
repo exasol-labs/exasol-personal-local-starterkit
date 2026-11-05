@@ -149,7 +149,7 @@ trust. That is what makes the next steps safe.
 
 Check what is already there first: `exakit status --json` lists `datasets_loaded`. A persona
 install loaded the persona's own datasets — a Data Scientist or ML Engineer machine has
-`ESOPHAGEAL_POSTS`, `BANKING_COMPLAINTS`, `BANK_MARKETING` and the rest, **not** TPC-H. Use what
+`walmart_sales` (`WALMART.WEEKLY_SALES`) and `amazon_sales` (`AMAZON.ORDER_LINES`), **not** TPC-H. Use what
 is loaded. Only on an empty database, load a bundled sample, for example TPC-H (customers,
 orders, line items, parts, suppliers) into the `TPCH` schema:
 
@@ -183,8 +183,8 @@ ASK  ->  INSPECT (show the SQL first)  ->  RUN (read-only)  ->  VALIDATE (indepe
    describes each bundled dataset. Run them through `exakit sql` (`--json` for
    one parseable object).
 2. **Ask, but show the SQL first.** For a question that fits the loaded data — *"which product
-   category generated the most revenue?"* on TPC-H, *"which complaint products most often
-   end in monetary relief?"* on banking complaints — present the SQL and a plain-English explanation **before executing**.
+   category generated the most revenue?"* on TPC-H, *"which product categories are most
+   often cancelled?"* on Amazon sales — present the SQL and a plain-English explanation **before executing**.
    Call out the judgment calls: what defines "revenue" (price × quantity? an amount column?),
    whether returns are subtracted, what is filtered out. Let the user correct the SQL before
    it runs.

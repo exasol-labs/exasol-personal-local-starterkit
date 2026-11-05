@@ -250,8 +250,8 @@ printf '\n== a dataset without an asset block loads as it always did ==\n'
 exakit_dataset_files "$ROOT" "$ROOT/data/datasets/tpch" tpch
 check "tpch reads its own data/" "0:$ROOT/data/datasets/tpch/data" "$?:$EXAKIT_DATASET_DATA_DIR"
 check "without starting Python" "" "$(cat "$WORK/python.calls")"
-exakit_dataset_files "$ROOT" "$ROOT/data/datasets/esophageal_posts" esophageal_posts
-check "a checkout's esophageal_posts CSVs match: no download" "0:$ROOT/data/datasets/esophageal_posts/data" "$?:$EXAKIT_DATASET_DATA_DIR"
+exakit_dataset_files "$ROOT" "$ROOT/data/datasets/amazon_sales" amazon_sales
+check "a checkout's amazon_sales CSVs match: no download" "0:$ROOT/data/datasets/amazon_sales/data" "$?:$EXAKIT_DATASET_DATA_DIR"
 
 printf '\n== the listing names the download, the table keeps it ==\n'
 reset_cache

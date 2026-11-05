@@ -165,22 +165,22 @@ class ModelProposalTest(unittest.TestCase):
         self.assertEqual("Posts by country?", sent["question"])
 
     def test_a_proposal_shows_itself_once_and_readably(self):
-        sql = ('SELECT "SOCIAL_NETWORK", COUNT(*) AS POSTS FROM "ESOPHAGEAL"."POSTS" '
-               "WHERE \"MESSAGE\" LIKE '%from here%' GROUP BY 1 ORDER BY POSTS DESC")
+        sql = ('SELECT "SHIP_STATE", COUNT(*) AS LINES FROM "AMAZON"."ORDER_LINES" '
+               "WHERE \"SHIP_CITY\" LIKE '%from here%' GROUP BY 1 ORDER BY LINES DESC")
         self.assertEqual(ask_module.readable(sql).splitlines(), [
-            'SELECT "SOCIAL_NETWORK", COUNT(*) AS POSTS', 'FROM "ESOPHAGEAL"."POSTS"',
-            "WHERE \"MESSAGE\" LIKE '%from here%'", "GROUP BY 1", "ORDER BY POSTS DESC"])
+            'SELECT "SHIP_STATE", COUNT(*) AS LINES', 'FROM "AMAZON"."ORDER_LINES"',
+            "WHERE \"SHIP_CITY\" LIKE '%from here%'", "GROUP BY 1", "ORDER BY LINES DESC"])
         import io
         from contextlib import redirect_stdout
         with redirect_stdout(io.StringIO()) as out:
-            proposal = make_proposal(Descriptor(), "Posts per network?", sql)
+            proposal = make_proposal(Descriptor(), "Lines per state?", sql)
         self.assertEqual("", out.getvalue(), "ask() prints nothing: the proposal shows itself")
-        proposal.assumptions, proposal.doubts = ["<b>network</b> is SOCIAL_NETWORK"], ["NULLs are a group"]
+        proposal.assumptions, proposal.doubts = ["<b>state</b> is SHIP_STATE"], ["NULLs are a group"]
         text = str(proposal)
         self.assertEqual(1, text.count("NULLs are a group"))
         self.assertIn("not approved yet", text)
         html = proposal._repr_html_()
-        self.assertIn("&lt;b&gt;network&lt;/b&gt;", html, "the model's words are escaped")
+        self.assertIn("&lt;b&gt;state&lt;/b&gt;", html, "the model's words are escaped")
         self.assertIn("<li>NULLs are a group</li>", html)
         self.assertIn("Not approved yet", html)
         self.assertEqual(sql, proposal.sql, "the approved text is never reformatted")

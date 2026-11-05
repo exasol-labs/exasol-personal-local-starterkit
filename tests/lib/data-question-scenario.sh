@@ -20,7 +20,7 @@ run_python_any() { python3 "$@"; }
 EXAKIT_LOG_FILE="$W/log"; : > "$EXAKIT_LOG_FILE"
 exakit_pending_datasets() {
     [ "${DQ_PENDING:-}" = none ] && return 0
-    printf 'tpch|TPC-H retail benchmark\nenergy|Smart-meter energy readings\nbanking_complaints|Banking complaints (CFPB, ~7k complaints)\n'
+    printf 'tpch|TPC-H retail benchmark\nenergy|Smart-meter energy readings\nwalmart_sales|Walmart weekly sales (45 stores, 2010-2012, ~6k weeks)\n'
 }
 case "${DQ_SCENE:-source}" in
     yesno)

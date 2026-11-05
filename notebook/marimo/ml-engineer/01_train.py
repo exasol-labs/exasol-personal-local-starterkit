@@ -16,7 +16,7 @@ def _(mo):
     mo.md(r"""
     # Train in Exasol
 
-    **Dataset:** the one you approved last (else `esophageal_posts`); set `DATASET` for Banking or your own approved file. **How long:** about five minutes after setup.
+    **Dataset:** the one you approved last (else `amazon_sales`); set `DATASET` for `walmart_sales` or your own approved file. **How long:** about five minutes after setup.
 
     Trains a model inside Exasol from the approved column map and records it in MLflow. No LLM needed.
 
@@ -34,7 +34,7 @@ def _():
     import exasol_mlflow
     import os
 
-    DATASET = None  # None: the dataset approved last in a quickstart (else esophageal_posts); or "banking_complaints", or "~/my-data/transactions.csv" with approved roles beside it
+    DATASET = None  # None: the dataset approved last in a quickstart (else amazon_sales); or "walmart_sales", or "~/my-data/transactions.csv" with approved roles beside it
     CONTAINER = nb.ml_train.udf_container()   # or "PYTHON3_ML", "PYTHON3", or the alias of a container you installed
     DATASET = nb.chosen_dataset(DATASET)
     if os.environ.get("EXAKIT_WORKFLOW_ID"):
@@ -48,6 +48,10 @@ def _():
 def _(mo):
     mo.md(r"""
     ## Load the handoff
+
+    > **What is the handoff?** One small file that pins down what the model is trained on: the approved map, the features, the outcome (label) and how rows are split into training and test.
+    > Written down once, the same training can be repeated later and gives the same model.
+    > If the table or the map changes, the handoff no longer matches and is refused instead of being used silently.
 
     The handoff fixes what is trained on: the approved map version, a data fingerprint, the features, the label and the split. With none yet, it is written here from the approved map; a stale one is refused. Check the printed ID and split. No date role? Set `SPLIT = "random"`.
     """)
@@ -72,6 +76,10 @@ def _(mo):
     mo.md(r"""
     ## Build features and the training UDF
 
+    > **What is the feature view?** A SQL view that turns each row into numbers a model can use: year, month and weekday from the date, one 0/1 column per common category value, how common the entity is.
+    > It is plain SQL, so you can read every feature, and the Rust scorer later reads the very same view.
+    > It is built from the approved map only, so a column that gives the answer away (like `STATUS` in `amazon_sales`) never becomes a feature.
+
     Creates a SQL feature view and a training UDF. Check the label is not among the printed features.
     """)
     return
@@ -82,7 +90,7 @@ def _(CONTAINER, conn, ds, handoff, nb):
     UDF_SCHEMA = "EXASOL_MLFLOW"
     UDF_NAME = "TRAIN_FROM_HANDOFF"
     SEED = 0
-    CLASS_WEIGHT = None  # "balanced" for the Banking reference recipe; None for Esophageal
+    CLASS_WEIGHT = "balanced"  # "balanced": the rarer outcome counts more (amazon_sales: 14.2% cancelled); None: every row counts the same
     REGULARIZATION_C = 1.0
 
     plan = nb.prepare_training(conn, ds, handoff, schema=UDF_SCHEMA, name=UDF_NAME, container=CONTAINER,
@@ -101,7 +109,13 @@ def _(mo):
     mo.md(r"""
     ## Train and compare with the baseline
 
-    Compare macro-F1 with `baseline_macro_f1` (always predicting the most common class). Use `CLASS_WEIGHT = None` for Esophageal, `"balanced"` for Banking.
+    > **What is the baseline?** The score of a "model" that always predicts the most common outcome (in `amazon_sales`: never cancelled).
+    > A trained model has to beat it; if it does not, it has learned nothing useful yet.
+    > The score is macro-F1, which weighs both outcomes equally, so always answering "not cancelled" cannot look good.
+
+    Compare macro-F1 with `baseline_macro_f1` (always predicting the most common class). `CLASS_WEIGHT = "balanced"` helps when the label is rare (`amazon_sales`: 14.2% cancelled); with an even label (`walmart_sales`: 49.7% above the store's median) it changes little, and `None` is fine.
+
+    The run is recorded in MLflow: its settings, scores and model file, tagged with the map version and handoff it came from.
 
     If MLflow fails after training, replay with `exakit mlflow replay`.
     """)

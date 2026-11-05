@@ -31,7 +31,7 @@
       "persona": "data-scientist",
       "step": 1,
       "title": "Explore a dataset",
-      "summary": "The domain's landscape question with the SQL visible, a small scikit-learn model on this computer, and a text step with your own model traced to your Langfuse. Another dataset or your own file is one assignment away.",
+      "summary": "Compare groups and follow the label over time with the SQL visible. With a text column, also a small scikit-learn model on this computer and a text step with your own model traced to your Langfuse; amazon_sales and walmart_sales have none, so those steps skip and say why. Another dataset or your own file is one assignment away.",
       "needs": "a loaded dataset; a model for the optional AI step",
       "jupyter": "01_explore.ipynb",
       "marimo": "01_explore.py"
@@ -71,8 +71,8 @@
       "persona": "ml-engineer",
       "step": 1,
       "title": "Train inside the database",
-      "summary": "Checks the Data Scientist's handoff, builds its SQL feature view, trains a logistic regression inside a Python UDF, and logs metrics, baseline, model and coefficients to MLflow.",
-      "needs": "a hand-off from 01_explore, udf-devkit, MLflow",
+      "summary": "Writes or checks the training handoff from the approved column map, builds its SQL feature view, trains a logistic regression on the 0/1 target (amazon_sales: CANCELLED; walmart_sales: ABOVE_STORE_MEDIAN) inside a Python UDF, and logs metrics, baseline, model and coefficients to MLflow.",
+      "needs": "an approved column map with a target, udf-devkit, MLflow",
       "jupyter": "01_train.ipynb",
       "marimo": "01_train.py"
     },
