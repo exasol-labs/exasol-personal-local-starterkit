@@ -72,7 +72,9 @@ jobs:
           # request only when it touches what that job proves: the notebooks,
           # the reference datasets, the helper packages, the descriptor service
           # the notebooks describe through, or the job's own files.
-          nb_paths='^(notebook/|data/datasets/|packages/|setup/lib/descriptor/|setup/lib/describe_service\.py$|tools/notebooks\.py$|tests/notebooks-run\.sh$|tests/lib/stub_model_server\.py$|tests/mcp-readonly-sql-matrix\.sh$|\.github/workflows/versions\.yml$)'
+          # The files that PLACE the persona notebooks count too (QAT-09): the
+          # personas, and the add-on code that copies their folders.
+          nb_paths='^(notebook/|data/datasets/|packages/|personas/|marketplace/addons/notebook\.py$|marketplace/notebook_cli\.py$|marketplace/persona_apply\.py$|marketplace/persona_membership\.py$|setup/lib/descriptor/|setup/lib/describe_service\.py$|tools/notebooks\.py$|tests/notebooks-run\.sh$|tests/lib/stub_model_server\.py$|tests/mcp-readonly-sql-matrix\.sh$|\.github/workflows/versions\.yml$)'
           if printf '%s\n' "$changed" | grep -qE "$nb_paths"; then
             echo "notebooks=true" >> "$GITHUB_OUTPUT"
           else
@@ -1277,6 +1279,35 @@ jobs:
           done
           exakit status
           python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); print("status:", d["status"]); sys.exit(0 if d["status"] == "running" else 1)' "$RUNNER_TEMP/status.json"
+      - name: each recorded persona's notebooks, and no other's, are placed
+        # QAT-09: the notebooks below run from the checkout, so placement - what
+        # the install copied for the personas it recorded - was never looked at.
+        run: |
+          python3 - "$GITHUB_WORKSPACE/notebook/catalog.json" <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          kit = Path(os.path.expanduser("~/.exasol-starter-kit"))
+          manifest = json.loads((kit / "manifest.json").read_text())
+          recorded = [p for p in str((manifest.get("persona") or {}).get("id", "")).split(",") if p]
+          catalog = json.loads(Path(sys.argv[1]).read_text())
+          recorded_dir = ((manifest.get("components") or {}).get("notebook") or {}).get("notebooks_dir")
+          placed_root = Path(recorded_dir or kit / "notebooks") / catalog["folders"]["jupyter"]
+          problems = []
+          for persona in {n.get("persona") for n in catalog["notebooks"] if n.get("persona")}:
+              folder = placed_root / persona
+              wanted = sorted(n["jupyter"] for n in catalog["notebooks"] if n.get("persona") == persona and n.get("jupyter"))
+              if persona in recorded:
+                  have = sorted(f.name for f in folder.glob("*.ipynb"))
+                  if have != wanted:
+                      problems.append(f"{persona}: placed {have}, catalog lists {wanted}")
+              elif folder.exists():
+                  problems.append(f"{persona}: not recorded ({recorded}) but its folder was placed")
+          print("recorded personas:", recorded)
+          if problems:
+              print("\n".join(problems))
+              sys.exit(1)
+          print("placement matches the catalog")
+          PY
       - name: nbclient into the kit's notebook environment
         # tools/notebooks.py --run executes with nbclient on the kit's own kernel;
         # the add-on does not ship it (a user never runs a notebook headless).
