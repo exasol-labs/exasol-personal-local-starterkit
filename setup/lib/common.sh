@@ -10570,11 +10570,15 @@ try:
         doc = json.load(handle)
 except Exception:
     sys.exit(1)
+import os
+in_wsl = bool(os.environ.get("WSL_DISTRO_NAME") or os.environ.get("WSL_INTEROP"))
 for client in doc.get("clients", []):
     if client.get("configured"):
         state = "connected"
     elif client.get("detected"):
         state = "pending"
+    elif in_wsl and client["id"] == "claude_desktop":
+        state = "windows"          # a Windows app: not missing, on the other side (WSL-02)
     else:
         state = "missing"
     print(f'{client["id"]} {state}')
@@ -10785,6 +10789,7 @@ EOF
                     _menu_ids+=(""); _menu_notes+=("already connected")
                     _connected_count=$((_connected_count + 1))
                     ;;
+                windows)   _menu_ids+=(""); _menu_notes+=("on Windows - connect it from PowerShell") ;;
                 *)         _menu_ids+=(""); _menu_notes+=("not installed") ;;
             esac
         }

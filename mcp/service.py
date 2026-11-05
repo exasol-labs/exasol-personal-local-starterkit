@@ -833,10 +833,12 @@ class MCPAccessSubsystem:
                 Finding(
                     code="client_not_supported",
                     severity=Severity.WARNING,
-                    message=f"{adapter.display_name()} is not supported on this platform (skipped).",
+                    message=(f"{adapter.display_name()} is not supported on this platform (skipped)."
+                             if location.remedy is None else
+                             f"{adapter.display_name()} cannot be configured from here (skipped)."),
                     scope={"client": adapter.adapter_id()},
                     evidence=location.evidence,
-                    recommended_action="Choose a supported client or use a supported platform.",
+                    recommended_action=location.remedy or "Choose a supported client or use a supported platform.",
                 )
             )
             return None, None, findings
