@@ -786,6 +786,33 @@ jobs:
           sys.exit(1 if problems else 0)
           PY
 
+  linux-paths:
+    # LNX-09: the suites mock detect_os, so the paths only real Linux takes - the C library the exapump shim
+    # keys on, the CPU architecture, the container engine - were never run by anything. Here the installer's
+    # own preflight and dry run run from this checkout on an older glibc (Ubuntu 22.04) and on arm64; both
+    # check the machine and install nothing. The platform-specific suites run beside them.
+    name: linux paths (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@v7
+      - name: the machine as the kit sees it
+        run: |
+          uname -m
+          ldd --version 2>&1 | head -1
+          bash -c '. setup/lib/detect.sh; printf "os=%s arch=%s musl=%s docker=%s\n" "$(detect_os)" "$(detect_arch)" "$(detect_musl && echo yes || echo no)" "$(detect_docker)"'
+      - name: preflight, from this checkout (installs nothing)
+        run: EXAKIT_HOME="$RUNNER_TEMP/kit-home" EXAKIT_LOCAL_KIT="$PWD" EXAKIT_PREFLIGHT=1 sh install.sh </dev/null
+      - name: dry run, from this checkout (installs nothing)
+        run: EXAKIT_HOME="$RUNNER_TEMP/kit-home" EXAKIT_LOCAL_KIT="$PWD" EXAKIT_DRY_RUN=1 EXAKIT_PERSONA=data-scientist sh install.sh </dev/null
+      - run: bash tests/exapump-shim-wrapper.sh
+      - run: bash tests/mcp-sve.sh
+      - run: bash tests/personal-readiness.sh
+      - run: bash tests/podman-rootless-selfheal.sh
+
   shell-tests:
     name: shell tests (${{ matrix.os }}, ${{ matrix.shard }}/5)
     runs-on: ${{ matrix.os }}
