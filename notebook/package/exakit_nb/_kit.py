@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sys
 from functools import lru_cache
@@ -77,6 +78,32 @@ def _from_files() -> dict[str, str]:
     kit = home / "kit"
     return {"EXAKIT_NB_STORE": str(store), "EXAKIT_NB_MASTER_FILE": str(master), "EXAKIT_NB_KIT": str(kit),
             "EXAKIT_NB_DATASETS": str(kit / "data" / "datasets")}
+
+
+FINGERPRINT = re.compile(r"[0-9a-f]{64}")
+
+
+def tls_fingerprint(manifest: dict | None = None) -> str | None:
+    """The database's TLS pin the kit recorded (runtime.tls_fingerprint, audit SEC-14: the lowercase hex SHA-256 of
+    its certificate), or None before one is recorded. Read from the given manifest, else from the kit's own."""
+    if manifest is None:
+        home = _home()
+        try:
+            manifest = json.loads((home / "manifest.json").read_text(encoding="utf-8")) if home else {}
+        except (OSError, ValueError):
+            manifest = {}
+    runtime = manifest.get("runtime") if isinstance(manifest, dict) else None
+    value = str((runtime or {}).get("tls_fingerprint") or "").strip().lower() if isinstance(runtime, dict) else ""
+    return value if FINGERPRINT.fullmatch(value) else None
+
+
+def pinned_dsn(dsn: str, fingerprint: str | None) -> str:
+    """HOST:PORT with the pin in pyexasol's form, HOST/<fingerprint>:PORT, which refuses any other certificate; the
+    DSN unchanged without one. The same composition as setup/lib/tls_pin.py, which this environment cannot import."""
+    if not fingerprint:
+        return dsn
+    host, _, port = str(dsn).rpartition(":")
+    return f"{host.split('/', 1)[0]}/{fingerprint}:{port}"
 
 
 def setting(name: str) -> str | None:

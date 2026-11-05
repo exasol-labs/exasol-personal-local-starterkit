@@ -9323,6 +9323,10 @@ for prefix in PREFIXES:
     # so the listing is allowed and the install still asks.
     ALLOW.append("Bash(%s skills)" % prefix)
     ALLOW.append("Bash(%s skills --json)" % prefix)
+    # The same for the TLS pin: showing it reads, `tls-pin --accept` re-pins
+    # (trusts whatever answers on the port) and must keep asking.
+    ALLOW.append("Bash(%s tls-pin)" % prefix)
+    ALLOW.append("Bash(%s tls-pin --json)" % prefix)
 ALLOW.append("mcp__exasol")
 
 # The deny needs every spelling too, for the opposite reason: a rule that only
@@ -9388,6 +9392,10 @@ for prefix in PREFIXES:
         ALLOW.append("Bash(%s %s:*)" % (prefix, command))
     ALLOW.append("Bash(%s skills)" % prefix)
     ALLOW.append("Bash(%s skills --json)" % prefix)
+    # The same for the TLS pin: showing it reads, `tls-pin --accept` re-pins
+    # (trusts whatever answers on the port) and must keep asking.
+    ALLOW.append("Bash(%s tls-pin)" % prefix)
+    ALLOW.append("Bash(%s tls-pin --json)" % prefix)
 ALLOW.append("mcp__exasol")
 DENY = ["Bash(%s uninstall:*)" % prefix for prefix in PREFIXES]
 try:
@@ -9479,6 +9487,152 @@ _exakit_parse_runtime_port() {
     printf '%s\n' "${_dsn##*:}"
 }
 
+# ---------------------------------------------------------------------------
+# The database's TLS certificate pin (audit SEC-14)
+# ---------------------------------------------------------------------------
+# The database serves a self-signed certificate, so every kit client used to
+# connect with validation off and no pin: whatever answered TLS on the port
+# first - a port squatter - was handed the SYS password. The kit now records
+# the certificate's fingerprint ONCE, trust on first use, at the moment it has
+# itself just deployed or started its own database (runtime.tls_fingerprint,
+# runtime.tls_fingerprint_at), and every client it builds pins it: the exapump
+# profiles (certificate_fingerprint), pyexasol (dsn host/<fp>:port) and the MCP
+# server's EXA_DSN. Nothing recorded = exactly the old behaviour. A recorded pin
+# is never silently replaced: only a deployment the kit itself just made, or
+# `exakit tls-pin --accept` after the user confirms, writes over one.
+#
+# The live value comes from setup/lib/tls_pin.py, the one implementation both
+# shells call. Twin: the "TLS certificate pin" section of exakit-common.ps1.
+EXAKIT_TLS_PIN_PY="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/tls_pin.py"
+
+# exakit_tls_recorded_fingerprint — the recorded pin (lowercase hex SHA-256 of
+# the DER certificate), or nothing and exit 1. A value that is not 64 hex
+# digits is not a pin: the clients would refuse every connection with it.
+exakit_tls_recorded_fingerprint() {
+    _trf="$(manifest_get runtime.tls_fingerprint 2>/dev/null || true)"
+    case "$_trf" in ''|*[!0-9a-f]*) return 1 ;; esac
+    [ "${#_trf}" -eq 64 ] || return 1
+    printf '%s\n' "$_trf"
+}
+
+# exakit_tls_live_fingerprint <host> <port> [timeout] — what the port serves
+# now; exit 1 (reason in the log) when nothing answers TLS there.
+exakit_tls_live_fingerprint() {
+    [ -f "$EXAKIT_TLS_PIN_PY" ] || return 1
+    exakit_can_run_python_any 2>/dev/null || return 1
+    _tlf_out="$(run_python_any "$EXAKIT_TLS_PIN_PY" fingerprint "$1" "$2" --timeout "${3:-10}" 2>/dev/null)" || {
+        _exakit_log_file "INFO  TLS pin: nothing answered TLS on $1:$2"
+        return 1
+    }
+    printf '%s\n' "$_tlf_out"
+}
+
+# exakit_tls_pinned_dsn [dsn] — the DSN every kit-built pyexasol connection and
+# the MCP server use: host/<fp>:port when a pin is recorded, the DSN unchanged
+# otherwise. Defaults to runtime.dsn. (The same composition as tls_pin.py's
+# pinned_dsn; one line, so it is not worth a Python process per connection.)
+exakit_tls_pinned_dsn() {
+    _tpd_dsn="${1:-$(manifest_get runtime.dsn 2>/dev/null || true)}"
+    _tpd_fp="$(exakit_tls_recorded_fingerprint 2>/dev/null || true)"
+    if [ -n "$_tpd_fp" ] && [ -n "$_tpd_dsn" ]; then
+        _tpd_host="${_tpd_dsn%:*}"
+        printf '%s/%s:%s\n' "${_tpd_host%%/*}" "$_tpd_fp" "${_tpd_dsn##*:}"
+    else
+        printf '%s\n' "$_tpd_dsn"
+    fi
+}
+
+# exakit_tls_state [timeout] — "<recorded>|<live>" for status and tls-pin. The
+# live half is empty when nothing answers TLS on the port; both are empty
+# with no runtime recorded. Read-only.
+exakit_tls_state() {
+    _tst_fp="$(exakit_tls_recorded_fingerprint 2>/dev/null || true)"
+    _tst_dsn="$(manifest_get runtime.dsn 2>/dev/null || true)"
+    _tst_live=""
+    if [ -n "$_tst_dsn" ]; then
+        _tst_live="$(exakit_tls_live_fingerprint "${_tst_dsn%:*}" "${_tst_dsn##*:}" "${1:-5}" 2>/dev/null || true)"
+    fi
+    printf '%s|%s\n' "$_tst_fp" "$_tst_live"
+}
+
+# exakit_tls_record [--replace] — trust on first use. Reads what the database
+# port serves and records it, ONLY when nothing is recorded yet - or, with
+# --replace, when the kit has itself just deployed a new database (a new
+# deployment is a new certificate). Never fatal, never silent: an unchanged pin
+# is a no-op, a new one is said and logged, and EXAKIT_TLS_PIN_CHANGED=1 tells
+# the caller the clients holding the old value must be rewritten.
+exakit_tls_record() {
+    EXAKIT_TLS_PIN_CHANGED=0
+    _tr_old="$(exakit_tls_recorded_fingerprint 2>/dev/null || true)"
+    if [ -n "$_tr_old" ] && [ "${1:-}" != "--replace" ]; then
+        return 0
+    fi
+    _tr_dsn="$(manifest_get runtime.dsn 2>/dev/null || true)"
+    [ -n "$_tr_dsn" ] || return 1
+    _tr_live="$(exakit_tls_live_fingerprint "${_tr_dsn%:*}" "${_tr_dsn##*:}" 10)" || {
+        _exakit_log_file "INFO  TLS pin: not recorded - nothing answered TLS on $_tr_dsn"
+        return 1
+    }
+    [ -n "$_tr_live" ] || return 1
+    [ "$_tr_live" = "$_tr_old" ] && return 0
+    manifest_set runtime.tls_fingerprint "$_tr_live"
+    manifest_set runtime.tls_fingerprint_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    EXAKIT_TLS_PIN_CHANGED=1
+    if [ -n "$_tr_old" ]; then
+        _exakit_log_file "INFO  TLS pin: replaced for the new deployment ($_tr_old -> $_tr_live)"
+        info "Pinned the new database's TLS certificate (SHA-256 ${_tr_live:0:16}...)"
+    else
+        _exakit_log_file "INFO  TLS pin: recorded $_tr_live (trust on first use)"
+        info "Pinned the database's TLS certificate (SHA-256 ${_tr_live:0:16}...); clients now refuse any other"
+    fi
+    return 0
+}
+
+# exakit_tls_rewrite_clients [--profile-only] — after a pin was (re)recorded,
+# the clients that hold it are rewritten so they all agree: the kit's exapump
+# profile, and the AI clients' MCP entries through the same refresh `exakit
+# update` uses (the stdio server's EXA_DSN carries the pin; the launcher's
+# sidecar entries hold no DSN). Each half only when it exists; failures say how
+# to finish by hand. --profile-only is for a database the kit has just
+# deployed: its read-only MCP user does not exist yet, so the entries are
+# rewritten by the repair that recreates it (exakit mcp-doctor), not here.
+exakit_tls_rewrite_clients() {
+    _trc_scope="${1:-}"
+    _trc_pw="$(manifest_get runtime.password_file 2>/dev/null || true)"
+    if [ -n "$(manifest_get components.exapump.profile 2>/dev/null || true)" ] && \
+       [ -n "$_trc_pw" ] && [ -f "$_trc_pw" ] && command -v exapump_create_profile >/dev/null 2>&1; then
+        # A subshell: the writer dies on a broken record, and that must not end
+        # the command that merely recorded a pin.
+        ( exapump_create_profile ) || warn "Could not rewrite the exapump profile with the pin. Finish it with: exakit update exapump"
+    fi
+    [ "$_trc_scope" = "--profile-only" ] && return 0
+    if [ "$(manifest_get components.mcp_server.validated 2>/dev/null || true)" = "true" ] && \
+       [ "$(manifest_get components.mcp_server.backend 2>/dev/null || true)" != "sidecar" ] && \
+       command -v mcp_refresh_client_pins >/dev/null 2>&1; then
+        [ -n "${EXAKIT_MCP_VERSION:-}" ] || EXAKIT_MCP_VERSION="$(manifest_get components.mcp_server.version 2>/dev/null || true)"
+        [ -n "${EXAKIT_MCP_PACKAGE:-}" ] || EXAKIT_MCP_PACKAGE="$(manifest_get components.mcp_server.package 2>/dev/null || printf 'exasol-mcp-server')"
+        export EXAKIT_MCP_VERSION EXAKIT_MCP_PACKAGE
+        mcp_refresh_client_pins || warn "Could not rewrite every AI client with the pin. Finish it with: exakit mcp-doctor"
+    fi
+    return 0
+}
+
+# exakit_tls_ensure_pinned [--profile-only] — the lazy half of trust on first
+# use, for an install made before the pin existed: the first kit command that
+# already needs the database up (exakit start, mcp-setup, update) records it,
+# and rewrites the clients that hold the old unpinned settings (mcp-setup
+# passes --profile-only: it writes the AI clients itself, right after). Only
+# while the launcher reports ITS deployment running and it answers - the same
+# test that decides whose database is on the port everywhere else. A recorded
+# pin is left alone.
+exakit_tls_ensure_pinned() {
+    exakit_tls_recorded_fingerprint >/dev/null 2>&1 && return 0
+    exakit_runtime_is_running 2>/dev/null || return 0
+    exakit_tls_record || return 0
+    [ "${EXAKIT_TLS_PIN_CHANGED:-0}" = 1 ] && exakit_tls_rewrite_clients "${1:-}"
+    return 0
+}
+
 _exakit_first_schema() {
     _schemas="$1"
     _old_ifs="$IFS"
@@ -9507,16 +9661,21 @@ _exakit_write_exapump_config() {
     EXAKIT_ADMIN_PASSWORD="$_admin_password"
     EXAKIT_READONLY_PASSWORD="$_readonly_password"
     export EXAKIT_ADMIN_PASSWORD EXAKIT_READONLY_PASSWORD
-    run_python - "$_config_path" "$_host" "$_port" "$_admin_user" "$_readonly_user" "$_schema" <<'PY'
+    # The kit's own database, so its recorded TLS pin (SEC-14): these profiles
+    # carry the SYS password, the one secret a port squatter is after. Empty
+    # without a pin, and then the profiles are exactly what they always were.
+    _wec_fp="$(exakit_tls_recorded_fingerprint 2>/dev/null || true)"
+    run_python - "$_config_path" "$_host" "$_port" "$_admin_user" "$_readonly_user" "$_schema" "$_wec_fp" <<'PY'
 import os, sys
 
-config_path, host, port, admin_user, readonly_user, schema = sys.argv[1:]
+config_path, host, port, admin_user, readonly_user, schema, fingerprint = sys.argv[1:]
 admin_password = os.environ["EXAKIT_ADMIN_PASSWORD"]
 readonly_password = os.environ["EXAKIT_READONLY_PASSWORD"]
 
 def toml_string(value: str) -> str:
     return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
 
+pin = [f"certificate_fingerprint = {toml_string(fingerprint)}\n"] if fingerprint else []
 doc = [
     "[admin]\n",
     f"host = {toml_string(host)}\n",
@@ -9525,6 +9684,7 @@ doc = [
     f"password = {toml_string(admin_password)}\n",
     "tls = true\n",
     "validate_certificate = false\n",
+    *pin,
     "\n",
     "[mcp_readonly]\n",
     f"host = {toml_string(host)}\n",
@@ -9534,6 +9694,7 @@ doc = [
     f"schema = {toml_string(schema)}\n",
     "tls = true\n",
     "validate_certificate = false\n",
+    *pin,
 ]
 with open(config_path, "w", encoding="utf-8") as handle:
     handle.writelines(doc)
@@ -12525,7 +12686,8 @@ PY
     ui_panel_line "  >>> import os, pyexasol"
     ui_panel_line "  >>> pw = open(os.path.expanduser("
     ui_panel_line "  ...     '$(ui_tilde "${_g_pwfile:-$EXAKIT_CREDS_DIR/<password file>}")')).read().strip()"
-    ui_panel_line "  >>> c = pyexasol.connect(dsn='$_g_host:$_g_port', user='$_g_user',"
+    # The dsn carries the database's TLS pin once recorded (SEC-14).
+    ui_panel_line "  >>> c = pyexasol.connect(dsn='$(exakit_tls_pinned_dsn "$_g_host:$_g_port")', user='$_g_user',"
     ui_panel_line "  ...     password=pw, websocket_sslopt={'cert_reqs': 0})"
     ui_panel_line "  >>> c.execute('SELECT TABLE_NAME FROM EXA_ALL_TABLES').fetchall()"
     ui_panel_end

@@ -32,13 +32,14 @@ describe_installed() {
 
 # describe_run <service args> — the service in the kit's notebook Python with
 # the admin connection settings from the manifest (the password's FILE, never
-# the password); its exit code is the command's. ⇄ twin:
+# the password; the DSN with the recorded TLS pin, SEC-14); its exit code is the
+# command's. ⇄ twin:
 # Invoke-DescribeService.
 describe_run() {
     _dr_python="$(manifest_get components.notebook.python 2>/dev/null || true)"
     [ -n "$_dr_python" ] || _dr_python="${EXAKIT_NOTEBOOK_VENV:-$EXAKIT_HOME/notebook-venv}/bin/python"
     [ -x "$_dr_python" ] || die "The notebook environment is missing ($_dr_python). Repair it with: exakit notebook setup"
-    EXAKIT_PYX_DSN="$(manifest_get runtime.dsn 2>/dev/null || true)" \
+    EXAKIT_PYX_DSN="$(exakit_tls_pinned_dsn)" \
     EXAKIT_PYX_USER="$(manifest_get runtime.user 2>/dev/null || echo sys)" \
     EXAKIT_PYX_PWFILE="$(manifest_get runtime.password_file 2>/dev/null || true)" \
     EXAKIT_MCP_READER="$(manifest_get components.mcp_server.connection.user 2>/dev/null || true)" \

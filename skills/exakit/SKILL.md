@@ -174,8 +174,14 @@ start from an empty notebook or write connection code by hand.
 
 ## 6. This machine's connection facts
 
-- The database: `127.0.0.1:8563`, with a **self-signed certificate** (pyexasol
-  needs `websocket_sslopt={"cert_reqs": 0}`). Confirm with `exakit info --json`.
+- The database: `127.0.0.1:8563`, with a **self-signed certificate that the kit
+  pins**: its SHA-256 fingerprint is `runtime.tls_fingerprint` in
+  `exakit info --json`. pyexasol connects with the pinned dsn
+  `127.0.0.1/<fingerprint>:8563` and `websocket_sslopt={"cert_reqs": 0}`; the
+  kit's exapump profile and MCP entries carry the same pin. A fingerprint
+  mismatch (`exakit status --json` → `tls.matches: false`) is a redeploy outside
+  the kit or another process on the port: show it with `exakit tls-pin`, and
+  re-pin (`exakit tls-pin --accept`) only once the user confirms it is theirs.
 - Passwords live only in files under `~/.exasol-starter-kit/credentials/`.
   Read the file at run time (`exakit info --json` → `runtime.password_file`);
   **never print, log or paste a password**, never put one in a script literal.

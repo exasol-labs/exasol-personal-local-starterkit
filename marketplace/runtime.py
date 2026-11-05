@@ -274,6 +274,24 @@ class KitContext:
         uv_path = vetted_uv(home, bin_dir)
         return cls(root, home, bin_dir, Manifest(home / "manifest.json"), Path(uv_path) if uv_path else Path("uv"))
 
+    def client_dsn(self) -> str:
+        """runtime.dsn as every kit-built pyexasol connection uses it: host/<fingerprint>:port once the kit has
+        recorded the database's TLS pin (runtime.tls_fingerprint, audit SEC-14), unchanged before. The pin is
+        setup/lib/tls_pin.py's, the one implementation the shells use too."""
+        dsn = str(self.manifest.get("runtime.dsn") or "")
+        recorded = str(self.manifest.get("runtime.tls_fingerprint") or "").strip()
+        if not dsn or not recorded:
+            return dsn
+        import importlib.util
+        path = self.root / "setup" / "lib" / "tls_pin.py"
+        spec = importlib.util.spec_from_file_location("exakit_tls_pin", path)
+        if spec is None or spec.loader is None or not path.is_file():
+            raise AddonFailure(f"The kit copy has no {path}; repair it with: exakit update")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        fingerprint = module.normalize(recorded)
+        return module.pinned_dsn(dsn, fingerprint) if fingerprint else dsn
+
     def require_uv(self) -> Path:
         if self.uv.is_file() or shutil.which(str(self.uv)):
             return self.uv

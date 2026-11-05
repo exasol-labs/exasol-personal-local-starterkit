@@ -49,6 +49,7 @@ $script:log = New-Object System.Collections.ArrayList
 function Note([string]$Text) { [void]$script:log.Add($Text) }
 function Assert-ExakitInstalled { param([switch]$Json) Note "require-install" }
 function Initialize-ExakitLogging { }
+function Confirm-ExakitTlsPinned { }   # the TLS pin (SEC-14) has its own suite: tls-pin-ps.ps1
 function Write-ExakitLog { param($Kind, $Text) }
 function Get-RuntimeType { return "personal" }
 function Get-ExakitManifestValue { param([string]$Path) if ($Path -eq "runtime.type") { return "personal" }; return $null }

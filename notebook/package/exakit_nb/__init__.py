@@ -28,7 +28,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
-from ._kit import setting, telemetry_off
+from ._kit import pinned_dsn, setting, telemetry_off, tls_fingerprint
 from .ask import Proposal, ask
 from .checks import check_bucket, check_container, check_mlflow, check_model_compatibility, model_list
 from .dash_mcp import DashTools, dash_tools
@@ -71,13 +71,30 @@ def _store():
     return Secrets(Path(path), password)
 
 
+def _pinned(store, kwargs: dict[str, Any]) -> dict[str, Any]:
+    """The connection's arguments with the database's TLS pin (audit SEC-14) once the kit has recorded one: the
+    store's host and port as a pinned dsn, which the connector passes to pyexasol as an override - its store has no
+    field for a fingerprint. A dsn the caller gave wins."""
+    fingerprint = tls_fingerprint()
+    if not fingerprint or "dsn" in kwargs:
+        return kwargs
+    from exasol.nb_connector.ai_lab_config import AILabConfig
+
+    host, port = store.get(AILabConfig.db_host_name), store.get(AILabConfig.db_port)
+    if not host or not port:
+        return kwargs
+    return {**kwargs, "dsn": pinned_dsn(f"{host}:{port}", fingerprint)}
+
+
 def connect(**kwargs: Any):
-    """A pyexasol connection to the local database, opened from the kit's encrypted store. Exasol's usage telemetry
-    stays off unless EXASOL_TELEMETRY_DISABLE was already set."""
+    """A pyexasol connection to the local database, opened from the kit's encrypted store, pinned to the database's
+    TLS certificate once the kit has recorded it. Exasol's usage telemetry stays off unless EXASOL_TELEMETRY_DISABLE
+    was already set."""
     telemetry_off()
     from exasol.nb_connector.connections import open_pyexasol_connection
 
-    return open_pyexasol_connection(_store(), **kwargs)
+    store = _store()
+    return open_pyexasol_connection(store, **_pinned(store, kwargs))
 
 
 def sql(conn, statement: str, params: dict | None = None):

@@ -474,14 +474,20 @@ exapump_create_profile() {
         _EXAKIT_PENDING_RUNTIME_PASSWORD="$_password"
     fi
 
+    # The kit's own database: its recorded TLS pin goes in the profile (SEC-14).
     exapump_write_profile "$EXAKIT_EXAPUMP_PROFILE" "$_host" "$_port" "$_user" "$_password" \
+        "$(exakit_tls_recorded_fingerprint 2>/dev/null || true)" \
         || die "Could not write the exapump profile"
     manifest_set components.exapump.profile "$EXAKIT_EXAPUMP_PROFILE"
     ok_step "Connection profile [$EXAKIT_EXAPUMP_PROFILE] written to $(ui_tilde "$EXAPUMP_CONFIG")"
 }
 
-# exapump_write_profile <profile> <host> <port> <user> <password> - one TOML
-# section in ~/.exapump/config.toml, replaced in place if it is already there.
+# exapump_write_profile <profile> <host> <port> <user> <password> [fingerprint]
+# - one TOML section in ~/.exapump/config.toml, replaced in place if it is
+# already there. With a fingerprint (the kit's recorded TLS pin, lowercase hex:
+# exapump compares it case-sensitively) the profile refuses any certificate but
+# that one (SEC-14); without one it is exactly the old unpinned profile. Only
+# the kit's own database has a pin - the legacy crossing's profile has none.
 #
 # Split out of exapump_create_profile, which reads the manifest and can only
 # ever write the kit's own profile. The legacy crossing needs a SECOND profile,
@@ -489,7 +495,7 @@ exapump_create_profile() {
 # 0600 config file rather than in argv where `ps` can read it - so both callers
 # go through one writer instead of a second copy of this TOML surgery.
 exapump_write_profile() {
-    _ewp_profile="$1"; _ewp_host="$2"; _ewp_port="$3"; _ewp_user="$4"; _ewp_password="$5"
+    _ewp_profile="$1"; _ewp_host="$2"; _ewp_port="$3"; _ewp_user="$4"; _ewp_password="$5"; _ewp_fp="${6:-}"
     require_python3
     mkdir -p "$(dirname "$EXAPUMP_CONFIG")"
     # The password travels in the ENVIRONMENT, never in argv. An argv is visible
@@ -501,9 +507,9 @@ exapump_write_profile() {
     # password off the process table.
     EXAKIT_PROFILE_PASSWORD="$_ewp_password"
     export EXAKIT_PROFILE_PASSWORD
-    run_python - "$EXAPUMP_CONFIG" "$_ewp_profile" "$_ewp_host" "$_ewp_port" "$_ewp_user" <<'PY'
+    run_python - "$EXAPUMP_CONFIG" "$_ewp_profile" "$_ewp_host" "$_ewp_port" "$_ewp_user" "$_ewp_fp" <<'PY'
 import os, re, sys
-path, profile, host, port, user = sys.argv[1:6]
+path, profile, host, port, user, fingerprint = sys.argv[1:7]
 password = os.environ["EXAKIT_PROFILE_PASSWORD"]
 try:
     with open(path) as f:
@@ -520,6 +526,8 @@ section = (
     f"tls = true\n"
     f"validate_certificate = false\n"
 )
+if fingerprint:
+    section += f'certificate_fingerprint = "{fingerprint}"\n'
 pattern = re.compile(rf"\[{re.escape(profile)}\][^\[]*", re.S)
 if pattern.search(content):
     content = pattern.sub(section + "\n", content).rstrip("\n") + "\n"

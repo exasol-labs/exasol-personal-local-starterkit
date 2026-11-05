@@ -972,6 +972,12 @@ jobs:
         if: matrix.shard == 4
       - run: python3 tests/test_describe_service.py
         if: matrix.shard == 4
+      # The database's TLS pin (SEC-14): the fingerprint against a local TLS
+      # server, the pinned clients, status and `exakit tls-pin`.
+      - run: python3 -m unittest tests/test_tls_pin.py
+        if: matrix.shard == 4
+      - run: bash tests/tls-pin.sh
+        if: matrix.shard == 4
       # The role-per-column descriptor: the eight roles and their thresholds,
       # describe/approve/publish against a fake database.
       - run: python3 tests/test_descriptor_roles.py
@@ -1209,6 +1215,7 @@ jobs:
             pwsh -NoProfile -File tests/personal-destroy-lock-ps.ps1
             pwsh -NoProfile -File tests/workflow-command-ps.ps1
             pwsh -NoProfile -File tests/describe-command-ps.ps1
+            pwsh -NoProfile -File tests/tls-pin-ps.ps1
             pwsh -NoProfile -File tests/addon-activity-ps.ps1
             pwsh -NoProfile -File tests/addon-help-ps.ps1
             pwsh -NoProfile -File tests/mlflow-command-ps.ps1

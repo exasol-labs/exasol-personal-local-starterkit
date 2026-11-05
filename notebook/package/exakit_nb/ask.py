@@ -19,6 +19,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ._kit import pinned_dsn, tls_fingerprint
 from .workflow import ASK_ANSWER, ASK_APPROVE, SQL, home, log_event
 
 _READ_START = re.compile(r"^\s*(?:--[^\n]*\n\s*)*(SELECT|WITH)\b", re.I)
@@ -50,7 +51,8 @@ def _mcp_settings() -> tuple[list[str], dict[str, str]]:
     except ValueError:
         loopback = False
     environment = os.environ.copy()
-    environment.update(EXA_DSN=dsn, EXA_USER=user, EXA_PASSWORD=password_file.read_text(encoding="utf-8").strip(),
+    # With the database's TLS pin once the kit has recorded it (SEC-14), as the AI clients' entries carry it.
+    environment.update(EXA_DSN=pinned_dsn(dsn, tls_fingerprint(manifest)), EXA_USER=user, EXA_PASSWORD=password_file.read_text(encoding="utf-8").strip(),
                        EXA_SSL_CERT_VALIDATION="no" if loopback else "yes",
                        # Match mcp/runtime/exakit.py. The official server hides
                        # execute_exasol_query unless read queries are enabled.

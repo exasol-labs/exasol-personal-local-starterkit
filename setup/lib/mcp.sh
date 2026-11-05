@@ -8,6 +8,9 @@
 # Server facts:
 #   - PyPI package exasol-mcp-server; run: uvx exasol-mcp-server@<version>
 #   - config env: EXA_DSN, EXA_USER, EXA_PASSWORD, EXA_SSL_CERT_VALIDATION
+#     (EXA_DSN is host/<fingerprint>:port once the kit has recorded the
+#     database's TLS pin, runtime.tls_fingerprint - SEC-14; the server hands it
+#     to pyexasol unchanged, which then refuses any other certificate)
 #   - HTTP mode: exasol-mcp-server-http --host <h> --port <p>
 #   - the server's tools are read-only (metadata + data reading queries);
 #     a least-privilege database user adds defense in depth
@@ -624,7 +627,8 @@ mcp_print_handshake_detail() {
 mcp_validate() {
     info "Validating the MCP server (stdio handshake)"
     EXAKIT_ACTIVE_LABEL="Starting the MCP server and checking it answers"
-    _dsn="$(manifest_get runtime.dsn 2>/dev/null)"
+    # With the recorded TLS pin (SEC-14), as the client configs carry it.
+    _dsn="$(exakit_tls_pinned_dsn)"
     mcp_resolve_creds
     _user="$_mcp_user"
     _password="$_mcp_password"
@@ -702,7 +706,7 @@ mcp_validate() {
 # mcp_validate_http — optional: start the HTTP variant briefly and probe it.
 mcp_validate_http() {
     info "Validating the MCP server (HTTP mode on port $EXAKIT_MCP_HTTP_PORT)"
-    _dsn="$(manifest_get runtime.dsn 2>/dev/null)"
+    _dsn="$(exakit_tls_pinned_dsn)"
     mcp_resolve_creds
     _user="$_mcp_user"
     _password="$_mcp_password"

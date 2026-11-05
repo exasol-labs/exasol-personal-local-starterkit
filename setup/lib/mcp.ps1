@@ -352,7 +352,8 @@ function Show-McpHandshakeDetail {
 function Test-McpServer {
     Info "Validating the MCP server (stdio handshake)"
     $script:ExakitActiveLabel = "Starting the MCP server and checking it answers"
-    $dsn = Get-ExakitManifestValue "runtime.dsn"
+    # With the recorded TLS pin (SEC-14), as the client configs carry it.
+    $dsn = Get-ExakitPinnedDsn
     $creds = Resolve-McpCredentials
     $command = Get-McpCommandPath
     $sslCertValidation = Get-McpSslCertValidation
@@ -789,8 +790,8 @@ function Set-McpReadonlyAccess {
             # too; this covers the destination name itself.
             New-Item -ItemType File -Path $tempConfig -Force | Out-Null
             Protect-ExakitFile $tempConfig
-            Set-ExapumpTomlSection -ConfigPath $tempConfig -Profile "admin" -Host_ $dbHost -Port $dbPort -User $runtimeUser -Password $adminPassword
-            Set-ExapumpTomlSection -ConfigPath $tempConfig -Profile "mcp_readonly" -Host_ $dbHost -Port $dbPort -User $readonlyUser -Password $readonlyPassword -Schema $defaultSchemaUc
+            Set-ExapumpTomlSection -ConfigPath $tempConfig -Profile "admin" -Host_ $dbHost -Port $dbPort -User $runtimeUser -Password $adminPassword -Fingerprint (Get-ExakitTlsFingerprint)
+            Set-ExapumpTomlSection -ConfigPath $tempConfig -Profile "mcp_readonly" -Host_ $dbHost -Port $dbPort -User $readonlyUser -Password $readonlyPassword -Schema $defaultSchemaUc -Fingerprint (Get-ExakitTlsFingerprint)
             Protect-ExakitFile $tempConfig
 
             # Verify the TOML config was created and is readable
@@ -910,8 +911,8 @@ function Confirm-McpReadonlyPosture {
     $defaultSchema = Get-FirstSchema $schemasCsv
 
     $tempConfig = Join-Path ([System.IO.Path]::GetTempPath()) "exakit-exapump-$([guid]::NewGuid().ToString('N')).toml"
-    Set-ExapumpTomlSection -ConfigPath $tempConfig -Profile "admin" -Host_ $dbHost -Port $dbPort -User $runtimeUser -Password $adminPassword
-    Set-ExapumpTomlSection -ConfigPath $tempConfig -Profile "mcp_readonly" -Host_ $dbHost -Port $dbPort -User $readonlyUser -Password $readonlyPassword -Schema $defaultSchema
+    Set-ExapumpTomlSection -ConfigPath $tempConfig -Profile "admin" -Host_ $dbHost -Port $dbPort -User $runtimeUser -Password $adminPassword -Fingerprint (Get-ExakitTlsFingerprint)
+    Set-ExapumpTomlSection -ConfigPath $tempConfig -Profile "mcp_readonly" -Host_ $dbHost -Port $dbPort -User $readonlyUser -Password $readonlyPassword -Schema $defaultSchema -Fingerprint (Get-ExakitTlsFingerprint)
 
     Info "Re-checking MCP read-only grant posture against the database"
     try {

@@ -1165,7 +1165,8 @@ function Show-ExakitGuide {
     Write-ExakitPanelLine "then, at its >>> prompt:"
     Write-ExakitPanelLine "  >>> import pyexasol"
     Write-ExakitPanelLine "  >>> pw = open(r'$pwPath').read().strip()"
-    Write-ExakitPanelLine "  >>> c = pyexasol.connect(dsn='$($hostName):$port', user='$user',"
+    # The dsn carries the database's TLS pin once recorded (SEC-14).
+    Write-ExakitPanelLine "  >>> c = pyexasol.connect(dsn='$(Get-ExakitPinnedDsn "$($hostName):$port")', user='$user',"
     Write-ExakitPanelLine "  ...     password=pw, websocket_sslopt={'cert_reqs': 0})"
     Write-ExakitPanelLine "  >>> c.execute('SELECT TABLE_NAME FROM EXA_ALL_TABLES').fetchall()"
     Complete-ExakitPanel
@@ -2167,6 +2168,163 @@ function Remove-ExakitManifestValue {
     } finally {
         Exit-ExakitManifestLock $lock
     }
+}
+
+# ---------------------------------------------------------------------------
+# The database's TLS certificate pin (audit SEC-14). Twin of the "TLS
+# certificate pin" section of common.sh, which explains it: the database's
+# certificate is self-signed, so the kit records its fingerprint ONCE, trust on
+# first use, when it has itself just deployed or started its own database
+# (runtime.tls_fingerprint, runtime.tls_fingerprint_at), and every client it
+# builds pins it - exapump (certificate_fingerprint), pyexasol (dsn
+# host/<fp>:port) and the MCP server's EXA_DSN. Nothing recorded = exactly the
+# old behaviour; a recorded pin is never silently replaced. The live value
+# comes from setup/lib/tls_pin.py, the one implementation both shells call.
+# ---------------------------------------------------------------------------
+$script:ExakitTlsPinScript = Join-Path $PSScriptRoot "tls_pin.py"
+
+# Get-ExakitTlsFingerprint - the recorded pin (lowercase hex SHA-256 of the DER
+# certificate), or "" when none is. A value that is not 64 hex digits is not a
+# pin: the clients would refuse every connection with it.
+function Get-ExakitTlsFingerprint {
+    $value = "" + (Get-ExakitManifestValue "runtime.tls_fingerprint")
+    if ($value -cmatch '^[0-9a-f]{64}$') { return $value }
+    return ""
+}
+
+# Get-ExakitTlsPinnedAt - when the pin was recorded, as written (UTC ISO 8601),
+# or "". pwsh 7's ConvertFrom-Json turns an ISO timestamp into a [datetime],
+# which would print in the local culture; Windows PowerShell 5.1 keeps the text.
+function Get-ExakitTlsPinnedAt {
+    $value = Get-ExakitManifestValue "runtime.tls_fingerprint_at"
+    if ($value -is [datetime]) {
+        return $value.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ", [System.Globalization.CultureInfo]::InvariantCulture)
+    }
+    return "" + $value
+}
+
+# Get-ExakitTlsLiveFingerprint - what the port serves now, or "" (reason in the
+# log) when nothing answers TLS there. Never installs a Python to find out.
+function Get-ExakitTlsLiveFingerprint {
+    param([string]$DbHost, [string]$Port, [int]$TimeoutSeconds = 10)
+    if (-not $DbHost -or -not $Port -or -not (Test-Path $script:ExakitTlsPinScript)) { return "" }
+    $previous = $ErrorActionPreference
+    try {
+        # A native command's stderr must not become a terminating error here;
+        # the exit code is the answer. Same rule as Invoke-ExakitPython.
+        $ErrorActionPreference = "Continue"
+        $pinArgs = @($script:ExakitTlsPinScript, "fingerprint", $DbHost, "$Port", "--timeout", "$TimeoutSeconds")
+        if (Test-ExakitSystemPython) {
+            $out = & python @pinArgs 2>$null
+        } else {
+            $uv = Get-ExakitUvBin
+            if (-not $uv) { return "" }
+            $out = & $uv run --python $script:ManagedPythonVersion --no-project python @pinArgs 2>$null
+        }
+        if ($LASTEXITCODE -ne 0) {
+            Write-ExakitLog "INFO" "TLS pin: nothing answered TLS on ${DbHost}:${Port}"
+            return ""
+        }
+        $text = ("" + (@($out) | Select-Object -Last 1)).Trim()
+        if ($text -cmatch '^[0-9a-f]{64}$') { return $text }
+        return ""
+    } catch {
+        return ""
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+}
+
+# Split-ExakitDsn <host:port> - @(host, port), the host without a pin.
+function Split-ExakitDsn([string]$Dsn) {
+    $index = "$Dsn".LastIndexOf(":")
+    if ($index -lt 1) { return @("", "") }
+    return @($Dsn.Substring(0, $index).Split("/")[0], $Dsn.Substring($index + 1))
+}
+
+# Get-ExakitPinnedDsn [dsn] - the DSN every kit-built pyexasol connection and
+# the MCP server use: host/<fp>:port when a pin is recorded, the DSN unchanged
+# otherwise. Defaults to runtime.dsn. (tls_pin.py's pinned_dsn, in one line.)
+function Get-ExakitPinnedDsn {
+    param([string]$Dsn = "")
+    if (-not $Dsn) { $Dsn = "" + (Get-ExakitManifestValue "runtime.dsn") }
+    $fp = Get-ExakitTlsFingerprint
+    if (-not $fp -or -not $Dsn) { return $Dsn }
+    $parts = Split-ExakitDsn $Dsn
+    if (-not $parts[0]) { return $Dsn }
+    return "$($parts[0])/${fp}:$($parts[1])"
+}
+
+# Register-ExakitTlsPin [-Replace] - trust on first use: record what the
+# database port serves, ONLY when nothing is recorded yet - or, with -Replace,
+# when the kit has itself just deployed a new database. $true when the pin
+# changed (the clients holding the old value must then be rewritten). Never
+# fatal, never silent. Twin of exakit_tls_record.
+function Register-ExakitTlsPin {
+    param([switch]$Replace)
+    $old = Get-ExakitTlsFingerprint
+    if ($old -and -not $Replace) { return $false }
+    $dsn = "" + (Get-ExakitManifestValue "runtime.dsn")
+    if (-not $dsn) { return $false }
+    $parts = Split-ExakitDsn $dsn
+    $live = Get-ExakitTlsLiveFingerprint -DbHost $parts[0] -Port $parts[1] -TimeoutSeconds 10
+    if (-not $live) {
+        Write-ExakitLog "INFO" "TLS pin: not recorded - nothing answered TLS on $dsn"
+        return $false
+    }
+    if ($live -eq $old) { return $false }
+    Set-ExakitManifestValue "runtime.tls_fingerprint" $live | Out-Null
+    Set-ExakitManifestValue "runtime.tls_fingerprint_at" ((Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")) | Out-Null
+    if ($old) {
+        Write-ExakitLog "INFO" "TLS pin: replaced for the new deployment ($old -> $live)"
+        Info "Pinned the new database's TLS certificate (SHA-256 $($live.Substring(0, 16))...)"
+    } else {
+        Write-ExakitLog "INFO" "TLS pin: recorded $live (trust on first use)"
+        Info "Pinned the database's TLS certificate (SHA-256 $($live.Substring(0, 16))...); clients now refuse any other"
+    }
+    return $true
+}
+
+# Update-ExakitTlsPinnedClients [-ProfileOnly] - after a pin was (re)recorded,
+# rewrite the clients that hold it so they all agree: the kit's exapump profile
+# and the AI clients' MCP entries (the same refresh `exakit update` uses; the
+# launcher's sidecar entries hold no DSN). -ProfileOnly for a database the kit
+# has just deployed: its read-only MCP user does not exist yet, so the entries
+# are rewritten by the repair that recreates it (exakit mcp-doctor). Twin of
+# exakit_tls_rewrite_clients.
+function Update-ExakitTlsPinnedClients {
+    param([switch]$ProfileOnly)
+    $pwFile = "" + (Get-ExakitManifestValue "runtime.password_file")
+    if ((Get-ExakitManifestValue "components.exapump.profile") -and $pwFile -and (Test-Path $pwFile) -and
+        (Get-Command New-ExapumpProfile -ErrorAction SilentlyContinue)) {
+        try { New-ExapumpProfile | Out-Null } catch { Warn2 "Could not rewrite the exapump profile with the pin. Finish it with: exakit update exapump" }
+    }
+    if ($ProfileOnly) { return }
+    if ((Get-ExakitManifestValue "components.mcp_server.validated") -eq $true -and
+        (Get-ExakitManifestValue "components.mcp_server.backend") -ne "sidecar" -and
+        (Get-Command Update-McpClientPins -ErrorAction SilentlyContinue)) {
+        if (-not $script:McpVersion) { $script:McpVersion = "" + (Get-ExakitManifestValue "components.mcp_server.version") }
+        $recordedPackage = "" + (Get-ExakitManifestValue "components.mcp_server.package")
+        if ($recordedPackage) { $script:McpPackage = $recordedPackage }
+        $refreshed = $false
+        try { $refreshed = Update-McpClientPins } catch { $refreshed = $false }
+        if (-not $refreshed) { Warn2 "Could not rewrite every AI client with the pin. Finish it with: exakit mcp-doctor" }
+    }
+}
+
+# Confirm-ExakitTlsPinned [-ProfileOnly] - the lazy half of trust on first use,
+# for an install made before the pin existed: the first kit command that
+# already needs the database up (exakit start, mcp-setup, update) records it
+# and rewrites the clients that hold the old settings - only while the
+# launcher reports ITS deployment running. A recorded pin is left alone. Twin
+# of exakit_tls_ensure_pinned.
+function Confirm-ExakitTlsPinned {
+    param([switch]$ProfileOnly)
+    if (Get-ExakitTlsFingerprint) { return }
+    if ((Get-RuntimeType) -ne "personal") { return }
+    if (-not (Get-Command Test-PersonalDeploymentRunning -ErrorAction SilentlyContinue)) { return }
+    if (-not (Test-PersonalDeploymentRunning)) { return }
+    if (Register-ExakitTlsPin) { Update-ExakitTlsPinnedClients -ProfileOnly:$ProfileOnly }
 }
 
 # Drop a step flag so a re-run of the installer reinstalls what a partial
@@ -4709,11 +4867,17 @@ function Set-ExakitReadonlyAllowlist {
         # match `exakit skills-install`, which writes this very settings file.
         $allow += "Bash($prefix skills)"
         $allow += "Bash($prefix skills --json)"
+        # The same for the TLS pin: showing it reads, `tls-pin --accept`
+        # re-pins (trusts whatever answers on the port) and must keep asking.
+        $allow += "Bash($prefix tls-pin)"
+        $allow += "Bash($prefix tls-pin --json)"
     }
     # The PowerShell tool has its own rule namespace, and bare `exakit` resolves there.
     foreach ($command in $readonly) { $allow += "PowerShell(exakit $command`:*)" }
     $allow += "PowerShell(exakit skills)"
     $allow += "PowerShell(exakit skills --json)"
+    $allow += "PowerShell(exakit tls-pin)"
+    $allow += "PowerShell(exakit tls-pin --json)"
     $allow += "mcp__exasol"
     # The deny needs every spelling too, for the opposite reason: a rule that
     # only names the bare form is trivially sidestepped by the absolute path the

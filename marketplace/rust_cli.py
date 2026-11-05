@@ -33,7 +33,7 @@ def command(ctx: KitContext, words: list[str]) -> int:
                         "exakit marketplace udf-devkit")
     env = dict(os.environ)
     env["EXAKIT_HOME"] = str(ctx.home)
-    env["EXAKIT_PYX_DSN"] = str(ctx.manifest.get("runtime.dsn") or "")
+    env["EXAKIT_PYX_DSN"] = ctx.client_dsn()   # with the TLS pin once recorded (SEC-14)
     env["EXAKIT_PYX_USER"] = str(ctx.manifest.get("runtime.user") or "sys")
     env["EXAKIT_PYX_PWFILE"] = str(ctx.manifest.get("runtime.password_file") or "")
     env["EXAKIT_RUST_BUCKET_DIR"] = ""

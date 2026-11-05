@@ -37,6 +37,12 @@
 #                       for a machine that skipped the offer at install time or
 #                       never got it; the kit's own sample data is left out and
 #                       the container is never removed
+#   tls-pin [--accept [--yes]] [--json]
+#                       the database's pinned TLS certificate against the one
+#                       its port serves now; --accept records the live one
+#                       after a confirmation (a redeploy made outside the kit),
+#                       --yes answers it for a script, and the clients that
+#                       hold the pin are rewritten
 #   autostart           whether everything comes back after a restart; shows
 #                       the current state and asks whether to change it
 #   data-load [--force|<path>|<dataset>]
@@ -176,6 +182,9 @@ case "${1:-help}" in
     # persona's plan, list and show, and the marketplace's help and listing.
     persona)
         case "${2:-}" in plan|list|show|--help|-h) export EXAKIT_READONLY_QUERY=1 ;; esac ;;
+    # Showing the TLS pin reads; only --accept records one.
+    tls-pin)
+        case " $* " in *" --accept "*) ;; *) export EXAKIT_READONLY_QUERY=1 ;; esac ;;
     marketplace)
         case " $* " in *" --help "*|*" -h "*|*" --list "*) export EXAKIT_READONLY_QUERY=1 ;; esac ;;
 esac
@@ -459,6 +468,17 @@ cmd_status() {
     _cs_legacy_choice="$(manifest_get legacy.choice 2>/dev/null || true)"
     _cs_legacy_restored="$(manifest_get legacy.restored 2>/dev/null || true)"
     _cs_legacy_sample="$(manifest_get legacy.sample_left_out 2>/dev/null || true)"
+    # THE TLS PIN (SEC-14): the recorded certificate fingerprint against what
+    # the port serves now. Asked whatever the status word says - a certificate
+    # that no longer matches makes every pinned client refuse the database, so
+    # it is exactly when the database reads as unreachable that this is the
+    # reason. A refused port answers at once; nothing recorded asks nothing.
+    _cs_tls_fp="$(exakit_tls_recorded_fingerprint 2>/dev/null || true)"
+    _cs_tls_live=""
+    if [ -n "$_cs_tls_fp" ]; then
+        _cs_tls_dsn="$(manifest_get runtime.dsn 2>/dev/null || true)"
+        [ -n "$_cs_tls_dsn" ] && _cs_tls_live="$(exakit_tls_live_fingerprint "${_cs_tls_dsn%:*}" "${_cs_tls_dsn##*:}" 3 2>/dev/null || true)"
+    fi
 
     if [ "$_cs_json" -eq 1 ]; then
         # Composed in Python so every value is escaped properly; the service
@@ -504,12 +524,13 @@ cmd_status() {
             "$_cs_installing" "$_cs_step" "$_cs_urls" "$(exakit_install_command)" \
             "$_cs_legacy_c" "$_cs_legacy_e" "$_cs_legacy_choice" "$_cs_legacy_restored" "$_cs_legacy_sample" \
             "$(detect_os 2>/dev/null || true)" "$(detect_wsl_version 2>/dev/null || true)" "$_cs_failed" \
-            "$_cs_uv" <<'EXAKIT_SJ_PY'
+            "$_cs_uv" "$_cs_tls_fp" "$_cs_tls_live" <<'EXAKIT_SJ_PY'
 import json, sys
 kit, rtype, db, autostart, datasets, pyx, manifest, steps, services, note, note_at, installing, step, urls, install_cmd = sys.argv[1:16]
 legacy_c, legacy_e, legacy_choice, legacy_restored, legacy_sample = (sys.argv[16:21] + [""] * 5)[:5]
 host_platform, wsl_version = (sys.argv[21:23] + [""] * 2)[:2]
 failed_detail, uv_report = (sys.argv[23:25] + [""] * 2)[:2]
+tls_fp, tls_live = (sys.argv[25:27] + [""] * 2)[:2]
 installing = installing == "1"
 # uv: which one the kit runs, and whether a copy on this machine is below the
 # floor the kit will run at all (see exakit_uv_report). `ok` false with a
@@ -586,6 +607,18 @@ if db.startswith("conflict"):
     # Something else is on the SQL port. `exakit start` cannot help until it is gone.
     remedies["database"] = "exakit start"
     remedy_hints["database"] = "another process is listening on the database port — stop it first, then run the remedy"
+# The TLS pin (SEC-14): pinned says a fingerprint is recorded, matches whether
+# the port serves that certificate now (null when nothing answers TLS, or no pin).
+# A mismatch is a redeploy outside the kit or another process on the port; the
+# remedy SHOWS both values and changes nothing - re-pinning is the user's call,
+# made with `exakit tls-pin --accept` after they have looked.
+tls = {"pinned": bool(tls_fp), "matches": (tls_live == tls_fp) if (tls_fp and tls_live) else None}
+if tls["matches"] is False:
+    remedies["tls"] = "exakit tls-pin"
+    remedy_hints["tls"] = ("the certificate on the database port is not the one the kit pinned - a database redeployed "
+                           "outside the kit, or another process answering on the port; every kit client refuses it. "
+                           "The remedy shows both fingerprints; re-pin with exakit tls-pin --accept only once the user "
+                           "has confirmed this is their own database")
 if installing:
     remedies["install"] = "exakit status --json"
     remedy_hints["install"] = "the installer is still running (step: %s) — poll the remedy until status is running" % (step or "unknown")
@@ -668,6 +701,7 @@ payload = {
     "steps_missing": steps_missing,
     "pyexasol": pyx or None,
     "uv": uv,
+    "tls": tls,
     "remedies": remedies,
     # Prose that explains a remedy, same keys: the remedy itself stays a
     # runnable command, per the AGENTS.md contract.
@@ -770,6 +804,20 @@ EXAKIT_SJ_PY
         elif [ "$_cs_db" = "conflict" ]; then printf ' · port held by another process (not Exasol) — stop it, then: exakit start'
         elif [ -n "$_cs_failed" ]; then printf ' · not reachable — %s' "$_cs_failed"
         else printf ' · not reachable'; fi)")"
+    # The TLS pin, only where it says something: pinned and matching is one
+    # word; a certificate that changed names both causes and the command that
+    # shows the two values. Nothing at all before a runtime exists.
+    if [ -n "$_cs_tls_fp" ]; then
+        if [ -z "$_cs_tls_live" ]; then
+            ui_panel_line "$(_cs_pad 'TLS' "pinned (SHA-256 ${_cs_tls_fp:0:16}...)")"
+        elif [ "$_cs_tls_live" = "$_cs_tls_fp" ]; then
+            ui_panel_line "$(_cs_pad 'TLS' "pinned · certificate matches")"
+        else
+            ui_panel_line "$(_cs_pad 'TLS' "certificate CHANGED — not the pinned one: a redeploy outside the kit, or another process on the port. Clients refuse it. Compare: exakit tls-pin")"
+        fi
+    elif [ "$_cs_running" -eq 1 ]; then
+        ui_panel_line "$(_cs_pad 'TLS' "not pinned — pin it with: exakit tls-pin --accept")"
+    fi
     if [ "$_cs_installing" -eq 1 ]; then
         ui_panel_line "$(_cs_pad 'Install' "in progress · step: $_cs_step — poll: exakit status")"
     elif [ -n "$_cs_step" ]; then
@@ -1097,8 +1145,9 @@ cmd_start() {
     if [ -n "$EXAKIT_SERVICE_SCOPE" ]; then
         _exakit_log_file "INFO  start scoped to $EXAKIT_SERVICE_SCOPE"
         if [ "$EXAKIT_SERVICE_SCOPE" = "database" ]; then
-            _start_database
-            return $?
+            _start_database || return $?
+            exakit_tls_ensure_pinned
+            return 0
         fi
         # One add-on was asked for, so only that one is touched: the database
         # is NOT started on its behalf. An add-on talks to the database, and
@@ -1114,6 +1163,9 @@ cmd_start() {
     fi
     # Everything the kit runs, database first, then every add-on service.
     _start_database
+    # An install from before the TLS pin records it now, the database being up
+    # and the launcher's (SEC-14); a no-op once one is recorded.
+    exakit_tls_ensure_pinned
     for _start_id in $(exakit_service_ids); do
         [ "$_start_id" = "database" ] && continue
         exakit_service_start "$_start_id" || true
@@ -1358,6 +1410,107 @@ cmd_repair_runtime() {
 # 1 the copy did not finish (the reason and the copies' location are printed),
 # 2 bad input, 3 no deployment or no exapump to copy with, 4 not installed,
 # 5 not confirmed. --json prints one object on stdout and narrates on stderr.
+# cmd_tls_pin [--accept [--yes]] [--json] — the database's TLS pin (SEC-14):
+# the fingerprint the kit recorded (trust on first use, when it deployed or
+# started its own database) against the certificate the port serves now.
+#
+# Showing changes nothing. A certificate that no longer matches is either a
+# database redeployed outside the kit or something else answering on the port,
+# and only the user can say which - so --accept, which records the live one and
+# rewrites every client holding the old (exapump profile, MCP entries), asks
+# first, default no for a replacement; --yes answers for a script that has the
+# user's word. A first pin (nothing recorded yet) is the trust-on-first-use the
+# kit takes itself at `exakit start`, so its question defaults to yes.
+#
+# Exit codes: 0 pinned and matching, nothing pinned yet, or recorded; 2 bad
+# arguments; 3 nothing answers TLS on the database port; 4 not installed; 5 the
+# re-pin was not confirmed; 6 the live certificate is not the pinned one.
+# Twin: Invoke-CmdTlsPin in exakit.ps1.
+cmd_tls_pin() {
+    _tp_accept=0; _tp_yes=0; _tp_json=0
+    for _tp_arg in "$@"; do
+        case "$_tp_arg" in
+            --accept) _tp_accept=1 ;;
+            --yes|-y) _tp_yes=1 ;;
+            --json|-j) _tp_json=1 ;;
+            *) reject "Unknown option '$_tp_arg' for tls-pin (supported: --accept, --yes, --json)." ;;
+        esac
+    done
+    [ "$_tp_yes" -eq 0 ] || [ "$_tp_accept" -eq 1 ] || \
+        reject "--yes answers the question --accept asks, and does nothing on its own: exakit tls-pin --accept --yes"
+    _require_install "$_tp_json"
+    _tp_dsn="$(manifest_get runtime.dsn 2>/dev/null || true)"
+    _tp_fp="$(exakit_tls_recorded_fingerprint 2>/dev/null || true)"
+    _tp_at="$(manifest_get runtime.tls_fingerprint_at 2>/dev/null || true)"
+    [ -n "$_tp_fp" ] || _tp_at=""
+    _tp_live=""
+    [ -n "$_tp_dsn" ] && _tp_live="$(exakit_tls_live_fingerprint "${_tp_dsn%:*}" "${_tp_dsn##*:}" 10 2>/dev/null || true)"
+    _tp_q() { if [ -n "$1" ]; then printf '"%s"' "$1"; else printf 'null'; fi; }
+    _tp_matches=null
+    [ -n "$_tp_fp" ] && [ -n "$_tp_live" ] && { [ "$_tp_fp" = "$_tp_live" ] && _tp_matches=true || _tp_matches=false; }
+    # _tp_answer <ok> <changed> <status> <remedy-or-empty> <hint-or-empty> <code>
+    _tp_answer() {
+        if [ "$_tp_json" -eq 1 ]; then
+            exakit_json_out '{"ok": %s, "status": "%s", "pinned": %s, "fingerprint": %s, "recorded_at": %s, "live": %s, "matches": %s, "changed": %s, "dsn": %s, "remedy": %s, "remedy_hint": %s}\n' \
+                "$1" "$3" "$([ -n "$_tp_fp" ] && printf true || printf false)" "$(_tp_q "$_tp_fp")" "$(_tp_q "$_tp_at")" \
+                "$(_tp_q "$_tp_live")" "$_tp_matches" "$2" "$(_tp_q "$_tp_dsn")" "$(_tp_q "$4")" \
+                "$(_tp_q "$(_exakit_json_string "$5")")"
+        fi
+        exit "$6"
+    }
+    if [ "$_tp_json" -eq 0 ]; then
+        printf '  %-9s %s\n' "Database" "${_tp_dsn:-none recorded}"
+        printf '  %-9s %s\n' "Pinned" "${_tp_fp:-nothing pinned yet}${_tp_at:+  (since $_tp_at)}"
+        printf '  %-9s %s\n' "Live" "${_tp_live:-nothing answers TLS on the port}"
+        printf '\n'
+    fi
+    if [ -z "$_tp_live" ]; then
+        [ "$_tp_json" -eq 1 ] || { error "Nothing answers TLS on ${_tp_dsn:-the database port}: the database is not running."; info "Start it, then compare again: exakit start"; }
+        _tp_answer false false "not reachable" "exakit start" "the database must be up to read its certificate" 3
+    fi
+    if [ "$_tp_accept" -eq 0 ]; then
+        if [ -z "$_tp_fp" ]; then
+            [ "$_tp_json" -eq 1 ] || info "Nothing is pinned yet; clients connect without checking the certificate. Pin this one with: exakit tls-pin --accept"
+            _tp_answer true false "not pinned" "exakit tls-pin --accept" "records the certificate the port serves now (trust on first use)" 0
+        fi
+        if [ "$_tp_matches" = true ]; then
+            [ "$_tp_json" -eq 1 ] || ok "The database serves the pinned certificate."
+            _tp_answer true false "pinned" "" "" 0
+        fi
+        if [ "$_tp_json" -eq 0 ]; then
+            error "The certificate on ${_tp_dsn} is NOT the pinned one. Every kit client refuses it."
+            info "Either the database was redeployed outside the kit, or another process answers on the port."
+            info "Only if this is your own database, re-pin it with: exakit tls-pin --accept"
+        fi
+        _tp_answer false false "mismatch" "exakit tls-pin --accept" "re-pin only once the user has confirmed this is their own database (a redeploy outside the kit); otherwise find what holds the port" 6
+    fi
+    if [ "$_tp_matches" = true ]; then
+        [ "$_tp_json" -eq 1 ] || ok "Already pinned to this certificate; nothing changed."
+        _tp_answer true false "pinned" "" "" 0
+    fi
+    if [ "$_tp_yes" -ne 1 ]; then
+        if [ -n "$_tp_fp" ]; then
+            [ "$_tp_json" -eq 1 ] || warn "Replacing a pin: do this only for your own database (one redeployed outside the kit), never for a process you do not recognise on the port."
+            _tp_ok=0; [ "$_tp_json" -eq 0 ] && confirm "Trust the certificate the port serves now, and rewrite the clients?" n && _tp_ok=1
+        else
+            _tp_ok=0; [ "$_tp_json" -eq 0 ] && confirm "Pin the certificate the port serves now?" y && _tp_ok=1
+        fi
+        if [ "$_tp_ok" -ne 1 ]; then
+            [ "$_tp_json" -eq 1 ] || info "Nothing was changed. With the user's confirmation, a script re-pins with: exakit tls-pin --accept --yes"
+            _tp_answer false false "declined" "exakit tls-pin --accept --yes" "only after the user has confirmed the certificate is their own database's" 5
+        fi
+    fi
+    exakit_init_logging 2>/dev/null || true
+    manifest_set runtime.tls_fingerprint "$_tp_live"
+    _tp_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    manifest_set runtime.tls_fingerprint_at "$_tp_at"
+    _exakit_log_file "INFO  TLS pin: accepted by the user (${_tp_fp:-none} -> $_tp_live)"
+    _tp_fp="$_tp_live"; _tp_matches=true
+    if [ "$_tp_json" -eq 1 ]; then exakit_tls_rewrite_clients >&2; else exakit_tls_rewrite_clients; fi
+    [ "$_tp_json" -eq 1 ] || ok "Pinned. The kit's clients now accept only this certificate."
+    _tp_answer true true "pinned" "" "" 0
+}
+
 cmd_migrate() {
     _mg_source="${1:-}"
     [ $# -gt 0 ] && shift
@@ -1714,6 +1867,10 @@ cmd_update() {
         case "$_cu_arg" in --json|-j) _cu_json=1 ;; esac
     done
     _require_install "$_cu_json"
+    # An install from before the TLS pin records it first (SEC-14), so every
+    # client this update rewrites carries it. Narration stays off a --json
+    # answer's stdout.
+    if [ "$_cu_json" -eq 1 ]; then exakit_tls_ensure_pinned >&2; else exakit_tls_ensure_pinned; fi
     exakit_update "$@"
 }
 
@@ -1906,6 +2063,9 @@ cmd_mcp_setup() {
     done
     _require_install
     exakit_init_logging
+    # Before the clients are written, so they carry the TLS pin (SEC-14) on an
+    # install that predates it; the AI clients are this command's own output.
+    exakit_tls_ensure_pinned --profile-only
     exakit_mcp_setup || die "Could not complete MCP client setup"
 }
 
@@ -2803,6 +2963,7 @@ case "${1:-help}" in
     start)    shift; _exakit_refuse_unknown_options start "" "$@"; _with_notice cmd_start "$@" ;;
     stop)     shift; _exakit_refuse_unknown_options stop "" "$@"; _with_notice cmd_stop "$@" ;;
     repair-runtime) shift; cmd_repair_runtime "$@" ;;
+    tls-pin)  shift; cmd_tls_pin "$@" ;;
     migrate)  shift; cmd_migrate "$@" ;;
     autostart) shift; _with_notice cmd_autostart "$@" ;;
     data-load) shift; _with_notice cmd_data_load "$@" ;;

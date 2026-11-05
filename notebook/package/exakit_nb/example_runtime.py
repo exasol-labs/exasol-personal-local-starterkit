@@ -62,7 +62,8 @@ def bootstrap(namespace, notebook=""):
 
 def open_pyexasol_connection(conf, **kwargs):
     from exasol.nb_connector.connections import open_pyexasol_connection as original
-    conn = original(conf, **kwargs)
+    from . import _pinned
+    conn = original(conf, **_pinned(conf, kwargs))   # the TLS pin once recorded (SEC-14)
     # Personal's release suffix is not PEP 440; pyexasol's HTTP import checks
     # packaging.Version. This connection belongs only to the example session.
     release = conn.login_info.get("releaseVersion", "")

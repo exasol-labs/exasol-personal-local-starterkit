@@ -25,7 +25,7 @@ function Test-DescribeInstalled {
 
 # Invoke-DescribeService - the service in the kit's notebook Python with the
 # admin connection settings from the manifest (the password's FILE, never the
-# password). Its output flows through as the command's (so --json stays one
+# password; the DSN with the recorded TLS pin, SEC-14). Its output flows through as the command's (so --json stays one
 # object on stdout); its exit code, when not 0, becomes the CLI's through
 # PendingExitCode - not a return value, which would swallow the output. Twin
 # of describe_run.
@@ -38,7 +38,7 @@ function Invoke-DescribeService {
     }
     if (-not (Test-Path $python)) { Fail "The notebook environment is missing ($python). Repair it with: exakit notebook setup" }
     $service = Join-Path (Join-Path (Join-Path (Get-ExakitRepoRoot) "setup") "lib") "describe_service.py"
-    $envs = @{ EXAKIT_PYX_DSN = (Get-ExakitManifestValue "runtime.dsn"); EXAKIT_PYX_USER = (Get-ExakitManifestValue "runtime.user")
+    $envs = @{ EXAKIT_PYX_DSN = (Get-ExakitPinnedDsn); EXAKIT_PYX_USER = (Get-ExakitManifestValue "runtime.user")
                EXAKIT_PYX_PWFILE = (Get-ExakitManifestValue "runtime.password_file")
                EXAKIT_MCP_READER = (Get-ExakitManifestValue "components.mcp_server.connection.user") }
     if (-not $envs.EXAKIT_PYX_USER) { $envs.EXAKIT_PYX_USER = "sys" }

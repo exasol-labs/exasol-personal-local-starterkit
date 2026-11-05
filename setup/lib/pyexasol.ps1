@@ -227,7 +227,9 @@ finally:
     conn.close()
 '@
     $probeFile = Join-Path ([System.IO.Path]::GetTempPath()) "exakit-pyexasol-probe-$PID.py"
-    $env:EXAKIT_PYX_DSN = $dsn
+    # The DSN carries the recorded TLS pin when there is one (SEC-14): pyexasol
+    # then refuses any certificate but the database's own.
+    $env:EXAKIT_PYX_DSN = Get-ExakitPinnedDsn $dsn
     $env:EXAKIT_PYX_USER = $user
     $env:EXAKIT_PYX_PWFILE = $passwordFile
     try {

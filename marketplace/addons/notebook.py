@@ -442,7 +442,9 @@ def validate(ctx: KitContext) -> bool:
         master = _credential(ctx, "notebook_store_master_password")
         _run_helper(ctx, "check_connection.py", env={**os.environ,
             "SCS_FILE": str(paths(ctx)[1] / "connection.scs"),
-            "SCS_MASTER_PASSWORD": master.read_text(encoding="utf-8").strip()})
+            "SCS_MASTER_PASSWORD": master.read_text(encoding="utf-8").strip(),
+            # The connector's store has no field for a TLS pin; the DSN with it (SEC-14) goes in beside.
+            "EXAKIT_NB_DSN": ctx.client_dsn()})
     except AddonFailure:
         ctx.manifest.set_many({f"{RECEIPT}.validated": False})
         return False

@@ -19,6 +19,7 @@ Invoke-Expression $definition.Extent.Text
 $known = @("exakit", "exapump", "uv", "mcp", "pyexasol", "dbt-exasol", "dash-server")
 function Assert-ExakitInstalled { }
 function Initialize-ExakitLogging { }
+function Confirm-ExakitTlsPinned { }   # the TLS pin (SEC-14) has its own suite: tls-pin-ps.ps1
 function Test-ExakitUpdateTarget([string]$Target) { return ($Target -eq "all" -or $known -contains $Target) }
 function Get-ExakitUpdateTargets([string]$Target) { if ($Target -eq "all") { return $known } return @($Target) }
 function Deny-ExakitInput([string]$Message) { throw "DENIED: $Message" }

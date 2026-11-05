@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
+import importlib.util
 import json
 from pathlib import Path
 import shutil
@@ -49,6 +51,35 @@ DEFAULT_READ_ONLY_MCP_SETTINGS = {
     # descriptors are published as views in EXAKIT_SEMANTIC: an agent that lists or searches objects must see them.
     "views": {"enable": True},
 }
+
+
+@lru_cache(maxsize=1)
+def _tls_pin():
+    """setup/lib/tls_pin.py, the kit's one implementation of the database's TLS pin (audit SEC-14)."""
+    path = Path(__file__).resolve().parents[2] / "setup" / "lib" / "tls_pin.py"
+    spec = importlib.util.spec_from_file_location("exakit_tls_pin", path)
+    if spec is None or spec.loader is None:
+        raise MCPSubsystemError("runtime_tls_pin_unavailable", f"The kit copy has no {path}; repair it with: exakit update")
+    module = importlib.util.module_from_spec(spec)
+    try:
+        spec.loader.exec_module(module)
+    except OSError as error:
+        raise MCPSubsystemError("runtime_tls_pin_unavailable",
+                                f"The kit copy has no {path}; repair it with: exakit update") from error
+    return module
+
+
+def pinned_dsn(runtime: dict, dsn: str) -> str:
+    """The DSN the MCP server connects with: host/<fingerprint>:port when the kit has recorded the database's TLS
+    pin (runtime.tls_fingerprint), the DSN unchanged otherwise. The server hands EXA_DSN to pyexasol unchanged, and
+    pyexasol then refuses any certificate but the pinned one - so a process squatting on the port is never handed
+    the read-only user's password."""
+    recorded = str(runtime.get("tls_fingerprint") or "").strip()
+    if not recorded:
+        return dsn
+    module = _tls_pin()
+    fingerprint = module.normalize(recorded)
+    return module.pinned_dsn(dsn, fingerprint) if fingerprint else dsn
 
 
 @dataclass
@@ -160,7 +191,7 @@ class ExakitRuntimeLoader:
                 server_definition=definition,
             )
         env = {
-            "EXA_DSN": dsn,
+            "EXA_DSN": pinned_dsn(runtime, dsn),
             "EXA_USER": connection_user,
             "EXA_PASSWORD": password,
             "EXA_MCP_SETTINGS": json.dumps(DEFAULT_READ_ONLY_MCP_SETTINGS),

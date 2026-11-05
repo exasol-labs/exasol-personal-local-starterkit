@@ -68,6 +68,7 @@
       "commands": [
         "preflight",
         "repair-runtime",
+        "tls-pin",
         "migrate",
         "uninstall"
       ]
@@ -1008,6 +1009,26 @@
         "4": "not installed",
         "5": "declined - not confirmed, nothing was changed"
       }
+    },
+    {
+      "command": "tls-pin",
+      "options": "[--accept [--yes]] [--json | -j]",
+      "summary": "Compare or re-pin the database's TLS certificate.",
+      "description": "The database's certificate is self-signed, so the kit pins it instead: it records the SHA-256 fingerprint (trust on first use) when it deploys or starts its own database, and every client it builds - the exapump profile, pyexasol, the MCP server's EXA_DSN - refuses any other certificate. Without options this shows the pinned fingerprint against the one the port serves now and changes nothing. A mismatch means the database was redeployed outside the kit, or another process answers on the port: --accept records the live certificate and rewrites the clients that hold the pin, after a question (default no when replacing a pin; without a terminal the answer is no). --yes answers it for a script - pass it only with the user's confirmation. --json answers with one object ({\"ok\", \"status\", \"pinned\", \"fingerprint\", \"recorded_at\", \"live\", \"matches\", \"changed\", \"dsn\", \"remedy\", \"remedy_hint\"}).",
+      "warning": "Re-pinning trusts whatever answers on the database port now. Do it only for your own database, never for a process you do not recognise.",
+      "exit_codes": {
+        "0": "pinned and matching, nothing pinned yet, or the pin was recorded",
+        "2": "bad input",
+        "3": "nothing answers TLS on the database port",
+        "4": "not installed",
+        "5": "declined - not confirmed, nothing was changed",
+        "6": "the live certificate is not the pinned one"
+      },
+      "examples": [
+        "exakit tls-pin",
+        "exakit tls-pin --json",
+        "exakit tls-pin --accept"
+      ]
     },
     {
       "command": "migrate",

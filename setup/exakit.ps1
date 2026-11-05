@@ -38,6 +38,12 @@
 #                         run one SQL statement and translate the error into a
 #                         remedy; reads only unless --write. Uses the ADMIN
 #                         connection (the read-only boundary is the MCP user)
+#   tls-pin [--accept [--yes]] [--json]
+#                         the database's pinned TLS certificate against the
+#                         one its port serves now; --accept records the live
+#                         one after a confirmation (a redeploy made outside the
+#                         kit), --yes answers it for a script, and the clients
+#                         that hold the pin are rewritten
 #   repair-runtime [--yes] [--json]
 #                         rebuild the database from empty when it will not
 #                         start. DESTROYS every table in it; the bundled sample
@@ -326,6 +332,19 @@ function Invoke-CmdStatus {
     $legacyChoice = "" + (Get-ExakitManifestValue "legacy.choice")
     $legacyRestored = "" + (Get-ExakitManifestValue "legacy.restored")
     $legacySample = "" + (Get-ExakitManifestValue "legacy.sample_left_out")
+    # THE TLS PIN (SEC-14): the recorded certificate fingerprint against what
+    # the port serves now, asked whatever the status word says - a changed
+    # certificate makes every pinned client refuse the database, so it is
+    # exactly when it reads as unreachable that this is the reason. Nothing
+    # recorded asks nothing. Twin of _cs_tls_fp / _cs_tls_live in cmd_status.
+    $tlsFp = Get-ExakitTlsFingerprint
+    $tlsLive = ""
+    if ($tlsFp) {
+        $tlsParts = Split-ExakitDsn ("" + (Get-ExakitManifestValue "runtime.dsn"))
+        $tlsLive = Get-ExakitTlsLiveFingerprint -DbHost $tlsParts[0] -Port $tlsParts[1] -TimeoutSeconds 3
+    }
+    $tlsMatches = $null
+    if ($tlsFp -and $tlsLive) { $tlsMatches = ($tlsFp -eq $tlsLive) }
     $services = @{}
     # A service that knows its address says so through the registry's UrlFn, and
     # the JSON carries it - an agent could not get dash-server's URL from any
@@ -385,6 +404,13 @@ function Invoke-CmdStatus {
                 # The remedy stays the command that retries it; the hint says why.
                 if ($failedDetail) { $remedyHints["database"] = "$failedDetail - exakit start retries the launcher's deploy" }
             }
+        }
+        # A certificate that no longer matches the pin: the remedy SHOWS both
+        # values and changes nothing - re-pinning is the user's call. Twin of
+        # the tls block in cmd_status.
+        if ($tlsMatches -eq $false) {
+            $remedies["tls"] = "exakit tls-pin"
+            $remedyHints["tls"] = "the certificate on the database port is not the one the kit pinned - a database redeployed outside the kit, or another process answering on the port; every kit client refuses it. The remedy shows both fingerprints; re-pin with exakit tls-pin --accept only once the user has confirmed this is their own database"
         }
         if ($installing) {
             $remedies["install"] = "exakit status --json"
@@ -463,6 +489,10 @@ function Invoke-CmdStatus {
                 version     = $(if ($uvReport.Version) { "$($uvReport.Version)" } else { $null })
                 min_version = $(if ($uvReport.Min) { "$($uvReport.Min)" } else { $null })
             }
+            # Twin of `tls` in cmd_status: pinned says a fingerprint is
+            # recorded, matches whether the port serves it now (null when
+            # nothing answers TLS, or nothing is pinned).
+            tls             = [ordered]@{ pinned = [bool]$tlsFp; matches = $tlsMatches }
             remedies        = $remedies
             # Prose that EXPLAINS a remedy, same keys: the remedy itself stays a
             # runnable command, per the AGENTS.md contract. Twin of remedy_hints.
@@ -567,6 +597,14 @@ function Invoke-CmdStatus {
     if (-not $dsn) { $dsn = "unknown" }
     if ($running) { $reach = "reachable" } elseif ($failedDetail) { $reach = "not reachable - $failedDetail" } else { $reach = "not reachable" }
     Write-StatusPanelRow "Database" "$dsn - $reach"
+    # The TLS pin, only where it says something. Twin of the TLS row in cmd_status.
+    if ($tlsFp) {
+        if (-not $tlsLive) { Write-StatusPanelRow "TLS" "pinned (SHA-256 $($tlsFp.Substring(0, 16))...)" }
+        elseif ($tlsMatches) { Write-StatusPanelRow "TLS" "pinned - certificate matches" }
+        else { Write-StatusPanelRow "TLS" "certificate CHANGED - not the pinned one: a redeploy outside the kit, or another process on the port. Clients refuse it. Compare: exakit tls-pin" }
+    } elseif ($running) {
+        Write-StatusPanelRow "TLS" "not pinned - pin it with: exakit tls-pin --accept"
+    }
     # The install state, which the JSON has carried since the poll contract was
     # written and this screen never showed: it said "Start it: exakit start"
     # under a live installer.
@@ -943,7 +981,7 @@ function Invoke-CmdStart {
     Initialize-ExakitLogging
     if ($id) {
         Write-ExakitLog "INFO" "start scoped to $id"
-        if ($id -eq "database") { Start-ExakitDatabase; return }
+        if ($id -eq "database") { Start-ExakitDatabase; Confirm-ExakitTlsPinned; return }
         # One add-on was asked for, so only that one is touched: the database
         # is NOT started on its behalf. Started against a stopped database an
         # add-on would only sit there failing to connect, so say what is
@@ -957,6 +995,9 @@ function Invoke-CmdStart {
     }
     # Everything the kit runs, database first, then every add-on service.
     Start-ExakitDatabase
+    # An install from before the TLS pin records it now, the database being up
+    # and the launcher's (SEC-14); a no-op once one is recorded. Twin of cmd_start.
+    Confirm-ExakitTlsPinned
     foreach ($sid in (Get-ExakitServiceIds)) {
         if ($sid -eq "database") { continue }
         Start-ExakitService -Id $sid
@@ -1185,6 +1226,129 @@ function Invoke-CmdRepairRuntime {
 # one an older kit recorded), EXAKIT_LEGACY_PASSWORD for a scripted run, or a
 # prompt on a console. Exit codes: 0 done, 1 the copy did not finish, 2 bad
 # input, 3 no deployment or no exapump, 4 not installed, 5 not confirmed.
+# Invoke-CmdTlsPin [-Accept] [-Yes] [-Json] - the database's TLS pin (SEC-14):
+# the fingerprint the kit recorded (trust on first use, when it deployed or
+# started its own database) against the certificate the port serves now.
+# Showing changes nothing. A certificate that no longer matches is a database
+# redeployed outside the kit or something else answering on the port, and only
+# the user can say which - so -Accept asks first (default no when replacing a
+# pin, yes for a first one, no without a console), -Yes answers for a script
+# that has the user's word, and the clients holding the old pin are rewritten.
+# Exit codes: 0 pinned and matching, nothing pinned yet, or recorded; 2 bad
+# arguments; 3 nothing answers TLS on the port; 4 not installed; 5 not
+# confirmed; 6 the live certificate is not the pinned one. Twin of cmd_tls_pin.
+function Invoke-CmdTlsPin {
+    param([switch]$Accept, [switch]$Yes, [switch]$Json)
+    if ($Yes -and -not $Accept) { Deny-ExakitInput "--yes answers the question --accept asks, and does nothing on its own: exakit tls-pin --accept --yes" }
+    if ($Json) { Assert-ExakitInstalled -Json } else { Assert-ExakitInstalled }
+    $dsn = "" + (Get-ExakitManifestValue "runtime.dsn")
+    $script:TlsPinFp = Get-ExakitTlsFingerprint
+    $script:TlsPinAt = ""
+    if ($script:TlsPinFp) { $script:TlsPinAt = Get-ExakitTlsPinnedAt }
+    $live = ""
+    if ($dsn) {
+        $parts = Split-ExakitDsn $dsn
+        $live = Get-ExakitTlsLiveFingerprint -DbHost $parts[0] -Port $parts[1] -TimeoutSeconds 10
+    }
+    $script:TlsPinMatches = $null
+    if ($script:TlsPinFp -and $live) { $script:TlsPinMatches = ($script:TlsPinFp -eq $live) }
+    $orNull = { param($v) if ("$v") { "$v" } else { $null } }
+    $answer = {
+        param([bool]$Ok, [bool]$Changed, [string]$Status, [string]$Remedy, [string]$Hint, [int]$Code)
+        if ($Json) {
+            [ordered]@{
+                ok          = $Ok
+                status      = $Status
+                pinned      = [bool]$script:TlsPinFp
+                fingerprint = (& $orNull $script:TlsPinFp)
+                recorded_at = (& $orNull $script:TlsPinAt)
+                live        = (& $orNull $live)
+                matches     = $script:TlsPinMatches
+                changed     = $Changed
+                dsn         = (& $orNull $dsn)
+                remedy      = (& $orNull $Remedy)
+                remedy_hint = (& $orNull $Hint)
+            } | ConvertTo-Json -Depth 3 | Write-Output
+        }
+        exit $Code
+    }
+    if (-not $Json) {
+        $pinnedText = "nothing pinned yet"
+        if ($script:TlsPinFp) { $pinnedText = $script:TlsPinFp; if ($script:TlsPinAt) { $pinnedText = "$pinnedText  (since $($script:TlsPinAt))" } }
+        $liveText = "nothing answers TLS on the port"
+        if ($live) { $liveText = $live }
+        $dsnText = "none recorded"
+        if ($dsn) { $dsnText = $dsn }
+        Write-Host ("  {0} {1}" -f "Database".PadRight(9), $dsnText)
+        Write-Host ("  {0} {1}" -f "Pinned".PadRight(9), $pinnedText)
+        Write-Host ("  {0} {1}" -f "Live".PadRight(9), $liveText)
+        Write-Host ""
+    }
+    if (-not $live) {
+        if (-not $Json) {
+            $where = "the database port"
+            if ($dsn) { $where = $dsn }
+            Write-Host "  [x] Nothing answers TLS on ${where}: the database is not running."
+            Info "Start it, then compare again: exakit start"
+        }
+        & $answer $false $false "not reachable" "exakit start" "the database must be up to read its certificate" 3
+    }
+    if (-not $Accept) {
+        if (-not $script:TlsPinFp) {
+            if (-not $Json) { Info "Nothing is pinned yet; clients connect without checking the certificate. Pin this one with: exakit tls-pin --accept" }
+            & $answer $true $false "not pinned" "exakit tls-pin --accept" "records the certificate the port serves now (trust on first use)" 0
+        }
+        if ($script:TlsPinMatches) {
+            if (-not $Json) { Ok "The database serves the pinned certificate." }
+            & $answer $true $false "pinned" "" "" 0
+        }
+        if (-not $Json) {
+            Write-Host "  [x] The certificate on $dsn is NOT the pinned one. Every kit client refuses it."
+            Info "Either the database was redeployed outside the kit, or another process answers on the port."
+            Info "Only if this is your own database, re-pin it with: exakit tls-pin --accept"
+        }
+        & $answer $false $false "mismatch" "exakit tls-pin --accept" "re-pin only once the user has confirmed this is their own database (a redeploy outside the kit); otherwise find what holds the port" 6
+    }
+    if ($script:TlsPinMatches) {
+        if (-not $Json) { Ok "Already pinned to this certificate; nothing changed." }
+        & $answer $true $false "pinned" "" "" 0
+    }
+    if (-not $Yes) {
+        $confirmed = $false
+        if (-not $Json) {
+            if ($script:TlsPinFp) {
+                Warn2 "Replacing a pin: do this only for your own database (one redeployed outside the kit), never for a process you do not recognise on the port."
+                $confirmed = Confirm-ExakitPrompt "Trust the certificate the port serves now, and rewrite the clients?" $false
+            } else {
+                $confirmed = Confirm-ExakitPrompt "Pin the certificate the port serves now?" $true
+            }
+        }
+        if (-not $confirmed) {
+            if (-not $Json) { Info "Nothing was changed. With the user's confirmation, a script re-pins with: exakit tls-pin --accept --yes" }
+            & $answer $false $false "declined" "exakit tls-pin --accept --yes" "only after the user has confirmed the certificate is their own database's" 5
+        }
+    }
+    try { Initialize-ExakitLogging } catch { }
+    $previousPin = $script:TlsPinFp
+    Set-ExakitManifestValue "runtime.tls_fingerprint" $live | Out-Null
+    $script:TlsPinAt = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+    Set-ExakitManifestValue "runtime.tls_fingerprint_at" $script:TlsPinAt | Out-Null
+    $previousText = "none"
+    if ($previousPin) { $previousText = $previousPin }
+    Write-ExakitLog "INFO" "TLS pin: accepted by the user ($previousText -> $live)"
+    $script:TlsPinFp = $live
+    $script:TlsPinMatches = $true
+    if ($Json) {
+        $quiet = $script:ExakitQuietDetail
+        $script:ExakitQuietDetail = $true
+        try { & { Update-ExakitTlsPinnedClients } *> $null } finally { $script:ExakitQuietDetail = $quiet }
+    } else {
+        Update-ExakitTlsPinnedClients
+        Ok "Pinned. The kit's clients now accept only this certificate."
+    }
+    & $answer $true $true "pinned" "" "" 0
+}
+
 function Invoke-CmdMigrate {
     param([string[]]$Arguments = @())
     $argv = @($Arguments)
@@ -3008,6 +3172,10 @@ function Invoke-CmdUpdate {
         }
         $Target = (@($Target) + $More) -join " "
     }
+    # An install from before the TLS pin records it first, once the arguments are known good, (SEC-14), so every
+    # client this update rewrites carries it. Silent under --json, whose
+    # stdout is one object. Twin of cmd_update.
+    if ($Json) { & { Confirm-ExakitTlsPinned } *> $null } else { Confirm-ExakitTlsPinned }
     if (-not $Json) {
         Invoke-ExakitUpdateRun -Target $Target -Components $components -AssumeYes $AssumeYes
         return
@@ -3569,6 +3737,9 @@ function Invoke-CmdDataLoad {
 function Invoke-CmdMcpSetup {
     Assert-ExakitInstalled
     Initialize-ExakitLogging
+    # Before the clients are written, so they carry the TLS pin (SEC-14) on an
+    # install that predates it; the AI clients are this command's own output.
+    Confirm-ExakitTlsPinned -ProfileOnly
     if (-not (Invoke-McpSetup)) { Fail "Could not complete AI client setup." }
 }
 
@@ -4107,6 +4278,13 @@ try {
             # Its own option parser (values follow their flags), so the generic
             # unknown-option assertion does not apply. Twin of cmd_migrate.
             Invoke-CmdMigrate -Arguments @($RestArgs)
+        }
+        "tls-pin" {
+            Assert-ExakitKnownOptions -CommandName "tls-pin" -Allowed @("--accept", "--yes", "-y", "--json", "-j") -Arguments $RestArgs
+            $tlsJson = [bool]($RestArgs -contains "--json" -or $RestArgs -contains "-j")
+            if ($tlsJson) { $script:JsonOutput = $true }
+            Invoke-CmdTlsPin -Accept:([bool]($RestArgs -contains "--accept")) `
+                -Yes:([bool]($RestArgs -contains "--yes" -or $RestArgs -contains "-y")) -Json:$tlsJson
         }
         "repair-runtime" {
             Assert-ExakitKnownOptions -CommandName "repair-runtime" -Allowed @("--yes", "-y", "-Yes", "--json", "-j") -Arguments $RestArgs

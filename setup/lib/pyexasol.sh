@@ -273,7 +273,9 @@ pyexasol_validate() {
     # The password travels via a file read inside python, never on a command
     # line. TLS mirrors the exapump profile posture (tls on, local cert not
     # validated); a plain connection is the fallback for non-TLS runtimes.
-    if EXAKIT_PYX_DSN="${_pyx_host}:${_pyx_port}" \
+    # The DSN carries the recorded TLS pin when there is one (SEC-14): pyexasol
+    # then refuses any certificate but the database's own.
+    if EXAKIT_PYX_DSN="$(exakit_tls_pinned_dsn "${_pyx_host}:${_pyx_port}")" \
        EXAKIT_PYX_USER="$_pyx_user" \
        EXAKIT_PYX_PWFILE="$_pyx_pwfile" \
        "$_pyx_python" - >> "${EXAKIT_LOG_FILE:-/dev/null}" 2>&1 <<'PY'

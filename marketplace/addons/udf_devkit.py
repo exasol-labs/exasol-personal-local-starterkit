@@ -78,7 +78,8 @@ def _tool_python(ctx: KitContext) -> Path:
 
 
 def _tool(ctx: KitContext, *args: str, timeout: int = 120) -> subprocess.CompletedProcess[str]:
-    env = {**os.environ, "EXAKIT_PYX_DSN": str(ctx.manifest.get("runtime.dsn") or ""),
+    # With the database's TLS pin when one is recorded (SEC-14): pyexasol refuses any other certificate.
+    env = {**os.environ, "EXAKIT_PYX_DSN": ctx.client_dsn(),
            "EXAKIT_PYX_USER": str(ctx.manifest.get("runtime.user") or "sys"),
            "EXAKIT_PYX_PWFILE": str(ctx.manifest.get("runtime.password_file") or "")}
     try:

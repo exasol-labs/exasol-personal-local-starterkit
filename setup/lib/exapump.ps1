@@ -431,7 +431,8 @@ function New-ExapumpProfile {
     }
 
     New-Item -ItemType Directory -Force -Path (Split-Path $script:ExapumpConfigPath -Parent) | Out-Null
-    Set-ExapumpTomlSection -ConfigPath $script:ExapumpConfigPath -Profile $script:ExapumpProfile -Host_ $host_ -Port $port -User $user -Password $password
+    # The kit's own database: its recorded TLS pin goes in the profile (SEC-14).
+    Set-ExapumpTomlSection -ConfigPath $script:ExapumpConfigPath -Profile $script:ExapumpProfile -Host_ $host_ -Port $port -User $user -Password $password -Fingerprint (Get-ExakitTlsFingerprint)
     Protect-ExakitFile $script:ExapumpConfigPath
     Set-ExakitManifestValue "components.exapump.profile" $script:ExapumpProfile
     OkStep "Connection profile [$($script:ExapumpProfile)] written to $(Get-ExakitTilde $script:ExapumpConfigPath)"
@@ -445,7 +446,10 @@ function Format-TomlString {
 
 # Set-ExapumpTomlSection - replace/append a [profile] section in a TOML file,
 # preserving every other section. Atomic write (temp file + rename) so an
-# interrupted run never truncates a config that may hold other profiles.
+# interrupted run never truncates a config that may hold other profiles. With
+# -Fingerprint (the kit's recorded TLS pin, lowercase hex: exapump compares it
+# case-sensitively) the profile refuses any certificate but that one (SEC-14);
+# without one it is the old unpinned profile. Twin of exapump_write_profile.
 function Set-ExapumpTomlSection {
     param(
         [Parameter(Mandatory)][string]$ConfigPath,
@@ -454,7 +458,8 @@ function Set-ExapumpTomlSection {
         [Parameter(Mandatory)][string]$Port,
         [Parameter(Mandatory)][string]$User,
         [Parameter(Mandatory)][string]$Password,
-        [string]$Schema = ""
+        [string]$Schema = "",
+        [string]$Fingerprint = ""
     )
     $content = ""
     if (Test-Path $ConfigPath) { $content = Get-Content $ConfigPath -Raw }
@@ -470,6 +475,7 @@ function Set-ExapumpTomlSection {
     if ($Schema) { $lines += "schema = $(Format-TomlString $Schema)" }
     $lines += "tls = true"
     $lines += "validate_certificate = false"
+    if ($Fingerprint) { $lines += "certificate_fingerprint = $(Format-TomlString $Fingerprint)" }
     $section = ($lines -join "`n") + "`n"
 
     $escapedProfile = [regex]::Escape($Profile)

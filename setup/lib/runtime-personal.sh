@@ -1992,7 +1992,7 @@ personal_deploy_local() {
     rm -rf "$_deploy_tmp"
 
     exakit_record_ownership database kit "$EXAKIT_PERSONAL_DEPLOY_DIR"
-    personal_record_manifest "healthy"
+    personal_record_manifest "healthy" fresh
 }
 
 _personal_wait_ready_probe() {
@@ -2135,8 +2135,8 @@ personal_wait_ready_or_deploy() {
     return 1
 }
 
-# personal_record_manifest [status] — write the connection details this kit
-# hands to every client, plus the runtime state.
+# personal_record_manifest [status] [fresh] — write the connection details this
+# kit hands to every client, plus the runtime state and the database's TLS pin.
 #
 # The STATUS IS AN ARGUMENT because it used to be the constant "healthy". Every
 # caller got it, including `exakit update`, which reaches here after swapping
@@ -2170,6 +2170,9 @@ personal_clear_stale_record() {
 
 personal_record_manifest() {
     _prm_status="${1:-}"
+    # "fresh": the kit has just deployed this database itself (see the TLS pin
+    # at the end). Every other caller adopted, started or updated one.
+    _prm_fresh="${2:-}"
     manifest_set runtime.type "personal"
     personal_clear_stale_record
     # The version of the deployment ON DISK, whenever its state can say —
@@ -2234,6 +2237,25 @@ print("%s:%s\t%s" % (c.get("host", "127.0.0.1"), c.get("dbPort", 8563), c.get("u
     manifest_set runtime.status "${_prm_status:-unknown}"
     # A database that has been seen healthy may hold data from now on.
     [ "$_prm_status" = "healthy" ] && personal_set_first_boot_pending 0
+    # ITS TLS CERTIFICATE, PINNED (SEC-14). Trust on first use, taken while the
+    # kit is looking at its own database: a deployment it has just made
+    # replaces any earlier pin (a new deployment is a new certificate); one it
+    # adopted, started or merely updated the launcher of records one only when
+    # none is recorded yet - a recorded pin is never silently replaced. Never
+    # fatal: no TLS answer leaves the clients exactly as unpinned as before.
+    case "$_prm_status" in
+        healthy|running*)
+            # Clients that already exist hold the old value (a first install
+            # writes them after this step, so there is nothing to rewrite yet).
+            if [ "$_prm_fresh" = "fresh" ]; then
+                exakit_tls_record --replace || true
+                [ "${EXAKIT_TLS_PIN_CHANGED:-0}" = 1 ] && exakit_tls_rewrite_clients --profile-only
+            else
+                exakit_tls_record || true
+                [ "${EXAKIT_TLS_PIN_CHANGED:-0}" = 1 ] && exakit_tls_rewrite_clients
+            fi
+            ;;
+    esac
     return 0
 }
 

@@ -673,13 +673,15 @@ function Clear-PersonalStaleRecord {
     Set-ExakitManifestValue "runtime.engine" (Get-PersonalEngine)
 }
 
-# Set-PersonalManifest [status] - the connection details this kit hands to every
-# client, plus the runtime state. The deployment directory has everything a
+# Set-PersonalManifest [status] [-Fresh] - the connection details this kit hands
+# to every client, plus the runtime state and the database's TLS pin. The deployment directory has everything a
 # client needs: deployment.json (host, dbPort, username) and secrets.json
 # (dbPassword). The keys are the contract every add-on reads - identical to the
 # sh side's personal_record_manifest.
 function Set-PersonalManifest {
-    param([string]$Status = "")
+    # -Fresh: the kit has just deployed this database itself (see the TLS pin
+    # at the end). Every other caller adopted, started or updated one.
+    param([string]$Status = "", [switch]$Fresh)
     Set-ExakitManifestValue "runtime.type" "personal"
     Clear-PersonalStaleRecord
     # runtime.version is the COMPONENT the kit installs and compares against
@@ -736,6 +738,20 @@ function Set-PersonalManifest {
     Set-ExakitManifestValue "runtime.status" $Status
     # A database that has been seen healthy may hold data from now on.
     if ($Status -eq "healthy") { Set-PersonalFirstBootPending $false }
+    # ITS TLS CERTIFICATE, PINNED (SEC-14). Trust on first use, taken while the
+    # kit is looking at its own database: a deployment it has just made
+    # replaces any earlier pin (a new deployment is a new certificate); one it
+    # adopted, started or merely updated the launcher of records one only when
+    # none is recorded yet. Clients that already exist hold the old value; a
+    # first install writes them after this step. Never fatal. Twin of the end
+    # of personal_record_manifest.
+    if ($Status -eq "healthy" -or "$Status".StartsWith("running")) {
+        if ($Fresh) {
+            if (Register-ExakitTlsPin -Replace) { Update-ExakitTlsPinnedClients -ProfileOnly }
+        } else {
+            if (Register-ExakitTlsPin) { Update-ExakitTlsPinnedClients }
+        }
+    }
 }
 
 # Install-PersonalDeployment - run the local deployment, the long step. The
@@ -1698,7 +1714,7 @@ function Install-PersonalDeployment {
     }
     Set-ExakitComponentOwnership "database" "kit" $script:PersonalDeployDir
     Ok "Exasol Personal deployed and answering on 127.0.0.1:$(Get-PersonalDbPort)"
-    Set-PersonalManifest "healthy"
+    Set-PersonalManifest "healthy" -Fresh
 }
 
 # The launcher gave up on a first boot that was merely slow: wait with the kit's

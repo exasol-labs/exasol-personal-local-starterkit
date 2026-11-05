@@ -145,6 +145,10 @@ jobs:
         if: matrix.shard == 2
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/describe-command-ps.ps1
+      - name: the database's TLS pin under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/tls-pin-ps.ps1
       - name: the reference dataset assets under 5.1
         if: matrix.shard == 2
         shell: powershell
