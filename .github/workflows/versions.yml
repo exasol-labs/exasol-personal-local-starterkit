@@ -1189,6 +1189,8 @@ jobs:
             pwsh -NoProfile -File tests/env-file-ps.ps1
             pwsh -NoProfile -File tests/menu-mouse-ps.ps1
             pwsh -NoProfile -File tests/persona-search-ps.ps1
+            pwsh -NoProfile -File tests/sql-quoting-ps.ps1
+            pwsh -NoProfile -File tests/table-menu-ps.ps1
             pwsh -NoProfile -File tests/mcp-admin-sql-ps.ps1
             pwsh -NoProfile -File tests/update-targets-ps.ps1
             pwsh -NoProfile -File tests/dataset-asset-ps.ps1

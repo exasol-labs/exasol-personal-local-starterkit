@@ -117,6 +117,14 @@ jobs:
         if: matrix.shard == 2
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/persona-search-ps.ps1
+      - name: exakit sql keeps double quotes under 5.1 (WIN-05)
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/sql-quoting-ps.ps1
+      - name: the table menu, driven with keys (QAT-08)
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/table-menu-ps.ps1
       - name: MCP admin SQL reaches exapump without a byte order mark under 5.1
         if: matrix.shard == 2
         shell: powershell
@@ -217,3 +225,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python -m unittest discover -s tests -p 'test_marketplace_adapters.py' -k failed_public_uninstall -v
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # QAT-11: the suites with no shell, signal or file-mode dependency, never run on Windows before.
+          foreach ($suite in @('addons', 'apply', 'mlflow', 'pinned_digests', 'process', 'redirect_auth',
+                               'rust_cli', 'workflow', 'wsl_ports', 'ui')) {
+            python -m unittest discover -s tests -p "test_marketplace_$suite.py" -v
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }

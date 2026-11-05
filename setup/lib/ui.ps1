@@ -404,6 +404,17 @@ function Disable-ExakitMenuMouse {
     try { [void][Exakit.ConsoleMode]::SetConsoleMode($m.Handle, [uint32]$m.Mode) } catch { }
 }
 
+# Test-ExakitMenuConsole - whether a menu can ask: a console whose input is not
+# redirected. Decided the way Test-ExakitInteractive decides it, here because this
+# file is also dot-sourced on its own by install.ps1, where the shared library does
+# not exist yet. One function for every menu, so a test can drive them with keys
+# by defining its own (QAT-08) - nothing else changes it.
+function Test-ExakitMenuConsole {
+    try {
+        return ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected)
+    } catch { return $false }
+}
+
 # Read-ExakitMenuKey - one keypress for a menu: @{ Name = Enter | Space | Up | Down
 # | Char | Click | Escape; Char; Y }. Plain keys come as ConsoleKeys; with
 # virtual-terminal input on, the arrows and the mouse come as escape sequences,
@@ -1724,13 +1735,7 @@ function Invoke-ExakitTableMenu {
         return $from
     }
 
-    # Interactivity is decided the way Test-ExakitInteractive decides it, inlined:
-    # this file is also dot-sourced on its own by install.ps1, where the shared
-    # library does not exist yet.
-    $interactive = $true
-    try {
-        if (-not [Environment]::UserInteractive -or [Console]::IsInputRedirected) { $interactive = $false }
-    } catch { $interactive = $false }
+    $interactive = Test-ExakitMenuConsole
     # CONFIRMED means a human pressed Enter on this table - nothing else. A
     # caller about to INSTALL things needs the distinction: the defaults
     # standing without a console is right for the data-load and MCP menus, and

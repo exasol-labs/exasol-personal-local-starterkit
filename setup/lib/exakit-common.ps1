@@ -884,7 +884,7 @@ function Read-ExakitCheckboxMenu {
             [void]$sel.Remove($ExclusiveIndex)
         }
     }
-    if (-not [Environment]::UserInteractive -or [Console]::IsInputRedirected) {
+    if (-not (Test-ExakitMenuConsole)) {
         foreach ($i in @($sel | Sort-Object)) { Ok ("{0} (selected by default)" -f $Options[$i - 1]) }
         return @($sel | Sort-Object)
     }
@@ -1346,6 +1346,13 @@ function ConvertTo-ExakitNativeArgs {
             # same parser, so it has to be doubled or it would swallow the
             # backslash that protects the quote.
             $v = [regex]::Replace($v, '(\\*)"', '$1$1\"')
+        }
+        if ($v -match '\s' -and $v.EndsWith('\')) {
+            # 5.1 wraps an argument with a space in quotes and does not double
+            # the backslashes before its closing quote, so a trailing
+            # backslash would escape that quote and run into the next argument
+            # (WIN-05: a statement or path ending in a backslash lost its end).
+            $v = [regex]::Replace($v, '(\\+)$', '$1$1')
         }
         $out += $v
     }

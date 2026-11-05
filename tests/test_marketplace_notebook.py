@@ -9,7 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from io import StringIO
 from pathlib import Path
 from types import SimpleNamespace
@@ -476,6 +476,36 @@ class NotebookPlanTest(unittest.TestCase):
             self.assertEqual(1, command(self.ctx, []))
         self.assertEqual(["jupyterlab", "marimo"], [call.args[1] for call in start.call_args_list])
 
+    def test_windows_opens_jupyterlab_instead_of_the_textual_menu(self) -> None:
+        # QAT-03: nothing is mocked between the menu and the launcher here - the launcher is the real one.
+        self.store.set_many({"components.notebook.version": "3.1.0"})
+        with patch.object(notebook_cli, "_preflight"), \
+             patch.object(notebook_cli.sys, "platform", "win32"), \
+             patch.object(notebook_cli.sys.stdin, "isatty", return_value=True), \
+             patch.object(notebook_cli.sys.stdout, "isatty", return_value=True), \
+             patch.object(notebook_cli.subprocess, "run") as launched, \
+             patch.object(notebook_cli, "_start_frontend") as start:
+            self.assertEqual(0, command(self.ctx, ["--no-browser"]))
+        launched.assert_not_called()
+        self.assertEqual([("jupyterlab", None, False, False)], [call.args[1:] for call in start.call_args_list])
+
+    def test_the_menu_copes_with_the_real_launcher_refusing_to_draw(self) -> None:
+        import launch
+
+        def real_launcher(args, check=False):
+            # The launcher's own code, as Windows runs it: no Textual, exit 11.
+            terminal = SimpleNamespace(isatty=lambda: True)
+            with patch.object(launch.sys, "platform", "win32"), patch.object(launch.sys, "stdin", terminal), \
+                 patch.object(launch.sys, "stdout", terminal), redirect_stderr(StringIO()):
+                return SimpleNamespace(returncode=launch.run(Path(args[2]), args[3:]))
+
+        with patch.object(notebook_cli, "_find_jupyter", return_value=None), \
+             patch.object(OnDemandServer, "state", return_value="stopped"), \
+             patch.object(notebook_cli.subprocess, "run", side_effect=real_launcher), \
+             redirect_stderr(StringIO()) as said:
+            self.assertEqual(["jupyterlab"], notebook_cli._menu(self.ctx))
+        self.assertIn("exakit notebook marimo", said.getvalue())
+
     def test_tool_names_are_taken_in_any_case_and_refusals_name_only_the_offered_tools(self) -> None:
         self.store.set_many({"components.notebook.version": "3.1.0"})
         with patch.object(notebook_cli, "_preflight"), \
@@ -627,6 +657,79 @@ http.server.HTTPServer(('127.0.0.1', port), Handler).serve_forever()
                 notebook.update(self.ctx)
         self.assertIsNone(self.store.get("desired.notebook"))
 
+
+    def _services(self, *, running: tuple[str, ...], mlflow: bool):
+        """The update's view of the services: which notebook tools run, whether MLflow does, and a log of calls."""
+        from addons import udf_devkit
+
+        calls = []
+        self.store.set_many({"components.notebook.ownership": "kit", "components.notebook.version": "3.1.0",
+                             "components.notebook.port": 8899, "components.udf_devkit.version": "0.1.0"})
+        pid = lambda server: 4242 if server.front in running else None          # noqa: E731
+        return calls, [
+            patch.object(notebook_cli.OnDemandServer, "pid", pid),
+            patch.object(notebook_cli.OnDemandServer, "stop", lambda server: calls.append(("stop", server.front))),
+            patch.object(notebook_cli, "_start_frontend",
+                         lambda ctx, front, port, browser, setup: calls.append(("start", front, port, browser))),
+            patch.object(udf_devkit, "status", return_value="running" if mlflow else "stopped"),
+            patch.object(udf_devkit, "stop", lambda ctx: calls.append(("stop", "mlflow"))),
+            patch.object(udf_devkit, "start", lambda ctx: calls.append(("start", "mlflow"))),
+        ]
+
+    def test_update_stops_what_runs_from_the_environment_and_starts_it_again(self) -> None:
+        from contextlib import ExitStack
+
+        calls, patches = self._services(running=("jupyterlab", "marimo"), mlflow=True)
+        with ExitStack() as stack:
+            for item in patches:
+                stack.enter_context(item)
+            stack.enter_context(patch.object(notebook, "install", lambda ctx: calls.append(("install",))))
+            stack.enter_context(patch.object(notebook, "validate", return_value=True))
+            notebook.update(self.ctx)
+        self.assertEqual([("stop", "jupyterlab"), ("stop", "marimo"), ("stop", "mlflow"), ("install",),
+                          ("start", "jupyterlab", 8899, False), ("start", "marimo", 2718, False), ("start", "mlflow")],
+                         calls)
+
+    def test_update_leaves_stopped_services_stopped(self) -> None:
+        from contextlib import ExitStack
+
+        calls, patches = self._services(running=(), mlflow=False)
+        with ExitStack() as stack:
+            for item in patches:
+                stack.enter_context(item)
+            stack.enter_context(patch.object(notebook, "install", lambda ctx: calls.append(("install",))))
+            stack.enter_context(patch.object(notebook, "validate", return_value=True))
+            notebook.update(self.ctx)
+        self.assertEqual([("install",)], calls)
+
+    def test_a_failed_update_still_starts_the_services_again(self) -> None:
+        from contextlib import ExitStack
+
+        calls, patches = self._services(running=("jupyterlab",), mlflow=False)
+        with ExitStack() as stack:
+            for item in patches:
+                stack.enter_context(item)
+            stack.enter_context(patch.object(notebook, "install", side_effect=AddonFailure("download failed")))
+            with self.assertRaisesRegex(AddonFailure, "download failed"):
+                notebook.update(self.ctx)
+        self.assertEqual([("stop", "jupyterlab"), ("start", "jupyterlab", 8899, False)], calls)
+
+    def test_a_service_that_does_not_come_back_is_named_not_fatal(self) -> None:
+        from contextlib import ExitStack
+
+        said = []
+        calls, patches = self._services(running=("marimo",), mlflow=False)
+        with ExitStack() as stack:
+            for item in patches:
+                stack.enter_context(item)
+            stack.enter_context(patch.object(notebook_cli, "_start_frontend",
+                                             side_effect=AddonFailure("port 2718 is taken")))
+            stack.enter_context(patch.object(notebook, "install"))
+            stack.enter_context(patch.object(notebook, "validate", return_value=True))
+            stack.enter_context(patch.object(type(self.ctx), "activity", lambda ctx, label: said.append(label)))
+            notebook.update(self.ctx)
+        self.assertEqual("3.1.0", self.store.get("desired.notebook"))
+        self.assertIn("marimo did not start again (port 2718 is taken); start it with: exakit notebook marimo", said)
 
 if __name__ == "__main__":
     unittest.main()

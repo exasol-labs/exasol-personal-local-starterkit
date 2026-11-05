@@ -212,23 +212,25 @@ class AddonSafetyTest(unittest.TestCase):
         package.assert_not_called()
 
     def test_json_release_lookup_uses_token_and_distinguishes_refusal(self) -> None:
+        # The release lookup goes through runtime.open_url (SEC-12: the token never follows a redirect off
+        # GitHub's host), so that is what is patched; patching urlopen let the test reach the real API.
         response = io.BytesIO(b'{"assets": [{"name": "engine.bin", "digest": "sha256:abc"}]}')
         with patch.dict(os.environ, {"GITHUB_TOKEN": "private-test-token"}), \
-             patch.object(json_tables.urllib.request, "urlopen", return_value=response) as fetch:
+             patch.object(json_tables, "open_url", return_value=response) as fetch:
             assets = json_tables._api_assets("owner/repo", "json-tables-v1")
         self.assertIn("engine.bin", assets)
         request = fetch.call_args.args[0]
         self.assertEqual("Bearer private-test-token", request.get_header("Authorization"))
         for code, guidance in ((403, "GITHUB_TOKEN"), (404, "pkg / json-tables")):
             error = HTTPError("https://api.github.com", code, "failed", {}, None)
-            with self.subTest(code=code), patch.object(json_tables.urllib.request, "urlopen", side_effect=error):
+            with self.subTest(code=code), patch.object(json_tables, "open_url", side_effect=error):
                 with self.assertRaisesRegex(AddonFailure, guidance):
                     json_tables._api_assets("owner/repo", "json-tables-v1")
 
     def test_json_release_lookup_rejects_malformed_metadata(self) -> None:
         for content in (b"not JSON", b'{"assets": {}}'):
             with self.subTest(content=content), \
-                 patch.object(json_tables.urllib.request, "urlopen", return_value=io.BytesIO(content)):
+                 patch.object(json_tables, "open_url", return_value=io.BytesIO(content)):
                 with self.assertRaisesRegex(AddonFailure, "Malformed JSON Tables release metadata"):
                     json_tables._api_assets("owner/repo", "json-tables-v1")
 

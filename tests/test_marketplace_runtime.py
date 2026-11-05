@@ -135,8 +135,13 @@ class ManifestTest(unittest.TestCase):
                                       "EXAKIT_MARKETPLACE_VERSIONS_DOC": str(cache)}, clear=True):
                 self.assertEqual("2.0.0", ctx.target_version("exasol-vscode", "1.0.0"))
                 cache.write_text("{invalid")
-                self.assertEqual("a" * 64, exasol_vscode.expected_digest(ctx, "2.0.0", "editor.vsix"))
-                self.assertEqual("json-tables-v2", json_tables._release_info(ctx, "v2.0.0")[1])
+                # SEC-13: the digest is never the fetched document's ("a" * 64). The kit copy's pin answers for
+                # its own version; any other is checked against the release's own published digest.
+                with patch.object(exasol_vscode, "_release_digest", return_value="d" * 64) as published:
+                    self.assertEqual("b" * 64, exasol_vscode.expected_digest(ctx, "1.0.0", "editor.vsix"))
+                    published.assert_not_called()
+                    self.assertEqual("d" * 64, exasol_vscode.expected_digest(ctx, "2.0.0", "editor.vsix"))
+                self.assertEqual("json-tables-v2.0.0", json_tables._release_info(ctx, "v2.0.0")[1])
             with patch.dict(os.environ, {"EXAKIT_MARKETPLACE_VERSIONS_DOC": str(cache)}, clear=True):
                 with self.assertRaises(AddonFailure):
                     KitContext(root, home, root / "bin", Manifest(home / "manifest.json"), Path("uv")).versions_document()

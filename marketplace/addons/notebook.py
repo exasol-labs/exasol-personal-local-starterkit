@@ -450,13 +450,70 @@ def validate(ctx: KitContext) -> bool:
     return True
 
 
+def _stop_services(ctx: KitContext) -> tuple[list[tuple[str, int]], bool]:
+    """Stop what runs from the notebook environment before it is reinstalled (DAY-08): JupyterLab, Marimo and
+    udf-devkit's MLflow server. On Windows their open files block the reinstall; elsewhere they would go on
+    running half-replaced packages. Returns what was running - the notebook tools with their ports, and
+    whether MLflow was - so the update can start exactly those again."""
+    from notebook_cli import OnDemandServer
+
+    fronts = []
+    for front, key, default in (("jupyterlab", "port", 8888), ("marimo", "marimo_port", 2718)):
+        server = OnDemandServer(ctx, front)
+        if server.pid():
+            fronts.append((front, server.recorded_port(int(ctx.manifest.get(f"{RECEIPT}.{key}", default)))))
+            server.stop()
+    mlflow = False
+    if ctx.manifest.get("components.udf_devkit.version"):
+        from addons import udf_devkit
+
+        try:
+            mlflow = udf_devkit.status(ctx) == "running"
+            if mlflow:
+                udf_devkit.stop(ctx)
+        except (AddonFailure, OSError):
+            mlflow = False
+    names = [{"jupyterlab": "JupyterLab", "marimo": "Marimo"}[front] for front, _ in fronts] + (["MLflow"] if mlflow else [])
+    if names:
+        ctx.activity("stopped " + ", ".join(names) + " for the update; starting them again after it")
+    return fronts, mlflow
+
+
+def _restart_services(ctx: KitContext, fronts: list[tuple[str, int]], mlflow: bool) -> None:
+    """Start again what _stop_services stopped, on the same ports, without opening a browser. A service that does
+    not come back is named with the command that starts it; it never fails the update."""
+    import io
+    from contextlib import redirect_stdout
+
+    import notebook_cli
+
+    for front, port in fronts:
+        try:
+            with redirect_stdout(io.StringIO()):
+                notebook_cli._start_frontend(ctx, front, port, False, False)
+        except (AddonFailure, OSError) as error:
+            again = "exakit notebook" if front == "jupyterlab" else "exakit notebook marimo"
+            ctx.activity(f"{front} did not start again ({error}); start it with: {again}")
+    if mlflow:
+        from addons import udf_devkit
+
+        try:
+            udf_devkit.start(ctx)
+        except (AddonFailure, OSError) as error:
+            ctx.activity(f"MLflow did not start again ({error}); start it with: exakit mlflow start")
+
+
 def update(ctx: KitContext) -> None:
     if ctx.manifest.get(f"{RECEIPT}.ownership") != "kit":
         raise AddonFailure("Notebook is not kit-owned; its owner manages updates")
-    install(ctx)
-    if not validate(ctx):
-        raise AddonFailure("Notebook did not validate after the update")
-    ctx.manifest.set_many({"desired.notebook": ctx.manifest.get(f"{RECEIPT}.version")})
+    fronts, mlflow = _stop_services(ctx)
+    try:
+        install(ctx)
+        if not validate(ctx):
+            raise AddonFailure("Notebook did not validate after the update")
+        ctx.manifest.set_many({"desired.notebook": ctx.manifest.get(f"{RECEIPT}.version")})
+    finally:
+        _restart_services(ctx, fronts, mlflow)
 
 
 def summary(ctx: KitContext) -> str:

@@ -1388,9 +1388,12 @@ _vm_exapump="$(python3 -c "import json,sys; print(json.load(open(sys.argv[1]))['
 _vm_updated="$(python3 -c "import json,sys; print(str(json.load(open(sys.argv[1])).get('updated', ''))[:10])" "$REAL")"
 printf '#!/bin/sh\necho "exapump %s"\n' "$_vm_exapump" > "$DR/bin/exapump"
 drift_manifest "$_vm_exapump" 2.9.9
-current_out="$(EXAKIT_VERSION_POLICY=pinned version_out)"
+# Offline, with no cached copy from earlier in this run: the manifest is the kit copy's, not
+# whatever the network served today (upstream main moves; this check must not).
+rm -f "$DR/cache/versions.json"
+current_out="$(EXAKIT_VERSIONS_URL="http://offline.invalid/versions.json" EXAKIT_VERSION_POLICY=pinned version_out)"
 has "a current row names the manifest it was checked against" "current (manifest $_vm_updated)" "$(row "$current_out" exapump)"
-current_json="$(EXAKIT_VERSION_POLICY=pinned EXAKIT_HOME="$DR" bash "$ROOT/setup/exakit" version --json 2>/dev/null)"
+current_json="$(EXAKIT_VERSIONS_URL="http://offline.invalid/versions.json" EXAKIT_VERSION_POLICY=pinned EXAKIT_HOME="$DR" bash "$ROOT/setup/exakit" version --json 2>/dev/null)"
 has "...and the JSON keeps status current" '"status": "current"' "$(printf '%s' "$current_json" | python3 -c "import json,sys; print(json.dumps([c for c in json.load(sys.stdin)['components'] if c['component']=='exapump'][0]))")"
 has "...with checked_against naming the manifest" "\"checked_against\": \"manifest $_vm_updated\"" "$(printf '%s' "$current_json" | python3 -c "import json,sys; print(json.dumps([c for c in json.load(sys.stdin)['components'] if c['component']=='exapump'][0]))")"
 

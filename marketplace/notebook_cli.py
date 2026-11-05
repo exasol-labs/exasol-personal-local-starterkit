@@ -466,6 +466,11 @@ def _menu(ctx: KitContext) -> list[str] | None:
                               "--recorded", recorded], check=False)
         if run.returncode == 10:
             return None
+        if run.returncode == 11:
+            # The launcher draws no menu here (Windows: Textual has no inline driver, QAT-03/WIN-03). The tool
+            # the menu starts on is opened, as a run without a terminal does; the other is one word away.
+            print("Opening JupyterLab (for Marimo: exakit notebook marimo)", file=sys.stderr)
+            return ["jupyterlab"]
         if run.returncode != 0 or not result.is_file():
             raise AddonFailure("The Notebook menu could not start; choose jupyterlab or marimo explicitly")
         answer = json.loads(result.read_text(encoding="utf-8"))
@@ -518,7 +523,10 @@ def command(ctx: KitContext, args: list[str]) -> int:
             "SCS_MASTER_PASSWORD": master.read_text(encoding="utf-8").strip()})
         print("Notebooks connect to the database")
         return 0
-    if not explicit_front and not parsed.setup and parsed.port is None and sys.stdin.isatty() and sys.stdout.isatty():
+    # The menu is Textual's, which draws inline everywhere but Windows; there exakit.ps1 draws its own for a
+    # bare `exakit notebook`, and anything else (--no-browser) opens JupyterLab as it did before the menu.
+    if (not explicit_front and not parsed.setup and parsed.port is None and sys.platform != "win32"
+            and sys.stdin.isatty() and sys.stdout.isatty()):
         selected = _menu(ctx)
         if selected is None or not selected:
             print("Nothing opened. Open the notebook tools any time with: exakit notebook")

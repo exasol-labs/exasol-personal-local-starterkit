@@ -118,7 +118,8 @@ check "...and none of them is left afterwards" "0" \
 
 echo
 echo "the installer really does clear before it copies:"
-KSS="$(awk '/^kit_shared_steps\(\)/,/^}$/' "$ROOT/setup/lib/common.sh")"
+# The clear and the copy live in kit_helper_step, the install's last step (37eb7c0).
+KSS="$(awk '/^kit_helper_step\(\)/,/^}$/' "$ROOT/setup/lib/common.sh")"
 has "the shell half clears the staged subtrees" 'rm -rf "$_kss_stale"' "$KSS"
 has "...before the library is copied over"      'cp -R "$_script_dir/lib"' "$KSS"
 WIN="$(cat "$ROOT/setup/setup-windows.ps1")"

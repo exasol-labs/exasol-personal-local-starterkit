@@ -3775,7 +3775,12 @@ function Invoke-CmdSql {
         $previousEap = $ErrorActionPreference
         try {
             $ErrorActionPreference = "Continue"
-            $captured = @(& (Get-ExapumpCli) @("sql", "-p", $script:ExapumpProfile, "-f", "json", $Statement) 2>&1)
+            # Escaped for the 5.1 rules like every other exapump call (WIN-05):
+            # this branch alone handed the statement over raw, so on Windows
+            # PowerShell a quoted identifier reached the database unquoted - and
+            # --json is the form agents use.
+            $nativeArgs = ConvertTo-ExakitNativeArgs @("sql", "-p", $script:ExapumpProfile, "-f", "json", $Statement)
+            $captured = @(& (Get-ExapumpCli) @nativeArgs 2>&1)
             $code = $LASTEXITCODE
             foreach ($item in $captured) {
                 if ($item -is [System.Management.Automation.ErrorRecord]) { $errLines += "$($item.Exception.Message)" } else { $outLines += "$item" }
@@ -4088,6 +4093,14 @@ try {
             }
             $sqlText = ""
             if ($sqlRest.Count -eq 1) { $sqlText = $sqlRest[0] }
+            if (-not $sqlText -and -not $sqlFile -and [Console]::IsInputRedirected) {
+                # The statement on stdin, as cmd_sql takes it. From Windows
+                # PowerShell 5.1 this is the way to keep a double quote: 5.1
+                # drops it from an ARGUMENT before exakit.cmd ever runs (WIN-05),
+                # but a piped or redirected statement arrives as written. A BOM
+                # the pipe adds is not part of the statement.
+                $sqlText = ([Console]::In.ReadToEnd()).TrimStart([char]0xFEFF)
+            }
             Invoke-CmdSql -Statement $sqlText -Write:$sqlWrite -File $sqlFile -Json:$sqlJson
         }
         "migrate" {

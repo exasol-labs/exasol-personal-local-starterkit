@@ -3,7 +3,7 @@
 # scores every case in tests/fuzzy-search-cases.json exactly as fuzzy_score (marketplace/ui.py)
 # and _ui_fuzzy_score (common.sh) do, and Read-ExakitCheckboxMenu -Search types letters into the
 # search, points at the closest row, and keeps Space, Enter and Esc. Runs under Windows
-# PowerShell 5.1 and pwsh; the menu half needs a console (it is skipped with input redirected).
+# PowerShell 5.1 and pwsh; the keys come from the test, so no console is needed.
 $ErrorActionPreference = "Stop"
 $repo = Split-Path -Parent $PSScriptRoot
 $script:PASS = 0; $script:FAIL = 0
@@ -23,31 +23,29 @@ foreach ($case in $cases) {
 }
 
 Write-Host "== the menu: letters search, the pointer follows =="
-if (-not [Environment]::UserInteractive -or [Console]::IsInputRedirected) {
-    Write-Host "  SKIP the menu needs a console (input is redirected here)"
-} else {
-    $script:Keys = New-Object 'System.Collections.Generic.Queue[object]'
-    function Read-ExakitMenuKey { return $script:Keys.Dequeue() }
-    function Send([string]$text) { foreach ($c in $text.ToCharArray()) { $script:Keys.Enqueue(@{ Name = 'Char'; Char = [string]$c }) } }
-    $options = @("Data Scientist - Explore data", "ML Engineer - Train models", "General - The kit's own samples")
+# The menus ask Test-ExakitMenuConsole whether they can; here the keys come from the test.
+function Test-ExakitMenuConsole { return $true }
+$script:Keys = New-Object 'System.Collections.Generic.Queue[object]'
+function Read-ExakitMenuKey { return $script:Keys.Dequeue() }
+function Send([string]$text) { foreach ($c in $text.ToCharArray()) { $script:Keys.Enqueue(@{ Name = 'Char'; Char = [string]$c }) } }
+$options = @("Data Scientist - Explore data", "ML Engineer - Train models", "General - The kit's own samples")
 
-    Send "ml"; $script:Keys.Enqueue(@{ Name = 'Space' }); $script:Keys.Enqueue(@{ Name = 'Enter' })
-    $picked = @(Read-ExakitCheckboxMenu -Title "Personas" -Options $options -Defaults @(3) -Search 6> $null)
-    Check "typing 'ml' points at ML Engineer, Space ticks it" "2,3" ($picked -join ',')
+Send "ml"; $script:Keys.Enqueue(@{ Name = 'Space' }); $script:Keys.Enqueue(@{ Name = 'Enter' })
+$picked = @(Read-ExakitCheckboxMenu -Title "Personas" -Options $options -Defaults @(3) -Search 6> $null)
+Check "typing 'ml' points at ML Engineer, Space ticks it" "2,3" ($picked -join ',')
 
-    Send "qajk"; $script:Keys.Enqueue(@{ Name = 'Escape' }); $script:Keys.Enqueue(@{ Name = 'Enter' })
-    $picked = @(Read-ExakitCheckboxMenu -Title "Personas" -Options $options -Defaults @(3) -Search 6> $null)
-    Check "q, a, j and k are typed, not cancel, tick-all or moves; Esc clears" "3" ($picked -join ',')
+Send "qajk"; $script:Keys.Enqueue(@{ Name = 'Escape' }); $script:Keys.Enqueue(@{ Name = 'Enter' })
+$picked = @(Read-ExakitCheckboxMenu -Title "Personas" -Options $options -Defaults @(3) -Search 6> $null)
+Check "q, a, j and k are typed, not cancel, tick-all or moves; Esc clears" "3" ($picked -join ',')
 
-    Send "gex"; $script:Keys.Enqueue(@{ Name = 'Char'; Char = [string][char]8 })
-    $script:Keys.Enqueue(@{ Name = 'Space' }); $script:Keys.Enqueue(@{ Name = 'Enter' })
-    $picked = @(Read-ExakitCheckboxMenu -Title "Personas" -Options $options -Defaults @(1) -Search 6> $null)
-    Check "Backspace takes the last letter back ('ge' is General)" "1,3" ($picked -join ',')
+Send "gex"; $script:Keys.Enqueue(@{ Name = 'Char'; Char = [string][char]8 })
+$script:Keys.Enqueue(@{ Name = 'Space' }); $script:Keys.Enqueue(@{ Name = 'Enter' })
+$picked = @(Read-ExakitCheckboxMenu -Title "Personas" -Options $options -Defaults @(1) -Search 6> $null)
+Check "Backspace takes the last letter back ('ge' is General)" "1,3" ($picked -join ',')
 
-    $script:Keys.Enqueue(@{ Name = 'Char'; Char = 'a' }); $script:Keys.Enqueue(@{ Name = 'Enter' })
-    $picked = @(Read-ExakitCheckboxMenu -Title "Datasets" -Options $options -Defaults @(3) 6> $null)
-    Check "without -Search, 'a' still ticks every row" "1,2,3" ($picked -join ',')
-}
+$script:Keys.Enqueue(@{ Name = 'Char'; Char = 'a' }); $script:Keys.Enqueue(@{ Name = 'Enter' })
+$picked = @(Read-ExakitCheckboxMenu -Title "Datasets" -Options $options -Defaults @(3) 6> $null)
+Check "without -Search, 'a' still ticks every row" "1,2,3" ($picked -join ',')
 
 Write-Host ""
 Write-Host "passed: $($script:PASS), failed: $($script:FAIL)"
