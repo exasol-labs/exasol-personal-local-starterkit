@@ -190,9 +190,14 @@ def out(text=""):
     sys.stdout.write(text + "\n")
 
 def para(text, indent="  ", first=None):
-    for line in textwrap.wrap(text, width=WRAP - len(indent)) or [""]:
-        out((first if first is not None else indent) + line)
-        first = None
+    # A blank line in the text is a paragraph break (NEW-11): one long command
+    # description reads as several short paragraphs, not 40 lines of one.
+    for number, paragraph in enumerate(str(text).split("\n\n")):
+        if number:
+            out()
+        for line in textwrap.wrap(paragraph, width=WRAP - len(indent)) or [""]:
+            out((first if first is not None else indent) + line)
+            first = None
 
 def rule():
     out("  %s%s%s" % (CY, "-" * (min(WRAP, 72) - 2), R))

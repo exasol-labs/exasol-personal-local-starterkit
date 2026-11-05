@@ -189,6 +189,16 @@ function Get-ExakitHelpInvocationWithOptions {
 function Write-ExakitHelpWrapped {
     param([string]$Text, [string]$Indent = "    ", [string]$First = $null)
     if (-not $Text) { return }
+    # A blank line is a paragraph break (NEW-11). Twin of para() in help.sh.
+    $paragraphs = @($Text -split "\r?\n\r?\n")
+    if ($paragraphs.Count -gt 1) {
+        for ($i = 0; $i -lt $paragraphs.Count; $i++) {
+            if ($i -gt 0) { Write-Host "" }
+            if ($i -eq 0) { Write-ExakitHelpWrapped -Text $paragraphs[$i] -Indent $Indent -First $First }
+            else { Write-ExakitHelpWrapped -Text $paragraphs[$i] -Indent $Indent }
+        }
+        return
+    }
     $width = 100
     try { if ($Host.UI.RawUI.WindowSize.Width -gt 40) { $width = [Math]::Min(100, $Host.UI.RawUI.WindowSize.Width) } } catch { }
     $limit = $width - $Indent.Length
