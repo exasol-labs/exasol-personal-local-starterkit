@@ -2343,8 +2343,10 @@ self_update() (
                 *) shift ;;
             esac
         done
-        # Only the main branch archive exists in this world; the tag fallbacks 404.
+        # The main branch archive exists in this world; a release tag only when
+        # SU_TAG_SERVE says so (SEC-02: the tag is asked for first).
         case "$_su_url" in
+            *refs/tags/v*.tar.gz) [ -n "${SU_TAG_SERVE:-}" ] || return 22; cp "$SU_TAG_SERVE" "$_co" ;;
             *refs/heads/main.tar.gz) cp "$SU_SERVE" "$_co" ;;
             *) return 22 ;;
         esac
@@ -2366,6 +2368,16 @@ PS_KIT_SRC="$MK_LAST_SRC"       # reused by the PowerShell self-update check bel
 check "a newer kit replaces the copy and records itself" \
     "rc=0 version=0.3.0 source=$EXAKIT_KIT_REPO@main kit-present replaced cli-installed backup-kept" \
     "$(self_update "$WORK/kit-0.3.0.tgz" 0.3.0)"
+
+# SEC-02: the announced release's tag is used when it exists, not main.
+check "the announced release's tag comes before main" \
+    "rc=0 version=0.3.0 source=$EXAKIT_KIT_REPO@v0.3.0 kit-present replaced cli-installed backup-kept" \
+    "$(SU_TAG_SERVE="$WORK/kit-0.3.0.tgz" self_update "$WORK/kit-0.2.5-for-main.tgz" 0.3.0)"
+make_kit_tarball "$WORK/kit-0.2.9.tgz" 0.2.9
+check "a release archive that is not the announced version is refused" \
+    "rc=1 version=0.2.0" \
+    "$(SU_TAG_SERVE="$WORK/kit-0.2.9.tgz" self_update "$WORK/kit-0.3.0.tgz" 0.3.0 | cut -d' ' -f1-2)"
+has "...saying which version it was" "says it is version 0.2.9, not 0.3.0" "$(cat "$WORK/su-out.txt")"
 
 # The raw endpoint can be minutes ahead of the branch archive: record what landed.
 make_kit_tarball "$WORK/kit-0.2.5.tgz" 0.2.5

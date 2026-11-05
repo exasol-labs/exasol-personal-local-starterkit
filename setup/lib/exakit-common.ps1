@@ -3969,15 +3969,21 @@ function Update-ExakitSelf {
     # construction makes the swap a rename again. (The zip may stay in TEMP:
     # Expand-Archive writes across volumes fine.)
     $stage = Join-Path $script:ExakitHome ".kit-stage-$([guid]::NewGuid().ToString('N'))"
-    # main first - that is what install.ps1 fetches, and kit script changes live on
-    # main: a tag exists only where a release was cut. The tag URLs stay behind it
-    # so a kit installed from a tagged release still updates.
-    $refs = @("main", "v$Advertised", "$Advertised")
+    # THE ANNOUNCED RELEASE FIRST (SEC-02): its tag, then the branch this kit was
+    # installed from (kit.source), then main. Twin of exakit_update_self.
+    $branch = ""
+    $source = "" + (Get-ExakitManifestValue "kit.source")
+    if ($source.StartsWith("$repo@")) { $branch = $source.Substring($repo.Length + 1) }
+    if ($branch -in @("", "main") -or $branch -match '^v?[0-9]' -or $branch -notmatch '^[A-Za-z0-9._/-]+\z') { $branch = "" }
+    $tags = @("v$Advertised", "$Advertised")
+    $refs = @($tags)
+    if ($branch) { $refs += $branch }
+    $refs += "main"
     $kitRef = ""
     $proxyHint = ""
     foreach ($ref in $refs) {
-        if ($ref -eq "main") { $url = "https://github.com/$repo/archive/refs/heads/main.zip" }
-        else { $url = "https://github.com/$repo/archive/refs/tags/$ref.zip" }
+        if ($tags -contains $ref) { $url = "https://github.com/$repo/archive/refs/tags/$ref.zip" }
+        else { $url = "https://github.com/$repo/archive/refs/heads/$ref.zip" }
         try {
             Invoke-WebRequest -Uri $url -OutFile $tmpZip -UseBasicParsing -TimeoutSec 300
             $kitRef = $ref
@@ -3988,7 +3994,7 @@ function Update-ExakitSelf {
     }
     if (-not $kitRef) {
         Remove-Item -Force $tmpZip -ErrorAction SilentlyContinue
-        Fail "Could not download the starter kit from github.com/$repo (tried main and the $Advertised tags).$proxyHint"
+        Fail "Could not download the starter kit from github.com/$repo (tried the $Advertised release tags$(if ($branch) { ", $branch" }) and main).$proxyHint"
     }
 
     try {
@@ -4023,6 +4029,14 @@ function Update-ExakitSelf {
     # What actually landed is what gets recorded: GitHub's raw endpoint can serve a
     # newer versions.json than the branch archive for a few minutes after a merge.
     $stagedVersion = Get-ExakitKitVersionAt -KitRoot $stagedRoot
+    # A release archive that is not the announced version is refused; a branch is named for what it is.
+    if ($tags -contains $kitRef -and $stagedVersion -ne $Advertised) {
+        Remove-Item -Recurse -Force $stage -ErrorAction SilentlyContinue
+        Fail "The $kitRef release archive says it is version $(if ($stagedVersion) { $stagedVersion } else { 'unknown' }), not $Advertised; existing kit copy was left untouched."
+    }
+    if (-not ($tags -contains $kitRef) -and $stagedVersion -ne $Advertised) {
+        Info "No $Advertised release tag; updating from the $kitRef branch, which is version $(if ($stagedVersion) { $stagedVersion } else { 'unknown' })."
+    }
     if (-not $stagedVersion) {
         $stagedVersion = $Advertised
     } elseif ($stagedVersion -ne $Advertised -and (Test-ExakitVersionNewer -Latest $Advertised -Current $stagedVersion)) {

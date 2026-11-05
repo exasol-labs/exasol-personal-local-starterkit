@@ -475,10 +475,10 @@ if grep -q 'manifest_set kit.version "\$_staged_version"' "$ROOT/setup/lib/commo
 else
     check "self_update(records_kit_version)" "yes" "no"
 fi
-# main is the primary source (kit scripts live there; a tag exists only where a
-# release was cut), and versions.json is on the required list — without it the new
+# The announced release's tag is the primary source, a branch only where no tag
+# was cut (SEC-02), and versions.json is on the required list — without it the new
 # copy has no offline version tier and cannot say what version it is.
-if grep -q 'archive/refs/heads/main.tar.gz' "$ROOT/setup/lib/common.sh" && \
+if grep -q 'for _kit_candidate in "v${_latest}" "${_latest}"' "$ROOT/setup/lib/common.sh" && \
    grep -q 'exakit-common.ps1 versions.json' "$ROOT/setup/lib/common.sh"; then
     check "self_update(main_and_manifest)" "yes" "yes"
 else
@@ -487,7 +487,7 @@ fi
 # Windows is no longer warn-only: the same flow exists there, including the
 # deferred swap for the files this very script runs from.
 if grep -q 'function Update-ExakitSelf' "$ROOT/setup/lib/exakit-common.ps1" && \
-   grep -q 'archive/refs/heads/main.zip' "$ROOT/setup/lib/exakit-common.ps1" && \
+   grep -q '$tags = @("v$Advertised", "$Advertised")' "$ROOT/setup/lib/exakit-common.ps1" && \
    grep -q '"versions.json"' "$ROOT/setup/lib/exakit-common.ps1" && \
    grep -q 'Complete-ExakitSelfUpdateDeferred' "$ROOT/setup/lib/exakit-common.ps1" && \
    grep -q 'Update-ExakitSelf -Advertised' "$ROOT/setup/exakit.ps1"; then

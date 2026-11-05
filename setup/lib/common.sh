@@ -6980,16 +6980,22 @@ exakit_update_self() {
     # Named before the swap, cleared after it. See _exakit_update_marker.
     _update_marker="$EXAKIT_HOME/.update-in-progress"
     info "Updating starter kit ${_current:-unknown} -> $_latest"
-    # main first — that is what install.sh fetches, and kit script changes live on
-    # main: a tag exists only where a release was cut. The tag URLs stay behind it
-    # so a kit installed from a tagged release still updates, and so a v0.1.0 field
-    # kit (which only ever knew tags) keeps working.
+    # THE ANNOUNCED RELEASE FIRST (SEC-02). This said "Updating ... -> $_latest"
+    # and then installed whatever main held that minute, never the release that
+    # was announced and reviewed. The tag of that release is tried first; only
+    # where none was cut does the update come from a branch - the one this kit
+    # was installed from (kit.source), else main - and then it says so.
+    _kit_branch=""
+    _kit_src="$(manifest_get kit.source 2>/dev/null || true)"
+    case "$_kit_src" in "$_repo"@*) _kit_branch="${_kit_src#*@}" ;; esac
+    case "$_kit_branch" in ''|main|v[0-9]*|[0-9]*|*[!A-Za-z0-9._/-]*) _kit_branch="" ;; esac
     _kit_ref=""
-    for _kit_candidate in "main" "v${_latest}" "${_latest}"; do
-        case "$_kit_candidate" in
-            main) _kit_url="https://github.com/${_repo}/archive/refs/heads/main.tar.gz" ;;
-            *)    _kit_url="https://github.com/${_repo}/archive/refs/tags/${_kit_candidate}.tar.gz" ;;
-        esac
+    for _kit_candidate in "v${_latest}" "${_latest}" ${_kit_branch:+"$_kit_branch"} "main"; do
+        if [ "$_kit_candidate" = "v${_latest}" ] || [ "$_kit_candidate" = "${_latest}" ]; then
+            _kit_url="https://github.com/${_repo}/archive/refs/tags/${_kit_candidate}.tar.gz"
+        else
+            _kit_url="https://github.com/${_repo}/archive/refs/heads/${_kit_candidate}.tar.gz"
+        fi
         if curl -fL --proto '=https' --retry 3 --connect-timeout 15 -sS -o "$_tmp" "$_kit_url"; then
             _kit_ref="$_kit_candidate"
             break
@@ -6998,7 +7004,7 @@ exakit_update_self() {
     if [ -z "$_kit_ref" ]; then
         rm -f "$_tmp"
         rm -rf "$_stage"
-        die "Could not download the starter kit from $_repo (tried main and the $_latest tags)."
+        die "Could not download the starter kit from $_repo (tried the $_latest release tags${_kit_branch:+, $_kit_branch} and main)."
     fi
     tar -xzf "$_tmp" -C "$_stage" --strip-components 1 || {
         rm -rf "$_stage"
@@ -7015,6 +7021,17 @@ exakit_update_self() {
             die "Downloaded starter kit is incomplete (missing $_required); existing kit copy was left untouched."
         }
     done
+    # What was downloaded is the version that was announced: a release archive
+    # that says otherwise is refused, and a branch is named for what it is.
+    _kit_got="$(exakit_kit_version_at "$_stage" 2>/dev/null || true)"
+    if [ "$_kit_ref" = "v${_latest}" ] || [ "$_kit_ref" = "${_latest}" ]; then
+        if [ "$_kit_got" != "$_latest" ]; then
+            rm -rf "$_stage"
+            die "The $_kit_ref release archive says it is version ${_kit_got:-unknown}, not $_latest; existing kit copy was left untouched."
+        fi
+    elif [ "$_kit_got" != "$_latest" ]; then
+        info "No $_latest release tag; updating from the $_kit_ref branch, which is version ${_kit_got:-unknown}."
+    fi
     # What actually landed is what gets recorded. GitHub's raw endpoint can serve a
     # newer versions.json than the branch tarball for a few minutes after a merge,
     # and claiming a version that is not on disk would make every later comparison
