@@ -4205,8 +4205,15 @@ Initialize-ExakitWebProxy
 # off to debug their internet connection; naming the variable that fixes it is
 # the whole remedy. Empty for every other failure, so nothing else changes.
 function Get-ExakitProxyHint {
-    param([AllowEmptyString()][string]$ErrorText)
+    param([AllowEmptyString()][string]$ErrorText, [switch]$Python)
     if ("$ErrorText" -notmatch "407") { return "" }
+    # The add-ons install through uv and Python, which cannot sign in to a proxy
+    # with the Windows account the way PowerShell's downloads now do, so the
+    # remedy above did not reach them (WIN-04): they need a proxy that does not
+    # ask, or the proxy's own sign-in in the address.
+    if ($Python) {
+        return " The PROXY refused this, not the server (HTTP 407, authentication required). Add-ons install through uv, which cannot use your Windows sign-in: ask IT for a proxy address that does not need one, or set `$env:HTTPS_PROXY to http://<user>:<password>@<proxy>:<port> for this run, then re-run."
+    }
     return " The PROXY refused this, not the server (HTTP 407, authentication required): set `$env:HTTPS_PROXY to your proxy's address and re-run, or ask IT for one that accepts your Windows sign-in."
 }
 
@@ -5388,7 +5395,10 @@ function Invoke-ExakitMarketplacePythonNow {
     }
     if ($Operation -in @('validate', 'applicable', 'system-present')) { return ($code -eq 0) }
     if ($Operation -in @('installed-version', 'latest') -and $code -ne 0) { return '' }
-    if ($code -ne 0) { throw ((@($lines) + @($diagnostics) | Select-Object -Last 1) -join '') }
+    if ($code -ne 0) {
+        $failure = (@($lines) + @($diagnostics) | Select-Object -Last 1) -join ''
+        throw ($failure + (Get-ExakitProxyHint -ErrorText ((@($lines) + @($diagnostics)) -join " ") -Python))
+    }
     if ($DryRun) {
         foreach ($line in $lines) { Info "  will remove: $line" }
         return $true
