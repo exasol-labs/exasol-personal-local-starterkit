@@ -758,7 +758,7 @@ mcp_validate_http() {
 EXAKIT_MCP_SIDECAR="${EXAKIT_MCP_SIDECAR:-mcp}"
 EXAKIT_MCP_SIDECAR_PORT="${EXAKIT_MCP_SIDECAR_PORT:-4896}"
 EXAKIT_SIDECAR_PYYAML="${EXAKIT_SIDECAR_PYYAML:-PyYAML==6.0.3}"
-EXAKIT_MCP_SIDECAR_IMAGE_FALLBACK="docker.io/exasol/mcp-server:2.3.0@sha256:061ca243e7c50728c394a4ecf329993a6774ddde0d33bbabafbe8140c2a7c75f"
+EXAKIT_MCP_SIDECAR_IMAGE_FALLBACK="docker.io/exasol/mcp-server:2.4.0@sha256:ae13d5430dff463aa0817f5a188211820fb8c2565e95e477d5ca71b04bb50b68"
 EXAKIT_MCP_BRIDGE_FALLBACK="mcp-proxy@0.13.0"
 
 # mcp_sidecar_supported — the launcher can run the kit's MCP server here: not

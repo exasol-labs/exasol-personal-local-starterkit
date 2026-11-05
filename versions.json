@@ -46,9 +46,9 @@
       }
     },
     "mcp": {
-      "version": "2.3.0",
+      "version": "2.4.0",
       "package": "exasol-mcp-server",
-      "sidecar_image": "docker.io/exasol/mcp-server:2.3.0@sha256:061ca243e7c50728c394a4ecf329993a6774ddde0d33bbabafbe8140c2a7c75f",
+      "sidecar_image": "docker.io/exasol/mcp-server:2.4.0@sha256:ae13d5430dff463aa0817f5a188211820fb8c2565e95e477d5ca71b04bb50b68",
       "bridge": "mcp-proxy@0.13.0",
       "severity": "normal"
     },

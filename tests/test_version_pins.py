@@ -42,6 +42,31 @@ class LauncherPinTest(unittest.TestCase):
         self.assertFalse(udf_tool.at_least("2.2.9", udf_devkit.LAUNCHER_FLOOR))
 
 
+class McpPinTest(unittest.TestCase):
+    """One exasol-mcp-server version for the kit's stdio server and the launcher sidecar it runs on 2.4.0+, so
+    `exakit version` (which reads the sidecar's version from its image tag) says what actually answers."""
+
+    def test_the_sidecar_image_is_the_pinned_version_by_digest(self):
+        mcp = VERSIONS["mcp"]
+        image = mcp["sidecar_image"]
+        self.assertRegex(image, r"^docker\.io/exasol/mcp-server:[0-9][^@]*@sha256:[0-9a-f]{64}$")
+        self.assertEqual(image.split("@")[0].rsplit(":", 1)[1], mcp["version"])
+
+    def test_every_fallback_is_the_same_version(self):
+        version = VERSIONS["mcp"]["version"]
+        image = VERSIONS["mcp"]["sidecar_image"]
+        sources = {
+            "setup/lib/common.sh": f'EXAKIT_MCP_VERSION_FALLBACK="${{EXAKIT_MCP_VERSION_FALLBACK:-{version}}}"',
+            "setup/lib/exakit-common.ps1": f'else {{ "{version}" }}',
+            "mcp/runtime/exakit.py": f'DEFAULT_MCP_VERSION = "{version}"',
+            "setup/lib/mcp.sh": f'EXAKIT_MCP_SIDECAR_IMAGE_FALLBACK="{image}"',
+            "setup/lib/mcp.ps1": f'$script:McpSidecarImageFallback = "{image}"',
+        }
+        for path, needle in sources.items():
+            with self.subTest(path=path):
+                self.assertIn(needle, (ROOT / path).read_text(encoding="utf-8"))
+
+
 class PyexasolPinTest(unittest.TestCase):
     """The kit's own pyexasol defaults to versions.json's pin, at or above the floor; the notebook environment leaves pyexasol to the
     connector, whose exact pydantic pin no pyexasol from 2.4.0 can meet."""

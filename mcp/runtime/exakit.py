@@ -17,7 +17,7 @@ from .paths import RuntimePaths
 
 DEFAULT_MCP_COMMAND = "uvx"
 DEFAULT_MCP_PACKAGE = "exasol-mcp-server"
-DEFAULT_MCP_VERSION = "2.3.0"
+DEFAULT_MCP_VERSION = "2.4.0"
 DEFAULT_SERVER_NAME = "exasol"
 # The launcher's MCP server (Exasol Personal 2.4.0+): a sidecar next to the
 # database, answering Streamable HTTP on loopback, connected as the kit's
@@ -42,6 +42,9 @@ DEFAULT_READ_ONLY_MCP_SETTINGS = {
     "enable_query_profiling": True,
     "enable_write_query": False,
     "enable_write_bucketfs": False,
+    # Off on the launcher's MCP server too (its sidecar catalog): set_exasol_preprocessor changes how every later
+    # query of the session is rewritten, which is not a read.
+    "enable_preprocessor_tools": False,
     # The server lists no views unless told to (exasol-mcp-server 2.x: views default off), and the approved
     # descriptors are published as views in EXAKIT_SEMANTIC: an agent that lists or searches objects must see them.
     "views": {"enable": True},

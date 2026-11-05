@@ -2069,7 +2069,7 @@ function Request-ExakitMcpSetupOffer {
 $script:McpSidecarName = if ($env:EXAKIT_MCP_SIDECAR) { $env:EXAKIT_MCP_SIDECAR } else { "mcp" }
 $script:McpSidecarPort = if ($env:EXAKIT_MCP_SIDECAR_PORT) { [int]$env:EXAKIT_MCP_SIDECAR_PORT } else { 4896 }
 $script:SidecarPyYaml = if ($env:EXAKIT_SIDECAR_PYYAML) { $env:EXAKIT_SIDECAR_PYYAML } else { "PyYAML==6.0.3" }
-$script:McpSidecarImageFallback = "docker.io/exasol/mcp-server:2.3.0@sha256:061ca243e7c50728c394a4ecf329993a6774ddde0d33bbabafbe8140c2a7c75f"
+$script:McpSidecarImageFallback = "docker.io/exasol/mcp-server:2.4.0@sha256:ae13d5430dff463aa0817f5a188211820fb8c2565e95e477d5ca71b04bb50b68"
 $script:McpBridgeFallback = "mcp-proxy@0.13.0"
 
 function Test-McpSidecarSupported {
