@@ -131,9 +131,10 @@ connected or not installed on this machine appear greyed out with the reason and
 selected; **every selectable (pending) client is pre-selected**. The user restarts the
 client afterward.
 
-After setup, the client starts the MCP server named `exasol` on demand over stdio (it is not
-a background service). Verify with `exakit mcp-doctor`, which starts the server itself and
-completes an MCP handshake — so a `connected` client is one that can really reach it.
+After setup, every client has an MCP server named `exasol`: on Exasol Personal 2.4.0+ the
+launcher's own MCP server beside the database (`http://127.0.0.1:4896/mcp`), elsewhere the kit's
+server, started on demand over stdio. Verify with `exakit mcp-doctor`, which completes an MCP
+handshake with whichever it is — so a `connected` client is one that can really reach it.
 
 **If you are the client you just configured, you cannot use those tools yet.** An MCP client
 reads its server list at startup, so the `exasol` tools appear only after *your own* process
@@ -146,7 +147,10 @@ trust. That is what makes the next steps safe.
 
 ## Step 4 — Load the sample data
 
-So the user is not staring at an empty database, load the bundled TPC-H sample (customers,
+Check what is already there first: `exakit status --json` lists `datasets_loaded`. A persona
+install loaded the persona's own datasets — a Data Scientist or ML Engineer machine has
+`ESOPHAGEAL_POSTS`, `BANKING_COMPLAINTS`, `BANK_MARKETING` and the rest, **not** TPC-H. Use what
+is loaded. Only on an empty database, load a bundled sample, for example TPC-H (customers,
 orders, line items, parts, suppliers) into the `TPCH` schema:
 
 ```bash
@@ -167,8 +171,9 @@ hold the discipline even though it is tempting to just answer.
 ASK  ->  INSPECT (show the SQL first)  ->  RUN (read-only)  ->  VALIDATE (independently)  ->  RERUN
 ```
 
-1. **Discover.** Ask the user's assistant to list schemas/tables and describe the
-   `TPCH` tables first — ground in the *real* schema, do not guess column names.
+1. **Discover.** Ask the user's assistant to list schemas/tables and describe the tables of a
+   dataset this machine actually loaded (`datasets_loaded` above — `TPCH` only where it is
+   listed) — ground in the *real* schema, do not guess column names.
    Without MCP tools (always the case in the session that ran the install) the
    system tables answer the same questions in well under a second:
    `SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_ROW_COUNT FROM SYS.EXA_ALL_TABLES WHERE TABLE_SCHEMA NOT LIKE 'SYS%'`
@@ -176,8 +181,9 @@ ASK  ->  INSPECT (show the SQL first)  ->  RUN (read-only)  ->  VALIDATE (indepe
    columns and types, and `~/.exasol-starter-kit/kit/data/data-dictionary.md`
    describes each bundled dataset. Run them through `exakit sql` (`--json` for
    one parseable object).
-2. **Ask, but show the SQL first.** For a question like *"which product category generated
-   the most revenue?"*, present the SQL and a plain-English explanation **before executing**.
+2. **Ask, but show the SQL first.** For a question that fits the loaded data — *"which product
+   category generated the most revenue?"* on TPC-H, *"which complaint products most often
+   end in monetary relief?"* on banking complaints — present the SQL and a plain-English explanation **before executing**.
    Call out the judgment calls: what defines "revenue" (price × quantity? an amount column?),
    whether returns are subtracted, what is filtered out. Let the user correct the SQL before
    it runs.
