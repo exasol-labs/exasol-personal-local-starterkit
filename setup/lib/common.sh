@@ -9899,6 +9899,10 @@ exakit_run_mcp_setup_cli() {
     else
         exakit_configure_mcp_readonly_access || return 1
     fi
+    # The server behind the entries: the launcher's MCP sidecar as the read-only
+    # user where it can serve (Exasol Personal 2.4.0+), else the kit's own stdio
+    # server. Silent either way - the table is animating - and never a failure.
+    command -v mcp_sidecar_apply >/dev/null 2>&1 && { mcp_sidecar_apply || true; }
     _old_ifs="$IFS"
     IFS=','
     set -- $_clients_csv
@@ -9993,6 +9997,12 @@ exakit_run_mcp_operation_cli() {
             exakit_configure_mcp_readonly_access || return 1
             ;;
     esac
+    # Repair puts the server behind the entries right too: the launcher's MCP
+    # sidecar where it can serve (a deployment restarted since setup can now),
+    # else the kit's stdio server. Diagnosis only reads what is recorded.
+    if [ "$_operation" = repair ] && command -v mcp_sidecar_apply >/dev/null 2>&1; then
+        mcp_sidecar_apply >/dev/null 2>&1 || true
+    fi
     _old_ifs="$IFS"
     IFS=','
     set -- $_clients_csv
@@ -11487,6 +11497,25 @@ _exakit_install_exapump() {
 _exakit_install_mcp() {
     _eim_prev_quiet="${EXAKIT_QUIET_DETAIL:-0}"
     [ -t 1 ] && EXAKIT_QUIET_DETAIL=1
+    # The launcher's MCP server, as the read-only user, wherever it can serve
+    # (Exasol Personal 2.4.0+): nothing to download, the step's line names the
+    # endpoint. Anything short of serving falls through to the kit's own stdio
+    # server below, exactly as before. The read-only user is made here for it;
+    # a subshell keeps a die() in there from ending the step.
+    if command -v mcp_sidecar_supported >/dev/null 2>&1 && mcp_sidecar_supported; then
+        EXAKIT_MCP_STEP_T0="$(date +%s 2>/dev/null || echo 0)"
+        ui_spin_begin "Starting the MCP server and checking it answers"
+        if ( exakit_configure_mcp_readonly_access ) >/dev/null 2>&1 && mcp_sidecar_apply; then
+            ui_spin_end
+            manifest_set components.mcp_server.mode "http"
+            manifest_set components.mcp_server.validated true
+            exakit_record_ownership mcp kit
+            ok_step "MCP server answering at $(manifest_get components.mcp_server.url 2>/dev/null) as the read-only user ($(( $(date +%s 2>/dev/null || echo 0) - EXAKIT_MCP_STEP_T0 ))s)"
+            EXAKIT_QUIET_DETAIL="$_eim_prev_quiet"
+            return 0
+        fi
+        ui_spin_end
+    fi
     if ! mcp_install; then
         EXAKIT_QUIET_DETAIL="$_eim_prev_quiet"
         return 1
@@ -13721,6 +13750,18 @@ EXAKIT_PRESERVED_PATHS_EOF
                 warn "Removing the managed AI client config reported issues (continuing uninstall)"
         fi
         _done "MCP entry removed from the AI clients the kit manages: ${_un_mcp_clients:-all managed clients}"
+    fi
+    # The launcher's MCP server the kit set up (mcp_sidecar_apply), on a
+    # deployment that stays: a database the kit did not remove keeps running,
+    # and so would a server nobody is pointed at any more. A removed deployment
+    # took its sidecars with it.
+    if [ "$(manifest_get components.mcp_server.backend 2>/dev/null || true)" = sidecar ] && \
+       [ -d "${EXAKIT_PERSONAL_DEPLOY_DIR:-}" ] && command -v personal_cli >/dev/null 2>&1; then
+        _step "the MCP server the kit set up beside your database (sidecar '${EXAKIT_MCP_SIDECAR:-mcp}')"
+        if [ "$_dry" != "1" ]; then
+            run_logged "$(personal_cli)" sidecar disable "${EXAKIT_MCP_SIDECAR:-mcp}" --remove >/dev/null 2>&1 || \
+                warn "Removing the MCP sidecar reported issues (continuing uninstall): exasol sidecar disable ${EXAKIT_MCP_SIDECAR:-mcp} --remove"
+        fi
     fi
 
     # 3) Installed AI skills (shared with the selectable uninstall menu).

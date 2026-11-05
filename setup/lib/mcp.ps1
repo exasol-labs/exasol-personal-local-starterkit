@@ -1010,6 +1010,9 @@ function Invoke-McpSetupCli {
     } else {
         try { Set-McpReadonlyAccess } catch { return $null }
     }
+    # The server behind the entries: the launcher's MCP sidecar as the read-only
+    # user where it can serve, else the kit's stdio server. Twin of mcp_sidecar_apply.
+    try { [void](Set-McpSidecar) } catch { Write-ExakitLog "WARN" "MCP sidecar: $_" }
     $result = Invoke-McpModule (@("setup-runtime-clients", "--runtime-root", $script:ExakitHome, "--clients") + $Clients)
     if ($result.ExitCode -ne 0) {
         if ($script:LogFile) { $result.Output | Add-Content -Path $script:LogFile }
@@ -1030,6 +1033,10 @@ function Invoke-McpOperationCli {
     if (-not $repoRoot) { Warn2 "Could not find the MCP package source to manage your AI clients."; return $null }
     if ($Operation -in @("validate", "repair", "doctor")) {
         try { Set-McpReadonlyAccess } catch { return $null }
+    }
+    # Repair puts the server behind the entries right too; diagnosis only reads.
+    if ($Operation -eq "repair") {
+        try { [void](Set-McpSidecar) } catch { Write-ExakitLog "WARN" "MCP sidecar: $_" }
     }
     $args = @("run-runtime-operation", $Operation, "--runtime-root", $script:ExakitHome)
     if ($SnapshotId) { $args += @("--snapshot-id", $SnapshotId) }
@@ -2039,5 +2046,152 @@ function Request-ExakitMcpSetupOffer {
     if (-not (Invoke-McpSetup)) {
         Warn2 "Your local runtime is installed, but MCP client setup did not finish cleanly."
         Warn2 "Retry any time with: exakit mcp-setup"
+    }
+}
+
+# --- the launcher's MCP server (Exasol Personal 2.4.0+) ---------------------
+# Twin of the same section in mcp.sh: the launcher's MCP sidecar, written whole
+# by the kit (pinned image, loopback, --no-auth) and connected as the kit's
+# read-only MCP user instead of the deployment's SYS, applied with
+# `exasol start`; the kit's stdio server stays the fallback.
+$script:McpSidecarName = if ($env:EXAKIT_MCP_SIDECAR) { $env:EXAKIT_MCP_SIDECAR } else { "mcp" }
+$script:McpSidecarPort = if ($env:EXAKIT_MCP_SIDECAR_PORT) { [int]$env:EXAKIT_MCP_SIDECAR_PORT } else { 4896 }
+$script:SidecarPyYaml = if ($env:EXAKIT_SIDECAR_PYYAML) { $env:EXAKIT_SIDECAR_PYYAML } else { "PyYAML==6.0.3" }
+$script:McpSidecarImageFallback = "docker.io/exasol/mcp-server:2.3.0@sha256:061ca243e7c50728c394a4ecf329993a6774ddde0d33bbabafbe8140c2a7c75f"
+$script:McpBridgeFallback = "mcp-proxy@0.13.0"
+
+function Test-McpSidecarSupported {
+    if ($env:EXAKIT_MCP_BACKEND -in @("uvx", "stdio")) { return $false }
+    if ((Get-ExakitManifestValue "runtime.type") -ne "personal") { return $false }
+    if (-not (Get-Command Get-PersonalCli -ErrorAction SilentlyContinue)) { return $false }
+    if (-not (Test-Path -LiteralPath $script:PersonalDeployDir)) { return $false }
+    return ((Test-PersonalLauncherSupports "sidecar") -and (Test-PersonalLauncherSupports "mcp"))
+}
+
+function Clear-McpSidecarRecord([string]$Why) {
+    Write-ExakitLog "INFO" "MCP: the launcher's MCP server is not used ($Why) - clients use the kit's stdio server"
+    if ((Get-ExakitManifestValue "components.mcp_server.backend") -eq "sidecar" -and (Get-Command Get-PersonalCli -ErrorAction SilentlyContinue)) {
+        [void](Invoke-ExakitLogged (Get-PersonalCli) "sidecar" "disable" $script:McpSidecarName)
+    }
+    foreach ($key in @("backend", "url", "bridge")) { Remove-ExakitManifestValue "components.mcp_server.$key" }
+}
+
+function Get-McpSidecarStatus {
+    $text = "" + (Invoke-ExakitBounded -FilePath (Get-PersonalCli) -Arguments @("mcp", "status", "--json") -TimeoutSeconds 60)
+    try { $doc = $text | ConvertFrom-Json } catch { return $null }
+    if ($doc -is [array]) { $doc = $doc | Select-Object -First 1 }
+    return $doc
+}
+
+function Get-McpSidecarDefinitionJson([string]$User, [string]$PasswordFile) {
+    $image = Get-ExakitVersionsValue "components.mcp.sidecar_image"
+    if ("$image" -notlike "*@sha256:*") { $image = $script:McpSidecarImageFallback }
+    $ref = { param($k) @{ secretKeyRef = @{ name = "exasol-database"; key = $k } } }
+    $settings = [ordered]@{ default_row_limit = 1000; enable_read_query = $true; enable_summarize_table = $true
+        enable_query_profiling = $true; enable_preprocessor_tools = $false; enable_write_query = $false
+        enable_read_bucketfs = $false; enable_write_bucketfs = $false; views = @{ enable = $true } }
+    $definition = [ordered]@{
+        enabled = $true
+        container = [ordered]@{
+            image = "$image"; imagePullPolicy = "IfNotPresent"; restartPolicy = "Always"
+            args = @("--host", "0.0.0.0", "--port", "4896", "--no-auth")
+            env = @(
+                @{ name = "EXASOL_DB_HOST"; valueFrom = (& $ref "host") },
+                @{ name = "EXASOL_DB_PORT"; valueFrom = (& $ref "port") },
+                @{ name = "EXA_DSN"; value = '$(EXASOL_DB_HOST):$(EXASOL_DB_PORT)' },
+                @{ name = "EXA_USER"; value = $User },
+                @{ name = "EXA_PASSWORD"; valueFile = $PasswordFile },
+                @{ name = "EXA_SSL_CERT_VALIDATION"; value = "false" },
+                @{ name = "FASTMCP_HTTP_HOST_ORIGIN_PROTECTION"; value = "true" },
+                @{ name = "EXA_MCP_SETTINGS"; value = ($settings | ConvertTo-Json -Compress -Depth 4) },
+                @{ name = "EXASOL_TELEMETRY_DISABLE"; value = "1" })
+            ports = @(@{ name = "mcp"; containerPort = 4896; hostPort = $script:McpSidecarPort; hostIP = "127.0.0.1" })
+            readinessProbe = @{ httpGet = @{ path = "/health"; port = "mcp" }; periodSeconds = 10; failureThreshold = 6 }
+        }
+        endpoints = @(@{ port = "mcp"; scheme = "http"; path = "/mcp" })
+    }
+    return ($definition | ConvertTo-Json -Depth 8)
+}
+
+# Set-McpSidecar - twin of mcp_sidecar_apply: $true when the launcher's MCP
+# server serves as the read-only user and is recorded; $false (record cleared)
+# when the clients keep the kit's stdio server. Prints nothing.
+function Set-McpSidecar {
+    if (-not (Test-McpSidecarSupported)) { Clear-McpSidecarRecord "this launcher or runtime has no MCP sidecar"; return $false }
+    $user = Get-ExakitManifestValue "components.mcp_server.connection.user"
+    $pwFile = Get-ExakitManifestValue "components.mcp_server.connection.password_file"
+    if (-not $user -or -not $pwFile -or -not (Test-Path -LiteralPath $pwFile)) { Clear-McpSidecarRecord "the read-only MCP user is not ready"; return $false }
+    $uv = Get-ExakitUvBin
+    if (-not $uv) { try { $uv = Install-ExakitUv } catch { $uv = $null } }
+    $root = Get-ExakitRepoRoot
+    if (-not $uv -or -not $root) { Clear-McpSidecarRecord "uv or the kit source is not available"; return $false }
+    $defFile = [System.IO.Path]::GetTempFileName()
+    try {
+        Set-Content -LiteralPath $defFile -Encoding UTF8 -Value (Get-McpSidecarDefinitionJson $user $pwFile)
+        $changed = ("" + (& $uv run --no-project --quiet --with $script:SidecarPyYaml python `
+            (Join-Path $root "setup/lib/sidecar_definition.py") put `
+            (Join-Path $script:PersonalDeployDir "sidecars.yaml") $script:McpSidecarName $defFile 2>$null)).Trim()
+        $editRc = $LASTEXITCODE
+    } finally { Remove-Item -LiteralPath $defFile -Force -ErrorAction SilentlyContinue }
+    if ($editRc -ne 0) { Clear-McpSidecarRecord "the sidecar definition could not be written"; return $false }
+    $status = Get-McpSidecarStatus
+    if ($changed -eq "changed" -or -not $status -or $status.health -ne "serving") {
+        if ((Invoke-ExakitLogged (Get-PersonalCli) "start") -ne 0) { Clear-McpSidecarRecord "exasol start did not apply the sidecar"; return $false }
+    }
+    $budget = if ($env:EXAKIT_MCP_SIDECAR_WAIT) { [int]$env:EXAKIT_MCP_SIDECAR_WAIT } else { 120 }
+    $waited = 0
+    while ($true) {
+        $status = Get-McpSidecarStatus
+        if ($status -and $status.restartRequired -eq $true) {
+            Clear-McpSidecarRecord "the deployment needs 'exakit stop' and 'exakit start' before it serves sidecars"; return $false
+        }
+        if ($status -and $status.health -eq "serving") {
+            $url = "" + (@($status.endpoints) | Where-Object { $_.url } | Select-Object -First 1).url
+            if ($url -notlike "http://127.0.0.1:*") { $url = "http://127.0.0.1:$($script:McpSidecarPort)/mcp" }
+            $bridge = Get-ExakitVersionsValue "components.mcp.bridge"
+            if (-not $bridge) { $bridge = $script:McpBridgeFallback }
+            Set-ExakitManifestValue "components.mcp_server.backend" "sidecar"
+            Set-ExakitManifestValue "components.mcp_server.url" $url
+            Set-ExakitManifestValue "components.mcp_server.bridge" "$bridge"
+            $tag = ("" + (Get-ExakitVersionsValue "components.mcp.sidecar_image")).Split("@")[0].Split(":")[-1]
+            if ($tag -match '^[0-9]') { Set-ExakitManifestValue "components.mcp_server.version" $tag }
+            Write-ExakitLog "OK" "MCP: the launcher's MCP server answers at $url as $user"
+            return $true
+        }
+        if ($waited -ge $budget) { break }
+        Start-Sleep -Seconds 3
+        $waited += 3
+    }
+    Clear-McpSidecarRecord "the sidecar did not report serving within ${budget}s (exasol mcp status)"
+    return $false
+}
+
+# Install-McpSidecarStep - the install's AI-bridge step on the launcher's MCP
+# server: $true when it serves as the read-only user (the step's one line says
+# where), $false to fall through to the kit's stdio server. Twin of the sidecar
+# branch at the top of _exakit_install_mcp.
+function Install-McpSidecarStep {
+    if (-not (Test-McpSidecarSupported)) { return $false }
+    $script:McpStepT0 = Get-Date
+    try { Set-McpReadonlyAccess } catch { return $false }
+    if (-not (Set-McpSidecar)) { return $false }
+    $script:McpReadonlyReady = $true
+    Set-ExakitManifestValue "components.mcp_server.mode" "http"
+    Set-ExakitManifestValue "components.mcp_server.validated" $true
+    Set-ExakitComponentOwnership "mcp" "kit"
+    $secs = [int]((Get-Date) - $script:McpStepT0).TotalSeconds
+    OkStep "MCP server answering at $(Get-ExakitManifestValue 'components.mcp_server.url') as the read-only user (${secs}s)"
+    return $true
+}
+
+# Remove-McpSidecar [-DryRun] - uninstall: the MCP sidecar the kit set up, on a
+# deployment that stays. Twin of the same lines in exakit_uninstall_run.
+function Remove-McpSidecar {
+    param([switch]$DryRun)
+    if ((Get-ExakitManifestValue "components.mcp_server.backend") -ne "sidecar") { return }
+    if (-not (Test-Path -LiteralPath $script:PersonalDeployDir) -or -not (Get-Command Get-PersonalCli -ErrorAction SilentlyContinue)) { return }
+    if ($DryRun) { Info "  will remove: the MCP server the kit set up beside your database (sidecar '$($script:McpSidecarName)')"; return }
+    if ((Invoke-ExakitLogged (Get-PersonalCli) "sidecar" "disable" $script:McpSidecarName "--remove") -ne 0) {
+        Warn2 "Removing the MCP sidecar reported issues (continuing uninstall): exasol sidecar disable $($script:McpSidecarName) --remove"
     }
 }

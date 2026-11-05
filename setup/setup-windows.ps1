@@ -279,8 +279,10 @@ try {
                 $prevQuiet = $script:ExakitQuietDetail
                 if (Test-ExakitStdoutIsTerminal) { $script:ExakitQuietDetail = $true }
                 try {
-                    Install-Mcp
-                    Test-McpServer
+                    if (-not (Install-McpSidecarStep)) {
+                        Install-Mcp
+                        Test-McpServer
+                    }
                 } finally {
                     $script:ExakitQuietDetail = $prevQuiet
                 }

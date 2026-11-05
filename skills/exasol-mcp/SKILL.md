@@ -75,10 +75,20 @@ skill; the rest of this page is the database path.
 
 ## What the connection actually is
 
-After setup, the client starts an MCP server named **`exasol`** on demand over
-stdio. It is **not** a background service — nothing is listening between calls.
+After setup, every client has an MCP server named **`exasol`**. On Exasol
+Personal 2.4.0 or later it is the **launcher's own MCP server**: a sidecar that
+runs beside the database, starts and stops with it, and answers on
+`http://127.0.0.1:4896/mcp` (loopback only). The clients hold that URL and
+nothing secret; Claude Desktop, which runs only local servers, reaches it through
+a small bridge (`uvx mcp-proxy`). Where the sidecar cannot serve — an older
+launcher, a database the launcher does not run, or a deployment that needs one
+`exakit stop` / `exakit start` first — the client starts the kit's own server on
+demand over stdio instead, and nothing is listening between calls. The commands
+are the same either way; `exakit mcp-doctor` speaks MCP to whichever one it is.
 
-The login is a **dedicated, read-only database user**. It can read every schema
+The login is a **dedicated, read-only database user** — for the launcher's
+server too: the kit connects it as that user, not as the administrator the
+launcher would use. It can read every schema
 in the database but cannot write, and that limit is **enforced by the database**,
 not by trust or by prompt wording.
 
@@ -146,9 +156,11 @@ result and nothing else on stdout.
 
 ## The server itself
 
-The client runs the server on demand as `uvx exasol-mcp-server@<version>`. An
-HTTP mode also exists (`exasol-mcp-server-http --host <h> --port <p>`) but the
-kit configures **stdio**, which is what the supported clients expect.
+The launcher's server runs the official `exasol/mcp-server` image, pinned by
+digest in versions.json (`components.mcp.sidecar_image`, the same version as
+`components.mcp.version`); `exasol mcp status` shows its state. The fallback runs
+on demand as `uvx exasol-mcp-server@<version>`. `EXAKIT_MCP_BACKEND=uvx exakit
+mcp-setup` keeps the kit's own server even where the sidecar could serve.
 
 Update it like any other component:
 

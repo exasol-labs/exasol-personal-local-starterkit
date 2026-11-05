@@ -1615,7 +1615,7 @@ has "...and says what podman said" "What it said" "$_p2run"
 has "...leaving a reason for the summary" "exakit_note_failure" "$_p2run"
 has "...and it is a soft failure like the rest" "return 1" "$_p2run"
 _p2dep2="$(sed -n '/^personal_deploy_local()/,/^}/p' "$ROOT/setup/lib/runtime-personal.sh")"
-has "the deployment asks before it deploys" "personal_podman_running || return 1" "$_p2dep2"
+has "the deployment asks its engine (Podman, or Docker from 2.4.0) before it deploys" "personal_engine_running || return 1" "$_p2dep2"
 
 _p2winrun="$(sed -n '/^function Test-PersonalPodmanRunning/,/^}/p' "$ROOT/setup/lib/runtime-personal.ps1")"
 has "windows asks podman whether it works too" "Test-PersonalPodmanAnswers" "$_p2winrun"
@@ -1629,8 +1629,8 @@ has "...and naming the command that finishes the job" "re-run the installer" "$_
 # ...and before ANY branch: the readiness check (machine up, DNS for a fresh
 # pull, the pids controller) heads the deployment and the start alike, so a
 # broken Podman is named before anything waits on it or is replaced.
-has "the windows deploy asks before it deploys"     'if (-not (Test-PersonalPodmanReady -Fresh:$fresh))' "$(sed -n '/^function Install-PersonalDeployment/,/^}/p' "$ROOT/setup/lib/runtime-personal.ps1")"
-has "...and so does the windows start"     'Test-PersonalPodmanReady' "$(sed -n '/^function Start-Personal/,/^}/p' "$ROOT/setup/lib/runtime-personal.ps1")"
+has "the windows deploy asks its engine before it deploys"     'if (-not (Test-PersonalEngineReady -Fresh:$fresh))' "$(sed -n '/^function Install-PersonalDeployment/,/^}/p' "$ROOT/setup/lib/runtime-personal.ps1")"
+has "...and so does the windows start"     'Test-PersonalEngineReady' "$(sed -n '/^function Start-Personal/,/^}/p' "$ROOT/setup/lib/runtime-personal.ps1")"
 has "...which starts with the machine itself"     'Test-PersonalPodmanRunning' "$(sed -n '/^function Test-PersonalPodmanReady/,/^}/p' "$ROOT/setup/lib/runtime-personal.ps1")"
 
 # ---------------------------------------------------------------------------

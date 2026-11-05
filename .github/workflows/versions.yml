@@ -896,6 +896,12 @@ jobs:
       # exercised mcp/ at all -- a NameError in that package would have shipped.
       - run: python3 -m unittest discover -s mcp/tests -t .
         if: matrix.shard == 4
+      # The launcher's MCP sidecar as the kit's server: the shell side against a
+      # stub launcher, and the sidecars.yaml editor (skipped where the runner has no PyYAML).
+      - run: bash tests/mcp-sidecar.sh
+        if: matrix.shard == 4
+      - run: python3 -m unittest tests.test_sidecar_definition
+        if: matrix.shard == 4
       # Three more suites existed and were never run by CI either. This one had
       # rotted: it asserted a data-load prompt wording that the JSON support
       # changed on the bash side, and nothing noticed. (Not discoverable via
@@ -1160,6 +1166,7 @@ jobs:
             pwsh -NoProfile -File tests/uninstall-ps.ps1
             pwsh -NoProfile -File tests/component-ownership-ps.ps1
             pwsh -NoProfile -File tests/runtime-personal-ps.ps1
+            pwsh -NoProfile -File tests/mcp-sidecar-ps.ps1
             pwsh -NoProfile -File tests/service-scope-ps.ps1
             pwsh -NoProfile -File tests/personal-s3-ps.ps1
             pwsh -NoProfile -File tests/personal-destroy-lock-ps.ps1

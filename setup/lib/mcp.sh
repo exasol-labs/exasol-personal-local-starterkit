@@ -269,6 +269,17 @@ mcp_update() {
         return 0
     fi
     info "Updating MCP server ${_current:-unknown} -> $_latest"
+    # The launcher's MCP server: the new image goes into its definition and
+    # `exasol start` recreates that one container. The client entries are a URL
+    # that does not change, so there is nothing to rewrite in them.
+    if [ "$(manifest_get components.mcp_server.backend 2>/dev/null || true)" = sidecar ]; then
+        if mcp_sidecar_apply; then
+            manifest_set desired.mcp "$_latest"
+            ok "MCP server updated; database data was not changed"
+            return 0
+        fi
+        warn "The launcher's MCP server could not take the update - your AI clients go back to the kit's own server (exakit mcp-setup rewrites them)"
+    fi
     mcp_update_snapshot || warn "MCP pre-update snapshot was not created; generated configs will still be refreshed."
     EXAKIT_MCP_VERSION="$_latest"
     export EXAKIT_MCP_VERSION
@@ -723,4 +734,184 @@ mcp_validate_http() {
     pkill -9 -P "$_http_pid" 2>/dev/null
     kill -9 "$_http_pid" 2>/dev/null
     wait "$_http_pid" 2>/dev/null || true
+}
+
+# --- the launcher's MCP server (Exasol Personal 2.4.0+) ---------------------
+# From 2.4.0 the launcher runs the official Exasol MCP server as a sidecar next
+# to the database, on 127.0.0.1:4896 over Streamable HTTP. The kit uses it as
+# the server behind every `exasol` client entry, with one change the launcher
+# leaves to its user: the launcher connects it as SYS ("these controls limit the
+# exposed MCP tools; they do not change the database privileges of the saved
+# user"), the kit connects it as its read-only MCP user, exactly as the stdio
+# server was. Every command stays the same; only what answers behind the entry
+# changes, and the kit's own uvx server below stays as the fallback wherever
+# the sidecar cannot serve (an older launcher, a database the launcher does not
+# run, a deployment that needs a restart first, EXAKIT_MCP_BACKEND=uvx).
+#
+# The definition is the kit's, written whole BEFORE anything starts it: the
+# launcher's `exasol sidecar enable mcp` starts its catalog template at once on
+# a running deployment, which would serve the database as SYS, without auth,
+# until an edit landed. Written instead into <deployment>/sidecars.yaml (0600,
+# the launcher's file; the password is read from the kit's credential file by
+# the editor, never put on a command line) and applied by `exasol start`, which
+# reconciles a running deployment without restarting the database.
+EXAKIT_MCP_SIDECAR="${EXAKIT_MCP_SIDECAR:-mcp}"
+EXAKIT_MCP_SIDECAR_PORT="${EXAKIT_MCP_SIDECAR_PORT:-4896}"
+EXAKIT_SIDECAR_PYYAML="${EXAKIT_SIDECAR_PYYAML:-PyYAML==6.0.3}"
+EXAKIT_MCP_SIDECAR_IMAGE_FALLBACK="docker.io/exasol/mcp-server:2.3.0@sha256:061ca243e7c50728c394a4ecf329993a6774ddde0d33bbabafbe8140c2a7c75f"
+EXAKIT_MCP_BRIDGE_FALLBACK="mcp-proxy@0.13.0"
+
+# mcp_sidecar_supported — the launcher can run the kit's MCP server here: not
+# turned off (EXAKIT_MCP_BACKEND=uvx), the kit's Exasol Personal deployment,
+# and a launcher that has both `sidecar` and `mcp`.
+mcp_sidecar_supported() {
+    case "${EXAKIT_MCP_BACKEND:-auto}" in uvx|stdio) return 1 ;; esac
+    [ "$(manifest_get runtime.type 2>/dev/null || true)" = personal ] || return 1
+    command -v personal_cli >/dev/null 2>&1 || return 1
+    [ -d "${EXAKIT_PERSONAL_DEPLOY_DIR:-}" ] || return 1
+    _mss_help="$(exakit_run_bounded "${EXAKIT_PERSONAL_PROBE_TIMEOUT:-20}" "$(personal_cli)" --help 2>&1)" || return 1
+    printf '%s\n' "$_mss_help" | personal_help_names_token sidecar || return 1
+    printf '%s\n' "$_mss_help" | personal_help_names_token mcp
+}
+
+# _mcp_sidecar_forget <why> — clients keep (or go back to) the kit's stdio
+# server. A sidecar the kit wrote is switched off rather than left running
+# with nobody pointed at it.
+_mcp_sidecar_forget() {
+    _exakit_log_file "INFO  MCP: the launcher's MCP server is not used ($1) - clients use the kit's stdio server"
+    if [ "$(manifest_get components.mcp_server.backend 2>/dev/null || true)" = sidecar ] && \
+       command -v personal_cli >/dev/null 2>&1; then
+        run_logged "$(personal_cli)" sidecar disable "$EXAKIT_MCP_SIDECAR" >/dev/null 2>&1 || true
+    fi
+    manifest_del components.mcp_server.backend 2>/dev/null || true
+    manifest_del components.mcp_server.url 2>/dev/null || true
+    manifest_del components.mcp_server.bridge 2>/dev/null || true
+    return 0
+}
+
+# _mcp_sidecar_field <json> <health|restartRequired|url> — one answer out of
+# `exasol mcp status --json` (an object, or a one-item array).
+_mcp_sidecar_field() {
+    printf '%s' "$1" | run_python_any -c 'import json, sys
+try:
+    doc = json.load(sys.stdin)
+except Exception:
+    raise SystemExit(0)
+if isinstance(doc, list):
+    doc = doc[0] if doc else {}
+if sys.argv[1] == "url":
+    for endpoint in doc.get("endpoints") or []:
+        if isinstance(endpoint, dict) and endpoint.get("url"):
+            print(endpoint["url"])
+            break
+else:
+    value = doc.get(sys.argv[1])
+    print(("true" if value else "false") if isinstance(value, bool) else (value or ""))' "$2" 2>/dev/null
+}
+
+# _mcp_sidecar_definition <user> <password file> — the mcp sidecar as JSON on
+# stdout: the launcher's own catalog entry (image pinned in versions.json,
+# --no-auth on loopback, origin protection, the read-oriented tool set) with
+# the kit's read-only user in place of the deployment's SYS. The password is a
+# file reference the editor resolves; it is never in this text.
+_mcp_sidecar_definition() {
+    _msd_image="$(exakit_versions_value components.mcp.sidecar_image 2>/dev/null || true)"
+    case "$_msd_image" in *@sha256:*) : ;; *) _msd_image="$EXAKIT_MCP_SIDECAR_IMAGE_FALLBACK" ;; esac
+    run_python_any - "$_msd_image" "$EXAKIT_MCP_SIDECAR_PORT" "$1" "$2" <<'PY'
+import json, sys
+image, port, user, password_file = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
+def ref(key):
+    return {"secretKeyRef": {"name": "exasol-database", "key": key}}
+settings = {"default_row_limit": 1000, "enable_read_query": True, "enable_summarize_table": True,
+            "enable_query_profiling": True, "enable_preprocessor_tools": False, "enable_write_query": False,
+            "enable_read_bucketfs": False, "enable_write_bucketfs": False, "views": {"enable": True}}
+print(json.dumps({
+    "enabled": True,
+    "container": {
+        "image": image,
+        "imagePullPolicy": "IfNotPresent",
+        "restartPolicy": "Always",
+        "args": ["--host", "0.0.0.0", "--port", "4896", "--no-auth"],
+        "env": [
+            {"name": "EXASOL_DB_HOST", "valueFrom": ref("host")},
+            {"name": "EXASOL_DB_PORT", "valueFrom": ref("port")},
+            {"name": "EXA_DSN", "value": "$(EXASOL_DB_HOST):$(EXASOL_DB_PORT)"},
+            {"name": "EXA_USER", "value": user},
+            {"name": "EXA_PASSWORD", "valueFile": password_file},
+            {"name": "EXA_SSL_CERT_VALIDATION", "value": "false"},
+            {"name": "FASTMCP_HTTP_HOST_ORIGIN_PROTECTION", "value": "true"},
+            {"name": "EXA_MCP_SETTINGS", "value": json.dumps(settings)},
+            {"name": "EXASOL_TELEMETRY_DISABLE", "value": "1"},
+        ],
+        "ports": [{"name": "mcp", "containerPort": 4896, "hostPort": port, "hostIP": "127.0.0.1"}],
+        "readinessProbe": {"httpGet": {"path": "/health", "port": "mcp"}, "periodSeconds": 10, "failureThreshold": 6},
+    },
+    "endpoints": [{"port": "mcp", "scheme": "http", "path": "/mcp"}],
+}))
+PY
+}
+
+# mcp_sidecar_apply — make the launcher's MCP server the one behind every
+# client entry, connected as the kit's read-only user: write its definition,
+# reconcile, wait until it serves, and record it (components.mcp_server.backend
+# = sidecar, url, bridge) for the client configs. 0 when it serves; 1 when it
+# cannot, with the record cleared so the clients keep the kit's stdio server.
+# Prints nothing - it runs under the client table - and logs every step.
+mcp_sidecar_apply() {
+    mcp_sidecar_supported || { _mcp_sidecar_forget "this launcher or runtime has no MCP sidecar"; return 1; }
+    _msa_user="$(manifest_get components.mcp_server.connection.user 2>/dev/null || true)"
+    _msa_pw="$(manifest_get components.mcp_server.connection.password_file 2>/dev/null || true)"
+    if [ -z "$_msa_user" ] || [ ! -f "$_msa_pw" ]; then
+        _mcp_sidecar_forget "the read-only MCP user is not ready"; return 1
+    fi
+    exakit_ensure_uv || { _mcp_sidecar_forget "uv is not available to edit the sidecar definition"; return 1; }
+    _msa_root="$(exakit_repo_root)" || { _mcp_sidecar_forget "the kit source is not found"; return 1; }
+    _msa_def="$(mktemp "${TMPDIR:-/tmp}/exakit-mcp-sidecar.XXXXXX")" || { _mcp_sidecar_forget "no temp file"; return 1; }
+    exakit_track_tmp "$_msa_def"
+    _mcp_sidecar_definition "$_msa_user" "$_msa_pw" > "$_msa_def" || { _mcp_sidecar_forget "the definition could not be built"; return 1; }
+    _msa_changed="$("$EXAKIT_UV_BIN" run --no-project --quiet --with "$EXAKIT_SIDECAR_PYYAML" python \
+        "$_msa_root/setup/lib/sidecar_definition.py" put \
+        "$EXAKIT_PERSONAL_DEPLOY_DIR/sidecars.yaml" "$EXAKIT_MCP_SIDECAR" "$_msa_def" \
+        2>>"${EXAKIT_LOG_FILE:-/dev/null}")" || { rm -f "$_msa_def"; _mcp_sidecar_forget "the sidecar definition could not be written"; return 1; }
+    rm -f "$_msa_def"
+    _msa_cli="$(personal_cli)"
+    _msa_status="$(exakit_run_bounded 60 "$_msa_cli" mcp status --json 2>/dev/null || true)"
+    if [ "$_msa_changed" = changed ] || [ "$(_mcp_sidecar_field "$_msa_status" health)" != serving ]; then
+        # `exasol start` reconciles saved definitions even when the database is
+        # already running: it recreates only what changed, the database stays up.
+        run_logged "$_msa_cli" start || { _mcp_sidecar_forget "exasol start did not apply the sidecar"; return 1; }
+    fi
+    # The probe's own startup window is a minute; twice that before giving up.
+    _msa_budget="${EXAKIT_MCP_SIDECAR_WAIT:-120}"
+    _msa_waited=0
+    while :; do
+        _msa_status="$(exakit_run_bounded 60 "$_msa_cli" mcp status --json 2>/dev/null || true)"
+        if [ "$(_mcp_sidecar_field "$_msa_status" restartRequired)" = true ]; then
+            # A deployment from an older launcher serves sidecars only after its
+            # next stop and start; until then the kit's own server answers.
+            _mcp_sidecar_forget "the deployment needs 'exakit stop' and 'exakit start' before it serves sidecars"
+            return 1
+        fi
+        if [ "$(_mcp_sidecar_field "$_msa_status" health)" = serving ]; then
+            _msa_url="$(_mcp_sidecar_field "$_msa_status" url)"
+            case "$_msa_url" in http://127.0.0.1:*) : ;; *) _msa_url="http://127.0.0.1:$EXAKIT_MCP_SIDECAR_PORT/mcp" ;; esac
+            _msa_bridge="$(exakit_versions_value components.mcp.bridge 2>/dev/null || true)"
+            manifest_set components.mcp_server.backend sidecar
+            manifest_set components.mcp_server.url "$_msa_url"
+            # The server version is the image's tag (pinned with versions.json's
+            # components.mcp.version): what `exakit version` reads with no pin in
+            # any client entry.
+            _msa_tag="$(exakit_versions_value components.mcp.sidecar_image 2>/dev/null || true)"
+            _msa_tag="${_msa_tag%%@*}"; _msa_tag="${_msa_tag##*:}"
+            case "$_msa_tag" in [0-9]*) manifest_set components.mcp_server.version "$_msa_tag" ;; esac
+            manifest_set components.mcp_server.bridge "${_msa_bridge:-$EXAKIT_MCP_BRIDGE_FALLBACK}"
+            _exakit_log_file "OK    MCP: the launcher's MCP server answers at $_msa_url as $_msa_user"
+            return 0
+        fi
+        [ "$_msa_waited" -lt "$_msa_budget" ] || break
+        sleep 3
+        _msa_waited=$((_msa_waited + 3))
+    done
+    _mcp_sidecar_forget "the sidecar did not report serving within ${_msa_budget}s (exasol mcp status)"
+    return 1
 }

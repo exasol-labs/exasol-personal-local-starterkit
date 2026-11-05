@@ -1597,6 +1597,7 @@ function Invoke-ExakitUninstallRun {
         }
         RecordRemoved "MCP entry removed from the AI clients the kit manages: $mcpClientList"
     }
+    if (Get-Command Remove-McpSidecar -ErrorAction SilentlyContinue) { Remove-McpSidecar -DryRun:$DryRun }
 
     # 3) Installed AI skills: the live kit list, or what the install recorded
     #    once the checkout is gone. One helper, shared with the selectable
@@ -3181,7 +3182,12 @@ function Invoke-ExakitUpdateRun {
                 }
             }
             "mcp" {
-                if ($available) {
+                if ($available -and (Get-ExakitManifestValue "components.mcp_server.backend") -eq "sidecar" -and (Set-McpSidecar)) {
+                    # The launcher's MCP server: the new image goes into its
+                    # definition; the client entries are a URL that does not change.
+                    Set-ExakitManifestValue "desired.mcp" $available
+                    Ok "MCP server updated; database data was not changed"
+                } elseif ($available) {
                     New-McpUpdateSnapshot | Out-Null
                     $script:McpVersion = $available
                     Install-Mcp

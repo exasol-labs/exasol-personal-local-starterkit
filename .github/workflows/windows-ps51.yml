@@ -78,6 +78,12 @@ jobs:
         if: matrix.shard == 2
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/runtime-personal-ps.ps1
+      # The launcher's MCP sidecar as the kit's server: the read-only user, never
+      # SYS; the stdio server whenever the sidecar cannot serve.
+      - name: MCP sidecar backend under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/mcp-sidecar-ps.ps1
       # install.ps1's dry run, run as users run it (a string through iex):
       # nothing left in %TEMP% after success or a failure, and a local-kit
       # copy without the checkout's .git, .claude worktrees and caches.

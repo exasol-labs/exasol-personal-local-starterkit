@@ -48,6 +48,8 @@
     "mcp": {
       "version": "2.3.0",
       "package": "exasol-mcp-server",
+      "sidecar_image": "docker.io/exasol/mcp-server:2.3.0@sha256:061ca243e7c50728c394a4ecf329993a6774ddde0d33bbabafbe8140c2a7c75f",
+      "bridge": "mcp-proxy@0.13.0",
       "severity": "normal"
     },
     "pyexasol": {
@@ -56,7 +58,7 @@
       "severity": "normal"
     },
     "skills": {
-      "version": "1.18.11",
+      "version": "1.18.12",
       "severity": "normal"
     },
     "dash-server": {
