@@ -85,6 +85,8 @@ def register_autostart(ctx: KitContext, addon_id: str, module: object) -> bool:
     if ctx.manifest.get("autostart.enabled") is not True or not callable(command_fn):
         return False
     argv = command_fn(ctx)
+    if argv is None:
+        return False                    # nothing to start at login: the service follows the database (a sidecar)
     if not isinstance(argv, list) or not argv or not all(isinstance(item, str) and item for item in argv):
         raise AddonFailure(f"{addon_id}: invalid autostart command")
     label = f"com.exasol.exakit.{addon_id}"

@@ -31,6 +31,117 @@ HEX = re.compile(r"^[0-9a-f]{64}$")
 IDENT = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 
 
+# --- the engine as an Exasol Personal sidecar (launcher 2.4.0+) ---------------
+# Where versions.json pins a scheduler image by digest (components.exasol-
+# scheduler.image) and the launcher has sidecars, the engine runs as the
+# deployment's `exasol-scheduler` sidecar: started, stopped and destroyed with
+# the database, nothing on the host to supervise. Connected as scheduler_svc,
+# never SYS: the definition is the kit's, written whole into the deployment's
+# sidecars.yaml (the password read from the credential file by the editor) and
+# applied by `exasol start`. Every exakit command stays the same; an install
+# keeps the backend it was made with (components.exasol_scheduler.backend), and
+# EXAKIT_EXASOL_SCHEDULER_BACKEND=host keeps the native engine.
+SIDECAR = ID
+SIDECAR_PYYAML = os.environ.get("EXAKIT_SIDECAR_PYYAML", "PyYAML==6.0.3")
+
+
+def _sidecar_image(ctx: KitContext) -> str | None:
+    image = ctx.versions_document().get("components", {}).get(ID, {}).get("image")
+    return image if isinstance(image, str) and "@sha256:" in image else None
+
+
+def _launcher(ctx: KitContext) -> str | None:
+    for candidate in (ctx.manifest.get("components.personal.ownership_path"), os.environ.get("EXAKIT_PERSONAL_BIN"),
+                      str(ctx.bin_dir / ("exasol.exe" if os.name == "nt" else "exasol")), shutil.which("exasol")):
+        if candidate and Path(candidate).is_file():
+            return str(candidate)
+    return None
+
+
+def _deployment(ctx: KitContext) -> Path | None:
+    raw = os.environ.get("EXAKIT_PERSONAL_DEPLOY_DIR") or ctx.manifest.get("runtime.deployment_dir")
+    return Path(str(raw)) if raw and Path(str(raw)).is_dir() else None
+
+
+def _launch(ctx: KitContext, *args: str, timeout: int = 300) -> subprocess.CompletedProcess:
+    launcher = _launcher(ctx)
+    if not launcher:
+        raise AddonFailure("The Exasol Personal launcher is missing; repair with: exakit update personal")
+    return subprocess.run([launcher, *args], capture_output=True, text=True, check=False, timeout=timeout)
+
+
+def _sidecar_mode(ctx: KitContext) -> bool:
+    recorded = ctx.manifest.get(f"{RECEIPT}.backend")
+    if recorded in ("sidecar", "host"):
+        return recorded == "sidecar"
+    if os.environ.get("EXAKIT_EXASOL_SCHEDULER_BACKEND") == "host" or not _sidecar_image(ctx):
+        return False
+    if ctx.manifest.get("runtime.type") != "personal" or not _deployment(ctx) or not _launcher(ctx):
+        return False
+    try:
+        help_text = _launch(ctx, "--help", timeout=30).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return bool(re.search(r"(?m)^\s*sidecar(\s|,|$)", help_text))
+
+
+def _sidecar_definition(ctx: KitContext, user: str, schema: str) -> dict:
+    def ref(key: str) -> dict:
+        return {"secretKeyRef": {"name": "exasol-database", "key": key}}
+    return {"enabled": True, "container": {
+        "image": _sidecar_image(ctx), "imagePullPolicy": "IfNotPresent", "restartPolicy": "Always",
+        "env": [{"name": "EXA_HOST", "valueFrom": ref("host")}, {"name": "EXA_PORT", "valueFrom": ref("port")},
+                {"name": "EXA_USER", "value": user}, {"name": "EXA_PASSWORD", "valueFile": str(paths(ctx)[4])},
+                {"name": "EXA_SCHEMA", "value": schema}, {"name": "EXA_TLS", "value": "true"},
+                {"name": "EXA_VALIDATE_SERVER_CERT", "value": "false"},
+                {"name": "EXASOL_TELEMETRY_DISABLE", "value": "1"}]}}
+
+
+def _edit_sidecars(ctx: KitContext, *args: str) -> str:
+    deployment = _deployment(ctx)
+    if deployment is None:
+        raise AddonFailure("The Exasol Personal deployment was not found; check exakit status")
+    command = [str(ctx.require_uv()), "run", "--no-project", "--quiet", "--with", SIDECAR_PYYAML, "python",
+               str(ctx.root / "setup" / "lib" / "sidecar_definition.py"), args[0],
+               str(deployment / "sidecars.yaml"), SIDECAR, *args[1:]]
+    result = subprocess.run(command, capture_output=True, text=True, check=False, timeout=300)
+    if result.returncode != 0:
+        raise AddonFailure("The scheduler sidecar definition could not be written; see exakit logs setup")
+    return result.stdout.strip()
+
+
+def _sidecar_status(ctx: KitContext) -> dict:
+    try:
+        result = _launch(ctx, "sidecar", "status", SIDECAR, "--json", timeout=60)
+        doc = json.loads(result.stdout or "{}")
+    except (AddonFailure, OSError, ValueError, subprocess.TimeoutExpired):
+        return {}
+    if isinstance(doc, list):
+        doc = doc[0] if doc else {}
+    return doc if isinstance(doc, dict) else {}
+
+
+def _sidecar_put(ctx: KitContext, user: str, schema: str) -> None:
+    with tempfile.TemporaryDirectory(prefix="exakit-scheduler-sidecar-") as temp:
+        definition = Path(temp) / "definition.json"
+        definition.write_text(json.dumps(_sidecar_definition(ctx, user, schema)), encoding="utf-8")
+        changed = _edit_sidecars(ctx, "put", str(definition)) == "changed"
+    if changed or not _sidecar_status(ctx).get("running"):
+        # Reconciles a running deployment: only this container is (re)created.
+        if _launch(ctx, "start").returncode != 0:
+            raise AddonFailure("exasol start did not apply the scheduler sidecar; see exakit logs setup")
+
+
+def _install_sidecar(ctx: KitContext) -> None:
+    user, schema, bootstrap = _user(ctx)
+    _sidecar_put(ctx, user, schema)
+    tag = str(_sidecar_image(ctx)).split("@")[0].rsplit(":", 1)[-1].removeprefix("v")
+    ctx.manifest.set_many({f"{RECEIPT}.version": tag, f"{RECEIPT}.backend": "sidecar",
+                           f"{RECEIPT}.image": _sidecar_image(ctx), f"{RECEIPT}.db_user": user.lower(),
+                           f"{RECEIPT}.schema": schema, f"{RECEIPT}.ownership": "kit",
+                           f"{RECEIPT}.bootstrap_revoked": not bootstrap})
+
+
 def paths(ctx: KitContext) -> tuple[Path, Path, Path, Path, Path]:
     recorded_engine = ctx.manifest.get(f"{RECEIPT}.engine") if ctx.manifest.get(f"{RECEIPT}.ownership") == "kit" else None
     home = Path(recorded_engine).parent.parent if recorded_engine else ctx.path("EXAKIT_EXASOL_SCHEDULER_HOME", ctx.home / "exasol-scheduler")
@@ -73,6 +184,9 @@ def applicable_reason(ctx: KitContext) -> str:
 
 
 def installed_version(ctx: KitContext) -> str | None:
+    if ctx.manifest.get(f"{RECEIPT}.backend") == "sidecar":
+        version = ctx.manifest.get(f"{RECEIPT}.version")
+        return str(version).removeprefix("v") if version else None
     engine = paths(ctx)[2]
     version = ctx.manifest.get(f"{RECEIPT}.version")
     return str(version).removeprefix("v") if engine.is_file() and version else None
@@ -270,6 +384,9 @@ def install(ctx: KitContext) -> None:
     if ctx.manifest.get(f"{RECEIPT}.ownership") in ("user", "unknown") or \
        (not ctx.manifest.get(f"{RECEIPT}.version") and system_present(ctx)):
         raise AddonFailure("An external Scheduler is present; the kit leaves it under its owner's control")
+    if _sidecar_mode(ctx):
+        _install_sidecar(ctx)
+        return
     ctx.require_uv()
     version = _version(ctx)
     home, launcher, engine, _, _ = paths(ctx)
@@ -347,10 +464,20 @@ def _legacy_pids(ctx: KitContext) -> set[int]:
 
 
 def _running(ctx: KitContext) -> bool:
+    if ctx.manifest.get(f"{RECEIPT}.backend") == "sidecar":
+        return bool(_sidecar_status(ctx).get("running"))
     return _service(ctx).recorded_pid() is not None or bool(_legacy_pids(ctx))
 
 
 def status(ctx: KitContext) -> str:
+    if ctx.manifest.get(f"{RECEIPT}.backend") == "sidecar":
+        if not installed_version(ctx):
+            return "not installed"
+        state = _sidecar_status(ctx)
+        if state.get("running"):
+            return "running"
+        reason = state.get("error") or state.get("healthError")
+        return f"stopped ({reason}; diagnose: exasol sidecar status {SIDECAR})" if reason else "stopped"
     home, launcher, _, _, _ = paths(ctx)
     if not launcher.is_file() or not installed_version(ctx):
         return "not installed"
@@ -366,6 +493,11 @@ def start(ctx: KitContext) -> None:
     if not installed_version(ctx):
         raise AddonFailure("Scheduler is not installed; run exakit marketplace exasol-scheduler")
     if _running(ctx):
+        return
+    if ctx.manifest.get(f"{RECEIPT}.backend") == "sidecar":
+        # Re-enabling keeps the saved definition (the scheduler user, the image).
+        if _launch(ctx, "sidecar", "enable", SIDECAR).returncode != 0:
+            raise AddonFailure(f"The scheduler sidecar did not start; diagnose: exasol sidecar status {SIDECAR}")
         return
     home, _, engine, log, credential = paths(ctx)
     python = venv_python(home / "python")
@@ -398,6 +530,10 @@ def start(ctx: KitContext) -> None:
 
 
 def stop(ctx: KitContext) -> None:
+    if ctx.manifest.get(f"{RECEIPT}.backend") == "sidecar":
+        # Disable keeps the definition, so the next start brings back the same one.
+        _launch(ctx, "sidecar", "disable", SIDECAR)
+        return
     service = _service(ctx)
     pid = service.recorded_pid()
     if pid:
@@ -448,7 +584,9 @@ def validate(ctx: KitContext) -> bool:
     return False
 
 
-def autostart_command(ctx: KitContext) -> list[str]:
+def autostart_command(ctx: KitContext) -> list[str] | None:
+    if ctx.manifest.get(f"{RECEIPT}.backend") == "sidecar":
+        return None                     # a sidecar comes back with the database
     return [str(paths(ctx)[1])]
 
 
@@ -463,6 +601,16 @@ def summary(ctx: KitContext) -> str:
 def update(ctx: KitContext) -> None:
     if ctx.manifest.get(f"{RECEIPT}.ownership") != "kit":
         raise AddonFailure("Scheduler is not kit-owned; its owner manages updates")
+    if ctx.manifest.get(f"{RECEIPT}.backend") == "sidecar":
+        # The new image goes into the definition; exasol start recreates that container.
+        _sidecar_put(ctx, str(ctx.manifest.get(f"{RECEIPT}.db_user", "scheduler_svc")),
+                     str(ctx.manifest.get(f"{RECEIPT}.schema", "SCHED")))
+        tag = str(_sidecar_image(ctx)).split("@")[0].rsplit(":", 1)[-1].removeprefix("v")
+        ctx.manifest.set_many({f"{RECEIPT}.version": tag, f"{RECEIPT}.image": _sidecar_image(ctx),
+                               "desired.exasol_scheduler": tag})
+        if not validate(ctx):
+            raise AddonFailure("Scheduler did not validate after the update")
+        return
     was_running = _running(ctx)
     changed = installed_version(ctx) != _version(ctx)
     if was_running and changed:
@@ -497,6 +645,8 @@ def uninstall(ctx: KitContext, *, dry_run: bool = False) -> list[Path]:
     targets = [path for path in (home, launcher, credential) if path.exists()]
     if dry_run:
         return targets
+    if ctx.manifest.get(f"{RECEIPT}.backend") == "sidecar" and _deployment(ctx) is not None:
+        _launch(ctx, "sidecar", "disable", SIDECAR, "--remove")
     user = _ident(str(ctx.manifest.get(f"{RECEIPT}.db_user", "scheduler_svc")))
     schema = _ident(str(ctx.manifest.get(f"{RECEIPT}.schema", "SCHED")))
     owner = str(ctx.manifest.get("runtime.user", "sys"))
