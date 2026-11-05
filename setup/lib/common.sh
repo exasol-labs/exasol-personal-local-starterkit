@@ -5821,6 +5821,15 @@ exakit_print_ready_line() {
     [ -z "${EXAKIT_SOFT_FAILED:-}" ] || return 0
     printf '\n'
     ok "Your starter kit is ready to use."
+    # Where each recorded persona starts, which only `exakit persona show` named
+    # before (NEW-04). Nothing for a kit without a persona or one with no first step.
+    if command -v _exakit_persona_service >/dev/null 2>&1; then
+        for _prl_id in $(manifest_get persona.id 2>/dev/null | tr ',' ' '); do
+            _prl_step="$(_exakit_persona_service show "$_prl_id" 2>/dev/null | sed -n 's/^  Start here  *//p' | head -1)"
+            [ -n "$_prl_step" ] || continue
+            info "Start here ($(_exakit_persona_service title "$_prl_id" 2>/dev/null || printf '%s' "$_prl_id")): $_prl_step"
+        done
+    fi
     return 0
 }
 

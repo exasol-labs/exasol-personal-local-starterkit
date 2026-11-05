@@ -6851,6 +6851,16 @@ function Write-ExakitReadyLine {
     if ($script:ExakitSoftFailed.Count -gt 0) { return }
     Write-Host ""
     Ok "Your starter kit is ready to use."
+    # Where each recorded persona starts (NEW-04). Twin of exakit_print_ready_line.
+    if (Get-Command Invoke-ExakitPersonaService -ErrorAction SilentlyContinue) {
+        foreach ($id in @(("" + (Get-ExakitManifestValue "persona.id")) -split ',' | Where-Object { $_ })) {
+            $step = @(Invoke-ExakitPersonaService "show" $id) | Where-Object { "$_" -match '^  Start here\s+' } | Select-Object -First 1
+            if (-not $step) { continue }
+            $title = @(Invoke-ExakitPersonaService "title" $id) | Select-Object -First 1
+            if (-not $title) { $title = $id }
+            Info "Start here ($title): $(("$step" -replace '^  Start here\s+', '').Trim())"
+        }
+    }
 }
 
 function Request-ExakitMarketplaceOffer {
