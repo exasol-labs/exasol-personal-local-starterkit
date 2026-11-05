@@ -579,7 +579,17 @@ def _mlflow(ctx: KitContext, *args: str) -> subprocess.CompletedProcess[str]:
                           env={**os.environ, "EXAKIT_HOME": str(ctx.home)})
 
 
+def _notebook_missing(ctx: KitContext) -> bool:
+    """The MLflow server, its login entry and the container build tools run from the notebook environment: removing
+    the notebook add-on took them with it, which used to read as a plain "stopped" (DAY-06)."""
+    from addons.notebook import paths
+
+    return not venv_python(paths(ctx)[0]).is_file()
+
+
 def status(ctx: KitContext) -> str:
+    if _notebook_missing(ctx):
+        return "stopped (needs the notebook add-on, which runs its MLflow server: exakit marketplace notebook)"
     result = _mlflow(ctx, "status", "--json")
     try:
         state = json.loads(result.stdout).get("status")

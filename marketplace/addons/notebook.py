@@ -439,6 +439,11 @@ def uninstall(ctx: KitContext, *, dry_run: bool = False) -> list[Path]:
         targets.append(notebooks)
     if dry_run:
         return [path for path in targets if path.exists()]
+    if os.environ.get("EXAKIT_UNINSTALL_FULL") != "1" and ctx.manifest.get("components.udf_devkit.version"):
+        # Said, not refused: removing both in either order is fine. udf-devkit's
+        # status names the same thing until the notebook is back (DAY-06).
+        ctx.activity("udf-devkit's MLflow server and UDF build tools ran from this environment; "
+                     "reinstall with exakit marketplace notebook, or remove them too: exakit uninstall udf-devkit")
     from notebook_cli import OnDemandServer
 
     OnDemandServer(ctx, "jupyterlab").stop()
