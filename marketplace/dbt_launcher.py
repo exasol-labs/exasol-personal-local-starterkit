@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 import kit_telemetry
+import kit_tls
 
 
 def main() -> int:
@@ -20,6 +21,7 @@ def main() -> int:
     kit_telemetry.default_off(env)
     env.setdefault("DBT_ENV_SECRET_EXASOL_PASSWORD", credential.read_text(encoding="utf-8").strip())
     env.setdefault("DBT_PROFILES_DIR", paths["profiles_dir"])
+    env.setdefault("EXAKIT_DBT_DSN", kit_tls.client_dsn(doc))      # pinned once the kit recorded the certificate
     dbt = Path(paths["venv"]) / ("Scripts/dbt.exe" if os.name == "nt" else "bin/dbt")
     return subprocess.call([str(dbt), *sys.argv[1:]], env=env)
 

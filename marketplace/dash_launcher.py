@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 import kit_telemetry
+import kit_tls
 
 
 NO_READER = ("Dash Server starts without a database connection: the kit's read-only database user is not set up, "
@@ -45,6 +46,20 @@ def admin_profile_to_repair(instance: Path, name: str, runtime: dict, user: str)
     return str(stored.get("user", "")).upper() == admin and stored.get("dsn") == runtime.get("dsn")
 
 
+def pin_to_repair(instance: Path, name: str, runtime: dict, desired: str) -> bool:
+    """True when the stored profile is the kit's own for this database (its host and port) but not pinned to the
+    certificate the kit recorded - seeded before the pin, or pinned to an older one (audit SEC-14). A profile pointing
+    anywhere else, one a person or an agent set, is left alone."""
+    if "/" not in desired:
+        return False
+    try:
+        stored = json.loads((instance / "gitops-repo" / "profiles" / "exasol" / f"{name}.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    have = str(stored.get("dsn") or "")
+    return bool(have) and have != desired and kit_tls.host_port(have) == kit_tls.host_port(str(runtime.get("dsn") or ""))
+
+
 def main() -> int:
     home = Path(os.environ.get("EXAKIT_HOME", str(Path.home() / ".exasol-starter-kit")))
     doc = json.loads((home / "manifest.json").read_text(encoding="utf-8"))
@@ -61,11 +76,12 @@ def main() -> int:
         name = env.get("EXAKIT_DASH_SERVER_PROFILE", "starter-kit")
         env.setdefault("EXA_PASSWORD", Path(credential).read_text(encoding="utf-8").strip())
         env["DASH_SERVER_EXASOL_PROFILE_NAME"] = name
-        env["DASH_SERVER_EXASOL_DSN"] = runtime["dsn"]
+        env["DASH_SERVER_EXASOL_DSN"] = kit_tls.client_dsn(doc)       # pinned once the kit recorded the certificate
         env["DASH_SERVER_EXASOL_USER"] = user
         env["DASH_SERVER_EXASOL_SECRET_ENV_VAR"] = "EXA_PASSWORD"
         env.setdefault("DASH_SERVER_EXASOL_TLS_VERIFY", "false")
-        if admin_profile_to_repair(Path(addon["instance"]), name, runtime, user):
+        if admin_profile_to_repair(Path(addon["instance"]), name, runtime, user) or \
+                pin_to_repair(Path(addon["instance"]), name, runtime, env["DASH_SERVER_EXASOL_DSN"]):
             env["DASH_SERVER_EXASOL_OVERWRITE"] = "true"
     env["DASH_SERVER_HOST"] = "127.0.0.1"
     env["DASH_SERVER_PORT"] = str(port)

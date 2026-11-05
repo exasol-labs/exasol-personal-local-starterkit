@@ -13,6 +13,27 @@ import time
 from pathlib import Path
 
 import kit_telemetry
+import kit_tls
+
+
+def connection_env(doc: dict, env: dict, host: str, port: int) -> None:
+    """The engine's connection in its environment: pinned through EXA_DSN once the kit recorded the database's
+    certificate, else the EXA_* parts as before. What the caller already set is kept."""
+    receipt = doc.get("components", {}).get("exasol_scheduler", {})
+    pin = kit_tls.fingerprint(doc)
+    if pin and not any(env.get(name) for name in ("EXA_DSN", "EXA_HOST")):
+        # Pinned to the certificate the kit recorded (audit SEC-14): the engine takes the pin only in its connection
+        # string, so the connection is EXA_DSN - the user and address, never the password, which stays EXA_PASSWORD.
+        user = str(receipt.get("db_user", "scheduler_svc"))
+        env["EXA_DSN"] = (f"exasol://{user}@{host or '127.0.0.1'}:{port}"
+                          f"?tls=1&validateservercertificate=0&certificate_fingerprint={pin}")
+        env.setdefault("EXA_SCHEMA", str(receipt.get("schema", "SCHED")))
+    else:
+        for name, value in (("EXA_HOST", host or "127.0.0.1"), ("EXA_PORT", str(port)),
+                            ("EXA_USER", receipt.get("db_user", "scheduler_svc")),
+                            ("EXA_SCHEMA", receipt.get("schema", "SCHED")),
+                            ("EXA_TLS", "true"), ("EXA_VALIDATE_SERVER_CERT", "false")):
+            env.setdefault(name, str(value))
 
 
 def main() -> int:
@@ -29,14 +50,9 @@ def main() -> int:
         port = int(port_text)
     except ValueError:
         port = 8563
-    receipt = doc.get("components", {}).get("exasol_scheduler", {})
     env = os.environ.copy()
     kit_telemetry.default_off(env)
-    for name, value in (("EXA_HOST", host or "127.0.0.1"), ("EXA_PORT", str(port)),
-                        ("EXA_USER", receipt.get("db_user", "scheduler_svc")),
-                        ("EXA_SCHEMA", receipt.get("schema", "SCHED")),
-                        ("EXA_TLS", "true"), ("EXA_VALIDATE_SERVER_CERT", "false")):
-        env.setdefault(name, str(value))
+    connection_env(doc, env, host, port)
     if not env.get("EXA_PASSWORD"):
         try:
             env["EXA_PASSWORD"] = args.credential.read_text(encoding="utf-8").strip()
