@@ -456,10 +456,19 @@ def _engine(ctx: KitContext) -> dict[str, str]:
                     if probe.returncode == 0 and socket_path and Path(socket_path).is_socket():
                         env["DOCKER_HOST"] = "unix://" + socket_path
                         return env
-                raise UdfFailure("Podman has no Docker-compatible API socket.", 5, "install")
+                # Rootless Podman on Linux serves its API only when its socket unit runs, which no distro turns
+                # on by default; the remedy is that one command (LNX-04).
+                if sys.platform.startswith("linux"):
+                    remedy = "systemctl --user enable --now podman.socket"
+                elif os.name == "nt" or sys.platform == "darwin":
+                    remedy = "podman machine start"
+                else:
+                    remedy = "start Podman's API service: podman system service"
+                raise UdfFailure("Podman has no Docker-compatible API socket.", 5, "install", remedy)
         except (OSError, subprocess.TimeoutExpired):
             pass
-    raise UdfFailure("A running Docker or Podman engine is needed to build a UDF container.", 5, "install")
+    raise UdfFailure("A running Docker or Podman engine is needed to build a UDF container.", 5, "install",
+                     "start Docker or Podman (podman machine start on macOS and Windows), then retry")
 
 
 def build(ctx: KitContext, requirements: Path, alias: str, *, yes: bool) -> list[dict]:
