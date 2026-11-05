@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import platform
 import shutil
 import signal
 import socket
@@ -182,6 +183,27 @@ class OnDemandServer:
         (home / ("open-jupyter.html" if self.front == "jupyterlab" else "open-marimo.html")).unlink(missing_ok=True)
 
 
+def _open_in_windows(target: Path) -> bool:
+    """Inside WSL the browser is a Windows one, and file:///home/... means nothing to it (WSL-03): it is handed the
+    file's own Windows path (\\\\wsl.localhost\\<distro>\\...), which Explorer opens in the default browser.
+    The token stays in the file; only its path is on the command line. False outside WSL or when that fails."""
+    if not os.environ.get("WSL_DISTRO_NAME") and "microsoft" not in platform.release().lower():
+        return False
+    wslpath, explorer = shutil.which("wslpath"), shutil.which("explorer.exe")
+    if not wslpath or not explorer:
+        return False
+    try:
+        windows = subprocess.run([wslpath, "-w", str(target)], capture_output=True, text=True, check=False,
+                                 timeout=10).stdout.strip()
+        if not windows:
+            return False
+        # explorer.exe exits 1 even when it opened the file, so its exit code says nothing.
+        subprocess.run([explorer, windows], capture_output=True, check=False, timeout=30)
+        return True
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+
+
 def _open_logged_in(ctx: KitContext, front: str, url: str) -> None:
     _, home, _ = notebook.paths(ctx)
     home.mkdir(parents=True, exist_ok=True)
@@ -189,6 +211,8 @@ def _open_logged_in(ctx: KitContext, front: str, url: str) -> None:
     # The browser receives a file path. The token stays in a 0600 local file,
     # not in a shell command or visible CLI argument.
     write_private(target, "<!doctype html><meta http-equiv=refresh content=\"0;url=" + url.replace('"', "%22") + "\">\n")
+    if _open_in_windows(target):
+        return
     try:
         opened = webbrowser.open(target.as_uri())
     except webbrowser.Error:
