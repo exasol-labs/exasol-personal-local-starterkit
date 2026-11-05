@@ -486,5 +486,30 @@ class AdapterDryRunTest(unittest.TestCase):
         self._assert_preserved()
 
 
+    @unittest.skipUnless(shutil.which("pwsh"), "PowerShell is not installed")
+    def test_powershell_reader_settles_each_tool_row(self) -> None:
+        """QAT-11: the tool events apply.py emits (notebook:jupyterlab, notebook:marimo) reach the PowerShell reader's
+        tool arm, which says how each tool settled; nothing else fed it a tool event."""
+        lines = ["@@EXAKIT|notebook|installing||0", "@@EXAKIT|notebook|done|ready|2",
+                 "@@EXAKIT|notebook:jupyterlab|done|JupyterLab 4.4 ready|", "@@EXAKIT|notebook:marimo|skipped|not chosen|"]
+        fake = self.base / ("fake-uv.cmd" if os.name == "nt" else "fake-uv")
+        if os.name == "nt":
+            fake.write_text("@echo off\r\n" + "".join("echo " + line.replace("|", "^|") + "\r\n" for line in lines),
+                            encoding="ascii")
+        else:
+            fake.write_text("#!/bin/sh\nprintf '%s\\n' " + " ".join(f"'{line}'" for line in lines) + "\n",
+                            encoding="utf-8")
+            fake.chmod(0o755)
+        script = (f'. "{ROOT / "setup/lib/exakit-common.ps1"}"\n'
+                  'function Invoke-ExakitMarketplaceQuestions { param([string[]]$Ids) }\n'
+                  f'function Get-ExakitUvBin {{ return "{fake}" }}\n'
+                  'Invoke-ExakitMarketplaceApplyPython -Ids @("notebook")\n')
+        result = subprocess.run(["pwsh", "-NoProfile", "-Command", script], env=self._environment(),
+                                capture_output=True, text=True, timeout=30, check=False)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("jupyterlab: JupyterLab 4.4 ready", result.stdout)
+        self.assertIn("marimo: not chosen", result.stdout)
+        self._assert_preserved()
+
 if __name__ == "__main__":
     unittest.main()
