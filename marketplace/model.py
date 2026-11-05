@@ -32,6 +32,9 @@ class Addon:
     github: dict = field(default_factory=dict, compare=False)
     # Choices the backend still accepts but no screen offers ("visible": false), until they are fully supported.
     hidden_choices: tuple[str, ...] = ()
+    # An add-on the kit builds itself has no repository of its own: github names the upstream it is built on, whose
+    # About describes that upstream, not the add-on (DOC-13). kit_about is the one line the kit writes for it instead.
+    kit_about: str = field(default="", compare=False)
 
 
 def display_name(name: str, addon_id: str) -> str:
@@ -112,9 +115,13 @@ def load_addons(root: Path) -> list[Addon]:
                 validated_choices.append((choice_id, choice_label))
             else:
                 hidden_choices.append(choice_id)
+        kit_about = row.get("kit_about", "")
+        if not isinstance(kit_about, str) or len(kit_about) > 120 or any(c in kit_about for c in "\r\n|\"") \
+                or any(ord(c) < 32 for c in kit_about):
+            raise CatalogError(f"{addon_id}: kit_about must be one line of at most 120 characters")
         seen.add(addon_id)
         addons.append(Addon(addon_id, label, row["backend"], version, fallback, visible,
-                            tuple(validated_choices), github, tuple(hidden_choices)))
+                            tuple(validated_choices), github, tuple(hidden_choices), kit_about.strip()))
     return addons
 
 

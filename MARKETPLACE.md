@@ -384,7 +384,11 @@ add-on needs no shell or PowerShell lifecycle implementation.
    `visible`, and `default_version`; then run `python3 tools/addon_github.py`,
    which writes the repository's `url`, `name` and `about` from GitHub. Never
    type those by hand, and never add a `label`: the row's name is the
-   repository's. Set `visible: false`
+   repository's. The one exception is an add-on the kit builds itself and that
+   has no repository of its own (udf-devkit): its `github` block names the
+   upstream it is built on, so the row adds `kit_about`, one line (at most 120
+   characters, at the end of the row) shown in place of that upstream's About.
+   Set `visible: false`
    to stop new selections while keeping an existing installation manageable.
    Add `choices` only when the add-on has user-selectable variants.
 2. Add `marketplace/addons/<id_with_underscores>.py`. Implement the lifecycle

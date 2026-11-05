@@ -4712,6 +4712,11 @@ exakit_marketplace_addon_description() {
             return 0
         fi
     fi
+    _mad_text="$(_exakit_addon_kit_about "$1" 2>/dev/null)"
+    if [ -n "$_mad_text" ]; then
+        printf '%s\n' "$_mad_text"
+        return 0
+    fi
     _mad_cache="$(_exakit_about_cache_path "$1")"
     if [ -f "$_mad_cache" ] && _exakit_about_cache_matches "$1"; then
         # Cleaned again on the way out: the cache is a file anyone could have
@@ -4746,8 +4751,18 @@ exakit_marketplace_addon_name() {
 
 # _exakit_marketplace_addon_about_offline <id> — the About with no lookup: the
 # cached one at any age, else the catalog's copy; empty when neither exists.
+# _exakit_addon_kit_about <id> — the line the kit writes for an add-on it builds
+# itself (catalog kit_about, DOC-13): its github block names the upstream it is
+# built on, whose About describes that upstream. Empty for every other add-on.
+_exakit_addon_kit_about() {
+    _aka_cat="$(_exakit_marketplace_root 2>/dev/null)/marketplace/catalog.json"
+    [ -f "$_aka_cat" ] || return 1
+    grep -F "{\"id\": \"$1\"," "$_aka_cat" 2>/dev/null | head -1 | sed -n 's/.*"kit_about": "\([^"]*\)".*/\1/p'
+}
+
 _exakit_marketplace_addon_about_offline() {
-    _mao_text=""
+    _mao_text="$(_exakit_addon_kit_about "$1" 2>/dev/null)"
+    if [ -n "$_mao_text" ]; then printf '%s\n' "$_mao_text"; return 0; fi
     _exakit_about_cache_matches "$1" && \
         _mao_text="$(_exakit_about_cap "$(head -1 "$(_exakit_about_cache_path "$1")" 2>/dev/null | _exakit_about_sanitise)")"
     [ -n "$_mao_text" ] || _mao_text="$(_exakit_about_cap "$(_exakit_addon_github "$1" about 2>/dev/null | _exakit_about_sanitise)")"

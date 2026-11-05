@@ -80,6 +80,12 @@ class MarketplaceModelTest(unittest.TestCase):
             catalog_path.write_text(json.dumps(catalog))
             with self.subTest(message.strip()), self.assertRaisesRegex(CatalogError, message.strip()):
                 load_addons(self.root)
+        for bad in ("two\nlines", "x" * 121, 'a "quote"', 7):
+            catalog = json.loads(json.dumps(original))
+            catalog["addons"][0]["kit_about"] = bad
+            catalog_path.write_text(json.dumps(catalog))
+            with self.subTest(kit_about=bad), self.assertRaisesRegex(CatalogError, "kit_about must be one line"):
+                load_addons(self.root)
         catalog = json.loads(json.dumps(original))
         catalog["addons"][0]["label"] = "dash-server (hand-typed)"
         catalog_path.write_text(json.dumps(catalog))

@@ -11,6 +11,6 @@
       {"id": "marimo", "label": "Marimo"},
       {"id": "positron", "label": "Positron (configure existing app)", "visible": false}
     ]},
-    {"id": "udf-devkit", "github": {"repo": "exasol/script-languages-release", "url": "https://github.com/exasol/script-languages-release", "name": "script-languages-release", "about": "Release Repository for Script Language Container for user defined functions (UDF's) that can be used in the EXASOL database."}, "backend": "python", "visible": true, "default_version": "0.1.0"}
+    {"id": "udf-devkit", "github": {"repo": "exasol/script-languages-release", "url": "https://github.com/exasol/script-languages-release", "name": "script-languages-release", "about": "Release Repository for Script Language Container for user defined functions (UDF's) that can be used in the EXASOL database."}, "backend": "python", "visible": true, "default_version": "0.1.0", "kit_about": "Run Python and Rust code inside the database: UDF containers, model files in BucketFS, a local MLflow"}
   ]
 }

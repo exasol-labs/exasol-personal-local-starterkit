@@ -30,6 +30,16 @@ for id in $ids; do
     check "$id has a repository either way" "yes" "$([ -n "$(_exakit_python3_present() { return 1; }; _exakit_addon_repo "$id")" ] && echo yes || echo no)"
 done
 
+# DOC-13: an add-on the kit builds itself (udf-devkit) is described by the line
+# the kit writes, not by the upstream repository its github block names; every
+# other add-on keeps its repository's About. The row's github block still reads
+# the same with and without python (the kit_about sits after it).
+check "udf-devkit reads the kit's own line" \
+    "Run Python and Rust code inside the database: UDF containers, model files in BucketFS, a local MLflow" \
+    "$(exakit_marketplace_addon_description udf-devkit)"
+check "...in the offline listing too" "$(exakit_marketplace_addon_description udf-devkit)" "$(_exakit_marketplace_addon_about_offline udf-devkit)"
+check "an add-on with its own repository has no kit line" "" "$(_exakit_addon_kit_about dbt-exasol)"
+
 echo ""
 echo "catalog-github-sed.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

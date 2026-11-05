@@ -888,7 +888,7 @@ def main() -> int:
                              or row.version or row.default_version,
                              "choices": row.choices, "detail": status,
                              # The shell's live About, else the catalog's copy of it, else the help pointer.
-                             "about": said or row.github.get("about") or f"Details: exakit help {row.id}",
+                             "about": said or row.kit_about or row.github.get("about") or f"Details: exakit help {row.id}",
                              "reason": "Installed" if installed else status,
                              "disabled": status != "available"})
             if args.recorded:

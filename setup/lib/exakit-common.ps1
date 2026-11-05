@@ -5556,6 +5556,9 @@ function Get-ExakitMarketplaceAddons {
             throw "Invalid marketplace definition: ${id}: github must name the add-on's repository (tools/addon_github.py)"
         }
         if ($null -ne $row.visible -and $row.visible -isnot [bool]) { throw "Invalid visible setting: $id" }
+        # The line the kit writes for an add-on it builds itself (DOC-13). Twin of model.load_addons.
+        $kitAbout = ([string]$row.kit_about).Trim()
+        if ($kitAbout.Length -gt 120 -or $kitAbout -match '[\p{Cc}|"]') { throw "Invalid marketplace definition: ${id}: kit_about must be one line of at most 120 characters" }
         $seen[$id] = $true
         $visible = ($row.visible -ne $false)
         $stem = (($id -split '[-_]') | ForEach-Object { $_.Substring(0, 1).ToUpperInvariant() + $_.Substring(1) }) -join ''
@@ -5563,6 +5566,7 @@ function Get-ExakitMarketplaceAddons {
         $addon = [pscustomobject]@{
             Id = $id; Label = $label
             GitHubRepo = $ghRepo; GitHubUrl = [string]$gh.url; GitHubName = $ghName; GitHubAbout = $ghAbout
+            KitAbout = $kitAbout
             InstallFn = "Invoke-Marketplace${stem}Install"
             ValidateFn = "Invoke-Marketplace${stem}Validate"
             UpdateFn = "Invoke-Marketplace${stem}Update"
@@ -6065,6 +6069,10 @@ function Get-ExakitMarketplaceAddonDescription {
             if ($parts.Count -eq 2 -and $parts[0] -eq $Id -and $parts[1]) { return $parts[1] }
         }
     }
+    # An add-on the kit builds itself: the kit's own line (DOC-13). Twin of exakit_marketplace_addon_description.
+    $kit = $null
+    try { $kit = Get-ExakitMarketplaceAddon $Id } catch { $kit = $null }
+    if ($kit -and $kit.KitAbout) { return [string]$kit.KitAbout }
     $lines = @(Get-ExakitAboutCacheLines $Id)
     if ($lines.Count -ge 1 -and $lines[0]) {
         if ($lines.Count -ge 4 -and $lines[3] -eq "true") { return "$($lines[0]) (archived on GitHub)" }
@@ -6100,6 +6108,9 @@ function Get-ExakitAboutCacheLines {
 # _exakit_marketplace_addon_about_offline.
 function Get-ExakitMarketplaceAddonAboutOffline {
     param([string]$Id)
+    $kit = $null
+    try { $kit = Get-ExakitMarketplaceAddon $Id } catch { $kit = $null }
+    if ($kit -and $kit.KitAbout) { return [string]$kit.KitAbout }
     $lines = @(Get-ExakitAboutCacheLines $Id)
     if ($lines.Count -ge 1 -and $lines[0]) { return $lines[0] }
     $addon = $null

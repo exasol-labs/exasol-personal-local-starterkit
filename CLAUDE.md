@@ -31,7 +31,11 @@ Working on the code in this repo:
   `docs`, plus the two CI-guard entries. The add-on's **name, link and
   description are never typed into this repo** — they are that repository's on
   GitHub: looked up only while installing and showing updates, cached, and the
-  catalog's copy is the answer whenever a lookup fails. Never add per-add-on case
+  catalog's copy is the answer whenever a lookup fails. The one exception: an
+  add-on the kit builds itself, with no repository of its own (udf-devkit),
+  whose `github` block names the upstream it is built on — its row's
+  `kit_about` is the one line the kit writes in place of that upstream's
+  About. Never add per-add-on case
   arms to the registry functions — the generic arms handle registered add-ons,
   and `tests/marketplace.sh` fails on hand-wired ones. Never install an
   add-on from the setup scripts; the marketplace and its closing offer are
