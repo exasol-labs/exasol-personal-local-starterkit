@@ -25,6 +25,8 @@ user's request actually needs, not a manual for the whole kit.
 | Skill | Use it when… |
 |---|---|
 | [`local-agent-ready-starter`](local-agent-ready-starter/SKILL.md) | Setting up the kit and running a first trusted, AI-assisted query — install → connect MCP → load data → ask/inspect/run/validate/rerun. |
+| [`exakit-discovery`](exakit-discovery/SKILL.md) | Answering anything about what this kit has — its commands and exact options, personas, add-ons and how to install/update/remove each, datasets, skills, state — from the kit's own `--json` answers (`catalog`, `help <id>`, `persona list`, `marketplace --list`, `status`, `skills`), never from memory. |
+| [`exakit-personas`](exakit-personas/SKILL.md) | Personas: listing what each brings, `persona plan` for what is still pending, `persona add` / `remove`, `EXAKIT_PERSONA` at install (and why your own answer replaces the persona's), and defining a new persona as a file. |
 
 **The fixed components** — always installed
 

@@ -11,6 +11,7 @@
 - **Your personas' notebooks only.** Picking Data Scientist copies its notebooks; adding ML Engineer later brings that folder. The notebooks folder's README lists what you have, in order, and how to connect a model.
 - **Short notebooks.** Each step says what it does and what to set, in a line or two.
 - **Datasets say what they are.** The data table shows a short description beside each dataset.
+- **An AI agent finds all of this on its own.** Two new skills install with the kit: `exakit-discovery` maps every question about the kit - its commands and options, personas, add-ons and how to install, update or remove each, datasets, skills, state - to the read-only `--json` command that answers it, and says that what the kit does not report does not exist; `exakit-personas` covers listing, `persona plan`, `persona add` / `remove`, `EXAKIT_PERSONA` and a persona file of your own. The marketplace skill gains one table of the same five operations for every add-on, taken from `exakit help <id> --json`.
 
 ### Data Scientist
 

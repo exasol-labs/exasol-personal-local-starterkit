@@ -30,6 +30,30 @@ EXAKIT_MARKETPLACE_ADDONS=dash-server exakit marketplace   # ids csv, or all / n
 Look with `--list` first: it never installs anything, downloads nothing and
 writes nothing.
 
+## Every add-on, the same five operations
+
+Do not compose these from memory: `exakit help <id> --json` returns them for
+that add-on under `management`, beside its `environment` (every variable it
+reads, including its version pin), `platforms`, `commands` and
+`troubleshooting`.
+
+| Operation | Command | `management` key |
+|---|---|---|
+| See what exists and what is installed | `exakit marketplace --list --json` | — |
+| Read one add-on's page | `exakit help <id>` / `exakit help <id> --json` | `help`, `help_json` |
+| Install | `exakit marketplace <id> [<id>...]` | `install` |
+| Update | `exakit update <id> [<id>...]` | `update` |
+| Preview a removal | `exakit uninstall <id> --dry-run` | `uninstall_preview` |
+| Remove | `exakit uninstall <id>` (add `--yes` without a terminal) | `uninstall` |
+| Start / stop its service, if it has one | `exakit start <id>` / `exakit stop <id>` | — |
+| Pin a version | its `EXAKIT_<ID>_VERSION` variable, named in `environment` | — |
+
+`--list --json` rows carry `id`, `status`, `installed`, `ownership`,
+`installed_by_kit`, `version`, `reason` (why it is not offered here), `repo`,
+`docs`, `name`, `url`, `about`. An id not in that list does not exist — say so
+rather than guessing a name; `exakit marketplace <unknown id>` is refused with
+exit 2 and installs nothing (exit 4 first when no kit is installed).
+
 The same variable pre-answers the one-question offer that follows a successful
 interactive install ("Do you want to add optional tools?").
 
