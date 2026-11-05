@@ -77,7 +77,7 @@ releases:
   MCP up later via `exakit mcp-setup`
 - what the machine is for → `EXAKIT_PERSONA=general` (or `data-scientist`, `ml-engineer`,
   comma-separated to combine): a named set of the answers below; an answer you set yourself
-  wins for that one variable
+  wins for that one variable (it replaces the persona's: name the persona's add-ons too to keep them)
 - which data to load → `EXAKIT_DATASETS=tpch,weather` (bundled dataset ids; wins over
   `EXAKIT_LOAD_SAMPLE`), or `EXAKIT_LOAD_SAMPLE=1` (bundled sample) / `0` (skip data)
 - on macOS, if a database is already running → `EXAKIT_REUSE_DB=1` (reuse) or `0` (deploy fresh)

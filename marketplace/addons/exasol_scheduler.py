@@ -22,7 +22,7 @@ import zipfile
 from pathlib import Path
 
 from process import ManagedProcess, _command, _creation
-from runtime import AddonFailure, KitContext, cmd_quote, venv_python
+from runtime import AddonFailure, KitContext, cmd_quote, venv_python, write_private, host_machine
 
 ID = "exasol-scheduler"
 RECEIPT = "components.exasol_scheduler"
@@ -155,7 +155,7 @@ def paths(ctx: KitContext) -> tuple[Path, Path, Path, Path, Path]:
 
 def _platform() -> str | None:
     system = platform.system().lower()
-    arch = platform.machine().lower()
+    arch = host_machine().lower()
     if system == "darwin":
         system = "macos"
     elif system == "windows":
@@ -180,7 +180,7 @@ def applicable(ctx: KitContext) -> bool:
 
 
 def applicable_reason(ctx: KitContext) -> str:
-    return f"no prebuilt scheduler binary is published for {platform.system()}/{platform.machine()}"
+    return f"no prebuilt scheduler binary is published for {platform.system()}/{host_machine()}"
 
 
 def installed_version(ctx: KitContext) -> str | None:
@@ -337,9 +337,7 @@ def _user(ctx: KitContext) -> tuple[str, str, bool]:
     if not re.fullmatch(r"[A-Za-z0-9]{24,128}", password):
         alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
         password = "".join(secrets.choice(alphabet) for _ in range(40))
-        credential.write_text(password + "\n", encoding="utf-8")
-        if os.name != "nt":
-            credential.chmod(0o600)
+        write_private(credential, password + "\n")
     present = "EXAKIT_SCHED_USER_PRESENT" in _sql(
         ctx, "SELECT CASE WHEN EXISTS (SELECT 1 FROM EXA_DBA_USERS WHERE USER_NAME = "
         f"'{user}') THEN 'EXAKIT_SCHED_USER_PRESENT' ELSE 'EXAKIT_SCHED_USER_MISSING' END AS STATUS")

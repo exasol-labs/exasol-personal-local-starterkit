@@ -19,7 +19,7 @@ from pathlib import Path
 import kit_telemetry
 from addons import notebook
 from process import _command, _creation
-from runtime import AddonFailure, KitContext, venv_executable, venv_python
+from runtime import AddonFailure, KitContext, venv_executable, venv_python, write_private
 
 
 class NotebookParser(argparse.ArgumentParser):
@@ -188,10 +188,7 @@ def _open_logged_in(ctx: KitContext, front: str, url: str) -> None:
     target = home / ("open-jupyter.html" if front == "jupyterlab" else "open-marimo.html")
     # The browser receives a file path. The token stays in a 0600 local file,
     # not in a shell command or visible CLI argument.
-    target.write_text("<!doctype html><meta http-equiv=refresh content=\"0;url=" + url.replace('"', "%22") + "\">\n",
-                      encoding="utf-8")
-    if os.name != "nt":
-        target.chmod(0o600)
+    write_private(target, "<!doctype html><meta http-equiv=refresh content=\"0;url=" + url.replace('"', "%22") + "\">\n")
     try:
         opened = webbrowser.open(target.as_uri())
     except webbrowser.Error:

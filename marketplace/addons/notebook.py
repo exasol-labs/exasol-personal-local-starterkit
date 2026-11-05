@@ -18,7 +18,7 @@ from pathlib import Path
 
 import kit_telemetry
 from model import load_addons
-from runtime import AddonFailure, KitContext, venv_executable, venv_python
+from runtime import AddonFailure, KitContext, venv_executable, venv_python, write_private, host_machine
 
 ID = "notebook"
 RECEIPT = "components.notebook"
@@ -51,7 +51,7 @@ def _credential(ctx: KitContext, name: str) -> Path:
     folder.mkdir(parents=True, exist_ok=True)
     target = folder / name
     if not target.is_file() or not target.read_text(encoding="utf-8").strip():
-        target.write_text(secrets.token_urlsafe(36) + "\n", encoding="utf-8")
+        write_private(target, secrets.token_urlsafe(36) + "\n")
     if os.name != "nt":
         target.chmod(0o600)
     return target
@@ -71,13 +71,13 @@ def _package_version(ctx: KitContext) -> str | None:
 
 
 def _linux_arm() -> bool:
-    return sys.platform.startswith("linux") and platform.machine().lower() in ("aarch64", "arm64")
+    return sys.platform.startswith("linux") and host_machine().lower() in ("aarch64", "arm64")
 
 
 def _intel_mac() -> bool:
     """macOS on an Intel processor. Asked of the hardware, not of this Python: one running under Rosetta 2 reports
     x86_64 on an Apple silicon Mac, where the notebook environment is built native and works."""
-    if sys.platform != "darwin" or platform.machine().lower() not in ("x86_64", "amd64", "i386"):
+    if sys.platform != "darwin" or host_machine().lower() not in ("x86_64", "amd64", "i386"):
         return False
     try:
         answer = subprocess.run(["sysctl", "-n", "hw.optional.arm64"], capture_output=True, text=True, check=False,

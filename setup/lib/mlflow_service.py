@@ -58,6 +58,12 @@ def process_command(pid: int) -> str:
             command = "(Get-CimInstance Win32_Process -Filter 'ProcessId=%d').CommandLine" % pid
             return subprocess.run(["powershell", "-NoProfile", "-Command", command], capture_output=True,
                                   text=True, timeout=5, check=False).stdout.strip()
+        # /proc first: BusyBox and procps-less images have no `ps -o command=` (LNX-10).
+        proc = Path(f"/proc/{pid}/cmdline")
+        if proc.is_file():
+            raw = proc.read_bytes()
+            if raw:
+                return raw.replace(b"\0", b" ").decode("utf-8", "replace").strip()
         return subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True,
                               text=True, timeout=3, check=False).stdout.strip()
     except (OSError, ImportError, subprocess.TimeoutExpired):

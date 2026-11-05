@@ -33,6 +33,47 @@ class AddonFailure(RuntimeError):
     pass
 
 
+def host_machine() -> str:
+    """The machine's own CPU architecture, as platform.machine() spells it.
+
+    An x86_64 Python run through Rosetta 2 on Apple silicon reports x86_64, so a
+    check that asks it about the Mac answered for the emulator (MAC-03); the
+    shell side's detect_arch reads sysctl.proc_translated for the same reason.
+    """
+    import platform
+
+    machine = platform.machine()
+    if sys.platform == "darwin" and machine.lower() in ("x86_64", "amd64", "i386"):
+        try:
+            translated = subprocess.run(["sysctl", "-n", "sysctl.proc_translated"], capture_output=True,
+                                        text=True, timeout=5, check=False).stdout.strip()
+        except (OSError, subprocess.TimeoutExpired):
+            translated = ""
+        if translated == "1":
+            return "arm64"
+    return machine
+
+
+def write_private(path: Path, text: str) -> None:
+    """Write a file only its owner can read, owner-only from the moment it exists.
+
+    Writing first and chmod-ing after left a password or token readable under
+    the default umask for the time in between (SEC-15). Created 0600; an
+    existing file is narrowed before it is truncated and written.
+    """
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        if os.name != "nt":
+            os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            descriptor = -1
+            handle.write(text)
+    finally:
+        if descriptor != -1:
+            os.close(descriptor)
+
+
 def managed_python_version(environment: Mapping[str, str] | None = None) -> str:
     values = os.environ if environment is None else environment
     return values.get("EXAKIT_MANAGED_PYTHON_VERSION") or "3.12"

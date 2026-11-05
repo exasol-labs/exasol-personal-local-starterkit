@@ -21,6 +21,13 @@ def _command(pid: int) -> str:
         query = f"(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}').CommandLine"
         args = [shell, "-NoProfile", "-NonInteractive", "-Command", query]
     else:
+        # /proc first: BusyBox and procps-less images have no `ps -o command=` (LNX-10).
+        try:
+            raw = Path(f"/proc/{pid}/cmdline").read_bytes()
+            if raw:
+                return raw.replace(b"\0", b" ").decode("utf-8", "replace").strip()
+        except OSError:
+            pass
         args = ["ps", "-o", "command=", "-p", str(pid)]
     try:
         result = subprocess.run(args, capture_output=True, text=True, timeout=5, check=False)

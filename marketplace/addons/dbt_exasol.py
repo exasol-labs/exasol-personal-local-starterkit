@@ -17,7 +17,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from runtime import AddonFailure, KitContext, cmd_quote, venv_executable, venv_python
+from runtime import AddonFailure, KitContext, cmd_quote, venv_executable, venv_python, write_private
 
 ID = "dbt-exasol"
 PACKAGE = "dbt-exasol"
@@ -89,9 +89,7 @@ def _write_profile(ctx: KitContext) -> Path:
     _, profile_dir, _ = paths(ctx)
     profile_dir.mkdir(parents=True, exist_ok=True)
     target = profile_dir / "profiles.yml"
-    target.write_text(_profile_text(ctx), encoding="utf-8")
-    if os.name != "nt":
-        target.chmod(0o600)
+    write_private(target, _profile_text(ctx))
     return target
 
 

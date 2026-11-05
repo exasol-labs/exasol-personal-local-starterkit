@@ -283,6 +283,12 @@ $script:ExakitHomeNotice = ""
 if (-not $env:EXAKIT_HOME -and -not (Test-ExakitLocalPath $script:ExakitHome)) {
     $script:ExakitHomeNotice = "Your Windows home ($script:ExakitHomeBase) is not on a local drive. A network or redirected home cannot be bind-mounted, so the database cannot be deployed there. Set EXAKIT_HOME to a folder on a local drive (for example C:\exasol-starter-kit) and run the installer again."
 }
+# The Python half (marketplace, MCP, personas) finds the kit through
+# EXAKIT_HOME / EXAKIT_BIN_DIR, else Path.home(), which is USERPROFILE on
+# Windows. A kit this module found under $HOME instead (Get-ExakitHomeBase) was
+# a different kit to Python (WIN-06): the resolved paths go with every child.
+if (-not $env:EXAKIT_HOME) { $env:EXAKIT_HOME = $script:ExakitHome }
+if (-not $env:EXAKIT_BIN_DIR) { $env:EXAKIT_BIN_DIR = $script:BinDir }
 $script:ManagedPythonVersion = if ($env:EXAKIT_MANAGED_PYTHON_VERSION) { $env:EXAKIT_MANAGED_PYTHON_VERSION } else { "3.12" }
 $script:McpReadonlyUser    = if ($env:EXAKIT_MCP_READONLY_USER) { $env:EXAKIT_MCP_READONLY_USER } else { "mcp_readonly" }
 $script:McpReadonlySchemas = if ($env:EXAKIT_MCP_READONLY_SCHEMAS) { $env:EXAKIT_MCP_READONLY_SCHEMAS } else { "STARTER_KIT" }

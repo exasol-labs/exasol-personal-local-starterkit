@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from runtime import AddonFailure, KitContext, venv_executable, venv_python
+from runtime import AddonFailure, KitContext, venv_executable, venv_python, host_machine
 from udf_bucket import locate
 from udf_container import fetch, rust_smoke, select, verify
 
@@ -129,7 +129,7 @@ def _arch(ctx: KitContext) -> str:
     from udf_container import _rules
 
     try:
-        return _rules(ctx.root).database_arch(platform.machine(), platform.system(),
+        return _rules(ctx.root).database_arch(host_machine(), platform.system(),
                                               os.environ.get("EXAKIT_UDF_ARCH", ""))
     except ValueError as error:
         raise UdfFailure(str(error), 4, "select-container") from error

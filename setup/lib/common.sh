@@ -9494,6 +9494,18 @@ _exakit_assert_mcp_readonly_posture() {
         "SELECT CASE WHEN COUNT(*) = 0 THEN 'EXAKIT_OBJ_PRIV_SCOPE_OK' ELSE 'EXAKIT_OBJ_PRIV_SCOPE_TOO_WIDE' END AS STATUS FROM EXA_DBA_OBJ_PRIVS WHERE GRANTEE = '$_user_lit' AND PRIVILEGE <> 'SELECT'" \
         "EXAKIT_OBJ_PRIV_SCOPE_OK" || die "The database login for your AI client can write to at least one table, so the kit will not hand it over. Rebuild it with: exakit mcp-setup"
 
+    # AND WHAT EVERY USER HOLDS (SEC-17). A privilege granted to PUBLIC reaches
+    # this login too, and the checks above, which ask about the login by name,
+    # cannot see it. Said, not refused: PUBLIC is the database owner's to set,
+    # rebuilding this login would not change it, and the write probe below still
+    # refuses a login that can actually write where it looks.
+    if ! _exakit_exapump_sql_has_token \
+        "$_config_path" "admin" \
+        "SELECT CASE WHEN (SELECT COUNT(*) FROM EXA_DBA_SYS_PRIVS WHERE GRANTEE = 'PUBLIC' AND PRIVILEGE NOT IN ('CREATE SESSION', 'USE ANY SCHEMA', 'SELECT ANY TABLE')) + (SELECT COUNT(*) FROM EXA_DBA_OBJ_PRIVS WHERE GRANTEE = 'PUBLIC' AND PRIVILEGE <> 'SELECT') = 0 THEN 'EXAKIT_PUBLIC_SCOPE_OK' ELSE 'EXAKIT_PUBLIC_SCOPE_TOO_WIDE' END AS STATUS" \
+        "EXAKIT_PUBLIC_SCOPE_OK"; then
+        warn "Your database grants PUBLIC more than read access, so every login - the AI client's read-only one included - has it. See: SELECT * FROM EXA_DBA_SYS_PRIVS WHERE GRANTEE = 'PUBLIC' (and EXA_DBA_OBJ_PRIVS)."
+    fi
+
     # Live proof the user cannot write: creating a table in the default schema
     # (which USE ANY SCHEMA lets it OPEN) MUST be rejected, since neither read
     # privilege grants CREATE/INSERT.
@@ -11062,6 +11074,12 @@ if "remedy" not in doc:
         scope = finding.get("scope") if isinstance(finding.get("scope"), dict) else {}
         candidates.append((RANK[severity], 0 if scope.get("path") else 1, index, finding["recommended_action"]))
     remedy = min(candidates)[3] if candidates else None
+    # No client connected at all is the one gap status reports without a
+    # finding: name the command that closes it, as status --json does (AGT-13).
+    clients = (doc.get("details") or {}).get("clients") if isinstance(doc.get("details"), dict) else None
+    if remedy is None and doc.get("operation") == "status" and isinstance(clients, list) and \
+            not any(isinstance(c, dict) and c.get("state") == "configured" for c in clients):
+        remedy = "exakit mcp-setup"
     doc["remedy"] = remedy
 print(json.dumps(doc, indent=2, sort_keys=True, ensure_ascii=False))
 EXAKIT_MCP_STAMP_PY

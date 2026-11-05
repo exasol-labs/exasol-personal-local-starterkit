@@ -688,6 +688,13 @@ function Assert-McpReadonlyPosture {
         Fail "The MCP read-only user has a write object privilege; it must be read-only."
     }
 
+    # What every user holds through PUBLIC reaches this login too (SEC-17):
+    # said, not refused - PUBLIC is the database owner's to set. Twin of the
+    # same check in _exakit_assert_mcp_readonly_posture.
+    if (-not (Test-ExapumpSqlHasToken $ConfigPath "admin" "SELECT CASE WHEN (SELECT COUNT(*) FROM EXA_DBA_SYS_PRIVS WHERE GRANTEE = 'PUBLIC' AND PRIVILEGE NOT IN ('CREATE SESSION', 'USE ANY SCHEMA', 'SELECT ANY TABLE')) + (SELECT COUNT(*) FROM EXA_DBA_OBJ_PRIVS WHERE GRANTEE = 'PUBLIC' AND PRIVILEGE <> 'SELECT') = 0 THEN 'EXAKIT_PUBLIC_SCOPE_OK' ELSE 'EXAKIT_PUBLIC_SCOPE_TOO_WIDE' END AS STATUS" "EXAKIT_PUBLIC_SCOPE_OK")) {
+        Warn2 "Your database grants PUBLIC more than read access, so every login - the AI client's read-only one included - has it. See: SELECT * FROM EXA_DBA_SYS_PRIVS WHERE GRANTEE = 'PUBLIC' (and EXA_DBA_OBJ_PRIVS)."
+    }
+
     # Live proof the user cannot write: a CREATE TABLE in the default schema
     # (which USE ANY SCHEMA lets it OPEN) MUST be rejected.
     $probeSchemaUc = ConvertTo-UpperInvariantString (Get-FirstSchema $Schemas)
@@ -1115,6 +1122,11 @@ function Add-McpResultStamp {
                 if ($finding.scope -and $finding.scope.path) { $aboutFile = 0 }
                 $score = ($rank[$severity] * 1000000) + ($aboutFile * 100000) + $index
                 if ($null -eq $bestScore -or $score -lt $bestScore) { $bestScore = $score; $bestAction = "$($finding.recommended_action)" }
+            }
+            # No client connected at all: the gap status reports without a
+            # finding gets the command that closes it (AGT-13).
+            if ($null -eq $bestAction -and "$($doc.operation)" -eq "status" -and $doc.details -and $doc.details.PSObject.Properties["clients"]) {
+                if (@($doc.details.clients | Where-Object { $_ -and $_.state -eq "configured" }).Count -eq 0) { $bestAction = "exakit mcp-setup" }
             }
             $doc | Add-Member -NotePropertyName remedy -NotePropertyValue $bestAction
         }

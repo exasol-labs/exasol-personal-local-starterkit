@@ -18,7 +18,7 @@ from urllib.error import HTTPError
 from pathlib import Path, PurePosixPath
 
 import kit_telemetry
-from runtime import AddonFailure, KitContext, cmd_quote, venv_python
+from runtime import AddonFailure, KitContext, cmd_quote, venv_python, host_machine
 
 ID = "json-tables"
 RECEIPT = "components.json_tables"
@@ -34,7 +34,7 @@ def paths(ctx: KitContext) -> tuple[Path, Path, Path]:
 def _platform() -> tuple[str, str]:
     system = platform.system().lower()
     system = "macos" if system == "darwin" else "windows" if system == "windows" else system
-    arch = platform.machine().lower()
+    arch = host_machine().lower()
     arch = "aarch64" if arch in ("aarch64", "arm64") else "x86_64" if arch in ("x86_64", "amd64") else arch
     if system == "macos" and arch != "aarch64":
         raise AddonFailure("No prebuilt JSON Tables engine is published for Intel macOS")

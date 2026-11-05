@@ -502,7 +502,12 @@ personal_check_requirements() {
     _arch="$(detect_arch)"
     if [ "$_arch" = "unsupported" ]; then
         error "This machine is not compatible: no Exasol Personal build exists for the '$(uname -m)' CPU architecture."
-        info "Supported architectures: Apple Silicon (arm64) and Intel (x86_64)."
+        # In the platform's own words: "Apple Silicon" told a Raspberry Pi
+        # (armv7l) or a ppc64le box what a Mac would need (LNX-13).
+        case "$_pcr_os" in
+            macos) info "Supported on macOS: Apple Silicon (arm64) and Intel (x86_64)." ;;
+            *)     info "Supported on Linux: 64-bit x86 (x86_64) and 64-bit Arm (aarch64/arm64) - not 32-bit Arm (armv7l), ppc64le, s390x or riscv64." ;;
+        esac
         die "Incompatible CPU architecture: $(uname -m)."
     fi
 
@@ -1129,8 +1134,19 @@ _personal_proc_age_seconds() {
 # The name test alone, shared by the reaper (which additionally needs it to be
 # old and abandoned) and by personal_starting (which needs it to be young).
 # One definition, so the two can never disagree about whose process it is.
+# _personal_proc_command <pid> - the process's command line: /proc where there
+# is one (BusyBox and procps-less images have no `ps -o command=`, LNX-10),
+# else ps.
+_personal_proc_command() {
+    if [ -r "/proc/$1/cmdline" ]; then
+        tr '\000' ' ' < "/proc/$1/cmdline" 2>/dev/null
+        return 0
+    fi
+    ps -p "$1" -o command= 2>/dev/null || true
+}
+
 _personal_is_runner_process() {
-    case "$(ps -p "$1" -o command= 2>/dev/null || true)" in
+    case "$(_personal_proc_command "$1")" in
         *mac-runner*__daemon__*) return 0 ;;
         *exasol-local-runner*)   return 0 ;;
     esac
@@ -1212,7 +1228,7 @@ personal_reap_orphan_daemon() {
             kill "$_pid" 2>/dev/null || true
             _reaped="$_reaped $_pid"
         else
-            warn "Port $_rod_port is held by a non-Exasol process (pid $_pid: $(ps -p "$_pid" -o command= 2>/dev/null | cut -c1-80)); leaving it untouched."
+            warn "Port $_rod_port is held by a non-Exasol process (pid $_pid: $(_personal_proc_command "$_pid" | cut -c1-80)); leaving it untouched."
         fi
     done
 
