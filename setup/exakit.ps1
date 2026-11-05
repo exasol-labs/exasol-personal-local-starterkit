@@ -1999,6 +1999,11 @@ function Invoke-ExakitUninstallComponent {
             Info "Removing the managed MCP configuration from the AI clients"
             try { [void](Invoke-McpOperation -Operation "uninstall" -InputArgs @()) }
             catch { Warn2 "Removing the managed AI client config reported issues" }
+            # Nobody is pointed at the launcher's MCP server any more: it goes too.
+            if (Get-Command Remove-McpSidecar -ErrorAction SilentlyContinue) {
+                Remove-McpSidecar
+                if (Get-Command Clear-McpSidecarRecord -ErrorAction SilentlyContinue) { Clear-McpSidecarRecord "the MCP configuration was removed" }
+            }
         }
         "skills" {
             foreach ($root in (Get-ExakitSkillRoots)) {

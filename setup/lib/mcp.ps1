@@ -1298,7 +1298,12 @@ function Show-McpReadyPanel {
         Info "No read-only MCP credential is recorded, so writes from your AI client would NOT be rejected by the database."
         Info "Fix it with: exakit mcp-setup"
     } else {
-        Ok "MCP server 'exasol' - $dsnShown as $userShown (read-only), started by your AI client on demand"
+        # The same line for both servers; only where it runs differs.
+        $where = "started by your AI client on demand"
+        if ((Get-ExakitManifestValue "components.mcp_server.backend") -eq "sidecar") {
+            $where = "served beside the database at $(Get-ExakitManifestValue 'components.mcp_server.url')"
+        }
+        Ok "MCP server 'exasol' - $dsnShown as $userShown (read-only), $where"
     }
 
     # The prompt is only PRINTED when it could not be handed over: on the
@@ -2165,6 +2170,14 @@ function Set-McpSidecar {
             Set-ExakitManifestValue "components.mcp_server.backend" "sidecar"
             Set-ExakitManifestValue "components.mcp_server.url" $url
             Set-ExakitManifestValue "components.mcp_server.bridge" "$bridge"
+            # The absolute uv/uvx Claude Desktop runs the bridge through, and the
+            # bridge fetched now, as the stdio server was. Twin of mcp_sidecar_apply.
+            Set-ExakitManifestValue "components.mcp_server.uv_path" $uv
+            $uvx = Get-McpCommandPath
+            Set-ExakitManifestValue "components.mcp_server.command" $uvx
+            if ($env:EXAKIT_MCP_BRIDGE_PREFETCH -ne "0") {
+                try { & $uvx "$bridge" --help *> $null } catch { Write-ExakitLog "INFO" "MCP: the Claude Desktop bridge was not fetched ahead" }
+            }
             $tag = ("" + (Get-ExakitVersionsValue "components.mcp.sidecar_image")).Split("@")[0].Split(":")[-1]
             if ($tag -match '^[0-9]') { Set-ExakitManifestValue "components.mcp_server.version" $tag }
             Write-ExakitLog "OK" "MCP: the launcher's MCP server answers at $url as $user"

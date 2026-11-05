@@ -10253,7 +10253,12 @@ exakit_print_mcp_ready_panel() {
         info "No read-only MCP credential is recorded, so writes from your AI client would NOT be rejected by the database."
         info "Fix it with: exakit mcp-setup"
     else
-        ok "MCP server 'exasol' — ${_dsn:-unknown} as ${_mcp_user:-unknown} (read-only), started by your AI client on demand"
+        # The same line for both servers; only where it runs differs.
+        _mrp_where="started by your AI client on demand"
+        if [ "$(manifest_get components.mcp_server.backend 2>/dev/null || true)" = sidecar ]; then
+            _mrp_where="served beside the database at $(manifest_get components.mcp_server.url 2>/dev/null)"
+        fi
+        ok "MCP server 'exasol' — ${_dsn:-unknown} as ${_mcp_user:-unknown} (read-only), $_mrp_where"
     fi
     # Put the prompt straight onto the clipboard so the first interaction is a
     # paste, not a retype. Best-effort: silent when no clipboard tool exists.
@@ -12650,6 +12655,12 @@ _exakit_uninstall_component() {
             if command -v exakit_mcp_operation >/dev/null 2>&1; then
                 exakit_mcp_operation uninstall >/dev/null 2>&1 || \
                     warn "Removing the managed AI client config reported issues"
+            fi
+            # Nobody is pointed at the launcher's MCP server any more: it goes too.
+            if [ "$(manifest_get components.mcp_server.backend 2>/dev/null || true)" = sidecar ] && \
+               command -v personal_cli >/dev/null 2>&1; then
+                run_logged "$(personal_cli)" sidecar disable "${EXAKIT_MCP_SIDECAR:-mcp}" --remove >/dev/null 2>&1 || true
+                command -v _mcp_sidecar_forget >/dev/null 2>&1 && _mcp_sidecar_forget "the MCP configuration was removed"
             fi
             ;;
         skills)

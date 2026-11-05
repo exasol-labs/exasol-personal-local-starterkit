@@ -905,6 +905,9 @@ jobs:
       # stub launcher, and the sidecars.yaml editor (skipped where the runner has no PyYAML).
       - run: bash tests/mcp-sidecar.sh
         if: matrix.shard == 4
+      # The faked-SVE self-repair blames the CPU only when it is the CPU (LNX-11).
+      - run: bash tests/mcp-sve.sh
+        if: matrix.shard == 4
       - run: python3 -m unittest tests.test_sidecar_definition
         if: matrix.shard == 4
       # Three more suites existed and were never run by CI either. This one had

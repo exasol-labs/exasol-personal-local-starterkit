@@ -23,6 +23,7 @@ $env:EXAKIT_HOME = Join-Path $work "home"
 $env:EXAKIT_BIN_DIR = Join-Path $work "bin"
 $env:EXAKIT_PERSONAL_DEPLOY_DIR = Join-Path $work "deployment"
 $env:EXAKIT_MCP_SIDECAR_WAIT = "0"
+$env:EXAKIT_MCP_BRIDGE_PREFETCH = "0"
 Remove-Item Env:EXAKIT_MCP_BACKEND -ErrorAction SilentlyContinue
 
 . (Join-Path $repo "setup/lib/exakit-common.ps1")
@@ -51,14 +52,15 @@ function Invoke-ExakitLogged {
     param([Parameter(Mandatory)][string]$Cmd, [Parameter(ValueFromRemainingArguments)]$CmdArgs)
     $script:calls.Add(($CmdArgs -join " ")); return 0
 }
-function Get-ExakitUvBin {
-    return {
-        $script:calls.Add("editor " + ($args[7..9] -join " "))
-        $script:definition = Get-Content -Raw -LiteralPath $args[10]
-        $global:LASTEXITCODE = 0          # what the real uv leaves after a clean run
-        "changed"
-    }
+# uv, as a function called by name - exactly how `& $uv run ...` calls a path.
+function fake-uv {
+    $script:calls.Add("editor " + ($args[7..9] -join " "))
+    $script:definition = Get-Content -Raw -LiteralPath $args[10]
+    $global:LASTEXITCODE = 0          # what the real uv leaves after a clean run
+    "changed"
 }
+function Get-ExakitUvBin { return "fake-uv" }
+function Get-McpCommandPath { return "/abs/uvx" }
 $serving = [pscustomobject]@{ name = "mcp"; health = "serving"; restartRequired = $false
     endpoints = @([pscustomobject]@{ ip = "127.0.0.1"; port = 4896; url = "http://127.0.0.1:4896/mcp" }) }
 
@@ -83,6 +85,8 @@ Check "the password is a file reference" $pwFile $envByName["EXA_PASSWORD"].valu
 Check "...never the password itself" $false ($script:definition -like "*readonly-secret*")
 Check "the image is pinned by digest" (Get-ExakitVersionsValue "components.mcp.sidecar_image") $doc.container.image
 Check "loopback only" "127.0.0.1" $doc.container.ports[0].hostIP
+Check "the uv the bridge runs through is recorded" "fake-uv" (Get-ExakitManifestValue "components.mcp_server.uv_path")
+Check "...and an absolute uvx for Claude Desktop" "/abs/uvx" (Get-ExakitManifestValue "components.mcp_server.command")
 Check "written into the deployment's sidecars.yaml" $true ((@($script:calls) -join "|") -like "*put*sidecars.yaml mcp*")
 Check "a changed definition is reconciled by exasol start" $true (@($script:calls) -contains "start")
 Check "the catalog template is never enabled" $false ((@($script:calls) -join "|") -like "*sidecar enable*")

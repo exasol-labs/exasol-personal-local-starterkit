@@ -73,6 +73,7 @@ chmod +x "$WORK/bin/uv"
 exakit_ensure_uv() { EXAKIT_UV_BIN="$WORK/bin/uv"; }
 export STUB_DEF="$WORK/definition.json"
 export EXAKIT_MCP_SIDECAR_WAIT=0       # one look at the status, no waiting
+export EXAKIT_MCP_BRIDGE_PREFETCH=0    # never run a real uvx here
 
 SERVING='{"name": "mcp", "enabled": true, "running": true, "health": "serving", "restartRequired": false,
   "endpoints": [{"ip": "127.0.0.1", "port": 4896, "url": "http://127.0.0.1:4896/mcp"}]}'
@@ -93,6 +94,8 @@ check "backend recorded" "sidecar" "$(manifest_get components.mcp_server.backend
 check "url recorded" "http://127.0.0.1:4896/mcp" "$(manifest_get components.mcp_server.url)"
 check "bridge recorded from versions.json" "$(exakit_versions_value components.mcp.bridge)" "$(manifest_get components.mcp_server.bridge)"
 check "version from the image tag" "$(exakit_versions_value components.mcp.version)" "$(manifest_get components.mcp_server.version)"
+check "the uv the bridge runs through is recorded" "$WORK/bin/uv" "$(manifest_get components.mcp_server.uv_path)"
+has "...and an absolute uvx for Claude Desktop" "/" "$(manifest_get components.mcp_server.command)"
 def="$(cat "$STUB_DEF")"
 has "the read-only user, not SYS" '{"name": "EXA_USER", "value": "mcp_readonly"}' "$def"
 lacks "...never the deployment's saved username" '"key": "username"' "$def"
