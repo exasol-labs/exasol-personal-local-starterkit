@@ -206,6 +206,15 @@ def _run(args: list[str], *, cwd: Path | None = None) -> None:
                       "exakit rust-udf build " + (cwd.name if cwd else "<name>"), stage)
 
 
+def _is_podman_alias(executable: str) -> bool:
+    """A `docker` that is Podman under another name (podman-docker): rootless, so it needs no hand-back."""
+    try:
+        said = subprocess.run([executable, "--version"], capture_output=True, text=True, timeout=8, check=False).stdout
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    return "podman" in said.lower()
+
+
 def container_runtime() -> str:
     """Choose a running engine, not merely a CLI left on PATH."""
     for command in ("docker", "podman"):
@@ -249,10 +258,18 @@ def build(name: str) -> dict:
               "echo EXAKIT_STAGE=build >&2; cargo exasol-udf build /work; "
               "echo EXAKIT_STAGE=validate >&2; "
               f"cargo exasol-udf validate /work/target/release/lib{name}.so --deny-unknown-deps")
+    # Rootful Docker on Linux writes the build's files as root into the user's own project, so target/ and Cargo.lock
+    # could not be rebuilt or removed without sudo (LNX-03). They are handed back to the user when the build is done.
+    # Not for Podman (rootless maps the container's root to the user) nor Docker Desktop (its file sharing does).
+    owner_env: list[str] = []
+    if sys.platform.startswith("linux") and Path(runtime).name == "docker" and hasattr(os, "getuid") and os.getuid() \
+            and not _is_podman_alias(runtime):
+        script += "; chown -R \"$HOST_OWNER\" /work/target /work/Cargo.lock"
+        owner_env = ["-e", f"HOST_OWNER={os.getuid()}:{os.getgid()}"]
     # label=disable: on an SELinux host (Fedora, RHEL and its rebuilds) a bind mount is unreadable to the container
     # without it; Docker and Podman accept it everywhere (audit LNX-02).
     _run([runtime, "run", "--rm", "--security-opt", "label=disable", "--platform", platform_arg, "-v", f"{project}:/work",
-          "-v", f"exakit-rust-cargo-{arch}:/cargo-home", "-e", "CARGO_HOME=/cargo-home",
+          "-v", f"exakit-rust-cargo-{arch}:/cargo-home", "-e", "CARGO_HOME=/cargo-home", *owner_env,
           "-w", "/work", IMAGE, "sh", "-c", script], cwd=project)
     if not artifact.is_file():
         raise Refused(f"The build returned without {artifact}; inspect the build log.", 7)

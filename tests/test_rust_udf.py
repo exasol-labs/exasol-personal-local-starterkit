@@ -107,6 +107,40 @@ class RustUdfTests(unittest.TestCase):
         self.assertIn("label=disable", seen[seen.index("--security-opt") + 1:][:1], "an SELinux host can read the mount")
         self.assertEqual(len(record["cargo_lock_sha256"]), 64)
 
+    def _build_args(self, platform_name, runtime, *, alias=False):
+        result = rust.create("score_model", None)
+        project = Path(result["project"])
+        seen = []
+
+        def built(args, *, cwd=None):
+            seen.extend(args)
+            artifact = project / "target/release/libscore_model.so"
+            artifact.parent.mkdir(parents=True, exist_ok=True)
+            artifact.write_bytes(b"ELF fixture")
+            (project / "Cargo.lock").write_text("# pinned fixture\n")
+
+        with patch.object(rust.sys, "platform", platform_name), \
+                patch.object(rust, "architecture", return_value="x86_64"), \
+                patch.object(rust, "container_runtime", return_value=runtime), \
+                patch.object(rust, "_is_podman_alias", return_value=alias), \
+                patch.object(rust.os, "getuid", return_value=1000, create=True), \
+                patch.object(rust.os, "getgid", return_value=1000, create=True), \
+                patch.object(rust, "_run", side_effect=built):
+            rust.build("score_model")
+        return seen
+
+    def test_rootful_docker_on_linux_hands_the_output_back(self):
+        # LNX-03: target/ and Cargo.lock were left owned by root in the user's own project.
+        seen = self._build_args("linux", "/usr/bin/docker")
+        self.assertIn("HOST_OWNER=1000:1000", seen)
+        self.assertIn('chown -R "$HOST_OWNER" /work/target /work/Cargo.lock', seen[-1])
+
+    def test_podman_and_podmans_docker_alias_need_no_hand_back(self):
+        for runtime, alias in (("/usr/bin/podman", False), ("/usr/bin/docker", True)):
+            with self.subTest(runtime=runtime, alias=alias):
+                seen = self._build_args("linux", runtime, alias=alias)
+                self.assertNotIn("chown", seen[-1])
+
     def test_deploy_requires_validated_rust_container(self):
         result = rust.create("score_model", None)
         project = Path(result["project"])
