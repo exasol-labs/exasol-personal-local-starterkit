@@ -1384,12 +1384,23 @@ class NotebookWorkflowTest(unittest.TestCase):
         self.assertEqual([e["kind"] for e in self.log(namespace["workflow_id"])], ["start"])
         reviewed.assert_called_once_with(mock.ANY, "amazon_sales")
         review.dataset.assert_called_once_with(draft_ok=True)
-        # The typed view decides the dataset the steps read (the table as loaded unless USE_PREPARED), then the roles
-        # are read from it in a cell of their own.
+        # The joined view, then the typed view, decide the dataset the steps read (the table as loaded unless
+        # USE_JOINED / USE_PREPARED), then the roles are read from it in a cell of their own.
         cells = _code_cells(NOTEBOOKS / "data-scientist" / "01_explore.py")
+        schema_cell = next(c for c in cells if c.startswith("schema_map = "))
+        joined_cell = next(c for c in cells if c.startswith("joined_view_proposal = "))
+        found = mock.Mock(**{"joined_view.return_value": mock.Mock(needed=True)})
+        with mock.patch.object(exakit_nb, "describe_schema", return_value=found) as surveyed:
+            namespace, _ = self.run_cell(schema_cell, namespace)
+        surveyed.assert_called_once_with(mock.ANY, ds)
+        namespace, _ = self.run_cell(joined_cell, {**namespace, "USE_JOINED": False})
+        found.joined_view.assert_called_once_with(ds)
+        found.joined_view.return_value.create.assert_not_called()
+        self.assertIs(namespace["joined_dataset"], ds, "nothing is joined until USE_JOINED is set")
         view = next(c for c in cells if c.startswith("typed_view_proposal = "))
-        with mock.patch.object(exakit_nb, "typed_view", return_value=mock.Mock(needed=False)):
+        with mock.patch.object(exakit_nb, "typed_view", return_value=mock.Mock(needed=False)) as typed:
             namespace, _ = self.run_cell(view, {**namespace, "USE_PREPARED": False})
+        typed.assert_called_once_with(mock.ANY, ds)
         self.assertIs(namespace["dataset"], ds)
         namespace, _ = self.run_cell(next(c for c in cells if c.startswith("ENTITY_COLUMN = ")), namespace)
         self.assertEqual(namespace["LABEL_COLUMN"], "CANCELLED")

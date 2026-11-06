@@ -5,6 +5,8 @@
 # the evidence that chose it, and the slots the notebooks use. The approve half:
 #   exakit describe <id|SCHEMA.TABLE|draft.yaml> --approve [--role <slot>=<COL>]... [--owner <who>] [--no-comments]
 #   exakit describe <id> --show [--version n]  |  --versions  |  --comments
+# and the whole schema at once - its tables and the links between them:
+#   exakit describe --schema <SCHEMA> [--approve [--link T.COL=T.KEY]... [--unlink T.COL]... [--owner <who>] [--no-comments]]
 # approve checks the roles and that the table has not changed, writes the next
 # version into ~/.exasol-starter-kit/descriptors/<SCHEMA>.<TABLE>/ and
 # publishes the roles as column comments on a view in EXAKIT_SEMANTIC (the
@@ -49,9 +51,11 @@ describe_run() {
 # exakit describe <table> [--sample N] [--id <slug>] [--json] [--write <path>]
 # exakit describe <id|draft.yaml> --approve [--role r=COL]... [--owner x] [--no-comments] [--json]
 # exakit describe <id> --show [--version n] | --versions | --comments [--json]
+# exakit describe --schema <SCHEMA> [--approve [--link T.COL=T.KEY]... [--unlink T.COL]... [--owner x] [--no-comments]] [--json]
 cmd_describe() {
     _cd_target=""; _cd_sample=""; _cd_id=""; _cd_json=""; _cd_write=""
     _cd_mode=""; _cd_owner=""; _cd_version=""; _cd_nocomments=""; _cd_roles=()
+    _cd_schema=""; _cd_links=(); _cd_unlinks=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --help|-h) exakit_help_render command describe; return $? ;;
@@ -60,7 +64,7 @@ cmd_describe() {
                 [ -z "$_cd_mode" ] || [ "$_cd_mode" = "$1" ] || reject "$_cd_mode and $1 are two different things; give one of --approve, --show, --versions, --comments."
                 _cd_mode="$1" ;;
             --no-comments) _cd_nocomments="--no-comments" ;;
-            --sample|--id|--write|--owner|--version|--role)
+            --sample|--id|--write|--owner|--version|--role|--schema|--link|--unlink)
                 _cd_opt="$1"
                 [ $# -ge 2 ] || reject "$_cd_opt needs a value: exakit describe ... $_cd_opt <value>"
                 case "$2" in -*) reject "$_cd_opt needs a value: exakit describe ... $_cd_opt <value>" ;; esac
@@ -88,14 +92,49 @@ cmd_describe() {
                         printf '%s' "$2" | grep -Eq '^(key|time|text|target|category|entity|date|label)=([A-Za-z][A-Za-z0-9_]*(,[A-Za-z][A-Za-z0-9_]*)*|-)$' || \
                             reject "--role takes slot=COLUMN with the slot one of key, time, text, target, category, entity (date and label name time and target; slot=- leaves it empty), not '$2'."
                         _cd_roles+=("$2") ;;
+                    --schema)
+                        [ -z "$_cd_schema" ] || reject "--schema was given twice."
+                        printf '%s' "$2" | grep -Eq '^[A-Za-z_][A-Za-z0-9_]*$' || reject "--schema takes a schema name (letters, digits and _), not '$2'."
+                        _cd_schema="$2" ;;
+                    --link)
+                        printf '%s' "$2" | grep -Eq '^[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*=[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*$' || \
+                            reject "--link takes TABLE.COLUMN=TABLE.KEY (the column, then the key it points at), not '$2'."
+                        _cd_links+=("$2") ;;
+                    --unlink)
+                        printf '%s' "$2" | grep -Eq '^[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*$' || \
+                            reject "--unlink takes the TABLE.COLUMN a link starts from, not '$2'."
+                        _cd_unlinks+=("$2") ;;
                 esac
                 shift ;;
-            -*) reject "Unknown option '$1' for describe (supported: --sample, --id, --json, --write, --approve, --role, --owner, --no-comments, --show, --version, --versions, --comments)." ;;
+            -*) reject "Unknown option '$1' for describe (supported: --sample, --id, --json, --write, --approve, --role, --owner, --no-comments, --show, --version, --versions, --comments, --schema, --link, --unlink)." ;;
             *) [ -z "$_cd_target" ] || reject "Name one table or descriptor: exakit describe SCHEMA.TABLE | exakit describe <id> --approve|--show|--versions|--comments"
                _cd_target="$1" ;;
         esac
         shift
     done
+    if [ -n "$_cd_schema" ]; then
+        # The whole schema: its tables and the links between them, drafted or approved.
+        [ -z "$_cd_target$_cd_sample$_cd_id$_cd_write$_cd_version" ] && [ ${#_cd_roles[@]} -eq 0 ] || \
+            reject "--schema describes a whole schema and takes no table, --sample, --id, --write, --version or --role: exakit describe --schema SCHEMA [--approve [--link T.COL=T.KEY]... [--unlink T.COL]... [--owner who] [--no-comments]] [--json]"
+        if [ "$_cd_mode" = --approve ]; then
+            set -- schema-approve "$_cd_schema" ${_cd_owner:+--owner "$_cd_owner"} ${_cd_nocomments:+"$_cd_nocomments"} ${_cd_json:+"$_cd_json"}
+            _cd_n=0
+            while [ "$_cd_n" -lt ${#_cd_links[@]} ]; do set -- "$@" --link "${_cd_links[$_cd_n]}"; _cd_n=$((_cd_n + 1)); done
+            _cd_n=0
+            while [ "$_cd_n" -lt ${#_cd_unlinks[@]} ]; do set -- "$@" --unlink "${_cd_unlinks[$_cd_n]}"; _cd_n=$((_cd_n + 1)); done
+        elif [ -z "$_cd_mode" ]; then
+            [ -z "$_cd_owner$_cd_nocomments" ] && [ ${#_cd_links[@]} -eq 0 ] && [ ${#_cd_unlinks[@]} -eq 0 ] || \
+                reject "--link, --unlink, --owner and --no-comments go with --approve: exakit describe --schema SCHEMA --approve [--link T.COL=T.KEY]..."
+            set -- schema "$_cd_schema" ${_cd_json:+"$_cd_json"}
+        else
+            reject "$_cd_mode does not go with --schema: exakit describe --schema SCHEMA [--approve] [--json]"
+        fi
+        describe_installed || die "The notebook add-on is not installed; its Python runs the profiler. Install it with: exakit marketplace notebook"
+        describe_run "$@"
+        return $?
+    fi
+    [ ${#_cd_links[@]} -eq 0 ] && [ ${#_cd_unlinks[@]} -eq 0 ] || \
+        reject "--link and --unlink go with --schema: exakit describe --schema SCHEMA --approve [--link T.COL=T.KEY]... [--unlink T.COL]..."
     case "$_cd_mode" in
         "")
             [ -z "$_cd_owner$_cd_version$_cd_nocomments" ] && [ ${#_cd_roles[@]} -eq 0 ] || \

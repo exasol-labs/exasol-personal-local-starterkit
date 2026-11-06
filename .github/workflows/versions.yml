@@ -986,6 +986,9 @@ jobs:
         if: matrix.shard == 4
       - run: python3 tests/test_descriptor_v2.py
         if: matrix.shard == 4
+      # The schema map: keys, links declared and found, approve and the joined view.
+      - run: python3 tests/test_descriptor_schema.py
+        if: matrix.shard == 4
       - run: python3 tests/test_notebook_helpers.py
         if: matrix.shard == 4
       - run: python3 tests/test_model_provider.py

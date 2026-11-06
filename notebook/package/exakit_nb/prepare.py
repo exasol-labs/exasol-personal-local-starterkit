@@ -93,6 +93,8 @@ class TypedView:
             lines += ["", self.sql]
         return "\n".join(lines)
 
+    __repr__ = __str__                                  # a text-only front end shows the summary, not the fields
+
     def _repr_html_(self) -> str:
         html = [f"<p><b>Typed view of</b> <code>{escape(self.dataset.fact_table)}</code> &rarr; <code>{escape(self.view)}</code></p>"]
         if self.changes:
@@ -260,7 +262,8 @@ def typed_view(conn, ds) -> TypedView:
         body = (f"SELECT {', '.join(_q(c) for c, _ in columns)}\nFROM (\n    SELECT C_.*,\n"
                 f"           ROW_NUMBER() OVER (PARTITION BY {partition} ORDER BY {_q(key)}) AS COPY_\n"
                 f"    FROM {cleaned} C_)\nWHERE COPY_ = 1")
-    view = f"{SCHEMA}.{_q(f'{schema}__{name}')}"
+    # A view already in EXAKIT_PREPARED (a joined view) gets its typed twin beside it: TPCH__ORDERS__JOINED__TYPED.
+    view = f"{SCHEMA}.{_q(f'{name}__TYPED' if schema == SCHEMA else f'{schema}__{name}')}"
     # Only the type changes and the real cleaning make a view worth having; trimming alone does not.
     worth = bool(changes or unknown or copies or worth_distinct)
     if not worth:

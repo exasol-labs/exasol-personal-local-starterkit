@@ -29,8 +29,9 @@ def _(mo):
 def _():
     DATASET = None   # None: the dataset approved last in a quickstart (else amazon_sales); or "walmart_sales", "fraud_transactions", or your own file ("~/my-data/transactions.csv", roles beside it)
     USE_AI_THEMES = False  # True: your model sorts the texts into themes (needs a text column and EXAKIT_MODEL_ID; see the AI step below)
+    USE_JOINED = False     # True: approve the schema map and create the joined view proposed under Prepare (several tables), and explore that
     USE_PREPARED = False   # True: create the typed, cleaned view proposed under Prepare and explore that instead (nothing is created before)
-    return DATASET, USE_AI_THEMES, USE_PREPARED
+    return DATASET, USE_AI_THEMES, USE_JOINED, USE_PREPARED
 
 
 @app.cell(hide_code=True)
@@ -106,6 +107,43 @@ def _(connection, loaded_dataset, nb):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
+    ### Several tables: the schema around it
+
+    > **What is a schema map?** The tables that sit beside this one, and how they link: a column that holds another
+    > table's key (an order's customer number, a customer's country) is a many-to-one link, so following it adds that
+    > table's columns to each row without multiplying rows. The map names each link with its evidence.
+
+    The map below is found from the data: a link the database declares, or a column that names another table's key and whose every value is in it. Correct it with `schema_map.unlink("TABLE.COLUMN")` or `schema_map.link("TABLE.COLUMN", "TABLE.KEY")`.
+    """)
+    return
+
+
+@app.cell
+def _(connection, loaded_dataset, nb):
+    schema_map = nb.describe_schema(connection, loaded_dataset)
+    schema_map
+    return (schema_map,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    The joined view: this table with every table its links reach, as one view. Read the joins and the SQL; to use it, set `USE_JOINED = True` in the first cell and run again. The schema map is then approved (its links published for agents), the view is created in `EXAKIT_PREPARED`, gets its own approved column map, and every step below reads it. A table that links nowhere has nothing to join.
+    """)
+    return
+
+
+@app.cell
+def _(USE_JOINED, connection, loaded_dataset, schema_map):
+    joined_view_proposal = schema_map.joined_view(loaded_dataset)
+    joined_dataset = joined_view_proposal.create(connection) if USE_JOINED and joined_view_proposal.needed else loaded_dataset
+    joined_view_proposal
+    return (joined_dataset,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
     ### A typed, cleaned view
 
     > **What is a typed view?** A view over the table with each column in the type its values really have - numbers stored
@@ -118,9 +156,9 @@ def _(mo):
 
 
 @app.cell
-def _(USE_PREPARED, connection, loaded_dataset, nb):
-    typed_view_proposal = nb.typed_view(connection, loaded_dataset)
-    dataset = typed_view_proposal.create(connection) if USE_PREPARED and typed_view_proposal.needed else loaded_dataset   # the dataset every step below reads
+def _(USE_PREPARED, connection, joined_dataset, nb):
+    typed_view_proposal = nb.typed_view(connection, joined_dataset)
+    dataset = typed_view_proposal.create(connection) if USE_PREPARED and typed_view_proposal.needed else joined_dataset   # the dataset every step below reads
     typed_view_proposal
     return (dataset,)
 

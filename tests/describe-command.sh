@@ -2,7 +2,8 @@
 # describe-command.sh — `exakit describe <table> [--sample N] [--id <slug>]
 # [--json] [--write <path>]` and the approve half (`<id|draft.yaml> --approve
 # [--role r=COL]... [--owner x] [--no-comments]`, `<id> --show [--version n]`,
-# `--versions`, `--comments`) in setup/lib/describe.sh (the service it runs is
+# `--versions`, `--comments`) and the whole-schema half (`--schema <SCHEMA>
+# [--approve [--link T.COL=T.KEY]... [--unlink T.COL]...]`) in setup/lib/describe.sh (the service it runs is
 # tested in tests/test_describe_service.py).
 #
 #   bash tests/describe-command.sh
@@ -111,6 +112,16 @@ run readings --versions --version 2; check "--versions with --version" "2" "$COD
 run readings --comments --sample 5; check "--comments with --sample" "2" "$CODE"
 run --versions;                    check "--versions without an id" "2" "$CODE"; contains "asks for the id" "Name the dataset id" "$OUT"
 run Readings --versions;           check "--versions with an upper-case id" "2" "$CODE"; contains "says the shape" "lower-case letters and digits" "$OUT"
+run --schema;                      check "--schema without a name" "2" "$CODE"; contains "says so" "--schema needs a value" "$OUT"
+run --schema 'TP CH';              check "--schema with a space" "2" "$CODE"; contains "says the shape" "--schema takes a schema name" "$OUT"
+run --schema A --schema B;         check "--schema twice" "2" "$CODE"
+run LAB.READINGS --schema LAB;     check "--schema with a table" "2" "$CODE"; contains "says what it takes" "--schema describes a whole schema" "$OUT"
+run --schema LAB --sample 5;       check "--schema with --sample" "2" "$CODE"
+run --schema LAB --show;           check "--schema with --show" "2" "$CODE"; contains "names the mode" "--show does not go with --schema" "$OUT"
+run --schema LAB --link A.B=C.D;   check "--link without --approve" "2" "$CODE"; contains "says where it goes" "go with --approve" "$OUT"
+run --schema LAB --approve --link A.B; check "--link without the key" "2" "$CODE"; contains "says the shape" "TABLE.COLUMN=TABLE.KEY" "$OUT"
+run --schema LAB --approve --unlink A; check "--unlink without the column" "2" "$CODE"; contains "says the shape" "the TABLE.COLUMN a link starts from" "$OUT"
+run readings --approve --link A.B=C.D; check "--link without --schema" "2" "$CODE"; contains "says it goes with --schema" "go with --schema" "$OUT"
 OUT="$( (cmd_describe LAB.READINGS --json --bogus) 2>/dev/null )"; CODE=$?
 check "with --json the refusal is one object" "2" "$CODE"
 check "and it says rejected" "yes" "$(printf '%s' "$OUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); print("yes" if d.get("rejected") and d.get("ok") is False else "no")')"
@@ -150,6 +161,12 @@ run readings --show --show;        check "the same mode twice is one mode" "show
 run readings --versions;           check "versions" "versions readings" "$(asked args)"
 run readings --comments -j;        check "comments" "comments readings --json" "$(asked args)"
 check "the dsn reaches the approve half too" "127.0.0.1:8563" "$(asked dsn)"
+echo "the schema half passes through the same way:"
+run --schema tpch;                 check "schema, the name" "schema tpch" "$(asked args)"
+run --schema TPCH -j;              check "schema with --json" "schema TPCH --json" "$(asked args)"
+run --schema TPCH --approve --link ORDERS.O_CLERK=CLERKS.ID --unlink LINEITEM.L_PARTKEY --link A.B=C.D --owner lee --no-comments
+check "every schema approve option, in the service's order" "schema-approve TPCH --owner lee --no-comments --link ORDERS.O_CLERK=CLERKS.ID --link A.B=C.D --unlink LINEITEM.L_PARTKEY" "$(asked args)"
+STUB_EXIT=3 run --schema NOPE;     check "3: no such schema" "3" "$CODE"
 STUB_EXIT=2 run readings --approve --role entity=NOPE; check "the service's 2 (a bad role) is the command's" "2" "$CODE"
 STUB_EXIT=3 run nowhere --versions; check "3: no such id" "3" "$CODE"
 STUB_EXIT=5 run readings --approve; check "5: a version conflict" "5" "$CODE"
@@ -171,7 +188,7 @@ check "the help document has the command" "describe" "$(python3 -c 'import json,
 check "in the personas and notebooks group" "yes" "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print("yes" if any("describe" in g["commands"] for g in d["groups"] if g["title"]=="Personas and notebooks") else "no")' "$ROOT/setup/help/exakit.json")"
 _cd_page="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); c=[c for c in d["commands"] if c["command"]=="describe"][0]; print(c["options"]); print(c["description"]); print("\n".join(c["examples"]))' "$ROOT/setup/help/exakit.json")"
 contains "and its page names the add-on" "exakit marketplace notebook" "$_cd_page"
-for _opt in --approve --role --owner --no-comments --show --version --versions --comments; do
+for _opt in --approve --role --owner --no-comments --show --version --versions --comments --schema --link --unlink; do
     contains "the options list $_opt" "$_opt" "$(printf '%s' "$_cd_page" | sed -n 1p)"
 done
 contains "the page says what approve writes" "descriptors/<SCHEMA>.<TABLE>/draft.yaml" "$_cd_page"
@@ -179,6 +196,9 @@ contains "and the comment it writes" "the user's own table is never commented" "
 contains "and the view for a virtual table" "EXAKIT_SEMANTIC.<SCHEMA>__<TABLE>" "$_cd_page"
 contains "and exit 5" "5 when another approve" "$_cd_page"
 contains "with an approve example" "exakit describe orders --approve" "$_cd_page"
+contains "the page says where a schema map is kept" "descriptors/<SCHEMA>/" "$_cd_page"
+contains "and the view its links are published as" "EXAKIT_SEMANTIC.<SCHEMA>__RELATIONS" "$_cd_page"
+contains "with a schema example" "exakit describe --schema" "$_cd_page"
 
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

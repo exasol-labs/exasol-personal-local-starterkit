@@ -108,6 +108,16 @@ try {
     Run @("readings", "--comments", "--sample", "5"); Check "--comments with --sample" 2 $CODE
     Run @("--versions");                         Check "--versions without an id" 2 $CODE; Contains "asks for the id" "Name the dataset id" $OUT
     Run @("Readings", "--versions");             Check "--versions with an upper-case id" 2 $CODE; Contains "says the shape" "lower-case letters and digits" $OUT
+    Run @("--schema");                           Check "--schema without a name" 2 $CODE; Contains "says so" "--schema needs a value" $OUT
+    Run @("--schema", "TP CH");                  Check "--schema with a space" 2 $CODE; Contains "says the shape" "--schema takes a schema name" $OUT
+    Run @("--schema", "A", "--schema", "B");     Check "--schema twice" 2 $CODE
+    Run @("LAB.READINGS", "--schema", "LAB");    Check "--schema with a table" 2 $CODE; Contains "says what it takes" "--schema describes a whole schema" $OUT
+    Run @("--schema", "LAB", "--sample", "5");   Check "--schema with --sample" 2 $CODE
+    Run @("--schema", "LAB", "--show");          Check "--schema with --show" 2 $CODE; Contains "names the mode" "--show does not go with --schema" $OUT
+    Run @("--schema", "LAB", "--link", "A.B=C.D"); Check "--link without --approve" 2 $CODE; Contains "says where it goes" "go with --approve" $OUT
+    Run @("--schema", "LAB", "--approve", "--link", "A.B"); Check "--link without the key" 2 $CODE; Contains "says the shape" "TABLE.COLUMN=TABLE.KEY" $OUT
+    Run @("--schema", "LAB", "--approve", "--unlink", "A"); Check "--unlink without the column" 2 $CODE; Contains "says the shape" "the TABLE.COLUMN a link starts from" $OUT
+    Run @("readings", "--approve", "--link", "A.B=C.D"); Check "--link without --schema" 2 $CODE; Contains "says it goes with --schema" "go with --schema" $OUT
     Run @("LAB.READINGS", "--json", "--bogus");  Check "with --json the refusal is still exit 2" 2 $CODE
     Check "and the refusal is flagged for JSON" $true $script:ExakitRefusalJson
 
@@ -153,6 +163,13 @@ try {
     Run @("readings", "--versions");             Check "versions" "versions readings" (Asked "args")
     Run @("readings", "--comments", "-j");       Check "comments" "comments readings --json" (Asked "args")
     Check "the dsn reaches the approve half too" "127.0.0.1:8563" (Asked "dsn")
+    Write-Host "the schema half passes through the same way:"
+    Run @("--schema", "tpch");                   Check "schema, the name" "schema tpch" (Asked "args")
+    Run @("--schema", "TPCH", "-j");             Check "schema with --json" "schema TPCH --json" (Asked "args")
+    Run @("--schema", "TPCH", "--approve", "--link", "ORDERS.O_CLERK=CLERKS.ID", "--unlink", "LINEITEM.L_PARTKEY", "--link", "A.B=C.D", "--owner", "lee", "--no-comments")
+    Check "every schema approve option, in the service's order" "schema-approve TPCH --owner lee --no-comments --link ORDERS.O_CLERK=CLERKS.ID --link A.B=C.D --unlink LINEITEM.L_PARTKEY" (Asked "args")
+    $env:STUB_EXIT = "3"
+    Run @("--schema", "NOPE");                   Check "3: no such schema" 3 $CODE
     $env:STUB_EXIT = "2"
     Run @("readings", "--approve", "--role", "entity=NOPE"); Check "the service's 2 (a bad role) is the command's" 2 $CODE
     $env:STUB_EXIT = "3"
@@ -180,7 +197,7 @@ try {
     Check "the help document has the command" 1 @($help.commands | Where-Object { $_.command -eq "describe" }).Count
     Check "in the personas and notebooks group" $true ((@($help.groups | Where-Object { $_.title -eq "Personas and notebooks" })[0].commands) -contains "describe")
     $page = @($help.commands | Where-Object { $_.command -eq "describe" })[0]
-    foreach ($opt in @("--approve", "--role", "--owner", "--no-comments", "--show", "--version", "--versions", "--comments")) {
+    foreach ($opt in @("--approve", "--role", "--owner", "--no-comments", "--show", "--version", "--versions", "--comments", "--schema", "--link", "--unlink")) {
         Contains "the options list $opt" $opt $page.options
     }
     Contains "the page says what approve writes" "descriptors/<SCHEMA>.<TABLE>/draft.yaml" $page.description
@@ -188,6 +205,9 @@ try {
     Contains "and the view for a virtual table" "EXAKIT_SEMANTIC.<SCHEMA>__<TABLE>" $page.description
     Contains "and exit 5" "5 when another approve" $page.description
     Contains "with an approve example" "exakit describe orders --approve" ($page.examples -join "`n")
+    Contains "the page says where a schema map is kept" "descriptors/<SCHEMA>/" $page.description
+    Contains "and the view its links are published as" "EXAKIT_SEMANTIC.<SCHEMA>__RELATIONS" $page.description
+    Contains "with a schema example" "exakit describe --schema" ($page.examples -join "`n")
 } finally {
     Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 }

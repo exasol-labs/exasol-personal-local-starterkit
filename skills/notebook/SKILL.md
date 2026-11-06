@@ -121,6 +121,14 @@ repeated keys and ids, exact copies, empty cells, placeholder values such as `Un
 label) and `nb.leakage_check(conn, ds)` (Validate: a column whose values decide the label on their own,
 like `amazon_sales`' `STATUS`; the model leaves it out). Neither changes the data. Use them on the
 user's own table too before reporting a rate. `fraud_transactions` is the messy dataset that has all of it.
+Two proposals follow, each shown with its exact SQL and created only on request (`USE_JOINED`,
+`USE_PREPARED` in the first cell, or `.create(conn)`), each becoming a dataset with its own approved
+column map that every later step reads: `nb.describe_schema(conn, ds).joined_view(ds)` - the table
+with every table its many-to-one links reach (the schema map: keys and links, declared or found and
+checked on the values; `exakit describe --schema <SCHEMA>`; the approved links are published as
+`EXAKIT_SEMANTIC.<SCHEMA>__RELATIONS`, so join along them instead of guessing a join) - and
+`nb.typed_view(conn, ds)` - numbers and dates in their types, placeholders as NULL, copies dropped.
+Both go into `EXAKIT_PREPARED`; neither touches the user's tables.
 `data-scientist/01_explore` is built that way: its settings are all in the first cell, one
 assignment (`DATASET = ...`) picks the data, every query is printed before its result, a small
 scikit-learn model runs on this computer, and a text step calls the user's own model endpoint

@@ -63,10 +63,12 @@ function Invoke-DescribeService {
 # exakit describe <table> [--sample N] [--id <slug>] [--json] [--write <path>]
 # exakit describe <id|draft.yaml> --approve [--role r=COL]... [--owner x] [--no-comments] [--json]
 # exakit describe <id> --show [--version n] | --versions | --comments [--json]
+# exakit describe --schema <SCHEMA> [--approve [--link T.COL=T.KEY]... [--unlink T.COL]... [--owner x] [--no-comments]] [--json]
 function Invoke-CmdDescribe {
     param([string[]]$CmdArgs = @())
     $target = ""; $sample = ""; $id = ""; $json = $false; $write = ""
     $mode = ""; $owner = ""; $version = ""; $noComments = $false; $roles = @()
+    $schema = ""; $links = @(); $unlinks = @()
     $i = 0
     while ($i -lt $CmdArgs.Count) {
         $arg = "$($CmdArgs[$i])"
@@ -77,7 +79,7 @@ function Invoke-CmdDescribe {
             $mode = $arg
         }
         elseif ($arg -eq "--no-comments") { $noComments = $true }
-        elseif ($arg -in @("--sample", "--id", "--write", "--owner", "--version", "--role")) {
+        elseif ($arg -in @("--sample", "--id", "--write", "--owner", "--version", "--role", "--schema", "--link", "--unlink")) {
             $value = ""
             if ($i + 1 -lt $CmdArgs.Count) { $value = "$($CmdArgs[$i + 1])" }
             if (-not $value -or $value.StartsWith("-")) { Deny-ExakitInput "$arg needs a value: exakit describe ... $arg <value>" }
@@ -112,17 +114,60 @@ function Invoke-CmdDescribe {
                     }
                     $roles += $value
                 }
+                "--schema" {
+                    if ($schema) { Deny-ExakitInput "--schema was given twice." }
+                    if ($value -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') { Deny-ExakitInput "--schema takes a schema name (letters, digits and _), not '$value'." }
+                    $schema = $value
+                }
+                "--link" {
+                    if ($value -notmatch '^[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*=[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*$') {
+                        Deny-ExakitInput "--link takes TABLE.COLUMN=TABLE.KEY (the column, then the key it points at), not '$value'."
+                    }
+                    $links += $value
+                }
+                "--unlink" {
+                    if ($value -notmatch '^[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*$') {
+                        Deny-ExakitInput "--unlink takes the TABLE.COLUMN a link starts from, not '$value'."
+                    }
+                    $unlinks += $value
+                }
             }
             $i++
         }
-        elseif ($arg.StartsWith("-")) { Deny-ExakitInput "Unknown option '$arg' for describe (supported: --sample, --id, --json, --write, --approve, --role, --owner, --no-comments, --show, --version, --versions, --comments)." }
+        elseif ($arg.StartsWith("-")) { Deny-ExakitInput "Unknown option '$arg' for describe (supported: --sample, --id, --json, --write, --approve, --role, --owner, --no-comments, --show, --version, --versions, --comments, --schema, --link, --unlink)." }
         elseif ($target) { Deny-ExakitInput "Name one table or descriptor: exakit describe SCHEMA.TABLE | exakit describe <id> --approve|--show|--versions|--comments" }
         else { $target = $arg }
         $i++
     }
     $idShape = '^[a-z0-9]+([-_][a-z0-9]+)*$'
     $serviceArgs = @()
-    if (-not $mode) {
+    if ($schema) {
+        # The whole schema: its tables and the links between them, drafted or approved. Twin of the --schema arm in
+        # describe.sh.
+        if ($target -or $sample -or $id -or $write -or $version -or $roles.Count -gt 0) {
+            Deny-ExakitInput "--schema describes a whole schema and takes no table, --sample, --id, --write, --version or --role: exakit describe --schema SCHEMA [--approve [--link T.COL=T.KEY]... [--unlink T.COL]... [--owner who] [--no-comments]] [--json]"
+        }
+        if ($mode -eq "--approve") {
+            $serviceArgs = @("schema-approve", $schema)
+            if ($owner) { $serviceArgs += @("--owner", $owner) }
+            if ($noComments) { $serviceArgs += "--no-comments" }
+            if ($json) { $serviceArgs += "--json" }
+            foreach ($link in $links) { $serviceArgs += @("--link", $link) }
+            foreach ($unlink in $unlinks) { $serviceArgs += @("--unlink", $unlink) }
+        }
+        elseif (-not $mode) {
+            if ($owner -or $noComments -or $links.Count -gt 0 -or $unlinks.Count -gt 0) {
+                Deny-ExakitInput "--link, --unlink, --owner and --no-comments go with --approve: exakit describe --schema SCHEMA --approve [--link T.COL=T.KEY]..."
+            }
+            $serviceArgs = @("schema", $schema)
+            if ($json) { $serviceArgs += "--json" }
+        }
+        else { Deny-ExakitInput "$mode does not go with --schema: exakit describe --schema SCHEMA [--approve] [--json]" }
+    }
+    elseif ($links.Count -gt 0 -or $unlinks.Count -gt 0) {
+        Deny-ExakitInput "--link and --unlink go with --schema: exakit describe --schema SCHEMA --approve [--link T.COL=T.KEY]... [--unlink T.COL]..."
+    }
+    elseif (-not $mode) {
         if ($owner -or $version -or $noComments -or $roles.Count -gt 0) {
             Deny-ExakitInput "--role, --owner, --no-comments and --version go with --approve or --show: exakit describe <id> --approve [--role role=COLUMN]... [--owner who] [--no-comments]"
         }

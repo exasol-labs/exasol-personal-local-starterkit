@@ -19,6 +19,14 @@ library only.
     python describe_service.py versions <id | SCHEMA.TABLE> [--json]             every version with its owner
     python describe_service.py comments <id | SCHEMA.TABLE> [--json]             publish the current version again
     python describe_service.py profile <SCHEMA.TABLE>                            the profile alone, as JSON
+    python describe_service.py schema <SCHEMA> [--json]
+        the whole schema as one map: every table (rows, key) and every many-to-one link between them, declared or
+        found (a column naming another table's key whose every value is in it), each with its evidence; kept in the
+        store as draft.json until it is approved.
+    python describe_service.py schema-approve <SCHEMA> [--link <T.COL>=<T.KEY> ...] [--unlink <T.COL> ...]
+                                                       [--owner <who>] [--no-comments] [--json]
+        approves the schema's draft with the corrections given (--link adds a link, --unlink removes one): writes
+        v<n+1>.json and current.json, then publishes the links as EXAKIT_SEMANTIC.<SCHEMA>__RELATIONS.
 
 Exit codes: 0 ok; 2 bad arguments or roles (the message names the column, the slot and the reason); 3 the table or
 the descriptor is not there; 4 the database is not reachable; 5 another writer took the version number.
@@ -45,6 +53,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from descriptor import draft as drafting, flow, profile as profiling, publish as publishing, store  # noqa: E402
+from descriptor import schema as schema_map  # noqa: E402
 
 SAMPLE = 10000                       # rows of a virtual table the content digest reads
 DIGEST_SLICES = 5                    # 48-bit slices of each row hash summed (60 of the 64 hex chars)
@@ -407,6 +416,75 @@ def comments(conn, target: str) -> dict[str, Any]:
     return publishing.publish(conn.execute, lambda sql: _rows(conn, sql), flow.load(text), os.environ.get(READER_VARIABLE))
 
 
+# --- the whole schema ------------------------------------------------------------------------------------------------
+
+def describe_schema(conn, schema: str) -> dict[str, Any]:
+    """{status: draft, doc, approved: the current approved version or None}: the schema as found now."""
+    try:
+        doc = schema_map.draft(lambda sql: _rows(conn, sql), schema)
+    except LookupError as err:
+        raise NotFound(str(err)) from err
+    except ValueError as err:
+        raise Refused(str(err)) from err
+    approved = schema_map.current(doc["schema"])
+    return {"status": "draft", "doc": doc, "approved": approved["version"] if approved else None}
+
+
+def edit_links(doc: dict[str, Any], links: list[str] | None = None, unlinks: list[str] | None = None) -> dict[str, Any]:
+    """The schema map with links added (``T.COL=T.KEY``) and removed (``T.COL``), each marked as the user's."""
+    doc = json.loads(json.dumps(doc))
+    for spec in unlinks or []:
+        name = spec.strip().upper()
+        if not any(l["from"].upper() == name for l in doc["relations"]):
+            raise Refused(f"There is no link from {spec} to remove (the links are from: "
+                          f"{', '.join(l['from'] for l in doc['relations']) or 'none'}).")
+        doc["relations"] = [l for l in doc["relations"] if l["from"].upper() != name]
+    for spec in links or []:
+        source, sep, target = spec.partition("=")
+        if not sep or "." not in source or "." not in target:
+            raise Refused(f"--link takes TABLE.COLUMN=TABLE.KEY, not '{spec}'.")
+        source, target = source.strip().upper(), target.strip().upper()
+        doc["relations"] = [l for l in doc["relations"] if l["from"].upper() != source]
+        doc["relations"].append({"from": source, "to": target, "kind": "many-to-one", "evidence": "set by you",
+                                 "confidence": "high"})
+    problems = schema_map.check(doc)
+    if problems:
+        raise Refused("; ".join(problems))
+    return doc
+
+
+def approve_schema(conn, schema: str, links: list[str] | None = None, unlinks: list[str] | None = None,
+                   owner: str | None = None, publish: bool = True, doc: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Approve the schema's draft (or ``doc``, a notebook's) with the corrections given."""
+    try:
+        name = schema_map.schema_name(schema)
+    except ValueError as err:
+        raise Refused(str(err)) from err
+    doc = doc or schema_map.read(name, "draft.json")
+    if doc is None:
+        raise NotFound(f"There is no draft of {name}: describe it first (exakit describe --schema {name}).")
+    try:
+        return schema_map.approve(lambda sql: _rows(conn, sql), conn.execute, edit_links(doc, links, unlinks),
+                                  owner=flow.owner_name(owner), reader=os.environ.get(READER_VARIABLE), publish=publish)
+    except store.VersionTaken as err:
+        raise Conflict(str(err)) from err
+    except ValueError as err:
+        raise Refused(str(err)) from err
+
+
+def schema_text(doc: dict[str, Any]) -> str:
+    """The schema map for a terminal: its tables, then its links with their evidence."""
+    tables, links = len(doc["tables"]), len(doc["relations"])
+    lines = [f"{doc['schema']} - {doc['status']} schema map v{doc['version']}: {tables} table{'s' * (tables != 1)}, "
+             f"{links} link{'s' * (links != 1)}"]
+    for table, info in doc["tables"].items():
+        key = ", ".join(info.get("key") or []) or "none"
+        lines.append(f"  {table:<24} {int(info.get('rows') or 0):>12,} rows   key {key} ({info.get('key_evidence')})")
+    for link in doc["relations"]:
+        lines.append(f"  {link['from']} -> {link['to']}   ({link['evidence']})")
+    return "\n".join(lines)
+
+
 def model_notes(doc: dict[str, Any], profile: dict[str, Any]) -> dict[str, str] | None:
     """Step 7, optional: one line per column from the user's model, when EXAKIT_MODEL_ID and EXAKIT_PROVIDER_BASE_URL
     are both set. ONE call with each column's name, type, role, evidence and top values - never a row, never a
@@ -468,10 +546,10 @@ def _workflow_log():
 # --- the command line ------------------------------------------------------------------------------------------------
 
 def _options(args: list[str]) -> tuple[list[str], dict[str, Any]]:
-    words, opts = [], {"role": [], "set": []}
+    words, opts = [], {"role": [], "set": [], "link": [], "unlink": []}
     flags = {"--json": "json", "--no-comments": "no_comments", "--force": "force"}
     valued = {"--sample": "sample", "--id": "id", "--write": "write", "--owner": "owner", "--version": "version",
-              "--role": "role", "--set": "set"}
+              "--role": "role", "--set": "set", "--link": "link", "--unlink": "unlink"}
     i = 0
     while i < len(args):
         arg = args[i]
@@ -481,7 +559,7 @@ def _options(args: list[str]) -> tuple[list[str], dict[str, Any]]:
             if i + 1 >= len(args):
                 raise Refused(f"{arg} needs a value.")
             key = valued[arg]
-            if key in ("role", "set"):
+            if key in ("role", "set", "link", "unlink"):
                 opts[key].append(args[i + 1])
             else:
                 opts[key] = args[i + 1]
@@ -537,6 +615,24 @@ def _run(command: str, words: list[str], opts: dict[str, Any]) -> None:
     elif command == "versions":
         found = versions(target)
         _emit(found, bool(opts.get("json")), "\n".join(f"v{v['version']}  {v['status']}  {v['owner']}  {v['approved_at']}" for v in found) or "no versions")
+    elif command == "schema":
+        conn = connect()
+        try:
+            found = describe_schema(conn, target)
+        finally:
+            conn.close()
+        _emit(found, bool(opts.get("json")), schema_text(found["doc"]))
+    elif command == "schema-approve":
+        conn = connect()
+        try:
+            result = approve_schema(conn, target, opts["link"], opts["unlink"], opts.get("owner"), not opts.get("no_comments"))
+        finally:
+            conn.close()
+        line = result.get("message") or (f"{result['status'].capitalize()}: {result['schema']} v{result['version']} "
+                                         f"({result['relations']} links, owner {result['owner']}), {result['path']}"
+                                         + (f"; published as {result['published']}" if result.get("published") else "")
+                                         + (f"; not published: {result['reason']}" if result.get("reason") else ""))
+        _emit(result, bool(opts.get("json")), line)
     elif command == "comments":
         conn = connect()
         try:
@@ -545,7 +641,7 @@ def _run(command: str, words: list[str], opts: dict[str, Any]) -> None:
             conn.close()
         _emit(found, bool(opts.get("json")), f"Published {found['view']} ({found['columns']} columns)")
     else:
-        raise Refused(f"Unknown command '{command}' (draft, approve, show, versions, comments, profile).")
+        raise Refused(f"Unknown command '{command}' (draft, approve, show, versions, comments, profile, schema, schema-approve).")
 
 
 def main(argv: list[str]) -> int:

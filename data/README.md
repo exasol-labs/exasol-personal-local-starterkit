@@ -180,6 +180,16 @@ It then publishes the roles as a view, `EXAKIT_SEMANTIC.<SCHEMA>__<TABLE>`, whos
 comments carry them, so an AI client connected over MCP sees them.
 The table must not have changed since it was profiled: the schema digest is checked again.
 
+**Several tables: the schema map.** `exakit describe --schema MY_DATA` (or
+`nb.describe_schema(conn, "MY_DATA")`) describes the whole schema: every table with its rows
+and key, and every many-to-one link between them - a foreign key the database declares, or a
+column that names another table's key and whose every value is in it (a name alone never makes
+a link). Correct it with `--link TABLE.COLUMN=TABLE.KEY` / `--unlink TABLE.COLUMN` and approve
+with `--approve`: `~/.exasol-starter-kit/descriptors/<SCHEMA>/v<n>.json` and `current.json`, the
+links published as `EXAKIT_SEMANTIC.<SCHEMA>__RELATIONS` for AI clients. In Explore,
+`schema_map.joined_view(dataset).create(conn)` turns it into one view,
+`EXAKIT_PREPARED."<SCHEMA>__<TABLE>__JOINED"`, with its own approved column map.
+
 **Where a descriptor is read from.** `nb.dataset(conn, name)` takes, in this order: a path
 (a descriptor file, or a folder holding `descriptor.yaml`); for a data file of your own,
 `<name>.descriptor.yaml` beside it; for an id, the approved version in the kit's store, then

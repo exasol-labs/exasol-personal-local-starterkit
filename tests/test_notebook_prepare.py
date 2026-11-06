@@ -108,6 +108,13 @@ class TypedViewTest(unittest.TestCase):
         self.assertIn("Not created yet", str(view))
         self.assertTrue(view.sql.startswith('CREATE OR REPLACE VIEW EXAKIT_PREPARED."SHOP__ORDERS" AS'))
 
+    def test_a_joined_view_gets_its_typed_twin_beside_it(self):
+        joined = dataset()
+        joined.fact_table = "EXAKIT_PREPARED.TPCH__ORDERS__JOINED"
+        with mock.patch.object(exakit_nb, "sql", side_effect=Answers()):
+            view = exakit_nb.typed_view(mock.Mock(), joined)
+        self.assertTrue(view.sql.startswith('CREATE OR REPLACE VIEW EXAKIT_PREPARED."TPCH__ORDERS__JOINED__TYPED" AS'))
+
     def test_a_clean_typed_table_needs_no_view(self):
         global FOUND, COLUMNS
         saved = (FOUND, COLUMNS)
