@@ -239,9 +239,9 @@ class LoadWiringTests(unittest.TestCase):
         # one-table data question renamed the row on both sides together.
         self.assertIn("plain|Upload a file or folder: CSV/Parquet/JSON|", bash)
         self.assertIn('-Label "Upload a file or folder: CSV/Parquet/JSON"', ps1)
-        # NEW-09: no row anyone cannot pick, on either side.
-        self.assertNotIn("coming soon", bash)
-        self.assertNotIn("coming soon", ps1)
+        # The same table shows an external source, never pickable, on both.
+        self.assertIn("plain|Connect an external source - coming soon|0|disabled|", bash)
+        self.assertIn('-Label "Connect an external source - coming soon"', ps1)
         self.assertIn("Import-ExakitLocalJson -Path $path -Target $target", ps1)
         for text, name in ((bash, "exapump.sh"), (ps1, "exapump.ps1")):
             with self.subTest(menu=name):

@@ -3,7 +3,7 @@
 # (tests/lib/tty-replay.py types the keys): the pending datasets start ticked,
 # the reader moves to Skip and presses Enter. The answer must be Skip ("none"),
 # not the ticked datasets. Rows: the "Sample datasets" parent, three datasets,
-# your own file, Skip.
+# your own file, an external source (disabled - the cursor steps over it), Skip.
 set -u
 ROOT="$1"; W="$(mktemp -d)"; export HOME="$W/home"; mkdir -p "$HOME"
 EXAKIT_HOME="$W/kit"; EXAKIT_BIN_DIR="$W/bin"; mkdir -p "$EXAKIT_HOME" "$EXAKIT_BIN_DIR"
