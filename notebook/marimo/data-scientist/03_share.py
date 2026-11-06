@@ -33,24 +33,24 @@ def _():
     TITLE = None     # None: named after the data ("<dataset> by <column>"); or a title of your own
     APP_NAME = None  # or a name of your own; the default includes the approved dataset ID and the column
 
-    DATASET = nb.chosen_dataset(DATASET)
+    dataset_id = nb.chosen_dataset(DATASET)
     nb.continue_workflow("share")   # the quickstart's workflow, or the last one: nothing to paste
 
-    conn = nb.connect()
-    ds = nb.dataset(conn, DATASET)
-    ds.require_approved("share")
-    GROUPED_BY, category = ds.group_by()   # the category, else the entity, else the target
-    if GROUPED_BY != "category":
-        print(f"{ds.id} has no category; the dashboard counts rows per {GROUPED_BY} ({category}).")
+    connection = nb.connect()
+    dataset = nb.dataset(connection, dataset_id)
+    dataset.require_approved("share")
+    GROUP_ROLE, GROUP_COLUMN = dataset.group_by()   # the category, else the entity, else the target
+    if GROUP_ROLE != "category":
+        print(f"{dataset.id} has no category; the dashboard counts rows per {GROUP_ROLE} ({GROUP_COLUMN}).")
     # Everything below is named after the data: the column it counts by, and what one row is.
-    GROUP, COUNT = nb.name(category), nb.count_name(ds)
-    TITLE = TITLE or f"{ds.id} by {GROUP.lower()}"
-    APP_NAME = APP_NAME or (ds.id.replace("_", "-")[:30] + "-by-" + GROUP.lower().replace("_", "-"))[:60]
-    QUERY = f"SELECT {category} AS {GROUP}, COUNT(*) AS {COUNT} FROM {ds.fact_table} GROUP BY 1 ORDER BY {COUNT} DESC"
-    draft = nb.share(ds, QUERY, TITLE, APP_NAME, measure="count")
-    print("Query digest:", draft.query_digest)
-    print("Descriptor version:", ds.version)
-    return draft, nb
+    GROUP_HEADER, COUNT_HEADER = nb.name(GROUP_COLUMN), nb.count_name(dataset)
+    dashboard_title = TITLE or f"{dataset.id} by {GROUP_HEADER.lower()}"
+    app_name = APP_NAME or (dataset.id.replace("_", "-")[:30] + "-by-" + GROUP_HEADER.lower().replace("_", "-"))[:60]
+    dashboard_query = f"SELECT {GROUP_COLUMN} AS {GROUP_HEADER}, COUNT(*) AS {COUNT_HEADER} FROM {dataset.fact_table} GROUP BY 1 ORDER BY {COUNT_HEADER} DESC"
+    dashboard_draft = nb.share(dataset, dashboard_query, dashboard_title, app_name, measure="count")
+    print("Query digest:", dashboard_draft.query_digest)
+    print("Descriptor version:", dataset.version)
+    return dashboard_draft, nb
 
 
 @app.cell(hide_code=True)
@@ -68,11 +68,11 @@ def _(mo):
 
 
 @app.cell
-def _(draft, nb):
-    DASH_TOOL = nb.dash_tools()
-    preview_path = draft.preview(DASH_TOOL)
-    print("Preview:", DASH_TOOL.url + preview_path)
-    return (DASH_TOOL,)
+def _(dashboard_draft, nb):
+    dash_server = nb.dash_tools()
+    preview_path = dashboard_draft.preview(dash_server)
+    print("Preview:", dash_server.url + preview_path)
+    return (dash_server,)
 
 
 @app.cell(hide_code=True)
@@ -86,11 +86,11 @@ def _(mo):
 
 
 @app.cell
-def _(DASH_TOOL, draft):
+def _(dash_server, dashboard_draft):
     FIGURES_CHECKED = False
     if FIGURES_CHECKED:
-        live_path = draft.confirm(DASH_TOOL, figures_checked=True)
-        print("Live dashboard:", DASH_TOOL.url + live_path)
+        live_path = dashboard_draft.confirm(dash_server, figures_checked=True)
+        print("Live dashboard:", dash_server.url + live_path)
     else:
         print("Open the healthy preview and check the figures before promoting.")
     return

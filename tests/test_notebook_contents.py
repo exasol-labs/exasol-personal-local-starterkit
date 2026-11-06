@@ -85,7 +85,7 @@ class CallsExistTest(unittest.TestCase):
 
     def test_every_package_call_a_notebook_makes_exists(self):
         targets = {"nb": set(dir(exakit_nb)), "exakit_nb": set(dir(exakit_nb)), "exasol_mlflow": set(dir(exasol_mlflow)),
-                   "ds": _members(Dataset), "run": _members(exasol_mlflow.Run) | set(vars(exasol_mlflow.Run(
+                   "dataset": _members(Dataset), "loaded_dataset": _members(Dataset), "run": _members(exasol_mlflow.Run) | set(vars(exasol_mlflow.Run(
                        None, None, experiment="e", run_name=None, params=None, tags=None, tracking_dir=None)))}
         for path in NOTEBOOKS:
             for name, known in targets.items():
@@ -198,9 +198,9 @@ class NotebookShapeTest(unittest.TestCase):
     def test_role_review_follows_selection_and_precedes_queries(self):
         for persona in ("data-scientist", "ml-engineer"):
             cells = ["".join(c["source"]) for c in _built_cells(SOURCES / persona / "00_quickstart.py")]
-            selected = next(i for i, cell in enumerate(cells) if "nb.first(source, own, sample)" in cell)
-            review = next(i for i, cell in enumerate(cells) if "nb.review_roles(conn, ds)" in cell)
-            approved = next(i for i, cell in enumerate(cells) if "ds = review.dataset()" in cell)
+            selected = next(i for i, cell in enumerate(cells) if "nb.first(source_data, own_data, sample_data)" in cell)
+            review = next(i for i, cell in enumerate(cells) if "nb.review_roles(connection, chosen_data)" in cell)
+            approved = next(i for i, cell in enumerate(cells) if "dataset = role_review.dataset()" in cell)
             query = next(i for i, cell in enumerate(cells) if "first_rows = nb.sql(" in cell)
             self.assertLess(selected, review)
             self.assertLess(review, approved)
@@ -218,7 +218,7 @@ class NotebookShapeTest(unittest.TestCase):
         """G2 C2: one CONTAINER assignment near the top of each ML notebook, defaulting to the manifest's installed
         alias (ml_train.udf_container: PYTHON3_ML before PYTHON3); the quickstart's container check probes that
         alias and 01_train's plan creates the UDF on it, so the check's fix installs the container training uses."""
-        for name, user in (("00_quickstart.py", "nb.check_container(conn, alias=CONTAINER)"),
+        for name, user in (("00_quickstart.py", "nb.check_container(connection, alias=CONTAINER)"),
                            ("01_train.py", "container=CONTAINER")):
             with self.subTest(notebook=name):
                 cells = _built_cells(SOURCES / "ml-engineer" / name)
@@ -231,7 +231,7 @@ class NotebookShapeTest(unittest.TestCase):
                 self.assertEqual(len(used), 1, f"{user} in one cell")
                 self.assertLess(assigned[0], used[0])
                 text = "".join(code)
-                self.assertNotIn("nb.check_container(conn)", text, "the check never falls back to a default alias here")
+                self.assertNotIn("nb.check_container(connection)", text, "the check never falls back to a default alias here")
                 self.assertNotIn('"PYTHON3")', text.replace('"PYTHON3_ML"', ""), "no alias is hard-wired")
                 markdown = "".join("".join(c["source"]) for c in cells if c["cell_type"] == "markdown")
                 for needle in ("`PYTHON3_ML`", "`exakit udf-use default`", "`PYTHON3`", "`exakit udf-setup`", "`EXAKIT_UDF_CONTAINER`"):
@@ -242,14 +242,14 @@ class NotebookShapeTest(unittest.TestCase):
         count out, printing the reason, instead of raising on a missing category or label role."""
         code = ["".join(c["source"]) for c in _built_cells(SOURCES / "ml-engineer" / "00_quickstart.py") if c["cell_type"] == "code"]
         cell = next(s for s in code if "first_rows = nb.sql(" in s)
-        self.assertIn('BY = ds.col("category") if ds.has("category") else ds.col("entity")', cell)
-        self.assertIn("if ds.has(\"label\") else None", cell)
-        self.assertIn('ROUND(100 * AVG({ds.col(\'label\')}), 1) AS {PCT}', cell)
-        self.assertIn("nb.note_groups(first_rows, ds, GROUP, COUNT, PCT", cell, "the result carries its plain-language note")
-        self.assertIn("ds.missing", cell)
-        self.assertIn("skipped[role]", cell)
-        self.assertNotIn('SUM({ds.col("label")})', cell, "no unguarded label column")
-        self.assertNotIn('GROUP BY {ds.col("category")}', cell, "no unguarded category column")
+        self.assertIn('GROUP_COLUMN = dataset.col("category") if dataset.has("category") else dataset.col("entity")', cell)
+        self.assertIn("if dataset.has(\"label\") else None", cell)
+        self.assertIn('ROUND(100 * AVG({dataset.col(\'label\')}), 1) AS {LABEL_PCT_HEADER}', cell)
+        self.assertIn("nb.note_groups(first_rows, dataset, GROUP_HEADER, COUNT_HEADER, LABEL_PCT_HEADER", cell, "the result carries its plain-language note")
+        self.assertIn("dataset.missing", cell)
+        self.assertIn("missing_roles[role]", cell)
+        self.assertNotIn('SUM({dataset.col("label")})', cell, "no unguarded label column")
+        self.assertNotIn('GROUP BY {dataset.col("category")}', cell, "no unguarded category column")
 
     def test_the_quickstart_has_one_cell_per_way_data_comes_in(self):
         sources = ["".join(c["source"]) for c in _built_cells(SOURCES / "data-scientist" / "00_quickstart.py")]
@@ -271,7 +271,7 @@ class NotebookShapeTest(unittest.TestCase):
                         self.assertNotIn("01_explore", text)
         explore = (SOURCES / "data-scientist" / "01_explore.py").read_text(encoding="utf-8")
         self.assertNotIn("write_handoff", explore)
-        self.assertIn("nb.ml_train.training_handoff(conn, ds", (SOURCES / "ml-engineer" / "01_train.py").read_text(encoding="utf-8"))
+        self.assertIn("nb.ml_train.training_handoff(connection, dataset", (SOURCES / "ml-engineer" / "01_train.py").read_text(encoding="utf-8"))
         text = explore
         self.assertIn("`LANGFUSE_BASE_URL`", text)
         for match in re.finditer("LANGFUSE_HOST", text):
@@ -281,22 +281,22 @@ class NotebookShapeTest(unittest.TestCase):
 
     def test_explore_skips_what_a_missing_role_needs_and_says_why(self):
         """AC-DS5.3 / design 2.4: a role no column fits does not stop explore. The roles cell takes the date and label
-        through ds.has() and prints the descriptor's reason (ds.missing) with the steps it skips; the landscape, the
-        over-time step and the small model are each wrapped in a ds.has() guard that prints that reason, with the SQL
+        through dataset.has() and prints the descriptor's reason (dataset.missing) with the steps it skips; the landscape, the
+        over-time step and the small model are each wrapped in a dataset.has() guard that prints that reason, with the SQL
         text inside untouched (AC-DS3.2 is held by SwapTest); the text step runs on the text roles alone, its label
-        column and ordering coming from ds.has() fragments; the handoff is left to its own refusal."""
+        column and ordering coming from dataset.has() fragments; the handoff is left to its own refusal."""
         cells = ["".join(c["source"]) for c in _built_cells(SOURCES / "data-scientist" / "01_explore.py")
                  if c["cell_type"] == "code"]
-        roles = next(c for c in cells if 'ds.col("date") if ds.has("date") else None' in c)
-        for needle in ('ds.col("date") if ds.has("date") else None', 'ds.col("label") if ds.has("label") else None',
-                       "for m in ds.missing", "skip below"):
+        roles = next(c for c in cells if 'dataset.col("date") if dataset.has("date") else None' in c)
+        for needle in ('dataset.col("date") if dataset.has("date") else None', 'dataset.col("label") if dataset.has("label") else None',
+                       "for missing in dataset.missing", "skip below"):
             self.assertIn(needle, roles)
-        self.assertNotIn('ds.col("date"),', roles, "the date and label are no longer read unguarded")
-        guarded = {"landscape = nb.sql(": 'if not all(ds.has(role) for role in ("entity", "category", "label")):',
-                   "over_time = nb.sql(": 'if not (ds.has("date") and ds.has("label")):',
+        self.assertNotIn('dataset.col("date"),', roles, "the date and label are no longer read unguarded")
+        guarded = {"landscape = nb.sql(": 'if not all(dataset.has(role) for role in ("entity", "category", "label")):',
+                   "over_time = nb.sql(": 'if not (dataset.has("date") and dataset.has("label")):',
                    # The small model needs no text and no date: the category or the entity (one that does not give
                    # the label away), and the month only when there is a date.
-                   "rows = nb.sql(": 'if not (ds.has("label") and (USE_CATEGORY or USE_ENTITY)):'}
+                   "model_rows = nb.sql(": 'if not (dataset.has("label") and (USE_CATEGORY or USE_ENTITY)):'}
         for sql, guard in guarded.items():
             with self.subTest(cell=sql):
                 cell = next(c for c in cells if sql in c)
@@ -306,11 +306,11 @@ class NotebookShapeTest(unittest.TestCase):
         words = next(c for c in cells if "get_feature_names_out" in c)
         self.assertIn("if model is not None:", words)
         text_step = next(c for c in cells if "SAMPLE_SQL = " in c)
-        self.assertIn('if not ds.has("text"):', text_step)
-        self.assertNotIn('if not ds.has("date")', text_step)
-        self.assertNotIn('if not ds.has("label")', text_step)
-        self.assertIn('if ds.has("label") else ""', text_step)
-        self.assertIn('if ds.has("date") else ds.col("entity") if ds.has("entity") else "1"', text_step)
+        self.assertIn('if not dataset.has("text"):', text_step)
+        self.assertNotIn('if not dataset.has("date")', text_step)
+        self.assertNotIn('if not dataset.has("label")', text_step)
+        self.assertIn('if dataset.has("label") else ""', text_step)
+        self.assertIn('if dataset.has("date") else dataset.col("entity") if dataset.has("entity") else "1"', text_step)
         for role in ("date", "label"):
             self.assertNotIn("{" + role.upper() + "}", text_step, f"the {role} is in the text SQL only when it exists")
 

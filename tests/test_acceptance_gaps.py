@@ -103,16 +103,16 @@ class MissingRolesTest(unittest.TestCase):
             # month out). Where those are there it would train (scikit-learn, real rows), so its cell is not run here:
             # its own guard is read, after the lines that set it up, and must admit it.
             model_runs = missing in ("entity", "category", "text", "date")
-            cells = [c for c in self.cells if c.startswith(("DATASET = ", "import os\n", "findings = ", "prepared = ", "ENTITY = ",
-                     "LEAKED = ", "landscape = ",
-                     "over_time = ", "SAMPLE = ", "SAMPLE_TEXTS = ", "handoff_path = None"))
-                     and not (model_runs and c.startswith("SAMPLE = "))]
+            cells = [c for c in self.cells if c.startswith(("DATASET = ", "import os\n", "findings = ", "typed_view_proposal = ", "ENTITY_COLUMN = ",
+                     "LEAKING_COLUMNS = ", "landscape = ",
+                     "over_time = ", "MODEL_ROW_LIMIT = ", "SAMPLE_TEXTS = ", "handoff_path = None"))
+                     and not (model_runs and c.startswith("MODEL_ROW_LIMIT = "))]
             output = io.StringIO()
             with self.subTest(missing=missing), mock.patch.dict(sys.modules, {"exakit.nb": nb}), \
                     contextlib.redirect_stdout(output):
                 for cell in cells:
                     exec(cell.replace("import exakit.nb as nb", ""), namespace)
-                model_cell = next(c for c in self.cells if c.startswith("SAMPLE = "))
+                model_cell = next(c for c in self.cells if c.startswith("MODEL_ROW_LIMIT = "))
                 guard = re.search(r"^if not (\(.*\)):$", model_cell, re.M).group(1)
                 if model_runs:
                     exec(model_cell.split("\nmodel = None")[0], namespace)
@@ -183,7 +183,7 @@ class RustParityTest(unittest.TestCase):
         for actual in ([0.5, 0.5], [float("nan"), 0.5]):
             frame = pd.DataFrame({"FEATURE": [None, 1.0], "RUST_P": actual})
             query = mock.Mock(return_value=frame)
-            scope = {"np": np, "nb": SimpleNamespace(sql=query), "conn": object(), "features": ["FEATURE"],
+            scope = {"np": np, "nb": SimpleNamespace(sql=query), "connection": object(), "features": ["FEATURE"],
                      "deployed": {"udf": "S.SCORE"}, "handoff": {"training_sql": "SELECT * FROM S.FEATURES"},
                      "TEST_ROWS": 2, "coefficients": {"coef": [[0.0]], "intercept": [0.0]},
                      "expit": lambda x: 1 / (1 + np.exp(-x))}

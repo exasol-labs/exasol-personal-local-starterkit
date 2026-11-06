@@ -24,8 +24,8 @@
 import os
 import exakit.nb as nb
 
-wid = nb.workflow("ml-engineer-quickstart", resume=os.environ.get("EXAKIT_WORKFLOW_ID"))
-print(f"Every step below is logged under it: exakit workflow show {wid}")
+workflow_id = nb.workflow("ml-engineer-quickstart", resume=os.environ.get("EXAKIT_WORKFLOW_ID"))
+print(f"Every step below is logged under it: exakit workflow show {workflow_id}")
 
 # %% [markdown]
 # ## Pick the database Python runtime
@@ -52,7 +52,7 @@ print(f"container alias: {CONTAINER}")
 # Runs a small UDF that imports the training packages. On failure, run the command it prints and repeat.
 
 # %%
-container_ok = nb.check_container(conn, alias=CONTAINER)
+container_ok = nb.check_container(connection, alias=CONTAINER)
 
 # %% [markdown]
 # ## Check MLflow
@@ -77,7 +77,7 @@ mlflow_ok = nb.check_mlflow()
 # Tests that a UDF can read the kit's model directory (needed for Python model-file scoring). `exakit model list --json` shows its paths.
 
 # %%
-bucket_ok = nb.check_bucket(conn)
+bucket_ok = nb.check_bucket(connection)
 
 # %% [include] ../00_shared/data_paths.py load
 
@@ -89,25 +89,25 @@ bucket_ok = nb.check_bucket(conn)
 # How many rows per group and the % where the label is 1. Label 1 means the outcome happened (`CANCELLED`: the order line was cancelled; `ABOVE_STORE_MEDIAN`: the store sold more that week than in its median week), not that it is good. A note under the result says what the numbers mean.
 
 # %%
-skipped = {m["role"]: m["reason"] for m in ds.missing}
+missing_roles = {missing["role"]: missing["reason"] for missing in dataset.missing}
 for role, instead in (("category", "rows are counted per entity instead"),
                       ("label", "the label count is left out, and 01_train has nothing to predict until a label role is approved")):
-    if role in skipped:
-        print(f"No {role} role ({skipped[role]}): {instead}; the steps that need it later say so.")
-BY = ds.col("category") if ds.has("category") else ds.col("entity")
-GROUP, COUNT = nb.name(BY), nb.count_name(ds)       # columns named after the data: CATEGORY, ORDER_LINES
-PCT = nb.name(ds.col("label"), "PCT") if ds.has("label") else None   # CANCELLED_PCT
-RATE = f",\n       ROUND(100 * AVG({ds.col('label')}), 1) AS {PCT}" if PCT else ""
-first_rows = nb.sql(conn, f"""
-SELECT {BY} AS {GROUP},
-       COUNT(*) AS {COUNT}{RATE}
-FROM {ds.fact_table}
-GROUP BY {BY}
-ORDER BY {COUNT} DESC
+    if role in missing_roles:
+        print(f"No {role} role ({missing_roles[role]}): {instead}; the steps that need it later say so.")
+GROUP_COLUMN = dataset.col("category") if dataset.has("category") else dataset.col("entity")
+GROUP_HEADER, COUNT_HEADER = nb.name(GROUP_COLUMN), nb.count_name(dataset)       # columns named after the data: CATEGORY, ORDER_LINES
+LABEL_PCT_HEADER = nb.name(dataset.col("label"), "PCT") if dataset.has("label") else None   # CANCELLED_PCT
+LABEL_RATE_SQL = f",\n       ROUND(100 * AVG({dataset.col('label')}), 1) AS {LABEL_PCT_HEADER}" if LABEL_PCT_HEADER else ""
+first_rows = nb.sql(connection, f"""
+SELECT {GROUP_COLUMN} AS {GROUP_HEADER},
+       COUNT(*) AS {COUNT_HEADER}{LABEL_RATE_SQL}
+FROM {dataset.fact_table}
+GROUP BY {GROUP_COLUMN}
+ORDER BY {COUNT_HEADER} DESC
 LIMIT 10""")
 nb.show_sql()
-overall = nb.sql(conn, f"SELECT COUNT(*) AS N, ROUND(100 * AVG({ds.col('label')}), 1) AS PCT FROM {ds.fact_table}") if PCT else None
-nb.note_groups(first_rows, ds, GROUP, COUNT, PCT, overall=(overall["N"][0], overall["PCT"][0]) if PCT else None)
+overall_rate = nb.sql(connection, f"SELECT COUNT(*) AS N, ROUND(100 * AVG({dataset.col('label')}), 1) AS PCT FROM {dataset.fact_table}") if LABEL_PCT_HEADER else None
+nb.note_groups(first_rows, dataset, GROUP_HEADER, COUNT_HEADER, LABEL_PCT_HEADER, overall=(overall_rate["N"][0], overall_rate["PCT"][0]) if LABEL_PCT_HEADER else None)
 first_rows
 
 # %% [markdown]

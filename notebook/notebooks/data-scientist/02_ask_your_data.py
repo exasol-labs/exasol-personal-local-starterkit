@@ -22,13 +22,13 @@ DATASET = None  # None: the dataset approved last in a quickstart (else amazon_s
 QUESTION = "How many rows are in each category?"
 DRAFT_WITH_MODEL = False  # True: your model drafts the SQL (set it up in the model cell below); no rows are sent
 
-DATASET = nb.chosen_dataset(DATASET)
+dataset_id = nb.chosen_dataset(DATASET)
 nb.continue_workflow("questions")   # the quickstart's workflow, or the last one: nothing to paste
 
-conn = nb.connect()
-ds = nb.dataset(conn, DATASET)
-ds.require_approved("ask")
-nb.show_roles(ds)
+connection = nb.connect()
+dataset = nb.dataset(connection, dataset_id)
+dataset.require_approved("ask")
+nb.show_roles(dataset)
 
 # %% [markdown]
 # ## Optional: your model and Langfuse
@@ -51,12 +51,12 @@ nb.use_model(MODEL_ID, PROVIDER_BASE_URL, LANGFUSE_BASE_URL)
 # Read the SQL, what the model assumed and what it says to check. With the starter SQL (`DRAFT_WITH_MODEL = False`), changing `QUESTION` alone changes nothing; edit the SQL instead: `proposal.edit("SELECT ...")`.
 
 # %%
-GROUPED_BY, BY = ds.group_by()   # the category, else the entity, else the target
-GROUP, COUNT = nb.name(BY), nb.count_name(ds)       # columns named after the data: CATEGORY, ORDER_LINES
-starter_sql = f"SELECT {BY} AS {GROUP}, COUNT(*) AS {COUNT} FROM {ds.fact_table} GROUP BY 1 ORDER BY {COUNT} DESC"
-if GROUPED_BY != "category":
-    print(f"{ds.id} has no category; the starter SQL counts rows per {GROUPED_BY} ({BY}).")
-proposal = nb.ask(ds, QUESTION, proposed_sql=None if DRAFT_WITH_MODEL else starter_sql)
+GROUP_ROLE, GROUP_COLUMN = dataset.group_by()   # the category, else the entity, else the target
+GROUP_HEADER, COUNT_HEADER = nb.name(GROUP_COLUMN), nb.count_name(dataset)       # columns named after the data: CATEGORY, ORDER_LINES
+starter_sql = f"SELECT {GROUP_COLUMN} AS {GROUP_HEADER}, COUNT(*) AS {COUNT_HEADER} FROM {dataset.fact_table} GROUP BY 1 ORDER BY {COUNT_HEADER} DESC"
+if GROUP_ROLE != "category":
+    print(f"{dataset.id} has no category; the starter SQL counts rows per {GROUP_ROLE} ({GROUP_COLUMN}).")
+proposal = nb.ask(dataset, QUESTION, proposed_sql=None if DRAFT_WITH_MODEL else starter_sql)
 proposal
 
 # %% [markdown]

@@ -36,12 +36,12 @@ import exakit.nb as nb
 
 nb.continue_workflow("rust-scoring")   # the quickstart's workflow, or the last one: nothing to paste
 
-conn = nb.connect()
-DATASET = nb.chosen_dataset(DATASET)
-ds = nb.dataset(conn, DATASET).require_approved("rust scoring")
-SCORER_NAME = UDF_NAME or "score_" + ds.id.replace("-", "_")[:40] + "_v" + str(ds.version)
-handoff = nb.read_handoff(ds.id)
-stale = nb.handoff_is_stale(conn, handoff, ds)
+connection = nb.connect()
+dataset_id = nb.chosen_dataset(DATASET)
+dataset = nb.dataset(connection, dataset_id).require_approved("rust scoring")
+SCORER_NAME = UDF_NAME or "score_" + dataset.id.replace("-", "_")[:40] + "_v" + str(dataset.version)
+handoff = nb.read_handoff(dataset.id)
+stale = nb.handoff_is_stale(connection, handoff, dataset)
 if stale:
     raise ValueError(stale)
 
@@ -52,7 +52,8 @@ if stale:
 
 # %%
 source_run_id = None
-if COEFFICIENTS_FILE is None:
+coefficients_path = COEFFICIENTS_FILE
+if coefficients_path is None:
     from mlflow.tracking import MlflowClient
     from exasol_mlflow import tracking
 
@@ -61,18 +62,18 @@ if COEFFICIENTS_FILE is None:
     if experiment is None:
         raise FileNotFoundError("No MLflow experiment from 01_train. Run it first, or set COEFFICIENTS_FILE.")
     runs = client.search_runs([experiment.experiment_id],
-                              filter_string=(f"tags.exasol.descriptor_id = '{ds.id}' "
+                              filter_string=(f"tags.exasol.descriptor_id = '{dataset.id}' "
                                              "AND tags.exasol.language = 'python'"),
                               order_by=["attributes.start_time DESC"], max_results=20)
     matching = [item for item in runs if item.info.status == "FINISHED" and
-                item.data.tags.get("exasol.descriptor_version") == str(ds.version)]
+                item.data.tags.get("exasol.descriptor_version") == str(dataset.version)]
     if not matching:
         raise FileNotFoundError("No finished MLflow run for this descriptor version. Run 01_train again.")
     source_run_id = matching[0].info.run_id
     download_dir = Path(os.environ.get("EXAKIT_HOME") or Path.home() / ".exasol-starter-kit") / "rust-udfs" / "artifacts"
     download_dir.mkdir(parents=True, exist_ok=True)
-    COEFFICIENTS_FILE = client.download_artifacts(matching[0].info.run_id, "coefficients.json", str(download_dir))
-coefficients = json.loads(Path(COEFFICIENTS_FILE).expanduser().read_text(encoding="utf-8"))
+    coefficients_path = client.download_artifacts(matching[0].info.run_id, "coefficients.json", str(download_dir))
+coefficients = json.loads(Path(coefficients_path).expanduser().read_text(encoding="utf-8"))
 features = coefficients["features"]
 if features != [item["name"] for item in handoff["input_schema"] if item["name"] in features]:
     raise ValueError("Coefficient feature order differs from this handoff; rerun 01_train.")
@@ -101,7 +102,7 @@ def exakit(*arguments):
                            ("; run: " + answer["remedy"] if answer.get("remedy") else ""))
     return answer
 
-project = exakit("rust-udf", "new", SCORER_NAME, "--coefficients", str(Path(COEFFICIENTS_FILE).expanduser()))
+project = exakit("rust-udf", "new", SCORER_NAME, "--coefficients", str(Path(coefficients_path).expanduser()))
 built = exakit("rust-udf", "build", SCORER_NAME)
 deploy_options = ["--yes"] if ALLOW_DATABASE_RESTART else []
 deployed = exakit("rust-udf", "deploy", SCORER_NAME, "--schema", UDF_SCHEMA, *deploy_options)
@@ -121,7 +122,7 @@ arguments = ", ".join(f'COALESCE(CAST(T."{feature}" AS DOUBLE), 0.0)' for featur
 test_sql = (f'SELECT T.*, {deployed["udf"]}({arguments}) AS RUST_P '
             f'FROM ({handoff["training_sql"]}) T WHERE T."SPLIT_" = \'test\' LIMIT {TEST_ROWS}')
 print(test_sql)
-test = nb.sql(conn, test_sql)
+test = nb.sql(connection, test_sql)
 matrix = test[features].astype(float).fillna(0.0).to_numpy()
 weights = np.asarray(coefficients["coef"][0], dtype=float)
 expected = expit(matrix @ weights + float(coefficients["intercept"][0]))
@@ -166,8 +167,8 @@ tags = {"exasol.language": "rust", "exasol.container_alias": container["alias"],
         "exasol.container_digest": container_digest, "exasol.base_container_digest": container["sha256"],
         "exasol.rustc": built["rustc"],
         "exasol.sdk": built["sdk"], "exasol.cargo_lock_sha256": lock_digest,
-        "exasol.udf_sha256": built["sha256"], "exasol.descriptor_id": ds.id,
-        "exasol.descriptor_version": str(ds.version), "exasol.workflow_id": nb.current_workflow() or ""}
+        "exasol.udf_sha256": built["sha256"], "exasol.descriptor_id": dataset.id,
+        "exasol.descriptor_version": str(dataset.version), "exasol.workflow_id": nb.current_workflow() or ""}
 if source_run_id:
     tags["exasol.source_run_id"] = source_run_id
 rust_run = client.create_run(experiment_id, tags=tags)
@@ -181,7 +182,7 @@ except Exception:
     client.set_terminated(rust_run.info.run_id, status="FAILED")
     raise
 client.set_terminated(rust_run.info.run_id, status="FINISHED")
-nb.log_event("mlflow.run", run_id=rust_run.info.run_id, language="rust", descriptor_id=ds.id,
-             descriptor_version=ds.version, container_digest=container_digest,
+nb.log_event("mlflow.run", run_id=rust_run.info.run_id, language="rust", descriptor_id=dataset.id,
+             descriptor_version=dataset.version, container_digest=container_digest,
              cargo_lock_sha256=lock_digest, udf_sha256=built["sha256"])
 print("Rust scoring MLflow run:", rust_run.info.run_id)

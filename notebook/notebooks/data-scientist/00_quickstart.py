@@ -22,8 +22,8 @@
 import os
 import exakit.nb as nb
 
-wid = nb.workflow("data-scientist-quickstart", resume=os.environ.get("EXAKIT_WORKFLOW_ID"))
-print(f"Every step below is logged under it: exakit workflow show {wid}")
+workflow_id = nb.workflow("data-scientist-quickstart", resume=os.environ.get("EXAKIT_WORKFLOW_ID"))
+print(f"Every step below is logged under it: exakit workflow show {workflow_id}")
 
 # %% [include] ../00_shared/data_paths.py connect
 
@@ -37,25 +37,25 @@ print(f"Every step below is logged under it: exakit workflow show {wid}")
 # How many rows per group and, when the column map names a label, the % where it is 1. A note under the result says what the numbers mean.
 
 # %%
-skipped = {m["role"]: m["reason"] for m in ds.missing}
-GROUPED_BY, BY = ds.group_by()   # the category, else the entity, else the target
-if GROUPED_BY != "category":
-    print(f"No category role ({skipped.get('category', 'none approved')}): rows are counted per {GROUPED_BY} instead.")
-if "label" in skipped:
-    print(f"No label role ({skipped['label']}): the label rate is left out; the steps that need it later say so.")
-GROUP, COUNT = nb.name(BY), nb.count_name(ds)       # columns named after the data: CATEGORY, ORDER_LINES
-PCT = nb.name(ds.col("label"), "PCT") if ds.has("label") and GROUPED_BY != "label" else None   # CANCELLED_PCT
-RATE = f",\n       ROUND(100 * AVG({ds.col('label')}), 1) AS {PCT}" if PCT else ""
-first_rows = nb.sql(conn, f"""
-SELECT {BY} AS {GROUP},
-       COUNT(*) AS {COUNT}{RATE}
-FROM {ds.fact_table}
-GROUP BY {BY}
-ORDER BY {COUNT} DESC
+missing_roles = {missing["role"]: missing["reason"] for missing in dataset.missing}
+GROUP_ROLE, GROUP_COLUMN = dataset.group_by()   # the category, else the entity, else the target
+if GROUP_ROLE != "category":
+    print(f"No category role ({missing_roles.get('category', 'none approved')}): rows are counted per {GROUP_ROLE} instead.")
+if "label" in missing_roles:
+    print(f"No label role ({missing_roles['label']}): the label rate is left out; the steps that need it later say so.")
+GROUP_HEADER, COUNT_HEADER = nb.name(GROUP_COLUMN), nb.count_name(dataset)       # columns named after the data: CATEGORY, ORDER_LINES
+LABEL_PCT_HEADER = nb.name(dataset.col("label"), "PCT") if dataset.has("label") and GROUP_ROLE != "label" else None   # CANCELLED_PCT
+LABEL_RATE_SQL = f",\n       ROUND(100 * AVG({dataset.col('label')}), 1) AS {LABEL_PCT_HEADER}" if LABEL_PCT_HEADER else ""
+first_rows = nb.sql(connection, f"""
+SELECT {GROUP_COLUMN} AS {GROUP_HEADER},
+       COUNT(*) AS {COUNT_HEADER}{LABEL_RATE_SQL}
+FROM {dataset.fact_table}
+GROUP BY {GROUP_COLUMN}
+ORDER BY {COUNT_HEADER} DESC
 LIMIT 10""")
 nb.show_sql()
-overall = nb.sql(conn, f"SELECT COUNT(*) AS N, ROUND(100 * AVG({ds.col('label')}), 1) AS PCT FROM {ds.fact_table}") if PCT else None
-nb.note_groups(first_rows, ds, GROUP, COUNT, PCT, overall=(overall["N"][0], overall["PCT"][0]) if PCT else None)
+overall_rate = nb.sql(connection, f"SELECT COUNT(*) AS N, ROUND(100 * AVG({dataset.col('label')}), 1) AS PCT FROM {dataset.fact_table}") if LABEL_PCT_HEADER else None
+nb.note_groups(first_rows, dataset, GROUP_HEADER, COUNT_HEADER, LABEL_PCT_HEADER, overall=(overall_rate["N"][0], overall_rate["PCT"][0]) if LABEL_PCT_HEADER else None)
 first_rows
 
 # %% [markdown]

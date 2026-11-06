@@ -39,15 +39,15 @@ def _():
     # Cell tags: connect
     import exakit.nb as nb
 
-    conn = nb.connect()
-    nb.check_connection(conn)
-    return conn, nb
+    connection = nb.connect()
+    nb.check_connection(connection)
+    return connection, nb
 
 
 @app.cell
-def _(conn, nb):
+def _(connection, nb):
     # Cell tags: connect
-    nb.list_schemas(conn)
+    nb.list_schemas(connection)
     return
 
 
@@ -67,11 +67,11 @@ def _(mo):
 
 
 @app.cell
-def _(conn, nb):
+def _(connection, nb):
     # Cell tags: load
     SAMPLE = "amazon_sales"   # or "walmart_sales", "fraud_transactions", or None
-    sample = nb.load_sample(conn, SAMPLE)
-    return (sample,)
+    sample_data = nb.load_sample(connection, SAMPLE)
+    return (sample_data,)
 
 
 @app.cell(hide_code=True)
@@ -84,12 +84,12 @@ def _(mo):
 
 
 @app.cell
-def _(conn, nb):
+def _(connection, nb):
     # Cell tags: load
     OWN_FILE = "~/my-data/transactions.csv"   # .csv, .parquet or .json
     OWN_TABLE = "MY_DATA.TRANSACTIONS"
-    own = nb.load_own_file(OWN_FILE, OWN_TABLE, conn=conn, missing_ok=True)
-    return (own,)
+    own_data = nb.load_own_file(OWN_FILE, OWN_TABLE, conn=connection, missing_ok=True)
+    return (own_data,)
 
 
 @app.cell(hide_code=True)
@@ -102,11 +102,11 @@ def _(mo):
 
 
 @app.cell
-def _(conn, nb):
+def _(connection, nb):
     # Cell tags: load
     SOURCE = None   # e.g. "VS_SALES.ORDERS"
-    source = nb.load_source(conn, SOURCE)
-    return (source,)
+    source_data = nb.load_source(connection, SOURCE)
+    return (source_data,)
 
 
 @app.cell(hide_code=True)
@@ -119,10 +119,10 @@ def _(mo):
 
 
 @app.cell
-def _(nb, own, sample, source):
+def _(nb, own_data, sample_data, source_data):
     # Cell tags: load
-    ds = nb.first(source, own, sample)
-    return (ds,)
+    chosen_data = nb.first(source_data, own_data, sample_data)
+    return (chosen_data,)
 
 
 @app.cell(hide_code=True)
@@ -162,17 +162,17 @@ def _(mo):
 
 
 @app.cell
-def _(conn, ds, nb):
+def _(chosen_data, connection, nb):
     # Cell tags: review
-    review = nb.review_roles(conn, ds)
-    return (review,)
+    role_review = nb.review_roles(connection, chosen_data)
+    return (role_review,)
 
 
 @app.cell
-def _(nb, review):
+def _(nb, role_review):
     # Cell tags: review
-    ds_1 = review.dataset()
-    nb.show_roles(ds_1)
+    dataset = role_review.dataset()
+    nb.show_roles(dataset)
     return
 
 

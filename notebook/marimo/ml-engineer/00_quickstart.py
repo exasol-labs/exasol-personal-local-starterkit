@@ -40,8 +40,8 @@ def _():
     import os
     import exakit.nb as nb
 
-    wid = nb.workflow("ml-engineer-quickstart", resume=os.environ.get("EXAKIT_WORKFLOW_ID"))
-    print(f"Every step below is logged under it: exakit workflow show {wid}")
+    workflow_id = nb.workflow("ml-engineer-quickstart", resume=os.environ.get("EXAKIT_WORKFLOW_ID"))
+    print(f"Every step below is logged under it: exakit workflow show {workflow_id}")
     return (nb,)
 
 
@@ -84,15 +84,15 @@ def _(mo):
 @app.cell
 def _(nb):
     # Cell tags: connect
-    conn = nb.connect()
-    nb.check_connection(conn)
-    return (conn,)
+    connection = nb.connect()
+    nb.check_connection(connection)
+    return (connection,)
 
 
 @app.cell
-def _(conn, nb):
+def _(connection, nb):
     # Cell tags: connect
-    nb.list_schemas(conn)
+    nb.list_schemas(connection)
     return
 
 
@@ -107,8 +107,8 @@ def _(mo):
 
 
 @app.cell
-def _(CONTAINER, conn, nb):
-    container_ok = nb.check_container(conn, alias=CONTAINER)
+def _(CONTAINER, connection, nb):
+    container_ok = nb.check_container(connection, alias=CONTAINER)
     return
 
 
@@ -148,8 +148,8 @@ def _(mo):
 
 
 @app.cell
-def _(conn, nb):
-    bucket_ok = nb.check_bucket(conn)
+def _(connection, nb):
+    bucket_ok = nb.check_bucket(connection)
     return
 
 
@@ -169,11 +169,11 @@ def _(mo):
 
 
 @app.cell
-def _(conn, nb):
+def _(connection, nb):
     # Cell tags: load
     SAMPLE = "amazon_sales"   # or "walmart_sales", "fraud_transactions", or None
-    sample = nb.load_sample(conn, SAMPLE)
-    return (sample,)
+    sample_data = nb.load_sample(connection, SAMPLE)
+    return (sample_data,)
 
 
 @app.cell(hide_code=True)
@@ -186,12 +186,12 @@ def _(mo):
 
 
 @app.cell
-def _(conn, nb):
+def _(connection, nb):
     # Cell tags: load
     OWN_FILE = "~/my-data/transactions.csv"   # .csv, .parquet or .json
     OWN_TABLE = "MY_DATA.TRANSACTIONS"
-    own = nb.load_own_file(OWN_FILE, OWN_TABLE, conn=conn, missing_ok=True)
-    return (own,)
+    own_data = nb.load_own_file(OWN_FILE, OWN_TABLE, conn=connection, missing_ok=True)
+    return (own_data,)
 
 
 @app.cell(hide_code=True)
@@ -204,11 +204,11 @@ def _(mo):
 
 
 @app.cell
-def _(conn, nb):
+def _(connection, nb):
     # Cell tags: load
     SOURCE = None   # e.g. "VS_SALES.ORDERS"
-    source = nb.load_source(conn, SOURCE)
-    return (source,)
+    source_data = nb.load_source(connection, SOURCE)
+    return (source_data,)
 
 
 @app.cell(hide_code=True)
@@ -221,10 +221,10 @@ def _(mo):
 
 
 @app.cell
-def _(nb, own, sample, source):
+def _(nb, own_data, sample_data, source_data):
     # Cell tags: load
-    ds = nb.first(source, own, sample)
-    return (ds,)
+    chosen_data = nb.first(source_data, own_data, sample_data)
+    return (chosen_data,)
 
 
 @app.cell(hide_code=True)
@@ -264,18 +264,18 @@ def _(mo):
 
 
 @app.cell
-def _(conn, ds, nb):
+def _(chosen_data, connection, nb):
     # Cell tags: review
-    review = nb.review_roles(conn, ds)
-    return (review,)
+    role_review = nb.review_roles(connection, chosen_data)
+    return (role_review,)
 
 
 @app.cell
-def _(nb, review):
+def _(nb, role_review):
     # Cell tags: review
-    ds_1 = review.dataset()
-    nb.show_roles(ds_1)
-    return (ds_1,)
+    dataset = role_review.dataset()
+    nb.show_roles(dataset)
+    return (dataset,)
 
 
 @app.cell(hide_code=True)
@@ -289,19 +289,26 @@ def _(mo):
 
 
 @app.cell
-def _(conn, ds_1, nb):
-    skipped = {m['role']: m['reason'] for m in ds_1.missing}
-    for role, instead in (('category', 'rows are counted per entity instead'), ('label', 'the label count is left out, and 01_train has nothing to predict until a label role is approved')):
-        if role in skipped:
-            print(f'No {role} role ({skipped[role]}): {instead}; the steps that need it later say so.')
-    BY = ds_1.col('category') if ds_1.has('category') else ds_1.col('entity')
-    GROUP, COUNT = (nb.name(BY), nb.count_name(ds_1))
-    PCT = nb.name(ds_1.col('label'), 'PCT') if ds_1.has('label') else None  # columns named after the data: CATEGORY, ORDER_LINES
-    RATE = f",\n       ROUND(100 * AVG({ds_1.col('label')}), 1) AS {PCT}" if PCT else ''  # CANCELLED_PCT
-    first_rows = nb.sql(conn, f'\nSELECT {BY} AS {GROUP},\n       COUNT(*) AS {COUNT}{RATE}\nFROM {ds_1.fact_table}\nGROUP BY {BY}\nORDER BY {COUNT} DESC\nLIMIT 10')
+def _(connection, dataset, nb):
+    missing_roles = {missing["role"]: missing["reason"] for missing in dataset.missing}
+    for role, instead in (("category", "rows are counted per entity instead"),
+                          ("label", "the label count is left out, and 01_train has nothing to predict until a label role is approved")):
+        if role in missing_roles:
+            print(f"No {role} role ({missing_roles[role]}): {instead}; the steps that need it later say so.")
+    GROUP_COLUMN = dataset.col("category") if dataset.has("category") else dataset.col("entity")
+    GROUP_HEADER, COUNT_HEADER = nb.name(GROUP_COLUMN), nb.count_name(dataset)       # columns named after the data: CATEGORY, ORDER_LINES
+    LABEL_PCT_HEADER = nb.name(dataset.col("label"), "PCT") if dataset.has("label") else None   # CANCELLED_PCT
+    LABEL_RATE_SQL = f",\n       ROUND(100 * AVG({dataset.col('label')}), 1) AS {LABEL_PCT_HEADER}" if LABEL_PCT_HEADER else ""
+    first_rows = nb.sql(connection, f"""
+    SELECT {GROUP_COLUMN} AS {GROUP_HEADER},
+           COUNT(*) AS {COUNT_HEADER}{LABEL_RATE_SQL}
+    FROM {dataset.fact_table}
+    GROUP BY {GROUP_COLUMN}
+    ORDER BY {COUNT_HEADER} DESC
+    LIMIT 10""")
     nb.show_sql()
-    overall = nb.sql(conn, f"SELECT COUNT(*) AS N, ROUND(100 * AVG({ds_1.col('label')}), 1) AS PCT FROM {ds_1.fact_table}") if PCT else None
-    nb.note_groups(first_rows, ds_1, GROUP, COUNT, PCT, overall=(overall['N'][0], overall['PCT'][0]) if PCT else None)
+    overall_rate = nb.sql(connection, f"SELECT COUNT(*) AS N, ROUND(100 * AVG({dataset.col('label')}), 1) AS PCT FROM {dataset.fact_table}") if LABEL_PCT_HEADER else None
+    nb.note_groups(first_rows, dataset, GROUP_HEADER, COUNT_HEADER, LABEL_PCT_HEADER, overall=(overall_rate["N"][0], overall_rate["PCT"][0]) if LABEL_PCT_HEADER else None)
     first_rows
     return
 

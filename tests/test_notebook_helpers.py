@@ -463,7 +463,7 @@ class ShippedExploreTest(unittest.TestCase):
 
     def test_one_assignment_picks_the_data_and_no_dataset_is_named_in_the_sql(self):
         text = self.NOTEBOOK.read_text(encoding="utf-8")
-        resolve = "DATASET = nb.chosen_dataset(DATASET)"    # None: the dataset approved last; not a second choice
+        resolve = "dataset_id = nb.chosen_dataset(DATASET)"    # None: the dataset approved last; not a second choice
         self.assertEqual(sum(1 for line in text.splitlines() if line.startswith("DATASET = ") and line != resolve), 1)
         code = "\n".join(line for line in text.splitlines() if not line.startswith(("#", "DATASET = ")))
         for name in ("WALMART", "AMAZON", "WEEKLY_SALES", "ORDER_LINES", "ABOVE_STORE_MEDIAN", "CANCELLED", "SHIP_STATE",
@@ -530,7 +530,7 @@ class SwapTest(unittest.TestCase):
     synthetic file; without it, the reference dataset amazon_sales and the synthetic file's twin. A dataset missing a
     role renders the same way or stops with the descriptor's reason for it."""
 
-    EXTRA = {"LEAKED": [], "SAMPLE": 20000, "SAMPLE_TEXTS": 5, "period": "MONTH", "UDF_SCHEMA": "EXASOL_MLFLOW", "PARAMS": {"C": 1.0},
+    EXTRA = {"LEAKING_COLUMNS": [], "MODEL_ROW_LIMIT": 20000, "SAMPLE": 20000, "SAMPLE_TEXTS": 5, "period": "MONTH", "UDF_SCHEMA": "EXASOL_MLFLOW", "PARAMS": {"C": 1.0},
              "UDF": "EXAKIT_MODELS.SCORE_MODEL", "where": "1 = 1", "limit": 10, "extra": ""}
 
     def render(self, notebook: Path, descriptor) -> list[str]:
@@ -539,7 +539,7 @@ class SwapTest(unittest.TestCase):
 
         tree = ast.parse(notebook.read_text(encoding="utf-8"))
         ds = Dataset(descriptor.id, Path("descriptor.yaml"), "0" * 64, descriptor)
-        namespace = {"ds": ds, "json": json, "exasol_mlflow": sys.modules["exasol_mlflow"], **self.EXTRA}
+        namespace = {"dataset": ds, "json": json, "exasol_mlflow": sys.modules["exasol_mlflow"], **self.EXTRA}
         for node in tree.body:
             if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
                 try:
@@ -548,10 +548,10 @@ class SwapTest(unittest.TestCase):
                     pass
         readout = importlib.import_module("exakit_nb.readout")
         namespace["nb"] = types.SimpleNamespace(name=readout.name, count_name=readout.count_name)
-        for node in tree.body:     # the roles cell: ENTITY, ... = ds.col(...), TEXT = ...; result names: PCT = nb.name(...)
+        for node in tree.body:     # the roles cell: ENTITY_COLUMN, ... = dataset.col(...); result names: LABEL_PCT_HEADER = nb.name(...)
             source = ast.unparse(node.value) if isinstance(node, ast.Assign) else ""
             calls = set(re.findall(r"\bnb\.(\w+)", source))
-            if source and ("ds." in source or calls) and calls <= {"name", "count_name"}:
+            if source and ("dataset." in source or calls) and calls <= {"name", "count_name"}:
                 exec(compile(ast.Module([node], []), "roles", "exec"), namespace)
         sql = [node for node in ast.walk(tree) if isinstance(node, ast.JoinedStr)
                and any("FROM" in str(part.value) for part in node.values if isinstance(part, ast.Constant))]
@@ -608,7 +608,7 @@ columns:
             if notebook.name in ("01_train.py", "02_decision_tree_udf.py"):
                 # Its SQL is produced from the handoff by exakit_nb.ml_train; test_ml_train and test_handoff
                 # pin that path. It deliberately has no inline SQL f-string to substitute here.
-                self.assertIn("nb.prepare_training(conn, ds, handoff", notebook.read_text(encoding="utf-8"))
+                self.assertIn("nb.prepare_training(connection, dataset, handoff", notebook.read_text(encoding="utf-8"))
                 continue
             if notebook.name == "01_udf_package_check.py":
                 # The package diagnostic's SQL is independent of the reference dataset.
@@ -619,7 +619,7 @@ columns:
                 # Its SQL is the handoff's training SQL over the deployed Rust UDF: no role is rendered inline.
                 self.assertIn('handoff["training_sql"]', notebook.read_text(encoding="utf-8"))
                 continue
-            if "[include]" in notebook.read_text(encoding="utf-8") and "ds." not in notebook.read_text(encoding="utf-8"):
+            if "[include]" in notebook.read_text(encoding="utf-8") and "dataset." not in notebook.read_text(encoding="utf-8"):
                 continue
             with self.subTest(notebook=notebook.relative_to(NOTEBOOKS).as_posix()):
                 for text, pairs in ((True, _descriptors()), (False, _no_text_descriptors())):
@@ -642,11 +642,13 @@ columns:
             with self.subTest(notebook=name):
                 lines = (NOTEBOOKS / name).read_text(encoding="utf-8").splitlines()
                 self.assertEqual([l.split("#")[0].strip() for l in lines if l.startswith("DATASET = ")],
-                                 ["DATASET = None", "DATASET = nb.chosen_dataset(DATASET)"],
-                                 "one assignment picks the data; None is the dataset approved last")
+                                 ["DATASET = None"], "one assignment picks the data")
+                # None is the dataset approved last, resolved into a name of its own (never a second DATASET =).
+                self.assertIn("dataset_id = nb.chosen_dataset(DATASET)", "\n".join(lines))
                 # train opens the descriptor; explore opens it through the review, so a file with no roles beside it
                 # is loaded and drafted right there instead of stopping (T8b)
-                opened = "nb.review_roles(conn, DATASET)" if name.startswith("data-scientist") else "nb.dataset(conn, DATASET)"
+                opened = ("nb.review_roles(connection, dataset_id)" if name.startswith("data-scientist")
+                          else "nb.dataset(connection, dataset_id)")
                 self.assertIn(opened, "\n".join(lines))
 
 
@@ -1350,7 +1352,7 @@ class NotebookWorkflowTest(unittest.TestCase):
                 first = _code_cells(NOTEBOOKS / persona / "00_quickstart.py")[0]
                 self.assertIn(f'nb.workflow("{name}"', first)
                 namespace, out = self.run_cell(first)
-                wid = namespace["wid"]
+                wid = namespace["workflow_id"]
                 self.assertRegex(wid, r"^wf-\d{8}-[0-9a-f]{6}$")
                 self.assertIn(f"exakit workflow show {wid}", out)
                 self.assertEqual(os.environ["EXAKIT_WORKFLOW_ID"], wid, "a child process inherits it")
@@ -1359,13 +1361,13 @@ class NotebookWorkflowTest(unittest.TestCase):
     def test_a_kernel_started_under_a_workflow_continues_it(self):
         first = _code_cells(NOTEBOOKS / "data-scientist" / "00_quickstart.py")[0]
         namespace, _ = self.run_cell(first)
-        started = namespace["wid"]
+        started = namespace["workflow_id"]
         importlib.import_module("exakit_nb._kit").SESSION.pop("workflow_id", None)       # another kernel, same environment
         os.environ["EXAKIT_WORKFLOW_ID"] = started
         for persona in self.QUICKSTARTS:
             with self.subTest(persona=persona):
                 namespace, out = self.run_cell(_code_cells(NOTEBOOKS / persona / "00_quickstart.py")[0])
-                self.assertEqual(namespace["wid"], started)
+                self.assertEqual(namespace["workflow_id"], started)
                 self.assertIn(f"exakit workflow show {started}", out)
         self.assertEqual([e["kind"] for e in self.log(started)], ["start"], "resuming adds no second start line")
 
@@ -1379,32 +1381,32 @@ class NotebookWorkflowTest(unittest.TestCase):
         with mock.patch.object(exakit_nb, "connect", return_value=FakeConn(AMAZON)), \
                 mock.patch.object(exakit_nb, "review_roles", return_value=review) as reviewed:
             namespace, out = self.run_cell(first, {"DATASET": "amazon_sales"})
-        self.assertEqual([e["kind"] for e in self.log(namespace["wid"])], ["start"])
+        self.assertEqual([e["kind"] for e in self.log(namespace["workflow_id"])], ["start"])
         reviewed.assert_called_once_with(mock.ANY, "amazon_sales")
         review.dataset.assert_called_once_with(draft_ok=True)
         # The typed view decides the dataset the steps read (the table as loaded unless USE_PREPARED), then the roles
         # are read from it in a cell of their own.
         cells = _code_cells(NOTEBOOKS / "data-scientist" / "01_explore.py")
-        view = next(c for c in cells if c.startswith("prepared = "))
+        view = next(c for c in cells if c.startswith("typed_view_proposal = "))
         with mock.patch.object(exakit_nb, "typed_view", return_value=mock.Mock(needed=False)):
             namespace, _ = self.run_cell(view, {**namespace, "USE_PREPARED": False})
-        self.assertIs(namespace["ds"], ds)
-        namespace, _ = self.run_cell(next(c for c in cells if c.startswith("ENTITY = ")), namespace)
-        self.assertEqual(namespace["LABEL"], "CANCELLED")
+        self.assertIs(namespace["dataset"], ds)
+        namespace, _ = self.run_cell(next(c for c in cells if c.startswith("ENTITY_COLUMN = ")), namespace)
+        self.assertEqual(namespace["LABEL_COLUMN"], "CANCELLED")
         importlib.import_module("exakit_nb._kit").SESSION.pop("workflow_id", None)
-        os.environ["EXAKIT_WORKFLOW_ID"] = namespace["wid"]
+        os.environ["EXAKIT_WORKFLOW_ID"] = namespace["workflow_id"]
         with mock.patch.object(exakit_nb, "connect", return_value=FakeConn(AMAZON)), \
                 mock.patch.object(exakit_nb, "review_roles", return_value=review):
             again, _ = self.run_cell(first, {"DATASET": "amazon_sales"})
-        self.assertEqual(again["wid"], namespace["wid"])
+        self.assertEqual(again["workflow_id"], namespace["workflow_id"])
         # A new kernel with nothing inherited continues the last workflow started on this machine.
         importlib.import_module("exakit_nb._kit").SESSION.pop("workflow_id", None)
         os.environ.pop("EXAKIT_WORKFLOW_ID", None)
         with mock.patch.object(exakit_nb, "connect", return_value=FakeConn(AMAZON)), \
                 mock.patch.object(exakit_nb, "review_roles", return_value=review):
             last, _ = self.run_cell(first, {"DATASET": "amazon_sales"})
-        self.assertEqual(last["wid"], namespace["wid"])
-        self.assertEqual([e["kind"] for e in self.log(namespace["wid"])], ["start"], "continuing adds no start line")
+        self.assertEqual(last["workflow_id"], namespace["workflow_id"])
+        self.assertEqual([e["kind"] for e in self.log(namespace["workflow_id"])], ["start"], "continuing adds no start line")
 
 
 class MissingRoleTest(unittest.TestCase):
@@ -1431,7 +1433,7 @@ class MissingRoleTest(unittest.TestCase):
                                         show_sql=lambda: None, name=readout.name, count_name=readout.count_name,
                                         note_groups=readout.note_groups)
         with redirect_stdout(io.StringIO()) as out:
-            exec(compile(self.query_cell(), "cell", "exec"), {"nb": fake_nb, "conn": object(), "ds": ds})
+            exec(compile(self.query_cell(), "cell", "exec"), {"nb": fake_nb, "connection": object(), "dataset": ds})
         return statements[0], out.getvalue()
 
     def test_every_role_present_is_the_full_query(self):

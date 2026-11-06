@@ -36,9 +36,9 @@ def _():
 
     DATASET = None  # None: the dataset approved last in a quickstart (else amazon_sales); or "walmart_sales", or "~/my-data/transactions.csv" with approved roles beside it
     CONTAINER = nb.ml_train.udf_container()   # or "PYTHON3_ML", "PYTHON3", or the alias of a container you installed
-    DATASET = nb.chosen_dataset(DATASET)
-    nb.continue_workflow("train-" + DATASET)   # the quickstart's workflow, or the last one: nothing to paste
-    return CONTAINER, DATASET, exasol_mlflow, nb
+    dataset_id = nb.chosen_dataset(DATASET)
+    nb.continue_workflow("train-" + dataset_id)   # the quickstart's workflow, or the last one: nothing to paste
+    return CONTAINER, dataset_id, exasol_mlflow, nb
 
 
 @app.cell(hide_code=True)
@@ -76,16 +76,16 @@ def _(mo):
 
 
 @app.cell
-def _(DATASET, nb):
+def _(dataset_id, nb):
     SPLIT = None  # None: the time split by the date role; "random": a hash split, only when there is no handoff file yet
 
-    conn = nb.connect()
-    ds = nb.dataset(conn, DATASET).require_approved("training")
-    handoff = nb.ml_train.training_handoff(conn, ds, split=SPLIT)
-    print(f"handoff: {ds.id} v{ds.version}; {handoff['rows']} rows; {handoff['split']['kind']} split"
+    connection = nb.connect()
+    dataset = nb.dataset(connection, dataset_id).require_approved("training")
+    handoff = nb.ml_train.training_handoff(connection, dataset, split=SPLIT)
+    print(f"handoff: {dataset.id} v{dataset.version}; {handoff['rows']} rows; {handoff['split']['kind']} split"
           + (" (asked for)" if handoff['split'].get('explicit') else ""))
     print(f"data digest: {handoff['data_digest']}")
-    return conn, ds, handoff
+    return connection, dataset, handoff
 
 
 @app.cell(hide_code=True)
@@ -103,19 +103,19 @@ def _(mo):
 
 
 @app.cell
-def _(CONTAINER, conn, ds, handoff, nb):
+def _(CONTAINER, connection, dataset, handoff, nb):
     UDF_SCHEMA = "EXASOL_MLFLOW"
     UDF_NAME = "TRAIN_FROM_HANDOFF"
     SEED = 0
     CLASS_WEIGHT = "balanced"  # "balanced": the rarer outcome counts more (amazon_sales: 14.2% cancelled); None: every row counts the same
     REGULARIZATION_C = 1.0
 
-    plan = nb.prepare_training(conn, ds, handoff, schema=UDF_SCHEMA, name=UDF_NAME, container=CONTAINER,
+    plan = nb.prepare_training(connection, dataset, handoff, schema=UDF_SCHEMA, name=UDF_NAME, container=CONTAINER,
                                seed=SEED, C=REGULARIZATION_C, class_weight=CLASS_WEIGHT)
-    conn.execute(f"CREATE SCHEMA IF NOT EXISTS {UDF_SCHEMA}")
-    nb.log_sql(conn, f"CREATE SCHEMA IF NOT EXISTS {UDF_SCHEMA}", None)
-    conn.execute(plan.create_script)
-    nb.log_sql(conn, plan.create_script, None)
+    connection.execute(f"CREATE SCHEMA IF NOT EXISTS {UDF_SCHEMA}")
+    nb.log_sql(connection, f"CREATE SCHEMA IF NOT EXISTS {UDF_SCHEMA}", None)
+    connection.execute(plan.create_script)
+    nb.log_sql(connection, plan.create_script, None)
     print(f"UDF {UDF_SCHEMA}.{UDF_NAME} on {CONTAINER}; features ({len(plan.features)}): {', '.join(plan.features)}")
     print(plan.training_sql)
     return (plan,)
@@ -140,13 +140,13 @@ def _(mo):
 
 
 @app.cell
-def _(conn, ds, exasol_mlflow, handoff, nb, plan):
+def _(connection, dataset, exasol_mlflow, handoff, nb, plan):
     EXPERIMENT = "exasol-starter-kit"
-    with exasol_mlflow.start_run(conn, params=plan.params, experiment=EXPERIMENT,
-                                 run_name=f"{ds.id}-v{ds.version}-logistic", tags=ds.tags(),
+    with exasol_mlflow.start_run(connection, params=plan.params, experiment=EXPERIMENT,
+                                 run_name=f"{dataset.id}-v{dataset.version}-logistic", tags=dataset.tags(),
                                  handoff=handoff) as run:
         run.execute(plan.training_sql)
-        nb.log_sql(conn, plan.training_sql, 1)
+        nb.log_sql(connection, plan.training_sql, 1)
 
     f1 = run.metrics["macro_f1"]
     baseline = run.metrics["baseline_macro_f1"]

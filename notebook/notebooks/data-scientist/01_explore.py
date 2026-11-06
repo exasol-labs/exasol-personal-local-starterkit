@@ -49,11 +49,11 @@ nb.use_model(MODEL_ID, PROVIDER_BASE_URL, LANGFUSE_BASE_URL)
 import os
 import exakit.nb as nb
 
-wid = nb.continue_workflow("explore")   # the quickstart's workflow, or the last one: nothing to paste
-conn = nb.connect()
-DATASET = nb.chosen_dataset(DATASET)
-loaded = nb.review_roles(conn, DATASET).dataset(draft_ok=True)   # the table as loaded; `ds` below is what the steps read
-nb.show_roles(loaded)
+workflow_id = nb.continue_workflow("explore")   # the quickstart's workflow, or the last one: nothing to paste
+connection = nb.connect()
+dataset_id = nb.chosen_dataset(DATASET)
+loaded_dataset = nb.review_roles(connection, dataset_id).dataset(draft_ok=True)   # the table as loaded; `dataset` below is what the steps read
+nb.show_roles(loaded_dataset)
 
 # %% [markdown]
 # ## Prepare: is the data clean?
@@ -65,7 +65,7 @@ nb.show_roles(loaded)
 # Read each line before trusting a number below. `fraud_transactions` is messy on purpose: it has all of them.
 
 # %%
-findings = nb.data_checks(conn, loaded)
+findings = nb.data_checks(connection, loaded_dataset)
 findings
 
 # %% [markdown]
@@ -78,9 +78,9 @@ findings
 # Read what would change below. To use it, set `USE_PREPARED = True` in the first cell and run again: the view is created in `EXAKIT_PREPARED`, gets its own approved column map (the same roles), and every step below reads it.
 
 # %%
-prepared = nb.typed_view(conn, loaded)
-ds = prepared.create(conn) if USE_PREPARED and prepared.needed else loaded   # the dataset every step below reads
-prepared
+typed_view_proposal = nb.typed_view(connection, loaded_dataset)
+dataset = typed_view_proposal.create(connection) if USE_PREPARED and typed_view_proposal.needed else loaded_dataset   # the dataset every step below reads
+typed_view_proposal
 
 # %% [markdown]
 # ## The roles the steps below use
@@ -88,16 +88,16 @@ prepared
 # Each step takes its columns from the column map: a role the data does not have is `None` here, and the steps that need it skip and say why.
 
 # %%
-ENTITY = ds.col("entity") if ds.has("entity") else None
-CATEGORY = ds.col("category") if ds.has("category") else None
-TEXT = ds.text_sql() if ds.has("text") else None
-DATE = ds.col("date") if ds.has("date") else None      # a role no column fits is None here, never guessed
-LABEL = ds.col("label") if ds.has("label") else None
-skipped = {m["role"]: m["reason"] for m in ds.missing if not ds.has(m["role"])}
-missing_line = "; ".join(f"no {role} role: {reason}" for role, reason in skipped.items())
+ENTITY_COLUMN = dataset.col("entity") if dataset.has("entity") else None
+CATEGORY_COLUMN = dataset.col("category") if dataset.has("category") else None
+TEXT_SQL = dataset.text_sql() if dataset.has("text") else None
+DATE_COLUMN = dataset.col("date") if dataset.has("date") else None      # a role no column fits is None here, never guessed
+LABEL_COLUMN = dataset.col("label") if dataset.has("label") else None
+missing_roles = {missing["role"]: missing["reason"] for missing in dataset.missing if not dataset.has(missing["role"])}
+missing_line = "; ".join(f"no {role} role: {reason}" for role, reason in missing_roles.items())
 for role in ("entity", "category", "date", "label", "text"):
-    if role in skipped:
-        print(f"No {role} role ({skipped[role]}): steps that need it explain why they skip below.")
+    if role in missing_roles:
+        print(f"No {role} role ({missing_roles[role]}): steps that need it explain why they skip below.")
 
 # %% [markdown]
 # ## Compare groups
@@ -105,42 +105,42 @@ for role in ("entity", "category", "date", "label", "text"):
 # The 10 biggest entities, split by category: how many rows each has and, for each, the % where the label is 1. The note under the result says what it means.
 
 # %%
-landscape = pivot = None
+landscape = landscape_grid = None
 # Result columns are named after the data (SHIP_STATE, ORDER_LINES, CANCELLED_PCT); a note under each result says
 # what its numbers mean.
-COUNT = nb.count_name(ds)
-E = nb.name(ENTITY) if ENTITY else None
-C = nb.name(CATEGORY) if CATEGORY else None
-PCT = nb.name(LABEL, "PCT") if LABEL else None
-if not all(ds.has(role) for role in ("entity", "category", "label")):
+COUNT_HEADER = nb.count_name(dataset)
+ENTITY_HEADER = nb.name(ENTITY_COLUMN) if ENTITY_COLUMN else None
+CATEGORY_HEADER = nb.name(CATEGORY_COLUMN) if CATEGORY_COLUMN else None
+LABEL_PCT_HEADER = nb.name(LABEL_COLUMN, "PCT") if LABEL_COLUMN else None
+if not all(dataset.has(role) for role in ("entity", "category", "label")):
     print(f"Skipped - the landscape needs entity, category and label roles ({missing_line}).")
 else:
-    overall = nb.sql(conn, f"SELECT COUNT(*) AS N, ROUND(100 * AVG({LABEL}), 1) AS PCT FROM {ds.fact_table}")
-    landscape = nb.sql(conn, f"""
+    overall_rate = nb.sql(connection, f"SELECT COUNT(*) AS N, ROUND(100 * AVG({LABEL_COLUMN}), 1) AS PCT FROM {dataset.fact_table}")
+    landscape = nb.sql(connection, f"""
 WITH TOP_ENTITIES AS (
-    SELECT {ENTITY} AS ENTITY, COUNT(*) AS N_ROWS
-    FROM {ds.fact_table}
-    GROUP BY {ENTITY}
+    SELECT {ENTITY_COLUMN} AS ENTITY, COUNT(*) AS N_ROWS
+    FROM {dataset.fact_table}
+    GROUP BY {ENTITY_COLUMN}
     ORDER BY N_ROWS DESC
     LIMIT 10)
-SELECT T.ENTITY AS {E},
-       F.{CATEGORY} AS {C},
-       COUNT(*) AS {COUNT},
-       ROUND(100 * AVG(F.{LABEL}), 1) AS {PCT}
-FROM {ds.fact_table} F
-JOIN TOP_ENTITIES T ON F.{ENTITY} = T.ENTITY
-GROUP BY T.ENTITY, F.{CATEGORY}
-ORDER BY T.ENTITY, {COUNT} DESC""")
+SELECT T.ENTITY AS {ENTITY_HEADER},
+       F.{CATEGORY_COLUMN} AS {CATEGORY_HEADER},
+       COUNT(*) AS {COUNT_HEADER},
+       ROUND(100 * AVG(F.{LABEL_COLUMN}), 1) AS {LABEL_PCT_HEADER}
+FROM {dataset.fact_table} F
+JOIN TOP_ENTITIES T ON F.{ENTITY_COLUMN} = T.ENTITY
+GROUP BY T.ENTITY, F.{CATEGORY_COLUMN}
+ORDER BY T.ENTITY, {COUNT_HEADER} DESC""")
     nb.show_sql()
-    nb.note_groups(landscape, ds, (E, C), COUNT, PCT, overall=(overall["N"][0], overall["PCT"][0]))
-    pivot = landscape.pivot_table(index=E, columns=C, values=COUNT, fill_value=0, aggfunc="sum")
+    nb.note_groups(landscape, dataset, (ENTITY_HEADER, CATEGORY_HEADER), COUNT_HEADER, LABEL_PCT_HEADER, overall=(overall_rate["N"][0], overall_rate["PCT"][0]))
+    landscape_grid = landscape.pivot_table(index=ENTITY_HEADER, columns=CATEGORY_HEADER, values=COUNT_HEADER, fill_value=0, aggfunc="sum")
 landscape
 
 # %% [markdown]
 # The same counts as a grid: one row per entity, one column per category, each cell the number of rows.
 
 # %%
-pivot
+landscape_grid
 
 # %% [markdown]
 # ## Over time
@@ -149,22 +149,22 @@ pivot
 
 # %%
 over_time = None
-if not (ds.has("date") and ds.has("label")):
+if not (dataset.has("date") and dataset.has("label")):
     print(f"Skipped - rows and label rate per period need the date and label roles ({missing_line}).")
 else:
-    span = nb.sql(conn, f"SELECT DAYS_BETWEEN(MAX({DATE}), MIN({DATE})) AS DAYS FROM {ds.fact_table}")
-    days = int(span["DAYS"][0] or 0)
-    period = "DAY" if days <= 62 else "MONTH" if days <= 3 * 366 else "YEAR"
+    date_span = nb.sql(connection, f"SELECT DAYS_BETWEEN(MAX({DATE_COLUMN}), MIN({DATE_COLUMN})) AS DAYS FROM {dataset.fact_table}")
+    span_days = int(date_span["DAYS"][0] or 0)
+    period = "DAY" if span_days <= 62 else "MONTH" if span_days <= 3 * 366 else "YEAR"
 
-    over_time = nb.sql(conn, f"""
-SELECT CAST(DATE_TRUNC('{period}', {DATE}) AS DATE) AS {period}_START,
-       COUNT(*) AS {COUNT},
-       ROUND(100 * AVG({LABEL}), 1) AS {PCT}
-FROM {ds.fact_table}
+    over_time = nb.sql(connection, f"""
+SELECT CAST(DATE_TRUNC('{period}', {DATE_COLUMN}) AS DATE) AS {period}_START,
+       COUNT(*) AS {COUNT_HEADER},
+       ROUND(100 * AVG({LABEL_COLUMN}), 1) AS {LABEL_PCT_HEADER}
+FROM {dataset.fact_table}
 GROUP BY 1
 ORDER BY 1""")
     nb.show_sql()
-    nb.note_trend(over_time, ds, f"{period}_START", COUNT, PCT)
+    nb.note_trend(over_time, dataset, f"{period}_START", COUNT_HEADER, LABEL_PCT_HEADER)
 over_time
 
 # %% [markdown]
@@ -175,7 +175,7 @@ over_time
 # > This cell flags every column whose values (almost) decide the label on their own; the model below leaves them out.
 
 # %%
-LEAKED = nb.leakage_check(conn, ds)
+LEAKING_COLUMNS = nb.leakage_check(connection, dataset)
 
 # %% [markdown]
 # ## Small baseline model
@@ -189,33 +189,33 @@ LEAKED = nb.leakage_check(conn, ds)
 # Technical: one-hot features, logistic regression with balanced class weights, a stratified split with a fixed seed; the score is ROC AUC (0.5 = guessing).
 
 # %%
-SAMPLE = 20000
+MODEL_ROW_LIMIT = 20000
 # The features the model reads, each only when its role exists and does not give the label away: the category and the
 # entity as text, then the month of the date.
-USE_CATEGORY = ds.has("category") and CATEGORY.strip('"') not in LEAKED
-USE_ENTITY = ds.has("entity") and ENTITY.strip('"') not in LEAKED
-CATEGORY_FEATURE = f"CAST({ds.col('category')} AS VARCHAR(2000)) AS CATEGORY_,\n       " if USE_CATEGORY else ""
-ENTITY_FEATURE = f"CAST({ds.col('entity')} AS VARCHAR(2000)) AS ENTITY_,\n       " if USE_ENTITY else ""
-MONTH_FEATURE = f"EXTRACT(MONTH FROM {ds.col('date')}) AS MONTH_,\n       " if ds.has("date") else ""
+USE_CATEGORY = dataset.has("category") and CATEGORY_COLUMN.strip('"') not in LEAKING_COLUMNS
+USE_ENTITY = dataset.has("entity") and ENTITY_COLUMN.strip('"') not in LEAKING_COLUMNS
+CATEGORY_FEATURE = f"CAST({dataset.col('category')} AS VARCHAR(2000)) AS CATEGORY_,\n       " if USE_CATEGORY else ""
+ENTITY_FEATURE = f"CAST({dataset.col('entity')} AS VARCHAR(2000)) AS ENTITY_,\n       " if USE_ENTITY else ""
+MONTH_FEATURE = f"EXTRACT(MONTH FROM {dataset.col('date')}) AS MONTH_,\n       " if dataset.has("date") else ""
 # Which rows: the newest by date, else the first by the key - the same rows on every rerun either way.
-KEY = ds.descriptor.slots.get("key")
-ORDER = f"{ds.col('date')} DESC" if ds.has("date") else (f'"{KEY}"' if KEY else "1")
+KEY_COLUMN = dataset.descriptor.slots.get("key")
+ROW_ORDER = f"{dataset.col('date')} DESC" if dataset.has("date") else (f'"{KEY_COLUMN}"' if KEY_COLUMN else "1")
 
 model = None
-if not (ds.has("label") and (USE_CATEGORY or USE_ENTITY)):
+if not (dataset.has("label") and (USE_CATEGORY or USE_ENTITY)):
     print(f"Skipped - the small model predicts the label from the category and entity, which needs a label and a "
           f"category or entity role that does not give the label away ({missing_line or 'see the cell above'}).")
 else:
     # What each feature is called on screen: the column it comes from, or "month".
-    READABLE = {"MONTH_": "month", "CATEGORY_": (CATEGORY or "").strip('"'), "ENTITY_": (ENTITY or "").strip('"')}
-    if not DATE:
+    FEATURE_LABELS = {"MONTH_": "month", "CATEGORY_": (CATEGORY_COLUMN or "").strip('"'), "ENTITY_": (ENTITY_COLUMN or "").strip('"')}
+    if not DATE_COLUMN:
         print("No date: the model reads the first rows by the key and leaves the month out.")
-    rows = nb.sql(conn, f"""
-SELECT {CATEGORY_FEATURE}{ENTITY_FEATURE}{MONTH_FEATURE}{LABEL} AS LABEL_
-FROM {ds.fact_table}
-WHERE {LABEL} IS NOT NULL
-ORDER BY {ORDER}
-LIMIT {SAMPLE}""")
+    model_rows = nb.sql(connection, f"""
+SELECT {CATEGORY_FEATURE}{ENTITY_FEATURE}{MONTH_FEATURE}{LABEL_COLUMN} AS LABEL_
+FROM {dataset.fact_table}
+WHERE {LABEL_COLUMN} IS NOT NULL
+ORDER BY {ROW_ORDER}
+LIMIT {MODEL_ROW_LIMIT}""")
     nb.show_sql()
 
     from sklearn.linear_model import LogisticRegression
@@ -224,17 +224,17 @@ LIMIT {SAMPLE}""")
     from sklearn.pipeline import Pipeline
     from sklearn.preprocessing import OneHotEncoder
 
-    features = [name for name in ("CATEGORY_", "ENTITY_", "MONTH_") if name in rows.columns]
-    X, y = rows[features].fillna("(none)").astype(str), rows["LABEL_"].astype(int)
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.25, random_state=0, stratify=y)
+    feature_columns = [name for name in ("CATEGORY_", "ENTITY_", "MONTH_") if name in model_rows.columns]
+    feature_values, label_values = model_rows[feature_columns].fillna("(none)").astype(str), model_rows["LABEL_"].astype(int)
+    train_features, test_features, train_labels, test_labels = train_test_split(feature_values, label_values, test_size=0.25, random_state=0, stratify=label_values)
     model = Pipeline([
         ("onehot", OneHotEncoder(handle_unknown="ignore")),
         ("classifier", LogisticRegression(max_iter=1000, class_weight="balanced")),
     ])
-    model.fit(X_train, y_train)
-    auc = roc_auc_score(y_test, model.predict_proba(X_test)[:, 1])
-    print(f"ROC AUC on the held-out quarter: {auc:.3f}")
-    nb.note_model(auc, ds, len(rows), y.mean())
+    model.fit(train_features, train_labels)
+    roc_auc = roc_auc_score(test_labels, model.predict_proba(test_features)[:, 1])
+    print(f"ROC AUC on the held-out quarter: {roc_auc:.3f}")
+    nb.note_model(roc_auc, dataset, len(model_rows), label_values.mean())
 
 # %% [markdown]
 # ## Model clues
@@ -245,17 +245,17 @@ LIMIT {SAMPLE}""")
 import numpy as np
 
 if model is not None:
-    names = model.named_steps["onehot"].get_feature_names_out(features)
-    weights = model.named_steps["classifier"].coef_[0]
-    order = np.argsort(weights)
+    feature_names = model.named_steps["onehot"].get_feature_names_out(feature_columns)
+    feature_weights = model.named_steps["classifier"].coef_[0]
+    weight_order = np.argsort(feature_weights)
 
-    def said(name):
+    def describe_feature(name):
         feature, value = name.split("_", 1)[0] + "_", name.split("__", 1)[1]
-        return f"{READABLE[feature]} = {value}"
+        return f"{FEATURE_LABELS[feature]} = {value}"
 
-    TOP = min(8, len(names) // 2)        # each side its own values: few values are split, never shown twice
-    print(f"Make {LABEL} = 1 more likely:", ", ".join(said(n) for n in names[order[-TOP:]][::-1]))
-    print(f"Make {LABEL} = 1 less likely:", ", ".join(said(n) for n in names[order[:TOP]]))
+    CLUES_PER_SIDE = min(8, len(feature_names) // 2)        # each side its own values: few values are split, never shown twice
+    print(f"Make {LABEL_COLUMN} = 1 more likely:", ", ".join(describe_feature(feature_name) for feature_name in feature_names[weight_order[-CLUES_PER_SIDE:]][::-1]))
+    print(f"Make {LABEL_COLUMN} = 1 less likely:", ", ".join(describe_feature(feature_name) for feature_name in feature_names[weight_order[:CLUES_PER_SIDE]]))
 
 # %% [markdown]
 # ## Optional: what the label-1 texts are about
@@ -271,26 +271,26 @@ if model is not None:
 # %%
 SAMPLE_TEXTS = 20      # per side: the newest texts where the label is 1, and as many where it is 0
 text_sample = themes = None
-NEWEST = f"{ds.col('date')} DESC" if ds.has("date") else ds.col("entity") if ds.has("entity") else "1"
-SIDES = f"PARTITION BY {ds.col('label')} " if ds.has("label") else ""
-LABELLED = f" AND {ds.col('label')} IS NOT NULL" if ds.has("label") else ""
-if not ds.has("text"):
+NEWEST_FIRST = f"{dataset.col('date')} DESC" if dataset.has("date") else dataset.col("entity") if dataset.has("entity") else "1"
+PER_LABEL = f"PARTITION BY {dataset.col('label')} " if dataset.has("label") else ""
+LABELLED_ONLY = f" AND {dataset.col('label')} IS NOT NULL" if dataset.has("label") else ""
+if not dataset.has("text"):
     print(f"Skipped - the themes need a text role ({missing_line}).")
 else:
-    SAMPLE_SQL = f"""
-SELECT {LABEL or 'NULL'} AS LABEL_, {TEXT} AS TEXT_
-FROM {ds.fact_table}
-WHERE LENGTH(TRIM({TEXT})) > 0{LABELLED}
-QUALIFY ROW_NUMBER() OVER ({SIDES}ORDER BY {NEWEST}) <= {SAMPLE_TEXTS}"""
-    text_sample = nb.sql(conn, SAMPLE_SQL)
+    TEXT_SAMPLE_SQL = f"""
+SELECT {LABEL_COLUMN or 'NULL'} AS LABEL_, {TEXT_SQL} AS TEXT_
+FROM {dataset.fact_table}
+WHERE LENGTH(TRIM({TEXT_SQL})) > 0{LABELLED_ONLY}
+QUALIFY ROW_NUMBER() OVER ({PER_LABEL}ORDER BY {NEWEST_FIRST}) <= {SAMPLE_TEXTS}"""
+    text_sample = nb.sql(connection, TEXT_SAMPLE_SQL)
     nb.show_sql()
     if not USE_AI_THEMES:
         print("The AI step is off: above is the sample it would read. To run it, switch USE_AI_THEMES on in the first "
               "cell. Everything else in this notebook runs without a model.")
     else:
-        endpoint = nb.model_client()
-        if endpoint is not None and nb.confirm_send(ds, len(text_sample)):
-            themes = nb.themes(conn, ds, text_sample, endpoint, sql=SAMPLE_SQL)
+        model_endpoint = nb.model_client()
+        if model_endpoint is not None and nb.confirm_send(dataset, len(text_sample)):
+            themes = nb.themes(connection, dataset, text_sample, model_endpoint, sql=TEXT_SAMPLE_SQL)
 themes if themes is not None else text_sample
 
 # %% [markdown]

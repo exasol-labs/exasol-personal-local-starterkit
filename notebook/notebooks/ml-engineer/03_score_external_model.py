@@ -52,10 +52,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-conn = nb.connect()
-DATASET = nb.chosen_dataset(DATASET)
-ds = nb.dataset(conn, DATASET)
-for role, column in ds.roles():
+connection = nb.connect()
+dataset_id = nb.chosen_dataset(DATASET)
+dataset = nb.dataset(connection, dataset_id)
+for role, column in dataset.roles():
     print(f"  {role:<9} {column}")
 
 # %% [markdown]
@@ -64,27 +64,27 @@ for role, column in ds.roles():
 # The model's inputs come from the approved map: the category, the entity when there is one, the text when there is one (`amazon_sales` and `walmart_sales` have no text, so the stand-in learns from the groups only). A fixed hash of the key holds out about one row in five; the stand-in trains on the rest.
 
 # %%
-CATEGORY = f"COALESCE(CAST({ds.col('category')} AS VARCHAR(2000)), '')" if ds.has("category") else None
-ENTITY = f"COALESCE(CAST({ds.col('entity')} AS VARCHAR(2000)), '')" if ds.has("entity") else None
-TEXT = ds.text_sql() if ds.has("text") else None
-LABEL = ds.col("label")
+CATEGORY = f"COALESCE(CAST({dataset.col('category')} AS VARCHAR(2000)), '')" if dataset.has("category") else None
+ENTITY = f"COALESCE(CAST({dataset.col('entity')} AS VARCHAR(2000)), '')" if dataset.has("entity") else None
+TEXT = dataset.text_sql() if dataset.has("text") else None
+LABEL = dataset.col("label")
 # (result column and UDF parameter, SQL expression, the model's column name), for each role the map has
 INPUTS = [(column, sql, name) for column, sql, name in (("CATEGORY", CATEGORY, "category"), ("ENTITY", ENTITY, "entity"),
-                                                         ("DOC_TEXT", TEXT, "text")) if ds.has(name)]
+                                                         ("DOC_TEXT", TEXT, "text")) if dataset.has(name)]
 GROUPS = [name for _, _, name in INPUTS if name != "text"]
 if not GROUPS:
-    raise ValueError(f"{ds.id} has no category or entity role for the stand-in to learn from: approve one first.")
+    raise ValueError(f"{dataset.id} has no category or entity role for the stand-in to learn from: approve one first.")
 if TEXT is None:
-    print(f"No text role ({ds.descriptor.missing_reason('text') or 'none approved'}): the stand-in learns from "
+    print(f"No text role ({dataset.descriptor.missing_reason('text') or 'none approved'}): the stand-in learns from "
           f"{' and '.join(GROUPS)} only.")
-KEY = (getattr(ds.descriptor, "slots", None) or {}).get("key")
+KEY = (getattr(dataset.descriptor, "slots", None) or {}).get("key")
 HASHED = f"CAST({KEY} AS VARCHAR(200))" if KEY else " || '|' || ".join(sql for _, sql, _ in INPUTS)
 HELD_OUT = f"MOD(ASCII(SUBSTR(HASH_MD5({HASHED}), 1, 1)), 5) = 0"
 
 
 def rows_sql(where: str, limit: int, extra: str = "") -> str:
     return (f"SELECT {', '.join(sql + ' AS ' + column for column, sql, _ in INPUTS)}, {LABEL} AS LABEL{extra}\n"
-            f"FROM {ds.fact_table}\nWHERE {LABEL} IS NOT NULL AND {where}\nLIMIT {limit}")
+            f"FROM {dataset.fact_table}\nWHERE {LABEL} IS NOT NULL AND {where}\nLIMIT {limit}")
 
 
 def model_frame(rows) -> pd.DataFrame:
@@ -94,7 +94,7 @@ def model_frame(rows) -> pd.DataFrame:
 
 train_sql = rows_sql(f"NOT ({HELD_OUT})", TRAIN_ROWS)
 print(train_sql)
-train = nb.sql(conn, train_sql)
+train = nb.sql(connection, train_sql)
 print(f"\n{len(train)} training rows, label 1 share {train['LABEL'].mean():.2f}")
 
 # %% [markdown]
@@ -119,7 +119,7 @@ if MODEL_FILE is None:
         ("features", ColumnTransformer(parts)),
         ("classifier", LogisticRegression(max_iter=1000, class_weight="balanced"))])
     stand_in.fit(model_frame(train), train["LABEL"].astype(int))
-    model_path = Path("models") / f"{ds.id}_stand_in.pkl"
+    model_path = Path("models") / f"{dataset.id}_stand_in.pkl"
     model_path.parent.mkdir(exist_ok=True)
     model_path.write_bytes(pickle.dumps(stand_in))
 else:
@@ -149,7 +149,7 @@ if provenance_file.is_file():
     except ValueError:
         pass
 MODEL_COMPATIBLE = model is not None and nb.check_model_compatibility(
-    conn, model_version, alias=CONTAINER, model_path=f"/buckets/bfsdefault/default/models/{model_path.name}")
+    connection, model_version, alias=CONTAINER, model_path=f"/buckets/bfsdefault/default/models/{model_path.name}")
 
 # %% [markdown]
 # ## Copy the model for the UDF
@@ -203,8 +203,8 @@ if MODEL_COMPATIBLE:
                                        for column, _, name in INPUTS],
                                output="DOUBLE", method="predict_proba")
     print("\n".join(create_sql.splitlines()[:8]) + "\n...")
-    conn.execute(f"CREATE SCHEMA IF NOT EXISTS {SCORING_SCHEMA}")
-    conn.execute(create_sql)
+    connection.execute(f"CREATE SCHEMA IF NOT EXISTS {SCORING_SCHEMA}")
+    connection.execute(create_sql)
     UDF = f"{SCORING_SCHEMA}.{UDF_NAME}"
     print(f"UDF {UDF} is ready")
 
@@ -218,7 +218,7 @@ if MODEL_COMPATIBLE:
     holdout_sql = rows_sql(HELD_OUT, HOLDOUT_ROWS,
                            extra=f",\n       {UDF}({', '.join(sql for _, sql, _ in INPUTS)}) AS DB_SCORE")
     print(holdout_sql)
-    holdout = nb.sql(conn, holdout_sql)
+    holdout = nb.sql(connection, holdout_sql)
     here = model.predict_proba(model_frame(holdout))[:, 1]
     there = holdout["DB_SCORE"].astype(float).to_numpy()
     gap = float(np.max(np.abs(here - there))) if len(here) else 0.0
@@ -235,12 +235,12 @@ if MODEL_COMPATIBLE:
 # %%
 if MODEL_COMPATIBLE:
     table_sql = f"""SELECT GROUP_, COUNT(*) AS ROWS_SCORED, AVG(SCORE) AS MEAN_SCORE, AVG({LABEL}) AS LABEL_1_SHARE
-FROM (SELECT {INPUTS[0][1]} AS GROUP_, {LABEL}, {UDF}({', '.join(sql for _, sql, _ in INPUTS)}) AS SCORE FROM {ds.fact_table})
+FROM (SELECT {INPUTS[0][1]} AS GROUP_, {LABEL}, {UDF}({', '.join(sql for _, sql, _ in INPUTS)}) AS SCORE FROM {dataset.fact_table})
 GROUP BY GROUP_
 ORDER BY ROWS_SCORED DESC
 LIMIT 15"""
     print(table_sql)
-    nb.sql(conn, table_sql)
+    nb.sql(connection, table_sql)
 
 # %% [markdown]
 # ## Use your own model

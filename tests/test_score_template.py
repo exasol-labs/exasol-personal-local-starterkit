@@ -288,8 +288,8 @@ class NotebookTest(unittest.TestCase):
         code = "\n".join(line for line in self.text.splitlines() if not line.startswith("#"))
         for table in ("PHARMA.", "BANKING.", "PHARMA_TRIALS", "TERMINATED", "MONETARY_RELIEF"):
             self.assertNotIn(table, code)
-        self.assertIn("ds.col(", code)
-        self.assertIn("ds.text_sql()", code)
+        self.assertIn("dataset.col(", code)
+        self.assertIn("dataset.text_sql()", code)
         self.assertIn("import exakit.nb as nb", code)
         self.assertNotIn("import exakit_nb", code)       # the alias still imports, but notebooks use the name
 

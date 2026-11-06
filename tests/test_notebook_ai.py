@@ -36,10 +36,10 @@ class OptionalThemesTest(unittest.TestCase):
         helper = types.SimpleNamespace(sql=Mock(return_value=frame), show_sql=Mock(), model_client=endpoint,
                                        confirm_send=Mock(return_value=allow), themes=Mock(return_value="the themes"))
         roles = set(roles)
-        namespace = {"nb": helper, "conn": object(), "missing_line": "",
-                     "ENTITY": None, "TEXT": '"DESCRIPTION"', "DATE": '"DATE"' if "date" in roles else None,
-                     "LABEL": '"LABEL"' if "label" in roles else None,
-                     "ds": types.SimpleNamespace(has=lambda role: role in roles,
+        namespace = {"nb": helper, "connection": object(), "missing_line": "",
+                     "ENTITY_COLUMN": None, "TEXT_SQL": '"DESCRIPTION"', "DATE_COLUMN": '"DATE"' if "date" in roles else None,
+                     "LABEL_COLUMN": '"LABEL"' if "label" in roles else None,
+                     "dataset": types.SimpleNamespace(has=lambda role: role in roles,
                                                  col=lambda role: f'"{role.upper()}"', fact_table="EXAMPLE.RECORDS")}
         exec(self.settings, namespace)
         if enable is not None:

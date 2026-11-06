@@ -21,11 +21,11 @@
 # %% tags=["connect"]
 import exakit.nb as nb
 
-conn = nb.connect()
-nb.check_connection(conn)
+connection = nb.connect()
+nb.check_connection(connection)
 
 # %% tags=["connect"]
-nb.list_schemas(conn)
+nb.list_schemas(connection)
 
 # %% [markdown] tags=["load"]
 # ## Choose a dataset
@@ -38,7 +38,7 @@ nb.list_schemas(conn)
 
 # %% tags=["load"]
 SAMPLE = "amazon_sales"   # or "walmart_sales", "fraud_transactions", or None
-sample = nb.load_sample(conn, SAMPLE)
+sample_data = nb.load_sample(connection, SAMPLE)
 
 # %% [markdown] tags=["load"]
 # **Your own file (optional):** set `OWN_FILE` (CSV, Parquet or JSON) and `OWN_TABLE`. A missing path is skipped.
@@ -46,20 +46,20 @@ sample = nb.load_sample(conn, SAMPLE)
 # %% tags=["load"]
 OWN_FILE = "~/my-data/transactions.csv"   # .csv, .parquet or .json
 OWN_TABLE = "MY_DATA.TRANSACTIONS"
-own = nb.load_own_file(OWN_FILE, OWN_TABLE, conn=conn, missing_ok=True)
+own_data = nb.load_own_file(OWN_FILE, OWN_TABLE, conn=connection, missing_ok=True)
 
 # %% [markdown] tags=["load"]
 # **A connected source (optional):** set `SOURCE = "SCHEMA.TABLE"` for a virtual-schema table. `None` skips it.
 
 # %% tags=["load"]
 SOURCE = None   # e.g. "VS_SALES.ORDERS"
-source = nb.load_source(conn, SOURCE)
+source_data = nb.load_source(connection, SOURCE)
 
 # %% [markdown] tags=["load"]
 # The data used from here on: the source, else your file, else the sample.
 
 # %% tags=["load"]
-ds = nb.first(source, own, sample)
+chosen_data = nb.first(source_data, own_data, sample_data)
 
 # %% [markdown] tags=["review"]
 # ## Approve the column map
@@ -92,8 +92,8 @@ ds = nb.first(source, own, sample)
 # Plain Python: `review.approve({"COLUMN": "role"}, {"target": "COLUMN"})`.
 
 # %% tags=["review"]
-review = nb.review_roles(conn, ds)
+role_review = nb.review_roles(connection, chosen_data)
 
 # %% tags=["review"]
-ds = review.dataset()
-nb.show_roles(ds)
+dataset = role_review.dataset()
+nb.show_roles(dataset)

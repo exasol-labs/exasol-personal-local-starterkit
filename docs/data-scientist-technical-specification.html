@@ -159,10 +159,10 @@ footer { margin-top:3rem; padding-top:1rem; border-top:1px solid var(--rule); fo
 <tbody>
 <tr><td>Access</td><td>"Get me to the data without a ticket."</td><td>installer, <code>exakit data-load</code>, notebook add-on</td><td><code>EXAKIT_PERSONA=data-scientist</code>, quickstart <em>Choose a dataset</em></td></tr>
 <tr><td>Understand</td><td>"What is in here, and can I trust it?"</td><td>describe service: profile, draft, review, approve</td><td>quickstart <em>Approve the column map</em>, <code>exakit describe &lt;id&gt;</code></td></tr>
-<tr><td>Prepare</td><td>"What is wrong with it?"</td><td><code>nb.data_checks(conn, ds)</code></td><td>explore <em>Prepare: is the data clean?</em></td></tr>
+<tr><td>Prepare</td><td>"What is wrong with it?"</td><td><code>nb.data_checks(connection, dataset)</code></td><td>explore <em>Prepare: is the data clean?</em></td></tr>
 <tr><td>Explore</td><td>"Find the pattern."</td><td>SQL built from roles, every statement printed</td><td>explore <em>Compare groups</em>, <em>Over time</em>; ask your data</td></tr>
 <tr><td>Model</td><td>"Test a hypothesis."</td><td>logistic regression on category, entity, month</td><td>explore <em>Small baseline model</em></td></tr>
-<tr><td>Validate</td><td>"Am I fooling myself?"</td><td><code>nb.leakage_check(conn, ds)</code>, ROC AUC with a plain note</td><td>explore <em>Validate</em>, model note</td></tr>
+<tr><td>Validate</td><td>"Am I fooling myself?"</td><td><code>nb.leakage_check(connection, dataset)</code>, ROC AUC with a plain note</td><td>explore <em>Validate</em>, model note</td></tr>
 <tr><td>Share</td><td>"Show stakeholders."</td><td>Dash Server draft → preview → confirm → publish</td><td>share notebook</td></tr>
 <tr><td>Hand off</td><td>"Let someone repeat it."</td><td>versioned descriptor, query digest, workflow log</td><td><code>~/.exasol-starter-kit/workflows/&lt;id&gt;.jsonl</code></td></tr>
 </tbody></table></div>
@@ -241,11 +241,12 @@ columns:
 
 <section id="dynamic">
 <h2><span class="n">06</span>How every cell follows the data</h2>
-<p>No notebook names a column or a table. Four rules hold that:</p>
+<p>No notebook names a column or a table. Five rules hold that:</p>
 <ol class="steps">
   <li><b>One assignment picks the data.</b> <code>DATASET = None</code> means "the dataset approved last in a quickstart" (<code>nb.chosen_dataset</code>), else <code>amazon_sales</code>; any id or a file path with its descriptor beside it also works.</li>
-  <li><b>Columns come from roles.</b> <code>ds.col("category")</code>, <code>ds.col("label")</code>, ... and <code>ds.fact_table</code>; a role the data does not have is <code>None</code>, never guessed.</li>
+  <li><b>Columns come from roles.</b> <code>dataset.col("category")</code>, <code>dataset.col("label")</code>, ... and <code>dataset.fact_table</code>; a role the data does not have is <code>None</code>, never guessed.</li>
   <li><b>Result columns are named after the data.</b> <code>nb.name()</code> and <code>nb.count_name()</code> turn <code>CANCELLED</code> into <code>CANCELLED_PCT</code> and the grain into <code>ORDER_LINES</code> or <code>TRANSACTIONS</code>; Share's query, title and app name follow the same rule.</li>
+  <li><b>Every name says what it holds, and is set once.</b> <code>dataset</code>, <code>connection</code>, <code>workflow_id</code>, <code>LABEL_COLUMN</code>, <code>COUNT_HEADER</code>, <code>feature_values</code> - no <code>ds</code> or <code>X</code> - and no cell reassigns a name another cell set, so Marimo runs the same cells without renaming anything.</li>
   <li><b>A missing role skips, with its reason.</b> No date (<code>fraud_transactions</code>): no trend, and the model leaves the month out. No text (all three): the text step skips.</li>
 </ol>
 <p>Two tests hold this: <code>SwapTest</code> renders every SQL f-string for two datasets and requires them to differ only in descriptor values, and <code>MissingRolesTest</code> removes each role in turn and requires every step that needs it to skip, not fail.</p>
@@ -253,7 +254,7 @@ columns:
 
 <section id="prepare">
 <h2><span class="n">07</span>Prepare: is the data clean?</h2>
-<p><code>nb.data_checks(conn, ds)</code> runs a handful of SQL statements built from the descriptor (shown and logged like every other query) and prints one sentence per finding saying what it does to a result. It changes nothing.</p>
+<p><code>nb.data_checks(connection, dataset)</code> runs a handful of SQL statements built from the descriptor (shown and logged like every other query) and prints one sentence per finding saying what it does to a result. It changes nothing.</p>
 <div class="tbl"><table>
 <thead><tr><th>Check</th><th>How it is found</th><th>On fraud_transactions</th></tr></thead>
 <tbody>
@@ -268,7 +269,7 @@ columns:
 
 <section id="validate">
 <h2><span class="n">08</span>Validate: leakage and baselines</h2>
-<p><code>nb.leakage_check(conn, ds)</code> looks at every column with at most 50 values (not the key, identifiers or text) and flags one whose values almost decide the label on their own: values where the label is at least 99% one way cover at least 95% of rows and catch at least 90% of the label-1 rows. Such a column was usually written after the outcome. The model leaves it out.</p>
+<p><code>nb.leakage_check(connection, dataset)</code> looks at every column with at most 50 values (not the key, identifiers or text) and flags one whose values almost decide the label on their own: values where the label is at least 99% one way cover at least 95% of rows and catch at least 90% of the label-1 rows. Such a column was usually written after the outcome. The model leaves it out.</p>
 <pre><code>- STATUS gives CANCELLED away: CANCELLED is 1 whenever STATUS is 'Cancelled'.
   It was probably written after the outcome - leave it out of any model.</code></pre>
 <p>The model's score is ROC AUC on a quarter it has not seen, with a note in plain words ("about as good as guessing" near 0.5). A rare label is called out in Prepare, so accuracy is never the measure.</p>
@@ -298,9 +299,9 @@ columns:
 <h2><span class="n">11</span>Share a checked result</h2>
 <p>The share notebook counts rows by the category (else the entity, else the label), named after the data, and builds a Dash Server dashboard from that one visible query:</p>
 <ol class="steps">
-  <li><code>nb.share(ds, QUERY, TITLE, APP_NAME)</code> prepares a draft carrying the query digest and the descriptor version.</li>
-  <li><code>draft.preview(...)</code> publishes a preview the user opens and compares with the SQL.</li>
-  <li><code>draft.confirm(..., figures_checked=True)</code> publishes it only after the user says the figures are checked.</li>
+  <li><code>nb.share(dataset, dashboard_query, dashboard_title, app_name)</code> prepares a draft carrying the query digest and the descriptor version.</li>
+  <li><code>dashboard_draft.preview(...)</code> publishes a preview the user opens and compares with the SQL.</li>
+  <li><code>dashboard_draft.confirm(..., figures_checked=True)</code> publishes it only after the user says the figures are checked.</li>
 </ol>
 <p>Needs <code>exakit marketplace dash-server</code> and <code>exakit start dash-server</code> (port 5100 by default).</p>
 </section>
