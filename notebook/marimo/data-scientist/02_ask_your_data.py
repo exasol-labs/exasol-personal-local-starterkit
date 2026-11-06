@@ -18,7 +18,7 @@ def _(mo):
 
     **Dataset:** the one you approved last (else `amazon_sales`), `walmart_sales`, `fraud_transactions` or your own approved descriptor. **How long:** about five minutes.
 
-    Review a proposed query, approve it, then run it read-only. Set `WORKFLOW_ID` to continue the quickstart's log.
+    Review a proposed query, approve it, then run it read-only. It continues the quickstart's workflow log on its own.
 
     Optional: `DRAFT_WITH_MODEL = True` lets your model draft the SQL from the approved column map: every column with its role, evidence and note (no rows are sent). Set the model up in the cell *Optional: your model and Langfuse* below.
     """)
@@ -32,13 +32,9 @@ def _():
     DATASET = None  # None: the dataset approved last in a quickstart (else amazon_sales); or "walmart_sales", "fraud_transactions", or your own approved descriptor
     QUESTION = "How many rows are in each category?"
     DRAFT_WITH_MODEL = False  # True: your model drafts the SQL (set it up in the model cell below); no rows are sent
-    WORKFLOW_ID = None  # paste the quickstart's wf-... id to continue its log
 
     DATASET = nb.chosen_dataset(DATASET)
-    if WORKFLOW_ID:
-        nb.workflow(resume=WORKFLOW_ID)
-    elif not nb.current_workflow():
-        nb.workflow("questions")
+    nb.continue_workflow("questions")   # the quickstart's workflow, or the last one: nothing to paste
 
     conn = nb.connect()
     ds = nb.dataset(conn, DATASET)

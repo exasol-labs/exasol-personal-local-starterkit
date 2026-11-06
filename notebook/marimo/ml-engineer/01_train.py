@@ -37,10 +37,7 @@ def _():
     DATASET = None  # None: the dataset approved last in a quickstart (else amazon_sales); or "walmart_sales", or "~/my-data/transactions.csv" with approved roles beside it
     CONTAINER = nb.ml_train.udf_container()   # or "PYTHON3_ML", "PYTHON3", or the alias of a container you installed
     DATASET = nb.chosen_dataset(DATASET)
-    if os.environ.get("EXAKIT_WORKFLOW_ID"):
-        nb.workflow(resume=os.environ["EXAKIT_WORKFLOW_ID"])
-    elif not nb.current_workflow():
-        nb.workflow("train-" + DATASET)
+    nb.continue_workflow("train-" + DATASET)   # the quickstart's workflow, or the last one: nothing to paste
     return CONTAINER, DATASET, exasol_mlflow, nb
 
 

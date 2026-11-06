@@ -5,6 +5,11 @@ handoff, a dashboard revision, a model put. Without a workflow nothing is writte
     import exakit.nb as nb
     wf = nb.workflow("churn-baseline")        # Workflow wf-20261027-3f9a1c: log ~/.exasol-starter-kit/workflows/...
     nb.workflow(resume="wf-20261027-3f9a1c")  # later, in another kernel
+    nb.continue_workflow("explore")           # the one already going: this kernel's, inherited, or the last one started
+
+A notebook never needs an id pasted in: the quickstart starts the work and every later notebook continues it with
+``continue_workflow``, which takes this kernel's workflow, else the one inherited through EXAKIT_WORKFLOW_ID, else the
+last one started or resumed on this machine ($EXAKIT_HOME/last-workflow), and starts a new one only when there is none.
 
 The id is ``wf-YYYYMMDD-<6 hex>``, kept in the session store and in EXAKIT_WORKFLOW_ID so a child process (a CLI call
 from a notebook) inherits it. The log is ``$EXAKIT_HOME/workflows/<id>.jsonl`` (EXAKIT_HOME default
@@ -39,12 +44,13 @@ from typing import Any
 
 from ._kit import recall, remember
 
-__all__ = ["DASHBOARD_REVISION", "DESCRIBE_APPROVE", "DESCRIBE_DRAFT", "ENV_VARIABLE", "HANDOFF", "KINDS", "MLFLOW_RUN",
+__all__ = ["continue_workflow", "last_workflow", "DASHBOARD_REVISION", "DESCRIBE_APPROVE", "DESCRIBE_DRAFT", "ENV_VARIABLE", "HANDOFF", "KINDS", "MLFLOW_RUN",
            "MODEL_PUT", "REDACTED_SQL", "SQL", "START", "TRACE", "current_workflow", "list_workflows", "log_event", "log_path",
            "log_sql", "read_log", "workflow"]
 
 ENV_VARIABLE = "EXAKIT_WORKFLOW_ID"
 SESSION_KEY = "workflow_id"
+LAST_WORKFLOW = "last-workflow"          # $EXAKIT_HOME/last-workflow: the id the next notebook continues
 ID_PATTERN = re.compile(r"^wf-\d{8}-[0-9a-f]{6}$")
 
 # The kinds a line can carry. A helper logs exactly one of these; the CLI shows them as they are.
@@ -133,11 +139,48 @@ def workflow(name: str | None = None, resume: str | None = None) -> str:
         workflow_id = new_id()
     remember(SESSION_KEY, workflow_id)
     os.environ[ENV_VARIABLE] = workflow_id
+    _remember_last(workflow_id)
     if resume is None:
         log_event(START, name=name, kit_version=_kit_version(),
                   python=platform.python_version(), platform=platform.platform())
     print(f"Workflow {workflow_id}: log {_display(log_path(workflow_id))}")
     return workflow_id
+
+
+def _remember_last(workflow_id: str) -> None:
+    """Note the id the next notebook continues. Never fails a cell."""
+    try:
+        home().mkdir(parents=True, exist_ok=True)
+        (home() / LAST_WORKFLOW).write_text(workflow_id + "\n", encoding="utf-8")
+    except OSError:
+        pass
+
+
+def last_workflow() -> str | None:
+    """The workflow started or resumed last on this machine, when its log is still there; else None."""
+    try:
+        found = (home() / LAST_WORKFLOW).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return found if ID_PATTERN.match(found) and log_path(found).is_file() else None
+
+
+def continue_workflow(name: str | None = None) -> str:
+    """The workflow already going, without an id to paste: this kernel's, else the one inherited through
+    EXAKIT_WORKFLOW_ID, else the last one started or resumed on this machine (a quickstart starts one); a new one named
+    ``name`` only when there is none. Says which, and returns the id."""
+    active = recall(SESSION_KEY)
+    if active and log_path(str(active)).is_file():
+        print(f"Continuing workflow {active} (this notebook's).")
+        return str(active)
+    inherited = os.environ.get(ENV_VARIABLE, "")
+    if ID_PATTERN.match(inherited) and log_path(inherited).is_file():
+        return workflow(resume=inherited)
+    last = last_workflow()
+    if last:
+        print(f"Continuing the last workflow, {last}: run a quickstart to start a new one.")
+        return workflow(resume=last)
+    return workflow(name)
 
 
 def current_workflow() -> str | None:

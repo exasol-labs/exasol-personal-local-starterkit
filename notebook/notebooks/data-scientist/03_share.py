@@ -21,13 +21,9 @@ import exakit.nb as nb
 DATASET = None  # None: the dataset approved last in a quickstart (else amazon_sales); or "walmart_sales", "fraud_transactions", or an approved descriptor of your own
 TITLE = None     # None: named after the data ("<dataset> by <column>"); or a title of your own
 APP_NAME = None  # or a name of your own; the default includes the approved dataset ID and the column
-WORKFLOW_ID = None  # paste the quickstart's wf-... id to continue its log
 
 DATASET = nb.chosen_dataset(DATASET)
-if WORKFLOW_ID:
-    nb.workflow(resume=WORKFLOW_ID)
-elif not nb.current_workflow():
-    nb.workflow("share")
+nb.continue_workflow("share")   # the quickstart's workflow, or the last one: nothing to paste
 
 conn = nb.connect()
 ds = nb.dataset(conn, DATASET)

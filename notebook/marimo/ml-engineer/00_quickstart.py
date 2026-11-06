@@ -30,7 +30,7 @@ def _(mo):
     mo.md(r"""
     ## Start a workflow
 
-    One ID links data, checks and model runs. To continue an earlier log, start the kernel with `EXAKIT_WORKFLOW_ID`.
+    One ID links data, checks and model runs. Train, Rust scoring and scoring continue it on their own: nothing to copy.
     """)
     return
 

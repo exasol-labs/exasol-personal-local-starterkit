@@ -16,7 +16,7 @@
 # %% [markdown]
 # ## Start a workflow
 #
-# Logs your queries and decisions. Keep the printed `wf-...` ID: paste it into `WORKFLOW_ID` in Explore, Ask and Share.
+# Logs your queries and decisions under one ID. Explore, Ask and Share continue it on their own: nothing to copy.
 
 # %%
 import os

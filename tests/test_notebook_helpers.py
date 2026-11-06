@@ -1371,14 +1371,14 @@ class NotebookWorkflowTest(unittest.TestCase):
 
     def test_explore_continues_the_workflow_before_it_opens_the_data(self):
         first = next(c for c in _code_cells(NOTEBOOKS / "data-scientist" / "01_explore.py")   # after DATASET = ...
-                     if 'nb.workflow("explore"' in c)
-        self.assertIn('nb.workflow("explore", resume=WORKFLOW_ID or os.environ.get("EXAKIT_WORKFLOW_ID"))', first)
-        self.assertLess(first.index("nb.workflow("), first.index("nb.connect()"))
+                     if 'nb.continue_workflow("explore")' in c)
+        self.assertNotIn("WORKFLOW_ID =", first, "no id to paste: the notebook continues the workflow on its own")
+        self.assertLess(first.index("nb.continue_workflow("), first.index("nb.connect()"))
         ds = exakit_nb.dataset(FakeConn(AMAZON), "amazon_sales")
         review = mock.Mock(**{"dataset.return_value": ds})
         with mock.patch.object(exakit_nb, "connect", return_value=FakeConn(AMAZON)), \
                 mock.patch.object(exakit_nb, "review_roles", return_value=review) as reviewed:
-            namespace, out = self.run_cell(first, {"DATASET": "amazon_sales", "WORKFLOW_ID": None})
+            namespace, out = self.run_cell(first, {"DATASET": "amazon_sales"})
         self.assertEqual([e["kind"] for e in self.log(namespace["wid"])], ["start"])
         reviewed.assert_called_once_with(mock.ANY, "amazon_sales")
         review.dataset.assert_called_once_with(draft_ok=True)
@@ -1387,8 +1387,16 @@ class NotebookWorkflowTest(unittest.TestCase):
         os.environ["EXAKIT_WORKFLOW_ID"] = namespace["wid"]
         with mock.patch.object(exakit_nb, "connect", return_value=FakeConn(AMAZON)), \
                 mock.patch.object(exakit_nb, "review_roles", return_value=review):
-            again, _ = self.run_cell(first, {"DATASET": "amazon_sales", "WORKFLOW_ID": None})
+            again, _ = self.run_cell(first, {"DATASET": "amazon_sales"})
         self.assertEqual(again["wid"], namespace["wid"])
+        # A new kernel with nothing inherited continues the last workflow started on this machine.
+        importlib.import_module("exakit_nb._kit").SESSION.pop("workflow_id", None)
+        os.environ.pop("EXAKIT_WORKFLOW_ID", None)
+        with mock.patch.object(exakit_nb, "connect", return_value=FakeConn(AMAZON)), \
+                mock.patch.object(exakit_nb, "review_roles", return_value=review):
+            last, _ = self.run_cell(first, {"DATASET": "amazon_sales"})
+        self.assertEqual(last["wid"], namespace["wid"])
+        self.assertEqual([e["kind"] for e in self.log(namespace["wid"])], ["start"], "continuing adds no start line")
 
 
 class MissingRoleTest(unittest.TestCase):

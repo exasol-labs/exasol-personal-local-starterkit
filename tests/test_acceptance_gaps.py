@@ -87,6 +87,7 @@ class MissingRolesTest(unittest.TestCase):
                 descriptor=types.SimpleNamespace(slots={"key": "KEY"}, columns={}),
                 status="approved", id="fixture", missing=[{"role": role, "reason": "no suitable column"} for role in ROLES if role not in available])
             nb = types.SimpleNamespace(workflow=mock.Mock(return_value="wf-20261030-abcdef"),
+                continue_workflow=mock.Mock(return_value="wf-20261030-abcdef"),
                 connect=mock.Mock(), review_roles=mock.Mock(return_value=types.SimpleNamespace(dataset=lambda **kw: ds)),
                 show_roles=mock.Mock(), sql=mock.Mock(return_value=Frame(DAYS=[30], N=[10], PCT=[5.0], TEXT_=["Synthetic description"])),
                 show_sql=mock.Mock(), model_client=mock.Mock(),

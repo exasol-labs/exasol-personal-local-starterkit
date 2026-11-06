@@ -22,7 +22,6 @@ UDF_NAME = None  # choose a new plain lowercase name for a new coefficient revis
 UDF_SCHEMA = "EXAKIT_SCORING"
 TEST_ROWS = 500
 ALLOW_DATABASE_RESTART = False  # set True to consent if the shared bucket is unavailable
-WORKFLOW_ID = None  # paste the ML quickstart's wf-... id to continue its log
 
 # %%
 import json
@@ -35,10 +34,7 @@ import numpy as np
 from scipy.special import expit
 import exakit.nb as nb
 
-if WORKFLOW_ID:
-    nb.workflow(resume=WORKFLOW_ID)
-elif not nb.current_workflow():
-    nb.workflow("rust-scoring")
+nb.continue_workflow("rust-scoring")   # the quickstart's workflow, or the last one: nothing to paste
 
 conn = nb.connect()
 DATASET = nb.chosen_dataset(DATASET)

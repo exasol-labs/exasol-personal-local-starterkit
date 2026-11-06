@@ -169,6 +169,49 @@ class TestResume(WorkflowCase):
         self.assertFalse(wf.log_path("wf-20260101-abcdef").exists())
 
 
+class TestContinue(WorkflowCase):
+    """No id to paste: a later notebook continues the workflow already going."""
+
+    def quiet(self, name="later"):
+        with redirect_stdout(io.StringIO()) as out:
+            wid = wf.continue_workflow(name)
+        return wid, out.getvalue()
+
+    def fresh_kernel(self):
+        _kit.SESSION.clear()
+        os.environ.pop(wf.ENV_VARIABLE, None)
+
+    def test_nothing_going_starts_one(self):
+        wid, _ = self.quiet("explore")
+        self.assertEqual([e["kind"] for e in wf.read_log(wid)], [wf.START])
+        self.assertEqual(wf.last_workflow(), wid)
+
+    def test_a_new_kernel_continues_the_last_one_started(self):
+        started, _ = self.start("data-scientist-quickstart")
+        self.fresh_kernel()
+        wid, out = self.quiet("explore")
+        self.assertEqual(wid, started)
+        self.assertIn("Continuing the last workflow", out)
+        self.assertEqual([e["kind"] for e in wf.read_log(wid)], [wf.START], "continuing adds no start line")
+
+    def test_this_kernels_and_the_inherited_one_come_first(self):
+        first, _ = self.start("one")
+        self.assertEqual(self.quiet()[0], first)              # this kernel's
+        self.fresh_kernel()
+        second, _ = self.start("two")                         # now the last one on the machine
+        self.fresh_kernel()
+        os.environ[wf.ENV_VARIABLE] = first                    # handed down by a runner or a CLI
+        self.assertEqual(self.quiet()[0], first)
+
+    def test_a_last_id_whose_log_is_gone_starts_a_new_one(self):
+        started, _ = self.start("old")
+        self.fresh_kernel()
+        wf.log_path(started).unlink()
+        self.assertIsNone(wf.last_workflow())
+        wid, _ = self.quiet("new")
+        self.assertNotEqual(wid, started)
+
+
 class TestLogEvent(WorkflowCase):
     def test_line_shape(self):
         wid, _ = self.start()

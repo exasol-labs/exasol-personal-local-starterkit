@@ -29,8 +29,7 @@ def _(mo):
 def _():
     DATASET = None   # None: the dataset approved last in a quickstart (else amazon_sales); or "walmart_sales", "fraud_transactions", or your own file ("~/my-data/transactions.csv", roles beside it)
     USE_AI_THEMES = False  # True: your model sorts the texts into themes (needs a text column and EXAKIT_MODEL_ID; see the AI step below)
-    WORKFLOW_ID = None  # paste the quickstart's wf-... id to continue its log
-    return DATASET, USE_AI_THEMES, WORKFLOW_ID
+    return DATASET, USE_AI_THEMES
 
 
 @app.cell(hide_code=True)
@@ -72,11 +71,11 @@ def _(mo):
 
 
 @app.cell
-def _(DATASET, WORKFLOW_ID, nb):
+def _(DATASET, nb):
     import os
-    wid = nb.workflow('explore', resume=WORKFLOW_ID or os.environ.get('EXAKIT_WORKFLOW_ID'))
+    wid = nb.continue_workflow('explore')
     conn = nb.connect()
-    DATASET_1 = nb.chosen_dataset(DATASET)
+    DATASET_1 = nb.chosen_dataset(DATASET)  # the quickstart's workflow, or the last one: nothing to paste
     ds = nb.review_roles(conn, DATASET_1).dataset(draft_ok=True)
     nb.show_roles(ds)
     ENTITY = ds.col('entity') if ds.has('entity') else None

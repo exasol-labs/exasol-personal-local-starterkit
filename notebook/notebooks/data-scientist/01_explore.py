@@ -18,7 +18,6 @@
 # %%
 DATASET = None   # None: the dataset approved last in a quickstart (else amazon_sales); or "walmart_sales", "fraud_transactions", or your own file ("~/my-data/transactions.csv", roles beside it)
 USE_AI_THEMES = False  # True: your model sorts the texts into themes (needs a text column and EXAKIT_MODEL_ID; see the AI step below)
-WORKFLOW_ID = None  # paste the quickstart's wf-... id to continue its log
 
 # %% [markdown]
 # ## Optional: your model and Langfuse
@@ -49,7 +48,7 @@ nb.use_model(MODEL_ID, PROVIDER_BASE_URL, LANGFUSE_BASE_URL)
 import os
 import exakit.nb as nb
 
-wid = nb.workflow("explore", resume=WORKFLOW_ID or os.environ.get("EXAKIT_WORKFLOW_ID"))
+wid = nb.continue_workflow("explore")   # the quickstart's workflow, or the last one: nothing to paste
 conn = nb.connect()
 DATASET = nb.chosen_dataset(DATASET)
 ds = nb.review_roles(conn, DATASET).dataset(draft_ok=True)

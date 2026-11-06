@@ -307,7 +307,7 @@ columns:
 
 <section id="lineage">
 <h2><span class="n">12</span>Lineage: the workflow log</h2>
-<p>Every notebook starts or resumes a workflow (<code>wf-YYYYMMDD-xxxxxx</code>). Each SQL statement (with its digest and row count), each descriptor draft and approval, each approved question and each trace is one line in <code>~/.exasol-starter-kit/workflows/&lt;id&gt;.jsonl</code>, in order. Paste the quickstart's id into <code>WORKFLOW_ID</code> in the other notebooks to keep one log.</p>
+<p>The quickstart starts a workflow (<code>wf-YYYYMMDD-xxxxxx</code>); Explore, Ask and Share continue it on their own with <code>nb.continue_workflow()</code> - this kernel's workflow, else the one inherited through <code>EXAKIT_WORKFLOW_ID</code>, else the last one started on this machine (<code>~/.exasol-starter-kit/last-workflow</code>) - so there is no id to copy or paste. Each SQL statement (with its digest and row count), each descriptor draft and approval, each approved question and each trace is one line in <code>~/.exasol-starter-kit/workflows/&lt;id&gt;.jsonl</code>, in order; <code>exakit workflow show &lt;id&gt;</code> prints it. Running a quickstart again starts the next piece of work.</p>
 </section>
 
 <section id="mcp">
