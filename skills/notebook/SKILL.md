@@ -182,6 +182,13 @@ dataset and the descriptor's digest. Without those variables it prints that trac
 the notebook runs unchanged. The kit ships no model: the user's
 `EXAKIT_PROVIDER_BASE_URL` may point at a local endpoint such as Ollama.
 
+No terminal needed: Explore and Ask your data carry an optional cell, *Optional: your
+model and Langfuse*, whose `MODEL_ID`, `PROVIDER_BASE_URL` and `LANGFUSE_BASE_URL` feed
+`nb.use_model(...)`; the ML Engineer's quickstart and Train carry `MLFLOW_TRACKING_URI` and
+`MLFLOW_SERVER_LOGIN` for `nb.use_mlflow(...)`. Point the user at that cell. Only the plain
+values go in it; the keys are asked for in a hidden prompt and live in the kernel's
+environment until it stops. Never write a key into a cell, a file or a command line.
+
 ## AI Lab notebooks on a local database
 
 AI Lab notebooks that use only the database run here. Those that upload to
