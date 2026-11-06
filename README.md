@@ -86,11 +86,13 @@ Every platform runs the same database, Exasol Personal, set up by the same launc
 | Machine | Minimum | Notes |
 |---|---|---|
 | **[macOS](quickstarts/macos.md)** | 8 GB+ RAM, 20 GB free disk | Runs in a lightweight managed VM. Nothing to install first |
-| **[Linux](quickstarts/linux.md)** | Podman (rootless is fine), 8 GB+ RAM, 20 GB free disk | If Podman is missing, the installer installs it without stopping to ask. It uses `sudo`, so expect a password prompt |
-| **[Windows](quickstarts/windows.md)** | 8 GB+ RAM, 20 GB free disk | Runs through Podman, which the launcher offers to install (this may need administrator approval). An existing Podman machine must be rootless (`podman machine set --rootful=false`), or the database port cannot reach Windows. Windows arm64 is not supported<br>**WSL** is supported and follows the Linux path: run the same command inside a WSL2 distro. |
+| **[Linux](quickstarts/linux.md)** | Docker Engine 29+ or Podman (rootless is fine), 8 GB+ RAM, 20 GB free disk | A new install runs on Docker when a usable one is found, otherwise on Podman. If neither is there, the installer installs Podman without stopping to ask. It uses `sudo`, so expect a password prompt |
+| **[Windows](quickstarts/windows.md)** | 8 GB+ RAM, 20 GB free disk | Runs on Docker Desktop when it is running (Engine 29+, Linux containers), otherwise through Podman, which the launcher offers to install (this may need administrator approval). An existing Podman machine must be rootless (`podman machine set --rootful=false`), or the database port cannot reach Windows. Windows arm64 is not supported<br>**WSL** is supported and follows the Linux path: run the same command inside a WSL2 distro. Podman inside WSL needs WSL 2.7 or newer (`wsl --update`); Docker Desktop's WSL integration has no such floor. |
 | All platforms | Python 3.11+ |  |
 
 If Podman blocks the install, see the [Podman troubleshooting guide](quickstarts/podman.md).
+
+The engine is chosen once, at the first deploy, and a deployment keeps it: an install made with Exasol Personal 2.3 stays on Podman after `exakit update`. `EXAKIT_CONTAINER_ENGINE=docker|podman` names the engine for a new install.
 
 ## Upgrade Path for Starterkit
 
@@ -154,9 +156,11 @@ The whole flow, from install to the first query: -->
 | Question | Answer |
 |---|---|
 | What&nbsp;do&nbsp;I&nbsp;need&nbsp;installed&nbsp;first? | Python 3.11+. You don't need Rust or Homebrew. |
+| Can&nbsp;I&nbsp;use&nbsp;Docker<br>instead&nbsp;of&nbsp;Podman? | Yes, from kit 0.2.4 (Exasol Personal 2.4). A new install on Linux, WSL or Windows runs on Docker Engine 29 or newer when its daemon is running and set to Linux containers, otherwise on Podman. The kit never installs or starts Docker. A deployment keeps the engine it was first deployed on; to change it, run `exakit uninstall` (this deletes the database and its data) and install again with `EXAKIT_CONTAINER_ENGINE=docker`. |
 | What&nbsp;if&nbsp;I&nbsp;don't&nbsp;have<br>Podman&nbsp;Desktop&nbsp;on&nbsp;Windows? | The Exasol launcher offers to install Podman at the database step through Windows Package Manager, which may ask for administrator approval once. If that fails, see the [Podman troubleshooting guide](quickstarts/podman.md). |
 | Podman&nbsp;on&nbsp;Windows:&nbsp;rootful&nbsp;machine<br>or&nbsp;unreachable&nbsp;database? | The kit needs a rootless machine. Follow the [steps to switch to rootless mode](quickstarts/podman.md#windows-rootful-machine) when you can restart the machine and interrupt its containers. |
 | Podman&nbsp;on&nbsp;Windows:&nbsp;installed<br>but&nbsp;unable&nbsp;to&nbsp;connect? | Run `podman info` and check whether the machine is running. The [connection troubleshooting steps](quickstarts/podman.md#windows-connection-failures) explain how to get it working. |
+| Podman&nbsp;on&nbsp;WSL:&nbsp;"nft&nbsp;did&nbsp;not<br>return&nbsp;successfully"? | Exasol Personal 2.4 needs WSL 2.7 or newer for Podman, because its network needs nftables in the WSL kernel. The kit checks before a Podman deploy or a launcher update and names the fix: `wsl --update`, then `wsl --shutdown`. See [WSL 2.7 and nftables](quickstarts/podman.md#wsl-27-and-nftables). Docker is not affected. |
 | Podman&nbsp;on&nbsp;WSL2:&nbsp;machine&nbsp;won't&nbsp;start<br>or&nbsp;reports&nbsp;a&nbsp;virtualization&nbsp;error? | Check your WSL2 and Windows virtualization setup using the [WSL2 troubleshooting steps](quickstarts/podman.md#wsl2-and-virtualization). |
 | Podman&nbsp;on&nbsp;Linux/WSL:&nbsp;what&nbsp;do<br>`subuid`&nbsp;or&nbsp;`newuidmap`&nbsp;errors&nbsp;mean? | Your account may be missing the ID ranges or helpers that rootless Podman needs. Follow the [rootless permissions guide](quickstarts/podman.md#linux-and-wsl-rootless-permissions) before changing system settings. |
 | Does&nbsp;it&nbsp;cost&nbsp;anything? | No. Exasol Personal Local is free of charge, but it is not open source: the database ships under the [Exasol Personal End User License Agreement](https://www.exasol.com/terms-and-conditions/#h-exasol-personal-end-user-license-agreement), and this kit's scripts are [MIT](LICENSE). |

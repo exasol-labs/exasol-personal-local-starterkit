@@ -20,8 +20,8 @@ exakit info        # the Runtime line, the DSN and the port actually in use
 
 | | **Exasol Personal** |
 |---|---|
-| Where | macOS, native Linux (Podman), WSL 2 (Podman inside the distro), Windows x86_64 (host Podman) |
-| Not supported | WSL 1 and Windows arm64 — the installer says so and exits, changing nothing (WSL 2 is supported: it takes the Linux path, with Podman inside the distro) |
+| Where | macOS (its own VM runner), native Linux and WSL 2 (Docker Engine 29+ or Podman, inside the distro for WSL), Windows x86_64 (Docker Desktop or host Podman). The engine is chosen at the first deploy - Docker when usable, else Podman, `EXAKIT_CONTAINER_ENGINE` names one - and the deployment keeps it; the kit records it as `runtime.engine` in its manifest |
+| Not supported | WSL 1 and Windows arm64 — the installer says so and exits, changing nothing (WSL 2 is supported: it takes the Linux path, with Docker or Podman inside the distro; Podman there needs WSL 2.7 or newer, which the kit checks before a deploy or a launcher update) |
 | Deployed by | the `exasol` launcher (`exasol install local`) |
 | State lives in | `~/.exasol/personal/deployments/default` |
 | Extra detail command | `exasol info` |

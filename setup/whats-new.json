@@ -20,6 +20,13 @@
     "install shows no cards at all, so every line here is read by someone who",
     "already had the kit working and wants to know what is different."
   ],
+  "0.2.4": [
+    "Exasol Personal 2.4: new installs run on Docker when it is usable.",
+    "No Docker? Podman as before. EXAKIT_CONTAINER_ENGINE names one.",
+    "Existing deployments keep their engine and password; nothing moves.",
+    "Podman on WSL now needs WSL 2.7+: the kit checks and names the fix.",
+    "New deployments get a random sys password; exakit reads it for you."
+  ],
   "0.2.3": [
     "Security update for uv, the tool that runs the MCP server.",
     "uv is now pinned and checksum-verified; no install script runs.",

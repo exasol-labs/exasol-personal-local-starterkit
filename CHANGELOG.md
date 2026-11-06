@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+## 0.2.4
+
+**Exasol Personal 2.4.0, with Docker as an engine for new deployments.**
+`components.personal` moves to 2.4.0 (five S3 raw-binary digests re-pinned;
+nano engine nano.8 with its security and wrong-result fixes). What changes
+for whom:
+
+- **New installs on Linux, WSL and Windows choose an engine.** Docker when
+  its daemon answers, runs Linux containers and is Engine 29 or newer; Podman
+  otherwise, installed by the kit (Linux, WSL) or the launcher (Windows) as
+  before. The choice is passed explicitly as `--container-engine` and
+  recorded as `runtime.engine`; the launcher's own `auto` order (Podman
+  first) is never relied on. A Docker that is installed but stopped is
+  offered once where there is a terminal ("start it, then press Enter, or
+  `p` for Podman"); a run without one takes Podman and says so. A failed
+  deploy is never retried on the other engine. `EXAKIT_CONTAINER_ENGINE=
+  docker|podman` names an engine and is never swapped. Preflight counts
+  Docker Engine 29+ and names both engines when neither is there.
+- **Existing deployments change nothing.** `exakit update personal` stays a
+  launcher swap: a 2.3 deployment keeps Podman and its `sys` password
+  (`secrets.json` is never touched; 2.4 generates a random password for new
+  deployments only, which the kit reads as it always did). After the update
+  the kit says so, and that the next `exakit stop` + `exakit start` moves the
+  containers onto the launcher's new per-deployment network, once. The kit's
+  own MCP server (`mcp_readonly`) keeps connecting; the launcher's MCP sidecar
+  stays off unless `exasol mcp enable` is run by hand.
+- **Podman on a WSL kernel older than 2.7 is refused before anything
+  changes.** The 2.4 network needs nftables, which WSL 2.6 and older lack
+  (`netavark: nftables error: "nft" did not return successfully while
+  applying ruleset`). The kit reads `wsl.exe --version` (UTF-16, localized)
+  before a fresh Podman deploy inside WSL, before `exakit update personal` on
+  a Podman deployment, and on Windows before Podman-machine work, and stops
+  with the fix: `wsl --update`, `wsl --shutdown`, re-run. A machine already on
+  Podman's `firewall_driver = "iptables"` passes; one whose wsl.exe cannot be
+  read is warned and let through. Docker and macOS never ask.
+- Tests: `tests/personal-engine.sh` (+ `personal-engine-ps.ps1`) and
+  `tests/personal-wsl-gate.sh`. Docs: README, AGENTS, the Linux, Windows and
+  Podman quickstarts, the exasol-runtime skill (`components.skills.version`
+  1.12.4), and the what's-new card.
+
 ## 0.2.3
 
 **Security release: uv is pinned, verified and held to a minimum version.**

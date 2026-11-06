@@ -71,7 +71,32 @@ wsl --list --verbose
 
 The kit needs WSL2 and won't run on WSL1. If virtualization is disabled, the Virtual Machine Platform feature is missing, or you see an error such as `0x80370102`, follow [Microsoft's WSL troubleshooting](https://learn.microsoft.com/en-us/windows/wsl/troubleshooting). If Windows itself runs in a VM, ask the host administrator whether nested virtualization needs to be enabled. For an outdated WSL installation, run `wsl --update` and restart if prompted.
 
-If you're installing inside a WSL distro, install Podman in that distro too. Keep the kit in your Linux home directory rather than under `/mnt/c`. Podman Desktop on Windows doesn't supply Podman for this install. See the [Linux/WSL quickstart](linux.md). Save your work before running `wsl --shutdown`, as it stops every running WSL distribution, including a WSL-backed Podman machine.
+If you're installing inside a WSL distro, install Podman in that distro too, or enable Docker Desktop's WSL integration for it (the kit uses Docker Engine 29 or newer when it finds it). Keep the kit in your Linux home directory rather than under `/mnt/c`. Podman Desktop on Windows doesn't supply Podman for this install. See the [Linux/WSL quickstart](linux.md). Save your work before running `wsl --shutdown`, as it stops every running WSL distribution, including a WSL-backed Podman machine.
+
+### WSL 2.7 and nftables
+
+Exasol Personal 2.4 puts each deployment on its own network, which Podman builds with its nftables firewall driver. The kernel that WSL 2.6 and older ship has no nftables, so a Podman deploy inside WSL, or the first start of an existing deployment after the launcher update to 2.4, fails with:
+
+```
+Error: netavark: nftables error: "nft" did not return successfully while applying ruleset
+```
+
+The kit reads `wsl.exe --version` before a Podman deploy and before `exakit update personal`, and stops with the fix, changing nothing. Update WSL from PowerShell on Windows, restart it, then re-run the command the message names:
+
+```powershell
+wsl --update
+wsl --shutdown
+```
+
+A machine that cannot update WSL can switch Podman to the iptables driver instead, inside the distro, with the `iptables` package installed. The kit sees this setting and does not ask for the update:
+
+```ini
+# ~/.config/containers/containers.conf
+[network]
+firewall_driver = "iptables"
+```
+
+Docker is not affected: Docker Desktop's WSL integration has no such floor. The same floor applies to Podman's machine on Windows, which runs on the WSL kernel too.
 
 ### Linux and WSL rootless permissions
 
@@ -112,7 +137,7 @@ Two things to keep in mind:
 
 ### Podman Desktop and Docker Desktop
 
-The launcher needs Podman on Windows, Linux and WSL. Docker Desktop doesn't meet that requirement. You can use the Podman CLI on its own, with Podman Desktop as an optional graphical interface. Windows also needs a Podman machine. On Linux and inside WSL, the kit uses Podman directly.
+From Exasol Personal 2.4 the launcher runs a new deployment on Docker Engine 29 or newer (Docker Desktop on Windows, set to Linux containers; Docker Engine or Docker Desktop's WSL integration on Linux and WSL) or on Podman. The kit picks Docker when it is usable and Podman otherwise, and a deployment keeps its engine. You can use the Podman CLI on its own, with Podman Desktop as an optional graphical interface. Windows also needs a Podman machine for the Podman path. On Linux and inside WSL, the kit uses the engine directly.
 
 ### Podman is missing or installation failed
 
