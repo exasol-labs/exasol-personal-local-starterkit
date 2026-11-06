@@ -3415,10 +3415,9 @@ _exakit_resolve_versions_latest() {
         EXAKIT_EXAPUMP_VERSION="$(exakit_latest_github_release_version "$EXAKIT_EXAPUMP_REPO" || true)"
         [ -n "$EXAKIT_EXAPUMP_VERSION" ] || EXAKIT_EXAPUMP_VERSION="$EXAKIT_EXAPUMP_VERSION_FALLBACK"
     fi
-    if [ -z "$EXAKIT_MCP_VERSION" ]; then
-        EXAKIT_MCP_VERSION="$(exakit_latest_pypi_version "$EXAKIT_MCP_PACKAGE" || true)"
-        [ -n "$EXAKIT_MCP_VERSION" ] || EXAKIT_MCP_VERSION="$EXAKIT_MCP_VERSION_FALLBACK"
-    fi
+    # The MCP server is the image this kit copy pins, not a PyPI package: its
+    # version follows the pin under every policy.
+    _exakit_resolve_one EXAKIT_MCP_VERSION components.mcp.version "$EXAKIT_MCP_VERSION_FALLBACK"
     if [ -z "$EXAKIT_PYEXASOL_VERSION" ]; then
         EXAKIT_PYEXASOL_VERSION="$(exakit_latest_pypi_version "${EXAKIT_PYEXASOL_PACKAGE:-pyexasol}" || true)"
         [ -n "$EXAKIT_PYEXASOL_VERSION" ] || EXAKIT_PYEXASOL_VERSION="$EXAKIT_PYEXASOL_VERSION_FALLBACK"
@@ -3445,7 +3444,7 @@ exakit_component_latest() {
         # astral tags releases as plain numbers (0.13.6, no v); the helper
         # strips an optional v, so the answer has the same shape either way.
         uv)       exakit_latest_github_release_version "$EXAKIT_UV_REPO" ;;
-        mcp)      exakit_latest_pypi_version "$EXAKIT_MCP_PACKAGE" ;;
+        mcp)      exakit_mcp_image_version ;;
         pyexasol) exakit_latest_pypi_version "${EXAKIT_PYEXASOL_PACKAGE:-pyexasol}" ;;
         personal) exakit_latest_github_release_version "$EXAKIT_PERSONAL_REPO" ;;
         runtime)
@@ -3608,6 +3607,17 @@ exakit_version_plain() {
     esac
 }
 
+# exakit_mcp_image_version — the version of the MCP server image this kit copy
+# pins (the tag of components.mcp.sidecar_image, read from the kit copy only -
+# SEC-13). Here rather than in mcp.sh so every caller answers the same, with or
+# without the MCP module loaded; mcp_sidecar_image_version is the same answer.
+exakit_mcp_image_version() {
+    _emiv="$(exakit_versions_pin components.mcp.sidecar_image 2>/dev/null || true)"
+    _emiv="${_emiv%%@*}"
+    _emiv="${_emiv##*:}"
+    case "$_emiv" in [0-9]*) printf '%s\n' "$_emiv" ;; *) printf '%s\n' "$EXAKIT_MCP_VERSION_FALLBACK" ;; esac
+}
+
 exakit_component_available() {
     _cav_override="$(_exakit_component_env_override "$1")"
     if [ -n "$_cav_override" ]; then
@@ -3638,9 +3648,8 @@ exakit_component_available() {
     # digest in this kit copy: its tag is the only version an update can put
     # there, whatever PyPI or the fetched document say is newest. Offering
     # those instead parked the row on "update available" for good.
-    if [ "$1" = mcp ] && command -v mcp_sidecar_image_version >/dev/null 2>&1 && \
-       [ "$(manifest_get components.mcp_server.backend 2>/dev/null || true)" = sidecar ]; then
-        mcp_sidecar_image_version
+    if [ "$1" = mcp ]; then
+        exakit_mcp_image_version
         return 0
     fi
     case "${EXAKIT_VERSION_POLICY:-manifest}" in
@@ -3815,67 +3824,6 @@ _exakit_probe_pyexasol_version() {
     printf '%s' "$_ppv_out"
 }
 
-# exakit_installed_mcp_version — the MCP server is never "installed": uvx
-# materialises it per launch. What exists on the machine is the SPEC pinned into each
-# AI client config, and that is what will run the next time a client connects.
-#
-# The adapters own where those configs live, so the paths come from the kit's own
-# status operation rather than from a second copy of that knowledge here. When the
-# clients disagree — one set up before an update and never refreshed — the oldest pin
-# is the answer here, and the per-client picture belongs to `exakit mcp-doctor`: it
-# names each client whose managed entry is no longer the one the kit would write, and
-# `exakit mcp-doctor` re-writes those entries from the current definition.
-exakit_installed_mcp_version() {
-    command -v exakit_run_mcp_operation_cli >/dev/null 2>&1 || return 1
-    exakit_can_run_python || return 1
-    _imv_result="$(mktemp "${TMPDIR:-/tmp}/exakit-mcp-pins.XXXXXX")"
-    if ! exakit_run_mcp_operation_cli status \
-            "claude_desktop,claude_code,cursor,codex,vscode_copilot,gemini_cli,opencode,continue" \
-            "$_imv_result" >/dev/null 2>&1; then
-        rm -f "$_imv_result"
-        return 1
-    fi
-    _imv_pins="$(run_python - "$_imv_result" 2>/dev/null <<'PY'
-import json, re, sys
-
-try:
-    with open(sys.argv[1], encoding="utf-8") as handle:
-        doc = json.load(handle)
-except (OSError, ValueError):
-    raise SystemExit(1)
-pins = set()
-for artifact in doc.get("artifacts", []) or []:
-    path = artifact.get("path")
-    if not path:
-        continue
-    try:
-        with open(path, encoding="utf-8") as handle:
-            body = handle.read()
-    except OSError:
-        continue
-    pins.update(re.findall(r"exasol-mcp-server@([0-9][0-9A-Za-z._+-]*)", body))
-if not pins:
-    raise SystemExit(1)
-
-
-def key(v):
-    return [int(p) if p.isdigit() else p for p in re.split(r"([0-9]+)", v)]
-
-
-# The OLDEST pin, not the set: this value is compared against the advertised version,
-# and a comma-joined list is not a version. The oldest is also the honest answer —
-# it is the weakest link, the client that would launch the most outdated server.
-# Which client is stale belongs to `exakit mcp-doctor`, which prints per-client state
-# already. (No apostrophes in here: this heredoc sits inside a command substitution,
-# and bash 3.2 mis-tracks a lone quote in that position.)
-print(sorted(pins, key=key)[0])
-PY
-    )"
-    rm -f "$_imv_result"
-    [ -n "$_imv_pins" ] || return 1
-    printf '%s\n' "$_imv_pins"
-}
-
 # exakit_previous_kit_repo <installing-repo> — the owner/repo of a starter kit
 # already installed here that this run is moving on FROM, or empty.
 #
@@ -3962,14 +3910,11 @@ exakit_component_current() {
             fi
             ;;
         mcp)
-            # What the clients are pinned to is what will actually run; the record is
-            # the fallback when no client is configured or the module is absent.
-            _cur_live="$(exakit_installed_mcp_version 2>/dev/null || true)"
-            if [ -n "$_cur_live" ]; then
-                printf '%s\n' "$_cur_live"
-            else
-                manifest_get components.mcp_server.version 2>/dev/null
-            fi
+            # The image the sidecar runs, as recorded when it last served. A record
+            # from before the sidecar (clients on the old stdio server) is not this
+            # server at all: no version, so the update moves it over.
+            [ "$(manifest_get components.mcp_server.backend 2>/dev/null || true)" = sidecar ] || return 0
+            manifest_get components.mcp_server.version 2>/dev/null
             ;;
         uv)
             # The uv the kit would run, read from the binary itself: the first
@@ -8316,9 +8261,6 @@ exakit_on_failure() {
     # first, so a failure mid-animation never leaves a stuck/invisible cursor.
     ui_spin_end 2>/dev/null || true
     ui_restore_cursor
-    # Same reason as the sweep below: a background prefetch is this run's
-    # process, and a run that is ending does not get to leave one downloading.
-    if command -v mcp_prefetch_stop >/dev/null 2>&1; then mcp_prefetch_stop 2>/dev/null || true; fi
     exakit_sweep_sensitive_tmp     # never leave credential temp files behind
     exakit_sweep_tmp
     [ $_status -eq 0 ] && return 0
@@ -8398,9 +8340,6 @@ exakit_enable_failure_handling() {
 exakit_finish() {
     trap - EXIT
     exakit_sweep_tmp
-    # A prefetch that never got collected (the MCP step was skipped, or the run
-    # is ending early) must not outlive the installer. No-op when there is none.
-    if command -v mcp_prefetch_stop >/dev/null 2>&1; then mcp_prefetch_stop || true; fi
     rollback_discard
     exakit_release_lock
     EXAKIT_CURRENT_STEP=""
@@ -9555,14 +9494,6 @@ exakit_tls_rewrite_clients() {
         ( exapump_create_profile ) || warn "Could not rewrite the exapump profile with the pin. Finish it with: exakit update exapump"
     fi
     [ "$_trc_scope" = "--profile-only" ] && return 0
-    if [ "$(manifest_get components.mcp_server.validated 2>/dev/null || true)" = "true" ] && \
-       [ "$(manifest_get components.mcp_server.backend 2>/dev/null || true)" != "sidecar" ] && \
-       command -v mcp_refresh_client_pins >/dev/null 2>&1; then
-        [ -n "${EXAKIT_MCP_VERSION:-}" ] || EXAKIT_MCP_VERSION="$(manifest_get components.mcp_server.version 2>/dev/null || true)"
-        [ -n "${EXAKIT_MCP_PACKAGE:-}" ] || EXAKIT_MCP_PACKAGE="$(manifest_get components.mcp_server.package 2>/dev/null || printf 'exasol-mcp-server')"
-        export EXAKIT_MCP_VERSION EXAKIT_MCP_PACKAGE
-        mcp_refresh_client_pins || warn "Could not rewrite every AI client with the pin. Finish it with: exakit mcp-doctor"
-    fi
     return 0
 }
 
@@ -10161,9 +10092,11 @@ exakit_run_mcp_setup_cli() {
         exakit_configure_mcp_readonly_access || return 1
     fi
     # The server behind the entries: the launcher's MCP sidecar as the read-only
-    # user where it can serve (Exasol Personal 2.4.0+), else the kit's own stdio
-    # server. Silent either way - the table is animating - and never a failure.
-    command -v mcp_sidecar_apply >/dev/null 2>&1 && { mcp_sidecar_apply || true; }
+    # user, healed where it does not serve. Its lines go to the log - the table
+    # is animating - and a sidecar that still does not serve is said once the
+    # table is done (exakit_mcp_setup reads components.mcp_server.validated).
+    command -v mcp_sidecar_apply >/dev/null 2>&1 && \
+        { mcp_sidecar_apply >>"${EXAKIT_LOG_FILE:-/dev/null}" 2>&1 || true; }
     _old_ifs="$IFS"
     IFS=','
     set -- $_clients_csv
@@ -10262,7 +10195,7 @@ exakit_run_mcp_operation_cli() {
     # sidecar where it can serve (a deployment restarted since setup can now),
     # else the kit's stdio server. Diagnosis only reads what is recorded.
     if [ "$_operation" = repair ] && command -v mcp_sidecar_apply >/dev/null 2>&1; then
-        mcp_sidecar_apply >/dev/null 2>&1 || true
+        mcp_sidecar_apply >>"${EXAKIT_LOG_FILE:-/dev/null}" 2>&1 || true
     fi
     _old_ifs="$IFS"
     IFS=','
@@ -10439,18 +10372,16 @@ exakit_print_mcp_ready_panel() {
         _mcp_user="$(manifest_get components.mcp_server.connection.user 2>/dev/null || true)"
         _mcp_user_kind="readonly"
     fi
-    _mcp_package="$(manifest_get components.mcp_server.package 2>/dev/null || printf '%s' "$EXAKIT_MCP_PACKAGE")"
     _mcp_version="$(manifest_get components.mcp_server.version 2>/dev/null || printf '%s' "$EXAKIT_MCP_VERSION")"
-    _mcp_command="$(manifest_get components.mcp_server.command 2>/dev/null || true)"
+    _mcp_url="$(manifest_get components.mcp_server.url 2>/dev/null || true)"
     _tls="$(manifest_get runtime.tls 2>/dev/null || true)"
-    [ -n "$_mcp_command" ] || _mcp_command="uvx"
 
     # An eight-row panel of reference values became one line. The command, the
     # package version and the managed-state directory are what `exakit
     # mcp-status` is for; what the reader needs here is that the server exists,
     # what it is called, and that it reaches the database read-only. The whole
     # panel still goes to the logfile, so nothing is unrecoverable.
-    _exakit_log_file "DATA  MCP command: $_mcp_command $_mcp_package@$_mcp_version"
+    _exakit_log_file "DATA  MCP server: ${_mcp_url:-not serving yet} (image ${_mcp_version:-unknown})"
     _exakit_log_file "DATA  MCP managed state: $EXAKIT_MCP_DIR"
     _exakit_log_file "DATA  MCP TLS: ${_tls:-unknown}"
     # THE USER THAT WAS RESOLVED, not a default that assumes the good case.
@@ -10462,12 +10393,11 @@ exakit_print_mcp_ready_panel() {
         info "No read-only MCP credential is recorded, so writes from your AI client would NOT be rejected by the database."
         info "Fix it with: exakit mcp-setup"
     else
-        # The same line for both servers; only where it runs differs.
-        _mrp_where="started by your AI client on demand"
-        if [ "$(manifest_get components.mcp_server.backend 2>/dev/null || true)" = sidecar ]; then
-            _mrp_where="served beside the database at $(manifest_get components.mcp_server.url 2>/dev/null)"
+        if [ -n "$_mcp_url" ] && [ "$(manifest_get components.mcp_server.validated 2>/dev/null || true)" = true ]; then
+            ok "MCP server 'exasol' — ${_dsn:-unknown} as ${_mcp_user:-unknown} (read-only), served beside the database at $_mcp_url"
+        else
+            warn "MCP server 'exasol' — ${_dsn:-unknown} as ${_mcp_user:-unknown} (read-only) is not serving yet. Fix: exakit mcp-doctor"
         fi
-        ok "MCP server 'exasol' — ${_dsn:-unknown} as ${_mcp_user:-unknown} (read-only), $_mrp_where"
     fi
     # Put the prompt straight onto the clipboard so the first interaction is a
     # paste, not a retype. Best-effort: silent when no clipboard tool exists.
@@ -11769,38 +11699,38 @@ _exakit_install_exapump() {
     return $_eie_rc
 }
 
-# One line for this step's server work: the spinner narrates the prime and the
-# handshake, so the info/ok pairs beneath were the second telling.
+# One line for this step's server work: the launcher's MCP server, as the
+# read-only user, healed where it does not serve (mcp_sidecar_apply). Nothing to
+# download; the step's line names the endpoint. A server that still does not
+# serve fails the step softly with its error and fix: the install carries on,
+# and `exakit mcp-doctor` tries again. The read-only user is made here for it;
+# a subshell keeps a die() in there from ending the step.
 _exakit_install_mcp() {
     _eim_prev_quiet="${EXAKIT_QUIET_DETAIL:-0}"
     [ -t 1 ] && EXAKIT_QUIET_DETAIL=1
-    # The launcher's MCP server, as the read-only user, wherever it can serve
-    # (Exasol Personal 2.4.0+): nothing to download, the step's line names the
-    # endpoint. Anything short of serving falls through to the kit's own stdio
-    # server below, exactly as before. The read-only user is made here for it;
-    # a subshell keeps a die() in there from ending the step.
-    if command -v mcp_sidecar_supported >/dev/null 2>&1 && mcp_sidecar_supported; then
-        EXAKIT_MCP_STEP_T0="$(date +%s 2>/dev/null || echo 0)"
-        ui_spin_begin "Starting the MCP server and checking it answers"
-        if ( exakit_configure_mcp_readonly_access ) >/dev/null 2>&1 && mcp_sidecar_apply; then
-            ui_spin_end
-            manifest_set components.mcp_server.mode "http"
-            manifest_set components.mcp_server.validated true
-            exakit_record_ownership mcp kit
-            ok_step "MCP server answering at $(manifest_get components.mcp_server.url 2>/dev/null) as the read-only user ($(( $(date +%s 2>/dev/null || echo 0) - EXAKIT_MCP_STEP_T0 ))s)"
-            EXAKIT_QUIET_DETAIL="$_eim_prev_quiet"
-            return 0
-        fi
-        ui_spin_end
-    fi
-    if ! mcp_install; then
-        EXAKIT_QUIET_DETAIL="$_eim_prev_quiet"
-        return 1
-    fi
-    mcp_validate
+    EXAKIT_MCP_STEP_T0="$(date +%s 2>/dev/null || echo 0)"
+    ( exakit_configure_mcp_readonly_access ) >/dev/null 2>&1 || true
+    ui_spin_begin "Starting the MCP server and checking it answers"
+    _eim_out="$(mktemp "${TMPDIR:-/tmp}/exakit-mcp-step.XXXXXX")"
+    mcp_sidecar_apply >"$_eim_out" 2>&1
     _eim_rc=$?
+    ui_spin_end
+    cat "$_eim_out" >> "${EXAKIT_LOG_FILE:-/dev/null}" 2>/dev/null
     EXAKIT_QUIET_DETAIL="$_eim_prev_quiet"
-    return $_eim_rc
+    if [ "$_eim_rc" -eq 0 ]; then
+        exakit_record_ownership mcp kit
+        # What it healed on the way is worth its line; the rest was the spinner.
+        grep -a 'Self-heal:' "$_eim_out" 2>/dev/null | sed 's/^[^S]*Self-heal:/Self-heal:/' | while IFS= read -r _eim_line; do
+            info_step "$_eim_line"
+        done
+        rm -f "$_eim_out"
+        ok_step "MCP server answering at $(manifest_get components.mcp_server.url 2>/dev/null) as the read-only user ($(( $(date +%s 2>/dev/null || echo 0) - EXAKIT_MCP_STEP_T0 ))s)"
+        return 0
+    fi
+    # The error and its fix, as mcp_sidecar_apply said them.
+    cat "$_eim_out" >&2
+    rm -f "$_eim_out"
+    return 1
 }
 
 # pyexasol_validate used to run OUTSIDE the soft step, which defeated the whole
@@ -12255,16 +12185,6 @@ kit_shared_steps() {
         # and the closing summary said nothing (wrong). Record it so the user
         # leaves knowing the database is empty and which command fills it.
         exakit_clear_failure_note
-        # THE BRIDGE'S DOWNLOAD STARTS HERE, not two steps later. Priming the
-        # MCP package is a network download and an unpack; the load below is a
-        # local database reading local files. Neither needs the other, so the
-        # download runs underneath the load and the AI bridge step collects a
-        # finished one. See mcp_prefetch_begin. Only this branch starts it: with
-        # the data after the steps there is no load for it to run under, and the
-        # AI bridge step primes the package itself when nothing was prefetched.
-        if command -v mcp_prefetch_begin >/dev/null 2>&1; then
-            mcp_prefetch_begin || true
-        fi
         if ! exakit_maybe_offer_data_load "$_kit_root"; then
             exakit_record_soft_failure sample_data "exakit data-load" \
                 "$(exakit_take_failure_note)" "sample data"
@@ -12275,7 +12195,7 @@ kit_shared_steps() {
 
     if [ "$_kss_nodb" = 1 ]; then
         :
-    elif command -v mcp_install >/dev/null 2>&1; then
+    elif command -v mcp_sidecar_apply >/dev/null 2>&1; then
         if begin_step mcp "Step ${_step_no}/${_total}  AI bridge (MCP server, clients and skills)"; then
             if exakit_soft_step mcp "exakit update" "the MCP server" _exakit_install_mcp; then
                 mark_step mcp
@@ -12293,8 +12213,8 @@ kit_shared_steps() {
     # and was then asked which AI clients to connect, under no step at all. The
     # step numbering said one thing and the screen did another.
     #
-    # Nothing here needs a later step. The client configs point at `uvx
-    # <mcp-server>`, never at the exakit command, and exakit_repo_root falls back
+    # Nothing here needs a later step. The client configs point at the MCP
+    # server's loopback URL, never at the exakit command, and exakit_repo_root falls back
     # to the checkout for skills/ when the helper step has not staged its copy
     # yet. What they DO need is the database and exapump, which are two steps
     # back.
@@ -12870,7 +12790,7 @@ _exakit_uninstall_component() {
             if [ "$(manifest_get components.mcp_server.backend 2>/dev/null || true)" = sidecar ] && \
                command -v personal_cli >/dev/null 2>&1; then
                 run_logged "$(personal_cli)" sidecar disable "${EXAKIT_MCP_SIDECAR:-mcp}" --remove >/dev/null 2>&1 || true
-                command -v _mcp_sidecar_forget >/dev/null 2>&1 && _mcp_sidecar_forget "the MCP configuration was removed"
+                command -v mcp_sidecar_remove >/dev/null 2>&1 && mcp_sidecar_remove
             fi
             ;;
         skills)

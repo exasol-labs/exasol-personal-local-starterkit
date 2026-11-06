@@ -1172,27 +1172,18 @@ if grep -q 'personal_upgrade_backup' "$ROOT/setup/lib/runtime-personal.sh" && \
 else
     check "personal_update(recoverability)" "yes" "no"
 fi
-if grep -q 'mcp_update_snapshot' "$ROOT/setup/lib/mcp.sh" && \
-   grep -q 'New-McpUpdateSnapshot' "$ROOT/setup/lib/mcp.ps1" && \
-   grep -q 'backups.mcp_update.latest' "$ROOT/setup/lib/mcp.sh" && \
-   grep -q 'backups.mcp_update.latest' "$ROOT/setup/lib/mcp.ps1"; then
-    check "mcp_update(snapshot)" "yes" "yes"
+# The MCP server is the launcher's sidecar and nothing else: the update writes the
+# image this kit copy pins (refusing a version it has no image for), and moves the
+# clients of a kit from before the sidecar to its URL. Both sides carry it, and
+# neither still reinstalls a stdio server.
+if grep -q 'mcp_sidecar_image_version' "$ROOT/setup/lib/mcp.sh" && \
+   grep -q 'mcp_refresh_clients' "$ROOT/setup/lib/mcp.sh" && \
+   grep -q 'Get-McpSidecarImageVersion' "$ROOT/setup/exakit.ps1" && \
+   ! grep -q 'mcp_install\|mcp_validate\b' "$ROOT/setup/lib/mcp.sh" && \
+   ! grep -q 'Install-Mcp\b\|Test-McpServer' "$ROOT/setup/exakit.ps1"; then
+    check "mcp_update(sidecar_only)" "yes" "yes"
 else
-    check "mcp_update(snapshot)" "yes" "no"
-fi
-# The MCP update must judge itself by the pin in the AI client configs — what uvx
-# will actually launch, and what `exakit version` reports as its Version — and it must be
-# the thing that rewrites those configs. A guard that read
-# components.mcp_server.version instead answered "already current" for a version no
-# client was running. Both sides carry the same two halves.
-if grep -q 'exakit_component_current mcp' "$ROOT/setup/lib/mcp.sh" && \
-   grep -q 'mcp_refresh_client_pins' "$ROOT/setup/lib/mcp.sh" && \
-   grep -q 'Update-McpClientPins' "$ROOT/setup/lib/mcp.ps1" && \
-   grep -q 'Update-McpClientPins' "$ROOT/setup/exakit.ps1" && \
-   ! grep -q 'Run exakit mcp-setup to refresh AI client configs' "$ROOT/setup/exakit.ps1"; then
-    check "mcp_update(live_pin_guard)" "yes" "yes"
-else
-    check "mcp_update(live_pin_guard)" "yes" "no"
+    check "mcp_update(sidecar_only)" "yes" "no"
 fi
 # Same defect, same fix, for exapump: the guard must ask the binary on disk (what
 # `exakit version` reports) rather than components.exapump.version, which is

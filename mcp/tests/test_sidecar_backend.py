@@ -3,8 +3,8 @@
 When `exakit mcp-setup` finds the launcher's MCP server serving as the kit's
 read-only user, the manifest records `components.mcp_server.backend = "sidecar"`
 with its loopback URL. Every client must then get that URL in its own dialect,
-under the same `exasol` name the stdio server had (so an agent's tool names do
-not change), and no client config may hold a password any more. Claude Desktop,
+under the same `exasol` name the kit's former stdio server had (so an agent's
+tool names do not change), and no client config may hold a password any more. Claude Desktop,
 which runs only local servers, gets a stdio bridge to the same URL instead of
 being skipped. Doctor speaks MCP to the endpoint over HTTP.
 """
@@ -19,6 +19,7 @@ import sys
 import threading
 import unittest
 
+from mcp.core.errors import MCPSubsystemError
 from mcp.core.models import DeploymentMode
 from mcp.runtime.environment import ExecutionEnvironment
 from mcp.runtime.exakit import DEFAULT_MCP_BRIDGE, ExakitRuntimeLoader
@@ -71,15 +72,21 @@ class SidecarDefinitionTests(_DashServerFixture):
         _sidecar_manifest(self, bridge="mcp-proxy@0.13.9")
         self.assertEqual(self._load().for_client(False).args[0], "mcp-proxy@0.13.9")
 
-    def test_a_url_off_loopback_is_not_trusted_and_the_stdio_server_stays(self) -> None:
+    def test_a_url_off_loopback_is_not_trusted(self) -> None:
         _sidecar_manifest(self, url="http://example.com:4896/mcp")
-        self.assertIs(self._load().transport, DeploymentMode.STDIO)
+        with self.assertRaises(MCPSubsystemError) as ctx:
+            self._load()
+        self.assertEqual(ctx.exception.code, "runtime_mcp_server_not_set_up")
 
-    def test_without_the_backend_record_the_stdio_server_is_unchanged(self) -> None:
+    def test_without_the_backend_record_there_is_no_server_to_fall_back_to(self) -> None:
         self._write_manifest()
-        definition = self._load()
-        self.assertIs(definition.transport, DeploymentMode.STDIO)
-        self.assertEqual(definition.env["EXA_USER"], "mcp_readonly")
+        document = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        for key in ("backend", "url"):
+            document["components"]["mcp_server"].pop(key, None)
+        self.manifest_path.write_text(json.dumps(document), encoding="utf-8")
+        with self.assertRaises(MCPSubsystemError) as ctx:
+            self._load()
+        self.assertIn("Run: exakit mcp-setup", str(ctx.exception))
 
 
 class SidecarSetupCLITests(_DashServerFixture):

@@ -124,10 +124,10 @@ try {
     Check "the lazy record waits for the kit's own database to be running" "" (Get-ExakitTlsFingerprint)
     function Test-PersonalDeploymentRunning { return $true }
     $script:Rewrites = @()
-    function Update-McpClientPins { $script:Rewrites += "mcp"; return $true }
+    function Update-McpClients { $script:Rewrites += "mcp"; return $true }
     Confirm-ExakitTlsPinned *> $null
     Check "the lazy record pins an install that predates the pin" $fp1 (Get-ExakitTlsFingerprint)
-    Check "...and rewrites the MCP entries" "mcp" ($script:Rewrites -join " ")
+    Check "...and leaves the MCP entries alone (they name the server beside the database, no DSN)" "" ($script:Rewrites -join " ")
     $toml = Get-Content $script:ExapumpConfigPath -Raw
     Has "...and the exapump profile, carrying the pin lowercase" "certificate_fingerprint = `"$fp1`"" $toml
     Check "...once" 1 ([regex]::Matches($toml, "certificate_fingerprint").Count)
@@ -174,7 +174,7 @@ function Test-ExakitLegacyRuntimeRecorded { return $false }
 function Get-McpConfiguredClients { return @() }
 function Initialize-ExakitLogging { }
 function New-ExapumpProfile { Add-Content -Path $Rewrites -Value "profile" }
-function Update-McpClientPins { Add-Content -Path $Rewrites -Value "mcp"; return $true }
+function Update-McpClients { Add-Content -Path $Rewrites -Value "mcp"; return $true }
 $script:PendingExitCode = 0
 switch ($Mode) {
     "status-json"     { Invoke-CmdStatus -Json }
@@ -248,7 +248,7 @@ exit $script:PendingExitCode
     Check "tls-pin --accept --yes re-pins: exit 0" 0 $script:CODE
     Check "...records the live certificate" $fp2 (Get-ExakitTlsFingerprint)
     Check "...answers changed, matching" "True True pinned" "$($j.changed) $($j.matches) $($j.status)"
-    Check "...and rewrote the exapump profile and the MCP entries" "profile mcp" ((Get-Content $rewrites | Where-Object { $_ }) -join " ")
+    Check "...and rewrote the exapump profile (the MCP entries hold no DSN)" "profile" ((Get-Content $rewrites | Where-Object { $_ }) -join " ")
     Write-ManifestDoc $closed $fp1
     Invoke-Driver "tls-pin" | Out-Null
     Check "tls-pin with nothing answering TLS exits 3" 3 $script:CODE

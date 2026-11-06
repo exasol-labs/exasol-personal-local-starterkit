@@ -26,6 +26,8 @@ from mcp.runtime.environment import ExecutionEnvironment
 from mcp.service import MCPAccessSubsystem
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+OLD_URL = "http://127.0.0.1:4896/mcp"
+NEW_URL = "http://127.0.0.1:4897/mcp"
 
 
 class StaleVersionPinTests(unittest.TestCase):
@@ -221,7 +223,10 @@ class StaleVersionPinTests(unittest.TestCase):
 
 class StaleVersionPinCLITests(unittest.TestCase):
     """The desired definition has to reach validate and doctor through the CLI
-    too: that is the layer that previously handed one to repair only."""
+    too: that is the layer that previously handed one to repair only. The
+    entry is the launcher's MCP sidecar URL, so "out of date" is a URL that
+    moved - the port self-heal (setup/lib/mcp.sh) moves it when another program
+    holds 4896."""
 
     def setUp(self) -> None:
         self._temp_dir = Path(tempfile.mkdtemp(prefix="mcp-stale-pin-cli-"))
@@ -247,7 +252,7 @@ class StaleVersionPinCLITests(unittest.TestCase):
         self._listener.bind(("127.0.0.1", 0))
         self._listener.listen(8)
         self.dsn = "127.0.0.1:%d" % self._listener.getsockname()[1]
-        self._write_manifest(self.dsn)
+        self._write_manifest(self.dsn, OLD_URL)
 
     def tearDown(self) -> None:
         try:
@@ -256,22 +261,27 @@ class StaleVersionPinCLITests(unittest.TestCase):
             pass
         shutil.rmtree(self._temp_dir, ignore_errors=True)
 
-    def _env(self, version: str) -> dict:
+    def _env(self) -> dict:
         env = os.environ.copy()
         env.update(
             {
                 "CURSOR_MCP_CONFIG_PATH": str(self.cursor_path),
-                "EXAKIT_MCP_VERSION": version,
                 "EXAKIT_MCP_COMMAND": "uvx",
+                # No sidecar answers in a test: doctor's live probe would only add its own failure.
+                "EXAKIT_MCP_SKIP_SERVER_PROBE": "1",
             }
         )
         return env
 
-    def _run(self, args: list[str], version: str) -> dict:
+    def _run(self, args: list[str], url: str) -> dict:
+        # Only the URL moves: the client-setup record setup wrote into the manifest stays.
+        document = json.loads(self.manifest_path.read_text(encoding="utf-8"))
+        document["components"]["mcp_server"]["url"] = url
+        self.manifest_path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
         completed = subprocess.run(
             [sys.executable, "-m", "mcp", *args],
             cwd=REPO_ROOT,
-            env=self._env(version),
+            env=self._env(),
             check=False,
             capture_output=True,
             text=True,
@@ -279,7 +289,7 @@ class StaleVersionPinCLITests(unittest.TestCase):
         self.assertTrue(completed.stdout, completed.stderr)
         return json.loads(completed.stdout)
 
-    def _operation(self, operation: str, version: str) -> dict:
+    def _operation(self, operation: str, url: str) -> dict:
         return self._run(
             [
                 "run-runtime-operation",
@@ -289,12 +299,12 @@ class StaleVersionPinCLITests(unittest.TestCase):
                 "--clients",
                 "cursor",
             ],
-            version,
+            url,
         )
 
     def _pin(self) -> str:
         document = json.loads(self.cursor_path.read_text(encoding="utf-8"))
-        return document["mcpServers"]["exasol"]["args"][0]
+        return document["mcpServers"]["exasol"]["url"]
 
     def test_doctor_reports_and_repair_fixes_a_stale_pin_via_the_cli(self) -> None:
         setup = self._run(
@@ -305,7 +315,7 @@ class StaleVersionPinCLITests(unittest.TestCase):
                 "--clients",
                 "cursor",
             ],
-            "1.10.1",
+            OLD_URL,
         )
         # Include the payload in the failure: a bare status mismatch here says
         # nothing about WHY, and this ran green for as long as nobody ran these
@@ -323,24 +333,24 @@ class StaleVersionPinCLITests(unittest.TestCase):
                 setup.get("summary"),
             ),
         )
-        self.assertEqual(self._pin(), "exasol-mcp-server@1.10.1")
+        self.assertEqual(self._pin(), OLD_URL)
 
-        doctor = self._operation("doctor", "2.0.0")
+        doctor = self._operation("doctor", NEW_URL)
         codes = {finding["code"] for finding in doctor["findings"]}
         self.assertIn("managed_entry_outdated", codes)
         self.assertNotEqual(doctor["status"], "success")
 
-        repair = self._operation("repair", "2.0.0")
+        repair = self._operation("repair", NEW_URL)
         self.assertIn(repair["status"], {"success", "success_with_warnings"})
-        self.assertEqual(self._pin(), "exasol-mcp-server@2.0.0")
+        self.assertEqual(self._pin(), NEW_URL)
 
-        clean = self._operation("doctor", "2.0.0")
+        clean = self._operation("doctor", NEW_URL)
         self.assertNotIn(
             "managed_entry_outdated",
             {finding["code"] for finding in clean["findings"]},
         )
 
-    def _write_manifest(self, dsn: str) -> None:
+    def _write_manifest(self, dsn: str, url: str) -> None:
         manifest = {
             "manifest_version": 1,
             "kit_level": 1,
@@ -352,6 +362,8 @@ class StaleVersionPinCLITests(unittest.TestCase):
             },
             "components": {
                 "mcp_server": {
+                    "backend": "sidecar",
+                    "url": url,
                     "connection": {
                         "user": "mcp_readonly",
                         "password_file": str(self.mcp_password_file),

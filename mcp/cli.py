@@ -11,7 +11,6 @@ import sys
 from mcp.adapters import AdapterRegistry
 from mcp.core.errors import MCPSubsystemError
 from mcp.core.models import (
-    DeploymentMode,
     OperationRequest,
     OperationStatus,
     ServerDefinition,
@@ -411,8 +410,8 @@ def _permanent_setup(
     request = {
         "operation": "configure",
         "target_clients": clients,
-        # stdio for the kit's own server; http for the launcher's MCP sidecar,
-        # whose client entries carry a URL and no credential at all.
+        # http: the launcher's MCP sidecar, whose client entries carry a URL and
+        # no credential at all (Claude Desktop's is the stdio bridge to that URL).
         "deployment_mode": context.server_definition.transport.value,
         "runtime_root": str(runtime_root),
         "server_definition": to_primitive(context.server_definition),
@@ -420,8 +419,6 @@ def _permanent_setup(
         "create_snapshot": True,
         "validate_after_apply": True,
     }
-    if context.server_definition.transport is DeploymentMode.STDIO:
-        request["credential_reference"] = {"kind": "inline_env", "name": "EXA_PASSWORD"}
     result = subsystem.execute(request)
     payload = result.to_dict()
     payload.update(
@@ -610,18 +607,16 @@ def _setup_findings(payload: dict) -> list[dict]:
 
 
 def _doctor_stages() -> list[str]:
-    """The doctor's stage list, including the one that actually starts the server.
+    """The doctor's stage list, including the one that actually talks to the server.
 
-    `server_launch` is a live probe: it spawns the configured command and speaks
-    MCP to it. That is the whole point — every other stage inspects paperwork, so
-    a client whose entry was present and well-formed reported "connected" while
-    the server behind it could not start at all (a missing uvx, a package that
-    will not resolve), which is a healthy doctor report and an AI client with no
-    Exasol tools in it.
+    `server_launch` is a live probe: it speaks MCP to the sidecar at its URL.
+    That is the whole point — every other stage inspects paperwork, so a client
+    whose entry was present and well-formed reported "connected" while the
+    server behind it did not answer, which is a healthy doctor report and an AI
+    client with no Exasol tools in it.
 
-    It costs a subprocess and, on a cold uvx cache, a download. Set
-    EXAKIT_MCP_SKIP_SERVER_PROBE=1 to leave it out where that is unacceptable —
-    an offline machine, or a suite that must not reach the network.
+    Set EXAKIT_MCP_SKIP_SERVER_PROBE=1 to leave it out where a live request is
+    unacceptable, such as a suite that must not reach a server.
     """
     stages = list(OperationRequest.stages)
     if os.environ.get("EXAKIT_MCP_SKIP_SERVER_PROBE") == "1":
@@ -664,8 +659,9 @@ def _build_operation_request(
         request["server_definition"] = to_primitive(context.server_definition)
     if operation == "doctor":
         request["stages"] = _doctor_stages()
-    if operation == "repair" and request.get("deployment_mode", "stdio") == "stdio":
-        request["credential_reference"] = {"kind": "inline_env", "name": "EXA_PASSWORD"}
+    if operation == "repair":
+        # As configure does: snapshot first, validate after. No credential: the
+        # entries hold the sidecar's URL, never the read-only user's password.
         request["validate_after_apply"] = True
         request["create_snapshot"] = True
     if operation == "restore":

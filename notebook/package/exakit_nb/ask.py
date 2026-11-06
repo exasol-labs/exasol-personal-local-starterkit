@@ -1,25 +1,22 @@
 """Ask a question, inspect the proposed SQL, approve that exact text, then run through the Exasol MCP server.
 
 The archived Governed SQL server is not installed. The kit's own model endpoint can draft SQL from an approved
-descriptor; no SQL runs until the person approves it. The MCP process uses only the dedicated read-only user's
-credentials from the manifest, never the notebook's admin connection or an admin fallback.
+descriptor; no SQL runs until the person approves it. The SQL runs on the launcher's MCP server beside the
+database (the sidecar, on loopback), which connects as the dedicated read-only user only - never the notebook's
+admin connection or an admin fallback. The notebook sends no password: the sidecar holds the read-only login.
 """
 
 from __future__ import annotations
 
 import hashlib
-import ipaddress
 import json
-import os
-import queue
 import re
-import subprocess
-import threading
+import urllib.error
+import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from ._kit import pinned_dsn, tls_fingerprint
 from .workflow import ASK_ANSWER, ASK_APPROVE, SQL, home, log_event
 
 _READ_START = re.compile(r"^\s*(?:--[^\n]*\n\s*)*(SELECT|WITH)\b", re.I)
@@ -32,7 +29,23 @@ def _read_sql(statement: str) -> str:
     return clean.rstrip(";").strip()
 
 
-def _mcp_settings() -> tuple[list[str], dict[str, str]]:
+MCP_TIMEOUT_SECONDS = 30
+
+
+def _loopback_http(url: str) -> bool:
+    """An http:// URL on this machine: the only place the sidecar listens (no host is written into this file)."""
+    import ipaddress
+    from urllib.parse import urlsplit
+
+    parts = urlsplit(url)
+    try:
+        return parts.scheme == "http" and ipaddress.ip_address(parts.hostname or "").is_loopback
+    except ValueError:
+        return False
+
+
+def _mcp_settings() -> str:
+    """The sidecar's loopback URL, once the read-only identity behind it is the validated dedicated user."""
     manifest = json.loads((home() / "manifest.json").read_text(encoding="utf-8"))
     server = manifest["components"]["mcp_server"]
     connection = manifest["components"]["mcp_server"]["connection"]
@@ -41,67 +54,55 @@ def _mcp_settings() -> tuple[list[str], dict[str, str]]:
             or password_file.name != "mcp_readonly_password" or not password_file.is_file()
             or connection.get("validated") is not True):
         raise RuntimeError("The MCP read-only identity is not ready. Run exakit mcp-setup and exakit mcp-doctor.")
-    command, package, version = server.get("command"), server.get("package"), server.get("version")
-    if not command or not package or not version:
-        raise RuntimeError("The Exasol MCP server is not configured. Run exakit mcp-setup and exakit mcp-doctor.")
-    dsn = manifest["runtime"]["dsn"]
-    host = dsn.rsplit(":", 1)[0].strip("[]")
-    try:
-        loopback = ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        loopback = False
-    environment = os.environ.copy()
-    # With the database's TLS pin once the kit has recorded it (SEC-14), as the AI clients' entries carry it.
-    environment.update(EXA_DSN=pinned_dsn(dsn, tls_fingerprint(manifest)), EXA_USER=user, EXA_PASSWORD=password_file.read_text(encoding="utf-8").strip(),
-                       EXA_SSL_CERT_VALIDATION="no" if loopback else "yes",
-                       # Match mcp/runtime/exakit.py. The official server hides
-                       # execute_exasol_query unless read queries are enabled.
-                       EXA_MCP_SETTINGS=json.dumps({"enable_read_query": True,
-                           "enable_summarize_table": True, "enable_query_profiling": True,
-                           "enable_write_query": False, "enable_write_bucketfs": False}))
-    if server.get("openssl_armcap_workaround"):
-        environment["OPENSSL_armcap"] = "0"
-    return [str(command), f"{package}@{version}"], environment
+    url = str(server.get("url") or "")
+    if server.get("backend") != "sidecar" or not _loopback_http(url):
+        raise RuntimeError("The Exasol MCP server beside your database is not set up. Run exakit mcp-setup and "
+                           "exakit mcp-doctor.")
+    return url
 
 
 def _execute_mcp(statement: str) -> dict[str, Any]:
-    """One stdio MCP session, bounded in time and rows; the server's tool enforces SELECT and the DB user read-only."""
-    command, environment = _mcp_settings()
-    process = subprocess.Popen(command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                               text=True, encoding="utf-8", env=environment)
-    assert process.stdin is not None and process.stdout is not None
-    messages: queue.Queue[str] = queue.Queue()
+    """One MCP session over Streamable HTTP, bounded in time and rows; the server's tool enforces SELECT and the DB
+    user read-only. Each answer is JSON or an event stream (``data: {...}`` lines), whichever the server chose; the
+    session id it hands back on initialize goes with every later request, as the transport requires."""
+    url = _mcp_settings()
+    session: dict[str, str] = {}
 
-    def read_lines():
-        for line in process.stdout:
-            messages.put(line)
-
-    threading.Thread(target=read_lines, daemon=True).start()
-
-    def call(request: dict, timeout: int = 30) -> dict:
-        process.stdin.write(json.dumps(request) + "\n")
-        process.stdin.flush()
-        while True:
+    def post(request: dict) -> dict:
+        headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream", **session}
+        message = urllib.request.Request(url, data=json.dumps(request).encode("utf-8"), headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(message, timeout=MCP_TIMEOUT_SECONDS) as response:
+                if response.headers.get("mcp-session-id"):
+                    session["mcp-session-id"] = response.headers["mcp-session-id"]
+                body = response.read().decode("utf-8", errors="replace")
+        except urllib.error.HTTPError as error:
+            raise RuntimeError(f"Exasol MCP refused the request: HTTP {error.code}. Run exakit mcp-doctor.") from error
+        except TimeoutError as error:
+            raise RuntimeError(f"The Exasol MCP server did not answer within {MCP_TIMEOUT_SECONDS} seconds. "
+                               "Run exakit mcp-doctor.") from error
+        except (urllib.error.URLError, OSError) as error:
+            raise RuntimeError(f"The Exasol MCP server at {url} did not answer "
+                               f"({getattr(error, 'reason', error)}). Run exakit mcp-doctor.") from error
+        if "id" not in request:
+            return {}
+        for chunk in [body] + [line[5:].strip() for line in body.splitlines() if line.startswith("data:")]:
             try:
-                line = messages.get(timeout=timeout)
-            except queue.Empty as error:
-                raise RuntimeError("The Exasol MCP server did not answer within 30 seconds. Run exakit mcp-doctor.") from error
-            try:
-                response = json.loads(line)
+                response = json.loads(chunk)
             except ValueError:
                 continue
-            if response.get("id") == request.get("id"):
+            if isinstance(response, dict) and response.get("id") == request["id"]:
                 if "error" in response:
                     raise RuntimeError("Exasol MCP refused the request: " + str(response["error"].get("message", "unknown error")))
                 return response.get("result") or {}
+        raise RuntimeError("Exasol MCP answered something that is not MCP. Run exakit mcp-doctor.")
 
     try:
-        call({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+        post({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
             "protocolVersion": "2024-11-05", "capabilities": {},
             "clientInfo": {"name": "exakit-notebook", "version": "0.5"}}})
-        process.stdin.write(json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized"}) + "\n")
-        process.stdin.flush()
-        result = call({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
+        post({"jsonrpc": "2.0", "method": "notifications/initialized"})
+        result = post({"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {
             "name": "execute_exasol_query", "arguments": {"query": statement, "row_limit": 1000}}})
         if result.get("isError"):
             text = " ".join(str(item.get("text", "")) for item in result.get("content", []))
@@ -119,14 +120,11 @@ def _execute_mcp(statement: str) -> dict[str, Any]:
             raise RuntimeError("Exasol MCP returned no tabular result; run exakit mcp-doctor.")
         return data
     finally:
-        process.terminate()
-        try:
-            process.wait(timeout=3)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait()
-        process.stdin.close()
-        process.stdout.close()
+        if session:                                       # end the session; a server that has gone already is fine
+            try:
+                urllib.request.urlopen(urllib.request.Request(url, headers=session, method="DELETE"), timeout=5).close()
+            except (urllib.error.URLError, OSError):
+                pass
 
 
 _QUOTED = re.compile(r"('(?:[^']|'')*'|\"(?:[^\"]|\"\")*\")")

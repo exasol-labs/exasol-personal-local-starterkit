@@ -80,11 +80,13 @@ Personal 2.4.0 or later it is the **launcher's own MCP server**: a sidecar that
 runs beside the database, starts and stops with it, and answers on
 `http://127.0.0.1:4896/mcp` (loopback only). The clients hold that URL and
 nothing secret; Claude Desktop, which runs only local servers, reaches it through
-a small bridge (`uvx mcp-proxy`). Where the sidecar cannot serve — an older
-launcher, a database the launcher does not run, or a deployment that needs one
-`exakit stop` / `exakit start` first — the client starts the kit's own server on
-demand over stdio instead, and nothing is listening between calls. The commands
-are the same either way; `exakit mcp-doctor` speaks MCP to whichever one it is.
+a small bridge (`uvx mcp-proxy`). It is the only MCP server - there is no
+fallback. When it does not serve, `exakit mcp-doctor` (and `exakit mcp-setup`)
+heal it: the read-only user is set up again, a port another program took moves
+the server to a free one, a deployment that needs one restart gets it (the data
+stays), a container that did not start is recreated once. What cannot be healed
+is said with its fix - `exakit update personal` for a launcher before 2.4.0;
+`exasol mcp status` shows the launcher's own account of the server.
 
 The login is a **dedicated, read-only database user** — for the launcher's
 server too: the kit connects it as that user, not as the administrator the
@@ -125,9 +127,9 @@ In this order:
    because a start cannot succeed in that state. `status --json` puts the right one in
    `remedies.database`; use that rather than assuming.
 2. **Is MCP configured, and does the server actually run?** `exakit mcp-doctor` — it names
-   the problem per client, and it starts the configured server and completes an MCP
-   handshake, so it catches a missing `uvx` or a package that will not resolve instead of
-   reporting a well-formed config entry as `connected`.
+   the problem per client, heals the server beside the database when it does not serve,
+   and completes an MCP handshake with it, so a well-formed config entry is never
+   reported as `connected` when nothing answers.
 3. **Was the client restarted?** A config change does not reach a running
    client. This is the single most common cause — and if *you* ran the setup, it
    applies to you: your own MCP tools appear only after your process restarts.
@@ -158,9 +160,8 @@ result and nothing else on stdout.
 
 The launcher's server runs the official `exasol/mcp-server` image, pinned by
 digest in versions.json (`components.mcp.sidecar_image`, the same version as
-`components.mcp.version`); `exasol mcp status` shows its state. The fallback runs
-on demand as `uvx exasol-mcp-server@<version>`. `EXAKIT_MCP_BACKEND=uvx exakit
-mcp-setup` keeps the kit's own server even where the sidecar could serve.
+`components.mcp.version`); `exasol mcp status` shows its state. A newer image
+arrives with the kit update that pins it.
 
 Update it like any other component:
 

@@ -142,12 +142,14 @@ echo "the library (setup/lib/common.sh, exapump.sh):"
     exapump_create_profile_real() { :; }
     eval "exapump_create_profile_real() $(declare -f exapump_create_profile | tail -n +2)"
     exapump_create_profile() { echo profile >> "$_rw_log"; exapump_create_profile_real "$@"; }
-    mcp_refresh_client_pins() { echo mcp >> "$_rw_log"; }
+    mcp_refresh_clients() { echo mcp >> "$_rw_log"; }
     manifest_set components.exapump.profile starter-kit
     manifest_set components.mcp_server.validated true
     exakit_tls_ensure_pinned >/dev/null 2>&1
     check "the lazy record pins an install that predates the pin" "$FP1" "$(manifest_get runtime.tls_fingerprint)"
-    check "...and rewrites the exapump profile and the MCP entries" "profile mcp" "$(tr '\n' ' ' < "$_rw_log" | sed 's/ $//')"
+    # The MCP entries hold the server's loopback URL: the server beside the
+    # database connects inside the deployment, so the pin changes nothing in them.
+    check "...and rewrites the exapump profile (the MCP entries hold a URL)" "profile" "$(tr '\n' ' ' < "$_rw_log" | sed 's/ $//')"
     has "the rewritten exapump profile carries the pin, lowercase" "certificate_fingerprint = \"$FP1\"" "$(cat "$EXAPUMP_CONFIG")"
     check "...once, in the kit's section" "1" "$(grep -c certificate_fingerprint "$EXAPUMP_CONFIG")"
     : > "$_rw_log"; exakit_tls_rewrite_clients --profile-only >/dev/null 2>&1
@@ -186,7 +188,7 @@ exakit_runtime_is_running() { [ "${EXAKIT_TEST_DB:-running}" = running ]; }
 exakit_service_ids() { :; }
 exakit_loaded_datasets() { :; }
 exapump_create_profile() { echo profile >> "$EXAKIT_TEST_REWRITES"; }
-mcp_refresh_client_pins() { echo mcp >> "$EXAKIT_TEST_REWRITES"; }
+mcp_refresh_clients() { echo mcp >> "$EXAKIT_TEST_REWRITES"; }
 STUB_EOF
     sed -n "$((LAST_LIB + 1)),\$p" "$ROOT/setup/exakit"
 } > "$STUB"
@@ -274,7 +276,7 @@ cli_out tls-pin --accept --yes --json
 check "tls-pin --accept --yes re-pins: exit 0" "0" "$CODE"
 check "...records the live certificate" "$FP2" "$(jget "$(cat "$M")" 'd["runtime"]["tls_fingerprint"]')"
 check "...answers changed: true, matching" "true true pinned" "$(jget "$OUT" 'd["changed"]') $(jget "$OUT" 'd["matches"]') $(jget "$OUT" 'd["status"]')"
-check "...and rewrote the exapump profile and the MCP entries" "profile mcp" "$(tr '\n' ' ' < "$EXAKIT_TEST_REWRITES" | sed 's/ $//')"
+check "...and rewrote the exapump profile (the MCP entries hold a URL)" "profile" "$(tr '\n' ' ' < "$EXAKIT_TEST_REWRITES" | sed 's/ $//')"
 cli tls-pin --accept --yes
 check "re-pinning to the same certificate is a no-op: exit 0" "0" "$CODE"
 has "...said so" "nothing changed" "$OUT"

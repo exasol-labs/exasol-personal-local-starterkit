@@ -304,9 +304,9 @@ $script:McpReadonlySchemas = if ($env:EXAKIT_MCP_READONLY_SCHEMAS) { $env:EXAKIT
 $script:VersionPolicy = if ($env:EXAKIT_VERSION_POLICY) { $env:EXAKIT_VERSION_POLICY } else { "manifest" }
 $script:ExapumpVersionFallback = if ($env:EXAKIT_EXAPUMP_VERSION_FALLBACK) { $env:EXAKIT_EXAPUMP_VERSION_FALLBACK } else { "0.13.1" }
 $script:McpVersionFallback = if ($env:EXAKIT_MCP_VERSION_FALLBACK) { $env:EXAKIT_MCP_VERSION_FALLBACK } else { "2.4.0" }
-# uv is the Python tool runner: uvx is the process the AI client launches to
-# run the MCP server (and hands EXA_PASSWORD to on every start), and uv runs
-# the kit's managed Python wherever the system one is too old. Pinned and
+# uv is the Python tool runner: uvx runs the bridge Claude Desktop reaches the
+# MCP server through (`uvx mcp-proxy`), and uv runs the kit's managed Python
+# wherever the system one is too old. Pinned and
 # digest-verified like every other binary the kit installs - see Install-ExakitUv.
 # The MIN version is the oldest uv the kit will RUN at all: below it uv's
 # bundled CA store trusts an emSign root whose intermediate CA keys are
@@ -2201,11 +2201,10 @@ function Register-ExakitTlsPin {
 }
 
 # Update-ExakitTlsPinnedClients [-ProfileOnly] - after a pin was (re)recorded,
-# rewrite the clients that hold it so they all agree: the kit's exapump profile
-# and the AI clients' MCP entries (the same refresh `exakit update` uses; the
-# launcher's sidecar entries hold no DSN). -ProfileOnly for a database the kit
-# has just deployed: its read-only MCP user does not exist yet, so the entries
-# are rewritten by the repair that recreates it (exakit mcp-doctor). Twin of
+# rewrite the clients that hold it so they all agree: the kit's exapump profile.
+# The AI clients' MCP entries hold no DSN - they name the launcher's MCP server
+# beside the database - so there is nothing in them to rewrite. -ProfileOnly
+# is kept for callers that ask for the profile alone. Twin of
 # exakit_tls_rewrite_clients.
 function Update-ExakitTlsPinnedClients {
     param([switch]$ProfileOnly)
@@ -2213,17 +2212,6 @@ function Update-ExakitTlsPinnedClients {
     if ((Get-ExakitManifestValue "components.exapump.profile") -and $pwFile -and (Test-Path $pwFile) -and
         (Get-Command New-ExapumpProfile -ErrorAction SilentlyContinue)) {
         try { New-ExapumpProfile | Out-Null } catch { Warn2 "Could not rewrite the exapump profile with the pin. Finish it with: exakit update exapump" }
-    }
-    if ($ProfileOnly) { return }
-    if ((Get-ExakitManifestValue "components.mcp_server.validated") -eq $true -and
-        (Get-ExakitManifestValue "components.mcp_server.backend") -ne "sidecar" -and
-        (Get-Command Update-McpClientPins -ErrorAction SilentlyContinue)) {
-        if (-not $script:McpVersion) { $script:McpVersion = "" + (Get-ExakitManifestValue "components.mcp_server.version") }
-        $recordedPackage = "" + (Get-ExakitManifestValue "components.mcp_server.package")
-        if ($recordedPackage) { $script:McpPackage = $recordedPackage }
-        $refreshed = $false
-        try { $refreshed = Update-McpClientPins } catch { $refreshed = $false }
-        if (-not $refreshed) { Warn2 "Could not rewrite every AI client with the pin. Finish it with: exakit mcp-doctor" }
     }
 }
 
@@ -3361,7 +3349,8 @@ function Resolve-ExakitInstallVersions {
             if (-not $script:ExapumpVersion) { $script:ExapumpVersion = $script:ExapumpVersionFallback }
         }
         if (-not $script:McpVersion) {
-            $script:McpVersion = Get-ExakitLatestPypiVersion $script:McpPackage
+            # Not PyPI's newest: the MCP server is the image this kit copy pins.
+            $script:McpVersion = Get-ExakitVersionsPin -Path "components.mcp.version"
             if (-not $script:McpVersion) { $script:McpVersion = $script:McpVersionFallback }
         }
         if (-not $script:PyexasolVersion) {
@@ -7401,11 +7390,11 @@ function Get-ExakitComponentAvailable {
         $uvReport = Get-ExakitUvReport
         if ($uvReport.Verdict -eq "ok" -and $uvReport.Path -ne (Get-ExakitUvKitBin)) { return $uvReport.Version }
     }
-    # The launcher's MCP server is an image pinned by digest in this kit copy:
-    # its tag is the only version an update can put there. Twin of the same
-    # rule in exakit_component_available.
-    if ($Component -eq "mcp" -and (Get-Command Get-McpSidecarImageVersion -ErrorAction SilentlyContinue) -and
-        (Get-ExakitManifestValue "components.mcp_server.backend") -eq "sidecar") {
+    # The MCP server - the launcher's, beside the database, the only one the
+    # kit runs - is an image pinned by digest in this kit copy: its tag is the
+    # only version an update can put there, whatever the policy. Twin of the
+    # same rule in exakit_component_available.
+    if ($Component -eq "mcp" -and (Get-Command Get-McpSidecarImageVersion -ErrorAction SilentlyContinue)) {
         return (Get-McpSidecarImageVersion)
     }
     if ($script:VersionPolicy -eq "latest") { return (Get-ExakitComponentLatest $Component) }
@@ -7487,10 +7476,7 @@ function Get-ExakitComponentCurrent {
             return (Get-ExakitManifestValue "components.exapump.version")
         }
         "mcp" {
-            # What the clients are pinned to is what will actually run; the record is
-            # the fallback when no client is configured or the module is absent.
-            $live = Get-ExakitInstalledMcpVersion
-            if ($live) { return $live }
+            # The image the launcher's MCP server runs, recorded when it served.
             return (Get-ExakitManifestValue "components.mcp_server.version")
         }
         "uv" {
@@ -7651,7 +7637,9 @@ function Get-ExakitComponentLatest {
         # astral tags releases as plain numbers (0.13.6, no v); the helper
         # strips an optional v, so the answer has the same shape either way.
         "uv" { return (Get-ExakitLatestGithubRelease $script:UvRepo) }
-        "mcp" { return (Get-ExakitLatestPypiVersion $script:McpPackage) }
+        # The MCP server is the image this kit copy pins by digest: nothing newer
+        # can run beside the database until a kit update pins it.
+        "mcp" { if (Get-Command Get-McpSidecarImageVersion -ErrorAction SilentlyContinue) { return (Get-McpSidecarImageVersion) }; return (Get-ExakitVersionsPin -Path "components.mcp.version") }
         "pyexasol" { return (Get-ExakitLatestPypiVersion $script:PyexasolPackage) }
         "personal" { return (Get-ExakitLatestGithubRelease "exasol/exasol-personal") }
         "runtime" {
@@ -7692,44 +7680,6 @@ function Get-ExakitComponentSeverity {
     $value = Get-ExakitVersionsValue -Path "$block.severity"
     if ($value -eq "recommended" -or $value -eq "critical") { return $value }
     return "normal"
-}
-
-# Get-ExakitInstalledMcpVersion - the MCP server is never "installed": uvx
-# materialises it per launch. What exists on the machine is the SPEC pinned into each
-# AI client config, and that is what runs the next time a client connects. The
-# adapters own where those configs live, so the paths come from the kit's own status
-# operation rather than a second copy of that knowledge. When clients disagree the
-# oldest pin is the answer here; the per-client picture belongs to mcp-doctor, which
-# names each client whose managed entry is no longer the one the kit would write, and
-# mcp-doctor re-writes those entries from the current definition.
-# Twin of exakit_installed_mcp_version in setup/lib/common.sh.
-function Get-ExakitInstalledMcpVersion {
-    if (-not (Get-Command Invoke-McpOperationCli -ErrorAction SilentlyContinue)) { return "" }
-    try {
-        $json = Invoke-McpOperationCli -Operation "status" -Clients @(
-            "claude_desktop", "claude_code", "cursor", "codex",
-            "vscode_copilot", "gemini_cli", "opencode", "continue")
-        if (-not $json) { return "" }
-        $doc = $json | ConvertFrom-Json
-        $pins = @{}
-        foreach ($artifact in @($doc.artifacts)) {
-            if (-not $artifact.path -or -not (Test-Path $artifact.path)) { continue }
-            $body = Get-Content $artifact.path -Raw -ErrorAction SilentlyContinue
-            if (-not $body) { continue }
-            foreach ($m in [regex]::Matches($body, 'exasol-mcp-server@([0-9][0-9A-Za-z._+-]*)')) {
-                $pins[$m.Groups[1].Value] = $true
-            }
-        }
-        if ($pins.Count -eq 0) { return "" }
-        # The OLDEST pin, not the set: this value is compared against the advertised
-        # version, and a comma-joined list is not a version. The oldest is the weakest
-        # link - the client that would launch the most outdated server. Which client is
-        # stale belongs to `exakit mcp-doctor`, which prints per-client state already.
-        $sorted = $pins.Keys | Sort-Object { [regex]::Replace($_, '\d+', { param($m) $m.Value.PadLeft(12, '0') }) }
-        return ($sorted | Select-Object -First 1)
-    } catch {
-        return ""
-    }
 }
 
 # Get-ExakitProbedVersion - run a command that reports its own version and return

@@ -3,8 +3,10 @@
 import json
 import sys
 import tempfile
+import threading
 import types
 import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from unittest import mock
 
@@ -81,45 +83,93 @@ class AskTest(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "read-only identity"):
                     ask_module._mcp_settings()
 
-    def test_readonly_connection_uses_validated_mcp_identity(self):
+    def _manifest(self, home, **mcp_server):
+        password = home / "mcp_readonly_password"
+        password.write_text("unprinted-secret")
+        manifest = {"runtime": {"user": "sys", "dsn": "127.0.0.1:8563"},
+                    "components": {"mcp_server": {"backend": "sidecar", "url": "http://127.0.0.1:4896/mcp",
+                                                   **mcp_server, "connection": {
+                        "user": "mcp_readonly", "password_file": str(password),
+                        "default_schema": "STARTER_KIT", "validated": True}}}}
+        (home / "manifest.json").write_text(json.dumps(manifest))
+
+    def test_readonly_connection_uses_the_sidecar_url(self):
         with tempfile.TemporaryDirectory() as temporary:
             home = Path(temporary)
-            password = home / "mcp_readonly_password"
-            password.write_text("unprinted-secret")
-            manifest = {"runtime": {"user": "sys", "dsn": "127.0.0.1:8563"},
-                        "components": {"mcp_server": {"command": "uvx", "package": "exasol-mcp-server",
-                                                       "version": "2.2.0", "connection": {
-                            "user": "mcp_readonly", "password_file": str(password),
-                            "default_schema": "STARTER_KIT", "validated": True}}}}
-            (home / "manifest.json").write_text(json.dumps(manifest))
+            self._manifest(home)
             with mock.patch.object(ask_module, "home", return_value=home):
-                command, environment = ask_module._mcp_settings()
-            self.assertEqual(command, ["uvx", "exasol-mcp-server@2.2.0"])
-            self.assertEqual(environment["EXA_USER"], "mcp_readonly")
-            self.assertEqual(environment["EXA_DSN"], "127.0.0.1:8563")
-            self.assertEqual(environment["EXA_SSL_CERT_VALIDATION"], "no")
-            settings = json.loads(environment["EXA_MCP_SETTINGS"])
-            self.assertTrue(settings["enable_read_query"])
-            self.assertFalse(settings["enable_write_query"])
-            self.assertFalse(settings["enable_write_bucketfs"])
+                self.assertEqual(ask_module._mcp_settings(), "http://127.0.0.1:4896/mcp")
+
+    def test_without_the_sidecar_there_is_no_server_to_fall_back_to(self):
+        for state in ({"backend": None}, {"url": "http://db.example:4896/mcp"}):
+            with self.subTest(state=state), tempfile.TemporaryDirectory() as temporary:
+                home = Path(temporary)
+                self._manifest(home, **state)
+                with mock.patch.object(ask_module, "home", return_value=home), \
+                        self.assertRaisesRegex(RuntimeError, "not set up. Run exakit mcp-setup"):
+                    ask_module._mcp_settings()
+
+    def _serve(self, answer_as_events):
+        """A stand-in sidecar: initialize hands out a session id, tools/call answers once it is sent back."""
+        seen = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_DELETE(self):
+                seen.append(("DELETE", self.headers.get("mcp-session-id")))
+                self.send_response(200)
+                self.end_headers()
+
+            def do_POST(self):
+                request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                seen.append((request.get("method"), self.headers.get("mcp-session-id"), request))
+                if "id" not in request:
+                    self.send_response(202)
+                    self.end_headers()
+                    return
+                if request["id"] == 1:
+                    result = {"protocolVersion": "2024-11-05"}
+                else:
+                    result = {"structuredContent": {"columns": ["N"], "rows": [[1]]}}
+                body = json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result})
+                if answer_as_events:
+                    body, kind = f"event: message\ndata: {body}\n\n", "text/event-stream"
+                else:
+                    kind = "application/json"
+                self.send_response(200)
+                self.send_header("Content-Type", kind)
+                if request["id"] == 1:
+                    self.send_header("mcp-session-id", "session-1")
+                self.end_headers()
+                self.wfile.write(body.encode("utf-8"))
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return f"http://127.0.0.1:{server.server_address[1]}/mcp", seen
 
     def test_mcp_protocol_calls_read_query_tool_after_handshake(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            stub = Path(temporary) / "mcp_stub.py"
-            stub.write_text("""import json,sys
-for line in sys.stdin:
-    request=json.loads(line)
-    if request.get('id') == 1:
-        print(json.dumps({'jsonrpc':'2.0','id':1,'result':{'protocolVersion':'2024-11-05'}}),flush=True)
-    elif request.get('id') == 2:
-        assert request['params']['name']=='execute_exasol_query'
-        assert request['params']['arguments']['query']=='SELECT 1'
-        print(json.dumps({'jsonrpc':'2.0','id':2,'result':{'structuredContent':{'columns':['N'],'rows':[[1]]}}}),flush=True)
-        break
-""")
-            with mock.patch.object(ask_module, "_mcp_settings", return_value=([sys.executable, str(stub)], {})):
-                result = ask_module._execute_mcp("SELECT 1")
-            self.assertEqual(result, {"columns": ["N"], "rows": [[1]]})
+        for answer_as_events in (False, True):
+            with self.subTest(event_stream=answer_as_events):
+                url, seen = self._serve(answer_as_events)
+                with mock.patch.object(ask_module, "_mcp_settings", return_value=url):
+                    result = ask_module._execute_mcp("SELECT 1")
+                self.assertEqual(result, {"columns": ["N"], "rows": [[1]]})
+                self.assertEqual([entry[0] for entry in seen],
+                                 ["initialize", "notifications/initialized", "tools/call", "DELETE"])
+                call = seen[2][2]
+                self.assertEqual((call["params"]["name"], call["params"]["arguments"]["query"]),
+                                 ("execute_exasol_query", "SELECT 1"))
+                self.assertEqual({entry[1] for entry in seen[1:]}, {"session-1"}, "the session id goes with every later request")
+                self.assertNotIn("unprinted-secret", json.dumps([entry[-1] for entry in seen], default=str))
+
+    def test_a_sidecar_that_does_not_answer_names_the_doctor(self):
+        with mock.patch.object(ask_module, "_mcp_settings", return_value="http://127.0.0.1:9/mcp"), \
+                self.assertRaisesRegex(RuntimeError, "did not answer.*exakit mcp-doctor"):
+            ask_module._execute_mcp("SELECT 1")
 
 
 class ModelProposalTest(unittest.TestCase):

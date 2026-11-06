@@ -251,7 +251,8 @@ class NotebookTest(unittest.TestCase):
             recorder = Recorder()
             fakes = _fake_modules(**{"exasol.nb_connector.connections": {"open_pyexasol_connection": recorder}})
             with self.subTest(given=given), mock.patch.dict(os.environ, {**_without_var(), **given}, clear=True), \
-                    mock.patch.dict(sys.modules, fakes), mock.patch.object(exakit_nb, "_store", return_value=object()):
+                    mock.patch.dict(sys.modules, fakes), mock.patch.object(exakit_nb, "_store", return_value=object()), \
+                    mock.patch.object(exakit_nb, "tls_fingerprint", return_value=None):   # not this machine's kit pin
                 exakit_nb.connect()
             self.assertEqual([expected], recorder.seen)
 

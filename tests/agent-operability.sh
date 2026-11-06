@@ -392,7 +392,7 @@ has "and the suite asserts it left the real home clean" "no failure note in the 
 _cli_t="$(sed -n '/class StaleVersionPinCLITests/,$p' "$ROOT/mcp/tests/test_stale_version_pin.py")"
 has "the CLI stale-pin test binds its own listener" "socket.socket(socket.AF_INET" "$_cli_t"
 # The manifest must carry the port the test itself bound, not a fixed one.
-has "and writes that port into its manifest" '_write_manifest(self.dsn)' "$_cli_t"
+has "and writes that port into its manifest" '_write_manifest(self.dsn,' "$_cli_t"
 
 
 # ---------------------------------------------------------------------------
@@ -772,16 +772,9 @@ has "with an opt-out for offline runs" "EXAKIT_MCP_SKIP_SERVER_PROBE" "$(cat "$R
 # spawn a subprocess or reach the network.
 lacks "it is not in the default stage list" '"server_launch",' \
     "$(sed -n '/    stages: tuple\[str, ...\] = (/,/    )/p' "$ROOT/mcp/core/models.py")"
-# communicate() closes stdin, and an MCP stdio server treats that EOF as "client
-# gone" and exits without answering -- measured against the real server, which
-# never replied to tools/list. The fix is to write the requests and leave the
-# pipe open, draining stdout on a thread until the answer lands.
-has "the handshake keeps stdin open while it waits" "process.stdin.flush()" \
-    "$(sed -n '/def _mcp_handshake/,/^    def /p' "$ROOT/mcp/validator/service.py")"
-lacks "and does not hand the requests to communicate()" "= process.communicate(" \
-    "$(sed -n '/def _mcp_handshake/,/^    def /p' "$ROOT/mcp/validator/service.py")"
-has "the server's stderr is never read into a finding" "stderr=subprocess.DEVNULL" \
-    "$(sed -n '/def _mcp_handshake/,/^    def /p' "$ROOT/mcp/validator/service.py")"
+# The server is the launcher's sidecar, over HTTP: the doctor reaches it there
+# and never starts a stdio server of its own.
+lacks "the doctor starts no stdio server" "def _mcp_handshake" "$(cat "$ROOT/mcp/validator/service.py")"
 
 echo "the install record does not contradict itself:"
 # THE BUG: connection.schemas ["STARTER_KIT"] reads as "this user can only see

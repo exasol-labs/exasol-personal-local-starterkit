@@ -6,14 +6,18 @@
 #
 # What it pins:
 #   - mcp_sidecar_supported needs the kit's Personal deployment and a launcher
-#     with both `sidecar` and `mcp`; EXAKIT_MCP_BACKEND=uvx turns it off;
+#     with both `sidecar` and `mcp`;
 #   - the definition written is the kit's (pinned image, --no-auth on loopback)
 #     connected as the read-only user, never the deployment's SYS, and the JSON
 #     handed to the editor holds a file reference, not the password;
 #   - a serving sidecar is recorded (backend, url, bridge, version from the
 #     image tag), `exasol start` reconciles only when something changed;
-#   - a deployment that needs a restart first, an older launcher, or a sidecar
-#     that never serves leaves no record, so the clients keep the stdio server.
+#   - it is the only MCP server, so what does not serve is HEALED: a port another
+#     program took moves the server, a deployment that needs one restart gets
+#     it, a container that did not start is recreated once, a read-only user
+#     that is missing is set up again; what cannot be healed (an older
+#     launcher, a server that still does not start) is an error with its fix,
+#     and the record stays (validated=false) for the doctor to try again.
 # The YAML editor is replaced by a recorder: tests/test_sidecar_definition.py
 # covers the editor itself. No network, no real launcher, no real deployment.
 
@@ -52,14 +56,24 @@ cat > "$WORK/bin/exasol" <<'STUB'
 printf '%s\n' "$*" >> "$STUB_CALLS"
 case "$1 ${2:-}" in
     "--help ") for c in $STUB_HELP; do printf '  %s   the %s command\n' "$c" "$c"; done ;;
-    "mcp status") printf '%s\n' "$STUB_STATUS" ;;
-    "start "*|"sidecar disable") exit 0 ;;
+    "mcp status") if [ -f "$STUB_STATUS_FILE" ]; then cat "$STUB_STATUS_FILE"; else printf '%s\n' "$STUB_STATUS"; fi ;;
+    # A start (or a stop and start) can change what the status says next.
+    "start "*) [ -f "$STUB_STATUS_FILE.after-start" ] && mv "$STUB_STATUS_FILE.after-start" "$STUB_STATUS_FILE"; exit 0 ;;
+    "sidecar disable") exit 0 ;;
+    # Only a stop (the restart) changes it for a deployment that needs one.
+    "stop ") [ -f "$STUB_STATUS_FILE.after-restart" ] && mv "$STUB_STATUS_FILE.after-restart" "$STUB_STATUS_FILE"; exit 0 ;;
 esac
 exit 0
 STUB
 chmod +x "$WORK/bin/exasol"
 personal_cli() { printf '%s\n' "$WORK/bin/exasol"; }
-export STUB_CALLS="$WORK/calls"
+personal_stop() { "$WORK/bin/exasol" stop; }
+personal_start() { "$WORK/bin/exasol" start; }
+export STUB_CALLS="$WORK/calls" STUB_STATUS_FILE="$WORK/status"
+# The ports taken on this "machine" - never the real one, where a kit's own
+# sidecar may well be listening on 4896.
+STUB_PORTS_TAKEN=""
+port_in_use() { case " $STUB_PORTS_TAKEN " in *" $1 "*) return 0 ;; esac; return 1; }
 # The editor, recorded: what it was handed, and "changed" the first time.
 cat > "$WORK/bin/uv" <<'UV'
 #!/bin/sh
@@ -83,7 +97,6 @@ _fresh_manifest
 export STUB_HELP="install start stop sidecar mcp" STUB_STATUS="$SERVING"
 check "a 2.4.0 launcher and the kit's deployment" 0 "$(mcp_sidecar_supported; echo $?)"
 STUB_HELP="install start stop" check "a launcher without sidecars (before 2.4.0)" 1 "$(STUB_HELP='install start stop' mcp_sidecar_supported; echo $?)"
-check "EXAKIT_MCP_BACKEND=uvx keeps the kit's own server" 1 "$(EXAKIT_MCP_BACKEND=uvx mcp_sidecar_supported; echo $?)"
 _fresh_manifest docker
 check "a database the launcher does not run" 1 "$(mcp_sidecar_supported; echo $?)"
 
@@ -114,20 +127,65 @@ lacks "no password on any command line" "readonly-secret" "$calls"
 mcp_sidecar_apply >/dev/null 2>&1
 check "unchanged and serving: no restart of anything" 0 "$(grep -c '^start' "$STUB_CALLS")"
 
-echo "mcp_sidecar_apply, falling back to the kit's stdio server:"
-_fresh_manifest; rm -f "$STUB_DEF.seen"
-STUB_STATUS='{"name": "mcp", "health": "starting", "restartRequired": true, "endpoints": []}'
-check "a deployment that needs a restart first: not applied" 1 "$(mcp_sidecar_apply; echo $?)"
-check "...nothing recorded, clients keep stdio" "" "$(manifest_get components.mcp_server.backend 2>/dev/null)"
-_fresh_manifest; manifest_set components.mcp_server.backend sidecar; : > "$STUB_CALLS"
-STUB_STATUS='{"name": "mcp", "health": "failing", "restartRequired": false, "endpoints": []}'
-check "a sidecar that never serves: not applied" 1 "$(mcp_sidecar_apply; echo $?)"
-check "...the old record is cleared" "" "$(manifest_get components.mcp_server.backend 2>/dev/null)"
-has "...and the sidecar it set up is switched off" "sidecar disable mcp" "$(cat "$STUB_CALLS")"
-STUB_STATUS="$SERVING"
+echo "mcp_sidecar_apply heals what does not serve:"
+_status() { printf '{"name": "mcp", "health": "%s", "restartRequired": %s, "endpoints": [%s]%s}\n' "$1" "$2" "$3" "${4:-}"; }
+SERVING_AT() { _status serving false "{\"ip\": \"127.0.0.1\", \"port\": $1, \"url\": \"http://127.0.0.1:$1/mcp\"}"; }
+_fresh_manifest; : > "$STUB_CALLS"; rm -f "$STUB_DEF.seen" "$STUB_STATUS_FILE"*
+_status starting false "" > "$STUB_STATUS_FILE"; SERVING_AT 4897 > "$STUB_STATUS_FILE.after-start"
+STUB_PORTS_TAKEN="4896"
+out="$(mcp_sidecar_apply 2>&1)"; rc=$?
+check "port 4896 taken by another program: still served" 0 "$rc"
+has "...said as a self-heal" "Self-heal: port 4896 is in use by another program - the MCP server moves to 4897" "$out"
+has "...the definition listens on the new port" '"hostPort": 4897' "$(cat "$STUB_DEF")"
+check "...recorded" "4897|http://127.0.0.1:4897/mcp" "$(manifest_get components.mcp_server.port)|$(manifest_get components.mcp_server.url)"
+STUB_PORTS_TAKEN=""
+: > "$STUB_CALLS"
+mcp_sidecar_apply >/dev/null 2>&1
+check "...and the recorded port is kept on the next run" '"hostPort": 4897' "$(grep -o '"hostPort": [0-9]*' "$STUB_DEF")"
+
+_fresh_manifest; : > "$STUB_CALLS"; rm -f "$STUB_DEF.seen" "$STUB_STATUS_FILE"*
+_status starting true "" > "$STUB_STATUS_FILE"; SERVING_AT 4896 > "$STUB_STATUS_FILE.after-restart"
+out="$(mcp_sidecar_apply 2>&1)"; rc=$?
+check "a deployment that needs one restart: restarted, then served" 0 "$rc"
+has "...said as a self-heal, the data kept" "Self-heal: this deployment serves the MCP server only after one restart - restarting the database (your data is kept)" "$out"
+check "...one stop" 1 "$(grep -c '^stop' "$STUB_CALLS")"
+check "...recorded and validated" "sidecar|true" "$(manifest_get components.mcp_server.backend)|$(manifest_get components.mcp_server.validated)"
+_fresh_manifest; : > "$STUB_CALLS"; rm -f "$STUB_DEF.seen" "$STUB_STATUS_FILE"*
+_status starting true "" > "$STUB_STATUS_FILE"
+out="$(mcp_sidecar_apply 2>&1)"; rc=$?
+check "...a deployment that still asks after the restart: an error" 1 "$rc"
+has "...with its fix" "Fix: exakit stop && exakit start" "$out"
+check "...restarted once only" 1 "$(grep -c '^stop' "$STUB_CALLS")"
+
+_fresh_manifest; : > "$STUB_CALLS"; rm -f "$STUB_DEF.seen" "$STUB_STATUS_FILE"*
+_status failing false "" > "$STUB_STATUS_FILE"
+out="$(mcp_sidecar_apply 2>&1)"; rc=$?
+check "a container that never serves: an error after one recreate" 1 "$rc"
+has "...said as a self-heal first" "Self-heal: the MCP server did not start - recreating it" "$out"
+check "...one recreate (disable, then start again)" 1 "$(grep -c '^sidecar disable mcp$' "$STUB_CALLS")"
+has "...the error names the status" "did not start (status: failing)" "$out"
+has "...and the fix" "Fix: exakit mcp-doctor" "$out"
+check "...the record stays for the doctor, not validated" "sidecar|false" \
+    "$(manifest_get components.mcp_server.backend 2>/dev/null)|$(manifest_get components.mcp_server.validated)"
+_fresh_manifest; manifest_set components.mcp_server.backend sidecar; : > "$STUB_CALLS"; rm -f "$STUB_STATUS_FILE"*
+_status failing false "" ', "message": "image pull failed: no network"' > "$STUB_STATUS_FILE"
+check "...the launcher's own words are quoted" "image pull failed: no network" \
+    "$(mcp_sidecar_apply 2>&1 | grep -o 'image pull failed: no network' | head -1)"
+_fresh_manifest; : > "$STUB_CALLS"; rm -f "$STUB_STATUS_FILE"*
+_status failing false "" > "$STUB_STATUS_FILE"; SERVING_AT 4896 > "$STUB_STATUS_FILE.after-start"
+check "a container the recreate brings up: served" 0 "$(mcp_sidecar_apply >/dev/null 2>&1; echo $?)"
+
+rm -f "$STUB_STATUS_FILE"*; STUB_STATUS="$SERVING"
 _fresh_manifest; manifest_set components.mcp_server.backend sidecar
-check "an older launcher after an earlier sidecar run: not applied" 1 "$(STUB_HELP='install start stop' mcp_sidecar_apply; echo $?)"
-check "...and the record goes" "" "$(manifest_get components.mcp_server.backend 2>/dev/null)"
+out="$(STUB_HELP='install start stop' mcp_sidecar_apply 2>&1)"; rc=$?
+check "an older launcher: an error, nothing else to fall back to" 1 "$rc"
+has "...naming the fix" "Fix: exakit update personal" "$out"
+check "...the record stays" "sidecar" "$(manifest_get components.mcp_server.backend 2>/dev/null)"
+_fresh_manifest; manifest_set components.mcp_server.connection.password_file "$WORK/gone"
+exakit_configure_mcp_readonly_access() { manifest_set components.mcp_server.connection.password_file "$EXAKIT_HOME/credentials/mcp_readonly_password"; }
+out="$(mcp_sidecar_apply 2>&1)"; rc=$?
+check "a read-only user that is not ready: set up again, then served" 0 "$rc"
+has "...said as a self-heal" "Self-heal: the read-only MCP user is not ready" "$out"
 
 echo "updating the launcher's MCP server: the image is the version:"
 IMAGE_VERSION="$(exakit_versions_pin components.mcp.sidecar_image | sed 's/@.*//; s/.*://')"
@@ -143,7 +201,7 @@ exakit_component_latest() { printf '9.9.9\n'; }
 check "offered on a sidecar: the image's version, not PyPI's newest" "$IMAGE_VERSION" \
     "$(EXAKIT_VERSION_POLICY=latest exakit_component_available mcp)"
 _fresh_manifest
-check "...the kit's own stdio server still follows the policy" "9.9.9" \
+check "...also before the server first served (it is the only one)" "$IMAGE_VERSION" \
     "$(EXAKIT_VERSION_POLICY=latest exakit_component_available mcp)"
 exakit_component_current() { manifest_get components.mcp_server.version 2>/dev/null; }
 _fresh_manifest; manifest_set components.mcp_server.backend sidecar; manifest_set components.mcp_server.version 2.3.0

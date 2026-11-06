@@ -2164,10 +2164,7 @@ function Invoke-ExakitUninstallComponent {
             try { [void](Invoke-McpOperation -Operation "uninstall" -InputArgs @()) }
             catch { Warn2 "Removing the managed AI client config reported issues" }
             # Nobody is pointed at the launcher's MCP server any more: it goes too.
-            if (Get-Command Remove-McpSidecar -ErrorAction SilentlyContinue) {
-                Remove-McpSidecar
-                if (Get-Command Clear-McpSidecarRecord -ErrorAction SilentlyContinue) { Clear-McpSidecarRecord "the MCP configuration was removed" }
-            }
+            if (Get-Command Remove-McpSidecar -ErrorAction SilentlyContinue) { Remove-McpSidecar }
         }
         "skills" {
             foreach ($root in (Get-ExakitSkillRoots)) {
@@ -3355,31 +3352,22 @@ function Invoke-ExakitUpdateRun {
                 }
             }
             "mcp" {
-                $onSidecar = (Get-ExakitManifestValue "components.mcp_server.backend") -eq "sidecar"
-                if ($available -and $onSidecar -and (Get-McpSidecarImageVersion) -ne $available) {
-                    # The image is the version: writing the one this kit copy
-                    # pins and calling that $available was an update that never
-                    # happened. Twin of the same guard in mcp_update.
-                    Fail "This kit pins no launcher image of MCP server $available (it pins $(Get-McpSidecarImageVersion)), so the MCP server beside your database stays as it is. A kit update brings newer images: exakit update"
-                } elseif ($available -and $onSidecar -and (Set-McpSidecar)) {
-                    # The launcher's MCP server: the new image goes into its
-                    # definition; the client entries are a URL that does not change.
+                if ($available) {
+                    if ((Get-McpSidecarImageVersion) -ne $available) {
+                        # The image is the version: writing the one this kit copy
+                        # pins and calling that $available was an update that never
+                        # happened. Twin of the same guard in mcp_update.
+                        Fail "This kit pins no launcher image of MCP server $available (it pins $(Get-McpSidecarImageVersion)), so the MCP server beside your database stays as it is. A kit update brings newer images: exakit update"
+                    }
+                    # A kit from before had its clients start their own server:
+                    # once the one beside the database serves, they move to it.
+                    $wasSidecar = (Get-ExakitManifestValue "components.mcp_server.backend") -eq "sidecar"
+                    if (-not (Set-McpSidecar)) {
+                        Fail "The MCP server beside your database could not take the update. Finish it with: exakit mcp-doctor"
+                    }
+                    if (-not $wasSidecar) { [void](Update-McpClients) }
                     Set-ExakitManifestValue "desired.mcp" $available
                     Ok "MCP server updated; database data was not changed"
-                } elseif ($available) {
-                    New-McpUpdateSnapshot | Out-Null
-                    $script:McpVersion = $available
-                    Install-Mcp
-                    # $current above came from Get-ExakitComponentCurrent, i.e. the pin
-                    # in the AI client configs - never the manifest record. Install-Mcp
-                    # writes that record before the configs are refreshed (the renderer
-                    # reads it to build the pin), so the record can say the update
-                    # landed while every client still launches the old version. The
-                    # refresh below is what actually moves them; mcp_update in
-                    # setup/lib/mcp.sh keeps the same order.
-                    Update-McpClientPins | Out-Null
-                    Test-McpServer
-                    Set-ExakitManifestValue "desired.mcp" $script:McpVersion
                 }
             }
             "pyexasol" {

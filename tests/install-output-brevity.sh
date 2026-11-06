@@ -130,7 +130,7 @@ has "the server, the DSN and the user" "MCP server 'exasol' — 127.0.0.1:8563 a
 lacks "no reference box"     "MCP is ready"   "$READY"
 lacks "no command row"       "exasol-mcp-server@2.1.0" "$READY"
 lacks "no managed-state row" "Managed state"  "$READY"
-has "the command is in the log"       "MCP command: /home/u/.local/bin/uvx exasol-mcp-server@2.1.0" "$(cat "$EXAKIT_LOG_FILE")"
+has "the server is in the log"        "MCP server: " "$(cat "$EXAKIT_LOG_FILE")"
 has "so is the managed state"         "MCP managed state:" "$(cat "$EXAKIT_LOG_FILE")"
 
 printf '\n== the first prompt is shown only when it was not handed over ==\n'
@@ -540,10 +540,8 @@ ps_fn() { # ps_fn <file> <name>
     ' "$1"
 }
 
-MCP_INSTALL_SH="$(sh_fn "$ROOT/setup/lib/mcp.sh" "mcp_install() {")"
-MCP_VALIDATE_SH="$(sh_fn "$ROOT/setup/lib/mcp.sh" "mcp_validate() {")"
-MCP_INSTALL_PS="$(ps_fn "$ROOT/setup/lib/mcp.ps1" "Install-Mcp")"
-MCP_VALIDATE_PS="$(ps_fn "$ROOT/setup/lib/mcp.ps1" "Test-McpServer")"
+MCP_STEP_SH="$(sh_fn "$ROOT/setup/lib/common.sh" "_exakit_install_mcp() {")"
+MCP_STEP_PS="$(ps_fn "$ROOT/setup/lib/mcp.ps1" "Install-McpSidecarStep")"
 
 spins() { # spins <text> <begin-needle> <end-needle> -> "N/M"
     printf '%s/%s' \
@@ -551,25 +549,12 @@ spins() { # spins <text> <begin-needle> <end-needle> -> "N/M"
         "$(printf '%s\n' "$1" | grep -c "$3")"
 }
 
-# The download: the longest wait in the step, and the one that was silent.
-check "the download spins"       "1/1" "$(spins "$MCP_INSTALL_SH" 'ui_spin_begin' 'ui_spin_end')"
-check "...and its twin does too" "1/1" "$(spins "$MCP_INSTALL_PS" 'Start-ExakitSpinner' 'Stop-ExakitSpinner')"
-# The handshake: starting the server can still mean uvx materialising an
-# environment. Two ends to one begin here -- the loop closes the spinner on the
-# way out and before a retry, because a spinner owns its line.
-check "the handshake spins"      "1/2" "$(spins "$MCP_VALIDATE_SH" 'ui_spin_begin' 'ui_spin_end')"
-check "...and its twin does too" "1/1" "$(spins "$MCP_VALIDATE_PS" 'Start-ExakitSpinner' 'Stop-ExakitSpinner')"
-
-# The label is what the reader looks at for the whole wait, so it names the
-# phase and says the download happens once per machine.
-has "the label names the download"  'Downloading ${EXAKIT_MCP_PACKAGE}@${EXAKIT_MCP_VERSION} — first run only' "$MCP_INSTALL_SH"
-has "the twin's download label"     'Downloading $($script:McpPackage)@$($script:McpVersion) - first run only' "$MCP_INSTALL_PS"
-has "the handshake names itself"    'Starting the MCP server and checking it answers' "$MCP_VALIDATE_SH"
-has "...and on Windows"             'Starting the MCP server and checking it answers' "$MCP_VALIDATE_PS"
-
-# A spinner owns its line and rewrites it every 90ms, so the retry warning waits
-# until the spinner has been stopped.
-lacks "no warning under a spinner"  'Warn2 "Handshake attempt $attempt failed - retrying"; Start-Sleep' "$MCP_VALIDATE_PS"
+# The step is the server beside the database starting (and healing): the wait
+# the reader sits through, so it spins, on both sides, under the same label.
+check "the MCP step spins"       "1/1" "$(spins "$MCP_STEP_SH" 'ui_spin_begin' 'ui_spin_end')"
+check "...and its twin does too" "1/1" "$(spins "$MCP_STEP_PS" 'Start-ExakitSpinner' 'Stop-ExakitSpinner')"
+has "the label names the wait"      'Starting the MCP server and checking it answers' "$MCP_STEP_SH"
+has "...and on Windows"             'Starting the MCP server and checking it answers' "$MCP_STEP_PS"
 
 printf '\n== no question is asked under a live table ==\n'
 
@@ -634,55 +619,17 @@ lacks "no caller leaves it to the raw id" 'exakit_soft_step mcp "exakit update" 
 
 
 echo
-echo "the MCP package download overlaps the data load:"
-# THE TWO STEPS NEED NOTHING FROM EACH OTHER, and run back to back they cost
-# the sum of their times. On a fresh Windows install that sum was ~5 minutes -
-# 131s loading, 166s on the bridge - and almost all of the bridge is uv
-# materialising the server's environment (12,099 files, 207MB). That is work a
-# machine can do while its database is busy elsewhere. Measured on macOS with a
-# cold uv cache and a 20s stand-in load: 38s serial, 21s overlapped, same
-# verdict from mcp_install either way.
+echo "there is no MCP package to download any more:"
+# The server is the launcher's sidecar: nothing to prime, so nothing to overlap
+# with the data load and nothing left running behind the installer.
 MCP_SH_ALL="$(cat "$ROOT/setup/lib/mcp.sh")"
 MCP_PS_ALL="$(cat "$ROOT/setup/lib/mcp.ps1")"
-has "the shell half can start it early"   "mcp_prefetch_begin() {"      "$MCP_SH_ALL"
-has "...and stop it"                      "mcp_prefetch_stop() {"       "$MCP_SH_ALL"
-has "the twin can start it early"         "function Start-ExakitMcpPrefetch" "$MCP_PS_ALL"
-has "...and stop it"                      "function Stop-ExakitMcpPrefetch"  "$MCP_PS_ALL"
-has "...and collect it"                   "function Receive-ExakitMcpPrefetch" "$MCP_PS_ALL"
-# Started BEFORE the load, or it overlaps nothing.
 COMMON_LOAD="$(cat "$ROOT/setup/lib/common.sh")"
-check "the shell starts it before the load runs" "yes" \
-    "$(printf '%s\n' "$COMMON_LOAD" | awk '/mcp_prefetch_begin/{a=NR} /exakit_maybe_offer_data_load "\$_kit_root"/{if(a&&NR>a){print "yes";exit}}' | head -1)"
 WIN_SETUP="$(cat "$ROOT/setup/setup-windows.ps1")"
-check "the twin starts it before the load runs" "yes" \
-    "$(printf '%s\n' "$WIN_SETUP" | awk '/Start-ExakitMcpPrefetch/{a=NR} /Request-ExakitDataLoadOffer/{if(a&&NR>a){print "yes";exit}}' | head -1)"
-# Collected by the step that needs it, with the inline prime still there for a
-# run where no prefetch happened - that fallback is what keeps this optional.
-# NOT `wait`, and the suite pins that. mcp_install runs inside the soft-step
-# SUBSHELL (`if ( "$@" )` in exakit_soft_step), and a shell can only wait on its
-# OWN children - `wait` on a sibling pid returns non-zero immediately without
-# waiting, so the log is read mid-write and then deleted under a live process.
-# Seen on a real install: the collected output was uv's first progress line,
-# "Installed 87 packages in 429ms", six seconds after the prefetch started, and
-# the prime was graded "Could not prime" over a download that was still going.
-lacks "the collector does not wait on a pid it does not own" \
-    'wait "$EXAKIT_MCP_PREFETCH_PID"' "$MCP_INSTALL_SH"
-has "...it polls for the process instead" \
-    'kill -0 "$EXAKIT_MCP_PREFETCH_PID"' "$MCP_INSTALL_SH"
-has "...and takes the exit code from a file, the only way across a subshell" \
-    'cat "$EXAKIT_MCP_PREFETCH_LOG.rc"' "$MCP_INSTALL_SH"
-has "the prefetch records that exit code" \
-    'EXAKIT_MCP_PREFETCH_LOG.rc"' "$(cat "$ROOT/setup/lib/mcp.sh")"
-# Through the uvx beside the VETTED uv (mcp_uvx_bin), never a bare `uvx` off
-# PATH: that could be a copy below the floor the kit refused a moment earlier.
-has "...and still primes inline without one" '"$(mcp_uvx_bin)" "${EXAKIT_MCP_PACKAGE}@${EXAKIT_MCP_VERSION}" --help 2>&1' "$MCP_INSTALL_SH"
-has "the twin collects it in Install-Mcp"    'Receive-ExakitMcpPrefetch' "$MCP_INSTALL_PS"
-has "...and still primes inline without one" 'Get-UvxPath) "$($script:McpPackage)@$($script:McpVersion)" "--help"' "$MCP_INSTALL_PS"
-# A background download must not outlive the installer, on ANY way out.
-has "the shell stops it when the run ends"   "mcp_prefetch_stop" "$COMMON_LOAD"
-check "...on both the clean and the failing path" "2" \
-    "$(printf '%s\n' "$COMMON_LOAD" | grep -c 'mcp_prefetch_stop')"
-has "the twin stops it in the finally"       "Stop-ExakitMcpPrefetch" "$WIN_SETUP"
+lacks "no prefetch on the shell side"   "mcp_prefetch"            "$MCP_SH_ALL$COMMON_LOAD"
+lacks "...nor on Windows"               "ExakitMcpPrefetch"       "$MCP_PS_ALL$WIN_SETUP"
+lacks "no stdio server to prime"        "exasol-mcp-server@"      "$MCP_SH_ALL"
+lacks "...on either side"               'McpPackage)@$($script:McpVersion)' "$MCP_PS_ALL"
 
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

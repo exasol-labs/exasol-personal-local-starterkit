@@ -156,29 +156,6 @@ def _manifest(home: Path, fingerprint: str | None) -> Path:
     return path
 
 
-class McpStdioServer(unittest.TestCase):
-    def _env(self, fingerprint):
-        from mcp.runtime.exakit import ExakitRuntimeLoader
-        with tempfile.TemporaryDirectory() as folder:
-            home = Path(folder)
-            _manifest(home, fingerprint)
-            loader = ExakitRuntimeLoader()
-            with mock.patch.object(ExakitRuntimeLoader, "_resolve_mcp_command", return_value="uvx"):
-                context = loader.load(home)
-            return context.server_definition.env
-
-    def test_exa_dsn_is_pinned_when_a_fingerprint_is_recorded(self):
-        env = self._env(FP)
-        self.assertEqual(env["EXA_DSN"], f"127.0.0.1/{FP}:8563")
-        self.assertEqual(env["EXA_SSL_CERT_VALIDATION"], "no")   # self-signed: the pin is the check
-
-    def test_exa_dsn_is_unchanged_without_one(self):
-        self.assertEqual(self._env(None)["EXA_DSN"], "127.0.0.1:8563")
-
-    def test_a_malformed_record_is_not_a_pin(self):
-        self.assertEqual(self._env("not-hex")["EXA_DSN"], "127.0.0.1:8563")
-
-
 class MarketplaceClientDsn(unittest.TestCase):
     def _dsn(self, fingerprint):
         from runtime import KitContext, Manifest

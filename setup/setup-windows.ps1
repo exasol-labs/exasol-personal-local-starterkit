@@ -251,16 +251,6 @@ try {
         if (Get-Command Invoke-LegacyCrossingAfter -ErrorAction SilentlyContinue) {
             Invoke-LegacyCrossingAfter
         }
-        # THE BRIDGE'S DOWNLOAD STARTS HERE, not two steps later. Priming the
-        # MCP package is a network download and an unpack; the load below is a
-        # local database reading local files. Neither needs the other, so the
-        # download runs underneath the load and Step 4 collects a finished one.
-        # See Start-ExakitMcpPrefetch. Twin of the same call in kit_shared_steps.
-        # Only this branch starts it; without a prefetch Step 4 primes the
-        # package itself (Receive-ExakitMcpPrefetch answers $null).
-        if (Get-Command Start-ExakitMcpPrefetch -ErrorAction SilentlyContinue) {
-            try { Start-ExakitMcpPrefetch } catch { }
-        }
         [void](Invoke-ExakitBestEffort -Component "sample_data" -Repair "exakit data-load" `
             -Label "sample data" `
             -Warning "Sample data load did not finish cleanly." `
@@ -269,20 +259,19 @@ try {
 
     # --- step 3: AI bridge (server, clients, skills) ----------------------------
     if ($dbReady -and $exapumpSupported -and (Begin-ExakitStep "mcp" "Step 4/6  AI bridge (MCP server, clients and skills)")) {
-        if (Invoke-ExakitSoftStep -Component "mcp" -Repair "exakit update" -Body {
+        if (Invoke-ExakitSoftStep -Component "mcp" -Repair "exakit mcp-doctor" -Body {
                 # One line for this step's server work: the spinner narrates
-                # the prime and the handshake, so the Info/Ok pairs beneath
-                # were the second telling. try/finally because the body can
-                # throw and this is a soft step - a leaked quiet flag would
-                # silence every step after it.
+                # starting the launcher's MCP server and its healing, so the
+                # Info/Ok pairs beneath were the second telling. The launcher's
+                # server is the only one: a step that could not get it serving
+                # fails soft (its error and fix said) and the install goes on.
+                # try/finally because the body can throw and this is a soft
+                # step - a leaked quiet flag would silence every step after it.
                 # Twin of _exakit_install_mcp (common.sh).
                 $prevQuiet = $script:ExakitQuietDetail
                 if (Test-ExakitStdoutIsTerminal) { $script:ExakitQuietDetail = $true }
                 try {
-                    if (-not (Install-McpSidecarStep)) {
-                        Install-Mcp
-                        Test-McpServer
-                    }
+                    Install-McpSidecarStep
                 } finally {
                     $script:ExakitQuietDetail = $prevQuiet
                 }
@@ -557,11 +546,5 @@ try {
     # stops it on the path it owns; this covers every other way out, including
     # the ones nobody has thought of yet.
     try { Stop-ExakitAnimation } catch { }
-    # A prefetch that never got collected (the MCP step was skipped, or the run
-    # is ending early) must not outlive the installer. This finally is the one
-    # place every exit passes through. Twin of the same call in exakit_finish.
-    if (Get-Command Stop-ExakitMcpPrefetch -ErrorAction SilentlyContinue) {
-        try { Stop-ExakitMcpPrefetch } catch { }
-    }
     Exit-ExakitInstallLock
 }
