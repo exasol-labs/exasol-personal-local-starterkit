@@ -8,7 +8,7 @@ the evidence says "first 10,000 rows". A profile over 30 seconds is flagged slow
 sampling option.
 
 The statements: one per batch of 40 columns (COUNT(*), and per column COUNT, APPROXIMATE_COUNT_DISTINCT, MIN/MAX
-for numbers and dates, and for strings AVG(LENGTH) plus one count per pattern), then three follow-ups and nothing
+for numbers and dates, and for strings AVG(LENGTH) plus one count per pattern: the sensitive ones, the date ones and the value shapes), then three follow-ups and nothing
 else: the values of every non-sensitive column with 50 or fewer approximate distinct values (top 20 kept, with
 exact counts), an exact COUNT(DISTINCT) for null-free columns within 5% of the row count, and MIN/MAX through
 TO_DATE for date strings. Exasol's REGEXP_LIKE must match the whole value, so the patterns carry no ^ or $ and a
@@ -42,6 +42,14 @@ PATTERNS = {
     "phone": r"(?=(?:\D*\d){7,15}\D*$)(?=.*[ ()+.-])(?!\d{1,4}[./-]\d{1,2}[./-]\d{1,4}(?:\D.*)?$)\+?[0-9 ()./-]+",
     "iban": r"[A-Z]{2}\d{2}(?: ?[A-Z0-9]){11,30}",
     "postcode": r"\d{5}",
+    # The shape of a value, for the roles' second look: a code (one token holding a digit: SKU-1042, B09KXVBD7Z,
+    # Clerk#000000951, 400081), a number written as text, three or more words, no digit at all, and a postal code of
+    # any country (read only when the column's name says postcode).
+    "code": r"(?=\S*\d)[A-Za-z0-9][A-Za-z0-9#._:/-]*",
+    "number": r"[+-]?\d+(?:[.,]\d+)?",
+    "words": r"\S+(?:\s+\S+){2,}",
+    "nodigit": r"[^0-9]*",
+    "postal": r"(?=.*\d)[A-Za-z0-9]{2,7}(?:[ -][A-Za-z0-9]{2,4})?",
 }
 SENSITIVE = ("email", "phone", "iban", "postcode")
 DATE_FORMATS = {"iso": ("YYYY-MM-DD", "%Y-%m-%d", 10), "dotted": ("DD.MM.YYYY", "%d.%m.%Y", 10)}

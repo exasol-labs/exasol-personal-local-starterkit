@@ -43,7 +43,54 @@ class Database:
             return [{"VIEW_NAME": name}] if name in self.views else []
         if "EXA_ALL_COLUMNS" in sql:
             return [{"COLUMN_NAME": n, "COLUMN_TYPE": t, "IS_VIRTUAL": 0} for n, t in self.columns]
+        answer = self.review(sql)
+        if answer is not None:
+            return answer
         raise AssertionError(f"unexpected statement {sql}")
+
+    def values(self, column: str) -> list:
+        i = [n for n, _ in self.columns].index(column)
+        return [row[i] for row in self.data]
+
+    def review(self, sql: str) -> list[dict] | None:
+        """The approve step's review (descriptor/review.py), answered from the rows."""
+        text = lambda v: None if v is None else str(v)
+        if sql.startswith("SELECT COUNT(*) AS N"):
+            row = {"N": len(self.data)}
+            key = re.search(r'COUNT\("(\w+)"\) AS KN', sql)
+            if key:
+                present = [v for v in self.values(key.group(1)) if v is not None]
+                row.update(KN=len(present), KD=len(set(present)))
+            target = re.search(r'COUNT\(DISTINCT "(\w+)"\) AS TD', sql)
+            if target:
+                row["TD"] = len({v for v in self.values(target.group(1)) if v is not None})
+            return [row]
+        if "AS V, COUNT(*) AS N" in sql:
+            target = re.search(r'CAST\("(\w+)"', sql).group(1)
+            counts: dict = {}
+            for v in self.values(target):
+                if v is not None:
+                    counts[text(v)] = counts.get(text(v), 0) + 1
+            return [{"V": v, "N": n} for v, n in sorted(counts.items(), key=lambda item: (item[1], item[0]))]
+        if "GROUPING SETS" in sql:
+            columns = re.findall(r'GROUPING\("(\w+)"\)', sql)
+            target, rare = re.search(r'WHEN CAST\("(\w+)" AS VARCHAR\(2000\)\) = \'([^\']*)\'', sql).groups()
+            labels = [text(v) for v in self.values(target)]
+            found = []
+            for i, column in enumerate(columns):
+                groups: dict = {}
+                for value, label in zip(self.values(column), labels):
+                    if label is None:
+                        continue
+                    n, h = groups.get(text(value), (0, 0))
+                    groups[text(value)] = (n + 1, h + (label == rare))
+                for value, (n, h) in groups.items():
+                    row = {f"G{j}": 1 for j in range(len(columns))}
+                    row.update({f"V{j}": None for j in range(len(columns))})
+                    row.update({f"G{i}": 0, f"V{i}": value, "N": n, "H": h})
+                    found.append(row)
+            return found
+        return None
 
     def execute(self, sql: str) -> None:
         self.sent.append(sql)
@@ -142,6 +189,18 @@ class FlowTest(unittest.TestCase):
         self.assertEqual(v1, store.read("SUPPORT.TICKETS", 1, self.home))           # v1 is never touched
         self.assertEqual([1, 2], store.versions("SUPPORT.TICKETS", self.home))
 
+    def test_an_approval_kept_without_its_profile_carries_every_role_over_while_the_table_is_the_same(self):
+        # A shipped descriptor the store adopted has no profile beside it; re-describing the same table must not call
+        # every column changed.
+        doc = self.describe()["doc"]
+        doc["columns"]["CHANNEL"] = dict(doc["columns"]["CHANNEL"], role="identifier")
+        self.approve(doc)
+        for kept in store.folder("SUPPORT.TICKETS", self.home).glob("v1.profile.json"):
+            kept.unlink()
+        found = self.describe(force=True)
+        self.assertEqual([], found["changed"])
+        self.assertEqual("identifier", found["doc"]["columns"]["CHANNEL"]["role"])
+
     def test_a_table_reloaded_between_describe_and_approve_is_refused(self):
         doc = self.describe()["doc"]
         self.db.columns[2] = ("CHANNEL", "VARCHAR(20) UTF8")
@@ -172,7 +231,7 @@ class FlowTest(unittest.TestCase):
         lines = []
         self.approve(self.describe()["doc"], log=lambda kind, **payload: lines.append((kind, payload)))
         self.assertEqual([("describe.approve", {"table": "SUPPORT.TICKETS", "version": 1,
-                                                   "published": "EXAKIT_SEMANTIC.SUPPORT__TICKETS"})], lines)
+                                                   "published": "EXAKIT_SEMANTIC.SUPPORT__TICKETS", "warnings": []})], lines)
 
 
 class PublishTest(unittest.TestCase):

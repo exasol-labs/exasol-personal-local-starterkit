@@ -121,40 +121,64 @@ The two reference datasets ship theirs in the same shape:
 [`amazon_sales`](datasets/amazon_sales/descriptor.yaml).
 
 **The roles.** Eight, and no more: `key`, `time`, `measure`, `category`, `flag`, `text`,
-`identifier` and `other`. Sensitivity is decided first and kept whatever the role: a string
-column is `sensitive` when 90% or more of its non-null values look like an e-mail address, a
-phone number, an IBAN or a 5-digit postcode - a sensitive column is never charted, grouped
-or sent to a model. Then the first rule that matches wins
-([`setup/lib/descriptor/roles.py`](../setup/lib/descriptor/roles.py), each threshold pinned by
-a test):
+`identifier` and `other`. Three things are read: the column's type, its numbers (rows, values
+present, distinct values, length) and the shape of its values - the profile counts the values
+that look like a code (one token holding a digit: `SKU-1042`, `B09KXVBD7Z`), a number written as
+text, three words or more, a date, an e-mail. The name is read last, and only settles what the
+numbers leave open: `QTY` with ten values is a measure, `STORE` with forty-five a category.
+
+Sensitivity is decided first and kept whatever the role: a string column is `sensitive` when 90%
+or more of its values look like an e-mail address, a phone number, an IBAN or a 5-digit postcode,
+or its name says postcode (ZIP, POSTAL, PLZ) and 90% are shaped like one, or its name says a
+person's name (`FIRST_NAME`, `SURNAME`, `CUSTOMER_NAME`, `DRIVER_NAME`) or a street address - a
+sensitive column is never charted, grouped or sent to a model. Then the first rule that matches
+wins ([`setup/lib/descriptor/roles.py`](../setup/lib/descriptor/roles.py), each threshold pinned
+by a test; "distinct share" is distinct values over the values present):
 
 | Rule | Role |
 |---|---|
 | every value null | `other` |
 | `DATE` or `TIMESTAMP`, or 98%+ of the values match one date pattern (`YYYY-MM-DD`, `DD.MM.YYYY`, slash dates - DD/MM or MM/DD told apart by a part over 12) | `time` |
-| string, average length 40+, distinct/rows 0.5+ | `text` |
-| integer or string, no nulls, exactly as many distinct values as rows | `key` |
+| an integer named like a time (`TS`, `EPOCH`, `..._AT`) holding Unix seconds or milliseconds | `time` |
 | sensitive | `identifier` |
+| one value in every row (or one value, else empty) | `other` - it tells no row apart |
+| string, distinct share 0.5+, and average length 40+; or three words or more in half the values and average 15+; or named as text (`COMMENT`, `NOTES`, `DESCRIPTION`, `REVIEW`) and average 10+ | `text` |
+| no nulls, every value distinct, and an integer - or a string that is code-shaped or named like a key | `key` |
 | `BOOLEAN`, or exactly two non-null values (counted exactly) | `flag` |
-| 50 distinct values or fewer, or a string with distinct/rows 0.02 or less | `category` |
-| string, distinct/rows 0.9+ | `identifier` |
 | `DOUBLE`, or `DECIMAL` with a scale | `measure` |
-| integer | `identifier` when its name has a whole word id, code, no, nr or key (`CUSTOMER_NO`), else `measure` |
+| integer named as an identifier (a whole word id, no, nr or key, or a run-together `..KEY`: `O_CUSTKEY`) | `identifier` |
+| integer named as an amount (`QTY`, `PRICE`, `AGE`, `..._PCT`, `AVAILQTY`) | `measure` |
+| 50 distinct values or fewer, or a string with distinct/rows 0.02 or less | `category` |
+| string of numbers named as an amount | `measure` |
+| string, 90%+ code-shaped | `identifier` |
+| string, distinct share 0.9+ | `identifier` |
+| string, average length under 40, distinct share 0.5 or less (cities, job titles) | `category` |
+| integer | `measure` |
 | anything else | `other` |
 
-Confidence is `low` when the deciding number was within 10% of its threshold (for a share,
-10% of the room up to 100%) or an integer had no name hint; `high` otherwise.
+Confidence is `low` wherever the draft is a guess: the deciding number within 10% of its
+threshold (for a share, 10% of the room up to 100%), a role taken from a name alone, a number with
+few values and nothing in its name (a store number, a rating), short labels, a lone integer; `high`
+otherwise. A reviewer reads the `low` ones first, and approving reports the ones nobody changed.
+
+**How good the first draft is.** `python3 tools/descriptor_benchmark.py` scores a fresh draft of
+twenty-four tables - the kit's datasets, five synthetic ones and five held out (written after the
+rules, never tuned to) - against a reviewer's answers: every role and slot right, every sensitive
+column marked, and every role a reviewer might disagree with marked `low`. The held-out tables'
+first run got 98.1% of roles right; the two it missed are fixed and recorded in the tool.
 
 **The slots.** `key` takes a key column (an identifier-like name first, then the leftmost);
 with none it stays empty, "no single unique column". `time` takes the time column with the
 fewest nulls, the leftmost of a tie (a table puts the row's own event date first; follow-up
-dates have gaps), `text` the text column with the longest average length. `target` is **never
+dates have gaps), `text` a column named as text first, then the longest. `target` is **never
 drafted**: it stays empty until a person sets it, and training stops with that reason - a
-guessed target trains on the wrong label and nobody notices. `category` is the leftmost
-non-sensitive string category with 2 to 20 values (the grouping to compare) and `entity` the
-non-sensitive short string column with the most distinct values, more than 20 of them (who or
-where a row comes from). An empty slot always says why in `slot_evidence`, and the notebook steps that need
-it skip with that reason.
+guessed target trains on the wrong label and nobody notices. `category` is a non-sensitive
+string category with 2 to 20 values (the grouping to compare): one named as a grouping first
+(`CATEGORY`, `SEGMENT`, `..._TYPE`), one named as an outcome last (`STATUS` is often the label
+itself), then the leftmost. `entity` is a non-sensitive short string column with more than 20
+values but at most one per two rows (who or where a row comes from): one named so first
+(`CUSTOMER`, `STORE`, `CITY`), then the most values. An empty slot always says why in
+`slot_evidence`, and the notebook steps that need it skip with that reason.
 
 **Drafting is deterministic.** The same table gives the same bytes: no timestamps in a draft,
 a fixed key order, the columns in table order. A model may add a one-line `note` per column;
@@ -179,6 +203,11 @@ rewritten) and `current.yaml`, a copy of the approved one; `EXAKIT_HOME` moves t
 It then publishes the roles as a view, `EXAKIT_SEMANTIC.<SCHEMA>__<TABLE>`, whose column
 comments carry them, so an AI client connected over MCP sees them.
 The table must not have changed since it was profiled: the schema digest is checked again.
+Approving then looks at the data once more: a key slot whose column repeats or has a gap, or a
+target that does not hold exactly two values (a yes/no outcome), is refused with what to change;
+a column that gives the target away (values where it is nearly always one way, covering most
+rows - an order's `STATUS` once it was cancelled) and the `low` roles approved unchanged are
+listed as warnings, and the approval goes through.
 
 **Several tables: the schema map.** `exakit describe --schema MY_DATA` (or
 `nb.describe_schema(conn, "MY_DATA")`) describes the whole schema: every table with its rows

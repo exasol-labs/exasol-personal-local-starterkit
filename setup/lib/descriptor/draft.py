@@ -8,10 +8,12 @@ is the event (a follow-up date sent months later spans wider; reviewed 3 Nov aga
 takes the text column with the longest average length. Target is never drafted: it stays empty until the user sets it, and
 training skips with that reason (a guessed target trains on the wrong label and nobody notices).
 
-Two more slots carry what the notebooks group by. Category: the leftmost non-sensitive string category with 2 to
-CATEGORY_GROUPS values - the grouping to compare. Entity: the non-sensitive string column (a category, or a column
-no rule fits) shorter than text with the most distinct values, more than CATEGORY_GROUPS of them - who or where a
-row comes from. Either stays empty, with its reason, when no column fits.
+Two more slots carry what the notebooks group by. Category: a non-sensitive string category with 2 to
+CATEGORY_GROUPS values - the grouping to compare - one named as a grouping first (CATEGORY, SEGMENT, ..._TYPE), one
+named as an outcome last (STATUS is often the label itself), then the leftmost. Entity: a non-sensitive string column
+(a category, or a column no rule fits) shorter than text with more than CATEGORY_GROUPS values but at most one per two
+rows - who or where a row comes from - one named so first (CUSTOMER, STORE, CITY), then the most values. Text: one
+named as text first, then the longest. Either stays empty, with its reason, when no column fits.
 
 No timestamps, a fixed key order and the columns in table order, so the same profile gives the same bytes.
 """
@@ -21,7 +23,19 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from .roles import classify, has_name_hint
+from .roles import TEXT_HINTS, classify, has_name_hint, name_tokens
+
+GROUP_HINTS = frozenset({"category", "type", "segment", "group", "class", "kind", "department", "dept", "tier", "grade",
+                         "channel", "method", "mode", "tariff", "brand", "family", "priority", "plan", "line", "division"})
+OUTCOME_HINTS = frozenset({"status", "state", "result", "outcome"})
+ENTITY_HINTS = frozenset({"customer", "client", "user", "account", "member", "store", "shop", "branch", "site", "city",
+                          "state", "region", "country", "location", "merchant", "vendor", "supplier", "device", "clerk",
+                          "agent", "team", "product"})
+ENTITY_SHARE = 0.5                    # an entity has at most one value per two rows: else it is no grouping
+
+
+def _hint(name: str, words: frozenset[str]) -> bool:
+    return any(token in words for token in name_tokens(name))
 
 FORMAT = 1
 SLOTS = ("key", "time", "text", "target", "category", "entity")
@@ -43,9 +57,12 @@ def _slots(columns: list[dict[str, Any]], roles: dict[str, dict[str, Any]]) -> t
     times = having("time")
     time = min(times, key=_nulls)["column"] if times else None           # min() keeps the leftmost of a tie
     texts = having("text")
-    text = max(texts, key=lambda c: float(c.get("avg_length") or 0))["column"] if texts else None
-    category = next((c["column"] for c in columns if _grouping(c, roles) and roles[c["column"]]["role"] == "category"
-                     and 2 <= _distinct(c) <= CATEGORY_GROUPS), None)
+    # A column named as text first (P_COMMENT over P_NAME), then the longest.
+    text = (max(texts, key=lambda c: (_hint(c["column"], TEXT_HINTS), float(c.get("avg_length") or 0)))["column"]
+            if texts else None)
+    groups = [c for c in columns if _grouping(c, roles) and roles[c["column"]]["role"] == "category"
+              and 2 <= _distinct(c) <= CATEGORY_GROUPS]
+    category = min(groups, key=_group_rank)["column"] if groups else None    # min() keeps the leftmost of a tie
     entity = _entity(columns, roles)
     slots = {"key": key, "time": time, "text": text, "target": None, "category": category, "entity": entity}
     why = {"target": NO_TARGET}
@@ -73,11 +90,23 @@ def _grouping(column: dict[str, Any], roles: dict[str, dict[str, Any]]) -> bool:
     return column.get("kind") == "string" and not found.get("sensitive") and found["role"] in ("category", "other")
 
 
+def _group_rank(column: dict[str, Any]) -> int:
+    """0 for a name that says a grouping (CATEGORY, SEGMENT, ..._TYPE), 2 for one that says an outcome (STATUS: it is
+    often the label itself, as Amazon's STATUS gives CANCELLED away), 1 otherwise."""
+    tokens = name_tokens(column["column"])
+    if any(t in GROUP_HINTS or t.endswith(tuple(GROUP_HINTS)) for t in tokens):
+        return 0
+    return 2 if any(t in OUTCOME_HINTS or t.endswith(tuple(OUTCOME_HINTS)) for t in tokens) else 1
+
+
 def _entity(columns: list[dict[str, Any]], roles: dict[str, dict[str, Any]]) -> str | None:
+    """A column whose name says who or where (CUSTOMER, STORE, CITY, STATE) first, then the most values; a column
+    with a value for nearly every row is no grouping and is left out."""
     from .roles import TEXT_AVG_LENGTH
     fits = [c for c in columns if _grouping(c, roles) and float(c.get("avg_length") or 0) < TEXT_AVG_LENGTH
-            and _distinct(c) > CATEGORY_GROUPS]
-    return max(fits, key=_distinct)["column"] if fits else None           # max() keeps the leftmost of a tie
+            and CATEGORY_GROUPS < _distinct(c) <= ENTITY_SHARE * int(c.get("non_null") or 0)]
+    return (max(fits, key=lambda c: (_hint(c["column"], ENTITY_HINTS), _distinct(c)))["column"]   # max(): leftmost of a tie
+            if fits else None)
 
 
 def draft(profile: dict[str, Any], dataset: str, version: int = 1) -> dict[str, Any]:

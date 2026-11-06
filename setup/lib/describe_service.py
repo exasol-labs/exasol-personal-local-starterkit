@@ -608,6 +608,7 @@ def _run(command: str, words: list[str], opts: dict[str, Any]) -> None:
                                          f"(owner {result['owner']}), {result['path']}"
                                          + (f"; published as {result['published']}" if result.get("published") else "")
                                          + (f"; not published: {result['reason']}" if result.get("reason") else ""))
+        line += "".join(f"\nWarning: {w}" for w in result.get("warnings") or [])
         _emit(result, bool(opts.get("json")), line)
     elif command == "show":
         found = show(target, int(opts["version"]) if opts.get("version") else None)

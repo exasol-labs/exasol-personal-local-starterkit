@@ -989,6 +989,11 @@ jobs:
       # The schema map: keys, links declared and found, approve and the joined view.
       - run: python3 tests/test_descriptor_schema.py
         if: matrix.shard == 4
+      # The draft scored against a reviewer's answers (held-out tables too), and the approve step's look at the data.
+      - run: python3 tests/test_descriptor_benchmark.py
+        if: matrix.shard == 4
+      - run: python3 tests/test_descriptor_review.py
+        if: matrix.shard == 4
       - run: python3 tests/test_notebook_helpers.py
         if: matrix.shard == 4
       - run: python3 tests/test_model_provider.py

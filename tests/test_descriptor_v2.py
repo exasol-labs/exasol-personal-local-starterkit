@@ -99,7 +99,8 @@ class ReaderTest(unittest.TestCase):
                 d = rules.read_descriptor(ROOT / "data" / "datasets" / name)
                 self.assertEqual((d.schema_version, d.version, d.status, d.owner, d.drafted_by, d.source),
                                  (3, 1, "approved", "kit", "shipped", name))
-                self.assertEqual((d.created, d.live_source), ("2026-11-05T00:00:00Z", None))
+                self.assertRegex(d.created, r"^\d{4}-\d{2}-\d{2}T00:00:00Z$")      # the day the kit approved it
+                self.assertIsNone(d.live_source)
                 self.assertTrue(d.digest.startswith("sha256:"))
                 self.assertTrue(d.slots["key"] and d.slots["target"])
 

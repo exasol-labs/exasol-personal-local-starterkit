@@ -22,15 +22,15 @@ slot_evidence:
   text: "no text column"
 columns:
   "ROW_ID": {role: "key", confidence: "high", evidence: "51,000 distinct, no nulls"}
-  "TRANSACTION_ID": {role: "identifier", confidence: "high", evidence: "98% distinct"}
+  "TRANSACTION_ID": {role: "identifier", confidence: "high", evidence: "100% code-shaped, 50,000 distinct"}
   "USER_ID": {role: "identifier", confidence: "high", evidence: "integer named as an identifier, 4,000 distinct"}
   "TRANSACTION_AMOUNT": {role: "measure", confidence: "high", evidence: "DECIMAL(10,2), 5.03 to 49997.8"}
   "TRANSACTION_TYPE": {role: "category", confidence: "high", evidence: "5 distinct"}
-  "TRANSACTION_HOUR": {role: "category", confidence: "high", evidence: "24 distinct"}
+  "TRANSACTION_HOUR": {role: "category", confidence: "low", evidence: "24 distinct"}
   "DEVICE_USED": {role: "category", confidence: "high", evidence: "4 distinct"}
   "LOCATION": {role: "category", confidence: "high", evidence: "8 distinct"}
-  "PREVIOUS_FRAUDULENT_TRANSACTIONS": {role: "category", confidence: "high", evidence: "5 distinct"}
-  "ACCOUNT_AGE": {role: "measure", confidence: "low", evidence: "integer, no identifier in its name, 1 to 119"}
-  "TRANSACTIONS_LAST_24H": {role: "category", confidence: "high", evidence: "14 distinct"}
+  "PREVIOUS_FRAUDULENT_TRANSACTIONS": {role: "category", confidence: "low", evidence: "5 distinct"}
+  "ACCOUNT_AGE": {role: "measure", confidence: "high", evidence: "integer named as an amount, 119 distinct, 1 to 119"}
+  "TRANSACTIONS_LAST_24H": {role: "category", confidence: "low", evidence: "14 distinct"}
   "PAYMENT_METHOD": {role: "category", confidence: "high", evidence: "5 distinct"}
   "FRAUDULENT": {role: "flag", confidence: "high", evidence: "0 95.1%, 1 4.9%"}

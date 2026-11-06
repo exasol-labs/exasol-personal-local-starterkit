@@ -32,6 +32,9 @@ class ThresholdTest(unittest.TestCase):
                          (roles.SENSITIVE_SHARE, roles.DATE_SHARE, roles.TEXT_AVG_LENGTH, roles.TEXT_DISTINCT_RATIO,
                           roles.CATEGORY_DISTINCT, roles.CATEGORY_RATIO, roles.IDENTIFIER_RATIO, roles.NEAR))
         self.assertEqual(8, len(roles.ROLES))
+        self.assertEqual((0.5, 15, 10, 0.90, 0.98, 0.5),
+                         (roles.TEXT_WORDS_SHARE, roles.TEXT_WORDS_LENGTH, roles.TEXT_NAMED_LENGTH, roles.CODE_SHARE,
+                          roles.NUMBER_SHARE, roles.LABEL_RATIO))
 
     def test_sensitive_at_90_percent(self):
         self.assertTrue(classify(distinct=800, patterns={"email": 900}).get("sensitive"))
@@ -49,16 +52,19 @@ class ThresholdTest(unittest.TestCase):
     def test_category_at_50_distinct_and_2_percent(self):
         self.assertEqual("category", classify(kind="integer", distinct=50)["role"])
         self.assertEqual("measure", classify(kind="integer", distinct=51)["role"])
-        self.assertEqual("category", classify(rows=10000, distinct=200)["role"])
-        self.assertEqual("other", classify(rows=10000, distinct=201)["role"])
+        self.assertIn("2% of rows", classify(rows=10000, distinct=200)["evidence"])
+        self.assertIn("short labels", classify(rows=10000, distinct=201)["evidence"])            # the next rule down
+        self.assertEqual("other", classify(rows=10000, distinct=201, avg_length=45)["role"])     # long: no label
 
-    def test_string_identifier_at_90_percent_distinct(self):
-        self.assertEqual("identifier", classify(non_null=990, distinct=900)["role"])
-        self.assertEqual("other", classify(non_null=990, distinct=899)["role"])
+    def test_string_identifier_at_90_percent_of_the_values_present(self):
+        self.assertEqual("identifier", classify(distinct=900, avg_length=30)["role"])
+        self.assertEqual("other", classify(distinct=899, avg_length=30)["role"])
+        self.assertEqual("identifier", classify(non_null=500, distinct=450, avg_length=30)["role"])   # gaps do not count
 
     def test_low_confidence_within_10_percent(self):
-        self.assertEqual("low", classify(kind="integer", distinct=46)["confidence"])
-        self.assertEqual("high", classify(kind="integer", distinct=44)["confidence"])
+        self.assertEqual("low", classify(distinct=46)["confidence"])
+        self.assertEqual("high", classify(distinct=44)["confidence"])
+        self.assertEqual("low", classify(kind="integer", distinct=5)["confidence"])     # a number with few values: a guess
         self.assertEqual("low", classify(distinct=500, avg_length=43)["confidence"])
         self.assertEqual("high", classify(distinct=600, avg_length=45)["confidence"])
         self.assertEqual("low", classify(distinct=900, patterns={"iso": 981})["confidence"])
@@ -81,9 +87,60 @@ class RuleOrderTest(unittest.TestCase):
         self.assertNotEqual("key", classify(kind="integer", distinct=1000)["role"])
         self.assertNotEqual("key", classify(kind="decimal", distinct=1000, exact_distinct=1000)["role"])
 
-    def test_a_unique_email_is_a_sensitive_key(self):
+    def test_a_unique_email_is_a_sensitive_identifier_not_a_key(self):
         found = classify(distinct=1000, exact_distinct=1000, patterns={"email": 1000})
-        self.assertEqual(("key", True), (found["role"], found["sensitive"]))
+        self.assertEqual(("identifier", True), (found["role"], found["sensitive"]))
+
+    def test_unique_text_is_a_key_only_when_code_shaped_or_named_so(self):
+        self.assertEqual("key", classify(distinct=1000, exact_distinct=1000, patterns={"code": 1000})["role"])
+        self.assertEqual("key", classify(distinct=1000, exact_distinct=1000, name="ORDER_NO", avg_length=12)["role"])
+        self.assertEqual("category", classify(rows=25, distinct=25, exact_distinct=25, name="N_NAME")["role"])
+        self.assertEqual("identifier", classify(distinct=1000, exact_distinct=1000, avg_length=20)["role"])
+
+    def test_one_value_in_every_row_is_other(self):
+        self.assertEqual("other", classify(distinct=1, top=[["INR", 1000]])["role"])
+        self.assertIn("else empty (600 of 1,000 rows empty)", classify(non_null=400, distinct=1)["evidence"])
+
+    def test_decimals_are_measures_however_few_values(self):
+        self.assertEqual(("measure", "high"), tuple(classify(kind="decimal", distinct=11, name="L_DISCOUNT")[k]
+                                                    for k in ("role", "confidence")))
+
+    def test_an_integer_named_as_an_amount_is_a_measure(self):
+        for name in ("QTY", "UNIT_COUNT", "YEARS_OF_SERVICE", "PS_AVAILQTY", "DISCOUNT_PCT"):
+            self.assertEqual("measure", classify(kind="integer", distinct=12, name=name)["role"], name)
+        self.assertEqual("category", classify(kind="integer", distinct=12, name="RATING")["role"])
+
+    def test_an_identifier_name_beats_an_amount_name(self):
+        self.assertEqual("identifier", classify(kind="integer", distinct=900, name="ACCOUNT_ID")["role"])
+        self.assertEqual("identifier", classify(kind="integer", distinct=900, name="O_CUSTKEY")["role"])
+        self.assertEqual("identifier", classify(kind="integer", distinct=10, name="CITY_ID")["role"])
+        self.assertEqual("category", classify(kind="integer", distinct=3, name="STATUS_CODE")["role"])
+
+    def test_code_shaped_text_is_an_identifier_and_short_labels_a_category(self):
+        self.assertEqual("identifier", classify(rows=10000, distinct=7000, patterns={"code": 10000})["role"])
+        found = classify(rows=10000, distinct=800, avg_length=9, patterns={"nodigit": 10000})
+        self.assertEqual(("category", "low"), (found["role"], found["confidence"]))
+
+    def test_text_by_its_words_by_its_name_and_counted_over_the_values_present(self):
+        self.assertEqual("text", classify(distinct=1000, avg_length=27, patterns={"words": 900})["role"])
+        self.assertEqual("text", classify(distinct=1000, avg_length=14, name="P_COMMENT")["role"])
+        self.assertEqual("text", classify(non_null=300, distinct=300, avg_length=80)["role"])     # 70% empty notes
+        self.assertNotEqual("text", classify(distinct=1000, avg_length=14, patterns={"words": 900})["role"])
+
+    def test_epoch_seconds_named_as_a_time_are_time(self):
+        found = classify(kind="integer", distinct=1000, exact_distinct=1000, name="EPOCH_TS", min="1740787200", max="1741087200")
+        self.assertEqual("time", found["role"])
+        self.assertEqual("key", classify(kind="integer", distinct=1000, exact_distinct=1000, name="EVENT_ID",
+                                         min="1740787200", max="1741087200")["role"])
+
+    def test_names_that_make_a_column_sensitive(self):
+        self.assertTrue(classify(distinct=800, name="SHIP_POSTAL_CODE", patterns={"postal": 1000})["sensitive"])
+        self.assertNotIn("sensitive", classify(distinct=800, name="SHIP_POSTAL_CODE", patterns={"postal": 800}))
+        self.assertTrue(classify(distinct=800, name="DRIVER_NAME")["sensitive"])
+        self.assertTrue(classify(distinct=800, name="lastName")["sensitive"])
+        self.assertNotIn("sensitive", classify(distinct=800, name="PRODUCT_NAME"))
+        self.assertTrue(classify(distinct=800, name="STREET_ADDRESS", avg_length=24)["sensitive"])
+        self.assertNotIn("sensitive", classify(distinct=50, name="ADDR_STATE", avg_length=2))
 
     def test_sensitive_beats_category_however_few_values(self):
         found = classify(distinct=30, patterns={"email": 1000})
@@ -101,11 +158,12 @@ class RuleOrderTest(unittest.TestCase):
         self.assertNotEqual("time", classify(distinct=900, patterns={"slash": 1000, "slash_first_over_12": 1,
                                                                         "slash_second_over_12": 1})["role"])
 
-    def test_name_hints_settle_only_the_integer_line(self):
+    def test_name_hints_settle_the_integer_lines(self):
         self.assertEqual(["customer", "no"], roles.name_tokens("CustomerNo"))
         self.assertEqual(["customer", "no"], roles.name_tokens("CUSTOMER_NO"))
         self.assertEqual("identifier", classify(kind="integer", distinct=400, name="CUSTOMER_NO")["role"])
-        self.assertEqual("measure", classify(kind="integer", distinct=400, name="PAID_AMOUNT")["role"])
+        self.assertEqual(("measure", "high"), tuple(classify(kind="integer", distinct=400, name="PAID_AMOUNT")[k]
+                                                    for k in ("role", "confidence")))
         self.assertEqual("measure", classify(kind="decimal", distinct=400, name="CUSTOMER_ID")["role"])
         self.assertEqual("measure", classify(kind="integer", distinct=400, name="NOTICE")["role"])   # no whole token
 
@@ -158,7 +216,7 @@ class SyntheticTableTest(unittest.TestCase):
 
     def test_an_integer_id_that_looks_like_a_count_is_an_identifier_by_name(self):
         self.assertEqual(("identifier", "high"), (self.found["STORE_ID"]["role"], self.found["STORE_ID"]["confidence"]))
-        self.assertEqual(("measure", "low"), (self.found["QUANTITY"]["role"], self.found["QUANTITY"]["confidence"]))
+        self.assertEqual(("measure", "high"), (self.found["QUANTITY"]["role"], self.found["QUANTITY"]["confidence"]))
 
     def test_date_strings_carry_their_range(self):
         self.assertIn("2024-01-04 to", self.found["DELIVERED"]["evidence"])

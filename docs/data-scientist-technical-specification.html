@@ -207,24 +207,48 @@ footer { margin-top:3rem; padding-top:1rem; border-top:1px solid var(--rule); fo
 
 <section id="descriptor">
 <h2><span class="n">04</span>The column map (descriptor)</h2>
-<p>The kit profiles the table (type, share of empty cells, distinct values, date span, text length), proposes a role for every column with the evidence that chose it, and the user corrects and approves it in a picker - no YAML to edit.</p>
+<p>The kit profiles the table (type, share of empty cells, distinct values, date span, text length, and the shape of each text column's values), proposes a role for every column with the evidence that chose it, and the user corrects and approves it in a picker - no YAML to edit.</p>
 <div class="two">
   <div class="card"><h4>Column roles</h4><p><code>key</code>, <code>time</code>, <code>measure</code>, <code>category</code>, <code>flag</code>, <code>text</code>, <code>identifier</code>, <code>other</code> - one per column.</p></div>
   <div class="card"><h4>Slots the notebooks read</h4><p><code>key</code>, <code>time</code> (date), <code>target</code> (label), <code>category</code>, <code>entity</code>, <code>text</code>. An empty slot carries its reason, and the steps that need it skip and print that reason.</p></div>
 </div>
+<h3>How a role is chosen</h3>
+<p>One profiling pass reads three things per column, and the first rule that matches wins (<code>setup/lib/descriptor/roles.py</code>, every threshold pinned by a test):</p>
+<div class="tbl"><table>
+<thead><tr><th>Signal</th><th>What it settles</th><th>Example</th></tr></thead>
+<tbody>
+<tr><td>the type</td><td>dates and timestamps are time; a decimal with a scale is a measure however few values it has</td><td><code>L_DISCOUNT</code> (11 values) → measure</td></tr>
+<tr><td>the numbers</td><td>no nulls and all distinct → key; two values → flag; one value → other; ≤ 50 values → category</td><td><code>CURRENCY</code> (one value) → other</td></tr>
+<tr><td>the value shape</td><td>one token holding a digit is a code → identifier; three words or more → text; a date pattern → time; e-mail, phone, IBAN, postcode → sensitive</td><td><code>SKU-1042</code>, <code>B09KXVBD7Z</code> → identifier</td></tr>
+<tr><td>the name, last</td><td>only settles what the numbers leave open; never overrides a clear shape</td><td><code>QTY</code> (10 values) → measure, <code>O_CUSTKEY</code> → identifier</td></tr>
+</tbody></table></div>
+<p>A unique column is a key only when it is an integer, or text that is code-shaped or named like a key - so an e-mail, an IBAN or ten country names in a ten-row table are never keys. Sensitive also by name: a postcode name with postcode-shaped values, a person's name (<code>CUSTOMER_NAME</code>, <code>DRIVER_NAME</code>), a street address. Confidence is <code>low</code> wherever the draft is a guess, so the reviewer reads those first.</p>
+<h3>How good the first draft is</h3>
+<p><code>tools/descriptor_benchmark.py</code> scores a fresh draft against a reviewer's answers: the kit's 15 dataset tables, 5 synthetic tables shaped like common data (customers, order items, sensor readings, employees, loans), and 5 held-out tables written after the rules and never tuned to. A column where two roles are both right lists both.</p>
+<div class="tbl"><table>
+<thead><tr><th>Score</th><th class="num">Before</th><th class="num">Now</th><th class="num">Held out, first run</th></tr></thead>
+<tbody>
+<tr><td>roles right (183 / 54 columns)</td><td class="num">76.0%</td><td class="num">100%</td><td class="num">98.1%</td></tr>
+<tr><td>slots right</td><td class="num">92.6%</td><td class="num">100%</td><td class="num">100%</td></tr>
+<tr><td>sensitive columns marked</td><td class="num">85.7%</td><td class="num">100%</td><td class="num">66.7%</td></tr>
+<tr><td>wrong roles marked low</td><td class="num">43.2%</td><td class="num">100%</td><td class="num">0% (1 miss)</td></tr>
+<tr><td>high-confidence roles right</td><td class="num">83.3%</td><td class="num">100%</td><td class="num">97.9%</td></tr>
+</tbody></table></div>
+<p>The held-out tables' two misses - <code>account_id</code> read as an amount ("acc<b>count</b>"), and <code>DRIVER_NAME</code> not marked sensitive - were fixed after that run and are recorded in the tool; all held-out scores are 100% now. <code>tests/test_descriptor_benchmark.py</code> fails when any score falls under its floor.</p>
 <h3>Draft, approve, version</h3>
 <ul>
   <li>A draft is enough to explore. Ask your data and Share call <code>require_approved</code> and refuse a draft, saying how to approve it.</li>
   <li>Approving writes <code>v&lt;n&gt;.yaml</code> and <code>current.yaml</code> under <code>~/.exasol-starter-kit/descriptors/&lt;SCHEMA.TABLE&gt;/</code>; a version file is never rewritten.</li>
   <li>The roles are published as a view, <code>EXAKIT_SEMANTIC.&lt;SCHEMA&gt;__&lt;TABLE&gt;</code>, whose column comments carry them; agents read the roles from there over MCP.</li>
   <li>Approving roles that the current version already has writes nothing and says where that version is stored (and the view, when it exists).</li>
+  <li>Approving looks at the data first (<code>setup/lib/descriptor/review.py</code>, at most three <code>SELECT</code>s). <b>Refused</b>, with what to change: a key slot whose column repeats or has a gap now; a target that does not hold exactly two values. <b>Warned</b>, and approved: a column that gives the target away (the Explore notebook's leakage rule), and the low-confidence roles approved as drafted, by name - approving them is a decision the approver should know they made.</li>
 </ul>
 <p>The column map describes one table. How the tables of a schema fit together is a second, smaller document beside it, the <a href="#schema">schema map</a>.</p>
 <pre><code><span class="c"># fraud_transactions, shipped descriptor (excerpt)</span>
 grain: "one row per transaction (1,000 transactions appear twice)"
 slots: { key: ROW_ID, time: null, text: null, target: FRAUDULENT, category: TRANSACTION_TYPE, entity: LOCATION }
 columns:
-  "TRANSACTION_ID": {role: "identifier", evidence: "98% distinct"}
+  "TRANSACTION_ID": {role: "identifier", evidence: "100% code-shaped, 50,000 distinct"}
   "DEVICE_USED":    {role: "category",   evidence: "4 distinct"}
   "FRAUDULENT":     {role: "flag",       evidence: "0 95.1%, 1 4.9%"}</code></pre>
 </section>
@@ -400,6 +424,7 @@ joined_dataset = joined_view_proposal.create(connection) if USE_JOINED and joine
 <tr><td>Typed view on <code>fraud_transactions</code></td><td>two placeholders become <code>NULL</code>, 885 copies dropped; a new approved column map with the same roles</td></tr>
 <tr><td>Schema map on TPC-H (no foreign keys declared)</td><td>8 tables, their 8 declared primary keys (two of them two columns), 9 links found from the values, all correct (e.g. <code>ORDERS.O_CUSTKEY → CUSTOMER.C_CUSTKEY</code>, <code>CUSTOMER.C_NATIONKEY → NATION.N_NATIONKEY</code>); approved and published as <code>EXAKIT_SEMANTIC.TPCH__RELATIONS</code></td></tr>
 <tr><td>Joined view of <code>ORDERS</code></td><td>adds CUSTOMER → NATION → REGION; 30,000 rows, the same as <code>ORDERS</code>; its column map approved as <code>orders_joined</code></td></tr>
+<tr><td>Draft of <code>AMAZON.ORDER_LINES</code> on the database</td><td>profiled in 2.7 s with the value-shape patterns; <code>SKU</code>, <code>ASIN</code> identifiers, <code>QTY</code> a measure, <code>SHIP_POSTAL_CODE</code> sensitive; approving with <code>CANCELLED</code> as target warns "STATUS gives CANCELLED away" (review 0.6 s)</td></tr>
 <tr><td>Joined SQL of <code>LINEITEM</code></td><td>7 joins (NATION twice, by supplier and by customer); 120,515 rows, the same as <code>LINEITEM</code>, 53 distinct column names</td></tr>
 </tbody></table></div>
 <div class="note">The low AUCs are the honest answer: category and city say little about Amazon cancellations or this fraud label, and the note under the score says so instead of presenting a number as a finding.</div>
@@ -466,6 +491,7 @@ joined_dataset = joined_view_proposal.create(connection) if USE_JOINED and joine
   <dt>Many-to-one link</dt><dd>A column whose values are another table's key (an order's customer number); following it adds that table's columns without adding rows.</dd>
   <dt>Joined view</dt><dd>One table with every table its links reach, as one view with its own column map.</dd>
   <dt>Typed view</dt><dd>The table with numbers and dates in their types, placeholders as <code>NULL</code> and copies dropped, proposed from the values.</dd>
+  <dt>Confidence</dt><dd>High or low: low where the draft is a guess (a number near its threshold, a role from a name alone). Every role the benchmark's reviewer disagreed with was marked low.</dd>
   <dt>Slot</dt><dd>One of key, time, target, category, entity, text: the column a notebook step reads for that purpose.</dd>
   <dt>Leakage</dt><dd>A column that knows the outcome because it was written after it; it makes a model look perfect and fail on new rows.</dd>
   <dt>Baseline</dt><dd>The simplest answer a model has to beat, such as always predicting the common class.</dd>

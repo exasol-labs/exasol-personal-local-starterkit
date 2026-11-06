@@ -9,10 +9,13 @@ approved; it is never a version.
 approve() runs these in order and stops at the first failure:
     1. every column has a role and no column sits in two slots (the descriptor rules);
     2. the live schema digest still matches the draft's - the table may have been reloaded since describe();
-    3. v(n+1).yaml with status approved, the owner (the OS user unless given) and approved_at; v(n) is untouched;
-    4. current.yaml replaced through a temp file and os.replace;
-    5. published (publish.py) and read back;
-    6. one line for the workflow log: table, version, what was published.
+    3. the data against the slots (review.py): the key unique and never empty now, the target two-valued - else
+       refused; a column that gives the target away, and the low-confidence roles nobody changed - warned, in the
+       result's "warnings" and the log (a live source is not queried: every count would be a round trip to it);
+    4. v(n+1).yaml with status approved, the owner (the OS user unless given) and approved_at; v(n) is untouched;
+    5. current.yaml replaced through a temp file and os.replace;
+    6. published (publish.py) and read back;
+    7. one line for the workflow log: table, version, what was published, the warnings.
 A publish that fails leaves the approval standing: the result says "approved, not published" and why. Approving
 what the current version already says writes nothing.
 """
@@ -28,6 +31,7 @@ from typing import Any, Callable
 from . import draft as drafting
 from . import profile as profiling
 from . import publish as publishing
+from . import review as reviewing
 from . import store
 
 OWNER_VARIABLE = "EXAKIT_DESCRIPTOR_OWNER"
@@ -74,8 +78,13 @@ def _carry_over(doc: dict[str, Any], old: dict[str, Any], old_profile: dict[str,
                 new_profile: dict[str, Any]) -> list[str]:
     """Roles of the columns whose name and type did not change come from the approved version; the rest are flagged
     (low confidence, the evidence saying so). The changed or new column names."""
-    old_types = {c["column"]: c["type"] for c in (old_profile or {}).get("columns", [])}
     new_types = {c["column"]: c["type"] for c in new_profile["columns"]}
+    if old_profile is None and old.get("source", {}).get("schema_digest") == new_profile["source"]["schema_digest"]:
+        # No profile kept with the approval (a shipped descriptor the store adopted), but the same names and types in
+        # the same order: nothing changed.
+        old_types = dict(new_types)
+    else:
+        old_types = {c["column"]: c["type"] for c in (old_profile or {}).get("columns", [])}
     changed = []
     for name, entry in doc["columns"].items():
         if name in old["columns"] and old_types.get(name) == new_types.get(name) and name in old_types:
@@ -161,6 +170,16 @@ def approve(run: Callable[[str], list[dict[str, Any]]], execute: Callable[[str],
                 "published": view,
                 "message": f"{table} v{current['version']} already says this; nothing was written. It is stored at "
                            f"{path}" + (f"; published as {view}" if view else "")}
+    if doc["source"].get("kind") == "virtual":
+        checked = {"refused": [], "leaks": [], "unreviewed": reviewing.unreviewed(doc)}
+    else:
+        checked = reviewing.review(run, doc)
+    if checked["refused"]:
+        raise ValueError("The descriptor cannot be approved: " + "; ".join(checked["refused"]))
+    warnings = list(checked["leaks"])
+    if checked["unreviewed"]:
+        warnings.append(f"{len(checked['unreviewed'])} role(s) drafted at low confidence were approved as drafted: "
+                        + "; ".join(checked["unreviewed"]))
     stamp = (now() if now else dt.datetime.now(dt.timezone.utc)).replace(microsecond=0)
     version = max(store.versions(table, home) or [0]) + 1
     final = drafting.approved(doc, owner_name(owner), stamp.isoformat().replace("+00:00", "Z"), version=version)
@@ -169,12 +188,13 @@ def approve(run: Callable[[str], list[dict[str, Any]]], execute: Callable[[str],
     store.replace_current(table, text, home)
     store.promote_profile(table, version, home)
     result: dict[str, Any] = {"status": "approved", "table": table, "version": version, "owner": final["owner"],
-                              "path": str(path)}
+                              "path": str(path), "warnings": warnings}
     if publish:
         try:
             result["published"] = publishing.publish(execute, run, final, reader)["view"]
         except Exception as err:                       # the approval stands; say why it is not published
             result["status"], result["reason"] = "approved, not published", f"{type(err).__name__}: {err}"
     if log:
-        log("describe.approve", table=table, version=version, published=result.get("published") or result.get("reason"))
+        log("describe.approve", table=table, version=version, published=result.get("published") or result.get("reason"),
+            warnings=warnings)
     return result

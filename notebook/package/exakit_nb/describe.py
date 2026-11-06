@@ -289,6 +289,8 @@ class Draft:
                     print(f"Published as {result['published']}: agents read the roles from its column comments.")
                 elif result.get("reason"):
                     print(f"Approved, not published: {result['reason']}. Retry with: exakit describe {self.id} --comments")
+                for warning in result.get("warnings") or []:
+                    print(f"Warning: {warning}")
             current = service.store.folder(result["table"]) / service.store.CURRENT
             self.doc = service.flow.load(current.read_text(encoding="utf-8"))
             return dataset(conn, str(current))
