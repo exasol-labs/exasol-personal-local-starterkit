@@ -129,6 +129,36 @@ _fresh_manifest; manifest_set components.mcp_server.backend sidecar
 check "an older launcher after an earlier sidecar run: not applied" 1 "$(STUB_HELP='install start stop' mcp_sidecar_apply; echo $?)"
 check "...and the record goes" "" "$(manifest_get components.mcp_server.backend 2>/dev/null)"
 
+echo "updating the launcher's MCP server: the image is the version:"
+IMAGE_VERSION="$(exakit_versions_pin components.mcp.sidecar_image | sed 's/@.*//; s/.*://')"
+check "the image comes from this kit copy" "$(exakit_versions_pin components.mcp.sidecar_image)" "$(mcp_sidecar_image)"
+check "...and its version is the image tag" "$IMAGE_VERSION" "$(mcp_sidecar_image_version)"
+# A fetched document naming another image changes nothing: a digest read from
+# the mutable main branch would be that branch vouching for itself (SEC-13).
+sed 's#mcp-server:[0-9][^@"]*@sha256:[0-9a-f]*#mcp-server:9.9.9@sha256:'"$(printf 'f%.0s' $(seq 64))"'#' \
+    "$ROOT/versions.json" > "$WORK/fetched.json"
+check "a fetched versions.json cannot swap the image" "$IMAGE_VERSION" "$(_EXAKIT_VERSIONS_DOC="$WORK/fetched.json" mcp_sidecar_image_version)"
+_fresh_manifest; manifest_set components.mcp_server.backend sidecar
+exakit_component_latest() { printf '9.9.9\n'; }
+check "offered on a sidecar: the image's version, not PyPI's newest" "$IMAGE_VERSION" \
+    "$(EXAKIT_VERSION_POLICY=latest exakit_component_available mcp)"
+_fresh_manifest
+check "...the kit's own stdio server still follows the policy" "9.9.9" \
+    "$(EXAKIT_VERSION_POLICY=latest exakit_component_available mcp)"
+exakit_component_current() { manifest_get components.mcp_server.version 2>/dev/null; }
+_fresh_manifest; manifest_set components.mcp_server.backend sidecar; manifest_set components.mcp_server.version 2.3.0
+: > "$STUB_CALLS"; rm -f "$STUB_DEF.seen"; STUB_STATUS="$SERVING"
+check "a version with no pinned image is refused" 1 "$(EXAKIT_MCP_VERSION=9.9.9 mcp_update >/dev/null 2>&1; echo $?)"
+check "...nothing reconciled" 0 "$(grep -c '^start' "$STUB_CALLS")"
+check "...and nothing recorded as updated" "" "$(manifest_get desired.mcp 2>/dev/null)"
+check "...the record keeps what runs" "2.3.0" "$(manifest_get components.mcp_server.version)"
+check "the pinned image's version updates" 0 "$(mcp_update >/dev/null 2>&1; echo $?)"
+check "...reconciled by exasol start" 1 "$(grep -c '^start' "$STUB_CALLS")"
+check "...recorded as the image's version" "$IMAGE_VERSION" "$(manifest_get components.mcp_server.version)"
+check "...and as the desired one" "$IMAGE_VERSION" "$(manifest_get desired.mcp)"
+check "run again: already current, nothing offered" 0 "$(mcp_update >/dev/null 2>&1; echo $?)"
+check "...and nothing reconciled again" 1 "$(grep -c '^start' "$STUB_CALLS")"
+
 echo ""
 echo "mcp-sidecar.sh: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

@@ -102,6 +102,22 @@ Check "a sidecar that never serves: not applied" $false (Set-McpSidecar)
 Check "...the old record is cleared" "" "$(Get-ExakitManifestValue 'components.mcp_server.backend')"
 Check "...and the sidecar is switched off" $true (@($script:calls) -contains "sidecar disable mcp")
 
+Write-Host "updating the launcher's MCP server: the image is the version:"
+$pinned = Get-ExakitVersionsPin -Path "components.mcp.sidecar_image"
+$imageVersion = $pinned.Split("@")[0].Split(":")[-1]
+Check "the image comes from this kit copy" $pinned (Get-McpSidecarImage)
+Check "...and its version is the image tag" $imageVersion (Get-McpSidecarImageVersion)
+function Get-ExakitComponentLatest([string]$Component) { return "9.9.9" }
+$savedPolicy = $script:VersionPolicy
+$script:VersionPolicy = "latest"
+Reset-Manifest; Set-ExakitManifestValue "components.mcp_server.backend" "sidecar"
+Check "offered on a sidecar: the image's version, not PyPI's newest" $imageVersion (Get-ExakitComponentAvailable "mcp")
+Reset-Manifest; Set-ExakitManifestValue "components.mcp_server.backend" "stdio"
+Check "...the kit's own stdio server still follows the policy" "9.9.9" (Get-ExakitComponentAvailable "mcp")
+$script:VersionPolicy = $savedPolicy
+$updater = Get-Content -Raw -LiteralPath (Join-Path $repo "setup/exakit.ps1")
+Check "exakit update refuses a version with no pinned image" $true ($updater -match '\(Get-McpSidecarImageVersion\) -ne \$available')
+
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 Write-Host ""
 Write-Host "passed: $($script:PASS), failed: $($script:FAIL)"

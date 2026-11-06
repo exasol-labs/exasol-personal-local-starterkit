@@ -3634,6 +3634,15 @@ exakit_component_available() {
                 ;;
         esac
     fi
+    # The MCP server the launcher runs beside the database is an image pinned by
+    # digest in this kit copy: its tag is the only version an update can put
+    # there, whatever PyPI or the fetched document say is newest. Offering
+    # those instead parked the row on "update available" for good.
+    if [ "$1" = mcp ] && command -v mcp_sidecar_image_version >/dev/null 2>&1 && \
+       [ "$(manifest_get components.mcp_server.backend 2>/dev/null || true)" = sidecar ]; then
+        mcp_sidecar_image_version
+        return 0
+    fi
     case "${EXAKIT_VERSION_POLICY:-manifest}" in
         latest)
             exakit_component_latest "$1"

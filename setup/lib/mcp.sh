@@ -276,6 +276,15 @@ mcp_update() {
     # `exasol start` recreates that one container. The client entries are a URL
     # that does not change, so there is nothing to rewrite in them.
     if [ "$(manifest_get components.mcp_server.backend 2>/dev/null || true)" = sidecar ]; then
+        # The image is the version: writing the one this kit copy pins and
+        # calling that "$_latest" was an update that never happened, offered
+        # again on the next run. Only an explicit EXAKIT_MCP_VERSION can ask for
+        # a version with no pinned image (what is offered is the image's own).
+        _mu_image_version="$(mcp_sidecar_image_version)"
+        if [ "$_mu_image_version" != "$_latest" ]; then
+            warn "This kit pins no launcher image of MCP server $_latest (it pins $_mu_image_version), so the MCP server beside your database stays at ${_current:-$_mu_image_version}. A kit update brings newer images: exakit update"
+            return 1
+        fi
         if mcp_sidecar_apply; then
             manifest_set desired.mcp "$_latest"
             ok "MCP server updated; database data was not changed"
@@ -775,6 +784,23 @@ EXAKIT_SIDECAR_PYYAML="${EXAKIT_SIDECAR_PYYAML:-PyYAML==6.0.3}"
 EXAKIT_MCP_SIDECAR_IMAGE_FALLBACK="docker.io/exasol/mcp-server:2.4.0@sha256:ae13d5430dff463aa0817f5a188211820fb8c2565e95e477d5ca71b04bb50b68"
 EXAKIT_MCP_BRIDGE_FALLBACK="mcp-proxy@0.13.0"
 
+# mcp_sidecar_image — the launcher's MCP server image, by digest, from THIS KIT
+# COPY's versions.json (SEC-13): a digest read from the fetched main branch
+# would be the mutable branch vouching for itself, so a newer image arrives with
+# the kit update that reviewed it. mcp_sidecar_image_version is its tag, the
+# version that image IS - what an update of a sidecar install can offer and
+# record. Twins: Get-McpSidecarImage / Get-McpSidecarImageVersion.
+mcp_sidecar_image() {
+    _msi_image="$(exakit_versions_pin components.mcp.sidecar_image 2>/dev/null || true)"
+    case "$_msi_image" in *@sha256:*) : ;; *) _msi_image="$EXAKIT_MCP_SIDECAR_IMAGE_FALLBACK" ;; esac
+    printf '%s\n' "$_msi_image"
+}
+mcp_sidecar_image_version() {
+    _msiv="$(mcp_sidecar_image)"
+    _msiv="${_msiv%%@*}"
+    printf '%s\n' "${_msiv##*:}"
+}
+
 # mcp_sidecar_supported — the launcher can run the kit's MCP server here: not
 # turned off (EXAKIT_MCP_BACKEND=uvx), the kit's Exasol Personal deployment,
 # and a launcher that has both `sidecar` and `mcp`.
@@ -829,8 +855,7 @@ else:
 # the kit's read-only user in place of the deployment's SYS. The password is a
 # file reference the editor resolves; it is never in this text.
 _mcp_sidecar_definition() {
-    _msd_image="$(exakit_versions_value components.mcp.sidecar_image 2>/dev/null || true)"
-    case "$_msd_image" in *@sha256:*) : ;; *) _msd_image="$EXAKIT_MCP_SIDECAR_IMAGE_FALLBACK" ;; esac
+    _msd_image="$(mcp_sidecar_image)"
     run_python_any - "$_msd_image" "$EXAKIT_MCP_SIDECAR_PORT" "$1" "$2" <<'PY'
 import json, sys
 image, port, user, password_file = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
@@ -915,8 +940,7 @@ mcp_sidecar_apply() {
             # The server version is the image's tag (pinned with versions.json's
             # components.mcp.version): what `exakit version` reads with no pin in
             # any client entry.
-            _msa_tag="$(exakit_versions_value components.mcp.sidecar_image 2>/dev/null || true)"
-            _msa_tag="${_msa_tag%%@*}"; _msa_tag="${_msa_tag##*:}"
+            _msa_tag="$(mcp_sidecar_image_version)"
             case "$_msa_tag" in [0-9]*) manifest_set components.mcp_server.version "$_msa_tag" ;; esac
             manifest_set components.mcp_server.bridge "${_msa_bridge:-$EXAKIT_MCP_BRIDGE_FALLBACK}"
             # The same absolute uv/uvx the stdio server was given: Claude

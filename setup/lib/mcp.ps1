@@ -2101,9 +2101,20 @@ function Get-McpSidecarStatus {
     return $doc
 }
 
-function Get-McpSidecarDefinitionJson([string]$User, [string]$PasswordFile) {
-    $image = Get-ExakitVersionsValue "components.mcp.sidecar_image"
+# Get-McpSidecarImage - the launcher's MCP server image, by digest, from THIS KIT
+# COPY's versions.json (SEC-13); Get-McpSidecarImageVersion is its tag, the
+# version that image is. Twins of mcp_sidecar_image / mcp_sidecar_image_version.
+function Get-McpSidecarImage {
+    $image = Get-ExakitVersionsPin -Path "components.mcp.sidecar_image"
     if ("$image" -notlike "*@sha256:*") { $image = $script:McpSidecarImageFallback }
+    return "$image"
+}
+function Get-McpSidecarImageVersion {
+    return (Get-McpSidecarImage).Split("@")[0].Split(":")[-1]
+}
+
+function Get-McpSidecarDefinitionJson([string]$User, [string]$PasswordFile) {
+    $image = Get-McpSidecarImage
     $ref = { param($k) @{ secretKeyRef = @{ name = "exasol-database"; key = $k } } }
     $settings = [ordered]@{ default_row_limit = 1000; enable_read_query = $true; enable_summarize_table = $true
         enable_query_profiling = $true; enable_preprocessor_tools = $false; enable_write_query = $false
@@ -2179,7 +2190,7 @@ function Set-McpSidecar {
             if ($env:EXAKIT_MCP_BRIDGE_PREFETCH -ne "0") {
                 try { & $uvx "$bridge" --help *> $null } catch { Write-ExakitLog "INFO" "MCP: the Claude Desktop bridge was not fetched ahead" }
             }
-            $tag = ("" + (Get-ExakitVersionsValue "components.mcp.sidecar_image")).Split("@")[0].Split(":")[-1]
+            $tag = Get-McpSidecarImageVersion
             if ($tag -match '^[0-9]') { Set-ExakitManifestValue "components.mcp_server.version" $tag }
             Write-ExakitLog "OK" "MCP: the launcher's MCP server answers at $url as $user"
             return $true

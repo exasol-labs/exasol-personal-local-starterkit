@@ -3355,7 +3355,13 @@ function Invoke-ExakitUpdateRun {
                 }
             }
             "mcp" {
-                if ($available -and (Get-ExakitManifestValue "components.mcp_server.backend") -eq "sidecar" -and (Set-McpSidecar)) {
+                $onSidecar = (Get-ExakitManifestValue "components.mcp_server.backend") -eq "sidecar"
+                if ($available -and $onSidecar -and (Get-McpSidecarImageVersion) -ne $available) {
+                    # The image is the version: writing the one this kit copy
+                    # pins and calling that $available was an update that never
+                    # happened. Twin of the same guard in mcp_update.
+                    Fail "This kit pins no launcher image of MCP server $available (it pins $(Get-McpSidecarImageVersion)), so the MCP server beside your database stays as it is. A kit update brings newer images: exakit update"
+                } elseif ($available -and $onSidecar -and (Set-McpSidecar)) {
                     # The launcher's MCP server: the new image goes into its
                     # definition; the client entries are a URL that does not change.
                     Set-ExakitManifestValue "desired.mcp" $available

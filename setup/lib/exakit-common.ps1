@@ -7401,6 +7401,13 @@ function Get-ExakitComponentAvailable {
         $uvReport = Get-ExakitUvReport
         if ($uvReport.Verdict -eq "ok" -and $uvReport.Path -ne (Get-ExakitUvKitBin)) { return $uvReport.Version }
     }
+    # The launcher's MCP server is an image pinned by digest in this kit copy:
+    # its tag is the only version an update can put there. Twin of the same
+    # rule in exakit_component_available.
+    if ($Component -eq "mcp" -and (Get-Command Get-McpSidecarImageVersion -ErrorAction SilentlyContinue) -and
+        (Get-ExakitManifestValue "components.mcp_server.backend") -eq "sidecar") {
+        return (Get-McpSidecarImageVersion)
+    }
     if ($script:VersionPolicy -eq "latest") { return (Get-ExakitComponentLatest $Component) }
     if ($script:VersionPolicy -ne "manifest") { return (Get-ExakitComponentFallback $Component) }
     $block = Get-ExakitComponentBlock $Component
