@@ -36,6 +36,29 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
+    ## Optional: your model and Langfuse
+
+    > **What is this?** Where you tell the notebook which AI model to use, and where to record its calls (Langfuse: what was sent, the answer, the cost).
+    > We set it here so you need no terminal: fill in the plain values and run the cell; the keys are asked for in a hidden box.
+    > The keys stay in this notebook's kernel only - never in this file - and are gone when it stops. Left empty, the cell changes nothing.
+    """)
+    return
+
+
+@app.cell
+def _():
+    import exakit.nb as nb
+
+    MODEL_ID = ""           # e.g. "claude-opus-5-5"; empty: no model (or the one set before `exakit notebook`)
+    PROVIDER_BASE_URL = ""  # e.g. "https://api.anthropic.com/v1/" - any Chat Completions endpoint (MODEL-PROVIDERS.md lists more)
+    LANGFUSE_BASE_URL = ""  # e.g. "https://cloud.langfuse.com"; empty: the model calls are not traced
+    nb.use_model(MODEL_ID, PROVIDER_BASE_URL, LANGFUSE_BASE_URL)
+    return (nb,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
     ## Load the column map
 
     > **The column map (descriptor), again:** it says which column is the key, the time, the groups and the outcome (label).
@@ -49,9 +72,8 @@ def _(mo):
 
 
 @app.cell
-def _(DATASET, WORKFLOW_ID):
+def _(DATASET, WORKFLOW_ID, nb):
     import os
-    import exakit.nb as nb
     wid = nb.workflow('explore', resume=WORKFLOW_ID or os.environ.get('EXAKIT_WORKFLOW_ID'))
     conn = nb.connect()
     DATASET_1 = nb.chosen_dataset(DATASET)
@@ -62,12 +84,12 @@ def _(DATASET, WORKFLOW_ID):
     TEXT = ds.text_sql() if ds.has('text') else None
     DATE = ds.col('date') if ds.has('date') else None
     LABEL = ds.col('label') if ds.has('label') else None
-    skipped = {m['role']: m['reason'] for m in ds.missing if not ds.has(m['role'])}  # a role no column fits is None here, never guessed
-    missing_line = '; '.join((f'no {role} role: {reason}' for role, reason in skipped.items()))
+    skipped = {m['role']: m['reason'] for m in ds.missing if not ds.has(m['role'])}
+    missing_line = '; '.join((f'no {role} role: {reason}' for role, reason in skipped.items()))  # a role no column fits is None here, never guessed
     for role in ('entity', 'category', 'date', 'label', 'text'):
         if role in skipped:
             print(f'No {role} role ({skipped[role]}): steps that need it explain why they skip below.')
-    return CATEGORY, DATE, ENTITY, LABEL, TEXT, conn, ds, missing_line, nb
+    return CATEGORY, DATE, ENTITY, LABEL, TEXT, conn, ds, missing_line
 
 
 @app.cell(hide_code=True)
@@ -256,19 +278,11 @@ def _(mo):
 
     Needs a text column: on `amazon_sales` and `walmart_sales` it skips and says why. Your model reads the newest texts on each side of the label (label `= 1` and `= 0`) and sorts each side into a few themes. A theme found on one side only is the clue. The note under the result says how to read it.
 
-    To switch it on: set `EXAKIT_MODEL_ID`, `EXAKIT_PROVIDER_BASE_URL` and `EXAKIT_PROVIDER_API_KEY` before `exakit notebook`, then `USE_AI_THEMES = True` in the first cell. Two model calls, a few cents. A live source asks before anything is sent.
+    To switch it on: fill in the model cell at the top (*Optional: your model and Langfuse*) and run it, then `USE_AI_THEMES = True` in the first cell. Two model calls, a few cents. A live source asks before anything is sent.
 
-    With `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and `LANGFUSE_BASE_URL` set too, both calls are one trace, `explore-themes`, with what was sent, the answer, tokens, cost, time and two scores (`valid_json`, `texts_placed`): run it with another model and compare the two traces.
+    With `LANGFUSE_BASE_URL` filled in there too, both calls are one trace, `explore-themes`, with what was sent, the answer, tokens, cost, time and two scores (`valid_json`, `texts_placed`): run it with another model and compare the two traces.
 
-    **JupyterLab already running?** It only reads these settings when it starts: an `export` in another terminal, or a kernel restart, does not reach it (and `exakit.env` refuses keys on purpose). In a terminal, save your notebooks, then:
-
-    ```bash
-    read -rsp "API key: " EXAKIT_PROVIDER_API_KEY; echo
-    export EXAKIT_MODEL_ID=claude-opus-5-5 EXAKIT_PROVIDER_BASE_URL=https://api.anthropic.com/v1/ EXAKIT_PROVIDER_API_KEY
-    exakit notebook stop && exakit notebook
-    ```
-
-    The Langfuse keys go the same way (`read -rsp` for the two keys, `LANGFUSE_BASE_URL` in the `export`). They last until that JupyterLab stops.
+    Rather set them for every notebook? Export `EXAKIT_MODEL_ID`, `EXAKIT_PROVIDER_BASE_URL`, `EXAKIT_PROVIDER_API_KEY` and the `LANGFUSE_*` keys in the terminal before `exakit notebook` (the README in the notebooks folder shows how).
     """)
     return
 

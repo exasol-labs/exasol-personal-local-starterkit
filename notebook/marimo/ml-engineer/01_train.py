@@ -47,6 +47,26 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
+    ## Optional: another MLflow server
+
+    > **What is this?** Where this notebook records the training run (MLflow: the settings, scores and model file of every run).
+    > By default that is the kit's own MLflow on this computer. Fill in `MLFLOW_TRACKING_URI` to record to your team's server instead; `MLFLOW_SERVER_LOGIN = True` asks for its username and password in a hidden box.
+    > They stay in this notebook's kernel only - never in this file. Left empty, the cell changes nothing.
+    """)
+    return
+
+
+@app.cell
+def _(nb):
+    MLFLOW_TRACKING_URI = ""     # e.g. "https://mlflow.example.com"; empty: the kit's own MLflow (or the one set before `exakit notebook`)
+    MLFLOW_SERVER_LOGIN = False  # True: asks for the server's username and password (hidden)
+    nb.use_mlflow(MLFLOW_TRACKING_URI, MLFLOW_SERVER_LOGIN)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
     ## Load the handoff
 
     > **What is the handoff?** One small file that pins down what the model is trained on: the approved map, the features, the outcome (label) and how rows are split into training and test.

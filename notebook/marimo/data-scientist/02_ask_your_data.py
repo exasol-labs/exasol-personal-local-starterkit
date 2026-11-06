@@ -20,17 +20,7 @@ def _(mo):
 
     Review a proposed query, approve it, then run it read-only. Set `WORKFLOW_ID` to continue the quickstart's log.
 
-    Optional: `DRAFT_WITH_MODEL = True` lets your model draft the SQL from the approved column map: every column with its role, evidence and note (same `EXAKIT_MODEL_ID` settings as Explore; no rows are sent). Setup: the README in the notebooks folder.
-
-    **JupyterLab already running?** It only reads these settings when it starts: an `export` in another terminal, or a kernel restart, does not reach it (and `exakit.env` refuses keys on purpose). In a terminal, save your notebooks, then:
-
-    ```bash
-    read -rsp "API key: " EXAKIT_PROVIDER_API_KEY; echo
-    export EXAKIT_MODEL_ID=claude-opus-5-5 EXAKIT_PROVIDER_BASE_URL=https://api.anthropic.com/v1/ EXAKIT_PROVIDER_API_KEY
-    exakit notebook stop && exakit notebook
-    ```
-
-    The Langfuse keys go the same way (`read -rsp` for the two keys, `LANGFUSE_BASE_URL` in the `export`). They last until that JupyterLab stops.
+    Optional: `DRAFT_WITH_MODEL = True` lets your model draft the SQL from the approved column map: every column with its role, evidence and note (no rows are sent). Set the model up in the cell *Optional: your model and Langfuse* below.
     """)
     return
 
@@ -41,7 +31,7 @@ def _():
 
     DATASET = None  # None: the dataset approved last in a quickstart (else amazon_sales); or "walmart_sales", or your own approved descriptor
     QUESTION = "How many rows are in each category?"
-    DRAFT_WITH_MODEL = False  # set True after EXAKIT_MODEL_ID is configured; no rows are sent to draft SQL
+    DRAFT_WITH_MODEL = False  # True: your model drafts the SQL (set it up in the model cell below); no rows are sent
     WORKFLOW_ID = None  # paste the quickstart's wf-... id to continue its log
 
     DATASET = nb.chosen_dataset(DATASET)
@@ -55,6 +45,29 @@ def _():
     ds.require_approved("ask")
     nb.show_roles(ds)
     return DRAFT_WITH_MODEL, QUESTION, ds, nb
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## Optional: your model and Langfuse
+
+    > **What is this?** Where you tell the notebook which AI model drafts the SQL, and where to record its calls (Langfuse: what was sent, the answer, the cost).
+    > We set it here so you need no terminal: fill in the plain values and run the cell; the keys are asked for in a hidden box.
+    > The keys stay in this notebook's kernel only - never in this file - and are gone when it stops. Left empty, the cell changes nothing.
+
+    Rather set them for every notebook? Export `EXAKIT_MODEL_ID`, `EXAKIT_PROVIDER_BASE_URL`, `EXAKIT_PROVIDER_API_KEY` and the `LANGFUSE_*` keys in the terminal before `exakit notebook` (the README in the notebooks folder shows how).
+    """)
+    return
+
+
+@app.cell
+def _(nb):
+    MODEL_ID = ""           # e.g. "claude-opus-5-5"; empty: no model (or the one set before `exakit notebook`)
+    PROVIDER_BASE_URL = ""  # e.g. "https://api.anthropic.com/v1/" - any Chat Completions endpoint (MODEL-PROVIDERS.md lists more)
+    LANGFUSE_BASE_URL = ""  # e.g. "https://cloud.langfuse.com"; empty: the model calls are not traced
+    nb.use_model(MODEL_ID, PROVIDER_BASE_URL, LANGFUSE_BASE_URL)
+    return
 
 
 @app.cell(hide_code=True)

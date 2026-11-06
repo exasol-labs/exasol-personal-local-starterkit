@@ -61,9 +61,14 @@ container_ok = nb.check_container(conn, alias=CONTAINER)
 # > With it you can compare two runs side by side and find the exact model a result came from.
 # > By default the runs are kept on this computer, in the kit's own MLflow.
 #
-# Shows where runs are recorded. Browser UI: `exakit mlflow start`, then `exakit mlflow url`. `MLFLOW_TRACKING_URI` overrides.
+# Shows where runs are recorded. Browser UI: `exakit mlflow start`, then `exakit mlflow url`.
+#
+# **Optional: another MLflow server.** Fill in `MLFLOW_TRACKING_URI` to record to your team's server instead; `MLFLOW_SERVER_LOGIN = True` asks for its username and password in a hidden box. They stay in this notebook's kernel only - never in this file. Left empty, runs go to the kit's own MLflow.
 
 # %%
+MLFLOW_TRACKING_URI = ""     # e.g. "https://mlflow.example.com"; empty: the kit's own MLflow (or the one set before `exakit notebook`)
+MLFLOW_SERVER_LOGIN = False  # True: asks for the server's username and password (hidden)
+nb.use_mlflow(MLFLOW_TRACKING_URI, MLFLOW_SERVER_LOGIN)
 mlflow_ok = nb.check_mlflow()
 
 # %% [markdown]

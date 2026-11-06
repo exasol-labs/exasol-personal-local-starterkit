@@ -21,6 +21,21 @@ USE_AI_THEMES = False  # True: your model sorts the texts into themes (needs a t
 WORKFLOW_ID = None  # paste the quickstart's wf-... id to continue its log
 
 # %% [markdown]
+# ## Optional: your model and Langfuse
+#
+# > **What is this?** Where you tell the notebook which AI model to use, and where to record its calls (Langfuse: what was sent, the answer, the cost).
+# > We set it here so you need no terminal: fill in the plain values and run the cell; the keys are asked for in a hidden box.
+# > The keys stay in this notebook's kernel only - never in this file - and are gone when it stops. Left empty, the cell changes nothing.
+
+# %%
+import exakit.nb as nb
+
+MODEL_ID = ""           # e.g. "claude-opus-5-5"; empty: no model (or the one set before `exakit notebook`)
+PROVIDER_BASE_URL = ""  # e.g. "https://api.anthropic.com/v1/" - any Chat Completions endpoint (MODEL-PROVIDERS.md lists more)
+LANGFUSE_BASE_URL = ""  # e.g. "https://cloud.langfuse.com"; empty: the model calls are not traced
+nb.use_model(MODEL_ID, PROVIDER_BASE_URL, LANGFUSE_BASE_URL)
+
+# %% [markdown]
 # ## Load the column map
 #
 # > **The column map (descriptor), again:** it says which column is the key, the time, the groups and the outcome (label).
@@ -195,19 +210,11 @@ if model is not None:
 #
 # Needs a text column: on `amazon_sales` and `walmart_sales` it skips and says why. Your model reads the newest texts on each side of the label (label `= 1` and `= 0`) and sorts each side into a few themes. A theme found on one side only is the clue. The note under the result says how to read it.
 #
-# To switch it on: set `EXAKIT_MODEL_ID`, `EXAKIT_PROVIDER_BASE_URL` and `EXAKIT_PROVIDER_API_KEY` before `exakit notebook`, then `USE_AI_THEMES = True` in the first cell. Two model calls, a few cents. A live source asks before anything is sent.
+# To switch it on: fill in the model cell at the top (*Optional: your model and Langfuse*) and run it, then `USE_AI_THEMES = True` in the first cell. Two model calls, a few cents. A live source asks before anything is sent.
 #
-# With `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and `LANGFUSE_BASE_URL` set too, both calls are one trace, `explore-themes`, with what was sent, the answer, tokens, cost, time and two scores (`valid_json`, `texts_placed`): run it with another model and compare the two traces.
+# With `LANGFUSE_BASE_URL` filled in there too, both calls are one trace, `explore-themes`, with what was sent, the answer, tokens, cost, time and two scores (`valid_json`, `texts_placed`): run it with another model and compare the two traces.
 #
-# **JupyterLab already running?** It only reads these settings when it starts: an `export` in another terminal, or a kernel restart, does not reach it (and `exakit.env` refuses keys on purpose). In a terminal, save your notebooks, then:
-#
-# ```bash
-# read -rsp "API key: " EXAKIT_PROVIDER_API_KEY; echo
-# export EXAKIT_MODEL_ID=claude-opus-5-5 EXAKIT_PROVIDER_BASE_URL=https://api.anthropic.com/v1/ EXAKIT_PROVIDER_API_KEY
-# exakit notebook stop && exakit notebook
-# ```
-#
-# The Langfuse keys go the same way (`read -rsp` for the two keys, `LANGFUSE_BASE_URL` in the `export`). They last until that JupyterLab stops.
+# Rather set them for every notebook? Export `EXAKIT_MODEL_ID`, `EXAKIT_PROVIDER_BASE_URL`, `EXAKIT_PROVIDER_API_KEY` and the `LANGFUSE_*` keys in the terminal before `exakit notebook` (the README in the notebooks folder shows how).
 
 # %%
 SAMPLE_TEXTS = 20      # per side: the newest texts where the label is 1, and as many where it is 0
