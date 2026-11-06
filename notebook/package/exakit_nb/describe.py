@@ -278,7 +278,11 @@ class Draft:
         try:
             result = service.approve_document(conn, self.to_dict(), owner=owner, publish=comments, log=log_event)
             if result["status"] == "unchanged":
-                print(result["message"])
+                # Nothing new, but this run uses that approval: say where it is, as an approval does.
+                print(f"{result['table']} v{result['version']} already says this; nothing was written.")
+                print(f"Stored at: {result['path']}")
+                if result.get("published"):
+                    print(f"Published as {result['published']}: agents read the roles from its column comments.")
             else:
                 print(f"Approved {result['table']} v{result['version']} (owner {result['owner']}): {result['path']}")
                 if result.get("published"):

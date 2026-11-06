@@ -127,6 +127,17 @@ def _same(a: dict[str, Any], b: dict[str, Any]) -> bool:
     return all(a.get(k) == b.get(k) for k in keep)
 
 
+def _published_view(run: Callable[[str], list[dict[str, Any]]], table: str) -> str | None:
+    """EXAKIT_SEMANTIC.<view> when an earlier approval published it and it is still there; None otherwise."""
+    name = publishing.view_name(table)
+    try:
+        rows = run(f"SELECT VIEW_NAME FROM EXA_ALL_VIEWS WHERE VIEW_SCHEMA = {publishing.literal(publishing.SCHEMA)} "
+                   f"AND VIEW_NAME = {publishing.literal(name)}")
+    except Exception:                                   # the answer is a courtesy; the approval stands without it
+        return None
+    return f"{publishing.SCHEMA}.{name}" if rows else None
+
+
 def approve(run: Callable[[str], list[dict[str, Any]]], execute: Callable[[str], Any], doc: dict[str, Any], *,
             owner: str | None = None, home=None, reader: str | None = None, publish: bool = True,
             log: Callable[..., None] | None = None, now: Callable[[], dt.datetime] | None = None) -> dict[str, Any]:
@@ -142,8 +153,14 @@ def approve(run: Callable[[str], list[dict[str, Any]]], execute: Callable[[str],
     approved_text = store.current(table, home)
     if approved_text and _same(load(approved_text), doc):
         current = load(approved_text)
-        return {"status": "unchanged", "version": current["version"], "table": table,
-                "message": f"{table} v{current['version']} already says this; nothing was written"}
+        # Where the approval this run is using lives: nothing new was written, so the reader would otherwise have
+        # no path to open, nor the view an agent reads the roles from.
+        path = store.folder(table, home) / f"v{current['version']}.yaml"
+        view = _published_view(run, table)
+        return {"status": "unchanged", "version": current["version"], "table": table, "path": str(path),
+                "published": view,
+                "message": f"{table} v{current['version']} already says this; nothing was written. It is stored at "
+                           f"{path}" + (f"; published as {view}" if view else "")}
     stamp = (now() if now else dt.datetime.now(dt.timezone.utc)).replace(microsecond=0)
     version = max(store.versions(table, home) or [0]) + 1
     final = drafting.approved(doc, owner_name(owner), stamp.isoformat().replace("+00:00", "Z"), version=version)

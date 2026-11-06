@@ -392,6 +392,9 @@ class ApproveFlowTest(unittest.TestCase):
                 again = draft.approve(conn=conn)
             self.assertEqual(again.version, 1)
             self.assertIn("already says this; nothing was written", out.getvalue())
+            stored = next(line for line in out.getvalue().splitlines() if line.startswith("Stored at: "))
+            self.assertTrue(stored.endswith(str(Path("SUPPORT.TICKETS") / "v1.yaml")), "the unchanged run says where v1 is")
+            self.assertTrue(Path(stored[len("Stored at: "):]).is_file())
 
     def test_save_keeps_a_number_like_value_a_string(self):
         doc = {"descriptor": 1, "dataset": "readings", "source": {"kind": "local", "object": "LAB.READINGS", "schema_digest": None,

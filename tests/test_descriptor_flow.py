@@ -38,6 +38,9 @@ class Database:
         if "EXAKIT_SEMANTIC" in sql and "COLUMN_COMMENT" in sql:
             name = re.search(r"COLUMN_TABLE = '([^']+)'", sql).group(1)
             return [{"COLUMN_NAME": c, "COLUMN_COMMENT": comment} for c, comment in self.views.get(name, [])]
+        if "EXA_ALL_VIEWS" in sql:
+            name = re.search(r"VIEW_NAME = '([^']+)'", sql).group(1)
+            return [{"VIEW_NAME": name}] if name in self.views else []
         if "EXA_ALL_COLUMNS" in sql:
             return [{"COLUMN_NAME": n, "COLUMN_TYPE": t, "IS_VIRTUAL": 0} for n, t in self.columns]
         raise AssertionError(f"unexpected statement {sql}")
@@ -106,8 +109,21 @@ class FlowTest(unittest.TestCase):
     def test_approving_again_without_changes_writes_nothing(self):
         doc = self.describe()["doc"]
         self.approve(doc)
-        self.assertEqual("unchanged", self.approve(doc)["status"])
+        again = self.approve(doc)
+        self.assertEqual("unchanged", again["status"])
         self.assertEqual([1], store.versions("SUPPORT.TICKETS", self.home))
+        # Nothing written, but the run still says where the approval it uses lives, and where agents read it.
+        self.assertEqual(str(store.folder("SUPPORT.TICKETS", self.home) / "v1.yaml"), again["path"])
+        self.assertEqual("EXAKIT_SEMANTIC.SUPPORT__TICKETS", again["published"])
+        self.assertIn(f"It is stored at {again['path']}; published as EXAKIT_SEMANTIC.SUPPORT__TICKETS", again["message"])
+
+    def test_an_unchanged_approval_never_names_a_view_that_is_gone(self):
+        doc = self.describe()["doc"]
+        self.approve(doc)
+        self.db.views.clear()
+        again = self.approve(doc)
+        self.assertIsNone(again["published"])
+        self.assertNotIn("published as", again["message"])
 
     def test_a_changed_table_drafts_the_next_version_carrying_unchanged_columns_over(self):
         doc = self.describe()["doc"]
