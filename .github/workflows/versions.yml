@@ -866,6 +866,10 @@ jobs:
       # two facts the Windows install on a laptop with WSL got wrong.
       - run: bash tests/personal-readiness.sh
         if: matrix.shard == 4
+      # Docker when usable, else Podman, and an existing deployment keeps the
+      # engine its record names: the 2.4 engine choice against stub engines.
+      - run: bash tests/personal-engine.sh
+        if: matrix.shard == 4
       - run: bash tests/deploy-progress.sh
         if: matrix.shard == 3
       - run: bash tests/bulk-folder-load.sh

@@ -1435,19 +1435,185 @@ personal_podman_running() {
     return 1
 }
 
+# --- container engine ---------------------------------------------------------
+# Exasol Personal 2.4 runs a local deployment on Docker or on Podman on Linux
+# and Windows; macOS has the launcher's own VM runner and no engine to choose.
+# The launcher keeps whatever engine a deployment first started on, and a
+# deployment made by an earlier launcher keeps Podman - so the kit chooses only
+# for a FRESH deployment, passes that choice explicitly, and records it as
+# runtime.engine so every later health check reads one key.
+#
+# The kit's order is Docker when it is usable, else Podman. The launcher's own
+# `auto` is the reverse (Podman first), which is why the flag is always passed
+# rather than left to it. Usable means the daemon answers, runs Linux
+# containers, and is Docker Engine 29 or newer - the launcher's floor. The kit
+# never installs or starts Docker; it installs Podman, as it always has, when
+# neither engine is there. EXAKIT_CONTAINER_ENGINE=docker|podman names one
+# outright.
+EXAKIT_PERSONAL_ENGINE="${EXAKIT_PERSONAL_ENGINE:-}"
+
+# personal_engine_platform - true where there is an engine to choose at all.
+personal_engine_platform() {
+    case "$(detect_os)" in
+        linux|wsl) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# personal_docker_usable - 0 when the launcher could deploy on this Docker now.
+# Otherwise 1, with the one-line reason in _pdu_said for the caller to print.
+personal_docker_usable() {
+    _pdu_said=""
+    if ! command -v docker >/dev/null 2>&1; then
+        _pdu_said="Docker is not on PATH"
+        return 1
+    fi
+    # One probe answers all three questions. A daemon that is down fails this
+    # with the client's own error on stderr, which nobody needs to read here.
+    _pdu_info="$(exakit_run_bounded "${EXAKIT_ENGINE_PROBE_TIMEOUT:-15}" \
+        docker info --format '{{.OSType}} {{.ServerVersion}}' 2>/dev/null)" || _pdu_info=""
+    _pdu_info="$(printf '%s' "$_pdu_info" | tr -d '\r' | head -1)"
+    _pdu_type="${_pdu_info%% *}"
+    _pdu_ver="${_pdu_info#* }"
+    if [ -z "$_pdu_type" ] || [ "$_pdu_type" = "$_pdu_info" ]; then
+        _pdu_said="Docker is installed but not running ('docker info' did not answer)"
+        return 1
+    fi
+    if [ "$_pdu_type" != "linux" ]; then
+        _pdu_said="Docker runs $_pdu_type containers here, and Exasol Personal needs Linux containers"
+        return 1
+    fi
+    _pdu_major="${_pdu_ver%%.*}"
+    case "$_pdu_major" in
+        ''|*[!0-9]*)
+            _pdu_said="Docker Engine version '$_pdu_ver' could not be read"
+            return 1 ;;
+    esac
+    if [ "$_pdu_major" -lt 29 ]; then
+        _pdu_said="Docker Engine $_pdu_ver is older than 29, the oldest Exasol Personal 2.4 runs on"
+        return 1
+    fi
+    return 0
+}
+
+# personal_resolve_engine - choose the engine for a FRESH deployment into
+# EXAKIT_PERSONAL_ENGINE: "docker" or "podman", nothing on macOS. 1 only when
+# EXAKIT_CONTAINER_ENGINE names docker and docker is not usable: a named engine
+# is never silently swapped for the other one.
+#
+# Docker that is installed and not running is the one case worth a second
+# look, and only where someone can act on it: with a terminal the kit asks
+# for Docker to be started and probes once more. Without one (an agent, a
+# piped install, CI) there is nobody to start it, so Podman it is - said,
+# not silently.
+personal_resolve_engine() {
+    EXAKIT_PERSONAL_ENGINE=""
+    personal_engine_platform || return 0
+    case "${EXAKIT_CONTAINER_ENGINE:-}" in
+        podman)
+            EXAKIT_PERSONAL_ENGINE="podman"
+            return 0 ;;
+        docker)
+            if personal_docker_usable; then EXAKIT_PERSONAL_ENGINE="docker"; return 0; fi
+            warn "EXAKIT_CONTAINER_ENGINE=docker, but $_pdu_said."
+            info "Fix Docker and re-run the installer, or drop EXAKIT_CONTAINER_ENGINE to let the kit use Podman: $(exakit_install_command)"
+            exakit_note_failure "EXAKIT_CONTAINER_ENGINE=docker but $_pdu_said"
+            return 1 ;;
+        '') : ;;
+        *) die "EXAKIT_CONTAINER_ENGINE must be docker or podman, not '${EXAKIT_CONTAINER_ENGINE}'." ;;
+    esac
+    if personal_docker_usable; then EXAKIT_PERSONAL_ENGINE="docker"; return 0; fi
+    if command -v docker >/dev/null 2>&1; then
+        case "$_pdu_said" in
+            *"not running"*)
+                if [ -n "$(_exakit_prompt_tty)" ]; then
+                    info "Docker is installed but not running. Start Docker Desktop (or the docker service) to deploy on it."
+                    _pre_answer="$(prompt_text "Press Enter once Docker is running, or type p to use Podman instead" "")"
+                    case "$_pre_answer" in
+                        p|P|podman) : ;;
+                        *) if personal_docker_usable; then EXAKIT_PERSONAL_ENGINE="docker"; return 0; fi ;;
+                    esac
+                fi ;;
+        esac
+        info "$_pdu_said - the database will run on Podman."
+    fi
+    EXAKIT_PERSONAL_ENGINE="podman"
+    return 0
+}
+
+# personal_engine_recorded - the engine the kit's record says the deployment
+# runs on; "podman" when the record has none, which is every deployment made
+# before kit 0.2.4. A record still carrying the nano kit's container names the
+# OLD database's engine, not this deployment's, and is ignored.
+personal_engine_recorded() {
+    _per="$(manifest_get runtime.engine 2>/dev/null || true)"
+    [ -n "$(manifest_get runtime.container 2>/dev/null || true)" ] && _per=""
+    case "$_per" in
+        docker|podman) printf '%s' "$_per" ;;
+        *) printf 'podman' ;;
+    esac
+}
+
+# personal_engine_flag <engine> - "--container-engine <engine>" when this
+# launcher's `install` takes it, nothing otherwise. Same shape, and the same
+# reason, as personal_auto_approve_flag: a 2.3 launcher handed an unknown
+# flag fails outright, and 2.3 deployments are still supported.
+personal_engine_flag() {
+    [ -n "${1:-}" ] || return 0
+    if exakit_run_bounded "$EXAKIT_PERSONAL_PROBE_TIMEOUT" \
+            "$(personal_cli)" install --help 2>&1 \
+            | personal_help_names_token "--container-engine"; then
+        printf -- '--container-engine %s' "$1"
+    fi
+    return 0
+}
+
+# personal_engine_running <engine> - the engine can run a container right now.
+# Podman's answer is personal_podman_running, unchanged; Docker's is the probe
+# above, with the failure said the same way.
+personal_engine_running() {
+    case "${1:-}" in
+        docker)
+            personal_docker_usable && return 0
+            warn "The deployment runs on Docker, and $_pdu_said."
+            info "Start Docker, then re-run: $(exakit_install_command)"
+            exakit_note_failure "Docker is not usable: $_pdu_said"
+            return 1 ;;
+        *) personal_podman_running ;;
+    esac
+}
+
 # personal_deploy_local — run the local deployment. This is the long step
 # (usually under 2 minutes); output stays visible and is logged.
 personal_deploy_local() {
-    # BEFORE ANYTHING ELSE IN THIS STEP: the deployment runs through Podman, so
-    # a machine without it is given it here - after the launcher, before the
-    # database. No-op wherever Podman is already there, and on the platforms
-    # whose launcher brings its own. A no, or a machine it cannot install on,
-    # ends this STEP and not the run: the caller records it and the install
-    # carries on to what does not need a database.
-    personal_install_podman || return 1
-    # AND THAT IT ACTUALLY RUNS. A podman that is present but cannot start a
-    # container fails inside the launcher, minutes later, naming neither.
-    personal_podman_running || return 1
+    # WHICH ENGINE, BEFORE ANYTHING ELSE IN THIS STEP. A deployment that already
+    # exists keeps the engine it was made on - the launcher's rule, and every
+    # deployment from before 2.4 is Podman - so the kit only chooses for a
+    # fresh one (see personal_resolve_engine). A named engine the machine
+    # cannot provide ends this STEP and not the run: the caller records it and
+    # the install carries on to what does not need a database.
+    if personal_deployment_exists; then
+        EXAKIT_PERSONAL_ENGINE="$(personal_engine_recorded)"
+    else
+        personal_resolve_engine || return 1
+    fi
+    case "$EXAKIT_PERSONAL_ENGINE" in
+        docker)
+            personal_engine_running docker || return 1
+            ;;
+        *)
+            # The deployment runs through Podman, so a machine without it is
+            # given it here - after the launcher, before the database. No-op
+            # wherever Podman is already there, and on the platforms whose
+            # launcher brings its own. A no, or a machine it cannot install
+            # on, ends this STEP the same way.
+            personal_install_podman || return 1
+            # AND THAT IT ACTUALLY RUNS. A podman that is present but cannot
+            # start a container fails inside the launcher, minutes later,
+            # naming neither.
+            personal_podman_running || return 1
+            ;;
+    esac
     # A reachable Exasol is already up (this run, a previous run, or the user
     # started it by hand). `exasol info` is the launcher's own health signal.
     # Checked BEFORE the port test below so a healthy database that legitimately
@@ -1593,7 +1759,7 @@ personal_deploy_local() {
     # nothing to capture until the launcher has run -- so this line goes ahead
     # of it, saying which licence covers what while the reader can still stop.
     info "Exasol Personal is free to use and ships under Exasol's own licence terms, not the kit's MIT licence. The launcher shows them below."
-    info "Deploying Exasol Personal locally — about 2 minutes"
+    info "Deploying Exasol Personal locally${EXAKIT_PERSONAL_ENGINE:+ on $EXAKIT_PERSONAL_ENGINE} — about 2 minutes"
     push_rollback "$(personal_cli) destroy --remove --auto-approve || true"
 
     # The launcher's output is consumed, not shown -- see the progress helpers
@@ -1615,7 +1781,9 @@ personal_deploy_local() {
     # --auto-approve: 2.3 fails a non-interactive host preparation rather than
     # proceeding without approval, and this pipeline is the definition of one.
     # Omitted on launchers that do not take it — see personal_auto_approve_flag.
-    "$(personal_cli)" install local $(personal_auto_approve_flag install) 2>&1 | \
+    # shellcheck disable=SC2046
+    "$(personal_cli)" install local $(personal_auto_approve_flag install) \
+        $(personal_engine_flag "$EXAKIT_PERSONAL_ENGINE") 2>&1 | \
         _personal_deploy_collect "$_deploy_state" "$_deploy_tail" "$_deploy_notice"
     _deploy_rc=${PIPESTATUS[0]}
     ui_progress_end
@@ -1807,9 +1975,9 @@ personal_wait_ready_or_deploy() {
 # deployment's. legacy.* is where the kit keeps the old database: migrate and
 # the restore read it from there (legacy_record_value). Copied across first
 # when legacy.* has none, so an older record loses nothing. Called when the
-# runtime is recorded and on every resumed install. Twin of
-# Clear-PersonalStaleRecord (which also records podman: on Windows the
-# launcher always runs the database in it).
+# runtime is recorded and on every resumed install. runtime.engine is dropped
+# here with the rest and written back by personal_record_manifest with THIS
+# deployment's engine. Twin of Clear-PersonalStaleRecord.
 personal_clear_stale_record() {
     for _pcs_key in container engine volume; do
         _pcs_old="$(manifest_get "runtime.$_pcs_key" 2>/dev/null || true)"
@@ -1826,7 +1994,14 @@ personal_clear_stale_record() {
 personal_record_manifest() {
     _prm_status="${1:-}"
     manifest_set runtime.type "personal"
+    # Read before the clear below drops the key: a record that already names
+    # its engine keeps it, and one that never did is Podman (every deployment
+    # from before kit 0.2.4). This run's own choice, when it made one, wins.
+    _prm_engine="${EXAKIT_PERSONAL_ENGINE:-$(personal_engine_recorded)}"
     personal_clear_stale_record
+    if personal_engine_platform; then
+        manifest_set runtime.engine "$_prm_engine"
+    fi
     # The version of the deployment ON DISK, whenever its state can say —
     # never the version this kit merely advertises. Reusing or adopting an
     # existing deployment used to record the advertised number over it, after
