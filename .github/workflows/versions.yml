@@ -870,6 +870,10 @@ jobs:
       # engine its record names: the 2.4 engine choice against stub engines.
       - run: bash tests/personal-engine.sh
         if: matrix.shard == 4
+      # Podman on a WSL kernel without nftables is refused before the download
+      # or the launcher swap, and preflight counts Docker Engine 29+.
+      - run: bash tests/personal-wsl-gate.sh
+        if: matrix.shard == 4
       - run: bash tests/deploy-progress.sh
         if: matrix.shard == 3
       - run: bash tests/bulk-folder-load.sh

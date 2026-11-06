@@ -305,6 +305,66 @@ detect_podman() {
     echo "none"
 }
 
+# detect_docker — "docker" when a Docker the Exasol launcher can deploy on is
+# here: the daemon answers, runs Linux containers, and is Docker Engine 29 or
+# newer (the launcher's floor, from Exasol Personal 2.4). "none" otherwise - a
+# Docker that is installed and stopped is "none" too, since nothing can deploy
+# on it as it stands. One bounded probe answers all three questions. The
+# runtime module asks the same questions in personal_docker_usable, where it
+# also needs the reason; this one exists for preflight, which runs before that
+# module is sourced.
+detect_docker() {
+    if command -v docker >/dev/null 2>&1; then
+        _dd_info="$(_detect_engine_probe docker info --format '{{.OSType}} {{.ServerVersion}}' 2>/dev/null | tr -d '\r' | head -1)"
+        _dd_major="${_dd_info#* }"
+        _dd_major="${_dd_major%%.*}"
+        case "$_dd_info" in
+            "linux "*)
+                case "$_dd_major" in
+                    ''|*[!0-9]*) : ;;
+                    *) if [ "$_dd_major" -ge 29 ]; then echo "docker"; return 0; fi ;;
+                esac ;;
+        esac
+    fi
+    echo "none"
+}
+
+# detect_podman_iptables_driver — true when Podman's own configuration already
+# routes its firewall through iptables rather than nftables. That is the
+# documented way to run Exasol Personal 2.4 on a WSL kernel without nftables
+# (Podman's netavark fails applying its ruleset there), and a machine that has
+# done it must not be told to update WSL. Both the user's and the system file
+# count, as they do for Podman.
+detect_podman_iptables_driver() {
+    for _dpi_conf in "${XDG_CONFIG_HOME:-$HOME/.config}/containers/containers.conf" /etc/containers/containers.conf; do
+        [ -f "$_dpi_conf" ] || continue
+        grep -Eq '^[[:space:]]*firewall_driver[[:space:]]*=[[:space:]]*"iptables"' "$_dpi_conf" && return 0
+    done
+    return 1
+}
+
+# detect_wsl_release — the WSL release ("2.6.1.0") from `wsl.exe --version`,
+# run through the distro's interop. Exit 1 when wsl.exe cannot be run at all
+# (interop off, or not WSL): the caller must not read that as a version.
+# Empty with exit 0 when it ran and printed no dotted number: the inbox WSL
+# that predates the Store release has no --version and answers with its usage
+# text, and "older than any Store release" is exactly what that should read as.
+# wsl.exe writes UTF-16 even through a pipe, so the NULs are dropped first; the
+# label is localized ("WSL-Version:"), so only the number is read.
+detect_wsl_release() {
+    [ "$(detect_os)" = "wsl" ] || return 1
+    _dwr_exe="$(command -v wsl.exe 2>/dev/null || true)"
+    if [ -z "$_dwr_exe" ] && [ -x /mnt/c/Windows/System32/wsl.exe ]; then
+        _dwr_exe=/mnt/c/Windows/System32/wsl.exe
+    fi
+    [ -n "$_dwr_exe" ] || return 1
+    # LC_ALL=C on both: in a UTF-8 locale tr and grep refuse UTF-16's byte
+    # order mark as an illegal sequence, and the whole read answers nothing.
+    _dwr_line="$(_detect_engine_probe "$_dwr_exe" --version 2>/dev/null | LC_ALL=C tr -d '\000\r' | head -1)"
+    printf '%s\n' "$_dwr_line" | LC_ALL=C grep -o '[0-9][0-9]*\(\.[0-9][0-9]*\)*' | head -1
+    return 0
+}
+
 
 # port_listener_pids <port> — the pids of whatever is LISTENING on the port,
 # newest tool first, empty when nothing can tell. The one place in the kit that
@@ -566,10 +626,10 @@ preflight_report() {
     fi
 
     # The database is an Exasol Personal deployment, and on Linux the launcher
-    # deploys through Podman - specifically; nothing else substitutes. macOS
-    # needs nothing installed first. WSL takes the Linux checks: the launcher
-    # has no WSL concept on that path, only the Linux one, and a WSL2 distro
-    # satisfies it with a podman of its own.
+    # deploys through Docker or Podman; nothing else substitutes. macOS needs
+    # nothing installed first. WSL takes the Linux checks: the launcher has no
+    # WSL concept on that path, only the Linux one, and a WSL2 distro
+    # satisfies it with an engine of its own.
     # WSL 1 HAS NO LINUX KERNEL, so it has no cgroups, no user namespaces, and
     # no container runtime that can work. detect_wsl_version's own comment says
     # "this gates a hard refusal" - and nothing anywhere called it for that.
@@ -586,19 +646,26 @@ preflight_report() {
     if [ "$_os" = "wsl" ] && [ "$(detect_wsl_version 2>/dev/null)" = "1" ]; then
         _pf_bad "WSL 1: Exasol Personal needs a real Linux kernel to run containers, and WSL 1 does not have one (it translates syscalls to the NT kernel). Convert this distro from PowerShell: wsl --set-version $(cat /etc/hostname 2>/dev/null || echo '<distro>') 2   then re-run the installer."
     elif [ "$_os" = "linux" ] || [ "$_os" = "wsl" ]; then
-        if command -v podman >/dev/null 2>&1; then
+        # From Exasol Personal 2.4 a NEW deployment runs on Docker when the kit
+        # finds one it can use, else on Podman - the same order the deploy step
+        # takes (personal_resolve_engine). EXAKIT_CONTAINER_ENGINE=podman is
+        # honoured here too, so the report describes the install that will run.
+        if [ "${EXAKIT_CONTAINER_ENGINE:-}" != "podman" ] && [ "$(detect_docker 2>/dev/null)" = "docker" ]; then
+            _pf_docker_v="$(_detect_engine_probe docker info --format '{{.ServerVersion}}' 2>/dev/null | tr -d '\r' | head -1)"
+            _pf_ok "Docker: available (Engine ${_pf_docker_v:-29+}) - a new Exasol Personal deployment runs on it"
+        elif command -v podman >/dev/null 2>&1; then
             _pf_ok "Podman: available (the Exasol Personal deployment runs through it)"
             # Rootless Podman answers `podman info` happily and then fails at
             # `run` when the machine is missing what rootless needs.
             _pf_podman_gap="$(detect_rootless_podman_gap 2>/dev/null || true)"
             [ -n "$_pf_podman_gap" ] && _pf_bad "Rootless Podman: $_pf_podman_gap"
         elif [ "$_os" = "wsl" ]; then
-            # Named for the distro, not for "Linux": the podman that counts is
-            # the one inside WSL. A Podman Desktop on the Windows side is a
-            # different machine as far as this PATH is concerned.
-            _pf_bad "Podman is required and is not on PATH inside this distro - install it here (Debian/Ubuntu: 'sudo apt-get install -y podman uidmap'); Podman or Docker Desktop on the Windows side does not count"
+            # Named for the distro, not for "Linux": the engine that counts is
+            # the one on PATH inside WSL. Docker Desktop reaches it through its
+            # WSL integration; a Podman Desktop on the Windows side does not.
+            _pf_bad "A container engine is required and none is on PATH inside this distro - install Podman here (Debian/Ubuntu: 'sudo apt-get install -y podman uidmap'), or enable Docker Desktop's WSL integration for it (Docker Engine 29 or newer); Podman on the Windows side does not count"
         else
-            _pf_bad "Podman is required on Linux and is not on PATH - install it with your package manager (e.g. 'sudo apt-get install -y podman' or 'sudo dnf install -y podman')"
+            _pf_bad "A container engine is required and none is on PATH - install Podman with your package manager (e.g. 'sudo apt-get install -y podman' or 'sudo dnf install -y podman'), or Docker Engine 29 or newer"
         fi
     fi
 

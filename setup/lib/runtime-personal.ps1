@@ -944,6 +944,68 @@ function Test-PersonalEngineRunning {
     return (Test-PersonalPodmanRunning)
 }
 
+# Get-PersonalWslRelease - the WSL release ("2.6.1.0") from `wsl --version`.
+# $null when wsl.exe is not on this machine (the caller must not read that as
+# a version); "" when it ran and printed no dotted number, which is the inbox
+# WSL that predates the Store release and has no --version - and "older than
+# any Store release" is exactly what that should read as. wsl.exe writes UTF-16
+# even through a pipe, so the NULs are dropped first; the label is localized
+# ("WSL-Version:"), so only the number is read. Twin of detect_wsl_release.
+function Get-PersonalWslRelease {
+    $wsl = Get-Command wsl.exe -ErrorAction SilentlyContinue
+    if (-not $wsl) { return $null }
+    $said = Invoke-ExakitBounded -FilePath $wsl.Source -Arguments @("--version") -TimeoutSeconds 20
+    if ($null -eq $said) { return "" }
+    $line = @(((("" + $said) -replace "`0", "")) -split "`r?`n")[0]
+    if ($line -match '(\d+(?:\.\d+)*)') { return $Matches[1] }
+    return ""
+}
+
+# Test-PersonalWslPodmanNetworkOk [re-run command] - Podman's machine on this
+# WSL can build the network a 2.4 deployment needs.
+#
+# Exasol Personal 2.4 puts every local deployment on its own bridge network,
+# and Podman builds it through netavark with the nftables firewall driver. The
+# kernel WSL 2.6 and older ship has no nftables - and Podman's machine on
+# Windows runs on that kernel - so the deploy, or for a deployment made by 2.3
+# the first start after the launcher update, fails with:
+#   Error: netavark: nftables error: "nft" did not return successfully while applying ruleset
+# Found here, before anything is downloaded or swapped, with the fix named. A
+# machine whose wsl.exe cannot be found is warned about and let through: a
+# guess must never be the thing that blocks a working install. Docker is not
+# affected and never asks. Twin of personal_wsl_podman_network_ok.
+function Test-PersonalWslPodmanNetworkOk {
+    param([string]$Rerun = "")
+    if (-not $Rerun) { $Rerun = Get-ExakitInstallCommand }
+    $release = Get-PersonalWslRelease
+    if ($null -eq $release) {
+        Warn2 "Could not run wsl.exe, so the WSL release is unknown. Exasol Personal 2.4 on Podman needs WSL 2.7 or newer - check with 'wsl --version'."
+        return $true
+    }
+    $major = 0
+    $minor = 0
+    $parts = @($release -split "\.")
+    if ($parts[0] -match '^\d+$') { $major = [int]$parts[0] }
+    if ($parts.Count -gt 1 -and $parts[1] -match '^\d+$') { $minor = [int]$parts[1] }
+    if ($major -gt 2 -or ($major -eq 2 -and $minor -ge 7)) { return $true }
+    $shown = $release
+    if (-not $shown) { $shown = "(older than 2.0)" }
+    Warn2 "Podman on WSL $shown cannot create the network Exasol Personal 2.4 needs: this WSL kernel has no nftables, so Podman fails with 'nft did not return successfully while applying ruleset'."
+    Info "Run:  wsl --update   then:  wsl --shutdown   - then re-run: $Rerun"
+    Info "Nothing was changed."
+    Set-ExakitFailureReason "WSL $shown is older than 2.7, so Podman cannot create the deployment network (run: wsl --update)"
+    return $false
+}
+
+# Test-PersonalUpdateCrossesTo24 <version> - a launcher update to <version> is
+# the one that brings the 2.4 deployment network. Twin of
+# _personal_update_crosses_to_24.
+function Test-PersonalUpdateCrossesTo24 {
+    param([string]$Version)
+    if ($Version -match '^(0|1)\.' -or $Version -match '^2\.[0-3](\.|$)') { return $false }
+    return $true
+}
+
 # Invoke-PersonalInstallLocal <args> - `exasol install local`, retried when it
 # failed on a Windows file lock rather than on anything about the deployment.
 #
@@ -1116,6 +1178,13 @@ function Install-PersonalDeployment {
         return
     }
     if ($script:PersonalEngine -ne "docker") {
+        # A FRESH Podman deployment on a WSL kernel without nftables fails at
+        # its first network, after the download: refused here instead, with
+        # the fix named. Twin of the same gate in personal_deploy_local.
+        if (-not (Test-PersonalWslPodmanNetworkOk)) {
+            $script:PersonalNoDatabase = $true
+            return
+        }
         Info "Deploying Exasol Personal locally - the database runs through Podman's default machine, which the launcher prepares."
     }
 
@@ -1280,6 +1349,16 @@ function Remove-Personal {
 function Update-Personal {
     param([string]$Advertised = "")
     if (-not $Advertised) { $Advertised = Get-PersonalTargetVersion }
+    # A PODMAN DEPLOYMENT IS CHECKED BEFORE THE SWAP. The 2.4 launcher moves an
+    # existing deployment onto its own network at the next start, and a WSL
+    # kernel without nftables cannot build one: the launcher would be updated
+    # and the database would never start again until WSL was. Found here, with
+    # nothing changed, and the fix named. Twin of the gate in personal_update.
+    if ((Test-PersonalUpdateCrossesTo24 $Advertised) -and (Test-PersonalDeploymentExists) -and ((Get-PersonalEngineRecorded) -eq "podman")) {
+        if (-not (Test-PersonalWslPodmanNetworkOk "exakit update personal")) {
+            Fail "Exasol Personal was not updated: update WSL first (wsl --update), then re-run: exakit update personal"
+        }
+    }
     $env:EXAKIT_PERSONAL_VERSION = $Advertised
     $env:EXAKIT_FORCE_COMPONENT_INSTALL = "1"
     try {
@@ -1291,4 +1370,12 @@ function Update-Personal {
     # assumed healthy - updating a stopped database used to record it healthy
     # on the sh side, and anything reading the manifest was then simply wrong.
     Set-PersonalManifest
+    # WHAT STAYS THE SAME, said once, where the reader is wondering: 2.4 gives
+    # new deployments a random password and a choice of engine, and neither
+    # reaches a deployment that already exists. The one visible change is the
+    # network move, and it happens at the next stop-and-start, not now.
+    if ((Test-PersonalUpdateCrossesTo24 $Advertised) -and (Test-PersonalDeploymentExists)) {
+        Info "The existing deployment keeps its engine ($(Get-PersonalEngineRecorded)) and its database password: the launcher changes neither on update."
+        Info "Its next 'exakit stop' followed by 'exakit start' moves the containers onto the launcher's own deployment network, once."
+    }
 }

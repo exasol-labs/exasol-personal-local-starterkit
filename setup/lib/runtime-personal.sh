@@ -1583,6 +1583,53 @@ personal_engine_running() {
     esac
 }
 
+# personal_wsl_podman_network_ok <re-run command> - Podman on this WSL kernel
+# can build the network a 2.4 deployment needs. 0 anywhere but WSL.
+#
+# Exasol Personal 2.4 puts every local deployment on its own bridge network,
+# and Podman builds that network through netavark with the nftables firewall
+# driver. The kernel WSL 2.6 and older ship has no nftables, so the deploy -
+# or, for a deployment made by 2.3, the first start after the launcher update
+# - fails with:
+#   Error: netavark: nftables error: "nft" did not return successfully while applying ruleset
+# That is found here, before anything is downloaded or swapped, with the fix
+# named: `wsl --update` from Windows, or Podman's iptables firewall driver for
+# a machine that cannot update WSL. A WSL whose release cannot be read at all
+# (interop off) is warned about and let through: a guess must never be the
+# thing that blocks a working install. Docker is not affected and never asks.
+personal_wsl_podman_network_ok() {
+    [ "$(detect_os)" = "wsl" ] || return 0
+    detect_podman_iptables_driver && return 0
+    _pwn_rel="$(detect_wsl_release)" || {
+        warn "Could not run wsl.exe from this distro, so the WSL release is unknown. Exasol Personal 2.4 on Podman needs WSL 2.7 or newer - check with 'wsl --version' in PowerShell."
+        return 0
+    }
+    _pwn_major="${_pwn_rel%%.*}"
+    _pwn_minor="${_pwn_rel#*.}"
+    _pwn_minor="${_pwn_minor%%.*}"
+    [ "$_pwn_rel" = "$_pwn_major" ] && _pwn_minor=0
+    case "${_pwn_major}${_pwn_minor}" in ''|*[!0-9]*) _pwn_major=0; _pwn_minor=0 ;; esac
+    if [ "$_pwn_major" -gt 2 ] || { [ "$_pwn_major" -eq 2 ] && [ "$_pwn_minor" -ge 7 ]; }; then
+        return 0
+    fi
+    warn "Podman on WSL ${_pwn_rel:-(older than 2.0)} cannot create the network Exasol Personal 2.4 needs: this WSL kernel has no nftables, so Podman fails with 'nft did not return successfully while applying ruleset'."
+    info "In PowerShell on Windows run:  wsl --update   then:  wsl --shutdown   - reopen this distro and re-run: ${1:-$(exakit_install_command)}"
+    info "Without updating WSL: set  firewall_driver = \"iptables\"  under [network] in ~/.config/containers/containers.conf (the iptables package must be installed), then re-run."
+    info "Nothing was changed."
+    exakit_note_failure "WSL ${_pwn_rel:-(unknown)} is older than 2.7, so Podman cannot create the deployment network (run: wsl --update)"
+    return 1
+}
+
+# _personal_update_crosses_to_24 <version> - true when a launcher update to
+# <version> is the one that brings the 2.4 deployment network (and, on an
+# engine platform, the first launcher that could be on Docker).
+_personal_update_crosses_to_24() {
+    case "${1:-}" in
+        0.*|1.*|2.[0-3]|2.[0-3].*) return 1 ;;
+        *) return 0 ;;
+    esac
+}
+
 # personal_deploy_local — run the local deployment. This is the long step
 # (usually under 2 minutes); output stays visible and is logged.
 personal_deploy_local() {
@@ -1607,6 +1654,13 @@ personal_deploy_local() {
             # wherever Podman is already there, and on the platforms whose
             # launcher brings its own. A no, or a machine it cannot install
             # on, ends this STEP the same way.
+            # A FRESH Podman deployment on a WSL kernel without nftables fails
+            # at its first network, after the download: refused here instead,
+            # with the fix named. An existing deployment is not this step's
+            # to judge - its update was.
+            if ! personal_deployment_exists; then
+                personal_wsl_podman_network_ok "$(exakit_install_command)" || return 1
+            fi
             personal_install_podman || return 1
             # AND THAT IT ACTUALLY RUNS. A podman that is present but cannot
             # start a container fails inside the launcher, minutes later,
@@ -2472,6 +2526,16 @@ personal_update() {
             ;;
     esac
 
+    # A PODMAN DEPLOYMENT ON WSL IS CHECKED BEFORE THE SWAP. The 2.4 launcher
+    # moves an existing deployment onto its own network at the next start, and
+    # a WSL kernel without nftables cannot build one: the launcher would be
+    # updated and the database would never start again until WSL was. Found
+    # here, with nothing changed, and the fix named.
+    if _personal_update_crosses_to_24 "$_latest" && personal_deployment_exists && \
+       [ "$(personal_engine_recorded)" = "podman" ]; then
+        personal_wsl_podman_network_ok "exakit update personal" || \
+            die "Exasol Personal was not updated: update WSL first (wsl --update), then re-run: exakit update personal"
+    fi
     info "Updating Exasol Personal launcher ${_current:-unknown} -> $_latest"
     EXAKIT_PERSONAL_VERSION="$_latest"
     EXAKIT_FORCE_COMPONENT_INSTALL=1
@@ -2481,4 +2545,12 @@ personal_update() {
     personal_record_manifest
     manifest_set desired.runtime.personal "$EXAKIT_PERSONAL_VERSION"
     ok "Exasol Personal launcher updated; deployment data was not changed"
+    # WHAT STAYS THE SAME, said once, where the reader is wondering: 2.4 gives
+    # new deployments a random password and a choice of engine, and neither
+    # reaches a deployment that already exists. The one visible change is the
+    # network move, and it happens at the next stop-and-start, not now.
+    if _personal_update_crosses_to_24 "$_latest" && personal_engine_platform && personal_deployment_exists; then
+        info "The existing deployment keeps its engine ($(personal_engine_recorded)) and its database password: the launcher changes neither on update."
+        info "Its next 'exakit stop' followed by 'exakit start' moves the containers onto the launcher's own deployment network, once."
+    fi
 }
