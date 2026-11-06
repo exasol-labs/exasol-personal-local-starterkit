@@ -148,6 +148,16 @@ class RoleReview:
         """{column: drafted role} (one of the eight), in table order."""
         return {column: (self.draft.doc["columns"].get(column) or {}).get("role", "other") for column in self.draft.columns()}
 
+    def low_confidence(self) -> list[str]:
+        """The columns drafted at low confidence, in table order: where the draft guessed, so a person looks first."""
+        return [c for c in self.suggestions() if (self.draft.doc["columns"].get(c) or {}).get("confidence") == "low"]
+
+    def review_order(self) -> list[str]:
+        """The columns as the pickers show them: low confidence first, then the rest, each in table order. Only the
+        showing changes - the descriptor keeps the table's order."""
+        low = self.low_confidence()
+        return low + [c for c in self.suggestions() if c not in low]
+
     def slot_suggestions(self) -> dict[str, str | None]:
         """{slot: drafted column or None}: the columns the notebooks use."""
         slots = self.draft.slots
@@ -185,8 +195,9 @@ class RoleReview:
                 "\nYou choose the prediction target: the kit never guesses it. Two 0/1 columns can answer "
                 "different questions - pick the one that is the outcome you want to predict.\n"
                 "A rule's confidence says how close the evidence is to its line; it is not a probability that the "
-                "business meaning is correct. Keep useful suggestions, change the others, and leave a slot empty (—) "
-                "when no column fits. Approve descriptor saves this column map for the next notebooks.")
+                "business meaning is correct. The columns drafted at low confidence come first: those are where the "
+                "draft guessed, so check them before the rest. Keep useful suggestions, change the others, and leave a "
+                "slot empty (—) when no column fits. Approve descriptor saves this column map for the next notebooks.")
 
     def explanations(self) -> dict[str, str]:
         """Plain reasons beside the evidence; a low-confidence role says so, and certainty is never implied."""
@@ -201,7 +212,7 @@ class RoleReview:
             if column in slots:
                 reason += f" The notebooks use it as the {slots[column]}."
             if entry.get("confidence") == "low":
-                reason += f" Low confidence: {entry.get('evidence', '')} is close to the rule's line - check this one."
+                reason += f" Low confidence: the draft is a guess here ({entry.get('evidence', '')}) - check this one."
             result[column] = reason
         return result
 
@@ -373,11 +384,18 @@ class RoleReview:
         return self.build_jupyter_picker(widgets)
 
     def build_jupyter_picker(self, widgets):
-        """One dropdown per column with the eight roles (the drafted one set), its reason and evidence under it; then one
-        dropdown per slot with the table's columns; then the Approve button. ``widgets`` is ipywidgets (or a stand-in)."""
-        labels, explanations = self.labels(), self.explanations()
+        """One dropdown per column with the eight roles (the drafted one set), its reason and evidence under it - the
+        columns drafted at low confidence first, under their own heading; then one dropdown per slot with the table's
+        columns; then the Approve button. ``widgets`` is ipywidgets (or a stand-in)."""
+        labels, explanations, suggested = self.labels(), self.explanations(), self.suggestions()
+        low = self.low_confidence()
         pickers, slot_pickers, rows = {}, {}, [widgets.HTML("<b>Column roles</b>")]
-        for column, role in self.suggestions().items():
+        for column in self.review_order():
+            role = suggested[column]
+            if column == (low or [None])[0]:
+                rows.append(widgets.HTML(f"<b>Check these first</b> - {len(low)} drafted at low confidence, where the draft guessed"))
+            elif low and column == next(c for c in self.review_order() if c not in low):
+                rows.append(widgets.HTML("<b>The rest</b> - drafted at high confidence"))
             summary, runner = labels[column]
             picker = widgets.Dropdown(options=[(r, r) for r in COLUMN_ROLES], value=role,
                                       description=column, style={"description_width": "180px"})
@@ -419,11 +437,14 @@ def marimo_review(mo, draft: Draft, conn, file: Path | None = None) -> RoleRevie
     class MarimoRoleReview(RoleReview, mo.ui.dictionary):
         def __init__(self, draft, conn, file):
             RoleReview.__init__(self, draft, conn, file)
-            labels, explanations = self.labels(), self.explanations()
+            labels, explanations, suggested = self.labels(), self.explanations(), self.suggestions()
+            low = self.low_confidence()
             dropdowns = {}
-            for column, role in self.suggestions().items():
+            for column in self.review_order():                   # low confidence first: a dictionary keeps its order
+                role = suggested[column]
                 summary, runner = labels[column]
-                label = (f"**{escape(column)}**<br>{escape(explanations[column])}" +
+                label = (("**Check first** - drafted at low confidence<br>" if column in low else "") +
+                         f"**{escape(column)}**<br>{escape(explanations[column])}" +
                          (f"<br>Technical evidence: {escape(summary)}" if summary else "") +
                          (f"<br>{escape(runner)}" if runner else ""))
                 dropdowns[column] = mo.ui.dropdown(options={r: r for r in COLUMN_ROLES}, value=role, label=label)
@@ -435,7 +456,8 @@ def marimo_review(mo, draft: Draft, conn, file: Path | None = None) -> RoleRevie
             mo.ui.dictionary.__init__(self, {"roles": mo.ui.dictionary(dropdowns),
                                              "slots": mo.ui.dictionary(slot_dropdowns),
                                              "approve": mo.ui.run_button(label="Approve descriptor")},
-                                      label=f"Roles of {draft.table}")
+                                      label=f"Roles of {draft.table}" + (f" - the {len(low)} drafted at low "
+                                                                          "confidence come first" if low else ""))
 
         def choices(self) -> dict[str, str | None]:
             values = self.value or {}

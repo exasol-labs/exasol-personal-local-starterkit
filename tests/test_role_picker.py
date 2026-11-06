@@ -82,6 +82,11 @@ class ReviewTest(unittest.TestCase):
         proposal.doc["columns"]["C"].update(role="identifier", sensitive=True)
         self.assertIn("never charted, grouped or sent to a model", RoleReview(proposal, object()).explanations()["C"])
 
+    def test_the_review_order_puts_low_confidence_first(self):
+        review = RoleReview(draft(), object())
+        self.assertEqual((["A", "C"], ["A", "C", "B", "D"]), (review.low_confidence(), review.review_order()))
+        self.assertIn("low confidence come first", review.guide())
+
     def test_the_dropdowns_start_on_the_drafted_roles_and_slots(self):
         review = RoleReview(draft(), object())
         self.assertEqual(review.suggestions(), {"A": "category", "B": "category", "C": "other", "D": "category"})
@@ -152,10 +157,14 @@ class ReviewTest(unittest.TestCase):
         widgets = types.SimpleNamespace(**{name: type(name, (Widget,), {}) for name in ("Dropdown", "HTML", "VBox", "Button", "Output")})
         box = RoleReview(draft(), object()).build_jupyter_picker(widgets)
         dropdowns = [kw for name, kw in made if name == "Dropdown"]
+        # The two drafted at low confidence (A, C) first, then the rest; each group in table order.
         self.assertEqual([kw["description"] for kw in dropdowns],
-                         ["A", "B", "C", "D", "key", "time", "text", "target", "category", "entity"])
+                         ["A", "C", "B", "D", "key", "time", "text", "target", "category", "entity"])
         self.assertEqual([kw["value"] for kw in dropdowns],
-                         ["category", "category", "other", "category", None, None, None, None, "B", "A"])
+                         ["category", "other", "category", "category", None, None, None, None, "B", "A"])
+        headings = [w.args[0] for w in box.args[0] if type(w).__name__ == "HTML"]
+        self.assertIn("<b>Check these first</b> - 2 drafted at low confidence, where the draft guessed", headings)
+        self.assertIn("<b>The rest</b> - drafted at high confidence", headings)
         self.assertEqual([o for o, _ in dropdowns[0]["options"]],
                          ["key", "time", "measure", "category", "flag", "text", "identifier", "other"])
         self.assertEqual(dropdowns[4]["options"][0], ("—", None))
@@ -282,9 +291,13 @@ class MarimoTest(unittest.TestCase):
         self.assertIsInstance(review, mo.ui.dictionary)
         self.assertIs(mo.shown[0], review, "the element is the cell's output")
         roles, slots, button = review.elements["roles"], review.elements["slots"], review.elements["approve"]
-        self.assertEqual(list(roles.elements), ["A", "B", "C", "D"])
-        self.assertEqual([d.kwargs["value"] for d in roles.elements.values()], ["category", "category", "other", "category"])
+        self.assertEqual(list(roles.elements), ["A", "C", "B", "D"], "low confidence first, each group in table order")
+        self.assertEqual([d.kwargs["value"] for d in roles.elements.values()], ["category", "other", "category", "category"])
         self.assertIn("category (low confidence)", roles.elements["A"].kwargs["label"])
+        self.assertTrue(roles.elements["C"].kwargs["label"].startswith("**Check first** - drafted at low confidence"))
+        self.assertNotIn("Check first", roles.elements["B"].kwargs["label"])
+        self.assertIn("the 2 drafted at low confidence come first", review.kwargs["label"])
+        self.assertEqual(list(review.choices()), ["A", "B", "C", "D"], "the descriptor keeps the table's order")
         self.assertEqual(list(roles.elements["A"].kwargs["options"]),
                          ["key", "time", "measure", "category", "flag", "text", "identifier", "other"])
         self.assertEqual([d.kwargs["value"] for d in slots.elements.values()], ["—", "—", "—", "—", "B", "A"])
