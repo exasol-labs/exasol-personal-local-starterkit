@@ -1560,6 +1560,9 @@ personal_engine_recorded() {
 # flag fails outright, and 2.3 deployments are still supported.
 personal_engine_flag() {
     [ -n "${1:-}" ] || return 0
+    # Never off an engine platform: macOS has no engine to name, and a record
+    # that reads "podman" there describes nothing the launcher should be told.
+    personal_engine_platform || return 0
     if exakit_run_bounded "$EXAKIT_PERSONAL_PROBE_TIMEOUT" \
             "$(personal_cli)" install --help 2>&1 \
             | personal_help_names_token "--container-engine"; then
@@ -1639,7 +1642,9 @@ personal_deploy_local() {
     # fresh one (see personal_resolve_engine). A named engine the machine
     # cannot provide ends this STEP and not the run: the caller records it and
     # the install carries on to what does not need a database.
-    if personal_deployment_exists; then
+    if ! personal_engine_platform; then
+        EXAKIT_PERSONAL_ENGINE=""
+    elif personal_deployment_exists; then
         EXAKIT_PERSONAL_ENGINE="$(personal_engine_recorded)"
     else
         personal_resolve_engine || return 1

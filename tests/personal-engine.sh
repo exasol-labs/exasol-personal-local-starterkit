@@ -183,6 +183,7 @@ echo "personal_engine_flag: passed only to a launcher that takes it"
 check "2.4 launcher" "--container-engine docker" "$(probe -- 'personal_engine_flag docker' | sed '$d')"
 check "2.3 launcher" ""                          "$(probe STUB_HELP_ENGINE=0 -- 'personal_engine_flag docker' | sed '$d')"
 check "no engine"    ""                          "$(probe -- 'personal_engine_flag ""' | sed '$d')"
+check "never on macOS, whatever the record says" "" "$(probe STUB_OS=macos -- 'personal_engine_flag podman' | sed '$d')"
 check "the deploy passes it with install local" 1 \
     "$(grep -A1 '"$(personal_cli)" install local $(personal_auto_approve_flag install)' "$ROOT/setup/lib/runtime-personal.sh" | grep -c 'personal_engine_flag "$EXAKIT_PERSONAL_ENGINE"')"
 
