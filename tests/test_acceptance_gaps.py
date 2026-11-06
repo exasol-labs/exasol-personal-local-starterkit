@@ -84,21 +84,24 @@ class MissingRolesTest(unittest.TestCase):
             ds = types.SimpleNamespace(
                 has=lambda role: role in available, col=column,
                 text_sql=lambda: column("text"), fact_table="EXAMPLE.RECORDS",
+                descriptor=types.SimpleNamespace(slots={"key": "KEY"}, columns={}),
                 status="approved", id="fixture", missing=[{"role": role, "reason": "no suitable column"} for role in ROLES if role not in available])
             nb = types.SimpleNamespace(workflow=mock.Mock(return_value="wf-20261030-abcdef"),
                 connect=mock.Mock(), review_roles=mock.Mock(return_value=types.SimpleNamespace(dataset=lambda **kw: ds)),
                 show_roles=mock.Mock(), sql=mock.Mock(return_value=Frame(DAYS=[30], N=[10], PCT=[5.0], TEXT_=["Synthetic description"])),
-                show_sql=mock.Mock(), model_client=mock.Mock(), confirm_send=mock.Mock(), themes=mock.Mock(), chosen_dataset=lambda name: name or "fixture",
+                show_sql=mock.Mock(), model_client=mock.Mock(),
+                data_checks=mock.Mock(return_value=Frame()), leakage_check=mock.Mock(return_value=[]), confirm_send=mock.Mock(), themes=mock.Mock(), chosen_dataset=lambda name: name or "fixture",
                 name=mock.Mock(return_value="NAMED"), count_name=mock.Mock(return_value="ROW_COUNT"),
                 note_groups=mock.Mock(), note_trend=mock.Mock(), note_model=mock.Mock(),
                 write_handoff=mock.Mock(return_value="fixture.json"), read_handoff=mock.Mock(return_value={
                     "descriptor":{"id":"fixture","version":1},"feature_view":{"name":"EXAMPLE.FEATURES"},
                     "input_schema":[],"label":{"column":"LABEL","positive":1},"split":{"kind":"time"}}))
             namespace = {"nb": nb}
-            # The small model needs a date, a label and a category or entity - no text. Where those are there it would
-            # train (scikit-learn, real rows), so its cell is not run here: its own guard is read and must admit it.
-            model_runs = missing in ("entity", "category", "text")
-            cells = [c for c in self.cells if c.startswith(("DATASET = ", "import os\n", "landscape = ",
+            # The small model needs a label and a category or entity - no text, and no date (without one it leaves the
+            # month out). Where those are there it would train (scikit-learn, real rows), so its cell is not run here:
+            # its own guard is read, after the lines that set it up, and must admit it.
+            model_runs = missing in ("entity", "category", "text", "date")
+            cells = [c for c in self.cells if c.startswith(("DATASET = ", "import os\n", "findings = ", "LEAKED = ", "landscape = ",
                      "over_time = ", "SAMPLE = ", "SAMPLE_TEXTS = ", "handoff_path = None"))
                      and not (model_runs and c.startswith("SAMPLE = "))]
             output = io.StringIO()
@@ -109,7 +112,8 @@ class MissingRolesTest(unittest.TestCase):
                 model_cell = next(c for c in self.cells if c.startswith("SAMPLE = "))
                 guard = re.search(r"^if not (\(.*\)):$", model_cell, re.M).group(1)
                 if model_runs:
-                    self.assertTrue(eval(guard, {"ds": ds}), f"the model runs without the {missing} role")
+                    exec(model_cell.split("\nmodel = None")[0], namespace)
+                    self.assertTrue(eval(guard, namespace), f"the model runs without the {missing} role")
                 else:
                     self.assertIsNone(namespace["model"])
                 if missing in ("entity", "category", "label", "all"):

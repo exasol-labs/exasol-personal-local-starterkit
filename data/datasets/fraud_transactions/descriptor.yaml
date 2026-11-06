@@ -1,0 +1,36 @@
+descriptor: 1
+dataset: "fraud_transactions"
+source:
+  kind: "local"
+  object: "FRAUD.TRANSACTIONS"
+  schema_digest: "sha256:e63391b322cc09d0feb8bdf4638c28eac36888932b1711cd567ea4a30baeb395"
+  profiled_rows: 51000
+version: 1
+status: "approved"
+owner: "kit"
+approved_at: "2026-11-06T00:00:00Z"
+grain: "one row per transaction (1,000 transactions appear twice)"
+slots:
+  key: "ROW_ID"
+  time: null
+  text: null
+  target: "FRAUDULENT"
+  category: "TRANSACTION_TYPE"
+  entity: "LOCATION"
+slot_evidence:
+  time: "no time column"
+  text: "no text column"
+columns:
+  "ROW_ID": {role: "key", confidence: "high", evidence: "51,000 distinct, no nulls"}
+  "TRANSACTION_ID": {role: "identifier", confidence: "high", evidence: "98% distinct"}
+  "USER_ID": {role: "identifier", confidence: "high", evidence: "integer named as an identifier, 4,000 distinct"}
+  "TRANSACTION_AMOUNT": {role: "measure", confidence: "high", evidence: "DECIMAL(10,2), 5.03 to 49997.8"}
+  "TRANSACTION_TYPE": {role: "category", confidence: "high", evidence: "5 distinct"}
+  "TRANSACTION_HOUR": {role: "category", confidence: "high", evidence: "24 distinct"}
+  "DEVICE_USED": {role: "category", confidence: "high", evidence: "4 distinct"}
+  "LOCATION": {role: "category", confidence: "high", evidence: "8 distinct"}
+  "PREVIOUS_FRAUDULENT_TRANSACTIONS": {role: "category", confidence: "high", evidence: "5 distinct"}
+  "ACCOUNT_AGE": {role: "measure", confidence: "low", evidence: "integer, no identifier in its name, 1 to 119"}
+  "TRANSACTIONS_LAST_24H": {role: "category", confidence: "high", evidence: "14 distinct"}
+  "PAYMENT_METHOD": {role: "category", confidence: "high", evidence: "5 distinct"}
+  "FRAUDULENT": {role: "flag", confidence: "high", evidence: "0 95.1%, 1 4.9%"}

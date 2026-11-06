@@ -294,8 +294,9 @@ class NotebookShapeTest(unittest.TestCase):
         self.assertNotIn('ds.col("date"),', roles, "the date and label are no longer read unguarded")
         guarded = {"landscape = nb.sql(": 'if not all(ds.has(role) for role in ("entity", "category", "label")):',
                    "over_time = nb.sql(": 'if not (ds.has("date") and ds.has("label")):',
-                   # The small model needs no text: the category, the entity and the month of the date.
-                   "rows = nb.sql(": 'if not (ds.has("date") and ds.has("label") and (ds.has("category") or ds.has("entity"))):'}
+                   # The small model needs no text and no date: the category or the entity (one that does not give
+                   # the label away), and the month only when there is a date.
+                   "rows = nb.sql(": 'if not (ds.has("label") and (USE_CATEGORY or USE_ENTITY)):'}
         for sql, guard in guarded.items():
             with self.subTest(cell=sql):
                 cell = next(c for c in cells if sql in c)

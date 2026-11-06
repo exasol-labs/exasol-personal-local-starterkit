@@ -58,10 +58,10 @@ def _(mo):
     ## Choose a dataset
 
     > **What is a dataset?** One table of rows to learn from; each row is one thing that happened.
-    > The kit offers two to practise on: `amazon_sales` (online fashion orders, one row per order line) and `walmart_sales` (weekly sales, one row per store and week).
+    > The kit offers three to practise on: `amazon_sales` (online fashion orders, one row per order line), `walmart_sales` (weekly sales, one row per store and week) and `fraud_transactions` (card and bank payments with a fraud label, messy on purpose: repeats, gaps and placeholders to find).
     > We start with one of these known samples so you can try every step before bringing your own data.
 
-    Pick one: `SAMPLE = "amazon_sales"` (the default) or `"walmart_sales"`. The first run downloads it from the kit's release (internet needed) and loads it once; after that it is reused, and the later notebooks carry on with the dataset you approve here (their `DATASET = None`). Keep `SOURCE = None` for this walkthrough.
+    Pick one: `SAMPLE = "amazon_sales"` (the default), `"walmart_sales"` or `"fraud_transactions"`. The first run downloads it from the kit's release (internet needed) and loads it once; after that it is reused, and the later notebooks carry on with the dataset you approve here (their `DATASET = None`). Keep `SOURCE = None` for this walkthrough.
     """)
     return
 
@@ -69,7 +69,7 @@ def _(mo):
 @app.cell
 def _(conn, nb):
     # Cell tags: load
-    SAMPLE = "amazon_sales"   # or "walmart_sales", or None
+    SAMPLE = "amazon_sales"   # or "walmart_sales", "fraud_transactions", or None
     sample = nb.load_sample(conn, SAMPLE)
     return (sample,)
 

@@ -9,7 +9,7 @@
 # %% [markdown]
 # # Ask your data
 #
-# **Dataset:** `amazon_sales`, `walmart_sales` or your own approved descriptor. **How long:** about five minutes.
+# **Dataset:** the one you approved last (else `amazon_sales`), `walmart_sales`, `fraud_transactions` or your own approved descriptor. **How long:** about five minutes.
 #
 # Review a proposed query, approve it, then run it read-only. Set `WORKFLOW_ID` to continue the quickstart's log.
 #
@@ -18,7 +18,7 @@
 # %%
 import exakit.nb as nb
 
-DATASET = None  # None: the dataset approved last in a quickstart (else amazon_sales); or "walmart_sales", or your own approved descriptor
+DATASET = None  # None: the dataset approved last in a quickstart (else amazon_sales); or "walmart_sales", "fraud_transactions", or your own approved descriptor
 QUESTION = "How many rows are in each category?"
 DRAFT_WITH_MODEL = False  # True: your model drafts the SQL (set it up in the model cell below); no rows are sent
 WORKFLOW_ID = None  # paste the quickstart's wf-... id to continue its log

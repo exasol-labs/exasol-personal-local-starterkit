@@ -130,7 +130,10 @@ class WorkflowDatasetsTest(unittest.TestCase):
         self.assertIn("reference_datasets_live.py no-secrets", runs)
         self.assertEqual(named(runs, self.ids), set(self.ids), "the notebook loop must run on every reference dataset")
         install = next(s for s in job["steps"] if "install.sh" in s.get("run", ""))
-        self.assertEqual(install["env"]["EXAKIT_PERSONA"], "data-scientist,ml-engineer")
+        # The ML Engineer is disabled for now ("visible": false): the Data Scientist installs, and the add-on the ML
+        # Engineer's notebooks need is named beside the persona's own.
+        self.assertEqual(install["env"]["EXAKIT_PERSONA"], "data-scientist")
+        self.assertIn("udf-devkit", install["env"]["EXAKIT_MARKETPLACE_ADDONS"].split(","))
         self.assertIn("EXAKIT_LOCAL_KIT", install["env"])
         self.assertNotIn("EXAKIT_DATASETS", install["env"], "the personas' own dataset list is what has to load")
         on = triggers(doc)
@@ -140,10 +143,12 @@ class WorkflowDatasetsTest(unittest.TestCase):
                 self.assertTrue((ROOT / path).exists(), f"push.paths names {path}, which is not in the tree")
 
     def test_the_personas_load_the_reference_datasets(self) -> None:
-        """Every reference dataset, and beside them only datasets the kit has (a folder with a dataset.conf)."""
+        """A persona the kit offers loads every reference dataset; any persona names only datasets the kit has (a folder
+        with a dataset.conf). A disabled one ("visible": false, the ML Engineer for now) keeps the set it had."""
         for persona in ("data-scientist", "ml-engineer"):
             doc = json.loads((ROOT / "personas" / f"{persona}.json").read_text(encoding="utf-8"))
-            self.assertLessEqual(set(self.ids), set(doc["datasets"]), f"{persona}.json")
+            if doc.get("visible", True):
+                self.assertLessEqual(set(self.ids), set(doc["datasets"]), f"{persona}.json")
             for extra in set(doc["datasets"]) - set(self.ids):
                 self.assertTrue((DATASETS / extra / "dataset.conf").is_file(), f"{persona}.json names {extra}")
 

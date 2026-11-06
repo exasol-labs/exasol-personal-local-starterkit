@@ -357,11 +357,12 @@ class CopyTest(unittest.TestCase):
             base = Path(tmp) / "starter-kit-notebooks"
             base.mkdir()
             (base / "ml-engineer").write_text("a file, not a folder", encoding="utf-8")
-            added, problems = kit_notebooks.copy("jupyter", ROOT, Path(tmp))
+            # A kit that has both personas (the ML Engineer is disabled for new kits, kept for one that has it).
+            added, problems = kit_notebooks.copy("jupyter", ROOT, Path(tmp), {"data-scientist", "ml-engineer"})
             self.assertIn("data-scientist/00_quickstart.ipynb", added)
             self.assertTrue(problems and all(p.startswith("ml-engineer/") and "is a file" in p for p in problems), problems)
             with redirect_stderr(io.StringIO()) as err:
-                self.assertEqual(kit_notebooks.main(["copy", "jupyter", str(ROOT), tmp]), 1)
+                self.assertEqual(kit_notebooks.main(["copy", "jupyter", str(ROOT), tmp, "data-scientist,ml-engineer"]), 1)
             self.assertIn("could not copy ml-engineer/01_train.ipynb", err.getvalue())
 
     def test_the_folder_must_be_named(self):
@@ -529,7 +530,7 @@ class SwapTest(unittest.TestCase):
     synthetic file; without it, the reference dataset amazon_sales and the synthetic file's twin. A dataset missing a
     role renders the same way or stops with the descriptor's reason for it."""
 
-    EXTRA = {"SAMPLE": 20000, "SAMPLE_TEXTS": 5, "period": "MONTH", "UDF_SCHEMA": "EXASOL_MLFLOW", "PARAMS": {"C": 1.0},
+    EXTRA = {"LEAKED": [], "SAMPLE": 20000, "SAMPLE_TEXTS": 5, "period": "MONTH", "UDF_SCHEMA": "EXASOL_MLFLOW", "PARAMS": {"C": 1.0},
              "UDF": "EXAKIT_MODELS.SCORE_MODEL", "where": "1 = 1", "limit": 10, "extra": ""}
 
     def render(self, notebook: Path, descriptor) -> list[str]:

@@ -37,7 +37,7 @@ again (`--offline` skips the load; `--keep` leaves it; `--replace` reloads a sch
 is already there). The kit offers every folder that has a `dataset.conf`. A reference
 dataset is checked for more - see [Reference datasets](#reference-datasets) below.
 
-The kit offers five datasets:
+The kit offers six datasets:
 
 | Dataset | Schema | Contents |
 |---|---|---|
@@ -46,23 +46,25 @@ The kit offers five datasets:
 | [`datasets/weather/`](datasets/weather/) | `WEATHER` | 10 European cities, ~11k days of daily weather (2023–2025) |
 | [`datasets/walmart_sales/`](datasets/walmart_sales/) | `WALMART` | 6,435 weeks of sales from 45 Walmart stores (February 2010-October 2012) with holiday weeks, temperature, fuel price, CPI and unemployment, and a label (the week beat the store's median week); 0.4 MB of CSV, a 0.1 MB download ([README](datasets/walmart_sales/README.md)) |
 | [`datasets/amazon_sales/`](datasets/amazon_sales/) | `AMAZON` | 128,975 order lines of one fashion seller on Amazon.in (March 31-June 29 2022): status, fulfilment, product, size, amount and where it shipped, with a label (cancelled, 14.2%); 22 MB of CSV, a 4.5 MB download ([README](datasets/amazon_sales/README.md)) |
+| [`datasets/fraud_transactions/`](datasets/fraud_transactions/) | `FRAUD` | 51,000 card and bank transactions of 4,000 users with a fraud label (4.9%) - messy on purpose: 1,000 repeated transaction ids, about 5% gaps in five columns and two placeholder values, for the Prepare and Validate steps; no date, only the hour; 3.9 MB of CSV, a 1 MB download ([README](datasets/fraud_transactions/README.md)) |
 
 The first three are the kit's own samples: they ship inside the kit, load with no
 internet and are what the General persona loads (`default=yes` in their `dataset.conf`).
-The other two are what the Data Scientist and ML Engineer personas load, each downloaded
-from the kit's `datasets` release only when it is picked. Both are *reference datasets*:
+The other three are what the Data Scientist persona loads (the ML Engineer, disabled for now,
+takes the first two), each downloaded from the kit's `datasets` release only when it is picked.
+All three are *reference datasets*:
 data with a
 `README.md` (source, terms, data dictionary), a `manifest.json` (source, terms, snapshot
 date, rows and SHA-256 of every CSV, and the release asset they ship as) and a descriptor;
 the builders that make them again live in [`tools/datasets/`](../tools/datasets/).
-Neither has a free-text column, so the notebook steps that need text skip on them and say why.
+None has a free-text column, and `fraud_transactions` has no date, so the notebook steps that need one skip on it and say why.
 Every table and column has a `COMMENT` in its `01_create_schema.sql`, so the database itself
 describes the data; the narrative and the join map for every dataset are in
 [data-dictionary.md](data-dictionary.md).
 
 ## Reference datasets
 
-`walmart_sales` and `amazon_sales` are *reference datasets*. Each
+`walmart_sales`, `amazon_sales` and `fraud_transactions` are *reference datasets*. Each
 folder holds:
 
 | File | What it is | Checked by `tools/dataset_check.py` |

@@ -1,7 +1,7 @@
-# Data dictionary — the five datasets
+# Data dictionary — the six datasets
 
 TPCH (TPC-H at SF=0.02), ENERGY and WEATHER, bundled with the kit and loaded offline, and
-WALMART (`walmart_sales`) and AMAZON (`amazon_sales`), downloaded from the kit's `datasets`
+WALMART (`walmart_sales`), AMAZON (`amazon_sales`) and FRAUD (`fraud_transactions`), downloaded from the kit's `datasets`
 release when they are loaded. Each loads into its own schema; there are no joins across schemas.
 
 > The same descriptions ship **inside the database** as table and column comments
@@ -309,6 +309,39 @@ away and must stay out of a model.
 - **Revenue** (kit convention): `l_extendedprice * (1 - l_discount)` — net of line discount,
   excludes tax, does not subtract returns. Add `WHERE l_returnflag <> 'R'` to exclude returned lines.
 
+## FRAUD — transactions with a fraud label (schema `FRAUD`, dataset id `fraud_transactions`)
+
+51,000 card and bank transactions of 4,000 users: the amount, type, hour of day, device, city and
+payment method, the user's earlier fraud count, account age and activity in the last 24 hours, and
+whether the transaction was fraud ("Fraud Detection Dataset" on Kaggle, licence not confirmed;
+[datasets/fraud_transactions/README.md](datasets/fraud_transactions/README.md)). **Messy on
+purpose:** 1,000 `TRANSACTION_ID`s occur twice (881 exact copies), about 5% of five columns are
+NULL, and `Unknown Device` / `Invalid Method` are placeholders. There is no date. Descriptor
+slots: `ROW_ID` (key), `FRAUDULENT` (target), `TRANSACTION_TYPE` (category), `LOCATION` (entity);
+no time and no text.
+
+### TRANSACTIONS  (51,000 rows) — fact table
+Grain: one row per line of the source file. **PK:** `ROW_ID` (`TRANSACTION_ID` is not unique).
+
+| Column | Type | Description | Example / values |
+|---|---|---|---|
+| ROW_ID | DECIMAL(6,0) | The line of the source file (PK, added by the kit) | 1 |
+| TRANSACTION_ID | VARCHAR(10) | The source's id - 1,000 repeat | T1 |
+| USER_ID | DECIMAL(5,0) | The customer (4,000) | 4174 |
+| TRANSACTION_AMOUNT | DECIMAL(10,2) | Amount in US dollars; NULL in ~5% | 1292.76 |
+| TRANSACTION_TYPE | VARCHAR(20) | Kind of transaction (5) | ATM Withdrawal, Bill Payment, POS Payment |
+| TRANSACTION_HOUR | DECIMAL(2,0) | Hour of day 0-23; NULL in ~5% | 16 |
+| DEVICE_USED | VARCHAR(20) | Device; NULL in ~5% | Desktop, Mobile, Tablet, Unknown Device |
+| LOCATION | VARCHAR(20) | City (8); NULL in ~5% | New York, Chicago |
+| PREVIOUS_FRAUDULENT_TRANSACTIONS | DECIMAL(2,0) | Earlier frauds of the user, 0-4 | 2 |
+| ACCOUNT_AGE | DECIMAL(4,0) | Account age, 1-119 (no unit given) | 79 |
+| TRANSACTIONS_LAST_24H | DECIMAL(3,0) | The user's transactions in the 24 hours before | 13 |
+| PAYMENT_METHOD | VARCHAR(20) | Payment method; NULL in ~5% | UPI, Debit Card, Invalid Method |
+| FRAUDULENT | DECIMAL(1,0) | 1 when the transaction was fraud (2,510, 4.9%) — **the label** | 0 |
+
+Typical questions: are the repeated ids copies, how much is missing, what the placeholders hide,
+the fraud rate counted once per transaction, and fraud by type, history, hour, amount and city.
+
 See **[example-questions.md](example-questions.md)** for 14 ready-to-ask TPC-H questions with
-validated reference SQL you can inspect before running. WALMART and AMAZON each ship at least
+validated reference SQL you can inspect before running. WALMART, AMAZON and FRAUD each ship at least
 ten runnable example queries in `datasets/<id>/examples.sql`.

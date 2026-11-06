@@ -131,10 +131,10 @@ connected or not installed on this machine appear greyed out with the reason and
 selected; **every selectable (pending) client is pre-selected**. The user restarts the
 client afterward.
 
-After setup, every client has an MCP server named `exasol`: on Exasol Personal 2.4.0+ the
-launcher's own MCP server beside the database (`http://127.0.0.1:4896/mcp`), elsewhere the kit's
-server, started on demand over stdio. Verify with `exakit mcp-doctor`, which completes an MCP
-handshake with whichever it is — so a `connected` client is one that can really reach it.
+After setup, every client has an MCP server named `exasol`: the Exasol Personal launcher's own
+MCP server beside the database (`http://127.0.0.1:4896/mcp`), the only one there is. Verify with
+`exakit mcp-doctor`, which heals it when it does not serve and completes an MCP handshake with
+it — so a `connected` client is one that can really reach it.
 
 **If you are the client you just configured, you cannot use those tools yet.** An MCP client
 reads its server list at startup, so the `exasol` tools appear only after *your own* process
@@ -148,8 +148,9 @@ trust. That is what makes the next steps safe.
 ## Step 4 — Load the sample data
 
 Check what is already there first: `exakit status --json` lists `datasets_loaded`. A persona
-install loaded the persona's own datasets — a Data Scientist or ML Engineer machine has
-`walmart_sales` (`WALMART.WEEKLY_SALES`) and `amazon_sales` (`AMAZON.ORDER_LINES`), **not** TPC-H. Use what
+install loaded the persona's own datasets — a Data Scientist machine has `walmart_sales`
+(`WALMART.WEEKLY_SALES`), `amazon_sales` (`AMAZON.ORDER_LINES`) and `fraud_transactions`
+(`FRAUD.TRANSACTIONS`, messy on purpose), **not** TPC-H. Use what
 is loaded. Only on an empty database, load a bundled sample, for example TPC-H (customers,
 orders, line items, parts, suppliers) into the `TPCH` schema:
 

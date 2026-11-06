@@ -57,7 +57,7 @@ jobs:
     timeout-minutes: 75
     env:
       EXAKIT_NO_FANCY: "1"
-      REFERENCE_DATASETS: walmart_sales amazon_sales
+      REFERENCE_DATASETS: walmart_sales amazon_sales fraud_transactions
     steps:
       - uses: actions/checkout@v7
       - name: Podman
@@ -69,13 +69,16 @@ jobs:
           podman info --format '{{.Host.Arch}} podman {{.Version.Version}}'
           df -h "$HOME" | tail -1
           free -g | head -2
-      - name: install the kit from this checkout with both personas
-        # No EXAKIT_DATASETS: the personas' own list is what has to load. The
+      - name: install the kit from this checkout as the Data Scientist
+        # No EXAKIT_DATASETS: the persona's own list is what has to load. The
         # reference datasets' release assets need not exist: EXAKIT_LOCAL_KIT
-        # loads the checkout's CSVs after checking their SHA-256.
+        # loads the checkout's CSVs after checking their SHA-256. The ML
+        # Engineer is disabled for now; its notebooks still run below, so its
+        # add-on (udf-devkit) is named beside the persona's own.
         env:
           EXAKIT_LOCAL_KIT: ${{ github.workspace }}
-          EXAKIT_PERSONA: data-scientist,ml-engineer
+          EXAKIT_PERSONA: data-scientist
+          EXAKIT_MARKETPLACE_ADDONS: dash-server,notebook,udf-devkit
           EXAKIT_SKIP_MCP: "1"
           EXAKIT_NOTEBOOK_FRONTENDS: none
           EXAKIT_INSTALL_PODMAN: "0"
@@ -126,13 +129,14 @@ jobs:
           EXAKIT_NOTEBOOK_BIND_CHECKOUT: '1'
           EXAKIT_NOTEBOOK_RUN_OUTPUT: ${{ runner.temp }}/executed-notebooks
         run: |
-          for recipe in walmart_sales:none amazon_sales:balanced my_data_tickets:balanced; do
+          for recipe in walmart_sales:none amazon_sales:balanced fraud_transactions:balanced my_data_tickets:balanced; do
+            # The ML Engineer (disabled for now) takes walmart_sales and amazon_sales only.
+            ml=""; case "${recipe%:*}" in fraud_transactions) ;; *) ml="notebook/notebooks/ml-engineer/00_quickstart.py notebook/notebooks/ml-engineer/01_train.py" ;; esac
             EXAKIT_NOTEBOOK_DATASETS="${recipe%:*}" EXAKIT_NOTEBOOK_CLASS_WEIGHT="${recipe#*:}" \
               bash tests/notebooks-run.sh \
                 notebook/notebooks/data-scientist/00_quickstart.py \
                 notebook/notebooks/data-scientist/01_explore.py \
-                notebook/notebooks/ml-engineer/00_quickstart.py \
-                notebook/notebooks/ml-engineer/01_train.py
+                $ml
           done
       - name: no database password in notebooks, descriptors or workflows
         # (e): file names only, never a password.

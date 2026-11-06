@@ -115,6 +115,12 @@ nb.sql(conn, f"SELECT {ds.col('category')}, AVG({ds.col('label')}) FROM {ds.fact
 nb.load_own_file("~/data/claims.csv", "MY_DATA.CLAIMS", {"entity": "CUSTOMER", ...})   # CSV, Parquet or JSON
 ```
 
+`data-scientist/01_explore` starts with the two checks a result should pass before anyone trusts it,
+both built from the descriptor so they run on any dataset: `nb.data_checks(conn, ds)` (Prepare:
+repeated keys and ids, exact copies, empty cells, placeholder values such as `Unknown Device`, a rare
+label) and `nb.leakage_check(conn, ds)` (Validate: a column whose values decide the label on their own,
+like `amazon_sales`' `STATUS`; the model leaves it out). Neither changes the data. Use them on the
+user's own table too before reporting a rate. `fraud_transactions` is the messy dataset that has all of it.
 `data-scientist/01_explore` is built that way: its settings are all in the first cell, one
 assignment (`DATASET = ...`) picks the data, every query is printed before its result, a small
 scikit-learn model runs on this computer, and a text step calls the user's own model endpoint

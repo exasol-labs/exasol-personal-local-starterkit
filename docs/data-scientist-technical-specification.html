@@ -1,0 +1,427 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Data Scientist Persona Specification</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Sans+Condensed:wght@600;700&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a reference manual. Sticky contents rail on the left, one reading column, wide tables and code scroll in place. */
+:root {
+  --bg:#F6F8F8; --paper:#FFFFFF; --ink:#13201F; --muted:#4B5A59; --faint:#728180; --rule:#D9E1E0; --tint:#EEF4F3;
+  --accent:#0F7A6B; --accent-soft:#E1F2EE; --s1:#A85A00; --s1-soft:#FFF3E3; --s2:#00689A; --s2-soft:#E4F3FB; --s3:#4C4FC4; --s3-soft:#EEEFFD;
+  --warn:#9A5B00; --warn-soft:#FFF6E0; --bad:#B4232F; --bad-soft:#FDEDEF;
+  --code-bg:#0E1A1F; --code-fg:#D7E3E8; --code-dim:#7F98A3;
+  --f-body:"IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --f-head:"IBM Plex Sans Condensed", "IBM Plex Sans", "Arial Narrow", sans-serif;
+  --f-mono:"IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg:#0E1416; --paper:#141C1F; --ink:#E4ECEB; --muted:#A9B8B7; --faint:#82918F; --rule:#2A3638; --tint:#1A2427;
+  --accent:#4FC7B2; --accent-soft:#163430; --s1:#F0A350; --s1-soft:#2E2215; --s2:#5CB8E6; --s2-soft:#14293A; --s3:#9EA1F5; --s3-soft:#20223F;
+  --warn:#F0B44E; --warn-soft:#2E2512; --bad:#F2727C; --bad-soft:#341A1D; --code-bg:#091013; --code-fg:#D7E3E8; --code-dim:#6F8994; color-scheme:dark; } }
+:root[data-theme="dark"] {
+  --bg:#0E1416; --paper:#141C1F; --ink:#E4ECEB; --muted:#A9B8B7; --faint:#82918F; --rule:#2A3638; --tint:#1A2427;
+  --accent:#4FC7B2; --accent-soft:#163430; --s1:#F0A350; --s1-soft:#2E2215; --s2:#5CB8E6; --s2-soft:#14293A; --s3:#9EA1F5; --s3-soft:#20223F;
+  --warn:#F0B44E; --warn-soft:#2E2512; --bad:#F2727C; --bad-soft:#341A1D; --code-bg:#091013; --code-fg:#D7E3E8; --code-dim:#6F8994; color-scheme:dark; }
+* { box-sizing:border-box; }
+html { scroll-padding-top:1rem; }
+body { margin:0; background:var(--bg); color:var(--ink); font-family:var(--f-body); font-size:16px; line-height:1.6; }
+.wrap { display:grid; grid-template-columns:16rem minmax(0,1fr); gap:2.5rem; max-width:84rem; margin:0 auto; padding:2rem max(16px, env(safe-area-inset-right, 0px)) 5rem max(16px, env(safe-area-inset-left, 0px)); }
+nav.toc { position:sticky; top:1rem; align-self:start; max-height:calc(100vh - 2rem); overflow:auto; font-size:.86rem; }
+nav.toc .k { font-family:var(--f-mono); font-size:.7rem; letter-spacing:.12em; text-transform:uppercase; color:var(--faint); margin-bottom:.5rem; }
+nav.toc ol { list-style:none; margin:0; padding:0; display:grid; gap:.1rem; }
+nav.toc a { display:grid; grid-template-columns:1.8rem 1fr; color:var(--muted); text-decoration:none; padding:.2rem .4rem; border-radius:6px; }
+nav.toc a:hover, nav.toc a:focus-visible { background:var(--tint); color:var(--ink); outline:none; }
+nav.toc a span { font-family:var(--f-mono); color:var(--faint); font-size:.78rem; }
+main { min-width:0; }
+.doc { background:var(--paper); border:1px solid var(--rule); border-radius:14px; padding:2.4rem clamp(1rem, 4vw, 3rem) 3rem; }
+header.cover { border-bottom:1px solid var(--rule); padding-bottom:1.6rem; margin-bottom:1rem; }
+.cover .meta { font-family:var(--f-mono); font-size:.76rem; color:var(--faint); letter-spacing:.06em; display:flex; flex-wrap:wrap; gap:.4rem 1.4rem; }
+h1 { font-family:var(--f-head); font-size:clamp(2rem, 4.5vw, 2.9rem); line-height:1.05; letter-spacing:-.01em; margin:.6rem 0; text-wrap:balance; }
+.lede { font-size:1.08rem; color:var(--muted); max-width:68ch; margin:0; }
+section { padding-top:2.2rem; scroll-margin-top:1rem; }
+h2 { font-family:var(--f-head); font-size:1.65rem; line-height:1.15; margin:0 0 .8rem; display:flex; gap:.7rem; align-items:baseline; text-wrap:balance; }
+h2 .n { font-family:var(--f-mono); font-size:.9rem; color:var(--accent); font-weight:500; }
+h3 { font-size:1.08rem; margin:1.6rem 0 .4rem; }
+h4 { font-size:.92rem; margin:1.1rem 0 .3rem; color:var(--muted); text-transform:uppercase; letter-spacing:.06em; }
+p, li { max-width:72ch; }
+p { margin:.5rem 0; }
+ul, ol { padding-left:1.25rem; margin:.4rem 0; } li { margin:.2rem 0; }
+a { color:var(--accent); }
+code { font-family:var(--f-mono); font-size:.86em; background:var(--tint); border-radius:4px; padding:.05em .3em; overflow-wrap:anywhere; }
+pre { font-family:var(--f-mono); font-size:.8rem; line-height:1.55; background:var(--code-bg); color:var(--code-fg); border-radius:10px; padding:.9rem 1.1rem; overflow-x:auto; margin:.7rem 0 1rem; }
+pre code { background:none; padding:0; font-size:inherit; overflow-wrap:normal; }
+pre .c { color:var(--code-dim); }
+.tbl { overflow-x:auto; margin:.7rem 0 1.1rem; border:1px solid var(--rule); border-radius:10px; }
+table { border-collapse:collapse; width:100%; font-size:.88rem; }
+th, td { text-align:left; vertical-align:top; padding:.5rem .7rem; border-bottom:1px solid var(--rule); }
+th { font-size:.72rem; letter-spacing:.06em; text-transform:uppercase; color:var(--faint); background:var(--tint); font-weight:600; white-space:nowrap; }
+tr:last-child td { border-bottom:0; }
+td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+td code { white-space:nowrap; }
+.tag { display:inline-block; font-family:var(--f-mono); font-size:.7rem; font-weight:500; border-radius:5px; padding:.05rem .4rem; white-space:nowrap; }
+.tag.ok { background:var(--accent-soft); color:var(--accent); } .tag.part { background:var(--warn-soft); color:var(--warn); } .tag.no { background:var(--bad-soft); color:var(--bad); }
+.tag.s1 { background:var(--s1-soft); color:var(--s1); } .tag.s2 { background:var(--s2-soft); color:var(--s2); } .tag.s3 { background:var(--s3-soft); color:var(--s3); }
+.note { border-left:3px solid var(--accent); background:var(--accent-soft); padding:.6rem .9rem; border-radius:0 8px 8px 0; margin:.8rem 0; font-size:.92rem; }
+.note.warn { border-color:var(--warn); background:var(--warn-soft); }
+.note.bad { border-color:var(--bad); background:var(--bad-soft); }
+.facts { display:grid; grid-template-columns:repeat(auto-fit, minmax(9rem, 1fr)); gap:.8rem; margin:1.2rem 0 .4rem; }
+.fact { border:1px solid var(--rule); border-radius:10px; padding:.7rem .85rem; }
+.fact .v { font-family:var(--f-head); font-size:1.5rem; font-weight:700; font-variant-numeric:tabular-nums; line-height:1.1; }
+.fact .l { font-size:.8rem; color:var(--muted); margin-top:.2rem; line-height:1.35; }
+.steps { counter-reset:s; list-style:none; padding:0; }
+.steps > li { counter-increment:s; position:relative; padding-left:2.3rem; margin:.7rem 0; }
+.steps > li::before { content:counter(s); position:absolute; left:0; top:.05rem; width:1.55rem; height:1.55rem; border-radius:50%; background:var(--accent); color:var(--paper); font-family:var(--f-mono); font-size:.78rem; font-weight:500; display:flex; align-items:center; justify-content:center; }
+.two { display:grid; grid-template-columns:repeat(auto-fit, minmax(17rem, 1fr)); gap:1rem; }
+.card { border:1px solid var(--rule); border-radius:10px; padding:.8rem 1rem; }
+.card h4 { margin-top:0; }
+/* The loop: eight stages in a row that wraps, each a small card with its notebook. */
+.loop { display:grid; grid-template-columns:repeat(4, minmax(0, 1fr)); gap:.5rem; margin:1rem 0; counter-reset:l; }
+@media (max-width: 640px) { .loop { grid-template-columns:repeat(2, minmax(0, 1fr)); } }
+.loop .st { counter-increment:l; border:1px solid var(--rule); border-top:3px solid var(--accent); border-radius:8px; padding:.55rem .65rem; background:var(--paper); }
+.loop .st::before { content:counter(l, decimal-leading-zero); font-family:var(--f-mono); font-size:.7rem; color:var(--faint); }
+.loop .st b { display:block; font-family:var(--f-head); font-size:1.05rem; }
+.loop .st small { display:block; color:var(--muted); font-size:.76rem; line-height:1.35; margin-top:.15rem; }
+.loop .st.new { border-top-color:var(--s3); }
+.qa dt { font-weight:700; margin-top:1rem; max-width:72ch; } .qa dd { margin:.3rem 0 0; color:var(--muted); max-width:72ch; }
+footer { margin-top:3rem; padding-top:1rem; border-top:1px solid var(--rule); font-size:.82rem; color:var(--faint); }
+:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+@media (max-width: 960px) { .wrap { grid-template-columns:1fr; gap:1rem; } nav.toc { position:static; max-height:none; } }
+@media print { nav.toc { display:none; } .wrap { display:block; } .doc { border:0; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+<nav class="toc" aria-label="Contents">
+  <div class="k">Contents</div>
+  <ol>
+    <li><a href="#glance"><span>00</span>At a glance</a></li>
+    <li><a href="#loop"><span>01</span>The working loop</a></li>
+    <li><a href="#install"><span>02</span>Install as a Data Scientist</a></li>
+    <li><a href="#data"><span>03</span>The data</a></li>
+    <li><a href="#descriptor"><span>04</span>The column map (descriptor)</a></li>
+    <li><a href="#notebooks"><span>05</span>The four notebooks</a></li>
+    <li><a href="#dynamic"><span>06</span>How every cell follows the data</a></li>
+    <li><a href="#prepare"><span>07</span>Prepare: is the data clean?</a></li>
+    <li><a href="#validate"><span>08</span>Validate: leakage and baselines</a></li>
+    <li><a href="#model"><span>09</span>The small model</a></li>
+    <li><a href="#ask"><span>10</span>Ask your data</a></li>
+    <li><a href="#share"><span>11</span>Share a checked result</a></li>
+    <li><a href="#lineage"><span>12</span>Lineage: the workflow log</a></li>
+    <li><a href="#mcp"><span>13</span>AI agents through MCP</a></li>
+    <li><a href="#settings"><span>14</span>Your model and Langfuse</a></li>
+    <li><a href="#security"><span>15</span>Credentials and safety</a></li>
+    <li><a href="#measured"><span>16</span>Measured on a real kit</a></li>
+    <li><a href="#gaps"><span>17</span>Against the review: what is done</a></li>
+    <li><a href="#limits"><span>18</span>Known limits</a></li>
+    <li><a href="#trouble"><span>19</span>Troubleshooting</a></li>
+    <li><a href="#where"><span>20</span>Where everything is</a></li>
+    <li><a href="#glossary"><span>21</span>Glossary</a></li>
+  </ol>
+</nav>
+<main>
+<article class="doc">
+<header class="cover">
+  <div class="meta"><span>Exasol Personal Starter Kit</span><span>Branch feat/descriptor-approve</span><span>6 November 2026</span><span>Persona: data-scientist</span></div>
+  <h1>One table you have never seen: how the Data Scientist persona is built</h1>
+  <p class="lede">A data scientist installs the kit, loads a dataset or their own file, gets an approved description of it, checks it is clean, explores it with every SQL statement visible, tests one idea with a small model, and shares a result whose numbers they checked. This page describes what the kit does at each step, as the code on this branch does it.</p>
+</header>
+
+<section id="glance">
+<h2><span class="n">00</span>At a glance</h2>
+<div class="facts">
+  <div class="fact"><div class="v">3</div><div class="l">practice datasets: Amazon sales, Walmart sales, fraud transactions (messy on purpose)</div></div>
+  <div class="fact"><div class="v">4</div><div class="l">notebooks: quickstart, explore, ask your data, share</div></div>
+  <div class="fact"><div class="v">0</div><div class="l">column names typed in a notebook: every query is built from the approved column map</div></div>
+  <div class="fact"><div class="v">9 / 9</div><div class="l">live notebook runs passed (3 notebooks × 3 datasets) on 6 November 2026</div></div>
+  <div class="fact"><div class="v">1</div><div class="l">MCP server: the one beside the database, read-only, self-healing</div></div>
+</div>
+<p>Everything the user does happens in a notebook that opens already connected, with no password in it. The column map (the <em>descriptor</em>) is proposed by the kit from a profile of the data and approved by the user; every later step reads it, which is why changing one assignment, <code>DATASET = ...</code>, moves every notebook to another dataset. The ML Engineer persona is switched off on this branch (kept, not removed) so the work can focus here.</p>
+</section>
+
+<section id="loop">
+<h2><span class="n">01</span>The working loop</h2>
+<p>The persona follows the loop a data scientist already works in. Each stage has a place in the kit; the two marked in violet were added on this branch.</p>
+<div class="loop" role="list">
+  <div class="st" role="listitem"><b>Access</b><small>install, load a sample or a file, notebook opens connected</small></div>
+  <div class="st" role="listitem"><b>Understand</b><small>profile → proposed roles with evidence → approve</small></div>
+  <div class="st new" role="listitem"><b>Prepare</b><small>repeats, copies, gaps, placeholders, a rare label</small></div>
+  <div class="st" role="listitem"><b>Explore</b><small>groups and trends, SQL shown; ask in plain English</small></div>
+  <div class="st" role="listitem"><b>Model</b><small>a small scikit-learn model on this computer</small></div>
+  <div class="st new" role="listitem"><b>Validate</b><small>leakage check, baseline, honest score note</small></div>
+  <div class="st" role="listitem"><b>Share</b><small>dashboard preview, figures checked, then publish</small></div>
+  <div class="st" role="listitem"><b>Hand off</b><small>approved map + SQL + workflow log</small></div>
+</div>
+<div class="tbl"><table>
+<thead><tr><th>Stage</th><th>What the user needs</th><th>Where the kit does it</th><th>Command or cell</th></tr></thead>
+<tbody>
+<tr><td>Access</td><td>"Get me to the data without a ticket."</td><td>installer, <code>exakit data-load</code>, notebook add-on</td><td><code>EXAKIT_PERSONA=data-scientist</code>, quickstart <em>Choose a dataset</em></td></tr>
+<tr><td>Understand</td><td>"What is in here, and can I trust it?"</td><td>describe service: profile, draft, review, approve</td><td>quickstart <em>Approve the column map</em>, <code>exakit describe &lt;id&gt;</code></td></tr>
+<tr><td>Prepare</td><td>"What is wrong with it?"</td><td><code>nb.data_checks(conn, ds)</code></td><td>explore <em>Prepare: is the data clean?</em></td></tr>
+<tr><td>Explore</td><td>"Find the pattern."</td><td>SQL built from roles, every statement printed</td><td>explore <em>Compare groups</em>, <em>Over time</em>; ask your data</td></tr>
+<tr><td>Model</td><td>"Test a hypothesis."</td><td>logistic regression on category, entity, month</td><td>explore <em>Small baseline model</em></td></tr>
+<tr><td>Validate</td><td>"Am I fooling myself?"</td><td><code>nb.leakage_check(conn, ds)</code>, ROC AUC with a plain note</td><td>explore <em>Validate</em>, model note</td></tr>
+<tr><td>Share</td><td>"Show stakeholders."</td><td>Dash Server draft → preview → confirm → publish</td><td>share notebook</td></tr>
+<tr><td>Hand off</td><td>"Let someone repeat it."</td><td>versioned descriptor, query digest, workflow log</td><td><code>~/.exasol-starter-kit/workflows/&lt;id&gt;.jsonl</code></td></tr>
+</tbody></table></div>
+</section>
+
+<section id="install">
+<h2><span class="n">02</span>Install as a Data Scientist</h2>
+<pre><code>curl -fsSL https://www.exasol.com/install/starter-kit.sh | EXAKIT_PERSONA=data-scientist sh</code></pre>
+<p>On a terminal the installer asks <em>What will you use this machine for?</em> and offers <b>Data Scientist</b> and <b>General</b>; the environment variable answers it without a terminal. The persona is one file, <code>personas/data-scientist.json</code>:</p>
+<div class="tbl"><table>
+<thead><tr><th>Key</th><th>Value</th><th>Effect</th></tr></thead>
+<tbody>
+<tr><td><code>datasets</code></td><td><code>walmart_sales</code>, <code>amazon_sales</code>, <code>fraud_transactions</code></td><td>ticked in the data question, downloaded and loaded</td></tr>
+<tr><td><code>addons</code></td><td><code>dash-server</code>, <code>notebook</code></td><td>offered at the end of the install</td></tr>
+<tr><td><code>mcp_clients</code></td><td><code>all</code></td><td>every AI client found is connected to the database's MCP server</td></tr>
+<tr><td><code>addon_reasons</code></td><td>one line per add-on</td><td>what the add-on does for this persona, shown in the add-on table</td></tr>
+</tbody></table></div>
+<p>Later: <code>exakit persona add data-scientist</code> brings in what is missing; <code>exakit persona list | show | plan</code> show what each persona brings. <code>exakit persona add ml-engineer</code> is refused on this branch: its file says <code>"visible": false</code>.</p>
+</section>
+
+<section id="data">
+<h2><span class="n">03</span>The data</h2>
+<p>Three reference datasets, each in its own schema. They are downloaded from the kit's <code>datasets</code> release when picked (the General persona's TPC-H, energy and weather ship inside the kit and load offline).</p>
+<div class="tbl"><table>
+<thead><tr><th>Dataset</th><th>Table</th><th class="num">Rows</th><th>Label</th><th>Why it is here</th></tr></thead>
+<tbody>
+<tr><td><code>amazon_sales</code></td><td><code>AMAZON.ORDER_LINES</code></td><td class="num">128,975</td><td><code>CANCELLED</code> (14.2%)</td><td>a real sales table, and a column (<code>STATUS</code>) that gives the label away</td></tr>
+<tr><td><code>walmart_sales</code></td><td><code>WALMART.WEEKLY_SALES</code></td><td class="num">6,435</td><td><code>ABOVE_STORE_MEDIAN</code> (49.7%)</td><td>clean, balanced, a time series with a date</td></tr>
+<tr><td><code>fraud_transactions</code></td><td><code>FRAUD.TRANSACTIONS</code></td><td class="num">51,000</td><td><code>FRAUDULENT</code> (4.9%)</td><td>messy on purpose: 1,000 repeated ids, ~5% gaps in five columns, two placeholders, no date</td></tr>
+</tbody></table></div>
+<h3>How a dataset reaches the database</h3>
+<ol class="steps">
+  <li><code>exakit data-load fraud_transactions</code> (or the quickstart's load cell) downloads <code>fraud_transactions-2026-11-06.tar.gz</code> and checks its SHA-256 against <code>manifest.json</code>.</li>
+  <li>Every CSV in it is checked against its own digest, then loaded with exapump into the dataset's schema by its <code>01_create_schema.sql</code>.</li>
+  <li><code>03_verify_setup.sql</code> must answer <code>OK</code> on every row (row count, label count, the kept duplicates); a <code>FAIL</code> blocks marking it loaded.</li>
+</ol>
+<p>Your own CSV, Parquet or JSON file goes in from the quickstart (<code>SOURCE</code>) or <code>nb.load_own_file()</code>, and then through the same describe and approve step as a sample.</p>
+<div class="note warn"><b>Licences.</b> All three come from Kaggle; their licences are recorded as not confirmed (<code>terms.confirmed: false</code>). Check the pages before redistributing.</div>
+</section>
+
+<section id="descriptor">
+<h2><span class="n">04</span>The column map (descriptor)</h2>
+<p>The kit profiles the table (type, share of empty cells, distinct values, date span, text length), proposes a role for every column with the evidence that chose it, and the user corrects and approves it in a picker - no YAML to edit.</p>
+<div class="two">
+  <div class="card"><h4>Column roles</h4><p><code>key</code>, <code>time</code>, <code>measure</code>, <code>category</code>, <code>flag</code>, <code>text</code>, <code>identifier</code>, <code>other</code> - one per column.</p></div>
+  <div class="card"><h4>Slots the notebooks read</h4><p><code>key</code>, <code>time</code> (date), <code>target</code> (label), <code>category</code>, <code>entity</code>, <code>text</code>. An empty slot carries its reason, and the steps that need it skip and print that reason.</p></div>
+</div>
+<h3>Draft, approve, version</h3>
+<ul>
+  <li>A draft is enough to explore. Ask your data and Share call <code>require_approved</code> and refuse a draft, saying how to approve it.</li>
+  <li>Approving writes <code>v&lt;n&gt;.yaml</code> and <code>current.yaml</code> under <code>~/.exasol-starter-kit/descriptors/&lt;SCHEMA.TABLE&gt;/</code>; a version file is never rewritten.</li>
+  <li>The roles are published as a view, <code>EXAKIT_SEMANTIC.&lt;SCHEMA&gt;__&lt;TABLE&gt;</code>, whose column comments carry them; agents read the roles from there over MCP.</li>
+  <li>Approving roles that the current version already has writes nothing and says where that version is stored (and the view, when it exists).</li>
+</ul>
+<pre><code><span class="c"># fraud_transactions, shipped descriptor (excerpt)</span>
+grain: "one row per transaction (1,000 transactions appear twice)"
+slots: { key: ROW_ID, time: null, text: null, target: FRAUDULENT, category: TRANSACTION_TYPE, entity: LOCATION }
+columns:
+  "TRANSACTION_ID": {role: "identifier", evidence: "98% distinct"}
+  "DEVICE_USED":    {role: "category",   evidence: "4 distinct"}
+  "FRAUDULENT":     {role: "flag",       evidence: "0 95.1%, 1 4.9%"}</code></pre>
+</section>
+
+<section id="notebooks">
+<h2><span class="n">05</span>The four notebooks</h2>
+<p>Written as jupytext percent-format <code>.py</code> files, built into <code>.ipynb</code> and Marimo versions by <code>tools/notebooks.py</code>. Each important idea is explained the first time it appears, in three short lines: what it is and why it is used.</p>
+<div class="tbl"><table>
+<thead><tr><th>#</th><th>Notebook</th><th>Sections</th><th>Needs</th></tr></thead>
+<tbody>
+<tr><td>0</td><td><code>00_quickstart</code></td><td>Start a workflow · Connect · Choose a dataset · Approve the column map · First result · Next</td><td>nothing</td></tr>
+<tr><td>1</td><td><code>01_explore</code></td><td>Your model and Langfuse (optional) · Load the column map · <b>Prepare</b> · Compare groups · Over time · <b>Validate</b> · Small baseline model · Model clues · Texts (optional) · Decide what to test next</td><td>a draft map</td></tr>
+<tr><td>2</td><td><code>02_ask_your_data</code></td><td>Your model and Langfuse (optional) · Review the proposal · Approve and run</td><td>an approved map; a model only to draft SQL</td></tr>
+<tr><td>3</td><td><code>03_share</code></td><td>Settings and the draft · Preview · Publish</td><td>an approved map, Dash Server</td></tr>
+</tbody></table></div>
+</section>
+
+<section id="dynamic">
+<h2><span class="n">06</span>How every cell follows the data</h2>
+<p>No notebook names a column or a table. Four rules hold that:</p>
+<ol class="steps">
+  <li><b>One assignment picks the data.</b> <code>DATASET = None</code> means "the dataset approved last in a quickstart" (<code>nb.chosen_dataset</code>), else <code>amazon_sales</code>; any id or a file path with its descriptor beside it also works.</li>
+  <li><b>Columns come from roles.</b> <code>ds.col("category")</code>, <code>ds.col("label")</code>, ... and <code>ds.fact_table</code>; a role the data does not have is <code>None</code>, never guessed.</li>
+  <li><b>Result columns are named after the data.</b> <code>nb.name()</code> and <code>nb.count_name()</code> turn <code>CANCELLED</code> into <code>CANCELLED_PCT</code> and the grain into <code>ORDER_LINES</code> or <code>TRANSACTIONS</code>; Share's query, title and app name follow the same rule.</li>
+  <li><b>A missing role skips, with its reason.</b> No date (<code>fraud_transactions</code>): no trend, and the model leaves the month out. No text (all three): the text step skips.</li>
+</ol>
+<p>Two tests hold this: <code>SwapTest</code> renders every SQL f-string for two datasets and requires them to differ only in descriptor values, and <code>MissingRolesTest</code> removes each role in turn and requires every step that needs it to skip, not fail.</p>
+</section>
+
+<section id="prepare">
+<h2><span class="n">07</span>Prepare: is the data clean?</h2>
+<p><code>nb.data_checks(conn, ds)</code> runs a handful of SQL statements built from the descriptor (shown and logged like every other query) and prints one sentence per finding saying what it does to a result. It changes nothing.</p>
+<div class="tbl"><table>
+<thead><tr><th>Check</th><th>How it is found</th><th>On fraud_transactions</th></tr></thead>
+<tbody>
+<tr><td>repeated id</td><td>a key or identifier that is almost one per row but repeats; the message quotes the descriptor's grain</td><td><code>TRANSACTION_ID</code>: 1,000 rows</td></tr>
+<tr><td>exact copies</td><td>rows equal in every column but the key</td><td>881 rows</td></tr>
+<tr><td>empty cells</td><td><code>COUNT(*) - COUNT(column)</code> for every column</td><td>five columns, ~2,500 each</td></tr>
+<tr><td>placeholder</td><td>a category value such as <code>Unknown…</code>, <code>Invalid…</code>, <code>N/A</code>, <code>-</code></td><td><code>Unknown Device</code>, <code>Invalid Method</code>: 1,530 each</td></tr>
+<tr><td>rare label</td><td>label rate under 10% (or over 90%)</td><td><code>FRAUDULENT</code> 4.9%: "always 0" is right 95.1% of the time</td></tr>
+</tbody></table></div>
+<p>On <code>walmart_sales</code> the same cell reports that the table passed every check; on <code>amazon_sales</code> it finds 8,597 repeated <code>ORDER_ID</code>s (expected: one row per order line), 6 exact copies and the empty courier and amount columns.</p>
+</section>
+
+<section id="validate">
+<h2><span class="n">08</span>Validate: leakage and baselines</h2>
+<p><code>nb.leakage_check(conn, ds)</code> looks at every column with at most 50 values (not the key, identifiers or text) and flags one whose values almost decide the label on their own: values where the label is at least 99% one way cover at least 95% of rows and catch at least 90% of the label-1 rows. Such a column was usually written after the outcome. The model leaves it out.</p>
+<pre><code>- STATUS gives CANCELLED away: CANCELLED is 1 whenever STATUS is 'Cancelled'.
+  It was probably written after the outcome - leave it out of any model.</code></pre>
+<p>The model's score is ROC AUC on a quarter it has not seen, with a note in plain words ("about as good as guessing" near 0.5). A rare label is called out in Prepare, so accuracy is never the measure.</p>
+</section>
+
+<section id="model">
+<h2><span class="n">09</span>The small model</h2>
+<p>A one-hot logistic regression with balanced class weights and a stratified, seeded split (<code>random_state=0</code>), on this computer. Its features are what the map names and the leakage check allows:</p>
+<ul>
+  <li>the category and the entity, as text;</li>
+  <li>the month of the date, <b>only when there is a date</b>.</li>
+</ul>
+<p>With a date it reads the newest 20,000 rows; without one, the first 20,000 by the key - the same rows on every rerun either way. It needs a label and a category or entity. The <em>Model clues</em> cell lists the values the model leans on each way, at most half of them per side, so no value appears on both.</p>
+</section>
+
+<section id="ask">
+<h2><span class="n">10</span>Ask your data</h2>
+<ol class="steps">
+  <li>A question in plain English. With <code>DRAFT_WITH_MODEL = True</code> the user's own model drafts SQL from the approved map (every column with its role, evidence and note; no rows are sent); otherwise a starter query built from the roles.</li>
+  <li>The proposal shows the SQL one clause per line, what the model assumed and what to check. Nothing has run.</li>
+  <li><code>proposal.approve()</code> fixes the exact text (its digest is logged); <code>proposal.run()</code> refuses anything else.</li>
+  <li>It runs through the MCP server beside the database, as the read-only user: one <code>SELECT</code> or <code>WITH</code>, at most 1,000 rows. A draft map is refused.</li>
+</ol>
+</section>
+
+<section id="share">
+<h2><span class="n">11</span>Share a checked result</h2>
+<p>The share notebook counts rows by the category (else the entity, else the label), named after the data, and builds a Dash Server dashboard from that one visible query:</p>
+<ol class="steps">
+  <li><code>nb.share(ds, QUERY, TITLE, APP_NAME)</code> prepares a draft carrying the query digest and the descriptor version.</li>
+  <li><code>draft.preview(...)</code> publishes a preview the user opens and compares with the SQL.</li>
+  <li><code>draft.confirm(..., figures_checked=True)</code> publishes it only after the user says the figures are checked.</li>
+</ol>
+<p>Needs <code>exakit marketplace dash-server</code> and <code>exakit start dash-server</code> (port 5100 by default).</p>
+</section>
+
+<section id="lineage">
+<h2><span class="n">12</span>Lineage: the workflow log</h2>
+<p>Every notebook starts or resumes a workflow (<code>wf-YYYYMMDD-xxxxxx</code>). Each SQL statement (with its digest and row count), each descriptor draft and approval, each approved question and each trace is one line in <code>~/.exasol-starter-kit/workflows/&lt;id&gt;.jsonl</code>, in order. Paste the quickstart's id into <code>WORKFLOW_ID</code> in the other notebooks to keep one log.</p>
+</section>
+
+<section id="mcp">
+<h2><span class="n">13</span>AI agents through MCP</h2>
+<p>Every AI client the kit connects (Claude, Claude Code, Codex, Cursor, VS Code Copilot, Gemini CLI, OpenCode, Continue) reaches the database through one MCP server: the official Exasol MCP server that the Exasol Personal launcher runs beside the database, at <code>http://127.0.0.1:4896/mcp</code>, connected as the dedicated read-only user. Client configs hold the URL and no password; Claude Desktop goes through <code>uvx mcp-proxy</code>.</p>
+<p>There is no fallback server. When it does not serve, <code>exakit mcp-setup</code> and <code>exakit mcp-doctor</code> heal it:</p>
+<div class="tbl"><table>
+<thead><tr><th>Case</th><th>What the kit does</th></tr></thead>
+<tbody>
+<tr><td>read-only user missing</td><td>sets it up again</td></tr>
+<tr><td>port 4896 taken by another program</td><td>moves the server to the first free port of the next 20 and records it</td></tr>
+<tr><td>deployment from an older launcher asks for a restart</td><td>restarts the database once (data kept)</td></tr>
+<tr><td>container did not start</td><td>recreates it once</td></tr>
+<tr><td>launcher before 2.4.0</td><td>says so, with the fix <code>exakit update personal</code></td></tr>
+<tr><td>still not serving</td><td>quotes the launcher's own reason, keeps the clients on the URL, marks it not validated for the doctor</td></tr>
+</tbody></table></div>
+</section>
+
+<section id="settings">
+<h2><span class="n">14</span>Your model and Langfuse</h2>
+<p>Explore and Ask open with an optional cell: fill in <code>MODEL_ID</code>, <code>PROVIDER_BASE_URL</code> (any Chat Completions endpoint, a local one too) and <code>LANGFUSE_BASE_URL</code>, run it, and the keys are asked for in a hidden prompt. They stay in the notebook's kernel only - never in the file, its outputs or on disk. Left empty, the cell changes nothing; exporting the same variables before <code>exakit notebook</code> still works. A key is never sent over plain <code>http://</code> to another machine.</p>
+</section>
+
+<section id="security">
+<h2><span class="n">15</span>Credentials and safety</h2>
+<ul>
+  <li>No host, user or password in any notebook, helper or output template; a test greps every shipped file for them.</li>
+  <li>Notebooks connect from the kit's store; passwords live in files under <code>~/.exasol-starter-kit/credentials/</code>.</li>
+  <li>The database certificate is pinned (trust on first use) for every kit-built client.</li>
+  <li>AI clients reach the database only as the read-only user; writes are rejected by the database itself.</li>
+  <li>No SQL from Ask runs before the user approves that exact text.</li>
+</ul>
+</section>
+
+<section id="measured">
+<h2><span class="n">16</span>Measured on a real kit</h2>
+<p>On a MacBook (Apple silicon) running the kit's own Exasol Personal 2.4.0 database, 6 November 2026:</p>
+<div class="tbl"><table>
+<thead><tr><th>What</th><th>Result</th></tr></thead>
+<tbody>
+<tr><td><code>dataset_check fraud_transactions</code> (live)</td><td>loaded 51,000 rows in 0.4 s; 3 verify checks OK; all 12 example queries returned rows</td></tr>
+<tr><td>Quickstart, Explore, Ask on three datasets</td><td>9 of 9 runs passed, headless, on the kit's notebook environment</td></tr>
+<tr><td>Explore model, ROC AUC</td><td><code>walmart_sales</code> 0.660 · <code>amazon_sales</code> 0.521 · <code>fraud_transactions</code> 0.488</td></tr>
+<tr><td>Leakage check</td><td>flags <code>STATUS</code> on <code>amazon_sales</code>; nothing on the other two</td></tr>
+<tr><td>Prepare checks on <code>fraud_transactions</code></td><td>found all five planted problems (repeats, copies, gaps, placeholders, rare label)</td></tr>
+</tbody></table></div>
+<div class="note">The low AUCs are the honest answer: category and city say little about Amazon cancellations or this fraud label, and the note under the score says so instead of presenting a number as a finding.</div>
+</section>
+
+<section id="gaps">
+<h2><span class="n">17</span>Against the review: what is done</h2>
+<p>The review of the requirements named three gaps in the Data Scientist flow. Where each stands on this branch:</p>
+<div class="tbl"><table>
+<thead><tr><th>Gap</th><th>Status</th><th>What exists</th><th>Still open</th></tr></thead>
+<tbody>
+<tr><td>Prepare</td><td><span class="tag part">partly</span></td><td>the checks find repeats, copies, gaps, placeholders and a rare label on any dataset</td><td>a typed view proposed with the roles (a column that parses as a date becomes DATE) and created on approval</td></tr>
+<tr><td>Validate on the DS side</td><td><span class="tag ok">done</span></td><td>leakage check before the model; baseline and score note; rare label called out</td><td>a check that a time split respects order (the model splits at random, stratified, seeded)</td></tr>
+<tr><td>Several tables</td><td><span class="tag no">open</span></td><td>one fact table per descriptor; "describe a view I wrote" works</td><td>relations between tables in the descriptor</td></tr>
+</tbody></table></div>
+</section>
+
+<section id="limits">
+<h2><span class="n">18</span>Known limits</h2>
+<ul>
+  <li>Licences of the three datasets are not confirmed.</li>
+  <li>No dataset has a text column, so the text step (and its Langfuse trace) is exercised only on the user's own data.</li>
+  <li>Share needs Dash Server running; it was not part of the live run above.</li>
+  <li>The hidden prompt of the settings cell is shown by Jupyter; in Marimo it may not appear, and the cell then says how to set the key in the terminal.</li>
+  <li>The ML Engineer persona is switched off on this branch; its notebooks and training code stay.</li>
+</ul>
+</section>
+
+<section id="trouble">
+<h2><span class="n">19</span>Troubleshooting</h2>
+<dl class="qa">
+  <dt>A step says "Skipped - … needs the date role".</dt><dd>The data has no column for that role (no date in <code>fraud_transactions</code>). It is a fact about the data, not an error.</dd>
+  <dt>"training needs an approved descriptor: … is a draft".</dt><dd>Approve it in the quickstart's review cell, or <code>exakit describe &lt;id&gt; --approve</code>.</dd>
+  <dt>Ask fails with "The Exasol MCP server … did not answer".</dt><dd>Run <code>exakit mcp-doctor</code>: it heals the server beside the database and says what it could not fix.</dd>
+  <dt>The dataset download fails offline.</dt><dd>Point <code>EXAKIT_DATASETS_MIRROR</code> at a folder (or an https URL) holding the archive.</dd>
+</dl>
+</section>
+
+<section id="where">
+<h2><span class="n">20</span>Where everything is</h2>
+<div class="tbl"><table>
+<thead><tr><th>What</th><th>Where</th></tr></thead>
+<tbody>
+<tr><td>Persona</td><td><code>personas/data-scientist.json</code></td></tr>
+<tr><td>Datasets and their builders</td><td><code>data/datasets/&lt;id&gt;/</code>, <code>tools/datasets/&lt;id&gt;.py</code></td></tr>
+<tr><td>Notebook sources</td><td><code>notebook/notebooks/data-scientist/*.py</code>, shared cells in <code>00_shared/</code></td></tr>
+<tr><td>Notebook helpers</td><td><code>notebook/package/exakit_nb/</code> (<code>data_checks.py</code>, <code>dataset.py</code>, <code>role_picker.py</code>, <code>ask.py</code>, <code>share.py</code>, <code>setup_env.py</code>)</td></tr>
+<tr><td>Describe service</td><td><code>setup/lib/descriptor/</code>, <code>setup/lib/describe_service.py</code></td></tr>
+<tr><td>Approved descriptors</td><td><code>~/.exasol-starter-kit/descriptors/&lt;SCHEMA.TABLE&gt;/</code></td></tr>
+<tr><td>Workflow logs</td><td><code>~/.exasol-starter-kit/workflows/</code></td></tr>
+<tr><td>MCP server definition</td><td><code>setup/lib/mcp.sh</code> / <code>mcp.ps1</code> (<code>mcp_sidecar_apply</code> / <code>Set-McpSidecar</code>)</td></tr>
+</tbody></table></div>
+</section>
+
+<section id="glossary">
+<h2><span class="n">21</span>Glossary</h2>
+<dl class="qa">
+  <dt>Descriptor (column map)</dt><dd>The approved description of one table: every column's role with its evidence, and the slots the notebooks read.</dd>
+  <dt>Slot</dt><dd>One of key, time, target, category, entity, text: the column a notebook step reads for that purpose.</dd>
+  <dt>Leakage</dt><dd>A column that knows the outcome because it was written after it; it makes a model look perfect and fail on new rows.</dd>
+  <dt>Baseline</dt><dd>The simplest answer a model has to beat, such as always predicting the common class.</dd>
+  <dt>ROC AUC</dt><dd>How often the model ranks a label-1 row above a label-0 row: 0.5 is guessing, 1.0 is perfect.</dd>
+  <dt>Sidecar</dt><dd>A container the Exasol Personal launcher runs beside the database; the MCP server is one.</dd>
+  <dt>Workflow</dt><dd>One id that links the queries, descriptor versions, approvals and traces of one piece of work.</dd>
+</dl>
+</section>
+
+<footer>Exasol Personal Starter Kit · Data Scientist persona · generated from the code on branch feat/descriptor-approve, 6 November 2026. Every command and number on this page was checked against that code or measured on a running kit.</footer>
+</article>
+</main>
+</div>
+</body>
+</html>

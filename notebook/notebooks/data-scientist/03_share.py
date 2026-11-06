@@ -9,7 +9,7 @@
 # %% [markdown]
 # # Share a dashboard
 #
-# **Dataset:** `amazon_sales`, `walmart_sales` or your own approved descriptor. **How long:** about five minutes once Dash Server is ready.
+# **Dataset:** the one you approved last (else `amazon_sales`), `walmart_sales`, `fraud_transactions` or your own approved descriptor. **How long:** about five minutes once Dash Server is ready.
 #
 # Builds a dashboard on Dash Server, previews it and publishes only after you check the figures. No LLM needed.
 #
@@ -18,9 +18,9 @@
 # %%
 import exakit.nb as nb
 
-DATASET = None  # None: the dataset approved last in a quickstart (else amazon_sales); or "walmart_sales", or an approved descriptor of your own
-TITLE = "Category overview"
-APP_NAME = None  # or a name of your own; the default includes the approved dataset ID
+DATASET = None  # None: the dataset approved last in a quickstart (else amazon_sales); or "walmart_sales", "fraud_transactions", or an approved descriptor of your own
+TITLE = None     # None: named after the data ("<dataset> by <column>"); or a title of your own
+APP_NAME = None  # or a name of your own; the default includes the approved dataset ID and the column
 WORKFLOW_ID = None  # paste the quickstart's wf-... id to continue its log
 
 DATASET = nb.chosen_dataset(DATASET)
@@ -32,11 +32,14 @@ elif not nb.current_workflow():
 conn = nb.connect()
 ds = nb.dataset(conn, DATASET)
 ds.require_approved("share")
-APP_NAME = APP_NAME or ds.id.replace("_", "-")[:40] + "-category-overview"
 GROUPED_BY, category = ds.group_by()   # the category, else the entity, else the target
 if GROUPED_BY != "category":
     print(f"{ds.id} has no category; the dashboard counts rows per {GROUPED_BY} ({category}).")
-QUERY = f"SELECT {category} AS CATEGORY, COUNT(*) AS N FROM {ds.fact_table} GROUP BY 1 ORDER BY N DESC"
+# Everything below is named after the data: the column it counts by, and what one row is.
+GROUP, COUNT = nb.name(category), nb.count_name(ds)
+TITLE = TITLE or f"{ds.id} by {GROUP.lower()}"
+APP_NAME = APP_NAME or (ds.id.replace("_", "-")[:30] + "-by-" + GROUP.lower().replace("_", "-"))[:60]
+QUERY = f"SELECT {category} AS {GROUP}, COUNT(*) AS {COUNT} FROM {ds.fact_table} GROUP BY 1 ORDER BY {COUNT} DESC"
 draft = nb.share(ds, QUERY, TITLE, APP_NAME, measure="count")
 print("Query digest:", draft.query_digest)
 print("Descriptor version:", ds.version)

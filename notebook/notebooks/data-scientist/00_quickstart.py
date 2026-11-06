@@ -9,7 +9,7 @@
 # %% [markdown]
 # # Data Scientist quickstart
 #
-# **Dataset:** `amazon_sales` (default), `walmart_sales` or your own file. **How long:** about ten minutes on the first load.
+# **Dataset:** `amazon_sales` (default), `walmart_sales`, `fraud_transactions` or your own file. **How long:** about ten minutes on the first load.
 #
 # You end with a connection, an approved column map and a first grouped result. No LLM needed.
 

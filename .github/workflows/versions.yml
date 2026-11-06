@@ -809,7 +809,6 @@ jobs:
       - name: dry run, from this checkout (installs nothing)
         run: EXAKIT_HOME="$RUNNER_TEMP/kit-home" EXAKIT_LOCAL_KIT="$PWD" EXAKIT_DRY_RUN=1 EXAKIT_PERSONA=data-scientist sh install.sh </dev/null
       - run: bash tests/exapump-shim-wrapper.sh
-      - run: bash tests/mcp-sve.sh
       - run: bash tests/personal-readiness.sh
       - run: bash tests/podman-rootless-selfheal.sh
 
@@ -932,9 +931,6 @@ jobs:
       # stub launcher, and the sidecars.yaml editor (skipped where the runner has no PyYAML).
       - run: bash tests/mcp-sidecar.sh
         if: matrix.shard == 4
-      # The faked-SVE self-repair blames the CPU only when it is the CPU (LNX-11).
-      - run: bash tests/mcp-sve.sh
-        if: matrix.shard == 4
       - run: python3 -m unittest tests.test_sidecar_definition
         if: matrix.shard == 4
       # Three more suites existed and were never run by CI either. This one had
@@ -1023,6 +1019,7 @@ jobs:
       - run: python3 tests/test_role_picker.py
         if: matrix.shard == 4
       - run: python3 tests/test_notebook_bundle.py
+      - run: python3 tests/test_notebook_setup_env.py
       # Each suite named, so none can sit in tests/ unrun (audit QAT-01); tests/ci-wiring.sh fails on one that does.
       - name: notebook, training and persona suites
         if: matrix.shard == 4
@@ -1296,8 +1293,8 @@ jobs:
       - name: install the kit from this checkout
         env:
           EXAKIT_LOCAL_KIT: ${{ github.workspace }}
-          EXAKIT_PERSONA: data-scientist,ml-engineer
-          EXAKIT_DATASETS: tpch,walmart_sales,amazon_sales
+          EXAKIT_PERSONA: data-scientist   # the ML Engineer is disabled for now; its add-on is named below
+          EXAKIT_DATASETS: tpch,walmart_sales,amazon_sales,fraud_transactions
           EXAKIT_MARKETPLACE_ADDONS: notebook,udf-devkit
           # One named client so the install creates the read-only MCP user: the
           # matrix below and the notebook runs read as it. EXAKIT_SKIP_MCP=1
@@ -1365,13 +1362,14 @@ jobs:
           EXAKIT_NOTEBOOK_BIND_CHECKOUT: '1'
           EXAKIT_NOTEBOOK_RUN_OUTPUT: ${{ runner.temp }}/executed-notebooks
         run: |
-          for recipe in walmart_sales:none amazon_sales:balanced; do
+          for recipe in walmart_sales:none amazon_sales:balanced fraud_transactions:balanced; do
+            # The ML Engineer (disabled for now) takes walmart_sales and amazon_sales only.
+            ml=""; case "${recipe%:*}" in fraud_transactions) ;; *) ml="notebook/notebooks/ml-engineer/00_quickstart.py notebook/notebooks/ml-engineer/01_train.py" ;; esac
             EXAKIT_NOTEBOOK_DATASETS="${recipe%:*}" EXAKIT_NOTEBOOK_CLASS_WEIGHT="${recipe#*:}" \
               bash tests/notebooks-run.sh \
                 notebook/notebooks/data-scientist/00_quickstart.py \
                 notebook/notebooks/data-scientist/01_explore.py \
-                notebook/notebooks/ml-engineer/00_quickstart.py \
-                notebook/notebooks/ml-engineer/01_train.py
+                $ml
           done
       - name: the AI Lab notebook, as the connector ships it, connects from the kit's store
         # AC-DS1.4: first_steps.ipynb from exasol-notebook-connector 3.1.0, a

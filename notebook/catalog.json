@@ -31,7 +31,7 @@
       "persona": "data-scientist",
       "step": 1,
       "title": "Explore a dataset",
-      "summary": "Compare groups and follow the label over time with the SQL visible. With a text column, also a small scikit-learn model on this computer and a text step with your own model traced to your Langfuse; amazon_sales and walmart_sales have none, so those steps skip and say why. Another dataset or your own file is one assignment away.",
+      "summary": "Check the data is clean (repeats, gaps, placeholders, a rare label), compare groups and follow the label over time with the SQL visible, check no column gives the label away, then fit a small scikit-learn model on this computer from the category, entity and month (no date needed). With a text column, a text step with your own model, traced to Langfuse.",
       "needs": "a loaded dataset; a model for the optional AI step",
       "jupyter": "01_explore.ipynb",
       "marimo": "01_explore.py"
