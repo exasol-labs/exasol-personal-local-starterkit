@@ -21,6 +21,9 @@ class BundleTest(unittest.TestCase):
                     base = Path(tmp) / doc["folders"][front]
                     for entry in doc["notebooks"]:
                         path = base / entry["persona"] / entry[front]
+                        if entry["persona"] in doc["disabled"]:          # kept in the kit, not handed out
+                            self.assertFalse(path.exists(), path)
+                            continue
                         self.assertTrue(path.is_file())
                         self.assertIn("nb.connect()", path.read_text())
                     # The README says what the guides did; they and the shared cells (build input) stay in the kit.
@@ -47,11 +50,19 @@ class BundleTest(unittest.TestCase):
             bundle.copy("jupyter", ROOT, Path(tmp), {"general"})
             self.assertEqual("my notes", (base / "README.md").read_text(), "an edited README is the user's")
 
-    def test_no_persona_with_notebooks_brings_them_all(self):
+    def test_no_persona_with_notebooks_brings_every_offered_one(self):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp) / bundle.catalog(ROOT)["folders"]["jupyter"]
             bundle.copy("jupyter", ROOT, Path(tmp), {"general"})
-            self.assertTrue((base / "data-scientist").is_dir() and (base / "ml-engineer").is_dir())
+            self.assertTrue((base / "data-scientist").is_dir())
+            self.assertFalse((base / "ml-engineer").exists(), "the ML Engineer is disabled on this branch")
+
+    def test_a_disabled_persona_keeps_its_notebooks_on_a_kit_that_has_it(self):
+        self.assertEqual(["ml-engineer"], bundle.catalog(ROOT)["disabled"])
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp) / bundle.catalog(ROOT)["folders"]["jupyter"]
+            bundle.copy("jupyter", ROOT, Path(tmp), {"ml-engineer"})
+            self.assertTrue((base / "ml-engineer" / "00_quickstart.ipynb").is_file())
 
     def test_an_older_kits_readme_is_replaced_and_kept_beside(self):
         """A README an older kit wrote (no marker; it names useful-notebooks/ and Positron) is replaced, the old one

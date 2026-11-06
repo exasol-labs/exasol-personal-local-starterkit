@@ -111,7 +111,8 @@ class AdapterDryRunTest(unittest.TestCase):
             with self.subTest(host=command[0]):
                 result = subprocess.run(command, env=self._environment(), capture_output=True,
                                         text=True, timeout=20)
-                self.assertEqual(["data-scientist", "ml-engineer", "general"], result.stdout.splitlines(), result.stderr)
+                # The ML Engineer is disabled on this branch (kept, "visible": false): not offered.
+                self.assertEqual(["data-scientist", "general"], result.stdout.splitlines(), result.stderr)
 
     @unittest.skipIf(os.name == "nt", "Unix PTY; Windows uses its console tests")
     def test_bash_persona_and_marketplace_menus_use_candidate_source(self) -> None:

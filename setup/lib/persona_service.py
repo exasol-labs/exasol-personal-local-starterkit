@@ -149,7 +149,8 @@ def picked(root: Path, ids: str) -> list:
         raise BadInput(f"The persona file personas/{broken[0]}.json is invalid: {invalid[broken[0] + '.json']}.")
     unknown = [i for i in wanted if i not in known]
     if unknown or not wanted:
-        raise BadInput(f"Unknown persona '{','.join(unknown) or ids}' (available: {' '.join(known)}).")
+        offered = [i for i, doc in known.items() if doc.get("visible", True)]       # a disabled one is not offered
+        raise BadInput(f"Unknown persona '{','.join(unknown) or ids}' (available: {' '.join(offered)}).")
     return [known[i] for i in known if i in wanted]
 
 

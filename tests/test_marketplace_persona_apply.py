@@ -6,6 +6,7 @@ import contextlib
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -21,16 +22,43 @@ from model import Addon  # noqa: E402
 from runtime import KitContext, Manifest  # noqa: E402
 
 
+def kit_with_ml_engineer(where: Path) -> Path:
+    """A kit root that is this checkout with the ML Engineer switched on. It ships disabled on this branch
+    ("visible": false, kept, not removed); the add sequence it exercises - UDF add-on, MLflow service - is still the
+    kit's, so it stays tested."""
+    where.mkdir()
+    for entry in ROOT.iterdir():
+        if entry.name in (".git", "personas"):
+            continue
+        try:
+            (where / entry.name).symlink_to(entry, target_is_directory=entry.is_dir())
+        except OSError:                                    # no symlinks here (Windows without the right): a copy
+            (shutil.copytree if entry.is_dir() else shutil.copy2)(entry, where / entry.name)
+    shutil.copytree(ROOT / "personas", where / "personas")
+    ml = where / "personas" / "ml-engineer.json"
+    ml.write_text(json.dumps({**json.loads(ml.read_text(encoding="utf-8")), "visible": True}), encoding="utf-8")
+    return where
+
+
 class PersonaApplyTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.home = Path(self.temp.name)
+        self.kit = tempfile.TemporaryDirectory()
         self.manifest = Manifest(self.home / "manifest.json")
         self.manifest.path.write_text(json.dumps({"persona": {"id": "data-scientist"}}))
-        self.ctx = KitContext(ROOT, self.home, self.home / "bin", self.manifest, Path("uv"))
+        root = kit_with_ml_engineer(Path(self.kit.name) / "kit")
+        self.ctx = KitContext(root, self.home, self.home / "bin", self.manifest, Path("uv"))
 
     def tearDown(self) -> None:
         self.temp.cleanup()
+        self.kit.cleanup()
+
+    def test_the_shipped_ml_engineer_is_refused(self) -> None:
+        shipped = KitContext(ROOT, self.home, self.home / "bin", self.manifest, Path("uv"))
+        with self.assertRaisesRegex(persona_apply.persona_service.BadInput, "Persona 'ml-engineer' is disabled"):
+            persona_apply.apply(shipped, "ml-engineer", ["exakit"])
+        self.assertEqual("data-scientist", self.manifest.get("persona.id"))
 
     def test_union_runs_three_existing_services_and_new_persona_service(self) -> None:
         calls = []
@@ -200,16 +228,16 @@ class PersonaApplyTest(unittest.TestCase):
         for prefix in commands:
             with self.subTest(shell=prefix[0]):
                 self.manifest.delete('persona')
-                for args in (('add', 'data-scientist'), ('apply', 'ml-engineer', '--yes'), ('add', 'ml-engineer')):
+                for args in (('add', 'data-scientist'), ('apply', 'general', '--yes'), ('add', 'general')):
                     result = subprocess.run([*prefix, 'persona', *args], env=env, input='',
                                             capture_output=True, text=True, timeout=45)
                     self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-                self.assertEqual('data-scientist,ml-engineer', self.manifest.get('persona.id'))
+                self.assertEqual('data-scientist,general', self.manifest.get('persona.id'))
                 for _ in range(2):
                     result = subprocess.run([*prefix, 'persona', 'remove', 'data-scientist'], env=env, input='',
                                             capture_output=True, text=True, timeout=45)
                     self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-                self.assertEqual('ml-engineer', self.manifest.get('persona.id'))
+                self.assertEqual('general', self.manifest.get('persona.id'))
                 self.assertEqual('keep my work', shared.read_text())
 
 

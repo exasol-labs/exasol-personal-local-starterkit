@@ -106,7 +106,8 @@ $r = Run-Cli @("persona", "list", "--json")
 $doc = Parse-Json "persona list --json" $r.Out
 if ($doc) {
     $ids = @($doc.personas | ForEach-Object { $_.id })
-    Check "persona list --json lists every persona (AGT-07)" ($r.Code -eq 0 -and $ids -contains "data-scientist" -and $ids -contains "ml-engineer") "exit $($r.Code): $($ids -join ',')"
+    # The ML Engineer is disabled on this branch (kept, "visible": false): listed no more, still shown by name below.
+    Check "persona list --json lists every persona it offers (AGT-07)" ($r.Code -eq 0 -and $ids -contains "data-scientist" -and $ids -contains "general" -and -not ($ids -contains "ml-engineer")) "exit $($r.Code): $($ids -join ',')"
 }
 $r = Run-Cli @("persona", "show", "ml-engineer", "--json")
 $doc = Parse-Json "persona show ml-engineer --json" $r.Out

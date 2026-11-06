@@ -17,7 +17,7 @@ and General, the kit's own samples, bundled with the kit and loaded offline:
 | Persona | Datasets | AI clients | Add-ons | First notebook |
 |---|---|---|---|---|
 | `data-scientist` (Data Scientist) | `walmart_sales`, `amazon_sales` | all detected | `dash-server`, `notebook` | `data-scientist/00_quickstart.ipynb` |
-| `ml-engineer` (ML Engineer) | `walmart_sales`, `amazon_sales` | all detected | `notebook`, `udf-devkit` | `ml-engineer/00_quickstart.ipynb` |
+| `ml-engineer` (ML Engineer) - **disabled for now** (`"visible": false`: kept, not offered) | `walmart_sales`, `amazon_sales` | all detected | `notebook`, `udf-devkit` | `ml-engineer/00_quickstart.ipynb` |
 | `general` (General) | `tpch`, `energy`, `weather` | all detected | - | - |
 
 General is ticked to begin with and combines with the others like any persona:

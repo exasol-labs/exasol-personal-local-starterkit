@@ -36,23 +36,27 @@ try {
         Check "$($id): datasets" ((@($doc.datasets)) -join ",") (Get-ExakitPersonaValue $id "datasets")
         Check "$($id): add-ons" ((@($doc.addons)) -join ",") (Get-ExakitPersonaValue $id "addons")
     }
-    Write-Host "the two BRD personas the install question offers, each with its own data:"
+    Write-Host "the personas the install question offers (the ML Engineer is disabled on this branch, not removed):"
     $offered = @((Invoke-ExakitPersonaService "picker") | ForEach-Object { ("$_" -split '\|')[0] })
-    Check "the question offers both BRD personas in order" $true `
-        (($offered -contains 'data-scientist') -and ($offered -contains 'ml-engineer') -and
-         ([array]::IndexOf($offered, 'data-scientist') -lt [array]::IndexOf($offered, 'ml-engineer')))
+    Check "the question offers the Data Scientist and General" "data-scientist,general" ($offered -join ",")
+    $mlDoc = Get-Content -Raw (Join-Path (Join-Path $repo "personas") "ml-engineer.json") | ConvertFrom-Json
+    Check "ml-engineer: kept, hidden (visible: false)" $false $mlDoc.visible
+    Clear-Answers; $env:EXAKIT_PERSONA = "ml-engineer"
+    $said = ""
+    try { Set-ExakitPersonaEnv } catch { $said = "$_" }
+    Check "ml-engineer: asking for it by name is refused, nothing answered" $true (($said -like "*Persona 'ml-engineer' is disabled*") -and -not $env:EXAKIT_DATASETS)
     Check "no persona: the kit's own samples (default=yes)" "tpch,energy,weather" (@(Invoke-ExakitPersonaService "default-datasets") -join "")
     Check "data-scientist: the Walmart and Amazon sales datasets" "walmart_sales,amazon_sales" (Get-ExakitPersonaValue "data-scientist" "datasets")
     Check "ml-engineer: the Walmart and Amazon sales datasets" "walmart_sales,amazon_sales" (Get-ExakitPersonaValue "ml-engineer" "datasets")
     Check "data-scientist: Dash Server first, then the notebook" "dash-server,notebook" (Get-ExakitPersonaValue "data-scientist" "addons")
     Check "ml-engineer: BRD notebook and UDF baseline" "notebook,udf-devkit" (Get-ExakitPersonaValue "ml-engineer" "addons")
     Write-Host "several personas ticked together are combined by the service:"
-    Check "the title names each" "Data Scientist + ML Engineer" (@(Invoke-ExakitPersonaService "title" "ml-engineer,data-scientist") -join "")
-    Check "a known list reads back in the kit's order" "data-scientist,ml-engineer" (Get-ExakitPersona "ml-engineer,data-scientist")
+    Check "the title names each" "Data Scientist + General" (@(Invoke-ExakitPersonaService "title" "general,data-scientist") -join "")
+    Check "a known list reads back in the kit's order" "data-scientist,general" (Get-ExakitPersona "general,data-scientist")
     Check "one unknown among several is not known" "" "$(Get-ExakitPersona 'data-scientist,nope')"
-    Clear-Answers; $env:EXAKIT_PERSONA = "data-scientist,ml-engineer"; Set-ExakitPersonaEnv
-    Check "their datasets and add-ons together, each once" "walmart_sales,amazon_sales|all|dash-server,notebook,udf-devkit" (Answers)
-    Check "each dataset is named with the personas it is for" "both personas" ((Get-ExakitPersonaDatasetHints)["amazon_sales"])
+    Clear-Answers; $env:EXAKIT_PERSONA = "data-scientist,general"; Set-ExakitPersonaEnv
+    Check "their datasets and add-ons together, each once" "walmart_sales,amazon_sales,tpch,energy,weather|all|dash-server,notebook" (Answers)
+    Check "each dataset is named with the personas it is for (a hidden one is not named)" "Data Scientist" ((Get-ExakitPersonaDatasetHints)["amazon_sales"])
     Write-Host "the data question (one table) ticks the personas' datasets:"
     function Get-ExakitPendingDatasets { return @([pscustomobject]@{ Id = "tpch"; Label = "TPC-H retail benchmark (~175k rows)"; Description = "Orders, customers, parts" },
                                                   [pscustomobject]@{ Id = "amazon_sales"; Label = "Amazon sales (Amazon.in fashion orders, Apr-Jun 2022, ~129k lines)"; Description = "Online orders" }) }
@@ -78,16 +82,16 @@ try {
     Check "a persona that wants none: Skip is the default" "6~6" "$($script:ExakitTableDefaults -join ',')~$($script:ExakitTableRowSkip)"
     Remove-Item Env:EXAKIT_DATASETS_PRESELECT -ErrorAction SilentlyContinue
     Write-Host "an explicit answer wins, per variable:"
-    Clear-Answers; $env:EXAKIT_PERSONA = "ml-engineer"; Set-ExakitPersonaEnv
-    Check "the persona answers everything left open" "walmart_sales,amazon_sales|all|notebook,udf-devkit" (Answers)
-    Clear-Answers; $env:EXAKIT_PERSONA = "ml-engineer"; $env:EXAKIT_DATASETS = "amazon_sales"; Set-ExakitPersonaEnv
-    Check "EXAKIT_DATASETS wins, the rest stays the persona's" "amazon_sales|all|notebook,udf-devkit" (Answers)
+    Clear-Answers; $env:EXAKIT_PERSONA = "data-scientist"; Set-ExakitPersonaEnv
+    Check "the persona answers everything left open" "walmart_sales,amazon_sales|all|dash-server,notebook" (Answers)
+    Clear-Answers; $env:EXAKIT_PERSONA = "data-scientist"; $env:EXAKIT_DATASETS = "amazon_sales"; Set-ExakitPersonaEnv
+    Check "EXAKIT_DATASETS wins, the rest stays the persona's" "amazon_sales|all|dash-server,notebook" (Answers)
     Clear-Answers; $env:EXAKIT_PERSONA = "data-scientist"; $env:EXAKIT_LOAD_SAMPLE = "0"; $env:EXAKIT_MARKETPLACE_ADDONS = "none"; Set-ExakitPersonaEnv
     Check "EXAKIT_LOAD_SAMPLE=0 and add-ons none win" "|all|none" (Answers)
     Clear-Answers; $env:EXAKIT_PERSONA = "data-scientist"; $env:EXAKIT_SKIP_MCP = "1"; Set-ExakitPersonaEnv
     Check "EXAKIT_SKIP_MCP=1 wins over the persona's clients" "" $env:EXAKIT_MCP_CLIENTS
     Write-Host "the persona service's word, not a guess:"
-    Check "an unknown persona names the ones there are" $true (($null -eq (Get-ExakitPersona "nope")) -and ($script:ExakitPersonaProblem -like "*Unknown persona 'nope' (available: data-scientist ml-engineer general)*"))
+    Check "an unknown persona names the ones there are" $true (($null -eq (Get-ExakitPersona "nope")) -and ($script:ExakitPersonaProblem -like "*Unknown persona 'nope' (available: data-scientist general)*"))
     Check "two words are not two personas" $null (Get-ExakitPersona "ml-engineer ml-engineer")
     Write-Host "the install's persona section:"
     foreach ($v in @("EXAKIT_DATASETS_PRESELECT", "EXAKIT_MARKETPLACE_PRESELECT")) { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
@@ -130,7 +134,7 @@ try {
     Check "an interactive Windows terminal gets the kit's menu" "2" $script:menuDefaults
     Check "...and Textual is never started" $false $script:textualAsked
     Set-ExakitManifestValue "persona.id" ""
-    Clear-Answers; $env:EXAKIT_PERSONA = "ml-engineer"; Set-ExakitPersonaEnv -NoRecord
+    Clear-Answers; $env:EXAKIT_PERSONA = "data-scientist"; Set-ExakitPersonaEnv -NoRecord
     Check "-NoRecord answers without recording" "" "$(Get-ExakitManifestValue 'persona.id')"
     Write-Host "an unknown persona is refused; a known one is recorded:"
     Clear-Answers; $env:EXAKIT_PERSONA = "nope"
@@ -181,9 +185,9 @@ try {
     function Get-ExakitManifestValue { param($Key) if ($Key -eq "persona.id") { "data-scientist" } }
     function Read-ExakitPersonaQuestion { $env:EXAKIT_PERSONA = $script:Ticked }
     function Invoke-ExakitMarketplaceCli { param($Script, $CmdArgs) $script:Added = "$Script $($CmdArgs[0]) $($CmdArgs[1])" }
-    $script:Ticked = "data-scientist,ml-engineer"; $script:Added = ""
+    $script:Ticked = "data-scientist,general"; $script:Added = ""
     Invoke-ExakitPersonaAddMenu -Cli "exakit.ps1"
-    Check "only the newly ticked persona is added" "persona_apply add ml-engineer" $script:Added
+    Check "only the newly ticked persona is added" "persona_apply add general" $script:Added
     $script:Ticked = "data-scientist"; $script:Added = ""
     Invoke-ExakitPersonaAddMenu -Cli "exakit.ps1"
     Check "nothing new ticked adds nothing" "" $script:Added

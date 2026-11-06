@@ -1369,7 +1369,8 @@ class NotebookWorkflowTest(unittest.TestCase):
         self.assertEqual([e["kind"] for e in self.log(started)], ["start"], "resuming adds no second start line")
 
     def test_explore_continues_the_workflow_before_it_opens_the_data(self):
-        first = _code_cells(NOTEBOOKS / "data-scientist" / "01_explore.py")[1]        # after DATASET = ...
+        first = next(c for c in _code_cells(NOTEBOOKS / "data-scientist" / "01_explore.py")   # after DATASET = ...
+                     if 'nb.workflow("explore"' in c)
         self.assertIn('nb.workflow("explore", resume=WORKFLOW_ID or os.environ.get("EXAKIT_WORKFLOW_ID"))', first)
         self.assertLess(first.index("nb.workflow("), first.index("nb.connect()"))
         ds = exakit_nb.dataset(FakeConn(AMAZON), "amazon_sales")

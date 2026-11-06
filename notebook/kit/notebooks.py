@@ -49,14 +49,24 @@ def catalog(kit: Path) -> dict:
     doc = json.loads((kit / "notebook" / "catalog.json").read_text(encoding="utf-8"))
     personas = list(dict.fromkeys(entry["persona"] for entry in doc["notebooks"]))
     doc["notebooks"] = sorted(doc["notebooks"], key=lambda entry: (personas.index(entry["persona"]), int(entry.get("step", 0))))
+    doc["disabled"] = sorted(p for p in personas if not _visible(kit, p))
     return doc
+
+
+def _visible(kit: Path, persona: str) -> bool:
+    """False for a persona its file switches off ("visible": false: kept, not offered); True otherwise."""
+    try:
+        return json.loads((kit / "personas" / f"{persona}.json").read_text(encoding="utf-8-sig")).get("visible", True) is not False
+    except (OSError, ValueError):
+        return True
 
 
 def wanted(doc: dict, personas: set[str] | None, fresh: bool = True) -> set[str]:
     """The personas whose notebooks are copied: the ones picked that have notebooks. When none of them has any, every
     persona's - but only into a fresh folder (``fresh``), so installing the add-on on its own still brings them all,
     while a kit left with General after `persona remove data-scientist` is not handed the ML Engineer's (DAY-04)."""
-    have = {entry["persona"] for entry in doc["notebooks"]}
+    # A disabled persona's notebooks come only to a kit that already has that persona.
+    have = {entry["persona"] for entry in doc["notebooks"]} - (set(doc.get("disabled") or ()) - set(personas or ()))
     if not personas:
         return have                                  # no persona recorded: the add-on on its own brings them all
     return (have & personas) or (have if fresh else set())

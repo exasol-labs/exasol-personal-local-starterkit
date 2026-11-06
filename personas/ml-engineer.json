@@ -4,7 +4,7 @@
   "title": "ML Engineer",
   "summary": "Train and score models inside the database, tracked in MLflow.",
   "picker": true,
-  "visible": true,
+  "visible": false,
   "order": 20,
   "datasets": ["walmart_sales", "amazon_sales"],
   "mcp_clients": "all",

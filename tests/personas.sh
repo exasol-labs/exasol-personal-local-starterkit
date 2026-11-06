@@ -58,12 +58,14 @@ for id in $ids; do
     done
 done
 
-echo "the two BRD personas the install question offers, each with its own data:"
-_offered="$(_exakit_persona_service picker | cut -d'|' -f1 | tr '\n' ',' | sed 's/,$//')"
-case ",$_offered," in *,data-scientist,*ml-engineer,*)
-    check "the question offers both BRD personas in order" "yes" "yes" ;;
-    *) check "the question offers both BRD personas in order" "yes" "no" ;;
-esac
+echo "the personas the install question offers (the ML Engineer is disabled on this branch, not removed):"
+check "the question offers the Data Scientist and General" "data-scientist,general" \
+    "$(_exakit_persona_service picker | cut -d'|' -f1 | tr '\n' ',' | sed 's/,$//')"
+check "ml-engineer: kept, hidden (visible: false)" "False" \
+    "$(python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get('visible', True))" "$ROOT/personas/ml-engineer.json")"
+out="$( (unset EXAKIT_DATASETS EXAKIT_MCP_CLIENTS EXAKIT_MARKETPLACE_ADDONS EXAKIT_LOAD_SAMPLE
+        export EXAKIT_PERSONA=ml-engineer; exakit_persona_apply_env 2>&1; printf '|%s' "${EXAKIT_DATASETS:-unset}") )"
+contains "ml-engineer: asking for it by name is refused, nothing answered" "Persona 'ml-engineer' is disabled" "$out"
 check "no persona: the kit's own samples (default=yes)" "tpch,energy,weather" "$(_exakit_persona_service default-datasets)"
 check "data-scientist: the Walmart and Amazon sales datasets" "walmart_sales,amazon_sales" "$(exakit_persona_value data-scientist datasets)"
 check "data-scientist: Dash Server first, then the notebook" "dash-server,notebook" "$(exakit_persona_value data-scientist addons)"
@@ -75,7 +77,7 @@ mkdir -p "$WORK/kit2/personas"
 cp "$ROOT"/personas/*.json "$WORK/kit2/personas/"
 printf '{"schema_version": 1, "id": "analyst", "title": "Analyst", "summary": "SQL on the samples.", "picker": true, "order": 15, "datasets": ["tpch"], "mcp_clients": "all", "addons": ["dash-server"]}\n' \
     > "$WORK/kit2/personas/analyst.json"
-check "the question offers it where its order says, unticked" "data-scientist|0 analyst|0 ml-engineer|0 general|1" \
+check "the question offers it where its order says, unticked" "data-scientist|0 analyst|0 general|1" \
     "$(python3 "$ROOT/setup/lib/persona_service.py" "$WORK/kit2" picker | awk -F'|' '{printf "%s%s|%s", (NR>1?" ":""), $1, $4}')"
 check "it answers like any other" "EXAKIT_DATASETS=tpch EXAKIT_MARKETPLACE_ADDONS=dash-server" \
     "$(env -u EXAKIT_DATASETS -u EXAKIT_LOAD_SAMPLE -u EXAKIT_MARKETPLACE_ADDONS python3 "$ROOT/setup/lib/persona_service.py" "$WORK/kit2" answers analyst | grep -E '^EXAKIT_(DATASETS|MARKETPLACE_ADDONS)=' | tr '\n' ' ' | sed 's/ $//')"
@@ -83,12 +85,12 @@ check "the notebook catalog names only personas the kit ships" "" \
     "$(python3 "$ROOT/notebook/kit/notebooks.py" list "$ROOT" | cut -d'|' -f2 | sort -u | while read -r p; do [ -f "$ROOT/personas/$p.json" ] || printf ' %s' "$p"; done)"
 
 echo "several personas ticked together are combined by the service:"
-check "the title names each" "Data Scientist + ML Engineer" "$(_exakit_persona_service title ml-engineer,data-scientist)"
+check "the title names each" "Data Scientist + General" "$(_exakit_persona_service title general,data-scientist)"
 out="$( (unset EXAKIT_DATASETS EXAKIT_MCP_CLIENTS EXAKIT_MARKETPLACE_ADDONS EXAKIT_LOAD_SAMPLE
-        export EXAKIT_PERSONA=data-scientist,ml-engineer; exakit_persona_apply_env >/dev/null 2>&1
+        export EXAKIT_PERSONA=data-scientist,general; exakit_persona_apply_env >/dev/null 2>&1
         printf '%s|%s|%s' "$EXAKIT_DATASETS" "$EXAKIT_MCP_CLIENTS" "$EXAKIT_MARKETPLACE_ADDONS") )"
-check "their datasets and add-ons together, each once" "walmart_sales,amazon_sales|all|dash-server,notebook,udf-devkit" "$out"
-check "each dataset is named with the personas it is for" "amazon_sales|both personas" \
+check "their datasets and add-ons together, each once" "walmart_sales,amazon_sales,tpch,energy,weather|all|dash-server,notebook" "$out"
+check "each dataset is named with the personas it is for (a hidden one is not named)" "amazon_sales|Data Scientist" \
     "$(exakit_persona_dataset_hints | grep '^amazon_sales|')"
 
 echo "the data question: one table, the personas' datasets ticked:"
@@ -123,13 +125,13 @@ check "with every sample loaded, your own file is the default" "local" "$out"
 
 echo "an explicit answer wins, per variable:"
 out="$( (unset EXAKIT_DATASETS EXAKIT_MCP_CLIENTS EXAKIT_MARKETPLACE_ADDONS EXAKIT_LOAD_SAMPLE
-        export EXAKIT_PERSONA=ml-engineer; exakit_persona_apply_env >/dev/null 2>&1
+        export EXAKIT_PERSONA=data-scientist; exakit_persona_apply_env >/dev/null 2>&1
         printf '%s|%s|%s' "$EXAKIT_DATASETS" "$EXAKIT_MCP_CLIENTS" "$EXAKIT_MARKETPLACE_ADDONS") )"
-check "the persona answers everything left open" "walmart_sales,amazon_sales|all|notebook,udf-devkit" "$out"
+check "the persona answers everything left open" "walmart_sales,amazon_sales|all|dash-server,notebook" "$out"
 out="$( (unset EXAKIT_MCP_CLIENTS EXAKIT_MARKETPLACE_ADDONS EXAKIT_LOAD_SAMPLE
-        export EXAKIT_DATASETS=amazon_sales EXAKIT_PERSONA=ml-engineer; exakit_persona_apply_env >/dev/null 2>&1
+        export EXAKIT_DATASETS=amazon_sales EXAKIT_PERSONA=data-scientist; exakit_persona_apply_env >/dev/null 2>&1
         printf '%s|%s|%s' "$EXAKIT_DATASETS" "$EXAKIT_MCP_CLIENTS" "$EXAKIT_MARKETPLACE_ADDONS") )"
-check "EXAKIT_DATASETS wins, the rest stays the persona's" "amazon_sales|all|notebook,udf-devkit" "$out"
+check "EXAKIT_DATASETS wins, the rest stays the persona's" "amazon_sales|all|dash-server,notebook" "$out"
 out="$( (unset EXAKIT_DATASETS EXAKIT_MCP_CLIENTS EXAKIT_MARKETPLACE_ADDONS
         export EXAKIT_LOAD_SAMPLE=0 EXAKIT_MARKETPLACE_ADDONS=none EXAKIT_PERSONA=data-scientist; exakit_persona_apply_env >/dev/null 2>&1
         printf '%s|%s|%s' "${EXAKIT_DATASETS:-unset}" "$EXAKIT_MCP_CLIENTS" "$EXAKIT_MARKETPLACE_ADDONS") )"
@@ -162,7 +164,7 @@ printf '{"id":"bare","title":"Bare","summary":"Nothing.","datasets":[],"addons":
 printf 'junk' > "$WORK/kit3/personas/._data-scientist.json"
 SVC3() { env -u EXAKIT_DATASETS -u EXAKIT_LOAD_SAMPLE -u EXAKIT_MARKETPLACE_ADDONS -u EXAKIT_MCP_CLIENTS -u EXAKIT_NOTEBOOK_FRONTENDS \
     python3 "$ROOT/setup/lib/persona_service.py" "$WORK/kit3" "$@"; }
-check "the valid ones still answer (a BOM is fine, dotfiles are skipped)" "data-scientist ml-engineer general bare everything" \
+check "the valid ones still answer (a BOM is fine, dotfiles are skipped)" "data-scientist general bare everything" \
     "$(SVC3 ids 2>/dev/null | tr '\n' ' ' | sed 's/ $//')"
 check "each broken file is named with what is wrong" "broken.json inj.json pipe.json" \
     "$(SVC3 problems | cut -d'|' -f1 | tr '\n' ' ' | sed 's/ $//')"
@@ -195,16 +197,16 @@ check "an EXAKIT_LOAD_SAMPLE the installer does not read is not an answer" "EXAK
     "$(EXAKIT_LOAD_SAMPLE=yes python3 "$ROOT/setup/lib/persona_service.py" "$ROOT" answers data-scientist 2>/dev/null | grep '^EXAKIT_DATASETS=')"
 check "one persona where one is meant" "2" "$(python3 "$ROOT/setup/lib/persona_service.py" "$ROOT" value data-scientist,ml-engineer title >/dev/null 2>&1; echo $?)"
 out="$( (EXAKIT_PERSONA=nope; exakit_persona_known nope; printf '%s' "$EXAKIT_PERSONA_PROBLEM") )"
-contains "an unknown persona is named with the ones there are" "Unknown persona 'nope' (available: data-scientist ml-engineer general)" "$out"
+contains "an unknown persona is named with the ones there are" "Unknown persona 'nope' (available: data-scientist general)" "$out"
 out="$( (run_python_any() { return 127; }; exakit_persona_known data-scientist; printf '%s' "$EXAKIT_PERSONA_PROBLEM") )"
 contains "no Python: says so, not 'unknown persona'" "needs Python 3" "$out"
 
 echo "the install's persona section:"
 out="$( (manifest_set persona.id ""
-        ui_checkbox_menu() { shift; printf '%s|%s|%s' "$1" "${EXAKIT_CHECKBOX_EXCLUSIVE:-}" "$(eval echo \"\${$#}\")" > "$WORK/q"; EXAKIT_CHECKBOX_SELECTION="3"; }
+        ui_checkbox_menu() { shift; printf '%s|%s|%s' "$1" "${EXAKIT_CHECKBOX_EXCLUSIVE:-}" "$(eval echo \"\${$#}\")" > "$WORK/q"; EXAKIT_CHECKBOX_SELECTION="2"; }
         exakit_persona_question >/dev/null 2>&1; printf '%s~%s' "$(cat "$WORK/q")" "${EXAKIT_PERSONA:-}") )"
 check "the question ends with General, ticked to begin with, combinable (no exclusive row)" \
-    "3||General - Sample data (retail, energy, weather) and your AI clients.~general" "$out"
+    "2||General - Sample data (retail, energy, weather) and your AI clients.~general" "$out"
 out="$( (unset EXAKIT_PERSONA EXAKIT_DATASETS EXAKIT_LOAD_SAMPLE EXAKIT_DATASETS_PRESELECT EXAKIT_MARKETPLACE_PRESELECT
         exakit_persona_data() { :; }; exakit_persona_flow "$ROOT" </dev/null >/dev/null 2>&1
         printf '%s|%s|%s' "${EXAKIT_DATASETS_PRESELECT:-}" "${EXAKIT_MARKETPLACE_PRESELECT:-}" "${EXAKIT_PERSONA:-}") )"
@@ -296,7 +298,7 @@ _cli() { HOME="$_bare/home" EXAKIT_HOME="$_bare/home/.exasol-starter-kit" EXAKIT
 _json() { python3 -c 'import json,sys; d=json.loads(sys.stdin.read().rsplit("|rc=",1)[0]); print(eval(sys.argv[1]))' "$1"; }
 out="$(_cli persona list --json)"
 contains "persona list --json exits 0" "|rc=0" "$out"
-check "...and lists every persona" "data-scientist,ml-engineer,general" "$(printf '%s' "$out" | _json '",".join(p["id"] for p in d["personas"])')"
+check "...and lists every persona it offers" "data-scientist,general" "$(printf '%s' "$out" | _json '",".join(p["id"] for p in d["personas"])')"
 out="$(_cli persona show ml-engineer --json)"
 check "persona show --json names the notebooks it brings, in order" \
     "ml-engineer/00_quickstart.ipynb,ml-engineer/01_train.ipynb,ml-engineer/02_rust_score.ipynb,ml-engineer/03_score_external_model.ipynb" \

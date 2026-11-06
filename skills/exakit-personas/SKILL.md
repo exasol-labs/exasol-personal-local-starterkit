@@ -85,7 +85,8 @@ dbt-exasol`. `persona plan` then shows what of the persona is still pending.
 ## Where to start after adding one
 
 `start_here` in `persona show <id> --json` is the persona's first step (the
-Data Scientist and ML Engineer open their quickstart notebook with `exakit
+The ML Engineer is disabled for now (`"visible": false` in its file: kept, not offered, refused by
+name); never offer or add it, and say so if the user asks for it. Data Scientist and ML Engineer open their quickstart notebook with `exakit
 notebook`); the install's closing line prints it too. The persona's notebooks
 are `notebooks[]` in the same answer.
 
