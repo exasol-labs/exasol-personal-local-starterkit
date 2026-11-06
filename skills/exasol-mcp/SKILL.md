@@ -85,7 +85,7 @@ fallback. When it does not serve, `exakit mcp-doctor` (and `exakit mcp-setup`)
 heal it: the read-only user is set up again, a port another program took moves
 the server to a free one, a deployment that needs one restart gets it (the data
 stays), a container that did not start is recreated once. What cannot be healed
-is said with its fix - `exakit update personal` for a launcher before 2.4.0;
+is said with its fix - a launcher before 2.4.0: `exakit update` offers the new one;
 `exasol mcp status` shows the launcher's own account of the server.
 
 The login is a **dedicated, read-only database user** — for the launcher's
