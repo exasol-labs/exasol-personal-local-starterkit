@@ -1157,8 +1157,6 @@ jobs:
         if: matrix.shard == 2
       - run: bash tests/menu-hint.sh
         if: matrix.shard == 2
-      - run: bash tests/persona-search.sh
-        if: matrix.shard == 2
       - run: bash tests/mcp-status-clients.sh
         if: matrix.shard == 4
       - run: bash tests/status-soft-components.sh
@@ -1222,7 +1220,6 @@ jobs:
             pwsh -NoProfile -File tests/personas-ps.ps1
             pwsh -NoProfile -File tests/env-file-ps.ps1
             pwsh -NoProfile -File tests/menu-mouse-ps.ps1
-            pwsh -NoProfile -File tests/persona-search-ps.ps1
             pwsh -NoProfile -File tests/sql-quoting-ps.ps1
             pwsh -NoProfile -File tests/table-menu-ps.ps1
             pwsh -NoProfile -File tests/mcp-admin-sql-ps.ps1

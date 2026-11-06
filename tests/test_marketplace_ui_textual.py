@@ -31,11 +31,10 @@ class ChoiceScreenTest(unittest.TestCase):
             app = ChoiceApp("persona", PERSONAS, {"general"}, set())
             async with app.run_test(size=(100, 20)):
                 self.assertEqual(["    • Personas - tick one or more",
-                                  "      Search: ▏type to find a persona",
                                   "    ❯ [ ] Data Scientist - Explore",
                                   "      [ ] ML Engineer - Train",
                                   "      [✓] General - The kit's own samples",
-                                  "      Type to search · ↑/↓ to move · Space to toggle · Enter to confirm"],
+                                  "      ↑/↓ to move · Space to toggle · Enter to confirm"],
                                  app.render_screen(100)[0].plain.splitlines())
 
         asyncio.run(check())
@@ -46,7 +45,7 @@ class ChoiceScreenTest(unittest.TestCase):
         async def check() -> None:
             app = ChoiceApp("persona", PERSONAS, {"general"}, set())
             async with app.run_test() as pilot:
-                await pilot.press("space", "down", "space")   # on the persona question letters search
+                await pilot.press("a")
                 await pilot.press("enter")
             self.assertEqual(["data-scientist", "ml-engineer", "general"], app.return_value["selected"])
 
@@ -79,72 +78,15 @@ class ChoiceScreenTest(unittest.TestCase):
         async def check() -> None:
             app = ChoiceApp("persona", PERSONAS, {"general"}, set())
             async with app.run_test(size=(100, 20)) as pilot:
-                await pilot.click("#screen", offset=(10, 3))     # line 3: ML Engineer
+                await pilot.click("#screen", offset=(10, 2))     # line 2: ML Engineer
                 self.assertEqual({"ml-engineer", "general"}, app.selected)
                 self.assertTrue(app.is_running)
                 await pilot.click("#screen", offset=(10, 0))     # the title line is not a row
-                await pilot.click("#screen", offset=(10, 1))     # ...nor is the search line
                 self.assertEqual({"ml-engineer", "general"}, app.selected)
                 await pilot.press("enter")
             self.assertEqual(["ml-engineer", "general"], app.return_value["selected"])
 
         asyncio.run(check())
-
-    def test_typing_searches_and_points_at_the_closest_persona(self) -> None:
-        from ui import ChoiceApp
-
-        async def check() -> None:
-            app = ChoiceApp("persona", PERSONAS, {"general"}, set())
-            async with app.run_test(size=(100, 20)) as pilot:
-                await pilot.press("m", "l")
-                self.assertEqual(("ml", 1), (app.query, app.cursor))           # ML Engineer
-                screen = app.render_screen(100)[0].plain.splitlines()
-                self.assertEqual("      Search: ml▏", screen[1])
-                self.assertEqual("    ❯ [ ] ML Engineer - Train", screen[3])
-                await pilot.press("space")                                     # ticks what it points at
-                self.assertEqual({"ml-engineer", "general"}, app.selected)
-                await pilot.press("backspace", "backspace", "g", "e", "n")
-                self.assertEqual(2, app.cursor)                                # General
-                await pilot.press("escape")                                    # clears, does not cancel
-                self.assertEqual("", app.query)
-                self.assertTrue(app.is_running)
-                await pilot.press("enter")
-            self.assertEqual(["ml-engineer", "general"], app.return_value["selected"])
-
-        asyncio.run(check())
-
-    def test_search_letters_are_never_the_shortcut_keys(self) -> None:
-        from ui import ChoiceApp
-
-        async def check() -> None:
-            app = ChoiceApp("persona", PERSONAS, {"general"}, set())
-            async with app.run_test(size=(100, 20)) as pilot:
-                await pilot.press("q", "a", "j", "k")       # not cancel, tick all, or move
-                self.assertTrue(app.is_running)
-                self.assertEqual(("qajk", {"general"}), (app.query, app.selected))
-                self.assertIn("no persona matches", app.render_screen(100)[0].plain)
-                await pilot.press("down")                   # nothing fits: the pointer stays put
-                self.assertEqual(0, app.cursor)
-                await pilot.press("escape", "escape")       # the first clears, the second cancels
-            self.assertIsNone(app.return_value)
-
-        asyncio.run(check())
-
-    def test_fuzzy_score_matches_its_shell_twins(self) -> None:
-        import json
-        from ui import fuzzy_score
-
-        cases = json.loads((ROOT / "tests" / "fuzzy-search-cases.json").read_text(encoding="utf-8"))["cases"]
-        self.assertGreater(len(cases), 20)
-        for case in cases:
-            self.assertEqual(case["score"], fuzzy_score(case["query"], case["text"]), case)
-
-    def test_only_the_persona_question_has_a_search_line(self) -> None:
-        from ui import ChoiceApp
-
-        app = ChoiceApp("notebook", [{"id": "jupyterlab", "label": "JupyterLab"},
-                                     {"id": "marimo", "label": "Marimo"}], {"jupyterlab"}, set())
-        self.assertNotIn("Search:", app.render_screen(100)[0].plain)
 
     def test_the_wheel_hands_the_mouse_back_to_the_terminal(self) -> None:
         from textual import events

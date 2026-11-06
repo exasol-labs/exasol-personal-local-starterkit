@@ -173,7 +173,6 @@ PY
     done <<EXAKIT_EPQ_EOF
 $_epq_rows
 EXAKIT_EPQ_EOF
-    EXAKIT_CHECKBOX_SEARCH=1
     ui_checkbox_menu "Personas - tick one or more" "${_epq_recorded:-$_epq_default}" "${_epq_labels[@]}"
     EXAKIT_PERSONA=""
     for _epq_i in $(printf '%s' "${EXAKIT_CHECKBOX_SELECTION:-}" | tr ',' ' '); do

@@ -113,10 +113,6 @@ jobs:
         if: matrix.shard == 2
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/menu-mouse-ps.ps1
-      - name: the persona search under 5.1
-        if: matrix.shard == 2
-        shell: powershell
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/persona-search-ps.ps1
       - name: exakit sql keeps double quotes under 5.1 (WIN-05)
         if: matrix.shard == 2
         shell: powershell

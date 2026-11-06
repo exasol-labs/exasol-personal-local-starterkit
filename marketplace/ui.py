@@ -10,9 +10,7 @@ foreground, the 256-colour 35 accent, a bold green tick and dim detail, the code
 writes, following whatever colour scheme the terminal has.
 
 Keys are the shell's: up/down or j/k move, Space ticks, "a" ticks all, Enter confirms, Esc or q
-cancels. The persona question opens with a search line: there every letter is typed into it and the
-pointer jumps to the closest persona (fuzzy_score, the same rule as the shell menus), Backspace
-deletes, Esc clears it first. A click ticks or unticks the row under it; only Enter moves on. The wheel belongs to the
+cancels. A click ticks or unticks the row under it; only Enter moves on. The wheel belongs to the
 terminal: the first wheel event hands mouse reporting back, so the screen scrolls as it always
 does, and clicks are re-armed after two quiet seconds or on the next key (_ui_mouse_pause in
 ui.sh is the shell twin).
@@ -55,8 +53,6 @@ TICK, CROSS, BULLET, ARROW, POINTER = "✓", "✗", "•", "▸", "❯"
 HR, TL, TR, BL, BR, VB = "─", "╭", "╮", "╰", "╯", "│"
 BAR_FULL, BAR_EMPTY, EIGHTHS = "█", "░", " ▏▎▍▌▋▊▉"
 HINT = "↑/↓ to move · Space to toggle · Enter to confirm"
-SEARCH_HINT = "Type to search · " + HINT
-SEARCH_PLACEHOLDER = "type to find a persona"
 STAT_MIN = 44                       # UI_TABLE_STAT_MIN
 COL3_FIXED = 44                     # UI_TABLE_COL3_FIXED
 COL3_MAX = 90                       # UI_TABLE_COL3_MAX
@@ -72,30 +68,6 @@ def fit(text: str, chrome: int, cols: int) -> str:
     if len(text) + chrome > cols:
         return text[:max(1, cols - chrome - 1)] + "…"
     return text
-
-
-def fuzzy_score(query: str, text: str) -> int | None:
-    """How well a typed search fits a row, or None when it does not: the query's letters inside the text
-    score by how early they start (1000 - position), its letters in order but apart by how close together
-    they are (500 - span). Case and spaces do not count. Twins: _ui_fuzzy_score (common.sh) and
-    Get-ExakitFuzzyScore (exakit-common.ps1) - the same rule, so every menu points at the same row."""
-    q = "".join(query.lower().split())
-    t = text.lower()
-    if not q:
-        return 0
-    at = t.find(q)
-    if at >= 0:
-        return 1000 - at
-    first = last = -1
-    i = 0
-    for ch in q:
-        i = t.find(ch, i)
-        if i < 0:
-            return None
-        if first < 0:
-            first = i
-        last, i = i, i + 1
-    return 500 - (last - first)
 
 
 def creep(floor: int, ceiling: int, seconds: int, elapsed: float) -> int:
@@ -203,8 +175,6 @@ class ChoiceApp(App[dict | None]):
             for row in rows if row["id"] in self.selected and self.choices_by_addon[row["id"]]
         }
         self.frontends = self.selected_choices.setdefault("notebook", set())
-        self.search = mode == "persona"
-        self.query = ""
         self.skip = False
         self.apply_selection = apply_selection
         self.applying = False
@@ -390,30 +360,17 @@ class ChoiceApp(App[dict | None]):
         title = "Personas - tick one or more" if self.mode == "persona" else "Notebook tools - tick one or more"
         out.append("    ").append(BULLET, DIM).append(f" {title}\n")
         lines.append(None)
-        if self.search:
-            # The first line: what is typed, with a caret; the rows below stay, the ones it does not
-            # fit dimmed, and the pointer is on the closest one.
-            out.append("      ").append("Search: ", ACCENT)
-            if self.query:
-                out.append(fit(self.query, 15, cols)).append("▏", ACCENT)
-                if not self._matches():
-                    out.append("  no persona matches", DIM)
-            else:
-                out.append("▏", ACCENT).append(SEARCH_PLACEHOLDER, DIM)
-            out.append("\n")
-            lines.append(None)
         for index, (kind, name) in enumerate(self.table_rows):
             label = "Skip - open nothing" if kind == "skip" else self._label(name)
             if kind == "disabled":
                 out.append("      ").append("[ ] " + fit(label, 10, cols), DIM).append("\n")
             else:
                 pointer = POINTER if index == self.cursor and not self.applying else " "
-                faded = DIM if self.query and index not in self._matches() else None
                 out.append("    ").append(pointer, ACCENT).append(" ")
-                out.append(f"[{TICK}]", OK) if self._ticked(kind, name) else out.append("[ ]", faded)
-                out.append(" " + fit(label, 10, cols) + "\n", faded)
+                out.append(f"[{TICK}]", OK) if self._ticked(kind, name) else out.append("[ ]")
+                out.append(" " + fit(label, 10, cols) + "\n")
             lines.append(index)
-        out.append("      ").append(fit(SEARCH_HINT if self.search else HINT, 6, cols), DIM)
+        out.append("      ").append(fit(HINT, 6, cols), DIM)
         lines.append(None)
         return out, lines
 
@@ -564,48 +521,7 @@ class ChoiceApp(App[dict | None]):
     # --- keys and the mouse -----------------------------------------------------------------------
 
     def _pickable(self, index: int) -> bool:
-        if self.table_rows[index][0] == "disabled":
-            return False
-        return not self.query or index in self._matches()
-
-    def _matches(self) -> dict[int, int]:
-        """The rows the search fits, by index, with their score."""
-        found = {}
-        for index, (kind, name) in enumerate(self.table_rows):
-            if kind != "item":
-                continue
-            score = fuzzy_score(self.query, self._label(name))
-            if score is not None:
-                found[index] = score
-        return found
-
-    def _point_at_best(self) -> None:
-        """The pointer on the closest row; the earliest one wins a tie."""
-        found = self._matches() if self.query else {}
-        if found:
-            self.cursor = max(found, key=lambda index: (found[index], -index))
-
-    def _type(self, event: events.Key) -> bool:
-        """The search line's keys; True when the key was the search's."""
-        if not self.search or self.applying:
-            return False
-        if event.key == "backspace":
-            if self.query:
-                self.query = self.query[:-1]
-                self._point_at_best()
-                self._draw()
-            return True
-        if event.key == "escape" and self.query:
-            self.query = ""
-            self._draw()
-            return True
-        char = event.character
-        if char and len(char) == 1 and char.isprintable() and not char.isspace():
-            self.query += char
-            self._point_at_best()
-            self._draw()
-            return True
-        return False
+        return self.table_rows[index][0] != "disabled"
 
     def action_move(self, step: int) -> None:
         if self.applying or not self.table_rows:
@@ -649,15 +565,9 @@ class ChoiceApp(App[dict | None]):
             driver._enable_mouse_support()
         self._mouse_paused = False
 
-    async def _on_key(self, event: events.Key) -> None:
-        # One key handler per class (Textual takes _on_key over on_key), run before App's own (the
-        # bindings) unless the default is prevented: a key re-arms the mouse, and on the persona
-        # question a letter is the search's, not "a", "j", "k" or "q".
+    def on_key(self, _: events.Key) -> None:
         if self._mouse_paused:
             self._rearm_mouse()
-        if self._type(event):
-            event.prevent_default()
-            event.stop()
 
     def _all_selected(self) -> bool:
         enabled = [row["id"] for row in self.rows if not row.get("disabled")]

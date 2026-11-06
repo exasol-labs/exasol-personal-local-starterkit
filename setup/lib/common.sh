@@ -791,29 +791,6 @@ _ui_checkbox_apply_exclusive() {
     printf '%s' "$_ce_sel"
 }
 
-# _ui_fuzzy_score <query> <text> — how well a typed search fits a row: the
-# query inside the text scores 1000 minus where it starts, its letters in order
-# but apart 500 minus how far apart; case and spaces do not count. Prints
-# nothing when it does not fit. Twin of fuzzy_score (marketplace/ui.py) and
-# Get-ExakitFuzzyScore; tests/fuzzy-search-cases.json holds all three to it.
-_ui_fuzzy_score() {
-    _FZ_Q="$1" _FZ_T="$2" awk 'BEGIN {
-        q = tolower(ENVIRON["_FZ_Q"]); gsub(/[ \t]/, "", q); t = tolower(ENVIRON["_FZ_T"])
-        if (q == "") { print 0; exit }
-        p = index(t, q)
-        if (p > 0) { print 1000 - (p - 1); exit }
-        first = -1; i = 1
-        for (k = 1; k <= length(q); k++) {
-            r = index(substr(t, i), substr(q, k, 1))
-            if (r == 0) exit
-            pos = i + r - 1
-            if (first < 0) first = pos
-            last = pos; i = pos + 1
-        }
-        print 500 - (last - first)
-    }'
-}
-
 ui_checkbox_menu() {
     _cb_title="$1"
     _cb_defaults="$2"
@@ -838,39 +815,13 @@ ui_checkbox_menu() {
     _cb_is_disabled() {
         case "${_cb_labels[$(($1 - 1))]}" in "!"*) return 0 ;; *) return 1 ;; esac
     }
-    # EXAKIT_CHECKBOX_SEARCH=1 opens the menu with a search line (the persona
-    # question): every letter typed goes into it, the pointer jumps to the row
-    # it fits best, the rows it does not fit are dimmed and skipped, Backspace
-    # deletes, Esc clears. Twin of the persona screen in marketplace/ui.py.
-    _cb_search="${EXAKIT_CHECKBOX_SEARCH:-}"
-    _cb_query=""
-    _cb_fits() { # _cb_fits <row> — the row fits the search (always, with none typed)
-        [ -n "$_cb_query" ] || return 0
-        [ -n "$(_ui_fuzzy_score "$_cb_query" "${_cb_labels[$(($1 - 1))]}")" ]
-    }
-    _cb_point() { # the pointer on the row the search fits best; the earliest wins a tie
-        [ -n "$_cb_query" ] || return 0
-        _cb_best=""; _cb_best_score=""
-        _cb_p=1
-        while [ "$_cb_p" -le "$_cb_n" ]; do
-            if ! _cb_is_header "$_cb_p" && ! _cb_is_disabled "$_cb_p"; then
-                _cb_sc="$(_ui_fuzzy_score "$_cb_query" "${_cb_labels[$((_cb_p - 1))]}")"
-                if [ -n "$_cb_sc" ] && { [ -z "$_cb_best_score" ] || [ "$_cb_sc" -gt "$_cb_best_score" ]; }; then
-                    _cb_best="$_cb_p"; _cb_best_score="$_cb_sc"
-                fi
-            fi
-            _cb_p=$((_cb_p + 1))
-        done
-        [ -n "$_cb_best" ] && _cb_cur="$_cb_best"
-        return 0
-    }
     _cb_step() { # _cb_step <dir:+1|-1> — move the cursor, skipping headers/disabled
         _cb_steps=0
         while [ "$_cb_steps" -lt "$_cb_n" ]; do
             _cb_cur=$((_cb_cur + $1))
             [ "$_cb_cur" -lt 1 ] && _cb_cur=$_cb_n
             [ "$_cb_cur" -gt "$_cb_n" ] && _cb_cur=1
-            if ! _cb_is_header "$_cb_cur" && ! _cb_is_disabled "$_cb_cur" && _cb_fits "$_cb_cur"; then
+            if ! _cb_is_header "$_cb_cur" && ! _cb_is_disabled "$_cb_cur"; then
                 return 0
             fi
             _cb_steps=$((_cb_steps + 1))
@@ -914,7 +865,6 @@ ui_checkbox_menu() {
         EXAKIT_CHECKBOX_SELECTION="$_cb_defaults"
         EXAKIT_CHECKBOX_EXCLUSIVE=""
         EXAKIT_CHECKBOX_GROUP=""
-        EXAKIT_CHECKBOX_SEARCH=""
         _UI_CHECKBOX_SELECTABLE=""
         _cb_i=1
         for _cb_label in "$@"; do
@@ -946,26 +896,6 @@ ui_checkbox_menu() {
         # blank line that the redraw does not count (the frames stack).
         _cb_cols=$(( $(_ui_term_cols) - 1 ))
         _cb_drawn=0
-        if [ -n "$_cb_search" ]; then
-            # The first line: what is typed, after a caret-marked prompt.
-            _cb_none=""
-            if [ -n "$_cb_query" ]; then
-                _cb_none=" no persona matches"
-                _cb_p=1
-                while [ "$_cb_p" -le "$_cb_n" ]; do
-                    if ! _cb_is_header "$_cb_p" && ! _cb_is_disabled "$_cb_p" && _cb_fits "$_cb_p"; then _cb_none=""; break; fi
-                    _cb_p=$((_cb_p + 1))
-                done
-                _cb_text="$(_ui_fit_row "$_cb_query" 15 "$_cb_cols")"
-                printf '      %sSearch:%s %s%s▏%s%s%s%s\n' "${UI_ACCENT:-}" "${UI_RESET:-}" "$_cb_text" \
-                    "${UI_ACCENT:-}" "${UI_RESET:-}" "${UI_DIM:-}" "${_cb_none:+ $_cb_none}" "${UI_RESET:-}"
-                _cb_drawn=$((_cb_drawn + $(_ui_wrapped_lines $((15 + ${#_cb_text} + ${#_cb_none})) "$_cb_cols")))
-            else
-                printf '      %sSearch:%s %s▏%s%stype to find a persona%s\n' "${UI_ACCENT:-}" "${UI_RESET:-}" \
-                    "${UI_ACCENT:-}" "${UI_RESET:-}" "${UI_DIM:-}" "${UI_RESET:-}"
-                _cb_drawn=$((_cb_drawn + 1))
-            fi
-        fi
         _cb_i=1
         for _cb_label in "$@"; do
             _cb_at[$_cb_i]="$_cb_drawn"
@@ -997,26 +927,20 @@ ui_checkbox_menu() {
             _cb_chrome=$((9 + ${#_cb_mark}))
             [ "$_cb_chrome" -lt 10 ] && _cb_chrome=10
             _cb_text="$(_ui_fit_row "$_cb_label" "$_cb_chrome" "$_cb_cols")"
-            # A row the search does not fit is dimmed, never hidden: what is
-            # ticked stays in sight.
-            _cb_fade=""; _cb_unfade=""
-            if ! _cb_fits "$_cb_i"; then _cb_fade="${UI_DIM:-}"; _cb_unfade="${UI_RESET:-}"; fi
             case ",$_cb_sel," in
                 *",$_cb_i,"*)
-                    printf '    %s %s[%s]%s %s%s%s\n' \
-                        "$_cb_ptr" "${UI_OK:-}" "$_cb_mark" "${UI_RESET:-}" "$_cb_fade" "$_cb_text" "$_cb_unfade"
+                    printf '    %s %s[%s]%s %s\n' \
+                        "$_cb_ptr" "${UI_OK:-}" "$_cb_mark" "${UI_RESET:-}" "$_cb_text"
                     ;;
                 *)
-                    printf '    %s %s[ ] %s%s\n' "$_cb_ptr" "$_cb_fade" "$_cb_text" "$_cb_unfade"
+                    printf '    %s [ ] %s\n' "$_cb_ptr" "$_cb_text"
                     ;;
             esac
             _cb_drawn=$((_cb_drawn + $(_ui_wrapped_lines $((_cb_chrome + ${#_cb_text})) "$_cb_cols")))
             _cb_i=$((_cb_i + 1))
         done
         _cb_at[$(( _cb_n + 1 ))]="$_cb_drawn"
-        _cb_hint="↑/↓ to move · $_cb_space · Enter to confirm"
-        [ -n "$_cb_search" ] && _cb_hint="Type to search · $_cb_hint"
-        _cb_hint="$(_ui_fit_row "$_cb_hint" 6 "$_cb_cols")"
+        _cb_hint="$(_ui_fit_row "↑/↓ to move · $_cb_space · Enter to confirm" 6 "$_cb_cols")"
         ui_menu_hint "$_cb_hint"
         _cb_drawn=$((_cb_drawn + $(_ui_wrapped_lines $((6 + ${#_cb_hint})) "$_cb_cols")))
         _ui_cursor_ask
@@ -1024,19 +948,6 @@ ui_checkbox_menu() {
         # a Space keypress from being stripped to an empty string.
         _ui_menu_key "$_cb_tty" || { _cb_sel="$_cb_defaults"; break; }
         _cb_key="$UI_KEY"
-        if [ -n "$_cb_search" ]; then
-            # The search line's keys, before the menu's: on it a letter is
-            # typed, not "a", "j" or "k".
-            case "$_cb_key" in
-                "$(printf '\177')"|"$(printf '\010')")      # Backspace
-                    _cb_query="${_cb_query%?}"; _cb_point; continue ;;
-                "$(printf '\033')")
-                    if [ -z "$UI_KEY_SEQ" ] && [ -n "$_cb_query" ]; then _cb_query=""; continue; fi ;;
-                ""|" ") ;;
-                [[:print:]])
-                    _cb_query="$_cb_query$_cb_key"; _cb_point; continue ;;
-            esac
-        fi
         case "$_cb_key" in
             "")                                          # Enter → confirm, next step
                 # Enter ON the exclusive row (Skip, No, Nothing) answers that
@@ -1090,7 +1001,6 @@ ui_checkbox_menu() {
     EXAKIT_CHECKBOX_SELECTION="$(printf '%s' "$_cb_sel" | tr ',' '\n' | sort -n | paste -sd, -)"
     EXAKIT_CHECKBOX_EXCLUSIVE=""
     EXAKIT_CHECKBOX_GROUP=""
-    EXAKIT_CHECKBOX_SEARCH=""
     _UI_CHECKBOX_SELECTABLE=""
     return 0
 }
