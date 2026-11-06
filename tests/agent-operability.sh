@@ -1434,8 +1434,15 @@ check "gate(wsl, no podman but installable) carries on" \
 # must not run in front of a machine that has not yet agreed to anything.
 _p2dep="$(sed -n '/^personal_deploy_local()/,/^}/p' "$ROOT/setup/lib/runtime-personal.sh")"
 has "the deployment installs podman before anything else" "personal_install_podman" "$_p2dep"
+# Since 2.4 the step's first act is to settle the ENGINE - an existing
+# deployment keeps its own, a fresh one is chosen for - and the Podman install
+# follows on the Podman branch, still before the launcher is asked for anything.
 _p2first="$(printf '%s\n' "$_p2dep" | grep -nE '^\s+[a-z_]+' | grep -v '^\s*#' | head -1)"
-has "...as its first act" "personal_install_podman" "$_p2first"
+has "...right after the engine is settled" "personal_deployment_exists" "$_p2first"
+_p2pod="$(printf '%s\n' "$_p2dep" | grep -n 'personal_install_podman || return 1' | cut -d: -f1 | head -1)"
+_p2launch="$(printf '%s\n' "$_p2dep" | grep -n '"$(personal_cli)" install local' | cut -d: -f1 | head -1)"
+check "...and before the launcher is asked for anything" yes \
+    "$([ -n "$_p2pod" ] && [ -n "$_p2launch" ] && [ "$_p2pod" -lt "$_p2launch" ] && echo yes || echo no)"
 _p2ins="$(sed -n '/^personal_install_podman()/,/^}/p' "$ROOT/setup/lib/runtime-personal.sh")"
 # NO QUESTION. The database runs through Podman and the user asked for the
 # database; a y/n whose only sensible answer is yes bought nothing and cost a
@@ -1682,7 +1689,10 @@ lacks "...while Start-Personal stays a nudge" "Wait-PersonalReadyOrDeploy" \
 # ONE FLAG, because it stopped meaning "no podman" the moment a declined reuse
 # and a failed deploy started using it.
 lacks "...under one name for every cause" "PersonalNoPodman" "$_p2winh"
-check "...set by each cause that leaves no database" "9" \
+# Twelve since 2.4: the nine of old, plus an engine named by
+# EXAKIT_CONTAINER_ENGINE that the machine cannot provide, a Docker deployment
+# whose daemon is down, and Podman on a WSL kernel without nftables.
+check "...set by each cause that leaves no database" "12" \
     "$(printf '%s' "$_p2winh" | grep -c 'PersonalNoDatabase = $true')"
 has "the windows resume arm survives a start that cannot finish" \
     'Invoke-ExakitSoftStep -Component "runtime" -Repair "exakit start"' \

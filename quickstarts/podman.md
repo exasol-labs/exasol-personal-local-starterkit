@@ -81,7 +81,7 @@ Exasol Personal 2.4 puts each deployment on its own network, which Podman builds
 Error: netavark: nftables error: "nft" did not return successfully while applying ruleset
 ```
 
-The kit reads `wsl.exe --version` before a Podman deploy and before `exakit update personal`, and stops with the fix, changing nothing. Update WSL from PowerShell on Windows, restart it, then re-run the command the message names:
+The kit reads `wsl.exe --version` before a Podman deploy and before `exakit update`, and stops with the fix, changing nothing. Update WSL from PowerShell on Windows, restart it, then re-run the command the message names:
 
 ```powershell
 wsl --update
