@@ -29,7 +29,8 @@ def _(mo):
 def _():
     DATASET = None   # None: the dataset approved last in a quickstart (else amazon_sales); or "walmart_sales", "fraud_transactions", or your own file ("~/my-data/transactions.csv", roles beside it)
     USE_AI_THEMES = False  # True: your model sorts the texts into themes (needs a text column and EXAKIT_MODEL_ID; see the AI step below)
-    return DATASET, USE_AI_THEMES
+    USE_PREPARED = False   # True: create the typed, cleaned view proposed under Prepare and explore that instead (nothing is created before)
+    return DATASET, USE_AI_THEMES, USE_PREPARED
 
 
 @app.cell(hide_code=True)
@@ -76,19 +77,9 @@ def _(DATASET, nb):
     wid = nb.continue_workflow('explore')
     conn = nb.connect()
     DATASET_1 = nb.chosen_dataset(DATASET)  # the quickstart's workflow, or the last one: nothing to paste
-    ds = nb.review_roles(conn, DATASET_1).dataset(draft_ok=True)
-    nb.show_roles(ds)
-    ENTITY = ds.col('entity') if ds.has('entity') else None
-    CATEGORY = ds.col('category') if ds.has('category') else None
-    TEXT = ds.text_sql() if ds.has('text') else None
-    DATE = ds.col('date') if ds.has('date') else None
-    LABEL = ds.col('label') if ds.has('label') else None
-    skipped = {m['role']: m['reason'] for m in ds.missing if not ds.has(m['role'])}
-    missing_line = '; '.join((f'no {role} role: {reason}' for role, reason in skipped.items()))  # a role no column fits is None here, never guessed
-    for role in ('entity', 'category', 'date', 'label', 'text'):
-        if role in skipped:
-            print(f'No {role} role ({skipped[role]}): steps that need it explain why they skip below.')
-    return CATEGORY, DATE, ENTITY, LABEL, TEXT, conn, ds, missing_line
+    loaded = nb.review_roles(conn, DATASET_1).dataset(draft_ok=True)
+    nb.show_roles(loaded)  # the table as loaded; `ds` below is what the steps read
+    return conn, loaded
 
 
 @app.cell(hide_code=True)
@@ -106,10 +97,57 @@ def _(mo):
 
 
 @app.cell
-def _(conn, ds, nb):
-    findings = nb.data_checks(conn, ds)
+def _(conn, loaded, nb):
+    findings = nb.data_checks(conn, loaded)
     findings
     return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### A typed, cleaned view
+
+    > **What is a typed view?** A view over the table with each column in the type its values really have - numbers stored
+    > as text become numbers, dates become dates - blanks and placeholders as NULL, and exact copies dropped.
+    > The table itself is never changed; the view is proposed here, shown with its SQL, and created only when you say so.
+
+    Read what would change below. To use it, set `USE_PREPARED = True` in the first cell and run again: the view is created in `EXAKIT_PREPARED`, gets its own approved column map (the same roles), and every step below reads it.
+    """)
+    return
+
+
+@app.cell
+def _(USE_PREPARED, conn, loaded, nb):
+    prepared = nb.typed_view(conn, loaded)
+    ds = prepared.create(conn) if USE_PREPARED and prepared.needed else loaded   # the dataset every step below reads
+    prepared
+    return (ds,)
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ## The roles the steps below use
+
+    Each step takes its columns from the column map: a role the data does not have is `None` here, and the steps that need it skip and say why.
+    """)
+    return
+
+
+@app.cell
+def _(ds):
+    ENTITY = ds.col("entity") if ds.has("entity") else None
+    CATEGORY = ds.col("category") if ds.has("category") else None
+    TEXT = ds.text_sql() if ds.has("text") else None
+    DATE = ds.col("date") if ds.has("date") else None      # a role no column fits is None here, never guessed
+    LABEL = ds.col("label") if ds.has("label") else None
+    skipped = {m["role"]: m["reason"] for m in ds.missing if not ds.has(m["role"])}
+    missing_line = "; ".join(f"no {role} role: {reason}" for role, reason in skipped.items())
+    for role in ("entity", "category", "date", "label", "text"):
+        if role in skipped:
+            print(f"No {role} role ({skipped[role]}): steps that need it explain why they skip below.")
+    return CATEGORY, DATE, ENTITY, LABEL, TEXT, missing_line
 
 
 @app.cell(hide_code=True)

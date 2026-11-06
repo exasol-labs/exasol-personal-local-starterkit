@@ -287,7 +287,7 @@ class NotebookShapeTest(unittest.TestCase):
         column and ordering coming from ds.has() fragments; the handoff is left to its own refusal."""
         cells = ["".join(c["source"]) for c in _built_cells(SOURCES / "data-scientist" / "01_explore.py")
                  if c["cell_type"] == "code"]
-        roles = next(c for c in cells if "nb.review_roles(conn, DATASET)" in c)
+        roles = next(c for c in cells if 'ds.col("date") if ds.has("date") else None' in c)
         for needle in ('ds.col("date") if ds.has("date") else None', 'ds.col("label") if ds.has("label") else None',
                        "for m in ds.missing", "skip below"):
             self.assertIn(needle, roles)

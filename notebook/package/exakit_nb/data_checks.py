@@ -103,18 +103,11 @@ def data_checks(conn, ds, *, show: bool = True):
             add("empty cells", column, empty,
                 f"{column} is empty in {empty:,} rows: averages leave those rows out and groupings put them in a "
                 "group of their own")
-    # Placeholders: only where the values can be listed - category, flag and identifier-like text columns.
-    candidates = [c for c, e in columns.items() if e.get("role") in ("category", "flag") and c != label]
-    for column in candidates:
-        values = _run(conn, f"SELECT {_quoted(column)} AS VALUE_, COUNT(*) AS N FROM {table} "
-                            f"GROUP BY 1 ORDER BY N DESC LIMIT {GROUPABLE + 1}")
-        if len(values) > GROUPABLE:
-            continue
-        for value, count in zip(values["VALUE_"], values["N"]):
-            if isinstance(value, str) and PLACEHOLDER.match(value):
-                add("placeholder", column, int(count),
-                    f"{column} = '{value}' in {int(count):,} rows looks like a category but means 'not known': "
-                    "treat it as empty, or say what it is")
+    for column, found in placeholders(conn, ds).items():
+        for value, count in found:
+            add("placeholder", column, count,
+                f"{column} = '{value}' in {count:,} rows looks like a category but means 'not known': "
+                "treat it as empty, or say what it is")
     if label:
         rate = _run(conn, f"SELECT AVG(CAST({_quoted(label)} AS DOUBLE)) AS R FROM {table} WHERE {_quoted(label)} IS NOT NULL")
         r = float(rate["R"][0] or 0)
@@ -131,6 +124,23 @@ def data_checks(conn, ds, *, show: bool = True):
         for line in frame["MEANS"]:
             print("- " + line)
     return frame
+
+
+def placeholders(conn, ds) -> dict[str, list[tuple[str, int]]]:
+    """{COLUMN: [(value, rows), ...]} for the values that stand for "not known" in the category and flag columns -
+    only where the values can be listed (at most GROUPABLE of them). The typed view turns these into NULL."""
+    table, columns = ds.fact_table, _columns(ds)
+    label = _bare(ds.col("label")) if ds.has("label") else None
+    found: dict[str, list[tuple[str, int]]] = {}
+    for column in [c for c, e in columns.items() if e.get("role") in ("category", "flag") and c != label]:
+        values = _run(conn, f"SELECT {_quoted(column)} AS VALUE_, COUNT(*) AS N FROM {table} "
+                            f"GROUP BY 1 ORDER BY N DESC LIMIT {GROUPABLE + 1}")
+        if len(values) > GROUPABLE:
+            continue
+        hits = [(str(v), int(n)) for v, n in zip(values["VALUE_"], values["N"]) if isinstance(v, str) and PLACEHOLDER.match(v)]
+        if hits:
+            found[column] = hits
+    return found
 
 
 def leakage_check(conn, ds, *, show: bool = True) -> list[str]:

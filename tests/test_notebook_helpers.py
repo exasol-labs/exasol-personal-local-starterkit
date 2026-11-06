@@ -1382,6 +1382,14 @@ class NotebookWorkflowTest(unittest.TestCase):
         self.assertEqual([e["kind"] for e in self.log(namespace["wid"])], ["start"])
         reviewed.assert_called_once_with(mock.ANY, "amazon_sales")
         review.dataset.assert_called_once_with(draft_ok=True)
+        # The typed view decides the dataset the steps read (the table as loaded unless USE_PREPARED), then the roles
+        # are read from it in a cell of their own.
+        cells = _code_cells(NOTEBOOKS / "data-scientist" / "01_explore.py")
+        view = next(c for c in cells if c.startswith("prepared = "))
+        with mock.patch.object(exakit_nb, "typed_view", return_value=mock.Mock(needed=False)):
+            namespace, _ = self.run_cell(view, {**namespace, "USE_PREPARED": False})
+        self.assertIs(namespace["ds"], ds)
+        namespace, _ = self.run_cell(next(c for c in cells if c.startswith("ENTITY = ")), namespace)
         self.assertEqual(namespace["LABEL"], "CANCELLED")
         importlib.import_module("exakit_nb._kit").SESSION.pop("workflow_id", None)
         os.environ["EXAKIT_WORKFLOW_ID"] = namespace["wid"]
