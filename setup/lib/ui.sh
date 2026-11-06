@@ -315,6 +315,11 @@ _UI_SPIN_NESTED=0
 # landed on the PARENT's table animator -- mid-frame, leaving a half-drawn table
 # on screen with the finished one printed under it. A subshell's nesting counter
 # starts at zero, so counting alone cannot tell the two apart; ownership can.
+# $$ alone is NOT a shell's identity: bash gives a subshell its parent's $$, so
+# the subshell that set up the read-only MCP user passed this check, stopped the
+# step's spinner at (3s), and left it frozen through the half minute the MCP
+# server took to start. BASH_SUBSHELL (bash 3.0+, unlike BASHPID) is what tells
+# them apart; it is read inline, since a $( ) to compute it is a subshell too.
 _UI_SPIN_OWNER=''
 
 # ui_spin_begin <label> — start ONLY the animated spinner (prints no line of
@@ -334,7 +339,7 @@ ui_spin_begin() {
     fi
     [ "$UI_FANCY" = 1 ] || return 0
     [ -t 1 ] || return 0
-    _UI_SPIN_OWNER="$$"
+    _UI_SPIN_OWNER="$$.${BASH_SUBSHELL:-0}"
     _UI_STEP_LABEL="$1"
     # $2 is an ORIGINAL start time, passed only by ui_spin_resume: a spinner that
     # was paused so a line could be printed under it has to carry on counting
@@ -388,7 +393,7 @@ _UI_SPIN_PAUSED=0
 ui_spin_pause() {
     _UI_SPIN_PAUSED=0
     [ -n "${_UI_SPIN_PID:-}" ] || return 0
-    [ "${_UI_SPIN_OWNER:-}" = "$$" ] || return 0
+    [ "${_UI_SPIN_OWNER:-}" = "$$.${BASH_SUBSHELL:-0}" ] || return 0
     [ "${_UI_SPIN_NESTED:-0}" -eq 0 ] || return 0
     _UI_SPIN_PAUSED=1
     _UI_SPIN_PAUSE_LABEL="$_UI_STEP_LABEL"
@@ -417,7 +422,7 @@ _ui_step_stop_spinner() {
     [ -n "$_UI_SPIN_PID" ] || return 0
     # Started by another shell: this one is a subshell that inherited the pid,
     # and ending someone else's animation is never what it meant to do.
-    if [ -n "${_UI_SPIN_OWNER:-}" ] && [ "$_UI_SPIN_OWNER" != "$$" ]; then
+    if [ -n "${_UI_SPIN_OWNER:-}" ] && [ "$_UI_SPIN_OWNER" != "$$.${BASH_SUBSHELL:-0}" ]; then
         return 0
     fi
     kill "$_UI_SPIN_PID" 2>/dev/null
@@ -891,7 +896,7 @@ ui_progress_begin() {
     printf '\033[?25l'
     ui_progress_animate "$1" "$2" &
     _UI_SPIN_PID=$!
-    _UI_SPIN_OWNER="$$"
+    _UI_SPIN_OWNER="$$.${BASH_SUBSHELL:-0}"
     # Out of the job table right away, or bash ANNOUNCES the kill: killing a
     # tracked background job prints "line N: 12345 Terminated: 15 ( ... )" —
     # several lines of the loop's own source — straight into the middle of the
@@ -1817,7 +1822,7 @@ ui_table_begin() {
         done
     ) &
     _UI_SPIN_PID=$!
-    _UI_SPIN_OWNER="$$"
+    _UI_SPIN_OWNER="$$.${BASH_SUBSHELL:-0}"
     # Who to stop if this shell goes down without calling ui_table_end. The CLI
     # sets no EXIT trap and die() exits where it stands, so without this the
     # animator outlives the command: an orphan whose next frame moves the cursor
