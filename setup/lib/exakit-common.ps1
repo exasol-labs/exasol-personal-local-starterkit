@@ -3112,8 +3112,16 @@ function Get-ExakitStepArtifactState {
         # older install (or a soft failure) we cannot judge: "unknown".
         $recorded = Get-ExakitManifestValue "components.exapump.path"
         if (-not $recorded) { return "unknown" }
-        if ((Test-Path -LiteralPath $recorded -PathType Leaf) -and ((Get-Item -LiteralPath $recorded).Length -gt 0)) { return "present" }
-        return "missing"
+        if (-not ((Test-Path -LiteralPath $recorded -PathType Leaf) -and ((Get-Item -LiteralPath $recorded).Length -gt 0))) { return "missing" }
+        # A profile can be there and still be wrong: a replaced deployment is
+        # a new database, and from Exasol Personal 2.4 one with a new random
+        # sys password. Install-PersonalDeployment drops this step's tick when
+        # it deploys afresh; this catches a deployment replaced by hand.
+        if ((Get-Command Test-ExapumpProfilePasswordStale -ErrorAction SilentlyContinue) -and (Test-ExapumpProfilePasswordStale)) {
+            $script:ExakitStepRerunReason = "the exapump connection profile holds a password the database no longer accepts - writing it again"
+            return "missing"
+        }
+        return "present"
     }
     # runtime, mcp, pyexasol - and "launcher": nothing a file test can settle
     # without risking a destructive false "missing". See rule 1 above.
@@ -3135,6 +3143,11 @@ function Begin-ExakitStep {
     # (step X)" while the installer runs. Twin of the same write in begin_step.
     try { Set-ExakitManifestValue "install.current_step" $Name } catch { }
     $rerun = $false
+    # Cleared before every judgement so one step's reason cannot be reported
+    # against the next; Get-ExakitStepArtifactState sets it when it has a
+    # better explanation than the generic line below. Twin of
+    # EXAKIT_STEP_RERUN_REASON.
+    $script:ExakitStepRerunReason = ""
     if (Test-ExakitStepDone $Name) {
         # "unknown" (and "present") keep the manifest's answer: only a proven
         # "missing" is allowed to override the tick.
@@ -3153,7 +3166,11 @@ function Begin-ExakitStep {
     }
     Write-ExakitLog "STEP" $Description
     if ($rerun) {
-        Info "Recorded as done, but what it installed is missing - running it again"
+        if ($script:ExakitStepRerunReason) {
+            Info "Recorded as done, but $($script:ExakitStepRerunReason)"
+        } else {
+            Info "Recorded as done, but what it installed is missing - running it again"
+        }
     }
     return $true
 }

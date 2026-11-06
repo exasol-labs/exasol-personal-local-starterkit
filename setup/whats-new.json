@@ -25,7 +25,8 @@
     "No Docker? Podman as before. EXAKIT_CONTAINER_ENGINE names one.",
     "Existing deployments keep their engine and password; nothing moves.",
     "Podman on WSL now needs WSL 2.7+: the kit checks and names the fix.",
-    "New deployments get a random sys password; exakit reads it for you."
+    "New deployments get a random sys password; exakit reads it for you.",
+    "A replaced database gets its exapump profile and MCP user again."
   ],
   "0.2.3": [
     "Security update for uv, the tool that runs the MCP server.",

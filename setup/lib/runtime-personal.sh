@@ -1896,7 +1896,26 @@ personal_deploy_local() {
     _personal_deploy_print_notice "$_deploy_notice"
     rm -rf "$_deploy_tmp"
 
+    personal_forget_database_steps
     personal_record_manifest "healthy"
+}
+
+# personal_forget_database_steps — drop the ticks of the two steps whose work
+# lives in the database or is derived from its password: the exapump profile
+# and the MCP read-only user. A fresh deployment is a new database with its own
+# users and, from Exasol Personal 2.4, its own random sys password. A re-run
+# over it (exakit repair-runtime, EXAKIT_REPLACE_DB=1) used to skip both steps
+# as "already done": `exakit sql` answered "Authentication failed", the sample
+# data could not load, and mcp_readonly was gone until mcp-doctor recreated
+# it. Seen on a real machine. Nothing else is touched: the launcher, pyexasol
+# and the exakit helper do not depend on which database is there. Twin of
+# Clear-PersonalDatabaseSteps.
+personal_forget_database_steps() {
+    command -v exakit_unmark_step >/dev/null 2>&1 || return 0
+    for _pfs_step in exapump mcp; do
+        exakit_unmark_step "$_pfs_step" 2>/dev/null || true
+    done
+    return 0
 }
 
 _personal_wait_ready_probe() {

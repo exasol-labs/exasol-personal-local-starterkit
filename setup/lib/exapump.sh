@@ -447,6 +447,42 @@ exapump_create_profile() {
     ok_step "Connection profile [$EXAKIT_EXAPUMP_PROFILE] written to $(ui_tilde "$EXAPUMP_CONFIG")"
 }
 
+# exapump_profile_password_stale — true when the kit's profile holds a
+# password that is not the one on file for the database. A replaced deployment
+# (exakit repair-runtime, EXAKIT_REPLACE_DB=1) is a new database and, from
+# Exasol Personal 2.4, one with a new random sys password: the credential file
+# follows it (personal_record_manifest reads secrets.json on every deploy), the
+# profile did not, and every `exakit sql` answered "Authentication failed"
+# after a repair that had reported success. step_artifact_state asks this so
+# the exapump step runs again over such a profile. Two file reads and nothing
+# printed, so neither password can reach a log. Twin of
+# Test-ExapumpProfilePasswordStale.
+exapump_profile_password_stale() {
+    [ -s "$EXAPUMP_CONFIG" ] || return 1
+    _epps_file="$(manifest_get runtime.password_file 2>/dev/null || true)"
+    [ -n "$_epps_file" ] && [ -s "$_epps_file" ] || return 1
+    require_python3
+    run_python - "$EXAPUMP_CONFIG" "$EXAKIT_EXAPUMP_PROFILE" "$_epps_file" <<'PY'
+import re, sys
+path, profile, pwfile = sys.argv[1:4]
+try:
+    content = open(path).read()
+    onfile = open(pwfile).read().strip()
+except OSError:
+    sys.exit(1)
+section = re.search(r"\[%s\][^\[]*" % re.escape(profile), content, re.S)
+if not section or not onfile:
+    sys.exit(1)
+line = re.search(r'^password\s*=\s*"(.*)"\s*$', section.group(0), re.M)
+if not line:
+    sys.exit(1)
+# The same two escapes the PowerShell writer applies; the shell writer applies
+# none, so an unescaped value compares as written.
+written = line.group(1).replace('\\"', '"').replace("\\\\", "\\")
+sys.exit(0 if written != onfile else 1)
+PY
+}
+
 # exapump_write_profile <profile> <host> <port> <user> <password> - one TOML
 # section in ~/.exapump/config.toml, replaced in place if it is already there.
 #

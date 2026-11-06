@@ -37,8 +37,18 @@ for whom:
   with the fix: `wsl --update`, `wsl --shutdown`, re-run. A machine already on
   Podman's `firewall_driver = "iptables"` passes; one whose wsl.exe cannot be
   read is warned and let through. Docker and macOS never ask.
-- Tests: `tests/personal-engine.sh` (+ `personal-engine-ps.ps1`) and
-  `tests/personal-wsl-gate.sh`. Docs: README, AGENTS, the Linux, Windows and
+- **A replaced database is a new database.** `exakit repair-runtime` and
+  `EXAKIT_REPLACE_DB=1` deploy afresh, and a 2.4 deployment then has a new
+  random `sys` password and no `mcp_readonly` user. The re-run used to skip
+  the exapump and MCP steps as already done: `exakit sql` answered
+  `Authentication failed`, the sample data could not load, and the MCP user
+  was gone until `mcp-doctor` recreated it. A fresh deploy now drops both
+  steps' ticks so they run again, and the exapump step also re-runs over a
+  profile whose password is no longer the one on file (a deployment replaced
+  by hand with `exasol destroy` and `exasol install local`).
+- Tests: `tests/personal-engine.sh` (+ `personal-engine-ps.ps1`),
+  `tests/personal-wsl-gate.sh` and `tests/personal-fresh-password.sh`
+  (+ `-ps.ps1`). Docs: README, AGENTS, the Linux, Windows and
   Podman quickstarts, the exasol-runtime skill (`components.skills.version`
   1.12.4), and the what's-new card.
 

@@ -1434,11 +1434,12 @@ check "gate(wsl, no podman but installable) carries on" \
 # must not run in front of a machine that has not yet agreed to anything.
 _p2dep="$(sed -n '/^personal_deploy_local()/,/^}/p' "$ROOT/setup/lib/runtime-personal.sh")"
 has "the deployment installs podman before anything else" "personal_install_podman" "$_p2dep"
-# Since 2.4 the step's first act is to settle the ENGINE - an existing
-# deployment keeps its own, a fresh one is chosen for - and the Podman install
-# follows on the Podman branch, still before the launcher is asked for anything.
+# Since 2.4 the step's first act is to settle the ENGINE - none off an engine
+# platform (macOS), an existing deployment keeps its own, a fresh one is chosen
+# for - and the Podman install follows on the Podman branch, still before the
+# launcher is asked for anything.
 _p2first="$(printf '%s\n' "$_p2dep" | grep -nE '^\s+[a-z_]+' | grep -v '^\s*#' | head -1)"
-has "...right after the engine is settled" "personal_deployment_exists" "$_p2first"
+has "...right after the engine is settled" "personal_engine_platform" "$_p2first"
 _p2pod="$(printf '%s\n' "$_p2dep" | grep -n 'personal_install_podman || return 1' | cut -d: -f1 | head -1)"
 _p2launch="$(printf '%s\n' "$_p2dep" | grep -n '"$(personal_cli)" install local' | cut -d: -f1 | head -1)"
 check "...and before the launcher is asked for anything" yes \

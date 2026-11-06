@@ -1237,7 +1237,21 @@ function Install-PersonalDeployment {
         $script:ExakitQuietDetail = $prevDeployQuiet
     }
     Ok "Exasol Personal deployed and answering on 127.0.0.1:$(Get-PersonalDbPort)"
+    Clear-PersonalDatabaseSteps
     Set-PersonalManifest "healthy"
+}
+
+# Clear-PersonalDatabaseSteps - drop the ticks of the two steps whose work lives
+# in the database or is derived from its password: the exapump profile and the
+# MCP read-only user. A fresh deployment is a new database with its own users
+# and, from Exasol Personal 2.4, its own random sys password; a re-run over it
+# used to skip both steps as "already done" and leave `exakit sql` answering
+# "Authentication failed". Twin of personal_forget_database_steps.
+function Clear-PersonalDatabaseSteps {
+    if (-not (Get-Command Remove-ExakitStepDone -ErrorAction SilentlyContinue)) { return }
+    foreach ($step in @("exapump", "mcp")) {
+        try { Remove-ExakitStepDone $step } catch { }
+    }
 }
 
 # The launcher gave up on a first boot that was merely slow: wait with the kit's

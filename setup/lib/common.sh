@@ -7017,6 +7017,17 @@ step_artifact_state() {
                 # Re-running the installer is supposed to be the cure for that.
                 EXAKIT_STEP_RERUN_REASON="the exapump connection profile is gone — writing it again"
                 printf 'missing\n'
+            elif command -v exapump_profile_password_stale >/dev/null 2>&1 && exapump_profile_password_stale; then
+                # A PROFILE CAN BE THERE AND STILL BE WRONG. A replaced
+                # deployment is a new database, and from Exasol Personal 2.4
+                # one with a new random sys password: the credential file
+                # followed it, the profile did not, and `exakit sql` answered
+                # "Authentication failed" after a repair that had reported
+                # success. personal_deploy_local drops this step's tick when it
+                # deploys afresh; this catches the deployments replaced by
+                # hand (`exasol destroy`, then `exasol install local`).
+                EXAKIT_STEP_RERUN_REASON="the exapump connection profile holds a password the database no longer accepts — writing it again"
+                printf 'missing\n'
             else
                 printf 'present\n'
             fi
