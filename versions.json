@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "updated": "2026-11-05",
+  "updated": "2026-11-06",
   "kit": {
     "version": "0.2.3"
   },
@@ -100,7 +100,7 @@
       }
     },
     "dbt-exasol": {
-      "version": "1.12.1",
+      "version": "1.12.3",
       "package": "dbt-exasol",
       "severity": "normal"
     }

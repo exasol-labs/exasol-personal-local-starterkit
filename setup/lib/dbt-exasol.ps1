@@ -34,7 +34,7 @@
 # versions-bump workflow keeps the fallback in lockstep with versions.json
 # (COUPLED table).
 $script:DbtExasolPackage = "dbt-exasol"
-$script:DbtExasolVersionFallback = if ($env:EXAKIT_DBT_EXASOL_VERSION_FALLBACK) { $env:EXAKIT_DBT_EXASOL_VERSION_FALLBACK } else { "1.12.1" }
+$script:DbtExasolVersionFallback = if ($env:EXAKIT_DBT_EXASOL_VERSION_FALLBACK) { $env:EXAKIT_DBT_EXASOL_VERSION_FALLBACK } else { "1.12.3" }
 $script:DbtExasolVersion = if ($env:EXAKIT_DBT_EXASOL_VERSION) { $env:EXAKIT_DBT_EXASOL_VERSION } else { "" }
 $script:DbtExasolVenv = if ($env:EXAKIT_DBT_EXASOL_VENV) { $env:EXAKIT_DBT_EXASOL_VENV } else { Join-Path $script:ExakitHome "dbt-exasol-venv" }
 $script:DbtExasolHome = if ($env:EXAKIT_DBT_EXASOL_HOME) { $env:EXAKIT_DBT_EXASOL_HOME } else { Join-Path $script:ExakitHome "dbt" }

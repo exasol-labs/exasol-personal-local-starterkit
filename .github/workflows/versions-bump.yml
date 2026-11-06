@@ -227,7 +227,7 @@ jobs:
                               personal["version"] = winner
                               s3["sha256"] = digests
 
-          # --- mcp and pyexasol: stable, non-yanked PyPI releases ---------------
+          # --- mcp, pyexasol and dbt-exasol: stable, non-yanked PyPI releases ---
           def bump_pypi(key, default_package):
               block = components.get(key) or {}
               if not block.get("version"):
@@ -252,6 +252,11 @@ jobs:
 
           bump_pypi("mcp", "exasol-mcp-server")
           bump_pypi("pyexasol", "pyexasol")
+          # dbt-exasol is the one marketplace add-on that installs from PyPI,
+          # not from a GitHub release, and it carries no `repo` on purpose
+          # (see versions.yml): its GitHub tags are v-prefixed while the PyPI
+          # versions are not, so the add-on loop below must never see it.
+          bump_pypi("dbt-exasol", "dbt-exasol")
 
           # --- exapump: a stable release, plus the five asset digests -----------
           exapump = components.get("exapump") or {}
