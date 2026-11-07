@@ -125,9 +125,9 @@ footer { margin-top:3rem; padding-top:1rem; border-top:1px solid var(--rule); fo
 <main>
 <article class="doc">
 <header class="cover">
-  <div class="meta"><span>Exasol Personal Starter Kit</span><span>Branch feat/descriptor-approve</span><span>6 November 2026</span><span>Persona: data-scientist</span></div>
+  <div class="meta"><span>Exasol Personal Starter Kit</span><span>Branch feat/descriptor-approve</span><span>7 November 2026</span><span>Persona: data-scientist</span></div>
   <h1>One table you have never seen: how the Data Scientist persona is built</h1>
-  <p class="lede">A data scientist installs the kit, loads a dataset or their own file, gets an approved description of it (and of how its schema's tables link), checks it is clean, prepares a typed view, explores it with every SQL statement visible, tests one idea with a small model, and shares a result whose numbers they checked. This page describes what the kit does at each step, as the code on this branch does it.</p>
+  <p class="lede">A data scientist installs the kit, loads a dataset or their own file, gets a description of it the kit drafted and they approved - checking the columns where the draft guessed first - (and of how its schema's tables link), checks it is clean, prepares a typed view, explores it with every SQL statement visible, tests one idea with a small model, and shares a result whose numbers they checked. This page describes what the kit does at each step, as the code on this branch does it.</p>
 </header>
 
 <section id="glance">
@@ -138,17 +138,18 @@ footer { margin-top:3rem; padding-top:1rem; border-top:1px solid var(--rule); fo
   <div class="fact"><div class="v">0</div><div class="l">column names typed in a notebook: every query is built from the approved column map</div></div>
   <div class="fact"><div class="v">9 / 9</div><div class="l">live notebook runs passed (3 notebooks × 3 datasets) on 6 November 2026</div></div>
   <div class="fact"><div class="v">9 / 9</div><div class="l">TPC-H links found from the data alone (no foreign keys declared), every one right</div></div>
+  <div class="fact"><div class="v">100%</div><div class="l">of 237 column roles drafted right on 24 benchmark tables (held-out tables: 98.1% on their first run)</div></div>
   <div class="fact"><div class="v">1</div><div class="l">MCP server: the one beside the database, read-only, self-healing</div></div>
 </div>
-<p>Everything the user does happens in a notebook that opens already connected, with no password in it. The column map (the <em>descriptor</em>) is proposed by the kit from a profile of the data and approved by the user; every later step reads it, which is why changing one assignment, <code>DATASET = ...</code>, moves every notebook to another dataset. A table that is one of several gets a <em>schema map</em> too - the schema's tables and how they link - and the notebook can turn it into one joined view. The ML Engineer persona is switched off on this branch (kept, not removed) so the work can focus here.</p>
+<p>Everything the user does happens in a notebook that opens already connected, with no password in it. The column map (the <em>descriptor</em>) is proposed by the kit from a profile of the data, shown with the guesses first, checked against the data and approved by the user; every later step reads it, which is why changing one assignment, <code>DATASET = ...</code>, moves every notebook to another dataset. A table that is one of several gets a <em>schema map</em> too - the schema's tables and how they link - and the notebook can turn it into one joined view. The ML Engineer persona is switched off on this branch (kept, not removed) so the work can focus here.</p>
 </section>
 
 <section id="loop">
 <h2><span class="n">01</span>The working loop</h2>
-<p>The persona follows the loop a data scientist already works in. Each stage has a place in the kit; the two marked in violet were added on this branch.</p>
+<p>The persona follows the loop a data scientist already works in. Each stage has a place in the kit; the three marked in violet were added or rebuilt on this branch.</p>
 <div class="loop" role="list">
   <div class="st" role="listitem"><b>Access</b><small>install, load a sample or a file, notebook opens connected</small></div>
-  <div class="st" role="listitem"><b>Understand</b><small>profile → proposed roles with evidence → approve</small></div>
+  <div class="st new" role="listitem"><b>Understand</b><small>profile → roles with evidence, guesses first → approve, checked on the data</small></div>
   <div class="st new" role="listitem"><b>Prepare</b><small>checks, the schema's links → joined view, typed and cleaned view</small></div>
   <div class="st" role="listitem"><b>Explore</b><small>groups and trends, SQL shown; ask in plain English</small></div>
   <div class="st" role="listitem"><b>Model</b><small>a small scikit-learn model on this computer</small></div>
@@ -160,11 +161,11 @@ footer { margin-top:3rem; padding-top:1rem; border-top:1px solid var(--rule); fo
 <thead><tr><th>Stage</th><th>What the user needs</th><th>Where the kit does it</th><th>Command or cell</th></tr></thead>
 <tbody>
 <tr><td>Access</td><td>"Get me to the data without a ticket."</td><td>installer, <code>exakit data-load</code>, notebook add-on</td><td><code>EXAKIT_PERSONA=data-scientist</code>, quickstart <em>Choose a dataset</em></td></tr>
-<tr><td>Understand</td><td>"What is in here, and can I trust it?"</td><td>describe service: profile, draft, review, approve</td><td>quickstart <em>Approve the column map</em>, <code>exakit describe &lt;id&gt;</code></td></tr>
+<tr><td>Understand</td><td>"What is in here, and can I trust it?"</td><td>describe service: profile, draft (scored by a benchmark), picker with the low-confidence columns first, approve after a look at the data</td><td>quickstart <em>Approve the column map</em>, <code>exakit describe &lt;id&gt;</code></td></tr>
 <tr><td>Prepare</td><td>"What is wrong with it, and what goes with it?"</td><td><code>nb.data_checks</code>, <code>nb.describe_schema</code> → <code>joined_view</code>, <code>nb.typed_view</code></td><td>explore <em>Prepare</em>, <em>Several tables</em>, <em>A typed, cleaned view</em>; <code>exakit describe --schema</code></td></tr>
 <tr><td>Explore</td><td>"Find the pattern."</td><td>SQL built from roles, every statement printed</td><td>explore <em>Compare groups</em>, <em>Over time</em>; ask your data</td></tr>
 <tr><td>Model</td><td>"Test a hypothesis."</td><td>logistic regression on category, entity, month</td><td>explore <em>Small baseline model</em></td></tr>
-<tr><td>Validate</td><td>"Am I fooling myself?"</td><td><code>nb.leakage_check(connection, dataset)</code>, ROC AUC with a plain note</td><td>explore <em>Validate</em>, model note</td></tr>
+<tr><td>Validate</td><td>"Am I fooling myself?"</td><td><code>nb.leakage_check(connection, dataset)</code>, ROC AUC with a plain note; the same leak rule warns when the column map is approved</td><td>explore <em>Validate</em>, model note</td></tr>
 <tr><td>Share</td><td>"Show stakeholders."</td><td>Dash Server draft → preview → confirm → publish</td><td>share notebook</td></tr>
 <tr><td>Hand off</td><td>"Let someone repeat it."</td><td>versioned descriptor and schema map, query digest, workflow log</td><td><code>~/.exasol-starter-kit/workflows/&lt;id&gt;.jsonl</code></td></tr>
 </tbody></table></div>
@@ -338,6 +339,7 @@ joined_dataset = joined_view_proposal.create(connection) if USE_JOINED and joine
 <p><code>nb.leakage_check(connection, dataset)</code> looks at every column with at most 50 values (not the key, identifiers or text) and flags one whose values almost decide the label on their own: values where the label is at least 99% one way cover at least 95% of rows and catch at least 90% of the label-1 rows. Such a column was usually written after the outcome. The model leaves it out.</p>
 <pre><code>- STATUS gives CANCELLED away: CANCELLED is 1 whenever STATUS is 'Cancelled'.
   It was probably written after the outcome - leave it out of any model.</code></pre>
+<p>The same rule runs earlier too: approving a column map with a target set warns about such a column (<code>STATUS gives CANCELLED away: CANCELLED is '1' whenever STATUS is 'Cancelled'</code>), so it is seen before any notebook trains on it.</p>
 <p>The model's score is ROC AUC on a quarter it has not seen, with a note in plain words ("about as good as guessing" near 0.5). A rare label is called out in Prepare, so accuracy is never the measure.</p>
 </section>
 
@@ -424,6 +426,7 @@ joined_dataset = joined_view_proposal.create(connection) if USE_JOINED and joine
 <tr><td>Typed view on <code>fraud_transactions</code></td><td>two placeholders become <code>NULL</code>, 885 copies dropped; a new approved column map with the same roles</td></tr>
 <tr><td>Schema map on TPC-H (no foreign keys declared)</td><td>8 tables, their 8 declared primary keys (two of them two columns), 9 links found from the values, all correct (e.g. <code>ORDERS.O_CUSTKEY → CUSTOMER.C_CUSTKEY</code>, <code>CUSTOMER.C_NATIONKEY → NATION.N_NATIONKEY</code>); approved and published as <code>EXAKIT_SEMANTIC.TPCH__RELATIONS</code></td></tr>
 <tr><td>Joined view of <code>ORDERS</code></td><td>adds CUSTOMER → NATION → REGION; 30,000 rows, the same as <code>ORDERS</code>; its column map approved as <code>orders_joined</code></td></tr>
+<tr><td>Descriptor benchmark (<code>tools/descriptor_benchmark.py</code>)</td><td>24 tables, 237 columns: every role, slot and sensitive mark right, every role a reviewer might change marked low (before this branch's rules: 76% of roles, 43% of the wrong ones marked low)</td></tr>
 <tr><td>Draft of <code>AMAZON.ORDER_LINES</code> on the database</td><td>profiled in 2.7 s with the value-shape patterns; <code>SKU</code>, <code>ASIN</code> identifiers, <code>QTY</code> a measure, <code>SHIP_POSTAL_CODE</code> sensitive; approving with <code>CANCELLED</code> as target warns "STATUS gives CANCELLED away" (review 0.6 s)</td></tr>
 <tr><td>Joined SQL of <code>LINEITEM</code></td><td>7 joins (NATION twice, by supplier and by customer); 120,515 rows, the same as <code>LINEITEM</code>, 53 distinct column names</td></tr>
 </tbody></table></div>
@@ -432,12 +435,13 @@ joined_dataset = joined_view_proposal.create(connection) if USE_JOINED and joine
 
 <section id="gaps">
 <h2><span class="n">18</span>Against the review: what is done</h2>
-<p>The review of the requirements named three gaps in the Data Scientist flow. All three are closed on this branch; what is left of each is in the last column:</p>
+<p>The review of the requirements named three gaps in the Data Scientist flow. All three are closed on this branch; what is left of each is in the last column. A fourth row is the trust in the column map itself, which every other step rests on:</p>
 <div class="tbl"><table>
 <thead><tr><th>Gap</th><th>Status</th><th>What exists</th><th>Still open</th></tr></thead>
 <tbody>
 <tr><td>Prepare</td><td><span class="tag ok">done</span></td><td>the checks find repeats, copies, gaps, placeholders and a rare label on any dataset; a typed, cleaned view is proposed from the values and created on request, with its own approved column map</td><td>a person's own cleaning rules (a value mapping, an outlier cap) on top of the proposal</td></tr>
 <tr><td>Validate on the DS side</td><td><span class="tag ok">done</span></td><td>leakage check before the model; baseline and score note; rare label called out</td><td>a check that a time split respects order (the model splits at random, stratified, seeded)</td></tr>
+<tr><td>A column map to trust</td><td><span class="tag ok">done</span></td><td>roles drafted from the type, the numbers, the value shape and (last) the name, scored on 24 tables; the guesses marked low and shown first in the picker; approval refuses a key that repeats or a target that is not yes/no, and warns about a leaking column and the guesses approved unchanged</td><td>a fresh held-out set for the next rule change (the five used here have been seen); keys of more than one column</td></tr>
 <tr><td>Several tables</td><td><span class="tag ok">done</span></td><td>a schema map: keys and many-to-one links, declared or found and checked on the values, approved, versioned and published for agents; one joined view with its own column map, read by every later step</td><td>keys of more than one column; one-to-many links summed per row (an order's line count); the joined view stops at three steps</td></tr>
 </tbody></table></div>
 </section>
@@ -450,6 +454,9 @@ joined_dataset = joined_view_proposal.create(connection) if USE_JOINED and joine
   <li>Share needs Dash Server running; it was not part of the live run above.</li>
   <li>The schema map finds single-column keys only, and follows links many-to-one; a live source's schema (a virtual schema) is not surveyed, since every count would be a round trip to it.</li>
   <li>The hidden prompt of the settings cell is shown by Jupyter; in Marimo it may not appear, and the cell then says how to set the key in the terminal.</li>
+  <li>The benchmark's answers are one reviewer's judgement; where two roles are both reasonable, both count. Its five held-out tables scored 98.1% on their first run and were then fixed, so they are no longer unseen.</li>
+  <li>A column map approved before these rules keeps its roles (an approval is never rewritten); in a notebook, <code>exakit_nb.describe("SCHEMA.TABLE", force=True)</code> drafts it again for review.</li>
+  <li>Approving a live source's column map (a virtual table) does not query it: the key and target checks and the leak warning are skipped; the low-confidence list is still shown.</li>
   <li>The ML Engineer persona is switched off on this branch; its notebooks and training code stay.</li>
 </ul>
 </section>
@@ -458,6 +465,10 @@ joined_dataset = joined_view_proposal.create(connection) if USE_JOINED and joine
 <h2><span class="n">20</span>Troubleshooting</h2>
 <dl class="qa">
   <dt>A step says "Skipped - … needs the date role".</dt><dd>The data has no column for that role (no date in <code>fraud_transactions</code>). It is a fact about the data, not an error.</dd>
+  <dt>"slots.key: … repeats" or "… is empty in … rows" when approving.</dt><dd>The column in the key slot does not name one row each in the table now. Pick a unique, never-empty column, or leave the key empty (<code>--role key=-</code>; in the picker, —).</dd>
+  <dt>"slots.target: … holds N values; a target is a yes/no outcome".</dt><dd>The target must hold exactly two values (0/1, true/false, two labels). Pick such a column, or leave the target empty.</dd>
+  <dt>"Warning: … gives … away" after approving.</dt><dd>That column decides the target on its own and was probably written after the outcome. The approval stands; leave the column out of any model (Explore's model does).</dd>
+  <dt>"Warning: N role(s) drafted at low confidence were approved as drafted".</dt><dd>Those are the columns the draft guessed. The approval stands; check them in the picker (they are listed first) and approve again if one is wrong.</dd>
   <dt>"training needs an approved descriptor: … is a draft".</dt><dd>Approve it in the quickstart's review cell, or <code>exakit describe &lt;id&gt; --approve</code>.</dd>
   <dt>The schema map has a wrong link, or misses one.</dt><dd><code>schema_map.unlink("TABLE.COLUMN")</code> or <code>schema_map.link("TABLE.COLUMN", "TABLE.KEY")</code> in Explore; <code>--unlink</code> / <code>--link</code> with <code>exakit describe --schema &lt;SCHEMA&gt; --approve</code>. A link the data does not hold (more than 0.1% of values missing) is not found on its own - declare it or add it by hand.</dd>
   <dt>"… links to no other table: there is nothing to join".</dt><dd>The table has no column that names another table's key. Its data is used as it is.</dd>
@@ -475,7 +486,8 @@ joined_dataset = joined_view_proposal.create(connection) if USE_JOINED and joine
 <tr><td>Datasets and their builders</td><td><code>data/datasets/&lt;id&gt;/</code>, <code>tools/datasets/&lt;id&gt;.py</code></td></tr>
 <tr><td>Notebook sources</td><td><code>notebook/notebooks/data-scientist/*.py</code>, shared cells in <code>00_shared/</code></td></tr>
 <tr><td>Notebook helpers</td><td><code>notebook/package/exakit_nb/</code> (<code>data_checks.py</code>, <code>prepare.py</code>, <code>schema_map.py</code>, <code>dataset.py</code>, <code>role_picker.py</code>, <code>ask.py</code>, <code>share.py</code>, <code>setup_env.py</code>)</td></tr>
-<tr><td>Describe service</td><td><code>setup/lib/descriptor/</code> (the schema map: <code>schema.py</code>), <code>setup/lib/describe_service.py</code></td></tr>
+<tr><td>Describe service</td><td><code>setup/lib/descriptor/</code> (roles: <code>roles.py</code>; slots: <code>draft.py</code>; the approve step's look at the data: <code>review.py</code>; the schema map: <code>schema.py</code>), <code>setup/lib/describe_service.py</code></td></tr>
+<tr><td>Draft benchmark</td><td><code>tools/descriptor_benchmark.py</code> (<code>--check</code>), <code>tests/test_descriptor_benchmark.py</code></td></tr>
 <tr><td>Approved descriptors</td><td><code>~/.exasol-starter-kit/descriptors/&lt;SCHEMA.TABLE&gt;/</code>; schema maps in <code>~/.exasol-starter-kit/descriptors/&lt;SCHEMA&gt;/</code></td></tr>
 <tr><td>Created views</td><td><code>EXAKIT_PREPARED</code> (joined and typed views), <code>EXAKIT_SEMANTIC</code> (roles and links for agents)</td></tr>
 <tr><td>Workflow logs</td><td><code>~/.exasol-starter-kit/workflows/</code></td></tr>
@@ -501,7 +513,7 @@ joined_dataset = joined_view_proposal.create(connection) if USE_JOINED and joine
 </dl>
 </section>
 
-<footer>Exasol Personal Starter Kit · Data Scientist persona · generated from the code on branch feat/descriptor-approve, 6 November 2026. Every command and number on this page was checked against that code or measured on a running kit.</footer>
+<footer>Exasol Personal Starter Kit · Data Scientist persona · generated from the code on branch feat/descriptor-approve, 7 November 2026. Every command and number on this page was checked against that code or measured on a running kit.</footer>
 </article>
 </main>
 </div>
