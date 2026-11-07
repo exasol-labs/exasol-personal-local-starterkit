@@ -79,6 +79,11 @@ mlflow_ok = nb.check_mlflow()
 # %%
 bucket_ok = nb.check_bucket(connection)
 
+# %% [markdown]
+# ## Load and describe the data
+#
+# The same cells as the Data Scientist quickstart: pick a dataset, then approve its column map.
+
 # %% [include] ../00_shared/data_paths.py load
 
 # %% [include] ../00_shared/data_paths.py review

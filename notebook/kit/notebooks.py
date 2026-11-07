@@ -217,6 +217,9 @@ def readme_text(kit: Path, doc: dict, personas: set[str] | None = None, fresh: b
         lines += ["", "## Exasol examples", "", "`exasol-examples/00_library.ipynb` - the 50 official lessons, in order."]
     lines += ["", "## Good to know", "",
               "- Connect: `import exakit.nb as nb; conn = nb.connect()` - no host, user or password.",
+              "- The kit without a terminal: `nb.kit_check()` says what is installed and running; `nb.exakit(\"update\")`",
+              "  (or any other command of the kit) runs it with the log in the cell; `nb.addon_ready(\"dash-server\")`",
+              "  installs and starts an add-on.",
               "- A model for the AI steps: set `EXAKIT_MODEL_ID`, `EXAKIT_PROVIDER_BASE_URL` and",
               "  `EXAKIT_PROVIDER_API_KEY` before `exakit notebook` (Claude: `https://api.anthropic.com/v1/`;",
               "  Ollama: its `/v1/` address, no key).",

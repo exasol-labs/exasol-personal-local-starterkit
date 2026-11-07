@@ -14,11 +14,13 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    # Explore
+    # Prepare, explore, model, validate
 
     **Dataset:** the one you approved last (else `amazon_sales`); change `DATASET` for `walmart_sales`, `fraud_transactions` or your own file. **How long:** about two minutes.
 
-    Check the data is clean, compare groups and follow outcomes over time, check no column gives the answer away, then fit a small local model from the category, entity and (when there is a date) the month, and see which values it leans on. Every query is built from the dataset's approved column map, so nothing here names a column: change `DATASET` and every cell follows. A step whose role the data does not have (no date in `fraud_transactions`, no text in any of the three) skips and says why.
+    **The journey:** 1 Access → 2 Understand → **3 Prepare → 4 Explore → 5 Model → 6 Validate** → 7 Ask with AI → 8 Share → 9 Hand off. **This notebook: steps 3 to 6.**
+
+    Check the data is clean, compare groups and follow outcomes over time, train a small model and find out, honestly, how good it is. Every query is built from the dataset's approved column map, so nothing here names a column: change `DATASET` and every cell follows. A step whose role the data does not have (no date in `fraud_transactions`, no text in any of the three) skips and says why.
 
     Optional, for data with a text column: `USE_AI_THEMES = True` lets your model say what the label-1 texts are about, traced to Langfuse when it is set up.
     """)
@@ -37,9 +39,9 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Optional: your model and Langfuse
+    ## Optional · Your AI model and Langfuse
 
-    > **What is this?** Where you tell the notebook which AI model to use, and where to record its calls (Langfuse: what was sent, the answer, the cost).
+    > **What is this?** Where you tell the notebook which AI model to use (for the text step at the end), and where to record its calls (Langfuse: what was sent, the answer, the cost).
     > We set it here so you need no terminal: fill in the plain values and run the cell; the keys are asked for in a hidden box.
     > The keys stay in this notebook's kernel only - never in this file - and are gone when it stops. Left empty, the cell changes nothing.
     """)
@@ -60,7 +62,7 @@ def _():
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Load the column map
+    ## Step 2, continued · The column map you approved
 
     > **The column map (descriptor), again:** it says which column is the key, the time, the groups and the outcome (label).
     > Every query below is built from it, so the same notebook runs on any dataset whose map you approved.
@@ -86,7 +88,17 @@ def _(DATASET, nb):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Prepare: is the data clean?
+    ## Step 3 · Prepare the data
+
+    > **What happens here?** Three looks at the data before anything is computed from it: is it clean (repeats, gaps, placeholders), does it link to other tables, and are its columns in the types they should be. Each look only *proposes*; the table is never changed, and a cleaned or joined view is created only when you say so in the first cell.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### Is the data clean?
 
     > **Why check first?** A rate or a model is only as good as the rows under it. Repeated ids count twice, empty cells
     > drop out of averages, a value like "Unknown" poses as a category, and a rare label makes a lazy model look accurate.
@@ -166,7 +178,17 @@ def _(USE_PREPARED, connection, joined_dataset, nb):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## The roles the steps below use
+    ## Step 4 · Explore
+
+    > **What happens here?** The first real questions: how do the groups compare, and how does the outcome move over time. Each answer is one query, printed before its result, with a note in plain words under it.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### The columns the steps below use
 
     Each step takes its columns from the column map: a role the data does not have is `None` here, and the steps that need it skip and say why.
     """)
@@ -198,7 +220,7 @@ def _(dataset):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Compare groups
+    ### Compare groups
 
     The 10 biggest entities, split by category: how many rows each has and, for each, the % where the label is 1. The note under the result says what it means.
     """)
@@ -265,7 +287,7 @@ def _(landscape_grid):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Over time
+    ### Over time
 
     How many rows per day, month or year (picked from the date span), and the % where the label is 1. Needs date and label roles. The note under the result says what it means.
     """)
@@ -307,7 +329,17 @@ def _(
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Validate: does a column give the answer away?
+    ## Step 5 · Train a model to predict
+
+    > **What happens here?** A small model learns to tell label 1 from label 0 from the columns the map names, on this computer, in seconds. First, though, any column that already *knows* the answer is set aside - otherwise the model only learns to read it.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### Leave out columns that give the answer away
 
     > **What is leakage?** A column written after the outcome - an order's status once it was cancelled - predicts the
     > label perfectly and makes any model look brilliant, then fails on new rows where it is not known yet.
@@ -325,15 +357,15 @@ def _(connection, dataset, nb):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Small baseline model
+    ### Train a small baseline model
 
     > **What is a baseline model?** The simplest model worth trying, to see how much the data can tell at all.
-    > It learns from most rows and is graded on rows it never saw, like a test with new questions.
-    > If it is barely better than guessing, a bigger model is unlikely to rescue the idea.
+    > It learns from most rows and keeps a quarter back, unseen, for the test in the next step.
+    > If it is barely better than guessing there, a bigger model is unlikely to rescue the idea.
 
-    A small model learns to tell label 1 from label 0 from what the column map names: the category, the entity and, when the data has a date, its month (a column the cell above flagged is left out). With a date it uses the newest 20,000 rows; without one, the first 20,000 by the key, so a rerun reads the same rows. It is checked on a quarter it has not seen, and the note says how good it is in plain words. It needs a label and a category or entity.
+    The model learns from what the column map names: the category, the entity and, when the data has a date, its month (a column the cell above flagged is left out). With a date it uses the newest 20,000 rows; without one, the first 20,000 by the key, so a rerun reads the same rows. It needs a label and a category or entity.
 
-    Technical: one-hot features, logistic regression with balanced class weights, a stratified split with a fixed seed; the score is ROC AUC (0.5 = guessing).
+    Technical: one-hot features, logistic regression with balanced class weights, a stratified split with a fixed seed.
     """)
     return
 
@@ -380,7 +412,6 @@ def _(
         nb.show_sql()
 
         from sklearn.linear_model import LogisticRegression
-        from sklearn.metrics import roc_auc_score
         from sklearn.model_selection import train_test_split
         from sklearn.pipeline import Pipeline
         from sklearn.preprocessing import OneHotEncoder
@@ -393,16 +424,62 @@ def _(
             ("classifier", LogisticRegression(max_iter=1000, class_weight="balanced")),
         ])
         model.fit(train_features, train_labels)
-        roc_auc = roc_auc_score(test_labels, model.predict_proba(test_features)[:, 1])
-        print(f"ROC AUC on the held-out quarter: {roc_auc:.3f}")
-        nb.note_model(roc_auc, dataset, len(model_rows), label_values.mean())
-    return FEATURE_LABELS, feature_columns, model
+        print(f"Trained on {len(train_labels):,} rows; {len(test_labels):,} rows kept back for the test in step 6.")
+    return (
+        FEATURE_LABELS,
+        feature_columns,
+        label_values,
+        model,
+        model_rows,
+        test_features,
+        test_labels,
+    )
 
 
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Model clues
+    ## Step 6 · Validate
+
+    > **What happens here?** The model is graded on the quarter of rows it never saw, like a test with new questions, and the score is put into words. Then the values it leans on are listed, as clues to check - not as proof.
+    """)
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### How good is it, honestly
+
+    Runs only when the model above ran. The score is ROC AUC on the held-out quarter: 0.5 is guessing, 1.0 is perfect. The note under it says what that means for this data, and what "always predicting the common answer" would already get right - the baseline a model has to beat.
+    """)
+    return
+
+
+@app.cell
+def _(
+    dataset,
+    label_values,
+    model,
+    model_rows,
+    nb,
+    test_features,
+    test_labels,
+):
+    roc_auc = None
+    if model is not None:
+        from sklearn.metrics import roc_auc_score
+
+        roc_auc = roc_auc_score(test_labels, model.predict_proba(test_features)[:, 1])
+        print(f"ROC AUC on the held-out quarter: {roc_auc:.3f}")
+        nb.note_model(roc_auc, dataset, len(model_rows), label_values.mean())
+    return
+
+
+@app.cell(hide_code=True)
+def _(mo):
+    mo.md(r"""
+    ### What it leans on
 
     Runs only when the model above ran. The values the model leans on most, each way: a category, an entity or a month. They are clues, not proof: a value with few rows can look strong by chance.
     """)
@@ -431,11 +508,11 @@ def _(FEATURE_LABELS, LABEL_COLUMN, feature_columns, model):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Optional: what the label-1 texts are about
+    ## Optional · What the label-1 texts are about (AI)
 
     Needs a text column: on the three sample datasets (`amazon_sales`, `walmart_sales`, `fraud_transactions`) it skips and says why. Your model reads the newest texts on each side of the label (label `= 1` and `= 0`) and sorts each side into a few themes. A theme found on one side only is the clue. The note under the result says how to read it.
 
-    To switch it on: fill in the model cell at the top (*Optional: your model and Langfuse*) and run it, then `USE_AI_THEMES = True` in the first cell. Two model calls, a few cents. A live source asks before anything is sent.
+    To switch it on: fill in the model cell at the top (*Optional · Your AI model and Langfuse*) and run it, then `USE_AI_THEMES = True` in the first cell. Two model calls, a few cents. A live source asks before anything is sent.
 
     With `LANGFUSE_BASE_URL` filled in there too, both calls are one trace, `explore-themes`, with what was sent, the answer, tokens, cost, time and two scores (`valid_json`, `texts_placed`): run it with another model and compare the two traces.
 
@@ -483,9 +560,9 @@ def _(
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    ## Decide what to test next
+    ## Next: step 7
 
-    Keep one finding worth validating. To rerun on other data, change `DATASET`.
+    Keep one finding worth validating. Then open `02_ask_your_data.ipynb` to ask the data a question in plain English, with an AI model drafting the SQL if you want one. To rerun this notebook on other data, change `DATASET`.
     """)
     return
 

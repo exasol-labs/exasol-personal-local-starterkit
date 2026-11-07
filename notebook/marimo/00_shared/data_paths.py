@@ -27,7 +27,7 @@ def _(mo):
 def _(mo):
     # Cell tags: connect
     mo.md(r"""
-    ## Connect
+    ### Connect
 
     Uses the kit's saved connection, then lists the schemas. No password in the notebook.
     """)
@@ -55,7 +55,7 @@ def _(connection, nb):
 def _(mo):
     # Cell tags: load
     mo.md(r"""
-    ## Choose a dataset
+    ### Choose a dataset
 
     > **What is a dataset?** One table of rows to learn from; each row is one thing that happened.
     > The kit offers three to practise on: `amazon_sales` (online fashion orders, one row per order line), `walmart_sales` (weekly sales, one row per store and week) and `fraud_transactions` (card and bank payments with a fraud label, messy on purpose: repeats, gaps and placeholders to find).
@@ -129,7 +129,7 @@ def _(nb, own_data, sample_data, source_data):
 def _(mo):
     # Cell tags: review
     mo.md(r"""
-    ## Approve the column map
+    ### Approve the column map
 
     > **What is the descriptor?** A short map of the table, also called the column map: which column plays which part - the key, the time, the groups to compare (category), the outcome to predict (target).
     > Every later query is written from this map, so no notebook has your column names typed in.
@@ -154,7 +154,7 @@ def _(mo):
 
     The **target** matters most: the kit never guesses it, you choose it. Leave a slot as **—** when no column fits.
 
-    **Do now:** check the dropdowns, click **Approve descriptor**, then run the next cell. If the map is already approved and you change nothing, no click is needed. The later notebooks use this approved map.
+    **Do now:** the columns the kit was least sure about come first, under *Check these first* - look at those, change what is wrong, click **Approve descriptor**, then run the next cell. If the map is already approved and you change nothing, no click is needed. Approving also checks the data once more (a key that repeats, a target that is not yes/no) and warns about a column that gives the target away.
 
     Plain Python: `review.approve({"COLUMN": "role"}, {"target": "COLUMN"})`.
     """)

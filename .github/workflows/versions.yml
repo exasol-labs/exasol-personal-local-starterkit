@@ -994,6 +994,11 @@ jobs:
         if: matrix.shard == 4
       - run: python3 tests/test_descriptor_review.py
         if: matrix.shard == 4
+      # The kit's commands from a notebook cell, and the Data Scientist's hand-off bundle.
+      - run: python3 tests/test_kit_commands.py
+        if: matrix.shard == 4
+      - run: python3 tests/test_handoff_bundle.py
+        if: matrix.shard == 4
       - run: python3 tests/test_notebook_helpers.py
         if: matrix.shard == 4
       - run: python3 tests/test_model_provider.py

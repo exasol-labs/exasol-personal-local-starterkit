@@ -328,7 +328,7 @@ class CopyTest(unittest.TestCase):
             ran = json.loads((base / "00_quickstart.ipynb").read_text(encoding="utf-8"))
             ran["cells"][1]["outputs"] = [{"output_type": "stream", "name": "stdout", "text": ["ran\n"]}]
             (base / "00_quickstart.ipynb").write_text(json.dumps(ran), encoding="utf-8")      # run, not edited
-            self._rewrite_markdown(base / "01_explore.ipynb", "# Explore", "# Explore (my notes)")  # edited
+            self._rewrite_markdown(base / "01_explore.ipynb", "# Prepare, explore", "# Prepare (my notes), explore")  # edited
             for name in ("00_quickstart.ipynb", "01_explore.ipynb"):
                 self._rewrite_markdown(kit / "notebook" / "notebooks" / "data-scientist" / name, "## ", "## New: ")
             added, problems = kit_notebooks.copy("jupyter", kit, home, {"data-scientist"})
@@ -345,7 +345,7 @@ class CopyTest(unittest.TestCase):
             base = home / "starter-kit-notebooks"
             names = [line.split("\t")[0] for line in (base / ".kit-copied").read_text(encoding="utf-8").splitlines()]
             (base / ".kit-copied").write_text("".join(f"{n}\n" for n in names), encoding="utf-8")   # names only
-            self._rewrite_markdown(base / "data-scientist" / "01_explore.ipynb", "# Explore", "# Explore (older)")
+            self._rewrite_markdown(base / "data-scientist" / "01_explore.ipynb", "# Prepare, explore", "# Prepare (older), explore")
             self.assertEqual(kit_notebooks.copy("jupyter", kit, home, {"data-scientist"}), ([], []))
             record = dict(line.partition("\t")[::2] for line in (base / ".kit-copied").read_text(encoding="utf-8").splitlines())
             self.assertTrue(record["data-scientist/00_quickstart.ipynb"], "the kit's own copy: adopted, refreshed later")
@@ -1316,6 +1316,11 @@ def _code_cells(py: Path) -> list[str]:
     return ["".join(c["source"]) for c in json.loads(build_tool.build(py))["cells"] if c["cell_type"] == "code"]
 
 
+def _workflow_cell(path: Path) -> str:
+    """The quickstart cell that starts the workflow (the Data Scientist's opens with the kit check before it)."""
+    return next(c for c in _code_cells(path) if "nb.workflow(" in c)
+
+
 class NotebookWorkflowTest(unittest.TestCase):
     """T-new-15 (AC-X1.1): the quickstarts' first cell starts a workflow and prints its id with the exakit workflow
     show line, or continues the one EXAKIT_WORKFLOW_ID names; explore does the same before it opens the data. The
@@ -1349,7 +1354,7 @@ class NotebookWorkflowTest(unittest.TestCase):
             with self.subTest(persona=persona):
                 os.environ.pop("EXAKIT_WORKFLOW_ID", None)
                 importlib.import_module("exakit_nb._kit").SESSION.pop("workflow_id", None)
-                first = _code_cells(NOTEBOOKS / persona / "00_quickstart.py")[0]
+                first = _workflow_cell(NOTEBOOKS / persona / "00_quickstart.py")
                 self.assertIn(f'nb.workflow("{name}"', first)
                 namespace, out = self.run_cell(first)
                 wid = namespace["workflow_id"]
@@ -1359,14 +1364,14 @@ class NotebookWorkflowTest(unittest.TestCase):
                 self.assertEqual([(e["kind"], e.get("name")) for e in self.log(wid)], [("start", name)])
 
     def test_a_kernel_started_under_a_workflow_continues_it(self):
-        first = _code_cells(NOTEBOOKS / "data-scientist" / "00_quickstart.py")[0]
+        first = _workflow_cell(NOTEBOOKS / "data-scientist" / "00_quickstart.py")
         namespace, _ = self.run_cell(first)
         started = namespace["workflow_id"]
         importlib.import_module("exakit_nb._kit").SESSION.pop("workflow_id", None)       # another kernel, same environment
         os.environ["EXAKIT_WORKFLOW_ID"] = started
         for persona in self.QUICKSTARTS:
             with self.subTest(persona=persona):
-                namespace, out = self.run_cell(_code_cells(NOTEBOOKS / persona / "00_quickstart.py")[0])
+                namespace, out = self.run_cell(_workflow_cell(NOTEBOOKS / persona / "00_quickstart.py"))
                 self.assertEqual(namespace["workflow_id"], started)
                 self.assertIn(f"exakit workflow show {started}", out)
         self.assertEqual([e["kind"] for e in self.log(started)], ["start"], "resuming adds no second start line")

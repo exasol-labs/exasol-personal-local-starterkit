@@ -15,7 +15,7 @@ with `exakit notebook` or `exakit notebook marimo`; `exakit update notebook` ref
 
 | Persona | Notebooks |
 |---|---|
-| `data-scientist/` | `00_quickstart`, `01_explore`, `02_ask_your_data`, `03_share` |
+| `data-scientist/` | `00_quickstart` (steps 0-2), `01_explore` (3-6), `02_ask_your_data` (7), `03_share` (8-9) |
 | `ml-engineer/` | `00_quickstart`, `01_train`, `02_rust_score`, `03_score_external_model` |
 
 ## Build and check
@@ -42,6 +42,24 @@ fetches notebooks from GitHub: a new notebook reaches users only with a kit rele
 
 To refresh the examples library from a reviewed, pinned Notebook Connector checkout:
 `python3 tools/bundle_connector_notebooks.py /path/to/notebook-connector`.
+
+## The Data Scientist's journey
+
+The four Data Scientist notebooks are one path with nine numbered steps, each a `## Step N · ...` heading with a
+three-line plain explanation of what happens there (no jargon) and `###` parts under it: **1 Access** (connect, start a
+workflow, load) and **2 Understand** (approve the column map) in `00_quickstart`; **3 Prepare** (checks, schema map and
+joined view, typed view), **4 Explore** (groups, over time), **5 Model** (leakage set aside, a small model trained) and
+**6 Validate** (scored on unseen rows, what it leans on) in `01_explore`; **7 Ask with AI** in `02_ask_your_data`;
+**8 Share** (Dash Server installed and started from the notebook, preview, publish) and **9 Hand off** (one folder and
+zip: the column map, every query with its digest, the dashboards, the workflow log, a README) in `03_share`. Each
+notebook's first cell says which steps it holds. A **step 0** opens the quickstart: the kit itself, from the notebook.
+
+**No terminal.** `nb.kit_check()` prints what is installed and running; `nb.exakit("update")`,
+`nb.exakit("marketplace", "dash-server")`, `nb.exakit("data-load", "walmart_sales")`, `nb.exakit("logs")` run the same
+`exakit` the terminal runs, with its output streaming into the cell and the exit code in the result; `nb.addon_ready(id)`
+installs and starts an add-on when it is missing or stopped. The command runs with no terminal, so a question it would
+ask takes its default; a choice goes in up front (`nb.exakit("mcp-setup", env={"EXAKIT_MCP_CLIENTS": "claude"})`).
+`nb.handoff_bundle(conn, ds)` writes the hand-off into `~/.exasol-starter-kit/bundles/<workflow id>/` (and `.zip`).
 
 ## Rules every notebook follows
 

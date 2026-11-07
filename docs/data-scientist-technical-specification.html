@@ -127,14 +127,14 @@ footer { margin-top:3rem; padding-top:1rem; border-top:1px solid var(--rule); fo
 <header class="cover">
   <div class="meta"><span>Exasol Personal Starter Kit</span><span>Branch feat/descriptor-approve</span><span>7 November 2026</span><span>Persona: data-scientist</span></div>
   <h1>One table you have never seen: how the Data Scientist persona is built</h1>
-  <p class="lede">A data scientist installs the kit, loads a dataset or their own file, gets a description of it the kit drafted and they approved - checking the columns where the draft guessed first - (and of how its schema's tables link), checks it is clean, prepares a typed view, explores it with every SQL statement visible, tests one idea with a small model, and shares a result whose numbers they checked. This page describes what the kit does at each step, as the code on this branch does it.</p>
+  <p class="lede">A data scientist installs the kit, loads a dataset or their own file, gets a description of it the kit drafted and they approved - checking the columns where the draft guessed first - (and of how its schema's tables link), checks it is clean, prepares a typed view, explores it with every SQL statement visible, tests one idea with a small model, validates it, asks the data a question with an AI model, shares a result whose numbers they checked and hands the work off in one bundle - nine numbered steps across four notebooks, and never a terminal. This page describes what the kit does at each step, as the code on this branch does it.</p>
 </header>
 
 <section id="glance">
 <h2><span class="n">00</span>At a glance</h2>
 <div class="facts">
   <div class="fact"><div class="v">3</div><div class="l">practice datasets: Amazon sales, Walmart sales, fraud transactions (messy on purpose)</div></div>
-  <div class="fact"><div class="v">4</div><div class="l">notebooks: quickstart, explore, ask your data, share</div></div>
+  <div class="fact"><div class="v">9</div><div class="l">numbered steps across 4 notebooks: access, understand, prepare, explore, model, validate, ask with AI, share, hand off</div></div>
   <div class="fact"><div class="v">0</div><div class="l">column names typed in a notebook: every query is built from the approved column map</div></div>
   <div class="fact"><div class="v">9 / 9</div><div class="l">live notebook runs passed (3 notebooks × 3 datasets) on 6 November 2026</div></div>
   <div class="fact"><div class="v">9 / 9</div><div class="l">TPC-H links found from the data alone (no foreign keys declared), every one right</div></div>
@@ -160,14 +160,14 @@ footer { margin-top:3rem; padding-top:1rem; border-top:1px solid var(--rule); fo
 <div class="tbl"><table>
 <thead><tr><th>Stage</th><th>What the user needs</th><th>Where the kit does it</th><th>Command or cell</th></tr></thead>
 <tbody>
-<tr><td>Access</td><td>"Get me to the data without a ticket."</td><td>installer, <code>exakit data-load</code>, notebook add-on</td><td><code>EXAKIT_PERSONA=data-scientist</code>, quickstart <em>Choose a dataset</em></td></tr>
+<tr><td>Access</td><td>"Get me to the data without a ticket - and without a terminal."</td><td>installer, then the kit from a cell: <code>nb.kit_check</code>, <code>nb.exakit</code>, <code>nb.addon_ready</code>; a loader per source</td><td><code>EXAKIT_PERSONA=data-scientist</code>, quickstart <em>Step 0</em> and <em>Step 1</em></td></tr>
 <tr><td>Understand</td><td>"What is in here, and can I trust it?"</td><td>describe service: profile, draft (scored by a benchmark), picker with the low-confidence columns first, approve after a look at the data</td><td>quickstart <em>Approve the column map</em>, <code>exakit describe &lt;id&gt;</code></td></tr>
 <tr><td>Prepare</td><td>"What is wrong with it, and what goes with it?"</td><td><code>nb.data_checks</code>, <code>nb.describe_schema</code> → <code>joined_view</code>, <code>nb.typed_view</code></td><td>explore <em>Prepare</em>, <em>Several tables</em>, <em>A typed, cleaned view</em>; <code>exakit describe --schema</code></td></tr>
 <tr><td>Explore</td><td>"Find the pattern."</td><td>SQL built from roles, every statement printed</td><td>explore <em>Compare groups</em>, <em>Over time</em>; ask your data</td></tr>
-<tr><td>Model</td><td>"Test a hypothesis."</td><td>logistic regression on category, entity, month</td><td>explore <em>Small baseline model</em></td></tr>
-<tr><td>Validate</td><td>"Am I fooling myself?"</td><td><code>nb.leakage_check(connection, dataset)</code>, ROC AUC with a plain note; the same leak rule warns when the column map is approved</td><td>explore <em>Validate</em>, model note</td></tr>
-<tr><td>Share</td><td>"Show stakeholders."</td><td>Dash Server draft → preview → confirm → publish</td><td>share notebook</td></tr>
-<tr><td>Hand off</td><td>"Let someone repeat it."</td><td>versioned descriptor and schema map, query digest, workflow log</td><td><code>~/.exasol-starter-kit/workflows/&lt;id&gt;.jsonl</code></td></tr>
+<tr><td>Model</td><td>"Test a hypothesis."</td><td>leakage set aside, then logistic regression on category, entity, month</td><td>explore <em>Step 5</em></td></tr>
+<tr><td>Validate</td><td>"Am I fooling myself?"</td><td><code>nb.leakage_check(connection, dataset)</code>, ROC AUC with a plain note; the same leak rule warns when the column map is approved; the baseline to beat in the note</td><td>explore <em>Step 6</em></td></tr>
+<tr><td>Share</td><td>"Show stakeholders."</td><td>Dash Server installed and started from the notebook; draft → preview → confirm → publish</td><td>share <em>Step 8</em></td></tr>
+<tr><td>Hand off</td><td>"Let someone repeat it."</td><td><code>nb.handoff_bundle</code>: the column map and schema map, every query with its digest, the dashboards, the workflow log, a README - one folder and zip</td><td>share <em>Step 9</em>, <code>~/.exasol-starter-kit/bundles/&lt;id&gt;/</code></td></tr>
 </tbody></table></div>
 </section>
 
@@ -256,15 +256,19 @@ columns:
 
 <section id="notebooks">
 <h2><span class="n">05</span>The four notebooks</h2>
-<p>Written as jupytext percent-format <code>.py</code> files, built into <code>.ipynb</code> and Marimo versions by <code>tools/notebooks.py</code>. Each important idea is explained the first time it appears, in three short lines: what it is and why it is used.</p>
+<p>Written as jupytext percent-format <code>.py</code> files, built into <code>.ipynb</code> and Marimo versions by <code>tools/notebooks.py</code>. The four are one path: nine numbered steps, the day's work of a data scientist, each a <code>## Step N</code> heading with a three-line plain explanation of what happens there and <code>###</code> parts under it. Every notebook's first cell says which steps it holds and shows the whole journey, so a reader always knows where they are. Each important idea is explained the first time it appears: what it is and why it is used.</p>
 <div class="tbl"><table>
-<thead><tr><th>#</th><th>Notebook</th><th>Sections</th><th>Needs</th></tr></thead>
+<thead><tr><th>#</th><th>Notebook</th><th>Steps and parts</th><th>Needs</th></tr></thead>
 <tbody>
-<tr><td>0</td><td><code>00_quickstart</code></td><td>Start a workflow · Connect · Choose a dataset · Approve the column map · First result · Next</td><td>nothing</td></tr>
-<tr><td>1</td><td><code>01_explore</code></td><td>Your model and Langfuse (optional) · Load the column map · <b>Prepare</b> · <b>Several tables</b> · <b>A typed, cleaned view</b> · Compare groups · Over time · <b>Validate</b> · Small baseline model · Model clues · Texts (optional) · Decide what to test next</td><td>a draft map</td></tr>
-<tr><td>2</td><td><code>02_ask_your_data</code></td><td>Your model and Langfuse (optional) · Review the proposal · Approve and run</td><td>an approved map; a model only to draft SQL</td></tr>
-<tr><td>3</td><td><code>03_share</code></td><td>Settings and the draft · Preview · Publish</td><td>an approved map, Dash Server</td></tr>
+<tr><td>0</td><td><code>00_quickstart</code></td><td><b>Step 0 · The kit, from this notebook</b> (<code>nb.kit_check()</code>; update, add-ons, data-load, logs from a cell) · <b>Step 1 · Access the data</b> (start a workflow, connect, choose a dataset) · <b>Step 2 · Understand the data</b> (approve the column map, a first result) · Next</td><td>nothing</td></tr>
+<tr><td>1</td><td><code>01_explore</code></td><td>Your AI model and Langfuse (optional) · Step 2, continued (the map you approved) · <b>Step 3 · Prepare</b> (is it clean, several tables, a typed view) · <b>Step 4 · Explore</b> (the columns used, compare groups, over time) · <b>Step 5 · Model</b> (leave out what gives the answer away, train a small baseline) · <b>Step 6 · Validate</b> (how good is it, what it leans on) · What the texts are about (AI, optional) · Next</td><td>a draft map</td></tr>
+<tr><td>2</td><td><code>02_ask_your_data</code></td><td><b>Step 7 · Ask your data with AI</b> (your AI model and Langfuse, review the proposal, approve and run) · Next</td><td>an approved map; a model only to draft SQL</td></tr>
+<tr><td>3</td><td><code>03_share</code></td><td><b>Step 8 · Share the insight</b> (Dash Server from this notebook, preview, publish) · <b>Step 9 · Hand off</b> (one folder and zip)</td><td>an approved map; Dash Server is installed and started from the notebook</td></tr>
 </tbody></table></div>
+<h3>The kit, from a notebook</h3>
+<p>Nothing on the path needs a terminal. <code>nb.kit_check()</code> prints what is installed and running (the database, each add-on and its address, the datasets loaded). <code>nb.exakit("update")</code>, <code>nb.exakit("marketplace", "dash-server")</code>, <code>nb.exakit("data-load", "walmart_sales")</code>, <code>nb.exakit("logs")</code> - any command of the kit - run the same <code>exakit</code> the terminal runs, with the output streaming into the cell as it happens and the exit code in the result (<code>run.ok</code>). <code>nb.addon_ready("dash-server")</code> installs an add-on when it is missing and starts it when it is stopped, which is how Share gets Dash Server. The command runs detached from any terminal, so a question it would ask takes its default; a choice goes in up front (<code>env={"EXAKIT_MCP_CLIENTS": "claude"}</code>). Nothing is ever typed into a prompt from the notebook.</p>
+<h3>The hand-off bundle</h3>
+<p><code>nb.handoff_bundle(connection, dataset)</code> writes <code>~/.exasol-starter-kit/bundles/&lt;workflow id&gt;/</code> and a zip beside it: <code>README.md</code> (what the data is, the column-map version the numbers rest on, the questions approved, the dashboards published, how to repeat it), <code>descriptor.yaml</code>, <code>schema-map.json</code> when there is one, <code>queries.sql</code> (every distinct statement the workflow ran, with its SHA-256 and row count) and <code>workflow.jsonl</code>. The log gets a <code>handoff</code> line with the path. It works without Dash Server, and never holds a password.</p>
 </section>
 
 <section id="dynamic">
@@ -473,6 +477,7 @@ joined_dataset = joined_view_proposal.create(connection) if USE_JOINED and joine
   <dt>The schema map has a wrong link, or misses one.</dt><dd><code>schema_map.unlink("TABLE.COLUMN")</code> or <code>schema_map.link("TABLE.COLUMN", "TABLE.KEY")</code> in Explore; <code>--unlink</code> / <code>--link</code> with <code>exakit describe --schema &lt;SCHEMA&gt; --approve</code>. A link the data does not hold (more than 0.1% of values missing) is not found on its own - declare it or add it by hand.</dd>
   <dt>"… links to no other table: there is nothing to join".</dt><dd>The table has no column that names another table's key. Its data is used as it is.</dd>
   <dt>Ask fails with "The Exasol MCP server … did not answer".</dt><dd>Run <code>exakit mcp-doctor</code>: it heals the server beside the database and says what it could not fix.</dd>
+  <dt>Share says Dash Server is not installed, or stopped.</dt><dd>Run the <em>Dash Server, from this notebook</em> cell: <code>nb.addon_ready("dash-server")</code> installs it when missing and starts it when stopped, with the log in the cell. Anything else the kit can do runs the same way: <code>nb.exakit("...")</code>.</dd>
   <dt>The dataset download fails offline.</dt><dd>Point <code>EXAKIT_DATASETS_MIRROR</code> at a folder (or an https URL) holding the archive.</dd>
 </dl>
 </section>
@@ -485,12 +490,13 @@ joined_dataset = joined_view_proposal.create(connection) if USE_JOINED and joine
 <tr><td>Persona</td><td><code>personas/data-scientist.json</code></td></tr>
 <tr><td>Datasets and their builders</td><td><code>data/datasets/&lt;id&gt;/</code>, <code>tools/datasets/&lt;id&gt;.py</code></td></tr>
 <tr><td>Notebook sources</td><td><code>notebook/notebooks/data-scientist/*.py</code>, shared cells in <code>00_shared/</code></td></tr>
-<tr><td>Notebook helpers</td><td><code>notebook/package/exakit_nb/</code> (<code>data_checks.py</code>, <code>prepare.py</code>, <code>schema_map.py</code>, <code>dataset.py</code>, <code>role_picker.py</code>, <code>ask.py</code>, <code>share.py</code>, <code>setup_env.py</code>)</td></tr>
+<tr><td>Notebook helpers</td><td><code>notebook/package/exakit_nb/</code> (<code>kit_commands.py</code>, <code>handoff_bundle.py</code>, <code>data_checks.py</code>, <code>prepare.py</code>, <code>schema_map.py</code>, <code>dataset.py</code>, <code>role_picker.py</code>, <code>ask.py</code>, <code>share.py</code>, <code>setup_env.py</code>)</td></tr>
 <tr><td>Describe service</td><td><code>setup/lib/descriptor/</code> (roles: <code>roles.py</code>; slots: <code>draft.py</code>; the approve step's look at the data: <code>review.py</code>; the schema map: <code>schema.py</code>), <code>setup/lib/describe_service.py</code></td></tr>
 <tr><td>Draft benchmark</td><td><code>tools/descriptor_benchmark.py</code> (<code>--check</code>), <code>tests/test_descriptor_benchmark.py</code></td></tr>
 <tr><td>Approved descriptors</td><td><code>~/.exasol-starter-kit/descriptors/&lt;SCHEMA.TABLE&gt;/</code>; schema maps in <code>~/.exasol-starter-kit/descriptors/&lt;SCHEMA&gt;/</code></td></tr>
 <tr><td>Created views</td><td><code>EXAKIT_PREPARED</code> (joined and typed views), <code>EXAKIT_SEMANTIC</code> (roles and links for agents)</td></tr>
 <tr><td>Workflow logs</td><td><code>~/.exasol-starter-kit/workflows/</code></td></tr>
+<tr><td>Hand-off bundles</td><td><code>~/.exasol-starter-kit/bundles/&lt;workflow id&gt;/</code> and <code>.zip</code></td></tr>
 <tr><td>MCP server definition</td><td><code>setup/lib/mcp.sh</code> / <code>mcp.ps1</code> (<code>mcp_sidecar_apply</code> / <code>Set-McpSidecar</code>)</td></tr>
 </tbody></table></div>
 </section>
@@ -509,6 +515,7 @@ joined_dataset = joined_view_proposal.create(connection) if USE_JOINED and joine
   <dt>Baseline</dt><dd>The simplest answer a model has to beat, such as always predicting the common class.</dd>
   <dt>ROC AUC</dt><dd>How often the model ranks a label-1 row above a label-0 row: 0.5 is guessing, 1.0 is perfect.</dd>
   <dt>Sidecar</dt><dd>A container the Exasol Personal launcher runs beside the database; the MCP server is one.</dd>
+  <dt>Hand-off bundle</dt><dd>One folder and zip with the approved column map, every query that ran, the dashboards and the workflow log, so a colleague can repeat the work.</dd>
   <dt>Workflow</dt><dd>One id that links the queries, descriptor versions, approvals and traces of one piece of work.</dd>
 </dl>
 </section>

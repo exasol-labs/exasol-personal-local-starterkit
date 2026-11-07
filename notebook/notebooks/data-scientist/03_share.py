@@ -7,13 +7,13 @@
 # ---
 
 # %% [markdown]
-# # Share a dashboard
+# # Share the insight and hand it off
 #
 # **Dataset:** the one you approved last (else `amazon_sales`), `walmart_sales`, `fraud_transactions` or your own approved descriptor. **How long:** about five minutes once Dash Server is ready.
 #
-# Builds a dashboard on Dash Server, previews it and publishes only after you check the figures. No LLM needed.
+# **The journey:** 1 Access → 2 Understand → 3 Prepare → 4 Explore → 5 Model → 6 Validate → 7 Ask with AI → **8 Share → 9 Hand off**. **This notebook: steps 8 and 9.**
 #
-# **Run first:** `exakit marketplace dash-server`, `exakit mcp-setup`, `exakit start dash-server`. Paste your workflow ID below.
+# Builds a dashboard on Dash Server, previews it and publishes only after you check the figures; then packs everything a colleague needs to repeat the work into one folder. No AI model needed. Dash Server is installed and started from this notebook, no terminal.
 
 # %%
 import exakit.nb as nb
@@ -41,7 +41,20 @@ print("Query digest:", dashboard_draft.query_digest)
 print("Descriptor version:", dataset.version)
 
 # %% [markdown]
-# ## Preview
+# ## Step 8 · Share the insight
+#
+# > **What happens here?** One checked result becomes a small dashboard that other people open in a browser. It goes up as a preview first; you compare its figures with the SQL; only then is it published at its live address. The dashboard remembers which query and which column-map version it was built from.
+
+# %% [markdown]
+# ### Dash Server, from this notebook
+#
+# > **What is Dash Server?** The add-on that hosts dashboards on this computer. This cell installs it when it is missing and starts it when it is stopped - the same as `exakit marketplace dash-server` and `exakit start dash-server` in a terminal - and prints where it runs. Already there and running: it just says so.
+
+# %%
+dash_server_state = nb.addon_ready("dash-server")
+
+# %% [markdown]
+# ### Preview
 #
 # > **Why a preview first?** A dashboard is what other people will read and trust.
 # > It goes up as a preview first, and you check its figures against the SQL.
@@ -55,7 +68,7 @@ preview_path = dashboard_draft.preview(dash_server)
 print("Preview:", dash_server.url + preview_path)
 
 # %% [markdown]
-# ## Publish
+# ### Publish
 #
 # Set `FIGURES_CHECKED = True` only when the preview matches the query, then run the cell. Keep the live URL with your workflow ID.
 
@@ -66,3 +79,13 @@ if FIGURES_CHECKED:
     print("Live dashboard:", dash_server.url + live_path)
 else:
     print("Open the healthy preview and check the figures before promoting.")
+
+# %% [markdown]
+# ## Step 9 · Hand off
+#
+# > **What happens here?** Everything a colleague needs to repeat this piece of work goes into one folder, and a zip of it: the approved column map (and the schema map, if there is one), every query that ran with its digest and row count, the dashboards published, the workflow log, and a README that says what the data is and how to run it again.
+# > Nothing in it is a password. It works without Dash Server too: run this cell on its own.
+
+# %%
+handoff = nb.handoff_bundle(connection, dataset)
+handoff

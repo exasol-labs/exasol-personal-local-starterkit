@@ -156,6 +156,10 @@ def note_model(auc: float, ds, rows: int, share: float | None = None) -> str:
              f"the first one the higher score {chance}% of the time (50% is guessing): {verdict}.",
              f"It learned from {rows:,} {things}" + (f", {share:.1%} of them with {label} = 1." if share is not None else ".")
              + " It was checked on a quarter of them it had not seen."]
+    if share is not None:
+        common = max(float(share), 1 - float(share))
+        lines.append(f"The baseline to beat: always answering {label} = {1 if share >= 0.5 else 0} is right "
+                     f"{common:.0%} of the time, which is why accuracy is not the score here.")
     text = "\n".join(lines)
     print(text)
     return text

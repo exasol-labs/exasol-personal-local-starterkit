@@ -32,7 +32,7 @@ The JupyterLab and Marimo versions are pinned in the kit's `versions.json`
 
 The kit's notebooks are in `~/.exasol-starter-kit/notebooks/starter-kit-notebooks/`,
 one folder per persona, with a README naming the order to open them in:
-`data-scientist/00_quickstart`, `01_explore`, `02_ask_your_data`, `03_share` (Data Scientist),
+`data-scientist/00_quickstart` (steps 0-2), `01_explore` (3-6), `02_ask_your_data` (7), `03_share` (8-9) (Data Scientist),
 and `ml-engineer/00_quickstart`, `01_train`, `02_rust_score`, `03_score_external_model` (ML Engineer),
 plus Exasol's examples library as `exasol-examples/`.
 Only the picked personas' folders are copied; a persona added later (`exakit persona add`) brings its own.
@@ -185,6 +185,22 @@ The connection lives in the connector's **encrypted** configuration store,
 written by the kit and refreshed on every `exakit notebook`, so a database
 restart or a port change needs no edit. Never paste a host, user or password
 into a notebook, and never print the store's contents.
+
+## The journey, and the kit from a notebook
+
+The Data Scientist notebooks are one path of nine numbered steps - 1 Access, 2 Understand, 3 Prepare,
+4 Explore, 5 Model, 6 Validate, 7 Ask with AI, 8 Share, 9 Hand off - each a `## Step N · ...` heading
+with a three-line plain explanation and `###` parts under it; every notebook's first cell says which steps
+it holds. Point a user at the step, not the cell. A new notebook for a persona follows the same shape.
+
+Nothing on the path needs a terminal, and neither does an agent helping with it: `nb.kit_check()` prints what
+is installed and running; `nb.exakit("update")`, `nb.exakit("marketplace", "dash-server")`,
+`nb.exakit("data-load", "walmart_sales")`, `nb.exakit("logs")` - any command of the kit - run from a cell with
+the output streaming in and the exit code in the result (`run.ok`, `run.output`); `nb.addon_ready("dash-server")`
+installs and starts an add-on when it is missing or stopped. The command has no terminal, so a question takes
+its default; a choice goes in up front (`nb.exakit("mcp-setup", env={"EXAKIT_MCP_CLIENTS": "claude"})`).
+`nb.handoff_bundle(conn, ds)` (step 9) writes `~/.exasol-starter-kit/bundles/<workflow id>/` and a zip: the
+column map, the schema map, every query with its digest, the dashboards, the workflow log and a README.
 
 ## Tracing model calls (opt-in)
 
