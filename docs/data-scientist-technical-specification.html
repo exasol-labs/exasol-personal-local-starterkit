@@ -125,7 +125,7 @@ footer { margin-top:3rem; padding-top:1rem; border-top:1px solid var(--rule); fo
 <main>
 <article class="doc">
 <header class="cover">
-  <div class="meta"><span>Exasol Personal Starter Kit</span><span>Branch feat/descriptor-approve</span><span>7 November 2026</span><span>Persona: data-scientist</span></div>
+  <div class="meta"><span>Exasol Personal Starter Kit</span><span>Branch feat/descriptor-approve</span><span>8 November 2026</span><span>Persona: data-scientist</span></div>
   <h1>One table you have never seen: how the Data Scientist persona is built</h1>
   <p class="lede">A data scientist installs the kit, loads a dataset or their own file, gets a description of it the kit drafted and they approved - checking the columns where the draft guessed first - (and of how its schema's tables link), checks it is clean, prepares a typed view, explores it with every SQL statement visible, tests one idea with a small model, validates it, asks the data a question with an AI model, shares a result whose numbers they checked and hands the work off in one bundle - nine numbered steps across four notebooks, and never a terminal. This page describes what the kit does at each step, as the code on this branch does it.</p>
 </header>
@@ -136,17 +136,18 @@ footer { margin-top:3rem; padding-top:1rem; border-top:1px solid var(--rule); fo
   <div class="fact"><div class="v">3</div><div class="l">practice datasets: Amazon sales, Walmart sales, fraud transactions (messy on purpose)</div></div>
   <div class="fact"><div class="v">9</div><div class="l">numbered steps across 4 notebooks: access, understand, prepare, explore, model, validate, ask with AI, share, hand off</div></div>
   <div class="fact"><div class="v">0</div><div class="l">column names typed in a notebook: every query is built from the approved column map</div></div>
-  <div class="fact"><div class="v">9 / 9</div><div class="l">live notebook runs passed (3 notebooks × 3 datasets) on 6 November 2026</div></div>
+  <div class="fact"><div class="v">9 / 9</div><div class="l">live notebook runs passed (3 notebooks × 3 datasets) on 6 November 2026, before the step headings, the kit cells and the hand-off were added</div></div>
+  <div class="fact"><div class="v">0</div><div class="l">terminal commands on the path: the kit is checked, updated and extended from a cell</div></div>
   <div class="fact"><div class="v">9 / 9</div><div class="l">TPC-H links found from the data alone (no foreign keys declared), every one right</div></div>
   <div class="fact"><div class="v">100%</div><div class="l">of 237 column roles drafted right on 24 benchmark tables (held-out tables: 98.1% on their first run)</div></div>
   <div class="fact"><div class="v">1</div><div class="l">MCP server: the one beside the database, read-only, self-healing</div></div>
 </div>
-<p>Everything the user does happens in a notebook that opens already connected, with no password in it. The column map (the <em>descriptor</em>) is proposed by the kit from a profile of the data, shown with the guesses first, checked against the data and approved by the user; every later step reads it, which is why changing one assignment, <code>DATASET = ...</code>, moves every notebook to another dataset. A table that is one of several gets a <em>schema map</em> too - the schema's tables and how they link - and the notebook can turn it into one joined view. The ML Engineer persona is switched off on this branch (kept, not removed) so the work can focus here.</p>
+<p>Everything the user does happens in a notebook that opens already connected, with no password in it - including what used to need a terminal: checking the kit, updating it, adding an add-on, loading a dataset (<code>nb.exakit</code>). The column map (the <em>descriptor</em>) is proposed by the kit from a profile of the data, shown with the guesses first, checked against the data and approved by the user; every later step reads it, which is why changing one assignment, <code>DATASET = ...</code>, moves every notebook to another dataset. A table that is one of several gets a <em>schema map</em> too - the schema's tables and how they link - and the notebook can turn it into one joined view. The ML Engineer persona is switched off on this branch (kept, not removed) so the work can focus here.</p>
 </section>
 
 <section id="loop">
 <h2><span class="n">01</span>The working loop</h2>
-<p>The persona follows the loop a data scientist already works in. Each stage has a place in the kit; the three marked in violet were added or rebuilt on this branch.</p>
+<p>The persona follows the loop a data scientist already works in, and the notebooks are written in its order: nine numbered steps, each a heading with a plain three-line explanation (see <a href="#notebooks">05</a>). Each stage has a place in the kit; the three marked in violet were added or rebuilt on this branch.</p>
 <div class="loop" role="list">
   <div class="st" role="listitem"><b>Access</b><small>install, load a sample or a file, notebook opens connected</small></div>
   <div class="st new" role="listitem"><b>Understand</b><small>profile → roles with evidence, guesses first → approve, checked on the data</small></div>
@@ -184,6 +185,7 @@ footer { margin-top:3rem; padding-top:1rem; border-top:1px solid var(--rule); fo
 <tr><td><code>addon_reasons</code></td><td>one line per add-on</td><td>what the add-on does for this persona, shown in the add-on table</td></tr>
 </tbody></table></div>
 <p>Later: <code>exakit persona add data-scientist</code> brings in what is missing; <code>exakit persona list | show | plan</code> show what each persona brings. <code>exakit persona add ml-engineer</code> is refused on this branch: its file says <code>"visible": false</code>.</p>
+<p>The install is the last terminal command. From then on the quickstart's step 0 does the rest from a cell: <code>nb.kit_check()</code>, and <code>nb.exakit("update")</code>, <code>nb.exakit("marketplace", "dash-server")</code>, <code>nb.exakit("data-load", "walmart_sales")</code> when they are wanted, each with its log in the notebook.</p>
 </section>
 
 <section id="data">
@@ -380,14 +382,14 @@ joined_dataset = joined_view_proposal.create(connection) if USE_JOINED and joine
 
 <section id="lineage">
 <h2><span class="n">13</span>Lineage: the workflow log</h2>
-<p>The quickstart starts a workflow (<code>wf-YYYYMMDD-xxxxxx</code>); Explore, Ask and Share continue it on their own with <code>nb.continue_workflow()</code> - this kernel's workflow, else the one inherited through <code>EXAKIT_WORKFLOW_ID</code>, else the last one started on this machine (<code>~/.exasol-starter-kit/last-workflow</code>) - so there is no id to copy or paste. Each SQL statement (with its digest and row count), each descriptor draft and approval, each approved question and each trace is one line in <code>~/.exasol-starter-kit/workflows/&lt;id&gt;.jsonl</code>, in order; <code>exakit workflow show &lt;id&gt;</code> prints it. Running a quickstart again starts the next piece of work.</p>
+<p>The quickstart starts a workflow (<code>wf-YYYYMMDD-xxxxxx</code>); Explore, Ask and Share continue it on their own with <code>nb.continue_workflow()</code> - this kernel's workflow, else the one inherited through <code>EXAKIT_WORKFLOW_ID</code>, else the last one started on this machine (<code>~/.exasol-starter-kit/last-workflow</code>) - so there is no id to copy or paste. Each SQL statement (with its digest and row count), each descriptor draft and approval, each approved question, each dashboard revision, the hand-off bundle (a <code>handoff</code> line with its path) and each trace is one line in <code>~/.exasol-starter-kit/workflows/&lt;id&gt;.jsonl</code>, in order; <code>exakit workflow show &lt;id&gt;</code> prints it. Running a quickstart again starts the next piece of work.</p>
 </section>
 
 <section id="mcp">
 <h2><span class="n">14</span>AI agents through MCP</h2>
 <p>Every AI client the kit connects (Claude, Claude Code, Codex, Cursor, VS Code Copilot, Gemini CLI, OpenCode, Continue) reaches the database through one MCP server: the official Exasol MCP server that the Exasol Personal launcher runs beside the database, at <code>http://127.0.0.1:4896/mcp</code>, connected as the dedicated read-only user. Client configs hold the URL and no password; Claude Desktop goes through <code>uvx mcp-proxy</code>.</p>
 <p>Agents read the approved roles from <code>EXAKIT_SEMANTIC.&lt;SCHEMA&gt;__&lt;TABLE&gt;</code> and the approved links from <code>EXAKIT_SEMANTIC.&lt;SCHEMA&gt;__RELATIONS</code>, so a question that needs two tables is answered from an approved join, not a guessed one.</p>
-<p>There is no fallback server. When it does not serve, <code>exakit mcp-setup</code> and <code>exakit mcp-doctor</code> heal it:</p>
+<p>There is no fallback server. When it does not serve, <code>exakit mcp-setup</code> and <code>exakit mcp-doctor</code> heal it - from a notebook too: <code>nb.exakit("mcp-doctor")</code>, or <code>nb.exakit("mcp-setup", env={"EXAKIT_MCP_CLIENTS": "claude"})</code> to name the clients, since the command has no terminal to ask on:</p>
 <div class="tbl"><table>
 <thead><tr><th>Case</th><th>What the kit does</th></tr></thead>
 <tbody>
@@ -418,7 +420,7 @@ joined_dataset = joined_view_proposal.create(connection) if USE_JOINED and joine
 
 <section id="measured">
 <h2><span class="n">17</span>Measured on a real kit</h2>
-<p>On a MacBook (Apple silicon) running the kit's own Exasol Personal 2.4.0 database, 6 November 2026:</p>
+<p>On a MacBook (Apple silicon) running the kit's own Exasol Personal 2.4.0 database, 6 and 7 November 2026. The step headings, the kit cells (<code>nb.kit_check</code>, <code>nb.addon_ready</code>) and the hand-off bundle came after the last live run; they are covered by tests with a stand-in <code>exakit</code> and a stand-in log, not by a run against the database yet (<a href="#limits">19</a>).</p>
 <div class="tbl"><table>
 <thead><tr><th>What</th><th>Result</th></tr></thead>
 <tbody>
@@ -455,7 +457,9 @@ joined_dataset = joined_view_proposal.create(connection) if USE_JOINED and joine
 <ul>
   <li>Licences of the three datasets are not confirmed.</li>
   <li>No dataset has a text column, so the text step (and its Langfuse trace) is exercised only on the user's own data.</li>
-  <li>Share needs Dash Server running; it was not part of the live run above.</li>
+  <li>Share needs Dash Server running; it was not part of the live run above. Its new first cell installs and starts Dash Server when needed, which on a machine without it means a download.</li>
+  <li>The notebooks as rebuilt on 8 November (step headings, step 0, Dash Server from the notebook, the hand-off bundle) have not run against a database yet: the kit on the development machine was uninstalled that morning. Their cells are tested with stand-ins (<code>tests/test_kit_commands.py</code>, <code>tests/test_handoff_bundle.py</code>, the notebook cell tests); the headless run (<code>tools/notebooks.py --run</code>) is the check still to do.</li>
+  <li><code>nb.exakit</code> gives the command no terminal, so a question it would ask takes its default; a command that only works with a terminal (the marketplace menu with no add-on named) says so and installs nothing - name the add-on instead.</li>
   <li>The schema map finds single-column keys only, and follows links many-to-one; a live source's schema (a virtual schema) is not surveyed, since every count would be a round trip to it.</li>
   <li>The hidden prompt of the settings cell is shown by Jupyter; in Marimo it may not appear, and the cell then says how to set the key in the terminal.</li>
   <li>The benchmark's answers are one reviewer's judgement; where two roles are both reasonable, both count. Its five held-out tables scored 98.1% on their first run and were then fixed, so they are no longer unseen.</li>
@@ -520,7 +524,7 @@ joined_dataset = joined_view_proposal.create(connection) if USE_JOINED and joine
 </dl>
 </section>
 
-<footer>Exasol Personal Starter Kit · Data Scientist persona · generated from the code on branch feat/descriptor-approve, 7 November 2026. Every command and number on this page was checked against that code or measured on a running kit.</footer>
+<footer>Exasol Personal Starter Kit · Data Scientist persona · generated from the code on branch feat/descriptor-approve, 8 November 2026. Every command and number on this page was checked against that code or measured on a running kit; a figure measured on an earlier day says so.</footer>
 </article>
 </main>
 </div>
