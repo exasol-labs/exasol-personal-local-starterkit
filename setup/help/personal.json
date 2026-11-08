@@ -4,7 +4,7 @@
   "kind": "runtime",
   "title": "Exasol Personal (the kit's database runtime)",
   "tagline": "The local Exasol database, run by its own launcher.",
-  "role": "The kit's only database runtime. The Exasol launcher deploys it locally on macOS, Linux (through Podman, native or inside WSL) and Windows x86_64; Windows arm64 is not supported and the installer says so and exits. In WSL the launcher takes its Linux path, so Podman must be installed inside the distro.",
+  "role": "The kit's only database runtime. The Exasol launcher deploys it locally on macOS, Linux (through Docker Engine 29 or newer when it is usable, else Podman; native or inside WSL) and Windows x86_64 (Docker Desktop or Podman); Windows arm64 is not supported and the installer says so and exits. In WSL the launcher takes its Linux path, so the engine must be reachable inside the distro (Podman installed there, or Docker Desktop's WSL integration); Podman there, and Podman's machine on Windows, needs WSL 2.7 or newer unless Podman uses its iptables firewall driver. A deployment keeps the engine it was first deployed on.",
   "repo": "exasol/exasol-personal",
   "docs": "https://github.com/exasol/exasol-personal#readme",
   "binary": "~/.local/bin/exasol",
@@ -86,7 +86,7 @@
   ],
   "notes": [
     "An existing database is adopted, running or stopped. Only one that cannot start is replaced, and the installer says so.",
-    "A database update recreates the container over the same data volume; the previous image is put back if the new one does not come up."
+    "A database update (exakit update personal) replaces the launcher binary only: the deployment, its engine, its data and its password stay. The first start afterwards takes longer, once, while the launcher rebuilds part of the runtime."
   ],
   "troubleshooting": [
     {
@@ -98,8 +98,12 @@
       "remedy": "Stop the other app holding it, then exakit start."
     },
     {
+      "symptom": "exakit start fails with 'nft did not return successfully' (Podman on WSL older than 2.7)",
+      "remedy": "In PowerShell on the Windows host: wsl --update, then wsl --shutdown, then exakit start. Without updating WSL, set firewall_driver = \"iptables\" (quoted) under [network] in Podman's containers.conf - inside a WSL distro with the iptables package installed, on Windows inside the Podman machine. exakit status --json answers remedy wsl --update until a start succeeds. Never exakit repair-runtime: a rebuild meets the same kernel and destroys the data."
+    },
+    {
       "symptom": "Every start fails the same way",
-      "remedy": "exakit repair-runtime rebuilds it - destructive, data is not recoverable."
+      "remedy": "exakit repair-runtime rebuilds it - destructive, data is not recoverable. Not for the WSL nftables error above."
     }
   ],
   "see_also": [

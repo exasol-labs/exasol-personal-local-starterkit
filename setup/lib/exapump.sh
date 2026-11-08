@@ -314,22 +314,74 @@ exapump_verify_runs() {
 # exapump_install_glibc_shim — the exapump release binary needs a newer glibc
 # than this system provides (all published Linux builds currently require
 # 2.38+, while e.g. Ubuntu 22.04 LTS and every other Jammy-era distro ship
-# 2.35). The Linux install path already requires Podman for the database, so
-# run the real binary inside a small newer-glibc container with host
-# networking instead of failing the install. The wrapper is transparent
-# to every caller: same path, same CLI, profiles and data files under $HOME
-# and /tmp remain visible.
+# 2.35). The Linux install path always has a container engine for the database
+# - Docker (Engine 29+) or Podman since Exasol Personal 2.4 - so run the real
+# binary inside a small newer-glibc container with host networking instead of
+# failing the install. The wrapper is transparent to every caller: same path,
+# same CLI, profiles and data files under $HOME and /tmp remain visible.
 EXAKIT_EXAPUMP_SHIM_IMAGE="${EXAKIT_EXAPUMP_SHIM_IMAGE:-ubuntu:24.04}"
+
+# _exapump_shim_engine_usable <podman|docker> - the engine can run a container
+# now. Any working Docker will do here (the shim needs no Engine 29), but not
+# Podman's docker emulation: run as docker it gets docker's flags, and
+# rootless Podman without keep-id shows the user's own files as root's.
+_exapump_shim_engine_usable() {
+    case "$1" in
+        podman) [ "$(detect_podman)" = "podman" ] ;;
+        docker)
+            command -v docker >/dev/null 2>&1 || return 1
+            _detect_engine_probe docker info >/dev/null 2>&1 || return 1
+            ! detect_docker_is_podman "" ;;
+        *) return 1 ;;
+    esac
+}
+
+# _exapump_shim_engine - the engine the shim runs on: "podman", "docker" or
+# "none". THE DATABASE'S ENGINE FIRST. Since 2.4 a Docker-only box never gets
+# Podman, and the shim used to insist on it: on Debian 12, Ubuntu 22.04 and
+# RHEL 9 with Docker the data-loading CLI failed, told to install the engine
+# the user had just avoided. The recorded engine (else the one this run
+# plans), then Podman, then Docker.
+_exapump_shim_engine() {
+    _ese_pref="$(manifest_get runtime.engine 2>/dev/null || true)"
+    # A nano-kit record names the OLD database's engine, not this one's.
+    [ -n "$(manifest_get runtime.container 2>/dev/null || true)" ] && _ese_pref=""
+    if [ -z "$_ese_pref" ] && command -v personal_engine_planned >/dev/null 2>&1; then
+        personal_engine_planned >/dev/null 2>&1 || true
+        _ese_pref="${_PERSONAL_PLANNED:-}"
+    fi
+    for _ese in $_ese_pref podman docker; do
+        case "$_ese" in podman|docker) : ;; *) continue ;; esac
+        if _exapump_shim_engine_usable "$_ese"; then
+            printf '%s' "$_ese"
+            return 0
+        fi
+    done
+    printf 'none'
+}
+
 exapump_install_glibc_shim() {
-    _shim_runtime="$(detect_podman)"
+    _shim_runtime="$(_exapump_shim_engine)"
     # Rootless podman remaps ownership inside the container: without keep-id
     # the user's own files (profile at ~/.exapump, mode 600) appear root-owned
     # and unreadable to the -u uid.
     _shim_userns="--userns=keep-id"
+    # $(id ...) expands when the wrapper RUNS (the substitution is literal).
+    _shim_user='-u "$(id -u):$(id -g)"'
+    if [ "$_shim_runtime" = "docker" ]; then
+        # DOCKER HAS NO keep-id. Rootful Docker keeps host uids on bind
+        # mounts, so running as the user's uid:gid reads the profile as it is
+        # on the host. Rootless Docker maps the container's root to the user
+        # instead, so there root is the user.
+        _shim_userns=""
+        case "$(_detect_engine_probe docker info --format '{{.SecurityOptions}}' 2>/dev/null)" in
+            *rootless*) _shim_user="-u 0:0" ;;
+        esac
+    fi
     _sys_glibc="$(ldd --version 2>/dev/null | head -1)"
     warn "The exapump release binary needs a newer glibc than this system provides (${_sys_glibc:-unknown glibc})."
     if [ "$_shim_runtime" = "none" ]; then
-        die "exapump cannot run on this system's glibc and Podman is not available to shim it. Install Podman and re-run, or use a distro with glibc 2.38+ (e.g. Ubuntu 24.04)."
+        die "exapump cannot run on this system's glibc, and neither Podman nor Docker is available to run it in a container. Install or start Podman or Docker and re-run, or use a distro with glibc 2.38+ (e.g. Ubuntu 24.04)."
     fi
     info "Self-repair: running exapump inside a $EXAKIT_EXAPUMP_SHIM_IMAGE container via $_shim_runtime"
 
@@ -378,7 +430,7 @@ case "$PWD" in
         fi ;;
 esac
 exec @RUNTIME@ run --rm $_exakit_tty --network host @USERNS@ \
-    -u "$(id -u):$(id -g)" \
+    @USER@ \
     -e HOME="$HOME" \
     -v "$HOME:$HOME" -v /tmp:/tmp \
     ${_exakit_v:+"$_exakit_v"} ${_exakit_vp:+"$_exakit_vp"} \
@@ -391,6 +443,7 @@ EXAKIT_SHIM_EOF
     sed -i.exakit-bak \
         -e "s|@RUNTIME@|$_shim_runtime|" \
         -e "s|@USERNS@|$_shim_userns|" \
+        -e "s|@USER@|$_shim_user|" \
         -e "s|@IMAGE@|$EXAKIT_EXAPUMP_SHIM_IMAGE|" \
         -e "s|@REAL@|$_shim_real|" \
         "$EXAKIT_EXAPUMP_BIN" && rm -f "$EXAKIT_EXAPUMP_BIN.exakit-bak"
@@ -445,6 +498,42 @@ exapump_create_profile() {
         || die "Could not write the exapump profile"
     manifest_set components.exapump.profile "$EXAKIT_EXAPUMP_PROFILE"
     ok_step "Connection profile [$EXAKIT_EXAPUMP_PROFILE] written to $(ui_tilde "$EXAPUMP_CONFIG")"
+}
+
+# exapump_profile_password_stale — true when the kit's profile holds a
+# password that is not the one on file for the database. A replaced deployment
+# (exakit repair-runtime, EXAKIT_REPLACE_DB=1) is a new database and, from
+# Exasol Personal 2.4, one with a new random sys password: the credential file
+# follows it (personal_record_manifest reads secrets.json on every deploy), the
+# profile did not, and every `exakit sql` answered "Authentication failed"
+# after a repair that had reported success. step_artifact_state asks this so
+# the exapump step runs again over such a profile. Two file reads and nothing
+# printed, so neither password can reach a log. Twin of
+# Test-ExapumpProfilePasswordStale.
+exapump_profile_password_stale() {
+    [ -s "$EXAPUMP_CONFIG" ] || return 1
+    _epps_file="$(manifest_get runtime.password_file 2>/dev/null || true)"
+    [ -n "$_epps_file" ] && [ -s "$_epps_file" ] || return 1
+    require_python3
+    run_python - "$EXAPUMP_CONFIG" "$EXAKIT_EXAPUMP_PROFILE" "$_epps_file" <<'PY'
+import re, sys
+path, profile, pwfile = sys.argv[1:4]
+try:
+    content = open(path).read()
+    onfile = open(pwfile).read().strip()
+except OSError:
+    sys.exit(1)
+section = re.search(r"\[%s\][^\[]*" % re.escape(profile), content, re.S)
+if not section or not onfile:
+    sys.exit(1)
+line = re.search(r'^password\s*=\s*"(.*)"\s*$', section.group(0), re.M)
+if not line:
+    sys.exit(1)
+# The same two escapes the PowerShell writer applies; the shell writer applies
+# none, so an unescaped value compares as written.
+written = line.group(1).replace('\\"', '"').replace("\\\\", "\\")
+sys.exit(0 if written != onfile else 1)
+PY
 }
 
 # exapump_write_profile <profile> <host> <port> <user> <password> - one TOML
