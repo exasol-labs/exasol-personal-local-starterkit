@@ -20,6 +20,11 @@
     "install shows no cards at all, so every line here is read by someone who",
     "already had the kit working and wants to know what is different."
   ],
+  "0.2.4": [
+    "Exasol Personal 2.4: Linux/Windows installs use Docker if running.",
+    "Podman on WSL or Windows: if exakit start fails, run wsl --update",
+    "To move to Exasol Personal 2.4, run: exakit update personal"
+  ],
   "0.2.3": [
     "Security update for uv, the tool that runs the MCP server.",
     "uv is now pinned and checksum-verified; no install script runs.",

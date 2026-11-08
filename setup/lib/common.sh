@@ -79,11 +79,11 @@ EXAKIT_PYEXASOL_VERSION="${EXAKIT_PYEXASOL_VERSION:-}"
 # 2.3.0 FINAL since 2026-09-21, so no candidate is pinned here any more - the
 # two deletions above were both candidates, and a published release is not
 # removed the same way. Verified before pinning, as the note above demands:
-# v2.3.0 on exasol/exasol-personal is published, not a draft, not a
+# v2.4.0 on exasol/exasol-personal is published, not a draft, not a
 # prerelease, and carries every asset this kit fetches - the macOS and Linux
 # arm64/x86_64 tarballs, the Windows x86_64 zip, and
-# exasol-personal_2.3.0_checksums.txt.
-EXAKIT_PERSONAL_VERSION_FALLBACK="${EXAKIT_PERSONAL_VERSION_FALLBACK:-2.3.0}"
+# exasol-personal_2.4.0_checksums.txt.
+EXAKIT_PERSONAL_VERSION_FALLBACK="${EXAKIT_PERSONAL_VERSION_FALLBACK:-2.4.0}"
 EXAKIT_EXAPUMP_VERSION_FALLBACK="${EXAKIT_EXAPUMP_VERSION_FALLBACK:-0.13.1}"
 EXAKIT_MCP_VERSION_FALLBACK="${EXAKIT_MCP_VERSION_FALLBACK:-2.4.0}"
 EXAKIT_PYEXASOL_VERSION_FALLBACK="${EXAKIT_PYEXASOL_VERSION_FALLBACK:-3.0.1}"
@@ -2248,10 +2248,107 @@ _lock = _exakit_locked(path)
 with open(path) as f:
     doc = json.load(f)
 steps = doc.get("steps_completed")
+changed = False
 if isinstance(steps, list) and step in steps:
     doc["steps_completed"] = [s for s in steps if s != step]
+    changed = True
+# An unmarked step starts over, so a refusal booked for it before is history:
+# it must not speak again now that the step reads as missing. Twin:
+# Remove-ExakitStepDone.
+install = doc.get("install")
+soft = install.get("soft_failures") if isinstance(install, dict) else None
+if isinstance(soft, dict) and step in soft:
+    soft.pop(step, None)
+    changed = True
+if changed:
     _exakit_write(path, doc)
 PY
+}
+
+# exakit_clear_soft_failure <component> — the component finished after all (a
+# re-run, a later retry), so its record goes: on disk, and from this run's
+# closing summary. ⇄ twin: Clear-ExakitSoftFailure in exakit-common.ps1.
+exakit_clear_soft_failure() {
+    [ -n "${1:-}" ] || return 0
+    if [ -n "${EXAKIT_SOFT_FAILED:-}" ] && exakit_soft_failed "$1"; then
+        _csf_left=""
+        for _csf in $EXAKIT_SOFT_FAILED; do
+            [ "$_csf" = "$1" ] || _csf_left="${_csf_left}${_csf_left:+ }$_csf"
+        done
+        EXAKIT_SOFT_FAILED="$_csf_left"
+    fi
+    [ "${EXAKIT_READONLY_QUERY:-0}" = "1" ] && return 0
+    [ -f "${EXAKIT_MANIFEST:-}" ] || return 0
+    # Read first: a clean component (the common case) costs one read, no write.
+    _csf_key="install.soft_failures.$(printf '%s' "$1" | tr -c 'A-Za-z0-9_' '_')"
+    if [ -n "$(manifest_get "$_csf_key" 2>/dev/null || true)" ]; then
+        ( manifest_del "$_csf_key" ) >/dev/null 2>&1 || true
+    fi
+    return 0
+}
+
+# exakit_retire_start_soft_failure — the database is running again, so a
+# runtime record that a failed start booked against the COMPLETED runtime
+# step (the installer's resume arm; kept by exakit_prune_soft_failures for a
+# WSL network refusal) is history. A record of a step still missing stays:
+# that step has its own work to finish. One manifest read when there is none.
+exakit_retire_start_soft_failure() {
+    [ "${EXAKIT_READONLY_QUERY:-0}" = "1" ] && return 0
+    [ -f "${EXAKIT_MANIFEST:-}" ] || return 0
+    [ -n "$(manifest_get install.soft_failures.runtime.reason 2>/dev/null || true)" ] || return 0
+    # step_done may bootstrap a Python; this is a tidy-up, never a reason to.
+    exakit_can_run_python || return 0
+    step_done runtime 2>/dev/null || return 0
+    exakit_clear_soft_failure runtime
+}
+
+# exakit_prune_soft_failures — drop every record whose step is in
+# steps_completed. A clean finish must leave no record that a later unmark
+# could revive, including ones an older kit wrote before mark_step cleared
+# them. ⇄ twin: the same prune in Write-ExakitSoftFailures.
+exakit_prune_soft_failures() {
+    [ "${EXAKIT_READONLY_QUERY:-0}" = "1" ] && return 0
+    [ -f "${EXAKIT_MANIFEST:-}" ] || return 0
+    exakit_can_run_python || return 0
+    run_python - "$EXAKIT_MANIFEST" >/dev/null 2>&1 <<'PY' || true
+import fcntl, json, os, sys, tempfile
+path = sys.argv[1]
+handle = open(path + ".lock", "a+")
+fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+with open(path) as f:
+    doc = json.load(f)
+install = doc.get("install")
+soft = install.get("soft_failures") if isinstance(install, dict) else None
+steps = doc.get("steps_completed")
+if not isinstance(soft, dict) or not isinstance(steps, list):
+    sys.exit(0)
+# EXCEPT A START THE WSL KERNEL REFUSED. The installer's resume arm books a
+# failed start against the runtime step it never unmarks, and that record is
+# the only place its "wsl --update" survives (the note is taken, later steps
+# clear the next one). It stays until a start succeeds
+# (exakit_retire_start_soft_failure); status reads it only while the
+# database is not running.
+def _wsl_start_record(key):
+    rec = soft.get(key)
+    reason = str(rec.get("reason") or "") if isinstance(rec, dict) else ""
+    return key == "runtime" and "cannot create the deployment network" in reason and "wsl --update" in reason
+stale = [k for k in soft if k in steps and not _wsl_start_record(k)]
+if not stale:
+    sys.exit(0)
+for k in stale:
+    soft.pop(k, None)
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path) or ".", prefix=os.path.basename(path) + ".")
+try:
+    with os.fdopen(fd, "w") as out:
+        json.dump(doc, out, indent=2)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, path)
+except BaseException:
+    try: os.unlink(tmp)
+    except OSError: pass
+    raise
+PY
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -5838,7 +5935,8 @@ exakit_print_version_table() {
         done
         run_python - "$_uvt_tmp" "$_pending" "$(exakit_component_current exakit 2>/dev/null || printf unknown)" \
             "$(manifest_get installed_at 2>/dev/null || true)" "$(exakit_versions_source 2>/dev/null || true)" \
-            "$(exakit_marketplace_addons 2>/dev/null | cut -d'|' -f1 | tr '\n' ' ')" <<'EXAKIT_VJ_PY'
+            "$(exakit_marketplace_addons 2>/dev/null | cut -d'|' -f1 | tr '\n' ' ')" \
+            "$(exakit_installation_runtime_type 2>/dev/null || true)" "$(exakit_runtime_engine 2>/dev/null || true)" <<'EXAKIT_VJ_PY'
 import json, sys
 # WHICH ROWS ARE OPTIONAL. Nothing in a component object said whether it is
 # part of the kit or an add-on someone chose, so an agent reading
@@ -5896,6 +5994,11 @@ print(json.dumps({
     "remedy": "exakit update" if pending > 0 else None,
     "pending": pending,
     "kit": {"version": sys.argv[3], "installed_at": sys.argv[4] or None},
+    # Which runtime, and on Linux, WSL and Windows which container engine its
+    # deployment runs on (null on macOS, and with no runtime): the same
+    # runtime.engine `exakit status --json` reports.
+    "runtime": {"type": (sys.argv[7] if len(sys.argv) > 7 else "") or None,
+                "engine": (sys.argv[8] if len(sys.argv) > 8 else "") or None},
     "versions_source": sys.argv[5] or None,
     "components": rows,
 }, indent=2, ensure_ascii=False))
@@ -6430,6 +6533,21 @@ exakit_runtime_status() {
     return 0
 }
 
+# exakit_runtime_engine — the container engine the deployment runs on
+# ("docker" or "podman"), or nothing: off an engine platform (macOS has none)
+# or with no runtime recorded. ⇄ twin: Get-ExakitRuntimeEngine in
+# setup/exakit.ps1.
+exakit_runtime_engine() {
+    case "$(exakit_installation_runtime_type 2>/dev/null || true)" in
+        personal)
+            command -v personal_engine_platform >/dev/null 2>&1 || return 0
+            personal_engine_platform || return 0
+            personal_engine_recorded 2>/dev/null
+            ;;
+    esac
+    return 0
+}
+
 exakit_runtime_start() {
     case "$(exakit_installation_runtime_type 2>/dev/null || true)" in
         # AND THEN WAIT FOR IT. The launcher's start exits 0 without acting
@@ -6441,7 +6559,13 @@ exakit_runtime_start() {
         personal)
             command -v personal_start >/dev/null 2>&1 || return 0
             personal_start
-            command -v personal_wait_ready_or_deploy >/dev/null 2>&1 && personal_wait_ready_or_deploy
+            # A deploy that met the WSL kernel ends here with the network
+            # sentence (wsl --update), the same one personal_start dies with.
+            if command -v personal_wait_ready_or_deploy >/dev/null 2>&1 && \
+               ! personal_wait_ready_or_deploy; then
+                command -v personal_wait_network_die_if_blocked >/dev/null 2>&1 && \
+                    personal_wait_network_die_if_blocked
+            fi
             ;;
     esac
     return 0
@@ -6690,10 +6814,26 @@ exakit_update() {
         # piped --json never sees a frame, and a person watching sees the
         # elapsed time instead of a blank screen for a minute.
         ui_spin_begin "Applying updates (every line goes to the log: exakit logs)"
+        # WHY A RUN ENDED, NOT ONLY THAT IT DID. A die() outside the per-
+        # component rows (the runtime offer under --yes, say) used to surface
+        # as "the update did not finish" with remedy "exakit update", while
+        # the reason - and the command that actually clears it - sat in the
+        # failure note. Only a note this run wrote counts (see
+        # _exakit_update_note_begin), so an older install failure is never
+        # passed off as this run's reason.
+        _exakit_update_note_begin
         ( _exakit_update_run "$_target" "$_targets" "$@" ) >>"${EXAKIT_LOG_FILE:-/dev/null}" 2>&1
         _upd_rc=$?
+        _exakit_update_note_end
         ui_spin_end
-        _exakit_update_json_report "$EXAKIT_UPDATE_RESULTS" "$_upd_rc"
+        _upd_run_error=""
+        _ufr_remedy=""
+        _ufr_hint=""
+        if [ "$_upd_rc" -ne 0 ] && [ -n "$_upd_note_new" ]; then
+            _upd_run_error="$_upd_note_new"
+            _exakit_update_failure_remedy "" "$_upd_run_error"
+        fi
+        _exakit_update_json_report "$EXAKIT_UPDATE_RESULTS" "$_upd_rc" "$_upd_run_error" "$_ufr_remedy" "$_ufr_hint"
         _upd_json_rc=$?
         rm -f "$EXAKIT_UPDATE_RESULTS"
         return "$_upd_json_rc"
@@ -6702,10 +6842,72 @@ exakit_update() {
 }
 
 # _exakit_update_note <component> <outcome> <installed> <advertised> [remedy]
-# — one line in the --json results file; a no-op on the human screen.
+# [error] [remedy hint] — one line in the --json results file; a no-op on the
+# human screen. The error and the hint are sentences, so the field separator
+# and line breaks are taken out of them before they are written.
 _exakit_update_note() {
     [ -n "${EXAKIT_UPDATE_RESULTS:-}" ] || return 0
-    printf '%s|%s|%s|%s|%s\n' "$1" "$2" "${3:-}" "${4:-}" "${5:-}" >> "$EXAKIT_UPDATE_RESULTS"
+    _eun_error="$(printf '%s' "${6:-}" | tr '|\n\r' '/  ')"
+    _eun_hint="$(printf '%s' "${7:-}" | tr '|\n\r' '/  ')"
+    printf '%s|%s|%s|%s|%s|%s|%s\n' "$1" "$2" "${3:-}" "${4:-}" "${5:-}" "$_eun_error" "$_eun_hint" >> "$EXAKIT_UPDATE_RESULTS"
+    return 0
+}
+
+# _exakit_update_note_begin / _exakit_update_note_end — bracket one --json
+# subshell so the reason read afterwards is the one THAT subshell wrote.
+#
+# A NOTE IS NOT NEW BECAUSE ITS TEXT CHANGED. This used to compare the whole
+# note with a snapshot, and the note is "reason + a timestamp to the second":
+# the same refusal retried within the same second wrote identical bytes, read
+# as "no new reason", and the row lost both its error and its wsl --update
+# remedy - an agent re-running once to confirm got a different answer. So the
+# note is moved out of the way before the subshell runs: any note present
+# afterwards was written by it. With none, the earlier note goes back, so an
+# older install failure survives for status --json and is never passed off as
+# this run's. _exakit_update_note_end leaves the reason (line 1) in
+# _upd_note_new, empty when the subshell wrote none. The note itself is read,
+# never cleared: status --json still reports it as last_failure.
+_exakit_update_note_begin() {
+    _eunb_file="$(exakit_failure_note_file)"
+    _upd_note_saved="$(cat "$_eunb_file" 2>/dev/null || true)"
+    rm -f "$_eunb_file" 2>/dev/null
+    return 0
+}
+_exakit_update_note_end() {
+    _upd_note_new=""
+    _eune_file="$(exakit_failure_note_file)"
+    if [ -f "$_eune_file" ]; then
+        _upd_note_new="$(head -n 1 "$_eune_file" 2>/dev/null || true)"
+    elif [ -n "${_upd_note_saved:-}" ] && [ -d "$(dirname "$_eune_file")" ]; then
+        { printf '%s\n' "$_upd_note_saved" > "$_eune_file"; } 2>/dev/null || true
+    fi
+    _upd_note_saved=""
+    return 0
+}
+
+# _exakit_update_failure_remedy <component> <reason> — the command that clears
+# a failed update, in _ufr_remedy, and the sentence that explains it, in
+# _ufr_hint. "exakit update <component>" unless the reason names a fix that
+# re-running cannot reach.
+#
+# A WSL KERNEL DOES NOT CHANGE BY ITSELF. The launcher update itself is not
+# gated on WSL: it changes no data. But a database that was running before
+# `exakit update` is started again after the launcher swap
+# (exakit_apply_runtime_update), and on a WSL kernel without nftables that
+# start dies with _personal_start_network_die, whose reason names `wsl
+# --update`. The launcher WAS updated, so re-running `exakit update` answers
+# "current" and leaves the database stopped; an agent obeying "when remedy is
+# not null, run it" needs the fix on the Windows host, then a start. ⇄ twin:
+# Get-ExakitUpdateFailureRemedy in setup/exakit.ps1.
+_exakit_update_failure_remedy() {
+    _ufr_remedy="exakit update${1:+ $1}"
+    _ufr_hint=""
+    case "${2:-}" in
+        *"wsl --update"*)
+            _ufr_remedy="wsl --update"
+            _ufr_hint="The launcher was updated, but the database could not start: this WSL kernel cannot create the deployment network. Run wsl --update, then wsl --shutdown, reopen this distro, then exakit start."
+            ;;
+    esac
     return 0
 }
 
@@ -6714,7 +6916,7 @@ _exakit_update_note() {
 # skipped or failed, and the one command that resolves what is left.
 _exakit_update_json_report() {
     if exakit_can_run_python; then
-        run_python - "$1" "$2" <<'EXAKIT_UPDATE_JSON_PY'
+        run_python - "$1" "$2" "${3:-}" "${4:-}" "${5:-}" <<'EXAKIT_UPDATE_JSON_PY'
 import json, sys
 rows = []
 try:
@@ -6722,30 +6924,47 @@ try:
         for line in handle:
             parts = line.rstrip("\n").split("|")
             if len(parts) >= 5 and parts[0]:
-                rows.append(parts)
+                rows.append((parts + [""] * 7)[:7])
 except OSError:
     pass
 rc = int(sys.argv[2])
+# What the run's own die() said when it ended outside any per-component row,
+# and the remedy that reason calls for (_exakit_update_failure_remedy).
+run_error, run_remedy, run_hint = (sys.argv[3:6] + [""] * 3)[:3]
 def entries(kind):
     out = []
-    for comp, outcome, cur, avail, remedy in rows:
+    for comp, outcome, cur, avail, remedy, error, hint in rows:
         if outcome != kind:
             continue
         entry = {"component": comp, "from": cur or None, "to": avail or None}
         if remedy:
             entry["remedy"] = remedy
+        if error:
+            entry["error"] = error
+        if hint:
+            entry["remedy_hint"] = hint
         out.append(entry)
     return out
 updated, deferred, failed = entries("updated"), entries("deferred"), entries("failed")
 blocked, skipped, ahead = entries("blocked"), entries("skipped"), entries("ahead")
-current = [comp for comp, outcome, _, _, _ in rows if outcome == "current"]
+current = [row[0] for row in rows if row[1] == "current"]
 if rc != 0 and not failed:
-    failed.append({"component": None, "from": None, "to": None,
-                   "remedy": "exakit update", "error": "the update did not finish (see exakit logs)"})
+    entry = {"component": None, "from": None, "to": None,
+             "remedy": run_remedy or "exakit update",
+             "error": run_error or "the update did not finish (see exakit logs)"}
+    if run_hint:
+        entry["remedy_hint"] = run_hint
+    failed.append(entry)
+hint = None
 if failed:
     status, remedy = "failed", failed[0].get("remedy") or "exakit update"
+    hint = failed[0].get("remedy_hint")
 elif deferred:
     status, remedy = "deferred", deferred[0].get("remedy") or "exakit update --yes"
+    if remedy == "exakit update":
+        hint = "the starter kit itself was updated; run 'exakit update' again so the rest is updated by the new kit"
+    else:
+        hint = "a database change needs the database stopped; --yes (or EXAKIT_CONFIRM_RUNTIME_UPDATE=1) applies it unattended"
 elif blocked:
     status, remedy = "blocked", "exakit update"
 elif updated:
@@ -6763,7 +6982,7 @@ print(json.dumps({
     "ahead": ahead,
     "failed": failed,
     "remedy": remedy,
-    "remedy_hint": ("a database change needs the database stopped; --yes (or EXAKIT_CONFIRM_RUNTIME_UPDATE=1) applies it unattended" if status == "deferred" else None),
+    "remedy_hint": hint,
 }, indent=2, ensure_ascii=False))
 sys.exit(0 if not failed else 1)
 EXAKIT_UPDATE_JSON_PY
@@ -6774,7 +6993,7 @@ EXAKIT_UPDATE_JSON_PY
         exakit_json_out '{"ok": true, "status": "done", "remedy": null, "remedy_hint": "no Python runtime, so the per-component lists are not available; see exakit logs"}\n'
         return 0
     fi
-    exakit_json_out '{"ok": false, "status": "failed", "remedy": "exakit update", "remedy_hint": "the update did not finish (see exakit logs)"}\n'
+    exakit_json_out '{"ok": false, "status": "failed", "remedy": "%s", "remedy_hint": "the update did not finish (see exakit logs)"}\n' "$(printf '%s' "${4:-exakit update}" | sed 's/[\\"]/\\&/g')"
     return 1
 }
 
@@ -6791,12 +7010,25 @@ _exakit_update_run() {
     exakit_print_versions_source_line
     _deferred=0
     _acted=0
+    _upd_kit_swapped=0
     for _component in $_targets; do
         # _upd_ prefix: verify_sha256 (reached through the component updaters)
         # assigns _actual, and bash has no function-local variables here.
         _upd_actual="$(exakit_update_actual_target "$_component" 2>/dev/null || printf '%s\n' "$_component")"
         _cur="$(exakit_component_current "$_upd_actual" 2>/dev/null || true)"
         _avail="$(exakit_component_available "$_upd_actual" 2>/dev/null || true)"
+        # THE KIT WAS REPLACED UNDER THIS PROCESS, so nothing after it runs
+        # here. Every function this loop calls was read from the OLD kit when
+        # the command started; carrying on ran the old personal_update against
+        # the new launcher, which is how a kit release's own update checks (the
+        # password check, the engine notice) were skipped on the very update
+        # they were written for. The rest is deferred to the next `exakit update`,
+        # which the new kit runs. This only protects the hops AFTER the kit
+        # that carries it: the kit doing the update is always the old one.
+        if [ "$_upd_kit_swapped" = "1" ]; then
+            _exakit_update_note "$_upd_actual" deferred "$_cur" "$_avail" "exakit update"
+            continue
+        fi
         # No build for this machine: a routine update stays quiet about it (there is
         # nothing the user can do), and an explicit target says why rather than
         # failing deep inside the installer.
@@ -6833,12 +7065,33 @@ _exakit_update_run() {
         # exakit_offer_runtime_update.
         if [ "$_target" = "all" ] && exakit_component_is_heavy "$_upd_actual"; then
             if [ -n "$_cur" ] && [ -n "$_avail" ] && [ "$_cur" != "unknown" ] && [ "$_cur" != "$_avail" ]; then
-                if exakit_offer_runtime_update "$_component" "$_upd_actual" "$_cur" "$_avail"; then
+                # Under --json the offer runs in its own subshell, like every
+                # updater below, so a die() inside it (under --yes, the start
+                # after the launcher swap meeting a WSL kernel without
+                # nftables) is THIS component's failed row with its reason and
+                # remedy, not an anonymous end of run.
+                # 10 is the offer's own "deferred"; anything else non-zero is
+                # a die.
+                _upd_offer_rc=0
+                if [ "${EXAKIT_UPDATE_JSON:-0}" = "1" ]; then
+                    _exakit_update_note_begin
+                    ( exakit_offer_runtime_update "$_component" "$_upd_actual" "$_cur" "$_avail" || exit 10 ) || _upd_offer_rc=$?
+                    _exakit_update_note_end
+                else
+                    exakit_offer_runtime_update "$_component" "$_upd_actual" "$_cur" "$_avail" || _upd_offer_rc=10
+                fi
+                if [ "$_upd_offer_rc" = "0" ]; then
                     _acted=$((_acted + 1))
                     _exakit_update_note "$_upd_actual" updated "$_cur" "$_avail"
-                else
+                elif [ "$_upd_offer_rc" = "10" ]; then
                     _deferred=$((_deferred + 1))
                     _exakit_update_note "$_upd_actual" deferred "$_cur" "$_avail" "exakit update --yes"
+                else
+                    _upd_error="${_upd_note_new:-}"
+                    _exakit_update_failure_remedy "$_component" "$_upd_error"
+                    _exakit_update_note "$_upd_actual" failed "$_cur" "$_avail" "$_ufr_remedy" \
+                        "${_upd_error:-the update did not finish (see exakit logs)}" "$_ufr_hint"
+                    _upd_failed=$((${_upd_failed:-0} + 1))
                 fi
             else
                 _exakit_update_note "$_upd_actual" current "$_cur" "$_avail"
@@ -6877,20 +7130,40 @@ _exakit_update_run() {
         # die()s is recorded as failed and the rest still run; on the screen
         # a die stops the run as it always did.
         if [ "${EXAKIT_UPDATE_JSON:-0}" = "1" ]; then
+            _exakit_update_note_begin
             if ( exakit_update_component "$_component" "$@" ); then
+                _exakit_update_note_end
                 if [ -n "$_cur" ] && [ "$_cur" = "$_avail" ]; then
                     _exakit_update_note "$_upd_actual" current "$_cur" "$_avail"
                 else
                     _exakit_update_note "$_upd_actual" updated "$_cur" "$_avail"
                 fi
             else
-                _exakit_update_note "$_upd_actual" failed "$_cur" "$_avail" "exakit update $_component"
+                # The reason die() recorded, and the remedy THAT reason calls
+                # for - not always "run it again" (see
+                # _exakit_update_failure_remedy).
+                _exakit_update_note_end
+                _upd_error="$_upd_note_new"
+                _exakit_update_failure_remedy "$_component" "$_upd_error"
+                _exakit_update_note "$_upd_actual" failed "$_cur" "$_avail" "$_ufr_remedy" \
+                    "${_upd_error:-the update did not finish (see exakit logs)}" "$_ufr_hint"
                 _upd_failed=$((${_upd_failed:-0} + 1))
             fi
         else
             exakit_update_component "$_component" "$@"
         fi
         _acted=$((_acted + 1))
+        # Did that just replace the kit? kit.version on disk is the proof: the
+        # self-update records it only after the new copy is in place, and it
+        # does so in the subshell under --json too, where no variable it sets
+        # could reach this loop. Said once, and only when something is left.
+        if [ "$_upd_actual" = "exakit" ] && [ -n "$_cur" ] && \
+           [ "$(exakit_component_current exakit 2>/dev/null || true)" != "$_cur" ]; then
+            _upd_kit_swapped=1
+            if [ "$(printf '%s\n' $_targets | tail -n 1)" != "$_component" ]; then
+                info "The starter kit itself was updated; run 'exakit update' again so the rest is updated by the new kit."
+            fi
+        fi
     done
     if [ "$_acted" -eq 0 ] && [ "$_deferred" -eq 0 ]; then
         ok "Everything is already current."
@@ -7017,6 +7290,17 @@ step_artifact_state() {
                 # Re-running the installer is supposed to be the cure for that.
                 EXAKIT_STEP_RERUN_REASON="the exapump connection profile is gone — writing it again"
                 printf 'missing\n'
+            elif command -v exapump_profile_password_stale >/dev/null 2>&1 && exapump_profile_password_stale; then
+                # A PROFILE CAN BE THERE AND STILL BE WRONG. A replaced
+                # deployment is a new database, and from Exasol Personal 2.4
+                # one with a new random sys password: the credential file
+                # followed it, the profile did not, and `exakit sql` answered
+                # "Authentication failed" after a repair that had reported
+                # success. personal_deploy_local drops this step's tick when it
+                # deploys afresh; this catches the deployments replaced by
+                # hand (`exasol destroy`, then `exasol install local`).
+                EXAKIT_STEP_RERUN_REASON="the exapump connection profile holds a password the database no longer accepts — writing it again"
+                printf 'missing\n'
             else
                 printf 'present\n'
             fi
@@ -7104,6 +7388,15 @@ except (OSError, ValueError):
 steps = doc.setdefault("steps_completed", [])
 if step not in steps:
     steps.append(step)
+# A STEP THAT FINISHED IS NOT A REFUSAL ANY MORE. The record an earlier run
+# booked for it (exakit_record_soft_failure) goes in the same locked write:
+# status hid it only while the step stayed in steps_completed, so a later
+# unmark (a database uninstalled from the menu) brought a months-old
+# "wsl --update" back to life. Twin: Set-ExakitStepDone.
+install = doc.get("install")
+soft = install.get("soft_failures") if isinstance(install, dict) else None
+if isinstance(soft, dict):
+    soft.pop(step, None)
 try:
     _exakit_write(path, doc)
 except OSError:
@@ -9565,7 +9858,14 @@ exakit_ensure_runtime_running() {
                 # without acting on is finished by its own deploy.
                 # NOT `|| personal_wait_ready`: that would spend the whole
                 # budget a second time before saying anything.
-                personal_wait_ready_or_deploy ||                     die "The database is deployed but did not come up. Read the state with 'exakit status', or repair with: $(personal_repair_command)"
+                # A deploy that met the WSL kernel is told wsl --update, never
+                # repair-runtime (personal_wait_network_die_if_blocked).
+                if ! personal_wait_ready_or_deploy; then
+                    command -v personal_wait_network_die_if_blocked >/dev/null 2>&1 && \
+                        personal_wait_network_die_if_blocked
+                    die "The database is deployed but did not come up. Read the state with 'exakit status', or repair with: $(personal_repair_command)"
+                fi
+                exakit_retire_start_soft_failure
                 return 0
             fi
             if [ "$_err_deploy" = "deploy" ]; then
@@ -10336,6 +10636,9 @@ exakit_soft_step() {
     exakit_clear_failure_note
     if ( "$@" ); then
         exakit_clear_failure_note
+        # Finished this time: an earlier run's record for it is history (the
+        # same as Invoke-ExakitSoftStep).
+        exakit_clear_soft_failure "$_ss_component"
         return 0
     fi
     exakit_record_soft_failure "$_ss_component" "$_ss_repair" "$(exakit_take_failure_note)" "$_ss_label"
@@ -10365,6 +10668,25 @@ exakit_record_soft_failure() {
     eval "EXAKIT_SOFT_REPAIR_${_rsf_component}=\"\$_rsf_repair\""
     eval "EXAKIT_SOFT_REASON_${_rsf_component}=\"\$_rsf_reason\""
     eval "EXAKIT_SOFT_LABEL_${_rsf_component}=\"\$_rsf_label\""
+    # ON DISK TOO, or the reason dies with this process. The callers hand over
+    # the failure note with exakit_take_failure_note, which deletes it, and the
+    # later steps clear the note again before their own work - so `exakit
+    # status --json`, the one thing an agent is told to poll, answered
+    # last_failure null for a database step refused by the WSL gate or by an
+    # unusable EXAKIT_CONTAINER_ENGINE=docker, and the agent re-ran the
+    # installer into the identical refusal. status reads these keys back (for
+    # a step that is still missing). ⇄ twin: Register-ExakitSoftFailure in
+    # setup/lib/exakit-common.ps1, which records the same three keys.
+    if [ "${EXAKIT_READONLY_QUERY:-0}" != "1" ] && [ -f "${EXAKIT_MANIFEST:-}" ]; then
+        _rsf_key="install.soft_failures.$(printf '%s' "$_rsf_component" | tr -c 'A-Za-z0-9_' '_')"
+        manifest_set "$_rsf_key.repair" "$_rsf_repair" >/dev/null 2>&1 || true
+        manifest_set "$_rsf_key.reason" "$_rsf_reason" >/dev/null 2>&1 || true
+        # The label the installer screen uses ("the local database"), so
+        # status says what did not finish in the same words as the summary
+        # and the Windows twin, not the internal step id.
+        [ -n "$_rsf_label" ] && { manifest_set "$_rsf_key.label" "$_rsf_label" >/dev/null 2>&1 || true; }
+        manifest_set "$_rsf_key.at" "$(_exakit_ts)" >/dev/null 2>&1 || true
+    fi
     return 0
 }
 
@@ -10383,6 +10705,8 @@ exakit_soft_failed() {
 # that repairs it. Printed last, after the connection panel, so it is the final
 # thing on screen rather than something scrolled past mid-install.
 exakit_print_soft_failures() {
+    # The install is ending: no record of a step it finished may outlive it.
+    exakit_prune_soft_failures
     [ -n "${EXAKIT_SOFT_FAILED:-}" ] || return 0
     _sf_count=0
     for _sf in $EXAKIT_SOFT_FAILED; do
@@ -10808,6 +11132,8 @@ kit_shared_steps() {
             exakit_record_soft_failure sample_data "exakit data-load" \
                 "$(exakit_take_failure_note)" "sample data"
             warn "Sample data did not finish loading — carrying on so the rest of the install completes"
+        else
+            exakit_clear_soft_failure sample_data
         fi
         exakit_clear_failure_note
     fi
@@ -10845,11 +11171,15 @@ kit_shared_steps() {
     if ! ( exakit_maybe_offer_mcp_setup ); then
         exakit_record_soft_failure mcp_clients "exakit mcp-setup" \
             "$(exakit_take_failure_note)" "AI client (MCP) setup"
+    else
+        exakit_clear_soft_failure mcp_clients
     fi
     exakit_clear_failure_note
     if ! ( exakit_maybe_offer_skills_install ); then
         exakit_record_soft_failure skills "exakit skills-install" \
             "$(exakit_take_failure_note)" "AI skills"
+    else
+        exakit_clear_soft_failure skills
     fi
     exakit_clear_failure_note
     _step_no=$((_step_no + 1))
@@ -12057,6 +12387,12 @@ exakit_with_spinner() {
 }
 
 exakit_autostart_default_on() {
+    # autostart.user_set: the user chose (`exakit autostart`), written beside
+    # the answer - the marker the Windows twin needs. A recorded bool without
+    # it is still left alone HERE: no shell kit ever wrote false by itself for
+    # an install that could register (unlike Windows 0.2.0-0.2.3), so that
+    # false is a user's `autostart off` from before the marker.
+    [ "$(manifest_get autostart.user_set 2>/dev/null || true)" = "true" ] && return 0
     case "$(manifest_get autostart.enabled 2>/dev/null || true)" in
         true|false) return 0 ;;
     esac
@@ -12068,6 +12404,13 @@ exakit_autostart_default_on() {
     EXAKIT_QUIET_DETAIL=1
     exakit_autostart_enable
     EXAKIT_QUIET_DETAIL="$_ado_prev_quiet"
+    # NOTHING COULD BE REGISTERED (no supervisor yet, a database step that did
+    # not finish): exakit_autostart_enable recorded false, and that false then
+    # read as an answer on every later run, so the default never came back.
+    # It is not an answer - nobody chose it - so the next run tries again.
+    if [ "$(manifest_get autostart.enabled 2>/dev/null || true)" = "false" ]; then
+        manifest_del autostart.enabled >/dev/null 2>&1 || true
+    fi
     return 0
 }
 

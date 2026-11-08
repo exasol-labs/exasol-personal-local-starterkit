@@ -19,6 +19,16 @@ has() { case "$3" in *"$2"*) check "$1" present present ;; *) check "$1" present
 lacks() { case "$3" in *"$2"*) check "$1" absent PRESENT ;; *) check "$1" absent absent ;; esac; }
 
 WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
+# HERMETIC. The --help loop, the allowlist merge and the discovery checks ran
+# setup/exakit and sourced common.sh with no EXAKIT_HOME of their own, so they
+# fell back to the developer's real ~/.exasol-starter-kit and left credentials/
+# and logs/ there. Every call below now defaults into $WORK; a call that names
+# its own EXAKIT_HOME still wins.
+_REAL_KIT_SNAPSHOT="$(ls -A "$HOME/.exasol-starter-kit" 2>/dev/null || echo absent)"
+_REAL_KIT_DIR="$HOME/.exasol-starter-kit"
+export HOME="$WORK/home" EXAKIT_HOME="$WORK/home/.exasol-starter-kit" EXAKIT_BIN_DIR="$WORK/home/bin"
+mkdir -p "$HOME"
+unset XDG_CONFIG_HOME
 
 # The command surface now lives in setup/help/*.json (one document per
 # component plus one for the CLI), not in a TSV. This prints every command
@@ -1406,7 +1416,7 @@ check "gate(linux, podman) passes" \
 # would have to go and buy.
 # The documented promise has to match the gate: a WSL reader is now given the
 # Linux road and the one prerequisite that differs, not an exit.
-has "the README sends WSL down the Linux road" "WSL** is supported" "$(cat "$ROOT/README.md")"
+has "the README sends WSL down the Linux road" "**WSL**: run the same command inside a WSL2 distro" "$(cat "$ROOT/README.md")"
 has "...naming the podman that counts" "Podman has to be installed there as well" "$(cat "$ROOT/quickstarts/windows.md")"
 has "the Linux quickstart claims the WSL path" "also the WSL path" "$(cat "$ROOT/quickstarts/linux.md")"
 has "the Windows quickstart hands WSL over" "supported too" "$(cat "$ROOT/quickstarts/windows.md")"
@@ -1434,8 +1444,16 @@ check "gate(wsl, no podman but installable) carries on" \
 # must not run in front of a machine that has not yet agreed to anything.
 _p2dep="$(sed -n '/^personal_deploy_local()/,/^}/p' "$ROOT/setup/lib/runtime-personal.sh")"
 has "the deployment installs podman before anything else" "personal_install_podman" "$_p2dep"
+# Since 2.4 the step's first act is to settle the ENGINE - none off an engine
+# platform (macOS), an existing deployment keeps its own, a fresh one is chosen
+# for - and the Podman install follows on the Podman branch, still before the
+# launcher is asked for anything.
 _p2first="$(printf '%s\n' "$_p2dep" | grep -nE '^\s+[a-z_]+' | grep -v '^\s*#' | head -1)"
-has "...as its first act" "personal_install_podman" "$_p2first"
+has "...right after the engine is settled" "personal_engine_platform" "$_p2first"
+_p2pod="$(printf '%s\n' "$_p2dep" | grep -n 'personal_install_podman || return 1' | cut -d: -f1 | head -1)"
+_p2launch="$(printf '%s\n' "$_p2dep" | grep -n '"$(personal_cli)" install local' | cut -d: -f1 | head -1)"
+check "...and before the launcher is asked for anything" yes \
+    "$([ -n "$_p2pod" ] && [ -n "$_p2launch" ] && [ "$_p2pod" -lt "$_p2launch" ] && echo yes || echo no)"
 _p2ins="$(sed -n '/^personal_install_podman()/,/^}/p' "$ROOT/setup/lib/runtime-personal.sh")"
 # NO QUESTION. The database runs through Podman and the user asked for the
 # database; a y/n whose only sensible answer is yes bought nothing and cost a
@@ -1682,7 +1700,15 @@ lacks "...while Start-Personal stays a nudge" "Wait-PersonalReadyOrDeploy" \
 # ONE FLAG, because it stopped meaning "no podman" the moment a declined reuse
 # and a failed deploy started using it.
 lacks "...under one name for every cause" "PersonalNoPodman" "$_p2winh"
-check "...set by each cause that leaves no database" "9" \
+# Thirteen since 2.4: the nine of old, plus an engine named by
+# EXAKIT_CONTAINER_ENGINE that the machine cannot provide, a Docker deployment
+# whose daemon is down, Podman on a WSL kernel without nftables, and a replace
+# refused by that WSL check before anything is deleted. Fifteen with an
+# existing deployment whose engine nothing can name, and an existing Docker
+# deployment whose daemon is down, stopped before its start and replace.
+# Sixteen with a replace refused because this run's start already failed on
+# the WSL kernel's nftables error (nothing is deleted).
+check "...set by each cause that leaves no database" "16" \
     "$(printf '%s' "$_p2winh" | grep -c 'PersonalNoDatabase = $true')"
 has "the windows resume arm survives a start that cannot finish" \
     'Invoke-ExakitSoftStep -Component "runtime" -Repair "exakit start"' \
@@ -1928,10 +1954,14 @@ echo "WSL 1 is refused at the front, as detect_wsl_version says it is:"
 # unprompted - with the real failure arriving minutes later as a raw cgroups
 # error naming neither Podman nor the kernel.
 _wsl_pf() { # _wsl_pf <version> -> the preflight lines that mention WSL 1 or Podman
+    # detect_docker stubbed: a Docker on the machine running this test (the CI
+    # runner has Engine 29+) answered for the distro under test, and the
+    # preflight named Docker where this expects Podman.
     ROOT="$ROOT" V="$1" bash -c '
         . "$ROOT/setup/lib/detect.sh" >/dev/null 2>&1
         detect_os() { echo wsl; }
         detect_wsl_version() { printf "%s\n" "$V"; }
+        detect_docker() { echo none; }
         preflight_report 2>&1 | sed "s/\x1b\[[0-9;]*m//g"'
 }
 has "WSL 1 is refused, and told how to convert" 'wsl --set-version' "$(_wsl_pf 1)"
@@ -2643,6 +2673,10 @@ for _rs_f in setup/exakit setup/exakit.ps1; do
 done
 has "...and says why the name matters" 'file name becomes the table name' \
     "$(cat "$ROOT/setup/exakit")"
+
+echo "the suite stayed out of the real home:"
+check "the real kit home was not touched" "untouched" \
+    "$([ "$(ls -A "$_REAL_KIT_DIR" 2>/dev/null || echo absent)" = "$_REAL_KIT_SNAPSHOT" ] && echo untouched || echo CHANGED)"
 
 echo "passed: $PASS, failed: $FAIL"
 [ "$FAIL" -eq 0 ]
