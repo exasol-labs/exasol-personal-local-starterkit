@@ -404,7 +404,29 @@ joined_dataset = joined_view_proposal.create(connection) if USE_JOINED and joine
 
 <section id="settings">
 <h2><span class="n">15</span>Your model and Langfuse</h2>
-<p>Explore and Ask open with an optional cell: fill in <code>MODEL_ID</code>, <code>PROVIDER_BASE_URL</code> (any Chat Completions endpoint, a local one too) and <code>LANGFUSE_BASE_URL</code>, run it, and the keys are asked for in a hidden prompt. They stay in the notebook's kernel only - never in the file, its outputs or on disk. Left empty, the cell changes nothing; exporting the same variables before <code>exakit notebook</code> still works. A key is never sent over plain <code>http://</code> to another machine.</p>
+<p>Explore and Ask open with an optional cell: fill in <code>MODEL_ID</code>, <code>PROVIDER_BASE_URL</code> (any Chat Completions endpoint, a local one too) and <code>LANGFUSE_BASE_URL</code>, run it, and the keys are asked for in a hidden prompt. They stay in the notebook's kernel only - never in the file, its outputs or on disk. Left empty, the cell changes nothing. A key is never sent over plain <code>http://</code> to another machine.</p>
+<p><strong>Once for every notebook instead:</strong> the server inherits the environment of the terminal that starts it, and the kernels inherit the server's. Set the six names there, keys through a hidden prompt so they are in no command and no shell history, then start the notebooks from that terminal:</p>
+<pre><code><span class="c"># Mac and Linux (bash or zsh)</span>
+export EXAKIT_MODEL_ID="claude-opus-5-5" EXAKIT_PROVIDER_BASE_URL="https://api.anthropic.com/v1/"
+printf 'Model API key: '; read -rs EXAKIT_PROVIDER_API_KEY; echo; export EXAKIT_PROVIDER_API_KEY
+export LANGFUSE_BASE_URL="https://cloud.langfuse.com"
+printf 'Langfuse public key: '; read -rs LANGFUSE_PUBLIC_KEY; echo; export LANGFUSE_PUBLIC_KEY
+printf 'Langfuse secret key: '; read -rs LANGFUSE_SECRET_KEY; echo; export LANGFUSE_SECRET_KEY
+exakit notebook</code></pre>
+<pre><code><span class="c"># Windows PowerShell 5.1 or later</span>
+$env:EXAKIT_MODEL_ID = "claude-opus-5-5"
+$env:EXAKIT_PROVIDER_BASE_URL = "https://api.anthropic.com/v1/"
+$env:EXAKIT_PROVIDER_API_KEY = [Net.NetworkCredential]::new("", (Read-Host "Model API key" -AsSecureString)).Password
+$env:LANGFUSE_BASE_URL = "https://cloud.langfuse.com"
+$env:LANGFUSE_PUBLIC_KEY = [Net.NetworkCredential]::new("", (Read-Host "Langfuse public key" -AsSecureString)).Password
+$env:LANGFUSE_SECRET_KEY = [Net.NetworkCredential]::new("", (Read-Host "Langfuse secret key" -AsSecureString)).Password
+exakit notebook</code></pre>
+<ul>
+<li><strong>Already running:</strong> the server read its environment when it started and a kernel restart does not re-read it. <code>exakit notebook stop</code>, then <code>exakit notebook</code>, in the terminal that has the variables.</li>
+<li><strong>The settings file:</strong> <code>~/.exasol-starter-kit/exakit.env</code> has an <code>EXAKIT_MODEL_ID</code> and an <code>EXAKIT_PROVIDER_BASE_URL</code> line; uncommented, every command of the kit sees them. It refuses a key and reads <code>EXAKIT_*</code> names only, so the Langfuse address and the three keys stay in the terminal.</li>
+<li><strong>Nothing set:</strong> the AI steps skip and say so; tracing is off. Enter in a hidden prompt skips that key.</li>
+</ul>
+<p>Where it is written: the cell's own text in Explore and Ask, <em>Set them once</em> in <code>notebook/MODEL-PROVIDERS.md</code>, the notebooks folder's README, the notebook skill and <code>exakit help notebook</code>.</p>
 </section>
 
 <section id="security">

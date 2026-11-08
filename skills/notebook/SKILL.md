@@ -205,7 +205,7 @@ column map, the schema map, every query with its digest, the dashboards, the wor
 ## Tracing model calls (opt-in)
 
 With `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and `LANGFUSE_BASE_URL` exported (`LANGFUSE_HOST` is accepted as an alias)
-before `exakit notebook`, `nb.trace(conn, "label")` records the model
+in the terminal that then runs `exakit notebook`, `nb.trace(conn, "label")` records the model
 calls made inside it in the user's own Langfuse project, tagged with the
 database session and the last SQL; `trace(conn, "label", dataset=ds)` adds the
 dataset and the descriptor's digest. Without those variables it prints that tracing is off and
@@ -218,6 +218,27 @@ model and Langfuse*, whose `MODEL_ID`, `PROVIDER_BASE_URL` and `LANGFUSE_BASE_UR
 `MLFLOW_SERVER_LOGIN` for `nb.use_mlflow(...)`. Point the user at that cell. Only the plain
 values go in it; the keys are asked for in a hidden prompt and live in the kernel's
 environment until it stops. Never write a key into a cell, a file or a command line.
+
+Once for every notebook instead, in a terminal (the server inherits that terminal's
+environment; the kernels inherit the server's):
+
+```sh
+export EXAKIT_MODEL_ID="claude-opus-5-5" EXAKIT_PROVIDER_BASE_URL="https://api.anthropic.com/v1/"
+printf 'Model API key: '; read -rs EXAKIT_PROVIDER_API_KEY; echo; export EXAKIT_PROVIDER_API_KEY
+export LANGFUSE_BASE_URL="https://cloud.langfuse.com"
+printf 'Langfuse public key: '; read -rs LANGFUSE_PUBLIC_KEY; echo; export LANGFUSE_PUBLIC_KEY
+printf 'Langfuse secret key: '; read -rs LANGFUSE_SECRET_KEY; echo; export LANGFUSE_SECRET_KEY
+exakit notebook
+```
+
+PowerShell: `$env:NAME = "value"` for the plain values and
+`$env:EXAKIT_PROVIDER_API_KEY = [Net.NetworkCredential]::new("", (Read-Host "Model API key" -AsSecureString)).Password`
+for each key. A server already running read its environment at start: `exakit notebook stop`,
+then `exakit notebook`, from that terminal; a kernel restart does not re-read it. The model's
+id and address (not a key, not the Langfuse names) can stay in `~/.exasol-starter-kit/exakit.env`.
+When an agent sets these for a user, it runs the `read -rs` lines in the user's own terminal
+and never types, echoes or logs a key itself; `notebook/MODEL-PROVIDERS.md` (*Set them once*)
+is the page to point at.
 
 ## AI Lab notebooks on a local database
 

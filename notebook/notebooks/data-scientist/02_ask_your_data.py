@@ -44,7 +44,18 @@ nb.show_roles(dataset)
 #
 # - **Plain values go in the cell:** `MODEL_ID`, `PROVIDER_BASE_URL` (any Chat Completions endpoint: Claude, OpenAI, or Ollama on your own machine - `MODEL-PROVIDERS.md` lists them) and `LANGFUSE_BASE_URL` (where the calls are recorded: what was sent, the answer, the cost).
 # - **Secrets never go in the cell.** When you run it, a hidden box asks for the model's API key and the two Langfuse keys (Enter skips one). They live in this kernel only - not in this file, its outputs or on disk - and are gone when the kernel stops.
-# - **Once for every notebook instead:** export `EXAKIT_MODEL_ID`, `EXAKIT_PROVIDER_BASE_URL`, `EXAKIT_PROVIDER_API_KEY`, `LANGFUSE_BASE_URL`, `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` in the terminal before `exakit notebook`, and leave the cell as it is.
+# - **Once for every notebook instead:** set the same things in a terminal, then start the notebooks from it, and leave the cell as it is. The keys are typed into a hidden prompt, so they are not in the command or the shell's history. Mac and Linux:
+#
+#   ```sh
+#   export EXAKIT_MODEL_ID="claude-opus-5-5" EXAKIT_PROVIDER_BASE_URL="https://api.anthropic.com/v1/"
+#   printf 'Model API key: '; read -rs EXAKIT_PROVIDER_API_KEY; echo; export EXAKIT_PROVIDER_API_KEY
+#   export LANGFUSE_BASE_URL="https://cloud.langfuse.com"
+#   printf 'Langfuse public key: '; read -rs LANGFUSE_PUBLIC_KEY; echo; export LANGFUSE_PUBLIC_KEY
+#   printf 'Langfuse secret key: '; read -rs LANGFUSE_SECRET_KEY; echo; export LANGFUSE_SECRET_KEY
+#   exakit notebook
+#   ```
+#
+#   Windows PowerShell: the same names as `$env:NAME`, the keys through `Read-Host -AsSecureString`; `MODEL-PROVIDERS.md` in the notebooks folder has those lines. The notebook server reads them only when it starts: already running, then `exakit notebook stop` and `exakit notebook` again from that terminal. The model's id and address can also stay in `~/.exasol-starter-kit/exakit.env` (its `EXAKIT_MODEL_ID` and `EXAKIT_PROVIDER_BASE_URL` lines) for every command of the kit; the file takes no key.
 #
 # The cell answers in one line: which model and whether it has a key, and whether Langfuse is tracing.
 # %%

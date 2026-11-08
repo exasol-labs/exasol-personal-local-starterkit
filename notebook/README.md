@@ -81,7 +81,11 @@ ask takes its default; a choice goes in up front (`nb.exakit("mcp-setup", env={"
 
 `EXAKIT_MODEL_ID`, `EXAKIT_PROVIDER_BASE_URL`, `EXAKIT_PROVIDER_API_KEY`, and optionally `EXAKIT_PROVIDER_HEADERS`
 and `EXAKIT_MODEL_TEMPERATURE` (not sent unless set; Claude Opus 4.7+ refuses temperature).
-`nb.model_settings()` reports them without secrets. Providers in detail: [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md).
+`LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and `LANGFUSE_BASE_URL` turn tracing on. Set them in the terminal that
+starts `exakit notebook` (keys through a hidden `read -rs`, or `Read-Host -AsSecureString` on Windows), keep the
+model's id and address in `~/.exasol-starter-kit/exakit.env`, or fill in the *Your AI model and Langfuse* cell in
+Explore or Ask. `nb.model_settings()` reports them without secrets. The recipes, both shells, and the providers in
+detail: [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md).
 
 ## The training handoff
 

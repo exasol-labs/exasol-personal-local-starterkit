@@ -20,9 +20,10 @@ setting, not custom `Authorization`, `api-key` or `x-api-key` headers.
 
 Every call passes the selected base URL and key explicitly to the SDK. Unrelated
 SDK environment credentials do not supply either value. Settings are read on
-each call; a new Terminal environment does not change an already-running kernel.
-Restart notebook servers from that Terminal, or set the variables in that kernel.
-Do not print environment contents or paste a real key into a saved notebook.
+each call; a new terminal's environment does not reach an already-running server.
+*Set them once* below says how to set them, and the *Your AI model and Langfuse* cell
+in Explore and Ask sets them in one kernel instead. Do not print environment contents
+or paste a real key into a saved notebook.
 
 ## Documented connection options
 
@@ -50,9 +51,43 @@ guarantee strict tool schemas. The kit asks for text; Ask separately validates
 its JSON/SQL proposal and still requires approval. Endpoint compatibility alone
 does not establish a model's SQL quality, runtime performance or account access.
 
-## Configure a provider
+## Set them once, before `exakit notebook`
 
-For a local Ollama server, after installing/starting it and loading a chat model:
+The notebook server takes its environment from the terminal that starts it, and the
+kernels take theirs from the server. So: set everything in one terminal, start the
+notebooks from that terminal, and every notebook has the model and Langfuse without
+touching the *Your AI model and Langfuse* cell. Each key is typed into a hidden
+prompt: it is never part of a command, so it is not in the shell's history either.
+
+Mac and Linux (bash or zsh), for Claude:
+
+```sh
+export EXAKIT_MODEL_ID="claude-opus-5-5"
+export EXAKIT_PROVIDER_BASE_URL="https://api.anthropic.com/v1/"
+printf 'Model API key: '; read -rs EXAKIT_PROVIDER_API_KEY; echo; export EXAKIT_PROVIDER_API_KEY
+
+export LANGFUSE_BASE_URL="https://cloud.langfuse.com"      # or your own Langfuse's https:// address
+printf 'Langfuse public key: '; read -rs LANGFUSE_PUBLIC_KEY; echo; export LANGFUSE_PUBLIC_KEY
+printf 'Langfuse secret key: '; read -rs LANGFUSE_SECRET_KEY; echo; export LANGFUSE_SECRET_KEY
+
+exakit notebook
+```
+
+Windows PowerShell (5.1 or later), the same names:
+
+```powershell
+$env:EXAKIT_MODEL_ID = "claude-opus-5-5"
+$env:EXAKIT_PROVIDER_BASE_URL = "https://api.anthropic.com/v1/"
+$env:EXAKIT_PROVIDER_API_KEY = [Net.NetworkCredential]::new("", (Read-Host "Model API key" -AsSecureString)).Password
+
+$env:LANGFUSE_BASE_URL = "https://cloud.langfuse.com"
+$env:LANGFUSE_PUBLIC_KEY = [Net.NetworkCredential]::new("", (Read-Host "Langfuse public key" -AsSecureString)).Password
+$env:LANGFUSE_SECRET_KEY = [Net.NetworkCredential]::new("", (Read-Host "Langfuse secret key" -AsSecureString)).Password
+
+exakit notebook
+```
+
+A local Ollama server needs no key and no Langfuse; after loading a chat model:
 
 ```sh
 export EXAKIT_MODEL_ID="<exact-name-from-ollama-list>"
@@ -61,24 +96,21 @@ unset EXAKIT_PROVIDER_API_KEY EXAKIT_PROVIDER_HEADERS
 exakit notebook
 ```
 
-For another provider, set the same model/base-URL variables using the table and
-supply its key securely in the process environment. On macOS zsh, this prompt
-avoids putting the value in shell history:
+Three rules:
 
-```zsh
-read -r -s "EXAKIT_PROVIDER_API_KEY?Provider API key: "
-printf '\n'
-export EXAKIT_PROVIDER_API_KEY
-```
+- **Already running?** The server read its environment when it started, and a kernel
+  restart does not re-read it. Run `exakit notebook stop`, then `exakit notebook`, in the
+  terminal that has the variables. Marimo: `exakit notebook marimo`, the same way.
+- **The plain values can live in the settings file.** `~/.exasol-starter-kit/exakit.env`
+  has an `EXAKIT_MODEL_ID` and an `EXAKIT_PROVIDER_BASE_URL` line (and
+  `EXAKIT_PROVIDER_HEADERS`, `EXAKIT_MODEL_TEMPERATURE`): remove the `# ` and set them once,
+  and every `exakit` command, the notebook server included, sees them. The file refuses a
+  key (`*API_KEY*`, `*SECRET*`, `*TOKEN*`), and it reads `EXAKIT_*` names only, so the
+  Langfuse address and all three keys stay in the terminal as above.
+- **Leave them out and nothing breaks.** No `EXAKIT_MODEL_ID` means the AI steps skip and
+  say so; no Langfuse variables means tracing is off. Set only what you use.
 
-PowerShell uses the identical setting names:
-
-```powershell
-$env:EXAKIT_MODEL_ID = '<exact-model-id>'
-$env:EXAKIT_PROVIDER_BASE_URL = '<provider-api-base-url>'
-# Supply EXAKIT_PROVIDER_API_KEY securely when required by that provider.
-exakit notebook
-```
+Skip a value in the hidden prompt with Enter: an empty key is the same as none.
 
 When switching providers, replace or clear both the key and optional headers.
 Existing user notebook copies are preserved by updates: change their settings
@@ -96,7 +128,8 @@ configured result is not an authentication or inference success check.
 ## Optional tracing
 
 `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` and `LANGFUSE_BASE_URL` remain
-separate: they select the tracing project, not the model. With tracing enabled,
+separate: they select the tracing project, not the model. *Set them once* above shows
+the three lines that set them, keys in a hidden prompt. With tracing enabled,
 the same configured provider client is instrumented by Langfuse; without it the
 ordinary client is used. Explore still starts with `USE_AI_THEMES = False`.
 Set it to `True` deliberately to send the selected descriptions to your model.
