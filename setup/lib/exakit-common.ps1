@@ -7087,6 +7087,29 @@ function Write-ExakitReadyLine {
     }
 }
 
+# Write-ExakitModelSetupHint - after the persona's add-ons and before the closing
+# panel: how to give the notebooks a model and Langfuse, once, in this terminal.
+# Only when the notebook add-on is installed and no model is set yet. The keys
+# are typed into a hidden prompt, never into a command. Twin of
+# exakit_model_setup_hint in common.sh.
+function Write-ExakitModelSetupHint {
+    if ($env:EXAKIT_MODEL_ID) { return }
+    try { if (-not (Test-ExakitMarketplaceAddonInstalled notebook)) { return } } catch { return }
+    Write-Host ""
+    Start-ExakitPanel "Your AI model and Langfuse (optional, for the notebooks)"
+    Write-ExakitPanelLine "Set once, here in PowerShell, then: exakit notebook"
+    Write-ExakitPanelLine '  $env:EXAKIT_MODEL_ID = "claude-opus-5-5"'
+    Write-ExakitPanelLine '  $env:EXAKIT_PROVIDER_BASE_URL = "https://api.anthropic.com/v1/"'
+    Write-ExakitPanelLine '  $k = Read-Host "Model API key" -AsSecureString'
+    Write-ExakitPanelLine '  $c = New-Object Net.NetworkCredential "", $k'
+    Write-ExakitPanelLine '  $env:EXAKIT_PROVIDER_API_KEY = $c.Password'
+    Write-ExakitPanelLine '  $env:LANGFUSE_BASE_URL = "https://cloud.langfuse.com"'
+    Write-ExakitPanelLine "  LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY: the same way as the API key"
+    Write-ExakitPanelLine "Or in a notebook: nb.model_setup() shows what is set and how to set it"
+    Write-ExakitPanelLine "Nothing set: the AI steps skip and say so. Everything else runs."
+    Complete-ExakitPanel
+}
+
 function Request-ExakitMarketplaceOffer {
     # Several checks per add-on and a description fetched for each take
     # seconds: a turning spinner says the install is still going, not stuck.

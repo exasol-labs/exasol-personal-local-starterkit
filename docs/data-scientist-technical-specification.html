@@ -426,6 +426,7 @@ exakit notebook</code></pre>
 <li><strong>The settings file:</strong> <code>~/.exasol-starter-kit/exakit.env</code> has an <code>EXAKIT_MODEL_ID</code> and an <code>EXAKIT_PROVIDER_BASE_URL</code> line; uncommented, every command of the kit sees them. It refuses a key and reads <code>EXAKIT_*</code> names only, so the Langfuse address and the three keys stay in the terminal.</li>
 <li><strong>Nothing set:</strong> the AI steps skip and say so; tracing is off. Enter in a hidden prompt skips that key.</li>
 </ul>
+<p><strong>Nobody has to find this page:</strong> <code>nb.model_setup()</code> in any cell lists the six names with set / not set, the <code>nb.use_model(...)</code> way, and the terminal lines for the machine it runs on (Windows, Mac, Linux or WSL), the restart rule and the settings file; the one-line answer of the settings cell names it while something is still off. The install's closing screen shows the same lines, after the persona's add-ons and before the connection panel, whenever the notebook add-on is installed and no model is set (<code>exakit_model_setup_hint</code> and its PowerShell twin).</p>
 <p>Where it is written: the cell's own text in Explore and Ask, <em>Set them once</em> in <code>notebook/MODEL-PROVIDERS.md</code>, the notebooks folder's README, the notebook skill and <code>exakit help notebook</code>.</p>
 </section>
 

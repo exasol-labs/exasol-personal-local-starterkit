@@ -112,6 +112,11 @@ Three rules:
 
 Skip a value in the hidden prompt with Enter: an empty key is the same as none.
 
+In a notebook, `nb.model_setup()` prints this page's essentials for the machine it runs on
+(Windows, Mac, Linux or WSL): the six names with set / not set, the `nb.use_model(...)` way,
+the terminal lines, the restart rule and the settings file. The install's closing screen
+shows the same lines when the notebook add-on is installed.
+
 When switching providers, replace or clear both the key and optional headers.
 Existing user notebook copies are preserved by updates: change their settings
 to these names, or save a fresh copy of the current originals. In a notebook:

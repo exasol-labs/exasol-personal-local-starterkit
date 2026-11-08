@@ -70,5 +70,33 @@ EXAKIT_UNINSTALL_NOTEBOOKS=remove full_uninstall 0 >/dev/null 2>&1
 check "and the real run removes the whole kit home" "no" "$([ -e "$EXAKIT_HOME" ] && echo yes || echo no)"
 mkdir -p "$EXAKIT_HOME"
 
+echo "the install's closing screen says how to give the notebooks a model (before the panel, after the add-ons):"
+hint() { ( exakit_marketplace_addon_installed() { [ "$1" = notebook ]; }; UI_FANCY=0 exakit_model_setup_hint 2>&1 ); }
+HINT="$(hint)"
+contains "the model id and the address" 'export EXAKIT_MODEL_ID="claude-opus-5-5"' "$HINT"
+contains "the key through a hidden read, never a value" "read -rs EXAKIT_PROVIDER_API_KEY; export EXAKIT_PROVIDER_API_KEY" "$HINT"
+contains "Langfuse the same way" "LANGFUSE_PUBLIC_KEY and LANGFUSE_SECRET_KEY" "$HINT"
+contains "and the notebook command that shows it again" "nb.model_setup()" "$HINT"
+check "no key value, no secret pattern" "" "$(printf '%s' "$HINT" | grep -E 'API_KEY=|SECRET_KEY=|sk-' || true)"
+check "every line fits 80 columns" "" "$(printf '%s\n' "$HINT" | awk 'length > 80')"
+check "silent when a model is already set" "" "$(EXAKIT_MODEL_ID=set hint)"
+check "silent without the notebook add-on" "" "$( ( exakit_marketplace_addon_installed() { false; }; exakit_model_setup_hint 2>&1 ) )"
+for _s in setup-macos.sh setup-linux.sh; do
+    check "$_s prints it after the persona's add-ons and before the panel" "yes" \
+        "$(awk '/_exakit_marketplace_cli installer_flow --phase services/{a=NR} /exakit_model_setup_hint/{if(!h)h=NR} /^connection_summary/{c=NR} END{print (a&&h&&c&&a<h&&h<c)?"yes":"no"}' "$ROOT/setup/$_s")"
+done
+check "the Windows installer too" "yes" \
+    "$(awk '/installer_flow -AllowFailure/{a=NR} /Write-ExakitModelSetupHint/{if(!h)h=NR} /Show-ExakitConnectionSummary$/{c=NR} END{print (a&&h&&c&&a<h&&h<c)?"yes":"no"}' "$ROOT/setup/setup-windows.ps1")"
+check "the PowerShell twin types the key hidden too" "yes" "$(grep -q 'Read-Host "Model API key" -AsSecureString' "$ROOT/setup/lib/exakit-common.ps1" && echo yes)"
+if command -v pwsh >/dev/null 2>&1; then
+    PS_HINT="$(cd "$ROOT" && HOME="$WORK/pshome" EXAKIT_HOME="$WORK/pskit" pwsh -NoProfile -Command '. ./setup/lib/ui.ps1; . ./setup/lib/exakit-common.ps1; function Test-ExakitMarketplaceAddonInstalled { param($Id) $Id -eq "notebook" }; $script:UiFancy = $false; Write-ExakitModelSetupHint' 2>&1)"
+    contains "pwsh: the same panel, PowerShell lines" '$env:EXAKIT_MODEL_ID = "claude-opus-5-5"' "$PS_HINT"
+    contains "pwsh: the key through a secure prompt" 'Read-Host "Model API key" -AsSecureString' "$PS_HINT"
+    check "pwsh: no key value, no secret pattern" "" "$(printf '%s' "$PS_HINT" | grep -E 'API_KEY=|SECRET_KEY=|sk-' || true)"
+    check "pwsh: every line fits 80 columns" "" "$(printf '%s\n' "$PS_HINT" | awk 'length > 80')"
+else
+    echo "  skip pwsh is not installed - the PowerShell panel is checked as text only"
+fi
+
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

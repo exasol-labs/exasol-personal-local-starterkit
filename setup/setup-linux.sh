@@ -184,6 +184,8 @@ if [ -n "${EXAKIT_PERSONA_ACTIVE:-}" ]; then
     command -v exakit_persona_marketplace_note >/dev/null 2>&1 && exakit_persona_marketplace_note
     exakit_release_lock
 fi
+# How to give the notebooks a model and Langfuse, before the panel the reader keeps.
+command -v exakit_model_setup_hint >/dev/null 2>&1 && exakit_model_setup_hint
 connection_summary
 # Only when the kit version moved during this run, and never able to fail it: the
 # trap is already released and every reader inside degrades to silence.

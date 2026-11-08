@@ -119,12 +119,59 @@ class SetupEnvTest(unittest.TestCase):
 
 
 class NotebookCellsTest(unittest.TestCase):
+    def setUp(self):
+        patcher = mock.patch.dict(os.environ, {}, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     """The cells ship empty, so a headless run and a user who skips them see no prompt and no change."""
 
     CELLS = {"data-scientist/01_explore.py": "nb.use_model(MODEL_ID, PROVIDER_BASE_URL, LANGFUSE_BASE_URL)",
              "data-scientist/02_ask_your_data.py": "nb.use_model(MODEL_ID, PROVIDER_BASE_URL, LANGFUSE_BASE_URL)",
              "ml-engineer/00_quickstart.py": "nb.use_mlflow(MLFLOW_TRACKING_URI, MLFLOW_SERVER_LOGIN)",
              "ml-engineer/01_train.py": "nb.use_mlflow(MLFLOW_TRACKING_URI, MLFLOW_SERVER_LOGIN)"}
+
+    def test_model_setup_says_what_is_set_and_how_for_each_machine(self):
+        """nb.model_setup(): the six names with set/not set, the in-kernel way, and the terminal lines for THIS machine
+        (Windows, Mac, Linux, WSL) - the keys through a hidden prompt, never a value - and what to do next."""
+        for machine, first_line in (("mac", 'export EXAKIT_MODEL_ID="claude-opus-5-5"'), ("linux", "export EXAKIT_MODEL_ID="),
+                                    ("wsl", "export EXAKIT_MODEL_ID="), ("windows", '$env:EXAKIT_MODEL_ID = "claude-opus-5-5"')):
+            with self.subTest(machine=machine):
+                (state, out) = quiet(lambda: nb.model_setup(machine))
+                self.assertEqual(machine, state["machine"])
+                self.assertEqual(list(setup_env.NAMES), state["missing"])
+                self.assertIn(first_line, out)
+                self.assertIn("not set", out)
+                self.assertIn('nb.use_model("claude-opus-5-5"', out, "the in-kernel way first")
+                self.assertIn("exakit notebook stop", out, "what to do when the server already runs")
+                self.assertIn("exakit.env", out, "where the plain values may stay")
+                if machine == "windows":
+                    self.assertIn("Read-Host", out), self.assertNotIn("read -rs", out)
+                else:
+                    self.assertIn("read -rs EXAKIT_PROVIDER_API_KEY", out), self.assertNotIn("$env:", out)
+                if machine == "wsl":
+                    self.assertIn("not PowerShell", out)
+        self.assertIn(setup_env.this_machine(), ("mac", "linux", "wsl", "windows"))
+
+    def test_model_setup_never_prints_a_key_and_says_so_when_all_is_set(self):
+        os.environ.update({"EXAKIT_MODEL_ID": "m", "EXAKIT_PROVIDER_BASE_URL": "https://model.example/v1/",
+                           "EXAKIT_PROVIDER_API_KEY": KEY, "LANGFUSE_BASE_URL": "https://langfuse.example",
+                           "LANGFUSE_PUBLIC_KEY": "pk-" + KEY, "LANGFUSE_SECRET_KEY": "lf-" + KEY})
+        (state, out) = quiet(lambda: nb.model_setup("mac"))
+        self.assertEqual([], state["missing"])
+        self.assertNotIn(KEY, out)
+        self.assertIn("set (hidden)", out)
+        self.assertIn("https://model.example/v1/", out, "a plain value is shown")
+        self.assertIn("Nothing to do", out)
+        self.assertNotIn("export ", out, "no recipe when there is nothing left to set")
+
+    def test_the_one_line_answer_points_at_model_setup_while_something_is_off(self):
+        (_, out) = quiet(lambda: nb.use_model("", "", "", ask=Prompts()))
+        self.assertIn("nb.model_setup()", out)
+        os.environ.update({"EXAKIT_MODEL_ID": "m", "EXAKIT_PROVIDER_BASE_URL": "https://model.example/v1/",
+                           "LANGFUSE_BASE_URL": "https://langfuse.example", "LANGFUSE_PUBLIC_KEY": "p", "LANGFUSE_SECRET_KEY": "s"})
+        (_, out) = quiet(lambda: nb.use_model("", "", "", ask=Prompts()))
+        self.assertNotIn("nb.model_setup()", out, "all set: no nudge")
 
     def test_each_notebook_carries_its_cell_empty(self):
         for relative, call in self.CELLS.items():

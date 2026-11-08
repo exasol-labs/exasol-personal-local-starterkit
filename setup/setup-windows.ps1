@@ -482,6 +482,8 @@ try {
             (Join-Path $PSScriptRoot 'exakit.ps1'), '--host', (Get-Process -Id $PID).Path)
         if (Get-Command Write-ExakitPersonaMarketplaceNote -ErrorAction SilentlyContinue) { Write-ExakitPersonaMarketplaceNote }
     }
+    # How to give the notebooks a model and Langfuse, before the panel the reader keeps.
+    if (Get-Command Write-ExakitModelSetupHint -ErrorAction SilentlyContinue) { Write-ExakitModelSetupHint }
     Show-ExakitConnectionSummary
     # Only when the kit version moved during this run, and never able to fail it:
     # every reader inside degrades to silence.

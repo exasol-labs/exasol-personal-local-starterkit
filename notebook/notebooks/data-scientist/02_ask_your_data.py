@@ -57,7 +57,7 @@ nb.show_roles(dataset)
 #
 #   Windows PowerShell: the same names as `$env:NAME`, the keys through `Read-Host -AsSecureString`; `MODEL-PROVIDERS.md` in the notebooks folder has those lines. The notebook server reads them only when it starts: already running, then `exakit notebook stop` and `exakit notebook` again from that terminal. The model's id and address can also stay in `~/.exasol-starter-kit/exakit.env` (its `EXAKIT_MODEL_ID` and `EXAKIT_PROVIDER_BASE_URL` lines) for every command of the kit; the file takes no key.
 #
-# The cell answers in one line: which model and whether it has a key, and whether Langfuse is tracing.
+# The cell answers in one line: which model and whether it has a key, and whether Langfuse is tracing. Not sure what is set, or how to set it on your machine? Run `nb.model_setup()` in a cell: it lists the six names with set / not set, and prints the lines above for Windows, Mac, Linux or WSL, whichever this is.
 # %%
 MODEL_ID = ""           # e.g. "claude-opus-5-5"; empty: no model (or the one set before `exakit notebook`)
 PROVIDER_BASE_URL = ""  # e.g. "https://api.anthropic.com/v1/" - any Chat Completions endpoint (MODEL-PROVIDERS.md lists more)

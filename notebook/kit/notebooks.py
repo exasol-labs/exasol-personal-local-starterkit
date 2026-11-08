@@ -225,6 +225,7 @@ def readme_text(kit: Path, doc: dict, personas: set[str] | None = None, fresh: b
               "  `/v1/` address, no key), then `read -rs EXAKIT_PROVIDER_API_KEY; export EXAKIT_PROVIDER_API_KEY`",
               "  (typed hidden), then `exakit notebook` from that terminal. Or set only the id and address in",
               "  `~/.exasol-starter-kit/exakit.env`. Or fill in the *Your AI model and Langfuse* cell in a notebook.",
+              "  `nb.model_setup()` in a cell says what is set and prints these lines for this machine.",
               "- Langfuse traces: `export LANGFUSE_BASE_URL=...` and the two keys, `LANGFUSE_PUBLIC_KEY` and",
               "  `LANGFUSE_SECRET_KEY`, the same way. `MODEL-PROVIDERS.md` here has both recipes, PowerShell too.",
               "- JupyterLab reads these only when it starts. Already running? Set them in a terminal, then run",

@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import getpass
 import os
+import platform
+from pathlib import Path
 from typing import Callable
 
 from . import model_config
@@ -107,9 +109,105 @@ def _model_summary(notes: list[str]) -> dict:
         tracing_line = "Langfuse: off."
     else:
         tracing_line = f"Langfuse: off - {', '.join(missing)} not set."
-    # One line, read at a glance: "model: off, so the AI steps skip. Langfuse: off."
-    return {"model": bool(config), "tracing": not missing, "lines": [f"{model_line} {tracing_line}"],
+    # One line, read at a glance: "model: off, so the AI steps skip. Langfuse: off." - and, while something is
+    # still off, where the how-to is, so nobody has to find it.
+    hint = "" if config and not missing else f" {HOW}"
+    return {"model": bool(config), "tracing": not missing, "lines": [f"{model_line} {tracing_line}{hint}"],
             "problem": problem, "notes": list(notes)}
+
+
+HOW = "How to set them on this machine: nb.model_setup()"
+NAMES = (model_config.MODEL_ID, model_config.BASE_URL, model_config.API_KEY,
+         LANGFUSE_BASE_URL, LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY)
+SECRETS = frozenset((model_config.API_KEY, LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY))
+EXAMPLE_MODEL, EXAMPLE_URL, EXAMPLE_LANGFUSE = "claude-opus-5-5", "https://api.anthropic.com/v1/", "https://cloud.langfuse.com"
+
+
+def this_machine() -> str:
+    """``windows``, ``mac``, ``wsl`` or ``linux``: which terminal lines apply here."""
+    system = platform.system().lower()
+    if system == "windows":
+        return "windows"
+    if system == "darwin":
+        return "mac"
+    try:
+        if "microsoft" in Path("/proc/version").read_text(encoding="utf-8", errors="replace").lower():
+            return "wsl"
+    except OSError:
+        pass
+    return "linux"
+
+
+def _settings_file() -> Path:
+    return Path(os.environ.get("EXAKIT_HOME") or Path.home() / ".exasol-starter-kit").expanduser() / "exakit.env"
+
+
+def _terminal_lines(machine: str) -> list[str]:
+    """The lines to type, for one machine. A key is typed into a hidden prompt: never part of a command."""
+    if machine == "windows":
+        hidden = '[Net.NetworkCredential]::new("", (Read-Host "{0}" -AsSecureString)).Password'
+        return [f'$env:{model_config.MODEL_ID} = "{EXAMPLE_MODEL}"',
+                f'$env:{model_config.BASE_URL} = "{EXAMPLE_URL}"',
+                f"$env:{model_config.API_KEY} = " + hidden.format("Model API key"),
+                f'$env:{LANGFUSE_BASE_URL} = "{EXAMPLE_LANGFUSE}"',
+                f"$env:{LANGFUSE_PUBLIC_KEY} = " + hidden.format("Langfuse public key"),
+                f"$env:{LANGFUSE_SECRET_KEY} = " + hidden.format("Langfuse secret key"),
+                "exakit notebook"]
+    hidden = "printf '{0}: '; read -rs {1}; echo; export {1}"
+    return [f'export {model_config.MODEL_ID}="{EXAMPLE_MODEL}"',
+            f'export {model_config.BASE_URL}="{EXAMPLE_URL}"',
+            hidden.format("Model API key", model_config.API_KEY),
+            f'export {LANGFUSE_BASE_URL}="{EXAMPLE_LANGFUSE}"',
+            hidden.format("Langfuse public key", LANGFUSE_PUBLIC_KEY),
+            hidden.format("Langfuse secret key", LANGFUSE_SECRET_KEY),
+            "exakit notebook"]
+
+
+TERMINAL = {"windows": "Windows: in PowerShell", "mac": "Mac: in Terminal", "linux": "Linux: in a terminal",
+            "wsl": "WSL: in the WSL terminal (the Linux one, not PowerShell)"}
+
+
+def model_setup(machine: str | None = None, show: bool = True) -> dict:
+    """What is set for your model and Langfuse, and how to set what is not - here in this kernel, or once for every
+    notebook in the terminal of this machine (Windows, Mac, Linux or WSL), with where the settings file is and what to
+    do next. Prints values, never a key; returns {"machine", "set", "missing", "lines"}."""
+    machine = machine or this_machine()
+    state = {name: bool(os.environ.get(name)) for name in NAMES}
+    lines = ["Your AI model and Langfuse - what this kernel has:"]
+    for name in NAMES:
+        if not state[name]:
+            shown = "not set"
+        elif name in SECRETS:
+            shown = "set (hidden)"
+        else:
+            shown = os.environ[name]
+        lines.append(f"  {name:<26} {shown}")
+    missing = [name for name in NAMES if not state[name]]
+    summary = _model_summary([])
+    lines.append("  " + summary["lines"][0].replace(f" {HOW}", ""))
+    if not missing:
+        lines.append("Everything is set. Nothing to do.")
+    else:
+        lines += ["",
+                  "1. Set them here, in this kernel (gone when it stops) - the cell above does this:",
+                  f'   nb.use_model("{EXAMPLE_MODEL}", "{EXAMPLE_URL}", "{EXAMPLE_LANGFUSE}")',
+                  "   A hidden box asks for each key; Enter skips one. Only the model: leave the Langfuse address out.",
+                  "   A server on your own machine (Ollama): its /v1/ address, and Enter at the key.",
+                  "",
+                  f"2. Or once for every notebook. {TERMINAL[machine]}, type these, then start the notebooks from it:"]
+        lines += ["   " + line for line in _terminal_lines(machine)]
+        lines += ["   Each key goes into a hidden prompt: it is in no command and not in the shell's history.",
+                  "   Already running? exakit notebook stop, then exakit notebook, in that terminal: the server reads",
+                  "   these when it starts, and a kernel restart does not.",
+                  f"   The model's id and address can stay in {_settings_file()} (its {model_config.MODEL_ID} and",
+                  f"   {model_config.BASE_URL} lines, remove the '# '); that file takes no key and no LANGFUSE_* name.",
+                  "",
+                  "Next: run the cell above (nb.use_model) again - it answers in one line - or run this one to check.",
+                  "Set only what you use: no model means the AI steps skip and say so; no Langfuse means no tracing.",
+                  "MODEL-PROVIDERS.md in the notebooks folder lists the providers (Claude, Ollama, LM Studio, vLLM, Gemini)."]
+    if show:
+        print("\n".join(lines))
+    return {"machine": machine, "set": [name for name in NAMES if state[name]], "missing": missing, "lines": lines}
 
 
 def use_mlflow(tracking_uri: str = "", login: bool = False, *, ask: Ask | None = None) -> dict:
