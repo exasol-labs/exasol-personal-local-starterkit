@@ -159,16 +159,31 @@ def choose_addons(addons: list[Addon], states: dict[str, dict], selected: list[s
     return [row.id for row in addons if row.id in selected]
 
 
-def parse_addon_answer(addons: list[Addon], raw: str) -> str:
-    answer = raw.lower().replace(" ", "")
-    if answer in ("all", "none"):
-        return answer
-    parts = answer.split(",")
+def split_ids(raw: str) -> list[str]:
+    """A comma-separated answer as the ids it names: case and spaces do not matter, a repeat counts once, an empty
+    part is kept as "" so the caller can refuse it. The one tokenizer every id answer goes through."""
+    return list(dict.fromkeys(part.strip().lower() for part in (raw or "").split(",")))
+
+
+def parse_ids(raw: str, known: list[str], *, what: str, where: str, all_none: bool = False,
+              unknown: str = "Unknown") -> list[str]:
+    """The ids an answer names, checked: an empty part ("dash-server," - a typo, not a choice) and an unknown id are
+    refused naming the known ones; "all" and "none" stand alone, only where allowed; the order given is kept.
+    Returns ["all"] / ["none"] for those words."""
+    parts = split_ids(raw)
+    if all_none and parts in (["all"], ["none"]):
+        return parts
     if any(not part for part in parts):
-        raise CatalogError("empty add-on ID in EXAKIT_MARKETPLACE_ADDONS")
-    known = {addon.id for addon in addons}
+        raise CatalogError(f"empty {what} ID in {where}")
     for part in parts:
+        if part in ("all", "none") and all_none:
+            raise CatalogError(f"'{part}' stands alone in {where}: it cannot be combined with an {what} ID")
         if part not in known:
-            raise CatalogError(f"Unknown marketplace add-on in EXAKIT_MARKETPLACE_ADDONS: '{part}' "
-                               f"(known: {' '.join(addon.id for addon in addons)})")
-    return ",".join(dict.fromkeys(parts))
+            raise CatalogError(f"{unknown} {what} in {where}: '{part}' (known: {' '.join(known)})")
+    return parts
+
+
+def parse_addon_answer(addons: list[Addon], raw: str) -> str:
+    """EXAKIT_MARKETPLACE_ADDONS as the shells read it: "all", "none" or the ids named, comma-joined."""
+    return ",".join(parse_ids(raw, [addon.id for addon in addons], what="add-on", where="EXAKIT_MARKETPLACE_ADDONS",
+                              all_none=True, unknown="Unknown marketplace"))

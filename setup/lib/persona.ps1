@@ -142,7 +142,8 @@ function Get-ExakitPersonaDatasetHints {
 # installer's own variables are taken.
 function Set-ExakitPersonaAnswers {
     param([string[]]$Lines)
-    $allowed = @("EXAKIT_DATASETS", "EXAKIT_LOAD_SAMPLE", "EXAKIT_MCP_CLIENTS", "EXAKIT_MARKETPLACE_ADDONS", "EXAKIT_NOTEBOOK_FRONTENDS", "EXAKIT_PERSONA")
+    # Twin of _exakit_persona_export in persona.sh: the same names, or Windows answers a question differently.
+    $allowed = @("EXAKIT_DATASETS", "EXAKIT_LOAD_SAMPLE", "EXAKIT_MCP_CLIENTS", "EXAKIT_MARKETPLACE_ADDONS", "EXAKIT_NOTEBOOK_FRONTENDS", "EXAKIT_UDF_LANGUAGE", "EXAKIT_PERSONA")
     foreach ($line in @($Lines)) {
         $parts = "$line" -split '=', 2
         if ($parts.Count -eq 2 -and ($allowed -contains $parts[0])) { Set-Item -Path "env:$($parts[0])" -Value $parts[1] }

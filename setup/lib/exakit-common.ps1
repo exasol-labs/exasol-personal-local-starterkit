@@ -440,8 +440,10 @@ function Set-ExakitAcl {
 # empty credentials/ folder on a kit that had none, which the shell twin never
 # does. Whatever writes later makes its own folder (Set-ExakitCredential,
 # Initialize-ExakitLogging).
+# credentials/ is not made here either: a marketplace browse or a persona refusal left an empty one on
+# Windows where bash left none; Set-ExakitCredential makes it the moment a credential is written.
 if (-not $script:ExakitReadOnlyHelp -and -not $script:ExakitReadOnlyQuery) {
-    New-Item -ItemType Directory -Force -Path $script:ExakitHome, $script:LogDir, $script:CredsDir, $script:BinDir | Out-Null
+    New-Item -ItemType Directory -Force -Path $script:ExakitHome, $script:LogDir, $script:BinDir | Out-Null
 }
 # Best-effort: a home on a network share can refuse Set-Acl outright, and that
 # is not a reason to stop the CLI from running. The files keep their own ACL.
@@ -1157,7 +1159,12 @@ function Deny-ExakitInput {
     Stop-ExakitAnimation
     if (Get-Command Write-ExakitLog -ErrorAction SilentlyContinue) { Write-ExakitLog "REJECT" $Message }
     Write-Host ""
-    if ($script:UiFancy) {
+    # When stdout is not the console (a pipe, an agent reading it) the refusal goes to stderr, as
+    # reject() in common.sh and Fail above do: prose never lands where a program reads the answer.
+    if ([Console]::IsOutputRedirected) {
+        [Console]::Error.WriteLine("")
+        [Console]::Error.WriteLine(("  {0} {1}" -f $script:UiCross, $Message))
+    } elseif ($script:UiFancy) {
         Write-Host ("  {0}{1} {2}{3}{4}" -f $script:UiErr, $script:UiCross, $script:UiBold, $Message, $script:UiReset)
     } else {
         Write-Host ("  {0} {1}" -f $script:UiCross, $Message) -ForegroundColor Red
@@ -6248,7 +6255,8 @@ function Resolve-ExakitMarketplaceAnswer {
             $uv = Install-ExakitUv
             $output = @(& $uv run --python $script:ManagedPythonVersion --no-project python $metadata $root answer $Value 2>&1)
         }
-        if ($LASTEXITCODE -ne 0) { Fail (($output | ForEach-Object { "$_" }) -join ' ') }
+        # Bad input, not a failed install: exit 2 and no .last-failure note, as the shell twin's reject().
+        if ($LASTEXITCODE -ne 0) { Deny-ExakitInput (($output | ForEach-Object { "$_" }) -join ' ') }
         return "$($output[-1])"
     } finally { $ErrorActionPreference = $previousErrorActionPreference }
 }

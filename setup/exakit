@@ -2753,20 +2753,6 @@ cmd_persona() {
             exakit_persona_known "$_cp_id" || reject "$EXAKIT_PERSONA_PROBLEM"
             exakit_persona_plan "$_cp_id" "$_cp_json"
             ;;
-        add|apply)
-            shift
-            _cp_id=""
-            for _cp_arg in "$@"; do
-                case "$_cp_arg" in
-                    --yes|-y) ;;              # nothing is asked: accepted, so old scripts keep working
-                    -*) die "Unknown option for persona add: $_cp_arg (it asks nothing; --yes is accepted)" ;;
-                    *) [ -z "$_cp_id" ] || die "Name the personas once, joined by commas: exakit persona add $_cp_id,$_cp_arg"
-                       _cp_id="$_cp_arg" ;;
-                esac
-            done
-            exakit_persona_known "$_cp_id" || die "$EXAKIT_PERSONA_PROBLEM"
-            exakit_persona_add "$_cp_id"
-            ;;
         remove)
             [ "$#" -eq 2 ] || reject "Name one persona: exakit persona remove <id>"
             case "$2" in -*) reject "Unknown option for persona remove: $2" ;; esac

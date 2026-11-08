@@ -6,10 +6,10 @@ import argparse
 import os
 import subprocess
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
-from runtime import AddonFailure, KitContext, Manifest
+from persona_membership import record
+from runtime import AddonFailure, KitContext
 from persona_services import command_prefix, start_services
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -83,10 +83,9 @@ def main() -> int:
                    runtime_failed=args.runtime_failed, exapump_failed=args.exapump_failed)
     for action, key, value in actions:
         if action == "record":
+            # The question's answer replaces the record (a re-run with the same answer writes nothing).
             home = Path(os.environ.get("EXAKIT_HOME", str(Path.home() / ".exasol-starter-kit")))
-            Manifest(home / "manifest.json").set_many({
-                "persona.id": key, "persona.source": os.environ.get("EXAKIT_PERSONA_SOURCE", "install"),
-                "persona.requested_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")})
+            record(home, key, os.environ.get("EXAKIT_PERSONA_SOURCE", "install"))
         else:
             print("|".join(field.replace("|", "/").replace("\r", " ").replace("\n", " ")
                            for field in (action, key, value)))

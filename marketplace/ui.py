@@ -41,7 +41,7 @@ from textual.app import App, ComposeResult
 from textual.geometry import Size
 from textual.widgets import Static
 
-from model import CatalogError, choose_addons, choose_personas, load_addons, load_personas
+from model import CatalogError, choose_addons, choose_personas, load_addons, load_personas, split_ids
 
 # The shell palette (ui.sh): UI_ACCENT 38;5;35, UI_OK 1;32, UI_ERR 1;31, UI_DIM 2, UI_BOLD 1.
 ACCENT = Style(color="color(35)")
@@ -749,14 +749,14 @@ def main() -> int:
     if args.apply and args.mode != "marketplace":
         parser.error("--apply is only valid for marketplace")
     root = Path(__file__).resolve().parent.parent
-    defaults = {part for part in args.defaults.split(",") if part}
+    defaults = {part for part in split_ids(args.defaults) if part}
     try:
         if args.mode == "persona":
             personas = load_personas(root)
             rows = [{"id": row["id"], "label": row["title"], "detail": row.get("summary", "")}
                     for row in personas]
             if args.recorded:
-                defaults = set(args.recorded.split(","))
+                defaults = {part for part in split_ids(args.recorded) if part}
             elif not defaults:
                 defaults = {row["id"] for row in personas if row.get("default")}
             states = {}
@@ -765,7 +765,7 @@ def main() -> int:
             raw = json.loads(args.states.read_text(encoding="utf-8")) if args.states else {}
             rows = notebook_tools(raw)
             known = {row["id"] for row in rows}
-            defaults = (set(args.recorded.split(",")) if args.recorded else {"jupyterlab"}) & known
+            defaults = ({part for part in split_ids(args.recorded) if part} if args.recorded else {"jupyterlab"}) & known
             if not defaults:
                 defaults = {"jupyterlab"}
             states = {}
@@ -774,13 +774,13 @@ def main() -> int:
             all_addons = load_addons(root)
             addons = [addon for addon in all_addons if addon.visible]
             notebook = next((addon for addon in all_addons if addon.id == "notebook"), None)
-            requested_frontends = {name for name in args.frontends.split(",") if name}
+            requested_frontends = {name for name in split_ids(args.frontends) if name and name != "none"}
             available_frontends = {name for name, _ in notebook.choices} if notebook else set()
             unknown_frontends = requested_frontends - available_frontends
             if unknown_frontends:
                 raise CatalogError(f"unknown notebook choice: {', '.join(sorted(unknown_frontends))}")
             if args.only:
-                only = set(args.only.split(","))
+                only = set(split_ids(args.only))
                 addons = [addon for addon in addons if addon.id in only]
             raw = json.loads(args.states.read_text(encoding="utf-8")) if args.states else {}
             states = {row["id"]: row for row in raw.get("addons", [])}
@@ -802,10 +802,11 @@ def main() -> int:
                              "reason": "Installed" if installed else status,
                              "disabled": status != "available"})
             if args.recorded:
-                defaults = set(args.recorded.split(","))
-            elif not defaults:
+                defaults = {part for part in split_ids(args.recorded) if part}
+            elif not defaults or defaults == {"all"}:
+                # No preselection, or "all" (EXAKIT_MARKETPLACE_PRESELECT=all): every add-on that can be installed.
                 defaults = {row.id for row in addons if states.get(row.id, {}).get("status") == "available"}
-        app = ChoiceApp(args.mode, rows, defaults, set(args.frontends.split(",")),
+        app = ChoiceApp(args.mode, rows, defaults, requested_frontends if args.mode == "marketplace" else set(),
                         apply_selection=args.apply)
         result = app.run(inline=True, inline_no_clear=True)  # never full screen; launch.py keeps Windows out
         if result is None:

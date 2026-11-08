@@ -135,13 +135,10 @@ def _write_launcher(ctx: KitContext) -> Path:
 
 
 def install(ctx: KitContext) -> None:
-    from model import load_addons
-
     if ctx.manifest.get(f"{RECEIPT}.ownership") in ("user", "unknown"):
         return
     ctx.require_uv()
-    default = next(addon.default_version for addon in load_addons(ctx.root) if addon.id == ID)
-    version = ctx.target_version(ID, default)
+    version = _target(ctx)
     venv, home, _ = paths(ctx)
     port = _settle_port(ctx)
     python = venv_python(venv)
@@ -316,9 +313,20 @@ def uninstall(ctx: KitContext, *, dry_run: bool = False) -> list[Path]:
     return targets
 
 
+def _target(ctx: KitContext) -> str:
+    from model import load_addons
+
+    default = next(addon.default_version for addon in load_addons(ctx.root) if addon.id == ID)
+    return ctx.target_version(ID, default)
+
+
 def update(ctx: KitContext) -> None:
     if ctx.manifest.get(f"{RECEIPT}.ownership") != "kit":
         raise AddonFailure("Dash Server is not kit-owned; its owner manages updates")
+    if (package_version(ctx) == _target(ctx) and ctx.manifest.get(f"{RECEIPT}.validated") is not False
+            and os.environ.get("EXAKIT_FORCE_COMPONENT_INSTALL") != "1"):
+        ctx.log_event(f"Dash Server {_target(ctx)} is current; nothing to update")   # a running service is left running
+        return
     was_running = status(ctx) == "running"
     if was_running:
         stop(ctx)

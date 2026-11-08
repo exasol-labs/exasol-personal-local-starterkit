@@ -120,6 +120,13 @@ def _frontends(ctx: KitContext) -> tuple[str, ...]:
         raw = ",".join(defaults)
     if not isinstance(raw, str):
         raise AddonFailure("notebook front_ends receipt is invalid")
+    return normalize_frontends(raw)
+
+
+def normalize_frontends(raw: str) -> tuple[str, ...]:
+    """EXAKIT_NOTEBOOK_FRONTENDS (or the receipt) as the front ends it names, in the kit's order: commas, semicolons
+    or spaces between them, case free, "jupyter" for jupyterlab, "none" for no front end. The one parser for the
+    answer, whichever side reads it (the add-on, the shells through metadata.py, the Textual menu)."""
     selected = [part.lower() for part in re.split(r"[,;\s]+", raw.strip()) if part]
     selected = ["jupyterlab" if part == "jupyter" else part for part in selected]
     if selected == ["none"]:

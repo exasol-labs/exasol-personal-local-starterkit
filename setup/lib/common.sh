@@ -5477,7 +5477,8 @@ EXAKIT_MM_EOF
     # The env answer wins over any menu, so agents and CI never need a TTY.
     if [ -n "${EXAKIT_MARKETPLACE_ADDONS:-}" ]; then
         _mm_root="$(_exakit_marketplace_root)"
-        _mm_answer="$(run_python_any "$_mm_root/marketplace/metadata.py" "$_mm_root" answer "$EXAKIT_MARKETPLACE_ADDONS" 2>&1)" || die "$_mm_answer"
+        # Bad input, not a failed install: reject (exit 2, no .last-failure note), the same on Windows.
+        _mm_answer="$(run_python_any "$_mm_root/marketplace/metadata.py" "$_mm_root" answer "$EXAKIT_MARKETPLACE_ADDONS" 2>&1)" || reject "$_mm_answer"
         _mm_picked=""
         _mm_skipped=0
         case "$_mm_answer" in
@@ -5612,7 +5613,11 @@ EXAKIT_MM_COVERED
     # Do not install preselected rows when the menu could not read Enter.
     if [ "${EXAKIT_TABLE_CONFIRMED:-0}" != 1 ]; then
         _exakit_addon_table_cleanup
-        info "No interactive terminal to confirm a selection — nothing was installed."
+        if [ "${UI_FANCY:-0}" != 1 ]; then
+            info "The menu is off here (no terminal to read keys, or NO_COLOR, TERM=dumb, EXAKIT_NO_FANCY or a non-UTF-8 locale) — nothing was installed."
+        else
+            info "No interactive terminal to confirm a selection — nothing was installed."
+        fi
         info "Pick add-ons without the menu: EXAKIT_MARKETPLACE_ADDONS=<ids|all> exakit marketplace"
         return 0
     fi
@@ -10688,10 +10693,12 @@ exakit_mcp_clients_from_args() {
 }
 
 exakit_parse_mcp_client_selection() {
-    _raw="$(printf '%s' "$1" | tr ',/' '  ' | tr -s ' ')"
+    # Case does not matter ("Claude", "CLAUDE"), nor spaces or a trailing comma: PowerShell's switch is
+    # case-free, so the same answer must be read the same here. ⇄ twin: ConvertTo-McpClientSelection.
+    _raw="$(printf '%s' "$1" | tr 'A-Z' 'a-z' | tr ',/' '  ' | tr -s ' ')"
     case "$_raw" in
         "" ) return 1 ;;
-        all|ALL|All ) printf '%s\n' "claude_desktop,claude_code,cursor,codex,vscode_copilot,gemini_cli,opencode,continue"; return 0 ;;
+        all|" all"|"all "|" all " ) printf '%s\n' "claude_desktop,claude_code,cursor,codex,vscode_copilot,gemini_cli,opencode,continue"; return 0 ;;
     esac
     _result=""
     for _token in $_raw; do

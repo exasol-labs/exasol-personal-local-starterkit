@@ -129,12 +129,12 @@ class ManagedProcess:
         return None
 
     def status(self, port: int) -> str:
-        ours = self.owned_pids(port)
-        if self.recorded_pid() in ours or ours:
+        listening = listener_pids(port)
+        ours = {pid for pid in listening if str(self.marker) in _command(pid)}
+        if ours:
             return "running"
-        foreign = listener_pids(port) - ours
-        if foreign:
-            return f"stopped (port {port} is held by another process: pid {min(foreign)})"
+        if listening:
+            return f"stopped (port {port} is held by another process: pid {min(listening)})"
         if port_open(port):
             # No listener could be listed (lsof/ss missing or too slow) but the port answers: it is
             # ours when the process this record started is still alive.

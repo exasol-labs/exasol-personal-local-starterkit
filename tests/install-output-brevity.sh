@@ -441,7 +441,7 @@ done
 APPLY_PY="$(cat "$ROOT/marketplace/apply.py")"
 has "the hook is resolved by name"   'callable(getattr(module, "summary", None))' "$APPLY_PY"
 has "and only used when it exists"   'invoke(ctx.root, addon_id, "summary", ctx=ctx)' "$APPLY_PY"
-has "the result line carries it"     'emit(Event(addon_id, "done", summary, int(time.monotonic() - started)))' "$APPLY_PY"
+has "the result line carries it"     'emit(Event(addon_id, "done", _summary(ctx, addon_id, module), int(time.monotonic() - started)))' "$APPLY_PY"
 # "Browse again: exakit marketplace · how to use one: exakit help <add-on>"
 # stood here. The table above has just said what was installed and what each
 # gives you, and the closing support line already names `exakit help`.

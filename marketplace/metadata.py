@@ -21,17 +21,17 @@ def notebook_choices(root: Path, kind: str, selected: str = "") -> list[str]:
     from runtime import KitContext, venv_executable
 
     ctx = KitContext.from_environment(root)
-    choices = next((addon.choices for addon in load_addons(root) if addon.id == "notebook"), None)
-    if choices is None:
+    row = next((addon for addon in load_addons(root) if addon.id == "notebook"), None)
+    if row is None:
         raise CatalogError("notebook is missing from marketplace/catalog.json")
-    ids = [key for key, _ in choices]
+    choices, ids = row.choices, [key for key, _ in row.choices]
     # Choices no screen offers (Positron) are still accepted when named.
-    hidden = next((addon.hidden_choices for addon in load_addons(root) if addon.id == "notebook"), ())
+    hidden = row.hidden_choices
     if kind == "notebook-normalize":
-        picked = [part.strip().lower() for part in selected.split(",") if part.strip()]
-        unknown = set(picked) - set(ids) - set(hidden)
-        if unknown:
-            raise CatalogError(f"Unknown notebook choice: {', '.join(sorted(unknown))}")
+        try:
+            picked = notebook.normalize_frontends(selected)
+        except AddonFailure as error:
+            raise CatalogError(f"Unknown notebook choice: {selected.strip()}") from error
         return [",".join(key for key in (*ids, *hidden) if key in picked) or "none"]
     if kind == "notebook-questions":
         return ["JupyterLab - notebooks in the browser with the kit's kernel; yours is used if you have one",

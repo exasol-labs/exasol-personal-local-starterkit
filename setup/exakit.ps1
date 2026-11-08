@@ -2652,20 +2652,6 @@ function Invoke-CmdPersona {
             if (-not (Get-ExakitPersona $id)) { Deny-ExakitInput $script:ExakitPersonaProblem }
             Show-ExakitPersonaPlan -Ids $id -Json:$json
         }
-        { $_ -in @("add", "apply") } {
-            $id = ""
-            foreach ($arg in @($CmdArgs | Select-Object -Skip 1)) {
-                # Nothing is asked: --yes is accepted, so old scripts keep working.
-                if ($arg -in @("--yes", "-y")) { }
-                elseif ($arg.StartsWith("-")) { Fail "Unknown option for persona add: $arg (it asks nothing; --yes is accepted)" }
-                elseif ($id) { Fail "Name the personas once, joined by commas: exakit persona add $id,$arg" }
-                else { $id = $arg }
-            }
-            if (-not (Get-ExakitPersona $id)) { Fail $script:ExakitPersonaProblem }
-            # Not captured: each step's output is its own, straight to the console.
-            Invoke-ExakitPersonaAdd -Ids $id -Cli $PSCommandPath
-            if (-not $script:ExakitPersonaAddOk) { exit 1 }
-        }
         "remove" {
             if ($CmdArgs.Count -ne 2 -or $CmdArgs[1].StartsWith("-")) { Fail "Name one persona: exakit persona remove <id>" }
             $beforeHome = $env:EXAKIT_HOME

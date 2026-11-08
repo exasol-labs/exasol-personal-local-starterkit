@@ -227,7 +227,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # QAT-11: the suites with no shell, signal or file-mode dependency, never run on Windows before.
           foreach ($suite in @('addons', 'apply', 'mlflow', 'pinned_digests', 'process', 'redirect_auth',
-                               'rust_cli', 'workflow', 'wsl_ports', 'ui')) {
+                               'rust_cli', 'workflow', 'wsl_ports', 'ui', 'rules', 'blackbox')) {
             python -m unittest discover -s tests -p "test_marketplace_$suite.py" -v
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }

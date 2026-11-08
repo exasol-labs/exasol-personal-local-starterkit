@@ -12,11 +12,11 @@ import json
 import os
 import subprocess
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 from runtime import AddonFailure, KitContext
 from model import CatalogError, load_addons
+from persona_membership import record
 from persona_services import command_prefix, start_services
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -122,11 +122,13 @@ def apply(ctx: KitContext, requested: str, prefix: list[str], *, live: bool = Fa
                 if item.id in addons and not item.visible and item.id not in installed and item.id not in external]
     if disabled:
         raise CatalogError(f"Add-on '{disabled[0]}' is disabled in marketplace/catalog.json")
-    ctx.manifest.set_many({"persona.id": all_ids, "persona.source": "add",
-                           "persona.requested_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")})
+    _, changed = record(ctx.home, all_ids, "add")   # unchanged ids: nothing written, the install's record stays
     title = " + ".join(item["title"] for item in persona_service.picked(ctx.root, new_ids))
     all_title = " + ".join(item["title"] for item in persona_service.picked(ctx.root, all_ids))
-    print(f"\nAdding persona: {title}" + (f" (now {all_title})" if all_ids != new_ids else ""), flush=True)
+    if not changed:
+        print(f"\nAlready set up as {all_title}: checking what is still pending", flush=True)
+    else:
+        print(f"\nAdding persona: {title}" + (f" (now {all_title})" if all_ids != new_ids else ""), flush=True)
     failures: list[tuple[str, str]] = []
 
     print("Step 1/3  Sample data", flush=True)

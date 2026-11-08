@@ -181,7 +181,11 @@ def _kit_command(ctx: KitContext, *args: str) -> subprocess.CompletedProcess[str
 
 def _restart(ctx: KitContext, commands: list[list[str]], *, yes: bool, reason: str,
              action: Callable[[], None] | None = None) -> None:
-    if not yes and sys.stdin.isatty() and sys.stdout.isatty():
+    if not yes and not (sys.stdin.isatty() and sys.stdout.isatty()):
+        # No one to ask (a scripted run, a notebook, CI): a restart is refused, never taken by default.
+        raise UdfFailure(f"{reason} restarts the database, and there is no terminal to confirm it; "
+                         "run it again with --yes.", 5, "install", "exakit udf-setup --yes")
+    if not yes:
         reply = input(f"{reason} restarts the database. Continue? [Y/n] ").strip().lower()
         if reply not in ("", "y", "yes"):
             raise UdfFailure("The install was not confirmed; nothing changed.", 5, "install")

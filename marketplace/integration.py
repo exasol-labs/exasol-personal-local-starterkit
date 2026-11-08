@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import filecmp
 import os
 import plistlib
 import shlex
@@ -35,7 +36,21 @@ def _skill_roots() -> list[Path]:
     return [Path.home() / ".claude" / "skills", Path.home() / ".agents" / "skills"]
 
 
+def _same_tree(left: Path, right: Path) -> bool:
+    """Two folders with the same files and the same bytes (the skill already placed, unchanged)."""
+    if not (left.is_dir() and right.is_dir()):
+        return False
+    report = filecmp.dircmp(left, right)
+    if report.left_only or report.right_only or report.funny_files:
+        return False
+    if any(not filecmp.cmp(left / name, right / name, shallow=False) for name in report.common_files):
+        return False
+    return all(_same_tree(left / name, right / name) for name in report.common_dirs)
+
+
 def install_addon_skills(ctx: KitContext, addon_id: str) -> list[str]:
+    """Place the add-on's skills in every skill root. A skill already there, byte for byte, is left alone, so a
+    second install writes nothing; a user's own skill of the same name is never replaced."""
     source = ctx.root / "skills"
     if not source.is_dir():
         return []
@@ -52,14 +67,19 @@ def install_addon_skills(ctx: KitContext, addon_id: str) -> list[str]:
         if any((root / folder.name).exists() for root in roots) and folder.name not in recorded:
             ctx.log_event(f"Keeping user skill {folder.name}; marketplace did not replace it")
             continue
+        changed = False
         for root in roots:
             root.mkdir(parents=True, exist_ok=True)
             destination = root / folder.name
+            if _same_tree(folder, destination):
+                continue
             if destination.exists():
                 shutil.rmtree(destination)
             shutil.copytree(folder, destination)
+            changed = True
+        if changed or folder.name not in recorded:
+            copied.append(folder.name)
         recorded.add(folder.name)
-        copied.append(folder.name)
     if copied:
         marker = source / ".version"
         if marker.is_file():
@@ -80,7 +100,21 @@ def _run_quiet(*argv: str) -> bool:
         return False
 
 
+def _write_if_changed(path: Path, content: bytes) -> bool:
+    """Write the login entry only when it differs from what is there: True when it was written."""
+    try:
+        if path.read_bytes() == content:
+            return False
+    except OSError:
+        pass
+    path.write_bytes(content)
+    return True
+
+
 def register_autostart(ctx: KitContext, addon_id: str, module: object) -> bool:
+    """Register the add-on's service to start at login. Idempotent: an entry already there with the same command
+    is neither rewritten nor reloaded (a reload would restart a running service), so a second run changes nothing.
+    Returns True when an entry is in place."""
     command_fn = getattr(module, "autostart_command", None)
     if ctx.manifest.get("autostart.enabled") is not True or not callable(command_fn):
         return False
@@ -100,9 +134,11 @@ def register_autostart(ctx: KitContext, addon_id: str, module: object) -> bool:
         with log.open("a", encoding="utf-8"):
             pass
         log.chmod(0o600)
-        path.write_bytes(plistlib.dumps({"Label": label, "ProgramArguments": argv,
-                                        "RunAtLoad": True, "StandardOutPath": str(log),
-                                        "StandardErrorPath": str(log)}))
+        content = plistlib.dumps({"Label": label, "ProgramArguments": argv, "RunAtLoad": True,
+                                  "StandardOutPath": str(log), "StandardErrorPath": str(log)})
+        if not _write_if_changed(path, content) and _run_quiet("launchctl", "list", label):
+            ctx.log_event(f"Autostart unchanged: {addon_id}")
+            return True
         _run_quiet("launchctl", "unload", str(path))
         if not _run_quiet("launchctl", "load", str(path)):
             raise AddonFailure(f"{addon_id}: launchd refused the login entry; retry with exakit autostart")
@@ -112,7 +148,10 @@ def register_autostart(ctx: KitContext, addon_id: str, module: object) -> bool:
         root = Path(base)
         root.mkdir(parents=True, exist_ok=True)
         line = " ".join(cmd_quote(item) for item in argv)
-        (root / f"{label}.cmd").write_text("@echo off\r\nstart \"\" /min " + line + "\r\n", encoding="ascii")
+        content = ("@echo off\r\nstart \"\" /min " + line + "\r\n").encode("ascii")
+        if not _write_if_changed(root / f"{label}.cmd", content):
+            ctx.log_event(f"Autostart unchanged: {addon_id}")
+            return True
     else:
         root = Path(os.environ.get("EXAKIT_SYSTEMD_USER_DIR", str(Path.home() / ".config/systemd/user")))
         if not _run_quiet("systemctl", "--user", "show-environment"):
@@ -125,9 +164,12 @@ def register_autostart(ctx: KitContext, addon_id: str, module: object) -> bool:
         # systemd's command line uses its own quoted argument syntax.
         command = " ".join('"' + arg.replace('\\', '\\\\').replace('"', '\\"') + '"' for arg in argv)
         path = root / f"{label}.service"
-        path.write_text(f"[Unit]\nDescription=Exasol Starter Kit: {addon_id}\n\n"
-                        f"[Service]\n{service}\nExecStart={command}\n\n"
-                        "[Install]\nWantedBy=default.target\n", encoding="utf-8")
+        content = (f"[Unit]\nDescription=Exasol Starter Kit: {addon_id}\n\n"
+                   f"[Service]\n{service}\nExecStart={command}\n\n"
+                   "[Install]\nWantedBy=default.target\n").encode("utf-8")
+        if not _write_if_changed(path, content) and _run_quiet("systemctl", "--user", "is-enabled", path.name):
+            ctx.log_event(f"Autostart unchanged: {addon_id}")
+            return True
         if not (_run_quiet("systemctl", "--user", "daemon-reload") and
                 _run_quiet("systemctl", "--user", "enable", path.name)):
             raise AddonFailure(f"{addon_id}: systemd could not enable the login entry")

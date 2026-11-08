@@ -49,6 +49,7 @@ function Lacks($label, $needle, $haystack) {
     else { $script:FAIL++; Write-Host "  FAIL $($label): did not expect '$needle' in <$haystack>" }
 }
 function Fail([string]$Msg) { throw "FAIL: $Msg" }
+function Deny-ExakitInput([string]$Message, $Remedy = $null) { throw "REJECT: $Message" }
 function Set-Pending([string[]]$Ids) {
     $script:PendingIds = @($Ids)
 }
@@ -237,7 +238,7 @@ try {
     $out = Market "dash-server"
     Has "nothing applicable: it says so, not 'already present'" "Nothing to install on this machine" $out
     Lacks "...and it is not an error" "THREW" $out
-    Has "an unknown id among them still refuses" "THREW FAIL: Unknown marketplace add-on" (Market "json-tables,not-a-tool")
+    Has "an unknown id among them still refuses" "THREW REJECT: Unknown marketplace add-on" (Market "json-tables,not-a-tool")
     $offer = (Get-Content -Raw (Join-Path $repo "setup/lib/exakit-common.ps1"))
     Has "a persona's all is the whole marketplace, not a filter" 'if ($only -eq "all") {' $offer
 } finally {

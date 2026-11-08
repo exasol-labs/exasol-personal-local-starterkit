@@ -44,6 +44,10 @@ def run(root: Path, args: list[str]) -> int:
     if not warm and (not sys.stdin.isatty() or not sys.stdout.isatty()):
         print("An interactive terminal is required for the persona/marketplace UI.", file=sys.stderr)
         return 10
+    if not warm and os.environ.get("TERM", "").lower() == "dumb":
+        # A terminal that cannot draw: the kit's own plain menus can still ask (11: use them).
+        print("TERM=dumb: the kit's own menus ask instead of the Textual one.", file=sys.stderr)
+        return 11
     script = root / "marketplace" / "ui.py"
     if not script.is_file():
         print("The marketplace UI is missing from this kit copy.", file=sys.stderr)

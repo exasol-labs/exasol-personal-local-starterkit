@@ -55,6 +55,29 @@ Contents:
   report in `exakit version`, pin with
   `EXAKIT_<ID>_VERSION`, and are swept by `exakit uninstall`. Add-ons you never
   picked are never touched by `update all`.
+- **Every answer is read by one parser.** `EXAKIT_MARKETPLACE_ADDONS`,
+  `exakit marketplace a,b`, the menu's preselection and the notebook's
+  front ends all go through `model.parse_ids` / `notebook.normalize_frontends`:
+  case and spaces do not matter, a repeat counts once, `all` and `none` stand
+  alone, and an empty part (`dash-server,`) or an unknown id is bad input -
+  refused with exit 2, no `.last-failure` note, the known ids named - the same
+  on bash and PowerShell.
+- **A second run changes nothing.** `exakit marketplace <id>` for an add-on
+  the kit already has says so and installs nothing; a skill or login entry
+  already in place with the same bytes is neither rewritten nor reloaded (a
+  reload would restart the service); `exakit update <id>` at the target
+  version leaves a running service running; `uninstall <id>` of what is not
+  installed says so and exits 0; `persona add` of a persona already recorded
+  says *Already set up as* and leaves the manifest byte for byte; `persona
+  remove` of one not recorded does the same. `EXAKIT_VERSION_POLICY=latest`
+  asks GitHub or PyPI once per process.
+- **No terminal, no question - and never a hang.** Without a terminal to read
+  keys (CI, a pipe, a closed stdin) the menu prints how to answer with
+  `EXAKIT_MARKETPLACE_ADDONS` and installs nothing; a database restart that a
+  step would need is refused, not taken, when nobody can confirm it (`--yes`
+  confirms). `NO_COLOR`, `TERM=dumb`, `EXAKIT_NO_FANCY=1` or a non-UTF-8
+  locale turn the drawn menu off (the message says which) and never colour a
+  pipe; `TERM=dumb` gets the kit's own plain menus instead of the Textual one.
 
 ---
 
@@ -422,6 +445,17 @@ bash tests/agent-operability.sh
 bash tests/versions-manifest.sh
 bash tests/ps-encoding-guard.sh
 ```
+
+`tests/test_marketplace_rules.py` proves the rules above once each (the parser
+on present, absent and malformed answers; the apply skip; skills and login
+entries left alone; the persona record writer). `tests/test_marketplace_blackbox.py`
+runs the real `exakit` as a subprocess on every entry point the host has (bash,
+`pwsh`, `powershell`), with a timeout on every run: stdin from /dev/null, a pipe
+and closed; `NO_COLOR`, `TERM=dumb`, `EXAKIT_NO_FANCY` and a forced palette
+compared after stripping ANSI; `COLUMNS=60`; every environment answer present,
+absent and malformed; and each command twice for idempotency, asserting that
+bash and PowerShell give the same exit-code class, the same stream and the same
+files. CI runs both on Linux, macOS and Windows PowerShell 5.1.
 
 Run `tests/marketplace-e2e.sh` for the isolated integration path. A live
 database and native Windows/WSL checks are separate.

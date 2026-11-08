@@ -241,6 +241,29 @@ class Manifest:
                     node.pop(parts[-1], None)
 
 
+_LATEST: dict[str, str] = {}
+
+
+def _latest_published(block: dict) -> str:
+    """The newest release of an add-on (GitHub) or package (PyPI) under EXAKIT_VERSION_POLICY=latest: asked once
+    per process, through the same opener every download uses; "" when it cannot be asked."""
+    if block.get("repo"):
+        url, pick = f"https://api.github.com/repos/{block['repo']}/releases/latest", lambda doc: doc.get("tag_name", "")
+    elif block.get("package"):
+        url, pick = f"https://pypi.org/pypi/{block['package']}/json", lambda doc: doc.get("info", {}).get("version")
+    else:
+        return ""
+    if url not in _LATEST:
+        try:
+            with open_url(urllib.request.Request(url), 15) as response:
+                found = pick(json.load(response))
+        except (OSError, ValueError, KeyError):
+            found = ""
+        found = found if isinstance(found, str) else ""
+        _LATEST[url] = found[1:] if found.startswith("v") and block.get("repo") else found
+    return _LATEST[url]
+
+
 def vetted_uv(home: Path, bin_dir: Path) -> str | None:
     """The uv the kit vetted, never merely the first one on PATH, which may be below the version floor the shell
     refuses (exakit_ensure_uv): EXAKIT_UV_BIN, else the path the shell recorded in the manifest
@@ -376,21 +399,9 @@ class KitContext:
         block = versions.get("components", {}).get(addon_id, {})
         pinned = block.get("version")
         if policy == "latest" and addon_id != "json-tables":
-            try:
-                if block.get("repo"):
-                    url = f"https://api.github.com/repos/{block['repo']}/releases/latest"
-                    with urllib.request.urlopen(url, timeout=15) as response:
-                        tag = json.load(response).get("tag_name", "")
-                    if isinstance(tag, str) and tag:
-                        return tag[1:] if tag.startswith("v") else tag
-                elif block.get("package"):
-                    url = f"https://pypi.org/pypi/{block['package']}/json"
-                    with urllib.request.urlopen(url, timeout=15) as response:
-                        latest = json.load(response).get("info", {}).get("version")
-                    if isinstance(latest, str) and latest:
-                        return latest
-            except (OSError, ValueError, KeyError):
-                pass
+            latest = _latest_published(block)
+            if latest:
+                return latest
         return pinned or default
 
     def run_logged(self, label: str, *argv: str, env: dict[str, str] | None = None,
