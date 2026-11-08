@@ -67,7 +67,7 @@ ask takes its default; a choice goes in up front (`nb.exakit("mcp-setup", env={"
   or column name is hard-coded.
 - **One assignment picks the data**: `DATASET = "..."` (`SAMPLE = "..."` in the quickstarts): a dataset id, a
   descriptor, or the user's own CSV, Parquet or JSON file with its `<name>.descriptor.yaml` beside it.
-- **The first cell states the dataset, what must be loaded and the run time.**
+- **The first cell states the dataset and what must be loaded** (no run-time estimate: it depends on the machine and the first download).
 - **No host, user or password** anywhere; the connection comes from the kit's kernel, **Exasol (Starter Kit)**.
 - **Marimo-ready**: each name is assigned in one cell only.
 - **AI is opt-in**: `USE_AI_THEMES = False` in explore, `DRAFT_WITH_MODEL = False` in ask; a model never approves roles.

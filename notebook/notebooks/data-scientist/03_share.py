@@ -9,7 +9,7 @@
 # %% [markdown]
 # # Share the insight and hand it off
 #
-# **Dataset:** the one you approved last (else `amazon_sales`), `walmart_sales`, `fraud_transactions` or your own approved descriptor. **How long:** about five minutes once Dash Server is ready.
+# **Dataset:** the one you approved last (else `amazon_sales`), `walmart_sales`, `fraud_transactions` or your own approved descriptor.
 #
 # **The journey:** 1 Access → 2 Understand → 3 Prepare → 4 Explore → 5 Model → 6 Validate → 7 Ask with AI → **8 Share → 9 Hand off**. **This notebook: steps 8 and 9.**
 #

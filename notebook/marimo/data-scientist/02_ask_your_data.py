@@ -16,7 +16,7 @@ def _(mo):
     mo.md(r"""
     # Ask your data with AI
 
-    **Dataset:** the one you approved last (else `amazon_sales`), `walmart_sales`, `fraud_transactions` or your own approved descriptor. **How long:** about five minutes.
+    **Dataset:** the one you approved last (else `amazon_sales`), `walmart_sales`, `fraud_transactions` or your own approved descriptor.
 
     **The journey:** 1 Access → 2 Understand → 3 Prepare → 4 Explore → 5 Model → 6 Validate → **7 Ask with AI** → 8 Share → 9 Hand off. **This notebook: step 7.**
 

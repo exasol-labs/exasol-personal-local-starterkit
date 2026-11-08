@@ -180,12 +180,16 @@ class CatalogTest(unittest.TestCase):
 
 
 class NotebookShapeTest(unittest.TestCase):
-    def test_the_first_cell_states_the_dataset_and_the_run_time(self):
+    def test_the_first_cell_states_the_dataset_and_no_run_time(self):
+        """The first cell says which dataset; a run-time estimate was dropped from the Data Scientist notebooks (it
+        depends on the machine and the first download, and reads as a promise)."""
         for py in SOURCES.glob("*/*.py"):
             with self.subTest(notebook=py.relative_to(SOURCES).as_posix()):
                 first = "".join(_built_cells(py)[0]["source"])
                 self.assertIn("Dataset:", first)
-                self.assertTrue("How long:" in first or "Run time:" in first, first)
+                if py.parent.name in ("data-scientist", "00_shared"):
+                    self.assertNotIn("How long:", first)
+                    self.assertNotIn("Run time:", first)
 
     def test_both_quickstarts_carry_the_same_shared_cells(self):
         shared = [(c["cell_type"], c["source"]) for c in _built_cells(SOURCES / "00_shared" / "data_paths.py")[1:]]

@@ -16,7 +16,7 @@ def _(mo):
     mo.md(r"""
     # Shared start: connect, load, describe
 
-    **Dataset:** Amazon sales or Walmart sales. **Run time:** about ten minutes on a first load.
+    **Dataset:** Amazon sales or Walmart sales.
 
     Both persona quickstarts include these cells.
     """)

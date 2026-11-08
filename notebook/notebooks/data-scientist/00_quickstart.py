@@ -9,7 +9,7 @@
 # %% [markdown]
 # # Start here: access and understand your data
 #
-# **Dataset:** `amazon_sales` (default), `walmart_sales`, `fraud_transactions` or your own file. **How long:** about ten minutes on the first load.
+# **Dataset:** `amazon_sales` (default), `walmart_sales`, `fraud_transactions` or your own file.
 #
 # **The journey:** 1 Access → 2 Understand → 3 Prepare → 4 Explore → 5 Model → 6 Validate → 7 Ask with AI → 8 Share → 9 Hand off. **This notebook: steps 1 and 2** (and a step 0: the kit itself, from here).
 #
