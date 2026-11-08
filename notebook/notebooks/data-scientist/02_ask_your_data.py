@@ -40,12 +40,13 @@ nb.show_roles(dataset)
 # %% [markdown]
 # ### Your AI model and Langfuse (optional)
 #
-# > **What is this?** Where you tell the notebook which AI model drafts the SQL, and where to record its calls (Langfuse: what was sent, the answer, the cost).
-# > We set it here so you need no terminal: fill in the plain values and run the cell; the keys are asked for in a hidden box.
-# > The keys stay in this notebook's kernel only - never in this file - and are gone when it stops. Left empty, the cell changes nothing and the starter SQL is used.
+# Only the AI steps need this (the SQL draft, with `DRAFT_WITH_MODEL = True`). Skip it and everything else runs.
 #
-# Rather set them for every notebook? Export `EXAKIT_MODEL_ID`, `EXAKIT_PROVIDER_BASE_URL`, `EXAKIT_PROVIDER_API_KEY` and the `LANGFUSE_*` keys in the terminal before `exakit notebook` (the README in the notebooks folder shows how).
-
+# - **Plain values go in the cell:** `MODEL_ID`, `PROVIDER_BASE_URL` (any Chat Completions endpoint: Claude, OpenAI, or Ollama on your own machine - `MODEL-PROVIDERS.md` lists them) and `LANGFUSE_BASE_URL` (where the calls are recorded: what was sent, the answer, the cost).
+# - **Secrets never go in the cell.** When you run it, a hidden box asks for the model's API key and the two Langfuse keys (Enter skips one). They live in this kernel only - not in this file, its outputs or on disk - and are gone when the kernel stops.
+# - **Once for every notebook instead:** export `EXAKIT_MODEL_ID`, `EXAKIT_PROVIDER_BASE_URL`, `EXAKIT_PROVIDER_API_KEY`, `LANGFUSE_BASE_URL`, `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` in the terminal before `exakit notebook`, and leave the cell as it is.
+#
+# The cell answers in one line: which model and whether it has a key, and whether Langfuse is tracing.
 # %%
 MODEL_ID = ""           # e.g. "claude-opus-5-5"; empty: no model (or the one set before `exakit notebook`)
 PROVIDER_BASE_URL = ""  # e.g. "https://api.anthropic.com/v1/" - any Chat Completions endpoint (MODEL-PROVIDERS.md lists more)

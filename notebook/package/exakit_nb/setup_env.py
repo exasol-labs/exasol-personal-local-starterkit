@@ -93,21 +93,22 @@ def _model_summary(notes: list[str]) -> dict:
         problem = None
     if config:
         key = "API key set" if config.api_key else "no API key"
-        model_line = f"model: {config.model_id} at {config.base_url} ({key})"
+        model_line = f"model: {config.model_id} at {config.base_url} ({key})."
     elif problem:
-        model_line = f"model: not usable - {problem}"
+        model_line = f"model: not usable - {problem}."
     else:
-        model_line = "model: off (fill in MODEL_ID and PROVIDER_BASE_URL to use one)"
+        model_line = "model: off, so the AI steps skip."
     missing = [name for name in (LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, LANGFUSE_BASE_URL)
                if not (os.environ.get(name) or (name == LANGFUSE_BASE_URL and os.environ.get("LANGFUSE_HOST")))]
     if not missing:
         base = os.environ.get(LANGFUSE_BASE_URL) or os.environ.get("LANGFUSE_HOST")
-        tracing_line = f"Langfuse: tracing to {base}"
+        tracing_line = f"Langfuse: tracing to {base}."
     elif len(missing) == 3:
-        tracing_line = "Langfuse: off (fill in LANGFUSE_BASE_URL to trace the model calls)"
+        tracing_line = "Langfuse: off."
     else:
-        tracing_line = f"Langfuse: off - {', '.join(missing)} not set"
-    return {"model": bool(config), "tracing": not missing, "lines": [model_line, tracing_line],
+        tracing_line = f"Langfuse: off - {', '.join(missing)} not set."
+    # One line, read at a glance: "model: off, so the AI steps skip. Langfuse: off."
+    return {"model": bool(config), "tracing": not missing, "lines": [f"{model_line} {tracing_line}"],
             "problem": problem, "notes": list(notes)}
 
 

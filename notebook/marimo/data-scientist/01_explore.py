@@ -20,9 +20,9 @@ def _(mo):
 
     **The journey:** 1 Access → 2 Understand → **3 Prepare → 4 Explore → 5 Model → 6 Validate** → 7 Ask with AI → 8 Share → 9 Hand off. **This notebook: steps 3 to 6.**
 
-    Check the data is clean, compare groups and follow outcomes over time, train a small model and find out, honestly, how good it is. Every query is built from the dataset's approved column map, so nothing here names a column: change `DATASET` and every cell follows. A step whose role the data does not have (no date in `fraud_transactions`, no text in any of the three) skips and says why.
+    Four steps, each a heading below: check the data is clean, look at it, train a small model, find out honestly how good it is. Every query is built from the approved column map, so nothing here names a column - change `DATASET` and every cell follows. A step the data cannot do (no date, no text) skips and says why.
 
-    Optional, for data with a text column: `USE_AI_THEMES = True` lets your model say what the label-1 texts are about, traced to Langfuse when it is set up.
+    Everything you set is in the first cell. The AI step at the end is optional and off.
     """)
     return
 
@@ -41,9 +41,13 @@ def _(mo):
     mo.md(r"""
     ## Optional · Your AI model and Langfuse
 
-    > **What is this?** Where you tell the notebook which AI model to use (for the text step at the end), and where to record its calls (Langfuse: what was sent, the answer, the cost).
-    > We set it here so you need no terminal: fill in the plain values and run the cell; the keys are asked for in a hidden box.
-    > The keys stay in this notebook's kernel only - never in this file - and are gone when it stops. Left empty, the cell changes nothing.
+    Only the AI steps need this (the text themes at the end). Skip it and everything else runs.
+
+    - **Plain values go in the cell:** `MODEL_ID`, `PROVIDER_BASE_URL` (any Chat Completions endpoint: Claude, OpenAI, or Ollama on your own machine - `MODEL-PROVIDERS.md` lists them) and `LANGFUSE_BASE_URL` (where the calls are recorded: what was sent, the answer, the cost).
+    - **Secrets never go in the cell.** When you run it, a hidden box asks for the model's API key and the two Langfuse keys (Enter skips one). They live in this kernel only - not in this file, its outputs or on disk - and are gone when the kernel stops.
+    - **Once for every notebook instead:** export `EXAKIT_MODEL_ID`, `EXAKIT_PROVIDER_BASE_URL`, `EXAKIT_PROVIDER_API_KEY`, `LANGFUSE_BASE_URL`, `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY` in the terminal before `exakit notebook`, and leave the cell as it is.
+
+    The cell answers in one line: which model and whether it has a key, and whether Langfuse is tracing.
     """)
     return
 
@@ -64,12 +68,7 @@ def _(mo):
     mo.md(r"""
     ## Step 2, continued · The column map you approved
 
-    > **The column map (descriptor), again:** it says which column is the key, the time, the groups and the outcome (label).
-    > Every query below is built from it, so the same notebook runs on any dataset whose map you approved.
-
-    `DATASET` is a sample ID or a file path with its descriptor beside it. A draft map is enough here.
-
-    Everything you set is in the first cell: run it, then this one. Steps whose roles are missing skip and say why.
+    > **The column map, again:** which column is the key, the time, the groups and the outcome. Every query below is built from it, so this notebook runs on any dataset whose map you approved. A draft map is enough here.
     """)
     return
 
@@ -90,7 +89,7 @@ def _(mo):
     mo.md(r"""
     ## Step 3 · Prepare the data
 
-    > **What happens here?** Three looks at the data before anything is computed from it: is it clean (repeats, gaps, placeholders), does it link to other tables, and are its columns in the types they should be. Each look only *proposes*; the table is never changed, and a cleaned or joined view is created only when you say so in the first cell.
+    > **What happens here?** Three looks before anything is computed: is the data clean, does it link to other tables, are the columns in the right types. Each only *proposes*: the table is never changed, and a cleaned or joined view is created only when you say so in the first cell.
     """)
     return
 
@@ -100,11 +99,9 @@ def _(mo):
     mo.md(r"""
     ### Is the data clean?
 
-    > **Why check first?** A rate or a model is only as good as the rows under it. Repeated ids count twice, empty cells
-    > drop out of averages, a value like "Unknown" poses as a category, and a rare label makes a lazy model look accurate.
-    > This cell finds each of those from the column map, says what it does to a result, and changes nothing.
+    > **Why check first?** A number is only as good as the rows under it: repeated ids count twice, empty cells drop out of averages, "Unknown" poses as a category, a rare label makes a lazy model look accurate. This cell finds each and says what it does to a result. It changes nothing.
 
-    Read each line before trusting a number below. `fraud_transactions` is messy on purpose: it has all of them.
+    `fraud_transactions` is messy on purpose: it has all of them.
     """)
     return
 
@@ -121,11 +118,9 @@ def _(mo):
     mo.md(r"""
     ### Several tables: the schema around it
 
-    > **What is a schema map?** The tables that sit beside this one, and how they link: a column that holds another
-    > table's key (an order's customer number, a customer's country) is a many-to-one link, so following it adds that
-    > table's columns to each row without multiplying rows. The map names each link with its evidence.
+    > **What is a schema map?** The tables beside this one and how they link: a column that holds another table's key (an order's customer number) is a link, and following it adds that table's columns to each row without multiplying rows. Each link comes with its evidence.
 
-    The map below is found from the data: a link the database declares, or a column that names another table's key and whose every value is in it. Correct it with `schema_map.unlink("TABLE.COLUMN")` or `schema_map.link("TABLE.COLUMN", "TABLE.KEY")`.
+    Wrong or missing link? `schema_map.unlink("TABLE.COLUMN")`, `schema_map.link("TABLE.COLUMN", "TABLE.KEY")`.
     """)
     return
 
@@ -140,7 +135,7 @@ def _(connection, loaded_dataset, nb):
 @app.cell(hide_code=True)
 def _(mo):
     mo.md(r"""
-    The joined view: this table with every table its links reach, as one view. Read the joins and the SQL; to use it, set `USE_JOINED = True` in the first cell and run again. The schema map is then approved (its links published for agents), the view is created in `EXAKIT_PREPARED`, gets its own approved column map, and every step below reads it. A table that links nowhere has nothing to join.
+    The joined view: this table plus every table its links reach, as one view. Read the joins and the SQL. To use it, set `USE_JOINED = True` in the first cell and run again: the map is approved, the view created in `EXAKIT_PREPARED` with its own column map, and every step below reads it.
     """)
     return
 
@@ -158,11 +153,9 @@ def _(mo):
     mo.md(r"""
     ### A typed, cleaned view
 
-    > **What is a typed view?** A view over the table with each column in the type its values really have - numbers stored
-    > as text become numbers, dates become dates - blanks and placeholders as NULL, and exact copies dropped.
-    > The table itself is never changed; the view is proposed here, shown with its SQL, and created only when you say so.
+    > **What is a typed view?** The table with each column in the type its values really have - numbers stored as text become numbers, dates become dates - blanks and placeholders as NULL, exact copies dropped. The table itself is never changed.
 
-    Read what would change below. To use it, set `USE_PREPARED = True` in the first cell and run again: the view is created in `EXAKIT_PREPARED`, gets its own approved column map (the same roles), and every step below reads it.
+    Read what would change. To use it, set `USE_PREPARED = True` in the first cell and run again: the view is created in `EXAKIT_PREPARED` with the same roles, and every step below reads it.
     """)
     return
 
@@ -180,7 +173,7 @@ def _(mo):
     mo.md(r"""
     ## Step 4 · Explore
 
-    > **What happens here?** The first real questions: how do the groups compare, and how does the outcome move over time. Each answer is one query, printed before its result, with a note in plain words under it.
+    > **What happens here?** The first real questions: how do the groups compare, and how does the outcome move over time. Each answer is one query, printed before its result, with a plain note under it.
     """)
     return
 
@@ -190,7 +183,7 @@ def _(mo):
     mo.md(r"""
     ### The columns the steps below use
 
-    Each step takes its columns from the column map: a role the data does not have is `None` here, and the steps that need it skip and say why.
+    Each step takes its columns from the column map. A role the data does not have is `None`, and the steps that need it skip and say why.
     """)
     return
 
@@ -331,7 +324,7 @@ def _(mo):
     mo.md(r"""
     ## Step 5 · Train a model to predict
 
-    > **What happens here?** A small model learns to tell label 1 from label 0 from the columns the map names, on this computer, in seconds. First, though, any column that already *knows* the answer is set aside - otherwise the model only learns to read it.
+    > **What happens here?** A small model learns to tell label 1 from label 0 from the columns the map names, on this computer, in seconds. First, any column that already *knows* the answer is set aside, or the model only learns to read it.
     """)
     return
 
@@ -341,9 +334,7 @@ def _(mo):
     mo.md(r"""
     ### Leave out columns that give the answer away
 
-    > **What is leakage?** A column written after the outcome - an order's status once it was cancelled - predicts the
-    > label perfectly and makes any model look brilliant, then fails on new rows where it is not known yet.
-    > This cell flags every column whose values (almost) decide the label on their own; the model below leaves them out.
+    > **What is leakage?** A column written after the outcome - an order's status once it was cancelled - predicts the label perfectly, makes any model look brilliant, then fails on new rows where it is not known yet. This cell flags every such column; the model leaves them out.
     """)
     return
 
@@ -359,11 +350,9 @@ def _(mo):
     mo.md(r"""
     ### Train a small baseline model
 
-    > **What is a baseline model?** The simplest model worth trying, to see how much the data can tell at all.
-    > It learns from most rows and keeps a quarter back, unseen, for the test in the next step.
-    > If it is barely better than guessing there, a bigger model is unlikely to rescue the idea.
+    > **What is a baseline model?** The simplest model worth trying, to see how much the data can tell at all. It learns from most rows and keeps a quarter back, unseen, for the test in step 6. If it is barely better than guessing there, a bigger model will not rescue the idea.
 
-    The model learns from what the column map names: the category, the entity and, when the data has a date, its month (a column the cell above flagged is left out). With a date it uses the newest 20,000 rows; without one, the first 20,000 by the key, so a rerun reads the same rows. It needs a label and a category or entity.
+    It learns from the category, the entity and, with a date, the month (a flagged column is left out): the newest 20,000 rows, or the first 20,000 by the key, so a rerun reads the same rows. Needs a label and a category or entity.
 
     Technical: one-hot features, logistic regression with balanced class weights, a stratified split with a fixed seed.
     """)
@@ -441,7 +430,7 @@ def _(mo):
     mo.md(r"""
     ## Step 6 · Validate
 
-    > **What happens here?** The model is graded on the quarter of rows it never saw, like a test with new questions, and the score is put into words. Then the values it leans on are listed, as clues to check - not as proof.
+    > **What happens here?** The model is graded on the quarter of rows it never saw - a test with new questions - and the score is put into words. Then the values it leans on are listed: clues to check, not proof.
     """)
     return
 
@@ -451,7 +440,7 @@ def _(mo):
     mo.md(r"""
     ### How good is it, honestly
 
-    Runs only when the model above ran. The score is ROC AUC on the held-out quarter: 0.5 is guessing, 1.0 is perfect. The note under it says what that means for this data, and what "always predicting the common answer" would already get right - the baseline a model has to beat.
+    ROC AUC on the held-out quarter: 0.5 is guessing, 1.0 is perfect. The note says what that means here, and what always predicting the common answer would already get right - the baseline to beat.
     """)
     return
 
@@ -481,7 +470,7 @@ def _(mo):
     mo.md(r"""
     ### What it leans on
 
-    Runs only when the model above ran. The values the model leans on most, each way: a category, an entity or a month. They are clues, not proof: a value with few rows can look strong by chance.
+    The values the model leans on most, each way. Clues, not proof: a value with few rows can look strong by chance.
     """)
     return
 
@@ -510,13 +499,9 @@ def _(mo):
     mo.md(r"""
     ## Optional · What the label-1 texts are about (AI)
 
-    Needs a text column: on the three sample datasets (`amazon_sales`, `walmart_sales`, `fraud_transactions`) it skips and says why. Your model reads the newest texts on each side of the label (label `= 1` and `= 0`) and sorts each side into a few themes. A theme found on one side only is the clue. The note under the result says how to read it.
+    Needs a text column (the three sample datasets have none: it skips and says why). Your model reads the newest texts on each side of the label and sorts each side into a few themes; a theme on one side only is the clue.
 
-    To switch it on: fill in the model cell at the top (*Optional · Your AI model and Langfuse*) and run it, then `USE_AI_THEMES = True` in the first cell. Two model calls, a few cents. A live source asks before anything is sent.
-
-    With `LANGFUSE_BASE_URL` filled in there too, both calls are one trace, `explore-themes`, with what was sent, the answer, tokens, cost, time and two scores (`valid_json`, `texts_placed`): run it with another model and compare the two traces.
-
-    Rather set them for every notebook? Export `EXAKIT_MODEL_ID`, `EXAKIT_PROVIDER_BASE_URL`, `EXAKIT_PROVIDER_API_KEY` and the `LANGFUSE_*` keys in the terminal before `exakit notebook` (the README in the notebooks folder shows how).
+    To switch it on: fill in the model cell at the top and run it, then `USE_AI_THEMES = True` in the first cell. Two model calls, a few cents; a live source asks before anything is sent. With `LANGFUSE_BASE_URL` set, both calls are one trace, `explore-themes`, with what was sent, the answer, tokens, cost and two scores (`valid_json`, `texts_placed`).
     """)
     return
 
@@ -562,7 +547,7 @@ def _(mo):
     mo.md(r"""
     ## Next: step 7
 
-    Keep one finding worth validating. Then open `02_ask_your_data.ipynb` to ask the data a question in plain English, with an AI model drafting the SQL if you want one. To rerun this notebook on other data, change `DATASET`.
+    Keep one finding worth checking. Then open `02_ask_your_data.ipynb` and ask the data a question in plain English. Other data: change `DATASET` and run again.
     """)
     return
 
