@@ -299,6 +299,9 @@ class Database(object):
 
 class _Pyexasol(object):
     def __init__(self, dsn, user, password):
+        # pyexasol's usage telemetry stays off unless the user set the
+        # variable, as everywhere else the kit opens it (marketplace/kit_telemetry.py).
+        os.environ.setdefault("EXASOL_TELEMETRY_DISABLE", "1")
         import pyexasol
         import ssl
         try:
