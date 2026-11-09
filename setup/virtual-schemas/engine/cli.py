@@ -27,9 +27,11 @@ and plain ASCII survives every code page.
 
 Without --json, one "OK|INFO|WARN|FAIL <text>" line per event on stdout for
 the shell to render. With --json, events go to stderr and stdout carries one
-JSON object. Exit codes: 0 done, 1 failed, 2 bad input, 3 conflict, 4 no such
-source, 5 gated, 20 Java in the database cannot resolve host names,
-21 Java is not installed in the database, 22 the local database is unreachable.
+JSON object; for plan and connect it always has public_ip (publicip.py), null
+when it is not known or the source is not on the internet. Exit codes: 0 done,
+1 failed, 2 bad input, 3 conflict, 4 no such source, 5 gated, 20 Java in the
+database cannot resolve host names, 21 Java is not installed in the database,
+22 the local database is unreachable.
 """
 
 import argparse
@@ -302,6 +304,10 @@ def main(argv=None):
     if args.json:
         payload = dict(result or {})
         payload.setdefault("ok", code == 0)
+        if args.command in ("plan", "connect"):
+            # Always present for these two: the address a source on the
+            # internet must allow, null when it is not known or not needed.
+            payload.setdefault("public_ip", engine.public_ip() if engine is not None else None)
         print(json.dumps(payload, indent=2, default=str))
     elif result is not None and code == 0:
         print("RESULT " + json.dumps(result, default=str))

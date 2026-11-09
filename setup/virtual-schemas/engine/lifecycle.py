@@ -30,6 +30,7 @@ import sql
 import tlsca
 import keyfile
 import luaadapter
+import publicip
 import tlshelper
 
 PROBE = "EXAKIT_DNS_PROBE_V2"
@@ -87,6 +88,30 @@ def remedy_for(kind, name, connector, message=None):
     if kind == "error" and hint:
         text = "%s; %s" % (hint, text)
     return text
+
+
+# Failures an address filter in front of the source causes: no answer at all (a
+# security group or firewall drops the connection), or a refusal - an S3 bucket
+# policy on aws:SourceIp or an Azure storage firewall answers 403, read as
+# denied. Their remedy names this computer's public IP: the address the source
+# sees, since the database's traffic leaves through this computer.
+ADDRESS_KINDS = ("unreachable", "denied")
+LISTEN_ADVICE = "(a source on this computer must listen beyond 127.0.0.1)"
+
+
+def allow_ip(remedy, kind, ip):
+    """The remedy, naming the public IP to allow; unchanged without one. For a
+    source on the internet the address replaces the advice for one on this
+    computer."""
+    if not ip or kind not in ADDRESS_KINDS:
+        return remedy
+    clause = "allow this computer's public IP %s in its security group, firewall or IP access list" % ip
+    if LISTEN_ADVICE in remedy:
+        return remedy.replace(LISTEN_ADVICE, "(%s)" % clause)
+    head, sep, tail = remedy.rpartition(", then")
+    if not sep:
+        return "%s; if it filters by address, %s" % (remedy, clause)
+    return "%s and, if it filters by address, %s%s%s" % (head, clause, sep, tail)
 
 # Seconds the database clock may be off this computer's before it is named.
 # Measured on Exasol Personal (macOS): the VM's clock does not catch up after
@@ -242,6 +267,23 @@ class Engine(object):
     def close(self):
         if self._db is not None:
             self._db.close()
+
+    # --- this computer's public IP (publicip) ------------------------------------------
+    def egress(self, connector, values, wait=True):
+        """(this computer's public IP, the source's host on the internet) for a
+        source on the internet (planner.public_host); (None, None) for one on
+        this computer or a private network, and the IP None while it is not
+        known. wait=False only starts the lookup."""
+        host = planner.public_host(connector, values)
+        if not host:
+            return None, None
+        self._egress_host = host
+        publicip.start()
+        return (publicip.get() if wait else None), host
+
+    def public_ip(self):
+        """This run's answer for a source on the internet, else None (--json)."""
+        return publicip.get() if getattr(self, "_egress_host", None) else None
 
     def exists(self, kind, *names):
         db = self.db()
@@ -821,7 +863,14 @@ class Engine(object):
         values = planner.validate_inputs(connector, given)
         names = planner.objects(name, connector)
         description = planner.describe(self.defs, connector_id, name, values, self.runtime, self.cache, self.store)
+        # Asked now, in the background: a plan waits for the answer; a connect
+        # only when its result or a network failure's remedy names it.
+        self.egress(connector, values, wait=False)
         if plan_only or dry_run:
+            ip, host = self.egress(connector, values)
+            description["public_ip"] = ip
+            if ip:
+                self.emit("INFO", publicip.advice(ip, host))
             return description
         reconnect = False
         if self.store.exists(name):
@@ -958,6 +1007,8 @@ class Engine(object):
                               "external": "Unity Catalog does not let engines outside Databricks read this schema's files; nothing was kept - switch External Data Access on for the metastore and grant the token's user EXTERNAL USE SCHEMA on the schema (a schema on Databricks Default Storage can never be read from outside), or read it through the SQL warehouse: exakit connect databricks",
                               "managed": "a table here is a Databricks catalog-managed table, which this adapter version cannot read yet; nothing was kept - read it through the SQL warehouse instead: exakit connect databricks",
                               "schema_missing": "the catalog has no such namespace that this credential can see; nothing was kept - check the namespace (and the warehouse), then connect again"}[kind]
+                if kind in ADDRESS_KINDS:
+                    remedy = allow_ip(remedy, kind, self.egress(connector, values)[0])
                 if isinstance(error, Failure):
                     # The kit's own words already say what happened (the route
                     # check); only the driver's raw text needs it restated.
@@ -983,7 +1034,8 @@ class Engine(object):
                                                          "empty_tables": empty}})
             self.store.clear_journal(name)
         return {"name": name, "connector": connector_id, "objects": names, "tables": len(tables), "status": "ready",
-                "example": example_query(names["schema"], tables), "tips": tips(connector, name, names["schema"])}
+                "example": example_query(names["schema"], tables), "tips": tips(connector, name, names["schema"]),
+                "public_ip": self.egress(connector, values)[0]}
 
     def recover_interrupted(self, name, names):
         """Undo what an interrupted first connect recorded in its journal."""
@@ -1066,6 +1118,8 @@ class Engine(object):
                 remedy = "%s; then: exakit source check %s" % (specific.replace(
                     "give it with --set ca=<file>", "reconnect with it: exakit source disconnect %s --yes, then "
                     "exakit connect %s --name %s --set ca=<file>" % (name, config["connector"], name)), name)
+            if kind in ADDRESS_KINDS:
+                remedy = allow_ip(remedy, kind, self.egress(connector, config["inputs"])[0])
             # Said here, not only in the result: a failed check exits 1, and
             # the reason has to reach a reader who gets no RESULT line.
             self.emit("FAIL", "%s is %s: %s" % (name, status, error))

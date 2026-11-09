@@ -319,6 +319,48 @@ def source_host(connector, values):
         return ""
 
 
+def reached_hosts(connector, values):
+    """Every host a source is reached at, as given: its host (a template's, or
+    the host of the URL input it names), the host of any other URL input (a
+    storage endpoint) and each host of a MongoDB URI. Empty when it names none."""
+    hosts = [source_host(connector, values)]
+    for spec in connector.get("inputs", []):
+        raw = str(values.get(spec["name"]) or "")
+        if not raw:
+            continue
+        if spec["kind"] in URL_KINDS:
+            m = URL.match(raw)
+            if m:
+                hosts.append(m.group(2))
+        elif spec["kind"] == "mongodb-uri":
+            for item in raw.split("://", 1)[-1].split("/", 1)[0].split(","):
+                hosts.append(item[1:item.find("]")] if item.startswith("[") else item.split(":", 1)[0])
+    seen = []
+    for host in hosts:
+        host = host.strip("[]")
+        if host and host not in seen:
+            seen.append(host)
+    return seen
+
+
+def public_host(connector, values):
+    """The first host of this source that is on the internet, or None when every
+    one is this computer or a private network (host_scope). A source on the
+    internet sees the database's traffic come from this computer's public IP, so
+    that is the address its firewall or IP access list must allow.
+
+    One rule for every connector, read from its connector.json: the hosts a
+    host-based source names, and the fixed host a cloud store's template builds
+    (S3, Azure, Snowflake, BigQuery, Glue) - all public. An Iceberg REST catalog
+    or an S3-compatible endpoint on this computer or a private network is not;
+    one with no endpoint is judged by its catalog alone, since the storage it
+    vends is not known before it is asked."""
+    for host in reached_hosts(connector, values):
+        if host_scope(host) == "public":
+            return host
+    return None
+
+
 def source_port(connector, values):
     if connector.get("host_from"):
         m = URL.match(str(values.get(connector["host_from"], "")))

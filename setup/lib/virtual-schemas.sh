@@ -807,8 +807,9 @@ _exakit_vs_tui() {
     _evt_all=""; _evt_i=0
     while [ "$_evt_i" -lt "$_EVT_COUNT" ]; do _evt_all="$_evt_all $_evt_i"; _evt_i=$(( _evt_i + 1 )); done
 
-    # 3. review: what each plan downloads and who can read the result, above one
-    # table of the sources and one question
+    # 3. review: what each plan downloads and who can read the result, then the
+    # plan's own INFO lines (a source on the internet: the public IP it must
+    # allow), above one table of the sources and one question
     for _evt_i in $_evt_all; do
         _exakit_vs_result "$_EVT_DIR/plan.$_evt_i" | run_python_any -c 'import json, sys
 p = json.load(sys.stdin)
@@ -820,6 +821,8 @@ for w in p["warnings"]:
     print("WARN %s: %s" % (p["name"], w))
 if p.get("exposure"):
     print("INFO %s: %s" % (p["name"], p["exposure"][0].upper() + p["exposure"][1:]))' > "$_EVT_DIR/review" 2>/dev/null
+        # The name is [a-z0-9_] (the form checked it), safe in a sed replacement.
+        sed -n "s/^INFO /INFO ${_EVT_S_NAME[$_evt_i]}: /p" "$_EVT_DIR/plan.$_evt_i" >> "$_EVT_DIR/review"
         _exakit_vs_render "$_EVT_DIR/review"
     done
     _evt_state="$_EVT_DIR/sources"

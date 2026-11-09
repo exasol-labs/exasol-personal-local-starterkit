@@ -721,6 +721,19 @@ has "with the target table" "EXAKIT_DATA_TABLE" \
     "$(sed -n '/^function Import-ExakitLocalFile/,/^}/p' "$ROOT/setup/lib/exapump.ps1")"
 has "the catalog documents EXAKIT_DATA_FILE" "EXAKIT_DATA_FILE" "$(cat "$ROOT/setup/help/exakit.json")"
 has "and EXAKIT_DATA_TABLE" "EXAKIT_DATA_TABLE" "$(cat "$ROOT/setup/help/exakit.json")"
+
+echo "connect's public IP lookup has a documented off switch and a fixed JSON key:"
+# exakit connect asks checkip.amazonaws.com for this computer's public IP when a
+# source is on the internet. An agent on a locked-down network must be able to
+# find the switch that stops it, and read the answer by one key.
+has "the engine reads EXAKIT_NO_IP_LOOKUP" "EXAKIT_NO_IP_LOOKUP" \
+    "$(cat "$ROOT/setup/virtual-schemas/engine/publicip.py")"
+check "the catalog documents it (global list and connect's own)" "2" \
+    "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(sum("EXAKIT_NO_IP_LOOKUP" in json.dumps(x) for x in [d["environment"], [c for c in d["commands"] if c["command"] == "connect"][0]]))' "$ROOT/setup/help/exakit.json")"
+has "connect's help names the --json key" "public_ip" \
+    "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print([c for c in d["commands"] if c["command"] == "connect"][0]["description"])' "$ROOT/setup/help/exakit.json")"
+has "plan and connect --json always carry it" 'payload.setdefault("public_ip"' \
+    "$(cat "$ROOT/setup/virtual-schemas/engine/cli.py")"
 # The runbook must stop steering agents away from data-load: that sentence
 # described the prompt-only behaviour this contract replaces.
 lacks "AGENTS.md no longer routes agents around data-load" \

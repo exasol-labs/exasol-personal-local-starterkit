@@ -564,8 +564,11 @@ function Invoke-ExakitVsTuiForm {
         foreach ($f in $fields) { $f.Done = $false }
         $pwFile = ""
     }
+    # The plan's own INFO lines (a source on the internet: the public IP it must
+    # allow) are said in the review, as the line-by-line path says them.
+    $planInfo = @(@($planned.Lines) | Where-Object { $_ -like "INFO *" } | ForEach-Object { $_.Substring(5) })
     $src = @{ Id = $Connector; Label = "" + $doc.name; Base = $base; Plan = (Get-ExakitVsResultOf $planned.Lines)
-              Name = ""; Secret = ""; SecretFile = ""; Where = "" }
+              PlanInfo = $planInfo; Name = ""; Secret = ""; SecretFile = ""; Where = "" }
     foreach ($f in $fields) {
         if ($f.Kind -eq "source-name") { $src.Name = $f.Val }
         elseif ($f.Kind -eq "secret") { $src.Secret = $f.Val }
@@ -699,8 +702,8 @@ function Invoke-ExakitVsTui {
         $taken += $src.Name
     }
     if ($sources.Count -eq 0) { Info "Nothing was changed."; return 5 }
-    # 3. review: what each plan downloads and who can read the result, above one
-    # table and one question
+    # 3. review: what each plan downloads and who can read the result, then the
+    # plan's own INFO lines, above one table and one question
     foreach ($s in $sources) {
         $plan = $s.Plan
         if ($null -eq $plan) { continue }
@@ -711,6 +714,7 @@ function Invoke-ExakitVsTui {
         }
         foreach ($warning in @($plan.warnings)) { if ($warning) { Warn2 ("{0}: {1}" -f $plan.name, $warning) } }
         if ($plan.exposure) { Info ("{0}: {1}" -f $plan.name, ($plan.exposure.Substring(0, 1).ToUpperInvariant() + $plan.exposure.Substring(1))) }
+        foreach ($note in @($s.PlanInfo)) { if ($note) { Info ("{0}: {1}" -f $plan.name, $note) } }
     }
     $plural = "s"; if ($sources.Count -eq 1) { $plural = "" }
     $t = New-ExakitVsTuiTable -Title ("Connect {0} source{1}" -f $sources.Count, $plural) -Sources $sources
