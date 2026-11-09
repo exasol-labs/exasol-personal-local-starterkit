@@ -25,7 +25,7 @@
     "It is tested in one session before it becomes the database default.",
     "A preprocessor you set up yourself is left alone and reported.",
     "exakit update now finishes setup that only the installer can do.",
-    "From 0.2.2, run exakit update twice; from here on, once is enough.",
+    "From 0.2.2, run exakit update twice; then once is usually enough.",
     "exakit connect: query PostgreSQL, MySQL, SQL Server, Oracle live."
   ],
   "0.2.4": [
