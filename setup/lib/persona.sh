@@ -234,7 +234,7 @@ exakit_persona_data() {
 # offer the closing lines already name the marketplace: no second pointer.)
 exakit_persona_marketplace_note() {
     [ -n "${EXAKIT_PERSONA_ACTIVE:-}" ] && [ -n "${EXAKIT_MARKETPLACE_PRESELECT:-}" ] || return 0
-    info "More for any persona in the marketplace: exakit marketplace (dashboards, notebooks, dbt, the scheduler, Python UDFs, JSON tables)"
+    info "Add more useful add-ons, like dashboards, notebooks, dbt, the scheduler or JSON tables: \"exakit marketplace\" (terminal or PowerShell)"
 }
 
 # exakit_persona_plan <ids> <json 0|1> — what these personas bring and what of

@@ -310,7 +310,7 @@ function Invoke-ExakitPersonaData {
 # exakit_persona_marketplace_note.
 function Write-ExakitPersonaMarketplaceNote {
     if (-not $env:EXAKIT_PERSONA_ACTIVE -or -not $env:EXAKIT_MARKETPLACE_PRESELECT) { return }
-    Info "More for any persona in the marketplace: exakit marketplace (dashboards, notebooks, dbt, the scheduler, Python UDFs, JSON tables)"
+    Info "Add more useful add-ons, like dashboards, notebooks, dbt, the scheduler or JSON tables: `"exakit marketplace`" (terminal or PowerShell)"
 }
 
 # Show-ExakitPersonaPlan - what these personas bring and what of it is still
