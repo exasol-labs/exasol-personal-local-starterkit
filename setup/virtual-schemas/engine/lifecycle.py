@@ -213,6 +213,56 @@ def example_query(schema, tables):
     return "SELECT * FROM %s.%s LIMIT 10" % (schema, shown)
 
 
+def source_where(connector, values):
+    """Where a source lives, for its listing: the host it is reached at (a cloud
+    store's names its bucket, account or workspace), or the connector's "where"
+    when every source of its kind shares one API host (BigQuery: the project).
+    The host input as given when the connector's definition is gone."""
+    if not connector:
+        return str(values.get("host") or "")
+    if connector.get("where"):
+        try:
+            return connector["where"].format(**values)
+        except KeyError:
+            return ""
+    hosts = planner.reached_hosts(connector, values)
+    return hosts[0] if hosts else ""
+
+
+# MongoDB URI options that keep TLS on but stop the certificate or host check.
+MONGO_UNCHECKED = ("tlsinsecure", "tlsallowinvalidcertificates", "tlsallowinvalidhostnames")
+
+
+def tls_level(connector, values):
+    """A source's TLS in the tls input's words: verify, require or disable; None
+    when the connector's definition is gone. A connector without that input:
+    a MongoDB URI says it (mongodb+srv:// is TLS unless tls=false, and
+    tlsInsecure and its kin encrypt without checking), an http:// URL input is
+    disable, and every other one reaches its source over HTTPS or TLS only,
+    the certificate checked."""
+    if not connector:
+        return None
+    for spec in connector.get("inputs", []):
+        if spec["name"] == "tls":
+            return values.get("tls") or spec.get("default") or "verify"
+    for spec in connector.get("inputs", []):
+        if spec["kind"] != "mongodb-uri":
+            continue
+        uri = str(values.get(spec["name"]) or "")
+        options = {}
+        for segment in uri.partition("?")[2].split("&"):
+            key, _, value = segment.partition("=")
+            options[key.strip().lower()] = value.strip().lower()
+        on = uri.lower().startswith("mongodb+srv://")
+        for key in ("ssl", "tls"):  # tls, the current spelling, wins
+            if key in options:
+                on = options[key] == "true"
+        if not on:
+            return "disable"
+        return "require" if any(options.get(key) == "true" for key in MONGO_UNCHECKED) else "verify"
+    return "disable" if planner.plain_http(connector, values) else "verify"
+
+
 class Failure(Exception):
     """A failure the engine names. str() is what happened; kind is its class;
     remedy the fix in words and command the one exakit command that is the
@@ -1700,13 +1750,21 @@ class Engine(object):
             folder = os.path.dirname(folder)
 
     def listing(self):
+        """One row a source. host is where it lives (source_where), tls its TLS
+        level (tls_level: null when its connector is no longer defined)."""
         rows = []
         for name in self.store.names():
             config = self.store.config(name)
             status = self.store.status(name)
+            try:
+                connector = self.defs.connector(config["connector"])
+            except (OSError, ValueError, planner.PlanError):
+                connector = None
+            values = config.get("inputs") or {}
             rows.append({"name": name, "connector": config["connector"], "schema": config["objects"]["schema"],
                          "status": status.get("status", "unknown"), "last_check": status.get("last_check"),
-                         "needs_refresh": bool(status.get("needs_refresh"))})
+                         "needs_refresh": bool(status.get("needs_refresh")),
+                         "host": source_where(connector, values), "tls": tls_level(connector, values)})
         return rows
 
     def show(self, name):

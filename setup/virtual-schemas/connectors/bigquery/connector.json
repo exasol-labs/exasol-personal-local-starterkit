@@ -53,6 +53,7 @@
   "secret_as_file": true,
   "auth_hint": "a service-account sign-in is a token dated by the database's clock, so a clock that is off reads as a refused key - if exakit status shows it behind, restart the database; otherwise the key may be deleted or disabled in Google Cloud",
   "host": "www.googleapis.com",
+  "where": "{project}",
   "url": "jdbc:bigquery://https://www.googleapis.com/bigquery/v2:443;ProjectId={project};OAuthType=0;OAuthServiceAcctEmail={sa_email};OAuthPvtKeyPath={key_path}",
   "tls": null,
   "access": "BigQuery Job User on the project and BigQuery Data Viewer on the dataset",

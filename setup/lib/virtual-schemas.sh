@@ -1746,16 +1746,41 @@ for t in r["tables"]:
     print("")' 2>/dev/null
         _exakit_vs_exit "$_cs_rc"
     fi
+    # The sources (list, issues) are one table inside the terminal (argv[1], its
+    # width; the last column left unwritten). Too wide, SCHEMA goes first - it is
+    # always VS_<NAME> - then LAST CHECK (exakit source show has it), then HOST
+    # is cut, never below 10. An issue's fix goes on its own line under its row.
+    # Twin of the rows block in Invoke-CmdSource (exakit.ps1).
     [ -n "$EXAKIT_VS_RESULT" ] && printf '%s' "$EXAKIT_VS_RESULT" | run_python_any -c 'import json, sys
 r = json.load(sys.stdin)
 rows = r["sources"] if "sources" in r else r.get("issues")
 if rows is not None:
     if not rows:
         print("  (none)")
+    heads = ["NAME", "SOURCE", "SCHEMA", "HOST", "TLS", "STATUS", "LAST CHECK"]
+    cells = []
     for s in rows:
-        last = (s.get("last_check") or {})
-        print("  %-16s %-11s %-14s %-14s %s" % (s["name"], s["connector"], s["schema"], s["status"],
-              (last.get("at") or "never checked") + ((" - " + s["remedy"]) if s.get("remedy") else "")))
+        at = (s.get("last_check") or {}).get("at") or ""
+        cells.append([s["name"], s["connector"], s["schema"], s.get("host") or "-", s.get("tls") or "n/a",
+                      s["status"], at[:16].replace("T", " ") or "never"])
+    width = [max([len(h)] + [len(c[i]) for c in cells]) for i, h in enumerate(heads)]
+    shown = [0, 1, 2, 3, 4, 5, 6]
+    room = (int(sys.argv[1]) if sys.argv[1:] and sys.argv[1].isdigit() else 80) - 1
+    for i in (2, 6):
+        if 2 * len(shown) + sum(width[j] for j in shown) > room:
+            shown.remove(i)
+    over = 2 * len(shown) + sum(width[j] for j in shown) - room
+    if over > 0:
+        width[3] = max(10, width[3] - over)
+    def line(c):
+        out = [(c[j] if len(c[j]) <= width[j] else c[j][:width[j] - 3] + "...").ljust(width[j]) for j in shown]
+        return ("  " + "  ".join(out)).rstrip()
+    if rows:
+        print(line(heads))
+    for s, c in zip(rows, cells):
+        print(line(c))
+        if s.get("remedy"):
+            print("    fix: " + s["remedy"])
 elif "connectors" in r:
     for c in r["connectors"]:
         print("  %-12s %-18s %-5s %-10s aliases: %s" % (c["id"], c["name"], c["tier"], c["status"], ", ".join(c.get("aliases", []))))
@@ -1776,6 +1801,6 @@ else:
         if r.get(k) not in (None, "", {}):
             print("  %-11s %s" % (k, json.dumps(r[k]) if isinstance(r[k], (dict, list)) else r[k]))
     for i, t in enumerate(r.get("tips") or []):
-        print("  %-11s %s" % ("tips" if i == 0 else "", t))' 2>/dev/null
+        print("  %-11s %s" % ("tips" if i == 0 else "", t))' "$(_ui_term_cols 2>/dev/null || echo 80)" 2>/dev/null
     _exakit_vs_exit "$_cs_rc"
 }

@@ -83,7 +83,7 @@
     "The URI carries no credentials: the user and password go into the CONNECTION, where the database keeps them hidden; a URI with user:password@ is refused. Atlas mongodb+srv:// addresses resolve from inside the database (measured).",
     "Needs the Rust language container (exasol-labs/language-container-rs 0.33.0, pinned per CPU architecture): exakit connect installs it with your consent and restarts the database once.",
     "The adapter needs only MongoDB's find permission on the collection (read on the database).",
-    "The adapter always signs in against the admin database: it gives the CONNECTION's user and password as the credential, which replaces any authSource in the URI. Keep authSource=admin so the URI says the same, and make the reader a user of admin (an Atlas database user always is).",
+    "The adapter always signs in against the admin database: it gives the CONNECTION's user and password as the credential, which replaces any authSource in the URI, so a URI or connection string with another authSource is refused. Keep authSource=admin (or leave it out) so the URI says the same, and make the reader a user of admin (an Atlas database user always is).",
     "Atlas answers only addresses in the project's IP access list: add this computer's public IP as a permanent entry. A temporary entry stops the source when it expires."
   ]
 }
