@@ -2953,7 +2953,16 @@ function Write-ExakitUpdateJsonReport {
     param([bool]$RunFailed = $false, [string]$RunError = "")
     $updated = @(); $deferred = @(); $blocked = @(); $current = @()
     $skipped = @(); $ahead = @(); $failed = @()
+    $runRow = $null
     foreach ($row in @($script:ExakitUpdateResults)) {
+        # A row with no component is a run-level failure: a handed-over run's
+        # own reason for ending outside every component row (see
+        # Invoke-CmdUpdate). It stands in for the anonymous run entry below,
+        # and like that entry only when no component row failed.
+        if (-not $row.component) {
+            if ($row.outcome -eq "failed" -and $null -eq $runRow) { $runRow = $row }
+            continue
+        }
         $entry = [ordered]@{ component = $row.component }
         $entry.from = $(if ($row.from) { $row.from } else { $null })
         $entry.to = $(if ($row.to) { $row.to } else { $null })
@@ -2970,7 +2979,13 @@ function Write-ExakitUpdateJsonReport {
             "failed"   { $failed += [pscustomobject]$entry }
         }
     }
-    if ($RunFailed -and $failed.Count -eq 0) {
+    if ($failed.Count -eq 0 -and $null -ne $runRow) {
+        $runEntry = [ordered]@{ component = $null; from = $null; to = $null
+            remedy = $(if ($runRow.remedy) { $runRow.remedy } else { "exakit update" })
+            error = $(if ($runRow.error) { $runRow.error } else { "the update did not finish (see exakit logs)" }) }
+        if ($runRow.hint) { $runEntry.remedy_hint = $runRow.hint }
+        $failed += [pscustomobject]$runEntry
+    } elseif ($RunFailed -and $failed.Count -eq 0) {
         $msg = $(if ($RunError) { $RunError } else { "the update did not finish (see exakit logs)" })
         $runFix = Get-ExakitUpdateFailureRemedy -Component "" -Reason $RunError
         $runEntry = [ordered]@{ component = $null; from = $null; to = $null; remedy = $runFix.Remedy; error = $msg }
@@ -3063,6 +3078,20 @@ function Invoke-CmdUpdate {
     } catch {
         $runFailed = $true
         $runError = "" + $_.Exception.Message
+        # A HANDED-OVER RUN'S REASON GOES BACK TO THE RUN THAT STARTED IT. Its
+        # own object is discarded with its screen, so a failure outside every
+        # component row (a Fail in the run body, a throw from the new-setup
+        # check) is written to the parent's results file as a run-level row:
+        # no component, the reason, and the remedy and hint THAT reason calls
+        # for. The parent used to answer only "the updated kit's update run did
+        # not finish". No component is also what keeps older parents safe:
+        # every reader before this one skips a row without one. Bash needs no
+        # row: its parent reads the failure note the new run's die() left
+        # (_exakit_update_note_end).
+        if ($runError -and $env:EXAKIT_UPDATE_HANDOVER -eq "1" -and $env:EXAKIT_UPDATE_RESULTS_FILE) {
+            $runFix = Get-ExakitUpdateFailureRemedy -Component "" -Reason $runError
+            Add-ExakitUpdateNote -Component "" -Outcome "failed" -Remedy $runFix.Remedy -ErrorText $runError -Hint $runFix.Hint
+        }
     }
     Write-ExakitUpdateJsonReport -RunFailed $runFailed -RunError $runError
 }

@@ -343,6 +343,96 @@ Check "only the kit was updated: nothing ran after it, no new-setup check" "exak
 Check "...the next component is deferred to the next run" "pyexasol:exakit update" (@($swapJson.deferred | ForEach-Object { "$($_.component):$($_.remedy)" }) -join ";")
 Check "...and the run says so" "deferred|the starter kit itself was updated; run 'exakit update' again so the rest is updated by the new kit" ("$($swapJson.status)|$($swapJson.remedy_hint)")
 
+# A HANDED-OVER RUN THAT FAILS OUTSIDE EVERY ROW - a Fail in the run body, or a
+# throw from the new-setup check - still names its reason in the ONE object
+# the parent prints. The new run's own object is discarded with its screen, so
+# the reason travels as a run-level row (no component) in the results file;
+# the parent used to answer only "the updated kit's update run did not finish
+# (exit 1)" with remedy "exakit update". The REAL Invoke-CmdUpdate on both
+# sides and the REAL Invoke-ExakitUpdateHandover between them: an in-place kit
+# swap, `exakit update --json`, and a new kit whose new-setup check fails.
+Write-Host ""
+Write-Host "== a handed-over run that fails outside every row: the parent names the reason =="
+$hoHome = Join-Path $work "handover-home"
+$hoSetup = Join-Path $hoHome (Join-Path "kit" "setup")
+New-Item -ItemType Directory -Force -Path $hoSetup | Out-Null
+$hoCalls = Join-Path $work "handover-run-calls"
+$hoReason = "The database could not start: this WSL kernel cannot create the deployment network. Run: wsl --update"
+$hoPreamble = @'
+. (Join-Path '__REPO__' "setup/lib/exakit-common.ps1") *> $null
+$ast = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path '__REPO__' "setup/exakit.ps1"), [ref]$null, [ref]$null)
+foreach ($f in $ast.FindAll({ param($n) $n -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $n.Parent.Parent -eq $ast }, $true)) { . ([scriptblock]::Create($f.Extent.Text)) }
+. (Join-Path '__REPO__' "setup/lib/core-setup.ps1")
+$script:VersionPolicy = "pinned"
+function Assert-ExakitInstalled { param([switch]$Json) }
+function Initialize-ExakitLogging { }
+function Test-ExakitUpdateTarget { param($t) return $true }
+function Get-ExakitUpdateTargets { param([string]$Target) return @("exakit") }
+function Get-ExakitActualTarget { param($c) return $c }
+function Get-ExakitComponentCurrent { param($c) return "1.0" }
+function Get-ExakitComponentAvailable { param($c) return "2.0" }
+function Test-ExakitComponentSupported { param($c) return $true }
+function Test-ExakitComponentAhead { param($c) return $false }
+function Test-ExakitComponentHeavy { param($c) return $false }
+function Get-ExakitComponentMinKit { param($c) return "" }
+function Write-ExakitVersionsSourceLine { }
+function Invoke-ExakitWithSpinner { param([string]$Label, [scriptblock]$Body) & $Body }
+function Get-ExakitManifestValue { param([string]$Path) if ($Path -eq "kit.version") { return "2.0" }; return $null }
+
+'@
+$hoPreamble = $hoPreamble.Replace("__REPO__", $repo)
+# The new kit: the handed-over run skips the kit itself, so no component row
+# is written before its new-setup check fails.
+$hoNew = $hoPreamble + @'
+function Invoke-ExakitCoreUpdateCheck { param([string]$Target) Add-Content -LiteralPath '__CALLS__' -Value "new: core-check"; Fail '__REASON__' }
+Invoke-CmdUpdate -Target $args[1] -AssumeYes ($args -contains "--yes") -Json ($args -contains "--json")
+'@
+Set-Content -LiteralPath (Join-Path $hoSetup "exakit.ps1") -Encoding ASCII -Value $hoNew.Replace("__CALLS__", $hoCalls).Replace("__REASON__", $hoReason)
+# The old kit: it swaps itself in place, then hands the rest of the run over.
+$hoOld = $hoPreamble + @'
+function Update-ExakitSelf { param($Advertised, $Installed) Add-Content -LiteralPath '__CALLS__' -Value "old: exakit" }
+function Invoke-ExakitCoreUpdateCheck { param([string]$Target) Add-Content -LiteralPath '__CALLS__' -Value "old: core-check"; return $true }
+Invoke-CmdUpdate -Target "all" -AssumeYes $false -Json $true
+'@
+$hoParent = Join-Path $work "handover-parent.ps1"
+Set-Content -LiteralPath $hoParent -Encoding ASCII -Value $hoOld.Replace("__CALLS__", $hoCalls)
+Remove-Item -Force -LiteralPath $hoCalls -ErrorAction SilentlyContinue
+$savedHome = $env:EXAKIT_HOME
+$env:EXAKIT_HOME = $hoHome
+# A Continue window: on 5.1 a native call with redirected stderr under Stop
+# is a terminating error before its output is read.
+$eapHo = $ErrorActionPreference; $ErrorActionPreference = "Continue"
+$hoOut = (& ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -File $hoParent 2>$null) -join "`n"
+$hoCode = $LASTEXITCODE
+$ErrorActionPreference = $eapHo
+$hoJson = $null
+try { $hoJson = $hoOut | ConvertFrom-Json } catch { }
+Check "the old kit swapped itself and handed over; the new kit's check ran, the old one's did not" "old: exakit|new: core-check" (@(Get-Content -LiteralPath $hoCalls -ErrorAction SilentlyContinue) -join "|")
+Check "...the parent's one object fails, with the kit itself updated" "False|failed|exakit|1" ("$($hoJson.ok)|$($hoJson.status)|$(@($hoJson.updated | ForEach-Object { $_.component }) -join ',')|$hoCode")
+Check "...its one failed entry is run-level and carries the new run's reason" ("|" + $hoReason + "|wsl --update") (@($hoJson.failed | ForEach-Object { "$($_.component)|$($_.error)|$($_.remedy)" }) -join ";")
+Has "...with the hint that reason calls for" "this WSL kernel cannot create the deployment network" ("" + @($hoJson.failed)[0].remedy_hint)
+Check "...and the object's remedy and hint are that entry's" ("wsl --update|" + @($hoJson.failed)[0].remedy_hint) ("$($hoJson.remedy)|$($hoJson.remedy_hint)")
+Check "...not the anonymous end of the new run" $false ($hoOut.Contains("did not finish"))
+
+# An older parent never sees that row: every kit before it reads a row only
+# when it names a component, so it still answers with its own "did not finish"
+# entry. The new kit run straight, for a five-field parent.
+$hoRows = Join-Path $work "handover-rows"
+Remove-Item -Force -LiteralPath $hoRows -ErrorAction SilentlyContinue
+$env:EXAKIT_UPDATE_HANDOVER = "1"
+$env:EXAKIT_UPDATE_RESULTS_FILE = $hoRows
+Remove-Item Env:\EXAKIT_UPDATE_ROW_FIELDS -ErrorAction SilentlyContinue
+& ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -File (Join-Path $hoSetup "exakit.ps1") update all *> $null
+$env:EXAKIT_UPDATE_HANDOVER = $null
+$env:EXAKIT_UPDATE_RESULTS_FILE = $null
+$env:EXAKIT_UPDATE_ROW_FIELDS = $savedRowFields
+$env:EXAKIT_HOME = $savedHome
+$hoLines = @(Get-Content -LiteralPath $hoRows -ErrorAction SilentlyContinue)
+Check "a five-field parent gets the run-level row in five fields, no component" "|failed|||wsl --update" ($hoLines -join ";")
+# The reader of kits before this row, verbatim.
+$hoOldRead = @($hoLines | Where-Object { $parts = @("$_" -split '\|', 7); $parts.Count -ge 5 -and $parts[0] })
+Check "...and an older reader skips it" 0 $hoOldRead.Count
+
 Remove-Item -Recurse -Force -LiteralPath $work -ErrorAction SilentlyContinue
 Write-Host ""
 Write-Host ("{0} passed, {1} failed" -f $script:PASS, $script:FAIL)
