@@ -6,9 +6,9 @@ description: Connect MySQL or MariaDB to local Exasol as a virtual schema with e
 # MySQL → local Exasol
 
 Shared rules (credential handling, TLS and a private CA, the reader-password
-recipe, exit codes, disconnect versus remove) live in
-[exasol-virtual-schemas](../exasol-virtual-schemas/SKILL.md). Load it too;
-this skill adds only what is MySQL's own.
+recipe, the `--json` answer and failure kinds, disconnect versus remove) live in
+[exasol-virtual-schemas](../exasol-virtual-schemas/SKILL.md). Load it too; this
+skill adds only what is MySQL's own.
 
 ## 1. When to use it
 
@@ -86,7 +86,7 @@ exakit connect mysql --name shop --set host=<host> --set database=<database> \
   --set user=exakit_reader --dry-run
 exakit connect mysql --name shop --set host=<host> --set database=<database> \
   --set user=exakit_reader --set ca=~/.config/exakit/rds-<region>-bundle.pem \
-  --password-file ~/.config/exakit/shop.pw --yes
+  --password-file ~/.config/exakit/shop.pw --yes --json
 ```
 
 - `ca` only for a private CA. RDS: the region's bundle from
@@ -111,7 +111,8 @@ exakit sql 'SELECT "first_name" FROM VS_SHOP."actor" LIMIT 10'   # names keep My
 | "the trustAnchors parameter must be non-empty" | the loader has no CA store: the same `--set ca`, a public CA's root too |
 | "Communications link failure", and the kit says the certificate did not verify | the server answered over a TLS cause: as above, not the firewall |
 | "Communications link failure", and the kit says the source did not answer | security group, firewall, `public`, port (section 5) |
-| "Access denied for user" | wrong password or host part; `exakit source reauth shop --password-file <file>` |
+| "Access denied for user" (`auth`) | wrong password or host part; `exakit source reauth shop --password-file <file>` |
+| "SELECT command denied to user" (`privilege`) | signed in, but no SELECT on that table: `GRANT SELECT ON <database>.*` (section 4) |
 | "the source has no database X, but it has Y" | MySQL database names are case-sensitive on Linux: `--set database=Y` |
 
 Query rules (adapter 6.1.0):

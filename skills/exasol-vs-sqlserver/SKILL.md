@@ -6,9 +6,9 @@ description: Connect Microsoft SQL Server to local Exasol as a virtual schema wi
 # SQL Server → local Exasol
 
 Shared rules (credential handling, TLS and a private CA, the reader-password
-recipe, exit codes, disconnect versus remove) live in
-[exasol-virtual-schemas](../exasol-virtual-schemas/SKILL.md). Load it too;
-this skill adds only what is SQL Server's own.
+recipe, the `--json` answer and failure kinds, disconnect versus remove) live in
+[exasol-virtual-schemas](../exasol-virtual-schemas/SKILL.md). Load it too; this
+skill adds only what is SQL Server's own.
 
 ## 1. When to use it
 
@@ -97,7 +97,7 @@ exakit connect sqlserver --name erp --set host=<host> --set database=<database> 
   --set schema=<schema> --set user=exakit_reader --dry-run
 exakit connect sqlserver --name erp --set host=<host> --set database=<database> \
   --set schema=<schema> --set user=exakit_reader --set ca=~/.config/exakit/<ca>.pem \
-  --password-file ~/.config/exakit/erp.pw --yes
+  --password-file ~/.config/exakit/erp.pw --yes --json
 ```
 
 - On Exasol Personal `verify` needs `ca` even for a public CA: the loader's own
@@ -129,6 +129,7 @@ exakit sql 'SELECT "OrderID" FROM VS_ERP."Orders" LIMIT 10'   # names keep their
 | "The TCP/IP connection to the host ... has failed" | firewall, security group, port, a named instance's port |
 | "unexpected pre-login response" | the far end is not SQL Server on that port: check the port |
 | "the source has no schema X that this account can see" | check the name, and `GRANT SELECT ON SCHEMA::X` (section 4) |
+| "The SELECT permission was denied on the object" (`privilege`) | the login's database user lacks SELECT: `GRANT SELECT ON SCHEMA::X` (section 4) |
 | `host\instance` refused in `--url` | give `--set host=` and the instance's TCP port |
 
 Types: `datetime` arrives as `TIMESTAMP(3)`, `bit` as `BOOLEAN`, `money` as

@@ -5,9 +5,10 @@ description: Connect JSON, CSV and Parquet blobs in an Azure Blob Storage contai
 
 # Azure Blob Storage files → local Exasol
 
-Shared rules (credential handling, the EDML mapping, exit codes, disconnect
-versus remove) live in [exasol-virtual-schemas](../exasol-virtual-schemas/SKILL.md).
-Load it too; this skill adds only what is Azure's own.
+Shared rules (credential handling, the EDML mapping, the `--json` answer and
+failure kinds, disconnect versus remove) live in
+[exasol-virtual-schemas](../exasol-virtual-schemas/SKILL.md). Load it too; this
+skill adds only what is Azure's own.
 
 ## 1. When to use it
 
@@ -80,7 +81,7 @@ az storage account network-rule add --resource-group <rg> --account-name <accoun
 exakit connect azure-blob --name docs --set account=<account> --set container=<container> \
   --set mapping=./mapping --dry-run
 exakit connect azure-blob --name docs --set account=<account> --set container=<container> \
-  --set mapping=./mapping --password-file ~/.config/exakit/docs-sas.txt --yes
+  --set mapping=./mapping --password-file ~/.config/exakit/docs-sas.txt --yes --json
 ```
 
 Connect prints when the SAS expires. The tables appear as
@@ -99,7 +100,8 @@ exakit sql "SELECT * FROM VS_DOCS.CUSTOMERS LIMIT 10"
 | Message | Fix |
 |---|---|
 | `AuthenticationFailed` | a wrong key, an expired SAS - or a SAS made for another container (a SAS is valid only for its container, so a wrong container name reads the same): check the name, else `exakit source reauth docs --password-file <new-sas.txt>` |
-| `AuthorizationPermissionMismatch` (`access-denied`) | the SAS lacks a permission: a new one with `rl`, then reauth |
+| `AuthorizationPermissionMismatch` (`denied`) | the SAS lacks a permission: a new one with `rl`, then reauth |
+| `AuthorizationFailure` (`denied`) | the account refused the request - the storage firewall answers so: if `firewall` is `Deny`, allow the public IP the fix names (section 5) |
 | `ContainerNotFound` | no container by that name: check it, remove and connect again |
 | "the SAS lacks read (r) ... permission", "the SAS expired at ...", "the SAS is for a single blob" | generate a container SAS as in section 4 |
 | "a development-storage (Azurite) connection string", "endpoint suffix ... is a sovereign cloud" | not reached by this connector |

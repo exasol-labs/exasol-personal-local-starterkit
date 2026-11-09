@@ -5,9 +5,10 @@ description: Connect a Snowflake schema to local Exasol as a virtual schema with
 
 # Snowflake → local Exasol
 
-Shared rules (credential handling, exit codes, disconnect versus remove) live in
-[exasol-virtual-schemas](../exasol-virtual-schemas/SKILL.md). Load it too;
-this skill adds only what is Snowflake's own.
+Shared rules (credential handling, the `--json` answer and failure kinds,
+disconnect versus remove) live in
+[exasol-virtual-schemas](../exasol-virtual-schemas/SKILL.md). Load it too; this
+skill adds only what is Snowflake's own.
 
 ## 1. When to use it
 
@@ -100,7 +101,7 @@ exakit connect snowflake --name sf_sales --set account=<orgname-account> --set d
   --set schema=<SCHEMA> --set warehouse=<WH> --set role=EXAKIT_READER --set user=EXAKIT_READER --dry-run
 exakit connect snowflake --name sf_sales --set account=<orgname-account> --set database=<DB> \
   --set schema=<SCHEMA> --set warehouse=<WH> --set role=EXAKIT_READER --set user=EXAKIT_READER \
-  --password-file ~/.config/exakit/<name>.pat --yes
+  --password-file ~/.config/exakit/<name>.pat --yes --json
 ```
 
 - The JDBC loader on Exasol Personal has no CA store of its own; the kit's
@@ -123,6 +124,8 @@ exakit sql "SELECT * FROM VS_SF_SALES.CUSTOMER LIMIT 10"   # names arrive upper 
 | "Programmatic access token is invalid", "JWT token is invalid", "token has expired" | a new token (section 4), then `exakit source reauth sf_sales --password-file <file>` |
 | the sign-in is refused for this address | the network policy lacks this computer's public IP (section 5) |
 | "the source has no schema X that this account can see" | the name, or USAGE on database and schema for the role |
+| "SQL access control error", "Insufficient privileges to operate on" (`privilege`) | the role lacks USAGE on the warehouse, database or schema, or SELECT (section 4) |
+| "Object '...' does not exist or not authorized" (or `Schema '...'`) (`missing_or_denied`) | Snowflake says this for an object the role may not see too: dropped or renamed, `exakit source refresh sf_sales`; else grant the role SELECT on it (section 4) |
 | a column reads as the text "Number precision not supported" | `NUMBER(38,0)` is wider than Exasol's `DECIMAL(36)`: give the reader a view that casts it to `NUMBER(36,0)` |
 
 ## 9. Keep it working

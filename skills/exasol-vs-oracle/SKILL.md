@@ -6,9 +6,9 @@ description: Connect an Oracle database to local Exasol as a virtual schema with
 # Oracle → local Exasol
 
 Shared rules (credential handling, TLS and a private CA, the reader-password
-recipe, exit codes, disconnect versus remove) live in
-[exasol-virtual-schemas](../exasol-virtual-schemas/SKILL.md). Load it too;
-this skill adds only what is Oracle's own.
+recipe, the `--json` answer and failure kinds, disconnect versus remove) live in
+[exasol-virtual-schemas](../exasol-virtual-schemas/SKILL.md). Load it too; this
+skill adds only what is Oracle's own.
 
 ## 1. When to use it
 
@@ -98,7 +98,7 @@ exakit connect oracle --name hr --set host=<host> --set port=2484 --set service=
   --set schema=HR --set user=EXAKIT_READER --dry-run
 exakit connect oracle --name hr --set host=<host> --set port=2484 --set service=<service> \
   --set schema=HR --set user=EXAKIT_READER --set ca=~/.config/exakit/rds-<region>-bundle.pem \
-  --password-file ~/.config/exakit/hr.pw --yes
+  --password-file ~/.config/exakit/hr.pw --yes --json
 ```
 
 - `verify` is TCPS: set the TCPS port. The CA travels inside the URL as a
@@ -122,6 +122,8 @@ exakit sql "SELECT * FROM VS_HR.EMPLOYEES LIMIT 10"   # names arrive as Oracle s
 | Message | Fix |
 |---|---|
 | "ORA-01017" (invalid username/password) | wrong user or password: `exakit source reauth hr --password-file <file>` |
+| "ORA-01031" (insufficient privileges), "ORA-01045" (no CREATE SESSION), "ORA-41900" (missing READ, 23ai) (`privilege`) | grant CREATE SESSION and READ on each table (23ai: READ ANY TABLE ON SCHEMA), section 4 |
+| "ORA-00942" (table or view does not exist) (`missing_or_denied`) | Oracle says this for a table the account may not read too: dropped or renamed, `exakit source refresh hr`; else grant READ on it - a table added after the grants needs its own (section 4) |
 | "ORA-12541", "ORA-12170" | no listener there, or a firewall drops it: host, port, security group |
 | "ORA-17800", "ORA-17002", "IO Error: The Network Adapter", "Got minus one from a read call" | the far end answered, but not as Oracle: a wrong port, or a proxy that drops the protocol; `verify` needs the TCPS port |
 | "PKIX path building failed", "ssl_server_dn_match" | the CA or the name does not match: `--set ca=<bundle>`, and the host name the certificate carries |

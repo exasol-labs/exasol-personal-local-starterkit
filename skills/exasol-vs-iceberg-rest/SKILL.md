@@ -5,9 +5,10 @@ description: Connect Iceberg tables behind an Iceberg REST catalog (Polaris, Lak
 
 # Iceberg REST catalog → local Exasol (Beta)
 
-Shared rules (credential handling, the lakehouse engine, exit codes, disconnect
-versus remove) live in [exasol-virtual-schemas](../exasol-virtual-schemas/SKILL.md).
-Load it too; this skill adds only what is the REST route's own.
+Shared rules (credential handling, the lakehouse engine, the `--json` answer and
+failure kinds, disconnect versus remove) live in
+[exasol-virtual-schemas](../exasol-virtual-schemas/SKILL.md). Load it too; this
+skill adds only what is the REST route's own.
 
 ## 1. When to use it
 
@@ -82,14 +83,14 @@ allow this computer's public IP (`exakit connect` shows it; fallback: the
 ```bash
 # a catalog token
 exakit connect iceberg-rest --name lake --set catalog_url=<catalog_url> --set warehouse=<warehouse> \
-  --set namespace=<namespace> --password-file ~/.config/exakit/<name>.token --yes
+  --set namespace=<namespace> --password-file ~/.config/exakit/<name>.token --yes --json
 # storage keys on MinIO
 exakit connect iceberg-rest --name lake --set catalog_url=<catalog_url> --set warehouse=<warehouse> \
   --set namespace=<namespace> --set endpoint=https://minio.example.com:9000 --set region=us-east-1 \
-  --set access_key_id=<key-id> --password-file ~/.config/exakit/<name>.secret --yes
+  --set access_key_id=<key-id> --password-file ~/.config/exakit/<name>.secret --yes --json
 ```
 
-Run each with `--dry-run` instead of `--yes` first. The first lakehouse source
+Run each with `--dry-run` instead of `--yes --json` first. The first lakehouse source
 installs the Rust language container after asking (`--yes` consents: tell the
 user - one restart). The tables appear as `VS_LAKE`; connect again with another
 `--name` for the next namespace.
@@ -114,7 +115,7 @@ exakit sql "SELECT * FROM VS_LAKE.ORDERS LIMIT 10"   # names arrive upper case: 
 | "... carries credentials (user:password@)" | take them out of the URL; the secret goes in `--password-file` |
 | "give the token itself, not JSON" | the file holds only the token or secret key |
 | "incorrectly configured region", "x-amz-bucket-region" | connect again with `--set region=<the bucket's region>` |
-| exit 23 | the Rust language container is missing: rerun with `--yes` after telling the user |
+| `norust` (exit 23) | the Rust language container is missing: rerun with `--yes` after telling the user |
 
 ## 9. Keep it working
 

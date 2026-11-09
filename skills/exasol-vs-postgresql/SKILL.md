@@ -6,9 +6,9 @@ description: Connect PostgreSQL to local Exasol as a virtual schema with exakit 
 # PostgreSQL → local Exasol
 
 Shared rules (credential handling, TLS and a private CA, the reader-password
-recipe, exit codes, disconnect versus remove) live in
-[exasol-virtual-schemas](../exasol-virtual-schemas/SKILL.md). Load it too;
-this skill adds only what is PostgreSQL's own.
+recipe, the `--json` answer and failure kinds, disconnect versus remove) live in
+[exasol-virtual-schemas](../exasol-virtual-schemas/SKILL.md). Load it too; this
+skill adds only what is PostgreSQL's own.
 
 ## 1. When to use it
 
@@ -92,7 +92,7 @@ exakit connect postgresql --name sales --set host=<host> --set database=<databas
 exakit connect postgresql --name sales --set host=<host> --set database=<database> \
   --set schema=<schema> --set user=exakit_reader \
   --set ca=~/.config/exakit/rds-<region>-bundle.pem \
-  --password-file ~/.config/exakit/sales.pw --yes
+  --password-file ~/.config/exakit/sales.pw --yes --json
 ```
 
 - `ca` only for a private CA. RDS: the region's bundle from
@@ -117,7 +117,7 @@ exakit sql "SELECT * FROM VS_SALES.ORDERS LIMIT 10"   # names arrive upper case:
 | "PKIX path building failed" | a private CA: connect again with `--set ca=<PEM or bundle>`; never `tls=require` instead |
 | "the trustAnchors parameter must be non-empty" | the loader has no CA store: the same `--set ca`, a public CA's root too |
 | "the source has no schema X, but it has Y" | PostgreSQL folds unquoted names to lower case: `--set schema=Y` |
-| "the account may not use schema X" | grant it USAGE on the schema and SELECT on its tables (section 4) |
+| "permission denied for table X" (or `for schema`, `for database`), "the account may not use schema X" (`privilege`) | a missing grant: CONNECT on the database, USAGE on the schema, SELECT on its tables (section 4) |
 | "password authentication failed" | wrong password or user; `exakit source reauth sales --password-file <file>` |
 | "The connection attempt failed", "connect timed out" | security group, firewall, `public`, port (section 5) |
 | "validity check failed" | the database clock is behind: `exakit stop`, then `exakit start` |
