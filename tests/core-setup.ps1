@@ -332,7 +332,11 @@ function Update-ExakitSelf { param($Advertised, $Installed) Add-Content -Literal
     'Invoke-CmdUpdate -Target "all" -AssumeYes $false -Json $true'))
 $swapCalls = Join-Path $work "swap-calls"
 Remove-Item -Force -LiteralPath $swapCalls -ErrorAction SilentlyContinue
+# A Continue window: on 5.1 a native call with redirected stderr under Stop
+# is a terminating error before its output is read.
+$eapSwap = $ErrorActionPreference; $ErrorActionPreference = "Continue"
 $swapOut = (& ([System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName) -NoProfile -NonInteractive -File $swapScript -Repo $repo -Home2 (Join-Path $work "swap-home") -Calls $swapCalls 2>$null) -join "`n"
+$ErrorActionPreference = $eapSwap
 $swapJson = $null
 try { $swapJson = $swapOut | ConvertFrom-Json } catch { }
 Check "only the kit was updated: nothing ran after it, no new-setup check" "exakit" (@(Get-Content -LiteralPath $swapCalls -ErrorAction SilentlyContinue) -join "|")
