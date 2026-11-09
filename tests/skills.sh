@@ -41,6 +41,12 @@ EXAKIT_MANIFEST="$EXAKIT_HOME/manifest.json"
 EXAKIT_SKILL_ROOTS="$WORK/claude $WORK/agents"
 export EXAKIT_HOME EXAKIT_BIN_DIR EXAKIT_MANIFEST EXAKIT_SKILL_ROOTS
 mkdir -p "$EXAKIT_HOME" "$EXAKIT_BIN_DIR"
+# HOME too: exakit_install_skills also merges the kit's permission rules into
+# $HOME/.claude/settings.json, and with the real HOME a run edits the
+# developer's own Claude Code settings whenever an entry is missing there.
+HOME="$WORK/userhome"
+export HOME
+mkdir -p "$HOME"
 
 # shellcheck source=/dev/null
 . "$ROOT/setup/lib/ui.sh"
