@@ -908,9 +908,13 @@ jobs:
         if: matrix.shard == 4
       # Exasol Personal's language containers ship empty DNS files, so Java in
       # the database resolves no hostname; the kit repairs them after every
-      # start. Both routes against a stand-in podman: the Python helper (Linux,
-      # WSL, Windows) and the sh script for the macOS launcher VM.
+      # start, through the deployment's own engine (Docker or Podman). Both
+      # routes against a stand-in engine CLI: the Python helper (Linux, WSL,
+      # Windows) and the sh script for the macOS launcher VM; the PowerShell
+      # twin hands the helper the same engine and deployment id.
       - run: bash tests/personal-slc-dns.sh
+        if: matrix.shard == 4
+      - run: pwsh -NoProfile -File tests/personal-slc-dns-ps.ps1
         if: matrix.shard == 4
       # The virtual schema engine against a simulated Exasol: secrets only in
       # CONNECTION DDL, failed connects leave nothing, shared files counted,

@@ -87,8 +87,9 @@ the source: show it, run it only after a yes.
 - **Azure SQL**: public network access must be enabled (`public` above), then
   `az sql server firewall-rule create -g <rg> -s <server> -n exakit --start-ip-address <public-ip> --end-ip-address <public-ip>`
 - **On-premises**: TCP/IP enabled for the instance and the port open. On this
-  computer use host `192.168.64.1` (macOS) or `host.containers.internal`
-  (Linux, WSL).
+  computer use host `192.168.64.1` (macOS); on Linux and WSL the address the database sees this computer at (Podman:
+  `host.containers.internal`; Docker: `host.docker.internal` where the deployment
+  provides it, else the bridge gateway).
 
 ## 6. Connect
 

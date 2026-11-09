@@ -72,8 +72,10 @@ print it.
 
 The catalog URL and the storage must be reachable from inside the database.
 `https` by default; plain `http` is accepted only when typed, and only towards
-this computer (`192.168.64.1` on macOS, `host.containers.internal` on Linux and
-WSL) or a private network - the virtual schema then carries `ALLOW_HTTP`.
+this computer (`192.168.64.1` on macOS; on Linux and WSL the address the database
+sees this computer at - Podman: `host.containers.internal`; Docker:
+`host.docker.internal` where the deployment provides it, else the bridge gateway)
+or a private network - the virtual schema then carries `ALLOW_HTTP`.
 `localhost` is refused. A cloud catalog or bucket behind an allowlist must
 allow this computer's public IP (`exakit connect` shows it; fallback: the
 `python3` one-liner in the shared skill).

@@ -2006,23 +2006,70 @@ function Get-PersonalSlcInstalledFlavors {
     return $flavors
 }
 
+# Get-PersonalSlcContainerId - the deployment id the launcher names its
+# database container by (exasol-db-<id>), trimmed; "" when no state file names
+# one. The launcher's own state first: ContainerName reads
+# .exasolLauncherState.json, and deployment.json can be older than it, or say
+# "local" (what the launcher writes there when it cannot read its state). Read
+# as JSON, the top-level key only. Twin of personal_slc_container_id.
+function Get-PersonalSlcContainerId {
+    foreach ($name in @(".exasolLauncherState.json", "deployment.json")) {
+        $file = Join-Path $script:PersonalDeployDir $name
+        if (-not (Test-Path -LiteralPath $file)) { continue }
+        try { $doc = (Get-Content -Raw -LiteralPath $file -ErrorAction Stop) | ConvertFrom-Json } catch { continue }
+        if ($null -eq $doc -or $doc -is [array]) { continue }
+        $property = $doc.PSObject.Properties["deploymentId"]
+        if ($property -and ($property.Value -is [string]) -and $property.Value.Trim()) { return $property.Value.Trim() }
+    }
+    return ""
+}
+
+# Get-PersonalSlcDnsEngine - the engine the repair asks: the RECORD first (a
+# nano record's engine - runtime.container present, even null - is the old
+# database's), then this run's choice when nothing is recorded (an install
+# that has not recorded it yet), then Podman, every deployment before kit
+# 0.2.4. Twin of personal_slc_dns_engine.
+function Get-PersonalSlcDnsEngine {
+    $engine = ""
+    $runtime = $null
+    try { $doc = Read-ExakitManifest; if ($doc) { $runtime = $doc.runtime } } catch { $runtime = $null }
+    if ($runtime -and -not ($runtime -is [string])) {
+        $recorded = $runtime.PSObject.Properties["engine"]
+        if ($recorded) { $engine = "" + $recorded.Value }
+        $nano = $runtime.PSObject.Properties["container"]
+        if ($nano -and (($null -eq $nano.Value) -or (("" + $nano.Value) -ne ""))) { $engine = "" }
+    }
+    if ($engine -ne "docker" -and $engine -ne "podman") { $engine = "" + $script:PersonalEngine }
+    if ($engine -eq "docker") { return "docker" }
+    return "podman"
+}
+
 # Repair-PersonalSlcDns - give every installed official language container the
 # deployment's DNS. The official containers ship etc/resolv.conf and etc/hosts
 # empty, so Java code in the database - every virtual schema adapter - can
 # reach an IP address and resolve no name; the database mounts the real files
 # at /conf, and setup/lib/personal-slc-dns.py points the container's at them
-# through the host's Podman. Every start rebuilds the containers, so this runs
-# after every start. Best effort: returns $false and logs when it cannot.
-# Twin of personal_slc_dns_repair.
+# through the deployment's own engine (Get-PersonalSlcDnsEngine): Podman's CLI
+# cannot see a Docker container. Only this deployment's database container is
+# written to: exasol-db-<id> (Get-PersonalSlcContainerId), or without an id a
+# lone exasol-db-* that is not a sidecar. Every start rebuilds the
+# containers, so this runs after every start. Best effort: returns $false and
+# logs when it cannot. Twin of personal_slc_dns_repair.
 function Repair-PersonalSlcDns {
     $flavors = @(Get-PersonalSlcInstalledFlavors)
     if ($flavors.Count -eq 0) { return $true }
-    if (-not (Get-Command podman -ErrorAction SilentlyContinue)) {
-        Write-ExakitLog "WARN" "language container DNS: no podman on PATH"
+    $engine = Get-PersonalSlcDnsEngine
+    if (-not (Get-Command $engine -ErrorAction SilentlyContinue)) {
+        Write-ExakitLog "WARN" "language container DNS: no $engine on PATH"
         return $false
     }
     $helper = Join-Path $PSScriptRoot "personal-slc-dns.py"
-    $result = Invoke-ExakitPythonFile -Path $helper -Arguments $flavors
+    # No empty argument: Windows PowerShell 5.1 drops it on the way to python.
+    # The id in the = form: one that starts with "-" is still a value.
+    $helperArgs = @("--engine", $engine)
+    $id = "" + (Get-PersonalSlcContainerId)
+    if ($id) { $helperArgs += @("--deployment-id=$id") }
+    $result = Invoke-ExakitPythonFile -Path $helper -Arguments (@($helperArgs) + @($flavors))
     $ok = ($result.Code -eq 0)
     foreach ($line in @($result.Lines)) {
         if ($line -match '^EXAKIT_SLC_DNS (\S+) (\S+)$') {

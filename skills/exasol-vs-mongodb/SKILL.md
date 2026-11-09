@@ -77,8 +77,10 @@ after a yes.
   temporary entry: when it expires, the source stops working.
   `atlas accessLists create <public-ip> --type ipAddress --comment exakit --projectId <project-id>`
 - **Self-hosted**: `net.bindIp` must cover the interface and the firewall pass
-  port 27017. On this computer use `192.168.64.1` (macOS) or
-  `host.containers.internal` (Linux, WSL) in the URI.
+  port 27017. On this computer use `192.168.64.1` (macOS) in the URI; on Linux
+  and WSL the address the database sees this computer at (Podman:
+  `host.containers.internal`; Docker: `host.docker.internal` where the deployment
+  provides it, else the bridge gateway).
 
 ## 6. Connect
 

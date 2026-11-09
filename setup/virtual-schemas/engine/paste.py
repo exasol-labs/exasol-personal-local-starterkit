@@ -177,7 +177,7 @@ class Reading(object):
                 continue
             value, problem = planner.check_value(self.specs[name], self.values[name])
             if problem:
-                if problem != planner.LOOPBACK_ADVICE:
+                if problem != planner.loopback_advice():
                     # Not quoted: a password pasted without its percent-encoding
                     # can be misread as a host or a port.
                     problem = "it is not a valid %s" % self.specs[name]["kind"]

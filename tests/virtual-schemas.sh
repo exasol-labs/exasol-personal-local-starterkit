@@ -127,6 +127,42 @@ for loop in localhost 127.0.0.1 ::1 LOCALHOST; do
     check "host=$loop is refused (it is the database itself)" "2" "$RC"
 done
 has "...with the address to use instead" "on macOS 192.168.64.1, on Linux and WSL host.containers.internal" "$OUT"
+# Where this computer is follows the deployment's engine, read from the kit's
+# record (runtime.engine, kit 0.2.4+): Docker has no host.containers.internal.
+# Linux, WSL or Windows only: on macOS the database is in the launcher VM's
+# Podman whatever the record says (EXAKIT_VS_OS stands in for the platform).
+DOCKER_HOST_WORDS="on Docker host.docker.internal where the deployment provides it, else the bridge gateway"
+export EXAKIT_VS_OS=Linux
+printf '{"runtime": {"type": "personal", "engine": "docker"}}\n' > "$HOME_K/manifest.json"
+run plan postgresql --name sales --set host=localhost --set database=x --set user=u
+check "a Docker deployment: localhost is still refused, exit 2" "2" "$RC"
+has "...with Docker's address for this computer" "$DOCKER_HOST_WORDS" "$OUT"
+lacks "...not Podman's" "host.containers.internal" "$OUT"
+run plan iceberg-rest --name rest1 --set catalog_url=http://localhost:8181 --set warehouse=w --set namespace=sales
+has "...the same for a catalog URL on localhost" "$DOCKER_HOST_WORDS" "$OUT"
+run plan iceberg-rest --name rest1 --set catalog_url=http://rest.example.com --set warehouse=w --set namespace=sales
+has "...and in the plain-http refusal" "accepted only for this computer ($DOCKER_HOST_WORDS) or a private network" "$OUT"
+printf '{"runtime": {"type": "personal", "engine": "podman"}}\n' > "$HOME_K/manifest.json"
+run plan postgresql --name sales --set host=localhost --set database=x --set user=u
+has "a Podman deployment: Podman's name" "on macOS 192.168.64.1, on Linux and WSL host.containers.internal" "$OUT"
+printf '{"runtime": {"engine": "docker", "container": "exasol-nano"}}\n' > "$HOME_K/manifest.json"
+run plan postgresql --name sales --set host=localhost --set database=x --set user=u
+has "a nano record's engine (the OLD database's) is not this deployment's" "host.containers.internal" "$OUT"
+printf '{"runtime": {"engine": "docker", "container": null}}\n' > "$HOME_K/manifest.json"
+run plan postgresql --name sales --set host=localhost --set database=x --set user=u
+has "...runtime.container null is a nano record too, as the shell reads it" "host.containers.internal" "$OUT"
+printf '{"runtime": {"engine": "docker", "container": ""}}\n' > "$HOME_K/manifest.json"
+run plan postgresql --name sales --set host=localhost --set database=x --set user=u
+has "...an empty runtime.container is none: Docker's address" "$DOCKER_HOST_WORDS" "$OUT"
+printf '{"runtime": {"type": "personal", "engine": "docker"}}\n' > "$HOME_K/manifest.json"
+EXAKIT_VS_OS=Darwin run plan postgresql --name sales --set host=localhost --set database=x --set user=u
+has "macOS: the launcher VM's address whatever the record says" "on macOS 192.168.64.1, on Linux and WSL host.containers.internal" "$OUT"
+lacks "...never Docker's there" "host.docker.internal" "$OUT"
+printf '{"runtime": {"type": "personal"}}\n' > "$HOME_K/manifest.json"
+run plan postgresql --name sales --set host=localhost --set database=x --set user=u
+has "no engine recorded (before kit 0.2.4): as before" "on macOS 192.168.64.1, on Linux and WSL host.containers.internal" "$OUT"
+rm -f "$HOME_K/manifest.json"
+unset EXAKIT_VS_OS
 V6="$(python3 - "$ROOT" <<'PYV6'
 import sys; sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
 import plan
@@ -2548,6 +2584,12 @@ has "a TLS value the kit does not map is said, not guessed" "sslmode has a value
 pst pg 'jdbc:postgresql://localhost:5432/sales'
 check "localhost from the string is not taken, exit 0" '0 {"database": "sales", "port": "5432"}' "$RC $VALS"
 has "...with the address to use instead" "on macOS 192.168.64.1" "$OUT"
+printf '{"runtime": {"type": "personal", "engine": "docker"}}\n' > "$HOME_K/manifest.json"
+export EXAKIT_VS_OS=Linux
+pst pg 'jdbc:postgresql://localhost:5432/sales'
+has "...on a Docker deployment, Docker's address, still said in full" "$DOCKER_HOST_WORDS" "$OUT"
+unset EXAKIT_VS_OS
+rm -f "$HOME_K/manifest.json"
 pst pg 'postgres://pg.example.com:99999/sales'
 has "a value that fails its check is named, not quoted" "port from the connection string is not used: it is not a valid port" "$OUT"
 lacks "...(no value in the message)" "99999" "$OUT"
@@ -2912,7 +2954,10 @@ lacks "...and nothing is said about it" "public IP" "$OUT"
 _t0="$(date +%s)"; OUT="$(EXAKIT_NO_IP_LOOKUP=1 EXAKIT_PUBLIC_IP_URL="$BH_URL" eng --json plan pg --name ipsales $PG_SET 2>&1)"; _t1="$(date +%s)"
 check "EXAKIT_NO_IP_LOOKUP=1: nothing is asked (no wait on that same URL)" "yes" "$([ $((_t1 - _t0)) -le 2 ] && echo yes || echo no)"
 lacks "...nothing is said or logged" "public IP" "$(printf '%s\n' "$OUT" | grep -v '"public_ip"')"
-check "...and public_ip is null" "None" "$(printf '%s\n' "$OUT" | sed -n '/^{/,$p' | pubip)"
+# Assigned first: bash 3.2 brace-expands a sed range with a brace in an
+# address when it is passed straight as an argument (tests/bash32-guard.sh).
+_null_ip="$(printf '%s\n' "$OUT" | sed -n '/^{/,$p' | pubip)"
+check "...and public_ip is null" "None" "$_null_ip"
 kill "$BH_PID" 2>/dev/null; wait "$BH_PID" 2>/dev/null
 
 # connect: the lookup runs beside it; a failed one changes nothing.

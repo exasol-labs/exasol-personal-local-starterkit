@@ -82,9 +82,11 @@ exakit source check <name> --json                                   # later: a f
   `--token…` are refused (exit 2). Never invent, guess, echo or `cat` a credential.
 - **`localhost` / `127.0.0.1` means the database itself** and is refused. A source on
   this computer is `192.168.64.1` on macOS (the launcher VM's gateway;
-  `host.containers.internal` there is the VM) and `host.containers.internal` on Linux
-  and WSL, and must listen on that interface, not only on 127.0.0.1. A VPN client can
-  still drop that traffic.
+  `host.containers.internal` there is the VM). On Linux and WSL it is the address
+  the database sees this computer at (Podman: `host.containers.internal`; Docker:
+  `host.docker.internal` where the deployment provides it, else the bridge gateway);
+  the refusal names the one for this deployment's engine. The source must listen on
+  that interface, not only on 127.0.0.1. A VPN client can still drop that traffic.
 - **TLS verifies the certificate and host name by default** (`tls=verify` where a
   connector has the input). `require` only encrypts; `disable` sends credentials in
   clear. Lower it only when the user says so, and say the cost.
