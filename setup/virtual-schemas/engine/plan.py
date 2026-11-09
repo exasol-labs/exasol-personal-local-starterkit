@@ -99,10 +99,18 @@ THIS_COMPUTER = {
 
 # The engine the kit recorded for the deployment (manifest runtime.engine,
 # kit 0.2.4+), read once per run by use_engine. Podman when the record names
-# none - macOS, and every deployment before kit 0.2.4 - as
-# personal_engine_recorded answers; a nano record (runtime.container) names
-# the OLD database's engine and is ignored.
+# none - every deployment before kit 0.2.4 - as personal_engine_recorded
+# answers. A nano record names the OLD database's engine and is ignored: one
+# whose runtime.container key is there at all, null included, as the shell's
+# manifest_get reads it ("null" is not empty); only "" is no container.
 ENGINE = "podman"
+
+
+def on_macos():
+    """macOS: the database is in the launcher's VM, on its Podman, whatever a
+    record says - as the shell repair takes it. EXAKIT_VS_OS overrides the
+    platform (Darwin, Linux, Windows), as EXAKIT_VS_ARCH does the CPU."""
+    return (os.environ.get("EXAKIT_VS_OS") or platform.system()).lower() == "darwin"
 
 
 def recorded_engine(kit_home):
@@ -113,7 +121,7 @@ def recorded_engine(kit_home):
             runtime = json.load(handle).get("runtime")
     except (OSError, ValueError, AttributeError):
         return "podman"
-    if not isinstance(runtime, dict) or runtime.get("container"):
+    if not isinstance(runtime, dict) or ("container" in runtime and runtime["container"] != ""):
         return "podman"
     engine = runtime.get("engine")
     return engine if engine in ("docker", "podman") else "podman"
@@ -121,7 +129,7 @@ def recorded_engine(kit_home):
 
 def use_engine(kit_home):
     global ENGINE
-    ENGINE = recorded_engine(kit_home)
+    ENGINE = "podman" if on_macos() else recorded_engine(kit_home)
 
 
 def this_computer():

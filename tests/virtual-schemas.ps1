@@ -96,6 +96,9 @@ Check "paste through the bridge: a password's unencoded & leaks no name" $false 
 # kit's record (runtime.engine) under --kit-home, which this bridge passes.
 $engineRecord = Join-Path $home2 "manifest.json"
 $localhostPlan = @("plan", "postgresql", "--name", "lo", "--set", "host=localhost", "--set", "database=x", "--set", "user=u")
+# Linux, WSL or Windows: on macOS the advice is the launcher VM's whatever the
+# record says, so EXAKIT_VS_OS stands in for the platform.
+$env:EXAKIT_VS_OS = "Windows"
 Set-Content -LiteralPath $engineRecord -Value '{"runtime": {"type": "personal", "engine": "docker"}}' -Encoding ASCII
 $r = Invoke-ExakitVsEngine -Arguments $localhostPlan
 Check "a Docker deployment: localhost is refused, exit 2" 2 $r.Code
@@ -104,6 +107,11 @@ Check "...not Podman's" $false (($r.Lines -join "`n").Contains("host.containers.
 Set-Content -LiteralPath $engineRecord -Value '{"runtime": {"type": "personal", "engine": "podman"}}' -Encoding ASCII
 $r = Invoke-ExakitVsEngine -Arguments $localhostPlan
 Check "a Podman deployment: Podman's name" $true (($r.Lines -join "`n").Contains("on Linux and WSL host.containers.internal"))
+Set-Content -LiteralPath $engineRecord -Value '{"runtime": {"type": "personal", "engine": "docker"}}' -Encoding ASCII
+$env:EXAKIT_VS_OS = "Darwin"
+$r = Invoke-ExakitVsEngine -Arguments $localhostPlan
+Check "macOS: the launcher VM's address whatever the record says" $true (($r.Lines -join "`n").Contains("on macOS 192.168.64.1"))
+Remove-Item Env:\EXAKIT_VS_OS
 Remove-Item -LiteralPath $engineRecord -Force
 
 Write-Host ""
