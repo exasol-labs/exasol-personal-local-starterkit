@@ -738,6 +738,16 @@ Set-Content -LiteralPath $state -Value ($db | ConvertTo-Json -Depth 8) -Encoding
 $one = Invoke-JsonConnect (@("pg", "--name", "jsonjava") + $pgSet + @("--password-file", $jsonPw, "--json"))
 Check "a Java container that is missing, without --yes: one object, exit 21" "True 21 nojava" "$one $jsonCode $($jsonDoc.kind)"
 Check "...whose fix names --yes" $true ("$($jsonDoc.remedy)".Contains("--yes"))
+# A fresh Exasol Personal 2.4: JAVA=builtin_java, no client in BucketFS - the
+# same missing Java, where the engine used to answer exit 1.
+$db = Get-Content -Raw -LiteralPath $state | ConvertFrom-Json
+$db | Add-Member -NotePropertyName java -NotePropertyValue "builtin" -Force
+Set-Content -LiteralPath $state -Value ($db | ConvertTo-Json -Depth 8) -Encoding ASCII
+$one = Invoke-JsonConnect (@("pg", "--name", "jsonj24") + $pgSet + @("--password-file", $jsonPw, "--json"))
+Check "Personal 2.4's builtin_java without its client, without --yes: one object, exit 21" "True 21 nojava" "$one $jsonCode $($jsonDoc.kind)"
+$db = Get-Content -Raw -LiteralPath $state | ConvertFrom-Json
+$db | Add-Member -NotePropertyName java -NotePropertyValue $false -Force
+Set-Content -LiteralPath $state -Value ($db | ConvertTo-Json -Depth 8) -Encoding ASCII
 # A --password-file that cannot be read: one object, never a PowerShell error.
 $one = Invoke-JsonConnect (@("pg", "--name", "jsondir") + $pgSet + @("--password-file", $work, "--json"))
 Check "a --password-file that is a folder: one object, exit 2, kind input" "True 2 input" "$one $jsonCode $($jsonDoc.kind)"

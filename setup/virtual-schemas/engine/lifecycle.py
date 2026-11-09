@@ -49,6 +49,9 @@ SETTLE = float(os.environ.get("EXAKIT_VS_SETTLE_SECONDS", "2"))
 EXIT = {"ok": 0, "failed": 1, "input": 2, "conflict": 3, "missing": 4, "gated": 5,
         "dns": 20, "nojava": 21, "unreachable_db": 22, "norust": 23}
 
+# A Java the database cannot run, in the kit's words (sql.NOJAVA has the database's).
+JAVA_MISSING = "Java is not installed in the database (its language container is missing)"
+
 # Status recorded for a failure kind (sql.classify).
 STATUS_FOR = {"auth": "auth-failed", "tls": "tls-failed", "unreachable": "unreachable", "nohost": "unreachable",
               "dns": "dns-failed", "nojava": "failed", "error": "failed", "denied": "access-denied",
@@ -329,6 +332,19 @@ class Engine(object):
         self.clock()
         return "clock" if abs(getattr(self, "_skew", 0)) >= SIGNED_LIMIT else kind
 
+    def language_kind(self, kind, connector, error):
+        """nojava from a source's own adapter (a database error) is norust
+        when that adapter runs in the Rust container: neither "No usable
+        script language container" nor Exasol Personal 2.4's missing
+        /exaudf/exaudfclient (sql.NOJAVA) says which language is missing, and
+        the Rust one runs the same client. The kit's Java probes answer with
+        a Failure (java_query), which stays Java's. Every path that passes a
+        database error's kind on asks this."""
+        if kind != "nojava" or not isinstance(error, sql.DbError):
+            return kind
+        profile = self.defs.profile(connector["profile"]) if connector.get("profile") else {}
+        return "norust" if (profile.get("slc") or {}).get("language") == "rust" else kind
+
     def warn_clock(self):
         if self.clock():
             self.emit("WARN", "The database clock is %s this computer, and certificates are checked by it - a TLS "
@@ -412,8 +428,9 @@ class Engine(object):
                 "/" % (FILES, FILES))
         except sql.DbError as error:
             if error.kind == "nojava":
-                raise Failure("Java is not installed in the database (no usable script language container)",
-                              EXIT["nojava"], "nojava")
+                # Either database's words (sql.NOJAVA): no usable container,
+                # or Personal 2.4's builtin_java without its client in BucketFS.
+                raise Failure(JAVA_MISSING, EXIT["nojava"], "nojava")
             raise Failure("the DNS probe could not be created: %s" % error, EXIT["failed"])
 
     def ensure_language(self, profile):
@@ -432,8 +449,20 @@ class Engine(object):
     def probe(self, host, port):
         """'ok <ip>' | 'dns ...' | 'tcp <ip> ...', from inside the database's Java."""
         self.ensure_probe()
-        rows = self.db().query("SELECT EXAKIT_VS.%s(%s, %d) AS R" % (PROBE, sql.literal(host), int(port)))
+        rows = self.java_query("SELECT EXAKIT_VS.%s(%s, %d) AS R" % (PROBE, sql.literal(host), int(port)))
         return (rows[0].get("R") if rows else "") or ""
+
+    def java_query(self, statement):
+        """One of the kit's own Java scripts (the probes), whose missing Java is
+        Java's whatever the source's adapter runs in: a Failure, which
+        language_kind never reads as Rust. Personal 2.4 creates a Java script
+        with builtin_java and fails only when it runs."""
+        try:
+            return self.db().query(statement)
+        except sql.DbError as error:
+            if error.kind == "nojava":
+                raise Failure(JAVA_MISSING, EXIT["nojava"], "nojava") from None
+            raise
 
     def await_staged(self, used, written, profile):
         """Nothing is created over a file the database does not see yet (the
@@ -454,7 +483,7 @@ class Engine(object):
         self.ensure_probe()
         started = time.time()
         while True:
-            rows = self.db().query("SELECT EXAKIT_VS.%s(%s) AS R" % (FILES, sql.literal("\n".join(paths))))
+            rows = self.java_query("SELECT EXAKIT_VS.%s(%s) AS R" % (FILES, sql.literal("\n".join(paths))))
             missing = [p for p in ((rows[0].get("R") if rows else "") or "").split("\n") if p]
             waited = time.time() - started
             if not missing:
@@ -1077,7 +1106,7 @@ class Engine(object):
                 code = getattr(error, "code", EXIT["failed"])
                 if isinstance(error, sql.DbError):
                     code = EXIT["dns"] if kind == "dns" else EXIT["nojava"] if kind == "nojava" else EXIT["failed"]
-                if kind == "nojava" and (profile.get("slc") or {}).get("language") == "rust":
+                if self.language_kind(kind, connector, error) == "norust":
                     kind, code = "norust", EXIT["norust"]
                 # A first connect has no source record yet, so the lifecycle
                 # commands do not apply: nothing was left behind, and the fix is
@@ -1222,7 +1251,7 @@ class Engine(object):
             self.warn_key_readers(connector, name)
             tables, read, how, empty = self.verify(connector, names["schema"])
         except (Failure, sql.DbError) as error:
-            kind = self.signed_kind(getattr(error, "kind", "error"), connector)
+            kind = self.language_kind(self.signed_kind(getattr(error, "kind", "error"), connector), connector, error)
             status = self.record_check(name, "failed", str(error), kind)
             remedy = remedy_for(kind, name, connector, error)
             specific = tls_remedy(error, connector, self.clock()) if kind == "tls" else None
@@ -1359,7 +1388,7 @@ class Engine(object):
                             secrets=[secret] + list(hidden))
         except sql.DbError as error:
             raise Failure("the source refused the new credential, so the previous one was kept: %s" % error,
-                          EXIT["failed"], error.kind)
+                          EXIT["failed"], self.language_kind(error.kind, connector, error))
         finally:
             try:
                 self.db().execute("DROP CONNECTION IF EXISTS %s" % sql.ident(pending["connection"]))
@@ -1388,7 +1417,7 @@ class Engine(object):
                              secrets=secrets)
         except sql.DbError as error:
             raise Failure("the source refused the new credential, so the previous one was kept: %s" % error,
-                          EXIT["failed"], error.kind)
+                          EXIT["failed"], self.language_kind(error.kind, connector, error))
         finally:
             self.drop_pending(names)
         self.emit("OK", "The source accepted the new credential")
@@ -1399,7 +1428,9 @@ class Engine(object):
         try:
             self.db().execute("ALTER VIRTUAL SCHEMA %s REFRESH" % sql.ident(schema))
         except sql.DbError as error:
-            raise Failure("the metadata refresh failed: %s" % error, EXIT["failed"], error.kind)
+            connector = self.defs.connector(config["connector"])
+            raise Failure("the metadata refresh failed: %s" % error, EXIT["failed"],
+                          self.language_kind(error.kind, connector, error))
         count = len(self.tables(schema))
         status = self.store.status(name)
         status.pop("needs_refresh", None)

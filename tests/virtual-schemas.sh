@@ -220,12 +220,33 @@ for text in [
     "PKIX path building failed: unable to find valid certification path to requested target",
     "No usable script language container is installed for the requested language.",
     "java.net.UnknownHostException: db.example.com",
+    # Measured live on a fresh Exasol Personal 2.4 (VM and Docker):
+    # SCRIPT_LANGUAGES names JAVA=builtin_java, and its client is not there.
+    "VM error: The required executable '/exaudf/exaudfclient' does not exist in BucketFS",
+    # Another file missing from BucketFS is not a missing Java - not even one
+    # whose name starts like the client does (no apostrophe here: bash 3.2
+    # reads quotes inside a heredoc in a command substitution).
+    "The required executable '/buckets/bfsdefault/default/drivers/tool' does not exist in BucketFS",
+    "The required executable '/exaudf/exaudfclient_py3' does not exist in BucketFS",
+    "The required executable '/exaudf/exaudfclient.sh' does not exist in BucketFS",
 ]:
     print(sql.classify(text))
 PYC
 )"
-check "each real message lands in its class" "unreachable|unreachable|unreachable|unreachable|auth|auth|tls|nojava|dns|" \
+check "each real message lands in its class" "unreachable|unreachable|unreachable|unreachable|auth|auth|tls|nojava|dns|nojava|error|error|error|" \
     "$(printf '%s\n' "$CLASSES" | tr '\n' '|')"
+# The 2.4 words on a line under the summary - a wrapper's first line, or past
+# the cut to MAX_ERROR - are still a missing Java, never a generic failure.
+RAW_NOJAVA='Query execution failed: Protocol error: VM error: F-UDF-CL-LIB-1127: the script could not be started
+The required executable '"'"'/exaudf/exaudfclient'"'"' does not exist in BucketFS'
+check "the 2.4 message under the summary line: nojava" "nojava" \
+    "$(python3 - "$ROOT" "$RAW_NOJAVA" <<'PYC'
+import sys; sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
+import sql
+raw = sys.argv[2]
+print(sql.classify_raw(sql.summarize(raw), raw))
+PYC
+)"
 # Measured live: a rotated source password. The summary line is the
 # adapter's generic "Unable to create ... reader"; the cause is lines below.
 RAW_AUTH='Query execution failed: Protocol error: VM error: F-UDF-CL-LIB-1126: F-UDF-CL-SL-JAVA-1006:
@@ -501,6 +522,12 @@ lacks "...said once, not restated in a second parenthesis" "did not answer from 
 db '{"java": false}'
 run_secret "$SECRET" connect oracle --name erp --set host=ora.example.com --set service=ORCL --set schema=APP --set user=reader --secret-stdin
 check "no Java in the database: exit 21, for the shell to offer the install" "21" "$RC"
+# A fresh Exasol Personal 2.4: JAVA=builtin_java, no client in BucketFS. The
+# first connect of every new user failed here with exit 1 (live test, 2.4.0).
+db '{"java": "builtin"}'
+run_secret "$SECRET" connect oracle --name erp --set host=ora.example.com --set service=ORCL --set schema=APP --set user=reader --secret-stdin
+check "Personal 2.4's builtin_java without its client: exit 21 too, not 1" "21" "$RC"
+has "...said as a missing Java" "Java is not installed in the database" "$OUT"
 
 printf '\n== the first query and the tips ==\n'
 db '{"sources": {"my.example.com": {"tables": ["orders", "actor"]}}}'
@@ -1395,6 +1422,23 @@ check "...and the CONNECTION still holds the old password" "true" "$(dbq 'd["con
 run_secret "n3w-secret" reauth mg --secret-stdin
 check "reauth with the password the source accepts: exit 0" "0" "$RC"
 has "...accepted on the trial, then replaced" "The source accepted the new credential" "$OUT"
+# The Rust container runs the same /exaudf/exaudfclient: on Exasol Personal
+# 2.4 a Rust source whose container is gone answers in Java's words. Every
+# path that passes the database's kind on says Rust for a Rust adapter.
+RUST24="VM error: The required executable '/exaudf/exaudfclient' does not exist in BucketFS"
+kindof() { python3 -c 'import json,sys; print(json.load(sys.stdin)["kind"])'; }
+python3 - "$STATE" "$RUST24" <<'PY'
+import json, sys; d = json.load(open(sys.argv[1])); d["refresh_fail"] = ["VS_MG"]; d["refresh_error"] = sys.argv[2]; json.dump(d, open(sys.argv[1], "w"))
+PY
+check "a Rust source's refresh, its container gone: norust, not the Java fix" "norust" "$(eng --json refresh mg 2>/dev/null | kindof)"
+python3 - "$STATE" "$RUST24" <<'PY'
+import json, sys; d = json.load(open(sys.argv[1])); d.pop("refresh_fail"); d.pop("refresh_error"); d["vs_fail"] = sys.argv[2]; json.dump(d, open(sys.argv[1], "w"))
+PY
+check "...its reauth (a throwaway schema on the Rust adapter): norust too" "norust" \
+    "$(printf '%s' "n3w-secret" | eng --json reauth mg --secret-stdin 2>/dev/null | kindof)"
+python3 - "$STATE" <<'PY'
+import json, sys; d = json.load(open(sys.argv[1])); d.pop("vs_fail"); json.dump(d, open(sys.argv[1], "w"))
+PY
 
 run_secret "wrong" connect mongodb --name mgbad $MG_SET --set collection=movies --secret-stdin
 check "a wrong password on first connect: exit 1, nothing of its own kept" "1 false" "$RC $(dbq '"EXAKIT_SRC_MGBAD" in d["connections"]' | tr A-Z a-z)"
@@ -1537,6 +1581,13 @@ has "...the x86_64 archive on x86_64" '"asset": "lakehouse-engine.tar.gz"' "$OUT
 lkdb ', "rust": false'
 OUT="$(eng connect lakehouse --name lake $LK_SET --secret-stdin < "$LK_FILE" 2>&1)"; RC=$?
 check "without the Rust container: exit 23, nothing created" "23 {} {}" "$RC $(dbq 'd["connections"]') $(dbq 'd["virtual"]')"
+# Rust there, Java not (a fresh Exasol Personal 2.4 after the Rust install):
+# the kit's own Java DNS probe of the Glue host fails, and that is Java's to
+# install - it was read as Rust's (exit 23) before, which reinstalled Rust.
+lkdb ', "java": "builtin"'
+OUT="$(eng connect lakehouse --name lake $LK_SET --secret-stdin < "$LK_FILE" 2>&1)"; RC=$?
+check "Rust there, Java missing (the DNS probe): exit 21, not 23" "21" "$RC"
+has "...said as a missing Java" "Java is not installed in the database" "$OUT"
 
 lkdb
 OUT="$(eng connect lakehouse --name lake $LK_SET --secret-stdin < "$LK_FILE" 2>&1)"; RC=$?
@@ -3283,6 +3334,15 @@ JSON_JAVA_INSTALL=1 jsonsh "$WORK/json.secret" pg --name jsonjava $PG_SET --json
 check "Java missing, --yes: installed, retried, exit 0, one object - the retry's" "0 [True, 'jsonjava']" "$JRC $(one '[d["ok"], d["name"]]')"
 has "...what the bridge said while it installed is on stderr" "Installing the Java language container (test)" "$JERR"
 lacks "...not on stdout" "Installing the Java" "$JOUT"
+# The same on a fresh Exasol Personal 2.4 (builtin_java, no client): the
+# bridge's install path runs, where it used to stop at exit 1.
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["java"]="builtin"; json.dump(d, open(sys.argv[1], "w"))' "$STATE"
+JSON_JAVA_INSTALL=1 jsonsh "$WORK/json.secret" pg --name jsonj24 $PG_SET --json
+check "2.4 builtin_java, no --yes: exit 21, one failure object" "21 [False, 'nojava', True, True, True, True]" "$JRC $(one "$SHAPE")"
+check "...nothing was installed" "builtin" "$(dbq 'd["java"]')"
+JSON_JAVA_INSTALL=1 jsonsh "$WORK/json.secret" pg --name jsonj24 $PG_SET --json --yes
+check "2.4 builtin_java, --yes: installed, retried, exit 0" "0 [True, 'jsonj24'] true" "$JRC $(one '[d["ok"], d["name"]]') $(dbq 'd["java"]')"
+run remove jsonj24 >/dev/null 2>&1
 # The bridge cannot run the engine at all: the same shape.
 JOUT="$( ( EXAKIT_HOME="$HOME_K"; EXAKIT_PYEXASOL_VENV="$WORK/no-such-venv"
     . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/pyexasol.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
