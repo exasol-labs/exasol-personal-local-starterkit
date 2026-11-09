@@ -872,14 +872,19 @@ class Engine(object):
 
     # --- operations -----------------------------------------------------------------
     def connect(self, connector_id, name, given, secret, dry_run=False, plan_only=False):
-        if not sources.NAME.match(name or ""):
+        # The gate first, as the shells' own resolve says it: a gated
+        # connector is exit 5 whatever else is wrong with the command.
+        entry = self.defs.entry(connector_id)
+        if entry["status"] == "gated":
+            raise Failure("%s is not available yet: %s" % (entry["name"], entry["gate"]), EXIT["gated"], "gated")
+        if not name:
+            raise Failure("the connection has no name", EXIT["input"], "input",
+                          remedy="give it one with --name (lower case letters, digits and _, a letter first, e.g. sales)")
+        if not sources.NAME.match(name):
             raise Failure("the source name must be lower case letters, digits and _ (start with a letter, at most 40), "
                           "e.g. sales", EXIT["input"])
         connector = self.defs.connector(connector_id)
         profile = self.defs.profile(connector["profile"])
-        entry = self.defs.entry(connector_id)
-        if entry["status"] == "gated":
-            raise Failure("%s is not available yet: %s" % (entry["name"], entry["gate"]), EXIT["gated"], "gated")
         if self.store.exists(name):
             current = self.store.config(name)
             if self.store.status(name).get("status") == "disconnected" and current["connector"] == connector_id:

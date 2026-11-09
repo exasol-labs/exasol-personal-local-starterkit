@@ -3511,8 +3511,10 @@ function Invoke-CmdConnect {
         if ($resolved.Code -ne 0) { [void](Show-ExakitVsLines -Lines $resolved.Lines); exit $resolved.Code }
         $connector = ((@($resolved.Lines) | Where-Object { $_ -like "RESULT *" } | Select-Object -First 1).Substring(7) | ConvertFrom-Json).connector
     }
-    if (-not $name) {
-        if (-not $interactive) { Deny-ExakitVsInput "Give the connection a name with --name (lower case, e.g. sales)." "the connection has no name" "give it one with --name (lower case letters, digits and _, a letter first, e.g. sales)" }
+    # With --json a missing name is the plan's refusal, after the gate, as
+    # resolve orders them here without it.
+    if (-not $name -and -not $json) {
+        if (-not $interactive) { Deny-ExakitInput "Give the connection a name with --name (lower case, e.g. sales)." }
         $name = Read-ExakitPrompt "Name for this connection (lower case, e.g. sales)" ""
     }
     if ($interactive) {
@@ -3530,11 +3532,13 @@ function Invoke-CmdConnect {
     $base = @($connector, "--name", $name) + $sets
     if ($json) {
         # The plan checks every input before the credential is read; a refusal,
-        # or with --dry-run the plan itself, is the answer.
+        # or with --dry-run the plan itself, is the answer. --name=VALUE: an
+        # empty name stays one argument (5.1 drops an empty one).
+        $base = @($connector, "--name=$name") + $sets
         $planned = Invoke-ExakitVsEngine -Arguments (@("--json", "plan") + $base)
         if ($planned.Code -ne 0 -or $dry) { foreach ($line in $planned.Lines) { Write-Output $line }; exit $planned.Code }
         $connector = "" + ((@($planned.Lines) -join "`n") | ConvertFrom-Json).connector
-        $base = @($connector, "--name", $name) + $sets
+        $base = @($connector, "--name=$name") + $sets
     } else {
         $planned = Invoke-ExakitVsEngine -Arguments (@("plan") + $base)
         $plan = Show-ExakitVsLines -Lines $planned.Lines
@@ -3548,7 +3552,6 @@ function Invoke-CmdConnect {
     $secret = ""
     if ($secretSpec) {
         $what = ("" + $secretSpec.label).ToLower()
-        if ($pwFile -and -not (Test-Path -LiteralPath $pwFile)) { Deny-ExakitVsInput "Cannot read $pwFile" "cannot read $pwFile" "give a file this user can read with --password-file" }
         $secret = Read-ExakitVsSecret -Label $secretSpec.label -PasswordFile $pwFile -Kind ("" + $secretSpec.kind)
         if (-not $secret) { Deny-ExakitVsInput "No $what was given (pipe it on standard input or use --password-file)." "no $what was given" "give it with --password-file <file> (PowerShell does not read a credential from standard input)" }
         $code = Invoke-ExakitVsRun -Arguments (@("connect") + $base + @("--secret-stdin")) -Secret $secret
@@ -3576,6 +3579,9 @@ function Invoke-CmdSource {
     $json = $false; $dry = $false; $all = $false; $name = ""; $status = ""; $pwFile = ""
     $table = ""; $ddl = $false; $into = ""
     $script:ExakitVsAssumeYes = $false
+    # --json is known before anything is refused: the bridge's own refusals
+    # and failures then come in the engine's shape, and nothing is asked.
+    $script:ExakitVsJson = ((@($rest) -contains "--json") -or (@($rest) -contains "-j"))
     for ($i = 0; $i -lt $rest.Count; $i++) {
         $arg = $rest[$i]
         if ($arg -in @("--json", "-j")) { $json = $true }
@@ -3587,22 +3593,20 @@ function Invoke-CmdSource {
         elseif ($arg -eq "--ddl") { $ddl = $true }
         elseif ($arg -eq "--schema") { $i++; $into = "" + $rest[$i] }
         elseif ($arg -like "--schema=*") { $into = $arg.Substring(9) }
-        elseif ($arg -like "-*") { Deny-ExakitInput "Unknown option '$arg' for source $action (exakit help source)." }
+        elseif ($arg -like "-*") { Deny-ExakitVsInput "Unknown option '$arg' for source $action (exakit help source)." "unknown option '$arg' for source $action" "leave it out; the options are listed by: exakit help source" }
         elseif (-not $name) { $name = $arg }
         elseif ($action -eq "describe" -and -not $table) { $table = $arg }
-        else { Deny-ExakitInput "source $action takes one name." }
+        else { Deny-ExakitVsInput "source $action takes one name." "source $action takes one name; got '$name' and '$arg'" "name one source per command" }
     }
     if ($json) { Assert-ExakitInstalled -Json } else { Assert-ExakitInstalled }
     Initialize-ExakitLogging
-    # --json: the bridge's own failures in the engine's shape, and no prompt.
-    $script:ExakitVsJson = $json
     if ($action -notin @("list", "issues", "catalog", "show", "describe", "check", "reauth", "refresh", "disconnect", "remove")) {
-        Deny-ExakitInput "Unknown source action '$action' (list, issues, show, describe, check, reauth, refresh, disconnect, remove, catalog)."
+        Deny-ExakitVsInput "Unknown source action '$action' (list, issues, show, describe, check, reauth, refresh, disconnect, remove, catalog)." "unknown source action '$action'" "use one of list, issues, show, describe, check, reauth, refresh, disconnect, remove, catalog (exakit help source)"
     }
     if ($action -in @("show", "describe", "reauth", "refresh", "disconnect", "remove") -and -not $name) {
-        Deny-ExakitInput "exakit source $action needs a source name (see: exakit source list)."
+        Deny-ExakitVsInput "exakit source $action needs a source name (see: exakit source list)." "exakit source $action needs a source name" "name the source; the sources are listed by: exakit source list" "exakit source list"
     }
-    if ($action -eq "check" -and -not $name -and -not $all) { Deny-ExakitInput "exakit source check needs a name or --all." }
+    if ($action -eq "check" -and -not $name -and -not $all) { Deny-ExakitVsInput "exakit source check needs a name or --all." "exakit source check needs a name or --all" "name the source, or give --all to check every one" "exakit source check --all" }
     $argv = @()
     if ($json) { $argv += "--json" }
     switch ($action) {
@@ -3638,9 +3642,20 @@ function Invoke-CmdSource {
                 exit $shown.Code
             }
             $shownConnector = ""
-            foreach ($line in $shown.Lines) { if ("$line" -like "RESULT *") { $shownConnector = "" + ("$line".Substring(7) | ConvertFrom-Json).connector } }
+            if ($json) {
+                try { $shownConnector = "" + ((@($shown.Lines) -join "`n") | ConvertFrom-Json).connector } catch { }
+            } else {
+                foreach ($line in $shown.Lines) { if ("$line" -like "RESULT *") { $shownConnector = "" + ("$line".Substring(7) | ConvertFrom-Json).connector } }
+            }
             $secret = Read-ExakitVsSecret -Label "New credential for $name" -PasswordFile $pwFile -Kind (Get-ExakitVsSecretKind -Connector $shownConnector)
-            if (-not $secret) { Deny-ExakitInput "No credential was given." }
+            if (-not $secret) { Deny-ExakitVsInput "No credential was given." "no credential was given" "give it with --password-file <file> (PowerShell does not read a credential from standard input)" }
+            if ($json) {
+                # Twin of cmd_source: the engine's one object, as it answers.
+                $run = Invoke-ExakitVsEngine -Arguments ($argv + @("reauth", $name, "--secret-stdin")) -Secret $secret
+                $secret = $null
+                foreach ($line in $run.Lines) { Write-Output $line }
+                exit $run.Code
+            }
             $code = Invoke-ExakitVsRun -Arguments ($argv + @("reauth", $name, "--secret-stdin")) -Secret $secret
             $secret = $null
             if ($code -eq 0) { Ok "$name is ready again with the new credential" }

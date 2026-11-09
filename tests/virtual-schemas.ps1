@@ -322,7 +322,72 @@ Set-Content -LiteralPath $state -Value ($db | ConvertTo-Json -Depth 8) -Encoding
 $one = Invoke-JsonConnect (@("pg", "--name", "jsonjava") + $pgSet + @("--password-file", $jsonPw, "--json"))
 Check "a Java container that is missing, without --yes: one object, exit 21" "True 21 nojava" "$one $jsonCode $($jsonDoc.kind)"
 Check "...whose fix names --yes" $true ("$($jsonDoc.remedy)".Contains("--yes"))
+# A --password-file that cannot be read: one object, never a PowerShell error.
+$one = Invoke-JsonConnect (@("pg", "--name", "jsondir") + $pgSet + @("--password-file", $work, "--json"))
+Check "a --password-file that is a folder: one object, exit 2, kind input" "True 2 input" "$one $jsonCode $($jsonDoc.kind)"
+if ($PSVersionTable.PSEdition -eq "Core" -and -not $IsWindows) {
+    $locked = Join-Path $work "locked.pw"
+    Set-Content -LiteralPath $locked -Value "x" -Encoding ASCII -NoNewline
+    & chmod 000 $locked
+    $one = Invoke-JsonConnect (@("pg", "--name", "jsonlocked") + $pgSet + @("--password-file", $locked, "--json"))
+    Check "a --password-file that exists but cannot be read: one object, exit 2" "True 2 input" "$one $jsonCode $($jsonDoc.kind)"
+    & chmod 600 $locked
+} else { $script:PASS++; Write-Host "  ok   an unreadable --password-file: skipped (no chmod here)" }
+# The gate before the name, with --json as without: exit 5 both ways.
+$catalogFile = Join-Path $defs "catalog.json"
+$cat = Get-Content -Raw -LiteralPath $catalogFile | ConvertFrom-Json
+$cat.connectors += [pscustomobject]@{ id = "gatedtest"; name = "Gated Test"; aliases = @("gt"); profile = "java-jdbc"; tier = "GA"; status = "gated"; gate = "not qualified yet" }
+Set-Content -LiteralPath $catalogFile -Value ($cat | ConvertTo-Json -Depth 8) -Encoding ASCII
+New-Item -ItemType Directory -Force -Path (Join-Path $defs "connectors/gatedtest") | Out-Null
+Copy-Item (Join-Path $defs "connectors/postgresql/connector.json") (Join-Path $defs "connectors/gatedtest/connector.json")
+$one = Invoke-JsonConnect @("gatedtest", "--json")
+Check "a gated connector and no name, --json: one object, exit 5" "True 5 gated" "$one $jsonCode $($jsonDoc.kind)"
+[void](Invoke-JsonConnect @("gatedtest"))
+Check "...and without --json: exit 5 too" 5 $jsonCode
+$one = Invoke-JsonConnect (@("pg", "--name", "Bad-Name") + $pgSet + @("--json"))
+Check "an invalid name, --json: one object, exit 2" "True 2 input" "$one $jsonCode $($jsonDoc.kind)"
 Set-Content -LiteralPath $state -Value '{"sources": {"pg.example.com": {"tables": ["ORDERS"]}}}' -Encoding ASCII
+
+Write-Host ""
+Write-Host "== exakit source --json (PowerShell): one object of the same shape =="
+$srcChildFile = Join-Path $work "src-child.ps1"
+Set-Content -LiteralPath $srcChildFile -Value ($urlChild -replace "Invoke-CmdConnect", "Invoke-CmdSource") -Encoding ASCII
+function Invoke-JsonSource {
+    param([string[]]$A)
+    $ErrorActionPreference = "Continue"
+    $o = & $pwsh -NoProfile -File $srcChildFile $repo $defs $home2 $deploy $python $srcRecord @A 2>$null
+    $script:jsonCode = $LASTEXITCODE
+    $ErrorActionPreference = "Stop"
+    $script:jsonText = (@($o) | ForEach-Object { "$_" }) -join "`n"
+    $script:jsonDoc = $null
+    try { $script:jsonDoc = $script:jsonText | ConvertFrom-Json } catch { }
+    return ($null -ne $script:jsonDoc -and $script:jsonDoc -isnot [array])
+}
+$srcRecord = Join-Path $work "src-calls.txt"
+[void](Invoke-JsonConnect (@("pg", "--name", "jsonre") + $pgSet + @("--password-file", $jsonPw, "--json")))
+Check "a source to reauth: connected" "0 True" "$jsonCode $($jsonDoc.ok)"
+$db = Get-Content -Raw -LiteralPath $state | ConvertFrom-Json
+$db.sources.'pg.example.com' | Add-Member -NotePropertyName secret -NotePropertyValue "Json-Pw-2" -Force
+Set-Content -LiteralPath $state -Value ($db | ConvertTo-Json -Depth 8) -Encoding ASCII
+$jsonPw2 = Join-Path $work "json2.pw"
+Set-Content -LiteralPath $jsonPw2 -Value "Json-Pw-2" -Encoding ASCII -NoNewline
+Remove-Item -LiteralPath $srcRecord -ErrorAction SilentlyContinue
+$one = Invoke-JsonSource @("reauth", "jsonre", "--json", "--password-file", $jsonPw2)
+Check "reauth --json: one object, exit 0, the source ready" "True 0 True ready" "$one $jsonCode $($jsonDoc.ok) $($jsonDoc.status)"
+Check "...no rendered line on stdout" $false ($jsonText.Contains("ready again"))
+Check "...the engine asked with --json once" "--json show jsonre|--json reauth jsonre --secret-stdin" ((Get-Content -LiteralPath $srcRecord) -join "|")
+$one = Invoke-JsonSource @("reauth", "jsonre", "--json", "--password-file", $jsonPw)
+Check "reauth --json with a credential the source refuses: one failure object" "True False auth True" "$one $($jsonDoc.ok) $($jsonDoc.kind) $([bool]$jsonDoc.remedy)"
+$one = Invoke-JsonSource @("reauth", "jsonre", "--json", "--password-file", $work)
+Check "reauth --json, a --password-file that cannot be read: one object, exit 2" "True 2 input" "$one $jsonCode $($jsonDoc.kind)"
+$one = Invoke-JsonSource @("reauth", "jsonre", "--json")
+Check "reauth --json, no credential: one object, exit 2" "True 2 input" "$one $jsonCode $($jsonDoc.kind)"
+foreach ($a in @(@("bogus", "--json"), @("show", "--json"), @("check", "--json"), @("list", "--bogus", "--json"), @("show", "a", "b", "--json"))) {
+    $one = Invoke-JsonSource $a
+    Check ("source {0}: one object, exit 2, kind input, remedy and command keys" -f ($a -join " ")) "True 2 input True True" "$one $jsonCode $($jsonDoc.kind) $([bool]$jsonDoc.remedy) $($null -ne $jsonDoc.PSObject.Properties['command'])"
+}
+[void](Invoke-JsonSource @("show", "--json"))
+Check "...a missing name's command lists the sources" "exakit source list" $jsonDoc.command
 
 Write-Host ""
 Write-Host "== --json repairs say what they do on stderr, the answer is the retry's =="
@@ -337,6 +402,10 @@ $script:jcodes.AddRange(@(21, 0))
 $code = Invoke-ExakitVsRun -Arguments @("connect")
 Check "exit 21 with consent: Java installed, retried, the engine called with --json first" "0 --json|JAVA|--json" ("$code " + ($script:jcalls -join "|"))
 Check "...only the retry's answer is kept for stdout" "{`"try`": 3}" ($script:ExakitVsLastLines -join "")
+function Install-ExakitVsJava { [void]$script:jcalls.Add("JAVA"); throw "the download did not match its checksum (test)" }
+$script:jcalls.Clear(); $script:jcodes.AddRange(@(21))
+$code = Invoke-ExakitVsRun -Arguments @("--json", "connect")
+Check "an install that throws: no retry, exit 21, the first run's object kept" "21 --json|JAVA {`"try`": 1}" ("$code " + ($script:jcalls -join "|") + " " + ($script:ExakitVsLastLines -join ""))
 $script:ExakitVsJson = $false
 
 Remove-Item Env:\EXAKIT_VS_FAKE_DB, Env:\FAKE_VS_STATE

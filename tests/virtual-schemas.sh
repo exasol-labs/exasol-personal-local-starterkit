@@ -2532,7 +2532,10 @@ jsonsh() { # jsonsh <stdin-file> <args...> - stdout in JOUT, stderr in JERR, exi
       . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
       _require_install() { :; }; exakit_init_logging() { EXAKIT_LOG_FILE="$WORK/json.log"; }
       exakit_vs_engine() { eng "$@"; }
-      if [ -n "${JSON_JAVA_INSTALL:-}" ]; then
+      if [ "${JSON_JAVA_INSTALL:-}" = die ]; then
+          # A download that fails its checksum: die, as verify_sha256 does.
+          _exakit_vs_install_java() { die "The Java language container download did not match its checksum (test)."; }
+      elif [ -n "${JSON_JAVA_INSTALL:-}" ]; then
           _exakit_vs_install_java() {
               info "Installing the Java language container (test)"
               _exakit_vs_confirm "Install the Java language container now?" || return 1
@@ -2626,6 +2629,68 @@ check "a refused credential, engine --json: exit 1, kind auth, a first connect h
 lacks "...error is the driver's words, the fix is in remedy" "nothing was kept" "$(JOUT="$OUT" one 'd["error"]')"
 has "...remedy" "nothing was kept" "$(JOUT="$OUT" one 'd["remedy"]')"
 has "...the FAIL line on stderr still says both" "nothing was kept" "$(cat "$WORK/json.err")"
+# A repair that dies (a download failing its size or checksum) ends only the
+# repair: the first run's object is the answer, and no temporary file is left.
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["java"]=False; json.dump(d, open(sys.argv[1], "w"))' "$STATE"
+mkdir -p "$WORK/json-tmp"
+TMPDIR="$WORK/json-tmp" JSON_JAVA_INSTALL=die jsonsh "$WORK/json.secret" pg --name jsondie $PG_SET --json --yes
+check "Java missing, --yes, the install dies: exit 21, one object - the first run's" "21 [False, 'nojava', True, True, True, True]" "$JRC $(one "$SHAPE")"
+has "...the reason is on stderr" "did not match its checksum (test)" "$JERR"
+check "...and no temporary file is left behind" "" "$(ls "$WORK/json-tmp" 2>/dev/null)"
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["java"]=True; json.dump(d, open(sys.argv[1], "w"))' "$STATE"
+TMPDIR="$WORK/no-such-tmp" jsonsh "$WORK/json.secret" pg --name jsontmp $PG_SET --json
+check "no temporary file can be made: exit 1, one object (kind setup)" "1 [False, 'setup', True, True, True, True]" "$JRC $(one "$SHAPE")"
+# The gate comes before the name, with --json as without: exit 5 both ways.
+jsonsh /dev/null gatedtest --json
+check "a gated connector and no name, --json: exit 5, one object" "5 [False, 'gated', True, True, True, True]" "$JRC $(one "$SHAPE")"
+jsonsh /dev/null gatedtest
+check "...and without --json: exit 5 too" "5" "$JRC"
+jsonsh /dev/null pg --name Bad-Name $PG_SET --json
+check "an invalid name, --json: exit 2, one object" "2 [False, 'input', True, True, True, True]" "$JRC $(one "$SHAPE")"
+# Without --json an unreadable --password-file says what it always said.
+: > "$WORK/json.log"
+jsonsh /dev/null pg --name jsonnofile $PG_SET --password-file "$WORK/no-such.pw"
+check "without --json, an unreadable --password-file: exit 2" "2" "$JRC"
+has "...the reader's own line" "Cannot read $WORK/no-such.pw" "$JERR"
+check "...logged as an error, not as a refusal card" "1 0" \
+    "$(grep -c "ERROR Cannot read" "$WORK/json.log") $(grep -c "REJECT Cannot read" "$WORK/json.log")"
+
+printf '\n== exakit source --json: one object of the same shape ==\n'
+jsonsrc() { # jsonsrc <stdin-file> <args...> - cmd_source; stdout in JOUT, stderr in JERR, exit in JRC
+    _js_in="$1"; shift
+    JOUT="$( ( EXAKIT_HOME="$HOME_K"
+      . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
+      _require_install() { :; }; exakit_init_logging() { EXAKIT_LOG_FILE="$WORK/json.log"; }
+      exakit_vs_engine() { printf '%s\n' "$*" >> "$WORK/json.argv"; eng "$@"; }
+      cmd_source "$@" ) < "$_js_in" 2> "$WORK/json.err" )"; JRC=$?
+    JERR="$(cat "$WORK/json.err")"
+}
+printf 'rotated' > "$WORK/json.rotated"; printf 'not-it' > "$WORK/json.wrong"
+rm -f "$WORK/json.argv"; : > "$WORK/json.log"
+jsonsrc /dev/null reauth jsonjava --json --password-file "$WORK/json.rotated"
+check "reauth --json: exit 0, one object - the engine's" "0 [True, 'ready']" "$JRC $(one '[d["ok"], d["status"]]')"
+check "...the engine was asked with --json once" "--json show jsonjava|--json reauth jsonjava --secret-stdin|" "$(tr '\n' '|' < "$WORK/json.argv")"
+lacks "...its events are not on the terminal" "OK " "$JERR"
+has "...they are in the log" "OK " "$(cat "$WORK/json.log")"
+jsonsrc /dev/null reauth jsonjava --json --password-file "$WORK/json.wrong"
+check "reauth --json with a credential the source refuses: one failure object" "[False, 'auth', True, True, True]" \
+    "$(one '[d["ok"], d["kind"], bool(d["error"]), bool(d["remedy"]), "command" in d]')"
+jsonsrc /dev/null reauth jsonjava --json --password-file "$WORK/json-tmp"
+check "reauth --json, a --password-file that cannot be read: exit 2, one object" "2 [False, 'input', True, True, True, True]" "$JRC $(one "$SHAPE")"
+jsonsrc /dev/null reauth jsonjava --json
+check "reauth --json, no credential: exit 2, one object" "2 [False, 'input', True, True, True, True]" "$JRC $(one "$SHAPE")"
+jsonsrc /dev/null reauth jsonjava --password-file "$WORK/no-such.pw"
+check "reauth without --json, an unreadable file: exit 2, the reader's own line" "2 1" "$JRC $(printf '%s\n' "$JERR" | grep -c "Cannot read")"
+for args in "bogus --json" "show --json" "check --json" "list --bogus --json" "show a b --json"; do
+    # shellcheck disable=SC2086
+    jsonsrc /dev/null $args
+    check "source $args: exit 2, one failure object" "2 [False, 'input', True, True, True, True]" "$JRC $(one "$SHAPE")"
+done
+jsonsrc /dev/null show --json
+check "...a missing name's command lists the sources" "exakit source list" "$(one 'd["command"]')"
+jsonsrc /dev/null show nosuch --json
+check "source show of no such source: exit 4, one object" "4 [False, 'missing', 'exakit source list']" "$JRC $(one '[d["ok"], d["kind"], d["command"]]')"
+
 run remove jsonok
 run remove jsonjava
 

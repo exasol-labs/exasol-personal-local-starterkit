@@ -27,9 +27,10 @@ and plain ASCII survives every code page.
 
 Without --json, one "OK|INFO|WARN|FAIL <text>" line per event on stdout for
 the shell to render. With --json, events go to stderr and stdout carries one
-JSON object, and only that, whatever happens; for plan and connect it always
-has public_ip (publicip.py), null when it is not known or the source is not on
-the internet. A failure is
+JSON object, and only that, whatever happens; for plan and connect (and
+paste, the step connect --url takes first) it always has public_ip
+(publicip.py), null when it is not known or the source is not on the
+internet. A failure is
 
     {"ok": false, "error": <what happened>, "kind": <its class>,
      "remedy": <the fix, in words>, "command": <the exakit command that is the
@@ -393,9 +394,10 @@ def main(argv=None):
     if args.json:
         payload = dict(result or {})
         payload.setdefault("ok", code == 0)
-        if args.command in ("plan", "connect"):
-            # Always present for these two: the address a source on the
-            # internet must allow, null when it is not known or not needed.
+        if args.command in ("plan", "connect", "paste"):
+            # Always present for plan and connect: the address a source on the
+            # internet must allow, null when it is not known or not needed -
+            # and for paste, the step connect --url takes before them.
             try:
                 payload.setdefault("public_ip", engine.public_ip() if engine is not None else None)
             except Exception:  # noqa: BLE001 - an address is never worth the answer

@@ -65,7 +65,11 @@ function Invoke-ExakitVsEngine {
     } else {
         $argv += $Arguments
     }
-    $errFile = [System.IO.Path]::GetTempFileName()
+    try { $errFile = [System.IO.Path]::GetTempFileName() }
+    catch {
+        if (-not $asJson) { throw }
+        return [pscustomobject]@{ Code = 1; Lines = @(New-ExakitVsFailureJson -Kind "setup" -Problem "could not create a temporary file" -Remedy "check that the temporary folder exists, is writable and has space, then run the same command again") }
+    }
     $previous = $ErrorActionPreference
     $previousEncoding = $OutputEncoding
     try {
@@ -149,8 +153,14 @@ function Show-ExakitVsLines {
 function Read-ExakitVsSecret {
     param([string]$Label, [string]$PasswordFile = "", [string]$Kind = "secret")
     if ($PasswordFile) {
-        if (-not (Test-Path -LiteralPath $PasswordFile)) { Deny-ExakitInput "Cannot read $PasswordFile" }
-        return ((Get-Content -Raw -LiteralPath $PasswordFile) -replace "[\r\n]+$", "")
+        # A file that is there but cannot be read throws in Get-Content: that
+        # is the same refusal as a missing one (with --json, the one object).
+        $text = $null; $read = $false
+        if (Test-Path -LiteralPath $PasswordFile -PathType Leaf) {
+            try { $text = Get-Content -Raw -LiteralPath $PasswordFile -ErrorAction Stop; $read = $true } catch { $read = $false }
+        }
+        if (-not $read) { Deny-ExakitVsInput "Cannot read $PasswordFile" "cannot read $PasswordFile" "give a file this user can read with --password-file" }
+        return ("$text" -replace "[\r\n]+$", "")
     }
     # --json never prompts: without --password-file there is no credential.
     if ($script:ExakitVsJson) { return "" }
@@ -298,7 +308,8 @@ function Invoke-ExakitVsRun {
     param([string[]]$Arguments, [string]$Secret = "")
     $script:ExakitVsResult = $null
     $script:ExakitVsLastLines = @()
-    if ($script:ExakitVsJson) { $Arguments = @("--json") + @($Arguments) }
+    # Once: a caller that built its arguments with --json already has it.
+    if ($script:ExakitVsJson -and (@($Arguments) -notcontains "--json")) { $Arguments = @("--json") + @($Arguments) }
     for ($try = 1; $try -le 2; $try++) {
         $run = Invoke-ExakitVsEngine -Arguments $Arguments -Secret $Secret
         if ($script:ExakitVsJson) { $script:ExakitVsLastLines = @($run.Lines) }
@@ -306,7 +317,17 @@ function Invoke-ExakitVsRun {
         if ($try -eq 2) { break }
         if (@(20, 21, 23) -notcontains $run.Code) { break }
         $code = $run.Code
-        if (-not (Invoke-ExakitVsAside { Repair-ExakitVsForRetry -Code $code })) { break }
+        if ($script:ExakitVsJson) {
+            # A repair that throws (a download, an install) ends the repair,
+            # not the command: the first run's object is still the answer.
+            $fixed = $false
+            try { $fixed = Invoke-ExakitVsAside { Repair-ExakitVsForRetry -Code $code } }
+            catch {
+                [Console]::Error.WriteLine("  " + $_.Exception.Message)
+                if (Get-Command Write-ExakitLog -ErrorAction SilentlyContinue) { Write-ExakitLog "ERROR" $_.Exception.Message }
+            }
+            if (-not $fixed) { break }
+        } elseif (-not (Invoke-ExakitVsAside { Repair-ExakitVsForRetry -Code $code })) { break }
     }
     return $run.Code
 }
