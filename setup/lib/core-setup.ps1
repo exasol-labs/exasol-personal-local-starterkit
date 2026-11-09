@@ -338,8 +338,11 @@ function Invoke-ExakitUpdateHandover {
             foreach ($line in @(Get-Content -LiteralPath $resultsFile -ErrorAction SilentlyContinue)) {
                 # component|outcome|from|to|remedy|error|hint - the last two
                 # optional, so a row from a kit that wrote five still reads.
+                # A failed row with no component is the new run's own reason
+                # for ending outside every component (Invoke-CmdUpdate's
+                # catch); Write-ExakitUpdateJsonReport makes it the run entry.
                 $parts = @("$line" -split '\|', 7)
-                if ($parts.Count -ge 5 -and $parts[0]) {
+                if ($parts.Count -ge 5 -and ($parts[0] -or $parts[1] -eq "failed")) {
                     $rowError = $(if ($parts.Count -ge 6) { $parts[5] } else { "" })
                     $rowHint = $(if ($parts.Count -ge 7) { $parts[6] } else { "" })
                     [void]$script:ExakitUpdateResults.Add([pscustomobject]@{
