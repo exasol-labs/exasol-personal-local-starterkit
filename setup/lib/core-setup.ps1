@@ -295,10 +295,13 @@ function Invoke-ExakitCoreUpdateCheck {
 
 # Invoke-ExakitUpdateHandover - `exakit update`'s first check: this run just
 # downloaded a newer kit, so the NEW exakit.ps1 finishes it (the remaining
-# components and its own task list). Under --json the new run writes its rows
-# to a file this run merges back, so the caller still prints ONE object.
-# Returns the new run's exit code, or $null when there is no new command to
-# hand over to. Twin of exakit_update_handover.
+# components and its own task list). Under --json the new run is a --json run
+# too (each failure a row, the rest still tried) and writes its rows to a file
+# this run merges back, so the caller still prints ONE object;
+# EXAKIT_UPDATE_ROW_FIELDS=7 tells it this reader takes the error and hint
+# fields. Returns the new run's exit code, or $null when there is no new
+# command to hand over to - decided before anything runs, never read off an
+# exit code. Twin of exakit_update_handover.
 function Invoke-ExakitUpdateHandover {
     param([string]$Target = "all", [bool]$AssumeYes = $false)
     $newPs1 = Join-ExakitCorePath $script:ExakitHome "kit" "setup" "exakit.ps1"
@@ -307,15 +310,18 @@ function Invoke-ExakitUpdateHandover {
     $resultsFile = $null
     $previousHandover = $env:EXAKIT_UPDATE_HANDOVER
     $previousResults = $env:EXAKIT_UPDATE_RESULTS_FILE
+    $previousRowFields = $env:EXAKIT_UPDATE_ROW_FIELDS
     $previous = $ErrorActionPreference
     try {
         $env:EXAKIT_UPDATE_HANDOVER = "1"
+        $env:EXAKIT_UPDATE_ROW_FIELDS = "7"
         if ($script:ExakitUpdateJson) {
             $resultsFile = [System.IO.Path]::GetTempFileName()
             $env:EXAKIT_UPDATE_RESULTS_FILE = $resultsFile
         }
         $argv = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $newPs1, "update", $Target)
         if ($AssumeYes) { $argv += "--yes" }
+        if ($script:ExakitUpdateJson) { $argv += "--json" }
         $ErrorActionPreference = "Continue"
         $exe = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
         if ($script:ExakitUpdateJson) {
@@ -348,6 +354,7 @@ function Invoke-ExakitUpdateHandover {
         $ErrorActionPreference = $previous
         $env:EXAKIT_UPDATE_HANDOVER = $previousHandover
         $env:EXAKIT_UPDATE_RESULTS_FILE = $previousResults
+        $env:EXAKIT_UPDATE_ROW_FIELDS = $previousRowFields
         if ($resultsFile) { Remove-Item -Force -LiteralPath $resultsFile -ErrorAction SilentlyContinue }
     }
 }

@@ -215,7 +215,8 @@ printf '\n== exakit update: the handover to a freshly downloaded kit ==\n'
 cat > "$U/home/bin/exakit" <<EOF
 #!/bin/sh
 echo "new-exakit \$* handover=\${EXAKIT_UPDATE_HANDOVER:-0}" >> "$U/handover-calls"
-exit 4
+echo "\${EXAKIT_UPDATE_ROW_FIELDS:-unset}" > "$U/handover-rowfields"
+exit \$(cat "$U/handover-rc" 2>/dev/null || echo 4)
 EOF
 chmod +x "$U/home/bin/exakit"
 # ho_run <kit-version-before> <handover-flag> <targets> — _exakit_update_run
@@ -262,6 +263,35 @@ _ho="$(ho_run 0.3.0 0 "exakit exapump mcp")"
 check "the old updater updated the kit, then handed the rest over" \
     "updater exakit|new-exakit update all handover=1|" "$(tr '\n' '|' < "$U/handover-calls")"
 check "...and its exit code is the new run's" "rc=4" "$_ho"
+check "...told that this kit's reader takes the error and hint fields" "7" "$(cat "$U/handover-rowfields")"
+
+# 127 IS THE NEW RUN'S OWN ANSWER. "Is there a new exakit" is asked before the
+# handover, so a new run that ends in 127 is not read as "no handover": the old
+# process neither defers the components the new run already handled nor runs
+# anything after it.
+rm -f "$U/handover-calls" "$U/ho-results"
+printf '127' > "$U/handover-rc"
+: > "$U/ho-results"
+_ho="$(EXAKIT_UPDATE_RESULTS="$U/ho-results" ho_run 0.3.0 0 "exakit exapump mcp")"
+rm -f "$U/handover-rc"
+check "a new run that exits 127: its code stands" "rc=127" "$_ho"
+check "...and the old process ran nothing after the handover" \
+    "updater exakit|new-exakit update all handover=1|" "$(tr '\n' '|' < "$U/handover-calls")"
+lacks "...and booked nothing deferred for it" "|deferred|" "$(cat "$U/ho-results")"
+
+# NO NEW COMMAND: the rest is deferred to the next `exakit update`, and the
+# new-setup check is NOT made by this process - it holds the old task list
+# and would rerun the old installer.
+rm -f "$U/handover-calls" "$U/ho-results"
+chmod -x "$U/home/bin/exakit"
+: > "$U/ho-results"
+_ho="$(EXAKIT_UPDATE_RESULTS="$U/ho-results" ho_run 0.3.0 0 "exakit exapump mcp")"
+chmod +x "$U/home/bin/exakit"
+check "no new exakit: the kit is updated, nothing after it runs on the old code" \
+    "updater exakit|" "$(tr '\n' '|' < "$U/handover-calls")"
+has "...the rest is deferred to the next run" "exapump|deferred|1.0|2.0|exakit update" "$(cat "$U/ho-results")"
+has "...every one of them" "mcp|deferred|1.0|2.0|exakit update" "$(cat "$U/ho-results")"
+lacks "...and the old process makes no new-setup check" "core-check" "$(cat "$U/handover-calls")"
 
 rm -f "$U/handover-calls"
 _ho="$(ho_run 0.3.1 1 "exakit exapump mcp")"
@@ -272,6 +302,52 @@ rm -f "$U/handover-calls"
 _ho="$(ho_run 0.3.1 0 "exakit exapump")"
 check "a kit that is already current hands nothing over" "updater exapump|core-check all|" \
     "$(tr '\n' '|' < "$U/handover-calls")"
+
+printf '\n== handover rows: five fields unless the reader declared seven ==\n'
+# In a handover the OLD kit reads the rows the NEW kit writes. Kits before the
+# error and hint fields unpack exactly five - a sixth field is a ValueError, no
+# JSON at all, exit 1. That reader, verbatim from the kits that shipped it:
+cat > "$WORK/old-reader.py" <<'EXAKIT_OLD_READER'
+import sys
+rows = []
+with open(sys.argv[1], encoding="utf-8") as handle:
+    for line in handle:
+        parts = line.rstrip("\n").split("|")
+        if len(parts) >= 5 and parts[0]:
+            rows.append(parts)
+out = []
+for comp, outcome, cur, avail, remedy in rows:
+    out.append("%s %s %s" % (comp, outcome, remedy))
+print(";".join(out))
+EXAKIT_OLD_READER
+# rows_written <handover> <row-fields> - the rows _exakit_update_note writes.
+rows_written() {
+    ( EXAKIT_HOME="$U/home"
+      EXAKIT_MANIFEST="$U/home/manifest.json"
+      . "$ROOT/setup/lib/common.sh"
+      EXAKIT_UPDATE_RESULTS="$WORK/rows"; : > "$EXAKIT_UPDATE_RESULTS"
+      EXAKIT_UPDATE_HANDOVER="$1"; EXAKIT_UPDATE_ROW_FIELDS="$2"
+      _exakit_update_note personal failed 2.3.0 2.4.0 "wsl --update" "nft|failed" "run wsl --update"
+      _exakit_update_note uv updated 0.13.6 0.13.7
+      cat "$EXAKIT_UPDATE_RESULTS" )
+}
+_rows="$(rows_written 1 "")"
+check "a handed-over run with no marker writes five fields" "5;5" \
+    "$(printf '%s\n' "$_rows" | awk -F'|' '{printf "%s%s", (NR > 1 ? ";" : ""), NF}')"
+printf '%s\n' "$_rows" > "$WORK/rows"
+check "...which a five-field reader parses, remedy intact" \
+    "personal failed wsl --update;uv updated " "$(python3 "$WORK/old-reader.py" "$WORK/rows" 2>&1)"
+_rows="$(rows_written 1 7)"
+check "with the marker: seven fields, the separator taken out of the error" \
+    "personal|failed|2.3.0|2.4.0|wsl --update|nft/failed|run wsl --update" "$(printf '%s\n' "$_rows" | head -n 1)"
+_rows="$(rows_written 0 "")"
+check "a run that reads its own rows writes seven" "7" "$(printf '%s\n' "$_rows" | head -n 1 | awk -F'|' '{print NF}')"
+# And the reader this kit has takes both shapes.
+printf 'personal|failed|2.3.0|2.4.0|wsl --update\nuv|updated|0.13.6|0.13.7|\n' > "$WORK/rows"
+_json="$( ( EXAKIT_HOME="$U/home"; EXAKIT_MANIFEST="$U/home/manifest.json"; . "$ROOT/setup/lib/common.sh"
+            _exakit_update_json_report "$WORK/rows" 1 ) 2>/dev/null)"
+check "this kit's reader takes a five-field row" "failed wsl --update" \
+    "$(printf '%s' "$_json" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["status"], d["failed"][0]["remedy"])')"
 
 printf '\n== the installer: seven steps, the database step fourth ==\n'
 for _s in setup/setup-macos.sh setup/setup-linux.sh; do

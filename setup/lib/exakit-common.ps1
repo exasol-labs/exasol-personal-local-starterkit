@@ -2968,11 +2968,19 @@ function Add-ExakitUpdateNote {
     # A run handed over by the previous kit's updater (see
     # Invoke-ExakitUpdateHandover) writes its rows where that run can merge
     # them, so `exakit update --json` still answers with ONE object.
+    # FIVE FIELDS FOR A READER THAT ONLY KNOWS FIVE: kits before the error and
+    # hint fields split the row into five and glued the rest onto remedy, so
+    # the two extra fields are written only when the parent declared it reads
+    # them (EXAKIT_UPDATE_ROW_FIELDS=7, set by Invoke-ExakitUpdateHandover).
     if ($env:EXAKIT_UPDATE_HANDOVER -eq "1" -and $env:EXAKIT_UPDATE_RESULTS_FILE) {
-        $fileError = ("" + $ErrorText) -replace '\|', '/' -replace "[`r`n]", ' '
-        $fileHint = ("" + $Hint) -replace '\|', '/' -replace "[`r`n]", ' '
+        $row = "{0}|{1}|{2}|{3}|{4}" -f $Component, $Outcome, $From, $To, $Remedy
+        if ($env:EXAKIT_UPDATE_ROW_FIELDS -eq "7") {
+            $fileError = ("" + $ErrorText) -replace '\|', '/' -replace "[`r`n]", ' '
+            $fileHint = ("" + $Hint) -replace '\|', '/' -replace "[`r`n]", ' '
+            $row = "{0}|{1}|{2}" -f $row, $fileError, $fileHint
+        }
         try {
-            Add-Content -LiteralPath $env:EXAKIT_UPDATE_RESULTS_FILE -Value ("{0}|{1}|{2}|{3}|{4}|{5}|{6}" -f $Component, $Outcome, $From, $To, $Remedy, $fileError, $fileHint) -Encoding UTF8
+            Add-Content -LiteralPath $env:EXAKIT_UPDATE_RESULTS_FILE -Value $row -Encoding UTF8
         } catch { }
     }
     if (-not $script:ExakitUpdateJson) { return }

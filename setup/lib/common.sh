@@ -6864,8 +6864,21 @@ exakit_update() {
 # [error] [remedy hint] — one line in the --json results file; a no-op on the
 # human screen. The error and the hint are sentences, so the field separator
 # and line breaks are taken out of them before they are written.
+#
+# FIVE FIELDS FOR A READER THAT ONLY KNOWS FIVE. A run handed over by the
+# previous kit's updater (EXAKIT_UPDATE_HANDOVER=1) writes into THAT kit's
+# results file, and THAT kit's reader parses the rows. Kits before the
+# error/hint fields unpack exactly five (`for comp, outcome, cur, avail,
+# remedy in rows` - a sixth field is a ValueError and no JSON at all), so a
+# handed-over run writes the two extra fields only when the parent declared
+# it reads them (EXAKIT_UPDATE_ROW_FIELDS=7, set by exakit_update_handover).
+# Any other run reads its own rows. ⇄ twin: Add-ExakitUpdateNote.
 _exakit_update_note() {
     [ -n "${EXAKIT_UPDATE_RESULTS:-}" ] || return 0
+    if [ "${EXAKIT_UPDATE_HANDOVER:-0}" = "1" ] && [ "${EXAKIT_UPDATE_ROW_FIELDS:-5}" != "7" ]; then
+        printf '%s|%s|%s|%s|%s\n' "$1" "$2" "${3:-}" "${4:-}" "${5:-}" >> "$EXAKIT_UPDATE_RESULTS"
+        return 0
+    fi
     _eun_error="$(printf '%s' "${6:-}" | tr '|\n\r' '/  ')"
     _eun_hint="$(printf '%s' "${7:-}" | tr '|\n\r' '/  ')"
     printf '%s|%s|%s|%s|%s|%s|%s\n' "$1" "$2" "${3:-}" "${4:-}" "${5:-}" "$_eun_error" "$_eun_hint" >> "$EXAKIT_UPDATE_RESULTS"
@@ -7194,15 +7207,19 @@ _exakit_update_run() {
         [ "$_upd_actual" = "exakit" ] && _upd_kit_now="$(exakit_component_current exakit 2>/dev/null || true)"
         if [ "$_upd_actual" = "exakit" ] && [ "${EXAKIT_UPDATE_HANDOVER:-0}" != "1" ] && \
            [ -n "$_cur" ] && [ -n "$_upd_kit_now" ] && [ "$_upd_kit_now" != "$_cur" ]; then
-            if command -v exakit_update_handover >/dev/null 2>&1; then
-                exakit_update_handover "$_target"
-                _upd_handover_rc=$?
-                [ "$_upd_handover_rc" -ne 127 ] && return "$_upd_handover_rc"
+            # Whether a new exakit is there is asked BEFORE the handover, never
+            # read off its exit code: whatever the new run returns, 127
+            # included, is its own answer, and the rows it wrote stand.
+            if command -v exakit_update_handover_ready >/dev/null 2>&1; then
+                if exakit_update_handover_ready; then
+                    exakit_update_handover "$_target"
+                    return $?
+                fi
                 warn "The updated exakit command was not found - the rest of this update waits for the next 'exakit update'"
             fi
             # No handover: nothing after the kit runs on the old code (see the
-            # _upd_kit_swapped skip at the top of this loop). Said once, and
-            # only when something is left.
+            # _upd_kit_swapped skip at the top of this loop, and CHECK 2
+            # below). Said once, and only when something is left.
             _upd_kit_swapped=1
             if [ "$(printf '%s\n' $_targets | tail -n 1)" != "$_component" ]; then
                 info "The starter kit itself was updated; run 'exakit update' again so the rest is updated by the new kit."
@@ -7211,8 +7228,11 @@ _exakit_update_run() {
     done
     # CHECK 2: does this kit ask for setup this machine has not completed?
     # Only the installer holds that setup, so a pending task reruns it once.
+    # Not after a kit swap that was not handed over: this process holds the
+    # OLD task list and would rerun the OLD installer. The next
+    # `exakit update`, which the new kit runs, makes this check itself.
     EXAKIT_CORE_UPDATE_ACTED=0
-    if command -v exakit_core_update_check >/dev/null 2>&1; then
+    if [ "${_upd_kit_swapped:-0}" != "1" ] && command -v exakit_core_update_check >/dev/null 2>&1; then
         exakit_core_update_check "$_target" || _upd_failed=$((${_upd_failed:-0} + 1))
     fi
     if [ "$_acted" -eq 0 ] && [ "$_deferred" -eq 0 ] && [ "$EXAKIT_CORE_UPDATE_ACTED" = "0" ]; then

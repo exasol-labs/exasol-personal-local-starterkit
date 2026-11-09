@@ -3023,6 +3023,16 @@ function Invoke-CmdUpdate {
     if (-not (Test-ExakitUpdateTarget $Target)) {
         Deny-ExakitInput "Unknown update target '$Target' (see: exakit version)"
     }
+    # A RUN HANDED OVER BY A --json RUN IS A --json RUN. Its rows go to the
+    # parent's results file (Add-ExakitUpdateNote), and only in JSON mode is a
+    # failed updater a failed row with its reason while the rest are still
+    # tried; without it the first Fail ended the run and the parent reported
+    # an anonymous exit code. Kits that hand over without --json still set the
+    # results file, so the file is the signal. Twin of the inherited
+    # EXAKIT_UPDATE_JSON=1 in the shell's handover.
+    if (-not $Json -and $env:EXAKIT_UPDATE_HANDOVER -eq "1" -and $env:EXAKIT_UPDATE_RESULTS_FILE) {
+        $Json = $true
+    }
     if (-not $Json) {
         Invoke-ExakitUpdateRun -Target $Target -AssumeYes $AssumeYes
         return
@@ -3297,10 +3307,15 @@ function Invoke-ExakitUpdateRun {
     }
     # CHECK 2: does this kit ask for setup this machine has not completed?
     # Only the installer holds that setup, so a pending task reruns it once.
+    # Not after a kit swap that was not handed over (in place with no new
+    # command, or staged for the moment this process exits): this process
+    # holds the OLD task list and would rerun the OLD installer from a kit
+    # directory the after-exit finisher is about to rename. The next
+    # `exakit update`, which the new kit runs, makes this check itself.
     # Twin of the same check in _exakit_update_run.
     $script:ExakitCoreUpdateActed = $false
     $coreOk = $true
-    if (Get-Command Invoke-ExakitCoreUpdateCheck -ErrorAction SilentlyContinue) {
+    if (-not $script:ExakitKitSwapped -and (Get-Command Invoke-ExakitCoreUpdateCheck -ErrorAction SilentlyContinue)) {
         $coreOk = @(Invoke-ExakitCoreUpdateCheck -Target $Target)[-1]
     }
     if ($acted -eq 0 -and $deferred -eq 0 -and -not $script:ExakitCoreUpdateActed) {

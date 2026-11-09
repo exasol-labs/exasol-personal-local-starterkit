@@ -285,12 +285,20 @@ exakit_core_update_check() {
 # installer, and this process is still running the old code. The new exakit
 # is started once with the same target; --yes travels in
 # EXAKIT_CONFIRM_RUNTIME_UPDATE, and under --json the results file and the
-# no-prompt answer are already in the environment. Returns the new run's
-# exit code; non-zero from here only means "no handover happened" when the
-# new command is missing, which the caller reports.
+# no-prompt answer are already in the environment. EXAKIT_UPDATE_ROW_FIELDS=7
+# tells the new run that this kit's reader takes the error and hint fields
+# (see _exakit_update_note). Returns the new run's exit code. The caller
+# checks exakit_update_handover_ready first: any code from here, 127
+# included, is the new run's own.
 exakit_update_handover() {
     _euh_bin="$EXAKIT_BIN_DIR/exakit"
-    [ -x "$_euh_bin" ] || return 127
     info "Continuing with the updated kit"
-    EXAKIT_UPDATE_HANDOVER=1 "$_euh_bin" update "${1:-all}"
+    EXAKIT_UPDATE_HANDOVER=1 EXAKIT_UPDATE_ROW_FIELDS=7 "$_euh_bin" update "${1:-all}"
+}
+
+# exakit_update_handover_ready — 0 when there is a new exakit to hand the run
+# to. Asked before the handover, so "no handover" is never read off an exit
+# code the new run could also return.
+exakit_update_handover_ready() {
+    [ -x "$EXAKIT_BIN_DIR/exakit" ]
 }

@@ -131,9 +131,18 @@ can now finish setup that only the installer can do.**
   defers a database task while the database is stopped. `--json` reports it
   as the `core-setup` component.
 - **Handover.** An `exakit update` that downloads a newer kit hands the rest
-  of the run to the new updater, so one run is enough from 0.3.0 on. Coming
-  from 0.2.2, run `exakit update` twice (the 0.2.2 updater cannot hand over),
-  or re-run the installer once.
+  of the run to the new updater, so one run is usually enough from 0.3.0 on.
+  When it cannot (the new `exakit` is missing or not executable, or on
+  Windows, where the kit swap is usually staged for the moment the command
+  exits), the run stops after the kit: every later component is deferred
+  with remedy `exakit update`, and the new-setup check waits for that run
+  too, so it never reruns the old installer. Under `--json` a handed-over
+  run is a `--json` run, so a failed updater is a row and the rest are still
+  tried; it writes the `error` and `remedy_hint` fields only to a kit that
+  declares it reads them (`EXAKIT_UPDATE_ROW_FIELDS=7`), so an older kit's
+  five-field reader still parses its rows. Coming from 0.2.2, run
+  `exakit update` twice (the 0.2.2 updater cannot hand over), or re-run the
+  installer once.
 - `setup/preprocessor/` holds the package description, the dispatch probe,
   the (empty) list of tested upgrade paths and the folder add-ons will
   register their modules from. No bundled add-on needs the slot yet.
