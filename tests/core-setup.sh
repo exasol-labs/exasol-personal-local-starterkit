@@ -452,7 +452,7 @@ for _s in setup/setup-macos.sh setup/setup-linux.sh; do
         "$(grep -B3 'exakit_persona_flow "$KIT_ROOT"' "$ROOT/$_s")"
 done
 has "Windows keeps the persona question out of an update rerun" 'if ($coreRerun) {' \
-    "$(grep -B2 -A2 'Invoke-ExakitPersonaFlow -KitRoot' "$ROOT/setup/setup-windows.ps1")"
+    "$(grep -B3 'Invoke-ExakitPersonaFlow -KitRoot' "$ROOT/setup/setup-windows.ps1")"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

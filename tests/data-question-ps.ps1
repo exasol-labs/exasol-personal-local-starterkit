@@ -69,6 +69,8 @@ function Invoke-ExakitTableMenu {
           [int]$GroupFirst = 0, [int]$GroupLast = 0, [string]$GroupMode = "any", [int]$OnScreen = 0)
     $script:MenuAsked = "$($Defaults -join ',')~$ExclusiveIndex~$GroupParent~$GroupFirst~$GroupLast~$GroupMode"
     $script:Col2AtMenu = "" + $script:UiTable.Col2
+    # A person pressed Enter ($script:MenuConfirmed), or nobody was at the table.
+    $script:ExakitTableConfirmed = [bool]$script:MenuConfirmed
     if ($null -eq $script:Answer) { return @($Defaults) }
     return @($script:Answer)
 }
@@ -139,8 +141,14 @@ try {
     Check "the file row alone" "local" (Answer @("tpch", "energy") @(4))
     Check "the disabled external row never answers anything" "none" (Answer @("tpch", "energy") @(5))
     Check "nothing picked is none" "none" (Answer @("tpch", "energy") @())
-    Check "every sample loaded: your own file is the default answer" "local" (Answer @() $null)
+    # Every sample in: the file row is the default, but only a person can answer
+    # the path question it leads to. Nobody at the table answers none (and says
+    # how to name a file unattended); Enter pressed on it answers the file row.
+    Check "every sample loaded, nobody at the table: none" "none" (Answer @() $null)
     Check "...asked with no parent and Skip as row 4" "2~4~0~0~0~all" $script:MenuAsked
+    $script:MenuConfirmed = $true
+    Check "every sample loaded, Enter pressed: your own file is the default answer" "local" (Answer @() $null)
+    $script:MenuConfirmed = $false
     $env:EXAKIT_DATASETS_PRESELECT = "none"
     Check "persona datasets none: the default answer is none" "none" (Answer @("tpch", "energy") $null)
     $env:EXAKIT_DATASETS_PRESELECT = "energy"

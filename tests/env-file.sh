@@ -101,7 +101,7 @@ template = set(re.findall(r"^# (EXAKIT_[A-Z0-9_]+)=", open(f"{root}/setup/exakit
 not_settings = {"EXAKIT_SEMANTIC", "EXAKIT_SCORING", "EXAKIT_UDF", "EXAKIT_SMOKE", "EXAKIT_PREPARED",   # schema names, not settings
                 "EXAKIT_HOME", "EXAKIT_ENV_FILE",                                     # where the file is
                 "EXAKIT_DBT_DSN",                       # handed to dbt by its launcher on every run, not set by anyone
-                "EXAKIT_SRC_"}                          # exakit connect's CONNECTION name prefix (EXAKIT_SRC_<NAME>)
+                "EXAKIT_SRC_"}                          # the CONNECTION name prefix of exakit connect (EXAKIT_SRC_<NAME>)
 secret = re.compile("PASSWORD|API_KEY|TOKEN|SECRET")
 missing = sorted(n for n in documented & read if n not in not_settings and not secret.search(n) and n not in template)
 unread = sorted(n for n in template if n not in read)

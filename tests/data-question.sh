@@ -185,7 +185,20 @@ answer() { # answer <pending-ids...> — EXAKIT_DATA_LOAD_SELECTION, no terminal
 check "every pending sample" "tpch,energy" "$(answer tpch energy)"
 check "the persona's" "energy" "$(EXAKIT_DATASETS_PRESELECT=energy answer tpch energy)"
 check "the persona's none stands" "none" "$(EXAKIT_DATASETS_PRESELECT=none answer tpch energy)"
-check "every sample loaded: your own file" "local" "$(answer)"
+# Every sample in: the file row is the default (above), but only a person can
+# answer the path question it leads to. Nobody at the table answers none and
+# says how to name a file unattended (EXAKIT_DATA_FILE); a person who presses
+# Enter on it gets the file row.
+check "every sample loaded, nobody at the table: none" "none" "$(answer)"
+confirmed() { # confirmed — the same, with a person pressing Enter on the defaults
+    (
+        exakit_pending_datasets() { :; }
+        ui_table_menu() { EXAKIT_TABLE_SELECTION="$EXAKIT_TABLE_DEFAULTS"; EXAKIT_TABLE_CONFIRMED=1; }
+        exakit_data_load_select Skip >/dev/null 2>&1 </dev/null
+        printf '%s' "$EXAKIT_DATA_LOAD_SELECTION"
+    )
+}
+check "every sample loaded, Enter pressed: your own file" "local" "$(confirmed)"
 check "EXAKIT_DATA_FILE bypasses the table" "local~" \
     "$( (exakit_pending_datasets() { printf 'tpch|TPC-H\n'; }; EXAKIT_DATA_FILE="$WORK" exakit_data_load_select Skip >/dev/null 2>&1
         printf '%s~%s' "$EXAKIT_DATA_LOAD_SELECTION" "$EXAKIT_TABLE_STATE") )"
