@@ -55,6 +55,7 @@
   "host": "www.googleapis.com",
   "url": "jdbc:bigquery://https://www.googleapis.com/bigquery/v2:443;ProjectId={project};OAuthType=0;OAuthServiceAcctEmail={sa_email};OAuthPvtKeyPath={key_path}",
   "tls": null,
+  "access": "BigQuery Job User on the project and BigQuery Data Viewer on the dataset",
   "vs_properties": {
     "CATALOG_NAME": "{project}",
     "SCHEMA_NAME": "{dataset}"

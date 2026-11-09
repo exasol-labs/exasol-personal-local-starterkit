@@ -91,6 +91,7 @@
   },
   "tls_ca": "tcps://{host}:{port}/{service}?ssl_server_dn_match=true&wallet_location=data:;base64,{ca_pem}",
   "ca_encoding": "base64-bundle",
+  "access": "CREATE SESSION and READ on each table of the schema (Oracle 23ai: READ ANY TABLE ON SCHEMA)",
   "vs_properties": {
     "SCHEMA_NAME": "{schema}"
   },
