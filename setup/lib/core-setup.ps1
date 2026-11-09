@@ -330,10 +330,15 @@ function Invoke-ExakitUpdateHandover {
         # $null, not truthiness: an EMPTY ArrayList is falsy in PowerShell.
         if ($resultsFile -and $null -ne $script:ExakitUpdateResults) {
             foreach ($line in @(Get-Content -LiteralPath $resultsFile -ErrorAction SilentlyContinue)) {
-                $parts = "$line" -split '\|', 5
+                # component|outcome|from|to|remedy|error|hint - the last two
+                # optional, so a row from a kit that wrote five still reads.
+                $parts = @("$line" -split '\|', 7)
                 if ($parts.Count -ge 5 -and $parts[0]) {
+                    $rowError = $(if ($parts.Count -ge 6) { $parts[5] } else { "" })
+                    $rowHint = $(if ($parts.Count -ge 7) { $parts[6] } else { "" })
                     [void]$script:ExakitUpdateResults.Add([pscustomobject]@{
                         component = $parts[0]; outcome = $parts[1]; from = $parts[2]; to = $parts[3]; remedy = $parts[4]
+                        error = $rowError; hint = $rowHint
                     })
                 }
             }

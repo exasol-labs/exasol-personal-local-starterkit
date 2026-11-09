@@ -45,6 +45,12 @@ mkdir -p "$FIX"
 EXAKIT_HOME="$WORK/home"
 EXAKIT_BIN_DIR="$WORK/bin"
 mkdir -p "$EXAKIT_HOME" "$EXAKIT_BIN_DIR"
+# EXPORTED, AND HOME WITH THEM. Unexported, the child shells this suite starts
+# fell back to $HOME/.exasol-starter-kit and left credentials/ and logs/ in
+# the developer's real home on every run.
+HOME="$WORK/userhome"
+mkdir -p "$HOME"
+export EXAKIT_HOME EXAKIT_BIN_DIR HOME
 
 # shellcheck source=/dev/null
 . "$ROOT/setup/lib/common.sh"

@@ -234,6 +234,38 @@ if [ "$(exakit_autostart_default_on 2>&1)" = "ENABLE-CALLED" ]; then
 else
     fail "a fresh install no longer turns autostart on"
 fi
+# autostart.user_set (the Windows twin's marker): a user's choice is never
+# re-defaulted, and a default that could register nothing is not recorded as
+# an answer that blocks every later default.
+manifest_get() {
+    case "$1" in
+        autostart.user_set) printf '%s\n' "$_us" ;;
+        autostart.enabled)  printf '%s\n' "$_en" ;;
+    esac
+}
+_us=true; _en=""
+if [ -z "$(exakit_autostart_default_on 2>&1)" ]; then
+    pass "a user's choice (autostart.user_set) is left alone"
+else
+    fail "the installer default overrode a choice marked autostart.user_set"
+fi
+_us=""; _en=""
+exakit_autostart_enable() { _en=false; printf 'ENABLE-CALLED\n'; }
+# Recorded in a variable, not printed: the function silences manifest_del
+# (>/dev/null 2>&1), so a stub that echoes is never seen. Run in this shell,
+# not a $(...) subshell, so the variable survives the call.
+_deleted=""
+manifest_del() { _deleted="$_deleted $1"; }
+exakit_autostart_default_on >/dev/null 2>&1
+case "$_deleted" in
+    *" autostart.enabled"*) pass "a default that registered nothing leaves no recorded answer" ;;
+    *) fail "a default that registered nothing was recorded as false, so the default never comes back" ;;
+esac
+if grep -q 'manifest_set autostart.user_set true' "$ROOT/setup/exakit"; then
+    pass "exakit autostart marks the user's choice"
+else
+    fail "exakit autostart no longer marks the user's choice (autostart.user_set)"
+fi
 
 # --- the Windows installer -------------------------------------------------
 #

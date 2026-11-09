@@ -247,6 +247,16 @@ function Invoke-CmdStatus {
         switch ($type) { "personal" { Get-PersonalStatus } default { "not installed" } }
     }
     $running = "$status".StartsWith("running")
+    # WHICH ENGINE, AND WHETHER IT IS UP. A Docker deployment whose Docker was
+    # down read as plain "stopped" with "exakit start" as its remedy, and that
+    # start then named repair-runtime. Docker is probed only for a stopped
+    # Docker deployment. Twin of _cs_engine / _cs_engine_down in cmd_status.
+    $runtimeEngine = Get-ExakitRuntimeEngine
+    $engineDown = ""
+    if ($runtimeEngine -eq "docker" -and "$status" -eq "stopped" -and -not (Test-PersonalDockerUsable)) {
+        $engineDown = "$($script:PersonalDockerSaid)"
+        if (-not $engineDown) { $engineDown = "Docker is not usable" }
+    }
     $steps = @(Get-ExakitManifestValue "steps_completed")
     # An install in progress is its own state: Begin-ExakitStep records the step
     # and the setup script clears it when done. Twin of the same read in cmd_status.
@@ -260,6 +270,29 @@ function Invoke-CmdStatus {
     # Steps the installer recorded as not finished (a failed data load, a skipped
     # client wiring), each with the command that finishes it.
     $softRecords = Get-ExakitManifestValue "install.soft_failures"
+    # The runtime step's record speaks while its step is missing, like every
+    # record, AND - while the database is not running - when its step is
+    # complete but the record is a start the WSL kernel refused: the
+    # installer's resume arm books a failed start there, and a later step's
+    # note replaces the start's, so status said `exakit start` for a round.
+    # A successful start retires it (Clear-ExakitStartSoftFailure). Any other
+    # record of a completed runtime step is left out here. Twin of rt_record
+    # in cmd_status.
+    $rtRecord = $null
+    if ($softRecords -and $softRecords.PSObject.Properties["runtime"]) {
+        $rtRecord = $softRecords.runtime
+        if (($steps -contains "runtime") -and ($running -or -not (Test-ExakitWslStartRecord -Name "runtime" -Record $rtRecord))) {
+            $rtRecord = $null
+            $keptRecords = New-Object PSObject
+            foreach ($property in @($softRecords.PSObject.Properties)) {
+                if ($property.Name -ne "runtime") {
+                    $keptRecords | Add-Member -NotePropertyName $property.Name -NotePropertyValue $property.Value
+                }
+            }
+            $softRecords = $null
+            if (@($keptRecords.PSObject.Properties).Count -gt 0) { $softRecords = $keptRecords }
+        }
+    }
     $datasets = @(Invoke-ExakitWithSpinner -Quiet:$Json -Label "Checking which datasets are loaded" -Body {
         ,@(Get-ExakitLoadedDatasets)
     })
@@ -333,17 +366,119 @@ function Invoke-CmdStatus {
                 $remedyHints["uv"] = "no uv is installed; the MCP server and the managed Python run through it"
             }
         }
+        # A replace refused because the WSL release could not be read: the
+        # remedy is `wsl --version`, and this is what comes after it. Used by
+        # the database arm and the runtime step's record. Twin of
+        # WSL_UNREAD_HINT in cmd_status.
+        $wslUnreadHint = "If it shows 2.7 or newer, re-run with EXAKIT_WSL_CHECKED=1; otherwise run wsl --update first. The re-run is exakit repair-runtime, which DESTROYS the database and its data - ask the user, then pass --yes"
         if (-not $running) {
             # With NO runtime deployed, "exakit start" has nothing to start and
             # fails identically every time - only the installer creates one.
+            # REFUSED FOR THE WSL KERNEL (Stop-PersonalStartNetworkBlocked, or
+            # the replace check's "older than 2.7" note): the fix is the WSL
+            # update. Checked in the interrupted arm too: repair-runtime there
+            # is refused by the same check after the user consented to deleting
+            # the data. Twin of wsl_refused in cmd_status.
+            #
+            # THE NOTE OR THE RUNTIME STEP'S RECORD ($rtRecord, above): a
+            # later step's note can replace the start's, and the record is
+            # then the only place the refusal survives.
+            $startNote = "" + $failureNote.reason
+            $rtReason = ""
+            if ($rtRecord) { $rtReason = "" + $rtRecord.reason }
+            $wslRefused = ($startNote.Contains("cannot create the deployment network") -and $startNote.Contains("wsl --update")) -or
+                ($rtReason.Contains("cannot create the deployment network") -and $rtReason.Contains("wsl --update"))
+            # The release could not be read: wsl --update may not be needed,
+            # and only EXAKIT_WSL_CHECKED=1 lets the replace through, so the
+            # remedy is the command that reads the release - as repair-runtime
+            # --json answers it.
+            $wslUnread = (-not $wslRefused) -and ($startNote.Contains("WSL release could not be read") -or $rtReason.Contains("WSL release could not be read"))
             if ("$status".StartsWith("interrupted")) {
                 $remedies["database"] = "exakit repair-runtime"
                 $remedyHints["database"] = "this DESTROYS the database and its data - ask the user, then pass --yes"
+                if ($wslRefused) {
+                    $remedies["database"] = "wsl --update"
+                    $remedyHints["database"] = "this WSL kernel cannot create the deployment network, so neither a start nor a rebuild can work. Run 'wsl --update' in PowerShell, then 'wsl --shutdown', and re-run: exakit start"
+                } elseif ($wslUnread) {
+                    # Same remedy as repair-runtime --json's refused object:
+                    # only the user's own read of the release clears this one.
+                    $remedies["database"] = "wsl --version"
+                    $remedyHints["database"] = $wslUnreadHint
+                }
             } elseif ("$status".StartsWith("not installed")) {
                 $remedies["database"] = $installCmd
                 $remedyHints["database"] = "no database is deployed; the installer resumes at the unfinished step"
+            } elseif ($engineDown) {
+                # Docker is down under a Docker deployment: `exakit start`
+                # cannot start it, and no command the kit can name does
+                # (Docker Desktop is an app), so no remedy - the hint says what
+                # to do. Twin of the engine_down arm in cmd_status.
+                $remedyHints["database"] = "the deployment runs on Docker, and ${engineDown}: start Docker Desktop, then run: exakit start"
             } else {
                 $remedies["database"] = "exakit start"
+                # `exakit start` WAS REFUSED FOR THE WSL KERNEL
+                # (Stop-PersonalStartNetworkBlocked, recorded as the failure
+                # note): handing it back as the remedy is a loop. The fix is
+                # the WSL update. Twin of the same arm in cmd_status.
+                if ($wslRefused) {
+                    $remedies["database"] = "wsl --update"
+                    $remedyHints["database"] = "exakit start was refused: this WSL kernel cannot create the deployment network. Run 'wsl --update' in PowerShell, then 'wsl --shutdown', and re-run: exakit start"
+                } elseif ($wslUnread) {
+                    $remedies["database"] = "wsl --version"
+                    $remedyHints["database"] = $wslUnreadHint
+                }
+            }
+        }
+        # A step the installer REFUSED, with a reason, is not "never finished":
+        # re-running the installer meets the same refusal. The reason goes in
+        # the hint for EVERY refusal (an unusable EXAKIT_CONTAINER_ENGINE=docker,
+        # a launcher that cannot be told which engine), not only a WSL one - the
+        # bare installer remedy with the "resumes at the unfinished step" hint
+        # sent an agent straight back into it. A reason whose fix is a WSL update
+        # names that command. Only for an install step still missing, so a
+        # record a later run outlived never speaks. Twin of the soft-record arm
+        # in cmd_status.
+        $softStepIds = @("launcher", "runtime", "exapump", "mcp", "pyexasol", "exakit_helper")
+        $softNote = ""
+        $softAt = ""
+        if ($softRecords -and -not $installing) {
+            foreach ($property in @($softRecords.PSObject.Properties)) {
+                if (-not ($softStepIds -contains $property.Name)) { continue }
+                # A completed step's record stays silent - except the runtime
+                # record $rtRecord kept above (a start the WSL kernel refused).
+                if (($steps -contains $property.Name) -and -not ($property.Name -eq "runtime" -and $rtRecord)) { continue }
+                $softReason = "$($property.Value.reason)"
+                $softRepair = "$($property.Value.repair)"
+                if (-not $softRepair) { $softRepair = $installCmd }
+                if (-not $softNote) {
+                    # The installer's own label for the step ("the local
+                    # database"), as the summary says it; the id only for a
+                    # record an older kit wrote without one.
+                    $softLabel = "$($property.Value.label)"
+                    if (-not $softLabel) { $softLabel = $property.Name }
+                    $softNote = "$softLabel did not finish"
+                    if ($softReason) { $softNote = "$softNote - $($softReason.TrimEnd('.'))" }
+                    $softNote = "$softNote. Retry with: $softRepair"
+                    $softAt = "$($property.Value.at)"
+                }
+                if ($softReason -match 'wsl --update') {
+                    $remedies[$property.Name] = "wsl --update"
+                    $remedyHints[$property.Name] = "$($softReason.TrimEnd('.')). Run 'wsl --update' in PowerShell, then 'wsl --shutdown', and re-run: $softRepair"
+                } elseif ($softReason.Contains("WSL release could not be read")) {
+                    # The replace refused on an unreadable release: re-running
+                    # meets the same refusal (repair-runtime --json, same remedy).
+                    $remedies[$property.Name] = "wsl --version"
+                    $remedyHints[$property.Name] = "$($softReason.TrimEnd('.')). $wslUnreadHint"
+                } elseif ($softReason) {
+                    $remedies[$property.Name] = $softRepair
+                    $remedyHints[$property.Name] = "this step was refused: $($softReason.TrimEnd('.')). Fix that, then run the remedy (it resumes at this step)"
+                }
+                if ($remedies.Contains($property.Name)) {
+                    if ($property.Name -eq "runtime" -and "$status".StartsWith("not installed")) {
+                        $remedies["database"] = $remedies[$property.Name]
+                        $remedyHints["database"] = $remedyHints[$property.Name]
+                    }
+                }
             }
         }
         if ($clockSkewed) {
@@ -394,9 +529,10 @@ function Invoke-CmdStatus {
             }
         }
         $topRemedy = $null
-        if ($remedies.Contains("install")) { $topRemedy = $remedies["install"] }
-        elseif ($remedies.Contains("database")) { $topRemedy = $remedies["database"] }
-        elseif ($stepsMissing.Count -gt 0) { $topRemedy = $remedies[$stepsMissing[0]] }
+        $topHint = $null
+        if ($remedies.Contains("install")) { $topRemedy = $remedies["install"]; $topHint = $remedyHints["install"] }
+        elseif ($remedies.Contains("database") -or $engineDown) { $topRemedy = $remedies["database"]; $topHint = $remedyHints["database"] }
+        elseif ($stepsMissing.Count -gt 0) { $topRemedy = $remedies[$stepsMissing[0]]; $topHint = $remedyHints[$stepsMissing[0]] }
         elseif ($softRecords) {
             foreach ($property in @($softRecords.PSObject.Properties)) {
                 if (-not $topRemedy -and $property.Value.repair) { $topRemedy = "$($property.Value.repair)" }
@@ -408,8 +544,17 @@ function Invoke-CmdStatus {
             installing      = $installing
             install_step    = $(if ($installing -or $installStopped) { $installStep } else { $null })
             remedy          = $topRemedy
+            remedy_hint     = $topHint
             kit_level       = "$(Get-ExakitManifestValue 'kit_level')"
-            runtime         = [ordered]@{ type = $type; status = $status }
+            # engine: the container engine the deployment runs on, null with no
+            # runtime; engine_running is false only for a stopped Docker
+            # deployment whose Docker is down. Twin of cmd_status.
+            runtime         = [ordered]@{
+                type           = $type
+                status         = $status
+                engine         = $(if ($runtimeEngine) { $runtimeEngine } else { $null })
+                engine_running = $(if ($engineDown) { $false } else { $null })
+            }
             running         = $running
             # Seconds the database's clock is from this computer's (negative:
             # behind); null when the database could not be asked.
@@ -442,8 +587,11 @@ function Invoke-CmdStatus {
             # current one, and an undated note that outlived its cause is exactly
             # how a healthy machine comes to look broken - which is why the note
             # carries the timestamp on its second line.
-            last_failure    = $(if ($failureNote.reason) { $failureNote.reason } else { $null })
-            last_failure_at = $(if ($failureNote.at) { $failureNote.at } else { $null })
+            # The note first; with none, the refused step's own record, dated by
+            # its `at` so a months-old refusal never reads as current. Twin of
+            # cmd_status.
+            last_failure    = $(if ($failureNote.reason) { $failureNote.reason } elseif ($softNote) { $softNote } else { $null })
+            last_failure_at = $(if ($failureNote.reason) { $(if ($failureNote.at) { $failureNote.at } else { $null }) } elseif ($softAt) { $softAt } else { $null })
             manifest        = $script:ManifestPath
         }
         # An older kit's container database, as the crossing recorded it. Only
@@ -733,6 +881,9 @@ function Invoke-CmdStatus {
             Write-Host "Free the port: another process is listening on the database port - stop it, then: exakit start"
         } elseif ("$status".StartsWith("not installed")) {
             Write-Host "Deploy it:  $(Get-ExakitInstallCommand)   (it resumes at the unfinished step)"
+        } elseif ($engineDown) {
+            # `exakit start` cannot start Docker. Twin of the 'Start Docker:' row.
+            Write-Host "Start Docker: the deployment runs on Docker, and $engineDown - start Docker Desktop, then: exakit start"
         } else {
             Write-Host "Start it:   exakit start"
         }
@@ -846,12 +997,16 @@ function Test-ExakitAutostartRegistered {
     return $false
 }
 
+# Both write autostart.user_set: they run only on the user's own answer to
+# `exakit autostart`, and that marker is what keeps the installer's default
+# (Enable-ExakitAutostartDefault) from overriding it.
 function Enable-ExakitAutostart {
     $any = $false
     foreach ($id in (Get-ExakitServiceIds)) {
         if (Register-ExakitAutostart -Id $id) { $any = $true }
     }
     Set-ExakitManifestValue "autostart.enabled" $any
+    Set-ExakitManifestValue "autostart.user_set" $true
     # One line, whatever the service count - the twin of the sentence
     # Disable-ExakitAutostart has always printed, and of the one in
     # exakit_autostart_enable.
@@ -861,6 +1016,7 @@ function Enable-ExakitAutostart {
 function Disable-ExakitAutostart {
     foreach ($id in (Get-ExakitServiceIds)) { Unregister-ExakitAutostart -Id $id }
     Set-ExakitManifestValue "autostart.enabled" $false
+    Set-ExakitManifestValue "autostart.user_set" $true
     Ok "Automatic start after a restart is off."
 }
 
@@ -977,8 +1133,15 @@ function Start-ExakitDatabase {
         Confirm-ExakitRuntimeRunning -Deploy
     }
     # The database is up, so a note left by an earlier start that could not is
-    # no longer true. Only a runtime note goes; an install-step note stays.
-    try { if ((Get-ExakitRuntimeStatus) -like "running*") { Clear-ExakitRuntimeFailureNote } } catch { }
+    # no longer true. Only a runtime note goes; an install-step note stays. So
+    # does a start failure an installer re-run booked against the completed
+    # runtime step (Clear-ExakitStartSoftFailure).
+    try {
+        if ((Get-ExakitRuntimeStatus) -like "running*") {
+            Clear-ExakitRuntimeFailureNote
+            Clear-ExakitStartSoftFailure
+        }
+    } catch { }
 }
 
 function Invoke-CmdStart {
@@ -1179,6 +1342,33 @@ function Invoke-CmdRepairRuntime {
             [ordered]@{ ok = $true; status = "repaired"; changed = $true; remedy = $null } |
                 ConvertTo-Json -Compress | Write-Output
             exit 0
+        }
+        # REFUSED BY THE WSL CHECK BEFORE THE DESTROY: nothing was deleted, so
+        # "changed": true told an agent the database was gone, and the
+        # installer remedy meets the same refusal. The check's reason is the
+        # runtime step's soft-failure record (Remove-ExakitStepDone above
+        # cleared any older one). Twin of the same arm in cmd_repair_runtime.
+        $repairWhy = "" + (Get-ExakitManifestValue "install.soft_failures.runtime.reason")
+        #
+        # THE REMEDY BY CAUSE, under remedy_hint like every other object: a
+        # release READ below 2.7 is cleared by the WSL update; a release that
+        # could not be read is not - only the user's own 'wsl --version' and
+        # EXAKIT_WSL_CHECKED=1 clear it, and "wsl --update" there looped an
+        # agent on a WSL already at 2.7. Same remedies as status --json.
+        if ($repairWhy.Contains("WSL release could not be read") -or ($repairWhy.Contains("older than 2.7") -and $repairWhy.Contains("wsl --update"))) {
+            $repairRemedy = "wsl --update"
+            $repairHint = "Nothing was deleted. Run 'wsl --update' in PowerShell, then 'wsl --shutdown', and run: exakit start (if the database still does not come up, re-run: exakit repair-runtime)"
+            if ($repairWhy.Contains("could not be read")) {
+                $repairRemedy = "wsl --version"
+                $repairHint = "If it shows 2.7 or newer, re-run with EXAKIT_WSL_CHECKED=1; otherwise run wsl --update first."
+            }
+            [ordered]@{
+                ok = $false; status = "refused"; changed = $false
+                reason = $repairWhy
+                remedy = $repairRemedy
+                remedy_hint = $repairHint
+            } | ConvertTo-Json -Compress | Write-Output
+            exit 3
         }
         [ordered]@{
             ok = $false; status = "failed"; changed = $true
@@ -2204,6 +2394,13 @@ function Invoke-CmdVersion {
             remedy          = $remedy
             pending         = $pending
             kit             = [ordered]@{ version = "$(Get-ExakitComponentCurrent 'exakit')"; installed_at = "$(Get-ExakitManifestValue 'installed_at')" }
+            # Which runtime, and which container engine its deployment runs on:
+            # the same runtime.engine status --json reports. Twin of the runtime
+            # object in exakit_print_version_table.
+            runtime         = [ordered]@{
+                type   = $(if (Get-RuntimeType) { "$(Get-RuntimeType)" } else { $null })
+                engine = $(if (Get-ExakitRuntimeEngine) { "$(Get-ExakitRuntimeEngine)" } else { $null })
+            }
             versions_source = "$(Get-ExakitVersionsSource)"
             components      = $components
         } | ConvertTo-Json -Depth 5
@@ -2558,9 +2755,13 @@ function Start-ExakitRuntime {
         # database instead of the record and runs the launcher's own deploy
         # when nothing answers. The wait lives here rather than inside
         # Start-Personal, which other callers run as a best-effort nudge.
+        # A deploy that met the WSL kernel ends with the WSL fix named, as a
+        # start that met it does (Stop-PersonalStartNetworkBlocked).
         "personal" {
             Start-Personal
-            [void](Wait-PersonalReadyOrDeploy)
+            if (-not (Wait-PersonalReadyOrDeploy) -and $script:PersonalStartNetworkBlocked) {
+                Stop-PersonalStartNetworkBlocked
+            }
         }
     }
 }
@@ -2712,6 +2913,39 @@ function Invoke-ExakitRuntimeUpdateOffer {
 # EXAKIT_CONFIRM_RUNTIME_UPDATE answer without asking, and an unattended run with
 # neither defers it with the exact command that applies it later.
 # Twin of exakit_update in setup/lib/common.sh.
+# Get-ExakitRuntimeEngine - the container engine the deployment runs on
+# ("docker" or "podman"), or "" with no Personal runtime recorded. Windows is
+# always an engine platform. Twin of exakit_runtime_engine in common.sh.
+function Get-ExakitRuntimeEngine {
+    if ((Get-RuntimeType) -ne "personal") { return "" }
+    if (-not (Get-Command Get-PersonalEngineRecorded -ErrorAction SilentlyContinue)) { return "" }
+    return "" + (Get-PersonalEngineRecorded)
+}
+
+# Add-ExakitUpdateNote (one row of the --json result) lives in
+# lib/exakit-common.ps1: core-setup.ps1 reports through it too.
+
+# Get-ExakitUpdateFailureRemedy <component> <reason> - @{ Remedy; Hint } for a
+# failed update: "exakit update <component>" unless the reason names a fix that
+# re-running cannot reach. A WSL kernel does not change by itself: the update
+# does not check WSL, but it restarts a database that was running once the
+# launcher is swapped, and on WSL older than 2.7 that start fails at the 2.4
+# deployment network (Stop-PersonalStartNetworkBlocked). The launcher WAS
+# updated then, so re-running the update answers "current" and never starts
+# the database: the next step is the WSL fix, then a start. Twin of
+# _exakit_update_failure_remedy.
+function Get-ExakitUpdateFailureRemedy {
+    param([string]$Component = "", [string]$Reason = "")
+    $remedy = "exakit update"
+    if ($Component) { $remedy = "exakit update $Component" }
+    $hint = ""
+    if ("$Reason" -match 'wsl --update') {
+        $remedy = "wsl --update"
+        $hint = "The launcher was updated, but the database could not start: this WSL kernel cannot create the deployment network. Run wsl --update, then wsl --shutdown, then exakit start."
+    }
+    return [pscustomobject]@{ Remedy = $remedy; Hint = $hint }
+}
+
 # Write-ExakitUpdateJsonReport - the one object `exakit update --json` prints:
 # what was updated, deferred, left current, skipped or failed, and the one
 # command that resolves what is left. Twin of _exakit_update_json_report.
@@ -2724,6 +2958,8 @@ function Write-ExakitUpdateJsonReport {
         $entry.from = $(if ($row.from) { $row.from } else { $null })
         $entry.to = $(if ($row.to) { $row.to } else { $null })
         if ($row.remedy) { $entry.remedy = $row.remedy }
+        if ($row.error) { $entry.error = $row.error }
+        if ($row.hint) { $entry.remedy_hint = $row.hint }
         switch ($row.outcome) {
             "updated"  { $updated += [pscustomobject]$entry }
             "deferred" { $deferred += [pscustomobject]$entry }
@@ -2736,17 +2972,25 @@ function Write-ExakitUpdateJsonReport {
     }
     if ($RunFailed -and $failed.Count -eq 0) {
         $msg = $(if ($RunError) { $RunError } else { "the update did not finish (see exakit logs)" })
-        $failed += [pscustomobject]@{ component = $null; from = $null; to = $null; remedy = "exakit update"; error = $msg }
+        $runFix = Get-ExakitUpdateFailureRemedy -Component "" -Reason $RunError
+        $runEntry = [ordered]@{ component = $null; from = $null; to = $null; remedy = $runFix.Remedy; error = $msg }
+        if ($runFix.Hint) { $runEntry.remedy_hint = $runFix.Hint }
+        $failed += [pscustomobject]$runEntry
     }
     $hint = $null
     if ($failed.Count -gt 0) {
         $status = "failed"; $remedy = $(if ($failed[0].remedy) { $failed[0].remedy } else { "exakit update" })
+        if ($failed[0].PSObject.Properties["remedy_hint"]) { $hint = $failed[0].remedy_hint }
     } elseif ($deferred.Count -gt 0) {
         $status = "deferred"; $remedy = $(if ($deferred[0].remedy) { $deferred[0].remedy } else { "exakit update --yes" })
-        # The hint explains the database-change deferral only: new kit setup
-        # that waits for a STOPPED database is deferred too, and its remedy
-        # says so. Twin of the same condition in _exakit_update_json_report.
-        if ($deferred[0].component -ne "core-setup") {
+        # New kit setup that waits for a STOPPED database is deferred too, and
+        # its remedy says so: no hint. Twin of the same condition in
+        # _exakit_update_json_report.
+        if ($deferred[0].component -eq "core-setup") {
+            $hint = $null
+        } elseif ($remedy -eq "exakit update") {
+            $hint = "the starter kit itself was updated; run 'exakit update' again so the rest is updated by the new kit"
+        } else {
             $hint = "a database change needs the database stopped; --yes (or EXAKIT_CONFIRM_RUNTIME_UPDATE=1) applies it unattended"
         }
     } elseif ($blocked.Count -gt 0) {
@@ -2836,13 +3080,27 @@ function Invoke-ExakitUpdateRun {
     Write-ExakitVersionsSourceLine
     $deferred = 0
     $acted = 0
-    foreach ($component in (Get-ExakitUpdateTargets -Target $Target)) {
+    $script:ExakitKitSwapped = $false
+    $targets = @(Get-ExakitUpdateTargets -Target $Target)
+    foreach ($component in $targets) {
         # A run handed over by the previous kit's updater: that run already
         # updated the kit, and listing it again would report it twice.
         if ($component -eq "exakit" -and $env:EXAKIT_UPDATE_HANDOVER -eq "1") { continue }
         $actual = Get-ExakitActualTarget $component
         $current = Get-ExakitComponentCurrent $actual
         $available = Get-ExakitComponentAvailable $actual
+        # THE KIT WAS REPLACED UNDER THIS PROCESS (in place, or staged for the
+        # moment it exits), so nothing after it runs here: every function
+        # below was dot-sourced from the OLD kit, and carrying on ran the old
+        # Update-Personal against the new launcher - a kit release's own update
+        # checks skipped on the very update they were written for. The rest is
+        # deferred to the next `exakit update`, which the new kit runs. This
+        # only protects the hops AFTER the kit that carries it. Twin of the
+        # same arm in _exakit_update_run.
+        if ($script:ExakitKitSwapped) {
+            Add-ExakitUpdateNote -Component $actual -Outcome "deferred" -From $current -To $available -Remedy "exakit update"
+            continue
+        }
         # No build for this machine: a routine update stays quiet about it (there is
         # nothing the user can do), and an explicit target says why rather than
         # failing deep inside the installer.
@@ -2884,8 +3142,22 @@ function Invoke-ExakitUpdateRun {
                 # [-1]: the verdict is the LAST thing the offer returns. The
                 # updaters it calls can put objects on the pipeline of their own,
                 # and an array is truthy no matter what it holds.
-                $applied = @(Invoke-ExakitRuntimeUpdateOffer -Component $component -Actual $actual `
-                    -Installed $current -Advertised $available -AssumeYes $AssumeYes)[-1]
+                # Under --json a Fail inside the offer (a launcher swap that
+                # failed, or the restart after it meeting the WSL kernel, under
+                # -Yes) is THIS component's failed row with its reason and
+                # remedy, not an anonymous end of run. Twin of the offer
+                # subshell in _exakit_update_run.
+                try {
+                    $applied = @(Invoke-ExakitRuntimeUpdateOffer -Component $component -Actual $actual `
+                        -Installed $current -Advertised $available -AssumeYes $AssumeYes)[-1]
+                } catch {
+                    if (-not $script:ExakitUpdateJson) { throw }
+                    $offerError = "" + $_.Exception.Message
+                    $offerFix = Get-ExakitUpdateFailureRemedy -Component $component -Reason $offerError
+                    Add-ExakitUpdateNote -Component $actual -Outcome "failed" -From $current -To $available `
+                        -Remedy $offerFix.Remedy -ErrorText $offerError -Hint $offerFix.Hint
+                    continue
+                }
                 if ($applied -eq $true) {
                     $acted += 1
                     Add-ExakitUpdateNote -Component $actual -Outcome "updated" -From $current -To $available
@@ -2982,7 +3254,14 @@ function Invoke-ExakitUpdateRun {
         } catch {
             if (-not $script:ExakitUpdateJson) { throw }
             $componentFailed = $true
-            Add-ExakitUpdateNote -Component $actual -Outcome "failed" -From $current -To $available -Remedy "exakit update $component"
+            # The reason the updater gave, and the remedy THAT reason calls for
+            # (Get-ExakitUpdateFailureRemedy). The row used to carry no error at
+            # all, where the shell twin's row carries the die() reason.
+            $componentError = "" + $_.Exception.Message
+            if (-not $componentError) { $componentError = "the update did not finish (see exakit logs)" }
+            $componentFix = Get-ExakitUpdateFailureRemedy -Component $component -Reason $componentError
+            Add-ExakitUpdateNote -Component $actual -Outcome "failed" -From $current -To $available `
+                -Remedy $componentFix.Remedy -ErrorText $componentError -Hint $componentFix.Hint
         }
         if (-not $componentFailed) {
             Add-ExakitUpdateNote -Component $actual -Outcome "updated" -From $current -To $available
@@ -3005,8 +3284,15 @@ function Invoke-ExakitUpdateRun {
                     }
                     return
                 }
-                Warn2 "The updated exakit command was not found - finishing this update with the previous one"
+                Warn2 "The updated exakit command was not found - the rest of this update waits for the next 'exakit update'"
             }
+        }
+        # No handover (the new command is missing, or the swap is staged for
+        # the moment this process exits): nothing after the kit runs on the old
+        # code (see the $script:ExakitKitSwapped skip at the top of this loop).
+        # Said once, and only when something is left.
+        if ($component -eq "exakit" -and $script:ExakitKitSwapped -and $targets[-1] -ne $component) {
+            Info "The starter kit itself was updated; run 'exakit update' again so the rest is updated by the new kit."
         }
     }
     # CHECK 2: does this kit ask for setup this machine has not completed?
@@ -4032,7 +4318,7 @@ try {
     switch ($Command) {
         "preflight"    {
             Assert-ExakitKnownOptions -CommandName "preflight" -Allowed @() -Arguments $RestArgs
-            Test-PersonalRequirements
+            Test-PersonalRequirements -Preflight
         }
         "status"       {
             $statusJson = ($RestArgs -contains "--json" -or $RestArgs -contains "-j")
