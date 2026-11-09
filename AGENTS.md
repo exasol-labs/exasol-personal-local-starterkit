@@ -174,7 +174,7 @@ What an agent needs to know:
 
 ## External sources (virtual schemas)
 
-`exakit connect` makes a remote PostgreSQL, MySQL, SQL Server, Oracle or Snowflake queryable from the local database as `VS_<NAME>`; the data stays at the source. Skill: `exasol-virtual-schemas`. Unattended:
+`exakit connect` makes a remote PostgreSQL, MySQL, SQL Server, Oracle or Snowflake queryable from the local database as `VS_<NAME>`; the data stays at the source. Skill: `exasol-virtual-schemas` (the shared rules), plus one per connector with its inputs, source-side preparation and fixes: `exasol-vs-postgresql`, `exasol-vs-mysql`, `exasol-vs-sqlserver`, `exasol-vs-oracle`, `exasol-vs-snowflake`, `exasol-vs-bigquery`, `exasol-vs-s3`, `exasol-vs-azure-blob`, `exasol-vs-databricks`, `exasol-vs-lakehouse`, `exasol-vs-iceberg-rest`, `exasol-vs-unity`, `exasol-vs-mongodb`. Unattended:
 
 ```bash
 exakit connect pg --name sales --set host=db.example.com --set database=sales --set user=reader --dry-run
@@ -273,7 +273,7 @@ exakit skills             # what this kit carries, whether each is placed, and t
 
 The skill set is a versioned component: `exakit version` and `exakit info` show its installed and advertised versions, and `exakit update` fetches a newer set the maintainers advertise and places it, without a kit release. If a placed skill has gone missing, `exakit skills` says so and names the repair.
 
-There is one skill per thing you have to operate, so only the relevant one loads: `local-agent-ready-starter` (setup and the first query), `exasol-runtime`, `exasol-exapump`, `exasol-mcp`, `exasol-pyexasol`, `exakit-lifecycle` (updating, logs, credentials, uninstall), `exasol-ecosystem` (tools beyond this kit), and one per marketplace add-on (`exasol-marketplace`, `dash-server`, `dbt-exasol`, `exasol-scheduler`, `json-tables`, `exasol-vscode`). Full index: [skills/README.md](skills/README.md).
+There is one skill per thing you have to operate, so only the relevant one loads: `local-agent-ready-starter` (setup and the first query), `exasol-runtime`, `exasol-exapump`, `exasol-mcp`, `exasol-pyexasol`, `exakit-lifecycle` (updating, logs, credentials, uninstall), `exasol-ecosystem` (tools beyond this kit), `exasol-virtual-schemas` with one `exasol-vs-<connector>` skill per external-source connector (see External sources below), and one per marketplace add-on (`exasol-marketplace`, `dash-server`, `dbt-exasol`, `exasol-scheduler`, `json-tables`, `exasol-vscode`). Full index: [skills/README.md](skills/README.md).
 
 Then see `skills/local-agent-ready-starter/SKILL.md` for the full query-loop discipline. **If your harness loads this file but not filesystem skills, these are the rules that must not drop out:**
 

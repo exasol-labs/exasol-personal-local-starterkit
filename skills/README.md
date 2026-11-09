@@ -35,7 +35,32 @@ user's request actually needs, not a manual for the whole kit.
 | [`exasol-mcp`](exasol-mcp/SKILL.md) | Connecting AI clients over MCP, diagnosing `mcp-doctor`, repairing config drift, proving the read-only user really is read-only. |
 | [`exasol-pyexasol`](exasol-pyexasol/SKILL.md) | Querying the database from Python — the right interpreter, the TLS setting the self-signed certificate needs, reading credentials safely. |
 | [`exakit-lifecycle`](exakit-lifecycle/SKILL.md) | Operating the kit itself — versions and what changed, updates, logs, the command surface, where the credential files live, and uninstalling with `--dry-run` first. |
-| [`exasol-virtual-schemas`](exasol-virtual-schemas/SKILL.md) | Querying a remote PostgreSQL, MySQL, SQL Server, Oracle or Snowflake from local Exasol with `exakit connect` / `exakit source` — credentials on stdin only, the `localhost` trap, failure classes, reauth, disconnect vs remove. |
+| [`exasol-virtual-schemas`](exasol-virtual-schemas/SKILL.md) | Querying an external source from local Exasol with `exakit connect` / `exakit source` — the rules every connector shares (credentials never as arguments, the `localhost` trap, TLS and a private CA, failure classes, reauth, disconnect vs remove) and the index of the connector skills below. |
+
+**External sources (virtual schemas)** — one skill per connector in `setup/virtual-schemas/catalog.json`; installed with the kit
+
+Each takes an agent from the user's request to a working `VS_<NAME>`: the
+connector's inputs, finding them with the source's own CLI, a least-privilege
+reader, the network allowlist, the unattended `exakit connect` line, verifying
+it, and that connector's failures. The shared rules stay in
+`exasol-virtual-schemas`; `tests/skills.sh` fails when a catalog connector has
+no skill here, or a skill misses one of its connector's inputs.
+
+| Skill | Use it when… |
+|---|---|
+| [`exasol-vs-postgresql`](exasol-vs-postgresql/SKILL.md) | Connecting PostgreSQL (self-hosted, RDS/Aurora, Azure) — psql discovery, a reader role, the RDS CA. |
+| [`exasol-vs-mysql`](exasol-vs-mysql/SKILL.md) | Connecting MySQL or MariaDB — quoting lower-case names, `DESC NULLS LAST` for top-N. |
+| [`exasol-vs-sqlserver`](exasol-vs-sqlserver/SKILL.md) | Connecting SQL Server, Azure SQL or RDS — a schema-scoped login, named instances, verified TLS. |
+| [`exasol-vs-oracle`](exasol-vs-oracle/SKILL.md) | Connecting Oracle — service names (not SIDs), TCPS on 2484, the ORA- errors. |
+| [`exasol-vs-snowflake`](exasol-vs-snowflake/SKILL.md) | Connecting a Snowflake schema — a service user, a programmatic access token, the network policy. |
+| [`exasol-vs-bigquery`](exasol-vs-bigquery/SKILL.md) | Connecting a BigQuery dataset — a service account key, and who can read it in BucketFS. |
+| [`exasol-vs-s3`](exasol-vs-s3/SKILL.md) | Querying JSON, CSV or Parquet files in S3 — an EDML mapping and a prefix-scoped IAM key. |
+| [`exasol-vs-azure-blob`](exasol-vs-azure-blob/SKILL.md) | Querying the same in an Azure Blob Storage container — a read-and-list container SAS. |
+| [`exasol-vs-databricks`](exasol-vs-databricks/SKILL.md) | Connecting a Unity Catalog schema through a SQL warehouse — a PAT, CAN USE, IP access lists. |
+| [`exasol-vs-lakehouse`](exasol-vs-lakehouse/SKILL.md) | Reading Iceberg tables of an AWS Glue database from S3 — the Glue and S3 IAM policy. |
+| [`exasol-vs-iceberg-rest`](exasol-vs-iceberg-rest/SKILL.md) | Reading Iceberg tables behind an Iceberg REST catalog (Beta) — a catalog token or storage keys. |
+| [`exasol-vs-unity`](exasol-vs-unity/SKILL.md) | Reading a Unity Catalog schema from storage without a warehouse (Beta) — External Data Access. |
+| [`exasol-vs-mongodb`](exasol-vs-mongodb/SKILL.md) | Connecting one MongoDB collection (Atlas or self-hosted) — the access list, child tables. |
 
 **The wider Exasol ecosystem** — installed with the kit; it catalogs tools that are *not* part of it
 
