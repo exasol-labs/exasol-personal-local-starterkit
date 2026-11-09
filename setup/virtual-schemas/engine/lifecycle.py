@@ -52,7 +52,8 @@ EXIT = {"ok": 0, "failed": 1, "input": 2, "conflict": 3, "missing": 4, "gated": 
 STATUS_FOR = {"auth": "auth-failed", "tls": "tls-failed", "unreachable": "unreachable", "nohost": "unreachable",
               "dns": "dns-failed", "nojava": "failed", "error": "failed", "denied": "access-denied",
               "region": "failed", "nobucket": "failed", "clock": "failed", "norust": "failed",
-              "schema_missing": "failed", "external": "access-denied", "managed": "failed"}
+              "schema_missing": "failed", "external": "access-denied", "managed": "failed",
+              "privilege": "access-denied", "missing_or_denied": "failed"}
 
 REMEDY_FOR = {
     "auth": "the source rejected the credentials: exakit source reauth {name}",
@@ -64,6 +65,8 @@ REMEDY_FOR = {
     "norust": "the Rust language container is not installed: exakit connect installs it with one database restart - asked on a terminal, --yes for a script",
     "unreachable_db": "the local database did not answer: start it (exakit start), then try again",
     "denied": "the account signs in but may not read this data: grant it what the message names ({access}), then: exakit source check {name}",
+    "privilege": "the source took the credentials, but the account lacks a privilege: grant it what the message names ({access}), then: exakit source check {name}",
+    "missing_or_denied": "the source answers that the object the message names does not exist for this account - it was dropped or renamed (then: exakit source refresh {name}), or the account may not see it (grant it {access}); then: exakit source check {name}",
     "region": "the bucket is in another region: exakit source disconnect {name} --yes, then exakit connect <connector> --name {name} --set region=<the bucket's region> with the credential again",
     "nobucket": "the {store} does not exist under that name: check it, then remove and connect again",
     "clock": "the database clock is too far from the store's for a signed request; restart the database (exakit stop, then exakit start), then: exakit source check {name}",
@@ -107,7 +110,9 @@ def remedy_for(kind, name, connector, message=None):
 # security group or firewall drops the connection), or a refusal - an S3 bucket
 # policy on aws:SourceIp or an Azure storage firewall answers 403, read as
 # denied. Their remedy names this computer's public IP: the address the source
-# sees, since the database's traffic leaves through this computer.
+# sees, since the database's traffic leaves through this computer. Not
+# "privilege" or "missing_or_denied": a database answers those to a statement,
+# after the address was let through and the credentials taken.
 ADDRESS_KINDS = ("unreachable", "denied")
 LISTEN_ADVICE = "(a source on this computer must listen beyond 127.0.0.1)"
 
@@ -826,7 +831,7 @@ class Engine(object):
                                % (label, value, other, spec.get("case", "names differ in case")), "schema_missing",
                                "give it as the source spells it: --set %s=%s" % (spec["input"], other))
         if answer == "denied":
-            raise ScopeFailure("the account may not use %s %s" % (label, value), "denied",
+            raise ScopeFailure("the account may not use %s %s" % (label, value), "privilege",
                                "grant it USAGE on the %s (and SELECT on its tables)" % label)
         raise ScopeFailure("the source has no %s %s that this account can see" % (label, value), "schema_missing",
                            "check the name and that the account has access to it")
@@ -1034,8 +1039,11 @@ class Engine(object):
                 if specific:
                     remedy = "the source's certificate did not verify; nothing was kept - %s, then connect again" % specific
                 elif not reconnect and kind in ("auth", "tls", "unreachable", "nohost", "denied", "region", "nobucket",
-                                                "clock", "external", "managed", "schema_missing"):
+                                                "clock", "external", "managed", "schema_missing", "privilege",
+                                                "missing_or_denied"):
                     remedy = {"denied": "the account signs in but may not read this data; nothing was kept - grant it what the message names (%s), then connect again" % connector.get("access", "read access"),
+                              "privilege": "the source took the credentials, but the account lacks a privilege; nothing was kept - grant it what the message names (%s), then connect again" % connector.get("access", "read access"),
+                              "missing_or_denied": "the source answers that the object the message names does not exist for this account; nothing was kept - check that name as the source spells it, or grant the account %s, then connect again" % connector.get("access", "read access"),
                               "region": "the bucket is in another region; nothing was kept - connect again with --set region=<the bucket's region>",
                               "nobucket": "nothing was kept - check the %s name, then connect again" % connector.get("store", "bucket"),
                               "clock": "the database clock is too far from the store's for a signed request; nothing was kept - restart the database (exakit stop, then exakit start), then connect again",

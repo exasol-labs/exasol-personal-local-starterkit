@@ -51,6 +51,23 @@ _KINDS = (
     ("nobucket", r"NoSuchBucket|The specified bucket does not exist|ContainerNotFound"),
     ("denied", r"AccessDenied|not authorized to perform|AuthorizationPermissionMismatch|AuthorizationFailure|"
                r"PERMISSION_DENIED"),
+    # A database that took the credentials and then refused a statement for a
+    # missing grant, in the driver's words (under Exasol's "JDBC-Client-Error:
+    # Failed to receive MetaData for the given statement: ..." or an adapter's
+    # "Caused by:"). Apart from "denied": an address filter refuses before any
+    # SQL runs, so this fix never names an IP to allow. Ahead of "tls" and
+    # "auth": a table name can carry their words (certificates, auth_log).
+    ("privilege", r"permission denied for \w|"                    # PostgreSQL: for table / schema / database ...
+                  r"command denied to user|"                       # MySQL 1142/1143: SELECT command denied to user
+                  r"permission was denied on|"                     # SQL Server 229/230: The SELECT permission was denied on
+                  r"ORA-01031|ORA-01045|ORA-41900|"                # Oracle: insufficient privileges; lacks CREATE
+                                                                   # SESSION privilege; 23ai: missing READ privilege on
+                  r"SQL access control error|Insufficient privileges to operate on|"   # Snowflake
+                  r"not authorized on \S+ to execute"),            # MongoDB code 13 (Unauthorized)
+    # Words that mean "no such object" and "no grant on it" alike: Oracle and
+    # Snowflake answer for an object the account may not see as if it did not
+    # exist, so the fix names both - never "denied" alone.
+    ("missing_or_denied", r"ORA-00942|does not exist or not authorized"),
     ("dns", r"UnknownHostException|Name or service not known|nodename nor servname|unable to resolve host"),
     ("tls", r"PKIX|certificate|SSLHandshake|SSL connection|ssl_server_dn_match|TLS|SSLException|"
             r"trustAnchors parameter must be non-empty"),
@@ -199,10 +216,18 @@ def summarize(text):
     # The message field is the error; the fields under it describe the session.
     field = re.search(r"^\s*message\s*=>\s*(.+)$", text, re.M)
     if field:
-        line = field.group(1)
+        line, rest = field.group(1), text[field.end():]
     else:
         lines = [l.strip() for l in text.splitlines() if l.strip() and l.strip() not in ("(", ")")]
         line = next((l for l in lines if not l.startswith("message")), lines[0] if lines else text)
+        rest = text[text.find(line) + len(line):] if line in text else ""
+    # A driver message that goes on past a colon is said whole: Snowflake's
+    # "SQL compilation error:" names the object on the next line, which
+    # pyexasol prints bare under the message field - not a field of its own,
+    # and not a stack frame.
+    more = next((l.strip() for l in rest.splitlines() if l.strip()), "")
+    if line.rstrip().endswith(":") and more and not re.match(r"\w+\s*=>|at [\w$.]+\(|\)$", more):
+        line = "%s %s" % (line, more)
     return re.sub(r"\s+", " ", line).strip()
 
 
