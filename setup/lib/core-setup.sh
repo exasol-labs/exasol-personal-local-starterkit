@@ -246,7 +246,9 @@ exakit_core_update_check() {
     # Read by _exakit_update_run: set to 1 below once this check does work, so
     # a run that only finished new setup is not "already current".
     EXAKIT_CORE_UPDATE_ACTED=0
-    case "${1:-all}" in all|exakit) ;; *) return 0 ;; esac
+    # Several ids arrive joined by spaces (`exakit update exakit exapump`): the
+    # kit is one of them, so the check runs.
+    case " ${1:-all} " in *" all "*|*" exakit "*) ;; *) return 0 ;; esac
     exakit_core_rerun_active && return 0
     _cuc_root="$(exakit_repo_root 2>/dev/null)" || return 0
     [ -f "$_cuc_root/setup/core/tasks.json" ] || return 0
@@ -293,7 +295,11 @@ exakit_core_update_check() {
 exakit_update_handover() {
     _euh_bin="$EXAKIT_BIN_DIR/exakit"
     info "Continuing with the updated kit"
-    EXAKIT_UPDATE_HANDOVER=1 EXAKIT_UPDATE_ROW_FIELDS=7 "$_euh_bin" update "${1:-all}"
+    # Several ids (`exakit update exakit exapump`) arrive joined by spaces and
+    # leave as separate arguments, as they were typed: one quoted word was an
+    # unknown target to the new run. Each id was checked before this point.
+    # shellcheck disable=SC2086
+    EXAKIT_UPDATE_HANDOVER=1 EXAKIT_UPDATE_ROW_FIELDS=7 "$_euh_bin" update ${1:-all}
 }
 
 # exakit_update_handover_ready — 0 when there is a new exakit to hand the run
