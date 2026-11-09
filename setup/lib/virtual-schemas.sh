@@ -173,6 +173,8 @@ _exakit_vs_hidden_line() {
     _EVH_LINE=""
     _evh_saved="$(stty -g 2>/dev/null)"
     stty -echo -icanon min 1 time 0 2>/dev/null || return 2
+    # The caller's own traps are put back afterwards, not cleared.
+    _evh_prev_int="$(trap -p INT)"; _evh_prev_term="$(trap -p TERM)"
     trap 'stty "${_evh_saved:-echo icanon}" 2>/dev/null; printf "\n"; exit 130' INT TERM
     if [ "${2:-}" = err ]; then printf '%s' "$1" >&2; else printf '%s' "$1"; fi
     _evh_rc=0
@@ -194,6 +196,8 @@ _exakit_vs_hidden_line() {
     stty min 0 time 1 2>/dev/null && cat > /dev/null 2>&1
     stty "${_evh_saved:-echo icanon}" 2>/dev/null
     trap - INT TERM
+    [ -n "$_evh_prev_int" ] && eval "$_evh_prev_int"
+    [ -n "$_evh_prev_term" ] && eval "$_evh_prev_term"
     return "$_evh_rc"
 }
 
