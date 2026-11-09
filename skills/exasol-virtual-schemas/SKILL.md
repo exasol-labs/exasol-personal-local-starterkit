@@ -73,6 +73,8 @@ exakit source check <name> --json                                   # later: a f
   the tables appear as `VS_SALES`, the credential in the CONNECTION `EXAKIT_SRC_SALES`.
 - `exakit connect` alone, at a terminal, opens a menu and a panel per source. An agent
   never lands in it; suggest it to a user who connects several sources by hand.
+  The form marks each field required or optional, and its first question takes a pasted
+  connection string, read hidden.
 
 ## Rules that are not negotiable
 
@@ -150,6 +152,7 @@ does not guarantee the source does little work: keep remote queries selective.
 | `input` (2) | bad or missing input, named in `error` | fix that input, run the same command |
 | `conflict` (3) | the name or an object is taken | another name, or `exakit source remove <name>` first |
 | `missing` (4) / `gated` (5) | no source by that name / the connector is not available yet | `command`: `exakit source list` / `exakit source catalog` |
+| `declined` (5) | `disconnect` / `remove` without `--yes`: nothing changed | ask the user; `command` is the `--yes --json` form |
 | `nojava` / `norust` (21 / 23) | the Java / Rust language container is missing and was not installed | tell the user (download, one restart), then rerun with `--yes` |
 | `unreachable_db` (22) | the local database does not answer | `command`: `exakit start` |
 | `auth` (1) | the source rejected the credential | first connect: correct it; later: `exakit source reauth <name> --password-file <file>` |
@@ -192,11 +195,10 @@ exakit source remove <name> --dry-run       # drops VS_<NAME>, its adapter and C
                                             # downloaded files no other source still uses
 ```
 
-Both preview, then ask; `--yes` answers for a script the user told to (unconfirmed: exit
-5, nothing changed). `--json` asks nothing here either - `remove <name> --json` removes at
-once - so preview with `--dry-run` and ask the user first. Neither touches remote data or
-revokes anything at the source. Ask before removing: queries and views on `VS_<NAME>` stop
-working.
+Unattended: preview with `--dry-run --json`, ask the user, then run `--yes --json`.
+Without `--yes` nothing changes: the answer is `kind: declined` (exit 5), its `command`
+the `--yes` form. Neither touches remote data or revokes anything at the source. Ask
+before removing: queries and views on `VS_<NAME>` stop working.
 
 ## The EDML mapping (S3 and Azure Blob Storage)
 
