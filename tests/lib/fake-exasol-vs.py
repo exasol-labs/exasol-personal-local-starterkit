@@ -58,6 +58,8 @@ database and inspect it afterwards:
     refresh_fail virtual schemas whose ALTER ... REFRESH fails (the adapter
                 cannot reach its source); script_fail scripts (SCHEMA.NAME)
                 whose CREATE OR REPLACE fails
+    vs_fail     a message: every CREATE VIRTUAL SCHEMA fails with it (an
+                adapter that echoes what the CONNECTION holds)
     connection_fail  a message: CREATE CONNECTION fails as pyexasol reports it,
                 its query => field printing the statement back, secret and
                 all, across as many lines as the statement has
@@ -524,6 +526,8 @@ class Fake(object):
         raise Exception("fake: unexpected query: %s" % sql[:80])
 
     def _execute(self, doc, sql):
+        if doc.get("vs_fail") and sql.startswith("CREATE VIRTUAL SCHEMA"):
+            raise Exception(doc["vs_fail"])
         if sql == "CREATE SCHEMA EXAKIT_VS":
             doc["schemas"].append("EXAKIT_VS")
             return

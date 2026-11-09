@@ -121,7 +121,10 @@ function Protect-ExakitVsLog {
     if ($Today) {
         $folder = Get-ExakitVsLogFolder
         if (-not $folder) { return }
-        $path = Join-Path $folder ("virtual-schemas-{0}.log" -f (Get-Date -Format "yyyyMMdd"))
+        # The local Gregorian date in digits, as the engine names the file
+        # (vslog.day_name): the invariant culture, since th-TH or ar-SA would
+        # format another calendar's year and make ready a file nobody writes.
+        $path = Join-Path $folder ("virtual-schemas-{0}.log" -f (Get-Date).ToString("yyyyMMdd", [Globalization.CultureInfo]::InvariantCulture))
         try {
             if (-not (Test-Path -LiteralPath $folder)) { New-Item -ItemType Directory -Force -Path $folder | Out-Null }
             if (-not (Test-Path -LiteralPath $path)) { New-Item -ItemType File -Path $path | Out-Null }

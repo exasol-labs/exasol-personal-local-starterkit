@@ -3513,5 +3513,122 @@ check "review 9: ...an unexpected fault while handling a driver's exception: its
     "r9cli 1 True True []" "$(printf '%s\n' "$REVIEW" | grep '^r9cli ')"
 check "review 10: every pattern linear: 80k hostile characters each under 1 s" "r10 slow:" "$(printf '%s\n' "$REVIEW" | grep '^r10 ')"
 
+printf '\n== the day log: the second review'"'"'s findings, each with its own input ==\n'
+# Second review 5: a CREATE VIRTUAL SCHEMA carries no secret of its own, yet
+# its adapter can echo what the CONNECTION holds. The screen, --json and the
+# log were redacted only with the failing statement's secrets.
+python3 - "$STATE" <<'PYVSFAIL'
+import json, sys
+json.dump({"sources": {"pg.example.com": {"tables": ["ORDERS"]}},
+           "vs_fail": "E-VSPG-9: the adapter could not log in with <s3cr3t-Pa55'word> as the password"}, open(sys.argv[1], "w"))
+PYVSFAIL
+run_secret "$SECRET" connect postgresql --name vsecho $PG_SET --secret-stdin
+check "second review 5: a CREATE VIRTUAL SCHEMA failure echoing the run's credential: exit 1" "1" "$RC"
+has "second review 5: ...its message is on the screen" "E-VSPG-9: the adapter could not log in with <***> as the password" "$OUT"
+lacks "second review 5: ...without the credential" "s3cr3t" "$OUT"
+OUT="$(printf '%s' "$SECRET" | eng --json connect postgresql --name vsecho $PG_SET --secret-stdin 2>/dev/null)"
+check "second review 5: ...nor in --json's error" "[True, False]" "$(JOUT="$OUT" one '["E-VSPG-9" in d["error"], "s3cr3t" in d["error"]]')"
+lacks "second review 5: ...nor in the log" "s3cr3t" "$(cat "$VSLOG")"
+
+cat > "$WORK/vslog-review2.py" <<'PYREVIEW2'
+import datetime, os, sys, time
+sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
+import vslog, sql
+base = sys.argv[2]
+os.makedirs(base)
+R = vslog.redact
+
+# 1: a short secret right after an escape is still alone; inside a word it is not.
+texts = ["url=jdbc%3Apostgresql%3A%2F%2Freader%3AHunter2%40host", '{"msg": "line1\\nHunter2\\nline3"}', '"a\\tHunter2"']
+print("s1 leaks:%s" % "|".join(t for t in texts if "Hunter2" in R(t, ["Hunter2"])))
+print("s1 kept %s %s" % ("jdbc%3Apostgresql" in R("url=jdbc%3Apostgresql%3A%2F%2Fpostgres%40h", ["postgres"]),
+                         R("sales reader a", ["a"])))
+
+# 2: the engine names the day in local Gregorian digits; an empty file a
+# bridge made ready in another calendar is pruned, one with lines is kept.
+print("s2 " + vslog.day_name(datetime.date(2026, 11, 9)))
+today = datetime.date.today()
+folder = os.path.join(base, "s2")
+os.makedirs(folder)
+open(os.path.join(folder, "virtual-schemas-%04d%02d%02d.log" % (today.year + 543, today.month, min(today.day, 28))), "w").close()
+with open(os.path.join(folder, "virtual-schemas-%04d%02d%02d.log" % (today.year + 1, 1, 1)), "w") as handle:
+    handle.write("a line\n")
+vslog.RunLog(folder, "list", None).close()
+print("s2 left " + " ".join(sorted(os.listdir(folder))))
+
+# 3: user:password@ with no length cap and up to the last @.
+jwt = "eyJ" + "A" * 700 + "." + "B" * 790 + "Z"
+long_user = "https://" + "u" * 300 + ":Long-User-Pw9@git.example.com/x"
+at_inside = "https://u:" + "p" * 1100 + "@Tail-Of-Pw8@host/x"
+print("s3 leaks:%s" % "|".join(n for n, t in (("jwt", "https://oauth2:%s@git.example.com" % jwt), ("user", long_user),
+                                                ("at", at_inside))
+                                if any(w in R(t) for w in ("AAAA", "Long-User-Pw9", "Tail-Of-Pw8", "pppp"))))
+print("s3 kept " + R("https://oauth2:%s@git.example.com" % jwt))
+
+# 4: CamelCase names, a Python repr, Authorization; error codes and flags kept.
+# Each shape with the value that must go (": tok" - the value, not the name).
+shapes = [("AccessToken: abc123", "abc123"), ("SessionToken: tok", ": tok"), ("ClientSecret: s3cr3t", "s3cr3t"),
+          ("DbPassword: pw1", "pw1"), ("X-Auth-Token: abc123", "abc123"),
+          ("{'password': 'Hunter22', 'token': 'dapi123'}", "Hunter22"), ("{'password': 'Hunter22', 'token': 'dapi123'}", "dapi123"),
+          ("Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.e30.sig4", "eyJhbGci"), ("Authorization: Basic dXNlcjpwYXNzd29yZDQ=", "dXNlcjpw")]
+print("s4 leaks:%s" % "|".join(s for s, v in shapes if v in R(s)))
+print("s4 shown " + " ~ ".join(R(s) for s in ("AccessToken: abc123", "{'password': 'Hunter22', 'token': 'dapi123'}",
+                                               "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.e30.sig4")))
+readable = ["ExpiredToken: The security token included in the request is expired",
+            "InvalidToken: The provided token is malformed", "NoSuchKey: The specified key does not exist.",
+            "Access denied for user 'r'@'h' (using password: YES)", "(using password: NO)"]
+print("s4 changed:%s" % "|".join(r for r in readable if R(r) != r))
+print("s4 thrift " + R("TOpenSessionReq(username:token, password:dapiXYZ)"))
+kinds = []
+for message in ("Access denied for user 'r'@'h' (using password: YES)", "ExpiredToken: The security token included in the request is expired"):
+    kinds.append("%s=%s" % (sql.classify(message), sql.classify(sql.redact(Exception(message), []))))
+print("s4 kinds " + " ".join(kinds))
+
+# 5: a value credential() derived, registered with the run, echoed by a
+# statement that carries no secrets of its own.
+class Backend(object):
+    def execute(self, sql_text):
+        raise Exception("E-VSS3-4: the adapter refused key [" + "Derived-" + "Key-77]")
+log = vslog.RunLog(os.path.join(base, "s5"), "connect", "s5")
+log.secret("Derived-" + "Key-77")
+try:
+    sql.Database(Backend(), log).execute("CREATE VIRTUAL SCHEMA \"VS_S5\" USING X WITH CONNECTION_NAME = 'C'")
+except sql.DbError as error:
+    print("s5 %s" % error)
+
+# The new scanners stay linear (80k characters each).
+slow = []
+for hostile in ("a://b:" * 13000 + "@", "jdbc:oracle:thin:a/" * 4000 + "@", "https://u:" + "p@" * 40000, "Bearer " * 11000,
+                "Authorization: " * 5000, "'password':" * 7000, "AccessToken: " * 6000, "a\\n" * 26000, "%3A" * 26000):
+    started = time.time()
+    R(hostile, ["Hunter2", "Hunter22-long-secret"])
+    if time.time() - started > 1.0:
+        slow.append(hostile[:12])
+print("s6 slow:%s" % "|".join(slow))
+PYREVIEW2
+REVIEW2="$(python3 "$WORK/vslog-review2.py" "$ROOT" "$WORK/vslog-review2" 2>&1)"
+check "second review 1: the short secret Hunter2 after %3A, after \\n, after \\t: redacted" "s1 leaks:" "$(printf '%s\n' "$REVIEW2" | grep '^s1 leaks')"
+check "second review 1: ...and still not inside a word (postgres in jdbc%3Apostgresql, a in sales and reader)" \
+    "s1 kept True sales reader ***" "$(printf '%s\n' "$REVIEW2" | grep '^s1 kept')"
+check "second review 2: the engine names the day in local Gregorian digits" "s2 virtual-schemas-20261109.log" "$(printf '%s\n' "$REVIEW2" | grep '^s2 virtual')"
+check "second review 2: ...an empty file dated in another calendar is pruned, a written future one kept" \
+    "s2 left $(python3 -c 'import datetime as d; t=d.date.today(); print("virtual-schemas-%04d%02d%02d.log virtual-schemas-%04d0101.log" % (t.year, t.month, t.day, t.year + 1))')" \
+    "$(printf '%s\n' "$REVIEW2" | grep '^s2 left')"
+check "second review 3: https://oauth2:<1500-character JWT>@, a 300-character user, a password with @: redacted, no length cap" \
+    "s3 leaks:" "$(printf '%s\n' "$REVIEW2" | grep '^s3 leaks')"
+check "second review 3: ...the user and host kept" "s3 kept https://oauth2:***@git.example.com" "$(printf '%s\n' "$REVIEW2" | grep '^s3 kept')"
+check "second review 4: AccessToken: SessionToken: ClientSecret: DbPassword: X-Auth-Token: a Python repr, Authorization Bearer and Basic" \
+    "s4 leaks:" "$(printf '%s\n' "$REVIEW2" | grep '^s4 leaks')"
+check "second review 4: ...the names and the scheme kept" \
+    "s4 shown AccessToken: *** ~ {'password': '***', 'token': '***'} ~ Authorization: Bearer ***" "$(printf '%s\n' "$REVIEW2" | grep '^s4 shown')"
+check "second review 4: ...ExpiredToken: InvalidToken: NoSuchKey: and using password: YES / NO unchanged" "s4 changed:" \
+    "$(printf '%s\n' "$REVIEW2" | grep '^s4 changed')"
+check "second review 4: ...a Thrift password:...) keeps its closing )" "s4 thrift TOpenSessionReq(username:token, password:***)" \
+    "$(printf '%s\n' "$REVIEW2" | grep '^s4 thrift')"
+check "second review 4: ...and the classes stay" "s4 kinds auth=auth auth=auth" "$(printf '%s\n' "$REVIEW2" | grep '^s4 kinds')"
+check "second review 5: a derived value the run registered, echoed by a statement with no secrets of its own: redacted" \
+    "s5 E-VSS3-4: the adapter refused key [***]" "$(printf '%s\n' "$REVIEW2" | grep '^s5 ')"
+check "second review 3/4: the new scanners stay linear: 80k hostile characters each under 1 s" "s6 slow:" "$(printf '%s\n' "$REVIEW2" | grep '^s6 ')"
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

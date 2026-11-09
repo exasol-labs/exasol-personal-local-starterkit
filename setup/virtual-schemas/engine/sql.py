@@ -275,7 +275,14 @@ class Database(object):
         """The DbError for a driver's exception, logged. Raised `from None`:
         the driver's own exception (its query => field holds the statement,
         secret and all) never rides along to a traceback."""
-        message = redact(error, secrets)
+        # Every secret the run knows, not only this statement's own: a CREATE
+        # VIRTUAL SCHEMA carries none, yet its adapter can echo the credential
+        # (or a value derived from it) the CONNECTION holds.
+        try:
+            known = set(secrets) | set(self.log.secrets)
+        except Exception:  # noqa: BLE001 - never fewer than the statement's own
+            known = set(secrets)
+        message = redact(error, known)
         try:
             kind = classify_raw(message, error)
         except Exception:  # noqa: BLE001 - a class is never worth the answer
