@@ -111,6 +111,20 @@ Set-Content -LiteralPath $engineRecord -Value '{"runtime": {"type": "personal", 
 $env:EXAKIT_VS_OS = "Darwin"
 $r = Invoke-ExakitVsEngine -Arguments $localhostPlan
 Check "macOS: the launcher VM's address whatever the record says" $true (($r.Lines -join "`n").Contains("on macOS 192.168.64.1"))
+# Nothing recorded yet (an install that has not written it): this run's
+# choice, as Get-PersonalSlcDnsEngine falls back to it - $script:PersonalEngine,
+# which the bridge hands the engine; a stray environment value is not it.
+$env:EXAKIT_VS_OS = "Windows"
+Set-Content -LiteralPath $engineRecord -Value '{"runtime": {"type": "personal"}}' -Encoding ASCII
+$script:PersonalEngine = "docker"
+$r = Invoke-ExakitVsEngine -Arguments $localhostPlan
+Check "no engine recorded, this run chose Docker: Docker's address" $true (($r.Lines -join "`n").Contains("on Docker host.docker.internal"))
+$script:PersonalEngine = ""
+$env:EXAKIT_PERSONAL_ENGINE = "docker"
+$r = Invoke-ExakitVsEngine -Arguments $localhostPlan
+Check "...no choice made (a stray EXAKIT_PERSONAL_ENGINE ignored, as the bridge ignores it): Podman's" $true (($r.Lines -join "`n").Contains("on Linux and WSL host.containers.internal"))
+Check "...and the caller's environment is put back" "docker" $env:EXAKIT_PERSONAL_ENGINE
+Remove-Item Env:\EXAKIT_PERSONAL_ENGINE
 Remove-Item Env:\EXAKIT_VS_OS
 Remove-Item -LiteralPath $engineRecord -Force
 
@@ -252,6 +266,17 @@ Check "exit 21: Java offered; declined, not retried" "21 connect|JAVA" ("$code "
 $script:codes.AddRange(@(1)); $script:calls.Clear()
 $code = Invoke-ExakitVsRun -Arguments @("connect")
 Check "any other failure: no retry" "1 connect" ("$code " + ($script:calls -join "|"))
+# A repair that fails: the bridge's own line must not promise the restart
+# the engine's fix rules out on Docker (lifecycle.DNS_ON_DOCKER).
+function Repair-PersonalSlcDns { [void]$script:calls.Add("REPAIR"); return $false }
+function Get-PersonalSlcDnsEngine { return $script:stubEngine }
+$script:stubEngine = "docker"
+$said = (@(Repair-ExakitVsForRetry -Code 20 6>&1) | ForEach-Object { "$_" }) -join "|"
+Check "a failed repair on Docker: no restart promised" "True False" ("{0} {1}" -f $said.Contains("DNS could not be repaired on this Docker deployment; the failure's fix says why."), $said.Contains("Restart the database"))
+$script:stubEngine = "podman"
+$said = (@(Repair-ExakitVsForRetry -Code 20 6>&1) | ForEach-Object { "$_" }) -join "|"
+Check "...on Podman: the restart, as before" $true ($said.Contains("Restart the database (exakit stop, exakit start) and try again."))
+function Repair-PersonalSlcDns { [void]$script:calls.Add("REPAIR"); return $true }
 
 Write-Host ""
 Write-Host "== exakit connect refuses a credential argument =="

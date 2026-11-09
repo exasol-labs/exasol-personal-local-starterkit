@@ -80,6 +80,25 @@ REMEDY_FOR = {
     "error": "see the log: exakit logs",
 }
 
+# Java without DNS on a Docker deployment (kit 0.2.4+): the repair writes the
+# deployment's DNS into the language container, Docker mounts it read-only,
+# and the restart REMEDY_FOR["dns"] names changes nothing there. The one place
+# this is said - cli.py asks remedy_text too - so a working Docker repair
+# replaces it here.
+DNS_ON_DOCKER = ("Java in the database could not resolve the host name, and the kit cannot repair that on a Docker "
+                 "deployment yet: Docker mounts the language container read-only, so a restart does not fix it. "
+                 "A Podman deployment (or macOS) works around it")
+
+
+def remedy_text(kind, table=None):
+    """The fix for a kind as a template, from table (REMEDY_FOR by default):
+    DNS_ON_DOCKER for Java without DNS on a deployment recorded as Docker."""
+    table = REMEDY_FOR if table is None else table
+    if kind == "dns" and planner.ENGINE == "docker":
+        return DNS_ON_DOCKER
+    return table.get(kind, table["error"])
+
+
 # The one exakit command that IS the fix, for the kinds that have one (--json
 # carries it as `command`, null for the rest). A first connect has no source
 # yet, so the lifecycle commands do not apply to it (connect passes first=True).
@@ -98,7 +117,7 @@ def remedy_for(kind, name, connector, message=None):
     """The fix for a failure class, in the words of the connector's store.
     An error_hint given as {"match", "text"} is said only for a message it
     matches; a plain string, for every unclassified failure."""
-    text = REMEDY_FOR.get(kind, REMEDY_FOR["error"]).format(
+    text = remedy_text(kind).format(
         name=name, access=connector.get("access", "read access"), store=connector.get("store", "bucket"))
     if kind == "auth" and connector.get("auth_hint"):
         text += "; %s" % connector["auth_hint"]

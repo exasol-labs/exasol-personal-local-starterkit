@@ -37,6 +37,9 @@ NEWSECRET='n3w-T0ken-value'
 # checkip.amazonaws.com for this computer's public IP. The tests of that turn
 # the lookup back on against a file:// URL (ipeng, and the two terminal flows).
 export EXAKIT_NO_IP_LOOKUP=1
+# The engine falls back to this when nothing is recorded (plan.py); a value
+# left in the caller's environment must not decide the cases below.
+unset EXAKIT_PERSONAL_ENGINE
 printf '203.0.113.7\n' > "$WORK/public-ip"
 IPURL="file://$WORK/public-ip"
 
@@ -161,6 +164,26 @@ lacks "...never Docker's there" "host.docker.internal" "$OUT"
 printf '{"runtime": {"type": "personal"}}\n' > "$HOME_K/manifest.json"
 run plan postgresql --name sales --set host=localhost --set database=x --set user=u
 has "no engine recorded (before kit 0.2.4): as before" "on macOS 192.168.64.1, on Linux and WSL host.containers.internal" "$OUT"
+# Then this run's choice, as the shells' personal_slc_dns_engine reads it:
+# the record first, the run's EXAKIT_PERSONAL_ENGINE next, Podman last.
+EXAKIT_PERSONAL_ENGINE=docker run plan postgresql --name sales --set host=localhost --set database=x --set user=u
+has "...nothing recorded, this run chose Docker: Docker's address" "$DOCKER_HOST_WORDS" "$OUT"
+printf '{"runtime": {"type": "personal", "engine": "podman"}}\n' > "$HOME_K/manifest.json"
+EXAKIT_PERSONAL_ENGINE=docker run plan postgresql --name sales --set host=localhost --set database=x --set user=u
+has "...the record beats this run's choice" "on Linux and WSL host.containers.internal" "$OUT"
+printf '{"runtime": {"engine": "podman", "container": "exasol-nano"}}\n' > "$HOME_K/manifest.json"
+EXAKIT_PERSONAL_ENGINE=docker run plan postgresql --name sales --set host=localhost --set database=x --set user=u
+has "...a nano record is none: this run's choice" "$DOCKER_HOST_WORDS" "$OUT"
+# The bridge hands the engine the shell's own value, exported or not.
+rm -f "$HOME_K/manifest.json"
+OUT="$( ( EXAKIT_HOME="$HOME_K"
+    . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
+    exakit_vs_defs() { printf '%s' "$ROOT/setup/virtual-schemas"; }
+    _exakit_vs_kit_python() { command -v python3; }
+    manifest_get() { return 1; }
+    unset EXAKIT_PERSONAL_ENGINE; EXAKIT_PERSONAL_ENGINE=docker
+    exakit_vs_engine plan postgresql --name sales --set host=localhost --set database=x --set user=u ) 2>&1 )"
+has "...the bridge passes the run's choice on, set in the shell and not exported" "$DOCKER_HOST_WORDS" "$OUT"
 rm -f "$HOME_K/manifest.json"
 unset EXAKIT_VS_OS
 V6="$(python3 - "$ROOT" <<'PYV6'
@@ -507,6 +530,27 @@ import json, sys; d = json.load(open(sys.argv[1])); d["dns"] = False; json.dump(
 PY
 run_secret "$SECRET" connect mysql --name crm --set host=pg.example.com --set database=crm --set user=reader --secret-stdin
 check "Java without DNS: exit 20, for the shell to repair and retry" "20" "$RC"
+# The fix it names follows the deployment's engine. Podman (and macOS, and a
+# record that names none): a restart repairs DNS. Docker mounts the language
+# container read-only, so a restart cannot - the fix must not promise one.
+dnsfix() { printf '%s' "$SECRET" | eng --json connect mysql --name crm --set host=pg.example.com --set database=crm \
+    --set user=reader --secret-stdin 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["kind"], "|", d["remedy"])'; }
+has "...the fix on Podman: a restart repairs DNS" "dns | Java in the database could not resolve the host name; restart the database with exakit start (it repairs DNS)" "$(dnsfix)"
+export EXAKIT_VS_OS=Linux
+printf '{"runtime": {"type": "personal", "engine": "docker"}}\n' > "$HOME_K/manifest.json"
+OUT="$(dnsfix)"
+has "...on a Docker deployment: not repairable there yet, and why" "dns | Java in the database could not resolve the host name, and the kit cannot repair that on a Docker deployment yet: Docker mounts the language container read-only, so a restart does not fix it. A Podman deployment (or macOS) works around it" "$OUT"
+lacks "...never the restart that cannot help" "it repairs DNS" "$OUT"
+check "...the same words for a failure the engine names no fix for (cli.failure)" "True True" "$(python3 - "$ROOT" <<'PYC'
+import sys; sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
+import cli, lifecycle, plan
+plan.ENGINE = "docker"
+print(cli.failure("x", 20)["remedy"] == lifecycle.DNS_ON_DOCKER, cli.failure("x", 20, source="crm")["remedy"] == lifecycle.DNS_ON_DOCKER)
+PYC
+)"
+has "...on macOS the launcher VM's Podman, whatever the record says" "(it repairs DNS)" "$(EXAKIT_VS_OS=Darwin dnsfix)"
+rm -f "$HOME_K/manifest.json"
+unset EXAKIT_VS_OS
 python3 - "$STATE" <<'PYDNS'
 import json, sys; d = json.load(open(sys.argv[1])); d["dns"] = True; json.dump(d, open(sys.argv[1], "w"))
 PYDNS
@@ -781,6 +825,19 @@ check "exit 20 from the engine: DNS repaired, connect retried once, exit 0" \
 reset_bridge 0 0 21
 OUT="$(bridge cmd_connect pg --name sales --set host=h --password-file "$B/pw" </dev/null)"; RC=$?
 check "exit 21: the Java install is offered; declined, nothing retried" "21 1" "$RC $(grep -c '^connect' "$B/argv")"
+# A repair that fails: the bridge's own line must not promise the restart
+# the engine's fix rules out on Docker (lifecycle.DNS_ON_DOCKER).
+dnsline() { ( EXAKIT_HOME="$HOME_K"; STUB_OS="$1"; STUB_ENGINE="$2"
+    . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
+    personal_slc_dns_repair() { return 1; }
+    detect_os() { printf '%s' "$STUB_OS"; }
+    personal_slc_dns_engine() { printf '%s' "$STUB_ENGINE"; }
+    _exakit_vs_repair 20; echo "rc=$?" ) 2>&1; }
+OUT="$(dnsline linux docker)"
+has "a failed repair on Docker: said, exit 1" "DNS could not be repaired on this Docker deployment; the failure's fix says why." "$OUT"
+lacks "...no restart promised" "Restart the database" "$OUT"
+has "...on Podman: the restart, as before" "Restart the database (exakit stop, exakit start) and try again." "$(dnsline linux podman)"
+has "...on macOS: the launcher VM's Podman, whatever the record says" "Restart the database" "$(dnsline macos docker)"
 has "...the offer was made" "JAVA-ASKED" "$(cat "$B/argv")"
 reset_bridge 0
 OUT="$(bridge cmd_source remove sales --dry-run </dev/null)"
