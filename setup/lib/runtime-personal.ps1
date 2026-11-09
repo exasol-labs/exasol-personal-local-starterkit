@@ -2011,18 +2011,29 @@ function Get-PersonalSlcInstalledFlavors {
 # empty, so Java code in the database - every virtual schema adapter - can
 # reach an IP address and resolve no name; the database mounts the real files
 # at /conf, and setup/lib/personal-slc-dns.py points the container's at them
-# through the host's Podman. Every start rebuilds the containers, so this runs
-# after every start. Best effort: returns $false and logs when it cannot.
+# through the deployment's own engine: Docker or Podman, this run's choice
+# first, then the record, Podman when it names none (every deployment before
+# kit 0.2.4). Podman's CLI cannot see a Docker container. The deployment id
+# names the database container (exasol-db-<id>; a sidecar is
+# exasol-db-<id>-sidecar-<name>). Every start rebuilds the containers, so this
+# runs after every start. Best effort: returns $false and logs when it cannot.
 # Twin of personal_slc_dns_repair.
 function Repair-PersonalSlcDns {
     $flavors = @(Get-PersonalSlcInstalledFlavors)
     if ($flavors.Count -eq 0) { return $true }
-    if (-not (Get-Command podman -ErrorAction SilentlyContinue)) {
-        Write-ExakitLog "WARN" "language container DNS: no podman on PATH"
+    $engine = "" + $script:PersonalEngine
+    if (-not $engine) { $engine = "" + (Get-PersonalEngineRecorded) }
+    if ($engine -ne "docker") { $engine = "podman" }
+    if (-not (Get-Command $engine -ErrorAction SilentlyContinue)) {
+        Write-ExakitLog "WARN" "language container DNS: no $engine on PATH"
         return $false
     }
     $helper = Join-Path $PSScriptRoot "personal-slc-dns.py"
-    $result = Invoke-ExakitPythonFile -Path $helper -Arguments $flavors
+    # No empty argument: Windows PowerShell 5.1 drops it on the way to python.
+    $helperArgs = @("--engine", $engine)
+    $id = "" + (Get-PersonalDeploymentId)
+    if ($id) { $helperArgs += @("--deployment-id", $id) }
+    $result = Invoke-ExakitPythonFile -Path $helper -Arguments (@($helperArgs) + @($flavors))
     $ok = ($result.Code -eq 0)
     foreach ($line in @($result.Lines)) {
         if ($line -match '^EXAKIT_SLC_DNS (\S+) (\S+)$') {
