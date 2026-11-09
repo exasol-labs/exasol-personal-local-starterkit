@@ -376,6 +376,8 @@ $one = Invoke-JsonSource @("reauth", "jsonre", "--json", "--password-file", $jso
 Check "reauth --json: one object, exit 0, the source ready" "True 0 True ready" "$one $jsonCode $($jsonDoc.ok) $($jsonDoc.status)"
 Check "...no rendered line on stdout" $false ($jsonText.Contains("ready again"))
 Check "...the engine asked with --json once" "--json show jsonre|--json reauth jsonre --secret-stdin" ((Get-Content -LiteralPath $srcRecord) -join "|")
+$one = Invoke-JsonSource @("--json")
+Check "source --json (no action): the listing's one object, exit 0" "True 0 True" "$one $jsonCode $($jsonDoc.ok)"
 $one = Invoke-JsonSource @("reauth", "jsonre", "--json", "--password-file", $jsonPw)
 Check "reauth --json with a credential the source refuses: one failure object" "True False auth True" "$one $($jsonDoc.ok) $($jsonDoc.kind) $([bool]$jsonDoc.remedy)"
 $one = Invoke-JsonSource @("reauth", "jsonre", "--json", "--password-file", $work)

@@ -2562,6 +2562,15 @@ check "a real connect: exit 0, one object - the engine's result" "0 [True, 'json
     "$JRC $(one '[d["ok"], d["name"], d["objects"]["schema"], d["public_ip"]]')"
 lacks "...no query hint or Manage line on stdout" "Manage it with" "$JOUT"
 lacks "...and the credential is nowhere in it" "$SECRET" "$JOUT$JERR"
+# A credential kept off disk: --password-file <(pass show db) hands over a
+# pipe, not a regular file. A named pipe stands in for it here (bash 3.2 closes
+# a <(...) of its own as soon as a function it is given to runs a command;
+# exakit, a process of its own, keeps the one its caller passed it).
+mkfifo "$WORK/json.fifo"; ( printf '%s' "$SECRET" > "$WORK/json.fifo" ) & _jw=$!
+jsonsh /dev/null pg --name jsonpipe $PG_SET --json --password-file "$WORK/json.fifo"
+kill "$_jw" 2>/dev/null; wait "$_jw" 2>/dev/null; rm -f "$WORK/json.fifo"
+check "a connect with --password-file a pipe: exit 0, one object" "0 [True, 'jsonpipe']" "$JRC $(one '[d["ok"], d["name"]]')"
+run remove jsonpipe >/dev/null 2>&1
 jsonsh /dev/null pg --name jsondry $PG_SET --dry-run --json
 check "--dry-run --json: exit 0, one object - the plan" "0 [True, 'jsondry', 'GA', None]" \
     "$JRC $(one '[d["ok"], d["name"], d["tier"], d["public_ip"]]')"
@@ -2672,6 +2681,13 @@ check "reauth --json: exit 0, one object - the engine's" "0 [True, 'ready']" "$J
 check "...the engine was asked with --json once" "--json show jsonjava|--json reauth jsonjava --secret-stdin|" "$(tr '\n' '|' < "$WORK/json.argv")"
 lacks "...its events are not on the terminal" "OK " "$JERR"
 has "...they are in the log" "OK " "$(cat "$WORK/json.log")"
+# The same for a reauth: a pipe as --password-file (see the connect above).
+mkfifo "$WORK/json.fifo"; ( printf 'rotated' > "$WORK/json.fifo" ) & _jw=$!
+jsonsrc /dev/null reauth jsonjava --json --password-file "$WORK/json.fifo"
+kill "$_jw" 2>/dev/null; wait "$_jw" 2>/dev/null; rm -f "$WORK/json.fifo"
+check "reauth --json, --password-file a pipe: exit 0, one object" "0 [True, 'ready']" "$JRC $(one '[d["ok"], d["status"]]')"
+jsonsrc /dev/null --json
+check "source --json (no action): exit 0, the listing's one object" "0 True" "$JRC $(one 'd["ok"]')"
 jsonsrc /dev/null reauth jsonjava --json --password-file "$WORK/json.wrong"
 check "reauth --json with a credential the source refuses: one failure object" "[False, 'auth', True, True, True]" \
     "$(one '[d["ok"], d["kind"], bool(d["error"]), bool(d["remedy"]), "command" in d]')"

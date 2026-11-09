@@ -3575,7 +3575,9 @@ function Invoke-CmdSource {
     param([string[]]$Arguments = @())
     $action = "list"
     $rest = @($Arguments)
-    if ($rest.Count -gt 0) { $action = $rest[0]; $rest = @($rest | Select-Object -Skip 1) }
+    # An option where the action goes (`exakit source --json`) means the
+    # default action, list, with that option.
+    if ($rest.Count -gt 0 -and -not ("" + $rest[0]).StartsWith("-")) { $action = $rest[0]; $rest = @($rest | Select-Object -Skip 1) }
     $json = $false; $dry = $false; $all = $false; $name = ""; $status = ""; $pwFile = ""
     $table = ""; $ddl = $false; $into = ""
     $script:ExakitVsAssumeYes = $false

@@ -1138,7 +1138,7 @@ EOF
         _cc_what="$(printf '%s' "$_cc_label" | tr 'A-Z' 'a-z')"
         # With --json an unreadable file is the one object; without, the
         # credential reader says "Cannot read" as it always has.
-        if [ "$_cc_json" = 1 ] && [ -n "$_cc_pwfile" ] && { [ ! -f "$_cc_pwfile" ] || [ ! -r "$_cc_pwfile" ]; }; then
+        if [ "$_cc_json" = 1 ] && [ -n "$_cc_pwfile" ] && { [ -d "$_cc_pwfile" ] || [ ! -r "$_cc_pwfile" ]; }; then
             _exakit_vs_refuse 2 "Cannot read $_cc_pwfile" "cannot read $_cc_pwfile" \
                 "give a file this user can read with --password-file, or pipe the $_cc_what on a closed standard input"
         fi
@@ -1197,7 +1197,9 @@ if p.get("gate"):
 
 # cmd_source <action> [name] [options] — the lifecycle of a connected source.
 cmd_source() {
-    _cs_action="${1:-list}"; [ "$#" -gt 0 ] && shift
+    # An option where the action goes (`exakit source --json`) means the
+    # default action, list, with that option.
+    case "${1:-}" in -*) _cs_action=list ;; *) _cs_action="${1:-list}"; [ "$#" -gt 0 ] && shift ;; esac
     _cs_json=0; _cs_dry=0; _cs_name=""; _cs_all=0; _cs_status=""; _cs_pwfile=""; _cs_table=""; _cs_ddl=0; _cs_into=""
     # --json is known before anything is refused: the bridge's own refusals
     # and failures then come in the engine's shape, and nothing is asked.
@@ -1285,7 +1287,7 @@ print("  " + "\n  ".join(["drops: " + ", ".join(p["drop"])] + (["keeps: " + ", "
             rm -f "$_cs_out"
             # With --json an unreadable file is the one object; without, the
             # credential reader says "Cannot read" as it always has.
-            if [ "$_cs_json" = 1 ] && [ -n "$_cs_pwfile" ] && { [ ! -f "$_cs_pwfile" ] || [ ! -r "$_cs_pwfile" ]; }; then
+            if [ "$_cs_json" = 1 ] && [ -n "$_cs_pwfile" ] && { [ -d "$_cs_pwfile" ] || [ ! -r "$_cs_pwfile" ]; }; then
                 _exakit_vs_refuse 2 "Cannot read $_cs_pwfile" "cannot read $_cs_pwfile" \
                     "give a file this user can read with --password-file, or pipe the credential on a closed standard input"
             fi
