@@ -148,10 +148,16 @@ def plain_http(connector, values):
 
 
 class PlanError(Exception):
-    def __init__(self, message, code=2, choices=None):
+    """Input the plan refuses. remedy and command, when given, are the fix in
+    words and the one exakit command that is the fix (--json carries them);
+    said is the FAIL line, the message unless the fix belongs in it."""
+    def __init__(self, message, code=2, choices=None, remedy=None, command=None, said=None):
         super().__init__(message)
         self.code = code
         self.choices = choices or []
+        self.remedy = remedy
+        self.command = command
+        self.said = said or message
 
 
 class Definitions(object):
@@ -186,7 +192,9 @@ class Definitions(object):
         q = re.sub(r"[\s_]+", "-", (query or "").strip().lower())
         if not q:
             raise PlanError("name a source to connect, for example: exakit connect postgresql",
-                            choices=[e["id"] for e in self.entries()])
+                            choices=[e["id"] for e in self.entries()],
+                            remedy="name one of the choices; every connector with its aliases: exakit source catalog",
+                            command="exakit source catalog")
         exact = [e for e in self.entries()
                  if q in [e["id"], e["name"].lower().replace(" ", "-")] + [a.lower() for a in e.get("aliases", [])]]
         if len(exact) == 1:
@@ -196,14 +204,17 @@ class Definitions(object):
         if len(partial) == 1:
             return partial[0]["id"]
         if len(partial) > 1:
-            raise PlanError("%s matches more than one source" % query, choices=[e["id"] for e in partial])
+            raise PlanError("%s matches more than one source" % query, choices=[e["id"] for e in partial],
+                            remedy="name one of the choices exactly")
         keys = {}
         for e in self.entries():
             for key in [e["id"], e["name"].lower()] + e.get("aliases", []):
                 keys[key] = e["id"]
         close = difflib.get_close_matches(q, list(keys), n=3, cutoff=0.6)
         raise PlanError("no source matches %s" % query, choices=sorted(set(keys[c] for c in close))
-                        or [e["id"] for e in self.entries()])
+                        or [e["id"] for e in self.entries()],
+                        remedy="name one of the choices; every connector with its aliases: exakit source catalog",
+                        command="exakit source catalog")
 
 
 def objects(name, connector=None):

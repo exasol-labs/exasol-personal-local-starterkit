@@ -40,10 +40,16 @@ function Test-ExakitVsAvailable {
 # page. Returns @{ Code; Lines }.
 function Invoke-ExakitVsEngine {
     param([string[]]$Arguments = @(), [string]$Secret = "")
+    # Asked for JSON, the bridge's own failures come in the engine's shape too.
+    $asJson = @($Arguments) -contains "--json"
     $defs = Get-ExakitVsDefs
-    if (-not $defs) { return [pscustomobject]@{ Code = 2; Lines = @("FAIL This kit copy has no setup\virtual-schemas. Update it: exakit update") } }
+    if (-not $defs) {
+        if ($asJson) { return [pscustomobject]@{ Code = 2; Lines = @(New-ExakitVsFailureJson -Kind "setup" -Problem "this kit copy has no setup\virtual-schemas" -Remedy "update the kit: exakit update" -Command "exakit update") } }
+        return [pscustomobject]@{ Code = 2; Lines = @("FAIL This kit copy has no setup\virtual-schemas. Update it: exakit update") }
+    }
     $python = Get-PyexasolVenvPython
     if (-not (Test-Path -LiteralPath $python)) {
+        if ($asJson) { return [pscustomobject]@{ Code = 2; Lines = @(New-ExakitVsFailureJson -Kind "setup" -Problem "virtual schemas run with the kit's pyexasol, which is not installed" -Remedy "repair it: exakit update pyexasol" -Command "exakit update pyexasol") } }
         return [pscustomobject]@{ Code = 2; Lines = @("FAIL Virtual schemas run with the kit's pyexasol, which is not installed. Repair it: exakit update pyexasol") }
     }
     $argv = @((Join-ExakitCorePath $defs "engine" "cli.py"), "--defs", $defs, "--kit-home", $script:ExakitHome)
@@ -84,6 +90,46 @@ function Invoke-ExakitVsEngine {
     return [pscustomobject]@{ Code = $code; Lines = @($lines | ForEach-Object { "$_" }) }
 }
 
+# New-ExakitVsFailureJson - the engine's failure shape (cli.py) for what the
+# bridge refuses or cannot run itself, so --json is one object of one shape
+# whoever said no: what happened, its class, the fix in words, the one exakit
+# command that is the fix or null; rejected and public_ip as the other
+# refusals and plan/connect carry them. Twin of _exakit_vs_json_failure.
+function New-ExakitVsFailureJson {
+    param([string]$Kind, [string]$Problem, [string]$Remedy, [string]$Command = "")
+    $cmd = $null
+    if ($Command) { $cmd = $Command }
+    $payload = [ordered]@{ ok = $false; error = $Problem; kind = $Kind; remedy = $Remedy; command = $cmd; rejected = $true; public_ip = $null }
+    return ($payload | ConvertTo-Json -Depth 4)
+}
+
+# Deny-ExakitVsInput - the bridge says no before the engine runs: the message
+# as Deny-ExakitInput says it (exit 2), with --json the failure object instead.
+# Twin of _exakit_vs_refuse.
+function Deny-ExakitVsInput {
+    param([string]$Message, [string]$Problem, [string]$Remedy, [string]$Command = "")
+    if ($script:ExakitVsJson) {
+        if (Get-Command Write-ExakitLog -ErrorAction SilentlyContinue) { Write-ExakitLog "REJECT" $Message }
+        Write-Output (New-ExakitVsFailureJson -Kind "input" -Problem $Problem -Remedy $Remedy -Command $Command)
+        exit 2
+    }
+    Deny-ExakitInput $Message
+}
+
+# Invoke-ExakitVsAside - a step of the bridge's own (a DNS repair, a language
+# container install) whose lines are for a person: on the console as always,
+# with --json on stderr, where no parser reads them. Returns the step's answer.
+function Invoke-ExakitVsAside {
+    param([scriptblock]$Step)
+    if (-not $script:ExakitVsJson) { return (& $Step) }
+    $answer = $null
+    & $Step 6>&1 | ForEach-Object {
+        if ($_ -is [System.Management.Automation.InformationRecord]) { [Console]::Error.WriteLine("$_") }
+        else { $answer = $_ }
+    }
+    return $answer
+}
+
 # Show-ExakitVsLines - the engine's event lines in the kit's own marks; the
 # RESULT object is returned, parsed, or $null.
 function Show-ExakitVsLines {
@@ -106,6 +152,8 @@ function Read-ExakitVsSecret {
         if (-not (Test-Path -LiteralPath $PasswordFile)) { Deny-ExakitInput "Cannot read $PasswordFile" }
         return ((Get-Content -Raw -LiteralPath $PasswordFile) -replace "[\r\n]+$", "")
     }
+    # --json never prompts: without --password-file there is no credential.
+    if ($script:ExakitVsJson) { return "" }
     if (-not (Test-ExakitInteractive)) { Deny-ExakitInput "No $Label was given: use --password-file (a credential is never taken as an argument)." }
     if ($Kind -eq "secret-file") {
         # A key file is asked for by its path - nobody pastes a JSON key into a hidden prompt.
@@ -137,6 +185,8 @@ function Get-ExakitVsSecretKind {
 function Confirm-ExakitVs {
     param([string]$Question)
     if ($script:ExakitVsAssumeYes) { return $true }
+    # --json never asks: without --yes the answer is no.
+    if ($script:ExakitVsJson) { return $false }
     if (-not (Test-ExakitInteractive)) { return $false }
     $answer = Read-ExakitPrompt "$Question [y/N]" "N"
     return ($answer -match '^(y|yes)$')
@@ -191,7 +241,8 @@ function Install-ExakitVsRust {
         $env:EXAKIT_STOP_ADDONS = "1"
         & $exakit stop *> $null
     } finally { $env:EXAKIT_STOP_ADDONS = $previousStop }
-    & $exakit start | Out-Host
+    # Write-Host, not Out-Host: with --json, Invoke-ExakitVsAside moves these lines to stderr.
+    & $exakit start | ForEach-Object { Write-Host "$_" }
     Ok "Rust language container installed"
     return $true
 }
@@ -216,29 +267,46 @@ function Install-ExakitVsJava {
         $env:EXAKIT_STOP_ADDONS = "1"
         & $exakit stop *> $null
     } finally { $env:EXAKIT_STOP_ADDONS = $previousStop }
-    & $exakit start | Out-Host
+    # Write-Host, not Out-Host: with --json, Invoke-ExakitVsAside moves these lines to stderr.
+    & $exakit start | ForEach-Object { Write-Host "$_" }
     try { [void](Repair-PersonalSlcDns) } catch { }
     Ok "Java language container installed"
     return $true
 }
 
+# Repair-ExakitVsForRetry - what the bridge does about exit 20 (DNS repaired),
+# 21 (Java installed) or 23 (Rust installed) before its one retry; $false when
+# it could not, or was not allowed to. Twin of _exakit_vs_repair.
+function Repair-ExakitVsForRetry {
+    param([int]$Code)
+    if ($Code -eq 20) {
+        Info "Giving the database's language containers the deployment's DNS, then trying again"
+        if (-not (Repair-PersonalSlcDns)) { Write-Host "  DNS could not be repaired. Restart the database (exakit stop, exakit start) and try again." -ForegroundColor Red; return $false }
+        return $true
+    }
+    if ($Code -eq 21) { return [bool](Install-ExakitVsJava) }
+    if ($Code -eq 23) { return [bool](Install-ExakitVsRust) }
+    return $false
+}
+
 # Invoke-ExakitVsRun - the engine once, repairing DNS (exit 20) or installing
-# Java (exit 21) and retrying once. Twin of _exakit_vs_run.
+# Java (exit 21) and retrying once. Twin of _exakit_vs_run. With --json
+# ($script:ExakitVsJson) the engine answers in JSON, its events to the log; the
+# last run's lines are kept in $script:ExakitVsLastLines for the caller to
+# print, and what the bridge says while it repairs goes to stderr.
 function Invoke-ExakitVsRun {
     param([string[]]$Arguments, [string]$Secret = "")
     $script:ExakitVsResult = $null
+    $script:ExakitVsLastLines = @()
+    if ($script:ExakitVsJson) { $Arguments = @("--json") + @($Arguments) }
     for ($try = 1; $try -le 2; $try++) {
         $run = Invoke-ExakitVsEngine -Arguments $Arguments -Secret $Secret
-        $script:ExakitVsResult = Show-ExakitVsLines -Lines $run.Lines
+        if ($script:ExakitVsJson) { $script:ExakitVsLastLines = @($run.Lines) }
+        else { $script:ExakitVsResult = Show-ExakitVsLines -Lines $run.Lines }
         if ($try -eq 2) { break }
-        if ($run.Code -eq 20) {
-            Info "Giving the database's language containers the deployment's DNS, then trying again"
-            if (-not (Repair-PersonalSlcDns)) { Write-Host "  DNS could not be repaired. Restart the database (exakit stop, exakit start) and try again." -ForegroundColor Red; break }
-        } elseif ($run.Code -eq 21) {
-            if (-not (Install-ExakitVsJava)) { break }
-        } elseif ($run.Code -eq 23) {
-            if (-not (Install-ExakitVsRust)) { break }
-        } else { break }
+        if (@(20, 21, 23) -notcontains $run.Code) { break }
+        $code = $run.Code
+        if (-not (Invoke-ExakitVsAside { Repair-ExakitVsForRetry -Code $code })) { break }
     }
     return $run.Code
 }

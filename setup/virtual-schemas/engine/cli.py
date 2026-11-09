@@ -27,11 +27,20 @@ and plain ASCII survives every code page.
 
 Without --json, one "OK|INFO|WARN|FAIL <text>" line per event on stdout for
 the shell to render. With --json, events go to stderr and stdout carries one
-JSON object; for plan and connect it always has public_ip (publicip.py), null
-when it is not known or the source is not on the internet. Exit codes: 0 done,
-1 failed, 2 bad input, 3 conflict, 4 no such source, 5 gated, 20 Java in the
-database cannot resolve host names, 21 Java is not installed in the database,
-22 the local database is unreachable.
+JSON object, and only that, whatever happens; for plan and connect it always
+has public_ip (publicip.py), null when it is not known or the source is not on
+the internet. A failure is
+
+    {"ok": false, "error": <what happened>, "kind": <its class>,
+     "remedy": <the fix, in words>, "command": <the exakit command that is the
+     fix, or null>}
+
+the shape `check` has always answered with (plus command), with "choices" when
+the input was ambiguous. An unexpected exception is kind "internal": one line
+in error, the traceback on stderr. Exit codes: 0 done, 1 failed, 2 bad input,
+3 conflict, 4 no such source, 5 gated, 20 Java in the database cannot resolve
+host names, 21 Java is not installed in the database, 22 the local database is
+unreachable, 23 the Rust language container is not installed.
 """
 
 import argparse
@@ -42,13 +51,20 @@ import locale
 import os
 import re
 import sys
+import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import lifecycle  # noqa: E402
-import paste  # noqa: E402
-import plan as planner  # noqa: E402
-import sources  # noqa: E402
+# A kit copy updated by halves can fail here, before main() runs; that too is
+# answered in the one shape below (kind "internal"), not with a bare traceback.
+try:
+    import lifecycle  # noqa: E402
+    import paste  # noqa: E402
+    import plan as planner  # noqa: E402
+    import sources  # noqa: E402
+    BROKEN = None
+except Exception:  # noqa: BLE001
+    BROKEN = traceback.format_exc()
 
 
 def parse(argv):
@@ -101,6 +117,49 @@ def parse(argv):
         cmd.add_argument("name")
         cmd.add_argument("--dry-run", action="store_true")
     return parser.parse_args(argv)
+
+
+# A failure's class when nothing classified it further: its exit code says it.
+KIND_FOR_CODE = {2: "input", 3: "conflict", 4: "missing", 5: "gated", 20: "dns", 21: "nojava",
+                 22: "unreachable_db", 23: "norust"}
+
+# The fix for a failure that names none of its own, by kind; never null, so a
+# reader always has the next step in words.
+REMEDY_FOR_KIND = {
+    "input": "correct what the error names and run the same command again",
+    "conflict": "choose another name, or remove what holds this one first",
+    "missing": "name a source that exists; they are listed by: exakit source list",
+    "gated": "connect another source; the ones available are listed by: exakit source catalog",
+    "dns": "Java in the database could not resolve the host name; restart the database with exakit start "
+           "(it repairs DNS), then try again",
+    "nojava": "the Java language container is not installed: exakit connect installs it with one database "
+              "restart - asked on a terminal, --yes for a script - or run: exasol slc install java",
+    "norust": "the Rust language container is not installed: exakit connect installs it with one database "
+              "restart - asked on a terminal, --yes for a script",
+    "unreachable_db": "the local database did not answer: start it (exakit start), then try again",
+    "internal": "a fault in the kit, not in the input: the traceback is in the log (exakit logs); report it with that",
+    "error": "see the log: exakit logs",
+}
+
+# The one exakit command that is that fix, where one is.
+COMMAND_FOR_KIND = {"missing": "exakit source list", "gated": "exakit source catalog", "unreachable_db": "exakit start"}
+
+
+# The commands that act on a source that exists: a failure of theirs takes the
+# fix `check` would name for its class, when it names none of its own.
+SOURCE_COMMANDS = ("show", "check", "reauth", "refresh", "describe", "disconnect", "remove")
+
+
+def failure(message, code, kind=None, remedy=None, command=None, source=None):
+    """The one shape every --json failure has (see the module docstring)."""
+    if not kind or kind == "error":
+        kind = KIND_FOR_CODE.get(code, "error")
+    if source and not remedy and kind != "error" and kind in lifecycle.REMEDY_FOR:
+        remedy = lifecycle.REMEDY_FOR[kind].format(name=source, access="read access", store="bucket")
+        command = command or lifecycle.command_for(kind, source)
+    return {"ok": False, "error": str(message), "kind": kind,
+            "remedy": remedy or REMEDY_FOR_KIND.get(kind, REMEDY_FOR_KIND["error"]),
+            "command": command if command else COMMAND_FOR_KIND.get(kind)}
 
 
 def pairs(items):
@@ -201,9 +260,10 @@ def form_answer(args):
             # A disconnected source of the same connector is reconnected by
             # name - the one case where an existing name is the right answer.
             if store.status(raw).get("status") != "disconnected" or current["connector"] != connector_id:
-                raise planner.PlanError("a source named %s already exists (%s); choose another name or remove it "
-                                        "first: exakit source remove %s" % (raw, current["connector"], raw),
-                                        code=lifecycle.EXIT["conflict"])
+                taken = "a source named %s already exists (%s)" % (raw, current["connector"])
+                fix = "choose another name or remove it first: exakit source remove %s" % raw
+                raise planner.PlanError(taken, code=lifecycle.EXIT["conflict"], remedy=fix,
+                                        said="%s; %s" % (taken, fix))
         return {"value": raw}
     spec = next((s for s in connector["inputs"] if s["name"] == args.input), None)
     if spec is None or spec["kind"] in ("secret", "secret-file"):
@@ -222,19 +282,36 @@ def form_answer(args):
 
 
 def main(argv=None):
-    args = parse(argv)
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if BROKEN:
+        sys.stderr.write(BROKEN)
+        line = "the engine could not start: %s" % " ".join(BROKEN.strip().splitlines()[-1].split())
+        if "--json" in argv:
+            print(json.dumps(failure(line, 1, "internal"), indent=2))
+        else:
+            print("FAIL %s (details: exakit logs)" % line)
+        return 1
+    try:
+        args = parse(argv)
+    except SystemExit as stop:
+        # argparse said why on stderr; a caller that asked for JSON still gets
+        # its one object.
+        if stop.code and "--json" in argv:
+            print(json.dumps(failure("the engine does not take these arguments (the reason is in the log)", 2),
+                             indent=2))
+            return 2
+        raise
     out = sys.stderr if args.json else sys.stdout
 
     def emit(level, text):
         out.write("%s %s\n" % (level, text))
         out.flush()
 
-    if not args.command:
-        emit("FAIL", "name a command (see the module docstring)")
-        return lifecycle.EXIT["input"]
     result, code = None, 0
     engine = None
     try:
+        if not args.command:
+            raise planner.PlanError("name a command (see the module docstring)")
         if args.command in ("inputs", "field"):
             result = form_answer(args)
         elif args.command == "paste":
@@ -288,26 +365,41 @@ def main(argv=None):
             elif args.command == "remove":
                 result = engine.remove(args.name, args.dry_run)
     except planner.PlanError as error:
-        emit("FAIL", str(error))
+        emit("FAIL", error.said)
         if error.choices:
             emit("INFO", "choices: %s" % ", ".join(error.choices))
-        result, code = {"ok": False, "error": str(error), "choices": error.choices}, error.code
+        result, code = dict(failure(error, error.code, None, error.remedy, error.command),
+                            choices=error.choices), error.code
     except lifecycle.Failure as error:
-        emit("FAIL", str(error))
-        result, code = {"ok": False, "error": str(error), "kind": error.kind}, error.code
+        emit("FAIL", error.said)
+        source = args.name if args.command in SOURCE_COMMANDS else None
+        result, code = failure(error, error.code, error.kind, error.remedy, error.command, source), error.code
     except sources.SourceError as error:
         emit("FAIL", str(error))
-        result, code = {"ok": False, "error": str(error)}, error.code
+        result, code = failure(error, error.code), error.code
+    except Exception as error:  # noqa: BLE001 - the last line: never a traceback on stdout
+        # The traceback goes to stderr, which the shells keep in the log; the
+        # answer is one line, and the same shape as every other failure.
+        traceback.print_exc(file=sys.stderr)
+        line = " ".join(("%s: %s" % (type(error).__name__, error)).split())
+        emit("FAIL", "the engine failed unexpectedly: %s (details: exakit logs)" % line)
+        result, code = failure("the engine failed unexpectedly: %s" % line, 1, "internal"), 1
     finally:
         if engine is not None:
-            engine.close()
+            try:
+                engine.close()
+            except Exception:  # noqa: BLE001 - the answer is already decided
+                traceback.print_exc(file=sys.stderr)
     if args.json:
         payload = dict(result or {})
         payload.setdefault("ok", code == 0)
         if args.command in ("plan", "connect"):
             # Always present for these two: the address a source on the
             # internet must allow, null when it is not known or not needed.
-            payload.setdefault("public_ip", engine.public_ip() if engine is not None else None)
+            try:
+                payload.setdefault("public_ip", engine.public_ip() if engine is not None else None)
+            except Exception:  # noqa: BLE001 - an address is never worth the answer
+                payload.setdefault("public_ip", None)
         print(json.dumps(payload, indent=2, default=str))
     elif result is not None and code == 0:
         print("RESULT " + json.dumps(result, default=str))

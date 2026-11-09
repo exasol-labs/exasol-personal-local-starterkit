@@ -3433,21 +3433,27 @@ function Invoke-CmdInfoJson {
 
 # Invoke-CmdConnect - `exakit connect [source] [--name N] [--url STRING]
 # [--set KEY=VALUE]... [--password-file F] [--dry-run] [--yes] [--json]`. Twin of cmd_connect.
+# --json: stdout carries one JSON object and nothing else - the engine's plan
+# (--dry-run), its connect result, or a failure of the engine's one shape,
+# whoever refused. It never prompts; the credential comes from --password-file.
+# The engine's events go to the log, the bridge's own lines to stderr.
 function Invoke-CmdConnect {
     param([string[]]$Arguments = @())
     $source = ""; $name = ""; $pwFile = ""; $dry = $false; $json = $false; $sets = @(); $given = @(); $url = ""
     $script:ExakitVsAssumeYes = $false
+    # Known before anything is refused, so every refusal answers in its shape.
+    $script:ExakitVsJson = ((@($Arguments) -contains "--json") -or (@($Arguments) -contains "-j"))
     for ($i = 0; $i -lt $Arguments.Count; $i++) {
         $arg = $Arguments[$i]
         if ($arg -eq "--name") { $i++; $name = "" + $Arguments[$i] }
         elseif ($arg -like "--name=*") { $name = $arg.Substring(7) }
         elseif ($arg -eq "--url" -or $arg -like "--url=*") {
             if ($arg -eq "--url") { $i++; $url = "" + $Arguments[$i] } else { $url = $arg.Substring(6) }
-            if (-not $url) { Deny-ExakitInput "--url takes a connection string (exakit help connect)" }
+            if (-not $url) { Deny-ExakitVsInput "--url takes a connection string (exakit help connect)" "--url was given without a connection string" "give the source's connection string after --url, e.g. --url 'postgres://reader@db.example.com/sales'" }
         }
         elseif ($arg -eq "--set") {
             $i++; $pair = "" + $Arguments[$i]
-            if ($pair -notlike "*=*") { Deny-ExakitInput "--set takes KEY=VALUE (exakit help connect)" }
+            if ($pair -notlike "*=*") { Deny-ExakitVsInput "--set takes KEY=VALUE (exakit help connect)" "--set was not followed by KEY=VALUE" "give each input as --set KEY=VALUE (a connector's inputs: exakit help connect)" }
             $sets += @("--set", $pair); $given += $pair.Split("=")[0]
         }
         elseif ($arg -eq "--password-file") { $i++; $pwFile = "" + $Arguments[$i] }
@@ -3455,10 +3461,10 @@ function Invoke-CmdConnect {
         elseif ($arg -in @("--yes", "-y")) { $script:ExakitVsAssumeYes = $true }
         elseif ($arg -in @("--json", "-j")) { $json = $true }
         elseif ($arg -like "--password*" -or $arg -like "--secret*" -or $arg -like "--token*") {
-            Deny-ExakitInput "A credential is never taken as an argument (other users can read the process list). Use the hidden prompt or --password-file."
+            Deny-ExakitVsInput "A credential is never taken as an argument (other users can read the process list). Use the hidden prompt or --password-file." "a credential was given as an argument, where other users can read it in the process list" "give it with --password-file <file>"
         }
-        elseif ($arg -like "-*") { Deny-ExakitInput "Unknown option '$arg' for connect (exakit help connect)." }
-        elseif ($source) { Deny-ExakitInput "connect takes one source; got '$source' and '$arg'." }
+        elseif ($arg -like "-*") { Deny-ExakitVsInput "Unknown option '$arg' for connect (exakit help connect)." "unknown option '$arg' for connect" "leave it out; the options are listed by: exakit help connect" }
+        elseif ($source) { Deny-ExakitVsInput "connect takes one source; got '$source' and '$arg'." "connect takes one source; got '$source' and '$arg'" "connect one source per command" }
         else { $source = $arg }
     }
     if ($json) { Assert-ExakitInstalled -Json } else { Assert-ExakitInstalled }
@@ -3467,11 +3473,19 @@ function Invoke-CmdConnect {
     # goes to the engine on stdin (base64, as a secret does), never as an
     # argument; its pairs go BEFORE the command line's --set, so those win.
     if ($url) {
-        if (-not $source) { Deny-ExakitInput "--url needs the source it is for, e.g. exakit connect postgresql --url 'postgres://reader@db.example.com/sales'" }
-        $pasted = Invoke-ExakitVsEngine -Arguments @("paste", $source, "--base64") -Secret $url
-        $url = $null
-        $answer = Show-ExakitVsLines -Lines $pasted.Lines
-        if ($pasted.Code -ne 0) { exit $pasted.Code }
+        if (-not $source) { Deny-ExakitVsInput "--url needs the source it is for, e.g. exakit connect postgresql --url 'postgres://reader@db.example.com/sales'" "--url needs the source it is for" "name the source before it, e.g. exakit connect postgresql --url 'postgres://reader@db.example.com/sales'" }
+        if ($json) {
+            # Its notes go to the log; a refusal is the answer, as it stands.
+            $pasted = Invoke-ExakitVsEngine -Arguments @("--json", "paste", $source, "--base64") -Secret $url
+            $url = $null
+            if ($pasted.Code -ne 0) { foreach ($line in $pasted.Lines) { Write-Output $line }; exit $pasted.Code }
+            $answer = (@($pasted.Lines) -join "`n") | ConvertFrom-Json
+        } else {
+            $pasted = Invoke-ExakitVsEngine -Arguments @("paste", $source, "--base64") -Secret $url
+            $url = $null
+            $answer = Show-ExakitVsLines -Lines $pasted.Lines
+            if ($pasted.Code -ne 0) { exit $pasted.Code }
+        }
         $urlSets = @()
         if ($answer -and $answer.values) {
             foreach ($p in @($answer.values.PSObject.Properties)) { $urlSets += @("--set", "$($p.Name)=$($p.Value)"); $given += $p.Name }
@@ -3483,20 +3497,26 @@ function Invoke-CmdConnect {
     if (-not $dry -and -not $json -and (Test-ExakitVsTuiOk)) {
         exit (Invoke-ExakitVsTui -Source $source -Name $name -PasswordFile $pwFile -Sets $sets)
     }
-    $interactive = Test-ExakitInteractive
+    # --json never asks: a console is as good as none.
+    $interactive = (-not $json) -and (Test-ExakitInteractive)
     if (-not $source) {
-        if (-not $interactive) { Deny-ExakitInput "Name the source to connect, e.g. exakit connect postgresql (see: exakit source catalog)." }
+        if (-not $interactive) { Deny-ExakitVsInput "Name the source to connect, e.g. exakit connect postgresql (see: exakit source catalog)." "no source was named" "name the source to connect, e.g. exakit connect postgresql; every connector: exakit source catalog" "exakit source catalog" }
         $source = Read-ExakitPrompt "Which source? (name or alias, e.g. postgresql, mysql, mssql, oracle, snowflake, bigquery, databricks, mongodb, lakehouse, s3, azure)" ""
     }
-    $resolved = Invoke-ExakitVsEngine -Arguments @("resolve", $source)
-    if ($resolved.Code -ne 0) { [void](Show-ExakitVsLines -Lines $resolved.Lines); exit $resolved.Code }
-    $connector = ((@($resolved.Lines) | Where-Object { $_ -like "RESULT *" } | Select-Object -First 1).Substring(7) | ConvertFrom-Json).connector
+    # With --json the plan below resolves the source (an unknown or gated one
+    # is its refusal), so every answer is a plan or connect object.
+    $connector = $source
+    if (-not $json) {
+        $resolved = Invoke-ExakitVsEngine -Arguments @("resolve", $source)
+        if ($resolved.Code -ne 0) { [void](Show-ExakitVsLines -Lines $resolved.Lines); exit $resolved.Code }
+        $connector = ((@($resolved.Lines) | Where-Object { $_ -like "RESULT *" } | Select-Object -First 1).Substring(7) | ConvertFrom-Json).connector
+    }
     if (-not $name) {
-        if (-not $interactive) { Deny-ExakitInput "Give the connection a name with --name (lower case, e.g. sales)." }
+        if (-not $interactive) { Deny-ExakitVsInput "Give the connection a name with --name (lower case, e.g. sales)." "the connection has no name" "give it one with --name (lower case letters, digits and _, a letter first, e.g. sales)" }
         $name = Read-ExakitPrompt "Name for this connection (lower case, e.g. sales)" ""
     }
-    $definition = Get-Content -Raw -LiteralPath (Join-ExakitCorePath (Get-ExakitVsDefs) "connectors" $connector "connector.json") | ConvertFrom-Json
     if ($interactive) {
+        $definition = Get-Content -Raw -LiteralPath (Join-ExakitCorePath (Get-ExakitVsDefs) "connectors" $connector "connector.json") | ConvertFrom-Json
         foreach ($spec in @($definition.inputs)) {
             if ($spec.kind -in @("secret", "secret-file") -or $given -contains $spec.name) { continue }
             $label = "" + $spec.label
@@ -3508,25 +3528,38 @@ function Invoke-CmdConnect {
         }
     }
     $base = @($connector, "--name", $name) + $sets
-    $planned = Invoke-ExakitVsEngine -Arguments (@("plan") + $base)
-    $plan = Show-ExakitVsLines -Lines $planned.Lines
-    if ($planned.Code -ne 0) { exit $planned.Code }
-    Show-ExakitVsPlan $plan
-    if ($dry) {
-        if ($json) { Write-Output ($plan | ConvertTo-Json -Depth 6) }
-        exit 0
+    if ($json) {
+        # The plan checks every input before the credential is read; a refusal,
+        # or with --dry-run the plan itself, is the answer.
+        $planned = Invoke-ExakitVsEngine -Arguments (@("--json", "plan") + $base)
+        if ($planned.Code -ne 0 -or $dry) { foreach ($line in $planned.Lines) { Write-Output $line }; exit $planned.Code }
+        $connector = "" + ((@($planned.Lines) -join "`n") | ConvertFrom-Json).connector
+        $base = @($connector, "--name", $name) + $sets
+    } else {
+        $planned = Invoke-ExakitVsEngine -Arguments (@("plan") + $base)
+        $plan = Show-ExakitVsLines -Lines $planned.Lines
+        if ($planned.Code -ne 0) { exit $planned.Code }
+        Show-ExakitVsPlan $plan
+        if ($dry) { exit 0 }
     }
     if ($interactive -and -not (Confirm-ExakitVs "Connect now?")) { Info "Nothing was changed."; exit 5 }
+    $definition = Get-Content -Raw -LiteralPath (Join-ExakitCorePath (Get-ExakitVsDefs) "connectors" $connector "connector.json") | ConvertFrom-Json
     $secretSpec = @($definition.inputs) | Where-Object { $_.kind -in @("secret", "secret-file") } | Select-Object -First 1
     $secret = ""
     if ($secretSpec) {
+        $what = ("" + $secretSpec.label).ToLower()
+        if ($pwFile -and -not (Test-Path -LiteralPath $pwFile)) { Deny-ExakitVsInput "Cannot read $pwFile" "cannot read $pwFile" "give a file this user can read with --password-file" }
         $secret = Read-ExakitVsSecret -Label $secretSpec.label -PasswordFile $pwFile -Kind ("" + $secretSpec.kind)
-        if (-not $secret) { Deny-ExakitInput "No $("$($secretSpec.label)".ToLower()) was given (pipe it on standard input or use --password-file)." }
+        if (-not $secret) { Deny-ExakitVsInput "No $what was given (pipe it on standard input or use --password-file)." "no $what was given" "give it with --password-file <file> (PowerShell does not read a credential from standard input)" }
         $code = Invoke-ExakitVsRun -Arguments (@("connect") + $base + @("--secret-stdin")) -Secret $secret
     } else {
         $code = Invoke-ExakitVsRun -Arguments (@("connect") + $base)
     }
     $secret = $null
+    if ($json) {
+        foreach ($line in $script:ExakitVsLastLines) { Write-Output $line }
+        exit $code
+    }
     if ($code -eq 0) {
         Show-ExakitVsQueryHints -Result $script:ExakitVsResult -Name $name
         Info "Manage it with: exakit source show $name | check | reauth | refresh | disconnect | remove"
@@ -3561,6 +3594,8 @@ function Invoke-CmdSource {
     }
     if ($json) { Assert-ExakitInstalled -Json } else { Assert-ExakitInstalled }
     Initialize-ExakitLogging
+    # --json: the bridge's own failures in the engine's shape, and no prompt.
+    $script:ExakitVsJson = $json
     if ($action -notin @("list", "issues", "catalog", "show", "describe", "check", "reauth", "refresh", "disconnect", "remove")) {
         Deny-ExakitInput "Unknown source action '$action' (list, issues, show, describe, check, reauth, refresh, disconnect, remove, catalog)."
     }

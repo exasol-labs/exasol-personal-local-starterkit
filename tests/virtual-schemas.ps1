@@ -243,14 +243,22 @@ Remove-Item Env:\EXAKIT_NO_IP_LOOKUP
 # Unix path as relative and gives no AbsoluteUri).
 $env:EXAKIT_PUBLIC_IP_URL = "file:///" + (($ipFile -replace '\\', '/') -replace ' ', '%20').TrimStart('/')
 $ErrorActionPreference = "Continue"
-$out = & $pwsh -NoProfile -File $urlChildFile $repo $defs $home2 $deploy $python $urlRecord pg --name ipps --set host=pg.example.com --set database=sales --set user=reader --dry-run --json 2>&1
+$out = & $pwsh -NoProfile -File $urlChildFile $repo $defs $home2 $deploy $python $urlRecord pg --name ipps --set host=pg.example.com --set database=sales --set user=reader --dry-run 2>&1
+$childCode = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+$text = (@($out) | ForEach-Object { "$_" }) -join "`n"
+Check "connect --dry-run, a host on the internet: exit 0" 0 $childCode
+Check "...the plan's INFO line names the address and the host" $true $text.Contains("INFO This computer's public IP is 203.0.113.7: pg.example.com must allow it if it filters by address")
+Check "...said once" 1 ([regex]::Matches($text, "public IP is").Count)
+# --json: stdout is the plan object alone (the INFO line goes to the log).
+$ErrorActionPreference = "Continue"
+$out = & $pwsh -NoProfile -File $urlChildFile $repo $defs $home2 $deploy $python $urlRecord pg --name ipps --set host=pg.example.com --set database=sales --set user=reader --dry-run --json 2>$null
 $childCode = $LASTEXITCODE
 $ErrorActionPreference = "Stop"
 $text = (@($out) | ForEach-Object { "$_" }) -join "`n"
 Check "connect --dry-run --json, a host on the internet: exit 0" 0 $childCode
-Check "...the plan's INFO line names the address and the host" $true $text.Contains("INFO This computer's public IP is 203.0.113.7: pg.example.com must allow it if it filters by address")
-Check "...said once" 1 ([regex]::Matches($text, "public IP is").Count)
 Check "...and the JSON carries public_ip" $true ($text -match '"public_ip":\s+"203\.0\.113\.7"')
+Check "...and stdout is that object alone" "203.0.113.7" (($text | ConvertFrom-Json).public_ip)
 $ErrorActionPreference = "Continue"
 $out = & $pwsh -NoProfile -File $urlChildFile $repo $defs $home2 $deploy $python $urlRecord pg --name ipps --set host=192.168.64.1 --set database=sales --set user=reader --dry-run --json 2>&1
 $ErrorActionPreference = "Stop"
@@ -258,6 +266,78 @@ $text = (@($out) | ForEach-Object { "$_" }) -join "`n"
 Check "a private host: no public IP line" $false $text.Contains("public IP is")
 Check "...and public_ip is null" $true ($text -match '"public_ip":\s+null')
 Remove-Item Env:\EXAKIT_PUBLIC_IP_URL
+
+Write-Host ""
+Write-Host "== exakit connect --json: one object on stdout, whatever happens =="
+# Every path a script or an agent takes: a real connect, a dry run, and each
+# refusal - by the bridge or by the engine - answers with one JSON object and
+# nothing else on stdout (Ok/Info here write to the host, which is stdout too).
+$env:EXAKIT_NO_IP_LOOKUP = "1"
+Set-Content -LiteralPath $state -Value '{"sources": {"pg.example.com": {"tables": ["ORDERS", "CUSTOMERS"]}}}' -Encoding ASCII
+$jsonPw = Join-Path $work "json.pw"
+Set-Content -LiteralPath $jsonPw -Value "Json-Pw-1" -Encoding ASCII -NoNewline
+$pgSet = @("--set", "host=pg.example.com", "--set", "database=sales", "--set", "user=reader")
+function Invoke-JsonConnect {
+    param([string[]]$A)
+    $ErrorActionPreference = "Continue"
+    $o = & $pwsh -NoProfile -File $urlChildFile $repo $defs $home2 $deploy $python $urlRecord @A 2>$null
+    $script:jsonCode = $LASTEXITCODE
+    $ErrorActionPreference = "Stop"
+    $script:jsonText = (@($o) | ForEach-Object { "$_" }) -join "`n"
+    $script:jsonDoc = $null
+    try { $script:jsonDoc = $script:jsonText | ConvertFrom-Json } catch { }
+    return ($null -ne $script:jsonDoc -and $script:jsonDoc -isnot [array])
+}
+$one = Invoke-JsonConnect (@("pg", "--name", "jsonps") + $pgSet + @("--password-file", $jsonPw, "--json"))
+Check "a real connect: stdout is one JSON object, exit 0" "True 0" "$one $jsonCode"
+Check "...the connect result: ok, the schema, public_ip present" "True VS_JSONPS True" ("{0} {1} {2}" -f $jsonDoc.ok, $jsonDoc.objects.schema, ($null -ne $jsonDoc.PSObject.Properties["public_ip"]))
+Check "...no query hint or Manage line on stdout" $false ($jsonText.Contains("Manage it with") -or $jsonText.Contains("OK "))
+$one = Invoke-JsonConnect (@("pg", "--name", "jsondry") + $pgSet + @("--dry-run", "--json"))
+Check "a dry run: one object, the plan, exit 0" "True 0 jsondry" "$one $jsonCode $($jsonDoc.name)"
+Check "...no rendered plan before it" $false ($jsonText.Contains("Plan for"))
+$cases = @(
+    @("an unknown connector", 2, "input", @("nosuchdb", "--name", "x", "--json")),
+    @("no credential", 2, "input", (@("pg", "--name", "jsonnopw") + $pgSet + @("--json"))),
+    @("a bad input", 2, "input", @("pg", "--name", "jsonbad", "--set", "host=pg.example.com", "--set", "database=sales", "--set", "user=reader", "--set", "port=70000", "--json")),
+    @("a name already taken", 3, "conflict", (@("pg", "--name", "jsonps") + $pgSet + @("--password-file", $jsonPw, "--json"))),
+    @("an unknown option", 2, "input", @("pg", "--name", "x", "--bogus", "--json")),
+    @("no name", 2, "input", @("pg", "--json")),
+    @("a credential as an argument", 2, "input", @("pg", "--name", "x", "--password=hunter2", "--json")))
+foreach ($c in $cases) {
+    $one = Invoke-JsonConnect $c[3]
+    Check ("{0}: one object, exit {1}" -f $c[0], $c[1]) "True $($c[1])" "$one $jsonCode"
+    Check "...ok false, kind $($c[2]), an error and a remedy, command and public_ip present" "False $($c[2]) True True True True" ("{0} {1} {2} {3} {4} {5}" -f $jsonDoc.ok, $jsonDoc.kind, [bool]$jsonDoc.error, [bool]$jsonDoc.remedy, ($null -ne $jsonDoc.PSObject.Properties["command"]), ($null -ne $jsonDoc.PSObject.Properties["public_ip"]))
+}
+[void](Invoke-JsonConnect @("nosuchdb", "--name", "x", "--json"))
+Check "the unknown connector's command lists the connectors" "exakit source catalog" $jsonDoc.command
+[void](Invoke-JsonConnect (@("pg", "--name", "jsonps") + $pgSet + @("--password-file", $jsonPw, "--json")))
+Check "the taken name's fix names the source" $true ("$($jsonDoc.remedy)".Contains("exakit source remove jsonps"))
+Check "...and its error is what happened, without the fix" "a source named jsonps already exists (postgresql)" $jsonDoc.error
+[void](Invoke-JsonConnect @("pg", "--name", "x", "--password=hunter2", "--json"))
+Check "a credential given as an argument is not echoed" $false ($jsonText.Contains("hunter2"))
+# Java missing and no --yes: no question, the engine's nojava answer, exit 21.
+$db = Get-Content -Raw -LiteralPath $state | ConvertFrom-Json
+$db | Add-Member -NotePropertyName java -NotePropertyValue $false -Force
+Set-Content -LiteralPath $state -Value ($db | ConvertTo-Json -Depth 8) -Encoding ASCII
+$one = Invoke-JsonConnect (@("pg", "--name", "jsonjava") + $pgSet + @("--password-file", $jsonPw, "--json"))
+Check "a Java container that is missing, without --yes: one object, exit 21" "True 21 nojava" "$one $jsonCode $($jsonDoc.kind)"
+Check "...whose fix names --yes" $true ("$($jsonDoc.remedy)".Contains("--yes"))
+Set-Content -LiteralPath $state -Value '{"sources": {"pg.example.com": {"tables": ["ORDERS"]}}}' -Encoding ASCII
+
+Write-Host ""
+Write-Host "== --json repairs say what they do on stderr, the answer is the retry's =="
+$script:jcodes = New-Object System.Collections.ArrayList
+$script:jcalls = New-Object System.Collections.ArrayList
+function Invoke-ExakitVsEngine { param([string[]]$Arguments = @(), [string]$Secret = "")
+    [void]$script:jcalls.Add($Arguments[0]); $c = $script:jcodes[0]; $script:jcodes.RemoveAt(0)
+    return [pscustomobject]@{ Code = $c; Lines = @("{`"try`": $($script:jcalls.Count)}") } }
+function Install-ExakitVsJava { [void]$script:jcalls.Add("JAVA"); Write-Host "installing Java"; return $true }
+$script:ExakitVsJson = $true
+$script:jcodes.AddRange(@(21, 0))
+$code = Invoke-ExakitVsRun -Arguments @("connect")
+Check "exit 21 with consent: Java installed, retried, the engine called with --json first" "0 --json|JAVA|--json" ("$code " + ($script:jcalls -join "|"))
+Check "...only the retry's answer is kept for stdout" "{`"try`": 3}" ($script:ExakitVsLastLines -join "")
+$script:ExakitVsJson = $false
 
 Remove-Item Env:\EXAKIT_VS_FAKE_DB, Env:\FAKE_VS_STATE
 if (-not $env:KEEP_WORK) { Remove-Item -Recurse -Force -LiteralPath $work -ErrorAction SilentlyContinue } else { Write-Host "work: $work" }

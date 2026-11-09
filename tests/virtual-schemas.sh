@@ -1115,10 +1115,12 @@ print(" ".join(sorted(a for a, p in c["arch"].items() if re.fullmatch(r"[0-9a-f]
 PYR
 )"
 VSRUN="$(sed -n '/^_exakit_vs_run() {/,/^}/p' "$ROOT/setup/lib/virtual-schemas.sh")"
+VSREPAIR="$(sed -n '/^_exakit_vs_repair() {/,/^}/p' "$ROOT/setup/lib/virtual-schemas.sh")"
 VSRUST="$(sed -n '/^_exakit_vs_install_rust() {/,/^}/p' "$ROOT/setup/lib/virtual-schemas.sh")"
-has "bash: exit 23 installs the Rust container, then retries" "23) _exakit_vs_install_rust || break ;;" "$VSRUN"
+has "bash: exit 23 installs the Rust container" "23) _exakit_vs_install_rust ;;" "$VSREPAIR"
+has "...then retries" 'case "$_evx_rc" in 20|21|23) ;; *) break ;; esac' "$VSRUN"
 has "...it checks size and SHA-256 before installing" 'verify_sha256 "$_evr_dir/$_evr_asset" "$_evr_sha"' "$VSRUST"
-has "PowerShell: its twin" "if (-not (Install-ExakitVsRust)) { break }" "$(cat "$ROOT/setup/lib/virtual-schemas.ps1")"
+has "PowerShell: its twin" 'if ($Code -eq 23) { return [bool](Install-ExakitVsRust) }' "$(cat "$ROOT/setup/lib/virtual-schemas.ps1")"
 
 printf '\n== Databricks (Profile C): a Lua adapter with the kit'"'"'s certificate check ==\n'
 # Measured on Exasol Personal 2.3.0 (adapter 1.0.2, driver 3.4.3, a real
@@ -2514,9 +2516,135 @@ OUT="$(EXAKIT_NO_IP_LOOKUP= EXAKIT_PUBLIC_IP_URL="$IPURL" urlsh cmd_connect pg -
 check "exakit connect --dry-run (bash): exit 0" "0" "$RC"
 has "...the plan's line is shown" "$IPLINE: pg.example.com must allow it" "$OUT"
 OUT="$(EXAKIT_NO_IP_LOOKUP= EXAKIT_PUBLIC_IP_URL="$IPURL" urlsh cmd_connect pg --name iplines $PG_SET --dry-run --json </dev/null)"
-check "exakit connect --dry-run --json (bash): public_ip" "203.0.113.7" "$(printf '%s\n' "$OUT" | grep '^{' | tail -1 | pubip)"
+check "exakit connect --dry-run --json (bash): public_ip, the output one object" "203.0.113.7" "$(printf '%s\n' "$OUT" | pubip)"
 OUT="$(EXAKIT_NO_IP_LOOKUP= EXAKIT_PUBLIC_IP_URL="$IPURL" urlsh cmd_connect pg --name iplines --set host=192.168.64.1 --set database=sales --set user=reader --dry-run </dev/null)"
 lacks "...a private host: no line" "public IP" "$OUT"
+
+printf '\n== exakit connect --json: one object on stdout, whatever happens ==\n'
+# For scripts and agents: a real connect, a dry run, and every refusal - the
+# bridge's or the engine's - print exactly one JSON object on stdout, of one
+# failure shape (ok false, error, kind, remedy, command, public_ip), with the
+# documented exit code. Nothing is asked. stderr is kept apart here, so what
+# is asserted is stdout alone.
+jsonsh() { # jsonsh <stdin-file> <args...> - stdout in JOUT, stderr in JERR, exit in JRC
+    _js_in="$1"; shift
+    JOUT="$( ( EXAKIT_HOME="$HOME_K"
+      . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
+      _require_install() { :; }; exakit_init_logging() { EXAKIT_LOG_FILE="$WORK/json.log"; }
+      exakit_vs_engine() { eng "$@"; }
+      if [ -n "${JSON_JAVA_INSTALL:-}" ]; then
+          _exakit_vs_install_java() {
+              info "Installing the Java language container (test)"
+              _exakit_vs_confirm "Install the Java language container now?" || return 1
+              python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["java"]=True; json.dump(d, open(sys.argv[1], "w"))' "$STATE"
+          }
+      fi
+      cmd_connect "$@" ) < "$_js_in" 2> "$WORK/json.err" )"; JRC=$?
+    JERR="$(cat "$WORK/json.err")"
+}
+# one <python expression over d> - prints it when stdout is exactly one JSON object, else NOT-ONE-OBJECT.
+one() {
+    printf '%s' "$JOUT" | python3 -c 'import json,sys
+try:
+    d = json.load(sys.stdin)
+except ValueError:
+    print("NOT-ONE-OBJECT"); sys.exit()
+print(eval(sys.argv[1], {"d": d}) if isinstance(d, dict) else "NOT-ONE-OBJECT")' "$1"
+}
+SHAPE='[d["ok"], d["kind"], bool(d["error"]), bool(d["remedy"]), "command" in d, "public_ip" in d]'
+printf '%s' "$SECRET" > "$WORK/json.secret"
+db '{"sources": {"pg.example.com": {"tables": ["ORDERS", "CUSTOMERS"]}}}'
+jsonsh "$WORK/json.secret" pg --name jsonok $PG_SET --json
+check "a real connect: exit 0, one object - the engine's result" "0 [True, 'jsonok', 'VS_JSONOK', None]" \
+    "$JRC $(one '[d["ok"], d["name"], d["objects"]["schema"], d["public_ip"]]')"
+lacks "...no query hint or Manage line on stdout" "Manage it with" "$JOUT"
+lacks "...and the credential is nowhere in it" "$SECRET" "$JOUT$JERR"
+jsonsh /dev/null pg --name jsondry $PG_SET --dry-run --json
+check "--dry-run --json: exit 0, one object - the plan" "0 [True, 'jsondry', 'GA', None]" \
+    "$JRC $(one '[d["ok"], d["name"], d["tier"], d["public_ip"]]')"
+lacks "...not the rendered plan before it" "Plan for" "$JOUT"
+jsonsh /dev/null pg --name jsonurl --url "postgres://reader@pg.example.com:5433/sales" --dry-run --json
+check "--url with --dry-run --json: one object, the string's host in the plan" "0 ['jsonurl', True]" \
+    "$JRC $(one '[d["name"], "pg.example.com" in str(d["steps"])]')"
+jsonsh /dev/null nosuchdb --name x --json
+check "an unknown connector: exit 2, one failure object" "2 [False, 'input', True, True, True, True]" "$JRC $(one "$SHAPE")"
+check "...its error is what happened, its command lists the connectors, the choices kept" \
+    "['no source matches nosuchdb', 'exakit source catalog', True]" "$(one '[d["error"], d["command"], "postgresql" in d["choices"]]')"
+jsonsh /dev/null pg --name jsonnopw $PG_SET --json
+check "no credential (nothing on stdin): exit 2, one failure object, nothing asked" "2 [False, 'input', True, True, True, True]" "$JRC $(one "$SHAPE")"
+has "...its remedy says how to give it" "--password-file" "$(one 'd["remedy"]')"
+jsonsh /dev/null pg --name jsonbad --set host=pg.example.com --set database=sales --set user=reader --set port=70000 --json
+check "a bad input: exit 2, one failure object" "2 [False, 'input', True, True, True, True]" "$JRC $(one "$SHAPE")"
+jsonsh "$WORK/json.secret" pg --name jsonok $PG_SET --json
+check "a name already taken: exit 3, one failure object" "3 [False, 'conflict', True, True, True, True]" "$JRC $(one "$SHAPE")"
+check "...error is what happened, remedy the fix (once in each)" \
+    "['a source named jsonok already exists (postgresql)', 'choose another name or remove it first: exakit source remove jsonok']" \
+    "$(one '[d["error"], d["remedy"]]')"
+jsonsh "$WORK/json.secret" gatedtest --name jsongt --set project=p --set dataset=d --json
+check "a gated connector: exit 5, one failure object" "5 [False, 'gated', True, True, True, True]" "$JRC $(one "$SHAPE")"
+jsonsh /dev/null pg --name x --bogus --json
+check "an unknown option: exit 2, one failure object" "2 [False, 'input', True, True, True, True]" "$JRC $(one "$SHAPE")"
+jsonsh /dev/null pg --json
+check "no name: exit 2, one failure object" "2 [False, 'input', True, True, True, True]" "$JRC $(one "$SHAPE")"
+jsonsh /dev/null --json
+check "no source: exit 2, one failure object, never a question" "2 [False, 'input', True, True, True, True]" "$JRC $(one "$SHAPE")"
+jsonsh /dev/null pg --name x --password=hunter2 --json
+check "a credential as an argument: exit 2, one failure object" "2 [False, 'input', True, True, True, True]" "$JRC $(one "$SHAPE")"
+lacks "...that does not repeat it" "hunter2" "$JOUT$JERR"
+jsonsh /dev/null pg --name x $PG_SET --password-file "$WORK/no-such.pw" --json
+check "an unreadable --password-file: exit 2, one failure object" "2 [False, 'input', True, True, True, True]" "$JRC $(one "$SHAPE")"
+# A language container needs a database restart: without --yes, nothing is
+# asked and the engine's answer stands; with --yes, the answer is the retry's.
+db '{"sources": {"pg.example.com": {"tables": ["ORDERS"]}}, "java": false}'
+JSON_JAVA_INSTALL=1 jsonsh "$WORK/json.secret" pg --name jsonjava $PG_SET --json
+check "Java missing, no --yes: exit 21, one failure object" "21 [False, 'nojava', True, True, True, True]" "$JRC $(one "$SHAPE")"
+has "...whose fix names --yes" "--yes" "$(one 'd["remedy"]')"
+check "...nothing was installed" "false" "$(dbq 'd["java"]')"
+JSON_JAVA_INSTALL=1 jsonsh "$WORK/json.secret" pg --name jsonjava $PG_SET --json --yes
+check "Java missing, --yes: installed, retried, exit 0, one object - the retry's" "0 [True, 'jsonjava']" "$JRC $(one '[d["ok"], d["name"]]')"
+has "...what the bridge said while it installed is on stderr" "Installing the Java language container (test)" "$JERR"
+lacks "...not on stdout" "Installing the Java" "$JOUT"
+# The bridge cannot run the engine at all: the same shape.
+JOUT="$( ( EXAKIT_HOME="$HOME_K"; EXAKIT_PYEXASOL_VENV="$WORK/no-such-venv"
+    . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/pyexasol.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
+    _require_install() { :; }; exakit_init_logging() { EXAKIT_LOG_FILE="$WORK/json.log"; }
+    cmd_connect pg --name x $PG_SET --json ) < /dev/null 2>/dev/null )"; JRC=$?
+check "no pyexasol to run the engine: exit 2, one failure object" "2 [False, 'setup', True, True, True, True]" "$JRC $(one "$SHAPE")"
+check "...its command is the repair" "exakit update pyexasol" "$(one 'd["command"]')"
+# source check answers with the same failure keys. The source now accepts
+# another credential than the one it was connected with.
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["sources"]["pg.example.com"]["secret"]="rotated"; json.dump(d, open(sys.argv[1], "w"))' "$STATE"
+OUT="$(eng --json check jsonjava 2>/dev/null)"
+check "source check --json: the same failure keys, its command the reauth" \
+    "[False, 'auth', True, True, 'exakit source reauth jsonjava']" \
+    "$(JOUT="$OUT" one '[d["ok"], d["kind"], bool(d["error"]), bool(d["remedy"]), d["command"]]')"
+OUT="$(eng --json issues 2>/dev/null)"
+has "source issues --json: each row carries the command too" '"command": "exakit source reauth jsonjava"' "$OUT"
+OUT="$(printf '%s' "$SECRET" | eng --json connect pg --name jsonauth $PG_SET --secret-stdin 2>"$WORK/json.err")"; RC=$?
+check "a refused credential, engine --json: exit 1, kind auth, a first connect has no lifecycle command" "1 auth None" \
+    "$RC $(JOUT="$OUT" one '" ".join(str(x) for x in [d["kind"], d["command"]])')"
+lacks "...error is the driver's words, the fix is in remedy" "nothing was kept" "$(JOUT="$OUT" one 'd["error"]')"
+has "...remedy" "nothing was kept" "$(JOUT="$OUT" one 'd["remedy"]')"
+has "...the FAIL line on stderr still says both" "nothing was kept" "$(cat "$WORK/json.err")"
+run remove jsonok
+run remove jsonjava
+
+printf '\n== the engine never answers --json with a traceback ==\n'
+BROKEN="$WORK/broken-defs"; cp -R "$DEFS" "$BROKEN"; printf '{"connectors": [' > "$BROKEN/catalog.json"
+OUT="$(python3 "$ROOT/setup/virtual-schemas/engine/cli.py" --defs "$BROKEN" --kit-home "$HOME_K" --json catalog 2>"$WORK/json.err")"; RC=$?
+check "an unexpected exception: exit 1, one object, kind internal" "1 [False, 'internal', True, None]" \
+    "$RC $(JOUT="$OUT" one '[d["ok"], d["kind"], "\n" not in d["error"], d["command"]]')"
+has "...the traceback is on stderr (the shells keep it in the log)" "Traceback (most recent call last)" "$(cat "$WORK/json.err")"
+lacks "...and not on stdout" "Traceback" "$OUT"
+OUT="$(python3 "$ROOT/setup/virtual-schemas/engine/cli.py" --defs "$BROKEN" --kit-home "$HOME_K" catalog 2>/dev/null)"; RC=$?
+check "...without --json: one FAIL line for the bridge to render, exit 1" "1 1" "$RC $(printf '%s\n' "$OUT" | grep -c '^FAIL the engine failed unexpectedly: ')"
+OUT="$(python3 "$ROOT/setup/virtual-schemas/engine/cli.py" --defs "$BROKEN" --kit-home "$HOME_K" --json no-such-command 2>/dev/null)"; RC=$?
+check "arguments the engine does not take, with --json: exit 2, one object" "2 [False, 'input']" "$RC $(JOUT="$OUT" one '[d["ok"], d["kind"]]')"
+# A copy of the engine with no setup/core beside it (it imports core/state.py).
+mkdir -p "$WORK/lonely/a"; cp -R "$ROOT/setup/virtual-schemas/engine" "$WORK/lonely/a/engine"
+OUT="$(python3 "$WORK/lonely/a/engine/cli.py" --defs x --kit-home y --json list 2>/dev/null)"; RC=$?
+check "an engine that cannot even import (a kit copy updated by halves): exit 1, one object" "1 [False, 'internal']" \
+    "$RC $(JOUT="$OUT" one '[d["ok"], d["kind"]]')"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]
