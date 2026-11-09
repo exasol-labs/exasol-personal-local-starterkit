@@ -3036,6 +3036,17 @@ kill "$_jw" 2>/dev/null; wait "$_jw" 2>/dev/null; rm -f "$WORK/json.fifo"
 check "reauth --json, --password-file a pipe: exit 0, one object" "0 [True, 'ready']" "$JRC $(one '[d["ok"], d["status"]]')"
 jsonsrc /dev/null --json
 check "source --json (no action): exit 0, the listing's one object" "0 True" "$JRC $(one 'd["ok"]')"
+# --json never asks, so it never takes silence for consent: a disconnect or
+# remove without --yes changes nothing (exit 5), as without a terminal.
+jsonsrc /dev/null remove jsonjava --json
+check "source remove --json without --yes: exit 5, kind declined, the --yes form named" \
+    "5 [False, 'declined', 'exakit source remove jsonjava --yes --json']" "$JRC $(one '[d["ok"], d["kind"], d["command"]]')"
+jsonsrc /dev/null show jsonjava --json
+check "...and the source is still there" "0 True" "$JRC $(one 'd["ok"]')"
+jsonsrc /dev/null disconnect jsonjava --json
+check "source disconnect --json without --yes: exit 5, kind declined" "5 declined" "$JRC $(one 'd["kind"]')"
+jsonsrc /dev/null show jsonjava --json
+check "...still connected" "0 True" "$JRC $(one 'd["ok"]')"
 jsonsrc /dev/null reauth jsonjava --json --password-file "$WORK/json.wrong"
 check "reauth --json with a credential the source refuses: one failure object" "[False, 'auth', True, True, True]" \
     "$(one '[d["ok"], d["kind"], bool(d["error"]), bool(d["remedy"]), "command" in d]')"
