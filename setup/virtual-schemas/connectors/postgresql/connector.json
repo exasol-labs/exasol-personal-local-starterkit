@@ -96,6 +96,7 @@
   },
   "tls_ca": "sslmode=verify-full&sslfactory=org.postgresql.ssl.SingleCertValidatingFactory&sslfactoryarg={ca_pem}",
   "ca_probe": "postgres",
+  "access": "CONNECT on the database, USAGE on the schema and SELECT on its tables",
   "vs_properties": {
     "CATALOG_NAME": "{database}",
     "SCHEMA_NAME": "{schema}"

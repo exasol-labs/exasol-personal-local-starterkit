@@ -234,6 +234,29 @@ import sql
 print(" ".join(sql.classify_raw(sql.summarize(raw), raw) for raw in sys.argv[2:4]))
 PYC
 )"
+# An account that signs in but may not read is told what to grant: the
+# connector's "access", the least it needs at the source. A connector without
+# one falls back to the bare words "read access", which name no grant. Read
+# from the catalog, so a new connector is checked the moment it lands.
+check "every connector names the rights it needs at the source, and the denied fix says them" "ok" \
+    "$(python3 - "$ROOT" <<'PYC'
+import json, os, sys
+sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
+import lifecycle
+root = os.path.join(sys.argv[1], "setup", "virtual-schemas")
+for entry in json.load(open(os.path.join(root, "catalog.json")))["connectors"]:
+    doc = json.load(open(os.path.join(root, "connectors", entry["id"], "connector.json")))
+    access = doc.get("access", "").strip()
+    if not access or "(%s)" % access not in lifecycle.remedy_for("denied", "src", doc):
+        print("bad: " + entry["id"]); break
+else:
+    print("ok")
+PYC
+)"
+MG_NOTES="$(python3 -c 'import json,sys; print("\n".join(json.load(open(sys.argv[1]))["notes"]))' \
+    "$ROOT/setup/virtual-schemas/connectors/mongodb/connector.json")"
+has "MongoDB's notes: the adapter signs in against admin, whatever the URI says" "Keep authSource=admin" "$MG_NOTES"
+has "...and an Atlas access-list entry is permanent, since a temporary one expires" "as a permanent entry" "$MG_NOTES"
 
 printf '\n== connect: the happy path ==\n'
 db '{"sources": {"pg.example.com": {"tables": ["ORDERS", "CUSTOMERS"]}}}'
