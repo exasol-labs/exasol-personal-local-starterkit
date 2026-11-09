@@ -10,6 +10,12 @@
 # POSIX sh script fed to the launcher VM's shell (macOS). Every call it gets is
 # logged, so a test can say WHICH engine was asked and WHICH container.
 #
+# Docker mounts a language container image READ-ONLY, so there the stand-in
+# refuses a copy into the database container, as Docker does, and keeps its
+# images as folders too: the helper links the IMAGE (create, copy, commit under
+# the same tag, labelled) and the database sees it from its next start, which
+# a test plays by copying the image's etc/ over the container's.
+#
 # What it pins beyond the repair itself:
 #   - the deployment's recorded engine is the one asked: a Docker deployment
 #     (kit 0.2.4+) is invisible to Podman's CLI, and Podman stays the answer
@@ -33,48 +39,134 @@ WORK="$(mktemp -d)"; trap 'rm -rf "$WORK"' EXIT
 # Fake engine CLI: `ps --format {{.Names}}` prints FAKE_PS (space-separated,
 # one name per line; a comma is kept, as Docker joins a container's names)
 # unless FAKE_NO_CTR=1; `cp CTR:/exa/slc/F/etc -` streams $WORK/ctr/F/etc as
-# tar; `cp - CTR:/exa/slc/F/etc/` extracts stdin there. Each call appends
-# "<cli> <verb> <container>" to $WORK/calls.
+# tar; `cp - CTR:/exa/slc/F/etc/` extracts stdin there - as podman; as docker
+# it fails, the image mount being read-only. Docker's images are folders under
+# $WORK/img (etc/, id, labels.json), the database mounting docker.io/exa/slc:F
+# at /exa/slc/F; `create`, `cp` in and out of a created container (its own
+# /etc, or an image mounted at a target), `commit --change LABEL`, `rm`,
+# `image inspect`, `image rm`, `inspect` (the mounts) and `pull` (from
+# $WORK/registry) work on them. FAKE_COMMIT_FAILS=1 fails a commit. Each call
+# appends "<cli> <verb> <container or image>" to $WORK/calls.
 mkdir -p "$WORK/bin"
 cat > "$WORK/bin/podman" <<EOF
 #!/usr/bin/env python3
-import io, os, sys, tarfile
-root = "$WORK/ctr"
+import io, json, os, shutil, sys, tarfile
+W = "$WORK"
+root = W + "/ctr"
 cli = os.path.basename(sys.argv[0])
 a = sys.argv[1:]
 def log(ctr):
-    with open("$WORK/calls", "a") as f: f.write("%s %s %s\n" % (cli, a[0], ctr))
+    with open(W + "/calls", "a") as f: f.write("%s %s %s\n" % (cli, a[0], ctr))
+def key(ref): return ref.replace("/", "_").replace(":", "_")
+def img(ref): return os.path.join(W, "img", key(ref))
+def cont(name): return os.path.join(W, "cont", name)
+def put(tar_bytes, dest):
+    os.makedirs(dest, exist_ok=True)
+    with tarfile.open(fileobj=io.BytesIO(tar_bytes)) as t:
+        for m in t.getmembers():
+            path = os.path.join(dest, m.name)
+            if os.path.lexists(path): os.remove(path)
+            if m.issym(): os.symlink(m.linkname, path)
+            else:
+                with open(path, "wb") as f: f.write(t.extractfile(m).read())
+def stream(path):
+    if not os.path.isdir(path): sys.exit(1)
+    with tarfile.open(fileobj=sys.stdout.buffer, mode="w|") as t: t.add(path, arcname="etc")
+    sys.exit(0)
 if a[0] == "ps":
     log("-")
     if a[1:] != ["--format", "{{.Names}}"]: sys.exit(3)
     print("" if os.environ.get("FAKE_NO_CTR") == "1" else "\n".join(os.environ.get("FAKE_PS", "exasol-db-test").split()))
     sys.exit(0)
-if a[0] == "cp" and a[2] == "-":
+if a[0] == "cp" and a[2] == "-" and "/exa/slc/" in a[1]:
     log(a[1].split(":")[0])
-    flavor = a[1].split("/exa/slc/")[1].split("/")[0]
-    path = os.path.join(root, flavor, "etc")
-    if not os.path.isdir(path): sys.exit(1)
-    with tarfile.open(fileobj=sys.stdout.buffer, mode="w|") as t: t.add(path, arcname="etc")
-    sys.exit(0)
-if a[0] == "cp" and a[1] == "-":
+    stream(os.path.join(root, a[1].split("/exa/slc/")[1].split("/")[0], "etc"))
+if a[0] == "cp" and a[1] == "-" and "/exa/slc/" in a[2]:
     log(a[2].split(":")[0])
-    if os.environ.get("FAKE_CP_FAILS") == "1": sys.exit(1)
+    with open(W + "/writes", "a") as f: f.write(a[2].split(":")[0] + "\n")
+    if cli == "docker" or os.environ.get("FAKE_CP_FAILS") == "1": sys.exit(1)
     flavor = a[2].split("/exa/slc/")[1].split("/")[0]
-    with tarfile.open(fileobj=io.BytesIO(sys.stdin.buffer.read())) as t:
-        for m in t.getmembers():
-            dest = os.path.join(root, flavor, "etc", m.name)
-            if os.path.lexists(dest): os.remove(dest)
-            os.symlink(m.linkname, dest)
+    put(sys.stdin.buffer.read(), os.path.join(root, flavor, "etc"))
     sys.exit(0)
+if cli != "docker": sys.exit(2)
+if a[0] == "inspect":
+    log(a[-1])
+    mounts = [{"Type": "bind", "Source": "/data", "Target": "/exa"}]
+    for flavor in sorted(os.listdir(root)) if os.path.isdir(root) else []:
+        mounts.append({"Type": "image", "Source": "docker.io/exa/slc:" + flavor, "Target": "/exa/slc/" + flavor})
+    print(json.dumps(mounts)); sys.exit(0)
+if a[:2] == ["image", "inspect"]:
+    log(a[-1])
+    if not os.path.isdir(img(a[-1])): sys.exit(1)
+    print('"%s" %s' % (open(img(a[-1]) + "/id").read(), open(img(a[-1]) + "/labels.json").read())); sys.exit(0)
+if a[:2] == ["image", "rm"]:
+    log(a[2]); sys.exit(0)
+if a[0] == "pull":
+    log(a[-1])
+    src = os.path.join(W, "registry", key(a[-1]))
+    if not os.path.isdir(src): sys.exit(1)
+    shutil.copytree(src, img(a[-1]), symlinks=True); sys.exit(0)
+if a[0] == "create":
+    ref = a[-1]; name = a[a.index("--name") + 1]
+    log(ref)
+    if not os.path.isdir(img(ref)): sys.exit(1)
+    os.makedirs(cont(name) + "/etc")
+    open(cont(name) + "/ref", "w").write(ref)
+    with open(W + "/creates", "a") as f: f.write("%s %s\n" % (name.rsplit("-", 1)[1], "mount" if "--mount" in a else "nomount"))
+    if "--mount" in a:
+        spec = dict(x.split("=", 1) for x in a[a.index("--mount") + 1].split(","))
+        open(cont(name) + "/mount", "w").write(spec["target"] + " " + spec["source"])
+    sys.exit(0)
+if a[0] == "cp" and a[2] == "-":
+    name, path = a[1].split(":", 1)
+    log(name)
+    target, source = open(cont(name) + "/mount").read().split()
+    if path != target + "/etc": sys.exit(1)
+    stream(img(source) + "/etc")
+if a[0] == "cp" and a[1] == "-":
+    name, path = a[2].split(":", 1)
+    log(name)
+    if path != "/etc/": sys.exit(1)
+    put(sys.stdin.buffer.read(), cont(name) + "/etc"); sys.exit(0)
+if a[0] == "commit":
+    name, ref = a[-2], a[-1]
+    log(ref)
+    if os.environ.get("FAKE_COMMIT_FAILS") == "1": sys.exit(1)
+    base = open(cont(name) + "/ref").read()
+    new = os.path.join(W, "img-new")
+    shutil.copytree(img(base), new, symlinks=True)
+    for n in os.listdir(cont(name) + "/etc"):
+        dest = os.path.join(new, "etc", n)
+        if os.path.lexists(dest): os.remove(dest)
+        shutil.move(os.path.join(cont(name), "etc", n), dest)
+    labels = json.load(open(new + "/labels.json"))
+    k, v = a[a.index("--change") + 1].split(" ", 1)[1].split("=", 1)
+    labels[k] = v
+    json.dump(labels, open(new + "/labels.json", "w"))
+    open(new + "/id", "w").write(open(new + "/id").read() + "d")
+    shutil.rmtree(img(ref), ignore_errors=True)
+    shutil.move(new, img(ref)); sys.exit(0)
+if a[0] == "rm":
+    log(a[-1]); shutil.rmtree(cont(a[-1]), ignore_errors=True); sys.exit(0)
 sys.exit(2)
 EOF
 chmod +x "$WORK/bin/podman"
 cp "$WORK/bin/podman" "$WORK/bin/docker"
-ctr() { rm -rf "$WORK/ctr"; mkdir -p "$WORK/ctr/java-17/etc" "$WORK/ctr/python-3.12/etc"; : > "$WORK/ctr/java-17/etc/resolv.conf"; : > "$WORK/ctr/java-17/etc/hosts"; printf 'nameserver 9.9.9.9\n' > "$WORK/ctr/python-3.12/etc/resolv.conf"; : > "$WORK/calls"; }
+ctr() { rm -rf "$WORK/ctr" "$WORK/img" "$WORK/cont" "$WORK/registry"; mkdir -p "$WORK/ctr/java-17/etc" "$WORK/ctr/python-3.12/etc" "$WORK/cont"; : > "$WORK/ctr/java-17/etc/resolv.conf"; : > "$WORK/ctr/java-17/etc/hosts"; printf 'nameserver 9.9.9.9\n' > "$WORK/ctr/python-3.12/etc/resolv.conf"; mkimg java-17 img; mkimg python-3.12 img; printf 'nameserver 9.9.9.9\n' > "$WORK/img/docker.io_exa_slc_python-3.12/etc/resolv.conf"; : > "$WORK/calls"; : > "$WORK/writes"; : > "$WORK/creates"; }
+# mkimg <flavor> <img|registry> - docker.io/exa/slc:<flavor>, as shipped: the
+# two files empty, a hostname, no label.
+mkimg() { _d="$WORK/$2/docker.io_exa_slc_$1"; rm -rf "$_d"; mkdir -p "$_d/etc"; : > "$_d/etc/resolv.conf"; : > "$_d/etc/hosts"; printf 'build-host\n' > "$_d/etc/hostname"; printf 'sha256:%s' "$1" > "$_d/id"; printf '{"org.opencontainers.image.version": "22.04"}' > "$_d/labels.json"; }
+# restart <flavor> - the database starts again and mounts the image's etc/.
+restart() { rm -rf "$WORK/ctr/$1/etc"; cp -RP "$WORK/img/docker.io_exa_slc_$1/etc" "$WORK/ctr/$1/etc"; : > "$WORK/calls"; }
+ilink() { readlink "$WORK/img/docker.io_exa_slc_$1/etc/$2" 2>/dev/null || echo "regular"; }
+ilabel() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("com.exasol.starter-kit.slc-dns", "none"))' "$WORK/img/docker.io_exa_slc_$1/labels.json"; }
+verbs() { awk '{ print $1 "-" $2 }' "$WORK/calls" | tr '\n' ' ' | sed 's/ $//'; }
 link() { readlink "$WORK/ctr/$1/etc/$2" 2>/dev/null || echo "regular"; }
 # The engines asked, and the containers copied from or to, since the last ctr.
 clis() { cut -d' ' -f1 "$WORK/calls" | sort -u | tr '\n' ' ' | sed 's/ $//'; }
 target() { awk '$2 == "cp" { print $3 }' "$WORK/calls" | sort -u | tr '\n' ' ' | sed 's/ $//'; }
+# ...of them, the database's (not docker's own short-lived containers).
+dbtarget() { awk '$2 == "cp" && $3 !~ /^exakit-slc-dns-/ { print $3 }' "$WORK/calls" | sort -u | tr '\n' ' ' | sed 's/ $//'; }
 HELPER="$ROOT/setup/lib/personal-slc-dns.py"
 helper() { PATH="$WORK/bin:$PATH" python3 "$HELPER" "$@"; }
 # A 2.4 deployment with a sidecar, listed first because it is the newer
@@ -100,17 +192,19 @@ check "no database container: said, not guessed" "EXAKIT_SLC_DNS - nocontainer" 
 
 printf '\n== the helper on the deployment engine ==\n'
 ctr; OUT="$(helper --engine docker java-17)"
-check "--engine docker repairs through docker" "EXAKIT_SLC_DNS java-17 repaired" "$OUT"
+check "--engine docker links the image (read-only mount): derived" "EXAKIT_SLC_DNS java-17 derived" "$OUT"
 check "...and never asks podman" "docker" "$(clis)"
 ctr; helper --engine podman java-17 >/dev/null
 check "--engine podman: podman only" "podman" "$(clis)"
 ctr; OUT="$(helper --podman docker java-17)"
-check "--podman, the old spelling, still names the CLI" "EXAKIT_SLC_DNS java-17 repaired docker" "$OUT $(clis)"
+check "--podman, the old spelling, still names the CLI" "EXAKIT_SLC_DNS java-17 derived docker" "$OUT $(clis)"
 
 printf '\n== which container is the database ==\n'
-ctr; OUT="$(FAKE_PS="$PS_24" helper --engine docker --deployment-id "$ID" java-17)"
+ctr; OUT="$(FAKE_PS="$PS_24" helper --deployment-id "$ID" java-17)"
 check "2.4: exasol-db-<id>, past a sidecar listed first and another deployment" "exasol-db-$ID" "$(target)"
 check "...repaired there" "EXAKIT_SLC_DNS java-17 repaired" "$OUT"
+ctr; FAKE_PS="$PS_24" helper --engine docker --deployment-id "$ID" java-17 >/dev/null
+check "...on docker, read from that container and its mount inspected" "exasol-db-$ID exasol-db-$ID" "$(dbtarget) $(awk '$2 == "inspect" { print $3 }' "$WORK/calls")"
 ctr; FAKE_PS="$PS_24" helper --deployment-id "$ID" java-17 >/dev/null
 check "...the same on podman" "exasol-db-$ID podman" "$(target) $(clis)"
 ctr; FAKE_PS="$PS_24" helper "--deployment-id= $ID " java-17 >/dev/null
@@ -139,9 +233,60 @@ check "...and a lone exasol-db-* is" "exasol-db-abc" "$(target)"
 ctr; FAKE_PS="exasol-db-abc" helper "--deployment-id=   " java-17 >/dev/null
 check "a blank id is no id" "exasol-db-abc" "$(target)"
 ctr; FAKE_PS="legacy,exasol-db-$ID" helper --engine docker --deployment-id "$ID" java-17 >/dev/null
-check "Docker's comma-joined names are split" "exasol-db-$ID" "$(target)"
+check "Docker's comma-joined names are split" "exasol-db-$ID" "$(dbtarget)"
 ctr; OUT="$(FAKE_PS="exasol-db-$ID-sidecar-minio" helper --deployment-id "$ID" java-17)"
 check "only a sidecar runs: no database container" "EXAKIT_SLC_DNS - nocontainer" "$OUT"
+
+printf '\n== Docker: the image is linked, not the read-only mount ==\n'
+IMG_J="$WORK/img/docker.io_exa_slc_java-17"
+ctr; OUT="$(FAKE_PS="$PS_24" helper --engine docker --deployment-id "$ID" java-17 python-3.12)"; RC=$?
+check "an empty file under Docker: derived, exit 0" "EXAKIT_SLC_DNS java-17 derived|EXAKIT_SLC_DNS python-3.12 ok|0" "$(printf '%s\n' "$OUT" | tr '\n' '|')$RC"
+check "...the image's two files point at /conf" "/conf/resolv.conf /conf/hosts" "$(ilink java-17 resolv.conf) $(ilink java-17 hosts)"
+check "...its hostname kept, not Docker's empty placeholder" "build-host" "$(cat "$IMG_J/etc/hostname")"
+check "...committed under the tag the database mounts, labelled" "conf-links" "$(ilabel java-17)"
+check "...the image it replaced removed by id" "1" "$(grep -c '^docker image sha256:java-17$' "$WORK/calls")"
+check "...the read-only mount never written to" "" "$(cat "$WORK/writes")"
+check "...the database container itself unchanged until it starts again" "regular" "$(link java-17 resolv.conf)"
+check "...no container left behind" "0" "$(ls "$WORK/cont" | wc -l | tr -d ' ')"
+check "...the image read through a mount of itself, linked in a container without one" \
+    "docker-create docker-cp docker-rm docker-create docker-cp docker-commit docker-rm" \
+    "$(awk '$2 == "create" || $2 == "commit" || ($2 == "cp" && $3 ~ /^exakit-slc-dns-/) || ($2 == "rm" && $3 ~ /^exakit-slc-dns-/) { print $1 "-" $2 }' "$WORK/calls" | tr '\n' ' ' | sed 's/ $//')"
+check "...the reading container has the mount, the writing one none" "r mount|w nomount|" "$(tr '\n' '|' < "$WORK/creates")"
+: > "$WORK/calls"; OUT="$(FAKE_PS="$PS_24" helper --engine docker --deployment-id "$ID" java-17)"
+check "the database still started before the link: derived again (a restart), no second commit" "EXAKIT_SLC_DNS java-17 derived 0" "$OUT $(grep -c ' commit ' "$WORK/calls")"
+restart java-17; OUT="$(FAKE_PS="$PS_24" helper --engine docker --deployment-id "$ID" java-17)"
+check "after a start that mounts it: ok, nothing created" "EXAKIT_SLC_DNS java-17 ok docker-ps docker-cp" "$OUT $(verbs)"
+ctr; OUT="$(FAKE_COMMIT_FAILS=1 FAKE_PS="$PS_24" helper --engine docker --deployment-id "$ID" java-17)"; RC=$?
+check "a commit that fails: failed, exit 1, no container left" "EXAKIT_SLC_DNS java-17 failed 1 0" "$OUT $RC $(ls "$WORK/cont" | wc -l | tr -d ' ')"
+check "...the image untouched" "regular none" "$(ilink java-17 resolv.conf) $(ilabel java-17)"
+ctr; rm -rf "$IMG_J"; OUT="$(FAKE_PS="$PS_24" helper --engine docker --deployment-id "$ID" java-17)"; RC=$?
+check "the mounted image gone: failed, exit 1" "EXAKIT_SLC_DNS java-17 failed 1" "$OUT $RC"
+
+printf '\n== Docker, before a start: --prepare ==\n'
+STATE="$WORK/state.json"
+printf '{"deploymentId": "%s", "installedSlcs": [{"language": "java", "flavor": "java-17", "image": "docker.io/exa/slc:java-17"}, {"flavor": "python-3.12", "image": "docker.io/exa/slc:python-3.12"}]}\n' "$ID" > "$STATE"
+ctr; OUT="$(helper --engine docker --prepare "$STATE")"; RC=$?
+check "every SLC the launcher state lists: java linked, python already had DNS" "EXAKIT_SLC_DNS java-17 derived|EXAKIT_SLC_DNS python-3.12 ok|0" "$(printf '%s\n' "$OUT" | tr '\n' '|')$RC"
+check "...without a database container (nothing listed, nothing read)" "0" "$(grep -c -e '-ps ' -e ' ps ' "$WORK/calls")"
+check "...python, with DNS of its own, is not committed" "1" "$(grep -c ' commit ' "$WORK/calls")"
+: > "$WORK/calls"; OUT="$(helper --engine docker --prepare "$STATE" java-17)"
+check "a linked image: ok from its label, one inspect and nothing else" "EXAKIT_SLC_DNS java-17 ok docker-image" "$OUT $(verbs)"
+ctr; rm -rf "$IMG_J"; OUT="$(helper --engine docker --prepare "$STATE" java-17)"
+check "an image not pulled yet: absent (the start pulls it), nothing pulled" "EXAKIT_SLC_DNS java-17 absent 0" "$OUT $(grep -c ' pull ' "$WORK/calls")"
+ctr; rm -rf "$IMG_J"; mkimg java-17 registry; OUT="$(helper --engine docker --prepare "$STATE" --pull java-17)"
+check "--pull: pulled, then linked" "EXAKIT_SLC_DNS java-17 derived 1 conf-links" "$OUT $(grep -c ' pull docker.io/exa/slc:java-17$' "$WORK/calls") $(ilabel java-17)"
+ctr; : > "$WORK/calls"; OUT="$(helper --engine docker --prepare "$STATE" --pull java-17)"
+check "...an image that is here is not pulled again" "EXAKIT_SLC_DNS java-17 derived 0" "$OUT $(grep -c ' pull ' "$WORK/calls")"
+ctr; ln -sf /conf/resolv.conf "$IMG_J/etc/resolv.conf"; OUT="$(helper --engine docker --prepare "$STATE" java-17)"
+check "an image that ships the link itself (fixed upstream): ok, not committed" "EXAKIT_SLC_DNS java-17 ok 0 none" "$OUT $(grep -c ' commit ' "$WORK/calls") $(ilabel java-17)"
+ctr; OUT="$(helper --engine podman --prepare "$STATE")"; RC=$?
+check "podman: nothing before the start (its mount is writable)" "|0|" "$OUT|$RC|$(cat "$WORK/calls")"
+ctr; OUT="$(helper --engine docker --prepare "$WORK/no-such-state.json")"; RC=$?
+check "no state file: nothing, exit 0" "|0" "$OUT|$RC"
+printf '{"installedSlcs": [{"flavor": "java-17"}, "x", {"image": "i"}]}\n' > "$WORK/odd.json"
+ctr; OUT="$(helper --engine docker --prepare "$WORK/odd.json")"
+check "rows without a flavor and an image are skipped" "" "$OUT"
+check "a flavor is still required without --prepare" "2" "$(helper --engine docker >/dev/null 2>&1; echo $?)"
 
 printf '\n== the sh script for the launcher VM (macOS) ==\n'
 gen() { bash -c '. "$1/setup/lib/common.sh"; . "$1/setup/lib/detect.sh"; . "$1/setup/lib/runtime-personal.sh"; shift; personal_slc_dns_script "$@"' _ "$ROOT" "$@"; }
@@ -229,8 +374,12 @@ repair() {
 }
 ctr; OUT="$(repair "$WORK/bin" REC_ENGINE=docker FAKE_PS="$PS_24")"
 check "a Docker-recorded deployment is repaired through docker" "docker" "$(clis)"
-check "...in its database container" "exasol-db-$ID" "$(target)"
-check "...and says so, exit 0" "INFO Gave the java-17 language container the deployment's DNS|rc=0|" "$(printf '%s\n' "$OUT" | tr '\n' '|')"
+check "...in its database container" "exasol-db-$ID" "$(dbtarget)"
+check "...its image linked: says so, exit 2 (the next start sees it)" \
+    "INFO Gave the java-17 language container image the deployment's DNS; the database sees it from its next start|rc=2|" \
+    "$(printf '%s\n' "$OUT" | tr '\n' '|')"
+restart java-17; OUT="$(repair "$WORK/bin" REC_ENGINE=docker FAKE_PS="$PS_24")"
+check "...after that start: exit 0, nothing said" "rc=0" "$OUT"
 ctr; OUT="$(repair "$WORK/bin" REC_ENGINE=podman FAKE_PS="$PS_24")"
 check "a Podman-recorded deployment: podman" "podman exasol-db-$ID rc=0" "$(clis) $(target) $(printf '%s\n' "$OUT" | tail -1)"
 ctr; OUT="$(repair "$WORK/bin" FAKE_PS="$PS_24")"
@@ -289,14 +438,17 @@ check "a file goes through timeout(1), as before" "ok rc=0|printf" \
 # runs it - and on a real timeout(1) cuts off its whole process group.
 : > "$WORK/timeout.log"
 ctr; OUT="$(repair "$WORK/timeout-bin:$WORK/bin" REAL_RB=1 TIMEOUT_LOG="$WORK/timeout.log" REC_ENGINE=docker FAKE_PS="$PS_24")"
-check "the repair through the real runner and timeout(1): repaired, exit 0" \
-    "docker exasol-db-$ID INFO Gave the java-17 language container the deployment's DNS|rc=0|" \
-    "$(clis) $(target) $(printf '%s\n' "$OUT" | tr '\n' '|')"
+# On Docker the repair links the image (read-only mount): exit 2, the next
+# start mounts it.
+LINKED="INFO Gave the java-17 language container image the deployment's DNS; the database sees it from its next start|rc=2|"
+check "the repair through the real runner and timeout(1): the image linked, exit 2" \
+    "docker exasol-db-$ID $LINKED" \
+    "$(clis) $(dbtarget) $(printf '%s\n' "$OUT" | tr '\n' '|')"
 check "...timeout(1) ran python3 itself, not a function" "python3" "$(cat "$WORK/timeout.log")"
-check "...the java-17 file points at /conf now" "/conf/resolv.conf" "$(link java-17 resolv.conf)"
+check "...the java-17 image points at /conf now" "/conf/resolv.conf conf-links" "$(ilink java-17 resolv.conf) $(ilabel java-17)"
 if [ -x "$WORK/sys/timeout" ]; then
     ctr; OUT="$(repair "$WORK/bin" REAL_RB=1 REC_ENGINE=docker FAKE_PS="$PS_24")"
-    check "...and under the system's own timeout(1) too" "INFO Gave the java-17 language container the deployment's DNS|rc=0|" \
+    check "...and under the system's own timeout(1) too" "$LINKED" \
         "$(printf '%s\n' "$OUT" | tr '\n' '|')"
 else
     check "...no timeout(1) on this system (stock macOS): the stand-in stood for it" "skip" "skip"
@@ -315,8 +467,8 @@ chmod +x "$WORK/fake-uv/uv"
 : > "$WORK/timeout.log"
 ctr; OUT="$(repair "$WORK/timeout-bin:$WORK/bin" REAL_RB=1 TIMEOUT_LOG="$WORK/timeout.log" EXAKIT_DISABLE_SYSTEM_PYTHON=1 \
     _EXAKIT_UV_VETTED="$WORK/fake-uv/uv" REC_ENGINE=docker FAKE_PS="$PS_24")"
-check "no python3: the repair runs on uv's Python, through timeout(1), exit 0" \
-    "$WORK/fake-uv/uv INFO Gave the java-17 language container the deployment's DNS|rc=0|" \
+check "no python3: the repair runs on uv's Python, through timeout(1)" \
+    "$WORK/fake-uv/uv $LINKED" \
     "$(cat "$WORK/timeout.log") $(printf '%s\n' "$OUT" | tr '\n' '|')"
 # A repair that cannot run leaves one log line with the reason: every caller
 # ignores its exit code, so this line is all a reader of the log gets.
@@ -329,6 +481,80 @@ check "a repair that did not run: exit 1, one WARN line naming exit and reason" 
     "$(printf '%s\n' "$OUT" | tr '\n' '|')"
 check "the repair hands the runner no function" "0" \
     "$(sed -n '/^personal_slc_dns_repair()/,/^}/p' "$ROOT/setup/lib/runtime-personal.sh" | grep -c 'exakit_run_bounded [0-9]* run_python')"
+
+printf '\n== before the start on Docker (personal_slc_dns_prepare) ==\n'
+mkdir -p "$WORK/dep-st"
+printf '{"deploymentId": "%s", "installedSlcs": [{"flavor": "java-17", "image": "docker.io/exa/slc:java-17"}]}\n' "$ID" > "$WORK/dep-st/.exasolLauncherState.json"
+ctr; OUT="$(repair "$WORK/bin" REC_ENGINE=docker DEP="$WORK/dep-st" CALL=personal_slc_dns_prepare)"
+check "Docker: the state file's images linked before the start, and said" \
+    "INFO Gave the java-17 language container image the deployment's DNS|rc=0|conf-links" "$(printf '%s\n' "$OUT" | tr '\n' '|')$(ilabel java-17)"
+check "...no database container asked (it is not running yet)" "0" "$(grep -c -e ' ps ' -e ' inspect ' "$WORK/calls")"
+ctr; rm -rf "$WORK/img/docker.io_exa_slc_java-17"; mkimg java-17 registry
+OUT="$(repair "$WORK/bin" REC_ENGINE=docker DEP="$WORK/dep-st" CALL='personal_slc_dns_prepare --pull')"
+check "--pull reaches the helper: pulled, then linked" "rc=0 1 conf-links" "$(printf '%s\n' "$OUT" | tail -1) $(grep -c ' pull ' "$WORK/calls") $(ilabel java-17)"
+ctr; rm -rf "$WORK/img/docker.io_exa_slc_java-17"; mkimg java-17 registry
+OUT="$(repair "$WORK/bin" REC_ENGINE=docker DEP="$WORK/dep-st" CALL=personal_slc_dns_prepare)"
+check "...without it, nothing is pulled" "rc=0 0" "$OUT $(grep -c ' pull ' "$WORK/calls")"
+ctr; OUT="$(repair "$WORK/bin" REC_ENGINE=podman DEP="$WORK/dep-st" CALL=personal_slc_dns_prepare)"
+check "nothing before the start - podman" "rc=0||none" "$OUT|$(cat "$WORK/calls")|$(ilabel java-17)"
+ctr; OUT="$(repair "$WORK/bin" STUB_OS=macos REC_ENGINE=docker DEP="$WORK/dep-st" CALL=personal_slc_dns_prepare)"
+check "nothing before the start - macOS (the VM's Podman)" "rc=0||none" "$OUT|$(cat "$WORK/calls")|$(ilabel java-17)"
+ctr; OUT="$(repair "$WORK/bin" REC_ENGINE=docker DEP="$WORK/dep" CALL=personal_slc_dns_prepare)"
+check "nothing before the start - no launcher state file" "rc=0||none" "$OUT|$(cat "$WORK/calls")|$(ilabel java-17)"
+ctr; OUT="$(repair "$WORK/podman-only" REC_ENGINE=docker DEP="$WORK/dep-st" CALL=personal_slc_dns_prepare)"
+check "...no docker on PATH: nothing, exit 0" "rc=0|" "$OUT|$(cat "$WORK/calls")"
+
+printf '\n== the start (personal_start) ==\n'
+# start_run <bin dir> [VAR=value ...] - personal_start with the launcher
+# replaced: `start` mounts each image's etc/ (pulling a missing one from the
+# registry, as the launcher does), `stop` does nothing; every launcher call
+# is printed as RUN <verb>, then rc=N.
+start_run() {
+    _bin="$1"; shift
+    env "$@" STUB_PATH="$WORK/py:$_bin:$WORK/sys" WORK="$WORK" bash -c '
+        EXAKIT_HOME="$WORK/home"; export EXAKIT_HOME
+        . "$1/setup/lib/common.sh"; . "$1/setup/lib/detect.sh"; . "$1/setup/lib/runtime-personal.sh"
+        detect_os() { printf "%s" "${STUB_OS:-linux}"; }
+        personal_slc_installed_flavors() { printf "java-17"; }
+        personal_cli() { printf "LAUNCHER"; }
+        manifest_get() { case "$1" in runtime.engine) printf "%s" "${REC_ENGINE:-}" ;; *) return 1 ;; esac; }
+        _personal_start_engine_ok() { return 0; }
+        personal_launcher_supports() { return 0; }
+        personal_launcher_state() { printf "stopped"; }
+        personal_note_guest_rebuild() { :; }
+        port_in_use() { return 1; }
+        personal_auto_approve_flag() { :; }
+        run_logged() {
+            shift; printf "RUN %s\n" "$1"
+            if [ "$1" = start ]; then
+                _i="$WORK/img/docker.io_exa_slc_java-17"
+                [ -d "$_i" ] || cp -RP "$WORK/registry/docker.io_exa_slc_java-17" "$_i"
+                rm -rf "$WORK/ctr/java-17/etc"; cp -RP "$_i/etc" "$WORK/ctr/java-17/etc"
+            fi
+            return 0
+        }
+        run_python_any() { python3 "$@"; }
+        info() { printf "INFO %s\n" "$*"; }
+        ok() { :; }
+        die() { printf "DIE %s\n" "$*"; exit 1; }
+        _exakit_log_file() { :; }
+        EXAKIT_PERSONAL_DEPLOY_DIR="$WORK/dep-st"
+        PATH="$STUB_PATH"
+        personal_start; echo "rc=$?"' _ "$ROOT" 2>&1
+}
+ctr; OUT="$(start_run "$WORK/bin" REC_ENGINE=docker FAKE_PS="exasol-db-$ID")"
+check "Docker, the image here: linked before the start, one start, DNS in place" \
+    "RUN start|rc=0|/conf/resolv.conf" "$(printf '%s\n' "$OUT" | grep -e '^RUN' -e '^rc=' | tr '\n' '|')$(link java-17 resolv.conf)"
+ctr; rm -rf "$WORK/img/docker.io_exa_slc_java-17"; mkimg java-17 registry
+OUT="$(start_run "$WORK/bin" REC_ENGINE=docker FAKE_PS="exasol-db-$ID")"
+check "Docker, the image pulled by the start: linked after it, then ONE restart" \
+    "RUN start|RUN stop|RUN start|rc=0|/conf/resolv.conf" "$(printf '%s\n' "$OUT" | grep -e '^RUN' -e '^rc=' | tr '\n' '|')$(link java-17 resolv.conf)"
+check "...and says why it restarts" "1" "$(printf '%s\n' "$OUT" | grep -c '^INFO Restarting the database once, so Java in it can resolve host names$')"
+: > "$WORK/calls"; OUT="$(start_run "$WORK/bin" REC_ENGINE=docker FAKE_PS="exasol-db-$ID")"
+check "...the start after that: one start, nothing linked" "RUN start|rc=0|0" "$(printf '%s\n' "$OUT" | grep -e '^RUN' -e '^rc=' | tr '\n' '|')$(grep -c ' commit ' "$WORK/calls")"
+ctr; OUT="$(start_run "$WORK/bin" REC_ENGINE=podman FAKE_PS="exasol-db-$ID")"
+check "Podman: one start, the container repaired after it, the image never touched" \
+    "RUN start|rc=0|/conf/resolv.conf none" "$(printf '%s\n' "$OUT" | grep -e '^RUN' -e '^rc=' | tr '\n' '|')$(link java-17 resolv.conf) $(ilabel java-17)"
 
 printf '\n== the id the container is named by (personal_slc_container_id) ==\n'
 # st <dir> <state json or -> <deployment.json or -> - a deployment folder.
@@ -349,13 +575,13 @@ check "a blank id is none" "" "$(cid "$WORK/d6")"
 st "$WORK/d7" - -
 check "no state at all: none" "" "$(cid "$WORK/d7")"
 ctr; repair "$WORK/bin" REC_ENGINE=docker DEP="$WORK/d1" FAKE_PS="$PS_24" >/dev/null
-check "the repair targets the state file's id over deployment.json's \"local\"" "exasol-db-$ID" "$(target)"
+check "the repair targets the state file's id over deployment.json's \"local\"" "exasol-db-$ID" "$(dbtarget)"
 ctr; OUT="$(repair "$WORK/bin" REC_ENGINE=docker DEP="$WORK/d7" FAKE_PS="$PS_24")"
 check "no id and two exasol-db-* listed: nothing written, exit 1" "rc=1 " "$(printf '%s\n' "$OUT" | tail -1) $(target)"
 
 printf '\n== wiring ==\n'
 check "every start repairs (bash)" "1" "$(sed -n '/^personal_start()/,/^}/p' "$ROOT/setup/lib/runtime-personal.sh" | grep -c '^ *personal_slc_dns_repair || true')"
-check "every start repairs (PowerShell)" "1" "$(sed -n '/^function Start-Personal/,/^function Get-PersonalSlcInstalledFlavors/p' "$ROOT/setup/lib/runtime-personal.ps1" | grep -c 'try { \[void\](Repair-PersonalSlcDns) }')"
+check "every start repairs (PowerShell; again after a Docker restart)" "2" "$(sed -n '/^function Start-Personal/,/^function Get-PersonalSlcInstalledFlavors/p' "$ROOT/setup/lib/runtime-personal.ps1" | grep -c 'try { \[void\](Repair-PersonalSlcDns) }')"
 check "macOS feeds the VM shell inside the bounded command (stdin survives a background job)" "1" \
     "$(grep -c "exakit_run_bounded 90 sh -c 'exec \"\$0\" shell container < \"\$1\"'" "$ROOT/setup/lib/runtime-personal.sh")"
 check "the repair no longer gates on podman alone" "0" \

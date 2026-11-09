@@ -181,6 +181,60 @@ Check "...logged" "INFO language container DNS: -:nocontainer" ($script:logged -
 $script:helperLines = @("EXAKIT_SLC_DNS java-17 ok")
 Check "already repaired: true, nothing said" "True | personal-slc-dns.py --engine docker --deployment-id=exa-7f3a java-17" (Repair $both)
 Check "...nothing shown" "" ($script:shown -join "|")
+Check "...nothing for the next start to do" "False" $script:PersonalSlcDnsNeedsStart
+
+Write-Host ""
+Write-Host "== Docker: the image linked (derived) =="
+$script:helperLines = @("EXAKIT_SLC_DNS java-17 derived")
+Check "linked in the image: false, for now" "False | personal-slc-dns.py --engine docker --deployment-id=exa-7f3a java-17" (Repair $both)
+Check "...the next start is what it needs" "True" $script:PersonalSlcDnsNeedsStart
+Check "...and says so" "INFO Gave the java-17 language container image the deployment's DNS; the database sees it from its next start" ($script:shown -join "|")
+$script:helperLines = @("EXAKIT_SLC_DNS java-17 ok")
+[void](Repair $both)
+Check "a repair after it starts afresh: nothing pending" "False" $script:PersonalSlcDnsNeedsStart
+$script:helperLines = @("EXAKIT_SLC_DNS java-17 derived", "EXAKIT_SLC_DNS - nocontainer")
+Check "derived beside a failure: false, and no restart offered for it" "False | False" ("$((Repair $both).Split('|')[0].Trim()) | $script:PersonalSlcDnsNeedsStart")
+
+Write-Host ""
+Write-Host "== Docker, before a start (Initialize-PersonalSlcDns) =="
+$stateFile = Join-Path $dep ".exasolLauncherState.json"
+# Prepare <PATH dir> [-Pull] - one Initialize-PersonalSlcDns with only that
+# directory on PATH; returns the helper's arguments, or none.
+function Prepare([string]$Dir, [switch]$Pull) {
+    $script:helperCalls.Clear(); $script:logged.Clear(); $script:shown.Clear()
+    $env:PATH = $Dir
+    try { Initialize-PersonalSlcDns -Pull:$Pull } finally { $env:PATH = $realPath }
+    if ($script:helperCalls.Count -gt 0) { return $script:helperCalls[0] }
+    return "none"
+}
+Set-Content -LiteralPath $stateFile -Encoding Ascii -Value '{"deploymentId": "exa-7f3a", "installedSlcs": [{"flavor": "java-17", "image": "docker.io/exa/slc:java-17"}]}'
+$script:helperLines = @("EXAKIT_SLC_DNS java-17 derived")
+Set-Record ', "runtime": {"type": "personal", "engine": "docker"}'
+Check "Docker: the helper links the images the launcher state lists" "personal-slc-dns.py --engine docker --prepare $stateFile" (Prepare $both)
+Check "...and says so" "INFO Gave the java-17 language container image the deployment's DNS" ($script:shown -join "|")
+Check "...logged" "INFO language container DNS (before the start): java-17:derived" ($script:logged -join "|")
+Check "-Pull: the helper pulls a missing image first" "personal-slc-dns.py --engine docker --prepare $stateFile --pull" (Prepare $both -Pull)
+Set-Record ', "runtime": {"type": "personal", "engine": "podman"}'
+Check "Podman: nothing (its mount is writable, repaired after the start)" "none" (Prepare $both)
+Set-Record ', "runtime": {"type": "personal", "engine": "docker"}'
+Check "no docker on PATH: nothing" "none" (Prepare $podmanOnly)
+Remove-Item -Force -LiteralPath $stateFile
+Check "no launcher state file: nothing" "none" (Prepare $both)
+
+Write-Host ""
+Write-Host "== wiring =="
+$runtimeText = Get-Content -Raw -LiteralPath (Join-Path $repo "setup/lib/runtime-personal.ps1")
+$startText = $runtimeText.Substring($runtimeText.IndexOf("function Start-Personal"))
+$startText = $startText.Substring(0, $startText.IndexOf("function Get-PersonalSlcInstalledFlavors"))
+$initAt = $startText.IndexOf("try { Initialize-PersonalSlcDns }")
+$launchAt = $startText.IndexOf('if ((Invoke-ExakitLogged (Get-PersonalCli) @startArgs) -ne 0) {')
+Check "Start-Personal links the images before the launcher's start" "True" (($initAt -gt 0) -and ($initAt -lt $launchAt))
+Check "...and restarts once when the repair after it needs a start" "True" ($startText.Contains('if ($script:PersonalSlcDnsNeedsStart) {') -and $startText.Contains('(Invoke-ExakitLogged (Get-PersonalCli) stop) -ne 0 -or (Invoke-ExakitLogged (Get-PersonalCli) @startArgs) -ne 0'))
+$vsText = Get-Content -Raw -LiteralPath (Join-Path $repo "setup/lib/virtual-schemas.ps1")
+$javaText = $vsText.Substring($vsText.IndexOf("function Install-ExakitVsJava"))
+$javaText = $javaText.Substring(0, $javaText.IndexOf("function Restart-ExakitVsDatabase"))
+Check "the Java install pulls and links before its restart" "True" ($javaText.IndexOf("Initialize-PersonalSlcDns -Pull") -gt 0 -and $javaText.IndexOf("Initialize-PersonalSlcDns -Pull") -lt $javaText.IndexOf("Restart-ExakitVsDatabase"))
+Check "exit 20 on Docker asks before it restarts" "True" ($vsText.Contains('if (-not (Confirm-ExakitVs "Restart the database now?")) {'))
 
 Remove-Item -Recurse -Force -Path $work -ErrorAction SilentlyContinue
 Write-Host ""

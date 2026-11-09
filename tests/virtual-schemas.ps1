@@ -260,22 +260,35 @@ function Install-ExakitVsJava { [void]$script:calls.Add("JAVA"); return $false }
 $script:codes.AddRange(@(20, 0)); $script:calls.Clear()
 $code = Invoke-ExakitVsRun -Arguments @("connect")
 Check "exit 20: DNS repaired, retried once, exit 0" "0 connect|REPAIR|connect" ("$code " + ($script:calls -join "|"))
+# Docker: linked in the image, so the database needs a start to see it.
+function Repair-PersonalSlcDns { [void]$script:calls.Add("REPAIR"); $script:PersonalSlcDnsNeedsStart = $true; return $false }
+function Restart-ExakitVsDatabase { [void]$script:calls.Add("RESTART") }
+$script:ExakitVsAssumeYes = $true
+$script:codes.AddRange(@(20, 0)); $script:calls.Clear()
+$code = Invoke-ExakitVsRun -Arguments @("connect")
+Check "exit 20 on Docker, --yes: one restart, then the retry" "0 connect|REPAIR|RESTART|connect" ("$code " + ($script:calls -join "|"))
+$script:ExakitVsAssumeYes = $false
+$previousJson = $script:ExakitVsJson; $script:ExakitVsJson = $true
+$script:codes.AddRange(@(20)); $script:calls.Clear()
+$code = Invoke-ExakitVsRun -Arguments @("connect") 6> $null
+Check "...without --yes (--json never asks): no restart, no retry" "20 --json|REPAIR" ("$code " + ($script:calls -join "|"))
+$script:ExakitVsJson = $previousJson
+function Repair-PersonalSlcDns { [void]$script:calls.Add("REPAIR"); $script:PersonalSlcDnsNeedsStart = $false; return $true }
 $script:codes.AddRange(@(21)); $script:calls.Clear()
 $code = Invoke-ExakitVsRun -Arguments @("connect")
 Check "exit 21: Java offered; declined, not retried" "21 connect|JAVA" ("$code " + ($script:calls -join "|"))
 $script:codes.AddRange(@(1)); $script:calls.Clear()
 $code = Invoke-ExakitVsRun -Arguments @("connect")
 Check "any other failure: no retry" "1 connect" ("$code " + ($script:calls -join "|"))
-# A repair that fails: the bridge's own line must not promise the restart
-# the engine's fix rules out on Docker (lifecycle.DNS_ON_DOCKER).
-function Repair-PersonalSlcDns { [void]$script:calls.Add("REPAIR"); return $false }
+# A repair that fails: the bridge names the stop and start, whose start links
+# the image on Docker and repairs the container elsewhere.
+function Repair-PersonalSlcDns { [void]$script:calls.Add("REPAIR"); $script:PersonalSlcDnsNeedsStart = $false; return $false }
 function Get-PersonalSlcDnsEngine { return $script:stubEngine }
-$script:stubEngine = "docker"
-$said = (@(Repair-ExakitVsForRetry -Code 20 6>&1) | ForEach-Object { "$_" }) -join "|"
-Check "a failed repair on Docker: no restart promised" "True False" ("{0} {1}" -f $said.Contains("DNS could not be repaired on this Docker deployment; the failure's fix says why."), $said.Contains("Restart the database"))
-$script:stubEngine = "podman"
-$said = (@(Repair-ExakitVsForRetry -Code 20 6>&1) | ForEach-Object { "$_" }) -join "|"
-Check "...on Podman: the restart, as before" $true ($said.Contains("Restart the database (exakit stop, exakit start) and try again."))
+foreach ($stubEngine in @("docker", "podman")) {
+    $script:stubEngine = $stubEngine
+    $said = (@(Repair-ExakitVsForRetry -Code 20 6>&1) | ForEach-Object { "$_" }) -join "|"
+    Check "a failed repair ($stubEngine): the stop and start that fix it" $true ($said.Contains("Restart the database (exakit stop, exakit start) and try again."))
+}
 function Repair-PersonalSlcDns { [void]$script:calls.Add("REPAIR"); return $true }
 
 Write-Host ""

@@ -2936,6 +2936,10 @@ personal_start() {
             info "Clearing a leftover Exasol runner still holding port $(personal_db_port)"
             personal_reap_orphan_daemon >/dev/null 2>&1 || true
         fi
+        # Docker mounts a language container read-only: its DNS links go into
+        # the image, before the start that mounts it - see
+        # personal_slc_dns_prepare.
+        personal_slc_dns_prepare
         if ! run_logged "$(personal_cli)" start $(personal_auto_approve_flag start); then
             # Say what to do, not just that it failed. A start that fails on a
             # wedged deployment fails identically every time it is retried, and
@@ -2957,7 +2961,19 @@ personal_start() {
         ok "Database started"
         # Every start rebuilds the language containers from their images, and
         # with them their empty DNS files - see personal_slc_dns_repair.
-        personal_slc_dns_repair || true
+        _pst_dns=0
+        personal_slc_dns_repair || _pst_dns=$?
+        if [ "$_pst_dns" -eq 2 ]; then
+            # Docker, and an image the launcher pulled during this start: it
+            # is linked now, and only a start mounts it. Once - the next one
+            # finds it linked before it starts.
+            info "Restarting the database once, so Java in it can resolve host names"
+            if ! run_logged "$(personal_cli)" stop || \
+               ! run_logged "$(personal_cli)" start $(personal_auto_approve_flag start); then
+                die "The database did not come back from its restart. Start it with: exakit start"
+            fi
+            personal_slc_dns_repair || true
+        fi
     else
         info "This launcher version has no explicit start command."
         info "Check the database with: $(personal_cli) info"
@@ -3099,11 +3115,56 @@ personal_slc_dns_engine() {
     case "$_psde" in docker) printf 'docker' ;; *) printf 'podman' ;; esac
 }
 
+# personal_slc_dns_prepare [--pull] — before a start on Docker: link every
+# official language container IMAGE the launcher state lists (installedSlcs)
+# through setup/lib/personal-slc-dns.py --prepare. Docker mounts an image
+# read-only, so the links personal_slc_dns_repair writes into the running
+# container on Podman have to be in the image the start mounts; the image is
+# committed back under the tag the launcher mounts, once, and labelled, so a
+# later start asks one `docker image inspect` and nothing more. --pull first
+# pulls an image that is not here yet (the Java install, whose start would
+# otherwise pull it and mount it unlinked). Podman and macOS (the launcher
+# VM's Podman): nothing - their mount is writable and repaired after the
+# start. Best effort: logged, and never fails the start.
+# ⇄ twin: Initialize-PersonalSlcDns.
+personal_slc_dns_prepare() {
+    [ "$(detect_os 2>/dev/null)" = "macos" ] && return 0
+    [ "$(personal_slc_dns_engine)" = "docker" ] || return 0
+    command -v docker >/dev/null 2>&1 || return 0
+    _psdp_state="$EXAKIT_PERSONAL_DEPLOY_DIR/.exasolLauncherState.json"
+    [ -f "$_psdp_state" ] || return 0
+    # The interpreter as an executable (exakit_python_any_argv): the runner
+    # refuses a shell function. Bounded, except a --pull: a download of the
+    # image can take minutes, and the helper bounds each engine call itself
+    # (the pull at 30 minutes).
+    if ! exakit_python_any_argv; then
+        _exakit_log_file "WARN  language container DNS before the start did not run: no Python to run it with"
+        return 0
+    fi
+    if [ "${1:-}" = "--pull" ]; then
+        _psdp_out="$("${_EXAKIT_PY_ANY[@]}" "$EXAKIT_PERSONAL_LIB_DIR/personal-slc-dns.py" --engine docker \
+            --prepare "$_psdp_state" --pull 2>&1)"
+    else
+        _psdp_out="$(exakit_run_bounded 180 "${_EXAKIT_PY_ANY[@]}" "$EXAKIT_PERSONAL_LIB_DIR/personal-slc-dns.py" \
+            --engine docker --prepare "$_psdp_state" 2>&1)"
+    fi
+    for _psdp_line in $(printf '%s\n' "$_psdp_out" | sed -n 's/^EXAKIT_SLC_DNS \([^ ]*\) \([a-z]*\)$/\1:\2/p'); do
+        _exakit_log_file "INFO  language container DNS (before the start): $_psdp_line"
+        case "$_psdp_line" in
+            *:derived) info "Gave the ${_psdp_line%%:*} language container image the deployment's DNS" ;;
+        esac
+    done
+    return 0
+}
+
 # personal_slc_dns_repair — run personal_slc_dns_script for every official
 # language container the launcher reports installed. Best effort and bounded:
 # no container, a launcher without `slc` or a VM shell that does not answer is
 # logged and returns 1, and never fails the caller - the virtual schema check
-# reports a database without DNS on its own. ⇄ twin: Repair-PersonalSlcDns.
+# reports a database without DNS on its own. Returns 2 on Docker when an image
+# was linked (or found linked) under a database started before it was: the
+# fix is in the image, and the database sees it from its next start - the
+# caller restarts it, or says so. ⇄ twin: Repair-PersonalSlcDns.
 personal_slc_dns_repair() {
     _psdr_flavors="$(personal_slc_installed_flavors)"
     [ -n "$_psdr_flavors" ] || return 0
@@ -3152,10 +3213,13 @@ personal_slc_dns_repair() {
     fi
     [ -z "$_psdr_script" ] || rm -f "$_psdr_script"
     _psdr_rc=0
+    _psdr_derived=0
     for _psdr_line in $(printf '%s\n' "$_psdr_out" | sed -n 's/^EXAKIT_SLC_DNS \([^ ]*\) \([a-z]*\)$/\1:\2/p'); do
         _exakit_log_file "INFO  language container DNS: $_psdr_line"
         case "$_psdr_line" in
             *:repaired) info "Gave the ${_psdr_line%%:*} language container the deployment's DNS" ;;
+            *:derived) _psdr_derived=1
+                       info "Gave the ${_psdr_line%%:*} language container image the deployment's DNS; the database sees it from its next start" ;;
             *:failed|*:nocontainer|*:nopodman|*:nodocker) _psdr_rc=1 ;;
         esac
     done
@@ -3168,6 +3232,7 @@ personal_slc_dns_repair() {
         _exakit_log_file "WARN  language container DNS repair did not run (exit $_psdr_ran): ${_psdr_why:-no output}"
         _psdr_rc=1
     fi
+    [ "$_psdr_rc" = 0 ] && [ "$_psdr_derived" = 1 ] && _psdr_rc=2
     return "$_psdr_rc"
 }
 

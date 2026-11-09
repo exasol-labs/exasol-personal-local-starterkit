@@ -530,25 +530,29 @@ import json, sys; d = json.load(open(sys.argv[1])); d["dns"] = False; json.dump(
 PY
 run_secret "$SECRET" connect mysql --name crm --set host=pg.example.com --set database=crm --set user=reader --secret-stdin
 check "Java without DNS: exit 20, for the shell to repair and retry" "20" "$RC"
-# The fix it names follows the deployment's engine. Podman (and macOS, and a
-# record that names none): a restart repairs DNS. Docker mounts the language
-# container read-only, so a restart cannot - the fix must not promise one.
+# The fix it names is the same on every engine: a stop and a start. Podman
+# (and macOS) repair the running container after the start; Docker mounts the
+# language container read-only, and its start links the image before it
+# mounts it (personal-slc-dns.py). `exakit start` alone does nothing to a
+# running database, so the fix names both.
 dnsfix() { printf '%s' "$SECRET" | eng --json connect mysql --name crm --set host=pg.example.com --set database=crm \
     --set user=reader --secret-stdin 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["kind"], "|", d["remedy"])'; }
-has "...the fix on Podman: a restart repairs DNS" "dns | Java in the database could not resolve the host name; restart the database with exakit start (it repairs DNS)" "$(dnsfix)"
+DNSFIX="dns | Java in the database could not resolve the host name; restart the database - exakit stop, then exakit start (the start gives Java the deployment's DNS)"
+has "...the fix on Podman: a stop and a start" "$DNSFIX" "$(dnsfix)"
 export EXAKIT_VS_OS=Linux
 printf '{"runtime": {"type": "personal", "engine": "docker"}}\n' > "$HOME_K/manifest.json"
 OUT="$(dnsfix)"
-has "...on a Docker deployment: not repairable there yet, and why" "dns | Java in the database could not resolve the host name, and the kit cannot repair that on a Docker deployment yet: Docker mounts the language container read-only, so a restart does not fix it. A Podman deployment (or macOS) works around it" "$OUT"
-lacks "...never the restart that cannot help" "it repairs DNS" "$OUT"
+has "...on a Docker deployment: the same (its start links the image)" "$DNSFIX" "$OUT"
+lacks "...never the start alone, which does nothing to a running database" "restart the database with exakit start" "$OUT"
 check "...the same words for a failure the engine names no fix for (cli.failure)" "True True" "$(python3 - "$ROOT" <<'PYC'
 import sys; sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
 import cli, lifecycle, plan
 plan.ENGINE = "docker"
-print(cli.failure("x", 20)["remedy"] == lifecycle.DNS_ON_DOCKER, cli.failure("x", 20, source="crm")["remedy"] == lifecycle.DNS_ON_DOCKER)
+said = "exakit stop, then exakit start (the start gives Java the deployment's DNS)"
+print(said in cli.failure("x", 20)["remedy"], said in cli.failure("x", 20, source="crm")["remedy"])
 PYC
 )"
-has "...on macOS the launcher VM's Podman, whatever the record says" "(it repairs DNS)" "$(EXAKIT_VS_OS=Darwin dnsfix)"
+has "...on macOS the same" "$DNSFIX" "$(EXAKIT_VS_OS=Darwin dnsfix)"
 rm -f "$HOME_K/manifest.json"
 unset EXAKIT_VS_OS
 python3 - "$STATE" <<'PYDNS'
@@ -796,11 +800,16 @@ bridge() {
           case "$1" in list|issues) cat "$B/rows" 2>/dev/null ;; check) echo 'RESULT {"checks": []}' ;; remove|disconnect) echo 'RESULT {"name": "sales", "drop": ["virtual schema VS_SALES", "CONNECTION EXAKIT_SRC_SALES"], "keep": [], "delete_files": ["a.jar"], "keep_files": ["b.jar"], "note": "nothing is revoked at the source"}' ;; show) echo "FAIL no source named $2 (see: exakit source list)" ;; resolve) echo 'RESULT {"connector": "postgresql"}' ;; plan) echo 'RESULT {"name": "x", "connector": "postgresql", "tier": "GA", "status": "candidate", "downloads": [], "steps": [], "exposure": "e", "warnings": []}' ;; esac
           return "${_code:-0}"
       }
-      personal_slc_dns_repair() { echo "REPAIRED" >> "$B/argv"; return 0; }
+      # B/dnsrc: what the repair answers (2: Docker, linked in the image).
+      personal_slc_dns_repair() { echo "REPAIRED" >> "$B/argv"; return "$(cat "$B/dnsrc" 2>/dev/null || echo 0)"; }
       _exakit_vs_install_java() { echo "JAVA-ASKED" >> "$B/argv"; return 1; }
+      EXAKIT_BIN_DIR="$B/bin"
       "$@" ) 2>&1
 }
-reset_bridge() { rm -f "$B/argv" "$B/stdin" "$B/codes" "$B/env"; printf '%s\n' "$@" > "$B/codes"; }
+# The installed kit's exakit, recording what it was asked.
+mkdir -p "$B/bin"
+printf '#!/bin/sh\necho "EXAKIT $1" >> "%s/argv"\n' "$B" > "$B/bin/exakit"; chmod +x "$B/bin/exakit"
+reset_bridge() { rm -f "$B/argv" "$B/stdin" "$B/codes" "$B/env" "$B/dnsrc"; printf '%s\n' "$@" > "$B/codes"; }
 # The same bridge for a fresh bash started with a given environment (review 5).
 { printf 'ROOT=%q; B=%q\n' "$ROOT" "$B"; declare -f bridge; } > "$WORK/bridge-fn.sh"
 
@@ -822,22 +831,31 @@ reset_bridge 0 0 20 0
 OUT="$(bridge cmd_connect pg --name sales --set host=h --password-file "$B/pw" </dev/null)"; RC=$?
 check "exit 20 from the engine: DNS repaired, connect retried once, exit 0" \
     "0 connect|REPAIRED|connect|" "$RC $(grep -E '^(connect|REPAIRED)' "$B/argv" | cut -d' ' -f1 | tr '\n' '|')"
+reset_bridge 0 0 20 0; echo 2 > "$B/dnsrc"
+OUT="$(bridge cmd_connect pg --name sales --set host=h --password-file "$B/pw" --yes </dev/null)"; RC=$?
+check "exit 20 on Docker (the image linked): --yes restarts the database once, then retries" \
+    "0 connect|REPAIRED|EXAKIT stop|EXAKIT start|connect|" "$RC $(grep -E '^(connect|REPAIRED|EXAKIT)' "$B/argv" | cut -d' ' -f1-2 | sed 's/^connect .*/connect/' | tr '\n' '|')"
+reset_bridge 0 0 20 0; echo 2 > "$B/dnsrc"
+OUT="$(bridge cmd_connect pg --name sales --set host=h --password-file "$B/pw" </dev/null)"; RC=$?
+check "...without --yes and no terminal: no restart, nothing retried, exit 20" "20 0 1" "$RC $(grep -c '^EXAKIT' "$B/argv") $(grep -c '^connect' "$B/argv")"
+has "...and it names the restart that fixes it" "Run: exakit stop, then exakit start - and try again." "$OUT"
+reset_bridge 0 0 20 0; echo 1 > "$B/dnsrc"
+OUT="$(bridge cmd_connect pg --name sales --set host=h --password-file "$B/pw" --yes </dev/null)"; RC=$?
+check "a repair that fails: no restart, nothing retried" "20 0" "$RC $(grep -c '^EXAKIT' "$B/argv")"
 reset_bridge 0 0 21
 OUT="$(bridge cmd_connect pg --name sales --set host=h --password-file "$B/pw" </dev/null)"; RC=$?
 check "exit 21: the Java install is offered; declined, nothing retried" "21 1" "$RC $(grep -c '^connect' "$B/argv")"
-# A repair that fails: the bridge's own line must not promise the restart
-# the engine's fix rules out on Docker (lifecycle.DNS_ON_DOCKER).
+# A repair that fails: the bridge names the stop and start, whose start links
+# the image on Docker and repairs the container elsewhere.
 dnsline() { ( EXAKIT_HOME="$HOME_K"; STUB_OS="$1"; STUB_ENGINE="$2"
     . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
     personal_slc_dns_repair() { return 1; }
     detect_os() { printf '%s' "$STUB_OS"; }
     personal_slc_dns_engine() { printf '%s' "$STUB_ENGINE"; }
     _exakit_vs_repair 20; echo "rc=$?" ) 2>&1; }
-OUT="$(dnsline linux docker)"
-has "a failed repair on Docker: said, exit 1" "DNS could not be repaired on this Docker deployment; the failure's fix says why." "$OUT"
-lacks "...no restart promised" "Restart the database" "$OUT"
-has "...on Podman: the restart, as before" "Restart the database (exakit stop, exakit start) and try again." "$(dnsline linux podman)"
-has "...on macOS: the launcher VM's Podman, whatever the record says" "Restart the database" "$(dnsline macos docker)"
+for _e in "linux docker" "linux podman" "macos docker"; do
+    has "a failed repair ($_e): the stop and start that fix it" "Restart the database (exakit stop, exakit start) and try again." "$(dnsline $_e)"
+done
 has "...the offer was made" "JAVA-ASKED" "$(cat "$B/argv")"
 reset_bridge 0
 OUT="$(bridge cmd_source remove sales --dry-run </dev/null)"

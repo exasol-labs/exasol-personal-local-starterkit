@@ -10,6 +10,7 @@
 # reports but cannot fix from inside the database:
 #
 #   exit 20  Java in the database has no DNS resolver -> personal_slc_dns_repair, retry once
+#            (Docker: the fix is in the image - one restart, asked, then the retry)
 #   exit 21  the Java language container is missing   -> `exasol slc install java` (asked), retry once
 
 # exakit_vs_defs — the folder that holds catalog.json, profiles/, connectors/.
@@ -388,10 +389,21 @@ _exakit_vs_install_java() {
     fi
     run_logged "$(personal_cli)" slc install java --no-restart $(personal_auto_approve_flag slc) \
         || { error "The Java language container did not install. Details: exakit logs"; return 1; }
+    # Docker: the download the start would make, made now, and the image
+    # linked to the deployment's DNS before the start mounts it read-only -
+    # so this start is the only one (personal_slc_dns_prepare).
+    personal_slc_dns_prepare --pull
     EXAKIT_STOP_ADDONS=1 "$EXAKIT_BIN_DIR/exakit" stop >/dev/null 2>&1 || true
     "$EXAKIT_BIN_DIR/exakit" start || { error "The database did not come back after installing Java. Run: exakit start"; return 1; }
     # An installed kit's start repairs DNS; this kit copy may be newer than it.
-    personal_slc_dns_repair || true
+    # Exit 2 (Docker): linked in the image after an older kit's start mounted
+    # it - one more start mounts it.
+    _evj_dns=0
+    personal_slc_dns_repair || _evj_dns=$?
+    if [ "$_evj_dns" -eq 2 ]; then
+        EXAKIT_STOP_ADDONS=1 "$EXAKIT_BIN_DIR/exakit" stop >/dev/null 2>&1 || true
+        "$EXAKIT_BIN_DIR/exakit" start || { error "The database did not come back after installing Java. Run: exakit start"; return 1; }
+    fi
     ok "Java language container installed"
 }
 
@@ -442,15 +454,21 @@ EOF
 _exakit_vs_repair() {
     case "$1" in
         20) info "Giving the database's language containers the deployment's DNS, then trying again"
-            personal_slc_dns_repair && return 0
-            # A restart cannot repair it on Docker (lifecycle.DNS_ON_DOCKER):
-            # the failure's own fix says so, and this line does not contradict it.
-            if [ "$(detect_os 2>/dev/null)" != macos ] && [ "$(personal_slc_dns_engine 2>/dev/null)" = docker ]; then
-                error "DNS could not be repaired on this Docker deployment; the failure's fix says why."
-            else
-                error "DNS could not be repaired. Restart the database (exakit stop, exakit start) and try again."
-            fi
-            return 1 ;;
+            _evrp_dns=0
+            personal_slc_dns_repair || _evrp_dns=$?
+            case "$_evrp_dns" in
+                0) : ;;
+                # Docker: the fix is in the language container image, and the
+                # database mounts an image only when it starts.
+                2) info "The database sees it from its next start: one restart (add-on services restart with it)."
+                   if ! _exakit_vs_confirm "Restart the database now?"; then
+                       error "Java in the database resolves host names from its next start. Run: exakit stop, then exakit start - and try again."
+                       return 1
+                   fi
+                   EXAKIT_STOP_ADDONS=1 "$EXAKIT_BIN_DIR/exakit" stop >/dev/null 2>&1 || true
+                   "$EXAKIT_BIN_DIR/exakit" start || { error "The database did not come back. Run: exakit start"; return 1; } ;;
+                *) error "DNS could not be repaired. Restart the database (exakit stop, exakit start) and try again."; return 1 ;;
+            esac ;;
         21) _exakit_vs_install_java ;;
         23) _exakit_vs_install_rust ;;
         *)  return 1 ;;
