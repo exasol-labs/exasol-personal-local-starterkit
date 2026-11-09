@@ -100,6 +100,20 @@ typed by a password manager the moment the prompt appeared was echoed in clear
 first, restores the terminal's exact state afterwards and on Ctrl-C, and
 refuses to read where echo cannot be turned off.
 
+**Java in a Docker deployment can resolve host names.** From kit 0.2.4 a new
+Exasol Personal deployment runs on Docker wherever Docker Engine 29+ runs, but
+the language-container DNS repair only ever asked Podman, which cannot see a
+Docker container: Java kept its empty DNS files and every `exakit connect` to
+a source by host name failed ("DNS could not be repaired"). The repair now
+asks the engine the kit recorded for the deployment (Podman when the record
+names none) and finds the database by the launcher's own name,
+`exasol-db-<deployment id>`, so a 2.4 sidecar (`exasol-db-<id>-sidecar-...`)
+listed first is no longer taken for it. Same on Windows. The address a source
+on this computer is reached at follows the engine too: Podman's
+`host.containers.internal`, or on Docker `host.docker.internal` where the
+deployment provides it, else the bridge gateway. Tests:
+`tests/personal-slc-dns.sh`, `tests/personal-slc-dns-ps.ps1`.
+
 ## 0.3.0
 
 **The SQL preprocessor framework is a core component, and `exakit update`

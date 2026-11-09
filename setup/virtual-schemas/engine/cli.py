@@ -345,6 +345,8 @@ def main(argv=None):
                              indent=2))
             return 2
         raise
+    # Where "this computer" is depends on the deployment's engine (plan.py).
+    planner.use_engine(args.kit_home)
     out = sys.stderr if args.json else sys.stdout
     log = run_log(args, argv)
     started = time.time()

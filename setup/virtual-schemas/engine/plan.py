@@ -82,10 +82,57 @@ def resolve_arch(pin):
 # Exasol Personal (macOS): a UDF reaches the internet, the Mac as 192.168.64.1
 # (its resolver's address) and host.containers.internal - which there is the
 # launcher's Linux VM, not the Mac. On Linux Podman it is the host itself.
+#
+# ON DOCKER IT IS NOT PODMAN'S NAME. From Exasol Personal 2.4 a deployment on
+# Linux, WSL or Windows may run on Docker, where host.containers.internal does
+# not exist. The launcher starts the database container on its own bridge
+# network (exasol-db-<id>-services) with no --add-host, so host.docker.internal
+# resolves only where the Docker installation itself provides it (Docker
+# Desktop does; a plain Docker Engine on Linux does not), and without it the
+# address of this computer is that bridge's gateway. Not measured on a live
+# 2.4 deployment, so the advice names both rather than promising one.
 LOOPBACK = ("localhost", "127.0.0.1", "::1", "0.0.0.0", "localhost.localdomain")
-LOOPBACK_ADVICE = ("host=localhost would be the database itself, not this computer. For a source running on this "
-                   "computer use the address the database sees it at - on macOS 192.168.64.1, on Linux and WSL "
-                   "host.containers.internal - and make the source listen on that interface, not only on 127.0.0.1")
+THIS_COMPUTER = {
+    "podman": "on macOS 192.168.64.1, on Linux and WSL host.containers.internal",
+    "docker": "on Docker host.docker.internal where the deployment provides it, else the bridge gateway",
+}
+
+# The engine the kit recorded for the deployment (manifest runtime.engine,
+# kit 0.2.4+), read once per run by use_engine. Podman when the record names
+# none - macOS, and every deployment before kit 0.2.4 - as
+# personal_engine_recorded answers; a nano record (runtime.container) names
+# the OLD database's engine and is ignored.
+ENGINE = "podman"
+
+
+def recorded_engine(kit_home):
+    if not kit_home:
+        return "podman"
+    try:
+        with open(os.path.join(kit_home, "manifest.json"), encoding="utf-8-sig") as handle:
+            runtime = json.load(handle).get("runtime")
+    except (OSError, ValueError, AttributeError):
+        return "podman"
+    if not isinstance(runtime, dict) or runtime.get("container"):
+        return "podman"
+    engine = runtime.get("engine")
+    return engine if engine in ("docker", "podman") else "podman"
+
+
+def use_engine(kit_home):
+    global ENGINE
+    ENGINE = recorded_engine(kit_home)
+
+
+def this_computer():
+    """Where a source on this computer is, as the database sees it."""
+    return THIS_COMPUTER.get(ENGINE, THIS_COMPUTER["podman"])
+
+
+def loopback_advice():
+    return ("host=localhost would be the database itself, not this computer. For a source running on this "
+            "computer use the address the database sees it at - %s - and make the source listen on that "
+            "interface, not only on 127.0.0.1" % this_computer())
 
 
 def host_scope(host):
@@ -97,8 +144,8 @@ def host_scope(host):
     try:
         ip = ipaddress.ip_address(bare)
     except ValueError:
-        # A single-label name or a private suffix (host.containers.internal) is
-        # not on the internet; any other name is taken to be.
+        # A single-label name or a private suffix (host.containers.internal,
+        # host.docker.internal) is not on the internet; any other name is taken to be.
         return "private" if "." not in bare or bare.endswith(PRIVATE_SUFFIXES) else "public"
     if ip.is_loopback or ip.is_unspecified:
         return "loopback"
@@ -130,13 +177,13 @@ def check_url(name, raw, kind):
     scope = host_scope(host)
     if scope == "loopback":
         return None, ("%s points at %s, which inside the database is the database itself, not this computer. %s"
-                      % (name, host, LOOPBACK_ADVICE.split(". ", 1)[1]))
+                      % (name, host, loopback_advice().split(". ", 1)[1]))
     if scheme == "http" and kind == "https-url":
         return None, "%s must use https: the token would cross the network unencrypted" % name
     if scheme == "http" and scope == "public":
         return None, ("%s is plain http to %s, a public host: the credential and the rows would cross the internet "
-                      "unencrypted - use https. Plain http is accepted only for this computer (on macOS "
-                      "192.168.64.1, on Linux and WSL host.containers.internal) or a private network" % (name, host))
+                      "unencrypted - use https. Plain http is accepted only for this computer (%s) or a private "
+                      "network" % (name, host, this_computer()))
     netloc = "[%s]" % host if ":" in host else host
     return "%s://%s%s%s" % (scheme, netloc, ":" + port if port else "", path), None
 
@@ -286,7 +333,7 @@ def check_value(spec, raw):
     if kind == "mongodb-uri" and mongo_auth_source(raw):
         return None, mongo_auth_source(raw)
     if kind == "host" and raw.strip("[]").lower() in LOOPBACK:
-        return None, LOOPBACK_ADVICE
+        return None, loopback_advice()
     if kind == "host":
         # Stored bare; jdbc_url adds the brackets an IPv6 literal needs in
         # a URL, and the route probe resolves the bare form.

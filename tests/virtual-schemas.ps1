@@ -92,6 +92,19 @@ Check "...each row adds where it lives and its TLS level (host, tls)" "pg.exampl
 Check "...and keeps every key it had" "connector host last_check name needs_refresh schema status tls" ((@(@($result.sources)[0].PSObject.Properties | ForEach-Object { $_.Name }) | Sort-Object) -join " ")
 $r = Invoke-ExakitVsEngine -Arguments @("paste", "pg", "--base64") -Secret "jdbc:postgresql://h/db?user=r&password=Abc&Xyz9"
 Check "paste through the bridge: a password's unencoded & leaks no name" $false (($r.Lines -join "`n").Contains("Xyz9"))
+# Where this computer is follows the deployment's engine: the engine reads the
+# kit's record (runtime.engine) under --kit-home, which this bridge passes.
+$engineRecord = Join-Path $home2 "manifest.json"
+$localhostPlan = @("plan", "postgresql", "--name", "lo", "--set", "host=localhost", "--set", "database=x", "--set", "user=u")
+Set-Content -LiteralPath $engineRecord -Value '{"runtime": {"type": "personal", "engine": "docker"}}' -Encoding ASCII
+$r = Invoke-ExakitVsEngine -Arguments $localhostPlan
+Check "a Docker deployment: localhost is refused, exit 2" 2 $r.Code
+Check "...with Docker's address for this computer" $true (($r.Lines -join "`n").Contains("on Docker host.docker.internal where the deployment provides it, else the bridge gateway"))
+Check "...not Podman's" $false (($r.Lines -join "`n").Contains("host.containers.internal"))
+Set-Content -LiteralPath $engineRecord -Value '{"runtime": {"type": "personal", "engine": "podman"}}' -Encoding ASCII
+$r = Invoke-ExakitVsEngine -Arguments $localhostPlan
+Check "a Podman deployment: Podman's name" $true (($r.Lines -join "`n").Contains("on Linux and WSL host.containers.internal"))
+Remove-Item -LiteralPath $engineRecord -Force
 
 Write-Host ""
 Write-Host "== the query hint after connect: a quoted name, escaped for exakit.cmd =="

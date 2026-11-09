@@ -81,8 +81,10 @@ is at the source: show it and run it only after a yes.
   - the flag replaces the whole list, so repeat the existing entries.
 - **Self-hosted**: `listen_addresses` must cover the interface and
   `pg_hba.conf` must accept the address the connection comes from; the server
-  log names a refused one. On this computer use host `192.168.64.1` (macOS) or
-  `host.containers.internal` (Linux, WSL).
+  log names a refused one. On this computer use host `192.168.64.1` (macOS); on
+  Linux and WSL the address the database sees this computer at (Podman:
+  `host.containers.internal`; Docker: `host.docker.internal` where the deployment
+  provides it, else the bridge gateway).
 
 ## 6. Connect
 

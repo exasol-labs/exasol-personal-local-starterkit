@@ -77,7 +77,9 @@ the source: show it, run it only after a yes.
 - **Google Cloud SQL**: `gcloud sql instances patch <instance> --authorized-networks=<existing>,<public-ip>/32`
   - the flag replaces the whole list, so repeat the existing entries.
 - **Self-hosted**: `bind-address` must cover the interface. On this computer
-  use host `192.168.64.1` (macOS) or `host.containers.internal` (Linux, WSL).
+  use host `192.168.64.1` (macOS); on Linux and WSL the address the database sees this computer at (Podman:
+  `host.containers.internal`; Docker: `host.docker.internal` where the deployment
+  provides it, else the bridge gateway).
 
 ## 6. Connect
 

@@ -89,7 +89,9 @@ the source: show it, run it only after a yes.
   `aws ec2 authorize-security-group-ingress --group-id <sg> --protocol tcp --port 2484 --cidr <public-ip>/32`
 - **Self-hosted**: the listener must accept TCPS on its port (or plain TCP for
   `tls=disable`) and the firewall must pass it. On this computer use host
-  `192.168.64.1` (macOS) or `host.containers.internal` (Linux, WSL).
+  `192.168.64.1` (macOS); on Linux and WSL the address the database sees this computer at (Podman:
+  `host.containers.internal`; Docker: `host.docker.internal` where the deployment
+  provides it, else the bridge gateway).
 
 ## 6. Connect
 
