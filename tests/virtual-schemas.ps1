@@ -369,6 +369,12 @@ Check "56 columns: no panel row wider than the panel" 0 $wide.Count
 Check "...the value kept" $true $script:formOut.Contains((Row "Host name or address" "pg.example.com"))
 Check "...its mark dropped" $false $script:formOut.Contains("(from the string)")
 
+# A line exactly as wide as the console is one row: the console holds the wrap
+# until the next character (PowerShell reads no line through readline).
+$script:EvtCols = 56
+Check "a line exactly as wide as the console is one row" 1 (Get-ExakitVsTuiRows 56)
+Check "...one character wider is two" 2 (Get-ExakitVsTuiRows 57)
+
 # Which field a plan's refusal names: input names first, as whole words in any
 # case; labels only when no name is named; several named is -2, none -1.
 $named = @{ Fields = @(
