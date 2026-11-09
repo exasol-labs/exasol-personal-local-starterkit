@@ -18,6 +18,8 @@ _require_install() { :; }
 exakit_init_logging() { EXAKIT_LOG_FILE="$TUI_LOG"; }
 personal_slc_dns_repair() { return 0; }
 command -v reject >/dev/null 2>&1 || reject() { printf '%s\n' "$*" >&2; exit 2; }
+# The kit's pyexasol, which the credential reader runs on: here, python3.
+pyexasol_venv_python() { command -v python3; }
 exakit_vs_engine() {
     EXAKIT_VS_FAKE_DB="$ROOT/tests/lib/fake-exasol-vs.py" FAKE_VS_STATE="$TUI_STATE" FAKE_VS_EXA="$TUI_EXA" \
         EXAKIT_VS_SETTLE_SECONDS=0 EXAKIT_VS_VISIBLE_TIMEOUT=5 \

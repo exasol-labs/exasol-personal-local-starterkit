@@ -3802,10 +3802,11 @@ function Invoke-CmdConnect {
         elseif ($arg -in @("--dry-run", "-n")) { $dry = $true }
         elseif ($arg -in @("--yes", "-y")) { $script:ExakitVsAssumeYes = $true }
         elseif ($arg -in @("--json", "-j")) { $json = $true }
-        elseif ($arg -like "--password*" -or $arg -like "--secret*" -or $arg -like "--token*") {
-            Deny-ExakitVsInput "A credential is never taken as an argument (other users can read the process list). Use the hidden prompt, --password-file, or --password-stdin." "a credential was given as an argument, where other users can read it in the process list" "pipe it in with --password-stdin or give it with --password-file <file>"
-        }
-        elseif ($arg -like "-*") { Deny-ExakitVsInput "Unknown option '$arg' for connect (exakit help connect)." "unknown option '$arg' for connect" "leave it out; the options are listed by: exakit help connect" }
+        # After the exact --password-file and --password-stdin: anything else
+        # like a credential option is one given as an argument, and only an
+        # option's name is ever repeated, never what follows an =.
+        elseif ($arg -like "--password*" -or $arg -like "--passwd*" -or $arg -like "--secret*" -or $arg -like "--token*") { Deny-ExakitVsCredentialArgument }
+        elseif ($arg -like "-*") { $opt = ($arg -split "=", 2)[0]; Deny-ExakitVsInput "Unknown option '$opt' for connect (exakit help connect)." "unknown option '$opt' for connect" "leave it out; the options are listed by: exakit help connect" }
         elseif ($source) { Deny-ExakitVsInput "connect takes one source; got '$source' and '$arg'." "connect takes one source; got '$source' and '$arg'" "connect one source per command" }
         else { $source = $arg }
     }
@@ -3952,10 +3953,11 @@ function Invoke-CmdSource {
         elseif ($arg -eq "--status") { $i++; $status = "" + $rest[$i] }
         elseif ($arg -eq "--password-file") { $i++; $pwFile = "" + $rest[$i] }
         elseif ($arg -eq "--password-stdin") { $pwStdin = $true }
+        elseif ($arg -like "--password*" -or $arg -like "--passwd*" -or $arg -like "--secret*" -or $arg -like "--token*") { Deny-ExakitVsCredentialArgument }
         elseif ($arg -eq "--ddl") { $ddl = $true }
         elseif ($arg -eq "--schema") { $i++; $into = "" + $rest[$i] }
         elseif ($arg -like "--schema=*") { $into = $arg.Substring(9) }
-        elseif ($arg -like "-*") { Deny-ExakitVsInput "Unknown option '$arg' for source $action (exakit help source)." "unknown option '$arg' for source $action" "leave it out; the options are listed by: exakit help source" }
+        elseif ($arg -like "-*") { $opt = ($arg -split "=", 2)[0]; Deny-ExakitVsInput "Unknown option '$opt' for source $action (exakit help source)." "unknown option '$opt' for source $action" "leave it out; the options are listed by: exakit help source" }
         elseif (-not $name) { $name = $arg }
         elseif ($action -eq "describe" -and -not $table) { $table = $arg }
         else { Deny-ExakitVsInput "source $action takes one name." "source $action takes one name; got '$name' and '$arg'" "name one source per command" }

@@ -39,10 +39,14 @@ function Test-ExakitVsAvailable {
 # with $OutputEncoding set to UTF-8 - and plain ASCII survives every code
 # page. Returns @{ Code; Lines }. Every engine run (catalog, resolve, inputs,
 # field, paste, plan, connect, the source commands, the terminal form) comes
-# through here, and Python runs isolated (-I): PYTHONPATH, PYTHONHOME and the
-# user's site-packages cannot put code of their own into the process that
-# holds the credential. cli.py puts its own folder on sys.path. Twin of
-# exakit_vs_engine.
+# through here. Python runs isolated (-I), which ignores every PYTHON*
+# variable (PYTHONPATH, PYTHONHOME, PYTHONSTARTUP, ...), the user's
+# site-packages and the script's own folder. It does NOT stop a macOS
+# framework build taking its program path from PYTHONEXECUTABLE (or
+# __PYVENV_LAUNCHER__), which decides sys.prefix - another venv's
+# site-packages and its .pth files - so both are taken out of the child's
+# environment for the run. cli.py puts its own folder on sys.path. Twin of
+# exakit_vs_engine and _exakit_vs_python.
 function Invoke-ExakitVsEngine {
     param([string[]]$Arguments = @(), [string]$Secret = "")
     # Asked for JSON, the bridge's own failures come in the engine's shape too.
@@ -81,8 +85,11 @@ function Invoke-ExakitVsEngine {
     }
     $previous = $ErrorActionPreference
     $previousEncoding = $OutputEncoding
+    $previousExecutable = $env:PYTHONEXECUTABLE
+    $previousLauncher = $env:__PYVENV_LAUNCHER__
     try {
         $ErrorActionPreference = "Continue"
+        Remove-Item Env:\PYTHONEXECUTABLE, Env:\__PYVENV_LAUNCHER__ -ErrorAction SilentlyContinue
         if ($Secret) {
             $OutputEncoding = New-Object System.Text.UTF8Encoding($false)
             $encoded = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($Secret))
@@ -95,6 +102,8 @@ function Invoke-ExakitVsEngine {
     } finally {
         $ErrorActionPreference = $previous
         $OutputEncoding = $previousEncoding
+        if ($null -ne $previousExecutable) { $env:PYTHONEXECUTABLE = $previousExecutable }
+        if ($null -ne $previousLauncher) { $env:__PYVENV_LAUNCHER__ = $previousLauncher }
     }
     foreach ($line in @(Get-Content -LiteralPath $errFile -ErrorAction SilentlyContinue)) {
         if ("$line".Trim()) { Write-ExakitLog "VS" "$line" }
@@ -208,6 +217,14 @@ function Deny-ExakitVsInput {
     Deny-ExakitInput $Message
 }
 
+# Deny-ExakitVsCredentialArgument - a credential given as an option on the
+# command line (--password=..., --passwd ..., --secret..., --token...):
+# refused without repeating any of it, since every local user can read a
+# process's arguments. Twin of _exakit_vs_credential_argument.
+function Deny-ExakitVsCredentialArgument {
+    Deny-ExakitVsInput "A credential is never taken as an argument (other users can read the process list). Use the hidden prompt, --password-file, or --password-stdin." "a credential was given as an argument, where other users can read it in the process list" "pipe it in with --password-stdin or give it with --password-file <file>"
+}
+
 # Invoke-ExakitVsAside - a step of the bridge's own (a DNS repair, a language
 # container install) whose lines are for a person: on the console as always,
 # with --json on stderr, where no parser reads them. Returns the step's answer.
@@ -240,27 +257,40 @@ function Show-ExakitVsLines {
 
 # ConvertFrom-ExakitVsSecretBytes - a credential's bytes as text: UTF-16
 # little or big endian by its byte-order mark, else UTF-8 with or without
-# one; one trailing line ending (CRLF or LF) dropped, as the shell's reader
-# does. $null when the bytes are neither: a credential read in the wrong code
-# page is another credential, so it is refused, never guessed. The engine
-# reads stdin by the same rules (engine/cli.py decode_secret). Get-Content
-# without an encoding read a BOM-less UTF-8 file in the ANSI code page on
-# Windows PowerShell 5.1, and a non-ASCII password became another one.
+# one, and no NUL anywhere; one trailing line ending (CRLF or LF) dropped, as
+# the shell's reader does (the engine drops any others). $null when the bytes
+# are not such text: a credential read in the wrong code page is another
+# credential, so it is refused, never guessed. The engine and the shell read
+# by the same rules (engine/cli.py decode_secret, _exakit_vs_secret_text);
+# NUL is refused on all three because a shell variable drops it without a
+# word. Get-Content without an encoding read a BOM-less UTF-8 file in the
+# ANSI code page on Windows PowerShell 5.1, and a non-ASCII password became
+# another one.
 function ConvertFrom-ExakitVsSecretBytes {
     param([byte[]]$Bytes = @())
     $n = $Bytes.Length
     $skip = 0
-    $encoding = New-Object System.Text.UTF8Encoding($false, $true)
+    # Decoded without throwing (a caught decode error keeps a byte of the
+    # credential in $Error: "Unable to translate bytes [E4]"), then encoded
+    # back: an invalid byte became U+FFFD, which does not encode to what was read.
+    $encoding = New-Object System.Text.UTF8Encoding($false, $false)
     if ($n -ge 2 -and $Bytes[0] -eq 0xFF -and $Bytes[1] -eq 0xFE) {
-        $encoding = New-Object System.Text.UnicodeEncoding($false, $false, $true); $skip = 2
+        $encoding = New-Object System.Text.UnicodeEncoding($false, $false, $false); $skip = 2
     } elseif ($n -ge 2 -and $Bytes[0] -eq 0xFE -and $Bytes[1] -eq 0xFF) {
-        $encoding = New-Object System.Text.UnicodeEncoding($true, $false, $true); $skip = 2
+        $encoding = New-Object System.Text.UnicodeEncoding($true, $false, $false); $skip = 2
     } elseif ($n -ge 3 -and $Bytes[0] -eq 0xEF -and $Bytes[1] -eq 0xBB -and $Bytes[2] -eq 0xBF) {
         $skip = 3
     }
-    try { $text = $encoding.GetString($Bytes, $skip, $n - $skip) } catch { return $null }
-    if ($text.EndsWith("`r`n")) { $text = $text.Substring(0, $text.Length - 2) }
-    elseif ($text.EndsWith("`n")) { $text = $text.Substring(0, $text.Length - 1) }
+    $text = $encoding.GetString($Bytes, $skip, $n - $skip)
+    $back = $encoding.GetBytes($text)
+    $same = ($back.Length -eq ($n - $skip))
+    for ($i = 0; $same -and $i -lt $back.Length; $i++) { if ($back[$i] -ne $Bytes[$skip + $i]) { $same = $false } }
+    [Array]::Clear($back, 0, $back.Length)
+    if (-not $same -or $text.IndexOf([char]0) -ge 0) { return $null }
+    # Ordinal: a culture comparison ignores a soft hyphen after the newline
+    # and would cut that instead.
+    if ($text.EndsWith("`r`n", [StringComparison]::Ordinal)) { $text = $text.Substring(0, $text.Length - 2) }
+    elseif ($text.EndsWith("`n", [StringComparison]::Ordinal)) { $text = $text.Substring(0, $text.Length - 1) }
     return $text
 }
 
@@ -303,10 +333,51 @@ function Read-ExakitVsSecretFile {
     return $text
 }
 
-# Test-ExakitVsStdinTerminal - is standard input the console (nothing piped
-# or redirected into it)?
+# Test-ExakitVsMsysPtyName <name> - is this pipe a Git Bash / MSYS2 / Cygwin
+# terminal (\msys-<hex>-pty<n>-from-master, or cygwin-)?
+function Test-ExakitVsMsysPtyName {
+    param([string]$Name)
+    return ($Name -match '^\\(msys|cygwin)-[0-9a-fA-F]+-pty[0-9]+-(from|to)-master')
+}
+
+# Get-ExakitVsStdinPipeName - the name of the pipe behind standard input on
+# Windows, "" elsewhere or when there is none: GetFileInformationByHandleEx
+# (FileNameInfo), as Git for Windows and go-isatty tell a mintty terminal
+# from a pipe.
+function Get-ExakitVsStdinPipeName {
+    if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) { return "" }
+    try {
+        if (-not ("ExakitVsStdinName" -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class ExakitVsStdinName {
+    [DllImport("kernel32.dll")] static extern IntPtr GetStdHandle(int which);
+    [DllImport("kernel32.dll")] static extern bool GetFileInformationByHandleEx(IntPtr handle, int infoClass, IntPtr info, int size);
+    public static string Get() {
+        int size = 4 + 2 * 1024;
+        IntPtr info = Marshal.AllocHGlobal(size);
+        try {
+            if (!GetFileInformationByHandleEx(GetStdHandle(-10), 2, info, size)) { return ""; }
+            int length = Marshal.ReadInt32(info);
+            if (length <= 0 || length > size - 4) { return ""; }
+            return Marshal.PtrToStringUni(new IntPtr(info.ToInt64() + 4), length / 2);
+        } finally { Marshal.FreeHGlobal(info); }
+    }
+}
+'@
+        }
+        return [ExakitVsStdinName]::Get()
+    } catch { return "" }
+}
+
+# Test-ExakitVsStdinTerminal - is a person's terminal on standard input? The
+# console (nothing piped or redirected into it), or Git Bash's mintty, which
+# hands a Windows program its terminal as a named pipe: "redirected", yet
+# what is typed there echoes and nothing ever ends it.
 function Test-ExakitVsStdinTerminal {
-    return (-not [Console]::IsInputRedirected)
+    if (-not [Console]::IsInputRedirected) { return $true }
+    return (Test-ExakitVsMsysPtyName (Get-ExakitVsStdinPipeName))
 }
 
 # Read-ExakitVsStdinSecret - --password-stdin: ALL of standard input (a JSON
@@ -319,7 +390,8 @@ function Test-ExakitVsStdinTerminal {
 # Never echoed, logged or passed as an argument. Twin of _exakit_vs_stdin_secret.
 function Read-ExakitVsStdinSecret {
     if (Test-ExakitVsStdinTerminal) {
-        Deny-ExakitVsInput "--password-stdin reads the credential from standard input, which is the console here: pipe it in (for example Get-Content -Raw key.json | exakit ...), or leave --password-stdin out to be asked." "--password-stdin was given, but standard input is a terminal" "pipe the credential into the command (for example < key.json), or give it with --password-file <file>"
+        # Not a PowerShell pipe as the way out: Windows PowerShell 5.1 pipes only ASCII to a command.
+        Deny-ExakitVsInput '--password-stdin reads the credential from standard input, which is a terminal here: give it with --password-file <file>, or redirect the file in cmd.exe (cmd /c "exakit ... --password-stdin < key.json"), or leave --password-stdin out to be asked.' "--password-stdin was given, but standard input is a terminal" "give it with --password-file <file>, or redirect a file into the command from cmd.exe (exakit ... --password-stdin < key.json)"
     }
     $buffer = New-Object System.IO.MemoryStream
     $stdin = [Console]::OpenStandardInput()

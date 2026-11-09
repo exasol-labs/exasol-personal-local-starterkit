@@ -234,19 +234,25 @@ def read_secret(args):
 
 def decode_secret(raw):
     """A credential's bytes as text: UTF-16 (little or big endian) by its
-    byte-order mark, else UTF-8 with or without one - the rules the Windows
-    bridge reads a --password-file or --password-stdin with
-    (ConvertFrom-ExakitVsSecretBytes), so both read one file alike. Anything
-    else is refused, never guessed: a password decoded in the wrong code page
-    is another password."""
+    byte-order mark, else UTF-8 with or without one, and no NUL anywhere - the
+    rules the Windows bridge (ConvertFrom-ExakitVsSecretBytes) and the shell's
+    reader (_exakit_vs_secret_text) apply, so all three read one file alike. A
+    NUL is refused because a shell variable drops it without a word: BOM-less
+    UTF-16 would be another credential on each path. Anything else is refused,
+    never guessed: a password decoded in the wrong code page is another
+    password."""
     try:
         if raw[:2] in (codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE):
-            return raw.decode("utf-16")
-        return raw.decode("utf-8-sig")
+            text = raw.decode("utf-16")
+        else:
+            text = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
+        text = None
+    if text is None or "\0" in text:
         remedy = "save the credential as UTF-8 (UTF-16 needs its byte-order mark), then run the same command again"
         raise lifecycle.Failure("the credential is not UTF-8 or UTF-16 text", lifecycle.EXIT["input"], kind="input",
                                 remedy=remedy, said="the credential is not UTF-8 or UTF-16 text: " + remedy)
+    return text
 
 
 def read_value(args):

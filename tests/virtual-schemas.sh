@@ -712,9 +712,13 @@ bridge() {
       . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/detect.sh"; . "$ROOT/setup/lib/runtime-personal.sh"
       . "$ROOT/setup/lib/virtual-schemas.sh"
       _require_install() { :; }; exakit_init_logging() { :; }
+      # The credential reader runs on the kit's pyexasol: here, this python3.
+      pyexasol_venv_python() { command -v python3; }
       exakit_vs_engine() {
           printf '%s\n' "$*" >> "$B/argv"
           [ -t 0 ] || cat >> "$B/stdin"
+          # What a child of the bridge sees in its environment (item: exported names).
+          env >> "$B/env"
           _n="$(wc -l < "$B/argv" | tr -d ' ')"
           _code="$(sed -n "${_n}p" "$B/codes" 2>/dev/null)"
           if [ "$1" = resolve ] && [ -f "$B/gated" ]; then echo "FAIL BigQuery is not available yet: gated"; return 5; fi
@@ -725,7 +729,9 @@ bridge() {
       _exakit_vs_install_java() { echo "JAVA-ASKED" >> "$B/argv"; return 1; }
       "$@" ) 2>&1
 }
-reset_bridge() { rm -f "$B/argv" "$B/stdin" "$B/codes"; printf '%s\n' "$@" > "$B/codes"; }
+reset_bridge() { rm -f "$B/argv" "$B/stdin" "$B/codes" "$B/env"; printf '%s\n' "$@" > "$B/codes"; }
+# The same bridge for a fresh bash started with a given environment (review 5).
+{ printf 'ROOT=%q; B=%q\n' "$ROOT" "$B"; declare -f bridge; } > "$WORK/bridge-fn.sh"
 
 reset_bridge
 OUT="$(bridge cmd_connect pg --name sales --password=hunter2 </dev/null)"; RC=$?
@@ -809,7 +815,7 @@ OUT="$(printf 'pw-crlf\r\n' | bridge cmd_connect pg --name sales --set host=h --
 check "--password-stdin: a CRLF ending is one line ending" "same" "$(same 'pw-crlf' "$B/stdin")"
 reset_bridge 0 0 0
 OUT="$(printf 'pw-two\n\n' | bridge cmd_connect pg --name sales --set host=h --password-stdin --yes)"
-check "--password-stdin: exactly one trailing line ending is dropped" "same" "$(same 'pw-two
+check "--password-stdin: the bridge drops one trailing line ending (the engine the rest: end to end below)" "same" "$(same 'pw-two
 ' "$B/stdin")"
 reset_bridge 0 0 0
 OUT="$(bridge cmd_connect pg --name sales --set host=h --password-stdin --yes </dev/null)"; RC=$?
@@ -833,6 +839,64 @@ reset_bridge 0
 OUT="$(printf 'pw' | bridge cmd_source check docs --password-stdin)"; RC=$?
 check "--password-stdin on an action that takes no credential: exit 2, nothing ran" "2 no" "$RC $([ -f "$B/argv" ] && echo yes || echo no)"
 has "...saying where it belongs" "--password-stdin is for exakit source reauth" "$OUT"
+
+# Security review 1: what is not UTF-8 or UTF-16 text is refused BEFORE a shell
+# variable takes it. $( ) drops NUL bytes without a word: UTF-16 with a stray
+# byte, or without its BOM, became another credential (measured: '慰獳', 'pass').
+reset_bridge 0 0 0
+OUT="$(printf '\377\376p\000a\000s\000s\000\n' | bridge cmd_connect pg --name sales --set host=h --password-stdin --yes)"; RC=$?
+check "review 1: UTF-16 with a stray byte on stdin: exit 2, before anything ran" "2 no" "$RC $([ -f "$B/argv" ] && echo yes || echo no)"
+has "...saying it is not UTF-8 or UTF-16 text" "The credential is not UTF-8 or UTF-16 text" "$OUT"
+printf 'p\000a\000s\000s\000\n\000' > "$B/bomless16.pw"
+reset_bridge 0 0 0
+OUT="$(bridge cmd_connect pg --name sales --set host=h --password-file "$B/bomless16.pw" --yes </dev/null)"; RC=$?
+check "review 1: a BOM-less UTF-16 --password-file (NUL bytes): exit 2, no connect" "2 resolve pg|plan postgresql --name sales --set host=h|" "$RC $(tr '\n' '|' < "$B/argv")"
+reset_bridge 0 1
+OUT="$(printf 'p\000w' | bridge cmd_source reauth docs --password-stdin)"; RC=$?
+check "review 1: a NUL on stdin for reauth: exit 2, no reauth" "2 show docs|" "$RC $(tr '\n' '|' < "$B/argv")"
+
+# Security review 2: a credential given as an option is refused by name, on
+# connect and on source, and no option's =value is ever repeated.
+for args in "cmd_connect pg --name sales --password-stdin=hunter2" "cmd_connect pg --name sales --passwd=hunter2" \
+            "cmd_connect pg --name sales --password-file=hunter2" "cmd_source reauth docs --password=hunter2" \
+            "cmd_source reauth docs --secret hunter2" "cmd_source check docs --token=hunter2"; do
+    reset_bridge 0
+    # shellcheck disable=SC2086
+    OUT="$(bridge $args </dev/null)"; RC=$?
+    check "review 2: $(printf '%s' "$args" | sed 's/hunter2/<v>/'): exit 2, before anything ran" "2 no" "$RC $([ -f "$B/argv" ] && echo yes || echo no)"
+    has "...as a credential given as an argument" "A credential is never taken as an argument" "$OUT"
+    lacks "...without repeating it" "hunter2" "$OUT"
+done
+for args in "cmd_connect pg --name sales --bogus=hunter2" "cmd_source list --bogus=hunter2"; do
+    reset_bridge 0
+    # shellcheck disable=SC2086
+    OUT="$(bridge $args </dev/null)"; RC=$?
+    check "review 2: an unknown option with =value: exit 2 ($args)" "2" "$RC"
+    has "...its name said" "Unknown option '--bogus' for" "$OUT"
+    lacks "...its value not" "hunter2" "$OUT"
+done
+
+# Security review 5: a name that holds the credential, exported (even empty)
+# before exakit ran, stays exported when assigned - every child would see it.
+# The control first: this bash does keep the export.
+check "review 5 control: bash keeps an exported name exported when it is assigned" "1" \
+    "$( (export _evctl=; _evctl=val; env | grep -c '^_evctl=val') )"
+reset_bridge 0 0 0
+OUT="$(printf 'Exp0rted-Val' | env EXAKIT_VS_STDIN_SECRET= _cc_secret= _evx_secret= _erh_value= \
+    bash -c '. "$1"; shift; bridge "$@"' _ "$WORK/bridge-fn.sh" cmd_connect pg --name sales --set host=h --password-stdin --yes)" 2>/dev/null
+check "review 5: names exported empty: the credential reached the engine on stdin" "same" "$(same 'Exp0rted-Val' "$B/stdin")"
+check "...and is in no child's environment" "0" "$(grep -c 'Exp0rted-Val' "$B/env")"
+reset_bridge 0 0
+OUT="$(printf 'Exp0rted-Val' | env _cs_secret= _evx_secret= bash -c '. "$1"; shift; bridge "$@"' _ "$WORK/bridge-fn.sh" cmd_source reauth docs --password-stdin)" 2>/dev/null
+check "review 5: reauth, _cs_secret exported empty: in no child's environment" "1 0" "$(grep -c '^reauth' "$B/argv") $(grep -c 'Exp0rted-Val' "$B/env")"
+
+# Security review 12: under bash -x the credential is not in the trace.
+traced() { set -x; "$@"; }
+reset_bridge 0 0 0
+OUT="$(printf 'Tr4ced-Val' | bridge traced cmd_connect pg --name sales --set host=h --password-stdin --yes)"
+has "review 12: bash -x was on" "+ cmd_connect" "$OUT"
+lacks "...and the credential is not in its trace" "Tr4ced-Val" "$OUT"
+check "...which still reached the engine" "same" "$(same 'Tr4ced-Val' "$B/stdin")"
 
 # exakit source list: one table, where each source lives and its TLS level,
 # inside the terminal - columns give way rather than wrap.
@@ -2668,6 +2732,7 @@ urlsh() {
       . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
       _require_install() { :; }; exakit_init_logging() { EXAKIT_LOG_FILE="$WORK/url.log"; }
       command -v reject >/dev/null 2>&1 || reject() { printf '%s\n' "$*" >&2; exit 2; }
+      pyexasol_venv_python() { command -v python3; }
       exakit_vs_engine() { printf '%s\n' "$*" >> "$WORK/url.argv"; eng "$@"; }
       "$@" ) 2>&1
 }
@@ -3132,6 +3197,7 @@ jsonsh() { # jsonsh <stdin-file> <args...> - stdout in JOUT, stderr in JERR, exi
     JOUT="$( ( EXAKIT_HOME="$HOME_K"
       . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
       _require_install() { :; }; exakit_init_logging() { EXAKIT_LOG_FILE="$WORK/json.log"; }
+      pyexasol_venv_python() { command -v python3; }
       exakit_vs_engine() { eng "$@"; }
       if [ "${JSON_JAVA_INSTALL:-}" = die ]; then
           # A download that fails its checksum: die, as verify_sha256 does.
@@ -3279,6 +3345,24 @@ check "...its error says what happened" "--password-stdin was given, but standar
 jsonsh "$WORK/json.secret" pg --name jsonstdin $PG_SET --password-stdin --password-file "$WORK/json.secret" --json
 check "--password-stdin with --password-file, --json: exit 2, one failure object" "2 [False, 'input', True, True, True, True]" "$JRC $(one "$SHAPE")"
 check "...nothing connected" "false" "$(dbq '"EXAKIT_SRC_JSONSTDIN" in d["connections"]')"
+# Review 10, end to end: every trailing line ending is dropped (the bridge
+# drops one, the engine the rest), whichever way the credential came.
+printf '%s\r\n\n\r\n' "$SECRET" > "$WORK/json.endings"
+jsonsh "$WORK/json.endings" pg --name jsonends $PG_SET --password-stdin --json
+check "review 10: --password-stdin, CRLF LF CRLF after it: the CONNECTION holds the credential alone" "0 $SECRET" \
+    "$JRC $(dbq 'd["connections"]["EXAKIT_SRC_JSONENDS"]["secret"]')"
+run remove jsonends >/dev/null 2>&1
+jsonsh /dev/null pg --name jsonends $PG_SET --password-file "$WORK/json.endings" --json
+check "review 10: --password-file, the same: the credential alone" "0 $SECRET" \
+    "$JRC $(dbq 'd["connections"]["EXAKIT_SRC_JSONENDS"]["secret"]')"
+run remove jsonends >/dev/null 2>&1
+# Review 2 under --json: the one object names the problem, never the value.
+for args in "--password-stdin=hunter2" "--passwd=hunter2" "--bogus=hunter2"; do
+    : > "$WORK/json.log"
+    jsonsh /dev/null pg --name jsonarg $PG_SET "$args" --json
+    check "review 2, --json, $(printf '%s' "$args" | sed 's/hunter2/<v>/'): exit 2, one failure object" "2 [False, 'input', True, True, True, True]" "$JRC $(one "$SHAPE")"
+    lacks "...the value in neither stream nor the log" "hunter2" "$JOUT$JERR$(cat "$WORK/json.log")"
+done
 
 printf '\n== a credential file or pipe: UTF-8 with or without a BOM, UTF-16 by its BOM ==\n'
 # pässwörd€ written three ways; each reaches the CONNECTION as itself, through
@@ -3292,6 +3376,9 @@ for name, data in (("utf8", (pw + "\n").encode("utf-8")), ("bom", codecs.BOM_UTF
                    ("latin1", (pw[:-1] + "\n").encode("latin-1"))):
     open(os.path.join(sys.argv[1], "enc-%s.pw" % name), "wb").write(data)
 open(os.path.join(sys.argv[1], "enc-expected"), "wb").write(pw.encode("utf-8"))
+# Review 1: UTF-16 with a stray byte (an odd count), and UTF-16 without its BOM.
+open(os.path.join(sys.argv[1], "enc-utf16odd.pw"), "wb").write(codecs.BOM_UTF16_LE + "pass".encode("utf-16-le") + b"\n")
+open(os.path.join(sys.argv[1], "enc-bomless16.pw"), "wb").write("pass\n".encode("utf-16-le"))
 PYENC
 ENCPW="$(cat "$WORK/enc-expected")"
 for enc in utf8 bom utf16; do
@@ -3307,6 +3394,18 @@ jsonsh /dev/null pg --name enclatin $PG_SET --password-file "$WORK/enc-latin1.pw
 check "a Latin-1 file (neither UTF-8 nor UTF-16): exit 2, one failure object, nothing connected" \
     "2 [False, 'input', True, True, True, True] false" "$JRC $(one "$SHAPE") $(dbq '"EXAKIT_SRC_ENCLATIN" in d["connections"]')"
 check "...its error says why" "the credential is not UTF-8 or UTF-16 text" "$(one 'd["error"]')"
+for enc in utf16odd bomless16; do
+    jsonsh /dev/null pg --name "encf$enc" $PG_SET --password-file "$WORK/enc-$enc.pw" --json
+    check "review 1: --password-file in $enc: exit 2, refused by the shell before \$( ), nothing connected" \
+        "2 ['the credential is not UTF-8 or UTF-16 text', True] false" \
+        "$JRC $(one '[d["error"], d.get("rejected")]') $(dbq "'EXAKIT_SRC_ENCF$(printf '%s' "$enc" | tr a-z A-Z)' in d['connections']")"
+    jsonsh "$WORK/enc-$enc.pw" pg --name "encs$enc" $PG_SET --password-stdin --json
+    check "review 1: --password-stdin in $enc: the same" "2 ['the credential is not UTF-8 or UTF-16 text', True] false" \
+        "$JRC $(one '[d["error"], d.get("rejected")]') $(dbq "'EXAKIT_SRC_ENCS$(printf '%s' "$enc" | tr a-z A-Z)' in d['connections']")"
+    OUT="$(eng --json connect pg --name "ence$enc" $PG_SET --secret-stdin < "$WORK/enc-$enc.pw" 2>/dev/null)"; RC=$?
+    check "review 1: the engine (the terminal form's path) refuses $enc too" "2 the credential is not UTF-8 or UTF-16 text" \
+        "$RC $(JOUT="$OUT" one 'd["error"]')"
+done
 OUT="$(eng connect pg --name enclatin $PG_SET --secret-stdin < "$WORK/enc-utf16.pw" 2>&1)"; RC=$?
 check "the engine itself reads UTF-16 by its BOM (the terminal form hands it the file as it is)" "0 $ENCPW" \
     "$RC $(dbq 'd["connections"]["EXAKIT_SRC_ENCLATIN"]["secret"]')"
@@ -3319,6 +3418,7 @@ jsonsrc() { # jsonsrc <stdin-file> <args...> - cmd_source; stdout in JOUT, stder
     JOUT="$( ( EXAKIT_HOME="$HOME_K"
       . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
       _require_install() { :; }; exakit_init_logging() { EXAKIT_LOG_FILE="$WORK/json.log"; }
+      pyexasol_venv_python() { command -v python3; }
       exakit_vs_engine() { printf '%s\n' "$*" >> "$WORK/json.argv"; eng "$@"; }
       cmd_source "$@" ) < "$_js_in" 2> "$WORK/json.err" )"; JRC=$?
     JERR="$(cat "$WORK/json.err")"
@@ -3339,6 +3439,14 @@ jsonsrc "$WORK/json.rotated" reauth jsonjava --json --password-stdin
 check "reauth --json --password-stdin: exit 0, one object" "0 [True, 'ready']" "$JRC $(one '[d["ok"], d["status"]]')"
 jsonsrc /dev/null reauth jsonjava --json --password-stdin
 check "reauth --json --password-stdin, nothing on stdin: exit 2, one failure object" "2 [False, 'input', True, True, True, True]" "$JRC $(one "$SHAPE")"
+: > "$WORK/json.log"; rm -f "$WORK/json.argv"
+jsonsrc /dev/null reauth jsonjava --password=hunter2 --json
+check "review 2: source reauth --password=<v> --json: exit 2, one failure object, the engine never ran" "2 [False, 'input', True, True, True, True] no" \
+    "$JRC $(one "$SHAPE") $([ -f "$WORK/json.argv" ] && echo yes || echo no)"
+check "...the error names the problem" "a credential was given as an argument, where other users can read it in the process list" "$(one 'd["error"]')"
+lacks "...not the value: stdout, stderr, the log" "hunter2" "$JOUT$JERR$(cat "$WORK/json.log")"
+jsonsrc /dev/null list --bogus=hunter2 --json
+check "review 2: source list --bogus=<v> --json: the option's name only" "2 unknown option '--bogus' for source list" "$JRC $(one 'd["error"]')"
 jsonsrc /dev/null --json
 check "source --json (no action): exit 0, the listing's one object" "0 True" "$JRC $(one 'd["ok"]')"
 check "...whose rows carry host and tls" "pg.example.com verify" \
@@ -3460,6 +3568,7 @@ logsh() {
     ( EXAKIT_HOME="$HOME_K"
       . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
       _require_install() { :; }; exakit_init_logging() { EXAKIT_LOG_FILE="$WORK/vslog-setup.log"; }
+      pyexasol_venv_python() { command -v python3; }
       exakit_vs_engine() { eng "$@"; }
       "$@" ) 2>&1
 }
@@ -3917,11 +4026,53 @@ check "exakit_vs_engine: the planted module is ignored, the engine still imports
     '0 RESULT {"connector": "postgresql"} no' "$RC $OUT $([ -f "$WORK/plant.mark" ] && echo yes || echo no)"
 OUT="$( ( EXAKIT_HOME="$HOME_K"
     . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
+    pyexasol_venv_python() { command -v python3; }
     export PYTHONPATH="$PLANT" EXAKIT_PLANT_MARK="$WORK/plant.mark"
     printf 'k\n' | _exakit_vs_secret_text ) 2>&1 )"
 check "...and the shell's credential reader is isolated too" "k no" "$OUT $([ -f "$WORK/plant.mark" ] && echo yes || echo no)"
-check "every engine run goes through exakit_vs_engine: cli.py is named once, after -I" "1 1" \
-    "$(grep -c 'engine/cli\.py"' "$ROOT/setup/lib/virtual-schemas.sh") $(grep -c '"$_eve_py" -I "$_eve_defs/engine/cli.py"' "$ROOT/setup/lib/virtual-schemas.sh")"
+check "every engine run goes through exakit_vs_engine: cli.py is named once, run by _exakit_vs_python (-I)" "1 1 1" \
+    "$(grep -c 'engine/cli\.py"' "$ROOT/setup/lib/virtual-schemas.sh") $(grep -c '_exakit_vs_python "$_eve_py" "$_eve_defs/engine/cli.py"' "$ROOT/setup/lib/virtual-schemas.sh") $(grep -c 'exec "$_evy_bin" -I "$@"' "$ROOT/setup/lib/virtual-schemas.sh")"
+
+# Review 3: -I does not cover PYTHONEXECUTABLE. A macOS framework build takes
+# its program path from it, so sys.prefix - and the site-packages whose .pth
+# files run at startup - become a planted venv's. The control first; a Python
+# that ignores the variable (Linux, a non-framework build) cannot show it.
+PYV="$(python3 -c 'import sys; print("python%d.%d" % sys.version_info[:2])')"
+PEX="$WORK/pyexe"; mkdir -p "$PEX/bin" "$PEX/lib/$PYV/site-packages"
+printf 'home = %s\n' "$(python3 -c 'import os, sys; print(os.path.dirname(os.path.realpath(sys.executable)))')" > "$PEX/pyvenv.cfg"
+printf 'import os; open(os.environ["EXAKIT_PLANT_MARK"], "w").write("pth")\n' > "$PEX/lib/$PYV/site-packages/plant.pth"
+rm -f "$WORK/plant.mark"
+PYTHONEXECUTABLE="$PEX/bin/python" EXAKIT_PLANT_MARK="$WORK/plant.mark" python3 -I -c 'pass' 2>/dev/null
+if [ -f "$WORK/plant.mark" ]; then
+    pass "review 3 control: this python3 runs a planted .pth under -I through PYTHONEXECUTABLE"
+    rm -f "$WORK/plant.mark"
+    OUT="$( ( EXAKIT_HOME="$HOME_K"
+        . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
+        pyexasol_venv_python() { command -v python3; }
+        exakit_vs_defs() { printf '%s\n' "$DEFS"; }
+        manifest_get() { return 1; }
+        export PYTHONEXECUTABLE="$PEX/bin/python" __PYVENV_LAUNCHER__="$PEX/bin/python" EXAKIT_PLANT_MARK="$WORK/plant.mark"
+        exakit_vs_engine resolve pg; printf 'k' | _exakit_vs_secret_text; printf ' %s' "$PYTHONEXECUTABLE" ) 2>&1 )"; RC=$?
+    check "review 3: the engine and the credential reader run without it: no .pth ran, both answered, the caller keeps it" \
+        "0 RESULT {\"connector\": \"postgresql\"} k $PEX/bin/python no" "$RC $(printf '%s' "$OUT" | tr '\n' ' ' | sed 's/  */ /g') $([ -f "$WORK/plant.mark" ] && echo yes || echo no)"
+else
+    pass "review 3: this python3 ignores PYTHONEXECUTABLE under -I (not a macOS framework build): nothing to show here"
+fi
+
+# Review 4: the credential reader runs on the kit's pyexasol only. Without it,
+# that is what the command says - never "standard input was empty".
+OUT="$( ( EXAKIT_HOME="$HOME_K"
+    . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
+    _require_install() { :; }; exakit_init_logging() { EXAKIT_LOG_FILE="$WORK/json.log"; }
+    pyexasol_venv_python() { printf '%s\n' "$WORK/no-such-venv/bin/python"; }
+    exakit_vs_engine() { echo "ENGINE RAN" >&2; return 0; }
+    printf 'pw' | cmd_connect pg --name nopy --password-stdin --json ) 2>/dev/null )"; RC=$?
+check "review 4: no kit Python to read the credential: exit 2, one object, kind setup, the repair named" \
+    "2 ['setup', \"the credential is read with the kit's pyexasol, which did not run\", 'exakit update pyexasol']" \
+    "$RC $(JOUT="$OUT" one '[d["kind"], d["error"], d["command"]]')"
+_reader_range='/^_exakit_vs_secret_text()/,/^}/p'
+check "...and the reader never falls back to another Python (no run_python_any)" "0" \
+    "$(sed -n "$_reader_range" "$ROOT/setup/lib/virtual-schemas.sh" | grep -c run_python_any)"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

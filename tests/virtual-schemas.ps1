@@ -166,6 +166,18 @@ foreach ($enc in $encFiles.Keys) {
 Check "a Latin-1 file is neither: no text, so it is refused, not guessed" $true ($null -eq (Get-ExakitVsSecretFileText -Path (Join-Path $work "enc-latin1.pw")))
 Check "exactly one trailing line ending is dropped" ("pw" + "`n") (ConvertFrom-ExakitVsSecretBytes -Bytes $utf8.GetBytes("pw`n`n"))
 Check "UTF-16 big endian by its BOM" $pwEnc (ConvertFrom-ExakitVsSecretBytes -Bytes ([byte[]](@(0xFE, 0xFF) + [System.Text.Encoding]::BigEndianUnicode.GetBytes($pwEnc))))
+# Security review 1, 8 and 11: the decoder's edges.
+Check "review 1: a NUL anywhere is refused (a shell variable would drop it)" $true ($null -eq (ConvertFrom-ExakitVsSecretBytes -Bytes $utf8.GetBytes("p" + [char]0 + "w")))
+Check "review 1: UTF-16 without its BOM (NUL bytes) is refused" $true ($null -eq (ConvertFrom-ExakitVsSecretBytes -Bytes ([System.Text.Encoding]::Unicode.GetBytes("pass`n"))))
+Check "review 1: UTF-16 with a stray byte (an odd count) is refused" $true ($null -eq (ConvertFrom-ExakitVsSecretBytes -Bytes ([byte[]](@(0xFF, 0xFE) + [System.Text.Encoding]::Unicode.GetBytes("pass") + @(0x0A)))))
+Check "review 8: a newline then a soft hyphen: nothing is cut (an ordinal comparison, not a culture one)" ("pw`n" + [char]0xAD) (ConvertFrom-ExakitVsSecretBytes -Bytes $utf8.GetBytes("pw`n" + [char]0xAD))
+$Error.Clear()
+[void](ConvertFrom-ExakitVsSecretBytes -Bytes ([byte[]]@(0x70, 0xE4, 0x73, 0x73)))
+Check "review 11: a refused decode leaves no record in `$Error (one would hold a byte of the credential)" 0 $Error.Count
+# Review 6: Git Bash's mintty hands a Windows program its terminal as a pipe.
+Check "review 6: an MSYS2 / Cygwin terminal pipe is recognised, another pipe is not" "True True False False" ("{0} {1} {2} {3}" -f (Test-ExakitVsMsysPtyName "\msys-1888ae32e00d56aa-pty0-from-master"), (Test-ExakitVsMsysPtyName "\cygwin-e022582115c10879-pty4-to-master"), (Test-ExakitVsMsysPtyName "\exakit-other-pipe"), (Test-ExakitVsMsysPtyName ""))
+if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) { Check "review 6: ...off Windows there is no pipe name to ask for" "" (Get-ExakitVsStdinPipeName) }
+else { Check "review 6: ...on Windows the handle's name is asked for (a string)" $true ((Get-ExakitVsStdinPipeName) -is [string]) }
 
 Write-Host ""
 Write-Host "== the engine runs isolated: python -I =="
@@ -193,6 +205,34 @@ try {
 }
 $bridgeText = Get-Content -Raw -LiteralPath (J @("setup", "lib", "virtual-schemas.ps1"))
 Check "every engine run goes through Invoke-ExakitVsEngine: cli.py is named once, after -I" "1 1" ("{0} {1}" -f ([regex]::Matches($bridgeText, '"engine" "cli.py"')).Count, ([regex]::Matches($bridgeText, [regex]::Escape('@("-I", (Join-ExakitCorePath $defs "engine" "cli.py")'))).Count)
+# Review 3: -I does not cover PYTHONEXECUTABLE. A macOS framework build takes
+# its program path from it, so sys.prefix - and the site-packages whose .pth
+# files run at startup - become a planted venv's. The control first; a Python
+# that ignores the variable (Windows, Linux, a non-framework build) cannot show it.
+$pyv = "" + @(& $python -c "import sys; print('python%d.%d' % sys.version_info[:2])")[0]
+$pyHome = "" + @(& $python -c "import os, sys; print(os.path.dirname(os.path.realpath(sys.executable)))")[0]
+$pex = Join-Path $work "pyexe"
+$pexSite = Join-Path (Join-Path (Join-Path $pex "lib") $pyv) "site-packages"
+New-Item -ItemType Directory -Force -Path (Join-Path $pex "bin"), $pexSite | Out-Null
+Set-Content -LiteralPath (Join-Path $pex "pyvenv.cfg") -Value "home = $pyHome" -Encoding ASCII
+Set-Content -LiteralPath (Join-Path $pexSite "plant.pth") -Value "import os; open(os.environ['EXAKIT_PLANT_MARK'], 'w').write('pth')" -Encoding ASCII
+$pexBin = Join-Path (Join-Path $pex "bin") "python"
+$env:PYTHONEXECUTABLE = $pexBin; $env:EXAKIT_PLANT_MARK = $mark
+try {
+    Remove-Item -LiteralPath $mark -ErrorAction SilentlyContinue
+    $ErrorActionPreference = "Continue"
+    & $python -I -c "pass" 2>$null
+    $ErrorActionPreference = "Stop"
+    if (Test-Path -LiteralPath $mark) {
+        $script:PASS++; Write-Host "  ok   review 3 control: this python runs a planted .pth under -I through PYTHONEXECUTABLE"
+        Remove-Item -LiteralPath $mark
+        $r = Invoke-ExakitVsEngine -Arguments @("resolve", "pg")
+        Check "review 3: Invoke-ExakitVsEngine runs without it: no .pth ran, it answered, the caller keeps the variable" ("0 False " + $pexBin) ("{0} {1} {2}" -f $r.Code, (Test-Path -LiteralPath $mark), $env:PYTHONEXECUTABLE)
+    } else { $script:PASS++; Write-Host "  ok   review 3: this python ignores PYTHONEXECUTABLE under -I: nothing to show here" }
+} finally {
+    $ErrorActionPreference = "Stop"
+    Remove-Item Env:\PYTHONEXECUTABLE, Env:\EXAKIT_PLANT_MARK -ErrorAction SilentlyContinue
+}
 
 Write-Host ""
 Write-Host "== repair and retry =="
@@ -789,7 +829,29 @@ $one = Invoke-StdinChild $ttyChildFile $urlRecord (@("pg", "--name", "stdintty")
 Check "--password-stdin with the console on stdin: one object, exit 2" "True 2 input" "$one $jsonCode $($jsonDoc.kind)"
 Check "...its error says what happened" "--password-stdin was given, but standard input is a terminal" $jsonDoc.error
 $one = Invoke-StdinChild $ttyChildFile $urlRecord (@("pg", "--name", "stdintty") + $pgSet + @("--password-stdin")) $utf8.GetBytes("x")
-Check "...without --json: exit 2, one line, nothing connected" "2 True (none)" ("$jsonCode " + $jsonText.Contains("DENY --password-stdin reads the credential from standard input, which is the console here") + " " + (Get-StateSecret "EXAKIT_SRC_STDINTTY"))
+Check "...without --json: exit 2, one line, nothing connected" "2 True (none)" ("$jsonCode " + $jsonText.Contains("DENY --password-stdin reads the credential from standard input, which is a terminal here") + " " + (Get-StateSecret "EXAKIT_SRC_STDINTTY"))
+Check "review 7: ...pointing at --password-file and cmd's redirection, never a PowerShell pipe (5.1 pipes only ASCII)" "True True False" ("{0} {1} {2}" -f $jsonText.Contains("--password-file <file>"), $jsonText.Contains('cmd /c "exakit ... --password-stdin < key.json"'), $jsonText.Contains("Get-Content"))
+# Review 6: stdin redirected, but the pipe behind it is Git Bash's terminal.
+$msysChildFile = Join-Path $work "msys-child.ps1"
+Set-Content -LiteralPath $msysChildFile -Encoding ASCII -Value ($urlChild.Replace('Invoke-CmdConnect -Arguments $args', "function Get-ExakitVsStdinPipeName { return '\msys-1888ae32e00d56aa-pty0-from-master' }`nInvoke-CmdConnect -Arguments `$args"))
+$one = Invoke-StdinChild $msysChildFile $urlRecord (@("pg", "--name", "stdinmsys") + $pgSet + @("--password-stdin", "--json")) $utf8.GetBytes("typed")
+Check "review 6: a Git Bash terminal pipe on stdin: refused as a terminal, nothing connected" "True 2 --password-stdin was given, but standard input is a terminal (none)" "$one $jsonCode $($jsonDoc.error) $(Get-StateSecret 'EXAKIT_SRC_STDINMSYS')"
+# Review 1: UTF-16 with a stray byte, or without its BOM, refused on both flags.
+$bad16 = [ordered]@{ "odd" = [byte[]](@(0xFF, 0xFE) + [System.Text.Encoding]::Unicode.GetBytes("pass") + @(0x0A)); "bomless" = [System.Text.Encoding]::Unicode.GetBytes("pass`n") }
+foreach ($k in $bad16.Keys) {
+    $f = Join-Path $work "bad16-$k.pw"; [System.IO.File]::WriteAllBytes($f, $bad16[$k])
+    $one = Invoke-JsonConnect (@("pg", "--name", "bad16f$k") + $pgSet + @("--password-file", $f, "--json"))
+    Check "review 1: a --password-file in UTF-16 $($k): one object, exit 2, not text, nothing connected" "True 2 True (none)" ("$one $jsonCode " + "$($jsonDoc.error)".Contains("is not UTF-8 or UTF-16 text") + " " + (Get-StateSecret ("EXAKIT_SRC_BAD16F" + $k.ToUpperInvariant())))
+    $one = Invoke-StdinChild $urlChildFile $urlRecord (@("pg", "--name", "bad16s$k") + $pgSet + @("--password-stdin", "--json")) $bad16[$k]
+    Check "review 1: --password-stdin in UTF-16 $($k): the same" "True 2 True (none)" ("$one $jsonCode " + "$($jsonDoc.error)".Contains("is not UTF-8 or UTF-16 text") + " " + (Get-StateSecret ("EXAKIT_SRC_BAD16S" + $k.ToUpperInvariant())))
+}
+# Review 2: a credential given as an option is refused by name; no =value is repeated.
+foreach ($a in @("--password-stdin=hunter2", "--passwd=hunter2", "--password-file=hunter2", "--secret=hunter2", "--bogus=hunter2")) {
+    $one = Invoke-JsonConnect (@("pg", "--name", "jsonarg") + $pgSet + @($a, "--json"))
+    Check ("review 2: connect {0}: one object, exit 2, kind input" -f ($a -replace "hunter2", "<v>")) "True 2 input" "$one $jsonCode $($jsonDoc.kind)"
+    Check "...the value not repeated" $false ($jsonText.Contains("hunter2"))
+}
+Check "review 2: an unknown option: its name only" "unknown option '--bogus' for connect" $jsonDoc.error
 Set-Content -LiteralPath $state -Value '{"sources": {"pg.example.com": {"tables": ["ORDERS"]}}}' -Encoding ASCII
 
 Write-Host ""
@@ -840,6 +902,13 @@ $one = Invoke-StdinChild $srcChildFile $srcRecord @("reauth", "jsonre", "--json"
 Check "reauth --json --password-stdin, nothing on stdin: one object, exit 2" "True 2 input" "$one $jsonCode $($jsonDoc.kind)"
 $one = Invoke-StdinChild $srcChildFile $srcRecord @("check", "jsonre", "--json", "--password-stdin") $utf8.GetBytes("x")
 Check "--password-stdin on an action that takes no credential: one object, exit 2" "True 2 input" "$one $jsonCode $($jsonDoc.kind)"
+Remove-Item -LiteralPath $srcRecord -ErrorAction SilentlyContinue
+$one = Invoke-JsonSource @("reauth", "jsonre", "--password=hunter2", "--json")
+Check "review 2: source reauth --password=<v> --json: one object, exit 2, the engine never ran" "True 2 False" "$one $jsonCode $(Test-Path -LiteralPath $srcRecord)"
+Check "...the error names the problem" "a credential was given as an argument, where other users can read it in the process list" $jsonDoc.error
+Check "...not the value" $false ($jsonText.Contains("hunter2"))
+$one = Invoke-JsonSource @("list", "--bogus=hunter2", "--json")
+Check "review 2: source list --bogus=<v> --json: the option's name only" "True 2 unknown option '--bogus' for source list" "$one $jsonCode $($jsonDoc.error)"
 foreach ($a in @(@("bogus", "--json"), @("show", "--json"), @("check", "--json"), @("list", "--bogus", "--json"), @("show", "a", "b", "--json"))) {
     $one = Invoke-JsonSource $a
     Check ("source {0}: one object, exit 2, kind input, remedy and command keys" -f ($a -join " ")) "True 2 input True True" "$one $jsonCode $($jsonDoc.kind) $([bool]$jsonDoc.remedy) $($null -ne $jsonDoc.PSObject.Properties['command'])"
