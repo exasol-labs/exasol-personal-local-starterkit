@@ -4,7 +4,9 @@ The administrator password is read from the file the manifest names
 (runtime.password_file) and never leaves this process. A source credential
 arrives on stdin and is written into the database only inside CREATE /
 ALTER CONNECTION over the encrypted session; every error raised while it is
-in play has it replaced by *** before anything prints or logs it.
+in play has it replaced by *** before anything prints or logs it. Every
+statement is written to the run's log (vslog) before it is sent, redacted
+there the same way.
 
 Tests swap the backend: EXAKIT_VS_FAKE_DB names a Python file whose
 `connect(**kwargs)` returns an object with query/execute/close.
@@ -13,6 +15,8 @@ Tests swap the backend: EXAKIT_VS_FAKE_DB names a Python file whose
 import importlib.util
 import os
 import re
+
+import vslog
 
 MAX_ERROR = 600
 
@@ -243,23 +247,32 @@ def redact(text, secrets):
 
 
 class Database(object):
+    """The session. log is the run's vslog.RunLog: every statement is written
+    to it before it is sent, and the database's answer when it fails - both
+    redacted of the statement's secrets there."""
     def __init__(self, backend, log=None):
         self.backend = backend
-        self.log = log or (lambda text: None)
+        self.log = log if log is not None else vslog.NULL
 
     def query(self, sql_text, secrets=()):
+        self.log.statement(sql_text, secrets)
         try:
             return self.backend.query(sql_text)
         except Exception as error:     # the driver's own exception types vary by backend
             message = redact(error, secrets)
-            raise DbError(message, classify_raw(message, error))
+            kind = classify_raw(message, error)
+            self.log.failed(message, kind, error, secrets)
+            raise DbError(message, kind)
 
     def execute(self, sql_text, secrets=()):
+        self.log.statement(sql_text, secrets)
         try:
             self.backend.execute(sql_text)
         except Exception as error:
             message = redact(error, secrets)
-            raise DbError(message, classify_raw(message, error))
+            kind = classify_raw(message, error)
+            self.log.failed(message, kind, error, secrets)
+            raise DbError(message, kind)
 
     def close(self):
         try:

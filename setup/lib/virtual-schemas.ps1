@@ -91,7 +91,54 @@ function Invoke-ExakitVsEngine {
         if ("$line".Trim()) { Write-ExakitLog "VS" "$line" }
     }
     Remove-Item -Force -LiteralPath $errFile -ErrorAction SilentlyContinue
+    # The engine creates its day log owner-only (mode 600); on Windows that is
+    # the file's ACL, which this side sets, as it does for the install log.
+    $vsLog = Get-ExakitVsLogPath
+    if ($vsLog -and (Get-Command Protect-ExakitFile -ErrorAction SilentlyContinue)) {
+        try { Protect-ExakitFile $vsLog } catch { }
+    }
     return [pscustomobject]@{ Code = $code; Lines = @($lines | ForEach-Object { "$_" }) }
+}
+
+# Get-ExakitVsLogPath - the engine's day log (virtual-schemas-YYYYMMDD.log in
+# the kit's log folder, written by engine/vslog.py: every statement it sent
+# and every event, secrets redacted), the newest one; "" when there is none.
+# Twin of exakit_vs_log_path.
+function Get-ExakitVsLogPath {
+    $folder = $script:LogDir
+    if (-not $folder -and $script:ExakitHome) { $folder = Join-Path $script:ExakitHome "logs" }
+    if (-not $folder) { return "" }
+    $newest = Get-ChildItem -LiteralPath $folder -Filter "virtual-schemas-*.log" -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($newest) { return $newest.FullName }
+    return ""
+}
+
+# Get-ExakitVsLogMark - what that log is now (path:size), so the end of the
+# command can tell whether this run wrote to it: a lookup or a refusal the
+# engine never logged points at no log. Twin of _exakit_vs_log_mark.
+function Get-ExakitVsLogMark {
+    $path = Get-ExakitVsLogPath
+    if (-not $path) { return "" }
+    $size = 0
+    try { $size = (Get-Item -LiteralPath $path -ErrorAction Stop).Length } catch { }
+    return ("{0}:{1}" -f $path, $size)
+}
+
+# Exit-ExakitVs - end a connect or source command. A failure (not 5, a
+# question not confirmed or a gated source) that the engine logged names the
+# log once, so the statements it sent are one command away; with --json on
+# stderr, which no parser reads. Twin of _exakit_vs_exit.
+function Exit-ExakitVs {
+    param([int]$Code)
+    if ($Code -ne 0 -and $Code -ne 5) {
+        $mark = Get-ExakitVsLogMark
+        if ($mark -and $mark -ne $script:ExakitVsLogMark) {
+            $line = "Log (every SQL statement, secrets redacted): " + (Get-ExakitVsLogPath)
+            if ($script:ExakitVsJson) { [Console]::Error.WriteLine($line) } else { Info $line }
+        }
+    }
+    exit $Code
 }
 
 # New-ExakitVsFailureJson - the engine's failure shape (cli.py) for what the

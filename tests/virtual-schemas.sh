@@ -3131,5 +3131,155 @@ OUT="$(python3 "$WORK/lonely/a/engine/cli.py" --defs x --kit-home y --json list 
 check "an engine that cannot even import (a kit copy updated by halves): exit 1, one object" "1 [False, 'internal']" \
     "$RC $(JOUT="$OUT" one '[d["ok"], d["kind"]]')"
 
+printf '\n== the day log (exakit logs virtual-schemas): every statement, no secret ==\n'
+# engine/vslog.py: one file a day under <kit home>/logs, owner-only, the files
+# of more than 14 days ago pruned; every statement the engine sends and every
+# event it says, redacted of the run's secrets and of every credential shape.
+# Last in the suite, so the sweep below reads every run above.
+TODAY="$(python3 -c 'import datetime; print(datetime.date.today().strftime("%Y%m%d"))')"
+VSLOG="$HOME_K/logs/virtual-schemas-$TODAY.log"
+check "one file a day under the kit's log folder" "virtual-schemas-$TODAY.log" "$(ls "$HOME_K/logs" | grep '^virtual-schemas-' | tr '\n' ' ' | sed 's/ $//')"
+check "...owner-only (mode 600)" "600" "$(python3 -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' "$VSLOG")"
+check "...every statement the engine sent: the happy path's CONNECTION, its credential as ***" "yes" \
+    "$(grep -qE "\] connect sales SQL +CREATE CONNECTION \"EXAKIT_SRC_SALES\" TO 'jdbc:postgresql://pg\.example\.com:5432/sales[^']*' USER 'reader' IDENTIFIED BY '\*\*\*'$" "$VSLOG" && echo yes || echo no)"
+check "...a multi-line statement's further lines marked |" "yes" \
+    "$(grep -qE '\] connect sales \| +%scriptclass com\.exasol\.adapter\.RequestDispatcher;' "$VSLOG" && echo yes || echo no)"
+check "...the engine's own events, as the screen showed them" "yes" \
+    "$(grep -qE '\] connect sales OK +Virtual schema VS_SALES: ' "$VSLOG" && echo yes || echo no)"
+check "...a failed statement's answer, classified" "yes" \
+    "$(grep -qE '\] reauth sales SQLERR \[auth\] ' "$VSLOG" && echo yes || echo no)"
+check "...each run framed by START and END, with its exit code" "yes" \
+    "$(grep -qE '\] reauth sales START +reauth sales --secret-stdin \(dsn 127\.0\.0\.1:8563, user sys\)$' "$VSLOG" && \
+       grep -qE '\] reauth sales END +exit 1, kind auth \(' "$VSLOG" && echo yes || echo no)"
+check "...not the lookups and the form's checks (catalog, resolve, inputs, field)" "0" \
+    "$(grep -cE '\] (catalog|resolve|inputs|field) ' "$VSLOG")"
+# Every credential the suite handed the engine, in every connector's shape:
+# passwords, a quote doubled in SQL, tokens, AWS and Azure keys, a SAS, a
+# service-account key, the refused ones too.
+for needle in s3cr3t n3w-T0ken n3w-secret still-the-old-one AnotherSecretKeyValue wJalrXUtnFEMI QUFBQUFBQUFB \
+              QkJDQkJDQkJD abcSig Hunter2-pa55 hunter2 MIIfakeKEYbody dapi-wrong; do
+    check "no credential of the suite's runs is in it: $needle" "" "$(grep -l -- "$needle" "$HOME_K"/logs/virtual-schemas-*.log 2>/dev/null)"
+done
+
+# A driver's message that quotes credentials the run never knew, in the three
+# shapes a credential takes in SQL and URLs: the patterns catch them.
+python3 - "$STATE" <<'PYECHO'
+import json, sys
+json.dump({"sources": {"pg.example.com": {"tables": ["ORDERS"], "fail": "echo", "message":
+    "JDBC-Client-Error: Connecting to 'jdbc:postgresql://reader:Leak-Uri-1@pg.example.com:5432/sales"
+    "?password=Leak-Param-2&ssl=true' failed\nCaused by: org.postgresql.util.PSQLException: the session "
+    "ran CREATE USER x IDENTIFIED BY 'Leak-Ident-3' and ;pwd=Leak-Pwd-4;"}}}, open(sys.argv[1], "w"))
+PYECHO
+run_secret "$SECRET" connect postgresql --name leak $PG_SET --secret-stdin
+check "a source whose driver quotes credentials: the connect fails" "1" "$RC"
+for needle in Leak-Uri-1 Leak-Param-2 Leak-Ident-3 Leak-Pwd-4; do
+    lacks "...$needle is in no line of the log" "$needle" "$(cat "$VSLOG")"
+done
+has "...user:password@ keeps the user" "jdbc:postgresql://reader:***@pg.example.com:5432/sales" "$(grep '\] connect leak ' "$VSLOG")"
+has "...?password= keeps the name" "?password=***&ssl=true" "$(grep '\] connect leak ' "$VSLOG")"
+has "...the cause under it is kept, redacted" "IDENTIFIED BY '***' and ;pwd=***;" "$(grep '\] connect leak SQLERR' "$VSLOG")"
+
+# Through the shell, as a person runs it: the credential from --password-file,
+# and the log named once when the command fails.
+logsh() {
+    ( EXAKIT_HOME="$HOME_K"
+      . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
+      _require_install() { :; }; exakit_init_logging() { EXAKIT_LOG_FILE="$WORK/vslog-setup.log"; }
+      exakit_vs_engine() { eng "$@"; }
+      "$@" ) 2>&1
+}
+LOGLINE="Log (every SQL statement, secrets redacted): $VSLOG"
+db '{"sources": {"pg.example.com": {"tables": ["ORDERS"], "secret": "Right-0ne-pw"}}}'
+printf '%s' 'Pw-File-0nly-9' > "$WORK/vslog-wrong.pw"
+printf '%s' 'Right-0ne-pw' > "$WORK/vslog-right.pw"
+OUT="$(logsh cmd_connect pg --name logpw $PG_SET --password-file "$WORK/vslog-wrong.pw" </dev/null)"; RC=$?
+check "exakit connect, a --password-file the source refuses: exit 1" "1" "$RC"
+check "...the log's path said once" "1" "$(printf '%s\n' "$OUT" | grep -cF "$LOGLINE")"
+check "...as the last line" "$LOGLINE" "$(printf '%s\n' "$OUT" | tail -n 1 | sed 's/^ *[^ ]* //')"
+check "...the run is in it" "yes" "$(grep -qE "\] connect logpw SQL +CREATE CONNECTION .* IDENTIFIED BY '\*\*\*'$" "$VSLOG" && echo yes || echo no)"
+lacks "...the password from the file is in no log" "Pw-File-0nly-9" "$(cat "$HOME_K"/logs/* "$WORK/vslog-setup.log" 2>/dev/null)"
+OUT="$(logsh cmd_connect pg --name logok $PG_SET --password-file "$WORK/vslog-right.pw" </dev/null)"; RC=$?
+check "a connect that succeeds: exit 0, no log line" "0 0" "$RC $(printf '%s\n' "$OUT" | grep -cF 'Log (every SQL')"
+lacks "...its password is in no log either" "Right-0ne-pw" "$(cat "$HOME_K"/logs/* "$WORK/vslog-setup.log" 2>/dev/null)"
+OUT="$(logsh cmd_connect nosuchdb --name x </dev/null)"; RC=$?
+check "a refusal the engine never logged (an unknown connector): no log line" "2 0" "$RC $(printf '%s\n' "$OUT" | grep -cF 'Log (every SQL')"
+# The source stops answering; what the database holds stays as it is.
+srcfail() { python3 -c 'import json,sys
+d = json.load(open(sys.argv[1])); s = d["sources"]["pg.example.com"]
+s.update(fail=sys.argv[2]) if sys.argv[2] else s.pop("fail", None)
+json.dump(d, open(sys.argv[1], "w"))' "$STATE" "$1"; }
+srcfail unreachable
+OUT="$(logsh cmd_source check logok </dev/null)"; RC=$?
+check "exakit source check of a source that fails: exit 1, the log's path once" "1 1" "$RC $(printf '%s\n' "$OUT" | grep -cF "$LOGLINE")"
+srcfail ""
+# --json: stdout stays the one object; the path goes to stderr.
+jsonsh /dev/null pg --name logjson $PG_SET --password-file "$WORK/vslog-wrong.pw" --json
+check "connect --json that fails: one object on stdout, the path once on stderr" "1 [False, 'auth'] 1" \
+    "$JRC $(one '[d["ok"], d["kind"]]') $(printf '%s\n' "$JERR" | grep -cF "$LOGLINE")"
+lacks "...and not on stdout" "Log (every SQL" "$JOUT"
+lacks "...the password from the file is in no log" "Pw-File-0nly-9" "$(cat "$HOME_K"/logs/* "$WORK/json.log" 2>/dev/null)"
+run remove logok
+
+# exakit logs: the day log is one of its targets, through the real entry point.
+LOGS_JSON="$(EXAKIT_HOME="$HOME_K" bash "$ROOT/setup/exakit" logs --json 2>/dev/null)"
+check "exakit logs lists it: target virtual-schemas, the newest day file" "$VSLOG" \
+    "$(printf '%s' "$LOGS_JSON" | python3 -c 'import json,sys; print(next((t["path"] for t in json.load(sys.stdin)["targets"] if t["target"] == "virtual-schemas"), ""))' 2>/dev/null)"
+check "...and exakit logs virtual-schemas --path names it" "$VSLOG" "$(EXAKIT_HOME="$HOME_K" bash "$ROOT/setup/exakit" logs virtual-schemas --path 2>/dev/null)"
+
+# The module itself: the shapes, a long statement, the pruning, the mode.
+UNIT="$(python3 - "$ROOT" "$WORK/vslog-unit" <<'PYUNIT'
+import datetime, hashlib, os, sys
+sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
+import vslog
+folder = sys.argv[2]
+os.makedirs(folder)
+today = datetime.date.today()
+def day(days):
+    path = os.path.join(folder, "virtual-schemas-%s.log" % (today - datetime.timedelta(days=days)).strftime("%Y%m%d"))
+    open(path, "w").close()
+    return path
+day(20); day(15); day(14); day(3)
+os.chmod(day(0), 0o644)
+open(os.path.join(folder, "install-20200101-000000.log"), "w").close()
+log = vslog.RunLog(folder, "connect", "unit")
+log.secret("Run-Known-0")
+long_sql = "CREATE LUA ADAPTER SCRIPT X AS\n" + "-- lua\n" * 1000 + "-- the-tail-marker\n/"
+log.statement(long_sql)
+log.statement("CREATE CONNECTION C TO 'jdbc:x://h' USER 'r' IDENTIFIED BY 'Lit-''Pw-1'")
+log.write("INFO", "jdbc:sqlserver://h:1433;databaseName=d;password=Semi-Pw-2;encrypt=true")
+log.write("INFO", "https://acct.blob.core.windows.net/c?sv=1&sig=Sas-Sig-3&sp=r")
+log.write("INFO", "mongodb+srv://reader:Uri-Pw-4@cluster0.example.net/db")
+log.write("INFO", 'CREATE USER u IDENTIFIED BY "Quoted-Pw-5"')
+log.write("INFO", "a token=Tok-6 and AccountKey=Key-7== and the run's own Run-Known-0, as JSON \"Run-Known-0\"")
+log.write("INFO", "s3://bucket/path?X-Amz-Signature=Amz-8&X-Amz-Date=1")
+log.close()
+text = open(log.path).read()
+print("names " + " ".join(sorted(os.listdir(folder))))
+print("mode " + oct(os.stat(log.path).st_mode & 0o777)[2:])
+print("leaks " + " ".join(n for n in ("Lit-", "Pw-1", "Semi-Pw-2", "Sas-Sig-3", "Uri-Pw-4", "Quoted-Pw-5", "Tok-6",
+                                      "Key-7", "Run-Known-0", "Amz-8") if n in text))
+redacted = vslog.redact(long_sql)
+sql_lines = [l for l in text.splitlines() if " connect unit SQL " in l or " connect unit | " in l]
+print("digest %s %s %s" % ("CREATE LUA ADAPTER SCRIPT X AS" in sql_lines[0],
+                           sql_lines[len(redacted[:vslog.HEAD].splitlines()) - 1].endswith(
+                               " ... [%d characters, sha256 %s]" % (len(redacted), hashlib.sha256(redacted.encode()).hexdigest())),
+                           "the-tail-marker" not in text))
+print(text)
+PYUNIT
+)"
+check "the files of more than 14 days ago are pruned, the others kept" \
+    "names install-20200101-000000.log $(python3 -c 'import datetime as d; t=d.date.today(); print(" ".join("virtual-schemas-%s.log" % (t - d.timedelta(days=n)).strftime("%Y%m%d") for n in (14, 3, 0)))')" \
+    "$(printf '%s\n' "$UNIT" | grep '^names ')"
+check "...a day file made with a wider mode is owner-only once written" "mode 600" "$(printf '%s\n' "$UNIT" | grep '^mode ')"
+check "every credential shape and every known secret is redacted" "leaks " "$(printf '%s\n' "$UNIT" | grep '^leaks ')"
+has "...user:password@ in a URI" "mongodb+srv://reader:***@cluster0.example.net/db" "$UNIT"
+has "...IDENTIFIED BY '...', a doubled quote inside" "IDENTIFIED BY '***'" "$UNIT"
+has "...IDENTIFIED BY \"...\"" 'IDENTIFIED BY "***"' "$UNIT"
+has "...;password= and &sig=" ";password=***;encrypt=true" "$UNIT"
+has "...&sig=" "&sig=***&sp=r" "$UNIT"
+has "...X-Amz-Signature=" "X-Amz-Signature=***&X-Amz-Date=1" "$UNIT"
+check "a statement over 4000 characters: its head, then the sha256 of the whole; not the rest" "digest True True True" \
+    "$(printf '%s\n' "$UNIT" | grep '^digest ')"
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

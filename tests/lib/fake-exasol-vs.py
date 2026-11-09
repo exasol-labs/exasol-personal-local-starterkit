@@ -30,12 +30,14 @@ database and inspect it afterwards:
     "secret_key" (the storage keys it accepts), "warehouse" (the one it
     knows), "region" (the bucket's) and "fail": "external" (Unity closed to
     outside engines) | "managed" (a catalog-managed table, at the read)
-    sources     {host: {"tables": [...], "fail": null|"auth"|"tls"|"tls-validity"|"unreachable"|"denied",
+    sources     {host: {"tables": [...], "fail": null|"auth"|"tls"|"tls-validity"|"unreachable"|"denied"|"echo",
                         "secret": "<the credential the source accepts>",
                         "read_error": "<the driver's words for a refused read>"}}
                 read_error is raised by the bounded read alone, as Exasol
                 reports a pushed-down IMPORT the source refused (a missing
                 grant): the metadata was read, the rows may not be.
+                "echo" fails with the source's "message" as the driver's
+                text (one that quotes credentials the run never knew)
                 a document source (S3) is keyed by <bucket>.s3.<region>.amazonaws.com
                 and also takes "region" (the bucket's real one) and "empty"
                 (tables whose objects match nothing); its tables come from the
@@ -368,6 +370,8 @@ def _source_for(doc, connection, via="adapter"):
     if src is None:
         raise Exception("JDBC-Client-Error: The connection attempt failed.")
     fail = src.get("fail")
+    if fail == "echo":
+        raise Exception(src["message"])
     if fail == "auth" or (src.get("secret") is not None and con.get("secret") != src["secret"]):
         raise Exception('FATAL: password authentication failed for user "%s"' % con["user"])
     if fail == "tls":
