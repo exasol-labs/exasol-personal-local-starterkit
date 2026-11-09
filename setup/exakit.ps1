@@ -3769,14 +3769,18 @@ function Invoke-CmdInfoJson {
 }
 
 # Invoke-CmdConnect - `exakit connect [source] [--name N] [--url STRING]
-# [--set KEY=VALUE]... [--password-file F] [--dry-run] [--yes] [--json]`. Twin of cmd_connect.
+# [--set KEY=VALUE]... [--password-file F | --password-stdin] [--dry-run] [--yes] [--json]`.
+# Twin of cmd_connect.
 # --json: stdout carries one JSON object and nothing else - the engine's plan
 # (--dry-run), its connect result, or a failure of the engine's one shape,
-# whoever refused. It never prompts; the credential comes from --password-file.
-# The engine's events go to the log, the bridge's own lines to stderr.
+# whoever refused. It never prompts; the credential comes from --password-file
+# or --password-stdin (all of standard input; a console or nothing on it is
+# refused, Read-ExakitVsStdinSecret). The engine's events go to the log, the
+# bridge's own lines to stderr.
 function Invoke-CmdConnect {
     param([string[]]$Arguments = @())
     $source = ""; $name = ""; $pwFile = ""; $dry = $false; $json = $false; $sets = @(); $given = @(); $url = ""
+    $pwStdin = $false
     $script:ExakitVsAssumeYes = $false
     # Known before anything is refused, so every refusal answers in its shape.
     $script:ExakitVsJson = ((@($Arguments) -contains "--json") -or (@($Arguments) -contains "-j"))
@@ -3794,19 +3798,27 @@ function Invoke-CmdConnect {
             $sets += @("--set", $pair); $given += $pair.Split("=")[0]
         }
         elseif ($arg -eq "--password-file") { $i++; $pwFile = "" + $Arguments[$i] }
+        elseif ($arg -eq "--password-stdin") { $pwStdin = $true }
         elseif ($arg -in @("--dry-run", "-n")) { $dry = $true }
         elseif ($arg -in @("--yes", "-y")) { $script:ExakitVsAssumeYes = $true }
         elseif ($arg -in @("--json", "-j")) { $json = $true }
-        elseif ($arg -like "--password*" -or $arg -like "--secret*" -or $arg -like "--token*") {
-            Deny-ExakitVsInput "A credential is never taken as an argument (other users can read the process list). Use the hidden prompt or --password-file." "a credential was given as an argument, where other users can read it in the process list" "give it with --password-file <file>"
-        }
-        elseif ($arg -like "-*") { Deny-ExakitVsInput "Unknown option '$arg' for connect (exakit help connect)." "unknown option '$arg' for connect" "leave it out; the options are listed by: exakit help connect" }
-        elseif ($source) { Deny-ExakitVsInput "connect takes one source; got '$source' and '$arg'." "connect takes one source; got '$source' and '$arg'" "connect one source per command" }
+        # After the exact --password-file and --password-stdin: anything else
+        # like a credential option is one given as an argument, and only an
+        # option's name is ever repeated, never what follows an =.
+        elseif ($arg -like "--password*" -or $arg -like "--passwd*" -or $arg -like "--secret*" -or $arg -like "--token*") { Deny-ExakitVsCredentialArgument }
+        elseif ($arg -like "-*") { $opt = ($arg -split "=", 2)[0]; Deny-ExakitVsInput "Unknown option '$opt' for connect (exakit help connect)." "unknown option '$opt' for connect" "leave it out; the options are listed by: exakit help connect" }
+        # The extra word is not repeated: it may be a credential typed in the wrong place.
+        elseif ($source) { Deny-ExakitVsInput "connect takes one source; got more than one word for it." "connect takes one source; got more than one word for it" "connect one source per command" }
         else { $source = $arg }
     }
+    if ($pwStdin -and $pwFile) { Deny-ExakitVsInput "--password-stdin and --password-file both give the credential; use one." "--password-stdin and --password-file were both given" "give the credential one way: --password-stdin or --password-file <file>" }
     if ($json) { Assert-ExakitInstalled -Json } else { Assert-ExakitInstalled }
     Initialize-ExakitLogging
     $script:ExakitVsLogMark = Get-ExakitVsLogMark
+    # Read before anything runs or asks: nothing else can take it off stdin,
+    # and a console or nothing on it is refused before any work is done.
+    $stdinSecret = ""
+    if ($pwStdin) { $stdinSecret = Read-ExakitVsStdinSecret }
     # A pasted connection string fills what it names, for every path below. It
     # goes to the engine on stdin (base64, as a secret does), never as an
     # argument; its pairs go BEFORE the command line's --set, so those win.
@@ -3900,13 +3912,14 @@ function Invoke-CmdConnect {
     $secret = ""
     if ($secretSpec) {
         $what = ("" + $secretSpec.label).ToLower()
-        $secret = Read-ExakitVsSecret -Label $secretSpec.label -PasswordFile $pwFile -Kind ("" + $secretSpec.kind)
-        if (-not $secret) { Deny-ExakitVsInput "No $what was given (pipe it on standard input or use --password-file)." "no $what was given" "give it with --password-file <file> (PowerShell does not read a credential from standard input)" }
+        if ($pwStdin) { $secret = $stdinSecret }
+        else { $secret = Read-ExakitVsSecret -Label $secretSpec.label -PasswordFile $pwFile -Kind ("" + $secretSpec.kind) }
+        if (-not $secret) { Deny-ExakitVsInput "No $what was given (use --password-file or --password-stdin)." "no $what was given" "give it with --password-file <file>, or pipe it in with --password-stdin" }
         $code = Invoke-ExakitVsRun -Arguments (@("connect") + $base + @("--secret-stdin")) -Secret $secret
     } else {
         $code = Invoke-ExakitVsRun -Arguments (@("connect") + $base)
     }
-    $secret = $null
+    $secret = $null; $stdinSecret = $null
     if ($json) {
         foreach ($line in $script:ExakitVsLastLines) { Write-Output $line }
         Exit-ExakitVs $code
@@ -3927,7 +3940,7 @@ function Invoke-CmdSource {
     # default action, list, with that option.
     if ($rest.Count -gt 0 -and -not ("" + $rest[0]).StartsWith("-")) { $action = $rest[0]; $rest = @($rest | Select-Object -Skip 1) }
     $json = $false; $dry = $false; $all = $false; $name = ""; $status = ""; $pwFile = ""
-    $table = ""; $ddl = $false; $into = ""
+    $table = ""; $ddl = $false; $into = ""; $pwStdin = $false
     $script:ExakitVsAssumeYes = $false
     # --json is known before anything is refused: the bridge's own refusals
     # and failures then come in the engine's shape, and nothing is asked.
@@ -3940,13 +3953,21 @@ function Invoke-CmdSource {
         elseif ($arg -in @("--all", "-a")) { $all = $true }
         elseif ($arg -eq "--status") { $i++; $status = "" + $rest[$i] }
         elseif ($arg -eq "--password-file") { $i++; $pwFile = "" + $rest[$i] }
+        elseif ($arg -eq "--password-stdin") { $pwStdin = $true }
+        elseif ($arg -like "--password*" -or $arg -like "--passwd*" -or $arg -like "--secret*" -or $arg -like "--token*") { Deny-ExakitVsCredentialArgument }
         elseif ($arg -eq "--ddl") { $ddl = $true }
         elseif ($arg -eq "--schema") { $i++; $into = "" + $rest[$i] }
         elseif ($arg -like "--schema=*") { $into = $arg.Substring(9) }
-        elseif ($arg -like "-*") { Deny-ExakitVsInput "Unknown option '$arg' for source $action (exakit help source)." "unknown option '$arg' for source $action" "leave it out; the options are listed by: exakit help source" }
+        elseif ($arg -like "-*") { $opt = ($arg -split "=", 2)[0]; Deny-ExakitVsInput "Unknown option '$opt' for source $action (exakit help source)." "unknown option '$opt' for source $action" "leave it out; the options are listed by: exakit help source" }
         elseif (-not $name) { $name = $arg }
         elseif ($action -eq "describe" -and -not $table) { $table = $arg }
-        else { Deny-ExakitVsInput "source $action takes one name." "source $action takes one name; got '$name' and '$arg'" "name one source per command" }
+        else { Deny-ExakitVsInput "source $action takes one name." "source $action takes one name; got more than one" "name one source per command" }
+    }
+    if ($pwStdin) {
+        # Only reauth takes a credential: a pipe given to another action would
+        # be dropped unread. Twin of cmd_source.
+        if ($action -ne "reauth") { Deny-ExakitVsInput "--password-stdin is for exakit source reauth (and exakit connect)." "--password-stdin was given to source $action, which takes no credential" "leave --password-stdin out" }
+        if ($pwFile) { Deny-ExakitVsInput "--password-stdin and --password-file both give the credential; use one." "--password-stdin and --password-file were both given" "give the credential one way: --password-stdin or --password-file <file>" }
     }
     if ($json) { Assert-ExakitInstalled -Json } else { Assert-ExakitInstalled }
     Initialize-ExakitLogging
@@ -4008,8 +4029,9 @@ function Invoke-CmdSource {
             } else {
                 foreach ($line in $shown.Lines) { if ("$line" -like "RESULT *") { $shownConnector = "" + ("$line".Substring(7) | ConvertFrom-Json).connector } }
             }
-            $secret = Read-ExakitVsSecret -Label "New credential for $name" -PasswordFile $pwFile -Kind (Get-ExakitVsSecretKind -Connector $shownConnector)
-            if (-not $secret) { Deny-ExakitVsInput "No credential was given." "no credential was given" "give it with --password-file <file> (PowerShell does not read a credential from standard input)" }
+            if ($pwStdin) { $secret = Read-ExakitVsStdinSecret }
+            else { $secret = Read-ExakitVsSecret -Label "New credential for $name" -PasswordFile $pwFile -Kind (Get-ExakitVsSecretKind -Connector $shownConnector) }
+            if (-not $secret) { Deny-ExakitVsInput "No credential was given." "no credential was given" "give it with --password-file <file>, or pipe it in with --password-stdin" }
             if ($json) {
                 # Twin of cmd_source: the engine's one object, as it answers.
                 $run = Invoke-ExakitVsEngine -Arguments ($argv + @("reauth", $name, "--secret-stdin")) -Secret $secret

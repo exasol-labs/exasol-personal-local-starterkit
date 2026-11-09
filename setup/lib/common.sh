@@ -1254,6 +1254,8 @@ exakit_read_hidden() {
     stty -echo < /dev/tty 2>/dev/null || return 1
     trap 'stty "${_erh_saved:-echo}" < /dev/tty 2>/dev/null; printf "\n" > /dev/tty; exit 130' INT TERM
     printf '    %s?%s %s (input hidden): ' "${UI_ASK:-}" "${UI_RESET:-}" "$1" > /dev/tty
+    # Unset first: an exported name (even empty) stays exported when assigned.
+    unset _erh_value
     IFS= read -r _erh_value < /dev/tty
     stty "${_erh_saved:-echo}" < /dev/tty 2>/dev/null
     trap - INT TERM

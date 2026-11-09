@@ -19,7 +19,8 @@
 
 A secret is read from standard input only (--secret-stdin), never from an
 argument: arguments are visible to every local user through the process table.
-It is read as UTF-8 bytes, a byte-order mark dropped. --secret-stdin-base64
+It is read as UTF-16 by its byte-order mark, else as UTF-8 with or without
+one (decode_secret); anything else is refused. --secret-stdin-base64
 takes it base64-encoded instead: the Windows bridge sends it so, because
 Windows PowerShell 5.1 re-encodes what it pipes to a native program (measured
 on CI: a byte-order mark added, every non-ASCII character turned into '?'),
@@ -51,8 +52,8 @@ event above, each redacted of the run's secrets.
 import argparse
 import base64
 import binascii
+import codecs
 import json
-import locale
 import os
 import re
 import sys
@@ -228,12 +229,30 @@ def read_secret(args):
         return data.rstrip("\r\n") or None
     if not args.secret_stdin:
         return None
-    raw = sys.stdin.buffer.read()
+    return decode_secret(sys.stdin.buffer.read()).rstrip("\r\n") or None
+
+
+def decode_secret(raw):
+    """A credential's bytes as text: UTF-16 (little or big endian) by its
+    byte-order mark, else UTF-8 with or without one, and no NUL anywhere - the
+    rules the Windows bridge (ConvertFrom-ExakitVsSecretBytes) and the shell's
+    reader (_exakit_vs_secret_text) apply, so all three read one file alike. A
+    NUL is refused because a shell variable drops it without a word: BOM-less
+    UTF-16 would be another credential on each path. Anything else is refused,
+    never guessed: a password decoded in the wrong code page is another
+    password."""
     try:
-        data = raw.decode("utf-8-sig")
+        if raw[:2] in (codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE):
+            text = raw.decode("utf-16")
+        else:
+            text = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
-        data = raw.decode(locale.getpreferredencoding(False), errors="replace")
-    return data.rstrip("\r\n") or None
+        text = None
+    if text is None or "\0" in text:
+        remedy = "save the credential as UTF-8 (UTF-16 needs its byte-order mark), then run the same command again"
+        raise lifecycle.Failure("the credential is not UTF-8 or UTF-16 text", lifecycle.EXIT["input"], kind="input",
+                                remedy=remedy, said="the credential is not UTF-8 or UTF-16 text: " + remedy)
+    return text
 
 
 def read_value(args):
