@@ -3868,8 +3868,10 @@ exakit_data_samples_select() {
     # terminal (an agent re-running the installer) that default stood, asked
     # for a path nobody could give, and reported the install as failed.
     # EXAKIT_DATA_FILE, the unattended answer, returned above.
-    if [ "${EXAKIT_TABLE_CONFIRMED:-0}" != 1 ] && [ "$EXAKIT_TABLE_ROW_LOCAL" = 1 ] && \
-       [ "$EXAKIT_TABLE_SELECTION" = "$EXAKIT_TABLE_ROW_LOCAL" ]; then
+    # "Nothing pending" is the count, not the row number: the table keeps the
+    # sample parent on screen (disabled) then, so the file row is not row 1.
+    if [ "${EXAKIT_TABLE_CONFIRMED:-0}" != 1 ] && [ "${EXAKIT_TABLE_PENDING_COUNT:-0}" = 0 ] && \
+       [ "$EXAKIT_TABLE_ROW_LOCAL" -gt 0 ] && [ "$EXAKIT_TABLE_SELECTION" = "$EXAKIT_TABLE_ROW_LOCAL" ]; then
         info "Every bundled dataset is already loaded. To load a file of your own without a terminal, name it with EXAKIT_DATA_FILE."
         EXAKIT_DATA_LOAD_SELECTION="none"
         return 0
@@ -3908,6 +3910,7 @@ EXAKIT_TABLE_STATE=""
 EXAKIT_TABLE_ROW_LOCAL=0
 EXAKIT_TABLE_ROW_SKIP=0
 EXAKIT_TABLE_HAS_DESC=0           # does any row carry a description
+EXAKIT_TABLE_PENDING_COUNT=0      # how many dataset rows are on offer
 
 # exakit_data_table_build <state-file> — write the rows, in the order they are
 # drawn, and set EXAKIT_TABLE_DEFAULTS / _GROUP / _EXCLUSIVE the way the
@@ -4001,6 +4004,7 @@ exakit_data_table_build() {
         EXAKIT_TABLE_DEFAULTS=""
     fi
     rm -f "$_dtb_pend"
+    EXAKIT_TABLE_PENDING_COUNT="$_dtb_count"
     # The other two ways data comes in, in the same table: your own file or
     # folder, and an external source (`exakit connect`, pickable only where the
     # virtual-schema module can run - see below). EXAKIT_DATA_TABLE_NO_LOCAL=1

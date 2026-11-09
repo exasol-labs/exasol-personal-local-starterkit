@@ -3887,6 +3887,7 @@ $script:ExakitTableRowSkip = 0
 $script:ExakitTableHasDesc = $false  # does any row carry a description
 $script:ExakitTableDefaults = @()
 $script:ExakitTableGroupFirst = 0
+$script:ExakitTablePendingCount = 0
 $script:ExakitTableGroupLast = 0
 $script:ExakitTableLive = $false      # is the table animating right now
 $script:ExakitTableRow = 0            # the row the dataset being loaded owns
@@ -3956,6 +3957,7 @@ function New-ExakitDataTable {
         if ($script:UiTable) { $script:UiTable.Rows[$script:UiTable.Rows.Count - 1].State = "disabled" }
         [void]$ids.Add("")
     }
+    $script:ExakitTablePendingCount = $pending.Count
     # The other two ways data comes in, in the same table: your own file or
     # folder, and an external source (`exakit connect`, pickable only where the
     # virtual-schema module can run). -NoLocal leaves both rows out. 0 means no
@@ -4059,7 +4061,10 @@ function Select-ExakitDataLoad {
     # something, but only a person can answer the question it asks. With no
     # terminal the default stood and asked for a path nobody could give. Twin
     # of the same check in exakit_data_load_select.
-    if ((-not $script:ExakitTableConfirmed) -and $script:ExakitTableRowLocal -eq 1 -and
+    # "Nothing pending" is the count, not the row number: the table keeps the
+    # sample parent on screen (disabled) then, so the file row is not row 1.
+    if ((-not $script:ExakitTableConfirmed) -and $script:ExakitTablePendingCount -eq 0 -and
+        $script:ExakitTableRowLocal -gt 0 -and
         $selection.Count -eq 1 -and $selection[0] -eq $script:ExakitTableRowLocal) {
         Info "Every bundled dataset is already loaded. To load a file of your own without a terminal, name it with EXAKIT_DATA_FILE."
         return @("none")
