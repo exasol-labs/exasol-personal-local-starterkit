@@ -682,7 +682,7 @@ bridge() {
           _n="$(wc -l < "$B/argv" | tr -d ' ')"
           _code="$(sed -n "${_n}p" "$B/codes" 2>/dev/null)"
           if [ "$1" = resolve ] && [ -f "$B/gated" ]; then echo "FAIL BigQuery is not available yet: gated"; return 5; fi
-          case "$1" in check) echo 'RESULT {"checks": []}' ;; remove|disconnect) echo 'RESULT {"name": "sales", "drop": ["virtual schema VS_SALES", "CONNECTION EXAKIT_SRC_SALES"], "keep": [], "delete_files": ["a.jar"], "keep_files": ["b.jar"], "note": "nothing is revoked at the source"}' ;; show) echo "FAIL no source named $2 (see: exakit source list)" ;; resolve) echo 'RESULT {"connector": "postgresql"}' ;; plan) echo 'RESULT {"name": "x", "connector": "postgresql", "tier": "GA", "status": "candidate", "downloads": [], "steps": [], "exposure": "e", "warnings": []}' ;; esac
+          case "$1" in list|issues) cat "$B/rows" 2>/dev/null ;; check) echo 'RESULT {"checks": []}' ;; remove|disconnect) echo 'RESULT {"name": "sales", "drop": ["virtual schema VS_SALES", "CONNECTION EXAKIT_SRC_SALES"], "keep": [], "delete_files": ["a.jar"], "keep_files": ["b.jar"], "note": "nothing is revoked at the source"}' ;; show) echo "FAIL no source named $2 (see: exakit source list)" ;; resolve) echo 'RESULT {"connector": "postgresql"}' ;; plan) echo 'RESULT {"name": "x", "connector": "postgresql", "tier": "GA", "status": "candidate", "downloads": [], "steps": [], "exposure": "e", "warnings": []}' ;; esac
           return "${_code:-0}"
       }
       personal_slc_dns_repair() { echo "REPAIRED" >> "$B/argv"; return 0; }
@@ -751,6 +751,38 @@ OUT="$(bridge cmd_connect bq --name b </dev/null)"; RC=$?
 check "a gated connector stops the wizard with the engine's exit 5" "5 resolve bq|resolve bq|" "$RC $(tr '\n' '|' < "$B/argv")"
 has "...and the reason is shown" "not available yet" "$OUT"
 rm -f "$B/gated"
+
+# exakit source list: one table, where each source lives and its TLS level,
+# inside the terminal - columns give way rather than wrap.
+LONGHOST="mydb.cluster-abc123def456.eu-west-1.rds.amazonaws.com"
+printf 'RESULT {"sources": [{"name": "sales", "connector": "postgresql", "schema": "VS_SALES", "status": "ready", "last_check": {"at": "2026-11-09T10:22:33Z"}, "needs_refresh": false, "host": "pg.example.com", "tls": "verify"}, {"name": "orders", "connector": "mysql", "schema": "VS_ORDERS", "status": "auth-failed", "last_check": null, "needs_refresh": false, "host": "%s", "tls": "require"}, {"name": "old", "connector": "gone", "schema": "VS_OLD", "status": "ready", "last_check": null, "needs_refresh": false, "host": "", "tls": null}]}\n' "$LONGHOST" > "$B/rows"
+reset_bridge 0
+OUT="$(COLUMNS=200 bridge cmd_source list </dev/null)"
+has "list on a wide terminal: every column, under a heading" "NAME    SOURCE      SCHEMA     HOST" "$OUT"
+has "...a row names its host and TLS level, and when it was last checked" \
+    "sales   postgresql  VS_SALES   pg.example.com" "$(printf '%s\n' "$OUT" | grep '^  sales')"
+has "...TLS, then status" "verify   ready        2026-11-09 10:22" "$(printf '%s\n' "$OUT" | grep '^  sales')"
+has "...a host in full when there is room" "$LONGHOST  require  auth-failed  never" "$OUT"
+has "...a source whose connector is gone: no host, TLS n/a" "old     gone        VS_OLD     -" "$(printf '%s\n' "$OUT" | grep '^  old')"
+has "...n/a" " n/a " "$(printf '%s\n' "$OUT" | grep '^  old')"
+OUT="$(COLUMNS=80 bridge cmd_source list </dev/null)"
+check "on 80 columns: every line fits (79, the last column unwritten)" "0" \
+    "$(printf '%s\n' "$OUT" | awk 'length($0) > 79' | wc -l | tr -d ' ')"
+check "...SCHEMA goes first, then LAST CHECK; HOST and TLS stay" "  NAME    SOURCE      HOST                                 TLS      STATUS" \
+    "$(printf '%s\n' "$OUT" | grep '^  NAME')"
+has "...then a long host is cut, marked ..." "mydb.cluster-abc123def456.eu-wes...  require  auth-failed" "$OUT"
+has "...a short one kept whole" "  sales   postgresql  pg.example.com" "$OUT"
+OUT="$(COLUMNS=60 bridge cmd_source list </dev/null)"
+check "on 60 columns: the host is cut further, every line still fits" "0 1" \
+    "$(printf '%s\n' "$OUT" | awk 'length($0) > 59' | wc -l | tr -d ' ') $(printf '%s\n' "$OUT" | grep -c 'mydb\.cluster\.\.\.  require')"
+printf 'RESULT {"issues": [{"name": "orders", "connector": "mysql", "schema": "VS_ORDERS", "status": "auth-failed", "last_check": {"at": "2026-11-09T10:22:33Z"}, "needs_refresh": false, "host": "my.example.com", "tls": "require", "remedy": "the source rejected the credentials: exakit source reauth orders", "command": "exakit source reauth orders"}]}\n' > "$B/rows"
+OUT="$(COLUMNS=80 bridge cmd_source issues </dev/null)"
+has "issues: the same table, the fix on its own line under the row" \
+    "    fix: the source rejected the credentials: exakit source reauth orders" "$OUT"
+printf 'RESULT {"sources": []}\n' > "$B/rows"
+OUT="$(COLUMNS=80 bridge cmd_source list </dev/null)"
+check "no sources: (none), no heading" "  (none)" "$OUT"
+rm -f "$B/rows"
 
 printf '\n== a private CA (AWS RDS, Azure, a company CA) is trusted, not skipped ==\n'
 # Measured live against RDS PostgreSQL 18 (ap-south-1): tls=verify fails with
@@ -1156,6 +1188,20 @@ run plan mongodb --name mg --set "uri=mongodb://reader:pw@h:27017/" --set databa
 has "a URI carrying user:password@ is refused - the password belongs in the CONNECTION" "the MongoDB URI carries credentials" "$OUT"
 run plan mongodb --name mg --set "uri=postgres://h/" --set database=d --set collection=c --set user=reader
 has "...and a URI that is not MongoDB's" "is not a valid mongodb-uri" "$OUT"
+# The adapter (0.1.3) signs in against admin whatever the URI says: a reader
+# defined in another database could never log in, so its authSource is refused
+# before anything is staged, not left to fail at connect.
+run plan mongodb --name mg --set "uri=mongodb+srv://cluster0.example.net/?retryWrites=true&authSource=sales" \
+    --set database=sample_mflix --set collection=movies --set user=reader
+check "--set uri with authSource=sales: refused, exit 2" "2" "$RC"
+has "...in one line: the adapter signs in against admin, and the fix" \
+    "the MongoDB adapter always signs in against the admin database, so an authSource other than admin cannot work: make the reader a user of admin and drop authSource or set it to admin" "$OUT"
+run plan mongodb --name mg --set "uri=mongodb+srv://cluster0.example.net/?AUTHSOURCE=Sales" --set database=d --set collection=c --set user=reader
+check "...the option's name in any case" "2" "$RC"
+run plan mongodb --name mg $MG_SET --set collection=movies
+check "authSource=admin is accepted" "0" "$RC"
+run plan mongodb --name mg --set "uri=mongodb+srv://cluster0.example.net/" --set database=sample_mflix --set collection=movies --set user=reader
+check "...and so is no authSource" "0" "$RC"
 
 mgdb ', "rust": false'
 run_secret "$SECRET" connect mongodb --name mg $MG_SET --set collection=movies --secret-stdin
@@ -1178,6 +1224,12 @@ has "...the scan UDF too" 'CREATE OR REPLACE RUST SCALAR SCRIPT "EXAKIT_VS"."MON
 has "...the virtual schema names the connection the adapter's way" "MONGODB_CONNECTION = 'EXAKIT_SRC_MG' DATABASE = 'sample_mflix' COLLECTION = 'movies'" \
     "$(dbq '[x for x in d["statements"] if x.startswith("CREATE VIRTUAL SCHEMA \"VS_MG\"")][-1]')"
 lacks "...the password is not printed" "$SECRET" "$OUT"
+OUT="$(eng --json list 2>/dev/null)"
+check "list --json: every row keeps its keys and adds host and tls, nothing renamed" \
+    "connector host last_check name needs_refresh schema status tls" \
+    "$(printf '%s' "$OUT" | python3 -c 'import json, sys; print(" ".join(sorted(set(k for s in json.load(sys.stdin)["sources"] for k in s))))')"
+check "...a MongoDB source: the URI's host, and verify for mongodb+srv://" "cluster0.example.net verify" \
+    "$(printf '%s' "$OUT" | python3 -c 'import json, sys; s = [s for s in json.load(sys.stdin)["sources"] if s["name"] == "mg"][0]; print(s["host"], s["tls"])')"
 
 run_secret "$SECRET" connect mongodb --name mgt $MG_SET --set collection=theaters --secret-stdin
 check "a second MongoDB source: exit 0, the two scripts shared, not doubled" "0 1 1" \
@@ -2464,6 +2516,15 @@ done
 lacks "a credential never becomes an input value" '"password"' "$VALS"
 pst mongodb "mongodb+srv://reader:$PW@cluster0.abc12.mongodb.net/movies?retryWrites=true&authMechanismProperties=AWS_SESSION_TOKEN:$PW"
 check "mongodb: the uri keeps no credentials and no path" '{"database": "movies", "uri": "mongodb+srv://cluster0.abc12.mongodb.net/?retryWrites=true", "user": "reader"}' "$VALS"
+pst mongodb "mongodb+srv://reader@cluster0.abc12.mongodb.net/movies?retryWrites=true&authSource=sales"
+check "mongodb: a string with authSource=sales is refused, exit 2 - the adapter signs in against admin" "2" "$RC"
+has "...in one line, with the fix" \
+    "the MongoDB adapter always signs in against the admin database, so an authSource other than admin cannot work: make the reader a user of admin and drop authSource or set it to admin" "$OUT"
+lacks "...the value not quoted" "sales" "$OUT"
+pst mongodb "mongodb+srv://reader@cluster0.abc12.mongodb.net/movies?authSource=admin"
+check "mongodb: authSource=admin is read" '0 {"database": "movies", "uri": "mongodb+srv://cluster0.abc12.mongodb.net/?authSource=admin", "user": "reader"}' "$RC $VALS"
+pst mongodb "mongodb+srv://reader@cluster0.abc12.mongodb.net/movies"
+check "...and so is no authSource" '0 {"database": "movies", "uri": "mongodb+srv://cluster0.abc12.mongodb.net", "user": "reader"}' "$RC $VALS"
 pst pg 'jdbc:postgresql://h/db?user=r&password=Abc&Xyz9'
 lacks "a password with an unencoded & does not leak its tail as a setting's name" "Xyz9" "$OUT"
 has "...the tail is counted instead" "1 more part of the connection string could not be read" "$OUT"
@@ -2786,6 +2847,38 @@ check "public_host decides per connector, from its connector.json" \
     "postgresql=pg.example.com|postgresql=None|mysql=db.abc.eu-west-1.rds.amazonaws.com|sqlserver=None|oracle=ora.example.com|s3=docs-bucket.s3.ap-south-1.amazonaws.com|azure-blob=acct.blob.core.windows.net|snowflake=myorg-acct1.snowflakecomputing.com|bigquery=www.googleapis.com|databricks=dbc-1.cloud.databricks.com|lakehouse=glue.eu-west-1.amazonaws.com|unity=dbc-1.cloud.databricks.com|mongodb=cluster0.abcd.mongodb.net|mongodb=None|mongodb=shard.example.com|iceberg-rest=None|iceberg-rest=None|iceberg-rest=s3.example.com|iceberg-rest=rest.example.com|" \
     "$(printf '%s\n' "$SCOPE" | sed '$d' | tr '\n' '|')"
 check "...and every connector in the catalog is decided here (a new one must be added)" "[]" "$(printf '%s\n' "$SCOPE" | tail -1)"
+
+# exakit source list: where each source lives and its TLS level, one rule for
+# every connector - its tls input; a MongoDB URI's own options; http:// is
+# disable; a cloud store's HTTPS is verify; BigQuery is its project.
+WHERE="$(python3 - "$ROOT" <<'PYW'
+import sys
+sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
+import lifecycle, plan
+defs = plan.Definitions(sys.argv[1] + "/setup/virtual-schemas")
+cases = [("postgresql", {"host": "pg.example.com", "tls": "verify"}), ("mysql", {"host": "my.example.com", "tls": "require"}),
+         ("sqlserver", {"host": "sql.example.com", "tls": "disable"}), ("oracle", {"host": "ora.example.com"}),
+         ("s3", {"bucket": "docs-bucket", "region": "ap-south-1"}), ("azure-blob", {"account": "acct", "container": "c"}),
+         ("snowflake", {"account": "myorg-acct1"}), ("bigquery", {"project": "my-project", "dataset": "d"}),
+         ("databricks", {"host": "dbc-1.cloud.databricks.com"}), ("lakehouse", {"region": "eu-west-1"}),
+         ("unity", {"workspace_url": "https://dbc-1.cloud.databricks.com"}),
+         ("iceberg-rest", {"catalog_url": "http://192.168.64.1:8181"}),
+         ("iceberg-rest", {"catalog_url": "https://rest.example.com/api", "endpoint": "http://10.0.0.5:9000"}),
+         ("mongodb", {"uri": "mongodb+srv://cluster0.abcd.mongodb.net/?authSource=admin"}),
+         ("mongodb", {"uri": "mongodb://10.0.0.5:27017,10.0.0.6:27017/"}),
+         ("mongodb", {"uri": "mongodb://10.0.0.5:27017/?tls=true&tlsAllowInvalidCertificates=true"}),
+         ("mongodb", {"uri": "mongodb+srv://cluster0.abcd.mongodb.net/?ssl=false"})]
+for cid, values in cases:
+    c = defs.connector(cid)
+    print("%s=%s/%s" % (cid, lifecycle.source_where(c, values), lifecycle.tls_level(c, values)))
+print("gone=%s/%s" % (lifecycle.source_where(None, {"host": "h.example.com"}), lifecycle.tls_level(None, {})))
+print(sorted(set(e["id"] for e in defs.entries()) - set(c for c, _ in cases)))
+PYW
+)"
+check "list: host and tls per connector, from its connector.json" \
+    "postgresql=pg.example.com/verify|mysql=my.example.com/require|sqlserver=sql.example.com/disable|oracle=ora.example.com/verify|s3=docs-bucket.s3.ap-south-1.amazonaws.com/verify|azure-blob=acct.blob.core.windows.net/verify|snowflake=myorg-acct1.snowflakecomputing.com/verify|bigquery=my-project/verify|databricks=dbc-1.cloud.databricks.com/verify|lakehouse=glue.eu-west-1.amazonaws.com/verify|unity=dbc-1.cloud.databricks.com/verify|iceberg-rest=192.168.64.1/disable|iceberg-rest=rest.example.com/disable|mongodb=cluster0.abcd.mongodb.net/verify|mongodb=10.0.0.5/disable|mongodb=10.0.0.5/require|mongodb=cluster0.abcd.mongodb.net/disable|gone=h.example.com/None|" \
+    "$(printf '%s\n' "$WHERE" | sed '$d' | tr '\n' '|')"
+check "...and every connector in the catalog is decided here (a new one must be added)" "[]" "$(printf '%s\n' "$WHERE" | tail -1)"
 check "a cloud store with no host input: the plan names its endpoint" \
     "INFO $IPLINE: myorg-acct1.snowflakecomputing.com must allow it if it filters by address (security group, firewall or IP access list)" \
     "$(ipeng plan snowflake --name ipsf $SF_SET 2>/dev/null | grep '^INFO ')"
@@ -3081,6 +3174,11 @@ kill "$_jw" 2>/dev/null; wait "$_jw" 2>/dev/null; rm -f "$WORK/json.fifo"
 check "reauth --json, --password-file a pipe: exit 0, one object" "0 [True, 'ready']" "$JRC $(one '[d["ok"], d["status"]]')"
 jsonsrc /dev/null --json
 check "source --json (no action): exit 0, the listing's one object" "0 True" "$JRC $(one 'd["ok"]')"
+check "...whose rows carry host and tls" "pg.example.com verify" \
+    "$(one '" ".join([[s["host"], s["tls"]] for s in d["sources"] if s["name"] == "jsonjava"][0])')"
+COLUMNS=120 jsonsrc /dev/null list
+has "source list, the real engine through the shell: the host and TLS level in its row" "pg.example.com  verify" \
+    "$(printf '%s\n' "$JOUT" | grep '^  jsonjava ')"
 # --json never asks, so it never takes silence for consent: a disconnect or
 # remove without --yes changes nothing (exit 5), as without a terminal.
 jsonsrc /dev/null remove jsonjava --json

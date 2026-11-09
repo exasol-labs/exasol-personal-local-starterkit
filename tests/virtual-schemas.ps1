@@ -85,10 +85,46 @@ Check "connect through the bridge: exit 0" 0 $r.Code
 $db = Get-Content -Raw -LiteralPath $state -Encoding UTF8 | ConvertFrom-Json
 Check "a non-ASCII credential reaches the CONNECTION byte for byte" $secret $db.connections.EXAKIT_SRC_SALES.secret
 Check "...and is in none of the output" $false (($r.Lines -join "`n").Contains($secret.Substring(0, 5)))
+$connectLines = @($r.Lines)
 $result = Show-ExakitVsLines -Lines (Invoke-ExakitVsEngine -Arguments @("list")).Lines
 Check "list comes back parsed" "sales" (@($result.sources)[0].name)
+Check "...each row adds where it lives and its TLS level (host, tls)" "pg.example.com verify" ("" + @($result.sources)[0].host + " " + @($result.sources)[0].tls)
+Check "...and keeps every key it had" "connector host last_check name needs_refresh schema status tls" ((@(@($result.sources)[0].PSObject.Properties | ForEach-Object { $_.Name }) | Sort-Object) -join " ")
 $r = Invoke-ExakitVsEngine -Arguments @("paste", "pg", "--base64") -Secret "jdbc:postgresql://h/db?user=r&password=Abc&Xyz9"
 Check "paste through the bridge: a password's unencoded & leaks no name" $false (($r.Lines -join "`n").Contains("Xyz9"))
+
+Write-Host ""
+Write-Host "== the query hint after connect: a quoted name, escaped for exakit.cmd =="
+# On Windows `exakit` is exakit.cmd, and PowerShell strips the inner double
+# quotes of an argument it hands to a batch file: a quoted name needs \".
+$script:shown.Clear()
+Show-ExakitVsQueryHints -Result ([pscustomobject]@{ example = 'SELECT * FROM VS_X."actor" LIMIT 10'; tips = @("a tip") }) -Name "x"
+Check "an example that quotes a name is shown as it is" 'OK Query it like any schema: SELECT * FROM VS_X."actor" LIMIT 10' $script:shown[0]
+Check "...then the form that works from PowerShell, each inner double quote escaped" 'INFO From PowerShell: exakit sql ''SELECT * FROM VS_X.\"actor\" LIMIT 10''' $script:shown[1]
+Check "...with why, in one line" $true (("" + $script:shown[2]).StartsWith("INFO ") -and ("" + $script:shown[2]).Contains("drops unescaped ones when it hands the query to exakit.cmd"))
+Check "...before the connector's tips" "INFO a tip" $script:shown[3]
+$connectResult = Show-ExakitVsLines -Lines $connectLines
+$script:shown.Clear()
+Show-ExakitVsQueryHints -Result $connectResult -Name "sales"
+Check "the real connect's example quotes no name: no PowerShell line, the tips follow it" $true ((@($script:shown) -join "|").StartsWith("OK Query it like any schema: SELECT * FROM VS_SALES.ORDERS LIMIT 10|INFO Names arrive in upper case"))
+Check "...and nothing says From PowerShell" $false ((@($script:shown) -join "|").Contains("From PowerShell"))
+
+Write-Host ""
+Write-Host "== MongoDB: an authSource other than admin is refused =="
+$mgString = "mongodb+srv://reader@cluster0.abc12.mongodb.net/movies"
+$r = Invoke-ExakitVsEngine -Arguments @("paste", "mongodb", "--base64") -Secret ($mgString + "?authSource=sales")
+Check "paste with authSource=sales: exit 2, the adapter signs in against admin" "2 True" ("" + $r.Code + " " + (($r.Lines -join "`n").Contains("the MongoDB adapter always signs in against the admin database")))
+$r = Invoke-ExakitVsEngine -Arguments @("paste", "mongodb", "--base64") -Secret ($mgString + "?authSource=admin")
+Check "...authSource=admin is read" 0 $r.Code
+$r = Invoke-ExakitVsEngine -Arguments @("paste", "mongodb", "--base64") -Secret $mgString
+Check "...and so is no authSource" 0 $r.Code
+$mgPlan = @("plan", "mongodb", "--name", "mgps", "--set", "database=sample_mflix", "--set", "collection=movies", "--set", "user=reader", "--set")
+$r = Invoke-ExakitVsEngine -Arguments ($mgPlan + @("uri=mongodb+srv://cluster0.example.net/?authSource=sales"))
+Check "plan --set uri with authSource=sales: exit 2, the fix named" "2 True" ("" + $r.Code + " " + (($r.Lines -join "`n").Contains("make the reader a user of admin and drop authSource or set it to admin")))
+$r = Invoke-ExakitVsEngine -Arguments ($mgPlan + @("uri=mongodb+srv://cluster0.example.net/?authSource=admin"))
+Check "...authSource=admin is accepted" 0 $r.Code
+$r = Invoke-ExakitVsEngine -Arguments ($mgPlan + @("uri=mongodb+srv://cluster0.example.net/"))
+Check "...and so is no authSource" 0 $r.Code
 
 Write-Host ""
 Write-Host "== repair and retry =="
@@ -187,6 +223,38 @@ $out = & $pwsh -NoProfile -File $childFile (J @("setup", "exakit.ps1")) $record 
 $childCode = $LASTEXITCODE
 $ErrorActionPreference = "Stop"
 Check "remove --yes: exit 0, and says it is done" "0 True" ("$childCode " + (@($out) -join "`n").Contains("sales removed"))
+
+Write-Host ""
+Write-Host "== exakit source list: one table, host and TLS, inside the console =="
+# The same rows and widths as the bash suite: the two renderers are twins.
+$longHost = "mydb.cluster-abc123def456.eu-west-1.rds.amazonaws.com"
+$listRows = 'RESULT {"sources": [{"name": "sales", "connector": "postgresql", "schema": "VS_SALES", "status": "ready", "last_check": {"at": "2026-11-09T10:22:33Z"}, "needs_refresh": false, "host": "pg.example.com", "tls": "verify"}, {"name": "orders", "connector": "mysql", "schema": "VS_ORDERS", "status": "auth-failed", "last_check": null, "needs_refresh": false, "host": "' + $longHost + '", "tls": "require"}, {"name": "old", "connector": "gone", "schema": "VS_OLD", "status": "ready", "last_check": null, "needs_refresh": false, "host": "", "tls": null}]}'
+function Invoke-ListChild([string]$Cols, [string]$Rows, [string]$Action = "list") {
+    $env:COLUMNS = $Cols
+    $ErrorActionPreference = "Continue"
+    $o = & $pwsh -NoProfile -File $childFile (J @("setup", "exakit.ps1")) $record 0 (Canned $Rows) $Action 2>&1
+    $ErrorActionPreference = "Stop"
+    Remove-Item Env:COLUMNS -ErrorAction SilentlyContinue
+    return @($o | ForEach-Object { "$_" })
+}
+function Get-Row([string[]]$Lines, [string]$Start) { return (@($Lines | Where-Object { $_.StartsWith($Start) }) -join "") }
+$out = Invoke-ListChild "200" $listRows
+Check "list on a wide console: every column, under a heading" $true ((Get-Row $out "  NAME ").StartsWith("  NAME    SOURCE      SCHEMA     HOST"))
+Check "...a row names its host" $true ((Get-Row $out "  sales ").StartsWith("  sales   postgresql  VS_SALES   pg.example.com"))
+Check "...then TLS, status and when it was last checked" $true ((Get-Row $out "  sales ").EndsWith("verify   ready        2026-11-09 10:22"))
+Check "...a host in full when there is room" $true ((Get-Row $out "  orders ").Contains($longHost + "  require  auth-failed  never"))
+Check "...a source whose connector is gone: no host, TLS n/a" $true ((Get-Row $out "  old ").StartsWith("  old     gone        VS_OLD     -") -and (Get-Row $out "  old ").Contains(" n/a "))
+$out = Invoke-ListChild "80" $listRows
+Check "on 80 columns: every line fits (79, the last column unwritten)" 0 @($out | Where-Object { $_.Length -gt 79 }).Count
+Check "...SCHEMA goes first, then LAST CHECK; HOST and TLS stay" "  NAME    SOURCE      HOST                                 TLS      STATUS" (Get-Row $out "  NAME ")
+Check "...then a long host is cut, marked ..." $true ((Get-Row $out "  orders ").Contains("mydb.cluster-abc123def456.eu-wes...  require  auth-failed"))
+Check "...a short one kept whole" $true ((Get-Row $out "  sales ").StartsWith("  sales   postgresql  pg.example.com"))
+$out = Invoke-ListChild "60" $listRows
+Check "on 60 columns: the host is cut further, every line still fits" "0 True" ("" + @($out | Where-Object { $_.Length -gt 59 }).Count + " " + (Get-Row $out "  orders ").Contains("mydb.cluster...  require"))
+$out = Invoke-ListChild "80" 'RESULT {"issues": [{"name": "orders", "connector": "mysql", "schema": "VS_ORDERS", "status": "auth-failed", "last_check": {"at": "2026-11-09T10:22:33Z"}, "needs_refresh": false, "host": "my.example.com", "tls": "require", "remedy": "the source rejected the credentials: exakit source reauth orders", "command": "exakit source reauth orders"}]}' "issues"
+Check "issues: the same table, the fix on its own line under the row" $true ($out -contains "    fix: the source rejected the credentials: exakit source reauth orders")
+$out = Invoke-ListChild "80" 'RESULT {"sources": []}'
+Check "no sources: (none), no heading" "  (none)|" ((@($out | Where-Object { $_.Trim() }) -join "|") + "|")
 
 Write-Host ""
 Write-Host "== exakit connect --url: the string on the engine's stdin, --set still wins =="

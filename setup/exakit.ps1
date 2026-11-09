@@ -4031,13 +4031,58 @@ function Invoke-CmdSource {
         $rows = $null
         if ($r.PSObject.Properties["sources"]) { $rows = @($r.sources) } elseif ($r.PSObject.Properties["issues"]) { $rows = @($r.issues) }
         if ($null -ne $rows) {
+            # One table inside the console (COLUMNS, else its width, else 80; the
+            # last column left unwritten). Too wide, SCHEMA goes first - it is
+            # always VS_<NAME> - then LAST CHECK (exakit source show has it), then
+            # HOST is cut, never below 10. An issue's fix goes on its own line.
+            # Twin of the rows block of the renderer in cmd_source (virtual-schemas.sh).
             if ($rows.Count -eq 0) { Write-Host "  (none)" }
+            $heads = @("NAME", "SOURCE", "SCHEMA", "HOST", "TLS", "STATUS", "LAST CHECK")
+            $cells = @()
             foreach ($s in $rows) {
-                $at = "never checked"
-                if ($s.last_check -and $s.last_check.at) { $at = $s.last_check.at }
-                $remedy = ""
-                if ($s.PSObject.Properties["remedy"]) { $remedy = " - " + $s.remedy }
-                Write-Host ("  {0,-16} {1,-11} {2,-14} {3,-14} {4}{5}" -f $s.name, $s.connector, $s.schema, $s.status, $at, $remedy)
+                $at = "never"
+                if ($s.last_check -and $s.last_check.at) {
+                    $v = $s.last_check.at
+                    # PowerShell 7's ConvertFrom-Json reads an ISO time as a DateTime; 5.1 keeps the string.
+                    if ($v -is [DateTime]) { $at = $v.ToUniversalTime().ToString("yyyy-MM-dd HH:mm", [Globalization.CultureInfo]::InvariantCulture) }
+                    else { $at = "" + $v; if ($at.Length -gt 16) { $at = $at.Substring(0, 16) }; $at = $at.Replace("T", " ") }
+                }
+                $hostCell = "-"; if ($s.PSObject.Properties["host"] -and $s.host) { $hostCell = "" + $s.host }
+                $tlsCell = "n/a"; if ($s.PSObject.Properties["tls"] -and $s.tls) { $tlsCell = "" + $s.tls }
+                $cells += , @(("" + $s.name), ("" + $s.connector), ("" + $s.schema), $hostCell, $tlsCell, ("" + $s.status), $at)
+            }
+            $width = @()
+            for ($i = 0; $i -lt $heads.Count; $i++) {
+                $w = $heads[$i].Length
+                foreach ($c in $cells) { if ($c[$i].Length -gt $w) { $w = $c[$i].Length } }
+                $width += $w
+            }
+            $cols = 0
+            if ("$env:COLUMNS" -match '^[0-9]+$') { $cols = [int]$env:COLUMNS }
+            if ($cols -lt 20) { try { $cols = [Console]::WindowWidth } catch { $cols = 0 } }
+            if ($cols -lt 20) { $cols = 80 }
+            $shown = New-Object System.Collections.ArrayList
+            foreach ($i in 0..6) { [void]$shown.Add($i) }
+            foreach ($i in @(2, 6)) {
+                $total = 2 * $shown.Count; foreach ($j in $shown) { $total += $width[$j] }
+                if ($total -gt ($cols - 1)) { $shown.Remove($i) }
+            }
+            $total = 2 * $shown.Count; foreach ($j in $shown) { $total += $width[$j] }
+            if ($total -gt ($cols - 1)) { $width[3] = [Math]::Max(10, $width[3] - ($total - ($cols - 1))) }
+            $line = {
+                param($c)
+                $out = @()
+                foreach ($j in $shown) {
+                    $v = $c[$j]
+                    if ($v.Length -gt $width[$j]) { $v = $v.Substring(0, $width[$j] - 3) + "..." }
+                    $out += $v.PadRight($width[$j])
+                }
+                ("  " + ($out -join "  ")).TrimEnd()
+            }
+            if ($rows.Count -gt 0) { Write-Host (& $line $heads) }
+            for ($k = 0; $k -lt $rows.Count; $k++) {
+                Write-Host (& $line $cells[$k])
+                if ($rows[$k].PSObject.Properties["remedy"] -and $rows[$k].remedy) { Write-Host ("    fix: " + $rows[$k].remedy) }
             }
         } elseif ($r.PSObject.Properties["connectors"]) {
             foreach ($c in @($r.connectors)) { Write-Host ("  {0,-12} {1,-18} {2,-5} {3,-10} aliases: {4}" -f $c.id, $c.name, $c.tier, $c.status, (@($c.aliases) -join ", ")) }

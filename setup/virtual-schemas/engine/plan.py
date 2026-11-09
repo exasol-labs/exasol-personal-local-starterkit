@@ -226,6 +226,21 @@ def objects(name, connector=None):
             "script_schema": "EXAKIT_VS", "script": script}
 
 
+def mongo_auth_source(uri):
+    """The refusal for a MongoDB URI whose authSource is not admin, else None.
+    exasol-mongodb-vs 0.1.3 signs in against admin whatever the URI says (the
+    CONNECTION's user and password replace any authSource), so a reader defined
+    in another database could never log in: said now, not as a refused login at
+    connect. Never quotes the value - it may come from a pasted string."""
+    from urllib.parse import unquote
+    for segment in str(uri).partition("?")[2].split("&"):
+        key, _, value = segment.partition("=")
+        if unquote(key).strip().lower() == "authsource" and unquote(value).strip() not in ("", "admin"):
+            return ("the MongoDB adapter always signs in against the admin database, so an authSource other than "
+                    "admin cannot work: make the reader a user of admin and drop authSource or set it to admin")
+    return None
+
+
 def check_value(spec, raw):
     """One input's value checked by its kind: (value, None), or (None, the problem).
 
@@ -268,6 +283,8 @@ def check_value(spec, raw):
         return None, "%s=%r is not a valid %s" % (name, raw, kind)
     if kind == "aws-region" and raw.startswith("cn-"):
         return None, "the China regions use other endpoints, which this connector does not reach"
+    if kind == "mongodb-uri" and mongo_auth_source(raw):
+        return None, mongo_auth_source(raw)
     if kind == "host" and raw.strip("[]").lower() in LOOPBACK:
         return None, LOOPBACK_ADVICE
     if kind == "host":

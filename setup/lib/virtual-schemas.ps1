@@ -440,11 +440,20 @@ function Invoke-ExakitVsRun {
 }
 
 # Show-ExakitVsQueryHints - a first query on one of the source's real tables,
-# quoted as it must be, then the connector's tips. Twin of _exakit_vs_query_hints.
+# quoted as it must be, then the connector's tips. Twin of _exakit_vs_query_hints,
+# plus a line bash has no need for: here `exakit` is exakit.cmd, and PowerShell
+# (5.1, and 7 too for a batch file) strips the inner double quotes of an argument
+# it hands to one, so an example that quotes a name (MySQL, SQL Server, MongoDB
+# keep their names' case) is shown again with each one written \".
 function Show-ExakitVsQueryHints {
     param($Result, [string]$Name)
     if ($null -ne $Result -and $Result.PSObject.Properties["example"] -and $Result.example) {
-        Ok ("Query it like any schema: " + $Result.example)
+        $example = "" + $Result.example
+        Ok ("Query it like any schema: " + $example)
+        if ($example.Contains('"')) {
+            Info ("From PowerShell: exakit sql '" + $example.Replace('"', '\"').Replace("'", "''") + "'")
+            Info 'Each inner double quote needs its \ there: PowerShell drops unescaped ones when it hands the query to exakit.cmd.'
+        }
         foreach ($t in @($Result.tips)) { if ($t) { Info $t } }
     } else {
         Ok "Query it like any schema: SELECT * FROM VS_$($Name.ToUpperInvariant()).<table> LIMIT 10"

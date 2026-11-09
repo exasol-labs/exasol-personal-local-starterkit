@@ -350,6 +350,11 @@ def style_mongodb(reading, text):
             reading.drop(name)
         else:
             kept.append(segment)
+    # Refused here, not dropped by result() as an invalid uri: the adapter
+    # signs in against admin, so another authSource is a reader that cannot log in.
+    problem = planner.mongo_auth_source("?" + "&".join(kept))
+    if problem:
+        reading.refuse(problem)
     reading.put("uri", "%s://%s%s" % (scheme, authority, "/?" + "&".join(kept) if kept else ""))
 
 
