@@ -1797,6 +1797,22 @@ run_python_any() {
     run_python "$@"
 }
 
+# exakit_python_any_argv — the command run_python_any runs, as words in the
+# array _EXAKIT_PY_ANY, for a caller that needs an EXECUTABLE: timeout(1) in
+# exakit_run_bounded cannot run a shell function. The same choice in the same
+# order: a python3 that can run (run_python_any), then one meeting the floor
+# (run_python), then the uv-managed runtime as `uv run ... python`. Non-zero,
+# the array untouched, when there is no interpreter. ⇄ run_python_any and
+# run_python: a change to either changes this too.
+exakit_python_any_argv() {
+    if _exakit_python3_present || _exakit_has_system_python3; then
+        _EXAKIT_PY_ANY=(python3)
+        return 0
+    fi
+    exakit_ensure_uv || return 1
+    _EXAKIT_PY_ANY=("$EXAKIT_UV_BIN" run --python "$EXAKIT_MANAGED_PYTHON_VERSION" --no-project python)
+}
+
 # Is there any Python 3 at all? Never installs one from a read-only query
 # (exakit_ensure_uv enforces that); callers degrade instead of failing.
 # A STUB SATISFIES `command -v`. On a Mac without the Xcode Command Line Tools -
@@ -2935,6 +2951,16 @@ PY
 exakit_run_bounded() {
     _rb_limit="$1"
     shift
+    # AN EXECUTABLE, NEVER A SHELL FUNCTION. timeout(1) and gtimeout exec
+    # their command, and a function is no file: coreutils answered 127
+    # ("failed to run command") and the language container DNS repair, which
+    # passed run_python_any, never ran on any Linux or WSL host. Refused
+    # loudly instead, so a caller resolves its executable first
+    # (exakit_python_any_argv for run_python_any).
+    if declare -F "$1" >/dev/null 2>&1; then
+        printf 'exakit_run_bounded needs an executable, not the shell function %s\n' "$1" >&2
+        return 2
+    fi
     if command -v timeout >/dev/null 2>&1; then
         timeout "$_rb_limit" "$@"
         return $?

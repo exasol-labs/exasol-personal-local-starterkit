@@ -205,7 +205,7 @@ chmod +x "$WORK/launcher"
 # deployment folder DEP; prints its output, then rc=N.
 repair() {
     _bin="$1"; shift
-    env "$@" STUB_PATH="$WORK/py:$_bin:$WORK/sys" WORK="$WORK" bash -c '
+    env STUB_BIN="$_bin" "$@" WORK="$WORK" bash -c '
         EXAKIT_HOME="$WORK/home"; export EXAKIT_HOME
         . "$1/setup/lib/common.sh"; . "$1/setup/lib/detect.sh"; . "$1/setup/lib/runtime-personal.sh"
         detect_os() { printf "%s" "${STUB_OS:-linux}"; }
@@ -218,12 +218,13 @@ repair() {
                 *) return 1 ;;
             esac
         }
-        exakit_run_bounded() { shift; "$@"; }
+        # REAL_RB=1: the real exakit_run_bounded, timeout(1) and all.
+        if [ -z "${REAL_RB:-}" ]; then exakit_run_bounded() { shift; "$@"; }; fi
         run_python_any() { python3 "$@"; }
         info() { printf "INFO %s\n" "$*"; }
-        _exakit_log_file() { :; }
+        _exakit_log_file() { [ -z "${SHOW_LOG:-}" ] || printf "LOG %s\n" "$*"; return 0; }
         EXAKIT_PERSONAL_DEPLOY_DIR="${DEP:-$WORK/dep}"
-        PATH="$STUB_PATH"
+        PATH="${PY_DIR:-$WORK/py}:$STUB_BIN:$WORK/sys"
         ${CALL:-personal_slc_dns_repair}; echo "rc=$?"' _ "$ROOT" 2>&1
 }
 ctr; OUT="$(repair "$WORK/bin" REC_ENGINE=docker FAKE_PS="$PS_24")"
@@ -249,6 +250,85 @@ ctr; OUT="$(repair "$WORK/none" FAKE_PS="$PS_24")"
 check "no engine at all: exit 1, as before" "rc=1" "$OUT"
 ctr; OUT="$(repair "$WORK/bin" STUB_OS=macos REC_ENGINE=docker FAKE_PS="$PS_24")"
 check "macOS: the VM's podman, whatever a stale record says" "podman exasol-db-$ID rc=0" "$(clis) $(target) $(printf '%s\n' "$OUT" | tail -1)"
+
+printf '\n== the real bounded runner, with timeout(1) on PATH ==\n'
+# THE HARNESS STUB HID IT. `repair` above swaps exakit_run_bounded for
+# `shift; "$@"`, and the repair handed it a shell FUNCTION (run_python_any).
+# timeout(1) - coreutils, on every Linux and WSL host - execs its command, and
+# a function is no file: "failed to run command 'run_python_any': No such file
+# or directory", exit 127, the repair never ran, and only "DNS could not be
+# repaired" surfaced. The stand-in behaves like coreutils (it can run a file,
+# nothing else) and notes what it ran, so a stock macOS proves it too.
+mkdir -p "$WORK/timeout-bin"
+cat > "$WORK/timeout-bin/timeout" <<'EOF'
+#!/bin/sh
+shift
+[ -z "${TIMEOUT_LOG:-}" ] || printf '%s\n' "$1" >> "$TIMEOUT_LOG"
+command -v "$1" >/dev/null 2>&1 || { printf "timeout: failed to run command '%s': No such file or directory\n" "$1" >&2; exit 127; }
+exec "$@"
+EOF
+chmod +x "$WORK/timeout-bin/timeout"
+# bounded <PATH> <limit> <command...> - the real runner alone; prints the
+# command's output, then rc=N.
+bounded() {
+    _bp="$1"; shift
+    PATH="$_bp" TIMEOUT_LOG="$WORK/timeout.log" bash -c '
+        . "$1/setup/lib/common.sh"; shift
+        greet() { printf "ran %s" "$1"; }
+        exakit_run_bounded "$@"; echo " rc=$?"' _ "$ROOT" "$@" 2>&1
+}
+: > "$WORK/timeout.log"
+check "a shell function is refused out loud: exit 2, the reason on stderr (was 127, or a silent run)" \
+    "exakit_run_bounded needs an executable, not the shell function greet| rc=2|" \
+    "$(bounded "$WORK/timeout-bin:$WORK/sys" 5 greet x | tr '\n' '|')"
+check "...and timeout(1) was never handed it" "" "$(cat "$WORK/timeout.log")"
+check "a file goes through timeout(1), as before" "ok rc=0|printf" \
+    "$(bounded "$WORK/timeout-bin:$WORK/sys" 5 printf ok)|$(cat "$WORK/timeout.log")"
+# The repair itself, through the real runner: the case the live test met. Its
+# interpreter is an executable now (exakit_python_any_argv), so timeout(1)
+# runs it - and on a real timeout(1) cuts off its whole process group.
+: > "$WORK/timeout.log"
+ctr; OUT="$(repair "$WORK/timeout-bin:$WORK/bin" REAL_RB=1 TIMEOUT_LOG="$WORK/timeout.log" REC_ENGINE=docker FAKE_PS="$PS_24")"
+check "the repair through the real runner and timeout(1): repaired, exit 0" \
+    "docker exasol-db-$ID INFO Gave the java-17 language container the deployment's DNS|rc=0|" \
+    "$(clis) $(target) $(printf '%s\n' "$OUT" | tr '\n' '|')"
+check "...timeout(1) ran python3 itself, not a function" "python3" "$(cat "$WORK/timeout.log")"
+check "...the java-17 file points at /conf now" "/conf/resolv.conf" "$(link java-17 resolv.conf)"
+if [ -x "$WORK/sys/timeout" ]; then
+    ctr; OUT="$(repair "$WORK/bin" REAL_RB=1 REC_ENGINE=docker FAKE_PS="$PS_24")"
+    check "...and under the system's own timeout(1) too" "INFO Gave the java-17 language container the deployment's DNS|rc=0|" \
+        "$(printf '%s\n' "$OUT" | tr '\n' '|')"
+else
+    check "...no timeout(1) on this system (stock macOS): the stand-in stood for it" "skip" "skip"
+fi
+# No python3 at all: the uv-managed runtime, as run_python would run it - one
+# command, `uv run --python <v> --no-project python <helper> ...`. The stand-in
+# uv checks those words and hands the rest to this suite's python3.
+mkdir -p "$WORK/fake-uv"
+cat > "$WORK/fake-uv/uv" <<EOF
+#!/bin/sh
+[ "\$1 \$2 \$4 \$5" = "run --python --no-project python" ] || { echo "fake uv: unexpected \$*" >&2; exit 9; }
+shift 5
+exec "$(command -v python3)" "\$@"
+EOF
+chmod +x "$WORK/fake-uv/uv"
+: > "$WORK/timeout.log"
+ctr; OUT="$(repair "$WORK/timeout-bin:$WORK/bin" REAL_RB=1 TIMEOUT_LOG="$WORK/timeout.log" EXAKIT_DISABLE_SYSTEM_PYTHON=1 \
+    _EXAKIT_UV_VETTED="$WORK/fake-uv/uv" REC_ENGINE=docker FAKE_PS="$PS_24")"
+check "no python3: the repair runs on uv's Python, through timeout(1), exit 0" \
+    "$WORK/fake-uv/uv INFO Gave the java-17 language container the deployment's DNS|rc=0|" \
+    "$(cat "$WORK/timeout.log") $(printf '%s\n' "$OUT" | tr '\n' '|')"
+# A repair that cannot run leaves one log line with the reason: every caller
+# ignores its exit code, so this line is all a reader of the log gets.
+mkdir -p "$WORK/badpy"
+printf '#!/bin/sh\necho "python3: no such helper" >&2\nexit 2\n' > "$WORK/badpy/python3"
+chmod +x "$WORK/badpy/python3"
+ctr; OUT="$(repair "$WORK/timeout-bin:$WORK/bin" REAL_RB=1 SHOW_LOG=1 PY_DIR="$WORK/badpy" REC_ENGINE=docker FAKE_PS="$PS_24")"
+check "a repair that did not run: exit 1, one WARN line naming exit and reason" \
+    "LOG WARN  language container DNS repair did not run (exit 2): python3: no such helper|rc=1|" \
+    "$(printf '%s\n' "$OUT" | tr '\n' '|')"
+check "the repair hands the runner no function" "0" \
+    "$(sed -n '/^personal_slc_dns_repair()/,/^}/p' "$ROOT/setup/lib/runtime-personal.sh" | grep -c 'exakit_run_bounded [0-9]* run_python')"
 
 printf '\n== the id the container is named by (personal_slc_container_id) ==\n'
 # st <dir> <state json or -> <deployment.json or -> - a deployment folder.
