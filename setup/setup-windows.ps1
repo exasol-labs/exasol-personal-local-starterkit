@@ -437,7 +437,7 @@ try {
         # and the staged copy is what an installed exakit loads. Installing over
         # the official kit left its nano.ps1, runtime-nano.sh and catalog.tsv in
         # lib\, three files this kit removed on purpose. Twin of the same clear
-        # in kit_shared_steps.
+        # in kit_helper_step.
         #
         # ONLY WHEN THIS IS NOT THE KIT HOME ITSELF. install.ps1 unpacks the kit
         # into ~\.exasol-starter-kit\kit and runs setup from there, so these
@@ -469,7 +469,7 @@ try {
         Copy-ExakitAsset -Source (Join-Path $ScriptDir "exakit.ps1") -Destination (Join-Path $kitSetupDir "exakit.ps1")
         # setup\core and setup\preprocessor are what `exakit update` reads to decide
         # whether this kit asks for setup this machine has not finished. Twin of
-        # the same copy in kit_shared_steps.
+        # the same copy in kit_helper_step.
         foreach ($coreDir in @("core", "preprocessor", "virtual-schemas")) {
             Copy-ExakitAsset -Source (Join-Path $ScriptDir $coreDir) -Destination (Join-Path $kitSetupDir $coreDir)
         }
