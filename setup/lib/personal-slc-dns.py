@@ -1,6 +1,6 @@
 """Give Exasol Personal's language containers the deployment's DNS.
 
-    personal-slc-dns.py [--engine CLI] [--deployment-id ID] FLAVOR [FLAVOR ...]
+    personal-slc-dns.py [--engine CLI] [--deployment-id=ID] FLAVOR [FLAVOR ...]
 
 A language container (SLC) is its own filesystem, and the official ones ship
 etc/resolv.conf and etc/hosts EMPTY. The database mounts the deployment's real
@@ -21,8 +21,8 @@ privileges needed on the host) and handed to `<engine> cp -`.
 
 The database container is the one the launcher names exasol-db-<deployment
 id> on both engines (Exasol Personal 2.4, internal/localinstall/
-podman_install.go ContainerName); a sidecar is exasol-db-<id>-sidecar-<name>,
-so the first exasol-db-* name is not necessarily the database. See pick().
+podman_install.go ContainerName); a sidecar is exasol-db-<id>-sidecar-<name>.
+Nothing else is written to: see pick().
 
 Only a file that is still the shipped EMPTY one is replaced, so a Personal
 release that fixes this upstream turns the step into a no-op.
@@ -43,32 +43,32 @@ LINKS = (("resolv.conf", "/conf/resolv.conf"), ("hosts", "/conf/hosts"))
 DB_PREFIX = "exasol-db-"
 
 
-def carries(name, deployment_id):
-    """The name IS the deployment's id, or carries it as a whole leading or
-    trailing segment - the kit's own rule for "this deployment's container"
-    (_personal_names_carry_id in runtime-personal.sh). Never a substring."""
-    i = deployment_id
-    if name == i:
-        return True
-    if len(name) <= len(i):
-        return False
-    return name.startswith((i + "-", i + "_")) or name.endswith(("-" + i, "_" + i))
+# What the launcher writes as the id when it cannot read its own state
+# (internal/deploy/local_runtime.go): not a name any container carries.
+NO_ID = ("", "local")
+
+
+def clean_id(deployment_id):
+    """The id as the launcher names the container by it (TrimSpace), or ""
+    when it names none."""
+    i = (deployment_id or "").strip()
+    return "" if i in NO_ID else i
 
 
 def pick(names, deployment_id=""):
-    """The database container among the running containers' names: the
-    launcher's own name for this deployment (exasol-db-<id>), else a name
-    carrying the id as the kit matches it, else - the id unknown or nothing
-    carrying it - the first exasol-db-* that is not a sidecar, as before."""
-    exact = carry = first = ""
-    for name in names:
-        if deployment_id and not exact and name == DB_PREFIX + deployment_id:
-            exact = name
-        if deployment_id and not carry and carries(name, deployment_id):
-            carry = name
-        if not first and name.startswith(DB_PREFIX) and "-sidecar-" not in name:
-            first = name
-    return exact or carry or first
+    """The database container among the running containers' names, or "".
+
+    WRITE ONLY INTO THIS DEPLOYMENT'S DATABASE. With the id known, only the
+    launcher's own name, exasol-db-<id>: another exasol-db-* is another
+    deployment (a second kit on a shared Docker Desktop, a second deployment
+    folder, a stale container), and repairing it would report a repair this
+    deployment never got. Without an id, an exasol-db-* that is not a sidecar
+    only when it is the ONLY one: two are a choice nothing here can make."""
+    i = clean_id(deployment_id)
+    if i:
+        return DB_PREFIX + i if DB_PREFIX + i in names else ""
+    found = [n for n in names if n.startswith(DB_PREFIX) and "-sidecar-" not in n]
+    return found[0] if len(found) == 1 else ""
 
 
 def container(engine, deployment_id=""):
@@ -117,7 +117,7 @@ def main(argv=None):
     parser.add_argument("flavors", nargs="+")
     args = parser.parse_args(argv)
     try:
-        ctr = container(args.engine, args.deployment_id.strip())
+        ctr = container(args.engine, args.deployment_id)
     except (OSError, subprocess.SubprocessError):
         ctr = ""
     if not ctr:

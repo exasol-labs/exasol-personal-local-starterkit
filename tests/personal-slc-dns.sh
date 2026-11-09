@@ -15,8 +15,12 @@
 #     (kit 0.2.4+) is invisible to Podman's CLI, and Podman stays the answer
 #     when the record names none;
 #   - the database container is exasol-db-<deployment id> (the launcher's own
-#     name on both engines), never a sidecar exasol-db-<id>-sidecar-<name>
-#     that happens to be listed first; without an id, the first exasol-db-*.
+#     name on both engines) and nothing else: not a sidecar
+#     exasol-db-<id>-sidecar-<name>, not another deployment's exasol-db-*, not
+#     a name that merely contains the id. Without an id (or the launcher's
+#     "local"), a lone exasol-db-* that is not a sidecar; two are nocontainer;
+#   - the id is read the way the launcher names the container: its own state
+#     file first, trimmed, the top-level key only.
 #
 #   bash tests/personal-slc-dns.sh
 set -u
@@ -109,12 +113,31 @@ check "2.4: exasol-db-<id>, past a sidecar listed first and another deployment" 
 check "...repaired there" "EXAKIT_SLC_DNS java-17 repaired" "$OUT"
 ctr; FAKE_PS="$PS_24" helper --deployment-id "$ID" java-17 >/dev/null
 check "...the same on podman" "exasol-db-$ID podman" "$(target) $(clis)"
-ctr; FAKE_PS="exasol-db-other $ID-db-1" helper --engine docker --deployment-id "$ID" java-17 >/dev/null
-check "a name carrying the id the kit's way (<id>-db-1) wins over another exasol-db-*" "$ID-db-1" "$(target)"
+ctr; FAKE_PS="$PS_24" helper "--deployment-id= $ID " java-17 >/dev/null
+check "the id trimmed as the launcher trims it (TrimSpace)" "exasol-db-$ID" "$(target)"
+ctr; OUT="$(FAKE_PS="exasol-db--x7" helper --deployment-id=-x7 java-17)"
+check "an id starting with - is a value in the = form" "exasol-db--x7" "$(target)"
+# Never another deployment's database: the id known, only its own name.
+ctr; OUT="$(FAKE_PS="exasol-db-ffff0000" helper --engine docker --deployment-id 1a2b3c4d java-17)"
+check "id known, only another deployment's exasol-db-* runs: nocontainer" "EXAKIT_SLC_DNS - nocontainer" "$OUT"
+check "...nothing copied in or out of it, the file untouched" " regular" "$(target) $(link java-17 resolv.conf)"
+ctr; OUT="$(FAKE_PS="exasol-db-test" helper --deployment-id "$ID" java-17)"
+check "...an old-named exasol-db-* that is not this id: nocontainer" "EXAKIT_SLC_DNS - nocontainer" "$OUT"
+for _n in "$ID-app" "$ID-db-1" "x-$ID" "xexasol-db-$ID" "exasol-db-$ID-sidecar-$ID" "$ID"; do
+    ctr; OUT="$(FAKE_PS="$_n" helper --deployment-id "$ID" java-17)"
+    check "a name that merely contains the id is not the database: $_n" "EXAKIT_SLC_DNS - nocontainer" "$OUT"
+done
+# Without an id: a lone exasol-db-* that is not a sidecar, or nothing.
 ctr; FAKE_PS="exasol-db-abc-sidecar-minio exasol-db-abc" helper java-17 >/dev/null
-check "the id unknown (an old record): the first exasol-db-*, never a sidecar" "exasol-db-abc" "$(target)"
-ctr; FAKE_PS="exasol-db-test" helper --deployment-id "$ID" java-17 >/dev/null
-check "an old-named container is still found when the id names none" "exasol-db-test" "$(target)"
+check "no id: the lone exasol-db-*, never a sidecar" "exasol-db-abc" "$(target)"
+ctr; OUT="$(FAKE_PS="exasol-db-abc exasol-db-def" helper java-17)"
+check "no id, two exasol-db-*: nocontainer, not the first" "EXAKIT_SLC_DNS - nocontainer" "$OUT"
+ctr; OUT="$(FAKE_PS="x-local" helper --deployment-id local java-17)"
+check "the launcher's \"local\" is no id: x-local is not taken" "EXAKIT_SLC_DNS - nocontainer" "$OUT"
+ctr; FAKE_PS="exasol-db-abc" helper --deployment-id local java-17 >/dev/null
+check "...and a lone exasol-db-* is" "exasol-db-abc" "$(target)"
+ctr; FAKE_PS="exasol-db-abc" helper "--deployment-id=   " java-17 >/dev/null
+check "a blank id is no id" "exasol-db-abc" "$(target)"
 ctr; FAKE_PS="legacy,exasol-db-$ID" helper --engine docker --deployment-id "$ID" java-17 >/dev/null
 check "Docker's comma-joined names are split" "exasol-db-$ID" "$(target)"
 ctr; OUT="$(FAKE_PS="exasol-db-$ID-sidecar-minio" helper --deployment-id "$ID" java-17)"
@@ -131,15 +154,16 @@ check "...the same two links" "/conf/resolv.conf /conf/hosts" "$(link java-17 re
 check "...through podman, the VM's engine, by default" "podman" "$(clis)"
 OUT="$(printf '%s\n' "$GEN" | PATH="$WORK/bin:$PATH" sh)"
 check "...and idempotent" "EXAKIT_SLC_DNS java-17 ok" "$(printf '%s\n' "$OUT" | grep java-17)"
-# The container choice, case for case the Python helper's.
-for case in "$PS_24|$ID|exasol-db-$ID" "exasol-db-other $ID-db-1|$ID|$ID-db-1" \
-            "exasol-db-abc-sidecar-minio exasol-db-abc||exasol-db-abc" "exasol-db-test|$ID|exasol-db-test" \
-            "legacy,exasol-db-$ID|$ID|exasol-db-$ID"; do
+# The container choice, case for case the Python helper's ("" = nocontainer).
+for case in "$PS_24|$ID|exasol-db-$ID" "exasol-db-ffff0000|1a2b3c4d|" "exasol-db-test|$ID|" \
+            "$ID-app xexasol-db-$ID exasol-db-$ID-sidecar-$ID $ID-db-1|$ID|" "x-local|local|" \
+            "exasol-db-abc|local|exasol-db-abc" "exasol-db-abc-sidecar-minio exasol-db-abc||exasol-db-abc" \
+            "exasol-db-abc exasol-db-def||" "$PS_24| $ID |exasol-db-$ID"; do
     _ps="${case%%|*}"; _rest="${case#*|}"; _id="${_rest%%|*}"; _want="${_rest#*|}"
     ctr; gen --deployment-id "$_id" java-17 | FAKE_PS="$_ps" PATH="$WORK/bin:$PATH" sh >/dev/null
     _sh="$(target)"
-    ctr; FAKE_PS="$_ps" helper ${_id:+--deployment-id "$_id"} java-17 >/dev/null
-    check "VM script and helper agree: [$_ps] id=[$_id]" "$_want $_want" "$_sh $(target)"
+    ctr; FAKE_PS="$_ps" helper "--deployment-id=$_id" java-17 >/dev/null
+    check "VM script and helper agree: [$_ps] id=[$_id] -> [$_want]" "$_want $_want" "$_sh $(target)"
 done
 ctr; OUT="$(gen --deployment-id "$ID" java-17 | FAKE_PS="exasol-db-$ID-sidecar-minio" PATH="$WORK/bin:$PATH" sh)"
 check "...only a sidecar: nocontainer" "EXAKIT_SLC_DNS - nocontainer" "$OUT"
@@ -147,6 +171,14 @@ ctr; gen --engine docker --deployment-id "$ID" java-17 | FAKE_PS="$PS_24" PATH="
 check "--engine docker: the script asks docker" "docker exasol-db-$ID" "$(clis) $(target)"
 check "an id or engine the launcher would not write never reaches the script" "1 1" \
     "$(gen --deployment-id "x';rm -rf /;'" java-17 | grep -c "^ID=''$") $(gen --engine 'podman;id' java-17 | grep -c "^E='podman'$")"
+check "...nor the launcher's \"local\"" "1" "$(gen --deployment-id local java-17 | grep -c "^ID=''$")"
+check "the VM script needs no tr (the VM's Podman never joins names)" "0" "$(gen java-17 | grep -c 'tr ')"
+# A trailing option with no value used to loop for ever: `shift 2` with one
+# argument left shifts nothing. perl's alarm bounds the run.
+_trail="$(perl -e 'alarm 10; exec @ARGV' bash -c '. "$1/setup/lib/common.sh"; . "$1/setup/lib/detect.sh"; . "$1/setup/lib/runtime-personal.sh"; personal_slc_dns_script --engine docker --deployment-id' _ "$ROOT" | head -2 | tr '\n' ' ')"
+check "a trailing --deployment-id with no value ends, the option dropped" "E='docker' ID='' " "$_trail"
+_trail="$(perl -e 'alarm 10; exec @ARGV' bash -c '. "$1/setup/lib/common.sh"; . "$1/setup/lib/detect.sh"; . "$1/setup/lib/runtime-personal.sh"; personal_slc_dns_script --engine' _ "$ROOT" | head -2 | tr '\n' ' ')"
+check "...and a trailing --engine" "E='podman' ID='' " "$_trail"
 
 printf '\n== the repair asks the deployment engine (personal_slc_dns_repair) ==\n'
 # Only the stubs and the system tools on PATH: a real docker (Docker Desktop's
@@ -168,8 +200,9 @@ cat > "$WORK/launcher" <<'EOF'
 exit 2
 EOF
 chmod +x "$WORK/launcher"
-# repair <bin dir> [VAR=value ...] - personal_slc_dns_repair with the record
-# holding REC_ENGINE (none when unset); prints its output, then rc=N.
+# repair <bin dir> [VAR=value ...] - personal_slc_dns_repair (or CALL) with the
+# record holding REC_ENGINE and REC_CONTAINER (none when unset) and the
+# deployment folder DEP; prints its output, then rc=N.
 repair() {
     _bin="$1"; shift
     env "$@" STUB_PATH="$WORK/py:$_bin:$WORK/sys" WORK="$WORK" bash -c '
@@ -178,14 +211,20 @@ repair() {
         detect_os() { printf "%s" "${STUB_OS:-linux}"; }
         personal_slc_installed_flavors() { printf "java-17"; }
         personal_cli() { printf "%s" "$WORK/launcher"; }
-        manifest_get() { [ "$1" = runtime.engine ] && [ -n "${REC_ENGINE:-}" ] && printf "%s" "$REC_ENGINE"; }
+        manifest_get() {
+            case "$1" in
+                runtime.engine) [ -n "${REC_ENGINE:-}" ] && printf "%s" "$REC_ENGINE" ;;
+                runtime.container) [ -n "${REC_CONTAINER:-}" ] && printf "%s" "$REC_CONTAINER" ;;
+                *) return 1 ;;
+            esac
+        }
         exakit_run_bounded() { shift; "$@"; }
         run_python_any() { python3 "$@"; }
         info() { printf "INFO %s\n" "$*"; }
         _exakit_log_file() { :; }
-        EXAKIT_PERSONAL_DEPLOY_DIR="$WORK/dep"
+        EXAKIT_PERSONAL_DEPLOY_DIR="${DEP:-$WORK/dep}"
         PATH="$STUB_PATH"
-        personal_slc_dns_repair; echo "rc=$?"' _ "$ROOT" 2>&1
+        ${CALL:-personal_slc_dns_repair}; echo "rc=$?"' _ "$ROOT" 2>&1
 }
 ctr; OUT="$(repair "$WORK/bin" REC_ENGINE=docker FAKE_PS="$PS_24")"
 check "a Docker-recorded deployment is repaired through docker" "docker" "$(clis)"
@@ -196,7 +235,13 @@ check "a Podman-recorded deployment: podman" "podman exasol-db-$ID rc=0" "$(clis
 ctr; OUT="$(repair "$WORK/bin" FAKE_PS="$PS_24")"
 check "no engine recorded (before kit 0.2.4): podman, as before" "podman exasol-db-$ID rc=0" "$(clis) $(target) $(printf '%s\n' "$OUT" | tail -1)"
 ctr; repair "$WORK/bin" EXAKIT_PERSONAL_ENGINE=docker FAKE_PS="$PS_24" >/dev/null
-check "this run's own choice (an install not recorded yet) wins" "docker" "$(clis)"
+check "nothing recorded: this run's choice (an install not recorded yet)" "docker" "$(clis)"
+ctr; repair "$WORK/bin" REC_ENGINE=podman EXAKIT_PERSONAL_ENGINE=docker FAKE_PS="$PS_24" >/dev/null
+check "the record beats a stray EXAKIT_PERSONAL_ENGINE in the environment" "podman" "$(clis)"
+ctr; repair "$WORK/bin" REC_ENGINE=docker REC_CONTAINER=exasol-nano FAKE_PS="$PS_24" >/dev/null
+check "a nano record's engine is the old database's: podman" "podman" "$(clis)"
+ctr; repair "$WORK/bin" REC_ENGINE=docker REC_CONTAINER=null FAKE_PS="$PS_24" >/dev/null
+check "...runtime.container null (manifest_get says \"null\") is a nano record too" "podman" "$(clis)"
 ctr; OUT="$(repair "$WORK/podman-only" REC_ENGINE=docker FAKE_PS="$PS_24")"
 check "Docker recorded, no docker on PATH: exit 1, podman never asked" "rc=1|" "$(printf '%s\n' "$OUT" | tr '\n' '|')$(cat "$WORK/calls")"
 check "...the java-17 file untouched" "regular" "$(link java-17 resolv.conf)"
@@ -204,6 +249,29 @@ ctr; OUT="$(repair "$WORK/none" FAKE_PS="$PS_24")"
 check "no engine at all: exit 1, as before" "rc=1" "$OUT"
 ctr; OUT="$(repair "$WORK/bin" STUB_OS=macos REC_ENGINE=docker FAKE_PS="$PS_24")"
 check "macOS: the VM's podman, whatever a stale record says" "podman exasol-db-$ID rc=0" "$(clis) $(target) $(printf '%s\n' "$OUT" | tail -1)"
+
+printf '\n== the id the container is named by (personal_slc_container_id) ==\n'
+# st <dir> <state json or -> <deployment.json or -> - a deployment folder.
+st() { rm -rf "$1"; mkdir -p "$1"; [ "$2" = - ] || printf '%s\n' "$2" > "$1/.exasolLauncherState.json"; [ "$3" = - ] || printf '%s\n' "$3" > "$1/deployment.json"; }
+cid() { repair "$WORK/none" DEP="$1" CALL=personal_slc_container_id | sed '$d'; }
+st "$WORK/d1" '{"currentWorkflowState": {"running": {}}, "deploymentId": "  '"$ID"' "}' '{"deploymentId": "local"}'
+check "the launcher's state file first, trimmed; deployment.json's \"local\" ignored" "$ID" "$(cid "$WORK/d1")"
+st "$WORK/d2" '{"deploymentId": "aaaa1111"}' '{"deploymentId": "bbbb2222"}'
+check "...state and deployment.json disagree: the state's id (the one the launcher names by)" "aaaa1111" "$(cid "$WORK/d2")"
+st "$WORK/d3" '{"nested": {"deploymentId": "nested-id"}, "deploymentId": "top-id", "x": {"deploymentId": "later-id"}}' -
+check "the top-level key, not an occurrence before or after it" "top-id" "$(cid "$WORK/d3")"
+st "$WORK/d4" '{"nested": {"deploymentId": "nested-id"}}' '{"deploymentId": "bbbb2222"}'
+check "a state file with none at the top: deployment.json's" "bbbb2222" "$(cid "$WORK/d4")"
+st "$WORK/d5" '{not json' '{"deploymentId": "bbbb2222"}'
+check "an unreadable state file: deployment.json's" "bbbb2222" "$(cid "$WORK/d5")"
+st "$WORK/d6" '{"deploymentId": "   "}' -
+check "a blank id is none" "" "$(cid "$WORK/d6")"
+st "$WORK/d7" - -
+check "no state at all: none" "" "$(cid "$WORK/d7")"
+ctr; repair "$WORK/bin" REC_ENGINE=docker DEP="$WORK/d1" FAKE_PS="$PS_24" >/dev/null
+check "the repair targets the state file's id over deployment.json's \"local\"" "exasol-db-$ID" "$(target)"
+ctr; OUT="$(repair "$WORK/bin" REC_ENGINE=docker DEP="$WORK/d7" FAKE_PS="$PS_24")"
+check "no id and two exasol-db-* listed: nothing written, exit 1" "rc=1 " "$(printf '%s\n' "$OUT" | tail -1) $(target)"
 
 printf '\n== wiring ==\n'
 check "every start repairs (bash)" "1" "$(sed -n '/^personal_start()/,/^}/p' "$ROOT/setup/lib/runtime-personal.sh" | grep -c '^ *personal_slc_dns_repair || true')"

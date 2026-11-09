@@ -106,9 +106,11 @@ the language-container DNS repair only ever asked Podman, which cannot see a
 Docker container: Java kept its empty DNS files and every `exakit connect` to
 a source by host name failed ("DNS could not be repaired"). The repair now
 asks the engine the kit recorded for the deployment (Podman when the record
-names none) and finds the database by the launcher's own name,
-`exasol-db-<deployment id>`, so a 2.4 sidecar (`exasol-db-<id>-sidecar-...`)
-listed first is no longer taken for it. Same on Windows. The address a source
+names none) and writes only into the database the launcher names
+`exasol-db-<deployment id>` (the id read from the launcher's own state): never
+a 2.4 sidecar (`exasol-db-<id>-sidecar-...`) listed first, never another
+deployment's database. Without an id it takes a lone `exasol-db-*` and
+otherwise reports no container. Same on Windows. The address a source
 on this computer is reached at follows the engine too: Podman's
 `host.containers.internal`, or on Docker `host.docker.internal` where the
 deployment provides it, else the bridge gateway. Tests:

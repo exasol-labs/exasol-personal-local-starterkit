@@ -2982,12 +2982,15 @@ EXAKIT_PERSONAL_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # file that is still the shipped EMPTY one is replaced, so a Personal release
 # that fixes this upstream turns the whole step into a no-op.
 #
-# THE DATABASE CONTAINER BY ITS NAME, NOT THE FIRST exasol-db-*. The launcher
-# names it exasol-db-<deployment id> on every engine, and from Exasol Personal
-# 2.4 a sidecar is exasol-db-<id>-sidecar-<name> - listed first when it is the
-# newer container. So: exasol-db-<id>, else a name carrying the id the way
-# _personal_names_carry_id matches it, else (no id) the first exasol-db-* that
-# is not a sidecar. ⇄ twin: pick() in setup/lib/personal-slc-dns.py.
+# ONLY THIS DEPLOYMENT'S DATABASE CONTAINER. The launcher names it
+# exasol-db-<deployment id> on every engine; from Exasol Personal 2.4 a
+# sidecar is exasol-db-<id>-sidecar-<name>, and another deployment's database
+# (a second kit on a shared Docker Desktop, a second deployment folder, a
+# stale container) is exasol-db-<its id>. With the id known only that exact
+# name is taken; without one (or the launcher's "local"), an exasol-db-* that
+# is not a sidecar only when it is the only one. Anything else is
+# "nocontainer", never a repair written into someone else's database.
+# ⇄ twin: pick() in setup/lib/personal-slc-dns.py.
 #
 # Prints one "EXAKIT_SLC_DNS <flavor> repaired|ok|absent|failed" line per
 # flavor.
@@ -2996,25 +2999,34 @@ personal_slc_dns_script() {
     _psds_id=""
     while [ $# -gt 0 ]; do
         case "$1" in
-            --engine) _psds_engine="${2:-}"; shift 2 ;;
-            --deployment-id) _psds_id="${2:-}"; shift 2 ;;
+            --engine|--deployment-id)
+                # A trailing option has no value: dropped. `shift 2` with one
+                # argument left shifts nothing, and the loop never ended.
+                [ $# -ge 2 ] || { shift; break; }
+                case "$1" in --engine) _psds_engine="$2" ;; *) _psds_id="$2" ;; esac
+                shift 2 ;;
             *) break ;;
         esac
     done
     # Both are written into the script: only an engine CLI and an id the
-    # launcher could have made get through.
+    # launcher could have made get through. The id is trimmed as the launcher
+    # trims it (TrimSpace) before it names the container.
     case "$_psds_engine" in docker|podman) : ;; *) _psds_engine="podman" ;; esac
-    case "$_psds_id" in *[!A-Za-z0-9_.-]*) _psds_id="" ;; esac
+    _psds_id="${_psds_id#"${_psds_id%%[![:space:]]*}"}"
+    _psds_id="${_psds_id%"${_psds_id##*[![:space:]]}"}"
+    case "$_psds_id" in local|*[!A-Za-z0-9_.-]*) _psds_id="" ;; esac
     printf "E='%s'\nID='%s'\n" "$_psds_engine" "$_psds_id"
+    # One name per line: the VM's engine is Podman, which never joins names.
     cat <<'EOF'
-CTR=""; C2=""; C3=""
-for N in $("$E" ps --format '{{.Names}}' 2>/dev/null | tr ',' ' '); do
-  if [ -n "$ID" ] && [ -z "$CTR" ] && [ "$N" = "exasol-db-$ID" ]; then CTR="$N"; fi
-  if [ -n "$ID" ] && [ -z "$C2" ]; then case "$N" in "$ID"|"$ID"-*|"$ID"_*|*-"$ID"|*_"$ID") C2="$N" ;; esac; fi
-  if [ -z "$C3" ]; then case "$N" in exasol-db-*-sidecar-*) : ;; exasol-db-*) C3="$N" ;; esac; fi
+CTR=""; ONE=""; DBS=0
+for N in $("$E" ps --format '{{.Names}}' 2>/dev/null); do
+  if [ -n "$ID" ]; then
+    if [ "$N" = "exasol-db-$ID" ]; then CTR="$N"; fi
+  else
+    case "$N" in exasol-db-*-sidecar-*) : ;; exasol-db-*) ONE="$N"; DBS=$((DBS + 1)) ;; esac
+  fi
 done
-[ -n "$CTR" ] || CTR="$C2"
-[ -n "$CTR" ] || CTR="$C3"
+[ -n "$ID" ] || [ "$DBS" -ne 1 ] || CTR="$ONE"
 [ -n "$CTR" ] || { echo "EXAKIT_SLC_DNS - nocontainer"; exit 0; }
 EOF
     for _psds_flavor in "$@"; do
@@ -3050,6 +3062,43 @@ print(" ".join(r["flavor"] for r in rows if isinstance(r, dict) and r.get("insta
                and r.get("type") == "official" and r.get("flavor")))' 2>/dev/null
 }
 
+# personal_slc_container_id — the deployment id the launcher names its database
+# container by (exasol-db-<id>), trimmed; empty when no state file names one.
+# THE LAUNCHER'S OWN STATE FIRST: ContainerName reads .exasolLauncherState.json,
+# and deployment.json can be older than it, or say "local" (what the launcher
+# writes there when it cannot read its state). Read as JSON, the top-level key
+# only - never a "deploymentId" nested deeper, never a different occurrence
+# than the PowerShell twin takes. ⇄ twin: Get-PersonalSlcContainerId.
+personal_slc_container_id() {
+    run_python_any - "$EXAKIT_PERSONAL_DEPLOY_DIR" <<'PY' 2>/dev/null
+import json, os, sys
+for name in (".exasolLauncherState.json", "deployment.json"):
+    try:
+        with open(os.path.join(sys.argv[1], name), encoding="utf-8-sig") as handle:
+            doc = json.load(handle)
+    except (OSError, ValueError):
+        continue
+    value = doc.get("deploymentId") if isinstance(doc, dict) else None
+    if isinstance(value, str) and value.strip():
+        print(value.strip())
+        break
+PY
+    return 0
+}
+
+# personal_slc_dns_engine — the engine the repair asks: the RECORD first (a
+# nano record's engine is the old database's, not this one's), then this
+# run's choice when nothing is recorded (an install that has not recorded it
+# yet), then Podman - every deployment before kit 0.2.4. Not the other way
+# round: EXAKIT_PERSONAL_ENGINE left in a caller's environment must not send
+# a Podman deployment's repair to Docker. ⇄ twin: Get-PersonalSlcDnsEngine.
+personal_slc_dns_engine() {
+    _psde="$(manifest_get runtime.engine 2>/dev/null || true)"
+    [ -n "$(manifest_get runtime.container 2>/dev/null || true)" ] && _psde=""
+    case "$_psde" in docker|podman) : ;; *) _psde="${EXAKIT_PERSONAL_ENGINE:-}" ;; esac
+    case "$_psde" in docker) printf 'docker' ;; *) printf 'podman' ;; esac
+}
+
 # personal_slc_dns_repair — run personal_slc_dns_script for every official
 # language container the launcher reports installed. Best effort and bounded:
 # no container, a launcher without `slc` or a VM shell that does not answer is
@@ -3058,9 +3107,9 @@ print(" ".join(r["flavor"] for r in rows if isinstance(r, dict) and r.get("insta
 personal_slc_dns_repair() {
     _psdr_flavors="$(personal_slc_installed_flavors)"
     [ -n "$_psdr_flavors" ] || return 0
-    # The id names the database container (exasol-db-<id>); without one the
-    # lookup falls back to the first exasol-db-* that is not a sidecar.
-    _psdr_id="$(_personal_deployment_id)"
+    # The id names the database container (exasol-db-<id>); without one only
+    # a lone exasol-db-* that is not a sidecar is taken.
+    _psdr_id="$(personal_slc_container_id)"
     _psdr_script=""
     if [ "$(detect_os 2>/dev/null)" = "macos" ]; then
         _psdr_script="$(mktemp "${TMPDIR:-/tmp}/exakit-slc-dns.XXXXXX")" || return 1
@@ -3077,17 +3126,15 @@ personal_slc_dns_repair() {
         # THE DEPLOYMENT'S ENGINE, NOT PODMAN BY DEFAULT. From kit 0.2.4 a new
         # deployment runs on Docker wherever Docker Engine 29+ runs, and
         # Podman's CLI cannot see a Docker container: Java kept its empty DNS
-        # files and every connect by host name failed. This run's own choice
-        # first (an install records the engine after the start), then the
-        # record - Podman when it names none, every deployment before 0.2.4.
-        _psdr_engine="${EXAKIT_PERSONAL_ENGINE:-$(personal_engine_recorded)}"
-        case "$_psdr_engine" in docker|podman) : ;; *) _psdr_engine="podman" ;; esac
+        # files and every connect by host name failed.
+        _psdr_engine="$(personal_slc_dns_engine)"
         if command -v "$_psdr_engine" >/dev/null 2>&1; then
             # The host's own engine owns the container (Linux, WSL): the shared
-            # helper the Windows twin runs too.
+            # helper the Windows twin runs too. The id in the = form: one that
+            # starts with "-" is still a value, not an option.
             # shellcheck disable=SC2086 -- one argument per flavor
             _psdr_out="$(exakit_run_bounded 90 run_python_any "$EXAKIT_PERSONAL_LIB_DIR/personal-slc-dns.py" \
-                --engine "$_psdr_engine" ${_psdr_id:+--deployment-id "$_psdr_id"} $_psdr_flavors 2>&1)"
+                --engine "$_psdr_engine" ${_psdr_id:+"--deployment-id=$_psdr_id"} $_psdr_flavors 2>&1)"
         else
             _psdr_out="EXAKIT_SLC_DNS - no$_psdr_engine"
         fi

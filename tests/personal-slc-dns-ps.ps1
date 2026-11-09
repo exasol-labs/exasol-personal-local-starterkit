@@ -89,20 +89,29 @@ Set-DeploymentId "exa-7f3a"
 $script:PersonalEngine = ""
 Set-Record ', "runtime": {"type": "personal", "engine": "docker"}'
 Check "Docker recorded: the helper runs with --engine docker and the deployment id" `
-    "True | personal-slc-dns.py --engine docker --deployment-id exa-7f3a java-17" (Repair $both)
+    "True | personal-slc-dns.py --engine docker --deployment-id=exa-7f3a java-17" (Repair $both)
 Check "...and says what it repaired" "INFO Gave the java-17 language container the deployment's DNS" ($script:shown -join "|")
 Set-Record ', "runtime": {"type": "personal", "engine": "podman"}'
-Check "Podman recorded: --engine podman" "True | personal-slc-dns.py --engine podman --deployment-id exa-7f3a java-17" (Repair $both)
+Check "Podman recorded: --engine podman" "True | personal-slc-dns.py --engine podman --deployment-id=exa-7f3a java-17" (Repair $both)
 Set-Record ', "runtime": {"type": "personal"}'
 Check "no engine recorded (before kit 0.2.4): podman, as before" `
-    "True | personal-slc-dns.py --engine podman --deployment-id exa-7f3a java-17" (Repair $both)
+    "True | personal-slc-dns.py --engine podman --deployment-id=exa-7f3a java-17" (Repair $both)
 Set-Record ', "runtime": {"engine": "docker", "container": "exasol-nano"}'
 Check "a nano record's engine is the OLD database's: podman" `
-    "True | personal-slc-dns.py --engine podman --deployment-id exa-7f3a java-17" (Repair $both)
+    "True | personal-slc-dns.py --engine podman --deployment-id=exa-7f3a java-17" (Repair $both)
+Set-Record ', "runtime": {"engine": "docker", "container": null}'
+Check "...runtime.container null is a nano record too (as the shell reads it)" `
+    "True | personal-slc-dns.py --engine podman --deployment-id=exa-7f3a java-17" (Repair $both)
+Set-Record ', "runtime": {"engine": "docker", "container": ""}'
+Check "...an empty runtime.container is none: the record's docker" `
+    "True | personal-slc-dns.py --engine docker --deployment-id=exa-7f3a java-17" (Repair $both)
 Set-Record ', "runtime": {"type": "personal"}'
 $script:PersonalEngine = "docker"
-Check "this run's own choice (an install not recorded yet) wins" `
-    "True | personal-slc-dns.py --engine docker --deployment-id exa-7f3a java-17" (Repair $both)
+Check "nothing recorded: this run's choice (an install not recorded yet)" `
+    "True | personal-slc-dns.py --engine docker --deployment-id=exa-7f3a java-17" (Repair $both)
+Set-Record ', "runtime": {"type": "personal", "engine": "podman"}'
+Check "the record beats this run's choice" `
+    "True | personal-slc-dns.py --engine podman --deployment-id=exa-7f3a java-17" (Repair $both)
 $script:PersonalEngine = ""
 
 Write-Host ""
@@ -122,13 +131,42 @@ Check "no id to read: no --deployment-id at all" "True | personal-slc-dns.py --e
 Check "...and no empty argument (5.1 drops it and shifts the rest)" 0 $script:emptyArgument
 Set-DeploymentId "exa-7f3a"
 
+# The same fixtures as tests/personal-slc-dns.sh, through Get-PersonalSlcContainerId.
+$stateFile = Join-Path $dep ".exasolLauncherState.json"
+$depFile = Join-Path $dep "deployment.json"
+function Set-State([string]$State, [string]$Deployment) {
+    foreach ($pair in @(@($stateFile, $State), @($depFile, $Deployment))) {
+        if ($pair[1] -eq "-") { Remove-Item -Force -LiteralPath $pair[0] -ErrorAction SilentlyContinue }
+        else { Set-Content -LiteralPath $pair[0] -Encoding Ascii -Value $pair[1] }
+    }
+}
+Set-State '{"currentWorkflowState": {"running": {}}, "deploymentId": "  exa-7f3a "}' '{"deploymentId": "local"}'
+Check "the launcher's state file first, trimmed; deployment.json's local ignored" "exa-7f3a" (Get-PersonalSlcContainerId)
+Check "...and that id reaches the helper" "True | personal-slc-dns.py --engine docker --deployment-id=exa-7f3a java-17" (Repair $both)
+Set-State '{"deploymentId": "aaaa1111"}' '{"deploymentId": "bbbb2222"}'
+Check "state and deployment.json disagree: the state's id" "aaaa1111" (Get-PersonalSlcContainerId)
+Set-State '{"nested": {"deploymentId": "nested-id"}, "deploymentId": "top-id", "x": {"deploymentId": "later-id"}}' "-"
+Check "the top-level key, not an occurrence before or after it" "top-id" (Get-PersonalSlcContainerId)
+Set-State '{"nested": {"deploymentId": "nested-id"}}' '{"deploymentId": "bbbb2222"}'
+Check "a state file with none at the top: deployment.json's" "bbbb2222" (Get-PersonalSlcContainerId)
+Set-State '{not json' '{"deploymentId": "bbbb2222"}'
+Check "an unreadable state file: deployment.json's" "bbbb2222" (Get-PersonalSlcContainerId)
+Set-State '{"deploymentId": "   "}' "-"
+Check "a blank id is none" "" (Get-PersonalSlcContainerId)
+Set-State "-" "-"
+Check "no state at all: none" "" (Get-PersonalSlcContainerId)
+Set-State '{"deploymentId": "-x7"}' "-"
+Check "an id starting with - goes in the = form" "True | personal-slc-dns.py --engine docker --deployment-id=-x7 java-17" (Repair $both)
+Set-State "-" "-"
+Set-DeploymentId "exa-7f3a"
+
 Write-Host ""
 Write-Host "== what the helper says =="
 $script:helperLines = @("EXAKIT_SLC_DNS - nocontainer")
-Check "no database container: false" "False | personal-slc-dns.py --engine docker --deployment-id exa-7f3a java-17" (Repair $both)
+Check "no database container: false" "False | personal-slc-dns.py --engine docker --deployment-id=exa-7f3a java-17" (Repair $both)
 Check "...logged" "INFO language container DNS: -:nocontainer" ($script:logged -join "|")
 $script:helperLines = @("EXAKIT_SLC_DNS java-17 ok")
-Check "already repaired: true, nothing said" "True | personal-slc-dns.py --engine docker --deployment-id exa-7f3a java-17" (Repair $both)
+Check "already repaired: true, nothing said" "True | personal-slc-dns.py --engine docker --deployment-id=exa-7f3a java-17" (Repair $both)
 Check "...nothing shown" "" ($script:shown -join "|")
 
 Remove-Item -Recurse -Force -Path $work -ErrorAction SilentlyContinue
