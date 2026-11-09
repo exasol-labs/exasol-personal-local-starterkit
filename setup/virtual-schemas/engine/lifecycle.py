@@ -1163,7 +1163,7 @@ class Engine(object):
             # source that still works. The new credential goes into a pending
             # CONNECTION, one trivial statement runs through the loader with
             # it, and only an accepted credential replaces the old one.
-            self.try_credential(connector, config["objects"], url, user, secret, inputs)
+            self.try_credential(connector, config["objects"], url, user, secret, inputs, hidden, name)
             try:
                 self.create_connection(config["objects"], url, user, secret, replace=True, hidden=hidden)
             except sql.DbError as error:
@@ -1203,17 +1203,45 @@ class Engine(object):
         self.emit("OK", "Key file replaced for %s" % name)
         return result
 
-    def try_credential(self, connector, names, url, user, secret, values=None):
+    @staticmethod
+    def pending(names):
+        """The objects a reauth tries a new credential through. Named outside
+        the kit's EXAKIT_SRC_ and VS_ names: a source may be called
+        <name>_pending, and its own CONNECTION and virtual schema must never
+        be what a trial for <name> replaces or drops."""
+        return dict(names, connection="EXAKIT_PENDING_" + names["connection"],
+                    schema="EXAKIT_PENDING_" + names["schema"])
+
+    def drop_pending(self, names):
+        """Drop what a reauth trial made, if it is there: after the trial, and
+        wherever a trial killed part way may have left it (the next reauth,
+        disconnect, remove). The schema goes first and without calling its
+        adapter back (FORCE): it runs on the source's adapter script."""
+        pending = self.pending(names)
+        for statement in ("DROP FORCE VIRTUAL SCHEMA IF EXISTS %s CASCADE" % sql.ident(pending["schema"]),
+                          "DROP CONNECTION IF EXISTS %s" % sql.ident(pending["connection"])):
+            try:
+                self.db().execute(statement)
+            except (sql.DbError, Failure):
+                pass
+
+    def try_credential(self, connector, names, url, user, secret, values=None, hidden=(), name=None):
         if not connector.get("etl"):
             if connector.get("shared_adapter"):
-                self.try_through_schema(connector, names, url, user, secret, values or {})
+                self.try_through_schema(connector, names, url, user, secret, values or {}, hidden)
+            elif any(spec["kind"] == "edml" for spec in connector["inputs"]):
+                # A document source (S3, Azure Blob): its own adapter script,
+                # over the mapping connect staged for it.
+                mapping = self.runtime.bucket_sql("mappings", name)[len("/buckets"):]
+                self.try_through_schema(connector, names, url, user, secret,
+                                        dict(values or {}, mapping_path=mapping), hidden, read=True)
             return      # no loader driver to try it through (a VALUES connector)
-        pending = dict(names, connection=names["connection"] + "_PENDING")
+        pending = self.pending(names)
         try:
-            self.create_connection(pending, url, user, secret, replace=True)
+            self.create_connection(pending, url, user, secret, replace=True, hidden=hidden)
             self.db().query("SELECT * FROM (IMPORT FROM JDBC AT %s STATEMENT %s)"
                             % (sql.ident(pending["connection"]), sql.literal(connector.get("probe_sql", "SELECT 1"))),
-                            secrets=[secret])
+                            secrets=[secret] + list(hidden))
         except sql.DbError as error:
             raise Failure("the source refused the new credential, so the previous one was kept: %s" % error,
                           EXIT["failed"], error.kind)
@@ -1224,26 +1252,30 @@ class Engine(object):
                 pass
         self.emit("OK", "The source accepted the new credential")
 
-    def try_through_schema(self, connector, names, url, user, secret, values):
+    def try_through_schema(self, connector, names, url, user, secret, values, hidden=(), read=False):
         """A native adapter reads metadata when its virtual schema is created
         (measured: MongoDB with a wrong password fails at CREATE), so a
-        throwaway schema on a pending CONNECTION tries the new credential."""
-        pending = dict(names, connection=names["connection"] + "_PENDING", schema=names["schema"] + "_PENDING")
+        throwaway schema on a pending CONNECTION tries the new credential.
+        A document adapter reads no object at CREATE when the mapping names
+        its fields (measured on S3), so with read the throwaway schema is also
+        read - one row from each table, as connect proves a document source."""
+        pending = self.pending(names)
         db = self.db()
+        secrets = [secret] + list(hidden)
+        # What a trial killed part way left (Ctrl-C, a closed lid) goes first.
+        self.drop_pending(names)
         try:
-            self.create_connection(pending, url, user, secret, replace=True)
-            db.execute("DROP VIRTUAL SCHEMA IF EXISTS %s CASCADE" % sql.ident(pending["schema"]))
-            db.execute(self.vs_sql(connector, pending, values), secrets=[secret])
+            self.create_connection(pending, url, user, secret, replace=True, hidden=hidden)
+            db.execute(self.vs_sql(connector, pending, values), secrets=secrets)
+            if read:
+                for table in self.tables(pending["schema"])[:self.READ_ALL_LIMIT]:
+                    db.query("SELECT * FROM %s.%s LIMIT 1" % (sql.ident(pending["schema"]), sql.ident(table)),
+                             secrets=secrets)
         except sql.DbError as error:
             raise Failure("the source refused the new credential, so the previous one was kept: %s" % error,
                           EXIT["failed"], error.kind)
         finally:
-            for statement in ("DROP FORCE VIRTUAL SCHEMA IF EXISTS %s CASCADE" % sql.ident(pending["schema"]),
-                              "DROP CONNECTION IF EXISTS %s" % sql.ident(pending["connection"])):
-                try:
-                    db.execute(statement)
-                except sql.DbError:
-                    pass
+            self.drop_pending(names)
         self.emit("OK", "The source accepted the new credential")
 
     def refresh(self, name):
@@ -1504,6 +1536,9 @@ class Engine(object):
         with self.store.lock():
             if self.exists("connection", connection):
                 self.db().execute("DROP CONNECTION %s" % sql.ident(connection))
+            # A disconnected source keeps no credential: not even one a reauth
+            # killed mid-try left pending.
+            self.drop_pending(config["objects"])
             if config.get("key_file") and os.path.isfile(self.key_file(name)):
                 os.remove(self.key_file(name))
             self.store.update_status(name, status="disconnected", disconnected_at=sources.now())
@@ -1543,6 +1578,9 @@ class Engine(object):
                 # kit-owned schema only.
                 force = "" if connection_present else "FORCE "
                 db.execute("DROP %sVIRTUAL SCHEMA %s CASCADE" % (force, sql.ident(names["schema"])))
+            # A reauth killed mid-try can leave its trial schema, on this
+            # source's adapter script, and its pending credential behind.
+            self.drop_pending(names)
             if own_adapter and self.exists("script", names["script_schema"], names["script"]):
                 db.execute("DROP ADAPTER SCRIPT %s.%s" % (sql.ident(names["script_schema"]), sql.ident(names["script"])))
             for script in shared if last else []:
@@ -1551,7 +1589,10 @@ class Engine(object):
             if connection_present:
                 db.execute("DROP CONNECTION %s" % sql.ident(names["connection"]))
             # A reauth killed mid-try can leave its pending credential behind.
-            db.execute("DROP CONNECTION IF EXISTS %s" % sql.ident(names["connection"] + "_PENDING"))
+            # An earlier kit named it <connection>_PENDING - the live
+            # CONNECTION of a source called <name>_pending, which stays.
+            if not self.store.exists(name + "_pending"):
+                db.execute("DROP CONNECTION IF EXISTS %s" % sql.ident(names["connection"] + "_PENDING"))
             for path in self.store.release(name):
                 if os.path.isfile(path):
                     os.remove(path)
