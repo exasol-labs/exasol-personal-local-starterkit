@@ -7,7 +7,7 @@ personas; a maintainer can run it after the same install by hand.
         every reference dataset (a folder of data/datasets with a manifest.json): the ids given must be exactly those,
         so a workflow that names them cannot fall behind a new folder. For each:
           (a) exakit status lists it loaded; 03_verify_setup.sql answers OK on every row; every table holds the rows
-              its manifest lists (6,435 Walmart store weeks, 128,975 Amazon order lines);
+              its manifest lists (128,975 Amazon order lines, 51,000 fraud transactions);
           (b) `exakit describe <SCHEMA.TABLE> --id <id> --json` drafts the role (and sensitive flag) of every column,
               the key, time and text slots and source.schema_digest that data/datasets/<id>/descriptor.yaml ships - the
               digest is the live proof that the declared types are the ones EXA_ALL_COLUMNS reports; on a mismatch the

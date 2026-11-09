@@ -10,14 +10,14 @@ in the terminal's colours: a click ticks or unticks a row, Enter moves on, and
 the scroll wheel still scrolls the terminal. The shell menus remain the
 recovery path and take clicks the same way.
 
-The kit ships the two BRD persona baselines, both on Walmart weekly sales and Amazon sales,
+The kit ships the two BRD persona baselines, both on Amazon sales,
 each downloaded from the kit's `datasets` release only when it is loaded,
 and General, the kit's own samples, bundled with the kit and loaded offline:
 
 | Persona | Datasets | AI clients | Add-ons | First notebook |
 |---|---|---|---|---|
-| `data-scientist` (Data Scientist) | `walmart_sales`, `amazon_sales`, `fraud_transactions` | all detected | `dash-server`, `notebook` | `data-scientist/00_quickstart.ipynb` |
-| `ml-engineer` (ML Engineer) - **disabled for now** (`"visible": false`: kept, not offered) | `walmart_sales`, `amazon_sales` | all detected | `notebook`, `udf-devkit` | `ml-engineer/00_quickstart.ipynb` |
+| `data-scientist` (Data Scientist) | `amazon_sales`, `fraud_transactions` | all detected | `dash-server`, `notebook` | `data-scientist/00_quickstart.ipynb` |
+| `ml-engineer` (ML Engineer) - **disabled for now** (`"visible": false`: kept, not offered) | `amazon_sales`, `fraud_transactions` | all detected | `notebook`, `udf-devkit` | `ml-engineer/00_quickstart.ipynb` |
 | `general` (General) | `tpch`, `energy`, `weather` | all detected | - | - |
 
 General is ticked to begin with and combines with the others like any persona:
@@ -86,8 +86,8 @@ command changes nothing. Use the add-on uninstall command separately if you
 want to remove a kit-owned component.
 
 An answer you give yourself always wins for that one variable:
-`EXAKIT_PERSONA=data-scientist EXAKIT_DATASETS=walmart_sales` loads only
-the Walmart dataset and keeps the persona's clients and add-ons. Several
+`EXAKIT_PERSONA=data-scientist EXAKIT_DATASETS=amazon_sales` loads only
+the Amazon dataset and keeps the persona's clients and add-ons. Several
 personas together load each dataset and offer each add-on once; one naming
 `all` wins.
 

@@ -252,7 +252,7 @@ def remember_dataset(ds: "Dataset") -> None:
 
 def chosen_dataset(name: str | Path | None = None) -> str:
     """The dataset a notebook works on: ``name`` when it is set; with None, the one approved last in a quickstart (so
-    picking walmart_sales there carries on here), else amazon_sales. Says which, and why, in one line."""
+    picking fraud_transactions there carries on here), else amazon_sales. Says which, and why, in one line."""
     if name:
         return str(name)
     try:

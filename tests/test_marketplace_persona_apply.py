@@ -123,11 +123,11 @@ class PersonaApplyTest(unittest.TestCase):
 
         def query(_prefix, command, _args, _env):
             if command == "status":
-                return {"datasets_loaded": ["walmart_sales"]}
+                return {"datasets_loaded": ["fraud_transactions"]}
             return {"addons": [{"id": "notebook", "installed": True},
                                {"id": "dash-server", "status": "managed outside the kit"}]}
 
-        with patch.dict(os.environ, {"EXAKIT_DATASETS": "walmart_sales,amazon_sales",
+        with patch.dict(os.environ, {"EXAKIT_DATASETS": "amazon_sales,fraud_transactions",
                                      "EXAKIT_MCP_CLIENTS": "skip",
                                      "EXAKIT_MARKETPLACE_ADDONS": "notebook,dash-server,udf-devkit",
                                      "EXAKIT_SKIP_MCP": ""}), \
@@ -138,7 +138,7 @@ class PersonaApplyTest(unittest.TestCase):
         self.assertEqual(["data-load", "marketplace", "mlflow"], [name for name, _ in calls])
         self.assertEqual("amazon_sales", calls[0][1]["EXAKIT_DATASETS"])
         self.assertEqual("udf-devkit", calls[1][1]["EXAKIT_MARKETPLACE_ADDONS"])
-        self.assertIn("Already loaded: Walmart weekly sales", output.getvalue())
+        self.assertIn("Already loaded: Fraud transactions", output.getvalue())
         self.assertIn("Already installed: notebook", output.getvalue())
         self.assertIn("Already available outside the kit: dash-server", output.getvalue())
 

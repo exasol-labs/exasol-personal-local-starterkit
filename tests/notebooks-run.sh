@@ -34,7 +34,7 @@
 # with EXAKIT_NB_AUTO_APPROVE=1: a proposal equal to the approved descriptor is
 # used and nothing is written (the run is idempotent); any other stays a draft.
 #
-#   EXAKIT_NOTEBOOK_DATASETS     space-separated ids (default: the two persona datasets, amazon_sales walmart_sales)
+#   EXAKIT_NOTEBOOK_DATASETS     space-separated ids (default: the two persona datasets, amazon_sales fraud_transactions)
 #   EXAKIT_NOTEBOOK_BIND_CHECKOUT 1 binds candidate helpers/CLI in a temporary kernel (Mac/Linux CI)
 #   EXAKIT_NOTEBOOK_AI_THEMES     1 enables the optional stub-model text step
 #   EXAKIT_NOTEBOOK_CLASS_WEIGHT  none or balanced; otherwise source value
@@ -70,7 +70,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 EXAKIT_HOME="${EXAKIT_HOME:-$HOME/.exasol-starter-kit}"
 CREDS="$EXAKIT_HOME/credentials"
 MANIFEST="$EXAKIT_HOME/manifest.json"
-DATASETS="${EXAKIT_NOTEBOOK_DATASETS:-amazon_sales walmart_sales}"
+DATASETS="${EXAKIT_NOTEBOOK_DATASETS:-amazon_sales fraud_transactions}"
 
 # The skip that CI can turn into a failure (tests/lib/require.sh explains why),
 # with exit 3 rather than require.sh's 1: here 1 means a notebook failed.

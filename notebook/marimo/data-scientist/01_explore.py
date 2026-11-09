@@ -16,7 +16,7 @@ def _(mo):
     mo.md(r"""
     # Prepare, explore, model, validate
 
-    **Dataset:** the one you approved last (else `amazon_sales`); change `DATASET` for `walmart_sales`, `fraud_transactions` or your own file.
+    **Dataset:** the one you approved last (else `amazon_sales`); change `DATASET` for `fraud_transactions` or your own file.
 
     **The journey:** 1 Access → 2 Understand → **3 Prepare → 4 Explore → 5 Model → 6 Validate** → 7 Ask with AI → 8 Share → 9 Hand off. **This notebook: steps 3 to 6.**
 
@@ -29,7 +29,7 @@ def _(mo):
 
 @app.cell
 def _():
-    DATASET = None   # None: the dataset approved last in a quickstart (else amazon_sales); or "walmart_sales", "fraud_transactions", or your own file ("~/my-data/transactions.csv", roles beside it)
+    DATASET = None   # None: the dataset approved last in a quickstart (else amazon_sales); or "fraud_transactions", or your own file ("~/my-data/transactions.csv", roles beside it)
     USE_AI_THEMES = False  # True: your model sorts the texts into themes (needs a text column and EXAKIT_MODEL_ID; see the AI step below)
     USE_JOINED = False     # True: approve the schema map and create the joined view proposed under Prepare (several tables), and explore that
     USE_PREPARED = False   # True: create the typed, cleaned view proposed under Prepare and explore that instead (nothing is created before)

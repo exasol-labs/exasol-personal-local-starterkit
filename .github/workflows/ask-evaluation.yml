@@ -11,7 +11,7 @@ permissions:
 jobs:
   evaluate:
     # Requires a trusted runner with the installed kit, the reference datasets
-    # tools/ask_benchmark.py scores (Walmart sales and Amazon sales),
+    # tools/ask_benchmark.py scores (Amazon sales and fraud transactions),
     # validated read-only MCP identity and
     # local Ollama. No untrusted PR execution.
     runs-on: [self-hosted, exakit-acceptance]

@@ -39,8 +39,9 @@ AMAZON = ["AMAZON.ORDER_LINES." + c for c in (
     "ORDER_LINE_ID", "ORDER_ID", "ORDER_DATE", "STATUS", "FULFILMENT", "SALES_CHANNEL", "SHIP_SERVICE_LEVEL", "STYLE_CODE",
     "SKU", "CATEGORY", "SIZE", "ASIN", "COURIER_STATUS", "QTY", "CURRENCY", "AMOUNT", "SHIP_CITY", "SHIP_STATE",
     "SHIP_POSTAL_CODE", "SHIP_COUNTRY", "HAS_PROMOTION", "IS_B2B", "FULFILLED_BY", "CANCELLED")]
-WALMART = ["WALMART.WEEKLY_SALES." + c for c in ("SALES_ID", "STORE", "WEEK_DATE", "WEEKLY_SALES", "HOLIDAY_WEEK",
-                                                  "TEMPERATURE_F", "FUEL_PRICE", "CPI", "UNEMPLOYMENT", "ABOVE_STORE_MEDIAN")]
+FRAUD = ["FRAUD.TRANSACTIONS." + c for c in ("ROW_ID", "TRANSACTION_ID", "USER_ID", "TRANSACTION_AMOUNT", "TRANSACTION_TYPE",
+                                              "TRANSACTION_HOUR", "DEVICE_USED", "LOCATION", "PREVIOUS_FRAUDULENT_TRANSACTIONS",
+                                              "ACCOUNT_AGE", "TRANSACTIONS_LAST_24H", "PAYMENT_METHOD", "FRAUDULENT")]
 
 # Neither reference dataset has a text column, so a kit dataset WITH one is a folder of its own, written by the test:
 # support tickets, one text column (BODY), approved by the kit like the shipped ones.
@@ -141,7 +142,7 @@ class DatasetTest(unittest.TestCase):
         self.assertEqual(ds.text_sql(), "COALESCE(NOTE, '') || ' ' || COALESCE(OPERATOR_COMMENT, '')")
 
     def test_a_dataset_without_text_says_why(self):
-        for name, cols in (("walmart_sales", WALMART), ("amazon_sales", AMAZON)):
+        for name, cols in (("fraud_transactions", FRAUD), ("amazon_sales", AMAZON)):
             with self.subTest(dataset=name):
                 ds = exakit_nb.dataset(FakeConn(cols), name)
                 self.assertEqual(([], False), (ds.text_cols(), ds.has("text")))
@@ -170,7 +171,7 @@ class DatasetTest(unittest.TestCase):
         with self.assertRaises(ValueError) as caught:
             exakit_nb.dataset(FakeConn(AMAZON), "no_such_set")
         self.assertIn("amazon_sales", str(caught.exception))
-        self.assertIn("walmart_sales", str(caught.exception))
+        self.assertIn("fraud_transactions", str(caught.exception))
 
     def test_an_empty_table_or_a_label_that_is_not_0_or_1_is_refused(self):
         with self.assertRaises(ValueError) as caught:
@@ -466,8 +467,8 @@ class ShippedExploreTest(unittest.TestCase):
         resolve = "dataset_id = nb.chosen_dataset(DATASET)"    # None: the dataset approved last; not a second choice
         self.assertEqual(sum(1 for line in text.splitlines() if line.startswith("DATASET = ") and line != resolve), 1)
         code = "\n".join(line for line in text.splitlines() if not line.startswith(("#", "DATASET = ")))
-        for name in ("WALMART", "AMAZON", "WEEKLY_SALES", "ORDER_LINES", "ABOVE_STORE_MEDIAN", "CANCELLED", "SHIP_STATE",
-                     "WEEK_DATE", "ORDER_DATE"):
+        for name in ("AMAZON", "FRAUD", "ORDER_LINES", "TRANSACTIONS", "CANCELLED", "FRAUDULENT", "SHIP_STATE",
+                     "ORDER_DATE", "TRANSACTION_TYPE"):
             with self.subTest(name=name):
                 self.assertNotIn(name, code, "the SQL comes from the descriptor's roles")
 
@@ -518,10 +519,9 @@ def _no_text_descriptors():
 
 
 def _partial_descriptors():
-    """(name, Descriptor) for the reference datasets missing a role: neither has text, and walmart_sales has no entity
-    either (no short string column with more than 20 values)."""
-    return [("amazon", rules.read_descriptor(ROOT / "data" / "datasets" / "amazon_sales")),
-            ("walmart", rules.read_descriptor(ROOT / "data" / "datasets" / "walmart_sales"))]
+    """(name, Descriptor) for the reference dataset missing a role: amazon_sales has no text (fraud_transactions has no
+    time either, which stops Explore's trend step by design - its own tests cover that)."""
+    return [("amazon", rules.read_descriptor(ROOT / "data" / "datasets" / "amazon_sales"))]
 
 
 class SwapTest(unittest.TestCase):
@@ -653,7 +653,7 @@ columns:
 
 
 class ChosenDatasetTest(unittest.TestCase):
-    """DATASET = None in a later notebook: the dataset approved last in a quickstart (walmart_sales chosen there
+    """DATASET = None in a later notebook: the dataset approved last in a quickstart (fraud_transactions chosen there
     carries on), else amazon_sales; a draft is never remembered."""
 
     def test_the_dataset_approved_last_carries_on(self):
@@ -663,11 +663,11 @@ class ChosenDatasetTest(unittest.TestCase):
             self.assertEqual("amazon_sales", nb_dataset.chosen_dataset(None))
             nb_dataset.remember_dataset(types.SimpleNamespace(status="draft", id="my_draft", descriptor_origin="store"))
             self.assertEqual("amazon_sales", nb_dataset.chosen_dataset(None), "a draft is not remembered")
-            nb_dataset.remember_dataset(types.SimpleNamespace(status="approved", id="walmart_sales",
+            nb_dataset.remember_dataset(types.SimpleNamespace(status="approved", id="fraud_transactions",
                                                               descriptor_origin="shipped"))
-            self.assertEqual("walmart_sales", nb_dataset.chosen_dataset(None))
+            self.assertEqual("fraud_transactions", nb_dataset.chosen_dataset(None))
             self.assertEqual("amazon_sales", nb_dataset.chosen_dataset("amazon_sales"), "a set DATASET wins")
-        self.assertIn("walmart_sales, the dataset approved last", out.getvalue())
+        self.assertIn("fraud_transactions, the dataset approved last", out.getvalue())
 
 
 class AliasTest(unittest.TestCase):
@@ -700,7 +700,7 @@ class DescriptorFileTest(unittest.TestCase):
     def test_a_yaml_descriptor_path_and_a_dataset_folder_read(self):
         doc = own_file._descriptor_doc(ROOT / "data" / "datasets" / "amazon_sales" / "descriptor.yaml", None)
         self.assertEqual(doc["source"]["object"], "AMAZON.ORDER_LINES")
-        self.assertEqual(own_file._descriptor_doc(ROOT / "data" / "datasets" / "walmart_sales", None)["dataset"], "walmart_sales")
+        self.assertEqual(own_file._descriptor_doc(ROOT / "data" / "datasets" / "fraud_transactions", None)["dataset"], "fraud_transactions")
         self.assertIs(own_file._descriptor_doc(doc, None), doc)            # a whole role-per-column document as it is
         with tempfile.TemporaryDirectory() as tmp:
             (Path(tmp) / "d.json").write_text(json.dumps(doc), encoding="utf-8")
@@ -856,7 +856,7 @@ class QuickstartTest(unittest.TestCase):
         self.assertIn("skipped", out.getvalue())
         with self.assertRaises(ValueError) as caught:
             exakit_nb.load_sample(FakeConn(AMAZON), "no_such_set")
-        self.assertIn("walmart_sales", str(caught.exception))
+        self.assertIn("fraud_transactions", str(caught.exception))
 
     def test_no_connected_source_says_so_and_skips(self):
         with self.run_sql([("EXA_ALL_VIRTUAL_SCHEMAS", _Frame(SCHEMA_NAME=[]))]), redirect_stdout(io.StringIO()) as out:

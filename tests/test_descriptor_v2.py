@@ -94,7 +94,7 @@ class ReaderTest(unittest.TestCase):
         self.assertEqual((d.source, d.live_source), ("crm", "crm"))
 
     def test_the_shipped_descriptors_are_role_per_column_approved_by_the_kit(self):
-        for name in ("walmart_sales", "amazon_sales"):
+        for name in ("amazon_sales",):
             with self.subTest(dataset=name):
                 d = rules.read_descriptor(ROOT / "data" / "datasets" / name)
                 self.assertEqual((d.schema_version, d.version, d.status, d.owner, d.drafted_by, d.source),

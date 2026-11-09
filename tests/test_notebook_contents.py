@@ -339,7 +339,7 @@ class NotebookShapeTest(unittest.TestCase):
             # The persona datasets' schemas, tables and slot columns (inline comments may name the result columns the
             # descriptor yields, such as ORDER_LINES or CANCELLED_PCT, so those two are not listed).
             for name in ("PHARMA", "TERMINATED", "MONETARY_RELIEF", "BRIEF_SUMMARY", "LEAD_SPONSOR", "COMPANY",
-                         "WALMART", "AMAZON", "WEEKLY_SALES", "ABOVE_STORE_MEDIAN", "SHIP_STATE", "WEEK_DATE",
+                         "AMAZON", "FRAUD", "FRAUDULENT", "SHIP_STATE", "TRANSACTION_TYPE",
                          "ORDER_DATE", "ORDER_LINE_ID", "SALES_ID"):
                 with self.subTest(notebook=py.name, name=name):
                     self.assertNotIn(name, code, "the SQL comes from the descriptor's roles")

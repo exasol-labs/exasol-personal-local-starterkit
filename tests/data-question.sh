@@ -69,14 +69,14 @@ replay() { # replay <keys> [VAR=value ...] — the scenario's final screen and a
         "Data to load" "$_rp_keys" 2>&1
 }
 
-# The scenario's rows, with tpch, energy and walmart_sales still to load:
-#   1 Sample datasets (parent)  2 tpch  3 energy  4 walmart_sales
+# The scenario's rows, with tpch, energy and amazon_sales still to load:
+#   1 Sample datasets (parent)  2 tpch  3 energy  4 amazon_sales
 #   5 Your file or folder       6 Connect an external source (disabled)  7 Skip
 # The cursor starts on row 2, past the parent.
 echo "one table answers the data question (a real pty):"
 if command -v python3 >/dev/null 2>&1; then
     out="$(replay '\r')"
-    has "Enter keeps what is ticked: every pending dataset" "SELECTION=tpch,energy,walmart_sales" "$out"
+    has "Enter keeps what is ticked: every pending dataset" "SELECTION=tpch,energy,amazon_sales" "$out"
     has "the table draws once, and nothing else is boxed" "1 top borders, 1 bottom borders" "$out"
     check "...one box on the final screen" "1" "$(printf '%s\n' "$out" | sed -n '/=== FINAL SCREEN ===/,/^SELECTION=/p' | grep -c '╭')"
     has "the parent row is Sample datasets" "Sample datasets" "$out"
@@ -86,11 +86,11 @@ if command -v python3 >/dev/null 2>&1; then
     out="$(replay 'kk\r')"
     has "Up from the first row wraps to Skip, and Enter skips" "SELECTION=none" "$out"
     out="$(replay 'jjj\r')"
-    has "Enter on the unticked file row confirms what is ticked" "SELECTION=tpch,energy,walmart_sales" "$out"
+    has "Enter on the unticked file row confirms what is ticked" "SELECTION=tpch,energy,amazon_sales" "$out"
     out="$(replay 'jjj \r')"
-    has "the file row picked with the samples: <ids>,local" "SELECTION=tpch,energy,walmart_sales,local" "$out"
+    has "the file row picked with the samples: <ids>,local" "SELECTION=tpch,energy,amazon_sales,local" "$out"
     out="$(replay ' \r')"
-    has "unticking one dataset releases the parent, the rest still load" "SELECTION=energy,walmart_sales" "$out"
+    has "unticking one dataset releases the parent, the rest still load" "SELECTION=energy,amazon_sales" "$out"
     out="$(replay 'j\r' DQ_SCENE=yesno)"
     has "an either/or menu: Enter on No is No" "SELECTION=2" "$out"
     out="$(replay '\r' DQ_SCENE=yesno)"
@@ -106,25 +106,25 @@ if command -v python3 >/dev/null 2>&1; then
     echo "a persona's datasets: Skip when none of them is still to load:"
     out="$(replay '\r' EXAKIT_DATASETS_PRESELECT=none)"
     has "persona datasets none: Enter skips" "SELECTION=none" "$out"
-    out="$(replay '\r' EXAKIT_DATASETS_PRESELECT=amazon_sales)"
-    has "persona datasets all loaded already: Enter skips" "SELECTION=none" "$out"
+    out="$(replay '\r' EXAKIT_DATASETS_PRESELECT=fraud_transactions)"
+    has "persona datasets all loaded already: Enter skips" "SELECTION=none" "$out"  # fraud_transactions is not pending here
     out="$(replay '\r' EXAKIT_DATASETS_PRESELECT=energy)"
     has "persona datasets still to load: Enter loads exactly those" "SELECTION=energy" "$out"
     out="$(replay ' \r' EXAKIT_DATASETS_PRESELECT=none)"
     has "...and with none wanted, a sample can still be picked" "SELECTION=tpch" "$out"
     out="$(replay 'k \r' EXAKIT_DATASETS_PRESELECT=energy)"
-    has "ticking the parent ticks every dataset" "SELECTION=tpch,energy,walmart_sales" "$out"
+    has "ticking the parent ticks every dataset" "SELECTION=tpch,energy,amazon_sales" "$out"
 
     echo "what each dataset is, whole, at 80 columns:"
-    out="$(TTY_REPLAY_COLS=80 replay '\r' DQ_PERSONA=1 EXAKIT_DATASETS_PRESELECT=walmart_sales)"
+    out="$(TTY_REPLAY_COLS=80 replay '\r' DQ_PERSONA=1 EXAKIT_DATASETS_PRESELECT=amazon_sales)"
     has "the table draws once" "1 top borders, 1 bottom borders" "$out"
     has "a Description column" "Description" "$(printf '%s\n' "$out" | grep 'Dataset')"
-    has "the description is shown in full" "Store sales by week" "$out"
+    has "the description is shown in full" "Online orders" "$out"
     has "and the dataset name is not cut" "Smart-meter energy readings" "$out"
     has "nor your own file" "Upload a file or folder: CSV/Parquet/JSON" "$out"
     has "nor the external source" "Connect an external source - coming soon" "$out"
     lacks "nothing is truncated" "…" "$(printf '%s\n' "$out" | sed -n '/Data to load ─/,/╰/p')"
-    has "the persona's dataset is the one picked" "SELECTION=walmart_sales" "$out"
+    has "the persona's dataset is the one picked" "SELECTION=amazon_sales" "$out"
 else
     check "pty replays need python3" "skipped" "skipped"
 fi

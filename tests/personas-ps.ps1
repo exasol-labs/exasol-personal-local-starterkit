@@ -46,8 +46,8 @@ try {
     try { Set-ExakitPersonaEnv } catch { $said = "$_" }
     Check "ml-engineer: asking for it by name is refused, nothing answered" $true (($said -like "*Persona 'ml-engineer' is disabled*") -and -not $env:EXAKIT_DATASETS)
     Check "no persona: the kit's own samples (default=yes)" "tpch,energy,weather" (@(Invoke-ExakitPersonaService "default-datasets") -join "")
-    Check "data-scientist: the Walmart, Amazon and fraud datasets" "walmart_sales,amazon_sales,fraud_transactions" (Get-ExakitPersonaValue "data-scientist" "datasets")
-    Check "ml-engineer: the Walmart and Amazon sales datasets" "walmart_sales,amazon_sales" (Get-ExakitPersonaValue "ml-engineer" "datasets")
+    Check "data-scientist: the Amazon and fraud datasets" "amazon_sales,fraud_transactions" (Get-ExakitPersonaValue "data-scientist" "datasets")
+    Check "ml-engineer: the Amazon sales and fraud datasets" "amazon_sales,fraud_transactions" (Get-ExakitPersonaValue "ml-engineer" "datasets")
     Check "data-scientist: Dash Server first, then the notebook" "dash-server,notebook" (Get-ExakitPersonaValue "data-scientist" "addons")
     Check "ml-engineer: BRD notebook and UDF baseline" "notebook,udf-devkit" (Get-ExakitPersonaValue "ml-engineer" "addons")
     Write-Host "several personas ticked together are combined by the service:"
@@ -55,7 +55,7 @@ try {
     Check "a known list reads back in the kit's order" "data-scientist,general" (Get-ExakitPersona "general,data-scientist")
     Check "one unknown among several is not known" "" "$(Get-ExakitPersona 'data-scientist,nope')"
     Clear-Answers; $env:EXAKIT_PERSONA = "data-scientist,general"; Set-ExakitPersonaEnv
-    Check "their datasets and add-ons together, each once" "walmart_sales,amazon_sales,fraud_transactions,tpch,energy,weather|all|dash-server,notebook" (Answers)
+    Check "their datasets and add-ons together, each once" "amazon_sales,fraud_transactions,tpch,energy,weather|all|dash-server,notebook" (Answers)
     Check "each dataset is named with the personas it is for (a hidden one is not named)" "Data Scientist" ((Get-ExakitPersonaDatasetHints)["amazon_sales"])
     Write-Host "the data question (one table) ticks the personas' datasets:"
     function Get-ExakitPendingDatasets { return @([pscustomobject]@{ Id = "tpch"; Label = "TPC-H retail benchmark (~175k rows)"; Description = "Orders, customers, parts" },
@@ -83,7 +83,7 @@ try {
     Remove-Item Env:EXAKIT_DATASETS_PRESELECT -ErrorAction SilentlyContinue
     Write-Host "an explicit answer wins, per variable:"
     Clear-Answers; $env:EXAKIT_PERSONA = "data-scientist"; Set-ExakitPersonaEnv
-    Check "the persona answers everything left open" "walmart_sales,amazon_sales,fraud_transactions|all|dash-server,notebook" (Answers)
+    Check "the persona answers everything left open" "amazon_sales,fraud_transactions|all|dash-server,notebook" (Answers)
     Clear-Answers; $env:EXAKIT_PERSONA = "data-scientist"; $env:EXAKIT_DATASETS = "amazon_sales"; Set-ExakitPersonaEnv
     Check "EXAKIT_DATASETS wins, the rest stays the persona's" "amazon_sales|all|dash-server,notebook" (Answers)
     Clear-Answers; $env:EXAKIT_PERSONA = "data-scientist"; $env:EXAKIT_LOAD_SAMPLE = "0"; $env:EXAKIT_MARKETPLACE_ADDONS = "none"; Set-ExakitPersonaEnv
@@ -103,7 +103,7 @@ try {
     Remove-Item Env:EXAKIT_DATASETS_PRESELECT -ErrorAction SilentlyContinue
     $env:EXAKIT_PERSONA = "data-scientist"
     Invoke-ExakitPersonaFlow -KitRoot $repo -Phase selected
-    Check "picked on screen: the persona's datasets and add-ons are ticked" "walmart_sales,amazon_sales,fraud_transactions|dash-server,notebook" "$($env:EXAKIT_DATASETS_PRESELECT)|$($env:EXAKIT_MARKETPLACE_PRESELECT)"
+    Check "picked on screen: the persona's datasets and add-ons are ticked" "amazon_sales,fraud_transactions|dash-server,notebook" "$($env:EXAKIT_DATASETS_PRESELECT)|$($env:EXAKIT_MARKETPLACE_PRESELECT)"
     foreach ($v in @("EXAKIT_DATASETS_PRESELECT", "EXAKIT_MARKETPLACE_PRESELECT")) { Remove-Item "Env:$v" -ErrorAction SilentlyContinue }
     $env:EXAKIT_PERSONA_ACTIVE = "1"
     $note = (Write-ExakitPersonaMarketplaceNote 6>&1 | Out-String)

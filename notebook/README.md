@@ -55,7 +55,7 @@ zip: the column map, every query with its digest, the dashboards, the workflow l
 notebook's first cell says which steps it holds. A **step 0** opens the quickstart: the kit itself, from the notebook.
 
 **No terminal.** `nb.kit_check()` prints what is installed and running; `nb.exakit("update")`,
-`nb.exakit("marketplace", "dash-server")`, `nb.exakit("data-load", "walmart_sales")`, `nb.exakit("logs")` run the same
+`nb.exakit("marketplace", "dash-server")`, `nb.exakit("data-load", "fraud_transactions")`, `nb.exakit("logs")` run the same
 `exakit` the terminal runs, with its output streaming into the cell and the exit code in the result; `nb.addon_ready(id)`
 installs and starts an add-on when it is missing or stopped. The command runs with no terminal, so a question it would
 ask takes its default; a choice goes in up front (`nb.exakit("mcp-setup", env={"EXAKIT_MCP_CLIENTS": "claude"})`).
@@ -71,7 +71,7 @@ ask takes its default; a choice goes in up front (`nb.exakit("mcp-setup", env={"
 - **No host, user or password** anywhere; the connection comes from the kit's kernel, **Exasol (Starter Kit)**.
 - **Marimo-ready**: each name is assigned in one cell only.
 - **AI is opt-in**: `USE_AI_THEMES = False` in explore, `DRAFT_WITH_MODEL = False` in ask; a model never approves roles.
-- **A step whose role is missing skips and says why**: `amazon_sales` and `walmart_sales` have no text column, so
+- **A step whose role is missing skips and says why**: `amazon_sales` and `fraud_transactions` have no text column, so
   explore's small text model and AI themes skip on them; 03_score_external_model's stand-in then learns from the
   category and entity only.
 - **Each important idea is explained where it first appears**, in three or four plain lines (what it is, why we use
@@ -97,7 +97,7 @@ the training SQL. A stale one is refused (`nb.handoff_is_stale` names what chang
 UDF, compares macro-F1 with a majority baseline and logs to MLflow. The view is plain SQL, so `02_rust_score` scores
 the same columns with a Rust UDF. `nb.write_handoff(conn, ds)` writes one from any notebook.
 Training's `CLASS_WEIGHT` defaults to `"balanced"`, which helps a rare label (`amazon_sales`: 14.2% of order lines
-cancelled) and changes little on an even one (`walmart_sales`: 49.7% of weeks above the store's median); `None` weighs
+cancelled) and changes little on an even one; `None` weighs
 every row the same.
 
 ## Front-end versions
@@ -123,7 +123,7 @@ database and `nbclient` in the add-on's environment
 ```sh
 python3 tools/notebooks.py --run                    # every catalog notebook
 python3 tools/notebooks.py --run notebook/notebooks/data-scientist/01_explore.py \
-  --dataset walmart_sales --timeout 600 --output /tmp/executed
+  --dataset fraud_transactions --timeout 600 --output /tmp/executed
 ```
 
 - `--dataset <id>` rewrites the one dataset assignment (repeat it to run once per dataset).

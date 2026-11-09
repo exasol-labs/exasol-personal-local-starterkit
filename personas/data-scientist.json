@@ -6,7 +6,7 @@
   "picker": true,
   "visible": true,
   "order": 10,
-  "datasets": ["walmart_sales", "amazon_sales", "fraud_transactions"],
+  "datasets": ["amazon_sales", "fraud_transactions"],
   "mcp_clients": "all",
   "addons": ["dash-server", "notebook"],
   "addon_reasons": {"dash-server": "Share what you find as a live dashboard others open in a browser", "notebook": "The Data Scientist notebooks, already connected to your data"}

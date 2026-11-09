@@ -91,7 +91,7 @@ class WorkflowDatasetsTest(unittest.TestCase):
 
     def test_the_reference_datasets_are_found(self) -> None:
         self.assertGreaterEqual(len(self.ids), 2, self.ids)
-        self.assertLessEqual({"walmart_sales", "amazon_sales"}, set(self.ids), self.ids)
+        self.assertLessEqual({"amazon_sales", "fraud_transactions"}, set(self.ids), self.ids)
         for dataset in self.ids:
             for name in ("dataset.conf", "descriptor.yaml", "03_verify_setup.sql"):
                 self.assertTrue((DATASETS / dataset / name).is_file(), f"{dataset} has no {name}")
@@ -176,7 +176,7 @@ class WorkflowDatasetsTest(unittest.TestCase):
                 self.assertEqual(live.cmd_datasets(self.ids), 3)                 # ... a failure where CI insists
 
     def test_the_live_draft_check_passes_the_shipped_draft_and_names_a_changed_type(self) -> None:
-        """check_draft against `exakit describe --json` stood in by the offline draft of Walmart weekly sales (the very
+        """check_draft against `exakit describe --json` stood in by the offline draft of the fraud transactions (the very
         code the service runs, on the CSV): no failure; then one live type changed - the digest check fails and names
         it."""
         live = self._live()
@@ -184,7 +184,7 @@ class WorkflowDatasetsTest(unittest.TestCase):
         import descriptor_draft
         from descriptor import draft, profile
         import csv
-        dataset = "walmart_sales"
+        dataset = "fraud_transactions"
         folder = DATASETS / dataset
         schema, found = descriptor_draft.tables((folder / "01_create_schema.sql").read_text(encoding="utf-8"))
         shipped = live.read_yaml(folder / "descriptor.yaml")
@@ -204,7 +204,8 @@ class WorkflowDatasetsTest(unittest.TestCase):
                     contextlib.redirect_stdout(io.StringIO()) as out:
                 live.check_draft(checks, dataset, shipped)
             self.assertEqual(checks.failed, 0, out.getvalue())
-            changed = [(n, "TIMESTAMP(3)" if t == "DATE" else t) for n, t in columns]
+            # One live type different from the shipped one: the label widened from DECIMAL(1,0).
+            changed = [(n, "DECIMAL(2,0)" if n == "FRAUDULENT" else t) for n, t in columns]
             self.assertNotEqual(changed, columns)
             altered = profile.profile_rows(changed, [], table)
             store = Path(home) / "descriptors" / table
@@ -217,7 +218,7 @@ class WorkflowDatasetsTest(unittest.TestCase):
                 live.check_draft(checks, dataset, shipped)
             self.assertEqual(checks.failed, 1, out.getvalue())
             self.assertIn("schema_digest", out.getvalue())
-            self.assertIn("WEEK_DATE: declared DATE, EXA_ALL_COLUMNS TIMESTAMP(3)", out.getvalue())
+            self.assertIn("FRAUDULENT: declared DECIMAL(1,0), EXA_ALL_COLUMNS DECIMAL(2,0)", out.getvalue())
 
     def _live(self):
         sys.path.insert(0, str(LIVE_SCRIPT.parent))

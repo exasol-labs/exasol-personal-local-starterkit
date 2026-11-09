@@ -9,7 +9,7 @@
 # %% [markdown]
 # # Start here: access and understand your data
 #
-# **Dataset:** `amazon_sales` (default), `walmart_sales`, `fraud_transactions` or your own file.
+# **Dataset:** `amazon_sales` (default), `fraud_transactions` or your own file.
 #
 # **The journey:** 1 Access → 2 Understand → 3 Prepare → 4 Explore → 5 Model → 6 Validate → 7 Ask with AI → 8 Share → 9 Hand off. **This notebook: steps 1 and 2** (and a step 0: the kit itself, from here).
 #
@@ -30,7 +30,7 @@ kit_state = nb.kit_check()
 # Things you would otherwise do in a terminal - take the # off one line and run the cell; its log shows here.
 # nb.exakit("update")                            # bring the kit and its add-ons up to date
 # nb.exakit("marketplace", "dash-server")        # add an add-on (Share, step 8, needs this one)
-# nb.exakit("data-load", "walmart_sales")        # load another of the kit's datasets
+# nb.exakit("data-load", "fraud_transactions")        # load another of the kit's datasets
 # nb.exakit("logs")                              # every log the kit keeps
 # nb.exakit("mcp-setup", env={"EXAKIT_MCP_CLIENTS": "claude"})   # connect an AI client to the database
 

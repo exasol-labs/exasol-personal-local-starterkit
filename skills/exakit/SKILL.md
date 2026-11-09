@@ -194,7 +194,7 @@ start from an empty notebook or write connection code by hand.
   Never install into the system Python. Dataframes need pandas, which that
   environment does not have — use a notebook, which does.
 - Bundled datasets each live in their own schema (`TPCH`, `ENERGY`, `WEATHER`,
-  bundled and loaded offline, and per persona `WALMART` and `AMAZON`, downloaded
+  bundled and loaded offline, and per persona `AMAZON` and `FRAUD`, downloaded
   from the kit's `datasets` release); the user's own files default to `STARTER_KIT`. `starter-kit` is
   a profile name, not a schema.
 - MCP reads through a dedicated read-only user; that boundary is real. The

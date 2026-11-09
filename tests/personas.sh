@@ -67,9 +67,9 @@ out="$( (unset EXAKIT_DATASETS EXAKIT_MCP_CLIENTS EXAKIT_MARKETPLACE_ADDONS EXAK
         export EXAKIT_PERSONA=ml-engineer; exakit_persona_apply_env 2>&1; printf '|%s' "${EXAKIT_DATASETS:-unset}") )"
 contains "ml-engineer: asking for it by name is refused, nothing answered" "Persona 'ml-engineer' is disabled" "$out"
 check "no persona: the kit's own samples (default=yes)" "tpch,energy,weather" "$(_exakit_persona_service default-datasets)"
-check "data-scientist: the Walmart, Amazon and fraud datasets" "walmart_sales,amazon_sales,fraud_transactions" "$(exakit_persona_value data-scientist datasets)"
+check "data-scientist: the Amazon and fraud datasets" "amazon_sales,fraud_transactions" "$(exakit_persona_value data-scientist datasets)"
 check "data-scientist: Dash Server first, then the notebook" "dash-server,notebook" "$(exakit_persona_value data-scientist addons)"
-check "ml-engineer: the Walmart and Amazon sales datasets" "walmart_sales,amazon_sales" "$(exakit_persona_value ml-engineer datasets)"
+check "ml-engineer: the Amazon sales and fraud datasets" "amazon_sales,fraud_transactions" "$(exakit_persona_value ml-engineer datasets)"
 check "ml-engineer: BRD notebook and UDF baseline" "notebook,udf-devkit" "$(exakit_persona_value ml-engineer addons)"
 
 echo "a new persona is one file and no code:"
@@ -89,7 +89,7 @@ check "the title names each" "Data Scientist + General" "$(_exakit_persona_servi
 out="$( (unset EXAKIT_DATASETS EXAKIT_MCP_CLIENTS EXAKIT_MARKETPLACE_ADDONS EXAKIT_LOAD_SAMPLE
         export EXAKIT_PERSONA=data-scientist,general; exakit_persona_apply_env >/dev/null 2>&1
         printf '%s|%s|%s' "$EXAKIT_DATASETS" "$EXAKIT_MCP_CLIENTS" "$EXAKIT_MARKETPLACE_ADDONS") )"
-check "their datasets and add-ons together, each once" "walmart_sales,amazon_sales,fraud_transactions,tpch,energy,weather|all|dash-server,notebook" "$out"
+check "their datasets and add-ons together, each once" "amazon_sales,fraud_transactions,tpch,energy,weather|all|dash-server,notebook" "$out"
 check "each dataset is named with the personas it is for (a hidden one is not named)" "amazon_sales|Data Scientist" \
     "$(exakit_persona_dataset_hints | grep '^amazon_sales|')"
 
@@ -99,11 +99,11 @@ echo "the data question: one table, the personas' datasets ticked:"
 EXAKIT_TABLE_IDS="
 tpch
 energy
-walmart_sales
 amazon_sales
+fraud_transactions
 "
-check "a persona's datasets are the rows ticked" "4,5" "$(_exakit_data_table_preselect walmart_sales,amazon_sales)"
-check "datasets covering every dataset row tick the Sample datasets parent too" "1,2,3,4,5" "$(_exakit_data_table_preselect tpch,energy,walmart_sales,amazon_sales)"
+check "a persona's datasets are the rows ticked" "4,5" "$(_exakit_data_table_preselect amazon_sales,fraud_transactions)"
+check "datasets covering every dataset row tick the Sample datasets parent too" "1,2,3,4,5" "$(_exakit_data_table_preselect tpch,energy,amazon_sales,fraud_transactions)"
 check "a persona that wants none ticks nothing (the table then ticks Skip)" "" "$(_exakit_data_table_preselect none)"
 out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H retail benchmark (~175k rows)\namazon_sales|Amazon sales (Amazon.in fashion orders, Apr-Jun 2022, ~129k lines)\n'; }
         EXAKIT_DATASETS_PRESELECT=amazon_sales; exakit_data_table_build "$WORK/table"
@@ -127,7 +127,7 @@ echo "an explicit answer wins, per variable:"
 out="$( (unset EXAKIT_DATASETS EXAKIT_MCP_CLIENTS EXAKIT_MARKETPLACE_ADDONS EXAKIT_LOAD_SAMPLE
         export EXAKIT_PERSONA=data-scientist; exakit_persona_apply_env >/dev/null 2>&1
         printf '%s|%s|%s' "$EXAKIT_DATASETS" "$EXAKIT_MCP_CLIENTS" "$EXAKIT_MARKETPLACE_ADDONS") )"
-check "the persona answers everything left open" "walmart_sales,amazon_sales,fraud_transactions|all|dash-server,notebook" "$out"
+check "the persona answers everything left open" "amazon_sales,fraud_transactions|all|dash-server,notebook" "$out"
 out="$( (unset EXAKIT_MCP_CLIENTS EXAKIT_MARKETPLACE_ADDONS EXAKIT_LOAD_SAMPLE
         export EXAKIT_DATASETS=amazon_sales EXAKIT_PERSONA=data-scientist; exakit_persona_apply_env >/dev/null 2>&1
         printf '%s|%s|%s' "$EXAKIT_DATASETS" "$EXAKIT_MCP_CLIENTS" "$EXAKIT_MARKETPLACE_ADDONS") )"
@@ -193,7 +193,7 @@ check "datasets \"all\" become the kit's dataset ids (EXAKIT_DATASETS takes ids)
 check "[] answers the nothing-word for each key" "EXAKIT_LOAD_SAMPLE=0 EXAKIT_MCP_CLIENTS=skip EXAKIT_MARKETPLACE_ADDONS=none" \
     "$(SVC3 answers bare 2>/dev/null | grep -v '^EXAKIT_PERSONA=' | tr '\n' ' ' | sed 's/ $//')"
 check "an empty add-on list answers none" "EXAKIT_MARKETPLACE_ADDONS=none" "$(SVC3 answers bare 2>/dev/null | grep '^EXAKIT_MARKETPLACE_ADDONS=')"
-check "an EXAKIT_LOAD_SAMPLE the installer does not read is not an answer" "EXAKIT_DATASETS=walmart_sales,amazon_sales,fraud_transactions" \
+check "an EXAKIT_LOAD_SAMPLE the installer does not read is not an answer" "EXAKIT_DATASETS=amazon_sales,fraud_transactions" \
     "$(EXAKIT_LOAD_SAMPLE=yes python3 "$ROOT/setup/lib/persona_service.py" "$ROOT" answers data-scientist 2>/dev/null | grep '^EXAKIT_DATASETS=')"
 check "one persona where one is meant" "2" "$(python3 "$ROOT/setup/lib/persona_service.py" "$ROOT" value data-scientist,ml-engineer title >/dev/null 2>&1; echo $?)"
 out="$( (EXAKIT_PERSONA=nope; exakit_persona_known nope; printf '%s' "$EXAKIT_PERSONA_PROBLEM") )"
@@ -234,9 +234,9 @@ contains "...after a persona offer, one pointer" "exakit marketplace" \
     "$( (EXAKIT_PERSONA_ACTIVE=1 EXAKIT_MARKETPLACE_PRESELECT=notebook exakit_persona_marketplace_note 2>&1) )"
 
 echo "exakit persona plan (AC-P1.1: nothing pending after a persona install):"
-out="$( (exakit_pending_datasets() { printf 'walmart_sales|Walmart weekly sales\n'; }; exakit_marketplace_installed_addons() { printf 'notebook\njson-tables\ndash-server\n'; }
+out="$( (exakit_pending_datasets() { printf 'fraud_transactions|Fraud transactions\n'; }; exakit_marketplace_installed_addons() { printf 'notebook\njson-tables\ndash-server\n'; }
         exakit_persona_plan ml-engineer 0 2>&1) )"
-contains "what is loaded and what is pending" "loaded: amazon_sales   pending: walmart_sales" "$out"
+contains "what is loaded and what is pending" "loaded: amazon_sales   pending: fraud_transactions" "$out"
 contains "...add-ons the same way" "installed: notebook   pending: udf-devkit" "$out"
 contains "...and how to finish" "exakit persona add ml-engineer" "$out"
 out="$( (exakit_pending_datasets() { :; }; exakit_marketplace_installed_addons() { printf 'notebook\njson-tables\ndash-server\nudf-devkit\n'; }

@@ -9,7 +9,7 @@
 # %% [markdown]
 # # Share the insight and hand it off
 #
-# **Dataset:** the one you approved last (else `amazon_sales`), `walmart_sales`, `fraud_transactions` or your own approved descriptor.
+# **Dataset:** the one you approved last (else `amazon_sales`), `fraud_transactions` or your own approved descriptor.
 #
 # **The journey:** 1 Access → 2 Understand → 3 Prepare → 4 Explore → 5 Model → 6 Validate → 7 Ask with AI → **8 Share → 9 Hand off**. **This notebook: steps 8 and 9.**
 #
@@ -18,7 +18,7 @@
 # %%
 import exakit.nb as nb
 
-DATASET = None  # None: the dataset approved last in a quickstart (else amazon_sales); or "walmart_sales", "fraud_transactions", or an approved descriptor of your own
+DATASET = None  # None: the dataset approved last in a quickstart (else amazon_sales); or "fraud_transactions", or an approved descriptor of your own
 TITLE = None     # None: named after the data ("<dataset> by <column>"); or a title of your own
 APP_NAME = None  # or a name of your own; the default includes the approved dataset ID and the column
 

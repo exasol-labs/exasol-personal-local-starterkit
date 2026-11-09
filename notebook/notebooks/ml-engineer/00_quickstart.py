@@ -9,7 +9,7 @@
 # %% [markdown]
 # # ML Engineer quickstart
 #
-# **Dataset:** `amazon_sales` by default; `walmart_sales` or your own file also work. **How long:** about five minutes once runtimes are installed.
+# **Dataset:** `amazon_sales` by default; `fraud_transactions` or your own file also work. **How long:** about five minutes once runtimes are installed.
 #
 # Checks the database Python runtime, MLflow and the shared model directory, then loads and describes the data.
 #

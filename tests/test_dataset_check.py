@@ -199,7 +199,7 @@ class BuilderTest(unittest.TestCase):
     def test_each_builder_writes_the_tables_and_columns_the_dataset_ships(self):
         import csv
         import importlib
-        for builder in ("walmart_sales", "amazon_sales"):
+        for builder in ("amazon_sales", "fraud_transactions"):
             folder = ROOT / "data" / "datasets" / builder
             built = importlib.import_module(builder).TABLES
             schema = dataset_check.tables(folder)
@@ -291,7 +291,7 @@ class ReferenceTest(unittest.TestCase):
         self.assertIn("examples.sql has 9 queries", self.problems())
 
     def test_an_example_alias_that_is_a_reserved_word_is_named(self):
-        # "AS MONTH" passed every offline check and failed only in the database (walmart_sales, found live).
+        # "AS MONTH" passed every offline check and failed only in the database (a weekly-sales set, found live).
         (self.folder.path / "examples.sql").write_text(
             EXAMPLES.replace("SELECT COUNT(*) FROM EDGE_DEMO.EDGE_ITEMS WHERE ITEM_ID > 3;",
                              "SELECT COUNT(*) AS MONTH FROM EDGE_DEMO.EDGE_ITEMS WHERE ITEM_ID > 3;"))
@@ -360,7 +360,7 @@ class ReferenceTest(unittest.TestCase):
         self.assertEqual(found[0], ("1. Question 1?", "SELECT COUNT(*) FROM EDGE_DEMO.EDGE_ITEMS WHERE ITEM_ID > 1"))
 
     def test_the_shipped_reference_datasets_have_ten_questions_each(self):
-        for name in ("walmart_sales", "amazon_sales"):
+        for name in ("amazon_sales", "fraud_transactions"):
             with self.subTest(dataset=name):
                 found = dataset_check.example_questions((ROOT / "data" / "datasets" / name / "examples.sql").read_text())
                 self.assertGreaterEqual(len(found), 10)
@@ -383,7 +383,7 @@ class DescriptorDocsTest(unittest.TestCase):
             self.assertIn(f"(datasets/{name}/descriptor.yaml)", text)
 
 
-REFERENCE = ("walmart_sales", "amazon_sales")
+REFERENCE = ("amazon_sales", "fraud_transactions")
 
 
 class LiveReferenceTest(unittest.TestCase):

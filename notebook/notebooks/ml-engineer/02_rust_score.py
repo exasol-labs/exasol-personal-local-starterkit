@@ -9,14 +9,14 @@
 # %% [markdown]
 # # Rust scorer
 #
-# **Dataset:** `amazon_sales`, `walmart_sales` or your own approved descriptor and handoff. **How long:** about fifteen minutes for a first build.
+# **Dataset:** `amazon_sales`, `fraud_transactions` or your own approved descriptor and handoff. **How long:** about fifteen minutes for a first build.
 #
 # Builds a Rust UDF from the trained coefficients and checks it scores exactly like Python.
 #
 # **Run first:** `01_train`, the `RUST` container (`exakit udf-setup --language rust`) and Docker or Podman running.
 
 # %%
-DATASET = None  # None: the dataset approved last in a quickstart (else amazon_sales); or "walmart_sales", or your own approved descriptor
+DATASET = None  # None: the dataset approved last in a quickstart (else amazon_sales); or "fraud_transactions", or your own approved descriptor
 COEFFICIENTS_FILE = None  # or a local coefficients.json exported from 01_train's MLflow run
 UDF_NAME = None  # choose a new plain lowercase name for a new coefficient revision
 UDF_SCHEMA = "EXAKIT_SCORING"

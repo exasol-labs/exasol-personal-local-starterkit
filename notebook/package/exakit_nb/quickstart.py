@@ -65,7 +65,7 @@ def _run_exakit(*args: str) -> int:
 
 
 def load_sample(conn, dataset_id: str | None) -> Dataset | None:
-    """A dataset the kit offers (``amazon_sales``, ``walmart_sales``): used as it is when it is loaded, else loaded
+    """A dataset the kit offers (``amazon_sales``, ``fraud_transactions``): used as it is when it is loaded, else loaded
     first with ``exakit data-load <id>`` (the cell waits for it), then checked against the database. None skips it."""
     if not dataset_id:
         print("No sample dataset asked for: skipped.")

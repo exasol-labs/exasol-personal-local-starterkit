@@ -1,7 +1,7 @@
-# Data dictionary — the six datasets
+# Data dictionary — the five datasets
 
 TPCH (TPC-H at SF=0.02), ENERGY and WEATHER, bundled with the kit and loaded offline, and
-WALMART (`walmart_sales`), AMAZON (`amazon_sales`) and FRAUD (`fraud_transactions`), downloaded from the kit's `datasets`
+AMAZON (`amazon_sales`) and FRAUD (`fraud_transactions`), downloaded from the kit's `datasets`
 release when they are loaded. Each loads into its own schema; there are no joins across schemas.
 
 > The same descriptions ship **inside the database** as table and column comments
@@ -10,8 +10,8 @@ release when they are loaded. Each loads into its own schema; there are no joins
 > shape of the data. This file adds the narrative: keys, joins and conventions.
 
 Reference for every table and column in this folder. Use it to write correct SQL
-(and to ground an AI assistant) without guessing what a column means. The two downloaded
-datasets (WALMART, AMAZON) also have a README of their own with the source, the
+(and to ground an AI assistant) without guessing what a column means. The downloaded
+datasets (AMAZON, FRAUD) also have a README of their own with the source, the
 terms and how the snapshot was taken; row counts here are the shipped snapshots'.
 
 ## TPCH — TPC-H retail benchmark (schema `TPCH`, dataset id `tpch`)
@@ -224,34 +224,6 @@ Grain: one row per city per day. **PK:** `(city_id, w_date)`. **FK (documented, 
 Typical questions: hottest month per city, rainy-day counts per year, a city's
 temperature range on a given day.
 
-## WALMART — weekly store sales (schema `WALMART`, dataset id `walmart_sales`)
-
-6,435 weeks of sales from 45 Walmart stores, 2010-02-05 to 2012-10-26: the week's sales, whether
-a holiday fell in it, and the region's temperature, fuel price, consumer price index and
-unemployment that week ("Walmart Data Analysis and Forcasting" on Kaggle, licence not confirmed;
-[datasets/walmart_sales/README.md](datasets/walmart_sales/README.md)). Descriptor slots:
-`SALES_ID` (key), `WEEK_DATE` (time), `ABOVE_STORE_MEDIAN` (target), `STORE` (category); no text
-and no entity.
-
-### WEEKLY_SALES  (6,435 rows) — fact table
-Grain: one row per store and week. **PK:** `SALES_ID`.
-
-| Column | Type | Description | Example / values |
-|---|---|---|---|
-| SALES_ID | DECIMAL(5,0) | Row number, by store then week (PK) | 1 |
-| STORE | DECIMAL(2,0) | Store number, 1 to 45 | 1 |
-| WEEK_DATE | DATE | The date that ends the sales week, 2010-02-05 to 2012-10-26 | 2010-02-05 |
-| WEEKLY_SALES | DECIMAL(12,2) | The store's sales that week, US dollars | 1643690.90 |
-| HOLIDAY_WEEK | DECIMAL(1,0) | 1 when a holiday falls in the week (450 weeks: Super Bowl, Labor Day, Thanksgiving, Christmas) | 0 |
-| TEMPERATURE_F | DECIMAL(5,2) | Average temperature in the region, Fahrenheit | 42.31 |
-| FUEL_PRICE | DECIMAL(5,3) | Fuel price in the region, dollars per gallon | 2.572 |
-| CPI | DECIMAL(12,7) | Consumer price index | 211.0963582 |
-| UNEMPLOYMENT | DECIMAL(6,3) | Unemployment rate in the region, percent | 8.106 |
-| ABOVE_STORE_MEDIAN | DECIMAL(1,0) | 1 when the week sold more than this store's median week (3,195 weeks), added by the kit — **the label** | 1 |
-
-Typical questions: top stores, holiday weeks against the rest, sales by month and year,
-unemployment and temperature bands, which stores and months have the most strong weeks.
-
 ## AMAZON — online fashion orders (schema `AMAZON`, dataset id `amazon_sales`)
 
 128,975 order lines of one fashion seller on Amazon.in, 2022-03-31 to 2022-06-29: the order and
@@ -343,5 +315,5 @@ Typical questions: are the repeated ids copies, how much is missing, what the pl
 the fraud rate counted once per transaction, and fraud by type, history, hour, amount and city.
 
 See **[example-questions.md](example-questions.md)** for 14 ready-to-ask TPC-H questions with
-validated reference SQL you can inspect before running. WALMART, AMAZON and FRAUD each ship at least
+validated reference SQL you can inspect before running. AMAZON and FRAUD each ship at least
 ten runnable example queries in `datasets/<id>/examples.sql`.

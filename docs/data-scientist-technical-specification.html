@@ -133,7 +133,7 @@ footer { margin-top:3rem; padding-top:1rem; border-top:1px solid var(--rule); fo
 <section id="glance">
 <h2><span class="n">00</span>At a glance</h2>
 <div class="facts">
-  <div class="fact"><div class="v">3</div><div class="l">practice datasets: Amazon sales, Walmart sales, fraud transactions (messy on purpose)</div></div>
+  <div class="fact"><div class="v">2</div><div class="l">practice datasets: Amazon sales, fraud transactions (messy on purpose)</div></div>
   <div class="fact"><div class="v">9</div><div class="l">numbered steps across 4 notebooks: access, understand, prepare, explore, model, validate, ask with AI, share, hand off</div></div>
   <div class="fact"><div class="v">0</div><div class="l">column names typed in a notebook: every query is built from the approved column map</div></div>
   <div class="fact"><div class="v">9 / 9</div><div class="l">live notebook runs passed (3 notebooks × 3 datasets) on 6 November 2026, before the step headings, the kit cells and the hand-off were added</div></div>
@@ -179,13 +179,13 @@ footer { margin-top:3rem; padding-top:1rem; border-top:1px solid var(--rule); fo
 <div class="tbl"><table>
 <thead><tr><th>Key</th><th>Value</th><th>Effect</th></tr></thead>
 <tbody>
-<tr><td><code>datasets</code></td><td><code>walmart_sales</code>, <code>amazon_sales</code>, <code>fraud_transactions</code></td><td>ticked in the data question, downloaded and loaded</td></tr>
+<tr><td><code>datasets</code></td><td><code>amazon_sales</code>, <code>fraud_transactions</code></td><td>ticked in the data question, downloaded and loaded</td></tr>
 <tr><td><code>addons</code></td><td><code>dash-server</code>, <code>notebook</code></td><td>offered at the end of the install</td></tr>
 <tr><td><code>mcp_clients</code></td><td><code>all</code></td><td>every AI client found is connected to the database's MCP server</td></tr>
 <tr><td><code>addon_reasons</code></td><td>one line per add-on</td><td>what the add-on does for this persona, shown in the add-on table</td></tr>
 </tbody></table></div>
 <p>Later: <code>exakit persona add data-scientist</code> brings in what is missing; <code>exakit persona list | show | plan</code> show what each persona brings. <code>exakit persona add ml-engineer</code> is refused on this branch: its file says <code>"visible": false</code>.</p>
-<p>The install is the last terminal command. From then on the quickstart's step 0 does the rest from a cell: <code>nb.kit_check()</code>, and <code>nb.exakit("update")</code>, <code>nb.exakit("marketplace", "dash-server")</code>, <code>nb.exakit("data-load", "walmart_sales")</code> when they are wanted, each with its log in the notebook.</p>
+<p>The install is the last terminal command. From then on the quickstart's step 0 does the rest from a cell: <code>nb.kit_check()</code>, and <code>nb.exakit("update")</code>, <code>nb.exakit("marketplace", "dash-server")</code>, <code>nb.exakit("data-load", "fraud_transactions")</code> when they are wanted, each with its log in the notebook.</p>
 </section>
 
 <section id="data">
@@ -195,7 +195,6 @@ footer { margin-top:3rem; padding-top:1rem; border-top:1px solid var(--rule); fo
 <thead><tr><th>Dataset</th><th>Table</th><th class="num">Rows</th><th>Label</th><th>Why it is here</th></tr></thead>
 <tbody>
 <tr><td><code>amazon_sales</code></td><td><code>AMAZON.ORDER_LINES</code></td><td class="num">128,975</td><td><code>CANCELLED</code> (14.2%)</td><td>a real sales table, and a column (<code>STATUS</code>) that gives the label away</td></tr>
-<tr><td><code>walmart_sales</code></td><td><code>WALMART.WEEKLY_SALES</code></td><td class="num">6,435</td><td><code>ABOVE_STORE_MEDIAN</code> (49.7%)</td><td>clean, balanced, a time series with a date</td></tr>
 <tr><td><code>fraud_transactions</code></td><td><code>FRAUD.TRANSACTIONS</code></td><td class="num">51,000</td><td><code>FRAUDULENT</code> (4.9%)</td><td>messy on purpose: 1,000 repeated ids, ~5% gaps in five columns, two placeholders, no date</td></tr>
 </tbody></table></div>
 <h3>How a dataset reaches the database</h3>
@@ -268,7 +267,7 @@ columns:
 <tr><td>3</td><td><code>03_share</code></td><td><b>Step 8 · Share the insight</b> (Dash Server from this notebook, preview, publish) · <b>Step 9 · Hand off</b> (one folder and zip)</td><td>an approved map; Dash Server is installed and started from the notebook</td></tr>
 </tbody></table></div>
 <h3>The kit, from a notebook</h3>
-<p>Nothing on the path needs a terminal. <code>nb.kit_check()</code> prints what is installed and running (the database, each add-on and its address, the datasets loaded). <code>nb.exakit("update")</code>, <code>nb.exakit("marketplace", "dash-server")</code>, <code>nb.exakit("data-load", "walmart_sales")</code>, <code>nb.exakit("logs")</code> - any command of the kit - run the same <code>exakit</code> the terminal runs, with the output streaming into the cell as it happens and the exit code in the result (<code>run.ok</code>). <code>nb.addon_ready("dash-server")</code> installs an add-on when it is missing and starts it when it is stopped, which is how Share gets Dash Server. The command runs detached from any terminal, so a question it would ask takes its default; a choice goes in up front (<code>env={"EXAKIT_MCP_CLIENTS": "claude"}</code>). Nothing is ever typed into a prompt from the notebook.</p>
+<p>Nothing on the path needs a terminal. <code>nb.kit_check()</code> prints what is installed and running (the database, each add-on and its address, the datasets loaded). <code>nb.exakit("update")</code>, <code>nb.exakit("marketplace", "dash-server")</code>, <code>nb.exakit("data-load", "fraud_transactions")</code>, <code>nb.exakit("logs")</code> - any command of the kit - run the same <code>exakit</code> the terminal runs, with the output streaming into the cell as it happens and the exit code in the result (<code>run.ok</code>). <code>nb.addon_ready("dash-server")</code> installs an add-on when it is missing and starts it when it is stopped, which is how Share gets Dash Server. The command runs detached from any terminal, so a question it would ask takes its default; a choice goes in up front (<code>env={"EXAKIT_MCP_CLIENTS": "claude"}</code>). Nothing is ever typed into a prompt from the notebook.</p>
 <h3>The hand-off bundle</h3>
 <p><code>nb.handoff_bundle(connection, dataset)</code> writes <code>~/.exasol-starter-kit/bundles/&lt;workflow id&gt;/</code> and a zip beside it: <code>README.md</code> (what the data is, the column-map version the numbers rest on, the questions approved, the dashboards published, how to repeat it), <code>descriptor.yaml</code>, <code>schema-map.json</code> when there is one, <code>queries.sql</code> (every distinct statement the workflow ran, with its SHA-256 and row count) and <code>workflow.jsonl</code>. The log gets a <code>handoff</code> line with the path. It works without Dash Server, and never holds a password.</p>
 </section>
@@ -299,7 +298,7 @@ columns:
 <tr><td>placeholder</td><td>a category value such as <code>Unknown…</code>, <code>Invalid…</code>, <code>N/A</code>, <code>-</code></td><td><code>Unknown Device</code>, <code>Invalid Method</code>: 1,530 each</td></tr>
 <tr><td>rare label</td><td>label rate under 10% (or over 90%)</td><td><code>FRAUDULENT</code> 4.9%: "always 0" is right 95.1% of the time</td></tr>
 </tbody></table></div>
-<p>On <code>walmart_sales</code> the same cell reports that the table passed every check; on <code>amazon_sales</code> it finds 8,597 repeated <code>ORDER_ID</code>s (expected: one row per order line), 6 exact copies and the empty courier and amount columns.</p>
+<p>On <code>amazon_sales</code> the same cell finds 8,597 repeated <code>ORDER_ID</code>s (expected: one row per order line), 6 exact copies and the empty courier and amount columns.</p>
 <h3>A typed, cleaned view</h3>
 <p>The checks only report. <code>nb.typed_view(connection, dataset)</code> turns what they found into one proposed view, read from the values (one aggregate statement over all the text columns) and shown with its exact SQL before anything exists:</p>
 <div class="tbl"><table>
@@ -448,9 +447,9 @@ exakit notebook</code></pre>
 <thead><tr><th>What</th><th>Result</th></tr></thead>
 <tbody>
 <tr><td><code>dataset_check fraud_transactions</code> (live)</td><td>loaded 51,000 rows in 0.4 s; 3 verify checks OK; all 12 example queries returned rows</td></tr>
-<tr><td>Quickstart, Explore, Ask on three datasets</td><td>9 of 9 runs passed, headless, on the kit's notebook environment</td></tr>
-<tr><td>Explore model, ROC AUC</td><td><code>walmart_sales</code> 0.660 · <code>amazon_sales</code> 0.521 · <code>fraud_transactions</code> 0.488</td></tr>
-<tr><td>Leakage check</td><td>flags <code>STATUS</code> on <code>amazon_sales</code>; nothing on the other two</td></tr>
+<tr><td>Quickstart, Explore, Ask on two datasets</td><td>6 of 6 runs passed, headless, on the kit's notebook environment</td></tr>
+<tr><td>Explore model, ROC AUC</td><td><code>amazon_sales</code> 0.521 · <code>fraud_transactions</code> 0.488</td></tr>
+<tr><td>Leakage check</td><td>flags <code>STATUS</code> on <code>amazon_sales</code>; nothing on the other</td></tr>
 <tr><td>Prepare checks on <code>fraud_transactions</code></td><td>found all five planted problems (repeats, copies, gaps, placeholders, rare label)</td></tr>
 <tr><td>Typed view on <code>fraud_transactions</code></td><td>two placeholders become <code>NULL</code>, 885 copies dropped; a new approved column map with the same roles</td></tr>
 <tr><td>Schema map on TPC-H (no foreign keys declared)</td><td>8 tables, their 8 declared primary keys (two of them two columns), 9 links found from the values, all correct (e.g. <code>ORDERS.O_CUSTKEY → CUSTOMER.C_CUSTKEY</code>, <code>CUSTOMER.C_NATIONKEY → NATION.N_NATIONKEY</code>); approved and published as <code>EXAKIT_SEMANTIC.TPCH__RELATIONS</code></td></tr>

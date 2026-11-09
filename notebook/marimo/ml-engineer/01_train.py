@@ -16,7 +16,7 @@ def _(mo):
     mo.md(r"""
     # Train in Exasol
 
-    **Dataset:** the one you approved last (else `amazon_sales`); set `DATASET` for `walmart_sales` or your own approved file. **How long:** about five minutes after setup.
+    **Dataset:** the one you approved last (else `amazon_sales`); set `DATASET` for `fraud_transactions` or your own approved file. **How long:** about five minutes after setup.
 
     Trains a model inside Exasol from the approved column map and records it in MLflow. No LLM needed.
 
@@ -34,7 +34,7 @@ def _():
     import exasol_mlflow
     import os
 
-    DATASET = None  # None: the dataset approved last in a quickstart (else amazon_sales); or "walmart_sales", or "~/my-data/transactions.csv" with approved roles beside it
+    DATASET = None  # None: the dataset approved last in a quickstart (else amazon_sales); or "fraud_transactions", or "~/my-data/transactions.csv" with approved roles beside it
     CONTAINER = nb.ml_train.udf_container()   # or "PYTHON3_ML", "PYTHON3", or the alias of a container you installed
     dataset_id = nb.chosen_dataset(DATASET)
     nb.continue_workflow("train-" + dataset_id)   # the quickstart's workflow, or the last one: nothing to paste
@@ -130,7 +130,7 @@ def _(mo):
     > A trained model has to beat it; if it does not, it has learned nothing useful yet.
     > The score is macro-F1, which weighs both outcomes equally, so always answering "not cancelled" cannot look good.
 
-    Compare macro-F1 with `baseline_macro_f1` (always predicting the most common class). `CLASS_WEIGHT = "balanced"` helps when the label is rare (`amazon_sales`: 14.2% cancelled); with an even label (`walmart_sales`: 49.7% above the store's median) it changes little, and `None` is fine.
+    Compare macro-F1 with `baseline_macro_f1` (always predicting the most common class). `CLASS_WEIGHT = "balanced"` helps when the label is rare (`amazon_sales`: 14.2% cancelled); with an even label it changes little, and `None` is fine.
 
     The run is recorded in MLflow: its settings, scores and model file, tagged with the map version and handoff it came from.
 

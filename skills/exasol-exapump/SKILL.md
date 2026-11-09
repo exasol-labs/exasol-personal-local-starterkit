@@ -102,7 +102,7 @@ left alone), so export `EXAPUMP_CONFIG` as above before calling exapump directly
 
 > `starter-kit` is a *profile* name, not a schema. The bundled datasets each
 > live in their own **schema** — `TPCH`, `ENERGY`, `WEATHER`, and with a persona
-> `WALMART` and `AMAZON` — and data the user
+> `AMAZON` and `FRAUD` — and data the user
 > uploads defaults to the `STARTER_KIT` schema. Do not conflate the two or
 > "correct" one into the other.
 

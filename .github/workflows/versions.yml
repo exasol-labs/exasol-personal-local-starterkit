@@ -1328,7 +1328,7 @@ jobs:
         env:
           EXAKIT_LOCAL_KIT: ${{ github.workspace }}
           EXAKIT_PERSONA: data-scientist   # the ML Engineer is disabled for now; its add-on is named below
-          EXAKIT_DATASETS: tpch,walmart_sales,amazon_sales,fraud_transactions
+          EXAKIT_DATASETS: tpch,amazon_sales,fraud_transactions
           EXAKIT_MARKETPLACE_ADDONS: notebook,udf-devkit
           # One named client so the install creates the read-only MCP user: the
           # matrix below and the notebook runs read as it. EXAKIT_SKIP_MCP=1
@@ -1396,8 +1396,8 @@ jobs:
           EXAKIT_NOTEBOOK_BIND_CHECKOUT: '1'
           EXAKIT_NOTEBOOK_RUN_OUTPUT: ${{ runner.temp }}/executed-notebooks
         run: |
-          for recipe in walmart_sales:none amazon_sales:balanced fraud_transactions:balanced; do
-            # The ML Engineer (disabled for now) takes walmart_sales and amazon_sales only.
+          for recipe in amazon_sales:balanced fraud_transactions:balanced; do
+            # The ML Engineer (disabled for now) takes amazon_sales and fraud_transactions.
             ml=""; case "${recipe%:*}" in fraud_transactions) ;; *) ml="notebook/notebooks/ml-engineer/00_quickstart.py notebook/notebooks/ml-engineer/01_train.py" ;; esac
             EXAKIT_NOTEBOOK_DATASETS="${recipe%:*}" EXAKIT_NOTEBOOK_CLASS_WEIGHT="${recipe#*:}" \
               bash tests/notebooks-run.sh \

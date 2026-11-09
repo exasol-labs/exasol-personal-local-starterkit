@@ -9,7 +9,7 @@
 # %% [markdown]
 # # Score a model file in SQL
 #
-# **Dataset:** the one you approved last (else `amazon_sales`); set `DATASET` for `walmart_sales` or a compatible table. **Run time:** about three minutes after setup.
+# **Dataset:** the one you approved last (else `amazon_sales`); set `DATASET` for `fraud_transactions` or a compatible table. **Run time:** about three minutes after setup.
 #
 # Copies a scikit-learn model file to the shared model directory, wraps it in a scoring UDF and checks database scores match local ones.
 #
@@ -18,7 +18,7 @@
 # %%
 import exakit.nb as nb
 
-DATASET = None   # None: the dataset approved last in a quickstart (else amazon_sales); or "walmart_sales", or the path of a descriptor for a table you loaded
+DATASET = None   # None: the dataset approved last in a quickstart (else amazon_sales); or "fraud_transactions", or the path of a descriptor for a table you loaded
 
 # %% [markdown]
 # ## Settings
@@ -61,7 +61,7 @@ for role, column in dataset.roles():
 # %% [markdown]
 # ## Training rows
 #
-# The model's inputs come from the approved map: the category, the entity when there is one, the text when there is one (`amazon_sales` and `walmart_sales` have no text, so the stand-in learns from the groups only). A fixed hash of the key holds out about one row in five; the stand-in trains on the rest.
+# The model's inputs come from the approved map: the category, the entity when there is one, the text when there is one (`amazon_sales` and `fraud_transactions` have no text, so the stand-in learns from the groups only). A fixed hash of the key holds out about one row in five; the stand-in trains on the rest.
 
 # %%
 CATEGORY = f"COALESCE(CAST({dataset.col('category')} AS VARCHAR(2000)), '')" if dataset.has("category") else None

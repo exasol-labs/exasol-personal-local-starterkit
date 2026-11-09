@@ -105,7 +105,7 @@ df = nb.sql(conn, "SELECT * FROM TPCH.NATION")
 nb.show_sql()                                      # the statement that produced df
 ```
 
-For a dataset with a descriptor (`amazon_sales`, `walmart_sales`, or a
+For a dataset with a descriptor (`amazon_sales`, `fraud_transactions`, or a
 `descriptor.yaml` the user wrote for their own table), the roles become SQL
 names, checked against the database first:
 
@@ -134,7 +134,7 @@ assignment (`DATASET = ...`) picks the data, every query is printed before its r
 scikit-learn model runs on this computer, and a text step calls the user's own model endpoint
 only when `USE_AI_THEMES = True` and `EXAKIT_MODEL_ID` / `EXAKIT_PROVIDER_BASE_URL`
 are configured; on a dataset with no text column (both `amazon_sales` and
-`walmart_sales`) it skips and says why. That step (`nb.themes`) sends the newest texts on each side of the label,
+`fraud_transactions`) it skips and says why. That step (`nb.themes`) sends the newest texts on each side of the label,
 one call per side, and the model sorts each side into two to four themes: a table of theme,
 count, share and example. With Langfuse set up it is one trace, `explore-themes`.
 
@@ -195,7 +195,7 @@ it holds. Point a user at the step, not the cell. A new notebook for a persona f
 
 Nothing on the path needs a terminal, and neither does an agent helping with it: `nb.kit_check()` prints what
 is installed and running; `nb.exakit("update")`, `nb.exakit("marketplace", "dash-server")`,
-`nb.exakit("data-load", "walmart_sales")`, `nb.exakit("logs")` - any command of the kit - run from a cell with
+`nb.exakit("data-load", "fraud_transactions")`, `nb.exakit("logs")` - any command of the kit - run from a cell with
 the output streaming in and the exit code in the result (`run.ok`, `run.output`); `nb.addon_ready("dash-server")`
 installs and starts an add-on when it is missing or stopped. The command has no terminal, so a question takes
 its default; a choice goes in up front (`nb.exakit("mcp-setup", env={"EXAKIT_MCP_CLIENTS": "claude"})`).
@@ -285,9 +285,9 @@ exits non-zero when nothing could open. Relay that command to the user.
 
 ## Repeatable acceptance checks
 
-Source notebooks remain the user's starting point. For the reference training recipes, Walmart sales (about half the weeks above the
-store's median) uses `CLASS_WEIGHT = None`; Amazon sales (14.2% of lines cancelled)
-uses `CLASS_WEIGHT = "balanced"`. Record the choice and compare with the same
+Source notebooks remain the user's starting point. For the reference training recipes, Amazon sales (14.2% of lines cancelled) and
+fraud transactions (4.9% fraud) use `CLASS_WEIGHT = "balanced"`; an even label
+would take `None`. Record the choice and compare with the same
 held-out baseline. Do not claim that a model beats the baseline unless that held-out
 comparison shows it.
 

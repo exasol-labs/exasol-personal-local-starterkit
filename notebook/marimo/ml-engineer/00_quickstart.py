@@ -16,7 +16,7 @@ def _(mo):
     mo.md(r"""
     # ML Engineer quickstart
 
-    **Dataset:** `amazon_sales` by default; `walmart_sales` or your own file also work. **How long:** about five minutes once runtimes are installed.
+    **Dataset:** `amazon_sales` by default; `fraud_transactions` or your own file also work. **How long:** about five minutes once runtimes are installed.
 
     Checks the database Python runtime, MLflow and the shared model directory, then loads and describes the data.
 
@@ -170,10 +170,10 @@ def _(mo):
     ### Choose a dataset
 
     > **What is a dataset?** One table of rows to learn from; each row is one thing that happened.
-    > The kit offers three to practise on: `amazon_sales` (online fashion orders, one row per order line), `walmart_sales` (weekly sales, one row per store and week) and `fraud_transactions` (card and bank payments with a fraud label, messy on purpose: repeats, gaps and placeholders to find).
+    > The kit offers two to practise on: `amazon_sales` (online fashion orders, one row per order line) and `fraud_transactions` (card and bank payments with a fraud label, messy on purpose: repeats, gaps and placeholders to find).
     > We start with one of these known samples so you can try every step before bringing your own data.
 
-    Pick one: `SAMPLE = "amazon_sales"` (the default), `"walmart_sales"` or `"fraud_transactions"`. The first run downloads it from the kit's release (internet needed) and loads it once; after that it is reused, and the later notebooks carry on with the dataset you approve here (their `DATASET = None`). Keep `SOURCE = None` for this walkthrough.
+    Pick one: `SAMPLE = "amazon_sales"` (the default) or `"fraud_transactions"`. The first run downloads it from the kit's release (internet needed) and loads it once; after that it is reused, and the later notebooks carry on with the dataset you approve here (their `DATASET = None`). Keep `SOURCE = None` for this walkthrough.
     """)
     return
 
@@ -181,7 +181,7 @@ def _(mo):
 @app.cell
 def _(connection, nb):
     # Cell tags: load
-    SAMPLE = "amazon_sales"   # or "walmart_sales", "fraud_transactions", or None
+    SAMPLE = "amazon_sales"   # or "fraud_transactions", or None
     sample_data = nb.load_sample(connection, SAMPLE)
     return (sample_data,)
 
@@ -260,7 +260,7 @@ def _(mo):
     | Dataset | `key` | `time` | `text` | `target` | `category` | `entity` |
     |---|---|---|---|---|---|---|
     | Amazon sales | `ORDER_LINE_ID` | `ORDER_DATE` | — | `CANCELLED` | `CATEGORY` | `SHIP_STATE` |
-    | Walmart sales | `SALES_ID` | `WEEK_DATE` | — | `ABOVE_STORE_MEDIAN` | `STORE` | — |
+    | Fraud transactions | `ROW_ID` | — | — | `FRAUDULENT` | `TRANSACTION_TYPE` | `LOCATION` |
 
     Neither has a text column, so the steps that read text skip and say why. Your own file: the picker below proposes its map from the data.
 

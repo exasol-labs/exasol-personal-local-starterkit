@@ -148,8 +148,8 @@ trust. That is what makes the next steps safe.
 ## Step 4 — Load the sample data
 
 Check what is already there first: `exakit status --json` lists `datasets_loaded`. A persona
-install loaded the persona's own datasets — a Data Scientist machine has `walmart_sales`
-(`WALMART.WEEKLY_SALES`), `amazon_sales` (`AMAZON.ORDER_LINES`) and `fraud_transactions`
+install loaded the persona's own datasets — a Data Scientist machine has `amazon_sales`
+(`AMAZON.ORDER_LINES`) and `fraud_transactions`
 (`FRAUD.TRANSACTIONS`, messy on purpose), **not** TPC-H. Use what
 is loaded. Only on an empty database, load a bundled sample, for example TPC-H (customers,
 orders, line items, parts, suppliers) into the `TPCH` schema:

@@ -37,22 +37,21 @@ again (`--offline` skips the load; `--keep` leaves it; `--replace` reloads a sch
 is already there). The kit offers every folder that has a `dataset.conf`. A reference
 dataset is checked for more - see [Reference datasets](#reference-datasets) below.
 
-The kit offers six datasets:
+The kit offers five datasets:
 
 | Dataset | Schema | Contents |
 |---|---|---|
 | [`datasets/tpch/`](datasets/tpch/) | `TPCH` | TPC-H retail benchmark (below) — the original sample |
 | [`datasets/energy/`](datasets/energy/) | `ENERGY` | 50 smart meters + 108,000 hourly readings (SQL-generated time series) |
 | [`datasets/weather/`](datasets/weather/) | `WEATHER` | 10 European cities, ~11k days of daily weather (2023–2025) |
-| [`datasets/walmart_sales/`](datasets/walmart_sales/) | `WALMART` | 6,435 weeks of sales from 45 Walmart stores (February 2010-October 2012) with holiday weeks, temperature, fuel price, CPI and unemployment, and a label (the week beat the store's median week); 0.4 MB of CSV, a 0.1 MB download ([README](datasets/walmart_sales/README.md)) |
 | [`datasets/amazon_sales/`](datasets/amazon_sales/) | `AMAZON` | 128,975 order lines of one fashion seller on Amazon.in (March 31-June 29 2022): status, fulfilment, product, size, amount and where it shipped, with a label (cancelled, 14.2%); 22 MB of CSV, a 4.5 MB download ([README](datasets/amazon_sales/README.md)) |
 | [`datasets/fraud_transactions/`](datasets/fraud_transactions/) | `FRAUD` | 51,000 card and bank transactions of 4,000 users with a fraud label (4.9%) - messy on purpose: 1,000 repeated transaction ids, about 5% gaps in five columns and two placeholder values, for the Prepare and Validate steps; no date, only the hour; 3.9 MB of CSV, a 1 MB download ([README](datasets/fraud_transactions/README.md)) |
 
 The first three are the kit's own samples: they ship inside the kit, load with no
 internet and are what the General persona loads (`default=yes` in their `dataset.conf`).
-The other three are what the Data Scientist persona loads (the ML Engineer, disabled for now,
-takes the first two), each downloaded from the kit's `datasets` release only when it is picked.
-All three are *reference datasets*:
+The other two are what the Data Scientist persona loads (and the ML Engineer, disabled for now),
+each downloaded from the kit's `datasets` release only when it is picked.
+Both are *reference datasets*:
 data with a
 `README.md` (source, terms, data dictionary), a `manifest.json` (source, terms, snapshot
 date, rows and SHA-256 of every CSV, and the release asset they ship as) and a descriptor;
@@ -64,7 +63,7 @@ describes the data; the narrative and the join map for every dataset are in
 
 ## Reference datasets
 
-`walmart_sales`, `amazon_sales` and `fraud_transactions` are *reference datasets*. Each
+`amazon_sales` and `fraud_transactions` are *reference datasets*. Each
 folder holds:
 
 | File | What it is | Checked by `tools/dataset_check.py` |
@@ -82,7 +81,7 @@ it; each must return rows.
 The notebooks and the training template never name a dataset's tables or columns. They
 read a YAML descriptor that gives **every column of the table one role** - with how sure the
 kit is and the numbers that decided it - and names, in its **slots**, the columns the
-notebooks need. The same notebook therefore runs on Walmart, on Amazon, on a table you
+notebooks need. The same notebook therefore runs on Amazon, on the fraud transactions, on a table you
 loaded yourself or on a table in a virtual schema.
 
 ```yaml
@@ -117,8 +116,8 @@ columns:
 ```
 
 The two reference datasets ship theirs in the same shape:
-[`walmart_sales`](datasets/walmart_sales/descriptor.yaml) and
-[`amazon_sales`](datasets/amazon_sales/descriptor.yaml).
+[`amazon_sales`](datasets/amazon_sales/descriptor.yaml) and
+[`fraud_transactions`](datasets/fraud_transactions/descriptor.yaml).
 
 **The roles.** Eight, and no more: `key`, `time`, `measure`, `category`, `flag`, `text`,
 `identifier` and `other`. Three things are read: the column's type, its numbers (rows, values

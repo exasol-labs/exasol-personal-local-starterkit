@@ -1,6 +1,6 @@
 """Describe a table from a notebook (DS-2, DS-5): the role-per-column descriptor of setup/lib/descriptor.
 
-    d = exakit_nb.describe("WALMART.WEEKLY_SALES")    # profile, draft v(n+1), show the table
+    d = exakit_nb.describe("AMAZON.ORDER_LINES")    # profile, draft v(n+1), show the table
     d.set(PRODUCT="category", ZIP_CODE="identifier")  # corrections, chainable
     d.slot(target="TIMELY_RESPONSE")                  # target=None leaves it empty on purpose
     ds = d.approve()                                  # check, write, publish; the Dataset read back

@@ -2994,7 +2994,7 @@ exakit_bundled_datasets() {
 }
 
 # --- reference datasets: CSVs from a checksummed release asset ---------------
-# A reference dataset (walmart_sales, amazon_sales, fraud_transactions) keeps its CSVs in git
+# A reference dataset (amazon_sales, fraud_transactions) keeps its CSVs in git
 # but not in the kit archive users download (.gitattributes, export-ignore):
 # they ship as one deterministic <id>-<snapshot>.tar.gz per dataset, a release
 # asset whose SHA-256, size and URL are in the dataset's manifest.json

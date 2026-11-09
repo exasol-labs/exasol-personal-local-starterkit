@@ -50,12 +50,6 @@ GOLD: dict[str, dict[str, Any]] = {
         "slots": {"key": "ORDER_LINE_ID", "time": "ORDER_DATE", "text": None, "category": "CATEGORY",
                   "entity": ("SHIP_STATE", "SHIP_CITY")},
         "sensitive": ["SHIP_POSTAL_CODE"]},
-    "WALMART.WEEKLY_SALES": {
-        "roles": {"SALES_ID": "key", "STORE": ("category", "identifier"), "WEEK_DATE": "time", "WEEKLY_SALES": "measure",
-                  "HOLIDAY_WEEK": "flag", "TEMPERATURE_F": "measure", "FUEL_PRICE": "measure", "CPI": "measure",
-                  "UNEMPLOYMENT": "measure", "ABOVE_STORE_MEDIAN": "flag"},
-        "slots": {"key": "SALES_ID", "time": "WEEK_DATE", "text": None, "category": ("STORE", None),
-                  "entity": (None, "STORE")}},
     "FRAUD.TRANSACTIONS": {
         "roles": {"ROW_ID": "key", "TRANSACTION_ID": "identifier", "USER_ID": "identifier",
                   "TRANSACTION_AMOUNT": "measure", "TRANSACTION_TYPE": "category",
