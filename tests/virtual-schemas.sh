@@ -2938,7 +2938,10 @@ lacks "...and nothing is said about it" "public IP" "$OUT"
 _t0="$(date +%s)"; OUT="$(EXAKIT_NO_IP_LOOKUP=1 EXAKIT_PUBLIC_IP_URL="$BH_URL" eng --json plan pg --name ipsales $PG_SET 2>&1)"; _t1="$(date +%s)"
 check "EXAKIT_NO_IP_LOOKUP=1: nothing is asked (no wait on that same URL)" "yes" "$([ $((_t1 - _t0)) -le 2 ] && echo yes || echo no)"
 lacks "...nothing is said or logged" "public IP" "$(printf '%s\n' "$OUT" | grep -v '"public_ip"')"
-check "...and public_ip is null" "None" "$(printf '%s\n' "$OUT" | sed -n '/^{/,$p' | pubip)"
+# Assigned first: bash 3.2 brace-expands a sed range with a brace in an
+# address when it is passed straight as an argument (tests/bash32-guard.sh).
+_null_ip="$(printf '%s\n' "$OUT" | sed -n '/^{/,$p' | pubip)"
+check "...and public_ip is null" "None" "$_null_ip"
 kill "$BH_PID" 2>/dev/null; wait "$BH_PID" 2>/dev/null
 
 # connect: the lookup runs beside it; a failed one changes nothing.
