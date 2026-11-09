@@ -58,6 +58,17 @@ EXAKIT_HOME="$WORK/home"
 EXAKIT_BIN_DIR="$WORK/kitbin"
 EXAKIT_MANIFEST="$WORK/home/manifest.json"
 mkdir -p "$EXAKIT_HOME" "$WORK/path"
+# HOME too, and no profile edit at all. The install in section 5 runs with the
+# kit's bin dir off PATH, so exakit_ensure_uv reaches ensure_path_hint, which
+# appends an export line to the user's shell profile. With the real HOME every
+# run wrote a "# Added by the Exasol Personal Local Starter Kit" block into the
+# developer's own ~/.zshrc, pointing at a temp dir deleted on exit. The macOS
+# system python3 also leaves its bytecode cache under ~/Library/Caches. Set
+# before common.sh is read: it derives its paths from HOME at source time.
+HOME="$WORK/userhome"
+EXAKIT_NO_PROFILE_EDIT=1
+export HOME EXAKIT_NO_PROFILE_EDIT
+mkdir -p "$HOME"
 # shellcheck source=/dev/null
 . "$ROOT/setup/lib/common.sh"
 
@@ -228,6 +239,8 @@ check "the user's uv was not modified" "0.12.0" "$("$WORK/path/uv" --version | a
 lacks "no installer script ran" "install.sh" "$(cat "$WORK/install-out.txt")"
 check "the install is recorded nowhere without a manifest" "absent" \
     "$( [ -f "$EXAKIT_MANIFEST" ] && echo PRESENT || echo absent )"
+check "the install edited no shell profile" "" \
+    "$(cd "$HOME" && ls -A .zshrc .bashrc .bash_profile .profile 2>/dev/null)"
 
 rm -rf "$EXAKIT_BIN_DIR"
 tampered="$( PATH="$WORK/servecurl:$WORK/path:/usr/bin:/bin"; EXAKIT_UV_BIN=""; _EXAKIT_UV_VETTED=""; _EXAKIT_UV_NONE=""

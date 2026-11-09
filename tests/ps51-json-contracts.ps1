@@ -29,6 +29,15 @@ Write-Host "engine: $engine ($($PSVersionTable.PSVersion))"
 $kitHome = Join-Path ([System.IO.Path]::GetTempPath()) ("exakit-ps51-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Force -Path $kitHome | Out-Null
 $env:EXAKIT_HOME = $kitHome
+# The CLI runs in a child process, and exakit-common.ps1 creates the kit's bin
+# dir as it loads: with only EXAKIT_HOME set, that was an empty .local/bin in
+# the developer's real home on macOS/Linux. HOME and the bin dir get a sandbox
+# of their own, beside the kit home rather than inside it, so the kit home
+# still holds only what the CLI writes there.
+$userSandbox = "$kitHome-user"
+$env:HOME = Join-Path $userSandbox "home"
+$env:EXAKIT_BIN_DIR = Join-Path $userSandbox "bin"
+New-Item -ItemType Directory -Force -Path $env:HOME | Out-Null
 $env:EXAKIT_NO_UPDATE_NOTICE = "1"
 $env:EXAKIT_VERSION_POLICY = "pinned"
 $cli = Join-Path $repo "setup\exakit.ps1"
@@ -232,6 +241,7 @@ Check "the digest is a sha256" ($viaCmdlet -match '^[0-9a-f]{64}$') "got $viaCmd
 Check "and the fallback agrees with the cmdlet" ($viaFallback -eq $viaCmdlet) "cmdlet=$viaCmdlet fallback=$viaFallback"
 
 Remove-Item -Recurse -Force -Path $kitHome -ErrorAction SilentlyContinue
+Remove-Item -Recurse -Force -Path $userSandbox -ErrorAction SilentlyContinue
 Write-Host ""
 Write-Host "$($script:PASS) passed, $($script:FAIL) failed"
 if ($script:FAIL -gt 0) { exit 1 }
