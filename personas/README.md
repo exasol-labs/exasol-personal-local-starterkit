@@ -46,7 +46,8 @@ everyone needs (the database, exapump, the AI bridge):
 2. *Data to load* - one table: **Sample datasets** is the parent row with the
    datasets under it (a For column names the persona each is for, and the
    picked personas' datasets are ticked), then your own file or folder, an
-   external source (shown, coming soon) and Skip. Enter starts the load in the
+   external source (`exakit connect`; during the install it is shown and
+   cannot be picked yet) and Skip. Enter starts the load in the
    same table. With General, the kit's own samples are ticked: TPC-H, energy,
    weather.
 3. *Add-ons for your personas* - only their add-ons, ticked; Enter installs
