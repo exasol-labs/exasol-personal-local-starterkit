@@ -166,7 +166,7 @@ class RunLog(Null):
         self.secret(*secrets)
         self.write("SQLERR", "[%s] %s" % (kind, message))
         lines = [l.strip() for l in str(raw).splitlines()
-                 if l.strip() and not re.match(r"\s*(?:at |\.\.\. \d+ more)", l)]
+                 if l.strip() and l.strip() != message and not re.match(r"\s*(?:at |\.\.\. \d+ more)", l)]
         for line in lines[:RAW_LINES]:
             self.write("SQLERR", "  " + digest(line))
 
