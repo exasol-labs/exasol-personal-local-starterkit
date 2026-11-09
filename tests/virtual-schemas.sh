@@ -3131,5 +3131,504 @@ OUT="$(python3 "$WORK/lonely/a/engine/cli.py" --defs x --kit-home y --json list 
 check "an engine that cannot even import (a kit copy updated by halves): exit 1, one object" "1 [False, 'internal']" \
     "$RC $(JOUT="$OUT" one '[d["ok"], d["kind"]]')"
 
+printf '\n== the day log (exakit logs virtual-schemas): every statement, no secret ==\n'
+# engine/vslog.py: one file a day under <kit home>/logs, owner-only, the files
+# of more than 14 days ago pruned; every statement the engine sends and every
+# event it says, redacted of the run's secrets and of every credential shape.
+# Last in the suite, so the sweep below reads every run above.
+TODAY="$(python3 -c 'import datetime; print(datetime.date.today().strftime("%Y%m%d"))')"
+VSLOG="$HOME_K/logs/virtual-schemas-$TODAY.log"
+check "one file a day under the kit's log folder" "virtual-schemas-$TODAY.log" "$(ls "$HOME_K/logs" | grep '^virtual-schemas-' | tr '\n' ' ' | sed 's/ $//')"
+check "...owner-only (mode 600)" "600" "$(python3 -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' "$VSLOG")"
+check "...every statement the engine sent: the happy path's CONNECTION, its credential as ***" "yes" \
+    "$(grep -qE "\] connect sales SQL +CREATE CONNECTION \"EXAKIT_SRC_SALES\" TO 'jdbc:postgresql://pg\.example\.com:5432/sales[^']*' USER 'reader' IDENTIFIED BY '\*\*\*'$" "$VSLOG" && echo yes || echo no)"
+check "...a multi-line statement's further lines marked |" "yes" \
+    "$(grep -qE '\] connect sales \| +%scriptclass com\.exasol\.adapter\.RequestDispatcher;' "$VSLOG" && echo yes || echo no)"
+check "...the engine's own events, as the screen showed them" "yes" \
+    "$(grep -qE '\] connect sales OK +Virtual schema VS_SALES: ' "$VSLOG" && echo yes || echo no)"
+check "...a failed statement's answer, classified" "yes" \
+    "$(grep -qE '\] reauth sales SQLERR \[auth\] ' "$VSLOG" && echo yes || echo no)"
+check "...each run framed by START and END, with its exit code" "yes" \
+    "$(grep -qE '\] reauth sales START +reauth sales --secret-stdin \(dsn 127\.0\.0\.1:8563, user sys\)$' "$VSLOG" && \
+       grep -qE '\] reauth sales END +exit 1, kind auth \(' "$VSLOG" && echo yes || echo no)"
+check "...not the lookups and the form's checks (catalog, resolve, inputs, field)" "0" \
+    "$(grep -cE '\] (catalog|resolve|inputs|field) ' "$VSLOG")"
+# Every credential the suite handed the engine, in every connector's shape:
+# passwords, a quote doubled in SQL, tokens, AWS and Azure keys, a SAS, a
+# service-account key, the refused ones too.
+for needle in s3cr3t n3w-T0ken n3w-secret still-the-old-one AnotherSecretKeyValue wJalrXUtnFEMI QUFBQUFBQUFB \
+              QkJDQkJDQkJD abcSig Hunter2-pa55 hunter2 MIIfakeKEYbody dapi-wrong; do
+    check "no credential of the suite's runs is in it: $needle" "" "$(grep -l -- "$needle" "$HOME_K"/logs/virtual-schemas-*.log 2>/dev/null)"
+done
+
+# A driver's message that quotes credentials the run never knew, in the three
+# shapes a credential takes in SQL and URLs: the patterns catch them.
+python3 - "$STATE" <<'PYECHO'
+import json, sys
+json.dump({"sources": {"pg.example.com": {"tables": ["ORDERS"], "fail": "echo", "message":
+    "JDBC-Client-Error: Connecting to 'jdbc:postgresql://reader:Leak-Uri-1@pg.example.com:5432/sales"
+    "?password=Leak-Param-2&ssl=true' failed\nCaused by: org.postgresql.util.PSQLException: the session "
+    "ran CREATE USER x IDENTIFIED BY 'Leak-Ident-3' and ;pwd=Leak-Pwd-4;"}}}, open(sys.argv[1], "w"))
+PYECHO
+run_secret "$SECRET" connect postgresql --name leak $PG_SET --secret-stdin
+check "a source whose driver quotes credentials: the connect fails" "1" "$RC"
+for needle in Leak-Uri-1 Leak-Param-2 Leak-Ident-3 Leak-Pwd-4; do
+    lacks "...$needle is in no line of the log" "$needle" "$(cat "$VSLOG")"
+done
+has "...user:password@ keeps the user" "jdbc:postgresql://reader:***@pg.example.com:5432/sales" "$(grep '\] connect leak ' "$VSLOG")"
+has "...?password= keeps the name" "?password=***&ssl=true" "$(grep '\] connect leak ' "$VSLOG")"
+has "...the cause under it is kept, redacted" "IDENTIFIED BY '***' and ;pwd=***;" "$(grep '\] connect leak SQLERR' "$VSLOG")"
+# Review 2: the same message reached the screen's FAIL line, the kit's main
+# log (error -> _exakit_log_file) and --json's error through sql.redact,
+# which knew only IDENTIFIED BY: ;pwd=Leak-Pwd-4; stood.
+for needle in Leak-Uri-1 Leak-Param-2 Leak-Ident-3 Leak-Pwd-4; do
+    lacks "review 2: $needle is not on the screen's FAIL line" "$needle" "$OUT"
+done
+has "review 2: ...which still says what failed" "PSQLException: the session ran CREATE USER x IDENTIFIED BY '***' and ;pwd=***;" "$OUT"
+OUT="$(printf '%s' "$SECRET" | eng --json connect postgresql --name leak $PG_SET --secret-stdin 2>/dev/null)"
+check "review 2: --json: the error field holds none of them" "[False, False, False, False]" \
+    "$(JOUT="$OUT" one '[n in d["error"] for n in ("Leak-Uri-1", "Leak-Param-2", "Leak-Ident-3", "Leak-Pwd-4")]')"
+
+# Through the shell, as a person runs it: the credential from --password-file,
+# and the log named once when the command fails.
+logsh() {
+    ( EXAKIT_HOME="$HOME_K"
+      . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
+      _require_install() { :; }; exakit_init_logging() { EXAKIT_LOG_FILE="$WORK/vslog-setup.log"; }
+      exakit_vs_engine() { eng "$@"; }
+      "$@" ) 2>&1
+}
+LOGLINE="Log (every SQL statement, secrets redacted): $VSLOG"
+db '{"sources": {"pg.example.com": {"tables": ["ORDERS"], "secret": "Right-0ne-pw"}}}'
+printf '%s' 'Pw-File-0nly-9' > "$WORK/vslog-wrong.pw"
+printf '%s' 'Right-0ne-pw' > "$WORK/vslog-right.pw"
+OUT="$(logsh cmd_connect pg --name logpw $PG_SET --password-file "$WORK/vslog-wrong.pw" </dev/null)"; RC=$?
+check "exakit connect, a --password-file the source refuses: exit 1" "1" "$RC"
+check "...the log's path said once" "1" "$(printf '%s\n' "$OUT" | grep -cF "$LOGLINE")"
+check "...as the last line" "$LOGLINE" "$(printf '%s\n' "$OUT" | tail -n 1 | sed 's/^ *[^ ]* //')"
+check "...the run is in it" "yes" "$(grep -qE "\] connect logpw SQL +CREATE CONNECTION .* IDENTIFIED BY '\*\*\*'$" "$VSLOG" && echo yes || echo no)"
+lacks "...the password from the file is in no log" "Pw-File-0nly-9" "$(cat "$HOME_K"/logs/* "$WORK/vslog-setup.log" 2>/dev/null)"
+OUT="$(logsh cmd_connect pg --name logok $PG_SET --password-file "$WORK/vslog-right.pw" </dev/null)"; RC=$?
+check "a connect that succeeds: exit 0, no log line" "0 0" "$RC $(printf '%s\n' "$OUT" | grep -cF 'Log (every SQL')"
+lacks "...its password is in no log either" "Right-0ne-pw" "$(cat "$HOME_K"/logs/* "$WORK/vslog-setup.log" 2>/dev/null)"
+OUT="$(logsh cmd_connect nosuchdb --name x </dev/null)"; RC=$?
+check "a refusal the engine never logged (an unknown connector): no log line" "2 0" "$RC $(printf '%s\n' "$OUT" | grep -cF 'Log (every SQL')"
+# The source stops answering; what the database holds stays as it is.
+srcfail() { python3 -c 'import json,sys
+d = json.load(open(sys.argv[1])); s = d["sources"]["pg.example.com"]
+s.update(fail=sys.argv[2]) if sys.argv[2] else s.pop("fail", None)
+json.dump(d, open(sys.argv[1], "w"))' "$STATE" "$1"; }
+srcfail unreachable
+OUT="$(logsh cmd_source check logok </dev/null)"; RC=$?
+check "exakit source check of a source that fails: exit 1, the log's path once" "1 1" "$RC $(printf '%s\n' "$OUT" | grep -cF "$LOGLINE")"
+srcfail ""
+# --json: stdout stays the one object; the path goes to stderr.
+jsonsh /dev/null pg --name logjson $PG_SET --password-file "$WORK/vslog-wrong.pw" --json
+check "connect --json that fails: one object on stdout, the path once on stderr" "1 [False, 'auth'] 1" \
+    "$JRC $(one '[d["ok"], d["kind"]]') $(printf '%s\n' "$JERR" | grep -cF "$LOGLINE")"
+lacks "...and not on stdout" "Log (every SQL" "$JOUT"
+lacks "...the password from the file is in no log" "Pw-File-0nly-9" "$(cat "$HOME_K"/logs/* "$WORK/json.log" 2>/dev/null)"
+run remove logok
+
+# exakit logs: the day log is one of its targets, through the real entry point.
+LOGS_JSON="$(EXAKIT_HOME="$HOME_K" bash "$ROOT/setup/exakit" logs --json 2>/dev/null)"
+check "exakit logs lists it: target virtual-schemas, the newest day file" "$VSLOG" \
+    "$(printf '%s' "$LOGS_JSON" | python3 -c 'import json,sys; print(next((t["path"] for t in json.load(sys.stdin)["targets"] if t["target"] == "virtual-schemas"), ""))' 2>/dev/null)"
+check "...and exakit logs virtual-schemas --path names it" "$VSLOG" "$(EXAKIT_HOME="$HOME_K" bash "$ROOT/setup/exakit" logs virtual-schemas --path 2>/dev/null)"
+
+# The module itself: the shapes, a long statement, the pruning, the mode.
+UNIT="$(python3 - "$ROOT" "$WORK/vslog-unit" <<'PYUNIT'
+import datetime, hashlib, os, sys
+sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
+import vslog
+folder = sys.argv[2]
+os.makedirs(folder)
+today = datetime.date.today()
+def day(days):
+    path = os.path.join(folder, "virtual-schemas-%s.log" % (today - datetime.timedelta(days=days)).strftime("%Y%m%d"))
+    open(path, "w").close()
+    return path
+day(20); day(15); day(14); day(3)
+os.chmod(day(0), 0o644)
+open(os.path.join(folder, "install-20200101-000000.log"), "w").close()
+log = vslog.RunLog(folder, "connect", "unit")
+log.secret("Run-Known-0")
+long_sql = "CREATE LUA ADAPTER SCRIPT X AS\n" + "-- lua\n" * 1000 + "-- the-tail-marker\n/"
+log.statement(long_sql)
+log.statement("CREATE CONNECTION C TO 'jdbc:x://h' USER 'r' IDENTIFIED BY 'Lit-''Pw-1'")
+log.write("INFO", "jdbc:sqlserver://h:1433;databaseName=d;password=Semi-Pw-2;encrypt=true")
+log.write("INFO", "https://acct.blob.core.windows.net/c?sv=1&sig=Sas-Sig-3&sp=r")
+log.write("INFO", "mongodb+srv://reader:Uri-Pw-4@cluster0.example.net/db")
+log.write("INFO", 'CREATE USER u IDENTIFIED BY "Quoted-Pw-5"')
+log.write("INFO", "a token=Tok-6 and AccountKey=Key-7== and the run's own Run-Known-0, as JSON \"Run-Known-0\"")
+log.write("INFO", "s3://bucket/path?X-Amz-Signature=Amz-8&X-Amz-Date=1")
+log.close()
+text = open(log.path).read()
+print("names " + " ".join(sorted(os.listdir(folder))))
+print("mode " + oct(os.stat(log.path).st_mode & 0o777)[2:])
+print("leaks " + " ".join(n for n in ("Lit-", "Pw-1", "Semi-Pw-2", "Sas-Sig-3", "Uri-Pw-4", "Quoted-Pw-5", "Tok-6",
+                                      "Key-7", "Run-Known-0", "Amz-8") if n in text))
+redacted = vslog.redact(long_sql)
+sql_lines = [l for l in text.splitlines() if " connect unit SQL " in l or " connect unit | " in l]
+print("digest %s %s %s" % ("CREATE LUA ADAPTER SCRIPT X AS" in sql_lines[0],
+                           sql_lines[len(redacted[:vslog.HEAD].splitlines()) - 1].endswith(
+                               " ... [%d characters, sha256 %s]" % (len(redacted), hashlib.sha256(redacted.encode()).hexdigest())),
+                           "the-tail-marker" not in text))
+print(text)
+PYUNIT
+)"
+check "the files of more than 14 days ago are pruned, the others kept" \
+    "names install-20200101-000000.log $(python3 -c 'import datetime as d; t=d.date.today(); print(" ".join("virtual-schemas-%s.log" % (t - d.timedelta(days=n)).strftime("%Y%m%d") for n in (14, 3, 0)))')" \
+    "$(printf '%s\n' "$UNIT" | grep '^names ')"
+check "...a day file made with a wider mode is owner-only once written" "mode 600" "$(printf '%s\n' "$UNIT" | grep '^mode ')"
+check "every credential shape and every known secret is redacted" "leaks " "$(printf '%s\n' "$UNIT" | grep '^leaks ')"
+has "...user:password@ in a URI" "mongodb+srv://reader:***@cluster0.example.net/db" "$UNIT"
+has "...IDENTIFIED BY '...', a doubled quote inside" "IDENTIFIED BY '***'" "$UNIT"
+has "...IDENTIFIED BY \"...\"" 'IDENTIFIED BY "***"' "$UNIT"
+has "...;password= and &sig=" ";password=***;encrypt=true" "$UNIT"
+has "...&sig=" "&sig=***&sp=r" "$UNIT"
+has "...X-Amz-Signature=" "X-Amz-Signature=***&X-Amz-Date=1" "$UNIT"
+check "a statement over 4000 characters: its head, then the sha256 of the whole; not the rest" "digest True True True" \
+    "$(printf '%s\n' "$UNIT" | grep '^digest ')"
+
+printf '\n== the day log: the security review'"'"'s findings, each with its own input ==\n'
+# Review 1: a --password-file holding two lines. pyexasol prints a failed
+# statement back in its query => field, IDENTIFIED BY '<both lines>' and all;
+# redacting the driver's text line by line never matched the whole secret.
+python3 - "$STATE" <<'PYML'
+import json, sys
+json.dump({"sources": {"pg.example.com": {"tables": ["ORDERS"]}},
+           "connection_fail": "insufficient privileges for creating connection"}, open(sys.argv[1], "w"))
+PYML
+printf 'Hunter22\n# rotated 2026-11' > "$WORK/vslog-multiline.pw"
+OUT="$(logsh cmd_connect pg --name multiline $PG_SET --password-file "$WORK/vslog-multiline.pw" </dev/null)"; RC=$?
+check "review 1: a --password-file holding 'Hunter22<newline># rotated 2026-11', CREATE CONNECTION refused: exit 1" "1" "$RC"
+check "review 1: ...the driver's query => field is in the log, the literal as ***" "yes" \
+    "$(grep -qE "\] connect multiline SQLERR +query +=> +CREATE CONNECTION \"EXAKIT_SRC_MULTILINE\" .* IDENTIFIED BY '\*\*\*'$" "$VSLOG" && echo yes || echo no)"
+for needle in Hunter22 "rotated 2026-11"; do
+    lacks "review 1: ...'$needle' is in no log" "$needle" "$(cat "$HOME_K"/logs/* "$WORK/vslog-setup.log" 2>/dev/null)"
+    lacks "review 1: ...nor on the screen" "$needle" "$OUT"
+done
+
+# Review 2 through the shell: the kit's main log (error -> _exakit_log_file).
+python3 - "$STATE" <<'PYECHO2'
+import json, sys
+json.dump({"sources": {"pg.example.com": {"tables": ["ORDERS"], "fail": "echo", "message":
+    "Caused by: org.postgresql.util.PSQLException: the session ran ;pwd=Leak-Pwd-4; for mongodb://reader:Tr0ub4dor&3xyz@host"}}},
+    open(sys.argv[1], "w"))
+PYECHO2
+: > "$WORK/vslog-setup.log"
+OUT="$(logsh cmd_connect pg --name leakmain $PG_SET --password-file "$WORK/vslog-right.pw" </dev/null)"; RC=$?
+check "review 2: a connect whose driver quotes credentials, through the shell: exit 1" "1" "$RC"
+has "review 2: ...the kit's main log has its FAIL line" "PSQLException" "$(cat "$WORK/vslog-setup.log")"
+for needle in Leak-Pwd-4 Tr0ub4d; do
+    lacks "review 2: ...without $needle (main log, screen)" "$needle" "$(cat "$WORK/vslog-setup.log")$OUT"
+done
+
+# Review 8: a short password replaced only where it stands alone.
+db '{"sources": {"pg.example.com": {"tables": ["ORDERS"], "secret": "postgres"}}}'
+run_secret postgres connect postgresql --name pgshort $PG_SET --secret-stdin
+check "review 8: the password 'postgres': connected" "0" "$RC"
+check "review 8: ...jdbc:postgresql:// is whole in the log, the literal ***" "yes" \
+    "$(grep -qE "\] connect pgshort SQL +CREATE CONNECTION \"EXAKIT_SRC_PGSHORT\" TO 'jdbc:postgresql://pg\.example\.com:5432/sales[^']*' USER 'reader' IDENTIFIED BY '\*\*\*'$" "$VSLOG" && echo yes || echo no)"
+run remove pgshort
+
+# Review 4: START names the --set keys, never their values (validated or not).
+run plan postgresql --name review4 --set "uri=mongodb://u:pa/ssWORD@host/db" --set "uri=mongodb://alice@x.com:SECRWORD@host/db" \
+    --set secret_key=SKWORD --set "catalog_url=https://cat.example.com/api?apikey=KEYWORD" --set user=scott/tigerWORD
+check "review 4: a plan with values that hold credentials: refused, exit 2" "2" "$RC"
+check "review 4: ...START names the keys" "yes" \
+    "$(grep -qE '\] plan review4 START +plan postgresql --name review4 --set uri=\.\.\. --set uri=\.\.\. --set secret_key=\*\*\* --set catalog_url=\.\.\. --set user=\.\.\. \(dsn' "$VSLOG" && echo yes || echo no)"
+lacks "review 4: ...and no value: not one of ssWORD SECRWORD SKWORD KEYWORD tigerWORD" "WORD" "$(grep '\] plan review4 ' "$VSLOG")"
+
+# The module itself, with the review's exact inputs.
+cat > "$WORK/vslog-review.py" <<'PYREVIEW'
+import contextlib, datetime, hashlib, io, os, signal, sys, time, traceback
+engine = sys.argv[1] + "/setup/virtual-schemas/engine"
+sys.path.insert(0, engine)
+import vslog, sql
+base = sys.argv[2]
+os.makedirs(base)
+today = datetime.date.today().strftime("%Y%m%d")
+signal.alarm(60)  # a FIFO that blocked would hang the suite
+
+def logged(name, **secrets_and_calls):
+    folder = os.path.join(base, name)
+    log = vslog.RunLog(folder, "connect", name)
+    return log, folder
+
+def text_of(log):
+    log.close()
+    return open(log.path, encoding="utf-8", errors="surrogateescape").read()
+
+# 1: a multi-line secret, registered, printed back across lines; unregistered
+# (check, refresh: no secret), the open literal across lines; a PEM line by line.
+log, _ = logged("r1")
+log.secret("Hunter22\n# rotated 2026-11")
+log.failed("insufficient privileges", "error", "(\n    message     =>  insufficient privileges\n"
+           "    query       =>  CREATE CONNECTION \"C\" TO 'x' USER 'u' IDENTIFIED BY 'Hunter22\n# rotated 2026-11'\n)")
+log2, _ = logged("r1b")
+log2.failed("insufficient privileges", "error", "query => CREATE CONNECTION \"C\" TO 'x' USER 'u' IDENTIFIED BY "
+            "'Unknown-Line-One\nUnknown-Line-Two'\n)")
+pem = "-----BEGIN PRIVATE KEY-----\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC\nBKcwggSjAgEAAoIBAQC7\n-----END PRIVATE KEY-----\n"
+log3, _ = logged("r1c")
+log3.secret(pem)
+log3.failed("key rejected", "auth", "key rejected:\n  > MIIEvQIBADANBgkqhkiG9w0BAQEFAASC\n  > BKcwggSjAgEAAoIBAQC7\n")
+t1, t2, t3 = text_of(log), text_of(log2), text_of(log3)
+print("r1 " + " ".join(str(n in t) for n, t in (("Hunter22", t1), ("rotated 2026-11", t1), ("Unknown-Line", t2),
+                                                ("MIIEvQIBADANBgkqhkiG9w0BAQEFAASC", t3), ("BKcwggSjAgEAAoIBAQC7", t3))))
+
+# 2: sql.redact - the patterns, before the cut at MAX_ERROR; classify unchanged.
+leak = sql.redact(Exception("Caused by: org.postgresql.util.PSQLException: the session ran ;pwd=Leak-Pwd-4; now"), [])
+cut = sql.redact(Exception("x" * 570 + " mongodb://reader:Tr0ub4dor&3xyz@host/db"), [])
+print("r2 %s %s %s" % ("Leak-Pwd-4" in leak, "Tr0ub4d" in cut, len(cut) <= sql.MAX_ERROR))
+kinds = []
+for message in ('FATAL: password authentication failed for user "reader"',
+                "Access denied for user 'reader'@'10.0.0.9' (using password: YES)",
+                "S3Exception: The request signature we calculated does not match the signature you provided.",
+                "Invalid access token",
+                "Server failed to authenticate the request. https://acct.blob.core.windows.net/c?sv=1&sig=SigVal123&sp=r",
+                "Programmatic access token is invalid: https://h.example.com/api?token=TokVal123"):
+    shown = sql.redact(Exception(message), [])
+    kinds.append("%s=%s%s" % (sql.classify(message), sql.classify(shown),
+                              "!" if "SigVal123" in shown or "TokVal123" in shown else ""))
+print("r2kinds " + " ".join(kinds))
+
+# 3: a driver line over 4000 characters, a registered secret across character 1000.
+log, _ = logged("r3")
+line = "X" * 990 + "Straddle-Pw-0123456789" + "Y" * 4000
+log.failed("too long", "error", line, secrets=["Straddle-Pw-0123456789"])
+text = text_of(log)
+redacted = "X" * 990 + "***" + "Y" * 4000
+print("r3 %s %s %s" % ("Straddle" in text, hashlib.sha256(redacted.encode()).hexdigest() in text,
+                       hashlib.sha256(line.encode()).hexdigest() in text))
+
+# 5: the shapes and the forms the first patterns missed.
+shapes = [("sslpassword=Rv5a", "Rv5a"), ("trustStorePassword=Rv5b", "Rv5b"), ("db_password=Rv5c", "Rv5c"),
+          ("Auth_AccessToken=Rv5d", "Rv5d"), ("private_key_file_pwd=Rv5e", "Rv5e"), ("password:dapiRv5f", "Rv5f"),
+          ('{"password": "Rv5g"}', "Rv5g"), ('"awsSecretAccessKey":"abc\\/defRv5h"', "Rv5h"), ("PWD = Rv5i", "Rv5i"),
+          ("password= Rv5j", "Rv5j"), ("key=Rv5k", "Rv5k"), ("api_key=Rv5l", "Rv5l"), ("credential=id:Rv5m", "Rv5m"),
+          ("jdbc:oracle:thin:scott/tigerRv5n@//h:1521/svc", "Rv5n"), ("password={pa;ssRv5o}", "ssRv5o"),
+          ("mongodb://u:pa/ssRv5p@host/db", "Rv5p"), ("mongodb://alice@x.com:Rv5q@host/db", "Rv5q")]
+missed = [s for s, n in shapes if n in vslog.redact(s)]
+kept = [vslog.redact(s) for s in ("sslpassword=x", "password={pa;ss}", "mongodb://alice@x.com:p@host/db")]
+secret = "Pa  ss/w~rd-16"
+written = ["Pa++ss%2Fw~rd-16", "Pa%20%20ss%2fw~rd-16", "Pa++ss%2Fw%7Erd-16", "Pa  ss\\/w~rd-16", "Pa ss/w~rd-16"]
+missed += [w for w in written if "rd-16" in vslog.redact("x " + w + " y", [secret])]
+print("r5 missed:%s" % "|".join(missed))
+print("r5 kept " + " ".join(kept))
+
+# 6: the day file a link or a FIFO: no log, the target untouched, no wait.
+link = os.path.join(base, "r6link"); os.makedirs(link)
+target = os.path.join(base, "elsewhere.txt"); open(target, "w").write("keep\n"); os.chmod(target, 0o644)
+os.symlink(target, os.path.join(link, "virtual-schemas-%s.log" % today))
+log = vslog.RunLog(link, "connect", "r6"); log.write("INFO", "x"); log.close()
+fifo = os.path.join(base, "r6fifo"); os.makedirs(fifo)
+os.mkfifo(os.path.join(fifo, "virtual-schemas-%s.log" % today))
+started = time.time(); log2 = vslog.RunLog(fifo, "connect", "r6"); log2.write("INFO", "x"); log2.close()
+print("r6 %s %s %s %s %s" % (log.path, oct(os.stat(target).st_mode & 0o777)[2:], open(target).read() == "keep\n",
+                             log2.path, time.time() - started < 2))
+
+# 8: short secrets only where they stand alone.
+log, _ = logged("sales")
+log.secret("postgres", "a")
+log.statement("CREATE CONNECTION \"C\" TO 'jdbc:postgresql://pg.example.com:5432/sales' USER 'reader' IDENTIFIED BY 'postgres'")
+log.write("INFO", "reader sales a postgres")
+text = text_of(log)
+print("r8 %s %s %s" % ("jdbc:postgresql://pg.example.com:5432/sales' USER 'reader' IDENTIFIED BY '***'" in text,
+                       " connect sales INFO   reader sales *** ***" in text, "postgres'" in text))
+
+# 9: a lone surrogate in a long text; the driver's exception never chained.
+log, _ = logged("r9")
+log.statement("SELECT '" + "x" * 5000 + "\udc80'")
+log.failed("m", "error", "E" * 5000 + "\udc80")
+# Built from parts: a traceback prints source lines, and this file's own
+# must not be what a check finds.
+chain9 = "Chain-" + "Pw-9"
+statement9 = "CREATE CONNECTION C TO 'x' USER 'u' IDENTIFIED BY '%s'" % chain9
+class Backend(object):
+    def execute(self, sql_text):
+        raise Exception("E" * 5000 + "\udc80 query => " + sql_text)
+    query = execute
+try:
+    sql.Database(Backend(), log).execute(statement9, [chain9])
+    raised = "nothing"
+except Exception as error:
+    raised = "%s/%s" % (type(error).__name__, error.__suppress_context__)
+    trace = "".join(traceback.format_exception(type(error), error, error.__traceback__))
+text = text_of(log)
+print("r9 %s %s %s %s" % (raised, chain9 in trace, "sha256" in text, chain9 in text))
+import cli, lifecycle
+chain7, chain8, run99 = "Chain-" + "Pw-7", "Chain-" + "Pw-8", "Run-" + "Secret-99"
+def boom(self, *args, **kwargs):
+    try:
+        raise Exception("query => CREATE CONNECTION C TO 'x' USER 'u' IDENTIFIED BY '%s' and %s" % (chain7, run99))
+    except Exception:
+        raise RuntimeError("unexpected, password=" + chain8)
+lifecycle.Engine.connect = boom
+kit = os.path.join(base, "r9kit"); os.makedirs(kit)
+sys.stdin = io.TextIOWrapper(io.BytesIO(run99.encode()))
+err, out = io.StringIO(), io.StringIO()
+with contextlib.redirect_stderr(err), contextlib.redirect_stdout(out):
+    code = cli.main(["--defs", sys.argv[3], "--kit-home", kit, "--deployment-dir", base, "--dsn", "127.0.0.1:8563", "--password-file", "/nonexistent",
+                     "connect", "postgresql", "--name", "chain", "--set", "host=pg.example.com", "--set", "database=sales",
+                     "--set", "user=reader", "--secret-stdin"])
+day = open(os.path.join(kit, "logs", "virtual-schemas-%s.log" % today)).read()
+everything = err.getvalue() + out.getvalue() + day
+print("r9cli %d %s %s %s" % (code, "RuntimeError" in err.getvalue(),
+                             "Traceback (most recent call last)" in err.getvalue(),
+                             [n for n in (chain7, chain8, run99) if n in everything]))
+
+# 10: linear time on what a hostile source could send (80k characters each).
+slow = []
+for hostile in ("a." * 40000, "a://" * 20000, "x:y@" * 20000, "password=" * 9000, 'password:"' * 8000, '"' * 80000,
+                "{" * 80000, "pwd={" * 16000, "jdbc:oracle:thin:" * 4800, "IDENTIFIED BY '" * 5400, "a" * 80000):
+    started = time.time()
+    vslog.redact(hostile, ["Hunter22-long-secret", "short"])
+    sql.redact(Exception(hostile), ["Hunter22-long-secret"])
+    if time.time() - started > 1.0:
+        slow.append(hostile[:12])
+print("r10 slow:%s" % "|".join(slow))
+PYREVIEW
+REVIEW="$(python3 "$WORK/vslog-review.py" "$ROOT" "$WORK/vslog-review" "$DEFS" 2>&1)"
+check "review 1: a registered multi-line secret printed across lines; an unregistered literal across lines; a PEM line by line: none in the log" \
+    "r1 False False False False False" "$(printf '%s\n' "$REVIEW" | grep '^r1 ')"
+check "review 2: sql.redact applies the patterns before the cut at 600 (;pwd=Leak-Pwd-4;, mongodb://reader:Tr0ub4dor&3xyz@host)" \
+    "r2 False False True" "$(printf '%s\n' "$REVIEW" | grep '^r2 ')"
+check "review 2: ...and every class is the same after it (password auth, using password: YES, signature, access token, sig=, token=)" \
+    "r2kinds auth=auth auth=auth auth=auth auth=auth auth=auth auth=auth" "$(printf '%s\n' "$REVIEW" | grep '^r2kinds ')"
+check "review 3: a driver line over 4000 characters, a secret across character 1000: redacted before the cut and the sha256" \
+    "r3 False True False" "$(printf '%s\n' "$REVIEW" | grep '^r3 ')"
+check "review 5: sslpassword= trustStorePassword= db_password= Auth_AccessToken= private_key_file_pwd= password: JSON PWD = key= api_key= credential= Oracle braces user@ forms" \
+    "r5 missed:" "$(printf '%s\n' "$REVIEW" | grep '^r5 missed')"
+check "review 5: ...the names kept, braces closed, the user kept" "r5 kept sslpassword=*** password={***} mongodb://alice@x.com:***@host/db" \
+    "$(printf '%s\n' "$REVIEW" | grep '^r5 kept')"
+check "review 6: a day file that is a link: no log, the target's mode and text untouched; a FIFO: no log, no wait" \
+    "r6 None 644 True None True" "$(printf '%s\n' "$REVIEW" | grep '^r6 ')"
+check "review 8: the passwords 'postgres' and 'a': jdbc:postgresql:// and sales/reader whole, the literal and lone words ***" \
+    "r8 True True False" "$(printf '%s\n' "$REVIEW" | grep '^r8 ')"
+check "review 9: a lone surrogate in a long text: the DbError raised, without the driver's exception, logged digested, redacted" \
+    "r9 DbError/True False True False" "$(printf '%s\n' "$REVIEW" | grep '^r9 ')"
+check "review 9: ...an unexpected fault while handling a driver's exception: its traceback unchained and redacted, everywhere" \
+    "r9cli 1 True True []" "$(printf '%s\n' "$REVIEW" | grep '^r9cli ')"
+check "review 10: every pattern linear: 80k hostile characters each under 1 s" "r10 slow:" "$(printf '%s\n' "$REVIEW" | grep '^r10 ')"
+
+printf '\n== the day log: the second review'"'"'s findings, each with its own input ==\n'
+# Second review 5: a CREATE VIRTUAL SCHEMA carries no secret of its own, yet
+# its adapter can echo what the CONNECTION holds. The screen, --json and the
+# log were redacted only with the failing statement's secrets.
+python3 - "$STATE" <<'PYVSFAIL'
+import json, sys
+json.dump({"sources": {"pg.example.com": {"tables": ["ORDERS"]}},
+           "vs_fail": "E-VSPG-9: the adapter could not log in with <s3cr3t-Pa55'word> as the password"}, open(sys.argv[1], "w"))
+PYVSFAIL
+run_secret "$SECRET" connect postgresql --name vsecho $PG_SET --secret-stdin
+check "second review 5: a CREATE VIRTUAL SCHEMA failure echoing the run's credential: exit 1" "1" "$RC"
+has "second review 5: ...its message is on the screen" "E-VSPG-9: the adapter could not log in with <***> as the password" "$OUT"
+lacks "second review 5: ...without the credential" "s3cr3t" "$OUT"
+OUT="$(printf '%s' "$SECRET" | eng --json connect postgresql --name vsecho $PG_SET --secret-stdin 2>/dev/null)"
+check "second review 5: ...nor in --json's error" "[True, False]" "$(JOUT="$OUT" one '["E-VSPG-9" in d["error"], "s3cr3t" in d["error"]]')"
+lacks "second review 5: ...nor in the log" "s3cr3t" "$(cat "$VSLOG")"
+
+cat > "$WORK/vslog-review2.py" <<'PYREVIEW2'
+import datetime, os, sys, time
+sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
+import vslog, sql
+base = sys.argv[2]
+os.makedirs(base)
+R = vslog.redact
+
+# 1: a short secret right after an escape is still alone; inside a word it is not.
+texts = ["url=jdbc%3Apostgresql%3A%2F%2Freader%3AHunter2%40host", '{"msg": "line1\\nHunter2\\nline3"}', '"a\\tHunter2"']
+print("s1 leaks:%s" % "|".join(t for t in texts if "Hunter2" in R(t, ["Hunter2"])))
+print("s1 kept %s %s" % ("jdbc%3Apostgresql" in R("url=jdbc%3Apostgresql%3A%2F%2Fpostgres%40h", ["postgres"]),
+                         R("sales reader a", ["a"])))
+
+# 2: the engine names the day in local Gregorian digits; an empty file a
+# bridge made ready in another calendar is pruned, one with lines is kept.
+print("s2 " + vslog.day_name(datetime.date(2026, 11, 9)))
+today = datetime.date.today()
+folder = os.path.join(base, "s2")
+os.makedirs(folder)
+open(os.path.join(folder, "virtual-schemas-%04d%02d%02d.log" % (today.year + 543, today.month, min(today.day, 28))), "w").close()
+with open(os.path.join(folder, "virtual-schemas-%04d%02d%02d.log" % (today.year + 1, 1, 1)), "w") as handle:
+    handle.write("a line\n")
+vslog.RunLog(folder, "list", None).close()
+print("s2 left " + " ".join(sorted(os.listdir(folder))))
+
+# 3: user:password@ with no length cap and up to the last @.
+jwt = "eyJ" + "A" * 700 + "." + "B" * 790 + "Z"
+long_user = "https://" + "u" * 300 + ":Long-User-Pw9@git.example.com/x"
+at_inside = "https://u:" + "p" * 1100 + "@Tail-Of-Pw8@host/x"
+print("s3 leaks:%s" % "|".join(n for n, t in (("jwt", "https://oauth2:%s@git.example.com" % jwt), ("user", long_user),
+                                                ("at", at_inside))
+                                if any(w in R(t) for w in ("AAAA", "Long-User-Pw9", "Tail-Of-Pw8", "pppp"))))
+print("s3 kept " + R("https://oauth2:%s@git.example.com" % jwt))
+
+# 4: CamelCase names, a Python repr, Authorization; error codes and flags kept.
+# Each shape with the value that must go (": tok" - the value, not the name).
+shapes = [("AccessToken: abc123", "abc123"), ("SessionToken: tok", ": tok"), ("ClientSecret: s3cr3t", "s3cr3t"),
+          ("DbPassword: pw1", "pw1"), ("X-Auth-Token: abc123", "abc123"),
+          ("{'password': 'Hunter22', 'token': 'dapi123'}", "Hunter22"), ("{'password': 'Hunter22', 'token': 'dapi123'}", "dapi123"),
+          ("Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.e30.sig4", "eyJhbGci"), ("Authorization: Basic dXNlcjpwYXNzd29yZDQ=", "dXNlcjpw")]
+print("s4 leaks:%s" % "|".join(s for s, v in shapes if v in R(s)))
+print("s4 shown " + " ~ ".join(R(s) for s in ("AccessToken: abc123", "{'password': 'Hunter22', 'token': 'dapi123'}",
+                                               "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.e30.sig4")))
+readable = ["ExpiredToken: The security token included in the request is expired",
+            "InvalidToken: The provided token is malformed", "NoSuchKey: The specified key does not exist.",
+            "Access denied for user 'r'@'h' (using password: YES)", "(using password: NO)"]
+print("s4 changed:%s" % "|".join(r for r in readable if R(r) != r))
+print("s4 thrift " + R("TOpenSessionReq(username:token, password:dapiXYZ)"))
+kinds = []
+for message in ("Access denied for user 'r'@'h' (using password: YES)", "ExpiredToken: The security token included in the request is expired"):
+    kinds.append("%s=%s" % (sql.classify(message), sql.classify(sql.redact(Exception(message), []))))
+print("s4 kinds " + " ".join(kinds))
+
+# 5: a value credential() derived, registered with the run, echoed by a
+# statement that carries no secrets of its own.
+class Backend(object):
+    def execute(self, sql_text):
+        raise Exception("E-VSS3-4: the adapter refused key [" + "Derived-" + "Key-77]")
+log = vslog.RunLog(os.path.join(base, "s5"), "connect", "s5")
+log.secret("Derived-" + "Key-77")
+try:
+    sql.Database(Backend(), log).execute("CREATE VIRTUAL SCHEMA \"VS_S5\" USING X WITH CONNECTION_NAME = 'C'")
+except sql.DbError as error:
+    print("s5 %s" % error)
+
+# The new scanners stay linear (80k characters each).
+slow = []
+for hostile in ("a://b:" * 13000 + "@", "jdbc:oracle:thin:a/" * 4000 + "@", "https://u:" + "p@" * 40000, "Bearer " * 11000,
+                "Authorization: " * 5000, "'password':" * 7000, "AccessToken: " * 6000, "a\\n" * 26000, "%3A" * 26000):
+    started = time.time()
+    R(hostile, ["Hunter2", "Hunter22-long-secret"])
+    if time.time() - started > 1.0:
+        slow.append(hostile[:12])
+print("s6 slow:%s" % "|".join(slow))
+PYREVIEW2
+REVIEW2="$(python3 "$WORK/vslog-review2.py" "$ROOT" "$WORK/vslog-review2" 2>&1)"
+check "second review 1: the short secret Hunter2 after %3A, after \\n, after \\t: redacted" "s1 leaks:" "$(printf '%s\n' "$REVIEW2" | grep '^s1 leaks')"
+check "second review 1: ...and still not inside a word (postgres in jdbc%3Apostgresql, a in sales and reader)" \
+    "s1 kept True sales reader ***" "$(printf '%s\n' "$REVIEW2" | grep '^s1 kept')"
+check "second review 2: the engine names the day in local Gregorian digits" "s2 virtual-schemas-20261109.log" "$(printf '%s\n' "$REVIEW2" | grep '^s2 virtual')"
+check "second review 2: ...an empty file dated in another calendar is pruned, a written future one kept" \
+    "s2 left $(python3 -c 'import datetime as d; t=d.date.today(); print("virtual-schemas-%04d%02d%02d.log virtual-schemas-%04d0101.log" % (t.year, t.month, t.day, t.year + 1))')" \
+    "$(printf '%s\n' "$REVIEW2" | grep '^s2 left')"
+check "second review 3: https://oauth2:<1500-character JWT>@, a 300-character user, a password with @: redacted, no length cap" \
+    "s3 leaks:" "$(printf '%s\n' "$REVIEW2" | grep '^s3 leaks')"
+check "second review 3: ...the user and host kept" "s3 kept https://oauth2:***@git.example.com" "$(printf '%s\n' "$REVIEW2" | grep '^s3 kept')"
+check "second review 4: AccessToken: SessionToken: ClientSecret: DbPassword: X-Auth-Token: a Python repr, Authorization Bearer and Basic" \
+    "s4 leaks:" "$(printf '%s\n' "$REVIEW2" | grep '^s4 leaks')"
+check "second review 4: ...the names and the scheme kept" \
+    "s4 shown AccessToken: *** ~ {'password': '***', 'token': '***'} ~ Authorization: Bearer ***" "$(printf '%s\n' "$REVIEW2" | grep '^s4 shown')"
+check "second review 4: ...ExpiredToken: InvalidToken: NoSuchKey: and using password: YES / NO unchanged" "s4 changed:" \
+    "$(printf '%s\n' "$REVIEW2" | grep '^s4 changed')"
+check "second review 4: ...a Thrift password:...) keeps its closing )" "s4 thrift TOpenSessionReq(username:token, password:***)" \
+    "$(printf '%s\n' "$REVIEW2" | grep '^s4 thrift')"
+check "second review 4: ...and the classes stay" "s4 kinds auth=auth auth=auth" "$(printf '%s\n' "$REVIEW2" | grep '^s4 kinds')"
+check "second review 5: a derived value the run registered, echoed by a statement with no secrets of its own: redacted" \
+    "s5 E-VSS3-4: the adapter refused key [***]" "$(printf '%s\n' "$REVIEW2" | grep '^s5 ')"
+check "second review 3/4: the new scanners stay linear: 80k hostile characters each under 1 s" "s6 slow:" "$(printf '%s\n' "$REVIEW2" | grep '^s6 ')"
+
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

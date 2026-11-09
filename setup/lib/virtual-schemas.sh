@@ -108,6 +108,42 @@ _exakit_vs_unrunnable() {
     error "$1"
 }
 
+# exakit_vs_log_path — the engine's day log (virtual-schemas-YYYYMMDD.log in
+# the kit's log folder, written by engine/vslog.py: every statement it sent
+# and every event, secrets redacted), the newest one; nothing when there is none.
+exakit_vs_log_path() {
+    ls -t "${EXAKIT_LOG_DIR:-$EXAKIT_HOME/logs}"/virtual-schemas-*.log 2>/dev/null | head -n 1
+}
+
+# _exakit_vs_log_mark — what that log is now (path:size), kept in
+# EXAKIT_VS_LOG_MARK so the end of the command can tell whether this run wrote
+# to it: a lookup or a refusal the engine never logged points at no log.
+_exakit_vs_log_mark() {
+    _evm_path="$(exakit_vs_log_path)"
+    EXAKIT_VS_LOG_MARK=""
+    [ -n "$_evm_path" ] && EXAKIT_VS_LOG_MARK="$_evm_path:$(wc -c < "$_evm_path" 2>/dev/null | tr -d ' ')"
+    return 0
+}
+
+# _exakit_vs_exit <code> — end a connect or source command. A failure (not 5,
+# a question not confirmed or a gated source) that the engine logged names the
+# log once, so the statements it sent are one command away; with --json on
+# stderr, which no parser reads. An empty file names nothing (the Windows
+# twin makes today's ready before every engine run). ⇄ twin: Exit-ExakitVs.
+_exakit_vs_exit() {
+    case "$1" in 0|5) exit "$1" ;; esac
+    _eve_path="$(exakit_vs_log_path)"
+    if [ -n "$_eve_path" ] && [ -s "$_eve_path" ] && \
+       [ "$_eve_path:$(wc -c < "$_eve_path" 2>/dev/null | tr -d ' ')" != "${EXAKIT_VS_LOG_MARK:-}" ]; then
+        if [ "${EXAKIT_VS_JSON:-0}" = 1 ]; then
+            printf 'Log (every SQL statement, secrets redacted): %s\n' "$_eve_path" >&2
+        else
+            info "Log (every SQL statement, secrets redacted): $_eve_path"
+        fi
+    fi
+    exit "$1"
+}
+
 # _exakit_vs_render — the engine's event lines in the kit's own marks; the
 # RESULT line is kept in EXAKIT_VS_RESULT for the caller.
 _exakit_vs_render() {
@@ -1368,7 +1404,8 @@ EOF
 # (cli.py), whoever refused. It never prompts: what is not on the command
 # line, in --password-file or on a pipe is a failure, not a question. The
 # engine's events go to the log; what this bridge says while it repairs DNS
-# or installs a language container goes to stderr.
+# or installs a language container goes to stderr. A failure ends naming the
+# engine's day log, every statement it sent (_exakit_vs_exit).
 cmd_connect() {
     _cc_source=""; _cc_name=""; _cc_pwfile=""; _cc_dry=0; _cc_json=0; _cc_url=""
     EXAKIT_VS_SETS=""; EXAKIT_VS_GIVEN=""
@@ -1407,20 +1444,21 @@ $2"; EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${2%%=*}"; shift ;;
     done
     _require_install "$_cc_json"
     exakit_init_logging
+    _exakit_vs_log_mark
     # A pasted connection string fills what it names, for every path below:
     # the terminal's panel shows those answers, --yes and --dry-run use them.
     if [ -n "$_cc_url" ]; then
         [ -n "$_cc_source" ] || _exakit_vs_refuse 2 "--url needs the source it is for, e.g. exakit connect postgresql --url 'postgres://reader@db.example.com/sales'" \
             "--url needs the source it is for" \
             "name the source before it, e.g. exakit connect postgresql --url 'postgres://reader@db.example.com/sales'"
-        _exakit_vs_paste "$_cc_source" "$_cc_url" || exit $?
+        _exakit_vs_paste "$_cc_source" "$_cc_url" || _exakit_vs_exit $?
         _cc_url=""
     fi
     # A person at a terminal gets the menu and the panels; a pipe, --yes,
     # --dry-run and --json keep the line-by-line path below, unchanged.
     if [ "$_cc_dry" = 0 ] && [ "$_cc_json" = 0 ] && _exakit_vs_tui_ok; then
         _exakit_vs_tui "$_cc_source" "$_cc_name" "$_cc_pwfile"
-        exit $?
+        _exakit_vs_exit $?
     fi
     # --json never asks: a terminal is as good as none.
     _cc_tty=""
@@ -1477,7 +1515,7 @@ EOF
         # or with --dry-run the plan itself, is the answer.
         exakit_vs_engine --json plan "$@" < /dev/null > "$_cc_out" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
         _cc_rc=$?
-        if [ "$_cc_rc" -ne 0 ] || [ "$_cc_dry" = 1 ]; then cat "$_cc_out"; rm -f "$_cc_out"; exit "$_cc_rc"; fi
+        if [ "$_cc_rc" -ne 0 ] || [ "$_cc_dry" = 1 ]; then cat "$_cc_out"; rm -f "$_cc_out"; _exakit_vs_exit "$_cc_rc"; fi
         # The connector it resolved to, by the plan's own top-level key.
         _cc_resolved="$(sed -n 's/^  "connector": "\([a-z0-9-]*\)",*$/\1/p' "$_cc_out" | head -n 1)"
         rm -f "$_cc_out"
@@ -1486,7 +1524,7 @@ EOF
         exakit_vs_engine plan "$@" < /dev/null > "$_cc_out" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
         _cc_rc=$?
         _exakit_vs_render "$_cc_out"; rm -f "$_cc_out"
-        [ "$_cc_rc" -eq 0 ] || exit "$_cc_rc"
+        [ "$_cc_rc" -eq 0 ] || _exakit_vs_exit "$_cc_rc"
         _exakit_vs_show_plan "$EXAKIT_VS_RESULT"
         [ "$_cc_dry" = 1 ] && exit 0
     fi
@@ -1521,7 +1559,7 @@ EOF
         _exakit_vs_query_hints "$EXAKIT_VS_RESULT" "$_cc_name"
         info "Manage it with: exakit source show $_cc_name | check | reauth | refresh | disconnect | remove"
     fi
-    exit "$_cc_rc"
+    _exakit_vs_exit "$_cc_rc"
 }
 
 # _exakit_vs_query_hints <connect-result-json> <name> — a first query on one of
@@ -1591,6 +1629,7 @@ cmd_source() {
     done
     _require_install "$_cs_json"
     exakit_init_logging
+    _exakit_vs_log_mark
     case "$_cs_action" in
         list|issues|catalog|show|describe|check|reauth|refresh|disconnect|remove) ;;
         *) _exakit_vs_refuse 2 "Unknown source action '$_cs_action' (list, issues, show, describe, check, reauth, refresh, disconnect, remove, catalog)." \
@@ -1651,7 +1690,7 @@ print("  " + "\n  ".join(["drops: " + ", ".join(p["drop"])] + (["keeps: " + ", "
             _cs_rc=$?
             if [ "$_cs_rc" -ne 0 ]; then
                 if [ "$_cs_json" = 1 ]; then cat "$_cs_out"; else _exakit_vs_render "$_cs_out"; fi
-                rm -f "$_cs_out"; exit "$_cs_rc"
+                rm -f "$_cs_out"; _exakit_vs_exit "$_cs_rc"
             fi
             if [ "$_cs_json" = 1 ]; then
                 _cs_conn="$(sed -n 's/^  "connector": "\([a-z0-9-]*\)",*$/\1/p' "$_cs_out" | head -n 1)"
@@ -1672,15 +1711,15 @@ print("  " + "\n  ".join(["drops: " + ", ".join(p["drop"])] + (["keeps: " + ", "
             if [ "$_cs_json" = 1 ]; then
                 # The engine's events and any traceback go to the log, as connect's do.
                 printf '%s' "$_cs_secret" | exakit_vs_engine "$@" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
-                exit $?
+                _exakit_vs_exit $?
             fi
             _exakit_vs_run "$_cs_secret" "$@"; _cs_rc=$?; unset _cs_secret
             [ "$_cs_rc" -eq 0 ] && ok "$_cs_name is ready again with the new credential"
-            exit "$_cs_rc" ;;
+            _exakit_vs_exit "$_cs_rc" ;;
     esac
     if [ "$_cs_json" = 1 ]; then
         exakit_vs_engine "$@" < /dev/null 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
-        exit $?
+        _exakit_vs_exit $?
     fi
     _exakit_vs_run "" "$@"
     _cs_rc=$?
@@ -1705,7 +1744,7 @@ for t in r["tables"]:
     for c in t["columns"]:
         print("    %s  %s%s" % (c["name"].ljust(width), c["type"], "" if c["nullable"] else "  NOT NULL"))
     print("")' 2>/dev/null
-        exit "$_cs_rc"
+        _exakit_vs_exit "$_cs_rc"
     fi
     [ -n "$EXAKIT_VS_RESULT" ] && printf '%s' "$EXAKIT_VS_RESULT" | run_python_any -c 'import json, sys
 r = json.load(sys.stdin)
@@ -1738,5 +1777,5 @@ else:
             print("  %-11s %s" % (k, json.dumps(r[k]) if isinstance(r[k], (dict, list)) else r[k]))
     for i, t in enumerate(r.get("tips") or []):
         print("  %-11s %s" % ("tips" if i == 0 else "", t))' 2>/dev/null
-    exit "$_cs_rc"
+    _exakit_vs_exit "$_cs_rc"
 }

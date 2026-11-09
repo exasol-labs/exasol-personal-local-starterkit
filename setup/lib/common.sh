@@ -11592,6 +11592,11 @@ exakit_log_targets() {
     _lt_setup="$(ls -t "$EXAKIT_LOG_DIR"/install-*.log 2>/dev/null | head -1)"
     [ -n "$_lt_setup" ] && printf 'setup|Installer and setup runs|file|%s\n' "$_lt_setup"
 
+    # `exakit connect` and `exakit source`: the engine's day log, every SQL
+    # statement it sent and every event, secrets redacted (engine/vslog.py).
+    _lt_vs="$(ls -t "$EXAKIT_LOG_DIR"/virtual-schemas-*.log 2>/dev/null | head -1)"
+    [ -n "$_lt_vs" ] && printf 'virtual-schemas|connect and source runs|file|%s\n' "$_lt_vs"
+
     for _lt_id in $(exakit_marketplace_installed_addons 2>/dev/null); do
         _lt_fn="$(_exakit_addon_fn "$_lt_id" log_path)"
         command -v "$_lt_fn" >/dev/null 2>&1 || continue

@@ -30,12 +30,14 @@ database and inspect it afterwards:
     "secret_key" (the storage keys it accepts), "warehouse" (the one it
     knows), "region" (the bucket's) and "fail": "external" (Unity closed to
     outside engines) | "managed" (a catalog-managed table, at the read)
-    sources     {host: {"tables": [...], "fail": null|"auth"|"tls"|"tls-validity"|"unreachable"|"denied",
+    sources     {host: {"tables": [...], "fail": null|"auth"|"tls"|"tls-validity"|"unreachable"|"denied"|"echo",
                         "secret": "<the credential the source accepts>",
                         "read_error": "<the driver's words for a refused read>"}}
                 read_error is raised by the bounded read alone, as Exasol
                 reports a pushed-down IMPORT the source refused (a missing
                 grant): the metadata was read, the rows may not be.
+                "echo" fails with the source's "message" as the driver's
+                text (one that quotes credentials the run never knew)
                 a document source (S3) is keyed by <bucket>.s3.<region>.amazonaws.com
                 and also takes "region" (the bucket's real one) and "empty"
                 (tables whose objects match nothing); its tables come from the
@@ -56,6 +58,11 @@ database and inspect it afterwards:
     refresh_fail virtual schemas whose ALTER ... REFRESH fails (the adapter
                 cannot reach its source); script_fail scripts (SCHEMA.NAME)
                 whose CREATE OR REPLACE fails
+    vs_fail     a message: every CREATE VIRTUAL SCHEMA fails with it (an
+                adapter that echoes what the CONNECTION holds)
+    connection_fail  a message: CREATE CONNECTION fails as pyexasol reports it,
+                its query => field printing the statement back, secret and
+                all, across as many lines as the statement has
 
 Errors carry realistic driver text, including the statement for a failed
 CREATE CONNECTION, so the engine's redaction is exercised for real.
@@ -368,6 +375,8 @@ def _source_for(doc, connection, via="adapter"):
     if src is None:
         raise Exception("JDBC-Client-Error: The connection attempt failed.")
     fail = src.get("fail")
+    if fail == "echo":
+        raise Exception(src["message"])
     if fail == "auth" or (src.get("secret") is not None and con.get("secret") != src["secret"]):
         raise Exception('FATAL: password authentication failed for user "%s"' % con["user"])
     if fail == "tls":
@@ -517,6 +526,8 @@ class Fake(object):
         raise Exception("fake: unexpected query: %s" % sql[:80])
 
     def _execute(self, doc, sql):
+        if doc.get("vs_fail") and sql.startswith("CREATE VIRTUAL SCHEMA"):
+            raise Exception(doc["vs_fail"])
         if sql == "CREATE SCHEMA EXAKIT_VS":
             doc["schemas"].append("EXAKIT_VS")
             return
@@ -532,6 +543,9 @@ class Fake(object):
             return
         m = re.match(r"CREATE (OR REPLACE )?CONNECTION \"([^\"]+)\" TO '((?:[^']|'')*)'(?: USER '((?:[^']|'')*)' IDENTIFIED BY '((?:[^']|'')*)')?$", sql)
         if m:
+            if doc.get("connection_fail"):
+                raise Exception("(\n    message     =>  %s\n    dsn         =>  127.0.0.1:8563\n    user        =>  sys\n"
+                                "    code        =>  42000\n    query       =>  %s\n)" % (doc["connection_fail"], sql))
             if not m.group(1) and m.group(2) in doc["connections"]:
                 raise Exception("connection %s already exists (statement: %s)" % (m.group(2), sql))
             doc["connections"][m.group(2)] = {"url": m.group(3), "user": (m.group(4) or "").replace("''", "'"),

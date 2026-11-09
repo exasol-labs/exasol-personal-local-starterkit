@@ -4,7 +4,9 @@ The administrator password is read from the file the manifest names
 (runtime.password_file) and never leaves this process. A source credential
 arrives on stdin and is written into the database only inside CREATE /
 ALTER CONNECTION over the encrypted session; every error raised while it is
-in play has it replaced by *** before anything prints or logs it.
+in play has it replaced by *** before anything prints or logs it. Every
+statement is written to the run's log (vslog) before it is sent, redacted
+there the same way.
 
 Tests swap the backend: EXAKIT_VS_FAKE_DB names a Python file whose
 `connect(**kwargs)` returns an object with query/execute/close.
@@ -13,6 +15,8 @@ Tests swap the backend: EXAKIT_VS_FAKE_DB names a Python file whose
 import importlib.util
 import os
 import re
+
+import vslog
 
 MAX_ERROR = 600
 
@@ -232,34 +236,59 @@ def summarize(text):
 
 
 def redact(text, secrets):
-    text = summarize(text)
-    for secret in secrets:
-        if secret:
-            for form in (secret, secret.replace("'", "''")):
-                text = text.replace(form, "***")
-    text = re.sub(r"IDENTIFIED BY\s+'(?:[^']|'')*'", "IDENTIFIED BY '***'", text, flags=re.I)
-    text = re.sub(r"\s*\(Session: \d+\)", "", text)
+    """A database error as one line a person may read - on the screen, in the
+    kit's log, in --json's error: every form of the run's secrets and every
+    credential shape gone (vslog.redact) BEFORE it is cut to MAX_ERROR, so a
+    cut never leaves part of a password standing. A text that cannot be
+    redacted is not shown at all."""
+    try:
+        text = re.sub(r"\s*\(Session: \d+\)", "", summarize(text))
+        text = vslog.redact(text, secrets)
+    except Exception:  # noqa: BLE001 - never the clear text
+        return "the database refused the statement (its message could not be made safe to show)"
     return text[:MAX_ERROR]
 
 
 class Database(object):
+    """The session. log is the run's vslog.RunLog: every statement is written
+    to it before it is sent, and the database's answer when it fails - both
+    redacted of the statement's secrets there."""
     def __init__(self, backend, log=None):
         self.backend = backend
-        self.log = log or (lambda text: None)
+        self.log = log if log is not None else vslog.NULL
 
     def query(self, sql_text, secrets=()):
+        self.log.statement(sql_text, secrets)
         try:
             return self.backend.query(sql_text)
         except Exception as error:     # the driver's own exception types vary by backend
-            message = redact(error, secrets)
-            raise DbError(message, classify_raw(message, error))
+            raise self._failed(error, secrets) from None
 
     def execute(self, sql_text, secrets=()):
+        self.log.statement(sql_text, secrets)
         try:
             self.backend.execute(sql_text)
         except Exception as error:
-            message = redact(error, secrets)
-            raise DbError(message, classify_raw(message, error))
+            raise self._failed(error, secrets) from None
+
+    def _failed(self, error, secrets):
+        """The DbError for a driver's exception, logged. Raised `from None`:
+        the driver's own exception (its query => field holds the statement,
+        secret and all) never rides along to a traceback."""
+        # Every secret the run knows, not only this statement's own: a CREATE
+        # VIRTUAL SCHEMA carries none, yet its adapter can echo the credential
+        # (or a value derived from it) the CONNECTION holds.
+        try:
+            known = set(secrets) | set(self.log.secrets)
+        except Exception:  # noqa: BLE001 - never fewer than the statement's own
+            known = set(secrets)
+        message = redact(error, known)
+        try:
+            kind = classify_raw(message, error)
+        except Exception:  # noqa: BLE001 - a class is never worth the answer
+            kind = "error"
+        self.log.failed(message, kind, error, secrets)
+        return DbError(message, kind)
 
     def close(self):
         try:
@@ -306,12 +335,12 @@ def connect(dsn, user, password_file, log=None):
         with open(password_file, encoding="utf-8") as handle:
             password = handle.read().strip()
     except OSError as error:
-        raise DbError("the administrator password file could not be read: %s" % error, "error")
+        raise DbError("the administrator password file could not be read: %s" % error, "error") from None
     try:
         backend = _Pyexasol(dsn, user, password)
     except ImportError:
-        raise DbError("pyexasol is not installed in this Python (repair: exakit update pyexasol)", "error")
+        raise DbError("pyexasol is not installed in this Python (repair: exakit update pyexasol)", "error") from None
     except Exception as error:
         message = redact(error, [password])
-        raise DbError("the database did not accept a connection: %s" % message, "unreachable")
+        raise DbError("the database did not accept a connection: %s" % message, "unreachable") from None
     return Database(backend, log)

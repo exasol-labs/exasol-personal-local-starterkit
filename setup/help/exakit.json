@@ -199,7 +199,7 @@
       "command": "logs",
       "options": "[target | --json] [-f] [--lines N] [--path]",
       "summary": "Every log the kit can show.",
-      "description": "The installer run, the database container, each add-on service, and what the boot entries wrote at login. No target lists them all with size and last-updated; -f follows one live; --path prints just the path for piping.",
+      "description": "The installer run, the database container, each add-on service, what the boot entries wrote at login, and the virtual-schemas day log (every SQL statement exakit connect and exakit source sent, secrets redacted; kept 14 days). No target lists them all with size and last-updated; -f follows one live; --path prints just the path for piping.",
       "examples": [
         "exakit logs",
         "exakit logs setup -f",

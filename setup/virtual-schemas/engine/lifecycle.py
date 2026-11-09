@@ -32,6 +32,7 @@ import keyfile
 import luaadapter
 import publicip
 import tlshelper
+import vslog
 
 PROBE = "EXAKIT_DNS_PROBE_V2"
 FILES = "EXAKIT_FILES_PROBE_V1"
@@ -235,9 +236,11 @@ class ScopeFailure(Failure):
 
 
 class Engine(object):
-    def __init__(self, args, emit):
+    def __init__(self, args, emit, log=None):
         self.args = args
         self.emit = emit
+        # The run's log (vslog): the session writes every statement to it.
+        self.log = log if log is not None else vslog.NULL
         self.defs = planner.Definitions(args.defs)
         self.store = sources.Store(args.kit_home)
         self.cache = artifacts.Cache(args.kit_home, log=lambda text: emit("INFO", text))
@@ -285,7 +288,7 @@ class Engine(object):
     def db(self):
         if self._db is None:
             try:
-                self._db = sql.connect(self.args.dsn, self.args.user, self.args.password_file)
+                self._db = sql.connect(self.args.dsn, self.args.user, self.args.password_file, log=self.log)
             except sql.DbError as error:
                 raise Failure("the local database is not reachable: %s" % error, EXIT["unreachable_db"],
                               "unreachable_db", remedy=REMEDY_FOR["unreachable_db"], command="exakit start")
@@ -696,7 +699,9 @@ class Engine(object):
     def credential(self, connector, values, secret):
         """(url, user, secret, hidden, notes) for the CONNECTION: a JDBC URL with
         the user's password, or - for a document source - an empty URL and
-        user with the credential JSON as the secret."""
+        user with the credential JSON as the secret. Every secret here is the
+        run log's from now on (vslog), whatever writes it next."""
+        self.log.secret(secret)
         if connector.get("secret_as_file"):
             # The key goes to a file in BucketFS, never into the CONNECTION:
             # no user, no password, and the URL names only the file's path.
@@ -706,6 +711,7 @@ class Engine(object):
                 failure = Failure(str(error), EXIT["input"])
                 failure.complete = True
                 raise failure
+            self.log.secret(text, *hidden)
             return None, None, text, hidden, []
         if connector.get("credential"):
             try:
@@ -714,6 +720,7 @@ class Engine(object):
                 failure = Failure(str(error), EXIT["input"])
                 failure.complete = True  # the credential's own problem, named; nothing ran
                 raise failure
+            self.log.secret(text, *hidden)
             # A document adapter names no address; a lakehouse catalog's is its endpoint.
             url = connector["url"].format(**values) if connector.get("url") else ""
             return url, "", text, hidden, notes

@@ -65,6 +65,10 @@ function Invoke-ExakitVsEngine {
     } else {
         $argv += $Arguments
     }
+    # Today's log exists and is owner-only BEFORE the engine writes a line to
+    # it: content written under the inherited ACL would stay readable to
+    # others if the run were stopped (Ctrl+C) before the step after it.
+    Protect-ExakitVsLog -Today
     try { $errFile = [System.IO.Path]::GetTempFileName() }
     catch {
         if (-not $asJson) { throw }
@@ -91,7 +95,86 @@ function Invoke-ExakitVsEngine {
         if ("$line".Trim()) { Write-ExakitLog "VS" "$line" }
     }
     Remove-Item -Force -LiteralPath $errFile -ErrorAction SilentlyContinue
+    # Again after it: a run that crossed midnight wrote a new day's file.
+    Protect-ExakitVsLog
     return [pscustomobject]@{ Code = $code; Lines = @($lines | ForEach-Object { "$_" }) }
+}
+
+# Get-ExakitVsLogFolder - the kit's log folder, where the engine writes its
+# day log (--kit-home + logs, as engine/cli.py names it); "" when unknown.
+function Get-ExakitVsLogFolder {
+    $folder = $script:LogDir
+    if (-not $folder -and $script:ExakitHome) { $folder = Join-Path $script:ExakitHome "logs" }
+    if (-not $folder) { return "" }
+    return $folder
+}
+
+# Protect-ExakitVsLog [-Today] - the engine's day log owner-only. The engine
+# creates it mode 600 on macOS and Linux; on Windows that is the file's ACL,
+# which this side sets, as it does for the install log (Initialize-ExakitLogging).
+# -Today creates today's file first, so the ACL is on it before the engine
+# writes; without it, the newest file is protected.
+function Protect-ExakitVsLog {
+    param([switch]$Today)
+    if (-not (Get-Command Protect-ExakitFile -ErrorAction SilentlyContinue)) { return }
+    $path = ""
+    if ($Today) {
+        $folder = Get-ExakitVsLogFolder
+        if (-not $folder) { return }
+        # The local Gregorian date in digits, as the engine names the file
+        # (vslog.day_name): the invariant culture, since th-TH or ar-SA would
+        # format another calendar's year and make ready a file nobody writes.
+        $path = Join-Path $folder ("virtual-schemas-{0}.log" -f (Get-Date).ToString("yyyyMMdd", [Globalization.CultureInfo]::InvariantCulture))
+        try {
+            if (-not (Test-Path -LiteralPath $folder)) { New-Item -ItemType Directory -Force -Path $folder | Out-Null }
+            if (-not (Test-Path -LiteralPath $path)) { New-Item -ItemType File -Path $path | Out-Null }
+        } catch { return }
+    } else {
+        $path = Get-ExakitVsLogPath
+    }
+    if ($path) { try { Protect-ExakitFile $path } catch { } }
+}
+
+# Get-ExakitVsLogPath - the engine's day log (virtual-schemas-YYYYMMDD.log in
+# the kit's log folder, written by engine/vslog.py: every statement it sent
+# and every event, secrets redacted), the newest one; "" when there is none.
+# Twin of exakit_vs_log_path.
+function Get-ExakitVsLogPath {
+    $folder = Get-ExakitVsLogFolder
+    if (-not $folder) { return "" }
+    $newest = Get-ChildItem -LiteralPath $folder -Filter "virtual-schemas-*.log" -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($newest) { return $newest.FullName }
+    return ""
+}
+
+# Get-ExakitVsLogMark - what that log is now (path:size), so the end of the
+# command can tell whether this run wrote to it: a lookup or a refusal the
+# engine never logged points at no log. Twin of _exakit_vs_log_mark.
+function Get-ExakitVsLogMark {
+    $path = Get-ExakitVsLogPath
+    if (-not $path) { return "" }
+    $size = 0
+    try { $size = (Get-Item -LiteralPath $path -ErrorAction Stop).Length } catch { }
+    return ("{0}:{1}" -f $path, $size)
+}
+
+# Exit-ExakitVs - end a connect or source command. A failure (not 5, a
+# question not confirmed or a gated source) that the engine logged names the
+# log once, so the statements it sent are one command away; with --json on
+# stderr, which no parser reads. An empty file (made ready by
+# Protect-ExakitVsLog for a command the engine does not log) names nothing.
+# Twin of _exakit_vs_exit.
+function Exit-ExakitVs {
+    param([int]$Code)
+    if ($Code -ne 0 -and $Code -ne 5) {
+        $mark = Get-ExakitVsLogMark
+        if ($mark -and $mark -ne $script:ExakitVsLogMark -and -not $mark.EndsWith(":0")) {
+            $line = "Log (every SQL statement, secrets redacted): " + (Get-ExakitVsLogPath)
+            if ($script:ExakitVsJson) { [Console]::Error.WriteLine($line) } else { Info $line }
+        }
+    }
+    exit $Code
 }
 
 # New-ExakitVsFailureJson - the engine's failure shape (cli.py) for what the

@@ -42,6 +42,10 @@ in error, the traceback on stderr. Exit codes: 0 done, 1 failed, 2 bad input,
 3 conflict, 4 no such source, 5 gated, 20 Java in the database cannot resolve
 host names, 21 Java is not installed in the database, 22 the local database is
 unreachable, 23 the Rust language container is not installed.
+
+The commands that act on sources (LOGGED) also write the day's log under
+<kit home>/logs (vslog.py): the command, every statement sent and every
+event above, each redacted of the run's secrets.
 """
 
 import argparse
@@ -52,6 +56,7 @@ import locale
 import os
 import re
 import sys
+import time
 import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -63,6 +68,7 @@ try:
     import paste  # noqa: E402
     import plan as planner  # noqa: E402
     import sources  # noqa: E402
+    import vslog  # noqa: E402
     BROKEN = None
 except Exception:  # noqa: BLE001
     BROKEN = traceback.format_exc()
@@ -149,6 +155,43 @@ COMMAND_FOR_KIND = {"missing": "exakit source list", "gated": "exakit source cat
 # The commands that act on a source that exists: a failure of theirs takes the
 # fix `check` would name for its class, when it names none of its own.
 SOURCE_COMMANDS = ("show", "check", "reauth", "refresh", "describe", "disconnect", "remove")
+
+# The commands the day's log records (vslog). Not the catalog and resolve
+# lookups, nor the terminal form's inputs and field: no database, nothing to
+# debug, and a field's value may be a secret typed into the wrong one.
+LOGGED = ("paste", "plan", "connect", "list", "issues") + SOURCE_COMMANDS
+
+
+def set_keys(words):
+    """The command's words with every --set value left out: the keys say what
+    was given, and a value is logged by no one before it is validated - a
+    password pasted into the wrong input would otherwise be in the file."""
+    shown, rest = [], list(words)
+    while rest:
+        word = rest.pop(0)
+        if word == "--set" and rest:
+            item = rest.pop(0)
+            shown += ["--set", item.split("=", 1)[0] + "=..." if "=" in item else "..."]
+        elif word.startswith("--set="):
+            item = word[len("--set="):]
+            shown.append("--set=" + (item.split("=", 1)[0] + "=..." if "=" in item else "..."))
+        else:
+            shown.append(word)
+    return shown
+
+
+def run_log(args, argv):
+    """The day's log for this run (a no-op for a command it does not record),
+    its START line written: the command as given after the context options,
+    --set keys without their values, and the database it talks to."""
+    if args.command not in LOGGED:
+        return vslog.NULL
+    source = getattr(args, "name", None) or ("all" if getattr(args, "all", False) else None)
+    log = vslog.RunLog(os.path.join(args.kit_home, "logs"), args.command, source)
+    words = argv[argv.index(args.command):] if args.command in argv else [args.command]
+    log.write("START", "%s (dsn %s, user %s%s)" % (" ".join(set_keys(words)), args.dsn or "-", args.user,
+                                                    ", --json" if args.json else ""))
+    return log
 
 
 def failure(message, code, kind=None, remedy=None, command=None, source=None):
@@ -303,10 +346,18 @@ def main(argv=None):
             return 2
         raise
     out = sys.stderr if args.json else sys.stdout
+    log = run_log(args, argv)
+    started = time.time()
 
     def emit(level, text):
         out.write("%s %s\n" % (level, text))
         out.flush()
+        log.write(level, text)
+
+    def secret_of(args):
+        secret = read_secret(args)
+        log.secret(secret)
+        return secret
 
     result, code = None, 0
     engine = None
@@ -333,10 +384,10 @@ def main(argv=None):
                 result = {"connectors": [dict(e, profile=e["profile"], version=adapter_version(defs, e["id"]))
                                          for e in defs.entries() if not q or q in json.dumps(e).lower()]}
         else:
-            engine = lifecycle.Engine(args, emit)
+            engine = lifecycle.Engine(args, emit, log)
             if args.command in ("plan", "connect"):
                 connector = engine.defs.resolve(args.connector)
-                result = engine.connect(connector, args.name, pairs(args.set), read_secret(args),
+                result = engine.connect(connector, args.name, pairs(args.set), secret_of(args),
                                         dry_run=args.dry_run, plan_only=args.command == "plan")
             elif args.command == "list":
                 result = {"sources": engine.listing()}
@@ -355,7 +406,7 @@ def main(argv=None):
                 else:
                     raise planner.PlanError("check takes a source name or --all")
             elif args.command == "reauth":
-                result = engine.reauth(args.name, read_secret(args))
+                result = engine.reauth(args.name, secret_of(args))
                 code = 0 if result.get("status") == "ready" else 1
             elif args.command == "refresh":
                 result = engine.refresh(args.name)
@@ -381,8 +432,13 @@ def main(argv=None):
     except Exception as error:  # noqa: BLE001 - the last line: never a traceback on stdout
         # The traceback goes to stderr, which the shells keep in the log; the
         # answer is one line, and the same shape as every other failure.
-        traceback.print_exc(file=sys.stderr)
-        line = " ".join(("%s: %s" % (type(error).__name__, error)).split())
+        # Without the exceptions it was raised while handling (chain=False),
+        # and redacted: a driver's exception carries its statement, secret
+        # and all, and this traceback reaches files the run log does not.
+        trace = log.scrub(traceback.format_exc(chain=False))
+        sys.stderr.write(trace)
+        log.write("TRACE", trace.rstrip())
+        line = log.scrub(" ".join(("%s: %s" % (type(error).__name__, error)).split()))
         emit("FAIL", "the engine failed unexpectedly: %s (details: exakit logs)" % line)
         result, code = failure("the engine failed unexpectedly: %s" % line, 1, "internal"), 1
     finally:
@@ -390,7 +446,10 @@ def main(argv=None):
             try:
                 engine.close()
             except Exception:  # noqa: BLE001 - the answer is already decided
-                traceback.print_exc(file=sys.stderr)
+                sys.stderr.write(log.scrub(traceback.format_exc(chain=False)))
+        kind = result.get("kind") if code and isinstance(result, dict) else None
+        log.write("END", "exit %d%s (%.1f s)" % (code, ", kind %s" % kind if kind else "", time.time() - started))
+        log.close()
     if args.json:
         payload = dict(result or {})
         payload.setdefault("ok", code == 0)

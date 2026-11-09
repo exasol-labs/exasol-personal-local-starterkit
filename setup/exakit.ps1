@@ -3078,6 +3078,13 @@ function Get-ExakitLogTargets {
     if ($setup) {
         $targets += [pscustomobject]@{ Id = "setup"; Label = "Installer and setup runs"; Kind = "file"; Source = $setup.FullName }
     }
+    # `exakit connect` and `exakit source`: the engine's day log, every SQL
+    # statement it sent and every event, secrets redacted (engine/vslog.py).
+    $vsLog = Get-ChildItem -Path $script:LogDir -Filter "virtual-schemas-*.log" -ErrorAction SilentlyContinue |
+        Sort-Object LastWriteTime -Descending | Select-Object -First 1
+    if ($vsLog) {
+        $targets += [pscustomobject]@{ Id = "virtual-schemas"; Label = "connect and source runs"; Kind = "file"; Source = $vsLog.FullName }
+    }
     foreach ($addonId in (Get-ExakitMarketplaceInstalledAddons)) {
         $addon = Get-ExakitMarketplaceAddon $addonId
         if (-not ($addon -and $addon.PSObject.Properties["LogFn"] -and
@@ -3469,6 +3476,7 @@ function Invoke-CmdConnect {
     }
     if ($json) { Assert-ExakitInstalled -Json } else { Assert-ExakitInstalled }
     Initialize-ExakitLogging
+    $script:ExakitVsLogMark = Get-ExakitVsLogMark
     # A pasted connection string fills what it names, for every path below. It
     # goes to the engine on stdin (base64, as a secret does), never as an
     # argument; its pairs go BEFORE the command line's --set, so those win.
@@ -3478,13 +3486,13 @@ function Invoke-CmdConnect {
             # Its notes go to the log; a refusal is the answer, as it stands.
             $pasted = Invoke-ExakitVsEngine -Arguments @("--json", "paste", $source, "--base64") -Secret $url
             $url = $null
-            if ($pasted.Code -ne 0) { foreach ($line in $pasted.Lines) { Write-Output $line }; exit $pasted.Code }
+            if ($pasted.Code -ne 0) { foreach ($line in $pasted.Lines) { Write-Output $line }; Exit-ExakitVs $pasted.Code }
             $answer = (@($pasted.Lines) -join "`n") | ConvertFrom-Json
         } else {
             $pasted = Invoke-ExakitVsEngine -Arguments @("paste", $source, "--base64") -Secret $url
             $url = $null
             $answer = Show-ExakitVsLines -Lines $pasted.Lines
-            if ($pasted.Code -ne 0) { exit $pasted.Code }
+            if ($pasted.Code -ne 0) { Exit-ExakitVs $pasted.Code }
         }
         $urlSets = @()
         if ($answer -and $answer.values) {
@@ -3495,7 +3503,7 @@ function Invoke-CmdConnect {
     # A person at a console gets the menu and the panels; a pipe, --yes,
     # --dry-run and --json keep the line-by-line path below, unchanged.
     if (-not $dry -and -not $json -and (Test-ExakitVsTuiOk)) {
-        exit (Invoke-ExakitVsTui -Source $source -Name $name -PasswordFile $pwFile -Sets $sets)
+        Exit-ExakitVs (Invoke-ExakitVsTui -Source $source -Name $name -PasswordFile $pwFile -Sets $sets)
     }
     # --json never asks: a console is as good as none.
     $interactive = (-not $json) -and (Test-ExakitInteractive)
@@ -3546,13 +3554,13 @@ function Invoke-CmdConnect {
         # empty name stays one argument (5.1 drops an empty one).
         $base = @($connector, "--name=$name") + $sets
         $planned = Invoke-ExakitVsEngine -Arguments (@("--json", "plan") + $base)
-        if ($planned.Code -ne 0 -or $dry) { foreach ($line in $planned.Lines) { Write-Output $line }; exit $planned.Code }
+        if ($planned.Code -ne 0 -or $dry) { foreach ($line in $planned.Lines) { Write-Output $line }; Exit-ExakitVs $planned.Code }
         $connector = "" + ((@($planned.Lines) -join "`n") | ConvertFrom-Json).connector
         $base = @($connector, "--name=$name") + $sets
     } else {
         $planned = Invoke-ExakitVsEngine -Arguments (@("plan") + $base)
         $plan = Show-ExakitVsLines -Lines $planned.Lines
-        if ($planned.Code -ne 0) { exit $planned.Code }
+        if ($planned.Code -ne 0) { Exit-ExakitVs $planned.Code }
         Show-ExakitVsPlan $plan
         if ($dry) { exit 0 }
     }
@@ -3571,13 +3579,13 @@ function Invoke-CmdConnect {
     $secret = $null
     if ($json) {
         foreach ($line in $script:ExakitVsLastLines) { Write-Output $line }
-        exit $code
+        Exit-ExakitVs $code
     }
     if ($code -eq 0) {
         Show-ExakitVsQueryHints -Result $script:ExakitVsResult -Name $name
         Info "Manage it with: exakit source show $name | check | reauth | refresh | disconnect | remove"
     }
-    exit $code
+    Exit-ExakitVs $code
 }
 
 # Invoke-CmdSource - `exakit source <action> [name] [options]`. Twin of cmd_source.
@@ -3612,6 +3620,7 @@ function Invoke-CmdSource {
     }
     if ($json) { Assert-ExakitInstalled -Json } else { Assert-ExakitInstalled }
     Initialize-ExakitLogging
+    $script:ExakitVsLogMark = Get-ExakitVsLogMark
     if ($action -notin @("list", "issues", "catalog", "show", "describe", "check", "reauth", "refresh", "disconnect", "remove")) {
         Deny-ExakitVsInput "Unknown source action '$action' (list, issues, show, describe, check, reauth, refresh, disconnect, remove, catalog)." "unknown source action '$action'" "use one of list, issues, show, describe, check, reauth, refresh, disconnect, remove, catalog (exakit help source)"
     }
@@ -3661,7 +3670,7 @@ function Invoke-CmdSource {
             $shown = Invoke-ExakitVsEngine -Arguments ($argv + @("show", $name))
             if ($shown.Code -ne 0) {
                 if ($json) { foreach ($line in $shown.Lines) { Write-Output $line } } else { [void](Show-ExakitVsLines -Lines $shown.Lines) }
-                exit $shown.Code
+                Exit-ExakitVs $shown.Code
             }
             $shownConnector = ""
             if ($json) {
@@ -3676,18 +3685,18 @@ function Invoke-CmdSource {
                 $run = Invoke-ExakitVsEngine -Arguments ($argv + @("reauth", $name, "--secret-stdin")) -Secret $secret
                 $secret = $null
                 foreach ($line in $run.Lines) { Write-Output $line }
-                exit $run.Code
+                Exit-ExakitVs $run.Code
             }
             $code = Invoke-ExakitVsRun -Arguments ($argv + @("reauth", $name, "--secret-stdin")) -Secret $secret
             $secret = $null
             if ($code -eq 0) { Ok "$name is ready again with the new credential" }
-            exit $code
+            Exit-ExakitVs $code
         }
     }
     if ($json) {
         $run = Invoke-ExakitVsEngine -Arguments $argv
         foreach ($line in $run.Lines) { Write-Output $line }
-        exit $run.Code
+        Exit-ExakitVs $run.Code
     }
     $code = Invoke-ExakitVsRun -Arguments $argv
     if ($action -eq "describe") {
@@ -3710,7 +3719,7 @@ function Invoke-CmdSource {
                 Write-Host ""
             }
         }
-        exit $code
+        Exit-ExakitVs $code
     }
     if ($code -eq 0 -and -not $dry) {
         if ($action -eq "disconnect") { Ok ("$name disconnected: VS_" + $name.ToUpper() + " stays, its queries fail until you connect it again with --name $name"); exit 0 }
@@ -3752,7 +3761,7 @@ function Invoke-CmdSource {
             }
         }
     }
-    exit $code
+    Exit-ExakitVs $code
 }
 
 # Invoke-CmdSql <statement> [-Write] - run one SQL statement and translate the

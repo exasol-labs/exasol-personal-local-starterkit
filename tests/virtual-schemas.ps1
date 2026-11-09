@@ -151,7 +151,7 @@ function Confirm-ExakitVs { param([string]$Question) return [bool]$script:Exakit
 function Ok([string]$M) { Write-Host "OK $M" }
 function Info([string]$M) { Write-Host "INFO $M" }
 $lib = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path (Split-Path -Parent $cli) "lib/virtual-schemas.ps1"), [ref]$null, [ref]$null)
-foreach ($def in @($lib.FindAll({ param($n) ($n -is [System.Management.Automation.Language.FunctionDefinitionAst]) -and $n.Name -eq "Show-ExakitVsDropPlan" }, $true))) {
+foreach ($def in @($lib.FindAll({ param($n) ($n -is [System.Management.Automation.Language.FunctionDefinitionAst]) -and $n.Name -in @("Show-ExakitVsDropPlan", "Exit-ExakitVs", "Get-ExakitVsLogMark", "Get-ExakitVsLogPath", "Get-ExakitVsLogFolder") }, $true))) {
     . ([scriptblock]::Create($def.Extent.Text))
 }
 Invoke-CmdSource -Arguments $args
@@ -653,6 +653,133 @@ $script:jcalls.Clear(); $script:jcodes.AddRange(@(21))
 $code = Invoke-ExakitVsRun -Arguments @("--json", "connect")
 Check "an install that throws: no retry, exit 21, the first run's object kept" "21 --json|JAVA {`"try`": 1}" ("$code " + ($script:jcalls -join "|") + " " + ($script:ExakitVsLastLines -join ""))
 $script:ExakitVsJson = $false
+
+Write-Host ""
+Write-Host "== the day log: a failed connect or source command names it once, no secret in it =="
+# engine/vslog.py writes <kit home>/logs/virtual-schemas-YYYYMMDD.log; the
+# bridge names it at the end of a command that failed and wrote to it (twin
+# of _exakit_vs_exit), on stderr under --json. Real engine, simulated database.
+$today = (Get-Date).ToString("yyyyMMdd", [Globalization.CultureInfo]::InvariantCulture)
+$vsLogPath = Join-Path (Join-Path $home2 "logs") ("virtual-schemas-" + $today + ".log")
+$logLine = "Log (every SQL statement, secrets redacted): " + $vsLogPath
+Set-Content -LiteralPath $state -Value '{"sources": {"pg.example.com": {"tables": ["ORDERS"], "secret": "Ps-Right-Pw-8"}}}' -Encoding ASCII
+$wrongPw = Join-Path $work "wrong.pw"; Set-Content -LiteralPath $wrongPw -Value "Ps-Wrong-Pw-7" -Encoding ASCII -NoNewline
+$rightPw = Join-Path $work "right.pw"; Set-Content -LiteralPath $rightPw -Value "Ps-Right-Pw-8" -Encoding ASCII -NoNewline
+$ErrorActionPreference = "Continue"
+$out = & $pwsh -NoProfile -File $urlChildFile $repo $defs $home2 $deploy $python $urlRecord pg --name pslog @pgSet --password-file $wrongPw 2>&1
+$childCode = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+$text = (@($out) | ForEach-Object { "$_" }) -join "`n"
+Check "connect, a --password-file the source refuses: exit 1" 1 $childCode
+Check "...names the day log once" 1 ([regex]::Matches($text, [regex]::Escape($logLine)).Count)
+$logText = ""
+if (Test-Path -LiteralPath $vsLogPath) { $logText = Get-Content -Raw -LiteralPath $vsLogPath }
+Check "...the run is in it, its credential as ***" $true ($logText -match "\] connect pslog SQL +CREATE CONNECTION .* IDENTIFIED BY '\*\*\*'")
+Check "...the password from the file is not" $false ($logText.Contains("Ps-Wrong-Pw-7"))
+if ($PSVersionTable.PSEdition -eq "Core" -and -not $IsWindows) {
+    $mode = @(& $python -c "import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])" $vsLogPath)[0]
+    Check "...owner-only (mode 600)" "600" "$mode"
+} else { $script:PASS++; Write-Host "  ok   mode 600: skipped (on Windows the bridge sets the file's ACL)" }
+$ErrorActionPreference = "Continue"
+$out = & $pwsh -NoProfile -File $urlChildFile $repo $defs $home2 $deploy $python $urlRecord pg --name pslogok @pgSet --password-file $rightPw 2>&1
+$childCode = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+$text = (@($out) | ForEach-Object { "$_" }) -join "`n"
+Check "a connect that succeeds: exit 0, no log line" "0 False" ("$childCode " + $text.Contains("Log (every SQL"))
+$ErrorActionPreference = "Continue"
+$out = & $pwsh -NoProfile -File $urlChildFile $repo $defs $home2 $deploy $python $urlRecord nosuchdb --name x 2>&1
+$childCode = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+$text = (@($out) | ForEach-Object { "$_" }) -join "`n"
+Check "a refusal the engine never logged (an unknown connector): no log line" "2 False" ("$childCode " + $text.Contains("Log (every SQL"))
+# --json: stdout stays the one object; the path goes to stderr.
+$jsonErr = Join-Path $work "json-err.txt"
+$ErrorActionPreference = "Continue"
+$o = & $pwsh -NoProfile -File $urlChildFile $repo $defs $home2 $deploy $python $urlRecord pg --name psjson @pgSet --password-file $wrongPw --json 2>$jsonErr
+$childCode = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+$jsonText = (@($o) | ForEach-Object { "$_" }) -join "`n"
+$doc = $null; try { $doc = $jsonText | ConvertFrom-Json } catch { }
+$errText = (@(Get-Content -LiteralPath $jsonErr -ErrorAction SilentlyContinue) | ForEach-Object { "$_" }) -join "`n"
+Check "connect --json that fails: exit 1, one object, kind auth" "1 auth" ("$childCode " + $(if ($doc) { $doc.kind } else { "NOT-ONE-OBJECT" }))
+Check "...the path once on stderr" 1 ([regex]::Matches($errText, [regex]::Escape($logLine)).Count)
+Check "...and not on stdout" $false ($jsonText.Contains("Log (every SQL"))
+# A source command that fails names it too.
+$db = Get-Content -Raw -LiteralPath $state | ConvertFrom-Json
+$db.sources.'pg.example.com' | Add-Member -NotePropertyName fail -NotePropertyValue "unreachable" -Force
+Set-Content -LiteralPath $state -Value ($db | ConvertTo-Json -Depth 8) -Encoding ASCII
+$ErrorActionPreference = "Continue"
+$out = & $pwsh -NoProfile -File $srcChildFile $repo $defs $home2 $deploy $python $srcRecord check pslogok 2>&1
+$childCode = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+$text = (@($out) | ForEach-Object { "$_" }) -join "`n"
+Check "source check of a source that fails: exit 1, the log's path once" "1 1" ("$childCode " + [regex]::Matches($text, [regex]::Escape($logLine)).Count)
+Check "no credential of these runs is in the log" $false ((Get-Content -Raw -LiteralPath $vsLogPath) -match "Ps-Wrong-Pw-7|Ps-Right-Pw-8")
+# exakit logs: the day log is one of its targets (twin of exakit_log_targets).
+foreach ($def in @($cliAst.FindAll({ param($n) ($n -is [System.Management.Automation.Language.FunctionDefinitionAst]) -and $n.Name -eq "Get-ExakitLogTargets" }, $true))) {
+    . ([scriptblock]::Create($def.Extent.Text))
+}
+function Get-ExakitMarketplaceInstalledAddons { return @() }
+$script:LogDir = Join-Path $home2 "logs"
+$target = @(Get-ExakitLogTargets) | Where-Object { $_.Id -eq "virtual-schemas" } | Select-Object -First 1
+Check "exakit logs lists it: target virtual-schemas, the newest day file" $vsLogPath ("" + $target.Source)
+$script:LogDir = $null
+
+Write-Host ""
+Write-Host "== the day log: the security review's Windows finding =="
+# Review 7: the ACL was set only after the engine exited, so its lines were
+# first written under the inherited one (and stayed so after a Ctrl+C). The
+# bridge now makes today's file and protects it BEFORE Python starts. Here
+# Protect-ExakitFile records what it saw: the file there, still empty.
+. (J @("setup", "lib", "virtual-schemas.ps1"))
+function Get-ExakitVsDefs { return $defs }
+$script:protects = New-Object System.Collections.ArrayList
+function Protect-ExakitFile { param([string]$Path)
+    $len = -1
+    if (Test-Path -LiteralPath $Path) { $len = (Get-Item -LiteralPath $Path).Length }
+    [void]$script:protects.Add(("{0}|{1}" -f (Split-Path -Leaf $Path), $len)) }
+Remove-Item -LiteralPath $vsLogPath -ErrorAction SilentlyContinue
+$r = Invoke-ExakitVsEngine -Arguments @("list")
+Check "review 7: today's file exists and is protected before the engine writes to it" ("virtual-schemas-" + $today + ".log|0") ("" + $script:protects[0])
+$after = "" + $script:protects[$script:protects.Count - 1]
+Check "review 7: ...and protected again after it wrote" $true (($script:protects.Count -ge 2) -and ($after -like ("virtual-schemas-" + $today + ".log|*")) -and -not ($after -like "*|0"))
+Check "review 7: ...the run itself unchanged" "0" ("" + $r.Code)
+# Second review 2: under th-TH or ar-SA, Get-Date -Format "yyyyMMdd" gives
+# another calendar's year (25691109, 14480529): the file made ready and
+# protected was not the one the engine writes. The name is the engine's own.
+$logsDir = Join-Path $home2 "logs"
+$previousCulture = [System.Globalization.CultureInfo]::CurrentCulture
+foreach ($culture in @("th-TH", "ar-SA")) {
+    Remove-Item -LiteralPath $vsLogPath -ErrorAction SilentlyContinue
+    $before = @(Get-ChildItem -LiteralPath $logsDir -Filter "virtual-schemas-*.log" | ForEach-Object { $_.Name })
+    [System.Globalization.CultureInfo]::CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo($culture)
+    try { Protect-ExakitVsLog -Today } finally { [System.Globalization.CultureInfo]::CurrentCulture = $previousCulture }
+    $made = @(Get-ChildItem -LiteralPath $logsDir -Filter "virtual-schemas-*.log" | ForEach-Object { $_.Name } | Where-Object { $before -notcontains $_ })
+    Check "second review 2: under $culture the file made ready is the engine's day file" ("virtual-schemas-" + $today + ".log") ($made -join " ")
+}
+# A file made ready but never written (a lookup the engine does not log)
+# names nothing when the command fails.
+$exitChild = Join-Path $work "exit-child.ps1"
+Set-Content -LiteralPath $exitChild -Encoding ASCII -Value @'
+param($lib, $kitHome)
+$script:ExakitHome = $kitHome
+function Info([string]$M) { Write-Host "INFO $M" }
+. $lib
+$script:ExakitVsLogMark = Get-ExakitVsLogMark
+$day = Join-Path (Join-Path $kitHome "logs") ("virtual-schemas-" + (Get-Date).ToString("yyyyMMdd", [Globalization.CultureInfo]::InvariantCulture) + ".log")
+New-Item -ItemType File -Force -Path $day | Out-Null
+Exit-ExakitVs 1
+'@
+$home3 = Join-Path $work "kit3"
+New-Item -ItemType Directory -Force -Path (Join-Path $home3 "logs") | Out-Null
+$older = Join-Path (Join-Path $home3 "logs") "virtual-schemas-20200101.log"
+Set-Content -LiteralPath $older -Value "an older day" -Encoding ASCII
+(Get-Item -LiteralPath $older).LastWriteTime = [datetime]"2020-01-01"
+$ErrorActionPreference = "Continue"
+$out = & $pwsh -NoProfile -File $exitChild (J @("setup", "lib", "virtual-schemas.ps1")) $home3 2>&1
+$childCode = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+Check "review 7: ...a day file made ready but never written: a failure names no log" "1 False" ("$childCode " + ((@($out) | ForEach-Object { "$_" }) -join "`n").Contains("Log ("))
 
 Remove-Item Env:\EXAKIT_VS_FAKE_DB, Env:\FAKE_VS_STATE
 if (-not $env:KEEP_WORK) { Remove-Item -Recurse -Force -LiteralPath $work -ErrorAction SilentlyContinue } else { Write-Host "work: $work" }
