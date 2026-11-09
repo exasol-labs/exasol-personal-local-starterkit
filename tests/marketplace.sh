@@ -114,6 +114,14 @@ PATH="$WORK/code-bin:$PATH"
 # section below, which points the URL at a dead port so nothing leaves the host.
 EXAKIT_ABOUT_OFFLINE=1
 export EXAKIT_ABOUT_OFFLINE
+# The versions manifest is the other one. exakit_update asks upstream for
+# versions.json before it applies anything, so the "update repair path" cases
+# fetched it from raw.githubusercontent.com and the rest of the run then read
+# whatever main carried that day. A non-https URL is refused without a request
+# (as in tests/versions-manifest.sh), and resolution falls back to the
+# checkout's own versions.json.
+EXAKIT_VERSIONS_URL="http://offline.invalid/versions.json"
+export EXAKIT_VERSIONS_URL
 . "$ROOT/setup/lib/common.sh"
 _exakit_marketplace_python_hooks
 

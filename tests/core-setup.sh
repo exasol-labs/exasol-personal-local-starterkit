@@ -35,6 +35,14 @@ command -v python3 >/dev/null 2>&1 || { echo "python3 is required for this suite
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
+# HOME is the sandbox's too, and no profile edit. kit_shared_steps below runs
+# the install's closing steps, whose exakit helper step ends in
+# ensure_path_hint - an append to the user's shell profile. A stub is all that
+# stood between that and the developer's own ~/.zshrc.
+HOME="$WORK/userhome"
+EXAKIT_NO_PROFILE_EDIT=1
+export HOME EXAKIT_NO_PROFILE_EDIT
+mkdir -p "$HOME"
 MANAGE="$ROOT/setup/core/manage.py"
 RERUN="$ROOT/setup/core/rerun-installer.py"
 

@@ -81,11 +81,17 @@ Check "blank segments dropped, ends trimmed" "$rootA|$rootB" ($roots -join "|")
 # 3. Unset: the two discovery folders under the profile home, never $HOME.
 # On a redirected home those differ, and exapump/Claude Code read the profile.
 Remove-Item Env:\EXAKIT_SKILL_ROOTS -ErrorAction SilentlyContinue
-function Get-ExakitProfileHome { return "C:\fake-profile" }
+# Inside the sandbox, not "C:\fake-profile": on macOS/Linux pwsh there is no C:
+# drive, Join-Path refuses it, and the suite stopped here after four checks.
+# The expected paths spell the platform's own separator, so on Windows this is
+# still "<profile>\.claude\skills", byte for byte.
+$script:fakeProfile = Join-Path $sandbox "fake-profile"
+function Get-ExakitProfileHome { return $script:fakeProfile }
+$sep = [System.IO.Path]::DirectorySeparatorChar
 $roots = @(Get-ExakitSkillRoots)
 Check "default root count"  "2" "$($roots.Count)"
-Check "default is .claude"  "C:\fake-profile\.claude\skills" "$($roots[0])"
-Check "default is .agents"  "C:\fake-profile\.agents\skills" "$($roots[1])"
+Check "default is .claude"  "$fakeProfile$sep.claude${sep}skills" "$($roots[0])"
+Check "default is .agents"  "$fakeProfile$sep.agents${sep}skills" "$($roots[1])"
 
 Write-Host "Get-ExakitSkillField:"
 

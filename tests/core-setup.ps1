@@ -36,6 +36,12 @@ function Has($label, $needle, $haystack) {
 $work = Join-Path ([System.IO.Path]::GetTempPath()) ("exakit-core-ps-" + [guid]::NewGuid().ToString("N"))
 New-Item -ItemType Directory -Force -Path $work | Out-Null
 $isWin = ([System.Environment]::OSVersion.Platform -eq [System.PlatformID]::Win32NT)
+# A temp HOME and bin dir for every child process below. Each one dot-sources
+# exakit-common.ps1, which creates the kit's bin dir as it loads; with neither
+# set that was an empty .local/bin in the developer's real home on macOS/Linux.
+$env:HOME = Join-Path $work "userhome"
+$env:EXAKIT_BIN_DIR = Join-Path $work "bin"
+New-Item -ItemType Directory -Force -Path $env:HOME | Out-Null
 
 # The kit runs `python`. Where only python3 exists (macOS, many Linux images),
 # a shim directory supplies the name.

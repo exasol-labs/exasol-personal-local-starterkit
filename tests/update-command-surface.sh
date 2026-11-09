@@ -15,6 +15,12 @@
 set -u
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# Offline, for every child below. exakit_update asks upstream for versions.json
+# before it applies anything (_exakit_update_run, force), so each stubbed
+# `exakit_update --json` run fetched it from raw.githubusercontent.com. A
+# non-https URL is refused without a request, as in tests/versions-manifest.sh.
+EXAKIT_VERSIONS_URL="http://offline.invalid/versions.json"
+export EXAKIT_VERSIONS_URL
 PASS=0; FAIL=0
 pass() { PASS=$((PASS + 1)); printf '  ok   %s\n' "$1"; }
 fail() { FAIL=$((FAIL + 1)); printf '  FAIL %s\n' "$1"; }

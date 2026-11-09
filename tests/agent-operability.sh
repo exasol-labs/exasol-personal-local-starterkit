@@ -29,6 +29,11 @@ _REAL_KIT_DIR="$HOME/.exasol-starter-kit"
 export HOME="$WORK/home" EXAKIT_HOME="$WORK/home/.exasol-starter-kit" EXAKIT_BIN_DIR="$WORK/home/bin"
 mkdir -p "$HOME"
 unset XDG_CONFIG_HOME
+# Offline as well. `exakit version` and `exakit update` ask upstream for
+# versions.json, so those calls fetched it from raw.githubusercontent.com (one
+# with PATH reset to the system directories, past any stubbed curl). A non-https
+# URL is refused without a request, as in tests/versions-manifest.sh.
+export EXAKIT_VERSIONS_URL="http://offline.invalid/versions.json"
 
 # The command surface now lives in setup/help/*.json (one document per
 # component plus one for the CLI), not in a TSV. This prints every command
@@ -2059,11 +2064,15 @@ _wsl_pf() { # _wsl_pf <version> -> the preflight lines that mention WSL 1 or Pod
     # detect_docker stubbed: a Docker on the machine running this test (the CI
     # runner has Engine 29+) answered for the distro under test, and the
     # preflight named Docker where this expects Podman.
+    # curl stubbed, as tests/personal-wsl-gate.sh does for the same function:
+    # the reachability lines otherwise probe github.com,
+    # objects.githubusercontent.com and pypi.org on every call.
     ROOT="$ROOT" V="$1" bash -c '
         . "$ROOT/setup/lib/detect.sh" >/dev/null 2>&1
         detect_os() { echo wsl; }
         detect_wsl_version() { printf "%s\n" "$V"; }
         detect_docker() { echo none; }
+        curl() { return 0; }
         preflight_report 2>&1 | sed "s/\x1b\[[0-9;]*m//g"'
 }
 has "WSL 1 is refused, and told how to convert" 'wsl --set-version' "$(_wsl_pf 1)"
