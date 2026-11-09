@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
-# windows-rootful-podman.sh — the check that stopped every new Windows install,
-# and the exit that did not exit.
+# windows-rootful-podman.sh — the rootful Podman machine on Windows is a
+# remedy, not a check; and the exit that did not exit.
 #
 # Podman Desktop creates the default machine ROOTFUL. A rootful container
 # publishes its port as an iptables rule inside the machine - no listener - so
-# nothing forwards it to Windows, the database answers only inside the machine,
-# and every start waits 150 s for a port that will never open. The check that
-# catches this was right to exist and wrong to stop there: it printed three
-# commands and gave up, which is the entire experience of this product for
-# anyone whose machine Podman Desktop had already made.
+# nothing forwards it to Windows and the database answers only inside the
+# machine. Kit 0.2.4: new Windows users deploy on Docker and Podman is the
+# fallback, so the compatibility gate no longer probes, offers to switch or
+# warns about the machine. The manual fix is named only where a Podman
+# deployment failed or never answered, and never on Docker.
 #
 # Source checks, not behaviour: the machine and the podman that owns it are
-# Windows-only, and this suite runs where neither exists.
+# Windows-only, and this suite runs where neither exists. The hint's engine
+# gate is exercised for real in tests/personal-engine-ps.ps1.
 #
 #   bash tests/windows-rootful-podman.sh
 set -u
@@ -21,48 +22,55 @@ check() { if [ "$2" = "$3" ]; then PASS=$((PASS+1)); echo "  ok   $1 = $3"
           else FAIL=$((FAIL+1)); echo "  FAIL $1: expected $2, got $3"; fi; }
 has()   { case "$3" in *"$2"*) check "$1" present present ;; *) check "$1" present MISSING ;; esac; }
 lacks() { case "$3" in *"$2"*) check "$1" absent PRESENT ;; *) check "$1" absent absent ;; esac; }
+# The sed range is assigned first: bash 3.2 mangles a braced range passed
+# straight as an argument (tests/bash32-guard.sh).
+fn()    { _fn_range="/^function $1 {/,/^}\$/p"; printf '%s\n' "$RTP" | sed -n "$_fn_range"; }
 
 RTP="$(cat "$ROOT/setup/lib/runtime-personal.ps1")"
 WIN="$(cat "$ROOT/setup/setup-windows.ps1")"
-HEAL="$(printf '%s\n' "$RTP" | sed -n '/^function Repair-PersonalRootfulPodmanMachine/,/^}$/p')"
-GATE="$(printf '%s\n' "$RTP" | sed -n '/\$podmanCmd = Get-Command podman/,/Compatibility check passed (windows/p')"
+GATE="$(fn Test-PersonalRequirements)"
+HINT="$(fn Show-PersonalPodmanRootfulHint)"
+READY="$(fn Wait-PersonalReady)"
+ORDEPLOY="$(fn Wait-PersonalReadyOrDeploy)"
+DEPLOY="$(fn Install-PersonalDeployment)"
+START="$(fn Start-Personal)"
+HINT_TEXT="If Podman's default machine is rootful, the database port is not reachable from Windows. Make it rootless: podman machine stop; podman machine set --rootful=false; podman machine start"
 
-echo "the rootful machine is offered a fix, not three commands:"
-has "there is a repair at all"            "function Repair-PersonalRootfulPodmanMachine" "$RTP"
-has "the gate calls it"                   "if (Repair-PersonalRootfulPodmanMachine)" "$GATE"
-# The order that matters: repair, ASK AGAIN, and only then refuse. A repair that
-# reported success but did not take must not be trusted into the install.
-has "...then re-reads the machine"        '"machine", "inspect", "--format", "{{.Rootful}}"' "$GATE"
-has "...and still refuses if it is rootful" "Fail " "$GATE"
-# The manual commands stay for the run where the fix is declined or fails.
-has "the manual escape is still printed"  "podman machine set --rootful=false" "$GATE"
-has "...and so is the force flag"         "EXAKIT_FORCE=1" "$GATE"
-
-echo
-echo "it is not ours to change quietly:"
-has "a terminal is asked"                 "Confirm-ExakitPrompt" "$HEAL"
-has "...and an unattended run must opt in" "EXAKIT_PODMAN_SELFHEAL" "$HEAL"
-# The same opt-in as the Linux rootless fix: one variable for "you may change
-# system state to make Podman work", not one per platform.
-has "the opt-in matches the Linux one"    "EXAKIT_PODMAN_SELFHEAL" \
+echo "the gate has no rootful-machine check:"
+lacks "no repair function"                "Repair-PersonalRootfulPodmanMachine" "$RTP"
+lacks "the gate reads no machine setting"  "{{.Rootful}}" "$GATE"
+lacks "...runs no podman machine command"  '"machine"' "$GATE"
+lacks "...and warns about no machine"      "Warn2 " "$GATE"
+# The WSL check that shared the gate with it stays.
+has "the WSL check is still there"        "Test-PersonalWslPodmanNetworkOk -Quiet" "$GATE"
+lacks "the Windows side no longer reads the self-heal opt-in" "EXAKIT_PODMAN_SELFHEAL" "$RTP"
+# Its Linux/WSL meaning (the subuid/uidmap fix) is untouched.
+has "...the Linux side still does"        "EXAKIT_PODMAN_SELFHEAL" \
     "$(cat "$ROOT/setup/lib/runtime-personal.sh")"
-# The consequence a reader has to hear BEFORE, not discover after: the machine
-# is shared host-wide and rootful containers go out of view.
-has "the prompt names the restart"        "stops and restarts the machine" "$HEAL"
-has "...and the containers that vanish"   "will not be visible afterwards" "$HEAL"
-lacks "nothing is deleted to achieve it"  "machine rm" "$HEAL"
 
 echo
-echo "the three commands are run in the only order that works:"
-# set refuses on a running machine, so stop must come first; start last or the
-# install talks to a machine that is down.
-_stop=$(printf '%s\n' "$HEAL" | grep -n '"machine", "stop"' | cut -d: -f1 | head -1)
-_set=$(printf '%s\n'  "$HEAL" | grep -n '"machine" "set" "--rootful=false"' | cut -d: -f1 | head -1)
-_start=$(printf '%s\n' "$HEAL" | grep -n '"machine" "start"' | cut -d: -f1 | head -1)
-check "stop comes before set"  "yes" "$([ -n "$_stop" ] && [ -n "$_set" ] && [ "$_stop" -lt "$_set" ] && echo yes || echo no)"
-check "set comes before start" "yes" "$([ -n "$_set" ] && [ -n "$_start" ] && [ "$_set" -lt "$_start" ] && echo yes || echo no)"
-has "a set that fails is reported"   "podman machine set exited" "$HEAL"
-has "a start that fails says which half took" "set to rootless but would not start" "$HEAL"
+echo "the manual fix is a remedy, on Podman only:"
+has "one hint, the three commands"        "$HINT_TEXT" "$HINT"
+has "...only on the Podman engine"        'if ($engine -ne "podman") { return }' "$HINT"
+lacks "...and it probes nothing"          "podman machine inspect" "$HINT"
+lacks "...nor changes anything"           "Invoke-Exakit" "$HINT"
+_hits=$(printf '%s\n' "$RTP" | grep -c "podman machine set --rootful=false")
+check "the commands are written once"     1 "$_hits"
+has "a deploy that failed names it"       "Show-PersonalPodmanRootfulHint" "$DEPLOY"
+has "a database that never answered after the deploy retry" "Show-PersonalPodmanRootfulHint" "$ORDEPLOY"
+_n=$(printf '%s\n' "$ORDEPLOY" | grep -c "Show-PersonalPodmanRootfulHint")
+check "...on both of its failure returns" 2 "$_n"
+has "a wait that ran out names it"        "Show-PersonalPodmanRootfulHint" "$READY"
+_n=$(printf '%s\n' "$START" | grep -c "Show-PersonalPodmanRootfulHint")
+check "a start that failed names it, both generic arms" 2 "$_n"
+# Docker never sees it: a Docker start that fails because Docker is down ends
+# before any hint, and the hint itself returns for any engine but podman.
+_dk=$(printf '%s\n' "$START" | grep -n 'Start Docker Desktop, then: exakit start' | cut -d: -f1 | head -1)
+_h1=$(printf '%s\n' "$START" | grep -n 'Show-PersonalPodmanRootfulHint' | cut -d: -f1 | head -1)
+check "the Docker-down arm comes first" yes "$([ -n "$_dk" ] && [ -n "$_h1" ] && [ "$_dk" -lt "$_h1" ] && echo yes || echo no)"
+# The Podman-missing deploy failure is about installing Podman, not its machine.
+_pm=$(printf '%s\n' "$DEPLOY" | sed -n '/Podman is still not installed/,/return/p')
+lacks "a Podman-missing failure does not name the machine" "Show-PersonalPodmanRootfulHint" "$_pm"
 
 echo
 echo "and the run actually ends:"

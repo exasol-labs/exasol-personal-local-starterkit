@@ -131,8 +131,11 @@ else
         # this, and wrong here, where it is one step of six. die exits, so the
         # subshell turns it into a false; the reason it leaves behind is in a
         # file, so it survives the subshell to reach the summary.
+        # A WSL network refusal booked here stays in the runtime step's
+        # record (the step is complete, so status reads it only while the
+        # database is down) until a start succeeds - this one retires it.
         if ( personal_start && personal_wait_ready_or_deploy ); then
-            :
+            exakit_retire_start_soft_failure
         else
             exakit_record_soft_failure runtime "exakit start" "$(exakit_take_failure_note)" "the local database"
             warn "The database was not started - carrying on so the rest of the install completes"

@@ -86,15 +86,20 @@ Every platform runs the same database, Exasol Personal, set up by the same launc
 | Machine | Minimum | Notes |
 |---|---|---|
 | **[macOS](quickstarts/macos.md)** | 8 GB+ RAM, 20 GB free disk | Runs in a lightweight managed VM. Nothing to install first |
-| **[Linux](quickstarts/linux.md)** | Podman (rootless is fine), 8 GB+ RAM, 20 GB free disk | If Podman is missing, the installer installs it without stopping to ask. It uses `sudo`, so expect a password prompt |
-| **[Windows](quickstarts/windows.md)** | 8 GB+ RAM, 20 GB free disk | Runs through Podman, which the launcher offers to install (this may need administrator approval). An existing Podman machine must be rootless (`podman machine set --rootful=false`), or the database port cannot reach Windows. Windows arm64 is not supported<br>**WSL** is supported and follows the Linux path: run the same command inside a WSL2 distro. |
+| **[Linux](quickstarts/linux.md)** | Docker Engine 29+ or Podman (rootless is fine), 8 GB+ RAM, 20 GB free disk | A new install runs on Docker when a usable one is found, otherwise on Podman. If neither is there, the installer installs Podman without stopping to ask. It uses `sudo`, so expect a password prompt |
+| **[Windows](quickstarts/windows.md)** | 8 GB+ RAM, 20 GB free disk | Uses [Docker Desktop](quickstarts/windows.md#docker-or-podman) when it is running, otherwise Podman, which the launcher offers to install. We recommend installing Docker and having it running when you install the starter kit. Windows arm64 is not supported<br>**WSL**: run the same command inside a WSL2 distro. |
 | All platforms | Python 3.11+ |  |
 
 If Podman blocks the install, see the [Podman troubleshooting guide](quickstarts/podman.md).
 
-## Upgrade Path for Starterkit
 
-To upgrade from 0.1.0 to 0.2.0, run the install command from the top of this page again. On Windows it is recommended to have Podman Desktop installed before you start, and Podman on Linux. On macOS there is nothing to prepare, and `exakit update` does the same job.
+## Upgrade path for the starter kit
+
+To upgrade to 0.2.4, run `exakit update`. On Windows with Podman, WSL 2.7 or newer is recommended for Exasol Personal 2.4: if `exakit start` then fails with an nftables error, run `wsl --update`.
+
+To upgrade to 0.3.0 from an older kit, run `exakit update` twice: the first run brings the new kit, the second lets it finish its own new setup (the SQL preprocessor framework). From 0.3.0 on, one run is usually enough; when the run says the rest was deferred (on Windows the kit swap is usually staged for the moment the command exits), run it once more.
+
+To upgrade from 0.1.0 to 0.2.0, run the install command from the top of this page again. On macOS `exakit update` does the same job.
 
 ## Connect your AI client and ask
 
@@ -154,11 +159,10 @@ The whole flow, from install to the first query: -->
 | Question | Answer |
 |---|---|
 | What&nbsp;do&nbsp;I&nbsp;need&nbsp;installed&nbsp;first? | Python 3.11+. You don't need Rust or Homebrew. |
+| Can&nbsp;I&nbsp;use&nbsp;Docker<br>instead&nbsp;of&nbsp;Podman? | Yes, from kit 0.2.4 (Exasol Personal 2.4). A new install on Linux, WSL or Windows runs on Docker Engine 29 or newer when its daemon is running and set to Linux containers, otherwise on Podman. If Docker is installed but stopped, the installer asks once: start it and press Enter, or type `p` for Podman. The kit never installs or starts Docker. |
 | What&nbsp;if&nbsp;I&nbsp;don't&nbsp;have<br>Podman&nbsp;Desktop&nbsp;on&nbsp;Windows? | The Exasol launcher offers to install Podman at the database step through Windows Package Manager, which may ask for administrator approval once. If that fails, see the [Podman troubleshooting guide](quickstarts/podman.md). |
-| Podman&nbsp;on&nbsp;Windows:&nbsp;rootful&nbsp;machine<br>or&nbsp;unreachable&nbsp;database? | The kit needs a rootless machine. Follow the [steps to switch to rootless mode](quickstarts/podman.md#windows-rootful-machine) when you can restart the machine and interrupt its containers. |
 | Podman&nbsp;on&nbsp;Windows:&nbsp;installed<br>but&nbsp;unable&nbsp;to&nbsp;connect? | Run `podman info` and check whether the machine is running. The [connection troubleshooting steps](quickstarts/podman.md#windows-connection-failures) explain how to get it working. |
-| Podman&nbsp;on&nbsp;WSL2:&nbsp;machine&nbsp;won't&nbsp;start<br>or&nbsp;reports&nbsp;a&nbsp;virtualization&nbsp;error? | Check your WSL2 and Windows virtualization setup using the [WSL2 troubleshooting steps](quickstarts/podman.md#wsl2-and-virtualization). |
-| Podman&nbsp;on&nbsp;Linux/WSL:&nbsp;what&nbsp;do<br>`subuid`&nbsp;or&nbsp;`newuidmap`&nbsp;errors&nbsp;mean? | Your account may be missing the ID ranges or helpers that rootless Podman needs. Follow the [rootless permissions guide](quickstarts/podman.md#linux-and-wsl-rootless-permissions) before changing system settings. |
+| Podman&nbsp;on&nbsp;WSL:&nbsp;"nft&nbsp;did&nbsp;not<br>return&nbsp;successfully"? | Exasol Personal 2.4 needs WSL 2.7 or newer for Podman, because its network needs nftables in the WSL kernel. The kit checks before a fresh Podman deploy, and an `exakit start` that fails with this error after an update names the same fix: `wsl --update`, then `wsl --shutdown`. See [WSL 2.7 and nftables](quickstarts/podman.md#wsl-27-and-nftables). Docker is not affected. |
 | Does&nbsp;it&nbsp;cost&nbsp;anything? | No. Exasol Personal Local is free of charge, but it is not open source: the database ships under the [Exasol Personal End User License Agreement](https://www.exasol.com/terms-and-conditions/#h-exasol-personal-end-user-license-agreement), and this kit's scripts are [MIT](LICENSE). |
 | Can&nbsp;I&nbsp;load&nbsp;my&nbsp;own&nbsp;data? | Yes. `exakit data-load` takes CSV, Parquet or JSON files, or a folder of them, and `exapump upload` works from the terminal. |
 | How&nbsp;can&nbsp;I&nbsp;learn&nbsp;more<br>about&nbsp;an&nbsp;`exakit`&nbsp;command? | Run `exakit help <command>`. For example, `exakit help marketplace`. |
@@ -167,7 +171,7 @@ The whole flow, from install to the first query: -->
 | Port&nbsp;8563&nbsp;already&nbsp;taken? | If an Exasol database is on it, the kit adopts that database. If another program is on it, the kit says which program and leaves it running. Stop that program and re-run. `exakit info` shows the port your database uses. |
 | Behind&nbsp;a&nbsp;corporate&nbsp;proxy? | Set `HTTPS_PROXY` before installing so the kit can download through your proxy. Use `export HTTPS_PROXY=http://proxy.example.com:8080` on macOS and Linux, or `$env:HTTPS_PROXY = 'http://proxy.example.com:8080'` in PowerShell. For proxies that require a login, the Windows installer uses your signed-in Windows account. Podman image pulls may need separate proxy and certificate settings inside its machine. See the [Podman troubleshooting guide](quickstarts/podman.md). |
 | Installing&nbsp;over&nbsp;a&nbsp;database<br>I&nbsp;already&nbsp;have? | The kit adopts your existing database, running or stopped, and reuses it with its data intact. The installer replaces a database only if it cannot start at all, and it warns you first. |
-| I&nbsp;already&nbsp;have&nbsp;the&nbsp;kit.<br>How&nbsp;do&nbsp;I&nbsp;get&nbsp;this&nbsp;version? | Re-run the install command. See [Upgrade](#upgrade-path-for-starterkit). |
+| I&nbsp;already&nbsp;have&nbsp;the&nbsp;kit.<br>How&nbsp;do&nbsp;I&nbsp;get&nbsp;this&nbsp;version? | Run `exakit update` (from 0.1.x, re-run the install command). See [Upgrade](#upgrade-path-for-the-starter-kit). |
 | How&nbsp;do&nbsp;I&nbsp;remove&nbsp;everything? | Run `exakit uninstall`. |
 
 ---

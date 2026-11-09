@@ -131,9 +131,18 @@ can now finish setup that only the installer can do.**
   defers a database task while the database is stopped. `--json` reports it
   as the `core-setup` component.
 - **Handover.** An `exakit update` that downloads a newer kit hands the rest
-  of the run to the new updater, so one run is enough from 0.3.0 on. Coming
-  from 0.2.2, run `exakit update` twice (the 0.2.2 updater cannot hand over),
-  or re-run the installer once.
+  of the run to the new updater, so one run is usually enough from 0.3.0 on.
+  When it cannot (the new `exakit` is missing or not executable, or on
+  Windows, where the kit swap is usually staged for the moment the command
+  exits), the run stops after the kit: every later component is deferred
+  with remedy `exakit update`, and the new-setup check waits for that run
+  too, so it never reruns the old installer. Under `--json` a handed-over
+  run is a `--json` run, so a failed updater is a row and the rest are still
+  tried; it writes the `error` and `remedy_hint` fields only to a kit that
+  declares it reads them (`EXAKIT_UPDATE_ROW_FIELDS=7`), so an older kit's
+  five-field reader still parses its rows. Coming from 0.2.2, run
+  `exakit update` twice (the 0.2.2 updater cannot hand over), or re-run the
+  installer once.
 - `setup/preprocessor/` holds the package description, the dispatch probe,
   the (empty) list of tested upgrade paths and the folder add-ons will
   register their modules from. No bundled add-on needs the slot yet.
@@ -213,6 +222,133 @@ can now finish setup that only the installer can do.**
   container if it is missing (asked; one restart).
 - New skill `exasol-virtual-schemas`. Tests: `tests/virtual-schemas.{sh,ps1}`,
   `tests/personal-slc-dns.sh`.
+
+## 0.2.4
+
+**Exasol Personal 2.4.0, with Docker as an engine for new deployments.**
+`components.personal` moves to 2.4.0 (five S3 raw-binary digests re-pinned;
+nano engine nano.8 with its security and wrong-result fixes). What changes
+for whom:
+
+- **New installs on Linux, WSL and Windows choose an engine.** Docker when
+  its daemon answers, runs Linux containers and is Engine 29 or newer; Podman
+  otherwise, installed by the kit (Linux, WSL) or the launcher (Windows) as
+  before. The choice is passed explicitly as `--container-engine` and
+  recorded as `runtime.engine`; the launcher's own `auto` order (Podman
+  first) is never relied on. A Docker that is installed but stopped is
+  offered once where there is a terminal ("start it, then press Enter, or
+  `p` for Podman"); a run without one takes Podman and says so. A failed
+  deploy is never retried on the other engine. `EXAKIT_CONTAINER_ENGINE=
+  docker|podman` names an engine and is never swapped. Preflight counts
+  Docker Engine 29+ and names both engines when neither is there.
+- **Existing deployments change nothing.** `exakit update personal` stays a
+  launcher swap: a 2.3 deployment keeps Podman and its `sys` password
+  (`secrets.json` is never touched; 2.4 generates a random password for new
+  deployments only, which the kit reads as it always did). After the update
+  the kit says so, and that the next `exakit stop` + `exakit start` moves the
+  containers onto the launcher's new per-deployment network, once. The kit's
+  own MCP server (`mcp_readonly`) keeps connecting; the launcher's MCP sidecar
+  stays off unless `exasol mcp enable` is run by hand.
+- **Podman on a WSL kernel older than 2.7 is refused before anything
+  changes.** The 2.4 network needs nftables, which WSL 2.6 and older lack
+  (`netavark: nftables error: "nft" did not return successfully while
+  applying ruleset`). The kit reads `wsl.exe --version` (UTF-16, localized)
+  before a fresh Podman deploy (inside WSL, and on Windows for Podman's
+  machine) and before a replaced Podman deployment is destroyed
+  (`EXAKIT_REPLACE_DB=1`, `exakit repair-runtime`: refused, nothing is
+  deleted), and stops with the fix: `wsl --update`, `wsl --shutdown`,
+  re-run. The replace check runs only when the replace can be consented to,
+  and a replace is also refused when this run's start already failed on the
+  nftables error. On a fresh deploy only a release read below 2.7 refuses: a
+  wsl.exe that is missing, cannot run, fails, times out or answers no
+  version is warned about and let through. Replacing a deployment is the
+  exception: there an unreadable release refuses too, since the destroy
+  cannot be undone, until `wsl --version` shows 2.7 or newer and the replace
+  is re-run with `EXAKIT_WSL_CHECKED=1`. `exakit preflight` fails a fresh
+  Podman deploy on such a kernel and, inside WSL, only notes an existing
+  Podman deployment.
+- **`exakit update personal` is not checked.** It swaps the launcher and
+  changes no data. When the start after it fails on the nftables error, the
+  update fails with `remedy: "wsl --update"` and says the launcher was
+  updated: `wsl --update`, `wsl --shutdown` (WSL: reopen the distro), then
+  `exakit start`. `exakit start` names `wsl --update` only when its own
+  output carries netavark's nftables error, with the iptables alternative
+  (inside WSL the distro's file, on Windows inside Podman's machine), never
+  `repair-runtime`. `exakit status --json` then answers
+  `remedy: "wsl --update"` until a start succeeds, also after an installer
+  re-run. A release that could not be read answers `remedy: "wsl --version"`
+  in `status --json` and `repair-runtime --json` alike. A refused
+  `repair-runtime --json` answers `"status": "refused"`, exit 3, with
+  `remedy_hint`. `last_failure` names the step by its label ("the local
+  database did not finish ..."). Docker and macOS never ask.
+- **Podman on the iptables firewall driver passes on any WSL release.** The
+  kit reads `firewall_driver` from the `[network]` table of Podman's
+  containers.conf files in Podman's order (`/usr/share`, `/etc`,
+  `/etc/containers/containers.conf.d`, the user's file and its `.d`
+  drop-ins; the last setting wins), and only a quoted `"iptables"` counts.
+  Inside WSL it reads the distro's files and also needs the `iptables`
+  binary (the refusal says so when it is missing); a Podman reporting a
+  network backend other than netavark (`podman info --format
+  '{{.Host.NetworkBackend}}'`) passes too, and `exakit preflight` applies the
+  same exemptions. On Windows it reads the files inside Podman's machine
+  through `podman machine ssh`. A fresh deploy or a replace starts a stopped
+  machine first; preflight and the refusal messages never start it and name
+  `podman machine start`. The answer is kept for the run.
+- **A replaced database is a new database.** `exakit repair-runtime` and
+  `EXAKIT_REPLACE_DB=1` deploy afresh, and a 2.4 deployment then has a new
+  random `sys` password and no `mcp_readonly` user. The re-run used to skip
+  the exapump and MCP steps as already done: `exakit sql` answered
+  `Authentication failed`, the sample data could not load, and the MCP user
+  was gone until `mcp-doctor` recreated it. A fresh deploy now drops both
+  steps' ticks so they run again, and the exapump step also re-runs over a
+  profile whose password is no longer the one on file (a deployment replaced
+  by hand with `exasol destroy` and `exasol install local`).
+- **On WSL, run `wsl --update` before `exakit update`.** The first `exakit
+  update` on a 0.2.3 kit runs the 0.2.3 code for the Personal swap, which has
+  no WSL check; it asks first in a terminal and defers without one. Everything
+  after it runs this kit: `exakit start` names `wsl --update` on the nftables
+  failure and never `repair-runtime`, and the replace path refuses on WSL 2.6
+  before anything is deleted. From this kit on, `exakit update` stops after
+  updating the kit itself so the rest runs on the new code.
+- **Podman's rootless checks no longer stop an install.** On Linux and WSL the
+  preflight used to refuse when rootless Podman was incomplete (no subuid
+  range, no `newuidmap`, cgroups v2 off); it passes now, and the deploy step
+  heals what it can and warns about the rest, as it already did. The
+  self-healing itself is unchanged.
+- **The Windows rootful Podman machine check is removed.** New Windows users
+  deploy on Docker and Podman is the fallback, so the requirements gate no
+  longer inspects, offers to switch or warns about the default Podman machine,
+  and `EXAKIT_PODMAN_SELFHEAL` has no Windows meaning. If a Podman deployment
+  fails to deploy or never answers on 127.0.0.1:8563, the manual fix is shown
+  (`podman machine stop; podman machine set --rootful=false; podman machine
+  start`); never on Docker.
+- **The password is checked after an update, not assumed.** `exakit update
+  personal` re-reads `secrets.json` after the launcher swap; when the password
+  differs from the one on file, the credential and the exapump profile are
+  refreshed and the update says so. The kit's MCP user has its own password
+  and is unaffected. The 2.3 to 2.4 update was watched to keep the password;
+  this makes the "keeps its password" line a result rather than a promise.
+- **Windows: automatic start is on by default, as documented.** A fresh
+  install used to record it off. It now registers the Startup entry, and
+  `exakit autostart` (the user's answer) records the choice as the user's own
+  (`autostart.user_set`, on every platform). A Windows install whose "off"
+  was never chosen by the user (kits 0.2.0 to 0.2.3, or a first install
+  whose database step failed) is turned on the next time the installer
+  runs (that includes an "off" chosen under those kits, which carried no
+  marker: run `exakit autostart` again); an "off" chosen from this kit on
+  stays off. On macOS and Linux an unmarked
+  "off" is kept, except one the default wrote when nothing could be
+  registered yet, which the next run retries.
+- dbt-exasol 1.12.1 to 1.12.3, and the versions-bump workflow now tracks
+  dbt-exasol on PyPI alongside mcp and pyexasol.
+- Tests: `tests/personal-engine.sh` (+ `personal-engine-ps.ps1`),
+  `tests/personal-wsl-gate.sh` and `tests/personal-fresh-password.sh`
+  (+ `-ps.ps1`, which also covers the post-update password check);
+  `tests/windows-rootful-podman.sh` asserts the check is gone and the fix
+  shows only on Podman failures. Docs: README, AGENTS, the Linux, Windows and
+  Podman quickstarts, the exasol-runtime skill (`components.skills.version`
+  1.12.5), and the what's-new card.
+
 ## 0.2.3
 
 **Security release: uv is pinned, verified and held to a minimum version.**
