@@ -5,9 +5,10 @@ description: Connect a Unity Catalog schema (Databricks or OSS) to local Exasol 
 
 # Unity Catalog via the lakehouse engine → local Exasol (Beta)
 
-Shared rules (credential handling, the lakehouse engine, exit codes, disconnect
-versus remove) live in [exasol-virtual-schemas](../exasol-virtual-schemas/SKILL.md).
-Load it too; this skill adds only what is the Unity route's own.
+Shared rules (credential handling, the lakehouse engine, the `--json` answer and
+failure kinds, disconnect versus remove) live in
+[exasol-virtual-schemas](../exasol-virtual-schemas/SKILL.md). Load it too; this
+skill adds only what is the Unity route's own.
 
 ## 1. When to use it
 
@@ -81,7 +82,7 @@ exakit connect unity --name uc_sales --set workspace_url=https://<workspace-host
   --set namespace=<catalog>.<schema> --set region=<region> --dry-run
 exakit connect unity --name uc_sales --set workspace_url=https://<workspace-host> \
   --set namespace=<catalog>.<schema> --set region=<region> \
-  --password-file ~/.config/exakit/<name>.pat --yes
+  --password-file ~/.config/exakit/<name>.pat --yes --json
 ```
 
 The first lakehouse source installs the Rust language container after asking
@@ -100,14 +101,15 @@ exakit sql "SELECT * FROM VS_UC_SALES.ORDERS LIMIT 10"   # names arrive upper ca
 
 | Message | Fix |
 |---|---|
-| "Unity Catalog does not let engines outside Databricks read this schema's files" (EXTERNAL USE SCHEMA, External Data Access, EXTERNAL_ACCESS_DISABLED) | switch External Data Access on and grant EXTERNAL USE SCHEMA (section 4) - Default Storage never works: use `exakit connect databricks` |
+| "Unity Catalog does not let engines outside Databricks read this schema's files" (EXTERNAL USE SCHEMA, External Data Access, EXTERNAL_ACCESS_DISABLED) (`external`) | switch External Data Access on and grant EXTERNAL USE SCHEMA (section 4) - Default Storage never works: use `exakit connect databricks` |
+| any other `PERMISSION_DENIED` (`denied`) | grant the token's user what it names: USE CATALOG, USE SCHEMA, SELECT (section 4); behind an IP access list, the public IP the fix names (section 5) |
 | "catalog-managed table, which this adapter version cannot read yet" | read it through the SQL warehouse: `exakit connect databricks` |
 | "no such namespace" (SCHEMA_DOES_NOT_EXIST) | check `catalog.schema` and the user's grants |
 | "namespace must be catalog.schema" | give both parts, e.g. `main.sales` |
 | "workspace_url must use https" | the token never crosses the network unencrypted |
 | "Invalid access token", "REST API answered HTTP 401" | a new token, then `exakit source reauth uc_sales --password-file <file>` |
 | "incorrectly configured region", "x-amz-bucket-region" | connect again with `--set region=<the bucket's region>` |
-| exit 23 | the Rust language container is missing: rerun with `--yes` after telling the user |
+| `norust` (exit 23) | the Rust language container is missing: rerun with `--yes` after telling the user |
 
 ## 9. Keep it working
 

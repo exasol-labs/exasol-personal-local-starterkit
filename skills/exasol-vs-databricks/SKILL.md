@@ -5,9 +5,10 @@ description: Connect a Databricks Unity Catalog schema to local Exasol as a virt
 
 # Databricks (SQL warehouse) → local Exasol
 
-Shared rules (credential handling, exit codes, disconnect versus remove) live in
-[exasol-virtual-schemas](../exasol-virtual-schemas/SKILL.md). Load it too;
-this skill adds only what is Databricks' own.
+Shared rules (credential handling, the `--json` answer and failure kinds,
+disconnect versus remove) live in
+[exasol-virtual-schemas](../exasol-virtual-schemas/SKILL.md). Load it too; this
+skill adds only what is Databricks' own.
 
 ## 1. When to use it
 
@@ -92,7 +93,7 @@ one belongs to the workspace admin. Run a change only after a yes.
 exakit connect databricks --name lake --set host=<host> --set http_path=<path> \
   --set catalog=<catalog> --set schema=<schema> --dry-run
 exakit connect databricks --name lake --set host=<host> --set http_path=<path> \
-  --set catalog=<catalog> --set schema=<schema> --password-file ~/.config/exakit/<name>.pat --yes
+  --set catalog=<catalog> --set schema=<schema> --password-file ~/.config/exakit/<name>.pat --yes --json
 ```
 
 - **What the kit adds - say it if asked about security.** Upstream adapter

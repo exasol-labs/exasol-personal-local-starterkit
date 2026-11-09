@@ -5,9 +5,10 @@ description: Connect a Google BigQuery dataset to local Exasol as a virtual sche
 
 # BigQuery → local Exasol
 
-Shared rules (credential handling, exit codes, disconnect versus remove) live in
-[exasol-virtual-schemas](../exasol-virtual-schemas/SKILL.md). Load it too;
-this skill adds only what is BigQuery's own.
+Shared rules (credential handling, the `--json` answer and failure kinds,
+disconnect versus remove) live in
+[exasol-virtual-schemas](../exasol-virtual-schemas/SKILL.md). Load it too; this
+skill adds only what is BigQuery's own.
 
 ## 1. When to use it
 
@@ -74,7 +75,7 @@ fallback: the `python3` one-liner in the shared skill).
 ```bash
 exakit connect bigquery --name bq --set project=<project> --set dataset=<dataset> --dry-run
 exakit connect bigquery --name bq --set project=<project> --set dataset=<dataset> \
-  --password-file ~/.config/exakit/<name>-key.json --yes
+  --password-file ~/.config/exakit/<name>-key.json --yes --json
 ```
 
 - **Where the key lives - tell the user.** BigQuery's driver reads the key only
@@ -102,7 +103,7 @@ exakit sql 'SELECT "customer_id" FROM VS_BQ."orders" LIMIT 10'   # names keep Bi
 | "the credential must be the service-account key file (JSON)" | `--password-file` must name the key JSON |
 | "the key file is not a service-account key", "has no usable client_email", "has no private key" | not the file `gcloud iam service-accounts keys create` wrote |
 | "Required Connection Key(s)" | a configuration fault, not the network: `exakit logs` |
-| a permission error naming a BigQuery permission | Job User on the project, Data Viewer on the dataset (section 4) |
+| "PERMISSION_DENIED: Access Denied: ... User does not have permission" (`denied`) | Job User on the project, Data Viewer on the dataset (section 4); behind a VPC Service Controls perimeter, also the public IP the fix names (section 5) |
 
 Types: `INT64` arrives as `DECIMAL(19,0)`, `FLOAT64` as `DOUBLE`; an `ARRAY` or
 `STRUCT` column arrives as BigQuery's raw JSON text (`{"v": ...}`).

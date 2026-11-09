@@ -5,9 +5,10 @@ description: Connect JSON, CSV and Parquet files in an Amazon S3 bucket to local
 
 # Amazon S3 files → local Exasol
 
-Shared rules (credential handling, the EDML mapping, exit codes, disconnect
-versus remove) live in [exasol-virtual-schemas](../exasol-virtual-schemas/SKILL.md).
-Load it too; this skill adds only what is S3's own.
+Shared rules (credential handling, the EDML mapping, the `--json` answer and
+failure kinds, disconnect versus remove) live in
+[exasol-virtual-schemas](../exasol-virtual-schemas/SKILL.md). Load it too; this
+skill adds only what is S3's own.
 
 ## 1. When to use it
 
@@ -75,7 +76,7 @@ skill). A bucket reachable only through a VPC endpoint cannot be read from here.
 exakit connect s3 --name docs --set bucket=<bucket> --set region=<region> \
   --set mapping=./mapping --dry-run
 exakit connect s3 --name docs --set bucket=<bucket> --set region=<region> \
-  --set mapping=./mapping --password-file ~/.config/exakit/docs-key.json --yes
+  --set mapping=./mapping --password-file ~/.config/exakit/docs-key.json --yes --json
 ```
 
 - The plan lists the mapped tables; the kit checks the mapping before anything
@@ -95,7 +96,7 @@ exakit sql "SELECT * FROM VS_DOCS.ORDERS LIMIT 10"
 
 | Message | Fix |
 |---|---|
-| `access-denied`, naming the action (e.g. `s3:ListBucket`) | the key works but may not list or read there: grant it on the prefix, then `exakit source check docs` - not reauth |
+| "AccessDenied ... not authorized to perform: s3:ListBucket" (`denied`) | the key works but may not list or read there: grant the action on the prefix, then `exakit source check docs` - not reauth. A bucket policy on `aws:SourceIp` answers the same: allow the public IP the fix names (section 5) |
 | "must be addressed using the specified endpoint", "PermanentRedirect" | the bucket is in another region: `exakit source disconnect docs --yes`, then connect with `--set region=<the bucket's region>` (a first connect: just connect again) |
 | "RequestTimeTooSkewed" | the database clock is off by more than 15 minutes: `exakit stop`, then `exakit start` |
 | "NoSuchBucket" | check the bucket name; remove and connect again |

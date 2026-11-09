@@ -5,9 +5,10 @@ description: Connect one MongoDB collection (Atlas or self-hosted) to local Exas
 
 # MongoDB → local Exasol
 
-Shared rules (credential handling, exit codes, disconnect versus remove) live in
-[exasol-virtual-schemas](../exasol-virtual-schemas/SKILL.md). Load it too;
-this skill adds only what is MongoDB's own.
+Shared rules (credential handling, the `--json` answer and failure kinds,
+disconnect versus remove) live in
+[exasol-virtual-schemas](../exasol-virtual-schemas/SKILL.md). Load it too; this
+skill adds only what is MongoDB's own.
 
 ## 1. When to use it
 
@@ -86,7 +87,7 @@ exakit connect mongodb --name movies --set "uri=mongodb+srv://<cluster-host>/?au
   --set database=sample_mflix --set collection=movies --set user=exakit_reader --dry-run
 exakit connect mongodb --name movies --set "uri=mongodb+srv://<cluster-host>/?authSource=admin" \
   --set database=sample_mflix --set collection=movies --set user=exakit_reader \
-  --password-file ~/.config/exakit/movies.pw --yes
+  --password-file ~/.config/exakit/movies.pw --yes --json
 ```
 
 - The URI carries no credentials: user and password go into the CONNECTION,
@@ -116,9 +117,10 @@ document's ObjectId.
 |---|---|
 | "error while reading collection metadata" | a wrong password, this computer's IP not in the Atlas access list, or the server unreachable - the adapter does not say which: check the password (reauth tries it first), the access list, the URI |
 | "collection ... does not exist" | no such collection - or the account may not read that database (reported the same way): the name and the `read` role |
+| "Error code 13 (Unauthorized): not authorized on <db> to execute command" (`privilege`) | signed in, but no `read` role on that database (section 4) |
 | "the MongoDB URI carries credentials" | take `user:password@` out; `--set user=` and `--password-file` |
 | "is not a valid mongodb-uri" | `mongodb://` or `mongodb+srv://`, host, options - nothing else |
-| exit 23 | the Rust language container is missing: rerun with `--yes` after telling the user |
+| `norust` (exit 23) | the Rust language container is missing: rerun with `--yes` after telling the user |
 
 ## 9. Keep it working
 

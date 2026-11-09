@@ -5,9 +5,10 @@ description: Connect Iceberg tables in an AWS Glue database to local Exasol as a
 
 # Iceberg on AWS Glue → local Exasol
 
-Shared rules (credential handling, the lakehouse engine, exit codes, disconnect
-versus remove) live in [exasol-virtual-schemas](../exasol-virtual-schemas/SKILL.md).
-Load it too; this skill adds only what is the Glue route's own.
+Shared rules (credential handling, the lakehouse engine, the `--json` answer and
+failure kinds, disconnect versus remove) live in
+[exasol-virtual-schemas](../exasol-virtual-schemas/SKILL.md). Load it too; this
+skill adds only what is the Glue route's own.
 
 ## 1. When to use it
 
@@ -77,7 +78,7 @@ skill).
 ```bash
 exakit connect lakehouse --name lake --set region=<region> --set database=<database> --dry-run
 exakit connect lakehouse --name lake --set region=<region> --set database=<database> \
-  --password-file ~/.config/exakit/<name>-key.json --yes
+  --password-file ~/.config/exakit/<name>-key.json --yes --json
 ```
 
 The first lakehouse source installs the Rust language container after asking
@@ -97,13 +98,13 @@ exakit sql "SELECT EXAKIT_VS.LAKEHOUSE_VERSION()"    # the engine build
 
 | Message | Fix |
 |---|---|
-| "Glue GetTables failed ... AccessDeniedException ... not authorized to perform: glue:GetTables" (`access-denied`) | the key may not list that database - or, under a policy scoped to named databases, it does not exist (AWS answers both the same way): check the name, else grant what the message names, then `exakit source check lake` |
+| "Glue GetTables failed ... AccessDeniedException ... not authorized to perform: glue:GetTables" (`denied`) | the key may not list that database - or, under a policy scoped to named databases, it does not exist (AWS answers both the same way): check the name, else grant what the message names, then `exakit source check lake` |
 | "UnrecognizedClientException: The security token included in the request is invalid" | AWS does not know the key (deleted, or a typo): a new key, then `exakit source reauth lake --password-file <new.json>` |
 | a refusal that the kit files as the clock | signed requests allow 15 minutes: `exakit stop`, then `exakit start` |
 | "incorrectly configured region", "x-amz-bucket-region" | the bucket is in another region: connect again with `--set region=<the bucket's region>` |
-| exit 2 for the database | a dotted name: the engine refuses one |
+| `input` (exit 2) for the database | a dotted name: the engine refuses one |
 | a table left out by name | ORC, Avro and Delta tables, views and tables with partition projection are not read; an Iceberg table with equality deletes is refused |
-| exit 23 | the Rust language container is missing: rerun with `--yes` after telling the user |
+| `norust` (exit 23) | the Rust language container is missing: rerun with `--yes` after telling the user |
 
 ## 9. Keep it working
 
