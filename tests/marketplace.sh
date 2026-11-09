@@ -852,6 +852,12 @@ _dl_probe="$WORK/dl-default-label"
 # parent is shown disabled and "Your file or folder" waits under the cursor.
 check "with every sample loaded, your own file is the answer Enter gives" "local" \
     "$( (exakit_pending_datasets() { :; }; info() { :; }
+        ui_table_menu() { EXAKIT_TABLE_SELECTION="$EXAKIT_TABLE_DEFAULTS"; EXAKIT_TABLE_CONFIRMED=1; }
+        exakit_data_load_select "Skip" >/dev/null 2>&1 </dev/null; printf '%s' "$EXAKIT_DATA_LOAD_SELECTION") )"
+# Nobody at the table (no terminal): the file row's path question has no one to
+# answer it, so the answer is none and the hint names EXAKIT_DATA_FILE.
+check "...and with nobody at the table, none" "none" \
+    "$( (exakit_pending_datasets() { :; }; info() { :; }
         exakit_data_load_select "Skip" >/dev/null 2>&1 </dev/null; printf '%s' "$EXAKIT_DATA_LOAD_SELECTION") )"
 (
     exakit_pending_datasets() { :; }          # everything already loaded

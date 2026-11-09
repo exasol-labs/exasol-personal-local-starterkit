@@ -121,7 +121,13 @@ out="$( (exakit_pending_datasets() { printf 'tpch|TPC-H\n'; }; _exakit_prompt_tt
 check "without a terminal the pending samples are the answer" "tpch" "$out"
 out="$( (exakit_pending_datasets() { :; }; _exakit_prompt_tty() { :; }
         exakit_data_load_select Skip >/dev/null 2>&1; printf '%s' "$EXAKIT_DATA_LOAD_SELECTION") )"
-check "with every sample loaded, your own file is the default" "local" "$out"
+# The file row is the default, but its path question needs a person: without a
+# terminal the answer is none (and the EXAKIT_DATA_FILE hint), Enter gives local.
+check "with every sample loaded and nobody at the table, the answer is none" "none" "$out"
+out="$( (exakit_pending_datasets() { :; }
+        ui_table_menu() { EXAKIT_TABLE_SELECTION="$EXAKIT_TABLE_DEFAULTS"; EXAKIT_TABLE_CONFIRMED=1; }
+        exakit_data_load_select Skip >/dev/null 2>&1; printf '%s' "$EXAKIT_DATA_LOAD_SELECTION") )"
+check "with every sample loaded, your own file is the default Enter takes" "local" "$out"
 
 echo "an explicit answer wins, per variable:"
 out="$( (unset EXAKIT_DATASETS EXAKIT_MCP_CLIENTS EXAKIT_MARKETPLACE_ADDONS EXAKIT_LOAD_SAMPLE
