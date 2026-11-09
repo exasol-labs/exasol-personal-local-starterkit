@@ -12,7 +12,7 @@ import sys
 from contextlib import nullcontext, redirect_stderr, redirect_stdout
 from pathlib import Path
 
-from runtime import AddonFailure, KitContext, venv_executable, venv_python
+from runtime import AddonFailure, KitContext, probe, venv_executable, venv_python
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "setup" / "lib"))
@@ -53,15 +53,15 @@ def _server(ctx: KitContext) -> Path:
     if not ctx.manifest.get("components.udf_devkit.version"):
         raise AddonFailure("The UDF dev kit is not installed. Install it with: exakit marketplace udf-devkit")
     python = _require_notebook(ctx, "MLflow")
-    probe = subprocess.run([str(python), "-c", "import mlflow.server"], capture_output=True,
-                           check=False, timeout=15)
-    if probe.returncode:
+    answer = probe([str(python), "-c", "import mlflow.server"])
+    if answer is None or answer.returncode:
         ctx.require_uv()
-        ctx.run_logged("Installing the local MLflow server", str(ctx.uv), "pip", "install", "--python",
-                       str(python), f"mlflow=={_server_pin(ctx)}")
-        probe = subprocess.run([str(python), "-c", "import mlflow.server"], capture_output=True,
-                               check=False, timeout=15)
-        if probe.returncode:
+        ctx.run_logged("Installing the local MLflow server", str(ctx.uv), "pip", "install", "--compile-bytecode",
+                       "--python", str(python), f"mlflow=={_server_pin(ctx)}")
+        answer = probe([str(python), "-c", "import mlflow.server"])
+        if answer is None:
+            raise AddonFailure("MLflow's first import did not answer within two minutes; try again: exakit mlflow start")
+        if answer.returncode:
             raise AddonFailure("MLflow server could not be installed. Read: exakit logs setup")
     executable = venv_executable(_notebook_venv(ctx), "mlflow")
     if not executable.is_file():

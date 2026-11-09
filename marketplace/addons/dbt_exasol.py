@@ -17,7 +17,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from runtime import AddonFailure, KitContext, cmd_quote, venv_executable, venv_python, write_private
+from runtime import AddonFailure, KitContext, cmd_quote, probe, venv_executable, venv_python, write_private
 
 ID = "dbt-exasol"
 PACKAGE = "dbt-exasol"
@@ -135,8 +135,8 @@ def install(ctx: KitContext, *, force: bool = False) -> None:
     if package_version(ctx) != version or force:
         if not venv_python(venv).is_file():
             ctx.run_logged("Creating dbt-exasol environment", str(ctx.uv), "venv", "--python", ctx.managed_python_version, str(venv))
-        ctx.run_logged(f"Installing dbt-exasol {version}", str(ctx.uv), "pip", "install", "--python",
-                       str(venv_python(venv)), f"{PACKAGE}=={version}")
+        ctx.run_logged(f"Installing dbt-exasol {version}", str(ctx.uv), "pip", "install", "--compile-bytecode",
+                       "--python", str(venv_python(venv)), f"{PACKAGE}=={version}")
         if package_version(ctx) != version:
             raise AddonFailure("dbt-exasol did not report the requested version after installation")
     _write_profile(ctx)
@@ -157,9 +157,10 @@ def install(ctx: KitContext, *, force: bool = False) -> None:
 def validate(ctx: KitContext) -> bool:
     venv, profile_dir, _ = paths(ctx)
     python = venv_python(venv)
-    probe = subprocess.run([str(python), "-c", "import dbt.adapters.exasol"],
-                           capture_output=True, check=False, timeout=15)
-    if probe.returncode != 0:
+    answer = probe([str(python), "-c", "import dbt.adapters.exasol"])
+    if answer is None or answer.returncode != 0:
+        if answer is None:
+            ctx.activity("dbt-exasol did not answer its import in time; validate it again with: exakit update dbt-exasol")
         ctx.manifest.set_many({f"{RECEIPT}.validated": False})
         return False
     dsn = ctx.manifest.get("runtime.dsn", "")

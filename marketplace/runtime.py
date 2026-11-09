@@ -467,6 +467,24 @@ class KitContext:
         print(f"  • {label}", flush=True)
 
 
+# How long a freshly installed package may take to answer its first import. The first import after `uv pip
+# install` compiles every .pyc, and macOS checks each new native library the first time it loads, so on a slow
+# disk or a busy machine the dash-server import took longer than the ten seconds the install allowed and the
+# whole add-on step ended with "Command ... timed out" (seen on a real install). Two minutes, and a probe that
+# still does not answer is "not answered", never the end of the install.
+FIRST_IMPORT_TIMEOUT = 120
+
+
+def probe(argv: list[str], *, timeout: float = FIRST_IMPORT_TIMEOUT) -> subprocess.CompletedProcess | None:
+    """Ask a short question of a program (an import, a --version) and answer None when it could not be asked or
+    did not answer within `timeout` seconds: the caller treats that as "not answered" and says so, instead of
+    letting a TimeoutExpired end the install."""
+    try:
+        return subprocess.run(argv, capture_output=True, text=True, check=False, timeout=timeout)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
 def venv_python(venv: Path) -> Path:
     return venv / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
 

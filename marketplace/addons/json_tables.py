@@ -18,7 +18,7 @@ from urllib.error import HTTPError
 from pathlib import Path, PurePosixPath
 
 import kit_telemetry
-from runtime import AddonFailure, KitContext, cmd_quote, venv_python, host_machine, open_url
+from runtime import AddonFailure, KitContext, cmd_quote, venv_python, host_machine, open_url, probe
 
 ID = "json-tables"
 RECEIPT = "components.json_tables"
@@ -182,8 +182,10 @@ def _asset(ctx: KitContext, repo: str, tag: str, name: str, key: str, pins: dict
 def _restore_package_data(ctx: KitContext, version: str) -> None:
     """Restore upstream's omitted preprocessor asset without overwriting files."""
     python = venv_python(paths(ctx)[0])
-    result = subprocess.run([str(python), "-c", "import exasol_json_tables; print(exasol_json_tables.__path__[0])"],
-                            capture_output=True, text=True, check=False, timeout=10)
+    result = probe([str(python), "-c", "import exasol_json_tables; print(exasol_json_tables.__path__[0])"])
+    if result is None:
+        ctx.activity("JSON Tables' first import did not answer in time; its package data is checked at the next update")
+        return
     if result.returncode != 0:
         return
     site = Path(result.stdout.strip())
@@ -293,7 +295,8 @@ def install(ctx: KitContext) -> None:
     with tempfile.TemporaryDirectory(prefix="exakit-json-tables-") as temp:
         wheel = Path(temp) / wheel_name
         _asset(ctx, repo, tag, wheel_name, "wheel", pins, assets, wheel)
-        ctx.run_logged(f"Installing JSON Tables {version}", str(ctx.uv), "pip", "install", "--python", str(python), str(wheel))
+        ctx.run_logged(f"Installing JSON Tables {version}", str(ctx.uv), "pip", "install", "--compile-bytecode",
+                       "--python", str(python), str(wheel))
         _restore_package_data(ctx, version)
         engine = Path(temp) / engine_name
         _asset(ctx, repo, tag, engine_name, platform_key, pins, assets, engine)

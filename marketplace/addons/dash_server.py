@@ -15,7 +15,7 @@ import urllib.request
 from pathlib import Path, PurePosixPath
 
 from process import ManagedProcess, port_open, windows_listening
-from runtime import AddonFailure, KitContext, cmd_quote, venv_executable, venv_python
+from runtime import AddonFailure, KitContext, cmd_quote, probe, venv_executable, venv_python
 
 ID = "dash-server"
 RECEIPT = "components.dash_server"
@@ -85,8 +85,12 @@ def _settle_port(ctx: KitContext) -> int:
 def _restore_templates(ctx: KitContext, version: str) -> None:
     """Repair package data missing from the upstream 0.1.x source build."""
     python = venv_python(paths(ctx)[0])
-    result = subprocess.run([str(python), "-c", "import dash_server; print(dash_server.__path__[0])"],
-                            capture_output=True, text=True, check=False, timeout=10)
+    # The package's first import: slow on a fresh environment (see runtime.probe), and a repair of package data
+    # is not worth ending the install for - the next validate or update looks again.
+    result = probe([str(python), "-c", "import dash_server; print(dash_server.__path__[0])"])
+    if result is None:
+        ctx.activity("Dash Server's first import did not answer in time; its templates are checked at the next update")
+        return
     if result.returncode != 0:
         return
     site = Path(result.stdout.strip())
@@ -149,8 +153,10 @@ def install(ctx: KitContext) -> None:
             probe = subprocess.run([str(python), "-m", "pip", "--version"], capture_output=True, check=False)
             if probe.returncode != 0:
                 ctx.run_logged("Seeding Dash Server pip", str(ctx.uv), "pip", "install", "--python", str(python), "pip")
-        ctx.run_logged(f"Installing Dash Server {version}", str(ctx.uv), "pip", "install", "--python", str(python),
-                       _release_url(version))
+        # --compile-bytecode: the .pyc files are written now, so the first import (validated a moment later,
+        # and every server start) does not spend its time compiling them.
+        ctx.run_logged(f"Installing Dash Server {version}", str(ctx.uv), "pip", "install", "--compile-bytecode",
+                       "--python", str(python), _release_url(version))
         if package_version(ctx) != version:
             raise AddonFailure("Dash Server did not report the requested version after installation")
         _restore_templates(ctx, version)
@@ -224,8 +230,10 @@ def validate(ctx: KitContext) -> bool:
     python = venv_python(venv)
     if not python.is_file():
         return False
-    result = subprocess.run([str(python), "-c", "import dash_server"], capture_output=True, check=False, timeout=15)
-    if result.returncode != 0:
+    result = probe([str(python), "-c", "import dash_server"])
+    if result is None or result.returncode != 0:
+        if result is None:
+            ctx.activity("Dash Server did not answer its import in time; validate it again with: exakit update dash-server")
         ctx.manifest.set_many({f"{RECEIPT}.validated": False})
         return False
     port = _port(ctx)

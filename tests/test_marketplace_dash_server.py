@@ -19,6 +19,25 @@ from addons import dash_server  # noqa: E402
 from runtime import AddonFailure, KitContext, Manifest  # noqa: E402
 
 
+class ProbeTest(unittest.TestCase):
+    """runtime.probe: a question that cannot be asked, or is not answered in time, is None - never an exception
+    that ends the install (the dash-server import timing out after ten seconds did exactly that)."""
+
+    def test_a_timeout_and_a_missing_program_answer_none(self) -> None:
+        import subprocess
+        import runtime  # noqa: E402
+        with patch.object(runtime.subprocess, "run", side_effect=subprocess.TimeoutExpired(["x"], 1)):
+            self.assertIsNone(runtime.probe(["x"], timeout=1))
+        self.assertIsNone(runtime.probe([str(Path(tempfile.gettempdir()) / "no-such-program-exakit")], timeout=1))
+        self.assertGreaterEqual(runtime.FIRST_IMPORT_TIMEOUT, 60)
+
+    def test_an_answer_comes_back_whole(self) -> None:
+        import runtime  # noqa: E402
+        result = runtime.probe([sys.executable, "-c", "print('answered')"], timeout=30)
+        self.assertIsNotNone(result)
+        self.assertEqual((0, "answered"), (result.returncode, result.stdout.strip()))
+
+
 class DashServerTest(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
@@ -88,6 +107,41 @@ class DashServerTest(unittest.TestCase):
         install_package.assert_not_called()
         self.assertTrue(launcher.is_file())
         self.assertEqual(str(launcher), self.manifest.get("components.dash_server.command"))
+
+    def test_a_slow_first_import_never_ends_the_install(self) -> None:
+        """A fresh environment's first import can outlast any short budget (bytecode compiled on the spot, macOS
+        checking each new native library): the probe answers None, the template repair steps aside and says so,
+        validate records "not validated" - and nothing raises (a real install ended with "timed out after 10 s")."""
+        venv = dash_server.paths(self.ctx)[0]
+        python = dash_server.venv_python(venv)
+        python.parent.mkdir(parents=True)
+        python.write_text("fake")
+        with patch.object(dash_server, "probe", return_value=None), \
+             patch.object(KitContext, "activity") as activity:
+            dash_server._restore_templates(self.ctx, "0.2.1")
+            self.assertFalse(dash_server.validate(self.ctx))
+        self.assertEqual(False, self.manifest.get("components.dash_server.validated"))
+        said = " ".join(str(call.args[0]) for call in activity.call_args_list)
+        self.assertIn("did not answer in time", said)
+        self.assertIn("exakit update dash-server", said)
+
+    def test_install_compiles_bytecode_so_the_first_import_is_quick(self) -> None:
+        self.manifest.set_many({"components.dash_server.ownership": "kit"})
+        venv = dash_server.paths(self.ctx)[0]
+        python = dash_server.venv_python(venv)
+        python.parent.mkdir(parents=True)
+        python.write_text("fake")
+        with patch.object(KitContext, "require_uv"), \
+             patch.object(KitContext, "target_version", return_value="0.2.1"), \
+             patch.object(dash_server, "package_version", side_effect=["0.1.9", "0.2.1", "0.2.1"]), \
+             patch.object(dash_server, "_settle_port", return_value=5100), \
+             patch.object(dash_server, "_restore_templates"), \
+             patch.object(dash_server.subprocess, "run", return_value=Mock(returncode=0)), \
+             patch.object(KitContext, "run_logged") as run_logged:
+            dash_server.install(self.ctx)
+        installs = [call.args for call in run_logged.call_args_list if "pip" in call.args and "install" in call.args]
+        self.assertTrue(installs, run_logged.call_args_list)
+        self.assertIn("--compile-bytecode", installs[-1])
 
     @unittest.skipIf(os.name == "nt", "Unix execve contract")
     def test_launcher_uses_recorded_port_and_keeps_secret_out_of_arguments(self) -> None:
