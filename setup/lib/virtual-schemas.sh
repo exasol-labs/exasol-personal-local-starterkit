@@ -42,11 +42,16 @@ exakit_vs_connect_wizard() {
 # exakit_vs_engine <args...> — the engine with this installation's context.
 # Its stdin is passed through: that is where a secret travels.
 exakit_vs_engine() {
-    _eve_defs="$(exakit_vs_defs)" || { error "This kit copy has no setup/virtual-schemas. Update it: exakit update"; return 2; }
+    _eve_defs="$(exakit_vs_defs)" || {
+        _exakit_vs_unrunnable "This kit copy has no setup/virtual-schemas. Update it: exakit update" \
+            "this kit copy has no setup/virtual-schemas" "update the kit: exakit update" "exakit update"
+        return 2; }
     _eve_py=""
     command -v pyexasol_venv_python >/dev/null 2>&1 && _eve_py="$(pyexasol_venv_python 2>/dev/null || true)"
     if [ -z "$_eve_py" ] || [ ! -x "$_eve_py" ]; then
-        error "Virtual schemas run with the kit's pyexasol, which is not installed. Repair it: exakit update pyexasol"
+        _exakit_vs_unrunnable "Virtual schemas run with the kit's pyexasol, which is not installed. Repair it: exakit update pyexasol" \
+            "virtual schemas run with the kit's pyexasol, which is not installed" \
+            "repair it: exakit update pyexasol" "exakit update pyexasol"
         return 2
     fi
     "$_eve_py" "$_eve_defs/engine/cli.py" --defs "$_eve_defs" --kit-home "$EXAKIT_HOME" \
@@ -54,6 +59,53 @@ exakit_vs_engine() {
         --dsn "$(manifest_get runtime.dsn 2>/dev/null || true)" \
         --user "$(manifest_get runtime.user 2>/dev/null || printf sys)" \
         --password-file "$(manifest_get runtime.password_file 2>/dev/null || true)" "$@"
+}
+
+# _exakit_vs_json_failure <kind> <error> <remedy> [command] — the engine's
+# failure shape (cli.py) for what the bridge refuses or cannot run itself, so
+# `--json` is one object of one shape whoever said no: what happened, its
+# class, the fix in words, the one exakit command that is the fix or null.
+# rejected and public_ip as the other refusals and plan/connect carry them.
+_exakit_vs_json_failure() {
+    _ejf_cmd="null"
+    [ -n "${4:-}" ] && _ejf_cmd="\"$(_exakit_json_string "$4")\""
+    exakit_json_out '{"ok": false, "error": "%s", "kind": "%s", "remedy": "%s", "command": %s, "rejected": true, "public_ip": null}\n' \
+        "$(_exakit_json_string "$2")" "$1" "$(_exakit_json_string "$3")" "$_ejf_cmd"
+}
+
+# _exakit_vs_refuse <exit> <message> <error> <remedy> [command] — the bridge
+# says no before the engine runs: the message on a screen as always (reject's
+# card for bad input, exit 2), with --json the failure object instead. Exits.
+_exakit_vs_refuse() {
+    if [ "${EXAKIT_VS_JSON:-0}" = 1 ]; then
+        _exakit_log_file "REJECT $2"
+        _exakit_vs_json_failure input "$3" "$4" "${5:-}"
+        exit "$1"
+    fi
+    [ "$1" = 2 ] && reject "$2"
+    error "$2"
+    exit "$1"
+}
+
+# _exakit_vs_no_tmp — mktemp failed. With --json that is the one object (kind
+# setup), and 0: the caller then exits 1. Without, 1: the caller says what it
+# always said.
+_exakit_vs_no_tmp() {
+    [ "${EXAKIT_VS_JSON:-0}" = 1 ] || return 1
+    _exakit_log_file "ERROR Could not create a temporary file."
+    _exakit_vs_json_failure setup "could not create a temporary file" \
+        "check that the temporary folder (TMPDIR, else /tmp) exists, is writable and has space, then run the same command again"
+}
+
+# _exakit_vs_unrunnable <message> <error> <remedy> <command> — the engine cannot
+# run from this kit copy: said on stderr, and with --json as the one object.
+_exakit_vs_unrunnable() {
+    if [ "${EXAKIT_VS_JSON:-0}" = 1 ]; then
+        _exakit_log_file "ERROR $1"
+        _exakit_vs_json_failure setup "$2" "$3" "$4"
+        return 0
+    fi
+    error "$1"
 }
 
 # _exakit_vs_render — the engine's event lines in the kit's own marks; the
@@ -82,6 +134,11 @@ _exakit_vs_read_secret() {
         cat "$2"
         return 0
     fi
+    # --json never prompts: the credential is the file's, or a pipe's.
+    if [ "${EXAKIT_VS_JSON:-0}" = 1 ]; then
+        [ -t 0 ] || cat
+        return 0
+    fi
     _evs_tty="$(_exakit_prompt_tty)"
     if [ -n "$_evs_tty" ] && [ -r /dev/tty ]; then
         if [ "${3:-}" = "secret-file" ]; then
@@ -104,9 +161,11 @@ _exakit_vs_secret_kind() {
         "$(exakit_vs_defs)/connectors/$1/connector.json" 2>/dev/null
 }
 
-# _exakit_vs_confirm <question> — yes on a terminal answer y, or --yes.
+# _exakit_vs_confirm <question> — yes on a terminal answer y, or --yes. --json
+# never asks: without --yes the answer is no.
 _exakit_vs_confirm() {
     [ "${EXAKIT_VS_ASSUME_YES:-0}" = 1 ] && return 0
+    [ "${EXAKIT_VS_JSON:-0}" = 1 ] && return 1
     [ -n "$(_exakit_prompt_tty)" ] || return 1
     case "$(prompt_text "$1 [y/N]" "N")" in y|Y|yes|YES|Yes) return 0 ;; *) return 1 ;; esac
 }
@@ -171,11 +230,33 @@ EOF
     ok "Rust language container installed"
 }
 
+# _exakit_vs_repair <engine-exit> — what the bridge does about exit 20 (DNS
+# repaired), 21 (Java installed) or 23 (Rust installed) before its one retry;
+# non-zero when it could not, or was not allowed to.
+_exakit_vs_repair() {
+    case "$1" in
+        20) info "Giving the database's language containers the deployment's DNS, then trying again"
+            personal_slc_dns_repair || { error "DNS could not be repaired. Restart the database (exakit stop, exakit start) and try again."; return 1; } ;;
+        21) _exakit_vs_install_java ;;
+        23) _exakit_vs_install_rust ;;
+        *)  return 1 ;;
+    esac
+}
+
 # _exakit_vs_run <secret-or-empty> <engine args...> — run the engine once,
 # repairing DNS (exit 20) or installing Java (exit 21) or Rust (exit 23) and retrying once.
+# With EXAKIT_VS_JSON=1 the engine answers in JSON, events to the log, and
+# only the last run's object reaches stdout; what the bridge says while it
+# repairs goes to stderr.
 _exakit_vs_run() {
     _evx_secret="$1"; shift
-    _evx_out="$(mktemp "${TMPDIR:-/tmp}/exakit-vs.XXXXXX")" || return 1
+    if [ "${EXAKIT_VS_JSON:-0}" = 1 ]; then
+        # Once: a caller that built its arguments with --json already has it.
+        _evx_has=0
+        for _evx_a in "$@"; do [ "$_evx_a" = --json ] && _evx_has=1; done
+        [ "$_evx_has" = 1 ] || set -- --json "$@"
+    fi
+    _evx_out="$(mktemp "${TMPDIR:-/tmp}/exakit-vs.XXXXXX")" || { _exakit_vs_no_tmp; return 1; }
     _evx_try=0
     while :; do
         _evx_try=$((_evx_try + 1))
@@ -185,16 +266,23 @@ _exakit_vs_run() {
             exakit_vs_engine "$@" < /dev/null > "$_evx_out" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
         fi
         _evx_rc=$?
-        _exakit_vs_render "$_evx_out"
+        if [ "${EXAKIT_VS_JSON:-0}" = 1 ]; then
+            EXAKIT_VS_RESULT="$(cat "$_evx_out")"
+        else
+            _exakit_vs_render "$_evx_out"
+        fi
         [ "$_evx_try" -eq 1 ] || break
-        case "$_evx_rc" in
-            20) info "Giving the database's language containers the deployment's DNS, then trying again"
-                personal_slc_dns_repair || { error "DNS could not be repaired. Restart the database (exakit stop, exakit start) and try again."; break; } ;;
-            21) _exakit_vs_install_java || break ;;
-            23) _exakit_vs_install_rust || break ;;
-            *)  break ;;
-        esac
+        case "$_evx_rc" in 20|21|23) ;; *) break ;; esac
+        if [ "${EXAKIT_VS_JSON:-0}" = 1 ]; then
+            # In a subshell: a die inside a repair (a download that fails its
+            # size or checksum) ends only the repair, and the first run's
+            # object still reaches stdout.
+            ( _exakit_vs_repair "$_evx_rc" ) >&2 || break
+        else
+            _exakit_vs_repair "$_evx_rc" || break
+        fi
     done
+    [ "${EXAKIT_VS_JSON:-0}" = 1 ] && cat "$_evx_out"
     rm -f "$_evx_out"
     return "$_evx_rc"
 }
@@ -886,11 +974,21 @@ if p.get("exposure"):
 # engine's pairs() keeps the last, so an explicit --set wins - and their names
 # added to EXAKIT_VS_GIVEN, so they are not asked for again.
 _exakit_vs_paste() {
-    _evp_out="$(mktemp "${TMPDIR:-/tmp}/exakit-vs-paste.XXXXXX")" || { error "Could not create a temporary file."; return 1; }
-    printf '%s' "$2" | exakit_vs_engine paste "$1" > "$_evp_out" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
-    _evp_rc=$?
-    _exakit_vs_render "$_evp_out"; rm -f "$_evp_out"
-    [ "$_evp_rc" -eq 0 ] || return "$_evp_rc"
+    _evp_out="$(mktemp "${TMPDIR:-/tmp}/exakit-vs-paste.XXXXXX")" || {
+        _exakit_vs_no_tmp && return 1
+        error "Could not create a temporary file."; return 1; }
+    if [ "${EXAKIT_VS_JSON:-0}" = 1 ]; then
+        # Its notes go to the log; a refusal is the answer, as it stands.
+        printf '%s' "$2" | exakit_vs_engine --json paste "$1" > "$_evp_out" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
+        _evp_rc=$?
+        [ "$_evp_rc" -eq 0 ] || { cat "$_evp_out"; rm -f "$_evp_out"; return "$_evp_rc"; }
+        EXAKIT_VS_RESULT="$(cat "$_evp_out")"; rm -f "$_evp_out"
+    else
+        printf '%s' "$2" | exakit_vs_engine paste "$1" > "$_evp_out" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
+        _evp_rc=$?
+        _exakit_vs_render "$_evp_out"; rm -f "$_evp_out"
+        [ "$_evp_rc" -eq 0 ] || return "$_evp_rc"
+    fi
     _evp_pairs="$(printf '%s' "$EXAKIT_VS_RESULT" | run_python_any -c 'import json, sys
 for k, v in json.load(sys.stdin)["values"].items():
     print("%s=%s" % (k, v))')"
@@ -909,16 +1007,30 @@ EOF
 
 # cmd_connect [source] [--name N] [--url STRING] [--set KEY=VALUE]...
 #             [--password-file F] [--dry-run] [--yes] [--json]
+#
+# --json: stdout carries one JSON object and nothing else - the engine's plan
+# (--dry-run), its connect result, or a failure of the engine's one shape
+# (cli.py), whoever refused. It never prompts: what is not on the command
+# line, in --password-file or on a pipe is a failure, not a question. The
+# engine's events go to the log; what this bridge says while it repairs DNS
+# or installs a language container goes to stderr.
 cmd_connect() {
     _cc_source=""; _cc_name=""; _cc_pwfile=""; _cc_dry=0; _cc_json=0; _cc_url=""
     EXAKIT_VS_SETS=""; EXAKIT_VS_GIVEN=""
+    # Known before anything is refused, so every refusal answers in its shape.
+    for _cc_word in "$@"; do case "$_cc_word" in --json|-j) _cc_json=1 ;; esac; done
+    EXAKIT_VS_JSON="$_cc_json"
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --name) _cc_name="${2:-}"; shift ;;
             --name=*) _cc_name="${1#--name=}" ;;
-            --url) _cc_url="${2:-}"; [ -n "$_cc_url" ] || reject "--url takes a connection string (exakit help connect)"; shift ;;
-            --url=*) _cc_url="${1#--url=}"; [ -n "$_cc_url" ] || reject "--url takes a connection string (exakit help connect)" ;;
-            --set) case "${2:-}" in *=*) ;; *) reject "--set takes KEY=VALUE (exakit help connect)" ;; esac
+            --url|--url=*)
+                if [ "$1" = --url ]; then _cc_url="${2:-}"; shift; else _cc_url="${1#--url=}"; fi
+                [ -n "$_cc_url" ] || _exakit_vs_refuse 2 "--url takes a connection string (exakit help connect)" \
+                    "--url was given without a connection string" \
+                    "give the source's connection string after --url, e.g. --url 'postgres://reader@db.example.com/sales'" ;;
+            --set) case "${2:-}" in *=*) ;; *) _exakit_vs_refuse 2 "--set takes KEY=VALUE (exakit help connect)" \
+                       "--set was not followed by KEY=VALUE" "give each input as --set KEY=VALUE (a connector's inputs: exakit help connect)" ;; esac
                    EXAKIT_VS_SETS="$EXAKIT_VS_SETS
 --set
 $2"; EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${2%%=*}"; shift ;;
@@ -927,9 +1039,14 @@ $2"; EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${2%%=*}"; shift ;;
             --yes|-y) EXAKIT_VS_ASSUME_YES=1 ;;
             --json|-j) _cc_json=1 ;;
             --password=*|--password|--secret*|--token*)
-                reject "A credential is never taken as an argument (other users can read the process list). Use the hidden prompt, --password-file, or standard input." ;;
-            -*) reject "Unknown option '$1' for connect (exakit help connect)." ;;
-            *) [ -z "$_cc_source" ] || reject "connect takes one source; got '$_cc_source' and '$1'."; _cc_source="$1" ;;
+                _exakit_vs_refuse 2 "A credential is never taken as an argument (other users can read the process list). Use the hidden prompt, --password-file, or standard input." \
+                    "a credential was given as an argument, where other users can read it in the process list" \
+                    "pipe it on standard input or give it with --password-file <file>" ;;
+            -*) _exakit_vs_refuse 2 "Unknown option '$1' for connect (exakit help connect)." \
+                    "unknown option '$1' for connect" "leave it out; the options are listed by: exakit help connect" ;;
+            *) [ -z "$_cc_source" ] || _exakit_vs_refuse 2 "connect takes one source; got '$_cc_source' and '$1'." \
+                   "connect takes one source; got '$_cc_source' and '$1'" "connect one source per command"
+               _cc_source="$1" ;;
         esac
         shift
     done
@@ -938,7 +1055,9 @@ $2"; EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${2%%=*}"; shift ;;
     # A pasted connection string fills what it names, for every path below:
     # the terminal's panel shows those answers, --yes and --dry-run use them.
     if [ -n "$_cc_url" ]; then
-        [ -n "$_cc_source" ] || reject "--url needs the source it is for, e.g. exakit connect postgresql --url 'postgres://reader@db.example.com/sales'"
+        [ -n "$_cc_source" ] || _exakit_vs_refuse 2 "--url needs the source it is for, e.g. exakit connect postgresql --url 'postgres://reader@db.example.com/sales'" \
+            "--url needs the source it is for" \
+            "name the source before it, e.g. exakit connect postgresql --url 'postgres://reader@db.example.com/sales'"
         _exakit_vs_paste "$_cc_source" "$_cc_url" || exit $?
         _cc_url=""
     fi
@@ -948,20 +1067,32 @@ $2"; EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${2%%=*}"; shift ;;
         _exakit_vs_tui "$_cc_source" "$_cc_name" "$_cc_pwfile"
         exit $?
     fi
-    _cc_tty="$(_exakit_prompt_tty)"
+    # --json never asks: a terminal is as good as none.
+    _cc_tty=""
+    [ "$_cc_json" = 1 ] || _cc_tty="$(_exakit_prompt_tty)"
     if [ -z "$_cc_source" ]; then
-        [ -n "$_cc_tty" ] || reject "Name the source to connect, e.g. exakit connect postgresql (see: exakit source catalog)."
+        [ -n "$_cc_tty" ] || _exakit_vs_refuse 2 "Name the source to connect, e.g. exakit connect postgresql (see: exakit source catalog)." \
+            "no source was named" "name the source to connect, e.g. exakit connect postgresql; every connector: exakit source catalog" \
+            "exakit source catalog"
         _cc_source="$(prompt_text "Which source? (name or alias, e.g. postgresql, mysql, mssql, oracle, snowflake, bigquery, databricks, mongodb, lakehouse, s3, azure)" "")"
     fi
-    _cc_resolved="$(exakit_vs_engine resolve "$_cc_source" 2>/dev/null | sed -n 's/^RESULT {"connector": "\(.*\)"}$/\1/p')"
-    if [ -z "$_cc_resolved" ]; then
-        exakit_vs_engine resolve "$_cc_source" > "${TMPDIR:-/tmp}/exakit-vs-resolve.$$" 2>&1
-        _cc_rc=$?
-        _exakit_vs_render "${TMPDIR:-/tmp}/exakit-vs-resolve.$$"; rm -f "${TMPDIR:-/tmp}/exakit-vs-resolve.$$"
-        [ "$_cc_rc" -ne 0 ] || _cc_rc=2
-        exit "$_cc_rc"
+    # With --json the plan below resolves the source (an unknown or gated one
+    # is its refusal), so every answer is a plan or connect object.
+    _cc_resolved="$_cc_source"
+    if [ "$_cc_json" = 0 ]; then
+        _cc_resolved="$(exakit_vs_engine resolve "$_cc_source" 2>/dev/null | sed -n 's/^RESULT {"connector": "\(.*\)"}$/\1/p')"
+        if [ -z "$_cc_resolved" ]; then
+            _cc_out="$(mktemp "${TMPDIR:-/tmp}/exakit-vs.XXXXXX")" || die "Could not create a temporary file."
+            exakit_vs_engine resolve "$_cc_source" > "$_cc_out" 2>&1
+            _cc_rc=$?
+            _exakit_vs_render "$_cc_out"; rm -f "$_cc_out"
+            [ "$_cc_rc" -ne 0 ] || _cc_rc=2
+            exit "$_cc_rc"
+        fi
     fi
-    if [ -z "$_cc_name" ]; then
+    # With --json a missing name is the plan's refusal, after the gate, as
+    # resolve orders them here without it.
+    if [ -z "$_cc_name" ] && [ "$_cc_json" = 0 ]; then
         [ -n "$_cc_tty" ] || reject "Give the connection a name with --name (lower case, e.g. sales)."
         _cc_name="$(prompt_text "Name for this connection (lower case, e.g. sales)" "")"
     fi
@@ -969,21 +1100,31 @@ $2"; EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${2%%=*}"; shift ;;
     # Build the engine's argument list from the newline-separated pairs; bash
     # 3.2 has no arrays worth trusting with this, so the positional
     # parameters carry it.
-    set -- "$_cc_resolved" --name "$_cc_name"
+    # --name=VALUE under --json: an empty name stays one argument.
+    if [ "$_cc_json" = 1 ]; then set -- "$_cc_resolved" "--name=$_cc_name"; else set -- "$_cc_resolved" --name "$_cc_name"; fi
     while IFS= read -r _cc_word; do
         [ -n "$_cc_word" ] && set -- "$@" "$_cc_word"
     done <<EOF
 $EXAKIT_VS_SETS
 EOF
-    _cc_out="$(mktemp "${TMPDIR:-/tmp}/exakit-vs.XXXXXX")" || die "Could not create a temporary file."
-    exakit_vs_engine plan "$@" < /dev/null > "$_cc_out" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
-    _cc_rc=$?
-    _exakit_vs_render "$_cc_out"; rm -f "$_cc_out"
-    [ "$_cc_rc" -eq 0 ] || exit "$_cc_rc"
-    _exakit_vs_show_plan "$EXAKIT_VS_RESULT"
-    if [ "$_cc_dry" = 1 ]; then
-        [ "$_cc_json" = 1 ] && printf '%s\n' "$EXAKIT_VS_RESULT"
-        exit 0
+    _cc_out="$(mktemp "${TMPDIR:-/tmp}/exakit-vs.XXXXXX")" || { _exakit_vs_no_tmp && exit 1; die "Could not create a temporary file."; }
+    if [ "$_cc_json" = 1 ]; then
+        # The plan checks every input before the credential is read; a refusal,
+        # or with --dry-run the plan itself, is the answer.
+        exakit_vs_engine --json plan "$@" < /dev/null > "$_cc_out" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
+        _cc_rc=$?
+        if [ "$_cc_rc" -ne 0 ] || [ "$_cc_dry" = 1 ]; then cat "$_cc_out"; rm -f "$_cc_out"; exit "$_cc_rc"; fi
+        # The connector it resolved to, by the plan's own top-level key.
+        _cc_resolved="$(sed -n 's/^  "connector": "\([a-z0-9-]*\)",*$/\1/p' "$_cc_out" | head -n 1)"
+        rm -f "$_cc_out"
+        shift; set -- "$_cc_resolved" "$@"
+    else
+        exakit_vs_engine plan "$@" < /dev/null > "$_cc_out" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
+        _cc_rc=$?
+        _exakit_vs_render "$_cc_out"; rm -f "$_cc_out"
+        [ "$_cc_rc" -eq 0 ] || exit "$_cc_rc"
+        _exakit_vs_show_plan "$EXAKIT_VS_RESULT"
+        [ "$_cc_dry" = 1 ] && exit 0
     fi
     if [ -n "$_cc_tty" ] && ! _exakit_vs_confirm "Connect now?"; then
         # 5, as every command a person did not confirm: 0 would read as "done".
@@ -994,8 +1135,16 @@ EOF
         "$(exakit_vs_defs)/connectors/$_cc_resolved/connector.json" 2>/dev/null)"
     _cc_secret=""
     if [ -n "$_cc_label" ]; then
+        _cc_what="$(printf '%s' "$_cc_label" | tr 'A-Z' 'a-z')"
+        # With --json an unreadable file is the one object; without, the
+        # credential reader says "Cannot read" as it always has.
+        if [ "$_cc_json" = 1 ] && [ -n "$_cc_pwfile" ] && { [ -d "$_cc_pwfile" ] || [ ! -r "$_cc_pwfile" ]; }; then
+            _exakit_vs_refuse 2 "Cannot read $_cc_pwfile" "cannot read $_cc_pwfile" \
+                "give a file this user can read with --password-file, or pipe the $_cc_what on a closed standard input"
+        fi
         _cc_secret="$(_exakit_vs_read_secret "$_cc_label" "$_cc_pwfile" "$(_exakit_vs_secret_kind "$_cc_resolved")")" || exit 2
-        [ -n "$_cc_secret" ] || reject "No $(printf '%s' "$_cc_label" | tr 'A-Z' 'a-z') was given (pipe it on standard input or use --password-file)."
+        [ -n "$_cc_secret" ] || _exakit_vs_refuse 2 "No $_cc_what was given (pipe it on standard input or use --password-file)." \
+            "no $_cc_what was given" "pipe it on standard input or give it with --password-file <file>"
     fi
     if [ -n "$_cc_secret" ]; then
         _exakit_vs_run "$_cc_secret" connect "$@" --secret-stdin
@@ -1004,7 +1153,7 @@ EOF
     fi
     _cc_rc=$?
     unset _cc_secret
-    if [ "$_cc_rc" -eq 0 ]; then
+    if [ "$_cc_rc" -eq 0 ] && [ "$_cc_json" = 0 ]; then
         _exakit_vs_query_hints "$EXAKIT_VS_RESULT" "$_cc_name"
         info "Manage it with: exakit source show $_cc_name | check | reauth | refresh | disconnect | remove"
     fi
@@ -1048,8 +1197,14 @@ if p.get("gate"):
 
 # cmd_source <action> [name] [options] — the lifecycle of a connected source.
 cmd_source() {
-    _cs_action="${1:-list}"; [ "$#" -gt 0 ] && shift
+    # An option where the action goes (`exakit source --json`) means the
+    # default action, list, with that option.
+    case "${1:-}" in -*) _cs_action=list ;; *) _cs_action="${1:-list}"; [ "$#" -gt 0 ] && shift ;; esac
     _cs_json=0; _cs_dry=0; _cs_name=""; _cs_all=0; _cs_status=""; _cs_pwfile=""; _cs_table=""; _cs_ddl=0; _cs_into=""
+    # --json is known before anything is refused: the bridge's own refusals
+    # and failures then come in the engine's shape, and nothing is asked.
+    for _cs_word in "$@"; do case "$_cs_word" in --json|-j) _cs_json=1 ;; esac; done
+    EXAKIT_VS_JSON="$_cs_json"
     while [ "$#" -gt 0 ]; do
         case "$1" in
             --json|-j) _cs_json=1 ;;
@@ -1061,10 +1216,12 @@ cmd_source() {
             --ddl) _cs_ddl=1 ;;
             --schema) _cs_into="${2:-}"; shift ;;
             --schema=*) _cs_into="${1#--schema=}" ;;
-            -*) reject "Unknown option '$1' for source $_cs_action (exakit help source)." ;;
+            -*) _exakit_vs_refuse 2 "Unknown option '$1' for source $_cs_action (exakit help source)." \
+                    "unknown option '$1' for source $_cs_action" "leave it out; the options are listed by: exakit help source" ;;
             *) if [ -z "$_cs_name" ]; then _cs_name="$1"
                elif [ "$_cs_action" = describe ] && [ -z "$_cs_table" ]; then _cs_table="$1"
-               else reject "source $_cs_action takes one name."; fi ;;
+               else _exakit_vs_refuse 2 "source $_cs_action takes one name." \
+                        "source $_cs_action takes one name; got '$_cs_name' and '$1'" "name one source per command"; fi ;;
         esac
         shift
     done
@@ -1072,12 +1229,18 @@ cmd_source() {
     exakit_init_logging
     case "$_cs_action" in
         list|issues|catalog|show|describe|check|reauth|refresh|disconnect|remove) ;;
-        *) reject "Unknown source action '$_cs_action' (list, issues, show, describe, check, reauth, refresh, disconnect, remove, catalog)." ;;
+        *) _exakit_vs_refuse 2 "Unknown source action '$_cs_action' (list, issues, show, describe, check, reauth, refresh, disconnect, remove, catalog)." \
+               "unknown source action '$_cs_action'" \
+               "use one of list, issues, show, describe, check, reauth, refresh, disconnect, remove, catalog (exakit help source)" ;;
     esac
     case "$_cs_action" in
         show|describe|reauth|refresh|disconnect|remove)
-            [ -n "$_cs_name" ] || reject "exakit source $_cs_action needs a source name (see: exakit source list)." ;;
-        check) [ -n "$_cs_name" ] || [ "$_cs_all" = 1 ] || reject "exakit source check needs a name or --all." ;;
+            [ -n "$_cs_name" ] || _exakit_vs_refuse 2 "exakit source $_cs_action needs a source name (see: exakit source list)." \
+                "exakit source $_cs_action needs a source name" "name the source; the sources are listed by: exakit source list" \
+                "exakit source list" ;;
+        check) [ -n "$_cs_name" ] || [ "$_cs_all" = 1 ] || _exakit_vs_refuse 2 "exakit source check needs a name or --all." \
+                   "exakit source check needs a name or --all" "name the source, or give --all to check every one" \
+                   "exakit source check --all" ;;
     esac
     set --
     [ "$_cs_json" = 1 ] && set -- --json
@@ -1109,19 +1272,34 @@ print("  " + "\n  ".join(["drops: " + ", ".join(p["drop"])] + (["keeps: " + ", "
         reauth)
             # The name before the credential: nobody types a password for a
             # source that does not exist.
-            _cs_out="$(mktemp "${TMPDIR:-/tmp}/exakit-vs.XXXXXX")" || die "Could not create a temporary file."
+            _cs_out="$(mktemp "${TMPDIR:-/tmp}/exakit-vs.XXXXXX")" || { _exakit_vs_no_tmp && exit 1; die "Could not create a temporary file."; }
             exakit_vs_engine "$@" show "$_cs_name" < /dev/null > "$_cs_out" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
             _cs_rc=$?
             if [ "$_cs_rc" -ne 0 ]; then
                 if [ "$_cs_json" = 1 ]; then cat "$_cs_out"; else _exakit_vs_render "$_cs_out"; fi
                 rm -f "$_cs_out"; exit "$_cs_rc"
             fi
-            _cs_conn="$(sed -n 's/^RESULT .*"connector": "\([a-z0-9-]*\)".*/\1/p' "$_cs_out" | head -n 1)"
+            if [ "$_cs_json" = 1 ]; then
+                _cs_conn="$(sed -n 's/^  "connector": "\([a-z0-9-]*\)",*$/\1/p' "$_cs_out" | head -n 1)"
+            else
+                _cs_conn="$(sed -n 's/^RESULT .*"connector": "\([a-z0-9-]*\)".*/\1/p' "$_cs_out" | head -n 1)"
+            fi
             rm -f "$_cs_out"
+            # With --json an unreadable file is the one object; without, the
+            # credential reader says "Cannot read" as it always has.
+            if [ "$_cs_json" = 1 ] && [ -n "$_cs_pwfile" ] && { [ -d "$_cs_pwfile" ] || [ ! -r "$_cs_pwfile" ]; }; then
+                _exakit_vs_refuse 2 "Cannot read $_cs_pwfile" "cannot read $_cs_pwfile" \
+                    "give a file this user can read with --password-file, or pipe the credential on a closed standard input"
+            fi
             _cs_secret="$(_exakit_vs_read_secret "New credential for $_cs_name" "$_cs_pwfile" "$(_exakit_vs_secret_kind "$_cs_conn")")" || exit 2
-            [ -n "$_cs_secret" ] || reject "No credential was given."
+            [ -n "$_cs_secret" ] || _exakit_vs_refuse 2 "No credential was given." "no credential was given" \
+                "pipe it on standard input or give it with --password-file <file>"
             set -- "$@" reauth "$_cs_name" --secret-stdin
-            if [ "$_cs_json" = 1 ]; then printf '%s' "$_cs_secret" | exakit_vs_engine "$@"; exit $?; fi
+            if [ "$_cs_json" = 1 ]; then
+                # The engine's events and any traceback go to the log, as connect's do.
+                printf '%s' "$_cs_secret" | exakit_vs_engine "$@" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
+                exit $?
+            fi
             _exakit_vs_run "$_cs_secret" "$@"; _cs_rc=$?; unset _cs_secret
             [ "$_cs_rc" -eq 0 ] && ok "$_cs_name is ready again with the new credential"
             exit "$_cs_rc" ;;

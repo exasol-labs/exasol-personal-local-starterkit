@@ -60,8 +60,9 @@ REMEDY_FOR = {
     "unreachable": "the source did not answer from inside the database: check the host, port, firewall and VPN (a source on this computer must listen beyond 127.0.0.1), then: exakit source check {name}",
     "nohost": "the host name no longer resolves: check it (a private name may need a VPN), then: exakit source check {name}",
     "dns": "Java in the database could not resolve the host name; restart the database with exakit start (it repairs DNS), then: exakit source check {name}",
-    "nojava": "the Java language container is not installed: exakit connect installs it, or run: exasol slc install java",
-    "norust": "the Rust language container is not installed: exakit connect installs it (asked; one restart)",
+    "nojava": "the Java language container is not installed: exakit connect installs it with one database restart - asked on a terminal, --yes for a script - or run: exasol slc install java",
+    "norust": "the Rust language container is not installed: exakit connect installs it with one database restart - asked on a terminal, --yes for a script",
+    "unreachable_db": "the local database did not answer: start it (exakit start), then try again",
     "denied": "the account signs in but may not read this data: grant it what the message names ({access}), then: exakit source check {name}",
     "region": "the bucket is in another region: exakit source disconnect {name} --yes, then exakit connect <connector> --name {name} --set region=<the bucket's region> with the credential again",
     "nobucket": "the {store} does not exist under that name: check it, then remove and connect again",
@@ -71,6 +72,18 @@ REMEDY_FOR = {
     "managed": "a table here is a Databricks catalog-managed table, which this adapter version cannot read yet; read it through the SQL warehouse instead: exakit connect databricks",
     "error": "see the log: exakit logs",
 }
+
+# The one exakit command that IS the fix, for the kinds that have one (--json
+# carries it as `command`, null for the rest). A first connect has no source
+# yet, so the lifecycle commands do not apply to it (connect passes first=True).
+COMMAND_FOR = {"auth": "exakit source reauth {name}", "unreachable_db": "exakit start"}
+
+
+def command_for(kind, name, first=False):
+    if first and kind != "unreachable_db":
+        return None
+    text = COMMAND_FOR.get(kind)
+    return text.format(name=name) if text else None
 
 
 
@@ -195,17 +208,25 @@ def example_query(schema, tables):
 
 
 class Failure(Exception):
-    def __init__(self, message, code, kind="error"):
+    """A failure the engine names. str() is what happened; kind is its class;
+    remedy the fix in words and command the one exakit command that is the
+    fix, when there is one (--json carries all four). said is what a person
+    reads on the FAIL line: the message, or the message and its fix in one
+    sentence, as the kit has always said them."""
+    def __init__(self, message, code, kind="error", remedy=None, command=None, said=None):
         super().__init__(message)
         self.code = code
         self.kind = kind
+        self.remedy = remedy
+        self.command = command
+        self.said = said or message
 
 
 class ScopeFailure(Failure):
-    """The schema check's own answer: complete in its words, so connect adds
-    only that nothing was kept."""
-    def __init__(self, message, kind):
-        super().__init__(message, EXIT["failed"], kind)
+    """The schema check's own answer: what the source has, and the fix, so
+    connect adds only that nothing was kept."""
+    def __init__(self, message, kind, remedy):
+        super().__init__(message, EXIT["failed"], kind, remedy=remedy, said="%s; %s" % (message, remedy))
 
 
 class Engine(object):
@@ -261,7 +282,8 @@ class Engine(object):
             try:
                 self._db = sql.connect(self.args.dsn, self.args.user, self.args.password_file)
             except sql.DbError as error:
-                raise Failure("the local database is not reachable: %s" % error, EXIT["unreachable_db"])
+                raise Failure("the local database is not reachable: %s" % error, EXIT["unreachable_db"],
+                              "unreachable_db", remedy=REMEDY_FOR["unreachable_db"], command="exakit start")
         return self._db
 
     def close(self):
@@ -402,7 +424,9 @@ class Engine(object):
                 return "".join(certs)
             pem = tlsca.choose(certs, values["host"], values.get("port"), connector.get("ca_probe"), values["ca"])
         except tlsca.CaError as error:
-            failure = Failure("%s; nothing was kept" % error, EXIT["failed"], "tls")
+            failure = Failure(str(error), EXIT["failed"], "tls", said="%s; nothing was kept" % error,
+                              remedy="nothing was kept - correct the CA file (--set ca=<PEM file or bundle>), "
+                                     "then connect again")
             failure.complete = True  # it already says what to do
             raise failure
         if len(certs) > 1:
@@ -629,7 +653,10 @@ class Engine(object):
                     current = handle.read()
                 if current != settings and not self.store.consumers(cfg):
                     raise Failure("a loader driver %s is already registered and was not set up by the kit; it was "
-                                  "left unchanged" % etl["drivername"], EXIT["conflict"])
+                                  "left unchanged" % etl["drivername"], EXIT["conflict"], "conflict",
+                                  remedy="the kit does not replace a driver registration it did not make; remove "
+                                         "that one from the database's JDBC drivers if nothing uses it, then "
+                                         "connect again")
             made_jar = artifacts.stage_file(driver_src, os.path.join(loader, driver_pin["asset"]))
             os.makedirs(loader, exist_ok=True)
             made_cfg = not os.path.isfile(cfg)
@@ -795,14 +822,14 @@ class Engine(object):
             return
         if answer.startswith("case:"):
             other = answer[5:]
-            raise ScopeFailure("the source has no %s %s, but it has %s (%s); give it as the source spells it: "
-                               "--set %s=%s" % (label, value, other, spec.get("case", "names differ in case"),
-                                                spec["input"], other), "schema_missing")
+            raise ScopeFailure("the source has no %s %s, but it has %s (%s)"
+                               % (label, value, other, spec.get("case", "names differ in case")), "schema_missing",
+                               "give it as the source spells it: --set %s=%s" % (spec["input"], other))
         if answer == "denied":
-            raise ScopeFailure("the account may not use %s %s; grant it USAGE on the %s (and SELECT on its tables)"
-                               % (label, value, label), "denied")
-        raise ScopeFailure("the source has no %s %s that this account can see; check the name and that the "
-                           "account has access to it" % (label, value), "schema_missing")
+            raise ScopeFailure("the account may not use %s %s" % (label, value), "denied",
+                               "grant it USAGE on the %s (and SELECT on its tables)" % label)
+        raise ScopeFailure("the source has no %s %s that this account can see" % (label, value), "schema_missing",
+                           "check the name and that the account has access to it")
 
     def tables(self, schema):
         return [r.get("TABLE_NAME") for r in self.db().query(
@@ -845,14 +872,19 @@ class Engine(object):
 
     # --- operations -----------------------------------------------------------------
     def connect(self, connector_id, name, given, secret, dry_run=False, plan_only=False):
-        if not sources.NAME.match(name or ""):
+        # The gate first, as the shells' own resolve says it: a gated
+        # connector is exit 5 whatever else is wrong with the command.
+        entry = self.defs.entry(connector_id)
+        if entry["status"] == "gated":
+            raise Failure("%s is not available yet: %s" % (entry["name"], entry["gate"]), EXIT["gated"], "gated")
+        if not name:
+            raise Failure("the connection has no name", EXIT["input"], "input",
+                          remedy="give it one with --name (lower case letters, digits and _, a letter first, e.g. sales)")
+        if not sources.NAME.match(name):
             raise Failure("the source name must be lower case letters, digits and _ (start with a letter, at most 40), "
                           "e.g. sales", EXIT["input"])
         connector = self.defs.connector(connector_id)
         profile = self.defs.profile(connector["profile"])
-        entry = self.defs.entry(connector_id)
-        if entry["status"] == "gated":
-            raise Failure("%s is not available yet: %s" % (entry["name"], entry["gate"]), EXIT["gated"])
         if self.store.exists(name):
             current = self.store.config(name)
             if self.store.status(name).get("status") == "disconnected" and current["connector"] == connector_id:
@@ -876,13 +908,15 @@ class Engine(object):
         if self.store.exists(name):
             current = self.store.config(name)
             if self.store.status(name).get("status") != "disconnected" or current["connector"] != connector_id:
-                raise Failure("a source named %s already exists (%s); choose another name or remove it first: "
-                              "exakit source remove %s" % (name, current["connector"], name), EXIT["conflict"])
+                fix = "choose another name or remove it first: exakit source remove %s" % name
+                taken = "a source named %s already exists (%s)" % (name, current["connector"])
+                raise Failure(taken, EXIT["conflict"], "conflict", remedy=fix, said="%s; %s" % (taken, fix))
             reconnect = True
         spec = planner.secret_input(connector)
         if spec and not secret:
             raise Failure("%s needs %s on standard input (it is never taken as an argument)"
-                          % (connector_id, spec["label"].lower()), EXIT["input"])
+                          % (connector_id, spec["label"].lower()), EXIT["input"], "input",
+                          remedy="pipe it on standard input or give it with --password-file <file>")
         created = {"files": [], "connection": False, "script": False, "schema": False}
         journal = {"operation": "reconnect" if reconnect else "connect", "connector": connector_id,
                    "started": sources.now(), "created": created}
@@ -909,7 +943,8 @@ class Engine(object):
                     for kind, label in (("connection", names["connection"]), ("schema", names["schema"])):
                         if self.exists(kind, label):
                             raise Failure("%s %s already exists in the database and is not a source the kit set up; "
-                                          "it was left unchanged" % (kind, label), EXIT["conflict"])
+                                          "it was left unchanged" % (kind, label), EXIT["conflict"], "conflict",
+                                          remedy="choose another name for the source (--name)")
                 # Checked first: a malformed credential is named here, not as a
                 # Java stack from inside the database after files were staged.
                 url, user, conn_secret, hidden, notes = self.credential(connector, values, secret)
@@ -987,9 +1022,14 @@ class Engine(object):
                 # the same command with corrected input.
                 remedy = remedy_for(kind, name, connector, error)
                 if getattr(error, "complete", False):
+                    # Its own words say what to do; --json still gets the fix as remedy.
+                    if error.remedy is None:
+                        error.remedy = "nothing was kept - correct it, then run the same exakit connect again"
                     raise error
                 if isinstance(error, ScopeFailure):
-                    raise Failure("%s; nothing was kept - connect again with the corrected name" % error, code, kind)
+                    again = "nothing was kept - connect again with the corrected name"
+                    raise Failure(str(error), code, kind, remedy="%s; %s" % (error.remedy, again),
+                                  said="%s; %s" % (error.said, again))
                 specific = tls_remedy(error, connector, self.clock()) if kind == "tls" else None
                 if specific:
                     remedy = "the source's certificate did not verify; nothing was kept - %s, then connect again" % specific
@@ -1009,11 +1049,18 @@ class Engine(object):
                               "schema_missing": "the catalog has no such namespace that this credential can see; nothing was kept - check the namespace (and the warehouse), then connect again"}[kind]
                 if kind in ADDRESS_KINDS:
                     remedy = allow_ip(remedy, kind, self.egress(connector, values)[0])
+                command = command_for(kind, name, first=True)
                 if isinstance(error, Failure):
+                    # A failure that names its own fix keeps it.
+                    if error.remedy:
+                        raise Failure(str(error), code, kind, remedy=error.remedy, command=error.command or command,
+                                      said="%s; %s" % (error, error.remedy))
                     # The kit's own words already say what happened (the route
                     # check); only the driver's raw text needs it restated.
-                    raise Failure("%s; %s" % (error, remedy.split("; ", 1)[-1]), code, kind)
-                raise Failure("%s (%s)" % (error, remedy), code, kind)
+                    raise Failure(str(error), code, kind, remedy=remedy, command=command,
+                                  said="%s; %s" % (error, remedy.split("; ", 1)[-1]))
+                raise Failure(str(error), code, kind, remedy=remedy, command=command,
+                              said="%s (%s)" % (error, remedy))
             pins = self.pins(connector)
             record = {"schema_version": 1, "id": name, "connector": connector_id,
                       "profile": connector["profile"], "inputs": values, "objects": names,
@@ -1124,7 +1171,8 @@ class Engine(object):
             # the reason has to reach a reader who gets no RESULT line.
             self.emit("FAIL", "%s is %s: %s" % (name, status, error))
             self.emit("INFO", "Fix: %s" % remedy)
-            return {"name": name, "status": status, "kind": kind, "error": str(error), "remedy": remedy}
+            return {"name": name, "status": status, "kind": kind, "error": str(error), "remedy": remedy,
+                    "command": command_for(kind, name)}
         evidence = "metadata and %s (%d tables)" % (how, len(tables)) if read else "metadata only (no tables in scope)"
         self.record_check(name, "ok", evidence)
         result = {"name": name, "status": "ready", "evidence": evidence}
@@ -1143,10 +1191,12 @@ class Engine(object):
     def reauth(self, name, secret):
         config = self.store.config(name)
         if self.store.status(name).get("status") == "disconnected":
-            raise Failure("%s is disconnected; reconnect it with: exakit connect %s --name %s"
-                          % (name, config["connector"], name), EXIT["conflict"])
+            fix = "reconnect it with: exakit connect %s --name %s" % (config["connector"], name)
+            raise Failure("%s is disconnected" % name, EXIT["conflict"], "conflict", remedy=fix,
+                          said="%s is disconnected; %s" % (name, fix))
         if not secret:
-            raise Failure("reauth needs the new credential on standard input", EXIT["input"])
+            raise Failure("reauth needs the new credential on standard input", EXIT["input"], "input",
+                          remedy="pipe it on standard input or give it with --password-file <file>")
         connector = self.defs.connector(config["connector"])
         inputs = dict(config["inputs"])
         if connector.get("secret_as_file"):
@@ -1662,7 +1712,8 @@ class Engine(object):
         for row in self.listing():
             if row["status"] == "ready" and row["needs_refresh"] and not status_filter:
                 rows.append(dict(row, remedy="it moved to a new adapter and its metadata is not refreshed yet: "
-                                             "exakit source refresh %s" % row["name"]))
+                                             "exakit source refresh %s" % row["name"],
+                                 command="exakit source refresh %s" % row["name"]))
                 continue
             if row["status"] in ("ready", "disconnected"):
                 continue
@@ -1674,5 +1725,6 @@ class Engine(object):
             except (OSError, ValueError):
                 connector = {}
             rows.append(dict(row, remedy=remedy_for(check.get("kind") or "error", row["name"], connector,
-                                                                check.get("evidence"))))
+                                                                check.get("evidence")),
+                             command=command_for(check.get("kind") or "error", row["name"])))
         return rows

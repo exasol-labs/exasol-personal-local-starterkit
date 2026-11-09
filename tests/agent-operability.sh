@@ -734,6 +734,55 @@ has "connect's help names the --json key" "public_ip" \
     "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print([c for c in d["commands"] if c["command"] == "connect"][0]["description"])' "$ROOT/setup/help/exakit.json")"
 has "plan and connect --json always carry it" 'payload.setdefault("public_ip"' \
     "$(cat "$ROOT/setup/virtual-schemas/engine/cli.py")"
+echo "exakit connect --json is one object on stdout, through the real entry point:"
+# Scripts and agents parse what `exakit connect ... --json` prints. It used to
+# be the rendered plan and event lines (a real connect never asked the engine
+# for JSON at all) - so json.load failed on every path, success included. A
+# hermetic kit: a manifest, the engine run by this python3 as the kit's
+# pyexasol, and the suite's simulated database; nothing is downloaded (a dry
+# run, and refusals that stop before anything is staged).
+_vk="$WORK/vskit"; mkdir -p "$_vk/home" "$_vk/venv/bin" "$_vk/deploy/local/runtime/exa/jdbc"
+printf '{"runtime": {"type": "personal", "deployment_dir": "%s", "dsn": "127.0.0.1:8563", "user": "sys", "password_file": "/nonexistent"}}\n' \
+    "$_vk/deploy" > "$_vk/home/manifest.json"
+printf '#!/bin/sh\nexec python3 "$@"\n' > "$_vk/venv/bin/python"; chmod +x "$_vk/venv/bin/python"
+printf '{"sources": {"pg.example.com": {"tables": ["ORDERS"]}}}\n' > "$_vk/db.json"
+_vsconnect() { # stdout only; stdin closed
+    env EXAKIT_HOME="$_vk/home" EXAKIT_PYEXASOL_VENV="${_VK_VENV:-$_vk/venv}" PATH="$_HERMETIC_PATH" \
+        EXAKIT_VS_FAKE_DB="$ROOT/tests/lib/fake-exasol-vs.py" FAKE_VS_STATE="$_vk/db.json" \
+        FAKE_VS_EXA="$_vk/deploy/local/runtime/exa" EXAKIT_NO_IP_LOOKUP=1 EXAKIT_VS_SETTLE_SECONDS=0 \
+        bash "$ROOT/setup/exakit" connect "$@" < /dev/null 2>/dev/null
+}
+# _vsone <python over d> - the expression when stdout was exactly one JSON object.
+_vsone() { python3 -c 'import json,sys
+try:
+    d = json.load(sys.stdin)
+except ValueError:
+    print("NOT-ONE-OBJECT"); sys.exit()
+print(eval(sys.argv[1], {"d": d}) if isinstance(d, dict) else "NOT-ONE-OBJECT")' "$1"; }
+_vsshape='" ".join(str(x) for x in [d["ok"], d["kind"], bool(d["error"]), bool(d["remedy"]), "command" in d, "public_ip" in d])'
+_pg="--set host=pg.example.com --set database=sales --set user=reader"
+# shellcheck disable=SC2086
+_o="$(_vsconnect pg --name agentdry $_pg --dry-run --json)"; _rc=$?
+check "connect --dry-run --json: exit 0, one object (the plan, public_ip present)" "0 True agentdry True" \
+    "$_rc $(printf '%s' "$_o" | _vsone '" ".join(str(x) for x in [d["ok"], d["name"], "public_ip" in d])')"
+_o="$(_vsconnect nosuchdb --name x --json)"; _rc=$?
+check "an unknown connector: exit 2, one failure object" "2 False input True True True True" "$_rc $(printf '%s' "$_o" | _vsone "$_vsshape")"
+check "...and its command is runnable as written" "exakit source catalog" "$(printf '%s' "$_o" | _vsone 'd["command"]')"
+# shellcheck disable=SC2086
+_o="$(_vsconnect pg --name agentpw $_pg --json)"; _rc=$?
+check "no credential on stdin: exit 2, one failure object, nothing asked" "2 False input True True True True" "$_rc $(printf '%s' "$_o" | _vsone "$_vsshape")"
+# shellcheck disable=SC2086
+_o="$(_vsconnect pg --name agentbad $_pg --set port=70000 --json)"; _rc=$?
+check "a bad input: exit 2, one failure object" "2 False input True True True True" "$_rc $(printf '%s' "$_o" | _vsone "$_vsshape")"
+_o="$(_vsconnect pg --name x --no-such-option --json)"; _rc=$?
+check "an unknown option: exit 2, one failure object" "2 False input True True True True" "$_rc $(printf '%s' "$_o" | _vsone "$_vsshape")"
+# shellcheck disable=SC2086
+_o="$(_VK_VENV="$WORK/no-such-venv" _vsconnect pg --name x $_pg --json)"; _rc=$?
+check "no pyexasol to run the engine: exit 2, one failure object" "2 False setup True True True True" "$_rc $(printf '%s' "$_o" | _vsone "$_vsshape")"
+has "connect's help says --json is one object, and its failure keys" '"ok": false, "error"' \
+    "$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print([c for c in d["commands"] if c["command"] == "connect"][0]["description"])' "$ROOT/setup/help/exakit.json")"
+has "AGENTS.md documents the connect --json failure shape" '`connect --json` and `source ... --json`' "$(cat "$ROOT/AGENTS.md")"
+
 # The runbook must stop steering agents away from data-load: that sentence
 # described the prompt-only behaviour this contract replaces.
 lacks "AGENTS.md no longer routes agents around data-load" \
