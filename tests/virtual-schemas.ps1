@@ -69,6 +69,8 @@ function Get-ExakitVsDefs { return $defs }
 $state = Join-Path $work "db.json"
 $env:EXAKIT_VS_FAKE_DB = J @("tests", "lib", "fake-exasol-vs.py")
 $env:FAKE_VS_STATE = $state
+# Offline: no public IP lookup, except where it is tested (a file:// URL).
+$env:EXAKIT_NO_IP_LOOKUP = "1"
 Set-Content -LiteralPath $state -Value '{"sources": {"pg.example.com": {"tables": ["ORDERS"]}}}' -Encoding ASCII
 
 Write-Host ""
@@ -231,6 +233,31 @@ Check "...the string's inputs come before the command line's --set, which wins" 
 Check "...the password is in no argument" $false ((($calls -join "`n")).Contains("url9"))
 Check "...nor in the output" $false (((@($out) -join "`n")).Contains("url9"))
 Check "...whose note says it was not used" $true (((@($out) -join "`n")).Contains("The string was on the command line"))
+
+Write-Host ""
+Write-Host "== this computer's public IP: the plan's INFO line and --json, through Invoke-CmdConnect =="
+$ipFile = Join-Path $work "public-ip.txt"
+Set-Content -LiteralPath $ipFile -Value "203.0.113.7" -Encoding ASCII
+Remove-Item Env:\EXAKIT_NO_IP_LOOKUP
+# file:///C:/... on Windows, file:///var/... elsewhere ([System.Uri] reads a
+# Unix path as relative and gives no AbsoluteUri).
+$env:EXAKIT_PUBLIC_IP_URL = "file:///" + (($ipFile -replace '\\', '/') -replace ' ', '%20').TrimStart('/')
+$ErrorActionPreference = "Continue"
+$out = & $pwsh -NoProfile -File $urlChildFile $repo $defs $home2 $deploy $python $urlRecord pg --name ipps --set host=pg.example.com --set database=sales --set user=reader --dry-run --json 2>&1
+$childCode = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+$text = (@($out) | ForEach-Object { "$_" }) -join "`n"
+Check "connect --dry-run --json, a host on the internet: exit 0" 0 $childCode
+Check "...the plan's INFO line names the address and the host" $true $text.Contains("INFO This computer's public IP is 203.0.113.7: pg.example.com must allow it if it filters by address")
+Check "...said once" 1 ([regex]::Matches($text, "public IP is").Count)
+Check "...and the JSON carries public_ip" $true ($text -match '"public_ip":\s+"203\.0\.113\.7"')
+$ErrorActionPreference = "Continue"
+$out = & $pwsh -NoProfile -File $urlChildFile $repo $defs $home2 $deploy $python $urlRecord pg --name ipps --set host=192.168.64.1 --set database=sales --set user=reader --dry-run --json 2>&1
+$ErrorActionPreference = "Stop"
+$text = (@($out) | ForEach-Object { "$_" }) -join "`n"
+Check "a private host: no public IP line" $false $text.Contains("public IP is")
+Check "...and public_ip is null" $true ($text -match '"public_ip":\s+null')
+Remove-Item Env:\EXAKIT_PUBLIC_IP_URL
 
 Remove-Item Env:\EXAKIT_VS_FAKE_DB, Env:\FAKE_VS_STATE
 if (-not $env:KEEP_WORK) { Remove-Item -Recurse -Force -LiteralPath $work -ErrorAction SilentlyContinue } else { Write-Host "work: $work" }

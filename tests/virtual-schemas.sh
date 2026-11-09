@@ -33,6 +33,12 @@ mkdir -p "$HOME_K" "$EXA/bucketfs/bfsdefault/default" "$EXA/jdbc"
 printf 'kept\n' > "$EXA/jdbc/java.security"
 SECRET='s3cr3t-Pa55'"'"'word'
 NEWSECRET='n3w-T0ken-value'
+# Offline: a plan or connect of a source on the internet would ask
+# checkip.amazonaws.com for this computer's public IP. The tests of that turn
+# the lookup back on against a file:// URL (ipeng, and the two terminal flows).
+export EXAKIT_NO_IP_LOOKUP=1
+printf '203.0.113.7\n' > "$WORK/public-ip"
+IPURL="file://$WORK/public-ip"
 
 # Small stand-in artifacts with real digests, pinned into the copied
 # definitions and placed in the cache, so nothing is downloaded.
@@ -1839,10 +1845,13 @@ tui() { # tui <scenario> <title> <boxes> <keys> - the replay's report in TUI_OUT
 if command -v python3 >/dev/null 2>&1; then
     db '{"sources": {"pg.example.com": {"tables": ["ORDERS", "CUSTOMERS"]}}}'
     # Space ticks PostgreSQL - the cursor starts on the first connector, there
-    # is no "Select All" above it - then one wrong answer, corrected.
-    tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 3 \
+    # is no "Select All" above it - then one wrong answer, corrected. The public
+    # IP lookup is on (a file:// URL): the review says the address.
+    EXAKIT_NO_IP_LOOKUP= EXAKIT_PUBLIC_IP_URL="$IPURL" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 3 \
         " \rtuione\rlocalhost\rpg.example.com\r\rsales\r\rreader\r$TUI_SECRET\r\r\ry\r"
     check "one menu, one panel and one table are left on screen, never stacked" "0" "$TUI_RC"
+    has "...the review names this computer's public IP for a source on the internet" \
+        "tuione: This computer's public IP is 203.0.113.7" "$TUI_SCREEN"
     has "...the menu offers the connectors" "├─ PostgreSQL" "$TUI_SCREEN"
     has "...with the adapter version each one pins" "4.1.0" "$TUI_SCREEN"
     has "...and its release" "GA" "$TUI_SCREEN"
@@ -1904,9 +1913,10 @@ PY
     if command -v pwsh >/dev/null 2>&1; then
         # The PowerShell twin, under the same terminal model. pwsh starts slower,
         # hence the pauses (\x01) before the first key.
-        tui connect-tui-scenario-ps.sh "1 of 1 · PostgreSQL" 3 \
+        EXAKIT_NO_IP_LOOKUP= EXAKIT_PUBLIC_IP_URL="$IPURL" tui connect-tui-scenario-ps.sh "1 of 1 · PostgreSQL" 3 \
             "\x01\x01\x01 \rtuips\rlocalhost\rpg.example.com\r\rsales\r\rreader\r$TUI_SECRET\r\r\ry\r"
         check "PowerShell: one menu, one panel, one table" "0" "$TUI_RC"
+        has "...its review names this computer's public IP too" "tuips: This computer's public IP is 203.0.113.7" "$TUI_SCREEN"
         has "...and the row ends with the schema" "✓ VS_TUIPS · 1 table" "$TUI_SCREEN"
         lacks "...the credential is not on the screen" "$TUI_SECRET" "$TUI_OUT"
         check "...it reached the CONNECTION" "$TUI_SECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_TUIPS"]["secret"]')"
@@ -2260,6 +2270,146 @@ check "the terminal flow with --url: one panel, one table" "0" "$TUI_RC"
 has "...the panel holds the string's host" "Host name or address      pg.example.com" "$TUI_SCREEN"
 has "...and it connects" "✓ VS_TUIURL · 1 table" "$TUI_SCREEN"
 has "PowerShell parses --url too" '$arg -eq "--url"' "$(cat "$ROOT/setup/exakit.ps1")"
+
+printf '\n== this computer'"'"'s public IP, for a source on the internet ==\n'
+# The database's traffic leaves through this computer, so a cloud source's
+# security group, firewall or IP access list must allow this computer's public
+# IP. The engine asks for it once (publicip.py); here it reads a file:// URL.
+ipeng() { EXAKIT_NO_IP_LOOKUP= EXAKIT_PUBLIC_IP_URL="${IP_URL:-$IPURL}" eng "$@"; }
+pubip() { python3 -c 'import json,sys; print(json.load(sys.stdin).get("public_ip", "absent"))' 2>/dev/null; }
+IPLINE="This computer's public IP is 203.0.113.7"
+db '{"sources": {"pg.example.com": {"tables": ["ORDERS"]}}}'
+OUT="$(ipeng plan pg --name ipsales $PG_SET 2>/dev/null)"; RC=$?
+check "plan of a host on the internet: exit 0" "0" "$RC"
+has "...one INFO line names the address and the host that must allow it" \
+    "INFO $IPLINE: pg.example.com must allow it if it filters by address (security group, firewall or IP access list)" "$OUT"
+check "...said once" "1" "$(printf '%s\n' "$OUT" | grep -c 'public IP')"
+check "plan --json carries it as public_ip" "203.0.113.7" "$(ipeng --json plan pg --name ipsales $PG_SET 2>/dev/null | pubip)"
+for host in 192.168.64.1 host.containers.internal 10.0.0.5 100.100.1.2 db; do
+    OUT="$(ipeng plan pg --name ipsales --set host=$host --set database=sales --set user=reader 2>&1)"
+    lacks "a host on this computer or a private network ($host): no public IP line" "public IP" "$OUT"
+done
+check "...and public_ip is null, never absent" "None" \
+    "$(ipeng --json plan pg --name ipsales --set host=192.168.64.1 --set database=sales --set user=reader 2>/dev/null | pubip)"
+check "a refused input: public_ip is null too" "2 None" \
+    "$(ipeng --json plan pg --name ipsales --set host=pg.example.com > "$WORK/ip.json" 2>/dev/null; echo "$?") $(pubip < "$WORK/ip.json")"
+
+# One rule for every connector, from its definition: the hosts it names, the
+# host a cloud store's template builds, a MongoDB URI's hosts, a storage endpoint.
+SCOPE="$(python3 - "$ROOT" <<'PYS'
+import sys
+sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
+import plan
+# The shipped catalog: the copy in DEFS carries a test-only gated connector.
+defs = plan.Definitions(sys.argv[1] + "/setup/virtual-schemas")
+cases = [("postgresql", {"host": "pg.example.com"}), ("postgresql", {"host": "192.168.64.1"}),
+         ("mysql", {"host": "db.abc.eu-west-1.rds.amazonaws.com"}), ("sqlserver", {"host": "10.1.2.3"}),
+         ("oracle", {"host": "ora.example.com"}),
+         ("s3", {"bucket": "docs-bucket", "region": "ap-south-1"}), ("azure-blob", {"account": "acct", "container": "c"}),
+         ("snowflake", {"account": "myorg-acct1"}), ("bigquery", {"project": "p", "dataset": "d"}),
+         ("databricks", {"host": "dbc-1.cloud.databricks.com"}), ("lakehouse", {"region": "eu-west-1"}),
+         ("unity", {"workspace_url": "https://dbc-1.cloud.databricks.com"}),
+         ("mongodb", {"uri": "mongodb+srv://cluster0.abcd.mongodb.net/"}),
+         ("mongodb", {"uri": "mongodb://10.0.0.5:27017,10.0.0.6:27017/"}),
+         ("mongodb", {"uri": "mongodb://10.0.0.5:27017,shard.example.com:27017/"}),
+         ("iceberg-rest", {"catalog_url": "http://192.168.64.1:8181"}),
+         ("iceberg-rest", {"catalog_url": "http://192.168.64.1:8181", "endpoint": "http://192.168.64.1:9000"}),
+         ("iceberg-rest", {"catalog_url": "http://192.168.64.1:8181", "endpoint": "https://s3.example.com"}),
+         ("iceberg-rest", {"catalog_url": "https://rest.example.com/api"})]
+for cid, values in cases:
+    print("%s=%s" % (cid, plan.public_host(defs.connector(cid), values)))
+print(sorted(set(e["id"] for e in defs.entries()) - set(c for c, _ in cases)))
+PYS
+)"
+check "public_host decides per connector, from its connector.json" \
+    "postgresql=pg.example.com|postgresql=None|mysql=db.abc.eu-west-1.rds.amazonaws.com|sqlserver=None|oracle=ora.example.com|s3=docs-bucket.s3.ap-south-1.amazonaws.com|azure-blob=acct.blob.core.windows.net|snowflake=myorg-acct1.snowflakecomputing.com|bigquery=www.googleapis.com|databricks=dbc-1.cloud.databricks.com|lakehouse=glue.eu-west-1.amazonaws.com|unity=dbc-1.cloud.databricks.com|mongodb=cluster0.abcd.mongodb.net|mongodb=None|mongodb=shard.example.com|iceberg-rest=None|iceberg-rest=None|iceberg-rest=s3.example.com|iceberg-rest=rest.example.com|" \
+    "$(printf '%s\n' "$SCOPE" | sed '$d' | tr '\n' '|')"
+check "...and every connector in the catalog is decided here (a new one must be added)" "[]" "$(printf '%s\n' "$SCOPE" | tail -1)"
+check "a cloud store with no host input: the plan names its endpoint" \
+    "INFO $IPLINE: myorg-acct1.snowflakecomputing.com must allow it if it filters by address (security group, firewall or IP access list)" \
+    "$(ipeng plan snowflake --name ipsf $SF_SET 2>/dev/null | grep '^INFO ')"
+
+# The lookup is advice, never a step: it fails silently and never waits past 3 s.
+printf 'not an address\n' > "$WORK/garbage-ip"
+for bad in "an answer that is not an address|file://$WORK/garbage-ip" "no answer at all|file://$WORK/no-such-file"; do
+    label="${bad%%|*}"; IP_URL="${bad#*|}"
+    OUT="$(ipeng plan pg --name ipsales $PG_SET 2>/dev/null)"; RC=$?
+    check "a lookup with $label: plan exit 0" "0" "$RC"
+    lacks "...and nothing is said about it" "public IP" "$OUT"
+    has "...one line goes to the log (stderr)" "public IP lookup:" "$(ipeng plan pg --name ipsales $PG_SET 2>&1 >/dev/null)"
+    check "...public_ip is null" "None" "$(ipeng --json plan pg --name ipsales $PG_SET 2>/dev/null | pubip)"
+done
+unset IP_URL
+python3 - "$WORK/blackhole.port" <<'PYB' &
+import os, socket, sys
+s = socket.socket(); s.bind(("127.0.0.1", 0)); s.listen(8)
+open(sys.argv[1] + ".tmp", "w").write(str(s.getsockname()[1]))
+os.rename(sys.argv[1] + ".tmp", sys.argv[1])
+held = []
+while True:
+    held.append(s.accept()[0])        # accepted, never answered
+PYB
+BH_PID=$!
+_bh_wait=0; while [ ! -s "$WORK/blackhole.port" ] && [ "$_bh_wait" -lt 50 ]; do sleep 0.1; _bh_wait=$((_bh_wait + 1)); done
+BH_URL="http://127.0.0.1:$(cat "$WORK/blackhole.port")/"
+_t0="$(date +%s)"; OUT="$(IP_URL="$BH_URL" ipeng plan pg --name ipsales $PG_SET 2>/dev/null)"; RC=$?; _t1="$(date +%s)"
+check "a lookup that never answers: plan exit 0 within the 3 s budget" "0 yes" "$RC $([ $((_t1 - _t0)) -le 6 ] && echo yes || echo no)"
+lacks "...and nothing is said about it" "public IP" "$OUT"
+_t0="$(date +%s)"; OUT="$(EXAKIT_NO_IP_LOOKUP=1 EXAKIT_PUBLIC_IP_URL="$BH_URL" eng --json plan pg --name ipsales $PG_SET 2>&1)"; _t1="$(date +%s)"
+check "EXAKIT_NO_IP_LOOKUP=1: nothing is asked (no wait on that same URL)" "yes" "$([ $((_t1 - _t0)) -le 2 ] && echo yes || echo no)"
+lacks "...nothing is said or logged" "public IP" "$(printf '%s\n' "$OUT" | grep -v '"public_ip"')"
+check "...and public_ip is null" "None" "$(printf '%s\n' "$OUT" | sed -n '/^{/,$p' | pubip)"
+kill "$BH_PID" 2>/dev/null; wait "$BH_PID" 2>/dev/null
+
+# connect: the lookup runs beside it; a failed one changes nothing.
+db '{"sources": {"pg.example.com": {"tables": ["ORDERS"]}}}'
+OUT="$(printf '%s' "$SECRET" | IP_URL="file://$WORK/garbage-ip" ipeng --json connect pg --name ipfail $PG_SET --secret-stdin 2>/dev/null)"; RC=$?
+check "a connect whose lookup fails proceeds: exit 0, public_ip null" "0 None" "$RC $(printf '%s' "$OUT" | pubip)"
+run remove ipfail
+printf '%s' "$SECRET" | ipeng --json connect pg --name ipok $PG_SET --secret-stdin > "$WORK/ip.json" 2> "$WORK/ip.err"; RC=$?
+check "connect --json carries public_ip" "0 203.0.113.7" "$RC $(pubip < "$WORK/ip.json")"
+lacks "...and does not repeat the plan's line" "public IP" "$(cat "$WORK/ip.err")"
+# exakit source check: the source stops answering.
+python3 - "$STATE" <<'PYU'
+import json, sys; d = json.load(open(sys.argv[1])); d["unreachable"] = ["pg.example.com"]; json.dump(d, open(sys.argv[1], "w"))
+PYU
+OUT="$(ipeng check ipok 2>&1)"; RC=$?
+check "check of a source on the internet that does not answer: exit 1" "1" "$RC"
+has "...its fix names the address to allow" "Fix: the source did not answer from inside the database: check the host, port, firewall and VPN (allow this computer's public IP 203.0.113.7 in its security group, firewall or IP access list), then: exakit source check ipok" "$OUT"
+lacks "...not the advice for a source on this computer" "listen beyond 127.0.0.1" "$OUT"
+OUT="$(eng check ipok 2>&1)"
+has "...with the lookup off, the fix is the one it always was" "(a source on this computer must listen beyond 127.0.0.1), then: exakit source check ipok" "$OUT"
+run remove ipok
+# connect: a first connect that cannot reach the source.
+db '{"unreachable": ["slow.example.com", "10.0.0.9"]}'
+OUT="$(printf '%s' "$SECRET" | ipeng connect mysql --name ipslow --set host=slow.example.com --set database=crm --set user=reader --secret-stdin 2>&1)"; RC=$?
+check "connect to a host on the internet that does not answer: exit 1" "1" "$RC"
+has "...its fix names the address to allow" "nothing was kept - check host, port, firewall and VPN (allow this computer's public IP 203.0.113.7 in its security group, firewall or IP access list), then connect again" "$OUT"
+lacks "...not the advice for a source on this computer" "listen beyond 127.0.0.1" "$OUT"
+check "...and --json says it as public_ip" "1 203.0.113.7" \
+    "$(printf '%s' "$SECRET" | ipeng --json connect mysql --name ipslow --set host=slow.example.com --set database=crm --set user=reader --secret-stdin > "$WORK/ip.json" 2>/dev/null; echo "$?") $(pubip < "$WORK/ip.json")"
+OUT="$(printf '%s' "$SECRET" | ipeng connect mysql --name ipslow --set host=10.0.0.9 --set database=crm --set user=reader --secret-stdin 2>&1)"; RC=$?
+check "connect to a private host that does not answer: exit 1" "1" "$RC"
+has "...keeps the advice for a source on this computer or a private network" "(a source on this computer must listen beyond 127.0.0.1), then connect again" "$OUT"
+lacks "...and no public IP" "public IP" "$OUT"
+# An address filter on an object store answers 403 (an S3 bucket policy on
+# aws:SourceIp, an Azure storage firewall): denied, not unreachable.
+db '{"sources": {"'"$S3HOST"'": {"fail": "denied"}}}'
+OUT="$(printf '%s' "$AWSSECRET" | ipeng connect s3 --name ipdocs $S3_SET --set access_key_id=$KEYID --secret-stdin 2>&1)"; RC=$?
+check "S3 denied: exit 1" "1" "$RC"
+has "...the fix still names the grant" "s3:ListBucket on the mapped prefixes" "$OUT"
+has "...and the address, for a bucket that filters by it" "and, if it filters by address, allow this computer's public IP 203.0.113.7 in its security group, firewall or IP access list, then connect again" "$OUT"
+
+# The line-by-line path (a pipe, --yes, --dry-run) shows the plan's INFO line;
+# --dry-run --json prints the plan with public_ip.
+db '{"sources": {"pg.example.com": {"tables": ["ORDERS"]}}}'
+OUT="$(EXAKIT_NO_IP_LOOKUP= EXAKIT_PUBLIC_IP_URL="$IPURL" urlsh cmd_connect pg --name iplines $PG_SET --dry-run </dev/null)"; RC=$?
+check "exakit connect --dry-run (bash): exit 0" "0" "$RC"
+has "...the plan's line is shown" "$IPLINE: pg.example.com must allow it" "$OUT"
+OUT="$(EXAKIT_NO_IP_LOOKUP= EXAKIT_PUBLIC_IP_URL="$IPURL" urlsh cmd_connect pg --name iplines $PG_SET --dry-run --json </dev/null)"
+check "exakit connect --dry-run --json (bash): public_ip" "203.0.113.7" "$(printf '%s\n' "$OUT" | grep '^{' | tail -1 | pubip)"
+OUT="$(EXAKIT_NO_IP_LOOKUP= EXAKIT_PUBLIC_IP_URL="$IPURL" urlsh cmd_connect pg --name iplines --set host=192.168.64.1 --set database=sales --set user=reader --dry-run </dev/null)"
+lacks "...a private host: no line" "public IP" "$OUT"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

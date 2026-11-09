@@ -422,9 +422,10 @@
       "command": "connect",
       "options": "[source] [--name N] [--url STRING] [--set KEY=VALUE]... [--password-file F] [--dry-run] [--yes] [--json]",
       "summary": "Query an external database from the local one (virtual schema).",
-      "description": "Connects PostgreSQL, MySQL, SQL Server, Oracle, Snowflake, BigQuery, Databricks or MongoDB, Iceberg tables in AWS Glue - or document files in S3 or Azure Blob Storage - as an Exasol virtual schema: the tables stay at the source and queries fetch what they need. Search by name or alias (pg, mssql). On a terminal, `exakit connect` alone opens a menu of the connectors (Space ticks several, Enter confirms), then one panel per source with every field and its default, each answer checked where it is typed; a review shows what each will download and who can read it, and after one question a table follows every source to its VS_<NAME> or its failure; unattended, give every input with --set and the credential on standard input or with --password-file (never as an argument). --url takes the source's connection string (a JDBC URL, postgres://, mongodb+srv://, s3://, an Azure blob URL, ...) and fills the inputs it names, each checked as if given with --set; an explicit --set wins over it. A password in the string is never used or stored - the credential is still asked for separately - and settings the kit does not read are dropped by name. The adapter and JDBC driver are pinned and SHA-256 verified; the credential lives only in the database's CONNECTION EXAKIT_SRC_<NAME>, and the tables appear as VS_<NAME>. A failed connect leaves nothing behind. The first connect installs the Java language container if it is missing (asked; one database restart). Exit 2 bad input, 3 name or object conflict, 5 connector gated or not confirmed (nothing changed), 1 any other failure.",
+      "description": "Connects PostgreSQL, MySQL, SQL Server, Oracle, Snowflake, BigQuery, Databricks or MongoDB, Iceberg tables in AWS Glue - or document files in S3 or Azure Blob Storage - as an Exasol virtual schema: the tables stay at the source and queries fetch what they need. Search by name or alias (pg, mssql). On a terminal, `exakit connect` alone opens a menu of the connectors (Space ticks several, Enter confirms), then one panel per source with every field and its default, each answer checked where it is typed; a review shows what each will download and who can read it, and after one question a table follows every source to its VS_<NAME> or its failure; unattended, give every input with --set and the credential on standard input or with --password-file (never as an argument). --url takes the source's connection string (a JDBC URL, postgres://, mongodb+srv://, s3://, an Azure blob URL, ...) and fills the inputs it names, each checked as if given with --set; an explicit --set wins over it. A password in the string is never used or stored - the credential is still asked for separately - and settings the kit does not read are dropped by name. The adapter and JDBC driver are pinned and SHA-256 verified; the credential lives only in the database's CONNECTION EXAKIT_SRC_<NAME>, and the tables appear as VS_<NAME>. For a source on the internet the plan also names this computer's public IP address - the one its security group, firewall or IP access list must allow, since the database's traffic leaves through this computer (asked once of checkip.amazonaws.com, at most 3 seconds, never a step; --dry-run --json carries it as public_ip, null when not known) - and a connect or exakit source check that cannot reach the source names it in the fix. A failed connect leaves nothing behind. The first connect installs the Java language container if it is missing (asked; one database restart). Exit 2 bad input, 3 name or object conflict, 5 connector gated or not confirmed (nothing changed), 1 any other failure.",
       "environment": [
-        "EXAKIT_CONFIRM_RUNTIME_UPDATE=1 pre-answers the Java container install (--yes does the same)"
+        "EXAKIT_CONFIRM_RUNTIME_UPDATE=1 pre-answers the Java container install (--yes does the same)",
+        "EXAKIT_NO_IP_LOOKUP=1 skips the public IP lookup (no request to checkip.amazonaws.com)"
       ],
       "examples": [
         "exakit connect",
@@ -489,6 +490,10 @@
     {
       "name": "EXAKIT_NO_UPDATE_NOTICE",
       "effect": "1 never prints the update notice other commands can show."
+    },
+    {
+      "name": "EXAKIT_NO_IP_LOOKUP",
+      "effect": "1 skips the public IP lookup exakit connect and exakit source check make for a source on the internet (one HTTPS request to checkip.amazonaws.com, at most 3 seconds); the plan and the fix then do not name the address."
     },
     {
       "name": "EXAKIT_PERSONAL_S3",
