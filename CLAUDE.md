@@ -25,11 +25,17 @@ Working on the code in this repo:
   (dash-server is the reference implementation), a `components.<id>` block in
   versions.json, one registry line each side
   (`exakit_marketplace_addons` in common.sh, `Get-ExakitMarketplaceAddons` in
-  exakit-common.ps1), and a `setup/help/<id>.json` carrying `repo` + `tagline` + `docs`,
-  plus the two CI-guard entries. The add-on's one-line **description is never
-  typed into this repo** — it is that repository's GitHub About, fetched and
-  cached (`exakit_marketplace_addon_description`), with the tagline as the
-  offline answer. Never add per-add-on case
+  exakit-common.ps1), a `marketplace/catalog.json` row whose `github` block
+  names the repository (`python3 tools/addon_github.py` fills its `url`, `name`
+  and `about` from GitHub), and a `setup/help/<id>.json` carrying `role` +
+  `docs`, plus the two CI-guard entries. The add-on's **name, link and
+  description are never typed into this repo** — they are that repository's on
+  GitHub: looked up only while installing and showing updates, cached, and the
+  catalog's copy is the answer whenever a lookup fails. The one exception: an
+  add-on the kit builds itself, with no repository of its own (udf-devkit),
+  whose `github` block names the upstream it is built on — its row's
+  `kit_about` is the one line the kit writes in place of that upstream's
+  About. Never add per-add-on case
   arms to the registry functions — the generic arms handle registered add-ons,
   and `tests/marketplace.sh` fails on hand-wired ones. Never install an
   add-on from the setup scripts; the marketplace and its closing offer are
@@ -43,6 +49,13 @@ Working on the code in this repo:
   `components.skills.version` in versions.json in the same PR: that bump is
   what makes `exakit update` on every installed kit fetch the new set from
   `main` — no kit release is needed for a skills change.
+- **A component already ships a skill?** Use it rather than writing one: add it to
+  `skills/upstream.json` (repository, pinned ref, path; `addon:` when it belongs
+  to an add-on) and run `python3 tools/sync_upstream_skills.py`. The copies are
+  byte for byte plus a provenance line; never edit them by hand —
+  `tests/skills.sh` checks them against `skills/upstream.lock.json` and fails
+  when a pin falls behind the version the kit installs. The kit's own rules
+  for every task live in one master skill, `skills/exakit/SKILL.md`.
 - `setup/lib/ui.sh` and `setup/lib/ui.ps1` are close twins of the shared
   visual layer (banner, palette, status glyphs, spinner, progress, panels):
   when you change a function that exists in both, mirror it in the other,

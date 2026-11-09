@@ -217,6 +217,217 @@ function Test-PersonalTlsAnswers { return $true }
 $hint = Get-PersonalForeignDbHint
 Check "...and names WSL when something does" $true ($hint -like "*inside WSL*")
 
+# ---------------------------------------------------------------------------
+# THE REAL ERROR (Windows incident: a container that never started, its cause
+# unnamed; a never-booted deployment the kit asked the wrong questions of).
+# The kit reads the container's own error and names the cause; it never
+# changes the Podman machine (kit 0.2.4).
+#
+# The modules are dot-sourced AGAIN so every stub above is replaced by the real
+# function, then podman itself is a stub: Get-PersonalPodman answers with a
+# fake executable, and Invoke-ExakitBounded / Invoke-ExakitLogged answer from a
+# small model of the machine (rootful or not, which controllers, whether DNS
+# works) and record every call, so ORDER can be asserted as well as outcome.
+# ---------------------------------------------------------------------------
+. (Join-Path $repo "setup/lib/exakit-common.ps1")
+. (Join-Path $repo "setup/lib/runtime-personal.ps1")
+$script:PersonalDeployDir = Join-Path $work "absent"
+Initialize-ExakitManifest
+$script:PersonalContainerLookEvery = 0
+# Every wait in this section is one probe long: nothing here answers TLS.
+$env:EXAKIT_PERSONAL_READY_TIMEOUT = "1"
+
+$script:calls = New-Object System.Collections.Generic.List[string]
+function Reset-Machine {
+    $script:calls.Clear()
+    $script:m = @{
+        Rootful = $false; PidsRootless = $false; PidsRootful = $true; Dns = $true; DnsAfterTunnel = $true
+        Containers = ""; StateError = ""; Server = "5.8.9"; InstallRc = 0; DeployRc = 0; StartRc = 0
+        InstallSays = @()
+    }
+    $script:PersonalContainerError = ""
+    $script:PersonalLauncherOutput = @()
+    foreach ($v in @("EXAKIT_PODMAN_SELFHEAL", "EXAKIT_REPLACE_DB", "EXAKIT_REUSE_DB")) {
+        Remove-Item "Env:$v" -ErrorAction SilentlyContinue
+    }
+    Set-PersonalFirstBootPending $false
+}
+function Get-PersonalPodman { return [pscustomobject]@{ Source = "podman-stub" } }
+function Get-PersonalCli { return "exasol-stub" }
+function Get-PersonalAutoApproveFlag($Verb) { return "" }
+function Test-ExakitInteractive { return $false }
+function Test-ExakitStdoutIsTerminal { return $false }
+function Get-PersonalWindowsBuild { return 22631 }
+function Test-PersonalTlsAnswers { return $false }
+function Test-ExakitPortInUse { return $false }
+function Get-PersonalLauncherVersion { return "2.3.0" }
+function Set-PersonalManifest { param([string]$Status = "") $script:calls.Add("manifest: $Status") }
+function Invoke-ExakitBounded {
+    param([string]$FilePath, [string[]]$Arguments = @(), [string]$ArgumentString = "", [int]$TimeoutSeconds = 8)
+    $key = $Arguments -join " "
+    $script:calls.Add("bounded: $key")
+    $m = $script:m
+    switch -Wildcard ($key) {
+        "info --format {{.Host.Arch}}" { return "amd64" }
+        "info --format {{.Host.CgroupControllers}}" {
+            $pids = $m.PidsRootless
+            if ($m.Rootful) { $pids = $m.PidsRootful }
+            if ($pids) { return "[cpu io memory pids]" }
+            return "[]"
+        }
+        "machine inspect --format {{.Rootful}}" { if ($m.Rootful) { return "true" }; return "false" }
+        "version --format *" { return "5.8.3|$($m.Server)" }
+        "machine ssh getent hosts *" { if ($m.Dns) { return "1.2.3.4 registry-1.docker.io" }; return $null }
+        "machine ssh true" { return "" }
+        "ps -a --filter name=exasol-db *" { return $m.Containers }
+        "inspect --format {{.State.Error}} *" { return $m.StateError }
+        "machine stop" { return "" }
+    }
+    return $null
+}
+function Invoke-ExakitLogged {
+    param([Parameter(Mandatory)][string]$Cmd, [Parameter(ValueFromRemainingArguments)]$CmdArgs)
+    $line = ("$Cmd " + ($CmdArgs -join " ")).Trim()
+    $script:calls.Add("logged: $line")
+    $m = $script:m
+    switch -Wildcard ($line) {
+        "podman-stub machine set --rootful"       { $m.Rootful = $true; return 0 }
+        "podman-stub machine set --rootful=false" { $m.Rootful = $false; return 0 }
+        "wsl.exe --shutdown"                     { $m.Dns = $m.DnsAfterTunnel; return 0 }
+        "exasol-stub install local*" {
+            if ($script:LogFile) { foreach ($l in $m.InstallSays) { Add-Content -Path $script:LogFile -Value $l } }
+            return $m.InstallRc
+        }
+        "exasol-stub deploy*" { return $m.DeployRc }
+        "exasol-stub start*"  { return $m.StartRc }
+    }
+    return 0
+}
+function Show-Calls { return ($script:calls -join "`n") }
+function Index-Of([string]$Needle) {
+    for ($i = 0; $i -lt $script:calls.Count; $i++) { if ($script:calls[$i] -eq $Needle) { return $i } }
+    return -1
+}
+function Invoke-Captured([scriptblock]$Body) {
+    $script:threw = ""
+    try { return ((& $Body 6>&1 | Out-String)) } catch { $script:threw = "$_"; return "" }
+}
+
+Write-Host "known errors are named with their fix:"
+Check "the pids error" "pids" ((Get-PersonalKnownCause "crun: controller ``pids`` is not available under /sys/fs/cgroup/non-systemd/x/cgroup.controllers: OCI runtime error").Kind)
+Check "the DNS error" "dns" ((Get-PersonalKnownCause "pinging container registry registry-1.docker.io: Get https://registry-1.docker.io/v2/: dial tcp: lookup registry-1.docker.io: Temporary failure in name resolution").Kind)
+Check "...whose fix on 22H2+ is DNS tunneling" $true ((Get-PersonalKnownCause "lookup registry-1.docker.io").Remedy -like "*dnsTunneling=true*")
+function Get-PersonalWindowsBuild { return 19045 }
+Check "...and before 22H2 user-mode networking" $true ((Get-PersonalKnownCause "lookup registry-1.docker.io").Remedy -like "*--user-mode-networking*")
+function Get-PersonalWindowsBuild { return 22631 }
+Check "anything else is not guessed at" $null (Get-PersonalKnownCause "exit status 125")
+
+Write-Host "exakit start checks Podman first:"
+Reset-Machine
+function Test-PersonalLauncherSupports($Token) { return $true }
+$realPodmanRunning = ${function:Test-PersonalPodmanRunning}
+function Test-PersonalPodmanRunning { return $false }
+$out = Invoke-Captured { Start-Personal }
+Check "a Podman that cannot run containers fails the start" $true ($script:threw -like "*podman info*")
+Check "...before the launcher was asked to start" -1 (Index-Of "logged: exasol-stub start")
+Check "...and the machine is never reconfigured" -1 (Index-Of "logged: podman-stub machine set --rootful")
+${function:Test-PersonalPodmanRunning} = $realPodmanRunning
+
+Write-Host "a container that refused to start ends the wait at once, and is the reason:"
+Reset-Machine
+$script:m.PidsRootless = $true
+$script:m.Containers = "exasol-db-abc created"
+$script:m.StateError = "crun: controller ``pids`` is not available under /sys/fs/cgroup/non-systemd/x/cgroup.controllers: OCI runtime error"
+$env:EXAKIT_PERSONAL_READY_TIMEOUT = "40"
+$t0 = [DateTime]::UtcNow
+Set-ExakitFailureReason ""
+$out = Invoke-Captured { Wait-PersonalReadyOrDeploy }
+$spent = ([DateTime]::UtcNow - $t0).TotalSeconds
+Check "the wait ended early" $true ($spent -lt 20)
+Check "...without deploying again into the same error" -1 (Index-Of "logged: exasol-stub deploy")
+Check "...the container's error is the reason" $true ((Get-ExakitFailureReason) -like "*could not start (crun: controller*")
+Check "...and its fix is named" $true ($out -like "*podman machine set --rootful*")
+$script:m.Containers = "exasol-db-abc running"
+Check "a running container is never blamed" "" (Get-PersonalContainerError)
+$env:EXAKIT_PERSONAL_READY_TIMEOUT = "1"
+
+Write-Host "a failed fresh deploy says what went wrong:"
+Reset-Machine
+$script:m.PidsRootless = $true
+$script:m.InstallRc = 1
+$script:m.InstallSays = @("Error: initializing source docker://exasol/nano: pinging container registry registry-1.docker.io: dial tcp: lookup registry-1.docker.io: Temporary failure in name resolution")
+$script:LogFile = Join-Path $work "install.log"
+Set-Content -Path $script:LogFile -Value "2026-10-23 10:00:00 INFO  start"
+$script:PersonalNoDatabase = $false
+$out = Invoke-Captured { Install-PersonalDeployment }
+Check "no database, softly" $true $script:PersonalNoDatabase
+Check "...the launcher's last lines are shown" $true ($out -like "*last lines from the exasol launcher*Temporary failure in name resolution*")
+Check "...the cause is recognised in them" $true ((Get-ExakitFailureReason) -like "*could not deploy the database locally: Podman's machine cannot resolve registry-1.docker.io*")
+Check "...the deployment is recorded as never booted" $true (Test-PersonalFirstBootPending)
+$script:LogFile = $null
+
+Write-Host "a deployment that never booted is offered for replacement, default yes:"
+function Test-PersonalDeploymentExists { return $true }
+function Get-PersonalLauncherState { return "deployment_failed" }
+function Wait-PersonalSlowFirstBoot { return $false }
+# The WSL gate (tests/personal-wsl-gate-ps.ps1 covers it) answers yes here and
+# records that it was asked: a never-booted Podman deployment is checked
+# before its destroy, as a replace is.
+function Test-PersonalWslPodmanNetworkOk { param([string]$Rerun = "", [switch]$Replace, [switch]$Quiet, [switch]$StartMachine) $script:calls.Add("wsl: replace=$Replace"); return $true }
+Reset-Machine
+$script:m.PidsRootless = $true
+$script:m.DeployRc = 1
+Set-PersonalFirstBootPending $true
+$script:PersonalNoDatabase = $false
+$out = Invoke-Captured { Install-PersonalDeployment }
+# Unattended, Confirm-ExakitEnvPrompt takes its default without printing the
+# question, so what is asserted is the branch taken.
+Check "the never-started branch is taken" $true ($out -like "*Removing the deployment that never started*")
+Check "...not the keep-its-data ladder" $false ($out -like "*An Exasol deployment was found, not running*")
+Check "...unattended, the default replaces it" $true ((Index-Of "logged: exasol-stub destroy --remove --auto-approve") -ge 0)
+Check "...after the WSL check, on a Podman deployment" $true ((Index-Of "wsl: replace=True") -lt (Index-Of "logged: exasol-stub destroy --remove --auto-approve"))
+Check "...and deploys a fresh one" $true ((Index-Of "logged: exasol-stub install local") -gt (Index-Of "logged: exasol-stub destroy --remove --auto-approve"))
+Reset-Machine
+$script:m.PidsRootless = $true
+$script:m.DeployRc = 1
+Set-PersonalFirstBootPending $true
+$env:EXAKIT_REPLACE_DB = "0"
+$script:PersonalNoDatabase = $false
+$out = Invoke-Captured { Install-PersonalDeployment }
+Check "EXAKIT_REPLACE_DB=0 declines it" -1 (Index-Of "logged: exasol-stub destroy --remove --auto-approve")
+Check "...softly, with a reason" $true ($script:PersonalNoDatabase -and ((Get-ExakitFailureReason) -like "*never started*declined*"))
+Reset-Machine
+$script:m.PidsRootless = $true
+$script:m.DeployRc = 1
+$script:m.StartRc = 1
+$script:PersonalNoDatabase = $false
+$out = Invoke-Captured { Install-PersonalDeployment }
+Check "a deployment that ever answered keeps the old ladder" $true ($out -like "*An Exasol deployment was found, not running*")
+Check "...whose start is tried" $true ((Index-Of "logged: exasol-stub start") -ge 0)
+Check "...and whose DELETE still defaults to no" -1 (Index-Of "logged: exasol-stub destroy --remove --auto-approve")
+Reset-Machine
+$script:m.PidsRootless = $true
+$script:m.DeployRc = 1
+$script:m.StartRc = 1
+Set-PersonalFirstBootPending $true
+$env:EXAKIT_REUSE_DB = "1"
+$out = Invoke-Captured { Install-PersonalDeployment }
+Check "EXAKIT_REUSE_DB=1 keeps the old ladder even for a never-booted one" $true ($out -like "*An Exasol deployment was found, not running*")
+Check "...and so deletes nothing" -1 (Index-Of "logged: exasol-stub destroy --remove --auto-approve")
+Reset-Machine
+Set-PersonalFirstBootPending $true
+Set-ExakitManifestValue "runtime.status" "x"
+function Set-PersonalManifest { param([string]$Status = "") if ($Status -eq "healthy") { Set-PersonalFirstBootPending $false } }
+Set-PersonalManifest "healthy"
+Check "a healthy record retires the never-booted mark" $false (Test-PersonalFirstBootPending)
+
+Write-Host "repair-runtime consents to the deletion it just asked about:"
+$xk = Get-Content -Raw (Join-Path $repo "setup/exakit.ps1")
+Check "EXAKIT_REPLACE_DB=1 beside EXAKIT_REUSE_DB=0" $true ($xk -match '\$env:EXAKIT_REUSE_DB = "0"[\s\S]{0,800}\$env:EXAKIT_REPLACE_DB = "1"')
+Check "...and --json claims repaired only when the runtime step completed" $true ($xk -match '\$repairCode -eq 0 -and \(Test-ExakitStepDone "runtime"\)')
+Reset-Machine
+Remove-Item Env:EXAKIT_PERSONAL_READY_TIMEOUT -ErrorAction SilentlyContinue
+
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 Write-Host ""
 Write-Host "passed: $($script:PASS), failed: $($script:FAIL)"

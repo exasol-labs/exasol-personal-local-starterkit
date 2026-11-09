@@ -25,6 +25,8 @@ user's request actually needs, not a manual for the whole kit.
 | Skill | Use it when… |
 |---|---|
 | [`local-agent-ready-starter`](local-agent-ready-starter/SKILL.md) | Setting up the kit and running a first trusted, AI-assisted query — install → connect MCP → load data → ask/inspect/run/validate/rerun. |
+| [`exakit`](exakit/SKILL.md) | **The master skill — load it first.** What the kit is and what each piece is for; how to find any command, option, persona, add-on or dataset from the kit's own `--json` answers instead of guessing; and the MANDATORY order of tools: `exakit data-load` before exapump before SQL `IMPORT`, MCP before admin SQL, the kit's persona notebooks (a new one is a copy of the persona's quickstart, in the same folder), dash-server for dashboards. Its rules win over every other skill on this machine. |
+| [`exakit-personas`](exakit-personas/SKILL.md) | Personas: listing what each brings, `persona plan` for what is still pending, `persona add` / `remove`, `EXAKIT_PERSONA` at install (and why your own answer replaces the persona's), and defining a new persona as a file. |
 
 **The fixed components** — always installed
 
@@ -33,7 +35,6 @@ user's request actually needs, not a manual for the whole kit.
 | [`exasol-runtime`](exasol-runtime/SKILL.md) | Starting, stopping or diagnosing the local Exasol Personal deployment; autostart. |
 | [`exasol-exapump`](exasol-exapump/SKILL.md) | Running SQL, opening a SQL shell, bulk-loading CSV/Parquet — and knowing that the `starter-kit` profile is the **admin**, unsandboxed connection. |
 | [`exasol-mcp`](exasol-mcp/SKILL.md) | Connecting AI clients over MCP, diagnosing `mcp-doctor`, repairing config drift, proving the read-only user really is read-only. |
-| [`exasol-pyexasol`](exasol-pyexasol/SKILL.md) | Querying the database from Python — the right interpreter, the TLS setting the self-signed certificate needs, reading credentials safely. |
 | [`exakit-lifecycle`](exakit-lifecycle/SKILL.md) | Operating the kit itself — versions and what changed, updates, logs, the command surface, where the credential files live, and uninstalling with `--dry-run` first. |
 | [`exasol-virtual-schemas`](exasol-virtual-schemas/SKILL.md) | Querying an external source from local Exasol with `exakit connect` / `exakit source` — the rules every connector shares (credentials never as arguments, the `localhost` trap, TLS and a private CA, failure classes, reauth, disconnect vs remove) and the index of the connector skills below. |
 
@@ -70,7 +71,7 @@ no skill here, or a skill misses one of its connector's inputs.
 
 **The marketplace** — opt-in add-ons
 
-`exasol-marketplace` itself installs with the kit; the other five skills below
+`exasol-marketplace` itself installs with the kit; the other seven skills below
 are **installed with their add-on**, not with the kit: each declares
 `addon: <id>` in its frontmatter, and the marketplace places it as part of
 installing that add-on and removes it again when the add-on goes.
@@ -81,10 +82,37 @@ tool that is not on the machine is worse than not shipping the skill at all.
 |---|---|
 | [`exasol-marketplace`](exasol-marketplace/SKILL.md) | Choosing, installing, updating or removing add-ons; explaining why one is not offered at all. |
 | [`dbt-exasol`](dbt-exasol/SKILL.md) | Building SQL models with dbt against the local database; the generated profile, why `~/.dbt` is never touched, and why the command is `dbt-exasol` and not `dbt`. |
+| [`notebook`](notebook/SKILL.md) | Notebooks connected to the local database: `exakit notebook`, the Exasol (Starter Kit) kernel, JupyterLab or Marimo, the `exakit.nb` helpers, the descriptor-driven persona notebooks (quickstarts, explore, train inside the database and log to MLflow, score a model trained anywhere), opt-in Langfuse tracing. |
+| [`udf-devkit`](udf-devkit/SKILL.md) | Python and Rust UDFs on the local database: `exakit udf-setup` (the official container), `udf-use` (a tarball, or the kit's prebuilt one), `rust-udf` (a Rust scoring UDF), `model` (model files in the bucket), `mlflow` (the local MLflow server), `udf-build` from a pinned requirements file, `udf-file` into BucketFS; the restart every container install brings, and the smoke UDF that proves each. |
 | [`dash-server`](dash-server/SKILL.md) | Building live dashboards the agent drives over an MCP control plane while the user opens a browser URL. |
 | [`json-tables`](json-tables/SKILL.md) | Loading JSON into the database (exapump takes CSV and Parquet only); the prebuilt engine that means no Rust toolchain. |
 | [`exasol-scheduler`](exasol-scheduler/SKILL.md) | Scheduling SQL jobs in SCHED.SCHED_TASKS; the scheduler_svc trust boundary, task chains, and why missed runs are never replayed. |
 | [`exasol-vscode`](exasol-vscode/SKILL.md) | SQL editing and schema browsing inside VS Code; why the kit refuses to manage a copy the user installed themselves. |
+
+**From the components' own repositories** — Exasol's skills, used as they are
+
+Where a component ships skills of its own, the kit places those instead of
+writing its own: copied unchanged at the version the kit installs, with one
+line on top saying where they came from and that the `exakit` skill comes first
+on this machine. [`upstream.json`](upstream.json) names each source, its pin,
+and why the other skills in those repositories were not taken;
+`python3 tools/sync_upstream_skills.py` copies them and writes
+[`upstream.lock.json`](upstream.lock.json). Never edit a copy by hand —
+`tests/skills.sh` compares every file with the lock and fails on a pin behind
+the version the kit installs.
+
+| Skill | From | Use it when… |
+|---|---|---|
+| [`exasol-mcp-server`](exasol-mcp-server/SKILL.md) | `exasol/mcp-server` | Using the MCP server's tools: exploring the database, debugging a query, BucketFS. |
+| [`exasol-sql-dialect`](exasol-sql-dialect/SKILL.md) | `exasol/mcp-server` | Writing Exasol SQL that is correct the first time: syntax, types, functions, pitfalls. |
+| [`exasol-system-tables`](exasol-system-tables/SKILL.md) | `exasol/mcp-server` | Reading system and statistics tables (`EXA_ALL_*`, `EXA_DBA_*`, …). |
+| [`exasol-table-design`](exasol-table-design/SKILL.md) | `exasol/mcp-server` | `DISTRIBUTE BY`, `PARTITION BY`, data types, replication — designing tables for speed. |
+| [`exasol-import-export`](exasol-import-export/SKILL.md) | `exasol/mcp-server` | SQL `IMPORT` / `EXPORT` — for data the database reaches itself; local files go through `exakit data-load` first. |
+| [`exasol-udfs`](exasol-udfs/SKILL.md) | `exasol/mcp-server` | Writing `CREATE SCRIPT` UDFs; the containers come from `udf-devkit`. |
+| [`exasol-database`](exasol-database/SKILL.md) | `exasol-labs/exasol-agent-skills` | exapump and Exasol SQL in depth: the statement grammar, reserved words, profiling, analytics. |
+| [`exasol-pyexasol`](exasol-pyexasol/SKILL.md) | `exasol-labs/exasol-agent-skills` | The pyexasol API; this machine's interpreter, TLS setting and credentials are in the `exakit` skill. |
+| [`exasol-bucketfs`](exasol-bucketfs/SKILL.md) | `exasol-labs/exasol-agent-skills` | Files in BucketFS with exapump. |
+| [`exasol-dash`](exasol-dash/SKILL.md) | `exasol-labs/dash-server` | Writing the Dash app for a dashboard on dash-server. Placed with the dash-server add-on. |
 
 The set is versioned as one component (`components.skills` in `versions.json`),
 and it updates like one: when the maintainers change a skill and bump that
@@ -99,7 +127,8 @@ adds one more key, `addon: <add-on id>` — that is the whole wiring, and it is
 what makes the skill travel with its add-on instead of with the kit. The agent always sees the name and
 description, and loads the full body only when it decides the skill is relevant
 (progressive disclosure). The `description`'s **"Triggers —"** list is how the
-agent decides when to fire it — keep it accurate.
+agent decides when to fire it — keep it accurate. A skill copied from a
+component's repository keeps that repository's description as it is.
 
 ## Seeing what you have
 

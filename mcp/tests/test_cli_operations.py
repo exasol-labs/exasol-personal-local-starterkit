@@ -145,6 +145,8 @@ class RuntimeClientOperationCLITests(unittest.TestCase):
             },
             "components": {
                 "mcp_server": {
+                    "backend": "sidecar",
+                    "url": "http://127.0.0.1:4896/mcp",
                     "connection": {
                         "user": "mcp_readonly",
                         "password_file": str(self.mcp_password_file),

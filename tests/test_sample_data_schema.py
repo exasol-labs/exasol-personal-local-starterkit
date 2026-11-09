@@ -235,9 +235,13 @@ class LoadWiringTests(unittest.TestCase):
         # CSV/Parquet file") because exapump.ps1 had no twin of the shell's JSON
         # load path; that routing has landed (a .json pick goes to
         # Import-ExakitLocalJson), and the label was widened with it in
-        # b792369. This assertion is the one that had to move with them.
-        self.assertIn("A local CSV / Parquet / JSON file", bash)
-        self.assertIn("A local CSV / Parquet / JSON file", ps1)
+        # b792369. This assertion is the one that had to move with them; the
+        # one-table data question renamed the row on both sides together.
+        self.assertIn("plain|Upload a file or folder: CSV/Parquet/JSON|", bash)
+        self.assertIn('-Label "Upload a file or folder: CSV/Parquet/JSON"', ps1)
+        # The same table shows an external source, never pickable, on both.
+        self.assertIn("plain|Connect an external source - coming soon|0|disabled|", bash)
+        self.assertIn('-Label "Connect an external source - coming soon"', ps1)
         self.assertIn("Import-ExakitLocalJson -Path $path -Target $target", ps1)
         for text, name in ((bash, "exapump.sh"), (ps1, "exapump.ps1")):
             with self.subTest(menu=name):
@@ -373,6 +377,20 @@ class DatabaseReadinessTests(unittest.TestCase):
         ps1 = EXAPUMP_PS1.read_text(encoding="utf-8")
         self.assertIn("function Test-ExapumpSchemaPresent", ps1)
         self.assertIn("is not present after creation", ps1)
+
+
+class EveryDatasetPassesTheCheckTests(unittest.TestCase):
+    """Every folder under data/datasets passes tools/dataset_check.py's file checks - the rules a contributor runs
+    before adding a dataset (data/README.md): encoding, headers, row widths, keys, reserved words, the
+    verify script, and for a reference dataset its descriptor, manifest, README and examples."""
+
+    def test_every_folder_passes_the_dataset_check(self) -> None:
+        import sys
+        sys.path.insert(0, str(ROOT / "tools"))
+        import dataset_check
+        for folder in sorted(p.parent for p in (ROOT / "data" / "datasets").glob("*/dataset.conf")):
+            with self.subTest(dataset=folder.name):
+                self.assertEqual(dataset_check.check(folder), [], f"python3 tools/dataset_check.py data/datasets/{folder.name}")
 
 
 if __name__ == "__main__":

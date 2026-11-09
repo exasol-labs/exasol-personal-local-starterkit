@@ -13,6 +13,8 @@
 #
 # Options (environment variables, because flags don't travel through a pipe):
 #   EXAKIT_DRY_RUN=1        show the plan and downloaded scripts, install nothing
+#   EXAKIT_DRY_RUN_KEEP=1   with EXAKIT_DRY_RUN, keep the unpacked kit in TMPDIR
+#                           for reading (removed on exit otherwise)
 #   EXAKIT_PREFLIGHT=1      check this machine's requirements, install nothing
 #   EXAKIT_REPO=...         override the source repo (owner/name)
 #   EXAKIT_REF=...          override the git ref to install from
@@ -62,7 +64,54 @@
 
 set -u
 
+# The settings file, ~/.exasol-starter-kit/exakit.env (the kit's setup/exakit.env is its
+# template): read before anything else, so a value kept there answers this install too.
+# A copy of setup/lib/envfile.sh's function - this script runs before the kit is here;
+# tests/env-file.sh keeps the two the same.
+exakit_load_env_file() {
+    _elf_file="${EXAKIT_ENV_FILE:-${EXAKIT_HOME:-$HOME/.exasol-starter-kit}/exakit.env}"
+    EXAKIT_ENV_FILE_REFUSED=""
+    [ -f "$_elf_file" ] && [ -r "$_elf_file" ] || return 0
+    _elf_cr="$(printf '\r')"                       # a file saved on Windows ends its lines in CRLF
+    while IFS= read -r _elf_line || [ -n "$_elf_line" ]; do
+        _elf_line="${_elf_line%"$_elf_cr"}"
+        _elf_line="${_elf_line#"${_elf_line%%[! 	]*}"}"
+        case "$_elf_line" in ''|'#'*) continue ;; esac
+        case "$_elf_line" in 'export '*) _elf_line="${_elf_line#export }" ;; esac
+        case "$_elf_line" in *=*) ;; *) continue ;; esac
+        _elf_name="${_elf_line%%=*}"
+        _elf_name="${_elf_name%"${_elf_name##*[! 	]}"}"
+        _elf_value="${_elf_line#*=}"
+        _elf_value="${_elf_value#"${_elf_value%%[! 	]*}"}"
+        case "$_elf_name" in ''|*[!A-Z0-9_]*) continue ;; esac
+        case "$_elf_name" in EXAKIT_*|EXASOL_TELEMETRY_DISABLE) ;; *) continue ;; esac
+        case "$_elf_name" in
+            EXAKIT_HOME|EXAKIT_ENV_FILE|*PASSWORD*|*API_KEY*|*TOKEN*|*SECRET*)
+                EXAKIT_ENV_FILE_REFUSED="${EXAKIT_ENV_FILE_REFUSED:+$EXAKIT_ENV_FILE_REFUSED }$_elf_name"
+                continue ;;
+        esac
+        case "$_elf_value" in
+            \"*\"*) _elf_value="${_elf_value#\"}"; _elf_value="${_elf_value%%\"*}" ;;
+            \'*\'*) _elf_value="${_elf_value#\'}"; _elf_value="${_elf_value%%\'*}" ;;
+            *)
+                case "$_elf_value" in *' #'*|*'	#'*) _elf_value="${_elf_value%%[ 	]#*}" ;; esac
+                _elf_value="${_elf_value%"${_elf_value##*[! 	]}"}" ;;
+        esac
+        # The name is checked above (A-Z, 0-9, _), so eval only ever sees a plain name;
+        # the value is never in the evaluated text.
+        eval "_elf_set=\${$_elf_name+set}"
+        [ "$_elf_set" = set ] && continue
+        eval "$_elf_name=\$_elf_value; export $_elf_name"
+    done < "$_elf_file"
+    return 0
+}
+
 main() {
+    exakit_load_env_file
+    if [ -n "${EXAKIT_ENV_FILE_REFUSED:-}" ]; then
+        printf '  ! %s ignores %s: a secret, or where the file itself lives, stays in the environment\n' \
+            "${EXAKIT_ENV_FILE:-~/.exasol-starter-kit/exakit.env}" "$EXAKIT_ENV_FILE_REFUSED" >&2
+    fi
     EXAKIT_HOME="${EXAKIT_HOME:-$HOME/.exasol-starter-kit}"
     EXAKIT_REPO="${EXAKIT_REPO:-exasol-labs/exasol-personal-local-starterkit}"
     EXAKIT_REF="${EXAKIT_REF:-main}"
@@ -114,6 +163,49 @@ main() {
             bash "$_ui" __render_install_plan && return 0
         fi
         printf '\n  Exasol Personal Local Starter Kit\n\n'
+    }
+
+    # render_dry_run_plan — what EXAKIT_DRY_RUN=1 promises: the plan, not only
+    # the banner (audit MAC-07). Where it goes, the steps, and every choice the
+    # run would make: the ones you set, the persona's for the rest (asked of the
+    # kit's own persona service when a Python 3 is there), and that anything
+    # still open is asked on a terminal or takes its default without one.
+    render_dry_run_plan() {
+        say "The plan:"
+        printf '    %-14s %s (%s)\n' "Platform" "$platform" "$arch"
+        printf '    %-14s %s\n' "Database" "$target"
+        printf '    %-14s %s\n' "Kit home" "$EXAKIT_HOME"
+        printf '    %-14s %s\n' "Steps" "1 Exasol launcher, 2 the local database, 3 exapump, 4 AI bridge (MCP),"
+        printf '    %-14s %s\n' "" "5 pyexasol, then your persona's data, 6 the exakit command"
+        _plan_answers=""
+        if [ -n "${_personas:-}" ] && command -v python3 >/dev/null 2>&1; then
+            _plan_answers="$(python3 "$kit_dir/setup/lib/persona_service.py" "$kit_dir" answers "$_personas" 2>/dev/null)"
+        fi
+        _plan_shown=0
+        for _plan_var in EXAKIT_DATASETS EXAKIT_LOAD_SAMPLE EXAKIT_MCP_CLIENTS EXAKIT_SKIP_MCP EXAKIT_MARKETPLACE_ADDONS EXAKIT_NOTEBOOK_FRONTENDS; do
+            eval "_plan_val=\${$_plan_var:-}"
+            _plan_from="yours"
+            if [ -z "$_plan_val" ]; then
+                _plan_val="$(printf '%s\n' "$_plan_answers" | sed -n "s/^$_plan_var=//p" | head -1)"
+                _plan_from="the persona's"
+            fi
+            [ -n "$_plan_val" ] || continue
+            case "$_plan_var" in
+                EXAKIT_DATASETS) _plan_label="Sample data" ;;
+                EXAKIT_LOAD_SAMPLE) _plan_label="Sample data"; [ "$_plan_val" = 0 ] && _plan_val="none" ;;
+                EXAKIT_MCP_CLIENTS) _plan_label="AI clients" ;;
+                EXAKIT_SKIP_MCP) _plan_label="AI clients"; [ "$_plan_val" = 1 ] && _plan_val="skipped" ;;
+                EXAKIT_MARKETPLACE_ADDONS) _plan_label="Add-ons" ;;
+                *) _plan_label="Notebook tools" ;;
+            esac
+            printf '    %-14s %s (%s)\n' "$_plan_label" "$_plan_val" "$_plan_from"
+            _plan_shown=1
+        done
+        if [ "$_plan_shown" = 0 ]; then
+            printf '    %-14s %s\n' "Choices" "asked on a terminal; without one, each takes its default"
+        else
+            printf '    %-14s %s\n' "" "anything not listed is asked on a terminal, or takes its default without one"
+        fi
     }
 
     # --- 1. preflight --------------------------------------------------------
@@ -170,14 +262,65 @@ main() {
     esac
 
     # --- 3. fetch the kit ----------------------------------------------------
+    # SCRATCH SPACE GOES WITH THE RUN, however it ends. The dry run's kit copy
+    # and the downloaded archive used to be removed only on the success path
+    # (the archive) or never (the dry-run copy): 435 dry runs left ~135 GB of
+    # exakit-dry-run.* folders in one developer's TMPDIR. The EXIT trap covers
+    # exit 0, fail() and the signals below, which exit through it. It does not
+    # survive the `exec` into the setup script, and needs not: by then the
+    # archive is gone and a real install has no dry-run copy.
+    _dry_dir=""
+    tmp_tar=""
+    _cleanup_scratch() {
+        [ -n "$tmp_tar" ] && rm -f "$tmp_tar"
+        [ -n "$_dry_dir" ] && rm -rf "$_dry_dir"
+        return 0
+    }
+    trap _cleanup_scratch EXIT
+    trap 'exit 129' HUP
+    trap 'exit 130' INT
+    trap 'exit 143' TERM
+
+    # _copy_local_kit <checkout> <dest> — what the checkout would ship, not the
+    # checkout. A plain `cp -R` took everything beside the kit as well: .git,
+    # .claude/worktrees (whole other checkouts), caches and build output - about
+    # 500 MB per run on a working dev machine, for a kit of about 65 MB. In a
+    # git checkout that is the files git tracks plus new ones it does not
+    # ignore (so uncommitted work is still tested); anywhere else, everything
+    # but the usual VCS, editor and cache folders. A pipeline answers with its
+    # last command only, so the result is checked rather than the status.
+    _copy_local_kit() {
+        if command -v git >/dev/null 2>&1 &&
+           git -C "$1" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+            git -c core.quotePath=false -C "$1" ls-files -co --exclude-standard \
+                | while IFS= read -r _f; do
+                    # Agent worktrees stay out even where .gitignore does not name .claude.
+                    case "$_f" in .claude/*) continue ;; esac
+                    [ -e "$1/$_f" ] && printf '%s\n' "$_f"
+                done \
+                | (cd "$1" && tar -cf - -T -) | tar -xf - -C "$2"
+        else
+            (cd "$1" && tar -cf - --exclude .git --exclude .claude --exclude .venv \
+                --exclude node_modules --exclude __pycache__ --exclude .ruff_cache \
+                --exclude .pytest_cache --exclude .mypy_cache --exclude dist --exclude build .) \
+                | tar -xf - -C "$2"
+        fi
+        [ -f "$2/install.sh" ]
+    }
+
     # A DRY RUN WRITES NOTHING UNDER EXAKIT_HOME. It used to unpack into
     # $EXAKIT_HOME/kit, which first empties the copy an installed exakit loads
     # its code from, and then said "nothing was installed". It unpacks into a
     # scratch directory instead, so a dry run over a working install changes
-    # nothing about it.
-    if [ "${EXAKIT_DRY_RUN:-0}" = "1" ]; then
+    # nothing about it - and removes that directory on the way out, unless
+    # EXAKIT_DRY_RUN_KEEP=1 asks to keep it for reading.
+    # A preflight installs nothing either, so it reads the kit from the same
+    # scratch copy: it used to unpack over $EXAKIT_HOME/kit, which an installed
+    # exakit loads all its code from (audit MAC-01).
+    if [ "${EXAKIT_DRY_RUN:-0}" = "1" ] || [ "${EXAKIT_PREFLIGHT:-0}" = "1" ]; then
         kit_dir="$(mktemp -d "${TMPDIR:-/tmp}/exakit-dry-run.XXXXXX")" \
             || fail "Could not create a temporary directory for the dry run. Check that ${TMPDIR:-/tmp} is writable and the disk is not full."
+        _dry_dir="$kit_dir"
     fi
     # The failure text names the OWNERSHIP case explicitly. "Check that it is
     # writable" is not an action, and the documented escape hatch for a
@@ -192,8 +335,8 @@ main() {
         export EXAKIT_KIT_SOURCE
         say "Using local kit checkout: $EXAKIT_LOCAL_KIT"
         find "$kit_dir" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null
-        cp -R "$EXAKIT_LOCAL_KIT"/. "$kit_dir/"
-        rm -rf "$kit_dir/.git"
+        _copy_local_kit "$EXAKIT_LOCAL_KIT" "$kit_dir" \
+            || fail "Could not copy the local kit checkout from $EXAKIT_LOCAL_KIT to $kit_dir. Check that the disk is not full."
     else
         EXAKIT_KIT_SOURCE="$EXAKIT_REPO@$EXAKIT_REF"
         export EXAKIT_KIT_SOURCE
@@ -208,10 +351,13 @@ main() {
         # ${auth_header:+-H "..."} word-splits the header value into separate
         # argv tokens (a real bug), so branch explicitly instead. --max-time
         # caps a stalled transfer so a hung connection can't hang forever.
+        # The header reaches curl on stdin (-K -), never on its command line,
+        # where any user of the machine reads it with ps (audit SEC-05).
         _fetch_kit() {
             if [ -n "${GITHUB_TOKEN:-}" ]; then
+                printf 'header = "Authorization: Bearer %s"\n' "$GITHUB_TOKEN" | \
                 curl -fL --proto '=https' --retry 3 --connect-timeout 15 --max-time 300 -sS \
-                    -H "Authorization: Bearer $GITHUB_TOKEN" -o "$tmp_tar" "$1"
+                    -K - -o "$tmp_tar" "$1"
             else
                 curl -fL --proto '=https' --retry 3 --connect-timeout 15 --max-time 300 -sS \
                     -o "$tmp_tar" "$1"
@@ -226,18 +372,57 @@ main() {
         tar -xzf "$tmp_tar" -C "$kit_dir" --strip-components 1 \
             || fail "Could not extract the kit archive."
         rm -f "$tmp_tar"
+        tmp_tar=""
     fi
 
+    # Not exec'd: exec skips the EXIT trap, and with it a dry run's kit copy.
     if [ "${EXAKIT_PREFLIGHT:-0}" = "1" ]; then
-        exec bash -c ". '$kit_dir/setup/lib/detect.sh'; preflight_report"
+        bash -c ". '$kit_dir/setup/lib/detect.sh'; preflight_report"
+        exit $?
     fi
 
     # --- 4. show the plan ----------------------------------------------------
     render_banner_plan
 
+    # A persona is a file in the kit. An unknown one is refused here, before
+    # anything is installed - and a dry run says so too, since it never reaches
+    # the setup scripts that apply it.
+    # Several personas are joined by commas (general,ml-engineer): each one is
+    # a file, checked the same way. An id is lowercase letters, digits, - and _
+    # (the persona service's rule), so a path, a glob or another case never
+    # reaches a file test that a case-insensitive disk would wave through.
+    if [ -n "${EXAKIT_PERSONA:-}" ]; then
+        _known="$(ls "$kit_dir/personas" 2>/dev/null | sed -n 's/^\([a-z0-9][a-z0-9_-]*\)\.json$/\1/p' | tr '\n' ' ' | sed 's/ $//')"
+        _personas=""
+        _persona_ifs="$IFS"; IFS=','
+        set -f
+        for _persona in $EXAKIT_PERSONA; do
+            _persona="$(printf '%s' "$_persona" | sed 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+            [ -n "$_persona" ] || continue
+            case "$_persona" in
+                [a-z0-9]*) case "$_persona" in *[!a-z0-9_-]*) _persona_ok=0 ;; *) _persona_ok=1 ;; esac ;;
+                *) _persona_ok=0 ;;
+            esac
+            if [ "$_persona_ok" = 0 ] || [ ! -f "$kit_dir/personas/$_persona.json" ]; then
+                set +f; IFS="$_persona_ifs"
+                fail "Unknown persona '$_persona' (available: ${_known:-none}). Nothing was installed."
+            fi
+            _personas="${_personas:+$_personas,}$_persona"
+        done
+        set +f; IFS="$_persona_ifs"
+        [ -n "$_personas" ] || fail "EXAKIT_PERSONA names no persona (available: ${_known:-none}). Nothing was installed."
+        say "Persona: $_personas - it answers every choice you did not set yourself."
+    fi
+
     if [ "${EXAKIT_DRY_RUN:-0}" = "1" ]; then
+        render_dry_run_plan
         say "Dry run requested (EXAKIT_DRY_RUN=1) — nothing was installed, and nothing under $EXAKIT_HOME was changed."
-        say "The kit is unpacked for inspection in a temporary folder: $kit_dir"
+        if [ "${EXAKIT_DRY_RUN_KEEP:-0}" = "1" ]; then
+            _dry_dir=""
+            say "The kit is kept for inspection in a temporary folder (EXAKIT_DRY_RUN_KEEP=1); delete it when done: $kit_dir"
+        else
+            say "The kit was unpacked to a temporary folder for the plan and has been removed. To keep it for reading, set EXAKIT_DRY_RUN_KEEP=1."
+        fi
         say "To install, run the same command again without EXAKIT_DRY_RUN=1."
         exit 0
     fi

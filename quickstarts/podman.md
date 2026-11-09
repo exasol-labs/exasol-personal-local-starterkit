@@ -19,6 +19,7 @@ If `exakit` isn't available yet, start with the Podman commands. `exakit status 
 ## Common installation blockers
 
 - [Windows: rootful machine and unreachable database](#windows-rootful-machine)
+- [Windows: database container stays Created](#windows-database-container-stays-created)
 - [Windows: Podman is installed but cannot connect](#windows-connection-failures)
 - [WSL2 and virtualization errors](#wsl2-and-virtualization)
 - [Linux/WSL: missing rootless ID ranges or helpers](#linux-and-wsl-rootless-permissions)
@@ -44,6 +45,17 @@ podman info
 The inspection should now return `false`, and you can re-run the starter-kit install. Containers, images and volumes created in rootful mode are no longer visible through the rootless connection. They haven't been deleted or migrated. See [Podman's rootful/rootless setting](https://docs.podman.io/en/latest/markdown/podman-machine-set.1.html#rootful).
 
 `EXAKIT_PODMAN_SELFHEAL=1` has no effect here: the kit never switches the Windows machine for you.
+
+### Windows: database container stays Created
+
+When a deploy or start fails, the kit reads the container's own error and shows it, along with the launcher's last lines. You can check it yourself:
+
+```powershell
+podman ps -a --filter name=exasol-db
+podman inspect --format "{{.State.Error}}" <container-name>
+```
+
+A deployment that never started holds no data, so the installer offers to remove it and deploy a fresh one. That question defaults to yes. Set `EXAKIT_REPLACE_DB=0` to keep it.
 
 ### Windows connection failures
 
@@ -158,7 +170,9 @@ Once Podman works, re-run the starter-kit install command. It skips completed st
 
 The kit's rootless deployment needs cgroups v2. When the installer finds it off, it names the steps that apply to your platform and carries on; the launcher says if it matters. On Linux, you may need to change the boot configuration and reboot. On WSL, edit `%USERPROFILE%\.wslconfig` on Windows as instructed, then restart WSL. Keep the file's existing settings and save your work before running `wsl --shutdown`, which stops all distributions.
 
-`EXAKIT_PODMAN_SELFHEAL=1` doesn't change kernel boot settings, and `EXAKIT_FORCE=1` can't provide missing kernel capabilities. Ask your system administrator if you can't change them yourself.
+On Linux and inside WSL, `exakit preflight` also checks that rootless Podman gets a `pids` cgroup controller. On Linux, delegate it to your user: create `/etc/systemd/system/user@.service.d/delegate.conf` containing `[Service]` and `Delegate=cpu cpuset io memory pids`, run `sudo systemctl daemon-reload`, then log in again. Inside WSL 2.9 and later, this is the known issue [podman-container-tools/podman#29909](https://github.com/podman-container-tools/podman/issues/29909).
+
+`EXAKIT_PODMAN_SELFHEAL=1` doesn't change kernel boot settings or cgroup delegation, and `EXAKIT_FORCE=1` can't provide missing kernel capabilities. Ask your system administrator if you can't change them yourself.
 
 ### Proxy, VPN and certificate errors
 

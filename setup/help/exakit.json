@@ -37,6 +37,27 @@
       ]
     },
     {
+      "title": "Personas and notebooks",
+      "commands": [
+        "persona",
+        "notebook",
+        "describe",
+        "workflow"
+      ]
+    },
+    {
+      "title": "Models and UDFs (udf-devkit)",
+      "commands": [
+        "mlflow",
+        "udf-setup",
+        "udf-use",
+        "udf-build",
+        "udf-file",
+        "rust-udf",
+        "model"
+      ]
+    },
+    {
       "title": "Add-ons",
       "commands": [
         "marketplace"
@@ -54,6 +75,7 @@
       "commands": [
         "preflight",
         "repair-runtime",
+        "tls-pin",
         "migrate",
         "uninstall"
       ]
@@ -82,7 +104,7 @@
     },
     {
       "command": "status",
-      "options": "[--json | -j]",
+      "options": "[--json]",
       "summary": "Is the database up and healthy?",
       "description": "Shows what is installed, whether each component is healthy, which datasets are loaded, and whether add-on services are running. While the installer is still running the status is `installing` with the current step, exit 3, so a poll started in another shell can follow the install from its first seconds.",
       "exit_codes": {
@@ -93,6 +115,20 @@
       "examples": [
         "exakit status",
         "exakit status --json"
+      ],
+      "parameters": [
+        {
+          "name": "--json, -j",
+          "description": "Print machine-readable output rather than decorated text.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything.",
+          "default": "off",
+          "required": false
+        }
       ]
     },
     {
@@ -107,7 +143,7 @@
     },
     {
       "command": "info",
-      "options": "[--json | -j]",
+      "options": "[--json]",
       "summary": "Your connection details.",
       "description": "The connection panel: DSN, admin and MCP users, where each password file lives, TLS mode and paths. --json prints the install record (manifest.json) plus the state keys installed / status / remedy / skills on stdout, with nothing else on it.",
       "exit_codes": {
@@ -118,13 +154,27 @@
       "examples": [
         "exakit info",
         "exakit info --json"
+      ],
+      "parameters": [
+        {
+          "name": "--json, -j",
+          "description": "Print machine-readable output rather than decorated text.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything.",
+          "default": "off",
+          "required": false
+        }
       ]
     },
     {
       "command": "guide",
       "options": "",
       "summary": "Friendly walkthrough of every way to connect.",
-      "description": "How to connect AI clients over MCP, SQL clients (DBeaver or DbVisualizer), and Python via pyexasol.",
+      "description": "How to connect AI clients over MCP, SQL clients (DBeaver or DbVisualizer), the terminal and Python via pyexasol, then where your notebooks, dashboards and models are: the schemas actually loaded, the persona the kit is set up as and the add-ons it has.",
       "examples": [
         "exakit guide"
       ]
@@ -137,6 +187,26 @@
       "examples": [
         "exakit start",
         "exakit start exasol-scheduler"
+      ],
+      "parameters": [
+        {
+          "name": "<service>",
+          "description": "Start only this service. Omit it to start the database and enabled add-on services.",
+          "default": "all",
+          "required": false,
+          "choices": [
+            "database",
+            "dash-server",
+            "exasol-scheduler",
+            "udf-devkit"
+          ]
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything.",
+          "default": "off",
+          "required": false
+        }
       ]
     },
     {
@@ -148,6 +218,26 @@
         "exakit stop",
         "exakit stop exasol-scheduler",
         "exakit stop database"
+      ],
+      "parameters": [
+        {
+          "name": "<service>",
+          "description": "Stop only this service. Omit it to stop add-on services and the database.",
+          "default": "all",
+          "required": false,
+          "choices": [
+            "database",
+            "dash-server",
+            "exasol-scheduler",
+            "udf-devkit"
+          ]
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything.",
+          "default": "off",
+          "required": false
+        }
       ]
     },
     {
@@ -163,7 +253,7 @@
       "command": "sql",
       "options": "'<statement>' | --file <path> | (stdin) [--json] [--write] [--help]",
       "summary": "Run one SQL statement, with the error translated.",
-      "description": "Runs a single statement and turns the three faults everyone hits first into their remedy (connection refused -> exakit start; FETCH FIRST/TOP -> LIMIT; object not found -> describe it). Reads only unless --write. A saved statement runs with --file <path> or on stdin; comment lines (--) and a trailing ; are dropped first. The remedy is printed FIRST, on stdout with the error. --json returns one object instead: {\"ok\": true, \"rows\": [...], \"row_count\": n} or {\"ok\": false, \"error\": ..., \"remedy\": <a command to run as written, or null>, \"remedy_hint\": <the explanation, or null>}, nothing else on stdout. remedy is only ever a runnable command (exakit start for connection refused, exakit status for a TLS fault); a fault with no command to run (object not found, FETCH FIRST/TOP) has remedy null and its advice in remedy_hint - read it, do not execute it; a refusal (typo, write without --write, two statements) is {\"ok\": false, \"error\": ..., \"rejected\": true} with exit 2. A first word that is neither a read nor a known write is reported as unrecognised (a typo), not as a write.",
+      "description": "Runs a single statement and turns the three faults everyone hits first into their remedy (connection refused -> exakit start; FETCH FIRST/TOP -> LIMIT; object not found -> describe it). Reads only unless --write. A saved statement runs with --file <path> or on stdin; comment lines (--) and a trailing ; are dropped first. The remedy is printed FIRST, on stdout with the error. --json returns one object instead: {\"ok\": true, \"rows\": [...], \"row_count\": n} or {\"ok\": false, \"error\": ..., \"remedy\": <a command to run as written, or null>, \"remedy_hint\": <the explanation, or null>}, nothing else on stdout. remedy is only ever a runnable command (exakit start for connection refused, exakit status for a TLS fault); a fault with no command to run (object not found, FETCH FIRST/TOP) has remedy null and its advice in remedy_hint - read it, do not execute it; a refusal (typo, write without --write, two statements) is {\"ok\": false, \"error\": ..., \"rejected\": true} with exit 2. A first word that is neither a read nor a known write is reported as unrecognised (a typo), not as a write.\n\nFrom Windows PowerShell 5.1, a double quote inside an argument is dropped by PowerShell itself before exakit runs, so a quoted identifier would reach the database unquoted: pass such a statement with --file <path> or pipe it in: 'SELECT \"Name\" FROM t' | exakit sql. PowerShell 7 keeps the quotes.",
       "warning": "This connects with the starter-kit profile, which is the ADMIN user and is NOT sandboxed. The read-only boundary is the MCP user, not this command.",
       "examples": [
         "exakit sql 'SELECT CURRENT_TIMESTAMP'",
@@ -174,36 +264,102 @@
     },
     {
       "command": "data-load",
-      "options": "[--force | -Force] [<file-or-folder>]",
-      "summary": "Load sample data, one file, or a whole folder.",
-      "description": "Opens the data-loading menu: bundled datasets (tpch, energy, weather) or your own data. Name a path to skip the menu. A FILE asks the same two things whatever its kind - the file, then SCHEMA.TABLE - and JSON is shredded into tables by an engine the kit installs for you. A FOLDER is a bulk load: every CSV / Parquet / JSON (.json, .geojson) file at its top level, one table each named after the file, asking for the schema once. Files go to the loader as they are - a ';'-separated CSV with its delimiter, a header with no rows skipped by name, a tabular .txt or .tsv listed with the rename to .csv that exapump needs. Subfolders are not scanned, files of other kinds are ignored, and duplicates - byte-identical files, or two names that resolve to the same table - are skipped with the reason. RUNNING A FOLDER AGAIN IS SAFE: a file already loaded from that folder is skipped rather than loaded on top of itself, a file a stopped run left half-written is reloaded from scratch, and a target table holding rows this kit did not load is left alone unless you say otherwise (EXAKIT_ON_EXISTING). A SINGLE FILE is held to the same rule: a target already holding rows this kit did not load is not loaded unless EXAKIT_ON_EXISTING says replace (drop and rebuild it) or append (load on top) - on a terminal you are asked, and a declined load exits 5 with nothing changed - and the same file loaded twice is recognised and left as it is. When the load finishes, every file is listed with the table it went into, the rows it landed, and - for one that did not load - the reason against it; a file the engine refuses leaves no empty table behind. --force REPLACES bundled datasets instead of skipping what is already there: their tables are dropped and rebuilt, so anything you changed in those schemas is lost. JSON is macOS, Linux and WSL only; on Windows a folder's JSON files are listed as skipped. Unattended, EXAKIT_DATASETS=tpch,energy,weather loads only what is not loaded yet and exits 0 when everything named is already there.",
+      "options": "[<file-or-folder-or-dataset>] [--force]",
+      "summary": "Load a dataset (downloaded only when you pick it), one file, or a whole folder.",
+      "description": "Opens the data-loading menu: the bundled datasets (one per folder in data/datasets) or your own data. Name a path to skip the menu, or a bundled dataset by id (exakit data-load amazon_sales) to load just that one.\n\nA FILE asks the same two things whatever its kind - the file, then SCHEMA.TABLE - and JSON is shredded into tables by an engine the kit installs for you (macOS, Linux and WSL; on Windows a folder's JSON files are listed as skipped). Files go to the loader as they are: a ';'-separated CSV with its delimiter, a header with no rows skipped by name, a tabular .txt or .tsv listed with the rename to .csv that exapump needs.\n\nA FOLDER is a bulk load: every CSV / Parquet / JSON (.json, .geojson) file at its top level, one table each named after the file, asking for the schema once. Subfolders are not scanned, files of other kinds are ignored, and duplicates - byte-identical files, or two names that resolve to the same table - are skipped with the reason.\n\nRUNNING AGAIN IS SAFE: a file already loaded is skipped rather than loaded on top of itself, a file a stopped run left half-written is reloaded from scratch, and a target table holding rows this kit did not load is left alone unless EXAKIT_ON_EXISTING says replace or append (on a terminal you are asked). A SINGLE FILE is held to the same rule: declined, it exits 5 with nothing changed, and the same file loaded twice is recognised and left as it is. When the load finishes, every file is listed with its table and the rows it landed, or the reason it did not load; a file the engine refuses leaves no empty table behind.\n\n--force REPLACES bundled datasets instead of skipping what is already there: their tables are dropped and rebuilt, so anything you changed in those schemas is lost; with a dataset id it drops and rebuilds just that one, in either order.\n\ntpch, energy and weather are bundled with the kit and load offline. Every dataset beyond them (amazon_sales, fraud_transactions) is a checksummed archive in the kit's datasets release, downloaded only when it is loaded (GITHUB_TOKEN for a private repository): the kit verifies its SHA-256 and every file's digest, and refuses a mismatch. Unattended, EXAKIT_DATASETS=tpch,energy,weather loads only what is not loaded yet.",
       "environment": [
         "EXAKIT_DATASETS=tpch,energy,weather names exactly which bundled datasets to load",
         "EXAKIT_DATA_FILE=/path/file.json or /path/folder answers the local-data question, so a run without a terminal loads that file or folder",
         "EXAKIT_DATA_TABLE=SCHEMA.TABLE answers the target-table question for a single EXAKIT_DATA_FILE (default: STARTER_KIT.<filename>)",
         "EXAKIT_SCHEMA sets the default target schema",
-        "EXAKIT_ON_EXISTING=skip|replace|append decides what happens to a target table that already holds rows this kit did not load, for a single file and for every file in a folder alike (default: skip, which is also the answer without a terminal; a declined single-file load exits 5 with nothing changed)"
+        "EXAKIT_ON_EXISTING=skip|replace|append decides what happens to a target table that already holds rows this kit did not load, for a single file and for every file in a folder alike (default: skip, which is also the answer without a terminal; a declined single-file load exits 5 with nothing changed)",
+        "EXAKIT_DATASETS_MIRROR=<folder or https base URL> takes the reference dataset archives from there instead of the GitHub release (digests still checked)",
+        "EXAKIT_DATASETS_REPO=owner/name is the repository whose releases hold them"
       ],
       "examples": [
         "exakit data-load",
         "exakit data-load ~/exports",
         "exakit data-load ./sales.csv",
-        "exakit data-load --force",
         "EXAKIT_DATASETS=tpch exakit data-load",
         "EXAKIT_DATA_FILE=./sales.json EXAKIT_DATA_TABLE=STARTER_KIT.SALES exakit data-load",
         "EXAKIT_DATA_FILE=~/exports EXAKIT_SCHEMA=SALES exakit data-load",
-        "EXAKIT_ON_EXISTING=replace exakit data-load ~/exports"
-      ]
+        "EXAKIT_ON_EXISTING=replace exakit data-load ~/exports",
+        "exakit data-load amazon_sales",
+        "exakit data-load --force amazon_sales",
+        "EXAKIT_DATASETS_MIRROR=~/dataset-archives exakit data-load amazon_sales"
+      ],
+      "parameters": [
+        {
+          "name": "<file-or-folder-or-dataset>",
+          "description": "Load a CSV, Parquet, JSON/NDJSON file, a folder, or a bundled dataset ID. JSON Tables is selected automatically for JSON.",
+          "default": "interactive choice or EXAKIT_DATA_FILE / EXAKIT_DATASETS",
+          "required": false
+        },
+        {
+          "name": "--force",
+          "description": "Reload bundled datasets even if their load receipt already exists; inspect replacement behavior before using it.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything.",
+          "default": "off",
+          "required": false
+        }
+      ],
+      "exit_codes": {
+        "0": "loaded, or everything named was already there",
+        "5": "a single-file load was declined: the target holds rows this kit did not load"
+      }
     },
     {
       "command": "logs",
-      "options": "[target | --json] [-f] [--lines N] [--path]",
+      "options": "[<target>] [-f] [--lines N] [--path] [--json]",
       "summary": "Every log the kit can show.",
       "description": "The installer run, the database container, each add-on service, what the boot entries wrote at login, and the virtual-schemas day log (every SQL statement exakit connect and exakit source sent, secrets redacted; kept 14 days). No target lists them all with size and last-updated; -f follows one live; --path prints just the path for piping.",
       "examples": [
         "exakit logs",
         "exakit logs setup -f",
         "exakit logs dash-server --path"
+      ],
+      "parameters": [
+        {
+          "name": "<target>",
+          "description": "A log ID, for example setup, notebook, notebook-marimo, dash-server, json-tables or udf-devkit-mlflow. UDF container operations are in setup.",
+          "default": "list available log targets",
+          "required": false
+        },
+        {
+          "name": "-f, --follow",
+          "description": "Continue showing new lines until Ctrl+C.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--lines N, -n N",
+          "description": "Number of existing lines shown before following or returning.",
+          "default": "200",
+          "required": false
+        },
+        {
+          "name": "--path",
+          "description": "Print the selected log filename without its contents.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--json, -j",
+          "description": "List available log targets as JSON. Cannot be combined with a target.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything.",
+          "default": "off",
+          "required": false
+        }
       ]
     },
     {
@@ -276,10 +432,30 @@
       "hidden": true
     },
     {
+      "command": "persona",
+      "options": "list | show <id> | plan [<id>] [--json] | add [<id>[,<id>]] | remove <id>",
+      "summary": "Who the kit is set up for - Data Scientist, ML Engineer, General: list, show, plan, add or remove one.",
+      "description": "A persona is a named set of the answers the installer already takes: which datasets to load, which AI clients to connect, which marketplace add-ons to install. The kit ships three, and they combine with a comma (all three load everything).\n\ndata-scientist: the Amazon sales and fraud transactions reference datasets (downloaded from the kit's datasets release), every AI client, the dash-server and notebook add-ons. ml-engineer: the same datasets, the notebook and udf-devkit add-ons and a local MLflow. general: the kit's own TPC-H, energy and weather samples (bundled, loaded offline), every AI client.\n\nexakit persona add <id> (apply is its old name) joins the personas named to the ones this kit was set up as and brings in what is not here yet - the sample data, the AI clients, the add-ons - with no question, each step showing the installer's own table (plain lines without a terminal). What is already here is named once and not redone; a part that fails does not stop the others, and the closing line names the command that retries it. With no id, on a terminal, it asks the install's persona question with this kit's personas ticked; without a terminal it names the command instead. --yes is accepted and changes nothing.\n\nexakit persona plan [<id>] shows what the personas bring and what of it is still pending here - with no id, the ones recorded (--json for a script). exakit persona list and show <id> take --json too. exakit persona remove <id> takes a persona off the record and keeps everything it brought.\n\nAt install time: EXAKIT_PERSONA=<id>. An answer you give yourself replaces the persona's for that one variable: EXAKIT_PERSONA=data-scientist EXAKIT_DATASETS=amazon_sales loads only that dataset. Personas are files in personas/ (personas/README.md); adding one needs no installer code.",
+      "examples": [
+        "exakit persona list",
+        "exakit persona show ml-engineer",
+        "exakit persona plan",
+        "exakit persona plan data-scientist --json",
+        "exakit persona add ml-engineer",
+        "exakit persona remove data-scientist"
+      ],
+      "exit_codes": {
+        "0": "done, or nothing pending",
+        "1": "a part of persona add did not finish; the closing line names its retry",
+        "2": "an unknown persona or option, or persona add with no id and no terminal",
+        "4": "persona add with no kit installed"
+      }
+    },
+    {
       "command": "marketplace",
-      "options": "[--list [--json]] [<addon-id>...]",
-      "summary": "Optional add-ons (dashboards and more).",
-      "description": "Browse and install optional tools: Space selects, Enter installs. Bare and without a terminal it installs NOTHING - installing non-interactively takes an explicit answer. --list shows every add-on and its state without installing anything (--json for scripts: one object whose addons array carries id, status, installed, version, repo and docs - the repository as owner/name and the documentation URL; version, repo and docs are null when unknown). The full reference for any add-on is on this machine: exakit help <id>. Naming ids installs exactly those: exakit marketplace dash-server. Installed add-ons then update through exakit update, and one can be removed with exakit uninstall <id>. A tool you installed yourself is recognised and never re-offered.",
+      "options": "[<addon-id>...] | --list [--json]",
+      "summary": "Optional add-ons: dashboards, notebooks, UDFs, dbt, scheduling and more.",
+      "description": "Browse and install optional tools: Space selects, Enter installs. Bare and without a terminal it installs NOTHING - installing non-interactively takes an explicit answer. --list shows every add-on and its state without installing anything (--json for scripts: one object whose addons array carries id, status, installed, version, repo and docs - the repository as owner/name and the documentation URL - and name, url and about - the add-on repository's name, link and About on GitHub, as last looked up; version, repo, docs, url and about are null when unknown). The full reference for any add-on is on this machine: exakit help <id>. Naming ids installs exactly those: exakit marketplace dash-server. Installed add-ons then update through exakit update, and one can be removed with exakit uninstall <id>. A tool you installed yourself is recognised and never re-offered.",
       "environment": [
         "EXAKIT_MARKETPLACE_ADDONS=dash-server answers the menu non-interactively (ids csv, all, or none)"
       ],
@@ -289,11 +465,499 @@
         "exakit marketplace --json",
         "exakit marketplace dash-server",
         "EXAKIT_MARKETPLACE_ADDONS=dash-server exakit marketplace"
+      ],
+      "parameters": [
+        {
+          "name": "<addon-id>...",
+          "description": "Install only these registered add-ons. Without IDs, open the chooser on a terminal; install nothing without a terminal.",
+          "default": "interactive chooser",
+          "required": false
+        },
+        {
+          "name": "--list",
+          "description": "List add-ons and ownership without installing. Cannot be combined with install IDs.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--json",
+          "description": "List add-ons as JSON; read-only and cannot be combined with install IDs.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything. Combine with --json for structured help.",
+          "default": "off",
+          "required": false
+        }
+      ]
+    },
+    {
+      "command": "notebook",
+      "options": "[jupyterlab | marimo] [check] [setup] [stop] [--no-browser] [--port <number>]",
+      "summary": "Open JupyterLab or Marimo, connected to the local database (the notebook add-on).",
+      "description": "Starts JupyterLab in the background on 127.0.0.1 (port 8888 unless you name one) with the kit's notebooks and the kernel 'Exasol (Starter Kit)', and opens it in your browser, logged in; the login token is a kit credential and is never printed. Every run first writes the kit's current database connection into the notebook connector's encrypted store, so a restart or a port change needs no edit, and copies any kit notebook you do not have yet (yours are never overwritten). check proves the connection and says whether JupyterLab runs, starting nothing; setup settles JupyterLab (yours, or the kit's after a yes) and starts nothing; stop stops the JupyterLab the kit started. JupyterLab is never installed unasked (EXAKIT_NOTEBOOK_JUPYTER=install|skip answers for a script) and never starts with the database or at login. Needs the add-on: exakit marketplace notebook.",
+      "examples": [
+        "exakit notebook",
+        "exakit notebook marimo --no-browser --port 2720",
+        "exakit notebook check",
+        "exakit notebook setup",
+        "exakit notebook stop marimo"
+      ],
+      "parameters": [
+        {
+          "name": "<tool>",
+          "description": "Open one tool; use at most one. With no tool, show the chooser on a terminal and use JupyterLab without a terminal.",
+          "default": "chooser or jupyterlab",
+          "required": false,
+          "choices": [
+            "jupyterlab",
+            "marimo"
+          ]
+        },
+        {
+          "name": "check, --check",
+          "description": "Check the environment and database connection without opening a tool.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "setup, --setup",
+          "description": "Prepare or repair the notebook environment and connection.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "stop, --stop",
+          "description": "Stop the selected tool, or both notebook servers when no tool is named.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--marimo",
+          "description": "A compatibility alias for the tool word. Prefer marimo.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--no-browser",
+          "description": "Start the server without opening a browser window.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--port N",
+          "description": "JupyterLab/Marimo loopback port, 1024..65535. A running server keeps its current port; stop it first to move it.",
+          "default": "EXAKIT_NOTEBOOK_PORT (8888) or EXAKIT_MARIMO_PORT (2718)",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ]
+    },
+    {
+      "command": "workflow",
+      "options": "list | show <id> [--json | -j]",
+      "summary": "The workflow logs the notebook helpers write: list them, show one.",
+      "description": "A notebook starts a workflow with nb.workflow('name') and gets an id, wf-YYYYMMDD-xxxxxx, that it prints with the log's path; nb.workflow(resume='wf-...') continues one from another kernel. While a workflow is active every step the helpers run - a statement (its session and statement ids, its SHA-256 and text), a Langfuse trace, an MLflow run, a descriptor draft or approval, a handoff, a dashboard revision, a model put - appends one JSON line carrying the id to ~/.exasol-starter-kit/workflows/<id>.jsonl, so a result can be traced back through every step that made it. Without a workflow nothing is written. The log never holds a credential: the helpers refuse a password, token, secret or api_key field and a DSN with a password in it. list shows one row per workflow (id, first and last timestamp, line count, name); show <id> prints its lines in order; --json gives the same as JSON. Exit 0; 1 when the add-on is not installed or there is no such workflow; 2 on bad arguments. Needs the notebook add-on, whose helpers write the log: exakit marketplace notebook.",
+      "examples": [
+        "exakit workflow list",
+        "exakit workflow list --json",
+        "exakit workflow show wf-20261027-3f9a1c",
+        "exakit workflow show wf-20261027-3f9a1c --json"
+      ]
+    },
+    {
+      "command": "mlflow",
+      "options": "start|stop|disable|status|url|replay [action options]",
+      "summary": "Start or stop the local MLflow server, show its address, or replay pending runs.",
+      "description": "The server listens on 127.0.0.1, starting at port 5000. Its SQLite store, artifacts, log and pending run spool live under ~/.exasol-starter-kit/mlflow. The notebook add-on supplies the client and the UDF dev kit enables the service. Starting installs the full MLflow server package into the notebook environment if needed. Starting it records that you want it: exakit start brings it back after that, and never starts it for a udf-devkit user who has not asked for it. A plain stop is for the session; exakit mlflow disable (or stop --disable) stops it and keeps it off until the next exakit mlflow start. exakit stop stops the server; exakit logs mlflow shows its log. Replay sends spooled runs to MLFLOW_TRACKING_URI, the kit server, or the local store, and removes only records logged successfully.",
+      "examples": [
+        "exakit mlflow start --port 5000 --json",
+        "exakit mlflow status --json",
+        "exakit mlflow stop --disable",
+        "exakit mlflow replay --timeout 5 --json"
+      ],
+      "parameters": [
+        {
+          "name": "<action>",
+          "description": "Choose the server operation, or replay pending MLflow run records.",
+          "default": null,
+          "required": true,
+          "choices": [
+            "start",
+            "stop",
+            "disable",
+            "status",
+            "url",
+            "replay"
+          ]
+        },
+        {
+          "name": "--port N",
+          "description": "start only: loopback port for a new MLflow server. An already-running server keeps its current port.",
+          "default": "EXAKIT_MLFLOW_PORT, otherwise 5000",
+          "required": false
+        },
+        {
+          "name": "--disable",
+          "description": "stop only: also prevent automatic restart with exakit start. The disable action has the same effect.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--json, -j",
+          "description": "Print the action result as JSON.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--tracking-uri URI",
+          "description": "replay only: send pending records to this MLflow server.",
+          "default": "MLFLOW_TRACKING_URI or the kit server",
+          "required": false
+        },
+        {
+          "name": "--tracking-dir PATH",
+          "description": "replay only: log to a local MLflow store in this folder.",
+          "default": "not set",
+          "required": false
+        },
+        {
+          "name": "--timeout SECONDS",
+          "description": "replay only: server health-check timeout.",
+          "default": "3",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ]
+    },
+    {
+      "command": "describe",
+      "options": "<SCHEMA.TABLE> [--sample <rows>] [--id <slug>] [--json] [--write <path>] | <id|SCHEMA.TABLE|draft.yaml> --approve [--role <slot>=<COLUMN>]... [--owner <who>] [--no-comments] [--json] | <id> --show [--version <n>] [--json] | <id> --versions [--json] | <id> --comments [--json] | --schema <SCHEMA> [--approve [--link <TABLE.COLUMN>=<TABLE.KEY>]... [--unlink <TABLE.COLUMN>]... [--owner <who>] [--no-comments]] [--json]",
+      "summary": "Draft each column's role in a table (key, time, measure, category, flag, text, identifier, other), then approve it for the notebooks and AI clients.",
+      "description": "Profiles SCHEMA.TABLE in one pass of SELECTs (the column list, one aggregate statement per 40 columns, then the values of the low-cardinality columns, an exact distinct count of the near-unique ones and the range of date strings; nothing is written to the database) and prints its descriptor. A table whose approved descriptor still matches it (the schema digest of its column names and types) gets that one back - for a dataset the kit ships, the shipped approved descriptor until you approve your own; otherwise a draft: every column gets one of eight roles - key, time, measure, category, flag, text, identifier, other - with its confidence (high, or low when the deciding number was within 10% of its threshold) and the evidence that chose it, and a column whose values look like e-mail addresses, phone numbers, IBANs or postcodes is marked sensitive and is never charted, grouped or sent to a model. The slots name the columns the notebooks use: key, time, text, target - never drafted, only ever set by a person - category and entity; an empty slot says why. The draft is deterministic: the same table gives the same bytes. A virtual table is read as its first 10,000 rows (--sample is accepted and ignored). When EXAKIT_MODEL_ID and EXAKIT_PROVIDER_BASE_URL are set, one call with each column's name, type, role, evidence and top values (never a row, never a sensitive column) adds a one-line note per column; a note never decides a role. The draft is kept in ~/.exasol-starter-kit/descriptors/<SCHEMA>.<TABLE>/draft.yaml with its profile; --json prints it as one object, --write saves the YAML too. When the table changed since its approval, the columns whose name and type did not change keep their approved roles and the rest are flagged. --approve takes a dataset id, SCHEMA.TABLE or a draft file, applies the corrections given as --role <slot>=<COLUMN> (key, time, text, target, category, entity; date and label still name time and target; <slot>=- leaves it empty), checks that every column has a role and none sits in two slots and that the table has not changed since it was profiled, writes v<n+1>.yaml (a version is never rewritten) and current.yaml, status approved, owner --owner (else EXAKIT_DESCRIPTOR_OWNER or the OS user) and approved_at, then publishes the roles: a view EXAKIT_SEMANTIC.<SCHEMA>__<TABLE> naming every column with its role in the column comment (the user's own table is never commented), granted to the read-only MCP user, read back after. A publish that fails leaves the approval standing and says why; --comments publishes again later, --no-comments skips it. Approving what the current version already says writes nothing. --show prints one version (--version n; the current one by default), --versions lists them. --schema <SCHEMA> describes the whole schema at once: every table with its rows and key (a declared primary key, else the first column named like a key that is unique and never empty) and every many-to-one link between them - a foreign key the database declares, or a column that names another table's key (O_CUSTKEY and C_CUSTKEY, CUSTOMER_ID and CUSTOMERS.ID) whose every value is in that key (at most 0.1% missing, checked with one LEFT JOIN; a name alone never makes a link), each with its evidence. The draft is kept in ~/.exasol-starter-kit/descriptors/<SCHEMA>/draft.json; --approve applies --link TABLE.COLUMN=TABLE.KEY and --unlink TABLE.COLUMN, writes v<n>.json and current.json and publishes the links as the view EXAKIT_SEMANTIC.<SCHEMA>__RELATIONS (FROM_TABLE, FROM_COLUMN, TO_TABLE, TO_COLUMN, KIND, EVIDENCE) for agents; the schema's own tables are never altered. The Explore notebook turns an approved map into one joined view (EXAKIT_PREPARED.\"<SCHEMA>__<TABLE>__JOINED\") with its own approved column map. Exit 0; 1 when the notebook add-on is not installed; 2 on bad arguments or roles (the message names the role and the reason); 3 when the table or the id is not there; 4 when the database is not reachable; 5 when another approve took the next version number twice. Needs the notebook add-on, whose Python runs the service: exakit marketplace notebook.",
+      "examples": [
+        "exakit describe AMAZON.ORDER_LINES",
+        "exakit describe AMAZON.ORDER_LINES --json",
+        "exakit describe SALES.ORDERS --id orders --write ~/orders.descriptor.yaml",
+        "exakit describe VS_SALES.ORDERS --sample 20000",
+        "exakit describe orders --approve",
+        "exakit describe ~/orders.descriptor.yaml --approve --role category=REGION --owner dana",
+        "exakit describe amazon_sales --approve --no-comments --json",
+        "exakit describe amazon_sales --versions",
+        "exakit describe amazon_sales --show --version 1",
+        "exakit describe orders --comments",
+        "exakit describe --schema TPCH",
+        "exakit describe --schema TPCH --approve --unlink ORDERS.O_CLERK"
+      ]
+    },
+    {
+      "command": "udf-setup",
+      "options": "[--language python|rust] [--force] [--yes] [--json]",
+      "summary": "Python or Rust UDFs: install the official Python container (or the pinned Rust one) and prove it (the udf-devkit add-on).",
+      "description": "python (the default, or EXAKIT_UDF_LANGUAGE): installs the launcher's official Python script language container (alias PYTHON3) when it is missing (--force reinstalls it), then creates and runs a smoke UDF that reports the Python version. rust (--language rust, or EXAKIT_UDF_LANGUAGE=rust): the pinned Rust container from the matrix in versions.json for your database's architecture and version, downloaded once into ~/.exasol-starter-kit/cache/containers (EXAKIT_UDF_CONTAINERS_MIRROR takes it from a folder or base URL instead), verified against its sha256 and size, installed as alias RUST; its smoke UDF arrives with the next kit step. Installing a container restarts the database: you are asked first (--yes answers, and so does a run with no terminal), running add-on services are stopped and started again once the database answers. Needs Exasol launcher 2.3.0 or later. --json prints one object and nothing else on stdout: {\"ok\": true, \"language\", \"alias\", \"container\": {\"url\", \"sha256\", \"arch\", \"db_versions\"}, \"smoke\": [{\"package\", \"version\"}]} or {\"ok\": false, \"language\", \"step\", \"reason\", \"remedy\"} with step one of select-container, download, verify, install, smoke, so an agent branches on the language and the step. Exit 2 bad arguments (a language that is not python or rust, an unknown option); 3 the smoke UDF found a declared package missing; 4 no container in the matrix for this language, architecture or database version, or the downloaded file does not match its pinned digest (it is removed; run again); 5 not ready (the add-on is not installed, the database is not running, the launcher is older than 2.3.0, the download did not arrive, no disk, the install was not confirmed); 6 the launcher could not install the container (exakit logs); 7 the smoke UDF did not run, or reported a version other than the pinned one.",
+      "environment": [
+        "EXAKIT_UDF_LANGUAGE=python|rust the language the persona install and udf-setup/udf-use set up unless --language says otherwise (default python)",
+        "EXAKIT_UDF_ARCH=x86_64|aarch64 overrides the detected database architecture the container row is picked for",
+        "EXAKIT_UDF_CONTAINERS_MIRROR=<folder, file:// or https:// base URL> holds the container assets by file name, instead of the release (digests still checked)"
+      ],
+      "exit_codes": {
+        "0": "the container is installed and, for Python, the smoke UDF passed",
+        "2": "bad arguments: a language that is not python or rust, an unknown option",
+        "3": "the smoke UDF found a declared package missing",
+        "4": "no container for this language, architecture or database version, or a digest mismatch (the file is removed; run again)",
+        "5": "not ready: the add-on, the database, the launcher, the download or the disk; or not confirmed",
+        "6": "the launcher could not install the container (exakit logs)",
+        "7": "the smoke UDF did not run, or reported a version other than the pinned one"
+      },
+      "examples": [
+        "exakit udf-setup",
+        "exakit udf-setup --language rust --yes --json",
+        "exakit udf-setup --language rust --force --yes"
+      ],
+      "parameters": [
+        {
+          "name": "--language <language>",
+          "description": "Choose the script language.",
+          "default": "EXAKIT_UDF_LANGUAGE, otherwise python",
+          "required": false,
+          "choices": [
+            "python",
+            "rust"
+          ]
+        },
+        {
+          "name": "--force",
+          "description": "Reinstall even when the official container is already present; causes a database restart.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--yes, -y",
+          "description": "Confirm the database restart for container installation.",
+          "default": "ask on a terminal; unattended container installs proceed",
+          "required": false
+        },
+        {
+          "name": "--json, -j",
+          "description": "Print machine-readable output rather than decorated text.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ]
+    },
+    {
+      "command": "udf-use",
+      "options": "default [--language python|rust] [--yes] [--json] | <container.tar.gz> [--alias NAME] [--language python|rust] [--yes] [--json] | --list",
+      "summary": "Install a script language container: the kit's prebuilt one for this database, or a tarball of your own.",
+      "description": "udf-use default installs the matrix row (versions.json, components.udf-devkit.containers) for the language (--language, else EXAKIT_UDF_LANGUAGE, default python), your DATABASE's architecture (an Apple-silicon Mac runs an aarch64 database, Windows an x86_64 one; EXAKIT_UDF_ARCH overrides) and its version: downloaded once into ~/.exasol-starter-kit/cache/containers (EXAKIT_UDF_CONTAINERS_MIRROR, a folder or base URL holding the file by name, instead of the release), verified against its pinned sha256 and size before the launcher sees it, installed as PYTHON3_ML (python: numpy, pandas, scikit-learn, scipy at the pinned versions, and the smoke UDF compares every package's version with the pin) or RUST (rust). udf-use <container.tar.gz> installs a container tarball under an alias (PYTHON3_CUSTOM unless --alias names one) and proves it the same way; the database restarts (--yes answers the question). --list shows the launcher's containers and which are installed. --json: the same objects as udf-setup ({\"ok\": true, \"language\", \"alias\", \"container\", \"smoke\"} or {\"ok\": false, \"language\", \"step\", \"reason\", \"remedy\"}, step one of select-container, download, verify, install, smoke) and the same exit codes: 2 bad arguments (not a tarball, not a file, a bad alias, a language that is not python or rust); 3 a declared package missing; 4 no container for this language, architecture or database version, or a digest mismatch; 5 not ready (the add-on, the database, the launcher, the download or the disk; or not confirmed); 6 the launcher's install failed; 7 the smoke UDF did not pass.",
+      "environment": [
+        "EXAKIT_UDF_LANGUAGE=python|rust the language udf-use default picks unless --language says otherwise (default python)",
+        "EXAKIT_UDF_ARCH=x86_64|aarch64 overrides the detected database architecture the container row is picked for",
+        "EXAKIT_UDF_CONTAINERS_MIRROR=<folder, file:// or https:// base URL> holds the container assets by file name, instead of the release (digests still checked)"
+      ],
+      "exit_codes": {
+        "0": "installed and proven",
+        "2": "bad arguments: not a tarball, not a file, a bad alias, a language that is not python or rust",
+        "3": "the smoke UDF found a declared package missing",
+        "4": "no container for this language, architecture or database version, or a digest mismatch (the file is removed; run again)",
+        "5": "not ready: the add-on, the database, the launcher, the download or the disk; or not confirmed",
+        "6": "the launcher could not install the container (exakit logs)",
+        "7": "the smoke UDF did not run, or reported a version other than the pinned one"
+      },
+      "examples": [
+        "exakit udf-use --list",
+        "exakit udf-use default --yes --json",
+        "exakit udf-use ./custom.tar.gz --alias PYTHON3_CUSTOM --language python --yes"
+      ],
+      "parameters": [
+        {
+          "name": "<default|container.tar.gz>",
+          "description": "Required for installation: choose the pinned default (PYTHON3_ML or RUST) or a local .tar.gz/.tgz archive. Omit this positional argument when using --list.",
+          "default": null,
+          "required": false
+        },
+        {
+          "name": "--language <language>",
+          "description": "Choose the script language.",
+          "default": "EXAKIT_UDF_LANGUAGE, otherwise python",
+          "required": false,
+          "choices": [
+            "python",
+            "rust"
+          ]
+        },
+        {
+          "name": "--alias <NAME>",
+          "description": "SQL language alias for a custom tarball or custom build; ignored for the pinned default container. Use an Exasol identifier.",
+          "default": "PYTHON3_CUSTOM",
+          "required": false
+        },
+        {
+          "name": "--list",
+          "description": "List launcher containers. This returns human launcher output; --json is not a JSON-list mode. Do not combine it with install arguments.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--yes, -y",
+          "description": "Confirm the database restart for container installation.",
+          "default": "ask on a terminal; unattended container installs proceed",
+          "required": false
+        },
+        {
+          "name": "--json, -j",
+          "description": "Print machine-readable output rather than decorated text.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ]
+    },
+    {
+      "command": "udf-build",
+      "options": "<requirements.txt> [--alias <NAME>] [--yes]",
+      "summary": "Build a container with your pinned packages and install it.",
+      "description": "Builds a script language container with every package of the requirements file (each pinned name==version, so the build is reproducible) using the notebook add-on's container tooling, installs it under an alias (PYTHON3_CUSTOM unless --alias names one) and proves every package with the smoke UDF; the database restarts. Needs the notebook add-on, a running Docker engine and about 25 GB free disk.",
+      "examples": [
+        "exakit udf-build ./requirements.txt --alias PYTHON3_CUSTOM --yes"
+      ],
+      "parameters": [
+        {
+          "name": "<requirements.txt>",
+          "description": "Every package must be pinned as name==version. The build needs Notebook, Docker or Podman and about 25 GB free disk.",
+          "default": null,
+          "required": true
+        },
+        {
+          "name": "--alias <NAME>",
+          "description": "SQL language alias for a custom tarball or custom build; ignored for the pinned default container. Use an Exasol identifier.",
+          "default": "PYTHON3_CUSTOM",
+          "required": false
+        },
+        {
+          "name": "--yes, -y",
+          "description": "Confirm the database restart for container installation.",
+          "default": "ask on a terminal; unattended container installs proceed",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ]
+    },
+    {
+      "command": "udf-file",
+      "options": "<file> [<path in the bucket>]",
+      "summary": "Copy a file into BucketFS and print the path a UDF reads it from.",
+      "description": "A local database has no BucketFS upload service: its BucketFS is a folder in the deployment. This copies the file there (to the bucket's root, or the relative path you name - never outside the bucket) and prints the path a UDF opens, under /buckets/bfsdefault/default/.",
+      "examples": [
+        "exakit udf-file ./lookup.csv lookup/lookup.csv"
+      ],
+      "parameters": [
+        {
+          "name": "<file>",
+          "description": "Existing local file to copy into the deployment file bucket.",
+          "default": null,
+          "required": true
+        },
+        {
+          "name": "<path-in-bucket>",
+          "description": "Relative destination path, for example models/churn.pkl. Absolute paths and .. are refused.",
+          "default": "source filename",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ]
+    },
+    {
+      "command": "rust-udf",
+      "options": "new <name> [--coefficients <file>] | build <name> | deploy <name> [--schema <SCHEMA>] [--yes] [--json]",
+      "summary": "Create, build and deploy a Rust scoring UDF from exported coefficients.",
+      "description": "The new step creates a pinned exasol-udf-sdk 0.33.0 project under the kit home; --coefficients reads the 01_train coefficients.json. Build uses Rust 1.98.1 in a Linux Docker or Podman container matching the database architecture on macOS and Windows, then validates the .so. Deploy verifies its digest, copies it into the deployment's bucket directory and registers a RUST scalar script. If the shared bucket is unavailable, deploy requires --yes, packages the verified library into the pinned RUST container under /opt/exakit/udf, and runs exasol slc custom update, which restarts the database. Previously deployed kit libraries are retained and verified. JSON reports deployment (bucket or container), database_restart_requested and the container digest when updated.",
+      "examples": [
+        "exakit rust-udf new score_model --coefficients coefficients.json",
+        "exakit rust-udf build score_model --json",
+        "exakit rust-udf deploy score_model --schema EXAKIT_SCORING",
+        "exakit rust-udf deploy score_model --schema EXAKIT_SCORING --yes --json"
+      ],
+      "parameters": [
+        {
+          "name": "<action>",
+          "description": "Create a project, build its Linux shared library, or deploy it to the local bucket and database.",
+          "default": null,
+          "required": true,
+          "choices": [
+            "new",
+            "build",
+            "deploy"
+          ]
+        },
+        {
+          "name": "<name>",
+          "description": "Project and UDF name; use a valid identifier.",
+          "default": null,
+          "required": true
+        },
+        {
+          "name": "--coefficients FILE",
+          "description": "new only: initialise the scoring project from the exported training coefficients.",
+          "default": "not set",
+          "required": false
+        },
+        {
+          "name": "--schema SCHEMA",
+          "description": "deploy only: database schema for the scoring UDF.",
+          "default": "EXAKIT_SCORING",
+          "required": false
+        },
+        {
+          "name": "--json",
+          "description": "Print the operation result as JSON.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--yes",
+          "description": "deploy only: confirm a database restart if the shared bucket is unavailable and a container update is required.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
+      ]
+    },
+    {
+      "command": "model",
+      "options": "put|inspect|list|rm|prune|template [arguments]",
+      "summary": "Model files in the bucket directory: put one (digest recorded, /buckets path printed), list them, find the scoring UDF template.",
+      "description": "Inspect, copy, list, remove or prune local model files. Each action has its own arguments; exakit model <action> --help shows them. --yes confirms trust for put and removal for prune; --replace belongs only to put.",
+      "examples": [
+        "exakit model put churn.pkl",
+        "exakit model put churn.pkl --replace",
+        "exakit model list --json",
+        "exakit model template"
+      ],
+      "parameters": [
+        {
+          "name": "<action>",
+          "description": "Choose a model operation; use exakit model <action> --help for its exact parameters.",
+          "default": null,
+          "required": true,
+          "choices": [
+            "put",
+            "inspect",
+            "list",
+            "rm",
+            "prune",
+            "template"
+          ]
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference; install nothing and change no services.",
+          "default": "off",
+          "required": false
+        }
       ]
     },
     {
       "command": "update",
-      "options": "[all|runtime|exakit|exapump|mcp|pyexasol|skills|<add-on>|personal] [--yes] [--json]; --plan, --backup and --apply only with personal",
+      "options": "[<component>] [--yes] [--json]",
       "summary": "Apply the updates that are waiting.",
       "description": "Applies the quick components (kit scripts, exapump, MCP server, pyexasol, the AI skills, installed add-ons) in seconds. When the kit lists setup that only the installer can do and this machine has not finished it (a core task in setup/core/tasks.json, such as the SQL preprocessor framework), the downloaded installer is rerun once - none of the first install's questions again, every component kept at its installed version; with the database stopped that is deferred to exakit start && exakit update. An update that downloads a newer kit hands the rest of the run to it. When it cannot - the new exakit is missing or not executable, or on Windows, where the kit swap is usually staged for the moment the command exits - the run stops there instead: the rest is deferred (status deferred, remedy exakit update), so run exakit update again and the new kit applies it. Coming from 0.2.2, run exakit update twice. A newer skill set published by the maintainers is fetched and installed here too, with no kit release needed. A database change stops the database, so it is only applied for an answer the run was actually given: on a terminal you are asked, and an unattended run defers it with the exact command. Your data is kept either way. --yes (-y) may stand anywhere. --plan, --backup and --apply belong to the staged Personal major upgrade and work only with personal, as in exakit update personal --plan; written first, or with any other component, they are refused with the form that works. --json answers one object instead, with nothing else on stdout: {\"ok\", \"status\": updated|current|deferred|blocked|failed, \"updated\", \"deferred\", \"blocked\", \"current\", \"skipped\", \"ahead\", \"failed\", \"remedy\", \"remedy_hint\"}; every screen line goes to the log, nothing prompts, a database change is deferred unless --yes pre-answers it, and remedy names the command that applies what is left. Exit 1 when an updater failed. An unknown option or target is refused (exit 2) and records nothing.",
       "environment": [
@@ -305,6 +969,32 @@
         "exakit update",
         "exakit update --yes",
         "exakit update --json"
+      ],
+      "parameters": [
+        {
+          "name": "<component>",
+          "description": "Update a kit-owned component or add-on; user-owned components are preserved.",
+          "default": "all",
+          "required": false
+        },
+        {
+          "name": "--yes, -y",
+          "description": "Allow a pending runtime update that stops and restarts the database; not permission to remove user-owned resources.",
+          "default": "ask on a terminal; defer runtime changes without a terminal",
+          "required": false
+        },
+        {
+          "name": "--json, -j",
+          "description": "Print machine-readable output rather than decorated text.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything. Combine with --json for structured help.",
+          "default": "off",
+          "required": false
+        }
       ]
     },
     {
@@ -328,6 +1018,26 @@
         "4": "not installed",
         "5": "declined - not confirmed, nothing was changed"
       }
+    },
+    {
+      "command": "tls-pin",
+      "options": "[--accept [--yes]] [--json | -j]",
+      "summary": "Compare or re-pin the database's TLS certificate.",
+      "description": "The database's certificate is self-signed, so the kit pins it instead: it records the SHA-256 fingerprint (trust on first use) when it deploys or starts its own database, and every client it builds - the exapump profile, pyexasol, the MCP server's EXA_DSN - refuses any other certificate. Without options this shows the pinned fingerprint against the one the port serves now and changes nothing. A mismatch means the database was redeployed outside the kit, or another process answers on the port: --accept records the live certificate and rewrites the clients that hold the pin, after a question (default no when replacing a pin; without a terminal the answer is no). --yes answers it for a script - pass it only with the user's confirmation. --json answers with one object ({\"ok\", \"status\", \"pinned\", \"fingerprint\", \"recorded_at\", \"live\", \"matches\", \"changed\", \"dsn\", \"remedy\", \"remedy_hint\"}).",
+      "warning": "Re-pinning trusts whatever answers on the database port now. Do it only for your own database, never for a process you do not recognise.",
+      "exit_codes": {
+        "0": "pinned and matching, nothing pinned yet, or the pin was recorded",
+        "2": "bad input",
+        "3": "nothing answers TLS on the database port",
+        "4": "not installed",
+        "5": "declined - not confirmed, nothing was changed",
+        "6": "the live certificate is not the pinned one"
+      },
+      "examples": [
+        "exakit tls-pin",
+        "exakit tls-pin --json",
+        "exakit tls-pin --accept"
+      ]
     },
     {
       "command": "migrate",
@@ -356,36 +1066,98 @@
     },
     {
       "command": "uninstall",
-      "options": "[--yes] [--dry-run] [<addon-id>]",
+      "options": "[<addon-id>] [--dry-run] [--yes]",
       "summary": "Remove what the kit installed.",
       "description": "Pick what to remove (Skip, each add-on, or EVERYTHING) with a confirmation summary and a typed gate. --dry-run previews the full plan and changes nothing. Removing one add-on only: exakit uninstall <addon-id> [--yes] - the rest of the kit is untouched.",
-      "warning": "A full uninstall removes the database AND its data, the MCP configs, the skills and the binaries.",
+      "warning": "A full uninstall removes the database AND its data, the MCP configs, the skills and the binaries. Your notebooks, MLflow runs and models and Dash dashboards stay in the kit home unless EXAKIT_UNINSTALL_NOTEBOOKS=remove.",
       "examples": [
         "exakit uninstall --dry-run",
         "exakit uninstall --yes",
         "exakit uninstall json-tables --yes"
+      ],
+      "parameters": [
+        {
+          "name": "<addon-id>",
+          "description": "Remove one kit-owned add-on. Without an ID, choose components interactively; --yes without an ID selects the whole kit. User-owned resources are preserved.",
+          "default": "interactive chooser",
+          "required": false
+        },
+        {
+          "name": "--dry-run",
+          "description": "Preview removal without deleting anything.",
+          "default": "off",
+          "required": false
+        },
+        {
+          "name": "--yes, -y",
+          "description": "Confirm removal. With no addon ID, remove the full kit and kit-owned database data.",
+          "default": "ask for confirmation",
+          "required": false
+        },
+        {
+          "name": "--help, -h",
+          "description": "Show this command reference without installing or restarting anything. Combine with --json for structured help.",
+          "default": "off",
+          "required": false
+        }
       ]
     },
     {
       "command": "help",
-      "options": "[--all] [<component>]",
+      "options": "[<component> | <command> [<action>...]] [--all] [--json]",
       "summary": "This screen.",
-      "description": "exakit help shows the everyday commands. --all lists every command. exakit help <component> (or exakit <component> --help) opens the full reference for one component.",
+      "description": "Discover the shipped interface without installing or starting anything. Name an add-on/component for its page, or a complete command path for its own arguments. --all lists every public command. Add --json to any help form for structured metadata. Unknown command help exits 2; catalog provides keyword search.",
       "examples": [
-        "exakit help",
-        "exakit help --all",
-        "exakit help exapump"
+        "exakit help notebook",
+        "exakit --help udf-devkit",
+        "exakit help model put --json",
+        "exakit mlflow start --help --json",
+        "exakit help --all --json"
+      ],
+      "parameters": [
+        {
+          "name": "<component> | <command> [<action>...]",
+          "description": "A registered help topic or exact command path. The exakit prefix is optional. Command families include documented children.",
+          "required": false,
+          "default": "overview"
+        },
+        {
+          "name": "--all, -a",
+          "description": "List all public commands; with --json include the complete command registry and documents.",
+          "required": false,
+          "default": "off"
+        },
+        {
+          "name": "--json, -j",
+          "description": "Return one JSON document. Unknown command help exits 2 with an error and a catalog remedy.",
+          "required": false,
+          "default": "off"
+        }
       ]
     },
     {
       "command": "catalog",
       "options": "[search] [--json | -j]",
       "summary": "Browse or search every command.",
-      "description": "Every exakit, exapump and exasol command in one searchable screen. --json prints the whole command surface as one machine-readable object.",
+      "description": "Search the shipped command registry by command name, syntax, description or component topic. --json returns canonical invocations, usage, documented argument metadata, examples and help_command links. This is command discovery, not installation or liveness status.",
       "examples": [
         "exakit catalog",
-        "exakit catalog mcp",
+        "exakit catalog udf --json",
         "exakit catalog --json"
+      ],
+      "parameters": [
+        {
+          "name": "<search>",
+          "description": "Search command names, syntax and descriptions by substring. Use help for exact command lookup.",
+          "required": false,
+          "default": "all commands"
+        },
+        {
+          "name": "--json, -j",
+          "description": "Return canonical invocations, usage, parameter metadata and help commands in one JSON object.",
+          "required": false,
+          "default": "off"
+        }
       ]
     },
     {
@@ -453,6 +1225,10 @@
   ],
   "environment": [
     {
+      "name": "EXAKIT_PERSONA",
+      "effect": "A named set of answers (personas/<id>.json): data-scientist, ml-engineer or general, or several joined with a comma (all three load everything). It fills EXAKIT_DATASETS, EXAKIT_MCP_CLIENTS and EXAKIT_MARKETPLACE_ADDONS where you did not set them; an unknown persona is refused before anything is installed."
+    },
+    {
       "name": "EXAKIT_MCP_CLIENTS",
       "effect": "Which MCP clients to configure, by name: claude, claude_desktop, claude_code, codex, cursor, vscode_copilot, gemini_cli, opencode, continue, all, skip."
     },
@@ -462,7 +1238,7 @@
     },
     {
       "name": "EXAKIT_DATASETS",
-      "effect": "Which bundled datasets to load: tpch, energy, weather."
+      "effect": "Which bundled datasets to load, by id: one per folder in data/datasets (tpch, energy, weather, bundled and loaded offline, and the downloaded datasets amazon_sales, fraud_transactions)."
     },
     {
       "name": "EXAKIT_LOAD_SAMPLE",
@@ -499,12 +1275,36 @@
     {
       "name": "EXAKIT_PERSONAL_S3",
       "effect": "0 skips Exasol's S3 bucket for the Personal launcher and downloads the verified GitHub release directly - for a network that blocks the bucket. Default: S3 first, GitHub as fallback."
+    },
+    {
+      "name": "EXAKIT_UDF_LANGUAGE",
+      "effect": "python (default) or rust: the UDF language the ml-engineer persona install, udf-setup and udf-use default set up unless --language says otherwise. Anything else is refused: the UDF language must be python or rust."
+    },
+    {
+      "name": "EXAKIT_UDF_ARCH",
+      "effect": "x86_64 or aarch64: overrides the detected database architecture the prebuilt container row is picked for (an Apple-silicon Mac runs an aarch64 database, Windows an x86_64 one). For tests and unusual machines."
+    },
+    {
+      "name": "EXAKIT_UDF_CONTAINERS_MIRROR",
+      "effect": "A folder, file:// or https:// base URL holding the prebuilt container assets by file name, used instead of the GitHub release (offline or internal copies). Size and sha256 are verified all the same."
     }
   ],
   "troubleshooting": [
     {
       "symptom": "Podman is installed but not running",
       "remedy": "Run: podman machine start - then re-run the installer."
+    },
+    {
+      "symptom": "Podman cannot apply the pids limit",
+      "remedy": "A rootless machine under WSL 2.9+ has no pids cgroup controller (podman-container-tools/podman#29909). Make it rootful: podman machine stop; podman machine set --rootful; podman machine start - then re-run the installer. The kit names this; it never switches the machine itself."
+    },
+    {
+      "symptom": "Podman machine cannot resolve registry-1.docker.io",
+      "remedy": "Windows 11 22H2+: add dnsTunneling=true under [wsl2] in %USERPROFILE%\\.wslconfig, then: wsl --shutdown; podman machine start (this stops every WSL distro). Older Windows: podman machine stop; podman machine set --user-mode-networking; podman machine start. The kit names this; it never edits .wslconfig itself."
+    },
+    {
+      "symptom": "Database container stays Created",
+      "remedy": "Read its error: podman inspect --format \"{{.State.Error}}\" <exasol-db-...>. The kit shows it on a failed deploy or start; a pids error is fixed by a rootful machine (see above). A deployment that never started holds no data, and the installer offers to replace it (EXAKIT_REPLACE_DB=0 keeps it)."
     },
     {
       "symptom": "Port 8563 is already in use",

@@ -36,7 +36,7 @@ What happens, in order:
 
 The launcher picks the database's port and remembers it (8563 unless something else was using it). `exakit info` shows the port in use, and every later command reads it back from the deployment.
 
-**Inside WSL**, note that Windows and the WSL distros share one network stack. An Exasol Personal deployed on the Windows side therefore holds port 8563 inside the distro as well. The kit never adopts a database it cannot log in to. It reports it ("answers like an Exasol database this kit did not deploy") and asks you to stop it on the Windows side first (`exakit stop` in PowerShell), then re-run.
+**Inside WSL**, whether the two sides see each other's port 8563 depends on WSL's networking mode. With mirrored networking (`networkingMode=mirrored` in `%USERPROFILE%\.wslconfig`) they share it both ways, so an Exasol Personal deployed on the Windows side holds 8563 inside the distro as well. Under WSL 2's default NAT mode only one way: Windows reaches a database in the distro on `localhost`, but the distro does not see one running on Windows - the kit in the distro can deploy its own, and on Windows `localhost:8563` then answers with whichever started first. The kit never adopts a database it cannot log in to. It reports it ("answers like an Exasol database this kit did not deploy") and asks you to stop it on the Windows side first (`exakit stop` in PowerShell), then re-run.
 
 ## Headless, over SSH
 

@@ -7,6 +7,13 @@
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
+# Everything this suite's stubs leave in TMPDIR (the launcher download's
+# exakit-personal.* folders, behind a stubbed die() that cannot sweep them)
+# goes with the run instead of piling up in the developer's real TMPDIR.
+_SUITE_TMP="$(mktemp -d)"
+trap 'rm -rf "$_SUITE_TMP"' EXIT
+TMPDIR="$_SUITE_TMP"; export TMPDIR
+
 # A failure note that was ALREADY in the developer's kit home before this suite
 # started is not pollution this suite caused - any real command of theirs that
 # failed leaves one. Remember what was there, so the check at the end can tell
@@ -270,6 +277,7 @@ manifest_get() {
   case \"\$1\" in
     runtime.type) printf '%s\n' personal ;;
     runtime.version) printf '%s\n' 2.2.0 ;;
+    runtime.ownership|components.personal.ownership|components.exapump.ownership|components.mcp_server.ownership|components.pyexasol.ownership) printf '%s\n' kit ;;
     components.exapump.version) printf '%s\n' 0.11.2 ;;
     components.exapump.path) printf '%s\n' '$_stub_bin/exapump' ;;
     components.pyexasol.python) printf '%s\n' '$_stub_bin/python' ;;
@@ -307,6 +315,7 @@ manifest_get() {
   case \"\$1\" in
     runtime.type) printf '%s\n' personal ;;
     runtime.version) printf '%s\n' 2.2.0 ;;
+    runtime.ownership|components.personal.ownership|components.exapump.ownership) printf '%s\n' kit ;;
     components.exapump.version) printf '%s\n' 0.11.2 ;;
     kit.version) printf '%s\n' 0.2.0 ;;
     *) return 1 ;;
@@ -337,6 +346,7 @@ personal_major_plan="$(bash -c "
 manifest_get() {
   case \"\$1\" in
     runtime.version) printf '%s\n' 2.0.0 ;;
+    components.personal.ownership) printf '%s\n' kit ;;
     *) return 1 ;;
   esac
 }
@@ -485,10 +495,10 @@ if grep -q 'manifest_set kit.version "\$_staged_version"' "$ROOT/setup/lib/commo
 else
     check "self_update(records_kit_version)" "yes" "no"
 fi
-# main is the primary source (kit scripts live there; a tag exists only where a
-# release was cut), and versions.json is on the required list — without it the new
+# The announced release's tag is the primary source, a branch only where no tag
+# was cut (SEC-02), and versions.json is on the required list — without it the new
 # copy has no offline version tier and cannot say what version it is.
-if grep -q 'archive/refs/heads/main.tar.gz' "$ROOT/setup/lib/common.sh" && \
+if grep -q 'for _kit_candidate in "v${_latest}" "${_latest}"' "$ROOT/setup/lib/common.sh" && \
    grep -q 'exakit-common.ps1 versions.json' "$ROOT/setup/lib/common.sh"; then
     check "self_update(main_and_manifest)" "yes" "yes"
 else
@@ -497,7 +507,7 @@ fi
 # Windows is no longer warn-only: the same flow exists there, including the
 # deferred swap for the files this very script runs from.
 if grep -q 'function Update-ExakitSelf' "$ROOT/setup/lib/exakit-common.ps1" && \
-   grep -q 'archive/refs/heads/main.zip' "$ROOT/setup/lib/exakit-common.ps1" && \
+   grep -q '$tags = @("v$Advertised", "$Advertised")' "$ROOT/setup/lib/exakit-common.ps1" && \
    grep -q '"versions.json"' "$ROOT/setup/lib/exakit-common.ps1" && \
    grep -q 'Complete-ExakitSelfUpdateDeferred' "$ROOT/setup/lib/exakit-common.ps1" && \
    grep -q 'Update-ExakitSelf -Advertised' "$ROOT/setup/exakit.ps1"; then
@@ -509,7 +519,7 @@ fi
 echo "Windows parity guards:"
 if command -v pwsh >/dev/null 2>&1; then
     ps_parse="$(pwsh -NoProfile -Command '
-      $files = @("setup/lib/exakit-common.ps1","setup/lib/runtime-personal.ps1","setup/lib/mcp.ps1","setup/lib/dash-server.ps1","setup/lib/dbt-exasol.ps1","setup/lib/exasol-vscode.ps1","setup/lib/json-tables.ps1","setup/setup-windows.ps1","setup/exakit.ps1")
+      $files = @("setup/lib/exakit-common.ps1","setup/lib/runtime-personal.ps1","setup/lib/mcp.ps1","setup/setup-windows.ps1","setup/exakit.ps1")
       foreach ($f in $files) {
         $errors = $null
         $null = [System.Management.Automation.PSParser]::Tokenize((Get-Content -Raw $f), [ref]$errors)
@@ -659,50 +669,24 @@ else
     check "install(linux personal resume matches macos)" "yes" "no"
 fi
 
-# The marketplace, both sides. The registry, the installed-only gate on
-# `update all`, the command dispatch, and the dash-server module twins must
-# exist on each side, or the Windows path silently loses the add-on layer.
-if grep -q 'exakit_marketplace_addons()' "$ROOT/setup/lib/common.sh" && \
-   grep -q 'exakit_marketplace_installed_addons' "$ROOT/setup/lib/common.sh" && \
-   grep -q 'dash_server_update' "$ROOT/setup/lib/dash-server.sh" && \
-   grep -q 'dash_server_install' "$ROOT/setup/lib/dash-server.sh" && \
-   grep -q 'marketplace) shift; .*_with_notice cmd_marketplace' "$ROOT/setup/exakit" && \
-   grep -q 'function Get-ExakitMarketplaceAddons' "$ROOT/setup/lib/exakit-common.ps1" && \
-   grep -q 'Get-ExakitMarketplaceInstalledAddons' "$ROOT/setup/lib/exakit-common.ps1" && \
-   grep -q 'function Update-DashServer' "$ROOT/setup/lib/dash-server.ps1" && \
-   grep -q 'function Install-DashServer' "$ROOT/setup/lib/dash-server.ps1" && \
-   grep -q 'exasol_vscode_update' "$ROOT/setup/lib/exasol-vscode.sh" && \
-   grep -q 'exasol_vscode_install' "$ROOT/setup/lib/exasol-vscode.sh" && \
-   grep -q 'function Update-ExasolVscode' "$ROOT/setup/lib/exasol-vscode.ps1" && \
-   grep -q 'function Install-ExasolVscode' "$ROOT/setup/lib/exasol-vscode.ps1" && \
-   grep -q '"exasol-vscode"' "$ROOT/setup/lib/exakit-common.ps1" && \
-   grep -q 'json_tables_update' "$ROOT/setup/lib/json-tables.sh" && \
-   grep -q 'json_tables_install' "$ROOT/setup/lib/json-tables.sh" && \
-   grep -q 'function Update-JsonTables' "$ROOT/setup/lib/json-tables.ps1" && \
-   grep -q 'function Install-JsonTables' "$ROOT/setup/lib/json-tables.ps1" && \
-   grep -q '"json-tables"' "$ROOT/setup/lib/exakit-common.ps1" && \
-   grep -q 'dbt_exasol_update' "$ROOT/setup/lib/dbt-exasol.sh" && \
-   grep -q 'dbt_exasol_install' "$ROOT/setup/lib/dbt-exasol.sh" && \
-   grep -q 'function Update-DbtExasol' "$ROOT/setup/lib/dbt-exasol.ps1" && \
-   grep -q 'function Install-DbtExasol' "$ROOT/setup/lib/dbt-exasol.ps1" && \
-   grep -q '"dbt-exasol"' "$ROOT/setup/lib/exakit-common.ps1" && \
-   grep -q '"marketplace"  { Invoke-CmdMarketplace' "$ROOT/setup/exakit.ps1"; then
+# The catalog and Python hook list must expose the same add-ons to both
+# platform entry points. The adapter tests exercise the calls themselves.
+_market_ids="$(python3 "$ROOT/marketplace/metadata.py" "$ROOT" registry | cut -d'|' -f1 | sort)"
+_market_hook_ids="$(python3 "$ROOT/marketplace/metadata.py" "$ROOT" shell-hooks | awk -F'|' '$2 == "install" { print $1 }' | sort)"
+check "marketplace(hooks)" "$_market_ids" "$_market_hook_ids"
+if grep -q 'marketplace) shift; .*_with_notice cmd_marketplace' "$ROOT/setup/exakit" && \
+   grep -q '"marketplace"  { Invoke-CmdMarketplace' "$ROOT/setup/exakit.ps1" && \
+   grep -q 'Initialize-ExakitMarketplacePythonHooks' "$ROOT/setup/exakit.ps1"; then
     check "marketplace(twins)" "yes" "yes"
 else
     check "marketplace(twins)" "yes" "no"
 fi
 # The advertised-version resolver an add-on install needs, both sides. On the
-# shell side exakit_component_available lives in common.sh, so the setup script
-# and the CLI both have it. On the PowerShell side its twin,
-# Get-ExakitComponentAvailable, is defined in the CLI (setup/exakit.ps1) and the
-# SETUP script never loads the CLI — so an add-on Install-* that called it
-# directly died with a CommandNotFoundException the moment the closing
-# marketplace offer tried to install one, and every Windows add-on install
-# failed while macOS was fine. Get-ExakitAddonAdvertisedVersion is what answers
-# in both contexts; the Install-* functions must go through it.
+# The closing Windows offer cannot call version helpers defined only in the CLI.
+# PowerShell add-ons use the shared resolver; Python add-ons use target_version.
 if grep -q 'function Get-ExakitAddonAdvertisedVersion' "$ROOT/setup/lib/exakit-common.ps1" && \
-   grep -q 'Get-ExakitAddonAdvertisedVersion -Id "exasol-vscode"' "$ROOT/setup/lib/exasol-vscode.ps1" && \
-   grep -q 'Get-ExakitAddonAdvertisedVersion -Id "dash-server"' "$ROOT/setup/lib/dash-server.ps1" && \
+   grep -q 'ctx.target_version(ID, default)' "$ROOT/marketplace/addons/exasol_vscode.py" && \
+   grep -q 'ctx.target_version(ID, default)' "$ROOT/marketplace/addons/dash_server.py" && \
    grep -q 'exakit_component_available' "$ROOT/setup/lib/common.sh"; then
     check "marketplace(addon_version_resolver)" "yes" "yes"
 else
@@ -721,17 +705,16 @@ if [ -d "$ROOT/setup/shim/json-tables-cargo" ] && \
    grep -q 'fn is_ingest_call' "$ROOT/setup/shim/json-tables-cargo/src/main.rs" && \
    grep -q 'json-tables-cargo/Cargo.toml' "$ROOT/.github/workflows/pkg-json-tables.yml" && \
    grep -q 'exakit-json-tables-cargo-windows-x86_64.exe' "$ROOT/.github/workflows/pkg-json-tables.yml" && \
-   grep -q 'function Get-JsonTablesShimAsset' "$ROOT/setup/lib/json-tables.ps1" && \
-   grep -q 'function Write-JsonTablesLauncher' "$ROOT/setup/lib/json-tables.ps1" && \
-   grep -q 'function Get-JsonTablesMirrorDigest' "$ROOT/setup/lib/json-tables.ps1" && \
-   grep -q 'function Test-JsonTablesAppControl' "$ROOT/setup/lib/json-tables.ps1"; then
+   grep -q 'cargo-windows-x86_64' "$ROOT/marketplace/addons/json_tables.py" && \
+   grep -q 'def _write_launchers' "$ROOT/marketplace/addons/json_tables.py" && \
+   grep -q 'def _asset' "$ROOT/marketplace/addons/json_tables.py"; then
     check "json-tables(windows_shim)" "yes" "yes"
 else
     check "json-tables(windows_shim)" "yes" "no"
 fi
 # ...and that the module no longer reports itself unavailable unconditionally,
 # which is what the stub did.
-if grep -q 'return ((Get-JsonTablesEngineAsset) -ne "")' "$ROOT/setup/lib/json-tables.ps1"; then
+if grep -q 'if system == "windows" and arch != "x86_64"' "$ROOT/marketplace/addons/json_tables.py"; then
     check "json-tables(windows_applicable)" "yes" "yes"
 else
     check "json-tables(windows_applicable)" "yes" "no"
@@ -815,9 +798,8 @@ fi
 #
 # Guarded by shape, not by message: any bracketed `if ... (` in the launcher
 # generator is the hazard, whatever it happens to print today.
-if grep -q 'if errorlevel 1 goto exakit_dash_start' "$ROOT/setup/lib/dash-server.ps1" && \
-   grep -q ':exakit_dash_start' "$ROOT/setup/lib/dash-server.ps1" && \
-   ! grep -qE '"if (not )?errorlevel [0-9]+ \("' "$ROOT/setup/lib/dash-server.ps1"; then
+if grep -q 'subprocess.call(argv, env=env)' "$ROOT/marketplace/dash_launcher.py" && \
+   grep -q 'env\["DASH_SERVER_HOST"\] = "127.0.0.1"' "$ROOT/marketplace/dash_launcher.py"; then
     check "dash-server(launcher_no_bracket_block)" "yes" "yes"
 else
     check "dash-server(launcher_no_bracket_block)" "yes" "no"
@@ -825,12 +807,8 @@ fi
 
 # Port ownership, both sides: a foreign listener must never read as a running
 # dash-server, and the install must settle on a port before baking one in.
-if grep -q '_dash_server_port_is_ours()' "$ROOT/setup/lib/dash-server.sh" && \
-   grep -q '_dash_server_port_foreign_desc()' "$ROOT/setup/lib/dash-server.sh" && \
-   grep -q '_dash_server_settle_port()' "$ROOT/setup/lib/dash-server.sh" && \
-   grep -q 'function Test-DashServerPortIsOurs' "$ROOT/setup/lib/dash-server.ps1" && \
-   grep -q 'function Get-DashServerPortForeignDescription' "$ROOT/setup/lib/dash-server.ps1" && \
-   grep -q 'function Confirm-DashServerPort' "$ROOT/setup/lib/dash-server.ps1"; then
+if grep -q 'def owned_pids(' "$ROOT/marketplace/process.py" && \
+   grep -q 'def _settle_port(' "$ROOT/marketplace/addons/dash_server.py"; then
     check "dash-server(port_ownership_twins)" "yes" "yes"
 else
     check "dash-server(port_ownership_twins)" "yes" "no"
@@ -841,11 +819,11 @@ fi
 if grep -q 'exakit_log_targets()' "$ROOT/setup/lib/common.sh" && \
    grep -q 'exakit_logs_overview()' "$ROOT/setup/lib/common.sh" && \
    grep -q 'exakit_logs_show()' "$ROOT/setup/lib/common.sh" && \
-   grep -q 'dash_server_log_path()' "$ROOT/setup/lib/dash-server.sh" && \
+   grep -q 'def log_path(' "$ROOT/marketplace/addons/dash_server.py" && \
    grep -q 'function Get-ExakitLogTargets' "$ROOT/setup/exakit.ps1" && \
    grep -q 'function Show-ExakitLogsOverview' "$ROOT/setup/exakit.ps1" && \
    grep -q 'function Show-ExakitLog' "$ROOT/setup/exakit.ps1" && \
-   grep -q 'function Get-DashServerLogPath' "$ROOT/setup/lib/dash-server.ps1" && \
+   grep -q 'dash-server|log_path|log-path' <(python3 "$ROOT/marketplace/metadata.py" "$ROOT" shell-hooks) && \
    grep -q 'LogFn' "$ROOT/setup/lib/exakit-common.ps1"; then
     check "logs(viewer_twins)" "yes" "yes"
 else
@@ -857,15 +835,14 @@ fi
 if grep -q 'exakit_service_ids()' "$ROOT/setup/lib/common.sh" && \
    grep -q '_exakit_autostart_register()' "$ROOT/setup/lib/common.sh" && \
    grep -q 'exakit_autostart_enable()' "$ROOT/setup/lib/common.sh" && \
-   grep -q 'dash_server_status()' "$ROOT/setup/lib/dash-server.sh" && \
-   grep -q 'dash_server_start()' "$ROOT/setup/lib/dash-server.sh" && \
-   grep -q 'dash_server_autostart_command()' "$ROOT/setup/lib/dash-server.sh" && \
+   grep -q 'def status(' "$ROOT/marketplace/addons/dash_server.py" && \
+   grep -q 'def start(' "$ROOT/marketplace/addons/dash_server.py" && \
+   grep -q 'def autostart_command(' "$ROOT/marketplace/addons/dash_server.py" && \
    grep -q 'autostart) shift; _with_notice cmd_autostart' "$ROOT/setup/exakit" && \
-   grep -q 'function Get-ExakitServiceIds' "$ROOT/setup/exakit.ps1" && \
+   grep -q 'function Get-ExakitServiceIds' "$ROOT/setup/lib/exakit-common.ps1" && \
    grep -q 'function Register-ExakitAutostart' "$ROOT/setup/lib/exakit-common.ps1" && \
    grep -q 'function Enable-ExakitAutostart' "$ROOT/setup/exakit.ps1" && \
-   grep -q 'function Get-DashServerStatus' "$ROOT/setup/lib/dash-server.ps1" && \
-   grep -q 'function Start-DashServer' "$ROOT/setup/lib/dash-server.ps1" && \
+   grep -q 'dash-server|status|status' <(python3 "$ROOT/marketplace/metadata.py" "$ROOT" shell-hooks) && \
    grep -q '"autostart"    { Invoke-CmdAutostart' "$ROOT/setup/exakit.ps1"; then
     check "services(autostart_twins)" "yes" "yes"
 else
@@ -916,9 +893,9 @@ if grep -q 'tag_name: ${{ needs.check.outputs.tag }}' "$ROOT/.github/workflows/p
    grep -q 'version=${{ needs.check.outputs.sha }}' "$ROOT/.github/workflows/pkg-json-tables.yml" && \
    grep -qE '^  advertise:' "$ROOT/.github/workflows/pkg-json-tables.yml" && \
    grep -q 'needs: \[check, publish\]' "$ROOT/.github/workflows/pkg-json-tables.yml" && \
-   grep -q 'json_tables_write_shim()' "$ROOT/setup/lib/json-tables.sh" && \
-   grep -q 'json_tables_latest()' "$ROOT/setup/lib/json-tables.sh" && \
-   grep -q 'json_tables_system_present()' "$ROOT/setup/lib/json-tables.sh" && \
+   grep -q 'def _write_launchers' "$ROOT/marketplace/addons/json_tables.py" && \
+   grep -q 'def latest' "$ROOT/marketplace/addons/json_tables.py" && \
+   grep -q 'def system_present' "$ROOT/marketplace/addons/json_tables.py" && \
    grep -q 'exakit_data_file_kind()' "$ROOT/setup/lib/exapump.sh" && \
    grep -q 'exakit_load_local_json()' "$ROOT/setup/lib/exapump.sh"; then
     check "json_tables(prebuilt_chain)" "yes" "yes"
@@ -991,12 +968,14 @@ fi
 # Anchored on "for support", the one phrase the closing line keeps on all three
 # platforms. It used to anchor on "Next: exakit status" and that wording is gone
 # - an anchor tied to a sentence breaks the moment the sentence is reworded, and
-# what this guard actually cares about is only WHERE that line sits.
+# what this guard actually cares about is only WHERE that line sits. On macOS
+# and Linux the line is exakit_closing_hint (common.sh), which adds the full path
+# when the terminal that ran the installer cannot find exakit yet.
 wn_box_placement() { # wn_box_placement <file> <panel-call> <box-call>
     awk -v panel="$2" -v box="$3" '
         index($0, panel) && panel_at == 0 { panel_at = NR }
         index($0, box)   && box_at == 0   { box_at = NR }
-        index($0, "for support") && next_at == 0 { next_at = NR }
+        (index($0, "for support") || index($0, "exakit_closing_hint")) && next_at == 0 { next_at = NR }
         END {
             if (panel_at > 0 && box_at > panel_at && next_at > box_at) print "panel,box,next"
             else printf "panel=%d box=%d next=%d\n", panel_at, box_at, next_at
@@ -1213,27 +1192,18 @@ if grep -q 'personal_upgrade_backup' "$ROOT/setup/lib/runtime-personal.sh" && \
 else
     check "personal_update(recoverability)" "yes" "no"
 fi
-if grep -q 'mcp_update_snapshot' "$ROOT/setup/lib/mcp.sh" && \
-   grep -q 'New-McpUpdateSnapshot' "$ROOT/setup/lib/mcp.ps1" && \
-   grep -q 'backups.mcp_update.latest' "$ROOT/setup/lib/mcp.sh" && \
-   grep -q 'backups.mcp_update.latest' "$ROOT/setup/lib/mcp.ps1"; then
-    check "mcp_update(snapshot)" "yes" "yes"
+# The MCP server is the launcher's sidecar and nothing else: the update writes the
+# image this kit copy pins (refusing a version it has no image for), and moves the
+# clients of a kit from before the sidecar to its URL. Both sides carry it, and
+# neither still reinstalls a stdio server.
+if grep -q 'mcp_sidecar_image_version' "$ROOT/setup/lib/mcp.sh" && \
+   grep -q 'mcp_refresh_clients' "$ROOT/setup/lib/mcp.sh" && \
+   grep -q 'Get-McpSidecarImageVersion' "$ROOT/setup/exakit.ps1" && \
+   ! grep -q 'mcp_install\|mcp_validate\b' "$ROOT/setup/lib/mcp.sh" && \
+   ! grep -q 'Install-Mcp\b\|Test-McpServer' "$ROOT/setup/exakit.ps1"; then
+    check "mcp_update(sidecar_only)" "yes" "yes"
 else
-    check "mcp_update(snapshot)" "yes" "no"
-fi
-# The MCP update must judge itself by the pin in the AI client configs — what uvx
-# will actually launch, and what `exakit version` reports as its Version — and it must be
-# the thing that rewrites those configs. A guard that read
-# components.mcp_server.version instead answered "already current" for a version no
-# client was running. Both sides carry the same two halves.
-if grep -q 'exakit_component_current mcp' "$ROOT/setup/lib/mcp.sh" && \
-   grep -q 'mcp_refresh_client_pins' "$ROOT/setup/lib/mcp.sh" && \
-   grep -q 'Update-McpClientPins' "$ROOT/setup/lib/mcp.ps1" && \
-   grep -q 'Update-McpClientPins' "$ROOT/setup/exakit.ps1" && \
-   ! grep -q 'Run exakit mcp-setup to refresh AI client configs' "$ROOT/setup/exakit.ps1"; then
-    check "mcp_update(live_pin_guard)" "yes" "yes"
-else
-    check "mcp_update(live_pin_guard)" "yes" "no"
+    check "mcp_update(sidecar_only)" "yes" "no"
 fi
 # Same defect, same fix, for exapump: the guard must ask the binary on disk (what
 # `exakit version` reports) rather than components.exapump.version, which is

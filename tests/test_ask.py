@@ -1,0 +1,262 @@
+"""Approval gates SQL execution and the execution identity is never admin."""
+
+import json
+import sys
+import tempfile
+import threading
+import types
+import unittest
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from unittest import mock
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "notebook" / "package"))
+
+from exakit_nb import ask as make_proposal  # noqa: E402
+import importlib
+
+ask_module = importlib.import_module("exakit_nb.ask")
+
+
+class Descriptor:
+    id = "sample"
+    version = 1
+    fact_table = "STARTER_KIT.SAMPLE"
+
+    def __init__(self, approved=True):
+        self.approved = approved
+
+    def require_approved(self, purpose):
+        if not self.approved:
+            raise ValueError("descriptor is a Draft")
+
+    def roles(self):
+        return [("category", "CATEGORY")]
+
+
+class AskTest(unittest.TestCase):
+    def test_draft_never_runs(self):
+        with self.assertRaisesRegex(ValueError, "Draft"):
+            make_proposal(Descriptor(False), "How many?", "SELECT COUNT(*) FROM STARTER_KIT.SAMPLE")
+
+    def test_approval_binds_exact_sql_and_audit_gate(self):
+        statements = []
+        class Frame(dict):
+            def __init__(self, rows, columns):
+                super().__init__({columns[i]: [row[i] for row in rows] for i in range(len(columns))})
+
+            def __len__(self):
+                return len(next(iter(self.values())))
+
+        with mock.patch.dict(sys.modules, {"pandas": types.SimpleNamespace(DataFrame=Frame)}), \
+                mock.patch.object(ask_module, "_execute_mcp",
+                                  side_effect=lambda sql: statements.append(sql) or {"columns": ["N"], "rows": [[1]]}) as execute:
+            proposal = make_proposal(Descriptor(), "How many?", "SELECT COUNT(*) AS N FROM STARTER_KIT.SAMPLE")
+            self.assertEqual(statements, [])
+            with self.assertRaisesRegex(RuntimeError, "not been approved"):
+                proposal.run()
+            execute.assert_not_called()
+            proposal.approve()
+            proposal.edit("SELECT 1 AS N")
+            with self.assertRaisesRegex(RuntimeError, "not been approved"):
+                proposal.run()
+            proposal.approve()
+            frame = proposal.run()
+        self.assertEqual(statements, ["SELECT 1 AS N"])
+        self.assertEqual(frame["N"][0], 1)
+
+    def test_writes_and_multiple_statements_refused(self):
+        for sql in ("INSERT INTO T VALUES (1)", "DROP TABLE T", "SELECT 1; DROP TABLE T"):
+            with self.subTest(sql=sql), self.assertRaisesRegex(ValueError, "SELECT or WITH"):
+                make_proposal(Descriptor(), "question", sql)
+
+    def test_readonly_connection_refuses_admin_fallback(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            password = home / "mcp_readonly_password"
+            password.write_text("unprinted-secret")
+            manifest = {"runtime": {"user": "sys", "dsn": "127.0.0.1:8563"},
+                        "components": {"mcp_server": {"connection": {"user": "sys", "password_file": str(password)}}}}
+            (home / "manifest.json").write_text(json.dumps(manifest))
+            with mock.patch.object(ask_module, "home", return_value=home):
+                with self.assertRaisesRegex(RuntimeError, "read-only identity"):
+                    ask_module._mcp_settings()
+
+    def _manifest(self, home, **mcp_server):
+        password = home / "mcp_readonly_password"
+        password.write_text("unprinted-secret")
+        manifest = {"runtime": {"user": "sys", "dsn": "127.0.0.1:8563"},
+                    "components": {"mcp_server": {"backend": "sidecar", "url": "http://127.0.0.1:4896/mcp",
+                                                   **mcp_server, "connection": {
+                        "user": "mcp_readonly", "password_file": str(password),
+                        "default_schema": "STARTER_KIT", "validated": True}}}}
+        (home / "manifest.json").write_text(json.dumps(manifest))
+
+    def test_readonly_connection_uses_the_sidecar_url(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            home = Path(temporary)
+            self._manifest(home)
+            with mock.patch.object(ask_module, "home", return_value=home):
+                self.assertEqual(ask_module._mcp_settings(), "http://127.0.0.1:4896/mcp")
+
+    def test_without_the_sidecar_there_is_no_server_to_fall_back_to(self):
+        for state in ({"backend": None}, {"url": "http://db.example:4896/mcp"}):
+            with self.subTest(state=state), tempfile.TemporaryDirectory() as temporary:
+                home = Path(temporary)
+                self._manifest(home, **state)
+                with mock.patch.object(ask_module, "home", return_value=home), \
+                        self.assertRaisesRegex(RuntimeError, "not set up. Run exakit mcp-setup"):
+                    ask_module._mcp_settings()
+
+    def _serve(self, answer_as_events):
+        """A stand-in sidecar: initialize hands out a session id, tools/call answers once it is sent back."""
+        seen = []
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def do_DELETE(self):
+                seen.append(("DELETE", self.headers.get("mcp-session-id")))
+                self.send_response(200)
+                self.end_headers()
+
+            def do_POST(self):
+                request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                seen.append((request.get("method"), self.headers.get("mcp-session-id"), request))
+                if "id" not in request:
+                    self.send_response(202)
+                    self.end_headers()
+                    return
+                if request["id"] == 1:
+                    result = {"protocolVersion": "2024-11-05"}
+                else:
+                    result = {"structuredContent": {"columns": ["N"], "rows": [[1]]}}
+                body = json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result})
+                if answer_as_events:
+                    body, kind = f"event: message\ndata: {body}\n\n", "text/event-stream"
+                else:
+                    kind = "application/json"
+                self.send_response(200)
+                self.send_header("Content-Type", kind)
+                if request["id"] == 1:
+                    self.send_header("mcp-session-id", "session-1")
+                self.end_headers()
+                self.wfile.write(body.encode("utf-8"))
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.addCleanup(server.server_close)
+        self.addCleanup(server.shutdown)
+        return f"http://127.0.0.1:{server.server_address[1]}/mcp", seen
+
+    def test_mcp_protocol_calls_read_query_tool_after_handshake(self):
+        for answer_as_events in (False, True):
+            with self.subTest(event_stream=answer_as_events):
+                url, seen = self._serve(answer_as_events)
+                with mock.patch.object(ask_module, "_mcp_settings", return_value=url):
+                    result = ask_module._execute_mcp("SELECT 1")
+                self.assertEqual(result, {"columns": ["N"], "rows": [[1]]})
+                self.assertEqual([entry[0] for entry in seen],
+                                 ["initialize", "notifications/initialized", "tools/call", "DELETE"])
+                call = seen[2][2]
+                self.assertEqual((call["params"]["name"], call["params"]["arguments"]["query"]),
+                                 ("execute_exasol_query", "SELECT 1"))
+                self.assertEqual({entry[1] for entry in seen[1:]}, {"session-1"}, "the session id goes with every later request")
+                self.assertNotIn("unprinted-secret", json.dumps([entry[-1] for entry in seen], default=str))
+
+    def test_a_sidecar_that_does_not_answer_names_the_doctor(self):
+        with mock.patch.object(ask_module, "_mcp_settings", return_value="http://127.0.0.1:9/mcp"), \
+                self.assertRaisesRegex(RuntimeError, "did not answer.*exakit mcp-doctor"):
+            ask_module._execute_mcp("SELECT 1")
+
+
+class ModelProposalTest(unittest.TestCase):
+    def test_one_fenced_json_object_is_validated_without_execution(self):
+        client = mock.Mock()
+        client.chat.completions.create.return_value.choices = [types.SimpleNamespace(message=types.SimpleNamespace(
+            content='Here is the proposal:\n```json\n{"sql":"SELECT 1 AS N", "assumptions":[], "doubts":[]}\n```'))]
+        with mock.patch("exakit_nb.model_client", return_value=(client, "local")), mock.patch.object(ask_module, "_execute_mcp") as execute:
+            proposal = make_proposal(Descriptor(), "How many?")
+        self.assertEqual(proposal.sql, "SELECT 1 AS N")
+        execute.assert_not_called()
+        with self.assertRaisesRegex(RuntimeError, "not been approved"):
+            proposal.run()
+
+    def test_wrong_json_field_types_are_refused(self):
+        client = mock.Mock()
+        for value in ['[]', '{"sql":null}', '{"sql":"SELECT 1", "assumptions":"guess"}',
+                      '{"sql":"SELECT 1", "doubts":[1]}']:
+            client.chat.completions.create.return_value.choices = [types.SimpleNamespace(message=types.SimpleNamespace(content=value))]
+            with self.subTest(value=value), mock.patch("exakit_nb.model_client", return_value=(client, "local")), self.assertRaises(ValueError):
+                make_proposal(Descriptor(), "How many?")
+
+
+    def test_the_model_is_told_the_whole_approved_descriptor(self):
+        ds = Descriptor()
+        ds.descriptor = types.SimpleNamespace(grain="one row per post", columns={
+            "CATEGORY": {"role": "category", "confidence": "high", "evidence": "6 distinct"},
+            "COUNTRY": {"role": "category", "confidence": "high", "evidence": "7 distinct", "note": "where the author is"},
+            "EMAIL": {"role": "identifier", "confidence": "high", "evidence": "a@b.example, 99% of rows", "sensitive": True}})
+        client = mock.Mock()
+        client.chat.completions.create.return_value.choices = [types.SimpleNamespace(message=types.SimpleNamespace(
+            content='{"sql":"SELECT COUNTRY, COUNT(*) FROM STARTER_KIT.SAMPLE GROUP BY 1", "assumptions":[], "doubts":[]}'))]
+        with mock.patch("exakit_nb.model_client", return_value=(client, "local")):
+            make_proposal(ds, "Posts by country?")
+        sent = json.loads(client.chat.completions.create.call_args.kwargs["messages"][1]["content"])
+        self.assertEqual("one row per post", sent["grain"])
+        self.assertEqual("sample v1 (approved)", sent["descriptor"])
+        self.assertEqual({"category": "CATEGORY"}, sent["slots"])
+        self.assertEqual({"role": "category", "evidence": "7 distinct", "note": "where the author is"}, sent["columns"]["COUNTRY"],
+                         "a column outside the slots is there too")
+        self.assertNotIn("evidence", sent["columns"]["EMAIL"], "a sensitive column's evidence is never sent")
+        self.assertIn("never select", sent["columns"]["EMAIL"]["sensitive"])
+        self.assertEqual("Posts by country?", sent["question"])
+
+    def test_a_proposal_shows_itself_once_and_readably(self):
+        sql = ('SELECT "SHIP_STATE", COUNT(*) AS LINES FROM "AMAZON"."ORDER_LINES" '
+               "WHERE \"SHIP_CITY\" LIKE '%from here%' GROUP BY 1 ORDER BY LINES DESC")
+        self.assertEqual(ask_module.readable(sql).splitlines(), [
+            'SELECT "SHIP_STATE", COUNT(*) AS LINES', 'FROM "AMAZON"."ORDER_LINES"',
+            "WHERE \"SHIP_CITY\" LIKE '%from here%'", "GROUP BY 1", "ORDER BY LINES DESC"])
+        import io
+        from contextlib import redirect_stdout
+        with redirect_stdout(io.StringIO()) as out:
+            proposal = make_proposal(Descriptor(), "Lines per state?", sql)
+        self.assertEqual("", out.getvalue(), "ask() prints nothing: the proposal shows itself")
+        proposal.assumptions, proposal.doubts = ["<b>state</b> is SHIP_STATE"], ["NULLs are a group"]
+        text = str(proposal)
+        self.assertEqual(1, text.count("NULLs are a group"))
+        self.assertIn("not approved yet", text)
+        html = proposal._repr_html_()
+        self.assertIn("&lt;b&gt;state&lt;/b&gt;", html, "the model's words are escaped")
+        self.assertIn("<li>NULLs are a group</li>", html)
+        self.assertIn("Not approved yet", html)
+        self.assertEqual(sql, proposal.sql, "the approved text is never reformatted")
+
+    def test_no_temperature_is_sent_unless_asked_for(self):
+        """What Ask actually sends (audit QAT-07): newer Claude models refuse temperature with HTTP 400, so none is
+        sent by default; EXAKIT_MODEL_TEMPERATURE=0 sends 0.0. The themes step sends the same."""
+        import os
+        reply = '{"sql":"SELECT 1 AS N", "assumptions":[], "doubts":[]}'
+        for value, expected in ((None, None), ("0", 0.0)):
+            client = mock.Mock()
+            client.chat.completions.create.return_value.choices = [types.SimpleNamespace(message=types.SimpleNamespace(content=reply))]
+            environ = {k: v for k, v in os.environ.items() if k != "EXAKIT_MODEL_TEMPERATURE"}
+            if value is not None:
+                environ["EXAKIT_MODEL_TEMPERATURE"] = value
+            with self.subTest(temperature=value), mock.patch.dict(os.environ, environ, clear=True), \
+                    mock.patch("exakit_nb.model_client", return_value=(client, "local")):
+                make_proposal(Descriptor(), "How many?")
+                sent = client.chat.completions.create.call_args.kwargs
+                self.assertEqual(expected, sent.get("temperature"))
+                self.assertEqual(value is not None, "temperature" in sent)
+                themes = importlib.import_module("exakit_nb.themes")
+                client.chat.completions.create.return_value.choices = [types.SimpleNamespace(
+                    message=types.SimpleNamespace(content='{"themes": []}'))]
+                themes._ask(client, "local", ["a text"], "themes where all", traced=False)
+                self.assertEqual(value is not None, "temperature" in client.chat.completions.create.call_args.kwargs)
+
+if __name__ == "__main__":
+    unittest.main()

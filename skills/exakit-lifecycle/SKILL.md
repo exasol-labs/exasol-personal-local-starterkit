@@ -10,7 +10,11 @@ database it deploys. For starting, stopping or diagnosing the database use
 `exasol-runtime`; for SQL use `exasol-exapump`; for AI clients use `exasol-mcp`;
 for add-ons use `exasol-marketplace`.
 
-Every command below is read-only unless this page says otherwise. On Windows the
+Every command below is read-only unless this page says otherwise. The read-only
+ones (`status`, `version`, `info`, `help`, `catalog`, `logs`, `skills`,
+`whats-new`, `persona list|show|plan`, `marketplace --list`) never install uv
+or a Python to answer and never edit a shell profile; `help`, `catalog --json`
+and `logs --json` answer on any Python 3, including a stock macOS one. On Windows the
 binary is `exakit.cmd`; everywhere else it is `exakit`. A non-interactive shell
 usually has no `~/.local/bin` on `PATH`, so call it by absolute path
 (`~/.local/bin/exakit …`) if the bare name is not found.
@@ -38,21 +42,30 @@ exakit whats-new 0.2.0  # or for a named one
 
 `exakit version` is the answer to "what did the kit install" and to "is there a
 newer version". It reads a cached versions document — it does not decide to
-upgrade anything.
+upgrade anything. A row reading `current (manifest <date>)` is current against
+that dated versions manifest, not looked up upstream (`--json` keeps
+`status: current` and adds `checked_against`).
 
 ## Applying updates
 
 ```bash
 exakit update           # everything that is waiting
 exakit update skills    # or one target
+exakit update exapump dbt-exasol   # or several, each once
 exakit update --yes     # pre-answer the one question it can ask
 exakit update --json    # one object: ok, status (updated|current|deferred|blocked|failed), per-component lists, remedy
 exakit update personal --plan   # --plan, --backup and --apply work only with personal
 ```
 
-Targets are `all`, `runtime`, `exakit`, `exapump`, `mcp`, `pyexasol`, `skills`,
-any installed add-on id, and the runtime name `personal`. An unknown
+Targets are `all`, `runtime`, `exakit`, `exapump`, `uv`, `mcp`, `pyexasol`, `skills`,
+any add-on id, and the runtime name `personal`. Name several to update just
+those; `all` cannot stand beside other targets (bare `exakit update` is
+everything), and options such as `--plan` go only behind `personal`. An unknown
 target is refused with exit 2 and changes nothing.
+
+When the run updates the kit itself, the newly installed `exakit` updates the
+rest, so nothing is fetched with the old kit's addresses. Under `--json` the rest
+is reported `deferred` and `remedy` names the command that applies it.
 
 The quick components apply in seconds. A **database** change is different: it
 stops the database, so it is applied only for an answer the run was actually
@@ -157,7 +170,7 @@ exakit help <command>    # one command's page
 exakit catalog           # every exakit, exapump and exasol command
 exakit catalog mcp       # searchable
 exakit catalog --json    # the whole surface as one object
-exakit guide             # how to connect: AI clients, SQL clients, Python
+exakit guide             # how to connect: AI clients, SQL clients, Python, notebooks, dashboards
 ```
 
 Prefer `exakit catalog --json` over guessing a flag. If a command or flag is not
@@ -184,8 +197,13 @@ The files live in `~/.exasol-starter-kit/credentials/`.
 ## Uninstalling — preview first, always
 
 `exakit uninstall` is the one destructive command here. A full uninstall removes
-the database **and its data**, the managed AI-client configs, the skills the kit
-placed and the binaries.
+kit-owned components, including a database the kit created **and its data**,
+managed AI-client configs and skills. It keeps the user's work in
+`~/.exasol-starter-kit/`: the notebooks, the kit MLflow server's runs and models
+(`mlflow/`) and the Dash dashboards (`dash-server/instance`); a reinstall picks
+them up. `EXAKIT_UNINSTALL_NOTEBOOKS=remove` removes them too. Reused user-installed binaries and
+databases, shared exapump profiles and unknown shared installations are kept.
+Check ownership with `exakit version` before interpreting the removal plan.
 
 ```bash
 exakit uninstall --dry-run        # the full plan; changes nothing

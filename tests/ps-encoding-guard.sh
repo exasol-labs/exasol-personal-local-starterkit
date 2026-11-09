@@ -102,8 +102,8 @@ EOF
 # that let the commonest shape of all through untouched: `$v = & $python -c ...
 # 2>$null`, which is a probe whose whole purpose is to answer a question about
 # a possibly-broken thing. Six sites were hiding behind the anchor, among them
-# Get-PyexasolInstalledVersion and Get-DashServerPackageVersion (both read by
-# `exakit version`), where a probe writing to stderr is the ORDINARY case.
+# Get-PyexasolInstalledVersion (read by `exakit version`), where a probe
+# writing to stderr is the ordinary case.
 # Whole-line comments are
 # skipped so prose describing the trap does not trip it.
 while IFS= read -r file; do

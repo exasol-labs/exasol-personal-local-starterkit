@@ -68,7 +68,51 @@ foreach ($case in @(
     if ($doc) {
         Check "$($case.Label) (not installed) says installed=false" ($doc.installed -eq $false) "installed=$($doc.installed)"
         Check "$($case.Label) (not installed) carries status and remedy" ($doc.PSObject.Properties["status"] -and $doc.PSObject.Properties["remedy"]) (Head $r.Out 160)
+        # The state queries' answer; update --json's not-installed answer is a result, as in the shell twin.
+        if ($case.Label -ne "update --json") { Check "$($case.Label) (not installed) carries platform and wsl_version (audit WIN-02)" `
+            ("$($doc.platform)" -in @("windows", "macos", "linux") -and $doc.PSObject.Properties["wsl_version"] -and $null -eq $doc.wsl_version) (Head $r.Out 200) }
     }
+}
+
+$bareHome = Join-Path ([System.IO.Path]::GetTempPath()) ("exakit-ps51-bare-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Force -Path $bareHome | Out-Null
+$env:EXAKIT_HOME = $bareHome
+foreach ($q in @("status", "version", "info", "skills")) { Run-Cli @($q, "--json") | Out-Null }
+$env:EXAKIT_HOME = $kitHome
+Check "the state queries write nothing into the kit home (audit AGT-14)" (@(Get-ChildItem -Force $bareHome).Count -eq 0) "$(Get-ChildItem -Force -Name $bareHome)"
+Remove-Item -Recurse -Force $bareHome -ErrorAction SilentlyContinue
+
+# The commands that also write answer a machine with no kit the same way, and
+# refuse a wrong persona as bad input, before anything is fetched (AGT-05/06/09).
+foreach ($case in @(
+    @{ Args = @("marketplace", "--list", "--json"); Label = "marketplace --list --json" },
+    @{ Args = @("persona", "add", "data-scientist", "--json"); Label = "persona add --json" }
+)) {
+    $r = Run-Cli $case.Args
+    Check "$($case.Label) (not installed) exits 4" ($r.Code -eq 4) "exit $($r.Code): $(Head $r.Out 120)"
+    $doc = Parse-Json "$($case.Label) (not installed)" $r.Out
+    if ($doc) { Check "$($case.Label) (not installed) names the installer" ($doc.installed -eq $false -and $doc.remedy) (Head $r.Out 160) }
+}
+foreach ($case in @(
+    @{ Args = @("persona", "plan", "--json"); Label = "persona plan --json with no persona recorded" },
+    @{ Args = @("persona", "show", "nope", "--json"); Label = "persona show <unknown> --json" }
+)) {
+    $r = Run-Cli $case.Args
+    Check "$($case.Label) is bad input: exit 2" ($r.Code -eq 2) "exit $($r.Code): $(Head $r.Out 120)"
+    $doc = Parse-Json $case.Label $r.Out
+    if ($doc) { Check "$($case.Label) is a refusal object" ($doc.rejected -eq $true -and $doc.error) (Head $r.Out 160) }
+}
+$r = Run-Cli @("persona", "list", "--json")
+$doc = Parse-Json "persona list --json" $r.Out
+if ($doc) {
+    $ids = @($doc.personas | ForEach-Object { $_.id })
+    # The ML Engineer is disabled on this branch (kept, "visible": false): listed no more, still shown by name below.
+    Check "persona list --json lists every persona it offers (AGT-07)" ($r.Code -eq 0 -and $ids -contains "data-scientist" -and $ids -contains "general" -and -not ($ids -contains "ml-engineer")) "exit $($r.Code): $($ids -join ',')"
+}
+$r = Run-Cli @("persona", "show", "ml-engineer", "--json")
+$doc = Parse-Json "persona show ml-engineer --json" $r.Out
+if ($doc) {
+    Check "persona show --json names the notebooks it brings (AGT-12)" ($r.Code -eq 0 -and @($doc.notebooks | ForEach-Object { $_.jupyter }) -contains "ml-engineer/01_train.ipynb") (Head $r.Out 200)
 }
 
 # --- 2. the catalog and skills are one object each, nothing else on stdout --
@@ -148,6 +192,8 @@ if ($doc) {
     Check "status --json: not installing without a lock" ($doc.installing -eq $false -and $doc.status -ne "installing") "status=$($doc.status) installing=$($doc.installing)"
     Check "status --json: steps_completed is an array" ($doc.steps_completed -is [array]) "type $($doc.steps_completed.GetType().Name)"
     Check "status --json: carries datasets_source" ([bool]$doc.PSObject.Properties["datasets_source"]) "missing"
+    Check "status --json: carries platform and wsl_version (AGENTS.md; audit WIN-02)" `
+        ("$($doc.platform)" -in @("windows", "macos", "linux") -and $doc.PSObject.Properties["wsl_version"]) "platform=$($doc.platform)"
 }
 
 Set-ExakitManifestValue "install.current_step" "runtime"
@@ -205,13 +251,15 @@ if ($doc) {
     Check "marketplace --json lists the add-ons" ($rows.Count -ge 5) "count $($rows.Count)"
     $shapeOk = $true; $why = ""
     foreach ($row in $rows) {
-        foreach ($k in @("id", "status", "installed", "version", "repo", "docs")) {
+        foreach ($k in @("id", "status", "installed", "version", "repo", "docs", "name", "url", "about")) {
             if (-not $row.PSObject.Properties[$k]) { $shapeOk = $false; $why += "$($row.id) lacks $k; " }
         }
         if ($null -ne $row.docs -and "$($row.docs)" -notlike "https://*") { $shapeOk = $false; $why += "$($row.id) docs not https; " }
         if ($null -ne $row.repo -and "$($row.repo)" -notmatch '^[^/\s]+/[^/\s]+$') { $shapeOk = $false; $why += "$($row.id) repo not owner/name; " }
+        if (-not "$($row.name)") { $shapeOk = $false; $why += "$($row.id) has no name; " }
+        if ($null -ne $row.url -and "$($row.url)" -notlike "https://github.com/*") { $shapeOk = $false; $why += "$($row.id) url not GitHub; " }
     }
-    Check "marketplace --json: every row carries id, status, installed, version, repo and docs (null when unknown)" $shapeOk $why
+    Check "marketplace --json: every row carries id, status, installed, version, repo, docs, name, url and about (null when unknown; audit WIN-01)" $shapeOk $why
 }
 
 # --- a checksum does not depend on a cmdlet that may not load ----------------

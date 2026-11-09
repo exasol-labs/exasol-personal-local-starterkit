@@ -402,7 +402,7 @@ has "and the suite asserts it left the real home clean" "no failure note in the 
 _cli_t="$(sed -n '/class StaleVersionPinCLITests/,$p' "$ROOT/mcp/tests/test_stale_version_pin.py")"
 has "the CLI stale-pin test binds its own listener" "socket.socket(socket.AF_INET" "$_cli_t"
 # The manifest must carry the port the test itself bound, not a fixed one.
-has "and writes that port into its manifest" '_write_manifest(self.dsn)' "$_cli_t"
+has "and writes that port into its manifest" '_write_manifest(self.dsn,' "$_cli_t"
 
 
 # ---------------------------------------------------------------------------
@@ -844,16 +844,9 @@ has "with an opt-out for offline runs" "EXAKIT_MCP_SKIP_SERVER_PROBE" "$(cat "$R
 # spawn a subprocess or reach the network.
 lacks "it is not in the default stage list" '"server_launch",' \
     "$(sed -n '/    stages: tuple\[str, ...\] = (/,/    )/p' "$ROOT/mcp/core/models.py")"
-# communicate() closes stdin, and an MCP stdio server treats that EOF as "client
-# gone" and exits without answering -- measured against the real server, which
-# never replied to tools/list. The fix is to write the requests and leave the
-# pipe open, draining stdout on a thread until the answer lands.
-has "the handshake keeps stdin open while it waits" "process.stdin.flush()" \
-    "$(sed -n '/def _mcp_handshake/,/^    def /p' "$ROOT/mcp/validator/service.py")"
-lacks "and does not hand the requests to communicate()" "= process.communicate(" \
-    "$(sed -n '/def _mcp_handshake/,/^    def /p' "$ROOT/mcp/validator/service.py")"
-has "the server's stderr is never read into a finding" "stderr=subprocess.DEVNULL" \
-    "$(sed -n '/def _mcp_handshake/,/^    def /p' "$ROOT/mcp/validator/service.py")"
+# The server is the launcher's sidecar, over HTTP: the doctor reaches it there
+# and never starts a stdio server of its own.
+lacks "the doctor starts no stdio server" "def _mcp_handshake" "$(cat "$ROOT/mcp/validator/service.py")"
 
 echo "the install record does not contradict itself:"
 # THE BUG: connection.schemas ["STARTER_KIT"] reads as "this user can only see
@@ -1064,7 +1057,8 @@ check "no skill advertises 'exakit autostart on'" "0" \
     "$(grep -rl 'exakit autostart on' "$ROOT/skills" 2>/dev/null | wc -l | tr -d ' ')"
 check "...and no help document either" "0" \
     "$(grep -rl 'exakit autostart on' "$ROOT/setup/help" 2>/dev/null | wc -l | tr -d ' ')"
-has "dash-server declares its url hook" 'dash_server_url()' "$(cat "$ROOT/setup/lib/dash-server.sh")"
+has "dash-server declares its url hook" 'dash-server|url|url' \
+    "$(python3 "$ROOT/marketplace/metadata.py" "$ROOT" shell-hooks)"
 
 echo
 echo "the lifecycle keeps its promises on the unhappy paths:"
@@ -1092,22 +1086,26 @@ has "...and names the deliberate write path" "exakit sql --write" \
     "$(sed -n '/insufficient privileges/,+8p' "$ROOT/setup/lib/common.sh")"
 # SAY-08: the documented Personal major-upgrade route is accepted by the
 # option guard instead of being a phantom.
-_su="$WORK/say08"; mkdir -p "$_su"
-printf '{\n  "runtime": {\n    "type": "personal"\n  }\n}\n' > "$_su/manifest.json"
+_su="$WORK/say08"; mkdir -p "$_su/bin"
+# This is a kit-owned launcher deliberately behind the advertised version,
+# independent of the developer's real PATH and ownership receipts.
+printf '#!/bin/sh\nprintf "exasol 2.2.0\\n"\n' > "$_su/bin/exasol"
+chmod +x "$_su/bin/exasol"
+printf '{"runtime":{"type":"personal","version":"2.2.0","ownership":"kit"},"components":{"personal":{"ownership":"kit","ownership_path":"%s/bin/exasol"}}}\n' "$_su" > "$_su/manifest.json"
+_su_before="$(cat "$_su/bin/exasol")"
 # EXAKIT_BIN_DIR sandboxed too, and not only for tidiness: this fixture runs
 # the REAL update path, and that path deletes $EXAKIT_PERSONAL_BIN before
 # installing. Unscrubbed it inherits the developer's ~/.local/bin and takes
 # their launcher with it - which is exactly what happened, downgrading a
 # working machine mid-test-run.
-_su_out="$(EXAKIT_HOME="$_su" EXAKIT_BIN_DIR="$_su/bin" bash "$ROOT/setup/exakit" update runtime --plan 2>&1)"
+_su_out="$(EXAKIT_HOME="$_su" EXAKIT_BIN_DIR="$_su/bin" EXAKIT_VERSION_POLICY=pinned EXAKIT_PERSONAL_VERSION=2.3.0 PATH="$_su/bin:$PATH" bash "$ROOT/setup/exakit" update runtime --plan 2>&1)"
 lacks "update runtime --plan is not refused" "Unknown option" "$_su_out"
 # ...and --plan DESCRIBES. It used to describe only across a major gap and
 # install across every other one, so the flag that promises to touch nothing
 # replaced the launcher binary without asking.
 lacks "update runtime --plan installs nothing" "Installing launcher" "$_su_out"
 has "...and says how to apply it instead" "Apply it with: exakit update personal" "$_su_out"
-check "...leaving no launcher behind" "absent" \
-    "$([ -e "$_su/bin/exasol" ] && echo PRESENT || echo absent)"
+check "...leaving the existing launcher unchanged" "$_su_before" "$(cat "$_su/bin/exasol")"
 # AGK-02: a DEAD installer answers with installing:false, the step it died at,
 # and remedies.install naming the re-run - the exact shape AGENTS.md promises.
 printf '{\n  "runtime": {\n    "type": "personal"\n  },\n  "install": {\n    "current_step": "mcp"\n  }\n}\n' > "$_su/manifest.json"
@@ -1186,16 +1184,31 @@ for _rp_ln in $(grep -n 'destroy --remove' "$_rp_file" \
     _rp_gate="$(printf '%s\n' "$_rp_head" | grep -n 'confirm_env EXAKIT_REPLACE_DB\|!= "--data"' | tail -1 | cut -d: -f1)"
     _rp_fn="$(printf '%s\n' "$_rp_head" | grep -n '^[a-z_][a-z_0-9]*() {' | tail -1 | cut -d: -f1)"
     if [ -z "$_rp_gate" ] || [ "${_rp_gate:-0}" -lt "${_rp_fn:-0}" ]; then
-        _rp_ungated="$_rp_ungated $_rp_ln"
+        # A destroy inside a helper is gated when EVERY call of that helper is:
+        # each caller line needs a gate above it in its own function. One level
+        # deep, on purpose - a helper of a helper would hide the gate too well.
+        _rp_name="$(printf '%s\n' "$_rp_head" | sed -n "${_rp_fn:-0}p" | sed 's/() {.*//')"
+        _rp_callers="$(grep -n "\b$_rp_name\b" "$_rp_file" | grep -v "^[0-9]*:$_rp_name() {" | grep -v '^[0-9]*:[[:space:]]*#' | cut -d: -f1)"
+        [ -n "$_rp_callers" ] || _rp_ungated="$_rp_ungated $_rp_ln"
+        for _rp_cl in $_rp_callers; do
+            _rp_chead="$(sed -n "1,${_rp_cl}p" "$_rp_file")"
+            _rp_cgate="$(printf '%s\n' "$_rp_chead" | grep -n 'confirm_env EXAKIT_REPLACE_DB\|!= "--data"' | tail -1 | cut -d: -f1)"
+            _rp_cfn="$(printf '%s\n' "$_rp_chead" | grep -n '^[a-z_][a-z_0-9]*() {' | tail -1 | cut -d: -f1)"
+            if [ -z "$_rp_cgate" ] || [ "${_rp_cgate:-0}" -lt "${_rp_cfn:-0}" ]; then
+                _rp_ungated="$_rp_ungated $_rp_ln(via $_rp_cl)"
+            fi
+        done
     fi
 done
 check "no deploy path destroys without consent" "none" "${_rp_ungated:-none}"
 # ...and the enumeration is not vacuously empty: if the grep above stops
 # matching (the launcher subcommand gets renamed, say), the loop body never
 # runs and the check above passes having examined nothing.
+# Two today: the one destroy, in personal_destroy (its callers are the gated
+# sites, checked above), and the rollback registration.
 _rp_sites="$(grep -c 'destroy --remove' "$_rp_file")"
 check "...and the destroy sites were actually found" "yes" \
-    "$([ "${_rp_sites:-0}" -ge 3 ] && echo yes || echo no)"
+    "$([ "${_rp_sites:-0}" -ge 2 ] && grep -q '^personal_destroy() {' "$_rp_file" && echo yes || echo no)"
 # MAC-01: one PATH-persistence policy - the second writer delegates to the
 # Darwin-aware ensure_path_hint instead of preferring ~/.bashrc.
 has "the second PATH writer delegates to the one Darwin-aware policy" \
@@ -1434,6 +1447,7 @@ _p2gate_setup() { # _p2gate_setup <os> <with-podman:0|1> [installable] -> all ou
         confirm_env() { return 0; }
         . "$0/setup/lib/detect.sh" 2>/dev/null
         detect_os() { echo "'"$1"'"; }
+        detect_musl() { [ "${EXAKIT_TEST_MUSL:-0}" = 1 ]; }
         detect_arch() { echo arm64; }
         detect_ram_gb() { echo 16; }
         detect_free_disk_gb() { echo 100; }
@@ -1502,6 +1516,17 @@ check "gate(linux, no podman but installable) carries on" \
     "OK: Compatibility check passed (linux arm64, 16 GB RAM, 100 GB free)" "$(_p2gate linux 0 1)"
 check "gate(wsl, no podman but installable) carries on" \
     "OK: Compatibility check passed (wsl arm64, 16 GB RAM, 100 GB free)" "$(_p2gate wsl 0 1)"
+# LNX-06: a musl Linux (Alpine) is refused before anything is installed.
+_p2musl="$(EXAKIT_TEST_MUSL=1 _p2gate_setup linux 1)"
+has "gate(linux) refuses a musl system" "DIED: Unsupported C library: musl" "$_p2musl"
+check "gate(linux) on glibc passes" \
+    "OK: Compatibility check passed (linux arm64, 16 GB RAM, 100 GB free)" "$(_p2gate linux 1)"
+# WSL-06: a kit home on a Windows drive is refused BEFORE any password is
+# written there - the preflight warned, the install itself wrote them first.
+_p2drvfs="$(EXAKIT_HOME=/mnt/c/Users/me/.exasol-starter-kit _p2gate_setup wsl 1)"
+has "gate(wsl) refuses a kit home on a Windows drive" "DIED: Kit home on a Windows drive" "$_p2drvfs"
+check "gate(wsl) takes a kit home on the Linux filesystem" \
+    "OK: Compatibility check passed (wsl arm64, 16 GB RAM, 100 GB free)" "$(EXAKIT_HOME=/home/me/.exasol-starter-kit _p2gate wsl 1)"
 # ...and it is the DATABASE step that does it, not the gate: a package install
 # must not run in front of a machine that has not yet agreed to anything.
 _p2dep="$(sed -n '/^personal_deploy_local()/,/^}/p' "$ROOT/setup/lib/runtime-personal.sh")"
@@ -1619,7 +1644,12 @@ _p2kss="$(sed -n '/^kit_shared_steps()/,/^}/p' "$ROOT/setup/lib/common.sh")"
 has "the db-dependent steps are skipped in one line"     "they all need the database, which is not installed" "$_p2kss"
 has "...decided by the recorded failure" 'exakit_soft_failed runtime' "$_p2kss"
 check "...guarding all five of them (exapump, database features, data, AI bridge, pyexasol)" "5"     "$(printf '%s' "$_p2kss" | grep -c 'if \[ "$_kss_nodb" = 1 \]')"
-has "...and the exakit helper still runs" "begin_step exakit_helper" "$_p2kss"
+# The helper is the install's last step (kit_helper_step), after the persona's
+# data: it still installs then, and both setup scripts run it after the persona.
+has "...and the exakit helper still runs" "begin_step exakit_helper" "$(sed -n '/^kit_helper_step()/,/^}/p' "$ROOT/setup/lib/common.sh")"
+for _p2os in macos linux; do
+    check "...last, after the persona's data ($_p2os)" "yes" "$(awk '/exakit_persona_flow "\$KIT_ROOT"/{p=1} p&&/^kit_helper_step 7 7/{print "yes"; exit}' "$ROOT/setup/setup-$_p2os.sh")"
+done
 
 # THE WINDOWS TWIN. There the LAUNCHER installs Podman, through winget, so the
 # kit cannot retry it - but a machine whose winget refused must reach the end of
@@ -1670,7 +1700,8 @@ has "...and says what podman said" "What it said" "$_p2run"
 has "...leaving a reason for the summary" "exakit_note_failure" "$_p2run"
 has "...and it is a soft failure like the rest" "return 1" "$_p2run"
 _p2dep2="$(sed -n '/^personal_deploy_local()/,/^}/p' "$ROOT/setup/lib/runtime-personal.sh")"
-has "the deployment asks before it deploys" "personal_podman_running || return 1" "$_p2dep2"
+has "the deployment asks its engine (Docker or Podman since 2.4) before it deploys" "personal_engine_running docker || return 1" "$_p2dep2"
+has "...and Podman, when that is the engine" "personal_podman_running || return 1" "$_p2dep2"
 
 _p2winrun="$(sed -n '/^function Test-PersonalPodmanRunning/,/^}/p' "$ROOT/setup/lib/runtime-personal.ps1")"
 has "windows asks podman whether it works too" "Test-PersonalPodmanAnswers" "$_p2winrun"
@@ -1679,8 +1710,15 @@ has "windows asks podman whether it works too" "Test-PersonalPodmanAnswers" "$_p
 has "...and starts a machine that is merely stopped" '"machine" "start"' "$_p2winrun"
 has "...only when it really is stopped" 'machine", "list"' "$_p2winrun"
 has "...putting the whole error in the log" 'Invoke-ExakitLogged $podman.Source "info"' "$_p2winrun"
+has "...and its last line on screen, like the sh side" "What it said" "$_p2winrun"
 has "...and naming the command that finishes the job" "re-run the installer" "$_p2winrun"
-has "the windows deploy asks before it deploys"     "elseif (-not (Test-PersonalPodmanRunning))" "$(cat "$ROOT/setup/lib/runtime-personal.ps1")"
+# ...and before ANY branch: the engine's own readiness check (Docker answering,
+# or Podman's machine up) heads the deployment and the start alike, so a broken
+# engine is named before anything waits on it or is replaced.
+has "the windows deploy asks its engine before it deploys"     'Test-PersonalEngineRunning "docker"' "$(sed -n '/^function Install-PersonalDeployment/,/^}/p' "$ROOT/setup/lib/runtime-personal.ps1")"
+has "...and Podman, when that is the engine"     'Test-PersonalPodmanRunning' "$(sed -n '/^function Install-PersonalDeployment/,/^}/p' "$ROOT/setup/lib/runtime-personal.ps1")"
+has "...and so does the windows start"     'Test-PersonalPodmanRunning' "$(sed -n '/^function Start-Personal/,/^}/p' "$ROOT/setup/lib/runtime-personal.ps1")"
+has "...and Docker, when the deployment runs on it"     'Test-PersonalDockerUsable' "$(sed -n '/^function Start-Personal/,/^}/p' "$ROOT/setup/lib/runtime-personal.ps1")"
 
 # ---------------------------------------------------------------------------
 # A START THE LAUNCHER ACCEPTED IS NOT A DATABASE
@@ -1769,8 +1807,10 @@ lacks "...under one name for every cause" "PersonalNoPodman" "$_p2winh"
 # existing deployment whose engine nothing can name, and an existing Docker
 # deployment whose daemon is down, stopped before its start and replace.
 # Sixteen with a replace refused because this run's start already failed on
-# the WSL kernel's nftables error (nothing is deleted).
-check "...set by each cause that leaves no database" "16" \
+# the WSL kernel's nftables error (nothing is deleted). Eighteen with a
+# deployment that never started: its replacement declined, or refused by the
+# WSL check before its destroy.
+check "...set by each cause that leaves no database" "18" \
     "$(printf '%s' "$_p2winh" | grep -c 'PersonalNoDatabase = $true')"
 has "the windows resume arm survives a start that cannot finish" \
     'Invoke-ExakitSoftStep -Component "runtime" -Repair "exakit start"' \
@@ -2234,7 +2274,11 @@ _hd_missing() { # _hd_missing <file> <header-last-line> -> names not in the head
 import io, os, re, sys
 path = os.path.join(os.environ["ROOT"], os.environ["F"])
 src = io.open(path, encoding="utf-8").read()
-hdr = "\n".join(src.split("\n")[:int(os.environ["N"])])
+# The header is the leading comment block of the file, however long it grows (the
+# line count passed in is a floor, kept for the call sites).
+lines = src.split("\n")
+end = next((i for i, line in enumerate(lines) if i > 0 and not line.startswith("#")), len(lines))
+hdr = "\n".join(lines[:max(end, int(os.environ["N"]))])
 if path.endswith(".ps1"):
     body = re.search(r"switch \(\$Command\) \{(.*?)\n    \}\n", src, re.S).group(1)
     names = {m.group(1) for m in re.finditer(r"^\s{8}\"([a-z0-9-]+)\"", body, re.M)}
@@ -2246,9 +2290,10 @@ else:
     names = {n for n in names if n and n != "*"}
 print(" ".join(sorted(n for n in names if not n.startswith("-") and n not in hdr)))'
 }
-check "every command the Windows CLI dispatches is in its header" "" "$(_hd_missing setup/exakit.ps1 75)"
-check "...and the same holds for the shell CLI"                   "" "$(_hd_missing setup/exakit 84)"
-_hd_ps="$(sed -n '4,75p' "$ROOT/setup/exakit.ps1")"
+check "every command the Windows CLI dispatches is in its header" "" "$(_hd_missing setup/exakit.ps1 79)"
+check "...and the same holds for the shell CLI"                   "" "$(_hd_missing setup/exakit 88)"
+# The whole leading comment block, however long the command list grows.
+_hd_ps="$(awk 'NR > 1 && !/^#/ { exit } { print }' "$ROOT/setup/exakit.ps1")"
 has "the Windows header documents the add-on uninstall" 'uninstall [<addon-id>]' "$_hd_ps"
 
 # DOC-03: the shell header advertised the staged major-upgrade route with no
@@ -2451,9 +2496,9 @@ check "no remote fetch follows redirects without pinning https" "" "${_pg_bad# }
 _pg_guarded="$(grep -rc -- "--proto '=https'" "$ROOT"/setup/lib/*.sh "$ROOT"/install.sh 2>/dev/null | awk -F: '{s+=$2} END {print s+0}')"
 check "...and it saw the guarded calls" "yes" \
     "$([ "${_pg_guarded:-0}" -ge 8 ] && echo yes || echo no)"
-# The one that carries a credential is the one that must never be unguarded.
-has "the token-bearing lookup pins https" "--proto '=https' --proto-redir '=https'" \
-    "$(sed -n '/_esd_json="\$(curl/,+3p' "$ROOT/setup/lib/exasol-scheduler.sh")"
+# The scheduler release lookup rejects non-HTTPS responses.
+has "the scheduler lookup pins https" 'if not response.url.startswith("https://")' \
+    "$(cat "$ROOT/marketplace/addons/exasol_scheduler.py")"
 
 echo
 echo "a booting database is not a port conflict:"
@@ -2748,6 +2793,55 @@ PROFILE_FN="$(sed -n '/^exapump_create_profile() {/,/^}/p' "$ROOT/setup/lib/exap
 has "the database-password prompt uses it" "exakit_read_hidden" "$PROFILE_FN"
 lacks "...and keeps no prompt-then-stty of its own" "stty -echo" "$PROFILE_FN"
 
+echo "a full uninstall names what it leaves for you to remove (audit DAY-09):"
+_ul_dir="$(mktemp -d)"; mkdir -p "$_ul_dir/bin" "$_ul_dir/python/cpython-3.12.9-macos-aarch64-none"
+printf '#!/bin/sh\n[ "$1 $2" = "python dir" ] && echo "%s/python"\n' "$_ul_dir" > "$_ul_dir/bin/uv"; chmod +x "$_ul_dir/bin/uv"
+_ul_out="$( (PATH="$_ul_dir/bin:$PATH"; EXAKIT_MANAGED_PYTHON_VERSION=3.12; exakit_uninstall_leftovers) 2>&1)"
+has "the PATH line" "PATH entry for" "$_ul_out"
+has "the Python uv downloaded, with the command that removes it" "uv python uninstall 3.12" "$_ul_out"
+rm -rf "$_ul_dir/python/cpython-3.12.9-macos-aarch64-none"
+lacks "...and nothing about it when there is none" "uv python uninstall" "$( (PATH="$_ul_dir/bin:$PATH"; exakit_uninstall_leftovers) 2>&1)"
+rm -rf "$_ul_dir"
+has "both full-uninstall endings say it" "2" "$(cat "$ROOT/setup/exakit" "$ROOT/setup/lib/common.sh" | grep -c '^[[:space:]]*exakit_uninstall_leftovers$')"
+
+echo "GITHUB_TOKEN never reaches a command line (audit SEC-05/06):"
+_tk_dir="$(mktemp -d)"; mkdir -p "$_tk_dir/bin" "$_tk_dir/home"
+cat > "$_tk_dir/bin/curl" <<'CURL'
+#!/bin/sh
+printf '%s\n' "$*" >> "$TK_DIR/argv"
+case " $* " in *" -K - "*) cat >> "$TK_DIR/stdin" ;; esac
+exit 22
+CURL
+chmod +x "$_tk_dir/bin/curl"
+( TK_DIR="$_tk_dir" HOME="$_tk_dir/home" PATH="$_tk_dir/bin:$PATH" GITHUB_TOKEN=tk-not-a-real-token \
+    EXAKIT_DRY_RUN=1 sh "$ROOT/install.sh" </dev/null >/dev/null 2>&1 )
+lacks "install.sh: the token is not in curl's arguments" "tk-not-a-real-token" "$(cat "$_tk_dir/argv" 2>/dev/null)"
+has "...it reaches curl on stdin, as a header" "Authorization: Bearer tk-not-a-real-token" "$(cat "$_tk_dir/stdin" 2>/dev/null)"
+rm -rf "$_tk_dir"
+has "install.ps1 sends the token it names as the remedy" 'Authorization = "Bearer $($env:GITHUB_TOKEN)"' "$(cat "$ROOT/install.ps1")"
+
+echo "the PATH line runs in a non-interactive ssh shell too (audit LNX-14):"
+_lp_home="$(mktemp -d)"
+printf '# ~/.bashrc\ncase $- in\n    *i*) ;;\n      *) return;;\nesac\nalias ll=ls\n' > "$_lp_home/.bashrc"
+( HOME="$_lp_home" SHELL=/bin/bash PATH=/usr/bin:/bin; uname() { echo Linux; }; ensure_path_hint "$_lp_home/.local/bin" ) >/dev/null 2>&1
+check "Ubuntu's early return: the export goes above it" "export case" \
+    "$(awk '/^export PATH=/ && !e { printf "export "; e=1 } /^case / && !c { printf "case"; c=1 }' "$_lp_home/.bashrc")"
+has "...and the user's own lines are kept" "alias ll=ls" "$(cat "$_lp_home/.bashrc")"
+check "a non-interactive shell now has it" "yes" \
+    "$(env -i HOME="$_lp_home" PATH=/usr/bin:/bin bash -c ". '$_lp_home/.bashrc'; case :\$PATH: in *':$_lp_home/.local/bin:'*) echo yes ;; *) echo no ;; esac")"
+printf 'alias ll=ls\n' > "$_lp_home/.bashrc"
+( HOME="$_lp_home" SHELL=/bin/bash PATH=/usr/bin:/bin; uname() { echo Linux; }; ensure_path_hint "$_lp_home/.local/bin" ) >/dev/null 2>&1
+check "no early return: appended at the end, as before" "export" "$(tail -1 "$_lp_home/.bashrc" | cut -d' ' -f1)"
+rm -rf "$_lp_home"
+
+echo "the install's last line works in the terminal that ran it (audit MAC-04):"
+_ch_bare="$( (EXAKIT_PATH_AT_START=/usr/bin:/bin; exakit_closing_hint) 2>&1)"
+has "bin folder not on the starting PATH: the full path is given" "/exakit help" "$_ch_bare"
+_ch_on="$( (EXAKIT_PATH_AT_START="$EXAKIT_BIN_DIR:/usr/bin"; exakit_closing_hint) 2>&1)"
+lacks "already on PATH: the short form only" "in this one" "$_ch_on"
+for _ch_os in macos linux; do
+    has "setup-$_ch_os.sh ends with that line" "exakit_closing_hint" "$(tail -20 "$ROOT/setup/setup-$_ch_os.sh")"
+done
 echo "the suite stayed out of the real home:"
 check "the real kit home was not touched" "untouched" \
     "$([ "$(ls -A "$_REAL_KIT_DIR" 2>/dev/null || echo absent)" = "$_REAL_KIT_SNAPSHOT" ] && echo untouched || echo CHANGED)"

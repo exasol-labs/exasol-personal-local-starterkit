@@ -28,8 +28,9 @@ EXAKIT_EXAPUMP_BIN="${EXAKIT_EXAPUMP_BIN:-$EXAKIT_BIN_DIR/exapump}"
 # said so later, as `Profile 'starter-kit' not found in config` from a command
 # that had worked ten minutes earlier. Every reader and the remover now share
 # this variable, so sandboxing it once is enough.
-EXAKIT_EXAPUMP_CONFIG_DIR="${EXAKIT_EXAPUMP_CONFIG_DIR:-$HOME/.exapump}"
+EXAKIT_EXAPUMP_CONFIG_DIR="${EXAKIT_EXAPUMP_CONFIG_DIR:-$EXAKIT_HOME/exapump}"
 EXAPUMP_CONFIG="$EXAKIT_EXAPUMP_CONFIG_DIR/config.toml"
+export EXAPUMP_CONFIG
 
 exapump_asset_name() {
     _ver="$EXAKIT_EXAPUMP_VERSION"
@@ -57,12 +58,13 @@ exapump_asset_name() {
 # ⇄ twin: Get-ExapumpExpectedSha256 in exapump.ps1.
 exapump_expected_sha256() {
     _ex_asset="$1"
-    _ex_advertised="$(exakit_versions_value components.exapump.version 2>/dev/null || true)"
+    # The kit copy's own pin, never the fetched document (SEC-13).
+    _ex_advertised="$(exakit_versions_pin components.exapump.version 2>/dev/null || true)"
     if [ -n "$_ex_advertised" ] && [ "$_ex_advertised" = "$EXAKIT_EXAPUMP_VERSION" ]; then
         # The asset name is exapump-<version>-<os>-<arch>, and versions.json keys
         # its digests by that same <os>-<arch> token.
         _ex_platform="${_ex_asset#exapump-${EXAKIT_EXAPUMP_VERSION}-}"
-        _ex_digest="$(exakit_versions_value "components.exapump.sha256.${_ex_platform}" 2>/dev/null || true)"
+        _ex_digest="$(exakit_versions_pin "components.exapump.sha256.${_ex_platform}" 2>/dev/null || true)"
         case "$_ex_digest" in
             *[!0-9a-f]*) _ex_digest="" ;;
         esac
@@ -142,10 +144,11 @@ exapump_cli() {
 }
 
 exapump_install() {
+    if [ -e "$(exapump_cli)" ]; then exakit_reuse_ownership exapump "$(exapump_cli)"; fi
     [ "$(detect_arch)" != "unsupported" ] || \
         die "Unsupported CPU architecture: $(uname -m). exapump binaries exist for x86_64 and arm64 only."
 
-    if [ "${EXAKIT_FORCE_COMPONENT_INSTALL:-0}" != "1" ] && { command -v exapump >/dev/null 2>&1 || [ -x "$EXAKIT_EXAPUMP_BIN" ]; }; then
+    if { [ "${EXAKIT_FORCE_COMPONENT_INSTALL:-0}" != "1" ] || ! exakit_component_is_managed exapump; } && { command -v exapump >/dev/null 2>&1 || [ -e "$EXAKIT_EXAPUMP_BIN" ]; }; then
         # Trust the existing binary only if it actually runs — an interrupted
         # earlier download can leave a broken file at the same path.
         if _exi_out="$("$(exapump_cli)" --version 2>/dev/null)"; then
@@ -156,16 +159,24 @@ exapump_install() {
             # exapump fix in between missing. A binary elsewhere on PATH is
             # the user's and is left alone; only the kit's own is replaced.
             _exi_have="$(printf '%s' "$_exi_out" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)"
-            if [ -n "$_exi_have" ] && [ "$_exi_have" != "$EXAKIT_EXAPUMP_VERSION" ] && \
+            exakit_reuse_ownership exapump "$(exapump_cli)"
+            if exakit_component_is_managed exapump && [ -n "$_exi_have" ] && [ "$_exi_have" != "$EXAKIT_EXAPUMP_VERSION" ] && \
                [ "$(exapump_cli)" = "$EXAKIT_EXAPUMP_BIN" ]; then
                 info "exapump $_exi_have is installed; this kit ships $EXAKIT_EXAPUMP_VERSION - replacing it"
                 rm -f "$EXAKIT_EXAPUMP_BIN"
             else
                 ok "exapump already installed: $(exapump_cli)"
                 exapump_record_manifest
+                [ -z "$_exi_have" ] || manifest_set components.exapump.version "$_exi_have"
                 return 0
             fi
         else
+        exakit_reuse_ownership exapump "$(exapump_cli)"
+        if ! exakit_component_is_managed exapump; then
+            exakit_reuse_ownership exapump "$(exapump_cli)"
+            warn "The existing user-owned exapump cannot run; repair it outside the kit. It was not replaced."
+            return 1
+        fi
         # A binary that fails on the dynamic linker is not a broken download —
         # it is intact but needs a newer glibc than this system has. Shim it
         # in place instead of re-downloading the same incompatible bytes.
@@ -176,6 +187,7 @@ exapump_install() {
             case "$_existing_err" in
                 *GLIBC_*)
                     exapump_install_glibc_shim
+                    exakit_record_ownership exapump kit "$EXAKIT_EXAPUMP_BIN"
                     exapump_record_manifest
                     return 0
                     ;;
@@ -238,6 +250,7 @@ exapump_install() {
     install -m 755 "$_tmp" "$EXAKIT_EXAPUMP_BIN" \
         || die "Could not install exapump to $EXAKIT_EXAPUMP_BIN (is it writable? is the disk full?)."
     push_rollback "rm -f \"$EXAKIT_EXAPUMP_BIN\""
+    exakit_record_ownership exapump kit "$EXAKIT_EXAPUMP_BIN"
     rm -f "$_tmp"
     ensure_path_hint "$EXAKIT_BIN_DIR"
     # Smoke-test the freshly installed binary BEFORE reporting success. A
@@ -247,6 +260,7 @@ exapump_install() {
     # un-launchable binary would otherwise surface 30s later as an opaque
     # "SELECT 1 failed" after the connection retries.
     exapump_verify_runs
+    exakit_record_ownership exapump kit "$EXAKIT_EXAPUMP_BIN"
     ok_step "exapump v${EXAKIT_EXAPUMP_VERSION} installed to $(ui_tilde "$EXAKIT_EXAPUMP_BIN") ($(( $(date +%s 2>/dev/null || echo 0) - _exi_t0 ))s)"
     exapump_record_manifest
 }
@@ -319,7 +333,8 @@ exapump_verify_runs() {
 # binary inside a small newer-glibc container with host networking instead of
 # failing the install. The wrapper is transparent to every caller: same path,
 # same CLI, profiles and data files under $HOME and /tmp remain visible.
-EXAKIT_EXAPUMP_SHIM_IMAGE="${EXAKIT_EXAPUMP_SHIM_IMAGE:-ubuntu:24.04}"
+# Fully qualified: Podman refuses a short name without a TTY to ask on (registries.conf short-name-mode).
+EXAKIT_EXAPUMP_SHIM_IMAGE="${EXAKIT_EXAPUMP_SHIM_IMAGE:-docker.io/library/ubuntu:24.04}"
 
 # _exapump_shim_engine_usable <podman|docker> - the engine can run a container
 # now. Any working Docker will do here (the shim needs no Engine 29), but not
@@ -429,11 +444,24 @@ case "$PWD" in
             _exakit_wd="$HOME"
         fi ;;
 esac
-exec @RUNTIME@ run --rm $_exakit_tty --network host @USERNS@ \
+# The kit keeps its profile in its own store and names it with EXAPUMP_CONFIG: passed in, or exapump inside reads
+# ~/.exapump and finds no starter-kit profile. Its folder is mounted when it is not under $HOME already.
+_exakit_e=""; _exakit_ev=""; _exakit_c=""; _exakit_cp=""
+if [ -n "${EXAPUMP_CONFIG:-}" ]; then
+    _exakit_e="-e"; _exakit_ev="EXAPUMP_CONFIG=$EXAPUMP_CONFIG"
+    _exakit_cd="$(dirname "$EXAPUMP_CONFIG")"
+    case "$_exakit_cd" in
+        "$HOME"*|/tmp*) ;;
+        *) [ -d "$_exakit_cd" ] && { _exakit_c="-v"; _exakit_cp="$_exakit_cd:$_exakit_cd"; } ;;
+    esac
+fi
+# label=disable: on an SELinux host (RHEL and its rebuilds, Fedora) the mounts are unreadable to the container
+# without it; Docker and Podman accept it everywhere (audit LNX-02).
+exec @RUNTIME@ run --rm $_exakit_tty --network host --security-opt label=disable @USERNS@ \
     @USER@ \
-    -e HOME="$HOME" \
+    -e HOME="$HOME" ${_exakit_e:+"$_exakit_e"} ${_exakit_ev:+"$_exakit_ev"} \
     -v "$HOME:$HOME" -v /tmp:/tmp \
-    ${_exakit_v:+"$_exakit_v"} ${_exakit_vp:+"$_exakit_vp"} \
+    ${_exakit_v:+"$_exakit_v"} ${_exakit_vp:+"$_exakit_vp"} ${_exakit_c:+"$_exakit_c"} ${_exakit_cp:+"$_exakit_cp"} \
     -w "$_exakit_wd" \
     @IMAGE@ \
     "@REAL@" "$@"
@@ -490,7 +518,9 @@ exapump_create_profile() {
         _EXAKIT_PENDING_RUNTIME_PASSWORD="$_password"
     fi
 
+    # The kit's own database: its recorded TLS pin goes in the profile (SEC-14).
     exapump_write_profile "$EXAKIT_EXAPUMP_PROFILE" "$_host" "$_port" "$_user" "$_password" \
+        "$(exakit_tls_recorded_fingerprint 2>/dev/null || true)" \
         || die "Could not write the exapump profile"
     manifest_set components.exapump.profile "$EXAKIT_EXAPUMP_PROFILE"
     ok_step "Connection profile [$EXAKIT_EXAPUMP_PROFILE] written to $(ui_tilde "$EXAPUMP_CONFIG")"
@@ -532,8 +562,12 @@ sys.exit(0 if written != onfile else 1)
 PY
 }
 
-# exapump_write_profile <profile> <host> <port> <user> <password> - one TOML
-# section in ~/.exapump/config.toml, replaced in place if it is already there.
+# exapump_write_profile <profile> <host> <port> <user> <password> [fingerprint]
+# - one TOML section in ~/.exapump/config.toml, replaced in place if it is
+# already there. With a fingerprint (the kit's recorded TLS pin, lowercase hex:
+# exapump compares it case-sensitively) the profile refuses any certificate but
+# that one (SEC-14); without one it is exactly the old unpinned profile. Only
+# the kit's own database has a pin - the legacy crossing's profile has none.
 #
 # Split out of exapump_create_profile, which reads the manifest and can only
 # ever write the kit's own profile. The legacy crossing needs a SECOND profile,
@@ -541,7 +575,7 @@ PY
 # 0600 config file rather than in argv where `ps` can read it - so both callers
 # go through one writer instead of a second copy of this TOML surgery.
 exapump_write_profile() {
-    _ewp_profile="$1"; _ewp_host="$2"; _ewp_port="$3"; _ewp_user="$4"; _ewp_password="$5"
+    _ewp_profile="$1"; _ewp_host="$2"; _ewp_port="$3"; _ewp_user="$4"; _ewp_password="$5"; _ewp_fp="${6:-}"
     require_python3
     mkdir -p "$(dirname "$EXAPUMP_CONFIG")"
     # The password travels in the ENVIRONMENT, never in argv. An argv is visible
@@ -553,9 +587,9 @@ exapump_write_profile() {
     # password off the process table.
     EXAKIT_PROFILE_PASSWORD="$_ewp_password"
     export EXAKIT_PROFILE_PASSWORD
-    run_python - "$EXAPUMP_CONFIG" "$_ewp_profile" "$_ewp_host" "$_ewp_port" "$_ewp_user" <<'PY'
+    run_python - "$EXAPUMP_CONFIG" "$_ewp_profile" "$_ewp_host" "$_ewp_port" "$_ewp_user" "$_ewp_fp" <<'PY'
 import os, re, sys
-path, profile, host, port, user = sys.argv[1:6]
+path, profile, host, port, user, fingerprint = sys.argv[1:7]
 password = os.environ["EXAKIT_PROFILE_PASSWORD"]
 try:
     with open(path) as f:
@@ -572,6 +606,8 @@ section = (
     f"tls = true\n"
     f"validate_certificate = false\n"
 )
+if fingerprint:
+    section += f'certificate_fingerprint = "{fingerprint}"\n'
 pattern = re.compile(rf"\[{re.escape(profile)}\][^\[]*", re.S)
 if pattern.search(content):
     content = pattern.sub(section + "\n", content).rstrip("\n") + "\n"
@@ -1358,6 +1394,7 @@ exapump_confirm_installed_version() {
 }
 
 exapump_update() {
+    if ! exakit_component_is_managed exapump; then exakit_preserve_component exapump; return 0; fi
     _latest="$(exakit_component_available exapump)"
     [ -n "$_latest" ] || die "Could not resolve the advertised exapump version."
     # The already-current guard reads the same thing `exakit version` prints in
@@ -1593,42 +1630,41 @@ exakit_csv_inspect() {
 }
 
 # _exakit_json_tables_ready — is the add-on installed AND usable right now?
+_exakit_json_tables_bin() {
+    _jtb_recorded="$(manifest_get components.json_tables.command 2>/dev/null || true)"
+    if [ -n "$_jtb_recorded" ]; then printf '%s\n' "$_jtb_recorded"; return 0; fi
+    if [ -n "${EXAKIT_JSON_TABLES_BIN:-}" ]; then printf '%s\n' "$EXAKIT_JSON_TABLES_BIN"; return 0; fi
+    printf '%s\n' "$EXAKIT_BIN_DIR/exasol-json-tables"
+}
+
+_exakit_json_tables_logged() {
+    _jtl_log="${EXAKIT_JSON_TABLES_LOG:-${EXAKIT_LOG_DIR:-$EXAKIT_HOME/logs}/json-tables.log}"
+    { mkdir -p "$(dirname "$_jtl_log")" && \
+      printf '=== %s %s\n' "$(date '+%Y-%m-%d %H:%M:%S' 2>/dev/null || echo now)" "$*" >> "$_jtl_log"; } 2>/dev/null || true
+    "$@" 2>&1 | tee -a "$_jtl_log" 2>/dev/null
+    return "${PIPESTATUS[0]}"
+}
+
 _exakit_json_tables_ready() {
-    command -v json_tables_installed_version >/dev/null 2>&1 || return 1
-    [ -n "$(json_tables_installed_version 2>/dev/null || true)" ] || return 1
-    [ -x "${EXAKIT_JSON_TABLES_BIN:-}" ] || return 1
+    exakit_component_current json-tables >/dev/null 2>&1 || return 1
+    [ -x "$(_exakit_json_tables_bin)" ] || return 1
     return 0
 }
 
-# _exakit_json_tables_load_module — the module is sourced by the exakit CLI but
-# not by the installer, and the JSON path can be reached from either.
+# The JSON path is reachable from the CLI and the installer.
+_EXAKIT_JSON_TABLES_MODULE_READY=""
 _exakit_json_tables_load_module() {
-    command -v json_tables_install >/dev/null 2>&1 && return 0
+    [ "$_EXAKIT_JSON_TABLES_MODULE_READY" = 1 ] && return 0
     command -v _exakit_marketplace_load_modules >/dev/null 2>&1 || return 1
     _exakit_marketplace_load_modules >/dev/null 2>&1 || true
-    command -v json_tables_install >/dev/null 2>&1
+    exakit_marketplace_addon_available json-tables || return 1
+    _EXAKIT_JSON_TABLES_MODULE_READY=1
 }
 
-# _exakit_json_tables_ensure - make the JSON engine usable, saying nothing.
-# A JSON file is just data the user asked to load, so the engine it needs is an
-# implementation detail: it installs with its output in the log, under the same
-# "Loading your data" spinner as the load itself. No question is asked and no
-# install STEP is announced -- but the fact that an add-on arrived is, on one
-# line, once it has.
-#
-# Returns 0 when the engine is ready, 1 when this machine cannot have it - that
-# case still speaks up, because a silent failure is worse than a loud one.
-#
-# ONE ATTEMPT PER RUN, AND THAT IS NOT AN OPTIMISATION. This is called per FILE,
-# so a folder of ten JSON files whose engine cannot install downloaded the same
-# failing wheel ten times and printed the same three lines ten times - measured
-# at 95 seconds to load nothing, of which almost all was re-downloading a wheel
-# that had already failed its checksum. Whatever stops the engine installing is
-# the same on the second file as on the first. The memo is per-process, so the
-# next `exakit data-load` tries again.
+# Install JSON Tables on demand. Cache a failure for this command so a
+# folder load does not retry the same failed download for every file.
 _EXAKIT_JSON_TABLES_BLOCKED=""
 _exakit_json_tables_ensure() {
-    _exakit_json_tables_ready && return 0
     if [ -n "$_EXAKIT_JSON_TABLES_BLOCKED" ]; then
         warn "$_EXAKIT_JSON_TABLES_BLOCKED"
         return 1
@@ -1639,6 +1675,7 @@ _exakit_json_tables_ensure() {
         warn "This kit copy does not carry the JSON engine - update the kit first: exakit update"
         return 1
     }
+    _exakit_json_tables_ready && return 0
     if command -v _exakit_addon_applicable >/dev/null 2>&1 && \
        ! _exakit_addon_applicable json-tables; then
         _jte_why="$(_exakit_addon_applicable_reason json-tables 2>/dev/null || true)"
@@ -1662,30 +1699,7 @@ _exakit_json_tables_ensure() {
         warn "The JSON engine installed but is not usable yet - retry with: exakit data-load"
         return 1
     }
-    # Said once, and only when this run actually installed it -- the early
-    # readiness check above returns before reaching here, so a machine that
-    # already has the add-on stays quiet.
-    #
-    # An add-on the reader never chose has just appeared on their machine, and
-    # since an add-on's skills now install WITH it, a skill arrived too. Leaving
-    # both silent asks them to discover it in `exakit marketplace` later and work
-    # out where it came from. The install itself is still unannounced: this says
-    # that it happened and what it is for, not what it did.
-    #
-    # ok_step rather than ok: the load narrates on one line, which gates plain
-    # ok to the logfile, and ok_step also hands the spinner's line back before
-    # printing so this lands on a row of its own.
-    # Nothing on screen. This runs in the middle of a folder load, where the
-    # one-line progress bar owns the row and rewrites it continuously -- the
-    # line landed inside it:
-    #
-    #   ⠇ products.json (2/2)  ████████ 99% (7s)   ✓ JSON Tables installed — ...
-    #
-    # ok_step cannot help here: its ui_spin_pause looks for a SPINNER, and a
-    # progress bar is a different animator holding the same line. Announcing an
-    # add-on the reader did not choose was worth one line; it is not worth one
-    # line printed through the middle of another. The logfile keeps it, and the
-    # add-on shows as installed in `exakit marketplace` like any other.
+    # Keep the progress row intact while recording the automatic install.
     _exakit_log_file "OK    JSON Tables installed — the add-on that loads JSON into Exasol"
     return 0
 }
@@ -1763,9 +1777,9 @@ EXAKIT_JSON_NORMALISE_PY
         *) ;;   # no python, or an unreadable file: let the engine have its say
     esac
 
-    # Through _json_tables_logged so the engine's own words land in the
+    # Through _exakit_json_tables_logged so the engine's own words land in the
     # add-on's log too - the very file the failure message below points at.
-    if ! run_logged _json_tables_logged "$EXAKIT_JSON_TABLES_BIN" ingest \
+    if ! run_logged _exakit_json_tables_logged "$(_exakit_json_tables_bin)" ingest \
             --input "$_jl_input" --output-dir "$_jl_tmp/out"; then
         rm -rf "$_jl_tmp"
         warn "This JSON file could not be read - see: exakit logs json-tables"
@@ -2964,11 +2978,203 @@ exakit_bundled_datasets() {
         _bdr_order="$(_exakit_dataset_conf_get order "$_bdr_conf")"
         _bdr_schema="$(_exakit_dataset_conf_get schema "$_bdr_conf")"
         [ -n "$_bdr_id" ] && [ -n "$_bdr_label" ] || continue
+        # A dataset that will be downloaded says how big the download is, in
+        # every list that offers it ("... - 3.9 MB download").
+        _bdr_note="$(exakit_dataset_download_note "${_bdr_conf%/dataset.conf}")"
+        [ -n "$_bdr_note" ] && _bdr_label="$_bdr_label - $_bdr_note"
         [ -n "$_bdr_flag" ] || _bdr_flag="data.datasets.${_bdr_id}.loaded"
         [ -n "$_bdr_schema" ] || _bdr_schema="$(printf '%s' "$_bdr_id" | tr '[:lower:]' '[:upper:]')"
         case "$_bdr_order" in ''|*[!0-9]*) _bdr_order=50 ;; esac
         printf '%s|%s|%s|%s|%s|%s\n' "$_bdr_order" "$_bdr_id" "$_bdr_label" "$_bdr_flag" "$_bdr_markers" "$_bdr_schema"
     done | sort -t'|' -n -k1,1 | cut -d'|' -f2-
+}
+
+# --- reference datasets: CSVs from a checksummed release asset ---------------
+# A reference dataset (amazon_sales, fraud_transactions) keeps its CSVs in git
+# but not in the kit archive users download (.gitattributes, export-ignore):
+# they ship as one deterministic <id>-<snapshot>.tar.gz per dataset, a release
+# asset whose SHA-256, size and URL are in the dataset's manifest.json
+# ("asset", written by tools/datasets/package.py). The decisions and the checks
+# live in ONE place both twins call, setup/lib/dataset_asset.py; the download
+# stays here, with curl's proxy and TLS handling (fetch). Twin:
+# Get-ExakitDatasetFiles in exapump.ps1.
+#
+#   EXAKIT_DATASETS_MIRROR  a folder (or file:// or https:// base URL) holding
+#                           <id>-<snapshot>.tar.gz: an offline or internal copy
+#   EXAKIT_DATASETS_REPO    owner/name whose release holds the asset (default:
+#                           the repository this kit was installed from)
+#   GITHUB_TOKEN / GH_TOKEN a token that can read that repository: a private
+#                           repository's release is fetched through the API
+
+# _exakit_dataset_fetch_token <url> <dest> — a release asset of a PRIVATE
+# repository. Its github.com/<repo>/releases/download/<tag>/<file> link answers
+# 404 even with a token, so the asset is found through the API (the release by
+# its tag, then the asset by name) and fetched from its API URL as
+# application/octet-stream. The token (GITHUB_TOKEN, else GH_TOKEN) reaches
+# curl on stdin, never on its command line where ps shows it, and is sent to
+# api.github.com only: curl does not carry an Authorization header across the
+# redirect to the storage host. Returns 1 on any failure; the caller words it.
+_exakit_dataset_fetch_token() {
+    _edt_token="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+    [ -n "$_edt_token" ] || return 1
+    case "$1" in https://github.com/*/*/releases/download/*/*) ;; *) return 1 ;; esac
+    _edt_rest="${1#https://github.com/}"
+    _edt_repo="$(printf '%s' "$_edt_rest" | cut -d/ -f1-2)"
+    _edt_tag="$(printf '%s' "$_edt_rest" | cut -d/ -f5)"
+    _edt_file="${1##*/}"
+    _edt_json="$(mktemp "${TMPDIR:-/tmp}/exakit-release.XXXXXX")" || return 1
+    _exakit_log_file "GET   https://api.github.com/repos/$_edt_repo/releases/tags/$_edt_tag (with a token)"
+    if ! printf 'header = "Authorization: Bearer %s"\n' "$_edt_token" | curl -fsSL --proto '=https' --proto-redir '=https' \
+            --retry 3 --connect-timeout 15 --max-time 60 -K - -H 'Accept: application/vnd.github+json' \
+            -o "$_edt_json" "https://api.github.com/repos/$_edt_repo/releases/tags/$_edt_tag"; then
+        rm -f "$_edt_json"
+        return 1
+    fi
+    _edt_api="$(run_python_any - "$_edt_json" "$_edt_file" <<'PY'
+import json, sys
+release = json.load(open(sys.argv[1], encoding="utf-8"))
+print(next((a.get("url", "") for a in release.get("assets", []) if a.get("name") == sys.argv[2]), ""))
+PY
+)"
+    rm -f "$_edt_json"
+    case "$_edt_api" in "https://api.github.com/repos/$_edt_repo/releases/assets/"*) ;; *) return 1 ;; esac
+    _exakit_log_file "GET   $_edt_api (with a token) -> $2"
+    printf 'header = "Authorization: Bearer %s"\n' "$_edt_token" | curl -fsSL --proto '=https' --proto-redir '=https' \
+        --retry 3 --connect-timeout 15 --speed-limit 1024 --speed-time 60 -K - -H 'Accept: application/octet-stream' \
+        -o "$2" "$_edt_api"
+}
+
+# _exakit_dataset_asset_field <manifest.json> <key> — one value of the asset
+# block, read without Python (the listing calls this for every dataset).
+# manifest.json is written by package.py, one key per line.
+_exakit_dataset_asset_field() {
+    [ -f "$1" ] || return 1
+    awk -v k="\"$2\":" '
+        /"asset": *\{/ { a = 1; next }
+        a && /^ *\}/   { exit }
+        a && index($0, k) { sub(/^[^:]*: */, ""); gsub(/[",]/, ""); print; exit }
+    ' "$1"
+}
+
+# exakit_dataset_download_note <dataset-dir> — "3.9 MB download" when loading
+# the dataset would download its asset, else nothing: no asset block, CSVs in
+# the kit copy (a checkout), or an extraction already verified in the cache.
+exakit_dataset_download_note() {
+    _ddn_sha="$(_exakit_dataset_asset_field "$1/manifest.json" sha256 2>/dev/null)"
+    [ -n "$_ddn_sha" ] || return 0
+    for _ddn_csv in "$1"/data/*.csv; do
+        [ -f "$_ddn_csv" ] && return 0
+    done
+    [ -f "$EXAKIT_CACHE_DIR/datasets/$(basename "$1")/$_ddn_sha/.verified" ] && return 0
+    _ddn_size="$(_exakit_dataset_asset_field "$1/manifest.json" size 2>/dev/null)"
+    case "$_ddn_size" in ''|*[!0-9]*) return 0 ;; esac
+    awk -v b="$_ddn_size" 'BEGIN { m = b / 1000000; if (m < 0.1) m = 0.1; printf "%.1f MB download\n", m }'
+}
+
+# exakit_dataset_files <kit_root> <dataset-dir> <id> — set
+# EXAKIT_DATASET_DATA_DIR to the folder holding the dataset's verified CSVs.
+# Returns 1 with the reason in EXAKIT_DATASET_FETCH_ERROR (one line, for die)
+# when they cannot be had: offline with nothing cached, a digest that does not
+# match, an archive that is unsafe. Nothing is loaded from a file that failed a
+# check, and a failed download is never cached.
+EXAKIT_DATASET_DATA_DIR=""
+EXAKIT_DATASET_FETCH_ERROR=""
+exakit_dataset_files() {
+    _edf_root="$1"; _edf_dir="$2"; _edf_id="$3"
+    EXAKIT_DATASET_DATA_DIR="$_edf_dir/data"
+    EXAKIT_DATASET_FETCH_ERROR=""
+    # No asset block: the kit copy, exactly as before - and no Python started.
+    grep -q '"asset"' "$_edf_dir/manifest.json" 2>/dev/null || return 0
+    _edf_py="$_edf_root/setup/lib/dataset_asset.py"
+    _edf_cache="$EXAKIT_CACHE_DIR/datasets"
+    _edf_plan="$(run_python_any "$_edf_py" resolve "$_edf_dir" "$_edf_cache" 2>>"${EXAKIT_LOG_FILE:-/dev/null}")" || _edf_plan=""
+    _edf_tab="$(printf '\t')"
+    case "$_edf_plan" in
+        kit) return 0 ;;
+        "dir$_edf_tab"*)
+            EXAKIT_DATASET_DATA_DIR="${_edf_plan#dir$_edf_tab}"
+            _exakit_log_file "INFO  $_edf_id: verified CSVs in $EXAKIT_DATASET_DATA_DIR"
+            return 0 ;;
+        "fetch$_edf_tab"*) ;;
+        *)
+            EXAKIT_DATASET_FETCH_ERROR="Could not read the '$_edf_id' dataset's manifest (a Python 3 is needed; details: exakit logs setup)."
+            return 1 ;;
+    esac
+    IFS="$_edf_tab" read -r _edf_word _edf_file _edf_sha _edf_size _edf_url <<EXAKIT_EDF_EOF
+$_edf_plan
+EXAKIT_EDF_EOF
+    : "$_edf_word" "$_edf_sha"
+    # owner/name only: the value lands in a URL.
+    _edf_repo="${EXAKIT_DATASETS_REPO:-${EXAKIT_KIT_REPO:-exasol-labs/exasol-personal-local-starterkit}}"
+    case "$_edf_repo" in
+        */*/*|/*|*/|*[!A-Za-z0-9._/-]*)
+            EXAKIT_DATASET_FETCH_ERROR="EXAKIT_DATASETS_REPO must be owner/name (got '$_edf_repo')."
+            return 1 ;;
+        */*) ;;
+        *)
+            EXAKIT_DATASET_FETCH_ERROR="EXAKIT_DATASETS_REPO must be owner/name (got '$_edf_repo')."
+            return 1 ;;
+    esac
+    _edf_src="$(printf '%s' "$_edf_url" | sed "s|{repo}|$_edf_repo|")"
+    _edf_local=""
+    if [ -n "${EXAKIT_DATASETS_MIRROR:-}" ]; then
+        case "$EXAKIT_DATASETS_MIRROR" in
+            https://*) _edf_src="${EXAKIT_DATASETS_MIRROR%/}/$_edf_file" ;;
+            file://*)  _edf_local="${EXAKIT_DATASETS_MIRROR#file://}"; _edf_local="${_edf_local%/}/$_edf_file"; _edf_src="$_edf_local" ;;
+            *://*)
+                EXAKIT_DATASET_FETCH_ERROR="EXAKIT_DATASETS_MIRROR must be a folder, a file:// URL or an https:// URL (got '$EXAKIT_DATASETS_MIRROR')."
+                return 1 ;;
+            *)         _edf_local="${EXAKIT_DATASETS_MIRROR%/}/$_edf_file"; _edf_src="$_edf_local" ;;
+        esac
+    fi
+    _edf_mb="$(awk -v b="$_edf_size" 'BEGIN { m = b / 1000000; if (m < 0.1) m = 0.1; printf "%.1f MB", m }')"
+    mkdir -p "$_edf_cache/$_edf_id" 2>/dev/null
+    _edf_part="$_edf_cache/$_edf_id/$_edf_file.part"
+    rm -f "$_edf_part"
+    if [ -n "${EXAKIT_TABLE_ROW:-}" ] && [ -n "${EXAKIT_TABLE_STATE:-}" ]; then
+        ui_table_set "$EXAKIT_TABLE_STATE" "$EXAKIT_TABLE_ROW" running 0 1 10 "downloading $_edf_mb"
+        _exakit_log_file "INFO  Downloading the '$_edf_id' data ($_edf_mb) from $_edf_src"
+    else
+        info "Downloading the '$_edf_id' data ($_edf_mb, checked against its SHA-256)"
+        _exakit_log_file "INFO  from $_edf_src"
+    fi
+    if [ -n "$_edf_local" ]; then
+        cp "$_edf_local" "$_edf_part" 2>>"${EXAKIT_LOG_FILE:-/dev/null}" || rm -f "$_edf_part"
+    else
+        EXAKIT_ACTIVE_LABEL="Downloading the '$_edf_id' data ($_edf_mb)"
+        # With a token, the release may be a private repository's: through the
+        # API first, then the plain link (a public repository needs no token).
+        _edf_tok=0
+        if [ -z "${EXAKIT_DATASETS_MIRROR:-}" ] && [ -n "${GITHUB_TOKEN:-${GH_TOKEN:-}}" ]; then
+            ui_spin_begin "$EXAKIT_ACTIVE_LABEL"
+            _exakit_dataset_fetch_token "$_edf_src" "$_edf_part" >>"${EXAKIT_LOG_FILE:-/dev/null}" 2>&1 && _edf_tok=1
+            ui_spin_end
+            [ "$_edf_tok" = 1 ] || rm -f "$_edf_part"
+        fi
+        if [ "$_edf_tok" != 1 ]; then
+            fetch_quiet "$_edf_src" "$_edf_part" || rm -f "$_edf_part"
+        fi
+        EXAKIT_ACTIVE_LABEL=""
+    fi
+    if [ ! -s "$_edf_part" ]; then
+        rm -f "$_edf_part"
+        EXAKIT_DATASET_FETCH_ERROR="The '$_edf_id' data could not be fetched from $_edf_src and nothing is cached. Retry when online; for a private repository set GITHUB_TOKEN; or set EXAKIT_DATASETS_MIRROR to a folder or URL holding $_edf_file."
+        return 1
+    fi
+    _edf_err="$(mktemp "${TMPDIR:-/tmp}/exakit-asset.XXXXXX")" || _edf_err="/dev/null"
+    _edf_plan="$(run_python_any "$_edf_py" install "$_edf_dir" "$_edf_cache" "$_edf_part" 2>"$_edf_err")"
+    _edf_rc=$?
+    _edf_why="$(tail -n 1 "$_edf_err" 2>/dev/null)"
+    [ "$_edf_err" = /dev/null ] || { cat "$_edf_err" >> "${EXAKIT_LOG_FILE:-/dev/null}" 2>/dev/null; rm -f "$_edf_err"; }
+    rm -f "$_edf_part"
+    case "$_edf_rc:$_edf_plan" in
+        "0:dir$_edf_tab"*)
+            EXAKIT_DATASET_DATA_DIR="${_edf_plan#dir$_edf_tab}"
+            _exakit_log_file "OK    $_edf_id: $_edf_file verified (SHA-256) and cached in $EXAKIT_DATASET_DATA_DIR"
+            return 0 ;;
+    esac
+    EXAKIT_DATASET_FETCH_ERROR="The '$_edf_id' data from $_edf_src was refused: ${_edf_why:-it could not be verified}"
+    return 1
 }
 
 # exakit_db_reachable — can we run SQL right now?
@@ -3337,9 +3543,23 @@ exakit_load_dataset_dir() {
     # IS the narration now (see _exakit_dataset_progress). Nothing is lost —
     # every suppressed line still goes to the logfile, including the per-table
     # row counts, and a FAILED verification still prints in full.
+    # Which row of the table this dataset owns, if a table is on screen. Empty
+    # means there is none, and the single-line bar takes over.
+    EXAKIT_TABLE_ROW=""
+    if [ "${EXAKIT_TABLE_LIVE:-0}" = 1 ]; then
+        EXAKIT_TABLE_ROW="$(exakit_data_table_row "$_ld_id")"
+        [ "$EXAKIT_TABLE_ROW" = "0" ] && EXAKIT_TABLE_ROW=""
+    fi
+    # Where the CSVs come from. A reference dataset's ship as a checksummed
+    # release asset, not in the kit archive: the kit copy when it is there and
+    # matches the manifest, else the verified cache, else a download that is
+    # checked before anything is loaded (exakit_dataset_files). Every other
+    # dataset reads its own data/ as it always has.
+    exakit_dataset_files "$_ld_kit_root" "$_ld_dir" "$_ld_id" || die "$EXAKIT_DATASET_FETCH_ERROR"
+    _ld_data="$EXAKIT_DATASET_DATA_DIR"
     _ld_bytes=0
     _ld_files=0
-    for _ld_csv in "$_ld_dir"/data/*.csv; do
+    for _ld_csv in "$_ld_data"/*.csv; do
         [ -s "$_ld_csv" ] || continue
         _ld_bytes=$(( _ld_bytes + $(exakit_load_weight_of "$_ld_csv") ))
     done
@@ -3354,13 +3574,6 @@ exakit_load_dataset_dir() {
     _ld_t0="$(date +%s 2>/dev/null || echo 0)"
     _ld_state="$(mktemp "${TMPDIR:-/tmp}/exakit-load.XXXXXX")" || \
         die "Could not create a temporary file for the load progress."
-    # Which row of the table this dataset owns, if a table is on screen. Empty
-    # means there is none, and the single-line bar takes over.
-    EXAKIT_TABLE_ROW=""
-    if [ "${EXAKIT_TABLE_LIVE:-0}" = 1 ]; then
-        EXAKIT_TABLE_ROW="$(exakit_data_table_row "$_ld_id")"
-        [ "$EXAKIT_TABLE_ROW" = "0" ] && EXAKIT_TABLE_ROW=""
-    fi
     EXAKIT_UPLOAD_QUIET=1
     export EXAKIT_UPLOAD_QUIET
     exakit_load_step "$_ld_state" "$_ld_done_w" "$_ld_nominal" "$_ld_total_w" 2 \
@@ -3392,7 +3605,7 @@ exakit_load_dataset_dir() {
     # lever left: exapump upload cannot target more than one table per call,
     # and the server refuses IMPORT of local files over this protocol.
     _ld_csvs=""
-    for _ld_csv in "$_ld_dir"/data/*.csv; do
+    for _ld_csv in "$_ld_data"/*.csv; do
         [ -s "$_ld_csv" ] || continue
         _ld_table="$(basename "$_ld_csv" .csv | tr '[:lower:]' '[:upper:]')"
         _ld_tables="$_ld_tables $_ld_table"
@@ -3573,26 +3786,29 @@ exakit_load_dataset_dir() {
     fi
 }
 
-# exakit_data_load_select <final_label> — dynamic checkbox over the data
-# sources, shown as a small tree with exactly three top-level choices:
+# exakit_data_load_select <final_label> — the data question, ONE table that
+# the load then fills in ("Data to load"):
 #
-#   Select All                      <- group row (only when any is pending)
-#     [x] <each dataset not loaded yet, visible upfront and individually
-#          selectable — no extra keypress needed to see what is available>
-#   [ ] A local CSV / Parquet / JSON file
-#   [ ] <final_label>               <- mutually exclusive opt-out (Cancel/Skip)
+#   [x] Sample datasets              <- the parent: ticks every dataset under it
+#   [x] ├─ <each dataset not loaded yet>          For: the personas it is for
+#   [ ] Upload a file or folder: CSV/Parquet/JSON
+#   [ ] Connect an external source (...)  <- `exakit connect`, after the load;
+#                                            shown disabled ("coming soon")
+#                                            where the module cannot run
+#   [ ] <final_label>                <- mutually exclusive opt-out (Skip)
 #
-# Already-loaded datasets are not offered; when every bundled dataset is
-# loaded the group disappears and only the local-file and opt-out choices
-# remain. Pending datasets are pre-selected; with none pending the opt-out is
-# the (safe) default, which is also what a non-interactive run keeps. The
-# result lands in EXAKIT_DATA_LOAD_SELECTION as a csv of ids ("tpch",
-# "local") or "none".
+# Already-loaded datasets are not offered; when every one is in, the parent
+# stays on screen, disabled, saying so. The personas picked tick their own
+# datasets (EXAKIT_DATASETS_PRESELECT); with none, every pending one. Nothing
+# left to tick is Skip (or the file row, without a persona and with nothing
+# pending), which is also what a non-interactive run keeps. The result lands in
+# EXAKIT_DATA_LOAD_SELECTION as a csv of ids ("tpch", "local", "external") or
+# "none".
 EXAKIT_DATA_LOAD_SELECTION=""
 exakit_data_load_select() {
     _dls_final_label="$1"
     # EXAKIT_DATA_FILE mirrors the EXAKIT_DATASETS contract: naming a file IS
-    # choosing "A local CSV / Parquet / JSON file", so the table never draws.
+    # choosing the file row, so the table never draws.
     # The path (and EXAKIT_DATA_TABLE) are consumed by exakit_load_local_file
     # as its two answers.
     if [ -n "${EXAKIT_DATA_FILE:-}" ]; then
@@ -3600,35 +3816,52 @@ exakit_data_load_select() {
         EXAKIT_DATA_LOAD_SELECTION="local"
         return 0
     fi
+    # ONE SCREEN: "Sample datasets" is the parent row with the datasets under
+    # it, then your own file or folder, an external source (exakit connect where
+    # it can run, else shown disabled) and Skip. Enter starts the load in this same table, so the rows a reader
+    # ticks are the rows they then watch fill in.
+    EXAKIT_DATA_LOAD_SELECTION=""
+    exakit_data_samples_select "$_dls_final_label" || return 1
+    [ -n "$EXAKIT_DATA_LOAD_SELECTION" ] || EXAKIT_DATA_LOAD_SELECTION="none"
+    return 0
+}
+
+# exakit_data_samples_select <final-label> — the table of the data question
+# (exakit_data_load_select), which then shows the load's progress. Each says, in a
+# "For" column, the personas it is for; the personas picked for this machine
+# are ticked (EXAKIT_DATASETS_PRESELECT), or every pending one when none was
+# picked - and Skip when none of theirs is still to load.
+exakit_data_samples_select() {
+    _dls_final_label="$1"
+    : "$_dls_final_label"
     # The selection is made in the TABLE that will show the progress, so the
     # rows a reader ticks are the rows they then watch fill in. The final label
     # is a parameter for the same reason it always was: the installer's opt-out
     # reads "Skip", and so does the standalone command's.
+    exakit_data_table_release
     EXAKIT_TABLE_STATE="$(mktemp "${TMPDIR:-/tmp}/exakit-table.XXXXXX")" || {
         warn "Could not create a temporary file for the data table."
         EXAKIT_DATA_LOAD_SELECTION="none"
         return 1
     }
+    exakit_track_tmp "$EXAKIT_TABLE_STATE"
     exakit_data_table_build "$EXAKIT_TABLE_STATE"
-    # Nothing said about the bundled datasets already being loaded. The table
-    # below shows exactly what is on offer, and when they are all in it offers
-    # the local-file row and Skip -- their absence IS the message. A sentence
-    # explaining why the list is short, printed above the list, is the screen
-    # apologising for itself. The logfile keeps the fact.
-    if [ "$(exakit_data_table_row local)" = "$EXAKIT_TABLE_ROW_LOCAL" ] && \
-       [ "$EXAKIT_TABLE_ROW_LOCAL" = "1" ]; then
-        _exakit_log_file "INFO  Every bundled dataset is already loaded (replace with: exakit data-load --force, which drops and rebuilds their tables)."
-    fi
-    UI_TABLE_TITLE="Datasets to load"
+    UI_TABLE_TITLE="Data to load"
+    # What each dataset is (description= in its dataset.conf) gets a column of
+    # its own while the reader picks; the progress display that follows has no
+    # room for it, and needs none. With no description the second column is
+    # there all the same, blank and untitled: a table with a second column holds
+    # no room for a Status column while every row is idle, which is what gives
+    # the names their width here.
+    UI_TABLE_COL2=" "
+    [ "${EXAKIT_TABLE_HAS_DESC:-0}" = 1 ] && UI_TABLE_COL2="Description"
     printf '\n'
     ui_table_menu "$EXAKIT_TABLE_STATE"
+    UI_TABLE_COL2=""
 
-    EXAKIT_DATA_LOAD_SELECTION=""
+    # Skip answers none; the caller collects into EXAKIT_DATA_LOAD_SELECTION.
     case ",$EXAKIT_TABLE_SELECTION," in
-        *",$EXAKIT_TABLE_ROW_SKIP,"*)
-            EXAKIT_DATA_LOAD_SELECTION="none"
-            return 0
-            ;;
+        *",$EXAKIT_TABLE_ROW_SKIP,"*) EXAKIT_DATA_LOAD_SELECTION="none"; exakit_data_table_release; return 0 ;;
     esac
     # With nothing pending the local-file row is pre-ticked so Enter does
     # something, but only a person can answer the question it asks. With no
@@ -3646,7 +3879,21 @@ exakit_data_load_select() {
         [ -n "$_dls_id" ] || continue
         EXAKIT_DATA_LOAD_SELECTION="${EXAKIT_DATA_LOAD_SELECTION:+$EXAKIT_DATA_LOAD_SELECTION,}$_dls_id"
     done
-    [ -n "$EXAKIT_DATA_LOAD_SELECTION" ] || EXAKIT_DATA_LOAD_SELECTION="none"
+    # Nothing picked, nothing to show progress in: the table is done.
+    [ -n "$EXAKIT_DATA_LOAD_SELECTION" ] || exakit_data_table_release
+    return 0
+}
+
+# exakit_data_table_release — the data table's state file and the animator's
+# sidecars go once the table has closed. The state file used to stay in TMPDIR
+# after every data-load and every install that offered data, with nothing that
+# ever removed it. Callers release it after ui_table_end; the EXIT sweep
+# (exakit_track_tmp) covers a die() or Ctrl+C before that.
+exakit_data_table_release() {
+    [ -n "${EXAKIT_TABLE_STATE:-}" ] || return 0
+    rm -f "$EXAKIT_TABLE_STATE" "$EXAKIT_TABLE_STATE.new" "$EXAKIT_TABLE_STATE.lines" \
+          "$EXAKIT_TABLE_STATE.stop" "$EXAKIT_TABLE_STATE.fatal"
+    EXAKIT_TABLE_STATE=""
     return 0
 }
 
@@ -3660,6 +3907,7 @@ exakit_data_load_select() {
 EXAKIT_TABLE_STATE=""
 EXAKIT_TABLE_ROW_LOCAL=0
 EXAKIT_TABLE_ROW_SKIP=0
+EXAKIT_TABLE_HAS_DESC=0           # does any row carry a description
 
 # exakit_data_table_build <state-file> — write the rows, in the order they are
 # drawn, and set EXAKIT_TABLE_DEFAULTS / _GROUP / _EXCLUSIVE the way the
@@ -3669,11 +3917,32 @@ exakit_data_table_build() {
     _dtb_f="$1"
     : > "$_dtb_f"
     EXAKIT_TABLE_IDS=""
+    EXAKIT_TABLE_HAS_DESC=0
     # Via a FILE, not a space-separated list: every label has spaces in it
     # ("TPC-H retail benchmark"), and `for x in $list` would split each label
     # into a row of its own.
     _dtb_pend="$_dtb_f.pending"
     exakit_pending_datasets > "$_dtb_pend" 2>/dev/null || : > "$_dtb_pend"
+    # A PERSONA LISTS ITS OWN. Picked for this machine, the personas' datasets
+    # are the samples on offer; the rest of the bundle stays one
+    # `exakit data-load` away. No persona: every sample, as always.
+    if [ -n "${EXAKIT_PERSONA_ACTIVE:-}" ]; then
+        case "${EXAKIT_DATASETS_PRESELECT:-}" in
+            ''|none) ;;
+            *)
+                _dtb_keep="$_dtb_f.keep"
+                : > "$_dtb_keep"
+                while IFS='|' read -r _dtb_kid _dtb_krest; do
+                    case ",$EXAKIT_DATASETS_PRESELECT," in
+                        *",$_dtb_kid,"*) printf '%s|%s\n' "$_dtb_kid" "$_dtb_krest" >> "$_dtb_keep" ;;
+                    esac
+                done < "$_dtb_pend"
+                mv "$_dtb_keep" "$_dtb_pend"
+                ;;
+        esac
+    fi
+    # Each dataset's description= (its dataset.conf), for the second column.
+    _dtb_root="$(exakit_repo_root 2>/dev/null || true)"
     # NOT `grep -c ... || printf 0`: grep exits 1 when the count is zero, so the
     # fallback fired IN ADDITION and the count came out as "0\n0" — which every
     # later [ -gt ] then refused as a non-integer. The guard is the value, not
@@ -3682,7 +3951,9 @@ exakit_data_table_build() {
     case "$_dtb_count" in ''|*[!0-9]*) _dtb_count=0 ;; esac
     _dtb_n=0
     if [ "$_dtb_count" -gt 0 ]; then
-        printf 'group|Select All|1|idle|||||| \n' >> "$_dtb_f"
+        # The parent row: ticking it ticks every dataset under it, unticking
+        # one releases it (EXAKIT_TABLE_GROUP mode "all").
+        printf 'group|Sample datasets|1|idle|||||| \n' >> "$_dtb_f"
         EXAKIT_TABLE_IDS="
 "
         _dtb_n=1
@@ -3694,8 +3965,16 @@ exakit_data_table_build() {
             # The label loses its trailing "(~175k rows)": the Status column
             # carries the real count when the row finishes, and an estimate
             # beside a measurement is the same fact twice, worse.
-            printf '%s|%s|1|idle|||||| \n' "$_dtb_kind" \
-                "$(printf '%s' "$_dtb_label" | sed 's/ *([^()]*)$//')" >> "$_dtb_f"
+            # What it is goes in the row's second column (the Description
+            # column exakit_data_samples_select shows while the reader picks).
+            _dtb_desc=""
+            [ -n "$_dtb_root" ] && [ -f "$_dtb_root/data/datasets/$_dtb_id/dataset.conf" ] && \
+                _dtb_desc="$(_exakit_dataset_conf_get description "$_dtb_root/data/datasets/$_dtb_id/dataset.conf")"
+            [ -n "$_dtb_desc" ] && EXAKIT_TABLE_HAS_DESC=1
+            # A download size the label ends with stays: it is not an estimate
+            # of the rows, it is what loading the row will cost.
+            printf '%s|%s|1|idle|||||| |%s\n' "$_dtb_kind" \
+                "$(printf '%s' "$_dtb_label" | sed 's/ *([^()]*)\( - [0-9.]* MB download\)\{0,1\}$/\1/')" "$_dtb_desc" >> "$_dtb_f"
             EXAKIT_TABLE_IDS="$EXAKIT_TABLE_IDS$_dtb_id
 "
             _dtb_n=$(( _dtb_n + 1 ))
@@ -3707,24 +3986,46 @@ exakit_data_table_build() {
             EXAKIT_TABLE_DEFAULTS="${EXAKIT_TABLE_DEFAULTS:+$EXAKIT_TABLE_DEFAULTS,}$_dtb_i"
             _dtb_i=$(( _dtb_i + 1 ))
         done
+        # The personas picked for this machine tick their own datasets only (and
+        # the parent only when that is every row). No persona: all, as before.
+        [ -n "${EXAKIT_DATASETS_PRESELECT:-}" ] && \
+            EXAKIT_TABLE_DEFAULTS="$(_exakit_data_table_preselect "$EXAKIT_DATASETS_PRESELECT")"
     else
+        # Every sample is in already: the parent stays on screen, so the reader
+        # sees why, but it cannot be picked.
+        printf 'plain|Sample datasets - all of them are loaded already|0|disabled|||||| \n' >> "$_dtb_f"
+        EXAKIT_TABLE_IDS="
+"
+        _dtb_n=1
         EXAKIT_TABLE_GROUP=""
         EXAKIT_TABLE_DEFAULTS=""
     fi
     rm -f "$_dtb_pend"
-    printf 'plain|A local CSV / Parquet / JSON file, or a folder of them|0|idle|||||| \n' >> "$_dtb_f"
-    EXAKIT_TABLE_IDS="${EXAKIT_TABLE_IDS}local
+    # The other two ways data comes in, in the same table: your own file or
+    # folder, and an external source (`exakit connect`, pickable only where the
+    # virtual-schema module can run - see below). EXAKIT_DATA_TABLE_NO_LOCAL=1
+    # leaves both rows out. 0 means no row.
+    EXAKIT_TABLE_ROW_LOCAL=0
+    if [ "${EXAKIT_DATA_TABLE_NO_LOCAL:-0}" != 1 ]; then
+        printf 'plain|Upload a file or folder: CSV/Parquet/JSON|0|idle|||||| \n' >> "$_dtb_f"
+        EXAKIT_TABLE_IDS="${EXAKIT_TABLE_IDS}local
 "
-    _dtb_n=$(( _dtb_n + 1 ))
-    EXAKIT_TABLE_ROW_LOCAL="$_dtb_n"
-    # An external source stays where it is and is queried through a virtual
-    # schema - the same wizard as `exakit connect`. Offered only where it can
-    # work: the module is loaded and the kit's pyexasol, which runs it, is
-    # installed (during a first install it is not yet, two steps later).
-    if command -v exakit_vs_available >/dev/null 2>&1 && exakit_vs_available; then
-        printf 'plain|Connect an external source (PostgreSQL, MySQL, SQL Server, Oracle, Snowflake)|0|idle|||||| \n' >> "$_dtb_f"
-        EXAKIT_TABLE_IDS="${EXAKIT_TABLE_IDS}external
+        _dtb_n=$(( _dtb_n + 1 ))
+        EXAKIT_TABLE_ROW_LOCAL="$_dtb_n"
+        # An external source stays where it is and is queried through a virtual
+        # schema - the same wizard as `exakit connect`. Pickable only where it
+        # can work: the module is loaded and the kit's pyexasol, which runs it,
+        # is installed. Elsewhere (the installer, which does not load the
+        # module) the row is shown and cannot be picked.
+        if command -v exakit_vs_available >/dev/null 2>&1 && exakit_vs_available; then
+            printf 'plain|Connect an external source (PostgreSQL, MySQL, SQL Server, Oracle, Snowflake)|0|idle|||||| \n' >> "$_dtb_f"
+            EXAKIT_TABLE_IDS="${EXAKIT_TABLE_IDS}external
 "
+        else
+            printf 'plain|Connect an external source - coming soon|0|disabled|||||| \n' >> "$_dtb_f"
+            EXAKIT_TABLE_IDS="$EXAKIT_TABLE_IDS
+"
+        fi
         _dtb_n=$(( _dtb_n + 1 ))
     fi
     printf 'plain|Skip|0|idle|||||| \n' >> "$_dtb_f"
@@ -3735,8 +4036,40 @@ exakit_data_table_build() {
     EXAKIT_TABLE_EXCLUSIVE="$_dtb_n"
     # With every bundled dataset already loaded there is nothing to tick but the
     # local-file row, which is the only thing this screen can still do.
-    [ "$_dtb_count" -gt 0 ] || EXAKIT_TABLE_DEFAULTS="$EXAKIT_TABLE_ROW_LOCAL"
+    # A persona whose datasets are all in already: Skip, not the file row -
+    # nothing it asked for is left, and it did not ask for a file.
+    if [ "$_dtb_count" -eq 0 ]; then
+        EXAKIT_TABLE_DEFAULTS="$EXAKIT_TABLE_ROW_LOCAL"
+        [ -n "${EXAKIT_DATASETS_PRESELECT:-}" ] && EXAKIT_TABLE_DEFAULTS="$EXAKIT_TABLE_ROW_SKIP"
+    fi
+    # Nothing ticked - the personas' datasets are all loaded already, a persona
+    # wants none, or there is no local-file row to fall back on - is Skip, so
+    # Enter answers instead of doing nothing.
+    case "$EXAKIT_TABLE_DEFAULTS" in ''|0) EXAKIT_TABLE_DEFAULTS="$EXAKIT_TABLE_ROW_SKIP" ;; esac
     return 0
+}
+
+# _exakit_data_table_preselect <ids_csv> — the table rows to tick for those
+# dataset ids (EXAKIT_TABLE_IDS gives each row's id), plus the parent when the
+# ids cover every dataset row. Empty when none of them is on offer ("none"
+# included); exakit_data_table_build then ticks Skip.
+_exakit_data_table_preselect() {
+    _dtp_rows=""
+    _dtp_all=1
+    _dtp_i=0
+    while IFS= read -r _dtp_id; do
+        _dtp_i=$(( _dtp_i + 1 ))
+        [ "$_dtp_i" -gt 1 ] || continue                       # row 1: the parent
+        [ -n "$_dtp_id" ] || continue
+        case ",$1," in
+            *",$_dtp_id,"*) _dtp_rows="${_dtp_rows:+$_dtp_rows,}$_dtp_i" ;;
+            *) _dtp_all=0 ;;
+        esac
+    done <<EXAKIT_DTP_EOF
+$EXAKIT_TABLE_IDS
+EXAKIT_DTP_EOF
+    [ "$_dtp_all" = 1 ] && _dtp_rows="1${_dtp_rows:+,$_dtp_rows}"
+    printf '%s\n' "$_dtp_rows"
 }
 
 # exakit_data_table_row <dataset-id> — which row that dataset is on, or 0.
@@ -3833,6 +4166,7 @@ exakit_data_load_menu() {
         rm -f "$EXAKIT_DEFER_ERRORS"
     fi
     EXAKIT_DEFER_ERRORS=""
+    exakit_data_table_release
     # The local file / folder load, now that the box is closed.
     #
     # It is the one selection made entirely of QUESTIONS -- the path, then the

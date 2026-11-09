@@ -39,13 +39,19 @@ Install the Exasol starter kit from https://github.com/exasol-labs/exasol-person
 
 </div>
 
+Set up for a role in one go: `curl -fsSL https://www.exasol.com/install/starter-kit.sh | EXAKIT_PERSONA=data-scientist sh` installs the Data Scientist's set - the Amazon sales and fraud transactions reference datasets, every detected AI client, Dash Server and Notebook. `EXAKIT_PERSONA=ml-engineer` selects Notebook and the UDF devkit, with a local MLflow server. Without it, the installer asks (or installs the kit on its own when nobody is at the terminal). Add another one later with `exakit persona add ml-engineer`: the kit is then both, and what the new one brings is loaded, connected and installed without a question. See [personas/](personas/README.md).
+
 ---
 
 ## Overview
 
+For add-on arguments, defaults and copyable examples, use `exakit --help <addon-id>` or read [the add-on command guide](docs/ADDON-COMMANDS.md). Command-specific help is available through forms such as `exakit udf-use --help` and `exakit model put --help`.
+
+Existing compatible components are reused. The kit records whether each component belongs to the kit or the user, shows ownership in `exakit version`, and preserves user-installed components during updates and uninstall. See [component ownership and reuse](docs/COMPONENT-OWNERSHIP.md).
+
 This kit sets up an analytics database on your own machine and connects your AI assistant to it. Everything runs locally, so your data stays with you. You see every SQL statement before it runs and can check each answer yourself.
 
-The install command sets up four components and connects them:
+The install command sets up five components and connects them:
 
 | Component | What it does |
 |---|---|
@@ -54,7 +60,7 @@ The install command sets up four components and connects them:
 | [exapump](https://github.com/exasol-labs/exapump) | Loads CSV and Parquet files and runs SQL from your terminal |
 | [pyexasol](https://github.com/exasol/pyexasol) | The official Exasol Python driver, installed in its own environment |
 
-It also gives your AI agent eight skills, one for each part of the kit. They work in Claude Code, Codex, Cursor and any tool that reads the open skill standard, and an agent loads one only when the task needs it.
+It also gives your AI agent fifteen skills, one for each part of the kit and each add-on. They work in Claude Code, Codex, Cursor and any tool that reads the open skill standard, and an agent loads one only when the task needs it.
 
 ## What's new
 
@@ -69,6 +75,8 @@ The base install stays small. When you want more, you pick an add-on by the outc
 | [JSON&nbsp;Tables](https://github.com/exasol-labs/exasol-json-tables) | JSON files, nested ones included, turned into tables you can query |
 | [Exasol&nbsp;Scheduler](https://github.com/exasol-labs/exasol-scheduler) | SQL that runs on a timetable inside the database. The jobs are rows in a table |
 | [dbt-exasol](https://github.com/exasol/dbt-exasol) | Repeatable SQL models built, tested and documented with dbt against the local database |
+| [Notebooks](https://github.com/exasol/notebook-connector) | JupyterLab connected to the local database (no password in any notebook): for the Data Scientist a quickstart, explore, ask-your-data and share-a-dashboard notebook; for the ML Engineer a quickstart, a training notebook (runs logged to your MLflow), Rust scoring and scoring a model trained elsewhere; all on any described dataset. JupyterLab or Marimo: `exakit notebook` |
+| UDF&nbsp;dev&nbsp;kit | Python and Rust UDFs on the local database: `exakit udf-setup` installs the Python container (the database restarts), `udf-use default` the prebuilt machine-learning one picked for your database's architecture and verified against its pinned digest (scikit-learn, pandas, numpy, scipy), `--language rust` the pinned Rust container, `udf-build` builds one from your pinned requirements, `model put` brings in a model trained anywhere (digest recorded) and `model template` makes the scoring UDF for it |
 
 
 ### JSON support
@@ -109,7 +117,7 @@ exakit mcp-setup
 
 The installer runs this for you, and you can run it again any time to add a client. It lists Claude, Codex, Cursor, GitHub Copilot, Gemini CLI, OpenCode and Continue, greys out the ones already connected or not installed, writes the config for the ones you pick and checks the connection. `exakit mcp-doctor` checks it again later.
 
-Three sample datasets are loaded for you: TPC-H retail in `TPCH`, smart-meter energy readings in `ENERGY` and daily city weather in `WEATHER`. The [data dictionary](data/data-dictionary.md) describes them, and [data/example-questions.md](data/example-questions.md) has 14 questions with reference SQL.
+The General persona (ticked to begin with) loads three samples: TPC-H retail in `TPCH`, smart-meter energy readings in `ENERGY` and daily city weather in `WEATHER`. The Data Scientist and ML Engineer personas load two more, each downloaded from the kit's `datasets` release only when picked: Amazon.in fashion order lines in `AMAZON` and card and bank transactions with a fraud label in `FRAUD` (`exakit data-load amazon_sales` brings one in any time). The [data dictionary](data/data-dictionary.md) describes them, and [data/example-questions.md](data/example-questions.md) has 14 questions with reference SQL.
 
 Try it: *"Which product category generated the most revenue? Show me the SQL before you run it."*
 
@@ -129,12 +137,23 @@ exakit marketplace     # optional add-ons (dashboards & more)
 exakit help            # the commands it offers
 ```
 
+## Your settings in one file
+
+Every setting the kit reads - persona, datasets, mirrors, ports, versions, timeouts - is
+listed, commented out with its default, in `~/.exasol-starter-kit/exakit.env` (the
+installer puts it there; the template is [`setup/exakit.env`](setup/exakit.env)). To change
+one, remove the `# ` in front of its line and edit the value; every later install and
+`exakit` command uses it. A value given on the command line still wins for that run.
+Nothing in the file is ever run, and it holds no secrets: passwords, API keys and tokens
+stay in the environment or the kit's credentials store. `EXAKIT_ENV_FILE=/path` reads
+another file instead.
+
 ## More ways to connect
 
 - GUI: [DBeaver](https://dbeaver.io/download/) or [DbVisualizer](https://www.dbvis.com/download/). Create a new Exasol connection with host `127.0.0.1`, port `8563` and user `sys`.
   - `exakit info` shows where the password is stored.
 - Python: pyexasol is preinstalled in its own environment.
-- Terminal: `exapump interactive -p starter-kit` opens a SQL shell.
+- Terminal: `exakit sql "SELECT 42"` runs one statement; for a SQL shell, `export EXAPUMP_CONFIG=~/.exasol-starter-kit/exapump/config.toml` then `exapump interactive -p starter-kit`.
 
 Run `exakit guide` for the full walkthrough.
 

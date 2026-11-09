@@ -5,13 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
 import json
-import os
-import queue
 import socket
 import stat
-import subprocess
-import threading
-import time
 from typing import Iterable
 from urllib.parse import urlparse
 
@@ -20,6 +15,7 @@ from mcp.adapters.registry import AdapterRegistry
 from mcp.runtime.filesystem import OWNER_ONLY_ACL, describe_protection
 from mcp.core.models import (
     ArtifactReference,
+    DeploymentMode,
     DiscoveredClient,
     Finding,
     OperationRequest,
@@ -211,230 +207,119 @@ class ValidatorService:
         )
         return StageResult("connectivity", "pass", findings, evidence)
 
-    # How long the server gets to answer the handshake. Generous on purpose: the
-    # command is normally `uvx exasol-mcp-server@<version>`, and the very first
-    # run resolves and downloads the package before it says anything at all.
-    SERVER_LAUNCH_TIMEOUT_SECONDS = 90
-
     def validate_server_launch(self, request: OperationRequest) -> StageResult:
-        """Actually start the configured MCP server and speak MCP to it.
+        """Speak MCP to the configured server: the launcher's sidecar, at its loopback URL.
 
         WHY: every other stage inspects paperwork. Config syntax reads the client
         file, connectivity opens a TCP socket to the DATABASE, manifest
         consistency compares hashes — so a client whose entry is present and
-        well-formed was reported "connected" while the server behind it could not
-        start at all. A missing uvx, a package that will not resolve, a python
-        too old: every one of those is a healthy doctor report and an AI client
-        with no Exasol tools in it. This stage is the one that would have caught
-        them, because it is the only one that runs the thing.
+        well-formed could be reported "connected" while the server behind it does
+        not answer. This stage is the one that would catch it, because it is the
+        only one that talks to the server. There is no other server to try: the
+        sidecar is the kit's only one, and exakit mcp-setup heals it.
+        """
+        definition = request.server_definition
+        if definition is not None and definition.transport is DeploymentMode.HTTP and definition.url:
+            return self._validate_http_server(definition.url)
+        findings = [
+            Finding(
+                code="server_launch_not_verified",
+                severity=Severity.INFO,
+                message="No MCP server URL was supplied, so the server was not asked.",
+                recommended_action="Run 'exakit mcp-doctor' on an installed kit to verify the server itself.",
+            )
+        ]
+        return StageResult("server_launch", "pass_with_warnings", findings, [])
 
-        Deliberately forgiving about SPEED and strict about OUTCOME: a timeout is
-        a warning (first-run downloads are slow, and a slow server is not a
-        broken one), while a server that exits, crashes, or answers something
-        that is not MCP is an error with the repair named.
+    # The launcher's MCP sidecar is already running when doctor asks: no first
+    # download to wait for, so a short budget.
+    HTTP_HANDSHAKE_TIMEOUT_SECONDS = 15
+
+    def _validate_http_server(self, url: str) -> StageResult:
+        """The server is the launcher's MCP sidecar (an HTTP endpoint): speak MCP to it there.
+
+        Nothing is started - the sidecar runs with the database - so a refusal
+        names the launcher's own status command rather than a command to run.
         """
         findings: list[Finding] = []
         evidence: list[VerificationEvidence] = []
-        definition = request.server_definition
-        if definition is None or not definition.command:
-            findings.append(
-                Finding(
-                    code="server_launch_not_verified",
-                    severity=Severity.INFO,
-                    message="No stdio server command was supplied, so the server was not started.",
-                    recommended_action="Run 'exakit mcp-doctor' on an installed kit to verify the server itself.",
-                )
-            )
-            return StageResult("server_launch", "pass_with_warnings", findings, evidence)
-
-        command = [definition.command, *definition.args]
-        # The env block carries EXA_PASSWORD. It is passed to the child and is
-        # never echoed: nothing below puts `env` (or the child's stderr, which
-        # can quote its own configuration) into a finding or into evidence.
-        child_env = dict(os.environ)
-        child_env.update(definition.env)
-        # DO NOT LET THE KIT'S OWN IMPORT PATH REACH THE SERVER.
-        #
-        # This subsystem is a package called `mcp`, and it is reached by putting
-        # the kit root on PYTHONPATH (Invoke-McpModule does exactly that so
-        # `python -m mcp` resolves). The MCP server is a separate program that
-        # imports the official `mcp` SDK - so if it inherits that PYTHONPATH,
-        # `import mcp` finds OUR package instead and the server dies on import
-        # with "FastMCP server support is not installed", exits 1, and doctor
-        # reports server_launch_failed against a server that is in fact fine.
-        #
-        # Measured, same command and credentials, only the environment differing:
-        #   clean                      -> tools/list answered
-        #   PYTHONPATH=<kit root>      -> exited (code 1)
-        #   PYTHONPATH dropped         -> tools/list answered
-        # The working directory was tested separately and is harmless, which is
-        # why only the variables are removed and cwd is left alone.
-        #
-        # PYTHONPATH is the one proven to bite; PYTHONHOME goes with it because
-        # it would poison the same import in the same way and nothing here needs
-        # to pass either to a child that brings its own interpreter.
-        child_env.pop("PYTHONPATH", None)
-        child_env.pop("PYTHONHOME", None)
-        printable = " ".join([Path(command[0]).name, *command[1:]])
-
         try:
-            tools = self._mcp_handshake(command, child_env)
-        except subprocess.TimeoutExpired:
-            findings.append(
-                Finding(
-                    code="server_launch_timeout",
-                    severity=Severity.WARNING,
-                    message=(
-                        f"The MCP server did not answer within "
-                        f"{self.SERVER_LAUNCH_TIMEOUT_SECONDS}s ({printable})."
-                    ),
-                    recommended_action=(
-                        "Usually a first-run package download. Run the command once by hand "
-                        "to warm it, then re-run 'exakit mcp-doctor'."
-                    ),
-                )
-            )
-            return StageResult("server_launch", "pass_with_warnings", findings, evidence)
-        except FileNotFoundError:
-            findings.append(
-                Finding(
-                    code="server_command_missing",
-                    severity=Severity.ERROR,
-                    blocking=True,
-                    message=f"The configured MCP server command does not exist: {command[0]}",
-                    recommended_action="Run 'exakit mcp-doctor' to rewrite the entry from the current definition.",
-                )
-            )
-            return StageResult("server_launch", "fail_recoverable", findings, evidence)
+            tools = self._mcp_http_handshake(url)
         except _ServerLaunchError as exc:
             findings.append(
                 Finding(
                     code="server_launch_failed",
                     severity=Severity.ERROR,
                     blocking=True,
-                    message=f"The MCP server did not complete an MCP handshake ({printable}): {exc}",
-                    # No "rewrite the entry" advice here: the entry is fine, the
-                    # server behind it will not start. Rewriting a correct entry
-                    # changes nothing, and doctor has already tried. The only
-                    # thing that moves this forward is seeing the failure.
+                    message=f"The MCP server at {url} did not complete an MCP handshake: {exc}",
                     recommended_action=(
-                        "Run that command by hand to see why it fails - the config "
-                        "entry is correct, so rewriting it will not help."
+                        "Check that the database is running (exakit status; 'exakit start' starts both), then "
+                        "'exakit mcp-setup', which restarts or recreates the server; 'exasol mcp status' shows "
+                        "its own state."
                     ),
                 )
             )
             return StageResult("server_launch", "fail_recoverable", findings, evidence)
-
         evidence.append(
             VerificationEvidence(
                 stage="server_launch",
                 status="pass",
-                # The tool COUNT, not the list: it is the fact that matters
-                # ("the client will see tools"), and it stays honest when the
-                # server's tool set changes upstream.
-                details=f"The MCP server started and offered {len(tools)} tools.",
-                subject=printable,
+                details=f"The MCP server answered at {url} and offered {len(tools)} tools.",
+                subject=url,
             )
         )
         return StageResult("server_launch", "pass", findings, evidence)
 
-    def _mcp_handshake(self, command: list[str], env: dict[str, str]) -> list[str]:
-        """initialize + tools/list over stdio. Returns the tool names.
+    def _mcp_http_handshake(self, url: str) -> list[str]:
+        """initialize + tools/list over Streamable HTTP. Returns the tool names.
 
-        STDIN STAYS OPEN until the answer arrives. subprocess.communicate() would
-        be the obvious way to do this and it is wrong here: it closes stdin as
-        soon as the requests are written, and an MCP stdio server treats that EOF
-        as "the client is gone" and shuts down — measured against the real
-        server, which exited without ever answering tools/list. So the requests
-        are written, the pipe is left open, and stdout is drained on a helper
-        thread until the reply lands or the deadline passes.
+        The answer is JSON or an event stream (``data: {...}`` lines), whichever
+        the server chose; the session id it hands back on initialize goes with
+        every later request, as the transport requires.
         """
-        process = subprocess.Popen(
-            command,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            # The server's stderr is noisy (a startup banner, framework warnings,
-            # full tracebacks) and can quote its own configuration, which holds
-            # the database password. Nothing here reads it, so nothing can leak it.
-            stderr=subprocess.DEVNULL,
-            env=env,
-            text=True,
-            bufsize=1,
-        )
-        lines: "queue.Queue[str]" = queue.Queue()
+        import urllib.error
+        import urllib.request
 
-        def drain() -> None:
+        session: dict[str, str] = {}
+
+        def post(message: dict) -> dict | None:
+            headers = {"Content-Type": "application/json", "Accept": "application/json, text/event-stream"}
+            headers.update(session)
+            request = urllib.request.Request(url, data=json.dumps(message).encode("utf-8"),
+                                             headers=headers, method="POST")
             try:
-                for line in process.stdout:  # type: ignore[union-attr]
-                    lines.put(line)
-            except (OSError, ValueError):
-                pass
-
-        reader = threading.Thread(target=drain, daemon=True)
-        reader.start()
-        try:
-            for message in (
-                {
-                    "jsonrpc": "2.0",
-                    "id": 1,
-                    "method": "initialize",
-                    "params": {
-                        "protocolVersion": "2024-11-05",
-                        "capabilities": {},
-                        "clientInfo": {"name": "exakit-mcp-doctor", "version": "1"},
-                    },
-                },
-                {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
-                {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}},
-            ):
-                process.stdin.write(json.dumps(message) + "\n")  # type: ignore[union-attr]
-                process.stdin.flush()  # type: ignore[union-attr]
-
-            deadline = time.monotonic() + self.SERVER_LAUNCH_TIMEOUT_SECONDS
-            while time.monotonic() < deadline:
+                with urllib.request.urlopen(request, timeout=self.HTTP_HANDSHAKE_TIMEOUT_SECONDS) as response:
+                    sid = response.headers.get("mcp-session-id")
+                    if sid:
+                        session["mcp-session-id"] = sid
+                    body = response.read().decode("utf-8", errors="replace")
+            except urllib.error.HTTPError as exc:
+                raise _ServerLaunchError(f"HTTP {exc.code}") from exc
+            except (urllib.error.URLError, OSError) as exc:
+                raise _ServerLaunchError(f"not reachable ({getattr(exc, 'reason', exc)})") from exc
+            if "id" not in message:
+                return None
+            for chunk in [body] + [line[5:].strip() for line in body.splitlines() if line.startswith("data:")]:
                 try:
-                    line = lines.get(timeout=0.5)
-                except queue.Empty:
-                    # The server died without answering: no point waiting out the
-                    # rest of a 90-second budget for a process that is gone.
-                    if process.poll() is not None and lines.empty():
-                        raise _ServerLaunchError(
-                            f"the server exited (code {process.returncode}) before answering"
-                        )
-                    continue
-                line = line.strip()
-                if not line.startswith("{"):
-                    continue
-                try:
-                    message = json.loads(line)
+                    answer = json.loads(chunk)
                 except ValueError:
                     continue
-                if message.get("id") != 2:
-                    continue
-                if "error" in message:
-                    raise _ServerLaunchError(
-                        str((message["error"] or {}).get("message", "tools/list failed"))
-                    )
-                tools = [
-                    tool.get("name", "")
-                    for tool in (message.get("result") or {}).get("tools", [])
-                    if isinstance(tool, dict)
-                ]
-                if not tools:
-                    raise _ServerLaunchError("the server offered no tools")
-                return tools
-            raise subprocess.TimeoutExpired(command, self.SERVER_LAUNCH_TIMEOUT_SECONDS)
-        except BrokenPipeError as exc:
-            raise _ServerLaunchError(f"the server closed its input ({exc})") from exc
-        finally:
-            if process.poll() is None:
-                process.kill()
-            for stream in (process.stdin, process.stdout):
-                try:
-                    if stream is not None:
-                        stream.close()
-                except OSError:
-                    pass
+                if isinstance(answer, dict) and answer.get("id") == message["id"]:
+                    return answer
+            raise _ServerLaunchError("the server answered something that is not MCP")
+
+        post({"jsonrpc": "2.0", "id": 1, "method": "initialize",
+              "params": {"protocolVersion": "2024-11-05", "capabilities": {},
+                         "clientInfo": {"name": "exakit-mcp-doctor", "version": "1"}}})
+        post({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}})
+        answer = post({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}) or {}
+        if "error" in answer:
+            raise _ServerLaunchError(str((answer["error"] or {}).get("message", "tools/list failed")))
+        tools = [tool.get("name", "") for tool in (answer.get("result") or {}).get("tools", [])
+                 if isinstance(tool, dict)]
+        if not tools:
+            raise _ServerLaunchError("the server offered no tools")
+        return tools
 
     def validate_permission_posture(
         self, artifacts: Iterable[ArtifactReference]
@@ -608,6 +493,9 @@ class ValidatorService:
 
         if desired is None:
             return None
+        desired = desired.for_client(adapter.describe_capabilities().supports_http)
+        if desired is None:
+            return None
         if desired.name != entry_name:
             # This artifact records a different server entry than the one the
             # desired definition describes; there is nothing to compare.
@@ -627,7 +515,8 @@ class ValidatorService:
             message=(
                 f"{adapter.display_name()} still has the managed Exasol entry from an "
                 "earlier setup; it no longer matches the one this kit would write "
-                "(a superseded MCP server version is the usual reason)."
+                "(the MCP server moved to another port, or the entry predates the "
+                "launcher's MCP server, are the usual reasons)."
             ),
             scope={"path": artifact.path, "client": artifact.client},
             # Hashes only, deliberately: the rendered entry carries the managed

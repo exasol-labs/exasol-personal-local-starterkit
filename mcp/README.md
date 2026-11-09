@@ -8,7 +8,6 @@ This directory contains the MCP access and client configuration subsystem for th
 mcp/
 ├── AGENT.md          # guardrails for AI agents working in this subsystem
 ├── QUICKSTART.md     # subsystem-level usage notes
-├── docs/             # architecture, design, API contracts, security, QA
 ├── core/             # models, serialization, errors
 ├── adapters/         # one adapter per supported AI client
 ├── security/         # policy checks (loopback-only, stdio, credentials)
@@ -41,4 +40,3 @@ When the starter kit runtime is already installed and its manifest contains the 
 
 The setup menu always shows the full list: clients that are installed but not yet connected are selectable and pre-selected; clients that are already connected or not installed appear greyed out with the reason. Discovery comes from each adapter's own detection (`discover-clients`).
 
-See [architecture.md](docs/architecture.md) for the governing component boundaries.

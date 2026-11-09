@@ -78,6 +78,19 @@ jobs:
         if: matrix.shard == 2
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/runtime-personal-ps.ps1
+      # The launcher's MCP sidecar as the kit's server: the read-only user, never
+      # SYS; the stdio server whenever the sidecar cannot serve.
+      - name: MCP sidecar backend under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/mcp-sidecar-ps.ps1
+      # install.ps1's dry run, run as users run it (a string through iex):
+      # nothing left in %TEMP% after success or a failure, and a local-kit
+      # copy without the checkout's .git, .claude worktrees and caches.
+      - name: dry run leaves nothing in TEMP under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/temp-cleanup-ps.ps1
       - name: container engine choice under 5.1
         if: matrix.shard == 2
         shell: powershell
@@ -110,6 +123,72 @@ jobs:
         if: matrix.shard == 2
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/personal-s3-ps.ps1
+      # A stale launcher lock no longer blocks an uninstall, against a .cmd stub
+      # launcher and a real process holding the launcher's image name.
+      - name: personas under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/personas-ps.ps1
+      - name: the settings file under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/env-file-ps.ps1
+      - name: menu clicks under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/menu-mouse-ps.ps1
+      - name: exakit sql keeps double quotes under 5.1 (WIN-05)
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/sql-quoting-ps.ps1
+      - name: the table menu, driven with keys (QAT-08)
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/table-menu-ps.ps1
+      - name: MCP admin SQL reaches exapump without a byte order mark under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/mcp-admin-sql-ps.ps1
+      - name: exakit update takes several component ids under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/update-targets-ps.ps1
+      - name: exakit mlflow under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/mlflow-command-ps.ps1
+      - name: the workflow command under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/workflow-command-ps.ps1
+      - name: exakit describe under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/describe-command-ps.ps1
+      - name: the database's TLS pin under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/tls-pin-ps.ps1
+      - name: the reference dataset assets under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/dataset-asset-ps.ps1
+      - name: the data question under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/data-question-ps.ps1
+      - name: the notebook's tools in the add-ons table under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/notebook-tools-table-ps.ps1
+      - name: Rust UDF command twin
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/rust-udf-ps.ps1
+      - name: destroy through a stale lock under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/personal-destroy-lock-ps.ps1
       # The crossing from a container database, executed on the engine that
       # exakit.cmd really runs under: the fault-injection engine and exapump
       # behind .cmd wrappers, every gate, both halves, and the coverage floor.
@@ -154,3 +233,48 @@ jobs:
         if: matrix.shard == 2
         shell: powershell
         run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/virtual-schemas.ps1
+      - name: add-on parameter help under 5.1
+        if: matrix.shard == 2
+        shell: powershell
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/addon-help-ps.ps1
+
+  marketplace-python:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Python add-ons and public PowerShell entry points
+        shell: powershell
+        run: |
+          python -m pip install uv
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -p 'test_marketplace_notebook*.py' -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -p 'test_marketplace_udf*.py' -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -p 'test_marketplace_model_cli.py' -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -p 'test_marketplace_installer_flow.py' -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -p 'test_marketplace_persona_apply.py' -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -p 'test_marketplace_selection.py' -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -p 'test_marketplace_service.py' -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -p 'test_marketplace_runtime.py' -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -p 'test_marketplace_live_fixture.py' -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -p 'test_marketplace_scheduler.py' -k bootstrap -k uninstall -k administrator -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m unittest discover -s tests -p 'test_marketplace_adapters.py' -k failed_public_uninstall -v
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # QAT-11: the suites with no shell, signal or file-mode dependency, never run on Windows before.
+          foreach ($suite in @('addons', 'apply', 'mlflow', 'pinned_digests', 'process', 'redirect_auth',
+                               'rust_cli', 'workflow', 'wsl_ports', 'ui', 'rules', 'blackbox')) {
+            python -m unittest discover -s tests -p "test_marketplace_$suite.py" -v
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }

@@ -1,6 +1,6 @@
-# mcp.ps1 - Exasol MCP server module: install/validate, dedicated read-only
-# database user provisioning, and client config generation (Windows /
-# PowerShell path).
+# mcp.ps1 - Exasol MCP module: the launcher's MCP server (the sidecar beside the
+# database, the only MCP server the kit runs), the dedicated read-only database
+# user it connects as, and client config generation (Windows / PowerShell path).
 #
 # Dot-sourced by setup-windows.ps1 and setup/exakit.ps1 after
 # exakit-common.ps1 and exapump.ps1. Mirrors setup/lib/mcp.sh plus the
@@ -12,8 +12,6 @@
 #      Set-McpReadonlyAccess
 #   3. client configs (generated via the Python mcp package, OS-agnostic)
 #      point at that user, never the admin user
-
-$script:McpHttpPort = if ($env:EXAKIT_MCP_HTTP_PORT) { $env:EXAKIT_MCP_HTTP_PORT } else { "8123" }
 
 # The AI-client table: the rows a reader ticks in the selection phase are the
 # rows the progress phase fills in. $null means this run has no table - a
@@ -100,182 +98,26 @@ function Get-McpCommandPath {
 }
 
 # Set-McpClientsToKitUv - after uv moved (exakit update uv), make the AI
-# clients launch the uvx the kit vetted. The record is rewritten first because
-# the config renderer reads it; then every already-connected client is
+# clients that reach the MCP server through the bridge (Claude Desktop runs
+# `uvx mcp-proxy`) use the uvx the kit vetted. The record is rewritten first
+# because the config renderer reads it; then every already-connected client is
 # refreshed. Clients the user never connected are left alone, as always. Twin
 # of mcp_point_clients_at_kit_uv.
 function Set-McpClientsToKitUv {
     $uvx = Get-ExakitUvUvx
     if (-not $uvx) { return $false }
     if (-not (Test-Path $script:ManifestPath)) { return $true }
-    if ($null -eq (Get-ExakitManifestValue "components.mcp_server.version")) { return $true }
+    if ((Get-ExakitManifestValue "components.mcp_server.backend") -ne "sidecar") { return $true }
     Set-ExakitManifestValue "components.mcp_server.command" $uvx
     Set-ExakitManifestValue "components.mcp_server.uv_path" (Get-ExakitUvBin)
-    # The refresh names the package and version it writes; in this path they
-    # come from the record, not from an install that set them.
-    if (-not $script:McpVersion) { $script:McpVersion = Get-ExakitManifestValue "components.mcp_server.version" }
-    $recordedPackage = Get-ExakitManifestValue "components.mcp_server.package"
-    if ($recordedPackage) { $script:McpPackage = $recordedPackage }
-    return (Update-McpClientPins)
+    return (Update-McpClients)
 }
 
-function Get-McpSslCertValidation {
-    # Disable certificate validation ONLY for the local self-signed loopback
-    # runtime, keyed on the DSN host - never on the runtime.tls label alone.
-    # Every runtime hardcodes tls="self-signed", so keying on the label would
-    # blanket-disable validation even for a non-loopback DSN (adopted from a
-    # deployment.json), sending credentials over an unvalidated channel.
-    $dsn = Get-ExakitManifestValue "runtime.dsn"
-    if ($dsn -match '^(127\.0\.0\.1|localhost|\[::1\]):') { return "no" }
-    return "yes"
-}
-
-# Six lines became one. uv's path, the priming bullet, "package cached",
-# "ready to run via uvx", the handshake bullet and its tick were one fact:
-# the server is cached and answers. Test-McpServer prints the merged line; the
-# phases live on the spinner instead. Twin of mcp_install in mcp.sh.
 # Set by Invoke-McpOperationCli: whether the last runtime operation exited
 # non-zero (a report that FOUND something also exits non-zero), and the system
 # privileges the MCP user was last seen holding (Confirm-McpReadonlyPosture).
 $script:McpLastRunFailed = $false
 $script:McpReadonlyPrivileges = @()
-
-# Start-ExakitMcpPrefetch - start the MCP package download NOW, in the
-# background, so it overlaps the data load instead of queueing behind it.
-#
-# THE TWO STEPS NEED NOTHING FROM EACH OTHER. Priming the package is a download
-# and an unpack; the data load is a local database talking to local files. Run
-# one after the other they cost the sum of their times, and on a fresh Windows
-# install that sum was ~5 minutes: 131s loading, 166s on the bridge. The prime
-# is the bigger half and almost all of it is uv materialising the server's
-# environment - 12,099 files and 207MB, measured - which is exactly the work a
-# machine can do while its database is busy elsewhere. Windows pays most for
-# it, because Defender scans every one of those files as it lands.
-#
-# Best-effort by construction: no uv, or a kit where the MCP step never runs,
-# and this returns having done nothing. Install-Mcp then primes inline exactly
-# as it always did, so the only thing that can be lost is the saving.
-# Twin of mcp_prefetch_begin.
-$script:McpPrefetchProc = $null
-$script:McpPrefetchLog  = ""
-function Start-ExakitMcpPrefetch {
-    if ($env:EXAKIT_MCP_PREFETCH -eq "0") { return }
-    if ($script:McpPrefetchProc) { return }
-    try { [void](Install-ExakitUv) } catch { return }
-    $uvx = Get-UvxPath
-    if (-not $uvx) { return }
-    # Its own file, not the install log: this writes while the data load is
-    # writing too, and two appenders interleave into nonsense. It is folded
-    # into the install log when Install-Mcp collects it.
-    $log = Join-Path ([System.IO.Path]::GetTempPath()) ("exakit-mcp-prefetch-" + [guid]::NewGuid().ToString("N") + ".log")
-    try {
-        $script:McpPrefetchProc = Start-Process -FilePath $uvx `
-            -ArgumentList @("$($script:McpPackage)@$($script:McpVersion)", "--help") `
-            -WindowStyle Hidden -PassThru `
-            -RedirectStandardOutput $log -RedirectStandardError "$log.err"
-        $script:McpPrefetchLog = $log
-        Write-ExakitLog "INFO" "MCP package prefetch started in the background (pid $($script:McpPrefetchProc.Id))"
-    } catch {
-        $script:McpPrefetchProc = $null
-        $script:McpPrefetchLog = ""
-    }
-}
-
-# Stop-ExakitMcpPrefetch - leave no orphan behind when the install dies early.
-# Twin of mcp_prefetch_stop.
-function Stop-ExakitMcpPrefetch {
-    if (-not $script:McpPrefetchProc) { return }
-    try { if (-not $script:McpPrefetchProc.HasExited) { $script:McpPrefetchProc.Kill() } } catch { }
-    if ($script:McpPrefetchLog) {
-        Remove-Item -Force -ErrorAction SilentlyContinue $script:McpPrefetchLog, "$($script:McpPrefetchLog).err"
-    }
-    $script:McpPrefetchProc = $null
-    $script:McpPrefetchLog = ""
-}
-
-# Receive-ExakitMcpPrefetch - wait for the background prime and hand back what
-# it printed, or $null when there was no prefetch to collect.
-function Receive-ExakitMcpPrefetch {
-    if (-not $script:McpPrefetchProc) { return $null }
-    try { $script:McpPrefetchProc.WaitForExit() } catch { }
-    $text = ""
-    foreach ($f in @($script:McpPrefetchLog, "$($script:McpPrefetchLog).err")) {
-        if ($f -and (Test-Path $f)) {
-            $text += (Get-Content -Path $f -Raw -ErrorAction SilentlyContinue)
-        }
-    }
-    $code = 1
-    try { $code = $script:McpPrefetchProc.ExitCode } catch { }
-    if ($script:McpPrefetchLog) {
-        Remove-Item -Force -ErrorAction SilentlyContinue $script:McpPrefetchLog, "$($script:McpPrefetchLog).err"
-    }
-    $script:McpPrefetchProc = $null
-    $script:McpPrefetchLog = ""
-    return @{ Output = $text; ExitCode = $code }
-}
-
-function Install-Mcp {
-    $script:McpStepT0 = Get-Date
-    Install-ExakitUv | Out-Null
-    $script:ExakitActiveLabel = "Downloading $($script:McpPackage)@$($script:McpVersion) - first run only"
-    Info "Priming $($script:McpPackage)@$($script:McpVersion) (downloads on first use)"
-    # Use the resolved uvx path, not a bare "uvx" - uv was just installed to
-    # a dir that isn't on this process's PATH yet.
-    # `--help` exits non-zero on server versions that demand connection env
-    # before printing usage - so the exit code can't distinguish "download
-    # failed" from "downloaded fine, refused to run without a database". Any
-    # output from the package itself proves the prime worked (mirrors mcp.sh).
-    $primeOut = ""
-    $primeCode = 1
-    $previousEAP = $ErrorActionPreference
-    # The download itself, and the longest wait in this step on a machine
-    # with a cold uv cache. Under the step's one-line quieting the Info
-    # above goes to the log, so without a spinner the screen sits blank
-    # under the step heading for as long as the download takes - the twin
-    # (ui_spin_begin in mcp.sh) has always animated here.
-    Start-ExakitSpinner $script:ExakitActiveLabel
-    try {
-        $ErrorActionPreference = "Continue"
-        # Started before the data load (Start-ExakitMcpPrefetch). On a machine
-        # that took longer to load than to download, this has already finished
-        # and the wait returns at once - which is the whole point.
-        $early = Receive-ExakitMcpPrefetch
-        if ($null -ne $early) {
-            $primeOut = $early.Output
-            $primeCode = $early.ExitCode
-        } else {
-            $primeOut = & (Get-UvxPath) "$($script:McpPackage)@$($script:McpVersion)" "--help" 2>&1 | Out-String -Width 4096
-            $primeCode = $LASTEXITCODE
-        }
-    } catch {
-        $primeOut = "$_"
-    } finally {
-        $ErrorActionPreference = $previousEAP
-        Stop-ExakitSpinner
-    }
-    if ($script:LogFile) {
-        "uvx $($script:McpPackage)@$($script:McpVersion) --help" | Add-Content -Path $script:LogFile
-        # The prime runs the server with no database configuration on purpose; a
-        # Python traceback ending in "Insufficient database connection
-        # configuration" below is that, not a fault - said here so a reader
-        # chasing a different failure does not stop at it.
-        "NOTE  the priming run has no connection settings; an 'Insufficient database connection configuration' traceback below is expected" | Add-Content -Path $script:LogFile
-        $primeOut | Add-Content -Path $script:LogFile
-    }
-    if ($primeCode -eq 0 -or $primeOut -match '(?i)usage:|insufficient database connection|exasol[./\\]ai[./\\]mcp|site-packages[/\\]exasol') {
-        Ok "MCP server package cached"
-    } else {
-        Warn2 "Could not prime the MCP server package (it will download on first client start)"
-    }
-    $uvBin = Get-ExakitUvBin
-    if ($uvBin) { Set-ExakitManifestValue "components.mcp_server.uv_path" $uvBin }
-    Set-ExakitManifestValue "components.mcp_server.command" (Get-McpCommandPath)
-    Set-ExakitManifestValue "components.mcp_server.package" $script:McpPackage
-    Set-ExakitManifestValue "components.mcp_server.version" $script:McpVersion
-    # Not announced: "cached" above and "answers over stdio" below are the two
-    # facts, and this said neither of them again.
-    Write-ExakitLog "OK" "MCP server ready to run via uvx"
-}
 
 # Get-McpCredentials - "user, password_file" for the client configs. Prefers
 # the validated dedicated read-only user; falls back to the runtime admin
@@ -295,156 +137,6 @@ function Get-McpCredentials {
     }
     Write-ExakitLog "WARN" "No read-only MCP credential is recorded; falling back to the ADMIN account. Repair with: exakit mcp-setup"
     return @{ User = (Get-ExakitManifestValue "runtime.user"); PasswordFile = (Get-ExakitManifestValue "runtime.password_file"); Kind = "admin-fallback" }
-}
-
-function Resolve-McpCredentials {
-    $creds = Get-McpCredentials
-    $password = ""
-    if ($creds.PasswordFile -and (Test-Path $creds.PasswordFile)) {
-        $password = (Get-Content $creds.PasswordFile -Raw).TrimEnd("`r", "`n")
-    }
-    return @{ User = $creds.User; Password = $password; Kind = $creds.Kind }
-}
-
-# Show-McpHandshakeDetail <text> - show what the failed handshake actually said.
-#
-# The reason is already in this process's hands: Invoke-ExakitPython raises the
-# interpreter's combined output as its exception message, and Test-McpServer
-# catches that and writes it to the logfile. So the old "(see log)" wording sent
-# the reader into a different program to look for an answer this run was holding
-# - an authentication failure, a bad DSN, a missing package. On this step above
-# all - the one a user reaches BECAUSE their assistant cannot see the database -
-# the cause belongs on screen.
-#
-# Only the tail is shown: uvx narrates its own environment build first and the
-# reason is always last. The per-line cap is there because Invoke-ExakitPython
-# builds its message by interpolating the output ARRAY, which PowerShell joins
-# with spaces - so a multi-line traceback can reach here as one very long line,
-# and the end of it is still the part that matters.
-#
-# The text is redacted before it is printed. It comes from a process that was
-# handed the database password in EXA_PASSWORD, and a driver traceback can echo
-# its connection arguments back out.
-# Twin of mcp_print_handshake_detail in setup/lib/mcp.sh.
-function Show-McpHandshakeDetail {
-    param([AllowEmptyString()][string]$Text, [AllowEmptyString()][string]$Password = "")
-    if ([string]::IsNullOrWhiteSpace($Text)) { return $false }
-    $detail = ConvertTo-McpRedactedText -Text $Text -Secrets @($Password)
-    # The prefix is Invoke-ExakitPython's own plumbing, not something the server
-    # said, and it would otherwise be the first thing the reader sees.
-    $detail = $detail -replace '^Python exited with code \d+:\s*', ''
-    $lines = @($detail -split "`r?`n" | Where-Object { "$_".Trim() -ne "" } | Select-Object -Last 8)
-    if ($lines.Count -eq 0) { return $false }
-    foreach ($line in $lines) {
-        $shown = "$line".TrimEnd()
-        if ($shown.Length -gt 300) { $shown = "..." + $shown.Substring($shown.Length - 300) }
-        # The same contained gutter every other piece of foreign output gets, in
-        # the error colour because that is what this is.
-        if ($script:UiFancy) { Write-Host ("      {0}{1} {2}{3}" -f $script:UiErr, $script:UiVB, $shown, $script:UiReset) }
-        else { Write-Host ("      | {0}" -f $shown) -ForegroundColor Red }
-    }
-    return $true
-}
-
-# Test-McpServer - start the server over stdio and check it answers an MCP
-# initialize handshake. Uses the same env the client configs use.
-function Test-McpServer {
-    Info "Validating the MCP server (stdio handshake)"
-    $script:ExakitActiveLabel = "Starting the MCP server and checking it answers"
-    $dsn = Get-ExakitManifestValue "runtime.dsn"
-    $creds = Resolve-McpCredentials
-    $command = Get-McpCommandPath
-    $sslCertValidation = Get-McpSslCertValidation
-
-    $handshakeScript = @'
-import json, subprocess, sys
-
-command, pkg, ver = sys.argv[1], sys.argv[2], sys.argv[3]
-proc = subprocess.Popen(
-    [command, f"{pkg}@{ver}"],
-    stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-    text=True,
-)
-request = json.dumps({
-    "jsonrpc": "2.0", "id": 1, "method": "initialize",
-    "params": {
-        "protocolVersion": "2024-11-05",
-        "capabilities": {},
-        "clientInfo": {"name": "starter-kit-validator", "version": "1.0"},
-    },
-}) + "\n"
-try:
-    out, err = proc.communicate(request, timeout=120)
-except subprocess.TimeoutExpired:
-    proc.kill()
-    print("handshake timed out")
-    sys.exit(1)
-print(err)
-for line in out.splitlines():
-    try:
-        msg = json.loads(line)
-    except json.JSONDecodeError:
-        continue
-    if msg.get("id") == 1 and "result" in msg:
-        info = msg["result"].get("serverInfo", {})
-        print(f"handshake ok: {info.get('name')} {info.get('version')}")
-        sys.exit(0)
-print("no initialize result in server output")
-sys.exit(1)
-'@
-
-    $handshakeOk = $false
-    # What the handshake said, kept for the failure branch below. The retry
-    # overwrites it on purpose: what is reported has to be the attempt that was
-    # actually the last word, never an earlier one.
-    $handshakeDetail = ""
-    for ($attempt = 1; $attempt -le 2; $attempt++) {
-        # Starting the server can still mean uvx materialising an
-        # environment, so this phase is not instant either.
-        Start-ExakitSpinner $script:ExakitActiveLabel
-        $env:EXA_DSN = $dsn
-        $env:EXA_USER = $creds.User
-        $env:EXA_PASSWORD = $creds.Password
-        $env:EXA_SSL_CERT_VALIDATION = $sslCertValidation
-        try {
-            $out = Invoke-ExakitPython $handshakeScript $command $script:McpPackage $script:McpVersion
-            $handshakeOk = $true
-            if ($script:LogFile) { $out | Add-Content -Path $script:LogFile }
-            break
-        } catch {
-            # Invoke-ExakitPython throws with the interpreter's own output in
-            # the message, which is the only copy of the reason there is.
-            $handshakeDetail = "$_"
-            if ($script:LogFile) { $handshakeDetail | Add-Content -Path $script:LogFile }
-        } finally {
-            # Before the retry warning, not after: a spinner owns its line
-            # and rewrites it every 90ms, so a warning printed under it
-            # lands in the middle of that line.
-            Stop-ExakitSpinner
-            Remove-Item Env:\EXA_DSN, Env:\EXA_USER, Env:\EXA_PASSWORD, Env:\EXA_SSL_CERT_VALIDATION -ErrorAction SilentlyContinue
-        }
-        if (-not $handshakeOk -and $attempt -lt 2) {
-            Warn2 "Handshake attempt $attempt failed - retrying"
-            Start-Sleep -Seconds 5
-        }
-    }
-    if ($handshakeOk) {
-        # The step's one line: what is cached, and that it answers. The elapsed
-        # spans the prime and the handshake. Through OkStep so it survives the
-        # caller's one-line quieting.
-        $mcpSecs = if ($script:McpStepT0) { [int]((Get-Date) - $script:McpStepT0).TotalSeconds } else { 0 }
-        OkStep "MCP server $($script:McpPackage)@$($script:McpVersion) cached and answering over stdio (${mcpSecs}s)"
-        Set-ExakitManifestValue "components.mcp_server.mode" "stdio"
-        Set-ExakitManifestValue "components.mcp_server.validated" $true
-    } else {
-        Write-ExakitError "The MCP server did not answer the stdio handshake. What it said:"
-        if (-not (Show-McpHandshakeDetail -Text $handshakeDetail -Password $creds.Password)) {
-            if ($script:UiFancy) { Write-Host ("      {0}{1} (the handshake produced no output){2}" -f $script:UiErr, $script:UiVB, $script:UiReset) }
-            else { Write-Host "      | (the handshake produced no output)" -ForegroundColor Red }
-        }
-        Warn2 "Your database and the client configs are unchanged - clients will still start the server. For a deeper check, run: exakit mcp-doctor"
-        Set-ExakitManifestValue "components.mcp_server.validated" $false
-    }
 }
 
 # ---------------------------------------------------------------------------
@@ -532,14 +224,49 @@ function Invoke-ExapumpAdminSql {
         # this way also retires the ConvertTo-ExakitNativeArgs quoting dance -
         # nothing goes through the 5.1 command-line rules any more, so quoted
         # identifiers arrive intact by construction rather than by escaping.
-        $previousOutputEncoding = $OutputEncoding
+        #
+        # Bytes, not a pipe (#52): Windows PowerShell 5.1 starts a string piped into a native process with
+        # U+FEFF whatever $OutputEncoding says, and Exasol rejects that first character, so every statement
+        # failed and the read-only user was never made. The statement's UTF-8 bytes go to exapump's stdin
+        # straight from memory - never through a file, since two of them carry a password - as
+        # Invoke-ExapumpSqlFileCapture does; both output streams are read as they come, so a full pipe
+        # cannot stall it.
+        $out = ""
+        $code = 1
+        $previousInputEncoding = $null
         try {
-            # No BOM: exapump parses the first bytes as SQL.
-            $OutputEncoding = New-Object System.Text.UTF8Encoding($false)
-            $out = @($Sql | & $bin sql -p $Profile 2>&1) -join "`n"
-            $code = $LASTEXITCODE
+            # Process writes the preamble of [Console]::InputEncoding to stdin the moment it opens it - on
+            # 5.1 that is the BOM, before a single statement byte. So the console's input encoding is UTF-8
+            # without one while exapump starts (best effort: it throws where there is no console), and is
+            # restored after. Invoke-ExapumpSqlFileCapture does the same.
+            try {
+                $previousInputEncoding = [Console]::InputEncoding
+                [Console]::InputEncoding = New-Object System.Text.UTF8Encoding $false
+            } catch { $previousInputEncoding = $null }
+            $psi = New-Object System.Diagnostics.ProcessStartInfo
+            $psi.FileName = $bin
+            $psi.Arguments = "sql -p `"$Profile`""
+            $psi.UseShellExecute = $false
+            $psi.RedirectStandardInput = $true
+            $psi.RedirectStandardOutput = $true
+            $psi.RedirectStandardError = $true
+            $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+            $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
+            $proc = [System.Diagnostics.Process]::Start($psi)
+            $stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+            $stderrTask = $proc.StandardError.ReadToEndAsync()
+            $bytes = (New-Object System.Text.UTF8Encoding($false)).GetBytes($Sql)
+            $proc.StandardInput.BaseStream.Write($bytes, 0, $bytes.Length)
+            $proc.StandardInput.Close()
+            $proc.WaitForExit()
+            $out = ($stdoutTask.Result + $stderrTask.Result).TrimEnd()
+            $code = $proc.ExitCode
+        } catch {
+            $out = "$_"
         } finally {
-            $OutputEncoding = $previousOutputEncoding
+            if ($previousInputEncoding) {
+                try { [Console]::InputEncoding = $previousInputEncoding } catch { }
+            }
         }
         return @{ Output = $out; ExitCode = $code; Success = (Test-ExapumpSucceeded -ExitCode $code -Output $out) }
     } catch {
@@ -652,6 +379,13 @@ function Assert-McpReadonlyPosture {
         Fail "The MCP read-only user has a write object privilege; it must be read-only."
     }
 
+    # What every user holds through PUBLIC reaches this login too (SEC-17):
+    # said, not refused - PUBLIC is the database owner's to set. Twin of the
+    # same check in _exakit_assert_mcp_readonly_posture.
+    if (-not (Test-ExapumpSqlHasToken $ConfigPath "admin" "SELECT CASE WHEN (SELECT COUNT(*) FROM EXA_DBA_SYS_PRIVS WHERE GRANTEE = 'PUBLIC' AND PRIVILEGE NOT IN ('CREATE SESSION', 'USE ANY SCHEMA', 'SELECT ANY TABLE')) + (SELECT COUNT(*) FROM EXA_DBA_OBJ_PRIVS WHERE GRANTEE = 'PUBLIC' AND PRIVILEGE <> 'SELECT') = 0 THEN 'EXAKIT_PUBLIC_SCOPE_OK' ELSE 'EXAKIT_PUBLIC_SCOPE_TOO_WIDE' END AS STATUS" "EXAKIT_PUBLIC_SCOPE_OK")) {
+        Warn2 "Your database grants PUBLIC more than read access, so every login - the AI client's read-only one included - has it. See: SELECT * FROM EXA_DBA_SYS_PRIVS WHERE GRANTEE = 'PUBLIC' (and EXA_DBA_OBJ_PRIVS)."
+    }
+
     # Live proof the user cannot write: a CREATE TABLE in the default schema
     # (which USE ANY SCHEMA lets it OPEN) MUST be rejected.
     $probeSchemaUc = ConvertTo-UpperInvariantString (Get-FirstSchema $Schemas)
@@ -746,8 +480,8 @@ function Set-McpReadonlyAccess {
             # too; this covers the destination name itself.
             New-Item -ItemType File -Path $tempConfig -Force | Out-Null
             Protect-ExakitFile $tempConfig
-            Set-ExapumpTomlSection -ConfigPath $tempConfig -Profile "admin" -Host_ $dbHost -Port $dbPort -User $runtimeUser -Password $adminPassword
-            Set-ExapumpTomlSection -ConfigPath $tempConfig -Profile "mcp_readonly" -Host_ $dbHost -Port $dbPort -User $readonlyUser -Password $readonlyPassword -Schema $defaultSchemaUc
+            Set-ExapumpTomlSection -ConfigPath $tempConfig -Profile "admin" -Host_ $dbHost -Port $dbPort -User $runtimeUser -Password $adminPassword -Fingerprint (Get-ExakitTlsFingerprint)
+            Set-ExapumpTomlSection -ConfigPath $tempConfig -Profile "mcp_readonly" -Host_ $dbHost -Port $dbPort -User $readonlyUser -Password $readonlyPassword -Schema $defaultSchemaUc -Fingerprint (Get-ExakitTlsFingerprint)
             Protect-ExakitFile $tempConfig
 
             # Verify the TOML config was created and is readable
@@ -867,8 +601,8 @@ function Confirm-McpReadonlyPosture {
     $defaultSchema = Get-FirstSchema $schemasCsv
 
     $tempConfig = Join-Path ([System.IO.Path]::GetTempPath()) "exakit-exapump-$([guid]::NewGuid().ToString('N')).toml"
-    Set-ExapumpTomlSection -ConfigPath $tempConfig -Profile "admin" -Host_ $dbHost -Port $dbPort -User $runtimeUser -Password $adminPassword
-    Set-ExapumpTomlSection -ConfigPath $tempConfig -Profile "mcp_readonly" -Host_ $dbHost -Port $dbPort -User $readonlyUser -Password $readonlyPassword -Schema $defaultSchema
+    Set-ExapumpTomlSection -ConfigPath $tempConfig -Profile "admin" -Host_ $dbHost -Port $dbPort -User $runtimeUser -Password $adminPassword -Fingerprint (Get-ExakitTlsFingerprint)
+    Set-ExapumpTomlSection -ConfigPath $tempConfig -Profile "mcp_readonly" -Host_ $dbHost -Port $dbPort -User $readonlyUser -Password $readonlyPassword -Schema $defaultSchema -Fingerprint (Get-ExakitTlsFingerprint)
 
     Info "Re-checking MCP read-only grant posture against the database"
     try {
@@ -974,6 +708,11 @@ function Invoke-McpSetupCli {
     } else {
         try { Set-McpReadonlyAccess } catch { return $null }
     }
+    # The server behind the entries: the launcher's MCP sidecar as the read-only
+    # user, healed where it can be. Quiet - the client table may be animating; a
+    # failure is kept for Invoke-McpSetup to say after the table. Twin of the
+    # mcp_sidecar_apply call in exakit_run_mcp_setup_cli.
+    try { [void](Set-McpSidecar -Quiet) } catch { Write-ExakitLog "WARN" "MCP sidecar: $_" }
     $result = Invoke-McpModule (@("setup-runtime-clients", "--runtime-root", $script:ExakitHome, "--clients") + $Clients)
     if ($result.ExitCode -ne 0) {
         if ($script:LogFile) { $result.Output | Add-Content -Path $script:LogFile }
@@ -994,6 +733,12 @@ function Invoke-McpOperationCli {
     if (-not $repoRoot) { Warn2 "Could not find the MCP package source to manage your AI clients."; return $null }
     if ($Operation -in @("validate", "repair", "doctor")) {
         try { Set-McpReadonlyAccess } catch { return $null }
+    }
+    # Repair puts the server behind the entries right too, healing what it can;
+    # diagnosis only reads. Quiet under the spinner: Invoke-McpOperation says
+    # what could not be healed.
+    if ($Operation -eq "repair") {
+        try { [void](Set-McpSidecar -Quiet) } catch { Write-ExakitLog "WARN" "MCP sidecar: $_" }
     }
     $args = @("run-runtime-operation", $Operation, "--runtime-root", $script:ExakitHome)
     if ($SnapshotId) { $args += @("--snapshot-id", $SnapshotId) }
@@ -1072,6 +817,11 @@ function Add-McpResultStamp {
                 if ($finding.scope -and $finding.scope.path) { $aboutFile = 0 }
                 $score = ($rank[$severity] * 1000000) + ($aboutFile * 100000) + $index
                 if ($null -eq $bestScore -or $score -lt $bestScore) { $bestScore = $score; $bestAction = "$($finding.recommended_action)" }
+            }
+            # No client connected at all: the gap status reports without a
+            # finding gets the command that closes it (AGT-13).
+            if ($null -eq $bestAction -and "$($doc.operation)" -eq "status" -and $doc.details -and $doc.details.PSObject.Properties["clients"]) {
+                if (@($doc.details.clients | Where-Object { $_ -and $_.state -eq "configured" }).Count -eq 0) { $bestAction = "exakit mcp-setup" }
             }
             $doc | Add-Member -NotePropertyName remedy -NotePropertyValue $bestAction
         }
@@ -1215,21 +965,17 @@ function Show-McpReadyPanel {
     $mcpCreds = Get-McpCredentials
     $mcpUser = $mcpCreds.User
     $mcpUserKind = $mcpCreds.Kind
-    $mcpPackage = Get-ExakitManifestValue "components.mcp_server.package"
-    if (-not $mcpPackage) { $mcpPackage = $script:McpPackage }
+    $mcpUrl = Get-ExakitManifestValue "components.mcp_server.url"
     $mcpVersion = Get-ExakitManifestValue "components.mcp_server.version"
-    if (-not $mcpVersion) { $mcpVersion = $script:McpVersion }
-    $mcpCommand = Get-ExakitManifestValue "components.mcp_server.command"
-    if (-not $mcpCommand) { $mcpCommand = "uvx" }
     $tls = Get-ExakitManifestValue "runtime.tls"
 
-    # An eight-row panel of reference values became one line. The command, the
-    # package version and the managed-state directory are what `exakit
+    # An eight-row panel of reference values became one line. The server's
+    # address and version and the managed-state directory are what `exakit
     # mcp-status` is for; what the reader needs here is that the server exists,
     # what it is called, and that it reaches the database read-only. The whole
     # panel still goes to the logfile, so nothing is unrecoverable.
     if ($script:LogFile) {
-        "DATA  MCP command: $mcpCommand $mcpPackage@$mcpVersion" | Add-Content -Path $script:LogFile
+        "DATA  MCP server: $mcpUrl (exasol/mcp-server $mcpVersion, beside the database)" | Add-Content -Path $script:LogFile
         "DATA  MCP managed state: $script:McpDir" | Add-Content -Path $script:LogFile
         "DATA  MCP TLS: $tls" | Add-Content -Path $script:LogFile
     }
@@ -1243,7 +989,7 @@ function Show-McpReadyPanel {
         Info "No read-only MCP credential is recorded, so writes from your AI client would NOT be rejected by the database."
         Info "Fix it with: exakit mcp-setup"
     } else {
-        Ok "MCP server 'exasol' - $dsnShown as $userShown (read-only), started by your AI client on demand"
+        Ok "MCP server 'exasol' - $dsnShown as $userShown (read-only), served beside the database at $mcpUrl"
     }
 
     # The prompt is only PRINTED when it could not be handed over: on the
@@ -1626,12 +1372,27 @@ function Invoke-McpSetup {
         # A client with no id is one this machine cannot offer - it becomes a
         # disabled row carrying the reason, so the list is the whole answer rather
         # than a list that quietly omits things.
-        $defaults = @(1)
+        # $env:EXAKIT_MCP_PRESELECT (the personas' clients, from `exakit persona
+        # add`) ticks only the pending clients it names; "all" is every one.
+        # Twin of the same rule in exakit_mcp_setup.
+        $filter = [bool]($env:EXAKIT_MCP_PRESELECT -and $env:EXAKIT_MCP_PRESELECT -notmatch '^\s*(all|ALL|All)\s*$')
+        $pre = @()
+        if ($filter) { $pre = @(ConvertTo-McpClientSelection $env:EXAKIT_MCP_PRESELECT | Where-Object { $_ }) }
+        $defaults = @()
+        $every = $true
         for ($i = 0; $i -lt $clientCount; $i++) {
             $rowAt = $rowFirst + $i
-            if (@($menuIds[$i]).Count -gt 0) { $defaults += $rowAt }
+            if (@($menuIds[$i]).Count -gt 0) {
+                $want = $true
+                if ($filter) {
+                    $want = [bool](@($menuIds[$i]) | Where-Object { $pre -contains $_ })
+                }
+                if ($want) { $defaults += $rowAt } else { $every = $false }
+            }
             else { Disable-ExakitTableRow -Row $rowAt -Note $menuNotes[$i] -Table $script:McpTable }
         }
+        if ($defaults.Count -eq 0) { $defaults = @($rowSkip) }
+        elseif ($every) { $defaults = @(1) + $defaults }
         Write-Host ""
         # Loop so a not-confirmed skip returns the user to the menu.
         $onScreen = 0
@@ -1641,6 +1402,14 @@ function Invoke-McpSetup {
                 -ExclusiveIndex $rowSkip -GroupParent 1 -GroupFirst $rowFirst `
                 -GroupLast $rowLast -GroupMode "all" -OnScreen $onScreen)
             if ($selection -contains $rowSkip) {
+                # Taken without asking (UI_TABLE_AUTO): none of the clients named
+                # is on this machine to connect, which is no question. Twin of
+                # the same branch in exakit_mcp_setup.
+                if ($env:UI_TABLE_AUTO -eq "1") {
+                    Info "None of the AI clients named is waiting to be connected here - connect one any time with: exakit mcp-setup"
+                    Reset-McpClientTable
+                    return $true
+                }
                 Warn2 "No AI client will be connected to your database."
                 if (Confirm-ExakitPrompt "Are you sure you want to continue without an AI client?" $true) {
                     Info "Okay - you can connect one any time with: exakit mcp-setup"
@@ -1740,6 +1509,8 @@ function Invoke-McpSetup {
     }
     if ($resultJson) { Show-McpSetupSummary -ResultJson $resultJson -TableShown $tableShown }
     Reset-McpClientTable
+    # What the MCP server's apply could not heal, now that the table is done.
+    Show-McpSidecarProblem
     if (-not $resultJson) { return $false }
     Show-McpReadyPanel "permanent"
     # The panel above IS the guidance; announcing that it exists, directly
@@ -1800,6 +1571,7 @@ function Invoke-McpOperation {
     if ($Operation -eq "doctor" -and $resultJson -and (Test-McpResultRepairable -Text $resultJson)) {
         Info "Repairing what doctor found"
         $repairJson = Invoke-McpOperationCli -Operation "repair" -Clients $clients
+        Show-McpSidecarProblem
         if ($repairJson -and -not $script:McpLastRunFailed) {
             Ok "Repair applied - re-checking"
             $recheck = Invoke-McpOperationCli -Operation "doctor" -Clients $clients
@@ -1824,20 +1596,6 @@ function Invoke-McpOperation {
     return $ok
 }
 
-function New-McpUpdateSnapshot {
-    $resultJson = Invoke-McpOperationCli -Operation "backup" -Clients @("claude_desktop", "claude_code", "cursor", "codex", "vscode_copilot", "gemini_cli", "opencode", "continue")
-    if (-not $resultJson) { Warn2 "MCP pre-update snapshot was not created; generated configs will still be refreshed."; return "" }
-    Show-McpOperationSummary $resultJson
-    try {
-        $doc = $resultJson | ConvertFrom-Json
-        if ($doc.backup_reference) {
-            Set-ExakitManifestValue "backups.mcp_update.latest" $doc.backup_reference
-            return $doc.backup_reference
-        }
-    } catch { }
-    return ""
-}
-
 # Get-McpManagedClients - the client ids that already carry a managed MCP entry.
 # Empty when nothing is connected or the status operation is unavailable, which
 # callers treat as "nothing to refresh". Twin of mcp_managed_clients in
@@ -1859,45 +1617,29 @@ function Get-McpManagedClients {
     }
 }
 
-# Update-McpClientPins - re-render the managed entry in the clients that are
-# already connected, so the version they launch is the one this update installed.
-# Without it an update moved nothing a client can see: only the manifest record
-# changed, and a guard that trusted that record would skip the next attempt.
-#
-# This is the configure operation (what `exakit mcp-setup` runs), and it stays
-# configure because configure re-renders unconditionally: mid-update the guarantee
-# wanted is "the entry now says what we just installed", not the outcome of a
-# comparison. `repair` can also move an intact-but-outdated pin now - it compares
-# the live entry against the definition the kit would write, not only against the
-# hash recorded at the last write (mcp/validator/service.py) - so it is the right
-# command for a user fixing a client after the fact, not the one for this step.
+# Update-McpClients - re-render the managed entry in the clients that are
+# already connected: after the MCP server moved (a new port, the first switch of
+# a kit from before to the server beside the database) or the uvx the bridge
+# runs through changed. This is the configure operation (what `exakit mcp-setup`
+# runs), because configure re-renders unconditionally.
 #
 # Scoped to already-managed clients on purpose: configure would happily create a
 # config for a client the user never chose to connect. Twin of
-# mcp_refresh_client_pins in setup/lib/mcp.sh.
-function Update-McpClientPins {
+# mcp_refresh_clients in setup/lib/mcp.sh.
+function Update-McpClients {
     $clients = Get-McpManagedClients
     if (@($clients).Count -eq 0) {
         Info "No AI client is connected yet - connect one any time with: exakit mcp-setup"
         return $true
     }
-    Info "Refreshing AI client configs to $($script:McpPackage)@$($script:McpVersion)"
+    Info "Refreshing the AI client configs"
     $resultJson = Invoke-McpSetupCli -Clients $clients
     if (-not $resultJson) {
-        Warn2 "Could not refresh the AI client configs - run exakit mcp-setup to finish the update."
+        Warn2 "Could not refresh the AI client configs - run exakit mcp-setup to finish."
         return $false
     }
     Show-McpSetupSummary $resultJson
-    # Confirm from the configs, not from the record: Install-Mcp already wrote the
-    # record, so only the live pin can say whether the clients actually moved.
-    # The reader used to be CLI-only, so this was skipped during an install;
-    # it is in the shared layer now and the confirmation runs in both.
-    $pin = Get-ExakitInstalledMcpVersion
-    if ($pin -and $pin -ne $script:McpVersion) {
-        Warn2 "An AI client is still pinned to $($script:McpPackage)@$pin - see exakit mcp-doctor."
-        return $false
-    }
-    Ok "AI client configs now launch $($script:McpPackage)@$($script:McpVersion)"
+    Ok "AI client configs point at $(Get-ExakitManifestValue 'components.mcp_server.url')"
     return $true
 }
 
@@ -1905,7 +1647,7 @@ function Update-McpClientPins {
 # into the clients that are already connected. Twin of
 # mcp_register_addon_servers in setup/lib/mcp.sh.
 #
-# Scoped to already-managed clients for the same reason Update-McpClientPins is:
+# Scoped to already-managed clients for the same reason Update-McpClients is:
 # configure would happily create a config for a client the user never chose to
 # connect. Nothing here is fatal - an add-on that installed correctly is
 # installed, whether or not an AI client is wired to it yet, and the endpoint is
@@ -1981,4 +1723,335 @@ function Request-ExakitMcpSetupOffer {
         Warn2 "Your local runtime is installed, but MCP client setup did not finish cleanly."
         Warn2 "Retry any time with: exakit mcp-setup"
     }
+}
+
+# --- the launcher's MCP server (Exasol Personal 2.4.0+) ---------------------
+# Twin of the same section in mcp.sh: the launcher's MCP sidecar, written whole
+# by the kit (pinned image, loopback, --no-auth) and connected as the kit's
+# read-only MCP user instead of the deployment's SYS, applied with
+# `exasol start`. It is the only MCP server the kit runs: there is no fallback.
+# What would stop it serving is healed here (the read-only user, a taken port,
+# a deployment that needs one restart, a container that did not start), and
+# what cannot be healed is said with its fix - the record stays, so the clients
+# keep the URL and `exakit mcp-doctor` can finish the job later.
+$script:McpSidecarName = if ($env:EXAKIT_MCP_SIDECAR) { $env:EXAKIT_MCP_SIDECAR } else { "mcp" }
+$script:McpSidecarPort = if ($env:EXAKIT_MCP_SIDECAR_PORT) { [int]$env:EXAKIT_MCP_SIDECAR_PORT } else { 4896 }
+$script:SidecarPyYaml = if ($env:EXAKIT_SIDECAR_PYYAML) { $env:EXAKIT_SIDECAR_PYYAML } else { "PyYAML==6.0.3" }
+$script:McpSidecarImageFallback = "docker.io/exasol/mcp-server:2.4.0@sha256:ae13d5430dff463aa0817f5a188211820fb8c2565e95e477d5ca71b04bb50b68"
+$script:McpBridgeFallback = "mcp-proxy@0.13.0"
+# The last apply's failure as the lines to show (the error, then its fix), for
+# a caller that ran it under -Quiet while a table owned the screen.
+$script:McpSidecarProblem = @()
+
+function Test-McpSidecarSupported {
+    if ((Get-ExakitManifestValue "runtime.type") -ne "personal") { return $false }
+    if (-not (Get-Command Get-PersonalCli -ErrorAction SilentlyContinue)) { return $false }
+    if (-not (Test-Path -LiteralPath $script:PersonalDeployDir)) { return $false }
+    return ((Test-PersonalLauncherSupports "sidecar") -and (Test-PersonalLauncherSupports "mcp"))
+}
+
+function Get-McpSidecarStatus {
+    $text = "" + (Invoke-ExakitBounded -FilePath (Get-PersonalCli) -Arguments @("mcp", "status", "--json") -TimeoutSeconds 60)
+    try { $doc = $text | ConvertFrom-Json } catch { return $null }
+    if ($doc -is [array]) { $doc = $doc | Select-Object -First 1 }
+    return $doc
+}
+
+# Get-McpSidecarStatusDetail <status> - what the launcher says went wrong (its
+# message, error or reason), at most 200 characters; "" when it says nothing.
+function Get-McpSidecarStatusDetail($Status) {
+    if (-not $Status) { return "" }
+    foreach ($key in @("message", "error", "reason")) {
+        $value = "" + $Status.$key
+        if ($value.Trim()) {
+            $value = $value.Trim() -replace "\s+", " "
+            if ($value.Length -gt 200) { $value = $value.Substring(0, 200) }
+            return $value
+        }
+    }
+    return ""
+}
+
+# Get-McpSidecarImage - the launcher's MCP server image, by digest, from THIS KIT
+# COPY's versions.json (SEC-13); Get-McpSidecarImageVersion is its tag, the
+# version that image is. Twins of mcp_sidecar_image / mcp_sidecar_image_version.
+function Get-McpSidecarImage {
+    $image = Get-ExakitVersionsPin -Path "components.mcp.sidecar_image"
+    if ("$image" -notlike "*@sha256:*") { $image = $script:McpSidecarImageFallback }
+    return "$image"
+}
+function Get-McpSidecarImageVersion {
+    return (Get-McpSidecarImage).Split("@")[0].Split(":")[-1]
+}
+
+# Get-McpSidecarPort - the host port the MCP server is published on: the one
+# recorded (a self-heal may have moved it), else EXAKIT_MCP_SIDECAR_PORT, else
+# 4896. Twin of mcp_sidecar_port.
+function Get-McpSidecarPort {
+    $recorded = "" + (Get-ExakitManifestValue "components.mcp_server.port")
+    if ($recorded -match '^[0-9]+$') { return [int]$recorded }
+    return [int]$script:McpSidecarPort
+}
+
+function Get-McpSidecarDefinitionJson([string]$User, [string]$PasswordFile, [int]$Port = 0) {
+    if ($Port -le 0) { $Port = Get-McpSidecarPort }
+    $image = Get-McpSidecarImage
+    $ref = { param($k) @{ secretKeyRef = @{ name = "exasol-database"; key = $k } } }
+    $settings = [ordered]@{ default_row_limit = 1000; enable_read_query = $true; enable_summarize_table = $true
+        enable_query_profiling = $true; enable_preprocessor_tools = $false; enable_write_query = $false
+        enable_read_bucketfs = $false; enable_write_bucketfs = $false; views = @{ enable = $true } }
+    $definition = [ordered]@{
+        enabled = $true
+        container = [ordered]@{
+            image = "$image"; imagePullPolicy = "IfNotPresent"; restartPolicy = "Always"
+            args = @("--host", "0.0.0.0", "--port", "4896", "--no-auth")
+            env = @(
+                @{ name = "EXASOL_DB_HOST"; valueFrom = (& $ref "host") },
+                @{ name = "EXASOL_DB_PORT"; valueFrom = (& $ref "port") },
+                @{ name = "EXA_DSN"; value = '$(EXASOL_DB_HOST):$(EXASOL_DB_PORT)' },
+                @{ name = "EXA_USER"; value = $User },
+                @{ name = "EXA_PASSWORD"; valueFile = $PasswordFile },
+                @{ name = "EXA_SSL_CERT_VALIDATION"; value = "false" },
+                @{ name = "FASTMCP_HTTP_HOST_ORIGIN_PROTECTION"; value = "true" },
+                @{ name = "EXA_MCP_SETTINGS"; value = ($settings | ConvertTo-Json -Compress -Depth 4) },
+                @{ name = "EXASOL_TELEMETRY_DISABLE"; value = "1" })
+            ports = @(@{ name = "mcp"; containerPort = 4896; hostPort = $Port; hostIP = "127.0.0.1" })
+            readinessProbe = @{ httpGet = @{ path = "/health"; port = "mcp" }; periodSeconds = 10; failureThreshold = 6 }
+        }
+        endpoints = @(@{ port = "mcp"; scheme = "http"; path = "/mcp" })
+    }
+    return ($definition | ConvertTo-Json -Depth 8)
+}
+
+# Write-McpSidecarDefinition <user> <password file> <port> - the definition put
+# into <deployment>/sidecars.yaml by the kit's editor: "changed", "unchanged",
+# or $null when it could not be written. Twin of _mcp_sidecar_put.
+function Write-McpSidecarDefinition([string]$User, [string]$PasswordFile, [int]$Port, [string]$Uv, [string]$Root) {
+    $defFile = [System.IO.Path]::GetTempFileName()
+    try {
+        Set-Content -LiteralPath $defFile -Encoding UTF8 -Value (Get-McpSidecarDefinitionJson $User $PasswordFile $Port)
+        $changed = ("" + (& $Uv run --no-project --quiet --with $script:SidecarPyYaml python `
+            (Join-Path $Root "setup/lib/sidecar_definition.py") put `
+            (Join-Path $script:PersonalDeployDir "sidecars.yaml") $script:McpSidecarName $defFile 2>$null)).Trim()
+        if ($LASTEXITCODE -ne 0) { return $null }
+        return $changed
+    } finally { Remove-Item -LiteralPath $defFile -Force -ErrorAction SilentlyContinue }
+}
+
+# Wait-McpSidecarServing <budget> - poll `exasol mcp status` every 3s until it
+# serves ("serving"), asks for a restart ("restart"), or the budget runs out
+# ("timeout"). The last status is left in $script:McpSidecarLastStatus.
+$script:McpSidecarLastStatus = $null
+function Wait-McpSidecarServing([int]$Budget) {
+    $waited = 0
+    while ($true) {
+        $status = Get-McpSidecarStatus
+        $script:McpSidecarLastStatus = $status
+        if ($status -and $status.restartRequired -eq $true) { return "restart" }
+        if ($status -and $status.health -eq "serving") { return "serving" }
+        if ($waited -ge $Budget) { return "timeout" }
+        Start-Sleep -Seconds 3
+        $waited += 3
+    }
+}
+
+# Set-McpSidecar [-Quiet] - twin of mcp_sidecar_apply: make the launcher's MCP
+# server the one behind every client entry, connected as the kit's read-only
+# user, healing what stands in the way. $true when it serves (recorded);
+# $false otherwise, with the error and its fix said - or, under -Quiet (a table
+# owns the screen), logged and kept in $script:McpSidecarProblem for the caller
+# to show. A failure never clears the record: the clients keep the URL.
+function Set-McpSidecar {
+    param([switch]$Quiet)
+    $script:McpSidecarProblem = @()
+    $script:McpSidecarTargetPort = $null
+    $say = {
+        param([string]$Kind, [string]$Msg)
+        Write-ExakitLog $Kind "MCP: $Msg"
+        if (-not $Quiet) { if ($Kind -eq "INFO") { Info $Msg } }
+    }
+    $fail = {
+        param([string]$Msg, [string]$Fix)
+        Write-ExakitLog "ERROR" "MCP: $Msg Fix: $Fix"
+        $script:McpSidecarProblem = @($Msg, "Fix: $Fix")
+        # Once the port is known, a failure still records where the server will
+        # answer (the clients are pointed there, and work the moment it serves),
+        # with validated=false. Twin of _mcp_sidecar_unhealed.
+        if ($script:McpSidecarTargetPort) {
+            Set-ExakitManifestValue "components.mcp_server.backend" "sidecar"
+            Set-ExakitManifestValue "components.mcp_server.port" "$($script:McpSidecarTargetPort)"
+            Set-ExakitManifestValue "components.mcp_server.url" "http://127.0.0.1:$($script:McpSidecarTargetPort)/mcp"
+        }
+        if ((Get-ExakitManifestValue "components.mcp_server.backend") -eq "sidecar") {
+            Set-ExakitManifestValue "components.mcp_server.validated" $false
+        }
+        if (-not $Quiet) { Show-McpSidecarProblem }
+    }
+    # 1. The launcher has no sidecar: not healed here, a launcher update can
+    #    carry a data migration.
+    if (-not (Test-McpSidecarSupported)) {
+        & $fail "The Exasol Personal launcher here has no MCP sidecar (it predates 2.4.0)." "exakit update personal"
+        return $false
+    }
+    # 2. The read-only user it connects as.
+    $user = Get-ExakitManifestValue "components.mcp_server.connection.user"
+    $pwFile = Get-ExakitManifestValue "components.mcp_server.connection.password_file"
+    if (-not $user -or -not $pwFile -or -not (Test-Path -LiteralPath $pwFile)) {
+        & $say "INFO" "Self-heal: the read-only MCP user is not ready - setting it up"
+        try { if ($Quiet) { Set-McpReadonlyAccess *> $null } else { Set-McpReadonlyAccess } } catch { Write-ExakitLog "WARN" "MCP: read-only setup: $_" }
+        $user = Get-ExakitManifestValue "components.mcp_server.connection.user"
+        $pwFile = Get-ExakitManifestValue "components.mcp_server.connection.password_file"
+        if (-not $user -or -not $pwFile -or -not (Test-Path -LiteralPath $pwFile)) {
+            & $fail "The read-only MCP user could not be set up." "exakit mcp-setup"
+            return $false
+        }
+    }
+    # 3. uv, for the definition editor.
+    $uv = Get-ExakitUvBin
+    if (-not $uv) { try { $uv = Install-ExakitUv } catch { $uv = $null } }
+    if (-not $uv) { & $fail "uv is not available to write the MCP server's definition." "exakit update uv"; return $false }
+    $root = Get-ExakitRepoRoot
+    if (-not $root) { & $fail "The kit's own files were not found." "exakit update"; return $false }
+    # 4. The port: something else listening there while the server is not
+    #    serving means it can never bind - move to the first free one.
+    $port = Get-McpSidecarPort
+    $status = Get-McpSidecarStatus
+    $serving = ($status -and $status.health -eq "serving")
+    if (-not $serving -and (Test-ExakitPortInUse -Port $port)) {
+        $free = 0
+        for ($candidate = $port + 1; $candidate -le $port + 20; $candidate++) {
+            if (-not (Test-ExakitPortInUse -Port $candidate)) { $free = $candidate; break }
+        }
+        if ($free -eq 0) {
+            & $fail "Port $port is in use by another program, and so are the next 20." "free port $port, or set EXAKIT_MCP_SIDECAR_PORT to a free one"
+            return $false
+        }
+        & $say "INFO" "Self-heal: port $port is in use by another program - the MCP server moves to $free"
+        $port = $free
+        Set-ExakitManifestValue "components.mcp_server.port" "$port"
+    }
+    # 5. The definition, applied by `exasol start` when it changed or the
+    #    server is not serving.
+    $script:McpSidecarTargetPort = $port
+    $changed = Write-McpSidecarDefinition $user $pwFile $port $uv $root
+    if ($null -eq $changed) { & $fail "The MCP server's definition could not be written into the deployment." "exakit mcp-doctor"; return $false }
+    if ($changed -eq "changed" -or -not $serving) {
+        if ((Invoke-ExakitLogged (Get-PersonalCli) "start") -ne 0) {
+            & $fail "exasol start did not apply the MCP server." "exakit mcp-doctor (details: exasol mcp status)"
+            return $false
+        }
+    }
+    # 6-7. Wait; heal a deployment that needs one restart, and a container
+    #      that did not start, once each.
+    $budget = if ($env:EXAKIT_MCP_SIDECAR_WAIT) { [int]$env:EXAKIT_MCP_SIDECAR_WAIT } else { 120 }
+    $restarted = $false
+    $recreated = $false
+    while ($true) {
+        $outcome = Wait-McpSidecarServing $budget
+        if ($outcome -eq "serving") { break }
+        if ($outcome -eq "restart") {
+            if ($restarted) {
+                & $fail "The deployment still asks for a restart before it serves the MCP server." "exakit stop && exakit start"
+                return $false
+            }
+            $restarted = $true
+            & $say "INFO" "Self-heal: this deployment serves the MCP server only after one restart - restarting the database (your data is kept)"
+            try {
+                if ($Quiet) { Stop-Personal *> $null; Start-Personal *> $null } else { Stop-Personal; Start-Personal }
+            } catch {
+                & $fail "The database could not be restarted: $_" "exakit stop && exakit start"
+                return $false
+            }
+            continue
+        }
+        if ($recreated) { break }
+        $recreated = $true
+        & $say "INFO" "Self-heal: the MCP server did not start - recreating it"
+        [void](Invoke-ExakitLogged (Get-PersonalCli) "sidecar" "disable" $script:McpSidecarName)
+        if ($null -eq (Write-McpSidecarDefinition $user $pwFile $port $uv $root)) {
+            & $fail "The MCP server's definition could not be written into the deployment." "exakit mcp-doctor"
+            return $false
+        }
+        [void](Invoke-ExakitLogged (Get-PersonalCli) "start")
+    }
+    $status = $script:McpSidecarLastStatus
+    if (-not ($status -and $status.health -eq "serving")) {
+        $health = if ($status -and $status.health) { "" + $status.health } else { "unknown" }
+        $detail = Get-McpSidecarStatusDetail $status
+        $msg = "The MCP server beside your database did not start (status: $health)."
+        if ($detail) { $msg += " $detail" }
+        & $fail $msg "exakit mcp-doctor (details: exasol mcp status)"
+        return $false
+    }
+    # 8. Serving: the record every client entry is rendered from.
+    $url = "" + (@($status.endpoints) | Where-Object { $_.url } | Select-Object -First 1).url
+    if ($url -notlike "http://127.0.0.1:*") { $url = "http://127.0.0.1:$port/mcp" }
+    $bridge = Get-ExakitVersionsValue "components.mcp.bridge"
+    if (-not $bridge) { $bridge = $script:McpBridgeFallback }
+    Set-ExakitManifestValue "components.mcp_server.backend" "sidecar"
+    Set-ExakitManifestValue "components.mcp_server.url" $url
+    Set-ExakitManifestValue "components.mcp_server.port" "$port"
+    Set-ExakitManifestValue "components.mcp_server.bridge" "$bridge"
+    # The absolute uv/uvx Claude Desktop runs the bridge through, and the
+    # bridge fetched now, so its first start is not a download. Twin of
+    # mcp_sidecar_apply.
+    Set-ExakitManifestValue "components.mcp_server.uv_path" $uv
+    $uvx = Get-McpCommandPath
+    Set-ExakitManifestValue "components.mcp_server.command" $uvx
+    if ($env:EXAKIT_MCP_BRIDGE_PREFETCH -ne "0") {
+        try { & $uvx "$bridge" --help *> $null } catch { Write-ExakitLog "INFO" "MCP: the Claude Desktop bridge was not fetched ahead" }
+    }
+    $tag = Get-McpSidecarImageVersion
+    if ($tag -match '^[0-9]') { Set-ExakitManifestValue "components.mcp_server.version" $tag }
+    Set-ExakitManifestValue "components.mcp_server.validated" $true
+    Write-ExakitLog "OK" "MCP: the launcher's MCP server answers at $url as $user"
+    return $true
+}
+
+# Show-McpSidecarProblem - the last apply's error and its fix, on screen, once.
+function Show-McpSidecarProblem {
+    $lines = @($script:McpSidecarProblem)
+    if ($lines.Count -eq 0) { return }
+    Write-ExakitError $lines[0]
+    if ($lines.Count -gt 1) { Info $lines[1] }
+    $script:McpSidecarProblem = @()
+}
+
+# Install-McpSidecarStep - the install's AI-bridge step: the launcher's MCP
+# server as the read-only user. $true when it serves (the step's one line says
+# where); $false when it does not, with the error and its fix said - the step
+# fails soft and the install goes on. Twin of _exakit_install_mcp.
+function Install-McpSidecarStep {
+    $script:McpStepT0 = Get-Date
+    $ready = $true
+    try { Set-McpReadonlyAccess } catch { $ready = $false; Write-ExakitLog "WARN" "MCP: read-only setup: $_" }
+    Start-ExakitSpinner "Starting the MCP server and checking it answers"
+    $served = $false
+    try { $served = Set-McpSidecar -Quiet } catch { Write-ExakitLog "WARN" "MCP sidecar: $_" }
+    Stop-ExakitSpinner
+    if (-not $served) {
+        # The reason the soft step records, then the error and its fix on screen.
+        $why = @($script:McpSidecarProblem)
+        if ($why.Count -gt 0) { Set-ExakitFailureReason $why[0] } else { Set-ExakitFailureReason "the MCP server beside the database did not start" }
+        Show-McpSidecarProblem
+        return $false
+    }
+    if ($ready) { $script:McpReadonlyReady = $true }
+    Set-ExakitComponentOwnership "mcp" "kit"
+    $secs = [int]((Get-Date) - $script:McpStepT0).TotalSeconds
+    OkStep "MCP server answering at $(Get-ExakitManifestValue 'components.mcp_server.url') as the read-only user (${secs}s)"
+    return $true
+}
+
+# Remove-McpSidecar [-DryRun] - uninstall: the MCP sidecar the kit set up, on a
+# deployment that stays, and its record. Twin of mcp_sidecar_remove.
+function Remove-McpSidecar {
+    param([switch]$DryRun)
+    if ((Get-ExakitManifestValue "components.mcp_server.backend") -ne "sidecar") { return }
+    if (-not (Test-Path -LiteralPath $script:PersonalDeployDir) -or -not (Get-Command Get-PersonalCli -ErrorAction SilentlyContinue)) { return }
+    if ($DryRun) { Info "  will remove: the MCP server the kit set up beside your database (sidecar '$($script:McpSidecarName)')"; return }
+    if ((Invoke-ExakitLogged (Get-PersonalCli) "sidecar" "disable" $script:McpSidecarName "--remove") -ne 0) {
+        Warn2 "Removing the MCP sidecar reported issues (continuing uninstall): exasol sidecar disable $($script:McpSidecarName) --remove"
+    }
+    foreach ($key in @("backend", "url", "port", "bridge", "validated")) { Remove-ExakitManifestValue "components.mcp_server.$key" }
 }

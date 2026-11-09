@@ -1,0 +1,6 @@
+# The RUST container's rustc (versions.json: containers[].runtime.rustc). The
+# ABI fingerprint the database checks at load is SDK_VERSION:RUSTC_VERSION, so
+# the smoke UDF must be compiled by exactly this toolchain.
+[toolchain]
+channel = "1.98.1"
+profile = "minimal"

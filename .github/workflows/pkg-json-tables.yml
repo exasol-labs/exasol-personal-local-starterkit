@@ -436,20 +436,21 @@ jobs:
               handle.write("\n")
           print("bumped %s -> %s (%s)" % (old.get("version", ""), new, tag))
           PY
-          # The module's fallback constant is what a no-network install picks:
-          # it moves with the manifest or the two drift apart, which versions.yml
-          # fails the build over.
-          sed -i "s/^EXAKIT_JSON_TABLES_VERSION_FALLBACK=\"\${EXAKIT_JSON_TABLES_VERSION_FALLBACK:-.*}\"$/EXAKIT_JSON_TABLES_VERSION_FALLBACK=\"\${EXAKIT_JSON_TABLES_VERSION_FALLBACK:-$new}\"/" setup/lib/json-tables.sh
+          # The Python marketplace catalog owns the no-network fallback.
+          # Keep it aligned with the release manifest in this same PR.
           python3 - "$new" <<'PY'
-          import re, sys
+          import json, sys
           new = sys.argv[1]
-          path = "setup/lib/json-tables.ps1"
+          path = "marketplace/catalog.json"
           with open(path) as handle:
-              text = handle.read()
-          text = re.sub(r'(\$script:JsonTablesVersionFallback = .*else \{ ")[^"]*(" \})',
-                        lambda m: m.group(1) + new + m.group(2), text, count=1)
+              doc = json.load(handle)
+          rows = [row for row in doc["addons"] if row["id"] == "json-tables"]
+          if len(rows) != 1:
+              raise SystemExit("marketplace/catalog.json must have one json-tables row")
+          rows[0]["default_version"] = new
           with open(path, "w") as handle:
-              handle.write(text)
+              json.dump(doc, handle, indent=2)
+              handle.write("\n")
           PY
           if git diff --quiet; then
             echo "changed=false" >> "$GITHUB_OUTPUT"
@@ -468,7 +469,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$branch"
-          git add versions.json setup/lib/json-tables.sh setup/lib/json-tables.ps1
+          git add versions.json marketplace/catalog.json
           git commit -m "json-tables: advertise $new (release $tag published)"
           git push -u origin "$branch" --force
           # An existing open PR for this branch just gets the new commit from
@@ -481,7 +482,7 @@ jobs:
             echo "::notice::an open PR for $branch already exists - the push updated it."
           elif gh pr create --head "$branch" --base "${{ github.event.repository.default_branch }}" \
             --title "json-tables: advertise $new" \
-            --body "The prebuilt ingest engine, cargo shim and wheel for \`$new\` are published as the immutable release \`$tag\`, and this pull request pins its version, wheel and every asset digest in versions.json. CI verifies each pin against the release before this can merge. Merging is what makes the new build visible to installed kits; until then every kit keeps installing the previous release, which is untouched."; then
+            --body "The prebuilt ingest engine, cargo shim and wheel for \`$new\` are published as the immutable release \`$tag\`. This pull request pins the version, wheel and asset digests in versions.json and updates the offline fallback in marketplace/catalog.json. CI verifies the pins against the release before this can merge. Merging makes the new build visible to installed kits; until then every kit keeps installing the previous release."; then
             echo "::notice::advertise PR opened for $new ($tag)."
           else
             echo "::warning::could not open the advertise PR (is 'Allow GitHub Actions to create and approve pull requests' enabled under Settings > Actions > General?). The branch is pushed - open it here: https://github.com/${{ github.repository }}/compare/${{ github.event.repository.default_branch }}...$branch?expand=1"

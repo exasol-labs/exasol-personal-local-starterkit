@@ -130,7 +130,7 @@ has "the server, the DSN and the user" "MCP server 'exasol' — 127.0.0.1:8563 a
 lacks "no reference box"     "MCP is ready"   "$READY"
 lacks "no command row"       "exasol-mcp-server@2.1.0" "$READY"
 lacks "no managed-state row" "Managed state"  "$READY"
-has "the command is in the log"       "MCP command: /home/u/.local/bin/uvx exasol-mcp-server@2.1.0" "$(cat "$EXAKIT_LOG_FILE")"
+has "the server is in the log"        "MCP server: " "$(cat "$EXAKIT_LOG_FILE")"
 has "so is the managed state"         "MCP managed state:" "$(cat "$EXAKIT_LOG_FILE")"
 
 printf '\n== the first prompt is shown only when it was not handed over ==\n'
@@ -209,12 +209,14 @@ MCP_PS1_ALL="$(cat "$ROOT/setup/lib/mcp.ps1")"
 # The add-on and data-load screens are live TABLES now; each writes its parent
 # row into the table's own state file rather than into a label array.
 has "the add-on group row"  "printf 'group|Select All|1|idle" "$COMMON"
-has "the dataset group row" "printf 'group|Select All|1|idle" "$EXAPUMP_SH"
+# ...except the data question's, whose parent is one of three ways data comes
+# in (the samples, your own file, an external source), so it names them.
+has "the dataset group row" "printf 'group|Sample datasets|1|idle" "$EXAPUMP_SH"
 # Windows draws the same live table now - for all three selections, not only
 # datasets - so every parent row is a table row rather than an entry in a label
 # array.
 has "...and on Windows"     'Add-ExakitTableRow -Kind "group" -Label "Select All" -Table $script:ExakitAddonTable' "$COMMON_PS1"
-has "...for datasets too"   'Add-ExakitTableRow -Kind "group" -Label "Select All"' "$EXAPUMP_PS1"
+has "...for datasets too"   'Add-ExakitTableRow -Kind "group" -Label "Sample datasets" -Ticked' "$EXAPUMP_PS1"
 has "...and for AI clients" 'Add-ExakitTableRow -Kind "group" -Label "Select All" -Table $script:McpTable' "$MCP_PS1_ALL"
 
 # One word for the opt-out row, in every menu that has one. Five call sites on
@@ -355,9 +357,9 @@ has "the screen is not left silent" "still speaking" "$LOUD"
 printf '\n== the result line does not repeat the panel ==\n'
 
 # The outcome is the id plus, at most, the add-on's own one-line summary.
-has "one line for the outcome" 'ok "$_mp_id installed${_mp_note:+' "$COMMON"
+has "one line for the outcome" 'ok|$_mpa_id installed${_mpa_detail:+ — $_mpa_detail}' "$COMMON"
 lacks "no doubled update hint" 'installed — it now updates with: exakit update (or exakit update' "$COMMON"
-has "...on Windows too"        'Ok "$id installed - $note"' "$COMMON_PS1"
+has "...on Windows too"        'Text = "$id installed$(if ($detail) { '"'"' - '"'"' + $detail })"' "$COMMON_PS1"
 
 printf '\n== the PowerShell twin gates at the same sink ==\n'
 
@@ -365,9 +367,9 @@ has "Info is gated"        'if (-not $script:ExakitQuietDetail) {' "$COMMON_PS1"
 has "the flag is declared" '$script:ExakitQuietDetail = $false'    "$COMMON_PS1"
 has "the progress helper"  'function Set-ExakitAddonProgress'      "$COMMON_PS1"
 has "the apply loop starts the bar" 'Start-ExakitProgress -Pct 0 -Ceiling 65 -Secs 40' "$COMMON_PS1"
-has "...and reports each stage"      'Set-ExakitAddonProgress -Id $id -Pct 65 -Ceiling 90' "$COMMON_PS1"
+has "...and reports each stage"      'Set-ExakitProgress -Pct 65 -Ceiling 90 -Secs 8 -Phase "$id - validating"' "$COMMON_PS1"
 has "...and stops it"                'Stop-ExakitProgress' "$COMMON_PS1"
-has "and hands it back"      '$script:ExakitQuietDetail = $prevQuiet' "$COMMON_PS1"
+has "and hands it back"      '$script:ExakitQuietDetail = $prev' "$COMMON_PS1"
 
 printf '\n== exakit help lists each command once ==\n'
 
@@ -414,33 +416,7 @@ has "and so does its twin"       'if (-not $entry -or $seen[$name]) { continue }
 
 printf '\n== a reference card is not part of an add-on install ==\n'
 
-# The add-on modules are sourced here, not stubbed: what is under test is that
-# each one's real panel steps aside under the quiet flag.
-# shellcheck source=/dev/null
-. "$ROOT/setup/lib/dash-server.sh"
-# shellcheck source=/dev/null
-. "$ROOT/setup/lib/json-tables.sh"
-# shellcheck source=/dev/null
-. "$ROOT/setup/lib/exasol-vscode.sh"
-
-: > "$EXAKIT_LOG_FILE"
-PANEL_QUIET="$(EXAKIT_QUIET_DETAIL=1 _dash_server_print_usage 2>&1)"
-check "the dash-server panel steps aside" "" "$PANEL_QUIET"
-has "...leaving its address in the log" "dash-server: http://127.0.0.1:" "$(cat "$EXAKIT_LOG_FILE")"
-PANEL_LOUD="$(_dash_server_print_usage 2>&1)"
-has "and it still prints outside an install" "MCP endpoint" "$PANEL_LOUD"
-
-: > "$EXAKIT_LOG_FILE"
-JT_QUIET="$(EXAKIT_QUIET_DETAIL=1 _json_tables_print_usage 2>&1)"
-check "the JSON Tables panel steps aside" "" "$JT_QUIET"
-has "...leaving its command in the log" "exasol-json-tables ingest" "$(cat "$EXAKIT_LOG_FILE")"
-has "and it still prints outside an install" "Ingest JSON" "$(_json_tables_print_usage 2>&1)"
-
-# The VS Code panel lives inside its validate function rather than a printer of
-# its own, so the gate is asserted at the source.
-has "the VS Code panel is gated too" \
-    'if [ "${EXAKIT_QUIET_DETAIL:-0}" = 1 ]; then
-        _exakit_log_file "DATA  exasol-vscode:' "$(cat "$ROOT/setup/lib/exasol-vscode.sh")"
+_exakit_marketplace_python_hooks
 
 printf '\n== ...but its one useful fact rides out on the result line ==\n'
 
@@ -460,9 +436,12 @@ done
 # The hook is OPTIONAL and resolved generically: no add-on id appears in the
 # apply loop, so a new add-on gets this by defining the function and nothing in
 # common.sh has to learn its name.
-has "the hook is resolved by name"   '_mp_summary_fn="$(_exakit_addon_fn "$_mp_id" summary)"' "$COMMON"
-has "and only used when it exists"   'command -v "$_mp_summary_fn" >/dev/null 2>&1' "$COMMON"
-has "the result line carries it"     'ok "$_mp_id installed${_mp_note:+ — $_mp_note}"' "$COMMON"
+# The add-ons are installed by the shared Python controller (marketplace/apply.py), which asks each one for its
+# summary; the Bash and PowerShell adapters only render the events it streams.
+APPLY_PY="$(cat "$ROOT/marketplace/apply.py")"
+has "the hook is resolved by name"   'callable(getattr(module, "summary", None))' "$APPLY_PY"
+has "and only used when it exists"   'invoke(ctx.root, addon_id, "summary", ctx=ctx)' "$APPLY_PY"
+has "the result line carries it"     'emit(Event(addon_id, "done", _summary(ctx, addon_id, module), int(time.monotonic() - started)))' "$APPLY_PY"
 # "Browse again: exakit marketplace · how to use one: exakit help <add-on>"
 # stood here. The table above has just said what was installed and what each
 # gives you, and the closing support line already names `exakit help`.
@@ -471,22 +450,21 @@ lacks "...nor on Windows"            "how to use one: exakit help <add-on>" "$CO
 
 printf '\n== the PowerShell twin does the same ==\n'
 
-DS_PS1="$(cat "$ROOT/setup/lib/dash-server.ps1")"
-JT_PS1="$(cat "$ROOT/setup/lib/json-tables.ps1")"
-VS_PS1="$(cat "$ROOT/setup/lib/exasol-vscode.ps1")"
-has "dash-server gates its panel"   'if ($script:ExakitQuietDetail) {' "$DS_PS1"
-has "json-tables gates its panel"   'if ($script:ExakitQuietDetail) {' "$JT_PS1"
-has "exasol-vscode gates its panel" 'if ($script:ExakitQuietDetail) {' "$VS_PS1"
-has "dash-server has a summary"     'function Get-DashServerSummary'     "$DS_PS1"
-has "json-tables has a summary"     'function Get-JsonTablesSummary'     "$JT_PS1"
-has "exasol-vscode has a summary"   'function Get-ExasolVscodeSummary'   "$VS_PS1"
-has "exasol-scheduler has a summary" 'function Get-ExasolSchedulerSummary' "$(cat "$ROOT/setup/lib/exasol-scheduler.ps1")"
-has "dbt-exasol has a summary"      'function Get-DbtExasolSummary'      "$(cat "$ROOT/setup/lib/dbt-exasol.ps1")"
-# Counted from the registry, so a new add-on that forgets its SummaryFn row
-# fails here by count even before its own has-check exists.
-check "every add-on is registered" "5" "$(printf '%s\n' "$COMMON_PS1" | grep -cE 'SummaryFn *= *"')"
-has "the apply loop reads the hook" '$addon.PSObject.Properties["SummaryFn"]' "$COMMON_PS1"
-has "and only when it resolves"     'Get-Command $addon.SummaryFn -ErrorAction SilentlyContinue' "$COMMON_PS1"
+DS_PY="$(cat "$ROOT/marketplace/addons/dash_server.py")"
+JT_PY="$(cat "$ROOT/marketplace/addons/json_tables.py")"
+VS_PY="$(cat "$ROOT/marketplace/addons/exasol_vscode.py")"
+has "dash-server has a summary"     'def summary('                      "$DS_PY"
+has "json-tables has a summary"     'def summary('                      "$JT_PY"
+has "exasol-vscode has a summary"   'def summary('                      "$VS_PY"
+has "exasol-scheduler has a summary" 'def summary(' "$(cat "$ROOT/marketplace/addons/exasol_scheduler.py")"
+has "dbt-exasol has a summary"      'def summary('                      "$(cat "$ROOT/marketplace/addons/dbt_exasol.py")"
+has "notebook has a summary"        'def summary(' "$(cat "$ROOT/marketplace/addons/notebook.py")"
+has "udf-devkit has a summary"      'def summary(' "$(cat "$ROOT/marketplace/addons/udf_devkit.py")"
+_catalog_ids="$(python3 "$ROOT/marketplace/metadata.py" "$ROOT" registry | cut -d'|' -f1 | sort)"
+_summary_ids="$(python3 "$ROOT/marketplace/metadata.py" "$ROOT" shell-hooks | awk -F'|' '$2 == "summary" { print $1 }' | sort)"
+check "every add-on has a summary hook" "$_catalog_ids" "$_summary_ids"
+has "the apply loop reads the summary" "'done' {" "$COMMON_PS1"
+has "and puts it in the finished cell" 'Get-ExakitAddonTableCell -Summary $detail -Seconds $seconds' "$COMMON_PS1"
 
 printf '\n== a folded description lines up under the one above it ==\n'
 
@@ -562,10 +540,8 @@ ps_fn() { # ps_fn <file> <name>
     ' "$1"
 }
 
-MCP_INSTALL_SH="$(sh_fn "$ROOT/setup/lib/mcp.sh" "mcp_install() {")"
-MCP_VALIDATE_SH="$(sh_fn "$ROOT/setup/lib/mcp.sh" "mcp_validate() {")"
-MCP_INSTALL_PS="$(ps_fn "$ROOT/setup/lib/mcp.ps1" "Install-Mcp")"
-MCP_VALIDATE_PS="$(ps_fn "$ROOT/setup/lib/mcp.ps1" "Test-McpServer")"
+MCP_STEP_SH="$(sh_fn "$ROOT/setup/lib/common.sh" "_exakit_install_mcp() {")"
+MCP_STEP_PS="$(ps_fn "$ROOT/setup/lib/mcp.ps1" "Install-McpSidecarStep")"
 
 spins() { # spins <text> <begin-needle> <end-needle> -> "N/M"
     printf '%s/%s' \
@@ -573,25 +549,12 @@ spins() { # spins <text> <begin-needle> <end-needle> -> "N/M"
         "$(printf '%s\n' "$1" | grep -c "$3")"
 }
 
-# The download: the longest wait in the step, and the one that was silent.
-check "the download spins"       "1/1" "$(spins "$MCP_INSTALL_SH" 'ui_spin_begin' 'ui_spin_end')"
-check "...and its twin does too" "1/1" "$(spins "$MCP_INSTALL_PS" 'Start-ExakitSpinner' 'Stop-ExakitSpinner')"
-# The handshake: starting the server can still mean uvx materialising an
-# environment. Two ends to one begin here -- the loop closes the spinner on the
-# way out and before a retry, because a spinner owns its line.
-check "the handshake spins"      "1/2" "$(spins "$MCP_VALIDATE_SH" 'ui_spin_begin' 'ui_spin_end')"
-check "...and its twin does too" "1/1" "$(spins "$MCP_VALIDATE_PS" 'Start-ExakitSpinner' 'Stop-ExakitSpinner')"
-
-# The label is what the reader looks at for the whole wait, so it names the
-# phase and says the download happens once per machine.
-has "the label names the download"  'Downloading ${EXAKIT_MCP_PACKAGE}@${EXAKIT_MCP_VERSION} — first run only' "$MCP_INSTALL_SH"
-has "the twin's download label"     'Downloading $($script:McpPackage)@$($script:McpVersion) - first run only' "$MCP_INSTALL_PS"
-has "the handshake names itself"    'Starting the MCP server and checking it answers' "$MCP_VALIDATE_SH"
-has "...and on Windows"             'Starting the MCP server and checking it answers' "$MCP_VALIDATE_PS"
-
-# A spinner owns its line and rewrites it every 90ms, so the retry warning waits
-# until the spinner has been stopped.
-lacks "no warning under a spinner"  'Warn2 "Handshake attempt $attempt failed - retrying"; Start-Sleep' "$MCP_VALIDATE_PS"
+# The step is the server beside the database starting (and healing): the wait
+# the reader sits through, so it spins, on both sides, under the same label.
+check "the MCP step spins"       "1/1" "$(spins "$MCP_STEP_SH" 'ui_spin_begin' 'ui_spin_end')"
+check "...and its twin does too" "1/1" "$(spins "$MCP_STEP_PS" 'Start-ExakitSpinner' 'Stop-ExakitSpinner')"
+has "the label names the wait"      'Starting the MCP server and checking it answers' "$MCP_STEP_SH"
+has "...and on Windows"             'Starting the MCP server and checking it answers' "$MCP_STEP_PS"
 
 printf '\n== no question is asked under a live table ==\n'
 
@@ -656,55 +619,17 @@ lacks "no caller leaves it to the raw id" 'exakit_soft_step mcp "exakit update" 
 
 
 echo
-echo "the MCP package download overlaps the data load:"
-# THE TWO STEPS NEED NOTHING FROM EACH OTHER, and run back to back they cost
-# the sum of their times. On a fresh Windows install that sum was ~5 minutes -
-# 131s loading, 166s on the bridge - and almost all of the bridge is uv
-# materialising the server's environment (12,099 files, 207MB). That is work a
-# machine can do while its database is busy elsewhere. Measured on macOS with a
-# cold uv cache and a 20s stand-in load: 38s serial, 21s overlapped, same
-# verdict from mcp_install either way.
+echo "there is no MCP package to download any more:"
+# The server is the launcher's sidecar: nothing to prime, so nothing to overlap
+# with the data load and nothing left running behind the installer.
 MCP_SH_ALL="$(cat "$ROOT/setup/lib/mcp.sh")"
 MCP_PS_ALL="$(cat "$ROOT/setup/lib/mcp.ps1")"
-has "the shell half can start it early"   "mcp_prefetch_begin() {"      "$MCP_SH_ALL"
-has "...and stop it"                      "mcp_prefetch_stop() {"       "$MCP_SH_ALL"
-has "the twin can start it early"         "function Start-ExakitMcpPrefetch" "$MCP_PS_ALL"
-has "...and stop it"                      "function Stop-ExakitMcpPrefetch"  "$MCP_PS_ALL"
-has "...and collect it"                   "function Receive-ExakitMcpPrefetch" "$MCP_PS_ALL"
-# Started BEFORE the load, or it overlaps nothing.
 COMMON_LOAD="$(cat "$ROOT/setup/lib/common.sh")"
-check "the shell starts it before the load runs" "yes" \
-    "$(printf '%s\n' "$COMMON_LOAD" | awk '/mcp_prefetch_begin/{a=NR} /exakit_maybe_offer_data_load "\$_kit_root"/{if(a&&NR>a){print "yes";exit}}' | head -1)"
 WIN_SETUP="$(cat "$ROOT/setup/setup-windows.ps1")"
-check "the twin starts it before the load runs" "yes" \
-    "$(printf '%s\n' "$WIN_SETUP" | awk '/Start-ExakitMcpPrefetch/{a=NR} /Request-ExakitDataLoadOffer/{if(a&&NR>a){print "yes";exit}}' | head -1)"
-# Collected by the step that needs it, with the inline prime still there for a
-# run where no prefetch happened - that fallback is what keeps this optional.
-# NOT `wait`, and the suite pins that. mcp_install runs inside the soft-step
-# SUBSHELL (`if ( "$@" )` in exakit_soft_step), and a shell can only wait on its
-# OWN children - `wait` on a sibling pid returns non-zero immediately without
-# waiting, so the log is read mid-write and then deleted under a live process.
-# Seen on a real install: the collected output was uv's first progress line,
-# "Installed 87 packages in 429ms", six seconds after the prefetch started, and
-# the prime was graded "Could not prime" over a download that was still going.
-lacks "the collector does not wait on a pid it does not own" \
-    'wait "$EXAKIT_MCP_PREFETCH_PID"' "$MCP_INSTALL_SH"
-has "...it polls for the process instead" \
-    'kill -0 "$EXAKIT_MCP_PREFETCH_PID"' "$MCP_INSTALL_SH"
-has "...and takes the exit code from a file, the only way across a subshell" \
-    'cat "$EXAKIT_MCP_PREFETCH_LOG.rc"' "$MCP_INSTALL_SH"
-has "the prefetch records that exit code" \
-    'EXAKIT_MCP_PREFETCH_LOG.rc"' "$(cat "$ROOT/setup/lib/mcp.sh")"
-# Through the uvx beside the VETTED uv (mcp_uvx_bin), never a bare `uvx` off
-# PATH: that could be a copy below the floor the kit refused a moment earlier.
-has "...and still primes inline without one" '"$(mcp_uvx_bin)" "${EXAKIT_MCP_PACKAGE}@${EXAKIT_MCP_VERSION}" --help 2>&1' "$MCP_INSTALL_SH"
-has "the twin collects it in Install-Mcp"    'Receive-ExakitMcpPrefetch' "$MCP_INSTALL_PS"
-has "...and still primes inline without one" 'Get-UvxPath) "$($script:McpPackage)@$($script:McpVersion)" "--help"' "$MCP_INSTALL_PS"
-# A background download must not outlive the installer, on ANY way out.
-has "the shell stops it when the run ends"   "mcp_prefetch_stop" "$COMMON_LOAD"
-check "...on both the clean and the failing path" "2" \
-    "$(printf '%s\n' "$COMMON_LOAD" | grep -c 'mcp_prefetch_stop')"
-has "the twin stops it in the finally"       "Stop-ExakitMcpPrefetch" "$WIN_SETUP"
+lacks "no prefetch on the shell side"   "mcp_prefetch"            "$MCP_SH_ALL$COMMON_LOAD"
+lacks "...nor on Windows"               "ExakitMcpPrefetch"       "$MCP_PS_ALL$WIN_SETUP"
+lacks "no stdio server to prime"        "exasol-mcp-server@"      "$MCP_SH_ALL"
+lacks "...on either side"               'McpPackage)@$($script:McpVersion)' "$MCP_PS_ALL"
 
 printf '\n%s: %d passed, %d failed\n' "$(basename "$0")" "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

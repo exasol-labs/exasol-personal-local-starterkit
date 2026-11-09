@@ -19,11 +19,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  marketplace-python-tests:
+    name: marketplace Python (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Install the marketplace UI dependency from its single pin
+        shell: bash
+        run: |
+          version="$(python -c 'from pathlib import Path; print(next(line.split("=", 1)[1] for line in Path("marketplace/defaults.env").read_text().splitlines() if line.startswith("EXAKIT_TEXTUAL_VERSION=")))')"
+          python -m pip install "textual==$version" uv
+      - name: Persona and marketplace Python contracts
+        shell: bash
+        run: python -m unittest discover -s tests -p 'test_marketplace_*.py'
+
   changes:
     name: detect versions.json changes
     runs-on: ubuntu-latest
     outputs:
       versions: ${{ steps.detect.outputs.versions }}
+      notebooks: ${{ steps.detect.outputs.notebooks }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -46,6 +68,19 @@ jobs:
             echo "versions=false" >> "$GITHUB_OUTPUT"
           fi
           printf 'versions.json changed: %s\n' "$(printf '%s\n' "$changed" | grep -cx 'versions.json')"
+          # The notebooks-live job (a database on the runner) runs on a pull
+          # request only when it touches what that job proves: the notebooks,
+          # the reference datasets, the helper packages, the descriptor service
+          # the notebooks describe through, or the job's own files.
+          # The files that PLACE the persona notebooks count too (QAT-09): the
+          # personas, and the add-on code that copies their folders.
+          nb_paths='^(notebook/|data/datasets/|packages/|personas/|marketplace/addons/notebook\.py$|marketplace/notebook_cli\.py$|marketplace/persona_apply\.py$|marketplace/persona_membership\.py$|setup/lib/descriptor/|setup/lib/describe_service\.py$|tools/notebooks\.py$|tests/notebooks-run\.sh$|tests/lib/stub_model_server\.py$|tests/mcp-readonly-sql-matrix\.sh$|\.github/workflows/versions\.yml$)'
+          if printf '%s\n' "$changed" | grep -qE "$nb_paths"; then
+            echo "notebooks=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "notebooks=false" >> "$GITHUB_OUTPUT"
+          fi
+          printf 'notebook, dataset or helper files changed: %s\n' "$(printf '%s\n' "$changed" | grep -cE "$nb_paths")"
 
   validate:
     name: validate versions.json
@@ -88,7 +123,8 @@ jobs:
 
           expected = {"personal", "exapump", "uv", "mcp", "pyexasol", "skills",
                       "dash-server", "exasol-vscode", "json-tables",
-                      "exasol-scheduler", "dbt-exasol", "preprocessor"}
+                      "exasol-scheduler", "dbt-exasol", "preprocessor", "notebook",
+                      "udf-devkit"}
           components = doc.get("components") or {}
           if set(components) != expected:
               problems.append("components must be exactly %s, found %s"
@@ -548,6 +584,9 @@ jobs:
           # v-prefixed (v1.12.1) while the PyPI versions are not (1.12.1).
           if components.get("dbt-exasol"):
               check_pypi("dbt-exasol", components["dbt-exasol"], "dbt-exasol")
+          # The notebook add-on installs Exasol's notebook connector from PyPI.
+          if components.get("notebook"):
+              check_pypi("notebook", components["notebook"], "exasol-notebook-connector")
 
           # --- the marketplace add-ons (GitHub-release-installed) --------------
           # Each installs from its release tag, so the tag the installer
@@ -794,6 +833,32 @@ jobs:
           sys.exit(1 if problems else 0)
           PY
 
+  linux-paths:
+    # LNX-09: the suites mock detect_os, so the paths only real Linux takes - the C library the exapump shim
+    # keys on, the CPU architecture, the container engine - were never run by anything. Here the installer's
+    # own preflight and dry run run from this checkout on an older glibc (Ubuntu 22.04) and on arm64; both
+    # check the machine and install nothing. The platform-specific suites run beside them.
+    name: linux paths (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@v7
+      - name: the machine as the kit sees it
+        run: |
+          uname -m
+          ldd --version 2>&1 | head -1
+          bash -c '. setup/lib/detect.sh; printf "os=%s arch=%s musl=%s docker=%s\n" "$(detect_os)" "$(detect_arch)" "$(detect_musl && echo yes || echo no)" "$(detect_docker)"'
+      - name: preflight, from this checkout (installs nothing)
+        run: EXAKIT_HOME="$RUNNER_TEMP/kit-home" EXAKIT_LOCAL_KIT="$PWD" EXAKIT_PREFLIGHT=1 sh install.sh </dev/null
+      - name: dry run, from this checkout (installs nothing)
+        run: EXAKIT_HOME="$RUNNER_TEMP/kit-home" EXAKIT_LOCAL_KIT="$PWD" EXAKIT_DRY_RUN=1 EXAKIT_PERSONA=data-scientist sh install.sh </dev/null
+      - run: bash tests/exapump-shim-wrapper.sh
+      - run: bash tests/personal-readiness.sh
+      - run: bash tests/podman-rootless-selfheal.sh
+
   shell-tests:
     name: shell tests (${{ matrix.os }}, ${{ matrix.shard }}/5)
     runs-on: ${{ matrix.os }}
@@ -831,6 +896,14 @@ jobs:
       - run: bash tests/ps-undefined-functions.sh
         if: matrix.shard == 2
       - run: bash tests/versions-manifest.sh
+      # The exapump wrapper for glibc < 2.38, rendered: no CI runner is old enough to generate it.
+      - run: bash tests/exapump-shim-wrapper.sh
+        if: matrix.shard == 1
+      # The read-only commands download nothing and write nothing to the home, on any Python 3.
+      - run: bash tests/readonly-queries.sh
+        if: matrix.shard == 1
+      - run: bash tests/ci-wiring.sh
+        if: matrix.shard == 1
       - run: bash tests/uv-bootstrap.sh
         if: matrix.shard == 3
       - run: bash tests/personal-s3.sh
@@ -840,6 +913,9 @@ jobs:
       - run: bash tests/noninteractive-answers.sh
         if: matrix.shard == 4
       - run: bash tests/marketplace.sh
+        if: matrix.shard == 2
+      # The no-Python reader of the catalog's GitHub block agrees with the Python one (QAT-12).
+      - run: bash tests/catalog-github-sed.sh
         if: matrix.shard == 2
       # json-tables ships from one immutable release per build; the pin in
       # versions.json is the only authority. This guards both halves: the
@@ -929,11 +1005,202 @@ jobs:
       # exercised mcp/ at all -- a NameError in that package would have shipped.
       - run: python3 -m unittest discover -s mcp/tests -t .
         if: matrix.shard == 4
+      # The launcher's MCP sidecar as the kit's server: the shell side against a
+      # stub launcher, and the sidecars.yaml editor (skipped where the runner has no PyYAML).
+      - run: bash tests/mcp-sidecar.sh
+        if: matrix.shard == 4
+      - run: python3 -m unittest tests.test_sidecar_definition
+        if: matrix.shard == 4
       # Three more suites existed and were never run by CI either. This one had
       # rotted: it asserted a data-load prompt wording that the JSON support
       # changed on the bash side, and nothing noticed. (Not discoverable via
       # `unittest discover` -- tests/ is not an importable package.)
       - run: python3 tests/test_sample_data_schema.py
+        if: matrix.shard == 4
+      # tools/dataset_check.py: every file defect named before a load; the live
+      # half against a fake exapump (refuse an existing schema, drop its own).
+      - run: python3 tests/test_dataset_check.py
+        if: matrix.shard == 4
+      # Full-kit removal must preserve user notebooks by default.
+      - run: bash tests/notebook-addon.sh
+        if: matrix.shard == 4
+      # exakit workflow list|show: the CLI over the logs the helpers write.
+      - run: bash tests/workflow-command.sh
+        if: matrix.shard == 4
+      - run: python3 tests/test_workflow.py
+        if: matrix.shard == 4
+      - run: python3 tests/test_ask.py
+        if: matrix.shard == 4
+      - run: python3 tests/test_share.py
+        if: matrix.shard == 4
+      - run: python3 tests/test_rust_udf.py
+      - run: python3 tests/test_rust_container.py
+        if: matrix.shard == 4
+      - run: python3 tests/test_model_compatibility.py
+        if: matrix.shard == 4
+      - run: bash tests/rust-udf.sh
+        if: matrix.shard == 4
+      # exakit describe: the profiler and the draft, approve/show/versions and
+      # the descriptor v2 reader behind the notebooks (DS-5, DS-2).
+      - run: bash tests/describe-command.sh
+        if: matrix.shard == 4
+      - run: python3 tests/test_describe_service.py
+        if: matrix.shard == 4
+      # The database's TLS pin (SEC-14): the fingerprint against a local TLS
+      # server, the pinned clients, status and `exakit tls-pin`.
+      - run: python3 -m unittest tests/test_tls_pin.py
+        if: matrix.shard == 4
+      - run: bash tests/tls-pin.sh
+        if: matrix.shard == 4
+      # The role-per-column descriptor: the eight roles and their thresholds,
+      # describe/approve/publish against a fake database.
+      - run: python3 tests/test_descriptor_roles.py
+        if: matrix.shard == 4
+      - run: python3 tests/test_descriptor_flow.py
+        if: matrix.shard == 4
+      # The workflows parse and none falls behind the reference datasets
+      # (every folder with a manifest.json), and the live job's checks.
+      - run: python3 tests/test_workflow_datasets.py
+        if: matrix.shard == 4
+      - run: python3 tests/test_descriptor_v2.py
+        if: matrix.shard == 4
+      # The schema map: keys, links declared and found, approve and the joined view.
+      - run: python3 tests/test_descriptor_schema.py
+        if: matrix.shard == 4
+      # The draft scored against a reviewer's answers (held-out tables too), and the approve step's look at the data.
+      - run: python3 tests/test_descriptor_benchmark.py
+        if: matrix.shard == 4
+      - run: python3 tests/test_descriptor_review.py
+        if: matrix.shard == 4
+      # The kit's commands from a notebook cell, and the Data Scientist's hand-off bundle.
+      - run: python3 tests/test_kit_commands.py
+        if: matrix.shard == 4
+      - run: python3 tests/test_handoff_bundle.py
+        if: matrix.shard == 4
+      - run: python3 tests/test_notebook_helpers.py
+        if: matrix.shard == 4
+      - run: python3 tests/test_model_provider.py
+        if: matrix.shard == 4
+      # The same helpers with the real Langfuse SDK 5 installed (the add-on pins
+      # langfuse>=5,<6), so RealLangfuseTest runs instead of being skipped. A
+      # venv of its own: the runner's python3 is externally managed.
+      # Check the supported Python floor as well as the ordinary 3.12 checks.
+      - uses: actions/setup-python@v6
+        id: provider-python
+        if: matrix.shard == 4
+        with:
+          python-version: '3.11'
+          update-environment: false
+      - name: exakit.nb helpers and provider contracts on Python 3.11 with real SDKs
+        if: matrix.shard == 4
+        run: |
+          "${{ steps.provider-python.outputs.python-path }}" -m venv "$RUNNER_TEMP/langfuse-venv"
+          "$RUNNER_TEMP/langfuse-venv/bin/python" -m pip install --quiet "langfuse>=5,<6" "openai>=1,<3" pandas
+          "$RUNNER_TEMP/langfuse-venv/bin/python" -m unittest tests.test_notebook_helpers tests.test_notebook_prepare
+          "$RUNNER_TEMP/langfuse-venv/bin/python" tests/test_model_provider.py
+      - run: python3 tests/test_notebook_contents.py
+      - run: python3 tests/test_notebook_ai.py
+        if: matrix.shard == 4
+      - run: python3 tests/test_acceptance_gaps.py
+        if: matrix.shard == 4
+      - run: python3 tests/test_ask_benchmark.py
+        if: matrix.shard == 4
+      - run: python3 tests/test_artifact_scan.py
+        if: matrix.shard == 4
+      - run: python3 tests/test_role_picker.py
+        if: matrix.shard == 4
+      - run: python3 tests/test_notebook_bundle.py
+      - run: python3 tests/test_notebook_setup_env.py
+      - run: python3 tests/test_notebook_prepare.py
+      # Each suite named, so none can sit in tests/ unrun (audit QAT-01); tests/ci-wiring.sh fails on one that does.
+      - name: notebook, training and persona suites
+        if: matrix.shard == 4
+        run: |
+          for suite in test_handoff test_ml_train test_notebook_readout test_notebook_redact test_notebook_themes test_persona_membership \
+                       test_privacy_watch test_telemetry_default test_version_pins; do
+            echo "== $suite"; python3 "tests/$suite.py" || exit 1
+          done
+      - run: python3 tests/test_example_library.py
+        if: matrix.shard == 4
+      - run: python3 tests/test_addon_github.py
+        if: matrix.shard == 4
+      # The catalog's copy of each add-on's GitHub name, link and About is the
+      # kit's answer when GitHub cannot be reached. A repository that renamed
+      # itself or reworded its About is flagged here (refresh with
+      # tools/addon_github.py); a warning, so another project's edit does not
+      # fail an unrelated change.
+      - name: the add-ons' GitHub names, links and Abouts match the catalog
+        if: matrix.shard == 4
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if ! python3 tools/addon_github.py --check; then
+            echo "::warning title=add-on catalog drift::marketplace/catalog.json no longer matches GitHub; run python3 tools/addon_github.py"
+          fi
+      - run: python3 tests/test_addon_help.py
+        if: matrix.shard == 4
+      - run: python3 tests/test_exasol_mlflow.py
+        if: matrix.shard == 4
+      # exasol-mlflow at both ends of the MLflow 3.x range it pins (mlflow-skinny
+      # >=3,<4): the oldest 3.0 and the latest 3.x, each in a venv of its own, so
+      # the store test runs against the real package rather than being skipped.
+      - name: exasol-mlflow against MLflow 3.0 and the latest 3.x
+        if: matrix.shard == 4
+        run: |
+          for pin in "mlflow-skinny==3.0.*" "mlflow-skinny>=3,<4"; do
+            rm -rf "$RUNNER_TEMP/mlflow-venv"
+            python3 -m venv "$RUNNER_TEMP/mlflow-venv"
+            # The same store pins as exasol-mlflow's [mlflow] extra: SQLAlchemy 2.1 removed a pool
+            # class MLflow 3.0's store imports.
+            "$RUNNER_TEMP/mlflow-venv/bin/python" -m pip install --quiet "$pin" "sqlalchemy>=2,<2.1" "alembic>=1.13,<2"
+            "$RUNNER_TEMP/mlflow-venv/bin/python" -c 'import mlflow; print("mlflow", mlflow.__version__)'
+            "$RUNNER_TEMP/mlflow-venv/bin/python" -m unittest tests.test_exasol_mlflow
+          done
+      # The reference datasets as checksummed release assets (DS-2): kit copy,
+      # cache, download through a mirror, tampered archives refused; the data
+      # question (source first, Enter on Skip skips, the For column).
+      - run: bash tests/dataset-asset.sh
+        if: matrix.shard == 4
+      - run: bash tests/data-question.sh
+        if: matrix.shard == 4
+      # An add-on's install question is asked before the progress table animates,
+      # never under it (a real pty: one table on screen, the answer reaches the
+      # install).
+      - run: bash tests/addon-questions.sh
+        if: matrix.shard == 4
+      # The notebook's tools as child rows of its row in the add-ons table (a
+      # real pty: the tree at 80 columns, the ticks reaching the install, each
+      # tool's own status in the one table).
+      - run: bash tests/notebook-tools-table.sh
+        if: matrix.shard == 4
+      # exakit model put / list / template and the scoring UDF template (ML-4).
+      - run: bash tests/model-commands.sh
+        if: matrix.shard == 4
+      - run: python3 tests/test_model_tool.py
+        if: matrix.shard == 4
+      - run: python3 tests/test_score_template.py
+        if: matrix.shard == 4
+      # The udf-devkit add-on: each container install confirmed, the services
+      # follow the restart, BucketFS never written outside the bucket; the
+      # shared rules (pins, bucket paths, aliases, the smoke UDF).
+      - run: bash tests/addon-activity.sh
+      # exakit mlflow: start/stop/disable against a stub server, server.json,
+      # the enabled flag exakit start honours, and the lifecycle's own rules.
+      - run: bash tests/mlflow-command.sh
+        if: matrix.shard == 4
+      - run: python3 tests/test_mlflow_service.py
+        if: matrix.shard == 4
+      # Personas (PRD P-1): every file valid and read the same by the shell,
+      # an explicit answer wins per variable, an unknown persona is refused
+      # by the installer before anything is installed.
+      - run: bash tests/personas.sh
+        if: matrix.shard == 4
+      # The settings file (~/.exasol-starter-kit/exakit.env): read as written,
+      # the environment wins, and setup/exakit.env lists every setting.
+      - run: bash tests/env-file.sh
+        if: matrix.shard == 4
+      - run: python3 tests/test_udf_tool.py
+      - run: python3 tests/test_slc_archive.py
         if: matrix.shard == 4
       - run: bash tests/reap-orphan-daemon.sh
         if: matrix.shard == 4
@@ -943,6 +1210,9 @@ jobs:
       # two facts the Windows install on a laptop with WSL got wrong.
       - run: bash tests/personal-readiness.sh
         if: matrix.shard == 4
+      # A lock a crashed launcher left behind: released (diag unlock) and the
+      # destroy retried only when no launcher runs; the launcher's words quoted.
+      - run: bash tests/personal-destroy-lock.sh
       # Docker when usable, else Podman, and an existing deployment keeps the
       # engine its record names: the 2.4 engine choice against stub engines.
       - run: bash tests/personal-engine.sh
@@ -1006,7 +1276,13 @@ jobs:
         if: matrix.shard == 3
       - run: bash tests/uninstall-addons-only.sh
         if: matrix.shard == 3
+      - run: bash tests/component-ownership.sh
+        if: matrix.shard == 3
       - run: bash tests/whats-new.sh
+        if: matrix.shard == 3
+      # Nothing the kit makes in TMPDIR outlives its run: dry runs, the data and
+      # add-ons tables, the launcher download - on success, die(), and signals.
+      - run: bash tests/temp-cleanup.sh
         if: matrix.shard == 3
       # The two PowerShell-native suites had NO caller anywhere -- not this
       # workflow, not their shell siblings, not a script. They document
@@ -1040,11 +1316,32 @@ jobs:
           if command -v pwsh >/dev/null 2>&1; then
             pwsh -NoProfile -File tests/noninteractive-answers.ps1
             pwsh -NoProfile -File tests/uninstall-ps.ps1
+            pwsh -NoProfile -File tests/component-ownership-ps.ps1
             pwsh -NoProfile -File tests/runtime-personal-ps.ps1
+            pwsh -NoProfile -File tests/mcp-sidecar-ps.ps1
             pwsh -NoProfile -File tests/service-scope-ps.ps1
             pwsh -NoProfile -File tests/personal-s3-ps.ps1
+            pwsh -NoProfile -File tests/personal-destroy-lock-ps.ps1
+            pwsh -NoProfile -File tests/workflow-command-ps.ps1
+            pwsh -NoProfile -File tests/describe-command-ps.ps1
+            pwsh -NoProfile -File tests/tls-pin-ps.ps1
+            pwsh -NoProfile -File tests/addon-activity-ps.ps1
+            pwsh -NoProfile -File tests/addon-help-ps.ps1
+            pwsh -NoProfile -File tests/mlflow-command-ps.ps1
+            pwsh -NoProfile -File tests/personas-ps.ps1
+            pwsh -NoProfile -File tests/env-file-ps.ps1
+            pwsh -NoProfile -File tests/menu-mouse-ps.ps1
+            pwsh -NoProfile -File tests/sql-quoting-ps.ps1
+            pwsh -NoProfile -File tests/table-menu-ps.ps1
+            pwsh -NoProfile -File tests/mcp-admin-sql-ps.ps1
+            pwsh -NoProfile -File tests/update-targets-ps.ps1
+            pwsh -NoProfile -File tests/dataset-asset-ps.ps1
+            pwsh -NoProfile -File tests/data-question-ps.ps1
+            pwsh -NoProfile -File tests/notebook-tools-table-ps.ps1
+            pwsh -NoProfile -File tests/rust-udf-ps.ps1
             pwsh -NoProfile -File tests/data-load-shapes-ps.ps1
             pwsh -NoProfile -File tests/db-clock-skew-ps.ps1
+            pwsh -NoProfile -File tests/temp-cleanup-ps.ps1
           elif [ "${EXAKIT_REQUIRE_PS:-0}" = "1" ]; then
             echo "FAIL pwsh is missing on the runner that is supposed to have it" >&2
             exit 1
@@ -1070,3 +1367,153 @@ jobs:
       # Dry run only without EXAKIT_SMOKE_FULL=1: no install, no database.
       - run: bash tests/smoke-test.sh
         if: matrix.shard == 2
+
+  notebooks-live:
+    name: notebooks headless on a live database (Linux)
+    needs: changes
+    # THE ONE JOB WITH A DATABASE. Everything else in this workflow runs shell
+    # and Python against fakes; this deploys Exasol Personal on the runner
+    # through the kit's own installer (the launcher runs the database in a
+    # rootless Podman container on Linux), then runs the two suites that need
+    # it: the read-only MCP user proven empirically (TPC-H), and the four core
+    # quickstart/explore/train notebooks on the two reference datasets with the
+    # text step on a stub model, which skips on both with its reason: neither
+    # has a text column (TDD/BRD AC-DS3.1, AC-ML3.1). Ask requires an
+    # explicit SQL approval; Share requires Dash Server and a figure check;
+    # Rust scoring requires its separate pinned SLC. They have their own gates.
+    # Both suites skip without a database; EXAKIT_REQUIRE_DB=1 turns that into
+    # a failure here, so a runner that could not deploy is red, never green.
+    # Every push to main or a release branch; a pull request only when it
+    # touches the notebooks, the reference datasets, the helper packages or
+    # this job's own files (the changes job's filter). A real gate: no
+    # continue-on-error, time-boxed to fifty-five minutes (a third dataset).
+    if: >-
+      (github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release')))
+      || (github.event_name == 'pull_request' && needs.changes.outputs.notebooks == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      EXAKIT_NO_FANCY: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - name: Podman
+        # Installed here rather than by the kit, so the sudo step is this
+        # workflow's and not the installer's (EXAKIT_INSTALL_PODMAN=0 below).
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y podman uidmap slirp4netns fuse-overlayfs
+          podman info --format '{{.Host.Arch}} podman {{.Version.Version}}'
+          df -h "$HOME" | tail -1
+          free -g | head -2
+      - name: install the kit from this checkout
+        env:
+          EXAKIT_LOCAL_KIT: ${{ github.workspace }}
+          EXAKIT_PERSONA: data-scientist   # the ML Engineer is disabled for now; its add-on is named below
+          EXAKIT_DATASETS: tpch,amazon_sales,fraud_transactions
+          EXAKIT_MARKETPLACE_ADDONS: notebook,udf-devkit
+          # One named client so the install creates the read-only MCP user: the
+          # matrix below and the notebook runs read as it. EXAKIT_SKIP_MCP=1
+          # skipped that user too, and both steps failed with no credential.
+          EXAKIT_MCP_CLIENTS: claude
+          EXAKIT_NOTEBOOK_FRONTENDS: none
+          EXAKIT_INSTALL_PODMAN: "0"
+          EXAKIT_PODMAN_SELFHEAL: "1"
+          EXAKIT_PERSONAL_READY_TIMEOUT: "600"
+          EXAKIT_PERSONAL_MIN_DISK_GB: "10"
+        run: |
+          sh install.sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: the database answers
+        run: |
+          for _ in $(seq 1 60); do
+            exakit status --json > "$RUNNER_TEMP/status.json" 2>/dev/null && break
+            sleep 10
+          done
+          exakit status
+          python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); print("status:", d["status"]); sys.exit(0 if d["status"] == "running" else 1)' "$RUNNER_TEMP/status.json"
+      - name: each recorded persona's notebooks, and no other's, are placed
+        # QAT-09: the notebooks below run from the checkout, so placement - what
+        # the install copied for the personas it recorded - was never looked at.
+        run: |
+          python3 - "$GITHUB_WORKSPACE/notebook/catalog.json" <<'PY'
+          import json, os, sys
+          from pathlib import Path
+          kit = Path(os.path.expanduser("~/.exasol-starter-kit"))
+          manifest = json.loads((kit / "manifest.json").read_text())
+          recorded = [p for p in str((manifest.get("persona") or {}).get("id", "")).split(",") if p]
+          catalog = json.loads(Path(sys.argv[1]).read_text())
+          recorded_dir = ((manifest.get("components") or {}).get("notebook") or {}).get("notebooks_dir")
+          placed_root = Path(recorded_dir or kit / "notebooks") / catalog["folders"]["jupyter"]
+          problems = []
+          for persona in {n.get("persona") for n in catalog["notebooks"] if n.get("persona")}:
+              folder = placed_root / persona
+              wanted = sorted(n["jupyter"] for n in catalog["notebooks"] if n.get("persona") == persona and n.get("jupyter"))
+              if persona in recorded:
+                  have = sorted(f.name for f in folder.glob("*.ipynb"))
+                  if have != wanted:
+                      problems.append(f"{persona}: placed {have}, catalog lists {wanted}")
+              elif folder.exists():
+                  problems.append(f"{persona}: not recorded ({recorded}) but its folder was placed")
+          print("recorded personas:", recorded)
+          if problems:
+              print("\n".join(problems))
+              sys.exit(1)
+          print("placement matches the catalog")
+          PY
+      - name: nbclient into the kit's notebook environment
+        # tools/notebooks.py --run executes with nbclient on the kit's own kernel;
+        # the add-on does not ship it (a user never runs a notebook headless).
+        run: |
+          py="$(python3 -c 'import json, os; print(json.load(open(os.path.expanduser("~/.exasol-starter-kit/manifest.json")))["components"]["notebook"]["python"])')"
+          uv pip install --python "$py" "nbclient>=0.10,<1"
+          exakit notebook check
+      - name: the read-only MCP user can read everything and write nothing
+        run: EXAKIT_REQUIRE_DB=1 bash tests/mcp-readonly-sql-matrix.sh
+      - name: core notebooks headless on the two reference datasets
+        env:
+          EXAKIT_REQUIRE_DB: "1"
+          EXAKIT_NOTEBOOK_AI_LAB: "0"
+          EXAKIT_NOTEBOOK_AI_THEMES: "1"
+          EXAKIT_NOTEBOOK_BIND_CHECKOUT: '1'
+          EXAKIT_NOTEBOOK_RUN_OUTPUT: ${{ runner.temp }}/executed-notebooks
+        run: |
+          for recipe in amazon_sales:balanced fraud_transactions:balanced; do
+            # The ML Engineer (disabled for now) takes amazon_sales and fraud_transactions.
+            ml=""; case "${recipe%:*}" in fraud_transactions) ;; *) ml="notebook/notebooks/ml-engineer/00_quickstart.py notebook/notebooks/ml-engineer/01_train.py" ;; esac
+            EXAKIT_NOTEBOOK_DATASETS="${recipe%:*}" EXAKIT_NOTEBOOK_CLASS_WEIGHT="${recipe#*:}" \
+              bash tests/notebooks-run.sh \
+                notebook/notebooks/data-scientist/00_quickstart.py \
+                notebook/notebooks/data-scientist/01_explore.py \
+                $ml
+          done
+      - name: the AI Lab notebook, as the connector ships it, connects from the kit's store
+        # AC-DS1.4: first_steps.ipynb from exasol-notebook-connector 3.1.0, a
+        # copy in a temporary folder, run on the kit's kernel through its
+        # connection cell (tests/notebooks-run.sh explains the one cell that
+        # stands in for the access-store widget's Open button). Its own step,
+        # so a red here reads as the AI Lab notebook, not as a kit notebook.
+        if: success() || failure()
+        env:
+          EXAKIT_REQUIRE_DB: "1"
+          EXAKIT_NOTEBOOK_AI_LAB: only
+          EXAKIT_NOTEBOOK_RUN_OUTPUT: ${{ runner.temp }}/executed-notebooks
+        run: bash tests/notebooks-run.sh
+      - name: Check notebook and workflow output before upload
+        id: notebook_privacy
+        if: always()
+        run: |
+          if python3 tools/artifact_scan.py "$RUNNER_TEMP/executed-notebooks" "$HOME/.exasol-starter-kit/workflows"; then
+            echo 'safe=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'safe=false' >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+      - name: keep checked workflow logs and executed notebooks
+        if: failure() && steps.notebook_privacy.outputs.safe == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: notebooks-live-logs
+          path: |
+            ~/.exasol-starter-kit/workflows
+            ${{ runner.temp }}/executed-notebooks
+          if-no-files-found: ignore

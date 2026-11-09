@@ -74,6 +74,17 @@ try {
     Check "copilot"       "vscode_copilot" (ConvertTo-McpClientSelection "copilot")
     Check "gemini"        "gemini_cli" (ConvertTo-McpClientSelection "gemini")
 
+    # The same answer, however it is typed - case, spaces, a trailing comma - as on bash; empty and the
+    # callers' own words ("skip") are not clients.
+    Check "case and spaces" "claude_desktop,claude_code,cursor" ((ConvertTo-McpClientSelection " Claude , Cursor ") -join ",")
+    Check "upper case"      "claude_desktop,claude_code" ((ConvertTo-McpClientSelection "CLAUDE") -join ",")
+    Check "trailing comma"  "claude_desktop,claude_code" ((ConvertTo-McpClientSelection "claude,") -join ",")
+    Check "ALL with spaces" "claude_desktop,claude_code,cursor,codex,vscode_copilot,gemini_cli,opencode,continue" ((ConvertTo-McpClientSelection " ALL ") -join ",")
+    foreach ($bad in @("", "  ", ",", "skip", "none", "all,claude")) {
+        $got = ConvertTo-McpClientSelection $bad
+        if ($null -eq $got) { $script:Pass++; Write-Host "  ok   [$bad] is not a selection = rejected" }
+        else { $script:Fail++; Write-Host ("  FAIL [$bad] is not a selection: expected rejected, got {0}" -f ($got -join ",")) }
+    }
     $invalid = ConvertTo-McpClientSelection "bogus"
     if ($null -eq $invalid) {
         $script:Pass++; Write-Host "  ok   invalid rejected = rejected"

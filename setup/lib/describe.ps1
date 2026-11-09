@@ -1,0 +1,214 @@
+# describe.ps1 - `exakit describe <table> [--sample N] [--id <slug>] [--json]
+# [--write <path>]`: profile SCHEMA.TABLE and draft its descriptor (DS-5), a
+# role per column with the evidence that chose it and, under missing, the
+# roles no column fits; and the approve half: `exakit describe <id|draft.yaml>
+# --approve [--role <role>=<COL>]... [--owner <who>] [--no-comments]`,
+# `--show [--version n]`, `--versions`, `--comments`, all with --json. Twin of
+# setup/lib/describe.sh; read that header. The profiling, the scoring and the
+# approving live in one Python service, setup\lib\describe_service.py, which
+# both twins run through the kit's notebook Python (the add-on has to be
+# installed), connected as the kit's admin user the way the Python UDF command runs
+# udf_tool.py: the password is read from its file by the child and never
+# reaches a command line. The shell keeps only the argument check and the
+# refusals. Drafting runs SELECTs only; approving writes comments (and the
+# view for a virtual table) and nothing else.
+#
+# Exit codes: 0 ok; 1 the add-on is not installed; 2 bad arguments or roles;
+# 3 the table or the id is not there; 4 the database is not reachable; 5 a
+# version conflict (the service's own codes pass through).
+
+# Test-DescribeInstalled - the notebook add-on's record is there (the
+# profiler's Python lives in its venv). Twin of describe_installed.
+function Test-DescribeInstalled {
+    return [bool](Get-ExakitManifestValue "components.notebook.version")
+}
+
+# Invoke-DescribeService - the service in the kit's notebook Python with the
+# admin connection settings from the manifest (the password's FILE, never the
+# password; the DSN with the recorded TLS pin, SEC-14). Its output flows through as the command's (so --json stays one
+# object on stdout); its exit code, when not 0, becomes the CLI's through
+# PendingExitCode - not a return value, which would swallow the output. Twin
+# of describe_run.
+function Invoke-DescribeService {
+    param([string[]]$ServiceArgs = @())
+    $python = Get-ExakitManifestValue "components.notebook.python"
+    if (-not $python) {
+        $venv = if ($env:EXAKIT_NOTEBOOK_VENV) { $env:EXAKIT_NOTEBOOK_VENV } else { Join-Path $script:ExakitHome "notebook-venv" }
+        $python = Join-Path $venv "Scripts/python.exe"
+    }
+    if (-not (Test-Path $python)) { Fail "The notebook environment is missing ($python). Repair it with: exakit notebook setup" }
+    $service = Join-Path (Join-Path (Join-Path (Get-ExakitRepoRoot) "setup") "lib") "describe_service.py"
+    $envs = @{ EXAKIT_PYX_DSN = (Get-ExakitPinnedDsn); EXAKIT_PYX_USER = (Get-ExakitManifestValue "runtime.user")
+               EXAKIT_PYX_PWFILE = (Get-ExakitManifestValue "runtime.password_file")
+               EXAKIT_MCP_READER = (Get-ExakitManifestValue "components.mcp_server.connection.user") }
+    if (-not $envs.EXAKIT_PYX_USER) { $envs.EXAKIT_PYX_USER = "sys" }
+    $saved = @{}
+    foreach ($key in $envs.Keys) {
+        $saved[$key] = [Environment]::GetEnvironmentVariable($key, "Process")
+        [Environment]::SetEnvironmentVariable($key, [string]$envs[$key], "Process")
+    }
+    $prevEap = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = "Continue"
+        # A quoted identifier keeps its quotes on 5.1 too (see ConvertTo-ExakitNativeArgs).
+        $nativeArgs = ConvertTo-ExakitNativeArgs $ServiceArgs
+        & $python $service @nativeArgs
+        if ($LASTEXITCODE -ne 0) { $script:PendingExitCode = $LASTEXITCODE }
+    } finally {
+        $ErrorActionPreference = $prevEap
+        foreach ($key in $saved.Keys) { [Environment]::SetEnvironmentVariable($key, $saved[$key], "Process") }
+    }
+}
+
+# exakit describe <table> [--sample N] [--id <slug>] [--json] [--write <path>]
+# exakit describe <id|draft.yaml> --approve [--role r=COL]... [--owner x] [--no-comments] [--json]
+# exakit describe <id> --show [--version n] | --versions | --comments [--json]
+# exakit describe --schema <SCHEMA> [--approve [--link T.COL=T.KEY]... [--unlink T.COL]... [--owner x] [--no-comments]] [--json]
+function Invoke-CmdDescribe {
+    param([string[]]$CmdArgs = @())
+    $target = ""; $sample = ""; $id = ""; $json = $false; $write = ""
+    $mode = ""; $owner = ""; $version = ""; $noComments = $false; $roles = @()
+    $schema = ""; $links = @(); $unlinks = @()
+    $i = 0
+    while ($i -lt $CmdArgs.Count) {
+        $arg = "$($CmdArgs[$i])"
+        if ($arg -in @("--help", "-h")) { Show-ExakitHelpCommand -Name "describe" | Out-Null; return }
+        elseif ($arg -in @("--json", "-j")) { $json = $true; $script:ExakitRefusalJson = $true }
+        elseif ($arg -in @("--approve", "--show", "--versions", "--comments")) {
+            if ($mode -and $mode -ne $arg) { Deny-ExakitInput "$mode and $arg are two different things; give one of --approve, --show, --versions, --comments." }
+            $mode = $arg
+        }
+        elseif ($arg -eq "--no-comments") { $noComments = $true }
+        elseif ($arg -in @("--sample", "--id", "--write", "--owner", "--version", "--role", "--schema", "--link", "--unlink")) {
+            $value = ""
+            if ($i + 1 -lt $CmdArgs.Count) { $value = "$($CmdArgs[$i + 1])" }
+            if (-not $value -or $value.StartsWith("-")) { Deny-ExakitInput "$arg needs a value: exakit describe ... $arg <value>" }
+            switch ($arg) {
+                "--sample" {
+                    if ($sample) { Deny-ExakitInput "--sample was given twice." }
+                    if ($value -notmatch '^[1-9][0-9]*$') { Deny-ExakitInput "--sample takes the number of rows to profile (a positive integer), not '$value'." }
+                    $sample = $value
+                }
+                "--id" {
+                    if ($id) { Deny-ExakitInput "--id was given twice." }
+                    if ($value -cnotmatch '^[a-z0-9]+([-_][a-z0-9]+)*$') { Deny-ExakitInput "--id takes a dataset id (lower-case letters and digits, joined by - or _), not '$value'." }
+                    $id = $value
+                }
+                "--write" {
+                    if ($write) { Deny-ExakitInput "--write was given twice." }
+                    $write = $value
+                }
+                "--owner" {
+                    if ($owner) { Deny-ExakitInput "--owner was given twice." }
+                    $owner = $value
+                }
+                "--version" {
+                    if ($version) { Deny-ExakitInput "--version was given twice." }
+                    if ($value -notmatch '^[1-9][0-9]*$') { Deny-ExakitInput "--version takes a version number (a positive integer), not '$value'." }
+                    $version = $value
+                }
+                "--role" {
+                    # slot=COLUMN (or slot=- to leave it empty); the service checks the column against the table.
+                    if ($value -cnotmatch '^(key|time|text|target|category|entity|date|label)=([A-Za-z][A-Za-z0-9_]*(,[A-Za-z][A-Za-z0-9_]*)*|-)$') {
+                        Deny-ExakitInput "--role takes slot=COLUMN with the slot one of key, time, text, target, category, entity (date and label name time and target; slot=- leaves it empty), not '$value'."
+                    }
+                    $roles += $value
+                }
+                "--schema" {
+                    if ($schema) { Deny-ExakitInput "--schema was given twice." }
+                    if ($value -notmatch '^[A-Za-z_][A-Za-z0-9_]*$') { Deny-ExakitInput "--schema takes a schema name (letters, digits and _), not '$value'." }
+                    $schema = $value
+                }
+                "--link" {
+                    if ($value -notmatch '^[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*=[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*$') {
+                        Deny-ExakitInput "--link takes TABLE.COLUMN=TABLE.KEY (the column, then the key it points at), not '$value'."
+                    }
+                    $links += $value
+                }
+                "--unlink" {
+                    if ($value -notmatch '^[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*$') {
+                        Deny-ExakitInput "--unlink takes the TABLE.COLUMN a link starts from, not '$value'."
+                    }
+                    $unlinks += $value
+                }
+            }
+            $i++
+        }
+        elseif ($arg.StartsWith("-")) { Deny-ExakitInput "Unknown option '$arg' for describe (supported: --sample, --id, --json, --write, --approve, --role, --owner, --no-comments, --show, --version, --versions, --comments, --schema, --link, --unlink)." }
+        elseif ($target) { Deny-ExakitInput "Name one table or descriptor: exakit describe SCHEMA.TABLE | exakit describe <id> --approve|--show|--versions|--comments" }
+        else { $target = $arg }
+        $i++
+    }
+    $idShape = '^[a-z0-9]+([-_][a-z0-9]+)*$'
+    $serviceArgs = @()
+    if ($schema) {
+        # The whole schema: its tables and the links between them, drafted or approved. Twin of the --schema arm in
+        # describe.sh.
+        if ($target -or $sample -or $id -or $write -or $version -or $roles.Count -gt 0) {
+            Deny-ExakitInput "--schema describes a whole schema and takes no table, --sample, --id, --write, --version or --role: exakit describe --schema SCHEMA [--approve [--link T.COL=T.KEY]... [--unlink T.COL]... [--owner who] [--no-comments]] [--json]"
+        }
+        if ($mode -eq "--approve") {
+            $serviceArgs = @("schema-approve", $schema)
+            if ($owner) { $serviceArgs += @("--owner", $owner) }
+            if ($noComments) { $serviceArgs += "--no-comments" }
+            if ($json) { $serviceArgs += "--json" }
+            foreach ($link in $links) { $serviceArgs += @("--link", $link) }
+            foreach ($unlink in $unlinks) { $serviceArgs += @("--unlink", $unlink) }
+        }
+        elseif (-not $mode) {
+            if ($owner -or $noComments -or $links.Count -gt 0 -or $unlinks.Count -gt 0) {
+                Deny-ExakitInput "--link, --unlink, --owner and --no-comments go with --approve: exakit describe --schema SCHEMA --approve [--link T.COL=T.KEY]..."
+            }
+            $serviceArgs = @("schema", $schema)
+            if ($json) { $serviceArgs += "--json" }
+        }
+        else { Deny-ExakitInput "$mode does not go with --schema: exakit describe --schema SCHEMA [--approve] [--json]" }
+    }
+    elseif ($links.Count -gt 0 -or $unlinks.Count -gt 0) {
+        Deny-ExakitInput "--link and --unlink go with --schema: exakit describe --schema SCHEMA --approve [--link T.COL=T.KEY]... [--unlink T.COL]..."
+    }
+    elseif (-not $mode) {
+        if ($owner -or $version -or $noComments -or $roles.Count -gt 0) {
+            Deny-ExakitInput "--role, --owner, --no-comments and --version go with --approve or --show: exakit describe <id> --approve [--role role=COLUMN]... [--owner who] [--no-comments]"
+        }
+        if (-not $target) { Deny-ExakitInput "Name the table: exakit describe SCHEMA.TABLE [--sample N] [--id slug] [--json] [--write <path>] (exakit describe --help)." }
+        # The table's shape, checked here so a stray word never reaches SQL: two
+        # names joined by a dot, a part quoted when it is not a plain name.
+        if ($target -notmatch '^("([^"]|"")+"|[A-Za-z_][A-Za-z0-9_]*)\.("([^"]|"")+"|[A-Za-z_][A-Za-z0-9_]*)$') {
+            Deny-ExakitInput "Name the table as SCHEMA.TABLE (quote a part that is not a plain name: `"my schema`".`"order data`"), not '$target'."
+        }
+        $serviceArgs = @("draft", $target)
+        if ($sample) { $serviceArgs += @("--sample", $sample) }
+        if ($id) { $serviceArgs += @("--id", $id) }
+        if ($json) { $serviceArgs += "--json" }
+        if ($write) { $serviceArgs += @("--write", $write) }
+    }
+    elseif ($mode -eq "--approve") {
+        if ($id -or $write -or $version) { Deny-ExakitInput "--id, --write and --version do not go with --approve (the id is the draft's; --show takes --version)." }
+        if (-not $target) { Deny-ExakitInput "Name the draft to approve, a dataset id or a draft file: exakit describe <id|draft.yaml> --approve [--role role=COLUMN]... [--owner who] [--no-comments]" }
+        if (-not (Test-Path -LiteralPath $target -PathType Leaf) -and ($target -cnotmatch $idShape)) {
+            Deny-ExakitInput "--approve takes a dataset id (lower-case letters and digits, joined by - or _) or a draft file that exists, not '$target'."
+        }
+        $serviceArgs = @("approve", $target)
+        if ($sample) { $serviceArgs += @("--sample", $sample) }
+        if ($owner) { $serviceArgs += @("--owner", $owner) }
+        if ($noComments) { $serviceArgs += "--no-comments" }
+        if ($json) { $serviceArgs += "--json" }
+        foreach ($role in $roles) { $serviceArgs += @("--role", $role) }
+    }
+    else {
+        if ($id -or $write -or $sample -or $owner -or $noComments -or $roles.Count -gt 0) {
+            $extra = ""
+            if ($mode -eq "--show") { $extra = " and --version n" }
+            Deny-ExakitInput "$mode takes a dataset id$extra and --json, nothing else."
+        }
+        if ($mode -ne "--show" -and $version) { Deny-ExakitInput "--version goes with --show: exakit describe <id> --show --version n" }
+        if (-not $target) { Deny-ExakitInput "Name the dataset id: exakit describe <id> $mode [--json]" }
+        if ($target -cnotmatch $idShape) { Deny-ExakitInput "$mode takes a dataset id (lower-case letters and digits, joined by - or _), not '$target'." }
+        $serviceArgs = @($mode.Substring(2), $target)
+        if ($version) { $serviceArgs += @("--version", $version) }
+        if ($json) { $serviceArgs += "--json" }
+    }
+    if (-not (Test-DescribeInstalled)) { Fail "The notebook add-on is not installed; its Python runs the profiler. Install it with: exakit marketplace notebook" }
+    Invoke-DescribeService -ServiceArgs $serviceArgs
+}

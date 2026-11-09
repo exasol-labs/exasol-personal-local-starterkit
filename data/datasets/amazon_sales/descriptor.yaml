@@ -1,0 +1,46 @@
+descriptor: 1
+dataset: "amazon_sales"
+source:
+  kind: "local"
+  object: "AMAZON.ORDER_LINES"
+  schema_digest: "sha256:c084c665360f20c0307fa573440e98570914e2957ed9da189e7fa5442230acc0"
+  profiled_rows: 128975
+version: 1
+status: "approved"
+owner: "kit"
+approved_at: "2026-11-06T00:00:00Z"
+grain: "one row per order line"
+slots:
+  key: "ORDER_LINE_ID"
+  time: "ORDER_DATE"
+  text: null
+  target: "CANCELLED"
+  category: "CATEGORY"
+  entity: "SHIP_STATE"
+slot_evidence:
+  text: "no text column"
+columns:
+  "ORDER_LINE_ID": {role: "key", confidence: "high", evidence: "128,975 distinct, no nulls"}
+  "ORDER_ID": {role: "identifier", confidence: "high", evidence: "100% code-shaped, 120,378 distinct"}
+  "ORDER_DATE": {role: "time", confidence: "high", evidence: "DATE, 2022-03-31 to 2022-06-29"}
+  "STATUS": {role: "category", confidence: "high", evidence: "13 distinct"}
+  "FULFILMENT": {role: "flag", confidence: "high", evidence: "Amazon 69.5%, Merchant 30.5%"}
+  "SALES_CHANNEL": {role: "flag", confidence: "high", evidence: "Amazon.in 99.9%, Non-Amazon 0.1%"}
+  "SHIP_SERVICE_LEVEL": {role: "flag", confidence: "high", evidence: "Expedited 68.7%, Standard 31.3%"}
+  "STYLE_CODE": {role: "identifier", confidence: "high", evidence: "100% code-shaped, 1,377 distinct"}
+  "SKU": {role: "identifier", confidence: "high", evidence: "99.9% code-shaped, 7,195 distinct"}
+  "CATEGORY": {role: "category", confidence: "high", evidence: "9 distinct"}
+  "SIZE": {role: "category", confidence: "high", evidence: "11 distinct"}
+  "ASIN": {role: "identifier", confidence: "high", evidence: "100% code-shaped, 7,190 distinct"}
+  "COURIER_STATUS": {role: "category", confidence: "high", evidence: "3 distinct"}
+  "QTY": {role: "measure", confidence: "high", evidence: "integer named as an amount, 10 distinct, 0 to 15"}
+  "CURRENCY": {role: "other", confidence: "high", evidence: "one value, else empty (7,795 of 128,975 rows empty)"}
+  "AMOUNT": {role: "measure", confidence: "high", evidence: "DECIMAL(9,2), 0.0 to 5584.0"}
+  "SHIP_CITY": {role: "category", confidence: "low", evidence: "short labels, 7,291 distinct, avg 8 chars"}
+  "SHIP_STATE": {role: "category", confidence: "low", evidence: "47 distinct"}
+  "SHIP_POSTAL_CODE": {role: "identifier", confidence: "high", evidence: "postcode 100%", sensitive: true}
+  "SHIP_COUNTRY": {role: "other", confidence: "high", evidence: "one value, else empty (33 of 128,975 rows empty)"}
+  "HAS_PROMOTION": {role: "flag", confidence: "high", evidence: "1 61.9%, 0 38.1%"}
+  "IS_B2B": {role: "flag", confidence: "high", evidence: "0 99.3%, 1 0.7%"}
+  "FULFILLED_BY": {role: "other", confidence: "high", evidence: "one value, else empty (89,698 of 128,975 rows empty)"}
+  "CANCELLED": {role: "flag", confidence: "high", evidence: "0 85.8%, 1 14.2%"}

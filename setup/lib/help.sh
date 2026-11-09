@@ -52,7 +52,18 @@ exakit_help_is_id() {
     # option. Without them `exakit --help --json` reached here with the topic
     # "--help", grep read it as a flag, and the user got grep's own usage
     # block printed at them mid-help-screen.
-    exakit_help_ids 2>/dev/null | grep -qxF -- "$1"
+    #
+    # The list is read whole, then matched: piped into `grep -q`, grep left at the
+    # first match and, under exakit's `set -o pipefail`, the writer's SIGPIPE made
+    # the pipeline fail on a fast machine - `exakit help dash-server` then printed
+    # the dash-server COMMAND's entry instead of the add-on's page (Linux CI).
+    _hii_ids="$(exakit_help_ids 2>/dev/null)" || return 1
+    while IFS= read -r _hii_id; do
+        [ "$_hii_id" = "$1" ] && return 0
+    done <<EXAKIT_HELP_IDS
+$_hii_ids
+EXAKIT_HELP_IDS
+    return 1
 }
 
 # exakit_help_doc_local <id> - the document this kit shipped, or nothing.
@@ -68,20 +79,28 @@ exakit_help_doc() {
     exakit_help_doc_local "$1"
 }
 
-# _exakit_help_docs_args - "id=path" for every document this kit carries.
+# _exakit_help_docs_args - "id=path" for every document this kit carries, then
+# where the add-ons' GitHub names and Abouts are: the catalog's copy and the
+# cache the last lookup wrote (a help screen never fetches).
 _exakit_help_docs_args() {
     exakit_help_ids 2>/dev/null | while IFS= read -r _hda_id; do
         [ -n "$_hda_id" ] || continue
         _hda_path="$(exakit_help_doc_local "$_hda_id" 2>/dev/null)" || continue
         printf '%s=%s\n' "$_hda_id" "$_hda_path"
     done
+    _hda_cat="$(_exakit_marketplace_root 2>/dev/null)/marketplace/catalog.json"
+    [ -f "$_hda_cat" ] && printf '__catalog__=%s\n' "$_hda_cat"
+    [ -n "${EXAKIT_ABOUT_CACHE_DIR:-}" ] && printf '__about__=%s\n' "$EXAKIT_ABOUT_CACHE_DIR"
+    return 0
 }
 
 # exakit_help_render <mode> [arg] - every screen this module draws.
 exakit_help_render() {
     _hr_mode="$1"
     _hr_arg="${2:-}"
-    exakit_can_run_python || {
+    # Any Python 3 renders it (the script needs nothing newer than 3.8): a stock
+    # macOS 3.9 must show help before the kit's own Python exists (audit AGT-04).
+    exakit_can_run_python_any || {
         # No python: fall back to the shipped exakit document, read as text, so
         # help still says something useful instead of dying.
         _hr_ship="$(exakit_help_kit_dir)/exakit.json"
@@ -98,20 +117,66 @@ exakit_help_render() {
     [ "$_hr_width" -lt 40 ] && _hr_width=80
 
     # shellcheck disable=SC2046
-    run_python - "$_hr_mode" "$_hr_color" "$_hr_width" "$_hr_arg" \
+    run_python_any - "$_hr_mode" "$_hr_color" "$_hr_width" "$_hr_arg" \
         $(_exakit_help_docs_args | tr '\n' ' ') <<'EXAKIT_HELP_RENDER_PY'
 import json, sys, textwrap
 
 mode, color, width, arg = sys.argv[1], sys.argv[2] == "1", int(sys.argv[3]), sys.argv[4]
 docs = {}
+places = {}
 for pair in sys.argv[5:]:
     if "=" not in pair:
         continue
     key, path = pair.split("=", 1)
+    if key.startswith("__"):
+        places[key] = path
+        continue
     try:
         docs[key] = json.load(open(path, encoding="utf-8"))
     except Exception:
         pass
+
+import os, re
+
+def github_facts():
+    """Each add-on's name, About and link: its repository's on GitHub, as the last lookup cached them (a
+    renamed repository under its new name), else the catalog's copy. Twin of Get-ExakitHelpGitHubFacts."""
+    facts = {}
+    try:
+        rows = json.load(open(places["__catalog__"], encoding="utf-8"))["addons"]
+    except Exception:
+        return facts
+    plain = re.compile(r"^[A-Za-z0-9._-]+$")
+    for row in rows:
+        block = row.get("github") if isinstance(row, dict) else None
+        if not isinstance(block, dict) or not isinstance(row.get("id"), str):
+            continue
+        name, about, url = block.get("name"), block.get("about"), block.get("url")
+        archived = False
+        try:
+            with open(os.path.join(places.get("__about__", ""), row["id"] + ".txt"), encoding="utf-8") as handle:
+                cached = [line.strip() for line in handle.read().splitlines()[:4]]
+        except Exception:
+            cached = []
+        if cached and cached[0]:
+            about = cached[0]
+        if len(cached) > 1 and plain.fullmatch(cached[1]):
+            name = cached[1]
+        if len(cached) > 2 and re.fullmatch(r"https://github\.com/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+", cached[2]):
+            url = cached[2]
+        archived = len(cached) > 3 and cached[3] == "true"
+        if not (isinstance(name, str) and plain.fullmatch(name) and isinstance(about, str) and about.strip()
+                and isinstance(url, str) and url.startswith("https://github.com/") and ".." not in url):
+            continue
+        about = " ".join(re.sub(r"[\x00-\x1f\x7f]", " ", about).split())
+        facts[row["id"]] = {"title": name, "tagline": about + (" (archived on GitHub)" if archived else ""),
+                            "repo": url}
+    return facts
+
+# An add-on's title, tagline and repository are its GitHub repository's: never typed into its help document.
+for key, facts in github_facts().items():
+    if key in docs:
+        docs[key] = dict(docs[key], **facts)
 
 WRAP = min(width, 100)
 
@@ -125,9 +190,14 @@ def out(text=""):
     sys.stdout.write(text + "\n")
 
 def para(text, indent="  ", first=None):
-    for line in textwrap.wrap(text, width=WRAP - len(indent)) or [""]:
-        out((first if first is not None else indent) + line)
-        first = None
+    # A blank line in the text is a paragraph break (NEW-11): one long command
+    # description reads as several short paragraphs, not 40 lines of one.
+    for number, paragraph in enumerate(str(text).split("\n\n")):
+        if number:
+            out()
+        for line in textwrap.wrap(paragraph, width=WRAP - len(indent)) or [""]:
+            out((first if first is not None else indent) + line)
+            first = None
 
 def rule():
     out("  %s%s%s" % (CY, "-" * (min(WRAP, 72) - 2), R))
@@ -135,7 +205,14 @@ def rule():
 def header(title, subtitle=""):
     out()
     rule()
-    out("   %s%s%s%s" % (CYB, title, R, ("  %s%s%s" % (DIM, subtitle, R)) if subtitle else ""))
+    if subtitle and len(title) + 2 + len(subtitle) > WRAP - 3:
+        # An add-on's tagline is its GitHub About, written for a repository page:
+        # too long for the title line, it wraps under it (audit MAC-02).
+        out("   %s%s%s" % (CYB, title, R))
+        for line in textwrap.wrap(subtitle, width=WRAP - 3):
+            out("   %s%s%s" % (DIM, line, R))
+    else:
+        out("   %s%s%s%s" % (CYB, title, R, ("  %s%s%s" % (DIM, subtitle, R)) if subtitle else ""))
     rule()
 
 def section(title):
@@ -144,6 +221,12 @@ def section(title):
     out()
 
 def kv(key, value, pad=16):
+    if len(key) >= pad:
+        # A name as wide as its column ran straight into its text
+        # (EXAKIT_UDF_CONTAINERS_MIRRORLocal ...): it gets a line of its own (audit MAC-02).
+        out("    %s%s%s" % (GN, key, R))
+        para(value, indent=" " * (4 + pad))
+        return
     para(value, indent=" " * (4 + pad), first="    %s%-*s%s" % (GN, pad, key, R))
 
 def cmd_line(prefix, command, options, summary, pad=22, indent="    "):
@@ -160,7 +243,7 @@ def cmd_line(prefix, command, options, summary, pad=22, indent="    "):
 
 def commands_of(doc, include_hidden=False):
     """The commands a document lists. An entry marked "hidden": true still has
-    a page (`exakit <cmd> --help` finds it through find_command) but is left
+    a page (`exakit <cmd> --help` finds it through command_rows) but is left
     off the overview, `--all`, the catalogue and the JSON surfaces: it exists
     for repair, not for discovery. skills-install is the first such command -
     the installer places the skills itself and `exakit update` fetches a newer
@@ -188,18 +271,36 @@ def with_hidden_marked(doc):
     copy = dict(doc)
     copy["commands"] = [dict(e, hidden=bool(e.get("hidden")))
                         for e in commands_of(doc, include_hidden=True)]
+    if doc.get("kind") == "addon":
+        copy["management"] = addon_management(doc["id"])
     return copy
+
+def addon_management(key):
+    return {"install": "exakit marketplace " + key,
+            "help": "exakit help " + key,
+            "help_json": "exakit help " + key + " --json",
+            "update": "exakit update " + key,
+            "uninstall_preview": "exakit uninstall " + key + " --dry-run",
+            "uninstall": "exakit uninstall " + key}
 
 # Every binary the kit documents. A command whose first word is one of these is
 # already spelled out ("exakit start" on the runtime page); anything else is a
 # bare subcommand and gets its document's prefix put in front.
-KNOWN_TOOLS = ("exakit", "exapump", "exasol", "dash-server",
+KNOWN_TOOLS = ("exakit", "exapump", "exasol", "dash-server", "dbt-exasol",
                "exasol-json-tables", "exasol-mcp-server", "exasol-mcp-server-http")
+# New component/native prefixes are discovered from the shipped documents.
+KNOWN_TOOLS = set(KNOWN_TOOLS) | set(docs) | {
+    d["invocation_prefix"] for d in docs.values() if d.get("invocation_prefix")
+}
 
 def invocation(doc_id, entry):
     """The command as a reader would actually type it."""
     command = (entry.get("command") or "").strip()
     parts = command.split()
+    # An add-on ID can also be an exakit subcommand (notebook). Bare entries
+    # in the CLI's own document always belong to exakit.
+    if doc_id == "exakit":
+        return command if parts and parts[0] == "exakit" else "exakit " + command
     if parts and parts[0] in KNOWN_TOOLS:
         return command
     prefix = (docs.get(doc_id) or {}).get("invocation_prefix") or doc_id
@@ -212,16 +313,19 @@ def invocation_with_options(doc_id, entry):
         label = "%s %s" % (label, options)
     return label
 
-def find_command(doc, name):
-    name = name.strip().lower()
-    exact, prefix = [], []
-    for entry in commands_of(doc, include_hidden=True):
-        key = entry.get("command", "").lower()
-        if key == name:
-            exact.append(entry)
-        elif key.startswith(name + " ") or name.startswith(key + " "):
-            prefix.append(entry)
-    return exact or prefix
+def render_parameters(entry, indent="    "):
+    for parameter in entry.get("parameters", []):
+        out(indent + parameter["name"])
+        detail = parameter.get("description", "")
+        if parameter.get("required"):
+            detail += " Required."
+        if parameter.get("choices"):
+            detail += " Values: " + ", ".join(parameter["choices"]) + "."
+        if parameter.get("default") is not None:
+            detail += " Default: " + str(parameter["default"]) + "."
+        para(detail, indent=indent + "  ")
+    if not entry.get("parameters") and entry.get("parameter_note"):
+        para(entry["parameter_note"], indent=indent)
 
 def render_command_detail(doc, entry, prefix=""):
     label = ("%s %s" % (prefix, entry.get("command", ""))).strip()
@@ -230,6 +334,10 @@ def render_command_detail(doc, entry, prefix=""):
     out("  %s%s%s%s" % (B, label, (" " + opts) if opts else "", R))
     out()
     para(entry.get("description") or entry.get("summary", ""), indent="    ")
+    if "parameters" in entry:
+        out()
+        out("    %sParameters and options%s" % (DIM, R))
+        render_parameters(entry, indent="      ")
     if entry.get("warning"):
         out()
         para(entry["warning"], indent="    ", first="    %s!%s " % (YL, R) + "")
@@ -367,6 +475,10 @@ def render_component(key):
     header(doc.get("title", key), doc.get("tagline", ""))
     out()
     para(doc.get("role", ""), indent="   ")
+    if doc.get("kind") == "addon":
+        section("Manage this add-on")
+        for action, command in addon_management(key).items():
+            kv(action, command, pad=20)
 
     facts = [("Repository", doc.get("repo")), ("Package", doc.get("package")),
              ("Binary", doc.get("binary")), ("Runs via", doc.get("runs_via")),
@@ -412,6 +524,17 @@ def render_component(key):
             cmd_line("", invocation_with_options(key, entry), "",
                      entry.get("summary") or entry.get("description", ""), pad=34)
 
+    reference = [entry for entry in commands_of(doc) if "parameters" in entry]
+    if reference:
+        section("Parameters and options")
+        for entry in reference:
+            out("    %s%s%s" % (B, invocation_with_options(key, entry), R))
+            render_parameters(entry, indent="      ")
+            for example in entry.get("examples", []):
+                out("      %sExample: %s%s" % (CY, example, R))
+            out()
+        para("Flags apply only to the command that lists them. For full behavior and exit codes: exakit help <command>. Help never installs or restarts anything.", indent="    ")
+
     if doc.get("snippets"):
         # Blank line BETWEEN blocks, not after the last one: several examples
         # run together into one wall otherwise, and the titles stop reading as
@@ -448,29 +571,21 @@ def render_component(key):
 
 # ----------------------------------------------------------------- command --
 def render_command(name):
-    doc = docs.get("exakit")
-    matches = find_command(doc, name) if doc else []
+    matches = command_rows(name)
     if matches:
-        for entry in matches:
-            render_command_detail(doc, entry, prefix="exakit")
+        for row in matches:
+            doc = docs[row["source"]]
+            entry = next(e for e in commands_of(doc, include_hidden=True)
+                         if invocation(row["source"], e) == row["invocation"])
+            render_command_detail(doc, dict(entry, command=row["invocation"]))
         return 0
-    for key in sorted(docs):
-        if key == "exakit":
-            continue
-        found = find_command(docs[key], name)
-        if found:
-            for entry in found:
-                render_command_detail(docs[key], entry)
-            out("  %sFull reference: exakit %s --help%s" % (DIM, key, R))
-            out()
-            return 0
     if name in docs:
         return render_component(name)
     out()
     out("  No help entry for '%s'." % name)
     out("  Try: exakit catalog %s   or   exakit help --all" % name)
     out()
-    return 1
+    return 2
 
 # ----------------------------------------------------------------- catalog --
 def catalog_rows(include_hidden=False):
@@ -479,21 +594,20 @@ def catalog_rows(include_hidden=False):
         doc = docs[key]
         tool = "exakit" if key == "exakit" else key
         for entry in commands_of(doc, include_hidden=include_hidden):
-            command = entry.get("command", "")
+            full = invocation(key, entry)
+            parts = full.split(maxsplit=1)
+            tool, command = parts[0], parts[1] if len(parts) > 1 else ""
             hidden = bool(entry.get("hidden"))
-            # A component document may list a command that belongs to another
-            # tool (exakit start on a runtime page); keep the tool it names.
-            parts = command.split()
-            if parts and parts[0] in ("exakit", "exapump", "exasol") and key != parts[0]:
-                rows.append({"tool": parts[0], "command": " ".join(parts[1:]),
-                             "options": entry.get("options", ""),
-                             "description": entry.get("summary") or entry.get("description", ""),
-                             "source": key, "hidden": hidden})
-            else:
-                rows.append({"tool": tool, "command": command,
-                             "options": entry.get("options", ""),
-                             "description": entry.get("summary") or entry.get("description", ""),
-                             "source": key, "hidden": hidden})
+            row = {"tool": tool, "command": command,
+                   "options": entry.get("options", ""),
+                   "description": entry.get("summary") or entry.get("description", ""),
+                   "source": key, "topics": [key], "hidden": hidden, "invocation": full,
+                   "usage": invocation_with_options(key, entry),
+                   "help_command": 'exakit help "%s" --json' % full}
+            for field in ("parameters", "parameter_note", "examples", "exit_codes", "environment", "warning"):
+                if field in entry:
+                    row[field] = entry[field]
+            rows.append(row)
     # Dedupe on (tool, command) WITHOUT options. Keying on options too let the
     # same command through twice whenever two documents spelled its options
     # differently: exakit.json lists `status [--json | -j]` while
@@ -509,16 +623,34 @@ def catalog_rows(include_hidden=False):
             unique.append(row)
             continue
         kept = unique[at[key]]
+        topics = sorted(set(kept["topics"] + row["topics"]))
         if row["source"] == row["tool"] and kept["source"] != kept["tool"]:
+            row["topics"] = topics
             unique[at[key]] = row
+        else:
+            kept["topics"] = topics
     return unique
+
+def command_rows(name):
+    """Help resolves names, never prose or options. Unknown children do not
+    silently fall back to a parent's help. Families include their children."""
+    needle = " ".join(name.lower().split())
+    if not needle:
+        return []
+    rows = catalog_rows(include_hidden=True)
+    first = needle.split()[0]
+    if first not in {r["tool"] for r in rows}:
+        needle = "exakit " + needle
+    return [r for r in rows
+            if r["invocation"].lower() == needle or
+            r["invocation"].lower().startswith(needle + " ")]
 
 def render_catalog(search):
     rows = catalog_rows()
     if search:
         needle = search.lower()
         rows = [r for r in rows if needle in
-                (" ".join([r["tool"], r["command"], r["options"], r["description"]])).lower()]
+                (" ".join([r["tool"], r["command"], r["options"], r["description"]] + r["topics"])).lower()]
     header("command catalog", ("results for \"%s\"" % search) if search else
                               "exakit - exapump - exasol - components")
     if not rows:
@@ -554,14 +686,14 @@ def render_catalog(search):
         pad = max([len(r["command"]) for r in entries] + [12])
         pad = min(pad, 30)
         for row in sorted(entries, key=lambda r: r["command"]):
-            cmd_line("", row["command"], "", row["description"], pad=pad)
+            cmd_line("", row["command"] or row["tool"], "", row["description"], pad=pad)
     out()
     if color:
         sys.stdout.write(R)
     out()
     return 0
 
-def render_json(which):
+def render_json(which, command_help=False):
     # Shape kept compatible with the original `exakit catalog --json`: one
     # object carrying a "commands" array of tool/command/options/description.
     rows = catalog_rows(include_hidden=True)
@@ -570,16 +702,22 @@ def render_json(which):
     if which in ("", "all"):
         payload = {"schema_version": 1, "search": None, "count": len(rows),
                    "commands": rows, "documents": {k: with_hidden_marked(d) for k, d in docs.items()}}
-    elif which in docs:
+    elif command_help and which in docs:
         payload = with_hidden_marked(docs[which])
+    elif command_help:
+        hit = command_rows(which)
+        payload = {"schema_version": 1, "search": which, "count": len(hit), "commands": hit}
+        if not hit:
+            payload.update(ok=False, error="No help entry for '%s'." % which,
+                           remedy="exakit catalog --json")
     else:
         needle = which.lower()
         hit = [r for r in rows if needle in
-               (" ".join([r["tool"], r["command"], r["options"], r["description"]])).lower()]
+               (" ".join([r["tool"], r["command"], r["options"], r["description"]] + r["topics"])).lower()]
         payload = {"schema_version": 1, "search": which, "count": len(hit),
                    "commands": hit}
     print(json.dumps(payload, indent=2, ensure_ascii=False))
-    return 0
+    return 2 if payload.get("ok") is False else 0
 
 if mode == "overview":
     sys.exit(render_overview())
@@ -593,6 +731,8 @@ elif mode == "catalog":
     sys.exit(render_catalog(arg))
 elif mode == "json":
     sys.exit(render_json(arg))
+elif mode == "command-json":
+    sys.exit(render_json(arg, command_help=True))
 else:
     sys.exit(render_overview())
 EXAKIT_HELP_RENDER_PY

@@ -178,6 +178,13 @@ read_credential(){
 _personal_update_secrets_readable(){ [ "\${STUB_CRED_EMPTY:-0}" != 1 ]; }
 personal_install_podman(){ printf 'RUN install_podman\n' >> "\$STUB_CALLS"; return 0; }
 personal_podman_running(){ printf 'RUN podman_running\n' >> "\$STUB_CALLS"; return 0; }
+# The launcher and the database are the kit's own here (ownership receipts).
+exakit_component_is_managed(){ return 0; }
+exakit_preserve_component(){ :; }
+exakit_reuse_ownership(){ :; }
+exakit_record_ownership(){ :; }
+ui_spin_begin(){ :; }
+ui_spin_end(){ :; }
 personal_deployment_exists(){ [ "\${STUB_EXISTS:-0}" = 1 ]; }
 eval "\$@"
 HARNESS

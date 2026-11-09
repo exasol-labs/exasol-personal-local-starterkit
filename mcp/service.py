@@ -787,6 +787,11 @@ class MCPAccessSubsystem:
             )
         server_definition = request.server_definition
         capabilities = adapter.describe_capabilities()
+        bridged = server_definition.for_client(capabilities.supports_http)
+        if bridged is not None:
+            # This client is given the definition it can express: the HTTP one
+            # itself, or the local bridge to it (Claude Desktop, for the exasol server).
+            server_definition = bridged
         if server_definition.transport is DeploymentMode.HTTP and not capabilities.supports_http:
             # Not every client can express a remote server, and the ones that
             # cannot are skipped rather than half-configured: an entry this
@@ -828,10 +833,12 @@ class MCPAccessSubsystem:
                 Finding(
                     code="client_not_supported",
                     severity=Severity.WARNING,
-                    message=f"{adapter.display_name()} is not supported on this platform (skipped).",
+                    message=(f"{adapter.display_name()} is not supported on this platform (skipped)."
+                             if location.remedy is None else
+                             f"{adapter.display_name()} cannot be configured from here (skipped)."),
                     scope={"client": adapter.adapter_id()},
                     evidence=location.evidence,
-                    recommended_action="Choose a supported client or use a supported platform.",
+                    recommended_action=location.remedy or "Choose a supported client or use a supported platform.",
                 )
             )
             return None, None, findings

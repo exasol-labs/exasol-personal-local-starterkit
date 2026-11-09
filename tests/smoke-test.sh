@@ -18,11 +18,33 @@ say() { printf '\n\033[1;36m[smoke]\033[0m %s\n' "$*"; }
 
 say "1/4 dry run through the pipe entry point"
 start=$(date +%s)
-if ! EXAKIT_DRY_RUN=1 sh "$ROOT/install.sh"; then
+# THIS CHECKOUT, NOT MAIN (QAT-10). The dry run used to fetch the kit from the
+# main branch, so a pull request's own kit was never the one dry-run, and only
+# the exit code was read. It now plans from this checkout, in a home of its own
+# (nothing of the runner's is touched), and the plan it prints is checked.
+_smoke_home="$(mktemp -d)"
+_smoke_out="$_smoke_home/dry-run.txt"
+if ! HOME="$_smoke_home" EXAKIT_HOME="$_smoke_home/.exasol-starter-kit" EXAKIT_LOCAL_KIT="$ROOT" \
+        EXAKIT_DRY_RUN=1 sh "$ROOT/install.sh" > "$_smoke_out" 2>&1; then
+    cat "$_smoke_out" >&2
     echo "[smoke] FAIL: dry run exited non-zero" >&2
     exit 1
 fi
-say "dry run finished in $(( $(date +%s) - start ))s"
+_smoke_plan="$(sed 's/\x1b\[[0-9;]*m//g' "$_smoke_out")"
+for _smoke_want in "Using local kit checkout: $ROOT" "The plan:" "Database" "Steps" "nothing was installed"; do
+    case "$_smoke_plan" in
+        *"$_smoke_want"*) : ;;
+        *) printf '%s\n' "$_smoke_plan" >&2
+           echo "[smoke] FAIL: the dry run's plan does not say: $_smoke_want" >&2
+           exit 1 ;;
+    esac
+done
+if [ -e "$_smoke_home/.exasol-starter-kit/manifest.json" ]; then
+    echo "[smoke] FAIL: the dry run wrote a manifest" >&2
+    exit 1
+fi
+rm -rf "$_smoke_home"
+say "dry run of this checkout finished in $(( $(date +%s) - start ))s"
 
 if [ "${EXAKIT_SMOKE_FULL:-0}" != "1" ]; then
     say "EXAKIT_SMOKE_FULL=1 not set — stopping after the dry run. PASS"
