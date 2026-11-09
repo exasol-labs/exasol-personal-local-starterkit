@@ -805,7 +805,8 @@ else:
              "unreachable": "the source did not answer", "nohost": "the host name does not resolve",
              "dns": "Java in the database has no DNS", "denied": "the account may not read this",
              "region": "the region does not match", "nobucket": "no such bucket or container",
-             "clock": "the database clock is wrong"}
+             "clock": "the database clock is wrong", "privilege": "the account lacks a privilege",
+             "missing_or_denied": "no such object, or not granted"}
     why = short.get(doc.get("kind", ""))
     if not why and rc == "3":
         why = "the name is already taken"

@@ -238,7 +238,7 @@ PYC
 # connector's "access", the least it needs at the source. A connector without
 # one falls back to the bare words "read access", which name no grant. Read
 # from the catalog, so a new connector is checked the moment it lands.
-check "every connector names the rights it needs at the source, and the denied fix says them" "ok" \
+check "every connector names the rights it needs at the source, and the denied, privilege and missing_or_denied fixes say them" "ok" \
     "$(python3 - "$ROOT" <<'PYC'
 import json, os, sys
 sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
@@ -247,12 +247,118 @@ root = os.path.join(sys.argv[1], "setup", "virtual-schemas")
 for entry in json.load(open(os.path.join(root, "catalog.json")))["connectors"]:
     doc = json.load(open(os.path.join(root, "connectors", entry["id"], "connector.json")))
     access = doc.get("access", "").strip()
-    if not access or "(%s)" % access not in lifecycle.remedy_for("denied", "src", doc):
+    if not access or "(%s)" % access not in lifecycle.remedy_for("denied", "src", doc) \
+            or "(%s)" % access not in lifecycle.remedy_for("privilege", "src", doc) \
+            or "(grant it %s)" % access not in lifecycle.remedy_for("missing_or_denied", "src", doc):
         print("bad: " + entry["id"]); break
 else:
     print("ok")
 PYC
 )"
+# A database refusing a statement for a missing grant, in each driver's own
+# words, as they arrive: pyexasol's wrapper around Exasol's IMPORT error
+# ("JDBC-Client-Error: Failed to receive MetaData for the given statement:"),
+# the driver's text inside it - Snowflake's on a second line, which pyexasol
+# prints bare. Each is "privilege": the remedy names that connector's access,
+# and no public IP, since a database answers it after the address was let in.
+GRANTS="$(python3 - "$ROOT" <<'PYC'
+import json, os, sys
+sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
+import lifecycle, sql
+load = lambda c: json.load(open(os.path.join(sys.argv[1], "setup/virtual-schemas/connectors", c, "connector.json")))
+IMPORT = "JDBC-Client-Error: Failed to receive MetaData for the given statement: "
+for cid, words in [
+    ("postgresql", IMPORT + "ERROR: permission denied for table orders"),
+    ("postgresql", IMPORT + 'FATAL: permission denied for database "sales"\n  Detail: User does not have CONNECT privilege.'),
+    ("mysql", IMPORT + "SELECT command denied to user 'reader'@'203.0.113.7' for table 'orders'"),
+    ("sqlserver", IMPORT + "The SELECT permission was denied on the object 'orders', database 'sales', schema 'dbo'."),
+    ("oracle", IMPORT + "ORA-01031: insufficient privileges\nhttps://docs.oracle.com/error-help/db/ora-01031/"),
+    ("oracle", IMPORT + 'ORA-41900: missing READ privilege on "SALES"."ORDERS"'),
+    ("snowflake", IMPORT + "SQL access control error:\nInsufficient privileges to operate on schema 'PUBLIC'"),
+    ("mongodb", "VM error: F-UDF-CL-RUST-9001: UDF error: Command failed: Error code 13 (Unauthorized): not authorized "
+                'on sales to execute command { find: "orders", $db: "sales" }'),
+]:
+    raw = ("\n(\n    message     =>  %s (Session: 1880237644681707520)\n    dsn         =>  127.0.0.1:8563\n"
+           "    user        =>  sys\n    code        =>  ETL-5\n)\n" % words)
+    line = sql.redact(raw, [])
+    kind = sql.classify_raw(line, raw)
+    doc = load(cid)
+    remedy = lifecycle.remedy_for(kind, "src", doc, line)
+    print("%s %s %s %s %s" % (cid, kind, lifecycle.STATUS_FOR[kind],
+                              "access" if "(%s)" % doc["access"] in remedy else "NO-ACCESS: " + remedy,
+                              "no-ip" if lifecycle.allow_ip(remedy, kind, "203.0.113.7") == remedy else "IP"))
+PYC
+)"
+check "a missing grant, in each driver's words, is privilege: access-denied, the connector's access named, no IP" \
+    "postgresql privilege access-denied access no-ip|postgresql privilege access-denied access no-ip|mysql privilege access-denied access no-ip|sqlserver privilege access-denied access no-ip|oracle privilege access-denied access no-ip|oracle privilege access-denied access no-ip|snowflake privilege access-denied access no-ip|mongodb privilege access-denied access no-ip|" \
+    "$(printf '%s\n' "$GRANTS" | tr '\n' '|')"
+# Oracle and Snowflake answer for an object the account may not see as if it
+# did not exist. Neither cause is certain, so the fix names both: the name
+# (dropped or renamed: refresh) and the grant (the connector's access).
+AMBIG="$(python3 - "$ROOT" <<'PYC'
+import json, os, sys
+sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
+import lifecycle, sql
+load = lambda c: json.load(open(os.path.join(sys.argv[1], "setup/virtual-schemas/connectors", c, "connector.json")))
+IMPORT = "JDBC-Client-Error: Failed to receive MetaData for the given statement: "
+last = ""
+for cid, words in [
+    ("oracle", IMPORT + "ORA-00942: table or view does not exist"),
+    ("oracle", IMPORT + 'ORA-00942: table or view "SALES"."ORDERS" does not exist\nhttps://docs.oracle.com/error-help/db/ora-00942/'),
+    ("snowflake", IMPORT + "SQL compilation error:\nSchema 'SALES.PUBLIC' does not exist or not authorized."),
+    ("snowflake", IMPORT + "SQL compilation error:\nObject 'SALES.PUBLIC.ORDERS' does not exist or not authorized."),
+]:
+    raw = "\n(\n    message     =>  %s (Session: 1)\n    dsn         =>  127.0.0.1:8563\n    code        =>  ETL-5\n)\n" % words
+    line = last = sql.redact(raw, [])
+    kind = sql.classify_raw(line, raw)
+    doc = load(cid)
+    remedy = lifecycle.remedy_for(kind, "src", doc, line)
+    both = "dropped or renamed (then: exakit source refresh src)" in remedy and "(grant it %s)" % doc["access"] in remedy
+    print("%s %s %s %s %s" % (cid, kind, lifecycle.STATUS_FOR[kind], "both" if both else "NOT-BOTH: " + remedy,
+                              "no-ip" if lifecycle.allow_ip(remedy, kind, "203.0.113.7") == remedy else "IP"))
+print(last)
+PYC
+)"
+check "missing or not granted (ORA-00942, Snowflake): missing_or_denied, never denied, the fix names both causes" \
+    "oracle missing_or_denied failed both no-ip|oracle missing_or_denied failed both no-ip|snowflake missing_or_denied failed both no-ip|snowflake missing_or_denied failed both no-ip|" \
+    "$(printf '%s\n' "$AMBIG" | sed '$d' | tr '\n' '|')"
+check "...Snowflake's second line stays in the message: it names the object" \
+    "JDBC-Client-Error: Failed to receive MetaData for the given statement: SQL compilation error: Object 'SALES.PUBLIC.ORDERS' does not exist or not authorized." \
+    "$(printf '%s\n' "$AMBIG" | tail -1)"
+# What was classified before stays so: the new words come after every cloud
+# class, and a sign-in refusal or a network failure has none of them.
+KEPT="$(python3 - "$ROOT" <<'PYC'
+import sys
+sys.path.insert(0, sys.argv[1] + "/setup/virtual-schemas/engine")
+import lifecycle, sql
+for text in [
+    "AccessDeniedException: User: arn:aws:iam::1:user/reader is not authorized to perform: s3:ListBucket (Service: S3, Status Code: 403)",
+    "AuthorizationFailure: This request is not authorized to perform this operation. (HTTP 403)",
+    "AuthorizationPermissionMismatch: This request is not authorized to perform this operation using this permission.",
+    "[Simba][BigQueryJDBCDriver](100032) PERMISSION_DENIED: Access Denied: Table p:d.t: User does not have permission",
+    'Unity Catalog request failed: HTTP 403: {"error_code":"PERMISSION_DENIED","message":"User does not have EXTERNAL USE SCHEMA on Schema"}',
+    "Access denied for user 'reader'@'203.0.113.7' (using password: YES)",
+    'FATAL: password authentication failed for user "reader"',
+    "Login failed for user 'reader'.",
+    "ORA-01017: invalid username/password; logon denied",
+    "Incorrect username or password was specified.",
+    "PKIX path building failed: unable to find valid certification path to requested target",
+    "Connection refused. Check that the hostname and port are correct",
+    "java.net.UnknownHostException: db.example.com",
+    "RequestTimeTooSkewed: The difference between the request time and the current time is too large.",
+    "NoSuchBucketException: The specified bucket does not exist",
+    "NoSuchNamespaceException: Namespace does not exist: sales (HTTP 404)",
+    'ERROR: relation "orders" does not exist',
+]:
+    print(sql.classify(text))
+print(lifecycle.allow_ip(lifecycle.remedy_for("denied", "src", {"access": "s3:ListBucket"}), "denied", "203.0.113.7"))
+PYC
+)"
+check "every class before is unchanged: cloud refusals denied (Unity's closed schema external), sign-in auth, and the rest" \
+    "denied|denied|denied|denied|external|auth|auth|auth|auth|auth|tls|unreachable|dns|clock|nobucket|schema_missing|error|" \
+    "$(printf '%s\n' "$KEPT" | sed '$d' | tr '\n' '|')"
+has "...and a cloud refusal still names the public IP, since an address filter answers it too" \
+    "allow this computer's public IP 203.0.113.7" "$(printf '%s\n' "$KEPT" | tail -1)"
 MG_NOTES="$(python3 -c 'import json,sys; print("\n".join(json.load(open(sys.argv[1]))["notes"]))' \
     "$ROOT/setup/virtual-schemas/connectors/mongodb/connector.json")"
 has "MongoDB's notes: the adapter signs in against admin, whatever the URI says" "Keep authSource=admin" "$MG_NOTES"
@@ -2508,6 +2614,47 @@ OUT="$(printf '%s' "$AWSSECRET" | ipeng connect s3 --name ipdocs $S3_SET --set a
 check "S3 denied: exit 1" "1" "$RC"
 has "...the fix still names the grant" "s3:ListBucket on the mapped prefixes" "$OUT"
 has "...and the address, for a bucket that filters by it" "and, if it filters by address, allow this computer's public IP 203.0.113.7 in its security group, firewall or IP access list, then connect again" "$OUT"
+# A database on the internet that refuses the read for a missing grant: it
+# let the address in and took the credentials, so the fix names the grant
+# and never an address to allow.
+PGGRANT="JDBC-Client-Error: Failed to receive MetaData for the given statement: ERROR: permission denied for table orders (Session: 1)"
+db '{"sources": {"pg.example.com": {"tables": ["ORDERS"], "read_error": "'"$PGGRANT"'"}}}'
+OUT="$(printf '%s' "$SECRET" | ipeng connect pg --name ipgrant $PG_SET --secret-stdin 2>&1)"; RC=$?
+check "a read PostgreSQL refuses for a missing grant: exit 1" "1" "$RC"
+has "...the fix names the connector's grant" "the source took the credentials, but the account lacks a privilege; nothing was kept - grant it what the message names (CONNECT on the database, USAGE on the schema and SELECT on its tables), then connect again" "$OUT"
+lacks "...and no address to allow" "allow this computer's public IP" "$OUT"
+check "...--json says kind privilege, and still carries public_ip" "1 privilege 203.0.113.7" \
+    "$(printf '%s' "$SECRET" | ipeng --json connect pg --name ipgrant $PG_SET --secret-stdin > "$WORK/grant.json" 2>/dev/null; echo "$?") $(python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["kind"], d["public_ip"])' < "$WORK/grant.json")"
+# exakit source check: the grant is revoked after the source was connected.
+db '{"sources": {"pg.example.com": {"tables": ["ORDERS"]}}}'
+printf '%s' "$SECRET" | ipeng connect pg --name ipgrant $PG_SET --secret-stdin >/dev/null 2>&1
+python3 - "$STATE" "$PGGRANT" <<'PYU'
+import json, sys; d = json.load(open(sys.argv[1])); d["sources"]["pg.example.com"]["read_error"] = sys.argv[2]; json.dump(d, open(sys.argv[1], "w"))
+PYU
+OUT="$(ipeng check ipgrant 2>&1)"; RC=$?
+check "check of a source whose grant was revoked: exit 1, recorded access-denied" "1 access-denied" \
+    "$RC $(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "$HOME_K/sources/ipgrant/state.json" 2>/dev/null || echo unread)"
+has "...its fix names the grant" "Fix: the source took the credentials, but the account lacks a privilege: grant it what the message names (CONNECT on the database, USAGE on the schema and SELECT on its tables), then: exakit source check ipgrant" "$OUT"
+lacks "...and no address to allow" "allow this computer's public IP" "$OUT"
+run remove ipgrant
+# Snowflake answers for an object the role may not see as for one that is
+# gone: the fix names both - refresh for a dropped table, the grant otherwise.
+SFHOST="myorg-acct1.snowflakecomputing.com"
+db '{"sources": {"'"$SFHOST"'": {"tables": ["ORDERS"]}}}'
+printf '%s' "$SECRET" | ipeng connect snowflake --name ipsfgone $SF_SET --secret-stdin >/dev/null 2>&1
+python3 - "$STATE" "$SFHOST" <<'PYU'
+import json, sys; d = json.load(open(sys.argv[1]))
+d["sources"][sys.argv[2]]["read_error"] = ("JDBC-Client-Error: Failed to receive MetaData for the given statement: SQL compilation "
+                                           "error:\nObject 'SALES.PUBLIC.ORDERS' does not exist or not authorized. (Session: 1)")
+json.dump(d, open(sys.argv[1], "w"))
+PYU
+OUT="$(ipeng check ipsfgone 2>&1)"; RC=$?
+check "check of a Snowflake table gone or not granted: exit 1, recorded failed" "1 failed" \
+    "$RC $(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["status"])' "$HOME_K/sources/ipsfgone/state.json" 2>/dev/null || echo unread)"
+has "...the error names the object, from the driver's second line" "Object 'SALES.PUBLIC.ORDERS' does not exist or not authorized." "$OUT"
+has "...the fix names both causes" "it was dropped or renamed (then: exakit source refresh ipsfgone), or the account may not see it (grant it USAGE on the warehouse" "$OUT"
+lacks "...and no address to allow" "allow this computer's public IP" "$OUT"
+run remove ipsfgone
 
 # The line-by-line path (a pipe, --yes, --dry-run) shows the plan's INFO line;
 # --dry-run --json prints the plan with public_ip.

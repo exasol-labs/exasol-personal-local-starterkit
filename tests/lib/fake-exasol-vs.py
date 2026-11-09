@@ -31,7 +31,11 @@ database and inspect it afterwards:
     knows), "region" (the bucket's) and "fail": "external" (Unity closed to
     outside engines) | "managed" (a catalog-managed table, at the read)
     sources     {host: {"tables": [...], "fail": null|"auth"|"tls"|"tls-validity"|"unreachable"|"denied",
-                        "secret": "<the credential the source accepts>"}}
+                        "secret": "<the credential the source accepts>",
+                        "read_error": "<the driver's words for a refused read>"}}
+                read_error is raised by the bounded read alone, as Exasol
+                reports a pushed-down IMPORT the source refused (a missing
+                grant): the metadata was read, the rows may not be.
                 a document source (S3) is keyed by <bucket>.s3.<region>.amazonaws.com
                 and also takes "region" (the bucket's real one) and "empty"
                 (tables whose objects match nothing); its tables come from the
@@ -507,6 +511,8 @@ class Fake(object):
             # A JDBC adapter pushes the read down as IMPORT FROM JDBC: the loader runs it.
             _loader_trust(doc, vs["connection"])
             src = _source_for(doc, vs["connection"], "loader")
+            if src.get("read_error"):
+                raise Exception(src["read_error"])
             return [] if m.group(2) in src.get("empty", []) else [{"X": 1}]
         raise Exception("fake: unexpected query: %s" % sql[:80])
 
