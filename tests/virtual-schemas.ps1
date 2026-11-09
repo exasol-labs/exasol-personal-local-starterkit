@@ -612,6 +612,10 @@ Check "...no rendered line on stdout" $false ($jsonText.Contains("ready again"))
 Check "...the engine asked with --json once" "--json show jsonre|--json reauth jsonre --secret-stdin" ((Get-Content -LiteralPath $srcRecord) -join "|")
 $one = Invoke-JsonSource @("--json")
 Check "source --json (no action): the listing's one object, exit 0" "True 0 True" "$one $jsonCode $($jsonDoc.ok)"
+$one = Invoke-JsonSource @("remove", "jsonre", "--json")
+Check "source remove --json without --yes: exit 5, kind declined, the --yes form named" "True 5 declined exakit source remove jsonre --yes --json" "$one $jsonCode $($jsonDoc.kind) $($jsonDoc.command)"
+$one = Invoke-JsonSource @("show", "jsonre", "--json")
+Check "...and the source is still there" "True 0 True" "$one $jsonCode $($jsonDoc.ok)"
 $one = Invoke-JsonSource @("reauth", "jsonre", "--json", "--password-file", $jsonPw)
 Check "reauth --json with a credential the source refuses: one failure object" "True False auth True" "$one $($jsonDoc.ok) $($jsonDoc.kind) $([bool]$jsonDoc.remedy)"
 $one = Invoke-JsonSource @("reauth", "jsonre", "--json", "--password-file", $work)

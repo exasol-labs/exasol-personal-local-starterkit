@@ -1572,7 +1572,17 @@ cmd_source() {
             set -- "$@" "$_cs_action" "$_cs_name"
             if [ "$_cs_dry" = 1 ]; then
                 set -- "$@" --dry-run
-            elif [ "$_cs_json" != 1 ]; then
+            elif [ "$_cs_json" = 1 ]; then
+                # --json never asks, and asking is how a person agrees: without
+                # --yes nothing is dropped (exit 5), as without a terminal and as
+                # every other destructive exakit command.
+                if [ "${EXAKIT_VS_ASSUME_YES:-0}" != 1 ]; then
+                    _exakit_log_file "DECLINED source $_cs_action $_cs_name: --json without --yes"
+                    _exakit_vs_json_failure declined "$_cs_action $_cs_name was not confirmed; nothing was changed" \
+                        "preview it with --dry-run, then confirm it with --yes" "exakit source $_cs_action $_cs_name --yes --json"
+                    exit 5
+                fi
+            else
                 exakit_vs_engine "$_cs_action" "$_cs_name" --dry-run < /dev/null 2>/dev/null \
                     | sed -n 's/^RESULT //p' | run_python_any -c 'import json, sys
 p = json.load(sys.stdin)

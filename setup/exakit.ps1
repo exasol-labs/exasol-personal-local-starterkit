@@ -3635,7 +3635,17 @@ function Invoke-CmdSource {
         { $_ -in @("disconnect", "remove") } {
             $argv += @($action, $name)
             if ($dry) { $argv += "--dry-run" }
-            elseif (-not $json) {
+            elseif ($json) {
+                # --json never asks, and asking is how a person agrees: without
+                # --yes nothing is dropped (exit 5). Twin of cmd_source.
+                if (-not $script:ExakitVsAssumeYes) {
+                    if (Get-Command Write-ExakitLog -ErrorAction SilentlyContinue) { Write-ExakitLog "DECLINED" "source $action $($name): --json without --yes" }
+                    Write-Output (New-ExakitVsFailureJson -Kind "declined" -Problem "$action $name was not confirmed; nothing was changed" `
+                        -Remedy "preview it with --dry-run, then confirm it with --yes" -Command "exakit source $action $name --yes --json")
+                    exit 5
+                }
+            }
+            else {
                 $preview = Invoke-ExakitVsEngine -Arguments @($action, $name, "--dry-run")
                 $p = Show-ExakitVsLines -Lines $preview.Lines
                 if ($null -ne $p) {
