@@ -63,7 +63,7 @@ exakit source check <name> --json                                   # later: a f
   `--password-file <(pass show db)` - or from a stdin pipe closed once it is written
   (`printf '%s' "$PW" | exakit connect ... --json`). Without `--password-file`, `--json`
   reads stdin to its end: a stdin left open waits forever, so add `< /dev/null` when there
-  is no credential to give. PowerShell takes it only from `--password-file`.
+  is no credential to give. `--password-stdin` (PowerShell too) reads all of stdin, terminal or not.
 - Give every input with `--set`; under `--json` a missing one is `kind: input` (exit 2).
   `--url '<string>'` fills what a connection string names (JDBC URL, `postgres://`,
   `mongodb+srv://`, `s3://`, an Azure blob URL, a Glue ARN), checked like `--set`, which

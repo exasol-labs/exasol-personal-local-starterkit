@@ -787,6 +787,52 @@ OUT="$(bridge cmd_connect bq --name b </dev/null)"; RC=$?
 check "a gated connector stops the wizard with the engine's exit 5" "5 resolve bq|resolve bq|" "$RC $(tr '\n' '|' < "$B/argv")"
 has "...and the reason is shown" "not available yet" "$OUT"
 rm -f "$B/gated"
+# --password-stdin: ALL of stdin (a JSON key file's line breaks kept), one
+# trailing line ending dropped; nothing on it, or --password-file beside it,
+# refused before anything runs. What the stand-in engine got is compared byte
+# for byte: $( ) would hide the line endings.
+same() { if printf '%s' "$1" | cmp -s - "$2"; then echo same; else echo "differs: $(od -c < "$2" | head -3 | tr -s ' ' | tr '\n' ' ')"; fi; }
+KEYJSON='{
+  "type": "service_account",
+  "private_key": "-----BEGIN PRIVATE KEY-----\nMIIx\n-----END PRIVATE KEY-----\n"
+}'
+reset_bridge 0 0 0
+OUT="$(printf '%s\n' "$KEYJSON" | bridge cmd_connect pg --name sales --set host=db.example.com --set user=reader --password-stdin --yes)"; RC=$?
+check "--password-stdin: exit 0, resolve, plan, then connect with --secret-stdin" \
+    "0 resolve pg|plan postgresql --name sales --set host=db.example.com --set user=reader|connect postgresql --name sales --set host=db.example.com --set user=reader --secret-stdin|" \
+    "$RC $(tr '\n' '|' < "$B/argv")"
+check "...all of stdin reached the engine, its line breaks kept, the trailing one dropped" "same" "$(same "$KEYJSON" "$B/stdin")"
+lacks "...never as an argument" "service_account" "$(cat "$B/argv")"
+lacks "...nor in the output" "service_account" "$OUT"
+reset_bridge 0 0 0
+OUT="$(printf 'pw-crlf\r\n' | bridge cmd_connect pg --name sales --set host=h --password-stdin --yes)"
+check "--password-stdin: a CRLF ending is one line ending" "same" "$(same 'pw-crlf' "$B/stdin")"
+reset_bridge 0 0 0
+OUT="$(printf 'pw-two\n\n' | bridge cmd_connect pg --name sales --set host=h --password-stdin --yes)"
+check "--password-stdin: exactly one trailing line ending is dropped" "same" "$(same 'pw-two
+' "$B/stdin")"
+reset_bridge 0 0 0
+OUT="$(bridge cmd_connect pg --name sales --set host=h --password-stdin --yes </dev/null)"; RC=$?
+check "--password-stdin with nothing on stdin: exit 2, before anything ran" "2 no" "$RC $([ -f "$B/argv" ] && echo yes || echo no)"
+has "...saying so in one line" "--password-stdin read nothing: standard input was empty." "$OUT"
+reset_bridge 0 0 0
+OUT="$(printf 'pw' | bridge cmd_connect pg --name sales --set host=h --password-stdin --password-file "$B/pw" --yes)"; RC=$?
+check "--password-stdin with --password-file: exit 2, before anything ran" "2 no" "$RC $([ -f "$B/argv" ] && echo yes || echo no)"
+has "...saying to use one" "--password-stdin and --password-file both give the credential; use one." "$OUT"
+reset_bridge 0 1
+OUT="$(printf 'new-cred\n' | bridge cmd_source reauth docs --password-stdin)"; RC=$?
+check "source reauth --password-stdin: the name is checked, then the engine gets --secret-stdin" "show docs|reauth docs --secret-stdin|" "$(tr '\n' '|' < "$B/argv")"
+check "...the piped credential reached it, its newline dropped" "same" "$(same 'new-cred' "$B/stdin")"
+reset_bridge 0
+OUT="$(bridge cmd_source reauth docs --password-stdin </dev/null)"; RC=$?
+check "source reauth --password-stdin, nothing on stdin: exit 2 after the name check, no reauth" "2 show docs|" "$RC $(tr '\n' '|' < "$B/argv")"
+reset_bridge 0
+OUT="$(printf 'pw' | bridge cmd_source reauth docs --password-stdin --password-file "$B/pw")"; RC=$?
+check "source reauth --password-stdin with --password-file: exit 2, nothing ran" "2 no" "$RC $([ -f "$B/argv" ] && echo yes || echo no)"
+reset_bridge 0
+OUT="$(printf 'pw' | bridge cmd_source check docs --password-stdin)"; RC=$?
+check "--password-stdin on an action that takes no credential: exit 2, nothing ran" "2 no" "$RC $([ -f "$B/argv" ] && echo yes || echo no)"
+has "...saying where it belongs" "--password-stdin is for exakit source reauth" "$OUT"
 
 # exakit source list: one table, where each source lives and its TLS level,
 # inside the terminal - columns give way rather than wrap.
@@ -2796,6 +2842,30 @@ if command -v python3 >/dev/null 2>&1; then
     lacks "...no (optional)" "(optional)" "$TUI_RAW"
     lacks "...no connection string" "Connection string" "$TUI_RAW"
     check "...and it connects" "$TUI_SECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_LINEPIPE"]["secret"]')"
+
+    # --password-stdin with the same terminal behind /dev/tty: the pipe is read
+    # whole (without the flag it is read only when no terminal is), so the
+    # hidden prompt never comes; the other questions still do.
+    TTY_REPLAY_RAW="$RAW" TTY_REPLAY_CTTY=1 TUI_STDIN="$TUI_SECRET
+" \
+        TUI_ARGS="pg --name linestdin --set host=pg.example.com --set database=sales --set user=reader --password-stdin" \
+        tui connect-tui-scenario.sh "none" 0 \
+        "$(when 'Port [5432]')\r$(when 'Schema [public]')\r$(when 'TLS (verify/require/disable) [verify]')\r$(when 'Enter to skip')\r$(when 'Connect now? [y/N]')y\r"
+    TUI_RAW="$(tr -d '\r' < "$RAW")"
+    lacks "--password-stdin, /dev/tty a terminal: no hidden prompt" "(input hidden)" "$TUI_RAW"
+    has "...the questions from the terminal as before" "Schema [public]" "$TUI_RAW"
+    check "...the piped credential, its newline dropped, reaches the CONNECTION" "$TUI_SECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_LINESTDIN"]["secret"]')"
+    lacks "...and is never shown" "$TUI_SECRET" "$TUI_RAW"
+
+    # --password-stdin with the terminal ON stdin: refused, nothing asked, nothing done.
+    TTY_REPLAY_RAW="$RAW" TTY_REPLAY_CTTY=1 TUI_SAY_EXIT=1 \
+        TUI_ARGS="pg --name ttystdin --set host=pg.example.com --set database=sales --set user=reader --password-stdin" \
+        tui connect-tui-scenario.sh "none" 0 ""
+    TUI_RAW="$(tr -d '\r' < "$RAW")"
+    has "--password-stdin with a terminal on stdin: refused in one line" "--password-stdin reads the credential from standard input, which is a terminal here" "$TUI_RAW"
+    has "...exit 2" "EXIT 2" "$TUI_RAW"
+    lacks "...nothing asked" "Port [5432]" "$TUI_RAW"
+    check "...nothing connected" "false" "$(dbq '"EXAKIT_SRC_TTYSTDIN" in d.get("connections", {})')"
 fi
 # Without a terminal - a pipe, --json - nothing is asked and nothing is marked.
 OUT="$(printf '%s' "$SECRET" | urlsh cmd_connect pg --name pipeform $PG_SET)"; RC=$?
@@ -3194,6 +3264,54 @@ check "without --json, an unreadable --password-file: exit 2" "2" "$JRC"
 has "...the reader's own line" "Cannot read $WORK/no-such.pw" "$JERR"
 check "...logged as an error, not as a refusal card" "1 0" \
     "$(grep -c "ERROR Cannot read" "$WORK/json.log") $(grep -c "REJECT Cannot read" "$WORK/json.log")"
+# --password-stdin under --json: the connect's one object, or the refusal's.
+# The source takes any credential for these (the reauth tests below want
+# "rotated" back, and get it after the encodings).
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["sources"]["pg.example.com"].pop("secret", None); json.dump(d, open(sys.argv[1], "w"))' "$STATE"
+jsonsh "$WORK/json.secret" pg --name jsonstdin $PG_SET --password-stdin --json
+check "--password-stdin --json: exit 0, one object - the connect" "0 [True, 'jsonstdin']" "$JRC $(one '[d["ok"], d["name"]]')"
+check "...the piped credential is the CONNECTION's" "$SECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_JSONSTDIN"]["secret"]')"
+lacks "...and in neither stream" "$SECRET" "$JOUT$JERR"
+run remove jsonstdin >/dev/null 2>&1
+jsonsh /dev/null pg --name jsonstdin $PG_SET --password-stdin --json
+check "--password-stdin --json, nothing on stdin: exit 2, one failure object" "2 [False, 'input', True, True, True, True]" "$JRC $(one "$SHAPE")"
+check "...its error says what happened" "--password-stdin was given, but standard input was empty" "$(one 'd["error"]')"
+jsonsh "$WORK/json.secret" pg --name jsonstdin $PG_SET --password-stdin --password-file "$WORK/json.secret" --json
+check "--password-stdin with --password-file, --json: exit 2, one failure object" "2 [False, 'input', True, True, True, True]" "$JRC $(one "$SHAPE")"
+check "...nothing connected" "false" "$(dbq '"EXAKIT_SRC_JSONSTDIN" in d["connections"]')"
+
+printf '\n== a credential file or pipe: UTF-8 with or without a BOM, UTF-16 by its BOM ==\n'
+# pässwörd€ written three ways; each reaches the CONNECTION as itself, through
+# --password-file and --password-stdin alike. What is neither is refused, not
+# guessed (it once fell back to the locale, which mangles it).
+python3 - "$WORK" <<'PYENC'
+import codecs, os, sys
+pw = "p\u00e4ssw\u00f6rd\u20ac"
+for name, data in (("utf8", (pw + "\n").encode("utf-8")), ("bom", codecs.BOM_UTF8 + (pw + "\r\n").encode("utf-8")),
+                   ("utf16", codecs.BOM_UTF16_LE + (pw + "\r\n").encode("utf-16-le")),
+                   ("latin1", (pw[:-1] + "\n").encode("latin-1"))):
+    open(os.path.join(sys.argv[1], "enc-%s.pw" % name), "wb").write(data)
+open(os.path.join(sys.argv[1], "enc-expected"), "wb").write(pw.encode("utf-8"))
+PYENC
+ENCPW="$(cat "$WORK/enc-expected")"
+for enc in utf8 bom utf16; do
+    jsonsh /dev/null pg --name "encf$enc" $PG_SET --password-file "$WORK/enc-$enc.pw" --json
+    check "--password-file in $enc: exit 0, the CONNECTION holds pässwörd€" "0 $ENCPW" \
+        "$JRC $(dbq "d['connections']['EXAKIT_SRC_ENCF$(printf '%s' "$enc" | tr a-z A-Z)']['secret']")"
+    jsonsh "$WORK/enc-$enc.pw" pg --name "encs$enc" $PG_SET --password-stdin --json
+    check "--password-stdin in $enc: the same" "0 $ENCPW" \
+        "$JRC $(dbq "d['connections']['EXAKIT_SRC_ENCS$(printf '%s' "$enc" | tr a-z A-Z)']['secret']")"
+    run remove "encf$enc" >/dev/null 2>&1; run remove "encs$enc" >/dev/null 2>&1
+done
+jsonsh /dev/null pg --name enclatin $PG_SET --password-file "$WORK/enc-latin1.pw" --json
+check "a Latin-1 file (neither UTF-8 nor UTF-16): exit 2, one failure object, nothing connected" \
+    "2 [False, 'input', True, True, True, True] false" "$JRC $(one "$SHAPE") $(dbq '"EXAKIT_SRC_ENCLATIN" in d["connections"]')"
+check "...its error says why" "the credential is not UTF-8 or UTF-16 text" "$(one 'd["error"]')"
+OUT="$(eng connect pg --name enclatin $PG_SET --secret-stdin < "$WORK/enc-utf16.pw" 2>&1)"; RC=$?
+check "the engine itself reads UTF-16 by its BOM (the terminal form hands it the file as it is)" "0 $ENCPW" \
+    "$RC $(dbq 'd["connections"]["EXAKIT_SRC_ENCLATIN"]["secret"]')"
+run remove enclatin >/dev/null 2>&1
+python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); d["sources"]["pg.example.com"]["secret"]="rotated"; json.dump(d, open(sys.argv[1], "w"))' "$STATE"
 
 printf '\n== exakit source --json: one object of the same shape ==\n'
 jsonsrc() { # jsonsrc <stdin-file> <args...> - cmd_source; stdout in JOUT, stderr in JERR, exit in JRC
@@ -3217,6 +3335,10 @@ mkfifo "$WORK/json.fifo"; ( printf 'rotated' > "$WORK/json.fifo" ) & _jw=$!
 jsonsrc /dev/null reauth jsonjava --json --password-file "$WORK/json.fifo"
 kill "$_jw" 2>/dev/null; wait "$_jw" 2>/dev/null; rm -f "$WORK/json.fifo"
 check "reauth --json, --password-file a pipe: exit 0, one object" "0 [True, 'ready']" "$JRC $(one '[d["ok"], d["status"]]')"
+jsonsrc "$WORK/json.rotated" reauth jsonjava --json --password-stdin
+check "reauth --json --password-stdin: exit 0, one object" "0 [True, 'ready']" "$JRC $(one '[d["ok"], d["status"]]')"
+jsonsrc /dev/null reauth jsonjava --json --password-stdin
+check "reauth --json --password-stdin, nothing on stdin: exit 2, one failure object" "2 [False, 'input', True, True, True, True]" "$JRC $(one "$SHAPE")"
 jsonsrc /dev/null --json
 check "source --json (no action): exit 0, the listing's one object" "0 True" "$JRC $(one 'd["ok"]')"
 check "...whose rows carry host and tls" "pg.example.com verify" \
@@ -3772,6 +3894,34 @@ check "second review 4: ...and the classes stay" "s4 kinds auth=auth auth=auth" 
 check "second review 5: a derived value the run registered, echoed by a statement with no secrets of its own: redacted" \
     "s5 E-VSS3-4: the adapter refused key [***]" "$(printf '%s\n' "$REVIEW2" | grep '^s5 ')"
 check "second review 3/4: the new scanners stay linear: 80k hostile characters each under 1 s" "s6 slow:" "$(printf '%s\n' "$REVIEW2" | grep '^s6 ')"
+
+printf '\n== the engine runs isolated: python -I ==\n'
+# A module planted on PYTHONPATH named like one the engine imports (argparse,
+# its first) runs inside the process that holds the credential - unless the
+# interpreter is isolated. The control first: without -I it runs.
+PLANT="$WORK/planted"; mkdir -p "$PLANT"
+printf 'import os\nopen(os.environ["EXAKIT_PLANT_MARK"], "w").write("planted")\nraise SystemExit(97)\n' > "$PLANT/argparse.py"
+rm -f "$WORK/plant.mark"
+PYTHONPATH="$PLANT" EXAKIT_PLANT_MARK="$WORK/plant.mark" python3 "$ROOT/setup/virtual-schemas/engine/cli.py" \
+    --defs "$DEFS" --kit-home "$HOME_K" resolve pg >/dev/null 2>&1; RC=$?
+check "control: without -I a planted argparse on PYTHONPATH runs in the engine" "97 yes" "$RC $([ -f "$WORK/plant.mark" ] && echo yes || echo no)"
+rm -f "$WORK/plant.mark"
+OUT="$( ( EXAKIT_HOME="$HOME_K"
+    . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
+    pyexasol_venv_python() { command -v python3; }
+    exakit_vs_defs() { printf '%s\n' "$DEFS"; }
+    manifest_get() { return 1; }
+    export PYTHONPATH="$PLANT" EXAKIT_PLANT_MARK="$WORK/plant.mark"
+    exakit_vs_engine resolve pg ) 2>&1 )"; RC=$?
+check "exakit_vs_engine: the planted module is ignored, the engine still imports its own and answers" \
+    '0 RESULT {"connector": "postgresql"} no' "$RC $OUT $([ -f "$WORK/plant.mark" ] && echo yes || echo no)"
+OUT="$( ( EXAKIT_HOME="$HOME_K"
+    . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
+    export PYTHONPATH="$PLANT" EXAKIT_PLANT_MARK="$WORK/plant.mark"
+    printf 'k\n' | _exakit_vs_secret_text ) 2>&1 )"
+check "...and the shell's credential reader is isolated too" "k no" "$OUT $([ -f "$WORK/plant.mark" ] && echo yes || echo no)"
+check "every engine run goes through exakit_vs_engine: cli.py is named once, after -I" "1 1" \
+    "$(grep -c 'engine/cli\.py"' "$ROOT/setup/lib/virtual-schemas.sh") $(grep -c '"$_eve_py" -I "$_eve_defs/engine/cli.py"' "$ROOT/setup/lib/virtual-schemas.sh")"
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

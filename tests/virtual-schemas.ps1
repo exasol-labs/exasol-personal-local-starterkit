@@ -148,6 +148,53 @@ $r = Invoke-ExakitVsEngine -Arguments ($mgPlan + @("uri=mongodb+srv://cluster0.e
 Check "...and so is no authSource" 0 $r.Code
 
 Write-Host ""
+Write-Host "== a --password-file read as bytes: UTF-8 with or without a BOM, UTF-16 by its BOM =="
+# Get-Content without an encoding read a BOM-less UTF-8 file in the ANSI code
+# page on 5.1: a non-ASCII password became another one. a-umlaut, o-umlaut and
+# the euro sign, from code points.
+$pwEnc = "p" + [char]0xE4 + "ssw" + [char]0xF6 + "rd" + [char]0x20AC
+$utf8 = New-Object System.Text.UTF8Encoding($false)
+$encFiles = [ordered]@{
+    "utf8" = $utf8.GetBytes($pwEnc + "`n")
+    "bom" = [byte[]](@(0xEF, 0xBB, 0xBF) + $utf8.GetBytes($pwEnc + "`r`n"))
+    "utf16" = [byte[]](@(0xFF, 0xFE) + [System.Text.Encoding]::Unicode.GetBytes($pwEnc + "`r`n")) }
+foreach ($enc in $encFiles.Keys) {
+    [System.IO.File]::WriteAllBytes((Join-Path $work "enc-$enc.pw"), $encFiles[$enc])
+    Check "--password-file in $($enc): read as itself, one line ending dropped" $pwEnc (Read-ExakitVsSecret -Label "Password" -PasswordFile (Join-Path $work "enc-$enc.pw"))
+}
+[System.IO.File]::WriteAllBytes((Join-Path $work "enc-latin1.pw"), [byte[]](@(0x70, 0xE4, 0x73, 0x73)))
+Check "a Latin-1 file is neither: no text, so it is refused, not guessed" $true ($null -eq (Get-ExakitVsSecretFileText -Path (Join-Path $work "enc-latin1.pw")))
+Check "exactly one trailing line ending is dropped" ("pw" + "`n") (ConvertFrom-ExakitVsSecretBytes -Bytes $utf8.GetBytes("pw`n`n"))
+Check "UTF-16 big endian by its BOM" $pwEnc (ConvertFrom-ExakitVsSecretBytes -Bytes ([byte[]](@(0xFE, 0xFF) + [System.Text.Encoding]::BigEndianUnicode.GetBytes($pwEnc))))
+
+Write-Host ""
+Write-Host "== the engine runs isolated: python -I =="
+# A module planted on PYTHONPATH named like one the engine imports (argparse,
+# its first) runs inside the process that holds the credential - unless the
+# interpreter is isolated. The control first: without -I it runs.
+$plant = Join-Path $work "planted"; New-Item -ItemType Directory -Force -Path $plant | Out-Null
+Set-Content -LiteralPath (Join-Path $plant "argparse.py") -Encoding ASCII -Value "import os`nopen(os.environ['EXAKIT_PLANT_MARK'], 'w').write('planted')`nraise SystemExit(97)"
+$mark = Join-Path $work "plant.mark"
+$previousPythonPath = $env:PYTHONPATH
+$env:PYTHONPATH = $plant; $env:EXAKIT_PLANT_MARK = $mark
+try {
+    $ErrorActionPreference = "Continue"
+    & $python (Join-Path (Join-Path $defs "engine") "cli.py") --defs $defs --kit-home $home2 resolve pg 2>$null | Out-Null
+    $controlCode = $LASTEXITCODE
+    $ErrorActionPreference = "Stop"
+    Check "control: without -I a planted argparse on PYTHONPATH runs in the engine" "97 True" ("$controlCode " + (Test-Path -LiteralPath $mark))
+    Remove-Item -LiteralPath $mark -ErrorAction SilentlyContinue
+    $r = Invoke-ExakitVsEngine -Arguments @("resolve", "pg")
+    Check "Invoke-ExakitVsEngine: the planted module is ignored, the engine imports its own and answers" "0 RESULT {`"connector`": `"postgresql`"} False" ("{0} {1} {2}" -f $r.Code, ($r.Lines -join ""), (Test-Path -LiteralPath $mark))
+} finally {
+    $ErrorActionPreference = "Stop"
+    if ($previousPythonPath) { $env:PYTHONPATH = $previousPythonPath } else { Remove-Item Env:\PYTHONPATH -ErrorAction SilentlyContinue }
+    Remove-Item Env:\EXAKIT_PLANT_MARK -ErrorAction SilentlyContinue
+}
+$bridgeText = Get-Content -Raw -LiteralPath (J @("setup", "lib", "virtual-schemas.ps1"))
+Check "every engine run goes through Invoke-ExakitVsEngine: cli.py is named once, after -I" "1 1" ("{0} {1}" -f ([regex]::Matches($bridgeText, '"engine" "cli.py"')).Count, ([regex]::Matches($bridgeText, [regex]::Escape('@("-I", (Join-ExakitCorePath $defs "engine" "cli.py")'))).Count)
+
+Write-Host ""
 Write-Host "== repair and retry =="
 $script:codes = New-Object System.Collections.ArrayList
 $script:calls = New-Object System.Collections.ArrayList
@@ -678,6 +725,74 @@ Check "an invalid name, --json: one object, exit 2" "True 2 input" "$one $jsonCo
 Set-Content -LiteralPath $state -Value '{"sources": {"pg.example.com": {"tables": ["ORDERS"]}}}' -Encoding ASCII
 
 Write-Host ""
+Write-Host "== --password-stdin (PowerShell): all of stdin, read as bytes =="
+# The child's stdin carries exact bytes: a Process, not a PowerShell pipe,
+# which re-encodes what it sends (5.1: ASCII) and adds a line ending.
+function Invoke-StdinChild {
+    param([string]$ChildFile, [string]$Record, [string[]]$A, [byte[]]$Bytes = @())
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $pwsh
+    $all = @("-NoProfile", "-File", $ChildFile, $repo, $defs, $home2, $deploy, $python, $Record) + $A
+    $psi.Arguments = (@($all | ForEach-Object { '"' + $_ + '"' }) -join " ")
+    $psi.UseShellExecute = $false
+    $psi.RedirectStandardInput = $true; $psi.RedirectStandardOutput = $true; $psi.RedirectStandardError = $true
+    $p = [System.Diagnostics.Process]::Start($psi)
+    $errTask = $p.StandardError.ReadToEndAsync()
+    $in = $p.StandardInput.BaseStream
+    if ($Bytes.Length -gt 0) { $in.Write($Bytes, 0, $Bytes.Length) }
+    $in.Close()
+    $o = $p.StandardOutput.ReadToEnd()
+    $p.WaitForExit()
+    $script:stdinErr = $errTask.Result
+    $script:jsonCode = $p.ExitCode
+    $script:jsonText = $o.Trim()
+    $script:jsonDoc = $null
+    try { $script:jsonDoc = $script:jsonText | ConvertFrom-Json } catch { }
+    return ($null -ne $script:jsonDoc -and $script:jsonDoc -isnot [array])
+}
+function Get-StateSecret([string]$Connection) {
+    $d = Get-Content -Raw -LiteralPath $state -Encoding UTF8 | ConvertFrom-Json
+    if (-not $d.connections -or -not $d.connections.PSObject.Properties[$Connection]) { return "(none)" }
+    return $d.connections.$Connection.secret
+}
+$one = Invoke-StdinChild $urlChildFile $urlRecord (@("pg", "--name", "stdinps") + $pgSet + @("--password-stdin", "--json")) $utf8.GetBytes($pwEnc + "`n")
+Check "connect --password-stdin --json: one object, exit 0" "True 0 True" "$one $jsonCode $($jsonDoc.ok)"
+Check "...the non-ASCII credential, its newline dropped, is the CONNECTION's" $pwEnc (Get-StateSecret "EXAKIT_SRC_STDINPS")
+Check "...and in neither stream" $false (($jsonText + $stdinErr).Contains($pwEnc))
+$one = Invoke-StdinChild $urlChildFile $urlRecord (@("pg", "--name", "stdinps16") + $pgSet + @("--password-stdin", "--json")) $encFiles["utf16"]
+Check "--password-stdin in UTF-16 LE with its BOM: exit 0, the same credential" ("0 " + $pwEnc) ("$jsonCode " + (Get-StateSecret "EXAKIT_SRC_STDINPS16"))
+$keyJson = "{`n  `"type`": `"service_account`",`n  `"private_key`": `"-----BEGIN PRIVATE KEY-----\nMIIx\n-----END PRIVATE KEY-----\n`"`n}"
+$one = Invoke-StdinChild $urlChildFile $urlRecord (@("pg", "--name", "stdinkey") + $pgSet + @("--password-stdin", "--json")) $utf8.GetBytes($keyJson + "`r`n")
+Check "a JSON key on stdin: its line breaks kept, the trailing CRLF dropped" ("0 " + $keyJson) ("$jsonCode " + (Get-StateSecret "EXAKIT_SRC_STDINKEY"))
+foreach ($enc in $encFiles.Keys) {
+    $one = Invoke-JsonConnect (@("pg", "--name", "encps$enc") + $pgSet + @("--password-file", (Join-Path $work "enc-$enc.pw"), "--json"))
+    Check "--password-file in $($enc), end to end: exit 0, the CONNECTION holds the credential" ("0 " + $pwEnc) ("$jsonCode " + (Get-StateSecret ("EXAKIT_SRC_ENCPS" + $enc.ToUpperInvariant())))
+}
+$one = Invoke-JsonConnect (@("pg", "--name", "encpslatin") + $pgSet + @("--password-file", (Join-Path $work "enc-latin1.pw"), "--json"))
+Check "a Latin-1 --password-file: one object, exit 2, kind input, nothing connected" "True 2 input (none)" "$one $jsonCode $($jsonDoc.kind) $(Get-StateSecret 'EXAKIT_SRC_ENCPSLATIN')"
+Check "...its error says why" $true ("$($jsonDoc.error)".Contains("is not UTF-8 or UTF-16 text"))
+$one = Invoke-StdinChild $urlChildFile $urlRecord (@("pg", "--name", "stdinnone") + $pgSet + @("--password-stdin", "--json"))
+Check "--password-stdin, nothing on stdin: one object, exit 2, kind input" "True 2 input" "$one $jsonCode $($jsonDoc.kind)"
+Check "...its error says what happened" "--password-stdin was given, but standard input was empty" $jsonDoc.error
+Check "...command and public_ip present, rejected" "True True True" ("{0} {1} {2}" -f ($null -ne $jsonDoc.PSObject.Properties["command"]), ($null -ne $jsonDoc.PSObject.Properties["public_ip"]), $jsonDoc.rejected)
+$one = Invoke-StdinChild $urlChildFile $urlRecord (@("pg", "--name", "stdinnone") + $pgSet + @("--password-stdin"))
+Check "...without --json: exit 2, one line" "2 True" ("$jsonCode " + $jsonText.Contains("DENY --password-stdin read nothing: standard input was empty."))
+$one = Invoke-StdinChild $urlChildFile $urlRecord (@("pg", "--name", "stdinboth") + $pgSet + @("--password-stdin", "--password-file", $jsonPw, "--json")) $utf8.GetBytes("x")
+Check "--password-stdin with --password-file: one object, exit 2, nothing connected" "True 2 input (none)" "$one $jsonCode $($jsonDoc.kind) $(Get-StateSecret 'EXAKIT_SRC_STDINBOTH')"
+$one = Invoke-StdinChild $urlChildFile $urlRecord (@("pg", "--name", "stdinlatin") + $pgSet + @("--password-stdin", "--json")) ([byte[]](@(0x70, 0xE4, 0x73, 0x73)))
+Check "Latin-1 bytes on stdin: one object, exit 2, nothing connected" "True 2 input (none)" "$one $jsonCode $($jsonDoc.kind) $(Get-StateSecret 'EXAKIT_SRC_STDINLATIN')"
+# Standard input the console: the child is told it is (the one primitive,
+# [Console]::IsInputRedirected, is what a piped run above answered false to).
+$ttyChildFile = Join-Path $work "tty-child.ps1"
+Set-Content -LiteralPath $ttyChildFile -Encoding ASCII -Value ($urlChild.Replace('Invoke-CmdConnect -Arguments $args', "function Test-ExakitVsStdinTerminal { return `$true }`nInvoke-CmdConnect -Arguments `$args"))
+$one = Invoke-StdinChild $ttyChildFile $urlRecord (@("pg", "--name", "stdintty") + $pgSet + @("--password-stdin", "--json")) $utf8.GetBytes("x")
+Check "--password-stdin with the console on stdin: one object, exit 2" "True 2 input" "$one $jsonCode $($jsonDoc.kind)"
+Check "...its error says what happened" "--password-stdin was given, but standard input is a terminal" $jsonDoc.error
+$one = Invoke-StdinChild $ttyChildFile $urlRecord (@("pg", "--name", "stdintty") + $pgSet + @("--password-stdin")) $utf8.GetBytes("x")
+Check "...without --json: exit 2, one line, nothing connected" "2 True (none)" ("$jsonCode " + $jsonText.Contains("DENY --password-stdin reads the credential from standard input, which is the console here") + " " + (Get-StateSecret "EXAKIT_SRC_STDINTTY"))
+Set-Content -LiteralPath $state -Value '{"sources": {"pg.example.com": {"tables": ["ORDERS"]}}}' -Encoding ASCII
+
+Write-Host ""
 Write-Host "== exakit source --json (PowerShell): one object of the same shape =="
 $srcChildFile = Join-Path $work "src-child.ps1"
 Set-Content -LiteralPath $srcChildFile -Value ($urlChild -replace "Invoke-CmdConnect", "Invoke-CmdSource") -Encoding ASCII
@@ -717,6 +832,14 @@ $one = Invoke-JsonSource @("reauth", "jsonre", "--json", "--password-file", $wor
 Check "reauth --json, a --password-file that cannot be read: one object, exit 2" "True 2 input" "$one $jsonCode $($jsonDoc.kind)"
 $one = Invoke-JsonSource @("reauth", "jsonre", "--json")
 Check "reauth --json, no credential: one object, exit 2" "True 2 input" "$one $jsonCode $($jsonDoc.kind)"
+Remove-Item -LiteralPath $srcRecord -ErrorAction SilentlyContinue
+$one = Invoke-StdinChild $srcChildFile $srcRecord @("reauth", "jsonre", "--json", "--password-stdin") $utf8.GetBytes("Json-Pw-2`r`n")
+Check "reauth --json --password-stdin: one object, exit 0, the source ready" "True 0 ready" "$one $jsonCode $($jsonDoc.status)"
+Check "...the engine got --secret-stdin, never the credential" "--json show jsonre|--json reauth jsonre --secret-stdin" ((Get-Content -LiteralPath $srcRecord) -join "|")
+$one = Invoke-StdinChild $srcChildFile $srcRecord @("reauth", "jsonre", "--json", "--password-stdin")
+Check "reauth --json --password-stdin, nothing on stdin: one object, exit 2" "True 2 input" "$one $jsonCode $($jsonDoc.kind)"
+$one = Invoke-StdinChild $srcChildFile $srcRecord @("check", "jsonre", "--json", "--password-stdin") $utf8.GetBytes("x")
+Check "--password-stdin on an action that takes no credential: one object, exit 2" "True 2 input" "$one $jsonCode $($jsonDoc.kind)"
 foreach ($a in @(@("bogus", "--json"), @("show", "--json"), @("check", "--json"), @("list", "--bogus", "--json"), @("show", "a", "b", "--json"))) {
     $one = Invoke-JsonSource $a
     Check ("source {0}: one object, exit 2, kind input, remedy and command keys" -f ($a -join " ")) "True 2 input True True" "$one $jsonCode $($jsonDoc.kind) $([bool]$jsonDoc.remedy) $($null -ne $jsonDoc.PSObject.Properties['command'])"

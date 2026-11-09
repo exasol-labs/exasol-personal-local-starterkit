@@ -37,7 +37,12 @@ function Test-ExakitVsAvailable {
 # re-encodes what it pipes to a native program - measured on CI, a
 # byte-order mark added and every non-ASCII character turned into '?' even
 # with $OutputEncoding set to UTF-8 - and plain ASCII survives every code
-# page. Returns @{ Code; Lines }.
+# page. Returns @{ Code; Lines }. Every engine run (catalog, resolve, inputs,
+# field, paste, plan, connect, the source commands, the terminal form) comes
+# through here, and Python runs isolated (-I): PYTHONPATH, PYTHONHOME and the
+# user's site-packages cannot put code of their own into the process that
+# holds the credential. cli.py puts its own folder on sys.path. Twin of
+# exakit_vs_engine.
 function Invoke-ExakitVsEngine {
     param([string[]]$Arguments = @(), [string]$Secret = "")
     # Asked for JSON, the bridge's own failures come in the engine's shape too.
@@ -52,7 +57,7 @@ function Invoke-ExakitVsEngine {
         if ($asJson) { return [pscustomobject]@{ Code = 2; Lines = @(New-ExakitVsFailureJson -Kind "setup" -Problem "virtual schemas run with the kit's pyexasol, which is not installed" -Remedy "repair it: exakit update pyexasol" -Command "exakit update pyexasol") } }
         return [pscustomobject]@{ Code = 2; Lines = @("FAIL Virtual schemas run with the kit's pyexasol, which is not installed. Repair it: exakit update pyexasol") }
     }
-    $argv = @((Join-ExakitCorePath $defs "engine" "cli.py"), "--defs", $defs, "--kit-home", $script:ExakitHome)
+    $argv = @("-I", (Join-ExakitCorePath $defs "engine" "cli.py"), "--defs", $defs, "--kit-home", $script:ExakitHome)
     # An empty value is never passed: 5.1 drops it and the option before it
     # would swallow the next one.
     foreach ($pair in @(@("--deployment-dir", "runtime.deployment_dir"), @("--dsn", "runtime.dsn"),
@@ -233,18 +238,102 @@ function Show-ExakitVsLines {
     return $result
 }
 
+# ConvertFrom-ExakitVsSecretBytes - a credential's bytes as text: UTF-16
+# little or big endian by its byte-order mark, else UTF-8 with or without
+# one; one trailing line ending (CRLF or LF) dropped, as the shell's reader
+# does. $null when the bytes are neither: a credential read in the wrong code
+# page is another credential, so it is refused, never guessed. The engine
+# reads stdin by the same rules (engine/cli.py decode_secret). Get-Content
+# without an encoding read a BOM-less UTF-8 file in the ANSI code page on
+# Windows PowerShell 5.1, and a non-ASCII password became another one.
+function ConvertFrom-ExakitVsSecretBytes {
+    param([byte[]]$Bytes = @())
+    $n = $Bytes.Length
+    $skip = 0
+    $encoding = New-Object System.Text.UTF8Encoding($false, $true)
+    if ($n -ge 2 -and $Bytes[0] -eq 0xFF -and $Bytes[1] -eq 0xFE) {
+        $encoding = New-Object System.Text.UnicodeEncoding($false, $false, $true); $skip = 2
+    } elseif ($n -ge 2 -and $Bytes[0] -eq 0xFE -and $Bytes[1] -eq 0xFF) {
+        $encoding = New-Object System.Text.UnicodeEncoding($true, $false, $true); $skip = 2
+    } elseif ($n -ge 3 -and $Bytes[0] -eq 0xEF -and $Bytes[1] -eq 0xBB -and $Bytes[2] -eq 0xBF) {
+        $skip = 3
+    }
+    try { $text = $encoding.GetString($Bytes, $skip, $n - $skip) } catch { return $null }
+    if ($text.EndsWith("`r`n")) { $text = $text.Substring(0, $text.Length - 2) }
+    elseif ($text.EndsWith("`n")) { $text = $text.Substring(0, $text.Length - 1) }
+    return $text
+}
+
+# Get-ExakitVsSecretFileBytes - a credential file's bytes, read whole: a
+# stream, not a length, so a pipe given as the file is read too (once - it
+# cannot be opened again). $null when it is not there or cannot be read.
+function Get-ExakitVsSecretFileBytes {
+    param([string]$Path)
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+    try {
+        # The full path: .NET resolves a relative one against the process's
+        # folder, not PowerShell's current location.
+        $stream = [System.IO.File]::OpenRead((Get-Item -LiteralPath $Path -ErrorAction Stop).FullName)
+        $buffer = New-Object System.IO.MemoryStream
+        try { $stream.CopyTo($buffer) } finally { $stream.Dispose() }
+        # The comma keeps an empty file's empty array from unrolling to $null.
+        return ,$buffer.ToArray()
+    } catch { return $null }
+}
+
+# Get-ExakitVsSecretFileText - a credential file's text
+# (ConvertFrom-ExakitVsSecretBytes); $null when it cannot be read, or is
+# neither UTF-8 nor UTF-16 text.
+function Get-ExakitVsSecretFileText {
+    param([string]$Path)
+    $bytes = Get-ExakitVsSecretFileBytes -Path $Path
+    if ($null -eq $bytes) { return $null }
+    return (ConvertFrom-ExakitVsSecretBytes -Bytes $bytes)
+}
+
+# Read-ExakitVsSecretFile - the file's text, or the refusal (exit 2; with
+# --json the one object) saying which: it cannot be read (a missing file is
+# the same refusal), or it is not text this side reads.
+function Read-ExakitVsSecretFile {
+    param([string]$Path)
+    $bytes = Get-ExakitVsSecretFileBytes -Path $Path
+    if ($null -eq $bytes) { Deny-ExakitVsInput "Cannot read $Path" "cannot read $Path" "give a file this user can read with --password-file" }
+    $text = ConvertFrom-ExakitVsSecretBytes -Bytes $bytes
+    if ($null -eq $text) { Deny-ExakitVsInput "$Path is not UTF-8 or UTF-16 text: save it as UTF-8 (UTF-16 needs its byte-order mark)." "$Path is not UTF-8 or UTF-16 text" "save the file as UTF-8 (UTF-16 needs its byte-order mark), then run the same command again" }
+    return $text
+}
+
+# Test-ExakitVsStdinTerminal - is standard input the console (nothing piped
+# or redirected into it)?
+function Test-ExakitVsStdinTerminal {
+    return (-not [Console]::IsInputRedirected)
+}
+
+# Read-ExakitVsStdinSecret - --password-stdin: ALL of standard input (a JSON
+# key file has line breaks), decoded and trimmed as a --password-file is
+# (ConvertFrom-ExakitVsSecretBytes). Its bytes, not [Console]::In, which
+# decodes in the console's input code page and turns a UTF-8 credential's
+# non-ASCII characters into others. Refuses (exit 2; with --json the one
+# object) a console on stdin - the flag means a pipe or a file - and nothing
+# read. It reaches the engine as every secret does: base64 on its stdin.
+# Never echoed, logged or passed as an argument. Twin of _exakit_vs_stdin_secret.
+function Read-ExakitVsStdinSecret {
+    if (Test-ExakitVsStdinTerminal) {
+        Deny-ExakitVsInput "--password-stdin reads the credential from standard input, which is the console here: pipe it in (for example Get-Content -Raw key.json | exakit ...), or leave --password-stdin out to be asked." "--password-stdin was given, but standard input is a terminal" "pipe the credential into the command (for example < key.json), or give it with --password-file <file>"
+    }
+    $buffer = New-Object System.IO.MemoryStream
+    $stdin = [Console]::OpenStandardInput()
+    try { $stdin.CopyTo($buffer) } finally { $stdin.Dispose() }
+    $text = ConvertFrom-ExakitVsSecretBytes -Bytes $buffer.ToArray()
+    $buffer.Dispose()
+    if ($null -eq $text) { Deny-ExakitVsInput "--password-stdin: standard input is not UTF-8 or UTF-16 text." "the credential on standard input is not UTF-8 or UTF-16 text" "send it as UTF-8 (UTF-16 needs its byte-order mark), or give it with --password-file <file>" }
+    if (-not $text) { Deny-ExakitVsInput "--password-stdin read nothing: standard input was empty." "--password-stdin was given, but standard input was empty" "pipe the credential into the command and close the pipe once it is written, or give it with --password-file <file>" }
+    return $text
+}
+
 function Read-ExakitVsSecret {
     param([string]$Label, [string]$PasswordFile = "", [string]$Kind = "secret")
-    if ($PasswordFile) {
-        # A file that is there but cannot be read throws in Get-Content: that
-        # is the same refusal as a missing one (with --json, the one object).
-        $text = $null; $read = $false
-        if (Test-Path -LiteralPath $PasswordFile -PathType Leaf) {
-            try { $text = Get-Content -Raw -LiteralPath $PasswordFile -ErrorAction Stop; $read = $true } catch { $read = $false }
-        }
-        if (-not $read) { Deny-ExakitVsInput "Cannot read $PasswordFile" "cannot read $PasswordFile" "give a file this user can read with --password-file" }
-        return ("$text" -replace "[\r\n]+$", "")
-    }
+    if ($PasswordFile) { return (Read-ExakitVsSecretFile -Path $PasswordFile) }
     # --json never prompts: without --password-file there is no credential.
     if ($script:ExakitVsJson) { return "" }
     if (-not (Test-ExakitInteractive)) { Deny-ExakitInput "No $Label was given: use --password-file (a credential is never taken as an argument)." }
@@ -253,7 +342,7 @@ function Read-ExakitVsSecret {
         $path = Read-ExakitPrompt "$Label - path to the file" ""
         if ($path -like "~*") { $path = $HOME + $path.Substring(1) }
         if (-not $path -or -not (Test-Path -LiteralPath $path)) { Deny-ExakitInput "Cannot read $path" }
-        return ((Get-Content -Raw -LiteralPath $path) -replace "[\r\n]+$", "")
+        return (Read-ExakitVsSecretFile -Path $path)
     }
     return (Read-ExakitVsHidden $Label)
 }
@@ -1134,12 +1223,19 @@ function Invoke-ExakitVsTuiRun {
         $row = $i + 1
         $t0 = Get-Date
         $secret = $s.Secret
+        $unread = ""
         if (-not $secret -and $s.SecretFile) {
-            $secret = ((Get-Content -Raw -LiteralPath $s.SecretFile) -replace "[\r\n]+$", "")
+            $secret = Get-ExakitVsSecretFileText -Path $s.SecretFile
+            if ($null -eq $secret) { $secret = ""; $unread = "" + $s.SecretFile }
         }
         $engineArgs = @("--json", "connect") + $s.Base
         if ($secret) { $engineArgs += "--secret-stdin" }
         for ($try = 1; $try -le 2; $try++) {
+            if ($unread) {
+                # Its row says so, as the engine says a file the shell hands it raw.
+                $run = [pscustomobject]@{ Code = 2; Lines = @(New-ExakitVsFailureJson -Kind "input" -Problem "cannot read $unread as UTF-8 or UTF-16 text" -Remedy "save the file as UTF-8 (UTF-16 needs its byte-order mark), then run the same command again") }
+                break
+            }
             Set-ExakitTableRow -Row $row -State running -Pct 5 -Ceiling 90 -Secs 30 -Phase "connecting" -Table $Table
             $run = Invoke-ExakitVsEngine -Arguments $engineArgs -Secret $secret
             if ($run.Code -eq 20 -and $try -eq 1) {

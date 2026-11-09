@@ -70,6 +70,10 @@ fi
 # those prompts and the hidden one read /dev/tty.
 [ -n "${TUI_PLAIN:-}" ] && UI_FANCY=0
 
+# TUI_SAY_EXIT=1: the exit status is the last line written ("EXIT <n>"), for a
+# refusal the replay could otherwise only see the words of.
+[ -n "${TUI_SAY_EXIT:-}" ] && trap 'printf "EXIT %s\n" "$?"' EXIT
+
 # TUI_STDIN: stdin is a pipe carrying this text, the terminal still behind
 # /dev/tty (run with TTY_REPLAY_CTTY=1) - `printf pw | exakit connect ...`.
 if [ -n "${TUI_STDIN:-}" ]; then

@@ -40,7 +40,12 @@ exakit_vs_connect_wizard() {
 }
 
 # exakit_vs_engine <args...> — the engine with this installation's context.
-# Its stdin is passed through: that is where a secret travels.
+# Its stdin is passed through: that is where a secret travels. Every engine
+# run (catalog, resolve, inputs, field, paste, plan, connect, the source
+# commands, the terminal form) comes through here, and Python runs isolated
+# (-I): PYTHONPATH, PYTHONHOME and the user's site-packages cannot put code of
+# their own into the process that holds the credential. cli.py puts its own
+# folder on sys.path, which -I leaves off.
 exakit_vs_engine() {
     _eve_defs="$(exakit_vs_defs)" || {
         _exakit_vs_unrunnable "This kit copy has no setup/virtual-schemas. Update it: exakit update" \
@@ -54,7 +59,7 @@ exakit_vs_engine() {
             "repair it: exakit update pyexasol" "exakit update pyexasol"
         return 2
     fi
-    "$_eve_py" "$_eve_defs/engine/cli.py" --defs "$_eve_defs" --kit-home "$EXAKIT_HOME" \
+    "$_eve_py" -I "$_eve_defs/engine/cli.py" --defs "$_eve_defs" --kit-home "$EXAKIT_HOME" \
         --deployment-dir "$(manifest_get runtime.deployment_dir 2>/dev/null || true)" \
         --dsn "$(manifest_get runtime.dsn 2>/dev/null || true)" \
         --user "$(manifest_get runtime.user 2>/dev/null || printf sys)" \
@@ -160,6 +165,52 @@ _exakit_vs_render() {
     done < "$1"
 }
 
+# _exakit_vs_secret_text — a credential's bytes (stdin) on stdout, ready for a
+# shell variable, which cannot hold the NUL bytes of UTF-16: UTF-16 (by its
+# byte-order mark; Windows PowerShell 5.1 writes `>` so) is turned into UTF-8,
+# anything else passes as it is. The engine then reads it by the rules the
+# Windows bridge has (engine/cli.py decode_secret: UTF-8 with or without a
+# byte-order mark, else refused). Python isolated (-I), as the engine runs.
+_exakit_vs_secret_text() {
+    run_python_any -I -c 'import codecs, sys
+raw = sys.stdin.buffer.read()
+if raw[:2] in (codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE):
+    try:
+        raw = raw.decode("utf-16").encode("utf-8")
+    except UnicodeDecodeError:
+        pass
+sys.stdout.buffer.write(raw)'
+}
+
+# _exakit_vs_stdin_secret — --password-stdin: ALL of standard input, read even
+# when a terminal is reachable (a JSON key file has line breaks), one trailing
+# line ending (LF or CRLF) dropped, into EXAKIT_VS_STDIN_SECRET. Run in the
+# command's own shell, never in $( ): a refusal must end the command, and
+# with --json its one object must reach stdout. Refuses (exit 2) a terminal on
+# stdin - the flag means a pipe or a file - and nothing read. Never echoed,
+# logged or passed as an argument. ⇄ twin: Read-ExakitVsStdinSecret.
+_exakit_vs_stdin_secret() {
+    if [ -t 0 ]; then
+        _exakit_vs_refuse 2 "--password-stdin reads the credential from standard input, which is a terminal here: pipe it in (for example < key.json), or leave --password-stdin out to be asked." \
+            "--password-stdin was given, but standard input is a terminal" \
+            "pipe the credential into the command (for example < key.json), or give it with --password-file <file>"
+    fi
+    # The dot keeps the line endings $( ) would take; one is dropped below.
+    EXAKIT_VS_STDIN_SECRET="$(_exakit_vs_secret_text; printf .)"
+    EXAKIT_VS_STDIN_SECRET="${EXAKIT_VS_STDIN_SECRET%.}"
+    _esi_lf='
+'
+    _esi_crlf="$(printf '\r')$_esi_lf"
+    case "$EXAKIT_VS_STDIN_SECRET" in
+        *"$_esi_crlf") EXAKIT_VS_STDIN_SECRET="${EXAKIT_VS_STDIN_SECRET%"$_esi_crlf"}" ;;
+        *"$_esi_lf") EXAKIT_VS_STDIN_SECRET="${EXAKIT_VS_STDIN_SECRET%"$_esi_lf"}" ;;
+    esac
+    [ -n "$EXAKIT_VS_STDIN_SECRET" ] || _exakit_vs_refuse 2 "--password-stdin read nothing: standard input was empty." \
+        "--password-stdin was given, but standard input was empty" \
+        "pipe the credential into the command and close the pipe once it is written, or give it with --password-file <file>"
+    return 0
+}
+
 # _exakit_vs_read_secret <label> <password-file> [kind] — a secret, from the
 # file the caller named, else a hidden prompt, else stdin. Never from an
 # argument. A secret-file credential (a key file) is asked for by its path on
@@ -167,12 +218,12 @@ _exakit_vs_render() {
 _exakit_vs_read_secret() {
     if [ -n "$2" ]; then
         [ -r "$2" ] || { error "Cannot read $2"; return 1; }
-        cat "$2"
+        _exakit_vs_secret_text < "$2"
         return 0
     fi
     # --json never prompts: the credential is the file's, or a pipe's.
     if [ "${EXAKIT_VS_JSON:-0}" = 1 ]; then
-        [ -t 0 ] || cat
+        [ -t 0 ] || _exakit_vs_secret_text
         return 0
     fi
     _evs_tty="$(_exakit_prompt_tty)"
@@ -181,13 +232,13 @@ _exakit_vs_read_secret() {
             _evs_path="$(prompt_text "$1 - path to the file" "")"
             case "$_evs_path" in "~/"*) _evs_path="$HOME/${_evs_path#\~/}" ;; esac
             [ -n "$_evs_path" ] && [ -r "$_evs_path" ] || { error "Cannot read ${_evs_path:-the file}"; return 1; }
-            cat "$_evs_path"
+            _exakit_vs_secret_text < "$_evs_path"
             return 0
         fi
         exakit_read_hidden "$1" || { error "The terminal cannot hide input; give the credential with --password-file."; return 1; }
         return 0
     fi
-    cat
+    _exakit_vs_secret_text
 }
 
 # _exakit_vs_hidden_line <prompt> [err] — one line typed or pasted at a hidden
@@ -1397,7 +1448,11 @@ EOF
 }
 
 # cmd_connect [source] [--name N] [--url STRING] [--set KEY=VALUE]...
-#             [--password-file F] [--dry-run] [--yes] [--json]
+#             [--password-file F | --password-stdin] [--dry-run] [--yes] [--json]
+#
+# --password-stdin: the credential is all of standard input, read even with a
+# terminal reachable (a pipe without it is read only when no terminal is);
+# a terminal or an empty stdin is refused (_exakit_vs_stdin_secret).
 #
 # --json: stdout carries one JSON object and nothing else - the engine's plan
 # (--dry-run), its connect result, or a failure of the engine's one shape
@@ -1407,7 +1462,7 @@ EOF
 # or installs a language container goes to stderr. A failure ends naming the
 # engine's day log, every statement it sent (_exakit_vs_exit).
 cmd_connect() {
-    _cc_source=""; _cc_name=""; _cc_pwfile=""; _cc_dry=0; _cc_json=0; _cc_url=""
+    _cc_source=""; _cc_name=""; _cc_pwfile=""; _cc_dry=0; _cc_json=0; _cc_url=""; _cc_pwstdin=0
     EXAKIT_VS_SETS=""; EXAKIT_VS_GIVEN=""
     # Known before anything is refused, so every refusal answers in its shape.
     for _cc_word in "$@"; do case "$_cc_word" in --json|-j) _cc_json=1 ;; esac; done
@@ -1427,13 +1482,14 @@ cmd_connect() {
 --set
 $2"; EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${2%%=*}"; shift ;;
             --password-file) _cc_pwfile="${2:-}"; shift ;;
+            --password-stdin) _cc_pwstdin=1 ;;
             --dry-run|-n) _cc_dry=1 ;;
             --yes|-y) EXAKIT_VS_ASSUME_YES=1 ;;
             --json|-j) _cc_json=1 ;;
             --password=*|--password|--secret*|--token*)
-                _exakit_vs_refuse 2 "A credential is never taken as an argument (other users can read the process list). Use the hidden prompt, --password-file, or standard input." \
+                _exakit_vs_refuse 2 "A credential is never taken as an argument (other users can read the process list). Use the hidden prompt, --password-file, or --password-stdin." \
                     "a credential was given as an argument, where other users can read it in the process list" \
-                    "pipe it on standard input or give it with --password-file <file>" ;;
+                    "pipe it in with --password-stdin or give it with --password-file <file>" ;;
             -*) _exakit_vs_refuse 2 "Unknown option '$1' for connect (exakit help connect)." \
                     "unknown option '$1' for connect" "leave it out; the options are listed by: exakit help connect" ;;
             *) [ -z "$_cc_source" ] || _exakit_vs_refuse 2 "connect takes one source; got '$_cc_source' and '$1'." \
@@ -1442,9 +1498,14 @@ $2"; EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${2%%=*}"; shift ;;
         esac
         shift
     done
+    [ "$_cc_pwstdin" = 1 ] && [ -n "$_cc_pwfile" ] && _exakit_vs_refuse 2 "--password-stdin and --password-file both give the credential; use one." \
+        "--password-stdin and --password-file were both given" "give the credential one way: --password-stdin or --password-file <file>"
     _require_install "$_cc_json"
     exakit_init_logging
     _exakit_vs_log_mark
+    # Read before anything runs or asks: nothing else can take it off stdin,
+    # and a terminal or nothing on it is refused before any work is done.
+    [ "$_cc_pwstdin" = 1 ] && _exakit_vs_stdin_secret
     # A pasted connection string fills what it names, for every path below:
     # the terminal's panel shows those answers, --yes and --dry-run use them.
     if [ -n "$_cc_url" ]; then
@@ -1544,7 +1605,11 @@ EOF
             _exakit_vs_refuse 2 "Cannot read $_cc_pwfile" "cannot read $_cc_pwfile" \
                 "give a file this user can read with --password-file, or pipe the $_cc_what on a closed standard input"
         fi
-        _cc_secret="$(_exakit_vs_read_secret "$_cc_label" "$_cc_pwfile" "$(_exakit_vs_secret_kind "$_cc_resolved")")" || exit 2
+        if [ "$_cc_pwstdin" = 1 ]; then
+            _cc_secret="$EXAKIT_VS_STDIN_SECRET"
+        else
+            _cc_secret="$(_exakit_vs_read_secret "$_cc_label" "$_cc_pwfile" "$(_exakit_vs_secret_kind "$_cc_resolved")")" || exit 2
+        fi
         [ -n "$_cc_secret" ] || _exakit_vs_refuse 2 "No $_cc_what was given (pipe it on standard input or use --password-file)." \
             "no $_cc_what was given" "pipe it on standard input or give it with --password-file <file>"
     fi
@@ -1554,7 +1619,7 @@ EOF
         _exakit_vs_run "" connect "$@"
     fi
     _cc_rc=$?
-    unset _cc_secret
+    unset _cc_secret EXAKIT_VS_STDIN_SECRET
     if [ "$_cc_rc" -eq 0 ] && [ "$_cc_json" = 0 ]; then
         _exakit_vs_query_hints "$EXAKIT_VS_RESULT" "$_cc_name"
         info "Manage it with: exakit source show $_cc_name | check | reauth | refresh | disconnect | remove"
@@ -1603,6 +1668,7 @@ cmd_source() {
     # default action, list, with that option.
     case "${1:-}" in -*) _cs_action=list ;; *) _cs_action="${1:-list}"; [ "$#" -gt 0 ] && shift ;; esac
     _cs_json=0; _cs_dry=0; _cs_name=""; _cs_all=0; _cs_status=""; _cs_pwfile=""; _cs_table=""; _cs_ddl=0; _cs_into=""
+    _cs_pwstdin=0
     # --json is known before anything is refused: the bridge's own refusals
     # and failures then come in the engine's shape, and nothing is asked.
     for _cs_word in "$@"; do case "$_cs_word" in --json|-j) _cs_json=1 ;; esac; done
@@ -1615,6 +1681,7 @@ cmd_source() {
             --all|-a) _cs_all=1 ;;
             --status) _cs_status="${2:-}"; shift ;;
             --password-file) _cs_pwfile="${2:-}"; shift ;;
+            --password-stdin) _cs_pwstdin=1 ;;
             --ddl) _cs_ddl=1 ;;
             --schema) _cs_into="${2:-}"; shift ;;
             --schema=*) _cs_into="${1#--schema=}" ;;
@@ -1627,6 +1694,14 @@ cmd_source() {
         esac
         shift
     done
+    if [ "$_cs_pwstdin" = 1 ]; then
+        # Only reauth takes a credential: a pipe given to another action would
+        # be dropped unread.
+        [ "$_cs_action" = reauth ] || _exakit_vs_refuse 2 "--password-stdin is for exakit source reauth (and exakit connect)." \
+            "--password-stdin was given to source $_cs_action, which takes no credential" "leave --password-stdin out"
+        [ -z "$_cs_pwfile" ] || _exakit_vs_refuse 2 "--password-stdin and --password-file both give the credential; use one." \
+            "--password-stdin and --password-file were both given" "give the credential one way: --password-stdin or --password-file <file>"
+    fi
     _require_install "$_cs_json"
     exakit_init_logging
     _exakit_vs_log_mark
@@ -1704,7 +1779,12 @@ print("  " + "\n  ".join(["drops: " + ", ".join(p["drop"])] + (["keeps: " + ", "
                 _exakit_vs_refuse 2 "Cannot read $_cs_pwfile" "cannot read $_cs_pwfile" \
                     "give a file this user can read with --password-file, or pipe the credential on a closed standard input"
             fi
-            _cs_secret="$(_exakit_vs_read_secret "New credential for $_cs_name" "$_cs_pwfile" "$(_exakit_vs_secret_kind "$_cs_conn")")" || exit 2
+            if [ "$_cs_pwstdin" = 1 ]; then
+                _exakit_vs_stdin_secret
+                _cs_secret="$EXAKIT_VS_STDIN_SECRET"; unset EXAKIT_VS_STDIN_SECRET
+            else
+                _cs_secret="$(_exakit_vs_read_secret "New credential for $_cs_name" "$_cs_pwfile" "$(_exakit_vs_secret_kind "$_cs_conn")")" || exit 2
+            fi
             [ -n "$_cs_secret" ] || _exakit_vs_refuse 2 "No credential was given." "no credential was given" \
                 "pipe it on standard input or give it with --password-file <file>"
             set -- "$@" reauth "$_cs_name" --secret-stdin
