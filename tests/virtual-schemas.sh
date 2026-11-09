@@ -99,6 +99,8 @@ eng() {
 }
 run() { OUT="$(eng "$@" 2>&1)"; RC=$?; }
 run_secret() { local s="$1"; shift; OUT="$(printf '%s' "$s" | eng "$@" 2>&1)"; RC=$?; }
+# What a reauth trial leaves in the database: nothing, once it is over.
+pending() { dbq '[c for c in d["connections"] if c.startswith("EXAKIT_PENDING_")] + [v for v in d["virtual"] if v.startswith("EXAKIT_PENDING_")]'; }
 PG_SET="--set host=pg.example.com --set database=sales --set user=reader"
 
 printf '\n== search and plan ==\n'
@@ -495,7 +497,8 @@ run_secret "typo-$NEWSECRET" reauth sales --secret-stdin
 check "reauth with a credential the source refuses: exit 1" "1" "$RC"
 has "...and says the previous one was kept" "refused the new credential, so the previous one was kept" "$OUT"
 check "...the CONNECTION still holds the previous credential" "$OLDSECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_SALES"]["secret"]')"
-check "...and the pending CONNECTION is gone" "false" "$(dbq '"EXAKIT_SRC_SALES_PENDING" in d["connections"]')"
+check "...and the pending CONNECTION is gone" "[]" "$(pending)"
+has "...it was tried under a name no source can have" 'CREATE OR REPLACE CONNECTION "EXAKIT_PENDING_EXAKIT_SRC_SALES"' "$(dbq '" | ".join(d["statements"])')"
 lacks "...the refused credential is in none of the output" "typo-$NEWSECRET" "$OUT"
 run_secret "$NEWSECRET" reauth sales --secret-stdin
 check "reauth with the new credential: ready again" "0" "$RC"
@@ -604,6 +607,13 @@ OUT="$(bridge cmd_source reauth nosuch --password-file "$B/pw" </dev/null)"; RC=
 check "reauth of a source that does not exist: exit 4, before any credential" "4 show nosuch|" "$RC $(tr '\n' '|' < "$B/argv")"
 check "...nothing reached the engine's stdin" "no" "$([ -s "$B/stdin" ] && echo yes || echo no)"
 has "...and says which name" "no source named nosuch" "$OUT"
+reset_bridge 0 1
+OUT="$(bridge cmd_source reauth docs --password-file "$B/pw" </dev/null)"; RC=$?
+check "reauth: the name is checked, then the engine gets --secret-stdin" "show docs|reauth docs --secret-stdin|" "$(tr '\n' '|' < "$B/argv")"
+check "...the credential reached it on stdin" "pw-from-stdin" "$(cat "$B/stdin")"
+lacks "...and never as an argument" "pw-from-stdin" "$(cat "$B/argv")"
+check "...a refused credential (engine exit 1) exits 1" "1" "$RC"
+lacks "...without saying the source is ready again" "ready again with the new credential" "$OUT"
 reset_bridge 0
 OUT="$(bridge cmd_source check --all </dev/null)"
 has "check --all with no sources says so" "(none)" "$OUT"
@@ -1053,7 +1063,7 @@ run_secret "still-the-old-one" reauth mg --secret-stdin
 check "reauth with a password the source refuses: exit 1" "1" "$RC"
 has "...tried on a throwaway schema first, so the old one is kept" "the source refused the new credential, so the previous one was kept" "$OUT"
 check "...nothing pending is left behind" "[] []" \
-    "$(dbq '[c for c in d["connections"] if c.endswith("_PENDING")]') $(dbq '[v for v in d["virtual"] if v.endswith("_PENDING")]')"
+    "$(dbq '[c for c in d["connections"] if c.startswith("EXAKIT_PENDING_")]') $(dbq '[v for v in d["virtual"] if v.startswith("EXAKIT_PENDING_")]')"
 check "...and the CONNECTION still holds the old password" "true" "$(dbq 'd["connections"]["EXAKIT_SRC_MG"]["secret"] == "'"$SECRET"'"')"
 run_secret "n3w-secret" reauth mg --secret-stdin
 check "reauth with the password the source accepts: exit 0" "0" "$RC"
@@ -1256,7 +1266,7 @@ OUT="$(eng reauth lake --secret-stdin < "$LK_FILE" 2>&1)"; RC=$?
 check "reauth with the key AWS now refuses: exit 1, the old CONNECTION kept" "1 $LK_KEY_ID" \
     "$RC $(dbq '__import__("json").loads(d["connections"]["EXAKIT_SRC_LAKE"]["secret"])["access_key"]')"
 check "...nothing pending left behind" "[] []" \
-    "$(dbq '[c for c in d["connections"] if c.endswith("_PENDING")]') $(dbq '[v for v in d["virtual"] if v.endswith("_PENDING")]')"
+    "$(dbq '[c for c in d["connections"] if c.startswith("EXAKIT_PENDING_")]') $(dbq '[v for v in d["virtual"] if v.startswith("EXAKIT_PENDING_")]')"
 OUT="$(printf '{"AccessKey": {"AccessKeyId": "AKIANEWNEWNEWNEWNEW1", "SecretAccessKey": "%s"}}' "$NEWSECRET-0123456789abcdefghijk" \
     | eng reauth lake --secret-stdin 2>&1)"; RC=$?
 check "reauth with the new key: exit 0, replaced" "0 AKIANEWNEWNEWNEWNEW1" \
@@ -1661,7 +1671,73 @@ OUT="$(eng reauth docs --secret-stdin < "$WORK/s3key2.json" 2>&1)"; RC=$?
 check "reauth with a new key file: exit 0" "0" "$RC"
 has "...the CONNECTION holds the new key, the bucket and region kept" '{"awsAccessKeyId": "AKIAEXAMPLEKEYID0002", "awsSecretAccessKey": "AnotherSecretKeyValue0000000000000000000", "awsRegion": "ap-south-1", "s3Bucket": "docs-bucket"}' \
     "$(dbq 'd["connections"]["EXAKIT_SRC_DOCS"]["secret"]')"
+has "...after a throwaway schema on a pending CONNECTION read it" "The source accepted the new credential" "$OUT"
+has "...one row from each table, as connect reads a document source" 'SELECT * FROM "EXAKIT_PENDING_VS_DOCS"."ORDERS" LIMIT 1' \
+    "$(dbq '" | ".join(d["statements"])')"
+check "...nothing pending is left behind" "[]" "$(pending)"
+
+# A typo in the new key: S3 refuses it, so the working one stays. This
+# mapping has a CSV without fields, so the trial schema's CREATE reads already.
+DOCSKEY="$(dbq 'd["connections"]["EXAKIT_SRC_DOCS"]["secret"]')"
+TYPOAWS="AnotherSecretKeyValue000000000000000000O"
+printf '%s' '{"AccessKey": {"AccessKeyId": "AKIAEXAMPLEKEYID0003", "SecretAccessKey": "'"$TYPOAWS"'"}}' > "$WORK/s3typo.json"
+DN0="$(dbq 'len(d["statements"])')"
+OUT="$(eng reauth docs --secret-stdin < "$WORK/s3typo.json" 2>&1)"; RC=$?
+check "reauth with a key S3 refuses: exit 1, as every refused reauth" "1" "$RC"
+has "...it says the previous one was kept" "the source refused the new credential, so the previous one was kept" "$OUT"
+check "...the CONNECTION still holds the working key" "$DOCSKEY" "$(dbq 'd["connections"]["EXAKIT_SRC_DOCS"]["secret"]')"
+check "...nothing pending is left behind" "[]" "$(pending)"
+lacks "...the refused key is in none of the output" "$TYPOAWS" "$OUT"
+check "...nor in any statement but the pending CONNECTION's" "[]" \
+    "$(dbq '[s[:60] for s in d["statements"]['"$DN0"':] if "'"$TYPOAWS"'" in s and not s.startswith("CREATE OR REPLACE CONNECTION \"EXAKIT_PENDING_")]')"
+run check docs; check "...and the source still checks ready" "0" "$RC"
+
+# A mapping that names its fields: CREATE reads no object (measured on S3),
+# so only the trial's read can catch the refused key - and does.
+TYPED="$WORK/edml-typed"; mkdir -p "$TYPED"
+printf '{"$schema": "https://schemas.exasol.com/edml-2.1.0.json", "source": "data/orders/*.jsonl", "destinationTable": "ORDERS", "mapping": {"fields": {"id": {"toDecimalMapping": {}}}}}\n' > "$TYPED/orders.json"
+run_secret "$NEWAWS" connect s3 --name typed --set bucket=docs-bucket --set region=ap-south-1 --set mapping=$TYPED \
+    --set access_key_id=AKIAEXAMPLEKEYID0002 --secret-stdin
+check "a source whose mapping names its fields connects: exit 0" "0" "$RC"
+OUT="$(eng reauth typed --secret-stdin < "$WORK/s3typo.json" 2>&1)"; RC=$?
+check "...reauth with a key S3 refuses: exit 1, though the trial schema was created" "1 true" \
+    "$RC $(dbq 'any(s.startswith("CREATE VIRTUAL SCHEMA \"EXAKIT_PENDING_VS_TYPED\"") for s in d["statements"])')"
+has "...the read through it said no" 'SELECT * FROM "EXAKIT_PENDING_VS_TYPED"."ORDERS" LIMIT 1' "$(dbq '" | ".join(d["statements"])')"
+check "...the working key kept, nothing pending" "AKIAEXAMPLEKEYID0002 []" \
+    "$(dbq '__import__("json").loads(d["connections"]["EXAKIT_SRC_TYPED"]["secret"])["awsAccessKeyId"]') $(pending)"
+run check typed; check "...and the source still checks ready" "0" "$RC"
+run remove typed
+
+# A source may be called <name>_pending: a trial for <name> never touches it.
+run_secret "$NEWAWS" connect s3 --name docs_pending $S3_SET --set access_key_id=AKIAEXAMPLEKEYID0002 --secret-stdin
+check "a source named docs_pending connects beside docs: exit 0" "0" "$RC"
+DPKEY="$(dbq 'd["connections"]["EXAKIT_SRC_DOCS_PENDING"]["secret"]')"
+eng reauth docs --secret-stdin < "$WORK/s3typo.json" >/dev/null 2>&1
+OUT="$(eng reauth docs --secret-stdin < "$WORK/s3key2.json" 2>&1)"; RC=$?
+check "...a refused and an accepted reauth of docs leave its schema alone" "0 true" "$RC $(dbq '"VS_DOCS_PENDING" in d["virtual"]')"
+check "...and its CONNECTION" "$DPKEY" "$(dbq 'd["connections"]["EXAKIT_SRC_DOCS_PENDING"]["secret"]')"
+
+# A reauth killed mid-trial (SIGKILL: no finally runs) leaves its trial schema
+# and pending CONNECTION; disconnect and remove sweep them.
+killed_trial() {
+    python3 -c 'import json,sys; d=json.load(open(sys.argv[1]))
+d["connections"]["EXAKIT_PENDING_EXAKIT_SRC_DOCS"] = dict(d["connections"].get("EXAKIT_SRC_DOCS") or {"url": "", "user": "", "secret": "{}"})
+d["virtual"]["EXAKIT_PENDING_VS_DOCS"] = {"connection": "EXAKIT_PENDING_EXAKIT_SRC_DOCS", "tables": ["ORDERS"]}
+json.dump(d, open(sys.argv[1], "w"))' "$STATE"
+}
+killed_trial
+run disconnect docs
+check "disconnect after a killed trial: exit 0, its pending credential and schema gone" "0 []" "$RC $(pending)"
+killed_trial
+DN0="$(dbq 'len(d["statements"])')"
 run remove docs
+check "remove after a killed trial: exit 0, nothing pending left" "0 []" "$RC $(pending)"
+check "...the trial schema dropped before the adapter script it runs on" "true" \
+    "$(dbq '(lambda s: s.index("DROP FORCE VIRTUAL SCHEMA IF EXISTS \"EXAKIT_PENDING_VS_DOCS\" CASCADE") < s.index("DROP ADAPTER SCRIPT \"EXAKIT_VS\".\"ADAPTER_DOCS\""))(d["statements"]['"$DN0"':])')"
+check "...and docs_pending's CONNECTION and schema are still there" "true true" \
+    "$(dbq '"EXAKIT_SRC_DOCS_PENDING" in d["connections"]') $(dbq '"VS_DOCS_PENDING" in d["virtual"]')"
+run check docs_pending; check "...it still checks ready" "0" "$RC"
+run remove docs_pending
 
 printf '\n== Profile B: Azure Blob Storage document files ==\n'
 # Measured against a real storage account (Exasol Personal 2.3.0, adapter
@@ -1726,6 +1802,14 @@ check "reauth with a SAS that cannot list is refused here, exit 2" "2" "$RC"
 has "...saying which permission is missing" "the SAS lacks list (l) permission" "$OUT"
 lacks "...without sending anyone to the log" "exakit logs" "$OUT"
 has "...and the working key is kept" "AccountKey=$AZKEY" "$(dbq 'd["connections"]["EXAKIT_SRC_AZDOCS"]["secret"]')"
+AZWRONG="$(printf 'QkJC%.0s' 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21)Qg=="
+run_secret "$AZWRONG" reauth azdocs --secret-stdin
+check "reauth with an account key Azure refuses: exit 1" "1" "$RC"
+has "...it says the previous one was kept" "the source refused the new credential, so the previous one was kept" "$OUT"
+check "...the working key kept, nothing pending" "true []" \
+    "$(dbq '"AccountKey='"$AZKEY"'" in d["connections"]["EXAKIT_SRC_AZDOCS"]["secret"]') $(pending)"
+lacks "...the refused key is not printed" "$AZWRONG" "$OUT"
+run check azdocs; check "...and the source still checks ready" "0" "$RC"
 run remove azkey --dry-run
 lacks "removing one: the shared import script is not in its plan" "IMPORT_FROM_AZURE" "$OUT"
 run remove azkey; run remove azdocs
