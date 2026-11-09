@@ -58,6 +58,9 @@ database and inspect it afterwards:
     refresh_fail virtual schemas whose ALTER ... REFRESH fails (the adapter
                 cannot reach its source); script_fail scripts (SCHEMA.NAME)
                 whose CREATE OR REPLACE fails
+    connection_fail  a message: CREATE CONNECTION fails as pyexasol reports it,
+                its query => field printing the statement back, secret and
+                all, across as many lines as the statement has
 
 Errors carry realistic driver text, including the statement for a failed
 CREATE CONNECTION, so the engine's redaction is exercised for real.
@@ -536,6 +539,9 @@ class Fake(object):
             return
         m = re.match(r"CREATE (OR REPLACE )?CONNECTION \"([^\"]+)\" TO '((?:[^']|'')*)'(?: USER '((?:[^']|'')*)' IDENTIFIED BY '((?:[^']|'')*)')?$", sql)
         if m:
+            if doc.get("connection_fail"):
+                raise Exception("(\n    message     =>  %s\n    dsn         =>  127.0.0.1:8563\n    user        =>  sys\n"
+                                "    code        =>  42000\n    query       =>  %s\n)" % (doc["connection_fail"], sql))
             if not m.group(1) and m.group(2) in doc["connections"]:
                 raise Exception("connection %s already exists (statement: %s)" % (m.group(2), sql))
             doc["connections"][m.group(2)] = {"url": m.group(3), "user": (m.group(4) or "").replace("''", "'"),

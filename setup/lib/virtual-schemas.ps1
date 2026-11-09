@@ -65,6 +65,10 @@ function Invoke-ExakitVsEngine {
     } else {
         $argv += $Arguments
     }
+    # Today's log exists and is owner-only BEFORE the engine writes a line to
+    # it: content written under the inherited ACL would stay readable to
+    # others if the run were stopped (Ctrl+C) before the step after it.
+    Protect-ExakitVsLog -Today
     try { $errFile = [System.IO.Path]::GetTempFileName() }
     catch {
         if (-not $asJson) { throw }
@@ -91,13 +95,41 @@ function Invoke-ExakitVsEngine {
         if ("$line".Trim()) { Write-ExakitLog "VS" "$line" }
     }
     Remove-Item -Force -LiteralPath $errFile -ErrorAction SilentlyContinue
-    # The engine creates its day log owner-only (mode 600); on Windows that is
-    # the file's ACL, which this side sets, as it does for the install log.
-    $vsLog = Get-ExakitVsLogPath
-    if ($vsLog -and (Get-Command Protect-ExakitFile -ErrorAction SilentlyContinue)) {
-        try { Protect-ExakitFile $vsLog } catch { }
-    }
+    # Again after it: a run that crossed midnight wrote a new day's file.
+    Protect-ExakitVsLog
     return [pscustomobject]@{ Code = $code; Lines = @($lines | ForEach-Object { "$_" }) }
+}
+
+# Get-ExakitVsLogFolder - the kit's log folder, where the engine writes its
+# day log (--kit-home + logs, as engine/cli.py names it); "" when unknown.
+function Get-ExakitVsLogFolder {
+    $folder = $script:LogDir
+    if (-not $folder -and $script:ExakitHome) { $folder = Join-Path $script:ExakitHome "logs" }
+    if (-not $folder) { return "" }
+    return $folder
+}
+
+# Protect-ExakitVsLog [-Today] - the engine's day log owner-only. The engine
+# creates it mode 600 on macOS and Linux; on Windows that is the file's ACL,
+# which this side sets, as it does for the install log (Initialize-ExakitLogging).
+# -Today creates today's file first, so the ACL is on it before the engine
+# writes; without it, the newest file is protected.
+function Protect-ExakitVsLog {
+    param([switch]$Today)
+    if (-not (Get-Command Protect-ExakitFile -ErrorAction SilentlyContinue)) { return }
+    $path = ""
+    if ($Today) {
+        $folder = Get-ExakitVsLogFolder
+        if (-not $folder) { return }
+        $path = Join-Path $folder ("virtual-schemas-{0}.log" -f (Get-Date -Format "yyyyMMdd"))
+        try {
+            if (-not (Test-Path -LiteralPath $folder)) { New-Item -ItemType Directory -Force -Path $folder | Out-Null }
+            if (-not (Test-Path -LiteralPath $path)) { New-Item -ItemType File -Path $path | Out-Null }
+        } catch { return }
+    } else {
+        $path = Get-ExakitVsLogPath
+    }
+    if ($path) { try { Protect-ExakitFile $path } catch { } }
 }
 
 # Get-ExakitVsLogPath - the engine's day log (virtual-schemas-YYYYMMDD.log in
@@ -105,8 +137,7 @@ function Invoke-ExakitVsEngine {
 # and every event, secrets redacted), the newest one; "" when there is none.
 # Twin of exakit_vs_log_path.
 function Get-ExakitVsLogPath {
-    $folder = $script:LogDir
-    if (-not $folder -and $script:ExakitHome) { $folder = Join-Path $script:ExakitHome "logs" }
+    $folder = Get-ExakitVsLogFolder
     if (-not $folder) { return "" }
     $newest = Get-ChildItem -LiteralPath $folder -Filter "virtual-schemas-*.log" -ErrorAction SilentlyContinue |
         Sort-Object LastWriteTime -Descending | Select-Object -First 1
@@ -128,12 +159,14 @@ function Get-ExakitVsLogMark {
 # Exit-ExakitVs - end a connect or source command. A failure (not 5, a
 # question not confirmed or a gated source) that the engine logged names the
 # log once, so the statements it sent are one command away; with --json on
-# stderr, which no parser reads. Twin of _exakit_vs_exit.
+# stderr, which no parser reads. An empty file (made ready by
+# Protect-ExakitVsLog for a command the engine does not log) names nothing.
+# Twin of _exakit_vs_exit.
 function Exit-ExakitVs {
     param([int]$Code)
     if ($Code -ne 0 -and $Code -ne 5) {
         $mark = Get-ExakitVsLogMark
-        if ($mark -and $mark -ne $script:ExakitVsLogMark) {
+        if ($mark -and $mark -ne $script:ExakitVsLogMark -and -not $mark.EndsWith(":0")) {
             $line = "Log (every SQL statement, secrets redacted): " + (Get-ExakitVsLogPath)
             if ($script:ExakitVsJson) { [Console]::Error.WriteLine($line) } else { Info $line }
         }

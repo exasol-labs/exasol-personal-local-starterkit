@@ -162,16 +162,34 @@ SOURCE_COMMANDS = ("show", "check", "reauth", "refresh", "describe", "disconnect
 LOGGED = ("paste", "plan", "connect", "list", "issues") + SOURCE_COMMANDS
 
 
+def set_keys(words):
+    """The command's words with every --set value left out: the keys say what
+    was given, and a value is logged by no one before it is validated - a
+    password pasted into the wrong input would otherwise be in the file."""
+    shown, rest = [], list(words)
+    while rest:
+        word = rest.pop(0)
+        if word == "--set" and rest:
+            item = rest.pop(0)
+            shown += ["--set", item.split("=", 1)[0] + "=..." if "=" in item else "..."]
+        elif word.startswith("--set="):
+            item = word[len("--set="):]
+            shown.append("--set=" + (item.split("=", 1)[0] + "=..." if "=" in item else "..."))
+        else:
+            shown.append(word)
+    return shown
+
+
 def run_log(args, argv):
     """The day's log for this run (a no-op for a command it does not record),
     its START line written: the command as given after the context options,
-    and the database it talks to."""
+    --set keys without their values, and the database it talks to."""
     if args.command not in LOGGED:
         return vslog.NULL
     source = getattr(args, "name", None) or ("all" if getattr(args, "all", False) else None)
     log = vslog.RunLog(os.path.join(args.kit_home, "logs"), args.command, source)
     words = argv[argv.index(args.command):] if args.command in argv else [args.command]
-    log.write("START", "%s (dsn %s, user %s%s)" % (" ".join(words), args.dsn or "-", args.user,
+    log.write("START", "%s (dsn %s, user %s%s)" % (" ".join(set_keys(words)), args.dsn or "-", args.user,
                                                     ", --json" if args.json else ""))
     return log
 
@@ -414,9 +432,13 @@ def main(argv=None):
     except Exception as error:  # noqa: BLE001 - the last line: never a traceback on stdout
         # The traceback goes to stderr, which the shells keep in the log; the
         # answer is one line, and the same shape as every other failure.
-        traceback.print_exc(file=sys.stderr)
-        log.write("TRACE", traceback.format_exc().rstrip())
-        line = " ".join(("%s: %s" % (type(error).__name__, error)).split())
+        # Without the exceptions it was raised while handling (chain=False),
+        # and redacted: a driver's exception carries its statement, secret
+        # and all, and this traceback reaches files the run log does not.
+        trace = log.scrub(traceback.format_exc(chain=False))
+        sys.stderr.write(trace)
+        log.write("TRACE", trace.rstrip())
+        line = log.scrub(" ".join(("%s: %s" % (type(error).__name__, error)).split()))
         emit("FAIL", "the engine failed unexpectedly: %s (details: exakit logs)" % line)
         result, code = failure("the engine failed unexpectedly: %s" % line, 1, "internal"), 1
     finally:
@@ -424,7 +446,7 @@ def main(argv=None):
             try:
                 engine.close()
             except Exception:  # noqa: BLE001 - the answer is already decided
-                traceback.print_exc(file=sys.stderr)
+                sys.stderr.write(log.scrub(traceback.format_exc(chain=False)))
         kind = result.get("kind") if code and isinstance(result, dict) else None
         log.write("END", "exit %d%s (%.1f s)" % (code, ", kind %s" % kind if kind else "", time.time() - started))
         log.close()

@@ -128,11 +128,12 @@ _exakit_vs_log_mark() {
 # _exakit_vs_exit <code> — end a connect or source command. A failure (not 5,
 # a question not confirmed or a gated source) that the engine logged names the
 # log once, so the statements it sent are one command away; with --json on
-# stderr, which no parser reads. ⇄ twin: Exit-ExakitVs.
+# stderr, which no parser reads. An empty file names nothing (the Windows
+# twin makes today's ready before every engine run). ⇄ twin: Exit-ExakitVs.
 _exakit_vs_exit() {
     case "$1" in 0|5) exit "$1" ;; esac
     _eve_path="$(exakit_vs_log_path)"
-    if [ -n "$_eve_path" ] && \
+    if [ -n "$_eve_path" ] && [ -s "$_eve_path" ] && \
        [ "$_eve_path:$(wc -c < "$_eve_path" 2>/dev/null | tr -d ' ')" != "${EXAKIT_VS_LOG_MARK:-}" ]; then
         if [ "${EXAKIT_VS_JSON:-0}" = 1 ]; then
             printf 'Log (every SQL statement, secrets redacted): %s\n' "$_eve_path" >&2

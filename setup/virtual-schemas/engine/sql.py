@@ -236,13 +236,16 @@ def summarize(text):
 
 
 def redact(text, secrets):
-    text = summarize(text)
-    for secret in secrets:
-        if secret:
-            for form in (secret, secret.replace("'", "''")):
-                text = text.replace(form, "***")
-    text = re.sub(r"IDENTIFIED BY\s+'(?:[^']|'')*'", "IDENTIFIED BY '***'", text, flags=re.I)
-    text = re.sub(r"\s*\(Session: \d+\)", "", text)
+    """A database error as one line a person may read - on the screen, in the
+    kit's log, in --json's error: every form of the run's secrets and every
+    credential shape gone (vslog.redact) BEFORE it is cut to MAX_ERROR, so a
+    cut never leaves part of a password standing. A text that cannot be
+    redacted is not shown at all."""
+    try:
+        text = re.sub(r"\s*\(Session: \d+\)", "", summarize(text))
+        text = vslog.redact(text, secrets)
+    except Exception:  # noqa: BLE001 - never the clear text
+        return "the database refused the statement (its message could not be made safe to show)"
     return text[:MAX_ERROR]
 
 
@@ -259,20 +262,26 @@ class Database(object):
         try:
             return self.backend.query(sql_text)
         except Exception as error:     # the driver's own exception types vary by backend
-            message = redact(error, secrets)
-            kind = classify_raw(message, error)
-            self.log.failed(message, kind, error, secrets)
-            raise DbError(message, kind)
+            raise self._failed(error, secrets) from None
 
     def execute(self, sql_text, secrets=()):
         self.log.statement(sql_text, secrets)
         try:
             self.backend.execute(sql_text)
         except Exception as error:
-            message = redact(error, secrets)
+            raise self._failed(error, secrets) from None
+
+    def _failed(self, error, secrets):
+        """The DbError for a driver's exception, logged. Raised `from None`:
+        the driver's own exception (its query => field holds the statement,
+        secret and all) never rides along to a traceback."""
+        message = redact(error, secrets)
+        try:
             kind = classify_raw(message, error)
-            self.log.failed(message, kind, error, secrets)
-            raise DbError(message, kind)
+        except Exception:  # noqa: BLE001 - a class is never worth the answer
+            kind = "error"
+        self.log.failed(message, kind, error, secrets)
+        return DbError(message, kind)
 
     def close(self):
         try:
@@ -319,12 +328,12 @@ def connect(dsn, user, password_file, log=None):
         with open(password_file, encoding="utf-8") as handle:
             password = handle.read().strip()
     except OSError as error:
-        raise DbError("the administrator password file could not be read: %s" % error, "error")
+        raise DbError("the administrator password file could not be read: %s" % error, "error") from None
     try:
         backend = _Pyexasol(dsn, user, password)
     except ImportError:
-        raise DbError("pyexasol is not installed in this Python (repair: exakit update pyexasol)", "error")
+        raise DbError("pyexasol is not installed in this Python (repair: exakit update pyexasol)", "error") from None
     except Exception as error:
         message = redact(error, [password])
-        raise DbError("the database did not accept a connection: %s" % message, "unreachable")
+        raise DbError("the database did not accept a connection: %s" % message, "unreachable") from None
     return Database(backend, log)

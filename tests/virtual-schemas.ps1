@@ -151,7 +151,7 @@ function Confirm-ExakitVs { param([string]$Question) return [bool]$script:Exakit
 function Ok([string]$M) { Write-Host "OK $M" }
 function Info([string]$M) { Write-Host "INFO $M" }
 $lib = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path (Split-Path -Parent $cli) "lib/virtual-schemas.ps1"), [ref]$null, [ref]$null)
-foreach ($def in @($lib.FindAll({ param($n) ($n -is [System.Management.Automation.Language.FunctionDefinitionAst]) -and $n.Name -in @("Show-ExakitVsDropPlan", "Exit-ExakitVs", "Get-ExakitVsLogMark", "Get-ExakitVsLogPath") }, $true))) {
+foreach ($def in @($lib.FindAll({ param($n) ($n -is [System.Management.Automation.Language.FunctionDefinitionAst]) -and $n.Name -in @("Show-ExakitVsDropPlan", "Exit-ExakitVs", "Get-ExakitVsLogMark", "Get-ExakitVsLogPath", "Get-ExakitVsLogFolder") }, $true))) {
     . ([scriptblock]::Create($def.Extent.Text))
 }
 Invoke-CmdSource -Arguments $args
@@ -724,6 +724,49 @@ $script:LogDir = Join-Path $home2 "logs"
 $target = @(Get-ExakitLogTargets) | Where-Object { $_.Id -eq "virtual-schemas" } | Select-Object -First 1
 Check "exakit logs lists it: target virtual-schemas, the newest day file" $vsLogPath ("" + $target.Source)
 $script:LogDir = $null
+
+Write-Host ""
+Write-Host "== the day log: the security review's Windows finding =="
+# Review 7: the ACL was set only after the engine exited, so its lines were
+# first written under the inherited one (and stayed so after a Ctrl+C). The
+# bridge now makes today's file and protects it BEFORE Python starts. Here
+# Protect-ExakitFile records what it saw: the file there, still empty.
+. (J @("setup", "lib", "virtual-schemas.ps1"))
+function Get-ExakitVsDefs { return $defs }
+$script:protects = New-Object System.Collections.ArrayList
+function Protect-ExakitFile { param([string]$Path)
+    $len = -1
+    if (Test-Path -LiteralPath $Path) { $len = (Get-Item -LiteralPath $Path).Length }
+    [void]$script:protects.Add(("{0}|{1}" -f (Split-Path -Leaf $Path), $len)) }
+Remove-Item -LiteralPath $vsLogPath -ErrorAction SilentlyContinue
+$r = Invoke-ExakitVsEngine -Arguments @("list")
+Check "review 7: today's file exists and is protected before the engine writes to it" ("virtual-schemas-" + $today + ".log|0") ("" + $script:protects[0])
+$after = "" + $script:protects[$script:protects.Count - 1]
+Check "review 7: ...and protected again after it wrote" $true (($script:protects.Count -ge 2) -and ($after -like ("virtual-schemas-" + $today + ".log|*")) -and -not ($after -like "*|0"))
+Check "review 7: ...the run itself unchanged" "0" ("" + $r.Code)
+# A file made ready but never written (a lookup the engine does not log)
+# names nothing when the command fails.
+$exitChild = Join-Path $work "exit-child.ps1"
+Set-Content -LiteralPath $exitChild -Encoding ASCII -Value @'
+param($lib, $kitHome)
+$script:ExakitHome = $kitHome
+function Info([string]$M) { Write-Host "INFO $M" }
+. $lib
+$script:ExakitVsLogMark = Get-ExakitVsLogMark
+$day = Join-Path (Join-Path $kitHome "logs") ("virtual-schemas-" + (Get-Date -Format "yyyyMMdd") + ".log")
+New-Item -ItemType File -Force -Path $day | Out-Null
+Exit-ExakitVs 1
+'@
+$home3 = Join-Path $work "kit3"
+New-Item -ItemType Directory -Force -Path (Join-Path $home3 "logs") | Out-Null
+$older = Join-Path (Join-Path $home3 "logs") "virtual-schemas-20200101.log"
+Set-Content -LiteralPath $older -Value "an older day" -Encoding ASCII
+(Get-Item -LiteralPath $older).LastWriteTime = [datetime]"2020-01-01"
+$ErrorActionPreference = "Continue"
+$out = & $pwsh -NoProfile -File $exitChild (J @("setup", "lib", "virtual-schemas.ps1")) $home3 2>&1
+$childCode = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
+Check "review 7: ...a day file made ready but never written: a failure names no log" "1 False" ("$childCode " + ((@($out) | ForEach-Object { "$_" }) -join "`n").Contains("Log ("))
 
 Remove-Item Env:\EXAKIT_VS_FAKE_DB, Env:\FAKE_VS_STATE
 if (-not $env:KEEP_WORK) { Remove-Item -Recurse -Force -LiteralPath $work -ErrorAction SilentlyContinue } else { Write-Host "work: $work" }
