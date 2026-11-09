@@ -287,8 +287,29 @@ _exakit_vs_run() {
     return "$_evx_rc"
 }
 
-# _exakit_vs_ask_inputs <connector> — prompt for each input the caller did not
-# set, defaults offered; appends --set KEY=VALUE pairs to EXAKIT_VS_SETS.
+# _exakit_vs_prompt <question> <default> <required:1|""> <marks:1|""> [label] —
+# one line-by-line answer on stdout. With marks (someone is answering: not
+# --yes, --dry-run or --json) the question says (required) or (optional), dim,
+# and an empty answer to a required one is refused ("<label> is required") and
+# asked again; without, it is prompt_text as it always was. ⇄ twin:
+# Read-ExakitVsLineAnswer.
+_exakit_vs_prompt() {
+    [ -n "$4" ] || { prompt_text "$1" "$2"; return 0; }
+    _evq_mark="(optional)"; [ -n "$3" ] && _evq_mark="(required)"
+    while :; do
+        # Nobody to ask after all (no terminal reachable from here): the
+        # default, as prompt_text would answer, never a loop.
+        [ -n "$(_exakit_prompt_tty)" ] || { printf '%s\n' "$2"; return 0; }
+        _evq_v="$(prompt_text "$1 ${UI_DIM:-}$_evq_mark${UI_RESET:-}" "$2")"
+        if [ -n "$_evq_v" ] || [ -z "$3" ]; then printf '%s\n' "$_evq_v"; return 0; fi
+        error "${5:-$1} is required"
+    done
+}
+
+# _exakit_vs_ask_inputs <connector> [marks] — prompt for each input the caller
+# did not set, defaults offered; appends --set KEY=VALUE pairs to
+# EXAKIT_VS_SETS. marks: each question says (required) or (optional), and a
+# required one is not left empty (_exakit_vs_prompt).
 _exakit_vs_ask_inputs() {
     _evi_lines="$(run_python_any - "$(exakit_vs_defs)/connectors/$1/connector.json" <<'PY'
 import json, sys
@@ -296,20 +317,63 @@ for spec in json.load(open(sys.argv[1]))["inputs"]:
     if spec["kind"] in ("secret", "secret-file"):
         continue
     choices = "/".join(spec.get("choices", []))
-    print("%s|%s|%s|%s" % (spec["name"], spec.get("label", spec["name"]), spec.get("default", ""), choices))
+    label = spec.get("label", spec["name"])
+    short = label
+    for cut in (" - ", " (", "; "):
+        short = short.split(cut)[0]
+    print("%s|%s|%s|%s|%s|%s" % (spec["name"], label, spec.get("default", ""), choices,
+                                 "1" if spec.get("required") else "", short))
 PY
 )"
-    while IFS='|' read -r _evi_name _evi_label _evi_default _evi_choices; do
+    while IFS='|' read -r _evi_name _evi_label _evi_default _evi_choices _evi_req _evi_short; do
         [ -n "$_evi_name" ] || continue
         case " $EXAKIT_VS_GIVEN " in *" $_evi_name "*) continue ;; esac
         [ -n "$_evi_choices" ] && _evi_label="$_evi_label ($_evi_choices)"
-        _evi_value="$(prompt_text "$_evi_label" "$_evi_default")"
+        _evi_value="$(_exakit_vs_prompt "$_evi_label" "$_evi_default" "$_evi_req" "${2:-}" "$_evi_short")"
         [ -n "$_evi_value" ] && EXAKIT_VS_SETS="$EXAKIT_VS_SETS
 --set
 $_evi_name=$_evi_value"
     done <<EOF
 $_evi_lines
 EOF
+}
+
+# _exakit_vs_paste_forms <connector> — the connection strings its paste block
+# reads ("a, b or c"), for the question that asks for one; empty when the
+# connector reads none. ⇄ twin: Get-ExakitVsPasteForms.
+_exakit_vs_paste_forms() {
+    run_python_any -c 'import json, sys
+f = (json.load(open(sys.argv[1])).get("paste") or {}).get("forms") or []
+print(", ".join(f[:-1]) + " or " + f[-1] if len(f) > 1 else "".join(f))' \
+        "$(exakit_vs_defs)/connectors/$1/connector.json" 2>/dev/null
+}
+
+# _exakit_vs_paste_typed — the engine's paste lines on stdin, for a string typed
+# at a prompt: its credential note (a WARN line) ends by saying the string was on
+# the command line, which a typed one was not, so that sentence is dropped. The
+# RESULT line, which repeats the notes, is left whole. ⇄ twin:
+# Format-ExakitVsPasteTyped.
+_exakit_vs_paste_typed() {
+    sed '/^WARN /s/ The string was on the command line.*$//'
+}
+
+# _exakit_vs_ask_paste <connector> — the line-by-line twin of the form's first
+# question: a connection string, or Enter to type the fields. It is read with
+# echo off, as a password is (it often holds one): only the fields it filled
+# are shown afterwards. What it names is not asked again (_exakit_vs_paste); a
+# string the engine cannot read is said, in its words, and asked again. A
+# terminal that cannot hide input is not asked at all. ⇄ twin:
+# Read-ExakitVsLinePaste.
+_exakit_vs_ask_paste() {
+    _eap_forms="$(_exakit_vs_paste_forms "$1")"
+    [ -n "$_eap_forms" ] || return 0
+    info "Paste the source's connection string as it shows it: $_eap_forms"
+    while :; do
+        _eap_url="$(exakit_read_hidden "Connection string (Enter to type the fields)")" || return 0
+        [ -n "$_eap_url" ] || return 0
+        if _exakit_vs_paste "$1" "$_eap_url" typed; then _eap_url=""; return 0; fi
+        _eap_url=""
+    done
 }
 
 # --- the terminal flow: pick, fill in, review, connect ----------------------------
@@ -319,11 +383,16 @@ EOF
 #   1. pick    the marketplace's own table (ui_table_menu): one row per connector,
 #              the sources already connected named in its Description; skipped
 #              when the command named a connector;
-#   2. fill    one panel per picked source, every field visible with its default,
-#              each answer checked by the engine where it was typed (cli.py field,
-#              the value on its stdin); a credential is a hidden prompt (or a key
-#              file's path) and stays in this shell's memory until it goes down
-#              the engine's stdin;
+#   2. fill    one panel per picked source, every field visible with (required)
+#              or (optional) and its default; first a connection string, read
+#              hidden (cli.py paste, on its stdin), that answers what it names,
+#              or Enter to type the fields; each answer checked by the engine
+#              where it was typed (cli.py field, the value on its stdin); a
+#              credential is a hidden prompt (or a key file's path) and stays in
+#              this shell's memory until it goes down the engine's stdin; then a
+#              numbered summary, where a number asks that one field again; a
+#              plan that refuses one input goes straight back to it, one naming
+#              several reopens the summary, where skip leaves the source out;
 #   3. review  the engine's plan for each (cli.py plan): what it downloads and who
 #              can read the result, then one table of the sources, one question;
 #   4. connect that table comes alive: one source at a time, a bar per row, then
@@ -347,9 +416,18 @@ _exakit_vs_result() {
 
 # _exakit_vs_tui_rows <characters> — how many terminal lines a line of that many
 # characters takes. A wrapped line counted as one is a stale line the next
-# redraw leaves behind.
+# redraw leaves behind. One that fills the last column exactly counts as two:
+# a terminal that wraps there (and readline, which forces the wrap) has moved
+# to the next line before the newline moves it again.
 _exakit_vs_tui_rows() {
-    if [ "$1" -le 0 ]; then echo 1; else echo $(( ($1 - 1) / _EVT_COLS + 1 )); fi
+    if [ "$1" -le 0 ]; then echo 1; else echo $(( $1 / _EVT_COLS + 1 )); fi
+}
+
+# _exakit_vs_tui_fit <text> <width> — the text, its END kept when it is wider
+# (_exakit_vs_tui_tail), or nothing when the width is too small to say anything.
+_exakit_vs_tui_fit() {
+    if [ "${#1}" -le "$2" ]; then printf '%s' "$1"
+    elif [ "$2" -ge 4 ]; then _exakit_vs_tui_tail "$1" "$2"; fi
 }
 
 # _exakit_vs_tui_short <text> <width> — the text with its START kept ("…" at the end).
@@ -423,51 +501,90 @@ $_evp_id"
     return 0
 }
 
-# _exakit_vs_tui_frame <title> <current-field> — the panel, built into _EVT_BUF
-# with its height in _EVT_BUF_N.
+# _exakit_vs_tui_frame <title> <current-field> [numbered] — the panel, built into
+# _EVT_BUF with its height in _EVT_BUF_N. A field still to answer is dim, with
+# (required) or (optional) and its default; an answered one is ticked - or, in
+# the summary (numbered), numbered for the reader to pick - and says so when a
+# pasted connection string gave it. What the engine said about that string
+# (_EVT_NOTES) stays under the panel while the form is open.
 _exakit_vs_tui_frame() {
     _EVT_BUF=""; _EVT_BUF_N=0
     _evf_t=" $1 "
     _evf_fill=$(( _EVT_IN - ${#_evf_t} - 1 )); [ "$_evf_fill" -ge 0 ] || _evf_fill=0
     _EVT_BUF="  $UI_ACCENT$UI_TL$UI_HR$UI_RESET$UI_BOLD$_evf_t$UI_RESET$UI_ACCENT${_EVT_HR:0:$_evf_fill}$UI_TR$UI_RESET"$'\n'
     _EVT_BUF_N=1
+    # What a row's value may take: the panel's inside less the mark and label.
+    _evf_room=$(( _EVT_IN - 7 - _EVT_LW ))
     _evf_i=0
     while [ "$_evf_i" -lt "$_EVT_NF" ]; do
         _evf_lab="${_EVT_LAB[$_evf_i]}"
         _evf_lab="$_evf_lab${_EVT_SP:0:$(( _EVT_LW - ${#_evf_lab} ))}"
         _evf_kind="${_EVT_KIND[$_evf_i]}"
+        _evf_lead=""
         if [ "$_evf_i" -eq "$2" ]; then
             _evf_mark="$UI_ACCENT$UI_ARROW$UI_RESET"; _evf_shown="$UI_BOLD$_evf_lab$UI_RESET"
             _evf_plain=""; _evf_val=""
         elif [ -n "${_EVT_DONE[$_evf_i]:-}" ]; then
             _evf_mark="$UI_OK$UI_TICK$UI_RESET"; _evf_shown="$_evf_lab"
+            # The summary's number takes the tick's place, in as many columns.
+            [ -n "${3:-}" ] && printf -v _evf_lead ' %s%2d%s  ' "$UI_ACCENT" $(( _evf_i + 1 )) "$UI_RESET"
             _evf_val="${_EVT_VAL[$_evf_i]}"
             if [ "$_evf_kind" = secret ]; then
                 if [ -n "$_evf_val" ]; then _evf_val="(given, hidden)"; else _evf_val="(read from a file)"; fi
             fi
-            [ -n "$_evf_val" ] || _evf_val="(none)"
-            _evf_plain="$(_exakit_vs_tui_tail "$_evf_val" "$_EVT_VW")"
+            # Emptied with "-": the default is what the plan will use.
+            [ -n "$_evf_val" ] || _evf_val="${_EVT_DEF[$_evf_i]:-(none)}"
+            _evf_from=""; [ -n "${_EVT_FROM[$_evf_i]:-}" ] && _evf_from=" (from the string)"
+            # Too narrow for both: the mark goes first, then the value is cut.
+            [ $(( ${#_evf_val} + ${#_evf_from} )) -le "$_evf_room" ] || _evf_from=""
+            _evf_plain="$(_exakit_vs_tui_fit "$_evf_val" "$_evf_room")"
             _evf_val="$_evf_plain"
+            if [ -n "$_evf_from" ]; then _evf_val="$_evf_val$UI_DIM$_evf_from$UI_RESET"; _evf_plain="$_evf_plain$_evf_from"; fi
         else
             _evf_mark=" "; _evf_shown="$UI_DIM$_evf_lab$UI_RESET"
+            _evf_req="(optional)"; [ -n "${_EVT_REQ[$_evf_i]}" ] && _evf_req="(required)"
             _evf_val="${_EVT_VAL[$_evf_i]:-${_EVT_DEF[$_evf_i]}}"
             case "$_evf_kind" in secret|secret-file) _evf_val="" ;; esac
-            [ -n "$_evf_val" ] && _evf_val="[$(_exakit_vs_tui_tail "$_evf_val" $(( _EVT_VW - 2 )))]"
-            _evf_plain="$_evf_val"; _evf_val="$UI_DIM$_evf_val$UI_RESET"
+            _evf_plain="$_evf_req"; [ -n "$_evf_val" ] && _evf_plain="$_evf_req [$_evf_val]"
+            if [ "${#_evf_plain}" -gt "$_evf_room" ]; then
+                # Too narrow: the mark goes first, then the default is cut,
+                # then it goes too (the question says both again).
+                _evf_plain=""
+                [ -n "$_evf_val" ] && [ "$_evf_room" -ge 6 ] && _evf_plain="[$(_exakit_vs_tui_fit "$_evf_val" $(( _evf_room - 2 )))]"
+            fi
+            _evf_val="$UI_DIM$_evf_plain$UI_RESET"
         fi
+        [ -n "$_evf_lead" ] || _evf_lead="  $_evf_mark  "
         _evf_pad=$(( _EVT_IN - 7 - _EVT_LW - ${#_evf_plain} )); [ "$_evf_pad" -ge 0 ] || _evf_pad=0
-        _EVT_BUF="$_EVT_BUF  $UI_ACCENT$UI_VB$UI_RESET  $_evf_mark  $_evf_shown  $_evf_val${_EVT_SP:0:$_evf_pad}$UI_ACCENT$UI_VB$UI_RESET"$'\n'
+        _EVT_BUF="$_EVT_BUF  $UI_ACCENT$UI_VB$UI_RESET$_evf_lead$_evf_shown  $_evf_val${_EVT_SP:0:$_evf_pad}$UI_ACCENT$UI_VB$UI_RESET"$'\n'
         _EVT_BUF_N=$(( _EVT_BUF_N + 1 ))
         _evf_i=$(( _evf_i + 1 ))
     done
     _EVT_BUF="$_EVT_BUF  $UI_ACCENT$UI_BL${_EVT_HR:0:$_EVT_IN}$UI_BR$UI_RESET"$'\n'
     _EVT_BUF_N=$(( _EVT_BUF_N + 1 ))
+    [ -n "${_EVT_NOTES:-}" ] || return 0
+    while IFS= read -r _evf_note; do
+        [ -n "$_evf_note" ] || continue
+        _evf_nm="$UI_DIM$UI_BULLET$UI_RESET"
+        case "$_evf_note" in "WARN "*) _evf_nm="$UI_WARN!$UI_RESET" ;; esac
+        _ui_wrap "${_evf_note#* }" $(( _EVT_COLS - 8 ))
+        _evf_k=0
+        while [ "$_evf_k" -lt "$_UI_WRAP_N" ]; do
+            if [ "$_evf_k" -eq 0 ]; then _EVT_BUF="$_EVT_BUF    $_evf_nm ${_UI_WRAP[0]}"$'\n'
+            else _EVT_BUF="$_EVT_BUF      ${_UI_WRAP[$_evf_k]}"$'\n'; fi
+            _EVT_BUF_N=$(( _EVT_BUF_N + 1 ))
+            _evf_k=$(( _evf_k + 1 ))
+        done
+    done <<EOF
+$_EVT_NOTES
+EOF
 }
 
-# _exakit_vs_tui_draw <title> <current-field> — the panel over what this form
-# drew last (_EVT_ON_SCREEN lines: the panel and every line under it), in one write.
+# _exakit_vs_tui_draw <title> <current-field> [numbered] — the panel over what
+# this form drew last (_EVT_ON_SCREEN lines: the panel and every line under it),
+# in one write.
 _exakit_vs_tui_draw() {
-    _exakit_vs_tui_frame "$1" "$2"
+    _exakit_vs_tui_frame "$1" "$2" "${3:-}"
     if [ "$_EVT_ON_SCREEN" -gt 0 ]; then
         printf '\r\033[%dA\033[0J%s' "$_EVT_ON_SCREEN" "$_EVT_BUF"
     else
@@ -499,6 +616,7 @@ _exakit_vs_tui_ask() {
         _eva_saved="$(stty -g 2>/dev/null)"
         trap 'stty "${_eva_saved:-echo}" 2>/dev/null; printf "\n"; exit 130' INT TERM
         if ! stty -echo 2>/dev/null; then
+            _EVT_NOHIDE=1
             _exakit_vs_tui_say "$UI_ERR$UI_CROSS$UI_RESET" "this terminal cannot hide input; give the credential with --password-file"
             _EVT_ANSWER=""; trap - INT TERM; return 1
         fi
@@ -567,6 +685,214 @@ EOF
     exakit_vs_engine "$@"
 }
 
+# _exakit_vs_tui_field <i> [why] — field i asked under the panel (with why it is
+# asked again, when there is a reason): its label, (required) or (optional), its
+# notes and its default. Enter takes the default; an optional one with none is
+# left empty, a required one is refused in one line and asked again. The engine
+# checks a typed answer (cli.py field, the value on its stdin, never in argv); a
+# credential is hidden, and asked again keeps the one given on Enter. Returns 1
+# at end of input. Twin of Read-ExakitVsTuiField.
+_exakit_vs_tui_field() {
+    _etf_i="$1"
+    _exakit_vs_tui_draw "$_evo_title" "$_etf_i"
+    [ -n "${2:-}" ] && _exakit_vs_tui_say "$UI_ERR$UI_CROSS$UI_RESET" "$2"
+    _etf_k="${_EVT_KIND[$_etf_i]}"; _etf_lab="${_EVT_LAB[$_etf_i]}"; _etf_req="${_EVT_REQ[$_etf_i]}"
+    _etf_old="${_EVT_VAL[$_etf_i]}"
+    _etf_def="${_EVT_VAL[$_etf_i]:-${_EVT_DEF[$_etf_i]}}"
+    _etf_keep=""
+    _etf_note="(optional)"; [ -n "$_etf_req" ] && _etf_note="(required)"
+    case "$_etf_k" in
+        choice) _etf_note="$_etf_note ($(printf '%s' "${_EVT_CH[$_etf_i]}" | sed 's/ / · /g'))" ;;
+        secret) _etf_def=""
+                # Given already - typed, or read from --password-file: Enter keeps it.
+                if [ -n "$_etf_old" ] || { [ -n "${_EVT_DONE[$_etf_i]}" ] && [ -n "$_evo_pwfile" ]; }; then
+                    _etf_keep=1; _etf_note="$_etf_note (hidden, Enter keeps the one given)"
+                else _etf_note="$_etf_note (hidden)"; fi ;;
+        secret-file) _etf_note="$_etf_note (the path to the file)" ;;
+    esac
+    # An optional answer that differs from its default can be taken back.
+    if [ -z "$_etf_req" ] && [ -n "$_etf_old" ] && [ "$_etf_old" != "${_EVT_DEF[$_etf_i]}" ]; then
+        case "$_etf_k" in secret|secret-file) ;; *) _etf_note="$_etf_note (- clears it)" ;; esac
+    fi
+    [ -n "$_etf_def" ] && _etf_note="$_etf_note [$(_exakit_vs_tui_tail "$_etf_def" 32)]"
+    _etf_plain="$_etf_lab $_etf_note"
+    if [ "$_etf_k" = secret ]; then
+        _etf_deco="$UI_ASK$_etf_lab$UI_RESET $UI_DIM$_etf_note$UI_RESET"
+    else
+        _etf_deco=$'\001'"$UI_ASK"$'\002'"$_etf_lab"$'\001'"$UI_RESET"$'\002'" "$'\001'"$UI_DIM"$'\002'"$_etf_note"$'\001'"$UI_RESET"$'\002'
+    fi
+    while :; do
+        if [ "$_etf_k" = secret ]; then
+            _exakit_vs_tui_ask "$_etf_plain" "$_etf_deco" 1 || return 1
+            if [ -z "$_EVT_ANSWER" ]; then
+                [ -n "$_etf_keep" ] && break
+                if [ -n "$_etf_req" ]; then
+                    _exakit_vs_tui_say "$UI_ERR$UI_CROSS$UI_RESET" "${_EVT_LABF[$_etf_i]} is required; it stays in memory and goes only to the database"
+                    continue
+                fi
+            fi
+            _EVT_VAL[$_etf_i]="$_EVT_ANSWER"; _EVT_ANSWER=""
+            break
+        fi
+        _exakit_vs_tui_ask "$_etf_plain" "$_etf_deco" 0 || return 1
+        if [ "$_EVT_ANSWER" = "-" ] && [ -z "$_etf_req" ]; then _EVT_VAL[$_etf_i]=""; break; fi
+        _etf_v="${_EVT_ANSWER:-$_etf_def}"
+        case "$_etf_v" in "~/"*) _etf_v="$HOME/${_etf_v#\~/}" ;; esac
+        if [ -z "$_etf_v" ]; then
+            if [ -n "$_etf_req" ]; then
+                _exakit_vs_tui_say "$UI_ERR$UI_CROSS$UI_RESET" "${_EVT_LABF[$_etf_i]} is required"
+                continue
+            fi
+            _EVT_VAL[$_etf_i]=""
+            break
+        fi
+        if [ "$_etf_k" = secret-file ]; then
+            if [ -f "$_etf_v" ] && [ -r "$_etf_v" ]; then _EVT_VAL[$_etf_i]="$_etf_v"; break; fi
+            _exakit_vs_tui_say "$UI_ERR$UI_CROSS$UI_RESET" "$_etf_v cannot be read here; give the path to the key file"
+            continue
+        fi
+        # The engine's own rule for this input, in the words a scripted
+        # connect would get; the value travels on its stdin, never in argv.
+        printf '%s' "$_etf_v" | exakit_vs_engine field "$_evo_id" "${_EVT_NAME[$_etf_i]}" \
+            > "$_EVT_DIR/field" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
+        if [ $? -eq 0 ]; then
+            _etf_v="$(_exakit_vs_result "$_EVT_DIR/field" | run_python_any -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
+            if [ "$_etf_k" = source-name ]; then
+                case " ${_EVT_TAKEN:-} " in *" $_etf_v "*)
+                    _exakit_vs_tui_say "$UI_ERR$UI_CROSS$UI_RESET" "$_etf_v is already the name of another source in this list"
+                    continue ;;
+                esac
+            fi
+            _EVT_VAL[$_etf_i]="$_etf_v"
+            break
+        fi
+        _exakit_vs_tui_say "$UI_ERR$UI_CROSS$UI_RESET" "$(sed -n 's/^FAIL //p' "$_EVT_DIR/field" | head -1)"
+    done
+    _EVT_DONE[$_etf_i]=1
+    # Changed by hand, it is no longer what the connection string said.
+    [ "${_EVT_VAL[$_etf_i]}" = "$_etf_old" ] || _EVT_FROM[$_etf_i]=""
+    return 0
+}
+
+# _exakit_vs_tui_walk [why] — every field not answered yet, in order; 1 at end
+# of input. Twin of Invoke-ExakitVsTuiWalk.
+_exakit_vs_tui_walk() {
+    _etw_f=0
+    while [ "$_etw_f" -lt "$_EVT_NF" ]; do
+        if [ -z "${_EVT_DONE[$_etw_f]}" ]; then _exakit_vs_tui_field "$_etw_f" "${1:-}" || return 1; fi
+        _etw_f=$(( _etw_f + 1 ))
+    done
+    return 0
+}
+
+# _exakit_vs_tui_review [why] — the summary before the plan: the panel with
+# every answer numbered (a credential as hidden, a key file by its path), with
+# why it is shown again when a plan refused. A number asks that one field again,
+# then the summary comes back; Enter goes on. Once a plan has refused this source
+# (_evo_refused), skip leaves it out. Returns 1 at end of input, 2 for skip.
+# Twin of Invoke-ExakitVsTuiReview.
+_exakit_vs_tui_review() {
+    _etv_why="${1:-}"
+    _etv_q="Number to change, Enter to continue"
+    [ -n "${_evo_refused:-}" ] && _etv_q="$_etv_q, skip to leave this source out"
+    _etv_deco=$'\001'"$UI_ASK"$'\002'"Number to change"$'\001'"$UI_RESET$UI_DIM"$'\002'"${_etv_q#Number to change}"$'\001'"$UI_RESET"$'\002'
+    while :; do
+        _exakit_vs_tui_draw "$_evo_title" -1 numbered
+        [ -n "$_etv_why" ] && _exakit_vs_tui_say "$UI_ERR$UI_CROSS$UI_RESET" "$_etv_why"
+        _exakit_vs_tui_ask "$_etv_q" "$_etv_deco" 0 || return 1
+        _etv_n="$(printf '%s' "$_EVT_ANSWER" | tr -d ' ')"
+        [ "$_etv_n" = skip ] && [ -n "${_evo_refused:-}" ] && return 2
+        if [ -z "$_etv_n" ]; then
+            # The answers as they stand, ticked again, the question gone.
+            _exakit_vs_tui_draw "$_evo_title" -1
+            return 0
+        fi
+        case "$_etv_n" in
+            [0-9]|[0-9][0-9])
+                _etv_n=$(( 10#$_etv_n ))
+                if [ "$_etv_n" -ge 1 ] && [ "$_etv_n" -le "$_EVT_NF" ]; then
+                    _exakit_vs_tui_field $(( _etv_n - 1 )) || return 1
+                    _etv_why=""
+                    continue
+                fi ;;
+        esac
+        _etv_why="give a number from 1 to $_EVT_NF, or press Enter to continue"
+    done
+}
+
+# _exakit_vs_tui_paste — the form's first question, for a connector that reads a
+# connection string (its paste block): read hidden, the string goes to the
+# engine's paste on stdin, never in argv, and is not kept. What it names is answered, marked "from
+# the string" and not asked; the engine's notes (a credential in it ignored, to
+# be asked for hidden) stay under the panel. A string it cannot read is said, in
+# the engine's words, and asked again; Enter types the fields instead. Returns 1
+# at end of input. Twin of Invoke-ExakitVsTuiPaste.
+_exakit_vs_tui_paste() {
+    _etp_forms="$(_exakit_vs_paste_forms "$_evo_id")"
+    [ -n "$_etp_forms" ] || return 0
+    _etp_why=""
+    # Read with echo off, as a password is: the string often holds one. Only
+    # the fields it filled are shown afterwards.
+    _etp_deco="${UI_ASK}Connection string$UI_RESET $UI_DIM(hidden; Enter to type the fields)$UI_RESET"
+    while :; do
+        _exakit_vs_tui_draw "$_evo_title" -1
+        _exakit_vs_tui_say "$UI_DIM$UI_BULLET$UI_RESET" "Paste the source's connection string as it shows it: $_etp_forms"
+        [ -n "$_etp_why" ] && _exakit_vs_tui_say "$UI_ERR$UI_CROSS$UI_RESET" "$_etp_why"
+        _EVT_NOHIDE=""
+        if ! _exakit_vs_tui_ask "Connection string (hidden; Enter to type the fields)" "$_etp_deco" 1; then
+            # A terminal that cannot hide input is not asked: the fields are.
+            [ -n "$_EVT_NOHIDE" ] && return 0
+            return 1
+        fi
+        [ -n "$_EVT_ANSWER" ] || return 0
+        printf '%s' "$_EVT_ANSWER" | exakit_vs_engine paste "$_evo_id" > "$_EVT_DIR/paste" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
+        _etp_rc=$?
+        _EVT_ANSWER=""
+        if [ "$_etp_rc" -ne 0 ]; then
+            _etp_why="$(sed -n 's/^FAIL //p' "$_EVT_DIR/paste" | head -1)"
+            [ -n "$_etp_why" ] || _etp_why="the connection string could not be read"
+            continue
+        fi
+        _etp_pairs="$(_exakit_vs_result "$_EVT_DIR/paste" | run_python_any -c 'import json, sys
+for k, v in json.load(sys.stdin)["values"].items():
+    print("%s=%s" % (k, v))')"
+        while IFS= read -r _etp_kv; do
+            [ -n "$_etp_kv" ] || continue
+            _etp_f=0
+            while [ "$_etp_f" -lt "$_EVT_NF" ]; do
+                if [ "${_EVT_NAME[$_etp_f]}" = "${_etp_kv%%=*}" ]; then
+                    _EVT_VAL[$_etp_f]="${_etp_kv#*=}"; _EVT_DONE[$_etp_f]=1; _EVT_FROM[$_etp_f]=1
+                fi
+                _etp_f=$(( _etp_f + 1 ))
+            done
+        done <<EOF
+$_etp_pairs
+EOF
+        _EVT_NOTES="$(grep -E '^(WARN|INFO) ' "$_EVT_DIR/paste" | _exakit_vs_paste_typed)"
+        rm -f "$_EVT_DIR/paste"
+        return 0
+    done
+}
+
+# _exakit_vs_tui_named <message> — the field a plan's refusal names: its index
+# when it names one, -2 when it names several, -1 when none. Input names count
+# first, as whole words in any case ("host", "tls=verify", "URI"; the source
+# name as "source name", not the bare word); only when none is named, the
+# labels, the same way ("Port" is not "report"). Twin of Find-ExakitVsTuiNamed.
+_exakit_vs_tui_named() {
+    run_python_any - "$_EVT_DIR/fields" "$1" <<'PY' 2>/dev/null || printf '%s\n' -1
+import re, sys
+fields = [(line.split("|") + ["", "", ""])[:3] for line in open(sys.argv[1]).read().splitlines()[1:]]
+text = sys.argv[2]
+def named(word):
+    return bool(word) and re.search(r"(?<![A-Za-z0-9_])%s(?![A-Za-z0-9_])" % re.escape(word), text, re.I) is not None
+hits = [i for i, (name, _, kind) in enumerate(fields) if named("source name" if kind == "source-name" else name)]
+if not hits:
+    hits = [i for i, (_, label, _) in enumerate(fields) if named(label)]
+print(hits[0] if len(hits) == 1 else (-2 if hits else -1))
+PY
+}
+
 # _exakit_vs_tui_form <connector> <pos> <total> <given-name> <given-sets> <password-file>
 # — one source's panel; on success it joins the _EVT_S_* lists. Returns 5 when
 # the reader left it out, 2 when its definition could not be read.
@@ -592,13 +918,14 @@ for f in doc["inputs"]:
                    (f["name"], label, f["kind"], "1" if f["required"] else "", f["default"], " ".join(f["choices"]))))
 PY
     _evo_label=""
-    _EVT_NAME=(); _EVT_LAB=(); _EVT_KIND=(); _EVT_REQ=(); _EVT_DEF=(); _EVT_CH=(); _EVT_VAL=(); _EVT_DONE=()
+    _EVT_NAME=(); _EVT_LAB=(); _EVT_LABF=(); _EVT_KIND=(); _EVT_REQ=(); _EVT_DEF=(); _EVT_CH=(); _EVT_VAL=(); _EVT_DONE=()
+    _EVT_FROM=(); _EVT_NOTES=""
     _EVT_NF=0; _EVT_LW=0
     while IFS='|' read -r _evo_n _evo_l _evo_k _evo_r _evo_d _evo_c; do
         if [ -z "$_evo_label" ]; then _evo_label="$_evo_n"; continue; fi
-        _EVT_NAME[$_EVT_NF]="$_evo_n"; _EVT_LAB[$_EVT_NF]="$_evo_l"; _EVT_KIND[$_EVT_NF]="$_evo_k"
+        _EVT_NAME[$_EVT_NF]="$_evo_n"; _EVT_LAB[$_EVT_NF]="$_evo_l"; _EVT_LABF[$_EVT_NF]="$_evo_l"; _EVT_KIND[$_EVT_NF]="$_evo_k"
         _EVT_REQ[$_EVT_NF]="$_evo_r"; _EVT_DEF[$_EVT_NF]="$_evo_d"; _EVT_CH[$_EVT_NF]="$_evo_c"
-        _EVT_VAL[$_EVT_NF]=""; _EVT_DONE[$_EVT_NF]=""
+        _EVT_VAL[$_EVT_NF]=""; _EVT_DONE[$_EVT_NF]=""; _EVT_FROM[$_EVT_NF]=""
         # What the command line already said is an answer, not a question.
         if [ "$_evo_k" = source-name ] && [ -n "$4" ]; then _EVT_VAL[$_EVT_NF]="$4"; _EVT_DONE[$_EVT_NF]=1; fi
         _evo_given="$(printf '%s\n' "$5" | sed -n "s/^$_evo_n=//p" | tail -1)"
@@ -618,78 +945,49 @@ PY
         _EVT_LAB[$_evo_f]="$(_exakit_vs_tui_short "${_EVT_LAB[$_evo_f]}" "$_EVT_LW")"
         _evo_f=$(( _evo_f + 1 ))
     done
-    _EVT_VW=$(( _EVT_IN - 7 - _EVT_LW - 2 ))
     _evo_title="$_evo_pos of $_evo_total · $_evo_label"
+    _EVT_ON_SCREEN=0
+    # 1. A connection string first, when the command line answered nothing but
+    # the name: what it names is answered (and marked so), the rest asked next.
+    _evo_asked=""; _evo_f=0
+    while [ "$_evo_f" -lt "$_EVT_NF" ]; do
+        case "${_EVT_KIND[$_evo_f]}" in
+            source-name|secret|secret-file) ;;
+            *) [ -n "${_EVT_DONE[$_evo_f]}" ] && _evo_asked=1 ;;
+        esac
+        _evo_f=$(( _evo_f + 1 ))
+    done
+    if [ -z "$_evo_asked" ]; then _exakit_vs_tui_paste || return 5; fi
+    # 2. every field not answered yet
+    _exakit_vs_tui_walk || return 5
+    _evo_refused=""; _evo_again=""
     while :; do
-        _EVT_ON_SCREEN=0
-        _evo_f=0
-        while [ "$_evo_f" -lt "$_EVT_NF" ]; do
-            if [ -n "${_EVT_DONE[$_evo_f]}" ]; then _evo_f=$(( _evo_f + 1 )); continue; fi
-            _exakit_vs_tui_draw "$_evo_title" "$_evo_f"
-            _evo_k="${_EVT_KIND[$_evo_f]}"; _evo_def="${_EVT_VAL[$_evo_f]:-${_EVT_DEF[$_evo_f]}}"
-            _evo_note=""
-            case "$_evo_k" in
-                choice) _evo_note="($(printf '%s' "${_EVT_CH[$_evo_f]}" | sed 's/ / · /g'))" ;;
-                secret) _evo_note="(hidden)"; _evo_def="" ;;
-                secret-file) _evo_note="(the path to the file)" ;;
-            esac
-            [ -n "$_evo_def" ] && _evo_note="${_evo_note:+$_evo_note }[$(_exakit_vs_tui_tail "$_evo_def" 32)]"
-            _evo_plain="${_EVT_LAB[$_evo_f]}${_evo_note:+ $_evo_note}"
-            if [ "$_evo_k" = secret ]; then
-                _evo_deco="$UI_ASK${_EVT_LAB[$_evo_f]}$UI_RESET $UI_DIM$_evo_note$UI_RESET"
-            else
-                _evo_deco=$'\001'"$UI_ASK"$'\002'"${_EVT_LAB[$_evo_f]}"$'\001'"$UI_RESET"$'\002'
-                [ -n "$_evo_note" ] && _evo_deco="$_evo_deco "$'\001'"$UI_DIM"$'\002'"$_evo_note"$'\001'"$UI_RESET"$'\002'
-            fi
-            while :; do
-                if [ "$_evo_k" = secret ]; then
-                    _exakit_vs_tui_ask "$_evo_plain" "$_evo_deco" 1 || return 5
-                    if [ -z "$_EVT_ANSWER" ]; then
-                        _exakit_vs_tui_say "$UI_ERR$UI_CROSS$UI_RESET" "this one is needed; it stays in memory and goes only to the database"
-                        continue
-                    fi
-                    _EVT_VAL[$_evo_f]="$_EVT_ANSWER"; _EVT_ANSWER=""
-                    break
-                fi
-                _exakit_vs_tui_ask "$_evo_plain" "$_evo_deco" 0 || return 5
-                _evo_v="${_EVT_ANSWER:-$_evo_def}"
-                case "$_evo_v" in "~/"*) _evo_v="$HOME/${_evo_v#\~/}" ;; esac
-                if [ "$_evo_k" = secret-file ]; then
-                    if [ -n "$_evo_v" ] && [ -f "$_evo_v" ] && [ -r "$_evo_v" ]; then _EVT_VAL[$_evo_f]="$_evo_v"; break; fi
-                    _exakit_vs_tui_say "$UI_ERR$UI_CROSS$UI_RESET" "${_evo_v:-no file} cannot be read here; give the path to the key file"
-                    continue
-                fi
-                # The engine's own rule for this input, in the words a scripted
-                # connect would get; the value travels on its stdin, never in argv.
-                printf '%s' "$_evo_v" | exakit_vs_engine field "$_evo_id" "${_EVT_NAME[$_evo_f]}" \
-                    > "$_EVT_DIR/field" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
-                if [ $? -eq 0 ]; then
-                    _evo_v="$(_exakit_vs_result "$_EVT_DIR/field" | run_python_any -c 'import json,sys; print(json.load(sys.stdin)["value"])')"
-                    if [ "$_evo_k" = source-name ]; then
-                        case " ${_EVT_TAKEN:-} " in *" $_evo_v "*)
-                            _exakit_vs_tui_say "$UI_ERR$UI_CROSS$UI_RESET" "$_evo_v is already the name of another source in this list"
-                            continue ;;
-                        esac
-                    fi
-                    _EVT_VAL[$_evo_f]="$_evo_v"
-                    break
-                fi
-                _exakit_vs_tui_say "$UI_ERR$UI_CROSS$UI_RESET" "$(sed -n 's/^FAIL //p' "$_EVT_DIR/field" | head -1)"
-            done
-            _EVT_DONE[$_evo_f]=1
-            _evo_f=$(( _evo_f + 1 ))
-        done
-        _exakit_vs_tui_draw "$_evo_title" -1
+        # 3. the numbered summary: one answer at a time asked again, then Enter
+        _exakit_vs_tui_review "$_evo_again" || return 5
+        _evo_again=""
         # The whole source, checked by the plan: what one field cannot see (a CA
         # with tls=require), and what will be downloaded.
         _exakit_vs_tui_engine "$(_exakit_vs_tui_args)" plan < /dev/null \
             > "$_EVT_DIR/plan.$_EVT_COUNT" 2>>"${EXAKIT_LOG_FILE:-/dev/null}" && break
-        _exakit_vs_tui_say "$UI_ERR$UI_CROSS$UI_RESET" "$(sed -n 's/^FAIL //p' "$_EVT_DIR/plan.$_EVT_COUNT" | head -1)"
+        _evo_why="$(sed -n 's/^FAIL //p' "$_EVT_DIR/plan.$_EVT_COUNT" | head -1)"
+        _evo_refused=1
+        # A refusal that names one input goes straight back to that one, its
+        # reason above the question; one that names several opens the summary
+        # with the reason; any other is said, and every answer can be given
+        # again. The summary then offers skip, so no refusal is a dead end.
+        _evo_at="$(_exakit_vs_tui_named "$_evo_why")"
+        case "$_evo_at" in -2) ;; ''|*[!0-9]*) _evo_at=-1 ;; esac
+        if [ "$_evo_at" -ge 0 ]; then
+            _exakit_vs_tui_field "$_evo_at" "$_evo_why" || return 5
+            continue
+        fi
+        if [ "$_evo_at" -eq -2 ]; then _evo_again="$_evo_why"; continue; fi
+        _exakit_vs_tui_say "$UI_ERR$UI_CROSS$UI_RESET" "$_evo_why"
         _exakit_vs_tui_yes "Change the answers?" || return 5
-        printf '\n'
         _evo_f=0
         while [ "$_evo_f" -lt "$_EVT_NF" ]; do _EVT_DONE[$_evo_f]=""; _evo_f=$(( _evo_f + 1 )); done
         _evo_pwfile=""
+        _exakit_vs_tui_walk "$_evo_why" || return 5
     done
     # Kept for the review and the run, one entry per source.
     _evo_name=""; _evo_secret=""; _evo_sfile=""; _evo_sets=""; _evo_where=""
@@ -969,11 +1267,12 @@ if p.get("exposure"):
     return "$_EVT_RC"
 }
 
-# _exakit_vs_paste <connector> <string> - the inputs a pasted connection string
-# names (engine paste, the string on its stdin, never an argument), its notes
-# shown, as --set pairs put BEFORE the command line's own in EXAKIT_VS_SETS - the
-# engine's pairs() keeps the last, so an explicit --set wins - and their names
-# added to EXAKIT_VS_GIVEN, so they are not asked for again.
+# _exakit_vs_paste <connector> <string> [typed] - the inputs a pasted connection
+# string names (engine paste, the string on its stdin, never an argument), its
+# notes shown, as --set pairs put BEFORE the command line's own in EXAKIT_VS_SETS
+# - the engine's pairs() keeps the last, so an explicit --set wins - and their
+# names added to EXAKIT_VS_GIVEN, so they are not asked for again. typed: the
+# string was typed at a prompt, not given with --url (_exakit_vs_paste_typed).
 _exakit_vs_paste() {
     _evp_out="$(mktemp "${TMPDIR:-/tmp}/exakit-vs-paste.XXXXXX")" || {
         _exakit_vs_no_tmp && return 1
@@ -987,7 +1286,12 @@ _exakit_vs_paste() {
     else
         printf '%s' "$2" | exakit_vs_engine paste "$1" > "$_evp_out" 2>>"${EXAKIT_LOG_FILE:-/dev/null}"
         _evp_rc=$?
-        _exakit_vs_render "$_evp_out"; rm -f "$_evp_out"
+        if [ -n "${3:-}" ]; then
+            _exakit_vs_render <(_exakit_vs_paste_typed < "$_evp_out")
+        else
+            _exakit_vs_render "$_evp_out"
+        fi
+        rm -f "$_evp_out"
         [ "$_evp_rc" -eq 0 ] || return "$_evp_rc"
     fi
     _evp_pairs="$(printf '%s' "$EXAKIT_VS_RESULT" | run_python_any -c 'import json, sys
@@ -1071,6 +1375,14 @@ $2"; EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${2%%=*}"; shift ;;
     # --json never asks: a terminal is as good as none.
     _cc_tty=""
     [ "$_cc_json" = 1 ] || _cc_tty="$(_exakit_prompt_tty)"
+    # Someone answering at a terminal: each question says (required) or
+    # (optional), and a connection string can stand for the fields. A pipe on
+    # stdin (even with a terminal behind /dev/tty), --yes, --dry-run and --json
+    # ask exactly as they always did - as Test-ExakitInteractive has it.
+    _cc_ask=""
+    if [ -t 0 ] && [ -n "$_cc_tty" ] && [ "$_cc_dry" = 0 ] && [ "$_cc_json" = 0 ] && [ "${EXAKIT_VS_ASSUME_YES:-0}" != 1 ]; then
+        _cc_ask=1
+    fi
     if [ -z "$_cc_source" ]; then
         [ -n "$_cc_tty" ] || _exakit_vs_refuse 2 "Name the source to connect, e.g. exakit connect postgresql (see: exakit source catalog)." \
             "no source was named" "name the source to connect, e.g. exakit connect postgresql; every connector: exakit source catalog" \
@@ -1091,13 +1403,14 @@ $2"; EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${2%%=*}"; shift ;;
             exit "$_cc_rc"
         fi
     fi
+    [ -n "$_cc_ask" ] && [ -z "$EXAKIT_VS_GIVEN" ] && _exakit_vs_ask_paste "$_cc_resolved"
     # With --json a missing name is the plan's refusal, after the gate, as
     # resolve orders them here without it.
     if [ -z "$_cc_name" ] && [ "$_cc_json" = 0 ]; then
         [ -n "$_cc_tty" ] || reject "Give the connection a name with --name (lower case, e.g. sales)."
-        _cc_name="$(prompt_text "Name for this connection (lower case, e.g. sales)" "")"
+        _cc_name="$(_exakit_vs_prompt "Name for this connection (lower case, e.g. sales)" "" 1 "$_cc_ask" "Name for this connection")"
     fi
-    [ -n "$_cc_tty" ] && _exakit_vs_ask_inputs "$_cc_resolved"
+    [ -n "$_cc_tty" ] && _exakit_vs_ask_inputs "$_cc_resolved" "$_cc_ask"
     # Build the engine's argument list from the newline-separated pairs; bash
     # 3.2 has no arrays worth trusting with this, so the positional
     # parameters carry it.

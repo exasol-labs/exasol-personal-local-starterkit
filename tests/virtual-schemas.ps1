@@ -87,6 +87,8 @@ Check "a non-ASCII credential reaches the CONNECTION byte for byte" $secret $db.
 Check "...and is in none of the output" $false (($r.Lines -join "`n").Contains($secret.Substring(0, 5)))
 $result = Show-ExakitVsLines -Lines (Invoke-ExakitVsEngine -Arguments @("list")).Lines
 Check "list comes back parsed" "sales" (@($result.sources)[0].name)
+$r = Invoke-ExakitVsEngine -Arguments @("paste", "pg", "--base64") -Secret "jdbc:postgresql://h/db?user=r&password=Abc&Xyz9"
+Check "paste through the bridge: a password's unencoded & leaks no name" $false (($r.Lines -join "`n").Contains("Xyz9"))
 
 Write-Host ""
 Write-Host "== repair and retry =="
@@ -233,6 +235,238 @@ Check "...the string's inputs come before the command line's --set, which wins" 
 Check "...the password is in no argument" $false ((($calls -join "`n")).Contains("url9"))
 Check "...nor in the output" $false (((@($out) -join "`n")).Contains("url9"))
 Check "...whose note says it was not used" $true (((@($out) -join "`n")).Contains("The string was on the command line"))
+
+Write-Host ""
+Write-Host "== the connect form: required or optional, a pasted string, one answer changed =="
+# Invoke-ExakitVsTuiForm in a child PowerShell, with the real bridge and engine on
+# the simulated database. The console's answers come from a file and every
+# question is recorded: its text, and whether it was asked hidden.
+$formChild = @'
+param($repo, $defs, $kitHome, $deploy, $python, $answers, $record, $planFail)
+$ErrorActionPreference = "Stop"
+$script:ExakitHome = $kitHome
+function Write-ExakitLog { param($L, $M) }
+function Ok([string]$M) { Write-Host "OK $M" }
+function Info([string]$M) { Write-Host "INFO $M" }
+function Warn2([string]$M) { Write-Host "WARN $M" }
+function Get-ExakitRepoRoot { return $null }
+function Get-PyexasolVenvPython { return $python }
+function Get-ExakitManifestValue { param([string]$Path)
+    switch ($Path) { "runtime.deployment_dir" { return $deploy } "runtime.dsn" { return "127.0.0.1:8563" } "runtime.user" { return "sys" } default { return "" } } }
+. (Join-Path $repo "setup/lib/ui.ps1")
+. (Join-Path $repo "setup/lib/core-setup.ps1")
+. (Join-Path $repo "setup/lib/virtual-schemas.ps1")
+function Get-ExakitVsDefs { return $defs }
+$script:UiFancy = $false
+Set-ExakitPalette
+$script:EvtCols = 100
+if ($env:FORM_COLS) { $script:EvtCols = [int]$env:FORM_COLS }
+$script:EvtIn = [Math]::Min($script:EvtCols - 2, 96) - 4; $script:EvtOnScreen = 0
+$script:queue = New-Object System.Collections.ArrayList
+foreach ($line in @(Get-Content -LiteralPath $answers)) { [void]$script:queue.Add("" + $line) }
+function Read-ExakitVsTuiAnswer { param([string]$Plain, [string]$Colour, [switch]$Hidden)
+    $tag = "ASK"
+    if ($Hidden) { $tag = "HIDDEN" }
+    Add-Content -LiteralPath $record -Value "$tag $Plain"
+    if ($script:queue.Count -eq 0) { return $null }
+    $a = $script:queue[0]; $script:queue.RemoveAt(0)
+    return $a }
+function Confirm-ExakitVsTui { param([string]$Question) Add-Content -LiteralPath $record -Value "CONFIRM $Question"; return $false }
+if ($planFail) {
+    # The first plan refuses an input the form's own checks let through.
+    $realEngine = ${function:Invoke-ExakitVsEngine}
+    $script:refused = $false
+    function Invoke-ExakitVsEngine { param([string[]]$Arguments = @(), [string]$Secret = "")
+        if ($Arguments[0] -eq "plan" -and -not $script:refused) {
+            $script:refused = $true
+            return [pscustomobject]@{ Code = 2; Lines = @("FAIL " + $planFail) }
+        }
+        return (& $realEngine -Arguments $Arguments -Secret $Secret) }
+}
+$pw = ""
+if ($env:FORM_PWFILE) { $pw = $env:FORM_PWFILE }
+$src = Invoke-ExakitVsTuiForm -Connector "postgresql" -Pos 1 -Total 1 -PasswordFile $pw
+if ($src -is [string]) { Write-Host "FORM $src" }
+else {
+    Write-Host ("FORM " + ($src.Base -join " ")); Write-Host ("SECRET " + ($src.Secret -eq $env:FORM_SECRET))
+    Write-Host ("SECRETFILE " + ($src.SecretFile -eq $pw))
+}
+'@
+$formChildFile = Join-Path $work "form-child.ps1"; Set-Content -LiteralPath $formChildFile -Value $formChild -Encoding ASCII
+$formAnswers = Join-Path $work "form-answers.txt"
+$formRecord = Join-Path $work "form-record.txt"
+$env:FORM_SECRET = "Form-s3cret-" + [char]0x20AC
+$pastePw = "Paste-pw-zz8"
+function Invoke-FormChild([string[]]$Answers, [string]$PlanFail = "") {
+    Set-Content -LiteralPath $formAnswers -Value $Answers -Encoding UTF8
+    Remove-Item -LiteralPath $formRecord -ErrorAction SilentlyContinue
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $o = & $pwsh -NoProfile -File $formChildFile $repo $defs $home2 $deploy $python $formAnswers $formRecord $PlanFail 2>&1
+    $ErrorActionPreference = $previous
+    $script:formOut = (@($o) | ForEach-Object { "$_" }) -join "`n"
+    $script:formAsked = @(Get-Content -LiteralPath $formRecord -ErrorAction SilentlyContinue)
+}
+function Row([string]$Label, [string]$Value) { return ($Label.PadRight(24) + "  " + $Value) }
+# Enter on the required name is refused; on the optional schema it takes the
+# default, on the optional CA it leaves it empty; 3 asks the port again.
+Invoke-FormChild @(("postgres://reader:" + $pastePw + "@pg.example.com:5433/sales"), "", "psform", "", "", $env:FORM_SECRET, "", "", "3", "5432", "")
+Check "the first question is the connection string, read hidden" "HIDDEN Connection string (hidden; Enter to type the fields)" $script:formAsked[0]
+Check "...its help names the forms the connector reads" $true $script:formOut.Contains("jdbc:postgresql://host:5432/db,")
+Check "the panel marks a required field" $true $script:formOut.Contains((Row "Host name or address" "(required)"))
+Check "...and an optional one, with its default" $true $script:formOut.Contains((Row "Port" "(optional) [5432]"))
+Check "the question says (required)" $true ($script:formAsked -contains "ASK Name for this connection (required)")
+Check "...an empty required answer is refused, in one line" $true $script:formOut.Contains("Name for this connection is required")
+Check "...an optional one says so, with the default Enter takes" $true ($script:formAsked -contains "ASK Schema (optional) [public]")
+Check "the fields the string filled are marked" $true $script:formOut.Contains((Row "Host name or address" "pg.example.com (from the string)"))
+Check "...and not asked" 0 @($script:formAsked | Where-Object { $_ -like "*Host name or address*" }).Count
+Check "a password in the string: the note says it was not used" $true $script:formOut.Contains("it was not used.")
+Check "...without the command-line sentence" $false $script:formOut.Contains("The string was on the command line")
+Check "...the hidden prompt still asks for it" $true ($script:formAsked -contains "HIDDEN Password (required) (hidden)")
+Check "...whose empty answer is refused too" $true $script:formOut.Contains("Password is required; it stays in memory")
+Check "the summary numbers every answer" $true $script:formOut.Contains("  3  " + (Row "Port" "5433 (from the string)"))
+Check "...a number asks that field again" $true ($script:formAsked -contains "ASK Port (optional) (- clears it) [5433]")
+Check "...one change, the rest as given" "FORM postgresql --name psform --set host=pg.example.com --set port=5432 --set database=sales --set schema=public --set user=reader --set tls=verify" (@($script:formOut -split "`n" | Where-Object { $_ -like "FORM *" })[0])
+Check "...the typed credential kept for the connect, not the string's" "SECRET True" (@($script:formOut -split "`n" | Where-Object { $_ -like "SECRET *" })[0])
+Check "...and the string's password is in none of the output" $false $script:formOut.Contains($pastePw)
+
+# A string that does not parse is said and asked again; Enter types the fields.
+# A plan that refuses an input goes straight back to that field.
+Invoke-FormChild @("not a url", "jdbc:mysql://my.example.com/shop", "", "psjump", "old.example.com", "", "sales", "", "reader", $env:FORM_SECRET, "", "", "", "pg.example.com", "") "host=old.example.com is not a host this test lets through"
+Check "a string with a space is refused in the engine's words" $true $script:formOut.Contains("the connection string has a space, line break or control character in it")
+Check "...so is another connector's" $true $script:formOut.Contains("the kit does not read this as a PostgreSQL connection string")
+Check "the plan's refusal is said above the field it names" $true $script:formOut.Contains("host=old.example.com is not a host this test lets through")
+Check "...which is asked again, its answer the default" $true ($script:formAsked -contains "ASK Host name or address (required) [old.example.com]")
+Check "...instead of asking to change every answer" 0 @($script:formAsked | Where-Object { $_ -like "CONFIRM*" }).Count
+Check "...and the corrected host is the one planned" $true $script:formOut.Contains("FORM postgresql --name psjump --set host=pg.example.com ")
+Check "...the summary after it offers to leave the source out" $true ($script:formAsked -contains "ASK Number to change, Enter to continue, skip to leave this source out")
+
+# A refusal naming two inputs opens the summary with its reason; "-" takes an
+# optional answer back to its default; skip leaves the source out.
+Invoke-FormChild @("", "psca", "pg.example.com", "", "sales", "ops", "reader", $env:FORM_SECRET, "", "", "", "5", "-", "skip") "ca is used to verify the server, so it needs tls=verify (not require)"
+Check "a refusal naming two inputs: the summary, with the reason" $true $script:formOut.Contains("ca is used to verify the server, so it needs tls=verify (not require)")
+Check "...no question to change every answer" 0 @($script:formAsked | Where-Object { $_ -like "CONFIRM*" }).Count
+Check "...an optional answer says how to take it back" $true ($script:formAsked -contains "ASK Schema (optional) (- clears it) [ops]")
+Check "...and - did: the default stands again" $true $script:formOut.Contains("  5  " + (Row "Schema" "public"))
+Check "...skip left the source out" "FORM left-out" (@($script:formOut -split "`n" | Where-Object { $_ -like "FORM *" })[0])
+
+# The credential from --password-file, picked in the summary, is kept on Enter.
+$pwFileForm = Join-Path $work "form.pw"
+Set-Content -LiteralPath $pwFileForm -Value $env:FORM_SECRET -Encoding UTF8 -NoNewline
+$env:FORM_PWFILE = $pwFileForm
+Invoke-FormChild @("", "pspw", "pg.example.com", "", "sales", "", "reader", "", "", "7", "", "")
+Remove-Item Env:\FORM_PWFILE
+Check "a password file, picked in the summary: Enter keeps it" $true ($script:formAsked -contains "HIDDEN Password (required) (hidden, Enter keeps the one given)")
+Check "...the file still the credential" "SECRETFILE True" (@($script:formOut -split "`n" | Where-Object { $_ -like "SECRETFILE *" })[0])
+
+# 56 columns: a row too narrow for its value and "(from the string)" drops the
+# mark; no row is wider than the panel.
+$env:FORM_COLS = "56"
+Invoke-FormChild @(("postgres://reader:" + $pastePw + "@pg.example.com:5433/sales"), "psnarrow", "", $env:FORM_SECRET, "", "", "")
+Remove-Item Env:\FORM_COLS
+$wide = @($script:formOut -split "`n" | Where-Object { $_ -like "  |*" -and $_.TrimEnd("`r").Length -gt 54 })
+Check "56 columns: no panel row wider than the panel" 0 $wide.Count
+Check "...the value kept" $true $script:formOut.Contains((Row "Host name or address" "pg.example.com"))
+Check "...its mark dropped" $false $script:formOut.Contains("(from the string)")
+
+# Which field a plan's refusal names: input names first, as whole words in any
+# case; labels only when no name is named; several named is -2, none -1.
+$named = @{ Fields = @(
+    @{ Name = "name"; LabelFull = "Name for this connection"; Kind = "source-name" },
+    @{ Name = "host"; LabelFull = "Host name or address"; Kind = "host" },
+    @{ Name = "port"; LabelFull = "Port"; Kind = "port" },
+    @{ Name = "ca"; LabelFull = "CA certificate file"; Kind = "ca-file" },
+    @{ Name = "tls"; LabelFull = "TLS"; Kind = "choice" },
+    @{ Name = "uri"; LabelFull = "MongoDB URI"; Kind = "mongodb-uri" },
+    @{ Name = "user"; LabelFull = "Reader account"; Kind = "text" }) }
+Check "a refusal naming host goes to host" 1 (Find-ExakitVsTuiNamed -Form $named -Text "host is required (Host name or address)")
+Check "...one naming ca and tls opens the summary" -2 (Find-ExakitVsTuiNamed -Form $named -Text "ca is used to verify the server, so it needs tls=verify (not require)")
+Check "...Port is not in report or export" -1 (Find-ExakitVsTuiNamed -Form $named -Text "the report could not be exported")
+Check "...a label counts when no name does, as a whole word in any case" 6 (Find-ExakitVsTuiNamed -Form $named -Text "the reader account may not read this")
+Check "...the source name is named as such, not by the bare word name" 0 (Find-ExakitVsTuiNamed -Form $named -Text "the source name must be lower case")
+Check "...so a value that is not a valid name names only its input" 2 (Find-ExakitVsTuiNamed -Form $named -Text "port='x y' is not a valid name")
+Check "...the MongoDB URI with user: names uri and user, not user alone" -2 (Find-ExakitVsTuiNamed -Form $named -Text "the MongoDB URI carries credentials (user:password@): give the user with --set user=...")
+
+Write-Host ""
+Write-Host "== exakit connect line by line: marks, a pasted string, the credential still hidden =="
+# Invoke-CmdConnect on a console without the drawn form: Read-ExakitPrompt's
+# answers from a file, every question recorded; the hidden prompt recorded too.
+$lineChild = @'
+param($repo, $defs, $kitHome, $deploy, $python, $answers, $record)
+$ErrorActionPreference = "Stop"
+$script:ExakitHome = $kitHome
+function Write-ExakitLog { param($L, $M) }
+function Ok([string]$M) { Write-Host "OK $M" }
+function Info([string]$M) { Write-Host "INFO $M" }
+function Warn2([string]$M) { Write-Host "WARN $M" }
+function Get-ExakitRepoRoot { return $null }
+function Get-PyexasolVenvPython { return $python }
+function Get-ExakitManifestValue { param([string]$Path)
+    switch ($Path) { "runtime.deployment_dir" { return $deploy } "runtime.dsn" { return "127.0.0.1:8563" } "runtime.user" { return "sys" } default { return "" } } }
+. (Join-Path $repo "setup/lib/core-setup.ps1")
+. (Join-Path $repo "setup/lib/virtual-schemas.ps1")
+function Get-ExakitVsDefs { return $defs }
+$cli = [System.Management.Automation.Language.Parser]::ParseFile((Join-Path $repo "setup/exakit.ps1"), [ref]$null, [ref]$null)
+foreach ($def in @($cli.FindAll({ param($n) ($n -is [System.Management.Automation.Language.FunctionDefinitionAst]) -and $n.Name -eq "Invoke-CmdConnect" }, $true))) {
+    . ([scriptblock]::Create($def.Extent.Text))
+}
+function Assert-ExakitInstalled { param([switch]$Json) }
+function Initialize-ExakitLogging { }
+function Test-ExakitInteractive { return $true }
+function Test-ExakitVsTuiOk { return $false }
+function Deny-ExakitInput { param([string]$Message, $Remedy = $null) Write-Output "DENY $Message"; exit 2 }
+$script:queue = New-Object System.Collections.ArrayList
+foreach ($line in @(Get-Content -LiteralPath $answers)) { [void]$script:queue.Add("" + $line) }
+function Read-ExakitPrompt { param([string]$Question, [string]$Default = "")
+    Add-Content -LiteralPath $record -Value ("ASK " + $Question + " [" + $Default + "]")
+    if ($script:queue.Count -eq 0) { return $Default }
+    $a = $script:queue[0]; $script:queue.RemoveAt(0)
+    if ([string]::IsNullOrWhiteSpace($a)) { return $Default }
+    return $a }
+function Read-ExakitVsSecret { param([string]$Label, [string]$PasswordFile = "", [string]$Kind = "secret")
+    Add-Content -LiteralPath $record -Value "HIDDEN $Label"
+    return $env:FORM_SECRET }
+function Read-ExakitVsHidden { param([string]$Label)
+    Add-Content -LiteralPath $record -Value "HIDDEN $Label"
+    if ($script:queue.Count -eq 0) { return "" }
+    $a = $script:queue[0]; $script:queue.RemoveAt(0)
+    return $a }
+Invoke-CmdConnect -Arguments $args
+'@
+$lineChildFile = Join-Path $work "line-child.ps1"; Set-Content -LiteralPath $lineChildFile -Value $lineChild -Encoding ASCII
+function Invoke-LineChild([string[]]$Answers, [string[]]$CliArgs) {
+    Set-Content -LiteralPath $formAnswers -Value $Answers -Encoding UTF8
+    Remove-Item -LiteralPath $formRecord -ErrorAction SilentlyContinue
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    $o = & $pwsh -NoProfile -File $lineChildFile $repo $defs $home2 $deploy $python $formAnswers $formRecord @CliArgs 2>&1
+    $script:lineCode = $LASTEXITCODE
+    $ErrorActionPreference = $previous
+    $script:formOut = (@($o) | ForEach-Object { "$_" }) -join "`n"
+    $script:formAsked = @(Get-Content -LiteralPath $formRecord -ErrorAction SilentlyContinue)
+}
+Invoke-LineChild @("garbage string", ("jdbc:postgresql://pg.example.com:5432/sales?user=reader&password=" + $pastePw), "", "psline", "", "", "", "y") @("pg")
+Check "line by line: exit 0" 0 $script:lineCode
+Check "...the connection string is asked first, hidden" "HIDDEN Connection string (Enter to type the fields)" $script:formAsked[0]
+Check "...a garbage string is said and asked again" $true $script:formOut.Contains("the connection string has a space, line break or control character in it")
+Check "...the password in it noted, not used" $true $script:formOut.Contains("it was not used.")
+Check "...what it filled is said" $true $script:formOut.Contains("From the connection string: database, host, port, user")
+Check "...without the command-line sentence" $false $script:formOut.Contains("The string was on the command line")
+Check "...the fields it filled are not asked" 0 @($script:formAsked | Where-Object { $_ -like "*Host name or address*" }).Count
+Check "...each question says (required)" $true ($script:formAsked -contains "ASK Name for this connection (lower case, e.g. sales) (required) []")
+Check "...or (optional), with its default" $true ($script:formAsked -contains "ASK Schema (optional) [public]")
+Check "...an empty required answer is refused" $true $script:formOut.Contains("Name for this connection is required")
+Check "...the credential still asked hidden" $true ($script:formAsked -contains "HIDDEN Password")
+$db = Get-Content -Raw -LiteralPath $state -Encoding UTF8 | ConvertFrom-Json
+Check "...the typed one reaches the CONNECTION" $env:FORM_SECRET $db.connections.EXAKIT_SRC_PSLINE.secret
+Check "...and the string's password is in none of the output" $false $script:formOut.Contains($pastePw)
+# --dry-run at the same console asks as it always did.
+Invoke-LineChild @("", "sales", "", "reader", "", "") @("pg", "--name", "psdry", "--set", "host=pg.example.com", "--dry-run")
+Check "--dry-run on a console: exit 0" 0 $script:lineCode
+Check "...the questions as before" $true ($script:formAsked -contains "ASK Database []")
+Check "...no marks" 0 @($script:formAsked | Where-Object { $_ -like "*(required)*" -or $_ -like "*(optional)*" }).Count
+Check "...no connection string" 0 @($script:formAsked | Where-Object { $_ -like "*Connection string*" }).Count
+Remove-Item Env:\FORM_SECRET
 
 Write-Host ""
 Write-Host "== this computer's public IP: the plan's INFO line and --json, through Invoke-CmdConnect =="
