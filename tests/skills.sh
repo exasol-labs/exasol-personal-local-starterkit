@@ -527,6 +527,61 @@ for _dir in "$ROOT"/skills/*/; do
     has "skills/README.md lists $_id" "$_id" "$README"
 done
 
+printf '\n== every virtual-schema connector has a skill that names its inputs ==\n'
+# THE DRIFT THIS PINS: a connector added to setup/virtual-schemas/catalog.json
+# without skills/exasol-vs-<id>/SKILL.md leaves an agent guessing its inputs,
+# and an input added to a connector.json without the skill learning it sends
+# the agent to a connect that fails with "<input> is required". Both lists are
+# READ from the catalog and the connector definitions, never written here, so a
+# new connector is checked the moment it lands and no connector id appears in
+# this file.
+_vs_rows="$(python3 - "$ROOT/setup/virtual-schemas" <<'PYVS'
+import json, os, sys
+root = sys.argv[1]
+for entry in json.load(open(os.path.join(root, "catalog.json")))["connectors"]:
+    spec = json.load(open(os.path.join(root, "connectors", entry["id"], "connector.json")))
+    print(entry["id"] + " " + " ".join(s["name"] for s in spec["inputs"]))
+PYVS
+)"
+if [ -n "$_vs_rows" ]; then
+    check "the connector catalog and its definitions are readable" "yes" "yes"
+else
+    check "the connector catalog and its definitions are readable" "yes" "NO"
+fi
+_vs_ids=""
+_vs_shared="$(cat "$ROOT/skills/exasol-virtual-schemas/SKILL.md" 2>/dev/null)"
+while read -r _vs_id _vs_inputs; do
+    [ -n "$_vs_id" ] || continue
+    _vs_ids="$_vs_ids $_vs_id"
+    _vs_md="$ROOT/skills/exasol-vs-$_vs_id/SKILL.md"
+    if [ ! -f "$_vs_md" ]; then
+        check "connector $_vs_id has skills/exasol-vs-$_vs_id/SKILL.md" "present" "MISSING"
+        continue
+    fi
+    check "connector $_vs_id has skills/exasol-vs-$_vs_id/SKILL.md" "present" "present"
+    _vs_text="$(cat "$_vs_md")"
+    # Named as code (`host`), the way the skill's inputs table writes it: a
+    # bare word such as "host" or "schema" would match any sentence.
+    for _vs_in in $_vs_inputs; do
+        has "exasol-vs-$_vs_id names input \`$_vs_in\`" "\`$_vs_in\`" "$_vs_text"
+    done
+    has "exasol-vs-$_vs_id shows its connect command" "exakit connect $_vs_id " "$_vs_text"
+    has "exasol-vs-$_vs_id points at the shared rules" "../exasol-virtual-schemas/SKILL.md" "$_vs_text"
+    has "the shared skill indexes exasol-vs-$_vs_id" "exasol-vs-$_vs_id/SKILL.md" "$_vs_shared"
+done <<EOF
+$_vs_rows
+EOF
+# ...and the other way round: a connector skill outliving its connector keeps
+# firing triggers for a source `exakit connect` no longer offers.
+for _vs_dir in "$ROOT"/skills/exasol-vs-*/; do
+    [ -f "$_vs_dir/SKILL.md" ] || continue
+    _vs_sid="$(basename "$_vs_dir")"; _vs_sid="${_vs_sid#exasol-vs-}"
+    case " $_vs_ids " in
+        *" $_vs_sid "*) check "skills/exasol-vs-$_vs_sid matches a catalog connector" "yes" "yes" ;;
+        *)              check "skills/exasol-vs-$_vs_sid matches a catalog connector" "yes" "NO" ;;
+    esac
+done
+
 printf '\n== the skill set is a component exakit update can fetch ==\n'
 # THE GAP THIS CLOSES: skills reached a machine only inside a kit update. Bump
 # components.skills.version alone and `exakit skills` said "stale" while
