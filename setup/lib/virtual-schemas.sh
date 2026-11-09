@@ -1562,8 +1562,10 @@ $2"; EXAKIT_VS_GIVEN="$EXAKIT_VS_GIVEN ${2%%=*}"; shift ;;
             --password*|--passwd*|--secret*|--token*) _exakit_vs_credential_argument ;;
             -*) _exakit_vs_refuse 2 "Unknown option '${1%%=*}' for connect (exakit help connect)." \
                     "unknown option '${1%%=*}' for connect" "leave it out; the options are listed by: exakit help connect" ;;
-            *) [ -z "$_cc_source" ] || _exakit_vs_refuse 2 "connect takes one source; got '$_cc_source' and '$1'." \
-                   "connect takes one source; got '$_cc_source' and '$1'" "connect one source per command"
+            # The extra word is not repeated: it may be a credential typed in
+            # the wrong place.
+            *) [ -z "$_cc_source" ] || _exakit_vs_refuse 2 "connect takes one source; got more than one word for it." \
+                   "connect takes one source; got more than one word for it" "connect one source per command"
                _cc_source="$1" ;;
         esac
         shift
@@ -1762,8 +1764,9 @@ cmd_source() {
                     "unknown option '${1%%=*}' for source $_cs_action" "leave it out; the options are listed by: exakit help source" ;;
             *) if [ -z "$_cs_name" ]; then _cs_name="$1"
                elif [ "$_cs_action" = describe ] && [ -z "$_cs_table" ]; then _cs_table="$1"
+               # The extra word is not repeated: it may be a credential.
                else _exakit_vs_refuse 2 "source $_cs_action takes one name." \
-                        "source $_cs_action takes one name; got '$_cs_name' and '$1'" "name one source per command"; fi ;;
+                        "source $_cs_action takes one name; got more than one" "name one source per command"; fi ;;
         esac
         shift
     done

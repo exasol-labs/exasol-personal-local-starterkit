@@ -3394,6 +3394,10 @@ jsonsh /dev/null pg --name enclatin $PG_SET --password-file "$WORK/enc-latin1.pw
 check "a Latin-1 file (neither UTF-8 nor UTF-16): exit 2, one failure object, nothing connected" \
     "2 [False, 'input', True, True, True, True] false" "$JRC $(one "$SHAPE") $(dbq '"EXAKIT_SRC_ENCLATIN" in d["connections"]')"
 check "...its error says why" "the credential is not UTF-8 or UTF-16 text" "$(one 'd["error"]')"
+# An extra word after the source is never repeated: it may be a credential.
+jsonsh /dev/null pg Xtra-W0rd-Kept-Out --name jsonx $PG_SET --json
+check "connect with an extra word: exit 2" "2" "$JRC"
+lacks "...the word is not repeated" "Xtra-W0rd-Kept-Out" "$JOUT$JERR"
 for enc in utf16odd bomless16; do
     jsonsh /dev/null pg --name "encf$enc" $PG_SET --password-file "$WORK/enc-$enc.pw" --json
     check "review 1: --password-file in $enc: exit 2, refused by the shell before \$( ), nothing connected" \
@@ -3423,6 +3427,9 @@ jsonsrc() { # jsonsrc <stdin-file> <args...> - cmd_source; stdout in JOUT, stder
       cmd_source "$@" ) < "$_js_in" 2> "$WORK/json.err" )"; JRC=$?
     JERR="$(cat "$WORK/json.err")"
 }
+jsonsrc /dev/null show jsonjava Xtra-W0rd-Kept-Out --json
+check "source with an extra name: exit 2" "2" "$JRC"
+lacks "...the word is not repeated" "Xtra-W0rd-Kept-Out" "$JOUT$JERR"
 printf 'rotated' > "$WORK/json.rotated"; printf 'not-it' > "$WORK/json.wrong"
 rm -f "$WORK/json.argv"; : > "$WORK/json.log"
 jsonsrc /dev/null reauth jsonjava --json --password-file "$WORK/json.rotated"

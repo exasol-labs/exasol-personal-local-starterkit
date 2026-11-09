@@ -3807,7 +3807,8 @@ function Invoke-CmdConnect {
         # option's name is ever repeated, never what follows an =.
         elseif ($arg -like "--password*" -or $arg -like "--passwd*" -or $arg -like "--secret*" -or $arg -like "--token*") { Deny-ExakitVsCredentialArgument }
         elseif ($arg -like "-*") { $opt = ($arg -split "=", 2)[0]; Deny-ExakitVsInput "Unknown option '$opt' for connect (exakit help connect)." "unknown option '$opt' for connect" "leave it out; the options are listed by: exakit help connect" }
-        elseif ($source) { Deny-ExakitVsInput "connect takes one source; got '$source' and '$arg'." "connect takes one source; got '$source' and '$arg'" "connect one source per command" }
+        # The extra word is not repeated: it may be a credential typed in the wrong place.
+        elseif ($source) { Deny-ExakitVsInput "connect takes one source; got more than one word for it." "connect takes one source; got more than one word for it" "connect one source per command" }
         else { $source = $arg }
     }
     if ($pwStdin -and $pwFile) { Deny-ExakitVsInput "--password-stdin and --password-file both give the credential; use one." "--password-stdin and --password-file were both given" "give the credential one way: --password-stdin or --password-file <file>" }
@@ -3960,7 +3961,7 @@ function Invoke-CmdSource {
         elseif ($arg -like "-*") { $opt = ($arg -split "=", 2)[0]; Deny-ExakitVsInput "Unknown option '$opt' for source $action (exakit help source)." "unknown option '$opt' for source $action" "leave it out; the options are listed by: exakit help source" }
         elseif (-not $name) { $name = $arg }
         elseif ($action -eq "describe" -and -not $table) { $table = $arg }
-        else { Deny-ExakitVsInput "source $action takes one name." "source $action takes one name; got '$name' and '$arg'" "name one source per command" }
+        else { Deny-ExakitVsInput "source $action takes one name." "source $action takes one name; got more than one" "name one source per command" }
     }
     if ($pwStdin) {
         # Only reauth takes a credential: a pipe given to another action would

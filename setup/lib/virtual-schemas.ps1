@@ -329,7 +329,7 @@ function Read-ExakitVsSecretFile {
     $bytes = Get-ExakitVsSecretFileBytes -Path $Path
     if ($null -eq $bytes) { Deny-ExakitVsInput "Cannot read $Path" "cannot read $Path" "give a file this user can read with --password-file" }
     $text = ConvertFrom-ExakitVsSecretBytes -Bytes $bytes
-    if ($null -eq $text) { Deny-ExakitVsInput "$Path is not UTF-8 or UTF-16 text: save it as UTF-8 (UTF-16 needs its byte-order mark)." "$Path is not UTF-8 or UTF-16 text" "save the file as UTF-8 (UTF-16 needs its byte-order mark), then run the same command again" }
+    if ($null -eq $text) { Deny-ExakitVsInput "The credential in $Path is not UTF-8 or UTF-16 text (another encoding, or a NUL byte): save it as UTF-8 (UTF-16 needs its byte-order mark)." "the credential is not UTF-8 or UTF-16 text" "save the file as UTF-8 (UTF-16 needs its byte-order mark), then run the same command again" }
     return $text
 }
 
@@ -398,7 +398,7 @@ function Read-ExakitVsStdinSecret {
     try { $stdin.CopyTo($buffer) } finally { $stdin.Dispose() }
     $text = ConvertFrom-ExakitVsSecretBytes -Bytes $buffer.ToArray()
     $buffer.Dispose()
-    if ($null -eq $text) { Deny-ExakitVsInput "--password-stdin: standard input is not UTF-8 or UTF-16 text." "the credential on standard input is not UTF-8 or UTF-16 text" "send it as UTF-8 (UTF-16 needs its byte-order mark), or give it with --password-file <file>" }
+    if ($null -eq $text) { Deny-ExakitVsInput "--password-stdin: the credential on standard input is not UTF-8 or UTF-16 text (another encoding, or a NUL byte)." "the credential is not UTF-8 or UTF-16 text" "send it as UTF-8 (UTF-16 needs its byte-order mark), or give it with --password-file <file>" }
     if (-not $text) { Deny-ExakitVsInput "--password-stdin read nothing: standard input was empty." "--password-stdin was given, but standard input was empty" "pipe the credential into the command and close the pipe once it is written, or give it with --password-file <file>" }
     return $text
 }
