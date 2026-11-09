@@ -26,6 +26,15 @@
 # wait keep the clock below, unchanged. With waits, the keys of one answer go
 # in 0.05 s apart (TTY_REPLAY_KEY_GAP sets another gap, for a slow console).
 #
+# '\x0eTEXT\x0f' is a PASTE: TEXT goes in with one write, as a terminal hands
+# over a paste - all of it at once, line breaks ('\r') included - where keys
+# go in one by one.
+#
+# TTY_REPLAY_WRAP=deferred models a terminal that holds the wrap: writing the
+# last column leaves the cursor there, and only the next printable character
+# moves to the next row (xterm and its kind). The default wraps as the last
+# column is written, the stricter model the live tables are measured against.
+#
 # The pty is driven directly rather than through pty.spawn, for two reasons that
 # both showed up as a wrong screen. It asks for keystrokes only when OUR stdin
 # has some, so a run from an interactive terminal is never asked and hangs on a
@@ -44,6 +53,13 @@ if len(sys.argv) > 4 and sys.argv[4]:
     _text = sys.argv[4].encode('utf-8').decode('unicode_escape')
     _i = 0
     while _i < len(_text):
+        if _text[_i] == '\x0e':
+            _end = _text.find('\x0f', _i + 1)
+            if _end < 0:
+                sys.exit("tty-replay: a paste (\\x0e...) has no closing \\x0f")
+            keys.append(('paste', _text[_i + 1:_end]))
+            _i = _end + 1
+            continue
         if _text[_i] == '\x02':
             _end = _text.find('\x03', _i + 1)
             if _end < 0:
@@ -56,7 +72,10 @@ if len(sys.argv) > 4 and sys.argv[4]:
             continue
         keys.append(_text[_i])
         _i += 1
-WAITS = any(isinstance(_k, tuple) for _k in keys)
+def is_wait(k):
+    return isinstance(k, tuple) and k[0] == 'wait'
+WAITS = any(is_wait(_k) for _k in keys)
+DEFERRED = os.environ.get('TTY_REPLAY_WRAP') == 'deferred'
 WAIT_SECS = float(os.environ.get('TTY_REPLAY_WAIT', '120'))
 # After a wait is met: long enough for the program to go from printing its
 # question to reading the answer, under load too.
@@ -125,7 +144,7 @@ def wait_met():
 
 while True:
     if time.time() > deadline:
-        if keys and isinstance(keys[0], tuple):
+        if keys and is_wait(keys[0]):
             wait_failed = 'the run passed its deadline waiting for: %s' % keys[0][1]
         proc.kill()
         break
@@ -142,10 +161,10 @@ while True:
         fresh = True
         # A live table never goes quiet for long: a wait is checked as the
         # output arrives, not only in the gaps.
-        if keys and isinstance(keys[0], tuple):
+        if keys and is_wait(keys[0]):
             wait_met()
         continue
-    if keys and isinstance(keys[0], tuple):
+    if keys and is_wait(keys[0]):
         if wait_since is None:
             wait_since = time.time()
         if fresh and wait_met():
@@ -163,7 +182,9 @@ while True:
             # arrive once it is listening again.
             next_key = time.time() + 1.0
             continue
-        os.write(master, k.encode('utf-8'))
+        data = (k[1] if isinstance(k, tuple) else k).encode('utf-8')
+        while data:                     # a paste may not go in with one write
+            data = data[os.write(master, data):]
         since = bytearray()
         fresh = False
         next_key = time.time() + KEY_GAP
@@ -173,7 +194,7 @@ while True:
         continue
     if proc.poll() is not None:
         break
-if not wait_failed and keys and isinstance(keys[0], tuple):
+if not wait_failed and keys and is_wait(keys[0]):
     wait_failed = 'the scenario ended before showing %r' % keys[0][1]
 proc.wait()
 raw = b''.join(out).decode('utf-8', 'replace')
@@ -189,6 +210,10 @@ scr, cur, col = [], 0, 0
 worst_per_line, worst_total = 0, 0
 def put(ch):
     global cur, col
+    # Deferred: the wrap the last column left pending happens now.
+    if DEFERRED and col >= COLS:
+        cur += 1
+        col = 0
     while len(scr) <= cur: scr.append('')
     line = scr[cur]
     if col > len(line): line = line + ' ' * (col - len(line))
@@ -199,7 +224,7 @@ def put(ch):
     # up by -- which strands the top of the previous frame on screen. Modelling
     # it is the difference between catching that and asserting a clean screen
     # while the user watches the table flicker into two.
-    if col >= COLS:
+    if col >= COLS and not DEFERRED:
         cur += 1
         col = 0
 i = 0

@@ -154,6 +154,53 @@ _exakit_vs_read_secret() {
     cat
 }
 
+# _exakit_vs_hidden_line <prompt> [err] — one line typed or pasted at a hidden
+# prompt, from stdin (a terminal; the caller redirects /dev/tty to it when it
+# must), into _EVH_LINE. The prompt goes to stdout, or stderr with "err".
+# Returns 1 at end of input (Ctrl-D on an empty line, or the terminal gone), 2
+# when echo cannot be turned off - then nothing is read: input is never taken
+# in clear. Twin of the hidden branch of Read-ExakitVsTuiAnswer.
+#   - Echo goes off BEFORE the prompt shows (exakit_read_hidden, same order).
+#   - The terminal leaves canonical mode for the read: a canonical line stops at
+#     1023 bytes on macOS (MAX_CANON), so a longer paste rang the bell, lost its
+#     Enter, and the read never ended. Key by key instead, Backspace and Ctrl-U
+#     editing what was typed.
+#   - What is still pending after Enter - the rest of a multi-line paste - is
+#     discarded, so it answers no later question; what arrives within a tenth
+#     of a second counts as pending.
+#   - The terminal's own state comes back, on Ctrl-C too.
+_exakit_vs_hidden_line() {
+    _EVH_LINE=""
+    _evh_saved="$(stty -g 2>/dev/null)"
+    stty -echo -icanon min 1 time 0 2>/dev/null || return 2
+    # The caller's own traps are put back afterwards, not cleared.
+    _evh_prev_int="$(trap -p INT)"; _evh_prev_term="$(trap -p TERM)"
+    trap 'stty "${_evh_saved:-echo icanon}" 2>/dev/null; printf "\n"; exit 130' INT TERM
+    if [ "${2:-}" = err ]; then printf '%s' "$1" >&2; else printf '%s' "$1"; fi
+    _evh_rc=0
+    while :; do
+        # One character; the newline Enter sends is read's delimiter: empty.
+        IFS= read -r -n 1 _evh_c || { _evh_rc=1; break; }
+        case "$_evh_c" in
+            '') break ;;
+            $'\004') if [ -z "$_EVH_LINE" ]; then _evh_rc=1; break; fi ;;
+            $'\177'|$'\010') _EVH_LINE="${_EVH_LINE%?}" ;;
+            $'\025') _EVH_LINE="" ;;
+            [[:cntrl:]]) ;;
+            *) _EVH_LINE="$_EVH_LINE$_evh_c" ;;
+        esac
+    done
+    _evh_c=""
+    # The rest of the paste: read until a tenth of a second passes with nothing
+    # (VMIN 0, VTIME 1 - a read then returns empty, and cat stops).
+    stty min 0 time 1 2>/dev/null && cat > /dev/null 2>&1
+    stty "${_evh_saved:-echo icanon}" 2>/dev/null
+    trap - INT TERM
+    [ -n "$_evh_prev_int" ] && eval "$_evh_prev_int"
+    [ -n "$_evh_prev_term" ] && eval "$_evh_prev_term"
+    return "$_evh_rc"
+}
+
 # _exakit_vs_secret_kind <connector> — the kind of its credential input
 # (secret or secret-file), empty when it has none.
 _exakit_vs_secret_kind() {
@@ -359,7 +406,8 @@ _exakit_vs_paste_typed() {
 
 # _exakit_vs_ask_paste <connector> — the line-by-line twin of the form's first
 # question: a connection string, or Enter to type the fields. It is read with
-# echo off, as a password is (it often holds one): only the fields it filled
+# echo off, as a password is (it often holds one), out of canonical mode, so a
+# long one is read whole (_exakit_vs_hidden_line): only the fields it filled
 # are shown afterwards. What it names is not asked again (_exakit_vs_paste); a
 # string the engine cannot read is said, in its words, and asked again. A
 # terminal that cannot hide input is not asked at all. ⇄ twin:
@@ -369,7 +417,10 @@ _exakit_vs_ask_paste() {
     [ -n "$_eap_forms" ] || return 0
     info "Paste the source's connection string as it shows it: $_eap_forms"
     while :; do
-        _eap_url="$(exakit_read_hidden "Connection string (Enter to type the fields)")" || return 0
+        _exakit_vs_hidden_line "    ${UI_ASK:-}?${UI_RESET:-} Connection string (Enter to type the fields) (input hidden): " err < /dev/tty \
+            || { printf '\n' >&2; return 0; }
+        printf '\n' >&2
+        _eap_url="$_EVH_LINE"; _EVH_LINE=""
         [ -n "$_eap_url" ] || return 0
         if _exakit_vs_paste "$1" "$_eap_url" typed; then _eap_url=""; return 0; fi
         _eap_url=""
@@ -416,11 +467,13 @@ _exakit_vs_result() {
 
 # _exakit_vs_tui_rows <characters> — how many terminal lines a line of that many
 # characters takes. A wrapped line counted as one is a stale line the next
-# redraw leaves behind. One that fills the last column exactly counts as two:
-# a terminal that wraps there (and readline, which forces the wrap) has moved
-# to the next line before the newline moves it again.
+# redraw leaves behind. One that fills the last column exactly is one row on a
+# terminal, which holds the wrap until the next character; readline forces the
+# wrap there, so a readline line ("readline") counts as two.
 _exakit_vs_tui_rows() {
-    if [ "$1" -le 0 ]; then echo 1; else echo $(( $1 / _EVT_COLS + 1 )); fi
+    if [ "$1" -le 0 ]; then echo 1
+    elif [ "${2:-}" = readline ]; then echo $(( $1 / _EVT_COLS + 1 ))
+    else echo $(( ($1 - 1) / _EVT_COLS + 1 )); fi
 }
 
 # _exakit_vs_tui_fit <text> <width> — the text, its END kept when it is wider
@@ -611,19 +664,16 @@ _exakit_vs_tui_say() {
 # whatever happens) for the hidden one. Returns 1 at end of input.
 _exakit_vs_tui_ask() {
     if [ "$3" = 1 ]; then
-        # Echo off BEFORE the prompt shows: a key typed the moment it appears
-        # would otherwise be echoed in clear (exakit_read_hidden, same order).
-        _eva_saved="$(stty -g 2>/dev/null)"
-        trap 'stty "${_eva_saved:-echo}" 2>/dev/null; printf "\n"; exit 130' INT TERM
-        if ! stty -echo 2>/dev/null; then
+        # Echo off before the prompt shows, out of canonical mode, the rest of
+        # a multi-line paste discarded (_exakit_vs_hidden_line).
+        _EVT_ANSWER=""
+        _exakit_vs_hidden_line "  $2: "; _eva_rc=$?
+        if [ "$_eva_rc" = 2 ]; then
             _EVT_NOHIDE=1
             _exakit_vs_tui_say "$UI_ERR$UI_CROSS$UI_RESET" "this terminal cannot hide input; give the credential with --password-file"
-            _EVT_ANSWER=""; trap - INT TERM; return 1
+            return 1
         fi
-        printf '  %s: ' "$2"
-        IFS= read -r _EVT_ANSWER; _eva_rc=$?
-        stty "${_eva_saved:-echo}" 2>/dev/null
-        trap - INT TERM
+        _EVT_ANSWER="$_EVH_LINE"; _EVH_LINE=""
         printf '\n'
         _EVT_ON_SCREEN=$(( _EVT_ON_SCREEN + $(_exakit_vs_tui_rows $(( ${#1} + 4 ))) ))
         return "$_eva_rc"
@@ -631,7 +681,7 @@ _exakit_vs_tui_ask() {
     # The prompt goes through readline (-p), its colour marked invisible
     # (\001..\002), so editing and history redraw it in the right place.
     IFS= read -r -e -p "  $2: " _EVT_ANSWER; _eva_rc=$?
-    _EVT_ON_SCREEN=$(( _EVT_ON_SCREEN + $(_exakit_vs_tui_rows $(( ${#1} + 4 + ${#_EVT_ANSWER} ))) ))
+    _EVT_ON_SCREEN=$(( _EVT_ON_SCREEN + $(_exakit_vs_tui_rows $(( ${#1} + 4 + ${#_EVT_ANSWER} )) readline) ))
     return "$_eva_rc"
 }
 

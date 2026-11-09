@@ -182,9 +182,25 @@ function Read-ExakitVsHidden {
     param([string]$Label)
     Write-Host ("    {0}?{1} {2} (input hidden): " -f $script:UiAsk, $script:UiReset, $Label) -NoNewline
     $secure = Read-Host -AsSecureString
+    # The rest of a multi-line paste answers no later question.
+    Clear-ExakitVsPendingKeys
     $ptr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
     try { return [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($ptr) }
     finally { [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr) }
+}
+
+# Clear-ExakitVsPendingKeys - after a hidden answer, the keys still pending (the
+# rest of a multi-line paste) are read and dropped, until a tenth of a second
+# passes with none: they would otherwise answer the next question, and a
+# visible one would echo them. Twin of the drain in _exakit_vs_hidden_line.
+function Clear-ExakitVsPendingKeys {
+    try {
+        do {
+            Start-Sleep -Milliseconds 100
+            $any = $false
+            while ([Console]::KeyAvailable) { [void][Console]::ReadKey($true); $any = $true }
+        } while ($any)
+    } catch { }
 }
 
 # Get-ExakitVsSecretKind - the kind of a connector's credential input (secret
@@ -432,12 +448,13 @@ function Format-ExakitVsTuiFit {
 }
 
 # Get-ExakitVsTuiRows - how many console lines a line of that many characters
-# takes; one that fills the last column exactly counts as two (a console that
-# wraps there has moved on before the newline). Twin of _exakit_vs_tui_rows.
+# takes; one that fills the last column exactly is one row, as the console
+# holds the wrap until the next character. Twin of _exakit_vs_tui_rows (which
+# counts a readline line one more; PowerShell reads no line through readline).
 function Get-ExakitVsTuiRows {
     param([int]$Chars)
     if ($Chars -le 0) { return 1 }
-    return [int][Math]::Floor($Chars / $script:EvtCols) + 1
+    return [int][Math]::Floor(($Chars - 1) / $script:EvtCols) + 1
 }
 
 # Invoke-ExakitVsPick - the connector menu. Returns the chosen connector ids;
@@ -577,20 +594,32 @@ function Read-ExakitVsTuiAnswer {
         # Key by key, nothing echoed - the console call the menu reads with.
         # Read-Host -AsSecureString here left the console's next ReadLine
         # reading garbage on pwsh for Unix after an empty answer (measured).
+        # Twin of _exakit_vs_hidden_line: Backspace and Ctrl-U edit, Ctrl-D (or
+        # Ctrl-Z, the Windows console's) on an empty line is the end of input,
+        # and what is still pending after Enter is discarded.
         $sb = New-Object System.Text.StringBuilder
+        $ended = $false
         while ($true) {
             $key = [Console]::ReadKey($true)
-            if ($key.Key -eq [ConsoleKey]::Enter) { break }
-            if ($key.Key -eq [ConsoleKey]::Backspace) {
+            $code = [int]$key.KeyChar
+            if ($key.Key -eq [ConsoleKey]::Enter -or $code -eq 13 -or $code -eq 10) { break }
+            if ($code -eq 4 -or $code -eq 26) {
+                if ($sb.Length -eq 0) { $ended = $true; break }
+                continue
+            }
+            if ($key.Key -eq [ConsoleKey]::Backspace -or $code -eq 8 -or $code -eq 127) {
                 if ($sb.Length -gt 0) { [void]$sb.Remove($sb.Length - 1, 1) }
                 continue
             }
-            if ([int]$key.KeyChar -ge 32) { [void]$sb.Append($key.KeyChar) }
+            if ($code -eq 21) { [void]$sb.Clear(); continue }
+            if ($code -ge 32) { [void]$sb.Append($key.KeyChar) }
         }
         $answer = $sb.ToString()
         [void]$sb.Clear()
+        Clear-ExakitVsPendingKeys
         [Console]::Write("`r`n")
         $script:EvtOnScreen += (Get-ExakitVsTuiRows ($Plain.Length + 4))
+        if ($ended) { return $null }
         return $answer
     }
     $answer = [Console]::ReadLine()
@@ -718,6 +747,7 @@ function Read-ExakitVsTuiField {
     while ($true) {
         if ($f.Kind -eq "secret") {
             $a = Read-ExakitVsTuiAnswer -Plain $plain -Colour $colour -Hidden
+            if ($null -eq $a) { return $false }
             if (-not $a) {
                 if ($keep) { break }
                 if ($f.Req) { Write-ExakitVsTuiSay ("{0} is required; it stays in memory and goes only to the database" -f $f.LabelFull); continue }

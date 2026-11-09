@@ -2053,8 +2053,15 @@ printf '\n== exakit connect on a terminal: menu, panel, review, live table ==\n'
 TUI_SECRET='tUi-s3cret-Value'
 export TUI_KIT="$HOME_K" TUI_STATE="$STATE" TUI_EXA="$EXA" TUI_DEFS="$DEFS" TUI_DEPLOY="$DEPLOY" TUI_LOG="$WORK/tui.log"
 tui() { # tui <scenario> <title> <boxes> <keys> - the replay's report in TUI_OUT, its verdict in TUI_RC
+    # The stream file (TTY_REPLAY_RAW) is this run's or none: a replay that dies
+    # before writing it must not leave the last scenario's to be asserted on.
+    [ -z "${TTY_REPLAY_RAW:-}" ] || rm -f "$TTY_REPLAY_RAW"
     TUI_OUT="$(TTY_REPLAY_COLS="${TUI_COLS:-100}" python3 "$ROOT/tests/lib/tty-replay.py" "$ROOT/tests/lib/$1" "$ROOT" "$2" "$4" "$3" 2>&1)"
     TUI_RC=$?
+    if [ -n "${TTY_REPLAY_RAW:-}" ] && [ ! -f "$TTY_REPLAY_RAW" ]; then
+        fail "the replay of $1 wrote no stream to $TTY_REPLAY_RAW"
+        : > "$TTY_REPLAY_RAW"
+    fi
     TUI_SCREEN="$(printf '%s\n' "$TUI_OUT" | sed -n '/=== FINAL SCREEN ===/,/=== tables on screen/p')"
     # A question that never came is said here, whatever the caller asserts next.
     case "$TUI_OUT" in
@@ -2068,6 +2075,12 @@ tui() { # tui <scenario> <title> <boxes> <keys> - the replay's report in TUI_OUT
 # round trip, a hidden prompt switching the terminal - is lost or answers the
 # wrong question, and the busier the machine, the likelier.
 when() { printf '\\x02%s\\x03' "$1"; }
+# pasted <text> - text that goes in with one write, as a terminal hands over a
+# paste ('\r' in it is a line break); plain ASCII.
+pasted() { printf '\\x0e%s\\x0f' "$1"; }
+# A connection string longer than a canonical terminal line (1023 bytes on
+# macOS): a hidden prompt in canonical mode never saw its Enter.
+LONGX="$(printf '%1450s' '' | tr ' ' x)"
 MENU="$(when 'Enter to confirm')"                       # the menu, drawn and reading keys
 Q_PASTE="$(when 'Connection string (hidden; Enter to type the fields):')"
 Q_NAME="$(when 'Name for this connection (required):')"
@@ -2168,6 +2181,30 @@ PY
         check "...it reached the CONNECTION" "$TUI_SECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_TUIPS"]["secret"]')"
     else
         pass "PowerShell terminal flow: skipped (no pwsh)"
+    fi
+
+    # A 1500-character connection string pasted with a second line after it:
+    # read whole at the hidden prompt, the second line answering nothing; then
+    # Ctrl-D at the hidden password prompt is the end of input - the source
+    # left out. Bash, then PowerShell.
+    LONGURL="jdbc:postgresql://pg.example.com:5433/sales?user=reader&ApplicationName=$LONGX"
+    TTY_REPLAY_RAW="$WORK/tui.raw" TUI_ARGS="pg" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 1 \
+        "${Q_PASTE}$(pasted "$LONGURL\rzz2nd\r")${Q_NAME}tuilong\r$Q_SCHEMA\r${Q_PW}\x04"
+    check "a 1500-character paste with a second line, then Ctrl-D: one panel" "0" "$TUI_RC"
+    has "...the long string was read whole: its port" "$(printf '%-24s  %s' Port '5433 (from the string)')" "$TUI_SCREEN"
+    has "...the second line answered nothing: the name is the one typed" "Name for this connection  tuilong" "$TUI_SCREEN"
+    lacks "...and was never shown" "zz2nd" "$(cat "$WORK/tui.raw")"
+    has "...Ctrl-D at the hidden prompt left the source out" "Left out: postgresql" "$TUI_SCREEN"
+    if command -v pwsh >/dev/null 2>&1; then
+        TTY_REPLAY_RAW="$WORK/tui.raw" tui connect-tui-scenario-ps.sh "1 of 1 · PostgreSQL" 2 \
+            "$MENU $MENU\r${Q_PASTE}$(pasted "$LONGURL\rzz2nd\r")${Q_NAME}tuipslong\r$Q_SCHEMA\r${Q_PW}\x04"
+        check "PowerShell: the same paste and Ctrl-D: one menu, one panel" "0" "$TUI_RC"
+        has "...the long string was read whole" "$(printf '%-24s  %s' Port '5433 (from the string)')" "$TUI_SCREEN"
+        has "...the second line answered nothing" "Name for this connection  tuipslong" "$TUI_SCREEN"
+        lacks "...and was never shown" "zz2nd" "$(cat "$WORK/tui.raw")"
+        has "...Ctrl-D at the hidden prompt left the source out" "Left out: postgresql" "$TUI_SCREEN"
+    else
+        pass "PowerShell long paste: skipped (no pwsh)"
     fi
 fi
 # The twins carry the same flow.
@@ -2598,8 +2635,10 @@ if command -v python3 >/dev/null 2>&1; then
 
     # 56 columns: a row too narrow for its value and "(from the string)" drops
     # the mark, never overflows the panel (the replay counts the frames). The
-    # review is declined: this is about the form.
-    TUI_COLS=56 TUI_ARGS="pg" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 2 \
+    # review is declined: this is about the form. The hidden question is exactly
+    # 56 columns wide, on a terminal that holds the wrap (xterm's kind): one row,
+    # counted as one, or the next redraw climbs one line too far.
+    TTY_REPLAY_WRAP=deferred TUI_COLS=56 TUI_ARGS="pg" tui connect-tui-scenario.sh "1 of 1 · PostgreSQL" 2 \
         "${Q_PASTE}postgres://reader:$URLPW@pg.example.com:5433/sales\r${Q_NAME}tuinarrow\r$Q_SCHEMA\r$Q_PW$TUI_SECRET\r$Q_TLS\r$Q_CA\r$Q_SUM\r${Q_GO}n\r"
     check "56 columns: one panel and the review, never stacked" "0" "$TUI_RC"
     has "...the value kept" "$(prow 'Host name or address' 'pg.example.com')" "$TUI_SCREEN"
@@ -2611,7 +2650,7 @@ if command -v python3 >/dev/null 2>&1; then
     Q_LNAME="$(when 'Name for this connection (lower case, e.g. sales) (required)')"
     Q_LPASTE="$(when 'Connection string (Enter to type the fields) (input hidden):')"
     TTY_REPLAY_RAW="$RAW" TTY_REPLAY_CTTY=1 TUI_PLAIN=1 TUI_ARGS="pg" tui connect-tui-scenario.sh "none" 0 \
-        "${Q_LPASTE}garbage string\r${Q_LPASTE}jdbc:postgresql://pg.example.com:5432/sales?user=reader&password=$URLPW\r$Q_LNAME\r${Q_LNAME}linepg\r$(when 'Schema (optional) [public]')\r$(when 'TLS (verify/require/disable) (optional) [verify]')\r$(when 'Enter to skip (optional)')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET\r"
+        "${Q_LPASTE}garbage string\r${Q_LPASTE}$(pasted "jdbc:postgresql://pg.example.com:5432/sales?user=reader&password=$URLPW&ApplicationName=$LONGX\rzz2nd\r")$Q_LNAME\r${Q_LNAME}linepg\r$(when 'Schema (optional) [public]')\r$(when 'TLS (verify/require/disable) (optional) [verify]')\r$(when 'Enter to skip (optional)')\r$(when 'Connect now? [y/N]')y\r$(when 'Password (input hidden):')$TUI_SECRET\r"
     TUI_RAW="$(tr -d '\r' < "$RAW")"
     has "line by line: the connection string is asked first, hidden" "Connection string (Enter to type the fields) (input hidden):" "$TUI_RAW"
     lacks "...the string, password and all, is in nothing drawn" "$URLPW" "$TUI_RAW"
@@ -2624,6 +2663,7 @@ if command -v python3 >/dev/null 2>&1; then
     has "...or (optional), with its default" "Schema (optional) [public]" "$TUI_RAW"
     has "...an empty required answer is refused" "Name for this connection is required" "$TUI_RAW"
     has "...and the credential is asked hidden" "Password (input hidden):" "$TUI_RAW"
+    lacks "...a 1500-character paste read whole, its second line answering nothing, never shown" "zz2nd" "$TUI_RAW"
     check "...the typed one reaches the CONNECTION" "$TUI_SECRET" "$(dbq 'd["connections"]["EXAKIT_SRC_LINEPG"]["secret"]')"
     lacks "...and is never shown" "$TUI_SECRET" "$TUI_RAW"
     check "...the string's password is nowhere under the kit home or in the log" "" "$(grep -rl "$URLPW" "$HOME_K" "$WORK/tui.log" 2>/dev/null)"
@@ -2669,6 +2709,11 @@ lacks "...no connection string" "Connection string" "$OUT"
 # summary opens), none -1.
 mkdir -p "$WORK/named"
 printf 'PostgreSQL\nname|Name for this connection|source-name\nhost|Host name or address|host\nport|Port|port\nca|CA certificate file|ca-file\ntls|TLS|choice\nuri|MongoDB URI|mongodb-uri\nuser|Reader account|text\n' > "$WORK/named/fields"
+rows() { ( . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
+           _EVT_COLS=56; _exakit_vs_tui_rows "$@" ) 2>/dev/null; }
+check "a line exactly as wide as the terminal is one row: the terminal holds the wrap" "1" "$(rows 56)"
+check "...a readline line that wide is two: readline forces the wrap" "2" "$(rows 56 readline)"
+check "...one character wider is two either way" "2 2" "$(rows 57) $(rows 57 readline)"
 named() { ( . "$ROOT/setup/lib/ui.sh"; . "$ROOT/setup/lib/common.sh"; . "$ROOT/setup/lib/virtual-schemas.sh"
             _EVT_DIR="$WORK/named"; _exakit_vs_tui_named "$1" ) 2>/dev/null; }
 check "a refusal naming host goes to host" "1" "$(named 'host is required (Host name or address)')"
@@ -2681,7 +2726,7 @@ check "...the MongoDB URI with user: names uri and user, not user alone" "-2" \
     "$(named 'the MongoDB URI carries credentials (user:password@): give the user with --set user=...')"
 for fn in Read-ExakitVsTuiField Invoke-ExakitVsTuiReview Invoke-ExakitVsTuiPaste Find-ExakitVsTuiNamed \
           Read-ExakitVsLineAnswer Read-ExakitVsLinePaste Get-ExakitVsPasteForms Format-ExakitVsPasteTyped \
-          Read-ExakitVsHidden Format-ExakitVsTuiFit; do
+          Read-ExakitVsHidden Format-ExakitVsTuiFit Clear-ExakitVsPendingKeys; do
     has "PowerShell has $fn" "function $fn" "$(cat "$ROOT/setup/lib/virtual-schemas.ps1")"
 done
 has "Invoke-CmdConnect asks for a connection string line by line" "Read-ExakitVsLinePaste -Connector" "$(cat "$ROOT/setup/exakit.ps1")"
