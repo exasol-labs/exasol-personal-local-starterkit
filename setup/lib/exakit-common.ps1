@@ -2244,10 +2244,21 @@ function Remove-ExakitStepDone {
     $doc = Read-ExakitManifest
     if ($null -eq $doc) { return }
     $steps = Get-ManifestValue -Manifest $doc -Path "steps_completed"
-    if ($null -eq $steps) { return }
-    $remaining = @([array]$steps | Where-Object { $_ -ne $Step })
-    Set-ManifestValue -Manifest $doc -Path "steps_completed" -Value $remaining
-    Save-ExakitManifest $doc
+    $changed = $false
+    if ($null -ne $steps) {
+        $remaining = @([array]$steps | Where-Object { $_ -ne $Step })
+        Set-ManifestValue -Manifest $doc -Path "steps_completed" -Value $remaining
+        $changed = $true
+    }
+    # An unmarked step starts over, so a refusal booked for it before is
+    # history: it must not speak again now that the step reads as missing.
+    # Twin of exakit_unmark_step.
+    $soft = Get-ManifestValue -Manifest $doc -Path "install.soft_failures"
+    if ($null -ne $soft -and $soft.PSObject.Properties[$Step]) {
+        $soft.PSObject.Properties.Remove($Step)
+        $changed = $true
+    }
+    if ($changed) { Save-ExakitManifest $doc }
 }
 
 # ---------------------------------------------------------------------------
@@ -2496,7 +2507,14 @@ function Start-ExakitDatabase {
     }
     # The database is up, so a note left by an earlier start that could not is
     # no longer true. Only a runtime note goes; an install-step note stays.
-    try { if ((Get-ExakitRuntimeStatus) -like "running*") { Clear-ExakitRuntimeFailureNote } } catch { }
+    # So does a start failure an installer re-run booked against the completed
+    # runtime step (Clear-ExakitStartSoftFailure).
+    try {
+        if ((Get-ExakitRuntimeStatus) -like "running*") {
+            Clear-ExakitRuntimeFailureNote
+            Clear-ExakitStartSoftFailure
+        }
+    } catch { }
 }
 
 
@@ -2598,6 +2616,10 @@ function Register-ExakitSoftFailure {
         $key = "install.soft_failures." + ($Component -replace '[^A-Za-z0-9_]', '_')
         Set-ExakitManifestValue "$key.repair" $Repair
         Set-ExakitManifestValue "$key.reason" "$Reason"
+        # The label the installer screen uses ("the local database"), so
+        # status says what did not finish in the summary's words, not the
+        # internal step id. Twin of the .label exakit_record_soft_failure keeps.
+        Set-ExakitManifestValue "$key.label" $Label
         Set-ExakitManifestValue "$key.at" (Get-Date).ToString("yyyy-MM-dd HH:mm:ss")
     } catch { }
     if (Get-Command Write-ExakitFailureNote -ErrorAction SilentlyContinue) {
@@ -2622,6 +2644,61 @@ function Clear-ExakitSoftFailure {
         if ($null -ne (Get-ExakitManifestValue $key)) { Remove-ExakitManifestValue $key }
     } catch { }
     if ($script:ExakitSoftFailed.Contains($Component)) { $script:ExakitSoftFailed.Remove($Component) }
+}
+
+# Test-ExakitWslStartRecord <name> <record> - the runtime step's record is a
+# start (or deploy) the WSL kernel refused: its reason carries the network
+# sentence and its fix.
+function Test-ExakitWslStartRecord {
+    param([string]$Name, $Record)
+    if ($Name -ne "runtime" -or $null -eq $Record) { return $false }
+    $why = ""
+    try { $why = "" + $Record.reason } catch { $why = "" }
+    return ($why.Contains("cannot create the deployment network") -and $why.Contains("wsl --update"))
+}
+
+# Clear-ExakitStartSoftFailure - the database is running again, so a runtime
+# record that a failed start booked against the COMPLETED runtime step (the
+# installer's resume arm; kept by Clear-ExakitFinishedSoftFailures for a WSL
+# network refusal) is history. A record of a step still missing stays: that
+# step has its own work to finish. Twin of exakit_retire_start_soft_failure.
+function Clear-ExakitStartSoftFailure {
+    try {
+        if ($null -eq (Get-ExakitManifestValue "install.soft_failures.runtime")) { return }
+        if (-not (Test-ExakitStepDone "runtime")) { return }
+        Clear-ExakitSoftFailure -Component "runtime"
+    } catch { }
+}
+
+# Clear-ExakitFinishedSoftFailures - drop every record whose step is in
+# steps_completed. A clean finish must leave no record that a later unmark
+# could revive, including ones an older kit wrote before Set-ExakitStepDone
+# cleared them. Twin of exakit_prune_soft_failures in common.sh.
+function Clear-ExakitFinishedSoftFailures {
+    try {
+        $lock = Enter-ExakitManifestLock
+        try {
+            $doc = Read-ExakitManifest
+            if ($null -eq $doc) { return }
+            $soft = Get-ManifestValue -Manifest $doc -Path "install.soft_failures"
+            $steps = @(Get-ManifestValue -Manifest $doc -Path "steps_completed")
+            if ($null -eq $soft) { return }
+            # EXCEPT A START THE WSL KERNEL REFUSED. The installer's resume arm
+            # books a failed start against the runtime step it never unmarks,
+            # and that record is the only place its "wsl --update" survives (a
+            # later step's note replaces the start's). It stays until a start
+            # succeeds (Clear-ExakitStartSoftFailure); status reads it only
+            # while the database is not running. Twin of _wsl_start_record.
+            $stale = @($soft.PSObject.Properties | Where-Object {
+                    ($steps -contains $_.Name) -and -not (Test-ExakitWslStartRecord -Name $_.Name -Record $_.Value)
+                } | ForEach-Object { $_.Name })
+            if ($stale.Count -eq 0) { return }
+            foreach ($name in $stale) { $soft.PSObject.Properties.Remove($name) }
+            Save-ExakitManifest $doc
+        } finally {
+            Exit-ExakitManifestLock $lock
+        }
+    } catch { }
 }
 
 function Invoke-ExakitSoftStep {
@@ -2704,6 +2781,8 @@ function Invoke-ExakitBestEffort {
 # command that installs it. Printed last, after the connection panel, so it is
 # the final thing on screen rather than something scrolled past mid-install.
 function Write-ExakitSoftFailures {
+    # The install is ending: no record of a step it finished may outlive it.
+    Clear-ExakitFinishedSoftFailures
     if ($script:ExakitSoftFailed.Count -eq 0) { return }
     Write-Host ""
     if ($script:ExakitSoftFailed.Count -eq 1) {
@@ -3440,10 +3519,26 @@ function Resolve-ExakitInstallVersions {
 # business (`exakit autostart on`), and an add-on installed later registers
 # itself through the marketplace.
 # Twin of exakit_autostart_default_on in common.sh.
+#
+# IT WROTE "OFF". This recorded autostart.enabled = $false and never wrote the
+# Startup entry, so every fresh Windows install reported "Autostart disabled"
+# while the comment above, AGENTS.md and the shell twin all said on. Now it
+# registers the database's Startup entry and records the result. Only the
+# database: an add-on installed afterwards joins through the marketplace.
+#
+# "THE USER HAS ANSWERED" IS ITS OWN MARKER, autostart.user_set, written only
+# where the user chooses (`exakit autostart`, Enable-/Disable-ExakitAutostart
+# in exakit.ps1). A bare autostart.enabled is not an answer: kit 0.2.0-0.2.3
+# wrote false on every Windows install, and a first install whose database
+# step failed recorded false because there was nothing to register - read as
+# "no", both kept autostart off for good. Without the marker the default is
+# applied again; with nothing to register (no runtime yet), nothing is
+# written, so the re-run that deploys the database turns it on.
 function Enable-ExakitAutostartDefault {
-    $existing = Get-ExakitManifestValue "autostart.enabled"
-    if ($existing -is [bool]) { return }        # the user has already answered
-    Set-ExakitManifestValue "autostart.enabled" $false
+    if ((Get-ExakitManifestValue "autostart.user_set") -eq $true) { return }   # the user has answered
+    if ([bool](Register-ExakitAutostart -Id "database")) {
+        Set-ExakitManifestValue "autostart.enabled" $true
+    }
 }
 
 # Invoke-ExakitWithSpinner <label> <body> - run a slow phase behind the kit's
@@ -3517,6 +3612,12 @@ function Set-ExakitStepDone {
         if ($null -eq $steps) { $steps = @() } else { $steps = @($steps) }
         if ($steps -notcontains $Step) { $steps += $Step }
         Set-ManifestValue -Manifest $doc -Path "steps_completed" -Value $steps
+        # A STEP THAT FINISHED IS NOT A REFUSAL ANY MORE. The record an earlier
+        # run booked for it goes in the same locked write: status hid it only
+        # while the step stayed in steps_completed, so a later unmark brought a
+        # stale "wsl --update" back. Twin of mark_step.
+        $soft = Get-ManifestValue -Manifest $doc -Path "install.soft_failures"
+        if ($null -ne $soft -and $soft.PSObject.Properties[$Step]) { $soft.PSObject.Properties.Remove($Step) }
         Save-ExakitManifest $doc
     } finally {
         Exit-ExakitManifestLock $lock
@@ -3563,8 +3664,16 @@ function Get-ExakitStepArtifactState {
         # older install (or a soft failure) we cannot judge: "unknown".
         $recorded = Get-ExakitManifestValue "components.exapump.path"
         if (-not $recorded) { return "unknown" }
-        if ((Test-Path -LiteralPath $recorded -PathType Leaf) -and ((Get-Item -LiteralPath $recorded).Length -gt 0)) { return "present" }
-        return "missing"
+        if (-not ((Test-Path -LiteralPath $recorded -PathType Leaf) -and ((Get-Item -LiteralPath $recorded).Length -gt 0))) { return "missing" }
+        # A profile can be there and still be wrong: a replaced deployment is
+        # a new database, and from Exasol Personal 2.4 one with a new random
+        # sys password. Install-PersonalDeployment drops this step's tick when
+        # it deploys afresh; this catches a deployment replaced by hand.
+        if ((Get-Command Test-ExapumpProfilePasswordStale -ErrorAction SilentlyContinue) -and (Test-ExapumpProfilePasswordStale)) {
+            $script:ExakitStepRerunReason = "the exapump connection profile holds a password the database no longer accepts - writing it again"
+            return "missing"
+        }
+        return "present"
     }
     # runtime, mcp, pyexasol - and "launcher": nothing a file test can settle
     # without risking a destructive false "missing". See rule 1 above.
@@ -3601,6 +3710,11 @@ function Begin-ExakitStep {
     # (step X)" while the installer runs. Twin of the same write in begin_step.
     try { Set-ExakitManifestValue "install.current_step" $Name } catch { }
     $rerun = $false
+    # Cleared before every judgement so one step's reason cannot be reported
+    # against the next; Get-ExakitStepArtifactState sets it when it has a
+    # better explanation than the generic line below. Twin of
+    # EXAKIT_STEP_RERUN_REASON.
+    $script:ExakitStepRerunReason = ""
     if (Test-ExakitStepDone $Name) {
         # "unknown" (and "present") keep the manifest's answer: only a proven
         # "missing" is allowed to override the tick.
@@ -3613,7 +3727,11 @@ function Begin-ExakitStep {
     }
     Write-ExakitStepHeading $Description
     if ($rerun) {
-        Info "Recorded as done, but what it installed is missing - running it again"
+        if ($script:ExakitStepRerunReason) {
+            Info "Recorded as done, but $($script:ExakitStepRerunReason)"
+        } else {
+            Info "Recorded as done, but what it installed is missing - running it again"
+        }
     }
     return $true
 }
@@ -4236,7 +4354,14 @@ function Update-ExakitSelf {
     Set-ExakitCmdShim -PsTarget (Join-Path $kitDir "setup\exakit.ps1") | Out-Null
     Confirm-ExakitOnPath $script:BinDir
 
+    # THE KIT IS REPLACED (now, or the moment this process exits), and every
+    # function this process runs was dot-sourced from the OLD copy. The update
+    # loop reads this and defers the rest of the run to the next `exakit
+    # update`, which the new kit runs. Twin of the kit.version check in
+    # _exakit_update_run. Set in both arms below, once the swap (or the staging
+    # for after exit) has actually happened.
     if ($swapped) {
+        $script:ExakitKitSwapped = $true
         Info "Previous kit copy kept at $backup"
         Set-ExakitManifestValue "kit.source" "$repo@$kitRef"
         Set-ExakitManifestValue "kit.version" $stagedVersion
@@ -4254,6 +4379,7 @@ function Update-ExakitSelf {
     # and the next command adopts it (Sync-ExakitDeferredKitUpdate).
     Complete-ExakitSelfUpdateDeferred -StagedRoot $stagedRoot -KitDir $kitDir -Backup $backup `
         -Version $stagedVersion -Source "$repo@$kitRef"
+    $script:ExakitKitSwapped = $true
     Ok "exakit $stagedVersion is staged and will be in place the moment this command exits."
     Info "The next `exakit` you run is the new one. Nothing else was changed."
 }
@@ -5376,8 +5502,11 @@ function Confirm-ExakitRuntimeRunning {
             # Wait-PersonalReady, which would spend the whole budget a second
             # time before saying anything.
             if (-not (Wait-PersonalReadyOrDeploy)) {
+                # The deploy met the WSL kernel: repair-runtime is not the fix.
+                if ($script:PersonalStartNetworkBlocked) { Stop-PersonalStartNetworkBlocked }
                 Fail "The database is deployed but did not come up. Read the state with 'exakit status', or repair with: exakit repair-runtime"
             }
+            Clear-ExakitStartSoftFailure
             return
         }
         if ($Deploy) {

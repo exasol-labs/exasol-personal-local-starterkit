@@ -227,7 +227,7 @@ jobs:
                               personal["version"] = winner
                               s3["sha256"] = digests
 
-          # --- mcp and pyexasol: stable, non-yanked PyPI releases ---------------
+          # --- mcp, pyexasol and dbt-exasol: stable, non-yanked PyPI releases ---
           def bump_pypi(key, default_package):
               block = components.get(key) or {}
               if not block.get("version"):
@@ -252,6 +252,7 @@ jobs:
 
           bump_pypi("mcp", "exasol-mcp-server")
           bump_pypi("pyexasol", "pyexasol")
+          bump_pypi("dbt-exasol", "dbt-exasol")
 
           # --- the notebook tools: JupyterLab and Marimo, stable PyPI releases ---
           # Pinned per tool under components.notebook.frontends; a new release is

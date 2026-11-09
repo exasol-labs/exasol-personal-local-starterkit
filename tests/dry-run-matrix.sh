@@ -22,6 +22,17 @@ TMPDIR="$_SUITE_TMP"; export TMPDIR
 _PRE_NOTE=""
 [ -e "$HOME/.exasol-starter-kit/.last-failure" ] && \
     _PRE_NOTE="$(cat "$HOME/.exasol-starter-kit/.last-failure" 2>/dev/null)"
+# HERMETIC FROM HERE ON. Every call that sources common.sh without its own
+# EXAKIT_HOME fell back to the developer's real ~/.exasol-starter-kit and left a
+# kit skeleton there (backups/ logs/ mcp/) - a directory later code reads as
+# "a kit lives here". HOME and the kit paths point into a throwaway directory;
+# the real home is remembered so the check at the end can prove it untouched.
+_REAL_HOME="$HOME"
+_REAL_KIT_SNAPSHOT="$(ls -A "$_REAL_HOME/.exasol-starter-kit" 2>/dev/null || echo absent)"
+_SUITE_HOME="$(mktemp -d)"
+export HOME="$_SUITE_HOME/home" EXAKIT_HOME="$_SUITE_HOME/home/.exasol-starter-kit" EXAKIT_BIN_DIR="$_SUITE_HOME/home/bin"
+mkdir -p "$HOME"
+unset XDG_CONFIG_HOME
 PASS=0
 FAIL=0
 
@@ -144,23 +155,32 @@ grep -q 'runtime-personal.sh' "$ROOT/setup/setup-linux.sh" && \
     ! grep -q 'runtime-nano' "$ROOT/setup/setup-linux.sh" && \
     check "setup-linux.sh sources the Personal runtime, and only it" present present || \
     check "setup-linux.sh sources the Personal runtime, and only it" present MISSING
-# The preflight answers the question the runtime actually asks: it checks Podman
-# by name, because no other engine substitutes for it.
-_pfr() { # _pfr <with-podman:0|1> -> the engine line of the preflight
+# The preflight answers the question the runtime actually asks: it checks the
+# engine by name. Since Exasol Personal 2.4 a usable Docker (Engine 29+) is
+# named first and a new deployment runs on it; otherwise Podman, as before.
+_pfr() { # _pfr <with-podman:0|1> [with-docker:0|1] [pattern] -> matches in the preflight
     _pfr_bin="$(mktemp -d)/pf-bin"; mkdir -p "$_pfr_bin"
     [ "$1" = 1 ] && { printf '#!/bin/sh\nexit 0\n' > "$_pfr_bin/podman"; chmod +x "$_pfr_bin/podman"; }
-    PATH="$_pfr_bin:/usr/bin:/bin" bash -c '
+    # detect_docker is stubbed, never probed: a Docker on the machine running
+    # this test (the CI runner has Engine 29+ in /usr/bin) answered for the
+    # machine under test, and the preflight then named Docker instead of Podman.
+    PATH="$_pfr_bin:/usr/bin:/bin" PFR_DOCKER="${2:-0}" bash -c '
         . "$0/setup/lib/detect.sh"
         detect_os() { echo linux; }; detect_arch() { echo x86_64; }
         detect_ram_gb() { echo 16; }; detect_free_disk_gb() { echo 100; }
         detect_wsl_version() { echo 2; }; detect_wsl_drvfs_path() { return 1; }
-        preflight_report' "$ROOT" 2>/dev/null | grep -ci "podman"
+        detect_docker() { [ "$PFR_DOCKER" = 1 ] && echo docker || echo none; }
+        preflight_report' "$ROOT" 2>/dev/null | grep -ci "${3:-podman}"
 }
 # Counted as "at least once", not "exactly once": the refusal names the engine
 # and then names the package-manager command that installs it, and pinning the
 # count made the guard fail on a better message.
 check "preflight(personal) asks about podman" "yes" "$([ "$(_pfr 1)" -ge 1 ] && echo yes || echo no)"
 check "preflight(personal, no podman) fails on podman by name" "yes" "$([ "$(_pfr 0)" -ge 1 ] && echo yes || echo no)"
+check "preflight(personal, docker usable) names Docker" "yes" "$([ "$(_pfr 0 1 'Docker: available')" -ge 1 ] && echo yes || echo no)"
+check "...and asks nothing about podman" "0" "$(_pfr 0 1)"
+check "preflight(personal, docker usable, EXAKIT_CONTAINER_ENGINE=podman) still asks about podman" "yes" \
+    "$([ "$(EXAKIT_CONTAINER_ENGINE=podman _pfr 1 1)" -ge 1 ] && echo yes || echo no)"
 grep -q 'Exasol Personal (local deployment via Podman)' "$ROOT/install.ps1" && \
     check "install.ps1 names the personal plan" present present || \
     check "install.ps1 names the personal plan" present MISSING
@@ -1791,7 +1811,10 @@ echo
 # Any helper that forgets to isolate it silently mutates a real install: the
 # downgrade-guard case used to leave a bogus .last-failure behind, which took an
 # agent-operability audit to notice. Assert the live home is untouched.
-_real_home="${HOME}/.exasol-starter-kit"
+_real_home="${_REAL_HOME}/.exasol-starter-kit"
+check "the suite did not touch the real kit home" "untouched" \
+    "$([ "$(ls -A "$_real_home" 2>/dev/null || echo absent)" = "$_REAL_KIT_SNAPSHOT" ] && echo untouched || echo CHANGED)"
+rm -rf "$_SUITE_HOME"
 _now_note=""
 [ -e "$_real_home/.last-failure" ] && _now_note="$(cat "$_real_home/.last-failure" 2>/dev/null)"
 if [ -n "$_now_note" ] && [ "$_now_note" != "$_PRE_NOTE" ]; then

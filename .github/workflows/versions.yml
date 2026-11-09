@@ -1135,6 +1135,26 @@ jobs:
       # A lock a crashed launcher left behind: released (diag unlock) and the
       # destroy retried only when no launcher runs; the launcher's words quoted.
       - run: bash tests/personal-destroy-lock.sh
+      # Docker when usable, else Podman, and an existing deployment keeps the
+      # engine its record names: the 2.4 engine choice against stub engines.
+      - run: bash tests/personal-engine.sh
+        if: matrix.shard == 4
+      # exapump's glibc shim runs on Docker as well as Podman: a Docker-only
+      # box on glibc < 2.38 kept losing the data-loading CLI.
+      - run: bash tests/exapump-glibc-shim.sh
+        if: matrix.shard == 4
+      # Podman on a WSL kernel without nftables is refused before the download
+      # or the launcher swap, and preflight counts Docker Engine 29+.
+      - run: bash tests/personal-wsl-gate.sh
+        if: matrix.shard == 4
+      # A replaced database is a new database: the exapump profile and the MCP
+      # read-only user are rebuilt, never skipped as "already done".
+      - run: bash tests/personal-fresh-password.sh
+        if: matrix.shard == 4
+      # The agent contract: a kit self-update stops the run, a refused update
+      # names its real remedy, a refused install keeps its reason, a Docker
+      # deployment with Docker down is never sent to repair-runtime.
+      - run: bash tests/personal-agent-contract.sh
         if: matrix.shard == 4
       - run: bash tests/deploy-progress.sh
         if: matrix.shard == 3

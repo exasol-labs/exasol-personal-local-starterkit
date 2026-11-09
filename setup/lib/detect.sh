@@ -302,9 +302,9 @@ _detect_engine_probe() {
 
 # detect_podman — "podman" when a usable Podman is here, "none" otherwise.
 #
-# The launcher deploys through Podman, or (from 2.4.0, Linux and Windows) a
-# Docker where Podman is not installed - see personal_engine - and exapump's
-# glibc shim borrows whichever is here. Bounded, because `podman info` can
+# Since Exasol Personal 2.4 the launcher deploys on Docker (Engine 29+) or
+# Podman, and exapump's glibc shim borrows whichever is there; this answers
+# for Podman only (detect_docker for Docker). Bounded, because `podman info` can
 # block while a machine is still coming up, and a probe that hangs turns a
 # status command into a stall.
 detect_podman() {
@@ -315,36 +315,271 @@ detect_podman() {
     echo "none"
 }
 
-# detect_docker_cli — a `docker` on PATH that is Docker itself: Podman installs
-# a `docker` that is podman under another name, and the launcher does not count
-# that one as Docker either.
-detect_docker_cli() {
-    command -v docker >/dev/null 2>&1 || return 1
-    case "$(_detect_engine_probe docker --version 2>/dev/null | tr '[:upper:]' '[:lower:]')" in
-        *podman*) return 1 ;;
+# detect_docker — "docker" when a Docker the Exasol launcher can deploy on is
+# here: the daemon answers, runs Linux containers, and is Docker Engine 29 or
+# newer (the launcher's floor, from Exasol Personal 2.4). "none" otherwise - a
+# Docker that is installed and stopped is "none" too, since nothing can deploy
+# on it as it stands. One bounded probe answers all three questions. The
+# runtime module asks the same questions in personal_docker_usable, where it
+# also needs the reason; this one exists for preflight, which runs before that
+# module is sourced.
+detect_docker() {
+    if detect_docker_reason; then echo "docker"; return 0; fi
+    echo "none"
+}
+
+# detect_docker_is_podman [probe output] - 0 when the `docker` on PATH is
+# Podman's Docker emulation (Fedora/RHEL's podman-docker), so there is no
+# Docker here at all. NOT BY ITS BANNER ALONE: /etc/containers/nodocker, which
+# the banner itself tells people to create, silences it, and the box then read
+# as "Docker is installed but not running" - a prompt to start a Docker that
+# does not exist, and about 30 s of re-probes. Podman answering `docker info`'s
+# template (no OSType field), a docker that resolves to podman, and a
+# `docker --version` naming podman all say the same thing. Only asked once
+# `docker info` has failed, so a working Docker costs nothing extra. Twin of
+# _personal_docker_is_podman in runtime-personal.sh.
+detect_docker_is_podman() {
+    case "$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')" in
+        *"emulate docker cli using podman"*|*"can't evaluate field ostype"*) return 0 ;;
     esac
+    _ddp_path="$(command -v docker 2>/dev/null || true)"
+    [ -n "$_ddp_path" ] || return 1
+    _ddp_real="$(readlink -f "$_ddp_path" 2>/dev/null || true)"
+    case "${_ddp_real##*/}" in podman|podman-remote*) return 0 ;; esac
+    case "$(_detect_engine_probe docker --version 2>/dev/null | tr '[:upper:]' '[:lower:]')" in
+        *podman*) return 0 ;;
+    esac
+    return 1
+}
+
+# detect_launcher_takes_engine - 0 when the Exasol launcher that will deploy
+# can be told the engine (`install local --help` names --container-engine).
+# The installer's launcher step decides which launcher that is: an `exasol` on
+# PATH whose `install` has the `local` preset is KEPT (and the kit's managed
+# EXAKIT_BIN_DIR/exasol, when there, still wins, as in personal_cli); any
+# other case ends with the kit's own download, which can be told. The bare
+# `install --help` is still asked, but only for the `local` preset itself -
+# a preset's variables, the engine among them, are listed only under
+# `install local --help`, so that is the one bounded question asked of the
+# launcher that will deploy. Twin of personal_launcher_takes_engine, for the
+# preflight, which runs before the runtime module is sourced.
+detect_launcher_takes_engine() {
+    [ "${EXAKIT_FORCE_COMPONENT_INSTALL:-0}" != "1" ] || return 0
+    command -v exasol >/dev/null 2>&1 || return 0
+    _dlt_tok='([[:space:]]|,|$)'
+    _dlt_lead='^[[:space:]]*(-[-a-zA-Z0-9]+,[[:space:]]*)?'
+    _dlt_cli="$(command -v exasol)"
+    _dlt_help="$(_detect_engine_probe "$_dlt_cli" install --help 2>&1 || true)"
+    # No `local` preset: the installer downloads its own launcher, which can.
+    printf '%s\n' "$_dlt_help" | grep -E "${_dlt_lead}local${_dlt_tok}" >/dev/null || return 0
+    if [ -n "${EXAKIT_BIN_DIR:-}" ] && [ -x "$EXAKIT_BIN_DIR/exasol" ] && \
+       [ "$EXAKIT_BIN_DIR/exasol" != "$_dlt_cli" ]; then
+        _dlt_cli="$EXAKIT_BIN_DIR/exasol"
+    fi
+    # The engine is a variable of the `local` preset: only `install local
+    # --help` lists it. Twin of personal_launcher_takes_engine.
+    _dlt_help="$(_detect_engine_probe "$_dlt_cli" install local --help 2>&1 || true)"
+    printf '%s\n' "$_dlt_help" | grep -E "${_dlt_lead}--container-engine${_dlt_tok}" >/dev/null
+}
+
+# detect_docker_reason - 0 when Docker is usable (as detect_docker). Otherwise
+# 1 with the reason in _dd_said and its kind in _dd_kind: missing (no docker,
+# or Podman's docker emulation), denied, down, type, version. The same reasons,
+# in the same words, as personal_docker_usable - which the deploy step prints
+# a minute later, so the preflight must not say something else.
+detect_docker_reason() {
+    _dd_said=""
+    _dd_kind=""
+    if ! command -v docker >/dev/null 2>&1; then
+        _dd_said="Docker is not on PATH"; _dd_kind="missing"; return 1
+    fi
+    _dd_errf="$(mktemp "${TMPDIR:-/tmp}/exakit-docker.XXXXXX" 2>/dev/null || true)"
+    [ -n "$_dd_errf" ] || _dd_errf=/dev/null
+    _dd_info="$(_detect_engine_probe docker info --format '{{.OSType}} {{.ServerVersion}}' 2>"$_dd_errf" | tr -d '\r' | head -1)"
+    _dd_err=""
+    if [ "$_dd_errf" != /dev/null ]; then
+        _dd_err="$(cat "$_dd_errf" 2>/dev/null || true)"
+        rm -f "$_dd_errf"
+    fi
+    _dd_type="${_dd_info%% *}"
+    _dd_ver="${_dd_info#* }"
+    if [ -z "$_dd_type" ] || [ "$_dd_type" = "$_dd_info" ]; then
+        if detect_docker_is_podman "$_dd_err $_dd_info"; then
+            _dd_said="'docker' here is Podman's Docker emulation"; _dd_kind="missing"; return 1
+        fi
+        case "$(printf '%s %s' "$_dd_err" "$_dd_info" | tr '[:upper:]' '[:lower:]')" in
+            *"permission denied"*)
+                _dd_said="Docker is running but your user cannot use it (permission denied on its socket)"; _dd_kind="denied" ;;
+            *"could not be found in this wsl"*)
+                _dd_said="Docker Desktop is not running (its WSL integration answered, the daemon did not)"; _dd_kind="down" ;;
+            *)
+                _dd_said="Docker is installed but not running ('docker info' did not answer)"; _dd_kind="down" ;;
+        esac
+        return 1
+    fi
+    if [ "$_dd_type" != "linux" ]; then
+        _dd_said="Docker runs $_dd_type containers here, and Exasol Personal needs Linux containers"; _dd_kind="type"; return 1
+    fi
+    _dd_major="${_dd_ver%%.*}"
+    case "$_dd_major" in
+        ''|*[!0-9]*) _dd_said="Docker Engine version '$_dd_ver' could not be read"; _dd_kind="version"; return 1 ;;
+    esac
+    if [ "$_dd_major" -lt 29 ]; then
+        _dd_said="Docker Engine $_dd_ver is older than 29, the oldest Exasol Personal 2.4 runs on"; _dd_kind="version"; return 1
+    fi
     return 0
 }
 
-# detect_docker — "docker <major>" when a Docker daemon answers and runs Linux
-# containers (<major> is the Docker Engine major version, 0 when it does not
-# say), "down" when the Docker CLI is here but its daemon does not answer,
-# "none" otherwise (no Docker, Podman's alias, or Windows containers).
-detect_docker() {
-    if ! detect_docker_cli; then
-        echo "none"
-        return 0
+# _detect_podman_conf_files — the containers.conf files Podman reads, one per
+# line, in Podman's order (a later file's setting wins): the vendor file, the
+# admin file, the admin drop-ins (sorted), the user's file, the user's
+# drop-ins (sorted). Only files that exist and can be read are listed; a
+# missing one is never an error. ⇄ twin: the file list
+# Test-PersonalPodmanMachineIptables reads inside the Podman machine.
+_detect_podman_conf_files() {
+    _dpcf_user="${XDG_CONFIG_HOME:-$HOME/.config}/containers"
+    for _dpcf_f in /usr/share/containers/containers.conf \
+                   /etc/containers/containers.conf \
+                   /etc/containers/containers.conf.d/*.conf \
+                   "$_dpcf_user/containers.conf" \
+                   "$_dpcf_user/containers.conf.d/"*.conf; do
+        [ -f "$_dpcf_f" ] && [ -r "$_dpcf_f" ] && printf '%s\n' "$_dpcf_f"
+    done
+    return 0
+}
+
+# detect_podman_firewall_driver — the firewall_driver Podman will use, as its
+# configuration sets it ("iptables", "nftables"), or nothing when no file sets
+# it. THE SAME RULE AS PODMAN, not a grep: only the key inside the [network]
+# table counts (a firewall_driver line under [engine] is not read by Podman),
+# comments are ignored, a TOML basic ("...") or literal ('...') string is
+# accepted, and the LAST setting across the files of _detect_podman_conf_files
+# wins - a user file on nftables overrides an admin file on iptables. A value
+# that is not a quoted string is not one Podman reads either, so it is
+# answered as it stands and never matches "iptables". Each file starts with no
+# table. ⇄ twin: the same rule in Test-PersonalPodmanMachineIptables.
+detect_podman_firewall_driver() {
+    _dpfd_files="$(_detect_podman_conf_files)"
+    [ -n "$_dpfd_files" ] || return 0
+    printf '%s\n' "$_dpfd_files" | {
+        set --
+        while IFS= read -r _dpfd_f; do
+            [ -n "$_dpfd_f" ] && set -- "$@" "$_dpfd_f"
+        done
+        [ "$#" -gt 0 ] || exit 0
+        awk -v q="'" '
+            FNR == 1 { table = "" }
+            {
+                line = $0
+                sub(/\r$/, "", line)
+                sub(/#.*/, "", line)
+                if (line ~ /^[ \t]*\[/) {
+                    head = line
+                    gsub(/[ \t]/, "", head)
+                    table = (head == "[network]") ? "network" : "other"
+                    next
+                }
+                if (table != "network") next
+                if (line !~ /^[ \t]*firewall_driver[ \t]*=/) next
+                sub(/^[ \t]*firewall_driver[ \t]*=[ \t]*/, "", line)
+                sub(/[ \t]+$/, "", line)
+                first = substr(line, 1, 1)
+                if (length(line) >= 2 && (first == "\"" || first == q) && substr(line, length(line), 1) == first) {
+                    value = substr(line, 2, length(line) - 2)
+                } else {
+                    value = "unquoted:" line
+                }
+            }
+            END { if (value != "") print value }
+        ' "$@" 2>/dev/null
+    }
+    return 0
+}
+
+# detect_podman_iptables_driver — true when Podman's own configuration routes
+# its firewall through iptables rather than nftables, AND iptables is there to
+# do it. That is the documented way to run Exasol Personal 2.4 on a WSL kernel
+# without nftables (Podman's netavark fails applying its ruleset there), and a
+# machine that has done it must not be told to update WSL.
+#
+# EVIDENCE THAT HOLDS, because this exemption also lets a REPLACE through -
+# the path that destroys the deployment before its fresh deploy runs. A line
+# in the wrong table, an admin setting the user's file overrides, or the
+# setting without the iptables package all passed once, and on WSL 2.6 the
+# rebuild then failed after the data was gone. So the setting is read as
+# Podman reads it (detect_podman_firewall_driver) and the binary must be on
+# PATH, as the kit's own hint says.
+detect_podman_iptables_driver() {
+    command -v iptables >/dev/null 2>&1 || return 1
+    [ "$(detect_podman_firewall_driver)" = "iptables" ]
+}
+
+# _detect_personal_deployment_present — true when an Exasol Personal deployment
+# already exists in the launcher's deployment directory (its deployment.json or
+# state file is there). A file check, not personal_deployment_exists: the
+# preflight runs before the runtime module is sourced and must not start the
+# launcher. Same directory default as runtime-personal.sh.
+_detect_personal_deployment_present() {
+    _dpdp_dir="${EXAKIT_PERSONAL_DEPLOY_DIR:-$HOME/.exasol/personal/deployments/default}"
+    [ -f "$_dpdp_dir/deployment.json" ] || [ -f "$_dpdp_dir/.exasolLauncherState.json" ]
+}
+
+# detect_podman_backend_not_netavark — true when Podman is on PATH and answers
+# a network backend other than netavark (`cni`). The WSL nftables failure is
+# netavark's own, so such a Podman cannot hit it. No Podman, a Podman that
+# does not answer (a template error, a hang) or one that answers netavark is
+# false: no answer is not an exemption. ONE PREDICATE for the deploy gate
+# (personal_wsl_podman_network_ok) and the preflight line that previews it,
+# so the two cannot disagree about the same machine.
+detect_podman_backend_not_netavark() {
+    command -v podman >/dev/null 2>&1 || return 1
+    _dpbn_backend="$(_detect_engine_probe podman info --format '{{.Host.NetworkBackend}}' 2>/dev/null | head -1 | tr -d '\r ')" || true
+    [ -n "$_dpbn_backend" ] && [ "$_dpbn_backend" != "netavark" ]
+}
+
+# detect_wsl_release — the WSL release ("2.6.1.0") from `wsl.exe --version`,
+# run through the distro's interop. Exit 1, printing nothing, whenever no
+# release could be READ: not WSL, no wsl.exe, a wsl.exe that cannot run
+# (interop off: "Exec format error"), one that exits non-zero or times out,
+# and one that answers without a dotted release - the inbox WSL that predates
+# the Store release has no --version and prints its usage text. The caller
+# must read every one of those as "unknown", never as a version: a probe that
+# failed is not evidence of an old WSL.
+# wsl.exe writes UTF-16LE even through a pipe. It is decoded, not stripped:
+# with only the NULs dropped, a localized label's high bytes survive as ASCII
+# digits (Katakana is 0x30xx, Cyrillic а..й is 0x043x), so a Japanese label
+# read as "WSL 0" and a Russian one as "5". The release is taken only as a
+# number with at least two dots, which no stray byte can form either.
+detect_wsl_release() {
+    [ "$(detect_os)" = "wsl" ] || return 1
+    _dwr_exe="$(command -v wsl.exe 2>/dev/null || true)"
+    if [ -z "$_dwr_exe" ] && [ -x /mnt/c/Windows/System32/wsl.exe ]; then
+        _dwr_exe=/mnt/c/Windows/System32/wsl.exe
     fi
-    _dd="$(_detect_engine_probe docker info --format '{{.OSType}} {{.ServerVersion}}' 2>/dev/null | head -1)"
-    case "$_dd" in
-        linux\ *) : ;;
-        "") echo "down"; return 0 ;;
-        *) echo "none"; return 0 ;;
-    esac
-    _dd_major="${_dd#linux }"
-    _dd_major="${_dd_major%%.*}"
-    case "$_dd_major" in ''|*[!0-9]*) _dd_major=0 ;; esac
-    echo "docker $_dd_major"
+    [ -n "$_dwr_exe" ] || return 1
+    # A FILE, NOT A PIPE: the probe's own exit status is the first verdict
+    # (bash 3.2 has no pipefail to keep it), and a command substitution would
+    # drop the NUL bytes the decoder needs to recognise UTF-16.
+    _dwr_tmp="$(mktemp "${TMPDIR:-/tmp}/exakit-wsl.XXXXXX" 2>/dev/null)" || return 1
+    if ! _detect_engine_probe "$_dwr_exe" --version > "$_dwr_tmp" 2>/dev/null; then
+        rm -f "$_dwr_tmp"
+        return 1
+    fi
+    # UTF-16 only when NULs are there: WSL_UTF8=1 makes wsl.exe write UTF-8,
+    # which a UTF-16 decode would garble. LC_ALL=C throughout: in a UTF-8
+    # locale tr, sed and grep refuse a byte order mark as an illegal sequence.
+    if [ "$(LC_ALL=C tr -d '\000' < "$_dwr_tmp" | wc -c)" -ne "$(wc -c < "$_dwr_tmp")" ] && \
+       command -v iconv >/dev/null 2>&1; then
+        _dwr_line="$(iconv -f UTF-16LE -t UTF-8 < "$_dwr_tmp" 2>/dev/null | \
+            LC_ALL=C sed "1s/^$(printf '\357\273\277')//" | LC_ALL=C tr -d '\r' | head -1)"
+    else
+        _dwr_line="$(LC_ALL=C tr -d '\000\r' < "$_dwr_tmp" | head -1)"
+    fi
+    rm -f "$_dwr_tmp"
+    _dwr_rel="$(printf '%s\n' "$_dwr_line" | \
+        LC_ALL=C grep -o '[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\(\.[0-9][0-9]*\)*' | head -1)"
+    [ -n "$_dwr_rel" ] || return 1
+    printf '%s\n' "$_dwr_rel"
 }
 
 
@@ -648,10 +883,10 @@ preflight_report() {
     fi
 
     # The database is an Exasol Personal deployment, and on Linux the launcher
-    # deploys through Podman - specifically; nothing else substitutes. macOS
-    # needs nothing installed first. WSL takes the Linux checks: the launcher
-    # has no WSL concept on that path, only the Linux one, and a WSL2 distro
-    # satisfies it with a podman of its own.
+    # deploys through Docker or Podman; nothing else substitutes. macOS needs
+    # nothing installed first. WSL takes the Linux checks: the launcher has no
+    # WSL concept on that path, only the Linux one, and a WSL2 distro
+    # satisfies it with an engine of its own.
     # WSL 1 HAS NO LINUX KERNEL, so it has no cgroups, no user namespaces, and
     # no container runtime that can work. detect_wsl_version's own comment says
     # "this gates a hard refusal" - and nothing anywhere called it for that.
@@ -668,19 +903,121 @@ preflight_report() {
     if [ "$_os" = "wsl" ] && [ "$(detect_wsl_version 2>/dev/null)" = "1" ]; then
         _pf_bad "WSL 1: Exasol Personal needs a real Linux kernel to run containers, and WSL 1 does not have one (it translates syscalls to the NT kernel). Convert this distro from PowerShell: wsl --set-version $(cat /etc/hostname 2>/dev/null || echo '<distro>') 2   then re-run the installer."
     elif [ "$_os" = "linux" ] || [ "$_os" = "wsl" ]; then
-        if command -v podman >/dev/null 2>&1; then
+        # From Exasol Personal 2.4 a NEW deployment runs on Docker when the kit
+        # finds one it can use, else on Podman - the same order the deploy step
+        # takes (personal_resolve_engine). EXAKIT_CONTAINER_ENGINE=podman is
+        # honoured here too, so the report describes the install that will run.
+        #
+        # THE SAME ANSWER AS THE DEPLOY STEP, reasons included. A docker on
+        # PATH that did not count used to vanish from the report ("none is on
+        # PATH"), EXAKIT_CONTAINER_ENGINE=docker with a stopped Docker passed
+        # here and stopped the database step a minute later, and a bogus value
+        # passed here and ended the run there.
+        _pf_named="${EXAKIT_CONTAINER_ENGINE:-}"
+        _pf_engine=""
+        _pf_docker_why=""
+        case "$_pf_named" in
+            ''|docker|podman) : ;;
+            *) _pf_bad "EXAKIT_CONTAINER_ENGINE must be docker or podman, not '$_pf_named' - the database step stops on it" ;;
+        esac
+        _pf_docker_kind=""
+        if [ "${EXAKIT_CONTAINER_ENGINE:-}" != "podman" ] && [ "$(detect_docker 2>/dev/null)" = "docker" ]; then
+            # NOT GREEN FOR A LAUNCHER THAT CANNOT BE TOLD. A kept launcher
+            # from before --container-engine deploys on Podman whatever the
+            # kit decides, and the deploy step says so; the preflight used to
+            # promise Docker on exactly that machine.
+            if detect_launcher_takes_engine; then
+                _pf_docker_v="$(_detect_engine_probe docker info --format '{{.ServerVersion}}' 2>/dev/null | tr -d '\r' | head -1)"
+                _pf_ok "Docker: available (Engine ${_pf_docker_v:-29+}) - a new Exasol Personal deployment runs on it"
+                _pf_engine="docker"
+            elif [ "$_pf_named" = "docker" ]; then
+                _pf_bad "EXAKIT_CONTAINER_ENGINE=docker, but this Exasol launcher cannot be told which engine to use, so the database runs on Podman - the database step stops on it: update the launcher ('exakit update personal'), or drop the variable"
+                _pf_engine="refused"
+            else
+                _pf_docker_why="Docker is usable, but this Exasol launcher cannot be told which engine to use"
+            fi
+        elif [ "$_pf_named" != "podman" ] && command -v docker >/dev/null 2>&1 && \
+             ! detect_docker_reason && [ "$_dd_kind" != "missing" ]; then
+            _pf_docker_why="$_dd_said"
+            _pf_docker_kind="$_dd_kind"
+        fi
+        if [ -n "$_pf_engine" ]; then
+            :
+        elif [ "$_pf_named" = "docker" ]; then
+            _pf_bad "EXAKIT_CONTAINER_ENGINE=docker, but ${_pf_docker_why:-Docker is not usable here} - the database step stops on it: fix Docker, or drop the variable to let the kit use Podman"
+        elif command -v podman >/dev/null 2>&1; then
+            [ -n "$_pf_docker_why" ] && _pf_note "$_pf_docker_why - a new Exasol Personal deployment will run on Podman"
+            # THE REMEDY GOES HERE, BEFORE ANYTHING EXISTS. Once the database
+            # is made on Podman it stays there: joining the group and
+            # re-running does not move it (that takes an uninstall).
+            [ "$_pf_docker_kind" = "denied" ] && \
+                _pf_note "To use Docker instead, add your user to the docker group before installing (this grants root-level access; log out and back in), then re-run"
             _pf_ok "Podman: available (the Exasol Personal deployment runs through it)"
-            # Rootless Podman answers `podman info` happily and then fails at
-            # `run` when the machine is missing what rootless needs.
-            _pf_podman_gap="$(detect_rootless_podman_gap 2>/dev/null || true)"
-            [ -n "$_pf_podman_gap" ] && _pf_bad "Rootless Podman: $_pf_podman_gap"
+            _pf_engine="podman"
+            # NOT JUDGED HERE: whether rootless Podman is complete (a subuid
+            # range, newuidmap, cgroups v2). This gate used to refuse the
+            # install on such a gap, which sent people to fix by hand what the
+            # next step offers to fix for them. The deploy step heals what it
+            # can and warns about the rest (personal_heal_rootless_podman), and
+            # the launcher says if what is left matters.
+        elif [ "$_pf_named" = "podman" ]; then
+            # NAMED, NOT ABSENT. "None is on PATH" was wrong on a box with a
+            # working Docker, and offered Docker while the variable bars it.
+            # The database step installs Podman where it can.
+            if [ "${EXAKIT_INSTALL_PODMAN:-1}" = "0" ]; then
+                _pf_bad "EXAKIT_CONTAINER_ENGINE=podman, and Podman is not installed - EXAKIT_INSTALL_PODMAN=0 stops the installer installing it: install Podman yourself (e.g. 'sudo apt-get install -y podman uidmap' or 'sudo dnf install -y podman'), then re-run"
+            else
+                _pf_note "EXAKIT_CONTAINER_ENGINE=podman, and Podman is not installed yet - the database step installs it where this distro's package manager can (or install it yourself: e.g. 'sudo apt-get install -y podman uidmap' or 'sudo dnf install -y podman')"
+                _pf_engine="podman"
+            fi
+        elif [ -n "$_pf_docker_why" ]; then
+            # Docker IS on PATH: say why it did not count, not "none is on PATH".
+            if [ "$_os" = "wsl" ]; then
+                _pf_bad "No usable container engine in this distro: $_pf_docker_why, and Podman is not installed - fix Docker (Docker Desktop with its WSL integration for this distro, Engine 29 or newer), or install Podman here ('sudo apt-get install -y podman uidmap'); Podman on the Windows side does not count"
+            else
+                _pf_bad "No usable container engine: $_pf_docker_why, and Podman is not installed - fix Docker (Engine 29 or newer), or install Podman with your package manager (e.g. 'sudo apt-get install -y podman' or 'sudo dnf install -y podman')"
+            fi
         elif [ "$_os" = "wsl" ]; then
-            # Named for the distro, not for "Linux": the podman that counts is
-            # the one inside WSL. A Podman Desktop on the Windows side is a
-            # different machine as far as this PATH is concerned.
-            _pf_bad "Podman is required and is not on PATH inside this distro - install it here (Debian/Ubuntu: 'sudo apt-get install -y podman uidmap'); Podman or Docker Desktop on the Windows side does not count"
+            # Named for the distro, not for "Linux": the engine that counts is
+            # the one on PATH inside WSL. Docker Desktop reaches it through its
+            # WSL integration; a Podman Desktop on the Windows side does not.
+            _pf_bad "A container engine is required and none is on PATH inside this distro - install Podman here (Debian/Ubuntu: 'sudo apt-get install -y podman uidmap'), or enable Docker Desktop's WSL integration for it (Docker Engine 29 or newer); Podman on the Windows side does not count"
         else
-            _pf_bad "Podman is required on Linux and is not on PATH - install it with your package manager (e.g. 'sudo apt-get install -y podman' or 'sudo dnf install -y podman')"
+            _pf_bad "A container engine is required and none is on PATH - install Podman with your package manager (e.g. 'sudo apt-get install -y podman' or 'sudo dnf install -y podman'), or Docker Engine 29 or newer"
+        fi
+        # THE WSL GATE, PREVIEWED. A fresh Podman deployment on a WSL kernel
+        # without nftables is refused by the deploy step (Podman cannot build
+        # the 2.4 network there); the preflight said "all checks passed" on
+        # exactly that machine. A release that cannot be read is unknown,
+        # never old (detect_wsl_release), so it is a note, not a failure.
+        # THE GATE'S OWN EXEMPTIONS, NOT A SUBSET: the iptables driver and a
+        # Podman on another network backend pass the deploy, so they pass
+        # here too - a preview that fails a machine the deploy accepts stops
+        # an agent for nothing.
+        if [ "$_os" = "wsl" ] && [ "$_pf_engine" = "podman" ] && \
+           ! detect_podman_iptables_driver && ! detect_podman_backend_not_netavark; then
+            if _pf_wsl_rel="$(detect_wsl_release 2>/dev/null)" && [ -n "$_pf_wsl_rel" ]; then
+                _pf_wsl_major="${_pf_wsl_rel%%.*}"
+                _pf_wsl_minor="${_pf_wsl_rel#*.}"
+                _pf_wsl_minor="${_pf_wsl_minor%%.*}"
+                [ "$_pf_wsl_rel" = "$_pf_wsl_major" ] && _pf_wsl_minor=0
+                case "${_pf_wsl_major}${_pf_wsl_minor}" in ''|*[!0-9]*) _pf_wsl_major=0; _pf_wsl_minor=0 ;; esac
+                if [ "$_pf_wsl_major" -lt 2 ] || { [ "$_pf_wsl_major" -eq 2 ] && [ "$_pf_wsl_minor" -lt 7 ]; }; then
+                    # AN EXISTING DEPLOYMENT IS NOT REFUSED. The deploy step
+                    # gates only a fresh Podman deployment, and the launcher
+                    # update is not gated at all (it changes no data; the
+                    # start after it names the fix from netavark's own error).
+                    # Failing the preview there stopped an agent before a
+                    # re-run the deploy step accepts, so it is a note.
+                    if _detect_personal_deployment_present; then
+                        _pf_note "WSL $_pf_wsl_rel: the existing Podman deployment is kept, but once its launcher is Exasol Personal 2.4 it cannot start on this WSL kernel (no nftables) - in PowerShell run 'wsl --update' then 'wsl --shutdown', or set firewall_driver = \"iptables\" under [network] in ~/.config/containers/containers.conf (the iptables package must be installed)"
+                    else
+                        _pf_bad "WSL $_pf_wsl_rel: Podman on this WSL kernel cannot create the network Exasol Personal 2.4 needs (no nftables) - in PowerShell run 'wsl --update' then 'wsl --shutdown', or set firewall_driver = \"iptables\" under [network] in ~/.config/containers/containers.conf (the iptables package must be installed)"
+                    fi
+                fi
+            else
+                _pf_note "The WSL release could not be read from this distro - Exasol Personal 2.4 on Podman needs WSL 2.7 or newer; check with 'wsl --version' in PowerShell"
+            fi
         fi
     fi
 

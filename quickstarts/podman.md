@@ -18,87 +18,33 @@ If `exakit` isn't available yet, start with the Podman commands. `exakit status 
 
 ## Common installation blockers
 
-- [Windows: rootful and rootless machines](#windows-rootful-and-rootless-machines)
-- [Windows: the pids controller](#windows-the-pids-controller)
-- [Windows: DNS inside the machine](#windows-dns-inside-the-machine)
+- [Windows: rootful machine and unreachable database](#windows-rootful-machine)
 - [Windows: database container stays Created](#windows-database-container-stays-created)
 - [Windows: Podman is installed but cannot connect](#windows-connection-failures)
 - [WSL2 and virtualization errors](#wsl2-and-virtualization)
 - [Linux/WSL: missing rootless ID ranges or helpers](#linux-and-wsl-rootless-permissions)
 
-### Windows rootful and rootless machines
+### Windows rootful machine
 
-The kit supports both rootful and rootless Podman machines. It reports the mode in the compatibility check and doesn't switch it unless it finds a specific problem and you agree. Check the mode in PowerShell:
+On Windows, the database port has only been reachable from a rootless default Podman machine: a rootful one publishes the port as an iptables rule inside the machine, which nothing forwards to Windows. The installer does not check the machine. If a Podman deployment fails to deploy, or deploys but never answers on `127.0.0.1:8563`, it prints the fix below. Check the setting in PowerShell:
 
 ```powershell
 podman machine inspect --format "{{.Rootful}}"
-podman version
 ```
 
-If the database container runs but nothing answers on `127.0.0.1:8563` from Windows, the kit tells you why:
-
-- **Podman 6.0.0 to 6.1.0 on a rootful machine.** These versions don't forward a rootful machine's published ports to Windows. The bug is fixed in 6.1.1, but a machine only gets the fix when you recreate it. Upgrade Podman, then recreate the machine. **This deletes the machine and every container and image in it.**
-
-  ```powershell
-  podman machine rm
-  podman machine init
-  podman machine start
-  ```
-
-- **Any other version.** Restart the machine with `podman machine stop` and `podman machine start`, then run `exakit start`. As another option, the kit offers to switch the machine to rootless mode. It switches back if rootless mode has no `pids` controller (see below), because the database can't start there.
-
-Switching modes stops and restarts the machine, interrupting its containers. Containers, images and volumes created in one mode aren't visible in the other. They haven't been deleted or migrated. See [Podman's rootful/rootless setting](https://docs.podman.io/en/latest/markdown/podman-machine-set.1.html#rootful).
-
-For an unattended Windows install, set `$env:EXAKIT_PODMAN_SELFHEAL = '1'` before running the installer only if you can allow the machine to restart. Without it, the installer names the cause and the commands but changes nothing. `EXAKIT_FORCE=1` has nothing to do with the machine's mode.
-
-### Windows: the pids controller
-
-The database container runs with a process (`pids`) limit. Since WSL 2.9, a rootless Podman machine can get no cgroup controllers at all, so the container stays `Created` with `crun: controller 'pids' is not available ... OCI runtime error`. This is a known upstream issue: [podman-container-tools/podman#29909](https://github.com/podman-container-tools/podman/issues/29909). Check the machine:
-
-```powershell
-podman info --format "{{.Host.CgroupControllers}}"
-```
-
-If the list doesn't contain `pids`, a rootful machine is the current workaround. The installer offers to make the switch for you. To do it yourself:
+If it returns `true`, run the commands below yourself. Finish other work on the machine first. **These commands stop and restart it, interrupting its containers.**
 
 ```powershell
 podman machine stop
-podman machine set --rootful
+podman machine set --rootful=false
 podman machine start
-podman info --format "{{.Host.CgroupControllers}}"
+podman machine inspect --format "{{.Rootful}}"
+podman info
 ```
 
-Then re-run the starter-kit install. If a rootful machine still lists no `pids`, the database can't start in this machine until WSL or Podman fixes the issue. The kit stops before deploying and names the cause instead of waiting for a database that can't start.
+The inspection should now return `false`, and you can re-run the starter-kit install. Containers, images and volumes created in rootful mode are no longer visible through the rootless connection. They haven't been deleted or migrated. See [Podman's rootful/rootless setting](https://docs.podman.io/en/latest/markdown/podman-machine-set.1.html#rootful).
 
-### Windows: DNS inside the machine
-
-The image is pulled inside Podman's machine, which can fail to resolve names even when Windows can. The error reads `lookup registry-1.docker.io: Temporary failure in name resolution`. Before a fresh deploy, the kit checks this with:
-
-```powershell
-podman machine ssh getent hosts registry-1.docker.io
-```
-
-On Windows 11 22H2 and later, turn on WSL DNS tunneling. Add this to `%USERPROFILE%\.wslconfig`, keeping any settings already in the file:
-
-```ini
-[wsl2]
-dnsTunneling=true
-```
-
-Then restart WSL and the machine. **`wsl --shutdown` stops every running WSL distribution**, so save your work first:
-
-```powershell
-wsl --shutdown
-podman machine start
-```
-
-The installer offers to make this edit and restart for you. On older Windows, switch the machine to user-mode networking instead:
-
-```powershell
-podman machine stop
-podman machine set --user-mode-networking
-podman machine start
-```
+`EXAKIT_PODMAN_SELFHEAL=1` has no effect here: the kit never switches the Windows machine for you.
 
 ### Windows: database container stays Created
 
@@ -109,7 +55,7 @@ podman ps -a --filter name=exasol-db
 podman inspect --format "{{.State.Error}}" <container-name>
 ```
 
-A `pids` error is covered [above](#windows-the-pids-controller). A deployment that never started holds no data, so the installer offers to remove it and deploy a fresh one. That question defaults to yes. Set `EXAKIT_REPLACE_DB=0` to keep it.
+A deployment that never started holds no data, so the installer offers to remove it and deploy a fresh one. That question defaults to yes. Set `EXAKIT_REPLACE_DB=0` to keep it.
 
 ### Windows connection failures
 
@@ -137,14 +83,46 @@ wsl --list --verbose
 
 The kit needs WSL2 and won't run on WSL1. If virtualization is disabled, the Virtual Machine Platform feature is missing, or you see an error such as `0x80370102`, follow [Microsoft's WSL troubleshooting](https://learn.microsoft.com/en-us/windows/wsl/troubleshooting). If Windows itself runs in a VM, ask the host administrator whether nested virtualization needs to be enabled. For an outdated WSL installation, run `wsl --update` and restart if prompted.
 
-If you're installing inside a WSL distro, install Podman in that distro too. Keep the kit in your Linux home directory rather than under `/mnt/c`. Podman Desktop on Windows doesn't supply Podman for this install. See the [Linux/WSL quickstart](linux.md). Save your work before running `wsl --shutdown`, as it stops every running WSL distribution, including a WSL-backed Podman machine.
+If you're installing inside a WSL distro, install Podman in that distro too, or enable Docker Desktop's WSL integration for it (the kit uses Docker Engine 29 or newer when it finds it). Keep the kit in your Linux home directory rather than under `/mnt/c`. Podman Desktop on Windows doesn't supply Podman for this install. See the [Linux/WSL quickstart](linux.md). Save your work before running `wsl --shutdown`, as it stops every running WSL distribution, including a WSL-backed Podman machine.
+
+### WSL 2.7 and nftables
+
+Exasol Personal 2.4 puts each deployment on its own network, which Podman builds with its nftables firewall driver. The kernel that WSL 2.6 and older ship has no nftables, so a Podman deploy inside WSL, or the first start of an existing deployment after the launcher update to 2.4, fails with:
+
+```
+Error: netavark: nftables error: "nft" did not return successfully while applying ruleset
+```
+
+The kit reads `wsl.exe --version` before a fresh Podman deploy and before replacing a Podman deployment (`exakit repair-runtime`), and stops with the fix, changing and deleting nothing. The replace check runs only when the replace can be consented to (`EXAKIT_REPLACE_DB=1`, or a terminal to ask), and a replace is also refused when this run's start already failed with the nftables error. `exakit preflight` fails a fresh Podman deploy on such a kernel; inside WSL, with an existing Podman deployment, it shows a note instead. `exakit update` does not check: it swaps the launcher and changes no data, and if the next `exakit start` then fails with the nftables error below, the kit says the launcher was updated and names `wsl --update`, `wsl --shutdown`, then `exakit start`, with the deployment untouched; `exakit status --json` keeps answering `remedy: "wsl --update"` until a start succeeds. If the release cannot be read (no `wsl.exe`, interop off, no answer), the kit warns and carries on: check it yourself with `wsl --version`. Replacing a deployment is the exception, because its destroy cannot be undone: there an unreadable release stops the replace until `wsl --version` shows 2.7 or newer and you re-run it with `EXAKIT_WSL_CHECKED=1`. `exakit start` names `wsl --update` only when its own output shows the nftables error below; it also names the iptables alternative (inside WSL in the distro's containers.conf, on Windows inside Podman's machine). Update WSL from PowerShell on Windows, restart it, then re-run the command the message names:
+
+```powershell
+wsl --update
+wsl --shutdown
+```
+
+The error comes only from Podman's nftables driver, so a Podman that uses the iptables driver is not affected and the kit does not ask for the update:
+
+- **Podman's machine on Windows.** The kit reads the machine's Podman configuration through `podman machine ssh` (no root needed), and only when the WSL release is below 2.7 or, on a replace, cannot be read. It reads the files Podman reads, in Podman's order: `/usr/share/containers/containers.conf`, `/etc/containers/containers.conf`, `/etc/containers/containers.conf.d/*.conf`, `~/.config/containers/containers.conf`, then `~/.config/containers/containers.conf.d/*.conf`. Only a `firewall_driver` inside the `[network]` table counts, the last one set wins, and the value must be quoted (`firewall_driver = iptables` without quotes does not count). When that is `"iptables"`, the kit lets a fresh deploy and a replace through on any WSL release (`exakit update` has no check to pass). A fresh deploy or a replace starts a stopped machine first, and says so; `exakit preflight` and the refusal messages never start it, and for a stopped machine they say the setting could not be read and name `podman machine start`. An ssh that fails counts as not set, and the release decides. The answer is kept for the rest of the run. Check it yourself with `podman machine ssh "grep -s firewall_driver /usr/share/containers/containers.conf /etc/containers/containers.conf /etc/containers/containers.conf.d/*.conf ~/.config/containers/containers.conf ~/.config/containers/containers.conf.d/*.conf"`.
+- **Podman inside a WSL distro.** A machine that cannot update WSL can switch Podman to the iptables driver, inside the distro, with the `iptables` package installed (below). The kit reads the distro's files with the same rule (`~/.config` is `$XDG_CONFIG_HOME` when set, the value must be quoted), checks that the `iptables` command is there, and then does not ask for the update. When the setting is there but `iptables` is not installed, the refusal says so.
+
+On Windows without either, `EXAKIT_CONTAINER_ENGINE=docker` with Docker Desktop is the way through without a WSL update. The kit also does not ask when the distro's Podman reports a network backend other than netavark (`podman info --format '{{.Host.NetworkBackend}}'` answers, for example, `cni`), which cannot hit this error. A Podman that answers `netavark`, or answers nothing, is still checked:
+
+```ini
+# ~/.config/containers/containers.conf
+[network]
+firewall_driver = "iptables"
+```
+
+Docker is not affected: Docker Desktop's WSL integration has no such floor. The same floor applies to Podman's machine on Windows, which runs on the WSL kernel too, unless the machine uses the iptables driver (see above).
 
 ### Linux and WSL rootless permissions
 
-Rootless Podman needs two things from your Linux account: a range of subordinate user and group IDs in `/etc/subuid` and `/etc/subgid`, and the `newuidmap` / `newgidmap` helpers. Check what is missing:
+Rootless Podman needs two things from your Linux account: a range of subordinate user and group IDs in `/etc/subuid` and `/etc/subgid`, and the `newuidmap` / `newgidmap` helpers. The installer checks both before a Podman deployment, offers to repair a gap, and names what is still missing in its "Rootless Podman is not ready" warning (also in `exakit logs setup`). To check by hand:
 
 ```bash
-exakit preflight
+podman info
+grep "^$USER:" /etc/subuid /etc/subgid
+command -v newuidmap newgidmap
 ```
 
 **Missing helpers.** On Debian or Ubuntu:
@@ -153,7 +131,7 @@ exakit preflight
 sudo apt-get install -y uidmap
 ```
 
-On other distributions, install the package the diagnostic names.
+On other distributions, install the package the installer's warning names.
 
 **Missing ID ranges.** The installer can add the `/etc/subuid` and `/etc/subgid` entries for you through `sudo`. On a shared or centrally managed machine, ask your administrator first: the new ranges must not overlap another user's. Once the ranges have changed, run this as your normal user, never as root:
 
@@ -172,13 +150,13 @@ podman info
 Two things to keep in mind:
 
 - Run the whole install under your normal account. Installing with `sudo` uses root's separate Podman storage, and the database ends up where your user cannot reach it.
-- An unattended install repairs these only when `EXAKIT_PODMAN_SELFHEAL=1` is set and `sudo` works without a password prompt. Otherwise the kit prints the manual fix and stops.
+- An unattended install repairs these only when `EXAKIT_PODMAN_SELFHEAL=1` is set and `sudo` works without a password prompt. Otherwise the kit warns, prints the manual fix and carries on; the deploy step says if the gap matters.
 
 ## Other Podman issues
 
 ### Podman Desktop and Docker Desktop
 
-The launcher needs Podman on Windows, Linux and WSL. Docker Desktop doesn't meet that requirement. You can use the Podman CLI on its own, with Podman Desktop as an optional graphical interface. Windows also needs a Podman machine. On Linux and inside WSL, the kit uses Podman directly.
+From Exasol Personal 2.4 the launcher runs a new deployment on Docker Engine 29 or newer (Docker Desktop on Windows, set to Linux containers; Docker Engine or Docker Desktop's WSL integration on Linux and WSL) or on Podman. The kit picks Docker when it is usable and Podman otherwise, and a deployment keeps its engine. You can use the Podman CLI on its own, with Podman Desktop as an optional graphical interface. Windows also needs a Podman machine for the Podman path. On Linux and inside WSL, the kit uses the engine directly.
 
 ### Podman is missing or installation failed
 
@@ -190,7 +168,7 @@ Once Podman works, re-run the starter-kit install command. It skips completed st
 
 ### Cgroups v2 and resource limits
 
-The kit's rootless deployment needs cgroups v2. Run `exakit preflight` for the steps that apply to your platform. On Linux, you may need to change the boot configuration and reboot. On WSL, edit `%USERPROFILE%\.wslconfig` on Windows as instructed, then restart WSL. Keep the file's existing settings and save your work before running `wsl --shutdown`, which stops all distributions.
+The kit's rootless deployment needs cgroups v2. When the installer finds it off, it names the steps that apply to your platform and carries on; the launcher says if it matters. On Linux, you may need to change the boot configuration and reboot. On WSL, edit `%USERPROFILE%\.wslconfig` on Windows as instructed, then restart WSL. Keep the file's existing settings and save your work before running `wsl --shutdown`, which stops all distributions.
 
 On Linux and inside WSL, `exakit preflight` also checks that rootless Podman gets a `pids` cgroup controller. On Linux, delegate it to your user: create `/etc/systemd/system/user@.service.d/delegate.conf` containing `[Service]` and `Delegate=cpu cpuset io memory pids`, run `sudo systemctl daemon-reload`, then log in again. Inside WSL 2.9 and later, this is the known issue [podman-container-tools/podman#29909](https://github.com/podman-container-tools/podman/issues/29909).
 

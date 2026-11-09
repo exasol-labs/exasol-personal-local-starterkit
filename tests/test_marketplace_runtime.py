@@ -248,7 +248,9 @@ class DbtLifecycleTest(unittest.TestCase):
         python.parent.mkdir(parents=True)
         python.write_text("fake")
         dbt.write_text("fake")
-        with patch.object(dbt_exasol, "package_version", return_value="1.12.1"), \
+        # The version the kit pins today (versions.json), so a bump never fails this test.
+        pinned = self.ctx.target_version("dbt-exasol", "1.12.3")
+        with patch.object(dbt_exasol, "package_version", return_value=pinned), \
              patch.object(dbt_exasol, "validate", return_value=True), \
              patch.object(KitContext, "run_logged") as run_logged:
             dbt_exasol.install(self.ctx)

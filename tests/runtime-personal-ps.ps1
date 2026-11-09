@@ -218,9 +218,10 @@ $hint = Get-PersonalForeignDbHint
 Check "...and names WSL when something does" $true ($hint -like "*inside WSL*")
 
 # ---------------------------------------------------------------------------
-# PODMAN READINESS, SELF-HEAL AND THE REAL ERROR (Windows incident: DNS inside
-# the machine, a rootless machine with no pids controller, a rootful machine
-# the kit refused, a never-booted deployment it asked the wrong questions of).
+# THE REAL ERROR (Windows incident: a container that never started, its cause
+# unnamed; a never-booted deployment the kit asked the wrong questions of).
+# The kit reads the container's own error and names the cause; it never
+# changes the Podman machine (kit 0.2.4).
 #
 # The modules are dot-sourced AGAIN so every stub above is replaced by the real
 # function, then podman itself is a stub: Get-PersonalPodman answers with a
@@ -312,26 +313,6 @@ function Invoke-Captured([scriptblock]$Body) {
     try { return ((& $Body 6>&1 | Out-String)) } catch { $script:threw = "$_"; return "" }
 }
 
-Write-Host "both machine modes pass the requirements gate, and the gate changes nothing:"
-Reset-Machine
-$script:m.Rootful = $true
-function Get-ExakitHostArch { return "amd64" }
-$out = Invoke-Captured { Test-PersonalRequirements }
-Check "a rootful machine is not refused" "" $script:threw
-Check "...the mode is reported" $true ($out -like "*Podman machine rootful*")
-Check "...and nothing was stopped, set or started" $false ((Show-Calls) -match "machine (stop|set|start)")
-$script:m.Rootful = $false
-$out = Invoke-Captured { Test-PersonalRequirements }
-Check "a rootless machine is reported too" $true ($out -like "*Podman machine rootless*")
-
-Write-Host "the rootful port-forwarding regression is recognised by version:"
-Check "6.0.2 is the regression" $true (Test-PersonalPodmanForwardingRegression "6.0.2")
-Check "6.1.0 is the regression" $true (Test-PersonalPodmanForwardingRegression "v6.1.0")
-Check "6.1.1 is fixed" $false (Test-PersonalPodmanForwardingRegression "6.1.1")
-Check "5.8.9 forwards" $false (Test-PersonalPodmanForwardingRegression "5.8.9")
-Check "6.10.0 is not 6.1.0" $false (Test-PersonalPodmanForwardingRegression "6.10.0")
-Check "unknown is not evidence" $false (Test-PersonalPodmanForwardingRegression "")
-
 Write-Host "known errors are named with their fix:"
 Check "the pids error" "pids" ((Get-PersonalKnownCause "crun: controller ``pids`` is not available under /sys/fs/cgroup/non-systemd/x/cgroup.controllers: OCI runtime error").Kind)
 Check "the DNS error" "dns" ((Get-PersonalKnownCause "pinging container registry registry-1.docker.io: Get https://registry-1.docker.io/v2/: dial tcp: lookup registry-1.docker.io: Temporary failure in name resolution").Kind)
@@ -341,96 +322,16 @@ Check "...and before 22H2 user-mode networking" $true ((Get-PersonalKnownCause "
 function Get-PersonalWindowsBuild { return 22631 }
 Check "anything else is not guessed at" $null (Get-PersonalKnownCause "exit status 125")
 
-Write-Host "a machine that cannot resolve the registry stops a fresh deploy, with the fix:"
-Reset-Machine
-$script:m.Dns = $false
-function Test-PersonalDeploymentExists { return $false }
-function Test-PersonalDeploymentRunning { return $false }
-$script:PersonalNoDatabase = $false
-Set-ExakitFailureReason ""
-$out = Invoke-Captured { Install-PersonalDeployment }
-Check "no database, softly" $true $script:PersonalNoDatabase
-Check "...the reason names the registry" $true ((Get-ExakitFailureReason) -like "*cannot resolve registry-1.docker.io*")
-Check "...the fix is printed" $true ($out -like "*dnsTunneling=true*")
-Check "...the unattended opt-in is spelled out" $true ($out -like "*EXAKIT_PODMAN_SELFHEAL=1*")
-Check "...and nothing was deployed" -1 (Index-Of "logged: exasol-stub install local")
-Check "...nor was WSL restarted without consent" -1 (Index-Of "logged: wsl.exe --shutdown")
-
-Write-Host "...and with consent it is fixed and asked again:"
-Reset-Machine
-$script:m.Dns = $false
-$env:EXAKIT_PODMAN_SELFHEAL = "1"
-$savedProfile = $env:USERPROFILE
-$env:USERPROFILE = Join-Path $work "profile"
-New-Item -ItemType Directory -Force -Path $env:USERPROFILE | Out-Null
-Check "the DNS check passes after the fix" $true (Test-PersonalPodmanDns)
-Check "...wsl --shutdown ran" $true ((Index-Of "logged: wsl.exe --shutdown") -ge 0)
-Check "...before the machine was started again" $true ((Index-Of "logged: podman-stub machine start") -gt (Index-Of "logged: wsl.exe --shutdown"))
-Check "...and .wslconfig says so" $true ((Get-Content (Join-Path $env:USERPROFILE ".wslconfig") -Raw) -match '(?m)^dnsTunneling=true')
-
-Write-Host ".wslconfig is edited, never replaced:"
-$cfg = Join-Path $work "wslconfig-test"
-Remove-Item $cfg -ErrorAction SilentlyContinue
-Check "a missing file is created" $true (Set-PersonalWslDnsTunneling $cfg)
-Check "...with the section and the key" "[wsl2]|dnsTunneling=true" ((Get-Content $cfg) -join "|")
-[System.IO.File]::WriteAllText($cfg, "# mine`r`n[boot]`r`nsystemd=true`r`n`r`n[wsl2]`r`nmemory=8GB`r`n[experimental]`r`nautoMemoryReclaim=gradual`r`n")
-[void](Set-PersonalWslDnsTunneling $cfg)
-Check "an existing [wsl2] gets the key under its header, everything else kept" "# mine|[boot]|systemd=true||[wsl2]|dnsTunneling=true|memory=8GB|[experimental]|autoMemoryReclaim=gradual" ((Get-Content $cfg) -join "|")
-$once = [System.IO.File]::ReadAllText($cfg)
-[void](Set-PersonalWslDnsTunneling $cfg)
-Check "a second run changes nothing" $true ($once -eq [System.IO.File]::ReadAllText($cfg))
-[System.IO.File]::WriteAllText($cfg, "[wsl2]`ndnsTunneling = false`nnetworkingMode=nat`n")
-[void](Set-PersonalWslDnsTunneling $cfg)
-Check "a key set to false is set to true, in place" "[wsl2]|dnsTunneling=true|networkingMode=nat" ((Get-Content $cfg) -join "|")
-Check "...and LF endings stay LF" $false ([System.IO.File]::ReadAllText($cfg) -match "`r")
-[System.IO.File]::WriteAllText($cfg, "[boot]`r`nsystemd=true`r`n")
-[void](Set-PersonalWslDnsTunneling $cfg)
-Check "a file without [wsl2] gets it appended" "[boot]|systemd=true||[wsl2]|dnsTunneling=true" ((Get-Content $cfg) -join "|")
-$env:USERPROFILE = $savedProfile
-
-Write-Host "no pids controller, rootless, consent: switched to rootful in order, then asked again:"
-Reset-Machine
-$env:EXAKIT_PODMAN_SELFHEAL = "1"
-Check "the pids check passes after the switch" $true (Test-PersonalPodmanPids)
-$iStop = Index-Of "bounded: machine stop"
-$iSet = Index-Of "logged: podman-stub machine set --rootful"
-$iStart = Index-Of "logged: podman-stub machine start"
-Check "stop, then set" $true ($iStop -ge 0 -and $iStop -lt $iSet)
-Check "set, then start" $true ($iSet -ge 0 -and $iSet -lt $iStart)
-$lastCtl = -1
-for ($i = 0; $i -lt $script:calls.Count; $i++) { if ($script:calls[$i] -eq "bounded: info --format {{.Host.CgroupControllers}}") { $lastCtl = $i } }
-Check "...and the controllers are asked again after the start" $true ($lastCtl -gt $iStart)
-Check "...on a machine that is rootful now" $true $script:m.Rootful
-
-Write-Host "no pids controller, no consent: no deploy that cannot succeed:"
-Reset-Machine
-$script:PersonalNoDatabase = $false
-$out = Invoke-Captured { Install-PersonalDeployment }
-Check "no database, softly" $true $script:PersonalNoDatabase
-Check "...the reason names the cause and the issue" $true ((Get-ExakitFailureReason) -like "*'pids'*podman-container-tools/podman#29909*")
-Check "...the machine was left alone" -1 (Index-Of "logged: podman-stub machine set --rootful")
-Check "...the manual fix is printed" $true ($out -like "*podman machine set --rootful*")
-Check "...and nothing was deployed" -1 (Index-Of "logged: exasol-stub install local")
-Reset-Machine
-$env:EXAKIT_PODMAN_SELFHEAL = "0"
-function Test-ExakitInteractive { return $true }
-Check "a terminal answer of no (EXAKIT_PODMAN_SELFHEAL=0) declines too" $false (Test-PersonalPodmanPids)
-Check "...and leaves the machine alone" -1 (Index-Of "logged: podman-stub machine set --rootful")
-function Test-ExakitInteractive { return $false }
-Reset-Machine
-$script:m.Rootful = $true
-$script:m.PidsRootful = $false
-$env:EXAKIT_PODMAN_SELFHEAL = "1"
-Check "rootful and still no pids: nothing to switch, a named failure" $false (Test-PersonalPodmanPids)
-Check "...without touching the machine" -1 (Index-Of "logged: podman-stub machine set --rootful=false")
-
 Write-Host "exakit start checks Podman first:"
 Reset-Machine
-$out = Invoke-Captured { Start-Personal }
 function Test-PersonalLauncherSupports($Token) { return $true }
+$realPodmanRunning = ${function:Test-PersonalPodmanRunning}
+function Test-PersonalPodmanRunning { return $false }
 $out = Invoke-Captured { Start-Personal }
-Check "a machine with no pids controller fails the start" $true ($script:threw -like "*podman-container-tools/podman#29909*")
+Check "a Podman that cannot run containers fails the start" $true ($script:threw -like "*podman info*")
 Check "...before the launcher was asked to start" -1 (Index-Of "logged: exasol-stub start")
+Check "...and the machine is never reconfigured" -1 (Index-Of "logged: podman-stub machine set --rootful")
+${function:Test-PersonalPodmanRunning} = $realPodmanRunning
 
 Write-Host "a container that refused to start ends the wait at once, and is the reason:"
 Reset-Machine
@@ -469,6 +370,10 @@ Write-Host "a deployment that never booted is offered for replacement, default y
 function Test-PersonalDeploymentExists { return $true }
 function Get-PersonalLauncherState { return "deployment_failed" }
 function Wait-PersonalSlowFirstBoot { return $false }
+# The WSL gate (tests/personal-wsl-gate-ps.ps1 covers it) answers yes here and
+# records that it was asked: a never-booted Podman deployment is checked
+# before its destroy, as a replace is.
+function Test-PersonalWslPodmanNetworkOk { param([string]$Rerun = "", [switch]$Replace, [switch]$Quiet, [switch]$StartMachine) $script:calls.Add("wsl: replace=$Replace"); return $true }
 Reset-Machine
 $script:m.PidsRootless = $true
 $script:m.DeployRc = 1
@@ -480,6 +385,7 @@ $out = Invoke-Captured { Install-PersonalDeployment }
 Check "the never-started branch is taken" $true ($out -like "*Removing the deployment that never started*")
 Check "...not the keep-its-data ladder" $false ($out -like "*An Exasol deployment was found, not running*")
 Check "...unattended, the default replaces it" $true ((Index-Of "logged: exasol-stub destroy --remove --auto-approve") -ge 0)
+Check "...after the WSL check, on a Podman deployment" $true ((Index-Of "wsl: replace=True") -lt (Index-Of "logged: exasol-stub destroy --remove --auto-approve"))
 Check "...and deploys a fresh one" $true ((Index-Of "logged: exasol-stub install local") -gt (Index-Of "logged: exasol-stub destroy --remove --auto-approve"))
 Reset-Machine
 $script:m.PidsRootless = $true
@@ -515,75 +421,12 @@ function Set-PersonalManifest { param([string]$Status = "") if ($Status -eq "hea
 Set-PersonalManifest "healthy"
 Check "a healthy record retires the never-booted mark" $false (Test-PersonalFirstBootPending)
 
-Write-Host "a running container Windows cannot reach is diagnosed, not timed out:"
-Reset-Machine
-$script:m.Rootful = $true
-$script:m.Server = "6.1.0"
-$script:m.Containers = "exasol-db-abc running"
-$out = Invoke-Captured { [void](Resolve-PersonalUnreachableDatabase) }
-Check "Podman 6.1.0 rootful is named as the known regression" $true ($out -like "*6.0.0 to 6.1.0, fixed in 6.1.1*")
-Check "...with the recreate fix" $true ($out -like "*podman machine rm; podman machine init*")
-Check "...the cause is kept for the reason" $true ($script:PersonalUnreachableCause -like "*6.1.1*")
-Check "...and the machine is not switched for it" -1 (Index-Of "logged: podman-stub machine set --rootful=false")
-Reset-Machine
-$script:m.Rootful = $true
-$script:m.Containers = "exasol-db-abc running"
-$out = Invoke-Captured { [void](Resolve-PersonalUnreachableDatabase) }
-Check "on 5.x, without consent, rootless is only offered" -1 (Index-Of "logged: podman-stub machine set --rootful=false")
-Check "...as one of the options" $true ($out -like "*podman machine set --rootful=false*")
-Reset-Machine
-$script:m.Rootful = $true
-$script:m.Containers = "exasol-db-abc running"
-$env:EXAKIT_PODMAN_SELFHEAL = "1"
-$out = Invoke-Captured { [void](Resolve-PersonalUnreachableDatabase) }
-Check "with consent it switches to rootless" $true ((Index-Of "logged: podman-stub machine set --rootful=false") -ge 0)
-Check "...and back to rootful when rootless has no pids" $true ((Index-Of "logged: podman-stub machine set --rootful") -gt (Index-Of "logged: podman-stub machine set --rootful=false"))
-Check "...without deploying into it" -1 (Index-Of "logged: exasol-stub deploy")
-Reset-Machine
-$script:m.Containers = "exasol-db-abc exited"
-Check "no running container: no forwarding diagnosis" $false (Resolve-PersonalUnreachableDatabase)
-Check "...and no question about the machine" -1 (Index-Of "bounded: machine inspect --format {{.Rootful}}")
-
 Write-Host "repair-runtime consents to the deletion it just asked about:"
 $xk = Get-Content -Raw (Join-Path $repo "setup/exakit.ps1")
 Check "EXAKIT_REPLACE_DB=1 beside EXAKIT_REUSE_DB=0" $true ($xk -match '\$env:EXAKIT_REUSE_DB = "0"[\s\S]{0,800}\$env:EXAKIT_REPLACE_DB = "1"')
 Check "...and --json claims repaired only when the runtime step completed" $true ($xk -match '\$repairCode -eq 0 -and \(Test-ExakitStepDone "runtime"\)')
 Reset-Machine
 Remove-Item Env:EXAKIT_PERSONAL_READY_TIMEOUT -ErrorAction SilentlyContinue
-
-Write-Host "Get-PersonalEngine: the launcher's own choice - Podman if installed, else a Docker 29+ on Linux containers:"
-$script:PersonalDeployDir = Join-Path $work "engine-none"
-$script:podmanHere = $false
-$script:dockerSays = "none"
-function Get-PersonalPodman { if ($script:podmanHere) { return [pscustomobject]@{ Source = "podman-stub" } }; return $null }
-function Get-PersonalDockerState { return $script:dockerSays }
-$script:podmanHere = $true; $script:dockerSays = "docker 29"
-Check "Podman installed -> podman, Docker beside it or not" "podman" (Get-PersonalEngine)
-$script:podmanHere = $false
-Check "no Podman, Docker 29 on Linux containers -> docker" "docker" (Get-PersonalEngine)
-$script:dockerSays = "docker 28"
-Check "Docker older than 29 -> podman (the launcher installs it)" "podman" (Get-PersonalEngine)
-$script:dockerSays = "down"
-Check "Docker Desktop not running -> docker (start it; no Podman beside it)" "docker" (Get-PersonalEngine)
-$script:dockerSays = "none"
-Check "neither -> podman (the launcher installs it through winget)" "podman" (Get-PersonalEngine)
-$recorded = Join-Path $work "engine-docker"
-New-Item -ItemType Directory -Force -Path (Join-Path $recorded "local/runtime") | Out-Null
-Set-Content -Path (Join-Path $recorded "local/runtime/container-engine.json") -Value '{"engine":"docker"}'
-$script:PersonalDeployDir = $recorded; $script:podmanHere = $true
-Check "a deployment keeps its recorded engine" "docker" (Get-PersonalEngine)
-$legacyDep = Join-Path $work "engine-legacy"
-New-Item -ItemType Directory -Force -Path (Join-Path $legacyDep "local/runtime/exa") | Out-Null
-$script:PersonalDeployDir = $legacyDep; $script:podmanHere = $false; $script:dockerSays = "docker 29"
-Check "a deployment from before 2.4.0 (data, no record) stays on podman" "podman" (Get-PersonalEngine)
-$script:PersonalDeployDir = Join-Path $work "engine-none"; $script:dockerSays = "down"
-function Warn2 { param($m) $script:calls.Add("warn: $m") }
-function Info { param($m) $script:calls.Add("info: $m") }
-$script:calls.Clear()
-Check "a stopped Docker is not ready" $false (Test-PersonalEngineReady)
-Check "...and says to start Docker Desktop" $true ((@($script:calls) -join "|") -like "*Start Docker Desktop*")
-$script:dockerSays = "docker 29"
-Check "a running Docker is ready" $true (Test-PersonalEngineReady)
 
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 Write-Host ""

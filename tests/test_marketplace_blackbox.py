@@ -202,8 +202,16 @@ class EnvAnswerTest(KitHomeCase):
             notes[prefix[0]] = (self.home / ".last-failure").exists()
         self.assertEqual(1, len(set(notes.values())), f".last-failure after a refused env answer: {notes}")
 
+    @unittest.skipIf(os.name == "nt", "the add-on's environment is stood in by a shell script")
     def test_already_installed_addon_is_left_alone(self) -> None:
+        """An add-on the kit installed is left alone on a second run. "Installed" is what the add-on's own
+        environment answers (a receipt alone is a stale record, and the kit reinstalls over it), so the
+        environment is stood in: its python answers the recorded version to any question."""
         self.reset_manifest({"components": {"dash_server": {"ownership": "kit", "version": "9.9.9"}}})
+        python = self.home / "dash-server-venv" / "bin" / "python"
+        python.parent.mkdir(parents=True)
+        python.write_text("#!/bin/sh\necho 9.9.9\n", encoding="utf-8")
+        python.chmod(0o755)
         for prefix in self.commands:
             with self.subTest(shell=prefix[0]):
                 before = self.tree()

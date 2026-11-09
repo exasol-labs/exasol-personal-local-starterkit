@@ -438,6 +438,31 @@ function New-ExapumpProfile {
     OkStep "Connection profile [$($script:ExapumpProfile)] written to $(Get-ExakitTilde $script:ExapumpConfigPath)"
 }
 
+# Test-ExapumpProfilePasswordStale - $true when the kit's profile holds a
+# password that is not the one on file for the database. A replaced deployment
+# is a new database and, from Exasol Personal 2.4, one with a new random sys
+# password: the credential file follows it, the profile did not, and every
+# `exakit sql` answered "Authentication failed". Get-ExakitStepArtifactState
+# asks this so the exapump step runs again over such a profile. Two file reads
+# and nothing written out. Twin of exapump_profile_password_stale.
+function Test-ExapumpProfilePasswordStale {
+    if (-not (Test-Path -LiteralPath $script:ExapumpConfigPath -PathType Leaf)) { return $false }
+    $pwFile = Get-ExakitManifestValue "runtime.password_file"
+    if (-not $pwFile -or -not (Test-Path -LiteralPath $pwFile -PathType Leaf)) { return $false }
+    $onFile = (Get-Content -LiteralPath $pwFile -Raw).TrimEnd("`r", "`n")
+    if (-not $onFile) { return $false }
+    $content = Get-Content -LiteralPath $script:ExapumpConfigPath -Raw
+    if (-not $content) { return $false }
+    $escapedProfile = [regex]::Escape($script:ExapumpProfile)
+    $section = [regex]::Match($content, "(?s)\[$escapedProfile\][^\[]*")
+    if (-not $section.Success) { return $false }
+    $line = [regex]::Match($section.Value, '(?m)^password\s*=\s*"(.*)"\s*$')
+    if (-not $line.Success) { return $false }
+    # Undo Format-TomlString's two escapes.
+    $written = $line.Groups[1].Value.Replace('\"', '"').Replace("\\", "\")
+    return ($written -cne $onFile)
+}
+
 function Format-TomlString {
     param([Parameter(Mandatory)][AllowEmptyString()][string]$Value)
     $escaped = $Value.Replace("\", "\\").Replace('"', '\"')

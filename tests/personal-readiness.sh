@@ -283,11 +283,10 @@ PODMAN_PS="exasol-db-abc created"
 _out="$(probe PATH="$TMP/podbin:$PATH" -- 'detect_os(){ printf macos; }; personal_container_error' | sed '$d')"
 check "macOS's podman is not the launcher's" "" "$_out"
 
-echo "personal_engine: the launcher's own choice - Podman if installed, else a Docker 29+ on Linux containers"
-# Stub engines on a PATH with nothing else on it: `podman` answers info, `docker`
-# answers --version / info from DOCKER_VERSION_TEXT and DOCKER_INFO ("" = daemon down).
-mkdir -p "$TMP/eng-pod" "$TMP/eng-dock"
-printf '#!/bin/sh\nexit 0\n' > "$TMP/eng-pod/podman"
+echo "personal_container_error asks the engine the deployment runs on"
+# A stub docker on a PATH with nothing else on it: answers --version / info
+# from DOCKER_VERSION_TEXT and DOCKER_INFO, ps and inspect from DOCKER_PS / DOCKER_ERR.
+mkdir -p "$TMP/eng-dock"
 cat > "$TMP/eng-dock/docker" <<'DOCK'
 #!/bin/sh
 case "$1" in
@@ -298,40 +297,14 @@ case "$1" in
     *) exit 1 ;;
 esac
 DOCK
-chmod +x "$TMP/eng-pod/podman" "$TMP/eng-dock/docker"
-_eng() { # _eng <PATH dirs> <os> [deploy dir] -> personal_engine's answer
-    probe PATH="$1:/usr/bin:/bin" -- \
-        ". '$ROOT/setup/lib/detect.sh'; detect_os(){ printf $2; }; _exakit_log_file(){ :; }; EXAKIT_PERSONAL_DEPLOY_DIR='${3:-$TMP/no-deployment}'; personal_engine" | sed '$d'
-}
-export DOCKER_INFO="linux 29.0.1"
-check "Podman installed -> podman (Docker beside it or not)" "podman" "$(_eng "$TMP/eng-pod:$TMP/eng-dock" linux)"
-check "no Podman, Docker 29 on Linux containers -> docker" "docker" "$(_eng "$TMP/eng-dock" linux)"
-check "...the same inside WSL" "docker" "$(_eng "$TMP/eng-dock" wsl)"
-DOCKER_INFO="linux 28.5.2"
-check "Docker older than 29 -> podman (the kit installs it)" "podman" "$(_eng "$TMP/eng-dock" linux)"
-DOCKER_INFO="windows 29.0.1"
-check "Docker on Windows containers -> podman" "podman" "$(_eng "$TMP/eng-dock" linux)"
-DOCKER_INFO=""
-check "Docker whose daemon is down -> docker (start it; no Podman beside it)" "docker" "$(_eng "$TMP/eng-dock" linux)"
-DOCKER_INFO="linux 29.0.1"
-export DOCKER_VERSION_TEXT="podman version 5.4.0"
-check "Podman's docker alias is not Docker -> podman" "podman" "$(_eng "$TMP/eng-dock" linux)"
-unset DOCKER_VERSION_TEXT
-check "nothing at all -> podman (the kit installs it)" "podman" "$(_eng "/nonexistent" linux)"
-check "macOS: the launcher's own VM, no engine" "" "$(_eng "$TMP/eng-pod:$TMP/eng-dock" macos)"
-mkdir -p "$TMP/dep-docker/local/runtime" "$TMP/dep-legacy/local/runtime/exa"
-printf '{"engine":"docker"}' > "$TMP/dep-docker/local/runtime/container-engine.json"
-check "a deployment keeps its recorded engine, Podman installed or not" "docker" "$(_eng "$TMP/eng-pod:$TMP/eng-dock" linux "$TMP/dep-docker")"
-check "a deployment from before 2.4.0 (data, no record) stays on podman" "podman" "$(_eng "$TMP/eng-dock" linux "$TMP/dep-legacy")"
-export DOCKER_PS="exasol-db-abc created" DOCKER_ERR="docker: Error response from daemon: port is already allocated"
+chmod +x "$TMP/eng-dock/docker"
+export DOCKER_INFO="linux 29.0.1" DOCKER_PS="exasol-db-abc created" DOCKER_ERR="docker: Error response from daemon: port is already allocated"
 _out="$(probe PATH="$TMP/eng-dock:/usr/bin:/bin" -- \
-    ". '$ROOT/setup/lib/detect.sh'; detect_os(){ printf linux; }; EXAKIT_PERSONAL_DEPLOY_DIR='$TMP/dep-docker'; personal_container_error" | sed '$d')"
-check "personal_container_error asks Docker for a Docker deployment" "$DOCKER_ERR" "$_out"
-DOCKER_INFO=""
+    ". '$ROOT/setup/lib/detect.sh'; detect_os(){ printf linux; }; EXAKIT_PERSONAL_ENGINE=docker; personal_container_error" | sed '$d')"
+check "a Docker deployment (this run's engine) is asked of Docker" "$DOCKER_ERR" "$_out"
 _out="$(probe PATH="$TMP/eng-dock:/usr/bin:/bin" -- \
-    ". '$ROOT/setup/lib/detect.sh'; detect_os(){ printf linux; }; EXAKIT_PERSONAL_DEPLOY_DIR='$TMP/dep-docker'; unset -f personal_podman_running; personal_engine_running")"
-check "a stopped Docker stops the step" 1 "$(rc_of "$_out")"
-contains "  ...saying to start Docker" "Start Docker" "$_out"
+    ". '$ROOT/setup/lib/detect.sh'; detect_os(){ printf linux; }; manifest_get(){ [ \"\$1\" = runtime.engine ] && printf docker; }; personal_container_error" | sed '$d')"
+check "...and so is one the record names as Docker" "$DOCKER_ERR" "$_out"
 unset DOCKER_INFO DOCKER_PS DOCKER_ERR
 
 echo "personal_known_cause: the errors the kit can name, in this platform's words"

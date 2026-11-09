@@ -420,6 +420,22 @@ cmd_status() {
         fi
         if [ "$_cs_json" -eq 0 ]; then ui_spin_end; fi
     fi
+    # WHICH ENGINE, AND WHETHER IT IS UP. runtime.engine was readable from the
+    # manifest file alone, and a Docker deployment whose daemon was down after
+    # a reboot read as plain "stopped" with "exakit start" as its remedy -
+    # which then failed and named repair-runtime, the one command that
+    # destroys the data and cannot start Docker. Docker is probed only for a
+    # stopped Docker deployment: nothing else needs the answer. Empty off an
+    # engine platform (macOS has no engine to name). ⇄ twin: the same read in
+    # Invoke-CmdStatus, setup/exakit.ps1.
+    _cs_engine=""
+    _cs_engine_down=""
+    if [ "$_type" = "personal" ] && command -v personal_engine_platform >/dev/null 2>&1 && personal_engine_platform; then
+        _cs_engine="$(personal_engine_recorded 2>/dev/null || true)"
+        if [ "$_cs_engine" = "docker" ] && [ "$_cs_db" = "stopped" ] && ! personal_docker_usable >/dev/null 2>&1; then
+            _cs_engine_down="${_pdu_said:-Docker is not usable}"
+        fi
+    fi
     # REALITY, NOT THE RECORDED INTENT. This read the manifest's
     # autostart.enabled, which is what the user last ASKED for - so a machine
     # whose boot entry had since gone reported "autostart: true" for a database
@@ -524,13 +540,24 @@ cmd_status() {
             "$_cs_installing" "$_cs_step" "$_cs_urls" "$(exakit_install_command)" \
             "$_cs_legacy_c" "$_cs_legacy_e" "$_cs_legacy_choice" "$_cs_legacy_restored" "$_cs_legacy_sample" \
             "$(detect_os 2>/dev/null || true)" "$(detect_wsl_version 2>/dev/null || true)" "$_cs_failed" \
-            "$_cs_uv" "$_cs_tls_fp" "$_cs_tls_live" <<'EXAKIT_SJ_PY'
+            "$_cs_uv" "$_cs_tls_fp" "$_cs_tls_live" "$_cs_engine" "$_cs_engine_down" <<'EXAKIT_SJ_PY'
 import json, sys
 kit, rtype, db, autostart, datasets, pyx, manifest, steps, services, note, note_at, installing, step, urls, install_cmd = sys.argv[1:16]
 legacy_c, legacy_e, legacy_choice, legacy_restored, legacy_sample = (sys.argv[16:21] + [""] * 5)[:5]
 host_platform, wsl_version = (sys.argv[21:23] + [""] * 2)[:2]
 failed_detail, uv_report = (sys.argv[23:25] + [""] * 2)[:2]
 tls_fp, tls_live = (sys.argv[25:27] + [""] * 2)[:2]
+engine, engine_down = (sys.argv[27:29] + [""] * 2)[:2]
+# The steps the installer booked as not finished, with their reason and repair
+# (exakit_record_soft_failure). The failure note that carried the reason is
+# consumed during the install, so this is where it survives.
+try:
+    with open(manifest, encoding="utf-8") as handle:
+        soft = ((json.load(handle).get("install") or {}).get("soft_failures") or {})
+    if not isinstance(soft, dict):
+        soft = {}
+except (OSError, ValueError, AttributeError):
+    soft = {}
 installing = installing == "1"
 # uv: which one the kit runs, and whether a copy on this machine is below the
 # floor the kit will run at all (see exakit_uv_report). `ok` false with a
@@ -580,14 +607,59 @@ if uv_report and not uv["ok"] and (uv["version"] or "mcp" in steps_list):
                               % (uv["version"], uv["path"], uv["min_version"]))
     else:
         remedy_hints["uv"] = "no uv is installed; the MCP server and the managed Python run through it"
+# A replace refused because the WSL release could not be read: the remedy is
+# `wsl --version` (repair-runtime --json answers the same), and this is what
+# comes after it. Used by the database arm and the runtime step's record.
+WSL_UNREAD_HINT = ("If it shows 2.7 or newer, re-run with EXAKIT_WSL_CHECKED=1; otherwise run wsl --update first. "
+                   "The re-run is exakit repair-runtime, which DESTROYS the database and its data - ask the user, then pass --yes")
+def _wsl_network(text):
+    return "cannot create the deployment network" in text and "wsl --update" in text
+# The runtime step's soft record. It speaks while its step is missing, like
+# every record, AND - while the database is not running - when its step is
+# complete but the record is a start the WSL kernel refused: the installer's
+# resume arm books a failed start there, takes the note, and later steps
+# clear the next one, so status said `exakit start` for a round (WSL4-05).
+# A successful start retires it (exakit_retire_start_soft_failure).
+rt_record = soft.get("runtime")
+if not isinstance(rt_record, dict):
+    rt_record = None
+elif "runtime" in steps_list and (running or not _wsl_network(str(rt_record.get("reason") or ""))):
+    rt_record = None
 if not running:
     # "exakit start" is the wrong remedy for an INTERRUPTED deployment: it fails
     # identically every time, which is how an agent ends up looping on it. The
     # runtime reports that state distinctly so the remedy can differ. And with
     # NO runtime at all, "exakit start" has nothing to start - only the
     # installer can create one, so its command is the remedy an agent is handed.
+    # REFUSED FOR THE WSL KERNEL (the start's network die, or the replace
+    # gate's "older than 2.7" note): the fix is the WSL update. Checked in the
+    # interrupted arm too: a network-failed start is often also a wedged one,
+    # and repair-runtime there is refused by the same gate after the user
+    # consented to deleting the data. ⇄ twin: the same arms in Invoke-CmdStatus.
+    #
+    # THE NOTE OR THE RUNTIME STEP'S RECORD. A refused repair-runtime re-runs
+    # setup-linux.sh, which TAKES the note into the runtime step's soft record
+    # (exakit_take_failure_note deletes it), so the note alone missed exactly
+    # the refusal this arm is for and handed back the repair just refused. The
+    # record counts as rt_record says (above).
+    _rt_reason = str(rt_record.get("reason") or "") if isinstance(rt_record, dict) else ""
+    wsl_refused = any(_wsl_network(s) for s in (note, _rt_reason))
+    # The release could not be read: wsl --update may not be needed, and only
+    # EXAKIT_WSL_CHECKED=1 lets the replace through, so the remedy is the
+    # command that reads the release - as repair-runtime --json answers it.
+    wsl_unread = (not wsl_refused) and any("WSL release could not be read" in s for s in (note, _rt_reason))
     if db.startswith("interrupted"):
         remedies["database"] = "exakit repair-runtime"
+        # The remedy destroys the data: said, as the Windows twin says it.
+        remedy_hints["database"] = "this DESTROYS the database and its data - ask the user, then pass --yes"
+        if wsl_refused:
+            remedies["database"] = "wsl --update"
+            remedy_hints["database"] = ("this WSL kernel cannot create the deployment network, so neither a start nor "
+                                        "a rebuild can work. Run 'wsl --update' in PowerShell on the Windows host, then "
+                                        "'wsl --shutdown', reopen the distro and re-run: exakit start")
+        elif wsl_unread:
+            remedies["database"] = "wsl --version"
+            remedy_hints["database"] = WSL_UNREAD_HINT
     elif db.startswith("not installed"):
         remedies["database"] = install_cmd
         remedy_hints["database"] = "no database is deployed; the installer resumes at the unfinished step"
@@ -597,12 +669,33 @@ if not running:
         # handed it loops. repair-runtime is the command that deploys one.
         remedies["database"] = "exakit repair-runtime"
         remedy_hints["database"] = "the launcher is installed but no database is deployed; this deploys one"
+    elif engine_down:
+        # The deployment runs on Docker and Docker is not running. `exakit
+        # start` cannot start Docker and fails, and its failure used to name
+        # repair-runtime, which destroys the data. No command the kit can name
+        # starts Docker everywhere (Docker Desktop is an app, on WSL on another
+        # operating system), so no remedy: the hint says what to do.
+        remedy_hints["database"] = ("the deployment runs on Docker, and %s: start Docker (Docker Desktop, "
+                                    "or the docker service), then run: exakit start" % engine_down)
     else:
         remedies["database"] = "exakit start"
         # A deployment the launcher records as failed: the remedy stays the
         # command that retries it, and the hint says why it is needed.
         if failed_detail:
             remedy_hints["database"] = failed_detail + " - exakit start retries the launcher's deploy"
+        # `exakit start` WAS REFUSED FOR THE WSL KERNEL (personal_start's
+        # network die, recorded as the failure note): handing it back as the
+        # remedy is a loop - the same start meets the same kernel. The fix
+        # is the WSL update, named as the update path names it. ⇄ twin: the
+        # same arm in Invoke-CmdStatus.
+        if wsl_refused:
+            remedies["database"] = "wsl --update"
+            remedy_hints["database"] = ("exakit start was refused: this WSL kernel cannot create the deployment network. "
+                                        "Run 'wsl --update' in PowerShell on the Windows host, then 'wsl --shutdown', "
+                                        "reopen the distro and re-run: exakit start")
+        elif wsl_unread:
+            remedies["database"] = "wsl --version"
+            remedy_hints["database"] = WSL_UNREAD_HINT
 if db.startswith("conflict"):
     # Something else is on the SQL port. `exakit start` cannot help until it is gone.
     remedies["database"] = "exakit start"
@@ -645,6 +738,48 @@ STEP_REMEDIES = [
     ("exakit_helper", None),
 ]
 steps_missing = []
+# A step the installer REFUSED, with a reason, is not "never finished": re-running
+# the installer meets the same refusal. The reason goes in the hint, and a
+# reason whose fix is a WSL update names that command - on the Windows host,
+# which `platform` tells an agent. Only for a step still missing, so a record
+# a later run outlived never speaks. ⇄ twin: the soft-record arm in
+# Invoke-CmdStatus.
+soft_note = ""
+soft_at = ""
+if not installing:
+    for step_id, _fix in STEP_REMEDIES:
+        if step_id == "runtime":
+            record = rt_record
+        else:
+            record = soft.get(step_id) if step_id not in steps_list else None
+        if not isinstance(record, dict):
+            continue
+        reason = str(record.get("reason") or "")
+        repair = str(record.get("repair") or "") or install_cmd
+        if not soft_note:
+            # The installer's own label for the step ("the local database"),
+            # as the summary and the Windows twin say it; the id only for a
+            # record an older kit wrote without one.
+            soft_note = "%s did not finish%s. Retry with: %s" % (
+                str(record.get("label") or "") or step_id,
+                (" - " + reason.rstrip(".")) if reason else "", repair)
+            soft_at = str(record.get("at") or "")
+        if "wsl --update" in reason:
+            remedies[step_id] = "wsl --update"
+            remedy_hints[step_id] = ("%s. Run 'wsl --update' in PowerShell on the Windows host, then 'wsl --shutdown', "
+                                     "reopen the distro and re-run: %s" % (reason.rstrip("."), repair))
+        elif "WSL release could not be read" in reason:
+            # The same remedy as the database arm and repair-runtime --json.
+            remedies[step_id] = "wsl --version"
+            remedy_hints[step_id] = "%s. %s" % (reason.rstrip("."), WSL_UNREAD_HINT)
+        elif reason:
+            remedies[step_id] = repair
+            remedy_hints[step_id] = "this step was refused: %s. Fix that, then run the remedy (it resumes at this step)" % reason.rstrip(".")
+        # No database because its step was refused: the database remedy is the
+        # step's, or the top-level remedy would loop on the installer.
+        if step_id == "runtime" and step_id in remedies and db.startswith("not installed"):
+            remedies["database"] = remedies[step_id]
+            remedy_hints["database"] = remedy_hints[step_id]
 if not installing:
     for step_id, fix in STEP_REMEDIES:
         if step_id not in steps_list:
@@ -664,6 +799,23 @@ elif db.startswith("not installed"):
     top_status = "no database"
 else:
     top_status = db
+# The single most useful remedy and its sentence, taken from ONE key so the
+# two can never describe different actions. DOCKER DOWN WINS over a missing
+# step: the remedy was the step's ("exakit mcp-setup") while the hint said to
+# start Docker, and the step cannot be finished with the database stopped
+# anyway. With Docker down there is no command (remedy null) and the hint is
+# the instruction; the step's remedy stays in `remedies`. ⇄ twin: $topRemedy
+# in Invoke-CmdStatus, and AGENTS.md.
+if remedies.get("install"):
+    top_key = "install"
+elif remedies.get("database") or engine_down:
+    top_key = "database"
+elif steps_missing:
+    top_key = steps_missing[0]
+else:
+    top_key = None
+top_remedy = remedies.get(top_key) if top_key else None
+top_hint = remedy_hints.get(top_key) if top_key else None
 payload = {
     "installed": True,
     # Top-level `status` and `remedy` are the keys EVERY --json answer from a
@@ -677,7 +829,11 @@ payload = {
     # is the one fact the next session needs, and AGENTS.md documents it here.
     "install_step": step or None,
     "kit_level": kit or None,
-    "runtime": {"type": rtype or None, "status": db},
+    # engine: "docker" | "podman" on Linux, WSL and Windows, null on macOS
+    # (no engine there) and with no runtime. engine_running is false only for
+    # a stopped Docker deployment whose Docker is down - probed for nothing else.
+    "runtime": {"type": rtype or None, "status": db, "engine": engine or None,
+                "engine_running": (False if engine_down else None)},
     # WHICH MACHINE THIS IS, as a token rather than as prose. Every WSL-specific
     # remedy the kit emits asks for an action on a DIFFERENT operating system -
     # a .wslconfig edit under %USERPROFILE%, `wsl --shutdown` "from
@@ -710,10 +866,14 @@ payload = {
     # state a state query can report. `remedies` keeps the full per-component map.
     # An unfinished step ranks below a stopped database (start it first) and
     # above nothing: a running machine with a step missing is not "remedy: null".
-    "remedy": remedies.get("install") or remedies.get("database")
-        or (remedies.get(steps_missing[0]) if steps_missing else None),
-    "last_failure": note or None,
-    "last_failure_at": note_at or None,
+    "remedy": top_remedy,
+    # The sentence behind that remedy - or, when there is no command to run (a
+    # Docker deployment whose Docker is down), the only instruction there is.
+    "remedy_hint": top_hint,
+    "last_failure": note or soft_note or None,
+    # A soft record carries its own date: without it a months-old refusal read
+    # as current.
+    "last_failure_at": (note_at or None) if note else (soft_at or None),
     "manifest": manifest,
 }
 # An older kit's container database, as the crossing recorded it. Only present
@@ -786,7 +946,7 @@ EXAKIT_SJ_PY
     if exakit_legacy_runtime_recorded 2>/dev/null; then
         ui_panel_line "$(_cs_pad 'Runtime' "$_type · from an older kit, not managed here")"
     else
-        ui_panel_line "$(_cs_pad 'Runtime' "${_type:-none} · $_cs_db")"
+        ui_panel_line "$(_cs_pad 'Runtime' "${_type:-none}${_cs_engine:+ ($_cs_engine)} · $_cs_db")"
     fi
     # An older kit's container database that was copied out but not restored.
     # One that was
@@ -1036,7 +1196,13 @@ EXAKIT_CS_SOFT
             # for `interrupted`. The command that CREATES one is the repair
             # path: it re-runs the platform setup from the deployment step.
             'not deployed'*) _cs_row 'Deploy it:' 'exakit repair-runtime   (the launcher is installed but no database is deployed; this deploys one)' ;;
-            *)            _cs_row 'Start it:' 'exakit start' ;;
+            # A Docker deployment whose Docker is down: `exakit start` cannot
+            # start Docker, so the row names what can (see _cs_engine_down).
+            *)            if [ -n "$_cs_engine_down" ]; then
+                              _cs_row 'Start Docker:' "the deployment runs on Docker, and $_cs_engine_down - start Docker (Docker Desktop, or the docker service), then: exakit start"
+                          else
+                              _cs_row 'Start it:' 'exakit start'
+                          fi ;;
         esac
         exit 3
     fi
@@ -1130,7 +1296,12 @@ _start_database() {
     # The database is up, so a note left by an earlier start that could not
     # ("Port 8563 is held by another process ...") is no longer true. Only a
     # runtime note goes; an install-step note is a different fault and stays.
-    exakit_runtime_is_running 2>/dev/null && exakit_clear_runtime_failure_note
+    # So is a start failure booked against the completed runtime step by an
+    # installer re-run (exakit_retire_start_soft_failure).
+    if exakit_runtime_is_running 2>/dev/null; then
+        exakit_clear_runtime_failure_note
+        exakit_retire_start_soft_failure
+    fi
     return 0
 }
 
@@ -1350,7 +1521,12 @@ cmd_repair_runtime() {
     # loaded" over an empty schema, and the promise two lines above ("reloaded
     # afterwards") was broken. Seen on a real machine.
     exakit_reset_dataset_flags
-    info "Re-running $_rr_setup to rebuild the database"
+    # Narration never shares stdout with the JSON object (see above).
+    if [ "$_rr_json" -eq 1 ]; then
+        info "Re-running $_rr_setup to rebuild the database" >&2
+    else
+        info "Re-running $_rr_setup to rebuild the database"
+    fi
     export EXAKIT_BANNER_SHOWN=1
     # The deployment step must NOT offer to reuse what is there. Its reuse
     # question defaults to YES, so a repair that the user had just confirmed as
@@ -1380,6 +1556,32 @@ cmd_repair_runtime() {
             exakit_json_out '{"ok": true, "status": "repaired", "changed": true, "remedy": null}\n'
             return 0
         fi
+        # REFUSED BY THE WSL CHECK BEFORE THE DESTROY: nothing was deleted, so
+        # "changed": true told an agent the database was gone, and the
+        # installer remedy meets the same refusal. The check's reason is the
+        # runtime step's soft-failure record (exakit_unmark_step above cleared
+        # any older one). THE REMEDY BY CAUSE: a release READ below 2.7 is
+        # cleared by wsl --update; one that could not be read is not - only
+        # EXAKIT_WSL_CHECKED=1 lets that replace through - so its remedy is the
+        # command that reads it. remedy_hint, as on every other remedy-bearing
+        # object. `exakit status --json` answers the same remedy for the same
+        # record. ⇄ twin: the same arm in Invoke-CmdRepairRuntime.
+        _rr_why="$(manifest_get install.soft_failures.runtime.reason 2>/dev/null || true)"
+        case "$_rr_why" in
+            *"WSL release could not be read"*|*"older than 2.7"*"wsl --update"*)
+                _rr_remedy="wsl --update"
+                _rr_hint="Nothing was deleted. Run 'wsl --update' in PowerShell on the Windows host, then 'wsl --shutdown', reopen the distro and run: exakit start (if the database still does not come up, re-run: exakit repair-runtime)"
+                case "$_rr_why" in
+                    *"could not be read"*)
+                        _rr_remedy="wsl --version"
+                        _rr_hint="If it shows 2.7 or newer, re-run with EXAKIT_WSL_CHECKED=1; otherwise run wsl --update first." ;;
+                esac
+                _rr_why="$(printf '%s' "$_rr_why" | tr -d '\r\n' | sed 's/\\/\\\\/g; s/"/\\"/g')"
+                exakit_json_out '{"ok": false, "status": "refused", "changed": false, "reason": "%s", "remedy": "%s", "remedy_hint": "%s"}\n' \
+                    "$_rr_why" "$_rr_remedy" "$_rr_hint"
+                return 3
+                ;;
+        esac
         exakit_json_out '{"ok": false, "status": "failed", "changed": true, "reason": "the rebuild did not finish (see exakit logs)", "remedy": "%s"}\n' \
             "$(exakit_install_command)"
         return 3
@@ -1712,6 +1914,9 @@ cmd_autostart() {
         confirm_env EXAKIT_AUTOSTART_CHANGE "Turn it on?" n || return 0
         exakit_autostart_enable
     fi
+    # The USER chose: marked, so no installer default ever overrides it.
+    # ⇄ twin: autostart.user_set in Enable-/Disable-ExakitAutostart.
+    manifest_set autostart.user_set true >/dev/null 2>&1 || true
 }
 
 cmd_uninstall() {
