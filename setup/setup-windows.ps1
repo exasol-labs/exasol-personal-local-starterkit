@@ -519,13 +519,6 @@ try {
         Set-ExakitStepDone "exakit_helper"
         OkStep "exakit installed ($(Get-ExakitTilde (Join-Path $script:BinDir 'exakit.cmd')))"
     }
-    # On every run, done or not: the exakit.ps1 launcher keeps PowerShell users'
-    # arguments away from cmd.exe, and a default Windows 11 (every execution
-    # policy scope Undefined, so Restricted) would refuse it. Enable-ExakitLocalScripts
-    # changes nothing a person or Group Policy has already set.
-    if (Enable-ExakitLocalScripts) {
-        try { [void](Set-ExakitPsLauncher -PsTarget (Join-Path $script:ExakitHome "kit\setup\exakit.ps1")) } catch { }
-    }
 
     # The upgrade news (Write-ExakitWhatsNewBox) and the closing summary
     # (Write-ExakitSoftFailures) are printed after the connection panel at the

@@ -143,7 +143,7 @@ function Seed {
         "$($script:ExakitHome)\credentials")) {
         New-Item -ItemType Directory -Force -Path $d | Out-Null
     }
-    foreach ($f in @("exakit.cmd", "exakit.ps1", "exapump.exe", "exasol.exe", "some-other-tool.exe")) {
+    foreach ($f in @("exakit.cmd", "exapump.exe", "exasol.exe", "some-other-tool.exe")) {
         New-Item -ItemType File -Force -Path (Join-Path $script:BinDir $f) | Out-Null
     }
     New-Item -ItemType File -Force -Path (Join-Path $script:ExakitHome "manifest.json") | Out-Null
@@ -182,7 +182,6 @@ Check "real: user's exapump profiles kept" "yes" (Ex (Join-Path $fakeHome ".exap
 Check "real: user's profile-home exapump profiles kept" "yes" (Ex (Join-Path $fakeProfile ".exapump"))
 Check "real: exapump.exe gone"  "no"  (Ex (Join-Path $script:BinDir "exapump.exe"))
 Check "real: exakit.cmd gone"   "no"  (Ex (Join-Path $script:BinDir "exakit.cmd"))
-Check "real: exakit.ps1 launcher gone" "no" (Ex (Join-Path $script:BinDir "exakit.ps1"))
 Check "real: skill A gone"      "no"  (Ex "$fakeHome\.claude\skills\local-agent-ready-starter")
 Check "real: skill B gone"      "no"  (Ex "$fakeHome\.claude\skills\trusted-ai-workflow")
 Check "real: bystander kept"    "yes" (Ex (Join-Path $script:BinDir "some-other-tool.exe"))

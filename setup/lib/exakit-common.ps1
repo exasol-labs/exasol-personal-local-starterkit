@@ -3868,16 +3868,11 @@ function Begin-ExakitStep {
 
 # Set-ExakitCmdShim - (re)write the `exakit` command in the bin directory.
 #
-# Two files, one command. exakit.cmd is for cmd.exe and everything that is not
-# PowerShell. exakit.ps1 (Set-ExakitPsLauncher) sits next to it for PowerShell,
-# which resolves a .ps1 before a .cmd of the same name in the same PATH
-# directory. The .ps1 matters because the .cmd is CMD.EXE: PowerShell 5.1 hands
-# it `--url "postgresql://h/db?a=1&b=2"` with the quotes removed, cmd.exe sees
-# a bare `&`, runs the rest of the line as a second command and drops every
-# argument after it. Any & | < > ^ in any exakit argument was command
-# injection. Both targets are the kit's copy by absolute path. Both the
-# installer and the kit self-update write them, so the content lives here
-# rather than in two places.
+# The bare command must be ONLY this .cmd shim: when an exakit.ps1 also sits on
+# PATH, PowerShell resolves the .ps1 first, which routes around the shim's
+# -ExecutionPolicy Bypass and fails on default-policy systems. The shim therefore
+# targets the kit's copy by absolute path. Both the installer and the kit
+# self-update write it, so the content lives here rather than in two places.
 function Get-ExakitCmdShimContent {
     param([Parameter(Mandatory)][string]$PsTarget)
     # %USERPROFILE% rather than the expanded path, whenever the target sits under
@@ -3934,6 +3929,7 @@ function Write-ExakitCmdFile {
 function Set-ExakitCmdShim {
     param([Parameter(Mandatory)][string]$PsTarget)
     New-Item -ItemType Directory -Force -Path $script:BinDir | Out-Null
+    Remove-Item -Force (Join-Path $script:BinDir "exakit.ps1") -ErrorAction SilentlyContinue
     $shimPath = Join-Path $script:BinDir "exakit.cmd"
     $content = Get-ExakitCmdShimContent -PsTarget $PsTarget
     # Written in the code page cmd.exe itself reads a batch file in. It only
@@ -3945,133 +3941,7 @@ function Set-ExakitCmdShim {
     $oem = Get-ExakitOemEncoding
     if ($oem) { [System.IO.File]::WriteAllText($shimPath, $content, $oem) }
     else { Set-Content -Path $shimPath -Value $content -NoNewline }
-    # The PowerShell launcher beside it. Never allowed to cost the shim: the
-    # .cmd above is already in place whatever happens here.
-    try { [void](Set-ExakitPsLauncher -PsTarget $PsTarget) } catch { }
     return $shimPath
-}
-
-# Test-ExakitLocalScriptsAllowed - would a plain PowerShell window on this
-# machine run an unsigned local .ps1 such as the exakit.ps1 launcher?
-#
-# Judged WITHOUT the Process scope: the installer and the CLI themselves run
-# under -ExecutionPolicy Bypass, so Get-ExecutionPolicy in this process says
-# Bypass, which is not what the user's next terminal will get. Precedence is
-# MachinePolicy, UserPolicy, CurrentUser, LocalMachine; all Undefined means
-# Restricted on a Windows client (about_Execution_Policies). Off Windows there
-# is no execution policy, so the answer is yes.
-function Get-ExakitUserExecutionPolicy {
-    if ($env:OS -ne "Windows_NT") { return "Unrestricted" }
-    foreach ($scope in @("MachinePolicy", "UserPolicy", "CurrentUser", "LocalMachine")) {
-        $policy = ""
-        try { $policy = "" + (Get-ExecutionPolicy -Scope $scope -ErrorAction Stop) } catch { $policy = "" }
-        if ($policy -and $policy -ne "Undefined") { return $policy }
-    }
-    return "Restricted"
-}
-
-function Test-ExakitLocalScriptsAllowed {
-    return ((Get-ExakitUserExecutionPolicy) -in @("RemoteSigned", "Unrestricted", "Bypass"))
-}
-
-# Enable-ExakitLocalScripts - the one execution-policy change the kit makes,
-# and only on a machine where nobody ever chose one.
-#
-# A default Windows 11 has every scope Undefined, so its effective policy is
-# Restricted and PowerShell REFUSES a .ps1 on PATH ("running scripts is
-# disabled") instead of falling back to the .cmd beside it. Without this the
-# exakit.ps1 launcher could only ever reach the users who did not need it. The
-# change is CurrentUser RemoteSigned - what Windows Server ships with and what
-# Settings > For developers > PowerShell sets: local scripts run, scripts
-# downloaded from the internet still need a signature. Any scope already set
-# (by Group Policy, by an admin, by the user) is a choice and is left alone;
-# the launcher is then written only if that choice allows it. Twin: none,
-# macOS and Linux have no execution policy.
-function Enable-ExakitLocalScripts {
-    if ($env:OS -ne "Windows_NT") { return $false }
-    foreach ($scope in @("MachinePolicy", "UserPolicy", "CurrentUser", "LocalMachine")) {
-        $policy = ""
-        try { $policy = "" + (Get-ExecutionPolicy -Scope $scope -ErrorAction Stop) } catch { return $false }
-        if ($policy -ne "Undefined") { return $false }
-    }
-    # Set-ExecutionPolicy reports an error even when it succeeds, because this
-    # process's own -ExecutionPolicy Bypass (Process scope) outranks the new
-    # value. The registry is the answer, so read it back rather than trust the
-    # error stream.
-    try { Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force -ErrorAction Stop } catch { }
-    $now = ""
-    try { $now = "" + (Get-ExecutionPolicy -Scope CurrentUser -ErrorAction Stop) } catch { }
-    if ($now -ne "RemoteSigned") { return $false }
-    Info "PowerShell can now run local scripts for your user (execution policy CurrentUser: RemoteSigned), so ``exakit`` in PowerShell no longer goes through cmd.exe."
-    Write-Host "    To undo: Set-ExecutionPolicy -Scope CurrentUser Undefined  (exakit then runs through exakit.cmd again)."
-    Write-ExakitLog "INFO" "execution policy CurrentUser set to RemoteSigned (every scope was Undefined)"
-    return $true
-}
-
-# Get-ExakitPsLauncherContent <target> - the exakit.ps1 launcher's text.
-#
-# A fresh powershell.exe, not the kit script run in-process: the kit is built
-# and tested on Windows PowerShell 5.1, the caller may be pwsh 7, and the CLI
-# sets preferences, environment variables and calls `exit` that must not land
-# in the user's session. powershell.exe is an executable, so `&` hands it the
-# argument array through CreateProcess and cmd.exe never parses a byte.
-# LASTEXITCODE starts at 1 so a powershell.exe that cannot be started is a
-# failure, not a stale 0. Pipeline input is forwarded only when there is some: piping an empty $input
-# would redirect stdin and break every prompt and the `exakit sql` stdin read.
-# The target is written relative to $env:USERPROFILE when it sits under it, so
-# the file stays ASCII for any user name (same reason as the .cmd shim).
-function Get-ExakitPsLauncherContent {
-    param([Parameter(Mandatory)][string]$PsTarget)
-    $targetExpr = "'" + ($PsTarget -replace "'", "''") + "'"
-    $profileDir = $env:USERPROFILE
-    if ($profileDir) {
-        $profileDir = $profileDir.TrimEnd([char]92)
-        if ($PsTarget.StartsWith($profileDir + [string][char]92, [System.StringComparison]::OrdinalIgnoreCase)) {
-            $rest = $PsTarget.Substring($profileDir.Length + 1)
-            $targetExpr = "(Join-Path `$env:USERPROFILE '" + ($rest -replace "'", "''") + "')"
-        }
-    }
-    $lines = @(
-        "# exakit.ps1 - the exakit command in PowerShell. Written by the Exasol starter kit;"
-        "# rewritten on every install and update. PowerShell runs this file rather than"
-        "# exakit.cmd beside it, so no argument passes through cmd.exe, where & | < > ^"
-        "# would be read as commands."
-        "`$exakitTarget = $targetExpr"
-        "`$exakitPs = 'powershell.exe'"
-        "if (`$env:SystemRoot) {"
-        "    `$exakitFull = Join-Path `$env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'"
-        "    if (Test-Path -LiteralPath `$exakitFull) { `$exakitPs = `$exakitFull }"
-        "}"
-        "`$global:LASTEXITCODE = 1"
-        "if (`$MyInvocation.ExpectingInput) {"
-        "    `$input | & `$exakitPs -NoProfile -ExecutionPolicy Bypass -File `$exakitTarget @args"
-        "} else {"
-        "    & `$exakitPs -NoProfile -ExecutionPolicy Bypass -File `$exakitTarget @args"
-        "}"
-        "exit `$LASTEXITCODE"
-    )
-    return (($lines -join "`r`n") + "`r`n")
-}
-
-# Set-ExakitPsLauncher <target> - write bin\exakit.ps1 when a plain PowerShell
-# window will run it, remove it when it will not. A .ps1 the policy refuses is
-# worse than none: PowerShell stops at the refusal and never tries exakit.cmd.
-# Returns the path written, or $null. Uninstall removes it with the .cmd.
-function Set-ExakitPsLauncher {
-    param([Parameter(Mandatory)][string]$PsTarget)
-    $launcher = Join-Path $script:BinDir "exakit.ps1"
-    if (-not (Test-ExakitLocalScriptsAllowed)) {
-        Remove-Item -Force -LiteralPath $launcher -ErrorAction SilentlyContinue
-        return $null
-    }
-    New-Item -ItemType Directory -Force -Path $script:BinDir | Out-Null
-    $content = Get-ExakitPsLauncherContent -PsTarget $PsTarget
-    # ASCII whenever it can be (the usual case, thanks to $env:USERPROFILE);
-    # UTF-8 WITH a BOM otherwise, the only non-ASCII encoding 5.1 reads right.
-    if ($content -match '[^\x00-\x7F]') { $enc = New-Object System.Text.UTF8Encoding $true }
-    else { $enc = New-Object System.Text.ASCIIEncoding }
-    [System.IO.File]::WriteAllText($launcher, $content, $enc)
-    return $launcher
 }
 
 # Test-ExakitCmdShimCurrent - is the installed shim the one this kit would write?
