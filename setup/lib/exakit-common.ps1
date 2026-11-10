@@ -7403,7 +7403,11 @@ function Request-ExakitMarketplaceOffer {
     # ticked: "all" is not an id, and as a filter it matched nothing, which ended
     # the offer with "Everything available is already covered." Twin of
     # exakit_marketplace_offer.
-    if ($env:EXAKIT_MARKETPLACE_PRESELECT -and -not $softFailed -and $interactive) {
+    # Independent of the data: a dataset that failed to download is repaired with
+    # `exakit data-load` and is no reason to withhold the persona's notebooks and
+    # dashboards. Only a database that never installed holds them back.
+    $runtimeFailed = ($softState -and $softState.Value -and $softState.Value.Contains("runtime"))
+    if ($env:EXAKIT_MARKETPLACE_PRESELECT -and -not $runtimeFailed -and $interactive) {
         # No rule above it: the personas' add-ons carry on from their data, as
         # one setup, rather than reading as a separate offer.
         Write-ExakitHeading "Add-ons for your personas"

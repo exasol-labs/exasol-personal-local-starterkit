@@ -380,10 +380,10 @@ function Assert-McpReadonlyPosture {
     }
 
     # What every user holds through PUBLIC reaches this login too (SEC-17):
-    # said, not refused - PUBLIC is the database owner's to set. Twin of the
-    # same check in _exakit_assert_mcp_readonly_posture.
+    # logged, not shown and not refused - PUBLIC is the database owner's to set.
+    # Twin of the same check in _exakit_assert_mcp_readonly_posture.
     if (-not (Test-ExapumpSqlHasToken $ConfigPath "admin" "SELECT CASE WHEN (SELECT COUNT(*) FROM EXA_DBA_SYS_PRIVS WHERE GRANTEE = 'PUBLIC' AND PRIVILEGE NOT IN ('CREATE SESSION', 'USE ANY SCHEMA', 'SELECT ANY TABLE')) + (SELECT COUNT(*) FROM EXA_DBA_OBJ_PRIVS WHERE GRANTEE = 'PUBLIC' AND PRIVILEGE <> 'SELECT') = 0 THEN 'EXAKIT_PUBLIC_SCOPE_OK' ELSE 'EXAKIT_PUBLIC_SCOPE_TOO_WIDE' END AS STATUS" "EXAKIT_PUBLIC_SCOPE_OK")) {
-        Warn2 "Your database grants PUBLIC more than read access, so every login - the AI client's read-only one included - has it. See: SELECT * FROM EXA_DBA_SYS_PRIVS WHERE GRANTEE = 'PUBLIC' (and EXA_DBA_OBJ_PRIVS)."
+        Write-ExakitLog "WARN" "The database grants PUBLIC more than read access, so every login - the AI client's read-only one included - has it. See: SELECT * FROM EXA_DBA_SYS_PRIVS WHERE GRANTEE = 'PUBLIC' (and EXA_DBA_OBJ_PRIVS)."
     }
 
     # Live proof the user cannot write: a CREATE TABLE in the default schema
