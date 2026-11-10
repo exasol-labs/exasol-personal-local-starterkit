@@ -18,13 +18,13 @@
 **macOS / Linux / WSL**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/exasol-labs/exasol-personal-local-starterkit/staging-vs-preproc-persona-rc-build/install.sh | EXAKIT_REF=staging-vs-preproc-persona-rc-build sh
+curl -fsSL https://raw.githubusercontent.com/exasol-labs/exasol-personal-local-starterkit/feat/rc-build-0.3.0/install.sh | EXAKIT_REF=feat/rc-build-0.3.0 sh
 ```
 
 **Windows (PowerShell)**
 
 ```powershell
-$env:EXAKIT_REF = "staging-vs-preproc-persona-rc-build"; irm https://raw.githubusercontent.com/exasol-labs/exasol-personal-local-starterkit/staging-vs-preproc-persona-rc-build/install.ps1 | iex
+$env:EXAKIT_REF = "feat/rc-build-0.3.0"; irm https://raw.githubusercontent.com/exasol-labs/exasol-personal-local-starterkit/feat/rc-build-0.3.0/install.ps1 | iex
 ```
 
 To have an AI agent do the install, paste this into Claude Code, Codex or any other coding agent:
