@@ -103,6 +103,7 @@ Check "...each row adds where it lives and its TLS level (host, tls)" "pg.exampl
 Check "...and keeps every key it had" "connector host last_check name needs_refresh schema status tls" ((@(@($result.sources)[0].PSObject.Properties | ForEach-Object { $_.Name }) | Sort-Object) -join " ")
 $r = Invoke-ExakitVsEngine -Arguments @("paste", "pg", "--base64") -Secret "jdbc:postgresql://h/db?user=r&password=Abc&Xyz9"
 Check "paste through the bridge: a password's unencoded & leaks no name" $false (($r.Lines -join "`n").Contains("Xyz9"))
+Check "...the string comes back masked by the engine, the password and its unencoded tail hidden" "jdbc:postgresql://h/db?user=r&password=****&****" (Get-ExakitVsResultOf $r.Lines).masked
 # Where this computer is follows the deployment's engine: the engine reads the
 # kit's record (runtime.engine) under --kit-home, which this bridge passes.
 $engineRecord = Join-Path $home2 "manifest.json"
@@ -520,6 +521,15 @@ function Read-ExakitVsTuiAnswer { param([string]$Plain, [string]$Colour, [switch
     $a = $script:queue[0]; $script:queue.RemoveAt(0)
     return $a }
 function Confirm-ExakitVsTui { param([string]$Question) Add-Content -LiteralPath $record -Value "CONFIRM $Question"; return $false }
+# The key after a string was shown back: the next answer when it is one (<e>,
+# <n>, <esc>, <eof>, <enter>), else Enter.
+function Read-ExakitVsKey {
+    if ($script:queue.Count -gt 0 -and $script:queue[0] -match '^<(enter|e|n|esc|eof)>$') {
+        $k = $Matches[1]; $script:queue.RemoveAt(0)
+        Add-Content -LiteralPath $record -Value "KEY $k"
+        return $k }
+    Add-Content -LiteralPath $record -Value "KEY enter"
+    return "enter" }
 if ($planFail) {
     # The first plan refuses an input the form's own checks let through.
     $realEngine = ${function:Invoke-ExakitVsEngine}
@@ -561,8 +571,12 @@ function Row([string]$Label, [string]$Value) { return ($Label.PadRight(26) + "  
 # Enter on the required name is refused; on the optional schema it takes the
 # default, on the optional CA it leaves it empty; 3 asks the port again.
 Invoke-FormChild @(("postgres://reader:" + $pastePw + "@pg.example.com:5433/sales"), "", "psform", "", "", $env:FORM_SECRET, "", "", "3", "5432", "")
-Check "the first question is the connection string, read hidden" "HIDDEN Connection string (hidden; Enter to type the fields)" $script:formAsked[0]
-Check "...its help names the forms the connector reads" $true $script:formOut.Contains("jdbc:postgresql://host:5432/db,")
+Check "the first question is the connection string, read hidden" "HIDDEN Connection string (not shown while you paste; Enter to type the fields)" $script:formAsked[0]
+Check "...its hint says what to paste" $true $script:formOut.Contains("Paste the source's connection string, for example:")
+Check "...then one form per line, indented under the text" $true $script:formOut.Contains("        jdbc:postgresql://host:5432/db`n        postgres://user@host:5432/db`n        host[:port][/database]")
+Check "...the string is shown back, its password masked by the engine" $true $script:formOut.Contains("Read: postgres://reader:****@pg.example.com:5433/sales")
+Check "...then one key decides, and Enter used it" "KEY enter" $script:formAsked[1]
+Check "...the question names the three keys" $true $script:formOut.Contains("Enter to use it - e to paste it again - Esc/n to type the fields instead")
 Check "the panel marks a required field with a star after its label" $true $script:formOut.Contains("|     Host name or address *      ")
 Check "...an optional one has no star, and keeps its default" $true $script:formOut.Contains((Row "Port" "[5432]"))
 Check "...no star on an optional one" $false $script:formOut.Contains("Port *")
@@ -582,6 +596,19 @@ Check "...a number asks that field again" $true ($script:formAsked -contains "AS
 Check "...one change, the rest as given" "FORM postgresql --name psform --set host=pg.example.com --set port=5432 --set database=sales --set schema=public --set user=reader --set tls=verify" (@($script:formOut -split "`n" | Where-Object { $_ -like "FORM *" })[0])
 Check "...the typed credential kept for the connect, not the string's" "SECRET True" (@($script:formOut -split "`n" | Where-Object { $_ -like "SECRET *" })[0])
 Check "...and the string's password is in none of the output" $false $script:formOut.Contains($pastePw)
+
+# e asks for the string again, and the second one is used; n or Esc types the
+# fields instead, nothing from the string kept.
+Invoke-FormChild @("postgres://reader@first.example.com/one", "<e>", ("postgres://reader:" + $pastePw + "@pg.example.com:5433/sales"), "<enter>", "psagain", "", $env:FORM_SECRET, "", "", "")
+Check "e: the string asked again" 2 @($script:formAsked | Where-Object { $_ -like "HIDDEN Connection string*" }).Count
+Check "...both shown back" $true ($script:formOut.Contains("Read: postgres://reader@first.example.com/one") -and $script:formOut.Contains("Read: postgres://reader:****@pg.example.com:5433/sales"))
+Check "...and the second one is used" $true $script:formOut.Contains("FORM postgresql --name psagain --set host=pg.example.com --set port=5433 ")
+Check "...its password nowhere" $false $script:formOut.Contains($pastePw)
+foreach ($k in @("<n>", "<esc>")) {
+    Invoke-FormChild @("postgres://reader@pg.example.com:5433/sales", $k, "psnot", "pg.example.com", "", "sales", "", "reader", $env:FORM_SECRET, "", "", "")
+    Check ("$k" + ": the fields are typed instead, the host asked") 1 @($script:formAsked | Where-Object { $_ -eq "ASK Host name or address *" }).Count
+    Check "...nothing from the string kept: the default port" $true $script:formOut.Contains("FORM postgresql --name psnot --set host=pg.example.com --set port=5432 ")
+}
 
 # A string that does not parse is said and asked again; Enter types the fields.
 # A plan that refuses an input goes straight back to that field.
@@ -685,11 +712,18 @@ function Read-ExakitPrompt { param([string]$Question, [string]$Default = "")
 function Read-ExakitVsSecret { param([string]$Label, [string]$PasswordFile = "", [string]$Kind = "secret")
     Add-Content -LiteralPath $record -Value "HIDDEN $Label"
     return $env:FORM_SECRET }
-function Read-ExakitVsHidden { param([string]$Label)
-    Add-Content -LiteralPath $record -Value "HIDDEN $Label"
+function Read-ExakitVsHidden { param([string]$Label, [string]$Note = "input hidden")
+    Add-Content -LiteralPath $record -Value "HIDDEN $Label ($Note)"
     if ($script:queue.Count -eq 0) { return "" }
     $a = $script:queue[0]; $script:queue.RemoveAt(0)
     return $a }
+function Read-ExakitVsKey {
+    if ($script:queue.Count -gt 0 -and $script:queue[0] -match '^<(enter|e|n|esc|eof)>$') {
+        $k = $Matches[1]; $script:queue.RemoveAt(0)
+        Add-Content -LiteralPath $record -Value "KEY $k"
+        return $k }
+    Add-Content -LiteralPath $record -Value "KEY enter"
+    return "enter" }
 Invoke-CmdConnect -Arguments $args
 '@
 $lineChildFile = Join-Path $work "line-child.ps1"; Set-Content -LiteralPath $lineChildFile -Value $lineChild -Encoding ASCII
@@ -706,7 +740,10 @@ function Invoke-LineChild([string[]]$Answers, [string[]]$CliArgs) {
 }
 Invoke-LineChild @("garbage string", ("jdbc:postgresql://pg.example.com:5432/sales?user=reader&password=" + $pastePw), "", "psline", "", "", "", "y") @("pg")
 Check "line by line: exit 0" 0 $script:lineCode
-Check "...the connection string is asked first, hidden" "HIDDEN Connection string (Enter to type the fields)" $script:formAsked[0]
+Check "...the connection string is asked first, hidden" "HIDDEN Connection string (not shown while you paste; Enter to type the fields)" $script:formAsked[0]
+Check "...under the hint" $true $script:formOut.Contains("INFO Paste the source's connection string, for example:")
+Check "...shown back masked" $true $script:formOut.Contains("INFO Read: jdbc:postgresql://pg.example.com:5432/sales?user=reader&password=****")
+Check "...then one key decides, Enter used it" 1 @($script:formAsked | Where-Object { $_ -eq "KEY enter" }).Count
 Check "...a garbage string is said and asked again" $true $script:formOut.Contains("the connection string has a space, line break or control character in it")
 Check "...the password in it noted, not used" $true $script:formOut.Contains("it was not used.")
 Check "...what it filled is said" $true $script:formOut.Contains("From the connection string: database, host, port, user")
@@ -720,6 +757,19 @@ Check "...an empty required answer is refused" $true $script:formOut.Contains("N
 Check "...the credential still asked hidden" $true ($script:formAsked -contains "HIDDEN Password")
 $db = Get-Content -Raw -LiteralPath $state -Encoding UTF8 | ConvertFrom-Json
 Check "...the typed one reaches the CONNECTION" $env:FORM_SECRET $db.connections.EXAKIT_SRC_PSLINE.secret
+Check "...and the string's password is in none of the output" $false $script:formOut.Contains($pastePw)
+# e asks again and the second is used; n types the fields.
+Invoke-LineChild @("postgres://reader@first.example.com/one", "<e>", "postgres://reader@pg.example.com:5433/sales", "<n>", "pslineno", "pg.example.com", "", "sales", "", "reader", "", "", "y") @("pg")
+Check "line by line, e then n: exit 0" 0 $script:lineCode
+Check "...the string asked twice" 2 @($script:formAsked | Where-Object { $_ -like "HIDDEN Connection string*" }).Count
+Check "...both shown back" $true ($script:formOut.Contains("INFO Read: postgres://reader@first.example.com/one") -and $script:formOut.Contains("INFO Read: postgres://reader@pg.example.com:5433/sales"))
+Check "...n: the host asked" $true (@($script:formAsked | Where-Object { $_ -like "ASK Host name or address*" }).Count -eq 1)
+Check "...nothing from the string said" $false $script:formOut.Contains("From the connection string")
+# --url asks nothing about the string.
+Invoke-LineChild @("", "", "", "", "y") @("pg", "--name", "psurl", "--url", ("postgres://reader:" + $pastePw + "@pg.example.com/sales"))
+Check "--url: exit 0" 0 $script:lineCode
+Check "...no hidden question for a string, no key asked" 0 @($script:formAsked | Where-Object { $_ -like "HIDDEN Connection string*" -or $_ -like "KEY *" }).Count
+Check "...nothing shown back" $false $script:formOut.Contains("Read:")
 Check "...and the string's password is in none of the output" $false $script:formOut.Contains($pastePw)
 # --dry-run at the same console asks as it always did.
 Invoke-LineChild @("", "sales", "", "reader", "", "") @("pg", "--name", "psdry", "--set", "host=pg.example.com", "--dry-run")
@@ -1406,6 +1456,26 @@ Check "EXAKIT_NO_IP_LOOKUP=1: no IP line, the menu's own line first" "INFO Tick 
 Remove-Item Env:\EXAKIT_PUBLIC_IP_URL, Env:\_EXAKIT_VS_PUBLIC_IP -ErrorAction SilentlyContinue
 $catalogDoc = Get-ExakitVsResultOf (Invoke-ExakitVsEngine -Arguments @("catalog")).Lines
 Check "no connector reports Beta: every tier is GA" "GA" ((@($catalogDoc.connectors | ForEach-Object { "" + $_.tier }) | Sort-Object -Unique) -join " ")
+
+Write-Host ""
+Write-Host "== the hint above the connection-string question: one form per line, every connector =="
+# ui.ps1 is loaded above: Split-ExakitWrap, which wraps a form too wide for the console.
+# The hint above the question asks for the string, then names every form the
+# connector reads on a line of its own, indented under the hint's text: all 13
+# connectors. Too narrow for a form, it wraps at the same indent.
+$hintN = 0
+foreach ($dir in @(Get-ChildItem -LiteralPath (J @("setup", "virtual-schemas", "connectors")) -Directory | Sort-Object Name)) {
+    $script:shown.Clear()
+    $lines = @(Write-ExakitVsPasteHint -Forms @(Get-ExakitVsPasteForms $dir.Name) -Cols 200 6>&1 | ForEach-Object { ("" + $_) -replace ([string][char]27 + "\[[0-9;]*m"), "" })
+    $want = @((Get-Content -Raw -LiteralPath (Join-Path $dir.FullName "connector.json") | ConvertFrom-Json).paste.forms | ForEach-Object { "        " + $_ })
+    Check ("the hint for " + $dir.Name + ": what to paste, then one form per line, indented under its text") ("INFO Paste the source's connection string, for example:`n" + ($want -join "`n")) ((@($script:shown) + $lines) -join "`n")
+    $hintN++
+}
+Check "...every connector has one" 13 $hintN
+$script:shown.Clear()
+$lines = @(Write-ExakitVsPasteHint -Forms @(Get-ExakitVsPasteForms "postgresql") -Cols 30 6>&1 | ForEach-Object { ("" + $_) -replace ([string][char]27 + "\[[0-9;]*m"), "" })
+Check "...a form wider than the console wraps at the same indent" "        jdbc:postgresql://ho|        st:5432/db|        postgres://user@host|        :5432/db|        host[:port][/databas|        e]" ($lines -join "|")
+$script:shown.Clear()
 $script:BinDir = $previousBin
 Remove-Item Env:\FAKE_START_RC
 
